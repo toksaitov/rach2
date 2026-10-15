@@ -1,12 +1,6 @@
-/**
- * Anonymous pipes.
- *
- * A pipe is a bounded byte FIFO with a read end and a write end. Each end is a
- * descriptor whose ops are pipe_ops and whose priv is the struct pipe;
- * read/write block on the pipe's wait queues (so other processes run while a
- * stage waits); dup/dup2/fork share an end through the refcounted open-file
- * description, and pipe_close runs (from fd_release_backing) only when an
- * end's LAST descriptor closes. See pipe.h for the EOF/SIGPIPE contract.
+/*
+ * pipe.c: anonymous pipes and FIFOs, as pipe.h describes them: the
+ * operations of a pipe end, pipe2(2), and the open of a FIFO file.
  */
 
 #include "pipe.h"
@@ -24,18 +18,13 @@
 /* Linux ioctls a pipe answers. */
 #define FIONREAD 0x541B /* bytes available to read */
 
-/* The O_* flags pipe2 takes (the values in syscall.c and fd.h). */
+/* The flags pipe2 takes, Linux's O_CLOEXEC and O_NONBLOCK. */
 #define O_CLOEXEC_FLAG  02000000
 #define O_NONBLOCK_FLAG 04000
 
 /* The live pipes, each allocated from the heap when made and freed when
  * both ends are closed. */
 static pipe_t *pipes;
-
-/* The pure ring helpers (pipe_available/pipe_free_space/pipe_ring_put/
- * pipe_ring_get and the spans) live in pipe_ring.c so the host test can
- * exercise the wrap arithmetic natively under ASan without pulling in the
- * syscall glue. */
 
 void pipe_init_pool(void)
 {
@@ -45,13 +34,15 @@ void pipe_init_pool(void)
 static uint32_t next_pipe_inode = 1;
 
 /**
- * The next inode to give a pipe: rising, nonzero, and not one a live pipe has.
+ * The next inode number to give a pipe: rising, nonzero, and not one a live
+ * pipe has.
  *
- * Two pipes must not be one thing to a program reading `/proc/<pid>/fd`, and a
- * new pipe must not read as one that has closed, so the number rises. Rising
- * is not enough by itself: the counter is 32 bits and wraps, so the list of
- * live pipes is checked and a number in use is stepped over. Zero is skipped
- * because it is what an unset field reads as.
+ * A program reading /proc/PID/fd takes two descriptors that show one number
+ * for ends of one pipe, so no two live pipes share a number, and the number
+ * rises so that a new pipe does not read as one that closed. The counter is
+ * 32 bits and wraps, so the list of live pipes is searched and a number in
+ * use is stepped over. Zero is skipped because it is what an unset field
+ * reads as.
  */
 static uint32_t pipe_next_inode(void)
 {
@@ -70,6 +61,8 @@ static uint32_t pipe_next_inode(void)
     }
 }
 
+/** A new pipe on the live list, with one end of each kind counted open and
+ * no ring yet; NULL when the heap has no room. */
 static pipe_t *pipe_alloc(void)
 {
     pipe_t *p = kzalloc(sizeof(*p));
@@ -89,8 +82,8 @@ static pipe_t *pipe_alloc(void)
     return p;
 }
 
-/* Both ends closed, or the pipe never handed out: off the list and back to
- * the heap. Nothing refers to it after this. */
+/** Take `p` off the live list and free it with its ring, once no end of it
+ * is open or before any descriptor has it. */
 static void pipe_free(pipe_t *p)
 {
     pipe_t **link = &pipes;
@@ -105,34 +98,31 @@ static void pipe_free(pipe_t *p)
     kfree(p);
 }
 
-/**
- * Wait predicate: a reader can stop blocking; data is available, or every
- * writer has gone (EOF).
- */
+/** The wait condition of a read of the pipe `arg`: bytes are buffered, or
+ * no writer is left, when the read returns 0. */
 static int pipe_readable(void *arg)
 {
     pipe_t *p = (pipe_t *)arg;
     return pipe_available(p) != 0 || !p->write_open;
 }
 
-/**
- * Wait predicate: a writer can stop blocking; space is available, or every
- * reader has gone (the write will fail with EPIPE).
- */
+/** The wait condition of a write to the pipe `arg`: the ring has room, or
+ * no reader is left, when the write fails with EPIPE. */
 static int pipe_writable(void *arg)
 {
     pipe_t *p = (pipe_t *)arg;
     return pipe_free_space(p) != 0 || !p->read_open;
 }
 
+/** Whether the description of `e` has O_NONBLOCK. */
 static int fd_is_nonblock(fd_entry_t *e)
 {
     return e->ofd && (e->ofd->status_flags & OFD_NONBLOCK);
 }
 
-/* Wake the waiters of one end's queue `wq`, and the pollers of a FIFO's
- * descriptions open on both ends, whose readiness any change moves, for a
- * change of the kinds `kinds` (`wq_wake`). */
+/** Wake the waiters on one end's queue `wq` for a change of the kinds
+ * `kinds` (`wq_wake`), and the pollers of a FIFO's descriptions open on both
+ * ends, whose readiness any change can move. */
 static void pipe_wake(pipe_t *p, wait_queue_t *wq, uint32_t kinds)
 {
     wq_wake(wq, kinds);
@@ -142,9 +132,9 @@ static void pipe_wake(pipe_t *p, wait_queue_t *wq, uint32_t kinds)
 }
 
 /**
- * The bytes of `n` from `addr` that lie in `addr`'s own page: a copy into
- * user memory goes a page at a time, so a page that faults leaves the ones
- * before it moved and reported.
+ * The bytes of `n` from `addr` that lie in `addr`'s own page. A copy to or
+ * from user memory goes a page at a time, so a page that faults leaves the
+ * bytes of the pages before it moved and counted.
  */
 static uint32_t page_piece(uintptr_t addr, uint32_t n)
 {
@@ -154,19 +144,21 @@ static uint32_t page_piece(uintptr_t addr, uint32_t n)
 }
 
 /**
- * Read one batch of available bytes, waiting only before the first transfer.
+ * The read of a pipe end: up to `count` bytes, and at most those buffered
+ * when the first transfer begins, waiting only before it. Returns the bytes
+ * read; 0 for an empty pipe with no writer left; or, before a transfer,
+ * -EBADF for a descriptor not open for reading, -EFAULT for a bad buffer,
+ * -EAGAIN for an empty pipe with O_NONBLOCK, or -EINTR when a signal ends
+ * the wait. A fault after a transfer returns the count read, and the bytes
+ * meant for the page that faulted stay buffered.
  *
- * An empty pipe returns EOF when its writers close, -EAGAIN in nonblocking
- * mode, or -EINTR on an interrupted wait. A later empty ring or user-copy
- * fault returns the count already copied. A fault leaves its bytes unread.
- *
- * Resolve each user page before selecting a ring span. Recheck the ring
- * after any operation that can sleep; copying a span and advancing its
- * counter must not be separated by a context switch.
- *
- * The checked copy's repeated prefault finds the page present and needs no
- * allocation. User pages are not evicted or shared between threads, and
- * interrupt preemption is deferred until the syscall returns.
+ * Each transfer makes one page of the buffer present first, which can
+ * sleep, and only then takes its span of the ring, so the ring is judged
+ * after the sleep; copying the span and advancing the counter have no sleep
+ * between them. The checked copy repeats the prefault, which finds the page
+ * present and allocates nothing: nothing between the two sleeps, and an
+ * interrupt does not preempt a system call, so no other thread can unmap
+ * the page meanwhile.
  */
 static int32_t pipe_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -229,22 +221,19 @@ static int32_t pipe_read(fd_entry_t *e, char __user *buf, uint32_t count)
 }
 
 /**
- * Write to the write end. Blocks while the FIFO is full (until space frees or
- * every reader closes). A write with no readers raises SIGPIPE and returns
- * -EPIPE. Returns the byte count written, -EAGAIN if O_NONBLOCK and full, or
- * -EINTR if a signal cut a wait short; either returns the count already
- * written instead when there is one. A user-copy fault returns -EFAULT or the
- * count already written. Readers are woken for data at every transfer, the
- * ring empty before it or not, so an edge-triggered epoll registration of the
- * read end is told of each write, as Linux tells one of a pipe it polls.
+ * The write of a pipe end: all `count` bytes, waiting whenever the ring is
+ * full. Returns the bytes written, or, before a transfer, -EBADF for a
+ * descriptor not open for writing, -EFAULT for a bad buffer, -EAGAIN for a
+ * full pipe with O_NONBLOCK, -EINTR when a signal ends a wait, or -ENOMEM
+ * when the heap has no room for the ring; each of these after a transfer
+ * returns the count written instead. With no reader left the write raises
+ * SIGPIPE in the calling thread, as Linux sends it, and returns -EPIPE or
+ * the count written. Readers are woken for data at every transfer, the ring
+ * empty before it or not, so an edge-triggered epoll registration of the
+ * read end is told of each write, as Linux tells one of a pipe.
  *
- * Resolve each user page before selecting a ring span. Recheck the ring
- * after any operation that can sleep; copying a span and advancing its
- * counter must not be separated by a context switch.
- *
- * The checked copy's repeated prefault finds the page present and needs no
- * allocation. User pages are not evicted or shared between threads, and
- * interrupt preemption is deferred until the syscall returns.
+ * Each transfer makes its page present as `pipe_read`'s does, and judges
+ * the readers and the ring again after that sleep.
  */
 static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
@@ -268,8 +257,7 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 
         if (!p->read_open) {
             {
-                /* As Linux sends it: SI_USER, from the writer itself, to
-                 * the writing thread. */
+                /* Linux's SIGPIPE: SI_USER, from the writer, to its thread. */
                 struct k_siginfo info;
 
                 k_memset(&info, 0, sizeof(info));
@@ -334,19 +322,19 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 #define PIPE_POLLHUP 0x010
 
 /**
- * Poll readiness for one end, on that end's own wait queue: the read end's
- * read_wq, which data and a writer's close wake, and the write end's
- * write_wq, which freed space and a reader's close wake. A FIFO opened for
- * reading and writing is both ends, and its pollers wait on rdwr_wq, which
+ * The poll of a pipe end, with `*wq` set to the end's own queue: the read
+ * end's `read_wq`, which data and a writer's close wake, or the write end's
+ * `write_wq`, which freed room and a reader's close wake. A FIFO opened for
+ * reading and writing is both ends, and its pollers wait on `rdwr_wq`, which
  * every change of either wakes (`pipe_wake`).
  *
- * Readiness matches the read and write wait predicates, so a poller wakes for
- * exactly what unblocks a read or a write: the read end is readable with data
- * buffered or the writers gone (the read then returns 0), and the write end
- * is writable with space free or the readers gone (the write then fails with
- * EPIPE). POLLHUP on the read end once the writers are gone, and POLLERR on
- * the write end once the readers are gone, are reported whatever `events`
- * asks.
+ * Readiness matches the wait conditions of a read and a write, so a poller
+ * wakes for what ends the wait of a read or a write: the read end is
+ * readable with data buffered or the writers gone (the read then returns 0),
+ * and the write end is writable with room or the readers gone (the write
+ * then fails with EPIPE). POLLHUP on the read end once the writers are gone,
+ * and POLLERR on the write end once the readers are gone, are reported
+ * whatever `events` asks.
  */
 static short pipe_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
@@ -366,7 +354,7 @@ static short pipe_poll(fd_entry_t *e, short events, struct wait_queue **wq)
             revents |= (short)(events & PIPE_POLLIN);
         }
         if (!p->write_open) {
-            revents |= PIPE_POLLHUP; /* the peer (writer) hung up */
+            revents |= PIPE_POLLHUP;
         }
     }
     if (e->flags & FD_FLAG_WRITE) {
@@ -374,12 +362,14 @@ static short pipe_poll(fd_entry_t *e, short events, struct wait_queue **wq)
             revents |= (short)(events & PIPE_POLLOUT);
         }
         if (!p->read_open) {
-            revents |= PIPE_POLLERR; /* broken pipe: a write would fail with EPIPE */
+            revents |= PIPE_POLLERR;
         }
     }
     return revents;
 }
 
+/** The ioctls of a pipe end: FIONREAD stores the bytes buffered, an int, at
+ * `arg`, or fails with -EFAULT; any other request is -ENOTTY. */
 static int32_t pipe_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     pipe_t *p = (pipe_t *)e->priv;
@@ -398,11 +388,12 @@ static int32_t pipe_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 }
 
 /**
- * Release one end when its last descriptor closes (called from
- * fd_release_backing at OFD refcount 1). Count the end closed, wake the peer
- * so a blocked reader sees EOF or a blocked writer sees the broken pipe once
- * no end of its kind is left, and free the pipe once no end is open. A FIFO
- * opened for reading and writing is an end of both kinds.
+ * Close the end `e` when its description's last reference goes
+ * (`fd_release_backing`): count the end closed, wake the other end's queue
+ * for every kind of change, so that a waiting reader sees the end of file,
+ * or a waiting writer the broken pipe, once no end of the closed kind is
+ * left, and free the pipe once no end is open. A FIFO opened for reading and
+ * writing is an end of both kinds.
  */
 static void pipe_close(fd_entry_t *e)
 {
@@ -413,11 +404,11 @@ static void pipe_close(fd_entry_t *e)
     }
     if (e->flags & FD_FLAG_READ) {
         p->read_open--;
-        pipe_wake(p, &p->write_wq, WQ_ALL); /* writers now get SIGPIPE */
+        pipe_wake(p, &p->write_wq, WQ_ALL);
     }
     if (e->flags & FD_FLAG_WRITE) {
         p->write_open--;
-        pipe_wake(p, &p->read_wq, WQ_ALL); /* readers now get EOF */
+        pipe_wake(p, &p->read_wq, WQ_ALL);
     }
     if ((e->flags & FD_FLAG_READ) && (e->flags & FD_FLAG_WRITE)) {
         p->rdwr_open--;
@@ -429,7 +420,8 @@ static void pipe_close(fd_entry_t *e)
 
 static const struct file_ops pipe_ops = {pipe_read, pipe_write, pipe_poll, pipe_ioctl, pipe_close};
 
-/** Install a pipe end onto a freshly allocated descriptor. */
+/** Make the caller's reserved descriptor `fd` an end of `p` with the access
+ * `access`, close-on-exec and O_NONBLOCK as pipe2's `flags` ask. */
 static void pipe_setup_end(int fd, pipe_t *p, uint32_t access, int flags)
 {
     fd_entry_t *e = &current_proc->fds->entries[fd];
@@ -448,14 +440,17 @@ static void pipe_setup_end(int fd, pipe_t *p, uint32_t access, int flags)
     }
 }
 
-/* An open of a FIFO waiting for the other end: the opens of that end so far
- * when the wait began. */
+/* An open of a FIFO waiting for the other end: the pipe, whether it waits
+ * for a reader, as a writer's open does, or for a writer, and that end's
+ * count of opens when the wait began. */
 struct fifo_wait {
     const pipe_t *p;
     int for_reader;
     uint32_t seen;
 };
 
+/** The wait condition of an open of a FIFO, `arg` its `struct fifo_wait`:
+ * the end it waits for has been opened since the wait began. */
 static int fifo_partner_came(void *arg)
 {
     const struct fifo_wait *w = (const struct fifo_wait *)arg;
@@ -463,6 +458,8 @@ static int fifo_partner_came(void *arg)
     return (w->for_reader ? w->p->read_opens : w->p->write_opens) != w->seen;
 }
 
+/** The pipe of the FIFO file that `mnt` and `ino` identify, or NULL when no
+ * end of it is open. */
 static pipe_t *fifo_find(const void *mnt, uint64_t ino)
 {
     pipe_t *p;
@@ -472,8 +469,8 @@ static pipe_t *fifo_find(const void *mnt, uint64_t ino)
     return p;
 }
 
-/* Take back an open of `reads` and `writes` that did not finish, and free a
- * pipe with no end left. */
+/** Take back the ends counted by an open that did not finish, `reads` and
+ * `writes` of them, and free the pipe when no end is left. */
 static void fifo_unopen(pipe_t *p, int reads, int writes)
 {
     p->read_open -= reads;
@@ -483,6 +480,12 @@ static void fifo_unopen(pipe_t *p, int reads, int writes)
     }
 }
 
+/**
+ * A blocking open waits for the other end's count of opens to change, not
+ * for an end of that kind to be open, so an open of the other end that
+ * closes again while this one sleeps still ends the wait, as Linux's
+ * counters have it.
+ */
 int32_t fifo_attach(fd_entry_t *e, const void *mnt, uint64_t ino, int flags)
 {
     int acc = flags & 3;
@@ -546,12 +549,18 @@ int32_t fifo_attach(fd_entry_t *e, const void *mnt, uint64_t ino, int flags)
 }
 
 /**
- * pipe2(2) of the user array at `fds_ptr` with `flags`. Both descriptors
- * are reserved, their numbers copied to the caller, and only then given
- * their ends, as Linux's do_pipe2 does: the copy can sleep, and a reserved
- * slot has no type, so a thread sharing the table can neither use nor
- * duplicate an end before the call succeeds, and a copy that fails frees
- * the slots and the pipe, which nothing else can reach.
+ * pipe2(2) of the user array at `fds_ptr` with `flags`: a new pipe, the
+ * read end's descriptor stored first and the write end's second, each with
+ * O_CLOEXEC and O_NONBLOCK as `flags` ask. Returns 0, or -ESRCH with no
+ * current process, -EINVAL for any other flag, -ENFILE when the heap has no
+ * room for a pipe, -EMFILE or -ENOMEM from the descriptor table, or -EFAULT
+ * for a bad array.
+ *
+ * Both descriptors are reserved, their numbers copied to the caller, and
+ * only then given their ends, as Linux's do_pipe2 does: the copy can sleep,
+ * and a reserved slot has no type, so a thread sharing the table can neither
+ * use nor duplicate an end before the call succeeds, and a copy that fails
+ * frees the slots and the pipe, which nothing else can reach.
  */
 static int32_t pipe_open(uintptr_t fds_ptr, int flags)
 {
@@ -561,7 +570,6 @@ static int32_t pipe_open(uintptr_t fds_ptr, int flags)
     if (!current_proc) {
         return -ESRCH;
     }
-    /* Only O_CLOEXEC and O_NONBLOCK are valid pipe2 flags. */
     if (flags & ~(O_CLOEXEC_FLAG | O_NONBLOCK_FLAG)) {
         return -EINVAL;
     }
@@ -588,14 +596,15 @@ static int32_t pipe_open(uintptr_t fds_ptr, int flags)
     return 0;
 }
 
+/** pipe2(2) takes the array and the flags (`pipe_open`). */
 long sys_pipe2(struct isr_params *params)
 {
     return pipe_open(SC_ARG(params, 0), (int)SC_ARG(params, 1));
 }
 
-/* pipe() is pipe2() with no flags. The register of a second argument is
- * not one of its arguments, and comes back as it went, as every register
- * but the result's does. */
+/** pipe(2) takes the array alone and is pipe2 with no flags. The register
+ * of pipe2's second argument is not changed to pass them: it goes back to
+ * the program as it came, as every register but the result's does. */
 long sys_pipe(struct isr_params *params)
 {
     return pipe_open(SC_ARG(params, 0), 0);

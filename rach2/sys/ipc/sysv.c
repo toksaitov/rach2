@@ -3,14 +3,14 @@
  * describe it.
  *
  * Each kind has a table of SYSV_SLOTS places. An object's id is its place
- * plus its sequence number times 32768, as Linux builds it, so an id names
- * one object and not a later one in the same place. Every object begins with
- * its permissions, `struct sysv_perm`, which the lookup, the permission
- * check and the control calls share. A segment's memory is a file on the
- * tmpfs of memfd_create, which shmat maps shared; a set and a queue are in
- * the heap. A caller that sleeps on a set or a queue holds a reference to
- * it, so removing it wakes the sleeper with EIDRM rather than freeing what
- * it waits on.
+ * plus its sequence number times 32768, as Linux builds it, so an id refers
+ * to one object and not a later one in the same place. Every object begins
+ * with its permissions, `struct sysv_perm`, which the lookup, the
+ * permission check and the control calls share. A segment's memory is a
+ * file on the tmpfs of memfd_create, which shmat maps shared; a set and a
+ * queue are in the heap. A caller that sleeps on a set or a queue holds a
+ * reference to it, so removing it wakes the sleeper with EIDRM rather than
+ * freeing what it waits on.
  */
 
 #include "../arch/uabi.h"
@@ -52,8 +52,8 @@
 
 /* The limits, Linux's defaults but for the number of objects. SHMMAX is
  * Linux's ULONG_MAX less 16 MiB on each width: 0xFEFFFFFF on i686, and on
- * x86-64 more than a tmpfs file holds, so there the file's own limit,
- * SHMEM_MAX_SIZE, refuses a larger segment with ENOMEM. */
+ * x86-64 more than a tmpfs file holds, so there a larger segment fails with
+ * ENOMEM at the file's own limit, SHMEM_MAX_SIZE. */
 #define SHMMAX (~0UL - (1UL << 24))
 #define SHMMIN 1u
 #define SEMMSL 32000u
@@ -64,8 +64,10 @@
 #define MSGMNB 16384u
 
 /* The permissions every object begins with. `mode` has the nine bits and,
- * for a segment, SHM_DEST once it is removed while attached. `ns` is the
- * IPC namespace it was made in (proc/ns.h), which alone sees it, and
+ * for a segment, SHM_DEST once it is removed. `seq` and `place` make the id
+ * (`sysv_id`). `refs` counts the table's reference to a set or a queue and
+ * each sleeper's; `removed` is set when the object leaves its table. `ns`
+ * is the IPC namespace it was made in (proc/ns.h), which alone sees it, and
  * `ipc_gone` for a segment its namespace's end left attached. */
 struct sysv_perm {
     int32_t key;
@@ -82,6 +84,8 @@ struct sysv_perm {
  * no process is in. */
 static struct ipcns ipc_gone;
 
+/* The objects of each kind by place, and each kind's next sequence
+ * number. */
 static struct sysv_perm *tables[3][SYSV_SLOTS];
 static uint16_t seqs[3];
 
@@ -149,7 +153,8 @@ static int32_t sysv_id(const struct sysv_perm *p)
     return (int32_t)(p->seq * SYSV_SEQ + (uint32_t)p->place);
 }
 
-/** The object of `kind` that `id` names, or NULL. */
+/** The object of `kind` whose id is `id` in the caller's IPC namespace, or
+ * NULL. */
 static struct sysv_perm *sysv_find(int kind, int32_t id)
 {
     struct sysv_perm *p;
@@ -161,7 +166,8 @@ static struct sysv_perm *sysv_find(int kind, int32_t id)
     return p && (uint32_t)id % SYSV_SEQ < SYSV_SLOTS && sysv_id(p) == id && sysv_mine(p) ? p : NULL;
 }
 
-/** The object of `kind` with key `key`, not removed, or NULL. */
+/** The object of `kind` with key `key` in the caller's IPC namespace, not
+ * removed, or NULL. */
 static struct sysv_perm *sysv_find_key(int kind, int32_t key)
 {
     int i;
@@ -268,8 +274,8 @@ static int32_t sysv_perm_set(struct sysv_perm *p, const struct ipc64_perm *in)
     return 0;
 }
 
-/** The highest place of `kind`'s table in use, which IPC_INFO and the
- * kinds' INFO commands return, or 0. */
+/** The highest place of `kind`'s table that the caller's IPC namespace
+ * uses, which IPC_INFO and the kinds' INFO commands return, or 0. */
 static int32_t sysv_highest(int kind)
 {
     int32_t i;
@@ -280,7 +286,7 @@ static int32_t sysv_highest(int kind)
 }
 
 /**
- * The object a control command names: by id, or by place for the STAT
+ * The object a control command is for: by id, or by place for the STAT
  * commands that take one (`by_place`), which the caller may read unless
  * `any`. NULL with the error in `*rc`: EINVAL for an id or a place with no
  * object, EACCES when the caller may not read it.
@@ -313,6 +319,9 @@ static struct sysv_perm *sysv_target(int kind, int32_t id, int by_place, int any
 #define SHM_LOCK     11
 #define SHM_UNLOCK   12
 
+/* A segment: its size in bytes, the open-file description of its tmpfs
+ * file, its attach, detach and change times in seconds, and the pids of its
+ * creator and its last operator. */
 struct shm_seg {
     struct sysv_perm perm;
     size_t size;
@@ -332,7 +341,8 @@ struct shm_info {
     unsigned long shm_tot, shm_rss, shm_swp, swap_attempts, swap_successes;
 };
 
-/** The segment's memory's record of sharing, which its mappings have. */
+/** The shared-memory record of the segment's tmpfs file, which its
+ * mappings point at. */
 static struct shmem *shm_mem(const struct shm_seg *s)
 {
     return tmpfs_shmem(s->ofd->vnode);
@@ -346,9 +356,9 @@ static void shm_free(struct shm_seg *s)
 }
 
 /**
- * Free each segment removed while attached that has no attachment left:
- * Linux frees one at its last detach, and this kernel, which does not see
- * an address space's end, frees it at the next call that reads the table.
+ * Free each removed segment that has no attachment left. Linux frees one at
+ * its last detach; here no hook runs when an address space ends, so the
+ * segment is freed at the next call that reads the table.
  */
 static void shm_reap(void)
 {
@@ -366,9 +376,10 @@ static void shm_reap(void)
 
 /**
  * A new segment of `size` bytes in a tmpfs file; NULL with no memory, or
- * for a size tmpfs refuses. The open file takes the node and its open once
- * the node is opened, so that a size refused after that gives both back
- * through the open file's release, and a node not opened is put alone.
+ * when tmpfs cannot give the file that size. The open-file description
+ * takes the node and its open once the node is opened, so a failure to set
+ * the size after that gives both back through the description's release,
+ * and a node not yet opened is put alone.
  */
 static struct shm_seg *shm_new(size_t size)
 {
@@ -457,12 +468,13 @@ static char *shm_path(int32_t key)
 
 /**
  * shmat: map segment `id` into the caller at `addr`, or where the kernel
- * finds room when it is 0, and return the address. `addr` must be page
- * aligned unless SHM_RND rounds it down, and may not cover a mapping unless
- * SHM_REMAP replaces it, both EINVAL. SHM_RDONLY maps it read-only, which
- * mprotect cannot undo, and SHM_EXEC executable; the caller must be allowed
- * to read the segment, and to write it without SHM_RDONLY, else EACCES. A
- * removed segment may still be attached, as on Linux.
+ * finds room when it is 0, and store the address in `*base`. Returns 0, or
+ * -EINVAL for no such segment. `addr` must be page aligned unless SHM_RND
+ * rounds it down, and may not cover a mapping unless SHM_REMAP replaces it,
+ * which needs an address; each is EINVAL. SHM_RDONLY maps it read-only,
+ * which mprotect cannot undo, and SHM_EXEC executable; the caller must be
+ * allowed to read the segment, and to write it without SHM_RDONLY, else
+ * EACCES. A removed segment may still be attached, as on Linux.
  */
 static int32_t shm_at(int32_t id, uintptr_t addr, uint32_t flag, uintptr_t *base)
 {
@@ -571,10 +583,11 @@ static int32_t shm_info_out(int cmd, void __user *buf)
  * shmctl: IPC_STAT, SHM_STAT and SHM_STAT_ANY copy a segment's record out,
  * the last two by place, returning its id; IPC_SET changes its owner, group
  * and bits; IPC_RMID removes it, at once when nothing is attached and else
- * at its last detach, giving it the key IPC_PRIVATE meanwhile; IPC_INFO and
- * SHM_INFO give the limits and the use. SHM_LOCK and SHM_UNLOCK do nothing,
- * since no page is ever swapped. EPERM for a caller that neither owns nor
- * made the segment, EINVAL for another command.
+ * once the last attachment goes (`shm_reap`), giving it the key IPC_PRIVATE
+ * meanwhile; IPC_INFO and SHM_INFO give the limits and the use. SHM_LOCK
+ * and SHM_UNLOCK do nothing, since no page is ever swapped. EPERM for a
+ * caller that neither owns nor made the segment, EINVAL for another
+ * command.
  */
 static int32_t shm_ctl(int32_t id, int cmd, void __user *buf)
 {
@@ -644,12 +657,17 @@ static int32_t shm_ctl(int32_t id, int cmd, void __user *buf)
 #define SEM_INFO     19
 #define SEM_STAT_ANY 20
 
+/* A semaphore: its value, the callers waiting for it to rise and for it to
+ * reach 0, and the pid of the last process to operate on it. */
 struct sem {
     uint16_t val;
     uint16_t ncnt, zcnt;
     int32_t pid;
 };
 
+/* A set: its semaphores, the times of its last operation and its last
+ * change in seconds, the queue its waiters sleep on, and a count that every
+ * change of a value raises, which a sleeper compares (`struct sysv_wait`). */
 struct sem_set {
     struct sysv_perm perm;
     uint32_t nsems;
@@ -669,6 +687,7 @@ struct sem_undo {
     int16_t *adj;
 };
 
+/* IPC_INFO's and SEM_INFO's struct seminfo. */
 struct seminfo {
     int32_t semmap, semmni, semmns, semmnu, semmsl, semopm, semume, semusz, semvmx, semaem;
 };
@@ -835,7 +854,9 @@ static void sem_done(struct sem_set *set, const struct sembuf *ops, uint32_t n, 
 }
 
 /* What a sleeper on a set or a queue waits for: a change, the object's
- * removal or the deadline. */
+ * removal or the deadline. `gen` points at the object's count of changes
+ * and `from` is its value when the sleep began; `target` is the deadline,
+ * a tick count, when `timed`. */
 struct sysv_wait {
     const struct sysv_perm *perm;
     const uint32_t *gen;
@@ -844,6 +865,7 @@ struct sysv_wait {
     uint32_t target;
 };
 
+/** The wait condition of the `struct sysv_wait` at `arg`. */
 static int sysv_wait_done(void *arg)
 {
     const struct sysv_wait *w = arg;
@@ -854,8 +876,8 @@ static int sysv_wait_done(void *arg)
 
 /**
  * Sleep on `wq` until what `w` waits for: 0 for a change, -EIDRM when the
- * object was removed, -EAGAIN at the deadline, as semtimedop and msgrcv
- * report it, and -EINTR for a signal.
+ * object was removed, -EAGAIN at the deadline, as semtimedop reports it,
+ * and -EINTR for a signal.
  */
 static int32_t sysv_sleep(wait_queue_t *wq, struct sysv_wait *w)
 {
@@ -1020,7 +1042,7 @@ static int32_t sem_info_out(int cmd, void __user *buf)
 /** SETVAL and SETALL: semaphore `num` of `set` to `val`, or every one from
  * the array at `uarr` when `num` is negative; each process's adjustment of
  * what changed is cleared and every waiter woken. ERANGE for a value past
- * SEMVMX. */
+ * SEMVMX, and ENOMEM or EFAULT for SETALL's array. */
 static int32_t sem_set_values(struct sem_set *set, int num, int32_t val, const void __user *uarr)
 {
     uint16_t *vals = NULL;
@@ -1085,7 +1107,8 @@ static int32_t sem_ctl_one(struct sem_set *set, int num, int cmd, uintptr_t arg)
     }
 }
 
-/** GETALL: every value of `set` into the array at `uarr`. */
+/** GETALL: every value of `set` into the array at `uarr`. EACCES when the
+ * caller may not read the set, ENOMEM, EFAULT. */
 static int32_t sem_get_all(const struct sem_set *set, void __user *uarr)
 {
     uint16_t *vals;
@@ -1223,12 +1246,17 @@ void sysv_exit(struct tgroup *tg)
 #define MSG_INFO     12
 #define MSG_STAT_ANY 13
 
+/* A message: its type and `size` bytes of text, which follow the record. */
 struct msg {
     struct msg *next;
     long type;
     uint32_t size;
 };
 
+/* A queue: its messages, oldest first; the bytes of text queued, the count
+ * of messages and the limit `qbytes` on both; its send, receive and change
+ * times in seconds; the pids of the last sender and receiver; and, as a set
+ * has, the queue its waiters sleep on and a count of changes. */
 struct msg_queue {
     struct sysv_perm perm;
     struct msg *head;
@@ -1239,6 +1267,7 @@ struct msg_queue {
     uint32_t gen;
 };
 
+/* IPC_INFO's and MSG_INFO's struct msginfo. */
 struct msginfo {
     int32_t msgpool, msgmap, msgmax, msgmnb, msgmni, msgssz, msgtql;
     uint16_t msgseg;
@@ -1258,7 +1287,9 @@ static void msg_put(struct msg_queue *q)
     }
 }
 
-/** msgget: the queue of `key`, or a new empty one of MSGMNB bytes. */
+/** msgget: the queue of `key`, or a new empty one of MSGMNB bytes made with
+ * IPC_CREAT or for IPC_PRIVATE. ENOSPC and ENOMEM as for shmget, and the
+ * refusals of `sysv_lookup`. */
 static int32_t msg_get(int32_t key, uint32_t flag)
 {
     struct msg_queue *q;
@@ -1283,8 +1314,8 @@ static int32_t msg_get(int32_t key, uint32_t flag)
     return rc;
 }
 
-/** The queue `id` names, held, when the caller may use it as `flag` asks;
- * NULL with EINVAL or EACCES in `*rc`. */
+/** The queue whose id is `id`, held, when the caller may use it as `flag`
+ * asks; NULL with EINVAL or EACCES in `*rc`. */
 static struct msg_queue *msg_hold(int32_t id, uint32_t flag, int32_t *rc)
 {
     struct msg_queue *q = (struct msg_queue *)sysv_find(SYSV_MSG, id);
@@ -1301,8 +1332,9 @@ static struct msg_queue *msg_hold(int32_t id, uint32_t flag, int32_t *rc)
  * msgsnd: append the message at `umsg`, a long type of at least 1 and
  * `size` bytes of text, to queue `id`, waiting while the queue's bytes or
  * its count of messages would pass its limit, unless IPC_NOWAIT gives
- * EAGAIN. EINVAL for a size past MSGMAX or a type below 1, EACCES when the
- * caller may not write the queue, EIDRM when it is removed meanwhile.
+ * EAGAIN. EINVAL for a size past MSGMAX, a type below 1 or no such queue,
+ * EACCES when the caller may not write the queue, EIDRM when it is removed
+ * meanwhile, EINTR for a signal, and ENOMEM and EFAULT.
  */
 static int32_t msg_snd(int32_t id, const void __user *umsg, uint32_t size, uint32_t flag)
 {
@@ -1376,7 +1408,7 @@ static struct msg **msg_pick(struct msg_queue *q, long type, uint32_t flag)
 }
 
 /** Copy `m` out to `umsg`, its text cut to `size` bytes; the bytes of text
- * copied. */
+ * copied, or -EFAULT. */
 static int32_t msg_copy_out(const struct msg *m, void __user *umsg, uint32_t size)
 {
     uint32_t n = m->size < size ? m->size : size;
@@ -1393,7 +1425,9 @@ static int32_t msg_copy_out(const struct msg *m, void __user *umsg, uint32_t siz
  * most `size` bytes of its text, into `umsg`, waiting while there is none
  * unless IPC_NOWAIT gives ENOMSG. A longer message is E2BIG and stays
  * unless MSG_NOERROR cuts it. MSG_COPY is ENOSYS, as from a Linux built
- * without checkpoint and restore. Returns the bytes of text.
+ * without checkpoint and restore. Returns the bytes of text, or -EINVAL for
+ * a negative size or no such queue, -EACCES when the caller may not read
+ * the queue, -EIDRM when it is removed meanwhile, -EINTR, -EFAULT.
  */
 static int32_t msg_rcv(int32_t id, void __user *umsg, int32_t size, long type, uint32_t flag)
 {
@@ -1630,6 +1664,15 @@ static int32_t msg_rcv_ipc(int version, int32_t id, int32_t size, uint32_t flag,
     return msg_rcv(id, (void __user *)kludge.msgp, size, kludge.msgtyp, flag);
 }
 
+/**
+ * ipc(2), i386's one call to every System V object. The low 16 bits of the
+ * first argument choose the operation and the high 16 bits its version; the
+ * rest, `first`, `second`, `third`, `ptr` and `fifth` as Linux names them,
+ * are the operation's, as the C library passes them. SEMCTL reads its last
+ * argument through `ptr`; SHMAT stores the address at `third`, and its
+ * version 1, Linux's iBCS2 entry, is EINVAL; MSGRCV's versions are
+ * `msg_rcv_ipc`'s. ENOSYS for an unknown operation.
+ */
 long sys_ipc(struct isr_params *params)
 {
     uint32_t call = SC_ARG(params, 0) & 0xFFFFu;
@@ -1677,30 +1720,37 @@ long sys_ipc(struct isr_params *params)
     }
 }
 
+/** semget(2) takes the key, the count and the flags (`sem_get`). */
 long sys_semget(struct isr_params *params)
 {
     return sem_get((int32_t)SC_ARG(params, 0), (int32_t)SC_ARG(params, 1),
                    (uint32_t)SC_ARG(params, 2));
 }
 
+/** semctl(2) takes the set, the semaphore, the command and the semun value
+ * (`sem_ctl`). */
 long sys_semctl(struct isr_params *params)
 {
     return sem_ctl((int32_t)SC_ARG(params, 0), (int)SC_ARG(params, 1), (int)SC_ARG(params, 2),
                    SC_ARG(params, 3));
 }
 
+/** shmget(2) takes the key, the size and the flags (`shm_get`). */
 long sys_shmget(struct isr_params *params)
 {
     return shm_get((int32_t)SC_ARG(params, 0), (size_t)SC_ARG(params, 1),
                    (uint32_t)SC_ARG(params, 2));
 }
 
+/** shmctl(2) takes the segment, the command and the buffer (`shm_ctl`). */
 long sys_shmctl(struct isr_params *params)
 {
     return shm_ctl((int32_t)SC_ARG(params, 0), (int)SC_ARG(params, 1),
                    (void __user *)SC_ARG(params, 2));
 }
 
+/** shmat(2) takes the segment, the address and the flags, and returns the
+ * address of the attachment or -errno (`shm_at`). */
 long sys_shmat(struct isr_params *params)
 {
     uintptr_t base;
@@ -1710,25 +1760,30 @@ long sys_shmat(struct isr_params *params)
     return rc != 0 ? rc : (long)base;
 }
 
+/** shmdt(2) takes the address of the attachment (`shm_dt`). */
 long sys_shmdt(struct isr_params *params)
 {
     return shm_dt(SC_ARG(params, 0));
 }
 
+/** msgget(2) takes the key and the flags (`msg_get`). */
 long sys_msgget(struct isr_params *params)
 {
     return msg_get((int32_t)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 1));
 }
 
+/** msgsnd(2) takes the queue, the message, the size of its text and the
+ * flags (`msg_snd`); a size past 32 bits saturates and is EINVAL. */
 long sys_msgsnd(struct isr_params *params)
 {
     return msg_snd((int32_t)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1),
                    USER_LEN32(SC_ARG(params, 2)), (uint32_t)SC_ARG(params, 3));
 }
 
-/* msgrcv's `size_t` capacity as msg_rcv takes it: a value whose long is
- * negative is EINVAL, as Linux has it, and one past the int's range is the
- * most an int holds, since no message is that long. */
+/** msgrcv(2) takes the queue, the buffer, the capacity of its text, the
+ * type and the flags (`msg_rcv`). The capacity is a `size_t`: one whose
+ * long is negative is EINVAL, as Linux has it, and one past the int's range
+ * is the most an int holds, since no message is that long. */
 long sys_msgrcv(struct isr_params *params)
 {
     long size = (long)SC_ARG(params, 2);
@@ -1740,13 +1795,19 @@ long sys_msgrcv(struct isr_params *params)
                    (long)SC_ARG(params, 3), (uint32_t)SC_ARG(params, 4));
 }
 
+/** msgctl(2) takes the queue, the command and the buffer (`msg_ctl`). */
 long sys_msgctl(struct isr_params *params)
 {
     return msg_ctl((int32_t)SC_ARG(params, 0), (int)SC_ARG(params, 1),
                    (void __user *)SC_ARG(params, 2));
 }
 
-/** semtimedop_time64: the timeout a 64-bit timespec. */
+/**
+ * semtimedop with a 64-bit timespec: i686's semtimedop_time64 and x86-64's
+ * semtimedop. It takes the set, the operations, their count and a relative
+ * timeout, none when NULL (`sem_op`); EINVAL for a negative or malformed
+ * timeout, EFAULT for one it cannot read.
+ */
 long sys_semtimedop_time64(struct isr_params *params)
 {
     int64_t ts[2];
@@ -1819,6 +1880,13 @@ int sysv_row_at(int kind, int i, struct sysv_row *row)
     return 1;
 }
 
+/**
+ * The namespace's segments are marked removed and moved to `ipc_gone`,
+ * where no lookup finds them, and `shm_reap` frees each once no attachment
+ * is left; its sets and queues are removed as IPC_RMID removes one, their
+ * sleepers woken with EIDRM; and its POSIX queues lose their names
+ * (`mq_ns_gone`).
+ */
 void ipc_ns_gone(struct ipcns *ns)
 {
     int i;

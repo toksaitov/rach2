@@ -2,13 +2,14 @@
  * mqueue.c: POSIX message queues, as Linux gives them through mq_open and
  * its five calls (ipc/Readme.md).
  *
- * A queue has a name in one list, which every process shares, until
- * mq_unlink, and lives while a descriptor or the name has it. A descriptor
- * is an anonymous one whose object refers to the queue; its access mode is
- * the descriptor's read and write flags and its O_NONBLOCK the description's.
- * Messages are kept highest priority first, in the order they came within a
- * priority. A sender or a receiver that waits holds a reference, so the
- * queue outlives its last close while one sleeps on it.
+ * A named queue is on one list, which every process shares, with the IPC
+ * namespace it was made in, until mq_unlink takes its name; it lives while
+ * its name, a descriptor, a waiter or an open of its file has a reference.
+ * A descriptor is an anonymous one whose object refers to the queue; its
+ * access mode is the descriptor's read and write flags and its O_NONBLOCK
+ * the description's. Messages are kept highest priority first, in the order
+ * they came within a priority. A sender or a receiver that waits holds a
+ * reference, so the queue outlives its last close while one sleeps on it.
  *
  * The mqueue file system lists the named queues of one IPC namespace as the
  * files of a directory, as Linux's /dev/mqueue does: a file's attributes are
@@ -38,12 +39,15 @@
 #include "../timer.h"
 #include "../syscall_internal.h"
 
+/* The longest name, the priorities a message may have, and the queues an
+ * unprivileged caller may make, counted over every namespace. */
 #define MQ_NAME_MAX 255
 #define MQ_PRIO_MAX 32768u
 #define MQ_QUEUES   256
 
-/* The limits of /proc/sys/fs/mqueue: an unprivileged caller's largest
- * queue, and the queue mq_open makes without attributes. */
+/* The limits of /proc/sys/fs/mqueue: MQ_MSG_MAX and MQ_MSGSIZE_MAX are an
+ * unprivileged caller's largest queue and the queue mq_open makes without
+ * attributes, and the hard limits a privileged caller's largest. */
 #define MQ_MSG_MAX         10
 #define MQ_MSGSIZE_MAX     8192
 #define MQ_HARD_MSGMAX     65536
@@ -59,12 +63,18 @@
 #define SIGEV_NONE   1
 #define SIGEV_THREAD 2
 
+/* A message: its priority and `len` bytes, which follow the record. */
 struct mq_msg {
     struct mq_msg *next;
     uint32_t prio;
     uint32_t len;
 };
 
+/* A queue. `refs` counts its name's reference, each description's, each
+ * waiter's and each open of its file; `head` is its messages, highest
+ * priority first. `gen` rises at every change, which a sleeper compares
+ * (`struct mq_wait`). A registered notification is `notify_how`,
+ * SIGEV_SIGNAL or SIGEV_NONE, with its signal and value. */
 struct mqueue {
     struct mqueue *next;    /* the list of named queues */
     char *name;             /* NULL once unlinked */
@@ -96,6 +106,8 @@ struct mq_attr {
     long reserved[4];
 };
 
+/* The named queues, the count of the queues alive, named or not, and the
+ * next file number to give a queue, 1 being the mqueue root's. */
 static struct mqueue *queues;
 static int nqueues;
 static uint32_t next_ino = 2;
@@ -177,7 +189,8 @@ static void mq_close(fd_entry_t *e);
 
 static const struct file_ops mq_ops = {mq_read, NULL, mq_poll, NULL, mq_close};
 
-/** The queue the caller's descriptor `fd` is open on, or NULL. */
+/** The queue the caller's descriptor `fd` is open on, with the descriptor
+ * in `*ep`, or NULL when `fd` is no queue's. */
 static struct mqueue *mq_of(int fd, fd_entry_t **ep)
 {
     fd_entry_t *e = fd_get(current_proc->fds, fd);
@@ -190,9 +203,11 @@ static struct mqueue *mq_of(int fd, fd_entry_t **ep)
 }
 
 /**
- * The text a read of the descriptor gives, as Linux's mqueue file has it:
- * the bytes of the messages queued, the notification's kind, its signal and
- * the process registered.
+ * Write to `out` the text a read of the queue `q` gives, as Linux's mqueue
+ * file has it: the bytes of the messages queued, the notification's kind,
+ * its signal and the process registered. At most `cap` - 1 characters and a
+ * newline are written, then a NUL, so `out` needs `cap` + 1 bytes; returns
+ * the length without the NUL.
  */
 static int mq_status(const struct mqueue *q, char *out, int cap)
 {
@@ -233,6 +248,8 @@ static int mq_status(const struct mqueue *q, char *out, int cap)
     return n;
 }
 
+/** The read of a queue's descriptor: its status line (`mq_status`) from the
+ * description's offset, which advances; 0 past its end, or -EFAULT. */
 static int32_t mq_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     char text[96];
@@ -252,6 +269,8 @@ static int32_t mq_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return (int32_t)count;
 }
 
+/** The poll of a queue's descriptor, on the queue's wait queue: readable
+ * while a message is queued, writable while there is room for one. */
 static short mq_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct mqueue *q = ((struct mq_file *)e->priv)->q;
@@ -284,7 +303,8 @@ static void mq_close(fd_entry_t *e)
 }
 
 /** The attributes a new queue takes from `uattr`, or the defaults without
- * one: EINVAL for a count or a size below 1 or past the caller's limit. */
+ * one: EINVAL for a count or a size below 1 or past the caller's limit,
+ * EFAULT for an address it cannot read. */
 static int32_t mq_new_attr(const void __user *uattr, int32_t *maxmsg, int32_t *msgsize)
 {
     struct mq_attr a;
@@ -307,8 +327,10 @@ static int32_t mq_new_attr(const void __user *uattr, int32_t *maxmsg, int32_t *m
     return 0;
 }
 
-/** A new queue `name`, the caller's, with the bits of `mode` its umask
- * leaves, entered in the list with the reference its name holds. */
+/** A new queue `name` in `*out`, the caller's, with the bits of `mode` its
+ * umask leaves, entered in the list with the reference its name holds.
+ * Returns 0, the refusals of `mq_new_attr`, -ENFILE past MQ_QUEUES queues
+ * for an unprivileged caller, or -ENOMEM. */
 static int32_t mq_create(const char *name, uint32_t mode, const void __user *uattr,
                          struct mqueue **out)
 {
@@ -352,8 +374,9 @@ static int32_t mq_create(const char *name, uint32_t mode, const void __user *uat
     return 0;
 }
 
-/** Copy the queue name at `uname` into `name`: ENAMETOOLONG past
- * MQ_NAME_MAX, ENOENT for an empty one, EACCES for one with a slash. */
+/** Copy the queue name at `uname` into `name`, of MQ_NAME_MAX + 1 bytes:
+ * ENAMETOOLONG past MQ_NAME_MAX, ENOENT for an empty one, EACCES for one
+ * with a slash, EFAULT for an address it cannot read. */
 static int32_t mq_name(const char __user *uname, char *name)
 {
     int32_t n = strncpy_from_user(name, uname, MQ_NAME_MAX + 1);
@@ -376,7 +399,8 @@ static int32_t mq_name(const char __user *uname, char *name)
 }
 
 /** A descriptor open on `q` for the access mode of `oflag`, with its
- * O_NONBLOCK and O_CLOEXEC; it takes a reference to `q`. */
+ * O_NONBLOCK and O_CLOEXEC; it takes a reference to `q`. Returns the
+ * descriptor, or -ENOMEM or `fd_alloc`'s error. */
 static int32_t mq_install(struct mqueue *q, uint32_t oflag)
 {
     struct mq_file *f = kzalloc(sizeof(*f));
@@ -408,12 +432,13 @@ static int32_t mq_install(struct mqueue *q, uint32_t oflag)
 }
 
 /**
- * mq_open takes the name without its leading slash, as the C library passes it,
- * the flags, the mode and the attributes of a new queue. An existing queue is
- * EEXIST under O_CREAT|O_EXCL and EACCES for an access its bits do not give; a
- * missing one is ENOENT without O_CREAT. EINVAL for the access mode 3, ENFILE
- * past MQ_QUEUES queues for an unprivileged caller, and the refusals of
- * `mq_name` and `mq_new_attr`.
+ * mq_open(2) takes the name without its leading slash, as the C library
+ * passes it, the flags, the mode and the attributes of a new queue, and
+ * returns a descriptor open on the queue of that name in the caller's IPC
+ * namespace. An existing queue is EEXIST under O_CREAT|O_EXCL and EACCES for
+ * an access its bits do not give; a missing one is ENOENT without O_CREAT.
+ * EINVAL for the access mode 3, and the refusals of `mq_name`, `mq_create`
+ * and `mq_install`; a queue made for an open that fails is unmade.
  */
 long sys_mq_open(struct isr_params *params)
 {
@@ -455,10 +480,11 @@ long sys_mq_open(struct isr_params *params)
     return rc;
 }
 
-/** mq_unlink: take the queue's name away; it lives while a
- * descriptor has it. ENOENT for no such queue, EACCES for a caller that
- * neither owns it nor is privileged, as the sticky directory of Linux's
- * mqueue mount has it. */
+/** mq_unlink(2) takes a name, as mq_open does, and removes it from its
+ * queue, which lives while a descriptor has it. ENOENT for no such queue,
+ * EACCES for a caller that neither owns it nor is privileged, the rule of
+ * the sticky directory of Linux's mqueue mount, and the refusals of
+ * `mq_name`. */
 long sys_mq_unlink(struct isr_params *params)
 {
     char name[MQ_NAME_MAX + 1];
@@ -480,7 +506,8 @@ long sys_mq_unlink(struct isr_params *params)
 }
 
 /* What a sender or a receiver sleeps for: a change of the queue, or the
- * deadline. */
+ * deadline. `from` is the queue's `gen` when the sleep began, and `target`
+ * the deadline, a tick count, when `timed`. */
 struct mq_wait {
     const struct mqueue *q;
     uint32_t from;
@@ -488,6 +515,7 @@ struct mq_wait {
     uint32_t target;
 };
 
+/** The wait condition of the `struct mq_wait` at `arg`. */
 static int mq_wait_done(void *arg)
 {
     const struct mq_wait *w = arg;
@@ -512,11 +540,12 @@ static int32_t mq_sleep(struct mqueue *q, struct mq_wait *w)
 }
 
 /**
- * The deadline of the absolute real-time timeout at `uts`, a timespec of
- * 64-bit seconds when `wide` and of longs else, 32 bits on i686 and 64 on
- * x86-64, as ticks from now in
- * `w`; no deadline without one. EINVAL for nanoseconds outside 0 to 10^9-1
- * or negative seconds, as Linux checks it before it looks at the queue.
+ * Set `w`'s deadline, a tick count, from the absolute real-time timeout at
+ * `uts`: a timespec of two 64-bit fields when `wide`, else of two longs, 32
+ * bits on i686 and 64 on x86-64; no deadline when `uts` is NULL. A time
+ * already past is a deadline of now. EINVAL for nanoseconds outside 0 to
+ * 10^9-1 or negative seconds, as Linux checks it before it looks at the
+ * queue; EFAULT for an address it cannot read.
  */
 static int32_t mq_deadline(const void __user *uts, int wide, struct mq_wait *w)
 {
@@ -601,7 +630,9 @@ static void mq_enqueue(struct mqueue *q, struct mq_msg *m)
  * descriptor `fd`, waiting while it is full until the deadline at `uts`,
  * ETIMEDOUT after, or EAGAIN at once for a descriptor with O_NONBLOCK.
  * EBADF for a descriptor not open on a queue for writing, EMSGSIZE past the
- * queue's message size, EINVAL for a priority past MQ_PRIO_MAX.
+ * queue's message size, EINVAL for a priority past MQ_PRIO_MAX, EINTR for a
+ * signal, the refusals of `mq_deadline`, and ENOMEM and EFAULT. A wait
+ * holds a reference to the queue.
  */
 static int32_t mq_send(int fd, const void __user *umsg, uint32_t len, uint32_t prio,
                        const void __user *uts, int wide)
@@ -657,8 +688,8 @@ static int32_t mq_send(int fd, const void __user *umsg, uint32_t len, uint32_t p
  * the highest priority's oldest, into `umsg`, and its priority into `uprio`
  * unless NULL, waiting while the queue is empty as `mq_send` waits while it
  * is full. EBADF for a descriptor not open for reading, EMSGSIZE for a
- * buffer smaller than the queue's message size. Returns the message's
- * length.
+ * buffer smaller than the queue's message size, EFAULT with the message
+ * left queued. Returns the message's length.
  */
 static int32_t mq_receive(int fd, void __user *umsg, uint32_t len, void __user *uprio,
                           const void __user *uts, int wide)
@@ -706,6 +737,8 @@ static int32_t mq_receive(int fd, void __user *umsg, uint32_t len, void __user *
     return rc;
 }
 
+/** mq_timedsend(2) takes the descriptor, the message, its length, its
+ * priority and the timeout, a timespec of longs (`mq_send`). */
 long sys_mq_timedsend(struct isr_params *params)
 {
     return mq_send((int)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1),
@@ -713,6 +746,9 @@ long sys_mq_timedsend(struct isr_params *params)
                    (const void __user *)SC_ARG(params, 4), 0);
 }
 
+/** mq_timedreceive(2) takes the descriptor, the buffer, its length, where
+ * to store the priority and the timeout, a timespec of longs
+ * (`mq_receive`). */
 long sys_mq_timedreceive(struct isr_params *params)
 {
     return mq_receive((int)SC_ARG(params, 0), (void __user *)SC_ARG(params, 1),
@@ -720,6 +756,8 @@ long sys_mq_timedreceive(struct isr_params *params)
                       (const void __user *)SC_ARG(params, 4), 0);
 }
 
+/** i686's mq_timedsend_time64: mq_timedsend with a timespec of two 64-bit
+ * fields. */
 long sys_mq_timedsend_time64(struct isr_params *params)
 {
     return mq_send((int)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1),
@@ -727,6 +765,8 @@ long sys_mq_timedsend_time64(struct isr_params *params)
                    (const void __user *)SC_ARG(params, 4), 1);
 }
 
+/** i686's mq_timedreceive_time64: mq_timedreceive with a timespec of two
+ * 64-bit fields. */
 long sys_mq_timedreceive_time64(struct isr_params *params)
 {
     return mq_receive((int)SC_ARG(params, 0), (void __user *)SC_ARG(params, 1),
@@ -735,12 +775,13 @@ long sys_mq_timedreceive_time64(struct isr_params *params)
 }
 
 /**
- * mq_notify: with a null second argument, take the caller's registration
- * away; else register the caller for the queue's next message as the
- * `struct sigevent` it points at says, a signal or nothing. EBUSY when another
- * process is registered, EINVAL for SIGEV_THREAD, whose notice Linux sends
- * through a netlink socket this kernel does not have, for another kind or
- * for a signal outside 1 to 64; EBADF for a descriptor not open on a queue.
+ * mq_notify(2) takes the descriptor and a `struct sigevent`. With a null
+ * one it takes the caller's registration away; else it registers the
+ * caller for the queue's next message as the sigevent says, a signal or
+ * nothing. EBUSY when a process is registered already, EINVAL for
+ * SIGEV_THREAD, whose notice Linux sends through a netlink socket this
+ * kernel does not have, for another kind or for a signal outside 1 to 64;
+ * EBADF for a descriptor not open on a queue, EFAULT.
  */
 long sys_mq_notify(struct isr_params *params)
 {
@@ -782,7 +823,8 @@ long sys_mq_notify(struct isr_params *params)
  * mq_getsetattr: the queue's attributes into the `struct mq_attr` the third
  * argument points at unless it is null, with the description's O_NONBLOCK
  * as the flags; then the flags from the one the second points at unless it
- * is null, of which only O_NONBLOCK may be set, else EINVAL.
+ * is null, of which only O_NONBLOCK may be set, else EINVAL. EBADF for a
+ * descriptor not open on a queue, EFAULT.
  */
 long sys_mq_getsetattr(struct isr_params *params)
 {
@@ -839,6 +881,7 @@ void mq_ns_gone(const struct ipcns *ns)
 
 /* The mqueue file system. */
 
+/* Linux's MQUEUE_MAGIC, and the file type bits of stat. */
 #define MQFS_MAGIC   0x19800202u
 #define MQFS_S_IFDIR 0040000u
 #define MQFS_S_IFREG 0100000u
@@ -875,6 +918,9 @@ static struct mqueue *mqfs_find(const struct vfs_mount *mnt, const char *name)
     return NULL;
 }
 
+/** Look `name` up in the root: `.` and `..` are the root, another name the
+ * queue of that name, held for the caller; -ENOENT for no such queue,
+ * -ENOTDIR under a queue. */
 static int mqfs_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
 {
     struct mqueue *q;
@@ -895,6 +941,7 @@ static int mqfs_lookup(struct vfs_mount *mnt, void *dir, const char *name, void 
     return 0;
 }
 
+/** Take a reference to a queue's node; the root needs none. */
 static void mqfs_hold(struct vfs_mount *mnt, void *node)
 {
     (void)mnt;
@@ -903,6 +950,8 @@ static void mqfs_hold(struct vfs_mount *mnt, void *node)
     }
 }
 
+/** Drop a reference to a queue's node, which frees the queue with its
+ * last (`mq_put`). */
 static void mqfs_put(struct vfs_mount *mnt, void *node)
 {
     (void)mnt;
@@ -912,7 +961,7 @@ static void mqfs_put(struct vfs_mount *mnt, void *node)
 }
 
 /** A queue's file: its owner and mode, and as its size the bytes of its
- * messages; the root: a directory every user may add to, sticky, 1777. */
+ * messages; the root: a sticky directory of mode 1777, as Linux's. */
 static int mqfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     const struct mqueue *q = (const struct mqueue *)node;
@@ -938,6 +987,7 @@ static int mqfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     return 0;
 }
 
+/** An open of a node: the handle is the node, held while it is open. */
 static int mqfs_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
 {
     (void)flags;
@@ -946,13 +996,14 @@ static int mqfs_open(struct vfs_mount *mnt, void *node, int flags, void **handle
     return 0;
 }
 
+/** The end of an open, which drops its hold. */
 static void mqfs_release(struct vfs_mount *mnt, void *handle)
 {
     mqfs_put(mnt, handle);
 }
 
 /** A queue's status line, Linux's `QSIZE:... NOTIFY:... SIGNO:...
- * NOTIFY_PID:...`, from `offset`. */
+ * NOTIFY_PID:...`, from `offset`; 0 past its end, -EISDIR for the root. */
 static int32_t mqfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
                          uint64_t offset)
 {
@@ -974,7 +1025,9 @@ static int32_t mqfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_
     return (int32_t)count;
 }
 
-/** `.` and `..`, then the namespace's queues; the cursor counts entries. */
+/** `.` and `..`, then the namespace's queues, one entry a call in `ent`;
+ * the cursor counts entries. 1 for an entry, 0 at the end, -ENOTDIR for a
+ * queue. */
 static int mqfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
                         struct vfs_dirent *ent)
 {
@@ -1009,8 +1062,9 @@ static int mqfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
     return 0;
 }
 
-/** mq_unlink by the file's name: the queue's owner, or a privileged caller,
- * since the directory is sticky. */
+/** mq_unlink by the file's name, for the queue's owner or a privileged
+ * caller, since the directory is sticky: -EPERM for another, -ENOENT for no
+ * such queue, -ENOTDIR under a queue. */
 static int mqfs_unlink(struct vfs_mount *mnt, void *dir, const char *name)
 {
     struct mqueue *q;
@@ -1029,6 +1083,8 @@ static int mqfs_unlink(struct vfs_mount *mnt, void *dir, const char *name)
     return 0;
 }
 
+/** The statfs of a mount: Linux's magic, a block of 4096 bytes, and the
+ * longest name. */
 static int mqfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 {
     (void)mnt;
@@ -1052,6 +1108,7 @@ static int mqfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags
     return 0;
 }
 
+/** Forget the namespace the mount lists. */
 static void mqfs_unmount(struct vfs_mount *mnt)
 {
     mnt->priv = 0;
