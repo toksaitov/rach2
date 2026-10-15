@@ -132,6 +132,19 @@ static int has_page(const char *text, const char *section)
     return page_of(text, section) != NULL;
 }
 
+/** Whether `text` is a page of `section`; an alias does not count. */
+static int is_page(const char *text, const char *section)
+{
+    int i;
+
+    for (i = 0; i < npages; i++) {
+        if (strcmp(pages[i].text, text) == 0 && strcmp(pages[i].section, section) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /**
  * Reads the pages, `MANDIR/manN/NAME.N`, and lints each with mandoc when
  * `lint` is set.
@@ -196,10 +209,11 @@ static void read_aliases(const char *path)
             continue;
         }
         if (sscanf(line, "%63s %3s %63s", name, section, target) != 3) {
+            line[strcspn(line, "\n")] = '\0';
             fail("%s: an alias line is not NAME SECTION TARGET: %s", path, line);
             continue;
         }
-        if (has_page(name, section)) {
+        if (is_page(name, section)) {
             fail("alias %s is also a page of section %s", name, section);
         }
         if (!add(aliases, &naliases, name, section, target, "alias")) {
@@ -509,10 +523,11 @@ static void read_syscalls(const char *header, const char *sources, struct name *
 }
 
 /**
- * Checks each page the list at `listpath` names: it must be a page or an
- * alias, and `manifest` must stage it with an active `file` line from
- * build/man/catN/NAME.N to /usr/share/man/catN/NAME.N. A commented line, or
- * one that stages another file, does not count.
+ * Checks each page the list at `listpath` names: it must be a page, since
+ * man/render.sh makes no file for an alias, and `manifest` must stage it with
+ * an active `file` line from build/man/catN/NAME.N to
+ * /usr/share/man/catN/NAME.N. A commented line, or one that stages another
+ * file, does not count.
  */
 static void check_recovery(const char *listpath, const char *manifest)
 {
@@ -531,7 +546,11 @@ static void check_recovery(const char *listpath, const char *manifest)
         if (line[0] == '#' || sscanf(line, "%63s %3s", name, section) != 2) {
             continue;
         }
-        if (!has_page(name, section)) {
+        if (has_page(name, section) && !is_page(name, section)) {
+            fail("recovery lists %s(%s), an alias; the list names pages", name, section);
+            continue;
+        }
+        if (!is_page(name, section)) {
             fail("recovery needs %s(%s) and there is no such page", name, section);
             continue;
         }
