@@ -1,13 +1,14 @@
 /**
- * Check kernel address bounds, an x86-64 kernel's a.out kludge, the
- * multiboot2 header, a chain's cluster count, and fallback copy failures
- * over resolved files.
+ * bootslot_hosttest.c: the kernel checks and the fallback copy of
+ * utils/bootslot.c: load address bounds, an x86-64 kernel's a.out kludge,
+ * the multiboot2 header, the disk policy, a chain's cluster count, and copy
+ * failures over resolved files.
  *
- * The sector model starts after FAT discovery. It drops a payload write
- * beyond the 8192-byte header prefix, fails a payload read, and drops or
- * tears the final header write. The FAT fixture test covers discovery. The
- * source is included, so that the count a chain must have is checked at a
- * size no fixture reaches: a chain past 4 GiB.
+ * The sector model starts after FAT discovery, which bootctl_hosttest.c
+ * tests. It drops a payload write beyond the 8192-byte header prefix, fails
+ * a payload read, and drops or tears the final header write. The source is
+ * included, so that the count a chain must have is checked at a size no
+ * fixture reaches: a chain past 4 GiB.
  */
 
 #include <stdio.h>
@@ -24,11 +25,15 @@ static struct bootslot bs;
 static uint8_t disk[ENV_SECTOR + 2][BOOTSLOT_SECTOR];
 static uint8_t kernel[SLOT_BYTES];
 static char err[128];
+/* The faults of the model: the numbers, counted from 1, of the write to drop
+   and the write to tear, 0 for none, and the sector that fails to read, -1
+   for none. */
 static unsigned writes, drop_write, tear_write;
 static int bad_read;
 static int fails;
 
-/** Count a failed assertion without stopping the remaining cases. */
+/** Count a failed check and print `message`, without stopping the
+ *  remaining cases. */
 static void check(int ok, const char *message)
 {
     if (!ok) {
@@ -37,7 +42,8 @@ static void check(int ok, const char *message)
     }
 }
 
-/** Read one sector, or fail at the selected sector. */
+/** Read sector `lba` of the model into `out`. Returns 0, or -1 for the
+ *  sector `bad_read` names and for one past the model. */
 static int read_sector(void *ctx, uint32_t lba, void *out)
 {
     (void)ctx;
@@ -48,7 +54,10 @@ static int read_sector(void *ctx, uint32_t lba, void *out)
     return 0;
 }
 
-/** Drop or tear the selected write; other writes copy a whole sector. */
+/** Write sector `lba` of the model from `in`, counting the write. Write
+ *  number `drop_write` is dropped and reported done; write number
+ *  `tear_write` stores 16 bytes and fails; others store the whole sector.
+ *  Returns 0, or -1 for a torn write and for a sector past the model. */
 static int write_sector(void *ctx, uint32_t lba, const void *in)
 {
     (void)ctx;
@@ -67,7 +76,8 @@ static int write_sector(void *ctx, uint32_t lba, const void *in)
     return 0;
 }
 
-/** Encode an ELF32 word independently of host byte order. */
+/** Store `value` little-endian in the four bytes at `out`, whatever the
+ *  host's byte order. */
 static void put32(uint8_t *out, uint32_t value)
 {
     unsigned i;
@@ -77,7 +87,14 @@ static void put32(uint8_t *out, uint32_t value)
     }
 }
 
-/** Build a kernel with one load and a valid Multiboot header. */
+/**
+ * Build in `kernel` an i386 kernel the checks take: an ELF32 executable
+ * with one load of the whole file at 1 MiB, entered at 1 MiB; a Multiboot
+ * header at offset 96 with the flags ALIGN|MEMINFO; the multiboot2 header
+ * the GPT menu loads by at offset 112, with only its end tag; a pattern in
+ * the rest; and the read-write policy banner at offset 200. An image
+ * without a banner names no policy, and the check refuses it.
+ */
 static void make_kernel(void)
 {
     unsigned i;
@@ -101,16 +118,12 @@ static void make_kernel(void)
     for (i = 128; i < sizeof(kernel); i++) {
         kernel[i] = (uint8_t)(i * 7);
     }
-    /* The multiboot2 header the GPT menu loads by: the header at 112 and
-       its end tag. */
     put32(kernel + 112, 0xE85250D6u);
     put32(kernel + 116, 0);
     put32(kernel + 120, 24);
     put32(kernel + 124, 0u - (0xE85250D6u + 24u));
     put32(kernel + 128, 0);
     put32(kernel + 132, 8);
-    /* The banner a real kernel carries: an image without it names no policy
-       and the validator refuses it. */
     memcpy(kernel + 200, "rach2: disk policy: read-write", 31);
 }
 
@@ -154,7 +167,9 @@ static void make_kernel64(void)
     put32(kernel + 0x105C, 8);
 }
 
-/** Check that an x86-64 kernel's load is judged by its a.out kludge. */
+/** Check that an x86-64 kernel's load is judged by its a.out kludge: the
+ *  kernel of `make_kernel64` is taken, and each of the faults the messages
+ *  name is refused with its own diagnostic. */
 static void check_kludge(void)
 {
     uint32_t whole = sizeof(kernel);
@@ -297,7 +312,12 @@ static void check_chain(void)
           "a chain of 4 GiB and 64 KiB does not fit a file of 64 KiB");
 }
 
-/** Initialize two resolved slots and an environment that permits copying. */
+/** Make `bs` a volume with three resolved files over the model: the kernel
+ *  slot in sectors 0 to 31 and the fallback in 32 to 63, both holding the
+ *  kernel of `make_kernel`, and an environment block in sectors 64 and 65
+ *  that permits copying. Sector `BAD_SECTOR` of the fallback is 0xEE, so
+ *  the fallback differs from the kernel until a copy writes that sector.
+ *  Clears the faults. */
 static void setup(void)
 {
     const char env[] = "# GRUB Environment Block\nsaved_entry=candidate\nnext_entry=\n";
@@ -327,7 +347,8 @@ static void setup(void)
     bad_read = -1;
 }
 
-/** Reject an unverified fallback before an install changes any sector. */
+/** Check that an install refuses an unverified fallback before it writes
+ *  any sector. */
 static void check_retry(void)
 {
     unsigned before = writes;
@@ -338,7 +359,14 @@ static void check_retry(void)
     check(writes == before, "refused install writes no sectors");
 }
 
-/** Check a dropped payload write, a failed read and failed final writes. */
+/**
+ * Check `bootslot_fallback`, the copy of the kernel slot into the fallback,
+ * against a dropped payload write, a failed payload read, and a dropped or
+ * torn final header write. Each fails the copy, and after each but the torn
+ * write the fallback's header stays invalid, so an install refuses the
+ * fallback (`check_retry`). After the dropped payload write a retry copies
+ * every byte and the install is taken.
+ */
 static void check_fallback(void)
 {
     static const uint8_t zero[BOOTSLOT_SECTOR];
@@ -379,7 +407,9 @@ static void check_fallback(void)
           "torn final header reports failure");
 }
 
-/** Check the largest representable end and memory extents past that end. */
+/** Check an i386 load's memory end against the 32-bit address space: a load
+ *  ending at 0xffffffff is taken from a 512-byte header prefix, and one
+ *  ending at 4 GiB or crossing it is refused. */
 static void check_bounds(void)
 {
     make_kernel();
@@ -403,8 +433,10 @@ static void check_bounds(void)
 /**
  * Check the disk policy a whole image names.
  *
- * The read-only build refuses every write command, so a machine booted from
- * it cannot mount its disk root and stops with nothing mounted.
+ * The read-only build issues no write command to a disk, so a machine booted
+ * from it cannot mount its disk root and stops with nothing mounted. The
+ * read-write build is taken; the read-only build and an image with no
+ * banner are refused.
  */
 static void check_policy(void)
 {
@@ -424,7 +456,8 @@ static void check_policy(void)
           "an image with no policy banner is refused");
 }
 
-/** Run the focused boot-slot checks. */
+/** Run the groups of rows above. Returns 0 when every check passed and 1
+ *  otherwise. */
 int main(void)
 {
     check_fallback();

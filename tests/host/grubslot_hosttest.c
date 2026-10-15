@@ -1,19 +1,18 @@
 /*
- * grubslot_hosttest.c: the two core-image tails of a boot loader window, and
- * which one is in use.
+ * grubslot_hosttest.c: the two core-image tails of a boot loader window that
+ * utils/grubslot.c lays out, and which one is in use.
  *
  * host-deps: utils/grubslot.c
  *
  * Sector 0 has the partition table, and a disk writes whole sectors, so the
- * boot code's pointer at byte 0x5c can never be rewritten without rewriting the
- * table beside it. The arithmetic here is what lets it stay untouched forever:
- * the window's first sector is a selector, the rest has two tails, and a
- * replacement goes into the one not in use. The window is the post-MBR gap of
- * an MBR disk, LBA 1 through 2047, or the BIOS boot partition of a GPT disk,
- * LBA 34 through 2047 on the disks this project builds. Getting the tail
- * boundaries or the blocklist offsets wrong produces a disk that does not boot
- * and cannot be repaired remotely, so every number below is checked, not
- * assumed.
+ * boot code's pointer at byte 0x5c cannot be rewritten without rewriting the
+ * table beside it. grubslot.c leaves sector 0 alone: the window's first
+ * sector is a selector, the rest has two tails, and a replacement goes into
+ * the one not in use. The window is the post-MBR gap of an MBR disk, LBA 1
+ * through 2047, or the BIOS boot partition of a GPT disk, LBA 34 through
+ * 2047 on the disks this project builds. A wrong tail boundary or blocklist
+ * offset makes a disk that does not boot and cannot be repaired remotely, so
+ * the rows check each number.
  */
 
 extern int printf(const char *fmt, ...);
@@ -36,8 +35,9 @@ static unsigned char entry[512];
 static unsigned char image[GRUBSLOT_MAX_IMAGE_SECTORS * 512];
 static char err[128];
 
-/* The fields grub-mkimage writes into a core image's first sector: the segment
-   the tail is read into, and the tail's length. */
+/** Write into the core image's first sector at `p` the fields grub-mkimage
+ *  writes there: the tail's length, `sectors - 1`, the segment the tail is
+ *  read into, and a zero count for the next blocklist record. */
 static void stamp_core(unsigned char *p, unsigned long sectors)
 {
     p[GRUBSLOT_BLOCKLIST_LEN_OFF] = (unsigned char)((sectors - 1u) & 0xffu);
@@ -48,13 +48,16 @@ static void stamp_core(unsigned char *p, unsigned long sectors)
     p[GRUBSLOT_BLOCKLIST_NEXT_LEN_OFF + 1] = 0;
 }
 
-/* A whole core image as grub-mkimage leaves one, `sectors` long. */
+/** Fill `p` with a core image `sectors` long, as grub-mkimage leaves one:
+ *  bytes of 0x5c with the fields of `stamp_core`. */
 static void make_core(unsigned char *p, unsigned long sectors)
 {
     memset(p, 0x5c, sectors * 512u);
     stamp_core(p, sectors);
 }
 
+/** Store `lba` as the blocklist's 8-byte little-endian first sector in the
+ *  entry sector at `p`. */
 static void set_blocklist(unsigned char *p, unsigned long long lba)
 {
     int i;
@@ -65,6 +68,7 @@ static void set_blocklist(unsigned char *p, unsigned long long lba)
     }
 }
 
+/** The blocklist's first sector in the entry sector at `p`. */
 static unsigned long long get_blocklist(const unsigned char *p)
 {
     unsigned long long v = 0;
@@ -76,17 +80,21 @@ static unsigned long long get_blocklist(const unsigned char *p)
     return v;
 }
 
-/* A model of the disk's first 2048 sectors, with an io that can be told to
-   report a write as done without doing it. A disk that loses a write silently
-   is the failure the readback exists for, and it cannot be staged on a real
-   device. Every sector outside the window under test starts as 0xee, and an
-   access outside the window is counted, so a stray read or write is caught
-   whether or not it changes a byte. */
+/* A model of the disk's first 2048 sectors, whose io can report a write as
+   done without doing it. A disk that loses a write silently is the failure
+   the readback exists for, and a real device cannot be made to do it on
+   request. Every sector outside the window under test starts as 0xee, and
+   an access outside the window is counted, so a stray read or write is
+   caught whether or not it changes a byte. */
 static unsigned char gap[2048 * 512];
-static long drops_from = -1;
+static long drops_from = -1; /* first sector whose writes drop; -1, none */
 static int writes, strays;
 static const struct grubslot_window *in_use;
 
+/** The sector io `grubslot_install` calls: read or write sector `lba` of the
+ *  model through `buf`. Counts writes, and accesses outside `in_use` in
+ *  `strays`; drops a write at or past `drops_from` while reporting it done.
+ *  Returns 0, or -1 for a sector past the model. */
 static int model_io(void *ctx, uint32_t lba, uint8_t *buf, int write)
 {
     (void)ctx;
@@ -108,14 +116,18 @@ static int model_io(void *ctx, uint32_t lba, uint8_t *buf, int write)
     return 0;
 }
 
-/* One disk as it is before an install over the window `w`: an entry sector
-   naming `active`, an old image under it whose first sector is recognisable,
-   and 0x77 in the rest of both tails, so a fill that was not written shows. */
+/**
+ * Make the model a disk before an install over the window `w`: an entry
+ * sector naming `active`, an old image under it whose first sector is 0xa0,
+ * and 0x77 in the rest of both tails, so a fill that was not written shows.
+ * Clears the counters and the dropped writes. A window laid out wrong may
+ * run past the model; it is cut at the model's end, and the rows that check
+ * the layout report it.
+ */
 static void model_reset(const struct grubslot_window *w, unsigned long long active)
 {
     size_t end = (size_t)w->tail_b + w->tail;
 
-    /* A window laid out wrong may run past the model; the rows say so. */
     if (end > 2048u) {
         end = 2048u;
     }
@@ -131,7 +143,7 @@ static void model_reset(const struct grubslot_window *w, unsigned long long acti
     strays = 0;
 }
 
-/* Whether every sector of the model outside `[from, to)` still has 0xee. */
+/** Whether every sector of the model outside `[from, to)` still has 0xee. */
 static int outside_untouched(uint32_t from, uint32_t to)
 {
     size_t i;
@@ -145,17 +157,24 @@ static int outside_untouched(uint32_t from, uint32_t to)
 }
 
 /**
- * The windows' shapes: the MBR gap as it always was, the BIOS boot partition
- * the disk builder makes, a larger one capped at the longest tail, and the
- * windows no install could use.
+ * Check the windows' shapes, and lay out the gap in `mbr` and the BIOS boot
+ * partition in `gpt` for the rows after.
+ *
+ * In the gap a tail is 1023 sectors, and the two are adjacent and disjoint,
+ * so between them they cover LBA 2 through 2047 and nothing else: LBA 0 is
+ * the MBR and LBA 1 the selector. The BIOS boot partition the disk builder
+ * and the installer make, LBA 34 through 2047, is 2014 sectors: two tails
+ * of 1006 at LBA 35 and 1041, and one sector left over, which nothing
+ * writes. A partition of a mebibyte has tails of 1023, and a larger one is
+ * capped there, since a tail is written whole on every install. Windows the
+ * kernel does not publish are refused all the same: one over sector 0, one
+ * too small for two tails, one that runs past the last 32-bit sector and
+ * one that starts past it.
  */
 static void shapes(struct grubslot_window *mbr, struct grubslot_window *gpt)
 {
     struct grubslot_window w;
 
-    /* The gap's shape. A tail is 1023 sectors and the two are adjacent and
-       disjoint, so between them they cover LBA 2 through 2047 and nothing
-       else: LBA 0 is the MBR, LBA 1 is the selector. */
     CHECK(grubslot_window(1, 2047, mbr, err, sizeof(err)) == 0, "the post-MBR gap is a window");
     CHECK(mbr->entry == 1 && mbr->tail_a == 2, "tail A starts at LBA 2, just past the selector");
     CHECK(mbr->tail == GRUBSLOT_TAIL_SECTORS && mbr->tail_b == mbr->tail_a + mbr->tail,
@@ -164,9 +183,6 @@ static void shapes(struct grubslot_window *mbr, struct grubslot_window *gpt)
     CHECK(GRUBSLOT_MAX_IMAGE_SECTORS == GRUBSLOT_TAIL_SECTORS + 1,
           "a whole image is its entry sector plus a tail");
 
-    /* The BIOS boot partition of the disk builder and the installer, LBA 34
-       through 2047: 2014 sectors, so two tails of 1006 and one sector left
-       over, which nothing writes. */
     CHECK(grubslot_window(34, 2014, gpt, err, sizeof(err)) == 0,
           "the BIOS boot partition is a window");
     CHECK(gpt->entry == 34 && gpt->tail_a == 35,
@@ -174,8 +190,6 @@ static void shapes(struct grubslot_window *mbr, struct grubslot_window *gpt)
     CHECK(gpt->tail == 1006 && gpt->tail_b == 1041, "two tails of 1006 sectors, B at LBA 1041");
     CHECK(gpt->tail_b + gpt->tail == 2047, "and B ends one sector before the partition does");
 
-    /* A partition of a mebibyte has tails of 1023, and a larger one is capped
-       there, since a tail is written whole on every install. */
     CHECK(grubslot_window(2048, 2048, &w, err, sizeof(err)) == 0 && w.tail == 1023 &&
               w.tail_b == 2048 + 1 + 1023,
           "a 1 MiB partition has tails of 1023");
@@ -183,7 +197,6 @@ static void shapes(struct grubslot_window *mbr, struct grubslot_window *gpt)
               w.tail == GRUBSLOT_TAIL_SECTORS,
           "and a larger one is capped at the longest tail");
 
-    /* What the kernel would never publish, refused all the same. */
     w = *gpt;
     CHECK(grubslot_window(0, 2048, &w, err, sizeof(err)) == -1,
           "a window over sector 0 is refused");
@@ -199,8 +212,19 @@ static void shapes(struct grubslot_window *mbr, struct grubslot_window *gpt)
 }
 
 /**
- * Which tail an entry sector names, in the window it is read in. The same LBA
- * is a tail in one window and nothing in the other.
+ * Check which tail an entry sector names, in the window it is read in. The
+ * same LBA is a tail in one window and nothing in the other.
+ *
+ * In the gap, a blocklist naming LBA 2 or 1025 names tail A or B, and the
+ * other tail is the other one. One that does not begin at a tail boundary
+ * (LBA 3, the MBR, the selector, or past the gap) names no slot. That is a
+ * check on the layout and not on who built the disk: a conventional GRUB
+ * installation, whose one extent also begins at LBA 2, passes it. In the
+ * partition, the blocklist grubembed writes names LBA 35, one past the
+ * partition's first sector, and an install moves it to 1041; the gap's
+ * tails, the entry sector and the last sector of tail A name nothing there.
+ * A running image of 1007 tail sectors fits the gap's tail and runs out of
+ * the partition's tail A into its B, which leaves no inactive tail.
  */
 static void selectors(const struct grubslot_window *mbr, const struct grubslot_window *gpt)
 {
@@ -218,9 +242,6 @@ static void selectors(const struct grubslot_window *mbr, const struct grubslot_w
           "a blocklist naming tail B reports tail B");
     CHECK(grubslot_other(mbr, active) == mbr->tail_a, "and the other tail is A");
 
-    /* An entry sector whose extent does not begin at a tail boundary. This is a
-       check on the layout and not on who built the disk: a conventional GRUB
-       installation, whose one extent also begins at LBA 2, passes it. */
     set_blocklist(entry, 3);
     CHECK(grubslot_active(mbr, entry, &active) == -1, "a blocklist inside a tail names no slot");
     set_blocklist(entry, 0);
@@ -231,8 +252,6 @@ static void selectors(const struct grubslot_window *mbr, const struct grubslot_w
     CHECK(grubslot_active(mbr, entry, &active) == -1, "nor one past the gap");
     CHECK(grubslot_other(mbr, 0) == 0, "and there is no other tail to a slot that is not one");
 
-    /* The GPT window: the blocklist grubembed writes names LBA 35, one past
-       the partition's first sector, and an install moves it to 1041. */
     set_blocklist(entry, 35);
     CHECK(grubslot_active(gpt, entry, &active) == 0 && active == 35,
           "in the BIOS boot partition, LBA 35 is tail A");
@@ -252,8 +271,6 @@ static void selectors(const struct grubslot_window *mbr, const struct grubslot_w
     CHECK(grubslot_active(gpt, entry, &active) == -1, "nor the last sector of its tail A");
     CHECK(grubslot_other(gpt, mbr->tail_b) == 0, "and the gap's tail has no other in it");
 
-    /* A running image of 1007 tail sectors fits the gap's tail and runs out of
-       the partition's tail A into its B. */
     stamp_core(entry, 1008);
     set_blocklist(entry, 35);
     CHECK(grubslot_active(gpt, entry, &active) == -1,
@@ -263,12 +280,16 @@ static void selectors(const struct grubslot_window *mbr, const struct grubslot_w
 }
 
 /**
- * Patching a candidate: the two fields GRUB reads, the bounds of each window,
- * and the targets that are not tails.
+ * Check `grubslot_patch` on a candidate: it writes the two fields GRUB reads,
+ * the blocklist's first sector and its count, and nothing else; it holds an
+ * image to each window's tail, where a gap's tail of 1023 sectors takes a
+ * whole image of 1024 and not 1025, and a partition's tail of 1006 takes
+ * 1007 and not 1008; it refuses an image of one sector or none; and it
+ * refuses a target that is not a tail's first sector, as the gap's tail is
+ * not in the partition.
  */
 static void patches(const struct grubslot_window *mbr, const struct grubslot_window *gpt)
 {
-    /* The patch writes the two fields GRUB reads, and nothing else. */
     make_core(image, 309);
     image[0] = 0xa5;
     image[GRUBSLOT_BLOCKLIST_LBA_OFF - 1] = 0xa5;
@@ -285,8 +306,6 @@ static void patches(const struct grubslot_window *mbr, const struct grubslot_win
                   (unsigned char)((GRUBSLOT_BLOCKLIST_SEG >> 8) & 0xff),
           "and the segment after it, which GRUB's boot code reads, is left alone");
 
-    /* The bounds. A tail has 1023 sectors, so a whole image of 1024 fills one
-       exactly and 1025 does not fit. */
     make_core(image, GRUBSLOT_MAX_IMAGE_SECTORS);
     CHECK(grubslot_patch(mbr, image, GRUBSLOT_MAX_IMAGE_SECTORS, mbr->tail_a, err, sizeof(err)) ==
               0,
@@ -304,8 +323,6 @@ static void patches(const struct grubslot_window *mbr, const struct grubslot_win
           "a target that is not a tail's first sector is refused");
     CHECK(strstr(err, "not a tail slot") != NULL, "and says so");
 
-    /* The partition's tail has 1006 sectors, so an image of 1007 fills one and
-       1008, which the gap would take, does not fit. */
     make_core(image, 1007);
     CHECK(grubslot_patch(gpt, image, 1007, 1041, err, sizeof(err)) == 0 &&
               get_blocklist(image) == 1041,
@@ -320,10 +337,13 @@ static void patches(const struct grubslot_window *mbr, const struct grubslot_win
 }
 
 /**
- * Installing over a model of the BIOS boot partition: the tail not in use is
- * written whole, the entry sector at LBA 34 is rewritten last, and no sector
+ * Check installs over a model of the BIOS boot partition: the tail not in
+ * use is written whole, the entry sector at LBA 34 names it, and no sector
  * outside LBA 34 through 2046 is read or written; the sectors before the
- * partition are the GPT's and LBA 2047 belongs to no tail.
+ * partition are the GPT's and LBA 2047 belongs to no tail. An install goes
+ * from tail A to B and back. An image of 1008 sectors, which the gap would
+ * take, is refused before any write, and a dropped write to the tail is
+ * caught with the old image still selected.
  */
 static void gpt_installs(const struct grubslot_window *gpt)
 {
@@ -352,7 +372,6 @@ static void gpt_installs(const struct grubslot_window *gpt)
     CHECK(gap[1041 * 512] == 0xa0 && strays == 0 && outside_untouched(34, 2047),
           "leaving tail B and everything outside the window as they were");
 
-    /* An image the gap would take and the partition cannot. */
     model_reset(gpt, 35);
     make_core(image, 1008);
     CHECK(grubslot_install(gpt, NULL, model_io, image, 1008, entry, &target, err, sizeof(err)) ==
@@ -362,7 +381,6 @@ static void gpt_installs(const struct grubslot_window *gpt)
     CHECK(writes == 0, "with nothing written");
     CHECK(get_blocklist(gap + 34 * 512) == 35, "and the entry sector as it was");
 
-    /* A dropped write is caught there as in the gap. */
     model_reset(gpt, 35);
     make_core(image, 330);
     drops_from = 1041;
@@ -372,6 +390,41 @@ static void gpt_installs(const struct grubslot_window *gpt)
           "and the old image stays selected");
 }
 
+/**
+ * Run the rows of `shapes`, `selectors` and `patches`, then install over the
+ * model disk. Returns the count of failed checks, at most 255.
+ *
+ * - An install over the gap puts the image into the tail not in use, zeroes
+ *   the rest of that tail so nothing of a longer predecessor survives,
+ *   leaves the tail in use and sector 0 alone, and leaves the entry sector
+ *   naming the new tail; a second install goes back to tail A. Then the
+ *   rows of `gpt_installs`.
+ * - A disk that reports a write as done and drops it: the readback catches
+ *   it, and the entry sector still names the old tail, with the old image
+ *   under it, so the machine boots what it booted before.
+ * - Refusals before any write, which leave the entry sector as it was: an
+ *   image of 1025 sectors; a file that is not a core image; and a core image
+ *   cut short. A machine that activates either of the last two cannot boot
+ *   and cannot be repaired remotely, since GRUB is what loads recovery.
+ * - `grubslot_prepare` rounds a partial last sector up and zeroes the bytes
+ *   past the file's end. Nothing in a core image records its byte length,
+ *   so an image of 157703 bytes, which declares 308 tail sectors, still
+ *   rounds to 309 sectors and is taken with up to six bytes cut off; cut by
+ *   seven it is 308 sectors and refused. It refuses an empty file, one byte
+ *   past a whole image, and a length past the buffer, and takes a whole
+ *   image and a length that fills the buffer. A length near the end of the
+ *   32-bit range would round to zero sectors and pass every bound, so the
+ *   byte count is judged before it is rounded.
+ * - A running image whose count runs out of one tail into the other uses
+ *   both, so neither is free; calling the far one inactive would overwrite
+ *   the running boot loader, and the install is refused. A count of zero
+ *   names no image.
+ * - GRUB walks the blocklist records downward from 0x1f4 until a count of
+ *   zero ends the list, so a second record names sectors this code never
+ *   reads. A running image with one, and a candidate with one, which would
+ *   send the next boot to an extent nothing here wrote, are refused, as is
+ *   an entry sector naming neither tail.
+ */
 int main(void)
 {
     struct grubslot_window mbr, gpt;
@@ -381,10 +434,6 @@ int main(void)
     selectors(&mbr, &gpt);
     patches(&mbr, &gpt);
 
-    /* Installing over a model disk. The image goes into the tail that is not in
-       use, the rest of that slot is zeroed so nothing of a longer predecessor
-       survives, the tail that was in use is not touched, and the entry sector
-       is left naming the new one. */
     model_reset(&mbr, mbr.tail_a);
     make_core(image, 309);
     CHECK(grubslot_install(&mbr, NULL, model_io, image, 309, entry, &target, err, sizeof(err)) == 0,
@@ -406,9 +455,6 @@ int main(void)
 
     gpt_installs(&gpt);
 
-    /* A disk that reports a write as done and drops it. The readback must catch
-       it, and what the machine boots must be what it booted before: the entry
-       sector still naming the old tail, with the old image still under it. */
     model_reset(&mbr, mbr.tail_a);
     make_core(image, 309);
     drops_from = (long)mbr.tail_b;
@@ -420,7 +466,6 @@ int main(void)
           "the entry sector still names the tail that was in use");
     CHECK(gap[(size_t)mbr.tail_a * 512] == 0xa0, "and the old image is still there");
 
-    /* A refusal costs nothing: the image is judged before any write. */
     model_reset(&mbr, mbr.tail_a);
     CHECK(grubslot_install(&mbr, NULL, model_io, image, GRUBSLOT_MAX_IMAGE_SECTORS + 1u, entry,
                            &target, err, sizeof(err)) == -1,
@@ -428,10 +473,6 @@ int main(void)
     CHECK(writes == 0, "with nothing written");
     CHECK(get_blocklist(gap + 512) == mbr.tail_a, "and the entry sector as it was");
 
-    /* A file that is not a core image, and one that is a core image cut short.
-       Both are refused before any write, because a machine that activates
-       either one cannot boot and cannot be repaired remotely: GRUB is what
-       loads recovery. */
     model_reset(&mbr, mbr.tail_a);
     memset(image, 0x5c, 309u * 512u);
     CHECK(grubslot_install(&mbr, NULL, model_io, image, 309, entry, &target, err, sizeof(err)) ==
@@ -448,12 +489,6 @@ int main(void)
     CHECK(strstr(err, "not the length it declares") != NULL, "and says so");
     CHECK(writes == 0, "with nothing written");
 
-    /* The boundary of that check, over the rounding the tool really does. A
-       core image is not a whole number of sectors: the one this project builds
-       is 157703 bytes and declares 308 tail sectors. Cutting up to six bytes
-       off it still rounds to 309 sectors and is accepted, because nothing in
-       the image records its byte length; cutting seven crosses into 308 and is
-       refused. Both halves are asserted so that neither is assumed. */
     for (cut = 0; cut <= 7u; cut++) {
         uint32_t bytes = 157703u - cut;
         uint32_t rounded = 0;
@@ -477,7 +512,6 @@ int main(void)
         }
     }
 
-    /* And the sizes that have no image in them at all. */
     {
         uint32_t rounded = 0;
 
@@ -496,18 +530,11 @@ int main(void)
         CHECK(grubslot_prepare(image, 4096u, 4096u, &rounded, err, sizeof(err)) == 0 &&
                   rounded == 8u,
               "and one that exactly fills it is not");
-        /* Rounding a length near the end of the range wraps to zero sectors,
-           and a wrapped count passes every bound there is, so the byte count is
-           judged before it is rounded. */
         CHECK(grubslot_prepare(image, (uint32_t)sizeof(image), 0xffffffffu, &rounded, err,
                                sizeof(err)) == -1,
               "and a length that would wrap when rounded is refused");
     }
 
-    /* An entry sector whose count runs out of one tail and into the other. The
-       image in use occupies both, so neither is free and there is nothing to
-       install into; calling the far one inactive would overwrite the running
-       boot loader. */
     model_reset(&mbr, mbr.tail_a);
     gap[512 + GRUBSLOT_BLOCKLIST_LEN_OFF] = (unsigned char)(1200u & 0xffu);
     gap[512 + GRUBSLOT_BLOCKLIST_LEN_OFF + 1] = (unsigned char)((1200u >> 8) & 0xffu);
@@ -524,9 +551,6 @@ int main(void)
     gap[512 + GRUBSLOT_BLOCKLIST_LEN_OFF + 1] = 0;
     CHECK(grubslot_active(&mbr, gap + 512, &active) == -1, "a count of zero names no image");
 
-    /* A loader read through more than one extent. GRUB walks the records
-       downward from 0x1f4 until a count of zero ends the list, so a second one
-       names sectors this code never looks at, anywhere in the window. */
     model_reset(&mbr, mbr.tail_a);
     gap[512 + GRUBSLOT_BLOCKLIST_NEXT_LEN_OFF] = 8;
     CHECK(grubslot_active(&mbr, gap + 512, &active) == -1, "a second blocklist record is refused");
@@ -536,9 +560,6 @@ int main(void)
           "and the install with it");
     CHECK(writes == 0, "with nothing written");
 
-    /* And the candidate is held to the same one-extent rule the running image
-       is. A file with a second record would send the next boot to an extent
-       nothing here wrote, and there would be no way back. */
     model_reset(&mbr, mbr.tail_a);
     make_core(image, 309);
     image[GRUBSLOT_BLOCKLIST_NEXT_LEN_OFF] = 4;
@@ -548,8 +569,6 @@ int main(void)
     CHECK(strstr(err, "more than one extent") != NULL, "and says so");
     CHECK(writes == 0, "with nothing written");
 
-    /* And an extent beginning nowhere near a tail is not written over
-     * either. */
     model_reset(&mbr, mbr.tail_a);
     set_blocklist(gap + 512, 900);
     CHECK(grubslot_install(&mbr, NULL, model_io, image, 309, entry, &target, err, sizeof(err)) ==

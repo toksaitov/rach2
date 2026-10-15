@@ -1,19 +1,20 @@
 /**
- * Host test for the boot-slot library bootctl drives (utils/bootslot.c).
+ * bootctl_hosttest.c: utils/bootslot.c, the boot-slot library bootctl
+ * drives, over FAT32 images in memory.
  *
  * host-deps: utils/bootslot.c tests/host/compat/fixdir_host.c
  *
- * The fixtures come from tests/host/mkfatfixture.c, an independent FAT32
- * writer, so two implementations of the format meet over every image. The
- * well-formed image (a volume label, a long-name entry, dot entries, an empty
- * file, the four named files) must open and install; each malformed image
- * must be refused with its own diagnostic, matched by substring so a mutation
- * cannot pass by tripping a different rule. The write callback is the fault
- * injector: it can report success while dropping a chosen sector (what makes
- * the byte-for-byte readback falsifiable), stop the run after any chosen
- * write (what produces the interruption matrix's states, whose order
- * properties are asserted on the bytes), and tear a sector into a prefix of
- * the new bytes over the old. Returns the failed-check count (0 == pass).
+ * The fixtures come from tests/host/mkfatfixture.c, a FAT32 writer written
+ * apart from bootslot.c, so two implementations of the format meet over
+ * every image. The well-formed image (a volume label, a long-name entry, dot
+ * entries, an empty file, the four named files) must open and install; each
+ * malformed image must be refused with its own diagnostic, matched by
+ * substring so a mutation cannot pass by failing a different rule. The
+ * write callback injects the faults: it can report success while dropping a
+ * chosen sector, which only the byte-for-byte readback can catch; stop the
+ * run after any chosen write, which leaves the states of the interruption
+ * matrix in dev-log/23-install/plan.md, whose order the rows check on the
+ * bytes; and tear a sector into a prefix of the new bytes over the old.
  */
 
 #include <stdio.h>
@@ -35,16 +36,19 @@ static int fails;
         }                                          \
     } while (0)
 
-/* The image under test, in memory, with the injector's controls. */
+/* The image under test, in memory, with the injector's controls. A control
+   of -1 is off. */
 static struct {
     uint8_t data[IMG_BYTES];
     long writes_left; /* stop (report failure) when this reaches 0 */
     long drop_at;     /* report success but write nothing at this count */
     long tear_at;     /* write only the first tear_bytes at this count */
     int tear_bytes;
-    long count;
+    long count; /* writes so far, the first counted as 1 */
 } img;
 
+/** Read sector `lba` of the image into `buf`. Returns 0, or -1 for a sector
+ *  past the image. */
 static int io_read(void *ctx, uint32_t lba, void *buf)
 {
     (void)ctx;
@@ -55,6 +59,14 @@ static int io_read(void *ctx, uint32_t lba, void *buf)
     return 0;
 }
 
+/**
+ * Write sector `lba` of the image from `buf`, through the injector. The
+ * write numbered `drop_at` is reported done and not made. The one numbered
+ * `tear_at` stores its first `tear_bytes` and fails, a cut inside the
+ * sector. When `writes_left` counts down to 0 the write fails and stores
+ * nothing, a cut after the write before it. Returns 0, or -1 for a cut and
+ * for a sector past the image.
+ */
 static int io_write(void *ctx, uint32_t lba, const void *buf)
 {
     (void)ctx;
@@ -63,14 +75,14 @@ static int io_write(void *ctx, uint32_t lba, const void *buf)
     }
     img.count++;
     if (img.count == img.drop_at) {
-        return 0; /* reported written, not written */
+        return 0;
     }
     if (img.count == img.tear_at) {
         memcpy(img.data + (long)lba * 512, buf, (size_t)img.tear_bytes);
-        return -1; /* the cut lands inside this sector */
+        return -1;
     }
     if (img.writes_left > 0 && --img.writes_left == 0) {
-        return -1; /* the cut lands after the previous write */
+        return -1;
     }
     memcpy(img.data + (long)lba * 512, buf, 512);
     return 0;
@@ -78,11 +90,12 @@ static int io_write(void *ctx, uint32_t lba, const void *buf)
 
 static const struct bootslot_io IO = {io_read, io_write, NULL};
 
-/** Build the named fixture and load it; aborts the test run on builder
- *  failure, which would make every case meaningless. The builder is
- *  compiled at the first load, into the test's own fixture directory
- *  (compat/fixdir_host.c), since this test is compiled and run directly and
- *  has no build system to ask. */
+/** Build the fixture `mkfatfixture` makes with the option `opt`, load it
+ *  into `img` and clear the injector. Exits with status 1 when the builder
+ *  cannot be built or run or the image does not load, since no row means
+ *  anything then. The builder is compiled at the first load, into the
+ *  test's own fixture directory (compat/fixdir_host.c), since the suite
+ *  compiles and runs this test directly and has no build system to ask. */
 static void load(const char *opt)
 {
     static int built;
@@ -116,13 +129,22 @@ static void load(const char *opt)
     img.count = 0;
 }
 
-/** A valid minimal kernel image of `size` bytes, distinct from the fixture's
- *  (different fill), so an install visibly changes the slot. */
+/** Store `v` at `p` in the host's byte order, which the ELF and Multiboot
+ *  fields take to be little-endian. */
 static void put32(uint8_t *p, uint32_t v)
 {
     memcpy(p, &v, 4);
 }
 
+/**
+ * Write to `out` a valid minimal kernel image of `size` bytes, filled
+ * differently from the fixture's, so an install changes the slot. It is an
+ * ELF32 i386 executable with one load of the whole file at 1 MiB, entered at
+ * 1 MiB; a Multiboot header at offset 96 with the flags ALIGN|MEMINFO; the
+ * multiboot2 header the GPT menu loads by at offset 112, with only its end
+ * tag; and, when `size` is at least 231, the read-write policy banner at
+ * offset 200, without which an image names no policy and is refused.
+ */
 static void make_kernel(uint8_t *out, uint32_t size)
 {
     uint32_t magic = 0x1BADB002u, flags = 3, i;
@@ -152,16 +174,12 @@ static void make_kernel(uint8_t *out, uint32_t size)
     for (i = 128; i < size; i++) {
         out[i] = (uint8_t)(i * 7);
     }
-    /* The multiboot2 header the GPT menu loads by: the header at 112 and
-       its end tag. */
     put32(out + 112, 0xE85250D6u);
     put32(out + 116, 0);
     put32(out + 120, 24);
     put32(out + 124, (uint32_t)(0u - (0xE85250D6u + 24u)));
     put32(out + 128, 0);
     put32(out + 132, 8);
-    /* The banner a real kernel carries: an image without it names no policy
-       and the validator refuses it. */
     if (size >= 231) {
         memcpy(out + 200, "rach2: disk policy: read-write", 31);
     }
@@ -191,11 +209,13 @@ static char err[128];
 /**
  * Check the disk policy a whole image names.
  *
- * A kernel built read-only refuses every write command, so its mount of a
- * disk root fails and the machine stops with nothing mounted; installing one
- * costs a boot and a trip to the machine. An image that names neither policy,
- * or both, is refused too: the banner is how a built kernel's policy is read,
- * and an image with no answer to that is not a kernel this tool installs.
+ * A kernel built read-only issues no write command to a disk, so its mount
+ * of a disk root fails and the machine stops with nothing mounted;
+ * installing one costs a boot and a trip to the machine. An image that
+ * names neither policy, or both, is refused too: the banner is how a built
+ * kernel's policy is read, and nothing else in the image says it. A header
+ * prefix cannot show a banner past it, so the policy is not judged there;
+ * that is the readback a slot's own check makes.
  */
 static void check_policy(void)
 {
@@ -217,15 +237,14 @@ static void check_policy(void)
     make_kernel(kernel, 5000);
     CHECK(bootslot_validate_kernel(kernel, 5000, 5000, err, sizeof(err)) == 0,
           "the read-write build is taken");
-    /* A prefix cannot see a banner past it, so the policy is not judged
-       there: this is the readback a slot's own check makes. */
     make_kernel(kernel, 5000);
     memset(kernel + 200, 0, 31);
     CHECK(bootslot_validate_kernel(kernel, 136, 5000, err, sizeof(err)) == 0,
           "a header prefix is judged without the policy");
 }
 
-/** Open the loaded image and expect the named diagnostic. */
+/** Load the fixture of option `opt` and require `bootslot_open` to refuse
+ *  it with a diagnostic containing `needle`. */
 static void expect_open_error(const char *opt, const char *needle)
 {
     load(opt);
@@ -234,8 +253,9 @@ static void expect_open_error(const char *opt, const char *needle)
     CHECK(strstr(err, needle) != NULL, needle);
 }
 
-/** Report the failures, or say the test passed; the exit status, which keeps
- * its low eight bits, so at most 255. */
+/** Report the failures, or mark the fixture directory for removal when there
+ *  were none. Returns the count of failures, at most 255, since the exit
+ *  status keeps only its low eight bits. */
 static int finish(void)
 {
     if (fails) {
@@ -246,16 +266,88 @@ static int finish(void)
     return fails > 255 ? 255 : fails;
 }
 
+/**
+ * Run the rows, in this order. Returns the count of failed checks, at most
+ * 255.
+ *
+ * - The well-formed image opens, the scan passing over the label, the
+ *   long-name entry, the dot entries and the empty file. An install saves
+ *   the fallback, arms the one-boot trial, and writes the kernel at the
+ *   slot's start with zero padding after it. A commit is allowed only after
+ *   the trial boot consumed the arming line; GRUB's consumption (the value
+ *   emptied, the line kept) is made on the bytes, and the commit then
+ *   replaces the saved entry.
+ * - The copy of the committed candidate into the fallback is refused by
+ *   name where the fallback file is shorter than the slot. On the
+ *   `--fallback-slot` image it is refused while the trial is armed, and
+ *   after the commit writes the fallback and reads it back whole. The copy
+ *   zeroes the fallback's first sector first and writes it last, so a copy
+ *   cut part way leaves no header and the next install refuses it by name.
+ *   It writes the rest from the last sector down, so the write of the third
+ *   sector is number 1 + (slot sectors - 2); dropped, with the sector
+ *   spoiled beforehand, it is caught by the readback.
+ * - An unknown variable, put after the block's last newline, survives the
+ *   install's environment writes.
+ * - The fragmented candidate installs cluster by cluster: the kernel's
+ *   bytes in the first run, the zero padding across the hole into the
+ *   second run, and the hole not written.
+ * - Each malformed volume is refused with its own diagnostic, and so is a
+ *   kernel larger than the slot. Kernel validation refuses a non-ELF, a
+ *   broken Multiboot checksum, no program headers, a load past the file, an
+ *   entry outside every load, a physical address away from the virtual one,
+ *   and Multiboot flags with the a.out kludge; then `check_policy`.
+ * - A fallback that is not a bootable kernel stops the install before the
+ *   first environment write. A grub.cfg whose size does not match its chain
+ *   refuses the volume, since every reachable regular file is held to the
+ *   rule, and not only the named ones.
+ * - A stale armed trial is dropped by the install's first environment
+ *   write: cut mid-slot, the block has the fallback saved and no armed line.
+ * - At eight sectors per cluster (`--cluster8`), what the library reports is
+ *   in sectors and bytes, so the rows test its multiplication by the cluster
+ *   size. 8192 sectors less a data start of 160, divided by eight, is 1004
+ *   clusters; a count computed as though a cluster were a sector would be
+ *   8032, larger than the volume, and bound nothing. The armed trial is read
+ *   back through the library, since `env_has` reads at the default
+ *   geometry's offset. A chain one cluster past the last is refused, so the
+ *   count is a range bound and not only a number reported.
+ * - A cancel removes `next_entry` and does not set it empty. An empty
+ *   `next_entry` is the marker GRUB leaves once a trial has booted, which
+ *   `bootslot_commit` requires, so a cancel that wrote it would let a
+ *   kernel that never ran become the default.
+ * - The menu slot: a long menu and then a short one over it. Every sector is
+ *   rewritten, so nothing of the long menu is left behind for GRUB, which
+ *   reads the whole file. A menu over the slot's size is refused and one of
+ *   exactly its size taken. A slot that is not a whole number of sectors
+ *   cannot be rewritten whole, so it is refused when the volume is opened,
+ *   not at a write that would half-succeed; one whose size does not match
+ *   its chain is refused by the rule for every file. A disk with no menu
+ *   slot opens, and only staging a menu on it fails.
+ * - A key that only ends in `next_entry`, which the writer keeps as an
+ *   unknown line, does not block a commit beside the consumed marker.
+ * - A dropped environment sector, the install's first write, is caught by
+ *   the block's readback. A commit is refused with the trial armed, on a
+ *   fresh block, and after an interrupted install; the last two have no
+ *   consumed marker, and an interrupted slot has bytes the running kernel
+ *   never was.
+ * - A dropped slot sector, the 41st slot write after the two environment
+ *   writes, is sector 40, away from everything structural validation
+ *   reads, so only the readback catches it.
+ * - The order of the interruption matrix, on the bytes: a cut at the 30th
+ *   slot write, after the two environment writes, and a cut at the arming
+ *   write after all 4096, both leave the fallback saved and the trial
+ *   unarmed. A torn environment write, 100 bytes of the new block over the
+ *   old, fails the install.
+ * - `bootslot_env_set`, which `bootctl env` and `bootctl trial` use, writes a
+ *   menu id and an empty value that read back; a setter that reported
+ *   success and wrote nothing would pass every row before it.
+ */
 int main(void)
 {
-    /* The well-formed image opens; the skip rules took the label, the
-       long-name entry, the dot entries and the empty file in stride. */
     load("");
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "wellformed opens");
     CHECK(bs.kernel.size == 4096 * 512, "the candidate slot is 2 MiB");
     CHECK(bs.grubenv.size == 1024, "grubenv is 1024 bytes");
 
-    /* A full install: order, bytes, and the trial marker. */
     make_kernel(kernel, 5000);
     CHECK(bootslot_install(&bs, kernel, 5000, err, sizeof(err)) == 0,
           "install on the well-formed image");
@@ -278,9 +370,6 @@ int main(void)
         CHECK(allzero, "the slot's tail is zero padding");
     }
 
-    /* Commit is allowed only after the trial boot consumed the arming line;
-       the consumption GRUB performs (the value emptied, the line kept) is
-       simulated on the bytes, and then the commit replaces the saved entry. */
     {
         long env_off = (long)(160 + 4160 - 2) * 512;
         long i;
@@ -299,16 +388,10 @@ int main(void)
     CHECK(env_has("saved_entry=candidate\n"), "commit saves the candidate");
     CHECK(!env_has("saved_entry=fallback\n"), "one saved entry only");
 
-    /* The committed candidate into the fallback file: refused on this
-       image, whose fallback is shorter than the slot as every disk built
-       before the fallback was rewritable is. */
     CHECK(bootslot_fallback(&bs, err, sizeof(err)) == -1 &&
               strstr(err, "shorter than the candidate slot") != NULL,
           "a fallback file shorter than the slot refuses the copy by name");
 
-    /* On an image whose fallback is as long as the slot: refused while the
-       candidate is unproved, armed or merely installed, and after the commit
-       written and read back, the fallback's bytes the candidate's. */
     load("--fallback-slot");
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "the fallback-slot image opens");
     CHECK(bs.kernel.size == bs.fallback.size, "and its two slots are one length");
@@ -340,9 +423,6 @@ int main(void)
         }
     }
     CHECK(bootslot_commit(&bs, err, sizeof(err)) == 0, "the tried candidate commits");
-    /* A copy that stops part way: the fallback's first sector is zeroed
-       before the rest is written and written last, so what is left has no
-       header, and the next install refuses it by name. */
     img.writes_left = 3;
     CHECK(bootslot_fallback(&bs, err, sizeof(err)) == -1,
           "a fallback copy the device stops part way fails");
@@ -374,11 +454,6 @@ int main(void)
                      kernel, 5000) == 0,
               "beginning with the kernel that was installed");
     }
-    /* A device that says yes to a sector and keeps nothing: the fallback's
-       third sector spoiled and the write that would mend it dropped, the
-       readback is what catches it, so the copy is refused. The copy zeroes
-       the first sector and then writes from the last sector down, so the
-       third sector's write is the count after the sectors above it. */
     memset(img.data +
                ((long)bs.data_start + ((long)bs.fallback.chain[2] - 2) * bs.cluster_sectors) * 512,
            0xEE, 512);
@@ -391,8 +466,6 @@ int main(void)
     load("");
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "the well-formed image opens again");
 
-    /* An unknown variable survives both env writers. The insertion point is
-       found, not assumed: the byte after the block's last newline. */
     load("");
     {
         long env_off = (long)(160 + 4160 - 2) * 512;
@@ -412,9 +485,6 @@ int main(void)
     CHECK(bootslot_install(&bs, kernel, 5000, err, sizeof(err)) == 0, "install with extra var");
     CHECK(env_has("exp_probe=kept\n"), "an unknown variable survives");
 
-    /* The fragmented candidate installs cluster by cluster: the kernel's
-       bytes land in the first run, the zero padding continues across the
-       hole into the second run, and the hole itself is not written. */
     load("--fragmented");
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "fragmented opens");
     make_kernel(kernel, 40000);
@@ -429,7 +499,6 @@ int main(void)
     CHECK(img.data[(long)(160 + 16 + 2048 - 2) * 512] == 0xEE,
           "the hole between the runs is not written");
 
-    /* Every malformed shape, each to its own diagnostic. */
     expect_open_error("--fats-differ", "the two FAT copies disagree");
     expect_open_error("--loop", "two chains share a cluster");
     expect_open_error("--out-of-range", "a chain leaves the volume");
@@ -442,7 +511,6 @@ int main(void)
     expect_open_error("--bpb-overflow", "FAT regions do not fit");
     expect_open_error("--no-grubenv", "no /boot/grub/grubenv");
 
-    /* A kernel larger than the slot. */
     load("--small-candidate");
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "small slot opens");
     make_kernel(kernel, 16384);
@@ -450,16 +518,13 @@ int main(void)
           "an oversized kernel is refused");
     CHECK(strstr(err, "does not fit") != NULL, "the slot-size diagnostic");
 
-    /* Validation rejects a non-kernel, a broken checksum, and every
-       loader-surface break: no loadable segment, a load past the file, an
-       entry outside every load. */
     make_kernel(kernel, 5000);
     kernel[0] = 'X';
     CHECK(bootslot_validate_kernel(kernel, 5000, 5000, err, sizeof(err)) == -1 &&
               strstr(err, "not an ELF") != NULL,
           "a non-ELF is refused");
     make_kernel(kernel, 5000);
-    kernel[104] ^= 0x40; /* the multiboot checksum no longer sums to zero */
+    kernel[104] ^= 0x40;
     CHECK(bootslot_validate_kernel(kernel, 5000, 5000, err, sizeof(err)) == -1 &&
               strstr(err, "no multiboot header") != NULL,
           "a broken checksum is refused");
@@ -469,23 +534,23 @@ int main(void)
               strstr(err, "not a loader's") != NULL,
           "a kernel with no program headers is refused");
     make_kernel(kernel, 5000);
-    put32(kernel + 68, 6000); /* p_filesz beyond the file */
+    put32(kernel + 68, 6000); /* p_filesz */
     put32(kernel + 72, 6000);
     CHECK(bootslot_validate_kernel(kernel, 5000, 5000, err, sizeof(err)) == -1 &&
               strstr(err, "leaves the file") != NULL,
           "a load past the file is refused");
     make_kernel(kernel, 5000);
-    put32(kernel + 24, 0x200000); /* the entry outside the one load */
+    put32(kernel + 24, 0x200000); /* e_entry */
     CHECK(bootslot_validate_kernel(kernel, 5000, 5000, err, sizeof(err)) == -1 &&
               strstr(err, "outside every load") != NULL,
           "an entry outside every load is refused");
     make_kernel(kernel, 5000);
-    put32(kernel + 64, 0); /* p_paddr away from p_vaddr: the loader loads THERE */
+    put32(kernel + 64, 0); /* p_paddr, where a Multiboot loader puts the load */
     CHECK(bootslot_validate_kernel(kernel, 5000, 5000, err, sizeof(err)) == -1 &&
               strstr(err, "physical address differs") != NULL,
           "a physical address away from the virtual is refused");
     make_kernel(kernel, 5000);
-    put32(kernel + 100, 0x10003); /* the a.out kludge bit changes the load */
+    put32(kernel + 100, 0x10003); /* flags: bit 16 is the a.out kludge */
     put32(kernel + 104, (uint32_t)(0u - (0x1BADB002u + 0x10003)));
     CHECK(bootslot_validate_kernel(kernel, 5000, 5000, err, sizeof(err)) == -1 &&
               strstr(err, "flags are not ALIGN") != NULL,
@@ -493,8 +558,6 @@ int main(void)
 
     check_policy();
 
-    /* A fallback whose loader surface is broken stops the install before the
-       first environment write. */
     load("--bad-fallback");
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "bad-fallback opens");
     make_kernel(kernel, 5000);
@@ -503,13 +566,8 @@ int main(void)
     CHECK(strstr(err, "fallback file is not a bootable kernel") != NULL, "the fallback diagnostic");
     CHECK(env_has("saved_entry=candidate\n"), "the environment was never touched");
 
-    /* A grub.cfg whose size does not match its chain is a refused volume:
-       every reachable regular file is held to the rule, not only the four
-       named ones. */
     expect_open_error("--cfg-short", "size does not match its chain");
 
-    /* A stale armed trial is dropped by the install's first transition: cut
-       mid-slot, the block has the fallback and no armed line. */
     load("");
     {
         long env_off = (long)(160 + 4160 - 2) * 512;
@@ -534,18 +592,9 @@ int main(void)
     CHECK(!env_has("next_entry=candidate\n"),
           "the stale armed trial was dropped before the slot was touched");
 
-    /* Eight sectors per cluster. Every fixture before milestone 25 was
-       one-to-one, so the library's cluster arithmetic had never been driven at
-       any other geometry, and the 64 MiB boot partition of an MBR disk
-       installed before milestone 57 has eight. Everything the library reports
-       here is in sectors and bytes, so the multiplication is what is under
-       test. */
     load("--cluster8");
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "a 4 KiB-cluster volume opens");
     CHECK(bs.cluster_sectors == 8, "the volume reports eight sectors per cluster");
-    /* 8192 total sectors less a data start of 160, divided by eight, is 1004.
-       A count computed as though a cluster were a sector gives 8032, which is
-       larger than the volume and so bounds nothing. */
     CHECK(bs.cluster_count == 1004,
           "the cluster count divides by the cluster size instead of counting sectors");
     CHECK(bs.kernel.size == 2 * 1024 * 1024, "the candidate is still 2 MiB");
@@ -557,8 +606,6 @@ int main(void)
     CHECK(bootslot_install(&bs, kernel, 60 * 512, err, sizeof(err)) == 0,
           "an install works at eight sectors per cluster");
     {
-        /* env_has reads the block at the default geometry's offset; here the
-           library is asked where it actually is. */
         static uint8_t envbuf[BOOTSLOT_ENV_BYTES];
         int armed = 0;
         size_t i;
@@ -575,15 +622,8 @@ int main(void)
     CHECK(bootslot_commit(&bs, err, sizeof(err)) == -1,
           "and an unbooted candidate is still refused there");
 
-    /* The count has to be the range bound, not a number that is merely
-       reported: a chain reaching one cluster past the last legal one must be
-       refused at this geometry too. */
     expect_open_error("--cluster8-past-end", "a chain leaves the volume");
 
-    /* Cancelling a trial removes the key; it does not set it empty. An empty
-       `next_entry` is the marker GRUB leaves after a trial has actually booted
-       and `bootslot_commit` requires it, so a cancel that wrote it would let a
-       kernel that never ran be made the default. */
     load("");
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "the cancel image opens");
     make_kernel(kernel, 60 * 512);
@@ -596,10 +636,6 @@ int main(void)
           "so a commit after a cancel is refused, because nothing booted");
     CHECK(strstr(err, "no consumed trial") != NULL, "and says why");
 
-    /* The rewritable menu slot: written whole, read back, and refused when the
-       text is larger than the slot. Every sector is rewritten whether the new
-       text reaches it or not, so a shorter menu leaves nothing of a longer one
-       behind, which is the property a torn boot would otherwise expose. */
     load("");
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "the menu image opens");
     CHECK(bs.menu.size == 8192, "the menu slot is 8192 bytes");
@@ -612,10 +648,6 @@ int main(void)
         for (i = 0; i < sizeof(menu); i++) {
             menu[i] = (uint8_t)('a' + (i % 26));
         }
-        /* A long menu first, so the slot has something other than its fill,
-           and then a short one over it. A writer that touched only the sectors
-           the new text reaches would leave the long menu's tail behind, and
-           GRUB reads the whole file. */
         CHECK(bootslot_write_menu(&bs, menu, 8192, err, sizeof(err)) == 0, "a full menu writes");
         CHECK(bootslot_write_menu(&bs, menu, 400, err, sizeof(err)) == 0,
               "and a short one writes over it");
@@ -654,17 +686,9 @@ int main(void)
               "a menu exactly the slot's size is accepted");
     }
 
-    /* A slot whose size is not a whole number of sectors cannot be rewritten
-       whole, so it is refused where the volume is judged, not later,
-       where a write would half-succeed. */
     expect_open_error("--menu-odd", "the menu slot is not a whole number of sectors");
-    /* And a slot whose directory size does not match its chain is the ordinary
-       inconsistency, caught by the same rule as any other file's. */
     expect_open_error("--menu-short", "size does not match its chain");
 
-    /* A disk built before the menu slot existed still opens, and every command
-       that does not need a menu still works on it. Only staging one fails, and
-       it says why. */
     load("--no-menu");
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "a disk with no menu slot still opens");
     CHECK(bs.have_menu == 0, "and reports that it has none");
@@ -677,9 +701,6 @@ int main(void)
         CHECK(strstr(err, "no menu slot") != NULL, "and says why");
     }
 
-    /* A key that merely ends in next_entry is not the trial state. The writer
-       preserves lines it does not recognise, so a block can hold one; commit
-       must read the consumed marker beside it and not refuse on the impostor. */
     load("");
     {
         long env_off = (long)(160 + 4160 - 2) * 512;
@@ -703,15 +724,13 @@ int main(void)
           "a line ending in next_entry is not an armed trial");
     CHECK(env_has("saved_entry=candidate\n"), "the impostor did not block the commit");
 
-    /* A dropped environment sector is caught by the block's own readback. */
     load("");
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "reopen for env drop");
-    img.drop_at = 1; /* the first environment sector */
+    img.drop_at = 1;
     CHECK(bootslot_install(&bs, kernel, 60 * 512, err, sizeof(err)) == -1,
           "a dropped environment sector fails the install");
     CHECK(strstr(err, "did not read back") != NULL, "the env readback diagnostic");
 
-    /* A commit under an armed trial names the unbooted candidate. */
     load("");
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "reopen for commit gate");
     make_kernel(kernel, 60 * 512);
@@ -721,16 +740,13 @@ int main(void)
           "a commit with the trial still armed is refused");
     CHECK(strstr(err, "has not booted") != NULL, "the commit-gate diagnostic");
 
-    /* A commit with no trial state at all is refused too: a fresh block has
-       no consumed marker, and neither does an interrupted install, whose slot
-       has partial bytes the running kernel never was. */
     load("");
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "reopen for fresh commit");
     CHECK(bootslot_commit(&bs, err, sizeof(err)) == -1, "a commit on a fresh block is refused");
     CHECK(strstr(err, "no consumed trial") != NULL, "the fresh-block diagnostic");
     load("");
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "reopen for cut commit");
-    img.writes_left = 2 + 30; /* the install is cut mid-slot */
+    img.writes_left = 2 + 30;
     CHECK(bootslot_install(&bs, kernel, 60 * 512, err, sizeof(err)) == -1,
           "the install is cut for the commit case");
     img.writes_left = -1;
@@ -738,26 +754,18 @@ int main(void)
           "a commit after an interrupted install is refused");
     CHECK(strstr(err, "no consumed trial") != NULL, "the interrupted-install diagnostic");
 
-    /* The dropped sector: the write callback reports success and writes
-       nothing, and only the byte-for-byte readback can catch it. The header
-       sectors land early, so sector 40 of the slot is far from anything
-       structural validation reads. */
     load("");
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "reopen for the drop");
     make_kernel(kernel, 60 * 512);
-    img.drop_at = 2 /* env */ + 41; /* the 41st slot write */
+    img.drop_at = 2 + 41;
     CHECK(bootslot_install(&bs, kernel, 60 * 512, err, sizeof(err)) == -1,
           "a dropped load sector fails the install");
     CHECK(strstr(err, "do not match") != NULL, "the readback diagnostic");
 
-    /* The interruption matrix's order properties, on the bytes:
-       a cut mid-slot finds saved_entry=fallback already durable and no
-       next_entry; a cut after the last slot write, before the arming env
-       write, finds the same. */
     load("");
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "reopen for cut 1");
     make_kernel(kernel, 60 * 512);
-    img.writes_left = 2 + 30; /* the cut lands mid-slot */
+    img.writes_left = 2 + 30;
     CHECK(bootslot_install(&bs, kernel, 60 * 512, err, sizeof(err)) == -1,
           "a mid-slot cut fails the install");
     CHECK(env_has("saved_entry=fallback\n"),
@@ -766,16 +774,12 @@ int main(void)
 
     load("");
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "reopen for cut 2");
-    img.writes_left = 2 + 4096 + 1; /* every slot write lands; the cut takes
-                                       the first arming env write */
+    img.writes_left = 2 + 4096 + 1;
     CHECK(bootslot_install(&bs, kernel, 60 * 512, err, sizeof(err)) == -1,
           "a cut before the arming write fails the install");
     CHECK(env_has("saved_entry=fallback\n"), "the fallback stays saved");
     CHECK(!env_has("next_entry=candidate\n"), "the trial stays unarmed");
 
-    /* A torn env sector: the first 100 bytes of the new block over the old.
-       The library reports the write failed; the bytes are the mix the phase 4
-       matrix boots. */
     load("");
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "reopen for the tear");
     img.tear_at = 1;
@@ -783,16 +787,6 @@ int main(void)
     CHECK(bootslot_install(&bs, kernel, 60 * 512, err, sizeof(err)) == -1,
           "a torn env write fails the install");
 
-    /* Two pairs of kernel entries, one of them carrying a fixed address, were
-       checked here until 2026-09-14, with the flag that chose between them.
-       The menu has one pair now, so there is no choice to make and no flag:
-       an install writes `candidate` and `fallback` whatever the boot line
-       says, which every row above already requires.
-
-       What went with those rows was the only call to `bootslot_env_set`, the
-       setter `bootctl env` and `bootctl trial` are built on. A setter that
-       reported success and wrote nothing would leave every row above passing,
-       so one write and its readback stay here. */
     load("");
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "reopen for the setter");
     CHECK(bootslot_env_set(&bs, "saved_entry", "recovery", err, sizeof(err)) == 0,
