@@ -31,9 +31,11 @@
 # otherwise; it prints nothing and fails when GitHub cannot be reached, so
 # that a caller does not take a lost connection for a closed issue.
 #
-# `release N [STATUS]` hands N back: it unassigns this account, removes the
-# label `grouped`, and sets STATUS, Ready unless given, so that N returns to
-# the queue as an issue of its own.
+# `release N [STATUS]` hands N back: it sets STATUS, Ready unless given, then
+# unassigns this account and removes the label `grouped`, so that N returns to
+# the queue as an issue of its own. A step that fails exits 1 with N still
+# assigned to this account, so that its worker keeps it and can release it
+# again.
 #
 # `ready AFTER N...` moves each N after AFTER on the board, the first N after
 # AFTER and each later one after the one before, and then sets it Ready, so
@@ -207,8 +209,15 @@ mine()
 release()
 {
     me=$(gh api user --jq .login)
-    gh issue edit "$1" --repo "$REPO" --remove-assignee "$me" --remove-label grouped > /dev/null
-    set_status "$1" "$2"
+    if ! set_status "$1" "$2"; then
+        echo "board: #$1: cannot set it $2; it is still assigned to $me" >&2
+        exit 1
+    fi
+    if ! gh issue edit "$1" --repo "$REPO" --remove-assignee "$me" \
+        --remove-label grouped > /dev/null; then
+        echo "board: #$1: set $2, but cannot unassign $me; release it again" >&2
+        exit 1
+    fi
 }
 
 ready()
