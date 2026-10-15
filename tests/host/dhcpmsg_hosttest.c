@@ -1,5 +1,6 @@
 /**
- * Host test for the DHCP client's message half (utils/dhcpmsg.c).
+ * Test the message half of the DHCP client, utils/dhcpmsg.c: the requests it
+ * builds, the replies it judges and the arithmetic of a lease.
  *
  * host-deps: utils/dhcpmsg.c utils/ipcheck.c
  *
@@ -11,7 +12,7 @@
  * this file's own checksum routines, not the library's, so two
  * implementations of the same arithmetic meet over every packet.
  *
- * Returns the failed-check count (0 == pass).
+ * The test exits with the number of failed checks, at most 120.
  */
 
 #include <stdio.h>
@@ -32,12 +33,15 @@ static int fails;
 
 #define XID 0x12345678UL
 
-/*
- * Every message goes through the library on a heap copy of its exact length,
- * so a read one byte past what the sender sent is an AddressSanitizer report,
- * not a byte of whatever the client had in its buffer. That is what a
- * declared option length longer than the message is: the checks that refuse it
- * cannot be shown to matter on a 576-byte buffer with slack after it.
+/**
+ * Run dhcp_frame_ok on a heap copy of exactly the `n` bytes at `f`, and return
+ * what it returns.
+ *
+ * Every message goes through the library on a heap copy of its exact length, so
+ * a read one byte past what the sender sent is an AddressSanitizer report, not
+ * a byte of whatever the client had in its buffer. That is what a declared
+ * option length longer than the message is: the checks that reject it cannot be
+ * shown to matter on a 576-byte buffer with slack after it.
  */
 static int frame_ok_exact(const unsigned char *f, int n, unsigned int *ihl, unsigned int *udplen)
 {
@@ -50,6 +54,10 @@ static int frame_ok_exact(const unsigned char *f, int n, unsigned int *ihl, unsi
     return rc;
 }
 
+/**
+ * Run dhcp_parse on a heap copy of exactly the `len` bytes at `msg`, as
+ * frame_ok_exact does, and return what it returns.
+ */
 static int parse_exact(const unsigned char *msg, unsigned int len, unsigned long xid,
                        const unsigned char *mac, struct dhcp_lease *l)
 {
@@ -64,7 +72,11 @@ static int parse_exact(const unsigned char *msg, unsigned int len, unsigned long
 
 static const unsigned char MAC[6] = {0x52, 0x54, 0x00, 0x11, 0x22, 0x33};
 
-/* This file's own one's-complement sum, deliberately not the library's. */
+/**
+ * Return the one's complement of the 16-bit one's complement sum of `len` bytes
+ * at `p`, begun at `start`: this file's own sum, deliberately not the
+ * library's.
+ */
 static unsigned int sum16(const unsigned char *p, unsigned int len, unsigned long start)
 {
     unsigned long s = start;
@@ -82,12 +94,14 @@ static unsigned int sum16(const unsigned char *p, unsigned int len, unsigned lon
     return (unsigned int)(~s & 0xffff);
 }
 
+/** Store the 16-bit `v` at `p` in network byte order. */
 static void w16(unsigned char *p, unsigned int v)
 {
     p[0] = (unsigned char)(v >> 8);
     p[1] = (unsigned char)(v & 0xff);
 }
 
+/** Store the 32-bit `v` at `p` in network byte order. */
 static void w32(unsigned char *p, unsigned long v)
 {
     p[0] = (unsigned char)((v >> 24) & 0xff);
@@ -96,12 +110,17 @@ static void w32(unsigned char *p, unsigned long v)
     p[3] = (unsigned char)(v & 0xff);
 }
 
+/** Read the big-endian 16-bit field at `p`. */
 static unsigned int r16(const unsigned char *p)
 {
     return ((unsigned int)p[0] << 8) | p[1];
 }
 
-/* Fill in the two checksums of a frame whose other fields are already set. */
+/**
+ * Fill in the IP header checksum of the frame `f` of `total` bytes, whose other
+ * fields are set, and its UDP checksum, or 0 for none when `udp_checksum` is
+ * clear.
+ */
 static void seal(unsigned char *f, unsigned int total, int udp_checksum)
 {
     unsigned long ps;
@@ -123,7 +142,9 @@ static void seal(unsigned char *f, unsigned int total, int udp_checksum)
 }
 
 /**
- * Build one server reply into `f` and return its length.
+ * Build into `f` a reply from the server 192.168.90.2 to the broadcast
+ * address, of transaction `xid`, for the hardware address `mac` and offering
+ * `yiaddr`, and return its length. `udp_checksum` is as for seal.
  *
  * `opts` is the option block after the cookie, and it is copied whole, so a
  * caller may hand in a block that is malformed on purpose.
@@ -164,6 +185,18 @@ static const unsigned char GOOD_OPTS[] = {
     53, 1,  DHCP_OFFER, 1, 4, 255, 255, 255, 0, 3,   4,   192, 168, 90, 2, 6,   4,   192, 168, 90,
     3,  51, 4,          0, 0, 2,   88,  54,  4, 192, 168, 90,  2,   15, 4, 'l', 'a', 'n', '.', 255};
 
+/**
+ * Check the discover dhcp_build makes: its length, padded to RFC 1542's 300
+ * BOOTP octets, its IP and UDP headers and checksums, its BOOTP fields and its
+ * first option; that the reader of replies drops it as it would on the wire;
+ * and that a buffer smaller than the largest message is rejected.
+ *
+ * A UDP checksum of zero means "not computed", so a message whose checksum
+ * comes out zero must be sent as all ones instead. It comes out zero for one
+ * transaction id in about 65536, which is a machine that cannot be reached one
+ * boot in 65536; the row finds one by trying them. A request has the two
+ * options a discover does not, the requested address and the server identifier.
+ */
 static void check_build(void)
 {
     unsigned char out[DHCP_MAX];
@@ -193,17 +226,12 @@ static void check_build(void)
     CHECK(out[28 + OPTIONS_OFF] == 53 && out[28 + OPTIONS_OFF + 2] == DHCP_DISCOVER,
           "the first option is the message type");
 
-    /* The same bytes, judged by the reader that will see them on the wire. */
     CHECK(frame_ok_exact(out, (int)n, &ihl, &udplen) == 0,
           "a request is not a reply and the reader drops it");
 
     n = dhcp_build(out, DHCP_MAX - 1, &r);
     CHECK(n == 0, "a buffer smaller than the maximum message is refused");
 
-    /* A UDP checksum of zero means "not computed", so a message whose checksum
-       comes out zero must be sent as all ones instead. It comes out zero for
-       one transaction id in about 65536, which is a machine that cannot be
-       reached one boot in 65536: found here by trying them until one does. */
     {
         unsigned long w;
         int found = 0;
@@ -235,7 +263,6 @@ static void check_build(void)
         CHECK(found, "a transaction id whose checksum comes out zero was found");
     }
 
-    /* A request has the two options a discover does not. */
     memset(&r, 0, sizeof(r));
     r.type = DHCP_REQUEST;
     r.xid = XID;
@@ -269,6 +296,11 @@ static void check_build(void)
     (void)l;
 }
 
+/**
+ * Check that a well-formed offer is accepted and parsed into every field of the
+ * lease, and that it is accepted with a UDP checksum of zero, which IPv4 allows
+ * and SLIRP sends.
+ */
 static void check_good_reply(void)
 {
     unsigned char f[DHCP_MAX];
@@ -290,11 +322,14 @@ static void check_good_reply(void)
     CHECK(strcmp(l.domain, "lan.") == 0, "the domain is option 15");
     CHECK(l.t1 == 0 && l.t2 == 0, "a server that named no timers leaves them unset");
 
-    /* IPv4 allows a UDP checksum of zero, and SLIRP sends one. */
     n = reply(f, XID, MAC, 0xC0A85A14UL, GOOD_OPTS, sizeof(GOOD_OPTS), 0);
     CHECK(frame_ok_exact(f, (int)n, &ihl, &udplen), "a zero UDP checksum is allowed");
 }
 
+/**
+ * Check that dhcp_frame_ok rejects a frame cut short and one with each field of
+ * its IP and UDP headers wrong in turn.
+ */
 static void check_frame_refusals(void)
 {
     unsigned char f[DHCP_MAX];
@@ -361,6 +396,13 @@ static void check_frame_refusals(void)
 #undef REFUSED
 }
 
+/**
+ * Check that dhcp_parse drops a reply to another transaction or hardware
+ * address, a request, a message with no magic cookie or shorter than the fixed
+ * part, and options that run past the message, a code with no length byte, and
+ * a well-formed block with no end marker, which means the message was cut
+ * short.
+ */
 static void check_parse_refusals(void)
 {
     unsigned char f[DHCP_MAX];
@@ -398,7 +440,6 @@ static void check_parse_refusals(void)
     CHECK(parse_exact(f + ihl + 8, OPTIONS_OFF - 1, XID, MAC, &l) == 0,
           "a message shorter than the fixed part is dropped");
 
-    /* An option whose length runs past the message. */
     memset(opts, 0, sizeof(opts));
     opts[0] = 53;
     opts[1] = 1;
@@ -411,7 +452,6 @@ static void check_parse_refusals(void)
     CHECK(parse_exact(f + ihl + 8, udplen - 8, XID, MAC, &l) == 0,
           "an option that claims more than the message holds is dropped");
 
-    /* A code with no length byte after it. */
     memset(opts, 0, sizeof(opts));
     opts[0] = 53;
     opts[1] = 1;
@@ -422,7 +462,6 @@ static void check_parse_refusals(void)
     CHECK(parse_exact(f + ihl + 8, udplen - 8, XID, MAC, &l) == 0,
           "an option code with no length is dropped");
 
-    /* Well formed but with no end marker: the message was cut short. */
     memset(opts, 0, sizeof(opts));
     opts[0] = 53;
     opts[1] = 1;
@@ -436,6 +475,13 @@ static void check_parse_refusals(void)
           "a message with no end marker is dropped");
 }
 
+/**
+ * Check options a hostile server can send. A domain with a newline in it would
+ * be a second line in resolv.conf, the line the resolver uses first, and is
+ * dropped. A nameserver list longer than the lease holds, its last address a
+ * byte short, keeps three. A domain longer than its field is cut to it. A pad
+ * byte and an option this client does not know are passed over.
+ */
 static void check_hostile_options(void)
 {
     unsigned char f[DHCP_MAX];
@@ -444,8 +490,6 @@ static void check_hostile_options(void)
     unsigned int i;
     struct dhcp_lease l;
 
-    /* A domain with a newline in it would be a second line in resolv.conf,
-       and the second line is what the resolver would use first. */
     memset(opts, 0, sizeof(opts));
     i = 0;
     opts[i++] = 53;
@@ -468,8 +512,6 @@ static void check_hostile_options(void)
           "the message itself is still an acknowledgement");
     CHECK(l.domain[0] == '\0', "a domain with anything but a hostname in it is dropped");
 
-    /* More nameservers than the lease can hold, and a fifth that is a byte
-       short of an address. */
     memset(opts, 0, sizeof(opts));
     i = 0;
     opts[i++] = 53;
@@ -487,7 +529,6 @@ static void check_hostile_options(void)
           "an over-long nameserver list does not spoil the message");
     CHECK(l.dns_count == 3, "no more nameservers are kept than there is room for");
 
-    /* A domain name longer than the field it is kept in. */
     memset(opts, 0, sizeof(opts));
     i = 0;
     opts[i++] = 53;
@@ -505,7 +546,6 @@ static void check_hostile_options(void)
           "an over-long domain does not spoil the message");
     CHECK(strlen(l.domain) == sizeof(l.domain) - 1, "the domain is cut to the field");
 
-    /* A pad byte between options, and an option this client does not know. */
     memset(opts, 0, sizeof(opts));
     i = 0;
     opts[i++] = 0;
@@ -523,10 +563,18 @@ static void check_hostile_options(void)
           "padding and unknown options are stepped over");
 }
 
-/* A lease is judged whole before it is applied, by the same rule a static
-   stanza is judged by: applying one that the kernel then refuses half way
-   through leaves the machine with neither the address it had nor the one it
-   was given. */
+/**
+ * Check dhcp_lease_usable, which judges a lease whole before it is applied, by
+ * the rule a static stanza is judged by: applying one that the kernel then
+ * rejects half way through leaves the machine with neither the address it had
+ * nor the one it was given.
+ *
+ * A lease with no netmask is judged under the classful mask the kernel derives:
+ * 10.1.0.0 is a host under the /8 of a class A address and the network address
+ * under a /16, so the row for it says which mask the judgement used. A mask
+ * wide enough puts a loopback router on the subnet, and the rule about what a
+ * machine can hold still rejects it.
+ */
 static void check_lease_usable(void)
 {
     struct dhcp_lease l;
@@ -545,9 +593,6 @@ static void check_lease_usable(void)
     CHECK(dhcp_lease_usable(&l, why, sizeof(why)) == 0,
           "a lease with no netmask is judged under the mask the kernel will derive");
 
-    /* 10.1.0.0 is a host under the /8 the kernel derives for a class A address
-       and the network address under any shorter mask, so this says which mask
-       the judgement used. */
     l.address = 0x0A010000UL;
     l.netmask = 0;
     l.router = 0;
@@ -580,8 +625,6 @@ static void check_lease_usable(void)
     l.router = 0x7F000001UL;
     CHECK(dhcp_lease_usable(&l, why, sizeof(why)) != 0, "a loopback router");
 
-    /* Wide enough and the loopback router is on the subnet, so only the rule
-       about what a machine can hold refuses it. */
     l.address = 0x0A000005UL;
     l.netmask = 0x80000000UL;
     l.router = 0x7F000001UL;
@@ -594,6 +637,12 @@ static void check_lease_usable(void)
           "and a lease with no address, refused for being none, not for its class");
 }
 
+/**
+ * Check the floor and cap dhcp_sane_lease puts on a lease, and the renewal,
+ * rebinding and end times dhcp_boundaries gives with and without the server's
+ * timers. Seven eighths computed with the division first is zero for every
+ * lease under eight seconds, which would rebind the instant it was configured.
+ */
 static void check_lease_arithmetic(void)
 {
     struct dhcp_lease l;
@@ -609,8 +658,6 @@ static void check_lease_arithmetic(void)
     CHECK(dhcp_sane_lease(1000, DHCP_MIN_LEASE - 1) == 0,
           "a cap below the minimum leaves no lease, not a short one");
 
-    /* Seven eighths computed the other way around is zero for every lease
-       under eight seconds, which would rebind the instant it was configured. */
     memset(&l, 0, sizeof(l));
     l.seconds = 10;
     dhcp_boundaries(&l, 0, &t1, &t2, &end);
@@ -653,6 +700,7 @@ static void check_lease_arithmetic(void)
     CHECK(t1 == 100 && t2 == 700, "a named renewal stands beside the default rebinding");
 }
 
+/** Run the cases; return the number of failed checks, at most 120. */
 int main(void)
 {
     check_build();
