@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd October 15, 2026
 .Dt PRLIMIT64 2
 .Os
 .Sh NAME
@@ -46,6 +46,8 @@ selects the caller's.
 The limits are the process's, and a change applies to all its threads.
 Another process may be selected by a caller with effective user ID 0
 or the same real user ID as that process.
+A zombie keeps its limits until it is reaped, and may be selected as
+any other process may, as on Linux.
 If
 .Fa new_limit
 is non-null, it supplies new values.
@@ -216,8 +218,8 @@ sets the descriptor limit to eight, checks that open returns
 when those descriptors are occupied, and checks that dup2 refuses a
 destination at or above eight with
 .Er EBADF .
-It also checks process and address-space limits, inheritance, and the
-privilege required to raise a hard limit.
+It also checks process and address-space limits, inheritance, the
+privilege required to raise a hard limit, and the limits of a zombie.
 .Pa tests/musl/stackmusl.c
 checks the stack limit's default, inheritance and refusals, and that an
 exec lets the stack grow to 12 MiB under a limit of 16 MiB and kills it
@@ -234,11 +236,10 @@ For a stored resource, the new soft limit exceeds the new hard limit.
 A caller without effective user ID 0 tries to raise a stored hard limit
 or select a process with a different real user ID.
 The requested descriptor hard limit exceeds 1024.
-Selecting a process record that is unused or a zombie also gives this
-error.
 .It Er ESRCH
-No process record exists for
-.Fa pid .
+No process with ID
+.Fa pid
+exists in the caller's PID namespace, or it has been reaped.
 .El
 .Sh SEE ALSO
 .Xr brk 2 ,

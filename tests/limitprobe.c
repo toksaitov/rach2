@@ -21,7 +21,9 @@
  * still selects and polls a descriptor it opened before, as the test of
  * that sandbox in OpenSSH's configure requires. A child with a file limit
  * of 4096 bytes has a write of 8192 cut to 4096, and the next write and a
- * truncation past the limit refused with `EFBIG`.
+ * truncation past the limit refused with `EFBIG`. A zombie not yet reaped
+ * keeps its limits, which root reads and sets and another user is refused
+ * with `EPERM`; once reaped, its pid is `ESRCH`.
  *
  * Needs: root privilege, readable /hello, a writable /tmp, this binary at
  * /limitprobe, and only descriptors 0, 1 and 2 open. Start with
@@ -41,6 +43,7 @@
 #define RLIMIT_AS     9
 
 #define EPERM  1
+#define ESRCH  3
 #define EAGAIN 11
 #define ENOMEM 12
 #define EINVAL 22
@@ -53,6 +56,11 @@
 #define O_CREAT  0100
 #define O_TRUNC  01000
 
+#define P_PID   1
+#define WEXITED 4
+#define WNOWAIT 0x01000000
+
+#define SIGCHLD 17
 #define SIGXFSZ 25
 #define SIG_IGN 1
 
@@ -314,6 +322,57 @@ static int body_hard(void)
     return 0;
 }
 
+/** The limits of `pid`, a process other than the caller: read into `old`
+ * and, with `set` nonzero, set to `cur` and `cur`. 0, or a negated errno. */
+static int pid_limit(int pid, int set, unsigned cur, struct rlimit64 *old)
+{
+    struct rlimit64 rl;
+
+    rl.cur_lo = cur;
+    rl.cur_hi = 0;
+    rl.max_lo = cur;
+    rl.max_hi = 0;
+    return syscall4(SYS_PRLIMIT64, pid, RLIMIT_NOFILE, set ? (long)&rl : 0, (long)old);
+}
+
+/** A zombie keeps its limits until it is reaped: a child that set a
+ * descriptor limit of 100 and exited reads 100 to root, takes 90, and is
+ * refused to uid 1001 with EPERM; reaped, its pid is ESRCH. Returns 0, or 2
+ * to 8 for the step that fails. */
+static int body_zombie(void)
+{
+    struct rlimit64 rl;
+    int info[32]; /* siginfo_t, 128 bytes on both architectures */
+    int pid = syscall1(SYS_FORK, 0);
+
+    if (pid < 0) {
+        return 2;
+    }
+    if (pid == 0) {
+        sys_exit(set_limit(RLIMIT_NOFILE, 100, 100) == 0 ? 0 : 1);
+    }
+    if (syscall5(SYS_WAITID, P_PID, pid, (long)info, WEXITED | WNOWAIT, 0) != 0 ||
+        info[0] != SIGCHLD) {
+        return 3;
+    }
+    if (pid_limit(pid, 0, 0, &rl) != 0 || rl.cur_lo != 100 || rl.max_lo != 100) {
+        return 4; /* root reads the zombie's limit */
+    }
+    if (pid_limit(pid, 1, 90, &rl) != 0 || rl.cur_lo != 100) {
+        return 5; /* root sets it */
+    }
+    if (pid_limit(pid, 0, 0, &rl) != 0 || rl.cur_lo != 90 || rl.max_lo != 90) {
+        return 6; /* and reads what it set */
+    }
+    if (syscall1(SYS_SETUID, 1001) != 0 || pid_limit(pid, 0, 0, &rl) != -EPERM) {
+        return 7; /* another user is refused */
+    }
+    if (wait_status(pid) != 0 || pid_limit(pid, 0, 0, &rl) != -ESRCH) {
+        return 8; /* the reaped pid is gone */
+    }
+    return 0;
+}
+
 /* The pipe on which `body_nproc` tells the parent that its four exist. */
 static int report_fd = -1;
 
@@ -430,6 +489,7 @@ void probe_main(unsigned long *sp)
     child_must(body_hard, 0, "the hard limit: a user lowers, root raises");
     child_must(body_sandbox, 0, "select and poll under the limits of 0 of OpenSSH's sandbox");
     child_must(body_fsize, 0, "a file limit of 4096: a write is cut to it and the next is EFBIG");
+    child_must(body_zombie, 0, "a zombie's limits: root reads and sets them, a user is EPERM");
     if (set_limit(RLIMIT_NOFILE, 200, 200) != 0) {
         fail("setting the limit a child inherits");
     }

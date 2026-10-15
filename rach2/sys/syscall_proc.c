@@ -5228,28 +5228,34 @@ static int rlimit_set(process_t *p, uint32_t resource, unsigned long cur, unsign
 }
 
 /**
- * The process `pid` names for a limit call: the caller for 0 or its own
- * pid; another process only to root or to a caller of the same real uid.
+ * Find the process `pid` names for a limit call and store it in `*out`: the
+ * caller for 0 or its own pid; another process only to root or to a caller
+ * of the same real uid. A zombie counts until it is reaped, since its record
+ * keeps its limits and its thread group until then, as a Linux zombie keeps
+ * its `signal_struct`. Returns 0, -ESRCH for a pid the caller's PID
+ * namespace does not show or no record has, or -EPERM.
  */
-static process_t *rlimit_target(uint32_t pid)
+static int rlimit_target(uint32_t pid, process_t **out)
 {
     process_t *p;
 
+    *out = current_proc;
     if (pid == 0) {
-        return current_proc;
+        return 0;
     }
     pid = pid_named(pid);
     if (pid == current_proc->tgid) {
-        return current_proc;
+        return 0;
     }
-    p = get_process(pid);
-    if (!p || p->state == PROC_UNUSED || p->tg->live == 0) {
-        return NULL;
+    p = pid != 0 ? get_process(pid) : NULL;
+    if (!p || p->state == PROC_UNUSED) {
+        return -ESRCH;
     }
     if (!proc_privileged(current_proc) && p->ruid != current_proc->ruid) {
-        return NULL;
+        return -EPERM;
     }
-    return p;
+    *out = p;
+    return 0;
 }
 
 /** getrlimit/ugetrlimit: struct rlimit { unsigned long rlim_cur, rlim_max },
@@ -5307,9 +5313,8 @@ static uint64_t rlimit_to64(unsigned long v)
  * leaves the new limits in place, as it does on Linux. The copies may sleep,
  * and the target may end while they do, so the new limits are read before the
  * target is looked up, and the old are written after its last use. Returns 0,
- * or -ESRCH for no such process, -EPERM for one the caller may not act on
- * (`rlimit_target`), -EFAULT, or the error of `rlimit_set`. This is the form
- * musl issues for both.
+ * the error of `rlimit_target` or of `rlimit_set`, or -EFAULT. This is the
+ * form musl issues for both.
  */
 long sys_prlimit64(isr_params_t *params)
 {
@@ -5326,9 +5331,9 @@ long sys_prlimit64(isr_params_t *params)
     if (newp && copy_from_user(in, (const void __user *)newp, sizeof(in)) != 0) {
         return -EFAULT;
     }
-    p = rlimit_target(pid);
-    if (!p) {
-        return pid != 0 && get_process(pid_named(pid)) ? -EPERM : -ESRCH;
+    rc = rlimit_target(pid, &p);
+    if (rc != 0) {
+        return rc;
     }
     rlimit_for(p, resource, &cur, &max);
     out[0] = rlimit_to64(cur);

@@ -5950,6 +5950,18 @@ new
     if (limit == RLIM_INFINITY || end <= limit || 1) {
 end
 
+fault prlimit-zombie-refused
+probe limitprobe
+file rach2/sys/syscall_proc.c
+expect LIMITPROBE FAIL: a zombie's limits
+old
+    p = pid != 0 ? get_process(pid) : NULL;
+    if (!p || p->state == PROC_UNUSED) {
+new
+    p = pid != 0 ? get_process(pid) : NULL;
+    if (!p || p->state == PROC_UNUSED || p->tg->live == 0) {
+end
+
 fault oom-segv
 probe oomprobe
 file rach2/sys/mm/paging.c

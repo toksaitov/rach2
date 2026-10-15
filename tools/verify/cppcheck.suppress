@@ -145,6 +145,7 @@ unusedStructMember:*tests/musl/waitidmusl.c
 constVariable:*tests/bootprobe.c
 constVariable:*tests/devprobe.c
 constVariable:*tests/exitprobe.c
+constVariable:*tests/limitprobe.c
 constVariable:*tests/loopdevprobe.c
 constVariable:*tests/sigprobe.c
 unassignedVariable:*tests/devprobe.c
