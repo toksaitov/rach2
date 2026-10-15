@@ -215,6 +215,10 @@ int fbcon_init(const struct boot_framebuffer *fb)
         fb->width > fb->pitch / fb_bytes) {
         return -1;
     }
+    base = fbcon_window();
+    if (base == NULL) {
+        return -1;
+    }
     for (fb_scale = 1; fb->width / (GLYPH_WIDTH * (fb_scale + 1)) >= MIN_COLS &&
                        fb->height / (GLYPH_HEIGHT * (fb_scale + 1)) >= MIN_ROWS;
          fb_scale++) {
@@ -243,10 +247,6 @@ int fbcon_init(const struct boot_framebuffer *fb)
         }
     }
 
-    base = fbcon_window();
-    if (base == NULL) {
-        return -1;
-    }
     for (row = 0; row < fb_height; row++) {
         volatile uint8_t *p = base + row * fb_pitch;
 

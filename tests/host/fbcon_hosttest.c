@@ -206,7 +206,8 @@ static int cell_shows(uint32_t col, uint32_t row, unsigned char ch, uint32_t fg,
 #define BLACK 0x000000u
 
 /** The console takes a 1280x800 framebuffer, clears it whole and fills it
- * with 80x25 cells; framebuffers it cannot draw on are not taken. */
+ * with 80x25 cells; framebuffers it cannot draw on are not taken, and leave
+ * the cells as they were. */
 static void row_init(void)
 {
     uint32_t px, py;
@@ -252,8 +253,13 @@ static void row_init(void)
     CHECK(fbcon_init(&fb) == -1, "the text mode is not a framebuffer");
     fb.type = BOOT_FB_RGB;
     fb.bpp = 32;
+    fb.width = 2048;
+    fb.height = 768;
+    fb.pitch = 2048 * 4;
     reachable = 0;
     CHECK(fbcon_init(&fb) == -1, "a framebuffer out of reach is refused");
+    CHECK(textcon_cols == 80 && textcon_rows == 25 && fb_scale == 2,
+          "and the cells stay as they were, not the 128x24 it would hold");
     reachable = 1;
 }
 

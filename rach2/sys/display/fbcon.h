@@ -38,10 +38,11 @@ extern uint16_t fbcon_cells[FBCON_CELLS];
  * still gives 80 columns and 24 rows, `textcon_cols` and `textcon_rows`, at
  * most `TEXTCON_COLS_MAX` by `TEXTCON_ROWS_MAX`: 85x24 at twice the font's
  * size on a 1366x768 screen. The log records the screen and the cells.
- * Returns 0, or -1, and the console stays on the text adapter, when the
- * framebuffer is neither direct color at 8 to 32 bits a pixel nor indexed
- * color at 8, holds fewer than 80 columns and 24 rows, has a pitch shorter
- * than a row of pixels, or cannot be reached (`fbcon_window`).
+ * Returns 0, or -1, and the console stays on the text adapter with its
+ * cells unchanged, when the framebuffer is neither direct color at 8 to 32
+ * bits a pixel nor indexed color at 8, holds fewer than 80 columns and 24
+ * rows, has a pitch shorter than a row of pixels, or cannot be reached
+ * (`fbcon_window`).
  */
 int fbcon_init(const struct boot_framebuffer *fb);
 
