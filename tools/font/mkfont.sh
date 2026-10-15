@@ -10,8 +10,8 @@
 # https://ftp.gnu.org/gnu/unifont/unifont-18.0.01/, whose signature gpgv
 # verified with the GNU keyring, made by Paul Hardy's key
 # 95D2E9AB8740D8046387FD151A09227B1F435A33; the script refuses a file with
-# another digest. The kernel's sources carry the output, since a build on
-# Rach2 has no network to fetch the font from.
+# another digest. The output is committed with the kernel's sources, since a
+# build on Rach2 has no network to fetch the font from.
 #
 # The layout keeps code page 437's box drawing, shades and blocks at 0xB0 to
 # 0xDF, where the adapter widens the line glyphs to nine columns, and puts
@@ -101,6 +101,8 @@ BEGIN {
         glyph[want[f[1]]] = f[2]
     }
 }
+# Print the glyph of slot S as a struct vga_glyph initializer; ROWS is its 16
+# rows as 32 hexadecimal digits.
 function entry(s, rows,    r)
 {
     printf "    {0x%02X,\n     {", s
