@@ -5,27 +5,28 @@
 #include "netdev.h"
 
 /*
- * Realtek RTL8168GU (RTL8111GU) PCIe gigabit driver.
+ * rtl8168.h: the registers of the Realtek RTL8168GU (RTL8111GU) PCIe
+ * gigabit chip, the Lenovo G50-70's card, and the driver's entry in the
+ * driver table.
  *
- * The chip in the Lenovo G50-70 this kernel is being carried to. It is not the
- * RTL8139 with more registers: it is the C+ descriptor-ring design, its PHY
- * and MAC configuration live behind four different indirect-access windows
- * (ERI, MAC-OCP, PHY-OCP, EPHY), and QEMU does not emulate it, so this driver
- * cannot be tested before it meets the hardware.
- *
- * It is therefore a port of one pinned reference, not a reading of a
- * datasheet: Linux v6.16, commit 038d61fd642278bab63ee8ef722c50d10ab01e8f,
+ * The chip is not the RTL8139 with more registers: it has the C+
+ * descriptor-ring design, its PHY and MAC configuration are behind four
+ * indirect-access windows (ERI, MAC-OCP, PHY-OCP, EPHY), and QEMU does not
+ * emulate it. The driver is therefore a port of one pinned reference, not a
+ * reading of a datasheet: Linux v6.16, commit
+ * 038d61fd642278bab63ee8ef722c50d10ab01e8f,
  * drivers/net/ethernet/realtek/r8169_main.c and r8169_phy_config.c, for the
- * chip that file calls RTL_GIGA_MAC_VER_42. Every register sequence below
- * names the reference function it came from, so a reader can check the port
- * against its source, and tests/host/rtl8168_hosttest.c drives the whole
- * bring-up against a software model of the chip that asserts the sequence
- * step by step.
+ * chip that file calls RTL_GIGA_MAC_VER_42. Each register sequence in
+ * rtl8168.c names the reference function it came from, so a reader can check
+ * the port against its source, and tests/host/rtl8168_hosttest.c drives the
+ * whole bring-up against a software model of the chip that checks the
+ * sequence step by step.
  *
  * The card's messages are taken on a vector of the driver's own where the
- * machine routes them, with the timer tick as the fallback pump, and alone on
- * a machine that cannot route them. Deliberately absent: MSI-X, jumbo frames,
- * every offload, RSS, VLAN, Wake-on-LAN and runtime power management.
+ * machine routes them, with the timer tick as the fallback; on a machine
+ * that cannot route them the tick alone serves the card. Not supported:
+ * MSI-X, jumbo frames, every offload, RSS, VLAN, Wake-on-LAN and runtime
+ * power management.
  */
 
 /* Register offsets in the memory window (reference: enum rtl_registers). */
@@ -117,7 +118,8 @@ struct r8168_counters {
 #define R8168_MCU_RXTX_EMPTY    0x30
 #define R8168_MCU_LINK_LIST_RDY 0x02
 
-/* MISC: the receive-data-valid gate. RX stays dead while this is set. */
+/* MISC: the receive-data-valid gate. The receiver passes nothing to memory
+ * while it is set. */
 #define R8168_MISC_RXDV_GATED 0x00080000
 
 /* TxConfig: the revision field, and the bits rtl_set_tx_config_registers
@@ -133,7 +135,7 @@ struct r8168_counters {
 #define R8168_RXCFG_VALUE           0x0000cf00
 #define R8168_RXCFG_ACCEPT_OK_MASK  0x0f
 #define R8168_RXCFG_ACCEPT_ERR_MASK 0x30
-#define R8168_RXCFG_ACCEPT          0x0e /* broadcast, multicast, our own address */
+#define R8168_RXCFG_ACCEPT          0x0e /* broadcast, multicast, own address */
 
 /* CPlusCmd: the bits the reference preserves from the power-on value. */
 #define R8168_CPCMD_MASK 0x2063
@@ -148,11 +150,11 @@ struct r8168_counters {
 #define R8168_CSIAR_FLAG        0x80000000u
 #define R8168_CSIAR_BYTE_ENABLE 0x0000f000u
 
-/* The descriptor ring. 64 entries, not the reference's 256: this
- * kernel's whole direct map is 32 MiB, and 64 entries with the reference's
- * buffer size already cost a megabyte. The deviation is the one number in
- * this driver the reference does not vouch for, so the model burst-tests it
- * and the laptop measures it (dev-log/24-metal/plan.md). */
+/* The descriptor rings. 64 entries each, where the reference has 256: the
+ * kernel's directly mapped window is 32 MiB (HARD_MEMORY_LIMIT), and 64
+ * receive buffers of the reference's size are already a megabyte. It is the
+ * one number of the driver not taken from the reference, and the host
+ * model sends bursts against it. */
 #define R8168_RING_SIZE   64
 #define R8168_RX_BUF_SIZE 16383 /* the reference's SZ_16K - 1 */
 #define R8168_RX_MAX_SIZE 16384
@@ -173,14 +175,15 @@ struct r8168_counters {
  * nothing here supports jumbo frames. */
 #define R8168_FRAME_MAX 1514
 
-/* How long a transmit will wait for a full ring to free a descriptor: about a
- * millisecond, which is a tick's worth of chip time at 100 Mbps and short
- * enough that a wedged chip does not hold the caller. */
+/* How long a transmit waits for a full ring to free a descriptor: ten waits
+ * of 100 microseconds, about a millisecond, in which a 100 Mb/s link sends
+ * eight full frames, and short enough that a stuck chip does not hold the
+ * caller long. */
 #define R8168_TX_WAIT_STEPS 10u
 #define R8168_TX_WAIT_USEC  100u
 
-/* How long `stop` waits for what the chip already accepted to reach the wire
-   before it silences the chip. */
+/* How long `stop` waits for the frames the chip has taken to be sent,
+   twenty waits of 500 microseconds (`rtl8168_stop`). */
 #define R8168_DRAIN_STEPS 20u
 #define R8168_DRAIN_USEC  500u
 
@@ -192,7 +195,7 @@ struct r8168_desc {
     uint32_t addr_hi;
 };
 
-/** This driver's entry in the device table (driver/netdev.h). */
+/** This driver's entry in the driver table (netdev.c). */
 extern const struct netdev_ops rtl8168_netdev;
 
 #endif /* _RTL8168_H_ */

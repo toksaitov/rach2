@@ -180,7 +180,7 @@ rach2/sys/mm/vm.c:vm_insert_file params 7 the parameters are the fields of one r
 
 rach2/sys/network/driver/e1000.c:e1000_init lines 130 a hardware sequence, the registers written in the order the datasheet requires
 
-rach2/sys/network/driver/rtl8168.c:rtl8168_init lines 123 a hardware sequence, the registers written in the order the datasheet requires
+rach2/sys/network/driver/rtl8168.c:rtl8168_init lines 118 a hardware sequence, the registers written in the order the datasheet requires
 
 rach2/sys/network/netif.c:route_ioctl complexity 30 one system call's contract, its checks in the order the manual page lists the errors
 

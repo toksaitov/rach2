@@ -5,12 +5,14 @@
 #include "netdev.h"
 
 /*
- * Realtek RTL8139 PCI NIC driver.
+ * rtl8139.h: the registers of the Realtek RTL8139, the card
+ * rach2/qemu_devices.sh gives QEMU unless `NIC` names another, and the
+ * driver's entry points.
  *
- * QEMU exposes this card with "-device rtl8139,netdev=net0". BAR0 is an I/O
- * BAR, so every register below is an offset from the I/O base returned by
- * pci_bar_address(). The card uses four TX descriptors and a single linear RX
- * ring buffer.
+ * QEMU attaches it with `-device rtl8139,netdev=net0`. BAR0 is an I/O
+ * window, so every register below is an offset from the port the BAR gives
+ * (`pci_bar_address`). The card sends from four transmit descriptors in
+ * turn and receives into one ring buffer, each frame after a 4-byte header.
  */
 
 /* Register offsets (I/O port, relative to the I/O base). */
@@ -33,8 +35,8 @@
 #define RTL_MSR     0x58 /* Media status (8-bit)                    */
 #define RTL_BMCR    0x62 /* Basic mode control (16-bit)             */
 
-/* Media status bits. LINKB is inverted: the bit is SET when the link is
-   DOWN, which is the one thing about this register worth stating twice. */
+/* Media status bits. LINKB is inverted: it is set while the link is
+   down. */
 #define RTL_MSR_LINKB    0x04 /* 1 = no link */
 #define RTL_MSR_SPEED_10 0x08 /* 1 = 10 Mb/s, 0 = 100 Mb/s */
 
@@ -60,47 +62,67 @@
 #define RTL_TSD_TOK 0x8000 /* Transmit completed OK                  */
 
 /*
- * RX configuration: accept unicast (APM), broadcast (AB), and all packets
- * (AAP/promiscuous, so we also see ARP aimed at the gateway), WRAP=1 so the
- * chip's DMA wraps the ring, and an unlimited DMA burst. Promiscuous is fine
- * on QEMU's SLIRP network.
+ * Receive configuration: accept every destination (AAP), this card's own
+ * (APM), multicast (AM) and broadcast (AB); WRAP set, so a frame that
+ * reaches the end of the ring goes on past it into the overhang instead of
+ * wrapping to the start; an unlimited DMA burst; and the 8 KiB ring (RBLEN
+ * 0). QEMU's user network has no other station, so accepting every
+ * destination costs nothing there.
  */
 #define RTL_RCR_VALUE (0xF | (1 << 7) | (7 << 8))
 
-/* TX configuration: standard 96-bit interframe gap, 1024-byte DMA burst. */
+/* Transmit configuration: the standard 96-bit interframe gap and a
+   1024-byte DMA burst. */
 #define RTL_TCR_VALUE ((3 << 24) | (6 << 8))
 
 /*
- * RX ring is 8 KB plus 16 bytes for the CAPR offset convention plus a 2 KB
- * overhang so a maximum frame that wraps the ring end still lands in one
- * contiguous span (WRAP=1).
+ * The receive buffer: the 8 KiB ring and the 16 bytes the card adds to its
+ * length for RBLEN 0, then a 2 KiB overhang, so that a frame of the largest
+ * size that starts near the end of the ring is whole in memory (WRAP set).
  */
 #define RTL_RX_RING     8192
 #define RTL_RX_BUF_SIZE (RTL_RX_RING + 16 + 2048)
 #define RTL_TX_BUF_SIZE 1536 /* one max Ethernet frame */
 #define RTL_TX_NUM      4    /* the card has four TX descriptors */
 
-/* RX ring header validation. */
-#define RTL_RX_EARLY   0xFFF0 /* length while the chip is still DMAing */
+/* What a ring header's length may be. */
+#define RTL_RX_EARLY   0xFFF0 /* length while the card writes the frame */
 #define RTL_RX_PKT_MIN 18     /* Ethernet header (14) + CRC (4)        */
 #define RTL_RX_PKT_MAX 1518   /* max frame (1514) + CRC (4)            */
 
 /* The interface a card is brought up for. */
 struct netdev;
 
-/** Probe and bring up the card; 1 on success, 0 if absent or bring-up fails. */
+/**
+ * The driver table's `init` (netdev.h) for the one RTL8139 this driver
+ * drives, the first 10EC:8139 function on the PCI bus. `nd->dev` is left
+ * NULL.
+ *
+ * Returns `NETDEV_ABSENT` for any `nth` but 0 or when there is no such
+ * function; `NETDEV_FAILED`, with `rtl8139_error` giving the reason, for a
+ * card whose line is above 15 or that has no I/O window, a reset that did
+ * not finish, or a receive buffer the boot allocator could not give; and
+ * `NETDEV_UP` otherwise. Called by the probe at boot.
+ */
 int rtl8139_init(struct netdev *nd, int nth);
 
-/** Transmit a raw Ethernet frame (destination MAC through payload, no FCS; the
- *  chip appends the CRC). len must be <= RTL_TX_BUF_SIZE. */
+/**
+ * The driver table's `tx`: copy one frame into the next of the four slots
+ * and start it. `dev` is ignored.
+ *
+ * Returns `NETDEV_TX_DROPPED`, with a warning in the log, for a frame of
+ * more than RTL_TX_BUF_SIZE bytes, and `NETDEV_TX_OK` otherwise. The slot is
+ * not checked for a frame still being sent: QEMU's card finishes each one as
+ * its length is written. Takes `net_lock`, and may be called with it held.
+ */
 int rtl8139_tx(void *dev, const uint8_t *data, uint16_t len);
 
-/** Reason the most recent rtl8139_init() returned 0; valid only after a 0
- * return. */
+/** The driver table's `error`: the reason the last `rtl8139_init` that found
+ * no card or failed gave, a string constant. */
 const char *rtl8139_error(void);
 
-/** This driver's entry in the device table (see driver/netdev.h). Its `poll`
- *  is NULL: the card takes an interrupt and delivers from its handler. */
+/** This driver's entry in the driver table (netdev.c). Its `poll` is NULL:
+ * the card interrupts and delivers from its handler. */
 extern const struct netdev_ops rtl8139_netdev;
 
 #endif /* _RTL8139_H_ */

@@ -1,21 +1,24 @@
 /*
- * rtl8139.c - Realtek RTL8139 PCI NIC driver.
+ * rtl8139.c: the driver of one Realtek RTL8139, the card QEMU gets from
+ * rach2/qemu_devices.sh by default.
  *
- * TX: four round-robin descriptors, each with its own buffer. Writing the
- * length to a TSD register starts the DMA. This driver does not wait for a
- * slot's previous transmission to complete before reusing it, because QEMU
- * finishes each one as the TSD is written; see the note on rtl8139_tx, which
- * is where that assumption is stated and where real hardware would differ.
+ * Transmit uses the card's four descriptors in turn, each with a buffer of
+ * its own; writing a frame's length to a descriptor's TSD register starts
+ * it. A slot is used again without a check that its last frame has gone,
+ * since QEMU's card finishes a frame as its length is written; a physical
+ * card would need the TSD's OWN bit checked first.
  *
- * RX: one linear ring buffer. The chip prefixes each frame with a 4-byte header
- * (little-endian status word and length word). We validate that header before
- * trusting the length, and resync the receiver if it ever looks wrong. An
- * overflow drains the complete frames already in the ring.
+ * Receive is one ring buffer, in which the card puts each frame after a
+ * 4-byte header of a status word and a length. The header is checked before
+ * the length is used, and a header that cannot be right restarts the
+ * receiver. An overflow is recovered by taking the whole frames already in
+ * the ring.
  *
- * IRQ: registered at vector 32 + IRQ line. The shared IRQ router sends the
- * PIC EOI before calling us, so this driver must not touch the PIC. The card
- * is on a PCI line that can be shared (e.g. with the HDA device); see the
- * service-loop note in rtl8139_irq for the shared-line handling.
+ * The handler is registered at vector `32 + line`, and the line may be
+ * shared, with the HDA controller among others, so the handler services the
+ * card until its status reads clear. The driver has one card and keeps it in
+ * this file's statics: the `dev` every operation is given is NULL and
+ * ignored.
  */
 
 #include "../../klog.h"
@@ -29,23 +32,27 @@
 #include "../../lib/kstring.h"
 #include "../../mm/heap.h"
 
-/* I/O base port (BAR0, with the type bits stripped). */
+/* The I/O window's first port, BAR0 without its type bit; 0 until a usable
+ * window was found. */
 static uint16_t iobase = 0;
 
-/* PCI device record, kept so we can read the IRQ line. */
+/* The card's PCI function, with its interrupt line. */
 static pci_device_t rtl_pci;
 
-/* Four TX buffers, 4-byte aligned as the card requires. */
+/* The four transmit buffers, 4-byte aligned as TSAD requires, and the slot
+ * the next frame goes in. */
 static uint8_t tx_buf[RTL_TX_NUM][RTL_TX_BUF_SIZE] __attribute__((aligned(4)));
 static int tx_idx = 0;
 
-/* RX ring (see RTL_RX_BUF_SIZE), allocated page-aligned at init (out of BSS),
- * with the software read pointer. */
+/* The receive buffer (RTL_RX_BUF_SIZE bytes), taken from the boot
+ * allocator at the first bring-up and kept; the offset in the ring of the
+ * next header to read; and whether the one overflow warning of the boot was
+ * logged. */
 static uint8_t *rx_buf;
 static uint32_t rx_ptr = 0;
 static int rx_overflow_logged;
 
-/* The most recent device discovery or initialization error. */
+/* The reason the last bring-up that found no card or failed gave. */
 static const char *rtl_err = "no card";
 
 static void rtl8139_irq(isr_params_t *params);
@@ -61,24 +68,23 @@ static uint8_t rtl8139_mac[6];
 static struct netdev *rtl8139_iface;
 
 /**
- * Probe, reset, and bring up the RTL8139.
+ * The card is reset with its configuration registers unlocked, its station
+ * address read, the receive buffer and the transmit slots' addresses given
+ * to it, its configuration and filters set, and its interrupts unmasked; the
+ * receiver and transmitter are enabled last, once the buffers are in place,
+ * so that no DMA starts on a ring that is not set up. The receive buffer is
+ * from the boot allocator, page-aligned and below the window's top, so its
+ * physical address fits the 32 bits of RBSTART; it is kept for a later
+ * bring-up.
  *
- * Finds the card on the PCI bus, resets it, latches rtl8139_mac from the chip,
- * programs the RX ring and TX descriptor base addresses, sets the receive and
- * transmit configuration, registers the IRQ handler, and enables the receiver
- * and transmitter. The receiver and transmitter are enabled last, after the
- * buffers are in place, so no DMA can start against an unconfigured ring.
- *
- * A legacy line reaches the processor only through the 8259 pair, and the
- * vector is `32 + irq` in a byte, so a line above 15 is refused rather than
- * registered onto an exception vector. BAR0 must be an assigned I/O window:
- * an unassigned BAR reads zero and a memory BAR is not a port number, and
- * either would drive writes at unrelated legacy ports. Both are checked
- * before bus mastering is enabled, so a card refused for them never had the
- * bus.
- *
- * @return NETDEV_UP on success, NETDEV_ABSENT when absent, or NETDEV_FAILED
- *         with rtl8139_error() describing the failure.
+ * The platform's lines are 0 to 15, at vectors `32 + irq`; a line above 15
+ * has no such vector, and 255, a function's line when it has none, would
+ * wrap the byte onto an exception vector, so such a line is refused. BAR0
+ * must be an assigned I/O window: an unassigned BAR reads zero and a memory
+ * BAR is not a port number, and either would send writes to unrelated
+ * ports. Both are checked before bus mastering is enabled, so a card refused
+ * for them never had the bus. The reset's wait is a count of reads, not a
+ * time.
  */
 int rtl8139_init(struct netdev *nd, int nth)
 {
@@ -86,11 +92,11 @@ int rtl8139_init(struct netdev *nd, int nth)
     uint32_t i;
     uint32_t timeout;
 
-    nd->dev = 0; /* this driver keeps its one card in its own file */
+    nd->dev = 0;
     if (nth != 0) {
         return NETDEV_ABSENT;
     }
-    rtl8139_iface = nd; /* only for the card this driver has */
+    rtl8139_iface = nd;
 
     if (!pci_find_device_by_id(0x10EC, 0x8139, &rtl_pci)) {
         rtl_err = "RTL8139 not found on PCI bus";
@@ -110,10 +116,10 @@ int rtl8139_init(struct netdev *nd, int nth)
     pci_enable_bus_master(&rtl_pci);
     iobase = (uint16_t)pci_bar_address(rtl_pci.bar[0]);
 
-    /* Enter config-write mode so the configuration registers are writable. */
+    /* 0xC0 in 9346CR unlocks the configuration registers. */
     pci_io_write8(iobase + RTL_9346CR, 0xC0);
 
-    /* Software reset; the RST bit self-clears when the reset completes. */
+    /* RST clears itself when the reset is done. */
     pci_io_write8(iobase + RTL_CHIPCMD, RTL_CMD_RST);
     timeout = 100000;
     while ((pci_io_read8(iobase + RTL_CHIPCMD) & RTL_CMD_RST) && --timeout) {
@@ -124,7 +130,7 @@ int rtl8139_init(struct netdev *nd, int nth)
         return NETDEV_FAILED;
     }
 
-    /* The MAC address is latched at I/O offsets 0x00-0x05 after reset. */
+    /* IDR0 to IDR5, ports 0x00 to 0x05, have the station address. */
     mac_lo = pci_io_read32(iobase + RTL_MAC0);
     mac_hi = pci_io_read16(iobase + RTL_MAC4);
     rtl8139_mac[0] = (uint8_t)(mac_lo >> 0);
@@ -134,9 +140,6 @@ int rtl8139_init(struct netdev *nd, int nth)
     rtl8139_mac[4] = (uint8_t)(mac_hi >> 0);
     rtl8139_mac[5] = (uint8_t)(mac_hi >> 8);
 
-    /* Allocate the RX ring from the boot allocator (page-aligned, which also
-     * satisfies the chip's DMA alignment), whose memory lies below the
-     * window's top, and point the chip at its physical address. */
     if (!rx_buf) {
         rx_buf = mem_reserve_ptr(RTL_RX_BUF_SIZE, true);
         if (!rx_buf) {
@@ -147,7 +150,6 @@ int rtl8139_init(struct netdev *nd, int nth)
     pci_io_write32(iobase + RTL_RBSTART, (uint32_t)virt_to_phys(rx_buf));
     rx_ptr = 0;
 
-    /* Pre-load each TX start address; the lengths are written per packet. */
     for (i = 0; i < RTL_TX_NUM; i++) {
         pci_io_write32(iobase + RTL_TSAD0 + i * 4, (uint32_t)virt_to_phys(tx_buf[i]));
     }
@@ -156,25 +158,22 @@ int rtl8139_init(struct netdev *nd, int nth)
     pci_io_write32(iobase + RTL_RCR, RTL_RCR_VALUE);
     pci_io_write32(iobase + RTL_TCR, RTL_TCR_VALUE);
 
-    /* Accept all multicast (fine on SLIRP). */
+    /* A multicast filter of all ones passes every group. */
     pci_io_write32(iobase + RTL_MAR0, 0xFFFFFFFF);
     pci_io_write32(iobase + RTL_MAR4, 0xFFFFFFFF);
 
-    /* Leave config-write mode. */
+    /* 0x00 in 9346CR locks the configuration registers again. */
     pci_io_write8(iobase + RTL_9346CR, 0x00);
 
-    /* Clear any stale interrupt status, then unmask the events we handle. */
+    /* ISR bits are cleared by writing them as 1. */
     pci_io_write16(iobase + RTL_ISR, 0xFFFF);
     pci_io_write16(iobase + RTL_IMR, RTL_ISR_ROK | RTL_ISR_TOK | RTL_ISR_RER | RTL_ISR_TER |
                                          RTL_ISR_RXOVW | RTL_ISR_FOVW);
 
     register_isr_handler((uint8_t)IRQ_VECTOR(rtl_pci.irq), rtl8139_irq, "rtl8139");
 
-    /* Enable the receiver and transmitter (after the buffers are
-     * configured). */
     pci_io_write8(iobase + RTL_CHIPCMD, RTL_CMD_RE | RTL_CMD_TE);
 
-    /* The card's address is its interface's; netdev_probe sets net_mac. */
     for (i = 0; i < 6; i++) {
         nd->mac[i] = rtl8139_mac[i];
     }
@@ -187,16 +186,17 @@ const char *rtl8139_error(void)
 }
 
 /**
- * Log this card's IRQ, I/O port and MAC, then its link.
+ * The driver table's `print_info`: log the card's interrupt line, I/O port
+ * and station address, then its link.
  *
- * The kernel formatter has no field width, so the MAC is printed a nibble at
- * a time.
+ * The kernel formatter has no field width, so the address is printed a
+ * nibble at a time.
  */
 static void rtl8139_print_info(void *dev)
 {
     struct netdev_link link;
 
-    (void)dev; /* this driver has one card */
+    (void)dev;
 
     klog(KLOG_INFO, "rtl8139", "IRQ %d, I/O 0x%X, MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X",
          (int)rtl_pci.irq, (unsigned)iobase, (unsigned)(rtl8139_mac[0] >> 4),
@@ -215,29 +215,26 @@ static void rtl8139_print_info(void *dev)
 }
 
 /**
- * Silence the card: receiver and transmitter off, interrupts masked, DMA
- * revoked.
+ * The driver table's `stop`: receiver and transmitter off, interrupts masked
+ * and acknowledged, and bus mastering cleared, which ends the card's DMA.
  *
- * There is nothing to drain first, unlike the other two: this driver does not
- * track transmit completion at all, because the machine it runs on finishes a
- * descriptor as the length is written (see the note on rtl8139_tx). A frame
- * handed to it has already gone.
+ * Unlike the other two drivers' `stop`, this one waits for no frame to be
+ * sent: the driver does not follow transmit completion, and QEMU's card has
+ * sent a frame by the time `rtl8139_tx` returns.
  *
- * The receive ring is the card's to write into for as long as it is enabled
- * and mastering the bus, and that ring is kernel memory that outlives this
- * driver's interest in it. The order is enables, then mask, then bus
- * mastering: the card is told to stop while it still has a register interface
- * to be told through, and the ability to write memory is taken away last.
+ * The card may write the receive ring for as long as it is enabled and a bus
+ * master, and the ring is kernel memory. The order is the enables, then the
+ * mask, then bus mastering: the card is told to stop through its registers,
+ * and its access to memory is taken away last.
  *
  * Safe on a card that never finished starting, which is how the probe calls
- * it after a failed bring-up. The register writes are guarded on `iobase`,
- * which is zero until a usable port window was found, so nothing here writes
- * to port zero. Bus mastering is revoked outside that guard, whenever the
- * card was found.
+ * it after a failed bring-up. The register writes depend on `iobase`, which
+ * is zero until a usable port window was found, so nothing here writes to
+ * port zero. Bus mastering is cleared whenever the card was found.
  */
 static void rtl8139_stop(void *dev)
 {
-    (void)dev; /* this driver has one card */
+    (void)dev;
     if (iobase != 0) {
         pci_io_write8(iobase + RTL_CHIPCMD, 0);
         pci_io_write16(iobase + RTL_IMR, 0);
@@ -249,11 +246,11 @@ static void rtl8139_stop(void *dev)
 }
 
 /**
- * Report the link, from the card's own media status register.
+ * The driver table's `link`, from the card's media status register.
  *
- * `LINKB` is inverted, so the test reads the opposite way round from every
- * other bit here. Speed is one bit because this card has two speeds, and the
- * duplex comes from the basic mode control register, which is where the PHY
+ * `LINKB` is inverted, so its test reads the opposite way round from every
+ * other bit here. The speed is one bit because this card has two speeds, and
+ * the duplex comes from the basic mode control register, where the PHY
  * records what it negotiated.
  *
  * @return 1 with `*out` filled; 0 only when the driver has no port window,
@@ -263,7 +260,7 @@ static int rtl8139_link(void *dev, struct netdev_link *out)
 {
     uint8_t msr;
 
-    (void)dev; /* this driver has one card */
+    (void)dev;
 
     if (iobase == 0) {
         return 0;
@@ -281,29 +278,20 @@ const struct netdev_ops rtl8139_netdev = {
     rtl8139_link, rtl8139_error, rtl8139_print_info, 0};
 
 /**
- * Copy a frame into the next TX descriptor and start its DMA.
+ * A short frame is padded with zeroes to the 60-byte minimum, so that no
+ * bytes of an earlier frame are sent. The four slots and `tx_idx` are shared
+ * by senders in system calls and in interrupt handlers, so the copy and the
+ * register writes run under `net_lock`, which nests.
  *
- * Frames larger than RTL_TX_BUF_SIZE are dropped; short frames are padded to
- * the 60-byte Ethernet minimum with zeroed pad so no stale buffer bytes leak
- * onto the wire. The descriptor is selected round-robin over the four slots.
- *
- * The four TX descriptors and tx_idx are shared between syscall-context and
- * IRQ-context senders, so the descriptor write runs with interrupts disabled
- * and the prior interrupt flag restored on return. In normal operation IF is
- * already 0 here (see the transmit concurrency note in net.h); the guard makes
- * that requirement explicit instead of trusting every caller to honor it.
- *
- * QEMU completes each transmit synchronously when the TSD is written, so a
- * descriptor is always free again by the time the four-slot rotation returns to
- * it; no OWN-bit poll is needed. Real hardware would poll the TSD OWN bit, but
- * this driver targets QEMU only.
+ * QEMU's card sends a frame as its TSD is written, so a slot is free again
+ * by the time the rotation comes back to it, and the OWN bit is not polled.
  */
 int rtl8139_tx(void *dev, const uint8_t *data, uint16_t len)
 {
     uint16_t txlen;
     uint32_t eflags;
 
-    (void)dev; /* this driver has one card */
+    (void)dev;
 
     if (len > RTL_TX_BUF_SIZE) {
         klog(KLOG_WARN, "rtl8139", "tx: frame of %d bytes is too large, dropped", (int)len);
@@ -330,10 +318,13 @@ int rtl8139_tx(void *dev, const uint8_t *data, uint16_t len)
 }
 
 /**
- * Resync the receiver after a desynced ring header.
+ * Restart the receiver at the start of the ring, after a ring header that
+ * cannot be right. The frames in the ring are lost.
  *
- * Disables RX, resets the software read pointer, reprograms the ring (which
- * also resets the chip's internal write pointer), then re-enables RX.
+ * With the receiver off, the ring's address and the receive configuration
+ * are written again, which also returns the card's write offset to the
+ * start; this driver's read offset goes to 0 and CAPR to 16 bytes before
+ * it, and the error and overflow bits of the status are acknowledged.
  */
 static void rtl8139_rx_reset(void)
 {
@@ -347,18 +338,22 @@ static void rtl8139_rx_reset(void)
 }
 
 /**
- * Drain completed frames from the RX ring up to the chip's write pointer as
- * it was when the call began.
+ * Give the frames in the receive ring to `ethernet_rx`, up to the card's
+ * write offset as it was when the call began. Called from the interrupt
+ * handler, with interrupts off.
  *
- * Reads each 4-byte ring header, validates its status and length before
- * trusting the length, hands the frame (minus its 4-byte CRC) to ethernet_rx,
- * and advances the read pointer and CAPR. A bad header means an error packet or
- * a desynced ring, so the receiver is resynced, not advanced by garbage.
+ * Each header's status and length are checked before the length is used,
+ * and each frame is given without its 4-byte frame check sequence; the read
+ * offset and CAPR then move past it. A bad header is an errored frame or a
+ * ring this driver no longer reads in step with, so it is counted as a
+ * receive error and the receiver restarted (`rtl8139_rx_reset`). A length
+ * of RTL_RX_EARLY is a frame the card is still writing, which the next
+ * interrupt takes.
  *
- * The drain stops at the write pointer it read on entry. Space goes back
- * through CAPR after every frame and the emulated card offers a queued packet
- * the moment it does, so a drain that ran to an empty ring could go on for as
- * long as frames keep arriving, with interrupts off, and starve the timer, the
+ * The drain stops at the write offset it read on entry. Space goes back
+ * through CAPR after every frame and QEMU's card gives a queued frame at
+ * once, so a drain that ran to an empty ring could go on for as long as
+ * frames keep arriving, with interrupts off, and starve the timer, the
  * scheduler and every other line. A frame past the mark raises the source
  * again and is taken by the next entry.
  */
@@ -382,8 +377,7 @@ static void rtl8139_rx(void)
         status = (uint16_t)(rx_buf[rx_ptr] | (rx_buf[rx_ptr + 1] << 8));
         pkt_len = (uint16_t)(rx_buf[rx_ptr + 2] | (rx_buf[rx_ptr + 3] << 8));
 
-        /* The length reads as a sentinel while the chip is still DMAing this
-         * packet; stop and pick it up on the next interrupt. */
+        /* The length is RTL_RX_EARLY while the card is still writing. */
         if (pkt_len == RTL_RX_EARLY) {
             break;
         }
@@ -396,11 +390,10 @@ static void rtl8139_rx(void)
             return;
         }
 
-        /* Hand the frame up without its 4-byte CRC. */
+        /* The length counts the 4-byte frame check sequence. */
         ethernet_rx(rtl8139_iface, rx_buf + rx_ptr + 4, (uint16_t)(pkt_len - 4));
 
-        /* Advance past header + packet, rounded up to the next dword, and wrap
-         * within the ring. CAPR trails the read pointer by 16 bytes. */
+        /* Headers are 4-byte aligned; CAPR is 16 behind the read offset. */
         advance = (uint32_t)pkt_len + 4 + 3;
         rx_ptr = (rx_ptr + advance) & ~3u;
         rx_ptr %= RTL_RX_RING;
@@ -408,28 +401,31 @@ static void rtl8139_rx(void)
     }
 }
 
-/* Interrupt sources this driver acts on (TOK is unmasked but needs no work). */
+/* The sources unmasked at bring-up; TOK needs no work. */
 #define RTL_ISR_HANDLED \
     (RTL_ISR_ROK | RTL_ISR_TOK | RTL_ISR_RER | RTL_ISR_TER | RTL_ISR_RXOVW | RTL_ISR_FOVW)
 
 /**
- * Service the card until its interrupt status reads clear.
+ * The card's interrupt handler: service the card until its status reads
+ * clear.
  *
- * The card shares a PCI interrupt line (e.g. with the HDA device), and a frame
- * finishing after ISR is acknowledged but before the ring drains would
- * re-assert ROK. Reading and acknowledging in a loop until nothing is pending
- * leaves the line deasserted and the ring drained on return, so no event is
- * stranded for the next IRQ. The guard bounds the loop should a status bit ever
- * stick. The shared IRQ router has already sent the PIC EOI, so this handler
- * must not touch the PIC.
+ * The line may be shared, with the HDA controller among others, and a frame
+ * that arrives after the status is acknowledged but before the ring is
+ * drained sets ROK again. Reading and acknowledging in a loop until nothing
+ * is pending leaves the line deasserted and the ring drained on return, so no
+ * event waits for the next interrupt. The guard of 64 reads bounds the loop
+ * should a status bit stay set. The interrupt router ends the interrupt at
+ * its controller, so this handler sends no end of interrupt.
  *
- * Overflow is counted on every entry but logged only once per boot, so
- * sustained traffic cannot evict the boot inventory with repeated warnings.
- * Draining the ring is the whole recovery: the card reports the overflow
- * instead of writing the packet that would not fit, so the frames already in
- * the ring are whole, and a reset would throw away frames that arrived since.
- * A ring that is actually desynced is caught by the header check in the
- * drain, which does reset.
+ * An overflow is counted as a receive drop on every entry but logged only
+ * once in a boot, so that sustained traffic cannot push the boot's lines out
+ * of the log with repeated warnings. Draining the ring is the whole
+ * recovery: the card reports the overflow instead of writing the frame that
+ * would not fit, so the frames already in the ring are whole, and a reset
+ * would lose frames that arrived since. A ring read out of step is caught by
+ * the header check in the drain, which does reset. A receive error is
+ * counted and a transmit error logged; TOK needs nothing, since the driver
+ * does not follow transmit completion.
  */
 static void rtl8139_irq(isr_params_t *params)
 {
@@ -443,7 +439,7 @@ static void rtl8139_irq(isr_params_t *params)
         if ((isr_val & RTL_ISR_HANDLED) == 0) {
             break;
         }
-        pci_io_write16(iobase + RTL_ISR, isr_val); /* write-1-to-clear acknowledge */
+        pci_io_write16(iobase + RTL_ISR, isr_val); /* bits written as 1 clear */
 
         if (isr_val & RTL_ISR_ROK) {
             rtl8139_rx();
@@ -464,7 +460,5 @@ static void rtl8139_irq(isr_params_t *params)
         if (isr_val & RTL_ISR_TER) {
             klog(KLOG_WARN, "rtl8139", "tx: the card reported an error");
         }
-        /* TOK needs no work here. This driver does not wait for a transmit
-         * to complete at all; see the note on rtl8139_tx. */
     }
 }
