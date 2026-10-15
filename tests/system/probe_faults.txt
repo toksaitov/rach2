@@ -802,6 +802,24 @@ new
                 rc = walk_move(&cur, cur.mnt->parent, cur.mnt->parent->root, locked);
 end
 
+fault krffs-root-getattr-bare
+probe tmpfsmusl
+file rach2/sys/fs/vfs.c
+expect TMPFSMUSL FAIL (a bind of the KRFFS root reports its links
+old
+        st->mode = VFS_S_IFDIR | 0755u;
+    } else {
+        st->mode = krffs_mode_type(n->mode) | (uint32_t)(n->mode & 07777u);
+    }
+new
+        st->mode = VFS_S_IFDIR | 0755u;
+        st->ino = 1;
+        return 0;
+    } else {
+        st->mode = krffs_mode_type(n->mode) | (uint32_t)(n->mode & 07777u);
+    }
+end
+
 fault chdir-root-shortcut
 probe chrootmusl
 file rach2/sys/syscall_fs.c

@@ -26,8 +26,9 @@
  * file made through it as its source does after the file grows enough for
  * KRFFS to move it, and so does a descriptor opened before the growth, whose
  * fstat reaches the file where it is now; and the bind's root is busy to rmdir
- * until the bind is unmounted. A recursive bind of /dev has its devices and
- * /dev/shm, which are unmounted in turn with /dev/mqueue.
+ * until the bind is unmounted. A bind of the KRFFS root directory reports its
+ * links, owner and times as / does. A recursive bind of /dev has its devices
+ * and /dev/shm, which are unmounted in turn with /dev/mqueue.
  *
  * The program runs as root, since it mounts. It prints `TMPFSMUSL OK` and
  * exits 0 on success, and prints `TMPFSMUSL FAIL (detail)` and exits 1
@@ -438,10 +439,34 @@ static int kbound(void)
     return 0;
 }
 
+/**
+ * Check that a bind of the KRFFS root directory reports what / does for it.
+ * Returns 0, or 1 once the failure is reported.
+ */
+static int krbound(void)
+{
+    struct stat a, b;
+
+    if (mkdir("/tmp/kbroot", 0755) != 0 || mount("/", "/tmp/kbroot", NULL, MS_BIND, NULL) != 0) {
+        return fail("a bind of the KRFFS root directory");
+    }
+    if (stat("/", &a) != 0 || stat("/tmp/kbroot", &b) != 0 || a.st_ino != b.st_ino ||
+        a.st_mode != b.st_mode || a.st_nlink != b.st_nlink || a.st_uid != b.st_uid ||
+        a.st_gid != b.st_gid || a.st_mtim.tv_sec != b.st_mtim.tv_sec ||
+        a.st_mtim.tv_nsec != b.st_mtim.tv_nsec || a.st_ctim.tv_sec != b.st_ctim.tv_sec ||
+        a.st_ctim.tv_nsec != b.st_ctim.tv_nsec || a.st_atim.tv_sec != b.st_atim.tv_sec) {
+        return fail("a bind of the KRFFS root reports its links, owner and times as / does");
+    }
+    if (umount2("/tmp/kbroot", 0) != 0 || rmdir("/tmp/kbroot") != 0) {
+        return fail("the bind of the KRFFS root unmounts and its directory goes");
+    }
+    return 0;
+}
+
 int main(void)
 {
     if (placed() || resized() || deep() || shm() || bound() || bound_mount() || rbound() ||
-        kbound()) {
+        kbound() || krbound()) {
         return 1;
     }
     printf("TMPFSMUSL OK\n");

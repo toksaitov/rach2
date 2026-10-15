@@ -1859,8 +1859,9 @@ static int kfs_lookup(struct vfs_mount *mnt, void *dir, const char *name, void *
 }
 
 /** The `getattr` of the KRFFS root: a node's mode, owner, size and times,
- * one link, and the inode number `krffs_node_ino` gives. The root directory
- * reports mode 0755 and inode 1, owned by root, with no times. */
+ * one link, and the inode number `krffs_node_ino` gives, as
+ * `krffs_fill_stat64` reports them for the boot root. The root directory
+ * reports mode 0755 whatever its stored mode says. */
 static int kfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     krffs_node_t *n = node;
@@ -1870,10 +1871,9 @@ static int kfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     if (n == krffs_fs->node) {
         /* The root's stored mode has the dirty flag, KRFFS_MODE_DIRTY. */
         st->mode = VFS_S_IFDIR | 0755u;
-        st->ino = 1;
-        return 0;
+    } else {
+        st->mode = krffs_mode_type(n->mode) | (uint32_t)(n->mode & 07777u);
     }
-    st->mode = krffs_mode_type(n->mode) | (uint32_t)(n->mode & 07777u);
     st->uid = n->uid;
     st->gid = n->gid;
     st->nlink = 1;
