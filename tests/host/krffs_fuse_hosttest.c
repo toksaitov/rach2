@@ -2,7 +2,8 @@
  * krffs_fuse_hosttest.c: the FUSE mount of KRFFS, the entry point of
  * krffs/krffs.c and the callbacks of krffs/krffs_fuse_operations.c, over a
  * mapping of a scratch image file, with tests/host/fuse/fuse.h in place of
- * libfuse's header.
+ * libfuse's header, and with krffs/stageimage.krffs.c to stage nodes as the
+ * image scripts do.
  *
  * host-deps: krffs/krffs_fuse_operations.c krffs/krffs_allocator.c
  * host-deps: krffs/krffs_node.c krffs/krffs_file_system.c
@@ -12,11 +13,15 @@
 #define main krffs_mount_main
 #include "../../krffs/krffs.c"
 #undef main
+#define main krffs_stage_main
+#include "../../krffs/stageimage.krffs.c"
+#undef main
 
 static int failures;
 static int mounted;
 static struct krffs_file_system fixture;
 static char image_path[] = "krffs-fuse.XXXXXX";
+static char listing[512];
 
 /** Count and print a failed row; the rows after it still run. */
 static void check(int ok, const char *what)
@@ -47,6 +52,32 @@ struct fuse_context *fuse_get_context(void)
 {
     static struct fuse_context context = {123, 456};
     return &context;
+}
+
+/**
+ * Append `name` to `listing`, after a blank unless it is the first, in place
+ * of FUSE's filler.
+ */
+static int list_name(void *buffer, const char *name, const struct stat *stat_buffer, off_t offset)
+{
+    (void)buffer;
+    (void)stat_buffer;
+    (void)offset;
+    if (listing[0] != '\0') {
+        strncat(listing, " ", sizeof(listing) - strlen(listing) - 1);
+    }
+    strncat(listing, name, sizeof(listing) - strlen(listing) - 1);
+    return 0;
+}
+
+/** Return the names `krffs_readdir` lists for `path`, or "error". */
+static const char *list(const char *path)
+{
+    listing[0] = '\0';
+    if (krffs_readdir(path, NULL, list_name, 0, NULL) != 0) {
+        return "error";
+    }
+    return listing;
 }
 
 /**
@@ -195,7 +226,7 @@ static void owner_rows(void)
 
     reset_image();
     check(krffs_create("/a", 0600, NULL) == 0, "create owned file");
-    node = krffs_find_reserved_node_by_name(&fixture, "a");
+    node = krffs_find_node_by_path(&fixture, "/a", 2);
     check(krffs_chown("/a", (uid_t)-1, 789) == 0 && node->uid == 123 && node->gid == 789,
           "group-only chown preserves uid");
     check(krffs_chown("/a", 321, (gid_t)-1) == 0 && node->uid == 321 && node->gid == 789,
@@ -216,7 +247,7 @@ static void time_rows(void)
 
     reset_image();
     check(krffs_create("/a", 0600, NULL) == 0, "create timed file");
-    node = krffs_find_reserved_node_by_name(&fixture, "a");
+    node = krffs_find_node_by_path(&fixture, "/a", 2);
     check(krffs_utimens("/a", times) == 0 && node->access_time.seconds == 946684800 &&
               node->access_time.nanoseconds == 123 &&
               node->modification_time.seconds == 946684900 &&
@@ -244,6 +275,94 @@ static void time_rows(void)
     check(krffs_utimens("/a", NULL) == 0 && node->access_time.seconds >= before.seconds &&
               node->modification_time.seconds >= before.seconds,
           "null times set now");
+}
+
+/**
+ * Stage `/d/f` and then `/f` with the image stager, which gives every node
+ * the id mixed from its directory's and its name, and require the mount to
+ * find each by its directory and name: each reads its own bytes, `/d` is a
+ * directory, and each directory lists its own names once.
+ */
+static void staged_rows(void)
+{
+    struct stat stat_buffer;
+    char buffer[8] = {0};
+
+    reset_image();
+    check(stage_file(&fixture, "/d/f", 0100644, 0, 0, "inner", 5) &&
+              stage_file(&fixture, "/f", 0100644, 0, 0, "outer", 5),
+          "stage two files named f");
+    check(krffs_getattr("/d", &stat_buffer) == 0 && S_ISDIR(stat_buffer.st_mode),
+          "staged directory is a directory");
+    check(krffs_open("/d/f", NULL) == 0, "staged file opens");
+    check(krffs_read("/d/f", buffer, sizeof(buffer), 0, NULL) == 5 &&
+              memcmp(buffer, "inner", 5) == 0,
+          "staged file in a directory reads");
+    check(krffs_read("/f", buffer, sizeof(buffer), 0, NULL) == 5 && memcmp(buffer, "outer", 5) == 0,
+          "staged file of the same name at the root reads");
+    check(strcmp(list("/"), ". .. d f") == 0 && strcmp(list("/d"), ". .. f") == 0,
+          "each staged directory lists its own names");
+}
+
+/**
+ * Check the directories the mount makes: their mode and owner, a file in one
+ * apart from a file of the same name at the root, the root's link count,
+ * creation under a missing directory and under a file, the refusals of
+ * `rmdir`, `unlink` and `rename` that the kernel makes, a rename across
+ * directories, and `mkdir` refusing `/cb`, whose id `/bC` has.
+ */
+static void directory_rows(void)
+{
+    struct stat stat_buffer;
+    char buffer[4] = {0};
+
+    reset_image();
+    check(krffs_mkdir("/d", 0750) == 0, "mkdir");
+    check(krffs_getattr("/d", &stat_buffer) == 0 && S_ISDIR(stat_buffer.st_mode) &&
+              (stat_buffer.st_mode & 07777) == 0750 && stat_buffer.st_uid == 123 &&
+              stat_buffer.st_nlink == 2,
+          "made directory attributes");
+    check(krffs_create("/d/a", 0100600, NULL) == 0 && krffs_write("/d/a", "in", 2, 0, NULL) == 2,
+          "create in a directory");
+    check(krffs_create("/a", 0100600, NULL) == 0 && krffs_write("/a", "out", 3, 0, NULL) == 3,
+          "create the same name at the root");
+    check(krffs_read("/d/a", buffer, sizeof(buffer), 0, NULL) == 2 && memcmp(buffer, "in", 2) == 0,
+          "directory keeps its own file");
+    check(strcmp(list("/"), ". .. d a") == 0 && strcmp(list("/d"), ". .. a") == 0,
+          "each made directory lists its own names");
+    check(krffs_getattr("/", &stat_buffer) == 0 && stat_buffer.st_nlink == 3,
+          "root counts its directory");
+    check(krffs_create("/x/a", 0100600, NULL) == -ENOENT, "create under a missing directory");
+    check(krffs_create("/a/b", 0100600, NULL) == -ENOTDIR, "create under a file");
+    check(krffs_rmdir("/d") == -ENOTEMPTY, "rmdir refuses a directory with a file");
+    check(krffs_unlink("/d") == -EISDIR, "unlink refuses a directory");
+    check(krffs_rename("/d", "/e") == -EPERM, "rename refuses a directory");
+    check(krffs_rename("/a", "/d") == -EISDIR, "rename does not replace a directory");
+    check(krffs_rename("/d/a", "/b") == 0 && krffs_getattr("/d/a", &stat_buffer) == -ENOENT &&
+              krffs_read("/b", buffer, sizeof(buffer), 0, NULL) == 2 &&
+              memcmp(buffer, "in", 2) == 0,
+          "rename across directories");
+    check(krffs_rmdir("/d") == 0 && krffs_getattr("/d", &stat_buffer) == -ENOENT,
+          "rmdir an empty directory");
+    check(krffs_mkdir("/bC", 0755) == 0 && krffs_mkdir("/cb", 0755) == -EINVAL,
+          "mkdir refuses a taken directory id");
+}
+
+/**
+ * Grow a file in a directory with a neighbour after it, which moves the file
+ * to a new node, and require it to stay in its directory.
+ */
+static void moved_row(void)
+{
+    struct stat stat_buffer;
+
+    reset_image();
+    check(krffs_mkdir("/d", 0755) == 0 && krffs_create("/d/a", 0100600, NULL) == 0 &&
+              krffs_create("/d/b", 0100600, NULL) == 0,
+          "make a file and its neighbour");
+    check(krffs_write("/d/a", "x", 1, 8191, NULL) == 1, "grow past the neighbour");
+    check(krffs_getattr("/d/a", &stat_buffer) == 0 && stat_buffer.st_size == 8192,
+          "moved file keeps its directory");
 }
 
 /**
@@ -276,6 +395,9 @@ int main(void)
     slack_row();
     owner_rows();
     time_rows();
+    staged_rows();
+    directory_rows();
+    moved_row();
     krffs_unmap_file(fixture.node, (size_t)fixture.size);
     unlink(image_path);
     printf("krffs-fuse-test: result: %d failures\n", failures);

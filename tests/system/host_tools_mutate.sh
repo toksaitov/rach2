@@ -59,9 +59,9 @@ elif kind == 'truncate':
     replace('        node->data_size = size;\n        krffs_sync_mapping(node, sizeof(*node));\n        return node;',
             '        return node;')
 elif kind == 'timestamps':
-    start = s.index('            if (!time || time[0].tv_nsec == UTIME_NOW)')
-    end = s.index('\n\n            krffs_sync_mapping', start)
-    s = s[:start] + '            node->access_time = current_node_time;\n            node->modification_time = current_node_time;' + s[end:]
+    start = s.index('        if (!time || time[0].tv_nsec == UTIME_NOW)')
+    end = s.index('\n\n        krffs_sync_mapping', start)
+    s = s[:start] + '        node->access_time = current_node_time;\n        node->modification_time = current_node_time;' + s[end:]
 elif kind == 'host-djb':
     replace('hash = ((hash << 5) + hash) ^ character;',
             'hash = ((hash << 5) + hash) + character;')
@@ -96,7 +96,7 @@ select_case()
         truncate) file=krffs/krffs_allocator.c; expected='capacity growth updates eof' ;;
         timestamps) file=krffs/krffs_fuse_operations.c; expected='explicit timestamps retained' ;;
         host-djb) file=krffs/krffs_utilities.c; expected='hash vector failed' ;;
-        host-mix) file=krffs/stageimage.krffs.c; expected='hash vector failed' ;;
+        host-mix) file=krffs/krffs_utilities.c; expected='hash vector failed' ;;
         kernel-djb|kernel-mix) file=rach2/sys/fs/krffs.c; expected='kernel hash vector' ;;
         probe-root) file=tests/Makefile; expected='unassigned program: review_unassigned' ;;
         probe-musl) file=tests/musl/review_unassigned.c; expected='unassigned program: musl/review_unassigned' ;;

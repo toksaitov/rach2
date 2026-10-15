@@ -1,5 +1,6 @@
 /*
- * krffs_utilities.c: the djb2 hash and the size printer of krffs_utilities.h.
+ * krffs_utilities.c: the djb2 hash, the directory identifier and the size
+ * printer of krffs_utilities.h.
  */
 
 #include "krffs_utilities.h"
@@ -20,6 +21,18 @@ uint64_t krffs_calculate_djb_hash(uint8_t *string)
     }
 
     return hash;
+}
+
+uint64_t krffs_mix_id(uint64_t parent_id, const char *name)
+{
+    assert(name);
+
+    uint64_t h = (parent_id + 1) * 1099511628211ULL;
+
+    h ^= krffs_calculate_djb_hash((uint8_t *)name);
+    h *= 1099511628211ULL;
+
+    return h ? h : 1;
 }
 
 char *krffs_scale_size(uint64_t size, char *buffer, size_t buffer_size)

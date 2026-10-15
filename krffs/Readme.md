@@ -127,7 +127,7 @@ mkdir -p build/krffs/mount
 build/krffs/krffs build/krffs/file_system.krffs build/krffs/mount
 ```
 
-The driver checks the whole ring first, backward links included, and runs FUSE single-threaded. The mount is one flat directory: create, read, write, truncate, rename, unlink, `chmod`, `chown`, `utimens`, `fsync` and `statfs` work, and there is no `mkdir`, `rmdir`, hard link or symbolic link. A write past the end of a file fills the gap with zeros. `chown` keeps an owner or group given as -1; `utimens` takes times, `UTIME_NOW`, `UTIME_OMIT`, or none, meaning now; and the root's dirty flag is neither shown in its mode nor changed by `chmod`. Unmount with `umount` on macOS or `fusermount -u` on Linux.
+The driver checks the whole ring first, backward links included, and runs FUSE single-threaded. It finds a path as the kernel does, a component at a time by its directory and its name, so a staged image and one made through the mount read alike. Create, read, write, truncate, rename, unlink, `mkdir`, `rmdir`, `chmod`, `chown`, `utimens`, `fsync` and `statfs` work, and there is no hard link or symbolic link. As on the kernel's boot root, a directory cannot be renamed, a rename does not replace a directory, and `mkdir` refuses a name whose identifier another directory has, with `EINVAL`. A write past the end of a file fills the gap with zeros. `chown` keeps an owner or group given as -1; `utimens` takes times, `UTIME_NOW`, `UTIME_OMIT`, or none, meaning now; and the root's dirty flag is neither shown in its mode nor changed by `chmod`. Unmount with `umount` on macOS or `fusermount -u` on Linux.
 
 ### The staged scripts
 
@@ -143,7 +143,7 @@ The driver checks the whole ring first, backward links included, and runs FUSE s
 * `krffs_node.c`: `struct krffs_node`, the packed 357-byte node header, laid out as the kernel's `krffs_node_t`, and the ring walk: the next node is at a node's address plus its size, and the end of the region wraps to the root.
 * `krffs_file_system.c`, `krffs_platform.c`: the handle, a mapped region and its size; mapping it (`mmap`, or `MapViewOfFile` on Windows); the empty layout; the region options.
 * `krffs_allocator.c`: first fit with split and coalesce, as in the kernel, for the stager, `fsck.krffs` and the FUSE driver.
-* `krffs_utilities.c`: the djb2 hash of a name. `krffs_reader.c`: the bounds-checked path walk of `readfile.krffs`.
+* `krffs_node.c`: the node header, the ring walk, and the lookup of a path by directory and name. `krffs_utilities.c`: the djb2 hash of a name and the identifier of a directory. `krffs_reader.c`: the bounds-checked path walk of `readfile.krffs`.
 * `NAME.krffs.c`: each tool. `krffs.c`, `krffs_fuse_operations.c`: the FUSE driver.
 * `vendor/`: termbox2 2.7.0-dev (MIT license), its Windows form, and `windows.sh`, which makes one from the other. `vs-dokany/`: a Visual Studio solution with the FUSE driver, over Dokany's FUSE library, and five of the tools.
 
@@ -151,11 +151,11 @@ Every tool maps the region shared and works on the nodes in place, so a store in
 
 ### Identifiers
 
-Each node has a 64-bit identifier, and a reserved node has its directory's in `parent_id`, 0 for the root directory. `krffs_calculate_djb_hash` is the djb2 hash of a name: `mkfs.krffs` gives it to the root and the FUSE driver to the files it creates, as the kernel does to the regular files it creates. `krffs_mix_id` in `stageimage.krffs.c` mixes the parent's identifier with that hash, as the kernel's function of the same name does, and the stager gives the result to every node. `tests/host/krffs_hash_vectors.h` has the values both must give, and the kernel's test checks its own functions against the same list. The kernel finds a file by its directory and name, never by its identifier, so a file with either kind works there.
+Each node has a 64-bit identifier, and a reserved node has its directory's in `parent_id`, 0 for the root directory. `krffs_calculate_djb_hash` is the djb2 hash of a name: `mkfs.krffs` gives it to the root and the FUSE driver to the files it creates, as the kernel does to the regular files it creates. `krffs_mix_id` in `krffs_utilities.c` mixes the parent's identifier with that hash, as the kernel's function of the same name does; the stager gives the result to every node, and the FUSE driver, as the kernel does, to the directories it makes. `tests/host/krffs_hash_vectors.h` has the values both must give, and the kernel's test checks its own functions against the same list. The kernel finds a file by its directory and name, never by its identifier, so a file with either kind works there.
 
 ### Staging and checking
 
-`stageimage.krffs` gives the root the owner 0:0 and the staged time, then applies the manifest a line at a time (`apply_line`). `resolve_dir` finds or makes each directory of a path through `find_child`, which matches a reserved node's `parent_id` and name, and `stage_node` allocates the node, fills its header and copies the data after it. Each image is staged into an empty file system, so a name already there is an error, not an update. The bulk directives sort a directory's names before they stage them, since `readdir` order differs between hosts.
+`stageimage.krffs` gives the root the owner 0:0 and the staged time, then applies the manifest a line at a time (`apply_line`). `resolve_dir` finds or makes each directory of a path through `krffs_find_child`, which matches a reserved node's `parent_id` and name, and `stage_node` allocates the node, fills its header and copies the data after it. Each image is staged into an empty file system, so a name already there is an error, not an update. The bulk directives sort a directory's names before they stage them, since `readdir` order differs between hosts.
 
 `fsck.krffs` asks of each node what the kernel's mount check asks, and judges a node's size before it steps by it. It writes nothing until the walk has returned to the root. It then rebuilds the backward links first, since the allocator follows them when it frees a node, takes the name off the loser of each repeated name, frees the nameless reserved nodes through the allocator, and clears the dirty flag last.
 
@@ -173,7 +173,7 @@ An image is staged again when a file it stages changes, and only then. `manifest
 
 ## Limits
 
-* The FUSE driver takes a whole-file image. It finds a file by the djb2 hash of its name alone, ignoring `parent_id`, so it lists the named nodes of every directory as one, and cannot open a staged node, whose identifier is the mixed one. It is for images made with `mkfs.krffs`.
+* The FUSE driver takes a whole-file image, and renames no directory.
 * `defrag.krffs` does not pass the region options to `fsck.krffs`, so it works only on a whole-file image.
 * `fsviz.krffs` and `edfs.krffs` follow the ring by each node's size without `fsck.krffs`'s checks, so an image `fsck.krffs` refuses can make them loop or read past the mapping.
 * `edfs.krffs --set-name` on a directory replaces its identifier, which cuts it off from its children.
@@ -188,6 +188,6 @@ An image is staged again when a file it stages changes, and only then. `manifest
 * `tests/run krffscheck` (`tests/system/krffscheck.sh`, needs `python3`) damages images and reads `fsck.krffs`'s verdicts on each fault, then stops a model of the kernel's order of writes after each store and requires every result to be accepted or repaired.
 * `tests/run imagerace` builds one image twice at once, and checks that a changed program restages its image while an unchanged one, or a file made beside it, does not.
 * `crash`, `shutdown`, `krffsmount` and `loopdev` run `fsck.krffs` on volumes the kernel wrote, and `selfbuild` takes the kernel the guest built off its disk with `readfile.krffs`.
-* `sh tests/host/krffs_tools_mutate.sh` puts thirteen faults into private copies of the stager, `fsviz.krffs`, `defrag.krffs`, `edfs.krffs` and `mkimage.sh`; `sh tests/host/krffs_fuse_mutate.sh` removes the driver's ring check; and `sh tests/system/host_tools_mutate.sh` puts faults into the driver, the host allocator's truncate and the host hashes, among others. Each fault must fail its test.
+* `sh tests/host/krffs_tools_mutate.sh` puts thirteen faults into private copies of the stager, `fsviz.krffs`, `defrag.krffs`, `edfs.krffs` and `mkimage.sh`; `sh tests/host/krffs_fuse_mutate.sh` puts five faults into the driver and the library, among them the ring check taken out and a lookup that ignores the directory; and `sh tests/system/host_tools_mutate.sh` puts faults into the driver, the host allocator's truncate and the host hashes, among others. Each fault must fail its test.
 
 [`tests/host/Readme.md`](../tests/host/Readme.md) and [`tests/system/Readme.md`](../tests/system/Readme.md) describe these. Run a suite with `tests/run NAME`, and a mutation script with `sh` from the repository root.

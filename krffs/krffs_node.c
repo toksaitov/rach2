@@ -179,18 +179,37 @@ bool krffs_is_node_in_file_system(struct krffs_file_system *file_system, struct 
     return is_inside;
 }
 
-struct krffs_node *krffs_find_reserved_node_by_name(struct krffs_file_system *file_system,
-                                                    const char *name)
+bool krffs_is_directory(struct krffs_file_system *file_system, const struct krffs_node *node)
+{
+    assert(file_system && node);
+
+    return node == file_system->node || (node->type == KRFFS_Reserved_Node &&
+                                         (node->mode & KRFFS_MODE_IFMT) == KRFFS_MODE_IFDIR);
+}
+
+uint64_t krffs_get_directory_id(struct krffs_file_system *file_system,
+                                const struct krffs_node *node)
+{
+    assert(file_system && node);
+
+    return node == file_system->node ? 0 : node->id;
+}
+
+struct krffs_node *krffs_find_child(struct krffs_file_system *file_system, uint64_t directory_id,
+                                    const char *name)
 {
     assert(file_system && name);
 
     struct krffs_node *result = NULL;
 
-    uint64_t hash = krffs_calculate_djb_hash((uint8_t *)name);
+    if (name[0] == '\0') {
+        return result;
+    }
 
     struct krffs_node *node = file_system->node;
     do {
-        if (node->type == KRFFS_Reserved_Node && node->name[0] != '\0' && node->id == hash) {
+        if (node->type == KRFFS_Reserved_Node && node->parent_id == directory_id &&
+            strcmp((const char *)node->name, name) == 0) {
             result = node;
 
             break;
@@ -200,20 +219,16 @@ struct krffs_node *krffs_find_reserved_node_by_name(struct krffs_file_system *fi
     return result;
 }
 
-struct krffs_node *krffs_find_reserved_or_root_node_by_name(struct krffs_file_system *file_system,
-                                                            const char *name)
+struct krffs_node *krffs_find_directory_by_id(struct krffs_file_system *file_system, uint64_t id)
 {
-    assert(file_system && name);
+    assert(file_system);
 
     struct krffs_node *result = NULL;
 
-    uint64_t hash = krffs_calculate_djb_hash((uint8_t *)name);
-
     struct krffs_node *node = file_system->node;
     do {
-        if ((node->type == KRFFS_Root_Node ||
-             (node->type == KRFFS_Reserved_Node && node->name[0] != '\0')) &&
-            node->id == hash) {
+        if (node->type == KRFFS_Reserved_Node && krffs_is_directory(file_system, node) &&
+            node->name[0] != '\0' && node->id == id) {
             result = node;
 
             break;
@@ -221,6 +236,41 @@ struct krffs_node *krffs_find_reserved_or_root_node_by_name(struct krffs_file_sy
     } while ((node = krffs_get_next_node(file_system, node)) != file_system->node);
 
     return result;
+}
+
+struct krffs_node *krffs_find_node_by_path(struct krffs_file_system *file_system, const char *path,
+                                           size_t length)
+{
+    assert(file_system && path);
+
+    struct krffs_node *node = file_system->node;
+    size_t position = 0;
+
+    while (node) {
+        while (position < length && path[position] == '/') {
+            ++position;
+        }
+        if (position == length) {
+            break;
+        }
+
+        size_t start = position;
+        while (position < length && path[position] != '/') {
+            ++position;
+        }
+
+        char name[KRFFS_FILE_NAME_BUFFER_SIZE];
+        size_t name_length = position - start;
+        if (!krffs_is_directory(file_system, node) || name_length >= sizeof(name)) {
+            return NULL;
+        }
+        memcpy(name, path + start, name_length);
+        name[name_length] = '\0';
+
+        node = krffs_find_child(file_system, krffs_get_directory_id(file_system, node), name);
+    }
+
+    return node;
 }
 
 size_t krffs_count_free_nodes(struct krffs_file_system *file_system)

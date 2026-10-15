@@ -39,6 +39,13 @@ enum krffs_node_type {
  */
 #define KRFFS_MODE_DIRTY 0004000u
 
+/**
+ * The type field of a node's mode and a directory's value in it, as the
+ * kernel writes them; the host's `S_IFDIR` need not be the same.
+ */
+#define KRFFS_MODE_IFDIR 0040000u
+#define KRFFS_MODE_IFMT  0170000u
+
 /** A node timestamp, byte-packed as part of the on-disk node record. */
 #pragma pack(push, 1)
 struct krffs_node_time {
@@ -146,24 +153,46 @@ uint64_t krffs_get_node_relative_position(struct krffs_file_system *file_system,
 bool krffs_is_node_in_file_system(struct krffs_file_system *file_system, struct krffs_node *node);
 
 /**
- * Returns the first reserved node in ring order whose `id` is the djb2 hash
- * of `name` and whose name is not empty, or NULL. The name itself is not
- * compared and `parent_id` is not read, so every directory is searched as
- * one, and a node with a mixed id, as the stager and the kernel give, is not
- * found. A node with an empty name is an orphan, which the kernel unlinked
- * while a descriptor held it; it keeps its `id`, so the name test leaves it
- * out.
+ * Reports whether `node` is a directory: the root, or a reserved node whose
+ * mode has the type `KRFFS_MODE_IFDIR`.
  */
-struct krffs_node *krffs_find_reserved_node_by_name(struct krffs_file_system *file_system,
-                                                    const char *name);
+bool krffs_is_directory(struct krffs_file_system *file_system, const struct krffs_node *node);
 
 /**
- * Like `krffs_find_reserved_node_by_name`, but the root, whose name is empty,
- * is found too when its `id` is the hash of `name`. `mkfs.krffs` gives it the
- * hash of the empty name, so `name` "" finds it.
+ * Returns the id that the nodes in the directory `node` have as their
+ * `parent_id`: 0 for the root, and the directory's own `id` otherwise.
  */
-struct krffs_node *krffs_find_reserved_or_root_node_by_name(struct krffs_file_system *file_system,
-                                                            const char *name);
+uint64_t krffs_get_directory_id(struct krffs_file_system *file_system,
+                                const struct krffs_node *node);
+
+/**
+ * Returns the first reserved node in ring order whose `parent_id` is
+ * `directory_id` and whose name is `name`, or NULL; the kernel's
+ * `krffs_find_child` matches the same way. An empty `name` finds nothing: a
+ * node with an empty name is an orphan, which the kernel unlinked while a
+ * descriptor held it, and no path reaches it.
+ */
+struct krffs_node *krffs_find_child(struct krffs_file_system *file_system, uint64_t directory_id,
+                                    const char *name);
+
+/**
+ * Returns the directory whose `id` is `id`, or NULL. As in the kernel's
+ * `krffs_id_taken`, it is a reserved node with a directory's mode and a
+ * name, since a node with no name is an orphan and no path reaches it.
+ */
+struct krffs_node *krffs_find_directory_by_id(struct krffs_file_system *file_system, uint64_t id);
+
+/**
+ * Returns the node at the absolute path made of the first `length` bytes of
+ * `path`, or NULL. The walk starts at the root and finds each component in
+ * the directory before it with `krffs_find_child`, as the kernel's walk
+ * does, so a component before the last must be a directory. Slashes may
+ * repeat or trail, and a path of slashes alone, or of none, is the root.
+ * `.` and `..` are names like any other, and a component longer than 255
+ * bytes is not found.
+ */
+struct krffs_node *krffs_find_node_by_path(struct krffs_file_system *file_system, const char *path,
+                                           size_t length);
 
 /** Counts the free nodes in the file system. */
 size_t krffs_count_free_nodes(struct krffs_file_system *file_system);

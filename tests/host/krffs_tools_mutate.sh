@@ -334,7 +334,7 @@ apply_fault()
             mutate stageimage.krffs.c 'strncmp(path, "/dev/", 5) == 0' '0'
             row=stager-synthetic ;;
         twice)
-            mutate stageimage.krffs.c 'if (find_child(file_system, dir_id, name) != NULL) {' \
+            mutate stageimage.krffs.c 'if (krffs_find_child(file_system, dir_id, name) != NULL) {' \
                 'if (0) {'
             row=stager-twice ;;
         tree-twice)

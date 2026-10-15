@@ -25,10 +25,12 @@ struct fuse_operations {
     int (*read)(const char *, char *, size_t, off_t, struct fuse_file_info *);
     int (*mknod)(const char *, mode_t, dev_t);
     int (*create)(const char *, mode_t, struct fuse_file_info *);
+    int (*mkdir)(const char *, mode_t);
     int (*write)(const char *, const char *, size_t, off_t, struct fuse_file_info *);
     int (*fsync)(const char *, int, struct fuse_file_info *);
     int (*truncate)(const char *, off_t);
     int (*unlink)(const char *);
+    int (*rmdir)(const char *);
     int (*rename)(const char *, const char *);
     int (*utimens)(const char *, const struct timespec[2]);
     int (*chmod)(const char *, mode_t);

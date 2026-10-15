@@ -27,13 +27,6 @@
 #include <unistd.h>
 #endif
 
-/**
- * The type field of a node's mode and a directory's value in it, as the
- * kernel writes them; the host's `S_IFDIR` need not be the same.
- */
-#define KRFFS_MODE_IFDIR 0040000u
-#define KRFFS_MODE_IFMT  0170000u
-
 /** Returns whether the mode of `node` makes it a directory. */
 static bool is_dir_node(const struct krffs_node *node)
 {
@@ -216,62 +209,6 @@ static char *read_whole_file(const char *path, size_t *len)
 }
 
 /**
- * Returns the id of a node named `name` in the directory `parent_id`: the
- * djb2 hash of the name mixed with `parent_id` by the 64-bit FNV prime, and 1
- * in place of 0. The kernel's `krffs_mix_id` (rach2/sys/fs/krffs.c), which
- * gives a directory its id, is the same function, so a directory staged here
- * has the id the kernel would give it.
- */
-static uint64_t krffs_mix_id(uint64_t parent_id, const char *name)
-{
-    uint64_t h = (parent_id + 1) * 1099511628211ULL;
-
-    h ^= krffs_calculate_djb_hash((uint8_t *)name);
-    h *= 1099511628211ULL;
-
-    return h ? h : 1;
-}
-
-/**
- * Returns the reserved node named `name` in the directory `parent_id`, or
- * NULL, matched by name and `parent_id` as the kernel's `krffs_find_child`
- * matches it.
- */
-static struct krffs_node *find_child(struct krffs_file_system *file_system, uint64_t parent_id,
-                                     const char *name)
-{
-    struct krffs_node *node = file_system->node;
-
-    do {
-        if (node->type == KRFFS_Reserved_Node && node->parent_id == parent_id &&
-            strcmp((const char *)node->name, name) == 0) {
-            return node;
-        }
-    } while ((node = krffs_get_next_node(file_system, node)) != file_system->node);
-
-    return NULL;
-}
-
-/**
- * Returns the directory whose `id` is `id`, or NULL. As in the kernel's
- * `krffs_id_taken`, it is a reserved node with a directory's mode and a name,
- * since a node with no name is an orphan and no path reaches it.
- */
-static struct krffs_node *find_dir_by_id(struct krffs_file_system *file_system, uint64_t id)
-{
-    struct krffs_node *node = file_system->node;
-
-    do {
-        if (node->type == KRFFS_Reserved_Node && is_dir_node(node) && node->name[0] != '\0' &&
-            node->id == id) {
-            return node;
-        }
-    } while ((node = krffs_get_next_node(file_system, node)) != file_system->node);
-
-    return NULL;
-}
-
-/**
  * Writes the guest path of the directory `node` into `buf`, of `size` bytes,
  * for a message.
  *
@@ -288,7 +225,8 @@ static void dir_path(struct krffs_file_system *file_system, const struct krffs_n
 
     while (node != NULL && depth < sizeof(chain) / sizeof(chain[0])) {
         chain[depth++] = node;
-        node = node->parent_id == 0 ? NULL : find_dir_by_id(file_system, node->parent_id);
+        node =
+            node->parent_id == 0 ? NULL : krffs_find_directory_by_id(file_system, node->parent_id);
     }
     buf[0] = '\0';
     while (depth > 0 && used < size) {
@@ -314,7 +252,8 @@ static void dir_path(struct krffs_file_system *file_system, const struct krffs_n
 static bool dir_id_free(struct krffs_file_system *file_system, uint64_t parent_id, const char *name,
                         const char *path)
 {
-    const struct krffs_node *other = find_dir_by_id(file_system, krffs_mix_id(parent_id, name));
+    const struct krffs_node *other =
+        krffs_find_directory_by_id(file_system, krffs_mix_id(parent_id, name));
     char other_path[512];
 
     if (other == NULL) {
@@ -434,7 +373,7 @@ static uint64_t resolve_dir(struct krffs_file_system *file_system, const char *p
     strcpy(buf, path + 1);
 
     for (p = strtok_r(buf, "/", &save); p != NULL; p = strtok_r(NULL, "/", &save)) {
-        struct krffs_node *existing = find_child(file_system, parent, p);
+        struct krffs_node *existing = krffs_find_child(file_system, parent, p);
         uint64_t id;
 
         if (existing != NULL) {
@@ -726,7 +665,7 @@ static bool stage_dir(struct krffs_file_system *file_system, const char *path, u
         return false;
     }
 
-    node = find_child(file_system, parent_id, name);
+    node = krffs_find_child(file_system, parent_id, name);
     if (node != NULL) {
         if (!is_dir_node(node)) {
             fprintf(stderr, "stageimage: '%s' already exists as a non-directory.\n", path);
@@ -790,7 +729,7 @@ static bool stage_file(struct krffs_file_system *file_system, const char *path, 
         return false;
     }
 
-    if (find_child(file_system, dir_id, name) != NULL) {
+    if (krffs_find_child(file_system, dir_id, name) != NULL) {
         fprintf(stderr, "stageimage: '%s' is staged more than once.\n", path);
 
         return false;
@@ -1049,7 +988,7 @@ static bool stage_dir_if_absent(struct krffs_file_system *file_system, const cha
     if (parent_id == (uint64_t)-1) {
         return false;
     }
-    node = find_child(file_system, parent_id, name);
+    node = krffs_find_child(file_system, parent_id, name);
     if (node != NULL) {
         if (!is_dir_node(node)) {
             fprintf(stderr, "stageimage: '%s' already exists as a non-directory.\n", path);
