@@ -1,17 +1,12 @@
 /*
- * netdev.c: the driver table and the binding.
+ * netdev.c: the driver table, the probe that brings up the cards and `lo`,
+ * and the interface records it fills, as netdev.h describes them.
  *
- * The order of the table is the probe order, and each position has a reason.
- * The RTL8139 is first because it is what every existing suite boots against
- * and must keep binding. The e1000 is second because it is what QEMU attaches
- * when nobody asks for a card, so it is what an emulated machine has by
- * default. The RTL8168GU is last because it is the physical target.
- *
- * A failed card is stopped and its error retained. Probing continues with
- * subsequent cards and drivers, subject to the interface and failure limits.
- *
- * A driver's `init` must have no effect on a machine where its device is
- * absent, since the next driver's probe runs after it.
+ * The order of the table is the probe's order, and so the order of the
+ * interfaces' names on a machine with cards of more than one kind: the
+ * RTL8139, which rach2/qemu_devices.sh gives QEMU unless `NIC` names
+ * another card; the e1000, which QEMU attaches when no card is named; and
+ * the RTL8168GU, the Lenovo G50-70's card, which QEMU does not emulate.
  */
 
 #include "netdev.h"
@@ -23,22 +18,18 @@
 #include "../../klog.h"
 #include "../../lib/kstring.h"
 
-/*
- * The interfaces the probe brought up, in the order it found them. Each is
- * one card: a driver and that driver's own record for it, with the name and
- * index the rest of the kernel knows it by.
- */
+/* The interfaces: the `niface` cards the probe brought up, in the order it
+ * found them, and `lo` after them. */
 static struct netdev ifaces[NETDEV_MAX + 1];
 static int niface;
 
 /* Whether `lo` stands after the cards, in ifaces[niface]. */
 static int lo_ready;
 
-/* Why the last probe bound nothing. A driver that found ITS card and then
- * failed to bring it up is the interesting case and the one whose reason is
- * kept: on the target machine the RTL8139 is simply absent, and printing that
- * absence instead of the real failure would hide the only diagnostic there is
- * on a machine with no network to report it over. */
+/* The reason the last probe's last failed card gave (`netdev_error`). A
+ * driver that answers absent leaves it as it is, so that one card's absence
+ * does not hide another's failure, the one report a machine with no network
+ * has. */
 static const char *probe_error = "no supported network card";
 
 static const struct netdev_ops *const drivers[] = {&rtl8139_netdev, &e1000_netdev, &rtl8168_netdev};
@@ -123,7 +114,7 @@ int netdev_holds(const struct netdev *nd, uint32_t ip)
     int i;
 
     if (ip == 0 || !nd) {
-        return 0; /* an unconfigured interface owns no address */
+        return 0;
     }
     for (i = 0; i < nd->naddr2; i++) {
         if (nd->ip2[i] == ip) {
@@ -194,7 +185,7 @@ int netdev_is_broadcast(uint32_t ip)
     return 0;
 }
 
-/** Name interface `n` `ethN`, which is what every ioctl matches it by. */
+/** Name `nd`, the interface of card `n` from 0, `ethN`. */
 static void name_iface(struct netdev *nd, int n)
 {
     nd->name[0] = 'e';
@@ -211,9 +202,9 @@ static void name_iface(struct netdev *nd, int n)
 }
 
 /**
- * Return the zero-based card number refused by `rach2.nicfail`, or -1.
- *
- * Only cards that initialize successfully count toward this number.
+ * The number from 0 of the card `rach2.nicfail=N` refuses, or -1 when the
+ * boot line has no such option or its value is not a decimal number. Only
+ * the cards that come up are counted.
  */
 static int nicfail_at(void)
 {
@@ -231,19 +222,11 @@ static int nicfail_at(void)
 }
 
 /**
- * Try every compiled-in driver and take every card each of them finds.
- *
- * A failed card is stopped, and its reason, the driver's error or the
- * boot-line refusal, replaces `probe_error`, so the last failure is the one
- * reported. Probing continues with subsequent cards and drivers, subject to
- * the interface and failure limits.
- *
- * Stop failed cards because initialization may have enabled bus mastering.
- * They have no bound interface through which shutdown could stop them.
- * Limit failures per driver to NETDEV_MAX in case a driver never reports
- * NETDEV_ABSENT. The first interface supplies the primary hardware address.
- *
- * @return 1 when at least one interface came up, 0 when none did.
+ * A card that fails is stopped here, since its bring-up may have enabled
+ * bus mastering and no interface is left through which the shutdown could
+ * stop it; its slot of `ifaces` is given to the next card. Its reason, the
+ * driver's error or the boot line's refusal, replaces `probe_error`. The
+ * limit of `NETDEV_MAX` failures ends a driver that never answers absent.
  */
 int netdev_probe(void)
 {

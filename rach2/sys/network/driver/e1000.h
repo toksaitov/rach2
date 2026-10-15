@@ -5,25 +5,24 @@
 #include "netdev.h"
 
 /*
- * Intel 82540EM gigabit driver, the card QEMU attaches when nobody chooses.
+ * e1000.h: the registers of the Intel 82540EM gigabit card, the card QEMU
+ * attaches when no card is named, and the driver's entry in the table.
  *
  * `qemu-system-i386 -device e1000` is this chip; `e1000-82540em` is that
- * device's own alias. It is therefore the card a person gets from a plain
- * QEMU command line, and until this driver existed such a machine booted with
- * no network and no explanation. The related `e1000e` device is the 82574L,
- * a different register interface, and is not this driver's.
+ * device's own alias. The related `e1000e` device is the 82574L, a different
+ * register interface, and is not this driver's.
  *
  * The chip is the descriptor-ring design in its plainest form: two rings of
  * 16-byte descriptors, a head the card owns and a tail the driver owns, and
- * a done bit written back per descriptor. It has no indirect-access windows
- * and no vendor firmware, which is what makes it the one to read first. The
- * register data below comes from the Intel PCI/PCI-X Family of Gigabit
- * Ethernet Controllers Software Developer's Manual, and every value this
- * driver writes is named rather than spelled as a number.
+ * a done bit written back in each descriptor. It has no indirect-access
+ * windows and no vendor firmware, which is why it is the one to read first.
+ * The register data below comes from the Intel PCI/PCI-X Family of Gigabit
+ * Ethernet Controllers Software Developer's Manual, and the bits this driver
+ * writes are named here.
  *
  * Deliberately absent: jumbo frames, every checksum and segmentation
- * offload, MSI and MSI-X (this kernel is PIC-only), multiple queues, VLAN
- * handling, interrupt throttling, and runtime power management.
+ * offload, MSI and MSI-X, multiple queues, VLAN handling, interrupt
+ * throttling, and runtime power management.
  */
 
 /* The one device this driver claims. QEMU's `e1000` reports it. */
@@ -35,20 +34,17 @@
    because Intel's specification update records that on this part a memory
    write of `CTRL.RST` can be followed by a bridge padding write that takes a
    master abort while the controller is resetting, which some bridges promote
-   to a fatal machine check. The reference driver uses the I/O path on every
-   member before the 82545 revision 3 for that reason. The I/O window is a
-   pair: an address register at offset 0 and a data register at offset 4. */
+   to a fatal machine check. Linux's e1000 driver also resets the 82540
+   through the I/O window. The I/O window is a pair: an address register at
+   offset 0 and a data register at offset 4. */
 #define E1000_IO_ADDR 0
 #define E1000_IO_DATA 4
 
-/* The register window the 82540EM declares in BAR0. The driver reads and
-   writes nothing above RAH0; the whole window is mapped anyway, because that
-   is what the card decodes and a partial mapping would fault on a read this
-   driver does not yet make. */
+/* The memory window the 82540EM decodes, 128 KiB, which is mapped whole
+   although the driver uses no register above RAH0. */
 #define E1000_BAR_WINDOW (128u * 1024u)
 
-/* Registers, by offset in the memory window. The driver touches nothing
-   above RAH0. */
+/* Registers, by offset in the memory window. */
 #define E1000_CTRL   0x0000 /* device control */
 #define E1000_STATUS 0x0008 /* device status */
 #define E1000_EERD   0x0014 /* EEPROM read */
@@ -83,7 +79,7 @@
 #define E1000_CTRL_FRCDPLX 0x00001000u /* force duplex */
 #define E1000_CTRL_RST     0x04000000u /* device reset, self-clearing */
 #define E1000_CTRL_VME     0x40000000u /* VLAN mode */
-#define E1000_CTRL_PHY_RST 0x80000000u
+#define E1000_CTRL_PHY_RST 0x80000000u /* PHY reset */
 
 /* Device status bits. The speed field is two bits: 0 is 10, 1 is 100, and
    both 2 and 3 mean 1000. */
@@ -102,9 +98,9 @@
 #define E1000_EEPROM_STEPS    100u
 #define E1000_EEPROM_USEC     50u
 
-/* The station address registers. AV marks RAH0 as holding a real address,
-   which is how a card that loaded it from its own EEPROM at power-on is told
-   apart from one whose registers are still clear. */
+/* The station address registers. AV, address valid, marks RAH0 as holding
+   an address, which is how a card that loaded it from its own EEPROM at
+   power-on is told apart from one whose registers are still clear. */
 #define E1000_RAH_AV      0x80000000u
 #define E1000_MTA_ENTRIES 128u
 
@@ -120,9 +116,8 @@
 #define E1000_RCTL_SZ_2048 0x00000000u /* BSIZE 00 with BSEX clear */
 #define E1000_RCTL_SECRC   0x04000000u /* strip the frame check sequence */
 
-/* Transmit control. PSP asks the card to pad a short frame; this driver pads
-   in software as well, because the two do not agree on every emulated card
-   and a runt on the wire is the failure that would follow. */
+/* Transmit control. PSP asks the card to pad a short frame, which the
+   driver also pads itself (`e1000_tx_frame`). */
 #define E1000_TCTL_EN         0x00000002u
 #define E1000_TCTL_PSP        0x00000008u /* pad short packets */
 /* Retransmit on late collision. With this clear a late collision on a
@@ -134,8 +129,8 @@
 #define E1000_TCTL_CT_DEFAULT 0x0fu
 #define E1000_TCTL_COLD_FD    0x40u /* full duplex distance, in byte times */
 
-/* Transmit inter-packet gap, the copper values the reference driver uses:
-   IPGT 8, IPGR1 8, IPGR2 6. QEMU ignores this register; a real chip does
+/* Transmit inter-packet gap, the copper values Linux's e1000 driver uses:
+   IPGT 8, IPGR1 8, IPGR2 6. QEMU ignores this register; the chip does
    not. */
 #define E1000_TIPG_IPGT        8u
 #define E1000_TIPG_IPGR1       8u
@@ -143,11 +138,11 @@
 #define E1000_TIPG_IPGR1_SHIFT 10
 #define E1000_TIPG_IPGR2_SHIFT 20
 
-/* Interrupt causes. The mask carries only what this driver acts on, which is
-   why TXDW is not in it: transmit descriptors are reclaimed by the next
-   transmit, so an interrupt per completion would be one this handler has
-   nothing to do with. It is still named, because reading ICR reports every
-   cause whatever the mask says. */
+/* Interrupt causes. The mask has the receive causes and the link change.
+   TXDW is left out of it, since transmit descriptors are reclaimed by the
+   next transmit and an interrupt for each completion would find nothing to
+   do; it is named because reading ICR reports every cause whatever the
+   mask. */
 #define E1000_INT_TXDW   0x00000001u /* transmit descriptor written back */
 #define E1000_INT_LSC    0x00000004u /* link status changed */
 #define E1000_INT_RXDMT0 0x00000010u /* receive ring at its low threshold */
@@ -156,7 +151,7 @@
 #define E1000_INT_MASK   (E1000_INT_LSC | E1000_INT_RXDMT0 | E1000_INT_RXO | E1000_INT_RXT0)
 
 /* Receive descriptor status and error bits. A descriptor can report DD and
-   EOP and still carry an error, which is why both bytes are read. */
+   EOP and still have an error bit set, which is why both bytes are read. */
 #define E1000_RXD_STAT_DD  0x01u /* descriptor done */
 #define E1000_RXD_STAT_EOP 0x02u /* end of packet */
 #define E1000_RXD_ERR_ANY  0xffu
@@ -168,7 +163,7 @@
 #define E1000_TXD_CMD_RS   0x08u /* report status */
 #define E1000_TXD_STAT_DD  0x01u /* descriptor done */
 
-/* The rings. 32 descriptors each, so both rings are 512 bytes, which
+/* The rings. 32 descriptors each, so each ring is 512 bytes, which
    satisfies the requirement that RDLEN and TDLEN be a multiple of 128. */
 #define E1000_RING_SIZE  32
 #define E1000_RING_BYTES (E1000_RING_SIZE * 16)
@@ -182,27 +177,26 @@
 #define E1000_FRAME_MIN   14 /* an Ethernet header and nothing after it */
 
 /* How long a transmit waits for a full ring to free its next descriptor:
-   about a millisecond, the interval rtl8168.c settled on, short enough that a
-   wedged card does not hold the caller. */
+   ten waits of 100 microseconds, about a millisecond, as in rtl8168.c, short
+   enough that a stuck card does not hold the caller long. */
 #define E1000_TX_WAIT_STEPS 10u
 #define E1000_TX_WAIT_USEC  100u
 
-/* How long `stop` waits for what the card already accepted to reach the wire
-   before it silences the card. The shutdown path submits a last log line and
-   then stops the device, so without this the message a remote reader is
-   waiting for would be discarded in the ring it was just placed in. */
+/* How long `stop` waits for the frames the card has taken to be sent,
+   twenty waits of 500 microseconds (`e1000_stop`). */
 #define E1000_DRAIN_STEPS 20u
 #define E1000_DRAIN_USEC  500u
 
-/* How long the reset handshake is given to clear CTRL.RST. The manual asks
-   for a wait of microseconds; this is far longer, because a budget that is
-   too short is a bring-up that fails on one machine only. */
+/* How long the card is given to clear CTRL.RST, 100 waits of 100
+   microseconds. The manual asks for a wait of microseconds; this is far
+   longer, because a limit that is too short is a bring-up that fails on one
+   machine only. */
 #define E1000_RESET_STEPS 100u
 #define E1000_RESET_USEC  100u
 
-/* How long a card that arrived running is given to finish a transfer already
-   begun, before it is reset out from under itself. The reference driver waits
-   10 ms here. */
+/* How long a card the firmware left running is given to finish a transfer
+   already begun before it is reset. Linux's e1000 driver waits 10 ms at the
+   same point. */
 #define E1000_QUIESCE_USEC 10000u
 
 /**
@@ -210,10 +204,9 @@
  * them.
  *
  * The manual describes the second half as a 16-bit length, a 16-bit checksum,
- * a status byte, an error byte, and a 16-bit VLAN field. They are packed into
- * two 32-bit words here for the reason `struct r8168_desc` packs its own: the
- * layout is then stated by the shifts that read it rather than resting on
- * what the compiler does with adjacent narrow members.
+ * a status byte, an error byte, and a 16-bit VLAN field. They are kept as two
+ * 32-bit words here and read with shifts, so the layout does not depend on
+ * how a compiler places adjacent narrow members.
  */
 struct e1000_rx_desc {
     uint32_t addr_lo;
@@ -230,15 +223,16 @@ struct e1000_tx_desc {
     uint32_t upper; /* status in 0..7, offload start in 8..15, VLAN in 16..31 */
 };
 
-/* The accessors take a volatile pointer because the rings are shared with
-   the card; see the declaration in e1000.c. */
+/* The fields of the packed words. The accessors are given the rings'
+   descriptors, which are volatile because the card writes them (`struct
+   e1000` in e1000.c). */
 #define E1000_RXD_LEN(d)          ((d)->len_csum & 0xffffu)
 #define E1000_RXD_STATUS(d)       ((uint8_t)((d)->sta_err & 0xffu))
 #define E1000_RXD_ERRORS(d)       ((uint8_t)(((d)->sta_err >> 8) & 0xffu))
 #define E1000_TXD_STATUS(d)       ((uint8_t)((d)->upper & 0xffu))
 #define E1000_TXD_LOWER(len, cmd) (((uint32_t)(len)) | ((uint32_t)(cmd) << 24))
 
-/** This driver's entry in the device table (driver/netdev.h). */
+/** This driver's entry in the driver table (netdev.c). */
 extern const struct netdev_ops e1000_netdev;
 
 #endif /* _E1000_H_ */

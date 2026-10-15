@@ -178,7 +178,7 @@ rach2/sys/lib/kfmt.c:k_vprintf lines 112 a parser over an external format, one c
 
 rach2/sys/mm/vm.c:vm_insert_file params 7 the parameters are the fields of one region; a struct for them would be filled and unpacked once
 
-rach2/sys/network/driver/e1000.c:e1000_init lines 162 a hardware sequence, the registers written in the order the datasheet requires
+rach2/sys/network/driver/e1000.c:e1000_init lines 130 a hardware sequence, the registers written in the order the datasheet requires
 
 rach2/sys/network/driver/rtl8168.c:rtl8168_init lines 123 a hardware sequence, the registers written in the order the datasheet requires
 
