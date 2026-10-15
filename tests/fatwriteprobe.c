@@ -106,63 +106,6 @@ static void fail_n(const char *why, int n)
     sys_exit(1);
 }
 
-/** Whether `needle` occurs in the string `hay`. */
-static int contains(const char *hay, const char *needle)
-{
-    const char *h;
-
-    for (h = hay; *h; h++) {
-        const char *a = h;
-        const char *b = needle;
-
-        while (*a && *b && *a == *b) {
-            a++;
-            b++;
-        }
-        if (!*b) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-/** Whether the getdents64 records in the first `n` bytes of `b` name `name`:
- * the records are binary, so they are walked by d_reclen rather than read as
- * text. */
-static int dirents_contain(const unsigned char *b, int n, const char *name)
-{
-    int at = 0;
-
-    while (at + 19 < n) {
-        int reclen = b[at + 16] | (b[at + 17] << 8);
-        const char *dn = (const char *)b + at + 19;
-        const char *a = dn;
-        const char *c = name;
-
-        while (*a && *c && *a == *c) {
-            a++;
-            c++;
-        }
-        if (!*a && !*c) {
-            return 1;
-        }
-        if (reclen <= 0) {
-            break;
-        }
-        at += reclen;
-    }
-    return 0;
-}
-
-/** stat(2) of `path`: 0 when it exists, or a negated errno. */
-static int xstat(const char *path)
-{
-    char st[KSTAT_SIZE];
-
-    st[0] = 0;
-    return syscall2(SYS_STAT, (long)path, (long)st);
-}
-
 /* The type mounted: vfat unless the second argument names another, which
  * is how the exfat suite runs the same modes on its volume. */
 static const char *fs_type = "vfat";
@@ -174,50 +117,8 @@ static int do_mount(const char *src, const char *target, unsigned flags, const c
     return syscall5(SYS_MOUNT, (long)src, (long)target, (long)fs_type, (int)flags, (long)data);
 }
 
-/** Sleep `ms` milliseconds. */
-static void sleep_ms(int ms)
-{
-    long ts[2];
-
-    ts[0] = ms / 1000;
-    ts[1] = (ms % 1000) * 1000000;
-    syscall2(SYS_NANOSLEEP, (long)ts, 0);
-}
-
-/** Reap `pid` and return its wait status; fail when waitpid does. */
-static int wait_status(int pid)
-{
-    int status = 0;
-
-    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid) {
-        fail("waitpid");
-    }
-    return status;
-}
-
-static unsigned char buf[4096];
-
-/** Read the /proc file `path` into `buf` as text, with one read of at most
- * 4095 bytes; fail when it does not open or read. */
-static void read_text(const char *path)
-{
-    int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
-    int n;
-
-    if (fd < 0) {
-        fail(path);
-    }
-    n = syscall3(SYS_READ, fd, (long)buf, sizeof(buf) - 1);
-    if (n < 0) {
-        fail("reading a /proc file");
-    }
-    buf[n] = 0;
-    syscall1(SYS_CLOSE, fd);
-}
-
 #define FW      "/fw"
 #define SRC     "/dev/disk0p2"
-#define O_CREAT 0100
 #define O_TRUNC 01000
 
 static unsigned char pattern[65536];

@@ -264,8 +264,6 @@ static void read_rows(void)
             fail("the listing of the mount");
         }
     }
-
-    (void)0;
 }
 
 /** `/proc/mounts` calls the volume read-only, as the read mode mounted it:

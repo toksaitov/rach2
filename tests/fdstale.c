@@ -95,15 +95,14 @@
  * the condition on the orphan is judged by, since an orphan taken at either
  * call site with no holder is one nobody is left to close.
  *
- * A directory is not kept as an orphan but refused: rmdir answers -EBUSY while
- * a descriptor, an O_PATH one among them, or a working directory refers to
- * the directory on the boot root, where ext2 keeps one as it keeps a file.
- * A descriptor of the boot root finds its directory by the node's place, so
- * a directory freed under one would leave it on whatever node the allocator
- * put there next. The case holds the directory each way in turn, as the
- * working directory of a child and then of the caller, and requires the
- * descriptor to go on listing it and the rmdir to succeed once nothing
- * refers to it.
+ * KRFFS refuses rmdir with -EBUSY while a descriptor, including O_PATH,
+ * or a working directory refers to the directory. A descriptor finds its
+ * directory by the node's place, so freeing it would leave the descriptor
+ * on whatever node the allocator put there next. The descriptor must still
+ * list the directory, and rmdir must succeed once nothing refers to it.
+ * Ext2 removes the name and keeps the inode until its last reference goes;
+ * getdents64 through the descriptor then returns -ENOENT. Each kind of
+ * reference is tested on a separate directory on ext2.
  *
  * Every wait checks WIFEXITED before WEXITSTATUS: a signal death has the
  * signal in the low bits and would otherwise decode as exit 0, scoring a
@@ -559,11 +558,11 @@ static void orphan_scan_case(void)
     want_eq("close the orphan", syscall3(SYS_CLOSE, fd, 0, 0), 0);
 }
 
-/** Whether the root this probe runs on is the boot root. A rename row below
- * expects different answers on the two file systems, and reads the type out
- * of `/proc/mounts` rather than assuming the one it was written on. A root
- * whose line cannot be read is taken for the boot root, which is what an
- * image without `/proc` boots. */
+/**
+ * Read whether the root is KRFFS from /proc/mounts. The rename and rmdir
+ * rows need different results on KRFFS and ext2. Assume KRFFS if the mount
+ * table cannot be read or has no root line, as on an image without /proc.
+ */
 static int root_is_krffs(void)
 {
     static char mounts[1024];
@@ -922,16 +921,18 @@ static void cwd_child(void)
     syscall1(SYS_EXIT, 0);
 }
 
-/** A directory in use is refused with EBUSY, which POSIX permits, on the
- * boot root: while a descriptor has it, one opened for reading and then one
- * opened with O_PATH, while it is a child's working directory, and while it
- * is the caller's own. The descriptor opened for reading still lists the
- * directory and resolves a relative path through it, and the rmdir succeeds
- * once nothing refers to the directory, the caller having gone back to the
- * root, which on the boot root leaves the working directory no node. */
+/**
+ * Check rmdir with a reading descriptor, an O_PATH descriptor, a child's
+ * working directory and the caller's working directory. KRFFS refuses each
+ * removal with -EBUSY and removes the directory after the last reference
+ * goes. Ext2 removes each name immediately, so each case needs a new
+ * directory; the open reading descriptor then lists it with -ENOENT.
+ */
 static void directory_case(void)
 {
     static char dbuf[256];
+    int krffs = root_is_krffs();
+    int result = krffs ? -EBUSY : 0;
     int fd;
     int dot;
     int pid;
@@ -939,33 +940,49 @@ static void directory_case(void)
     want_eq("mkdir the directory to be removed", syscall3(SYS_MKDIR, (long)DDIR, 0755, 0), 0);
     fd = syscall3(SYS_OPEN, (long)DDIR, O_RDONLY | O_DIRECTORY, 0);
     want_ok("open the directory", fd);
-    want_eq("rmdir refused under the directory descriptor", syscall3(SYS_RMDIR, (long)DDIR, 0, 0),
-            -EBUSY);
-    want_ok("getdents64 through the held directory",
-            syscall3(SYS_GETDENTS64, fd, (long)dbuf, (int)sizeof(dbuf)));
-    dot = syscall4(SYS_OPENAT, fd, (long)".", O_RDONLY | O_DIRECTORY, 0);
-    want_ok("a relative path through the held directory", dot);
-    want_eq("close what the relative path opened", syscall3(SYS_CLOSE, dot, 0, 0), 0);
+    want_eq("rmdir under the directory descriptor", syscall3(SYS_RMDIR, (long)DDIR, 0, 0), result);
+    if (krffs) {
+        want_ok("getdents64 through the held directory",
+                syscall3(SYS_GETDENTS64, fd, (long)dbuf, (int)sizeof(dbuf)));
+        dot = syscall4(SYS_OPENAT, fd, (long)".", O_RDONLY | O_DIRECTORY, 0);
+        want_ok("a relative path through the held directory", dot);
+        want_eq("close what the relative path opened", syscall3(SYS_CLOSE, dot, 0, 0), 0);
+    } else {
+        want_eq("getdents64 through the removed directory",
+                syscall3(SYS_GETDENTS64, fd, (long)dbuf, (int)sizeof(dbuf)), -ENOENT);
+    }
     want_eq("close the held directory", syscall3(SYS_CLOSE, fd, 0, 0), 0);
 
+    if (!krffs) {
+        want_eq("mkdir for the O_PATH descriptor", syscall3(SYS_MKDIR, (long)DDIR, 0755, 0), 0);
+    }
     fd = syscall3(SYS_OPEN, (long)DDIR, O_PATH, 0);
     want_ok("open the directory with O_PATH", fd);
-    want_eq("rmdir refused under the O_PATH descriptor", syscall3(SYS_RMDIR, (long)DDIR, 0, 0),
-            -EBUSY);
+    want_eq("rmdir under the O_PATH descriptor", syscall3(SYS_RMDIR, (long)DDIR, 0, 0), result);
     want_eq("close the O_PATH descriptor", syscall3(SYS_CLOSE, fd, 0, 0), 0);
 
+    if (!krffs) {
+        want_eq("mkdir for the child's working directory", syscall3(SYS_MKDIR, (long)DDIR, 0755, 0),
+                0);
+    }
     pid = spawn(cwd_child, "fork the working-directory child");
     wait_for("the parent waits for the child's chdir", up[0]);
-    want_eq("rmdir refused under a working directory", syscall3(SYS_RMDIR, (long)DDIR, 0, 0),
-            -EBUSY);
+    want_eq("rmdir under a working directory", syscall3(SYS_RMDIR, (long)DDIR, 0, 0), result);
     notify("the parent releases the working-directory child", down[1]);
     reap(pid, "the working-directory child");
 
+    if (!krffs) {
+        want_eq("mkdir for the caller's working directory",
+                syscall3(SYS_MKDIR, (long)DDIR, 0755, 0), 0);
+    }
     want_eq("chdir into the directory", syscall1(SYS_CHDIR, (long)DDIR), 0);
-    want_eq("rmdir refused under the caller's own working directory",
-            syscall3(SYS_RMDIR, (long)DDIR, 0, 0), -EBUSY);
+    want_eq("rmdir under the caller's own working directory", syscall3(SYS_RMDIR, (long)DDIR, 0, 0),
+            result);
     want_eq("chdir back to the root", syscall1(SYS_CHDIR, (long)"/"), 0);
-    want_eq("rmdir once nothing refers to the directory", syscall3(SYS_RMDIR, (long)DDIR, 0, 0), 0);
+    if (krffs) {
+        want_eq("rmdir once nothing refers to the directory", syscall3(SYS_RMDIR, (long)DDIR, 0, 0),
+                0);
+    }
 }
 
 /** Run every case, the cross-process ones over the two pipes, and print

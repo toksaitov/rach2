@@ -682,8 +682,6 @@ void probe_main(unsigned long *sp)
     want_eq("close the file chowned by descriptor", syscall3(SYS_CLOSE, fd, 0, 0), 0);
     want_mode("an fchown kept setuid", FCHOWNED, 0755);
     want_owner("an fchown did not store the owner", FCHOWNED, 1000, 1000);
-    want_owner("an fchown did not store the owner", FCHOWNED, 1000, 1000);
-    want_owner("an fchown did not store the owner", FCHOWNED, 1000, 1000);
 
     fd = syscall3(SYS_OPEN, (long)FDIRSUID, O_RDONLY | O_DIRECTORY, 0);
     want_ok("open the directory to be chowned by descriptor", fd);

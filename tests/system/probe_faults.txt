@@ -3696,7 +3696,7 @@ end
 fault root-rmdir-descriptions-ignored
 probe fdstale
 file rach2/sys/syscall_fs.c
-expect FDSTALE FAIL: rmdir refused under the directory descriptor
+expect FDSTALE FAIL: rmdir under the directory descriptor
 old
     if (fd_ofd_holders(mnt, dir, NULL) > 0) {
         return 1;
@@ -3709,7 +3709,7 @@ end
 fault root-rmdir-o-path-ignored
 probe fdstale
 file rach2/sys/syscall_fs.c
-expect FDSTALE FAIL: rmdir refused under the O_PATH descriptor
+expect FDSTALE FAIL: rmdir under the O_PATH descriptor
 old
     if (fd_ofd_holders(mnt, dir, NULL) > 0) {
         return 1;
@@ -3732,7 +3732,7 @@ end
 fault root-rmdir-cwd-ignored
 probe fdstale
 file rach2/sys/syscall_fs.c
-expect FDSTALE FAIL: rmdir refused under a working directory
+expect FDSTALE FAIL: rmdir under a working directory
 old
     for (pr = proc_list; pr; pr = pr->next) {
         if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {
@@ -3746,7 +3746,7 @@ end
 fault root-cwd-not-recorded
 probe fdstale
 file rach2/sys/fs/vfs.c
-expect FDSTALE FAIL: rmdir refused under a working directory
+expect FDSTALE FAIL: rmdir under a working directory
 old
     if (mnt && (mnt == mounts[1] || mnt == mounts[2])) {
         mnt = 0;
@@ -3779,7 +3779,7 @@ end
 fault root-rmdir-caller-cwd-skipped
 probe fdstale
 file rach2/sys/syscall_fs.c
-expect FDSTALE FAIL: rmdir refused under the caller's own working directory
+expect FDSTALE FAIL: rmdir under the caller's own working directory
 old
         if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {
 new
