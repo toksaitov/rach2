@@ -3618,12 +3618,12 @@ long sys_tgkill(isr_params_t *params)
     return do_tkill((int)SC_ARG(params, 0), (int)SC_ARG(params, 1), (int)SC_ARG(params, 2));
 }
 
-/*
+/**
  * The siginfo a caller of rt_sigqueueinfo or rt_tgsigqueueinfo gives at
  * `u`: its code and the three words after it, the pid, uid and value that
  * sigqueue fills in. A code of zero or above, or SI_TKILL, is the kernel's
  * to send, and a caller may give one only to its own process (`own`), as
- * on Linux; -EPERM otherwise.
+ * on Linux. Returns 0, -EFAULT when `u` cannot be read, or -EPERM.
  */
 static int32_t queued_info(uintptr_t u, int own, struct k_siginfo *info)
 {
@@ -3643,7 +3643,10 @@ static int32_t queued_info(uintptr_t u, int own, struct k_siginfo *info)
  * rt_sigqueueinfo, which sigqueue calls, takes pid, signal and the siginfo,
  * posted to the process with that siginfo, under kill's permission. The kernel
  * keeps one pending instance of each signal, so a real-time signal sent again
- * while pending is merged, where Linux queues it.
+ * while pending is merged, where Linux queues it. Signal 0, and a signal to a
+ * process whose threads have all ended, are checked and not posted. -EINVAL
+ * for a signal out of range, -ESRCH for no such process, and -EFAULT or
+ * -EPERM from the siginfo (`queued_info`) or the permission.
  */
 long sys_rt_sigqueueinfo(isr_params_t *params)
 {
@@ -3697,11 +3700,14 @@ long sys_rt_tgsigqueueinfo(isr_params_t *params)
     return rc;
 }
 
-/* Block until a deliverable signal is pending. Lost-wakeup-safe: the pending
- * check and the BLOCKED transition are one interrupts-off critical section, so
- * a signal posted from an IRQ either is seen here or finds us BLOCKED and wakes
- * us (the wait_queue.c discipline). IF is re-enabled only while
- * yielding/idling. */
+/**
+ * Block the current thread until a deliverable signal is pending.
+ *
+ * The test of the pending signals and the move to PROC_BLOCKED are one
+ * section with interrupts off, so a signal posted from an interrupt is
+ * either seen by the test or finds the thread blocked and wakes it, as in
+ * `wait_queue.c`. Interrupts are on only while the thread yields or idles.
+ */
 static void sig_wait(void)
 {
     uint32_t flags = sig_irq_save();
@@ -3719,10 +3725,10 @@ static void sig_wait(void)
     sig_irq_restore(flags);
 }
 
-/*
- * sys_pause - sleep until a signal is delivered (pause(2)). Returns -EINTR
- * once a deliverable signal is pending (the signal then acts on the return
- * to user).
+/**
+ * Sleep until a signal is delivered (pause(2)). Returns -EINTR once a
+ * deliverable signal is pending; the signal then acts on the return to user
+ * mode.
  */
 long sys_pause(isr_params_t *params)
 {
@@ -3740,9 +3746,10 @@ long sys_pause(isr_params_t *params)
  *
  * Its arguments are const sigset_t *mask and sigsetsize (8). Replaces the
  * blocked mask with *mask, waits for a deliverable signal, and returns -EINTR.
- * The handler the signal runs runs under *mask, and the frame it gets carries
- * the old mask, which its return restores; without a handler the old mask comes
- * back on the return to user mode.
+ * The handler the signal runs runs under *mask, and the frame it gets has the
+ * old mask, which its return restores; without a handler the old mask comes
+ * back on the return to user mode. -EINVAL for another sigsetsize, -EFAULT
+ * when the mask cannot be read.
  */
 long sys_rt_sigsuspend(isr_params_t *params)
 {
@@ -3770,8 +3777,13 @@ long sys_rt_sigsuspend(isr_params_t *params)
  * Install or query a signal disposition (rt_sigaction).
  *
  * Its arguments are signo, const struct k_sigaction* act, struct k_sigaction*
- * old and sigsetsize. Stores the action per-signal; SIGKILL/SIGSTOP cannot be
- * changed.
+ * old and sigsetsize, which must be 8. The old action is written before the
+ * new one is stored. Installing SIG_IGN drops any instance of the signal
+ * already pending, the process's and each thread's, as Linux does, with
+ * interrupts off so that a signal posted from an interrupt cannot change the
+ * pending sets in the middle. -EINVAL for a signal out of range, another
+ * sigsetsize, or SIGKILL and SIGSTOP, whose action cannot be read or
+ * changed; -EFAULT.
  */
 long sys_rt_sigaction(isr_params_t *params)
 {
@@ -3800,9 +3812,6 @@ long sys_rt_sigaction(isr_params_t *params)
             return -EFAULT;
         }
         current_proc->sigacts[signo] = act;
-        /* Installing SIG_IGN drops any already-pending instance, the
-         * process's and each thread's, the way Linux does. Guard the pending
-         * RMW against a concurrent IRQ signal_post. */
         if (act.handler == KSIG_IGN) {
             uint32_t f = sig_irq_save();
             sig_discard(current_proc, KSIG_BIT(signo));
@@ -3818,6 +3827,8 @@ long sys_rt_sigaction(isr_params_t *params)
  * Its arguments are how (0 BLOCK/1 UNBLOCK/2 SETMASK), const set*, old set* and
  * sigsetsize. SIGKILL/SIGSTOP can never be blocked, and a signal of the process
  * that the new mask blocks is left to another thread (`signal_set_blocked`).
+ * The old mask is written before the new one is read. -EINVAL for another
+ * sigsetsize or an unknown `how`, -EFAULT.
  */
 long sys_rt_sigprocmask(isr_params_t *params)
 {
@@ -3886,18 +3897,18 @@ static long signal_return(isr_params_t *tf, int rt)
     return (long)SC_RET(tf);
 }
 
-/*
- * rt_sigreturn: the return of an SA_SIGINFO handler, through a
- * restorer that issues the call with the stack pointer 4 bytes past the
- * frame's start.
+/**
+ * rt_sigreturn: the return of an SA_SIGINFO handler, and of every handler on
+ * x86-64, through a restorer that issues the call with the stack pointer one
+ * word past the frame's start, 4 bytes on i686 and 8 on x86-64.
  */
 long sys_rt_sigreturn(isr_params_t *tf)
 {
     return signal_return(tf, 1);
 }
 
-/*
- * sigreturn: the return of a plain handler, through a restorer
+/**
+ * sigreturn, on i686 only: the return of a plain handler, through a restorer
  * that pops the signal number first, 8 bytes past the frame's start.
  */
 long sys_sigreturn(isr_params_t *tf)
@@ -3923,11 +3934,11 @@ struct k_stack {
  * NULL.
  *
  * The old settings are read before the change: SS_DISABLE for none, and
- * SS_ONSTACK while the process runs on the stack, when a change is refused
- * with EPERM. SS_AUTODISARM is accepted and has no effect. A stack smaller
- * than MINSIGSTKSZ is refused with ENOMEM. The old settings are zeroed
- * first, so that the padding after x86-64's int flags gives no byte of the
- * kernel's stack.
+ * SS_ONSTACK while the process runs on the stack, when a change fails with
+ * EPERM. SS_AUTODISARM is accepted and has no effect, and other flags are
+ * EINVAL. A stack smaller than MINSIGSTKSZ fails with ENOMEM. The old
+ * settings are zeroed first, so that the padding after x86-64's int flags
+ * gives no byte of the kernel's stack. EFAULT for a copy that fails.
  */
 long sys_sigaltstack(isr_params_t *params)
 {
@@ -3978,7 +3989,7 @@ long sys_sigaltstack(isr_params_t *params)
 
 /**
  * rt_sigpending: the signals pending while blocked. Its arguments are set
- * and size of the set in bytes, at most 8.
+ * and size of the set in bytes, at most 8; -EINVAL for a larger size, -EFAULT.
  */
 long sys_rt_sigpending(isr_params_t *params)
 {
@@ -4007,7 +4018,8 @@ long sys_rt_sigpending(isr_params_t *params)
 /**
  * sigprocmask: the old form of rt_sigprocmask, with signals 1 to 32
  * in one word. Its arguments are how, new set or NULL and old set or NULL.
- * SIG_SETMASK replaces signals 1 to 32 and leaves the rest.
+ * SIG_SETMASK replaces signals 1 to 32 and leaves the rest. -EINVAL for an
+ * unknown `how`, -EFAULT.
  */
 long sys_sigprocmask(isr_params_t *params)
 {
@@ -4048,9 +4060,9 @@ long sys_sigprocmask(isr_params_t *params)
     return 0;
 }
 
-/* Restart the system call the dispatcher recorded: its number back in the
- * number's register and the instruction pointer back on the instruction that
- * made the call. */
+/** Restart the system call the dispatcher recorded, `restart_nr` being one
+ * more than its number: the number back in the number's register and the
+ * instruction pointer back on the instruction that made the call. */
 static void restart_syscall(isr_params_t *tf, uint32_t restart_nr)
 {
     SC_NR(tf) = restart_nr - 1u;
@@ -4061,11 +4073,13 @@ static void restart_syscall(isr_params_t *tf, uint32_t restart_nr)
  * Free the records of the threads that have ended and are not leaders,
  * which no wait reaps, a traced one aside, which its tracer's wait reaps:
  * their CPU time goes to their process, and their address space reference,
- * kernel stack and record go back (`proc_release`). A record the current
- * process is not is never running, so its stack is free to take. The release
- * of the address space may sleep, and another reaper may run then, so a
- * record is taken off the zombies first, and the walk starts again after
- * each one, since the list may have changed under it.
+ * kernel stack and record go back (`proc_release`). A zombie other than the
+ * current thread is on no processor while the caller holds the big lock,
+ * since a thread ends and switches away with the lock held, so its stack is
+ * free to take. The release of the address space may sleep, and another
+ * reaper may run then, so a record is taken off the zombies first, and the
+ * walk starts again after each one, since the list may have changed under
+ * it.
  */
 static void reap_threads(void)
 {
@@ -4200,19 +4214,20 @@ static int group_stop_taken(void)
 }
 
 /**
- * Act on a pending signal at the return-to-user boundary.
- *
- * Called from the ISR/IRQ return path just before iret, with the trapframe
- * about to be restored. If the current thread is returning to USER mode and
- * has a deliverable signal, one pending for it or for its process and not
- * blocked, act on one (`sig_dequeue`), the lowest-numbered of the thread's
- * own or, when it has none, of its process's: ignore it, end the process (a
- * default that terminates), stop the process, or build a handler frame. A
- * thread whose process is stopped parks here first; a traced one reports the
- * stop to its tracer instead and looks at the stop again when it resumes, so
- * one its tracer detached meanwhile parks, as Linux's detach leaves a tracee
- * to its group's stop. The records of ended threads are freed here too, a
- * point every running process passes where none of them is in use.
+ * Only a frame that returns to user mode is acted on, and one handler at most
+ * is given a frame on each return. A deliverable signal, one pending for the
+ * thread or for its process and not blocked, is taken (`sig_dequeue`), the
+ * lowest-numbered of the thread's own or, when it has none, of its process's,
+ * and is ignored, ends the process (a default that terminates), stops the
+ * process, or gets a handler frame. The handler runs with its sa_mask blocked
+ * as well, and its own signal unless SA_NODEFER; the signals still pending
+ * are acted on when its sigreturn comes back through here. SA_RESETHAND
+ * resets the action after the frame has the handler. A thread whose process
+ * is stopped parks here first; a traced one reports the stop to its tracer
+ * instead and looks at the stop again when it resumes, so one its tracer
+ * detached meanwhile parks, as Linux's detach leaves a tracee to its group's
+ * stop. The records of ended threads are freed here too, a point every
+ * running process passes where none of them is in use.
  *
  * A system call the dispatcher found interrupted and restartable is
  * restarted when no handler runs, and when the handler that runs has
@@ -4228,7 +4243,7 @@ void deliver_signals(isr_params_t *tf)
         return;
     }
     if (!FRAME_USER(tf)) {
-        return; /* not returning to user mode */
+        return;
     }
     if (proc_dead_threads != 0) {
         reap_threads();
@@ -4256,8 +4271,7 @@ void deliver_signals(isr_params_t *tf)
         }
         signo = sig_dequeue(deliverable, &info);
         if (current_proc->ptrace) {
-            /* The tracer sees the stop's system call, and may cancel its
-             * restart through orig_nr. */
+            /* The tracer may cancel the call's restart through orig_nr. */
             current_proc->restart_nr = restart_nr;
             current_proc->orig_nr = restart_nr ? (int32_t)restart_nr - 1 : -1;
             signo = ptrace_signal_stop(signo, &info);
@@ -4270,7 +4284,7 @@ void deliver_signals(isr_params_t *tf)
         sa = &current_proc->sigacts[signo];
 
         if (sa->handler == KSIG_IGN) {
-            continue; /* explicitly ignored */
+            continue;
         }
         if (sa->handler == KSIG_DFL) {
             enum ksig_default def = ksig_default_action(signo);
@@ -4280,13 +4294,11 @@ void deliver_signals(isr_params_t *tf)
             }
             if (def == KSIG_DEFAULT_STOP) {
                 sig_group_stop(signo);
-                continue; /* parks at the top, then re-checks pending signals */
+                continue;
             }
             continue; /* default ignore (SIGCHLD/SIGCONT/SIGURG/SIGWINCH) */
         }
 
-        /* A user handler: build the frame and run it. The remaining pending
-         * signals deliver after sigreturn returns through this path again. */
         handler_flags = (uint32_t)sa->flags;
         if (restart_nr != 0 && (handler_flags & SA_RESTART)) {
             restart_syscall(tf, restart_nr);
@@ -4298,15 +4310,11 @@ void deliver_signals(isr_params_t *tf)
             return;
         }
         current_proc->sigmask_saved = 0;
-        /* Block the handler's mask, plus this signal unless SA_NODEFER, for
-         * the run. */
         newblock = current_proc->sig_blocked | sigact_mask(sa);
         if (!(handler_flags & SA_NODEFER)) {
             newblock |= KSIG_BIT(signo);
         }
         signal_set_blocked(newblock);
-        /* SA_RESETHAND is for the next signal; this one's handler is in the
-         * frame already. */
         if (handler_flags & SA_RESETHAND) {
             sa->handler = KSIG_DFL;
         }
@@ -4359,7 +4367,7 @@ static int32_t sigwait_take(uint64_t set, int timed, uint32_t deadline, struct k
     }
 }
 
-/* `sigwait_take`, with the siginfo copied to `uinfo` unless it is null;
+/** `sigwait_take`, with the siginfo copied to `uinfo` unless it is null;
  * -EFAULT when it cannot be. */
 static int32_t sigwait_set(uint64_t set, int timed, uint32_t deadline, void __user *uinfo)
 {
@@ -4391,8 +4399,11 @@ static int32_t sigwait_set(uint64_t set, int timed, uint32_t deadline, void __us
  * left to another thread (`signal_set_blocked`). The timeout is rounded up to
  * whole 10 ms ticks and cut to 2147483646 of them, as nanosleep's is, so that
  * with the tick in progress added the deadline stays ahead of the present in
- * the signed comparison of ticks `sigwait_set` makes, which would take a longer
- * one for past; one of zero polls. SIGKILL and SIGSTOP cannot be waited for.
+ * the signed comparison of ticks `sigwait_take` makes, which would take a
+ * longer one for past; one of zero polls. SIGKILL and SIGSTOP cannot be waited
+ * for. Returns the signal, -EAGAIN when the timeout passes, -EINTR for another
+ * signal the thread acts on, -EINVAL for another sigsetsize or a timeout out
+ * of range, -EFAULT.
  */
 long sys_rt_sigtimedwait(isr_params_t *params)
 {
@@ -4446,17 +4457,19 @@ struct sigfd {
     uint64_t mask;
 };
 
+/** Store the 32-bit `v` at `at`, which need not be aligned. */
 static void put_word(uint8_t *at, uint32_t v)
 {
     k_memcpy(at, &v, sizeof(v));
 }
 
+/** Store the 64-bit `v` at `at`, which need not be aligned. */
 static void put_u64(uint8_t *at, uint64_t v)
 {
     k_memcpy(at, &v, sizeof(v));
 }
 
-/*
+/**
  * The 128-byte struct signalfd_siginfo of `signo` and `info`, in Linux's
  * fields: a timer's id, overrun and value, a child's pid, uid and status, a
  * fault's address, or a sender's pid, uid and value.
@@ -4493,7 +4506,9 @@ static void sigfd_fill(uint8_t *out, int signo, const struct k_siginfo *info)
  * each, as many as fit, taken off the thread's or the process's pending set
  * as sigtimedwait takes them. With none pending it waits for one, the mask
  * counting as unblocked meanwhile, as sigtimedwait's set does, or fails with
- * EAGAIN when non-blocking; EINVAL for a buffer shorter than a record.
+ * EAGAIN when non-blocking, and with EINTR when another signal ends the wait;
+ * EINVAL for a buffer shorter than a record, EFAULT when no record could be
+ * copied.
  */
 static int32_t sigfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -4534,7 +4549,7 @@ static int32_t sigfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return (int32_t)done;
 }
 
-/* Readable while a signal of the mask is pending for the poller. A signal
+/** Readable while a signal of the mask is pending for the poller. A signal
  * sent while it sleeps wakes it as the thread the signal would go to. */
 static short sigfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
@@ -4546,6 +4561,7 @@ static short sigfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     return (short)((sig_pending_now() & sf->mask) ? (events & POLLIN) : 0);
 }
 
+/** Free the signalfd's record when its last descriptor closes. */
 static void sigfd_close(fd_entry_t *e)
 {
     kfree(e->priv);
@@ -4555,11 +4571,12 @@ static void sigfd_close(fd_entry_t *e)
 static const struct file_ops sigfd_ops = {sigfd_read, NULL, sigfd_poll, NULL, sigfd_close};
 
 /**
- * signalfd and signalfd4 take -1 for a new signalfd or one to change, the mask
- * and its size, which must be 8, and for signalfd4 the flags SFD_NONBLOCK and
- * SFD_CLOEXEC. SIGKILL and SIGSTOP are left out of the mask, as Linux leaves
- * them. The descriptor, or EBADF for an open descriptor that is not a signalfd,
- * EINVAL.
+ * signalfd and signalfd4 take -1 for a new signalfd or the descriptor of one to
+ * change, the mask and its size, which must be 8, and for signalfd4 the flags
+ * SFD_NONBLOCK and SFD_CLOEXEC. SIGKILL and SIGSTOP are left out of the mask,
+ * as Linux leaves them. Returns the descriptor, or -EINVAL for another size,
+ * an unknown flag or an open descriptor that is not a signalfd, -EBADF for a
+ * descriptor that is not open, -EFAULT, -ENOMEM, or `fd_alloc`'s error.
  */
 static int32_t signalfd_common(isr_params_t *params, uint32_t flags)
 {
@@ -4608,20 +4625,21 @@ static int32_t signalfd_common(isr_params_t *params, uint32_t flags)
     return fd;
 }
 
+/** signalfd: `signalfd_common` with no flags. */
 long sys_signalfd(isr_params_t *params)
 {
     return signalfd_common(params, 0);
 }
 
+/** signalfd4: `signalfd_common` with the flags of the fourth argument. */
 long sys_signalfd4(isr_params_t *params)
 {
     return signalfd_common(params, (uint32_t)SC_ARG(params, 3));
 }
 
-/*
- * sys_getpid - return the calling process's PID (getpid(2)), which is its
- * thread group's id, in its PID namespace (`pid_seen`), as every id these
- * calls give and take is.
+/**
+ * The calling process's PID (getpid(2)), which is its thread group's id, in
+ * its PID namespace (`pid_seen`), as every id these calls give and take is.
  */
 long sys_getpid(isr_params_t *params)
 {
@@ -4664,9 +4682,9 @@ static void group_set_ids(const process_t *p, uint32_t sid, uint32_t pgid)
 /**
  * Create a new session (setsid(2)).
  *
- * The caller becomes the leader of a new session AND a new process group,
+ * The caller becomes the leader of a new session and of a new process group,
  * both numbered with its pid. Fails with -EPERM if the caller already leads
- * a process group (a group leader cannot carry its group into a new
+ * a process group (a group leader cannot take its group into a new
  * session). Returns the new session id (the caller's pid).
  */
 long sys_setsid(isr_params_t *params)
@@ -4677,7 +4695,7 @@ long sys_setsid(isr_params_t *params)
         return -ESRCH;
     }
     if (current_proc->pgid == current_proc->tgid) {
-        return -EPERM; /* already a process-group leader */
+        return -EPERM;
     }
     group_set_ids(current_proc, current_proc->tgid, current_proc->tgid);
     return (int32_t)pid_seen(current_proc->tgid);
@@ -4688,8 +4706,12 @@ long sys_setsid(isr_params_t *params)
  *
  * Its arguments are pid (0 = caller) and pgid (0 = the target's own pid, i.e.
  * make it a group leader). The target must be the caller or a child of the
- * caller, must not be a session leader, and the destination group must live in
- * the target's session. Returns 0 or -errno.
+ * caller, else -ESRCH, and must not be a session leader, whose group is fixed
+ * with its session, else -EPERM. A group other than the target's own must
+ * already exist in the target's session, else -EPERM: some process must be in
+ * it, whether or not its leader is still alive (`pgrp_in_session`). Returns 0;
+ * -EINVAL for a negative pgid, -EPERM for a pgid the caller cannot see, and
+ * -ESRCH for no such process.
  */
 long sys_setpgid(isr_params_t *params)
 {
@@ -4706,28 +4728,22 @@ long sys_setpgid(isr_params_t *params)
     if (pgid != 0) {
         pgid = (int)pid_named((uint32_t)pgid);
         if (pgid == 0) {
-            return -EPERM; /* no group the caller can see */
+            return -EPERM;
         }
     }
     target = (pid == 0) ? current_proc : get_process(pid_named((uint32_t)pid));
     if (!target || target->state == PROC_UNUSED || target->tg->live == 0) {
         return -ESRCH;
     }
-    /* Only the caller's process or one of its children may be moved. */
     if (target->tg != current_proc->tg && target->parent_pid != current_proc->tgid) {
         return -ESRCH;
     }
-    /* A session leader's group is fixed (it anchors the session). */
     if (target->sid == target->tgid) {
         return -EPERM;
     }
     if (pgid == 0) {
-        pgid = (int)target->tgid; /* create/lead the group named by the target */
+        pgid = (int)target->tgid;
     }
-    /* The destination group must be in the target's session: either the target
-     * creates its own group, or a process is ALREADY in group `pgid` within the
-     * same session (an existing group, regardless of whether its leader is
-     * still alive, not merely "a process whose pid == pgid"). */
     if ((uint32_t)pgid != target->tgid && !pgrp_in_session(pgid, (int)target->sid)) {
         return -EPERM;
     }
@@ -4735,8 +4751,8 @@ long sys_setpgid(isr_params_t *params)
     return 0;
 }
 
-/* Resolve a getpgid/getsid target: the caller for pid 0, else the named
- * process. */
+/** Resolve a getpgid/getsid target: the caller for pid 0, else the named
+ * process, or NULL for none. */
 static process_t *pgrp_target(int pid)
 {
     if (pid == 0) {
@@ -4745,9 +4761,9 @@ static process_t *pgrp_target(int pid)
     return get_process(pid_named((uint32_t)pid));
 }
 
-/*
- * sys_getpgid - return a process's process-group id (getpgid(2)).
- * Its argument is pid (0 = caller).
+/**
+ * A process's process-group id (getpgid(2)). Its argument is pid (0 =
+ * caller); -ESRCH for no such process.
  */
 long sys_getpgid(isr_params_t *params)
 {
@@ -4763,9 +4779,7 @@ long sys_getpgid(isr_params_t *params)
     return (int32_t)pid_seen(target->pgid);
 }
 
-/*
- * sys_getpgrp - the caller's process-group id (getpgrp(2), the no-arg form).
- */
+/** The caller's process-group id (getpgrp(2), the no-arg form). */
 long sys_getpgrp(isr_params_t *params)
 {
     (void)params;
@@ -4776,9 +4790,9 @@ long sys_getpgrp(isr_params_t *params)
     return (int32_t)pid_seen(current_proc->pgid);
 }
 
-/*
- * sys_getsid - return a process's session id (getsid(2)).
- * Its argument is pid (0 = caller).
+/**
+ * A process's session id (getsid(2)). Its argument is pid (0 = caller);
+ * -ESRCH for no such process.
  */
 long sys_getsid(isr_params_t *params)
 {
@@ -4794,9 +4808,7 @@ long sys_getsid(isr_params_t *params)
     return (int32_t)pid_seen(target->sid);
 }
 
-/*
- * sys_getppid - return the parent's PID (getppid(2)).
- */
+/** The parent's PID (getppid(2)). */
 long sys_getppid(isr_params_t *params)
 {
     (void)params;
@@ -4807,10 +4819,9 @@ long sys_getppid(isr_params_t *params)
     return (int32_t)pid_seen(current_proc->parent_pid);
 }
 
-/*
- * sys_umask - set the file-creation mask, returning the previous value
- * (umask(2)). Its argument is new mask (only the low 9 permission bits
- * are kept).
+/**
+ * Set the file-creation mask, returning the previous value (umask(2)). Its
+ * argument is the new mask, of which only the low 9 permission bits are kept.
  */
 long sys_umask(isr_params_t *params)
 {
@@ -4824,6 +4835,14 @@ long sys_umask(isr_params_t *params)
     return (int32_t)old;
 }
 
+/**
+ * setuid takes a user ID. A caller privileged in its user namespace
+ * (`id_privileged`) gets it as its real, effective and saved IDs; another may
+ * make its real or saved ID its effective one. The change is the calling
+ * thread's alone, as on Linux, and a new effective ID loses what `cred_moved`
+ * takes away. -EINVAL for -1 or an ID the namespace does not map
+ * (`ids_named`), -EPERM otherwise.
+ */
 long sys_setuid(isr_params_t *params)
 {
     process_t *p = current_proc;
@@ -4848,6 +4867,7 @@ long sys_setuid(isr_params_t *params)
     return -EPERM;
 }
 
+/** setgid: setuid's rule over the group IDs. */
 long sys_setgid(isr_params_t *params)
 {
     process_t *p = current_proc;
@@ -4872,6 +4892,14 @@ long sys_setgid(isr_params_t *params)
     return -EPERM;
 }
 
+/**
+ * setreuid takes a real and an effective user ID, -1 keeping either. A caller
+ * that is not privileged (`id_privileged`) may set the real ID to its real or
+ * effective one, and the effective ID to any of its three. The saved ID takes
+ * the new effective one when the real ID is set, or when the effective ID is
+ * set to other than the old real one. -EINVAL for an ID the namespace does not
+ * map, -EPERM.
+ */
 long sys_setreuid(isr_params_t *params)
 {
     process_t *p = current_proc;
@@ -4905,6 +4933,7 @@ long sys_setreuid(isr_params_t *params)
     return 0;
 }
 
+/** setregid: setreuid's rule over the group IDs. */
 long sys_setregid(isr_params_t *params)
 {
     process_t *p = current_proc;
@@ -4938,6 +4967,12 @@ long sys_setregid(isr_params_t *params)
     return 0;
 }
 
+/**
+ * setresuid takes a real, an effective and a saved user ID, -1 keeping any of
+ * them. A caller that is not privileged (`id_privileged`) may set each only to
+ * one of its current three. -EINVAL for an ID the namespace does not map,
+ * -EPERM.
+ */
 long sys_setresuid(isr_params_t *params)
 {
     process_t *p = current_proc;
@@ -4976,6 +5011,7 @@ long sys_setresuid(isr_params_t *params)
     return 0;
 }
 
+/** setresgid: setresuid's rule over the group IDs. */
 long sys_setresgid(isr_params_t *params)
 {
     process_t *p = current_proc;
@@ -5014,8 +5050,9 @@ long sys_setresgid(isr_params_t *params)
     return 0;
 }
 
-/* getresuid/getresgid (the *32 forms): report all three ids through the three
- * user pointers, the introspection half of the saved-id model. */
+/** getresuid (getresuid32 on i686): the real, effective and saved user IDs, as
+ * the caller's user namespace sees them, through the three user pointers;
+ * -EFAULT. */
 long sys_getresuid(isr_params_t *params)
 {
     process_t *p = current_proc;
@@ -5029,6 +5066,7 @@ long sys_getresuid(isr_params_t *params)
     return 0;
 }
 
+/** getresgid: getresuid's report of the group IDs. */
 long sys_getresgid(isr_params_t *params)
 {
     process_t *p = current_proc;
@@ -5042,9 +5080,13 @@ long sys_getresgid(isr_params_t *params)
     return 0;
 }
 
-/* setgroups/getgroups (the *32 forms): the supplementary list, privileged to
- * set (effective uid 0), NGROUPS_MAX entries. getgroups with size 0 reports the
- * count, the POSIX sizing idiom. */
+/**
+ * setgroups (setgroups32 on i686) takes a count and a list of group IDs, at
+ * most NGROUPS_MAX, as the calling thread's supplementary groups. -EINVAL for
+ * a longer list or an ID the user namespace does not map, -EPERM for a caller
+ * not privileged there (`id_privileged`) or one whose namespace denies
+ * setgroups (`ns_setgroups_denied`), -EFAULT.
+ */
 long sys_setgroups(isr_params_t *params)
 {
     process_t *p = current_proc;
@@ -5074,6 +5116,12 @@ long sys_setgroups(isr_params_t *params)
     return 0;
 }
 
+/**
+ * getgroups (getgroups32 on i686) takes a count and a list to fill with the
+ * supplementary groups, as the user namespace sees them, and returns their
+ * number; a count of 0 returns the number alone, the POSIX sizing idiom.
+ * -EINVAL for a negative count or one smaller than the number, -EFAULT.
+ */
 long sys_getgroups(isr_params_t *params)
 {
     process_t *p = current_proc;
@@ -5135,6 +5183,8 @@ static int rlimit_slot(uint32_t resource)
     }
 }
 
+/** The soft and hard limits of `resource` for `p`, RLIM_INFINITY for both of
+ * one that is not kept. */
 static void rlimit_for(const process_t *p, uint32_t resource, unsigned long *cur,
                        unsigned long *max)
 {
@@ -5208,8 +5258,8 @@ static process_t *rlimit_target(uint32_t pid)
     return p;
 }
 
-/* getrlimit/ugetrlimit: struct rlimit { unsigned long rlim_cur, rlim_max },
- * the record's own width, with RLIM_INFINITY all ones in either. */
+/** getrlimit/ugetrlimit: struct rlimit { unsigned long rlim_cur, rlim_max },
+ * the record's own width, with RLIM_INFINITY all ones in either; -EFAULT. */
 long sys_getrlimit(isr_params_t *params)
 {
     uint32_t resource = (uint32_t)SC_ARG(params, 0);
@@ -5226,7 +5276,8 @@ long sys_getrlimit(isr_params_t *params)
     return 0;
 }
 
-/* setrlimit: a set in the form getrlimit reads. */
+/** setrlimit: limits in the form getrlimit writes, set by `rlimit_set`;
+ * -EFAULT. */
 long sys_setrlimit(isr_params_t *params)
 {
     uint32_t resource = (uint32_t)SC_ARG(params, 0);
@@ -5239,7 +5290,7 @@ long sys_setrlimit(isr_params_t *params)
     return rlimit_set(current_proc, resource, in[0], in[1]);
 }
 
-/* A 64-bit limit as the record holds it: a value as large as the record's
+/** A 64-bit limit as the record holds it: a value as large as the record's
  * RLIM_INFINITY or larger is no limit, as Linux's `rlim64_is_infinity`
  * reads it, so on i686 a value past 32 bits is kept as no limit. */
 static unsigned long rlimit_from64(uint64_t v)
@@ -5247,7 +5298,7 @@ static unsigned long rlimit_from64(uint64_t v)
     return v >= (uint64_t)RLIM_INFINITY ? RLIM_INFINITY : (unsigned long)v;
 }
 
-/* The record's limit as prlimit64 gives it: RLIM_INFINITY as the 64-bit
+/** The record's limit as prlimit64 gives it: RLIM_INFINITY as the 64-bit
  * one, all ones. */
 static uint64_t rlimit_to64(unsigned long v)
 {
@@ -5259,8 +5310,12 @@ static uint64_t rlimit_to64(unsigned long v)
  * and old (rlimit64* or NULL); a struct rlimit64 is two 64-bit words, cur and
  * max. The old limits are read before the new are set, as POSIX's `setrlimit`
  * and `getrlimit` see them, and written to the caller after: a copy that fails
- * leaves the new limits in place, as it does on Linux. This is the form musl
- * issues for both.
+ * leaves the new limits in place, as it does on Linux. The copies may sleep,
+ * and the target may end while they do, so the new limits are read before the
+ * target is looked up, and the old are written after its last use. Returns 0,
+ * or -ESRCH for no such process, -EPERM for one the caller may not act on
+ * (`rlimit_target`), -EFAULT, or the error of `rlimit_set`. This is the form
+ * musl issues for both.
  */
 long sys_prlimit64(isr_params_t *params)
 {
@@ -5274,9 +5329,6 @@ long sys_prlimit64(isr_params_t *params)
     uint64_t out[2]; /* cur, max */
     int rc = 0;
 
-    /* The user copies may sleep, and another process may end while they
-     * do, so the record is looked up between them and not held across one:
-     * the new limits are read first, the old are written last. */
     if (newp && copy_from_user(in, (const void __user *)newp, sizeof(in)) != 0) {
         return -EFAULT;
     }
@@ -5297,9 +5349,9 @@ long sys_prlimit64(isr_params_t *params)
 }
 
 /*
- * mmap2 and mprotect protection bits and flags (Linux i386 ABI). The PROT_*
- * bits become VMA permissions; only anonymous mappings exist, since a mapping
- * of a file needs pages the file's cache holds.
+ * The protection bits and flags of mmap, mmap2 and mprotect, Linux's values
+ * on i386 and x86-64 alike. The PROT_* bits become VMA permissions
+ * (`vm_prot_of`).
  */
 #define PROT_READ 0x1
 
@@ -5324,16 +5376,19 @@ long sys_prlimit64(isr_params_t *params)
 /* Round 'v' up to the next page boundary. */
 #define PAGE_UP(v) (((v) + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1))
 
-/*
- * sys_brk - set the program break (heap top). Its argument is requested
- * break. Returns the resulting break: the new value on success, or the
- * unchanged current break if the request is out of range. This is the contract
- * musl's allocator relies on when it issues SYS_brk (it compares the return to
- * its request; musl's public brk() never issues the call). The heap is the
- * demand-paged range [heap_start, page_up(brk)), which mprotect may have cut
- * into regions of different protection: growing adds a read-write region at the
- * top, which merges with a read-write top piece, and shrinking removes the
- * range above the new top and frees its pages.
+/**
+ * Set the program break, the heap's top (brk(2)). Its argument is the
+ * requested break. Returns the resulting break: the new value on success, or
+ * the unchanged current break if the request is below the heap's start or into
+ * the stack's growth window, if growing would meet another region or pass
+ * RLIMIT_AS, or if there is no room for a region. brk(0) is below the heap's
+ * start, so it reads the break. This is the contract musl's allocator relies
+ * on when it issues SYS_brk (it compares the return to its request; musl's
+ * public brk() never issues the call). The heap is the demand-paged range
+ * [heap_start, page_up(brk)), which mprotect may have cut into regions of
+ * different protection: growing adds a read-write region at the top, which
+ * merges with a read-write top piece, and shrinking removes the range above
+ * the new top and frees its pages.
  */
 long sys_brk(isr_params_t *params)
 {
@@ -5347,8 +5402,6 @@ long sys_brk(isr_params_t *params)
     mem_balance();
     vm = &current_proc->mm->vm;
 
-    /* brk(0) queries the break; below the heap base or into the stack window is
-     * refused with the break left unchanged. */
     if (req < vm->heap_start || req > vm->stack_limit) {
         return (long)vm->brk;
     }
@@ -5357,8 +5410,6 @@ long sys_brk(isr_params_t *params)
     new_top = PAGE_UP(req);
 
     if (new_top > old_top) {
-        /* Grow: the new pages [old_top, new_top) must not collide with mmap or
-         * any other region. */
         if (vm_overlaps(vm, old_top, new_top)) {
             return (long)vm->brk;
         }
@@ -5381,16 +5432,16 @@ long sys_brk(isr_params_t *params)
 }
 
 /**
- * Say on the serial log that a process ran out of mappings, once per process.
+ * Log that the current process ran out of mappings in the call `what`, once
+ * per process.
  *
- * `vm.c` is deliberately independent of the kernel's globals, so it cannot
- * name the process it refused; here the caller is known. Silence is what this
- * replaces, and it cost hours: a program whose library ran out of mappings
- * looks exactly like a program whose library failed for its own reasons. Said
- * once per process, because a program that meets the ceiling meets it in a
- * loop and a flood of lines would bury the first one. The mark is in the
- * process, not a remembered pid: a pid is reused, and the next process to hold
- * that number would be silenced by a report it never made.
+ * `vm.c` uses none of the kernel's globals, so it cannot say which process
+ * ran out; here the caller is known. Without the line, a program whose
+ * library ran out of mappings looks like a program whose library failed for
+ * its own reasons. It is logged once per process, because a program that
+ * meets the limit meets it in a loop and a flood of lines would bury the
+ * first one. The mark is in the process record, since a pid is reused, and
+ * the next process to have that number would go unreported.
  */
 static void vma_exhausted(const char *what)
 {
@@ -5402,8 +5453,8 @@ static void vma_exhausted(const char *what)
          (int)current_proc->pid, current_proc->comm, VMA_LIMIT);
 }
 
-/* The VMA protection of an mmap or mprotect `prot`. Write and execute each
- * grant read, which this i386 paging cannot withhold from them. */
+/** The VMA protection of an mmap or mprotect `prot`. Write and execute each
+ * grant read, which x86 paging cannot withhold from them. */
 static uint32_t vm_prot_of(uint32_t prot)
 {
     uint32_t vmprot = 0;
@@ -5504,19 +5555,20 @@ static int mmap_disk_shares(const fd_entry_t *e)
 /**
  * The file half of `mmap_backing`: the file the descriptor `e`, number `fd`, is
  * open on, mapped shared or not. A private mapping of it is VM_FILE, and a
- * shared mapping of a file in memory is VM_SHARED, the file's own pages; what
- * `mmap_file_check` refuses is not mapped. A shared mapping of a file on ext2
- * is VM_SHARED too, the file's pages in memory, which its stores are written
- * back from (`filemap_disk_shared`), when the descriptor is open for writing or
- * another shared mapping has the pages in memory already: ext2's inode number
- * names one file for as long as anything holds it, which is what the pages are
- * found by. A file a loop device stands on is refused with EBUSY, as write(2)
- * refuses it. A shared mapping of a file of another disk file system, whose
- * inode numbers follow names, is served as a private one when it is read-only,
- * which reads the same bytes, and refused with ENODEV when it may be written. A
- * shared mapping through a descriptor not open for writing is given
- * VM_PROT_NOWRITE, so that mprotect cannot make it writable later. It may
- * sleep, finding the file's path.
+ * shared mapping of a file in memory is VM_SHARED, the file's own pages; a
+ * descriptor that fails `mmap_file_check` is not mapped. A shared mapping of a
+ * file on ext2 is VM_SHARED too, the file's pages in memory, which its stores
+ * are written back from (`filemap_disk_shared`), when the descriptor is open
+ * for writing or another shared mapping has the pages in memory already:
+ * ext2's inode number names one file for as long as anything holds it, which
+ * is what the pages are found by. Through a descriptor open for writing, such
+ * a mapping of a file that backs a loop device fails with EBUSY, as write(2)
+ * to the file does. A shared mapping of a file of another disk file system,
+ * whose inode numbers follow names, is served as a private one when it is
+ * read-only, which reads the same bytes, and fails with ENODEV when it may be
+ * written. A shared mapping served as a private one, or made through a
+ * descriptor not open for writing, is given VM_PROT_NOWRITE, so that mprotect
+ * cannot make it writable later. It may sleep, finding the file's path.
  */
 static int32_t mmap_file(fd_entry_t *e, int fd, int shared, struct map_source *src)
 {
@@ -5576,7 +5628,7 @@ static int32_t mmap_devmem(uint32_t flags, uintptr_t len, struct map_source *src
     return src->file ? 0 : -ENOMEM;
 }
 
-/* Map the frames of the /dev/mem region at `base`, `len` bytes from the
+/** Map the frames of the /dev/mem region at `base`, `len` bytes from the
  * page offset `pgoff`, uncached, then give them the region's protection
  * `prot`. Each mapping takes a reference, which a frame the allocator counts,
  * one of the first megabyte, keeps while unmapping drops it; the others have
@@ -5636,8 +5688,8 @@ static int32_t mmap_backing(uint32_t flags, int fd, uintptr_t len, struct map_so
 
 /**
  * Where a new mapping of `len` bytes goes, in `*base`: `addr` itself under
- * MAP_FIXED or MAP_FIXED_NOREPLACE, which refuses a range in use with
- * EEXIST; otherwise a page-aligned hint whose range is free below the
+ * MAP_FIXED or MAP_FIXED_NOREPLACE, which fails with EEXIST for a range in
+ * use; otherwise a page-aligned hint whose range is free below the
  * stack's growth window, and without one the highest free range below
  * USER_MMAP_BASE and above the heap's top, so the ranges munmap frees are used
  * again. RLIMIT_AS counts the range, less what a fixed mapping replaces.
@@ -5676,6 +5728,9 @@ static int32_t mmap_place(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint32_
  * `addr` and `flags`, replacing what a MAP_FIXED range held, and map a
  * /dev/mem region's frames at once. The region takes its own reference to
  * the file, and the caller's is put here. Returns the address, or -errno.
+ * Under MAP_FIXED the two entries that a split in the removal and the new
+ * region take are reserved before the old mapping is removed, so that a
+ * failure leaves the old mapping in place.
  */
 static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct map_source *src)
 {
@@ -5684,8 +5739,6 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct m
     int32_t rc = mmap_place(vm, addr, len, flags, &base);
 
     if (rc == 0 && (flags & MAP_FIXED)) {
-        /* A split in the removal and the new region take two entries, found
-           before the old mapping goes. */
         if (vm_reserve(vm, 2) == 0) {
             vm_remove(vm, base, base + len);
             unmap_user_range(_curr_dir, base, base + len);
@@ -5709,7 +5762,7 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct m
     return rc == 0 ? (long)base : rc;
 }
 
-/*
+/**
  * The core of mmap(2) and mmap2(2): map memory. Its arguments are addr,
  * length, prot, flags, fd and pgoff, the offset in the file in pages, which
  * anonymous memory ignores. The offset and the length in pages must sum to a
@@ -5718,14 +5771,15 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct m
  * than 2^32, which on i686 is the same bound; else EOVERFLOW. Private
  * anonymous memory on x86-64 has only the first bound. Returns the mapped
  * base address, or -errno.
- * What is mapped is `mmap_backing`'s: anonymous memory, private or shared, or a
- * file, private or shared; where it goes is `mmap_place`'s. The backing is
- * found first, since finding it may sleep, and the place after, so that nothing
- * sleeps between the checks on the range and the insertion: a thread sharing
- * the address space cannot map the range meanwhile, and MAP_FIXED_NOREPLACE
- * cannot replace what it put there. MAP_FIXED replaces whatever the range held.
- * Pages are backed on first touch: zeroed, read from the file, or the shared
- * page itself.
+ *
+ * What is mapped is `mmap_backing`'s: anonymous memory, private or shared, a
+ * file, private or shared, or /dev/mem; where it goes is `mmap_place`'s. The
+ * backing is found first, since finding it may sleep, and the place after, so
+ * that nothing sleeps between the checks on the range and the insertion: a
+ * thread sharing the address space cannot map the range meanwhile, and
+ * MAP_FIXED_NOREPLACE cannot replace what it put there. MAP_FIXED replaces
+ * whatever the range held. Pages are backed on first touch: zeroed, read from
+ * the file, or the shared page itself.
  */
 long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t flags, int fd,
                      unsigned long pgoff)
@@ -5766,15 +5820,15 @@ long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t f
     return mmap_install(addr, len, flags, &src);
 }
 
-/** mmap2(2): addr, length, prot, flags, fd and the offset in pages. */
+/** mmap2(2), on i686: addr, length, prot, flags, fd and the offset in pages. */
 long sys_mmap2(isr_params_t *params)
 {
     return ksys_mmap_pgoff(SC_ARG(params, 0), SC_ARG(params, 1), (uint32_t)SC_ARG(params, 2),
                            (uint32_t)SC_ARG(params, 3), (int)SC_ARG(params, 4), SC_ARG(params, 5));
 }
 
-/** mmap(2): mmap2's arguments with the offset in bytes, a multiple of the
- * page, or EINVAL. */
+/** mmap(2), on x86-64: mmap2's arguments with the offset in bytes, a multiple
+ * of the page, or EINVAL. */
 long sys_mmap(isr_params_t *params)
 {
     if (SC_ARG(params, 5) & (PAGE_SIZE - 1u)) {
@@ -5785,6 +5839,9 @@ long sys_mmap(isr_params_t *params)
                            SC_ARG(params, 5) >> PAGE_SHIFT);
 }
 
+/** The segment is mapped as a shared mapping of its tmpfs file, through a
+ * descriptor made here and open for reading and writing; `access` limits the
+ * region instead. */
 long mmap_shm(struct open_file *ofd, uintptr_t addr, uintptr_t len, uint32_t access, int place,
               char *path)
 {
@@ -5837,6 +5894,8 @@ int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, size_t size)
     return 0;
 }
 
+/** An address space is counted at the first process of `proc_list` that has
+ * it. */
 uint32_t shm_attaches(const struct shmem *sh)
 {
     const process_t *p, *q;
@@ -5854,11 +5913,14 @@ uint32_t shm_attaches(const struct shmem *sh)
     return n;
 }
 
-/*
- * sys_munmap - unmap a range. Its arguments are addr (page-aligned) and
- * length. Returns 0, or -errno. Drops the VMA bookkeeping (trimming or
- * splitting partial overlaps) and frees the backing frames; unmapping
- * never-faulted or never-mapped pages is a no-op, as on Linux.
+/**
+ * Unmap a range (munmap(2)). Its arguments are addr (page-aligned) and
+ * length. Drops the VMA bookkeeping (trimming or splitting partial overlaps)
+ * and frees the backing frames; unmapping never-faulted or never-mapped pages
+ * is a no-op, as on Linux. Returns 0; -EINVAL for a zero length, an unaligned
+ * address, or a range that leaves user space or wraps, which is judged before
+ * the end is rounded up so that the rounding cannot wrap to a smaller end;
+ * -ENOMEM when a split finds no room for its region.
  */
 long sys_munmap(isr_params_t *params)
 {
@@ -5875,8 +5937,6 @@ long sys_munmap(isr_params_t *params)
     if (length == 0 || (addr & (PAGE_SIZE - 1)) != 0) {
         return -EINVAL;
     }
-    /* Reject a range that leaves user space or wraps, so PAGE_UP(addr + length)
-     * below cannot overflow to a smaller end and silently no-op. */
     if (addr >= USER_ADDR_MAX || length > USER_ADDR_MAX - addr) {
         return -EINVAL;
     }
@@ -5893,7 +5953,7 @@ long sys_munmap(isr_params_t *params)
     return 0;
 }
 
-/* Bring the resident pages of [start, end) to `prot`, region by region, so a
+/** Bring the resident pages of [start, end) to `prot`, region by region, so a
  * shared region's pages stay shared. */
 static void protect_resident(uintptr_t start, uintptr_t end, uint32_t prot)
 {
@@ -5907,15 +5967,15 @@ static void protect_resident(uintptr_t start, uintptr_t end, uint32_t prot)
     }
 }
 
-/*
- * sys_mprotect - change the protection of a range. Its arguments are addr
+/**
+ * Change the protection of a range (mprotect(2)). Its arguments are addr
  * (page aligned), length and prot. Returns 0, or -errno: EINVAL for an
  * unaligned address or an unknown protection bit, ENOMEM when a page of the
  * range is not mapped or a split finds no room for its region, EACCES for write
  * asked of a shared mapping that may never be written (the VM_PROT_NOWRITE
- * `mmap_file` gives), with nothing changed. The regions take the new protection
- * first and the resident pages after, so a fault in between reads the
- * protection the call is setting.
+ * `mmap_file` and `mmap_shm` give), with nothing changed. The regions take the
+ * new protection first and the resident pages after, so a fault in between
+ * reads the protection the call is setting.
  */
 long sys_mprotect(isr_params_t *params)
 {
@@ -5960,10 +6020,11 @@ long sys_mprotect(isr_params_t *params)
 #define MREMAP_FIXED     2
 #define MREMAP_DONTUNMAP 4
 
-/* Give [addr, addr + len), the pages of one region from its page `pgoff`,
- * the region at `to`, moving the pages there and making the region `new_len`
- * long. The file the region maps is held across the move, which removes
- * the old region's hold before the new region takes its own. */
+/** Give [addr, addr + len), which lies in the region `r`, a region at `to`
+ * of `new_len` bytes, moving the resident pages there. Returns `to`, or
+ * -ENOMEM with no room for the regions or a page table. The file the region
+ * maps is held across the move, which removes the old region's hold before
+ * the new region takes its own. */
 static long remap_move(vm_space_t *vm, vma_t *r, uintptr_t addr, uintptr_t len, uintptr_t to,
                        uintptr_t new_len)
 {
@@ -6044,18 +6105,20 @@ static int remap_args_valid(uintptr_t addr, uintptr_t old_len, uintptr_t new_len
            old_len <= USER_ADDR_MAX - addr && new_len <= USER_ADDR_MAX - USER_ADDR_MIN;
 }
 
-/*
- * sys_mremap - resize a mapping, or move it. Its arguments are old
- * address, old length, new length, flags and new address with MREMAP_FIXED. The
- * old range must lie in one region. A shrink cuts its end; a growth takes the
+/**
+ * Resize a mapping, or move it (mremap(2)). Its arguments are old address,
+ * old length, new length, flags and new address with MREMAP_FIXED. The old
+ * range must lie in one region. With MREMAP_FIXED the mapping moves, pages
+ * and all, to the new address, whatever was there going first
+ * (`remap_fixed`). Otherwise a shrink cuts its end, and a growth takes the
  * range after it when that is free, or with MREMAP_MAYMOVE moves the whole
- * mapping, pages and all, to a free range of the new length, or to the new
- * address with MREMAP_FIXED, whatever was there going first (`remap_fixed`).
- * Returns the mapping's address, or -errno: EINVAL for the arguments
- * `remap_args_valid` refuses, and for a mapping of a file whose last page at
- * the new length would not fit in 32 bits; EFAULT for a range not in one
- * region; ENOMEM when it can grow in place and may not move, or when no range
- * is free. MREMAP_DONTUNMAP is not implemented.
+ * mapping to a free range of the new length. Returns the mapping's address,
+ * or -errno: EINVAL for arguments that fail `remap_args_valid`, and for a
+ * mapping of a file whose last page at the new length would not fit in 32
+ * bits; EFAULT for a range not in one region, or for a growth of device
+ * memory; ENOMEM when it cannot grow in place and may not move, when no range
+ * is free, or past RLIMIT_AS. MREMAP_DONTUNMAP is not implemented, and is
+ * EINVAL.
  */
 long sys_mremap(isr_params_t *params)
 {
@@ -6129,17 +6192,17 @@ long sys_mremap(isr_params_t *params)
 #define MADV_REMOVE   9
 #define MADV_HWPOISON 100
 
-/*
- * sys_madvise - advice about a range. Its arguments are address, length
- * and advice. MADV_DONTNEED and MADV_FREE let the resident pages go: a private
+/**
+ * Advice about a range (madvise(2)). Its arguments are address, length and
+ * advice. MADV_DONTNEED and MADV_FREE let the resident pages go: a private
  * anonymous page reads as zeros again, a private page of a file reads the file
- * again, and a shared page reads what the shared memory holds. The other advice
- * Linux has is accepted and changes nothing, but MADV_REMOVE and MADV_HWPOISON,
- * which are refused with EINVAL, and the two that let pages go over device
- * memory, which has no pages to read again, as Linux refuses them for
- * VM_PFNMAP. A range with a page in no region is ENOMEM, as in Linux. A range
- * that runs past user space is EINVAL, judged by the length as given: a length
- * within a page of 4 GiB rounds up to 0, which would pass for an empty range.
+ * again, and a shared page reads what the shared memory holds. Those two are
+ * EINVAL over device memory, which has no pages to read again, as on Linux for
+ * VM_PFNMAP, and so are MADV_REMOVE and every advice from MADV_HWPOISON up.
+ * Any other advice is accepted and changes nothing. A range with a page in no
+ * region is ENOMEM, as in Linux. A range that runs past user space is EINVAL,
+ * judged by the length as given: a length within a page of 4 GiB rounds up to
+ * 0, which would pass for an empty range.
  */
 long sys_madvise(isr_params_t *params)
 {
@@ -6207,15 +6270,16 @@ static int32_t msync_range(uintptr_t addr, uintptr_t end, int flush)
     return rc;
 }
 
-/*
- * sys_msync - write a mapping back. Its arguments are address, length and
+/**
+ * Write a mapping back (msync(2)). Its arguments are address, length and
  * flags. A shared mapping of a disk file has its file's pages written back
  * (`msync_range`), at once with MS_ASYNC too, and with MS_SYNC the file
  * system's fsync after; a shared mapping of a file in memory maps the file's
  * pages themselves, and a private one has nothing to write. Returns 0, EIO for
- * a failed write, ENOMEM for a range with a page in no region, or EINVAL, which
- * a range that runs past user space is too, judged by the length as given, as
- * `sys_madvise` judges it.
+ * a failed write, ENOMEM for a range with a page in no region, or EINVAL for
+ * an unaligned address, an unknown flag, MS_ASYNC with MS_SYNC, or a range
+ * that runs past user space, judged by the length as given, as `sys_madvise`
+ * judges it.
  */
 long sys_msync(isr_params_t *params)
 {
@@ -6325,10 +6389,10 @@ long sys_getpriority(isr_params_t *params)
  * effective uid is neither the target's real nor its effective uid gets -EPERM,
  * and one that would lower the target's nice value, raising its priority, gets
  * -EACCES, since `RLIMIT_NICE` is 0; effective uid 0 may do both. The targets
- * that pass are changed whatever the others answer, and the call returns the
- * last refusal, 0 when there was none, or -ESRCH when nothing matched. The
- * value is kept and inherited, and the scheduler does not read it: every ready
- * process takes its turn.
+ * that pass are changed even when others fail, and the call returns the error
+ * of the last that failed, 0 when none did, or -ESRCH when nothing matched;
+ * -EINVAL for an unknown `which`. The value is kept and inherited, and the
+ * scheduler does not read it: every ready process takes its turn.
  */
 long sys_setpriority(isr_params_t *params)
 {
@@ -6415,9 +6479,11 @@ static int32_t ioprio_check(uint32_t ioprio)
  * `setpriority`: a thread, a process group or a real user, `who` 0 being the
  * caller's own. A caller may change a target whose real uid is its own real or
  * effective uid, and a privileged one any. The targets are changed in turn
- * until one refuses, whose error is returned, as Linux stops; 0 when every
- * target took it, -ESRCH when nothing matched. The value is kept and inherited,
- * and no disk queue reads it.
+ * until one the caller may not change, which ends the call with -EPERM, as
+ * Linux stops; 0 when every target took it, -ESRCH when nothing matched, and
+ * the error of `ioprio_check` for a priority it does not pass, or -EINVAL for
+ * an unknown `which`. The value is kept and inherited, and no disk queue reads
+ * it.
  */
 long sys_ioprio_set(isr_params_t *params)
 {
@@ -6484,9 +6550,9 @@ long sys_ioprio_get(isr_params_t *params)
     return best;
 }
 
-/* The scheduling policies Linux numbers. Only SCHED_OTHER is run here; the
- * others are known so that each is refused as Linux refuses it, or answered
- * as Linux answers for it. */
+/* The scheduling policies Linux numbers. Only SCHED_OTHER runs here; the
+ * others are defined so that a call about each returns the error or the value
+ * Linux returns for it. */
 #define SCHED_OTHER 0
 
 #define SCHED_FIFO 1
@@ -6501,8 +6567,8 @@ long sys_ioprio_get(isr_params_t *params)
 
 #define SCHED_EXT 7
 
-/* The flag a policy may carry that asks a fork not to pass the policy on;
- * accepted with SCHED_OTHER, which it changes nothing for here. */
+/* The flag of a policy that makes a fork not pass the policy on; accepted
+ * with SCHED_OTHER, for which it changes nothing here. */
 #define SCHED_RESET_ON_FORK 0x40000000
 
 /* The highest real-time priority Linux gives SCHED_FIFO and SCHED_RR. */
@@ -6576,19 +6642,18 @@ long sys_sched_yield(isr_params_t *params)
 }
 
 /**
- * Change a process's policy and priority (sched_setscheduler(2), syscall
- * 156), or its priority alone (sched_setparam, which passes
- * `policy` -1).
+ * Change a process's policy and priority (sched_setscheduler(2)), or its
+ * priority alone (sched_setparam, which passes `policy` -1).
  *
  * `uparam` points at a struct sched_param, one int. SCHED_OTHER with priority
- * 0 is the one setting a process has here, and asking for it succeeds for a
- * caller that may change the target; SCHED_RESET_ON_FORK beside it is
+ * 0 is the one setting a process has here, and a request for it succeeds for
+ * a caller that may change the target; SCHED_RESET_ON_FORK beside it is
  * accepted and kept nowhere, since a fork has no other policy to reset. The
- * rest is refused in Linux's order and with its errors: no parameter or a
- * negative pid, -EINVAL; an unreadable parameter, -EFAULT; no such process,
- * -ESRCH; a priority past 99, or one that does not suit the policy, -EINVAL,
- * as for SCHED_DEADLINE, which takes its parameters from sched_setattr
- * alone; SCHED_FIFO and SCHED_RR, -EPERM, as Linux answers a caller without
+ * rest fails in Linux's order and with its errors: no parameter or a negative
+ * pid, -EINVAL; an unreadable parameter, -EFAULT; no such process, -ESRCH; a
+ * priority outside 0 to 99, or one that does not suit the policy, -EINVAL, as
+ * for SCHED_DEADLINE, which takes its parameters from sched_setattr alone;
+ * SCHED_FIFO and SCHED_RR, -EPERM, as Linux returns to a caller without
  * CAP_SYS_NICE when RLIMIT_RTPRIO is 0; and a caller that may not change the
  * target, -EPERM. SCHED_BATCH and SCHED_IDLE, which Linux grants anyone, and
  * every other number, -EINVAL: this kernel has one policy.
@@ -6718,10 +6783,9 @@ long sys_sched_get_priority_min(isr_params_t *params)
 }
 
 /**
- * A process's round-robin time slice (sched_rr_get_interval,
- * 32-bit timespec): one tick, 10 ms, since the timer takes the processor
- * from every process at each tick. -EINVAL for a negative pid, -ESRCH,
- * -EFAULT.
+ * A process's round-robin time slice (sched_rr_get_interval, a timespec of
+ * two longs): one tick, 10 ms, since the timer takes the processor from every
+ * process at each tick. -EINVAL for a negative pid, -ESRCH, -EFAULT.
  */
 long sys_sched_rr_get_interval(isr_params_t *params)
 {
@@ -6774,8 +6838,8 @@ long sys_sched_getaffinity(isr_params_t *params)
 }
 
 /** Whether [`addr`, `addr` + `len`) is a range the current process's
- * regions cover without a gap, as mlock asks: -EINVAL for an address past
- * the end of the address space, -ENOMEM for a gap, 0. */
+ * regions cover without a gap, as mlock requires: -EINVAL for a range that
+ * wraps past the end of the address space, -ENOMEM for a gap, 0. */
 static int32_t lock_range(uintptr_t addr, uintptr_t len)
 {
     uintptr_t start = addr & ~(uintptr_t)(PAGE_SIZE - 1);
@@ -6805,11 +6869,14 @@ long sys_mlock(isr_params_t *params)
     return lock_range(SC_ARG(params, 0), SC_ARG(params, 1));
 }
 
+/** munlock: mlock's check of the range. */
 long sys_munlock(isr_params_t *params)
 {
     return sys_mlock(params);
 }
 
+/** mlock2: mlock's check of the range, after its flags; -EINVAL for a flag
+ * other than MLOCK_ONFAULT (1). */
 long sys_mlock2(isr_params_t *params)
 {
     if (SC_ARG(params, 2) & ~1u) {
@@ -6820,8 +6887,9 @@ long sys_mlock2(isr_params_t *params)
 
 /**
  * mlockall and munlockall: lock or unlock every page, which the
- * machine keeps in memory anyway; mlockall's flags must be MCL_CURRENT,
- * MCL_FUTURE and MCL_ONFAULT, not MCL_ONFAULT alone, and not none.
+ * machine keeps in memory anyway. mlockall's flags are any of MCL_CURRENT (1),
+ * MCL_FUTURE (2) and MCL_ONFAULT (4), but not MCL_ONFAULT alone and not none;
+ * -EINVAL otherwise.
  */
 long sys_mlockall(isr_params_t *params)
 {
@@ -6833,6 +6901,7 @@ long sys_mlockall(isr_params_t *params)
     return 0;
 }
 
+/** munlockall: every page stays in memory, and the call returns 0. */
 long sys_munlockall(isr_params_t *params)
 {
     (void)params;
@@ -6897,10 +6966,10 @@ long sys_getcpu(isr_params_t *params)
 /**
  * personality, the execution domain, takes the new value, or 0xFFFFFFFF to read
  * it, and the old value is returned. The domain, the low byte, must be
- * PER_LINUX (0) or PER_LINUX32 (8), the two a Linux i386 program runs in, else
- * -EINVAL; the flag bits above it are kept and change nothing, since this
- * kernel has no address randomization for ADDR_NO_RANDOMIZE, which GDB sets, to
- * turn off, and no other domain.
+ * PER_LINUX (0) or PER_LINUX32 (8), the domains of Linux programs on x86, else
+ * -EINVAL; the flag bits above it are kept and change nothing. This kernel
+ * does not randomize addresses, so ADDR_NO_RANDOMIZE, which GDB sets, has
+ * nothing to turn off.
  */
 long sys_personality(isr_params_t *params)
 {
@@ -6926,7 +6995,7 @@ long sys_personality(isr_params_t *params)
  * `cpu_mask_bytes()` are read, as Linux reads no more than its own mask's
  * size, and a shorter mask is zero past its end. The process is bound to the
  * started processors the mask has (`sched_set_affinity`), and moves off one
- * it no longer has; a mask with none is refused with -EINVAL. -EFAULT, then
+ * it no longer has; a mask with none fails with -EINVAL. -EFAULT, then
  * -ESRCH, then -EPERM for a caller that may not change the target, in
  * Linux's order.
  */
@@ -6957,8 +7026,8 @@ long sys_sched_setaffinity(isr_params_t *params)
     return 0;
 }
 
-/* The prctl options this kernel has; every other is EINVAL, as Linux answers
- * an option it does not know. */
+/* The prctl options this kernel has; every other is EINVAL, as Linux returns
+ * for an option it does not have. */
 #define PR_SET_PDEATHSIG 1
 
 #define PR_GET_PDEATHSIG 2
@@ -7087,10 +7156,11 @@ struct cap_data {
 /**
  * Read the version at the start of the header at `uhdr` and the number of
  * words it gives each set into `*words`. An unknown version is -EINVAL,
- * with the version this kernel prefers written back into the header, as
- * Linux answers a program that asks which version to use. The pid after it
- * is read only by a call that needs it (`cap_pid_in`), so a header whose
- * version ends a page asks for the version as on Linux.
+ * with the version this kernel prefers written back into the header, which
+ * is how Linux tells a program the version to use. The pid after it is read
+ * only by a call that needs it (`cap_pid_in`), so a query of the version
+ * through a header whose version word ends a page works as on Linux. -EFAULT
+ * for a null header or one that cannot be read or written.
  */
 static int32_t cap_version_in(uintptr_t uhdr, uint32_t *words)
 {
@@ -7149,10 +7219,12 @@ static int32_t cap_pid_in(uintptr_t uhdr, int32_t *pid)
  * capget takes header and the sets' words.
  *
  * The sets of the thread the header's pid names, the caller for 0, as
- * `cap_held` gives them; the inheritable set is always empty. A null second
- * argument asks only for the version, and is 0 with an unknown version written
- * back. -ESRCH for a pid that names no thread, -EINVAL for a negative one or an
- * unknown version, -EFAULT for memory that cannot be read or written.
+ * `cap_held` gives them; the inheritable set is always empty. With a null
+ * second argument the call is a query of the version alone, and returns 0 even
+ * for an unknown version, over which the preferred one is written
+ * (`cap_version_in`). -ESRCH for a pid that names no thread, -EINVAL for a
+ * negative one or an unknown version, -EFAULT for memory that cannot be read
+ * or written.
  */
 long sys_capget(isr_params_t *params)
 {
