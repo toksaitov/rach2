@@ -10,9 +10,9 @@
  * block again. The last step is what a file system that lost the space
  * instead of freeing it would fail.
  *
- * The probe writes to the mounted root, so it needs an image with room to
- * fill; `tests/run diskfull` gives it a small one. It removes its own file on
- * every path but a failed unlink.
+ * The probe writes to the mounted root until it is full, so `tests/run
+ * diskfull` runs it in a boot of its own on the test image, which the other
+ * probes share. It removes its own file on every path but a failed unlink.
  *
  * Prints "DISKFULL OK (...)" and exits 0, or "DISKFULL FAIL: " with the
  * reason and exits 1. Freestanding; direct system calls (probe.h).

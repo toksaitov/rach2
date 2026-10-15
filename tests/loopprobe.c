@@ -334,7 +334,8 @@ static void sys_nanosleep_ms(long ms)
  * bytes comes back as one, with its source, and the datagram after it
  * arrives whole; the drained socket then answers EAGAIN. A receive that took
  * the empty datagram for an empty queue would block, and the runner reports
- * a probe that never ends.
+ * a probe that never ends; the EAGAIN fails a receive that reports a
+ * datagram whether or not one is queued, which passes the rows before it.
  */
 static void udp_loop(void)
 {
@@ -957,7 +958,7 @@ static int pipe_pingpong_ms(void)
  * delivers the ring, so only the idle path can deliver it before the next
  * tick: the sender blocks in its read, nothing else is runnable, and the
  * processor is about to idle. Of the 400 legs at least half must be delivered
- * by the idle path, and fewer by the timer than by it; a leg left for the
+ * by the idle path, and no more by the timer than by it; a leg left for the
  * timer costs a tick, and a connection that waits for it turns over one
  * window a tick. The times of these rounds and of the same rounds over pipes
  * are printed for a person and not judged.

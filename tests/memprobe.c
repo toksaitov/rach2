@@ -12,7 +12,7 @@
  * mappings. Then a child executes `memprobe fresh`, which maps 16 MiB and
  * requires every byte zero, since a frame that held the pattern a moment ago
  * must come back clean. Then the mapping is unmapped, and the free memory
- * `/proc/meminfo` reports must be within 256 KiB of what it was before, the
+ * `/proc/meminfo` reports must not have fallen by more than 256 KiB, the
  * mapping's page tables aside, which stay with the process until it exits,
  * so the frames came back. The mapping and the pattern come first and the
  * fork after, so that the fork's page tables and directory, which the kernel
@@ -555,8 +555,7 @@ void probe_main(unsigned long *sp)
     if (syscall2(SYS_MUNMAP, (long)base, (long)len) != 0) {
         fail("munmap");
     }
-    /* The page tables of the mapping stay with the process until it exits
-     * (TABLE_KIB); everything else must be back. */
+    /* The mapping's page tables stay with the process (TABLE_KIB). */
     after = mem_free_kib();
     if (after + 256 + TABLE_KIB(pages) < before) {
         fail("the frames did not come back");

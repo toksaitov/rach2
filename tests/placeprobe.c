@@ -8,13 +8,12 @@
  * translated; `far` is never executed. The same work for both: a forked
  * child writes 32 MiB of a pattern into a pipe in 4 KiB writes, and the
  * parent reads it into the buffer from `buf + 16`, asking for the rest of
- * the buffer and getting at most a page, since the pipe holds one, so
- * every read of the near buffer writes into the page with the `ret`, which
- * the parent calls once per read to keep it code. The first and last byte
- * of each read's extent are checked and then cleared, so a read that
- * reported bytes it did not copy would be caught by the next; only an end
- * of file before 32 MiB is short. Each run is timed by the monotonic
- * clock; three of each, near and far alternating.
+ * the buffer, so every read of the near buffer writes into the page with
+ * the `ret`, which the parent calls once per read to keep it code. The
+ * first and last byte of each read's extent are checked and then cleared,
+ * so a read that reported bytes it did not copy would be caught by the
+ * next; only an end of file before 32 MiB is short. Each run is timed by
+ * the monotonic clock; three of each, near and far alternating.
  *
  * Prints, per run, `PLACEPROBE NEAR N ms KiB/s` or `PLACEPROBE FAR N ms
  * KiB/s`, and first the mappings: the code's pages from `_start` to

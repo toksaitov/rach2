@@ -16,16 +16,18 @@
  * * a message past the MTU is refused, and one for an address whose hardware
  *   address is not known yet is accepted, since the request has gone and a
  *   datagram promises no delivery;
- * * the queue is eight deep, and the ninth datagram is dropped, not the first;
+ * * the queue is eight deep, so of nine replies eight are queued;
  * * eight more raw sockets open at once, and while two children hold full
  *   descriptor tables of sockets a socket still opens and the first raw
  *   socket still receives.
  *
  * For the suite's capture checker (`pcapcheck rawwire`) it also sends raw
  * datagrams with hop limits 1 to 3, datagram sends with 4 to 6, and a message
- * with a wrong checksum, which must cross the wire as written. Booted with an
- * address and no gateway, it checks only that a raw send and a datagram send
- * off the subnet are ENETUNREACH.
+ * with a wrong checksum, which must cross the wire as written. A stack that
+ * ignored IP_TTL or recomputed the checksum would show it only on the wire.
+ * Booted with an address and no gateway, it checks the refusals of the
+ * first row and then only that a raw send and a datagram send off the subnet
+ * are ENETUNREACH.
  *
  * Runs on the test image with QEMU's user network, where 10.0.2.2 is the
  * gateway and answers. Prints "RAWPROBE START", then "  FAIL: " and the row
@@ -640,7 +642,7 @@ PROBE_START void _start(void)
     args[5] = 16;
     check(socketcall(SC_SENDTO, args) == 8, "a send to an unresolved neighbour is not an error");
 
-    /* Nine replies to a queue eight deep: the first eight are kept. */
+    /* Nine replies to a queue eight deep: eight are kept. */
     {
         int got = 0;
 

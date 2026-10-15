@@ -8,9 +8,9 @@
  *   (c) hangup: polling a read end whose writer has closed reports POLLHUP;
  *   (d) select: the same readable fd is found through an fd_set, through
  *       the fd_set to pollfd translation and, on i386, _newselect;
- *   (e) block and wake: a parent that polls with a two-second timeout wakes
- *       when a forked child writes, without waiting out the timeout, so poll
- *       sleeps on the pipe's wait queue;
+ *   (e) block and wake: a parent polls with a two-second timeout while a
+ *       forked child writes after 60 ms, and the poll returns the pipe
+ *       readable (the row does not time the wake);
  *   (f) fd contract: a wide nfds with only in-range bits works; a bit naming
  *       a closed fd, past the table or not, is -EBADF; nfds past the fd_set
  *       width is -EINVAL, not a truncation;

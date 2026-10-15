@@ -157,7 +157,7 @@ static int make_in(const char *dir, const char *file)
     if (sys_call3(SYS_MKDIR, (long)dir, 0755, 0) < 0) {
         return -1;
     }
-    fd = sys_call3(SYS_OPEN, (long)file, 0101, 0644); /* open O_WRONLY|O_CREAT */
+    fd = sys_call3(SYS_OPEN, (long)file, 0101, 0644); /* O_WRONLY|O_CREAT */
     if (fd < 0) {
         return -1;
     }
@@ -344,9 +344,9 @@ static int below_tick(const struct stat64 *s)
  * The time rows; 1 when they passed. KRFFS keeps nanoseconds and the clock
  * adds the timer's place within the tick, so stamps taken back to back never
  * go back and carry a part below the 10 ms tick, which a clock of whole
- * ticks never gives. They may repeat: a reading that would fall back, as when
- * the tick's interrupt arrives after the counter has wrapped, is given as
- * the last reading again (`rtc_realtime`). No delay separates the first two
+ * ticks never gives. They may repeat: a reading that would fall back, as
+ * after interrupts were off for longer than a timer period, is given as the
+ * last reading again (`rtc_realtime`). No delay separates the first two
  * writes or the fifty stamps. Explicit times keep their fractions, zero
  * included.
  */

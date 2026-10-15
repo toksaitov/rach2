@@ -435,9 +435,9 @@ static void baseline_child(void)
 }
 
 /** The same calls with /sp_denied at 0666 and owned by root. Every call that
- * enters the directory answers -EACCES; the root, which no path here enters
- * through it, and access(2) asked with a real uid of 0 still succeed, or the
- * rule would deny more than search. Exits 0, or fails the probe. */
+ * enters the directory answers -EACCES; the root, whose path does not enter
+ * it, and access(2) asked with a real uid of 0 still succeed, or the rule
+ * would deny more than search. Exits 0, or fails the probe. */
 static void denied_child(void)
 {
     /* The walk is charged by the effective uid 1000, access by the real 0. */

@@ -13,8 +13,8 @@
  * removes them as `rm` does, and requires every name to have been listed and
  * the directory to be removable afterwards. Each record's `d_off` increases
  * strictly, and its inode, length and type are checked. Two descriptors on
- * one directory each have a cursor of their own, and each reports the end
- * again and again.
+ * one directory each have a cursor of their own, and each reports the end,
+ * the first a second time as well.
  *
  * Prints "UNLINKDIRPROBE OK" and exits 0 on success; a failure prints
  * "UNLINKDIRPROBE FAIL: " with the reason and exits 1. Freestanding; direct

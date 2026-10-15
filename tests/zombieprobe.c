@@ -142,7 +142,7 @@ PROBE_START void _start(void)
             long req[2];
 
             req[0] = 0;
-            req[1] = 60000000u; /* 60 ms, long enough for the victim to fill and unlink */
+            req[1] = 60000000u; /* 60 ms, for the victim to fill and unlink */
             syscall2(SYS_NANOSLEEP, (long)req, 0);
         }
         if (syscall2(SYS_KILL, vpid, SIGKILL) != 0) {

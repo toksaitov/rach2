@@ -7,8 +7,8 @@
  * nobody answers:
  *
  * Progress. The parent reads the clock in a loop while the child is inside
- * that four-second call, and at least one reading must be taken while the
- * child is alive. A wait that spun with sti and hlt inside the system call
+ * that four-second call, and the readings it takes while the child is alive
+ * must span some time. A wait that spun with sti and hlt inside the system call
  * would give the parent no processor for the child's whole call. The child
  * measures its own call and reports the milliseconds through the pipe, and
  * the call may not return before the kernel's four hundred ticks.

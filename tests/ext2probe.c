@@ -188,8 +188,13 @@ static int st_mode(void)
 
 static char big[512];
 
-/** The rows of `ext2probe links`, on the fixture mounted read-only on /e2;
- * fails the probe at the first row that fails. */
+/**
+ * The rows of `ext2probe links`, on the fixture mounted read-only on /e2;
+ * fails the probe at the first row that fails. `..` is physical, so through
+ * a link to a directory it is the target's parent, and O_CREAT through a
+ * dangling link creates the target, which the read-only mount refuses with
+ * an answer and not a loop.
+ */
 static void links_rows(void)
 {
     char buf[64];
@@ -445,8 +450,8 @@ static void cost_write(int fd, unsigned char pattern)
     }
 }
 
-/** Create `path`, which may not exist, write one block of `pattern` and
- * fsync it, before a count begins: the open descriptor. */
+/** Create `path`, which must not exist yet, write one block of `pattern`
+ * and fsync it, before a count begins: the open descriptor. */
 static int cost_create(const char *path, unsigned char pattern)
 {
     int fd = syscall3(SYS_OPEN, (long)path, O_RDWR | O_CREAT | O_EXCL, 0644);
@@ -489,12 +494,12 @@ static void cost_verify(const char *path, unsigned first, unsigned blocks)
 
 /**
  * Count sixteen rewrites of one block and two appends, each with its final
- * fsync. The rewrites may cost four commands and two flushes, the cost of one
- * data write and one inode write, and none before the fsync. The two appends
- * together may cost at most ten commands and five flushes, what one append
- * costs when each write call is written through on its own, and no flush
- * before the fsync. With `append_only` the rewrites' counts are printed and
- * not judged.
+ * fsync. The rewrites cost exactly four commands and two flushes, the cost of
+ * one data write and one inode write, and none before the fsync. The two
+ * appends together cost at least one command and one flush and at most ten
+ * commands and five flushes, what one append costs when each write call is
+ * written through on its own, and no flush before the fsync. With
+ * `append_only` the rewrites' counts are printed and not judged.
  */
 static void cost_rows(int append_only)
 {

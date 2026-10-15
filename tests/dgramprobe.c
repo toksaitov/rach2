@@ -15,10 +15,10 @@
  * ENOTSOCK; AF_UNSPEC disconnects a datagram socket and is EAFNOSUPPORT for a
  * stream; a packet socket cannot be connected; two sockets share a port only
  * when both set SO_REUSEADDR, and the reply goes to the one connected to the
- * sender; a port below 1024 is root's; a broadcast is EACCES until
- * SO_BROADCAST is set; the options read back; and SO_BINDTODEVICE takes the
- * machine's interface, by name or as the whole `struct ifreq` BusyBox sends,
- * and no other.
+ * sender; a port below 1024 is root's; a connect beside eight bound sockets
+ * answers 0 or EAGAIN; a broadcast is EACCES until SO_BROADCAST is set; the
+ * options read back; and SO_BINDTODEVICE takes the machine's interface, by
+ * name or as the whole `struct ifreq` BusyBox sends, and no other.
  *
  * The peer is the machine itself at its own address, so both ends of the
  * exchanges are in this process. Prints "DGRAMPROBE OK" and exits 0 on
@@ -152,8 +152,9 @@ static void fail(const char *what)
 
 static uint8_t sa[16];
 static uint8_t buf[64];
-/* A `struct ifreq`: a 16-byte name and a union whose largest member is a
- * map of longs and pointers, 32 bytes on i386 and 40 on x86-64. */
+/* A `struct ifreq`: a 16-byte name and a union whose largest member,
+ * struct ifmap, begins with two unsigned longs; 32 bytes on i386 and 40 on
+ * x86-64. */
 #if defined __x86_64__
 #define IFREQ_SIZE 40
 #else
@@ -226,7 +227,18 @@ static int open_bound(uint16_t port)
     return fd;
 }
 
-/** The probe's entry: the rows of the list above, in its order. */
+/**
+ * The probe's entry: the rows of the list above, in its order.
+ *
+ * A datagram to the machine's own address goes on the loopback ring, which
+ * the kernel delivers after the send returns, so the first read of each
+ * exchange waits for it and only the reads that expect nothing do not. The
+ * socket that ignores the outsider must still hear its peer afterwards, or
+ * its silence would show only that nothing was sent. The eight packet
+ * sockets, opened and closed, show that none of them took a UDP binding.
+ * The connect beside eight bound sockets has to find an ephemeral port, and
+ * answers at once, 0 or EAGAIN.
+ */
 PROBE_START void _start(void)
 {
     unsigned long args[6];
@@ -418,7 +430,7 @@ PROBE_START void _start(void)
     }
     sys_close(stream);
 
-    /* A packet socket has no peer; a datagram socket binds after eight. */
+    /* A packet socket has no peer, and takes no UDP binding. */
     for (i = 0; i < 8; i++) {
         int pkt;
 

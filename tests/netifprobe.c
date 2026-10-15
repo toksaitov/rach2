@@ -238,10 +238,11 @@ static void fail(const char *what)
     sys_exit(1);
 }
 
-/* struct ifreq: a 16-byte name, then a union whose largest member is a map
- * of longs and pointers. struct rtentry: a pad word of a long, three
- * sockaddrs, the flags, and a pointer to the interface's name. Their sizes
- * and the rtentry's offsets are Linux's for each architecture. */
+/* struct ifreq: a 16-byte name, then a union whose largest member, struct
+ * ifmap, begins with two unsigned longs. struct rtentry: a pad word of a
+ * long, three sockaddrs, the flags, and further on a pointer to the
+ * interface's name. Their sizes and the rtentry's offsets are Linux's for
+ * each architecture. */
 #if defined __x86_64__
 #define IFREQ_SIZE 40
 #define RT_SIZE    120
@@ -896,8 +897,9 @@ PROBE_SP_ENTRY;
  * A TCP connection to the machine itself is open across the change of
  * address, so both its ends recorded the old one. A process that is not root
  * may not set the address (EPERM). After the change a write to one end and a
- * read of the other are ENETRESET: each end has the reason once and its first
- * reader takes it, as SO_ERROR does on Linux, so SO_ERROR then reads 0. The
+ * read of the other are ENETRESET, and not a bare -1, which the C library
+ * reads as EPERM: each end has the reason once and its first reader takes
+ * it, as SO_ERROR does on Linux, so SO_ERROR then reads 0. The
  * listener survives, since it answers whatever address the machine has, and
  * accepts a connection to the new address. The same address and mask set
  * again, as a DHCP client sets them at every renewal, reset nothing. An
