@@ -7,12 +7,13 @@
 #
 # Each digest was recorded after the upstream signature verified: Mozilla's
 # release key, 14F26682D0916CDD81E37B6D61B7B526D98F0353, for Firefox's
-# source, whose signed SHA256SUMS lists the same digest; and the Rust release
-# key, 108F66205EAEB0AAA8DD5E1C85AB96E6FA1BE5FE, for the Rust components. cbindgen's
-# crate has no signature: its digest is the one the crates.io index lists,
-# and the crate records the git revision from which Firefox's automation
-# builds cbindgen. The Debian archive keys have the fingerprints ftp-master
-# publishes, and Ubuntu's debian-archive-keyring package has the same ones.
+# source, whose signed SHA256SUMS lists the same digest; and the Rust
+# release key, 108F66205EAEB0AAA8DD5E1C85AB96E6FA1BE5FE, for the Rust
+# components. cbindgen's crate has no signature: its digest is the one the
+# crates.io index lists, and the crate records the git revision from which
+# Firefox's automation builds cbindgen. The Debian archive keys have the
+# fingerprints ftp-master publishes, and Ubuntu's debian-archive-keyring
+# package has the same ones.
 #
 # The CA bundle is curl's extract of Mozilla's root store as Mozilla last
 # changed it, on 2026-09-25: 121 certificates in PEM form. It has no

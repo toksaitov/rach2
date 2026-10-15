@@ -7,9 +7,9 @@
 #
 # tools/image/mkext2.sh runs this over the tree it staged from
 # krffs/manifests/os-real-gnu.manifest, before it formats the volume, so that
-# the GNU system lies over the os-real system as a Debian system has it. From
-# the GNU layer's build tree for the architecture RACH2_ARCH names
-# (vendor/gnu/arch.sh) it copies in:
+# the image is the os-real system with the GNU system installed over it, laid
+# out as a Debian system is. From the GNU layer's build tree for the
+# architecture RACH2_ARCH names (vendor/gnu/arch.sh) it copies in:
 #
 #   root      glibc's runtime, with its loader at /lib/ld-linux.so.2 on i686
 #             and /lib64/ld-linux-x86-64.so.2 on x86-64, and the ports under
@@ -24,18 +24,18 @@
 #
 # Then it links /bin/bash, /bin/sh, /bin/apropos, /bin/whatis, /usr/bin/cc,
 # /usr/bin/vi, /bin/mkfs.ext2, /sbin/fsck.ext2, /sbin/e2label, /etc/mtab and
-# /run, writes autoconf's site file, links each BusyBox applet no file of the
-# path answers for, gives each program of /bin and /usr/bin its name in the
-# other, and of /sbin and /usr/sbin, puts the CA bundle in /etc/ssl, puts
-# /etc/services, /etc/protocols, /etc/networks, /etc/localtime and /etc/timezone
-# in place, compiles the console's terminfo entry, rach2.ti, renders the ports'
-# manual pages with render_man.sh, takes the set-id bit off OpenSSH's
-# ssh-keysign, gives /etc/shadow a locked line for each system account of
-# /etc/passwd, and has the root's own ldconfig write /etc/ld.so.cache from the
-# /etc/ld.so.conf the manifest staged. A file the tree already has is refused
-# rather than replaced, so that what the manifest staged is what the image has;
-# the one file replaced and the one added to are named where they are, and
-# /bin/sh, which the manifest does not stage, is a name of bash's file.
+# /run, links each BusyBox applet that no file of the path provides, gives
+# each program of /bin and /usr/bin its name in the other, and of /sbin and
+# /usr/sbin, puts the CA bundle in /etc/ssl, puts /etc/services,
+# /etc/protocols, /etc/networks, /etc/localtime and /etc/timezone in place,
+# compiles the console's terminfo entry, rach2.ti, renders the ports' manual
+# pages with render_man.sh, takes the set-id bit off OpenSSH's ssh-keysign,
+# gives /etc/shadow a locked line for each system account of /etc/passwd, and
+# has the root's own ldconfig write /etc/ld.so.cache from the /etc/ld.so.conf
+# the manifest staged. A file the tree already has is refused rather than
+# replaced, so that what the manifest staged is what the image has; the one
+# file replaced and the one added to are named where they are, and /bin/sh,
+# which the manifest does not stage, is a name of bash's file.
 #
 
 set -e
@@ -48,7 +48,7 @@ OUT="$GNU_OUT"
 DEBIAN="$OUT/work/chromium"
 
 # The packages of the browser's closure that are not installed: libc6,
-# whose glibc 2.41 the root's 2.44 replaces; the libraries the root has its
+# whose glibc the root's newer one replaces; the libraries the root has its
 # own builds of, of the same sonames and newer: GCC's in libgcc-s1,
 # libstdc++6 and libatomic1, zlib1g, liblzma5, libpcre2-8-0, util-linux's
 # libmount1, libblkid1 and libuuid1, libffi8, libsqlite3-0, libbz2-1.0 and
@@ -122,7 +122,7 @@ install_part()
 
 install_part root
 # The runtime's libstdc++.so.6 is a copy of the cross compiler's library,
-# and the native compiler has the same library of GCC 16.2.0 with the links
+# and the native compiler has the same library of the same GCC with the links
 # and archives a link against it needs, so its copy replaces the runtime's.
 rm -f "$TREE/usr/lib/libstdc++.so.6"
 install_part native
@@ -157,17 +157,18 @@ echo "gnu: install: chromium: $(wc -l < "$WORK/new" | tr -d ' ') files"
 ln -s ../usr/bin/bash "$TREE/bin/bash"
 ln "$TREE/usr/bin/bash" "$TREE/bin/sh"
 
-# The system's man answers to apropos and whatis, as man-db's does.
+# apropos and whatis are names of the system's man, which searches as each
+# does when it is run by that name, as man-db's are.
 ln -s man "$TREE/bin/apropos"
 ln -s man "$TREE/bin/whatis"
 ln -s gcc "$TREE/usr/bin/cc"
 ln -s vim "$TREE/usr/bin/vi"
 
-# The manifest's mke2fs answers to mkfs.ext2 too, the name util-linux's
-# mkfs runs for `mkfs -t ext2` and Debian's e2fsprogs links, e2fsck to
-# fsck.ext2, which fsck runs for an ext2 volume, and tune2fs to e2label,
-# whose name it reads. The ext3 and ext4 names are left out, since the
-# kernel mounts neither's volumes.
+# mkfs.ext2 is a name of the manifest's mke2fs, the name util-linux's mkfs
+# runs for `mkfs -t ext2` and Debian's e2fsprogs links; fsck.ext2 is one of
+# e2fsck, which fsck runs for an ext2 volume; and e2label is one of tune2fs,
+# which acts as e2label when it is run by that name. The ext3 and ext4 names
+# are left out, since the kernel mounts neither's volumes.
 ln -s mke2fs "$TREE/bin/mkfs.ext2"
 ln -s e2fsck "$TREE/sbin/fsck.ext2"
 ln -s tune2fs "$TREE/sbin/e2label"
@@ -189,7 +190,7 @@ ln -s var/run "$TREE/run"
 # BusyBox's applets are not files: ash runs one for its name before it
 # searches the path, and bash and every program that searches the path
 # itself, as Git does for its editor, find only files. So each applet that
-# no file in /usr/bin, /bin, /usr/sbin or /sbin answers for, as ps, mount
+# no file in /usr/bin, /bin, /usr/sbin or /sbin provides, as ps, mount
 # and which, is linked to /bin/busybox where BusyBox's own install puts it.
 # The build host runs the BusyBox the manifest stages, which is static, for
 # the list, from the architecture's build: the stager writes the tree's files
@@ -274,7 +275,7 @@ chmod u-s "$TREE/usr/libexec/ssh-keysign"
 
 # The shadow file the manifest stages, krffs/shadow, has the lines of the
 # accounts that log in, root's and test's, which every image shares. shadow's
-# pwck wants a line for every account of /etc/passwd, and the GNU root's
+# pwck reports an account of /etc/passwd that has no line, so the GNU root's
 # system accounts, sshd, messagebus and nobody, get one with a locked
 # password, as Debian's have.
 locked=$(awk -F: 'NR == FNR { have[$1] = 1; next } !($1 in have) { print $1 ":!:::::::" }' \

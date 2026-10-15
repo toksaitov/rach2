@@ -5,18 +5,19 @@
 #
 # Usage: build_native.sh [STEP...]
 #
-# Builds binutils 2.47 and GCC 16.2.0 for C and C++ on this Linux host, with
-# the cross toolchain `make gnu-toolchain` built, as programs that run on the
-# toolchain's target, i686-linux-gnu or x86_64-rach2-linux-gnu as RACH2_ARCH
-# names the architecture (vendor/gnu/arch.sh), and make code for it: a native
-# compiler for Rach2 made by a cross build. They link dynamically against the
-# toolchain's glibc and install under the prefix /usr into native/ of the
-# layer's build tree, the staging root. The steps are binutils, gcc and check;
-# with no STEP all three run from nothing, and naming steps runs only those
-# over what an earlier run left. Each step writes its output to a log in log/
-# of the build tree. Under make the sub-makes share the caller's jobs; run
-# alone, the script uses GNU_JOBS processors, or every processor when GNU_JOBS
-# is not set.
+# Builds binutils and GCC for C and C++, at the versions sources.txt pins, on
+# this Linux host with the cross toolchain `make gnu-toolchain` built, as
+# programs that run on the toolchain's target, i686-linux-gnu or
+# x86_64-rach2-linux-gnu as RACH2_ARCH names the architecture
+# (vendor/gnu/arch.sh), and make code for it: a native compiler for Rach2
+# made by a cross build. They link dynamically against the toolchain's glibc
+# and install under the prefix /usr into native/ of the layer's build tree,
+# the staging root. The steps are binutils, gcc and check; with no STEP all
+# three run from nothing, and naming steps runs only those over what an
+# earlier run left. Each step writes its output to a log in log/ of the build
+# tree. Under make the sub-makes share the caller's jobs; run alone, the
+# script uses GNU_JOBS processors, or every processor when GNU_JOBS is not
+# set.
 #
 
 set -e

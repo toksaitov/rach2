@@ -8,9 +8,9 @@
 # Usage: build_toolchain.sh [STEP...]
 #
 # Builds, from the tarballs fetch.sh checks, into the layer's build tree
-# (build/vendor/gnu for i686, build/x86_64/vendor/gnu for x86-64): binutils, a
-# first C-only GCC without a C library, the Linux headers, glibc, the final
-# GCC with C and C++, and libxcrypt, whose libcrypt glibc 2.44 no longer has.
+# (build/vendor/gnu for i686, build/x86_64/vendor/gnu for x86-64): binutils,
+# the Linux headers, a first C-only GCC without a C library, glibc, the final
+# GCC with C and C++, and libxcrypt, whose libcrypt glibc no longer has.
 # The compilers go in cross/, the target's headers and libraries in sysroot/.
 # The steps are binutils, headers, gcc1, glibc, gcc2 and libxcrypt; with no
 # STEP the whole toolchain is built again from nothing, its own sources and
@@ -150,6 +150,8 @@ step_glibc()
     make install install_root="$SYSROOT"
 }
 
+# The final compiler, built over the tree gcc1 unpacked, or over a new one
+# when that tree is gone.
 step_gcc2()
 {
     s="$SRC/gcc-$(awk '$1 == "gcc" { print $2; exit }' "$DIR/sources.txt")"

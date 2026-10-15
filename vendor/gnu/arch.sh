@@ -4,8 +4,8 @@
 #
 # Sourced by the GNU layer's scripts, which set REPO first. It sets:
 #
-#   GNU_OUT       the layer's build tree: build/vendor/gnu for i686, as it
-#                 always was, and build/x86_64/vendor/gnu for x86-64
+#   GNU_OUT       the layer's build tree: build/vendor/gnu for i686 and
+#                 build/x86_64/vendor/gnu for x86-64
 #   GNU_TARGET    the toolchain's target, `i686-linux-gnu` or
 #                 `x86_64-rach2-linux-gnu`; the build host is an x86-64
 #                 Linux, whose own compilers are named x86_64-linux-gnu-gcc

@@ -1,2 +1,2 @@
-# The fetched tarballs (fetch.sh), kept outside Git by design
+# The tarballs fetch.sh downloads, which are not committed.
 downloads/
