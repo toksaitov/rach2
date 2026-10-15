@@ -1,27 +1,43 @@
 /**
- * `system(3)` and `popen(3)`, which reach a child only through `posix_spawn`.
+ * spawnmusl: check `system(3)` and `popen(3)`, which start their child through
+ * `posix_spawn`.
  *
  * Upstream musl's `posix_spawn` starts the child with `clone` and
- * CLONE_VM|CLONE_VFORK, so the child runs in the PARENT's address space
- * until it execs. One pinned patch to the vendored musl (see
- * vendor/musl/patches/) makes it fork instead. The child function never
- * returns and reports failure through a pipe, not through shared memory, so
- * a forked child serves it as a cloned one does, in a copy of the parent's
- * memory. A make runs every recipe this way.
+ * CLONE_VM|CLONE_VFORK, so the child runs in the parent's address space
+ * until it execs. A patch to the vendored musl (`vendor/musl/patches/`) makes
+ * it fork instead. The child function never returns and reports a failure
+ * through a pipe rather than through shared memory, so a forked child serves
+ * it as a cloned one does, in a copy of the parent's memory. A make runs
+ * every recipe this way.
  *
- * What is asserted:
+ * The checks, in order:
  *
- * A command RUNS and its status arrives. `system("exit 3")` must report 3
- * through the wait encoding, not 3 as a raw return.
+ * A command runs and its status arrives: `system("exit 3")` reports 3
+ * through the wait encoding, not as a raw return, and `system("exit 0")`
+ * reports 0. The second is a builtin rather than `true`, a program the image
+ * need not have; a shell that did not run reports 127, so the check still
+ * tells the two apart.
  *
- * A command's OUTPUT arrives. `popen` reads a line back and `pclose` reports
- * the status, which is the pair `$(shell ...)` and a `!=` assignment need.
+ * A command's output arrives: `popen` reads back the line `/bin/echo` prints
+ * and `pclose` reports its status, the pair `$(shell ...)` and a `!=`
+ * assignment need. The command is named by its full path, so that the check
+ * is of the pipe and not of the search of `PATH`.
  *
- * The PARENT survives intact. The child is a fork, with a copy of the
- * parent's memory, not a share of it, so this writes a canary into its
- * own stack and heap around the calls and requires both to be untouched.
+ * The parent's memory is unchanged: canaries on its stack and heap are whole
+ * after the calls, where a child that shared the address space would show.
  *
- * Prints "SPAWNMUSL OK" on success and "SPAWNMUSL FAIL (detail)" otherwise.
+ * A spawn that fails reports why: `posix_spawn` of a missing program returns
+ * ENOENT, the errno the child wrote through the pipe, and leaves no child to
+ * reap. The commands before it all exec, so none of them reaches the pipe.
+ *
+ * A command that fails through `popen` reports its status, 7, to `pclose`;
+ * without it a `!=` assignment in a makefile cannot tell a command that
+ * worked from one that did not.
+ *
+ * Twenty `system` and twenty `popen` calls in a row each succeed.
+ *
+ * It prints "SPAWNMUSL OK" and exits 0 on success, or prints "SPAWNMUSL FAIL
+ * (detail)" and exits 1 at the first failure.
  */
 
 #define _GNU_SOURCE
@@ -49,7 +65,10 @@ static int fail(const char *what)
     return 1;
 }
 
-/** Whether every byte of a canary still has its value. */
+/**
+ * Return 1 when each of the `count` bytes at `bytes` still has
+ * `CANARY_VALUE`, and 0 otherwise.
+ */
 static int canary_intact(const unsigned char *bytes, int count)
 {
     int i;
@@ -91,17 +110,13 @@ int main(void)
         return fail(detail);
     }
 
-    /* A command that succeeds reports zero. Spelled as a builtin rather than
-     * as `true`, which is a program this image need not carry: a shell that
-     * never ran at all reports 127, so this still tells the two apart. */
+    /* A command that succeeds reports zero. */
     status = system("exit 0");
     if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return fail("a command that succeeds did not report success");
     }
 
     /* Output comes back, and pclose reports the status. */
-    /* Named absolutely: this shell searches no PATH, and the point here is the
-     * pipe, not the lookup. */
     pipe = popen("/bin/echo spawned-line", "r");
     if (pipe == NULL) {
         return fail("popen() could not start a command");
@@ -121,8 +136,7 @@ int main(void)
         return fail("pclose() did not report the command's status");
     }
 
-    /* The parent's own memory is where a shared-address-space substitution
-     * would show, so it is checked, not assumed. */
+    /* The parent's stack and heap are unchanged. */
     if (!canary_intact(stack_canary, sizeof(stack_canary))) {
         return fail("the parent's stack was written by the spawn");
     }
@@ -132,10 +146,7 @@ int main(void)
     free(heap_canary);
     heap_canary = NULL;
 
-    /* A spawn that FAILS. Nothing above this line exercises the error pipe:
-     * every command so far execs. A missing program must come back as the
-     * errno the child wrote through that pipe, and must leave no child behind
-     * for anyone to wait on. */
+    /* A spawn that fails: ENOENT through the error pipe, and no child. */
     {
         pid_t spawned = 0;
         char *const args[] = {(char *)"/no/such/program", (char *)0};
@@ -157,9 +168,7 @@ int main(void)
         }
     }
 
-    /* A command that FAILS through popen: the status has to come back, or a
-     * `!=` assignment in a makefile cannot tell a command that worked from one
-     * that did not. */
+    /* A command that fails through popen reports its status. */
     pipe = popen("exit 7", "r");
     if (pipe == NULL) {
         return fail("popen() could not start a failing command");
@@ -179,9 +188,7 @@ int main(void)
         return fail(detail);
     }
 
-    /* And enough of them to cross the sixteen the process and descriptor
-     * tables once held, so a descriptor or a zombie leaked per call would
-     * have stopped the twentieth of these; a make runs hundreds. */
+    /* Twenty rounds of each. */
     {
         int round;
 
