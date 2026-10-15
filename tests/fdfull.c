@@ -137,7 +137,7 @@ PROBE_START void _start(void)
     }
     fd = syscall3(SYS_OPEN, (long)"/hello", O_RDONLY, 0);
     if (fd < 0) {
-        n_fds--;
+        fds[0] = fds[--n_fds];
         close_all();
         puts("FDFULL FAIL: a closed descriptor was not reusable");
         sys_exit(1);
