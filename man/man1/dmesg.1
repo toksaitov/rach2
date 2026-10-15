@@ -1,4 +1,4 @@
-.Dd October 1, 2026
+.Dd October 15, 2026
 .Dt DMESG 1
 .Os
 .Sh NAME
@@ -78,10 +78,29 @@ Print each record's facility and level before it, as
 Short options may be combined, as in
 .Fl Tw .
 Linux's options that clear the buffer, resize it or set the console's
-level are refused, since the log here is not a buffer they could change.
+level are refused:
+.Pa /dev/bootlog
+has no clear or size to change, and
+.Nm
+changes nothing.
+.Xr syslog 2
+clears the place its own reads of the whole ring begin and sets the
+screen's level, and a write to
+.Pa /dev/screenlog
+sets the level too.
+.Pp
 The BusyBox
 .Nm
-applet is not built, because it cannot read this kernel's log.
+applet reads the same records through
+.Xr syslog 2 ,
+but it takes only
+.Fl c ,
+.Fl n ,
+.Fl s
+and
+.Fl r ,
+so it is not built and this script is
+.Pa /bin/dmesg .
 .Sh FILES
 .Bl -tag -width /dev/bootlog
 .It Pa /bin/dmesg
@@ -116,5 +135,6 @@ or
 The caller may not read the log, which is root's.
 .El
 .Sh SEE ALSO
+.Xr syslog 2 ,
 .Xr bootlog 4 ,
 .Xr rach2 7

@@ -11,14 +11,15 @@
 # are run and each must name its own source and options; one boot would pass
 # with a fixed line.
 #
-# The second is the programs: `ps`, `df`, `free`, `uptime`, `dmesg` and the
-# network applets of the busybox on the real image, each of which reads files
-# under /proc. Exiting 0 is not enough and neither is the output, so both are
-# required: each applet's status is captured before anything reads what it
-# wrote, and then each is asked for something checkable. `ps` must list the
-# shell's own pid, which the shell knows independently as `$$`; `df` must
-# report the root at the size the image was built at; `free` must report a
-# non-zero total; and `uptime` must print a time.
+# The second is the programs on the real image: `ps`, `df`, `free`, `uptime`
+# and the network applets of the busybox, each of which reads files under
+# /proc, and `dmesg`, a script that reads /dev/bootlog. Exiting 0 is not
+# enough and neither is the output, so both are required: each program's
+# status is captured before anything reads what it wrote, and then each is
+# asked for something checkable. `ps` must list the shell's own pid, which
+# the shell knows independently as `$$`; `df` must report the root at the
+# size the image was built at; `free` must report a non-zero total; and
+# `uptime` must print a time.
 #
 # Usage: procfiles.sh <kernel> <test.krffs> <disk.img> <os-real.krffs>
 #            <user> <password> <image-mb> [port]

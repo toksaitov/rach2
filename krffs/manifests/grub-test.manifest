@@ -33,8 +33,9 @@ file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid
 # this one asks the kernel to send the echo, so any account can run it.
 file 0755 /bin/ping build/utils/ping
 # dmesg, which prints the kernel's log from `/dev/bootlog`, a device root can
-# read (krffs/dmesg.script). BusyBox's applet is turned off; the shell would
-# run it in place of this file if it were not.
+# read (krffs/dmesg.script). BusyBox's applet, which reads the same records
+# through syslog(2) but takes only -c, -n, -s and -r, is turned off; the
+# shell would run it in place of this file if it were not.
 file 0755 /bin/dmesg krffs/dmesg.script
 file 0755 /bin/man krffs/man.script
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
