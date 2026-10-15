@@ -1,36 +1,14 @@
 /**
- * Host test for tmpfs and the in-memory file bytes under it (fs/tmpfs.c,
- * mm/shmem.c).
+ * tmpfs_hosttest.c: tmpfs, rach2/sys/fs/tmpfs.c, and the memory file under
+ * each of its files, rach2/sys/mm/shmem.c.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
- * Includes both sources and stands a pool of host pages in for the frames.
- * A file's bytes are written across a hole and a page boundary, read back with
- * the hole as zeros, and cut and grown again; frames come filled with 0xA5, so
- * a zero read is one the code wrote. A file whose first pages are a hole reads
- * a whole page of it as zeros into a buffer that held other bytes, and a write
- * and a read across a page boundary move every byte. The mount option sets the
- * root's mode. Directories count their subdirectories in their link count and
- * refuse rmdir while they have names; a hard link keeps the bytes after the
- * first name goes; rename moves a name, replaces a file, and refuses to put a
- * directory over a file, a file over a directory, a directory over one that is
- * not empty, or a directory under itself, and one the heap cannot serve changes
- * nothing. A symbolic link reads back its target, a FIFO keeps its type, a
- * device node keeps its number and does not open, a listing is ".", "..", then
- * the names in the order they were made or renamed, each with its type, and
- * goes on past a name removed during it, and a directory knows its path. A node
- * held after its last name goes stays readable, a removed directory held after
- * its parent is removed keeps the parent for its "..", and a shared mapping's
- * page takes a reference of its own; statfs counts in use the pages the files
- * hold and not a frame held elsewhere, against the mount's size, half the
- * machine's frames by default; a page at or past the most a file may have,
- * 2^32 - 1, is refused without growing the table, and the last page below it
- * is given; fallocate makes a range's pages and punches a hole; a truncation
- * of mapped memory takes the pages it frees out of the mappings first. A
- * memfd's node has its name and no directory, and goes with its last hold;
- * its seals refuse a shrink, a growth, a write, a change of its execute bits
- * and more seals, and a named file starts sealed against sealing. Returns the
- * failed-check count.
+ * The test includes both sources whole, with a pool of host pages for the
+ * frames. A frame comes filled with 0xA5, as a real one comes with what its
+ * last user left, so a page that reads as zeros was zeroed by the code under
+ * test. The rows run in order on one mount, each on the names the earlier
+ * rows left, and every frame must be back in the pool after the unmount.
  */
 
 #include "fs/tmpfs.c"
@@ -54,47 +32,55 @@ static int fails;
 static process_t process;
 struct percpu cpu_table[NR_CPUS] = {{.current = &process}};
 
-/* When positive, the allocation that counts it down to zero is refused. */
+/* When positive, the allocation that counts it down to zero fails. */
 static int heap_fails_in;
 
+/** Whether this allocation fails, as `heap_fails_in` counts. */
 static int heap_refuses(void)
 {
     return heap_fails_in > 0 && --heap_fails_in == 0;
 }
 
+/** The host's allocation, or NULL when `heap_refuses`. */
 void *kmalloc(size_t n)
 {
     return heap_refuses() ? NULL : malloc(n);
 }
 
+/** The host's zeroed allocation, or NULL when `heap_refuses`. */
 void *kzalloc(size_t n)
 {
     return heap_refuses() ? NULL : calloc(1, n);
 }
 
+/** Free what `kmalloc` or `kzalloc` gave. */
 void kfree(void *p)
 {
     free(p);
 }
 
+/** The time of day, which stands at 1000 seconds. */
 void get_current_time(int64_t *seconds, int64_t *nanoseconds)
 {
     *seconds = 1000;
     *nanoseconds = 0;
 }
 
+/* The frames: page i of `pool` is the frame at physical address
+ * (i + 1) * PAGE_SIZE, so that no frame is at 0, and `refs[i]` counts its
+ * references, 0 for a free frame. */
 #define POOL 64
 static unsigned char pool[POOL][PAGE_SIZE];
 static int refs[POOL];
 
+/** The index in `pool` of the frame at `phys`. */
 static int frame_index(uintptr_t phys)
 {
     return (int)(phys / PAGE_SIZE) - 1;
 }
 
-/* A frame comes filled with 0xA5, as a real one comes with what its last
- * user left, so a page that reads as zeros was zeroed by the code under
- * test. */
+/** A free frame of the pool, filled with 0xA5 and with one reference.
+ *  Returns its physical address, or 0 when the pool has none free. */
 uintptr_t alloc_user_frame(void)
 {
     int i;
@@ -109,37 +95,44 @@ uintptr_t alloc_user_frame(void)
     return 0;
 }
 
+/** Drop a reference to the frame at `phys`. */
 void free_frame(uintptr_t phys)
 {
     refs[frame_index(phys)]--;
 }
 
+/** Take a reference to the frame at `phys`. */
 void frame_ref(uintptr_t phys)
 {
     refs[frame_index(phys)]++;
 }
 
+/** The pool page of the frame at `phys`. */
 void *kmap_temp(uintptr_t phys)
 {
     return pool[frame_index(phys)];
 }
 
+/** End a map `kmap_temp` made, which has nothing to undo. */
 void kunmap_temp(void *va)
 {
     (void)va;
 }
 
+/** Zero the frame at `phys`. Returns 0. */
 int paging_zero_frame(uintptr_t phys)
 {
     k_memset(pool[frame_index(phys)], 0, PAGE_SIZE);
     return 0;
 }
 
+/** The machine's frames, the pool's. */
 size_t frame_total_count(void)
 {
     return POOL;
 }
 
+/** The frames of the pool with no reference. */
 size_t frame_free_count(void)
 {
     size_t n = 0;
@@ -151,18 +144,21 @@ size_t frame_free_count(void)
     return n;
 }
 
+/** The frames of the pool with a reference. */
 static int frames_in_use(void)
 {
     return POOL - (int)frame_free_count();
 }
 
-/* The mapping side's part, which a truncation of mapped memory calls before
- * it frees the pages: counted, with the first page it was given, and every
- * mapped page past it let go, as the regions' page tables would let go. */
+/* What `filemap_shmem_cut` saw: the cuts, the first page of the last, and
+ * the frames a mapping maps by page, 0 for none. */
 static int cuts;
 static uint32_t cut_first;
 static uintptr_t mapped[4];
 
+/** The mapping side's part, which a truncation of mapped memory calls before
+ *  it frees the pages: count the cut, record `first`, and let go every page
+ *  of `mapped` from `first` on, as the regions' page tables would. */
 void filemap_shmem_cut(struct shmem *sh, uint32_t first)
 {
     int i;
@@ -180,6 +176,8 @@ void filemap_shmem_cut(struct shmem *sh, uint32_t first)
 
 static struct vfs_mount mnt;
 
+/** Create `name` of `mode` in `dir`, NULL for the root, which must succeed.
+ *  Returns the node, held, or NULL. */
 static void *make(void *dir, const char *name, uint32_t mode)
 {
     void *n = NULL;
@@ -188,6 +186,8 @@ static void *make(void *dir, const char *name, uint32_t mode)
     return n;
 }
 
+/** The node `name` in `dir`, NULL for the root, held, or NULL when there is
+ *  none. */
 static void *look(void *dir, const char *name)
 {
     void *n = NULL;
@@ -195,6 +195,8 @@ static void *look(void *dir, const char *name)
     return tmpfs_lookup(&mnt, dir, name, &n) == 0 ? n : NULL;
 }
 
+/** Compare `n` bytes as memcmp does; the kernel's string library has no
+ *  compare. */
 static int k_memcmp(const void *a, const void *b, uint32_t n)
 {
     const unsigned char *x = (const unsigned char *)a;
@@ -210,6 +212,7 @@ static int k_memcmp(const void *a, const void *b, uint32_t n)
     return 0;
 }
 
+/** Whether the strings `a` and `b` are equal. */
 static int same(const char *a, const char *b)
 {
     while (*a && *a == *b) {
@@ -219,6 +222,15 @@ static int same(const char *a, const char *b)
     return *a == *b;
 }
 
+/**
+ * A file's bytes, in the file "a". A write at 0 and one across the end of
+ * page 1 take the frames of pages 0 and 1 and none for the hole between.
+ * statfs counts those two in use, and not a frame held elsewhere, against
+ * the mount's size, half the machine's frames by default. The bytes read
+ * back with the hole as zeros, and a read at the end reads nothing. A
+ * truncation to 3 bytes frees a page, and a growth to 10 reads zeros past
+ * the 3.
+ */
 static void bytes(void)
 {
     struct vfs_stat st;
@@ -230,7 +242,7 @@ static void bytes(void)
     CHECK(tmpfs_write(&mnt, f, "hello", 5, 0) == 5);
     CHECK(tmpfs_write(&mnt, f, "xy", 2, 8190) == 2);
     CHECK(tmpfs_getattr(&mnt, f, &st) == 0 && st.size == 8192);
-    CHECK(frames_in_use() == 2); /* pages 0 and 1; the hole between is none */
+    CHECK(frames_in_use() == 2);
     {
         struct vfs_statfs sf;
         uintptr_t other = alloc_user_frame();
@@ -247,7 +259,7 @@ static void bytes(void)
     tmpfs_put(&mnt, f);
 }
 
-/* Whether the `n` bytes at `p` are all zero. */
+/** Whether the `n` bytes at `p` are all zero. */
 static int all_zero(const char *p, size_t n)
 {
     while (n-- > 0) {
@@ -258,10 +270,10 @@ static int all_zero(const char *p, size_t n)
     return 1;
 }
 
-/* A file whose first pages are a hole reads them as zeros into a buffer that
- * held something else, and a write and a read across a page boundary move
- * every byte: the write takes two frames, and the read returns the bytes of
- * both pages and the hole's zeros after them. */
+/** A file whose first pages are a hole reads them as zeros into a buffer
+ *  that held something else, and a write and a read across a page boundary
+ *  move every byte: the write takes two frames, and the read returns the
+ *  bytes of both pages and the hole's zeros after them. */
 static void sparse(void)
 {
     static char buf[PAGE_SIZE + 16];
@@ -286,6 +298,13 @@ static void sparse(void)
     CHECK(frames_in_use() == frames);
 }
 
+/**
+ * Directories. A mkdir of a name that exists is EEXIST, and a directory
+ * counts its subdirectories in its link count. An rmdir of a directory with
+ * a name in it is ENOTEMPTY, an unlink of a directory EISDIR and an rmdir of
+ * a file ENOTDIR. ".." of a subdirectory is the root, and an rmdir takes the
+ * root's link count back to 2.
+ */
 static void directories(void)
 {
     struct vfs_stat st;
@@ -310,6 +329,15 @@ static void directories(void)
     CHECK(look(NULL, "d") == NULL);
 }
 
+/**
+ * Hard links and rename. A hard link keeps the bytes of "a" after its first
+ * name goes, and a rename moves the name to "c". A rename is EINVAL for a
+ * directory moved under itself, EISDIR for a file over a directory, ENOTDIR
+ * for a directory over a file and ENOTEMPTY for a directory over one that
+ * is not empty. A directory's path is written back, and is ENAMETOOLONG in
+ * a buffer too small for it. A rename over "c" replaces it, and the
+ * replaced node, still held, reads its bytes with a link count of 0.
+ */
 static void links_and_renames(void)
 {
     struct vfs_stat st;
@@ -350,7 +378,6 @@ static void links_and_renames(void)
         CHECK(tmpfs_rename(&mnt, NULL, "r", NULL, "c") == 0);
         CHECK(look(NULL, "r") == NULL);
     }
-    /* "c" was replaced, but its node is held and still reads. */
     CHECK(tmpfs_read(&mnt, held, buf, 3, 0) == 3 && k_memcmp(buf, "hel", 3) == 0);
     CHECK(tmpfs_getattr(&mnt, held, &st) == 0 && st.nlink == 0);
     tmpfs_put(&mnt, held);
@@ -358,6 +385,12 @@ static void links_and_renames(void)
     tmpfs_put(&mnt, x);
 }
 
+/**
+ * The other kinds of node. A symbolic link reads back its target and has
+ * its length as its size; a FIFO keeps its type and has no device number; a
+ * device node keeps its number, a second mknod of its name is EEXIST, and
+ * an open of it is ENXIO. A create of a directory is EINVAL.
+ */
 static void kinds(void)
 {
     struct vfs_stat st;
@@ -383,6 +416,8 @@ static void kinds(void)
     tmpfs_put(&mnt, c);
 }
 
+/** The root's listing: ".", "..", then the names in the order they were
+ *  made or renamed, each with its type. */
 static void listing(void)
 {
     static const char *want[] = {".", "..", "x", "w", "c", "s", "p", "dev"};
@@ -431,6 +466,13 @@ static void listing_removal(void)
     tmpfs_put(&mnt, d);
 }
 
+/**
+ * The pages of a mapping. The root has no memory file. A shared mapping's
+ * page takes a reference of its own. A page at or past the most a file may
+ * have, 2^32 - 1 pages, is 0 and does not grow the table, and the last page
+ * below it is given. A truncation to 0 drops the file's references and
+ * leaves the mapping's.
+ */
 static void mapping(void)
 {
     const uint32_t most = (uint32_t)(SHMEM_MAX_SIZE / PAGE_SIZE);
@@ -454,10 +496,10 @@ static void mapping(void)
     tmpfs_put(&mnt, f);
 }
 
-/* A truncation of memory a mapping maps takes the pages it frees out of the
- * mapping first, from the first page past the new end, so that after the
- * file grows again a write and the mapping's next touch meet in one page.
- * Memory no mapping maps is truncated without the mapping side. */
+/** A truncation of memory a mapping maps takes the pages it frees out of
+ *  the mapping first, from the first page past the new end, so that after
+ *  the file grows again a write and the mapping's next touch meet in one
+ *  page. Memory no mapping maps is truncated without the mapping side. */
 static void truncation(void)
 {
     void *f = make(NULL, "t", 0644);
@@ -481,6 +523,16 @@ static void truncation(void)
     tmpfs_put(&mnt, f);
 }
 
+/**
+ * A memfd's seals. A memfd has its name and no seals. F_SEAL_SHRINK makes a
+ * shrink, by truncate or by setattr, EPERM and leaves a growth; F_SEAL_GROW
+ * makes a write past the end and a growth EPERM and leaves a write inside;
+ * F_SEAL_FUTURE_WRITE makes a write EPERM; an unknown seal is EINVAL; and
+ * F_SEAL_SEAL makes another seal EPERM. A named file has no name of a memfd
+ * and starts sealed against sealing. F_SEAL_EXEC on a file with execute
+ * bits seals it against writing too, and makes a change of its execute bits
+ * EPERM while a change of another bit is made.
+ */
 static void seals(void)
 {
     struct vfs_stat st;
@@ -511,8 +563,6 @@ static void seals(void)
     tmpfs_put(&mnt, f);
     CHECK(tmpfs_unlink(&mnt, NULL, "named") == 0);
 
-    /* Sealed against a change of its execute bits, a file that has them is
-     * sealed against writing too. */
     CHECK(tmpfs_memfd(&mnt, "exec", 0755, 0, &f) == 0 && tmpfs_add_seals(f, TMPFS_SEAL_EXEC) == 0 &&
           (tmpfs_seals(f) & TMPFS_SEAL_WRITE));
     st.mode = 0644;
@@ -548,9 +598,9 @@ static void removed_parent(void)
 }
 
 /**
- * A rename the heap cannot serve changes nothing, whether its entry or its
- * name is refused: a directory with a file in it keeps its old name and the
- * file, and the new name is not made.
+ * A rename the heap cannot serve is ENOSPC and changes nothing, whether the
+ * allocation of its entry or of its name fails: a directory with a file in
+ * it keeps its old name and the file, and the new name is not made.
  */
 static void rename_refused(void)
 {
@@ -583,10 +633,10 @@ static void rename_refused(void)
  * A mount's size= is the most pages its files hold: a write the limit stops
  * is short and then ENOSPC, statfs gives the limit as the blocks, and a
  * truncation gives the pages back. A remount takes a new size= that the
- * files' pages fit in and refuses a smaller one. size=0 is no limit, a
- * percentage is of the machine's frames, and a value that is no number
- * refuses the mount. A file reaches past 1 GiB with a hole before its one
- * page, and stops a page short of 16 TiB.
+ * files' pages fit in, and is EINVAL for a smaller one. size=0 is no limit,
+ * a percentage is of the machine's frames, and a value that is no number
+ * fails the mount with EINVAL. A file reaches past 1 GiB with a hole before
+ * its one page, and stops a page short of 16 TiB.
  */
 static void sizes(void)
 {
@@ -655,6 +705,11 @@ static void allocation(void)
     CHECK(frames_in_use() == frames);
 }
 
+/**
+ * Mount with mode= and size= and check the root's mode and links, mount
+ * again with no options, whose root is 01777, and run the rows on that
+ * mount. Returns the count of failed checks, at most 100.
+ */
 int main(void)
 {
     struct vfs_stat st;
