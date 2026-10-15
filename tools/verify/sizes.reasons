@@ -329,7 +329,7 @@ tests/host/exfat_hosttest.c:write_rows lines 204 a test's rows, each a case, rea
 tests/host/ext2_hosttest.c:dirty_rows complexity 37 a test's rows, each a case, read as one table
 tests/host/ext2_hosttest.c:dirty_rows lines 133 a test's rows, each a case, read as one table
 tests/host/ext2_hosttest.c:matrix_rows lines 101 a test's rows, each a case, read as one table
-tests/host/ext2_hosttest.c:oracle_after complexity 30 a test's rows, each a case, read as one table
+tests/host/ext2_hosttest.c:oracle_after complexity 29 a test's rows, each a case, read as one table
 tests/host/ext2_hosttest.c:publication_ok nesting 5 a test's rows, each a case, read as one table
 tests/host/ext2_hosttest.c:read_rows complexity 57 a test's rows, each a case, read as one table
 tests/host/ext2_hosttest.c:read_rows lines 135 a test's rows, each a case, read as one table

@@ -1933,8 +1933,8 @@ static int base_intact(void)
 /**
  * Whether the finished sequence `i` of `sequences` left what it should: the
  * base files intact, the files it made with their bytes, and the names it
- * removed or moved gone. The callers judge sequence 0 by
- * `oracle_create_write`.
+ * removed or moved gone. Sequence 0 is judged by `oracle_create_write`,
+ * which knows the bytes it writes, and is not a case here.
  */
 static int oracle_after(int i)
 {
@@ -1946,8 +1946,6 @@ static int oracle_after(int i)
         return 0;
     }
     switch (i) {
-    case 0:
-        return file_is("/new.txt", pattern, 100) == 0 ? 0 : 1;
     case 1:
         return file_is("/big.bin", pattern, 100000);
     case 2: {
