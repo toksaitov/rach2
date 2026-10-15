@@ -1,11 +1,11 @@
 #!/bin/sh
-# Compile the scheduler's fixed, faulty and restored forms in a private tree.
+# Prove sched_hosttest.c with private mutations of rach2/sys/proc/sched.c.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FILE FAULT: put FAULT into FILE, a copy of sched.c; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -50,6 +50,8 @@ child=
 cp -R rach2/sys "$work/sys"
 cp "$work/sys/proc/sched.c" "$work/sched.saved"
 
+# cleanup: stop the running test and put the saved sched.c back; the loop calls
+# it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -65,6 +67,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: compile sched_hosttest.c over the copy as
+# $work/PHASE, run it for at most 10 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1

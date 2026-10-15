@@ -1,12 +1,14 @@
 #!/bin/sh
-# Compile USB lifecycle faults into the host models, then restore and rebuild.
+# Prove hub_hosttest.c, usb_interrupt_hosttest.c and msc_hosttest.c with private
+# mutations of rach2/sys/usb/hub.c, usb.c and msc.c.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault DIR FAULT: put FAULT into DIR/hub.c, usb.c or msc.c, the file its
+# name begins with; with RACH2_FAULT_TEXTS set, only check its text and write
+# nothing.
 apply_fault()
 {
     python3 - "$1" "$2" <<'PY'
@@ -82,6 +84,8 @@ for name in hub msc usb; do
     cp "$work/rach2/sys/usb/$name.c" "$work/$name.saved"
 done
 
+# cleanup: stop the running test and put the saved hub.c, msc.c and usb.c back;
+# the loop calls it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -99,6 +103,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE TEST STATUS MESSAGE: compile TEST_hosttest.c over the private
+# tree as $work/PHASE, run it for at most 10 seconds, and exit unless it ends
+# with STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Compile tcp_reset_hosttest.c against faults in a private copy of tcp.c: a
+# Prove tcp_reset_hosttest.c against faults in a private copy of tcp.c: a
 # reset inside the window taken as if at the next sequence number, a reset
 # outside the window answered, a reset taken while opening without the ACK
 # flag, one taken while opening that acknowledges another number, a handshake
@@ -11,7 +11,7 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FILE FAULT: put FAULT into FILE, a copy of tcp.c; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -66,6 +66,8 @@ cp tests/host/compat/kheap_host.c tests/host/compat/pressure_host.c "$work/tests
 source="$work/rach2/sys/network/tcp/tcp.c"
 cp "$source" "$work/tcp.saved"
 
+# cleanup: stop the running test and put the saved tcp.c back; the loop calls
+# it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -81,6 +83,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: compile tcp_reset_hosttest.c over the copy as
+# $work/PHASE, run it for at most 10 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1

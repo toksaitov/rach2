@@ -1,7 +1,12 @@
 #!/bin/sh
-# Compile fixed, faulty and restored TCP sources in a private tree. --texts
-# checks that each fault's text is once in the tree's source, and builds
-# and runs nothing.
+# Prove tcp_hosttest.c with private mutations of rach2/sys/network/tcp/tcp.c:
+# tcp_send taking the network lock only after its checks (mutated); an
+# acknowledgement without its SACK option (sackless); a SACK table that does
+# not put the newest range first (sack-unordered), or that names a segment
+# past a full table (sack-full); and a reopened window announced in
+# ESTABLISHED alone (half-close-quiet). Each must fail its row with the status
+# given, and the restored source must pass. --texts checks that each fault's
+# text is once in the tree's source, and builds and runs nothing.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -27,6 +32,8 @@ else
     cp "$source" "$work/tcp.saved"
 fi
 
+# cleanup: stop the running test and put the saved tcp.c back; the script
+# calls it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -42,6 +49,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: compile tcp_hosttest.c over the copy as
+# $work/PHASE, run it for at most 10 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1
@@ -127,6 +137,8 @@ PY
 run_phase sackless 5 'a segment past a hole is named in the acknowledgement'
 cleanup
 run_phase restored-sack 0 'tcp_hosttest: PASS'
+# mutate OLD NEW: replace the unique OLD in the copy of tcp.c by NEW; with
+# RACH2_FAULT_TEXTS set, only check that OLD is once in it.
 mutate()
 {
     python3 - "$source" "$1" "$2" <<'PY'

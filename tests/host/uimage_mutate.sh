@@ -1,12 +1,12 @@
 #!/bin/sh
 # Prove the checks of uimage_hosttest.c against faults in a private copy of
-# the initial-stack builder.
+# the initial-stack builder, rach2/sys/proc/uimage.c.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault DIR FAULT: put FAULT into DIR/uimage.c; with RACH2_FAULT_TEXTS
+# set, only check its text and write nothing.
 apply_fault()
 {
     python3 - "$1" "$2" <<'PY'
@@ -93,12 +93,14 @@ child=
 cp rach2/sys/proc/uimage.c "$work/uimage.saved"
 cp "$work/uimage.saved" "$work/uimage.c"
 
+# restore: copy the saved uimage.c back over the copy under test.
 restore()
 {
     cp "$work/uimage.saved" "$work/uimage.c"
     touch "$work/uimage.c"
 }
 
+# cleanup: the exit trap; stop the running test and restore the source.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -114,7 +116,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 # run_phase PHASE STATUS DETAIL: compile the test against the private copy
-# and run it; it must exit with STATUS and print DETAIL.
+# and run it for at most 20 seconds; it must exit with STATUS and print
+# DETAIL.
 run_phase()
 {
     phase=$1
@@ -131,8 +134,7 @@ run_phase()
         exit 1
     fi
     cksum "$work/uimage.c" "$binary" >"$binary.artifacts"
-    # A sanitizer's report ends the test with status 1 on every host; macOS
-    # would otherwise abort it.
+    # A sanitizer's report ends the test with status 1; macOS would abort it.
     ASAN_OPTIONS=abort_on_error=0 UBSAN_OPTIONS=abort_on_error=0 \
         perl -e 'alarm 20; exec @ARGV or die "uimage-mutation: exec: $!\n"' \
         "$binary" >"$binary.log" 2>&1 &

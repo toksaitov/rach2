@@ -1,11 +1,13 @@
 #!/bin/sh
-# Rebuild fixed, faulty and restored userland sources in a private tree.
+# Prove oplmusic_hosttest.c, resolv_hosttest.c and ish_hosttest.c with private
+# mutations of Doom's music code in ports/doom, utils/resolv.c and ish/.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault DIR FAULT: put FAULT into its source under DIR, a tree laid out
+# as the repository is; with RACH2_FAULT_TEXTS set, only check its text and
+# write nothing.
 apply_fault()
 {
     python3 - "$1" "$2" <<'PY'
@@ -99,6 +101,7 @@ for source in $sources; do
 done
 child=
 
+# restore: copy the saved sources back over the private tree.
 restore()
 {
     for source in $sources; do
@@ -107,6 +110,7 @@ restore()
     done
 }
 
+# cleanup: the exit trap; stop the running test and restore the sources.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -122,6 +126,10 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE: compile the host test $mutation belongs to over the private
+# tree and run it in a session of its own for at most 20 seconds. The phase
+# `mutated` must fail with a status below 124 and print $expected; any other
+# must pass. Exit if not.
 run_phase()
 {
     phase=$1

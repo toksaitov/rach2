@@ -1,12 +1,14 @@
 #!/bin/sh
-# Build each mutation from private sources and retain every binary and log.
+# Prove tty_hosttest.c and n_tty_hosttest.c with private mutations of
+# rach2/sys/tty/tty.c, pty.c, pty.h and n_tty.c; every binary and log is kept.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault DIR FAULT: put FAULT into its sources in DIR, a copy of
+# rach2/sys/tty; with RACH2_FAULT_TEXTS set, only check its text and write
+# nothing.
 apply_fault()
 {
     python3 - "$1" "$2" <<'PY'
@@ -118,12 +120,14 @@ mkdir "$work/tty" "$work/saved"
 cp rach2/sys/tty/*.[ch] "$work/saved/"
 cp "$work/saved/"* "$work/tty/"
 
+# restore: copy the saved tty sources back over the private ones.
 restore()
 {
     cp "$work/saved/"* "$work/tty/"
     touch "$work/tty/"*
 }
 
+# cleanup: the exit trap; stop the running test and restore the sources.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -139,6 +143,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# compile DIR NAME: compile $test's host test and the private n_tty.c into
+# $work/DIR/NAME, which `binary` names, and check from the dependency files
+# that the private sources were the ones compiled.
 compile()
 {
     binary="$work/$1/$2"
@@ -170,6 +177,9 @@ compile()
     fi
 }
 
+# run_phase PHASE: compile and run the test for at most 15 seconds. The phase
+# `mutated` must fail with a status from 1 to 123 and print $expected; any
+# other must pass. Exit if not.
 run_phase()
 {
     phase=$1
@@ -190,6 +200,7 @@ run_phase()
     echo "tty-mutation: result: $case_name $phase status $status"
 }
 
+# mutate: put $case_name into the private sources.
 mutate()
 {
     apply_fault "$work/tty" "$case_name"

@@ -2,14 +2,16 @@
 # Prove the processors rach2/sys/proc/smp.c interrupts: a shootdown passes
 # an idle processor that kept the directory by and marks it stale, and
 # interrupts one that runs a thread of the directory; a release interrupts
-# the idle processor that kept the directory about to be freed.
+# the idle processor that kept the directory about to be freed; a stop waits
+# for the processors it asks; and a started processor comes online only when
+# the boot admitted it.
 # tests/host/smp_hosttest.c is compiled against a private copy of the
 # kernel's sources with each fault put in turn, and its row must fail; the
 # restored copy must pass again.
 #
 # Usage: smp_mutate.sh [--check | --texts]
 # With --check it compiles and runs the unmodified test alone. The faults:
-# a shootdown that interrupts idle processors too, as before lazy TLB; one
+# a shootdown that interrupts idle processors too; one
 # that passes every processor by, which leaves a running thread with a
 # translation of a freed page; a release that interrupts none, which
 # leaves an idle processor on a freed directory; and a stop that does not
@@ -20,7 +22,7 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FILE FAULT: put FAULT into FILE, a copy of smp.c; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -95,6 +97,8 @@ cp -R rach2/sys "$work/rach2/"
 smp="$work/rach2/sys/proc/smp.c"
 cp "$smp" "$work/smp.saved"
 
+# cleanup: stop the running test and put the saved smp.c back; the loop calls
+# it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -117,6 +121,9 @@ deps=$(grep -oE 'host-deps:[^*]*' "$test" | sed 's/host-deps://' | tr '\n' ' ' |
     sed "s# rach2/# $work/rach2/#g")
 extra=$(grep -oE 'host-cflags:[^*]*' "$test" | sed 's/host-cflags://' | tr '\n' ' ')
 
+# run_phase PHASE STATUS MESSAGE: compile smp_hosttest.c over the private tree
+# as $work/PHASE, run it for at most 10 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1

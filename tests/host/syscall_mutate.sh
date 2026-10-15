@@ -1,11 +1,13 @@
 #!/bin/sh
-# Prove the syscall state checks in private compiled copies.
+# Prove syscall_hosttest.c, the state checks of connect, the framebuffer
+# calls, the clocks, the sleeps, the interval timers and alarm, with private
+# mutations of rach2/sys/syscall.c and syscall_net.c.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault DIR FAULT: put FAULT into DIR/syscall.c or DIR/syscall_net.c;
+# with RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
     python3 - "$1" "$2" <<'PY'
@@ -365,6 +367,7 @@ for source in syscall syscall_net; do
     cp "$work/$source.saved" "$work/$source.c"
 done
 
+# restore: copy the saved syscall.c and syscall_net.c back over the copies.
 restore()
 {
     for source in syscall syscall_net; do
@@ -373,6 +376,7 @@ restore()
     done
 }
 
+# cleanup: the exit trap; stop the running test and restore the sources.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -388,8 +392,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 # run_phase PHASE STATUS DETAILS: compile the test against the private copies
-# and run it; it must exit with STATUS and print each of DETAILS, which are
-# separated by `|`.
+# and run it for at most 10 seconds; it must exit with STATUS and print each
+# of DETAILS, which are separated by `|`.
 run_phase()
 {
     phase=$1
@@ -406,8 +410,7 @@ run_phase()
         exit 1
     fi
     cksum "$work/syscall.c" "$work/syscall_net.c" "$binary" >"$binary.artifacts"
-    # A sanitizer's report ends the test with status 1 on every host; macOS
-    # would otherwise abort it.
+    # A sanitizer's report ends the test with status 1; macOS would abort it.
     ASAN_OPTIONS=abort_on_error=0 UBSAN_OPTIONS=abort_on_error=0 \
         perl -e 'alarm 10; exec @ARGV or die "syscall-mutation: exec: $!\n"' \
         "$binary" >"$binary.log" 2>&1 &

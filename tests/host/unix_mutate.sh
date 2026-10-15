@@ -1,27 +1,27 @@
 #!/bin/sh
-# Prove each row of tests/host/unix_hosttest.c with a fault that takes its
-# fix back in a private copy of rach2/sys: the descriptors accept and
-# socketpair make published before their numbers are copied, and closed
-# through the table when the copy fails, as they were; the slot a receive
-# of SCM_RIGHTS reserves given its type before the copy; pipe2's ends given
-# before the copy; connect's check of the socket's state after its sleeps
-# removed; the bind lock and the receive lock never waited for, or let go
-# with no wake; bind's check of a named socket made before it waits for the
-# lock; a stream send judged after its copy as before and a datagram send
-# not at all; a receive's descriptors in flight not found by the holder
-# count while it installs or closes them, the one being closed counted as
-# its own file's holder, or one it installed still counted; a descriptor in
-# flight whose file moved counted, installed or released by the node it had
-# before; and a descriptor in flight taken from its place before its drop
-# has the root's lock. Each compiled fault must fail its named row and
-# end the run with status 1; each restored source is touched, rebuilt and
-# must pass again under ASan and UBSan.
+# Prove each row of tests/host/unix_hosttest.c with a fault in a private copy
+# of rach2/sys/ipc/unix.c and pipe.c: the descriptors accept and socketpair
+# make published before their numbers are copied, and closed through the
+# table when the copy fails; the slot a receive of SCM_RIGHTS reserves given
+# its type before the copy; pipe2's ends given before the copy; connect's
+# check of the socket's state after its sleeps removed; the bind lock and the
+# receive lock never waited for, or let go with no wake; bind's check of a
+# named socket made before it waits for the lock; a stream send that checks
+# only the peer's close after its copy, and a datagram send that checks no
+# shutdown; a receive's descriptors in flight not found by the holder count
+# while it installs or closes them, the one being closed counted as its own
+# file's holder, or one it installed still counted; a descriptor in flight
+# whose file moved counted, installed or released by the node it had before;
+# and a descriptor in flight taken from its place before its drop has the
+# root's lock. Each compiled fault must fail its named row and end the run
+# with status 1; each restored source is touched, rebuilt and must pass again
+# under ASan and UBSan.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault DIR FAULT: put FAULT into DIR/unix.c or DIR/pipe.c; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -142,12 +142,14 @@ cp -R rach2/sys "$work/sys"
 cp "$work/sys/ipc/unix.c" "$work/unix.saved"
 cp "$work/sys/ipc/pipe.c" "$work/pipe.saved"
 
+# restore: copy the saved unix.c and pipe.c back over the private tree.
 restore()
 {
     cp "$work/unix.saved" "$work/sys/ipc/unix.c"
     cp "$work/pipe.saved" "$work/sys/ipc/pipe.c"
     touch "$work/sys/ipc/unix.c" "$work/sys/ipc/pipe.c"
 }
+# cleanup: the exit trap; stop the running test and restore the sources.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -162,6 +164,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: compile unix_hosttest.c over the private tree
+# as $work/PHASE, run it for at most 10 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1

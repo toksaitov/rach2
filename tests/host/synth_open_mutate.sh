@@ -1,22 +1,24 @@
 #!/bin/sh
-# Compile synthetic-file regressions before, during and after each fault:
-# the ptmx dispatch before the flag checks, the screen log dropped from the
-# devices whose transfers move the offset, the text's terminator written
-# with no buffer, a read of a process's arguments that holds no reference to
-# the address space or reads the process's record after the first read,
-# which may sleep while the process is reaped, a /proc/PID/mem open that
-# takes a user's count in place of a hold, a read of it that takes one when
-# no user remains, the exe link without the program's present path or
-# without its deleted mark, and an oom_score_adj write that takes a value
-# out of range, lowers the value below the floor without privilege, or
-# leaves the floor where a privileged write found it.
+# Prove devfs_hosttest.c and procfs_hosttest.c with private mutations of
+# rach2/sys/fs/devfs.c and procfs.c: the ptmx dispatch before the flag checks,
+# the screen log dropped from the devices whose transfers move the offset, the
+# text's terminator written with no buffer, a read of a process's arguments that
+# holds no reference to the address space or reads the process's record after
+# the first read, which may sleep while the process is reaped, a /proc/PID/mem
+# open that takes a user's count in place of a hold, a read of it that takes one
+# when no user remains, the exe link without the program's present path or
+# without its deleted mark, an oom_score_adj write that takes a value out of
+# range, lowers the value below the floor without privilege, or leaves the floor
+# where a privileged write found it, an open of oom_score_adj that answers
+# EMFILE where the heap has no room, and a parse of the value that takes byte
+# 0xA0 for no space or answers ERANGE for text that is no integer.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault FILE FAULT: put FAULT into FILE, a copy of devfs.c or procfs.c;
+# with RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
     python3 - "$1" "$2" <<'PY'
@@ -95,7 +97,8 @@ path.write_text(source)
 PY
 }
 
-# faults TEST: the faults compiled into the source of TEST, one at a time.
+# faults TEST: print the faults compiled into the source of TEST, one at a
+# time.
 faults()
 {
     case $1 in
@@ -127,6 +130,8 @@ for component in devfs procfs; do
     cp "$work/sys/fs/$component.c" "$work/$component.saved"
 done
 
+# cleanup: stop the running test and put the saved devfs.c and procfs.c back;
+# the loop calls it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -144,6 +149,10 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase TEST PHASE STATUS MESSAGE: compile TEST_hosttest.c with its own
+# dependency lines, its kernel sources taken from the private tree, as
+# $work/PHASE, run it for at most 10 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE.
 run_phase()
 {
     test=$1
@@ -151,8 +160,6 @@ run_phase()
     expected=$3
     message=$4
     binary="$work/$phase"
-    # The test's own dependency lines, with its kernel sources taken from the
-    # private tree.
     deps=$(grep -oE 'host-deps:[^*]*' "tests/host/${test}_hosttest.c" | sed 's/host-deps://' |
         tr '\n' ' ' | sed "s# rach2/sys/# $work/sys/#g")
     # shellcheck disable=SC2086 # the dependency list is one path a word

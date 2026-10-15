@@ -1,11 +1,12 @@
 #!/bin/sh
-# Compile the USB contract tests with fixed, faulty and restored sources.
+# Prove usb_hosttest.c and xhci_hosttest.c with private mutations of
+# rach2/sys/usb/core.c and xhci.c.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault DIR FAULT: put FAULT into DIR/core.c or DIR/xhci.c; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -85,6 +86,8 @@ cp tests/host/usb_hosttest.c tests/host/xhci_hosttest.c "$work/tests/host/"
 cp "$work/rach2/sys/usb/core.c" "$work/core.saved"
 cp "$work/rach2/sys/usb/xhci.c" "$work/xhci.saved"
 
+# cleanup: stop the running test and put the saved core.c and xhci.c back; the
+# loop calls it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -101,6 +104,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE TEST STATUS MESSAGE: compile TEST_hosttest.c over the private
+# tree as $work/PHASE-TEST, run it for at most 30 seconds, and exit unless it
+# ends with STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1
