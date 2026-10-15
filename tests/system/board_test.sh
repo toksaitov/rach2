@@ -54,7 +54,10 @@ case "$1 $2" in
             *'field(name: "Status")'*)
                 printf '%s\n' project=project field=field Ready=ready ;;
             *'projectItems(first: 10)'*)
-                [ "$BOARD_TEST_FAIL" != item ] || exit 1
+                case $BOARD_TEST_FAIL in
+                    item) exit 1 ;;
+                    project|remove|close) exit 0 ;;
+                esac
                 echo item ;;
             *) exit 2 ;;
         esac ;;
@@ -96,7 +99,12 @@ case "$1 $2" in
             *) exit 2 ;;
         esac ;;
     'project item-add')
-        case $BOARD_TEST_FAIL in project|remove|close) exit 1 ;; esac ;;
+        case $BOARD_TEST_FAIL in
+            project|remove|close) exit 1 ;;
+            added)
+                echo 'GraphQL: Content already exists in this project' >&2
+                exit 1 ;;
+        esac ;;
     'project item-edit')
         case "$*" in *'--id item '*) ;; *) exit 1 ;; esac
         [ "$BOARD_TEST_FAIL" != status ] || exit 1
@@ -122,8 +130,9 @@ row()
     result=0
     sh "$work/board.sh" group fixtures 1 2 > "$work/out" 2> "$work/err" || result=$?
     case $1 in
-        success)
+        success|added)
             [ "$result" -eq 0 ] && [ "$(cat "$work/out")" = 99 ] &&
+                [ ! -s "$work/err" ] &&
                 [ "$(cat "$BOARD_TEST_WORK/group")" = open ] &&
                 [ "$(cat "$BOARD_TEST_WORK/status")" = ready ] &&
                 [ -f "$BOARD_TEST_WORK/grouped-1" ] &&
@@ -182,12 +191,13 @@ take_row()
     esac
 }
 
-# rows: check successful creation, each failed step and failed cleanup, and
-# which of two accounts assigned in the same second keeps an issue.
+# rows: check successful creation, a group the board added first, each failed
+# step and failed cleanup, and which of two accounts assigned in the same
+# second keeps an issue.
 rows()
 {
     failed=
-    for test in success validate create label1 label2 applied2 recheck recheck-read project item status term remove close; do
+    for test in success added validate create label1 label2 applied2 recheck recheck-read project item status term remove close; do
         if ! row "$test"; then
             echo "board-test: failed: $test" >&2
             cat "$work/err" >&2
@@ -225,4 +235,4 @@ if [ "$mode" = mutate ]; then
     rows || exit 1
     echo 'board-test: result: pass: rollback and take faults caught and restored'
 fi
-echo 'board-test: result: pass: 17 rows'
+echo 'board-test: result: pass: 18 rows'

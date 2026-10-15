@@ -61,7 +61,10 @@
 # group's number. `group` labels the members before it reads their assignees
 # again, as `take` assigns before it reads the label, so that of a take and a
 # grouping that overlap, at least one sees the other and fails; when a member
-# was taken, `group` removes the labels and makes no group.
+# was taken, `group` removes the labels and makes no group. The board adds
+# each new issue itself, and `gh project item-add` fails when the board was
+# first; `group` then reads the board and fails only when the group is not on
+# it.
 # A failure removes the labels attempted by this call and closes any group
 # it created. If cleanup fails, stderr gives the steps left to do.
 #
@@ -383,7 +386,12 @@ group()
         echo "board: cannot create the group" >&2
         exit 1
     fi
-    gh project item-add "$BOARD" --owner "$OWNER" --url "$group_url" > /dev/null
+    if ! added=$(gh project item-add "$BOARD" --owner "$OWNER" --url "$group_url" 2>&1 > /dev/null) &&
+        [ -z "$(item "${group_url##*/}")" ]; then
+        printf '%s\n' "$added" >&2
+        echo "board: $group_url: cannot add it to the board" >&2
+        exit 1
+    fi
     set_status "${group_url##*/}" Ready
     group_done=yes
     echo "${group_url##*/}"
