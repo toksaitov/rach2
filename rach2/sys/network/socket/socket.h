@@ -6,21 +6,20 @@
 #include "../../proc/wait_queue.h"
 
 /*
- * Socket abstraction. A socket is the kernel object behind one (or more) user
- * file descriptors of type FD_TYPE_SOCKET. SOCK_DGRAM (UDP) and SOCK_STREAM
- * (TCP) are both supported.
- *
- * The pool is a fixed array; socket_alloc/socket_ref/socket_unref manage it
- * with a reference count, so a socket shared by fork() or dup2() is only torn
- * down when its last descriptor closes.
+ * socket: the kernel object behind a descriptor of type FD_TYPE_SOCKET, for
+ * AF_INET stream, datagram and raw sockets and for AF_PACKET and AF_NETLINK
+ * ones. A socket is allocated from the heap and kept on a list of the live
+ * sockets. Its reference count has one for each descriptor that refers to it,
+ * which fork, dup and a descriptor passed over a local socket add to, and
+ * the socket is torn down when the last goes.
  */
 
 #define SOCK_STREAM         1 /* TCP */
 #define SOCK_DGRAM          2 /* UDP */
-/* A descriptor that accepts the interface ioctls and nothing else. A DHCP
- * client opens one to ask this machine about itself (busybox's
- * `udhcp_read_interface`); this stack has no raw IP path, so every other
- * operation on it is refused, not answered with silence. */
+/* An AF_INET raw socket of IPPROTO_ICMP (raw.h). One opened with
+ * IPPROTO_RAW has protocol 0 and accepts the interface ioctls and nothing
+ * else: a DHCP client opens one to ask this machine about itself (busybox's
+ * `udhcp_read_interface`), and every other operation on it is refused. */
 #define SOCK_RAW            3
 #define AF_INET             2 /* IPv4 address family */
 /* Format: one datagram of the Ethernet MTU is the most UDP can carry here. */
@@ -37,7 +36,8 @@
  * reset before anything is allocated for it. */
 #define SOCK_ACCEPT_BACKLOG 16
 
-/* Returned by socket_try_recv when no datagram is waiting (Linux EAGAIN). */
+/* What a receive or a stream send that does not wait returns when it would
+ * have to wait: EAGAIN, negated. */
 #define SOCK_EAGAIN (-11)
 
 struct tcb; /* defined in tcp/tcp.h */
@@ -45,12 +45,12 @@ struct tcb; /* defined in tcp/tcp.h */
 typedef struct socket {
     struct socket *next; /* the list of live sockets */
     int in_use;
-    int refcount; /* descriptors referencing this socket */
+    int refcount; /* descriptors, and a listener's queue before accept */
     int type;     /* SOCK_DGRAM, SOCK_STREAM or SOCK_RAW */
-    /* AF_INET, AF_PACKET for the tap above the Ethernet layer, or AF_NETLINK
-     * for the kernel's routing answers. Nearly every path below is AF_INET's;
-     * the family is what the few that are not branch on, not a second socket
-     * pool. */
+    /* AF_INET, AF_PACKET for the tap above the Ethernet layer (packet.h), or
+     * AF_NETLINK for the kernel's routing answers (netlink.h). The three
+     * families share this record, and the code of the other two branches on
+     * it. */
     uint16_t family;
     uint16_t local_port;
 
@@ -60,16 +60,18 @@ typedef struct socket {
      * nobody on the wire. */
     uint32_t local_ip;
 
-    /* AF_PACKET only: the EtherType this socket sends and receives, in HOST
+    /* For AF_PACKET, the EtherType this socket sends and receives, in host
      * order, or 0 for none. Linux takes it in network order at `socket` and
-     * again in the `sockaddr_ll` at `bind`, and the later one wins; a socket
-     * whose protocol is 0 receives nothing, which is what a client that asked
-     * for nothing asked for. */
+     * again in the `sockaddr_ll` at `bind`, where a nonzero one replaces it; a
+     * socket whose protocol is 0 receives nothing, which is what a client
+     * that asked for nothing asked for. For an AF_INET raw socket,
+     * IPPROTO_ICMP, or 0 for the descriptor that takes only the interface
+     * ioctls. */
     uint16_t protocol;
 
-    /* The hop limit this socket's datagrams leave with. IP_TTL sets it, which
-     * is the whole of what traceroute does to a socket, and it applies to a
-     * UDP send and a raw send alike. */
+    /* The hop limit of this socket's datagrams, IP_TTL_DEFAULT until the
+     * IP_TTL option sets it, as traceroute does. A UDP send and a raw send
+     * both use it. */
     uint8_t ip_ttl;
 
     /* Remote endpoint: a stream's peer, or the address a datagram socket was
@@ -86,38 +88,40 @@ typedef struct socket {
      * waits, as Linux does. */
     int so_error;
 
-    /* The three options a program really sets on a socket here. `broadcast` is
-     * required before a datagram may go to a broadcast address, because a
-     * program that broadcasts by accident wakes every machine on the wire.
-     * `reuseaddr` is recorded and reported and overrides nothing, since this
-     * stack never refuses a bind for the reason the flag exists to override.
-     * `bound_device` is one interface or none. */
+    /* Three socket options. `broadcast`, SO_BROADCAST, is required before a
+     * UDP datagram may go to a broadcast address, because a program that
+     * broadcasts by accident reaches every machine on the wire. `reuseaddr`,
+     * SO_REUSEADDR, lets UDP sockets share a port (`udp_bind`).
+     * `bound_device`, SO_BINDTODEVICE, is an interface's index, or 0 for
+     * none, and is only reported back by getsockopt. */
     int broadcast;
     int reuseaddr;
     int bound_device;
 
-    /* TCP control block for SOCK_STREAM sockets (NULL for SOCK_DGRAM). */
+    /* The TCP control block of a stream socket. NULL for the other types,
+     * and for a stream before `connect` or `listen` or once the block has
+     * been detached from it (tcp.h). */
     struct tcb *tcb;
 
-    /* Passive-open accept queue (circular, SOCK_STREAM listeners). */
+    /* A listener's connections not yet accepted: a ring with `accept_head`
+     * the oldest and `accept_tail` the next free place, empty when the two
+     * are equal. */
     struct socket *accept_queue[SOCK_ACCEPT_BACKLOG];
     int accept_head, accept_tail;
     int listening;
 
-    /* Set by shutdown(2), which detaches the block: a read of the socket
-     * afterwards is the end of input, where a stream that never connected
-     * has no block either and answers ENOTCONN. */
+    /* Set by shutdown(SHUT_RDWR), which detaches the block: a read of the
+     * socket afterwards is the end of input, where a stream that never
+     * connected has no block either and answers ENOTCONN. */
     int shut_down;
 
     /*
-     * Identity, for the files that report sockets.
-     *
-     * `inode` is this socket's number in the one namespace `/proc/net/tcp`,
-     * `/proc/<pid>/fd/N` and `fstat` all name it by; before this they printed a
-     * constant, so every socket on the machine looked like the same one. `uid`
-     * is who owns it, taken in syscall context where there is a caller to ask.
-     * A passive connection is allocated in receive context, where there is not,
-     * and inherits the listener's uid: that is whose socket it is.
+     * Identity, for the files that report sockets. `inode` is this socket's
+     * number in the one namespace `/proc/net/tcp`, `/proc/<pid>/fd/N` and
+     * `fstat` all report it by (`socket_inode_next`). `uid` is the owner: the
+     * effective uid of the process that made the socket, or for a passive
+     * connection, which is allocated in receive context with no process to
+     * ask, the listener's.
      */
     uint32_t inode;
     uint32_t uid;
@@ -136,24 +140,32 @@ typedef struct socket {
     int recv_head;
     int recv_count;
 
-    /* Processes blocked waiting for data, a connection, or an accept. The
-     * IRQ-side deliver/accept/connect/fin routines wake every waiter; each
-     * re-checks its own condition. */
+    /* The processes and pollers waiting for data, room, a connection or an
+     * accept. A wake from the receive path wakes every one; each checks its
+     * own condition again. */
     wait_queue_t waiters;
 
     /* AF_NETLINK only: the socket's port id and its queue of answers
      * (netlink.c). */
     void *netlink;
-    /* The network namespace the socket was made in (proc/ns.h), NULL for
-     * the first, whose interfaces alone a socket reaches; `net_gone` once
-     * its namespace has ended. */
+    /* The network namespace the socket was made in (proc/ns.h): NULL for
+     * the first, whose interfaces alone a socket reaches, and for every
+     * netlink socket; `net_gone` in socket.c once its namespace has ended. */
     const struct netns *ns;
 } socket_t;
 
 /** Start with no sockets; called once from init_network. */
 void socket_init(void);
 
-/** Allocate a socket with refcount 1; NULL if the pool is full. */
+/**
+ * Allocate a socket of `type`, SOCK_STREAM, SOCK_DGRAM or SOCK_RAW, from the
+ * heap and put it on the list: AF_INET, one reference, the default hop limit
+ * and a new inode number. Returns NULL with no memory. The caller sets the
+ * family, the protocol and the owner's uid, since whether there is a process
+ * to take the uid from depends on the caller's context. Takes `net_lock`
+ * itself, and may be called from the receive path, where an incoming SYN
+ * allocates one.
+ */
 struct socket *socket_alloc(int type);
 
 /** Whether `s` was made in a network namespace other than the first: it
@@ -183,56 +195,78 @@ struct socket_row {
 };
 
 /**
- * Copy the AF_INET sockets of `type`, SOCK_DGRAM or SOCK_RAW, into a
- * caller-owned array and return the row count, as `tcp_snapshot` does: -1
- * when the array cannot be had, and a non-NULL result to free even with no
- * rows.
+ * Copy the AF_INET sockets of `type`, SOCK_DGRAM or SOCK_RAW, in the calling
+ * process's network namespace into an array from the heap at `*rows`, and
+ * return the row count. With no socket of the type, `*rows` is NULL and the
+ * count 0; otherwise the caller frees the array, even with no rows. Returns
+ * -1 when the array cannot be allocated. Takes `net_lock` itself.
  */
 int socket_snapshot(int type, struct socket_row **rows);
 
 /** How many live sockets there are of `type` in AF_INET, or of every type
- * and family with `type` 0. */
+ * and family with `type` 0, in every network namespace. */
 int socket_count(int type);
 
-/** An inode number for a socket of either family: rising, nonzero, and not
- * one a live socket has. */
+/** A new inode number for a socket of this list or a local one
+ * (ipc/unix.c): rising, nonzero, and not one a live socket of either kind
+ * has. Takes `net_lock` itself. */
 uint32_t socket_inode_next(void);
 
-/** Add a reference (fork/dup2 sharing). */
+/** Add a reference, for a descriptor that comes to share the socket. NULL
+ * is ignored. */
 void socket_ref(struct socket *sock);
 
-/** Drop a reference; tear the socket down at the last one. */
+/**
+ * Drop a reference, and at the last tear the socket down: free a netlink
+ * socket's state, remove a packet, raw or UDP socket's binding, or close a
+ * stream's connection (`tcp_close`, after which the block finishes the close
+ * on its own); release a listener's connections not yet accepted; and take
+ * the socket off the list and free it. NULL is ignored. Takes `net_lock`
+ * itself, and may be called from the receive path.
+ */
 void socket_unref(struct socket *sock);
 
-/** Copy an incoming UDP payload into sock and wake any blocked recvfrom. */
+/**
+ * Queue the UDP payload of `len` bytes at `data`, from `src_ip`:`src_port`,
+ * on `sock` and wake its readers. A payload past SOCK_RECV_BUF_SIZE bytes is
+ * cut to that size. A datagram that finds all SOCK_DGRAM_SLOTS slots full,
+ * or that comes from other than the peer of a connected socket, is dropped.
+ * Called with interrupts off, from `udp_rx`.
+ */
 void socket_udp_deliver(struct socket *sock, uint32_t src_ip, uint16_t src_port,
                         const uint8_t *data, uint16_t len);
 
-/** Blocking datagram receive; returns the byte count or a negative errno.
- * With `peek` the datagram stays queued for the next receive (MSG_PEEK). */
+/**
+ * Wait for a datagram on a UDP, raw, packet or netlink socket, copy up to
+ * `len` bytes of it to `buf`, and report its sender through `src_ip` and
+ * `src_port` when they are not NULL, as `socket_dgram_consume` reports it.
+ * The rest of a longer datagram is discarded, since the datagram is the
+ * unit; with `peek` the datagram stays queued, whole, for the next receive
+ * (MSG_PEEK). Returns the bytes copied, -EINTR, or the socket's pending
+ * error, which this takes. The copy runs with interrupts off, so `buf`, a
+ * user buffer, must have been faulted in (`user_buffer_ok`).
+ */
 int socket_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip, uint16_t *src_port,
                 int peek);
 
-/** Non-blocking variant; SOCK_EAGAIN if no datagram is waiting. */
+/** `socket_recv` without the wait: the pending error first, then
+ * SOCK_EAGAIN when no datagram is waiting. */
 int socket_try_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip,
                     uint16_t *src_port, int peek);
 
 /*
- * The same receive taken in three steps, for a caller with more than one
- * destination to fill. `readv` is the caller: a datagram is one message, so
- * reading twice would take a second one and copying it out once would drop
- * whatever did not fit the first buffer. Waiting, copying piece by piece, and
- * consuming are therefore separable, and `socket_recv` above is the three of
- * them in a row over a single buffer.
+ * The same receive in three steps, wait, copy and consume, for a caller with
+ * more than one destination to fill: `readv_dgram` in syscall_fs.c, which
+ * readv and recvmsg use. A datagram is one message, so a second receive
+ * would take the next one, and a copy into the first destination alone would
+ * drop what did not fit. `socket_recv` is the three steps in a row over one
+ * buffer. These serve every family `socket_recv` does.
  *
- * A caller must hold `net_lock` across every copy it makes AND the consume,
- * whether it takes the message in one piece or several. A syscall body runs
- * with interrupts enabled here (see net.h), so the receive interrupt would
- * otherwise put the next datagram in the slot in between: a several-piece
- * caller would take a prefix of one message followed by bytes of another, and
- * a one-piece caller would return one message's bytes with the other one's
- * sender while clearing a datagram nobody read. Each of these takes the lock
- * itself as well, which nests safely.
+ * The caller holds `net_lock` across every copy it makes and the consume, so
+ * that the bytes copied, the sender reported and the datagram consumed are
+ * all of the one at the head of the queue. A system call runs with
+ * interrupts enabled (net.h). Each function takes the lock itself as well,
+ * which nests.
  */
 
 /** Wait for a datagram. Returns 0, or a negative errno: -EINTR on a signal,
@@ -246,47 +280,93 @@ int socket_dgram_error(struct socket *sock);
  * else -EAGAIN when no datagram waits, else 0. */
 int socket_dgram_nowait(struct socket *sock);
 
-/** Bytes in the waiting datagram, or -1 when the slot is empty. */
+/** Bytes in the oldest waiting datagram, or -1 when none waits. A datagram
+ * of no bytes is 0, not emptiness. */
 int socket_dgram_pending(struct socket *sock);
 
 /**
- * Copy up to `len` bytes of the waiting datagram from `offset` bytes into it,
- * leaving it in place. Returns the bytes copied, or -1 with no datagram.
+ * Copy up to `len` bytes of the oldest waiting datagram, from `offset` bytes
+ * into it, leaving it in place. Returns the bytes copied, 0 for a copy that
+ * starts at or past the datagram's end or a negative `len`, or -1 with no
+ * datagram. The copy runs with interrupts off, so a user buffer must have
+ * been faulted in.
  */
 int socket_dgram_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len);
 
-/** Drop the waiting datagram, reporting its sender through the two pointers. */
+/**
+ * Drop the oldest waiting datagram, with whatever of it the caller did not
+ * copy, and report its sender through the two pointers when they are not
+ * NULL: for UDP its address and port; for a raw socket the source address of
+ * its IP header and port 0; and 0 for both for a packet or netlink socket,
+ * whose link address `packet_last_addr` reports. With no datagram waiting, a
+ * UDP socket reports nothing.
+ */
 void socket_dgram_consume(struct socket *sock, uint32_t *src_ip, uint16_t *src_port);
 
-/** Report the waiting datagram's sender as `socket_dgram_consume` does,
- * leaving the datagram in place. */
+/** Report the oldest waiting datagram's sender as `socket_dgram_consume`
+ * does, 0 for both with none waiting, and leave the datagram in place. A
+ * packet socket keeps its link address for `packet_last_addr`. */
 void socket_dgram_sender(struct socket *sock, uint32_t *src_ip, uint16_t *src_port);
 
-/* TCP-side helpers, implemented with the TCP layer. */
+/*
+ * The stream side. The TCP layer calls `socket_tcp_accept`,
+ * `socket_tcp_connected`, `socket_tcp_writable`, `socket_tcp_deliver`,
+ * `socket_tcp_hold`, `socket_tcp_release` and `socket_tcp_fin` with
+ * interrupts off, from its receive path, its timers and a change of this
+ * machine's addresses; the send and the receives are for system calls. Each
+ * ignores a NULL socket, and a send or a receive returns -1 for one.
+ */
+
+/** Queue the established connection `conn_sock` on the listener
+ * `listen_sock` and wake its waiters. With the queue full the connection is
+ * closed and freed instead (`socket_unref`). */
 void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock);
+/** Wake every waiter of `sock` when its connection is established or ends. */
 void socket_tcp_connected(struct socket *sock);
+/** Wake a writer or a poller for output when an ACK frees send-ring room. */
 void socket_tcp_writable(struct socket *sock);
-/** Blocking stream send; SOCK_EAGAIN when nonblock and the send ring is
- * full. */
+/**
+ * Queue the `len` bytes at `buf` on the stream, waiting for room in the send
+ * ring as long as none is free, and return the count queued, never 0 for a
+ * nonzero `len`. Returns SOCK_EAGAIN instead of waiting when `nonblock` is
+ * set, -EINTR on a signal, and on a connection no longer in a sending state
+ * the error recorded for it or -EPIPE.
+ */
 int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblock);
-/** Copy in-order stream bytes into the recv ring; returns the count accepted
- * (less than `len` if the ring was nearly full, so the caller advances rcv_nxt
- * by only what fit and the peer retransmits the rest). */
+/** Copy in-order stream bytes into the receive ring and wake a reader;
+ * returns the count taken, less than `len` when the ring was nearly full, so
+ * that the caller advances `rcv_nxt` by only what fit and the peer sends the
+ * rest again. */
 uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t len);
-/** Keep stream bytes that arrived past a hole `offset` bytes past the recv
- * ring's tail, unreadable; returns how many fit in the ring's free space. */
+/** Keep stream bytes that arrived past a hole, `offset` bytes past the
+ * receive ring's tail, unreadable until `socket_tcp_release`; returns how
+ * many fit in the ring's free space. */
 uint16_t socket_tcp_hold(struct socket *sock, uint32_t offset, const uint8_t *data, uint16_t len);
-/** Make `n` bytes kept past the recv ring's tail readable, and wake a
- * reader. */
+/** Make `n` bytes kept past the receive ring's tail readable, once the hole
+ * before them is filled, and wake a reader. */
 void socket_tcp_release(struct socket *sock, uint32_t n);
-/** Blocking stream receive; with `peek` the bytes stay in the ring for the
- * next receive (MSG_PEEK). */
+/**
+ * Wait for stream bytes, the peer's FIN or the connection's end, and copy up
+ * to `len` bytes to `buf`. Returns the count copied; 0 at the end of input,
+ * the FIN with nothing buffered or a block a shutdown detached; with
+ * nothing buffered on a reset or closed connection, the error recorded for
+ * it or -ECONNRESET; -ENOTCONN for a stream that never connected; or -EINTR.
+ * With `peek` the bytes stay in the ring for the next receive (MSG_PEEK),
+ * and the window does not change.
+ */
 int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len, int peek);
-/** Non-blocking variant; SOCK_EAGAIN if no data is buffered (MSG_DONTWAIT). */
+/** `socket_tcp_recv` without the wait (MSG_DONTWAIT): SOCK_EAGAIN where it
+ * would wait. */
 int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len, int peek);
+/** Wake every waiter of `sock` on the peer's FIN or the connection's end. */
 void socket_tcp_fin(struct socket *sock);
 
-/** Map socket state to poll revents; sets *wq to the wait queue if non-NULL. */
+/**
+ * The events among `events` that `sock` is ready for now, with POLLERR and
+ * POLLHUP whether asked for or not, and POLLNVAL for a NULL socket. Sets
+ * `*wq` to the socket's wait queue when `wq` is not NULL, for the poller to
+ * sleep on.
+ */
 short socket_poll(struct socket *sock, short events, struct wait_queue **wq);
 
 #endif /* _SOCKET_H_ */
