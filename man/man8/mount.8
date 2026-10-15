@@ -233,7 +233,8 @@ The target is already a mount point; the source range is mounted or has
 an open descriptor permitting writes; or an unmount was attempted while
 a file or loop device still referred to the volume.
 .It Er ENAMETOOLONG
-The target path is 256 bytes or longer.
+The target's absolute path, as given or as the kernel records it, is
+longer than 63 bytes.
 .El
 .Sh SEE ALSO
 .Xr mount 2 ,
