@@ -5,11 +5,11 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `gnu` (full tier; needs qemu, ssh, scp, sftp, debugfs; 2048 MiB): the GNU system on its ext2 root, driven over OpenSSH with nobody at the console, logged in to by key and by password, and each port, GCC, GNU make, GDB, the SpiderMonkey shell and chromium-headless-shell doing its main job on the machine.
 * `install` (full tier; needs qemu, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the machine installs its own kernel.
 * `selfbuild` (full tier; needs qemu, mformat, mmd, mcopy; 128 MiB): the machine builds its own kernel.
-* `installer-repair` (full tier; needs qemu, qemu-system-x86_64, qemu-img, shasum, ssh, ssh-keygen, mcopy, mmd, mdeltree, mtype, minfo, debugfs; 128 MiB): the other half, the machine that will not boot.
-* `installer` (full tier; needs qemu, shasum, ssh, ssh-keygen, mformat, mcopy, mtype, mdel; 512 MiB): the install stick and the program on it.
+* `installer-repair` (full tier; needs qemu, qemu-system-x86_64, qemu-img, xorriso, shasum, ssh, ssh-keygen, mcopy, mmd, mdeltree, mtype, minfo, debugfs; 128 MiB): the other half, the machine that will not boot.
+* `installer` (full tier; needs qemu, xorriso, shasum, ssh, ssh-keygen, mformat, mcopy, mtype, mdel; 512 MiB): the install stick and the program on it.
 * `menu` (full tier; needs qemu, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the boot menu that can be rewritten, and the stub that cannot.
-* `uefi` (full tier; needs qemu-system-x86_64, ssh, mformat, mmd, mcopy; 512 MiB): the machine booted by UEFI firmware, OVMF, from its installed disk and that disk's recovery entry, from the install stick's image as a USB device and from the recovery ISO as a CD, each answering SSH, installed from the stick onto a 4 TiB NVMe disk whose root grows past 2 TiB, and booted by SeaBIOS after recovery writes a damaged primary GUID table again.
-* `installer-rehearse` (full tier; needs qemu, qemu-img, shasum; 512 MiB): the rehearsal of the machine sitting in its small form, minutes: the same rows RACH2_REHEARSE_LENOVO runs at the machine's size in most of an hour.
+* `uefi` (full tier; needs qemu-system-x86_64, xorriso, ssh, mformat, mmd, mcopy; 512 MiB): the machine booted by UEFI firmware, OVMF, from its installed disk and that disk's recovery entry, from the install stick's image as a USB device and from the recovery ISO as a CD, each answering SSH, installed from the stick onto a 4 TiB NVMe disk whose root grows past 2 TiB, and booted by SeaBIOS after recovery writes a damaged primary GUID table again.
+* `installer-rehearse` (full tier; needs qemu, qemu-img, xorriso, shasum; 512 MiB): the rehearsal of the machine sitting in its small form, minutes: the same rows RACH2_REHEARSE_LENOVO runs at the machine's size in most of an hour.
 * `selfbuild-ext2` (full tier; needs qemu, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the self-build on an ext2 root, the os-real system at 48 MiB on a partition at LBA 2048 as the KRFFS disk has it, booted with rach2.root=ext2; the suite reads the volume back with debugfs and e2fsck must find it consistent after the synced stop.
 * `sealed` (full tier; needs qemu, ssh, mformat, mmd, mcopy; 128 MiB): the disk that goes into the laptop, operated the way it will be operated once it is in there.
 * `dhcp-e1000` (full tier; needs qemu; 128 MiB): the dhcp suite's card half on the e1000 card.
@@ -18,7 +18,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `netif-e1000` (full tier; needs qemu; 128 MiB): the netif suite's card half on the e1000 card.
 * `mount` (core tier; needs qemu, mformat, mcopy, mdir; 128 MiB): the partition nodes, the block path through a device that sleeps or never answers, and mount(2) and the claims it makes (see tests/system/suites/mount.sh).
 * `fdlock` (full tier; needs qemu; 128 MiB): pending KRFFS relocation, orphan truncation, and concurrent raw offsets.
-* `grow` (full tier; needs qemu, mke2fs, e2fsck, qemu-img; 512 MiB): a 1 GiB ext2 root grown by `growroot` on the recovery system to a partition the size of the installed machine's disk, its writes checked against the grow set, a grow killed and repaired, one interrupted between the entry and the grow, and the memory it needs.
+* `grow` (full tier; needs qemu, mke2fs, e2fsck, qemu-img, xorriso; 512 MiB): a 1 GiB ext2 root grown by `growroot` on the recovery system to a partition the size of the installed machine's disk, its writes checked against the grow set, a grow killed and repaired, one interrupted between the entry and the grow, and the memory it needs.
 * `drill` (full tier; needs qemu, ssh, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the recovery drill, boots of one disk that carries the same three partitions the sealed disk has.
 * `account` (full tier; needs qemu; 128 MiB): accounts created, authenticated, changed and deleted on both images, since both have account tools and they are different code.
 * `large` (full tier; needs qemu, mke2fs, e2fsck, mformat, either hdiutil and newfs_exfat or mkfs.exfat and fsck.exfat; 128 MiB): a file past 4 GiB on ext2 and on exFAT, written, read back after a remount, sought, sized, truncated, appended and shared between two descriptors, and a write past each format's limit refused by name.
@@ -27,7 +27,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `raw` (full tier; needs qemu; 128 MiB): the raw ICMP socket, which is what `ping` and `traceroute` are.
 * `krffsmount` (full tier; needs qemu; 128 MiB): a KRFFS volume placed by mount(2), read through to its last byte and unmounted, and the three volumes the kernel refuses.
 * `diskrate` (full tier; needs qemu, mformat; 512 MiB): the storage paths timed in the machine and held under bounds: the raw device, a file on exFAT and on FAT32 written and read, two hundred small files, and a raw read piped into a hash.
-* `usbdisk` (core tier; needs qemu, mformat, mcopy, mtype; 128 MiB): a flash drive as a disk.
+* `usbdisk` (core tier; needs qemu, xorriso, mformat, mcopy, mtype; 128 MiB): a flash drive as a disk.
 * `stress-ahci` (full tier; needs qemu; 128 MiB): the stress suite's on-disk KRFFS larger than RAM, on an AHCI controller.
 * `default` (core tier; needs qemu; 128 MiB): the probe suite, every guest probe booted on the test image in one machine and scored by the runner.
 * `stress` (full tier; needs qemu; 128 MiB): prove an on-disk KRFFS larger than physical RAM works.
@@ -67,7 +67,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `bootline` (full tier; needs qemu, mke2fs; 128 MiB): the boot line that contradicts itself.
 * `servicelog` (full tier; needs qemu, mke2fs; 128 MiB): the log init's services write to is bounded within a boot, and a log a boot left full is removed at the next.
 * `persist` (core tier; needs qemu; 128 MiB): fsync durability across a reboot.
-* `style` (full tier; needs cppcheck, shellcheck, clang-format; no machine): the source checks over the tree, tools/verify/check.sh, booting nothing.
+* `style` (full tier; needs cppcheck, shellcheck, clang, clang-format; no machine): the source checks over the tree, tools/verify/check.sh, booting nothing.
 * `dgram-e1000` (full tier; needs qemu; 128 MiB): the dgram suite on the e1000 card.
 * `dgram` (core tier; needs qemu; 128 MiB): a connected datagram socket and the permission to broadcast, which is how a DHCP client renews a lease and how it asks for one.
 * `diskdiag` (full tier; needs qemu, ssh; 128 MiB): a disk read without being mounted and without being written.

@@ -201,15 +201,18 @@ req clang-format clang-format
 echo
 # A default `make` builds the three RAM images and reaches none of these. The
 # GRUB disks do, and tools/image/mkdisk_grub.sh needs all three mtools
-# commands, so all three are named rather than one standing for the set.
-echo "Needed by the GRUB disk suites (grub, menu, install, sealed, drill, selfbuild):"
+# commands, so all three are named rather than one standing for the set. The
+# ISOs and the sticks made from them need xorriso. A set of suites, `make test`
+# among them, prepares every suite's products and needs all four: they are
+# what `make prepare-tools` prints.
+echo "Needed by the suites that build GRUB disks, ISOs or sticks, and by every set of suites:"
 opt mformat      "the FAT boot partition" mtools
 opt mmd          "the FAT boot partition" mtools
 opt mcopy        "the FAT boot partition" mtools
+opt xorriso      "the ISOs and sticks, and make isos" xorriso
 
 echo
 echo "Optional (only some tasks need these):"
-opt xorriso      "make isos, the bootable ISO per image" xorriso
 opt docker       "vendor/grub regeneration (maintainer only)" docker
 opt git          "cloning and committing" git
 
