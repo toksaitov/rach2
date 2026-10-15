@@ -4,11 +4,11 @@
 # Build the musl-linked test programs in this directory.
 #
 # These differ from the freestanding probes in tests/: they are ordinary hosted
-# C programs linked statically against the ported musl (see
-# vendor/musl/build_libc.sh). Each <name>.c here becomes a guest binary
-# build/tests/musl/<name> (out of tree, like every other component), staged into
-# the test image under /musl by its manifest (so /musl/hello, /musl/mallocqsort,
-# ...). `make musl-programs` runs this.
+# C programs linked statically against the ported musl, which `make musl`
+# builds. Each <name>.c here becomes a guest binary build/tests/musl/<name>
+# (out of tree, like every other component), staged into the test image under
+# /musl by its manifest (so /musl/hello, /musl/mallocqsort, ...).
+# `make musl-programs` runs this.
 #
 # The architecture is RACH2_ARCH's, i686 when it is unset, as mk/arch.sh reads
 # it: the root Makefile sets it from ARCH. An x86-64 build compiles with
@@ -16,8 +16,8 @@
 # build/x86_64/tests/musl/.
 #
 # A program that must link a source from elsewhere in the tree names it in a
-# "link-deps:" comment, the convention the host suite parses for the host
-# tests, with the paths written from the repo root:
+# "link-deps:" comment, the counterpart of the "host-deps:" line the host
+# suite reads from a host test, with the paths written from the repo root:
 #
 #     /**
 #      * ...
@@ -26,16 +26,16 @@
 #      */
 #
 # The utils headers are on the include path for the same reason, so a probe can
-# test the library its program links. A named dependency that is not there is a
-# hard error: passed on to the compiler it would surface as a bare "no such
-# file", which reads as a broken toolchain, not a typo.
+# test the library its program links. A named dependency that is not there
+# stops the build with an error that names it; passed on to the compiler, it
+# would give a bare "no such file", which reads as a broken toolchain.
 #
 # The build is incremental: a program recompiles only when its source, a
 # link-deps source, a project header its previous compile recorded (-MMD),
-# the installed libc, or this script is newer than the binary. An untouched
-# tree therefore compiles nothing.
+# the installed libc, mk/arch.sh or this script is newer than the binary. An
+# untouched tree therefore compiles nothing.
 #
-# Run vendor/musl/build_libc.sh first if install/ is absent.
+# Run `make musl` first if the installed libc is absent.
 #
 
 set -e
@@ -84,11 +84,10 @@ mkdir -p "$OUT"
 for src in *.c; do
     prog="${src%.c}"
     deps=""
-    # Every link-deps: line, not just the first: the declaration is repeatable
-    # for the same reason the host tests' is, and `head -1` silently dropped a
-    # second one. A wrapped declaration is refused outright, because the
+    # Every link-deps: line counts, since the declaration is repeatable as the
+    # host tests' is. A wrapped declaration stops the build, because the
     # `[^*]*` grep stops at the next `*` and would drop the paths past the
-    # fold without saying so.
+    # fold without a message.
     if ! awk '
         /link-deps:/ && prev ~ /link-deps:/ { prev = $0; next }
         prev ~ /link-deps:/ && $0 ~ /^[[:space:]]*\*[[:space:]]+[A-Za-z0-9_.\/-]+\.[ch]([[:space:]]|$)/ { exit 1 }

@@ -1,13 +1,17 @@
 /**
- * The first ordinary hosted C program run on Rach2 through the real musl.
+ * hello: check that a hosted C program starts and exits through the ported
+ * musl.
  *
  * Unlike the freestanding probes in `tests/`, this includes `<stdio.h>`, calls
  * `printf` (buffered stdio over `writev`), and returns from `main` so musl's
  * `__libc_start_main` runs its exit path. It is linked statically against the
- * ported musl (`crt1` + `libc.a` + `crtn`). Running it in the guest exercises
- * the whole startup path: musl reaches `main`, does TLS setup
- * (`set_thread_area`), buffers stdio, and exits cleanly through `exit_group`.
- * It also calls `uname` and prints the result when that succeeds.
+ * ported musl (`crt1.o`, `crti.o`, `libc.a`, libgcc and `crtn.o`, as
+ * `build.sh` links every program here). Running it in the guest exercises
+ * the whole startup path: musl reaches `main`, sets up thread-local storage
+ * (`set_thread_area` on i686, `arch_prctl` on x86-64), buffers stdio, and
+ * exits through `exit_group`. It also calls `uname` and prints the result when
+ * that succeeds. No suite runs it; it is run by hand, as `exec musl/hello` at
+ * the kernel shell.
  */
 
 #include <stdio.h>

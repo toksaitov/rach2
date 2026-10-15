@@ -1,6 +1,6 @@
 /**
- * Draws random bytes through the ported musl, in the shape an SSH key generator
- * uses, and checks the kernel CSPRNG against it.
+ * rngmusl: draw random bytes through the ported musl, as an SSH key generator
+ * does, and check what the kernel's random source gives.
  *
  * Fills two 32-byte buffers, one through musl's `getrandom()` and one by
  * reading `/dev/urandom`, then confirms both calls deliver the full request,
@@ -10,7 +10,7 @@
  * closed and the rngprobe covers that path.
  *
  * Prints "RNGMUSL OK" on success or an "RNGMUSL FAIL" line naming the failing
- * step. Linked against the ported musl.
+ * step. No suite runs it; it is run by hand. Linked against the ported musl.
  */
 
 #include <sys/random.h>
@@ -19,6 +19,9 @@
 #include <stdio.h>
 #include <string.h>
 
+/**
+ * Return 1 when all `n` bytes at `b` are zero, and 0 otherwise.
+ */
 static int all_zero(const unsigned char *b, int n)
 {
     int i;

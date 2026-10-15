@@ -1,4 +1,21 @@
-/** Check the audio report and run the staged tone diagnostic in a guest. */
+/**
+ * hdaprobe: check the `/proc/audio` report and run the staged tone diagnostic.
+ *
+ * The report must be one file in `/proc`, with the inode its directory entry
+ * gives, mode 0444, and a descriptor link that reads back its path. Run with
+ * no argument on a machine with an HDA controller, it plays a one-second
+ * 440 Hz tone at 32 kHz through `/bin/audiotest`. It then checks that a
+ * report opened before the tone still shows no stream, since procfs makes the
+ * text when the file is opened, and that a fresh report shows the stream
+ * stopped, with 32000 Hz requested and programmed and the converter's format
+ * (16-bit stereo at 32 kHz) read back. Run as `hdaprobe absent` under
+ * `rach2.noaudio`, it checks the file the same way and then that the report
+ * shows no controller ready and nothing playing.
+ *
+ * Prints "HDAPROBE OK: ..." on success or "HDAPROBE FAIL: <row>" for the first
+ * failed check. No suite runs it; `tests/system/hda_mutate.sh` boots it and
+ * requires a failure at "open /proc/audio" once the report is renamed.
+ */
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -9,9 +26,14 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+/* The last report read, terminated. */
 static char text[8192];
 
-/** Fail with a row name the mutation script must observe. */
+/**
+ * Print "HDAPROBE FAIL: `row`" and exit with status 1 unless `ok` is true.
+ *
+ * The row is the name `hda_mutate.sh` looks for in the serial log.
+ */
 static void require(int ok, const char *row)
 {
     if (!ok) {
@@ -20,7 +42,13 @@ static void require(int ok, const char *row)
     }
 }
 
-/** Read in small chunks so offsets and EOF pass through procfs. */
+/**
+ * Read the report open on `fd` to its end into `text`, and terminate it.
+ *
+ * The reads are seven bytes each, so the report is served from many offsets
+ * and its end of file is reached by a read of its own. Fails the probe when
+ * the report does not fit in `text` or a read fails.
+ */
 static void read_report(int fd)
 {
     int n;
@@ -34,7 +62,11 @@ static void read_report(int fd)
     text[used] = 0;
 }
 
-/** Check stat, directory identity, snapshots and the programmed rate. */
+/**
+ * Run the checks; an argument "absent" selects those of a boot with no audio
+ * controller. Returns 0 when every check passes and exits 1 at the first that
+ * fails.
+ */
 int main(int argc, char **argv)
 {
     struct stat path, opened;

@@ -1,17 +1,21 @@
 /**
- * Exercises a musl pseudo-terminal round-trip, the exact shape a login server
- * uses to hand a remote shell a tty.
+ * ptymusl: check a pseudo-terminal round trip through musl, in the form a
+ * login server uses to give a remote shell a terminal.
  *
  * `openpty()` opens `/dev/ptmx`, unlocks it (`TIOCSPTLCK`), resolves the slave
  * name via `ptsname()` (`TIOCGPTN`), and opens `/dev/pts/N`. The test then
- * forks: the child confirms `ttyname(slave)` resolves to `/dev/pts/N` (the
- * `isatty` plus `/proc/self/fd` readlink plus `stat`/`fstat` identity match),
- * reads the cooked line off the slave, and replies on it; the parent drives the
- * master and checks the echo and reply it reads back. On x86-64 a TCFLSH of
- * the master whose selector passes 32 bits is EINVAL, as Linux's is.
+ * forks. The child checks that `ttyname(slave)` gives a name under `/dev/pts/`
+ * (musl's `ttyname` calls `isatty`, reads the link `/proc/self/fd/N`, and
+ * compares the target's `stat` with the descriptor's `fstat`), reads the cooked
+ * line off the slave, and replies "pong" on it; a child whose `ttyname` check
+ * fails exits without replying. The parent writes "ping" to the master, which
+ * the line discipline echoes back and cooks into the slave, and passes when it
+ * reads both the echo and the reply from the master. On x86-64 a TCFLSH of the
+ * master whose selector passes 32 bits is EINVAL, as Linux's is.
  *
- * Prints "PTYMUSL OK" on success and "PTYMUSL FAIL" otherwise. Linked against
- * the ported musl.
+ * Prints "PTYMUSL OK" on success and a "PTYMUSL FAIL (...)" line naming the
+ * failed step otherwise. No suite runs it; it is run by hand at the kernel
+ * shell. Linked against the ported musl.
  */
 
 #include <errno.h>
@@ -48,14 +52,12 @@ int main(void)
         return 1;
     }
     if (pid == 0) {
-        /* Child: read the cooked line off the slave and reply on it. */
         char sbuf[64];
         char *tn;
         int n;
         close(master);
         tn = ttyname(slave);
         if (!tn || strncmp(tn, "/dev/pts/", 9) != 0) {
-            /* ttyname failed: the parent's round-trip and status catch it. */
             _exit(7);
         }
         n = (int)read(slave, sbuf, sizeof(sbuf));
@@ -66,8 +68,6 @@ int main(void)
         _exit(0);
     }
 
-    /* Parent: drive the master. The write is cooked into the slave (and echoed
-     * back here); the child's reply comes back as slave output. */
     close(slave);
     write(master, "ping\n", 5);
     waitpid(pid, &status, 0);

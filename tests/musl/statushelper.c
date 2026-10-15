@@ -1,10 +1,12 @@
 /**
- * A fixture that ends the way it was told to, for probes about exit statuses.
+ * statushelper: end with the exit status or the signal it is told to, for
+ * probes of what a parent reads back.
  *
  * `statushelper N` exits with N; `statushelper signal` kills itself with
- * SIGTERM, whose default action terminates. It is a fixture and not a probe:
- * The probe runner never runs it, since a program whose whole purpose is to
- * fail on request would fail the suite it was listed in.
+ * SIGTERM, whose default action terminates; any other argument count exits
+ * with 2. It is a fixture and not a probe: the probe runner never runs it,
+ * since a program whose purpose is to fail on request would fail the suite it
+ * was listed in.
  *
  * `ishmusl` runs it through `ish -c` to read back what the shell reports.
  */

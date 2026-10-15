@@ -1,19 +1,21 @@
 /**
- * Stands up the exact resource footprint one remote-login session needs, then
- * confirms the kernel has headroom to spare, all through real musl.
+ * budgetmusl: open the descriptors one remote-login session needs, then count
+ * how many more the process can open, through musl.
  *
  * A session is modelled as a connected socket pair (the listening socket plus
  * the accepted socket), a pty master, and the pty slave handed to a forked
- * child as its controlling-terminal stdio. The child becomes a session leader
- * (`setsid`), claims the slave as its controlling terminal (`TIOCSCTTY`), and
- * dups it onto stdin, stdout, and stderr, exactly as a login server wires a
- * shell before exec. With that set held, the probe counts how many more fds it
- * can open against `/dev/null`: spare capacity beyond the session set proves a
- * real session (which also forks pipeline children in the shell) fits, as it
- * had to under the fixed tables of sixteen this kernel once had.
+ * child as its controlling-terminal stdio. When `socketpair` fails, the
+ * program opens two unconnected TCP sockets in its place and checks neither.
+ * The child becomes a session leader (`setsid`), claims the slave as its
+ * controlling terminal (`TIOCSCTTY`), and dups it onto stdin, stdout, and
+ * stderr, as a login server sets up a shell before exec, and exits. The
+ * parent, still holding the sockets and the master, then opens `/dev/null` up
+ * to eight more times; at least four spare descriptors leave room for the
+ * pipelines a session's shell forks.
  *
  * Prints the spare-fd count, then "BUDGETMUSL OK" on success or a
- * "BUDGETMUSL FAIL (...)" line naming the failed step. Linked against musl.
+ * "BUDGETMUSL FAIL (...)" line naming the failed step. No suite runs it; it is
+ * a diagnostic run by hand. Linked against musl.
  */
 
 #include <pty.h>
@@ -35,9 +37,7 @@ int main(void)
     int extra = 0;
     int i;
 
-    /* Model listen + accepted as one hermetic socketpair (no external peer). */
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sp) != 0) {
-        /* Fall back to two plain stream sockets; same socket-pool draw. */
         sp[0] = socket(AF_INET, SOCK_STREAM, 0);
         sp[1] = socket(AF_INET, SOCK_STREAM, 0);
     }
@@ -53,7 +53,6 @@ int main(void)
         return 1;
     }
     if (pid == 0) {
-        /* Session child: leader, slave as controlling terminal and stdio. */
         close(master);
         setsid();
         ioctl(slave, TIOCSCTTY, 0);
@@ -69,7 +68,6 @@ int main(void)
     close(slave);
     waitpid(pid, &status, 0);
 
-    /* Spare fds beyond the held session set (sp[0], sp[1], master, stdio). */
     for (i = 0; i < 8; i++) {
         extra_fds[i] = open("/dev/null", O_RDWR);
         if (extra_fds[i] < 0) {

@@ -1,20 +1,22 @@
 /**
- * Exercises the kernel termios layer through musl's own termios API.
+ * ttymusl: check the kernel's termios layer through musl's termios API.
  *
  * The freestanding ttyprobe drives the kernel ioctls with hand-built structs;
- * this proves the same kernel layer satisfies musl's API, whose termios struct
- * is wider (NCCS=32 plus speeds) than the 36-byte prefix the kernel exchanges.
- * If the prefix layout (flags, c_line, the c_cc indices) were off, cfmakeraw's
- * effect would be misread here.
+ * this shows that the same kernel layer serves musl's API, whose termios
+ * struct is wider (NCCS=32 plus speeds) than the 36-byte prefix the kernel
+ * exchanges. If the prefix layout (flags, c_line, the c_cc indices) were off,
+ * cfmakeraw's effect would be misread here.
  *
- * The checks are: isatty(0) reports the console is a terminal (musl probes it
- * with TIOCGWINSZ); tcgetattr shows the inherited mode cooked with echo
+ * The checks are: isatty(0) reports the console is a terminal (musl asks with
+ * TIOCGWINSZ); tcgetattr shows the inherited mode cooked with echo
  * (ICANON|ECHO); cfmakeraw plus tcsetattr puts the terminal in raw mode,
- * confirmed by reading it back; one read() returns a single byte with no line
- * editing or echo (the driver sends "Z" right after the exec line); and a final
- * tcsetattr restores the original mode.
+ * confirmed by reading it back; one read() returns the byte "Z" without
+ * waiting for a newline; and a final tcsetattr restores the original mode.
  *
- * Prints "MTTY OK" or "MTTY FAIL <n>". Staged into test.krffs as /musl/ttymusl.
+ * No suite runs it. A person runs `exec musl/ttymusl` at the kernel shell and
+ * types Z, which raw mode delivers at once and does not echo. It prints
+ * "MTTY OK", or "MTTY FAIL <n>" with n the number of failed checks and exits
+ * nonzero. Staged into test.krffs as /musl/ttymusl.
  */
 
 #include <termios.h>
@@ -49,7 +51,6 @@ int main(void)
         fails++;
     }
 
-    /* Raw mode through musl's cfmakeraw, then confirm the kernel applied it. */
     raw = orig;
     cfmakeraw(&raw);
     if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0) {
@@ -61,14 +62,12 @@ int main(void)
         fails++;
     }
 
-    /* One byte, raw: no newline needed, nothing echoed. */
     n = read(STDIN_FILENO, &c, 1);
     if (n != 1 || c != 'Z') {
         printf("raw read got n=%d c=%d\n", (int)n, (int)c);
         fails++;
     }
 
-    /* Put the terminal back the way we found it. */
     if (tcsetattr(STDIN_FILENO, TCSANOW, &orig) != 0) {
         printf("tcsetattr(restore) failed\n");
         fails++;
