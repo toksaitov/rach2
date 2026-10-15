@@ -36,7 +36,7 @@
 #define UNIX_BUF        212992u
 #define UNIX_DGRAM_QLEN 10u
 #define UNIX_CHUNK      65536u
-/* Format: the descriptors one message carries at most, Linux's SCM_MAX_FD. */
+/* Format: the descriptors one message may have, Linux's SCM_MAX_FD. */
 #define UNIX_MAX_FDS    253u
 /* Policy: the connections a listener queues at most, Linux's somaxconn. */
 #define UNIX_SOMAXCONN  4096
@@ -93,6 +93,8 @@
 
 enum { US_UNCONNECTED, US_LISTENING, US_CONNECTED };
 
+/* Credentials, Linux's struct ucred, as SO_PEERCRED and SCM_CREDENTIALS
+ * give them; kept as the kernel's ids. */
 struct unix_cred {
     uint32_t pid;
     uint32_t uid;
@@ -107,9 +109,11 @@ struct unix_name {
     char path[UNIX_PATH_MAX + 1];
 };
 
-/* A message on a receive queue. A stream reader takes it `off` bytes at a
- * time; the others take it whole. `fds` are the descriptors it carries, each
- * holding its open file as a descriptor in a table would. */
+/* A message on a receive queue: `len` bytes at `data`, after the record,
+ * and the sender's credentials and name. A stream reader has taken `off`
+ * bytes of it so far; the others take it whole. `fds` are the `nfds`
+ * descriptors sent with it, each holding its open file as a descriptor in a
+ * table would. */
 struct unix_msg {
     struct unix_msg *next;
     uint32_t len;
@@ -135,32 +139,32 @@ struct unix_sock {
     uint32_t refs;
     int type;
     int state;
-    int closed;
+    int closed; /* its descriptors' side has ended */
     uint32_t inode;
-    uint32_t uid;
+    uint32_t uid; /* its maker's effective uid; an accepted one has the listener's */
     /* The name bind gave it, or for an accepted socket the listener's name,
      * which it reports; only a `bound` socket is found by its name. */
     struct unix_name name;
     int bound;
-    int bound_fs;
+    int bound_fs; /* bound to a path, whose socket file `fs_ref` holds */
     struct vfs_ref fs_ref;
     uint32_t fs_ino;
     struct unix_sock *peer;
     struct unix_msg *rq_head;
     struct unix_msg *rq_tail;
-    uint32_t rq_bytes;
+    uint32_t rq_bytes; /* bytes queued and not yet read */
     uint32_t rq_count;
-    int shut;
-    int err;
+    int shut; /* SHUT_RCV and SHUT_SEND */
+    int err;  /* a pending positive errno, for SO_ERROR or the next call */
     int passcred;
-    struct unix_cred peercred;
+    struct unix_cred peercred; /* what SO_PEERCRED gives, when `has_peercred` */
     int has_peercred;
     int backlog;
     struct unix_sock *acc_head;
     struct unix_sock *acc_tail;
-    struct unix_sock *acc_next;
+    struct unix_sock *acc_next; /* the next on the listener's queue it is on */
     uint32_t acc_len;
-    uint32_t sndbuf;
+    uint32_t sndbuf; /* bytes */
     uint32_t rcvbuf;
     uint32_t rcvtimeo; /* ticks, 0 for none */
     uint32_t sndtimeo;
@@ -174,7 +178,7 @@ struct unix_sock {
     wait_queue_t lock_wq;
 };
 
-/* What a send carries besides its bytes. */
+/* What a send has besides its bytes: descriptors and credentials. */
 struct unix_out {
     uint32_t nfds;
     fd_entry_t *fds;
@@ -201,6 +205,7 @@ static void unix_close(fd_entry_t *e);
 
 static const struct file_ops unix_ops = {unix_read, unix_write, unix_poll, unix_ioctl, unix_close};
 
+/* Every socket not yet freed. */
 static struct unix_sock *socks;
 
 /* The messages whose descriptors are being closed, first to last, and
@@ -222,16 +227,20 @@ void unix_init(void)
     transits = NULL;
 }
 
+/** The caller's descriptor table. */
 static fd_table_t *table(void)
 {
     return current_proc->fds;
 }
 
+/** The socket of the descriptor `e`. */
 static struct unix_sock *sock_of(const fd_entry_t *e)
 {
     return (struct unix_sock *)e->priv;
 }
 
+/** Whether a call on `e` with `flags` must not wait: MSG_DONTWAIT, or
+ * O_NONBLOCK on the description. */
 static int nonblocking(const fd_entry_t *e, int flags)
 {
     return (flags & MSG_DONTWAIT) || (e->ofd && (e->ofd->status_flags & OFD_NONBLOCK));
@@ -303,6 +312,8 @@ uint32_t unix_inode(const fd_entry_t *e)
     return sock_of(e)->inode;
 }
 
+/** A new unconnected socket of `type`, the caller's, on the list with the
+ * descriptors' reference; NULL when the heap has no room. */
 static struct unix_sock *unix_alloc(int type)
 {
     struct unix_sock *s = kzalloc(sizeof(*s));
@@ -325,8 +336,8 @@ static struct unix_sock *unix_alloc(int type)
     return s;
 }
 
-/* The caller's credentials: the effective ids SO_PEERCRED reports, or the
- * real ids a message carries unless the sender names others. */
+/** The caller's credentials into `c`: the effective ids SO_PEERCRED
+ * reports, or the real ids a message has unless the sender gives others. */
 static void own_cred(struct unix_cred *c, int effective)
 {
     c->pid = current_proc->tgid;
@@ -334,7 +345,7 @@ static void own_cred(struct unix_cred *c, int effective)
     c->gid = effective ? current_proc->egid : current_proc->rgid;
 }
 
-/* Credentials of kernel ids as the current process sees them in its user
+/** Credentials of kernel ids as the current process sees them in its user
  * and PID namespaces. */
 static struct unix_cred cred_seen(struct unix_cred c)
 {
@@ -344,9 +355,8 @@ static struct unix_cred cred_seen(struct unix_cred c)
     return c;
 }
 
-/* Take the references a descriptor in a table holds, for a copy of it that
- * goes in flight; and drop them, as a close does, for one that never
- * arrives. */
+/** Take the references a descriptor in a table holds, for the copy `e` of
+ * it that goes in flight; `flight_drop` drops them as a close would. */
 static void flight_hold(fd_entry_t *e)
 {
     fd_ofd_ref(e->ofd);
@@ -357,7 +367,7 @@ static void flight_hold(fd_entry_t *e)
 
 /**
  * Bring a KRFFS file or directory in flight to the node its description
- * names now.
+ * has now.
  *
  * A write that grows a KRFFS file can move its node, and `vfs_repoint`
  * then repoints the descriptors in tables and the descriptions, but not the
@@ -376,9 +386,9 @@ static void flight_sync(fd_entry_t *e)
  * Close the descriptor in flight at `slot`, as a close of it in a table
  * would, and take it from where `unix_inflight_holds` finds it: the slot is
  * emptied, or, when `count` is not NULL, `slot` is the last of the `*count`
- * a message carries and the count is lowered. It is closed from a copy,
- * taken from its place first, since the close can sleep and the one being
- * closed is no holder of its own file. A descriptor of a file of the KRFFS
+ * a message has and the count is lowered. It is closed from a copy, taken
+ * from its place first, since the close can sleep and the one being closed
+ * is no holder of its own file. A descriptor of a file of the KRFFS
  * root leaves its place only once the root's namespace lock is held
  * (`fd_release_lock`): a release of the file's last descriptor elsewhere
  * counts it until then, and the count and any reclaim of the file its own
@@ -402,7 +412,7 @@ static void flight_drop(fd_entry_t *slot, uint32_t *count)
     }
 }
 
-/*
+/**
  * Close the descriptors in flight `fds[from..n)` and free the array. The ones
  * after the descriptor being closed stay where `unix_inflight_holds` finds
  * them while its close sleeps (`flight_drop`).
@@ -434,6 +444,7 @@ static void transit_enter(struct unix_in *in)
     transits = in;
 }
 
+/** Take `in` off the transit list. */
 static void transit_leave(struct unix_in *in)
 {
     struct unix_in **link = &transits;
@@ -446,6 +457,8 @@ static void transit_leave(struct unix_in *in)
     }
 }
 
+/** A message of `len` bytes, its data after the record and nothing else
+ * set; NULL when the heap has no room. */
 static struct unix_msg *msg_alloc(uint32_t len)
 {
     struct unix_msg *m = kmalloc(sizeof(*m) + len);
@@ -460,10 +473,10 @@ static struct unix_msg *msg_alloc(uint32_t len)
 }
 
 /**
- * Free the message `m` and close the descriptors it carries.
+ * Free the message `m` and close the descriptors sent with it.
  *
  * Closing a descriptor in flight can close an AF_UNIX socket, whose queue
- * can carry the only descriptor of another, and so on down a chain as long
+ * can have the only descriptor of another, and so on down a chain as long
  * as its senders made it. Freeing each queue inside the close of the socket
  * before it would take kernel stack for every socket in the chain, so a
  * message with descriptors goes on the reap list instead, and the outermost
@@ -507,8 +520,8 @@ static void msg_free(struct unix_msg *m)
     reaping = 0;
 }
 
-/* Whether one of the `n` descriptors in flight at `fds` is the KRFFS file
- * `node`, which its description names (`flight_sync`). */
+/** Whether one of the `n` descriptors in flight at `fds` is the KRFFS file
+ * whose description has the node `node` (`flight_sync`). */
 static int fds_hold(const fd_entry_t *fds, uint32_t n, const void *node)
 {
     uint32_t i;
@@ -523,8 +536,8 @@ static int fds_hold(const fd_entry_t *fds, uint32_t n, const void *node)
     return 0;
 }
 
-/* Whether a message of the chain from `m` carries a descriptor of the KRFFS
- * file `node`. */
+/** Whether a message of the chain from `m` has a descriptor of the KRFFS
+ * file `node` (`fds_hold`). */
 static int chain_holds(const struct unix_msg *m, const void *node)
 {
     for (; m; m = m->next) {
@@ -553,6 +566,9 @@ int unix_inflight_holds(const void *node)
     return chain_holds(reap_head, node);
 }
 
+/** Whether `s`'s receive queue is full: at `rcvbuf` bytes, or for a
+ * datagram or sequenced-packet socket at more than UNIX_DGRAM_QLEN messages
+ * as well. */
 static int queue_full(const struct unix_sock *s)
 {
     if (s->type == SOCK_STREAM) {
@@ -561,6 +577,7 @@ static int queue_full(const struct unix_sock *s)
     return s->rq_count > UNIX_DGRAM_QLEN || s->rq_bytes >= s->rcvbuf;
 }
 
+/** Append `m` to `s`'s receive queue and wake its waiters for data. */
 static void enqueue(struct unix_sock *s, struct unix_msg *m)
 {
     m->next = NULL;
@@ -592,8 +609,8 @@ static void wake_writers(struct unix_sock *s)
     }
 }
 
-/* Take the head message off `s`'s queue, with whatever of it was not read;
- * the caller frees it. */
+/** Take the head message off `s`'s queue, with whatever of it was not
+ * read, and wake the writers when that makes room; the caller frees it. */
 static struct unix_msg *dequeue(struct unix_sock *s)
 {
     struct unix_msg *m = s->rq_head;
@@ -611,6 +628,8 @@ static struct unix_msg *dequeue(struct unix_sock *s)
     return m;
 }
 
+/** Drop every message of `s`'s queue, closing the descriptors sent with
+ * them. */
 static void purge(struct unix_sock *s)
 {
     while (s->rq_head) {
@@ -618,6 +637,8 @@ static void purge(struct unix_sock *s)
     }
 }
 
+/** Drop a reference to `s`; the last drops its queue, takes it off the
+ * list and frees it. */
 static void unix_put(struct unix_sock *s)
 {
     struct unix_sock **link = &socks;
@@ -635,8 +656,8 @@ static void unix_put(struct unix_sock *s)
     kfree(s);
 }
 
-/* Forget the name: an abstract one is free at once, and the socket file of
- * a path stays until it is removed, as in Linux. */
+/** Forget the name: an abstract one is free at once, and the socket file
+ * of a path stays until it is removed, as in Linux. */
 static void unbind(struct unix_sock *s)
 {
     if (s->bound_fs) {
@@ -648,7 +669,7 @@ static void unbind(struct unix_sock *s)
 
 static void unix_release(struct unix_sock *s, int embryo);
 
-/* A listener's queued connections, never accepted, end as if closed. */
+/** End a listener's queued connections, never accepted, as if closed. */
 static void drop_embryos(struct unix_sock *s)
 {
     while (s->acc_head) {
@@ -706,6 +727,8 @@ struct timed_cond {
     int timed;
 };
 
+/** The wait condition of `unix_wait`, `arg` its `struct timed_cond`: the
+ * caller's condition holds, or the time limit has passed. */
 static int timed_ready(void *arg)
 {
     struct timed_cond *t = (struct timed_cond *)arg;
@@ -756,7 +779,7 @@ static int reserve(void)
     return fd_alloc(table());
 }
 
-/* Give the reserved descriptor `fd` the socket `s`, which takes the
+/** Give the reserved descriptor `fd` the socket `s`, which takes the
  * reference the caller had, with the creation `flags` SOCK_CLOEXEC and
  * SOCK_NONBLOCK. */
 static void publish(int fd, struct unix_sock *s, int flags)
@@ -777,6 +800,8 @@ static void publish(int fd, struct unix_sock *s, int flags)
     e->type = FD_TYPE_UNIX;
 }
 
+/** Check the type `*type` and the protocol of a new socket: 0, or
+ * `unix_socket`'s -ESOCKTNOSUPPORT or -EPROTONOSUPPORT. */
 static int32_t check_type(int *type, int protocol)
 {
     if (*type == SOCK_RAW) {
@@ -813,7 +838,8 @@ int32_t unix_socket(int type, int protocol, int flags)
     return fd;
 }
 
-/* Join `a` and `b` as the two ends of one connection. */
+/** Join `a` and `b` as the two ends of one connection, each taking a
+ * reference to the other. */
 static void join(struct unix_sock *a, struct unix_sock *b)
 {
     a->peer = b;
@@ -825,9 +851,10 @@ static void join(struct unix_sock *a, struct unix_sock *b)
 }
 
 /**
- * socketpair(2). The two descriptors are reserved and their numbers copied
- * to `sv` before either is published, so a failed copy leaves nothing that
- * another thread could have used, and both sockets are released.
+ * The two descriptors are reserved and their numbers copied to `sv` before
+ * either is published, so a failed copy leaves nothing that another thread
+ * could have used, and both sockets are released. Each socket's peer
+ * credentials are the caller's.
  */
 int32_t unix_socketpair(int type, int protocol, int flags, uintptr_t sv)
 {
@@ -876,7 +903,8 @@ int32_t unix_socketpair(int type, int protocol, int flags, uintptr_t sv)
 /**
  * Copy a sockaddr_un from the caller into `n`. An address of the family
  * alone gives an empty name; a path ends at its first NUL or at the end of
- * the address. EINVAL for a length or a family that is not AF_UNIX's.
+ * the address. EINVAL for a length or a family that is not AF_UNIX's,
+ * EFAULT for an address it cannot read.
  */
 static int32_t get_name(uintptr_t addr, uint32_t addrlen, struct unix_name *n)
 {
@@ -903,11 +931,13 @@ static int32_t get_name(uintptr_t addr, uint32_t addrlen, struct unix_name *n)
     return 0;
 }
 
+/** Whether `n` is a name in the abstract namespace. */
 static int abstract(const struct unix_name *n)
 {
     return n->len > 0 && n->path[0] == '\0';
 }
 
+/** Whether `a` and `b` are the same name. */
 static int same_name(const struct unix_name *a, const struct unix_name *b)
 {
     uint32_t i;
@@ -920,7 +950,7 @@ static int same_name(const struct unix_name *a, const struct unix_name *b)
     return i == a->len;
 }
 
-/* The length of the sockaddr_un a name is reported in: the family alone
+/** The length of the sockaddr_un a name is reported in: the family alone
  * for no name, and a path with its NUL. */
 static uint32_t name_addrlen(const struct unix_name *n)
 {
@@ -933,7 +963,8 @@ static uint32_t name_addrlen(const struct unix_name *n)
 /**
  * Report a name through the caller's address and length: as much of the
  * address as the caller's length has room for, and the true length. A
- * receive reports a sender with no name as a length of 0.
+ * receive, with `sender` set, reports a sender with no name as a length of
+ * 0. Returns 0, -EINVAL for a negative length, or -EFAULT.
  */
 static int32_t put_name(uintptr_t addr, uintptr_t lenp, const struct unix_name *n, int sender)
 {
@@ -997,8 +1028,9 @@ static struct unix_sock *lookup(const struct unix_name *n, int type, int32_t *er
     return NULL;
 }
 
-/* Bind an unnamed socket to an abstract name of five hex digits, as Linux's
- * autobind does. */
+/** Bind an unnamed socket, whose bind lock the caller holds, to a free
+ * abstract name of five hex digits, as Linux's autobind does; -ENOSPC when
+ * every one is taken. */
 static int32_t autobind(struct unix_sock *s)
 {
     static uint32_t order;
@@ -1027,6 +1059,7 @@ static int32_t autobind(struct unix_sock *s)
     return -ENOSPC;
 }
 
+/** The wait condition of `bind_lock`. */
 static int bind_idle(void *arg)
 {
     return !((const struct unix_sock *)arg)->binding;
@@ -1051,12 +1084,14 @@ static int32_t bind_lock(struct unix_sock *s)
     return 0;
 }
 
+/** Let go of `s`'s bind lock and wake its waiters. */
 static void bind_unlock(struct unix_sock *s)
 {
     s->binding = 0;
     wq_wake_all(&s->lock_wq);
 }
 
+/** The wait condition of `recv_lock`. */
 static int recv_idle(void *arg)
 {
     return !((const struct unix_sock *)arg)->reading;
@@ -1080,14 +1115,16 @@ static void recv_lock(struct unix_sock *s)
     s->reading = 1;
 }
 
+/** Let go of `s`'s receive lock and wake its waiters. */
 static void recv_unlock(struct unix_sock *s)
 {
     s->reading = 0;
     wq_wake_all(&s->lock_wq);
 }
 
-/* Give a socket with SO_PASSCRED and no name the automatic one, before a
- * connect or a send, as Linux does. */
+/** Give a socket with SO_PASSCRED and no name the automatic one, before a
+ * connect or a send, as Linux does; 0, or the error of `bind_lock` or
+ * `autobind`. */
 static int32_t passcred_name(struct unix_sock *s)
 {
     int32_t rc;
@@ -1103,7 +1140,8 @@ static int32_t passcred_name(struct unix_sock *s)
     return rc;
 }
 
-/* Bind the socket `s`, whose bind lock the caller holds, to the name `n`. */
+/** Bind the socket `s`, whose bind lock the caller holds, to the name `n`:
+ * 0, or `unix_bind`'s errors but those of the address and the lock. */
 static int32_t bind_name(struct unix_sock *s, const struct unix_name *n)
 {
     struct vfs_ref ref;
@@ -1138,7 +1176,7 @@ static int32_t bind_name(struct unix_sock *s, const struct unix_name *n)
 }
 
 /**
- * bind(2). The name is judged free and taken under the socket's bind lock
+ * The name is judged free and taken under the socket's bind lock
  * (`bind_lock`), and the socket file a path makes is recorded only once it
  * is made, so two binds of one socket cannot both succeed and lose the
  * first one's hold on its file and its mount.
@@ -1159,11 +1197,8 @@ int32_t unix_bind(fd_entry_t *e, uintptr_t addr, uint32_t addrlen)
     return rc;
 }
 
-/**
- * listen(2), which a listening socket may call again to change its backlog.
- * The connects waiting for room in the queue are woken, since a larger
- * backlog may have made it.
- */
+/** The connects waiting for room in the queue are woken, since a larger
+ * backlog may have made room. */
 int32_t unix_listen(fd_entry_t *e, int backlog)
 {
     struct unix_sock *s = sock_of(e);
@@ -1185,7 +1220,7 @@ int32_t unix_listen(fd_entry_t *e, int backlog)
     return 0;
 }
 
-/* Whether a connect waiting for room on the listener `l` can stop: there
+/** Whether a connect waiting for room on the listener `l` can stop: there
  * is room, or `l` takes connections no more. */
 static int listener_has_room(void *arg)
 {
@@ -1228,8 +1263,8 @@ static void dgram_repeer(struct unix_sock *s, struct unix_sock *target)
 /**
  * connect(2) of a datagram socket: the target becomes the peer its sends
  * without a name go to, or with AF_UNSPEC it has none (`dgram_repeer`). A
- * target connected to another socket refuses with EPERM and the connection
- * is left as it was, as Linux's unix_may_send has it.
+ * target connected to another socket gives EPERM and the connection is left
+ * as it was, as Linux's unix_may_send has it.
  */
 static int32_t connect_dgram(struct unix_sock *s, uintptr_t addr, uint32_t addrlen)
 {
@@ -1271,10 +1306,10 @@ static int32_t connect_dgram(struct unix_sock *s, uintptr_t addr, uint32_t addrl
     return 0;
 }
 
-/*
+/**
  * Why the stream or sequenced-packet socket `s` cannot connect to `target`
- * now, or 0 when it can. A listener shut down for reading refuses, as in
- * Linux.
+ * now, or 0 when it can. A listener shut down for reading is
+ * ECONNREFUSED, as in Linux.
  */
 static int32_t connect_refusal(const struct unix_sock *s, const struct unix_sock *target)
 {
@@ -1291,10 +1326,6 @@ static int32_t connect_refusal(const struct unix_sock *s, const struct unix_sock
 }
 
 /**
- * connect(2). A stream or sequenced-packet socket queues a new socket on the
- * listener, joined to it, and a datagram socket takes the target as its peer
- * (`connect_dgram`).
- *
  * Copying the address, finding a path's socket file and waiting for room in
  * the listener's queue can each sleep, and another thread may connect the
  * socket, or make it listen, while this one sleeps; so the state of both
@@ -1373,7 +1404,7 @@ int32_t unix_connect(fd_entry_t *e, uintptr_t addr, uint32_t addrlen)
     return 0;
 }
 
-/* Whether an accept waiting on the listener `l` can stop: a connection is
+/** Whether an accept waiting on the listener `l` can stop: a connection is
  * queued, or `l` takes connections no more. */
 static int has_connection(void *arg)
 {
@@ -1383,14 +1414,14 @@ static int has_connection(void *arg)
 }
 
 /**
- * accept4(2). The descriptor is reserved before the connection is taken off
- * the queue, so a caller with none free leaves it queued, and published only
- * after the peer's name is copied out: a copy that fails frees the slot and
- * ends the connection as a close of it would, and no other thread can have
- * used the socket or freed the peer whose name is copied. An address with
- * no length pointer is such a failure, EFAULT, as in Linux. A listener shut
- * down for reading gives up the connections queued before and then fails
- * with EINVAL, as Linux's does.
+ * The descriptor is reserved before the connection is taken off the queue,
+ * so a caller with none free leaves it queued, and published only after the
+ * peer's name is copied out: a copy that fails frees the slot and ends the
+ * connection as a close of it would, and no other thread can have used the
+ * socket or freed the peer whose name is copied. An address with no length
+ * pointer is such a failure, EFAULT, as in Linux. A listener shut down for
+ * reading still hands out the connections queued before the shutdown, and
+ * then fails with EINVAL, as Linux's does.
  */
 int32_t unix_accept(fd_entry_t *e, uintptr_t addr, uintptr_t addrlen_ptr, int flags)
 {
@@ -1456,10 +1487,10 @@ int32_t unix_getname(fd_entry_t *e, uintptr_t addr, uintptr_t addrlen_ptr, int p
 }
 
 /**
- * shutdown(2). A connection's other end has the matching direction shut
- * too. Whoever waits on either socket is woken, and so are the sockets
- * connected to `s`, whose sends to it now fail and which poll therefore
- * reports writable.
+ * A connection's other end has the matching direction shut too. Whoever
+ * waits on either socket is woken, and so are the sockets connected to
+ * `s`, whose sends to it now fail and which poll therefore reports
+ * writable.
  */
 int32_t unix_shutdown(fd_entry_t *e, int how)
 {
@@ -1480,8 +1511,9 @@ int32_t unix_shutdown(fd_entry_t *e, int how)
     return 0;
 }
 
-/* A time limit of SO_RCVTIMEO or SO_SNDTIMEO, a struct timeval of two
- * longs, in ticks, 0 for none, or 0xFFFFFFFF for a timeval out of range. */
+/** A time limit of SO_RCVTIMEO or SO_SNDTIMEO, a struct timeval of two
+ * longs, in ticks: 0 for none, at most 0x7FFFFFFE, or 0xFFFFFFFF for a
+ * timeval out of range. */
 static uint32_t timeval_ticks(const long tv[2])
 {
     uint32_t ticks;
@@ -1496,8 +1528,8 @@ static uint32_t timeval_ticks(const long tv[2])
     return ticks;
 }
 
-/* A buffer size set by SO_SNDBUF or SO_RCVBUF: twice the value asked, at
- * most twice Linux's limit, as Linux keeps it. */
+/** A buffer size set by SO_SNDBUF or SO_RCVBUF: twice the value asked, at
+ * least 4608 and at most twice Linux's limit, as Linux keeps it. */
 static uint32_t buf_size(int32_t v)
 {
     if (v < 2304) {
@@ -1646,7 +1678,8 @@ int32_t unix_getsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uintp
     return 0;
 }
 
-/* The bytes of a caller's buffers from `skip` on, copied to or from `k`. */
+/** Copy `n` bytes of the caller's buffers from `skip` on to `k`, or with
+ * `to_user` from `k` to them; 0, or -EFAULT. */
 static int iov_copy(const struct kernel_iovec *iov, uint32_t iovlen, uint32_t skip, uint8_t *k,
                     uint32_t n, int to_user)
 {
@@ -1674,8 +1707,10 @@ static int iov_copy(const struct kernel_iovec *iov, uint32_t iovlen, uint32_t sk
     return 0;
 }
 
-/* The descriptors of one SCM_RIGHTS message added to `out`, each with the
- * references of a descriptor taken. */
+/** Add to `out` the `n` descriptors of one SCM_RIGHTS message, whose
+ * numbers are at `data`, each with the references of a descriptor taken.
+ * -EINVAL past UNIX_MAX_FDS in all, -EBADF for one not open, -ENOMEM,
+ * -EFAULT; the ones added before an error stay in `out`. */
 static int32_t get_rights(uintptr_t data, uint32_t n, struct unix_out *out)
 {
     fd_entry_t *grown;
@@ -1712,10 +1747,11 @@ static int32_t get_rights(uintptr_t data, uint32_t n, struct unix_out *out)
     return 0;
 }
 
-/* The credentials of an SCM_CREDENTIALS message: the sender's own process
- * id, the thread group's and not a thread's, and ids, unless it is root, as
- * Linux checks them. They are named in the sender's namespaces and kept as
- * the kernel's ids. */
+/** The credentials of an SCM_CREDENTIALS message at `data` into `out`: the
+ * sender's own process id, the thread group's and not a thread's, and ids,
+ * unless it is privileged, as Linux checks them. They are given in the
+ * sender's namespaces and kept as the kernel's ids. -EINVAL for an id of
+ * -1 or one its user namespace does not map, -EPERM, -EFAULT. */
 static int32_t get_cred(uintptr_t data, struct unix_out *out)
 {
     const process_t *p = current_proc;
@@ -1744,7 +1780,9 @@ static int32_t get_cred(uintptr_t data, struct unix_out *out)
     return 0;
 }
 
-/* Read the caller's control messages into `out`. */
+/** Read the caller's control messages into `out`: -EINVAL for a malformed
+ * header, a level other than SOL_SOCKET or another type, and the errors of
+ * `get_rights` and `get_cred`. */
 static int32_t get_control(uintptr_t control, uint32_t controllen, struct unix_out *out)
 {
     uint32_t off = 0;
@@ -1777,6 +1815,7 @@ static int32_t get_control(uintptr_t control, uint32_t controllen, struct unix_o
     return 0;
 }
 
+/** Close the descriptors in flight `out` has and forget them. */
 static void release_out(struct unix_out *out)
 {
     drop_fds(out->fds, 0, out->nfds);
@@ -1784,8 +1823,9 @@ static void release_out(struct unix_out *out)
     out->nfds = 0;
 }
 
-/* A message of `len` bytes of the caller's buffers from `skip` bytes in,
- * with the sender's name and credentials, or NULL with the reason. */
+/** A message of `len` bytes of the caller's buffers from `skip` bytes in,
+ * with the sender's name and credentials, or NULL with -ENOBUFS or -EFAULT
+ * in `*err`. */
 static struct unix_msg *build(const struct unix_sock *s, const struct kernel_iovec *iov,
                               uint32_t iovlen, uint32_t skip, uint32_t len,
                               const struct unix_out *out, int32_t *err)
@@ -1810,7 +1850,7 @@ static struct unix_msg *build(const struct unix_sock *s, const struct kernel_iov
     return m;
 }
 
-/* Move the descriptors `out` carries into `m`. */
+/** Move the descriptors in flight `out` has into `m`. */
 static void attach(struct unix_msg *m, struct unix_out *out)
 {
     m->nfds = out->nfds;
@@ -1819,6 +1859,8 @@ static void attach(struct unix_msg *m, struct unix_out *out)
     out->fds = NULL;
 }
 
+/** Raise SIGPIPE in the calling thread, as Linux sends it, unless `flags`
+ * has MSG_NOSIGNAL. */
 static void broken_pipe(int flags)
 {
     struct k_siginfo info;
@@ -1833,6 +1875,8 @@ static void broken_pipe(int flags)
     signal_post_thread(current_proc, SIGPIPE, &info);
 }
 
+/** The wait condition of a send on the connected socket `arg`: its peer
+ * has room, or the send ends at once. */
 static int peer_has_room(void *arg)
 {
     const struct unix_sock *s = (const struct unix_sock *)arg;
@@ -1841,19 +1885,21 @@ static int peer_has_room(void *arg)
     return !p || p->closed || (s->shut & SHUT_SEND) || s->err || !queue_full(p);
 }
 
-/* Whether a send on the connected socket `s` to its peer `p` must end with
+/** Whether a send on the connected socket `s` to its peer `p` must end with
  * EPIPE: the connection is gone, or shut down in the send's direction. */
 static int send_stopped(const struct unix_sock *s, const struct unix_sock *p)
 {
     return !p || p->closed || (s->shut & SHUT_SEND) || (p->shut & SHUT_RCV);
 }
 
-/*
- * A send on a connected stream or sequenced-packet socket. A stream's bytes
- * go in pieces as the peer's queue has room; a packet goes whole. Copying a
- * piece from the caller can sleep, and the connection is judged again after
- * it, so a piece is not queued past an error or a shutdown that came
- * meanwhile.
+/**
+ * A send of `total` bytes of `iov` on a connected stream or
+ * sequenced-packet socket, with what `out` has, which the first piece
+ * queued takes; the bytes queued, or `unix_sendto`'s errors for its kind.
+ * A stream's bytes go in pieces as the peer's queue has room; a packet goes
+ * whole. Copying a piece from the caller can sleep, and the connection is
+ * judged again after it, so a piece is not queued past an error or a
+ * shutdown that came meanwhile.
  */
 static int32_t send_conn(struct unix_sock *s, int nonblock, const struct kernel_iovec *iov,
                          uint32_t iovlen, uint32_t total, struct unix_out *out, int flags)
@@ -1922,7 +1968,7 @@ static int32_t send_conn(struct unix_sock *s, int nonblock, const struct kernel_
     }
 }
 
-/* Whether a datagram send waiting for room in the queue of `t` can stop:
+/** Whether a datagram send waiting for room in the queue of `t` can stop:
  * there is room, or `t` is gone or takes nothing more, when the send fails. */
 static int target_has_room(void *arg)
 {
@@ -1931,7 +1977,9 @@ static int target_has_room(void *arg)
     return t->closed || (t->shut & SHUT_RCV) || !queue_full(t);
 }
 
-/* A send on a datagram socket, to `to` or to the connected peer. */
+/** A send of one message of `total` bytes of `iov` on a datagram socket, to
+ * `to` or to the connected peer, with what `out` has; `total`, or
+ * `unix_sendto`'s errors for its kind. */
 static int32_t send_dgram(struct unix_sock *s, int nonblock, const struct kernel_iovec *iov,
                           uint32_t iovlen, uint32_t total, const struct unix_name *to,
                           struct unix_out *out)
@@ -1977,7 +2025,7 @@ static int32_t send_dgram(struct unix_sock *s, int nonblock, const struct kernel
             break;
         }
         if (t->closed) {
-            /* As Linux: a peer that is gone disconnects, and then ENOTCONN. */
+            /* As Linux: a closed peer is dropped; the next send is ENOTCONN. */
             if (!to && s->peer == t) {
                 s->peer = NULL;
                 unix_put(t);
@@ -2013,6 +2061,8 @@ static int32_t send_dgram(struct unix_sock *s, int nonblock, const struct kernel
     return rc;
 }
 
+/** A send on `e` of `total` bytes of `iov`, to `to` or to the peer, with
+ * what `out` has, which it releases whatever the result (`unix_sendto`). */
 static int32_t send_core(fd_entry_t *e, const struct kernel_iovec *iov, uint32_t iovlen,
                          uint32_t total, const struct unix_name *to, struct unix_out *out,
                          int flags)
@@ -2034,6 +2084,7 @@ static int32_t send_core(fd_entry_t *e, const struct kernel_iovec *iov, uint32_t
     return rc;
 }
 
+/** The wait condition of `wait_data`. */
 static int has_data(void *arg)
 {
     const struct unix_sock *s = (const struct unix_sock *)arg;
@@ -2041,8 +2092,8 @@ static int has_data(void *arg)
     return s->rq_head != NULL || s->err || (s->shut & SHUT_RCV);
 }
 
-/* Wait for a message: 0 with one at the head of the queue, 1 at the end of
- * input, or -errno. */
+/** Wait for a message: 0 with one at the head of the queue, 1 at the end of
+ * input, or the socket's pending error, -EAGAIN or -EINTR. */
 static int32_t wait_data(struct unix_sock *s, int nonblock)
 {
     int32_t rc;
@@ -2067,8 +2118,8 @@ static int32_t wait_data(struct unix_sock *s, int nonblock)
     return 0;
 }
 
-/* Move a message's descriptors into `in`, or with `peek` copies of them.
- * Whether it had any. */
+/** Move a message's descriptors into `in`, or with `peek` copies of them;
+ * whether it had any. */
 static int take_fds(struct unix_msg *m, struct unix_in *in, int peek)
 {
     uint32_t i;
@@ -2094,12 +2145,13 @@ static int take_fds(struct unix_msg *m, struct unix_in *in, int peek)
     return 1;
 }
 
+/** Whether `a` and `b` are the same credentials. */
 static int same_cred(const struct unix_cred *a, const struct unix_cred *b)
 {
     return a->pid == b->pid && a->uid == b->uid && a->gid == b->gid;
 }
 
-/* The message a stream read continues from after `copied` bytes, and the
+/** The message a stream read continues from after `copied` bytes, and the
  * offset in it; a peek does not consume, so it counts them off. */
 static struct unix_msg *stream_at(struct unix_sock *s, uint32_t copied, int peek, uint32_t *off)
 {
@@ -2117,7 +2169,7 @@ static struct unix_msg *stream_at(struct unix_sock *s, uint32_t copied, int peek
     return m;
 }
 
-/* Consume `chunk` bytes of the stream message `m` at the head of `s`'s
+/** Consume `chunk` bytes of the stream message `m` at the head of `s`'s
  * queue, and the message once they are all read. */
 static void stream_consume(struct unix_sock *s, struct unix_msg *m, uint32_t chunk)
 {
@@ -2133,11 +2185,12 @@ static void stream_consume(struct unix_sock *s, struct unix_msg *m, uint32_t chu
     }
 }
 
-/*
- * A receive on a stream socket: bytes across messages, up to and including
- * one that carries descriptors, and not past a change of credentials when
- * they are asked for. The receive lock is held throughout but for the wait
- * for data.
+/**
+ * A receive of up to `total` bytes into `iov` on a stream socket: bytes
+ * across messages, up to and including one that has descriptors, and not
+ * past a change of credentials when they are asked for; the bytes read, or
+ * `unix_recvfrom`'s errors before any. The receive lock is held throughout
+ * but for the wait for data.
  */
 static int32_t recv_stream(struct unix_sock *s, int nonblock, const struct kernel_iovec *iov,
                            uint32_t iovlen, uint32_t total, int flags, struct unix_in *in)
@@ -2203,8 +2256,9 @@ static int32_t recv_stream(struct unix_sock *s, int nonblock, const struct kerne
     return copied ? (int32_t)copied : rc;
 }
 
-/* A receive on a datagram or sequenced-packet socket: one message, which
- * the receive lock keeps from its choice to its consumption. */
+/** A receive of one message into `iov` on a datagram or sequenced-packet
+ * socket, which the receive lock keeps from its choice to its consumption;
+ * its length as `unix_recvfrom` gives it, or its errors. */
 static int32_t recv_msg(struct unix_sock *s, int nonblock, const struct kernel_iovec *iov,
                         uint32_t iovlen, uint32_t total, int flags, struct unix_in *in)
 {
@@ -2251,6 +2305,8 @@ static int32_t recv_msg(struct unix_sock *s, int nonblock, const struct kernel_i
     return rc;
 }
 
+/** A receive on `e` into `iov`, with the sender's name and credentials and
+ * the message's descriptors in `in` (`unix_recvfrom`). */
 static int32_t recv_core(fd_entry_t *e, const struct kernel_iovec *iov, uint32_t iovlen,
                          uint32_t total, int flags, struct unix_in *in)
 {
@@ -2266,6 +2322,7 @@ static int32_t recv_core(fd_entry_t *e, const struct kernel_iovec *iov, uint32_t
     return recv_msg(s, nonblock, iov, iovlen, total, flags, in);
 }
 
+/** Close the descriptors `in` received and forget them. */
 static void release_in(struct unix_in *in)
 {
     drop_fds(in->fds, 0, in->nfds);
@@ -2323,7 +2380,7 @@ static uint32_t put_rights(uintptr_t at, uint32_t room, struct unix_in *in, int 
  * credentials, and the descriptors, each installed as a new descriptor.
  * Returns the bytes of the buffer used, a message's padding to the next
  * alignment counted only as far as the buffer goes, as Linux's `put_cmsg`
- * counts it, so that a header given back again names no byte past it.
+ * counts it, so that the length given back covers no byte past the buffer.
  */
 static uint32_t put_control(uintptr_t control, uint32_t controllen, struct unix_in *in, int flags)
 {
@@ -2390,11 +2447,9 @@ int32_t unix_sendto(fd_entry_t *e, uintptr_t buf, uint32_t len, int flags, uintp
     return send_core(e, &iov, 1, len, addr ? &to : NULL, &out, flags);
 }
 
-/**
- * recvfrom(2), and recv(2) and read(2) with no address. An address with no
- * length pointer is EFAULT before anything is taken, so the message stays
- * queued; Linux fails the call only after it has taken the message.
- */
+/** An address with no length pointer is EFAULT before anything is taken,
+ * so the message stays queued; Linux fails the call only after it has
+ * taken the message. */
 int32_t unix_recvfrom(fd_entry_t *e, uintptr_t buf, uint32_t len, int flags, uintptr_t addr,
                       uintptr_t addrlen_ptr)
 {
@@ -2425,8 +2480,10 @@ int32_t unix_recvfrom(fd_entry_t *e, uintptr_t buf, uint32_t len, int flags, uin
     return rc;
 }
 
-/* The caller's iovec array, copied in and checked, with its total length
- * in `*total`. The caller frees the array, whatever the result. */
+/** The caller's iovec array in `*iov`, copied in and checked, with its
+ * total length in `*total`: 0, or -EMSGSIZE past IOV_MAX_LOCAL vectors,
+ * -EINVAL for a total past 2^31 - 1, -ENOMEM, -EFAULT. The caller frees the
+ * array, whatever the result. */
 static int32_t get_iov(uintptr_t uiov, unsigned long iovlen, struct kernel_iovec **iov,
                        uint32_t *total)
 {
@@ -2491,6 +2548,8 @@ int32_t unix_sendmsg(fd_entry_t *e, uintptr_t msg, int flags)
     return rc;
 }
 
+/** The header and the control buffer are checked writable before the
+ * receive, so that a bad one fails before a message is taken. */
 int32_t unix_recvmsg(fd_entry_t *e, uintptr_t msg, int flags)
 {
     struct kernel_msghdr hdr;
@@ -2542,22 +2601,24 @@ int32_t unix_recvmsg(fd_entry_t *e, uintptr_t msg, int flags)
     return rc;
 }
 
+/** read(2) of a socket: a receive with no flags (`unix_recvfrom`). */
 static int32_t unix_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     return unix_recvfrom(e, (__force uintptr_t)buf, count, 0, 0, 0);
 }
 
+/** write(2) of a socket: a send with no flags (`unix_sendto`). */
 static int32_t unix_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     return unix_sendto(e, (__force uintptr_t)buf, count, 0, 0, 0);
 }
 
-/* Whether a send would not wait: a connected socket's peer has room in its
+/** Whether a send would not wait: a connected socket's peer has room in its
  * queue, or the send fails at once, the peer being gone or the connection
  * shut down in the send's direction, which the send then reports. A
- * datagram socket that names its receiver in each send cannot tell and says
- * yes, as Linux does; so does a stream socket that is not connected, whose
- * send fails at once. */
+ * datagram socket whose sends each give the receiver's name cannot tell
+ * and says yes, as Linux does; so does a stream socket that is not
+ * connected, whose send fails at once. A listener is never writable. */
 static int writable(const struct unix_sock *s)
 {
     const struct unix_sock *p = s->peer;
@@ -2571,6 +2632,14 @@ static int writable(const struct unix_sock *s)
     return !queue_full(p);
 }
 
+/**
+ * The poll of a socket, on its queue `wq`: POLLERR with a pending error;
+ * POLLHUP when it is shut down both ways, or for a stream or
+ * sequenced-packet socket never connected; POLLIN with POLLRDHUP once it is
+ * shut down for reading, and POLLIN with a message or a connection queued;
+ * POLLOUT while a send would not wait (`writable`). POLLERR and POLLHUP are
+ * reported whatever `events` asks.
+ */
 static short unix_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct unix_sock *s = sock_of(e);
@@ -2597,6 +2666,11 @@ static short unix_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     return (short)((mask & events) | (mask & (POLLERR | POLLHUP)));
 }
 
+/** The ioctls of a socket, an int stored at `arg`: FIONREAD gives the bytes
+ * queued to a stream socket, the length of the next message to another, or
+ * -EINVAL for a listener; TIOCOUTQ the bytes waiting in the peer's queue of
+ * a connected stream or sequenced-packet socket, else 0. -EFAULT, or
+ * -ENOTTY for another request. */
 static int32_t unix_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     struct unix_sock *s = sock_of(e);
@@ -2625,6 +2699,8 @@ static int32_t unix_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     return 0;
 }
 
+/** The last close of a socket's description: the end of its descriptors'
+ * side (`unix_release`). */
 static void unix_close(fd_entry_t *e)
 {
     struct unix_sock *s = sock_of(e);
