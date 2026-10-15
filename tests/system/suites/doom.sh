@@ -17,10 +17,17 @@
 # game: the file must have mode 644, the 0666 that fopen passes less the
 # shell's umask.
 #
+# The image stages the WAD from ports/doom/doom1.wad, which Git does not
+# track, and without it no row can pass, so the suite refuses to boot in a
+# tree that lacks the file.
+#
 # Usage: doom.sh KERNEL DISK HARNESS PASSWORD
 set -u
 KERNEL=$1; DISK=$2; HARNESS=$3; PASSWORD=$4
 fail() { echo "doom-test: FAIL: $1" >&2; exit 1; }
+REPO=$(cd "$(dirname "$0")/../../.." && pwd)
+[ -f "$REPO/ports/doom/doom1.wad" ] ||
+    fail "ports/doom/doom1.wad is absent, so the image has no WAD for the game; sh ports/doom/fetch_wad.sh says how to get one"
 LOG="$DISK.doom.log"
 # interval: doom runs for ten seconds; the row counts its disk commands
 if "$HARNESS" --kernel "$KERNEL" --append "rach2.fsdisk rach2.diskdiag" \
