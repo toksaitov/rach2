@@ -1,15 +1,16 @@
 /**
- * Exercises the synthetic /dev character devices and the /proc self views.
+ * devprobe: the synthetic /dev character devices, the /proc self views and
+ * the ownership of the framebuffer.
  *
  * From user space, proves that /dev/zero reads back all-zero bytes; /dev/null
- * reads as immediate EOF and sinks writes; /dev/full fails a write with
+ * reads as immediate EOF and discards writes; /dev/full fails a write with
  * -ENOSPC; and /dev/urandom yields a varying stream. A disk's `BLKRRPART`
- * asked of /dev/null answers ENOTTY, and fstat gives /dev/null the inode the
- * /dev listing does. It then reads /proc/self/stat for our pid and comm and
- * resolves /proc/self/fd/0 to the console. Prints "DEVPROBE OK" when every
- * check passes.
- *
- * Freestanding; direct system calls (probe.h).
+ * on /dev/null answers ENOTTY, and fstat gives /dev/null the inode the
+ * /dev listing does. It then reads /proc/self/stat for the probe's pid and
+ * comm, resolves /proc/self/fd/0 to the console, and checks which
+ * descriptors of /fb may change the display (`framebuffer`). Prints
+ * "DEVPROBE OK" and exits 0 when every check passes, and "DEVPROBE FAIL"
+ * with the count of failed checks as its status otherwise.
  *
  * Needs: the console as stdin. One row reads /proc/self/fd/0 and requires it
  * to name /dev/console, which is true of a console session and not of one
@@ -33,12 +34,14 @@
 #define FB_MODE_TEXT  0x4602
 #define FB_SETPALETTE 0x4603
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -48,6 +51,7 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
@@ -56,6 +60,7 @@ static void puts(const char *s)
 
 static int fails = 0;
 
+/** Count a failure and print `msg` when `cond` is false. */
 static void check(int cond, const char *msg)
 {
     if (!cond) {
@@ -65,22 +70,26 @@ static void check(int cond, const char *msg)
     }
 }
 
+/** The open call with mode 0: a descriptor, or a negated errno. */
 static int do_open(const char *path, int flags)
 {
     return syscall3(SYS_OPEN, (long)path, flags, 0);
 }
 
+/** The read call: the count read, 0 at the end, or a negated errno. */
 static int do_read(int fd, char *buf, int n)
 {
     return syscall3(SYS_READ, fd, (long)buf, n);
 }
 
+/** The readlink call: the length of the target, which is not NUL-ended, or a
+ * negated errno. */
 static int do_readlink(const char *path, char *buf, int n)
 {
     return syscall3(SYS_READLINK, (long)path, (long)buf, n);
 }
 
-/** Parse the leading decimal of s. */
+/** The leading decimal number of `s`. */
 static int atoin(const char *s)
 {
     int v = 0;
@@ -91,7 +100,7 @@ static int atoin(const char *s)
     return v;
 }
 
-/** Does haystack contain needle? */
+/** Non-zero when the string `h` contains the string `n`. */
 static int contains(const char *h, const char *n)
 {
     int i, j;
@@ -105,6 +114,7 @@ static int contains(const char *h, const char *n)
     return 0;
 }
 
+/** Non-zero when the first `n` bytes of `a` and `b` are equal. */
 static int streq_n(const char *a, const char *b, int n)
 {
     int i;
@@ -151,12 +161,12 @@ static unsigned int listed_ino(const char *name)
  * A disk's ioctl and a disk node's inode, asked of /dev/null.
  *
  * `BLKRRPART` (0x125F) reaches every device, and a record that is not a disk
- * node read as one reads past the table it is in; the request must answer
+ * node read as one reads past the table it is in; the request answers
  * ENOTTY (25). That row cannot see the misreading itself: the misread node's
  * partition number is the major and minor of the entry two further on, never
- * zero, so the request is refused either way. The inode can. The listing
- * numbers a leaf by its place in the table, and fstat by what the
- * descriptor's record is.
+ * zero, so the request is refused either way. The inode row can see it:
+ * the listing numbers a leaf by its place in the table, and fstat numbers
+ * it by the descriptor's record.
  */
 static void null_is_not_a_disk(void)
 {
@@ -175,7 +185,16 @@ static void null_is_not_a_disk(void)
     syscall1(SYS_CLOSE, fd);
 }
 
-/** Check mode reentry and a descriptor retained across two display owners. */
+/**
+ * The ownership of the framebuffer, /fb. The owner leaves graphics mode and
+ * enters it again, and can still write. While it owns the display, a second
+ * open and a text-mode request on a forked child's inherited descriptor are
+ * -EBUSY, and the owner can still write. Once the owner releases the display
+ * by entering text mode, the child opens it, and the first owner's
+ * descriptor can then neither release nor take the display nor set its
+ * palette, a new open is -EBUSY, and the child can still write. The child
+ * reports its own failures by exiting 1.
+ */
 static void framebuffer(void)
 {
     int ready[2], next[2];
@@ -238,6 +257,7 @@ static void framebuffer(void)
     syscall1(SYS_CLOSE, next[1]);
 }
 
+/** The probe: the rows (a) to (f), then `framebuffer`. */
 PROBE_START void _start(void)
 {
     char buf[64];
@@ -248,7 +268,7 @@ PROBE_START void _start(void)
     fd = do_open("/dev/zero", O_RDONLY);
     check(fd >= 0, "open /dev/zero");
     for (i = 0; i < 64; i++) {
-        buf[i] = (char)0xAB; /* poison so we see real zeros, not stale */
+        buf[i] = (char)0xAB; /* not zero, so a read that stores nothing fails */
     }
     n = do_read(fd, buf, 64);
     check(n == 64, "/dev/zero read returns the full count");
@@ -261,7 +281,7 @@ PROBE_START void _start(void)
     check(allzero, "/dev/zero yields zero bytes");
     syscall1(SYS_CLOSE, fd);
 
-    /* (b) /dev/null: read is immediate EOF (0); write is accepted (sink). */
+    /* (b) /dev/null: a read is EOF (0); a write is accepted and discarded. */
     fd = do_open("/dev/null", O_RDONLY);
     check(fd >= 0, "open /dev/null");
     check(do_read(fd, buf, 64) == 0, "/dev/null read is EOF (0)");
@@ -295,7 +315,7 @@ PROBE_START void _start(void)
     check(differ, "/dev/urandom varies between reads");
     syscall1(SYS_CLOSE, fd);
 
-    /* (e) /proc/self/stat: field 1 is our pid, comm is our name. */
+    /* (e) /proc/self/stat: field 1 is the pid, and comm is "devprobe". */
     {
         int mypid = syscall1(SYS_GETPID, 0);
         fd = do_open("/proc/self/stat", O_RDONLY);

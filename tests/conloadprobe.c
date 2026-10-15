@@ -1,32 +1,36 @@
 /**
- * The console's receive path under load: every typed line arrives.
+ * conloadprobe: the console's receive path under load, where every typed
+ * line arrives.
  *
  * The harness types numbered lines, `L NNNN payload SUM`, where SUM is the
- * Adler-32 of the line before it in eight hex digits, while five children
- * spin and one writes and syncs a 256 KiB file on the mounted volume over and
- * over. The probe reads the lines in four stages and requires each one in
- * order with its sum: (A) 200 lines typed back to back while the reader is
- * parked in read, at least one of whose bytes the port's interrupt must
- * have moved, which `irq-bytes` counts: the port is drained into the
- * console's ring by its interrupt and by the tick alike, and the reader
- * takes from the ring, so how many bytes the interrupt moves is the
- * machine's, a fast reader leaving it few, and a share would fail one
- * machine; a tick-paced drain alone moves none; the stage's time is
- * printed and not judged, since it is the machine's; (B) 60 lines typed while
- * the probe spins for two seconds without reading, type-ahead into a
- * session nobody is reading; (C) 200 lines typed while a child in its own
- * group holds the
- * terminal and nobody reads, more than the discipline holds, then an
- * interrupt character behind them, which must still kill the child and
- * discards what came before it, then 60 lines read by the parent after it
- * takes the terminal back; (D) 40 lines typed before the probe execs
- * itself, read by the new image. Each stage is announced with
- * `CONLOAD X` and closed with `CONLOAD X OK`; the harness types after the
- * announcement. Each loaded stage also requires a completed writer file
- * by the end of its console work. The end prints the
- * `/proc/console` counters and
- * `CONLOAD OK lines=N`, or `CONLOAD FAIL: reason`. Freestanding; direct system
- * calls (probe.h).
+ * Adler-32 of the text before it in eight hex digits, while five children
+ * spin and one writes and syncs a 256 KiB file on the mounted volume over
+ * and over. The probe reads the lines in four stages and requires each one
+ * in order with its sum:
+ *
+ *   (A) 200 lines typed back to back while the reader waits in poll, at
+ *       least one of whose bytes the port's interrupt must have moved, which
+ *       `irq-bytes` counts. The port is drained into the console's ring by
+ *       its interrupt and by the tick alike, and the reader takes from the
+ *       ring, so how many bytes the interrupt moves depends on the machine,
+ *       a fast reader leaving it few, and a required share would fail on
+ *       some machine; a drain by the tick alone moves none. The stage's time
+ *       is printed and not judged.
+ *   (B) 60 lines typed while the probe spins for two seconds without
+ *       reading: type-ahead into a session nobody is reading.
+ *   (C) 200 lines typed while a child in its own group has the terminal and
+ *       nobody reads, more than the discipline holds, then an interrupt
+ *       character behind them, which must still kill the child and discards
+ *       what came before it; then 60 lines read by the parent after it takes
+ *       the terminal back.
+ *   (D) 40 lines typed before the probe executes itself, read by the new
+ *       image.
+ *
+ * Each stage is announced with `CONLOAD X` and closed with `CONLOAD X OK`;
+ * the harness types after the announcement. After each loaded stage the
+ * probe prints how many files the writer completed in it. The end prints
+ * the `/proc/console` counters and `CONLOAD OK lines=N`, or
+ * `CONLOAD FAIL: reason`.
  */
 
 #include "probe.h"
@@ -53,12 +57,14 @@ struct pollfd {
 #define LINES_D   40
 #define LINES_ALL (LINES_A + LINES_B + LINES_C + LINES_D)
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -68,17 +74,20 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` to standard output. */
 static void print(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     print(s);
     print("\n");
 }
 
+/** Write `v` in decimal to standard output. */
 static void print_num(unsigned v)
 {
     char tmp[12];
@@ -98,6 +107,8 @@ static int npids;
 static int progress[2]; /* the writer reports each file written, one byte */
 static int load_died;   /* a load process that ended on its own */
 
+/** Kill and reap the load processes, and set `load_died` for any that a
+ * signal other than SIGKILL, or its own exit, ended. */
 static void stop_load(void)
 {
     int i;
@@ -115,6 +126,7 @@ static void stop_load(void)
     npids = 0;
 }
 
+/** Stop the load, print "CONLOAD FAIL: " and `why`, and exit 1. */
 static void fail(const char *why)
 {
     stop_load();
@@ -123,6 +135,7 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
+/** Sleep for `ms` milliseconds. */
 static void sleep_ms(int ms)
 {
     long ts[2];
@@ -132,6 +145,7 @@ static void sleep_ms(int ms)
     syscall2(SYS_NANOSLEEP, (long)ts, 0);
 }
 
+/** The time of day in milliseconds, modulo 2^32. */
 static unsigned now_ms(void)
 {
     long tv[2];
@@ -141,7 +155,7 @@ static unsigned now_ms(void)
     return (unsigned)tv[0] * 1000u + (unsigned)tv[1] / 1000u;
 }
 
-/* Spin until `ms` have passed, reading nothing. */
+/** Spin until `ms` have passed, reading nothing. */
 static void spin_ms(unsigned ms)
 {
     unsigned start = now_ms();
@@ -152,7 +166,9 @@ static void spin_ms(unsigned ms)
 
 static unsigned char block[4096];
 
-/* A writer: the file written whole and synced, again and again. */
+/** The writer: write the file `path` whole, 64 blocks of 4 KiB, close it,
+ * sync, and report it with a byte on `progress`, again and again. It exits 2
+ * when the open fails and 3 when a write is short. */
 static void writer(const char *path)
 {
     unsigned i;
@@ -178,15 +194,15 @@ static void writer(const char *path)
 }
 
 /**
- * Count completed files since the preceding loaded stage.
+ * Print how many files the writer completed since the preceding loaded
+ * stage.
  *
- * The count is taken when the stage's console work ends and is printed for the
- * record, not judged. How many 256 KiB files a writer finishes inside a stage
- * is that stage's length and the machine's rate: the same stage measured 4720
- * ms alone and 930 ms in a set of twenty machines, and finished one file in
- * the first and none in the second. What the scheduler owes a woken writer is
- * a count, the dispatches it waits, and `tests/host/sched_hosttest.c` holds
- * that bound where no other machine's load can move it.
+ * The count is taken when the stage's console work ends and is printed, not
+ * judged. How many 256 KiB files a writer finishes inside a stage depends on
+ * the stage's length and the machine's speed, and a short stage can finish
+ * none. The scheduler's bound for a woken writer is the number of dispatches
+ * it waits, which `tests/host/sched_hosttest.c` checks where no other load
+ * can change it.
  */
 static void writer_progressed(const char *stage)
 {
@@ -208,6 +224,7 @@ static void writer_progressed(const char *stage)
     print("\n");
 }
 
+/** Start the load: five spinners and the writer, with the progress pipe. */
 static void start_load(void)
 {
     int i;
@@ -231,6 +248,7 @@ static void start_load(void)
     }
 }
 
+/** The Adler-32 checksum of the `n` bytes at `s`. */
 static unsigned adler32(const char *s, int n)
 {
     unsigned a = 1, b = 0;
@@ -243,6 +261,7 @@ static unsigned adler32(const char *s, int n)
     return (b << 16) | a;
 }
 
+/** The value of the hex digit `c`, or -1. */
 static int hexval(char c)
 {
     if (c >= '0' && c <= '9') {
@@ -261,15 +280,20 @@ static char line[512];
 static int line_len;
 static int bad_seq;
 static int bad_sum;
+/* The number of the first bad line, or -1 while none has been bad. */
 static int first_bad = -1;
 
 static void print_counters(void);
 
-/* One line from the console, without its newline; 0 at end of file. The
- * reader parks in poll, which is a waiter on the console the interrupt
- * must wake, with a deadline: a byte that does not arrive within five
- * seconds is reported with what arrived and the counters, since a blocked
- * read would say nothing. */
+/**
+ * Read one line from the console into `line`, without its newline: 1, or 0
+ * at end of file. A line longer than `line` is cut short.
+ *
+ * Before each byte the reader waits in poll, so that the port's interrupt
+ * has a waiter on the console to wake, for at most five seconds. When no
+ * byte arrives in that time it prints what arrived and the counters, stops
+ * the load and exits 1, since a read that blocked would print nothing.
+ */
 static int read_line(void)
 {
     line_len = 0;
@@ -303,7 +327,9 @@ static int read_line(void)
     }
 }
 
-/* Whether `line` is line `expected`, with its sum. */
+/** Non-zero when `line` is line `expected` with a right sum; a wrong number
+ * counts in `bad_seq`, a wrong sum in `bad_sum`, and a line of another form
+ * in neither. */
 static int check_line(int expected)
 {
     int seq = 0, i, sp = -1;
@@ -345,7 +371,8 @@ static int check_line(int expected)
     return 1;
 }
 
-/* Read `count` lines numbered from `first`; the number of good ones. */
+/** Read `count` lines numbered from `first`; the number of good ones. The
+ * first bad line's number goes to `first_bad`. */
 static int read_lines(int first, int count)
 {
     int good = 0, n;
@@ -363,6 +390,7 @@ static int read_lines(int first, int count)
     return good;
 }
 
+/** Print the counters of /proc/console, or that there are none. */
 static void print_counters(void)
 {
     static char text[2048];
@@ -382,7 +410,8 @@ static void print_counters(void)
     }
 }
 
-/* A counter of /proc/console, or 0xFFFFFFFF when absent. */
+/** The value of the /proc/console counter `key`, given with the space that
+ * ends its name, or 0xFFFFFFFF when the file or the counter is absent. */
 static unsigned counter(const char *key)
 {
     static char text[2048];
@@ -417,6 +446,8 @@ static unsigned counter(const char *key)
     return 0xFFFFFFFFu;
 }
 
+/** Return when `good` is `count`; otherwise print the stage's failure with
+ * the counts and the counters, stop the load and exit 1. */
 static void require(int good, int count, const char *stage)
 {
     if (good == count) {
@@ -444,6 +475,8 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/** The probe, entered with `sp` at argc: stage D's half after the exec when
+ * the first argument begins with 'D', and otherwise the stages in order. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
@@ -469,7 +502,7 @@ void probe_main(unsigned long *sp)
     }
     start_load();
 
-    /* A: the reader parked while the flood arrives. */
+    /* A: the reader waits in poll while the lines arrive. */
     irq_before = counter("irq-bytes ");
     puts("CONLOAD A");
     if (!read_line()) {
@@ -484,7 +517,7 @@ void probe_main(unsigned long *sp)
     require(good, LINES_A, "A");
     elapsed = now_ms() - start;
     print_counters();
-    /* Bytes, not services: a service that took nothing would count. */
+    /* irq-drains would also count a service that took no byte. */
     if (irq_before == 0xFFFFFFFFu || counter("irq-bytes ") == irq_before) {
         print_counters();
         fail("the port's interrupt served no bytes during stage A");

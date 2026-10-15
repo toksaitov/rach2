@@ -1,5 +1,5 @@
 /**
- * Exercises hierarchical directories from user space, on the root it is run on.
+ * dirprobe: directories, tested from user space on the root it is run on.
  *
  * One row depends on the file system: KRFFS does not store `.` and `..` and
  * does not synthesize them in a directory read, and ext2 has them on the disk
@@ -8,14 +8,13 @@
  *
  * Makes a directory, creates and writes a file inside it, and reads it back;
  * rejects a duplicate mkdir and a create in a missing directory; refuses rmdir
- * on a non-empty directory; then unlinks the file, rmdirs the now-empty
+ * on a non-empty directory; then unlinks the file, rmdirs the emptied
  * directory, and confirms the file is gone. Goes on to test getdents on a
  * subdirectory, on KRFFS the EINVAL of a directory whose identifier another
  * has, the *at API (openat, fstat64, fstatat64, _llseek, fcntl64),
- * O_APPEND and O_CREAT mode, and chdir/getcwd with relative-name resolution.
- * Prints "DIRPROBE OK" when every check passes, else "DIRPROBE FAIL".
- *
- * Freestanding; direct system calls (probe.h).
+ * O_APPEND, F_DUPFD and O_CREAT mode, and chdir/getcwd with relative-name
+ * resolution. Prints "DIRPROBE OK" and exits 0 when every check passes, and
+ * "DIRPROBE FAIL" with the count of failed checks as its status otherwise.
  */
 
 #include "probe.h"
@@ -53,22 +52,26 @@
 #define STAT64_MODE(b)    (*(unsigned int *)((b) + KSTAT_MODE))
 #define STAT64_SIZE_LO(b) (*(unsigned int *)((b) + KSTAT_SIZE_AT))
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The write call: the count written, or a negated errno. */
 static int sys_write(int fd, const void *buf, size_t n)
 {
     return syscall3(SYS_WRITE, fd, (long)buf, (int)n);
 }
 
+/** The read call: the count read, 0 at the end, or a negated errno. */
 static int sys_read(int fd, void *buf, size_t n)
 {
     return syscall3(SYS_READ, fd, (long)buf, (int)n);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -78,6 +81,7 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
@@ -86,19 +90,19 @@ static void puts(const char *s)
 
 static int fails = 0;
 
-/**
- * The root's file system type, read from `/proc/mounts`: 1 for KRFFS, 2 for
- * ext2.
- *
- * The two owe different answers for a directory's entries, so a probe that
- * could not read the type would judge whichever image it was written for.
- * Anything this cannot read, or a type it does not know, ends the probe.
- */
 #define DT_DIR 4
 
 #define ROOT_KRFFS 1
 #define ROOT_EXT2  2
 
+/**
+ * The root's file system type, read from `/proc/mounts`: ROOT_KRFFS,
+ * ROOT_EXT2, or 0 when the file cannot be read or the type is another.
+ *
+ * The two give different answers for a directory's entries, so a probe that
+ * did not read the type would judge only the image it was written for.
+ * The caller fails a root of type 0.
+ */
 static int root_type(void)
 {
     static char mounts[2048];
@@ -114,8 +118,7 @@ static int root_type(void)
         return 0;
     }
     mounts[n] = 0;
-    /* Each line is "device mountpoint type options 0 0"; the root's is the one
-       whose mount point is a bare slash, and the field after it is the type. */
+    /* A line is "device mountpoint type options 0 0"; the root's has " / ". */
     for (i = 0; i < n; i++) {
         if (mounts[i] == ' ' && mounts[i + 1] == '/' && mounts[i + 2] == ' ') {
             const char *t = &mounts[i + 3];
@@ -133,6 +136,7 @@ static int root_type(void)
     return 0;
 }
 
+/** Count a failure and print `msg` when `cond` is false. */
 static void check(int cond, const char *msg)
 {
     if (!cond) {
@@ -142,14 +146,22 @@ static void check(int cond, const char *msg)
     }
 }
 
+/**
+ * The probe: the numbered rows in order, each counted by `check`.
+ *
+ * Row 8b: a KRFFS directory's identifier is its parent's mixed with the
+ * hash of its name, which bC and cb share, so the second of the two in one
+ * directory is a name the format cannot hold, EINVAL, and not a full or a
+ * failing volume. Row 11: /g has "hello", and a write of '!' through an
+ * O_APPEND descriptor after a seek to 0 goes to the end, giving "hello!".
+ */
 PROBE_START void _start(void)
 {
     int fd;
     int root = root_type();
     char buf[8];
 
-    /* The root's type decides one row below, and a root this probe does not
-       know is not one it can judge. */
+    /* The root's type decides row 8, and an unknown type fails. */
     check(root == ROOT_KRFFS || root == ROOT_EXT2, "the root's type is krffs or ext2");
     if (root == ROOT_EXT2) {
         puts("dirprobe: the root is ext2");
@@ -161,7 +173,7 @@ PROBE_START void _start(void)
     check(syscall2(SYS_MKDIR, (long)"/d", 0755) == 0, "mkdir /d");
     check(syscall2(SYS_MKDIR, (long)"/d", 0755) < 0, "mkdir /d again fails");
 
-    /* 2. Create a file INSIDE the directory and write to it. */
+    /* 2. Create a file inside the directory and write to it. */
     fd = syscall2(SYS_CREAT, (long)"/d/f", 0644);
     check(fd >= 0, "creat /d/f");
     if (fd >= 0) {
@@ -184,14 +196,14 @@ PROBE_START void _start(void)
     /* 5. rmdir must refuse a non-empty directory. */
     check(syscall1(SYS_RMDIR, (long)"/d") < 0, "rmdir non-empty /d fails");
 
-    /* 6. Remove the file, then the now-empty directory. */
+    /* 6. Remove the file, then the emptied directory. */
     check(syscall1(SYS_UNLINK, (long)"/d/f") == 0, "unlink /d/f");
     check(syscall1(SYS_RMDIR, (long)"/d") == 0, "rmdir empty /d");
 
     /* 7. The file is gone. */
     check(syscall3(SYS_OPEN, (long)"/d/f", O_RDONLY, 0) < 0, "open removed /d/f fails");
 
-    /* 8. getdents on a subdirectory lists EXACTLY its own children. */
+    /* 8. getdents on a subdirectory lists its own children and no others. */
     check(syscall2(SYS_MKDIR, (long)"/e", 0755) == 0, "mkdir /e");
     fd = syscall2(SYS_CREAT, (long)"/e/a", 0644);
     if (fd >= 0) {
@@ -245,10 +257,7 @@ PROBE_START void _start(void)
     syscall1(SYS_UNLINK, (long)"/e/b");
     check(syscall1(SYS_RMDIR, (long)"/e") == 0, "rmdir emptied /e");
 
-    /* 8b. A KRFFS directory's identifier is its parent's mixed with the hash
-       of its name, which bC and cb share: the second of the two in one
-       directory is a name the format cannot hold, EINVAL, and not a full
-       or a failing volume. */
+    /* 8b. On KRFFS, bC and cb in one directory share an identifier. */
     if (root == ROOT_KRFFS) {
         check(syscall2(SYS_MKDIR, (long)"/ids", 0755) == 0 &&
                   syscall2(SYS_MKDIR, (long)"/ids/bC", 0755) == 0,
@@ -275,13 +284,11 @@ PROBE_START void _start(void)
         long long result = 0;
         char c = 0;
 
-        /* fstat64 the descriptor: a 5-byte regular file. */
         check(syscall2(SYS_FSTAT, fd, (long)st) == 0, "fstat64 /g");
         check((STAT64_MODE(st) & S_IFMT) == S_IFREG, "fstat64 /g is regular");
         check(STAT64_SIZE_LO(st) == 5, "fstat64 /g size is 5");
 
-        /* _llseek SEEK_SET to offset 1; the result offset must come back
-         * as 1. */
+        /* _llseek SEEK_SET to offset 1 gives the result offset 1. */
         check(probe_llseek(fd, 1, 0, &result) == 0, LLSEEK_NAME " /g");
         check(result == 1, LLSEEK_NAME " result offset is 1");
         check(sys_read(fd, &c, 1) == 1 && c == 'e', "read byte after seek is 'e'");
@@ -293,10 +300,10 @@ PROBE_START void _start(void)
         syscall1(SYS_CLOSE, fd);
     }
 
-    /* 10. fstatat64 by path: the file is regular, a directory reports
-     *     S_IFDIR. */
+    /* 10. fstatat64 by path: the file is regular, a directory is S_IFDIR. */
     {
-        unsigned char st[STAT64_SIZE] = {0}; /* fstatat64 overwrites; init quiets cppcheck */
+        /* fstatat64 overwrites st; the initializer quiets cppcheck. */
+        unsigned char st[STAT64_SIZE] = {0};
 
         check(syscall5(SYS_FSTATAT, AT_FDCWD, (long)"/g", (long)st, 0, 0) == 0, "fstatat64 /g");
         check((STAT64_MODE(st) & S_IFMT) == S_IFREG && STAT64_SIZE_LO(st) == 5,
@@ -308,8 +315,7 @@ PROBE_START void _start(void)
         check(syscall1(SYS_RMDIR, (long)"/h") == 0, "rmdir /h");
     }
 
-    /* 11. O_APPEND forces writes to EOF; F_DUPFD honors its minimum fd; O_CREAT
-     *     stamps the requested mode. */
+    /* 11. O_APPEND, the minimum of F_DUPFD, and the mode O_CREAT stamps. */
     {
         /* fstat64 overwrites st; the initializer just quiets cppcheck. */
         unsigned char st[STAT64_SIZE] = {0};
@@ -317,8 +323,7 @@ PROBE_START void _start(void)
         char rb[8];
         int dupfd, r;
 
-        /* /g holds "hello". Open O_APPEND, seek to 0, write '!': the append
-         * contract must ignore the seek and place it at EOF -> "hello!". */
+        /* With O_APPEND a write after a seek to 0 still goes to the end. */
         fd = syscall3(SYS_OPENAT, AT_FDCWD, (long)"/g", O_WRONLY | O_APPEND);
         check(fd >= 0, "openat /g O_APPEND");
         if (fd >= 0) {
@@ -331,7 +336,7 @@ PROBE_START void _start(void)
             r = sys_read(fd, rb, sizeof rb);
             check(r == 6 && rb[5] == '!', "O_APPEND wrote at EOF (hello!)");
 
-            /* F_DUPFD must return the lowest free fd >= 10, not just any fd. */
+            /* F_DUPFD returns a descriptor of at least 10. */
             dupfd = syscall3(SYS_FCNTL, fd, F_DUPFD, 10);
             check(dupfd >= 10, "F_DUPFD honors minimum fd");
             if (dupfd >= 0) {
@@ -340,8 +345,7 @@ PROBE_START void _start(void)
             syscall1(SYS_CLOSE, fd);
         }
 
-        /* O_CREAT must apply the requested mode (openat's mode is the 4th arg,
-         * passed in ESI, so use the 5-arg form). */
+        /* openat's mode is its fourth argument, which syscall3 omits. */
         fd = syscall5(SYS_OPENAT, AT_FDCWD, (long)"/m", O_WRONLY | O_CREAT, 0644, 0);
         check(fd >= 0, "openat /m O_CREAT");
         if (fd >= 0) {
@@ -354,8 +358,7 @@ PROBE_START void _start(void)
 
     check(syscall1(SYS_UNLINK, (long)"/g") == 0, "unlink /g");
 
-    /* 12. chdir into a subdir, getcwd, relative-name resolution, and a
-     *     dirfd-relative openat. */
+    /* 12. chdir, getcwd, relative names, and an openat from a dirfd. */
     {
         char cwd[64];
         char rb[8];
@@ -369,7 +372,7 @@ PROBE_START void _start(void)
                   cwd[4] == 'k' && cwd[5] == '\0',
               "getcwd is /work");
 
-        /* Create + write a file by a RELATIVE name; it must land in /work. */
+        /* A file made by a relative name is in /work. */
         fd = syscall2(SYS_CREAT, (long)"rel.txt", 0644);
         check(fd >= 0, "creat relative rel.txt");
         if (fd >= 0) {
@@ -385,8 +388,7 @@ PROBE_START void _start(void)
             syscall1(SYS_CLOSE, fd);
         }
 
-        /* dirfd-relative openat: open /work as a dir fd, then resolve "rel.txt"
-         * against it. */
+        /* openat of "rel.txt" relative to a descriptor of /work. */
         dfd = syscall3(SYS_OPENAT, AT_FDCWD, (long)"/work", O_RDONLY);
         check(dfd >= 0, "open /work as a dir fd");
         if (dfd >= 0) {
@@ -400,8 +402,7 @@ PROBE_START void _start(void)
             syscall1(SYS_CLOSE, dfd);
         }
 
-        /* A path that descends through a regular file is ENOTDIR, not
-         * ENOENT. */
+        /* A path through a regular file is ENOTDIR, not ENOENT. */
         check(syscall1(SYS_CHDIR, (long)"rel.txt/x") == -ENOTDIR,
               "chdir through a file is ENOTDIR");
 

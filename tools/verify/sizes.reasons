@@ -281,7 +281,7 @@ tests/bootprobe.c:_start complexity 42 a probe, one sequence of steps in the ord
 tests/bootprobe.c:_start lines 334 a probe, one sequence of steps in the order the log records them
 tests/bootprobe.c:auth_case lines 161 a probe, one sequence of steps in the order the log records them
 
-tests/conloadprobe.c:probe_main lines 109 a probe, one sequence of steps in the order the log records them
+tests/conloadprobe.c:probe_main lines 105 a probe, one sequence of steps in the order the log records them
 
 tests/credprobe.c:child_main complexity 46 a probe, one sequence of steps in the order the log records them
 tests/credprobe.c:child_main lines 105 a probe, one sequence of steps in the order the log records them
@@ -290,13 +290,13 @@ tests/dgramprobe.c:_start complexity 79 a probe, one sequence of steps in the or
 tests/dgramprobe.c:_start lines 505 a probe, one sequence of steps in the order the log records them
 
 tests/dirprobe.c:_start complexity 61 a probe, one sequence of steps in the order the log records them
-tests/dirprobe.c:_start lines 288 a probe, one sequence of steps in the order the log records them
+tests/dirprobe.c:_start lines 272 a probe, one sequence of steps in the order the log records them
 
 tests/dirtest.c:_start lines 108 a probe, one sequence of steps in the order the log records them
 
 tests/dnstest.c:main complexity 30 a probe, one sequence of steps in the order the log records them
 
-tests/dup2test.c:_start lines 179 a probe, one sequence of steps in the order the log records them
+tests/dup2test.c:_start lines 173 a probe, one sequence of steps in the order the log records them
 
 tests/ext2probe.c:links_rows complexity 48 a probe, one sequence of steps in the order the log records them
 tests/ext2probe.c:links_rows lines 134 a probe, one sequence of steps in the order the log records them
