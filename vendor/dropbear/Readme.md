@@ -34,7 +34,7 @@ The source is the release tarball from [the Dropbear site](https://matt.ucc.asn.
 
 The source is not patched: [`patches/series`](patches/series) lists no patch. The changes are the build options.
 
-[`localoptions.h`](localoptions.h), copied into the tree before the build, turns on Curve25519, ECDH, ChaCha20-Poly1305, AES-128 and AES-256 in CTR mode, Ed25519, and the server's public-key and password authentication, and turns off the message of the day. Its `DROPBEAR_HMAC_SHA256` is a name Dropbear does not read; HMAC-SHA256 is on through the upstream default `DROPBEAR_SHA2_256_HMAC`. Every option the header does not name keeps its upstream default, RSA and ECDSA among them.
+[`localoptions.h`](localoptions.h), copied into the tree before the build, turns on Curve25519, ECDH, ChaCha20-Poly1305, AES-128 and AES-256 in CTR mode, HMAC-SHA256, Ed25519, and the server's public-key and password authentication, and turns off the message of the day. Every option the header does not name keeps its upstream default, RSA and ECDSA among them.
 
 The configure options use the bundled libtomcrypt and libtommath and turn off zlib, syslog, hardening, utmp, utmpx, wtmp, wtmpx, lastlog, the login functions, `pututline` and `pututxline`. `--disable-harden` keeps configure from adding position-independent flags, since the Rach2 ELF loader does not relocate a PIE. With syslog compiled out the server writes its diagnostics to standard error, and `-E` is not an option of this build.
 
