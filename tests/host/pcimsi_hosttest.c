@@ -3,15 +3,15 @@
  *
  * host-deps: rach2/sys/pci.c rach2/sys/arch/x86/pciconf.c
  *
- * The order of the writes is the whole of this: a device told to send
- * messages while its address is half written sends them somewhere, and a
- * device left with MSI-X enabled beside MSI is undefined by the
- * specification. No machine can be made to show either, so the model
- * records every write in order and the rows read that record.
+ * The rows check the order of the writes: a device told to send messages
+ * while its address is half written sends them to a wrong address, and the
+ * PCI specification leaves a device with MSI-X enabled beside MSI undefined.
+ * No machine can be made to show either, so the model records every write
+ * in order and the rows read that record.
  *
- * Configuration space is reached through the two ports, which is where the
- * model sits: the driver's own `pci_read_config32` and its neighbours are
- * the code under test, not a stub.
+ * The model stands behind the configuration ports 0xCF8 and 0xCFC, so the
+ * accessors of arch/x86/pciconf.c, `pci_read_config32` and the rest, run as
+ * they do in the kernel and are part of the code under test.
  */
 
 #include "../../rach2/sys/pci.h"
@@ -26,20 +26,28 @@ extern int printf(const char *fmt, ...);
 
 #define CONFIG_BYTES 256
 
+/* The configuration space of the one device, and the last value written to
+ * the address port 0xCF8. */
 static unsigned char space[CONFIG_BYTES];
 static unsigned int address_port;
+/* The write record, in order: each write's dword offset and its value, the
+ * value of a halfword write shifted to its place in the dword. Writes past
+ * the 64th are not recorded. */
 static unsigned int writes[64];
 static unsigned int written[64];
 static int nwrites;
 
-/* The MSI-X table of the row that has one, whose entry 0's address each
-   configuration write records beside itself: a store to the table is a
-   store to memory the model cannot see, but where it falls among the
-   configuration writes it can. */
+/* The MSI-X table of the row that has one, or 0. Each configuration write
+ * records entry 0's address beside itself in `table_at`: the model cannot
+ * see a store to the table, but it can see where the store falls among the
+ * configuration writes. */
 static volatile unsigned int *msix_table;
 static unsigned int table_at[64];
 
-/* One device: a capability list whose contents each row lays out. */
+/**
+ * Reset the model to one device, vendor 0x8086, with the capability-list bit
+ * set and an empty list, and clear the write record.
+ */
 static void model_reset(void)
 {
     int i;
@@ -54,8 +62,10 @@ static void model_reset(void)
     nwrites = 0;
 }
 
-/* A capability of `id` at `offset`, linked after `prev` (0x34 for the
-   first), with `len` bytes of room. */
+/**
+ * Put a capability of `id` at `offset` at the end of the list, linked from
+ * the capability at `prev`, or from the pointer at 0x34 when `prev` is 0x34.
+ */
 static void model_cap(unsigned char offset, unsigned char id, unsigned char prev)
 {
     space[prev == 0x34 ? 0x34 : (unsigned char)(prev + 1)] = offset;
@@ -63,6 +73,13 @@ static void model_cap(unsigned char offset, unsigned char id, unsigned char prev
     space[offset + 1] = 0;
 }
 
+/**
+ * Take a dword write to the address port 0xCF8 or the data port 0xCFC, and
+ * record a data write. The dword at 4 is the command word and the status
+ * word, whose bits are cleared by writing them as one; the model applies
+ * that rule, so a driver that reads the dword and writes it back clears the
+ * latched bits, which the halfword row checks.
+ */
 void outd(unsigned short port, unsigned int value)
 {
     if (port == 0xCF8) {
@@ -74,11 +91,6 @@ void outd(unsigned short port, unsigned int value)
         int i;
 
         if (off == 0x04) {
-            /* The dword at 4 is the command word and the status word, and the
-               status word's faults are cleared by writing them as one. A
-               device model that stored the whole dword would let a driver
-               that reads and writes it back keep every latched bit, which is
-               the defect the row below is for. */
             unsigned int status = (unsigned int)space[0x06] | ((unsigned int)space[0x07] << 8);
 
             status &= ~((value >> 16) & 0xF900u);
@@ -106,6 +118,7 @@ void outd(unsigned short port, unsigned int value)
     }
 }
 
+/** Read the dword the address port selects from the data port 0xCFC. */
 unsigned int ind(unsigned short port)
 {
     unsigned int off = address_port & 0xFC;
@@ -117,22 +130,26 @@ unsigned int ind(unsigned short port)
            ((unsigned int)space[off + 2] << 16) | ((unsigned int)space[off + 3] << 24);
 }
 
+/** Ignore a byte write: no row writes a byte of configuration space. */
 void outb(unsigned short port, unsigned char value)
 {
     (void)port;
     (void)value;
 }
 
+/** Return 0xFF, as an absent port reads. */
 unsigned char inb(unsigned short port)
 {
     (void)port;
     return 0xFF;
 }
 
-/* A halfword access goes to the data port the register's own offset selects,
-   0xCFC or 0xCFE, and touches those two bytes and no others. The model
-   records it in the same order record as a dword write, under the dword
-   offset, so a row can ask which came first. */
+/**
+ * Take a halfword write at the data port the register's own offset selects,
+ * 0xCFC or 0xCFE, which changes those two bytes and no others. The write is
+ * recorded under its dword offset in the same record as a dword write, so a
+ * row can ask which came first.
+ */
 void outw(unsigned short port, unsigned short value)
 {
     unsigned int off;
@@ -151,6 +168,7 @@ void outw(unsigned short port, unsigned short value)
     }
 }
 
+/** Read the halfword at 0xCFC or 0xCFE, as `outw` writes it. */
 unsigned short inw(unsigned short port)
 {
     unsigned int off;
@@ -162,18 +180,21 @@ unsigned short inw(unsigned short port)
     return (unsigned short)((unsigned int)space[off] | ((unsigned int)space[off + 1] << 8));
 }
 
-/* The kernel takes each access with interrupts off, which on a host with no
-   interrupts is a pair of counters: a row can then require that every write
-   this driver makes was taken inside one. */
+/* The kernel takes each port access with interrupts off. On the host that is
+ * a pair of counters, the depth of `kirq_save` calls not yet restored and the
+ * restores that had no save, so the last row can require that every access
+ * was balanced. */
 static int irq_depth;
 static int irq_unbalanced;
 
+/** Count one level of interrupts off. */
 unsigned int kirq_save(void)
 {
     irq_depth++;
     return 0;
 }
 
+/** Undo one level of interrupts off, or count a restore with no save. */
 void kirq_restore(unsigned int flags)
 {
     (void)flags;
@@ -184,6 +205,7 @@ void kirq_restore(unsigned int flags)
     }
 }
 
+/** Discard the message: no row checks the log. */
 void klog(int level, const char *subsystem, const char *fmt, ...)
 {
     (void)level;
@@ -191,8 +213,10 @@ void klog(int level, const char *subsystem, const char *fmt, ...)
     (void)fmt;
 }
 
+/* The local APIC identity of the boot processor, set by each row. */
 static unsigned int the_apic_id;
 
+/** Return the identity a row set in `the_apic_id`. */
 unsigned int lapic_id(void)
 {
     return the_apic_id;
@@ -202,6 +226,7 @@ unsigned int lapic_id(void)
 
 static int fails;
 
+/** Count and print a failed row when `ok` is 0. */
 static void check(int ok, const char *what)
 {
     if (!ok) {
@@ -210,19 +235,23 @@ static void check(int ok, const char *what)
     }
 }
 
+/** Return the halfword at `off` in the model's configuration space. */
 static unsigned short cfg16(unsigned char off)
 {
     return (unsigned short)(space[off] | (space[off + 1] << 8));
 }
 
+/** Return the dword at `off` in the model's configuration space. */
 static unsigned int cfg32(unsigned char off)
 {
     return (unsigned int)space[off] | ((unsigned int)space[off + 1] << 8) |
            ((unsigned int)space[off + 2] << 16) | ((unsigned int)space[off + 3] << 24);
 }
 
-/* The index in the write record of the first write that touched `off`, or
-   -1: the dword offset is what the model records. */
+/**
+ * Return the index in the write record of the first write to the dword that
+ * holds `off`, or -1 when there is none.
+ */
 static int first_write_of(unsigned char off)
 {
     int i;
@@ -235,8 +264,10 @@ static int first_write_of(unsigned char off)
     return -1;
 }
 
-/* The first write to the dword at `off` whose value has `bits` set in the
-   halfword at `off`, or -1. */
+/**
+ * Return the index of the first write to the dword that holds `off` whose
+ * value has `bits` set in the halfword at `off`, or -1 when there is none.
+ */
 static int first_write_with(unsigned char off, unsigned int bits)
 {
     unsigned int shift = 8u * (off & 2u);
@@ -250,13 +281,13 @@ static int first_write_with(unsigned char off, unsigned int bits)
     return -1;
 }
 
-/*
- * MSI-X, whose table is in the device's memory and not in its configuration
- * space: the model's table is an array the rows read after the call. The
- * device comes in with MSI enabled by firmware and entry 0 masked, as a
- * device out of reset has it, with a stale address in it. These are the
- * last rows, so they end with the check that every access of the run left
- * the interrupt flag as it found it.
+/**
+ * Run the MSI-X rows on `dev`. The table is in the device's memory, not in
+ * its configuration space, so the model's table is an array the rows read
+ * after the call. The device comes in with MSI enabled by firmware and entry
+ * 0 masked, as a device out of reset has it, with a stale address in it.
+ * These are the last rows, so they end with the check that every access of
+ * the run left the interrupt flag as it found it.
  */
 static void msix_rows(const pci_device_t *dev)
 {
@@ -341,6 +372,22 @@ static void msix_rows(const pci_device_t *dev)
           "every access left the interrupt flag as it found it");
 }
 
+/**
+ * Run the rows and print the result; return 1 when a row failed.
+ *
+ * The 32-bit capability comes in as firmware might leave it, enabled with
+ * four of its eight vectors in use, and the first write must take both down,
+ * since a device left enabled would send from the address it had. The rows
+ * find the first write that sets the enable bit, since a later one would
+ * hide an enable that came before the address. The 64-bit capability comes
+ * in with a stale upper half, since a device programmed for a 64-bit
+ * destination and given a 32-bit one would send to neither. A device left
+ * with its own vector masked would be programmed, enabled and silent. A
+ * capability near the end of configuration space would wrap its writes onto
+ * the identity registers at zero, since an offset is one byte. A halfword
+ * write must leave the status word beside the command word alone: its bits
+ * are cleared by writing them as one.
+ */
 int main(void)
 {
     pci_device_t dev;
@@ -351,11 +398,7 @@ int main(void)
     dev.function = 0;
     the_apic_id = 0;
 
-    /* A 32-bit capability, which QEMU's HDA is not and the specification
-       still allows: the address at 4 and the data at 8. The device comes in
-       as firmware might leave it, with its enable bit set and four of its
-       eight vectors in use, and both must be down before anything else is
-       written. */
+    /* A 32-bit capability: the address at 4 and the data at 8. */
     model_reset();
     model_cap(0x50, PCI_CAP_ID_MSI, 0x34);
     space[0x52] = 0x07; /* eight vectors offered, 32-bit */
@@ -373,9 +416,6 @@ int main(void)
     {
         int enable_down = -1, i;
 
-        /* The enable bit and the count of vectors go down in the same first
-           write, before the address: a device left enabled by firmware would
-           otherwise send from the address it already had. */
         for (i = 0; i < nwrites; i++) {
             if (writes[i] == 0x50 && (written[i] & (PCI_MSI_ENABLE << 16)) == 0 &&
                 enable_down < 0) {
@@ -387,8 +427,6 @@ int main(void)
     {
         int enable_at = -1, address_at = first_write_of(0x54), data_at = first_write_of(0x58), i;
 
-        /* The first write that sets the enable bit: a later one would hide
-           an enable that came before the address. */
         for (i = 0; i < nwrites; i++) {
             if (writes[i] == 0x50 && (written[i] & (PCI_MSI_ENABLE << 16)) != 0 && enable_at < 0) {
                 enable_at = i;
@@ -401,10 +439,7 @@ int main(void)
               "and the enable bit is cleared before either");
     }
 
-    /* A 64-bit capability, which is what both controllers this kernel drives
-       have: the upper half zero and the data at 12. The upper half comes in
-       with a stale address in it, because a device left programmed for a
-       64-bit destination and given a 32-bit one would send to neither. */
+    /* A 64-bit capability: the address's upper half at 8, the data at 12. */
     model_reset();
     model_cap(0x60, PCI_CAP_ID_MSI, 0x34);
     space[0x62] = 0x80; /* one vector, 64-bit address */
@@ -430,8 +465,7 @@ int main(void)
               "both halves of the address and the data are written before the enable bit");
     }
 
-    /* A device that can mask its own vectors, left with this one masked. It
-       would be programmed, enabled and silent. */
+    /* A device that can mask its own vectors, left with this one masked. */
     model_reset();
     model_cap(0x60, PCI_CAP_ID_MSI, 0x34);
     space[0x62] = 0x80;                               /* 64-bit */
@@ -452,9 +486,7 @@ int main(void)
               "and the mask taken off before the enable bit is set");
     }
 
-    /* A capability so near the end of configuration space that its own
-       registers would run past it. An offset is one byte, so the writes
-       would wrap onto the identity registers at zero. */
+    /* A capability whose registers would run past configuration space. */
     model_reset();
     model_cap(0xF8, PCI_CAP_ID_MSI, 0x34);
     space[0xFA] = 0x80; /* 64-bit, so its data would be at 0x104 */
@@ -507,10 +539,7 @@ int main(void)
     pci_msi_disable(&dev);
     check(nwrites == 0, "disabling a device with no MSI writes nothing");
 
-    /* A halfword written into the dword that holds the command word must not
-       take the status word beside it with it: the status word's bits are
-       cleared by writing them as one, and a read of the dword and a write of
-       it back would clear every fault the bus had latched. */
+    /* A halfword write to the command word, beside a latched status bit. */
     model_reset();
     space[0x04] = 0x03; /* the command word: I/O and memory decoding */
     space[0x05] = 0x00;
