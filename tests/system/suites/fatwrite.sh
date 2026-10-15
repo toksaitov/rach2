@@ -150,7 +150,12 @@ cmp -s "$DISK.bb" "$DISK.bb.want" || fail "the program BusyBox copied differs th
 echo "fatwrite-test: the program BusyBox copied reads identically through mtools: OK"
 
 # ---- 6: two writers and a sync at once, under the lag ----
-if run --append "rach2.blocklag=3 rach2.rescue" --timeout 180 --steptmo 120 \
+# The lag's deadline counts the flush after each write, so the disk keeps the
+# guest's flushes from the host (cache=unsafe), as tests/system/Readme.md says.
+if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --drive "file=$DISK,format=raw,if=ide,index=0,media=disk,cache=unsafe" \
+    --append "rach2.blocklag=3 rach2.rescue" --timeout 180 --steptmo 120 \
     --ok "LAGPROBE OK" --never "LAGPROBE FAIL" --log "$DISK.writers.log" \
     "expect=Type 'help'" "send=exec /lagprobe writers" "expect=LAGPROBE" > /dev/null 2>&1; then
     echo "fatwrite-test: two writers and a sync interleave under the lag and each file is whole: OK"

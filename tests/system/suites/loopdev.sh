@@ -135,8 +135,12 @@ fi
 # The same sequence over a disk that sleeps its caller: the device under the
 # loop device takes a slot of the request pool for every transfer, and the
 # loop device must take none, or the pool of sixteen would run out with every
-# holder waiting for another.
-if run --append "rach2.rescue rach2.blocklag=1" --timeout 180 --steptmo 150 \
+# holder waiting for another. The lag's deadline counts the flush after each
+# write, so the disk keeps the guest's flushes from the host (cache=unsafe),
+# as tests/system/Readme.md says.
+if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
+    --drive "file=$DISK,format=raw,if=ide,index=0,media=disk,cache=unsafe" \
+    --append "rach2.rescue rach2.blocklag=1" --timeout 180 --steptmo 150 \
     --ok "LOOPPROBE OK (vfat)" --never "LOOPPROBE FAIL" --log "$DISK.lag.log" \
     "expect=Type 'help'" "send=exec /loopdevprobe vfat" "expect=LOOPPROBE" \
     > /dev/null 2>&1; then

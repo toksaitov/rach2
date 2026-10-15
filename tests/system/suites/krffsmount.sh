@@ -269,7 +269,11 @@ refuse "a region the ring does not fill" "krffs: mount: refused: the node chain 
 # what that refusal tests; this row wants the volume's own length again.
 SECTORS=$(($(wc -c < "$VOL") / 512))
 build_disk "$VOL"
-if run --append "rach2.rescue rach2.blocklag=1 rach2.blockfail=24" \
+# The lag's deadline counts the flush after each write, so the disk keeps the
+# guest's flushes from the host (cache=unsafe), as tests/system/Readme.md says.
+if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
+    --drive "file=$DISK,format=raw,if=ide,index=0,media=disk,cache=unsafe" \
+    --append "rach2.rescue rach2.blocklag=1 rach2.blockfail=24" \
     --timeout 120 --steptmo 90 \
     --ok "KRFFSPROBE OK (failed)" --never "KRFFSPROBE FAIL" \
     --log "$DISK.failed.log" "expect=Type 'help'" \

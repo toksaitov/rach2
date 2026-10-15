@@ -54,9 +54,21 @@ run() {
         --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" "$@"
 }
 
+# lag_run FILE ARG...: boot the test image on the disk image FILE for a row
+# under the lag. The lag's deadline counts the flush after each write, which
+# QEMU makes an fdatasync of the image, so the disk keeps the guest's flushes
+# from the host (cache=unsafe), as tests/system/Readme.md says.
+lag_run() {
+    file=$1
+    shift
+    "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
+        --qemu-arg=-cpu --qemu-arg=max \
+        --drive "file=$file,format=raw,if=ide,index=0,media=disk,cache=unsafe" "$@"
+}
+
 # ---- 1: the partition nodes appear with the sizes the MBR gives, and a read
 #         through one, on the lag, sleeps the reader while its sibling runs ----
-if run --append "rach2.blocklag=10 rach2.rescue" \
+if lag_run "$DISK" --append "rach2.blocklag=10 rach2.rescue" \
     --timeout 90 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" --log "$DISK.sleep.log" \
     "expect=Type 'help'" "send=exec /lagprobe sleep" \
     "expect=LAGPROBE OK" > /dev/null 2>&1; then
@@ -68,7 +80,7 @@ fi
 # ---- 2: a device that never answers in time: the deadline gives EIO, the
 #         late completion frees the quarantined slot, and the pool serves the
 #         next request ----
-if run --append "rach2.blocklag=700 rach2.rescue" \
+if lag_run "$DISK" --append "rach2.blocklag=700 rach2.rescue" \
     --timeout 120 --steptmo 60 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
     --log "$DISK.deadline.log" \
     "expect=Type 'help'" "send=exec /lagprobe deadline" \
@@ -81,7 +93,7 @@ fi
 
 # ---- 3: the root mounts through the real device while the partitions are on
 #         the lag, and /proc/mounts names the partition as the root ----
-if run --append "rach2.blocklag=3 rach2.fsdisk rach2.rescue" \
+if lag_run "$DISK" --append "rach2.blocklag=3 rach2.fsdisk rach2.rescue" \
     --timeout 90 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" --log "$DISK.root.log" \
     "expect=Type 'help'" "send=exec /lagprobe root" \
     "expect=LAGPROBE" > /dev/null 2>&1; then
@@ -98,10 +110,7 @@ BOOTDISK="${DISK%.disk}-boot.disk"
 sh "$REPO/krffs/mkdisk.sh" "$REPO/krffs/manifests/disk-test.manifest" "$BOOTDISK" 64 48 >/dev/null 2>&1 \
     || fail "mkdisk (boot fixture)"
 "$REPO/build/tests/system/mkfixture" boot "$BOOTDISK" >/dev/null || fail "mkfixture boot"
-if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
-    --qemu-arg=-cpu --qemu-arg=max \
-    --drive "file=$BOOTDISK,format=raw,if=ide,index=0,media=disk" \
-    --append "rach2.blocklag=10 rach2.rescue" \
+if lag_run "$BOOTDISK" --append "rach2.blocklag=10 rach2.rescue" \
     --timeout 90 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
     "expect=Type 'help'" "send=exec /lagprobe write" \
     "expect=LAGPROBE OK" > /dev/null 2>&1; then
@@ -131,7 +140,7 @@ fi
 
 # ---- 6: the mounted half of the lag probe; diskdiag publishes /dev/disk0 on
 #         the real disk while the partitions are on the lag ----
-if run --append "rach2.blocklag=3 rach2.diskdiag rach2.rescue" \
+if lag_run "$DISK" --append "rach2.blocklag=3 rach2.diskdiag rach2.rescue" \
     --timeout 120 --steptmo 60 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
     --log "$DISK.mounted.log" \
     "expect=Type 'help'" "send=exec /lagprobe mounted" \
@@ -211,7 +220,7 @@ echo "mount-test: every file's bytes are what mcopy reads: OK"
 
 # ---- 9: a write to the volume that the device fails: the mount goes
 #         read-only with a record, and stays so ----
-if run --append "rach2.blocklag=3 rach2.blockfail=3 rach2.rescue" \
+if lag_run "$DISK" --append "rach2.blocklag=3 rach2.blockfail=3 rach2.rescue" \
     --timeout 90 --steptmo 60 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
     --log "$DISK.blockfail.log" \
     "expect=Type 'help'" "send=exec /lagprobe blockfail" \
@@ -225,7 +234,7 @@ fi
 #          readers and a writer, and whoever finds the share taken waits
 #          instead of failing; every read succeeds, the sync's flush goes
 #          through the pool while they run, and the mount stays writable ----
-if run --append "rach2.blocklag=10 rach2.blockpool=2 rach2.rescue" \
+if lag_run "$DISK" --append "rach2.blocklag=10 rach2.blockpool=2 rach2.rescue" \
     --timeout 120 --steptmo 60 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
     --log "$DISK.pool.log" \
     "expect=Type 'help'" "send=exec /lagprobe pool" \
@@ -242,7 +251,7 @@ fi
 #          behind it is released with EIO the same tick with no deadline of its
 #          own, and the second partition, the lag device on the same pool,
 #          still writes ----
-if run --append "rach2.blocklag=10 rach2.blockdead=1 rach2.blockpool=2 rach2.rescue" \
+if lag_run "$DISK" --append "rach2.blocklag=10 rach2.blockdead=1 rach2.blockpool=2 rach2.rescue" \
     --timeout 120 --steptmo 60 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
     --log "$DISK.dead.log" \
     "expect=Type 'help'" "send=exec /lagprobe dead" \
@@ -257,7 +266,7 @@ fi
 # ---- 12: sixteen requests queued for the one the disk may hold, the last
 #          eight seconds behind: none is quarantined, since a deadline starts
 #          when a request is taken and not when its caller began to wait ----
-if run --append "rach2.blocklag=50 rach2.blockpool=2 rach2.rescue" \
+if lag_run "$DISK" --append "rach2.blocklag=50 rach2.blockpool=2 rach2.rescue" \
     --timeout 120 --steptmo 60 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
     --log "$DISK.queue.log" \
     "expect=Type 'help'" "send=exec /lagprobe queue" \
@@ -274,7 +283,7 @@ fi
 # The boot takes 65 s of the guest's clock, and in a pool the emulator runs
 # at a third of its rate, so the deadline is set from that and not from the
 # boot alone.
-if run --append "rach2.blocklag=1 rach2.rescue" \
+if lag_run "$DISK" --append "rach2.blocklag=1 rach2.rescue" \
     --timeout 400 --steptmo 200 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
     --log "$DISK.dirty.log" \
     "expect=Type 'help'" "send=exec /lagprobe dirty" \
@@ -312,10 +321,7 @@ fi
 #          the flag set. A copy of the disk, so no later boot meets a dirty
 #          volume ----
 cp "$DISK" "$DISK.late" || fail "copy the disk"
-if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
-    --qemu-arg=-cpu --qemu-arg=max \
-    --drive "file=$DISK.late,format=raw,if=ide,index=0,media=disk" \
-    --append "rach2.blocklag=3 rach2.blockfail=12 rach2.rescue" \
+if lag_run "$DISK.late" --append "rach2.blocklag=3 rach2.blockfail=12 rach2.rescue" \
     --timeout 90 --steptmo 60 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
     --log "$DISK.latefail.log" \
     "expect=Type 'help'" "send=exec /lagprobe latefail" \

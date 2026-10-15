@@ -507,7 +507,9 @@ $(FD_HOSTTEST): $(FD_HOSTTEST_SOURCES) rach2/sys/proc/process.c
 -include $(FD_HOSTTEST).d
 
 # `tests/run fdlock`: pending KRFFS relocation, orphan truncation, and
-# concurrent raw offsets.
+# concurrent raw offsets. The raw boot is under the lag, so its disk keeps
+# the guest's flushes from the host (cache=unsafe), as tests/system/Readme.md
+# says.
 run-fdlock: rach2 tests krffs $(FD_HOSTTEST) $(MKFIXTURE) $(HARNESS)
 	$(FD_HOSTTEST)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(FDLOCK_IMAGE) 64 48
@@ -519,7 +521,7 @@ run-fdlock: rach2 tests krffs $(FD_HOSTTEST) $(MKFIXTURE) $(HARNESS)
 	$(MKFIXTURE) boot $(FDLOCK_IMAGE)
 	$(HARNESS) --kernel $(BOOT_KERNEL) --net hubport,id=net0,hubid=0 \
 	    --append "rach2.fsdisk rach2.rescue rach2.diskdiag rach2.blocklag=10 rach2.bootprobe=shared" \
-	    --drive "file=$(FDLOCK_IMAGE),format=raw,if=ide,index=0,media=disk" \
+	    --drive "file=$(FDLOCK_IMAGE),format=raw,if=ide,index=0,media=disk,cache=unsafe" \
 	    --timeout 90 --ok "BOOTPROBE SHARED OK" --never "FAIL" \
 	    --log $(FDLOCK_IMAGE).raw.log probe=bootprobe
 

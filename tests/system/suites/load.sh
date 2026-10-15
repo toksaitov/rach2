@@ -8,7 +8,9 @@
 # with a FAT32 partition, under the lag device so that their writes go
 # through the request layer whose delays are recorded; its pinger has the
 # harness's network card; and its reader has the console, where the harness
-# types each line once the reader has said it took the last.
+# types each line once the reader has said it took the last. The lag's
+# deadline counts the flush after each write, so that disk keeps the guest's
+# flushes from the host (cache=unsafe), as tests/system/Readme.md says.
 #
 # Usage: load.sh KERNEL IMAGE HARNESS DISK
 set -u
@@ -23,7 +25,7 @@ mformat -i "$DISK"@@1048576 -F -T 28672 -v LOAD :: || fail "mformat"
 
 if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
     --qemu-arg=-cpu --qemu-arg=max \
-    --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" \
+    --drive "file=$DISK,format=raw,if=ide,index=0,media=disk,cache=unsafe" \
     --append "rach2.rescue rach2.blocklag=1" \
     --timeout 120 --steptmo 60 --ok "LOADPROBE OK" --never "LOADPROBE FAIL" --log "$DISK.log" \
     "expect=Type 'help'" "send=exec /loadprobe" \
