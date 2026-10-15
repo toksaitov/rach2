@@ -166,7 +166,7 @@ static int length_rows(void)
         return fail("lengthen with zeros");
     }
     if (syscall(SYS_truncate, FILE_PATH, 2L) != 0 || !size_is(fd, 2)) {
-        return fail("call 92");
+        return fail("truncate by number");
     }
     if (TRUNCATE_WIDE(FILE_PATH, 7L, 0L) != 0 || !size_is(fd, 7)) {
         return fail(WIDE_ROW);

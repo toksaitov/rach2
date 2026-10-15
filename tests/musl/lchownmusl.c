@@ -117,7 +117,7 @@ static int file_rows(const char *dir)
         return fail("lchown on a file");
     }
     if (syscall(SYS_lchown, file, 1100, 1101) != 0 || !owner_is(file, 1, 1100)) {
-        return fail("lchown by call 16");
+        return fail("lchown by number");
     }
     if (fchownat(AT_FDCWD, file, 1200, (gid_t)-1, AT_SYMLINK_NOFOLLOW) != 0 ||
         !owner_is(file, 1, 1200) || !group_is(file, 1101)) {
