@@ -5,16 +5,20 @@
 # Usage: board.sh next
 #        board.sh take N
 #        board.sh mine N
+#        board.sh release N [STATUS]
 #        board.sh ready AFTER N...
+#        board.sh order N...
+#        board.sh group TITLE N...
 #        board.sh done
 #
 # `next` prints the issues a worker may take, in the order AGENTS.md gives:
 # the open issues whose titles begin `ci:`, then the Ready issues in the
-# board's order, each open, unassigned and with no open blocker, one line each
-# with the number, a tab and the title. `gh project item-list` does not return
-# the board's order, so the query asks for the items by position. When any
-# page of the answer is lost, `next` prints nothing and fails, so that a caller
-# does not take a part of the board for the whole.
+# board's order, each open, unassigned, with no open blocker and without the
+# label `grouped`, one line each with the number, a tab and the title.
+# `gh project item-list` does not return the board's order, so the query asks
+# for the items by position. When any page of the answer is lost, `next`
+# prints nothing and fails, so that a caller does not take a part of the board
+# for the whole.
 #
 # `take N` assigns N to this account and reads the issue's timeline. Of the
 # accounts assigned now, the one whose latest assignment is the earliest keeps
@@ -27,9 +31,23 @@
 # otherwise; it prints nothing and fails when GitHub cannot be reached, so
 # that a caller does not take a lost connection for a closed issue.
 #
+# `release N [STATUS]` hands N back: it unassigns this account, removes the
+# label `grouped`, and sets STATUS, Ready unless given, so that N returns to
+# the queue as an issue of its own.
+#
 # `ready AFTER N...` sets each N Ready and moves it after AFTER on the board,
-# the first N after AFTER and each later one after the one before. `done` sets
-# Done on every closed issue whose Status is not.
+# the first N after AFTER and each later one after the one before. `order N...`
+# sets each N Ready, moves the first to the top of the board and each later
+# one after the one before, ahead of every issue it does not name.
+#
+# `group TITLE N...` makes a group, one issue that a worker takes in place of
+# its members N..., at most eight of them, each open, unassigned, in no other
+# group and not filed by ci. The group is an issue titled `group: TITLE` with
+# the label `group`, whose body lists the members one a line as `* #N`. Each
+# member gets the label `grouped`, which keeps it out of `next`, and the group
+# is set Ready, for `ready` or `order` to place. It prints the group's number.
+#
+# `done` sets Done on every closed issue whose Status is not.
 #
 # The repository and the board's owner and number are below. The ids of the
 # board, its Status field and the field's options are looked up by name on
@@ -80,6 +98,23 @@ set_status()
         --single-select-option-id "$(id_of "$(echo "$2" | tr ' ' _)")" > /dev/null
 }
 
+# move ITEM [AFTER]: put the board's item ITEM after the item AFTER, or at the
+# top of the board when AFTER is empty.
+move()
+{
+    if [ -n "$2" ]; then
+        gh api graphql -f p="$(id_of project)" -f i="$1" -f a="$2" -f query='
+            mutation($p: ID!, $i: ID!, $a: ID!) {
+                updateProjectV2ItemPosition(input: {projectId: $p, itemId: $i,
+                    afterId: $a}) { clientMutationId } }' > /dev/null
+    else
+        gh api graphql -f p="$(id_of project)" -f i="$1" -f query='
+            mutation($p: ID!, $i: ID!) {
+                updateProjectV2ItemPosition(input: {projectId: $p,
+                    itemId: $i}) { clientMutationId } }' > /dev/null
+    fi
+}
+
 next()
 {
     answer=$(gh api graphql --paginate -F n="$BOARD" -f o="$OWNER" -f query='
@@ -93,10 +128,13 @@ next()
                             ... on ProjectV2ItemFieldSingleSelectValue { name } }
                         content { ... on Issue { number title state
                             assignees(first: 1) { totalCount }
+                            labels(first: 20) { nodes { name } }
                             blockedBy(first: 20) { nodes { state } } } } } } } } }' \
         --jq '.data.user.projectV2.items.nodes[] |
             select(.content.state == "OPEN" and
                    .content.assignees.totalCount == 0 and
+                   ([.content.labels.nodes[] | select(.name == "grouped")]
+                    | length) == 0 and
                    ([.content.blockedBy.nodes[] | select(.state == "OPEN")]
                     | length) == 0) |
             "\(.fieldValueByName.name // "-")\t\(.content.number)\t\(.content.title)"')
@@ -165,6 +203,13 @@ mine()
     if printf '%s\n' "$who" | grep -qx "$me"; then echo yes; else echo no; fi
 }
 
+release()
+{
+    me=$(gh api user --jq .login)
+    gh issue edit "$1" --repo "$REPO" --remove-assignee "$me" --remove-label grouped > /dev/null
+    set_status "$1" "$2"
+}
+
 ready()
 {
     prev=$(item "$1")
@@ -172,14 +217,57 @@ ready()
     for n; do
         i=$(item "$n")
         set_status "$n" Ready
-        gh api graphql -f p="$(id_of project)" -f i="$i" -f a="$prev" -f query='
-            mutation($p: ID!, $i: ID!, $a: ID!) {
-                updateProjectV2ItemPosition(input: {projectId: $p, itemId: $i,
-                    afterId: $a}) { clientMutationId } }' > /dev/null
+        move "$i" "$prev"
         prev=$i
         printf '%s ' "$n"
     done
     echo
+}
+
+order()
+{
+    prev=
+    for n; do
+        i=$(item "$n")
+        set_status "$n" Ready
+        move "$i" "$prev"
+        prev=$i
+        printf '%s ' "$n"
+    done
+    echo
+}
+
+group()
+{
+    title=$1
+    shift
+    if [ $# -gt 8 ]; then
+        echo "board: a group has at most 8 members, not $#" >&2
+        exit 2
+    fi
+    body="Members, each fixed in a commit of its own, as the Work section of AGENTS.md says:
+"
+    for n; do
+        why=$(gh issue view "$n" --repo "$REPO" --json state,assignees,labels,title --jq '
+            if .state != "OPEN" then "closed"
+            elif (.assignees | length) > 0 then "assigned"
+            elif any(.labels[]; .name == "grouped") then "in a group"
+            elif (.title | startswith("ci:")) then "filed by ci"
+            else empty end')
+        if [ -n "$why" ]; then
+            echo "board: #$n is $why, so it cannot join a group" >&2
+            exit 1
+        fi
+        body="$body
+* #$n"
+    done
+    url=$(gh issue create --repo "$REPO" --title "group: $title" --label group --body "$body")
+    for n; do
+        gh issue edit "$n" --repo "$REPO" --add-label grouped > /dev/null
+    done
+    gh project item-add "$BOARD" --owner "$OWNER" --url "$url" > /dev/null
+    set_status "${url##*/}" Ready
+    echo "${url##*/}"
 }
 
 done_()
@@ -205,7 +293,10 @@ done_()
 case "$1" in
     next) next ;;
     take|mine) [ -n "$2" ] || exit 2; board_ids=$(ids); "$1" "$2" ;;
+    release) [ -n "$2" ] || exit 2; board_ids=$(ids); release "$2" "${3:-Ready}" ;;
     ready) [ -n "$3" ] || exit 2; board_ids=$(ids); shift; ready "$@" ;;
+    order) [ -n "$2" ] || exit 2; board_ids=$(ids); shift; order "$@" ;;
+    group) [ -n "$3" ] || exit 2; board_ids=$(ids); shift; group "$@" ;;
     done) board_ids=$(ids); done_ ;;
     *) sed -n 's/^# Usage: /usage: /p; s/^#        /       /p' "$0" >&2; exit 2 ;;
 esac
