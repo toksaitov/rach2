@@ -188,7 +188,6 @@ int main(void)
         return fail(detail);
     }
 
-    /* Twenty rounds of each. */
     {
         int round;
 
