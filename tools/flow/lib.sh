@@ -79,9 +79,11 @@ limited()
 # run_session OUT ERR LIMIT COMMAND...: run COMMAND with its output in OUT and
 # its errors in ERR, in a process group of its own, and stop the whole group
 # when it is still running after LIMIT seconds: TERM, then KILL half a minute
-# later. Return COMMAND's status as soon as it ends; or, when the limit
-# stopped it, 124, after the KILL has gone to the whole group, so that a child
-# that outlives the TERM, such as an emulator, does not outlive the call.
+# later. Return COMMAND's status once it ends and `stop_group` has stopped
+# what it left in its group, such as a suite it started in the background;
+# or, when the limit stopped it, 124, after the KILL has gone to the whole
+# group, so that a child that outlives the TERM, such as an emulator, does
+# not outlive the call.
 #
 # STATE/session has the group's id while COMMAND runs. The watcher, the perl
 # process that enforces the limit, has a group of its own too, so a hangup
@@ -109,9 +111,35 @@ run_session()
     if [ -e "$state/expired" ]; then
         kill -KILL -"$pid" 2> /dev/null
         status=124
+    else
+        stop_group "$pid"
     fi
     rm -f "$state/expired" "$state/session"
     return "$status"
+}
+
+# stop_group GROUP: stop the processes left in the process group GROUP after
+# its leader ended, as the limit does: TERM, then KILL to those still there
+# half a minute later. Log each process found: a session should leave none,
+# and one it leaves, such as a `tests/run` that holds the clone's run lock,
+# would keep the next session's suite from running.
+stop_group()
+{
+    kill -0 -"$1" 2> /dev/null || return 0
+    ps -A -o pgid= -o pid= -o args= | awk -v g="$1" '$1 == g { $1 = ""; print }' |
+        while read -r left; do
+            log "session group $1 left $left; stopping it"
+        done
+    kill -TERM -"$1" 2> /dev/null
+    waited=0
+    while kill -0 -"$1" 2> /dev/null && [ "$waited" -lt 30 ]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if kill -0 -"$1" 2> /dev/null; then
+        log "session group $1 outlived the TERM; killing it"
+        kill -KILL -"$1" 2> /dev/null
+    fi
 }
 
 # wait_session: wait while the process group whose id is in STATE/session is
