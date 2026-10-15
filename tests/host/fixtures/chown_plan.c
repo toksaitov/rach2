@@ -1,6 +1,5 @@
 /**
- * The set-id rules of a chown on a mounted file system (entry 48 of
- * milestone 50).
+ * The set-id rules of a chown on a mounted file system.
  *
  * tests/host/chown_mutate.sh extracts `vfs_chown_plan` and the three
  * credential helpers it calls unchanged from a copy of
@@ -30,7 +29,8 @@ struct fixture_proc {
 static struct fixture_proc caller;
 static struct fixture_proc *current_proc = &caller;
 
-/* `cred_privileged` asks this, as rach2/sys/proc/process.h defines it. */
+/* `cred_privileged` calls this. The macro in rach2/sys/proc/process.h also
+ * requires that the process have no user namespace, which this record lacks. */
 #define proc_privileged(p) ((p)->euid == 0 && !(p)->nocaps)
 
 #include "chown_plan.inc"
@@ -41,6 +41,7 @@ static struct fixture_proc *current_proc = &caller;
 
 static int fails;
 
+/** Count and print a failed row named `what`. */
 static void check(int ok, const char *what)
 {
     if (!ok) {
@@ -49,7 +50,8 @@ static void check(int ok, const char *what)
     }
 }
 
-/* The caller: its effective ids and one supplementary group, or none. */
+/** Set the caller's effective ids and one supplementary group, or none when
+ * `group` is 0. */
 static void as_caller(uint32_t euid, uint32_t egid, uint32_t group)
 {
     caller.euid = euid;
@@ -58,7 +60,7 @@ static void as_caller(uint32_t euid, uint32_t egid, uint32_t group)
     caller.groups[0] = group;
 }
 
-/* A node's attributes as `vfs_getattr` reports them. */
+/** A node's attributes as `vfs_getattr` reports them. */
 static struct vfs_stat attrs(uint32_t mode, uint32_t uid, uint32_t gid)
 {
     struct vfs_stat st;
@@ -70,7 +72,7 @@ static struct vfs_stat attrs(uint32_t mode, uint32_t uid, uint32_t gid)
     return st;
 }
 
-/* Root changes owners: the set-id bits are what the rule decides. */
+/** Root changes owners: the set-id bits are what the rule decides. */
 static void privileged_rows(void)
 {
     struct vfs_stat st;
@@ -101,7 +103,7 @@ static void privileged_rows(void)
           "root gives a file to any owner and group, and a mode without set-id bits stays");
 }
 
-/* An owner without privilege changes the group within its own groups, and
+/** An owner without privilege changes the group within its own groups, and
  * nothing else. */
 static void owner_rows(void)
 {
@@ -125,7 +127,7 @@ static void owner_rows(void)
           "an owner may not give a file to a group it is not in");
 }
 
-/* A caller that does not own the file changes nothing, and needs no right
+/** A caller that does not own the file changes nothing, and needs no right
  * for a request that changes nothing. */
 static void stranger_rows(void)
 {
@@ -145,6 +147,7 @@ static void stranger_rows(void)
           "a chown to the owner and group the file has changes nothing and is permitted");
 }
 
+/** Run the rows: 0 when every row passes, 1 otherwise. */
 int main(void)
 {
     privileged_rows();

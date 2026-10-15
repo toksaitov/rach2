@@ -5,10 +5,11 @@
 static pthread_t thread;
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t condition = PTHREAD_COND_INITIALIZER;
+/* Under `mutex`: the opener waits or has returned; the writer let it go on. */
 static int stopped, resumed;
 static void (*opener)(void);
 
-/** Publish completion to the writer. */
+/** The opener's thread: run `opener`, then tell the writer it stopped. */
 static void *run(void *unused)
 {
     (void)unused;
@@ -20,7 +21,7 @@ static void *run(void *unused)
     return NULL;
 }
 
-/** Start the opener and wait until it blocks or completes. */
+/** Start `fn` on a thread of its own and wait until it waits or returns. */
 void open_thread_start(void (*fn)(void))
 {
     stopped = resumed = 0;
@@ -35,7 +36,8 @@ void open_thread_start(void (*fn)(void))
     pthread_mutex_unlock(&mutex);
 }
 
-/** Suspend the opener inside the kernel's namespace-lock wait. */
+/** Called by the opener inside the kernel's namespace-lock wait: tell the
+ * writer it stopped and block until `open_thread_finish`. */
 void open_thread_wait(void)
 {
     pthread_mutex_lock(&mutex);
@@ -47,7 +49,7 @@ void open_thread_wait(void)
     pthread_mutex_unlock(&mutex);
 }
 
-/** Resume the opener and wait for its descriptor to be registered. */
+/** Resume the opener and join its thread, so that its open has returned. */
 void open_thread_finish(void)
 {
     pthread_mutex_lock(&mutex);

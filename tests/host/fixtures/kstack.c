@@ -1,15 +1,15 @@
 /**
  * A kernel stack taken from a heap whose pages held a finished process's
- * code (entry 26 of milestone 50), with a guard page below it (entry 248).
+ * code, with a guard page below it.
  *
  * tests/host/kstack_mutate.sh extracts `kstack_alloc`, `kstack_free` and
  * `kstack_overrun_pid` unchanged from a copy of rach2/sys/syscall_proc.c
  * into kstack.inc, with the two sizes they use. The heap here fills every
  * page it hands out with 0xC3, an x86 `ret`, which stands for the code a
  * frame last held. Fork writes only the top of a new stack, so a byte left
- * below it stays there for the life of the process; under QEMU that kept the
- * frame on the emulator's slow store path. The stack must come back clear,
- * every byte of it.
+ * below it stays there for the life of the process; under QEMU a frame that
+ * holds code bytes takes the emulator's slow store path. The stack must come
+ * back clear, every byte of it.
  *
  * The heap gives pages with a guard below them (`kalloc_guarded`) and
  * without (`kalloc_pages`), and records which a stack came from and went
@@ -42,8 +42,8 @@ process_t *current_proc;
  * known. */
 extern char stack[];
 
-/* External, so that a fault which removes the clearing leaves an unused
- * function the compiler does not refuse. */
+/* External, so that a fault which removes the clearing leaves no unused
+ * static function for the compiler to warn about. */
 void *kalloc_pages(uint32_t count, uintptr_t *phys);
 void kfree_pages(void *pages, uint32_t count);
 void *kalloc_guarded(uint32_t count);
@@ -56,9 +56,12 @@ int kstack_overrun_pid(uintptr_t addr);
 char stack[KERNEL_STACK_SIZE];
 
 static int fails, heap_empty;
+/* The page counts of the last plain and guarded allocations and guarded
+ * free, the pages that free named, and the pages the heap gave last. */
 static uint32_t plain_asked, guarded_asked, guarded_freed;
 static void *guarded_freed_at, *last_given;
 
+/** Count and print a failed row named `what`. */
 static void check(int ok, const char *what)
 {
     if (!ok) {
@@ -67,7 +70,7 @@ static void check(int ok, const char *what)
     }
 }
 
-/* `count` pages filled with a code byte, or none once a row empties the
+/** `count` pages filled with a code byte, or NULL once a row empties the
  * heap. */
 static void *code_pages(uint32_t count)
 {
@@ -84,6 +87,7 @@ static void *code_pages(uint32_t count)
     return pages;
 }
 
+/** The heap's pages without a guard: code pages, the count recorded. */
 void *kalloc_pages(uint32_t count, uintptr_t *phys)
 {
     if (phys) {
@@ -93,20 +97,23 @@ void *kalloc_pages(uint32_t count, uintptr_t *phys)
     return code_pages(count);
 }
 
+/** Free pages `kalloc_pages` gave. */
 void kfree_pages(void *pages, uint32_t count)
 {
     (void)count;
     free(pages);
 }
 
+/** The heap's pages with a guard below them: code pages, the count
+ * recorded. */
 void *kalloc_guarded(uint32_t count)
 {
     guarded_asked = count;
     return code_pages(count);
 }
 
-/* A free is recorded whatever it names, and done only for the pages the
- * heap gave last, as the kernel's refuses pages it did not give. */
+/** Record a free whatever it names, and free only the pages the heap gave
+ * last, as the kernel's logs and ignores pages it did not give. */
 void kfree_guarded(void *pages, uint32_t count)
 {
     guarded_freed_at = pages;
@@ -117,7 +124,7 @@ void kfree_guarded(void *pages, uint32_t count)
     }
 }
 
-/* The kernel's fill, for the extracted code: every byte of `n` set. */
+/** The kernel's fill, for the extracted code: every byte of `n` set. */
 void *k_memset(void *dst, int c, size_t n)
 {
     unsigned char *d = dst;
@@ -128,7 +135,7 @@ void *k_memset(void *dst, int c, size_t n)
     return dst;
 }
 
-/* How many bytes of the stack at `base` are not zero. */
+/** How many bytes of the stack at `base` are not zero. */
 static size_t dirty_bytes(uintptr_t base)
 {
     const unsigned char *bytes = (const unsigned char *)base;
@@ -140,7 +147,7 @@ static size_t dirty_bytes(uintptr_t base)
     return dirty;
 }
 
-/* A thread whose stack's top is 0xC0106000: the stack is the four pages
+/** A thread whose stack's top is 0xC0106000: the stack is the four pages
  * from 0xC0102000 and its guard the page from 0xC0101000. */
 static void overrun_rows(void)
 {
@@ -161,6 +168,7 @@ static void overrun_rows(void)
     check(kstack_overrun_pid(0xC0101000u) == -1, "no running thread gives none");
 }
 
+/** Run the rows: 0 when every row passes, 1 otherwise. */
 int main(void)
 {
     uintptr_t base = kstack_alloc();

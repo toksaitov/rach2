@@ -23,15 +23,20 @@ static int mount_slots = 1;
 static process_t writer, reader;
 static fd_table_t reader_files;
 static struct fs_struct dirs;
+/* The opener's descriptor, the flush hook's count of the open it started,
+ * the namespace-lock waits, and the open flags and whether the open starts
+ * before the copy is published. */
 static int opened_fd, publication_seen, lock_waits, opening_flags, before_publication;
 
 #define VFS_IS_DIR(mode) (((mode) & 0170000u) == 0040000u)
+/* A waiter's place in the line for the namespace lock, as fs/vfs.c has it. */
 struct ns_turn {
     struct vfs_mount *mnt;
     uint32_t place;
 };
 
-/** Stop on a broken production lock or reference invariant. */
+/** Print `message` and exit 2: a lock or reference invariant of the kernel
+ * code failed. */
 void k_panic(const char *message)
 {
     printf("krffs-open: panic: %s\n", message);
@@ -44,7 +49,9 @@ uint32_t block_flags(block_device_t *dev)
     return dev->flags;
 }
 
-/** Suspend the opener until the writer has finished its relocation. */
+/** The namespace-lock wait: check that the opener is the waiter, count the
+ * wait, and suspend the opener until the writer has finished its
+ * relocation, when the lock must be free. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
@@ -227,6 +234,7 @@ int lock_any(void)
     return 0;
 }
 
+/** Nothing to release: no row takes a lock. */
 void lock_ofd_gone(const struct open_file *ofd)
 {
     (void)ofd;
@@ -251,7 +259,10 @@ static void open_published(void)
 }
 
 /**
- * Start an open before publication or when lookup first sees the copy.
+ * The flush hook: start the open in the reader at the first flush where the
+ * name still finds the original node (`before_publication`) or first finds
+ * the copy, then remove the hook. The open runs on its own thread until it
+ * waits for the namespace lock.
  */
 static void publication_flush(void)
 {
@@ -273,7 +284,10 @@ static void publication_flush(void)
 }
 
 /**
- * Require both opens to survive a second move and reuse of the first copy.
+ * Relocate an open file while a second process opens it with `flags` at
+ * the publication flush, or before it when `before` is set, and require
+ * both opens to survive a second move and reuse of the first copy. A row
+ * that never reaches the flush ends the test with status 2.
  */
 static void publication_open(int flags, int before)
 {
@@ -423,7 +437,8 @@ static void locked_walks(void)
     check(mount.inprogress == 0 && mount.ns_depth == 0, "failed opens release all references");
 }
 
-/** Exercise ordinary and creating opens at relocation publication. */
+/** Run the opens at relocation publication, then the locked walks once
+ * those pass: 0 when every row passes, 1 otherwise. */
 int main(void)
 {
     publication_open(0, 0);

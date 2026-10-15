@@ -17,7 +17,9 @@
  * which has no address space and is in no call, and a record another reaper
  * has taken off the zombies must be left alone and not waited for. The
  * second row has a process that runs in its address space, which must be
- * sent SIGKILL, waited for and reaped.
+ * sent SIGKILL, waited for and reaped. The third has such a process running
+ * on another processor, which takes its SIGKILL while init waits for an
+ * interrupt with the big lock let go (`idle_wait_irq_on`).
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -158,6 +160,7 @@ static void kept(void)
     check(!idle.signalled && !idle.released, "the idle record is left alone");
 }
 
+/** Run the three rows: 0 when every row passes, 1 otherwise. */
 int main(void)
 {
     begin();

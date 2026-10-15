@@ -8,10 +8,10 @@
  * call, and the namespace lock they take, and compiles them here over the
  * real KRFFS core, with the thread glue of `krffs_open_threads.c`. In the
  * kernel each body reaches the image through the page cache's window, where
- * a copy can fault and the fill sleeps in the disk driver. The five took no
- * lock while that driver polled; once it slept, a second process entered the
- * ring and grew a file of its own under the first one's write, and the first
- * went on writing at the old place (entry 104 of milestone 50).
+ * a copy can fault and the fill sleeps in the disk driver. Without the lock,
+ * a second process can enter the ring during that sleep and grow a file of
+ * its own under the first one's write, and the first goes on writing at the
+ * old place.
  *
  * The first rows count every access a body makes to the image: through the
  * core's backend for a read, a write and a truncate, at `pc_sync` for an
@@ -20,14 +20,13 @@
  * must be free again.
  *
  * The last row is the lock's line. A holder lets the lock go while another
- * process waits for it and asks for it again at once, which is what the
- * self-build's writer did for every module it filled: the waiter must have
- * the lock before the holder has it back, or it waits for as long as the
- * writer writes. Two host threads stand for the two processes, and one runs
- * at a time, as in the kernel, where a process in a system call gives way
- * only where it sleeps: the waiter runs until it sleeps in the lock's wait,
- * and the holder runs until it waits for its own turn, where the waiter is
- * resumed and runs to its end.
+ * process waits for it and takes it again at once, as a writer filling one
+ * module after another does: the waiter must have the lock before the holder
+ * has it back, or it waits for as long as the writer writes. Two host threads
+ * stand for the two processes, and one runs at a time, as in the kernel, where
+ * a process in a system call gives way only where it sleeps: the waiter runs
+ * until it sleeps in the lock's wait, and the holder runs until it waits for
+ * its own turn, where the waiter is resumed and runs to its end.
  */
 #include "fs/krffs.c"
 #include "fs/vfs.h"
@@ -48,6 +47,8 @@ static struct vfs_mount mount;
 static process_t writer, waiter;
 struct percpu cpu_table[NR_CPUS];
 static int failures;
+/* The operation watched, or NULL; its accesses to the image, those made
+ * without the lock, and the repoints of a moved file. */
 static const char *under_test;
 static int reached, unlocked, repoints;
 /* The line row: whether it runs, how often the waiter slept in the lock's
@@ -144,10 +145,11 @@ void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to)
 /**
  * Sleep in the lock's wait.
  *
- * Outside the line row nobody else asks for the lock, so nobody may wait for
- * it. In the line row the waiter sleeps once, and the thread that stands for
- * it stops here until the holder resumes it; the holder waits only for its
- * own turn, behind the waiter, and its sleep is where the waiter runs.
+ * Outside the line row nobody else takes the lock, so nobody may wait for it; a
+ * wait there ends the test with status 2. In the line row the waiter sleeps
+ * once, and the thread that stands for it stops here until the holder resumes
+ * it; the holder waits only for its own turn, behind the waiter, and its sleep
+ * is where the waiter runs.
  */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
@@ -309,8 +311,8 @@ static void wait_for_lock(void)
 }
 
 /**
- * The holder lets the lock go while the waiter sleeps for it, and asks for
- * it again at once. The waiter must take it first.
+ * The holder lets the lock go while the waiter sleeps for it, and takes it
+ * again at once. The waiter must take it first.
  */
 static void line_row(void)
 {
@@ -339,6 +341,8 @@ static void line_row(void)
     line_row_runs = 0;
 }
 
+/** Run the data rows and the line row: 0 when every row passes, 1
+ * otherwise. */
 int main(void)
 {
     setup();
