@@ -1537,20 +1537,25 @@ static const char *procfs_global_fd_path(int origin)
  * `t`: the absolute path of a KRFFS node, "/memfd:NAME (deleted)" for a memfd
  * as Linux shows one, the path a node of another type was opened by, and "/"
  * for the root directory, a stale descriptor or a path that does not fit. A
- * KRFFS path is rebuilt, in 256 bytes, only from a node still live and
- * reachable, since the node of a stale descriptor, unlinked or relocated,
- * may be on the free list.
+ * KRFFS path is rebuilt, in a heap buffer of VFS_PATH_MAX bytes, only from a
+ * node still live and reachable, since the node of a stale descriptor,
+ * unlinked or relocated, may be on the free list; a heap with no room for the
+ * buffer sets `t`'s `nomem`.
  */
 static void procfs_file_target(struct procfs_text *t, const fd_entry_t *e)
 {
-    char path[256];
-
     if (e->node && e->node->type == KRFFS_RESERVED_NODE) {
-        if (krffs_node_path(e->node, path, sizeof(path)) == 0 && krffs_resolve(path) == e->node) {
+        char *path = kmalloc(VFS_PATH_MAX);
+
+        if (!path) {
+            t->nomem = 1;
+        } else if (krffs_node_path(e->node, path, VFS_PATH_MAX) == 0 &&
+                   krffs_resolve(path) == e->node) {
             ap_str(t, path);
         } else {
             ap_ch(t, '/');
         }
+        kfree(path);
     } else if (e->ofd && e->ofd->vmnt && e->ofd->vmnt->type == &vfs_tmpfs_type &&
                tmpfs_label(e->ofd->vnode)) {
         ap_str(t, "/memfd:");
