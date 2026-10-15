@@ -117,8 +117,8 @@ machine's interface address.
 .It Er EACCES
 A caller without effective user ID 0 requested a nonzero port below 1024.
 .It Er EADDRINUSE
-A UDP port cannot be shared, no ephemeral port is available, or memory
-for a UDP binding cannot be allocated.
+A UDP port cannot be shared, or a bind to port zero finds no free
+ephemeral port or no memory for its binding.
 A TCP port already has a live listener at an address that meets the one
 asked for, or no ephemeral port is free for a bind to port zero.
 .It Er EADDRNOTAVAIL
@@ -139,6 +139,8 @@ Memory for a packet-socket binding cannot be allocated.
 .It Er ENODEV
 The packet address names an interface index other than zero or an
 existing interface.
+.It Er ENOMEM
+Memory for the binding of a nonzero UDP port cannot be allocated.
 .It Er ENOTSOCK
 .Fa fd
 does not refer to a socket.

@@ -524,7 +524,8 @@ static int32_t netlink_bind_user(struct socket *sock, uintptr_t sa_ptr, int addr
  * Bind the TCP or UDP socket `sock` to the address `ip` and port `port`, as
  * `do_bind` describes: the address checked first, then the port's owner, a
  * datagram socket's registration and a stream's listener. Returns 0,
- * -EADDRNOTAVAIL, -EACCES or -EADDRINUSE.
+ * -EADDRNOTAVAIL, -EACCES, -EADDRINUSE, or -ENOMEM when there is no memory
+ * to register a datagram socket's port.
  *
  * A port below 1024 is a service's, and a service is root's; otherwise any
  * user could take the port a DHCP client or an SSH server answers on and be
@@ -541,6 +542,8 @@ static int32_t netlink_bind_user(struct socket *sock, uintptr_t sa_ptr, int addr
  */
 static int32_t bind_inet(struct socket *sock, uint32_t ip, uint16_t port)
 {
+    int rc;
+
     if (ip != 0 && !ip_is_local(ip) && !(sock->type == SOCK_DGRAM && netdev_is_broadcast(ip))) {
         return -EADDRNOTAVAIL;
     }
@@ -562,9 +565,10 @@ static int32_t bind_inet(struct socket *sock, uint32_t ip, uint16_t port)
             }
             return 0;
         }
-        if (udp_bind(port, sock) < 0) {
+        rc = udp_bind(port, sock);
+        if (rc < 0) {
             sock->local_ip = 0;
-            return -EADDRINUSE;
+            return rc == -ENOMEM ? -ENOMEM : -EADDRINUSE;
         }
     }
     if (sock->type == SOCK_STREAM && port == 0) {
