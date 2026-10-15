@@ -1,5 +1,5 @@
 /**
- * waitid(2) and the siginfo it fills, read through musl.
+ * waitidmusl: check waitid(2) and the siginfo it fills, read through musl.
  *
  * Each row forks the children it waits for and judges the fields the kernel
  * wrote: an exit reports CLD_EXITED with the exit status, a death by a
@@ -14,10 +14,11 @@
  * killed, the wait reports it and reaps it alone. The raw call's fifth
  * argument receives the CPU time and the peak memory of a child that spun,
  * and zero in the counters the kernel does not keep. No event, an unknown
- * option or idtype, a pid of 0 and a pidfd are refused, and no child at all
- * is ECHILD.
+ * option or idtype and a pid of 0 fail with EINVAL, any pidfd with EBADF,
+ * and a wait with no child at all with ECHILD.
  *
- * Prints "WAITIDMUSL OK" on success and "WAITIDMUSL FAIL (detail)" otherwise.
+ * It prints "WAITIDMUSL OK" and exits 0 on success, or prints "WAITIDMUSL
+ * FAIL (detail)" and exits 1 at the first failure.
  */
 
 #define _GNU_SOURCE
@@ -49,7 +50,7 @@ static int fail(const char *what)
     return 1;
 }
 
-/** A child that waits for signals until it is killed. */
+/** Fork a child that waits for signals until it is killed. Returns its pid. */
 static pid_t idle_child(void)
 {
     pid_t pid = fork();
@@ -62,7 +63,7 @@ static pid_t idle_child(void)
     return pid;
 }
 
-/** A child that exits with `code` at once. */
+/** Fork a child that exits with `code` at once. Returns its pid. */
 static pid_t exiting_child(int code)
 {
     pid_t pid = fork();
@@ -73,8 +74,10 @@ static pid_t exiting_child(int code)
     return pid;
 }
 
-/** Spend a while in user mode without a system call; the sum is what the
- * loop computed, returned so the compiler keeps the loop. */
+/**
+ * Spend a while in user mode without a system call. Returns the sum the loop
+ * computed, so that the compiler keeps the loop.
+ */
 static unsigned int spin(void)
 {
     volatile unsigned int x = 0;
@@ -86,8 +89,10 @@ static unsigned int spin(void)
     return x;
 }
 
-/** A child that spins until the kernel has charged it `ticks` of user time,
- * or for a thousand ticks, then exits with status 0. */
+/**
+ * Fork a child that spins until the kernel has charged it `ticks` of user
+ * time, or for a thousand ticks, then exits with status 0. Returns its pid.
+ */
 static pid_t spinning_child(long ticks)
 {
     pid_t pid = fork();
@@ -104,15 +109,20 @@ static pid_t spinning_child(long ticks)
     return pid;
 }
 
-/** Whether `si` reports `code` and `status` for child `pid`. */
+/**
+ * Return 1 when `si` reports SIGCHLD with `code` and `status` for child `pid`
+ * and the caller's real uid, and 0 otherwise.
+ */
 static int reports(const siginfo_t *si, pid_t pid, int code, int status)
 {
     return si->si_signo == SIGCHLD && si->si_code == code && si->si_pid == pid &&
            si->si_uid == getuid() && si->si_status == status;
 }
 
-/** A stop that WNOWAIT left, then a SIGKILL: once the child has died, a wait
- * for a stop finds none. */
+/**
+ * Check that a stop WNOWAIT left is not reported once the child has died of
+ * a SIGKILL. Returns 0, or 1 after the failure is printed.
+ */
 static int dead_stop(void)
 {
     siginfo_t si;
@@ -140,7 +150,10 @@ static int dead_stop(void)
     return 0;
 }
 
-/** Exits, deaths, stops and continues, and the fields each fills. */
+/**
+ * Check exits, deaths, stops and continues, and the fields each fills.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int events(void)
 {
     siginfo_t si;
@@ -234,7 +247,10 @@ static int selects(idtype_t idtype, int callers)
     return 0;
 }
 
-/** WNOWAIT, the selections, the resource usage and the refusals. */
+/**
+ * Check WNOWAIT, the selections, the raw call's resource usage and the
+ * errors. Returns 0, or 1 after the failure is printed.
+ */
 static int selections(void)
 {
     struct krusage ru;

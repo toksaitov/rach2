@@ -1,29 +1,27 @@
 /**
- * Exercises the signal path through the ported musl, end to end.
+ * sigmusl: check signal delivery through the ported musl, end to end.
  *
- * An ordinary hosted C program that drives four contracts. First, a plain
- * SIGUSR1 handler installed with sigaction (sa_flags=0, so musl wires up
- * SA_RESTORER -> __restore -> the legacy sigreturn(119) trampoline, the common
- * path for a handler that takes no siginfo; x86-64 has no legacy sigreturn, and
- * there musl's __restore_rt makes rt_sigreturn(15)) runs when the signal is
- * raised to self, and control resumes after it. Second, a signal blocked with
- * sigprocmask stays pending instead of running, and is delivered once
- * unblocked. Third, the default action terminates: a child that abort()s with
- * no handler is reaped as killed by SIGABRT (WIFSIGNALED / WTERMSIG). Fourth,
- * an SA_SIGINFO handler finds the interrupted context in Linux's layout: the
- * user code selector and a stack pointer in the saved registers, the
- * floating-point state's address, the mask from before the handler, and a
- * siginfo that names raise's tkill and its sender. A handler that finds the
- * user code selector, the stack pointer or the floating-point state missing
- * reports the context and ends the program itself, since a return through that
- * frame would restore no registers and fault before any report.
+ * It checks four things. First, a plain SIGUSR1 handler installed with
+ * sigaction and no flags runs when the signal is raised to the process, and
+ * control resumes after it. musl gives such a handler the restorer
+ * `__restore`, which makes the legacy sigreturn (119) on i386; x86-64 has no
+ * legacy sigreturn, and there musl's `__restore_rt` makes rt_sigreturn (15).
+ * Second, a signal blocked with sigprocmask stays pending instead of running,
+ * and is delivered once unblocked. Third, the default action terminates: a
+ * child that calls abort with no handler is reaped as killed by SIGABRT.
+ * Fourth, an SA_SIGINFO handler finds the interrupted context in Linux's
+ * layout: the user code selector and a stack pointer in the saved registers,
+ * the floating-point state's address, the mask from before the handler, and a
+ * siginfo with the code of raise's tkill and the sender's pid. A handler that
+ * finds the user code selector, the stack pointer or the floating-point state
+ * missing prints the context and ends the program itself, since a return
+ * through that frame would restore no registers and fault before any report.
  *
- * "SIGMUSL OK" means the whole path worked through libc: sigaction, the signal
- * mask, synchronous delivery on syscall return, musl's restorer trampoline,
- * raise and abort, and the wait-status signal encoding. Any "SIGMUSL FAIL"
- * line names the step that failed.
- *
- * Linked statically against the ported musl; see tests/musl/build.sh.
+ * "SIGMUSL OK" means each of these worked through libc: sigaction, the signal
+ * mask, delivery on the return from a system call, musl's restorer, raise and
+ * abort, and the signal encoding of the wait status. A "SIGMUSL FAIL" line
+ * names the step that failed, and the program exits 1. It is linked
+ * statically against the ported musl; see `tests/musl/build.sh`.
  */
 
 #define _GNU_SOURCE
@@ -52,6 +50,7 @@
 #define USER_CS 0x1B
 #endif
 
+/* What the handlers saw; context_cs is the low 16 bits of the saved CS. */
 static volatile sig_atomic_t handler_ran;
 static volatile sig_atomic_t handler_sig;
 static volatile sig_atomic_t info_signo;
@@ -69,8 +68,11 @@ static void usr1_handler(int sig)
     handler_sig = sig;
 }
 
-/** Write the context's report, as `run_context` prints it, and end the
- * program: what a handler does with a frame it cannot return through. */
+/**
+ * Write the context's report with write(2), as `run_context` prints it, and
+ * end the program with status 1. The handler calls it for a frame it cannot
+ * return through.
+ */
 static void context_fail(void)
 {
     char line[128];
@@ -85,9 +87,11 @@ static void context_fail(void)
     _exit(1);
 }
 
-/** Record the siginfo and the parts of the context the kernel fills, and end
+/**
+ * Record the siginfo and the parts of the context the kernel fills, and end
  * the program with the report when the registers a return restores are not
- * there. */
+ * there.
+ */
 static void info_handler(int sig, siginfo_t *info, void *context)
 {
     const ucontext_t *uc = context;
@@ -106,7 +110,10 @@ static void info_handler(int sig, siginfo_t *info, void *context)
     }
 }
 
-/** Check musl's SA_SIGINFO arguments and return through __restore_rt. */
+/**
+ * Check musl's SA_SIGINFO arguments and the return through `__restore_rt`.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int run_context(void)
 {
     struct sigaction sa = {0};
