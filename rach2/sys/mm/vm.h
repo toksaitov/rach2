@@ -48,9 +48,10 @@
  * may never be made writable. A shared mapping of a file opened without
  * write access has it, and so has a shared mapping of a file on a disk,
  * which is served as a private one and whose stores would not reach the
- * file. `vm_protect` keeps the bit and refuses write while it is set, as
- * Linux's mprotect refuses a mapping without VM_MAYWRITE; splits, merges,
- * copies and moves carry it with the rest of the protection. */
+ * file. `vm_protect` keeps the bit and answers a request for write with -3
+ * while it is set, as Linux's mprotect answers EACCES for a mapping without
+ * VM_MAYWRITE; splits, merges, copies and moves keep it with the rest of
+ * the protection. */
 #define VM_PROT_NOWRITE 0x10u
 /* Kept the same way: the region maps device memory through /dev/mem, whose
  * frames are not the allocator's. Nothing reads it on a process's behalf, a

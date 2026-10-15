@@ -117,7 +117,7 @@ static void _page_fault_handler(isr_params_t *params);
  * lies over memory the map does not offer would overwrite firmware's
  * memory, and the machine is refused by name in the memory report and stops
  * rather than run on it: on a machine too small for the kernel, its modules
- * and the table, this is where the table lands. A frame the map does not
+ * and the table, this is where the table is placed. A frame the map does not
  * offer is marked `FRAME_ABSENT`.
  *
  * `mmu_init` marks the frames it carves, and every frame below
@@ -821,7 +821,7 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
  *
  * The page count is rounded up by division and not by adding a page less
  * one: a region reaching the top of the address space would wrap that sum to
- * a few bytes, ask for no pages, map nothing and still return an address.
+ * a few bytes, count no pages, map nothing and still return an address.
  */
 uintptr_t map_mmio_typed(uintptr_t phys_addr, size_t size, pte_t cache)
 {

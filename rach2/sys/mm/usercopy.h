@@ -7,7 +7,7 @@
  * these helpers. Linux has the same names; BSD has copyin, copyout and
  * copyinstr.
  *
- * Each helper backs pages as a fault would, for the current process, and so
+ * The copies back pages as a fault would, for the current process, and so
  * may sleep: taking frames back from the caches can wait on a writeback.
  * With no current process, or one without an address space, every non-empty
  * copy is -EFAULT.
@@ -56,7 +56,7 @@ int copy_to_user(void __user *dst, const void *src, size_t n);
  * Read the aligned 32-bit user word at `src` into `*val` in one load, which a
  * store from another processor cannot tear, after the checks and the backing
  * `copy_from_user` makes; 0, or -EFAULT for an address that is not aligned
- * or that `copy_from_user` refuses.
+ * or that `copy_from_user` would answer with -EFAULT.
  */
 int get_user_u32(uint32_t *val, uintptr_t src);
 
@@ -65,7 +65,7 @@ int get_user_u32(uint32_t *val, uintptr_t src);
  * in one compare-and-exchange no other processor's access comes between,
  * after the checks and the backing `copy_to_user` makes; what the word held
  * goes to `*prev`. 0, or -EFAULT for an address that is not aligned or that
- * `copy_to_user` refuses.
+ * `copy_to_user` would answer with -EFAULT.
  */
 int cmpxchg_user_u32(uintptr_t dst, uint32_t old, uint32_t value, uint32_t *prev);
 

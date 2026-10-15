@@ -68,10 +68,10 @@ struct mm {
     unsigned long auxv[MM_AUXV_WORDS];
     /* Whether the process running this image may leave a core file, and be
      * traced or have its memory opened through /proc by a caller without
-     * effective uid 0: 1 for a new address space and for an image an exec
-     * builds, 0 for one that runs with ids its caller lacks or once any
-     * sharer's effective ids move; PR_SET_DUMPABLE sets it, and fork's copy
-     * takes it. */
+     * privilege: 1 for a new address space and for an image an exec builds,
+     * 0 for an image that runs with ids or privilege its caller lacks or
+     * that its caller may not read, and once any sharer's effective ids
+     * move; PR_SET_DUMPABLE sets it, and fork's copy takes it. */
     uint32_t dumpable;
 };
 
