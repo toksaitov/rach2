@@ -9,7 +9,9 @@
  * included, and checks the layout and the values of the auxv entries; it
  * prints "auxvprobe: ALL OK" and exits 0 when every check passes, and
  * "auxvprobe: FAILED" and exits 1 otherwise. This is the same stack the
- * dynamic loader and crt1 read on Linux.
+ * dynamic loader and crt1 read on Linux. Its entry also checks that every
+ * general register but the stack pointer is 0, since i386's crt1 registers
+ * a nonzero EDX with atexit.
  */
 
 #include "probe.h"
@@ -113,7 +115,77 @@ static void check(int cond, const char *msg)
 
 void probe_main(unsigned long *sp);
 
-PROBE_SP_ENTRY;
+/* The general registers but the stack pointer as the kernel entered `_start`
+ * with them, in the order of `entry_reg_names`. */
+#if defined __x86_64__
+#define ENTRY_REGS 15
+unsigned long entry_regs[ENTRY_REGS];
+static const char *const entry_reg_names[ENTRY_REGS] = {
+    "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "r8",
+    "r9",  "r10", "r11", "r12", "r13", "r14", "r15",
+};
+
+__asm__(".text\n"
+        ".globl _start\n"
+        "_start:\n"
+        "    movq %rax, entry_regs(%rip)\n"
+        "    movq %rbx, entry_regs+8(%rip)\n"
+        "    movq %rcx, entry_regs+16(%rip)\n"
+        "    movq %rdx, entry_regs+24(%rip)\n"
+        "    movq %rsi, entry_regs+32(%rip)\n"
+        "    movq %rdi, entry_regs+40(%rip)\n"
+        "    movq %rbp, entry_regs+48(%rip)\n"
+        "    movq %r8, entry_regs+56(%rip)\n"
+        "    movq %r9, entry_regs+64(%rip)\n"
+        "    movq %r10, entry_regs+72(%rip)\n"
+        "    movq %r11, entry_regs+80(%rip)\n"
+        "    movq %r12, entry_regs+88(%rip)\n"
+        "    movq %r13, entry_regs+96(%rip)\n"
+        "    movq %r14, entry_regs+104(%rip)\n"
+        "    movq %r15, entry_regs+112(%rip)\n"
+        "    xorq %rbp, %rbp\n"
+        "    movq %rsp, %rdi\n"
+        "    andq $-16, %rsp\n"
+        "    call probe_main\n"
+        "    hlt\n");
+#else
+#define ENTRY_REGS 7
+unsigned long entry_regs[ENTRY_REGS];
+static const char *const entry_reg_names[ENTRY_REGS] = {
+    "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp",
+};
+
+__asm__(".text\n"
+        ".globl _start\n"
+        "_start:\n"
+        "    movl %eax, entry_regs\n"
+        "    movl %ebx, entry_regs+4\n"
+        "    movl %ecx, entry_regs+8\n"
+        "    movl %edx, entry_regs+12\n"
+        "    movl %esi, entry_regs+16\n"
+        "    movl %edi, entry_regs+20\n"
+        "    movl %ebp, entry_regs+24\n"
+        "    mov %esp, %eax\n"
+        "    push %eax\n"
+        "    call probe_main\n");
+#endif
+
+/** Count a failure for each register of `entry_regs` that is not 0. */
+static void check_entry_regs(void)
+{
+    int i;
+
+    for (i = 0; i < ENTRY_REGS; i++) {
+        if (entry_regs[i] != 0) {
+            puts_("FAIL: ");
+            puts_(entry_reg_names[i]);
+            puts_(" not 0 at entry: ");
+            put_u32((u32)entry_regs[i]);
+            puts_("\n");
+            fails++;
+        }
+    }
+}
 
 /**
  * The probe, entered with `sp` at argc. It reads at most 64 auxv pairs.
@@ -142,6 +214,8 @@ void probe_main(unsigned long *sp)
     unsigned long minsigstksz = 0;
 
     puts_("auxvprobe: starting\n");
+
+    check_entry_regs();
 
     /* The initial stack pointer is 16-byte aligned. */
     check(((unsigned long)sp & 0xF) == 0, "esp not 16-byte aligned");

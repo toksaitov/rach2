@@ -6007,3 +6007,15 @@ new
         }
         return tty_poll(&console_tty, want, wq);
 end
+
+# The registers the debug shell's exec enters a program with, which the
+# i386 crt1 reads EDX of as a function for atexit.
+
+fault enter-user-edx
+probe auxvprobe
+file rach2/sys/arch/i686/loader.s
+expect FAIL: edx not 0 at entry
+old
+    xorl %edx, %edx
+new
+end

@@ -81,8 +81,9 @@ k_stop:
 
 # void arch_enter_user(uintptr_t pc, uintptr_t sp), of ../arch.h: an iret
 # to ring 3 at pc, with the stack pointer sp, IF set in EFLAGS and the user
-# data selector in every data segment register. The general registers keep
-# what the kernel left in them.
+# data selector in every data segment register, and every general register
+# but ESP cleared, as x86-64's x86_64_enter_user leaves them; the i386 ABI
+# reads EDX at entry as a function for atexit, which 0 says there is not.
 .set USER_CODE_SEG, 0x1B  # GDT entry 3, RPL 3
 .set USER_DATA_SEG, 0x23  # GDT entry 4, RPL 3
 
@@ -109,6 +110,13 @@ arch_enter_user:
     pushl $USER_CODE_SEG
     pushl %ecx
 
+    xorl %eax, %eax
+    xorl %ebx, %ebx
+    xorl %ecx, %ecx
+    xorl %edx, %edx
+    xorl %esi, %esi
+    xorl %edi, %edi
+    xorl %ebp, %ebp
     iret
 
 # The boot stack, which the boot, process 0, the debug shell and the first

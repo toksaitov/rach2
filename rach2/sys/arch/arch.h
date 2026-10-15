@@ -123,9 +123,8 @@ void arch_run_on_stack(uintptr_t sp, void (*fn)(void)) K_NORETURN;
 
 /**
  * Enter user mode at `pc` with the stack pointer `sp` and interrupts on:
- * how the first program, and the debug shell's own programs, start. x86-64
- * clears the general registers; i686 leaves them as the kernel had them.
- * Does not return.
+ * how the first program, and the debug shell's own programs, start. Every
+ * general register but the stack pointer is cleared. Does not return.
  */
 void arch_enter_user(uintptr_t pc, uintptr_t sp) K_NORETURN;
 
