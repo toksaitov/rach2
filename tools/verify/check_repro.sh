@@ -39,10 +39,7 @@ for tool in "$MKFS" "$STAGER"; do
 done
 
 SETID="$REPO/build/tools/inspect/setidcheck"
-if [ ! -x "$SETID" ] || [ "$REPO/tools/inspect/setidcheck.c" -nt "$SETID" ]; then
-    mkdir -p "${SETID%/*}"
-    cc -O2 -o "$SETID" "$REPO/tools/inspect/setidcheck.c" || exit 1
-fi
+make -s -C "$REPO" build/tools/inspect/setidcheck || exit 1
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/rach2_repro.XXXXXX")"
 # bash 3.2, the Mac's sh, gives an EXIT trap a status of 0 when `set -u`

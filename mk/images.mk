@@ -8,9 +8,9 @@
 #
 # The tools the disk and stick scripts run are named in the root Makefile, which
 # needs them before this point: the MBR and GUID table writers, which
-# krffs/mkdisk.sh and tools/image/mkdisk_grub.sh build on demand as well; the
-# stick image's judge, linked with the kernel's own MBR reader so the rules it
-# applies are the kernel's; and the exFAT builder and reader, which the exfat
+# krffs/mkdisk.sh and tools/image/mkdisk_grub.sh ask make for when run alone;
+# the stick image's judge, linked with the kernel's own MBR reader so the rules
+# it applies are the kernel's; and the exFAT builder and reader, which the exfat
 # suite uses too and which the sticks' volume is written with. What builds them
 # is here.
 $(MKMBR): tools/image/mkmbr.c
@@ -36,10 +36,11 @@ $(MKEXFATFIXTURE): tests/host/mkexfatfixture.c tests/host/exfat_upcase.inc
 # each embeds its kernel and RAM image as GRUB modules under the pinned GRUB
 # artifacts. The recovery ISO takes the recovery image's name, with the key
 # tag when this tree has a key.
-$(IMAGES_DIR)/rach2-metal.iso: $(METAL_KERNEL) $(METAL_IMAGE) tools/image/mkiso.sh $(GRUB_FILES)
+$(IMAGES_DIR)/rach2-metal.iso: $(METAL_KERNEL) $(METAL_IMAGE) tools/image/mkiso.sh $(GRUB_FILES) \
+                               $(BINFIND) $(SHA256TOOL)
 	RACH2_ARCH=$(ARCH) sh tools/image/mkiso.sh rach2-metal
 $(RECOVERY_ISO): $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) tools/image/mkiso.sh tools/image/keyname.sh \
-                 $(GRUB_FILES)
+                 $(GRUB_FILES) $(BINFIND) $(SHA256TOOL)
 	@sh tools/image/keyname.sh $@
 	RACH2_ARCH=$(ARCH) sh tools/image/mkiso.sh $(RECOVERY_NAME)
 

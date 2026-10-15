@@ -75,10 +75,7 @@ dd if=/dev/zero of="$TMP" bs=1048576 count="$DISK_MB" 2>/dev/null
 # experimental use, which a host does not mount by itself. mkmbr's --lba
 # form writes in the CHS fields the value that means "use the LBA".
 MKMBR="$REPO/build/tools/image/mkmbr"
-if [ ! -x "$MKMBR" ] || [ "$REPO/tools/image/mkmbr.c" -nt "$MKMBR" ]; then
-    mkdir -p "${MKMBR%/*}"
-    cc -O2 -o "$MKMBR" "$REPO/tools/image/mkmbr.c" || exit 1
-fi
+make -s -C "$REPO" build/tools/image/mkmbr || exit 1
 "$MKMBR" --lba "$TMP" "$PART_LBA:$((PART_SIZE / SECTOR)):7f"
 
 "$TOOLS/mkfs.krffs" "$TMP" --offset "$PART_OFFSET" --size "$PART_SIZE" >/dev/null
@@ -87,10 +84,7 @@ fi
 # Both halves of the set-id guard, as mkimage.sh runs them. The inventory
 # reads the partition, so it is given the region's offset and size.
 SETIDCHECK="$REPO/build/tools/inspect/setidcheck"
-if [ ! -x "$SETIDCHECK" ] || [ "$REPO/tools/inspect/setidcheck.c" -nt "$SETIDCHECK" ]; then
-    mkdir -p "${SETIDCHECK%/*}"
-    cc -O2 -o "$SETIDCHECK" "$REPO/tools/inspect/setidcheck.c" || exit 1
-fi
+make -s -C "$REPO" build/tools/inspect/setidcheck || exit 1
 "$SETIDCHECK" "$MANIFEST"
 "$SETIDCHECK" --image "$TMP" --manifest "$MANIFEST" \
     --offset "$PART_OFFSET" --size "$PART_SIZE"

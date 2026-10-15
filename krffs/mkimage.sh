@@ -70,10 +70,7 @@ fi
 # paths an `exec-dir` line stages without naming them, and it finds a
 # manifest that the guard's parser reads otherwise than the stager does.
 SETIDCHECK="$REPO/build/tools/inspect/setidcheck"
-if [ ! -x "$SETIDCHECK" ] || [ "$REPO/tools/inspect/setidcheck.c" -nt "$SETIDCHECK" ]; then
-    mkdir -p "${SETIDCHECK%/*}"
-    cc -O2 -o "$SETIDCHECK" "$REPO/tools/inspect/setidcheck.c" || exit 1
-fi
+make -s -C "$REPO" build/tools/inspect/setidcheck || exit 1
 "$SETIDCHECK" "$MANIFEST"
 "$SETIDCHECK" --image "$TMP" --manifest "$MANIFEST"
 

@@ -177,7 +177,7 @@ include mk/dryrun.mk
 # exists.
 LIBC_PATCHES = vendor/musl/patches/series $(wildcard vendor/musl/patches/*.patch)
 
-$(LIBC_STAMP): vendor/musl/build_libc.sh mk/arch.sh $(LIBC_TARBALL) $(LIBC_PATCHES)
+$(LIBC_STAMP): vendor/musl/build_libc.sh mk/arch.sh $(LIBC_TARBALL) $(LIBC_PATCHES) | $(SHA256TOOL)
 	@rm -f $@ $(LIBC_A)
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); RACH2_ARCH=$(ARCH) ./vendor/musl/build_libc.sh && echo "libc: result: built in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(LIBC_A) || { echo "libc: build produced no libc.a" >&2; exit 1; }
@@ -195,7 +195,7 @@ BUSYBOX_PATCHES = vendor/busybox/patches $(wildcard vendor/busybox/patches/*.pat
 
 $(BUSYBOX_STAMP): vendor/busybox/build_busybox.sh vendor/busybox/rach2.config \
                   vendor/busybox/rach2-suid.config $(VENDOR_COMMON) \
-                  $(BUSYBOX_TARBALL) $(BUSYBOX_PATCHES) $(LIBC_STAMP)
+                  $(BUSYBOX_TARBALL) $(BUSYBOX_PATCHES) $(LIBC_STAMP) | $(SHA256TOOL)
 	@rm -f $@ $(BUSYBOX_BIN) $(BUSYBOX_SUID_BIN) \
 	    $(BUSYBOX_STAGE)/applet_tables-main.h \
 	    $(BUSYBOX_STAGE)/applet_tables-suid.h \
@@ -206,7 +206,7 @@ $(BUSYBOX_STAMP): vendor/busybox/build_busybox.sh vendor/busybox/rach2.config \
 	@touch $@
 
 $(TCC_STAMP): vendor/tcc/build_tcc.sh $(wildcard vendor/tcc/rach2-*.patch) \
-              $(VENDOR_COMMON) $(TCC_TARBALL) $(LIBC_STAMP)
+              $(VENDOR_COMMON) $(TCC_TARBALL) $(LIBC_STAMP) | $(SHA256TOOL)
 	@rm -f $@ $(TCC_BIN) $(TCC_STAGE)/libtcc1.a \
 	    $(TCC_STAGE)/include/stdarg.h
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); RACH2_ARCH=$(ARCH) ./vendor/tcc/build_tcc.sh && echo "tcc: result: built in $$(($$(date +%s)-t0))s"; fi
@@ -219,7 +219,7 @@ $(TCC_STAMP): vendor/tcc/build_tcc.sh $(wildcard vendor/tcc/rach2-*.patch) \
 # predates one would keep a make whose built-in rules name a compiler this image
 # does not have and whose default link this system's compiler refuses.
 $(PDPMAKE_STAMP): vendor/pdpmake/build_pdpmake.sh $(PDPMAKE_PATCHES) \
-                  $(VENDOR_COMMON) $(PDPMAKE_TARBALL) $(LIBC_STAMP)
+                  $(VENDOR_COMMON) $(PDPMAKE_TARBALL) $(LIBC_STAMP) | $(SHA256TOOL) $(ELFCHECK)
 	@rm -f $@ $(PDPMAKE_BIN)
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); RACH2_ARCH=$(ARCH) ./vendor/pdpmake/build_pdpmake.sh && echo "pdpmake: result: built in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(PDPMAKE_BIN) || { echo "pdpmake: build produced no $(PDPMAKE_BIN)" >&2; exit 1; }
@@ -230,7 +230,7 @@ $(PDPMAKE_STAMP): vendor/pdpmake/build_pdpmake.sh $(PDPMAKE_PATCHES) \
 # and mke2fs.conf is one because mke2fs compiles it in as its defaults.
 $(E2FSPROGS_STAMP): vendor/e2fsprogs/build_e2fsprogs.sh $(VENDOR_COMMON) \
                     vendor/e2fsprogs/mke2fs.conf \
-                    $(E2FSPROGS_PATCHES) $(E2FSPROGS_TARBALL) $(LIBC_STAMP)
+                    $(E2FSPROGS_PATCHES) $(E2FSPROGS_TARBALL) $(LIBC_STAMP) | $(SHA256TOOL)
 	@rm -f $@ $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(TUNE2FS_BIN) $(DUMPE2FS_BIN)
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); RACH2_ARCH=$(ARCH) ./vendor/e2fsprogs/build_e2fsprogs.sh && echo "e2fsprogs: result: built in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(E2FSCK_BIN) || { echo "e2fsprogs: build produced no $(E2FSCK_BIN)" >&2; exit 1; }
@@ -246,7 +246,7 @@ $(E2FSPROGS_STAMP): vendor/e2fsprogs/build_e2fsprogs.sh $(VENDOR_COMMON) \
 DROPBEAR_PATCHES = vendor/dropbear/patches/series $(wildcard vendor/dropbear/patches/*.patch)
 
 $(DROPBEAR_STAMP): vendor/dropbear/build_dropbear.sh vendor/dropbear/localoptions.h $(VENDOR_COMMON) \
-                   $(DROPBEAR_PATCHES) $(DROPBEAR_TARBALL) $(LIBC_STAMP)
+                   $(DROPBEAR_PATCHES) $(DROPBEAR_TARBALL) $(LIBC_STAMP) | $(SHA256TOOL)
 	@rm -f $@ $(DROPBEAR_BIN)
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); RACH2_ARCH=$(ARCH) ./vendor/dropbear/build_dropbear.sh && echo "dropbear: result: built in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(DROPBEAR_BIN) || { echo "dropbear: build produced no $(DROPBEAR_BIN)" >&2; exit 1; }
@@ -439,8 +439,8 @@ $(GUESTCHECK): tools/verify/guestcheck.c
 	$(HOST_LINK)
 
 # The digest tool (tools/verify/sha256.c), which the scripts run in place of
-# sha256sum or shasum. The scripts that need it before make has run compile it
-# themselves.
+# sha256sum or shasum. A script run outside make asks make for it, as for every
+# other host program here, so that it is never compiled without -Werror.
 $(SHA256TOOL): tools/verify/sha256.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
@@ -740,7 +740,7 @@ $(METAL_KERNEL): ask-the-sub-make
 	@$(MAKE) --no-print-directory -C rach2 COMPONENT=rach2-metal KEXTRA=-DRACH2_DISK_READONLY
 # The kernel is built only by the file rule above; see the note on
 # `rach2-recovery`.
-rach2-metal: krffs $(METAL_KERNEL)
+rach2-metal: krffs $(METAL_KERNEL) $(BINFIND)
 	sh tools/inspect/check_diskpolicy.sh $(METAL_KERNEL) read-only
 
 # The recovery kernel: the same sources, built with the authority to write any
@@ -758,7 +758,7 @@ $(RECOVERY_KERNEL): ask-the-sub-make
 # as well would be a second invocation with no edge to the first, and a
 # parallel build could run both: they write the same object files, so one
 # could link while the other rewrote an object under it.
-rach2-recovery: krffs rach2 $(RECOVERY_KERNEL)
+rach2-recovery: krffs rach2 $(RECOVERY_KERNEL) $(BINFIND)
 	sh tools/inspect/check_recovery.sh $(RECOVERY_KERNEL) recovery
 	sh tools/inspect/check_recovery.sh $(KERNEL) ordinary
 	sh tools/inspect/check_diskpolicy.sh $(RECOVERY_KERNEL) read-write
@@ -889,7 +889,7 @@ MKGPT           = build/tools/image/mkgpt
 FATCHAINS       = build/tools/image/fatchains
 GRUBEMBED       = build/tools/image/grubembed
 STICKCHECK      = build/tools/image/stickcheck
-DISK_TOOLS      = $(MKMBR) $(MKGPT) $(FATCHAINS) $(GRUBEMBED)
+DISK_TOOLS      = $(MKMBR) $(MKGPT) $(FATCHAINS) $(GRUBEMBED) $(CFGCHECK) $(SHA256TOOL)
 # The pinned GRUB images and their manifest, which the disk and ISO scripts
 # copy and check, so that a regenerated image rebuilds what carries it.
 GRUB_FILES      = $(wildcard vendor/grub/*.img) vendor/grub/bootx64.efi \

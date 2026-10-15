@@ -35,15 +35,11 @@ PREFIX="$MUSL_PREFIX"
 # refuses to proceed if the tarball does not match; the version is locked.
 SHA256="a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4"
 
-# The digest through the project tool (tools/verify/sha256.c), compiled on
-# first use, so the build needs no coreutils or Perl digest command.
+# The digest through the project tool (tools/verify/sha256.c), which make
+# builds, so the build needs no coreutils or Perl digest command.
 sha256_of()
 {
-    if [ ! -x "$SCRIPT_DIR/../../build/tools/verify/sha256" ]; then
-        mkdir -p "$SCRIPT_DIR/../../build/tools/verify"
-        cc -O2 -o "$SCRIPT_DIR/../../build/tools/verify/sha256" \
-            "$SCRIPT_DIR/../../tools/verify/sha256.c" || return 1
-    fi
+    make -s -C "$REPO" build/tools/verify/sha256 || return 1
     "$SCRIPT_DIR/../../build/tools/verify/sha256" "$1" | awk '{print $1}'
 }
 

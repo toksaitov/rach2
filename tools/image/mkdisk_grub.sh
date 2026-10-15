@@ -452,10 +452,7 @@ cp "$REPO/tools/image/grub-embed.cfg" "$EMBED_CFG"
 # every healthy machine to recovery. cfgcheck requires the four lines in their
 # order.
 CFGCHECK="$REPO/build/tools/inspect/cfgcheck"
-if [ ! -x "$CFGCHECK" ] || [ "$REPO/tools/inspect/cfgcheck.c" -nt "$CFGCHECK" ]; then
-    mkdir -p "${CFGCHECK%/*}"
-    cc -O2 -o "$CFGCHECK" "$REPO/tools/inspect/cfgcheck.c" || exit 1
-fi
+make -s -C "$REPO" build/tools/inspect/cfgcheck "ARCH=$RACH2_ARCH" || exit 1
 "$CFGCHECK" grubembed "$EMBED_CFG"
 
 # No entry may name the address twice. The kernel refuses a command line that

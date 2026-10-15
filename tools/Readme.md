@@ -146,7 +146,7 @@ The other files of `verify/` are not part of the style check:
 
 * [analyze.sh](verify/analyze.sh) is `make analyze`: GCC's `-fanalyzer` over the kernel and the guest programs and cppcheck at its exhaustive level, either of which fails the run on a finding, and two advisory reports, clang-tidy over the kernel and the sections the linker drops as unused. `--fast` leaves out the exhaustive cppcheck. The logs are in `build/verify/analyze/`.
 * [coverage.sh](verify/coverage.sh) `[NAME...]` builds each host test again with `--coverage` and prints, for every kernel source the test compiles, the lines executed and the branches taken. No suite runs it.
-* [sha256.c](verify/sha256.c) prints the SHA-256 digest of each file. The build makes it as `build/tools/verify/sha256`, and the vendor scripts compile it on first use, so the build needs neither `sha256sum` nor `shasum`.
+* [sha256.c](verify/sha256.c) prints the SHA-256 digest of each file. The build makes it as `build/tools/verify/sha256`, so the build needs neither `sha256sum` nor `shasum`.
 * [prose_report.sh](verify/prose_report.sh) compares the rates of watched phrases in the tree's prose with those in the pinned upstream sources, and never fails. `--baseline` and `--fixture` compare the counts with the records [prose_baseline.txt](verify/prose_baseline.txt) and [prose_upstream.txt](verify/prose_upstream.txt), and `--write` rewrites a record.
 
 ### The commit-msg hook: `git-hooks/`
@@ -308,7 +308,7 @@ The install stick's 256 MiB of free space is too little for a full grow. Build t
 
 ## Building
 
-The C programs are compiled on the host with the rule text of [`mk/host.mk`](../mk/Readme.md), under `-Werror`, into `build/tools/SUBDIR/NAME`, and serve both architectures. `make` builds them all as `host-tools`, a prerequisite of `all`, and `make print-host-tools` prints their paths. A script that runs a checker names its built path, and the root Makefile builds the program before the rule that runs it. The scripts need no build.
+The C programs are compiled on the host with the rule text of [`mk/host.mk`](../mk/Readme.md), under `-Werror`, into `build/tools/SUBDIR/NAME`, and serve both architectures. `make` builds them all as `host-tools`, a prerequisite of `all`, and `make print-host-tools` prints their paths. A script that runs a checker names its built path, and the root Makefile builds the program before the rule that runs it. A script that may run outside make asks for the program with `make -C` and its path, and never compiles it by hand: make would read a hand-compiled binary as current and skip its `-Werror` build. The scripts need no build.
 
 ## Tests
 

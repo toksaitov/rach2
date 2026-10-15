@@ -680,7 +680,7 @@ run-install: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpma
 # recipe always runs, and two suites of the pool that named it would write the
 # one image at the same time. `prepare-images` builds the file before the pool
 # starts, and a suite run on its own builds it through this rule.
-run-sealed: $(DEMO_CREDS) $(SEALED_DISK) $(DEADLINE) $(ELFCHECK) $(BINFIND) $(MKGPT) $(RUNUTIL)
+run-sealed: $(DEMO_CREDS) $(SEALED_DISK) $(DEADLINE) $(ELFCHECK) $(BINFIND) $(MKGPT) $(RUNUTIL) $(SHA256TOOL)
 	sh tests/system/suites/sealed.sh $(SEALED_DISK) \
 	    "`cat krffs/rach2_demo_password`" $(SEALED_PORT)
 # `tests/run drill`: the recovery drill, boots of one disk that carries the same
@@ -706,7 +706,7 @@ OS_SIMPLE_EXT2 = $(IMAGES_DIR)/os-simple.ext2
 $(OS_SIMPLE_EXT2): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_DEPS_os_simple) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-setid
 	sh tools/image/mkext2.sh krffs/manifests/os-simple.manifest $@ 16
 DRILL_DISK = $(IMAGES_DIR)/drill-test.disk
-run-drill: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs check-setid $(BINFIND) $(MKMBR) $(HARNESS) $(OS_SIMPLE_EXT2) $(RUNUTIL) $(DISK_TOOLS)
+run-drill: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs check-setid $(BINFIND) $(MKMBR) $(HARNESS) $(OS_SIMPLE_EXT2) $(RUNUTIL) $(DISK_TOOLS) $(SHA256TOOL)
 	@mkdir -p $(IMAGES_DIR)
 	RACH2_DISK_TABLE=mbr \
 	RACH2_DISK_RECOVERY_MB=8 \
@@ -1730,7 +1730,7 @@ run-make: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake 
 # workspaces; the two kernels must hash equal. Every wait is bounded, and the
 # whole run carries one deadline over the per-step ones.
 SELFBUILD_DISK = $(IMAGES_DIR)/selfbuild-test.disk
-run-selfbuild: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs test-image $(OS_SIMPLE_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(ELFCHECK) $(RUNTESTS) $(RUNUTIL)
+run-selfbuild: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs test-image $(OS_SIMPLE_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(ELFCHECK) $(RUNTESTS) $(RUNUTIL) $(SHA256TOOL)
 	@mkdir -p $(IMAGES_DIR)
 	$(MKDISK) krffs/manifests/os-real.manifest $(SELFBUILD_DISK) 64 48
 	sh tests/system/suites/selfbuild.sh $(BOOT_KERNEL) $(SELFBUILD_DISK) \
@@ -1745,7 +1745,7 @@ SELFBUILD_EXT2_VOL = $(IMAGES_DIR)/selfbuild-ext2.vol
 SELFBUILD_EXT2_DISK = $(IMAGES_DIR)/selfbuild-ext2-test.disk
 $(SELFBUILD_EXT2_VOL): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 48
-run-selfbuild-ext2: $(DEMO_CREDS) rach2 utils krffs test-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(ELFCHECK) $(RUNTESTS) $(SELFBUILD_EXT2_VOL) build/tools/image/mkmbr $(RUNUTIL) $(HARNESS)
+run-selfbuild-ext2: $(DEMO_CREDS) rach2 utils krffs test-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(ELFCHECK) $(RUNTESTS) $(SELFBUILD_EXT2_VOL) build/tools/image/mkmbr $(RUNUTIL) $(HARNESS) $(SHA256TOOL)
 	@mkdir -p $(IMAGES_DIR)
 	{ dd if=/dev/zero bs=1048576 count=1 2>/dev/null; cat $(SELFBUILD_EXT2_VOL); \
 	  dd if=/dev/zero bs=1048576 count=15 2>/dev/null; } > $(SELFBUILD_EXT2_DISK)

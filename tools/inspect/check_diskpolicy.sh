@@ -35,10 +35,7 @@ esac
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 BINFIND="$REPO/build/tools/inspect/binfind"
-if [ ! -x "$BINFIND" ] || [ "$REPO/tools/inspect/binfind.c" -nt "$BINFIND" ]; then
-    mkdir -p "${BINFIND%/*}"
-    cc -O2 -o "$BINFIND" "$REPO/tools/inspect/binfind.c" || exit 2
-fi
+make -s -C "$REPO" build/tools/inspect/binfind || exit 2
 
 "$BINFIND" "rach2: disk policy: $POLICY" "$KERNEL" || {
     echo "check-diskpolicy: $KERNEL does not carry the $POLICY banner" >&2

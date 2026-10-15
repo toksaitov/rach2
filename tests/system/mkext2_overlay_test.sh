@@ -6,22 +6,23 @@
 # tools/image/mkext2.sh has the same modes whatever the umask it was made
 # under, and a failing mke2fs or debugfs leaves its diagnostic on stderr.
 #
-# A copy of mkext2.sh runs in a private tree with the built stager, the
-# set-id guard's source and an allowlist of the test's own, over a manifest
-# that stages /etc/motd, /usr and /tmp, mode 1777. The overlay copies a
-# build tree into the staged one, as vendor/gnu/install_root.sh copies the
-# GNU layer's, and writes /tmp/scratch itself. The build tree has a program
-# in /usr/libexec, which the allowlist declares a file the overlay installs,
-# so the guard requires the directories above it to be writable by root
-# alone, as it requires them of the GNU root's /usr/libexec/sshd-session; a
-# data file; and a link to a file outside it, mode 0666. The volume is made
-# under umask 022 and again under umask 002, the build tree each time under
-# the same umask; 002 leaves the tree's directories and data file writable
-# by their group, as a build in an account of Ubuntu's does. Each volume must
-# pass mkext2.sh's checks, the guard's among them; the guard's listing of
-# the two, each node's path, mode, owner and size, must be the same, with
-# /usr/libexec 0755, /tmp 1777 as the manifest asks, and the data file and
-# /tmp/scratch 0644; and the file the link names must keep its mode.
+# A copy of mkext2.sh runs in a private tree with the built stager, the set-id
+# guard's source, a makefile that builds the guard by mk/host.mk's rule, as
+# mkext2.sh asks make for it, and an allowlist of the test's own, over a
+# manifest that stages /etc/motd, /usr and /tmp, mode 1777. The overlay copies a
+# build tree into the staged one, as vendor/gnu/install_root.sh copies the GNU
+# layer's, and writes /tmp/scratch itself. The build tree has a program in
+# /usr/libexec, which the allowlist declares a file the overlay installs, so the
+# guard requires the directories above it to be writable by root alone, as it
+# requires them of the GNU root's /usr/libexec/sshd-session; a data file; and a
+# link to a file outside it, mode 0666. The volume is made under umask 022 and
+# again under umask 002, the build tree each time under the same umask; 002
+# leaves the tree's directories and data file writable by their group, as a
+# build in an account of Ubuntu's does. Each volume must pass mkext2.sh's
+# checks, the guard's among them; the guard's listing of the two, each node's
+# path, mode, owner and size, must be the same, with /usr/libexec 0755, /tmp
+# 1777 as the manifest asks, and the data file and /tmp/scratch 0644; and the
+# file the link names must keep its mode.
 #
 # Two more volumes are made from the manifest alone, each with a stand-in
 # first on the path for mke2fs or for debugfs that writes a line and exits
@@ -69,6 +70,11 @@ if [ "$mutate" -ne 2 ]; then
     cp "$repo/build/krffs/stageimage.krffs" "$work/build/krffs/"
     cp "$repo/tools/setup/e2fsprogs_path.sh" "$work/tools/setup/"
     cp "$repo/tools/inspect/setidcheck.c" "$work/tools/inspect/"
+    mkdir -p "$work/mk"
+    cp "$repo/mk/host.mk" "$work/mk/"
+    printf '%s\n' 'include mk/host.mk' \
+        'build/tools/inspect/setidcheck: tools/inspect/setidcheck.c' \
+        '	@mkdir -p $(dir $@)' '	$(HOST_LINK)' > "$work/Makefile"
 fi
 
 cat > "$work/tools/inspect/setid.allow" << 'EOF'

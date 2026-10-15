@@ -49,11 +49,7 @@ TARBALL_SHA256="7e19294d54edf360591d76d3b7a0a511864902ac3a75a0b5b11c7b3cae14c13f
 
 sha256_of()
 {
-    if [ ! -x "$SCRIPT_DIR/../../build/tools/verify/sha256" ]; then
-        mkdir -p "$SCRIPT_DIR/../../build/tools/verify"
-        cc -O2 -o "$SCRIPT_DIR/../../build/tools/verify/sha256" \
-            "$SCRIPT_DIR/../../tools/verify/sha256.c" || return 1
-    fi
+    make -s -C "$REPO" build/tools/verify/sha256 || return 1
     "$SCRIPT_DIR/../../build/tools/verify/sha256" "$1" | awk '{print $1}'
 }
 
@@ -125,10 +121,7 @@ cp "$SRC/make" "$STAGE/make"
 # thing, and this loader does not.
 echo "pdpmake: checking the result is loadable by this kernel"
 ELFCHECK="$SCRIPT_DIR/../../build/tools/inspect/elfcheck"
-if [ ! -x "$ELFCHECK" ] || [ "$SCRIPT_DIR/../../tools/inspect/elfcheck.c" -nt "$ELFCHECK" ]; then
-    mkdir -p "${ELFCHECK%/*}"
-    cc -O2 -o "$ELFCHECK" "$SCRIPT_DIR/../../tools/inspect/elfcheck.c"
-fi
+make -s -C "$REPO" build/tools/inspect/elfcheck || exit 1
 "$ELFCHECK" --arch "$RACH2_ARCH" "$STAGE/make"
 
 echo "pdpmake: built $VERSION ($(wc -c < "$STAGE/make") bytes, static, musl, $RACH2_ARCH)"

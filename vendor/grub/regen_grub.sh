@@ -130,10 +130,7 @@ round() {
     # The digests are taken on the host with the project tool, outside the
     # container, so the record and the verifier use one implementation.
     SHA="$REPO/build/tools/verify/sha256"
-    if [ ! -x "$SHA" ] || [ "$REPO/tools/verify/sha256.c" -nt "$SHA" ]; then
-        mkdir -p "${SHA%/*}"
-        cc -O2 -o "$SHA" "$REPO/tools/verify/sha256.c"
-    fi
+    make -s -C "$REPO" build/tools/verify/sha256 || exit 1
     {
         cat "$out/manifest.head"
         printf 'embed-cfg %s\n' "$("$SHA" "$EMBED" | awk '{print $1}')"

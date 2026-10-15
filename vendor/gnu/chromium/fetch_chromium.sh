@@ -90,10 +90,7 @@ export GNUPGHOME
 
 sha256_of()
 {
-    if [ ! -x "$SHA" ]; then
-        mkdir -p "$(dirname "$SHA")"
-        cc -O2 -o "$SHA" "$REPO/tools/verify/sha256.c" || return 1
-    fi
+    make -s -C "$REPO" build/tools/verify/sha256 || return 1
     "$SHA" "$1" | awk '{print $1}'
 }
 

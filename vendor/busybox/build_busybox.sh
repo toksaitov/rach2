@@ -39,11 +39,7 @@ TARBALL_SHA256="b8cc24c9574d809e7279c3be349795c5d5ceb6fdf19ca709f80cde50e47de314
 
 sha256_of()
 {
-    if [ ! -x "$SCRIPT_DIR/../../build/tools/verify/sha256" ]; then
-        mkdir -p "$SCRIPT_DIR/../../build/tools/verify"
-        cc -O2 -o "$SCRIPT_DIR/../../build/tools/verify/sha256" \
-            "$SCRIPT_DIR/../../tools/verify/sha256.c" || return 1
-    fi
+    make -s -C "$REPO" build/tools/verify/sha256 || return 1
     "$SCRIPT_DIR/../../build/tools/verify/sha256" "$1" | awk '{print $1}'
 }
 

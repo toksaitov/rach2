@@ -33,7 +33,7 @@ $(GNU_TOOLCHAIN_PINS): vendor/gnu/sources.txt
 	@awk '$$1 ~ /^(binutils|gcc|gmp|mpfr|mpc|glibc|linux|libxcrypt)$$/' vendor/gnu/sources.txt >$@.new
 	@if cmp -s $@.new $@; then rm -f $@.new; else mv $@.new $@; fi
 
-$(GNU_TOOLCHAIN_STAMP): vendor/gnu/build_toolchain.sh vendor/gnu/arch.sh vendor/gnu/fetch.sh $(GNU_TOOLCHAIN_PINS)
+$(GNU_TOOLCHAIN_STAMP): vendor/gnu/build_toolchain.sh vendor/gnu/arch.sh vendor/gnu/fetch.sh $(GNU_TOOLCHAIN_PINS) | $(SHA256TOOL)
 	@rm -f $@
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else RACH2_ARCH=$(ARCH) ./vendor/gnu/build_toolchain.sh; fi
 	@test -x $(GNU_CC) || { echo "gnu: toolchain: the build produced no $(GNU_CC)" >&2; exit 1; }

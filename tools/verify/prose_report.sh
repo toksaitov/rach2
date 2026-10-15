@@ -42,10 +42,7 @@ PROSECHECK="$REPO/build/tools/verify/prosecheck"
 BASELINE="$REPO/tools/verify/prose_baseline.txt"
 FIXTURE="$REPO/tools/verify/prose_upstream.txt"
 
-if [ ! -x "$PROSECHECK" ] || [ "$REPO/tools/verify/prosecheck.c" -nt "$PROSECHECK" ]; then
-    mkdir -p "${PROSECHECK%/*}"
-    cc -O2 -o "$PROSECHECK" "$REPO/tools/verify/prosecheck.c" || exit 1
-fi
+make -s -C "$REPO" build/tools/verify/prosecheck || exit 1
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/rach2_prose.XXXXXX")"
 # bash 3.2, the Mac's sh, gives an EXIT trap a status of 0 when `set -u`

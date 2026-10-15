@@ -235,14 +235,9 @@ fi
 SSHTMO="$DEADLINE_TOOL $(scaled 180)"
 QUICKTMO="$DEADLINE_TOOL $(scaled 20)"
 
-# sha256_of FILE: print the SHA-256 of FILE, building the tree's own sha256
-# tool first if it is missing.
+# sha256_of FILE: print the SHA-256 of FILE with the tree's own sha256 tool,
+# which the suite's make target builds.
 sha256_of() {
-    if [ ! -x "$REPO/build/tools/verify/sha256" ]; then
-        mkdir -p "$REPO/build/tools/verify"
-        cc -O2 -o "$REPO/build/tools/verify/sha256" \
-            "$REPO/tools/verify/sha256.c" || return 1
-    fi
     "$REPO/build/tools/verify/sha256" "$1" | awk '{print $1}'
 }
 

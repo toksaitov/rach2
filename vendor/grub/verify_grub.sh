@@ -31,10 +31,7 @@ MANIFEST="$SCRIPT_DIR/manifest.txt"
     echo "verify_grub: $MANIFEST is missing" >&2; exit 1; }
 
 SHA="$REPO/build/tools/verify/sha256"
-if [ ! -x "$SHA" ] || [ "$REPO/tools/verify/sha256.c" -nt "$SHA" ]; then
-    mkdir -p "${SHA%/*}"
-    cc -O2 -o "$SHA" "$REPO/tools/verify/sha256.c"
-fi
+make -s -C "$REPO" build/tools/verify/sha256 || exit 1
 
 check_one() {
     name="${1%%=*}"

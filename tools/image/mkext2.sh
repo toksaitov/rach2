@@ -236,10 +236,7 @@ fi
 
 # The two checks: e2fsck for the structure, then setidcheck for the policy.
 e2fsck -fn "$TMP" > "$FSCK" 2>&1 || { cat "$FSCK" >&2; exit 1; }
-if [ ! -x "$SETIDCHECK" ] || [ "$REPO/tools/inspect/setidcheck.c" -nt "$SETIDCHECK" ]; then
-    mkdir -p "${SETIDCHECK%/*}"
-    cc -O2 -o "$SETIDCHECK" "$REPO/tools/inspect/setidcheck.c" || exit 1
-fi
+make -s -C "$REPO" build/tools/inspect/setidcheck || exit 1
 "$SETIDCHECK" "$MANIFEST"
 "$SETIDCHECK" --ext2 "$TMP" --manifest "$MANIFEST"
 
