@@ -9,6 +9,7 @@
 
 #include "grubslot.h"
 
+/** The little-endian 64-bit field at `p`. */
 static uint64_t le64(const uint8_t *p)
 {
     uint64_t v = 0;
@@ -20,6 +21,7 @@ static uint64_t le64(const uint8_t *p)
     return v;
 }
 
+/** Store `v` in the little-endian 64-bit field at `p`. */
 static void put_le64(uint8_t *p, uint64_t v)
 {
     int i;
@@ -30,11 +32,13 @@ static void put_le64(uint8_t *p, uint64_t v)
     }
 }
 
+/** The little-endian 16-bit field at `p`. */
 static uint16_t le16(const uint8_t *p)
 {
     return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
 }
 
+/** Store `v` in the little-endian 16-bit field at `p`. */
 static void put_le16(uint8_t *p, uint16_t v)
 {
     p[0] = (uint8_t)(v & 0xffu);
@@ -81,11 +85,9 @@ int grubslot_active(const struct grubslot_window *w, const uint8_t *entry, uint3
     uint64_t lba = le64(entry + GRUBSLOT_BLOCKLIST_LBA_OFF);
     uint16_t len = le16(entry + GRUBSLOT_BLOCKLIST_LEN_OFF);
 
-    /* Zero names no image; more than a tail means the image spans both. */
     if (len == 0u || (uint32_t)len > w->tail) {
         return -1;
     }
-    /* A second record: the loader lies in extents this code does not read. */
     if (le16(entry + GRUBSLOT_BLOCKLIST_NEXT_LEN_OFF) != 0u) {
         return -1;
     }
@@ -126,11 +128,9 @@ int grubslot_patch(const struct grubslot_window *w, uint8_t *image, uint32_t sec
     if (le16(image + GRUBSLOT_BLOCKLIST_SEG_OFF) != GRUBSLOT_BLOCKLIST_SEG) {
         return say(err, errlen, "that file is not a GRUB core image for this platform");
     }
-    /* GRUB reads records to a zero count; a second names unwritten sectors. */
     if (le16(image + GRUBSLOT_BLOCKLIST_NEXT_LEN_OFF) != 0u) {
         return say(err, errlen, "that core image is read through more than one extent");
     }
-    /* A tail length unlike the file's means a truncated or foreign file. */
     if ((uint32_t)le16(image + GRUBSLOT_BLOCKLIST_LEN_OFF) != sectors - 1u) {
         return say(err, errlen,
                    "that core image is not the length it declares; it is truncated or "
@@ -142,6 +142,8 @@ int grubslot_patch(const struct grubslot_window *w, uint8_t *image, uint32_t sec
     return 0;
 }
 
+/** The byte count is bounded before it is rounded, since a rounded count near
+ *  the top of 32 bits wraps. */
 int grubslot_prepare(uint8_t *image, uint32_t capacity, uint32_t bytes, uint32_t *sectors,
                      char *err, size_t errlen)
 {
@@ -150,7 +152,6 @@ int grubslot_prepare(uint8_t *image, uint32_t capacity, uint32_t bytes, uint32_t
     if (bytes == 0u) {
         return say(err, errlen, "that file is empty");
     }
-    /* Bound the bytes before rounding: a rounded count near the top wraps. */
     if (bytes > capacity || bytes > GRUBSLOT_MAX_IMAGE_SECTORS * (uint32_t)BOOTSLOT_SECTOR) {
         return say(err, errlen, "the core image does not fit a tail slot");
     }

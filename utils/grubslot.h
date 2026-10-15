@@ -12,8 +12,9 @@
  * the blocklist naming where the rest of the image lives and how long it is.
  * Sector 0 has the partition table at byte 446, the protective one on a GPT
  * disk, and a disk writes whole sectors, so the eight bytes that point at the
- * core cannot be touched without rewriting the table beside them. So they are
- * never touched: they name the window's first sector for the life of the disk.
+ * core cannot be touched without rewriting the table beside them. Nothing
+ * here writes them: they point at the window's first sector for the life of
+ * the disk.
  *
  * That makes the first sector a selector. The rest of the window has two
  * tails, and replacing the core image means writing the one that is not in
@@ -49,14 +50,14 @@
  * into at 0x1fe. The first two are the offsets `grubembed` patches when the
  * disk is built. The segment is not patched by anything here; it is checked,
  * because GRUB's own image builder always writes 0x0820 (the kernel segment
- * 0x0800 plus the entry sector) and a file that does not carry it is not a
- * core image for this platform. */
+ * 0x0800 plus the entry sector) and a file without it is not a core image
+ * for this platform. */
 #define GRUBSLOT_BLOCKLIST_LBA_OFF 0x1f4
 #define GRUBSLOT_BLOCKLIST_LEN_OFF 0x1fc
 #define GRUBSLOT_BLOCKLIST_SEG_OFF 0x1fe
 #define GRUBSLOT_BLOCKLIST_SEG     0x0820
 
-/* GRUB's boot code reads a LIST of these records, 12 bytes each (an 8-byte LBA,
+/* GRUB's boot code reads a list of these records, 12 bytes each (an 8-byte LBA,
  * a 2-byte count, a 2-byte segment), growing downward from 0x1f4 and ending at
  * the first record whose count is zero. The record below the first therefore
  * begins at 0x1e8 and its count lives at 0x1f0. Every image this project builds
@@ -91,12 +92,13 @@ int grubslot_window(uint64_t first, uint64_t sectors, struct grubslot_window *w,
 /**
  * Which tail the entry sector points at.
  *
- * Reads the blocklist out of `entry` and answers with the first LBA of the tail
- * it starts in. There must be exactly one record: a loader spread over more of
+ * Reads the blocklist out of `entry` and gives the first LBA of the tail it
+ * starts in. There must be exactly one record: a loader spread over more of
  * them occupies parts of the window this code never reads. The count is judged
- * too, and must fit inside one tail: a core image long enough to run out of
- * tail A and into tail B has no inactive tail to install into, and treating B
- * as free would overwrite the running image.
+ * too, and must be nonzero and fit inside one tail: a count of zero names no
+ * image, and a core image long enough to run out of tail A and into tail B
+ * has no inactive tail to install into, and treating B as free would
+ * overwrite the running image.
  *
  * What this establishes is the layout, not who built the disk. A conventional
  * GRUB installation, whose core image also begins one sector into the window in
@@ -128,7 +130,7 @@ uint32_t grubslot_other(const struct grubslot_window *w, uint32_t active);
  *
  * Writes the blocklist the image will be read through: the tail's first LBA and
  * the number of sectors after the entry sector. The image is judged first, so a
- * caller that gets a refusal here has written nothing. Judged means: it fits a
+ * caller for whom this fails has written nothing. Judged means: it fits a
  * tail of this window, it is read through one extent and not several, it has
  * GRUB's blocklist segment, and the tail length it declares for itself matches
  * its length in sectors.
@@ -136,11 +138,11 @@ uint32_t grubslot_other(const struct grubslot_window *w, uint32_t active);
  * That last check catches less than it appears to. A core image declares a
  * count of sectors, not a count of bytes, and no field in it records the byte
  * length grub-mkimage gave it. So a transfer cut short by enough to lose a
- * whole sector is refused, and one cut inside the final sector cannot be told
- * from the whole file. Nor does any of this establish that the image has the
- * modules this disk needs (`part_gpt` for a GPT disk, `part_msdos` for an MBR
- * one); the shape is checked, not the ability to boot. Check the transfer where
- * it can be checked, with `sha256sum` at both ends, before installing.
+ * whole sector fails the check, and one cut inside the final sector cannot be
+ * told from the whole file. Nor does any of this establish that the image has
+ * the modules this disk needs (`part_gpt` for a GPT disk, `part_msdos` for an
+ * MBR one); the shape is checked, not the ability to boot. Check the transfer
+ * where it can be checked, with `sha256sum` at both ends, before installing.
  *
  * @param image    the whole image, at least one sector.
  * @param sectors  its length in sectors, 2 through `w->tail + 1`.
@@ -163,7 +165,9 @@ int grubslot_patch(const struct grubslot_window *w, uint8_t *image, uint32_t sec
  * @param capacity the buffer's size.
  * @param bytes    the file's length.
  * @param sectors  the rounded length, set only on success.
- * @return 0, or -1 with a diagnostic in `err`.
+ * @return 0, or -1 with a diagnostic in `err` for an empty file and for one
+ *         whose rounded length is larger than `capacity` or the longest
+ *         image a window takes.
  */
 int grubslot_prepare(uint8_t *image, uint32_t capacity, uint32_t bytes, uint32_t *sectors,
                      char *err, size_t errlen);
