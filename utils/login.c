@@ -1,13 +1,13 @@
 /**
  * login: authenticate whoever is at the console and become them.
  *
- * init's session child execs this, so the console is behind a password rather
- * than in front of one. It has no set-id bit and needs none: init is root,
- * so this program starts as root and spends that authority once, dropping to
- * the account it just authenticated and never climbing back.
+ * init's console session child execs this, so the console is behind a
+ * password. It has no set-id bit and needs none: init is root, so this
+ * program starts as root, and it drops that privilege once, to the account it
+ * has authenticated, with no way back.
  *
  * It prompts for a name, reads the password through the credential library,
- * and verifies it against `/etc/shadow`. A failure sleeps and asks again, a
+ * and verifies it against `/etc/shadow`. A failure sleeps and prompts again, a
  * bounded number of times, and says the same thing whichever half was wrong: a
  * message that distinguished an unknown name from a wrong password would turn
  * the prompt into an oracle for which accounts exist. Running out of tries is
@@ -23,14 +23,13 @@
  * It does not `setsid` and does not claim the terminal. init's child already
  * did both, and the session and its controlling terminal survive the exec.
  *
- * The environment is built from nothing, not filtered, for the reason su
- * builds one: what arrives here came from init, which got it from the kernel,
- * and a login that passed a variable through would be handing the account
- * whatever the boot happened to carry. `PATH` is part of what it builds, and
- * has to be: a shell handed no `PATH` at all finds only programs named by a
- * full path, so the first bare `ls` after a login would fail. It is the same
- * `/bin:/usr/bin` su sets, so an account reaches the same programs however it
- * arrived.
+ * The environment is built from nothing, for the reason su builds one: what
+ * arrives here came from init, which got it from the kernel, and a login that
+ * passed a variable through would hand the account whatever init was started
+ * with. `PATH` is part of what it builds, since a shell with no `PATH` finds
+ * only programs named by a full path, and the first bare `ls` after a login
+ * would fail. It is the same `/bin:/usr/bin` su sets, so an account reaches
+ * the same programs however it arrived.
  */
 
 #include <stdio.h>
@@ -49,42 +48,43 @@
 
 #define MOTD_FILE "/etc/motd"
 
-/* How many names may be tried before the program gives up and init starts it
+/* How many names may be tried before the program exits and init starts it
  * again. The tries are bounded so a wedged reader cannot hold the console; the
  * respawn is the retry. */
 #define LOGIN_TRIES 3
 
-/* The pause after a refusal, in seconds. It costs a legitimate user two
+/* The pause after a failed try, in seconds. It costs a legitimate user two
  * seconds and costs anyone working through a list of passwords the same two
  * seconds every time. */
 #define LOGIN_PAUSE 2
 
 /* The buffer for the longest account name that will be read, from the
- * library, so that what this reads and what `adduser` writes are one limit. An
- * over-long line is refused, not truncated, for the reason the password reader
- * refuses one: a prefix is a different name, and answering for it would
- * either fail confusingly or, worse, match somebody else. */
+ * library, so that what this reads and what `adduser` writes have one limit.
+ * An over-long line is discarded, not cut, for the reason the password reader
+ * discards one: a prefix is a different name, and a login for it would either
+ * fail with no clear reason or match somebody else. */
 #define LOGIN_NAME_MAX (PWAUTH_MAX_NAME + 1)
 
 /* Rach2 permits descriptors 0 through 1023. */
 #define LOGIN_MAX_FDS 1024
 
-/* SHA-512 comparison input for an absent passwd entry. */
+/* The SHA-512 hash a password is compared with when the name has no passwd
+ * entry, so that an unknown name costs the time of a wrong password. */
 #define LOGIN_DUMMY_HASH \
     "$6$rach2login$"     \
     "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 
 /**
- * Put the console back into the shape a login can be typed at. Returns
- * nothing.
+ * Put the console's modes back to ones a login can be typed at: canonical
+ * input with echo and signals, carriage return read as newline, and newline
+ * written as carriage return and newline.
  *
- * The terminal's settings are the terminal's, not the session's: they outlive
- * the account that changed them, so `stty -icanon min 0` followed by `exit` is
- * enough to leave every later login reading zero bytes at once, exiting, and
- * being respawned into the same failure forever. A getty resets the line before
- * it asks who is there, and this is that reset. Pending input goes with it,
- * since whatever was typed at the last session's shell is not this login's
- * answer.
+ * The terminal's settings outlive the session and the account that changed
+ * them, so `stty -icanon min 0` followed by `exit` is enough to leave every
+ * later login reading zero bytes at once, exiting, and being respawned into
+ * the same failure forever. A getty resets the line before its prompt, and
+ * this is that reset. Pending input is discarded with it (`TCSAFLUSH`), since
+ * whatever was typed at the last session's shell is not input for this login.
  */
 static void sane_terminal(void)
 {
@@ -103,10 +103,13 @@ static void sane_terminal(void)
 }
 
 /**
- * Read a name into `buf`, which must have at least one byte. Terminate every
- * successful result. Return 0 for a line or partial line at EOF, and -1 for
- * empty EOF or a read error. Discard an overlong line and return an empty
- * string. Read one byte at a time so the next prompt keeps its input.
+ * Read one line, the name, from standard input into `buf` of `size` bytes, at
+ * least one, without its newline or carriage return, and terminated.
+ *
+ * Returns 0 for a line, or for the partial line before an end of file, and -1
+ * for an end of file with nothing read or a read error. A line too long for
+ * `buf` is read to its end and gives an empty name. The line is read a byte
+ * at a time, so the input after it stays for the password prompt.
  */
 static int read_line(char *buf, size_t size)
 {
@@ -167,9 +170,9 @@ static void close_inherited(void)
 /**
  * Print `/etc/motd` to standard output, if it is there and readable.
  *
- * After the drop, deliberately: the file is the account's to read or not, and a
- * login that printed it as root would bypass the file's modes. A file that is
- * not there is not an error.
+ * It is called after the identity drop, so the file's modes decide whether
+ * the account may read it; a login that printed it as root would bypass
+ * them. A file that is not there is not an error.
  */
 static void print_motd(void)
 {
@@ -194,13 +197,14 @@ static void print_motd(void)
 
 /**
  * Become `pw` and exec its shell. Does not return: a failure to change
- * identity or to exec is reported and exits with status 1.
+ * identity or to exec is reported, and the process exits with status 1.
  *
- * The environment is the one this builds, the working directory is the
- * account's home, and `argv[0]` has the leading dash that tells a shell it
- * is a login shell. A home that cannot be entered is reported and the root
- * directory is used instead, since a missing home is a reason to complain and
- * not a reason to refuse a login the password already earned.
+ * The environment has `PATH`, `HOME`, `SHELL`, `USER` and `LOGNAME` and
+ * nothing else, the working directory is the account's home, and `argv[0]`
+ * has the leading dash that tells a shell it is a login shell. A home that
+ * cannot be entered is reported and the root directory is used instead,
+ * since the password has been verified and a missing home is no reason to
+ * deny the login.
  */
 static void become(const struct passwd *pw)
 {
@@ -245,9 +249,10 @@ static void become(const struct passwd *pw)
 }
 
 /**
- * Ask who is there, up to `LOGIN_TRIES` times, and become the first account
- * whose password is proved. Returns 1 when the name or the password cannot be
- * read, at end of input included, or when the tries run out.
+ * Prompt for a name and a password up to `LOGIN_TRIES` times, and become the
+ * first account whose password verifies. Returns 1 when the name or the
+ * password cannot be read, at end of input included, or when the tries run
+ * out.
  *
  * An empty name, which a bare newline or an over-long line both give, costs
  * no try and is never authenticated. A name with no passwd entry still has a
