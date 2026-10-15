@@ -21,8 +21,12 @@ process_t *proc_list;
 struct percpu cpu_table[NR_CPUS];
 process_t *proc_idle;
 volatile uint32_t kernel_ticks;
+/* pid 10, running, and pid 11, the console reader. */
 static process_t processes[2];
+/* The time `timer_now_us` returns, in microseconds; the modelled EFLAGS, with
+ * 0x200 (IF) set while interrupts are enabled. */
 static uint32_t clock_us, irq_flags;
+/* The records `klog` has taken since `begin`, and the text of the last. */
 static unsigned records;
 static char record[512];
 static int failures;
@@ -50,20 +54,21 @@ uint32_t kirq_save(void)
     return flags;
 }
 
-/** Restore the saved mask. */
+/** Restore the mask that `kirq_save` returned. */
 void kirq_restore(uint32_t flags)
 {
     irq_flags = flags;
 }
 
-/** No row waits for an interrupt. */
+/** Return at once: no row waits for an interrupt. */
 void arch_idle(void)
 {}
 
+/** Return at once, as `arch_idle` does. */
 void arch_idle_masked(void)
 {}
 
-/** Capture the production record exactly as the suite receives it. */
+/** Format the record into `record` as the suite receives it, and count it. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     va_list args;
@@ -76,65 +81,69 @@ void klog(int level, const char *subsystem, const char *format, ...)
     records++;
 }
 
-/** One processor: the run queues' lock is the interrupt mask alone. */
+/** Mask interrupts: with one processor the run queues' lock is the mask. */
 uint32_t spin_lock_irqsave(struct spinlock *lock)
 {
     (void)lock;
     return kirq_save();
 }
 
+/** Restore the mask that `spin_lock_irqsave` returned. */
 void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
 {
     (void)lock;
     kirq_restore(flags);
 }
 
+/** Do nothing: one processor takes no lock. */
 void spin_lock(struct spinlock *lock)
 {
     (void)lock;
 }
 
+/** Do nothing, as `spin_lock` does. */
 void spin_unlock(struct spinlock *lock)
 {
     (void)lock;
 }
 
-/** Nor a big lock to let go around an idle wait, or another processor to
- * wake. */
+/** Return depth 0: the model has no big kernel lock to let go. */
 int bkl_drop(void)
 {
     return 0;
 }
 
+/** Do nothing: no big kernel lock was let go. */
 void bkl_take(int depth)
 {
     (void)depth;
 }
 
+/** Do nothing: there is no other processor to wake. */
 void smp_kick(int cpu)
 {
     (void)cpu;
 }
 
-/** The idle task's loop is never run here. */
+/** Do nothing: the idle task's loop does not run here. */
 void arch_irq_disable(void)
 {}
 
-/** No process here arms a timer of processor time, which posts a signal. */
+/** Do nothing: no process here arms a timer of processor time. */
 void signal_post(process_t *target, int signo)
 {
     (void)target;
     (void)signo;
 }
 
-/** No suspend to idle holds the processes here. */
+/** Return 1: no suspend to idle holds the processes here. */
 int suspend_lets_run(const struct process *p)
 {
     (void)p;
     return 1;
 }
 
-/** Nor a POSIX timer on a clock of processor time. */
+/** Do nothing: no process here has a POSIX timer on processor time. */
 void ptimer_cpu_tick(const struct process *p, int user)
 {
     (void)p;
@@ -160,26 +169,34 @@ void arch_debug_switch(struct process *old, const struct process *next)
     (void)next;
 }
 
-/** Check publication while leaving the host on its own stack. */
+/**
+ * Check that the dispatch is atomic: interrupts are masked and `current_proc`
+ * is already `next`. The host stays on its own stack and returns.
+ */
 void switch_context(process_t *old, process_t *next)
 {
     (void)old;
     CHECK(!irq_flags && current_proc == next, "dispatch is atomic");
 }
 
-/** These rows have no loopback packets. */
+/** Return 0: these rows have no loopback packets. */
 int ip_loop_pending(void)
 {
     return 0;
 }
 
-/** These rows have no loopback packets. */
+/** Do nothing: these rows have no loopback packets. */
 void ip_loop_drain_from(int from)
 {
     (void)from;
 }
 
-/** Arm one blocked reader beside one running process. */
+/**
+ * Arm one blocked reader, pid 11, beside one running process, pid 10, and
+ * deliver one keystroke to it at 32000 us: a pump that entered at 1000 us and
+ * drained at 31000 us, run by an interrupt when `msi` is nonzero. The reader
+ * is woken but not yet dispatched, and no record has been taken.
+ */
 static void begin(int msi)
 {
     unsigned i;
@@ -210,7 +227,11 @@ static void begin(int msi)
     record[0] = '\0';
 }
 
-/** Dispatch through the actual scheduler, then delay the terminal's read. */
+/**
+ * Dispatch the reader through the scheduler unless it already runs, add a
+ * pump and 65536 bytes of work after the dispatch, and read at 112000 us
+ * with interrupts enabled; the read must leave them enabled.
+ */
 static void finish(void)
 {
     if (current_proc->pid != 11) {
@@ -224,7 +245,12 @@ static void finish(void)
     CHECK(irq_flags == 0x200, "read restores interrupts");
 }
 
-/** Emit slow and faulty records for the same checker used by the guest rows. */
+/**
+ * With no argument, run every row and print the result. With a mode (spin,
+ * timer, random, pump, work or undispatched), run that one case and print
+ * its record for `tests/system/checkers/usblatency.awk`, the checker of the
+ * guest rows; the exit status is 1 when a row of the case failed.
+ */
 int main(int argc, char **argv)
 {
     const char *mode = argc > 1 ? argv[1] : "spin";
