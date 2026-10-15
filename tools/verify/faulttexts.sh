@@ -4,13 +4,14 @@
 #
 # A fault script proves a test by putting faults into sources and requiring
 # the test to fail. Each fault finds the text it changes in its source, and a
-# change to that source can leave the text out, which the proof otherwise
-# finds only when it runs, hours later. Every fault script therefore takes
+# change to that source can remove the text, which the proof would otherwise
+# find only when it runs, hours later. Every fault script therefore takes
 # --texts, which looks for each fault's text in the tree's source by the
-# script's own rule, mostly once, and exits. The fault scripts are the
-# *_mutate.sh files under tests/, tools/dev/poll_kernels.sh, and every other
-# script under tests/ or tools/ with a --mutate mode. One of them without a
-# --texts mode is refused, not run, since it would start its proof.
+# script's own rule, in most scripts that it occurs once, and exits. The fault
+# scripts are the *_mutate.sh files under tests/, tools/dev/poll_kernels.sh,
+# and every other script under tests/ or tools/ with a --mutate mode. One
+# without a --texts mode is counted as a failure and not run, since it would
+# start its proof.
 #
 # Usage: sh tools/verify/faulttexts.sh
 set -u

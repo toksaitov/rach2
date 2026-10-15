@@ -1,38 +1,39 @@
 #!/usr/bin/env sh
 #
-# analyze.sh: the slow analysers, run by `make analyze` at a milestone's close
-# and not by the style suite, which stays about a minute.
+# analyze.sh: the slow analysers, run by `make analyze` and not by the style
+# suite, which takes about a minute.
 #
 #   1. GCC's -fanalyzer over the kernel and the guest programs, under
-#      -Werror, with -Wanalyzer-too-complex so a path the analyser stops
-#      following is reported and not silently green: those are counted and
-#      listed by program point, not held against the build, since a
-#      dispatcher's call graph exceeds the analyser's budget by design. The
-#      allocators are declared with the malloc attributes and k_panic with
-#      noreturn (sys/lib/kdef.h), which is what lets it follow a block from
-#      kmalloc to kfree or to a leak.
-#   2. cppcheck at --check-level=exhaustive over the two lists
+#      -Werror, with -Wanalyzer-too-complex so that a path the analyser stops
+#      following is reported. Those reports are counted and listed by program
+#      point but do not fail the run, since a dispatcher's call graph exceeds
+#      the analyser's budget by design. The allocators are declared with the
+#      malloc attributes and k_panic with noreturn (sys/lib/kdef.h), so that
+#      the analyser can follow a block from kmalloc to kfree or to a leak.
+#   2. cppcheck at --check-level=exhaustive over the lists that
 #      tools/verify/srclists.sh writes, the ones the style suite checks at the
 #      normal level, with the same suppressions.
-#   3. clang-tidy's bugprone-* and misc-* checks and the cognitive
-#      complexity report over the kernel, advisory: the count and the log,
-#      never a verdict, since the checks overlap the two above and the
-#      complexity numbers are read by a person. clang-tidy takes a directory
-#      and reads compile_commands.json in it, so the kernel's own database is
-#      copied there and the host tests' commands for the same sources are not
-#      the ones it reads. Left out: misc-include-cleaner (header hygiene, no
+#   3. clang-tidy's bugprone-* and misc-* checks and the cognitive complexity
+#      report over the kernel. The count and the log are advisory and do not
+#      fail the run, since the checks overlap the two above and a person reads
+#      the complexity numbers. clang-tidy takes a directory and reads the
+#      compile_commands.json in it, so the kernel's own database is copied to
+#      a directory of its own, and the host tests' commands for the same
+#      sources are not read. Left out: misc-include-cleaner (header hygiene, no
 #      fault), the swappable parameters check (every pair of integers), and
-#      the reserved identifier check, which names the _NAME_H_ guards the
-#      tree requires.
+#      the reserved identifier check, which flags the _NAME_H_ guards the tree
+#      requires.
 #   4. The linker's dead-code report: the kernel linked with function and
-#      data sections and --gc-sections, every section the linker dropped
-#      printed. The linker honours assembly references, which cppcheck's
-#      unusedFunction does not. Advisory: the count and the list.
+#      data sections and --gc-sections, and every section the linker dropped
+#      printed. The linker counts references from assembly, which cppcheck's
+#      unusedFunction does not. The count and the list are advisory.
 #
-# Each analyser reads the compilation databases the build phase generates,
-# or builds the component again under its own COMPONENT name, so the
-# ordinary objects are never touched. Usage: analyze.sh [--fast]; --fast
-# skips the exhaustive cppcheck.
+# The first and the last step build each component again under a COMPONENT
+# name of their own, so the ordinary objects are not touched; the third reads
+# the databases that tools/dev/gen_compile_commands.sh writes. The logs are
+# under build/verify/analyze/.
+#
+# Usage: analyze.sh [--fast]; --fast skips the exhaustive cppcheck.
 set -u
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO" || exit 1
@@ -41,6 +42,7 @@ mkdir -p "$VDIR"
 fail=0
 fast=0
 [ "${1:-}" = "--fast" ] && fast=1
+# Print the heading of a step.
 hr() { echo "---- $1 ----"; }
 
 hr "1/4 -fanalyzer over the kernel and the guest programs"

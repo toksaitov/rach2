@@ -1,37 +1,38 @@
 #!/usr/bin/env sh
 
 #
-# prose_report.sh: the measured half of the prose check.
+# prose_report.sh: report how often the watched phrases occur in the in-house
+# prose, beside their rate in the upstream sources.
 #
 # `prosecheck banned` fails a build on terms that are wrong at any
-# frequency. This is the other half: a watch list of ordinary phrases,
-# measured and never gated, because a high multiple is a question to ask
-# and not a defect. Teaching prose compares and negates more often than
-# terse implementation comments do, which is most of what `which is` and
-# `not a` measure.
+# frequency. This report covers the rest: a watch list of ordinary phrases,
+# counted for a person to read, since a high multiple is a question to ask
+# about the prose and fails nothing. Teaching prose compares and negates more
+# often than terse implementation comments do, which accounts for most of
+# what `which is` and `not a` count.
 #
-# The baseline is the upstream sources this repository vendors: musl,
-# busybox, dropbear, tinycc, pdpmake, and the Doom engine. They are human
-# comment prose in the same domain, written by people with no connection to
-# this project, which is what makes them a control. They are read from the
-# PINNED TARBALLS and not from the extracted directories, because
-# extraction happens during a build and a fresh clone has only the
-# tarballs; a check that needed the extracted trees could not run on the
-# machine this exists to serve. Each tarball is unpacked into a temporary
-# directory for the reading and the directory is removed afterwards.
+# The comparison is with the upstream sources the repository vendors, each
+# project with a pinned tarball under vendor/, and the Doom engine's tracked
+# sources. They are comments in the same domain, written by people outside
+# this project, and so serve as a control. They are read from the pinned
+# tarballs, since the build extracts them and a fresh clone has only the
+# tarballs; each is unpacked into a temporary directory, which is removed
+# after it is read.
 #
 # Three populations are reported and never pooled: C and header comments,
 # the comments in shell, make and Python, and Markdown prose. Only the
-# first has an upstream counterpart, so only the first gets a ratio.
-# Comparing our Markdown to upstream C comments would compare a tutorial to
-# a register description.
+# first has an upstream counterpart, so only the first has a ratio.
 #
 # Usage:
 #     prose_report.sh                  the report
 #     prose_report.sh --baseline       compare with the committed record
 #     prose_report.sh --baseline --write
-#     prose_report.sh --fixture        verify the committed upstream counts
+#     prose_report.sh --fixture        compare with the upstream record
 #     prose_report.sh --fixture --write
+#
+# --write writes the record or the upstream counts in place of comparing.
+# The baseline, tools/verify/prose_baseline.txt, is rewritten in a commit of
+# its own, after the prose it measures (AGENTS.md, Register rule).
 #
 
 set -eu
@@ -64,14 +65,16 @@ N_WATCH="$(printf '%s\n' "$WATCH" | wc -w | tr -d ' ')"
 # population includes.
 OURS="rach2 utils ish krffs tests tools mk ports/doom CLAUDE.md AGENTS.md Readme.md"
 
-# `words N` and one `phrase N` per watched phrase, as one line of numbers.
+# counts_of POPULATION PATHS: print the word count of POPULATION (c, hash or
+# md) in PATHS and the count of each watched phrase, as one line of numbers.
 counts_of() {
     # shellcheck disable=SC2086 # the roots are a deliberate word list
     "$PROSECHECK" count "$1" $2 | awk '{ printf "%s%s", sep, $2; sep = " " }
                                        END { print "" }'
 }
 
-# One upstream project's C and header comments, from its pinned tarball.
+# upstream_counts NAME TARBALL: print the counts of one upstream project's C
+# and header comments, read from its pinned tarball.
 upstream_counts() {
     dir="$WORK/up.$1"
     rm -rf "$dir"
@@ -86,8 +89,8 @@ upstream_counts() {
     rm -rf "$dir"
 }
 
-# Every vendored project with a pinned tarball, plus the tracked Doom
-# sources, in name order.
+# Print `NAME PATH` for every vendored project with a pinned tarball, PATH
+# its tarball, and for the tracked Doom sources, PATH their directory.
 project_names() {
     for d in "$REPO"/vendor/*/; do
         name="$(basename "$d")"
@@ -121,6 +124,7 @@ fixture_lines() {
     upstream_table
 }
 
+# The baseline's shape, for --baseline: the in-house counts per population.
 baseline_lines() {
     printf '%s\n' \
         "# Watched phrases, per population, at the end of milestone 30." \
@@ -162,8 +166,8 @@ case "${1:-}" in
             exit 0
         fi
         [ -f "$BASELINE" ] || { cat "$WORK/baseline.txt"; finished=1; exit 0; }
-        # What moved since the record was written, phrase by phrase. This
-        # is a record and not a limit: only the banned terms fail a build.
+        # What changed since the record was written, phrase by phrase. The
+        # record sets no limit: only the banned terms fail a build.
         printf '%-10s %-14s %8s %8s %8s\n' population phrase 'then' now change
         awk -v names="words $WATCH" '
             FNR == NR {
@@ -206,6 +210,9 @@ UPSUM="$(awk -v n="$N_WATCH" '
     END { for (i = 3; i <= n + 2; i++) printf "%s%d", (i > 3 ? " " : ""), s[i]
           print "" }' "$WORK/up.txt")"
 
+# report_population POPULATION LABEL: print each watched phrase's count and
+# rate per thousand words in POPULATION, and for the C comments its upstream
+# rate and the ratio of the two.
 report_population() {
     pop="$1"
     label="$2"

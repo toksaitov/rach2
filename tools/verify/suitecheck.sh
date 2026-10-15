@@ -1,10 +1,10 @@
 #!/bin/sh
-# suitecheck.sh: the suites wait for tokens and assert on counts.
+# suitecheck.sh: check that the suites wait for tokens and assert on counts.
 #
 # A suite that sleeps for a number of seconds has guessed how long a machine
 # takes, and a probe that compares a duration with a constant has too: both
 # pass on the machine that set the number and fail on a slower one, or on
-# the same one under load. This check refuses the forms, in
+# the same one under load. The check fails on these forms, in
 # tests/system/suites/*.sh, tests/system/suites.mk and the probes tests/*.c:
 #
 #   * `sleep N` in a suite, on the host or typed into the guest
@@ -17,30 +17,30 @@
 #     in `_ms`, `_MS` or `secs`, one with `elapsed` in it, or `took`, against
 #     a literal of three digits or more: `x < 3000`, `x <= 3000`, `x > 3000`,
 #     `3000 > x`, `3000 >= x`. A lower bound, `slept_ms >= 130`, is the
-#     contract of a sleep and is not refused.
+#     contract of a sleep and passes.
 #
 # A deliberate interval, a load applied for a period, a holder that must
 # outlive the step it holds against, a file time that must advance, a poll
-# of a server between tries, carries `interval: REASON` in a comment on its
-# line or on the line above its command, which runs to the end of the
-# command's continuation lines, and
-# tests/system/intervals lists `FILE: REASON` in the same words, FILE
-# relative to the repository, so that every interval is written down once
-# and read by a person. A `wait=` step has no reason to give: the harness
-# step is gone.
+# of a server between tries, has `interval: REASON` in a comment on its line
+# or on a line of its own above its command, where it covers the command's
+# continuation lines too, and tests/system/intervals lists `FILE: REASON` in
+# the same words, FILE relative to the repository, so that every interval is
+# written down once and read by a person. A `wait=` step fails even when it
+# is marked, since the harness has no such step.
 #
 #   sh tools/verify/suitecheck.sh             check the tree
-#   sh tools/verify/suitecheck.sh --selftest  prove the check on fixtures
+#   sh tools/verify/suitecheck.sh --selftest  run the check on fixtures
 #
-# Exit 0 when nothing is refused, 1 with each refusal on stderr as
-# `suitecheck: FILE:LINE: WHAT`, 2 when a file cannot be read.
+# The exit status is 0 when nothing is found; 1 with each finding on stderr
+# as `suitecheck: FILE:LINE: WHAT`; 2 when a file cannot be read.
+# SUITECHECK_ROOT, when set, is the tree to check in place of this one.
 
 set -u
 REPO=${SUITECHECK_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}
 REASONS="$REPO/tests/system/intervals"
 
-# The refusals of one file, on stdout, as `FILE:LINE: WHAT`. `$2` names
-# the kind: `suite` or `probe`.
+# scan FILE KIND: print the findings of one file, KIND `suite` or `probe`, on
+# stdout as `FILE:LINE: WHAT`.
 scan() {
     awk -v file="${1#"$REPO/"}" -v kind="$2" -v reasons="$REASONS" '
     BEGIN {
@@ -94,8 +94,7 @@ scan() {
                 refuse("an upper bound on a duration")
             }
         }
-        # A mark on a line of its own covers the command after it, to the
-        # end of its continuation lines.
+        # A mark alone on a line covers the next command and its continuations.
         if ($0 ~ /^[ \t]*(#|\/\*)[ \t]*interval:/) {
             prev_mark = reason_of($0)
         } else if ($0 !~ /\\$/) {
@@ -104,6 +103,9 @@ scan() {
     }' "$1"
 }
 
+# Check the suites and the probes of the tree, and that every reason the
+# intervals file lists is still marked in its file; return 0, 1 or 2 as the
+# script exits.
 check_tree() {
     rc=0
     [ -r "$REASONS" ] || { echo "suitecheck: $REASONS: cannot read the reasons file" >&2; return 2; }
@@ -117,8 +119,7 @@ check_tree() {
         out=$(scan "$f" probe)
         [ -z "$out" ] || { echo "$out" | sed 's/^/suitecheck: /' >&2; rc=1; }
     done
-    # Every listed reason is used: a line deleted leaves its entry behind
-    # otherwise, and the list stops being the inventory.
+    # A listed reason that no line of its file marks is a finding.
     while IFS= read -r entry; do
         case "$entry" in ''|'#'*) continue ;; esac
         f=${entry%%: *}; r=${entry#*: }
@@ -129,15 +130,16 @@ check_tree() {
     return $rc
 }
 
-# The fixtures: each case is a tree under a temporary root, checked, and
-# its exit compared with the one the rule promises.
+# Run the check over fixtures: each case is a tree under a temporary root,
+# checked by this script, and its exit status compared with the one the rule
+# gives. Exits 1 when a case differs.
 # shellcheck disable=SC2016
 selftest() {
     T=$(mktemp -d "${TMPDIR:-/tmp}/suitecheck.XXXXXX") || exit 2
     trap 'rm -rf "$T"' EXIT INT TERM
     n=0; bad=0
+    # case_ STATUS NAME: check the tree under $T/NAME and expect STATUS.
     case_() {
-        # $1 expected exit, $2 name; the tree is under $T/$2
         n=$((n + 1))
         SUITECHECK_ROOT="$T/$2" sh "$0" > "$T/$2.out" 2>&1
         got=$?
@@ -145,8 +147,9 @@ selftest() {
             echo "suitecheck selftest: $2: exit $got, expected $1"; cat "$T/$2.out"; bad=1
         fi
     }
+    # tree NAME SUITE PROBE REASONS: write a tree under $T/NAME with SUITE as
+    # its one suite, PROBE as its one probe and REASONS as its intervals file.
     tree() {
-        # $1 name, $2 suite text, $3 probe text, $4 reasons text
         mkdir -p "$T/$1/tests/system/suites"
         printf '%s\n' "$2" > "$T/$1/tests/system/suites/a.sh"
         : > "$T/$1/tests/system/suites.mk"

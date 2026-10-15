@@ -1,22 +1,21 @@
 #!/usr/bin/env sh
 #
-# textcheck.sh: mechanical text-style checks for the in-house files (see
-# AGENTS.md for the rules). It is called by tools/verify/check.sh, and a
-# finding fails `tests/run style`.
+# textcheck.sh: the text-style checks of the in-house files that a pattern
+# can decide, from the Writing and Documentation sections of AGENTS.md. Run
+# by tools/verify/check.sh; a finding fails `tests/run style`.
 #
-# It checks only objective things that cannot misfire: non-ASCII bytes (which
-# kills Unicode dashes, smart quotes, and the ellipsis character) across the
-# in-house C, headers, assembly, Markdown, shell, make, Python, and the
-# configuration files; the em-dash written as a spaced "--" in a C, H,
-# assembly, linker-script or awk comment, in an echo or printf message or a
-# make $(error/warning/info) directive, in a Python docstring or message, on
-# any line of a configuration file, or in Markdown prose; Markdown bullets
-# that use "-"; a leftover "Phase N" or "Part N" diary tag in a code comment
-# or a configuration file; and, in the component documents, a "##" heading
-# out of the list and order of AGENTS.md or a milestone cited by number.
-# Vocabulary is checked by tools/verify/prosecheck.c, not here, and the
-# half of the register rule that needs a judgement is checked by a person in
-# review. It uses grep, find, awk and sed.
+# The checks find: a non-ASCII byte (a Unicode dash, a smart quote, the
+# ellipsis character) in the in-house C, headers, assembly, Markdown, shell,
+# make, Python and configuration files; an em-dash written as a spaced "--"
+# in a C, header, assembly, linker-script or awk comment, in an echo or
+# printf message or a make $(error/warning/info) directive, in a Python
+# docstring or message, on any line of a configuration file, or in Markdown
+# prose; a Markdown bullet written as "-"; a "Phase N" or "Part N" diary tag
+# in a code comment or a configuration file; and, in the component
+# documents, a "##" heading out of the list and order of AGENTS.md, or a
+# milestone cited by number. tools/verify/prosecheck.c checks the
+# vocabulary, and a person checks the rest of the register rule in review.
+# The script uses grep, find, awk and sed.
 #
 set -u
 
@@ -32,12 +31,11 @@ cd "$REPO" || exit 1
 findings=$(mktemp)
 trap 'rm -f "$findings"' EXIT INT TERM
 
-# Find in-house files under the source roots. The vendored extracted trees and
-# their built output (vendor/musl/install and the extracted musl, busybox,
-# dropbear, tcc, pdpmake and e2fsprogs trees) are pruned; the out-of-tree build/
-# at the repo root is not a search root, so it is never descended into.
-# ports/doom and the dev-log records are not roots, so they are skipped. The
-# caller appends the name filter and -print.
+# Find in-house files under the source roots; the arguments are the name
+# filter and -print. The extracted vendor trees and their built output
+# (vendor/musl/install and the extracted musl, busybox, dropbear, tcc, pdpmake
+# and e2fsprogs trees) are pruned. build/, ports/doom and dev-log/ are not
+# roots, so they are not searched.
 prune_find() {
     find rach2 ish utils tests krffs tools mk vendor \
         -path 'vendor/musl/install' -prune -o \
@@ -50,6 +48,7 @@ prune_find() {
         "$@" 2>/dev/null
 }
 
+# The Markdown files: those at the top and those under the source roots.
 md_files() {
     ls ./*.md 2>/dev/null
     prune_find -name '*.md' -print
@@ -71,6 +70,7 @@ script_files() {
     prune_find '(' -name '*.mk' -o -name 'Makefile' -o -name 'Makefile.*' ')' -print
 }
 
+# The C files and headers.
 ch_files() {
     prune_find '(' -name '*.c' -o -name '*.h' ')' -print
 }
@@ -82,7 +82,7 @@ other_code_files() {
     prune_find '(' -name '*.s' -o -name '*.ld' -o -name '*.awk' -o -name '*.inc' ')' -print
 }
 
-# The Rach2-authored Python tools under tools/.
+# The in-house Python files under the source roots.
 py_files() {
     prune_find -name '*.py' -print
 }
@@ -105,9 +105,8 @@ config_files() {
 
 {
     # Non-ASCII bytes in every in-house file: Markdown, shell and make, the
-    # C, headers and other code, and the configuration files (the convention
-    # check in tools/verify/check.sh also covers the C/H, so this is a second
-    # line of defense for a stray Unicode dash or smart quote).
+    # C, headers and other code, and the configuration files. The convention
+    # step of tools/verify/check.sh checks the C files and headers too.
     { md_files; script_files; ch_files; other_code_files; py_files; config_files; } |
         sort -u | while IFS= read -r f; do
         [ -f "$f" ] || continue
@@ -158,8 +157,7 @@ config_files() {
     # A "Phase N" or "Part N" development-diary tag in a code comment or a
     # configuration file. Strings are stripped from the code first, so a
     # capitalized "Phase" or "Part" followed by a number in what remains is a
-    # comment marker (the legitimate place to record phases is the commit
-    # message and the dev-log, not the source).
+    # comment marker. Phases are recorded in commit messages and dev-log/.
     { ch_files; other_code_files; } | sort -u | while IFS= read -r f; do
         [ -f "$f" ] || continue
         sed 's/"[^"]*"//g' "$f" | grep -nE '\b(Phase|Part) [0-9]' \
@@ -172,8 +170,8 @@ config_files() {
     done
 
     # In Markdown, flag a spaced "--" and a "-" bullet, skipping fenced and
-    # indented code so a command example is never mistaken for prose. Fences are
-    # ``` or ~~~ with up to a few leading spaces.
+    # indented code so that a command example is not read as prose. A fence is
+    # ``` or ~~~ after any leading blanks.
     md_files | sort -u | while IFS= read -r f; do
         [ -f "$f" ] || continue
         awk -v file="$f" '

@@ -8,8 +8,8 @@
 #
 # The shared code, C_SRC_SHARED in rach2/sources.mk, is compiled by every
 # architecture; a platform's files, the processor's and the drivers of the
-# devices only that platform has, are listed by the architecture. Three
-# checks, each naming what it found:
+# devices only that platform has, are listed by the architecture. There are
+# three checks, and each reports what it finds:
 #
 #   1. clang's front end compiles the shared code for 32-bit and 64-bit ARM,
 #      the two architectures with headers alone, with the pointer and
@@ -27,7 +27,7 @@
 #      x86-64 and the two ARM ones, so that an include under `#if` for one
 #      processor is seen.
 #   3. No shared file has inline assembly. The one exception is the compiler
-#      barrier `k_barrier` in lib/kdef.h, which names no instruction.
+#      barrier `k_barrier` in sys/lib/kdef.h, which has no instruction.
 
 status=0
 shared=

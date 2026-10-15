@@ -1,14 +1,18 @@
 #!/usr/bin/env sh
 #
-# coverage.sh [NAME...]: the host tier's coverage, as an inventory and not a
-# score. Each host test named (all of them without arguments) is built again
-# with --coverage under the tier's own flags, run, and gcov is asked about
-# the kernel sources the test's `host-deps:` lines name: the lines executed
-# and the branches taken, per file. Nothing is summed across files or
-# tests. A person reads the report to choose the next test from a branch
-# nothing took, and to notice the drop when a case is removed. It is never
-# kernel coverage: the tier substitutes the allocator and the string
-# routines and runs at the host's width, and the kernel's proof is a boot.
+# coverage.sh [NAME...]: report what the host tests execute of the kernel
+# sources, file by file.
+#
+# Each host test named, or every one when none is named, is built again with
+# --coverage under the host tier's own flags and run, and gcov reports the
+# lines executed and the branches taken in each kernel source the test
+# compiled, whether linked from its `host-deps:` lines or included into the
+# test. Nothing is summed across files or tests, and there is no threshold.
+# A person reads the report to choose the next test from a branch no test
+# took, and to see the drop when a case is removed. The numbers are not the
+# kernel's coverage: the tier substitutes the allocator and the string
+# routines and runs at the host's width, and the kernel is tested by a boot.
+# The output is under build/verify/coverage/.
 #
 # On the Mac `gcov` is llvm-cov's, which prints the same summary lines.
 set -u
@@ -43,9 +47,7 @@ for name in "$@"; do
     fi
     (cd "$REPO" && "$dir/test") >"$dir/run.log" 2>&1
     echo "$name: exit $?"
-    # Every kernel source the test compiled, whether linked from its
-    # host-deps or included into the test itself: gcov reports a section
-    # per source file, and the ones under rach2/ are the inventory.
+    # gcov reports a section per source file; those under rach2/ are kept.
     for gcno in "$dir"/test-*.gcno; do
         obj=${gcno%.gcno}
         $GCOV -n -b -o "$obj" "$obj" 2>/dev/null | awk '

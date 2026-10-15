@@ -1,6 +1,7 @@
 #!/usr/bin/env sh
 #
-# dbcheck.sh: every in-house C source is compiled by something.
+# dbcheck.sh: check that every in-house C source is compiled by a build or a
+# test.
 #
 # tools/dev/gen_compile_commands.sh writes one database per unit under
 # build/compile_commands/. A source none of them names is one no build
@@ -45,9 +46,12 @@ sources=$( {
     find tools -name '*.c'
     find ports/doom -maxdepth 1 -name '*.c'
 } 2>/dev/null | sort -u )
+# included FILE: true when a C file in FILE's directory includes FILE by name.
 included() {
     grep -rqF --include='*.c' "#include \"${1##*/}\"" "$(dirname "$1")"
 }
+# fixture FILE: true when FILE is under tests/system/fixtures or
+# tests/host/fixtures and a script under tests/system or tests/host names it.
 fixture() {
     case $1 in
         tests/system/fixtures/*) tree=tests/system ;;

@@ -1,5 +1,12 @@
 #!/bin/sh
-# Require every built guest program to have a suite or a documented helper use.
+# probecheck.sh: check that every guest program tests/ builds has a suite or a
+# helper use with its reason.
+#
+# A program is assigned once: to the default suite by the PROBES table of
+# tests/system/runner/runtests.c, to a suite of tests/registry by a line
+# `NAME SUITE` of tests/probe-suites, or as a helper by a line `NAME REASON`
+# of tests/probe-helpers. An assignment of a program that is not built fails
+# too. PROBECHECK_ROOT, when set, is the tree to check in place of this one.
 set -eu
 REPO=${PROBECHECK_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/probecheck.XXXXXX")

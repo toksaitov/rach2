@@ -1,19 +1,17 @@
 #!/usr/bin/env sh
 
 #
-# linkcheck.sh: every Markdown link in the in-house documents names a file
-# that is there, and every anchor names a heading that is in it.
+# linkcheck.sh: check that every Markdown link in the in-house documents
+# points at a file that exists, and every anchor at a heading in that file.
 #
-# A document that points at a file a commit moved is worse than one that says
-# nothing: a reader follows it and learns that the tree cannot be trusted.
+# A link to a file that a commit moved or deleted leads the reader nowhere.
 # URLs are left alone, since this runs with no network, and so is an anchor of
-# the form `L120`, which names a line and not a heading. A link inside a code
-# span is an example of the form and not a link, so code spans are removed
-# first. The in-house documents are the Markdown files that git tracks, so
-# the extracted vendor trees and any helper's worktree under `.claude/` are
-# left out. `dev-log/` is excluded too: those records are history, and a
-# path inside one is relative to the repository root rather than to the
-# document.
+# the form `L120`, which is a line and not a heading. A link inside a code
+# span is an example of the syntax, so code spans are removed first. The
+# in-house documents are the Markdown files that git tracks, so the extracted
+# vendor trees and any helper's worktree under `.claude/` are left out.
+# `dev-log/` is left out too: its records are history, and a path inside one
+# is relative to the repository root rather than to the document.
 #
 # An anchor is a heading's text in lower case, with spaces turned to hyphens
 # and everything that is not a letter, a digit, a hyphen or an underscore

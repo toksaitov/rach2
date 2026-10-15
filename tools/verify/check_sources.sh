@@ -1,22 +1,21 @@
 #!/usr/bin/env sh
 #
-# check_sources.sh: kernel source-list guard (run via `make check-sources`, and
-# run by the style check, tools/verify/check.sh).
+# check_sources.sh: check the kernel's source list against the disk; run by
+# `make check-sources` and by the style check, tools/verify/check.sh.
 #
-# Every C source on disk in the kernel tree (rach2/kernel.c + rach2/sys/**/*.c)
-# must appear in the explicit C_SRC list in rach2/sources.mk of some
-# architecture, and every C_SRC entry must exist on disk. C_SRC is the shared
-# list and the architecture's own, sys/arch/ARCH/sources.mk, so the list
-# checked is the union over every architecture that has a processor's
-# directory with a source list: an i686 file is in i686's alone, an x86-64
-# one in x86-64's alone, and the PC's in both. A new kernel .c that is not
-# added to C_SRC would be silently left out of the build (and out of the
-# ABI/boot tests), so this fails loudly instead. Doom and the vendored
-# musl/busybox/dropbear trees keep their own source lists and are
-# intentionally NOT gated here.
+# Every C source on disk in the kernel tree (rach2/kernel.c and
+# rach2/sys/**/*.c) must be in the C_SRC list of some architecture, and every
+# C_SRC entry must exist on disk. C_SRC is the shared list of
+# rach2/sources.mk and the architecture's own, sys/arch/ARCH/sources.mk, so
+# the list checked is the union over every architecture that has a
+# processor's directory with a source list: an i686 file is in i686's alone,
+# an x86-64 one in x86-64's alone, and the PC's in both. A kernel .c missing
+# from C_SRC would be left out of the build, and out of the ABI and boot
+# tests, with no error. Doom and the vendored trees keep their own source
+# lists and are not checked here.
 #
-# Exits non-zero (and prints the offending files) if the list and the disk
-# disagree.
+# The exit status is 1, with the files named, when the list and the disk
+# differ, and 2 when the check cannot run.
 #
 set -u
 
@@ -43,11 +42,11 @@ listed=$(for a in $arches; do
     make --no-print-directory -C "$K" ARCH="$a" CROSS_CC=true print-c-src 2>/dev/null
 done | tr ' ' '\n' | sed '/^[[:space:]]*$/d' | sort -u)
 
-# Every C source actually on disk in the kernel tree.
+# Every C source on disk in the kernel tree.
 ondisk=$(cd "$K" && find kernel.c sys -name '*.c' 2>/dev/null | sed 's#^\./##' | sort -u)
 
-# Fail closed if mktemp cannot give us scratch files: without these the
-# comparison below would find nothing and the check would falsely print OK.
+# A failed mktemp stops the check, since the comparison below would then find
+# nothing and print OK.
 lf=$(mktemp) || { echo "check-sources: mktemp failed" >&2; exit 2; }
 df=$(mktemp) || { echo "check-sources: mktemp failed" >&2; rm -f "$lf"; exit 2; }
 trap 'rm -f "$lf" "$df"' EXIT INT TERM

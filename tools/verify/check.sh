@@ -1,64 +1,81 @@
 #!/usr/bin/env sh
 
 #
-# check.sh: the Rach2 source checks (`tests/run style`).
+# check.sh: the source checks of `tests/run style`.
 #
-# Over IN-HOUSE code only (the kernel, the krffs host tools, the utils, the ish
-# shell, the tests, and the build scripts; never the vendored musl/ports trees),
-# runs:
+# The checks read the in-house code: the kernel, the KRFFS host tools, the
+# utilities, the ish shell, the tests, the tools and the build scripts, and
+# none of the vendored trees. First the script runs the tests of its own
+# parts that need no image: its private log directory
+# (tests/system/verify_temp_test.sh), the probe assignments (probecheck.sh
+# and its test), the probe faults' check (probe_faults.sh --check) and the
+# fault texts (faulttexts.sh). A preflight then looks for every tool the
+# steps run, and a missing tool fails the run. The steps are:
 #
-#   0. a tool-presence check (a missing tool is a hard FAILURE, never a silent
-#   skip) 1. the kernel build with -Werror (the zero-warning policy, enforced)
-#   2. cppcheck (c89; warning, style, performance, portability) with
-#      tools/verify/cppcheck.suppress, the kernel once as i686's 32-bit code
-#      and once as x86-64's 64-bit code, and the host programs (tools/,
-#      tests/system/, krffs/) at c99
-#      (--error-exitcode; a differing cppcheck version reports its findings and
-#      decides nothing, but a cppcheck that fails to run fails the step)
-#   3. shellcheck on every in-house shell script (tools/verify/scripts.sh)
-#   4. the convention grep (no // comments, ASCII only, _NAME_H_ guards)
-#   5. clang-format on every in-house file and any named as arguments, judged
-#      by the version tools/setup/judges records
-#   6. a readelf ABI check on a freshly linked musl binary (entry + load range)
-#      of the architecture ARCH names, i686 unless set
-#   7. the kernel source-list guard (every rach2 .c on disk is in C_SRC), no
-#      product rule under tests/, every source in a compilation database, and
-#      the architecture layer (tools/verify/archcheck.sh): the shared kernel
-#      code compiles for 32- and 64-bit ARM, reaches no architecture's or
-#      platform's own header, and has no assembly
-#   8. text style, in three parts: textcheck.sh for non-ASCII, dashes and
-#      the component documents' headings and citations,
-#      prosecheck for the 80-column comment rule and for the vocabulary a
-#      script can decide (both beside this file).
-#   9. the probe runner's scoring rule (runtests --selftest)
-#  10. the set-id manifest sweep (tools/inspect/setidcheck.c)
-#  11. image reproducibility (tools/verify/check_repro.sh): one tree, one image
-#  12. the checker selftests (elfcheck, cfgcheck, and
-#      the compile-commands generator)
-#  13. the dev-log index (prosecheck devlog): it names every finished
-#      milestone, and names the newest last
-#  14. the test registry against the run- targets in tests/system/suites.mk,
+#   1. The kernel build, under -Werror.
+#   2. cppcheck (warning, style, performance, portability) with
+#      tools/verify/cppcheck.suppress: the kernel once as i686's 32-bit C89
+#      and once as x86-64's 64-bit C89, and the host programs (tools/,
+#      tests/system/, krffs/) as C99. Findings are judged only under the
+#      version tools/setup/judges records, but a cppcheck that fails to run
+#      fails the step under any version.
+#   3. ShellCheck on every in-house shell script (tools/verify/scripts.sh).
+#   4. Conventions: no // comments, ASCII only, a guard in every header, an
+#      idle wait only through the scheduler's helpers, no end-of-options
+#      marker before a process group in kill, and a `finished` flag in a
+#      script that sets -e and -u and traps EXIT.
+#   5. clang-format on every in-house C file and header and any file named as
+#      an argument, judged by the version tools/setup/judges records.
+#   6. A readelf ABI check of a static musl program linked here for the
+#      architecture ARCH names, i686 unless set: its class, type, machine,
+#      load address and entry, and no interpreter. The link-dependency test
+#      (tests/system/build_inputs_test.sh) runs before it.
+#   7. The kernel source list against the disk (check_sources.sh), the guest
+#      build lists (guestcheck.c), no product rule under tests/, every source
+#      in a compilation database (dbcheck.sh), and the architecture layer
+#      (archcheck.sh): the shared kernel code compiles for 32- and 64-bit
+#      ARM, includes no architecture's or platform's own header, and has no
+#      inline assembly.
+#   8. Text style: textcheck.sh for non-ASCII bytes, dashes, list bullets and
+#      the component documents' headings and citations, and prosecheck.c for
+#      the 80-column comment rule and the banned terms.
+#   9. The conversions of the kernel's messages (fmtcheck.sh).
+#  10. The runner's rules: the selftests of runtests and the harness.
+#  11. The set-id sweep of the manifests (tools/inspect/setidcheck.c).
+#  12. Image reproducibility (check_repro.sh): one tree, one image.
+#  13. The checkers' selftests and the tests of the build rules.
+#  14. The dev-log index (prosecheck devlog): it lists every finished
+#      milestone, in the directories' order.
+#  15. The test registry against the run- targets in tests/system/suites.mk,
+#      tests/system/suites.md against `tests/run inventory`,
 #      rach2/syscalls.md against what `make syscalls` writes, and
-#      man/programs.md against the output of man/programs.sh
-#  16. the suites' waits and criteria (tools/verify/suitecheck.sh): no sleep
-#      for a number of seconds, no wait= step, no upper bound on a duration
-#      in a probe, except an interval marked with a reason the file
-#      tests/system/intervals lists
-#  18. the manual against the machine (tools/verify/mancheck.c): a page or
-#      an alias for every staged program, applet and registered call, every
-#      page lint-clean, the recovery pages staged
-#  19. clang's positive list over the kernel, judged by the recorded version
-#  20. sparse over the kernel with the address-space annotations checked
-#  22. the Markdown links (tools/verify/linkcheck.sh): every link names a file
-#      that is there and every anchor a heading that is in it
-#  21. the size limits (tools/verify/sizecheck.c) over every in-house C file:
-#      100 lines, 6 parameters, nesting 4, and cyclomatic complexity 25 by
-#      pmccabe, against tools/verify/sizes.reasons
+#      man/programs.md against what `make programs-md` writes.
+#  16. Every product a run- target names is built by prepare-all.
+#  17. The suites' waits and criteria (suitecheck.sh): no sleep for a number
+#      of seconds, no wait= step, no upper bound on a duration in a probe,
+#      except an interval marked with a reason that tests/system/intervals
+#      lists.
+#  18. The manual against the machine (mancheck.c): a page or an alias for
+#      every staged program, applet and registered call, every page clean
+#      under mandoc's lint, and the recovery pages staged.
+#  19. clang's positive list of warnings over the kernel, judged by the
+#      version tools/setup/judges records.
+#  20. sparse over the kernel, with the address-space annotations checked.
+#  21. The size limits (sizecheck.c) over every in-house C file: 100 lines, 6
+#      parameters, nesting 4, and cyclomatic complexity 25 by pmccabe, against
+#      tools/verify/sizes.reasons.
+#  22. The Markdown links (linkcheck.sh): every link points at a file that
+#      exists and every anchor at a heading in it.
+#
+# A step judged by a recorded version reports SKIP under another version.
+# Where sparse is absent its step reports SKIP, and where pmccabe is absent the
+# size step leaves the complexity unjudged. The testing host has every tool,
+# at its recorded version.
 #
 # Usage:
-#     ./check.sh [file.c ...]      # extra files to hard clang-format check
+#     ./check.sh [FILE ...]      # more files for the clang-format check
 #
-# Exits non-zero if any hard check fails.
+# The exit status is 1 when any check fails.
 #
 
 set -u
@@ -115,12 +132,14 @@ case "${ARCH:-i686}" in
 esac
 fail=0
 
+# Print the heading of a step.
 hr() { printf -- '---- %s ----\n' "$*"; }
 
-# In-house C/H: the kernel, any in-house libc shim, the krffs host tools, the
-# utils, the ish shell, and every test. Excludes the vendored trees (the musl
-# source and install, the termbox2 under krffs/vendor, and krffs/vs-dokany);
-# ports/doom is not a root here.
+# Print the in-house C files and headers: the kernel, any in-house file under
+# vendor/musl, the KRFFS host tools, the utilities, the ish shell, the tests
+# and the tools. The vendored trees are left out (the musl source and install,
+# termbox2 under krffs/vendor, and krffs/vs-dokany), and ports/doom is not
+# read.
 inhouse_ch()
 {
     find rach2 \( -name '*.c' -o -name '*.h' \) 2>/dev/null
@@ -154,17 +173,16 @@ else
     echo "  FAIL: see $VDIR/verify_build.log"; fail=1
 fi
 
-# 2. cppcheck: --error-exitcode=2 makes a finding exit 2, so a silent 0-count
-#    cannot mask one. Any other non-zero status is cppcheck itself failing to
-#    run, which fails the step under every version; only the findings are the
-#    recorded version's to judge.
+# 2. cppcheck: --error-exitcode=2 makes a finding exit 2. Any other nonzero
+#    status means cppcheck failed to run, which fails the step under every
+#    version; only the findings are judged by the recorded version.
 hr "2/22 cppcheck (c89; warning, style, performance, portability)"
 # cppcheck's findings change between majors in both directions: 2.19 reports
 # a modulo of one in a mutation hook and an uninitialised word 2.21 does not,
 # and 2.21 reports a shadowed argument and an unused cast 2.19 does not. So
-# this is judged by the version tools/setup/judges records and nowhere else;
-# another version reports what it found and decides nothing, as step 5 does
-# for clang-format.
+# the findings are judged by the version tools/setup/judges records alone;
+# another version reports what it found and fails nothing, as step 5 does for
+# clang-format.
 cpp_recorded=$(sed -n 's/^cppcheck: //p' "$REPO/tools/setup/judges")
 cpp_found=$(cppcheck --version 2>/dev/null | head -1)
 . "$REPO/tools/verify/srclists.sh"
@@ -236,7 +254,8 @@ else
     echo "  FAIL: see $VDIR/verify_shellcheck.log"; fail=1
 fi
 
-# 4. convention grep (no //, ASCII only, _NAME_H_ guards)
+# 4. The conventions: no // comments, ASCII only, a guard in every header, and
+#    the three below.
 hr "4/22 conventions (no //, ASCII, header guards, marked idle wait, group kills, exit flags)"
 cv=0
 if inhouse_ch | xargs grep -nE '(^|[^:"])//' 2>/dev/null | grep -vE 'https?://|://' | grep -q .; then
@@ -258,11 +277,11 @@ done
 # `arch_idle` and `arch_idle_masked`, in sys/arch/*/cpu.c. A `sti; hlt`
 # written anywhere else, or a call of either outside the helpers, would count
 # its idle time as busy and hold the big lock through the halt, and no test
-# would notice, so both are refused. A `cli; hlt` that stops the machine for
-# good and a halt in early boot, before the scheduler accounts anything, are
-# not idle waits and are left alone. Comments are not code; the asm statement
-# and the kernel's calls are what is looked for, and a host test's stubs of
-# the two are not the kernel's.
+# would find it, so the check fails on both. A `cli; hlt` that stops the
+# machine for good and a halt in early boot, before the scheduler accounts
+# anything, are not idle waits and are not looked for. The check reads asm
+# statements and the kernel's calls, not comments, and leaves out a host
+# test's stubs of the two and the declarations in headers.
 idle_bad=$(inhouse_ch | grep -vE 'sys/arch/[^/]+/cpu\.c$' \
     | xargs grep -nE '__asm__[^;]*"[^"]*sti;[[:space:]]*hlt' 2>/dev/null || true)
 idle_call=$(inhouse_ch | grep -E '^rach2/' | grep -vE 'sys/proc/sched\.c$|sys/arch/[^/]+/cpu\.c$' \
@@ -273,7 +292,7 @@ if [ -n "$idle_bad$idle_call" ]; then
     printf '%s\n%s\n' "$idle_bad" "$idle_call" | grep . | head -3 | sed 's/^/    /'
     cv=1
 fi
-# dash, the testing host's /bin/sh, refuses `--` in its kill builtin with
+# dash, the testing host's /bin/sh, fails on `--` in its kill builtin with
 # "Illegal number: -", so `kill -TERM -- "-$child"` signals nothing, and a
 # trap that stops a test's process group that way waits for the group to end
 # by itself. After a signal option a negative pid is already a pid, so the
@@ -292,15 +311,14 @@ fi
 # in success lets the script exit 0; dash, bash 5 and BusyBox's ash report
 # the failure. So a script in the scope below that sets both and traps EXIT
 # keeps a `finished` flag, set where it succeeds, and its trap fails a run
-# that never set it (entry 222 of milestone 50's list). The scope is the
-# scripts under tools/ and krffs/, most of which the Mac runs, and the machine
-# probes and the acceptance's su command. The flags are read from a `set` at
-# the start of a line, after any other options: `-eu`, `-Ceu`, `-e -u`, the
-# two on separate lines, or `-o errexit` and `-o nounset`. A flag on the `#!`
-# line or in a second `set` after a `;` is not read. The trap is read from a
-# `trap` at the start of a line, and may span lines, its first leaving its
-# quote open and its last ending in the quote and its signals, EXIT or 0 among
-# them.
+# that never set it. The scope is the scripts under tools/ and krffs/, most of
+# which the Mac runs, and the machine probes and the acceptance's su command.
+# The flags are read from a `set` at the start of a line, after any other
+# options: `-eu`, `-Ceu`, `-e -u`, the two on separate lines, or
+# `-o errexit` and `-o nounset`. A flag on the `#!` line or in a second `set`
+# after a `;` is not read. The trap is read from a `trap` at the start of a
+# line, and may span lines, its first leaving its quote open and its last
+# ending in the quote and its signals, EXIT or 0 among them.
 opts='^[[:space:]]*set([[:space:]]+([-+][A-Za-z]+|[-+]o[[:space:]]+[a-z]+))*[[:space:]]+'
 sigs='([[:space:]]+[A-Z0-9]+)*[[:space:]]+(EXIT|0)([[:space:]]+[A-Z0-9]+)*[[:space:]]*$'
 # shellcheck disable=SC2016
@@ -323,11 +341,12 @@ if [ -n "$guard_bad" ]; then
 fi
 if [ "$cv" -eq 0 ]; then echo "  PASS"; else fail=1; fi
 
-# 5. clang-format over every in-house file, with --Werror so a real run
-#    failure is a real failure (not a 0 count). The verdict depends on the
-#    tool's version: two majors format four files of this tree differently.
-#    So the check is judged by the version tools/setup/judges records, the
-#    testing host's; another version reports the count and decides nothing.
+# 5. clang-format over every in-house C file and header, with --Werror so
+#    that a file it would change counts as a failure. The verdict depends on
+#    the tool's version: two majors format four files of this tree
+#    differently. So the check is judged by the version tools/setup/judges
+#    records, the testing host's; another version reports the count and fails
+#    nothing.
 hr "5/22 clang-format"
 recorded=$(sed -n 's/^clang-format: //p' "$REPO/tools/setup/judges")
 found=$(clang-format --version </dev/null 2>/dev/null | head -1)
@@ -348,7 +367,8 @@ else
     fail=1
 fi
 
-# 6. readelf ABI on a freshly linked musl binary (no stale-artifact dependency).
+# 6. readelf ABI of a musl program linked here, so that no earlier build's
+#    artifact is judged. The link-dependency test runs first.
 if ! sh tests/system/build_inputs_test.sh >"$VDIR/build-inputs.log" 2>&1; then
     echo "verify-style: link dependency test failed: $VDIR/build-inputs.log" >&2
     fail=1
@@ -384,8 +404,9 @@ else
     fail=1
 fi
 
-# 7. kernel source-list guard: every rach2 .c on disk must be listed in C_SRC,
-#    so a newly added kernel source cannot be silently dropped from the build.
+# 7. The kernel's source list: every rach2 .c on disk must be in C_SRC, so
+#    that a new kernel source cannot be left out of the build unnoticed; and
+#    the guest build lists, checked by guestcheck.
 hr "7/22 kernel source list (C_SRC vs disk), the guest build lists and the architecture layer"
 if "$REPO/tools/verify/check_sources.sh" >"$VDIR/verify_sources.log" 2>&1 &&
    "$GUESTCHECK" "$REPO" >>"$VDIR/verify_sources.log" 2>&1; then
@@ -394,10 +415,10 @@ else
     echo "  FAIL: see $VDIR/verify_sources.log"; fail=1
 fi
 # No recipe under tests/ makes a product: the images, disks, ISOs and sticks a
-# run boots are the build's (the root Makefile and mk/),
-# and a suite names one only as a prerequisite. A product is a file under
-# build/images named rach2-*, or one of the sealed and recovery names.
-# The dollar is grep's, a literal $(NAME) target.
+# run boots are the build's (the root Makefile and mk/), and a suite names one
+# only as a prerequisite. A product is a file under build/images named
+# rach2-*, or one of the image variables the pattern lists. The dollar is
+# grep's, a literal $(NAME) target.
 # shellcheck disable=SC2016
 products=$(grep -n '^\(build/images/rach2-[a-z0-9-]*\.[a-z0-9]*\|\$(SEALED_DISK)\|\$(SEALED_EXT2)\|\$(RECOVERY_ISO)\|\$(RECOVERY_IMAGE)\|\$(METAL_IMAGE)\|\$(STICK_IMAGE)\|\$(INSTALL_STICK)\|\$(OS_REAL_IMAGE)\|\$(OS_SIMPLE_IMAGE)\|\$(TEST_IMAGE)\) *:' "$REPO/tests/system/suites.mk" || true)
 if [ -z "$products" ]; then
@@ -422,9 +443,10 @@ else
     echo "  FAIL: the architecture layer; see $VDIR/verify_arch.log"; fail=1
 fi
 
-# Text style: the mechanical natural-text checks (tools/verify/textcheck.sh). It
-# catches non-ASCII bytes, faked em-dashes, and `-` list bullets in the in-house
-# tree, and the headings and milestone citations of the component documents.
+# 8. Text style. tools/verify/textcheck.sh finds non-ASCII bytes, dashes
+#    written as a spaced double hyphen, and `-` list bullets in the in-house
+#    tree, and the headings and milestone citations of the component
+#    documents.
 hr "8/22 text style"
 if "$REPO/tools/verify/textcheck.sh" >"$VDIR/verify_text.log" 2>&1; then
     echo "  PASS (textcheck)"
@@ -443,9 +465,10 @@ else
     echo "  FAIL: $cc over-width comment line(s); see $VDIR/verify_cols.log"; fail=1
 fi
 
-# Vocabulary. Only the half of the register rule a script can decide: terms with
-# no legitimate use in this tree, in comments AND in the strings a person reads.
-# The other half, and the repetition report, are for review; see AGENTS.md.
+# Vocabulary: the part of the register rule a program can decide, the terms
+# with no valid use in this tree, in comments and in the strings a person
+# reads. The rest of the rule, and the repetition report, are for review; see
+# AGENTS.md.
 if "$PROSECHECK" --selftest >"$VDIR/verify_prose.log" 2>&1 &&
    "$PROSECHECK" banned >>"$VDIR/verify_prose.log" 2>&1; then
     echo "  PASS (banned vocabulary)"
@@ -455,11 +478,10 @@ else
     echo "  FAIL: $pc banned term use(s); see $VDIR/verify_prose.log"; fail=1
 fi
 
-# Message formats. The kernel's own formatter takes a fixed set of
-# conversions, and one it does not know is written as its letter alone while
-# consuming no argument, so every field after it in that message is read one
-# slot early. That printed `at 02x:02x.0` on the machine and, worse, the wrong
-# numbers beside it.
+# 9. Message formats. The kernel's formatter knows a fixed set of
+#    conversions, and writes one it does not know as its letter alone and
+#    takes no argument for it, so every later field of that message prints
+#    the argument meant for the field before it.
 hr "9/22 message formats"
 if "$REPO/tools/verify/fmtcheck.sh" >"$VDIR/verify_fmt.log" 2>&1; then
     echo "  PASS (fmtcheck)"
@@ -470,11 +492,11 @@ else
     fail=1
 fi
 
-# The two runner rules that decide a result without a boot: the scoring rule,
-# which turns serial text into every probe's PASS or FAIL, and the harness's
-# escape decoder, which turns a step's text into the bytes a guest is given. A
-# regression in either is invisible in the place that would otherwise catch it,
-# because both are what that place reads its answer from.
+# 10. The two runner rules that decide a result without a boot: the scoring
+#     rule, which turns serial text into every probe's PASS or FAIL, and the
+#     harness's escape decoder, which turns a step's text into the bytes a
+#     guest is given. The suites read their verdicts through both, so a suite
+#     cannot find a fault in either; their selftests can.
 hr "10/22 runner rules (runtests and harness selftests)"
 HARNESSBIN="$REPO/build/tests/system/harness"
 make -C "$REPO" --no-print-directory build/tests/system/harness >/dev/null || exit 1
@@ -485,15 +507,15 @@ else
     echo "  FAIL: see $VDIR/verify_score.log"; fail=1
 fi
 
-# Every set-id line in every image manifest, against the per-image allowlist.
-# This half reads sources only, so it belongs with the source checks; the image
-# inventory that reads a built artifact runs from mkimage.sh and mkdisk.sh
-# instead.
+# 11. Every set-id line in every image manifest, against the per-image
+#     allowlist. This half reads sources only, so it runs with the source
+#     checks; the image inventory that reads a built artifact runs from
+#     mkimage.sh and mkdisk.sh.
 hr "11/22 set-id guard (selftest + manifest sweep)"
 setid=0
-# The self-test first: it covers the failure cases no current manifest
-# exercises, so without it a regression in, say, the image walk or the path
-# decoding would leave every real manifest passing and this check silent.
+# The selftest runs first: it covers the failure cases no current manifest
+# has, so without it a fault in, say, the image walk or the path decoding
+# would leave every manifest passing.
 "$SETIDCHECK" --selftest >"$VDIR/verify_setid.log" 2>&1 || setid=1
 "$SETIDCHECK" >>"$VDIR/verify_setid.log" 2>&1 || setid=1
 if [ "$setid" -eq 0 ]; then
@@ -504,10 +526,10 @@ else
 fi
 
 
-# 11. image reproducibility: one tree, one image. It stages a scratch manifest
-#     twice with the real host tools, so those are BUILT here first, the way
-#     step 1 builds the kernel it checks: a check that tested whatever binary
-#     happened to be lying in build/ would report on another day's source.
+# 12. Image reproducibility: one tree, one image. The check stages a scratch
+#     manifest twice with the KRFFS host tools, so they are built here first,
+#     as step 1 builds the kernel it checks; a binary left in build/ by an
+#     earlier build may come from other sources.
 hr "12/22 image reproducibility (one tree, one image)"
 if ! make -C "$REPO/krffs" >"$VDIR/verify_repro_build.log" 2>&1; then
     echo "  FAIL: the krffs host tools did not build; see $VDIR/verify_repro_build.log"
@@ -520,25 +542,31 @@ else
 fi
 
 
-# 12. the checkers' own selftests. Each runs on every build of the thing it
-#     guards, so what is verified here is the checker itself: the kernel one
-#     must accept a well-formed kernel and refuse each malformed variant a
-#     loader would misload, the GRUB one must accept the configuration a core
-#     image has and refuse every way of losing the recovery path, the
-#     sealed-network one must refuse every way the menu and the recovery script
-#     can come to describe two different machines, the compilation-database
-#     generator must join wrapped recipes, select only compile commands, and
-#     refuse to publish an invalid database, the suite checker must refuse
-#     each form of a guessed duration and accept each marked interval, the
-#     build rules that tests/system/build_rules_test.sh checks must hold in a
-#     private tree: the source-list guard names a source missing from its list
-#     and one missing from the disk, a clean needs no cross compiler, the GRUB
-#     disk has a rule, the disk and stick rules have their tools and names, a
-#     keyed tree names its disks for the key, and a release is refused in one,
-#     and the script
-#     list of step 3 and the text check of step 8 must read each kind of
-#     file they claim and find a fault planted in each
-#     (tests/system/style_scope_test.sh).
+# 13. The checkers' own selftests, and the tests of the build rules. Each
+#     checker runs on every build of what it checks, so here the checker
+#     itself is tested:
+#       * elfcheck accepts a well-formed kernel and fails each malformed one a
+#         loader would load wrongly;
+#       * cfgcheck accepts the configuration a GRUB core image has and fails
+#         every way of losing the recovery path, and fails every way the
+#         sealed disk's menu and recovery script can describe two different
+#         network setups;
+#       * the compilation-database generator joins wrapped recipes, selects
+#         only compile commands, and does not publish an invalid database;
+#       * suitecheck.sh fails each form of a guessed duration and accepts
+#         each marked interval;
+#       * recovery_key_test.sh checks the recovery credentials of a KRFFS
+#         image, and dryrun_test.sh the vendor stamps' dry-run test under the
+#         flags the tree passes;
+#       * build_rules_test.sh checks the build rules in a private tree: the
+#         source-list check finds a source missing from its list and one
+#         missing from the disk, a clean needs no cross compiler, the GRUB
+#         disk has a rule, the disk and stick rules have their tools and
+#         names, a keyed tree names its disks for the key, and a release
+#         stops in one;
+#       * style_scope_test.sh checks that the script list of step 3 and the
+#         text check of step 8 read each kind of file they cover and find a
+#         fault planted in each.
 hr "13/22 checker selftests"
 ELFCHECK="$REPO/build/tools/inspect/elfcheck"
 CFGCHECK="$REPO/build/tools/inspect/cfgcheck"
@@ -556,23 +584,23 @@ if "$ELFCHECK" --selftest >"$VDIR/verify_kernelck.log" 2>&1 &&
 else
     echo "  FAIL: see $VDIR/verify_kernelck.log"; fail=1
 fi
-# 13. the dev-log index against the directories it indexes. AGENTS.md tells a
-#     reader that the last entry in dev-log/Readme.md is where the tree stands,
-#     so every finished milestone must have an entry, the entries must be in the
-#     directories' numeric order, and a directory holding only a plan must have
-#     none. The selftest proves the rules reject; the run proves this index.
+# 14. The dev-log index against the directories it lists. AGENTS.md sends a
+#     reader to dev-log/Readme.md for the milestones in order, so every
+#     finished milestone must have an entry, the entries must be in the
+#     directories' numeric order, and a directory with only a plan must have
+#     none. prosecheck's selftest, run in step 8, tests the rules.
 hr "14/22 dev-log index"
 if "$PROSECHECK" devlog >"$VDIR/verify_devlog.log" 2>&1; then
     echo "  PASS"
 else
     echo "  FAIL: see $VDIR/verify_devlog.log"; fail=1
 fi
-# 14. the test registry against the suites it names. tests/run reads the
+# 15. The test registry against the suites it names. tests/run reads the
 #     registry and calls make with `run-` and the name, so a row whose target
 #     does not exist is a suite that cannot run, and a target with no row is a
-#     suite nothing runs. Neither shows up anywhere else: make accepts an
-#     unknown goal only by failing, which happens on the day someone asks for
-#     that suite, and a target no one names is silent forever.
+#     suite nothing runs. No other check finds either: make fails on an
+#     unknown goal only when someone asks for that suite, and nothing reports
+#     a target that no row names.
 hr "15/22 test registry against tests/system/suites.mk"
 {
     awk -F'|' '!/^#/ && NF > 1 { print $1 }' "$REPO/tests/registry" | sort > "$VDIR/_reg.txt"
@@ -597,8 +625,8 @@ if [ -n "$extra" ]; then
     echo "$extra" | sed 's/^/    /'
     regfail=1
 fi
-# The generated inventory: tests/system/suites.md is `tests/run inventory`,
-# and a sentence naming every suite exists in suites.mk for it to read.
+# The generated inventory: tests/system/suites.md must be the output of
+# `tests/run inventory`, and suites.mk must have a sentence for every suite.
 sh "$REPO/tests/run" inventory > "$VDIR/_inventory.md" 2>"$VDIR/verify_inventory.log"
 if ! cmp -s "$VDIR/_inventory.md" "$REPO/tests/system/suites.md"; then
     echo "  FAIL: tests/system/suites.md is not \`tests/run inventory\`; regenerate it"
@@ -638,7 +666,7 @@ else
     echo "  PASS (rach2/syscalls.md, $(grep -c '^| `' "$VDIR/_syscalls.md") calls)"
 fi
 
-# 15. every product a `run-` target names is built by `prepare-all`, so that a
+# 16. Every product a `run-` target names is built by `prepare-all`, so that a
 #     set's pool never has two suites building one at once. Both sides come
 #     from make's own database, prerequisites expanded, and the closure is
 #     transitive, so a product reached through an image counts as prepared.
@@ -681,10 +709,10 @@ else
     fail=1
 fi
 
-# 17. the suites wait for tokens and assert on counts. A `sleep N` in a
+# 17. The suites wait for tokens and assert on counts. A `sleep N` in a
 #     suite, a `wait=N` harness step and an upper bound on a duration in a
-#     probe are guesses at a machine's speed; each is refused unless it is
-#     an interval marked with a reason that tests/system/intervals lists.
+#     probe are guesses at a machine's speed; each fails the check unless it
+#     is an interval marked with a reason that tests/system/intervals lists.
 hr "17/22 suites' waits and criteria (suitecheck)"
 if sh "$REPO/tools/verify/suitecheck.sh" >"$VDIR/verify_suites.log" 2>&1; then
     echo "  PASS"
@@ -694,7 +722,7 @@ else
     fail=1
 fi
 
-# 18. the manual covers the machine (tools/verify/mancheck.c): every program
+# 18. The manual covers the machine (tools/verify/mancheck.c): every program
 #     the manifests stage, every BusyBox applet and every registered system
 #     call has a page or an alias, every alias names a page, every page passes
 #     mandoc's lint, and the recovery image stages the pages man/recovery lists.
@@ -708,9 +736,9 @@ else
 fi
 
 # 19. clang as a second front end over the kernel, with a short positive
-#     list: the flags -Weverything showed to have signal here. Judged by the
-#     clang version tools/setup/judges records; another version reports the
-#     count and decides nothing, as the format check does.
+#     list of the -Weverything warnings judged useful for this tree. Judged
+#     by the clang version tools/setup/judges records; another version
+#     reports the count and fails nothing, as the format check does.
 hr "19/22 clang's positive list over the kernel"
 recorded=$(sed -n 's/^clang: //p' "$REPO/tools/setup/judges")
 found=$(clang --version </dev/null 2>/dev/null | head -1)
@@ -733,9 +761,9 @@ else
 fi
 
 # 20. sparse with __CHECKER__ defined, so the kernel's __user annotations are
-#     checked: a user pointer dereferenced directly, or passed
-#     where a kernel pointer is expected, is a finding. -Wno-non-pointer-null
-#     is the one category left out; tools/verify/exceptions.md says why.
+#     checked: a user pointer dereferenced directly, or passed where a kernel
+#     pointer is expected, is a finding. -Wno-non-pointer-null is the one
+#     category left out; tools/verify/exceptions.md says why.
 hr "20/22 sparse over the kernel's address spaces"
 if ! command -v sparse >/dev/null 2>&1; then
     echo "  SKIP (sparse is absent here; the testing host judges)"
@@ -782,9 +810,8 @@ else
     echo "  FAIL: $sn size finding(s); see $VDIR/verify_sizes.log"; fail=1
 fi
 
-# 22. The links between the documents. A Readme that points at a file a commit
-#     moved is worse than one that says nothing: a reader follows it and
-#     learns that the tree cannot be trusted.
+# 22. The links between the documents: a link to a file that a commit moved
+#     leads the reader nowhere.
 hr "22/22 the documents' links"
 # The milestone checklists under dev-log/ are lists of links by their nature,
 # so they are checked by name although the records around them are not.
