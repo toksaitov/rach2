@@ -1,14 +1,14 @@
 /*
- * exfatcheck_hosttest.c: `mkexfatfixture --check` against every fixture.
+ * exfatcheck_hosttest.c: the checker and reader of mkexfatfixture.c,
+ * `--check` and `--read`, over the volumes its builder makes.
  *
  * host-deps: tests/host/compat/fixdir_host.c
  *
- * The check is the reader every exFAT write test relies on, and the pair of
- * the kernel's own check, so it is proved before the reader in the kernel
- * exists: every well-formed fixture is accepted, and every malformed one
- * refused with the finding named for its fault. The builder is compiled
- * here on every run, into the test's own fixture directory
- * (compat/fixdir_host.c).
+ * The exFAT tests judge what the kernel wrote with this checker, a second
+ * implementation of the format apart from the kernel's driver, so every
+ * well-formed volume must pass it and every malformed one fail with the
+ * finding named for its fault. The test compiles the builder on every run,
+ * into its own fixture directory (compat/fixdir_host.c).
  */
 
 #include <stdint.h>
@@ -30,7 +30,7 @@ static const char *tool(void)
     return text;
 }
 
-/** Record an assertion failure. */
+/** Count a failed check and print `what`. */
 static void check(int ok, const char *what)
 {
     if (!ok) {
@@ -39,7 +39,8 @@ static void check(int ok, const char *what)
     }
 }
 
-/** Build a fixture and require the checker to return its named finding. */
+/** Build a volume with the builder's option `opt`, and require `--check` to
+ *  exit with `want_rc` and print `want`. */
 static void row(const char *opt, int want_rc, const char *want)
 {
     char cmd[4096], line[512], out[8192];
@@ -75,13 +76,13 @@ static void row(const char *opt, int want_rc, const char *want)
     }
 }
 
-/** Read a little-endian field in a fixture, independently of the reader. */
+/** The little-endian 32-bit field at `p`, read apart from the checker. */
 static uint32_t field32(const unsigned char *p)
 {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
-/** Store a little-endian field of four or eight bytes. */
+/** Store `value` at `p` as a little-endian field of `bytes` bytes. */
 static void field_put(unsigned char *p, uint64_t value, unsigned bytes)
 {
     unsigned i;
@@ -90,7 +91,8 @@ static void field_put(unsigned char *p, uint64_t value, unsigned bytes)
         p[i] = (unsigned char)(value >> (8 * i));
 }
 
-/** Find a short ASCII name's set in the first root cluster. */
+/** The entry set of the file `name`, a short ASCII name, in the first
+ *  cluster of the root; NULL, and a failed check, when there is none. */
 static unsigned char *file_set(unsigned char *img, const char *name)
 {
     size_t heap = (size_t)field32(img + 88) << img[108];
@@ -113,7 +115,8 @@ static unsigned char *file_set(unsigned char *img, const char *name)
     return NULL;
 }
 
-/** Write a complete image before starting the reader. */
+/** Write the `bytes` bytes of `img` to exfatread.img. Returns 1, or 0 when
+ *  the write fails. */
 static int write_image(const unsigned char *img, size_t bytes)
 {
     FILE *f = fopen(fix_path("exfatread.img"), "wb");
@@ -125,7 +128,12 @@ static int write_image(const unsigned char *img, size_t bytes)
     return fclose(f) == 0 && ok;
 }
 
-/** Require a normal exit and either exact exported bytes or a diagnostic. */
+/**
+ * Run `--check --read path` over exfatread.img. With `diagnostic` NULL it
+ * must exit 0, print nothing on stderr and write the `size` bytes of `want`
+ * and no more; otherwise it must exit 1 with `diagnostic` on stderr. No run
+ * may print a sanitizer's report. `label` names the check.
+ */
 static void read_row(const char *path, const unsigned char *want, size_t size,
                      const char *diagnostic, const char *label)
 {
@@ -169,7 +177,12 @@ static void read_row(const char *path, const unsigned char *want, size_t size,
         fprintf(stderr, "exfatcheck_hosttest: reader diagnostics: %s", errors);
 }
 
-/** Write a changed stream and checksum; keep the original in memory. */
+/**
+ * Write exfatread.img with the stream extension of `name` changed to the
+ * first cluster `first`, the length `length` and the valid length `valid`,
+ * and the set's checksum made again; `img` keeps the original entries.
+ * Returns 1, or 0 when there is no such set or the write fails.
+ */
 static int write_stream(unsigned char *img, size_t bytes, const char *name, uint32_t first,
                         uint64_t length, uint64_t valid)
 {
@@ -198,7 +211,10 @@ static int write_stream(unsigned char *img, size_t bytes, const char *name, uint
     return ok;
 }
 
-/** Refuse a contiguous directory whose extent cannot be read from the heap. */
+/** A read through the contiguous directory "dir" fails with the diagnostic
+ *  of an extent outside the heap when its first cluster is 0, 1, past the
+ *  heap or 0xFFFFFFFF, when its extent ends past the heap, when its length
+ *  overflows, and when its extent is empty. */
 static void directory_rows(unsigned char *img, size_t bytes)
 {
     uint32_t clusters;
@@ -221,7 +237,14 @@ static void directory_rows(unsigned char *img, size_t bytes)
         read_row("dir/sub/leaf.txt", NULL, 0, extent, "reject empty directory extent");
 }
 
-/** Exercise path lengths, damaged directory extents, and both file layouts. */
+/**
+ * The rows of `--read` over the default volume: a contiguous, a nested and
+ * an empty file; a component of 599, 600, 601 or 2048 bytes, which is not
+ * found; zeros past the valid length; a fragmented file, with its tail
+ * zeroed past the valid length in a partial last cluster, and with a chain
+ * shorter than its length, which fails; a file with no valid bytes; a valid
+ * length past the length, which fails; and the rows of `directory_rows`.
+ */
 static void read_rows(void)
 {
     FILE *f;
@@ -291,7 +314,18 @@ static void read_rows(void)
     free(img);
 }
 
-/** Run the checker and export rows against freshly compiled code. */
+/**
+ * Compile the builder into the fixture directory with the sanitizers and
+ * run the rows. The checker must accept the well-formed volume and its
+ * variants: a large and an uncompressed up-case table, 4 KiB sectors,
+ * timestamps with no valid UTC offset and with an offset and hundredths of
+ * a second, a dirty volume, a volume whose free clusters hold junk, and a
+ * dirty volume with a label entry inside a directory, which the checker
+ * passes over. Each malformed volume breaks one rule and must exit 1 with
+ * the finding named for it, and so must each state a crash leaves under the
+ * dirty bit. The rows of `read_rows` follow. Returns 0 when every check
+ * passed and 1 otherwise.
+ */
 int main(void)
 {
     char cmd[2048];
@@ -306,7 +340,6 @@ int main(void)
         return 1;
     }
 
-    /* Well-formed volumes. */
     row("", 0, "check: OK: ");
     row("--big-upcase", 0, "check: OK: ");
     row("--uncompressed-upcase", 0, "check: OK: ");
@@ -315,7 +348,6 @@ int main(void)
     row("--zoned", 0, "check: OK: ");
     row("--dirty", 0, ", dirty");
 
-    /* Each malformed one breaks one rule and is named for it. */
     row("--bad-main-checksum", 1, "boot: main checksum");
     row("--main-bad-root", 1, "boot: main checksum");
     row("--bad-backup-checksum", 1, "boot: backup checksum");
@@ -344,8 +376,6 @@ int main(void)
     row("--surplus", 1, "surplus: /chained.bin (2 clusters)");
     row("--overlap", 1, "cross-link: /hello.txt");
 
-    /* The states a crash leaves under the dirty bit: the check's repairs
-       and its faults, each named. */
     row("--dirty-bad-set-checksum", 1, "checksum-only: /hello.txt");
     row("--dirty-orphan", 1, "orphan secondaries: 2 in /");
     row("--dirty-surplus", 1, "surplus: /chained.bin (1 clusters)");
@@ -362,7 +392,7 @@ int main(void)
     row("--swallow", 1, "an entry of a set that is not an in-use secondary");
     row("--dirty-nofat-orphan", 1, "orphan secondaries: 2 in /Wide Dir");
     row("--dirty-dup-checksum", 1, "duplicate name: /HELLO.txt");
-    row("--dirty-label-below", 0, "check: OK: "); /* the reader passes a label over */
+    row("--dirty-label-below", 0, "check: OK: ");
 
     read_rows();
 
