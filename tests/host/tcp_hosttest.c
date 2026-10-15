@@ -11,13 +11,13 @@
  * segment that arrives twice, a segment that arrives out of order, a hole in
  * the sequence space, a peer that stops acknowledging until the retransmission
  * gives up, a window that closes and reopens, a segment for a port nobody
- * listens on, and the control-block pool running out. Those are the cases
+ * listens on, and a driver that fails to send. Those are the cases
  * here, driven directly against `tcp.c` with the layer under it replaced by a
  * recorder that keeps every segment `ip_tx` would have sent, and the layer
  * above it by one that records every callback.
  *
- * The clock is a variable, so a retransmission that takes six seconds of a
- * real machine's time takes none here.
+ * The clock is a variable, so retransmission timeouts that take a minute on a
+ * real machine take no time here.
  *
  * The file is included, not linked, so each case can put the table back to its
  * initial state; the kernel has one boot per run and needs no such thing.
@@ -37,7 +37,10 @@ extern void *malloc(unsigned long n);
 
 volatile uint32_t kernel_ticks;
 
-/* The microsecond clock TCP times its round trips by, for `ss -i`. */
+/**
+ * Return the microsecond clock TCP times its round trips by, for `ss -i`: 10000
+ * to a tick.
+ */
 uint32_t timer_now_us(void)
 {
     return kernel_ticks * 10000u;
@@ -50,12 +53,12 @@ static struct {
     uint8_t proto;
     uint16_t len;
     uint8_t data[128];
-} segs[MAX_SEGS];
-static unsigned n_segs;
+} segs[MAX_SEGS];       /* the first MAX_SEGS segments ip_tx sent */
+static unsigned n_segs; /* the segments sent, MAX_SEGS and past it */
 
 static unsigned cb_connected, cb_fin, cb_writable, cb_deliver, cb_accept;
-static unsigned delivered_bytes;
-static unsigned held_bytes;
+static unsigned delivered_bytes; /* delivered in order or released */
+static unsigned held_bytes;      /* kept past a hole */
 
 /* How many transmits go through before the driver refuses, how many it
  * refuses then, and with which error: a full ring's -ENOBUFS, or a
@@ -69,10 +72,17 @@ static int ip_tx_refuse_err = -ENOBUFS;
  * ring shows wherever it lies in a segment. */
 #define STREAM_MAX 80000
 static uint8_t stream_got[STREAM_MAX];
-static uint32_t stream_base;
-static int stream_on;
+static uint32_t stream_base; /* the sequence number of stream_got[0] */
+static int stream_on;        /* nonzero while ip_tx fills stream_got */
 uint32_t read32be(const uint8_t *p);
 
+/**
+ * Record a segment sent, unless the driver model fails it: after
+ * `ip_tx_accept` transmits, the next `ip_tx_refuse` fail with
+ * `ip_tx_refuse_err`. While `stream_on` is set, a TCP segment's payload is also
+ * put in `stream_got` at its offset from `stream_base`. Returns 0 for a segment
+ * sent.
+ */
 int ip_tx(uint32_t dst, uint8_t proto, const uint8_t *payload, uint16_t len, uint8_t ttl)
 {
     unsigned i;
@@ -107,24 +117,28 @@ int ip_tx(uint32_t dst, uint8_t proto, const uint8_t *payload, uint16_t len, uin
     return 0;
 }
 
+/** Count a connection that completed or ended. */
 void socket_tcp_connected(struct socket *sock)
 {
     (void)sock;
     cb_connected++;
 }
 
+/** Count the peer's FIN or the connection's end. */
 void socket_tcp_fin(struct socket *sock)
 {
     (void)sock;
     cb_fin++;
 }
 
+/** Count a report of freed send-ring space. */
 void socket_tcp_writable(struct socket *sock)
 {
     (void)sock;
     cb_writable++;
 }
 
+/** Take and count all `len` bytes delivered in order. */
 uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t len)
 {
     (void)sock;
@@ -134,6 +148,7 @@ uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t l
     return len;
 }
 
+/** Take and count all `len` bytes that arrived past a hole. */
 uint16_t socket_tcp_hold(struct socket *sock, uint32_t offset, const uint8_t *data, uint16_t len)
 {
     (void)sock;
@@ -143,12 +158,14 @@ uint16_t socket_tcp_hold(struct socket *sock, uint32_t offset, const uint8_t *da
     return len;
 }
 
+/** Count `n` held bytes made readable as delivered. */
 void socket_tcp_release(struct socket *sock, uint32_t n)
 {
     (void)sock;
     delivered_bytes += n;
 }
 
+/** Count a connection queued on a listener for accept. */
 void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock)
 {
     (void)listen_sock;
@@ -156,6 +173,7 @@ void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock)
     cb_accept++;
 }
 
+/** Release a socket: a no-op. */
 void socket_unref(struct socket *sock)
 {
     (void)sock;
@@ -165,6 +183,7 @@ void socket_unref(struct socket *sock)
    over; 0 for none. */
 static uint16_t bound_elsewhere;
 
+/** Report whether `port` is the one another socket has bound. */
 int socket_port_bound(uint16_t port)
 {
     return bound_elsewhere != 0 && port == bound_elsewhere;
@@ -173,8 +192,12 @@ int socket_port_bound(uint16_t port)
 /* A passive open's socket, from a pool of four, which the listener rows
    need no more of. */
 static struct socket sock_pool[4];
-static unsigned sock_pooled;
+static unsigned sock_pooled; /* the sockets of the pool given out */
 
+/**
+ * Return the next socket of the pool, cleared, of type `type` and with one
+ * reference, or NULL when the pool is used up.
+ */
 struct socket *socket_alloc(int type)
 {
     struct socket *s;
@@ -191,24 +214,32 @@ struct socket *socket_alloc(int type)
 
 uint32_t net_ip_addr = 0x0A00020Fu; /* 10.0.2.15 */
 
-/* The four byte-order helpers, written out rather than dragging in the boot
-   report that shares their file. */
+/**
+ * Read the big-endian 16-bit field at `p`.
+ *
+ * This and the three functions after it are the byte-order helpers of
+ * net_core.c, written out here rather than bringing in the stack's bring-up,
+ * which shares their file.
+ */
 uint16_t read16be(const uint8_t *p)
 {
     return (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
 }
 
+/** Read the big-endian 32-bit field at `p`. */
 uint32_t read32be(const uint8_t *p)
 {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
+/** Store `v` at `p` in network byte order. */
 void write16be(uint8_t *p, uint16_t v)
 {
     p[0] = (uint8_t)(v >> 8);
     p[1] = (uint8_t)(v & 0xFF);
 }
 
+/** Store `v` at `p` in network byte order. */
 void write32be(uint8_t *p, uint32_t v)
 {
     p[0] = (uint8_t)(v >> 24);
@@ -217,8 +248,11 @@ void write32be(uint8_t *p, uint32_t v)
     p[3] = (uint8_t)v;
 }
 
-/* The IP header checksum, which `tcp_checksum` reuses for the pseudo-header.
-   Three lines, and its own file drags the whole IP layer in. */
+/**
+ * Return the Internet checksum of `len` bytes at `buf`: the IP header checksum,
+ * which `tcp_checksum` reuses for the pseudo-header. Its own file, ip.c, would
+ * bring the whole IP layer with it.
+ */
 uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
 {
     uint32_t sum = 0;
@@ -236,11 +270,15 @@ uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
     return (uint16_t)~sum;
 }
 
+/* The interrupt flag net_lock saves and clears, and an interrupt a row arms
+   to arrive just before the next net_lock masks interrupts. */
 static uint32_t irq_enabled = 1;
 static void (*before_net_lock)(void);
 
 /**
- * Deliver one pending interrupt before masking, then return the saved state.
+ * Take the network lock: when interrupts are enabled, run the interrupt
+ * `before_net_lock` once, as one arriving just before the mask would; then
+ * clear `irq_enabled` and return what it was.
  */
 uint32_t net_lock(void)
 {
@@ -255,11 +293,13 @@ uint32_t net_lock(void)
     return flags;
 }
 
+/** Release the network lock: put back the interrupt flag `flags`. */
 void net_unlock(uint32_t flags)
 {
     irq_enabled = flags;
 }
 
+/** Discard a kernel log record. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -267,18 +307,23 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
-/* The machine's addresses, as this test presents them: one interface's,
- * which is what every case here is written against, and 127/8. */
+/**
+ * Report whether `ip` is the machine's: the one interface's address, which
+ * every case here is written against, or an address of 127/8.
+ */
 int ip_is_local(uint32_t ip)
 {
     return ip != 0 && (ip == net_ip_addr || (ip & 0xFF000000u) == 0x7F000000u);
 }
 
+/** Return the source address for `dst`: 127.0.0.1 for 127/8, else the
+ * interface's address. */
 uint32_t ip_source(uint32_t dst)
 {
     return (dst & 0xFF000000u) == 0x7F000000u ? 0x7F000001u : net_ip_addr;
 }
 
+/** Send a segment from `src`, as ip_tx does. */
 int ip_tx_from(uint32_t src, uint32_t dst, uint8_t proto, const uint8_t *payload, uint16_t len,
                uint8_t ttl)
 {
@@ -286,10 +331,12 @@ int ip_tx_from(uint32_t src, uint32_t dst, uint8_t proto, const uint8_t *payload
     return ip_tx(dst, proto, payload, len, ttl);
 }
 
-/* A stand-in for the kernel's random words, from which `tcp.c` draws the key
- * of its initial sequence numbers. Every case reads a connection's number from
- * the segment that carries it, so any key serves; tcp_reset_hosttest.c checks
- * the numbers themselves. */
+/**
+ * Return a constant in place of the kernel's random words, from which `tcp.c`
+ * draws the key of its initial sequence numbers. Every case reads a
+ * connection's number from the segment that has it, so any key serves;
+ * tcp_reset_hosttest.c checks the numbers themselves.
+ */
 uint32_t krandom_u32(void)
 {
     return 0x52414348u;
@@ -322,6 +369,8 @@ static int fails;
 #define F_PSH 0x08
 #define F_ACK 0x10
 
+/** Free every control block, forget every segment and callback, and set
+ * the clock to tick 1000. */
 static void reset_all(void)
 {
     unsigned i;
@@ -335,16 +384,25 @@ static void reset_all(void)
     }
 }
 
-/* One segment from the peer, with the header this stack reads. */
 /* The MSS option a peer's SYN has, as a real peer's does; a row sets it
    lower to see the stack keep to it. */
 static uint16_t peer_mss = TCP_MSS;
-/* The window scale option a peer's SYN has, or -1 for none, as the rows
-   before window scaling have it. */
+/* The window scale option a peer's SYN has, or -1 for none, as every row but
+   window_scale_rows has it. */
 static int peer_wscale = -1;
 /* Whether a peer's SYN permits selective acknowledgements. */
 static int peer_sack = 0;
 
+/**
+ * Give this stack a segment from the peer's port `sport` to `dport`, with the
+ * numbers `seq` and `ack`, `flags`, `window` and the `plen` bytes of `payload`.
+ * A SYN has the MSS option of `peer_mss`, the window scale of `peer_wscale`
+ * unless it is -1, and the SACK-permitted option when `peer_sack` is set.
+ *
+ * The checksum is computed as the sender computes it: the receiver verifies it
+ * and drops a segment with a wrong one, and every case would then be checking
+ * that.
+ */
 static void rx(uint16_t sport, uint16_t dport, uint32_t seq, uint32_t ack, uint8_t flags,
                uint16_t window, const char *payload, uint16_t plen)
 {
@@ -387,14 +445,14 @@ static void rx(uint16_t sport, uint16_t dport, uint32_t seq, uint32_t ack, uint8
     for (i = 0; i < plen; i++) {
         seg[hdr + i] = (uint8_t)payload[i];
     }
-    /* The receiver verifies this, so the test computes it the same way the
-       sender does: a segment with a wrong checksum is dropped, and every case
-       below would then be checking that. */
     write16be(seg + 16, tcp_checksum(PEER, net_ip_addr, seg, (uint16_t)(hdr + plen)));
     tcp_rx(PEER, net_ip_addr, seg, (uint16_t)(hdr + plen));
 }
 
-/* The flags of the segment this stack sent last. */
+/**
+ * Return the flags of the segment this stack sent last, or 0 when none is
+ * recorded.
+ */
 static uint8_t last_flags(void)
 {
     if (n_segs == 0 || n_segs > MAX_SEGS) {
@@ -403,8 +461,11 @@ static uint8_t last_flags(void)
     return segs[n_segs - 1].data[13];
 }
 
-/* Open a connection on `port` with a 65535 window; the peer's sequence
-   number is set past the SYN. */
+/**
+ * Open a connection to the peer's `port` and complete the handshake with a
+ * 65535 window. `*peer_seq` is the peer's initial sequence number and is set
+ * past its SYN; `*lport` gets the local port. Returns the control block.
+ */
 static struct tcb *open_conn(struct socket *sock, uint16_t port, uint32_t *peer_seq,
                              uint16_t *lport)
 {
@@ -423,11 +484,12 @@ static struct tcb *open_conn(struct socket *sock, uint16_t port, uint32_t *peer_
     return conn;
 }
 
-/* Grow a connection's congestion window to `want` bytes: 40000 bytes are
-   offered and every segment is acknowledged on its own, each
-   acknowledgement adding a segment to the window, and what remains is
-   acknowledged whole at the end, so the ring is empty and nothing is in
-   flight. */
+/**
+ * Grow a connection's congestion window to `want` bytes: 40000 bytes are
+ * offered and every segment is acknowledged on its own, each acknowledgement
+ * adding a segment to the window, and what remains is acknowledged whole at the
+ * end, so the ring is empty and nothing is in flight.
+ */
 static void grow_window(struct socket *sock, struct tcb *conn, uint16_t port, uint16_t lport,
                         uint32_t peer_seq, uint32_t want)
 {
@@ -450,9 +512,12 @@ static void grow_window(struct socket *sock, struct tcb *conn, uint16_t port, ui
     n_segs = 0;
 }
 
-static struct tcb *reset_on_lock;
+static struct tcb *reset_on_lock; /* the connection receive_reset resets */
 
-/** Receive a peer reset at the next interrupt-masking boundary. */
+/**
+ * Give `reset_on_lock` a reset from its peer at its next sequence number; armed
+ * as `before_net_lock`, it arrives just before the next net_lock.
+ */
 static void receive_reset(void)
 {
     rx(reset_on_lock->remote_port, reset_on_lock->local_port, reset_on_lock->rcv_nxt,
@@ -460,7 +525,12 @@ static void receive_reset(void)
 }
 
 /**
- * Check send validation, interrupt restoration, and a reset before masking.
+ * Check that tcp_send rejects a missing socket or connection, a negative length
+ * and a closed connection; takes zero bytes, nothing into a full ring, and data
+ * in ESTABLISHED and CLOSE_WAIT; and puts the interrupt flag back each time,
+ * enabled or not. A reset that arrives just before tcp_send masks interrupts
+ * fails the send, closes the connection, and leaves the ring and the wire
+ * untouched.
  */
 static void test_send_checks(void)
 {
@@ -519,13 +589,16 @@ static void test_send_checks(void)
     reset_all();
 }
 
-/* On the open connection `conn` from local port `lport` to the peer's port
-   80, whose next byte is `peer_seq`: a segment past a hole is kept but not
-   delivered, and the acknowledgement still names the byte the receiver is
-   waiting for; the segment that fills the hole is delivered with the one
-   kept after it, and the acknowledgement covers both; and a resend that
-   starts before the byte awaited and runs past it delivers only the new
-   bytes. Returns the peer's next byte after them. */
+/**
+ * On the open connection `conn` from local port `lport` to the peer's port 80,
+ * whose next byte is `peer_seq`, with this side's initial sequence number
+ * `iss`: a segment past a hole is kept but not delivered, and the
+ * acknowledgement still names the byte the receiver is waiting for; the segment
+ * that fills the hole is delivered with the one kept after it, and the
+ * acknowledgement covers both; and a resend that starts before the byte awaited
+ * and runs past it delivers only the new bytes. Returns the peer's next byte
+ * after them.
+ */
 static uint32_t hole_rows(struct tcb *conn, uint16_t lport, uint32_t peer_seq, uint32_t iss)
 {
     cb_deliver = 0;
@@ -555,9 +628,11 @@ static uint32_t hole_rows(struct tcb *conn, uint16_t lport, uint32_t peer_seq, u
     return peer_seq + 2;
 }
 
-/* A peer whose SYN asks for smaller segments, as one behind a PPPoE line's
-   router does, gets no segment larger than it asked for, and the first
-   burst is four of them. */
+/**
+ * Check that a peer whose SYN asks for smaller segments, as one behind a PPPoE
+ * line's router does, gets no segment larger than it asked for, and that the
+ * first burst is four of them.
+ */
 static void peer_mss_row(void)
 {
     struct socket sock;
@@ -586,10 +661,12 @@ static void peer_mss_row(void)
           n_segs == 4 && oversize == 0 && segs[0].len - TCP_HDR_SIZE == 1400);
 }
 
-/* A router's report that a segment in flight was too big for a link of
-   1480 bytes shrinks the connection's segments to 1440 and sends the oldest
-   again at that size; a report for a sequence number not in flight, or one
-   that would make them larger, changes nothing. */
+/**
+ * Check that a router's report that a segment in flight was too big for a link
+ * of 1480 bytes shrinks the connection's segments to 1440 and sends the oldest
+ * again at that size, and that a report for a sequence number not in flight, or
+ * one that would make them larger, changes nothing.
+ */
 static void path_mtu_row(void)
 {
     struct socket sock;
@@ -620,9 +697,11 @@ static void path_mtu_row(void)
                                                          segs[0].len - TCP_HDR_SIZE == 1440);
 }
 
-/* A connection whose SYN offers a window scale: a peer that answers with a
-   scale of its own gets windows scaled both ways, and one that answers
-   without gets neither, and never more than 65535 offered. */
+/**
+ * Check a connection whose SYN offers a window scale: a peer that answers with
+ * a scale of its own gets windows scaled both ways, and one that answers
+ * without gets neither, and never more than 65535 offered.
+ */
 static void window_scale_rows(void)
 {
     struct socket sock;
@@ -661,8 +740,10 @@ static void window_scale_rows(void)
     }
 }
 
-/* The option of kind `kind` in the segment this stack sent, `seg` of `len`
-   bytes, or NULL when it has none. */
+/**
+ * Return the option of kind `kind` in the segment this stack sent, `seg` of
+ * `len` bytes, or NULL when it has none.
+ */
 static const uint8_t *sent_option(const uint8_t *seg, uint16_t len, uint8_t kind)
 {
     uint16_t hdr = (uint16_t)((seg[12] >> 4) * 4), i = 20;
@@ -683,8 +764,10 @@ static const uint8_t *sent_option(const uint8_t *seg, uint16_t len, uint8_t kind
     return 0;
 }
 
-/* Whether the acknowledgement sent last names the blocks `want`, `n` pairs
-   of start and end, in that order, and nothing else. */
+/**
+ * Return 1 when the acknowledgement sent last names the SACK blocks `want`, `n`
+ * pairs of start and end, in that order, and nothing else; else 0.
+ */
 static int sacks_are(const uint32_t *want, unsigned n)
 {
     const uint8_t *o;
@@ -708,18 +791,20 @@ static int sacks_are(const uint32_t *want, unsigned n)
     return 1;
 }
 
-/* The control block of a socket a row opened. */
+/** Return the control block of a socket a row opened. */
 static struct tcb *conn_of(struct socket *sock)
 {
     return sock->tcb;
 }
 
-/* Selective acknowledgements: this side's SYN permits them, and with a peer
-   whose SYN did too, an acknowledgement sent while data past a hole is held
-   names that data, the blocks of the segments that came last first, newest
-   first, until the holes are filled; a segment past a table already full is
-   not named; a peer that did not permit them gets none, and a listener's
-   answer permits them only to a SYN that did. */
+/**
+ * Check selective acknowledgements: this side's SYN permits them, and with a
+ * peer whose SYN did too, an acknowledgement sent while data past a hole is
+ * held names that data, the blocks of the segments that came last first, newest
+ * first, until the holes are filled; a segment past a table already full is not
+ * named; a peer that did not permit them gets none, and a listener's answer
+ * permits them only to a SYN that did.
+ */
 static void sack_rows(void)
 {
     struct socket sock, lsock;
@@ -797,9 +882,12 @@ static void sack_rows(void)
     reset_all();
 }
 
-/* A reader that shut down its writing half goes on reading, so a window
-   its reads reopen is announced in FIN_WAIT_1 and FIN_WAIT_2, as in
-   ESTABLISHED; unannounced, the peer waits for its persist timer. */
+/**
+ * Check that a window reopened by a reader that shut down its writing half is
+ * announced in FIN_WAIT_1 and FIN_WAIT_2, as in ESTABLISHED: such a reader goes
+ * on reading, and without the announcement the peer waits for its persist
+ * timer.
+ */
 static void half_close_rows(void)
 {
     struct socket sock;
@@ -829,8 +917,10 @@ static void half_close_rows(void)
     reset_all();
 }
 
-/* An ephemeral port passes over one another socket has bound, as a port
-   a control block uses. */
+/**
+ * Check that an ephemeral port passes over one another socket has bound, as it
+ * passes over a port a control block uses.
+ */
 static void ephemeral_rows(void)
 {
     reset_all();
@@ -841,13 +931,86 @@ static void ephemeral_rows(void)
     bound_elsewhere = 0;
 }
 
+/**
+ * Run the cases, each against a table put back to its initial state:
+ *
+ *   * the rows of test_send_checks, then forty control blocks at once, one
+ *     freed from the middle of the list and the rest kept;
+ *   * a segment for a port nobody listens on is answered with a reset, which
+ *     tells the peer to stop retransmitting, and a reset for such a port is not
+ *     answered, or two machines would reset each other for ever;
+ *   * a connection opened and carried, measured against the sequence numbers
+ *     its handshake settles: data in order is delivered once, and the same
+ *     segment again is acknowledged again, so that a peer that lost the first
+ *     acknowledgement stops asking; the rows of hole_rows; a zero window keeps
+ *     data offered from going out until the window reopens, which a check of
+ *     the stored window alone would pass in a stack that ignored it; and the
+ *     peer's FIN closes the reading half and is acknowledged;
+ *   * a ring's worth of data: the ring takes it in one call, the bursts are
+ *     bounded by the windows, every byte leaves in segments of at most one MSS,
+ *     and a second transfer takes the ring's indexes past 65536 with every byte
+ *     where the stream has it, so a wrap that copied from the wrong place would
+ *     show. A transmit the driver refuses for a full ring stays in the ring for
+ *     the next pump, the tick's or an acknowledgement's, rather than being
+ *     counted as sent; a permanent error counts the segment as sent and leaves
+ *     it to the retransmission timer; and a connection whose driver refuses
+ *     every transmit is given up after the bound rather than kept for ever;
+ *   * the rows of peer_mss_row, window_scale_rows, sack_rows, half_close_rows,
+ *     ephemeral_rows and path_mtu_row;
+ *   * a zero window that closes over a refused segment is flow control, not a
+ *     continuing refusal: the connection is kept past the bound and the segment
+ *     goes when the window reopens. A connection last in the list behind four
+ *     that a zero window holds is still pumped, since the tick's pumps rotate;
+ *     the list is newest first, so the first opened is the last pumped;
+ *   * a burst lost whole: the timer fires once, and from then on the
+ *     acknowledgements drive the resend, one segment at the timeout, two when
+ *     it is acknowledged, then a segment more per acknowledgement, until
+ *     everything sent before the loss is on the wire again, with no further
+ *     wait on the timer and every segment sent again once, in order. The
+ *     timeout the loss doubled is measured again once new data is acknowledged;
+ *   * one segment lost from the middle of a burst: the two duplicate
+ *     acknowledgements before the third send nothing; the third sends the
+ *     segment again at once, without a tick, in a recovery with the window
+ *     halved plus the three segments the duplicates say have left; a further
+ *     duplicate adds a segment; and the acknowledgement of everything ends the
+ *     recovery at the threshold;
+ *   * two segments lost from one burst: the third duplicate sends the first
+ *     again, the acknowledgement that then stops at the second hole sends the
+ *     second again at once, in the same recovery, and the acknowledgement of
+ *     everything ends it;
+ *   * a close with a lost burst in flight: the FIN waits behind the data, the
+ *     recovery goes on from the acknowledgements in FIN_WAIT_1, and a segment
+ *     the driver refuses there is sent by the tick;
+ *   * a peer whose window closes during a timeout's recovery: the resend stops
+ *     at the window, the zero-window probe timer runs, a probe goes out, and
+ *     the window's reopening resumes the recovery. A reset in the middle of a
+ *     recovery ends it with the connection;
+ *   * a fast resend the driver refuses is owed, and the tick's pump sends it
+ *     before anything else. Outside a recovery the mark that keeps a finished
+ *     recovery's duplicates from beginning another moves up with each
+ *     acknowledgement;
+ *   * a close from the peer with data still going out: the recovery after a
+ *     timeout runs through the acknowledgements in CLOSE_WAIT with the window
+ *     growing, as it does in ESTABLISHED;
+ *   * a round-trip sample ends at the acknowledgement that covers the sampled
+ *     segment, not at the first acknowledgement after it;
+ *   * a peer that stops answering a SYN: the stack retransmits with a doubling
+ *     timer and gives up, rather than holding the connection for ever. The
+ *     timer counts ticks and `tcp_tick` is one tick, so this is the timer
+ *     running rather than the clock jumping: the five backoffs together are
+ *     about six thousand ticks. The gaps between the attempts are checked,
+ *     since a stack that retried every tick would also give up in the end. The
+ *     control block stays until the socket lets go of it, as a program still
+ *     holding the descriptor expects; the socket is told that the connection
+ *     ended.
+ *
+ * Returns the number of failed checks, at most 255.
+ */
 int main(void)
 {
     struct tcb *t;
     unsigned i;
 
-    /* The blocks, past the sixteen the pool once held: forty at once, one
-       freed from the middle of the list and the rest still there. */
     tcp_init();
     test_send_checks();
     reset_all();
@@ -866,21 +1029,15 @@ int main(void)
     }
     CHECK("thirty-nine remain after one is freed", i == 39);
 
-    /* A segment for a port nobody listens on is answered with a reset, which
-       is what tells the peer to stop retransmitting. */
     reset_all();
     rx(4000, 9999, 100, 0, F_SYN, 4096, (const char *)0, 0);
     CHECK("a SYN for a closed port is answered", n_segs == 1);
     CHECK("and the answer is a reset", (last_flags() & F_RST) != 0);
 
-    /* A reset for a port nobody listens on is not answered, or two machines
-       would reset each other for ever. */
     reset_all();
     rx(4000, 9999, 100, 0, F_RST, 0, (const char *)0, 0);
     CHECK("a reset for a closed port is not answered", n_segs == 0);
 
-    /* A connection, opened and carried. Everything below is measured against
-       the sequence numbers this handshake settles. */
     {
         struct socket sock;
         struct tcb *conn;
@@ -896,7 +1053,6 @@ int main(void)
         iss = read32be(segs[0].data + 4);
         lport = read16be(segs[0].data + 0);
 
-        /* The peer answers. The connection opens and the socket is told. */
         rx((uint16_t)80, lport, peer_seq, iss + 1, (uint8_t)(F_SYN | F_ACK), 4096, (const char *)0,
            0);
         CHECK("the handshake completes", cb_connected == 1);
@@ -904,7 +1060,6 @@ int main(void)
         CHECK("and is acknowledged", (last_flags() & F_ACK) != 0);
         peer_seq++;
 
-        /* Data in order is delivered once. */
         n_segs = 0;
         rx((uint16_t)80, lport, peer_seq, iss + 1, (uint8_t)(F_ACK | F_PSH), 4096, "abcd", 4);
         CHECK("data in order is delivered", cb_deliver == 1 && delivered_bytes == 4);
@@ -912,8 +1067,6 @@ int main(void)
         CHECK("offering the ring clamped to the field, not zero",
               n_segs >= 1 && read16be(segs[n_segs - 1].data + 14) == 65535);
 
-        /* The same segment again is not delivered twice, and is acknowledged
-           again so a peer that lost the first acknowledgement stops asking. */
         cb_deliver = 0;
         delivered_bytes = 0;
         n_segs = 0;
@@ -924,9 +1077,6 @@ int main(void)
 
         peer_seq = hole_rows(conn, lport, peer_seq, iss);
 
-        /* A window of zero stops the sender: data offered while it is closed
-           must not go out, and must go out when it reopens. Checking the
-           stored window alone would pass a stack that ignored it. */
         rx((uint16_t)80, lport, peer_seq, iss + 1, F_ACK, 0, (const char *)0, 0);
         CHECK("a zero window is taken", conn->snd_wnd == 0);
         n_segs = 0;
@@ -939,7 +1089,6 @@ int main(void)
         CHECK("carrying what was offered",
               n_segs > 0 && segs[n_segs - 1].len > 20 && segs[n_segs - 1].data[20] == 'p');
 
-        /* The peer's FIN closes the reading half and is acknowledged. */
         n_segs = 0;
         rx((uint16_t)80, lport, peer_seq, iss + 1, (uint8_t)(F_ACK | F_FIN), 4096, (const char *)0,
            0);
@@ -947,10 +1096,6 @@ int main(void)
         CHECK("and acknowledged", n_segs >= 1 && (last_flags() & F_ACK) != 0);
     }
 
-    /* A ring's worth of data: the ring takes it in one call, the bursts are
-       bounded by the windows, every byte leaves in segments of at most one
-       MSS, and a transmit the driver refuses stays in the ring for the next
-       pump rather than being counted as sent. */
     {
         struct socket sock;
         struct tcb *conn;
@@ -997,9 +1142,6 @@ int main(void)
         CHECK("and no segment was larger than an MSS", oversize == 0);
         rx((uint16_t)82, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
 
-        /* A second transfer takes the ring's indexes past 65536, and every
-           segment recorded carries the byte the stream has at its sequence
-           number, so a wrap that copied from the wrong place would show. */
         n_segs = 0;
         {
             unsigned wrong = 0, seen = 0;
@@ -1051,8 +1193,6 @@ int main(void)
               n_segs == 3 && conn->send_head == conn->send_ack + 3000);
         rx((uint16_t)82, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
 
-        /* A refusal with a segment already out: the first goes, the rest
-           waits, and the acknowledgement of the first pumps the rest. */
         n_segs = 0;
         ip_tx_accept = 1;
         ip_tx_refuse = 1;
@@ -1066,8 +1206,6 @@ int main(void)
               n_segs == 2 && conn->send_head == conn->send_tail);
         rx((uint16_t)82, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
 
-        /* A permanent error is not a full ring: the segment counts as sent
-           and the retransmission timer, not the tick's pump, owns it. */
         n_segs = 0;
         ip_tx_refuse = 1;
         ip_tx_refuse_err = -ENETUNREACH;
@@ -1077,8 +1215,6 @@ int main(void)
         ip_tx_refuse_err = -ENOBUFS;
         rx((uint16_t)82, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
 
-        /* A driver that refuses for good: the bytes wait, and the connection
-           is given up after the bound rather than kept for ever. */
         n_segs = 0;
         cb_fin = 0;
         ip_tx_refuse = 1000000;
@@ -1099,12 +1235,6 @@ int main(void)
     ephemeral_rows();
     path_mtu_row();
 
-    /* A zero window that closes over a refused segment is flow control, not
-       a continuing refusal: the connection is kept through the bound and the
-       segment goes when the window reopens. And a connection last in the
-       list behind four that a zero window holds is still pumped, since the
-       tick's pumps rotate. The list is newest first, so the first opened is
-       the last pumped. */
     {
         struct socket socks[6];
         struct tcb *conns[6];
@@ -1163,13 +1293,6 @@ int main(void)
               n_segs == 1 && conns[0]->send_head == conns[0]->send_tail);
     }
 
-    /* A burst lost whole. The timer fires once, and from then on the
-       acknowledgements drive the resend: one segment at the timeout, two
-       when it is acknowledged, then three, then four, a segment more per
-       acknowledgement, until everything sent before the loss is on the wire
-       again, with no further wait on the timer and every segment sent again
-       once, in order. The timeout the loss doubled is measured again once
-       new data is acknowledged. */
     {
         struct socket sock;
         struct tcb *conn;
@@ -1247,12 +1370,6 @@ int main(void)
         CHECK("and its acknowledgement measures the timeout again", conn->rto == rto_before);
     }
 
-    /* One segment lost from the middle of a burst: the third duplicate
-       acknowledgement sends it again at once, without a tick, in a recovery
-       with the window halved plus the three segments the duplicates say
-       have left; a further duplicate adds a segment; the acknowledgement of
-       everything ends the recovery at the threshold. The two duplicates
-       before the third send nothing. */
     {
         struct socket sock;
         struct tcb *conn;
@@ -1315,10 +1432,6 @@ int main(void)
               n_segs == 0 && conn->recovering == 0);
     }
 
-    /* Two segments lost from one burst: the third duplicate sends the first
-       again, the acknowledgement that then stops at the second hole sends
-       the second again at once, in the same recovery, and the
-       acknowledgement of everything ends it. */
     {
         struct socket sock;
         struct tcb *conn;
@@ -1352,9 +1465,6 @@ int main(void)
               conn->recovering == 0 && conn->snd_una == sent_end && conn->retransmits == 2);
     }
 
-    /* A close with a lost burst in flight: the FIN waits behind the data,
-       the recovery goes on from the acknowledgements in FIN_WAIT_1, and a
-       segment the driver refuses there is sent by the tick. */
     {
         struct socket sock;
         struct tcb *conn;
@@ -1404,10 +1514,6 @@ int main(void)
               conn->recovering == 0 && conn->snd_una == lost_to && conn->retransmits == 6);
     }
 
-    /* A peer whose window closes during a timeout's recovery: the resend
-       stops at the window, the zero-window probe timer runs, a probe goes
-       out, and the window's reopening resumes the recovery. And a reset in
-       the middle of a recovery ends it with the connection. */
     {
         struct socket sock;
         struct tcb *conn;
@@ -1459,10 +1565,6 @@ int main(void)
         (void)lost_to;
     }
 
-    /* A fast resend the driver refuses is owed: the tick's pump sends it
-       before anything else, and the recovery goes on from there. Outside a
-       recovery the mark that keeps a finished recovery's duplicates from
-       beginning another moves up with each acknowledgement. */
     {
         struct socket sock;
         struct tcb *conn;
@@ -1495,9 +1597,6 @@ int main(void)
               conn->recovering == 0 && conn->snd_una == sent_end);
     }
 
-    /* A close from the peer with data still going out: the recovery after
-       a timeout runs through the acknowledgements in CLOSE_WAIT with the
-       window growing, as it does in ESTABLISHED. */
     {
         struct socket sock;
         struct tcb *conn;
@@ -1532,8 +1631,6 @@ int main(void)
               conn->recovering == 0 && conn->snd_una == lost_to);
     }
 
-    /* A round-trip sample ends at the acknowledgement that covers the
-       sampled segment, not at the first acknowledgement after it. */
     {
         struct socket sock;
         struct tcb *conn;
@@ -1561,8 +1658,6 @@ int main(void)
         CHECK("the acknowledgement of the third does", conn->rtt_start == 0);
     }
 
-    /* A peer that stops answering: the stack retransmits with a doubling
-       timer and gives up, rather than holding the connection for ever. */
     {
         struct socket sock;
         struct tcb *conn;
@@ -1573,12 +1668,6 @@ int main(void)
         CHECK("a second connection can be opened", tcp_connect(&sock, PEER, 81) == 0);
         conn = sock.tcb;
         n_segs = 0;
-        /* The retransmission timer counts ticks and `tcp_tick` is one tick,
-           so this is the timer running rather than the clock jumping: the
-           five backoffs together are about six thousand of them. The gaps
-           between the attempts are recorded, because a stack that retried
-           every tick would also eventually give up and pass a check that only
-           counted the attempts. */
         {
             unsigned last_at = 0, gaps[8], n_gaps = 0, before = 0;
 
@@ -1599,9 +1688,6 @@ int main(void)
         }
         CHECK("and given up on", conn->state == TCP_CLOSED);
         CHECK("with each SYN sent again counted", conn->retransmits >= 2);
-        /* The block stays until the socket lets go of it, which is what a
-           program still holding the descriptor expects; what the socket is
-           told is that the connection ended. */
         CHECK("and the socket was told the attempt failed", cb_connected == 1);
         CHECK("and that the connection is over", cb_fin == 1);
         CHECK("with the error a caller reads back", conn->so_error != 0);
