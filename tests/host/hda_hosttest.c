@@ -126,6 +126,7 @@ static int refuse_alloc; /* kmalloc fails */
 extern void *malloc(unsigned long size);
 extern void free(void *ptr);
 static uint32_t clock_value; /* the wall clock, 24000 ticks on at each read */
+static unsigned clock_reads, console_writes;
 
 /** Report the row and assertion that failed. */
 static void check(int ok, const char *message)
@@ -178,8 +179,10 @@ uint32_t hda_test_read(uint32_t offset, int bits)
     uint32_t value = 0;
     int i;
 
-    if (offset == HDA_WALCLK)
+    if (offset == HDA_WALCLK) {
+        clock_reads++;
         return clock_value += 24000;
+    }
     for (i = 0; i < bits / 8; i++)
         value |= (uint32_t)mmio[offset + i] << (i * 8);
     return value;
@@ -218,6 +221,7 @@ static void reset_model(void)
     user_callback = NULL;
     hda_base = 1;
     dma_posbuf_enabled = false;
+    dma_checked = false;
     output_stream_index = 0;
     mmio[HDA_STATESTS] = 1;
     params[0][HDA_PARAM_VENDOR_ID] = 0x14F1506E;
@@ -509,6 +513,26 @@ const char *audio_get_driver_name(void)
 
 /** Run codec and controller rows without executing host I/O instructions:
  * 0 when every check passes, 1 otherwise. */
+/** Only the first start after setup waits for the DMA check; none prints. */
+static void row_dma_check(void)
+{
+    unsigned reads;
+
+    row = "dma-check";
+    reset_model();
+    check(hda_find_output(), "enumeration succeeds");
+    console_writes = 0;
+    reads = clock_reads;
+    check(hda_start(48000, AUDIO_S16LE, 2) == 0, "first start succeeds");
+    check(dma_checked && clock_reads - reads > 2, "first start waits on the wall clock");
+    hda_stop();
+    reads = clock_reads;
+    check(hda_start(48000, AUDIO_S16LE, 2) == 0, "second start succeeds");
+    check(clock_reads - reads <= 1, "second start does not wait");
+    check(console_writes == 0, "starts print nothing on the console");
+    hda_stop();
+}
+
 int main(void)
 {
     row_rates();
@@ -517,6 +541,7 @@ int main(void)
     row_connections();
     row_route();
     row_report();
+    row_dma_check();
     printf("hda-test: result: %s\n", failures ? "fail" : "pass");
     return failures ? 1 : 0;
 }
@@ -543,10 +568,11 @@ void serial_putc(char c)
 {
     (void)c;
 }
-/** No formatter output is needed by the model. */
+/** Count what is printed on the console; the text itself is not needed. */
 void k_vprintf(void (*putc_fn)(char), const char *format, va_list ap)
 {
-    (void)putc_fn;
+    if (putc_fn == console_putc)
+        console_writes++;
     (void)format;
     (void)ap;
 }

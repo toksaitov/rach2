@@ -50,6 +50,12 @@ static uint16_t num_bidir_streams = 0;
 static volatile uint32_t dma_posbuf[HDA_MAX_STREAMS * 2] __attribute__((aligned(128)));
 static volatile bool dma_posbuf_enabled = false;
 static volatile bool dma_posbuf_use = false;
+/* The check of the first stream started after the controller was set up:
+ * LPIB, the stream status and the position buffer's entry, read 20 ms apart
+ * ([0] before, [1] after). `audio hda stats` prints it. */
+static bool dma_checked = false;
+static uint32_t dma_check_lpib[2], dma_check_pos[2];
+static uint8_t dma_check_sts[2];
 
 /* Codec info */
 static uint8_t codec_addr = 0;
@@ -276,6 +282,7 @@ static void hda_setup_dma_posbuf(void)
     dpl = hda_read32(HDA_DPLBASE);
     dma_posbuf_enabled = ((dpl & 0x1u) != 0) && ((dpl & ~0x7Fu) == addr);
     dma_posbuf_use = dma_posbuf_enabled;
+    dma_checked = false;
 }
 
 int hda_get_output_mode(void)
@@ -1854,8 +1861,7 @@ static void hda_shutdown(void)
 }
 
 /** Print on the console, the screen and the serial port, and not to the
- * kernel log: the dumps a person asks for with the `audio` shell command, and
- * hda_start's check of the stream's DMA. */
+ * kernel log: the dumps a person asks for with the `audio` shell command. */
 static void hda_log(const char *format, ...)
 {
     va_list ap;
@@ -2364,6 +2370,14 @@ void hda_debug_dump_stats(void)
 
     hda_log("  posbuf: enabled=%d use=%d pos=%d lpib=%d cbl=%d\n", dma_posbuf_enabled ? 1 : 0,
             dma_posbuf_use ? 1 : 0, pos, lpib, cbl);
+    if (dma_checked) {
+        hda_log("  check: lpib %d->%d sts 0x%x->0x%x pos %d->%d%s\n", dma_check_lpib[0],
+                dma_check_lpib[1], (uint32_t)dma_check_sts[0], (uint32_t)dma_check_sts[1],
+                dma_check_pos[0], dma_check_pos[1],
+                dma_check_lpib[1] == dma_check_lpib[0] ? " (lpib did not move)" : "");
+    } else {
+        hda_log("  check: none since setup\n");
+    }
     hda_log("  state: playing=%d stream_started=%d irq=%d underruns=%d (%d samples)\n",
             playing ? 1 : 0, stream_started ? 1 : 0, irq_count, underrun_count, underrun_samples);
     hda_log("  dma: fills=%d wraps=%d lpib_last=%d\n", hw_fill_count, lpib_wraps, lpib_last);
@@ -2404,6 +2418,38 @@ static void fill_silence(volatile uint8_t *buffer, size_t size, bool is_signed)
 }
 
 /**
+ * Read the running stream's position twice, 20 ms apart, and choose its source.
+ *
+ * When LPIB moved and the DMA position buffer's entry did not, the buffer is
+ * not used for the stream's position; otherwise it is, if the controller took
+ * it. The readings are kept for `audio hda stats` and `dma_checked` is set.
+ * The wait reads the wall clock, so it works with interrupts off.
+ */
+static void hda_check_dma(int stream)
+{
+    uint32_t idx = (uint32_t)stream * 2u;
+    bool have_pos = dma_posbuf_enabled && idx < (uint32_t)(HDA_MAX_STREAMS * 2);
+    int i;
+
+    for (i = 0; i < 2; i++) {
+        if (i == 1) {
+            hda_delay_walclk_us(20000);
+        }
+        dma_check_lpib[i] = hda_sd_read32(stream, HDA_SD_LPIB);
+        dma_check_sts[i] = hda_read8(hda_sd_offset(stream) + HDA_SD_STS);
+        dma_check_pos[i] = 0;
+        if (have_pos) {
+            hda_dma_sync_range(&dma_posbuf[idx], (uint32_t)sizeof(uint32_t));
+            dma_check_pos[i] = dma_posbuf[idx];
+        }
+    }
+
+    dma_posbuf_use = have_pos && !(dma_check_lpib[1] != dma_check_lpib[0] &&
+                                   dma_check_pos[1] == dma_check_pos[0]);
+    dma_checked = true;
+}
+
+/**
  * Configure the codec and stream and begin playback.
  *
  * Validate the requested PCM format before changing the current stream.
@@ -2429,9 +2475,9 @@ static void fill_silence(volatile uint8_t *buffer, size_t size, bool is_signed)
  * headphone pin's output is turned off, so the codec neither mutes the
  * speaker for it nor routes sound to it.
  *
- * After RUN the stream's LPIB is read twice, 20 ms apart, and the result
- * printed on the console (hda_log). When LPIB moved and the DMA position
- * buffer did not, the buffer is not used for the stream's position.
+ * The first start after the controller was set up then waits 20 ms in
+ * hda_check_dma to choose where the stream's position is read; later starts
+ * keep that choice and do not wait.
  */
 static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
 {
@@ -2716,48 +2762,8 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
     hda_report.hp_format =
         hp_dac_nid ? (uint16_t)hda_send_verb(codec_addr, hp_dac_nid, 0xA0000) : 0;
 
-    {
-        uint32_t lpib0, lpib1;
-        uint32_t pos0 = 0, pos1 = 0;
-        uint8_t sts0, sts1;
-
-        lpib0 = hda_sd_read32(stream, HDA_SD_LPIB);
-        sts0 = hda_read8(hda_sd_offset(stream) + HDA_SD_STS);
-        if (dma_posbuf_enabled) {
-            uint32_t idx = (uint32_t)stream * 2u;
-            if (idx < (uint32_t)(HDA_MAX_STREAMS * 2)) {
-                hda_dma_sync_range(&dma_posbuf[idx], (uint32_t)sizeof(uint32_t));
-                pos0 = dma_posbuf[idx];
-            }
-        }
-        hda_delay_walclk_us(20000);
-        lpib1 = hda_sd_read32(stream, HDA_SD_LPIB);
-        sts1 = hda_read8(hda_sd_offset(stream) + HDA_SD_STS);
-        if (dma_posbuf_enabled) {
-            uint32_t idx = (uint32_t)stream * 2u;
-            if (idx < (uint32_t)(HDA_MAX_STREAMS * 2)) {
-                hda_dma_sync_range(&dma_posbuf[idx], (uint32_t)sizeof(uint32_t));
-                pos1 = dma_posbuf[idx];
-            }
-        }
-
-        hda_log("  DMA: LPIB %d->%d STS 0x%x->0x%x\n", lpib0, lpib1, (uint32_t)sts0,
-                (uint32_t)sts1);
-        if (lpib1 == lpib0) {
-            hda_log("  DMA: WARNING: LPIB did not move (PCI BM/D0/IOMMU/BDL?)\n");
-        }
-
-        if (dma_posbuf_enabled) {
-            if (lpib1 != lpib0 && pos1 == pos0) {
-                dma_posbuf_use = false;
-                hda_log("  DMA: posbuf %d->%d looks dead; using LPIB\n", pos0, pos1);
-            } else {
-                dma_posbuf_use = true;
-                hda_log("  DMA: posbuf %d->%d OK\n", pos0, pos1);
-            }
-        } else {
-            dma_posbuf_use = false;
-        }
+    if (!dma_checked) {
+        hda_check_dma(stream);
     }
 
     return 0;
