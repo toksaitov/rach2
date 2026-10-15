@@ -81,8 +81,8 @@ int netdev_running(const struct netdev *nd)
 /**
  * Record a frame sent, or drop it when the link is down or `refuse_all` is
  * set. A recorded frame prints from inside the transmit when `tx_prints` is
- * set, and takes the link down when it is frame `link_lost_after`. Returns 0,
- * NETDEV_TX_OK, for a frame recorded.
+ * set, and takes the link down when it is frame `link_lost_after`. Returns
+ * NETDEV_TX_OK for a recorded frame, NETDEV_TX_DROPPED for a dropped frame.
  */
 int ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short type,
                 const unsigned char *payload, unsigned short plen)
@@ -92,7 +92,7 @@ int ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short typ
 
     tx_attempts++;
     if (link_down || refuse_all) {
-        return 1; /* not NETDEV_TX_OK: Ethernet or the card dropped it */
+        return NETDEV_TX_DROPPED;
     }
     tx_depth++;
     if (tx_depth > tx_max_depth) {
