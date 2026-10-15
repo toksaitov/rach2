@@ -39,12 +39,14 @@ else
     cp "$source" "$work/klog.c.saved"
 fi
 
+# restore: copy the saved klog.c back over the private tree.
 restore()
 {
     cp "$work/klog.c.saved" "$source"
     touch "$source"
 }
 
+# cleanup: the exit trap; stop the running test and restore the source.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -62,8 +64,8 @@ trap 'exit 143' TERM
 test=tests/host/klog_hosttest.c
 deps=$(grep -oE 'host-deps:[^*]*' "$test" | sed 's/host-deps://' | tr '\n' ' ')
 
-# run_phase NAME: compile the test against the private tree and run it;
-# `status` is its exit status and NAME.log what it printed.
+# run_phase NAME: compile the test against the private tree and run it for at
+# most 60 seconds; `status` is its exit status and NAME.log what it printed.
 run_phase()
 {
     phase=$1

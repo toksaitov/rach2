@@ -1,5 +1,6 @@
 #!/bin/sh
-# Compile fixed, faulty and restored ISH sources in a private test tree.
+# Prove ish_hosttest.c with private mutations of ish/ish.c and
+# ish/ish_cstring_utilities.c.
 #
 # Usage: sh tests/host/ish_mutate.sh [FAULT ...] | --texts
 # With no operand every fault is proved; an operand proves only the ones named.
@@ -8,8 +9,8 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault DIR FAULT: put FAULT into its source in DIR, a copy of ish/;
+# with RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
     python3 - "$1" "$2" <<'PY'
@@ -93,6 +94,8 @@ cp "$work/ish/ish.c" "$work/ish.saved"
 cp "$work/ish/ish_cstring_utilities.c" "$work/cstring.saved"
 child=
 
+# stop_child: end the running test and its session's process group, if there
+# is one, and wait until none of its processes is left.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -106,6 +109,8 @@ stop_child()
     fi
 }
 
+# cleanup: stop the running test and put the two saved sources back; the loop
+# calls it after each fault, and it is the exit trap.
 cleanup()
 {
     stop_child
@@ -118,6 +123,10 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: compile ish_hosttest.c over the copy twice,
+# over the C library and with ISH_RAW_HOSTTEST, run each in a session of its
+# own for at most 15 seconds, and exit unless each ends with STATUS and its
+# log contains MESSAGE.
 run_phase()
 {
     phase=$1

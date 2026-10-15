@@ -1,11 +1,16 @@
 #!/bin/sh
-# Exercise table validation and phase measurements in private builds.
+# Prove growroot_hosttest.c's rows on the partition table writer and the phase
+# measurements with private mutations of utils/growroot.c: the writer checking
+# the first sector only when it reads whole and reading it again before it
+# writes; the counters zeroed before the report (zero); and a phase's `after`
+# sample taken before its command runs (attribution).
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_unchecked_read ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_unchecked_read FILE: put the writer's fault into FILE, a copy of
+# growroot.c; with RACH2_FAULT_TEXTS set, only check its text and write
+# nothing.
 apply_unchecked_read()
 {
     python3 - "$1" <<'PY'
@@ -40,8 +45,9 @@ PY
 }
 
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault FILE FAULT: put FAULT, zero or attribution, into FILE, a copy of
+# growroot.c; with RACH2_FAULT_TEXTS set, only check its text and write
+# nothing.
 apply_fault()
 {
     python3 - "$1" "$2" <<'PYTHON'
@@ -87,6 +93,8 @@ cp utils/growroot.c "$work/growroot.saved"
 cp "$work/growroot.saved" "$work/growroot.c"
 child=
 
+# cleanup: stop the running test and put the saved growroot.c back; the script
+# calls it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -102,6 +110,10 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE: compile growroot_hosttest.c over the copy as $work/PHASE and
+# run it for at most 10 seconds. The phases `mutated`, `zero` and
+# `attribution` must fail with their faults' rows; any other must pass. Exit
+# if not.
 run_phase()
 {
     phase=$1

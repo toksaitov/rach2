@@ -9,8 +9,8 @@
 #   no-cap     lets the heap pass the region the layout has.
 #   short-map  sizes the page map of a large region for a quarter of its
 #              pages, so the map's last pages are given out as the heap's.
-#   one-end    takes the cache's pages from the bottom with the rest, as
-#              the heap did before, so their holes break every run.
+#   one-end    takes the cache's pages from the bottom with the rest, so
+#              their holes break every run.
 #
 # Usage: kheap_mutate.sh [--check | --texts]
 # With --check it compiles and runs the unmodified test alone. With --texts
@@ -45,12 +45,14 @@ else
     cp "$source" "$work/kheap.c.saved"
 fi
 
+# restore: copy the saved kheap.c back over the private tree.
 restore()
 {
     cp "$work/kheap.c.saved" "$source"
     touch "$source"
 }
 
+# cleanup: the exit trap; stop the running test and restore the source.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -68,8 +70,8 @@ trap 'exit 143' TERM
 test=tests/host/kheap_hosttest.c
 deps=$(grep -oE 'host-deps:[^*]*' "$test" | sed 's/host-deps://' | tr '\n' ' ')
 
-# run_phase NAME: compile the test against the private tree and run it;
-# `status` is its exit status and NAME.log what it printed.
+# run_phase NAME: compile the test against the private tree and run it for at
+# most 60 seconds; `status` is its exit status and NAME.log what it printed.
 run_phase()
 {
     phase=$1

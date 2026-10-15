@@ -1,21 +1,26 @@
 #!/bin/sh
-# Compile descriptor allocation before, during and after each fault. The
+# Prove fd_hosttest.c with private mutations of rach2/sys/fs/fd.c and
+# proc/process.c. The `unchecked` fault ignores a failed allocation of a
+# standard descriptor's description, `rollback` leaves the ones allocated
+# before it in the table, and `process` publishes a process whose standard
+# descriptors could not be made. The `repoint` fault moves the handle of a
+# description on any mounted type when a node moves, not KRFFS's alone. The
 # two namespace faults change the test that `fd_ofd_lock` and `fd_ofd_unlock`
 # both make: one takes the mount's namespace for KRFFS alone, the other for
 # every mounted file system whether or not its type asks to be serialised.
 # The six allocation faults answer -1 where a refusal of a descriptor
 # answers EMFILE, ENOMEM or EBADF. The two faults of `fd_ofd_live` call a
 # description open for a later serial than its own, or while its last
-# reference is closed. The split-modes fault gives the standard descriptors
-# the modes they had before tmux on the console needed a writable fd 0:
-# fd 0 read-only and fds 1 and 2 write-only.
+# reference is closed. The split-modes fault opens fd 0 read-only and fds 1
+# and 2 write-only, where each is open for reading and writing.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault FILE FAULT: put FAULT into FILE, a copy of fd.c or, for
+# `process`, of process.c; with RACH2_FAULT_TEXTS set, only check its text
+# and write nothing.
 apply_fault()
 {
     python3 - "$1" "$2" <<'PY'
@@ -98,6 +103,8 @@ cp -R rach2/sys "$work/sys"
 cp "$work/sys/fs/fd.c" "$work/fd-stdio.saved"
 cp "$work/sys/proc/process.c" "$work/process.saved"
 
+# cleanup: stop the running test and put the saved fd.c and process.c back;
+# the loop calls it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -114,6 +121,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: compile fd_hosttest.c over the copy as
+# $work/PHASE, run it for at most 10 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1

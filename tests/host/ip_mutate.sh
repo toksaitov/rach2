@@ -1,5 +1,5 @@
 #!/bin/sh
-# Compile the IP transmit rows of packet_hosttest.c against faults in a
+# Prove the IP transmit rows of packet_hosttest.c against faults in a
 # private copy of ip.c: a log line for every datagram the full loopback ring
 # refuses, a refusal reported as sent, a refusal left uncounted, a refused
 # datagram copied over the oldest one queued, a subnet broadcast sent by the
@@ -11,7 +11,7 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FILE FAULT: put FAULT into FILE, a copy of ip.c; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -67,6 +67,8 @@ cp tests/host/packet_hosttest.c "$work/tests/host/"
 ip="$work/rach2/sys/network/ip/ip.c"
 cp "$ip" "$work/ip.saved"
 
+# cleanup: stop the running test and put the saved ip.c back; the loop calls
+# it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -82,6 +84,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: compile packet_hosttest.c over the copy as
+# $work/PHASE, run it for at most 10 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1

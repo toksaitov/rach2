@@ -1,12 +1,15 @@
 #!/bin/sh
-# Compile fixed, faulty and restored HDA drivers against the model codec.
+# Prove hda_hosttest.c, the HDA driver against a model codec, with private
+# mutations of rach2/sys/audio/hda.c and of the driver's report in
+# rach2/sys/fs/procfs.c.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault DIR FAULT: put FAULT into DIR/audio/hda.c or, for `report`,
+# DIR/fs/procfs.c; with RACH2_FAULT_TEXTS set, only check its text and write
+# nothing.
 apply_fault()
 {
     python3 - "$1" "$2" <<'PY'
@@ -62,6 +65,8 @@ cp -R rach2/sys "$work/sys"
 cp "$work/sys/audio/hda.c" "$work/hda.saved"
 cp "$work/sys/fs/procfs.c" "$work/procfs.saved"
 
+# cleanup: stop the running test and put the saved hda.c and procfs.c back;
+# the loop calls it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -78,6 +83,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: compile hda_hosttest.c over the copy as
+# $work/PHASE, run it for at most 10 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1

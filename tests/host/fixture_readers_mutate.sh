@@ -1,10 +1,16 @@
 #!/bin/sh
-# Prove the fixture readers' bounds and exported file lengths.
+# Prove the readers' bounds and exported file lengths in the fixture builders
+# tests/host/mkexfatfixture.c and mkfatfixture.c, through exfatcheck_hosttest.c
+# and fatcheck_hosttest.c. Each mutation is written into the builder itself,
+# and restore puts the saved copy back.
+#
+# Usage: fixture_readers_mutate.sh [MUTATION...] | --texts
+# With no MUTATION it proves every one.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FILE MUTATION: put MUTATION into FILE, a fixture builder; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -40,8 +46,8 @@ for before, after in changes[sys.argv[2]]:
 path.write_text(source)
 PY
 }
-# select_mutation MUTATION: the fixture writer MUTATION changes, and the
-# failure its reader's row prints.
+# select_mutation MUTATION: set `kind`, exfat or fat, for the builder MUTATION
+# changes, and `expected` to the failure its check test's row prints.
 select_mutation()
 {
     case "$1" in
@@ -74,6 +80,8 @@ source=
 cp -p tests/host/mkexfatfixture.c "$work/mkexfatfixture.c.saved"
 cp -p tests/host/mkfatfixture.c "$work/mkfatfixture.c.saved"
 
+# restore: put the saved copy back over the builder a mutation is in, if any,
+# and check that it is the same.
 restore()
 {
     if [ -n "$source" ]; then
@@ -84,6 +92,7 @@ restore()
     fi
 }
 
+# cleanup: the exit trap; stop the running test and restore the builder.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -99,6 +108,10 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE KIND EXPECTED: compile KINDcheck_hosttest.c and run it in a
+# session of its own for at most 60 seconds. With EXPECTED empty it must pass;
+# otherwise it must fail with a status below 124 and print EXPECTED. Exit if
+# not.
 run_phase()
 {
     phase=$1

@@ -10,8 +10,9 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault DIR FAULT: put FAULT into its source in DIR, a tree laid out as
+# sys/ and utils/; with RACH2_FAULT_TEXTS set, only check its text and write
+# nothing.
 apply_fault()
 {
     python3 - "$1" "$2" <<'PY'
@@ -87,6 +88,8 @@ cp -R rach2/sys "$work/sys"
 cp utils/grubslot.c utils/grubslot.h utils/bootslot.h "$work/utils/"
 cp utils/grubslot.c rach2/sys/block/partition.c rach2/sys/fs/devfs.c "$work/saved/"
 
+# restore: copy the saved grubslot.c, partition.c and devfs.c back over the
+# private copies.
 restore()
 {
     cp "$work/saved/grubslot.c" "$work/utils/grubslot.c"
@@ -95,6 +98,7 @@ restore()
     touch "$work/utils/grubslot.c" "$work/sys/block/partition.c" "$work/sys/fs/devfs.c"
 }
 
+# cleanup: the exit trap; stop the running test and restore the sources.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -110,8 +114,9 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 # run_phase TEST PHASE EXPECTED MESSAGE: compile tests/host/TEST_hosttest.c
-# against the private copies as the host suite compiles it, run it, and
-# require its status to be EXPECTED and its output to have MESSAGE.
+# against the private copies as the host suite compiles it, run it for at most
+# 30 seconds, and require its status to be 0 if EXPECTED is 0 and nonzero
+# otherwise, and its output to have MESSAGE.
 run_phase()
 {
     test=$1
@@ -147,6 +152,7 @@ run_phase()
     echo "grubwindow-mutation: result: $test $phase status $status"
 }
 
+# pass_of TEST: print the line TEST's host test prints when it passes.
 pass_of()
 {
     case $1 in

@@ -4,10 +4,10 @@
 # checks named for it and no other:
 #
 #   acpi-nvs-as-ram  counts every map type but "reserved" as memory, so the
-#                    Lenovo's NVS and ACPI ranges and the UEFI map's become
-#                    usable: the Lenovo's map is the one QEMU's are not.
-#   reach-32         drops what lies at or above 4 GiB on x86-64 too, as the
-#                    allocator did before it took every usable range.
+#                    NVS and ACPI ranges of the Lenovo's map and of the UEFI
+#                    map become usable.
+#   reach-32         drops what lies at or above 4 GiB on x86-64 too, where
+#                    the allocator takes every usable range.
 #   ranges-short     keeps one range fewer than FRAME_MAP_RANGES says, which
 #                    the bound's row needs every one of.
 #   place-low        puts the frame table at the bottom of its range instead
@@ -47,6 +47,7 @@ else
     cp "$header" "$work/frame.h.saved"
 fi
 
+# restore: copy the saved frame.c and frame.h back over the private tree.
 restore()
 {
     cp "$work/frame.c.saved" "$source"
@@ -54,6 +55,7 @@ restore()
     touch "$source" "$header"
 }
 
+# cleanup: the exit trap; stop the running test and restore the sources.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -86,8 +88,8 @@ expected()
     done
 }
 
-# run_phase NAME: compile the test against the private tree and run it;
-# `status` is its exit status and NAME.log what it printed.
+# run_phase NAME: compile the test against the private tree and run it for at
+# most 10 seconds; `status` is its exit status and NAME.log what it printed.
 run_phase()
 {
     phase=$1
