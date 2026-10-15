@@ -1,17 +1,14 @@
-# Unix Utilities Makefile (Rach2)
+# utils/Makefile: build the Rach2 utilities with the cross compiler, as hosted
+# C programs linked statically against the ported musl.
 #
-# Builds the utilities as ordinary hosted C programs linked statically against
-# the ported musl (see vendor/musl/build_libc.sh), the same way
-# tests/musl/build.sh links its programs: musl's crt1/crti + libc.a + crtn via
-# the cross compiler, with the freestanding crt0.c and hand-rolled int-0x80
-# stubs dropped. Each program now uses the real libc headers (<stdio.h>,
-# <unistd.h>, <dirent.h>, ...).
-#
-# Requires vendor/musl/install (run vendor/musl/build_libc.sh once first). For
-# Linux host builds, use: make -f Makefile.linux
+# The link is the one tests/musl/build.sh makes: musl's crt1.o and crti.o, the
+# program, then libc.a, the compiler's libgcc and crtn.o. The programs include
+# musl's headers. musl's install tree is $(ARCH_MUSL) (mk/arch.mk), which
+# `make musl` in the top directory builds. For native Linux builds of the file
+# utilities: make -f Makefile.linux
 
-# Shared header-dependency tracking + the toolchain guard (see ../mk/). The musl
-# utilities link the ported libc of the architecture mk/arch.mk names AND the
+# Shared header-dependency tracking and the toolchain check (../mk/). The
+# utilities link the ported libc of the architecture mk/arch.mk names and the
 # libgcc of the compiler that built it, so they take that architecture's
 # compiler, which mk/toolchain.mk gives as CROSS_CC: i686-elf-gcc, whose -m32
 # is a no-op but keeps the i686 ABI explicit, or x86_64-elf-gcc with -m64. The
@@ -21,7 +18,7 @@ include ../mk/deps.mk
 include ../mk/build.mk
 CC := $(CROSS_CC)
 
-# Ported musl install tree (headers + static libc.a + crt objects).
+# The ported musl's install tree: its headers, libc.a and crt objects.
 PREFIX  := $(TOP)/$(ARCH_MUSL)
 LIBGCC  := $(shell $(CC) $(ARCH_CFLAGS) -print-libgcc-file-name)
 CRT1    := $(PREFIX)/lib/crt1.o
@@ -33,21 +30,21 @@ CFLAGS  = $(ARCH_CFLAGS) -static -nostdlib -nostartfiles -isystem $(PREFIX)/incl
 # Flags an analysis adds from the command line (tools/verify/analyze.sh).
 EXTRA ?=
 CFLAGS += $(EXTRA)
-# crt1/crti come before the program objects; libc + libgcc + crtn after.
+# crt1.o and crti.o come before the program; libc.a, libgcc and crtn.o after.
 LINK_PRE  = $(CRT1) $(CRTI)
 LINK_POST = $(PREFIX)/lib/libc.a $(LIBGCC) $(CRTN) -Wl,-z,noexecstack $(ARCH_LDFLAGS)
 
-# The program lists and the per-program source map live in programs.mk, which
+# The program lists and the per-program source map are in programs.mk, which
 # guest.mk includes too, so one file describes both builds.
 #
-# init is PID 1, and su and sudo climb privilege; none of the three is a user
-# tool to be swept into an image root. The SBIN_PROGS build into a sbin/ subdir
-# so the os-simple `exec-dir / build/utils` sweep (which stages only the regular
-# files directly in build/utils, skipping subdirs) cannot stage them at all.
-# Every image that wants one names it explicitly, which is also what makes the
-# set-id allowlist in tools/inspect/setid.allow a complete list rather than a
-# sample: a privileged program reaches an image only through a `file` line
-# naming it.
+# The SBIN_PROGS, the inits, the programs that check or change credentials and
+# bootctl, are not user tools to be swept into an image root: init is PID 1, and
+# su and sudo climb privilege. They build into a sbin/ subdirectory, which the
+# os-simple manifest's `exec-dir /bin build/utils` does not stage, since
+# `exec-dir` stages only the regular files directly in its directory. Every
+# image that wants one names it explicitly, which is also what makes the set-id
+# allowlist in tools/inspect/setid.allow a complete list rather than a sample: a
+# privileged program reaches an image only through a `file` line naming it.
 include programs.mk
 
 TARGETS      = $(addprefix $(BUILD)/, $(UTILITIES))
@@ -71,14 +68,11 @@ $(TARGETS) $(SBIN_TARGETS): | libc-check
 # into sbin/) would go on being staged from a tree that no longer builds it. The
 # build is out of tree and incremental, so nothing else removes it.
 #
-# Both levels are swept, and sbin/ is swept for a reason worth stating: its
-# contents are staged by name, so a stale binary there is only reachable through
-# a manifest line naming it, and the set-id guard (tools/inspect/setidcheck.c)
-# compares a manifest's declared source against its own table without ever
-# stat-ing the host file. A rename that missed one manifest line would therefore
-# go on staging the old binary with nothing reporting it. Milestone 25's rename
-# of install-kernel to bootctl left exactly that artifact behind, which is what
-# closed this gap.
+# sbin/ is swept too. Its programs are staged by name, so a stale binary there
+# is reachable only through a manifest line naming it, and the set-id check
+# (tools/inspect/setidcheck.c) compares a `file` line's declared source with
+# its own table and does not look at the host file. A rename that missed one
+# manifest line would go on staging the old binary with nothing to report it.
 prune-stale:
 	@keep=" $(UTILITIES) "; \
 	for f in $(BUILD)/*; do \
@@ -107,17 +101,17 @@ libc-check:
 	    echo "error: $(PREFIX)/lib/libc.a not found; run vendor/musl/build_libc.sh first" >&2; \
 	    exit 1; }
 
-# Each <name>.c compiles+links in one step into a static musl guest binary under
-# $(BUILD) (build/utils/, from mk/build.mk); -MF puts the GCC-written .d there
-# too. There are no .o intermediates and nothing lands in the source tree.
+# Each NAME.c is compiled and linked in one step into a static guest program
+# under $(BUILD) (mk/build.mk), and -MF puts GCC's .d file there too. There are
+# no .o files, and nothing is written in the source tree.
 $(BUILD)/%: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/$*.d -o $@ $(LINK_PRE) $< $(LINK_POST)
 
-# ping and nc link the shared stub resolver (resolv.c, declared in netdb.h).
-# These compile+link two sources in one step (-MF records only the last source's
-# headers), so the inputs (the program source, resolv.c, netdb.h) are explicit
-# prerequisites; the $(BUILD) .d adds the resolver's transitive headers.
+# ping and nc link the stub resolver (resolv.c, declared in netdb.h). Each is
+# compiled and linked from two sources in one step, and -MF records the
+# headers of the last source only, so the sources and the headers HDR_* names
+# are explicit prerequisites; the .d file adds the resolver's own headers.
 $(BUILD)/ping: $(SRC_ping) $(HDR_ping)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/ping.d -o $@ $(LINK_PRE) $(SRC_ping) $(LINK_POST)
@@ -138,19 +132,20 @@ $(BUILD)/sbin/su: $(SRC_su) $(HDR_su)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/su.d -o $@ $(LINK_PRE) $(SRC_su) $(LINK_POST)
 
-# passwd links the credential library for the same reason su does, and is the
-# first program that writes through it.
+# passwd links the credential library for the same reason su does, and writes
+# the account files through it.
 $(BUILD)/sbin/passwd: $(SRC_passwd) $(HDR_passwd)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/passwd.d -o $@ $(LINK_PRE) $(SRC_passwd) $(LINK_POST)
 
-# init builds three times from the one source, and no artifact is named plain
-# `init`: a manifest left on the old path fails to stage rather than silently
-# getting whichever init the tree happens to build. init-shell is today's
-# behavior unchanged; init-login execs /bin/login and nothing else, with the
-# shell table and its exec loop compiled out, so the strict artifact holds no
-# code path and no string that names a shell; init-metal is init-login plus a
-# supervised SSH server, for the machine nobody is standing in front of.
+# init builds four times from the one source, and no program is named plain
+# `init`: a manifest that names that path fails to stage rather than getting
+# whichever init the tree builds. init-shell gives a shell at the console and
+# supervises nothing; init-login execs /bin/login and nothing else, with the
+# shell table and its exec loop compiled out, so it has no code path and no
+# string that names a shell; init-metal is init-login with a supervised SSH
+# server, for a machine nobody is standing in front of; init-recovery is the
+# recovery system's, described in programs.mk.
 $(BUILD)/sbin/init-shell: $(SRC_init_shell)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/init-shell.d -o $@ $(LINK_PRE) $(SRC_init_shell) $(LINK_POST)
@@ -179,7 +174,7 @@ $(BUILD)/sbin/login: $(SRC_login) $(HDR_login)
 # one source: as shipped, and as a crash build that dies the instant a named
 # publication has landed, so the ordering the account's consistency rests on is
 # proved by injection rather than by a reading of the source. Everything the
-# second build adds lives under -DADDUSER_CRASH_POINT, so the shipped binary has
+# second build adds is under -DADDUSER_CRASH_POINT, so the shipped binary has
 # neither the extra argument nor the code, and only the test image stages it.
 $(BUILD)/sbin/adduser: $(SRC_adduser) $(HDR_adduser)
 	@mkdir -p $(dir $@)
@@ -223,8 +218,9 @@ $(BUILD)/netup: $(SRC_netup) $(HDR_netup)
 	$(CC) $(CFLAGS) -MF $(BUILD)/netup.d -o $@ $(LINK_PRE) $(SRC_netup) \
 	    $(LINK_POST)
 
-# bootctl links the boot-slot library (bootslot.c), the pure core its host test
-# drives over fixture images with fault injection.
+# bootctl links the boot-slot library (bootslot.c), which reads and writes
+# through callbacks, so that its host test drives it over images in memory with
+# injected faults.
 $(BUILD)/sbin/bootctl: $(SRC_bootctl) $(HDR_bootctl)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/bootctl.d -o $@ $(LINK_PRE) $(SRC_bootctl) $(LINK_POST)
