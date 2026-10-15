@@ -5,11 +5,10 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/pressure_host.c
  *
- * The conversion from UTF-8 to UTF-16 and what it refuses, the 8.3 rule
+ * The conversion from UTF-8 to UTF-16 and the names it fails, the 8.3 rule
  * with its case bits, the alias and its numbering, the checksum and the
- * long entries' layout, and the cases recorded from mtools in the
- * milestone's notes: where this driver's rule agrees with what mtools
- * writes and where it does not.
+ * long entries' layout, and names whose entries mtools wrote: where this
+ * driver's rule agrees with what mtools writes and where it does not.
  */
 
 #include "../../rach2/sys/fs/fat32name.h"
@@ -21,6 +20,7 @@ extern int printf(const char *fmt, ...);
 
 static int fails;
 
+/** Count and print a failed row. */
 static void check(int ok, const char *what)
 {
     if (!ok) {
@@ -29,6 +29,7 @@ static void check(int ok, const char *what)
     }
 }
 
+/** Whether the 11 bytes of the short name `a` equal those of `b`. */
 static int eq11(const uint8_t *a, const char *b)
 {
     int i;
@@ -44,16 +45,20 @@ static int eq11(const uint8_t *a, const char *b)
 static uint16_t units[FAT_NAME_UNITS];
 static uint8_t name11[11];
 
-/* ---- what fatcommon.c needs of the kernel: the walk's lock and the clock,
-   which the name rows never reach ---- */
+/* What fatcommon.c needs of the kernel: the walk's lock and the clock,
+   which the name rows never reach. */
+
+/** Clear the queue. */
 void wait_queue_init(wait_queue_t *wq)
 {
     __builtin_memset(wq, 0, sizeof(*wq));
 }
+/** Do nothing: no process sleeps. */
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
 }
+/** Return -1 at once, as an interrupted wait does. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
@@ -61,16 +66,24 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     (void)arg;
     return -1;
 }
+/** As `wq_wait_event`. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     return wq_wait_event(wq, cond, arg);
 }
+/** A fixed time, 2020-03-04 12:00 UTC. */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
     *seconds = 1583323200;
     *nanoseconds = 0;
 }
 
+/**
+ * Run the rows: the conversion and the names it fails; the 8.3 rule and
+ * the case bits, against what mtools wrote; the alias and its numbering;
+ * and the checksum and the long entries. Returns the count of failed
+ * rows, at most 255.
+ */
 int main(void)
 {
     uint32_t n;
@@ -78,7 +91,6 @@ int main(void)
     static char longname[300];
     int i;
 
-    /* The conversion and what it refuses. */
     check(fat_name_units("hello.c", units, &n) == 0 && n == 7 && units[0] == 'h',
           "an ASCII name converts");
     check(fat_name_units("\xc3\xa9.txt", units, &n) == 0 && n == 5 && units[0] == 0xE9,
@@ -125,7 +137,6 @@ int main(void)
     check(fat_name_units(".hidden", units, &n) == 0 && fat_name_units("a b", units, &n) == 0,
           "a leading dot and an inner space are names");
 
-    /* The 8.3 rule and the case bits, against what mtools wrote. */
     check(fat32_name_short("hello.c", name11, &lower) == 1 && eq11(name11, "HELLO   C  ") &&
               lower == 0x18,
           "hello.c is short with both parts lower");
@@ -151,7 +162,6 @@ int main(void)
     check(fat32_name_short("NOEXT", name11, &lower) == 1 && eq11(name11, "NOEXT      "),
           "a name with no extension fits");
 
-    /* The alias and its numbering. */
     fat32_alias("long name.txt", name11);
     check(eq11(name11, "LONGNA~1TXT"), "long name.txt takes LONGNA~1.TXT, as mtools gave it");
     fat32_alias("Mixed.c", name11);
@@ -172,7 +182,6 @@ int main(void)
     fat32_alias_number(name11, 999999);
     check(eq11(name11, "L~999999TXT"), "six digits leave one");
 
-    /* The checksum and the long entries. */
     check(fat_name_units("long name.txt", units, &n) == 0 && fat32_long_entries(n) == 1 &&
               fat32_long_entries(14) == 2 && fat32_long_entries(26) == 2 &&
               fat32_long_entries(27) == 3,

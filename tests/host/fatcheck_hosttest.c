@@ -3,11 +3,11 @@
  *
  * host-deps: tests/host/compat/fixdir_host.c
  *
- * The check is the reader every write test relies on, so it is proved
- * before the writer exists: every malformed fixture must be refused with
- * the finding named for its fault, and every well-formed one accepted.
- * The builder is compiled here on every run, into the test's own fixture
- * directory (compat/fixdir_host.c).
+ * The check is the reader every FAT write test relies on, so it is tested
+ * on its own: every malformed fixture must fail it with the finding named
+ * for its fault, and every well-formed one must pass. The builder is
+ * compiled here on every run, into the test's own fixture directory
+ * (compat/fixdir_host.c).
  */
 
 #include <stdint.h>
@@ -29,7 +29,7 @@ static const char *tool(void)
     return text;
 }
 
-/** Record an assertion failure. */
+/** Count and print a failed row. */
 static void check(int ok, const char *what)
 {
     if (!ok) {
@@ -38,7 +38,11 @@ static void check(int ok, const char *what)
     }
 }
 
-/** Require the checker to exit normally with the expected finding. */
+/**
+ * Run the check over the fixture image and require it to exit with
+ * `want_rc` and to print `want`; `label` names the row. The output is
+ * printed when the row fails.
+ */
 static void judge(int want_rc, const char *want, const char *label)
 {
     char cmd[2400], line[512], out[8192];
@@ -67,7 +71,7 @@ static void judge(int want_rc, const char *want, const char *label)
     }
 }
 
-/** Build one standard fixture and check its verdict. */
+/** Build the fixture the builder's option `opt` names and judge it. */
 static void row(const char *opt, int want_rc, const char *want)
 {
     char cmd[2400];
@@ -80,7 +84,15 @@ static void row(const char *opt, int want_rc, const char *want)
     judge(want_rc, want, opt[0] ? opt : "(default)");
 }
 
-/** Write a long-name sequence after the default root's BOOT entry. */
+/**
+ * Build the volume of 8-sector clusters and write after the root's BOOT
+ * entry `count` long-name entries of the letter a, with their checksum,
+ * and the short entry BOUND.TXT they belong to. A name of 20 entries ends
+ * at 255 units with the terminator and padding. With `restart`, the first
+ * entry is a start of its own, sequence 1 with the last-entry flag, and
+ * the second starts the name again. The check must exit with `want_rc`:
+ * 0 with no finding, or 1 naming orphan long-name entries.
+ */
 static void long_name_row(unsigned count, int restart, int want_rc, const char *label)
 {
     static const unsigned at[13] = {1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30};
@@ -130,7 +142,13 @@ static void long_name_row(unsigned count, int restart, int want_rc, const char *
               want_rc ? "orphan long-name entries before /BOUND.TXT" : "check: OK: ", label);
 }
 
-/** Run the standard fixtures and the long-name bounds. */
+/**
+ * Build the fixture builder, then run the rows: each well-formed geometry
+ * the builder has, and a volume whose free clusters hold junk, must pass;
+ * each fault must fail with the finding named for it; and the long names
+ * of 20 entries must pass and those of 21 entries or with a repeated start
+ * must fail. Returns the count of failed rows, at most 255.
+ */
 int main(void)
 {
     char cmd[2048];
@@ -145,7 +163,6 @@ int main(void)
         return 1;
     }
 
-    /* Well-formed volumes, in every geometry the builder has. */
     row("", 0, "check: OK: ");
     row("--cluster8", 0, "check: OK: ");
     row("--fragmented", 0, "check: OK: ");
@@ -154,7 +171,6 @@ int main(void)
     row("--active-second", 0, "check: OK: ");
     row("--small-candidate", 0, "check: OK: ");
 
-    /* Each fault named for what it is. */
     row("--loop", 1, "loop: /BOOT/KERNEL");
     row("--out-of-range", 1, "out of range: /BOOT/KERNEL");
     row("--cluster8-past-end", 1, "out of range: /BOOT/KERNEL");
