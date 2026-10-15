@@ -12,8 +12,8 @@
  * page alone out of a mapping of it, and a mapping of a file or of shared
  * memory of 16 TiB is EOVERFLOW and one of a page less is made; mprotect,
  * getrusage, a shrink and a move each pass terabytes without pages in the
- * run's time and reach the page beyond them. mprotect will not make a shared
- * mapping of a file opened read-only writable, and will a private one.
+ * run's time and reach the page beyond them. mprotect makes a private mapping
+ * of a file opened read-only writable, and not a shared one.
  * Shared anonymous memory ignores a raw mmap2's page offset (mmap's, in bytes,
  * on x86-64), a file's offset whose last page would not fit in 32 bits is
  * EOVERFLOW, and a page of a file in memory past its end is never backed.
