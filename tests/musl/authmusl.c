@@ -12,7 +12,7 @@
  * real time ahead and back again through clock_settime, settimeofday and stime
  * (which x86-64 does not have), and reads back each time it set; dup3 onto an
  * explicit high fd with O_CLOEXEC dups and sets close-on-exec; an advisory
- * fcntl(F_SETLK) read lock on it is granted, and a write lock refused with
+ * fcntl(F_SETLK) read lock on it is granted, and a write lock fails with
  * EBADF, since the file is open for reading alone, as in Linux; and the
  * credential changes a login server makes work through libc. That last check
  * runs last, since it gives up root for good: seteuid(1000) and back, legal
@@ -64,8 +64,8 @@ static int reads_near(long long sec)
  * Set the real time `delta` seconds ahead with clock_settime, back with the
  * kernel's settimeofday, whose timeval has fields of a long's width, and to the
  * second it reads with stime where there is one: 0 when each reads back the
- * time it set, and -1 with the errno of the first call refused, or EIO for a
- * time that did not take.
+ * time it set, and -1 with the errno of the first call that failed, or EIO
+ * for a time that did not take.
  */
 static int clock_step(long delta)
 {
@@ -113,7 +113,7 @@ static int clock_step(long delta)
 }
 
 /** Advisory locks on `fd`, which is open for reading alone: a read lock is
- * granted, and a write lock refused with EBADF. 0, or 1 once the failure is
+ * granted, and a write lock fails with EBADF. 0, or 1 once the failure is
  * reported. */
 static int lock_rows(int fd)
 {

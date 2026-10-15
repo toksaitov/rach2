@@ -5,20 +5,20 @@
  * The refusals come first: a file that is not a directory is ENOTDIR, a missing
  * path ENOENT, /proc and /dev EINVAL, and a caller who is not root EPERM, after
  * the path's own errors; chroot("/") changes nothing. A child that chroots into
- * a directory of mode 0700 and takes another uid is refused chdir("/") with
+ * a directory of mode 0700 and takes another uid fails chdir("/") with
  * EACCES. A child that chroots into a KRFFS directory under /tmp keeps its
  * working directory there, under its path from the new root; reads the root's
  * files by absolute paths and finds nothing of the tree above it; stays at the
  * root on ".."; opens a file through a directory descriptor opened outside, as
- * Linux does, though fchdir to it is refused; and passes the root to a child of
- * fork and to a copy of this program it execs from inside. A child whose
- * working directory is outside the new root finds it moved to the root, and a
- * second chroot inside the first gives the working directory its path from the
- * inner root. In a tmpfs jail an absolute symbolic link and one that climbs
- * past the root by ".." both resolve inside, and the working directory has its
- * path from the root there too. While a process has its root in a directory,
- * rmdir refuses the directory with EBUSY, on KRFFS and on tmpfs, and umount2
- * refuses the tmpfs; both succeed once the process is gone.
+ * Linux does, though fchdir to it fails with ENOENT; and passes the root to a
+ * child of fork and to a copy of this program it execs from inside. A child
+ * whose working directory is outside the new root finds it moved to the root,
+ * and a second chroot inside the first gives the working directory its path
+ * from the inner root. In a tmpfs jail an absolute symbolic link and one that
+ * climbs past the root by ".." both resolve inside, and the working directory
+ * has its path from the root there too. While a process has its root in a
+ * directory, rmdir of the directory fails with EBUSY, on KRFFS and on tmpfs,
+ * and so does umount2 of the tmpfs; both succeed once the process is gone.
  *
  * Prints "CHROOTMUSL OK" on success and "CHROOTMUSL FAIL (detail)" otherwise.
  */
@@ -208,8 +208,8 @@ static int refusals(void)
 
 /**
  * Check a root the caller may not search: a child that chroots into a
- * directory of mode 0700 owned by root and then takes uid 1000 is refused
- * chdir("/") with EACCES, as it is refused any directory it may not search.
+ * directory of mode 0700 owned by root and then takes uid 1000 fails
+ * chdir("/") with EACCES, as it fails for any directory it may not search.
  * Returns 0, or 1 after printing the failure.
  */
 static int private_root(void)
