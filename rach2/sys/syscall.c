@@ -1,9 +1,10 @@
 /*
- * The system call layer's entry and its table: the dispatcher every trap
- * reaches, the registration of every handler, and the calls that are the
- * machine's own: time, identity, the terminal and the reboot. The process,
- * file system and socket calls are in syscall_proc.c, syscall_fs.c and
- * syscall_net.c; syscall_internal.h is what the four share.
+ * The system call layer's entry and its table: the dispatcher every system
+ * call reaches, the table each architecture's `arch_syscall_init` fills, and
+ * the calls that are the machine's own: time, identity, ioctl and the
+ * terminal, the kernel log and the reboot. The process, file system and
+ * socket calls are in syscall_proc.c, syscall_fs.c and syscall_net.c;
+ * syscall_internal.h declares what the four share.
  */
 #include "arch/arch.h"
 #include "../kernel.h"
@@ -79,10 +80,11 @@
 #include "ipc/mqueue.h"
 #include "syscall_internal.h"
 
-/* Only one process owns the framebuffer at a time. Text mode is restored when
- * the owner exits and when it asks for it; a close of one descriptor of a
- * shared description leaves the mode as it is, since the description is still
- * open. */
+/* The thread group id of the one process that owns the framebuffer, 0 for
+ * none. Text mode is restored when the owner exits, when it switches to text
+ * mode and when it closes the last descriptor of its description; a close of
+ * one descriptor of a shared description leaves the mode as it is, since the
+ * description is still open. */
 volatile uint32_t fb_owner_pid = 0;
 
 /*
@@ -161,7 +163,8 @@ struct audio_start_params {
 };
 
 /*
- * Audio write parameters for AUDIO_WRITE
+ * The argument of AUDIO_WRITE: the caller's samples, in the format
+ * AUDIO_START set, and their length in bytes.
  */
 struct audio_write_params {
     const uint8_t *buffer;
@@ -169,7 +172,8 @@ struct audio_write_params {
 };
 
 /*
- * Syscall dispatch table
+ * The handlers by call number, which `arch_syscall_init` fills; a null entry
+ * is a call this kernel does not have.
  */
 static syscall_fn_t _syscall_table[SYSCALL_TABLE_SIZE];
 
@@ -204,16 +208,15 @@ static syscall_fn_t _syscall_table[SYSCALL_TABLE_SIZE];
  * `-EPERM` for an unprivileged caller, `-EINVAL` for a wrong magic or an
  * unknown command, and 0 for `RB_DISABLE_CAD`.
  *
- * The privilege check comes before the magics, which inverts the order the rest
- * of this file uses; Linux inverts it the same way.
+ * The privilege check comes before the magics, as on Linux.
  *
  * `RB_DISABLE_CAD` returning 0 is what makes the rest testable: every other
  * command that this call accepts stops the machine, so a test has no other way
- * to ask whether a magic was accepted. It asks for a state this kernel is
- * permanently in, since there is no keyboard reboot to disable, so 0 is a true
- * answer. `RB_ENABLE_CAD` asks
- * for a feature that does not exist and answers `-EINVAL`, because a 0 there
- * would be the one reply a caller could not tell from a working one.
+ * to learn whether a magic was accepted. The command requests a state this
+ * kernel is permanently in, since there is no keyboard reboot to disable, so 0
+ * is a true answer. `RB_ENABLE_CAD` requests a feature that does not exist and
+ * answers `-EINVAL`, because a 0 there would be the one reply a caller could
+ * not tell from a working one.
  */
 long sys_reboot(isr_params_t *params)
 {
@@ -306,18 +309,18 @@ int32_t raw_seek_resolve(uint64_t cur, uint64_t size, long long delta, int whenc
 }
 
 /*
- * timeval structure for gettimeofday
+ * The timeval of gettimeofday and settimeofday.
  */
 struct kernel_timeval {
     long tv_sec;  /* seconds */
     long tv_usec; /* microseconds */
 };
 
-/*
+/**
  * gettimeofday(2) takes tv (timeval*) and tz (ignored). Reports real time from
- * the clock anchored at boot (sys/arch/x86/rtc.c), or time since boot when
- * there was no clock to read, in seconds as wide as a long; a null tv asks
- * for nothing, as on Linux. Returns 0 or -errno.
+ * the clock anchored at boot (clock.c), or time since boot when there was no
+ * clock to read, in seconds as wide as a long; a null tv reads nothing, as on
+ * Linux. Returns 0 or -errno.
  */
 long sys_gettimeofday(isr_params_t *params)
 {
@@ -338,7 +341,7 @@ long sys_gettimeofday(isr_params_t *params)
     return 0;
 }
 
-/*
+/**
  * time(2): real time's seconds, as gettimeofday reads them, also stored at
  * tloc when it is not null. glibc on x86-64 calls it for time(), where a
  * vDSO would otherwise answer.
@@ -487,16 +490,16 @@ struct kernel_timespec64 {
 /**
  * Read clock `c` into `out`.
  *
- * Real time is the clock read at boot (sys/arch/x86/rtc.c) with the PIT's place
- * within the tick added; its coarse form stops at the last tick. Time since
- * boot is the uptime seconds and the ticks within the second, with the PIT's
- * place added as well (`rtc_monotonic`), read with interrupts masked, so
- * neither a torn second nor the tick counter's wrap at about 497 days can
- * make it step back; its coarse form stops at the tick. No clock is
- * disciplined by anything:
- * the machine reads the CMOS once and then keeps its own time, and it is never
- * suspended, which is why the four clocks of time since boot read the same.
- * A CPU clock is the ticks the timer charged. The seconds are 64 bits; the
+ * Real time is the clock read at boot (clock.c) with the timer's place within
+ * the tick added; its coarse form stops at the last tick. Time since boot is
+ * the uptime seconds and the ticks within the second, with the timer's place
+ * added as well (`rtc_monotonic`), read with interrupts masked, so neither a
+ * torn second nor the tick counter's wrap at about 497 days can make it step
+ * back; its coarse form stops at the tick. No clock is slewed: the machine
+ * reads the CMOS once and then keeps its own time, which only a setting of
+ * the real time steps, and it is never suspended, which is why
+ * CLOCK_MONOTONIC, CLOCK_MONOTONIC_RAW and CLOCK_BOOTTIME read the same. A
+ * CPU clock is the ticks the timer charged. The seconds are 64 bits; the
  * 32-bit timespec of i386's clock_gettime cuts them, which ends in 2038 for
  * real time, as Linux's does.
  */
@@ -538,7 +541,7 @@ static void clock_read(const struct kclock *c, struct kernel_timespec64 *out)
 }
 
 /** A clock's resolution in nanoseconds: a microsecond for real time and time
- * since boot, which the PIT's place is read in, and the tick for the rest. */
+ * since boot, which the timer's place is read in, and the tick for the rest. */
 static int32_t clock_res_ns(const struct kclock *c)
 {
     return c->kind == KCLOCK_REAL || c->kind == KCLOCK_MONO ? 1000 : 10000000;
@@ -578,8 +581,8 @@ int32_t clock_now(int32_t clk, int64_t *sec, int32_t *nsec)
  *
  * Its arguments are clockid and struct timespec*. The clocks are
  * `clock_resolve`'s and the readings `clock_read`'s. clock_gettime64
- * reads the same with 64-bit fields. An unknown clock is refused before the
- * timespec is written, as Linux refuses it.
+ * reads the same with 64-bit fields. An unknown clock is -EINVAL before the
+ * timespec is written, as on Linux.
  */
 long sys_clock_gettime(isr_params_t *params)
 {
@@ -603,7 +606,7 @@ long sys_clock_gettime(isr_params_t *params)
 
 /**
  * clock_gettime64: clock_gettime with the 64-bit timespec GNU libc and
- * musl try first, so a clock read is one call and not a refused call and a
+ * musl try first, so a clock read is one call rather than a failed call and a
  * second, with all 64 bits of the seconds.
  */
 long sys_clock_gettime64(isr_params_t *params)
@@ -751,7 +754,7 @@ static void realtime_step(int64_t sec, int32_t nsec)
     }
 }
 
-/* An offset of `v` microseconds, or nanoseconds with `nano`, as at most the
+/** An offset of `v` microseconds, or nanoseconds with `nano`, as at most the
  * half second Linux takes one to be (MAXPHASE), in nanoseconds. */
 static int32_t offset_ns(int64_t v, int nano)
 {
@@ -850,6 +853,9 @@ static const uint8_t timex_off[2][15] = {
     {0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 56, 80, 0},
     {0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 112, 160, 0}};
 
+/** Field `field` of the timex bytes `b`, in the layout `wide` chooses: 32
+ * bits, sign-extended, for the int fields and for every field of the narrow
+ * layout, and 64 bits for the rest. */
 static int64_t timex_get(const uint8_t *b, int wide, int field)
 {
     const uint8_t *p = b + timex_off[wide][field];
@@ -864,6 +870,8 @@ static int64_t timex_get(const uint8_t *b, int wide, int field)
     return (int64_t)(((uint64_t)hi << 32) | lo);
 }
 
+/** Store `v` in field `field` of the timex bytes `b`, at the width
+ * `timex_get` reads it with. */
 static void timex_put(uint8_t *b, int wide, int field, int64_t v)
 {
     uint8_t *p = b + timex_off[wide][field];
@@ -875,11 +883,6 @@ static void timex_put(uint8_t *b, int wide, int field, int64_t v)
     }
 }
 
-/**
- * The common body of adjtimex, clock_adjtime and clock_adjtime64: the
- * caller's timex at `uaddr`, in the 64-bit layout with `wide`, read,
- * adjusted and written back.
- */
 /* The ticks between two copies of the time to the CMOS clock. */
 #define NTP_RTC_TICKS (11u * 60u * 100u)
 
@@ -917,6 +920,12 @@ static void ntp_rtc_sync(void)
  * as on x86-64. */
 #define TIMEX_LONGS_WIDE (sizeof(long) == 8)
 
+/**
+ * The common body of adjtimex, clock_adjtime and clock_adjtime64: the
+ * caller's timex at `uaddr`, in the 64-bit layout with `wide`, read,
+ * adjusted and written back. Returns the clock's state, as `ktimex_adjust`
+ * gives it, or -errno.
+ */
 static int32_t timex_call(uintptr_t uaddr, int wide)
 {
     uint8_t b[208];
@@ -963,7 +972,8 @@ static int32_t timex_call(uintptr_t uaddr, int wide)
     return rc;
 }
 
-/** adjtimex takes the 128-byte struct timex. */
+/** adjtimex takes the struct timex of longs, 128 bytes on i686 and 208 on
+ * x86-64. */
 long sys_adjtimex(isr_params_t *params)
 {
     return timex_call(SC_ARG(params, 0), TIMEX_LONGS_WIDE);
@@ -984,11 +994,13 @@ static int32_t clock_adjtime_common(isr_params_t *params, int wide)
     return timex_call(SC_ARG(params, 1), wide);
 }
 
+/** clock_adjtime: `clock_adjtime_common` with the struct timex of longs. */
 long sys_clock_adjtime(isr_params_t *params)
 {
     return clock_adjtime_common(params, TIMEX_LONGS_WIDE);
 }
 
+/** clock_adjtime64: `clock_adjtime_common` with the 64-bit layout. */
 long sys_clock_adjtime64(isr_params_t *params)
 {
     return clock_adjtime_common(params, 1);
@@ -1031,9 +1043,9 @@ long sys_stime(isr_params_t *params)
  *
  * Its arguments are clockid and struct timespec*, which may be NULL. Each
  * clock's true granularity: a microsecond for real time and time since boot,
- * which the PIT's place is read in, and the 10 ms tick for every other clock,
- * the coarse clocks and the CPU clocks. Returns 0, -EINVAL for a clock
- * `clock_resolve` refuses, or -EFAULT.
+ * which the timer's place is read in, and the 10 ms tick for every other
+ * clock, the coarse clocks and the CPU clocks. Returns 0, -EINVAL for a clock
+ * `clock_resolve` does not have, or -EFAULT.
  */
 long sys_clock_getres(isr_params_t *params)
 {
@@ -1086,12 +1098,12 @@ static int32_t nanosleep_interrupted(struct kernel_timespec __user *urem, uint32
 /**
  * Block until the tick `target`, or until a signal the process acts on.
  *
- * Parks the process BLOCKED on its wakeup_tick and yields; the timer wakes
- * it at the deadline while OTHER processes keep running. The deadline and the
- * pending signals are tested, and the process marked BLOCKED, with interrupts
- * off, so neither a signal nor the deadline's tick can come between the test
- * and the block unseen; the halt after a yield that ran nothing is masked for
- * the same reason.
+ * Marks the process PROC_BLOCKED on its wakeup_tick and yields; the timer
+ * wakes it at the deadline while other processes run. The deadline and the
+ * pending signals are tested, and the process blocked, with interrupts off,
+ * so neither a signal nor the deadline's tick can come between the test and
+ * the block unseen; the halt after a yield that ran nothing is masked for the
+ * same reason.
  *
  * Once the deadline tick has come the sleep is over, and the call returns 0
  * whether or not a signal is pending. A signal the process acts on, found
@@ -1165,7 +1177,8 @@ static int timespec_valid(const struct kernel_timespec *req)
  * shorter than asked and at most a tick longer, up to the clamp in
  * `timespec_ticks`. The end is measured from where in the tick in progress
  * the call is (`rtc_tick_phase`): counting that tick as a whole would make
- * every sleep of a tick or less last two, so that `usleep(1000)` took 20 ms.
+ * every sleep of a tick or less last two, so that `usleep(1000)` would take
+ * 20 ms.
  *
  * A signal's remainder, written to `urem`, is the time left to the deadline
  * tick, so a caller that sleeps again for the remainder ends at the first
@@ -1431,7 +1444,7 @@ struct kernel_itimerval {
     long value_usec;
 };
 
-/*
+/**
  * A time in seconds and microseconds as whole 10 ms ticks, rounded up. The
  * seconds are clamped where nanosleep clamps them and the ticks at 0x7FFFFFFD,
  * so the signed difference between the timer's tick and the count stays
@@ -1447,7 +1460,7 @@ static uint32_t itimer_ticks(long sec, long usec)
     return ticks > 0x7FFFFFFDu ? 0x7FFFFFFDu : ticks;
 }
 
-/* The ticks left before the current process's timer is due, 0 when it is
+/** The ticks left before the current process's timer is due, 0 when it is
  * disarmed. Part of the tick in progress has passed, so the time left lies
  * between the whole ticks to the due tick less one and that number; the
  * lower end is what is reported, and a timer due within a tick reads as one
@@ -1467,14 +1480,14 @@ static uint32_t itimer_left(void)
     return (int32_t)left > 1 ? left - 1u : 1u;
 }
 
-/* `ticks` as the seconds and microseconds of an itimerval. */
+/** `ticks` as the seconds and microseconds of an itimerval. */
 static void itimer_put(uint32_t ticks, long *sec, long *usec)
 {
     *sec = (long)(ticks / 100u);
     *usec = (long)((ticks % 100u) * 10000u);
 }
 
-/* What the current process's timer `which` is set to, as setitimer and
+/** What the current process's timer `which` is set to, as setitimer and
  * getitimer report it. Interrupts are off. */
 static void itimer_read(int32_t which, struct kernel_itimerval *out)
 {
@@ -1489,7 +1502,7 @@ static void itimer_read(int32_t which, struct kernel_itimerval *out)
     }
 }
 
-/*
+/**
  * Arm or disarm the current process's timer `which`: the first signal
  * `value` ticks from now and then every `interval`, or disarmed for a value
  * of 0. A timer of real time does not count the tick in progress, so the
@@ -1624,11 +1637,20 @@ long sys_alarm(isr_params_t *params)
 /**
  * Fill a buffer with random bytes (getrandom).
  *
- * Its arguments are buf, buflen and flags. Backed by the kernel CSPRNG
- * (lib/krandom, ChaCha20). Returns the byte count, like Linux; musl's
- * getrandom/arc4random sit on top of this. We never block (GRND_NONBLOCK is a
- * no-op) and have a single source (GRND_RANDOM is equivalent); unknown flag
- * bits are rejected.
+ * Its arguments are buf, buflen and flags. The bytes come from the kernel
+ * CSPRNG (lib/krandom, ChaCha20); musl's getrandom and getentropy call this.
+ * Returns the byte count, like Linux, or the count copied before a fault, or
+ * -errno: -EINVAL for an unknown flag bit or a length a positive int32 cannot
+ * hold, -EFAULT, and -EIO with no trusted hardware entropy (RDSEED or RDRAND)
+ * unless the flags have GRND_INSECURE. The call never blocks, so
+ * GRND_NONBLOCK changes nothing, and there is a single source, so GRND_RANDOM
+ * changes nothing either.
+ *
+ * Without trusted entropy the call fails closed rather than hand out the
+ * weak boot-jitter stream for a key; a caller that accepts such bytes passes
+ * GRND_INSECURE, the tier of AT_RANDOM and the stack canary. A large call
+ * gives way every 4 KiB, between two pieces, so a reader the tick woke does
+ * not wait for the whole call.
  */
 long sys_getrandom(isr_params_t *params)
 {
@@ -1650,10 +1672,6 @@ long sys_getrandom(isr_params_t *params)
     if (!buf) {
         return -EFAULT;
     }
-    /* Fail closed: with no trusted hardware entropy (RDSEED/RDRAND), refuse,
-     * not hand out the weak boot-jitter stream for a key. A caller that
-     * explicitly accepts insecure bytes passes GRND_INSECURE (the same tier as
-     * AT_RANDOM / the stack canary). */
     if (!krandom_is_trusted() && !(flags & GRND_INSECURE)) {
         return -EIO;
     }
@@ -1668,8 +1686,6 @@ long sys_getrandom(isr_params_t *params)
         }
         done += chunk;
         usb_stamp_work(chunk);
-        /* A large call gives way every 4 KiB, between two pieces, so a
-         * reader the tick woke does not wait for the whole call. */
         if ((done & 4095u) == 0) {
             sched_service_point();
         }
@@ -1677,16 +1693,17 @@ long sys_getrandom(isr_params_t *params)
     return (int32_t)done;
 }
 
-/* True if some process is in process group `pgid` within session `sid`. This is
- * the TIOCSPGRP rule that a foreground group must belong to the controlling
+/** True if some process is in process group `pgid` within session `sid`. This
+ * is the TIOCSPGRP rule that a foreground group must belong to the controlling
  * session.
  *
  * A zombie counts. A process leaves its group when it is reaped and not when it
  * exits, and a shell depends on that: putting a pipeline in the foreground
  * means setting the terminal's group to the first member's pid, and that member
  * can be a short command that has already exited by the time the shell gets
- * there. Excluding zombies refused the claim in exactly that race and left the
- * shell reporting that it could not set the terminal's process group. */
+ * there. A test that excluded zombies would fail the TIOCSPGRP in that race,
+ * and the shell would report that it could not set the terminal's process
+ * group. */
 int pgrp_in_session(int pgid, int sid)
 {
     const process_t *p;
@@ -1823,8 +1840,8 @@ static int32_t fd_ioctl_nbio(fd_entry_t *entry, uintptr_t arg)
     return 0;
 }
 
-/* The tty behind a descriptor for the shared terminal ioctls: the console for a
- * FD_TYPE_CONSOLE fd, the slave tty for a FD_TYPE_PTS (pty slave) fd, else
+/** The tty behind a descriptor for the shared terminal ioctls: the console for
+ * a FD_TYPE_CONSOLE fd, the slave tty for a FD_TYPE_PTS (pty slave) fd, else
  * NULL. */
 struct tty *fd_tty(fd_entry_t *e)
 {
@@ -1838,16 +1855,31 @@ struct tty *fd_tty(fd_entry_t *e)
 }
 
 /**
- * The shared terminal ioctls operating on a GIVEN tty.
+ * The terminal ioctls of the tty `t`.
  *
- * The real termios layer plus the session/job-control requests, so the
- * console and a pty slave share one implementation. Sets *handled = 1 and
- * returns the result for a recognized terminal request; sets *handled = 0
- * (return value unused) otherwise, so the caller falls through to its own
- * handling. TCGETS/TCSETS exchange the 36-byte kernel termios (n_tty.h),
- * and TCGETS2 and the TCSETS2 family the 44-byte termios2, whose speeds
- * TCGETS2 takes from the baud codes of c_cflag and a set does not keep;
- * TCSETSF, TCSETSF2 and TCFLSH flush the unread input.
+ * The termios requests and the session and job-control requests, which the
+ * console and a pty slave share. Sets *handled = 1 and returns the result for
+ * a recognized terminal request; sets *handled = 0 (return value unused)
+ * otherwise, so the caller falls through to its own handling. TCGETS/TCSETS
+ * exchange the 36-byte kernel termios (n_tty.h), and TCGETS2 and the TCSETS2
+ * family the 44-byte termios2, whose speeds TCGETS2 takes from the baud codes
+ * of c_cflag and a set does not keep; TCSETSF, TCSETSF2 and TCFLSH flush the
+ * unread input. FIONREAD gives the bytes a read would return at once, a
+ * complete cooked line or the queued count in raw mode, with a pending EOF
+ * counted as 0; `tty_inq` drains the input source first, so input that has
+ * just arrived is counted. TCFLSH's TCIFLUSH (0) and TCIOFLUSH (2) drop the
+ * input; there is no output queue, so TCOFLUSH (1) does nothing.
+ *
+ * TIOCSPGRP needs the caller's session to be the one the terminal controls,
+ * checked before the argument, as on Linux (-ENOTTY), and a group in that
+ * session (`pgrp_in_session`, -EPERM). TIOCSCTTY lets a session leader take
+ * a terminal no other session controls, with the caller's group in the
+ * foreground; `tty_make_sole_ctty` publishes the session and the group and
+ * drops every other terminal the session controlled, the console and any
+ * other pty, in one step with interrupts off, so the console's drain in
+ * interrupt context never sees a torn or doubled controlling terminal, and
+ * /dev/tty resolves to `t`. TIOCNOTTY gives the terminal up when the caller's
+ * session controls it.
  */
 static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg, int *handled)
 {
@@ -1858,9 +1890,6 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg, 
         return tty_get_termios_at(t, request, arg);
 
     case FIONREAD: {
-        /* Bytes a read would return right now (a complete cooked line, or
-         * the queued count in raw mode); a pending EOF counts as 0. Drains
-         * the input source first so freshly arrived input is counted. */
         int navail;
         if (!arg) {
             return -EFAULT;
@@ -1881,9 +1910,6 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg, 
         return tty_set_termios_at(t, request, arg);
 
     case TCFLSH:
-        /* arg is the queue selector: TCIFLUSH(0)/TCIOFLUSH(2) drop input;
-         * we hold no output queue, so TCOFLUSH(1) is a no-op. Else invalid.
-         */
         if (arg > 2) {
             return -EINVAL;
         }
@@ -1929,8 +1955,6 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg, 
         if (copy_from_user(&pgrp, (const void __user *)arg, sizeof(pgrp)) != 0) {
             return -EFAULT;
         }
-        /* The caller must hold this terminal as its controlling terminal
-         * (checked before the argument, as Linux does)... */
         if (t->sid == 0 || (int)current_proc->sid != t->sid) {
             return -ENOTTY;
         }
@@ -1941,7 +1965,6 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg, 
         if (pgrp == 0) {
             return -ESRCH;
         }
-        /* ...and the new foreground group must live in that session. */
         if (!pgrp_in_session(pgrp, t->sid)) {
             return -EPERM;
         }
@@ -1950,24 +1973,16 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg, 
     }
 
     case TIOCSCTTY:
-        /* A session leader with no controlling tty claims this terminal for
-         * its session; re-claiming by the same session is idempotent. */
         if ((int)current_proc->sid != (int)current_proc->tgid) {
             return -EPERM; /* not a session leader */
         }
         if (t->sid != 0 && t->sid != (int)current_proc->sid) {
             return -EPERM; /* owned by another session */
         }
-        /* Claim t as this session's SOLE controlling terminal: one atomic
-         * step publishes t (sid + foreground group) AND drops every other
-         * terminal the session held (the console and any other pty), so the
-         * timer-IRQ serial drain never sees a torn or doubled ctty and
-         * /dev/tty resolves to t. */
         tty_make_sole_ctty(t, (int)current_proc->sid, (int)current_proc->pgid);
         return 0;
 
     case TIOCNOTTY:
-        /* Give up the controlling terminal if it belongs to our session. */
         if (t->sid == (int)current_proc->sid) {
             tty_set_session(t, 0, 0);
         }
@@ -2019,11 +2034,25 @@ static int32_t framebuffer_ioctl(uint32_t request, uintptr_t arg)
 /**
  * Device control (ioctl(2)).
  *
- * Its arguments are fd, request and arg. A tty fd (console or pty slave) routes
- * to the shared termios/session handler first; an ops-backed object handles its
- * own remaining requests; the framebuffer and console handle their
- * device-specific ones (FB_*, KIOCSOUND, AUDIO_*). Returns 0, the request
- * result, or -errno (-ENOTTY for a terminal request on a non-terminal fd).
+ * Its arguments are fd, request and arg. Returns 0, the request's result, or
+ * -errno: -ENOTTY for a request the descriptor does not answer, a terminal
+ * request on a descriptor that is no terminal among them, as on Linux.
+ *
+ * The descriptor is checked first, so a bad one is -EBADF whatever the
+ * request, `ioctl(-1, TCGETS)` included, and an O_PATH one is -EBADF to every
+ * request, as on Linux. The requests then go, in order, to: FIONBIO, which
+ * every descriptor answers (`fd_ioctl_nbio`); FS_IOC_GETFLAGS and the other
+ * file attribute requests (`fs_flags_ioctl`); the interface requests of
+ * `netif_ioctl` on a socket of any family, as on Linux, where glibc's
+ * if_nametoindex uses an AF_UNIX one and a DHCP client sets the machine's
+ * address; the termios and session requests of `tty_common_ioctl` on the
+ * console and a pty slave, ahead of the slave's own operations; and the
+ * `ioctl` of an object with operations of its own, such as a pipe or a pty
+ * master, -ENOTTY when it has none. The framebuffer answers its FB_* requests
+ * (`framebuffer_ioctl`), and the console KIOCSOUND and the AUDIO_* requests;
+ * these go by the descriptor's type, so a descriptor 1 reopened onto a
+ * regular file never reaches the speaker. AUDIO_WRITE checks the caller's
+ * samples with `user_buffer_ok`, and the driver reads them in place.
  */
 long sys_ioctl(isr_params_t *params)
 {
@@ -2036,9 +2065,6 @@ long sys_ioctl(isr_params_t *params)
         return -ESRCH;
     }
 
-    /* Validate the fd first, so a bad fd reports -EBADF, not a request-
-     * specific status (e.g. ioctl(-1, TCGETS) must be -EBADF, not -ENOTTY).
-     * An O_PATH descriptor is -EBADF to every request, as on Linux. */
     entry = fd_get(current_proc->fds, fd_num);
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
@@ -2055,11 +2081,6 @@ long sys_ioctl(isr_params_t *params)
         }
     }
 
-    /* A socket accepts the interface ioctls: this is where a program sets the
-     * machine's address, which is what a DHCP client is for. A socket of any
-     * family does, as on Linux: glibc's if_nametoindex asks an AF_UNIX one.
-     * They are checked before the tty block because a socket is not a
-     * terminal and would otherwise fall through to -ENOTTY. */
     if ((entry->type == FD_TYPE_SOCKET && entry->sock) || entry->type == FD_TYPE_UNIX) {
         int handled;
         int32_t r = netif_ioctl(request, arg, &handled);
@@ -2069,11 +2090,6 @@ long sys_ioctl(isr_params_t *params)
         }
     }
 
-    /* tty-family fds (the console and a pty slave) share the termios/session
-     * ioctls, handled here, BEFORE the generic ops dispatch, so a pty slave's
-     * TCGETS/TIOCSCTTY reach the shared handler, not its ops. On a
-     * non-terminal fd the terminal-only requests stay -ENOTTY (the
-     * fallthrough below), as Linux reports. */
     {
         struct tty *t = fd_tty(entry);
         if (t) {
@@ -2082,24 +2098,15 @@ long sys_ioctl(isr_params_t *params)
             if (handled) {
                 return r;
             }
-            /* not a terminal ioctl: fall through (the console falls to the
-             * audio block). */
         }
     }
 
-    /* A backing-ops object (pipe/pty/device) owns its remaining ioctls:
-     * FIONREAD, and for the pty master TIOCGPTN/TIOCSPTLCK/TIOCSWINSZ. */
     if (entry->ops) {
         return entry->ops->ioctl ? entry->ops->ioctl(entry, request, arg) : -ENOTTY;
     }
     if (tty_request(request)) {
         return -ENOTTY; /* terminal-only requests on a non-terminal fd */
     }
-
-    /* KIOCSOUND is handled by the console-type block below, keyed on the
-     * backing object's type (not the fd number) so it cannot fire on an fd 1/2
-     * that has been closed and reopened onto a regular file (now that
-     * close(0/1/2) is legal). */
 
     if (entry->type == FD_TYPE_FRAMEBUFFER) {
         return framebuffer_ioctl(request, arg);
@@ -2152,10 +2159,6 @@ long sys_ioctl(isr_params_t *params)
             if (!audio || !arg) {
                 return -EFAULT;
             }
-            /* Copy the param struct in through the helper, then range-check
-             * the PCM buffer it points at before the driver reads it (the
-             * bulk copy is the driver's, as with the framebuffer/socket
-             * data paths). */
             if (copy_from_user(&kp, (const void __user *)arg, sizeof(kp)) != 0) {
                 return -EFAULT;
             }
@@ -2179,28 +2182,27 @@ long sys_ioctl(isr_params_t *params)
     return -ENOTTY;
 }
 
-/*
- * User address window. The kernel is identity-mapped in the low 32 MB and user
- * space lives above it, below 0xC0000000. A user pointer and the whole length
- * it spans must fall inside this window; anything else is rejected so a syscall
- * argument cannot read or write kernel memory. The window and the check now
- * live in mm/usercopy (USER_ADDR_MIN/MAX, user_range_ok); user_access_ok is a
- * thin alias kept for the existing call sites.
+/**
+ * Whether the `len` bytes at `addr` lie wholly in user space, between the
+ * architecture's USER_ADDR_MIN and USER_ADDR_MAX, so that a system call
+ * argument cannot read or write kernel memory: `user_range_ok` of
+ * mm/usercopy under the name the system call layer uses. 1 yes, 0 no.
  */
 int user_access_ok(uintptr_t addr, size_t len)
 {
     return user_range_ok(addr, len);
 }
 
-/*
- * Range-check a user buffer AND back its pages before the kernel passes the
- * raw pointer to a lower layer (krffs, tcp, udp, the drivers) that
- * dereferences it directly. With demand paging a numerically valid pointer
+/**
+ * Range-check a user buffer and bring in its pages before the kernel passes
+ * the raw pointer to a lower layer (krffs, tcp, udp, the drivers) that
+ * dereferences it directly. With demand paging a pointer inside user space
  * may still be unmapped (a never-touched heap page, or a wild address in no
- * VMA); vm_prefault_range faults the valid pages in here and rejects the bad
- * ones, so the lower layer's raw access can never fault in kernel mode and
- * panic. 'write' is 1 when that layer writes into the buffer (so the pages
- * need write permission).
+ * VMA); `vm_prefault_range` faults the valid pages in here and fails on the
+ * bad ones, so the lower layer's raw access does not fault in kernel mode.
+ * 'write' is 1 when that layer writes into the buffer (so the pages need
+ * write permission). Returns 1 or 0; it may sleep, and a 1 holds until the
+ * caller sleeps.
  */
 int user_buffer_ok(uintptr_t addr, size_t len, int write)
 {
@@ -2252,12 +2254,13 @@ long sys_times(isr_params_t *params)
  * pages as the buffer RAM, which free(1) adds to /proc/meminfo's Cached for
  * its buff/cache, mem_unit = 1; shared and swap figures are reported as zero
  * (not tracked). Its argument is struct sysinfo *.
+ *
+ * The structure is Linux's, whose tail pads it to 64 bytes where a long has
+ * 32 bits and to nothing where it has 64: 64 bytes on i686 and 112 on
+ * x86-64, the size of the union.
  */
 long sys_sysinfo(isr_params_t *params)
 {
-    /* Linux's struct sysinfo, whose tail pads it to 64 bytes where a long
-     * has 32 bits and to nothing where it has 64: 64 bytes on i686 and 112
-     * on x86-64, the size of the union. */
     union {
         struct kernel_sysinfo {
             long uptime;
@@ -2284,9 +2287,6 @@ long sys_sysinfo(isr_params_t *params)
             n++;
         }
     }
-    /* Fill every field of the ABI struct explicitly: uptime, the loads, the
-     * process count, mem_unit, physical RAM (from the frame bitmap) and the
-     * buffer cache are real; swap is not tracked, so it is reported as zero. */
     k_memset(&u, 0, sizeof(u));
     u.si.uptime = (long)(kernel_ticks / 100);
     sched_loadavg(avg);
@@ -2314,8 +2314,10 @@ long sys_sysinfo(isr_params_t *params)
  * Record the address the caller's thread end clears and return the caller's
  * thread id (set_tid_address(2)).
  *
- * The address, its argument, becomes `clear_child_tid`; with one thread per
- * process the thread id is the process id.
+ * The address, its argument, becomes `clear_child_tid`, which the thread's
+ * end clears and wakes as a futex when another process shares the address
+ * space (`proc_thread_gone`). The id is the thread's, as the caller's pid
+ * namespace sees it (`pid_seen`).
  */
 long sys_set_tid_address(isr_params_t *params)
 {
@@ -2327,8 +2329,8 @@ long sys_set_tid_address(isr_params_t *params)
 }
 
 /*
- * uname(2): fill the six 65-byte fields of struct utsname (new-style, as musl
- * expects) in user memory. Its argument is struct utsname *.
+ * The struct utsname of uname(2): six fields of 65 bytes, the new-style
+ * layout musl expects.
  */
 struct kernel_utsname {
     char sysname[65];
@@ -2339,9 +2341,6 @@ struct kernel_utsname {
     char domainname[65];
 };
 
-/* The host and domain names (uname's nodename and domainname, what
- * gethostname and getdomainname read, sethostname and setdomainname set)
- * are the caller's UTS namespace's (proc/ns.h). */
 const char *uts_hostname(void)
 {
     return proc_utsns(current_proc)->hostname;
@@ -2377,7 +2376,7 @@ int uts_privileged(void)
     return ns_owner_privileged(current_proc, &proc_utsns(current_proc)->c);
 }
 
-/* Copy a C string into a fixed 65-byte utsname field (always
+/** Copy a C string into a fixed 65-byte utsname field (always
  * NUL-terminated). */
 static void uname_field(char *dst, const char *src)
 {
@@ -2431,7 +2430,7 @@ static int32_t syslog_copy(char __user *ubuf, uint32_t len, uint32_t *at)
     return (int32_t)done;
 }
 
-/* Where a read of the last `len` bytes of the ring from `from` begins: the
+/** Where a read of the last `len` bytes of the ring from `from` begins: the
  * first record wholly within them. */
 static uint32_t syslog_tail(uint32_t from, uint32_t len)
 {
@@ -2462,6 +2461,9 @@ static uint32_t syslog_tail(uint32_t from, uint32_t len)
  * as Linux with dmesg_restrict has it, since the ring is /dev/bootlog's,
  * which is root's. EINVAL for another action, a negative length or a level
  * out of 1 to 8, EINTR when a signal ends READ's wait.
+ *
+ * The ring wakes no one, since records come from any context, so READ looks
+ * again every tenth of a second.
  */
 long sys_syslog(isr_params_t *params)
 {
@@ -2488,8 +2490,6 @@ long sys_syslog(isr_params_t *params)
         if (len == 0) {
             return 0;
         }
-        /* The ring wakes no one, since records come from any context, so
-         * the reader looks again every tenth of a second. */
         while ((syslog_read_at = klog_clamp(syslog_read_at)) == klog_written()) {
             if (sleep_until(kernel_ticks + 10u, NULL) != 0) {
                 return -EINTR;
@@ -2536,6 +2536,11 @@ long sys_syslog(isr_params_t *params)
     }
 }
 
+/**
+ * uname(2): fill the struct utsname at its argument with the fixed fields of
+ * syscall.h, the host and domain names of the caller's UTS namespace and the
+ * architecture's name. Returns 0 or -EFAULT.
+ */
 long sys_uname(isr_params_t *params)
 {
     struct kernel_utsname __user *user_uts = (struct kernel_utsname __user *)SC_ARG(params, 0);
@@ -2555,12 +2560,14 @@ long sys_uname(isr_params_t *params)
     return 0;
 }
 
-/* sethostname and setdomainname: set the host name (uname's nodename, what
- * gethostname reads back) or the domain name of the caller's UTS namespace,
- * to the string of the first argument, the second's count of bytes, at most
- * 64; a
- * caller privileged over the namespace's alone, -EPERM for another, as on
- * Linux. */
+/**
+ * The body of sethostname and setdomainname: set the host name (uname's
+ * nodename, what gethostname reads back) or the domain name of the caller's
+ * UTS namespace, as `set` chooses, to the string of the first argument, the
+ * second's count of bytes, at most 64. Returns 0; -EPERM for a caller not
+ * privileged over the namespace, as on Linux; -EINVAL for a count outside 0
+ * to 64; or -EFAULT.
+ */
 static int32_t uts_set_call(isr_params_t *params, void (*set)(const char *, uint32_t))
 {
     const char __user *name = (const char __user *)SC_ARG(params, 0);
@@ -2580,38 +2587,33 @@ static int32_t uts_set_call(isr_params_t *params, void (*set)(const char *, uint
     return 0;
 }
 
+/** sethostname(2): `uts_set_call` on the host name. */
 long sys_sethostname(isr_params_t *params)
 {
     return uts_set_call(params, uts_set_hostname);
 }
 
+/** setdomainname(2): `uts_set_call` on the domain name. */
 long sys_setdomainname(isr_params_t *params)
 {
     return uts_set_call(params, uts_set_domainname);
 }
 
-/* Name each missing syscall behind `rach2.trace=enosys`, once per number for
- * the process that last asked for it, not once per boot. Per boot hides
- * exactly what such a trace is for: a program that asks for a missing number
- * early would leave a later program asking for the same number saying
- * nothing, and a reader comparing before and after would conclude the later
- * program asked for nothing. Recording which process last reported a number
- * costs one word per number and makes each program's own gaps visible; two
- * programs asking for the same number in turn each say so, since the word
- * holds one of them.
- *
- * A number past the table is remembered as one number and one process, so a
- * program asking for the same one twice says it once and two numbers in turn
- * say it each time; nothing should ever ask for one, and a boot that fills the
- * console with one is telling the truth about a program in a retry loop. Off
- * unless the flag is on the command line, so no other boot sees a line it did
- * not before. */
+/* Whether `rach2.trace=enosys` is on the command line, which makes
+ * `syscall_missing` report each call number the table has no handler for.
+ * A number is reported again whenever a process other than the last to
+ * report it makes the call: one word a number keeps that process, so each
+ * program's own missing calls appear even after an earlier program made the
+ * same ones, and two programs making the same number in turn each report
+ * it. */
 static int _trace_enosys = 0;
 
 static uint32_t _enosys_last_pid[SYSCALL_TABLE_SIZE];
 
-/* The last number past the table and who asked for it, which is the same
-   suppression the array above gives the numbers inside it. */
+/* The last number past the table that was reported, and the process that
+ * made it: the numbers past the table share this one entry, so one process
+ * making the same number twice reports it once, and two numbers in turn are
+ * each reported. */
 static uint32_t _enosys_big_num = 0;
 
 static uint32_t _enosys_big_pid = 0xFFFFFFFFu;
@@ -2623,8 +2625,8 @@ static uint32_t _enosys_big_pid = 0xFFFFFFFFu;
  * the ones Linux never restarts after a handler, which wait for a signal or
  * for a deadline, a timed futex wait among them (`futex_restartable`), and
  * the two returns from a handler, whose result register is the interrupted
- * call's. The handler names the call, whatever its number on this
- * architecture.
+ * call's. The call is told by its handler, since its number differs between
+ * the architectures.
  */
 static int syscall_restartable(syscall_fn_t fn, const isr_params_t *params)
 {
@@ -2639,13 +2641,12 @@ static int syscall_restartable(syscall_fn_t fn, const isr_params_t *params)
 }
 
 /**
- * Report a call this kernel does not have, when `rach2.trace=enosys` asks:
- * a missing call is otherwise invisible, -ENOSYS going back in a register
- * with nothing printed, so a program that fails for want of one fails for no
- * stated reason. Each number is reported once per process, a number past the
- * table as one in it: musl asks for `clock_gettime64` before every
- * `clock_gettime`, so a program that read the clock in a loop printed a line
- * a second and the console could not be read.
+ * Report a call this kernel does not have, when `rach2.trace=enosys` is on
+ * the command line: a missing call is otherwise invisible, -ENOSYS going back
+ * in a register with nothing printed, so a program that fails for want of one
+ * fails for no stated reason. Each number is reported once per process, a
+ * number past the table as one in it, so a program that makes a missing call
+ * in a loop prints one line and the console stays readable.
  */
 static void syscall_missing(uint32_t syscall_num)
 {
@@ -2672,14 +2673,27 @@ static void syscall_missing(uint32_t syscall_num)
  * The system call entry's handler: dispatch on the call's number.
  *
  * Looks up the number in _syscall_table and calls the handler, storing the
- * result in the result register (SC_RET) for the return to user mode. Marks the
- * process non-preemptible (in_syscall) around the dispatch and runs the body
- * with interrupts on so the PIT/HDA keep ticking during long syscalls. A switch
- * an interrupt asked for during the call is taken at its exit, with interrupts
- * off again and the trapframe whole, so a process that is always inside a call
- * gives way once per call; a call that does not return does not. The
- * descriptors the call held in a shared table are let go as the body returns,
- * before a tracer's exit stop (`fd_holds_release`).
+ * result in the result register (SC_RET) for the return to user mode. A
+ * number with no handler answers -ENOSYS, on which musl falls back to another
+ * call rather than taking it for a failure. Marks the process non-preemptible
+ * (in_syscall) around the dispatch and runs the body with interrupts on, so
+ * the timer and the sound card keep interrupting during a long call, such as
+ * Doom's framebuffer writes. A switch an interrupt requested during the call
+ * is taken at its exit, with interrupts off again and the trapframe whole, so
+ * a process that is always inside a call gives way once per call; a call that
+ * does not return does not. The descriptors the call held in a shared table
+ * are let go as the body returns, before a tracer's exit stop
+ * (`fd_holds_release`).
+ *
+ * The entry stub keeps interrupts off while it saves the trapframe, and
+ * in_syscall is set before they are enabled, so no timer interrupt can
+ * reschedule a process whose trapframe is still half built; the timer does
+ * not reschedule a process while in_syscall is set. Interrupts are off again
+ * for the epilogue, which restores the trapframe, and the return to user
+ * mode restores the caller's interrupt flag. Before the dispatch,
+ * `usbdisk_service` publishes the USB sticks that arrived and reclaims those
+ * that left, work that waits for a process context; it returns at once when
+ * there is none.
  *
  * A tracer's stop at the entry may change the call through orig_nr, as
  * Linux's `syscall_trace_enter` lets it: the number is read again after the
@@ -2693,36 +2707,29 @@ static void syscall_missing(uint32_t syscall_num)
  * return, is recorded in `restart_nr` before the exit stop, so a tracer
  * there cancels the restart with -1 in orig_nr, and with a result other
  * than EINTR.
+ *
+ * At the exit the datagrams the call put on the loopback ring are delivered,
+ * rather than only at the next tick, so a local transfer is not paced at a
+ * ring a tick. The threshold is three datagrams of the ring's 64
+ * (`ip_loop_crowded`): one or two are left to the timer, which lets the two
+ * crossing SYNs of a simultaneous open both be queued before either is
+ * delivered. The sender's own frames are gone by then, so no delivery runs
+ * under them. Interrupts are off, the drain does not run inside itself, and
+ * it takes at most four times the ring's slots in one run; what is left is
+ * taken by the next call's exit or by the timer.
  */
 static void _syscall_handler(isr_params_t *params)
 {
     uint32_t syscall_num = (uint32_t)SC_NR(params);
-    /* Default to -ENOSYS so an unimplemented or out-of-range number reports the
-     * real "no such syscall" errno; musl relies on -ENOSYS to fall back to an
-     * alternate path instead of treating it as a generic -EPERM failure. */
     long ret = -ENOSYS;
     int skip = 0;
 
-    /* Mark this process non-preemptible BEFORE enabling interrupts. The ISR
-     * stub keeps IF=0 through entry (segments/%gs are still being saved), so
-     * setting in_syscall here and only then doing sti closes the window in
-     * which a timer IRQ could reschedule a process whose trapframe is still
-     * half-built. The timer handler skips scheduling while in_syscall is set.
-     */
     if (current_proc) {
         current_proc->in_syscall = 1;
     }
 
-    /* Enable interrupts for the syscall body so the PIT/HDA keep ticking during
-     * long syscalls (e.g. Doom's framebuffer writes); preemption stays disabled
-     * via in_syscall above. The stub no longer does sti; iret restores IF. */
     arch_irq_enable();
 
-    /* A stick that arrived or was pulled out was learned in an interrupt,
-     * where nothing may sleep; reading its partition table and reclaiming
-     * what it held both do. This is the first place after that where a
-     * process is running, so the work is done here. It returns at once when
-     * there is none. */
     usbdisk_service();
 
     if (current_proc) {
@@ -2764,23 +2771,11 @@ static void _syscall_handler(isr_params_t *params)
         }
     }
 
-    /* Disable interrupts again so the epilogue restores the trapframe (segments
-     * and %gs) atomically; iret then restores the caller's IF. */
     arch_irq_disable();
 
     if (current_proc) {
         current_proc->in_syscall = 0;
     }
-    /* Deliver what this call put on the loopback ring, here at its exit rather
-     * than only on the next tick, so a local transfer is not paced at a ring a
-     * tick. The threshold is three datagrams, `LOOP_DRAIN_AT`, of the ring's
-     * 64: at one or two the delivery is left to the timer, which is what
-     * lets the two crossing SYNs of a simultaneous open both be queued
-     * before either is delivered. The sender's own frames are gone by here,
-     * so no delivery runs under them. Interrupts are off, the drain refuses
-     * to run inside itself, and it takes at most four times the ring's slots
-     * in one run; what is left is taken by the next call's exit or by the
-     * timer. */
     if (ip_loop_crowded()) {
         ip_loop_drain_from(IP_LOOP_FROM_CALL);
     }
