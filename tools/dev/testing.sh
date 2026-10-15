@@ -29,26 +29,29 @@
 # is sparse on the host is not sparse here. `sh` opens an interactive shell in
 # the copy.
 #
-# The check that the copy is free and the sync are one step, under a lock on
-# the host, `/home/testing/rach2.sync.lock`; two callers started at once
-# would otherwise both find the copy free, and the later sync would land
-# under the other's run. A caller takes the lock before it checks, keeps it
-# until its sync ends, or for `run` until the command ends, and records
-# itself in `rach2.sync.owner` beside it. A second caller is refused, not
-# made to wait, as a busy copy refuses it, and prints that record: the first
-# may hold the copy for a run of hours, and the second learns at once that
-# its tree did not reach the host. The lock is flock(1)'s, taken by a shell
-# in WSL whose input comes from this script, so it ends when this script
-# ends, however it ends, or when the connection closes, and a caller that is
-# gone holds nothing. That shell writes to the connection every ten seconds,
-# so that a connection whose other end is gone without having closed it, as
-# when this machine loses power, fails when TCP gives up on the data nobody
-# acknowledges, not after the hours the host's TCP keepalive takes, and the
-# shell ends with it. A lost connection frees the lock while this caller
-# still works in the copy, so the caller watches it: a sync whose holder has
-# ended fails and says so, `run` starts its command only while the holder
-# lives, and a command whose holder ends first is stopped here and the run
-# fails and says so. The command's side on the host is not stopped with it.
+# The copy is `/home/testing/rach2`, or the path RACH2_TESTING_COPY names, so
+# that callers on this machine that must not wait for each other, such as the
+# owner's worker loops, each have a copy of their own. The check that the copy
+# is free and the sync are one step, under a lock on the host beside the copy,
+# `COPY.sync.lock`; two callers started at once would otherwise both find the
+# copy free, and the later sync would land under the other's run. A caller
+# takes the lock before it checks, keeps it until its sync ends, or for `run`
+# until the command ends, and records itself in `COPY.sync.owner`. A second
+# caller is refused, not made to wait, as a busy copy refuses it, and prints
+# that record: the first may hold the copy for a run of hours, and the second
+# learns at once that its tree did not reach the host. The lock is flock(1)'s,
+# taken by a shell in WSL whose input comes from this script, so it ends when
+# this script ends, however it ends, or when the connection closes, and a
+# caller that is gone holds nothing. That shell writes to the connection every
+# ten seconds, so that a connection whose other end is gone without having
+# closed it, as when this machine loses power, fails when TCP gives up on the
+# data nobody acknowledges, not after the hours the host's TCP keepalive
+# takes, and the shell ends with it. A lost connection frees the lock while
+# this caller still works in the copy, so the caller watches it: a sync whose
+# holder has ended fails and says so, `run` starts its command only while the
+# holder lives, and a command whose holder ends first is stopped here and the
+# run fails and says so. The command's side on the host is not stopped with
+# it.
 #
 # `wait` watches a run started on the host as `/home/testing/NAME.sh`, which
 # writes its results as lines beginning `NAME: ` to `/home/testing/NAME.out`
@@ -84,7 +87,12 @@ set -e
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 HOST=testing
-DEST=/home/testing/rach2
+DEST=${RACH2_TESTING_COPY:-/home/testing/rach2}
+case $DEST in
+    /*[!A-Za-z0-9/._-]*|*/..*|/) echo "testing: not a copy's path: $DEST" >&2; exit 2 ;;
+    /*) ;;
+    *) echo "testing: not a copy's path: $DEST" >&2; exit 2 ;;
+esac
 RSYNC_PATH='MSYS_NO_PATHCONV=1 wsl.exe -- rsync'
 hold=
 holder=

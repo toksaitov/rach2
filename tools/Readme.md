@@ -53,7 +53,7 @@ The suites, the sets and the analyses run on the testing host, a Windows machine
 
     sudo apt install clang-tidy sparse pmccabe
 
-Each person has an account in WSL named after their GitHub login, with a clone of their own, and logs in by key as `ssh rach2`, an alias for port 2227 of `auca.space`, which Windows forwards to the ssh server in WSL; that server refuses passwords. The top of the account's `.bashrc`, which bash reads for a command sent over ssh too, sets `RACH2_QEMU_ACCEL=tcg` and the person's share, `RACH2_WORKERS=8` and `RACH2_MEMORY_MIB=16384`, and sets `WSL_DISTRO_NAME` and puts the PowerShell directory on `PATH`, which `tests/run` needs to ask Windows for the free space. Two GitHub Actions runners, `rach2-ci-1` and `rach2-ci-2`, run as the user `ghrunner`, each with its own directory and checkout, and take the jobs labelled `rach2`; each one's `.env` sets the same variables with 12 workers and 24576 MiB, and its `.path` has the PowerShell directory. A share keeps one run from taking the machine, which also runs Hyper-V guests; the shares do not bound all runs together. The owner's copy of the tree is `/home/testing/rach2`, reached as `ssh testing` through [testing.sh](dev/testing.sh).
+Each person has an account in WSL named after their GitHub login, with a clone of their own, and logs in by key as `ssh rach2`, an alias for port 2227 of `auca.space`, which Windows forwards to the ssh server in WSL; that server refuses passwords. The top of the account's `.bashrc`, which bash reads for a command sent over ssh too, sets `RACH2_QEMU_ACCEL=tcg` and the person's share, `RACH2_WORKERS=8` and `RACH2_MEMORY_MIB=16384`, and sets `WSL_DISTRO_NAME` and puts the PowerShell directory on `PATH`, which `tests/run` needs to ask Windows for the free space. Two GitHub Actions runners, `rach2-ci-1` and `rach2-ci-2`, run as the user `ghrunner`, each with its own directory and checkout, and take the jobs labelled `rach2`; each one's `.env` sets the same variables with 12 workers and 24576 MiB, and its `.path` has the PowerShell directory. A share keeps one run from taking the machine, which also runs Hyper-V guests; the shares do not bound all runs together. The owner's copy of the tree is `/home/testing/rach2`, and each of the owner's worker loops has one of its own beside it; they are reached as `ssh testing` through [testing.sh](dev/testing.sh).
 
 The accounts are in the `kvm` group, and the runner uses `/dev/kvm` when it can open it and refuses a device it cannot. Runs on this host ask for the emulator all the same: the KVM is nested under Hyper-V, and the ATA driver polls a port after every sector it writes, each poll exiting through two hypervisors, so a disk write is slower than under the emulator.
 
@@ -67,7 +67,7 @@ The accounts are in the `kvm` group, and the runner uses `/dev/kvm` when it can 
 
 ### Running on the testing host: `dev/testing.sh`
 
-[testing.sh](dev/testing.sh) puts the owner's tree in the copy at `/home/testing/rach2` and runs commands there, as the [testing skill](../.agents/skills/testing/SKILL.md) requires:
+[testing.sh](dev/testing.sh) puts the owner's tree in the copy at `/home/testing/rach2`, or the copy that `RACH2_TESTING_COPY` names, and runs commands there, as the [testing skill](../.agents/skills/testing/SKILL.md) requires:
 
     tools/dev/testing.sh sync
     tools/dev/testing.sh run tests/run all
