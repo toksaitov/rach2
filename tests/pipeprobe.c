@@ -10,9 +10,32 @@
  *   (c) SIGPIPE / -EPIPE: a write with the read end closed raises SIGPIPE and
  *       (with the signal caught) returns -EPIPE;
  *   (d) blocking across a fork: a writer of more than one buffer blocks until
- *       the forked reader drains it, and every byte arrives intact.
+ *       the forked reader drains it, and every byte arrives intact;
+ *   (e) a hundred pipes made and closed in turn each succeed;
+ *   (f) identity: the link /proc/self/fd gives for a pipe end is exactly
+ *       `pipe:[N]`, the two ends of one pipe give the same N and two pipes
+ *       different ones, and fstat reports N as the inode in both words of
+ *       its 64-bit field;
+ *   (g) a read into a buffer whose second page is unmapped returns the bytes
+ *       of the first page and leaves the rest in the pipe for the next read,
+ *       since the kernel copies to user memory a page at a time and a page
+ *       that faults leaves its bytes in the ring;
+ *   (h) one write of three pipefuls and a byte fills the pipe and waits three
+ *       times, and the reader, asleep on the empty pipe between refills, is
+ *       woken at every refill and not once per write call. The write end
+ *       stays open until the reader says through a second pipe that every
+ *       byte arrived, so a reader left asleep is not rescued by the close; a
+ *       kernel that wakes it only once leaves both ends waiting, and the
+ *       harness times the row out;
+ *   (i) every length up to 67 bytes at every alignment of the writer's and
+ *       the reader's buffers, over a long, arrives byte for byte with a
+ *       sentinel on each side of the reader's bytes untouched. The kernel's
+ *       copies move words with a tail of bytes, so a wrong tail, a wrong
+ *       start or a byte written past the end shows at the length and
+ *       alignment that has it.
  *
- * Prints "PIPEPROBE OK". Freestanding; direct system calls (probe.h).
+ * Prints "PIPEPROBE OK" and exits with the count of the checks that failed.
+ * Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
@@ -33,12 +56,14 @@
 
 #define PIPE_BUF_SIZE 65536
 
+/** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -48,6 +73,7 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
@@ -113,6 +139,7 @@ static int parse_pipe_link(const char *s, int n, unsigned int *out)
 
 static int fails = 0;
 
+/** Count a failure and print `msg` when `cond` is 0. */
 static void check(int cond, const char *msg)
 {
     if (!cond) {
@@ -122,6 +149,7 @@ static void check(int cond, const char *msg)
     }
 }
 
+/** Whether the first `n` bytes of `a` and `b` are equal. */
 static int eqn(const char *a, const char *b, int n)
 {
     int i;
@@ -134,28 +162,31 @@ static int eqn(const char *a, const char *b, int n)
 }
 
 /**
- * Reads n bytes from fd into buf and returns the byte count. The char* lets
- * the analyzer see buf written.
+ * Read up to `n` bytes from `fd` into `buf`: the byte count, or a negated
+ * errno. The char* lets the analyzer see buf written.
  */
 static int rd(int fd, char *buf, int n)
 {
     return syscall3(SYS_READ, fd, (long)buf, n);
 }
 
+/** Write `n` bytes of `buf` to `fd`: the count written, or a negated errno. */
 static int wr(int fd, const char *buf, int n)
 {
     return syscall3(SYS_WRITE, fd, (long)buf, n);
 }
 
+/** An anonymous read-write mapping of `len` bytes: its address, or a negated
+ * errno. */
 static long mmap_anon(long len)
 {
     return probe_mmap(0, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 }
 
 /**
- * Calls pipe() into the two-element fds array. fds is pre-cleared so the
- * analyzer sees the output written even though the kernel fills it through the
- * long-cast address.
+ * Calls pipe() into the two-element fds array: 0, or a negated errno. fds is
+ * pre-cleared so the analyzer sees the output written even though the kernel
+ * fills it through the long-cast address.
  */
 static int do_pipe(int fds[2])
 {
@@ -164,6 +195,7 @@ static int do_pipe(int fds[2])
     return syscall1(SYS_PIPE, (long)fds);
 }
 
+/** pipe2() into `fds` with `flags`, as `do_pipe` makes pipe(). */
 static int do_pipe2(int fds[2], int flags)
 {
     fds[0] = -1;
@@ -175,6 +207,7 @@ static int do_pipe2(int fds[2], int flags)
 extern void sig_restorer(void);
 PROBE_RT_RESTORER(sig_restorer);
 
+/* The sigaction rt_sigaction takes, with a 64-bit mask. */
 struct k_sigaction {
     void (*handler)(int);
     unsigned long flags;
@@ -184,6 +217,7 @@ struct k_sigaction {
 
 static volatile int got_sigpipe;
 
+/** The SIGPIPE handler: record that it ran. */
 static void sigpipe_handler(int sig)
 {
     (void)sig;
@@ -191,10 +225,12 @@ static void sigpipe_handler(int sig)
 }
 
 /* A pattern buffer of more than a pipe holds, for the fill and blocking
-   tests. */
+ * tests. */
 #define BIG 70000
 static char big[BIG];
 
+/** Run cases (a) to (i) in order; a failed check is printed and counted,
+ * and the next case runs. */
 PROBE_START void _start(void)
 {
     int p[2];
@@ -206,7 +242,7 @@ PROBE_START void _start(void)
         big[i] = (char)(i & 0x7f);
     }
 
-    /* (a) round-trip + EOF, in one process (the page-sized buffer has it). */
+    /* (a) round-trip + EOF, in one process, which the pipe's buffer allows. */
     check(do_pipe(p) == 0, "pipe()");
     check(wr(p[1], "hello pipe", 10) == 10, "write 10 bytes");
     n = rd(p[0], buf, 10);
@@ -215,8 +251,7 @@ PROBE_START void _start(void)
     check(rd(p[0], buf, 10) == 0, "read returns 0 (EOF) after write end closed");
     syscall1(SYS_CLOSE, p[0]);
 
-    /* (b) O_NONBLOCK: empty read -> EAGAIN; the FIFO holds 64 KiB; a write
-     * past full -> EAGAIN. */
+    /* (b) O_NONBLOCK: an empty read and a write past full are -EAGAIN. */
     check(do_pipe2(p, O_NONBLOCK) == 0, "pipe2(O_NONBLOCK)");
     check(syscall3(SYS_FCNTL, p[0], F_GETPIPE_SZ, 0) == PIPE_BUF_SIZE &&
               syscall3(SYS_FCNTL, p[1], F_GETPIPE_SZ, 0) == PIPE_BUF_SIZE,
@@ -241,9 +276,7 @@ PROBE_START void _start(void)
     check(got_sigpipe == 1, "SIGPIPE was raised");
     syscall1(SYS_CLOSE, p[1]);
 
-    /* (d) blocking across a fork: the parent writes more than the pipe holds,
-     * so it must block until the forked reader drains, and the reader gets
-     * every byte. */
+    /* (d) blocking across a fork: the writer blocks until the reader drains. */
     check(do_pipe(p) == 0, "pipe() for blocking test");
     pid = syscall1(SYS_FORK, 0);
     check(pid >= 0, "fork");
@@ -279,8 +312,7 @@ PROBE_START void _start(void)
               "child read every byte intact");
     }
 
-    /* (e) no pool leak: many create/close cycles past the pool size must keep
-     * succeeding (each closed pipe returns to the pool). */
+    /* (e) pipes made and closed in turn leak nothing. */
     for (i = 0; i < 100; i++) {
         int q[2];
         if (do_pipe(q) != 0) {
@@ -291,10 +323,7 @@ PROBE_START void _start(void)
         syscall1(SYS_CLOSE, q[1]);
     }
 
-    /* (f) identity: each pipe is one object with two ends, and the link a
-     * descriptor resolves to carries its inode. The two ends of one pipe must
-     * give the same number, two pipes must give different ones, and fstat must
-     * agree with the link. Every pipe here read as `pipe:[1]` before. */
+    /* (f) identity: one inode for a pipe's two ends, in its link and fstat. */
     {
         int a[2], b[2];
         unsigned int ino[4];
@@ -321,8 +350,7 @@ PROBE_START void _start(void)
                       "and it is a pipe link, spelled exactly as one");
             }
             check(syscall3(SYS_FSTAT, ends[k], (long)st, 0) == 0, "fstat a pipe end");
-            /* Both words of the 64-bit inode: a match in the low one alone is
-               a different number. */
+            /* Both words of the 64-bit inode. */
             check(*(unsigned int *)(st + KSTAT_INO) == ino[k] &&
                       *(unsigned int *)(st + KSTAT_INO + 4) == 0u && ino[k] != 0,
                   "and fstat reports the number the link does");
@@ -334,11 +362,7 @@ PROBE_START void _start(void)
         }
     }
 
-    /* (g) a read whose buffer's second page is unmapped: the first page's
-     * bytes arrive and are counted, the rest stay in the pipe for the next
-     * read, since the kernel copies a user page at a time and a page that
-     * faults is left in the ring. The hole is an anonymous mapping of two
-     * pages with the second unmapped. */
+    /* (g) a read into a buffer whose second page is unmapped. */
     {
         long m = mmap_anon(8192);
         char *first = (char *)m;
@@ -350,8 +374,7 @@ PROBE_START void _start(void)
         check(syscall2(SYS_MUNMAP, (long)(first + 4096), 4096) == 0,
               "with its second page unmapped");
         check(do_pipe(p) == 0, "pipe() for the fault test");
-        /* A pattern with no period of 2048, so the second half cannot pass
-           as the first read again: the byte's 128-byte block enters it. */
+        /* A pattern with no period of 2048 bytes. */
         for (i = 0; i < 4096; i++) {
             big[i] = (char)(((i * 7 + 3) ^ (i >> 7)) & 0x7f);
         }
@@ -376,13 +399,7 @@ PROBE_START void _start(void)
         syscall1(SYS_CLOSE, p[1]);
     }
 
-    /* (h) one write of three pipefuls and a byte, which fills the pipe and
-     * waits three times while the reader drains: the reader, which sleeps
-     * on the empty pipe between the refills, is woken at every refill and not
-     * once per write call. The write end stays open until the reader says
-     * through a second pipe that every byte arrived, so a reader left
-     * asleep is not rescued by the close; a kernel that wakes it only once
-     * leaves both ends waiting, and the harness times the row out. */
+    /* (h) one write of three pipefuls and a byte, through three refills. */
     {
         int q[2];
 
@@ -422,12 +439,7 @@ PROBE_START void _start(void)
         }
     }
 
-    /* (h) every length up to 67 bytes at every alignment of the writer's and
-     * the reader's buffers, through the pipe and compared byte for byte, with
-     * a sentinel on each side of the reader's bytes. The kernel's copies move
-     * words with a tail of bytes, so a wrong tail, a wrong start or a byte
-     * written past the end shows at the length and alignment that has it; the
-     * alignments run over a word, a long, of each buffer. */
+    /* (i) every length to 67 bytes at every alignment of both buffers. */
     {
         static char pat[80], got[80];
         int len, sa, da, bad = 0;

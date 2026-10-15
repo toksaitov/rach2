@@ -9,17 +9,20 @@
 
 #define STDOUT_FILENO 1
 
+/** write(2): the bytes written, or a negated errno. */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
+/** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t len = 0;
@@ -29,6 +32,7 @@ static size_t strlen(const char *s)
     return len;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
@@ -36,10 +40,9 @@ static void puts(const char *s)
 }
 
 /**
- * ELF entry point: the address the loader jumps to (no libc, no main).
- *
- * The stack on entry has argc at `[ESP+0]`, then the argv pointers; this
- * probe ignores them and prints a fixed message.
+ * The program's entry, where the kernel starts it with the stack pointer at
+ * argc and the argv pointers above it; this probe reads neither, prints a
+ * fixed line and exits 0.
  */
 PROBE_START void _start(void)
 {

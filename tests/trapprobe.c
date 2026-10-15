@@ -1,14 +1,14 @@
 /**
- * Probes that an unhandled CPU exception in user mode is contained, not fatal.
+ * Probes that a CPU exception in user mode kills only the faulting process.
  *
  * Two children fault on purpose: one executes an invalid opcode (#UD), one
- * divides by zero (#DE). The kernel has a dedicated handler only for the page
- * fault; every other CPU exception shares the default handler, which must kill
- * just the faulting process with the signal its cause maps to (SIGILL for #UD,
- * SIGFPE for #DE) and leave the parent and the kernel running. Without it an
- * unhandled exception returns into the faulting instruction, re-faults, and
- * triple-faults the machine with no diagnostic. The probe reaps each child and
- * checks the wait status has the expected signal.
+ * divides by zero (#DE). Every CPU exception but the page fault, the double
+ * fault, the NMI and the machine check goes to the kernel's default
+ * exception handler (arch/x86/isr.c), which sends the faulting process the
+ * signal its cause maps to (SIGILL for #UD, SIGFPE for #DE) and leaves the
+ * parent and the kernel running. A handler that returned into the faulting
+ * instruction would fault again without end. The probe reaps each child and
+ * checks that the wait status has the expected signal.
  *
  * Prints "TRAPPROBE OK" and exits 0. Freestanding; direct system calls
  * (probe.h).
@@ -21,27 +21,32 @@
 #define SIGILL 4
 #define SIGFPE 8
 
+/** write(2): the bytes written, or a negated errno. */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
+/** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** fork(2): the child's pid, 0 in the child, or a negated errno. */
 static int sys_fork(void)
 {
     return syscall0(SYS_FORK);
 }
 
+/** waitpid(2): the pid reaped, or a negated errno. */
 static int sys_waitpid(int pid, int *status, int options)
 {
     return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -51,20 +56,21 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
-/* An invalid opcode (#UD, vector 6) the assembler emits verbatim. */
+/** Execute ud2, the invalid opcode (#UD, vector 6). */
 static void raise_invalid_opcode(void)
 {
     __asm__ __volatile__("ud2");
 }
 
-/* An unsigned divide of 1 by 0 (#DE, vector 0); volatile-free but unfoldable
- * because the divisor is zeroed in a register the compiler cannot trace. */
+/** Divide 1 by 0 unsigned (#DE, vector 0), in assembly, so that the
+ * compiler can neither fold nor drop the division. */
 static void raise_divide_error(void)
 {
     __asm__ __volatile__("xorl %%ecx, %%ecx\n\t"
@@ -76,10 +82,10 @@ static void raise_divide_error(void)
                          : "eax", "ecx", "edx", "cc");
 }
 
-/*
- * Fork a child that runs `fault`, reap it, and return whether it was killed by
- * `expect_signo`. The Linux wait status has the terminating signal in its
- * low seven bits.
+/**
+ * Fork a child that runs `fault`, reap it, and return whether it was killed
+ * by `expect_signo`; 0 also when fork or waitpid fails. The Linux wait
+ * status has the terminating signal in its low seven bits.
  */
 static int faulted_with(void (*fault)(void), int expect_signo)
 {
@@ -88,7 +94,7 @@ static int faulted_with(void (*fault)(void), int expect_signo)
     pid = sys_fork();
     if (pid == 0) {
         fault();
-        sys_exit(0); /* a contained fault never reaches here */
+        sys_exit(0); /* reached only when `fault` did not fault */
     }
     if (pid < 0) {
         return 0;
@@ -101,6 +107,8 @@ static int faulted_with(void (*fault)(void), int expect_signo)
     return (status & 0x7f) == expect_signo;
 }
 
+/** Check #UD and then #DE; exit 1 or 2 for the first whose child did not
+ * die of the expected signal. */
 PROBE_START void _start(void)
 {
     if (!faulted_with(raise_invalid_opcode, SIGILL)) {

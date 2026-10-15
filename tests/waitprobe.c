@@ -1,5 +1,6 @@
 /**
- * Exercises the fd-layer blocking and dispatch substrate from user space.
+ * Exercises the descriptor layer's status flags, its numbering and its
+ * blocking waits, from user space.
  *
  * Three things are checked: (a) O_NONBLOCK is a real, settable OFD status flag,
  * so F_SETFL sets it, F_GETFL reads it back, and clearing it sticks; (b) close
@@ -38,12 +39,14 @@
 
 #define HELLO "/hello.txt" /* staged "hello, world\n" */
 
+/** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -53,6 +56,7 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
@@ -61,6 +65,7 @@ static void puts(const char *s)
 
 static int fails = 0;
 
+/** Count a failure and print `msg` when `cond` is 0. */
 static void check(int cond, const char *msg)
 {
     if (!cond) {
@@ -70,6 +75,7 @@ static void check(int cond, const char *msg)
     }
 }
 
+/** Whether the first `n` bytes of `a` and `b` are equal. */
 static int eqn(const char *a, const char *b, int n)
 {
     int i;
@@ -82,8 +88,9 @@ static int eqn(const char *a, const char *b, int n)
 }
 
 /**
- * Reads n bytes from fd into buf; returns the byte count. Passing buf as a
- * char*, not an inline int cast, lets the analyzer see it written.
+ * Read up to `n` bytes from `fd` into `buf`: the byte count, or a negated
+ * errno. Passing buf as a char*, not an inline int cast, lets the analyzer
+ * see it written.
  */
 static int rd(int fd, char *buf, int n)
 {
@@ -130,6 +137,7 @@ static int sleeping(int pid)
 extern void sig_restorer(void);
 PROBE_RT_RESTORER(sig_restorer);
 
+/* The sigaction rt_sigaction takes, with a 64-bit mask. */
 struct k_sigaction {
     void (*handler)(int);
     unsigned long flags;
@@ -139,6 +147,7 @@ struct k_sigaction {
 
 static volatile int got_usr1;
 
+/** The SIGUSR1 handler: record that it ran. */
 static void usr1_handler(int sig)
 {
     (void)sig;
@@ -150,7 +159,9 @@ static void usr1_handler(int sig)
 
 /**
  * The child: install a SIGUSR1 handler, block in a recvfrom() on a UDP socket
- * that never receives, and assert the parent's signal unwinds it with -EINTR.
+ * that never receives, and exit 0 when the parent's signal unwinds it with
+ * -EINTR after the handler ran, 1 otherwise, and 2 or 3 when the handler or
+ * the socket cannot be set up.
  */
 static void eintr_child(void)
 {
@@ -188,6 +199,8 @@ static void eintr_child(void)
     sys_exit((rc == -EINTR && got_usr1) ? 0 : 1);
 }
 
+/** Run cases (a) to (c), and exit with the count of the checks that
+ * failed. */
 PROBE_START void _start(void)
 {
     char buf[16];
@@ -202,8 +215,7 @@ PROBE_START void _start(void)
     check((syscall3(SYS_FCNTL, fd, F_GETFL, 0) & O_NONBLOCK) == 0, "F_GETFL no longer O_NONBLOCK");
     syscall1(SYS_CLOSE, fd);
 
-    /* (b) close(2) is legal. fd 0/1 stay open, so the freed lowest number is
-     * 2 and the reopen lands there. */
+    /* (b) close(stderr) is legal, and the reopen takes the freed fd 2. */
     r = syscall1(SYS_CLOSE, STDERR_FILENO);
     check(r == 0, "close(stderr) is legal");
     fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
@@ -218,8 +230,7 @@ PROBE_START void _start(void)
     check(n == 5 && eqn(buf, "hello", 5), "read through reopened fd 0");
     syscall1(SYS_CLOSE, fd);
 
-    /* (c) a blocking recvfrom is interruptible: the child unwinds with
-     * -EINTR. */
+    /* (c) a blocking recvfrom is interruptible: it unwinds with -EINTR. */
     pid = syscall1(SYS_FORK, 0);
     check(pid >= 0, "fork");
     if (pid == 0) {

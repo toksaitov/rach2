@@ -1,15 +1,15 @@
 /**
  * Probe that fork copies a read-only page with its protection intact.
  *
- * The parent maps an anonymous PROT_READ page, faults it in (reads zero), then
- * forks. The child writes to that read-only page: because fork must copy the
- * page into the child with the SAME (read-only) protection, the write is a
- * protection violation and the kernel kills the child. The parent reaps it
- * and checks the wait status is a SIGSEGV death (WIFSIGNALED and WTERMSIG
- * == SIGSEGV). If fork wrongly made the child's copy writable, the child
- * would survive and exit 0, which this probe reports as a failure.
+ * The parent maps an anonymous PROT_READ page, faults it in (it reads zero),
+ * then forks. The child writes to that page: fork gives the child's copy the
+ * parent's protection, read-only, so the write is a protection violation
+ * and the kernel kills the child. The parent reaps it and checks that the
+ * wait status is a death by SIGSEGV (WIFSIGNALED and WTERMSIG == SIGSEGV).
+ * A child whose copy fork made writable would survive and exit 0, which this
+ * probe reports as a failure.
  *
- * Freestanding; direct system calls (probe.h).
+ * Prints "FORKRO OK". Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
@@ -28,32 +28,39 @@
 #define WIFSIGNALED(s) (((s) & 0x7F) != 0 && ((s) & 0x7F) != 0x7F)
 #define WTERMSIG(s)    ((s) & 0x7F)
 
+/** write(2): the bytes written, or a negated errno. */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
+/** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** fork(2): the child's pid, 0 in the child, or a negated errno. */
 static int sys_fork(void)
 {
     return syscall0(SYS_FORK);
 }
 
+/** waitpid(2): the pid reaped, or a negated errno. */
 static int sys_waitpid(int pid, int *status, int options)
 {
     return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
+/** An anonymous mapping of `len` bytes with `prot`; its address, or a
+ * negated errno. */
 static long mmap_anon(long len, int prot)
 {
     return probe_mmap(0, len, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -63,12 +70,15 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
+/** Map a page PROT_READ, read it, fork, and require the child's write to
+ * the page to kill it with SIGSEGV; exit 1 on any failure. */
 PROBE_START void _start(void)
 {
     long p = mmap_anon(PAGE, PROT_READ);
@@ -95,8 +105,7 @@ PROBE_START void _start(void)
     }
 
     if (pid == 0) {
-        /* Child: writing the inherited read-only page must fault and kill it.
-         */
+        /* The child's copy of the page is read-only too: SIGSEGV. */
         ro[0] = 0xFF;
         /* Reached only if fork wrongly gave the child a writable copy. */
         puts("forkro: ERROR child wrote a read-only page and survived");

@@ -136,12 +136,14 @@ struct ymm {
     unsigned w[8];
 };
 
+/** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -152,17 +154,20 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` to standard output. */
 static void say(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (long)strlen(s));
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     say(s);
     say("\n");
 }
 
+/** Print "XSAVEPROBE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why)
 {
     say("XSAVEPROBE FAIL: ");
@@ -170,6 +175,7 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
+/** Print "XSAVEPROBE FAIL: ", `what`, ": " and `why`, and exit 1. */
 static void fail2(const char *what, const char *why)
 {
     say("XSAVEPROBE FAIL: ");
@@ -179,6 +185,7 @@ static void fail2(const char *what, const char *why)
     sys_exit(1);
 }
 
+/** Print that the row `row` did not run, for want of AVX. */
 static void not_run(const char *row)
 {
     say("xsaveprobe: ");
@@ -186,6 +193,7 @@ static void not_run(const char *row)
     puts(": not run: no AVX");
 }
 
+/** The time of day in milliseconds, modulo 2^32. */
 static unsigned now_ms(void)
 {
     struct timeval tv;
@@ -194,21 +202,25 @@ static unsigned now_ms(void)
     return (unsigned)tv.sec * 1000u + (unsigned)tv.usec / 1000u;
 }
 
+/** getpid(2): the caller's process id. */
 static int getpid(void)
 {
     return (int)syscall1(SYS_GETPID, 0);
 }
 
+/** ptrace(2): the request's result, or a negated errno. */
 static long ptrace(long request, long pid, long addr, long data)
 {
     return syscall4(SYS_PTRACE, request, pid, addr, data);
 }
 
+/** The little-endian 32-bit word at `p`. */
 static unsigned get32(const unsigned char *p)
 {
     return (unsigned)p[0] | ((unsigned)p[1] << 8) | ((unsigned)p[2] << 16) | ((unsigned)p[3] << 24);
 }
 
+/** Store `v` at `p` as a little-endian 32-bit word. */
 static void put32(unsigned char *p, unsigned v)
 {
     p[0] = (unsigned char)v;
@@ -217,6 +229,7 @@ static void put32(unsigned char *p, unsigned v)
     p[3] = (unsigned char)(v >> 24);
 }
 
+/** Execute cpuid for `leaf` and `sub`, with EAX, EBX, ECX and EDX in `r`. */
 static void cpuid(unsigned leaf, unsigned sub, unsigned r[4])
 {
     __asm__ __volatile__("cpuid"
@@ -234,6 +247,7 @@ static unsigned avx_offset;
 #define LOAD(n)  __asm__ __volatile__("vmovdqu %0, %%ymm" #n : : "m"(v[n]))
 #define STORE(n) __asm__ __volatile__("vmovdqu %%ymm" #n ", %0" : "=m"(v[n]))
 
+/** Load the NYMM YMM registers from `v`. */
 static void ymm_load(const struct ymm *v)
 {
     LOAD(0);
@@ -256,6 +270,7 @@ static void ymm_load(const struct ymm *v)
 #endif
 }
 
+/** Store the NYMM YMM registers into `v`. */
 static void ymm_store(struct ymm *v)
 {
     STORE(0);
@@ -278,7 +293,7 @@ static void ymm_store(struct ymm *v)
 #endif
 }
 
-/* Values derived from a seed, every word of them not zero. */
+/** Values derived from a seed, every word of them not zero. */
 static void make_values(struct ymm *v, unsigned seed)
 {
     int i, j;
@@ -290,6 +305,7 @@ static void make_values(struct ymm *v, unsigned seed)
     }
 }
 
+/** Clear the upper halves of the registers in `v`. */
 static void zero_upper(struct ymm *v)
 {
     int i, j;
@@ -304,6 +320,8 @@ static void zero_upper(struct ymm *v)
 /* "ymmN: the XMM half" or "ymmN: the upper half". */
 static char why_text[40];
 
+/** The text that names register `reg` and its XMM half, or its upper half
+ * when `upper`, written in `why_text`. */
 static const char *differs(int reg, int upper)
 {
     const char *tail = upper ? ": the upper half" : ": the XMM half";
@@ -323,7 +341,7 @@ static const char *differs(int reg, int upper)
     return why_text;
 }
 
-/* The registers against `want`: NULL when they agree, else which differs. */
+/** The registers against `want`: NULL when they agree, else which differs. */
 static const char *ymm_check(const struct ymm *want)
 {
     static struct ymm got[NYMM];
@@ -340,8 +358,9 @@ static const char *ymm_check(const struct ymm *want)
     return 0;
 }
 
-/* Check for `ms` milliseconds while yielding and sleeping, so the other
- * process runs between checks and the timer preempts the spins. */
+/** Check the registers against `v` for `ms` milliseconds while yielding and
+ * sleeping, so the other process runs between checks and the timer preempts
+ * the spins: NULL when they held, else which differs. */
 static const char *hold(const struct ymm *v, unsigned ms)
 {
     unsigned start = now_ms();
@@ -364,8 +383,9 @@ static const char *hold(const struct ymm *v, unsigned ms)
     return 0;
 }
 
-/* The XSAVE image `img` against the registers `want`: the XMM halves at
- * byte 160 and the upper halves at the AVX component's offset. */
+/** The XSAVE image `img` against the registers `want`: the XMM halves at
+ * byte 160 and the upper halves at the AVX component's offset. NULL when
+ * they agree, else which differs. */
 static const char *image_check(const unsigned char *img, const struct ymm *want)
 {
     int i, j;
@@ -391,8 +411,8 @@ static volatile const char *handler_fault;
 static struct ymm want[NYMM];
 static int header_pipe[2];
 
-/* The frame's state at `fp` against Linux's layout and the interrupted
- * registers `want`. */
+/** The frame's state at `fp` against Linux's layout and the interrupted
+ * registers `want`: NULL when it agrees, else what differs. */
 static const char *frame_check(const unsigned char *fp)
 {
     const unsigned char *img = fp + FRAME_PREFIX;
@@ -431,6 +451,14 @@ static const char *frame_check(const unsigned char *fp)
     return 0;
 }
 
+/**
+ * The SIGUSR1 handler of the signal rows, by `mode`. ROW_FRAME checks that
+ * the registers start zero and the frame (`frame_check`), keeping what it
+ * finds wrong in `handler_fault`, then clobbers every register; ROW_WRITE
+ * writes ymm1's upper half in the frame; ROW_MAGIC clears FP_XSTATE_MAGIC1;
+ * and ROW_HEADER damages the XSAVE header's XCOMP_BV and says so through
+ * `header_pipe`.
+ */
 static void handler(int sig, void *info, void *ucontext)
 {
     unsigned char *uc = ucontext;
@@ -478,6 +506,8 @@ static void handler(int sig, void *info, void *ucontext)
 extern void sig_restorer(void);
 PROBE_RT_RESTORER(sig_restorer);
 
+/** Install `handler` for `signo` with SA_SIGINFO and the restorer; fail when
+ * rt_sigaction does. */
 static void install(int signo)
 {
     struct k_sigaction ka;
@@ -549,6 +579,8 @@ static void run_cpuid(int noxsave)
                                        : "xsaveprobe: cpuid: OSXSAVE, XCR0 has x87 and SSE"));
 }
 
+/** The switches row: a forked child finds the parent's values, and parent
+ * and child each keep their own for 300 ms. */
 static void run_switches(void)
 {
     static struct ymm before[NYMM], mine[NYMM];
@@ -582,8 +614,9 @@ static void run_switches(void)
     }
 }
 
-/* Load `want` from `seed`, take SIGUSR1 in `row`, and return what the
- * registers then differ in from `after`, or NULL. */
+/** Load `want` from `seed`, take SIGUSR1 in `row`, and return what the
+ * registers then differ in from `after`, or from `want` when `after` is NULL;
+ * NULL when they agree. */
 static const char *signal_row(int row, unsigned seed, const struct ymm *after)
 {
     mode = row;
@@ -593,6 +626,9 @@ static const char *signal_row(int row, unsigned seed, const struct ymm *after)
     return ymm_check(after ? after : want);
 }
 
+/** The signal rows: the frame and a handler that clobbers the registers, a
+ * value written into the frame's AVX part, and a frame whose FP_XSTATE_MAGIC1
+ * was cleared. */
 static void run_signals(void)
 {
     static struct ymm after[NYMM];
@@ -625,6 +661,8 @@ static void run_signals(void)
     }
 }
 
+/** The damaged header row: a child whose handler damages its frame's XSAVE
+ * header, and says so through the pipe, must die of SIGSEGV. */
 static void run_header(void)
 {
     int pid, status;
@@ -651,6 +689,8 @@ static void run_header(void)
     }
 }
 
+/** The exec row: a child loads values and execs `xsaveprobe reset`, which
+ * must exit 0. */
 static void run_exec(void)
 {
     int pid, status;
@@ -675,7 +715,8 @@ static void run_exec(void)
     }
 }
 
-/* What a fresh image sees: every YMM register zero. */
+/** What a fresh image sees: every YMM register zero. Exits 0, or 3 when a
+ * register is not. */
 static void run_reset(void)
 {
     static const struct ymm zero[NYMM];
@@ -683,8 +724,10 @@ static void run_reset(void)
     sys_exit(ymm_check(zero) ? 3 : 0);
 }
 
-/* Fork a child that traces itself, loads the values of `seed` when `avx`,
- * and stops; the parent returns with the child in its stop. */
+/** Fork a child that traces itself, loads the values of `seed` when `avx`,
+ * and stops; the parent returns with the child in its stop. Once resumed the
+ * child exits 0, 7 when it did not find the value the tracer wrote in ymm2,
+ * or 8 when PTRACE_TRACEME failed. */
 static int traced_child(int avx, unsigned seed)
 {
     int pid, status;
@@ -720,6 +763,8 @@ static int traced_child(int avx, unsigned seed)
     return pid;
 }
 
+/** Continue the stopped child `pid` and require it to exit 0; fail naming
+ * `what` otherwise. */
 static void resume(int pid, const char *what)
 {
     int status;
@@ -732,6 +777,13 @@ static void resume(int pid, const char *what)
     }
 }
 
+/**
+ * The ptrace row: PTRACE_GETREGSET with NT_X86_XSTATE refuses a length that
+ * is not a multiple of 8, and gives an image of leaf 0xD's size with XCR0 at
+ * byte 464, AVX marked in use and the child's registers; the fxsave set has
+ * their XMM halves; and PTRACE_SETREGSET writes ymm2's upper half, which the
+ * child finds.
+ */
 static void run_ptrace(void)
 {
     static unsigned char img[IMAGE_MAX], fx[512];
@@ -792,12 +844,13 @@ struct rlimit64 {
     unsigned long long max;
 };
 
+/** The little-endian 64-bit word at `p`. */
 static unsigned long long get64(const unsigned char *p)
 {
     return (unsigned long long)get32(p) | ((unsigned long long)get32(p + 4) << 32);
 }
 
-/* Read `n` bytes at `off` of the file `fd` into `buf`; 0, or -1. */
+/** Read `n` bytes at `off` of the file `fd` into `buf`; 0, or -1. */
 static int read_at(int fd, unsigned long off, unsigned char *buf, unsigned long n)
 {
     if (syscall3(SYS_LSEEK, fd, (long)off, 0) != (long)off) {
@@ -870,6 +923,8 @@ static const unsigned char *core_xstate(unsigned char *notes, unsigned long cap,
     return 0;
 }
 
+/** The core row: a child that loads values and takes SIGQUIT with its core
+ * limit raised dumps a core whose NT_X86_XSTATE note has its registers. */
 static void run_core(void)
 {
     static unsigned char notes[16384];
@@ -926,6 +981,7 @@ static void run_core(void)
     syscall1(SYS_RMDIR, (long)CORE_DIR);
 }
 
+/** Without XSAVE, PTRACE_GETREGSET with NT_X86_XSTATE fails with -ENODEV. */
 static void run_ptrace_without(void)
 {
     static unsigned char img[IMAGE_MAX];
@@ -945,6 +1001,9 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/** Run `reset` when argv[1] begins with r; otherwise the cpuid checks, with
+ * `noxsave` when it begins with n, then every row where AVX is usable, or
+ * the rows' not-run lines and, without XSAVE, the ptrace check. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];

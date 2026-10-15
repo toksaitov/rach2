@@ -2,22 +2,23 @@
  * Drives reboot(2) at every answer that is not a shutdown, and leaves the
  * machine running.
  *
- * This is the one probe in the tree whose misbehaviour destroys every probe
- * after it: all of them share a single boot, and a syntactically valid
- * `RB_POWER_OFF` issued by a caller who is still root stops the machine and
- * takes the rest of the run with it. So the unprivileged case asserts its own
- * precondition before it asks for anything: the child requires `setuid` to
- * return 0 and `geteuid` to read back the new uid, and exits with a distinct
- * status WITHOUT issuing any command if either fails.
+ * A fault in this probe can end every probe after it: they share one boot
+ * (runtests), and a well-formed `RB_POWER_OFF` from a caller who is still
+ * root stops the machine and the rest of the run with it. So the
+ * unprivileged case checks its own precondition before it makes the call:
+ * the child requires `setuid` to return 0 and `geteuid` to read back the new
+ * uid, and exits with a status of its own, having made no call, if either
+ * fails.
  *
  * The cases: a correct call with `RB_DISABLE_CAD` returns 0, and so does each
- * of the three alternate second magics, which is the only way to pin that they
- * are accepted, not rejected for some other reason; `RB_ENABLE_CAD`,
- * `RB_KEXEC`, a zero first magic and a zero second magic each return -EINVAL;
- * and an unprivileged caller asking for a real power-off gets -EPERM.
+ * of the three alternate second magics, the one way to show that the kernel
+ * accepts them rather than refusing them for some other reason;
+ * `RB_ENABLE_CAD`, `RB_KEXEC`, a zero first magic, a zero second magic and a
+ * wrong second magic each return -EINVAL; and an unprivileged caller asking
+ * for a power-off gets -EPERM.
  *
- * Prints "REBOOTPROBE OK" at the end, which is also the proof that nothing
- * here stopped the machine.
+ * Prints "REBOOTPROBE OK" at the end, which also shows that nothing here
+ * stopped the machine.
  *
  * Freestanding; direct system calls (probe.h).
  */
@@ -28,8 +29,8 @@ typedef unsigned int uint32_t;
 
 #define STDOUT_FILENO 1
 
-/* The magics musl passes for a caller of reboot(2), and the four commands this
- * kernel answers without stopping. */
+/* The magics musl passes for a caller of reboot(2), and the four commands
+ * this probe makes, none of which stops the machine as the probe makes it. */
 #define MAGIC1        0xfee1deadu
 #define MAGIC2        672274793u
 #define MAGIC2A       85072278u
@@ -45,42 +46,51 @@ typedef unsigned int uint32_t;
 #define WANT_EPERM  (-1)
 #define WANT_EINVAL (-22)
 
+/** write(2): the bytes written, or a negated errno. */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
+/** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** fork(2): the child's pid, 0 in the child, or a negated errno. */
 static int sys_fork(void)
 {
     return syscall0(SYS_FORK);
 }
 
+/** waitpid(2): the pid reaped, or a negated errno. */
 static int sys_waitpid(int pid, int *status, int options)
 {
     return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
+/** setuid(2): 0, or a negated errno. */
 static int sys_setuid(int uid)
 {
     return syscall1(SYS_SETUID, (long)uid);
 }
 
+/** geteuid(2): the effective uid. */
 static int sys_geteuid(void)
 {
     return syscall0(SYS_GETEUID);
 }
 
+/** reboot(2) with the two magics and `cmd`: 0 or a negated errno, and no
+ * return when the call stops the machine. */
 static int sys_reboot(uint32_t magic1, uint32_t magic2, uint32_t cmd)
 {
     return syscall3(SYS_REBOOT, (long)magic1, (long)magic2, (long)cmd);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -89,16 +99,20 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` to standard output. */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
+
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     print(s);
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
+/** Write `n` in decimal. */
 static void print_num(int n)
 {
     char buf[12];
@@ -137,6 +151,12 @@ static void expect(const char *what, int got, int want)
     failures++;
 }
 
+/**
+ * Make each call of the case list and count the answers that differ. The
+ * child of the unprivileged case exits 2 when it could not drop root, having
+ * made no call, 3 when its power-off was not refused with -EPERM, and 0 when
+ * it was. Exits 0 when every case held, else 1.
+ */
 PROBE_START void _start(void)
 {
     int child, status = 0;
@@ -154,9 +174,7 @@ PROBE_START void _start(void)
     expect("no second magic", sys_reboot(MAGIC1, 0, CMD_CAD_OFF), WANT_EINVAL);
     expect("wrong second magic", sys_reboot(MAGIC1, MAGIC2 + 1, CMD_CAD_OFF), WANT_EINVAL);
 
-    /* The unprivileged refusal, in a child that proves it is unprivileged
-     * before it asks for a power-off. Exit 2 means the drop failed and nothing
-     * was asked; exit 3 means the answer was wrong. */
+    /* The unprivileged refusal, in a child that drops root before it asks. */
     child = sys_fork();
     if (child == 0) {
         if (sys_setuid(PROBE_UID) != 0 || sys_geteuid() != PROBE_UID) {

@@ -17,7 +17,8 @@ typedef unsigned int u32;
 
 #define STDOUT 1
 
-/* Linux errno values we expect back (negated), the same on i386 and x86-64. */
+/* The Linux errno values the calls return negated, the same on i386 and
+ * x86-64. */
 #define ENOENT 2
 #define EBADF  9
 #define EFAULT 14
@@ -33,6 +34,7 @@ typedef unsigned int u32;
 #define NR_UNIMPL_TEXT "222"
 #endif
 
+/** The length of the string `s`. */
 static u32 slen(const char *s)
 {
     u32 n = 0;
@@ -43,6 +45,7 @@ static u32 slen(const char *s)
     return n;
 }
 
+/** Write `s` to standard output. */
 static void puts_(const char *s)
 {
     syscall3(SYS_WRITE, STDOUT, (long)s, (int)slen(s));
@@ -102,6 +105,13 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/**
+ * Make each failing call and compare its result with the negated errno
+ * Linux returns: an unregistered number in the table's range and one beyond
+ * it, -ENOSYS; open of a missing path, -ENOENT; close and read of a
+ * descriptor that is not open, -EBADF; and writev with an iov pointer in the
+ * kernel's last page, -EFAULT. Exits 0 when every result matched, else 1.
+ */
 void probe_main(unsigned long *sp)
 {
     static const char missing[] = "/no_such_file_errnoprobe";
@@ -122,8 +132,7 @@ void probe_main(unsigned long *sp)
     expect(syscall3(SYS_CLOSE, 999, 0, 0), EBADF, "close(999)");
     expect(syscall3(SYS_READ, 999, (long)rbuf, (int)sizeof(rbuf)), EBADF, "read(999)");
 
-    /* writev() with an iov pointer outside user space, in the last page of
-     * the address space, which is the kernel's, -> -EFAULT. */
+    /* writev() with an iov pointer in the kernel's last page -> -EFAULT. */
     expect(syscall3(SYS_WRITEV, STDOUT, -4096L, 1), EFAULT, "writev(bad iov)");
 
     if (fails == 0) {

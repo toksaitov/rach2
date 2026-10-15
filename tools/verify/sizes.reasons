@@ -654,7 +654,7 @@ tests/pingtest.c:_start lines 179 a probe, one sequence of steps in the order th
 tests/pingtest.c:_start nesting 5 a probe, one sequence of steps in the order the log records them
 
 tests/pipeprobe.c:_start complexity 50 a probe, one sequence of steps in the order the log records them
-tests/pipeprobe.c:_start lines 268 a probe, one sequence of steps in the order the log records them
+tests/pipeprobe.c:_start lines 244 a probe, one sequence of steps in the order the log records them
 tests/pipeprobe.c:_start nesting 5 a probe, one sequence of steps in the order the log records them
 
 tests/procprobe.c:probe_main complexity 80 a probe, one sequence of steps in the order the log records them
