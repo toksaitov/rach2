@@ -790,40 +790,40 @@ tools/verify/prosecheck.c:selftest lines 198 the checker's own selftest, its cas
 tools/verify/prosecheck.c:selftest nesting 6 the checker's own selftest, its cases in one table
 
 utils/adduser.c:main complexity 61 one procedure over a file format, in the order the format is read
-utils/adduser.c:main lines 261 one procedure over a file format, in the order the format is read
+utils/adduser.c:main lines 246 one procedure over a file format, in the order the format is read
 
 utils/bootslot.c:bootslot_open complexity 38 one procedure over a file format, in the order the format is read
-utils/bootslot.c:bootslot_open lines 123 one procedure over a file format, in the order the format is read
+utils/bootslot.c:bootslot_open lines 112 one procedure over a file format, in the order the format is read
 utils/bootslot.c:resolve_file params 7 one procedure over a file format, in the order the format is read
 utils/bootslot.c:scan_dir complexity 39 one procedure over a file format, in the order the format is read
 utils/bootslot.c:scan_dir params 7 one procedure over a file format, in the order the format is read
 
 utils/dhcpc.c:main complexity 34 one procedure over a file format, in the order the format is read
-utils/dhcpc.c:main lines 161 one procedure over a file format, in the order the format is read
+utils/dhcpc.c:main lines 128 one procedure over a file format, in the order the format is read
 
 utils/dhcpmsg.c:dhcp_parse complexity 32 one procedure over a file format, in the order the format is read
-utils/dhcpmsg.c:dhcp_parse lines 122 one procedure over a file format, in the order the format is read
+utils/dhcpmsg.c:dhcp_parse lines 117 one procedure over a file format, in the order the format is read
 utils/dhcpmsg.c:dhcp_parse nesting 5 one procedure over a file format, in the order the format is read
 
 utils/growroot.c:main complexity 72 one procedure over a file format, in the order the format is read
-utils/growroot.c:main lines 244 one procedure over a file format, in the order the format is read
+utils/growroot.c:main lines 110 one procedure over a file format, in the order the format is read
 
 utils/growset.c:main complexity 63 one procedure over a file format, in the order the format is read
-utils/growset.c:main lines 222 one procedure over a file format, in the order the format is read
+utils/growset.c:main lines 206 one procedure over a file format, in the order the format is read
 
 utils/grubslot.c:grubslot_install params 9 one procedure over a file format, in the order the format is read
 
 utils/httpd.c:build_body lines 116 one procedure over a file format, in the order the format is read
-utils/httpd.c:main lines 125 one procedure over a file format, in the order the format is read
+utils/httpd.c:main lines 121 one procedure over a file format, in the order the format is read
 
 utils/netcfg.c:netcfg_read complexity 36 one procedure over a file format, in the order the format is read
-utils/netcfg.c:netcfg_read lines 147 one procedure over a file format, in the order the format is read
+utils/netcfg.c:netcfg_read lines 141 one procedure over a file format, in the order the format is read
 utils/netcfg.c:netcfg_read nesting 7 one procedure over a file format, in the order the format is read
 
-utils/netup.c:apply_static lines 135 one procedure over a file format, in the order the format is read
+utils/netup.c:apply_static lines 120 one procedure over a file format, in the order the format is read
 
 utils/passwd.c:main complexity 47 one procedure over a file format, in the order the format is read
-utils/passwd.c:main lines 247 one procedure over a file format, in the order the format is read
+utils/passwd.c:main lines 190 one procedure over a file format, in the order the format is read
 
 utils/pwauth.c:pwauth_read_password complexity 28 one procedure over a file format, in the order the format is read
-utils/pwauth.c:pwauth_read_password lines 154 one procedure over a file format, in the order the format is read
+utils/pwauth.c:pwauth_read_password lines 116 one procedure over a file format, in the order the format is read
