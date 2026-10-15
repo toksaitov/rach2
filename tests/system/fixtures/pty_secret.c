@@ -1,9 +1,11 @@
 /**
- * Authenticate a dummy SSH session on the real driver's pseudo-terminal.
+ * pty_secret: the ssh that accept/password_test.sh puts on the PATH, which
+ * asks for a password on the pseudo-terminal runner/ptydrive gives it and
+ * then runs the command su_command.sh passed.
  *
- * Only a test supplies this executable as ssh. It records receipt counts,
- * never input bytes, and runs the su helper's actual quoted command through
- * the test's unprivileged su substitute after receiving the first answer.
+ * It writes that it received one answer to $PTY_SECRET_AUDIT/first, never
+ * the answer itself, and runs the command through the test's su, which
+ * needs no privilege.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,7 +14,7 @@
 #include <unistd.h>
 
 /**
- * Report a fixture failure without printing any received credential bytes.
+ * Report a failure of the fixture and exit 2; nothing it received is printed.
  */
 static void fail(void)
 {
@@ -21,7 +23,7 @@ static void fail(void)
 }
 
 /**
- * Write fixture output as separate transfers to exercise split prompts.
+ * Write `length` bytes of `text` to standard output, or fail.
  */
 static void emit(const char *text, size_t length)
 {
@@ -36,7 +38,17 @@ static void emit(const char *text, size_t length)
 }
 
 /**
- * Run one dummy authentication before executing the helper's command.
+ * Prompt for a password as the case in $PTY_SECRET_CASE says, read one line
+ * as the answer, and run the last argument with `sh -c`.
+ *
+ * The prompt is `Password:` in two writes 20 ms apart; in `joined` it is two
+ * prompts in one write, and in `long` 4096 dots follow it. Echo is off while
+ * the answer is read, except in `echo`. In `prefix` the fixture writes the
+ * answer back without its last byte and exits 0. Otherwise it puts the
+ * answer, its first half and its second half in $PTY_DUMMY_RECEIVED,
+ * $PTY_DUMMY_FIRST and $PTY_DUMMY_LAST for the command to print. The
+ * password's own variable, RACH2_ACCEPT_PASSWORD, must not reach this
+ * program, and an empty or overlong answer fails.
  */
 int main(int argc, char **argv)
 {

@@ -1,5 +1,15 @@
-# Compare growroot's samples with independent proc reads around the tools.
-# Clock differences are delivered guest ticks, not independent wall time.
+# grow_measure.awk: check growroot's --measure lines in a grow suite's log
+# against the counters fixtures/grow_tool.sh read from /proc/disk.
+#
+# growroot prints a `growroot: measure:` line before and after each of its
+# four phases, table, check-readonly, check-repair and resize, with the
+# monotonic clock and the disk's command and flush counts. The lines must
+# come in that order with counts that never fall, and each phase must issue
+# at least one disk command; the script prints each phase's differences. A
+# phase may take no clock time, since the clock advances by whole ticks.
+# grow_tool.sh prints a `grow-witness:` line for the whole grow and for each
+# side of the three phases that run a tool. The exit status is 0 when all
+# eight lines of each kind are there and agree, and 1 otherwise.
 BEGIN { split("table check-readonly check-repair resize", phases, " ") }
 $1 == "growroot:" && $2 == "measure:" {
     n++
@@ -26,8 +36,8 @@ $1 == "grow-witness:" {
     w++
 }
 END {
-    # Discovery reads precede table/before. Everything after resize/after is
-    # RAM work, so its counters must equal the independent final snapshot.
+    # growroot reads the disk before table/before, and only memory after
+    # resize/after, so the last sample must equal the whole grow's witness.
     if (!seen["whole/before"] || !seen["whole/after"] ||
         c["table/before"] < wc["whole/before"] ||
         f["table/before"] < wf["whole/before"] ||

@@ -1,8 +1,18 @@
+/*
+ * runutil_machine: runutil.c's machine check run over a real process, for
+ * runutil_owned.sh, which checks that the check stops a live machine and
+ * passes over a zombie and a process whose PID was reused.
+ */
 #define main runutil_program_main
 #include "runutil.c"
 #undef main
 
-/** Keep a real child available while the production checker reads its ID. */
+/**
+ * Fork a worker that ignores SIGTERM, and return its PID with its identity in
+ * `*id`, as the worker read it. With `zombie` the worker exits at once and is
+ * left unreaped; otherwise it waits for a signal, at most 30 seconds. A
+ * failure exits 125.
+ */
 static pid_t start_worker(int zombie, struct identity *id)
 {
     int ready[2];
@@ -32,10 +42,17 @@ static pid_t start_worker(int zombie, struct identity *id)
     return pid;
 }
 
-/** Exercise saved identity, zombie exclusion and a live machine survivor.
- * The reused case changes the saved start time while retaining a real PID.
- * Its worker must survive both checking and selection for outer cleanup.
- * A zombie remains unreaped until after the verdict, as a console relay can.
+/**
+ * `runutil_machine CASE LEDGER` writes a worker's identity to LEDGER.identity
+ * and runs `registered_machine` and `check_machines` over it.
+ *
+ * In `live` both must find the worker, and `check_machines` must kill it
+ * with SIGKILL once SIGTERM has had its 15 seconds. In `reused` the saved
+ * start time is one more than the worker's, as if its PID had been reused,
+ * and in `zombie` the worker has exited and is not yet reaped, as a console
+ * relay's child can be; in both neither function may find it, and the
+ * worker must still be there afterwards. Prints `runutil-machine: result:
+ * CASE passed` and returns 0, or returns 1; 125 is a failure of the fixture.
  */
 int main(int argc, char **argv)
 {

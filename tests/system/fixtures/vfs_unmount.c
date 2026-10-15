@@ -1,10 +1,17 @@
 /**
- * Run the production unmount path with a missing ancestor and counted releases.
- * The generated include contains whole functions from vfs.c. Filesystem and
- * scheduler substitutes check ownership and writes; the USB rows test real I/O.
- * A caller with a root of its own names the target from that root. A target
- * named as a directory by its end must reach one, and the node the one walk
- * found is the node checked.
+ * vfs_unmount: the unmount functions of rach2/sys/fs/vfs.c, compiled whole
+ * with substitutes for the calls they make, and checked in 18 cases, for
+ * vfs_unmount_test.sh.
+ *
+ * The test copies the functions into unmount.inc. The substitutes for the
+ * file system, the block cache and the scheduler count what the path does,
+ * so that a case can check which mounts it releases and that nothing is
+ * written to a device that is gone. The model is a root, a mount at /mnt/a
+ * whose device is gone, a mount at /mnt/a/b below it, and a spare. The cases
+ * also check that a caller with a root of its own names the target from that
+ * root, and that a target named as a directory, by a path that ends in one,
+ * must reach a directory, the node of the one walk being the node checked.
+ * The USB disk rows test the same path with a real device.
  */
 #include <errno.h>
 #include <stdint.h>
@@ -24,6 +31,7 @@
  * more, and the rows need the three slots after them for mounts. */
 #define VFS_PERMANENT        3
 
+/* The parts of the kernel's structures that the unmount path reads. */
 struct block_device {
     int flags, backing_flags;
 };
@@ -79,28 +87,33 @@ static int getattrs;
 static int file_node;   /* a node that is no mount's root */
 static void *walk_node; /* the node a walk finds, or NULL for the mount's root */
 
+/** The flags of the device under `d`. */
 static unsigned block_flags(struct block_device *d)
 {
     return d->backing_flags;
 }
+/** Count a file system sync; `sync_error` is its result. */
 static int sync_mount(struct vfs_mount *m)
 {
     (void)m;
     syncs++;
     return sync_error;
 }
+/** Count a file system's preparation for unmount. */
 static int prepare(struct vfs_mount *m)
 {
     (void)m;
     prepares++;
     return 0;
 }
+/** Count a node released. */
 static void put(struct vfs_mount *m, void *node)
 {
     (void)m;
     (void)node;
     puts_count++;
 }
+/** Count a file system released. */
 static void unmount_fs(struct vfs_mount *m)
 {
     (void)m;
@@ -109,7 +122,11 @@ static void unmount_fs(struct vfs_mount *m)
 static struct vfs_ops ops = {sync_mount, prepare, NULL, put, unmount_fs};
 static struct vfs_type type = {&ops};
 
-/** No second pathname attempt is permitted after the simulated EIO. */
+/**
+ * The walk to `path`, which always reaches the mount at /mnt/a, at the node
+ * in `walk_node` or at its root, and returns `lookup_error`. Each call is
+ * counted, so that a case can check that no second walk follows an EIO.
+ */
 static int resolve_path(int a, const char *path, int b, struct vfs_ref *ref, int c, int d,
                         int unmount)
 {
@@ -124,13 +141,14 @@ static int resolve_path(int a, const char *path, int b, struct vfs_ref *ref, int
     ref->node = walk_node ? walk_node : records[3].root;
     return lookup_error;
 }
+/** Count a reference released. */
 static void vfs_ref_release(struct vfs_ref *r)
 {
     (void)r;
     ref_releases++;
 }
-/** The node a walk found is a directory unless a row says otherwise; the
- * file system of a device that has gone refuses the read with EIO. */
+/** The attributes of `node`: the mode in `node_mode`, a directory unless a
+ * case sets another, or EIO when the device of `m` is gone. Counted. */
 static int vfs_getattr(struct vfs_mount *m, void *node, struct vfs_stat *st)
 {
     (void)node;
@@ -141,17 +159,20 @@ static int vfs_getattr(struct vfs_mount *m, void *node, struct vfs_stat *st)
     st->mode = node_mode;
     return 0;
 }
+/** Entering a mount always succeeds. */
 static int vfs_enter(struct vfs_mount *m)
 {
     (void)m;
     return 0;
 }
+/** Count a hold on the caller's root. */
 static void vfs_ref_hold(const struct vfs_ref *r)
 {
     (void)r;
     root_holds++;
 }
-/** The caller's root is the one node this path is asked of. */
+/** The path of the caller's root, `root_path`; the path asks for no other
+ * node, and the fixture aborts if it does. */
 static int vfs_node_path(struct vfs_mount *m, void *node, char *out, uint32_t cap)
 {
     (void)m;
@@ -160,24 +181,30 @@ static int vfs_node_path(struct vfs_mount *m, void *node, char *out, uint32_t ca
     strcpy(out, root_path);
     return 0;
 }
+/** Release the node of `r`. */
 static void vfs_ref_put(struct vfs_ref *r)
 {
     put(r->mnt, r->node);
 }
+/** Count the namespace lock taken. */
 static void vfs_ns_lock(struct vfs_mount *m)
 {
     (void)m;
     locks++;
 }
+/** Count the namespace lock released. */
 static void vfs_ns_unlock(struct vfs_mount *m)
 {
     (void)m;
     locks--;
 }
+/** Whether no operation is in progress on `m`. */
 static int drained(struct vfs_mount *m)
 {
     return m->inprogress == 0;
 }
+/** The wait for `m` to drain: it must be unmounting and not yet drained,
+ * or the fixture aborts; the wait is counted and sets `inprogress` to 0. */
 static void wq_wait_event_nointr(int *q, int (*ready)(struct vfs_mount *), struct vfs_mount *m)
 {
     (void)q;
@@ -186,34 +213,39 @@ static void wq_wait_event_nointr(int *q, int (*ready)(struct vfs_mount *), struc
     waits++;
     m->inprogress = 0;
 }
+/** The block cache has nothing to write. */
 static int bcache_sync(struct block_device *d)
 {
     (void)d;
     return 0;
 }
+/** Count a device flush. */
 static int block_flush(struct block_device *d)
 {
     (void)d;
     flushes++;
     return 0;
 }
+/** Count the block cache of a device dropped. */
 static int bcache_invalidate(struct block_device *d)
 {
     (void)d;
     invalidates++;
     return 0;
 }
+/** Count the claims given back. */
 static void devfs_release_claim(int claim)
 {
     claims += claim;
 }
+/** Free the mount record `m`. */
 static void mount_release(struct vfs_mount *m)
 {
     m->state = 0;
 }
 
-/* The unmount path reports a failed flush to the device layer, which this
- * fixture has no device to carry out. */
+/** A failed flush, which the unmount path reports to the device layer;
+ * ignored. */
 static void vfs_device_failed(struct block_device *dev, unsigned long long lba, int rc)
 {
     (void)dev;
@@ -221,33 +253,31 @@ static void vfs_device_failed(struct block_device *dev, unsigned long long lba, 
     (void)rc;
 }
 
-/* The unmount drops the inotify watches on the mount's files, which this
- * fixture has none of. */
+/** Drop the inotify watches on the files of `m`; there are none. */
 static void inotify_unmount(struct vfs_mount *m)
 {
     (void)m;
 }
 
-/* The unmount drops the file page cache's copies of the mount's files,
- * which this fixture has none of. */
+/** Drop the page cache's copies of the files of `m`; there are none. */
 static void filecache_forget_mount(const struct vfs_mount *m)
 {
     (void)m;
 }
 
-/* The unmount lets a loop device set to clear itself go, and this fixture
- * mounts none. */
+/** Let a loop device set to clear itself go; no loop device is mounted. */
 static void loop_unmounted(struct block_device *d)
 {
     (void)d;
 }
 
-/* The caller's mount namespace is the only one, so an unmount is never
- * left to hide the mount from the caller alone. */
+/** The bit of the caller's mount namespace, the only one, so that an unmount
+ * never only hides the mount from the caller. */
 static uint32_t ns_bit(void)
 {
     return 1u;
 }
+/** The bits of the live namespaces: the caller's alone. */
 static uint32_t mntns_live_bits(void)
 {
     return 1u;
@@ -257,7 +287,11 @@ static int unmount_mount(struct vfs_mount *m);
 
 #include "unmount.inc"
 
-/** A missing parent, its live child and a spare record for deeper trees. */
+/**
+ * Reset the model: the root, /mnt/a whose device is gone and which a walk
+ * cannot read past (EIO), its live child /mnt/a/b, a spare record for deeper
+ * trees, and every count at 0.
+ */
 static void setup(void)
 {
     int i;
@@ -291,6 +325,7 @@ static void setup(void)
     walk_node = NULL;
 }
 
+/** Count a failed case, `name`, and report it. */
 static void check(int condition, const char *name)
 {
     if (!condition) {
@@ -299,6 +334,7 @@ static void check(int condition, const char *name)
     }
 }
 
+/** Run the cases; 0 when all pass, 1 otherwise. */
 int main(void)
 {
     setup();

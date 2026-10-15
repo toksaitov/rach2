@@ -8,26 +8,20 @@
  * bootprobe expects (byte j of partition sector k is (k * 7 + j) & 0xff).
  * The kernel's mount still finds KRFFS, since it probes entry contents
  * rather than order, and the MBR then qualifies for /dev/bootpart: a
- * FAT-typed entry 1, disjoint from KRFFS.
+ * FAT-typed entry 1, disjoint from KRFFS. The partition lies after the
+ * KRFFS partition and not in the 1 MiB gap after the MBR, where GRUB's core
+ * image is and where the kernel publishes /dev/grubcore.
  *
- * That partition sat at LBA 64 until milestone 25, inside the 1 MiB
- * post-MBR gap where GRUB's core image lives. It was harmless while
- * nothing else reached those sectors and stopped being harmless when
- * /dev/grubcore was published over the gap, so the fixture moved into the
- * free space after the KRFFS partition instead.
- *
- * `mkfixture wide DISK` builds a sparse disk as large as the one milestone
- * 25 seals into the laptop. The raw disk windows seek and transfer through
- * a 64-bit offset, and nothing else in the tree is big enough to tell that
- * apart from the old 32-bit one: every test image is tens of megabytes.
- * Size alone is not enough either. A fixture of a few gigabytes would be
- * satisfied by an implementation keeping 33 bits of offset, so this one is
- * 260 GB, larger than the 250 GB drive being sealed: its far marker needs
- * 38 bits, and an offset truncated anywhere below that misses it. Two
- * 512-byte patterns are written, one just past 4 GiB and one near the end
- * (byte j of the marker at offset k is (j * 7 + 3 + k / GiB) & 0xff), plus
- * an MBR signature with no partitions, so discovery runs and publishes no
- * boot partition. The file is sparse, so all of it costs kilobytes.
+ * `mkfixture wide DISK` builds a sparse disk of 260 GiB. The raw disk
+ * windows seek and transfer through a 64-bit offset, and every other test
+ * image is tens of megabytes, too small to tell that offset from a 32-bit
+ * one. A disk of a few gigabytes
+ * would pass with an offset of 33 bits; the far marker of this one, at 258
+ * GiB, needs 39, and an offset cut to fewer misses it. Two 512-byte markers
+ * are written, one at 5 GiB and one at 258 GiB (byte j of the marker at
+ * offset k is (j * 7 + 3 + k / GiB) & 0xff), and an MBR signature with no
+ * partitions, so that discovery runs and publishes no boot partition. The
+ * file is sparse, so all of it costs kilobytes.
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -43,6 +37,7 @@
 #define WIDE_NEAR (5 * GIB)
 #define WIDE_FAR  (258 * GIB)
 
+/** Store `v` at `p`, little-endian. */
 static void w32(unsigned char *p, uint32_t v)
 {
     p[0] = (unsigned char)v;
@@ -51,11 +46,14 @@ static void w32(unsigned char *p, uint32_t v)
     p[3] = (unsigned char)(v >> 24);
 }
 
+/** The little-endian 32-bit value at `p`. */
 static uint32_t r32(const unsigned char *p)
 {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
+/** `mkfixture boot PATH`: rewrite the mkdisk.sh disk at `path` in place;
+ * 0, or 1 having said why. */
 static int make_boot(const char *path)
 {
     unsigned char mbr[SECTOR], sector[SECTOR];
@@ -79,8 +77,6 @@ static int make_boot(const char *path)
         fclose(f);
         return 1;
     }
-    /* Entry 2 takes the KRFFS partition entry as mkdisk wrote it; entry 1
-       becomes the FAT-typed fixture partition. */
     memcpy(entry2, entry1, 16);
     memset(entry1, 0, 16);
     entry1[4] = 0x0C;
@@ -115,6 +111,8 @@ static int make_boot(const char *path)
     return 0;
 }
 
+/** `mkfixture wide PATH`: create the sparse wide disk at `path`; 0, or 1
+ * having said why. */
 static int make_wide(const char *path)
 {
     unsigned char marker[SECTOR];
@@ -126,8 +124,6 @@ static int make_wide(const char *path)
         fprintf(stderr, "mkwidefixture: cannot create %s\n", path);
         return 1;
     }
-    /* The size comes from a seek past the end and one byte written there,
-       which leaves the file sparse on every host this builds on. */
     if (fseeko(f, (off_t)WIDE_SIZE - 1, SEEK_SET) != 0 || fputc(0, f) == EOF) {
         fprintf(stderr, "mkwidefixture: cannot size %s\n", path);
         fclose(f);
@@ -155,6 +151,7 @@ static int make_wide(const char *path)
     return 0;
 }
 
+/** Dispatch on the first argument; 2 for a usage error. */
 int main(int argc, char **argv)
 {
     if (argc == 3 && strcmp(argv[1], "boot") == 0)

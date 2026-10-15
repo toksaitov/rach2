@@ -1,3 +1,7 @@
+/*
+ * runutil_group: runutil.c's `watch` with its setpgid replaced, for
+ * runutil_group.sh, which checks how the supervisor treats a failed setpgid.
+ */
 #define _POSIX_C_SOURCE 200809L
 #ifdef __APPLE__
 #define _DARWIN_C_SOURCE
@@ -11,18 +15,28 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const char *mode;
-static int barrier[2];
+static const char *mode;   /* the case: assigned, denied, child or session */
+static int barrier[2];     /* the pipe on which the parent releases the child */
 
-/** Abort setup without mistaking a fixture failure for runutil's exit 2. */
+/** Report a failure of the fixture itself and exit 125, a status runutil
+ * does not use, so that it is not taken for runutil's own exit 2. */
 static void fixture_error(const char *what)
 {
     fprintf(stderr, "runutil-group: setup: %s\n", what);
     exit(125);
 }
 
-/** Release the child only after the parent has chosen its group state.
- * Real membership calls verify setup before an injected error reaches runutil.
+/**
+ * The setpgid that runutil.c calls, both in the parent, as
+ * `setpgid(child, child)`, and in the child, as `setpgid(0, 0)`.
+ *
+ * The parent's call goes first: in the `assigned` case it puts the child in
+ * a group of its own and succeeds, and otherwise it fails with EPERM. It then
+ * releases the child, whose call checks that the group is what the case set
+ * up and then fails with EPERM, except in two cases: in `child` it is the
+ * real call, which succeeds, and in `session` the child makes itself a
+ * session leader first, so that the real call fails with EPERM while the
+ * child already leads its own group. A setup that does not hold exits 125.
  */
 static int fixture_setpgid(pid_t pid, pid_t group)
 {
@@ -65,8 +79,13 @@ static int fixture_setpgid(pid_t pid, pid_t group)
 #undef main
 #undef setpgid
 
-/** Run the real supervisor with injected errors or a session-leader EPERM.
- * The executed command verifies its group and returns 23 to test status relay.
+/**
+ * `runutil_group CASE LEDGER` runs runutil's `watch` over this program's own
+ * `report`, with LEDGER as its ledger, and returns runutil's status.
+ *
+ * `report` checks that it leads its own process group and exits 23, so that
+ * runutil_group.sh can tell its status from runutil's. runutil should run it
+ * whenever the child ends up leading a group, and exit 2 when it does not.
  */
 int main(int argc, char **argv)
 {

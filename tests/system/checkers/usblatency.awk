@@ -1,5 +1,12 @@
-# Bound pumps beside a spinner and bytes beside getrandom; times are diagnostic.
-# The log is the machine's console, so every line ends in a carriage return.
+# usblatency.awk: check the one `usb: latency:` record of a keystroke boot.
+#
+# The record must name each of its eight fields once, each an integer, with
+# one tracked event and one dispatch. With `-v random=1`, the boot ran the
+# probe beside a getrandom loop, and the record may show pumps and up to
+# 4096 bytes of work; otherwise it ran beside a spinner and both are 0. The
+# times are printed for a person and not judged. The exit status is 0 for
+# one valid record and 1 otherwise. The log is the machine's console, so
+# every line ends in a carriage return.
 { sub(/\r$/, "") }
 /usb: latency: msi [01],/ {
     delete value

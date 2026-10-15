@@ -2,8 +2,8 @@
  * pcapcheck: read a QEMU packet capture and check what the guest sent.
  *
  * QEMU's filter-dump object writes every frame the guest sends to a libpcap
- * file, so what a machine put on the wire can be judged after the fact,
- * from outside, where nothing in the guest can forge it. Three checks share
+ * file, so what a machine put on the wire can be judged afterwards, outside
+ * the guest, where nothing in the guest can change it. Three checks share
  * this one reader:
  *
  * `pcapcheck bcast CAPTURE ...` finds evidence of datagram behavior. Its
@@ -21,15 +21,18 @@
  * rach2/sys/network/netconsole.c) to the contract their header states: one
  * nonzero boot id, one source address, sequence numbers from zero with no
  * gaps, a length matching the frame, a checksum summing to zero, and a
- * broadcast destination; then requires each `--expect` string in the
- * reassembled log, which proves the output buffered from before the device
- * existed was carried, not lost.
+ * broadcast destination. It then requires each `--expect` string in the
+ * reassembled log, so that a suite can show that the output buffered before
+ * the device existed was sent, and refuses each `--reject` string.
  *
  * `pcapcheck rawwire CAPTURE` checks the two raw-socket facts invisible
  * from inside the machine: the probe's six sends must leave with the hop
  * limits they were given (ICMP echoes at 1, 2, 3 and datagrams at 4, 5, 6),
  * and the echo request deliberately sent with checksum 0x1234 must cross
  * the wire still wrong, because a raw checksum is the caller's.
+ *
+ * Each check exits 0 when it passes, 1 when it fails, and 2 for a usage
+ * error or a capture that cannot be read.
  */
 #include <stdarg.h>
 #include <stdint.h>
@@ -46,28 +49,33 @@
 
 /* ---- the capture reader ---- */
 
+/* A capture read whole into memory. */
 struct pcap {
     unsigned char *data;
     size_t len;
-    size_t off;
-    int swap;
+    size_t off; /* the offset of the next record */
+    int swap;   /* the file is little-endian */
 };
 
+/** The big-endian 32-bit value at `p`. */
 static uint32_t r32be(const unsigned char *p)
 {
     return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | (uint32_t)p[3];
 }
+/** The little-endian 32-bit value at `p`. */
 static uint32_t r32le(const unsigned char *p)
 {
     return (uint32_t)p[3] << 24 | (uint32_t)p[2] << 16 | (uint32_t)p[1] << 8 | (uint32_t)p[0];
 }
+/** The big-endian 16-bit value at `p`. */
 static uint32_t r16be(const unsigned char *p)
 {
     return p[0] << 8 | p[1];
 }
 
-/* Open a classic or nanosecond pcap of Ethernet frames; exits with the
-   diagnostic on anything else, the way every caller treated the errors. */
+/** Read the capture at `path` into `pc`: a classic or nanosecond pcap of
+ * Ethernet frames, in either byte order. Anything else exits 2, with a
+ * diagnostic that begins with `tool`. */
 static void pcap_open(struct pcap *pc, const char *path, const char *tool)
 {
     FILE *f = fopen(path, "rb");
@@ -107,8 +115,8 @@ static void pcap_open(struct pcap *pc, const char *path, const char *tool)
     }
 }
 
-/* The next frame, or NULL at the end (a truncated record ends the file the
-   way the readers always ended it). */
+/** The next frame, with its captured length in `*caplen`, or NULL at the end;
+ * a truncated record ends the capture. */
 static const unsigned char *pcap_next(struct pcap *pc, uint32_t *caplen)
 {
     const unsigned char *frame;
@@ -124,11 +132,13 @@ static const unsigned char *pcap_next(struct pcap *pc, uint32_t *caplen)
     return frame;
 }
 
+/** Go back to the first frame. */
 static void pcap_rewind(struct pcap *pc)
 {
     pc->off = 24;
 }
 
+/** Parse the dotted IPv4 address `s` into `out`; 1, or 0 when it is not one. */
 static int parse_ip4(const char *s, unsigned char out[4])
 {
     unsigned a, b, c, d;
@@ -146,9 +156,8 @@ static int parse_ip4(const char *s, unsigned char out[4])
 
 /* ---- bcast ---- */
 
-/* An Ethernet/IPv4 ARP reply, or NULL. */
-/* An Ethernet-over-IPv4 ARP frame with operation `op`, 1 for a request and
-   2 for a reply, or NULL. */
+/** The ARP payload of `f`, `n` bytes, when it is an ARP frame for IPv4 over
+ * Ethernet with operation `op`, 1 for a request and 2 for a reply; or NULL. */
 static const unsigned char *arp_op(const unsigned char *f, uint32_t n, int op)
 {
     const unsigned char *arp = f + 14;
@@ -161,15 +170,20 @@ static const unsigned char *arp_op(const unsigned char *f, uint32_t n, int op)
     return arp;
 }
 
+/** The ARP payload of `f` when it is a reply, or NULL. */
 static const unsigned char *arp_reply(const unsigned char *f, uint32_t n)
 {
     return arp_op(f, n, 2);
 }
 
-/* An ARP request the machine sent for someone else carries its own address
-   as the sender, so this is where an address reached ARP. It is what can be
-   checked when nothing on the network asks for the machine's address, and
-   so nothing makes it answer. */
+/**
+ * `--arp-from`: require an ARP request whose sender address is `address`.
+ *
+ * An ARP request the machine sent for another host has its own address as
+ * the sender, so the request shows that the address reached its ARP layer.
+ * It is what can be checked when nothing on the network asks for the
+ * machine's address, so that the machine never answers. Returns 0 or 1.
+ */
 static int check_arp_from(struct pcap *pc, const char *capture, const char *address)
 {
     unsigned char want[4];
@@ -195,6 +209,7 @@ static int check_arp_from(struct pcap *pc, const char *capture, const char *addr
     return 1;
 }
 
+/** `--source`: require an IPv4 packet sent from `address`; 0 or 1. */
 static int check_source(struct pcap *pc, const char *capture, const char *address)
 {
     unsigned char want[4];
@@ -221,6 +236,7 @@ static int check_source(struct pcap *pc, const char *capture, const char *addres
     return 0;
 }
 
+/** `--owns`: require an ARP reply for `address`; 0 or 1. */
 static int check_owns(struct pcap *pc, const char *capture, const char *address)
 {
     unsigned char want[4];
@@ -246,6 +262,17 @@ static int check_owns(struct pcap *pc, const char *capture, const char *address)
     return 1;
 }
 
+/**
+ * `--routed-via GW --routed-dst D`: require that every IPv4 packet for
+ * `destination` went to a hardware address at which `gateway` answered ARP,
+ * and that there was at least one. Returns 0 or 1.
+ *
+ * The capture is read twice, so that a packet sent before the gateway's
+ * reply was recorded is still judged against every reply. The hardware
+ * address comes from the gateway's own ARP replies, not from where the
+ * machine sent its packets, so that a stack that broadcast everything
+ * cannot pass.
+ */
 static int check_routed(struct pcap *pc, const char *gateway, const char *destination)
 {
     unsigned char gw[4], dst[4];
@@ -259,11 +286,6 @@ static int check_routed(struct pcap *pc, const char *gateway, const char *destin
 
     parse_ip4(gateway, gw);
     parse_ip4(destination, dst);
-    /* Two passes over the capture, so a datagram sent before the gateway's
-       reply was recorded is still judged against the full set of replies.
-       The address is learned from the gateway's own ARP reply, not from
-       where this machine sent things, so a stack that broadcast everything
-       cannot agree with itself. */
     pcap_rewind(pc);
     while ((f = pcap_next(pc, &n)) != NULL) {
         const unsigned char *arp = arp_reply(f, n);
@@ -321,6 +343,9 @@ static int check_routed(struct pcap *pc, const char *gateway, const char *destin
     return 0;
 }
 
+/** `--port N [--dst-ip A.B.C.D]`: require a UDP datagram for `port` sent to
+ * the broadcast hardware address, and to `dst_ip` when it is not NULL; 0 or
+ * 1. */
 static int check_broadcast(struct pcap *pc, const char *capture, long port, const char *dst_ip)
 {
     unsigned char want[4];
@@ -365,6 +390,8 @@ static int check_broadcast(struct pcap *pc, const char *capture, long port, cons
     return 0;
 }
 
+/** `pcapcheck bcast`: run each check its options ask for, in order, and
+ * stop at the first that fails. */
 static int cmd_bcast(int argc, char **argv)
 {
     const char *capture = NULL, *dst_ip = NULL, *routed_via = NULL;
@@ -441,7 +468,8 @@ static int cmd_bcast(int argc, char **argv)
 
 /* ---- netconsole ---- */
 
-/* The IP header checksum over `buf`; zero means the frame is intact. */
+/** The Internet checksum of the `len` bytes at `buf`; 0 over bytes that
+ * include their own correct checksum. */
 static unsigned ones_complement_sum(const unsigned char *buf, size_t len)
 {
     unsigned long total = 0;
@@ -460,8 +488,9 @@ static unsigned ones_complement_sum(const unsigned char *buf, size_t len)
     return (unsigned)(~total & 0xFFFF);
 }
 
-static int nc_fails;
+static int nc_fails; /* the failures nc_fail has reported */
 
+/** Report a netconsole failure, formatted as printf does, and count it. */
 static void nc_fail(const char *fmt, ...)
 {
     va_list ap;
@@ -474,6 +503,17 @@ static void nc_fail(const char *fmt, ...)
     nc_fails++;
 }
 
+/**
+ * `pcapcheck netconsole`: check every netconsole frame in the capture and
+ * the log they carry, as the file's comment says.
+ *
+ * A frame the network card padded to the 60-byte minimum has zeros after
+ * its payload, so the log is the length the header gives, not the frame's.
+ * A `--reject` text must not be in the log: a machine whose card is stopped
+ * part way through its shutdown sends the lines before that point and none
+ * after, and only a capture can tell a line that was not sent from one
+ * that was sent and missed. `--print` writes the log to standard output.
+ */
 static int cmd_netconsole(int argc, char **argv)
 {
     const char *capture = NULL;
@@ -543,9 +583,6 @@ static int cmd_netconsole(int argc, char **argv)
         id = r32be(body + 4);
         seq = r32be(body + 8);
         length = r16be(body + 12);
-        /* A frame the chip padded to the 60-byte minimum has trailing
-           zeros past the payload; the length field, not the frame size,
-           is the log. */
         if (NC_HDR_LEN + length > n - 14) {
             nc_fail("frame %ld claims %u bytes but has %u", index, length, n - 14 - NC_HDR_LEN);
             continue;
@@ -616,10 +653,6 @@ static int cmd_netconsole(int argc, char **argv)
         if (!found)
             nc_fail("the log does not contain '%s'", expect[i]);
     }
-    /* Text that must NOT have reached the wire. A machine whose card is
-       stopped part way through shutting down sends the lines before that
-       point and none after it, and only a capture can tell the difference
-       between "not sent" and "sent and missed". */
     for (i = 0; i < n_reject; i++) {
         size_t want_len = strlen(reject[i]);
         size_t j;
@@ -645,6 +678,8 @@ static int cmd_netconsole(int argc, char **argv)
 
 /* ---- rawwire ---- */
 
+/** `pcapcheck rawwire`: check the hop limits and the kept checksum of the
+ * raw probe's sends, as the file's comment says. */
 static int cmd_rawwire(int argc, char **argv)
 {
     struct pcap pc;
@@ -714,6 +749,7 @@ static int cmd_rawwire(int argc, char **argv)
     return ok ? 0 : 1;
 }
 
+/** Dispatch on the check named by the first argument; 2 for a usage error. */
 int main(int argc, char **argv)
 {
     if (argc >= 2 && strcmp(argv[1], "bcast") == 0)
