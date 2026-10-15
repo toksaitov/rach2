@@ -39,18 +39,22 @@ extern void *memcpy(void *d, const void *s, unsigned long n);
 
 /* ---- what the layers under the parsers record ---- */
 
+/* The frames or datagrams each layer above was given. */
 static unsigned to_arp, to_icmp, to_udp, to_tcp, to_raw, to_packet;
-static unsigned up = 1;
+static unsigned up = 1; /* what netif_is_up reports */
 
 uint8_t net_mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
 uint32_t net_ip_addr = 0x0A00020Fu; /* 10.0.2.15 */
 uint32_t net_ip_mask = 0xFFFFFF00u;
 
+/** Report `up`; no code compiled here calls this, and a row takes the
+ * interface down through `the_iface.up`. */
 int netif_is_up(void)
 {
     return (int)up;
 }
 
+/** Count an ARP packet received. */
 void arp_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
 {
     (void)nd;
@@ -59,6 +63,7 @@ void arp_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
     to_arp++;
 }
 
+/** Count a frame offered to the packet sockets. */
 void packet_rx(struct netdev *nd, uint16_t etype, const uint8_t *data, uint16_t len)
 {
     (void)nd;
@@ -68,6 +73,7 @@ void packet_rx(struct netdev *nd, uint16_t etype, const uint8_t *data, uint16_t 
     to_packet++;
 }
 
+/** Count an ICMP message received. */
 void icmp_rx(uint32_t src, uint32_t dst, uint8_t ttl, const uint8_t *data, uint16_t len)
 {
     (void)ttl;
@@ -78,6 +84,7 @@ void icmp_rx(uint32_t src, uint32_t dst, uint8_t ttl, const uint8_t *data, uint1
     to_icmp++;
 }
 
+/** Send no ICMP destination-unreachable message. */
 void icmp_unreachable(const uint8_t *dgram, uint16_t len, uint8_t code)
 {
     (void)dgram;
@@ -93,6 +100,7 @@ static struct {
     uint16_t number, len;
 } udp_seen[UDP_SEEN_MAX];
 
+/** Record and count a UDP datagram received; return 0. */
 int udp_rx(uint32_t src, uint32_t dst, const uint8_t *data, uint16_t len)
 {
     (void)src;
@@ -105,6 +113,7 @@ int udp_rx(uint32_t src, uint32_t dst, const uint8_t *data, uint16_t len)
     return 0;
 }
 
+/** Count a TCP segment received. */
 void tcp_rx(uint32_t src, uint32_t dst, const uint8_t *data, uint16_t len)
 {
     (void)src;
@@ -114,6 +123,7 @@ void tcp_rx(uint32_t src, uint32_t dst, const uint8_t *data, uint16_t len)
     to_tcp++;
 }
 
+/** Count a datagram offered to the raw sockets. */
 void raw_rx(uint8_t proto, const uint8_t *data, uint16_t len)
 {
     (void)proto;
@@ -128,6 +138,8 @@ void raw_rx(uint8_t proto, const uint8_t *data, uint16_t len)
 static int arp_known;
 static unsigned arp_queries, arp_requests;
 
+/** Count a lookup; while `arp_known` is set, give 10:11:12:13:14:15 for any
+ * address and return 1, else return 0. */
 int arp_lookup(struct netdev *nd, uint32_t ip, uint8_t *mac)
 {
     unsigned i;
@@ -146,6 +158,7 @@ int arp_lookup(struct netdev *nd, uint32_t ip, uint8_t *mac)
 
 struct arp_stats arp_stats;
 
+/** Count an ARP request sent. */
 void arp_request(struct netdev *nd, uint32_t ip)
 {
     (void)nd;
@@ -155,25 +168,32 @@ void arp_request(struct netdev *nd, uint32_t ip)
 
 uint32_t net_ip_gateway = 0x0A000202u;
 
-/* The four byte-order helpers, which live in net_core.c with the boot report
-   and its whole dependency chain; they are three lines each and are written
-   out here rather than dragging that in. */
+/**
+ * Read the big-endian 16-bit field at `p`.
+ *
+ * This and the three functions after it are the byte-order helpers of
+ * net_core.c, which has the stack's bring-up and its whole dependency chain
+ * with them; they are written out here rather than bringing that in.
+ */
 uint16_t read16be(const uint8_t *p)
 {
     return (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
 }
 
+/** Read the big-endian 32-bit field at `p`. */
 uint32_t read32be(const uint8_t *p)
 {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
+/** Store `v` at `p` in network byte order. */
 void write16be(uint8_t *p, uint16_t v)
 {
     p[0] = (uint8_t)(v >> 8);
     p[1] = (uint8_t)(v & 0xFF);
 }
 
+/** Store `v` at `p` in network byte order. */
 void write32be(uint8_t *p, uint32_t v)
 {
     p[0] = (uint8_t)(v >> 24);
@@ -182,16 +202,18 @@ void write32be(uint8_t *p, uint32_t v)
     p[3] = (uint8_t)v;
 }
 
-/* The interrupt bracket, which on this host is a counter: what the parsers
-   need from it is that it balances, not that it disables anything. */
+/* The interrupt flag's save and restore, which on this host is a counter.
+   Neither ethernet.c nor ip.c calls them, and no row reads the counter. */
 static unsigned irq_depth;
 
+/** Count a save of the interrupt flag and return 0. */
 unsigned int kirq_save(void)
 {
     irq_depth++;
     return 0;
 }
 
+/** Count a restore of the interrupt flag. */
 void kirq_restore(unsigned int flags)
 {
     (void)flags;
@@ -222,9 +244,11 @@ static struct netdev the_iface = {0,
 static struct netdev second_iface;
 static int ifaces = 1;
 
-static int route_available = 1;
-static unsigned route_queries;
+static int route_available = 1; /* netdev_route finds a route while set */
+static unsigned route_queries;  /* the routes netdev_route was asked for */
 
+/** Return the interface a datagram to `dst` leaves by, with `dst` itself as
+ * the next hop in `*via`, or NULL when `route_available` is clear. */
 struct netdev *netdev_route(uint32_t dst, uint32_t *via)
 {
     route_queries++;
@@ -232,17 +256,20 @@ struct netdev *netdev_route(uint32_t dst, uint32_t *via)
     return route_available ? &the_iface : 0;
 }
 
+/** Return `nd`'s one address as the source for any next hop. */
 uint32_t netdev_source(const struct netdev *nd, uint32_t hop)
 {
     (void)hop;
     return nd->ip;
 }
 
+/** Report the interfaces present: `ifaces`. */
 int netdev_count(void)
 {
     return ifaces;
 }
 
+/** Return interface `n`, counted from 0, or NULL past the last. */
 struct netdev *netdev_at(int n)
 {
     if (n == 0) {
@@ -251,14 +278,14 @@ struct netdev *netdev_at(int n)
     return n == 1 && ifaces == 2 ? &second_iface : 0;
 }
 
-/* Which addresses this machine's interfaces hold, as this test presents
- * them. */
-/* No lo here: the loopback ring counts its traffic only when there is one. */
+/** Report no loopback interface; the loopback ring counts its traffic only
+ * when there is one. */
 struct netdev *netdev_loopback(void)
 {
     return 0;
 }
 
+/** Report whether `ip` is the address of an interface present. */
 int netdev_owns(uint32_t ip)
 {
     int i;
@@ -271,6 +298,8 @@ int netdev_owns(uint32_t ip)
     return 0;
 }
 
+/** Report the all-ones address and the broadcast address of the subnet of
+ * an interface present. */
 int netdev_is_broadcast(uint32_t ip)
 {
     int i;
@@ -288,12 +317,13 @@ int netdev_is_broadcast(uint32_t ip)
     return 0;
 }
 
-/* The interfaces' answer, as `netconf.c` gives it. */
+/** Report the interfaces' broadcast addresses, as `netconf.c` does. */
 int netconf_is_broadcast(uint32_t ip)
 {
     return netdev_is_broadcast(ip);
 }
 
+/** Return the first interface. */
 struct netdev *netdev_first(void)
 {
     return &the_iface;
@@ -302,19 +332,21 @@ struct netdev *netdev_first(void)
 /* Whether the card says its link is up, as `netdev.c` judges it. */
 static int link_down;
 
+/** Report the link up unless `link_down` is set. */
 int netdev_running(struct netdev *nd)
 {
     return nd && !link_down;
 }
 
-/* What the driver answers a frame with, how many it was handed, and the card
- * and the first bytes of the last one. */
+/* What the driver answers a frame with, how many it was handed, and the
+ * length, the card and the first bytes of the last one. */
 static int tx_answer;
 static unsigned tx_frames;
 static uint16_t tx_len;
 static struct netdev *tx_card;
 static uint8_t tx_frame[64];
 
+/** Record a frame handed to the driver and answer it with `tx_answer`. */
 int netdev_tx(struct netdev *nd, const uint8_t *frame, uint16_t len)
 {
     unsigned i;
@@ -332,6 +364,8 @@ int netdev_tx(struct netdev *nd, const uint8_t *frame, uint16_t len)
  * The two files' other records are not what is under test. */
 static unsigned loop_lines;
 
+/** Count a record of subsystem "ip" whose format begins "loopback:", and
+ * discard any other. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     static const char prefix[] = "loopback:";
@@ -366,8 +400,10 @@ static int fails;
         }                                     \
     } while (0)
 
-/* Hand `len` bytes to `ethernet_rx` from the end of an allocation of exactly
-   that size, so one byte past the frame is one byte past the allocation. */
+/**
+ * Hand `len` bytes to `ethernet_rx` from an allocation of exactly that size, so
+ * that one byte past the frame is one byte past the allocation.
+ */
 static void deliver(const uint8_t *bytes, unsigned len)
 {
     uint8_t *exact = (uint8_t *)malloc(len ? len : 1);
@@ -377,13 +413,17 @@ static void deliver(const uint8_t *bytes, unsigned len)
     free(exact);
 }
 
+/** Mark the interface up and zero the counts of the layers above. */
 static void reset(void)
 {
     the_iface.up = 1;
     to_arp = to_icmp = to_udp = to_tcp = to_raw = to_packet = 0;
 }
 
-/* An Ethernet header with an IPv4 payload after it. */
+/**
+ * Write at `f` an Ethernet header to this machine's station address, from
+ * AA:AB:AC:AD:AE:AF, of EtherType `etype`; return its length, 14.
+ */
 static unsigned build_eth(uint8_t *f, uint16_t etype)
 {
     unsigned i;
@@ -397,8 +437,11 @@ static unsigned build_eth(uint8_t *f, uint16_t etype)
     return 14;
 }
 
-/* The header checksum, recomputed after a field is changed: every case below
-   changes one field and must not be dropped for the checksum as well. */
+/**
+ * Recompute the checksum of the IPv4 header at `ip` after a field is changed:
+ * every case changes one field and must not be dropped for the checksum as
+ * well.
+ */
 static void restamp(uint8_t *ip)
 {
     uint16_t sum;
@@ -410,7 +453,11 @@ static void restamp(uint8_t *ip)
     ip[11] = (uint8_t)(sum & 0xFF);
 }
 
-/* A well-formed IPv4 header at `f`, `proto` over `payload_len` bytes. */
+/**
+ * Write at `f` a well-formed IPv4 header from 10.0.2.2 to this machine,
+ * 10.0.2.15, of protocol `proto` over `payload_len` bytes; return its length,
+ * 20.
+ */
 static unsigned build_ip(uint8_t *f, uint8_t proto, unsigned payload_len)
 {
     unsigned i;
@@ -443,7 +490,11 @@ static unsigned build_ip(uint8_t *f, uint8_t proto, unsigned payload_len)
     return 20;
 }
 
-/** Check one accepted datagram at the loopback, ARP or driver boundary. */
+/**
+ * Check a datagram of `len` bytes of payload that ip_tx took, where path `path`
+ * puts it: 0 the loopback ring, 1 an ARP request and no data frame, any other
+ * the driver.
+ */
 static void check_tx_path(unsigned path, uint16_t len)
 {
     if (path == 0) {
@@ -462,7 +513,15 @@ static void check_tx_path(unsigned path, uint16_t len)
     }
 }
 
-/** Check size rejection before route lookup, ARP, queueing or transmission. */
+/**
+ * Send `len` bytes of protocol `proto` to `dst` by path `path`, and check the
+ * result. The paths are 0 this machine, 1 a next hop missing from the ARP
+ * cache, 2 one in it, 3 the limited broadcast and 4 a destination with no
+ * route. A payload past 1480 bytes is -EMSGSIZE before any route lookup, ARP,
+ * queueing or transmission; with no route the send is -ENETUNREACH; an ICMP
+ * broadcast is -EOPNOTSUPP; and anything else is taken, as check_tx_path
+ * checks.
+ */
 static void test_tx_size(unsigned path, uint32_t dst, uint8_t proto, uint16_t len)
 {
     static const uint8_t payload[65535];
@@ -522,7 +581,10 @@ static void test_tx_link_down(void)
               tx_frames == 1 && the_iface.tx_packets == 1);
 }
 
-/** Check empty, maximum and oversize payloads with ICMP and UDP protocols. */
+/**
+ * Check empty, maximum and oversize payloads of ICMP and UDP on each path of
+ * test_tx_size.
+ */
 static void test_tx_mtu(void)
 {
     static const uint32_t destinations[] = {0x0A00020Fu, 0x0A000202u, 0x0A000202u, 0xFFFFFFFFu,
@@ -543,7 +605,7 @@ static void test_tx_mtu(void)
     loop_head = loop_tail = 0;
 }
 
-volatile uint32_t kernel_ticks;
+volatile uint32_t kernel_ticks; /* the clock, 100 ticks to a second */
 
 /** A datagram sent while its next hop is missing from the ARP cache waits,
  * and leaves when the mapping is learned, once; one held past three seconds
@@ -573,7 +635,11 @@ static void test_tx_hold(void)
     CHECK("a datagram held for more than three seconds is dropped", tx_frames == 1);
 }
 
-/** Distinguish driver refusal from oversize rejection. */
+/**
+ * Check that a send the driver takes is reported sent, that one it does not
+ * take is -ENOBUFS, to be kept and sent again, and that a payload past the
+ * frame's 1500 bytes is -EMSGSIZE and reaches no driver.
+ */
 static void test_tx_errors(void)
 {
     static uint8_t big[1500];
@@ -601,8 +667,8 @@ static void test_tx_errors(void)
  * Every datagram past the last slot is refused with `-ENOBUFS`, which is what
  * lets TCP keep a refused segment and send it again, and is counted; the ring
  * keeps what it held. One line records the first refusal and no later one: a
- * line per refusal is what wrapped the kernel log and took the boot record
- * with it. A ring drained and filled past its end again writes no second line.
+ * line per refusal would wrap the kernel log and lose the boot record. A ring
+ * drained and filled past its end again writes no second line.
  * Every datagram has its own number in its first two bytes, so the drain
  * shows that the ring delivers the datagrams it took, in the order they were
  * sent, and none of those it refused.
@@ -660,7 +726,9 @@ static void test_loop_full(void)
  * A subnet's broadcast leaves by the card on that subnet, with that card's
  * address as its source, since that is the only address its answers can come
  * back to; the limited broadcast, which names no card, leaves by the first.
- * Both go to the all-ones hardware address without asking ARP.
+ * Both go to the all-ones hardware address without asking ARP. A second card
+ * masked /1 has 255.255.255.255 as its subnet's broadcast address, and the
+ * limited broadcast still leaves by the first card.
  */
 static void test_broadcast_iface(void)
 {
@@ -697,8 +765,6 @@ static void test_broadcast_iface(void)
         CHECK("to the all-ones hardware address, without ARP",
               tx_frame[0] == 0xFF && tx_frame[5] == 0xFF && arp_queries == 0);
     }
-    /* A second card masked /1 has 255.255.255.255 as its subnet's broadcast
-       address, and the limited broadcast still leaves by the first card. */
     second_iface.mask = 0x80000000u;
     tx_frames = arp_queries = 0;
     tx_card = 0;
@@ -708,6 +774,26 @@ static void test_broadcast_iface(void)
     ifaces = 1;
 }
 
+/**
+ * Run the send rows, then the receive rows, each frame built here:
+ *
+ *   * a whole UDP datagram reaches the port layer, the packet sockets and the
+ *     raw layer, and nothing else;
+ *   * a frame shorter than an Ethernet header is dropped, and one that is only
+ *     the header reaches no IP parser but is still offered to the packet
+ *     sockets, which exist to see what the IP layer drops, every reply a DHCP
+ *     client is waiting for among them;
+ *   * an interface that is down delivers nothing;
+ *   * an IPv4 header with a version other than 4, a header length below the
+ *     minimum or past the frame, a total length past the frame or below the
+ *     header, or a checksum that does not sum is dropped;
+ *   * a fragment is not delivered as a whole datagram, since this stack does
+ *     not reassemble, and a datagram addressed elsewhere is not delivered;
+ *   * ICMP and TCP reach their own parsers and the raw layer; an EtherType with
+ *     no parser reaches none; and ARP reaches the ARP parser.
+ *
+ * Returns 0 when every check passes and 1 otherwise.
+ */
 int main(void)
 {
     uint8_t f[256];
@@ -729,7 +815,6 @@ int main(void)
     CHECK("and the raw layer", to_raw == 1);
     CHECK("and nothing else", to_tcp == 0 && to_icmp == 0);
 
-    /* Ethernet: shorter than its own header, and exactly it. */
     reset();
     deliver(f, 13);
     CHECK("a frame shorter than an Ethernet header is dropped", to_packet == 0 && to_udp == 0);
@@ -738,11 +823,8 @@ int main(void)
     deliver(f, n);
     CHECK("a frame that is only an Ethernet header reaches no IP parser",
           to_udp == 0 && to_tcp == 0 && to_icmp == 0 && to_raw == 0);
-    /* Packet sockets are offered it, deliberately: they exist to see what the
-       IP layer drops, which is every reply a DHCP client is waiting for. */
     CHECK("but the packet sockets are still offered it", to_packet == 1);
 
-    /* An interface that is down receives nothing. */
     reset();
     up = 0;
     the_iface.up = 0; /* the flag the receive path reads is the interface's */
@@ -752,7 +834,6 @@ int main(void)
     CHECK("an interface that is down delivers nothing", to_udp == 0);
     up = 1;
 
-    /* IPv4: the version, the header length, the total length, the checksum. */
     reset();
     n = build_eth(f, 0x0800);
     build_ip(f + n, 17, 8);
@@ -803,8 +884,6 @@ int main(void)
     deliver(f, n + 28);
     CHECK("a header whose checksum does not sum is dropped", to_udp == 0);
 
-    /* A fragment: this stack does not reassemble, so it must not pass one on
-       as though it were whole. */
     reset();
     n = build_eth(f, 0x0800);
     build_ip(f + n, 17, 8);
@@ -813,7 +892,6 @@ int main(void)
     deliver(f, n + 28);
     CHECK("a fragment is not delivered as a whole datagram", to_udp == 0);
 
-    /* A datagram for another machine. */
     reset();
     n = build_eth(f, 0x0800);
     build_ip(f + n, 17, 8);
@@ -822,7 +900,6 @@ int main(void)
     deliver(f, n + 28);
     CHECK("a datagram addressed elsewhere is not delivered", to_udp == 0);
 
-    /* Each protocol reaches its own parser, and the raw layer sees them all. */
     reset();
     n = build_eth(f, 0x0800);
     n += build_ip(f + n, 1, 8);
@@ -836,14 +913,12 @@ int main(void)
     CHECK("TCP reaches the TCP parser", to_tcp == 1 && to_udp == 0);
     CHECK("and the raw layer sees it too", to_raw == 1);
 
-    /* An EtherType with no parser behind it. */
     reset();
     n = build_eth(f, 0x88B5);
     deliver(f, n + 20);
     CHECK("an unknown ethertype reaches no parser",
           to_udp == 0 && to_tcp == 0 && to_icmp == 0 && to_arp == 0);
 
-    /* ARP, which is the other type the switch above knows. */
     reset();
     n = build_eth(f, 0x0806);
     deliver(f, n + 28);
