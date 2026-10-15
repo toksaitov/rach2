@@ -754,7 +754,8 @@ static void external_rows(void)
     rc = system(cmd);
     rc = rc == -1 ? -1 : (rc >> 8) & 0xff;
     if (rc == 3) {
-        printf("exfat_hosttest: the gate is skipped: no newfs_exfat and hdiutil on this host\n");
+        printf("exfat_hosttest: the host volume's rows are skipped: no newfs_exfat and hdiutil on "
+               "this host\n");
         return;
     }
     check(rc == 0, "the external volume is made by the host's tools");
@@ -789,15 +790,15 @@ static void external_rows(void)
         size = atol(bar1 + 1);
         mtime = atol(bar2 + 1);
         snprintf(path, sizeof(path), "/%s", line);
-        snprintf(what, sizeof(what), "the gate: %s is found", line);
+        snprintf(what, sizeof(what), "the host volume: %s is found", line);
         n = walk(path, &err);
         check(n != 0, what);
         if (!n) {
             continue;
         }
         snprintf(what, sizeof(what),
-                 "the gate: %s has %ld bytes and its modification time within two seconds", line,
-                 size);
+                 "the host volume: %s has %ld bytes and its modification time within two seconds",
+                 line, size);
         check(OPS->getattr(&mnt, n, &st) == 0 && (long)st.size == size && st.mtime_sec <= mtime &&
                   st.mtime_sec + 2 > mtime,
               what);
@@ -807,7 +808,7 @@ static void external_rows(void)
         if (f) {
             fclose(f);
         }
-        snprintf(what, sizeof(what), "the gate: %s reads the bytes the host wrote", line);
+        snprintf(what, sizeof(what), "the host volume: %s reads the bytes the host wrote", line);
         check(f && (long)got == size && read_all(n, back, sizeof(back)) == size &&
                   memcmp(back, want, (unsigned long)size) == 0,
               what);
