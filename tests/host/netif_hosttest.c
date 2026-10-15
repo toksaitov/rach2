@@ -43,25 +43,25 @@ extern int dprintf(int fd, const char *format, ...);
 extern int memcmp(const void *a, const void *b, __SIZE_TYPE__ n);
 
 static process_t proc;
-static fd_table_t files;
+static fd_table_t files; /* the process's table, whose entries are `table` */
 struct percpu cpu_table[NR_CPUS] = {{.current = &proc}};
 uint32_t net_ip_addr = 0x0a00020fu;
 uint8_t net_mac[6] = {0x52, 0x54, 0, 0x12, 0x34, 0x56};
-static struct netdev cards[2];
-static struct socket sock;
+static struct netdev cards[2]; /* eth0 and eth1, indices 1 and 2 */
+static struct socket sock;     /* the socket of descriptor 3 */
 static struct tcb control;
-static fd_entry_t entry;
+static fd_entry_t entry; /* descriptor 3 */
 static struct open_file description;
-static uint8_t user[128];
+static uint8_t user[128]; /* user memory; a pointer is an offset */
 static int failures;
-static int waits;
-static int alloc_to = -1;
-static int takes;
-static struct socket made;
+static int waits;          /* waits that would have blocked */
+static int alloc_to = -1;  /* what fd_alloc returns; -1 forbids it */
+static int takes;          /* receives that took data */
+static struct socket made; /* the socket socket_alloc gives */
 static fd_entry_t table[8];
 static struct open_file made_description;
-static void (*copy_sleep)(void);
-static int sibling_found = -1;
+static void (*copy_sleep)(void); /* run once by the next copy in */
+static int sibling_found = -1;   /* what close_four found, or -1 */
 
 #define CHECK(condition, detail)                          \
     do {                                                  \
@@ -71,9 +71,9 @@ static int sibling_found = -1;
         }                                                 \
     } while (0)
 
-/** Copy a simulated user range, refusing null and out-of-arena pointers. A
- * row may arm `copy_sleep`, the call another thread makes while the copy
- * sleeps in a page fault, which runs once before the copy. */
+/** Copy a range of `user`, failing with EFAULT for a null pointer or one past
+ * the arena. A row may arm `copy_sleep`, the call another thread makes while
+ * the copy sleeps in a page fault, which runs once before the copy. */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     unsigned long at = (unsigned long)src;
@@ -90,7 +90,7 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
     return 0;
 }
 
-/** Copy back into the same simulated user address space. */
+/** Copy into a range of `user`, failing as copy_from_user does. */
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
     unsigned long at = (unsigned long)dst;
@@ -102,8 +102,8 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
     return 0;
 }
 
-/** The descriptor each row works on, 3, or one of the table the creating
- * rows fill; a slot that is free or only reserved is no descriptor. */
+/** Return descriptor 3, which each row works on, or a slot of `table` that
+ * the creating rows fill; a slot that is free or only reserved gives NULL. */
 fd_entry_t *fd_get(fd_table_t *fds, int fd)
 {
     if (fd == 3) {
@@ -112,9 +112,9 @@ fd_entry_t *fd_get(fd_table_t *fds, int fd)
     return fds == &files && fd >= 0 && fd < 8 && table[fd].type != FD_TYPE_NONE ? &table[fd] : NULL;
 }
 
-/** Descriptor 4 for the socket rows that create one, or the refusal
- * `alloc_to` has for the row that is refused one; an `alloc_to` of -1 is
- * for the rows that may not allocate, which invalid accepts are. */
+/** Return `alloc_to`: descriptor 4 for the rows that make a socket, or the
+ * error of the row that is denied one. An `alloc_to` of -1 marks the rows
+ * that must not allocate, the invalid accepts, and fails the row. */
 int fd_alloc(fd_table_t *fds)
 {
     (void)fds;
@@ -122,7 +122,8 @@ int fd_alloc(fd_table_t *fds)
     return alloc_to;
 }
 
-/** The one socket record the creating rows make. */
+/** Return `made`, cleared and of type `type`: the one socket record the
+ * creating rows make. */
 struct socket *socket_alloc(int type)
 {
     k_memset(&made, 0, sizeof(made));
@@ -130,7 +131,7 @@ struct socket *socket_alloc(int type)
     return &made;
 }
 
-/** No row makes a raw ICMP socket. */
+/** Fail the row and return -ENOBUFS: no row makes a raw socket. */
 int raw_register(struct socket *s, uint8_t proto)
 {
     (void)s;
@@ -139,7 +140,8 @@ int raw_register(struct socket *s, uint8_t proto)
     return -ENOBUFS;
 }
 
-/** Required by the accept error path, which these rows must not reach. */
+/** Fail the row: only accept's error path frees a descriptor here, and no
+ * row reaches it. */
 int fd_free(fd_table_t *table, int fd)
 {
     (void)table;
@@ -148,29 +150,30 @@ int fd_free(fd_table_t *table, int fd)
     return 0;
 }
 
-/** Required by the accept error path. */
+/** Fail the row: only accept's error path releases a descriptor here. */
 void fd_release_backing(fd_entry_t *e)
 {
     (void)e;
     CHECK(0, "invalid accept must not release a descriptor");
 }
 
-/** The user range a receive checks: inside the simulated user memory. */
+/** Report whether the user range a receive checks lies inside `user`. */
 int user_buffer_ok(uintptr_t addr, size_t len, int write)
 {
     (void)write;
     return addr && addr <= sizeof(user) && len <= sizeof(user) - addr;
 }
 
-/** No row's socket is the query descriptor. */
+/** Report that a socket is not the query descriptor, the raw socket a DHCP
+ * client opens for the interface ioctls; no row makes one. */
 int sock_is_query(const struct socket *s)
 {
     (void)s;
     return 0;
 }
 
-/** Count the receives that take a datagram or a stream's bytes, each of
- * which finds one byte; a peek takes nothing. */
+/** Receive one byte from the first interface's address, port 7, and count
+ * the receive unless it is a peek. */
 int socket_recv(struct socket *s, uint8_t *buf, int len, uint32_t *src_ip, uint16_t *src_port,
                 int peek)
 {
@@ -183,12 +186,14 @@ int socket_recv(struct socket *s, uint8_t *buf, int len, uint32_t *src_ip, uint1
     return 1;
 }
 
+/** Receive without waiting, as socket_recv does. */
 int socket_try_recv(struct socket *s, uint8_t *buf, int len, uint32_t *src_ip, uint16_t *src_port,
                     int peek)
 {
     return socket_recv(s, buf, len, src_ip, src_port, peek);
 }
 
+/** Receive one byte of a stream and count the receive unless it is a peek. */
 int socket_tcp_recv(struct socket *s, uint8_t *buf, int len, int peek)
 {
     (void)s;
@@ -198,21 +203,22 @@ int socket_tcp_recv(struct socket *s, uint8_t *buf, int len, int peek)
     return 1;
 }
 
+/** Receive from a stream without waiting, as socket_tcp_recv does. */
 int socket_tcp_try_recv(struct socket *s, uint8_t *buf, int len, int peek)
 {
     return socket_tcp_recv(s, buf, len, peek);
 }
 
-/** Required by the accept allocation failure path. */
+/** Fail the row: no row releases a socket. */
 void socket_unref(struct socket *s)
 {
     (void)s;
     CHECK(0, "invalid accept must not release a socket");
 }
 
-/** A wait for a condition already true returns at once, as the real one
- * does; any other returns EINTR, so a missing accept check fails without
- * hanging. */
+/** Return 0 at once when `ready` is true, as the kernel's wait does;
+ * otherwise count the wait and return -EINTR, so a row that would block, such
+ * as an accept with a check missing, fails without hanging. */
 int wq_wait_event(wait_queue_t *q, int (*ready)(void *), void *arg)
 {
     (void)q;
@@ -223,8 +229,8 @@ int wq_wait_event(wait_queue_t *q, int (*ready)(void *), void *arg)
     return -EINTR;
 }
 
-static wait_queue_t *woken;
-static uint32_t woken_kinds;
+static wait_queue_t *woken;  /* the queue wq_wake last named */
+static uint32_t woken_kinds; /* the WQ_ kinds of every wake, or-ed together */
 
 /** Record the queue a receive wakes and the kinds of change it names; no
  * process waits in this model. */
@@ -234,31 +240,32 @@ void wq_wake(wait_queue_t *q, uint32_t kinds)
     woken_kinds |= kinds;
 }
 
-/** A wake of every kind of change. */
+/** Record a wake of `q` for every kind of change. */
 void wq_wake_all(wait_queue_t *q)
 {
     wq_wake(q, WQ_ALL);
 }
 
-/** No interrupt can enter a native row. */
+/** Take the network lock: a no-op, since no interrupt runs in this model. */
 uint32_t net_lock(void)
 {
     return 0;
 }
 
-/** Restore the native row's unchanged interrupt state. */
+/** Release the network lock: a no-op. */
 void net_unlock(uint32_t flags)
 {
     (void)flags;
 }
 
-/** The model has two independently named interfaces. */
+/** Return the first interface's address as the source for any destination. */
 uint32_t ip_source(uint32_t dst)
 {
     (void)dst;
     return net_ip_addr;
 }
 
+/** Report the model's two interfaces. */
 int netdev_count(void)
 {
     return 2;
@@ -270,19 +277,19 @@ int netdev_seen_count(void)
     return netdev_count();
 }
 
-/** Match the registry's zero-based lookup. */
+/** Return interface `n`, counted from 0, or NULL for any `n` past the two. */
 struct netdev *netdev_at(int n)
 {
     return n >= 0 && n < 2 ? &cards[n] : NULL;
 }
 
-/** Report the first interface for packet transmit's default path. */
+/** Return the first interface, where a packet socket bound to none sends. */
 struct netdev *netdev_first(void)
 {
     return &cards[0];
 }
 
-/** Resolve only complete interface names. */
+/** Return the interface whose name is the whole of `name`, or NULL. */
 struct netdev *netdev_by_name(const char *name)
 {
     int i;
@@ -295,7 +302,7 @@ struct netdev *netdev_by_name(const char *name)
     return NULL;
 }
 
-/** These rows do not transmit packets. */
+/** Fail the row and return NETDEV_TX_OK: no row sends a frame. */
 int ethernet_tx(struct netdev *nd, const uint8_t *dst, uint16_t type, const uint8_t *data,
                 uint16_t len)
 {
@@ -308,7 +315,8 @@ int ethernet_tx(struct netdev *nd, const uint8_t *dst, uint16_t type, const uint
     return NETDEV_TX_OK;
 }
 
-/** No test frame fills a packet queue. */
+/** Discard a kernel log record; packet.c logs a full queue, and no row fills
+ * one. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -316,7 +324,9 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
-/** Set and read a device name, including refusal and clearing. */
+/** Set and read SO_BINDTODEVICE: an interface's name binds its index, an
+ * unknown name fails with ENODEV and keeps the binding, and an empty name
+ * clears it. */
 static void device_option(void)
 {
     k_memcpy(user + 16, "eth1", 5);
@@ -336,7 +346,12 @@ static void device_option(void)
     CHECK(!sock.bound_device && SC_LE32(user + 8) == 1 && !user[32], "device is clear");
 }
 
-/** Report packet bindings and preserve sockaddr truncation and length rules. */
+/**
+ * Check getsockname on a packet socket bound to each interface and to none:
+ * the index, family, protocol and hardware address, the length of 20 given
+ * back whole when the buffer is smaller and the address cut to fit, and an
+ * index of 0 once unbound.
+ */
 static void packet_names(void)
 {
     int index;
@@ -371,8 +386,9 @@ static void packet_names(void)
     CHECK(do_getsockname(3, 32, 8) == 0 && SC_LE32(user + 36) == 0, "unbound packet index is zero");
 }
 
-/** A frame queued for a bound packet socket wakes its queue for data alone,
- * so an edge-triggered epoll registration for output is not told of it. */
+/** Check that a frame queued for a bound packet socket wakes its queue for
+ * data alone, so an edge-triggered epoll registration for output gets no
+ * event from it. */
 static void packet_wake(void)
 {
     static uint8_t frame[ETH_HDR_SIZE + 28];
@@ -413,7 +429,9 @@ static void inet_names(void)
     sock.local_ip = 0;
 }
 
-/** Reject invalid accept calls before either waiting or checking nonblock. */
+/** Check that accept fails a datagram, unlistening or raw socket, and an
+ * unknown accept4 flag, at once, before it waits or allocates, with or without
+ * O_NONBLOCK; and that an empty nonblocking listener gives EAGAIN. */
 static void invalid_accept(void)
 {
     int nonblock;
@@ -572,8 +590,7 @@ static void accept_reserved(void)
     alloc_to = -1;
 }
 
-/** Run the four syscall contracts against distinct addresses and MACs. */
-/** No row opens a netlink socket. */
+/** Fail with EPROTONOSUPPORT: no row opens a netlink socket. */
 int netlink_open(struct socket *sock, int protocol)
 {
     (void)sock;
@@ -581,12 +598,15 @@ int netlink_open(struct socket *sock, int protocol)
     return -EPROTONOSUPPORT;
 }
 
+/** Write no netlink address: no row opens a netlink socket. */
 void netlink_name(struct socket *sock, uint8_t *sa)
 {
     (void)sock;
     (void)sa;
 }
 
+/** Set up eth0 and eth1, with distinct addresses and station addresses, and
+ * descriptor 3, then run the rows; return 0 when every one passes. */
 int main(void)
 {
     int i;
