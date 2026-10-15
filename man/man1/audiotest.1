@@ -24,7 +24,8 @@ The program opens
 .Pa /dev/console
 explicitly, so it works from an SSH session with a pty.
 It requires HDA or Sound Blaster 16; the PC speaker is refused.
-It retries short writes and fails after five seconds without queue progress.
+It retries short writes and fails after five seconds without queue progress,
+or when the monotonic clock cannot be read.
 After queuing the samples it waits two seconds for the queue and DMA buffers,
 then stops playback.
 Signals INT, TERM and HUP also stop playback.

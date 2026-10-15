@@ -61,16 +61,22 @@ static unsigned number(const char *text, unsigned low, unsigned high)
 }
 
 /**
- * The monotonic clock in milliseconds, or 0 when it cannot be read. The value
- * wraps, so a caller uses only the difference of two readings.
+ * Store the monotonic clock in milliseconds in `*value`. The value wraps, so a
+ * caller uses only the difference of two readings.
+ *
+ * Returns 0, or -1 with the failure reported on standard error when the clock
+ * cannot be read.
  */
-static unsigned milliseconds(void)
+static int milliseconds(unsigned *value)
 {
     struct timespec now;
 
-    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
-        return 0;
-    return (unsigned)now.tv_sec * 1000u + (unsigned)now.tv_nsec / 1000000u;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+        perror("audiotest: clock");
+        return -1;
+    }
+    *value = (unsigned)now.tv_sec * 1000u + (unsigned)now.tv_nsec / 1000000u;
+    return 0;
 }
 
 /**
@@ -83,16 +89,19 @@ static unsigned milliseconds(void)
  * taken is a failure. After the last frame it sleeps two seconds, so that the
  * driver plays what it has queued before the caller stops the stream.
  *
- * Returns 0 when every frame was written, or -1 on a failed write, a stall or
- * a signal; each failure but the signal is reported on standard error.
+ * Returns 0 when every frame was written, or -1 on a failed write, a stall, a
+ * clock that cannot be read or a signal; each failure but the signal is
+ * reported on standard error.
  */
 static int play_tone(int fd, unsigned rate, unsigned seconds, unsigned frequency)
 {
     int16_t samples[512];
     unsigned remaining = rate * seconds;
     unsigned phase = 0;
-    unsigned last_progress = milliseconds();
+    unsigned last_progress, now;
 
+    if (milliseconds(&last_progress) < 0)
+        return -1;
     while (remaining && !interrupted) {
         unsigned frames = remaining < 256 ? remaining : 256;
         unsigned i, offset = 0;
@@ -117,11 +126,13 @@ static int play_tone(int fd, unsigned rate, unsigned seconds, unsigned frequency
                 fprintf(stderr, "audiotest: invalid write count\n");
                 return -1;
             }
+            if (milliseconds(&now) < 0)
+                return -1;
             if (written) {
                 offset += (unsigned)written;
-                last_progress = milliseconds();
+                last_progress = now;
             } else {
-                if (milliseconds() - last_progress >= 5000) {
+                if (now - last_progress >= 5000) {
                     fprintf(stderr, "audiotest: no playback progress\n");
                     return -1;
                 }
@@ -145,8 +156,8 @@ static int play_tone(int fd, unsigned rate, unsigned seconds, unsigned frequency
  * the program opens `/dev/console` rather than using its standard output,
  * which lets it run from an SSH session's pseudo-terminal. It needs a PCM
  * driver; the PC speaker plays no samples. The status is 0 when the tone
- * played to its end, and 1 on a usage error, no PCM driver, a failed request
- * or a signal.
+ * played to its end, and 1 on a usage error, no PCM driver, a failed request,
+ * a clock that cannot be read or a signal.
  */
 int main(int argc, char **argv)
 {
