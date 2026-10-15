@@ -527,7 +527,6 @@ tests/krffsprobe.c:probe_main lines 305 a probe, one sequence of steps in the or
 tests/krffsprobe.c:write_rows complexity 84 a probe, one sequence of steps in the order the log records them
 tests/krffsprobe.c:write_rows lines 392 a probe, one sequence of steps in the order the log records them
 
-tests/lagprobe.c:probe_main complexity 28 a probe, one sequence of steps in the order the log records them
 tests/lagprobe.c:run_mounted complexity 30 a probe, one sequence of steps in the order the log records them
 tests/lagprobe.c:run_mounted lines 103 a probe, one sequence of steps in the order the log records them
 

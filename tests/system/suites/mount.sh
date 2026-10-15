@@ -303,4 +303,30 @@ else
     fail "the hog boot"
 fi
 
+# ---- 15: as 9, but the write the device fails comes after the dirty flag
+#          is on the disk: the mount goes read-only, unmounts, and leaves
+#          the flag set. A copy of the disk, so no later boot meets a dirty
+#          volume ----
+cp "$DISK" "$DISK.late" || fail "copy the disk"
+if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --drive "file=$DISK.late,format=raw,if=ide,index=0,media=disk" \
+    --append "rach2.blocklag=3 rach2.blockfail=12 rach2.rescue" \
+    --timeout 90 --steptmo 60 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
+    --log "$DISK.latefail.log" \
+    "expect=Type 'help'" "send=exec /lagprobe latefail" \
+    "expect=LAGPROBE" > /dev/null 2>&1 && grep -aq 'vfs: read-only: /lb' "$DISK.latefail.log"; then
+    echo "mount-test: a mount whose device failed a write after the dirty flag unmounts: OK"
+else
+    fail "the latefail boot"
+fi
+# Byte 65 of a FAT32 boot sector, bit 0: the volume's dirty flag.
+flag=$(od -An -tu1 -j $((51380224 + 65)) -N1 "$DISK.late" | tr -d ' ')
+if [ $((flag % 2)) -eq 1 ]; then
+    echo "mount-test: the volume is left marked dirty: OK"
+else
+    fail "the volume is not marked dirty after the failed write (byte 65 is $flag)"
+fi
+rm -f "$DISK.late"
+
 echo "mount-test: PASS"

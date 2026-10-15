@@ -1924,7 +1924,7 @@ static int fat_sync(struct vfs_mount *mnt)
     struct fat_mount *fm = fm_of(mnt);
     int rc;
 
-    if (!fm->writable) {
+    if (!fm->writable || (mnt->flags & VFS_MS_RDONLY)) {
         return 0;
     }
     vfs_ns_lock(mnt); /* a first mutation's flag writes may be in flight */

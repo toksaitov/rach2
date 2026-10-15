@@ -28,6 +28,10 @@
  * mounted volume fails, the mount goes read-only, /proc/mounts says so,
  * and the next write answers EROFS.
  *
+ * `lagprobe latefail`, under a later `rach2.blockfail`: a file is created,
+ * so the volume's dirty flag is on the disk, and written and synced until a
+ * write fails; the mount goes read-only, and it unmounts.
+ *
  * `lagprobe writers`: two children write files on the lagged volume while
  * the parent syncs it; each file reads back as its own bytes.
  *
@@ -412,32 +416,18 @@ static void run_root(void)
     puts("LAGPROBE OK");
 }
 
-/* `lagprobe blockfail`, under `rach2.blocklag=3 rach2.blockfail=3`: the
-   third write through the lag fails, which is inside the first write to
-   the mounted volume; the mount goes read-only with a record, /proc/mounts
-   says `ro`, and the next write answers EROFS. */
-static void run_blockfail(void)
+/* Whether /proc/mounts says the mount on /lb is `ro`. */
+static int lb_read_only(void)
 {
     static char text[1024];
     int fd, n, i, ro = 0;
 
-    if (syscall2(SYS_MKDIR, (long)"/lb", 0755) != 0) {
-        fail("mkdir /lb");
-    }
-    if (syscall5(SYS_MOUNT, (long)"/dev/disk0p2", (long)"/lb", (long)"vfat", 0, 0) != 0) {
-        fail("the writable mount through the lag");
-    }
-    fd = syscall3(SYS_OPEN, (long)"/lb/FAIL.TXT", O_WRONLY | O_CREAT, 0644);
-    if (fd >= 0) {
-        syscall1(SYS_CLOSE, fd);
-        fail("the first write to the volume did not fail");
-    }
     fd = syscall3(SYS_OPEN, (long)"/proc/mounts", O_RDONLY, 0);
     n = fd < 0 ? -1 : syscall3(SYS_READ, fd, (long)text, (int)sizeof(text) - 1);
     syscall1(SYS_CLOSE, fd);
     if (n <= 0) {
         fail("read /proc/mounts");
-        return;
+        return 0;
     }
     text[n] = 0;
     for (i = 0; i + 8 < n; i++) {
@@ -453,7 +443,29 @@ static void run_blockfail(void)
             }
         }
     }
-    if (!ro) {
+    return ro;
+}
+
+/* `lagprobe blockfail`, under `rach2.blocklag=3 rach2.blockfail=3`: the
+   third write through the lag fails, which is inside the first write to
+   the mounted volume; the mount goes read-only with a record, /proc/mounts
+   says `ro`, and the next write answers EROFS. */
+static void run_blockfail(void)
+{
+    int fd;
+
+    if (syscall2(SYS_MKDIR, (long)"/lb", 0755) != 0) {
+        fail("mkdir /lb");
+    }
+    if (syscall5(SYS_MOUNT, (long)"/dev/disk0p2", (long)"/lb", (long)"vfat", 0, 0) != 0) {
+        fail("the writable mount through the lag");
+    }
+    fd = syscall3(SYS_OPEN, (long)"/lb/FAIL.TXT", O_WRONLY | O_CREAT, 0644);
+    if (fd >= 0) {
+        syscall1(SYS_CLOSE, fd);
+        fail("the first write to the volume did not fail");
+    }
+    if (!lb_read_only()) {
         fail("the mount whose device failed a write is not read-only in /proc/mounts");
     }
     if (syscall3(SYS_OPEN, (long)"/lb/AGAIN.TXT", O_WRONLY | O_CREAT, 0644) != -EROFS) {
@@ -461,6 +473,50 @@ static void run_blockfail(void)
     }
     if (syscall2(SYS_UMOUNT2, (long)"/lb", 0) != 0) {
         fail("umount2 of the read-only mount");
+    }
+    puts("LAGPROBE OK");
+}
+
+/* `lagprobe latefail`, under `rach2.blocklag=3 rach2.blockfail=12`: the
+   create succeeds, so the dirty flag was written; then 4 KiB at a time is
+   written and synced until the device fails a write. The mount goes
+   read-only, and the unmount succeeds; the suite then reads the dirty flag
+   from the disk, which the driver does not clear on a read-only mount. */
+static void run_latefail(void)
+{
+    static char block[4096];
+    int fd, i, rc = 0;
+
+    if (syscall2(SYS_MKDIR, (long)"/lb", 0755) != 0) {
+        fail("mkdir /lb");
+    }
+    if (syscall5(SYS_MOUNT, (long)"/dev/disk0p2", (long)"/lb", (long)"vfat", 0, 0) != 0) {
+        fail("the writable mount through the lag");
+    }
+    fd = syscall3(SYS_OPEN, (long)"/lb/LATE.TXT", O_WRONLY | O_CREAT, 0644);
+    if (fd < 0) {
+        fail("the create before the failure");
+    }
+    for (i = 0; i < (int)sizeof(block); i++) {
+        block[i] = (char)('a' + i % 26);
+    }
+    for (i = 0; i < 64 && rc == 0; i++) {
+        rc = syscall3(SYS_WRITE, fd, (long)block, (int)sizeof(block));
+        rc = rc == (int)sizeof(block) ? syscall1(SYS_FSYNC, fd) : (rc < 0 ? rc : -EIO);
+    }
+    syscall1(SYS_CLOSE, fd);
+    if (rc == 0) {
+        fail("no write to the volume failed");
+    }
+    if (!lb_read_only()) {
+        fail("the mount whose device failed a write is not read-only in /proc/mounts");
+    }
+    rc = syscall2(SYS_UMOUNT2, (long)"/lb", 0);
+    if (rc != 0) {
+        syscall3(SYS_WRITE, 1, (long)"lagprobe: umount2: errno ", 25);
+        putnum((unsigned)-rc);
+        puts("");
+        fail("umount2 of the mount that failed after its dirty flag was set");
     }
     puts("LAGPROBE OK");
 }
@@ -1086,37 +1142,41 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/* Whether the strings `a` and `b` are equal. */
+static int same(const char *a, const char *b)
+{
+    while (*a && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+static const struct {
+    const char *name;
+    void (*run)(void);
+} modes[] = {
+    {"sleep", run_sleep}, {"deadline", run_deadline},   {"mounted", run_mounted},
+    {"root", run_root},   {"blockfail", run_blockfail}, {"latefail", run_latefail},
+    {"write", run_write}, {"writers", run_writers},     {"pool", run_pool},
+    {"dead", run_dead},   {"queue", run_queue},         {"dirty", run_dirty},
+};
+
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
+    unsigned i;
 
-    if (argc >= 2 && argv[1][0] == 'd' && argv[1][1] == 'e' && argv[1][2] == 'a' &&
-        argv[1][3] == 'd' && argv[1][4] == '\0') {
-        run_dead();
-    } else if (argc >= 2 && argv[1][0] == 'd' && argv[1][1] == 'i') {
-        run_dirty();
-    } else if (argc >= 2 && argv[1][0] == 'd') {
-        run_deadline();
-    } else if (argc >= 2 && argv[1][0] == 'q') {
-        run_queue();
-    } else if (argc >= 2 && argv[1][0] == 'p') {
-        run_pool();
-    } else if (argc >= 2 && argv[1][0] == 'w' && argv[1][5] == 'r') {
-        if (argc >= 3) {
-            writers_type = argv[2];
-        }
-        run_writers();
-    } else if (argc >= 2 && argv[1][0] == 'w') {
-        run_write();
-    } else if (argc >= 2 && argv[1][0] == 'm') {
-        run_mounted();
-    } else if (argc >= 2 && argv[1][0] == 'r') {
-        run_root();
-    } else if (argc >= 2 && argv[1][0] == 'b') {
-        run_blockfail();
-    } else {
-        run_sleep();
+    if (argc >= 3) {
+        writers_type = argv[2];
     }
-    sys_exit(0);
+    for (i = 0; i < sizeof(modes) / sizeof(modes[0]); i++) {
+        if (argc < 2 ? i == 0 : same(argv[1], modes[i].name)) {
+            modes[i].run();
+            sys_exit(0);
+        }
+    }
+    fail("usage: lagprobe [sleep|deadline|mounted|root|blockfail|latefail|write|writers [TYPE]|"
+         "pool|dead|queue|dirty]");
 }
