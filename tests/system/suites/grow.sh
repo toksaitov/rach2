@@ -2,12 +2,11 @@
 # grow.sh: a root grown in place by `growroot` on the recovery system.
 #
 # The disk is 16 GiB, sparse, or the installed machine's 1953525168
-# sectors when RACH2_GROW_LENOVO is set, which is what the milestone 47
-# record ran and takes most of an hour in e2fsck over the grown volume;
-# it has a 1 GiB ext2 volume in entry 1 at sector 2048 and nothing after
-# it. Each row boots recovery on a qcow2 overlay of that disk, so the base
-# is never changed and `qemu-img map` afterwards lists exactly the sectors
-# the row wrote. The rows:
+# sectors when RACH2_GROW_LENOVO is set, which takes most of an hour in
+# e2fsck over the grown volume; it has a 1 GiB ext2 volume in entry 1 at
+# sector 2048 and nothing after it. Each row boots recovery on a qcow2
+# overlay of that disk, so the base is never changed and `qemu-img map`
+# afterwards lists exactly the sectors the row wrote. The rows:
 #
 # 1. `growroot MBRID=...,1` at the memory the grow was measured to need:
 #    the entry rewritten to the disk's end, the table read again, e2fsck,
@@ -22,8 +21,8 @@
 #    the rest.
 # 4. A machine below the memory the grow needs: refused by name before
 #    anything is read. No machine this system boots on has less than the
-#    7 MiB the grow needs, so the row runs growroot built for the host,
-#    where `/proc/meminfo` does not exist and the memory reads as none.
+#    7 MiB the grow needs, so the row runs growroot built for the host with
+#    a requirement no machine meets.
 #
 # Usage: grow.sh RKERNEL RIMAGE HARNESS MKMBR GROWSET DIR
 # RACH2_GROW_SMALL=1 runs the measured grow and restoration on 64 MiB only.
@@ -45,11 +44,11 @@ if [ "${RACH2_GROW_SMALL:-0}" = 1 ]; then
 fi
 END=$((DISK_SECTORS - START))
 ID=47470001
-# The machine the grow runs on. The grow of a 1 GiB root to this disk was
-# measured on 2026-09-07 to finish on 16 MiB, whose MemTotal, 7232 kB, is
-# what utils/growroot.c refuses below. The recovery kernel of milestone 54
-# leaves 7108 kB of 16 MiB, under that, and 23476 kB of 32 MiB, the next
-# power of two.
+# The machine the grow runs on. The grow of a 1 GiB root to the installed
+# machine's disk was measured to finish on a machine of 16 MiB whose MemTotal
+# read 7232 kB, and utils/growroot.c refuses less than 7 MiB. The recovery
+# kernel leaves 7108 kB of 16 MiB, under that, and 23476 kB of 32 MiB, the
+# next power of two.
 MEM=32
 # The kill lands inside resize2fs: the 1 GiB check takes a few seconds,
 # the grow minutes on the Lenovo's disk and seconds on the small one.
@@ -70,16 +69,18 @@ dd if="$BASE" of="$DIR/head.vol" bs=1048576 skip=1 count="$HEAD_MIB" 2>/dev/null
 "$GROWSET" --lba $START "$DIR/head.vol" $END > "$DIR/set.txt" || fail "growset"
 grep '^total\|^blocks' "$DIR/set.txt" | sed 's/^/grow-test: set: /'
 
-# The backing file's path is kept relative to the overlay, so it is given
-# absolute.
+# overlay FILE BASE: a qcow2 overlay FILE over the raw disk BASE. qemu-img
+# reads a relative backing path from the overlay's directory, so the path is
+# given absolute.
 overlay() {
     rm -f "$1"
     qemu-img create -q -f qcow2 -o cluster_size=4096 -b "$(cd "$(dirname "$2")" && pwd)/$(basename "$2")" \
         -F raw "$1" || fail "the overlay $1"
 }
-# A recovery boot on overlay $1 with $2 MiB, the log $3, then the steps.
-# Recovery gives a root shell at the console with nothing typed, so what is
-# waited for is its own first line and then the prompt.
+# boot OVERLAY MIB LOG STEP...: a recovery boot on OVERLAY with MIB MiB,
+# logged to LOG, that runs the STEPs and must print ROWDONE. Recovery gives a
+# root shell at the console with nothing typed, so the boot waits for its
+# first line and then the prompt.
 boot() {
     over=$1; mib=$2; log=$3; shift 3
     "$HARNESS" --kernel "$RKERNEL" --initrd "$RIMAGE" --qemu-arg=-cpu --qemu-arg=max \
@@ -95,8 +96,10 @@ FSCK="send=/sbin/e2fsck -fn /dev/disk0p1 > /dev/null 2>&1; echo FSCK\"\"\$?"
 # ---- 1: the grow, its writes inside the set, and a file near the end ----
 grep -aq 'growroot: measure:' "$RIMAGE" || fail "the recovery image has no grow measurements"
 overlay "$DIR/one.qcow2" "$BASE"
-# The wrappers live only in this boot's RAM root and invoke the real tools.
-# Encode one small script for the console; no ext2 binary is copied in RAM.
+# The wrappers, tests/system/fixtures/grow_tool.sh, live only in this boot's
+# RAM root and run the real tools between two readings of the disk's
+# counters. The script is typed at the console in base64, 160 characters a
+# line.
 set -- 'send=: > /tmp/grow-tool.b64' 'expect=~ #'
 for chunk in $(base64 < "$REPO/tests/system/fixtures/grow_tool.sh" | tr -d '\n' | fold -w 160); do
     set -- "$@" "send=echo '$chunk' >> /tmp/grow-tool.b64" 'expect=~ #'

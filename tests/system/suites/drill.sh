@@ -1,35 +1,32 @@
 #!/usr/bin/env sh
 
 #
-# drill_test.sh: the recovery drill, end to end on one disk.
+# drill.sh: the recovery drill, end to end on one disk.
 #
-# This is the day the machine's root will not mount. Nobody is going to open the
-# case, so the repair has to arrive over the network, and the only thing that
-# can write a partition nothing is mounting is a kernel that boots from
-# somewhere else. That is what partition 2 has: the recovery build, which is
-# the only one whose /dev/disk0 accepts a write, and a RAM image with an SSH
-# server and the repair tools in it.
+# The drill is a machine whose root will not mount and whose case nobody
+# opens, so the repair arrives over the network, and only a kernel that boots
+# from somewhere else can write a partition nothing is mounting. Partition 2
+# has that: the recovery build, the only one whose /dev/disk0 accepts a
+# write, and a RAM image with an SSH server and the repair tools in it. The
+# root is the ext2 volume on partition 3, which the candidate entries boot.
 #
-# Five boots of one disk. The first is the machine as it shipped, and it proves
-# the everyday kernel cannot write its own disk: `reflash` is refused, a shell
-# redirect into the device opens and its first write is refused, and the
-# disk's first sector is compared byte for byte afterwards so the refusal is
-# shown to have written nothing, not merely to have printed something. Then
-# the root's first sector is destroyed from the host, with the machine
-# stopped, and the second boot must fail to mount rather than answer
-# anything. The third arms the recovery entry in the environment block and
-# boots it: recovery comes up on partition 2, takes an address, and answers
-# SSH with nothing typed at the console. The whole root partition then
-# arrives through one `ssh` pipe, and the host hashes what it sent against
-# what the machine reports written. The last boot is the ordinary entry
-# again, which must mount and offer a login.
+# The machine as it shipped must not write its own disk: `reflash` is refused,
+# a shell redirect into the device is refused, and the disk's first sector is
+# compared byte for byte afterwards, so the refusal is shown to have written
+# nothing. Then the root's superblock is destroyed from the host, with the
+# machine stopped, and the next boot must fail to mount, in the ext2 driver's
+# words, rather than answer anything. The recovery entry is armed in the
+# environment block and booted: recovery comes up on partition 2, takes an
+# address, and answers SSH with nothing typed at the console. The whole root
+# partition then arrives through one `ssh` pipe, and the host hashes the disk
+# against the image it sent. Recovery saved as the default must come back
+# after a power cut, and the ordinary entry must then mount the repaired root
+# and offer a login. The last boots show that a recovery entry that will not
+# load falls back to partition 1, that recovery on a network with no DHCP
+# server takes its fixed address, and that a destroyed partition 1 still
+# reaches recovery through the core image.
 #
-# Usage: drill_test.sh <grub-disk> <root password> <ssh port>
-#
-# third partition and the candidate entries boot it: the root destroyed,
-# refused and rewritten is that one, the boot that must fail says so in the
-# ext2 driver's words, and the saved default stays the candidate through the
-# repair, so the last boot mounts the ext2 root again.
+# Usage: drill.sh <grub-disk> <root password> [ssh port] [recovery image]
 #
 
 # The build tree and the emulator of the architecture
@@ -73,6 +70,8 @@ LOG=""
 QPID=""
 FPID=""
 
+# cleanup_boot: stop the machine and its feeder and remove the FIFO; safe to
+# call twice, since each pid is cleared before it is signalled.
 cleanup_boot() {
     qpid="$QPID"
     fpid="$FPID"
@@ -89,6 +88,7 @@ cleanup_boot() {
     rm -f "$FEED"
 }
 
+# cleanup: stop the boot and remove the working disk, the images and the logs.
 cleanup() {
     cleanup_boot
     rm -f "$WORK" "$FEED" "$STEPS" "$ROOTIMG" "$KNOWN" "$DISK".log* \
@@ -100,6 +100,8 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 
+# fail REASON: keep the failing boot's log as $DISK.fail.log, stop the boot,
+# print REASON and exit 1.
 fail() {
     if [ -n "$LOG" ] && [ -f "$LOG" ]; then
         cp "$LOG" "$DISK.fail.log" 2>/dev/null || true
@@ -110,10 +112,10 @@ fail() {
     exit 1
 }
 
-# Wait up to $3 seconds until the log has at least $2 occurrences of $1.
+# wait_count PATTERN COUNT SECONDS: wait up to SECONDS until the log has at
+# least COUNT occurrences of PATTERN; return 1 if it does not. The wait is cut
+# to what is left of the run's deadline, and passing that deadline fails.
 wait_count() {
-    # The wait's bound is its own or what is left of the run's budget,
-    # whichever is less, so a run cannot pass its deadline inside a wait.
     remaining=$((START + DEADLINE - $(date +%s)))
     if [ "$remaining" -le 0 ]; then
         fail "the run passed its ${DEADLINE}s deadline waiting for $1"
@@ -133,8 +135,8 @@ step() {
     printf '%s\t%s\t%s\n' "$2" "$1" "$3" >> "$STEPS"
 }
 
-# Boot $WORK on the current $STEPS, with the SSH port forwarded when $1 is
-# `net`; $LOG must be set by the caller.
+# boot_feed [net]: boot $WORK, logged to $LOG, and feed it the lines of $STEPS
+# in the background, with the SSH port forwarded when the argument is `net`.
 boot_feed() {
     rm -f "$FEED"
     mkfifo "$FEED"
@@ -163,7 +165,8 @@ boot_feed() {
     FPID=$!
 }
 
-# A watch-only boot: no feed, a bounded wait for $1.
+# boot_watch PATTERN: boot $WORK with no input, logged to $LOG, wait up to 100
+# seconds for PATTERN, and stop the machine; fail if it does not come.
 boot_watch() {
     rm -f "$FEED"
     mkfifo "$FEED"
@@ -177,10 +180,10 @@ boot_watch() {
     cleanup_boot
 }
 
-# Wait until the recovery machine answers a key login with the lease its
-# service log records: its console says the image booted before its server
-# listens, and a connection then is reset at the key exchange. 1 when it never
-# answers.
+# reachable: wait until the recovery machine answers a key login with the
+# lease its service log records; return 1 when it never does. The console
+# says the image booted before its server listens, and a connection then is
+# reset at the key exchange, so the console is not waited on.
 reachable() {
     i=0
     while :; do
@@ -196,7 +199,8 @@ reachable() {
     done
 }
 
-# ssh into the machine as root by key, with nothing of the runner's own offered.
+# machine COMMAND: run COMMAND on the machine as root by key, with none of the
+# runner's own keys offered, and print what it printed.
 machine() {
     ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
         -o "ConnectTimeout=$(scaled 20)" -o BatchMode=yes -o IdentitiesOnly=yes \
@@ -204,6 +208,8 @@ machine() {
         -i "$REPO/krffs/rach2_demo_ed25519" -p "$PORT" root@localhost "$1" 2>&1
 }
 
+# sha256_of FILE: print the SHA-256 of FILE, building the tree's own sha256
+# tool first if it is missing.
 sha256_of() {
     if [ ! -x "$REPO/build/tools/verify/sha256" ]; then
         mkdir -p "$REPO/build/tools/verify"
@@ -218,15 +224,12 @@ cp "$DISK" "$WORK"
 
 # The root partition's extent, read off the disk's own table rather than
 # recomputed from the sizes the build was given: what is about to be destroyed
-# and rewritten has to be the partition the machine actually mounts.
-# An ext2 root holds a claim on its partition, so the whole-disk window refuses
-# to open for writing at all, with EBUSY, before the build's rule could refuse
-# the write: reflash cannot open the device and the shell cannot open its
-# redirection.
+# and rewritten has to be the partition the machine mounts.
 #
-# There was a second root type here until 2026-09-14, a KRFFS partition that
-# the fallback entry booted, and this suite ran twice to cover both. The disk
-# has one root now, so it runs once.
+# A mounted ext2 root holds a claim on its partition, so the whole-disk window
+# refuses to open for writing at all, with EBUSY, before the build's rule
+# could refuse the write: reflash cannot open the device and the shell cannot
+# open its redirection.
 ROOT_GONE="has no ext2 file system this kernel mounts"
 ROOT_UP="ext2: root:"
 REFUSED_TOOL="Resource busy"
@@ -240,10 +243,10 @@ if [ -z "$ROOT_OFF" ] || [ -z "$ROOT_BYTES" ]; then
     fail "the root partition's extent could not be read from the table"
 fi
 
-# The environment block, rewritten in place at the offset the disk has it,
-# arming the recovery entry for the next boot: 1024 bytes, the lines below
-# and a '#' fill, the way grub-editenv writes one. An operator arms this
-# from the console; a machine that cannot mount its root cannot.
+# arm_recovery DISK: rewrite the environment block of DISK in place, arming
+# the recovery entry for the next boot: 1024 bytes, the lines below and a '#'
+# fill, the way grub-editenv writes one. An operator arms this from the
+# console; a machine that cannot mount its root cannot.
 arm_recovery() {
     at="$("$REPO/build/tools/inspect/binfind" --offset \
         '# GRUB Environment Block' "$1")" || \
@@ -252,8 +255,7 @@ arm_recovery() {
         printf '# GRUB Environment Block\n'
         printf '# WARNING: Do not edit this file by tools other than grub-editenv!!!\n'
         printf 'next_entry=recovery\n'
-        # The root is the candidate's, so the saved default stays there and the
-        # boot after the repair mounts the root that was repaired.
+        # The repaired root is the candidate's, so the saved default stays.
         printf 'saved_entry=candidate\n'
     } > "$1.env"
     n="$(wc -c < "$1.env" | tr -d ' ')"
@@ -263,7 +265,7 @@ arm_recovery() {
     rm -f "$1.env"
 }
 
-# Zero `$3` bytes at the start of partition `$2` of the disk `$1`.
+# wipe_partition DISK N BYTES: zero BYTES at the start of partition N of DISK.
 wipe_partition() {
     at="$("$REPO/build/tools/image/mkmbr" --list "$1" |
         awk -v want="$2" '$1 == want { print $3; exit }')"
@@ -357,10 +359,10 @@ LOG="$DISK.log.recovery"
 boot_feed net
 wait_count "recovery image" 1 200 || fail "the recovery entry never came up"
 # Nothing is typed at that console: the image starts its own server, and the
-# key login is what says the machine is reachable. The lease itself is read from
-# the machine, since init gives what it starts `/var/log/services` rather than
-# the console; answering at all is the other half of the proof, because this
-# connection runs over the address that lease gave.
+# key login says the machine is reachable. The lease is read from the
+# machine, since init gives what it starts `/var/log/services` rather than the
+# console; the answer itself also shows the lease, because this connection
+# runs over the address that lease gave.
 reachable || fail "recovery never took an address"
 
 OUT="$(machine 'test -b /dev/disk0 && echo DISK""NODE' || true)"
@@ -402,11 +404,11 @@ case "$OUT" in
     *) fail "the repair did not report the whole length written: $OUT" ;;
 esac
 
-# The bytes on the platter are compared, not the bytes the writer believes it
-# sent, and they are read from the disk file on the host: hashing the whole
-# root on an emulated 32-bit processor costs minutes, and a check that reads
-# through the machine's own driver would be judging the writer with the
-# reader that is under test beside it.
+# The bytes on the disk are compared, not the count the writer reports, and
+# they are read from the disk file on the host: hashing the whole root on an
+# emulated 32-bit processor costs minutes, and a check that read through the
+# machine's own driver would test the writer with a reader that is under test
+# beside it.
 machine 'sync' > /dev/null 2>&1 || true
 OUT="$(dd if="$WORK" bs=512 skip="$((ROOT_OFF / 512))" count="$((ROOT_BYTES / 512))" status=none \
     | shasum -a 256 | awk '{print $1}')"
@@ -470,9 +472,9 @@ grep -aq "$ROOT_UP" "$LOG" || \
 # A recovery payload that will not load must not stop the machine. GRUB does not
 # put `root` back when an entry fails, and the recovery entry sets it to
 # partition 2, so a fallback that assumed the root it started with would look
-# for the ordinary kernel there and fail too. Every entry names its own root for
-# that reason, and this is the proof: partition 2 is destroyed on a copy, the
-# recovery entry is armed, and the machine must fall back to a kernel on
+# for the ordinary kernel there and fail too. Every entry names its own root
+# for that reason, and this row tests it: partition 2 is destroyed on a copy,
+# the recovery entry is armed, and the machine must fall back to a kernel on
 # partition 1 and mount its ext2 root from partition 3.
 cp "$WORK" "$WORK.save"
 wipe_partition "$WORK" 2 $((1024 * 1024))

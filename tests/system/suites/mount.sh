@@ -1,11 +1,13 @@
 #!/usr/bin/env sh
 #
-# mount.sh: the block path under the mount milestone, phase 2's boots.
+# mount.sh: the block request path, mount(2) and umount2(2), and the FAT
+# driver mounted from a shell.
 #
 # The disk is the KRFFS test disk with a FAT32 partition added after it, so
-# the partition nodes have two real entries to publish. The lag boots prove
-# the sleeping path: a reader that sleeps while another process runs, and a
-# device that never answers in time being quarantined and freed late.
+# the partition nodes have two real entries to publish. The boots with
+# rach2.blocklag put the partitions on a slow device and test the sleeping
+# path: a reader that sleeps while another process runs, and a device that
+# never answers in time being quarantined and freed late.
 #
 # Usage: mount.sh KERNEL IMAGE HARNESS DISK OSREAL PASSWORD
 set -u
@@ -15,6 +17,7 @@ ARCH_BUILD=${ARCH_BUILD:-build}
 
 KERNEL=$1; IMAGE=$2; HARNESS=$3; DISK=$4; OSREAL=$5; PASSWORD=$6
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
+# fail REASON: print REASON and exit 1.
 fail() { echo "mount-test: FAIL: $1" >&2; exit 1; }
 
 # The two-partition disk: 48 MiB KRFFS at LBA 2048, 14 MiB FAT32 at LBA 100352.
@@ -44,6 +47,7 @@ mcopy -i "$DISK"@@51380224 "${DISK}.pattern" ::/pattern.bin || fail "mcopy patte
 mcopy -i "$DISK"@@51380224 "$REPO/$ARCH_BUILD/tests/memprobe" ::/memprobe || fail "mcopy memprobe"
 TESTPASSWORD=$(cat "$REPO/krffs/rach2_test_password") || fail "the test account's password"
 
+# run ARG...: boot the test image on the suite's disk with the harness's ARGs.
 run() {
     "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
         --qemu-arg=-cpu --qemu-arg=max \
@@ -161,8 +165,8 @@ fi
 # ---- 8: BusyBox on os-real mounts, lists, reads and unmounts through the
 #         shell; the listing is mdir's and the bytes are mcopy's. The held
 #         file is opened by the shell before the sleeper is forked with it,
-#         so the unmount that must find it busy cannot run first, as it did
-#         on a loaded host when the sleeper opened the file itself. ----
+#         so the unmount that must find it busy cannot run before the open,
+#         however loaded the host. ----
 LOG="$DISK.busybox.log"
 # interval: a sleeper holds the file open across the umount that must fail
 if "$HARNESS" --kernel "$KERNEL" --initrd "$OSREAL" \

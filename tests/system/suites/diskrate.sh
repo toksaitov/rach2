@@ -21,13 +21,12 @@
 # boot's polls per command stay under a hundred and its ticks in flight
 # per command under two, where a polled driver reads thousands and a
 # waited-out deadline spends three thousand ticks in flight and is
-# quarantined, which the device boots below hold at none. Multiples of a
-# measured baseline were tried on 2026-09-18 and dropped the same day:
-# the 4 KiB write rows cost four
-# times the exFAT write in the emulator and twenty-one under KVM, since
-# they are command counts times a per-command latency the machine sets,
-# and no multiple fits both. Times are read from /proc/uptime in
-# hundredths of a second.
+# quarantined, which the device boots below hold at none. No bound is a
+# multiple of a measured time: the 4 KiB write rows cost four times the
+# exFAT write in the emulator and twenty-one under KVM, since they are
+# command counts times a per-command latency the machine sets, and no
+# multiple fits both. Times are read from /proc/uptime in hundredths of a
+# second.
 #
 # A second boot, of the recovery kernel, which alone writes a whole-disk
 # node, times a 4 MiB raw write and raw read of a USB stick in 32 KiB
@@ -38,10 +37,10 @@
 # way. The times are printed for the record.
 #
 # A third boot, of the test image on the ordinary kernel, runs
-# `placeprobe`, entry 26's placement experiment: 32 MiB read through a pipe
-# into a buffer whose first page holds executed code, and into one that
-# holds none, three runs each; the far runs are held to the pipe row's
-# bound and every time is printed beside the pipe row's three.
+# `placeprobe`: 32 MiB read through a pipe into a buffer whose first page
+# holds executed code, and into one that holds none, three runs each. The
+# suite requires three far runs and prints every time beside the pipe
+# row's three.
 #
 # Usage: diskrate.sh KERNEL OSREAL HARNESS DIR PASSWORD MKEXFATFIXTURE MKMBR \
 #        RKERNEL RIMAGE TESTIMAGE
@@ -49,6 +48,7 @@ set -u
 KERNEL=$1; OSREAL=$2; HARNESS=$3; DIR=$4; PASSWORD=$5; MKEXFAT=$6; MKMBR=$7
 RKERNEL=$8; RIMAGE=$9; TESTIMAGE=${10}
 
+# fail REASON: print REASON and exit 1.
 fail() { echo "diskrate-test: FAIL: $1" >&2; exit 1; }
 
 sh "$(dirname "$0")/../../host/ata_rate_test.sh" || fail "the ATA write model"
@@ -126,8 +126,8 @@ least() {
 # times a cold read and a warm one together. The pipe row runs first in
 # the boot and three times: after other programs have run and exited, a
 # program's buffer may land in a frame that held code, which the emulator
-# keeps on its slow store path (entry 26 of milestone 50), and in the fresh
-# boot the three runs are the kernel's rate; the least is taken.
+# keeps on its slow store path, and in the fresh boot the three runs are
+# the kernel's rate; the least is taken.
 rc=0
 row() {
     t=$(least "$1")
@@ -186,7 +186,7 @@ counts() {
     [ -n "$before" ] && [ -n "$after" ] || fail "no counters for $1 in $LOG"
     cmds=$(( $(echo "$after" | awk '{print $2}') - $(echo "$before" | awk '{print $2}') ))
     hits=$(( $(echo "$after" | awk '{print $5}') - $(echo "$before" | awk '{print $5}') ))
-    # A counter that did not move is an instrument that stopped, not a fast row.
+    # A row with no disk command fails, since its counter did not move.
     if [ "$cmds" -gt 0 ] && [ "$hits" -ge 0 ] && [ "$cmds" -le "$2" ] && [ "$hits" -le "$3" ]; then
         echo "diskrate-test: $4: $cmds disk commands under $2, $hits cache hits under $3: OK"
     else
@@ -207,7 +207,7 @@ sleeps boot0 exfiles1 "the boot's driver waits"
 for r in exwrite fatwrite exsmall fatsmall; do
     sleeps "${r}0" "${r}1" "$r driver waits"
 done
-# The hits' bounds are three times the counts measured on 2026-09-10 (exFAT
+# The hits' bounds are three times the counts measured (exFAT
 # write 131 thousand, FAT32 write 427 thousand, exFAT small 37 thousand,
 # FAT32 small 115 thousand, exFAT files 21 thousand) and far under the
 # counts with a chain hint dropped (2.7 million, 10 million, 8.4 million,
@@ -319,9 +319,7 @@ PLOG="$DIR/place.log"
     "expect=Type 'help'" "send=exec /placeprobe" "expect=PLACEPROBE OK" > /dev/null 2>&1 \
     || fail "the placement boot did not reach its end; see $PLOG"
 echo "diskrate-test: the pipe row's three times: $(tr -d '\r' < "$DIR/diskrate.log" | grep -a "^T_pipehash [0-9]" | awk '{printf "%.2f s ", $2 / 100}')"
-# Which processes were runnable twenty seconds into the first pipe run: a
-# runnable process beside the pipe's two costs every hand-off a quantum
-# (entry 26), so the record says who it was.
+# The pages of the probe's code and of its two buffers, which must not meet.
 echo "diskrate-test: $(tr -d '\r' < "$PLOG" | grep -a "^PLACEPROBE code")"
 # The far runs are printed beside the near ones: the experiment's record,
 # not a judgement, since what it measures is the emulator's store path.

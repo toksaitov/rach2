@@ -1,10 +1,18 @@
 #!/usr/bin/env sh
 #
-# loopdev.sh: a file system in a file. Two boots on a disk whose one partition
-# is a FAT32 volume carrying two images, one FAT32 and one ext2, each with a
-# file of known bytes in it. The probe attaches an image to a loop device,
-# mounts it, reads it, writes it, unmounts and detaches, attaches again and
-# reads back what it wrote, and asks for everything an attachment refuses.
+# loopdev.sh: a file system in a file.
+#
+# The disk's one partition is a FAT32 volume that holds a FAT32, an ext2 and
+# a KRFFS image, each with a file of known bytes, a second FAT32 image, and a
+# file whose length is not whole sectors. For each of the three types a boot
+# runs the probe, which attaches the image to a loop device, mounts it, reads
+# it, writes it, unmounts and detaches, attaches again and reads back what it
+# wrote, and asks for everything an attachment refuses. Further boots require
+# a loop device's write to reach the medium when it returns, an image on an
+# ext2 volume whose second name is refused a device of its own, the FAT32
+# sequence over a disk that sleeps its caller, and an error when a USB stick
+# is pulled from under a mounted image. Last, the host reads the images the
+# machine wrote.
 #
 # Usage: loopdev.sh KERNEL IMAGE HARNESS DISK
 set -u
@@ -36,12 +44,10 @@ rm -rf "$DISK.tree"
 mkdir -p "$DISK.tree" || fail "the tree"
 cp "$DISK.hello" "$DISK.tree/hello.txt" || fail "the tree's file"
 cp "$DISK.inner" "$DISK.tree/inner.bin" || fail "the tree's whole-sector file"
-# The features this kernel writes: the fixture suite's set, so the volume
-# mounts read-write rather than read-only for a feature the writer would
-# leave stale.
-# Emptied first: mke2fs writes into a file that is already there without
-# shortening it, and a volume with a longer file around it is not the volume
-# the row asks for.
+# The features this kernel writes, the fixture suite's set, so that the
+# volume mounts read-write and not read-only for a feature the writer would
+# leave stale. The file is emptied first: mke2fs writes into a file that is
+# already there without shortening it.
 : > "$DISK.ext2"
 E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 \
     -O sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize \
@@ -50,7 +56,7 @@ E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 \
 # A file whose length is not whole sectors, which no device may stand on.
 dd if=/dev/zero of="$DISK.odd" bs=1 count=100 2>/dev/null || fail "the odd file"
 
-# And a KRFFS one, which is this project's own file system in a file.
+# And a KRFFS image with the same two files.
 mkdir -p "$REPO/build/tests/system/loopimg"
 printf 'hello from inside an image' > "$REPO/build/tests/system/loopimg/hello.txt"
 cp "$DISK.inner" "$REPO/build/tests/system/loopimg/inner.bin" || fail "the krffs tree"
@@ -67,6 +73,7 @@ mcopy -i "$DISK"@@$((PART * 512)) "$DISK.krffs" ::/krffs.img || fail "mcopy krff
 mcopy -i "$DISK"@@$((PART * 512)) "$DISK.ext2" ::/ext2.img || fail "mcopy ext2.img"
 mcopy -i "$DISK"@@$((PART * 512)) "$DISK.odd" ::/odd.bin || fail "mcopy odd.bin"
 
+# run ARG...: boot the test image on the disk with the harness's ARGs.
 run() {
     "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
         --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" "$@"
@@ -85,10 +92,10 @@ for type in vfat ext2 krffs; do
         || fail "the kernel did not say what it attached"
 done
 
-# What a loop device's write owes when it returns: the backing file written
-# and synced. The row fills the cache through a mounted image so that eviction
+# A loop device's write has written and synced the backing file when it
+# returns. The row fills the cache through a mounted image so that eviction
 # alone writes the image's blocks back, with no sync and no unmount, and the
-# drivers' own flush count must move.
+# drivers' own flush count must grow.
 if run --append "rach2.rescue" --timeout 150 --steptmo 120 \
     --ok "LOOPPROBE OK (durable)" --never "LOOPPROBE FAIL" \
     --log "$DISK.durable.log" "expect=Type 'help'" \
@@ -127,8 +134,8 @@ fi
 
 # The same sequence over a disk that sleeps its caller: the device under the
 # loop device takes a slot of the request pool for every transfer, and the
-# loop device must take none, or the pool of sixteen would run out with
-# everybody waiting for everybody.
+# loop device must take none, or the pool of sixteen would run out with every
+# holder waiting for another.
 if run --append "rach2.rescue rach2.blocklag=1" --timeout 180 --steptmo 150 \
     --ok "LOOPPROBE OK (vfat)" --never "LOOPPROBE FAIL" --log "$DISK.lag.log" \
     "expect=Type 'help'" "send=exec /loopdevprobe vfat" "expect=LOOPPROBE" \
@@ -138,10 +145,10 @@ else
     fail "the boot over a sleeping disk"
 fi
 
-# A stick pulled from under an image mounted on a loop device. The volume of
-# the stick carries the same FAT32 image; the harness pulls the device while
-# the probe is reading through it, and what the machine owes then is an error,
-# two unmounts and the file the attachment held let go of.
+# A stick pulled from under an image mounted on a loop device. The stick's
+# volume holds the same FAT32 image; the harness pulls the device while the
+# probe is reading through it, and the machine must then return an error,
+# unmount both volumes and release the file the attachment held.
 dd if=/dev/zero of="$DISK.stick" bs=1048576 count=32 2>/dev/null || fail "the stick"
 "$REPO/build/tools/image/mkmbr" --lba "$DISK.stick" "$PART:$SECTORS:0c" >/dev/null \
     || fail "the stick's partition table"
@@ -165,8 +172,8 @@ fi
 grep -aq "loop: loop0: the device under its file has gone" "$DISK.pull.log" \
     || fail "the kernel did not say the device under the file had gone"
 
-# The KRFFS image the machine wrote, judged by the host's own checker: what a
-# volume that was mounted, written and unmounted owes is a clean image.
+# The KRFFS image the machine wrote, judged by the host's own checker: a
+# volume that was mounted, written and unmounted must be clean.
 mcopy -n -i "$DISK"@@$((PART * 512)) ::/krffs.img "$DISK.krffs.after" || fail "mcopy krffs back"
 "$REPO/build/krffs/fsck.krffs" "$DISK.krffs.after" --strict > "$DISK.fsck" 2>&1 \
     || { cat "$DISK.fsck" >&2; fail "the checker finds the image faulty after the boots"; }

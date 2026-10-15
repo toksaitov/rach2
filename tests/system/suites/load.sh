@@ -2,14 +2,13 @@
 #
 # load.sh: the machine under load and the longest delays it saw.
 #
-# A disk with a FAT32 partition for the writers, under the lag device so
-# their writes go through the request layer, whose delays are the ones
-# recorded, the harness's own card for the pinger, and the harness typing a
-# line at the console for the reader, the next once the reader has said it
-# took the last; `loadprobe` runs the
-# load for twenty seconds and prints the four delays `/proc/stat` keeps as
-# its longest, the record of the machine, and requires what it counts: three
-# lines read and no request quarantined by its deadline under the load.
+# `loadprobe` runs its load for twenty seconds, prints the four delays
+# `/proc/stat` keeps as its longest, and requires what it counts: three lines
+# read and no request quarantined by its deadline. Its writers have a disk
+# with a FAT32 partition, under the lag device so that their writes go
+# through the request layer whose delays are recorded; its pinger has the
+# harness's network card; and its reader has the console, where the harness
+# types each line once the reader has said it took the last.
 #
 # Usage: load.sh KERNEL IMAGE HARNESS DISK
 set -u
@@ -38,12 +37,12 @@ else
     grep -a 'LOADPROBE' "$DISK.log" | tr -d '\r' >&2 || true
     fail "the load boot"
 fi
-# The same writer on a disk whose driver cannot sleep: `rach2.atapio` keeps
-# the ATA driver on the data port, whose transfers run with interrupts off,
-# so the writer is inside a system call from one write to the next. A timer
-# interrupt that lands inside the call requests a switch, and the call's
-# exit takes it, so the reader gets its lines and the probe's own sleep
-# ends.
+# The first writer alone, without its syncs, and the reader (`Wnr`), on a
+# disk whose driver cannot sleep: `rach2.atapio` keeps the ATA driver on the
+# data port, whose transfers run with interrupts off, so the writer is inside
+# a system call from one write to the next. A timer interrupt that lands
+# inside the call requests a switch, and the call's exit takes it, so the
+# reader gets its lines and the probe's own sleep ends.
 if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
     --qemu-arg=-cpu --qemu-arg=max \
     --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" \

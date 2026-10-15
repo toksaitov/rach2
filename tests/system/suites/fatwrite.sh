@@ -17,20 +17,22 @@ sh "$REPO/krffs/mkdisk.sh" "$REPO/krffs/manifests/disk-test.manifest" "$DISK" 64
 "$REPO/build/tools/image/mkmbr" --lba "$DISK" 2048:98304:7f 100352:28672:0c >/dev/null || fail "mkmbr"
 mformat -i "$VOL" -F -T 28672 -v M37FAT :: || fail "mformat"
 
+# run ARG...: boot the test image on the disk with the harness's ARGs.
 run() {
     "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
         --qemu-arg=-cpu --qemu-arg=max \
         --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" "$@"
 }
 
-# The volume walked on the host. The crash may leave lost clusters, which the
-# mount's check counts and leaves for a host tool; the repair step records
-# that one line, and from then on it is the only finding a walk may show.
+# walk_clean WHAT: walk the volume on the host, and fail with WHAT on any
+# finding but the dirty flag and the line LOST has. The crash may leave lost
+# clusters, which the mount's check counts and leaves for a host tool;
+# walk_repaired records that one line in LOST, and from then on it is the
+# only other finding a walk may show.
 LOST=""
 walk_clean() {
     "$MKFIXTURE" --check "$DISK" 100352 > "$DISK.check" 2>&1 && return 0
-    # A checker that crashed or found nothing to say is a failure of its own:
-    # its last line names the count of findings.
+    # A walk that found faults ends with `check: FAIL: `; any other is a crash.
     grep -q '^check: FAIL: ' "$DISK.check" \
         || { cat "$DISK.check" >&2; fail "the checker did not walk the volume"; }
     if grep '^check:' "$DISK.check" | grep -v '^check: FAIL:\|^check: dirty:' \
@@ -39,6 +41,8 @@ walk_clean() {
         fail "$1"
     fi
 }
+# walk_repaired WHAT: walk the volume, keep its lost-cluster line in LOST, and
+# judge it as walk_clean does.
 walk_repaired() {
     "$MKFIXTURE" --check "$DISK" 100352 > "$DISK.check" 2>&1 || true
     LOST="$(grep '^check: lost:' "$DISK.check" || true)"
@@ -106,14 +110,15 @@ fi
 walk_repaired "the volume is not consistent after the repair"
 echo "fatwrite-test: the host's walk finds the repaired volume consistent, lost clusters aside: OK"
 
-# ---- 5: BusyBox writes through the volume; and a 4 MiB write costs the
+# ---- 5: BusyBox writes through the volume, and a 4 MiB write costs the
 #         disk a bounded number of commands. The FAT entries of a run are
-#         written through one block at a time: 4 MiB is 8192 clusters of
-#         512 bytes on this volume, whose entries fill eight 4 KiB FAT
-#         blocks per copy, beside 1024 data blocks written and, since the
-#         cache fills a block before it is zeroed, read once each; the count
-#         here is under 4000. An entry written through on its own costs
-#         16384 commands more. The removal frees the chain the same way. ----
+#         written through a block at a time: 4 MiB is 8192 clusters of 512
+#         bytes on this volume, whose entries fill eight 4 KiB FAT blocks
+#         per copy, beside 1024 data blocks written and, since the cache
+#         fills a block before it is zeroed, read once each. The row requires
+#         fewer than 5000 commands for the write; an entry written through on
+#         its own would cost 16384 more. The removal frees the chain the same
+#         way, in fewer than 256. ----
 LOG="$DISK.busybox.log"
 if "$HARNESS" --kernel "$KERNEL" --initrd "$OSREAL" \
     --qemu-arg=-cpu --qemu-arg=max --append "rach2.diskdiag" \

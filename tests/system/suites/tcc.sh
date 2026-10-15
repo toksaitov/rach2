@@ -1,32 +1,29 @@
 #!/usr/bin/env sh
 
 #
-# tcc_test.sh: prove the machine can compile a C program on itself, and that it
-# refuses the kinds of program it cannot run.
+# tcc.sh: the machine compiles a C program on itself, and refuses the kinds of
+# program it cannot run.
 #
-# It boots os-real from a disk and works as the unprivileged `test` account, not
-# as root. That is the difference between a compiler on the machine and a
-# compiler for the administrator: the sysroot has to be readable by an ordinary
-# user, and the program has to be written somewhere an ordinary user may write.
+# The suite boots os-real from a disk and works as the unprivileged `test`
+# account, not as root, since a compiler on the machine must work for an
+# ordinary user: the sysroot must be readable by one, and the program written
+# where one may write. The disk is used and not the RAM image, which would
+# take memory the compiler needs.
 #
-# The disk, not the RAM image, because the RAM image is a 16 MB module
-# inside a 32 MB machine and the compiler wants room.
+# Every phase follows three rules. The console echoes what is typed, so a
+# token that appears in a command would be matched from its own echo, and
+# each is typed split. A feed typed all at once is lost to anything that
+# flushes its input, so each line waits for the prompt. A previous run's logs
+# have every token this run waits for, so they are removed before the boot
+# and not only in the trap.
 #
-# Three mistakes this repo has already paid for, avoided by every phase here:
-# the console echoes what is typed, so a token that appears in a command would
-# be matched from its own echo and each is written split; a feed written all at
-# once is eaten by anything that flushes its input, so every feed is spaced; and
-# a previous run's logs hold every token this run waits for, so they go before
-# the boot, not only in the trap.
+# A line typed at this console is edited in a buffer of `N_TTY_LINE_MAX`
+# bytes (256, in rach2/sys/tty/n_tty.h), and what does not fit is dropped,
+# not wrapped. The longest line here is about 180 characters; a command
+# longer than the buffer must be split, or it fails in a way that looks like
+# the compiler's fault.
 #
-# A fourth, which the longer commands below came close to: a line typed at this
-# console is edited in a buffer of `N_TTY_LINE_MAX` bytes (256, in
-# rach2/sys/tty/n_tty.h), and what does not fit is dropped, not wrapped.
-# The longest line here is about 180 characters. A command longer than the
-# buffer must be split, or it will fail in a way that looks like the compiler's
-# doing.
-#
-# Usage: tcc_test.sh <kernel> <disk> <root password> <test password>
+# Usage: tcc.sh <kernel> <disk> <root password> <test password>
 #
 
 # The emulator of the architecture tests/system/suites.mk names.
@@ -56,15 +53,15 @@ rm -f "$WORK" "$LOG" "$FEED"
 QPID=""
 FPID=""
 
-# Everything this run started, ended. It is written to be safe to call twice,
-# because the ordinary paths call it and the trap calls it again: a script that
-# only killed its machine when it succeeded or failed its own checks leaves
-# QEMU running for a cancelled build, and that QEMU still has the disk copy
-# whose name has just been removed.
+# Stop the machine and the feeder, and remove the feed. It is safe to call
+# twice, since the ordinary paths call it and the trap calls it again: a
+# script that stopped its machine only when its own checks ended would leave
+# QEMU running for a cancelled build, with the disk copy whose name has been
+# removed.
 #
-# Each pid is taken and forgotten BEFORE it is signalled, so a trap that fires
-# between the kill and the wait finds nothing left to kill: a pid this script no
-# longer owns is one the host may since have given to somebody else.
+# Each pid is taken and cleared before it is signalled, so a trap that fires
+# between the kill and the wait finds nothing to kill: a pid this script no
+# longer owns may since have been given to another process.
 cleanup_boot() {
     qpid="$QPID"
     fpid="$FPID"
@@ -81,6 +78,7 @@ cleanup_boot() {
     rm -f "$FEED"
 }
 
+# Stop the boot, and remove the disk's copy, the log and the feed.
 cleanup() {
     cleanup_boot
     rm -f "$WORK" "$LOG" "$FEED"
@@ -91,6 +89,8 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 
+# fail REASON: keep the console's log as DISK.fail.log, stop the boot, print
+# REASON and exit 1.
 fail() {
     if [ -f "$LOG" ]; then
         cp "$LOG" "$DISK.fail.log" 2>/dev/null || true
@@ -106,16 +106,15 @@ wait_token() {
     "$RUNUTIL" until "$LOG" "$1" "$2"
 }
 
-# The machine is started first and the feed second, which is the order that
-# lets the feed know the machine's pid: opening a fifo for reading waits for a
-# writer, so QEMU sits in that open until the feed arrives, and neither half
-# misses a line. The feed then holds the pipe open only while the machine is up,
-# so nothing is left typing at a machine that is gone.
-# The console is driven through tests/system/drive.sh: a line is typed when
-# the shell's prompt has come back, under a bound.
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 # shellcheck source=tests/system/drive.sh
 . "$REPO/tests/system/drive.sh"
+# boot_lines USER PASSWORD LINE...: boot the disk's copy, log in as USER at the
+# console, and type each LINE once the shell's prompt has come back, through
+# tests/system/drive.sh. The machine is started before the feeder, which lets
+# the feeder know the machine's pid: opening a fifo for reading waits for a
+# writer, so QEMU waits in that open until the feeder starts, and neither
+# misses a line. The feeder holds the fifo open only while the machine runs.
 boot_lines() {
     rm -f "$LOG" "$FEED"
     mkfifo "$FEED"
@@ -128,8 +127,6 @@ boot_lines() {
     DRIVE_FIFO=$FEED
     drive_feed "$QPID"
     FPID=$DRIVE_FPID
-    # The first two lines are the login; each line after it is typed once
-    # the shell has printed its prompt again.
     drive_login "$1" "$2" "$(scaled 90)" || fail "the machine did not log in at its console"
     shift 2
     for line in "$@"; do
@@ -171,14 +168,13 @@ if ! wait_token "COMPILEDHERE" 90; then
     fail "the program the machine compiled did not run, or printed the wrong thing"
 fi
 
-# What it must refuse. Each is asserted twice: the status it reported, and the
-# reason it gave, because a compiler that refused for the wrong reason has told
-# the student something false about the machine.
+# What it must refuse. Each refusal is checked twice, the status it reported
+# and the reason it gave, since a compiler that refused for the wrong reason
+# has told the student something false about the machine.
 #
-# Both halves WAIT. The status and the reason come from two different commands
-# (the shell echoes `$?`, then `cat` prints the file the compiler wrote), so a
-# grep for the reason the moment the status appears is a race, and it is one
-# this suite lost once the machine got slower.
+# Both checks wait. The status and the reason come from two commands (the
+# shell echoes `$?`, then `cat` prints the file the compiler wrote), so a grep
+# for the reason the moment the status appears would race the second command.
 if ! wait_token "RUNRC=1" 120; then
     fail "-run was not refused"
 fi
@@ -204,10 +200,9 @@ if ! wait_token "must be an ELF" 30; then
     fail "a raw-image link was refused without saying why"
 fi
 
-# A refusal that still wrote its output would be a refusal in name only. The
-# guest answers this one itself: the console ends every line with a carriage
-# return, so a pattern anchored here would have matched nothing and passed
-# whatever was there.
+# A refused compile must leave no output. The guest makes this check itself,
+# since the console ends every line with a carriage return and a pattern
+# anchored here would match nothing.
 if ! wait_token "NOLEFTOVERS" 90; then
     fail "a refused compile left its output behind, or the check never ran"
 fi
@@ -218,23 +213,23 @@ if ! wait_token "OBJECTOK" 120; then
     fail "compiling to an object was refused, and it must not be"
 fi
 
-# And a program of this project's own, compiled from the source the image
-# has. The proof is behavioural, not a byte comparison of the two
-# binaries: the shipped one was linked against libgcc on the host and this one
-# against libtcc1.a on the machine, so they are different objects that must do
-# the same thing.
+# A program of this project's own, compiled from the source the image has.
+# The check is of behaviour, not a byte comparison of the two binaries: the
+# shipped one was linked against libgcc on the host and this one against
+# libtcc1.a on the machine, so they are different objects that must do the
+# same thing.
 #
-# The reference is `busybox cat` and not `/bin/cat`, because in THIS image there
-# is no such file: busybox dispatches `cat` as an applet inside itself, and the
-# in-house cat lives in the other image. So what is compared is the program the
-# machine just built against the program this machine actually uses.
+# The reference is `busybox cat` and not `/bin/cat`, since this image has no
+# such file: busybox runs `cat` as an applet inside itself, and the in-house
+# cat is in the other image. What is compared is the program the machine
+# built with the program this machine uses.
 #
 # The input is 21 KB of a binary file, not a line of text, and the second
-# comparison passes two files, not one. A line of text is one 4096-byte
-# read and one write: a cat that returned after its first read would copy it
-# perfectly and truncate everything larger, and a cat that stopped after its
-# first argument would never be noticed. The commands are chained with `&&`, so
-# a cat that failed cannot reach the token by leaving an old output in place.
+# comparison passes two files. A line of text is one 4096-byte read and one
+# write: a cat that returned after its first read would copy it and truncate
+# anything larger, and a cat that stopped after its first argument would go
+# unnoticed. The commands are chained with `&&`, so a cat that failed cannot
+# reach the token by leaving an old output in place.
 if ! wait_token "TOOLBUILT" 240; then
     fail "the machine could not compile this project's own cat"
 fi
@@ -261,23 +256,19 @@ if ! wait_token "DONEIT" 90; then
     fail "the boot never finished its script"
 fi
 
-# A missing syscall says nothing on its own: the dispatcher answers -ENOSYS in a
-# register and prints nothing. The kernel's trace, on for this boot, turns that
-# into a line, once per number.
+# A missing system call says nothing on its own: the dispatcher answers
+# -ENOSYS in a register and prints nothing. The kernel's trace, on for this
+# boot, prints a line for each number, once for each process.
 #
-# The question is what the COMPILER asked for, and not what anything on the
-# machine asked for: another program may ask for a number this kernel does not
-# have and does not need. The trace names the process, and names each
-# number once PER PROCESS, so the question is asked by name. An earlier version
-# subtracted the numbers seen before the compile from the numbers seen after,
-# which reads well and is wrong: a number `login` had already reported would
-# have been suppressed for the compiler and the subtraction would come back
-# empty.
+# The question is what the compiler asked for, not what any program on the
+# machine asked for, since another program may ask for a number this kernel
+# does not have and does not need. The trace names the process, so the
+# question is asked by name; a difference of the numbers seen before and
+# after the compile would drop a number that `login` had already reported.
 #
-# It is asked LAST, after the script's own end token, for the same reason: the
-# log is read once, so it must be read when every compile this test performs has
-# already had its say. Asked in the middle, it would miss whatever the larger
-# compile of /src/utils/cat.c goes on to ask for.
+# It is asked last, after the script's own end token, since the log is read
+# once and must be read when every compile has printed what it will; asked
+# in the middle, it would miss what the compile of /src/utils/cat.c asks for.
 if grep "not implemented" "$LOG" | grep -q "asked for by tcc"; then
     fail "the compiler asked this kernel for a syscall it does not have: $(grep -m1 'asked for by tcc' "$LOG")"
 fi

@@ -9,8 +9,8 @@
 # emulator. This one gives an x86-64 machine QEMU's UEFI firmware, OVMF, and
 # nothing else: the firmware starts GRUB's EFI image from the disk's EFI
 # system partition, or from the stick's EFI boot image, and the image opens
-# the menu the BIOS core opens. Four boots by OVMF, a fifth part that boots
-# the GPT disk by SeaBIOS as well, an install by OVMF, and a repair:
+# the menu the BIOS core opens. Some parts boot by SeaBIOS as well, where the
+# BIOS core is what they test:
 #
 # 1. The installed disk, a GPT disk as the disk builder makes one and an
 #    install writes it: the firmware boots it, the kernel finds its root by
@@ -33,7 +33,7 @@
 #    tail not in use, and the entry sector, the partition's first, is left
 #    naming it. With the other tail zeroed on the host, the disk boots by
 #    SeaBIOS again, so the new tail is the one that ran; a second
-#    `bootctl grub` goes back to the first tail and is proved the same way;
+#    `bootctl grub` goes back to the first tail and is checked the same way;
 #    and the disk still boots by OVMF, whose path does not use the core. The
 #    table's sectors before the partition and the backup table at the disk's
 #    end are the same bytes after both installs.
@@ -106,6 +106,7 @@ KNOWN="$DIR/known_hosts"
 KERNEL_FILE="$REPO/build/rach2/kernel"
 [ "$ARCH" = i686 ] || KERNEL_FILE="$REPO/build/$ARCH/rach2/kernel"
 
+# note TEXT prints TEXT; bad REASON prints REASON and marks the run failed.
 fail=0
 note() { echo "uefi-test: $1"; }
 bad() {
@@ -120,6 +121,7 @@ for left in $(pgrep -f "$DIR/" 2>/dev/null || true); do
     "$RUNUTIL" gone "$left" 30 || true
 done
 
+# stop_machine: stop the running machine and wait for it, if there is one.
 QPID=""
 stop_machine() {
     [ -n "$QPID" ] || return 0
@@ -198,9 +200,9 @@ booted_by_uefi() { # booted_by_uefi LOG WHAT
     grep -aq "BdsDxe: starting Boot.*$2" "$1"
 }
 
-# Ask the machine's monitor, on the pipes $DIR/monitor.in and .out, for a dump
-# of its screen into $1, and wait for the whole file: the PPM header and three
-# bytes a pixel.
+# screen_dump FILE: ask the machine's monitor, on the pipes $DIR/monitor.in and
+# .out, for a dump of its screen into FILE, and wait until the file stops
+# growing; return 1 if no dump comes.
 screen_dump() {
     rm -f "$1"
     printf 'screendump %s\n' "$1" > "$DIR/monitor.in"

@@ -6,41 +6,33 @@
 # The kernel asks the machine to restart up to four ways (`power_reset`,
 # rach2/sys/arch/x86/power.c): the FADT's reset register, where the FADT has
 # one, then the firmware's own SMI handler, then the chipset reset register,
-# then the keyboard controller pulse. The order of the last three was chosen
-# for a laptop whose chipset register may not act. If only the first
-# mechanism were ever exercised, nobody would find out that a later one does
-# not work until the machine it was written for refused to restart, which
-# over SSH looks like a kernel that died.
+# then the keyboard controller's pulse. QEMU's FADT has none, and the suite
+# boots the other three with the first N left out (`rach2.resetskip=N`), so
+# that each must restart the machine on its own. A later mechanism that does
+# not work would otherwise be found only on a machine where the earlier ones
+# fail, and a restart that does not happen looks over SSH like a kernel that
+# died.
 #
-# So each is booted with the ones before it left out (`rach2.resetskip=N`), and
-# each must restart the machine on its own.
+# The harness runs QEMU with -no-reboot, so a machine that resets exits in
+# place of booting again, and a restart is judged by three things together.
+# The machine must log the restart. It must not print the fallback, which
+# `power_reset` prints when no mechanism it tried acted. And it must end by
+# itself: `--must-exit` fails a run killed at its deadline, as a kernel that
+# logged the restart and then hung would be. A panic, which also ends the
+# machine, is refused by `--never`.
 #
-# What "restarted" means here needs saying, because the obvious check does not
-# work: the harness runs QEMU with -no-reboot, so a machine that resets exits
-# instead of booting again, and waiting for a second boot banner would fail on
-# success. So three things are required together. The machine must reach the
-# restart, which its own record says. It must not print the fallback, which
-# `power_reset` prints when every mechanism it tried did nothing. And the
-# machine must have ended by itself: `--must-exit` fails a run that was still
-# there at the deadline and had to be killed, which is what a kernel that
-# announced the restart and then hung looks like, and which the first two
-# checks alone accept. A panic that also ends the machine is refused by
-# `--never`, since a crash is not a reset.
+# The kernel sends the firmware's command only to Insyde's firmware, and both
+# of its answers are booted: SeaBIOS, which QEMU boots by default, must log
+# that the command was not sent, and a machine given
+# `-smbios type=0,vendor=Insyde Corp.`, which makes QEMU publish that vendor's
+# name, must log that it was.
 #
-# The first of the three is sent only to the firmware it belongs to, and that
-# decision is made in the kernel and not in a test's copy of it, so both of its
-# answers are booted: a machine whose firmware is SeaBIOS, which is every
-# machine QEMU boots by default, must say the command was not sent; and a
-# machine given `-smbios type=0,vendor=Insyde Corp.`, which is how QEMU is
-# asked to publish another firmware's name, must say it was.
+# A triple fault also resets the machine, and with -no-reboot QEMU exits for
+# it as it does for a reset the kernel asked for. The kernel prints a `CRIT`
+# record for a kernel exception, which `--never` refuses, so the case the
+# suite cannot separate is a triple fault that printed nothing.
 #
-# What is left uncheckable from here: a triple fault also resets the machine,
-# and with `-no-reboot` QEMU exits for it exactly as it does for a reset the
-# kernel asked for. The kernel prints a `CRIT` record for a kernel exception,
-# which `--never` refuses, so the case this cannot separate is a triple fault
-# that printed nothing at all.
-#
-# Usage: reset_test.sh <kernel> <image>
+# Usage: reset.sh <kernel> <image>
 #
 
 set -e
@@ -59,6 +51,7 @@ fi
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 LOG="$REPO/$ARCH_BUILD/images/reset-test.log"
 
+# Remove the log and the harness's output.
 cleanup() {
     rm -f "$LOG" "$LOG.harness"
 }
@@ -104,9 +97,9 @@ for skip in 0 1 2; do
     echo "reset-test: $what: OK"
 done
 
-# The same first mechanism on a machine that says it runs the firmware the
-# command belongs to. QEMU publishes the name; the write itself is inert there,
-# and the machine still restarts through the chipset register after it.
+# The firmware's command on a machine whose SMBIOS names Insyde's firmware.
+# The command's write does nothing on QEMU, and the chipset register restarts
+# the machine after it.
 rm -f "$LOG"
 "$REPO/build/tests/system/harness" --kernel "$KERNEL" --initrd "$IMAGE"     --qemu-arg=-cpu --qemu-arg=max     --qemu-arg=-smbios --qemu-arg="type=0,vendor=Insyde Corp."     --append "rach2.rescue rach2.resetskip=0"     --timeout 90 --log "$LOG" --ok "reboot: restarting"     --must-exit --never "<2>"     "expect=Type 'help'" "send=reboot" until=10 >"$LOG.harness" 2>&1 && rc=0 || rc=$?
 

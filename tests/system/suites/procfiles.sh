@@ -1,27 +1,27 @@
 #!/usr/bin/env sh
 
 #
-# procfiles_test.sh: the machine's own /proc files, on the boots that differ
-# and through the programs that read them.
+# procfiles.sh: the machine's own /proc files, on the boots that differ and
+# through the programs that read them.
 #
-# Two halves. The first is `/proc/mounts`, which is the one file here whose
-# content depends on how the machine came up: this file system can be mounted
-# from a disk, from the RAM module through the page-cache window, or from the
-# module in place, and nothing left behind afterwards says which. So the three
-# boots are run and each must name its own source and options. One boot would
-# pass with a fixed line, which is what the file used to be worth.
+# Two halves. The first is `/proc/mounts`, the one file here whose content
+# depends on how the machine came up: this file system can be mounted from a
+# disk, from the RAM module through the page-cache window, or from the module
+# in place, and nothing left behind afterwards says which. So the three boots
+# are run and each must name its own source and options; one boot would pass
+# with a fixed line.
 #
-# The second is the programs. `ps`, `df`, `free` and `uptime` are compiled into
-# the busybox on the real image and every one of them failed on a missing file
-# under /proc. Exiting 0 is necessary and not sufficient and neither is the
-# output, so both are required: each applet's status is captured before
-# anything reads what it wrote, and then each is asked for something
-# checkable: `ps` must list the shell's own pid, which the shell
-# knows independently as `$$`; `df` must report the root with a non-zero size;
-# `free` must report a non-zero total; and `uptime` must print a time.
+# The second is the programs: `ps`, `df`, `free`, `uptime`, `dmesg` and the
+# network applets of the busybox on the real image, each of which reads files
+# under /proc. Exiting 0 is not enough and neither is the output, so both are
+# required: each applet's status is captured before anything reads what it
+# wrote, and then each is asked for something checkable. `ps` must list the
+# shell's own pid, which the shell knows independently as `$$`; `df` must
+# report the root at the size the image was built at; `free` must report a
+# non-zero total; and `uptime` must print a time.
 #
-# Usage: procfiles_test.sh <kernel> <test.krffs> <disk.img> <os-real.krffs>
-#            <user> <password> <image-mb>
+# Usage: procfiles.sh <kernel> <test.krffs> <disk.img> <os-real.krffs>
+#            <user> <password> <image-mb> [port]
 #
 
 # The emulator of the architecture tests/system/suites.mk names.
@@ -69,6 +69,7 @@ FEED="$TEST_IMAGE.procfiles.feed"
 # shellcheck source=tests/system/drive.sh
 . "$REPO/tests/system/drive.sh"
 
+# stop: stop the feeder and the machine and remove the FIFO.
 stop() {
     qpid="$QPID"
     QPID=""
@@ -80,7 +81,8 @@ stop() {
     rm -f "$FEED"
 }
 
-# A machine on the fifo and the log, and the feeder that types at it.
+# boot_driven ARG...: start QEMU with ARGs on the FIFO and $DRIVE_LOG, and the
+# feeder that types at it.
 boot_driven() {
     rm -f "$FEED"
     mkfifo "$FEED"
@@ -90,8 +92,8 @@ boot_driven() {
     drive_feed "$QPID"
 }
 
-# The logs are removed only after a pass: a failed row leaves them for the
-# reader, since the failure's explanation is in them.
+# cleanup: stop the machine, and remove the logs only after a pass, since a
+# failed row's explanation is in them.
 # shellcheck disable=SC2086
 cleanup() {
     stop
@@ -106,13 +108,15 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 
+# wait_serial LOG TOKEN SECONDS: wait up to SECONDS for TOKEN in LOG.
 wait_serial() {
     "$RUNUTIL" until "$1" "$2" "$3"
 }
 
-# One boot of the test image under `$2` of boot options, running the probe in
-# its mount-only mode and leaving its ROOTMOUNT line in `$1`. The command is
-# typed once the debug shell's prompt has been printed.
+# mount_boot LOG OPTIONS [QEMUARG...]: boot the test image with the boot
+# OPTIONS and run the probe in its mount mode, leaving its ROOTMOUNT line in
+# LOG; exit 1 when the debug shell or the probe's pass does not come. The
+# command is typed once the debug shell's prompt has been printed.
 mount_boot() {
     log="$1"
     append="$2"
@@ -125,9 +129,7 @@ mount_boot() {
         exit 1
     fi
     drive_type 'exec /procprobe mount'
-    # Waited on the probe's own verdict, which it prints AFTER the mount line:
-    # stopping at the mount line would kill the machine part way through
-    # writing it, and the value read back would be a prefix.
+    # The pass comes after the mount line, so the whole line has been written.
     if ! wait_serial "$log" "PROCPROBE OK" 150; then
         stop
         echo "procfiles-test: FAIL: the probe did not pass on the boot with" >&2
@@ -204,20 +206,19 @@ applet 'grep -c "Type .help." /tmp.dm | sed s/^/DM""ESG-CONSOLE:/' 'DMESG-CONSOL
 # Key generation can take minutes in emulation. Dropbear may write after
 # the shell's prompt; the driver still recognises that prompt.
 applet 'dropbearmulti dropbear -R -g -p 22; echo SSH""D-UP' 'SSHD-UP' 300
-# A connection opened from OUTSIDE, held open while netstat runs, and still
+# A connection opened from the host, held open while netstat runs, and still
 # resolved in the cache when `arp` runs after it. The order matters: a machine
-# that has spoken to nobody has an empty cache, and `arp` would then be asked to
-# show what is not there.
-# The guest sees
-# its peer as QEMU's gateway, 10.0.2.2: an address the guest did not choose and
-# the host end really has, which is what makes the row worth checking. The
-# forward reaches the SSH server started above, so this is the shape of a live
-# login and not a contrivance. It is opened once the server has been started,
-# since a connection made before the server is listening reaches nothing:
-# QEMU accepts the host side of it either way. The server is started by hand
-# because the image does not run one at boot. The seconds after the open are
-# an interval: the host's connection is accepted by QEMU at once and reaches
-# the guest's server, and its table, a moment later.
+# that has spoken to nobody has an empty cache, and `arp` would then be asked
+# to show what is not there.
+#
+# The guest sees its peer as QEMU's gateway, 10.0.2.2: an address the guest
+# did not choose and the host end has. The forward reaches the SSH server
+# started above, as a login would. It is opened once the server has been
+# started, since a connection made before the server is listening reaches
+# nothing, and QEMU accepts the host side of it either way. The server is
+# started by hand because the image does not run one at boot. The seconds
+# after the open are an interval: QEMU accepts the host's connection at once,
+# and it reaches the guest's server, and its table, a moment later.
 "$REPO/build/tests/system/hostpeer" hold "$FWD_PORT" 90 >/dev/null 2>&1 &
 PEER_PID=$!
 # shellcheck disable=SC2016
@@ -239,9 +240,8 @@ wait "$PEER_PID" 2>/dev/null || true
 PLAIN_LOG="$REAL.applets.plain"
 tr -d '\r' <"$REAL.applets.log" >"$PLAIN_LOG"
 
-# Each applet's own exit status, captured before anything reads its output. An
-# applet that printed a plausible row and then failed passed the earlier version
-# of this test, which looked only at the text.
+# Each applet's own exit status, captured before anything reads its output, so
+# an applet that printed a plausible row and then failed does not pass.
 for pair in "PS:ps" "DF:df" "FREE:free" "UP:uptime" "ND:cat" "IR:cat" "IF:ifconfig" \
             "DMESG:dmesg" "RT:route" "ARP:arp" "NS:netstat"; do
     token="${pair%%:*}"
@@ -350,12 +350,11 @@ if ! grep -qE "up +[0-9]" "$PLAIN_LOG"; then
 fi
 echo "procfiles-test: uptime prints a time: OK"
 
-# The boot log, under the name a person expects. busybox's own dmesg reads a
-# ring buffer through klogctl, which this kernel does not have, so /bin/dmesg
-# is a script that prints /dev/bootlog and the applet is off. The guest tags
-# the first line of what the command printed, because the same banner is on
-# this console anyway: a check that grepped the transcript for it would pass
-# with an empty log and a `cat` that read nothing.
+# The boot log, under the name a person expects. /bin/dmesg on this image is
+# a script that prints /dev/bootlog, and busybox's applet is off. The guest
+# tags the first line of what the command printed, because the same banner is
+# on this console anyway: a check that grepped the transcript for it would
+# pass with an empty log and a `cat` that read nothing.
 if ! grep -q "^DMESG-FIRST:.*Rach2 Booting" "$PLAIN_LOG"; then
     echo "procfiles-test: FAIL: dmesg did not print the boot log" >&2
     grep -A3 "DMESG-STATUS" "$PLAIN_LOG" | head -4 >&2
@@ -372,9 +371,9 @@ if ! grep -q "^DMESG-INFO:boot: Rach2 Booting" "$PLAIN_LOG"; then
 fi
 echo "procfiles-test: dmesg -t -l info prints the info records without their time: OK"
 
-# What the log holds, now that it is the kernel's records and not every byte
-# that crossed the serial port: whole records, and none of the shell's own
-# output. The counts are taken on the machine, so an empty file fails both.
+# The log holds the kernel's records and not every byte that crossed the
+# serial port: whole records, and none of the shell's own output. The counts
+# are taken on the machine, so an empty file fails.
 records="$(sed -n 's/^DMESG-RECORDS://p' "$PLAIN_LOG" | tr -d "\r" | head -1)"
 console="$(sed -n 's/^DMESG-CONSOLE://p' "$PLAIN_LOG" | tr -d "\r" | head -1)"
 case "$records" in
@@ -419,8 +418,8 @@ if ! awk '/\(10\.0\.2\.[0-9]+\)/ && / at [0-9A-Fa-f:]+ / { found = 1 } END { exi
 fi
 echo "procfiles-test: arp shows a resolved neighbour on the real subnet: OK"
 
-# netstat: the connection the guest opened outward, with the peer address the
-# host end really has. Nothing in the guest chose that number.
+# netstat: the connection the host opened to the guest's server, with the
+# peer address the host end has. Nothing in the guest chose that number.
 if ! awk '$1 == "tcp" && $5 ~ /^10\.0\.2\.2:/ { found = 1 } END { exit !found }' "$PLAIN_LOG"; then
     echo "procfiles-test: FAIL: netstat did not show the outbound connection's" >&2
     echo "procfiles-test: peer as the address the peer actually has" >&2
@@ -481,9 +480,9 @@ if [ "$pit_path" != "LAPIC" ] || [ "$pit_name" != "timer" ]; then
 fi
 echo "procfiles-test: /proc/interrupts counts the timer's vector and names it: OK"
 
-# /proc/stat's intr line, which said zero on every machine before the counts
-# existed. It is every interrupt the kernel has routed, so it cannot be below
-# the sum of the per-vector counts printed a moment earlier in the same boot.
+# /proc/stat's intr line counts every interrupt the kernel has routed, so it
+# cannot be below the sum of the per-vector counts printed a moment earlier
+# in the same boot.
 # Comparing it against the timer's line alone would pass for a file that
 # reported the timer and nothing else.
 intr=$(sed -n 's/^INTR:intr \([0-9][0-9]*\).*/\1/p' "$PLAIN_LOG" | head -1)

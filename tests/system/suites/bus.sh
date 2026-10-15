@@ -50,6 +50,9 @@ sh "$REPO/krffs/mkdisk.sh" "$REPO/krffs/manifests/disk-test.manifest" "$DIR/ide.
     >/dev/null 2>&1 || fail "mkdisk ide"
 "$MKMBR" --lba --id aaaa0001 "$DIR/sata.disk" 2048:98304:7f >/dev/null || fail "mkmbr sata"
 "$MKMBR" --lba --id bbbb0002 "$DIR/ide.disk" 2048:98304:7f >/dev/null || fail "mkmbr ide"
+# both ROOT NAME RECORD: boot with the AHCI disk and the IDE disk, the root
+# named ROOT, and require the root's RECORD and the block probe; NAME labels
+# the log and the result.
 both() {
     "$HARNESS" --kernel "$KERNEL" --qemu-arg=-cpu --qemu-arg=max \
         --drive "file=$DIR/sata.disk,format=raw,if=none,id=drv0" \

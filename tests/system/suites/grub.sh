@@ -1,13 +1,12 @@
 #!/usr/bin/env sh
 
 #
-# grub_test.sh: replacing the boot loader from the running machine.
+# grub.sh: replacing the boot loader from the running machine.
 #
 # The post-MBR gap has two core-image tails and LBA 1 selects between them.
 # `bootctl grub` writes the tail that is not in use, reads it back, and only
-# then rewrites LBA 1. Sector 0 is never written, which is the whole reason the
-# layout is shaped this way: it has the partition table, and a disk writes
-# whole sectors.
+# then rewrites LBA 1. The layout is shaped so that sector 0 is never
+# written: it has the partition table, and a disk writes whole sectors.
 #
 # Three boots of one disk. The first proves which core is running and installs
 # the other, the second proves the machine came up on it, installs the first
@@ -17,7 +16,7 @@
 # Reading the pointer back would prove only bytes at rest, and a tool that wrote
 # the pointer and nothing else would pass that.
 #
-# Usage: grub_test.sh <grub-disk> <root password>
+# Usage: grub.sh <grub-disk> <root password>
 #
 
 # The emulator of the architecture tests/system/suites.mk names.
@@ -48,6 +47,7 @@ LOG=""
 QPID=""
 FPID=""
 
+# Stop the machine and the feeder of this boot, and remove the feed.
 cleanup_boot() {
     qpid="$QPID"
     fpid="$FPID"
@@ -64,6 +64,7 @@ cleanup_boot() {
     rm -f "$FEED"
 }
 
+# Stop the boot, and remove the disk's copy, the feed, the steps and the logs.
 cleanup() {
     cleanup_boot
     rm -f "$WORK" "$FEED" "$STEPS" "$DISK".log*
@@ -74,6 +75,8 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 
+# fail REASON: keep the failing boot's log as DISK.fail.log, stop the boot,
+# print REASON and exit 1.
 fail() {
     if [ -n "$LOG" ] && [ -f "$LOG" ]; then
         cp "$LOG" "$DISK.fail.log" 2>/dev/null || true
@@ -84,10 +87,11 @@ fail() {
     exit 1
 }
 
-# Wait up to $3 seconds until the log has at least $2 occurrences of $1.
+# Wait up to $3 seconds until the log has at least $2 occurrences of $1, and
+# return 1 if it does not. The bound is $3 or what is left of the run's
+# budget, whichever is less, so that a run cannot pass its deadline inside a
+# wait; a run past its deadline fails.
 wait_count() {
-    # The wait's bound is its own or what is left of the run's budget,
-    # whichever is less, so a run cannot pass its deadline inside a wait.
     remaining=$((START + DEADLINE - $(date +%s)))
     if [ "$remaining" -le 0 ]; then
         fail "the run passed its ${DEADLINE}s deadline waiting for $1"
@@ -131,7 +135,7 @@ boot_feed() {
     FPID=$!
 }
 
-# A watch-only boot (the matrix states): no feed, a bounded wait for $1.
+# A boot with nothing typed: wait up to 75 seconds for $1, then stop it.
 boot_watch() {
     rm -f "$FEED"
     mkfifo "$FEED"

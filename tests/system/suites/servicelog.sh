@@ -7,9 +7,10 @@
 # when it reaches its cap, 256 KiB, leaving one line that says so, so a service
 # that fails in a loop cannot fill a root (`bound_service_log` in
 # utils/init.c). It looks at the file every sixty turns of its loop, and a turn
-# that reaps a child is shorter than an idle one, so orphans hurry it. A boot
-# that finds the file at its cap, left so by the boots before, removes it
-# before any service writes, and writes no line (`open_service_log`).
+# that reaps a child is shorter than an idle one, so orphans to reap bring the
+# look sooner. A boot that finds the file at its cap, left so by the boots
+# before, removes it before any service writes, and writes no line
+# (`open_service_log`).
 #
 # The root is an ext2 volume made here with init-shell as its init, BusyBox as
 # its shell and `update` as the one service init starts, so a boot comes to a
@@ -75,10 +76,10 @@ value() { # value LOG NAME
     grep -a "^$2=" "$1" | tail -1 | tr -d '\r' | cut -d= -f2
 }
 
-# The first boot. The orphans are the children of subshells that have exited:
-# init reaps each, a turn apiece. The wait is the guest's own, bounded, so a
-# kernel whose init never empties the file answers with the count instead of
-# holding the boot to the step's limit.
+# The first boot. The orphans are the children of subshells that have exited,
+# and init reaps each in a turn of its own. The wait is the guest's own,
+# bounded, so that a kernel whose init never empties the file prints the
+# count and does not hold the boot to the step's limit.
 TRIES=$(scaled 150)
 # interval: the guest polls the log's size each second until init bounds it
 if ! boot boot1 --ok "FIRSTDONE" --must-exit \

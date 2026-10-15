@@ -13,9 +13,9 @@
 # and its block count, 4 GiB on FAT32, and the seek's own reach on exFAT,
 # each refused with EFBIG and named in the kernel log.
 #
-# The file is 256 MiB unless RACH2_LARGE_MIB says otherwise; the milestone
-# 47 record ran 5120, which takes hours at the kernel's rates (entry 10 of
-# dev-log/50-shortcomings/plan.md). The disk is sparse and stays so.
+# The file is 256 MiB unless RACH2_LARGE_MIB says otherwise; a file past
+# 4 GiB, such as 5120, takes hours at the kernel's rates. The disk is sparse
+# and stays so.
 #
 # Usage: large.sh KERNEL IMAGE HARNESS MKMBR DIR
 set -u
@@ -65,10 +65,10 @@ else
 fi
 mformat -i "$DISK"@@$((P3 * 512)) -F -T $P3N -v LARGEFAT :: || fail "mformat"
 
-# One boot of the rescue shell on the disk, the probe run once; the log is
-# $1, the probe's arguments $2, and the rest are steps before the wait for
-# the probe's verdict, which keep the harness's step clock alive while a
-# gibibyte at a time goes by.
+# run LOG ARGS STEP...: one boot of the rescue shell on the disk that runs
+# the probe once with ARGS, logged to LOG. The STEPs come before the wait for
+# the probe's verdict and keep the harness's step clock alive while a
+# gibibyte at a time goes by. The status is the harness's.
 run() {
     log=$1; args=$2; shift 2
     "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max \

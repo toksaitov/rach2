@@ -1,42 +1,40 @@
 #!/usr/bin/env sh
 
 #
-# selfbuild_test.sh: the machine builds its own kernel, and the exact bytes it
+# selfbuild.sh: the machine builds its own kernel, and the exact bytes it
 # built are extracted, checked and booted through the full probe suite.
 #
-# Milestone 20 proved the machine compiles a program; milestone 21 proved a
-# build is a build. What this proves is self-hosting: the staged tcc, driven by
-# the staged pdpmake reading the staged guest.mk, turns the staged /src/rach2
-# tree into a kernel, twice from clean workspaces with equal hashes, and the
-# host then boots those bytes. It runs as the unprivileged `test` account, like
-# every build capstone: a machine only root can rebuild is a different machine.
+# The staged tcc, driven by the staged pdpmake reading the staged guest.mk,
+# turns the staged /src/rach2 tree into a kernel, twice from clean
+# workspaces with equal hashes, and the host then boots those bytes. It runs
+# as the unprivileged `test` account, as the other build suites do, since a
+# build that only root can run is not the one a user has.
 #
-# The harness contract is make_test.sh's, hard-won there: stale logs removed
-# before the boot, every assertion made in the guest over that command's own
-# output, every command sent only after the previous one's marker, tokens
-# written split so a command's echo cannot satisfy its own wait, pids cleared
-# before they are signalled, the failing log kept, and every wait bounded, with
-# one whole-run deadline over the per-step ones because two kernel builds under
+# The console is driven as make.sh drives it: stale logs removed before the
+# boot, every check made in the guest over that command's own output, every
+# command sent only after the previous one's marker, tokens written split so a
+# command's echo cannot satisfy its own wait, pids cleared before they are
+# signalled, the failing log kept, and every wait bounded, with one deadline
+# for the whole run over the per-step ones, because two kernel builds under
 # emulation are long and a hang must still be told from slow progress.
 #
-# The guest cannot ask its file system for free space (this kernel has no
-# statfs), so the space preflight runs on the host, over the disk copy's own
-# free-node chain, before the machine is started.
+# The free space is checked on the host, over the disk copy's free-node chain
+# or the ext2 volume's statistics, before the machine is started.
 #
 # The run ends with a second, short boot as root that rebuilds the staged
-# /src/ish in place, no copy and no touch: that is the demonstration flow,
-# and it is what a revert to zero staged timestamps breaks (pdpmake reads a
-# zero modification time as a file that does not exist).
+# /src/ish in place, with no copy and no touch, as a person would; staged
+# files with zero timestamps fail it, since pdpmake reads a zero modification
+# time as a file that does not exist.
 #
-# Usage: selfbuild_test.sh <kernel> <disk> <test password> <root password>
+# Usage: selfbuild.sh <kernel> <disk> <test password> <root password>
 #
 # With SELFBUILD_ROOT=ext2 in the environment the disk's partition is an ext2
 # volume, booted with rach2.root=ext2, its free space read by debugfs and the
 # built kernel extracted by debugfs; the guest builds the kernel once, and
 # the second build, the hash comparison, the userland builds and their smoke
-# checks are left to the KRFFS run, since the programs do not care which
-# root they were built on. One clean build of the kernel and the boot of what
-# it built is the ext2 root's exercise.
+# checks are left to the KRFFS run, since a program's bytes are the same
+# whichever root it was built on. The ext2 run is one clean build of the
+# kernel and the boot of what it built.
 #
 
 # The architecture, its build tree and its emulator, as
@@ -74,10 +72,11 @@ case "$ROOT_TYPE" in
     *) echo "selfbuild_test.sh: SELFBUILD_ROOT is krffs or ext2" >&2; exit 2 ;;
 esac
 
-# Two clean kernel builds: the copied source tree, the objects, the response
-# file and the kernel, with margin. Computed once here, not discovered
-# as a mid-build failure inside the guest. The x86-64 objects and kernel
-# are larger: its first build and the kernel set aside take about 13 MiB.
+# The space two clean kernel builds need: the copied source tree, the
+# objects, the response file and the kernel, with margin, checked here so a
+# full disk does not fail a build inside the guest. The x86-64 objects and
+# kernel are larger: its first build and the kernel set aside take about
+# 13 MiB.
 case "$RACH2_ARCH" in
     x86_64) NEED_BYTES=16777216 ;;
     *) NEED_BYTES=8388608 ;;
@@ -100,6 +99,8 @@ rm -f "$WORK" "$LOG" "$FEED" "$STEPS" "$KEXTRACT"
 QPID=""
 FPID=""
 
+# cleanup_boot: stop the machine and its feeder and remove the FIFO; safe to
+# call twice, since each pid is cleared before it is signalled.
 cleanup_boot() {
     qpid="$QPID"
     fpid="$FPID"
@@ -116,11 +117,11 @@ cleanup_boot() {
     rm -f "$FEED"
 }
 
-# The console log is kept as the failing boot's when the run did not pass,
-# which a stop by the runner is: it is the only account of what the machine
-# did.
-# The disk the machine wrote is kept beside it, so the state a failure
-# left in the file system can be read on the host.
+# cleanup: stop the boot and remove the working files. When the run did not
+# pass, which includes a stop by the runner, the console log is kept as
+# $DISK.fail.log, the only record of what the machine did, and the disk the
+# machine wrote as $DISK.fail.work, so the state a failure left in the file
+# system can be read on the host.
 PASSED=""
 cleanup() {
     cleanup_boot
@@ -136,6 +137,8 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 
+# fail REASON: keep the console log as $DISK.fail.log, stop the boot, print
+# REASON and exit 1.
 fail() {
     if [ -f "$LOG" ]; then
         cp "$LOG" "$DISK.fail.log" 2>/dev/null || true
@@ -146,7 +149,8 @@ fail() {
     exit 1
 }
 
-# Wait up to $2 seconds for the token $1 in the log, under the run deadline.
+# wait_token TOKEN SECONDS: wait up to SECONDS for TOKEN in the log; return 1
+# if it does not come, and fail once the run's deadline has passed.
 wait_token() {
     "$RUNUTIL" until "$LOG" "$1" "$2" && return 0
     if [ "$(($(date +%s) - START))" -gt "$DEADLINE" ]; then
@@ -155,17 +159,22 @@ wait_token() {
     return 1
 }
 
+# step MARKER COMMAND: add COMMAND to the steps, typed after the step before
+# it has printed its marker; MARKER is what COMMAND prints when done.
 step() {
     printf '%s\t%s\n' "$1" "$2" >> "$STEPS"
 }
 
-# The machine first, the feed second (opening the fifo for reading waits for
-# the writer). The feeder paces on each step's marker with a long bound, since
-# a full kernel build sits behind a single marker.
 # The console is driven through tests/system/drive.sh: a line is typed when
 # the output it answers has arrived, under a bound.
 # shellcheck source=tests/system/drive.sh
 . "$REPO/tests/system/drive.sh"
+# boot_steps NAME PASSWORD: boot the working disk, log in as NAME, and type
+# each step once the one before it has printed its marker. The machine starts
+# first and the feed second, since opening the FIFO for reading waits for the
+# writer. A full build is behind a single marker, so a step's bound is what
+# is left of the run's deadline, and a hung build fails when the deadline
+# passes rather than an hour after it.
 boot_steps() {
     login_name="$1"
     login_password="$2"
@@ -181,10 +190,6 @@ boot_steps() {
     drive_feed "$QPID"
     FPID=$DRIVE_FPID
     drive_login "$login_name" "$login_password" "$(scaled 90)" || fail "the machine did not log in at its console"
-    # Each step is typed once the one before it has printed its marker; a
-    # full build sits behind a single marker, so a step's bound is long,
-    # and the run has a budget the steps share, so a hung build fails the
-    # run when the budget is gone and not an hour a marker later.
     while IFS='	' read -r marker command; do
         remaining=$(( START + DEADLINE - $(date +%s) ))
         [ "$remaining" -gt 0 ] || fail "the run's budget was spent before $marker"
@@ -196,7 +201,7 @@ boot_steps() {
 rm -f "$WORK"
 cp "$DISK" "$WORK"
 
-# The space preflight, on the host, over the copy the guest will write.
+# The free space, read on the host from the copy the guest will write.
 if [ "$ROOT_TYPE" = ext2 ]; then
     dd if="$WORK" bs=1048576 skip=1 count=48 2>/dev/null > "$WORK.p1"
     FREE_BYTES="$(debugfs -R stats "$WORK.p1" 2>/dev/null | awk '/^Free blocks:/ { print $3 * 4096 }')"
@@ -208,11 +213,9 @@ if [ -z "$FREE_BYTES" ] || [ "$FREE_BYTES" -lt "$NEED_BYTES" ]; then
     fail "the disk has $FREE_BYTES free bytes and two kernel builds need $NEED_BYTES"
 fi
 
-# The build, twice, from a workspace deleted and recreated each time. There is
-# no in-guest process preflight: /proc does not enumerate processes (ps prints
-# nothing), and the harness itself holds the process budget by construction,
-# one console session sending one command at a time. Each build's tail is
-# echoed after its status so a failure names its file in the kept log.
+# The build, twice, from a workspace deleted and recreated each time, by one
+# console session sending one command at a time. Each build's tail is echoed
+# after its status so a failure names its file in the kept log.
 : > "$STEPS"
 step "COPYONE" "rm -rf /home/test/kbuild; mkdir /home/test/kbuild && cd /home/test/kbuild && cp -r /src/rach2 . && echo COPY\"\"ONE"
 step "BUILDONE" "cd /home/test/kbuild/rach2 && make -f guest.mk > /tmp/kb1.out 2>&1; echo BUILD\"\"ONE=\$?"
@@ -221,9 +224,7 @@ step "HASHONE" "cd /home/test/kbuild/rach2 && busybox sha256sum kernel > /tmp/k1
 step "KEEPONE" "cp /home/test/kbuild/rach2/kernel /home/test/kernel.selfbuilt && echo KEEP\"\"ONE"
 step "DUONE" "busybox du -sk /home/test/kbuild /tmp /home/test/kernel.selfbuilt; busybox df -k /home/test; echo DU\"\"ONE"
 # The second build, the hash comparison, the userland builds and their
-# smoke checks are the KRFFS suite's: the ext2 root proves itself with one
-# clean build of the kernel and the boot of what it built, and a program's
-# bytes are the same whichever root it was built on.
+# smoke checks run on the KRFFS root only, as the header says.
 if [ "$ROOT_TYPE" = krffs ]; then
 step "COPYTWO" "cd /home/test/kbuild && rm -rf rach2 && cp -r /src/rach2 . && echo COPY\"\"TWO"
 step "DUTWO" "busybox du -sk /home/test/kbuild /tmp; busybox df -k /home/test; echo DU\"\"TWO"
@@ -343,11 +344,13 @@ if [ -z "$GUEST_SHA" ]; then
 fi
 cleanup_boot
 
-# The proof of the bytes. The machine is stopped; the exact kernel it built is
-# extracted from the synced disk copy, its hash must equal the one the guest
-# recorded, the structural checker must accept the tcc layout, and then those
-# bytes boot the full probe suite. Nothing here trusts the build; everything
-# is read back out and judged.
+# The kernel's bytes, checked on the host. With the machine stopped, the
+# exact kernel it built is extracted from the synced disk copy, its hash must
+# equal the one the guest recorded, the structural checker must accept the
+# tcc layout, and then those bytes boot the full probe suite.
+#
+# sha256_of FILE: print the SHA-256 of FILE, building the tree's own sha256
+# tool first if it is missing.
 sha256_of() {
     if [ ! -x "$REPO/build/tools/verify/sha256" ]; then
         mkdir -p "$REPO/build/tools/verify"
@@ -388,9 +391,11 @@ if [ "$ROOT_TYPE" = ext2 ]; then
         || fail "the probes did not pass on the rebuilt kernel's ext2 root"
 fi
 
-# The GRUB half: the same bytes through a real loader. The disk assembly runs
-# under a bound, because a wait without one would hang a run whose every other
-# wait has a limit.
+# The GRUB half: the same bytes through a real loader.
+#
+# bounded SECONDS COMMAND...: run COMMAND, and kill it and return 124 if it has
+# not ended within SECONDS; otherwise return its status. The disk assembly
+# runs under it, since every other wait of the run has a limit.
 bounded() {
     limit="$1"
     shift
@@ -404,13 +409,11 @@ bounded() {
     wait "$bpid"
 }
 
-# The GRUB boot of the guest-built kernel is unconditional: the disk is
-# assembled natively from the pinned GRUB artifacts, so there is nothing to
-# skip.
+# The GRUB boot of the guest-built kernel always runs: the disk is assembled
+# on the host from the pinned GRUB images.
 GRUB_DISK="$DISK.grub"
-# The root the disk boots. It was a KRFFS partition built from the default
-# manifest until 2026-09-14; every disk carries an ext2 root now, and what this
-# proves is the guest-built kernel booting through GRUB, not what it mounts.
+# The disk's root is the small os-simple ext2 image, since the row tests the
+# guest-built kernel booting through GRUB and not what it mounts.
 if ! bounded 900 env \
         RACH2_DISK_TABLE=mbr \
         RACH2_DISK_RECOVERY_MB=8 \
@@ -439,11 +442,10 @@ fi
 rm -f "$GRUB_DISK" "$GLOG"
 GRUB_NOTE="and booted through GRUB"
 
-# The in-place regression: root, in a second short boot of the same disk,
-# runs make directly in the staged /src/ish, no copy and no touch. This is
-# the demonstration flow, and it is what a revert to zero staged timestamps
-# breaks (pdpmake then reads every staged source as a file that does not
-# exist).
+# The build in place: root, in a second short boot of the same disk, runs
+# make directly in the staged /src/ish, with no copy and no touch. Staged
+# files with zero timestamps fail it, since pdpmake then reads every staged
+# source as a file that does not exist.
 : > "$STEPS"
 step "INPLACERC" "cd /src/ish && make -f guest.mk > /tmp/ip.out 2>&1; echo INPLACE\"\"RC=\$?"
 step "IPTAIL" "busybox tail -3 /tmp/ip.out; echo IP\"\"TAIL"

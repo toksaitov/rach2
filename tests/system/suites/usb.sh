@@ -2,15 +2,13 @@
 #
 # usb.sh: the USB stack, from a port to a keystroke.
 #
-# Twenty-one boots, because what has to be proved differs in each.
+# Each row is a boot of its own, since each tests a different path.
 #
-# The machine has no 8042 in the eleven boots that type a key or move a mouse.
-# That is the whole point of the option: with a PS/2 keyboard and mouse
-# present, a typed key or a moved mouse could have arrived by either road, and
-# a check that passes either way says nothing about the one this milestone
-# built. QEMU's `sendkey` and `mouse_move` go to whatever input device the
-# machine has, so taking the other one away is what makes the answer mean
-# something.
+# The machine has no 8042 in the boots that type a key or move a mouse. With
+# a PS/2 keyboard and mouse present, a typed key or a moved mouse could have
+# arrived by either road, and a check that passes either way says nothing
+# about the USB one. QEMU's `sendkey` and `mouse_move` go to whatever input
+# device the machine has, so the PS/2 devices are taken away.
 #
 # The devices are bound to the controller by name rather than left to QEMU's
 # automatic placement, for the same reason.
@@ -32,16 +30,19 @@ if [ "${RACH2_USB_ROWS:-all}" = latency ]; then
     exec sh "$REPO/tests/system/usb_latency.sh" "$KERNEL" "$IMAGE" "$HARNESS"
 fi
 
+# note TEXT prints TEXT; bad REASON prints REASON and marks the run failed.
 fail=0
 note() { echo "usb-test: $1"; }
 bad() { echo "usb-test: $1" >&2; fail=1; }
 
+# run_harness ARG... boots the harness kernel with the harness's ARGs, and
+# run_shell ARG... the ordinary kernel. The harness kernel ends the machine
+# when its first process exits, which suits a boot that runs one probe; a
+# probe run in parts needs the ordinary kernel and its debug shell between
+# the parts.
 run_harness() {
     "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" "$@"
 }
-# The harness kernel ends the machine when its first process exits, which is
-# right for a boot that runs one probe; a probe run in parts needs the
-# ordinary kernel and its debug shell between the parts.
 run_shell() {
     "$HARNESS" --kernel "$REPO/$ARCH_BUILD/rach2/kernel" --initrd "$IMAGE" "$@"
 }
@@ -147,13 +148,12 @@ else
     bad "with USB switched off the file was not there, or was not empty"
 fi
 
-# ---- 6b: more devices than the table held before milestone 50: two hubs
-#          on two root ports with fourteen devices between them, sixteen in
-#          all, every one configured. A hub's last port is scanned like its
-#          first, which is what a table that fills from behind a hub needs.
-#          The probe is given the count, so it reads /proc/usb until the
-#          kernel lists all sixteen: the shell can start while the hubs are
-#          still being scanned. ----
+# ---- 6b: two hubs on two root ports with fourteen devices between them,
+#          sixteen in all, every one configured. A hub's last port is scanned
+#          like its first, which is what a table that fills from behind a hub
+#          needs. The probe is given the count, so it reads /proc/usb until
+#          the kernel lists all sixteen: the shell can start while the hubs
+#          are still being scanned. ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
     --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0,port=1,id=hub1 \
@@ -215,9 +215,8 @@ fi
 
 # ---- 7: a device this kernel cannot drive is refused once and left alone,
 #         and the devices beside it are still enumerated. Both halves matter:
-#         the notebook found a device of this kind and the stack enumerated it
-#         again every 150 ms until it ran out of slots, which cost the keyboard
-#         that was already working. ----
+#         a stack that enumerated such a device again every 150 ms would run
+#         out of slots, which would cost the keyboard already working. ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
     --qemu-arg=-device --qemu-arg=usb-tablet,bus=xhci.0 \
@@ -230,15 +229,14 @@ else
 fi
 
 # ---- 8: a device that cannot be driven does not consume the table. The
-#         notebook has three of them soldered to it, and while a refusal was
-#         remembered by holding a table entry, those three left one entry for
-#         everything a person plugs in: unplug once and the next scan gave
-#         that entry to another of them, after which nothing plugged in was
-#         ever enumerated again until the machine was rebooted. The tablet
-#         here stands for those devices, and the mouse is unplugged and
-#         plugged back in the way a person does. The port it comes back on is
-#         not named: the emulator hands out the next free one, as a person
-#         moving a plug from one socket to another does. ----
+#         notebook has three of them soldered to it; a refusal that held a
+#         table entry would leave one entry for everything a person plugs in,
+#         and after an unplug the next scan would give that entry to another
+#         of them, so nothing plugged in would be enumerated until a reboot.
+#         The tablet here stands for those devices, and the mouse is
+#         unplugged and plugged back in the way a person does. The port it
+#         comes back on is not named: the emulator hands out the next free
+#         one, as a person moving a plug from one socket to another does. ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
     --qemu-arg=-device --qemu-arg=usb-tablet,bus=xhci.0 \
@@ -294,7 +292,7 @@ fi
 # ---- 11: a mouse over messages, since a mouse and a keyboard are two
 #          different endpoints and the mouse is the one whose reports arrive
 #          without anybody asking. What is asked of this boot is the count and
-#          not the movement, which boot 4 already proves: a mouse whose
+#          not the movement, which boot 4 checks: a mouse whose
 #          messages never arrive is still read by the timer's pump, so a check
 #          on the movement alone would pass either way. `mouseprobe` is not run
 #          here because it stops the machine when it has its movement, and
@@ -351,7 +349,7 @@ fi
 
 # ---- 15: the keyboard's line and the timer with messages on, the I/O APIC
 #          delivering the line and the local APIC's timer ticking where ACPI
-#          lists them. The model in the host test cannot prove this: it takes
+#          lists them. The model in the host test cannot show this: it takes
 #          a machine with a PS/2 keyboard, whose keystroke arrives on its
 #          line, and a timer whose vector must be counting. ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
@@ -427,7 +425,7 @@ fi
 #           pull, however late the pull comes, within the driver's ten-second
 #           deadline. Unthrottled, the emulator completes each stage inside
 #           its doorbell and the pull lands between stages, and the order of
-#           the process's line and the kernel's proves nothing. The pull
+#           the process's line and the kernel's shows nothing. The pull
 #           drains the medium before it takes the device away, which ends the
 #           data stage, so the driver may see the status wrapper sent before
 #           it sees the device gone; either way the request is kept. The next
@@ -610,6 +608,9 @@ fi
 for i in 0 1 2; do
     cp "$STICK" "$OUT.twohc-stick-$i.img" || bad "the two-controller sticks"
 done
+# twohc_sticks BUS0 BUS1 BUS2 ARG...: boot the ordinary kernel with two
+# controllers and the three sticks on the buses named, with the harness's
+# ARGs.
 twohc_sticks() {
     where0=$1
     where1=$2
@@ -656,10 +657,11 @@ fi
 
 # ---- one controller refused at its bring-up: the other still comes up and
 #      the keyboard on it still types. `rach2.hcfail=0` refuses the first,
-#      which is the case no QEMU machine has and the one the bring-up loop was
-#      written for. What was taken from the firmware goes back and the record
-#      is closed, so the controller that is left is numbered from zero and the
-#      devices on it are enumerated as though the other had never been there.
+#      which is the case no QEMU machine has and the one the bring-up loop
+#      handles. What was taken from the firmware goes back and the record is
+#      closed, so the controller that is left is numbered from zero and the
+#      devices on it are enumerated as though the other had never been
+#      there. ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-machine --qemu-arg=pc,i8042=off \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci0 \

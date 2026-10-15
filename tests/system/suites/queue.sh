@@ -6,7 +6,9 @@
 # the controller's vector counts the completions. Then the fallback root
 # on the disk, whose faults poll the port, beside a raw reader that keeps a
 # command queued on the same port. Then a disk throttled below one request
-# in a deadline period, whose late answers must be taken as the answers.
+# in a deadline period, whose late answers must be taken as the answers; the
+# deadline's boundary on the lag device; a late completion that frees a
+# quarantined slot; and a reader that finds the request pool full.
 #
 # Usage: queue.sh KERNEL IMAGE HARNESS MKMBR DIR
 set -u
@@ -15,6 +17,7 @@ REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 fail() { echo "queue-test: FAIL: $1" >&2; exit 1; }
 mkdir -p "$DIR"
 
+# fat_disk FILE: an 8 MiB disk with one FAT32 partition from sector 2048.
 fat_disk() {
     rm -f "$1"
     dd if=/dev/zero of="$1" bs=1048576 count=8 2>/dev/null || fail "the disk $1"
@@ -59,20 +62,16 @@ mformat -i "$DIR/root.disk"@@51380224 -F -T 28672 :: || fail "mformat root"
 grep -aq 'BLOCKPROBE OK' "$DIR/fault.log" || fail "blockprobe on the root"
 echo "queue-test: the root's faults share the port with the queue: $(grep -a 'AHCIPROBE READ' "$DIR/fault.log" | tr -d '\r' | tr '\n' ' ')OK"
 
-# A request answered after its deadline is the answer, not a failure: the
-# disk is throttled to 512 KiB a second, so a 1 MiB request, which is the
-# cache's read run and the most an ext2 write's end gathers since entry 42
-# of milestone 50 raised a request to 2048 sectors, takes two seconds, and
-# the period is set to one second by `rach2.blockdeadline=1`; the request
-# passes its deadline, is answered inside the four periods a request is
-# waited for, and the mount keeps writing. Before entry 14 of milestone 50
-# the first deadline failed the write with EIO and the mount went
-# read-only. The throttle is set against the largest request: at 16 KiB a
-# second, the figure from the days of 32 KiB requests, a run of 1 MiB
-# outlasts the four periods and the disk is declared stalled. The volume
-# is ext2 and not FAT32 because ext2 writes a file back in runs where
-# FAT32 writes each 4 KiB block through as it is written, under the
-# deadline.
+# A request answered after its deadline is the answer, not a failure. The
+# disk is throttled to 512 KiB a second, so a 1 MiB request, the cache's read
+# run and the most an ext2 write's end gathers, takes two seconds, and
+# `rach2.blockdeadline=1` sets the period to one second: the request passes
+# its deadline, is answered inside the four periods a request is waited for,
+# and the mount keeps writing. The throttle is set against the largest
+# request: at 16 KiB a second a run of 1 MiB would outlast the four periods
+# and the disk would be declared stalled. The volume is ext2 and not FAT32
+# because ext2 writes a file back in runs, where FAT32 writes each 4 KiB
+# block through as it is written, under the deadline.
 rm -f "$DIR/late.vol"; : > "$DIR/late.vol"
 E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 \
     -O sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize \

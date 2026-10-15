@@ -1,27 +1,25 @@
 #!/usr/bin/env sh
 
 #
-# login_test.sh: prove the console cannot fall back to an unauthenticated shell.
+# login.sh: the console cannot fall back to an unauthenticated shell.
 #
-# Boots two images that differ only in the init they declare, neither staging
-# /bin/login, and then two boots of the real image: one that stops the login at
-# its prompt, which only init can undo, and one that proves the way back in. The
-# strict one (init-login) must report that it cannot exec /bin/login, must
-# report it more than once, since once is a failure and not a retry, and must
-# never print uid=0. The permissive one (init-shell) must print uid=0, and that
-# half is what makes the strict half's silence mean something: a strict image
-# that failed to boot at all for an unrelated reason would otherwise pass by
-# printing nothing. `id` is a standalone-ash applet, so uid=0 at a console
-# nobody authenticated at is an unauthenticated root shell and nothing else. A
-# third boot proves the way back into a broken image still works: rach2.rescue
-# must reach the kernel debug shell.
+# Two images that differ only in the init they declare boot first, neither
+# staging /bin/login. The strict one (init-login) must report that it cannot
+# exec /bin/login, must report it more than once, since once is a failure and
+# not a retry, and must never print uid=0. The permissive one (init-shell)
+# must print uid=0, which gives the strict half's silence its meaning: a
+# strict image that failed to boot for an unrelated reason would otherwise
+# pass by printing nothing. `id` is a standalone-ash applet, so uid=0 at a
+# console nobody authenticated at is an unauthenticated root shell. The
+# missing program gives ENOENT, the error of an image built without it,
+# which is the image that must refuse; a /bin/login without permission would
+# give EACCES instead.
 #
-# The ENOENT case is the one that matters and the one an earlier draft never
-# reached, having tested a chmod 0000 /bin/login instead, which yields EACCES.
-# ENOENT is exactly the shape of an image built without the program, which is
-# the image that must refuse hardest.
+# Two boots of the real image follow: one stops the console session, which
+# only init can continue, and one requires rach2.rescue to reach the kernel
+# debug shell, the way back into a broken image.
 #
-# Usage: login_test.sh <kernel> <strict.krffs> <shell.krffs> <os-real.krffs>
+# Usage: login.sh <kernel> <strict.krffs> <shell.krffs> <os-real.krffs>
 #            <user> <password>
 #
 
@@ -58,8 +56,9 @@ rm -f $LOGS
 
 QPID=""
 
-# Type `id` at whatever the console offers. A shell answers it; a console that
-# never came up does not, which is the whole distinction being drawn.
+# boot LOG IMAGE LINE: boot IMAGE with the boot line LINE in the background,
+# its console in LOG, and type `id` at whatever the console offers: a shell
+# answers it, and a console that never came up does not.
 boot() {
     printf '\nid\n' | "$QEMU" -cpu max -display none -kernel "$KERNEL" \
         -initrd "$2" -append "$3" -serial stdio >"$1" 2>&1 &
@@ -67,12 +66,13 @@ boot() {
 }
 
 # Wait until the serial log $1 contains the token $2, then return 0; give up
-# after $3 seconds and return 1. Gating on a token, not on a fixed sleep
-# keeps a loaded host from killing QEMU before the console has had its say.
+# after $3 seconds and return 1. A wait for a token, and not for a fixed
+# time, keeps a loaded host from stopping QEMU before the console printed it.
 wait_serial() {
     "$RUNUTIL" until "$1" "$2" "$3"
 }
 
+# Stop the machine, if it runs.
 stop() {
     qpid="$QPID"
     QPID=""
@@ -82,9 +82,8 @@ stop() {
     fi
 }
 
-# The machine goes down every way out of this script and not only the ways it
-# writes for itself: a cancelled run that had only removed the logs would leave
-# QEMU alive with nothing named to say so.
+# Stop the machine and remove the logs, on every way out of the script: a
+# cancelled run that only removed the logs would leave QEMU running.
 # shellcheck disable=SC2086
 cleanup() {
     stop
@@ -135,28 +134,26 @@ if ! grep -q "init: boot rach2.rescue" "$STRICT.log"; then
 fi
 echo "login-test: the strict init refuses and keeps refusing: OK"
 
-# A console session stopped by an uncatchable SIGSTOP, which only init can undo:
-# there is no shell above it to type `fg`, so an init that waited without
-# WUNTRACED would go on waiting and the console would be gone until the next
-# reboot. The signal is sent by the session itself, so what is proved is the
-# recovery and not the delivery: `kill -STOP $$` cannot be caught, ignored or
-# handled, and the token after it can only be printed by a session init brought
-# back. The token is written split, because the console echoes what is typed:
-# a command containing the whole token would put it in the log before it ran,
-# and the wait would match the echo, not the output.
+# A console session stopped by SIGSTOP, which only init can undo: there is no
+# shell above it to type `fg`, so an init that waited without WUNTRACED would
+# go on waiting and the console would be gone until the next reboot. The
+# session sends the signal to itself, so what is checked is the recovery and
+# not the delivery: `kill -STOP $$` cannot be caught, ignored or handled, and
+# only a session that init continued can print the token after it. The token
+# is typed split, since the console echoes what is typed and the wait would
+# otherwise match the echo.
+#
 # Each line is typed after the prompt it answers: `login` flushes pending
-# input when it puts the line back into canonical mode, so a script written
-# all at once is eaten by the very repair that makes the console usable, and
-# the test would pass having run nothing.
+# input when it puts the line back into canonical mode, so a script typed all
+# at once would be lost to that flush.
 FEED="$REAL.stop.feed"
 rm -f "$FEED"
 mkfifo "$FEED"
 "$QEMU" -cpu max -display none \
     -kernel "$KERNEL" -initrd "$REAL" -serial stdio < "$FEED" >"$REAL.stop.log" 2>&1 &
 QPID=$!
-# Each line is typed when the prompt it answers has been printed, through
-# tests/system/drive.sh, whose feeder holds the fifo open while the machine
-# lives.
+# tests/system/drive.sh types the lines; its feeder holds the fifo open while
+# the machine runs.
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 # shellcheck source=tests/system/drive.sh
 . "$REPO/tests/system/drive.sh"

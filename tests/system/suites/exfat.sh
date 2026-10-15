@@ -19,20 +19,22 @@ sh "$REPO/krffs/mkdisk.sh" "$REPO/krffs/manifests/disk-test.manifest" "$DISK" 80
 "$MKFIX" "$DISK.vol" --empty || fail "the empty volume"
 dd if="$DISK.vol" of="$DISK" bs=512 seek=$PART conv=notrunc 2>/dev/null || fail "placing the volume"
 
+# run ARG...: boot the test image on the disk with the harness's ARGs.
 run() {
     "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
         --qemu-arg=-cpu --qemu-arg=max \
         --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" "$@"
 }
 
-# The volume walked on the host. The crash may leave lost clusters, which the
-# mount's check counts and leaves for a host tool; the repair step records
-# that one line, and from then on it is the only finding a walk may show.
+# walk_clean WHAT: walk the volume with the host's reader, and fail with WHAT
+# on any finding but the line LOST has. The crash may leave lost clusters,
+# which the mount's check counts and leaves for a host tool; walk_repaired
+# records that one line in LOST, and from then on it is the only finding a
+# walk may show.
 LOST=""
 walk_clean() {
     "$MKFIX" --check "$DISK" $PART > "$DISK.check" 2>&1 && return 0
-    # A reader that crashed or found nothing to say is a failure of its own:
-    # its last line names the count of findings.
+    # A walk that found faults ends with `check: FAIL: `; any other is a crash.
     grep -q '^check: FAIL: ' "$DISK.check" || { cat "$DISK.check" >&2; fail "the reader did not walk the volume"; }
     if grep '^check:' "$DISK.check" | grep -v '^check: FAIL:' \
         | grep -vxF "${LOST:-no such line}" | grep -q .; then
@@ -40,19 +42,22 @@ walk_clean() {
         fail "$1"
     fi
 }
+# walk_repaired WHAT: walk the volume, keep its lost-cluster line in LOST, and
+# judge it as walk_clean does.
 walk_repaired() {
     "$MKFIX" --check "$DISK" $PART > "$DISK.check" 2>&1 || true
     LOST="$(grep '^check: lost:' "$DISK.check" || true)"
     walk_clean "$1"
 }
 
-# The external checker, where the host has one: macOS's fsck_exfat over a copy
-# of the volume, or exfatprogs' fsck.exfat over the same. It reports without
-# modifying; `$2` non-empty says the volume holds the lost clusters the
-# mount's check counts and leaves, and the checker is then given its repair
-# and must call the repaired copy clean. The two checkers differ on whether
-# a lost cluster is reported before the repair, so that report is not
-# required; the clean copy after the repair is.
+# external_check WHAT LOST: the external checker, where the host has one,
+# over a copy of the volume: macOS's fsck_exfat or exfatprogs' fsck.exfat. It
+# reports without modifying, and must call the copy clean or the suite fails
+# with WHAT. LOST not empty says the volume holds the lost clusters the
+# mount's check counts and leaves; the checker then repairs the copy and must
+# call the repaired copy clean. The two checkers differ on whether a lost
+# cluster is reported before the repair, so that report is not required.
+# Without a checker the function does nothing.
 external_check() {
     dd if="$DISK" of="$DISK.vol" bs=512 skip=$PART count=$SECTORS 2>/dev/null \
         || fail "copying the volume for the external checker"

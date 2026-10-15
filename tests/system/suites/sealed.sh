@@ -1,21 +1,21 @@
 #!/usr/bin/env sh
 
 #
-# sealed_test.sh: the disk that goes into the laptop, operated the way it will
-# be operated once it is in there.
+# sealed.sh: the disk that goes into the laptop, operated the way it is
+# operated once it is in there.
 #
-# Every other harness proves one mechanism on a disk built for it. This one
-# proves the finished article: the image `make rach2-sealed-disk` writes, on the
-# controller it will use, with nothing typed at the console after the machine is
-# switched on. Everything it does, it does over SSH, because after the screws go
-# in that is the only way in.
+# The other suites each test one mechanism on a disk built for it. This one
+# tests the image `make rach2-sealed-disk` writes, on the controller it will
+# use, with nothing typed at the console after the machine is switched on.
+# Everything it does, it does over SSH, because with the case closed that is
+# the only way in.
 #
 # Two runs of one artifact, on separate copies.
 #
 # The fault run walks the whole life of the machine: it comes up on the ext2
 # root the candidate entries carry and answers a key login; a new kernel
-# arrives over the same connection, is installed as a one-boot trial, proves
-# itself by a marker in its own boot, and is committed; a candidate destroyed
+# arrives over the same connection, is installed as a one-boot trial, shows
+# a marker in its own boot, and is committed; a candidate destroyed
 # from the host is caught by the fallback, which boots the same root on the
 # previous kernel, and repaired from the machine that fell back; the root is
 # made missing, faulty and dirty in turn under an armed trial and each lands in
@@ -28,12 +28,12 @@
 # recovery through an ssh pipe, after which the machine boots from what
 # arrived.
 #
-# The control run is the same artifact with no faults injected and no deliberate
-# entry into recovery, and it asserts that no fallback and no recovery token
-# appears anywhere. That absence is the whole point of the second run: a run
-# that entered recovery on purpose could never assert it.
+# The control run is the same artifact with no faults injected and no
+# deliberate entry into recovery, and it checks that no fallback and no
+# recovery token appears anywhere; a run that entered recovery on purpose
+# could not check that.
 #
-# Usage: sealed_test.sh <sealed-disk> <root password> [ssh port]
+# Usage: sealed.sh <sealed-disk> <root password> [ssh port]
 #
 
 # The build tree and the emulator of the architecture
@@ -69,6 +69,8 @@ CORE="$DISK.core.img"
 LOG=""
 QPID=""
 
+# cleanup_boot: stop the machine; safe to call twice, since the pid is cleared
+# before it is signalled.
 cleanup_boot() {
     qpid="$QPID"
     QPID=""
@@ -78,6 +80,8 @@ cleanup_boot() {
     fi
 }
 
+# cleanup: stop the machine and remove the working disk, the images and the
+# logs.
 cleanup() {
     cleanup_boot
     rm -f "$WORK" "$WORK.sb" "$KNOWN" "$ROOTIMG" "$MARKED" "$CORE" "$DISK.ext2.img" "$DISK".log*
@@ -88,6 +92,8 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 
+# fail REASON: keep the failing boot's log as $DISK.fail.log, stop the
+# machine, print REASON and exit 1.
 fail() {
     if [ -n "$LOG" ] && [ -f "$LOG" ]; then
         cp "$LOG" "$DISK.fail.log" 2>/dev/null || true
@@ -98,8 +104,9 @@ fail() {
     exit 1
 }
 
-# Each phase says how long it took, because the budget for this rehearsal is a
-# number in the plan and a harness that grew past it should say which part grew.
+# phase NAME: print how long the phase before took and start phase NAME. The
+# run has a time budget, and a run that grew past it should say which part
+# grew.
 phase() {
     now="$(date +%s)"
     if [ -n "${PHASE_NAME:-}" ]; then
@@ -109,10 +116,10 @@ phase() {
     PHASE_AT="$now"
 }
 
-# Wait up to $3 seconds until the log has at least $2 occurrences of $1.
+# wait_count PATTERN COUNT SECONDS: wait up to SECONDS until the log has at
+# least COUNT occurrences of PATTERN; return 1 if it does not. The wait is cut
+# to what is left of the run's deadline, and passing that deadline fails.
 wait_count() {
-    # The wait's bound is its own or what is left of the run's budget,
-    # whichever is less, so a run cannot pass its deadline inside a wait.
     remaining=$((START + DEADLINE - $(date +%s)))
     if [ "$remaining" -le 0 ]; then
         fail "the run passed its ${DEADLINE}s deadline waiting for $1"
@@ -126,10 +133,10 @@ wait_count() {
     return 1
 }
 
-# A cold boot of $WORK: a new QEMU, a new log, the SSH port forwarded, and
-# nothing typed at the console. The machine is on the network the sealed image
-# is built for, so the address it asks for is answered the way the building's
-# router will answer it.
+# start_qemu NAME: cold-boot $WORK in a new QEMU logged to $DISK.log.NAME, with
+# the SSH port forwarded and nothing typed at the console. The machine is on
+# the network the sealed image is built for, so the address it asks for is
+# answered as the building's router answers it.
 start_qemu() {
     LOG="$DISK.log.$1"
     rm -f "$LOG" "$KNOWN"
@@ -142,16 +149,16 @@ start_qemu() {
     QPID=$!
 }
 
-# A boot that is expected to come up and answer SSH. What says it is up depends
-# on which of the two systems booted: the installed one starts a login, and
-# recovery starts a shell and says at its first line whether a key was built
-# into it. Either line will do, since what is waited for after it is the port.
+# cold_boot NAME: start_qemu NAME, and fail unless the machine comes up and
+# answers SSH. What says it is up depends on which of the two systems booted:
+# the installed one starts a login, and recovery starts a shell and says at
+# its first line whether a key was built into it. Either line will do, since
+# init starts the server after the network and what is waited for after the
+# line is the port.
 UP="rach2 login:\|recovery image"
 cold_boot() {
     start_qemu "$1"
     wait_count "$UP" 1 180 || fail "the machine never came up"
-    # The server is started by init after the network, so what is waited for is
-    # the port answering, not a line on the console.
     i=0
     while [ "$i" -lt "$(scaled 60)" ]; do
         if machine 'echo up' > /dev/null 2>&1; then
@@ -164,18 +171,17 @@ cold_boot() {
     fail "the machine never answered SSH"
 }
 
-# A boot that is expected to stop somewhere: it waits for one line and looks at
-# nothing else. Used where the machine is meant to fail, since a boot that
-# reaches no login has no SSH to ask.
+# cold_watch NAME LINE: start_qemu NAME and fail unless LINE comes. It is for a
+# machine meant to fail, since a boot that reaches no login has no SSH to ask.
 cold_watch() {
     start_qemu "$1"
     wait_count "$2" 1 150 || fail "the boot never reached: $2"
 }
 
-# ssh in as root by key, with nothing of the runner's own offered. Every call is
-# bounded: a session that hangs would otherwise hold the whole rehearsal, and a
-# machine that stopped answering mid-command is a failure to report rather than
-# a reason to wait.
+# machine COMMAND: run COMMAND on the machine as root by key, with none of the
+# runner's own keys offered, and print what it printed. Every call is bounded:
+# a session that hangs would otherwise hold the whole run, and a machine that
+# stopped answering during a command is a failure to report.
 machine() {
     $SSHTMO ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
         -o "ConnectTimeout=$(scaled 20)" -o BatchMode=yes -o IdentitiesOnly=yes \
@@ -183,9 +189,9 @@ machine() {
         -i "$REPO/krffs/rach2_demo_ed25519" -p "$PORT" root@localhost "$1" 2>&1
 }
 
-# Stopping the machine is a command it does not answer: the connection dies with
-# it, so the call is bounded tightly and its result ignored, and what is waited
-# for is the process going.
+# stop_machine: power the machine off over SSH and wait for QEMU to end. The
+# connection dies with the machine, so the call is bounded tightly and its
+# result ignored, and what is waited for is the process going.
 stop_machine() {
     $QUICKTMO ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
         -o "ConnectTimeout=$(scaled 10)" -o BatchMode=yes -o IdentitiesOnly=yes \
@@ -195,12 +201,12 @@ stop_machine() {
     cleanup_boot
 }
 
-# The machine restarts inside the same QEMU; what says it came back is another
-# login prompt, counted, not matched, since the log has every boot.
+# reboot_machine N: reboot the machine over SSH and fail unless it comes back
+# and answers SSH. It restarts inside the same QEMU, so what says it came back
+# is the Nth login prompt, counted, since the log has every boot. The reboot's
+# call is bounded and its result ignored, as stop_machine's is.
 reboot_machine() {
     want="$1"
-    # Bounded and its result ignored, for the reason stopping is: the connection
-    # dies with the machine, so there is no answer to wait for.
     $QUICKTMO ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
         -o "ConnectTimeout=$(scaled 10)" -o BatchMode=yes -o IdentitiesOnly=yes \
         -o PreferredAuthentications=publickey -i "$REPO/krffs/rach2_demo_ed25519" \
@@ -220,8 +226,7 @@ reboot_machine() {
 
 # A bound on every ssh, through the project deadline tool: without it a
 # session that stalls after connecting never returns, and the run's own
-# deadline is only looked at between boots. A rehearsal that can hang for
-# ever is not a proof of anything.
+# deadline is only read between boots.
 DEADLINE_TOOL="$REPO/build/tests/system/deadline"
 if [ ! -x "$DEADLINE_TOOL" ]; then
     echo "sealed-test: $DEADLINE_TOOL is not built; run make first" >&2
@@ -230,6 +235,8 @@ fi
 SSHTMO="$DEADLINE_TOOL $(scaled 180)"
 QUICKTMO="$DEADLINE_TOOL $(scaled 20)"
 
+# sha256_of FILE: print the SHA-256 of FILE, building the tree's own sha256
+# tool first if it is missing.
 sha256_of() {
     if [ ! -x "$REPO/build/tools/verify/sha256" ]; then
         mkdir -p "$REPO/build/tools/verify"
@@ -260,10 +267,7 @@ echo "sealed-test: artifact $DISK_SHA ($(wc -c < "$DISK") bytes)"
 # The root is found the way the kernel finds it, by its superblock magic and
 # not by an entry number or a type byte: the first partition whose superblock,
 # at byte 1024, has 0xEF53 at byte 56. What is destroyed below has to be the
-# partition the machine actually mounts. The first partition is the boot one.
-#
-# There were two roots here until 2026-09-14, a KRFFS one the fallback booted
-# and this ext2 one, each discovered separately. The disk has one.
+# partition the machine mounts. The first partition is the boot one.
 #
 # The table is the GUID table the artifact has, read by `mkgpt --list`, which
 # prints its entries as `mkmbr --list` prints an MBR's; the artifact's
@@ -316,9 +320,8 @@ cp "$REPO/$ARCH_BUILD/rach2/kernel" "$MARKED"
 phase "first cold boot"
 cold_boot fault
 
-# The periodic sync init keeps running: the sealed root went without it until
-# the manual's proofreading found the manifest short of `update` (entry 109 of
-# the shortcomings), with init forking a failing exec every second instead.
+# The periodic sync init keeps running: the root must stage `update`, or init
+# forks a failing exec every second instead.
 case "$(machine 'ps' || true)" in
     *update*) ;;
     *) fail "the installed root runs no update process" ;;
@@ -360,12 +363,12 @@ fi
 # The address is the building's to give, and the machine asked for it: the disk
 # has rach2.ip=none and init runs the client.
 #
-# The evidence is read from the machine and not from this console. Since
-# 2026-09-14 init gives every service it starts `/var/log/services` instead of
-# the console, so that the login prompt is not written over by a DHCP client;
-# the client's own record of the lease is therefore in that file. Reaching the
-# machine at all to read it is the other half of the proof, since this suite
-# connects over the network the lease provides.
+# The lease is read from the machine and not from this console: init gives
+# every service it starts `/var/log/services` instead of the console, so that
+# the login prompt is not written over by a DHCP client, and the client's own
+# record of the lease is in that file. Reaching the machine at all to read it
+# also shows the lease, since this suite connects over the network the lease
+# provides.
 case "$(machine 'cat /var/log/services' || true)" in
     *"lease of"*) ;;
     *) fail "the machine did not record taking a lease" ;;
@@ -412,7 +415,7 @@ case "$OUT" in
 esac
 # The committed candidate becomes the fallback kernel: the slot copied into
 # the fallback file and read back, then tried once through the fallback
-# entry, which the marked kernel's token proves ran from that file.
+# entry, which the marked kernel's token shows ran from that file.
 OUT="$(machine 'bootctl fallback' || true)"
 case "$OUT" in
     *"fallback: "*"written from the committed candidate and read back"*) ;;
@@ -435,8 +438,8 @@ stop_machine
 
 phase "a destroyed candidate, the fallback, and the repair"
 # The candidate slot's first sector, destroyed with the machine stopped. GRUB
-# loads a kernel and this one no longer is one, so the fallback number takes the
-# other slot: that is the whole reason two slots exist.
+# loads a kernel and this one no longer is one, so the fallback number takes
+# the other slot, which is why there are two slots.
 dd if=/dev/zero of="$WORK" bs=512 seek=$((BOOT_LBA + CAND_SECTOR)) \
     count=1 conv=notrunc status=none
 
@@ -447,10 +450,9 @@ case "$OUT" in
     *"booted: fallback"*) ;;
     *) fail "the machine did not come up on the fallback: $OUT" ;;
 esac
-# The fallback boots the machine's own root, which is what makes it useful: a
-# kernel that will not load costs the previous kernel and nothing else. It
-# booted a KRFFS root of its own until 2026-09-14, so falling back also meant
-# losing the person's files and landing in the demonstration accounts.
+# The fallback boots the machine's own root, so a kernel that will not load
+# costs the newer kernel and nothing else: the person's files and accounts
+# are still there.
 ROOTS="$(machine 'cat /proc/cmdline; cat /proc/mounts' || true)"
 case "$ROOTS" in
     *"rach2.root=$DISK_ID,3 rach2.rootfstype=ext2"*) ;;
@@ -482,14 +484,13 @@ esac
 stop_machine
 
 phase "the root missing, faulty and dirty, each landing in recovery"
-# The trial is what makes a root that does not come up recoverable without a
-# person, and what it falls to changed on 2026-09-14. Both kernel entries now
-# boot the same root, so a damaged root is damaged for both of them and GRUB
-# cannot save the machine: its automatic fallback fires when a kernel image
-# will not load, not when a kernel loads and finds no file system. The saved
-# default is therefore the recovery system for the whole of a root write, which
-# is what `rach2-install --update` now leaves behind, and the candidate is
-# armed for one boot on top of it.
+# The trial makes a root that does not come up recoverable without a person.
+# Both kernel entries boot the same root, so a damaged root is damaged for
+# both of them and GRUB cannot save the machine: its automatic fallback fires
+# when a kernel image will not load, not when a kernel loads and finds no file
+# system. The saved default is therefore the recovery system for the whole of
+# a root write, which is what `rach2-install --update` leaves behind, and the
+# candidate is armed for one boot on top of it.
 #
 # So each damage is two boots: the armed one, which must fail to mount and
 # reach no login, and the one after it, which must be recovery with nothing
@@ -499,6 +500,8 @@ phase "the root missing, faulty and dirty, each landing in recovery"
 # None is committed, since nothing commits a candidate but a person. The
 # superblock is kept from the host copy and put back before the next damage.
 dd if="$WORK" of="$WORK.sb" bs=512 skip=$((EXT2_LBA + 2)) count=2 status=none
+# arm_candidate_trial NAME: cold-boot as NAME, set the saved default to
+# recovery, arm the candidate for one boot, and stop the machine.
 arm_candidate_trial() {
     cold_boot "$1"
     OUT="$(machine 'bootctl env saved_entry recovery && bootctl trial candidate && bootctl status' || true)"
@@ -508,8 +511,9 @@ arm_candidate_trial() {
     esac
     stop_machine
 }
-# The boot after a damaged one: the saved default, which is recovery, with the
-# trial spent. Recovery runs from RAM, so it comes up whatever the root is in.
+# landed_in_recovery NAME DAMAGE: cold-boot as NAME and fail unless the boot is
+# recovery with the trial spent, after a DAMAGE root. The saved default is
+# recovery, which runs from RAM, so it comes up whatever state the root is in.
 landed_in_recovery() {
     cold_boot "$1"
     OUT="$(machine 'bootctl status; cat /proc/mounts' || true)"
@@ -569,14 +573,11 @@ cold_watch dirty "rach2 login:"
 grep -aq "ext2: check: clean" "$LOG" || fail "the dirty root was not checked clean"
 cleanup_boot
 landed_in_recovery after-dirty dirty
-# The repair and the return: recovery is armed, the check is run there by hand,
-# and the candidate, tried once more, comes up clean and is committed, which is
-# the state the run continues in.
-#
-# A second recovery entry whose command line carried `rach2.fsck` did this at
-# boot until 2026-09-14. It is gone: `e2fsck` is a program, a person in
-# recovery runs it, and a boot menu is the wrong place to ask a question the
-# repair tool asks better.
+# The repair and the return: recovery is armed, the check is run there by
+# hand, and the candidate, tried once more, comes up clean and is committed,
+# which is the state the run continues in. No boot entry runs the check:
+# `e2fsck` is a program a person in recovery runs, and it asks its questions
+# better than a boot menu could.
 cold_boot arm-recovery
 OUT="$(machine 'bootctl trial recovery && bootctl status' || true)"
 case "$OUT" in
@@ -680,7 +681,8 @@ esac
 stop_machine
 
 phase "the root destroyed, and rewritten from recovery"
-# Armed the way `grub-editenv` arms it: one key set and every other line kept.
+# arm_next ENTRY: set next_entry to ENTRY in the environment block of $WORK,
+# the way `grub-editenv` arms it: one key set and every other line kept.
 # Writing the block from nothing would drop the saved default with it, and the
 # machine would come back on the fallback for a reason that had nothing to do
 # with the repair.
@@ -691,9 +693,7 @@ arm_next() {
     {
         printf '# GRUB Environment Block\n'
         printf '# WARNING: Do not edit this file by tools other than grub-editenv!!!\n'
-        # Every variable the block already holds except next_entry, which this
-        # is about to set: the '#' fill is stripped from each line, the two
-        # header comments and any empty line dropped.
+        # The block's variables but next_entry, with the fill and headers gone.
         dd if="$WORK" bs=1 skip="$ENV_AT" count=1024 status=none |
             sed 's/#*$//' |
             grep -a -v -e '^#' -e '^$' -e '^next_entry='
@@ -710,10 +710,10 @@ arm_next() {
 # no kernel entry can survive, since both boot this root.
 dd if=/dev/zero of="$WORK" bs=512 seek=$((ROOT_OFF / 512 + 2)) count=2 \
     conv=notrunc status=none
-# The damage is proved before it is repaired: the fallback entry, armed for one
+# The damage is shown before it is repaired: the fallback entry, armed for one
 # boot, must fail to mount and offer nothing, which is the state an operator
-# would find the machine in. Booting straight into recovery would prove the
-# repair without ever showing that anything was broken.
+# would find the machine in. Booting straight into recovery would test the
+# repair without showing that anything was broken.
 arm_next fallback
 cold_watch broken "root: $DISK_ID,3: /dev/disk0p3 has no ext2 file system this kernel mounts"
 if grep -aq "rach2 login:" "$LOG"; then
@@ -736,8 +736,8 @@ case "$OUT" in
 esac
 # What landed is read from the disk file on the host, not from inside the
 # machine: the bytes are the same bytes, and hashing 500 MiB on an emulated
-# 32-bit processor took longer than any answer is worth waiting for. The
-# machine's own read path is proved by the suites that mount this root.
+# 32-bit processor takes longer than any answer is worth waiting for. The
+# machine's own read path is tested by the suites that mount this root.
 machine 'sync' > /dev/null 2>&1 || true
 stop_machine
 OUT="$(dd if="$WORK" bs=512 skip="$ROOT_LBA" count="$ROOT_SECTORS" status=none | shasum -a 256 | awk '{print $1}')"
@@ -766,8 +766,8 @@ stop_machine
 
 phase "the control run"
 # A fresh copy, no faults, and no deliberate entry into recovery. What it
-# asserts is an absence, which is why it cannot be the same run: a machine that
-# was sent to recovery on purpose can never say that recovery was not reached.
+# checks is an absence, so it cannot be the same run: a machine that was sent
+# to recovery on purpose cannot show that recovery was not reached.
 rm -f "$WORK"
 cp "$DISK" "$WORK"
 cold_boot control

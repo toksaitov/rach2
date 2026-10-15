@@ -1,39 +1,34 @@
 #!/usr/bin/env sh
 
 #
-# make_test.sh: prove that a build on this machine is a build, and not a
-# from-scratch rebuild wearing a build's clothes.
+# make.sh: a build on this machine rebuilds only what changed.
 #
-# The compiler arrived in milestone 20 and `tests/run tcc` proves it compiles.
-# What this proves is what a make is for: that a second run does nothing, that
-# touching one thing rebuilds exactly what depends on it, that the program which
-# comes out is the new one, and that all of it survives a reboot. Every one of
-# those rests on the file system reporting times a build tool can order, which
-# is what the first half of milestone 21 built.
+# `tests/run tcc` checks that the compiler compiles; this suite checks what a
+# make is for: that a second run does nothing, that touching one file
+# rebuilds exactly what depends on it, that the program that comes out is the
+# new one, and that all of it holds across a reboot. Each of those depends on
+# the file system reporting times that a build tool can order.
 #
-# It runs as the unprivileged `test` account, like `tcc-test`: a build tool only
-# root can use is a different thing from a build tool.
+# It runs as the unprivileged `test` account, as the tcc suite does, since a
+# build tool that only root can use is not the tool a student needs.
 #
-# Two design decisions are worth stating, because both were arrived at the hard
-# way.
+# Every assertion is made in the guest, over the command's own output file,
+# and reported as one token this script waits for. A count of occurrences in
+# the console log would count every earlier command's output too, and a check
+# that reads the whole log can be satisfied by a later step's success.
 #
-# Every assertion is made IN THE GUEST, over that command's own output file, and
-# reported as one token this script waits for. Counting occurrences in the
-# console log instead counts every earlier command's output too, and a check
-# that reads the whole log can be satisfied by a LATER step's success.
+# Every line is typed only after the one before it has finished. The
+# console's line discipline holds a bounded amount of unread input, and a
+# build takes seconds to minutes, so a feed on a fixed timer would lose
+# commands on a slow host. Each command ends by printing a marker, and the
+# feeder waits for it.
 #
-# Every line is sent only after the previous one has finished. The console's
-# line discipline has a bounded amount of unread input, and a build takes
-# seconds to minutes, so a feed on a fixed timer silently loses commands on a
-# slow host. Each command ends by printing a marker, and the feeder waits for
-# it.
+# The console echoes what is typed, so a token that appears in a command
+# would be matched from its own echo, and each is typed split. A previous
+# run's logs have every token this run waits for, so they are removed before
+# the boot.
 #
-# Two mistakes this repo has already paid for, avoided by every line here: the
-# console echoes what is typed, so a token that appears in a command would be
-# matched from its own echo and each is written split; and a previous run's logs
-# hold every token this run waits for, so they go before the boot.
-#
-# Usage: make_test.sh <kernel> <disk> <test password>
+# Usage: make.sh <kernel> <disk> <test password>
 #
 
 # The emulator of the architecture tests/system/suites.mk names.
@@ -61,9 +56,9 @@ rm -f "$WORK" "$LOG" "$FEED" "$STEPS"
 QPID=""
 FPID=""
 
-# Everything this run started, ended, on every way out and not only the two the
-# script writes. Each pid is taken and forgotten BEFORE it is signalled, so a
-# trap that fires between the kill and the wait finds nothing left to kill.
+# Stop the machine and the feeder, and remove the feed, on every way out of
+# the script. Each pid is taken and cleared before it is signalled, so a trap
+# that fires between the kill and the wait finds nothing to kill.
 cleanup_boot() {
     qpid="$QPID"
     fpid="$FPID"
@@ -80,6 +75,7 @@ cleanup_boot() {
     rm -f "$FEED"
 }
 
+# Stop the boot, and remove the disk's copy, the log, the feed and the steps.
 cleanup() {
     cleanup_boot
     rm -f "$WORK" "$LOG" "$FEED" "$STEPS"
@@ -90,6 +86,8 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 
+# fail REASON: keep the console's log as DISK.fail.log, stop the boot, print
+# REASON and exit 1.
 fail() {
     if [ -f "$LOG" ]; then
         cp "$LOG" "$DISK.fail.log" 2>/dev/null || true
@@ -105,21 +103,23 @@ wait_token() {
     "$RUNUTIL" until "$LOG" "$1" "$2"
 }
 
-# Queue one command and the marker that says it finished. The marker is what the
-# feeder waits for before typing the next line.
+# step MARKER COMMAND: queue COMMAND and the MARKER that says it finished,
+# which the feeder waits for before it types the next line.
 step() {
     printf '%s\t%s\n' "$1" "$2" >> "$STEPS"
 }
 
-# The machine is started first and the feed second, which is the order that lets
-# the feed know the machine's pid: opening a fifo for reading waits for a
-# writer, so QEMU sits in that open until the feed arrives. The feed then holds
-# the console open only while the machine is up.
-# The console is driven through tests/system/drive.sh: a line is typed when
-# the output it answers has arrived, under a bound.
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 # shellcheck source=tests/system/drive.sh
 . "$REPO/tests/system/drive.sh"
+# boot_steps: boot the disk's copy, log in as `test` at the console, and type
+# each queued command once the one before it has printed its marker, through
+# tests/system/drive.sh. The machine is started before the feeder, which lets
+# the feeder know the machine's pid: opening a fifo for reading waits for a
+# writer, so QEMU waits in that open until the feeder starts. A full build is
+# behind a single marker, so the steps share one budget, `scaled 600`
+# seconds, and a hung build fails the run when the budget is spent and not an
+# hour later.
 boot_steps() {
     rm -f "$FEED"
     mkfifo "$FEED"
@@ -133,10 +133,6 @@ boot_steps() {
     drive_feed "$QPID"
     FPID=$DRIVE_FPID
     drive_login test "$TESTPASSWORD" "$(scaled 90)" || fail "the machine did not log in at its console"
-    # Each step is typed once the one before it has printed its marker; a
-    # full build sits behind a single marker, so a step's bound is long,
-    # and the run has a budget the steps share, so a hung build fails the
-    # run when the budget is gone and not an hour a marker later.
     boot_start=$(date +%s)
     while IFS='	' read -r marker command; do
         remaining=$(( boot_start + $(scaled 600) - $(date +%s) ))
@@ -190,8 +186,8 @@ if ! wait_token "FIRSTRAN=ANSWER 42" 90; then
     fail "the program make built did not run, or printed the wrong thing"
 fi
 
-# A control, not evidence: this passes on a machine with no clock at all, where
-# every timestamp is equal and nothing is ever out of date. It is here so that a
+# A control: this passes on a machine with no clock at all, where every
+# timestamp is equal and nothing is ever out of date, and is here so that a
 # failure below can be told from a make that never worked. The second it waits
 # out first is the one make compares: a build that finished inside the same
 # second as its sources leaves them equal, and equal is out of date, so without
@@ -200,9 +196,9 @@ if ! wait_token "IDLE1RC=0 TCC=0 UP=1" 120; then
     fail "a second make with nothing changed did not report the program up to date"
 fi
 
-# One source changed, and changed BEHAVIOUR. Exactly one object recompiles, the
-# program relinks once, and the program that runs is the new one: a make that
-# rebuilt the object and never relinked would otherwise pass.
+# One source changed, and its behaviour with it. Exactly one object
+# recompiles, the program relinks once, and the program that runs is the new
+# one: a make that rebuilt the object and never relinked would otherwise pass.
 if ! wait_token "ONERC=0 LIB=1 MAIN=0 LINK=1" 180; then
     fail "changing one source did not recompile exactly it and relink once"
 fi
@@ -210,9 +206,8 @@ if ! wait_token "ONERAN=ANSWER 63" 90; then
     fail "the program did not change after its source did"
 fi
 
-# The discriminator. An object nothing stamped stays older than its source, so
-# the same rebuild runs forever; this is the step that fails without the
-# stamping the file system gained in this milestone.
+# The discriminating step: an object nothing stamped stays older than its
+# source, so the same rebuild would run on every make.
 if ! wait_token "IDLE2RC=0 TCC=0 UP=1" 120; then
     fail "a make immediately after a rebuild ran the compiler again: nothing stamped the object it wrote"
 fi
@@ -223,8 +218,8 @@ if ! wait_token "HDRRC=0 LIB=1 MAIN=1" 180; then
 fi
 
 # And the makefile's own CC, which names a compiler that is not there: a make
-# WITHOUT the override must fail and say so. That is what makes the override on
-# every other step mean something.
+# without the override must fail and say so, which gives the override on every
+# other step its meaning.
 if ! wait_token "NOOVER=" 180; then
     fail "the run without a macro override never reported"
 fi
@@ -240,7 +235,7 @@ if ! wait_token "CLEANDONE=0 LEFT=0" 120; then
 fi
 
 # One of this project's own programs, built here from the source the image
-# has and compared with the one this machine actually uses.
+# has and compared with the one this machine uses.
 if ! wait_token "UTILRC=0" 240; then
     fail "make could not build this project's own cat"
 fi
@@ -260,7 +255,7 @@ if [ -z "$STAMP_BEFORE" ] || [ "$STAMP_BEFORE" = "0" ]; then
 fi
 cleanup_boot
 
-# The reboot. Two things are asked. The times must SURVIVE, exactly, which a
+# The reboot. Two things are asked. The times must survive exactly, which a
 # mount that replaced every one of them with a single boot-time value would
 # fail. And the clock must not have gone backwards: a machine whose time
 # restarts makes everything written before the reboot look newer than everything

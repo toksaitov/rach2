@@ -5,13 +5,14 @@
 #
 # The stick is the recovery ISO followed by an exFAT volume carrying the sealed
 # disk image and a manifest naming that image's length and SHA-256
-# (tools/image/mkinstallstick.sh). What is proved here is that the stick boots
-# through the firmware with no kernel given to the emulator, that the machine it
-# boots comes up as recovery with the stick as its own disk, and that the volume
-# holds the image at the length the manifest declares.
+# (tools/image/mkinstallstick.sh). The suite checks that the stick boots
+# through the firmware with no kernel given to the emulator, that the machine
+# it boots comes up as recovery with the stick as its own disk, and that the
+# volume holds the image at the length the manifest declares; then the
+# installer, the repair and the update on the machines it boots.
 #
-# The image is copied before it is booted, since mounting the volume writes its
-# dirty flag and the built image is the record.
+# The image is copied before it is booted, since mounting the volume writes
+# its dirty flag and the built image must stay as it was built.
 #
 # Usage:
 #   installer.sh <stick-image> <sealed-disk> <harness> <work-dir> <password>
@@ -22,8 +23,8 @@
 # The first stick is the product's, carrying the sealed disk; the second
 # carries a disk of 108 MiB instead, so the rows that install do not each
 # write a gibibyte and a half. Both disks have a GUID table, as a new install
-# writes one. The MBR disk is one installed before milestone 57, which the
-# repair half's conversion row updates.
+# writes one. The MBR disk is an installed disk in the older MBR layout, which
+# the repair half's conversion row updates.
 #
 
 # shellcheck source=tests/system/deadline.sh
@@ -67,14 +68,15 @@ for left in $(pgrep -f "$DIR/" 2>/dev/null || true); do
     "$RUNUTIL" gone "$left" 30 || true
 done
 
-# Change one digit of the hash the manifest on a stick image declares. The
-# manifest is a few lines of text in the volume, so its bytes are found in the
-# image and one of them is written: what a stick damaged in the writing or in a
-# pocket looks like from the machine's side.
+# spoil_manifest: change one digit of the hash the manifest on a stick image
+# declares; return 1 if the manifest is not found. The manifest is a few lines
+# of text in the volume, so its bytes are found in the image and one of them
+# is written: what a stick damaged in the writing or in a pocket looks like
+# from the machine's side. The manifest is found by its first line and the
+# hash's place computed from there, since the word `sha256` appears in the
+# programs the volume carries as well: `image NAME\n`, then `bytes N\n`, then
+# `sha256 `.
 spoil_manifest() { # spoil_manifest IMAGE
-    # The manifest is found by its first line and the hash's place computed
-    # from there, since the word `sha256` appears in the programs the volume
-    # carries as well: `image NAME\n`, then `bytes N\n`, then `sha256 `.
     name=$(basename "$TEST_DISK")
     bytes=$(wc -c < "$TEST_DISK" | tr -d ' ')
     at=$(grep -abo "image $name" "$1" | head -1 | cut -d: -f1)
@@ -89,11 +91,12 @@ spoil_manifest() { # spoil_manifest IMAGE
     printf '%s' "$now" | dd of="$1" bs=1 seek="$at" count=1 conv=notrunc 2>/dev/null
 }
 
+# note TEXT prints TEXT; bad REASON prints REASON and marks the run failed.
 fail=0
 note() { echo "installer-test: $1"; }
-# The time each row took, printed as it ends, so a set shows where the
-# minutes go: the guest's hashing of the image in the rows that install or
-# restore, and not the setup.
+# mark NAME: print the time since the last mark, as each row ends, so a set
+# shows where the minutes go: the guest's hashing of the image in the rows
+# that install or restore, and not the setup.
 MARK=$(date +%s)
 mark() { now=$(date +%s); note "$1: $((now - MARK))s"; MARK=$now; }
 bad() {
@@ -103,13 +106,14 @@ bad() {
 
 # ---- the recovery system's key ----
 #
-# The key an install places on the recovery partition is proved on the
+# The key an install places on the recovery partition is checked on the
 # recovery system that partition boots, and that system's image must have no
-# key of its own for the proof to be one. The images a run builds have this
-# tree's key, since `tests/run` mints one, so the image these rows boot is
-# staged here from the recovery manifest with the key's line taken out, which
-# is the image a tree with no key builds, and it replaces the one the installed
-# disk has. It is staged once a run, from this tree's programs.
+# key of its own for the check to mean anything. The images a run builds have
+# this tree's key, since `tests/run` makes one, so the image these rows boot
+# is staged here from the recovery manifest with the key's line taken out,
+# which is the image a tree with no key builds, and it replaces the one the
+# installed disk has. keyless_image stages it once a run, from this tree's
+# programs, and returns 1 if it cannot.
 RKEY_FILE="$DIR/recovery.key"
 KEYLESS="$DIR/keyless/rach2-recovery.krffs"
 keyless_made=""
@@ -190,6 +194,27 @@ key_ssh() { # key_ssh KEY COMMAND
 #          say it took the key off its partition, let root in with that key
 #          and no other, and leave the disk with no mount on it; the unkeyed
 #          one must say SSH is off and answer nothing on the port. ----
+#
+# init forks the console session before it starts the server, so the prompt
+# says nothing about the port. In 6b the harness's `tcp=` step connects until
+# the server's banner arrives, within its bound, and the token the attempts
+# wait for is typed after it; the harness goes on past a knock that failed,
+# and the first attempt then fails with what ssh printed.
+#
+# In 6c, each turn of init's loop forks a console session if none is
+# running, starts the server if root has an authorized key, and then reaps a
+# child. A session forked in a turn comes before that turn's test for a key,
+# so two are ended, and the token is typed at the third, which init forks
+# only after the turn that forked the second has made its test. init prints
+# `init: sshd: started` in the turn it forks the server, before it forks
+# another session, so the log up to the token says whether either turn
+# started one, however late the server's own exec or listen comes; the port
+# is probed after it. With -v, ssh reports a server's identification line as
+# `Remote protocol version`, whatever follows it, and any server fails the
+# row. With none there, QEMU closes the forwarded connection when the guest
+# refuses it, and ssh says it was closed or reset before a banner; that, or a
+# connection refused, is the pass. Anything else, a timeout or an ssh that
+# did not run, shows nothing.
 recovery_key_rows() { # recovery_key_rows KEYED UNKEYED
     keyless_image || return 0
     RKEY_ON="$DIR/rkey-on.img"
@@ -204,11 +229,7 @@ recovery_key_rows() { # recovery_key_rows KEYED UNKEYED
     recovery_boot_disk "$RKEY_ON" || { bad "row 6b: the recovery entry could not be armed"; return 0; }
     LOG6B="$DIR/rkey-on.log"
     rm -f "$KNOWN" "$LOG6B" "$LOG6B.harness"
-    # init forks the console session before it starts the server, so the
-    # prompt says nothing about the port. The harness's `tcp=` step connects
-    # until the server's banner arrives, within its bound, and the token the
-    # attempts wait for is typed after it; the harness goes on past a knock
-    # that failed, and the first attempt then fails with what ssh printed.
+    # The token is typed once `tcp=` has read the server's banner.
     "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
         --qemu-arg=-drive --qemu-arg="file=$RKEY_ON,format=raw,if=ide,index=0,media=disk" \
         --net "user,id=net0,hostfwd=tcp::$PORT-:22" --device "rtl8139,netdev=net0" \
@@ -265,15 +286,7 @@ recovery_key_rows() { # recovery_key_rows KEYED UNKEYED
     recovery_boot_disk "$RKEY_OFF" || { bad "row 6c: the recovery entry could not be armed"; return 0; }
     LOG6C="$DIR/rkey-off.log"
     rm -f "$KNOWN" "$LOG6C" "$LOG6C.harness" "$DIR/rkey-off.barrier"
-    # Each turn of init's loop forks a console session if none is running,
-    # starts the server if root has an authorized key, and then reaps a
-    # child. A session forked in a turn comes before that turn's test for a
-    # key, so two are ended, and the token is typed at the third, which init
-    # forks only after the turn that forked the second has made its test.
-    # init prints `init: sshd: started` in the turn it forks the server,
-    # before it forks another session, so the log up to the token says
-    # whether either turn started one, however late the server's own exec or
-    # listen comes; the port is probed after it.
+    # Two sessions are ended, so init has tested twice for a key by the token.
     "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
         --qemu-arg=-drive --qemu-arg="file=$RKEY_OFF,format=raw,if=ide,index=0,media=disk" \
         --net "user,id=net0,hostfwd=tcp::$PORT-:22" --device "rtl8139,netdev=net0" \
@@ -303,12 +316,7 @@ recovery_key_rows() { # recovery_key_rows KEYED UNKEYED
         1) note "row 6c: init started no SSH server by its second test for a key: OK" ;;
         *) bad "row 6c: the log could not be read for init's record of the server, status $started" ;;
     esac
-    # What answers the port. With -v, ssh reports a server's identification
-    # line as `Remote protocol version`, whatever follows it, and any server
-    # fails the row. With none there, QEMU closes the forwarded connection
-    # when the guest refuses it, and ssh says it was closed or reset before
-    # a banner; that, or a connection refused, is the pass. Anything else, a
-    # timeout or an ssh that did not run, proves nothing.
+    # What answers the port: a banner fails, a closed or refused one passes.
     OUT=$(ssh -v -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
         -o "ConnectTimeout=$(scaled 20)" -o BatchMode=yes -o IdentitiesOnly=yes \
         -o PreferredAuthentications=publickey -o PasswordAuthentication=no \
@@ -367,7 +375,7 @@ fi
 # Three lengths must agree: the image the host built, the length the manifest
 # on the stick declares, and the length the file on the volume has. A stick
 # whose manifest and image disagree is one the installer must refuse, and a
-# stick whose image is not the one built here proves nothing about either.
+# stick whose image is not the one built here shows nothing about either.
 HOST_BYTES=$(wc -c < "$DISK" | tr -d ' ')
 MANIFEST_BYTES=$(grep -a '^bytes ' "$LOG" | head -1 | tr -d '\r' | cut -d' ' -f2)
 GUEST_BYTES=$(grep -a '^SIZE:' "$LOG" | head -1 | tr -d '\r' | cut -d: -f2)
@@ -748,7 +756,7 @@ QPID=$!
 
 # The three attempts, once the machine has said it is up, which it does after
 # the harness's `tcp=` step has read the server's banner: init forks the login
-# before it starts the server. Each attempt says what it proves; with no
+# before it starts the server. Each attempt says what it tests; with no
 # machine up they fail with what ssh printed.
 if ! "$RUNUTIL" until "$LOG6" "SSHREADY" 120; then
     kill -TERM "$QPID" 2>/dev/null || true
@@ -1186,7 +1194,7 @@ fi
 
 mark "row 14"
 
-# ---- 18: an MBR disk installed before this system booted by UEFI, updated
+# ---- 18: an MBR disk in the layout UEFI firmware cannot boot, updated
 #          from the stick and converted on the way. Its boot partition is a
 #          FAT32 of 16348 clusters, at eight sectors to a cluster, which UEFI
 #          firmware does not read: the update makes it again at one sector to
@@ -1332,7 +1340,7 @@ fi
 fi
 
 if [ "$PART" = "all" ] || [ "$PART" = "repair" ] || [ "$PART" = "resume" ]; then
-# The focused proof needs only a bootable disk and the recovery rows.
+# The resume part needs only a bootable disk and the recovery rows.
 if [ "$PART" = "resume" ]; then
     cp "$TEST_STICK" "$DIR/test-stick.img"
     cp "$TEST_DISK" "$DIR/one.img"
@@ -1648,7 +1656,7 @@ fi
 mark "row 16"
 fi
 
-# ---- the rehearsal of milestone 50's sitting, at the machine's own size,
+# ---- the rehearsal of the Lenovo's install sitting, at its own size,
 #      behind RACH2_REHEARSE_LENOVO since it is hours in the emulator: a disk
 #      of the Lenovo's 488397168 sectors as a sparse base under a qcow2
 #      overlay, so that `qemu-img map` afterwards lists exactly the sectors
@@ -1670,7 +1678,7 @@ GROWSET="$REPO/build/tools/inspect/growset"
 # The small form, the `rehearse` part's default and RACH2_REHEARSE_SMALL
 # for the other parts: the same steps on a 256 MiB disk with the test stick
 # and its 138 MiB image, minutes where the machine's size is longer, which
-# is what the row is proved on before RACH2_REHEARSE_LENOVO runs it at size.
+# is what the row is tested on before RACH2_REHEARSE_LENOVO runs it at size.
 if [ -z "${RACH2_REHEARSE_LENOVO:-}" ]; then
     LENOVO=524288
     STICK=$TEST_STICK
@@ -1735,7 +1743,7 @@ done < "$R/ranges"
 # on USB as the sitting's stick is, since the rehearsal is of the procedure
 # and its set and not of the emulator's buses; the loops find it as the
 # second fixed disk. It is not FAT32: this kernel writes FAT32 through a
-# block at a time, 0.6 MB a second in the emulator, which is entry 25.
+# block at a time, 0.6 MB a second in the emulator.
 SAVE_SECTORS=$(( (IMAGE_SECTORS / 2048 + 2048 + 32) * 2048 ))
 "$REPO/build/tests/host/mkexfatfixture" --make "$R/save.vol" --sectors "$SAVE_SECTORS" --offset 2048 \
     --add "ranges=$R/ranges" > /dev/null || bad "the save disk's volume"

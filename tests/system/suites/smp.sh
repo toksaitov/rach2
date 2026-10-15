@@ -6,13 +6,13 @@
 #
 # The test image boots three times under the harness, with one processor,
 # with four, and with four and `maxcpus=2`, and each boot runs musl/smpmusl
-# with the number of processors it should have: the processors every way a
-# program asks for them, a stress of fork, exec, pipes, futexes and munmap
-# across them, which a page unmapped on one processor and read on another
-# ends, and sleeps on the last processor that must not end early
-# (tests/musl/smpmusl.c). Each boot names its own count, which
-# the runner's shim keeps, so the suite's counts are its own whatever
-# RACH2_CPUS says. A fourth boot, with two processors, runs the debug shell's
+# with the number of processors it should have (tests/musl/smpmusl.c): it
+# asks for the processors every way a program can, stresses fork, exec,
+# pipes, futexes and munmap across them, ending with a page unmapped on one
+# processor and read on another, and sleeps on the last processor, where no
+# sleep may end early. Each boot names its own count, which the runner's
+# shim keeps, so the suite's counts are its own whatever RACH2_CPUS says. A
+# fourth boot, with two processors, runs the debug shell's
 # preemption test, whose two kernel threads must each be preempted by the
 # tick and run again; a fifth runs its `usermode` payload, which must write
 # from ring 3 and exit back to the shell; and a sixth raises an NMI on both
@@ -25,10 +25,10 @@
 # processor's user ticks in /proc/stat grew while it did. The check reads
 # the kernel's counts and no clock.
 #
-# Every assertion is made in the guest, over that command's own output, and
-# reported as one token written split, so that the console's echo of the
-# command cannot satisfy its own wait; a line is typed only after the one
-# before it answered (tests/system/drive.sh).
+# In that last boot every assertion is made in the guest, over the command's
+# own output, and reported as one token written split, so that the console's
+# echo of the command cannot satisfy its own wait; a line is typed only after
+# the one before it answered (tests/system/drive.sh).
 #
 # Usage: smp.sh <kernel> <test image> <harness> <disk> <test password>
 #
@@ -58,6 +58,7 @@ rm -f "$LOG" "$FEED" "$DISK".probe-*.log "$DISK.fail.log"
 
 QPID=""
 
+# Stop the console's feed and the machine, and remove the feed.
 cleanup() {
     qpid="$QPID"
     QPID=""
@@ -74,6 +75,8 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 
+# fail REASON: keep the console's log as DISK.fail.log, clean up, print
+# REASON and exit 1.
 fail() {
     if [ -f "$LOG" ]; then
         cp "$LOG" "$DISK.fail.log" 2>/dev/null || true
@@ -83,8 +86,8 @@ fail() {
     exit 1
 }
 
-# Boot the test image with $1 processors, the boot line $2 added, and run
-# smpmusl expecting $3 of them.
+# probe N LINE M: boot the test image with N processors and LINE added to the
+# boot line, and require smpmusl to find M of them.
 probe() {
     plural=s
     [ "$3" = 1 ] && plural=

@@ -29,8 +29,8 @@ sh "$REPO/krffs/mkdisk.sh" "$REPO/krffs/manifests/disk-test.manifest" "$A" 64 48
 mformat -i "$A"@@$((100352 * 512)) -F -T 8192 -v APRIM :: || fail "mformat A p2"
 mformat -i "$A"@@$((112642 * 512)) -F -T 4096 -v ALOG :: || fail "mformat A p6"
 
-# Disk B: the GPT, with the FAT32 volume in entry 3 and the ext2 root in 4.
-# `gpt_disk DISK [--damage-primary]`: the GPT disk with seed 1.
+# `gpt_disk DISK [--damage-primary]`: the GPT disk with seed 1, its table's
+# report in DISK.gpt.
 gpt_disk() {
     disk=$1
     shift
@@ -40,6 +40,7 @@ gpt_disk() {
         16384:32768:data=ROOT 49152:1024:data 50176:1024:data=SIX > "$disk.gpt" \
         || fail "mkgpt $disk"
 }
+# Disk B: the GPT, with the FAT32 volume in entry 3 and the ext2 root in 4.
 gpt_disk "$B"
 mformat -i "$B"@@$((8192 * 512)) -F -T 8192 -v DATA3 :: || fail "mformat B p3"
 dd if="$EXT2" of="$B" bs=512 seek=16384 conv=notrunc 2>/dev/null || fail "the ext2 root into B"
@@ -81,6 +82,9 @@ mtype -i "$B"@@$((8192 * 512)) ::/gpt.txt 2>/dev/null | grep -q "gpt three says 
     || fail "the file written through the GPT partition"
 echo "parts-test: both files are where the nodes said: OK"
 
+# root_boot WHAT PORTS SPEC WANT NEVER: boot with the disks PORTS and the root
+# named SPEC to the shell, and require the record WANT and, when NEVER is not
+# empty, the absence of NEVER; WHAT labels the log and the result.
 root_boot() {
     what=$1; ports=$2; spec=$3; want=$4; never=$5
     if [ -n "$never" ]; then

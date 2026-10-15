@@ -11,9 +11,10 @@
 # the kernel counts from its frame table and not from the map's arithmetic,
 # is usable less reserved, within the partial frames at the ranges' ends.
 # That the numbers change with the size is what shows the harness passed
-# the size to the boot. After those boots the suite maps memory past the old
-# window, fails frame allocations on purpose, sweeps the string routines and
-# runs kernel stacks out.
+# the size to the boot. A machine of 8 MiB must be refused by name. After
+# those boots the suite maps and uses memory at the two ends of the range,
+# fails frame allocations on purpose, sweeps the string routines and runs
+# kernel stacks out.
 #
 # Usage: memory.sh KERNEL IMAGE HARNESS RECOVERY_KERNEL RECOVERY_IMAGE
 set -u
@@ -48,8 +49,7 @@ for mib in 64 512 2048 3072 4096; do
     managed=$(echo "$line" | sed -n 's/.*managed \([0-9]*\) KiB.*/\1/p')
     [ -n "$usable" ] && [ -n "$unreachable" ] && [ -n "$reserved" ] && [ -n "$managed" ] \
         || fail "the report at $mib MiB is not four numbers: $line"
-    # The map's available bytes, from the lines the kernel printed, summed in
-    # KiB so the arithmetic stays inside what printf's %d takes.
+    # The map's available bytes, summed in KiB to stay inside printf's %d.
     available=0
     for range in $(grep -a 'memory: map: .* available' "$LOG" | tr -d '\r' | sed -n 's/.*map: \(0x[0-9A-F]*-0x[0-9A-F]*\) available/\1/p'); do
         start=$(printf '%d' "${range%-*}")
@@ -60,16 +60,15 @@ for mib in 64 512 2048 3072 4096; do
         || fail "at $mib MiB usable $usable and unreachable $unreachable are not the map's $available KiB"
     [ "$((usable + unreachable + 513))" -eq "$((mib * 1024))" ] \
         || fail "at $mib MiB usable $usable and unreachable $unreachable and the holes are not the size"
-    # Managed is counted from the frame table, whole frames only, so it may
-    # fall short of the map's arithmetic by the partial frame at a range's end.
+    # Managed counts whole frames, so a range's partial frame is left out.
     [ "$managed" -le "$((usable - reserved))" ] && [ "$managed" -gt "$((usable - reserved - 32))" ] \
         || fail "at $mib MiB managed $managed is not usable $usable less reserved $reserved"
     echo "memory-test: $mib MiB: usable $usable, unreachable $unreachable, reserved $reserved, managed $managed KiB: OK"
 done
 
-# The frames beyond the old 32 MiB window, used: at the two ends of the
-# range, the probe maps more than the window held, patterns it, forks over
-# it, execs and frees it.
+# Memory used at the two ends of the range: the probe maps 24 MiB of a 64 MiB
+# machine and 1 GiB of a 4 GiB one, patterns it, forks over it, execs and
+# frees it.
 for spec in "64 24" "4096 1024"; do
     mib=${spec% *}; map=${spec#* }
     LOG="$OUT.memprobe-$mib.log"

@@ -1,17 +1,18 @@
 #!/usr/bin/env sh
 
 #
-# hosttest.sh: run the dual-target host tests (`tests/run host`).
+# host.sh: build and run the host tests (`tests/run host`).
 #
-# Each tests/host/*_hosttest.c is pure kernel/util logic compiled NATIVELY on
-# the host and run under AddressSanitizer + UndefinedBehaviorSanitizer. The same
-# .c files are also linked into the freestanding kernel (one source, two
-# targets), so a bounds or overflow bug surfaces here in milliseconds instead
-# of as a mystery fault in QEMU. A test names the kernel sources it links via a
-# "host-deps:" comment, and passes when it exits 0.
+# Each tests/host/*_hosttest.c tests kernel or utility code compiled natively
+# on the host and run under AddressSanitizer and UndefinedBehaviorSanitizer.
+# The same .c files are linked into the freestanding kernel, so a bounds or
+# overflow fault shows here in milliseconds and not as a fault in QEMU. A test
+# names the sources it links on a "host-deps:" comment line, and passes when
+# it exits 0. The suite then runs the checkers' selftests under the
+# sanitizers, the mutation and script tests, and the fuzz corpora.
 #
 # Usage:
-#     ./hosttest.sh
+#     sh tests/system/suites/host.sh
 #
 
 set -u
@@ -25,8 +26,8 @@ mkdir -p "$VDIR"
 
 CC="${CC:-cc}"
 SAN="-fsanitize=address,undefined -fno-sanitize-recover=all"
-# These are freestanding kernel sources, and saying so is what stops the
-# compiler assuming the standard library. See the note at the compile.
+# The kernel sources are freestanding, and -ffreestanding stops the compiler
+# assuming the standard library; the note at the compile says why it matters.
 FREESTANDING="-ffreestanding"
 # tests/host/compat has stand-ins for the three musl headers a util source
 # includes that a native host need not have (<crypt.h>, <shadow.h>,
@@ -37,15 +38,14 @@ INC="-I rach2/sys -I rach2/sys/arch/x86 -I rach2/sys/arch/i686 -I rach2/sys/lib 
 fail=0
 any=0
 
-# A test that hangs must fail the gate, not hang it. One of these tests
-# drives a device that reports an error on every transmit, and the first defect
-# it caught was an unbounded loop, so this is a demonstrated case and not a
-# precaution. The test runs in the FOREGROUND under the project deadline
-# tool: a background job in a non-interactive shell inherits SIGINT and
-# SIGQUIT ignored, and pwauth_hosttest checks precisely those dispositions
-# in a child it forks, so backgrounding the test makes that test fail for a
-# reason of our own making. The tool is built by this suite's make target
-# (and by any make) before the tests compile.
+# A test that hangs must fail the suite, not hang it: one of these tests
+# drives a device that reports an error on every transmit, and the first fault
+# it found was an unbounded loop. The test runs in the foreground under the
+# project's deadline tool, since a background job in a non-interactive shell
+# inherits SIGINT and SIGQUIT ignored, and pwauth_hosttest checks those
+# dispositions in a child it forks, so a test run in the background would
+# fail for a reason of the suite's own making. The tool is built by this
+# suite's make target, and by any make, before the tests compile.
 WATCHDOG_SECS=60
 WATCHDOG=""
 if [ -x "$REPO/build/tests/system/deadline" ]; then
@@ -54,14 +54,15 @@ else
     echo "hosttest: build/tests/system/deadline is not built; a hung test will not be cut short" >&2
 fi
 
+# wrapped_deps FILE TAG: return 1 when a TAG line of FILE is wrapped, its list
+# continued on the next comment line without the tag. The `[^*]*` grep below
+# stops at the next `*`, so the paths past the fold would be dropped, and the
+# test would fail to link with no reason given or go on passing because
+# something else pulled the file in. Each line is checked against the one
+# before it, not with `getline`, which consumes the next line and so misses a
+# wrap after a second, repeated tag line.
 wrapped_deps()
 {
-    # A wrapped declaration is silent damage: the `[^*]*` grep below stops at
-    # the next `*`, so paths past the fold are dropped and the test either
-    # fails to link for no stated reason or keeps passing because something
-    # else already pulled the file in. Checked against the PREVIOUS record,
-    # not with `getline`, which consumes the next line and so misses a
-    # wrap that follows a second, legitimately repeated declaration.
     awk -v tag="$2" '
         $0 ~ tag && prev ~ tag { prev = $0; next }
         prev ~ tag && $0 ~ /^[[:space:]]*\*[[:space:]]+[A-Za-z0-9_.\/-]+\.[ch]([[:space:]]|$)/ { exit 1 }
@@ -73,10 +74,8 @@ for t in tests/host/*_hosttest.c; do
     [ -f "$t" ] || continue
     any=1
     base="$(basename "$t" .c)"
-    # Every host-deps: line, not just the first. The line is repeatable because
-    # clang-format wraps a comment at 80 columns, and a wrapped list would
-    # silently lose everything past the fold; a second line is how a test with
-    # more dependencies than fit says so.
+    # Every host-deps: line, not only the first: clang-format wraps a comment
+    # at 80 columns, so a test with more dependencies than fit has a second.
     deps="$(grep -oE 'host-deps:[^*]*' "$t" | sed 's/host-deps://' | tr '\n' ' ')"
     # A test over sources outside the kernel tree says here what they need
     # to compile: their own include directories and the warnings their build
@@ -102,13 +101,12 @@ for t in tests/host/*_hosttest.c; do
         echo "$CC -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST $SAN -g -O1 -Wno-empty-body $FREESTANDING $INC $extra -o $out $t $deps"
         continue
     fi
-    # Name a missing dep here: passed on to the compiler it would surface as a
-    # bare "no such file", which reads as a broken test. A dep under the
-    # extracted musl tree has one specific cause and one specific repair, and
-    # the repair names the stamp, not a make target, because a copied
-    # worktree has a stamp whose tree is gone and make reads that stamp as
-    # current. An in-house dep is a typo or a rename, so say only that it is
-    # missing.
+    # Name a missing dep here, since the compiler would report only "no such
+    # file". A dep under the musl tree is missing because the tree is not
+    # extracted, and the repair removes the stamp, since a copied worktree can
+    # have the stamp without the tree and make then takes the tree as current.
+    # An in-house dep is a typo or a rename, so the message says only that it
+    # is missing.
     missing=""
     missing_musl=""
     for d in $deps; do
@@ -137,7 +135,7 @@ for t in tests/host/*_hosttest.c; do
     # their own memset, so a test compiled the way this runner compiles it has
     # never shown the fault, and one compiled any other way hangs. The
     # per-function -fno-builtin-memset is not enough on clang, whose
-    # loop-idiom pass is gated on the whole of -fno-builtin. The cross
+    # loop-idiom pass depends on the whole of -fno-builtin. The cross
     # compiler makes no such transformation, so the kernel is unaffected.
     # -std=c99 is the language; -D_DEFAULT_SOURCE is the library namespace,
     # which glibc narrows to ISO C under a strict -std unless a feature macro
@@ -286,9 +284,8 @@ fi
 # parser under the sanitizers in seconds. A long run is started by hand, as
 # tests/fuzz/Readme.md says; nothing here runs one.
 #
-# The loop is over the harnesses and not over the corpus directories, so a
-# harness whose corpus is gone is a failure and not a silence: a parser with
-# no inputs is a parser this suite stopped covering.
+# The loop is over the harnesses, not the corpus directories, so a harness
+# whose corpus is gone fails the suite.
 if [ -n "${HOST_PRINT_COMMANDS:-}" ]; then
     sh tests/fuzz/build.sh replay
 else
@@ -317,8 +314,8 @@ else
     fi
 fi
 
-# Zero discovered tests is a failure, not a quiet pass: the glob breaking or the
-# directory moving would otherwise turn verify-host into a silent green.
+# No tests found is a failure: a broken glob or a moved directory would
+# otherwise make the suite pass having run nothing.
 if [ "$any" -eq 0 ]; then
     echo "hosttest: no host tests discovered under tests/host/" >&2
     exit 1

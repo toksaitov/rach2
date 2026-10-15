@@ -1,22 +1,19 @@
 #!/usr/bin/env sh
 
 #
-# diskpolicy_test.sh: the read-only kernel does not write the disk.
+# diskpolicy.sh: the read-only kernel does not write the disk.
 #
-# Milestone 24 has Rach2 to a laptop whose SSD has a Windows installation
-# its owner has not backed up, and the promise made about it is absolute:
-# nothing this kernel does writes that disk until the owner has approved a
-# carved partition. The promise is kept by a build switch, so what has to be
-# shown is not that a function returns an error but that the platter is not
-# touched, and the only way to show that is to look at the bytes.
+# The metal kernel is built with -DRACH2_DISK_READONLY, so that nothing it
+# does writes the disk of the machine it boots on. The policy is a build
+# switch, and what shows that it holds is the disk's bytes after a boot, more
+# than any error a function returns.
 #
-# So this boots the same disk twice, once with each kernel, and compares the
-# image afterwards. The read-write boot MUST change it: that is what makes the
-# other half meaningful, since a test where neither kernel wrote would pass
-# while proving nothing. The read-only boot must refuse a command by name and
-# leave the image byte for byte as it was.
+# The suite boots the same disk once with each kernel and compares the image
+# afterwards. The read-write boot must change it, since a test where neither
+# kernel wrote would pass while showing nothing. The read-only boot must
+# refuse a command by name and leave the image byte for byte as it was.
 #
-# Usage: diskpolicy_test.sh <read-write kernel> <read-only kernel>
+# Usage: diskpolicy.sh <read-write kernel> <read-only kernel>
 #
 
 set -e
@@ -40,6 +37,7 @@ RO="$WORK.ro.disk"
 RWLOG="$WORK.rw.log"
 ROLOG="$WORK.ro.log"
 
+# Remove the disks and the logs.
 cleanup() {
     rm -f "$BASE" "$RW" "$RO" "$RWLOG" "$ROLOG"
 }
@@ -53,16 +51,15 @@ fail() {
     exit 1
 }
 
-# The artifacts first: a kernel that is not the policy it claims makes every
-# comparison below meaningless.
+# The artifacts first: the comparisons below mean nothing for a kernel built
+# with the other policy.
 sh "$REPO/tools/inspect/check_diskpolicy.sh" "$RW_KERNEL" read-write || fail "the read-write kernel is not read-write"
 sh "$REPO/tools/inspect/check_diskpolicy.sh" "$RO_KERNEL" read-only || fail "the read-only kernel is not read-only"
 
-# And the check's negative half, which is the case that matters: the Readme
-# records that the metal image was once built around the ordinary kernel, and
-# the only thing standing between that mistake and a stick that can write
-# somebody's SSD is this check refusing. A check that is only ever run on the
-# artifact it approves has never been shown to reject anything.
+# The check's refusals: each kernel offered as the other, and an empty file.
+# mkiso.sh runs the check before it builds an ISO around a kernel, and a
+# check run only on the artifact it approves has not been shown to refuse
+# anything.
 if sh "$REPO/tools/inspect/check_diskpolicy.sh" "$RW_KERNEL" read-only >/dev/null 2>&1; then
     fail "the policy check accepted the read-write kernel as read-only"
 fi
@@ -79,6 +76,8 @@ echo "diskpolicy-test: the policy check rejects each kernel offered as the other
 sh "$REPO/krffs/mkdisk.sh" "$REPO/krffs/manifests/disk-test.manifest" "$BASE" 64 48 >/dev/null 2>&1 \
     || fail "could not build the disk image"
 
+# boot KERNEL DISK LOG: copy the base image to DISK and boot KERNEL on it to
+# the shell, logging to LOG; the caller judges the log and the disk.
 boot() {
     cp "$BASE" "$2"
     "$REPO/build/tests/system/harness" --kernel "$1" \

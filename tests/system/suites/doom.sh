@@ -1,18 +1,21 @@
 #!/bin/sh
-# doom.sh: the Doom port's memory zone, on a disk root where the machine has
-# its free memory to give. One boot. First the game is started with its WAD
-# moved away, as on a machine built without one: the engine must refuse with
+# doom.sh: the Doom port on a disk root, where the machine has its free
+# memory to give to the game's zone.
+#
+# One boot runs four rows. First the game is started with its WAD moved
+# away, as on a machine built without one: the engine must refuse with
 # `IWAD file '/demo/doom1.wad' not found!` and the game exit with status 255,
-# a clean failure and not a fault, and the WAD is put back. Then the game is
-# started in the background, its zone line read after ten seconds with the
-# game still running, and the disk commands it cost recorded. The zone is
-# sized from MemFree less 8 MiB and capped at 16, so a 32 MiB machine reports
-# 12 MiB (0xc00000); the fixed heap this replaced held 6. Last, with that game
-# killed, the first demo is played to its end, where the engine quits as a
-# menu's Quit does and must exit with status 0; then a demo is recorded with
-# a buffer of 1 KiB, which fills in seconds and is written through the port's
-# fopen before the engine's error ends the game: the file must have mode
-# 644, the 0666 fopen passes less the shell's umask.
+# and the WAD is put back. Then the game is started in the background, and
+# after ten seconds it must still run, must have opened the framebuffer, and
+# must have printed its zone line; the disk commands of those ten seconds are
+# printed. The zone is MemFree less 8 MiB, up to the engine's default of 16
+# MiB, so a 32 MiB machine reports 12 MiB (0xc00000), and the row requires at
+# least 10 MiB. With that game killed, the first demo is played to its end,
+# where the engine quits as a menu's Quit does and must exit with status 0.
+# Last, a demo is recorded with a buffer of 1 KiB, which fills in seconds and
+# is written through the port's fopen before the engine's error ends the
+# game: the file must have mode 644, the 0666 that fopen passes less the
+# shell's umask.
 #
 # Usage: doom.sh KERNEL DISK HARNESS PASSWORD
 set -u

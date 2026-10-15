@@ -2,17 +2,17 @@
 #
 # subset.sh: the kernel with each optional device switched off.
 #
-# On a machine with no serial port, a boot that stops has no diagnostic but the
-# screen, and the only way to find which probe stopped it is to switch them off
-# one at a time from the GRUB command line. That is worth having only if each
-# switch works, so each is booted here.
+# On a machine with no serial port, a boot that stops has no diagnostic but
+# the screen, and the way to find which probe stopped it is to switch the
+# probes off one at a time from the GRUB command line. Each switch is booted
+# here.
 #
-# Reaching a shell is not enough to show that, and used to be all this asked: a
-# kernel that ignored every one of these options would still reach one. So each
-# probe says `started` when it begins and `skipped: rach2.noX` when it is told
-# not to, and a boot with the option requires the second record and forbids the
-# first. The last boot leaves out all five at once, which is the case the
-# option exists for.
+# Reaching a shell does not show that a switch works, since a kernel that
+# ignored every one of these options would reach one too. Each probe records
+# `started` when it begins and `skipped: rach2.noX` when it is told not to,
+# and a boot with the option requires the second record and forbids the
+# first. A boot then leaves out all five at once, the case the options exist
+# for, and an ordinary boot must run them all.
 #
 # Usage: subset.sh <kernel> <image> <harness>
 #
@@ -22,9 +22,10 @@ KERNEL="$1"
 IMAGE="$2"
 HARNESS="$3"
 
-# Each option, the subsystem whose records it decides, and three others that
-# must still run. Without that last part every check here would pass on a
-# kernel where any one of these options switched every probe off.
+# run_one OPTION SUBSYSTEM EXPECT...: boot with OPTION, which must skip
+# SUBSYSTEM's probe, and require the EXPECT steps of three other probes that
+# must still run; return 1 when the boot fails. Without the three, every check
+# here would pass on a kernel where any one option switched every probe off.
 run_one() {
     opt="$1"
     subsystem="$2"
@@ -53,11 +54,11 @@ run_one "rach2.nodisk" block \
 run_one "rach2.nousb" usb \
     "expect=mouse: started" "expect=audio: started" "expect=net: started" || exit 1
 
-# All four at once, which is what a person types when the boot stops and they
-# do not yet know which probe did it. Every probe must be skipped and the
+# All five at once, which is what a person types when the boot stops and they
+# do not yet know which probe stopped it. Every probe must be skipped and the
 # machine must still reach a shell. The five are named in the order the boot
-# prints them, the USB stack after the root since milestone 42, because each
-# `expect` reads on from where the last one matched.
+# prints them, the USB stack after the root, because each `expect` reads on
+# from where the last one matched.
 if ! "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
         --qemu-arg=-cpu --qemu-arg=max \
         --append "rach2.noaudio rach2.nomouse rach2.nonet rach2.nodisk rach2.nousb" \

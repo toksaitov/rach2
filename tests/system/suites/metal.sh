@@ -1,34 +1,28 @@
 #!/usr/bin/env sh
 
 #
-# metal_test.sh: the metal image, reached over SSH with nobody at its console.
+# metal.sh: the metal image, reached over SSH with nobody at its console.
 #
-# A USB controller and a keyboard are attached to the rehearsal because the
-# notebook has both and this image is the one that will boot there. What can be
-# rehearsed here is that the metal kernel brings the stack up and enumerates a
-# device without disturbing anything else it does; what cannot is the firmware
-# handoff and the chipset's port routing, which have no emulation.
+# The metal image is the one the Lenovo boots, with nobody at its keyboard.
+# ssh.sh reaches its SSH server by typing at the console: log in, start
+# dropbear, then connect. This suite types nothing at the console. It boots
+# the metal image with a LAN-style address on the kernel command line, waits,
+# and connects, so everything it checks follows from the machine having
+# booted on its own: init-metal supervising dropbear, the address
+# configuration reaching the stack, root's key authenticating, a pty, and a
+# file crossing intact in each direction. It also kills the SSH server once
+# and requires the machine to answer again, so init must restart it.
 #
-# This is the rehearsal for the machine across the room. `ssh_test.sh` proves
-# the SSH capstone works, but it gets there by typing at the console: log in,
-# start dropbear, then connect. On the Lenovo nobody is going to do that, so
-# the whole question here is different and narrower: does a machine that was
-# only ever given power end up answering SSH?
+# A USB controller, a hub, a keyboard and three sticks are attached because
+# the notebook has a controller and a keyboard and the acceptance script
+# writes a stick. The emulator shows that the metal kernel brings the stack up
+# and enumerates the devices without disturbing anything else it does; the
+# firmware handoff and the chipset's port routing have no emulation.
 #
-# So this script types NOTHING at the console. It boots the metal image with a
-# LAN-style address on the kernel command line, waits, and connects. Everything
-# it proves follows from the machine having booted on its own: init-metal
-# supervising dropbear, the address configuration reaching the stack, root's
-# key authenticating, a pty, and a file crossing in each direction intact.
+# Every wait is bounded and the image is a copy, so a hang fails, and a run
+# leaves nothing behind.
 #
-# It also kills the SSH server once and requires the machine to answer again,
-# because a supervisor that starts a daemon and does not restart it is a
-# supervisor that has not been tested.
-#
-# Every wait is bounded and the image is a copy, so a hang fails rather than
-# sits, and a run leaves nothing behind.
-#
-# Usage: metal_test.sh <kernel> <image> <port>
+# Usage: metal.sh <kernel> <image> [port]
 #
 
 # The build tree and the emulator of the architecture
@@ -65,11 +59,10 @@ rm -f "$WORK" "$LOG" "$KNOWN" "$SEND" "$BACK" "$ACCEPT_LOG"
 
 QPID=""
 
-# Everything this run started, ended, and safe to call twice: the ordinary
-# paths call it and the trap calls it again. The pid is taken and forgotten
-# before it is signalled, so a trap firing in between finds nothing left to
-# kill; a pid this script no longer owns may since have been given to somebody
-# else.
+# cleanup_boot: stop the machine; safe to call twice, since the ordinary paths
+# call it and the trap calls it again. The pid is cleared before it is
+# signalled, so a trap firing in between finds nothing left to kill; a pid
+# this script no longer owns may since have been given to another process.
 cleanup_boot() {
     qpid="$QPID"
     QPID=""
@@ -79,6 +72,7 @@ cleanup_boot() {
     fi
 }
 
+# cleanup: stop the machine and remove the working files.
 cleanup() {
     cleanup_boot
     rm -f "$WORK" "$KNOWN" "$SEND" "$BACK"
@@ -89,6 +83,8 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 
+# fail REASON: stop the machine, keep its console log as $OUT.metal.fail.log,
+# print REASON and exit 1.
 fail() {
     cleanup_boot
     if [ -f "$LOG" ]; then
@@ -99,6 +95,7 @@ fail() {
     exit 1
 }
 
+# fail_ssh REASON: print the console log, then fail with REASON.
 fail_ssh() {
     cat "$LOG" >&2 || true
     fail "$1"
@@ -107,6 +104,7 @@ fail_ssh() {
 sh "$REPO/tests/system/accept/transport_test.sh" || fail "the acceptance transport checks"
 sh "$REPO/tests/system/accept/password_test.sh" || fail "the acceptance password checks"
 
+# wait_token TOKEN SECONDS: wait up to SECONDS for TOKEN in the console log.
 wait_token() {
     "$RUNUTIL" until "$LOG" "$1" "$2"
 }
@@ -117,12 +115,11 @@ if [ ! -f "$KEY" ]; then
 fi
 cp "$IMAGE" "$WORK"
 
-# The address is given on the kernel command line, as it will be on the stick,
-# and it is a LAN-style one, not SLIRP's: what is under test includes
-# the stack running on an address nothing compiled in. SLIRP is told to serve
-# that same network, so the guest's configuration and the emulated network
-# agree, which is exactly the arrangement the real machine will be in with a
-# real router. -cpu max because dropbear's -R mints a host key and the kernel
+# The address is given on the kernel command line, as it is on the stick, and
+# it is a LAN-style one, not SLIRP's, so the stack runs on an address nothing
+# compiled in. SLIRP is told to serve that same network, so the guest's
+# configuration and the emulated network agree, as the Lenovo's do with its
+# router. -cpu max because dropbear's -R makes a host key and the kernel
 # refuses untrusted entropy for it.
 GUEST_NET="192.168.90.0/24"
 GUEST_IP="192.168.90.15"
@@ -138,9 +135,9 @@ dd if=/dev/zero of="$STICK" bs=1048576 count=80 2>/dev/null || fail "the stick i
 "$REPO/build/tools/image/mkmbr" --lba "$STICK" 2048:98304:0c 100352:32768:83 \
     > /dev/null || fail "mkmbr for the stick"
 mformat -i "$STICK"@@1048576 -F -T 98304 -v ACCEPT :: || fail "mformat for the stick"
-# The second partition is a KRFFS volume, which is what milestone 44 gave a
-# stick: the acceptance script mounts it through the mass-storage driver, not
-# through a loop device, and the host judges what it wrote below.
+# The second partition is a KRFFS volume: the acceptance script mounts it
+# through the mass-storage driver, not through a loop device, and the host
+# checks what it wrote below.
 STICKVOL="$WORK.stickvol"
 mkdir -p "$REPO/build/tests/system/loopimg"
 printf 'hello from inside an image' > "$REPO/build/tests/system/loopimg/hello.txt"
@@ -191,15 +188,17 @@ if ! grep -q "disk: policy: read-only" "$LOG"; then
     fail "the running kernel does not report the read-only disk policy"
 fi
 
-# Nothing has been typed and nothing will be. The SSH server is up because init
-# started it, or it is not up at all.
-# A connection the machine refused, or that ended before the two sides had
-# exchanged their identification, is tried again, three times a second
-# apart: a machine slow to answer under a loaded emulator says nothing about
-# what the command would have printed. A reset after that point is not
-# tried again, since the command may have run and read its input, and a
-# caller that sets `SSH_ONCE` gets one attempt, which the readiness loop
-# does, keeping its bound its own.
+# Nothing has been typed at the console, so the SSH server is up only if init
+# started it.
+#
+# ssh_run COMMAND: run COMMAND on the machine as root by key and return its
+# status. A connection the machine refused, or that ended before the two
+# sides had exchanged their identification, is tried again, three times a
+# second apart, since a machine slow to answer under a loaded emulator says
+# nothing about what the command would have printed. A reset after that point
+# is not tried again, since the command may have run and read its input. A
+# caller that sets `SSH_ONCE` gets one attempt; the readiness loop does, so
+# its bound is its own.
 ssh_run() {
     tries=0
     while :; do
@@ -276,10 +275,10 @@ if [ "$BACK_SUM" != "$SENT_SUM" ]; then
 fi
 echo "metal-test: the same file came back byte for byte: OK"
 
-# The supervision itself. Killing the server is the one thing that separates a
-# supervisor from a script that ran a command once at boot, and the server's pid
-# is read before and after: a kill that silently failed would leave the original
-# process answering, and the test would pass having proved nothing.
+# The supervision itself. Killing the server tells a supervisor from a script
+# that ran a command once at boot, and the server's pid is read before and
+# after, since a kill that failed would leave the original process answering
+# and the row would pass.
 BEFORE="$(ssh_run 'pidof dropbearmulti' | tr -d '\r' | awk '{print $NF}')"
 if [ -z "$BEFORE" ]; then
     fail "could not find the SSH server's pid on the machine, so killing it would prove nothing"

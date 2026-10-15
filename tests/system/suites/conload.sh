@@ -4,17 +4,18 @@
 #
 # `conloadprobe` runs five spinners and a writer on a FAT32 volume and reads
 # the lines this script types in four stages, each announced by the probe:
-# 200 typed back to back into a parked reader, 60 typed while nothing reads,
-# 60 typed after an interrupt character to a foreground child, the character
-# itself typed behind 200 lines nobody was reading, and 40 typed before the
-# probe execs itself. Each line is `L NNNN payload SUM`, SUM the Adler-32 of
-# the line before it; the probe requires every line in order with its sum,
-# one writer completion count for each loaded stage, printed and not judged,
-# and some bytes of the first stage moved by the port's interrupt, its time
-# printed and not judged. The lines of a stage are written
-# to the guest as one stream, more than the discipline holds, so the rest
-# waits at the UART; the interrupt character behind them is the case where
-# ordinary input is held back and the signal must not be held with it.
+# (A) 200 lines typed back to back into a waiting reader; (B) 60 typed while
+# nothing reads; (C) 200 typed while a foreground child has the terminal and
+# nothing reads, an interrupt character behind them, and 60 more read once
+# the child is killed; (D) 40 typed before the probe executes itself. Each
+# line is `L NNNN payload SUM`, SUM the Adler-32 of the text before it. The
+# probe requires every line it reads in order with its sum, and some bytes of
+# stage A moved by the port's interrupt. The time of stage A and the files
+# the writer completed in each of A, B and C are printed and not judged;
+# this script requires one such count for each of the three. The lines of a
+# stage reach the guest as one stream, more than the discipline holds, so the
+# rest waits at the UART; the interrupt character behind them is the case
+# where ordinary input is held back and the signal must not be held with it.
 #
 # Usage: conload.sh KERNEL IMAGE HARNESS DISK
 set -u
@@ -22,7 +23,7 @@ KERNEL=$1; IMAGE=$2; HARNESS=$3; DISK=$4
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 fail() { echo "conload-test: FAIL: $1" >&2; exit 1; }
 
-# lines FIRST COUNT > FILE: the numbered lines with their sums.
+# lines FIRST COUNT: print COUNT numbered lines from FIRST, each with its sum.
 lines() {
     awk -v first="$1" -v count="$2" 'BEGIN {
         alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -61,9 +62,7 @@ if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
     "expect=CONLOAD C" "sendfile=$DISK.a" 'sendraw=\x03' "sendfile=$DISK.c" \
     "expect=CONLOAD D" "sendfile=$DISK.d" \
     "expect=CONLOAD OK" > /dev/null 2>&1; then
-    # The line is matched inside its line and not anchored to it: the console
-    # is under load here, so a line the machine echoes can land in front of
-    # the probe's own output and did.
+    # Not anchored: under load, an echoed line can precede the probe's output.
     awk '
         { sub(/\r$/, "") }
         match($0, /CONLOAD writer files in stage [ABC]: [0-9]+/) {

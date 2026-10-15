@@ -32,6 +32,8 @@ sh "$REPO/tests/system/probe_roots.sh" "$KERNEL" "$DISK.maps" ext2 musl/mapmusl 
 
 sh "$REPO/tests/system/mkext2fixture.sh" "$DISK" "$MKMBR" > /dev/null || fail "the fixture disk"
 
+# run ARG...: boot the test image beside the fixture disk with the harness's
+# ARGs.
 run() {
     "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
         --qemu-arg=-cpu --qemu-arg=max \
@@ -93,11 +95,11 @@ p1_in() { dd if="$VOL" of="$ROOT" bs=1048576 seek=1 conv=notrunc 2>/dev/null; }
 # The superblock's state field of the first partition, as a number.
 p1_state() { od -A n -t u2 -j $((1048576 + 1024 + 58)) -N 2 "$ROOT" | tr -d ' '; }
 
-# A boot of the ordinary kernel on the root disk, logged in as root, with
-# the given steps after the prompt; the log is $1. A boot that changes the
-# root syncs before its last marker, since ext2 writes back and the harness
-# kills the machine at the marker: the root is then left unclean and whole,
-# which row 3 checks.
+# boot_root LOG ARG...: boot the ordinary kernel on the root disk, log in as
+# root, and run the harness's ARGs after the prompt, logged to LOG. A boot
+# that changes the root syncs before its last marker, since ext2 writes back
+# and the harness kills the machine at the marker: the root is then left
+# unclean and whole, which row 3 checks.
 boot_root() {
     log=$1; shift
     "$HARNESS" --kernel "$KERNEL" --qemu-arg=-cpu --qemu-arg=max \
@@ -115,12 +117,11 @@ boot_root "$ROOT.first.log" --ok "ROOTDONE" \
     "send=echo ROOT\"\"DONE" "expect=ROOTDONE" || fail "the ext2 root boot"
 echo "ext2-test: rach2.root=ext2 mounts the first ext2 partition as the root, writable: OK"
 
-# ---- 2b: what one small write costs the disk, which is entry 49 of milestone
-#      50. A 4 KiB rewrite in place is one data write and one inode store, each
-#      followed by the drive's cache flush, so four commands. The inode was
-#      stored twice a call until `7d94137d`, which made it six. Fifty rewrites
-#      are counted through `/proc/disk` and must stay under five a write, so a
-#      second store coming back fails this row rather than passing unnoticed.
+# ---- 2b: what one small write costs the disk. A 4 KiB rewrite in place is
+#      one data write and one inode store, each followed by the drive's cache
+#      flush, so four commands. Fifty rewrites are counted through
+#      `/proc/disk` and must stay under five a write, so a second inode store
+#      in each call, which would make six, fails this row.
 boot_root "$ROOT.cost.log" --ok "COSTDONE" \
     "send=dd if=/dev/zero of=/root/cost.bin bs=4096 count=1 2>/dev/null && sync && echo MADE\"\"IT" \
     "expect=MADEIT" \
@@ -137,14 +138,13 @@ if [ "$COST" -gt 250 ]; then
 fi
 echo "ext2-test: a 4 KiB rewrite costs the disk no more than five commands ($COST for 50): OK"
 
-# ---- 2c: the same count for an append, which is the other half of entry 49.
-#      A 4 KiB write that grows the file adds the group's bitmap and its
-#      descriptor to the rewrite's pair, so ten commands with their flushes
-#      where the rewrite has four; the second inode store made it twelve. The
-#      bound is eleven a write, which the fix meets at ten and the second store
-#      fails at twelve. The file crosses from the direct pointers into the
-#      first indirect block on the way, which is a few commands more in the
-#      whole fifty and well inside the bound.
+# ---- 2c: the same count for an append. A 4 KiB write that grows the file
+#      adds the group's bitmap and its descriptor to the rewrite's pair, so
+#      ten commands with their flushes where the rewrite has four, and twelve
+#      with a second inode store. The bound is eleven a write. The file
+#      crosses from the direct pointers into the first indirect block on the
+#      way, which is a few commands more in the whole fifty and well inside
+#      the bound.
 boot_root "$ROOT.append.log" --ok "APPENDDONE" \
     "send=rm -f /root/grow.bin; sync; echo READY\"\"NOW" "expect=READYNOW" \
     "send=a=\$(grep ^disk-commands /proc/disk | cut -d' ' -f2); i=0; ok=1; echo APPEND\"\"START" "expect=APPENDSTART" \
@@ -160,16 +160,16 @@ if [ "$APPEND" -gt 550 ]; then
 fi
 echo "ext2-test: a 4 KiB append costs the disk no more than eleven commands ($APPEND for 50): OK"
 
-# ---- 2d: the set-id rules on this file system, which is entry 48 of milestone
-#      50. One plan decides what a chown clears, and both dispatch paths reach
-#      it; the probe asserts a directory keeping its bits, a setgid file with
-#      and without group-execute, a privileged change, a permitted group
-#      change, a refused one and both spellings of a request that changes
-#      nothing; a directory, a setgid file with and without group-execute and
-#      a privileged change are asserted over both the pathname call and the
-#      descriptor, and the rest over the path the caller uses for them. It runs
-#      here because the answers must be the file system's, not KRFFS's. The
-#      probe empties its own supplementary group list, which is what its
+# ---- 2d: the set-id rules on this file system. One plan decides what a
+#      chown clears, and both dispatch paths reach it; the probe asserts a
+#      directory keeping its bits, a setgid file with and without
+#      group-execute, a privileged change, a permitted group change, a
+#      refused one and both spellings of a request that changes nothing; a
+#      directory, a setgid file with and without group-execute and a
+#      privileged change are asserted over both the pathname call and the
+#      descriptor, and the rest over the path the caller uses for them. It
+#      runs here because the answers must be the file system's, not KRFFS's.
+#      The probe empties its own supplementary group list, which its
 #      escalation row needs.
 boot_root "$ROOT.mode.log" --ok "MODESYNCED" \
     "send=/modeprobe /tmp" "expect=MODEPROBE OK" \

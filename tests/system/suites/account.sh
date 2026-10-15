@@ -1,44 +1,42 @@
 #!/usr/bin/env sh
 
 #
-# account_test.sh: prove an image can create, authenticate, change and delete an
-# account, and that the three credential databases agree afterwards.
+# account.sh: an image creates, authenticates, changes and deletes an
+# account, and the three credential databases agree afterwards.
 #
-# It runs one of two arcs, named by the flavor argument, because the two images
-# do not have the same tools and pretending otherwise would prove less about
-# both. `real` is os-real, whose account tools are busybox's, on a disk.
-# `simple` is os-simple, whose account tools are this project's own, in RAM: it
-# has no `deluser`, so its arc creates, authenticates, climbs and changes a
-# password and stops there. Deleting an account in that image is root editing
-# three files, which is what it was everywhere before busybox arrived.
+# It runs one of two arcs, named by the flavor argument, because the two
+# images do not have the same tools. `real` is os-real, whose account tools
+# are busybox's, on a disk. `simple` is os-simple, whose account tools are
+# this project's own, in RAM: it has no `deluser`, so its arc creates,
+# authenticates, climbs and changes a password and stops there; deleting an
+# account in that image is root editing three files.
 #
-# The real arc boots a disk three times. The first boot makes the accounts and
-# uses them, the second authenticates again from a cold start and reads the
-# databases back, the third looks at what is left after the delete. Splitting
-# them that way is the point: what is asserted is what survived to the platter,
-# not what one process had in its cache.
+# The real arc boots a disk three times. The first boot makes the accounts
+# and uses them, the second authenticates again from a cold start and reads
+# the databases back, the third looks at what is left after the delete. So
+# what is checked is what reached the disk, not what one process had in its
+# cache.
 #
 # The authentication is done from an unprivileged account and not from root.
 # Root's `su` never asks for a password, so a test that only ran `su testee`
 # as root would pass with a wrong hash, a broken password check, or a `passwd`
-# that cannot get its set-id bit, while every real user was locked out. Here
-# root becomes the account first, and the account authenticates from there: once
+# that cannot get its set-id bit, while every user was locked out. Here root
+# becomes the account first, and the account authenticates from there: once
 # with the right password, once with the wrong one, and once through `passwd`
 # itself, which is the staged set-id binary and nothing else.
 #
-# The deletion assertions are two-way on purpose. A check that only asked "does
-# every account in passwd have a shadow line" passes an account that was removed
-# from passwd and left in shadow, which is exactly what a partial delete leaves.
+# The deletion checks are two-way. A check that only asked "does every
+# account in passwd have a shadow line" passes an account that was removed
+# from passwd and left in shadow, which is what a partial delete leaves.
 #
-# Three mistakes this repo has already paid for, avoided by every phase here:
-# the console echoes what is typed, so a token that appears in a command would
-# be matched from its own echo and each is written split; a line typed before
-# the program that reads it is asking is eaten by one that flushes its input,
-# as login does, so every line is typed at the prompt or the marker it
-# answers; and a previous run's logs hold every token this run waits for, so
-# they go before the first boot, not only in the trap.
+# The console echoes what is typed, so a token that appears in a command is
+# written split, or it would match its own echo; a line typed before the
+# program that reads it is asking is eaten by one that flushes its input, as
+# login does, so every line is typed at the prompt or the marker it answers;
+# and the logs of an earlier run hold every token this run waits for, so they
+# are removed before the first boot as well as in the trap.
 #
-# Usage: account_test.sh <kernel> <image> <password> [real|simple]
+# Usage: account.sh <kernel> <image> <password> [real|simple]
 #
 
 # shellcheck source=tests/system/deadline.sh
@@ -64,10 +62,9 @@ OUT="$(dirname "$DISK")/account-$FLAVOR"
 WORK="$OUT.work"
 LOG="$OUT.work.log"
 
-# How the image is attached, which is the one thing the two arcs boot
-# differently: os-real is a disk the kernel mounts and writes back, os-simple is
-# a module in RAM. Deliberately unquoted where it is used, since it is several
-# arguments and QEMU refuses an empty one.
+# How the image is attached, the one thing the two arcs boot differently:
+# os-real is a disk the kernel mounts and writes back, os-simple is a module
+# in RAM. It is expanded unquoted, since it is several arguments.
 case "$FLAVOR" in
     real)   HARNESS_MEDIA="--append rach2.fsdisk --drive file=$WORK,format=raw,if=ide,index=0,media=disk" ;;
     simple) HARNESS_MEDIA="--initrd $WORK" ;;
@@ -106,15 +103,11 @@ SYS_ID_HIGH=999
 REG_ID_LOW=1000
 REG_ID_HIGH=60000
 
-# Everything this run started, ended. It is written to be safe to call twice,
-# because the ordinary paths call it and the trap calls it again: a script that
-# only killed its machine when it succeeded or failed its own checks leaves
-# QEMU running for a cancelled build, and that QEMU still has the disk copy
-# whose name has just been removed.
-#
-# Each pid is taken and forgotten BEFORE it is signalled, so a trap that fires
-# between the kill and the wait finds nothing left to kill: a pid this script no
-# longer owns is one the host may since have given to somebody else.
+# cleanup_boot: stop the machine. It is safe to call twice, since the
+# ordinary paths call it and the trap calls it again; without the trap a
+# cancelled build would leave QEMU running on a disk copy whose name has been
+# removed. The pid is cleared before it is signalled, so a trap that fires
+# between the kill and the wait finds nothing left to kill.
 cleanup_boot() {
     qpid="$QPID"
     QPID=""
@@ -124,9 +117,9 @@ cleanup_boot() {
     fi
 }
 
-# The console log is kept as the failing boot's when the run did not pass,
-# which a stop by the runner is: it is the only account of what the machine
-# did.
+# cleanup: stop the machine and remove the working image and the log. When
+# the run did not pass, which includes a stop by the runner, the log is kept
+# as $OUT.fail.log, the only record of what the machine did.
 PASSED=""
 cleanup() {
     cleanup_boot
@@ -141,6 +134,8 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 
+# fail REASON: keep the log as $OUT.fail.log, stop the machine, print REASON
+# and exit 1.
 fail() {
     if [ -f "$LOG" ]; then
         cp "$LOG" "$OUT.fail.log" 2>/dev/null || true
@@ -151,30 +146,30 @@ fail() {
     exit 1
 }
 
-# Wait up to $2 seconds for the token $1 in the log. A pattern anchored at the
-# end allows trailing space, since the console ends its lines with a carriage
-# return and the token would otherwise never be the last character.
+# wait_token PATTERN SECONDS: wait up to SECONDS for PATTERN in the log. A
+# pattern anchored at the end allows trailing space, since the console ends
+# its lines with a carriage return.
 wait_token() {
     "$RUNUTIL" until "$LOG" "$1" "$2"
 }
 
-# Wait up to $3 seconds for the pattern $1 to appear at least $2 times. Counting
-# is what an assertion needs when the same line is printed by more than one step
-# of an arc: the ISH shell does no quote removal, so a marker cannot be split
-# the way it is in a busybox shell and every token it prints would be matched
-# from the console's echo of the command that printed it.
+# wait_count PATTERN COUNT SECONDS: wait up to SECONDS for PATTERN to appear at
+# least COUNT times, for a line printed by more than one step of an arc. The
+# ISH shell does no quote removal, so a marker cannot be split as it is in a
+# busybox shell, and every token it prints is also in the console's echo of
+# the command that printed it.
 wait_count() {
     "$RUNUTIL" until "$LOG" "$1" "$3" "$2"
 }
 
 
-# Boot the working image and type the arc at its console through the
-# harness: each line is typed once the output it answers has arrived, a
-# login prompt, a password prompt or a marker the line before printed, so
-# no line is eaten by a program that flushes its input before asking. The
-# arc's last step is the token it waits for, and the harness ends the
-# machine once that token has been printed; the log stays for the checks.
 HARNESS="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/harness"
+# boot_steps STEP...: boot the working image and type the arc's STEPs at its
+# console through the harness: each line is typed once the output it answers
+# has arrived, a login prompt, a password prompt or a marker the line before
+# printed, so no line is eaten by a program that flushes its input before
+# asking. The last step is the token the harness waits for, and it ends the
+# machine once that token has been printed; the log stays for the checks.
 boot_steps() {
     last=""
     for step; do
@@ -192,17 +187,16 @@ boot_steps() {
         || fail "the machine did not answer every line of the arc; the log says which"
 }
 
-# The same, for an arc that starts from root's shell: the console login is
-# answered first.
+# boot_with STEP...: boot_steps for an arc that starts from root's shell; the
+# console login is answered first.
 boot_with() {
     boot_steps "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" "$@"
 }
 
-# Take an account's uid from a /etc/passwd record and fail unless it lands
-# inside the range adduser was configured to allocate from. The number is read
-# and compared, not matched against a digit pattern, which is what makes
-# the range an assertion instead of a shape, and it is read from the database,
-# not from an `id` run, since the uid is what was written down.
+# id_in_range NAME LOW HIGH: fail unless the uid of NAME in $PASSWD_TEXT is
+# within LOW..HIGH, the range adduser was configured to allocate from. The
+# number is compared, not matched against a digit pattern, and it is read from
+# the database, not from an `id` run, since the uid is what was written down.
 id_in_range() {
     who="$1"
     low="$2"
@@ -219,17 +213,30 @@ id_in_range() {
 rm -f "$WORK"
 cp "$DISK" "$WORK"
 
-# The arc for os-simple, which is this project's own code doing the same job:
+# run_simple_arc: the arc for os-simple, whose tools are this project's own:
 # `login` at the console, `adduser` to make an account, `su` to become it and
 # `passwd` to change a password, with no `deluser` to finish with.
 #
 # Every step is typed at a shell whose PATH is the one `login` built, and the
-# commands are bare names, so a PATH that reached nothing would fail here rather
-# than be worked around with absolute paths. The second half runs as the
-# unprivileged `test` account, reached by leaving root's shell and answering the
-# login prompt init puts back: `su` asks for a password only when the caller is
-# not root, and `passwd` needs its set-id bit only when the caller is not root,
-# so neither is proved by anything root types.
+# commands are bare names, so a PATH that reached nothing fails here rather
+# than being worked around with absolute paths. The second half runs as the
+# unprivileged `test` account, reached by leaving root's shell and answering
+# the login prompt init puts back: `su` asks for a password, and `passwd`
+# needs its set-id bit, only when the caller is not root.
+#
+# Each su attempt is read between its own markers: counted over the whole
+# boot, the results would be met as well by a passwd that changed nothing,
+# where the old password works and the new one is refused. A refused attempt
+# is checked twice, that su refused and that the command behind it did not
+# run, since the message alone would pass a `su` that printed a refusal and
+# then ran the shell. After the change come three attempts: the old password,
+# which must be refused; the new password offered to the other account, which
+# must be refused too, since a passwd that rewrote the wrong record would
+# leave that; and the new password for its own account, which must work. The
+# markers are printed by `echo` with an ordinary argument, since the ISH shell
+# does no quote removal and a split token would arrive with its quotes in it;
+# the console's echo of a command lands just before the output it delimits,
+# so it does not separate an attempt from its own result.
 run_simple_arc() {
     boot_with \
         "send=pwd" "expect=/root" \
@@ -271,10 +278,7 @@ run_simple_arc() {
     if ! wait_token "^/home/test[[:space:]]*\$" 180; then
         fail "the test account never reached a shell of its own"
     fi
-    # The two attempts are read inside their own markers for the reason every
-    # other pair here is: a refusal that ran the command anyway leaves the same
-    # log as a refusal that did not, once the successful attempt beside it has
-    # printed the same line.
+    # The wrong and the right password, each read between its own markers.
     if ! wait_token "TRYDONE" 240; then
         fail "the account's own password was never tried"
     fi
@@ -295,29 +299,14 @@ run_simple_arc() {
         fail "the account could not change its own password through the set-id passwd"
     fi
 
-    # And the change is used, not believed. Three attempts follow it: the
-    # old password, which must now be refused; the new password offered to the
-    # OTHER account, which must be refused too, since a passwd that rewrote the
-    # wrong record would leave exactly that; and the new password for its own
-    # account, which must work.
-    #
-    # Each attempt is read inside its own markers, and that is the whole point:
-    # counted over the boot as a whole, "two homes and three refusals" is
-    # satisfied just as well by a passwd that changed nothing, where the OLD
-    # password is the one that works and the new one is refused. The markers are
-    # printed by `echo` with an ordinary argument, since the ISH shell does no
-    # quote removal and a split token would arrive with its quotes in it; the
-    # console's echo of the command lands immediately before the output it
-    # delimits, so it does not separate an attempt from its own result.
+    # The three attempts after the change, each read between its own markers.
     if ! wait_token "TRYEND" 240; then
         fail "the attempts after the password change never finished"
     fi
     old_try=$(sed -n '/TRYOLD/,/TRYOTHER/p' "$LOG")
     other_try=$(sed -n '/TRYOTHER/,/TRYNEW/p' "$LOG")
     new_try=$(sed -n '/TRYNEW/,/TRYEND/p' "$LOG")
-    # Each refused attempt is asserted twice: that su said no, and that the
-    # command behind it did not run anyway. The message alone would pass a `su`
-    # that printed a refusal and went on to exec the shell.
+    # A refused attempt must also not have run the command behind it.
     case "$old_try" in
         *"authentication failure"*) ;;
         *) fail "the password the account replaced still authenticates it" ;;
@@ -347,12 +336,38 @@ run_simple_arc() {
     echo "account-test: PASS"
 }
 
-# The arc for os-real, whose account tools are busybox's.
+# run_real_arc: the arc for os-real, whose account tools are busybox's, in
+# three boots of the disk.
+#
+# The first boot makes the accounts and uses them. The creating commands are
+# joined with `&&` and not `;`, so a token cannot be printed by a run in which
+# one of them failed. In the authentication the outer su is root's and asks
+# nothing; the inner one is the account's own and must ask, so the row tests
+# that the hash chpasswd wrote is the hash su reads back and checks. Every
+# token there is behind an `&&`, since a token printed by the next command in
+# a list says only that the shell got that far, which a refused `su` also
+# allows; `id` runs nowhere else in the boot, so no other `uid=` line can
+# satisfy the check. The set-id passwd is then run as the account. What it
+# must refuse comes first, a wrong old password and another account's record,
+# each token printed by a `grep` of the program's own complaint, so a passwd
+# that changed the password without saying anything prints neither; busybox
+# checks who is asking before it asks for a password, so the second refusal
+# needs none.
+#
+# The second boot authenticates with the changed password from a cold start,
+# so the change reached the disk and not only a cache. `httpd -m` makes an
+# MD5-crypt hash, which busybox httpd accepts in its config; both are tested
+# over the loopback address, with no network device in the machine, and the
+# request with no credential must be refused and the one with the right
+# credential served. Each request is read between its own markers, since over
+# the whole log a 401 and the page would also appear for an httpd that had the
+# two the wrong way round. mkpasswd's SHA-512 hash must be the one this
+# project's own crypt gives for the same password and salt, the crypt the rest
+# of the image authenticates with. Then the databases are read back and the
+# accounts deleted. The third boot reads what the delete left on disk.
 run_real_arc() {
 
-    # The first boot: make the accounts, then use them. The creating commands
-    # are joined with `&&` and not `;`, so the token cannot be printed by a run
-    # in which one of them failed.
+    # The first boot: make the accounts, then use them.
     boot_with \
         "send=adduser -D $NEWUSER && addgroup $EXTRAGROUP && addgroup $NEWUSER $EXTRAGROUP && echo MADE\"\"IT" "expect=MADEIT" \
         "send=adduser -S -D -H -G $EXTRAGROUP $SYSUSER && echo SYS\"\"IT" "expect=SYSIT" \
@@ -378,16 +393,7 @@ run_real_arc() {
         fail "chpasswd did not report changing the password"
     fi
 
-    # The authentication itself. The outer su is root's and asks nothing; the
-    # inner one is the account's own and must ask, so what this proves is that
-    # the hash chpasswd wrote is the hash su reads back and checks.
-    #
-    # Every token here is behind an `&&`, not a `;`. A token printed by
-    # the next command in a list says only that the shell got that far, which a
-    # refused `su` also allows; behind `&&` it is printed by the run that
-    # succeeded and by no other. That is also why `id` is not run anywhere else
-    # in this boot: a `uid=` line from some other command would answer this
-    # assertion just as well.
+    # The authentication, with every token behind an `&&`.
     if ! wait_token "AUTHIT" 120; then
         fail "the account never authenticated with its own password"
     fi
@@ -407,12 +413,7 @@ run_real_arc() {
         fail "a wrong password reached root anyway"
     fi
 
-    # And the set-id binary, exercised as the unprivileged account it exists
-    # for. What it must refuse comes first: a wrong old password, and another
-    # account's record. Each token is printed by a `grep` of the program's own
-    # complaint, so a `passwd` that changed the password without saying anything
-    # prints neither. The refusal of another account's record needs no password
-    # at all, since busybox checks who is asking before it asks for one.
+    # The set-id passwd, run as the unprivileged account.
     if ! wait_token "REFUSED" 180; then
         fail "passwd took a wrong old password, or refused it without saying so"
     fi
@@ -430,10 +431,7 @@ run_real_arc() {
     fi
     cleanup_boot
 
-    # The second boot. The password set through `passwd` must still authenticate
-    # from a cold start, which is the difference between a change that reached
-    # the platter and one that lived in a cache. Then the databases are read
-    # back, and the accounts deleted.
+    # The second boot: a cold start, the hashes, the databases and the delete.
     boot_with \
         "send=su $NEWUSER -c \"su $NEWUSER -c id && echo AGAIN\"\"IT\"" "expect=Password:" "send=$NEXTPASS" "expect=AGAINIT" \
         "send=mkdir -p /www; echo SERVED\"\"OK > /www/index.html; echo MADE\"\"WWW" "expect=MADEWWW" \
@@ -454,20 +452,12 @@ run_real_arc() {
         fail "the second boot could not read the databases back"
     fi
 
-    # The other hash generator, which is a feature inside an applet whose name
-    # says nothing about passwords: `httpd -m` mints an MD5-crypt hash, and the
-    # same feature is what lets busybox httpd accept one in its config. Neither
-    # half is worth having without the other, so both are proved here, over the
-    # loopback address, with no network device in the machine at all: the wrong
-    # request must be refused and the right one must be served.
+    # The hash `httpd -m` makes, and the server that accepts it.
     # shellcheck disable=SC2016
     if ! grep -qE '^\$1\$[^$]+\$' "$LOG"; then
         fail "httpd -m did not mint an MD5 hash"
     fi
-    # Each request is read inside its own markers, not from the log as a
-    # whole. Asked of the whole log, "a 401 appears and the page appears" is
-    # satisfied by an httpd that had the two the wrong way round, which is
-    # exactly what a broken authentication branch looks like.
+    # Each request is read between its own markers.
     ANON_TEXT=$(sed -n '/ANONBEGIN/,/ANONEND/p' "$LOG")
     AUTH_TEXT=$(sed -n '/AUTHBEGIN/,/AUTHEND/p' "$LOG")
     case "$ANON_TEXT" in
@@ -482,26 +472,19 @@ run_real_arc() {
         *) fail "httpd refused the credential its own -m minted" ;;
     esac
 
-    # The hash generators, pinned against the value this project's own SHA-512
-    # crypt produces for the same password and salt, so the assertion is that
-    # busybox agrees with the implementation the rest of the image authenticates
-    # with, not merely that it printed something shaped like a hash.
+    # mkpasswd's hash, against the one this project's own SHA-512 crypt gives.
     # shellcheck disable=SC2016
     EXPECTED_HASH='$6$abcdefgh$M/eYsB4rVXAm3ZNc88J.UD9rCKAT6FB1rahiwJCHtEndQNORCub5qhjxn50qbqVVthkM.9HpEwtf0t.iV9uH0/'
     if ! grep -qF "$EXPECTED_HASH" "$LOG"; then
         fail "mkpasswd did not produce the hash this system's own crypt gives"
     fi
 
-    # Each database is the text between the marker before it and the marker
-    # after, and every marker is written split, so a section can never be
-    # delimited by the console's echo of the command that printed it.
+    # Each database lies between two split markers, which no echoed command has.
     PASSWD_TEXT=$(sed -n '/BEGIN/,/PWEND/p' "$LOG")
     SHADOW_TEXT=$(sed -n '/PWEND/,/SHEND/p' "$LOG")
     GROUP_TEXT=$(sed -n '/SHEND/,/GREND/p' "$LOG")
 
-    # What the databases hold while the accounts are still there. The membership
-    # is asserted here, not inferred from the delete, since a group the
-    # account never joined is also a group it cannot be left in.
+    # The membership is checked now, since a group never joined is never left.
     case "$PASSWD_TEXT" in
         *"$NEWUSER:"*) ;;
         *) fail "the account is not in /etc/passwd" ;;
@@ -536,16 +519,12 @@ run_real_arc() {
     fi
     cleanup_boot
 
-    # Each database is the text between the marker before it and the marker
-    # after, and every marker is written split, so a section can never be
-    # delimited by the console's echo of the command that printed it.
+    # Each database lies between two split markers, which no echoed command has.
     PASSWD_TEXT=$(sed -n '/BEGIN/,/PWEND/p' "$LOG")
     SHADOW_TEXT=$(sed -n '/PWEND/,/SHEND/p' "$LOG")
     GROUP_TEXT=$(sed -n '/SHEND/,/GREND/p' "$LOG")
 
-    # The delete is two-way: gone from every database and from every member
-    # list, not merely gone from passwd, since a partial delete leaves exactly
-    # that.
+    # The delete is two-way: gone from every database and every member list.
     for who in "$NEWUSER" "$SYSUSER"; do
         case "$PASSWD_TEXT" in
             *"$who:"*) fail "the deleted account $who is still in /etc/passwd" ;;
@@ -560,8 +539,7 @@ run_real_arc() {
         esac
     done
 
-    # The second group survived the delete, which is the difference between
-    # removing a member and removing the group somebody was a member of.
+    # The shared group survives the delete of its member.
     case "$GROUP_TEXT" in
         *"$EXTRAGROUP:"*) ;;
         *) fail "deleting the account took the shared group with it" ;;

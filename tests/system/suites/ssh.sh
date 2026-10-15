@@ -1,30 +1,27 @@
 #!/usr/bin/env sh
 
 #
-# ssh_test.sh: the SSH capstone, run without a person at the keyboard.
+# ssh.sh: log in to os-real over SSH with nobody at the keyboard.
 #
-# The capstone has always been a procedure in a Readme: boot os-real, log in at
-# the console, start dropbear, and ssh in from another terminal. That is fine
-# for a demonstration and useless as a gate, so this is the same procedure with
-# the waiting written down.
+# The procedure is a person's: boot os-real, log in at the console, start
+# dropbear, and ssh in from the host. The suite types the console lines and
+# waits on what the machine prints.
 #
-# It logs in BOTH ways, because they prove different things. The key login is
+# It logs in both ways, because they test different things. The key login is
 # root's, and it is the one the image is set up for. The password login is the
-# unprivileged account's, and it is the one that reaches the credential library:
-# dropbear reads /etc/shadow and compares a hash, which is the whole of what
-# this system's authentication is.
+# unprivileged account's, and it is the one that reaches the credential
+# library: dropbear reads /etc/shadow and compares a hash, which is all of
+# this system's authentication.
 #
-# The disk is a copy, so a run leaves nothing behind, and every wait is bounded:
-# a hang has to fail, not sit there.
+# The disk is a copy, so a run leaves nothing behind, and every wait is
+# bounded, so a hang fails.
 #
-# The card is a parameter because this machine has more than one driver and
-# the capstone is worth running on each: the TCP path is the deepest thing the
-# network stack does, and a driver that loses one frame in a handshake shows
-# here and nowhere else. It defaults to the RTL8139, so an invocation that
-# names no card runs exactly what it always ran.
+# The card is a parameter so the suite runs on each network driver: the TCP
+# path is the deepest thing the network stack does, and a driver that loses
+# one frame in a handshake fails here. It defaults to the RTL8139.
 #
-# Usage: ssh_test.sh <kernel> <disk> <root password> <test password>
-#                    [port] [card]
+# Usage: ssh.sh <kernel> <disk> <root password> <test password>
+#               [port] [card]
 #
 
 # The emulator of the architecture tests/system/suites.mk names.
@@ -58,15 +55,14 @@ FPID=""
 FLOOD_PIDS=""
 FLOOD_DIR="$DISK.work.flood"
 
-# Everything this run started, ended. It is written to be safe to call twice,
-# because the ordinary paths call it and the trap calls it again: a script that
-# only killed its machine when it succeeded or failed its own checks leaves
-# QEMU running for a cancelled build, still holding the forwarded port, and the
-# names that would have said so have just been removed.
+# cleanup_boot: stop the machine and its feeder and remove the FIFO. It is safe
+# to call twice, since the ordinary paths call it and the trap calls it again;
+# without the trap a cancelled build would leave QEMU running and holding the
+# forwarded port, with its files removed.
 #
-# Each pid is taken and forgotten BEFORE it is signalled, so a trap that fires
-# between the kill and the wait finds nothing left to kill: a pid this script no
-# longer owns is one the host may since have given to somebody else.
+# Each pid is cleared before it is signalled, so a trap that fires between the
+# kill and the wait finds nothing left to kill: a pid this script no longer
+# owns may since have been given to another process.
 cleanup_boot() {
     qpid="$QPID"
     fpid="$FPID"
@@ -83,10 +79,11 @@ cleanup_boot() {
     rm -f "$FEED"
 }
 
-# Each connection has two direct children, with a FIFO between them. Killing
-# a pipeline's shell would leave its sleep running for the full five minutes.
-# The directory is made afresh: a run killed mid-flood leaves its fifos,
-# and the next run's mkfifo would fail on them.
+# flood_start: open forty connections to the forwarded port and hold them
+# silent. Each connection is two direct children, a sleep writing a FIFO and
+# an nc reading it, since killing a pipeline's shell would leave its sleep
+# running for the full five minutes. The directory is made afresh: a run
+# killed during the flood leaves its FIFOs, and mkfifo would fail on them.
 flood_start() {
     rm -rf "$FLOOD_DIR"
     mkdir -p "$FLOOD_DIR"
@@ -103,7 +100,8 @@ flood_start() {
     done
 }
 
-# Reap both children of every connection, including after partial setup.
+# flood_stop: kill and reap both children of every connection, including
+# after a partial start, and remove the FIFOs.
 flood_stop() {
     flood_pids=$FLOOD_PIDS
     FLOOD_PIDS=""
@@ -112,6 +110,7 @@ flood_stop() {
     rm -rf "$FLOOD_DIR"
 }
 
+# cleanup: stop the flood and the boot and remove the working files.
 cleanup() {
     flood_stop
     cleanup_boot
@@ -123,6 +122,8 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 
+# fail REASON: keep the console log as $DISK.fail.log, stop the boot, print
+# REASON and exit 1.
 fail() {
     if [ -f "$LOG" ]; then
         cp "$LOG" "$DISK.fail.log" 2>/dev/null || true
@@ -138,6 +139,8 @@ fail() {
 # a bound.
 # shellcheck source=tests/system/drive.sh
 . "$REPO/tests/system/drive.sh"
+# type_line LINE types LINE; wait_token TOKEN SECONDS waits for TOKEN for a
+# scaled SECONDS.
 type_line() { drive_type "$1"; }
 wait_token() { drive_expect "$1" "$(scaled "$2")"; }
 
@@ -178,18 +181,17 @@ if ! wait_token "Running in background" 60; then
 fi
 
 # Root, by key. The options are written out, not held in a variable, so
-# nothing here depends on a shell splitting one, and each of the three that
-# narrow the attempt is there for a reason: `-i` alone only ADDS an identity,
-# so an agent or a default key in the runner's own ~/.ssh would still be
-# offered, and a run that passed on one of those would say nothing about the
-# key this image was built around. `IdentitiesOnly` cuts the offer down to the
-# file named here, and the two authentication options cut the METHOD down to
-# the one being claimed.
+# nothing here depends on a shell splitting one. `-i` alone only adds an
+# identity, so an agent or a default key in the runner's own ~/.ssh would
+# still be offered, and a run that passed on one of those would say nothing
+# about the key this image was built around. `IdentitiesOnly` limits the
+# offer to the file named here, and the two authentication options limit the
+# method to public key.
 #
-# `-tt` and the `test -t` in front of the command are what make this a pty
-# session, not a command run down a pipe. ssh asks for no terminal when
-# it is given a command, so without them dropbear's pty path is never touched
-# and the capstone would pass on a server that could not allocate one.
+# `-tt` and the `test -t` in front of the command make this a pty session and
+# not a command run down a pipe. ssh asks for no terminal when it is given a
+# command, so without them dropbear's pty path is never used and the suite
+# would pass on a server that could not allocate one.
 OUT=$(ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
       -o "ConnectTimeout=$(scaled 20)" -o BatchMode=yes -o IdentitiesOnly=yes \
       -o PreferredAuthentications=publickey -o PasswordAuthentication=no \
@@ -204,22 +206,21 @@ case "$OUT" in
     *) fail "the key login did not arrive as root: $OUT" ;;
 esac
 
-# One password login, run through the pty driver because ssh reads a
-# password from a terminal and not from a pipe. What comes back is the
-# session's output plus two lines this script reads: whether a password was
-# ever ASKED for, since a server that let somebody in without asking would
-# otherwise be read as a password login, and the driver's own exit status,
-# so a run that died before it ever spoke to the server cannot be read as an
-# answer from the server.
+# ssh_password USER PASSWORD PROMPTS COMMAND: log in as USER by PASSWORD and
+# run COMMAND, through the pty driver, since ssh reads a password from a
+# terminal and not from a pipe. It prints the session's output and two lines
+# this script reads: whether a password was asked for (PROMPTED=1), since a
+# server that let somebody in without asking would otherwise be read as a
+# password login, and the driver's exit status (DRIVERRC=), so a run that
+# died before it reached the server is not read as the server's answer.
 #
-# The number of prompts is an argument: a login that is expected to work gets
-# the ordinary three, and one that is expected to be refused gets one, so a
-# wrong password is answered once and the attempt ends instead of sitting
-# through two more.
+# A login expected to work gets the ordinary three PROMPTS, and one expected
+# to be refused gets one, so a wrong password is answered once and the
+# attempt ends.
 #
-# The driver sizes the pty at 40 rows by 100 columns; the session's window
-# size is part of what the checks below prove. The password travels in the
-# environment, never in an argument a process listing could show.
+# The driver sizes the pty at 40 rows by 100 columns, which the window checks
+# below read back. The password is passed in the environment, never in an
+# argument a process listing could show.
 ssh_password() {
     RACH2_PASSWORD="$2" "$REPO/build/tests/system/ptydrive" \
         --rows 40 --cols 100 --timeout 60 -- \
@@ -231,11 +232,10 @@ ssh_password() {
     echo "DRIVERRC=$?"
 }
 
-# Require an attempt to have been REFUSED, not merely to have run
-# nothing. An ssh that could not connect, a server that had died, and a
-# driver error all produce no session and no token; only the server saying
-# no produces
-# this line. $1 is the output, $2 names the attempt.
+# require_denied OUTPUT NAME: fail unless OUTPUT of the attempt NAME has the
+# server's refusal and no time-out. An ssh that could not connect, a server
+# that had died, and a driver error all give no session and no token; only
+# the server's answer gives `Permission denied`.
 require_denied() {
     case "$1" in
         *"Permission denied"*) ;;
@@ -246,8 +246,8 @@ require_denied() {
     esac
 }
 
-# And require the attempt to have been made at all: the driver returns
-# non-zero for a run that never reached the server.
+# require_ran OUTPUT NAME: fail unless the driver ran the attempt NAME to the
+# end; it returns non-zero for a run that never reached the server.
 require_ran() {
     case "$1" in
         *"DRIVERRC=0"*) ;;
@@ -275,10 +275,10 @@ esac
 
 # The window size, and the termios under it. A login server takes the size the
 # client asked for and sets it on the master before the shell starts; the shell
-# and everything it runs read it off the slave, which is a different descriptor
-# and a different path through the kernel. `stty` is those two ioctls and
-# nothing else, so it is what proves the path: `size` is TIOCGWINSZ, and `-a`
-# is TCGETS as well.
+# and everything it runs read it off the slave, which is a different
+# descriptor and a different path through the kernel. `stty` makes those two
+# ioctls and nothing else, so it tests that path: `size` is TIOCGWINSZ, and
+# `-a` is TCGETS as well.
 OUT=$(ssh_password test "$TESTPASSWORD" 3 'stty size; stty -a')
 require_ran "$OUT" "the session that reads its terminal"
 case "$OUT" in
@@ -295,12 +295,12 @@ case "$OUT" in
 esac
 echo "ssh-test: the session's terminal reports the window and the termios: OK"
 
-# What must be refused. Each of these is asserted twice: that no session ran,
-# and that the server SAID no. The absence of a token is not a refusal, since a
-# connection that was reset, a server that had died and an ssh that could not
-# start all produce the same nothing; `Permission denied` is ssh reporting an
-# answer it received. They also run after the two attempts that must work, which
-# is a second reason the same way: the server was answering a moment ago.
+# What must be refused. Each of these is checked twice: that no session ran,
+# and that the server refused. A missing token alone is not a refusal, since
+# a connection that was reset, a server that had died and an ssh that could
+# not start all print no token; `Permission denied` is ssh reporting an
+# answer it received. They also run after the two attempts that must work, so
+# the server was answering a moment before.
 OUT=$(ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
       -o "ConnectTimeout=$(scaled 20)" -o BatchMode=yes -o PubkeyAuthentication=no \
       -o PasswordAuthentication=no -p "$PORT" \
@@ -310,8 +310,8 @@ case "$OUT" in
 esac
 require_denied "$OUT" "the login offering no credentials"
 
-# The one that proves the hash is really compared, and not merely present: the
-# same account, one character short of its password.
+# The same account with one character added to its password, which tests that
+# the hash is compared.
 OUT=$(ssh_password test "${TESTPASSWORD}x" 1 'echo BADPASS""RAN')
 require_ran "$OUT" "the wrong-password attempt"
 case "$OUT" in
@@ -323,9 +323,9 @@ case "$OUT" in
     *) fail "the wrong-password attempt was never asked for one, so its refusal proves nothing: $OUT" ;;
 esac
 
-# And root by password, with the RIGHT password, which the server was started
-# with -g to refuse. Nothing is required of the prompt here: a server that does
-# not offer the method has nothing to ask, and the refusal is the point.
+# Root by password, with the right password, which the server was started
+# with -g to refuse. Nothing is required of the prompt here: a server that
+# does not offer the method has nothing to ask.
 OUT=$(ssh_password root "$PASSWORD" 1 'echo ROOTPW""RAN')
 require_ran "$OUT" "root's password attempt"
 case "$OUT" in
@@ -346,13 +346,13 @@ flood_start
 # interval is scaled, since a guest sharing its host with a pool of machines
 # gets through less of the flood in the same wall clock.
 sleep "$(scaled 5)" # interval: the forty connections are counted once the guest has taken them
-# The flood is real before it is relied on: the guest's own count of
-# established connections, typed at the console session about to end, must
-# be more than none while the forty are held, and none once they are
-# released below. How many the guest holds is the machine's, its backlog
-# against the emulator's forwarding, and is printed and not judged. The
-# reading is taken only from a table the guest could list: a `netstat`
-# that failed answers no number, and no number is not zero.
+# flood_count: ask the console for the guest's count of established
+# connections and set `established` to it; fail if the console does not
+# answer or netstat fails, since a failed listing gives no number and must
+# not be read as zero. The count must be more than none while the forty are
+# held, and none once they are released below. How many the guest holds
+# depends on its backlog and the emulator's forwarding, and is printed and not
+# judged.
 flood_count() {
     # shellcheck disable=SC2016 # The guest's shell expands the count.
     type_line 'if netstat -tn > /tmp/ns 2>&1; then echo FLOOD""N=$(grep -c ESTABLISHED /tmp/ns); else echo FLOOD""N=none; fi; echo FLOOD""COUNT'

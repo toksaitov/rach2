@@ -12,6 +12,7 @@ DIR="$REPO/build/tests/system/krffsvol"
 VOL="$DIR/volume.krffs"
 PART=2048
 
+# fail REASON: print REASON and exit 1.
 fail() { echo "krffsmount-test: FAIL: $1" >&2; exit 1; }
 
 mkdir -p "$DIR"
@@ -31,8 +32,8 @@ sh "$REPO/krffs/mkimage.sh" "$REPO/krffs/manifests/krffsvol-test.manifest" \
     "$VOL" 4 >/dev/null 2>&1 || fail "building the volume"
 SECTORS=$(( $(wc -c < "$VOL") / 512 ))
 
-# The disk: a megabyte of nothing, the volume, whatever padding the row asks
-# for, and a partition table naming the whole of it.
+# build_disk VOLUME [PAD]: write the disk as a megabyte of zeros, VOLUME and
+# PAD sectors of zeros, with a partition of SECTORS sectors at the volume.
 build_disk() {
     { dd if=/dev/zero bs=512 count=$PART 2>/dev/null; cat "$1"; \
       dd if=/dev/zero bs=512 count="${2:-0}" 2>/dev/null; } > "$DISK"
@@ -40,8 +41,8 @@ build_disk() {
         || fail "the partition table"
 }
 
-# Three volumes on one disk, for the row that mounts them all at once, one
-# past the two the kernel once had room for.
+# build_three: write the disk with three copies of the volume, each in a
+# partition of its own, for the row that mounts them all at once.
 build_three() {
     three=$(($(wc -c < "$VOL") / 512))
     { dd if=/dev/zero bs=512 count=$PART 2>/dev/null; cat "$VOL"; cat "$VOL"; \
@@ -53,6 +54,7 @@ build_three() {
         || fail "the partition table of three"
 }
 
+# run ARG...: boot the test image on the disk with the harness's ARGs.
 run() {
     "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
         --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" "$@"
@@ -79,13 +81,13 @@ cmp -s "$VOL" "$DISK.after" \
     || fail "the read-only mount changed the volume"
 echo "krffsmount-test: and the volume is byte for byte what it was: OK"
 
-# The volume as the host reads it: taken out of the disk and judged by
-# fsck.krffs, which is the independent check of everything the kernel writes.
-# `--strict` refuses an image that needs any repair, which is what a volume
-# that was unmounted cleanly must not.
+# take_volume: copy the volume out of the disk into $DISK.vol, for fsck.krffs,
+# the host's check of everything the kernel writes.
 take_volume() {
     dd if="$DISK" of="$DISK.vol" bs=512 skip=$PART count=$SECTORS 2>/dev/null
 }
+# strict_clean REASON: fail with REASON unless `fsck.krffs --strict`, which
+# refuses an image that needs any repair, passes the volume.
 strict_clean() {
     take_volume
     "$FSCK" "$DISK.vol" --strict > "$DISK.fsck" 2>&1 \
@@ -219,6 +221,8 @@ strict_clean "the volume needs repair after two writers"
 build_disk "$VOL"
 
 # ---- the volumes the kernel refuses ----
+# refuse WHAT LINE: boot the refusal probe on the disk and fail unless the
+# kernel refused the volume and its log has LINE.
 refuse() {
     what=$1; line=$2
     if run --append "rach2.rescue" --timeout 90 --steptmo 60 \
@@ -261,8 +265,8 @@ build_disk "$VOL" 8
 refuse "a region the ring does not fill" "krffs: mount: refused: the node chain is malformed"
 
 # ---- a write the device fails, and the flag the unmount must leave ----
-# The rows above leave SECTORS one partition longer than the volume, which is
-# what the refusal above is for; this row wants the volume's own length again.
+# The row above leaves SECTORS eight sectors longer than the volume, which is
+# what that refusal tests; this row wants the volume's own length again.
 SECTORS=$(($(wc -c < "$VOL") / 512))
 build_disk "$VOL"
 if run --append "rach2.rescue rach2.blocklag=1 rach2.blockfail=24" \
@@ -297,14 +301,13 @@ fi
 
 # ---- a stick pulled from under a mounted volume ----
 #
-# The medium goes while the volume is mounted and being written: what the
-# machine owes is an error, no write to a device that is not there, and an
-# unmount that takes the mount down. The same stick is then plugged back in
-# while the old mount is still there, which is what a person does and what
-# gives the driver a second device to find while the first is still held: a
-# machine that gave the new stick the old one's slot would hand the mount a
-# pointer into somebody else's device. A panic here is what that looks like,
-# which is why this row exists at all.
+# The medium goes while the volume is mounted and being written: the machine
+# must return an error, write nothing to a device that is not there, and let
+# an unmount take the mount down. The same stick is then plugged back in
+# while the old mount is still there, as a person would, which gives the
+# driver a second device to find while the first is still held: a kernel that
+# gave the new stick the old one's slot would hand the mount a pointer into
+# another device, and would most likely panic here.
 STICK="$DISK.stick"
 # The partition is the volume's own length: a ring that does not fill its
 # region is refused, which is the row above and not this one.

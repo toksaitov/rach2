@@ -1,40 +1,40 @@
 #!/usr/bin/env sh
 
 #
-# install_test.sh: the machine installs its own kernel, and the trial, the
-# commit, the fallback and the repair are all proved on the booted disk.
+# install.sh: the machine builds and installs its own kernel, and the trial,
+# the commit, the fallback and the repair are checked on the booted disk.
 #
-# The disk is the GRUB one (mkdisk_grub.sh): no -kernel anywhere, so what
-# boots is what GRUB reads from the boot partition, which is what makes a
-# reboot after an install mean something. The whole loop runs twice in one
-# invocation, with a distinct banner marker per pass, so the second pass
-# starts from the disk the first modified and proves the flow idempotent.
+# The disk is the GRUB one (mkdisk_grub.sh) and QEMU has no -kernel, so what
+# boots is what GRUB reads from the boot partition, and a reboot after an
+# install boots the installed kernel. The loop runs twice in one invocation,
+# with a distinct banner marker per pass, so the second pass starts from the
+# disk the first changed and shows that the flow can be repeated.
 #
-# One pass: log in as root and prove rach2.slot=candidate; edit the pass's
+# One pass: log in as root and check rach2.slot=candidate; edit the pass's
 # marker into the kernel's serial banner in /src/rach2 (the slot token alone
-# is menu text, and a hash of the slot proves only bytes at rest, so the
-# marker is what proves which bytes RUN); build the kernel in place; install
-# it; prove a commit is refused while the trial is armed; reboot -f into the
-# trial and prove the marker and the slot token; commit; cold-boot and prove
-# the saved default held. Then the recovery half: corrupt the candidate's
-# first sector through /dev/bootpart at the extent bootctl status
+# is menu text, and a hash of the slot shows only the bytes on the disk, so
+# the marker shows which kernel runs); build the kernel in place; install it;
+# check that a commit is refused while the trial is armed; reboot -f into the
+# trial and check the marker and the slot token; commit; cold-boot and check
+# that the saved default held. Then the recovery half: corrupt the
+# candidate's first sector through /dev/bootpart at the extent bootctl status
 # names, reboot into the fallback (the marker must be absent from that boot's
-# log interval), reinstall from inside, reboot into the repaired candidate,
-# and commit so the repair is the saved default.
+# part of the log), reinstall from inside, reboot into the repaired
+# candidate, and commit so the repair is the saved default.
 #
 # After the two passes, the interruption matrix's determinate states are
-# booted from host-crafted environment blocks: a destroyed header and a
+# booted from environment blocks the host writes: a destroyed header and a
 # complete old value select the fallback, a complete new value the candidate,
 # told apart by the marker with no login (the banner prints before one).
 #
 # The feeder paces on log patterns with occurrence counts, because a reboot
-# brings a second "login:" a plain grep would match the first of; assertions
-# over the log are made post-hoc on token byte offsets, each boot's claims
-# checked only inside its own interval. The disk is assembled natively with
-# mtools and the pinned GRUB artifacts, so the whole harness runs anywhere the
-# rest of the suites do.
+# brings a second "login:" and a plain grep would match the first. The log is
+# checked after each session on the byte offsets of its tokens, each boot's
+# claims only inside its own part of the log. The disk is assembled on the
+# host with mtools and the pinned GRUB images, so the suite runs anywhere the
+# other suites do.
 #
-# Usage: install_test.sh <grub-disk> <root password>
+# Usage: install.sh <grub-disk> <root password>
 #
 
 # The emulator of the architecture tests/system/suites.mk names.
@@ -50,9 +50,7 @@ DISK="$1"
 ROOTPASSWORD="$2"
 
 # Both entries boot the same root, so the kernel built under the candidate is
-# on the fallback's root as well and the repair is done where it stands. Until
-# 2026-09-14 the fallback booted a KRFFS root of its own and this suite ran
-# twice, once per root type; the disk has one root now.
+# on the fallback's root as well and the repair is done where it stands.
 REPAIR_CD="cd /src/rach2"
 
 if [ -z "$DISK" ] || [ -z "$ROOTPASSWORD" ]; then
@@ -72,6 +70,8 @@ LOG=""
 QPID=""
 FPID=""
 
+# cleanup_boot: stop the machine and its feeder and remove the FIFO; safe to
+# call twice, since each pid is cleared before it is signalled.
 cleanup_boot() {
     qpid="$QPID"
     fpid="$FPID"
@@ -88,6 +88,7 @@ cleanup_boot() {
     rm -f "$FEED"
 }
 
+# cleanup: stop the boot and remove the working disk and the logs.
 cleanup() {
     cleanup_boot
     rm -f "$WORK" "$FEED" "$STEPS" "$DISK".log*
@@ -98,6 +99,8 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 
+# fail REASON: keep the failing boot's log as $DISK.fail.log, stop the boot,
+# print REASON and exit 1.
 fail() {
     if [ -n "$LOG" ] && [ -f "$LOG" ]; then
         cp "$LOG" "$DISK.fail.log" 2>/dev/null || true
@@ -108,10 +111,10 @@ fail() {
     exit 1
 }
 
-# Wait up to $3 seconds until the log has at least $2 occurrences of $1.
+# wait_count PATTERN COUNT SECONDS: wait up to SECONDS until the log has at
+# least COUNT occurrences of PATTERN; return 1 if it does not. The wait is cut
+# to what is left of the run's deadline, and passing that deadline fails.
 wait_count() {
-    # The wait's bound is its own or what is left of the run's budget,
-    # whichever is less, so a run cannot pass its deadline inside a wait.
     remaining=$((START + DEADLINE - $(date +%s)))
     if [ "$remaining" -le 0 ]; then
         fail "the run passed its ${DEADLINE}s deadline waiting for $1"
@@ -131,9 +134,10 @@ step() {
     printf '%s\t%s\t%s\n' "$2" "$1" "$3" >> "$STEPS"
 }
 
-# Boot $WORK on the current $STEPS; $LOG must be set by the caller. The
-# feeder is pattern-paced: login prompts and shell markers alike are patterns
-# with counts, so a session that reboots in place keeps feeding correctly.
+# boot_feed: boot $WORK, logged to $LOG, and feed it the lines of $STEPS in the
+# background. Login prompts and shell markers alike are patterns with counts,
+# so a session that reboots in place keeps feeding correctly; the feeder stops
+# at a pattern that does not come within ten minutes.
 boot_feed() {
     rm -f "$FEED"
     mkfifo "$FEED"
@@ -155,7 +159,8 @@ boot_feed() {
     FPID=$!
 }
 
-# A watch-only boot (the matrix states): no feed, a bounded wait for $1.
+# boot_watch PATTERN: boot $WORK with no input, logged to $LOG, wait up to 75
+# seconds for PATTERN, and stop the machine; fail if it does not come.
 boot_watch() {
     rm -f "$FEED"
     mkfifo "$FEED"
@@ -179,26 +184,27 @@ if [ "$ENVOFF" -lt 0 ]; then
     fail "the disk has no environment block"
 fi
 
-# One pass of the install loop. $1 is the pass number, $2 the sed pattern the
-# marker edit replaces, $3 the marker this pass plants.
-# The byte offset of a token's first occurrence in the log, or empty when
-# it is absent. `grep -ab` numbers each matching line by its byte offset,
-# which is what puts the console tokens in order without a parser: the
-# console writes them as they happen, so an ordering assertion is an
-# assertion about these numbers.
+# token_at LOG TOKEN: print the byte offset of TOKEN's first occurrence in
+# LOG, or nothing when it is absent. The console writes the tokens as they
+# happen, so comparing these offsets checks their order without a parser.
 token_at() {
     grep -abo -m1 -e "$2" "$1" 2>/dev/null | head -1 | cut -d: -f1
 }
 
-# Whether `$3` appears in the log between the byte offsets $1 and $2.
+# token_between FROM TO TOKEN LOG: return 0 when TOKEN appears in LOG between
+# the byte offsets FROM and TO.
 token_between() {
     dd if="$4" bs=1 skip="$1" count=$(($2 - $1)) status=none 2>/dev/null |
         grep -aq -e "$3"
 }
 
-# run_pass P OLDMARK MARK TOKEN: one session of the machine, in two halves.
-# The first proves the slot, plants the marker, builds, installs, proves the
-# armed-commit refusal, reboots into the trial, proves it, commits and stops.
+# run_pass P OLDMARK MARK TOKEN: pass P of the loop, in two sessions, with the
+# banner's OLDMARK edited to MARK, whose TOKEN the installed kernel prints. The
+# first session checks the slot, edits the marker, builds, installs, checks
+# the refused commit, reboots into the trial, checks it, commits and powers
+# off. The second cold-boots, corrupts the candidate, reboots into the
+# fallback, reinstalls, reboots into the repair and commits it. Each session's
+# log is checked after it ends; any fault fails the suite.
 run_pass() {
     P="$1"
     OLDMARK="$2"
@@ -226,10 +232,10 @@ run_pass() {
     "$RUNUTIL" gone "$QPID" 60 || true
     cleanup_boot
 
-    # Post-hoc, on ordered byte offsets: the marker must appear between the
-    # reboot and the second slot token (the trial boot's own interval) and
-    # not before the reboot (the running kernel was unmarked or previously
-    # marked; the token echoes carry the marker text and do not count).
+    # On the byte offsets: the marker must appear between the reboot and the
+    # second slot token (the trial boot's part of the log), and not before
+    # the reboot, where the running kernel had no marker or the last pass's.
+    # The echoed commands have the marker text and are not counted.
     ARMED_AT="$(token_at "$LOG" "ARMED${P}RC=1")"
     RB_AT="$(token_at "$LOG" "PRERB${P}A")"
     SLOT2_AT="$(token_at "$LOG" "rach2.slotB${P}=candidate")"
@@ -301,9 +307,8 @@ run_pass 2 "IKMA" "IKMB" "IKMB"
 # login: the marked candidate prints IKMB before any prompt, so presence
 # tells the entries apart. A destroyed header and a complete old value select
 # the fallback; a complete new value selects the candidate once.
-# The block is built whole and written in place at the recorded offset:
-# 1024 bytes, the lines given here and a '#' fill, the way grub-editenv
-# writes one; `craft_env` takes the lines.
+# craft_env LINES: write the environment block in place at its offset: 1024
+# bytes, LINES and a '#' fill, the way grub-editenv writes one.
 craft_env() {
     printf '%s' "$1" > "$WORK.env"
     n="$(wc -c < "$WORK.env" | tr -d ' ')"
@@ -314,8 +319,8 @@ craft_env() {
     rm -f "$WORK.env"
 }
 
-# The destroyed header: 1024 bytes of one repeated pattern, so nothing in
-# the block reads as a variable at all.
+# smash_env: overwrite the environment block with 512 bytes of 0xDE and 512 of
+# 0xAD, so nothing in it reads as a header or a variable.
 smash_env() {
     dd if=/dev/zero bs=1 count=512 2>/dev/null | tr '\0' '\336' > "$WORK.env"
     dd if=/dev/zero bs=1 count=512 2>/dev/null | tr '\0' '\255' \

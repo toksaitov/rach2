@@ -2,14 +2,13 @@
 # bootorder.sh: a Rach2 disk that is not the first disk on its bus.
 #
 # The disk is built as the GRUB suites build it and attached on the second
-# AHCI port behind a disk that holds nothing, with the firmware told to boot
-# it. The kernel then numbers it disk 1, and everything that used to assume
-# the first disk has to find its way: the core image finds the boot
-# partition by its label, the menu finds the kernel's partition by its
-# serial, and the kernel finds the root and the boot partition by the
-# identity the menu names. SeaBIOS boots one hard disk only, so the disk it
-# boots is always its first; the order that changes here is the bus's,
-# which is what the kernel numbers by.
+# AHCI port behind a blank disk, with the firmware told to boot it. The
+# kernel numbers it disk 1, so no stage of the boot may assume the first
+# disk: the core image finds the boot partition by its label, the menu finds
+# the kernel's partition by its serial, and the kernel finds the root and the
+# boot partition by the identity the menu gives it. SeaBIOS boots one hard
+# disk only, and the disk it boots is always its first; the order that
+# changes here is the bus's, by which the kernel numbers its disks.
 #
 # Usage: bootorder.sh KERNEL HARNESS DISK
 set -u
@@ -22,9 +21,8 @@ REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 fail() { echo "bootorder-test: FAIL: $1" >&2; exit 1; }
 BLANK="$DISK.blank"
 
-# The root this disk boots. It was a KRFFS partition built from a manifest
-# until 2026-09-14; the same tree as an ext2 root, which the builder now
-# requires of every disk.
+# The root this disk boots is the grub-test tree as an ext2 partition, which
+# mkdisk_grub.sh requires of every disk.
 RACH2_DISK_TABLE=mbr \
 RACH2_DISK_APPEND="rach2.disk=ahci" \
 RACH2_DISK_RECOVERY_MB=8 \

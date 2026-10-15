@@ -17,7 +17,7 @@
 # arranged from inside the machine.
 #
 # Usage: usbdisk.sh KERNEL IMAGE HARNESS DIR OSREAL PASSWORD MKEXFATFIXTURE \
-#        STICKIMAGE
+#        STICKIMAGE RKERNEL RIMAGE
 set -u
 if [ $# -ne 10 ]; then
     echo "usage: usbdisk.sh KERNEL IMAGE HARNESS DIR OSREAL PASSWORD MKEXFATFIXTURE STICKIMAGE RKERNEL RIMAGE" >&2
@@ -31,6 +31,7 @@ sh "$REPO/tests/system/usbdisk_script_test.sh" || exit 1
 MKMBR="$REPO/build/tools/image/mkmbr"
 MKGPT="$REPO/build/tools/image/mkgpt"
 
+# fail REASON prints REASON and exits 1; note TEXT prints TEXT.
 fail() { echo "usbdisk-test: FAIL: $1" >&2; exit 1; }
 note() { echo "usbdisk-test: $1"; }
 
@@ -52,10 +53,11 @@ echo "hello from the stick" > "$DIR/hello.txt"
 awk 'BEGIN { for (i = 0; i < 128; i++) for (j = 0; j < 128; j++) printf "%03d.", i }' \
     > "$DIR/pattern.bin" || fail "the pattern"
 
+# fill_volumes IMAGE: make the FAT32 volume at sector 2048 of IMAGE with its two
+# files, and place and check the exFAT volume at sector 100352. mformat's -T
+# limits the volume to the partition's 98304 sectors, since the driver refuses
+# a volume that claims more than the partition has.
 fill_volumes() {
-    # -T: the volume is the partition's 98304 sectors and not the rest of
-    # the image; the driver refuses a volume that claims more than the
-    # partition has.
     mformat -i "$1"@@1048576 -F -T 98304 -v STICKFAT :: || fail "mformat $1"
     mcopy -i "$1"@@1048576 "$DIR/hello.txt" ::/hello.txt || fail "mcopy hello $1"
     mcopy -i "$1"@@1048576 "$DIR/pattern.bin" ::/pattern.bin || fail "mcopy pattern $1"
@@ -73,10 +75,11 @@ fill_volumes "$GPT"
 
 cp "$DIR/exfat.vol" "$SUPER" || fail "the superfloppy"
 
-# A stick on the controller beside the keyboard and the mouse, with the 8042
-# left in place: nothing here types, and the keyboard is there so that a
-# stick brought up beside a device that is polled every tick costs it
-# nothing, which the interrupt suite already checks the other way round.
+# run STICK ARG...: boot the test image with STICK on the controller beside
+# the keyboard and the mouse, with the harness's ARGs. The 8042 stays in place:
+# nothing here types, and the keyboard is there to show that a stick brought
+# up beside a device polled every tick costs it nothing, which the interrupt
+# suite checks the other way round.
 run() {
     stick=$1; shift
     "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
@@ -277,8 +280,8 @@ fi
 #         emulator: GRUB loads the metal kernel and its RAM root off the
 #         stick, the stick comes up as the machine's own disk, and the
 #         machine mounts the stick's second partition and reads a file from
-#         it. The image is copied first, since the volume is written by the
-#         mount's dirty flag and the built image is the record. ----
+#         it. The image is copied first, since the mount's dirty flag writes
+#         the volume and the built image must stay as it was built. ----
 cp "$STICKIMAGE" "$DIR/stick-boot.img" || fail "the stick image"
 LOG="$DIR/stickboot.log"
 if "$HARNESS" --bios \
@@ -319,6 +322,8 @@ fi
 for i in 0 1 2; do
     cp "$MBR" "$DIR/stick-three-$i.img" || fail "the three sticks' images"
 done
+# three ARG...: boot the test image with the three sticks on the controller,
+# with the harness's ARGs.
 three() {
     "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
         --qemu-arg=-cpu --qemu-arg=max \

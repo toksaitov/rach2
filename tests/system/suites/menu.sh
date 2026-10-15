@@ -1,34 +1,30 @@
 #!/usr/bin/env sh
 
 #
-# menu_test.sh: the boot menu that can be rewritten, and the stub that cannot.
+# menu.sh: the boot menu that can be rewritten, and the stub that cannot.
 #
 # GRUB reads two files on this disk. /boot/grub/grub.cfg is written once when
 # the disk is built and never again; it defines every entry the machine needs
 # to boot and then sources /boot/boot.cfg, the rewritable half that bootctl
-# overwrites in place. The order is the whole safety property: the stub's
-# entries are defined first, so they hold the low indices whatever the second
+# overwrites in place. The order is what makes the menu safe: the stub's
+# entries are defined first, so they keep the low indices whatever the second
 # file contains, and `set fallback` takes a number.
 #
-# Several boots of one disk prove it. The first stages a menu defining two
+# Four boots of one disk check it. The first stages a menu defining two
 # entries the stub does not have, round-trips a grubenv key through `bootctl
-# env`, and corrupts the candidate kernel so the next boot has to take the
-# fallback. The next boot proves both staged entries reached the menu and that
-# the fallback NUMBER still named the stub's own entry, not a staged one, which
-# is the property the ordering exists for. A staged file truncated mid-entry
-# from the host must still leave the machine booting through the stub. A trial
-# of the static-address candidate must fall back to the static-address fallback
-# and not the ordinary one, and a machine left on the static default must
-# select the static entries, since on a network with no DHCP server, falling
-# back to a lease nobody answers is a machine that cannot be reached. The last
-# boot reads the slot's extent back, which says bootctl overwrote bytes in
-# place instead of rewriting a file.
+# env`, and corrupts the candidate kernel so that the next boot must take the
+# fallback. The second requires both staged entries in the menu after the
+# stub's, and the fallback number to name the stub's own entry and not a
+# staged one. In the third, a staged file truncated mid-entry from the host
+# must still leave the machine booting through the stub. The last boot reads
+# the slot's extent back, which shows that bootctl overwrote bytes in place
+# and did not rewrite the file.
 #
-# What no boot here does is let the staged file choose the default. It cannot:
-# a slot overwritten in place is not written atomically, so a file in a torn
-# state must not be able to point the machine at anything.
+# No boot here lets the staged file choose the default, and it cannot: a slot
+# overwritten in place is not written atomically, so a file in a torn state
+# must not be able to point the machine at anything.
 #
-# Usage: menu_test.sh <grub-disk> <root password>
+# Usage: menu.sh <grub-disk> <root password>
 #
 
 # The emulator of the architecture tests/system/suites.mk names.
@@ -60,6 +56,7 @@ LOG=""
 QPID=""
 FPID=""
 
+# Stop the machine and the feeder of this boot, and remove the feed.
 cleanup_boot() {
     qpid="$QPID"
     fpid="$FPID"
@@ -76,6 +73,7 @@ cleanup_boot() {
     rm -f "$FEED"
 }
 
+# Stop the boot, and remove the disk's copy, the feed, the steps and the logs.
 cleanup() {
     cleanup_boot
     rm -f "$WORK" "$FEED" "$STEPS" "$DISK".log*
@@ -86,6 +84,8 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 
+# fail REASON: keep the failing boot's log as DISK.fail.log, stop the boot,
+# print REASON and exit 1.
 fail() {
     if [ -n "$LOG" ] && [ -f "$LOG" ]; then
         cp "$LOG" "$DISK.fail.log" 2>/dev/null || true
@@ -96,10 +96,11 @@ fail() {
     exit 1
 }
 
-# Wait up to $3 seconds until the log has at least $2 occurrences of $1.
+# Wait up to $3 seconds until the log has at least $2 occurrences of $1, and
+# return 1 if it does not. The bound is $3 or what is left of the run's
+# budget, whichever is less, so that a run cannot pass its deadline inside a
+# wait; a run past its deadline fails.
 wait_count() {
-    # The wait's bound is its own or what is left of the run's budget,
-    # whichever is less, so a run cannot pass its deadline inside a wait.
     remaining=$((START + DEADLINE - $(date +%s)))
     if [ "$remaining" -le 0 ]; then
         fail "the run passed its ${DEADLINE}s deadline waiting for $1"
@@ -143,7 +144,7 @@ boot_feed() {
     FPID=$!
 }
 
-# A watch-only boot (the matrix states): no feed, a bounded wait for $1.
+# A boot with nothing typed: wait up to 75 seconds for $1, then stop it.
 boot_watch() {
     rm -f "$FEED"
     mkfifo "$FEED"
@@ -192,7 +193,7 @@ grep -a "ENVA=" "$LOG" | grep -aq "candidate" || fail "bootctl env did not read 
 grep -a "ENVB=" "$LOG" | grep -aq "absent" || \
     fail "bootctl cancel did not remove the trial key, so it left the consumed marker behind"
 
-# The candidate is now unbootable, so GRUB takes the fallback NUMBER. That
+# The candidate is now unbootable, so GRUB takes the fallback number. That
 # number indexes the merged list, which is why the stub's entries have to be
 # defined before the staged file is sourced: index 1 must still be the stub's
 # own fallback and not whatever a staged menu put there.
@@ -205,13 +206,11 @@ grep -aq "stagedtwo" "$LOG" || fail "the staged menu's second entry is missing"
 grep -aq "Falling back to .Start Rach2 with the previous kernel'" "$LOG" || \
     fail "the fallback number did not select the stub's own fallback entry"
 
-# The whole list, in order, because every index is a contract and only one of
-# them is checked by the fallback above. The menu is drawn on the serial console
-# with one title per line, so the order they appear in is the order GRUB has
-# them in.
-# GRUB draws one title per screen row, positioned with a cursor escape,
-# and marks the highlighted one with a leading asterisk. The titles are cut
-# out of the log in the order they were drawn, each kept once.
+# The whole list, in order, since every index is a contract and the fallback
+# above checks only one. GRUB draws one title per screen row of the serial
+# console, positioned with a cursor escape, and marks the highlighted one with
+# a leading asterisk; the titles are cut out of the log in the order they were
+# drawn, each kept once.
 SEEN="$(tr '\033' '\n' < "$LOG" | sed -n 's/^\[[0-9][0-9]*;3H//p' |
     sed 's/^[ *]*//; s/[ ]*$//' | grep -a -v '^$' |
     awk '!seen[$0]++')"
@@ -249,13 +248,6 @@ grep -aqi "error" "$LOG" || \
 if grep -a "Falling back to" "$LOG" | grep -aq "staged"; then
     fail "a truncated menu still reached one of its own entries"
 fi
-
-# The static-address entries were removed on 2026-09-14 and the two sections
-# that were here went with them: a trial of the static candidate falling back to
-# the static fallback, and a machine left on the static default selecting them
-# every boot. A fixed address is a property of where a machine lives and is now
-# configuration rather than a pair of boot choices, so there is no second pair
-# to fall between and `set fallback=3` is gone with them.
 
 # The slot's extent, read back after all of it: bootctl overwrote bytes in place
 # instead of rewriting a file, so the chain found when the volume opened is the

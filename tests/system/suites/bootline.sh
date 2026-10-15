@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 
 #
-# bootline_test.sh: the boot line that contradicts itself, and the other boots
+# bootline.sh: the boot line that contradicts itself, and the other boots
 # that must halt rather than open the debug shell.
 #
 # `rach2.nodisk` skips the disk probe. On an image whose root is the disk that
@@ -12,11 +12,11 @@
 # cannot be read is refused the same way; tests/system/init_refusal.sh is that
 # row, run here on the kernel under test.
 #
-# Each refusal is asserted twice: the diagnostic is there, AND the machine
+# Each refusal is asserted twice: the diagnostic is there, and the machine
 # never reached a shell. A test that looked only for the message would pass on
 # a kernel that printed it and carried on.
 #
-# Usage: bootline_test.sh <kernel> <disk> <harness> <mkmbr>
+# Usage: bootline.sh <kernel> <disk> <harness> <mkmbr>
 #
 
 # The emulator of the architecture tests/system/suites.mk names.
@@ -42,11 +42,11 @@ WORK="$DISK.bootline"
 LOG="$WORK.log"
 QPID=""
 
-# Everything this run started, ended. The pid is taken and forgotten before it
-# is signalled, so a trap that fires between the kill and the wait finds
-# nothing left to kill: a pid this script no longer owns is one the host may
-# since have given to somebody else. SIGTERM first, then SIGKILL if the machine
-# is still there, so a wait here is bounded.
+# Stop the machine this run started, if it runs. The pid is taken and cleared
+# before it is signalled, so a trap that fires between the kill and the wait
+# finds nothing to kill: a pid this script no longer owns may since have been
+# given to another process. SIGTERM goes first, then SIGKILL if the machine is
+# still there five seconds later, so the wait is bounded.
 stop_boot() {
     qpid="$QPID"
     QPID=""
@@ -57,12 +57,14 @@ stop_boot() {
     fi
 }
 
+# Stop the machine and remove the disk's copy and the log.
 cleanup() {
     stop_boot
     rm -f "$WORK" "$LOG"
 }
 trap cleanup EXIT INT TERM HUP
 
+# fail REASON: print REASON and the console's last twenty lines, and exit 1.
 fail() {
     echo "bootline-test: FAIL: $1" >&2
     if [ -f "$LOG" ]; then
@@ -72,10 +74,11 @@ fail() {
     exit 1
 }
 
-# One boot, with the tokens under test, for a bounded time. $3 is how long to
-# leave the machine running AFTER the line arrives: a kernel that printed a
-# refusal and carried on would reach a shell in that time, and a test that
-# killed the machine the moment it saw the line could not tell the two apart.
+# boot TOKENS LINE SECONDS: boot a copy of the disk with the boot line TOKENS,
+# wait up to 25 seconds for LINE, then leave the machine running SECONDS more
+# and stop it. A kernel that printed a refusal and carried on would reach a
+# shell in that time, which a test that stopped the machine at the line could
+# not see.
 boot() {
     rm -f "$LOG" "$WORK"
     cp "$DISK" "$WORK"
@@ -92,27 +95,26 @@ boot() {
 
 # The two spellings of a disk root, each of which must be refused.
 for tokens in "rach2.nodisk rach2.fsdisk" "rach2.nodisk rach2.root=disk"; do
-    # The last of the refusal's four lines is the one waited for: under a
-    # loaded host the lines come seconds apart.
+    # The last of the refusal's four lines; under load they come seconds apart.
     boot "$tokens" "and no rach2.rescue" 10
     grep -q "boot: refused: rach2.nodisk with rach2.fsdisk or rach2.root=disk" "$LOG" ||
         fail "$tokens was not refused, or the refusal did not name both tokens"
-    # And the machine stopped there, ten seconds later. The debug shell
-    # announces itself, and a login prompt is the other way a boot ends up
-    # somewhere a person can type.
+    # Ten seconds on, neither the debug shell's banner nor a login prompt.
     if grep -qE "Kernel debug shell active|rach2 login" "$LOG"; then
         fail "$tokens was refused and then reached a shell anyway"
     fi
     echo "bootline-test: refused, and stopped: $tokens"
 done
 
-# And the wider case the same fall-through opens: a disk root on a machine
-# whose disk holds no file system. Nothing mounts, /sbin/init cannot be
-# reached, and the shell that would open authenticates nobody, so this halts
-# too. The image here is the one under test with its first megabyte zeroed,
-# which is a disk that answers and has nothing on it.
+# The wider case the same fall-through opens: a disk root on a machine whose
+# disk holds no file system. Nothing mounts, /sbin/init cannot be reached,
+# and the shell that would open authenticates nobody, so this halts too. The
+# disk is 48 MiB of zeros, a disk that answers and has nothing on it.
 rm -f "$WORK.blank"
 dd if=/dev/zero of="$WORK.blank" bs=1048576 count=48 2>/dev/null
+# boot_blank TOKENS: boot the blank disk with the boot line TOKENS, wait up
+# to 30 seconds for the refusal, leave the machine running ten seconds more
+# and stop it.
 boot_blank() {
     rm -f "$LOG"
     "$QEMU" -cpu max -display none -kernel "$KERNEL" \

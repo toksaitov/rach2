@@ -1,30 +1,28 @@
 #!/usr/bin/env sh
 
 #
-# diskdiag_test.sh: read a disk without mounting it, and without writing a byte.
+# diskdiag.sh: a disk read without mounting it, and without a byte written.
 #
-# This is the instrument the decision to carve the laptop's SSD rests on. That
-# SSD has a Windows installation, so the machine must be able to report what the
-# drive is, how big it is and what its partition table says, and to hand out
-# any sector for hashing, while leaving the platter exactly as it found it.
+# The read-only kernel's diagnostic reports what a drive is, how big it is and
+# what its partition table says, and hands out any sector for hashing, so that
+# a disk whose data has no backup can be examined without being changed. The
+# suite boots one freshly built disk image three times.
 #
-# The proof is in three boots of one freshly built disk image.
+# The first boot is the control: the ordinary kernel mounts the disk, which
+# must change the image, since the mount stamps a dirty flag. Without it the
+# comparisons below would pass on a test that could not detect a write.
 #
-# The first is the control: the ordinary kernel mounting the disk, which MUST
-# change the image, because the mount stamps a dirty flag. Without that step
-# the two comparisons below would pass on a test that could not detect a write
-# at all.
+# The second runs the diagnostic on the read-only kernel, reached over SSH
+# with nothing typed at the console. It checks what /proc/disk says, then
+# hashes sectors through /dev/disk0 and compares each with the host's hash of
+# the same offset in the image file, which shows that the machine returned
+# the sector named and not some other 512 bytes. A write to /dev/disk0 must
+# not reach the drive, and the image must be unchanged after the boot.
 #
-# The second is the diagnostic on the read-only kernel, reached over SSH with
-# nothing typed at the console, which is how the laptop will be used. It checks
-# what /proc/disk says, and then hashes sectors through /dev/disk0 and compares
-# each against the host's hash of the same offset in the image file. That last
-# comparison is the one that matters: it shows the machine handed back the
-# sector the caller named, not merely some 512 bytes.
+# The third boots the same kernel with no drive at all, and the diagnostic
+# must report the disk absent.
 #
-# The third is absence: the same kernel with no drive at all.
-#
-# Usage: diskdiag_test.sh <read-write kernel> <read-only kernel> <metal image>
+# Usage: diskdiag.sh <read-write kernel> <read-only kernel> <metal image>
 # [port]
 #
 
@@ -63,6 +61,7 @@ KNOWN="$W.known"
 
 QPID=""
 
+# Stop the machine, if it runs.
 cleanup_boot() {
     qpid="$QPID"
     QPID=""
@@ -72,6 +71,7 @@ cleanup_boot() {
     fi
 }
 
+# Stop the machine and remove the disks, the image and the logs.
 cleanup() {
     cleanup_boot
     rm -f "$BASE" "$RW" "$RO" "$IMG" "$RWLOG" "$ROLOG" "$NOLOG" "$KNOWN"
@@ -88,6 +88,7 @@ fail() {
     exit 1
 }
 
+# wait_token TOKEN SECONDS LOG: wait up to SECONDS for TOKEN in LOG.
 wait_token() {
     "$RUNUTIL" until "$3" "$1" "$2"
 }
@@ -97,8 +98,8 @@ if [ ! -f "$KEY" ]; then
     exit 2
 fi
 
-# The artifacts first: a kernel that is not the policy it claims would make
-# every comparison below meaningless.
+# The artifacts first: the comparisons below mean nothing for a kernel built
+# with the other policy.
 sh "$REPO/tools/inspect/check_diskpolicy.sh" "$RW_KERNEL" read-write \
     || fail "the read-write kernel is not read-write"
 sh "$REPO/tools/inspect/check_diskpolicy.sh" "$RO_KERNEL" read-only \
@@ -140,6 +141,8 @@ QPID=$!
 
 wait_token "rach2 login" 90 "$ROLOG" || fail "the diagnostic boot never reached its login prompt"
 
+# ssh_run COMMAND: run COMMAND as root on the machine over SSH with the demo
+# key, its errors appended to the console's log.
 ssh_run() {
     ssh -i "$KEY" -p "$PORT" \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile="$KNOWN" \
@@ -162,18 +165,18 @@ DISKTXT="$(ssh_run 'cat /proc/disk' | tr -d '\r')"
 for want in "state present" "driver ahci" "policy read-only" "mounted 0" "mbr-signature ok"; do
     echo "$DISKTXT" | grep -q "^$want\$" || fail "/proc/disk does not say '$want'"
 done
-# The sector count the machine reports must be the image's real size, computed
-# here, not written down, so a wrong IDENTIFY cannot agree with a
-# hardcoded number.
+# The sector count the machine reports must be the image's size, computed
+# here, so that a wrong IDENTIFY cannot agree with a number written into the
+# test.
 IMG_SECTORS=$(( $(wc -c < "$BASE") / 512 ))
 echo "$DISKTXT" | grep -q "^sectors $IMG_SECTORS\$" \
     || fail "/proc/disk reports a sector count that is not the image's $IMG_SECTORS"
 echo "$DISKTXT" | grep -q "^model " || fail "/proc/disk has no model"
 echo "diskdiag-test: /proc/disk reports the drive, its geometry and its table: OK"
 
-# The sectors themselves. Each is hashed on the machine through /dev/disk0 and
-# on the host straight out of the image file; the two must agree, which is what
-# shows the machine returned the sector that was named.
+# check_sector LBA: hash sector LBA on the machine through /dev/disk0 and on
+# the host out of the image file, and fail unless the two agree, which shows
+# that the machine returned the sector that was named.
 check_sector() {
     lba="$1"
     guest="$(ssh_run "dd if=/dev/disk0 bs=512 skip=$lba count=1 2>/dev/null | sha256sum" \
@@ -189,7 +192,8 @@ check_sector 2048
 check_sector $((IMG_SECTORS - 1))
 echo "diskdiag-test: sectors 0, 2048 and $((IMG_SECTORS - 1)) hash the same on the machine and here: OK"
 
-# A write to the window is refused, and the node is root-only.
+# A write to /dev/disk0 is refused above the driver: no command reaches the
+# drive's allow list to be refused there.
 ssh_run 'dd if=/dev/zero of=/dev/disk0 bs=512 count=1 2>&1 | head -1' >/dev/null 2>&1 || true
 if grep -q "refused: command" "$ROLOG"; then
     fail "the diagnostic path issued a command the allowlist refused; it strayed off the read path"
