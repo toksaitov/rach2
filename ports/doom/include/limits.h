@@ -1,8 +1,4 @@
-/*
- * limits.h: the limits of the integer types, and PATH_MAX, for Doom on
- * Rach2. LONG_MIN, LONG_MAX and ULONG_MAX are those of a 32-bit long, which
- * is i386's; on x86-64, where long has 64 bits, they are too small.
- */
+/* limits.h: integer limits and PATH_MAX for Doom on Rach2. */
 #ifndef _LIMITS_H
 #define _LIMITS_H
 
@@ -21,9 +17,9 @@
 #define INT_MAX     2147483647
 #define UINT_MAX    4294967295U
 
-#define LONG_MIN    (-2147483647L - 1)
-#define LONG_MAX    2147483647L
-#define ULONG_MAX   4294967295UL
+#define LONG_MAX    __LONG_MAX__
+#define LONG_MIN    (-LONG_MAX - 1L)
+#define ULONG_MAX   (2UL * LONG_MAX + 1UL)
 
 #define PATH_MAX    256
 

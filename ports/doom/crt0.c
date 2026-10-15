@@ -11,6 +11,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdarg.h>
+#include "include/ctype.h"
 
 #if defined __x86_64__
 /* The numbers of rach2/sys/arch/x86_64/sysnr.h, which are Linux's. */
@@ -419,21 +420,21 @@ int tolower(int c)
 /**
  * Write `n` in `base` to `buf`, with a '-' first when `n` is negative and
  * `base` is 10, and return the characters written. `buf` is not terminated,
- * and 32 bytes hold any long.
+ * and 32 bytes hold any long long.
  */
-static int format_signed(char *buf, long n, int base)
+static int format_signed(char *buf, long long n, int base)
 {
     int i = 0;
     int neg = 0;
-    unsigned long un;
+    unsigned long long un;
     char tmp[32];
     int ti = 0;
 
     if (n < 0 && base == 10) {
         neg = 1;
-        un = (unsigned long)(-(n + 1)) + 1;  /* -LONG_MIN overflows a long */
+        un = 0ULL - (unsigned long long)n;
     } else {
-        un = (unsigned long)n;
+        un = (unsigned long long)n;
     }
 
     do {
@@ -450,9 +451,9 @@ static int format_signed(char *buf, long n, int base)
 /**
  * Write `un` in `base` to `buf`, in capital hexadecimal digits when
  * `uppercase` is set, and return the characters written. `buf` is not
- * terminated, and 32 bytes hold any unsigned long.
+ * terminated, and 32 bytes hold any unsigned long long.
  */
-static int format_unsigned(char *buf, unsigned long un, int base, int uppercase)
+static int format_unsigned(char *buf, unsigned long long un, int base, int uppercase)
 {
     int i = 0;
     char tmp[32];
@@ -506,11 +507,14 @@ int vprintf(const char *fmt, va_list ap)
         if (*p == 'l') {
             is_long = 1;
             p++;
-            if (*p == 'l') p++;
+            if (*p == 'l') { is_long = 2; p++; }
         } else if (*p == 'h') {
             p++;
             if (*p == 'h') p++;
-        } else if (*p == 'z' || *p == 't' || *p == 'j') {
+        } else if (*p == 'j') {
+            is_long = sizeof(intmax_t) > sizeof(long) ? 2 : 1;
+            p++;
+        } else if (*p == 'z' || *p == 't') {
             is_long = 1;  /* size_t and ptrdiff_t have the size of long */
             p++;
         }
@@ -518,7 +522,8 @@ int vprintf(const char *fmt, va_list ap)
         switch (*p) {
             case 'd':
             case 'i': {
-                long val = is_long ? va_arg(ap, long) : va_arg(ap, int);
+                long long val = is_long == 2 ? va_arg(ap, long long)
+                    : is_long ? va_arg(ap, long) : va_arg(ap, int);
                 char tmp[32];
                 int len = format_signed(tmp, val, 10);
                 for (int j = 0; j < len && outlen < (int)sizeof(outbuf) - 1; j++)
@@ -526,7 +531,8 @@ int vprintf(const char *fmt, va_list ap)
                 break;
             }
             case 'u': {
-                unsigned long val = is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
+                unsigned long long val = is_long == 2 ? va_arg(ap, unsigned long long)
+                    : is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
                 char tmp[32];
                 int len = format_unsigned(tmp, val, 10, 0);
                 for (int j = 0; j < len && outlen < (int)sizeof(outbuf) - 1; j++)
@@ -534,7 +540,8 @@ int vprintf(const char *fmt, va_list ap)
                 break;
             }
             case 'o': {
-                unsigned long val = is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
+                unsigned long long val = is_long == 2 ? va_arg(ap, unsigned long long)
+                    : is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
                 char tmp[32];
                 int len = format_unsigned(tmp, val, 8, 0);
                 for (int j = 0; j < len && outlen < (int)sizeof(outbuf) - 1; j++)
@@ -543,7 +550,8 @@ int vprintf(const char *fmt, va_list ap)
             }
             case 'x':
             case 'X': {
-                unsigned long val = is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
+                unsigned long long val = is_long == 2 ? va_arg(ap, unsigned long long)
+                    : is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
                 char tmp[32];
                 int len = format_unsigned(tmp, val, 16, *p == 'X');
                 for (int j = 0; j < len && outlen < (int)sizeof(outbuf) - 1; j++)
@@ -610,10 +618,11 @@ int vprintf(const char *fmt, va_list ap)
 int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
 {
     char *out = buf;
-    char *end = buf + size - 1;
+    char *end;
     const char *p;
 
     if (size == 0) return 0;
+    end = buf + size - 1;
 
     for (p = fmt; *p && out < end; p++) {
         int is_long = 0;
@@ -649,11 +658,14 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
         if (*p == 'l') {
             is_long = 1;
             p++;
-            if (*p == 'l') p++;
+            if (*p == 'l') { is_long = 2; p++; }
         } else if (*p == 'h') {
             p++;
             if (*p == 'h') p++;
-        } else if (*p == 'z' || *p == 't' || *p == 'j') {
+        } else if (*p == 'j') {
+            is_long = sizeof(intmax_t) > sizeof(long) ? 2 : 1;
+            p++;
+        } else if (*p == 'z' || *p == 't') {
             is_long = 1;
             p++;
         }
@@ -661,20 +673,20 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
         switch (*p) {
             case 'd':
             case 'i': {
-                long val = is_long ? va_arg(ap, long) : va_arg(ap, int);
+                long long val = is_long == 2 ? va_arg(ap, long long)
+                    : is_long ? va_arg(ap, long) : va_arg(ap, int);
                 char tmp[32];
                 int i = 0;
                 int neg = 0;
-                unsigned long uval;
+                unsigned long long uval;
                 int min_digits;
                 int num_len;
 
                 if (val < 0) {
                     neg = 1;
-                    /* -LONG_MIN overflows a long */
-                    uval = (unsigned long)(-(val + 1)) + 1;
+                    uval = 0ULL - (unsigned long long)val;
                 } else {
-                    uval = (unsigned long)val;
+                    uval = (unsigned long long)val;
                 }
 
                 do {
@@ -700,7 +712,8 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
                 break;
             }
             case 'u': {
-                unsigned long val = is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
+                unsigned long long val = is_long == 2 ? va_arg(ap, unsigned long long)
+                    : is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
                 char tmp[32];
                 int i = 0;
                 int min_digits;
@@ -725,7 +738,8 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
                 break;
             }
             case 'o': {
-                unsigned long val = is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
+                unsigned long long val = is_long == 2 ? va_arg(ap, unsigned long long)
+                    : is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
                 char tmp[32];
                 int i = 0;
                 int min_digits;
@@ -745,7 +759,8 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
             }
             case 'x':
             case 'X': {
-                unsigned long val = is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
+                unsigned long long val = is_long == 2 ? va_arg(ap, unsigned long long)
+                    : is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
                 char tmp[32];
                 int i = 0;
                 int min_digits;
@@ -998,7 +1013,7 @@ FILE *fopen(const char *path, const char *mode)
 
     if (mode[0] == 'w') flags = O_WRONLY | O_CREAT | O_TRUNC;
     else if (mode[0] == 'a') flags = O_WRONLY | O_CREAT | O_APPEND;
-    else if (mode[0] == 'r' && mode[1] == '+') flags = O_RDWR;
+    if (strchr(mode, '+')) flags = (flags & ~3) | O_RDWR;
 
     fd = open(path, flags, 0666);
     if (fd < 0) return NULL;
@@ -1112,33 +1127,70 @@ int fprintf(FILE *f, const char *fmt, ...)
     return ret;
 }
 
+/** Return an ASCII digit's value, or -1 for a non-digit. */
+static int scan_digit(int c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
 int sscanf(const char *str, const char *fmt, ...)
 {
     va_list ap;
     int count = 0;
+    int input_failure = 0;
 
     va_start(ap, fmt);
-    while (*fmt && *str) {
-        if (*fmt == '%') {
-            fmt++;
-            if (*fmt == 'd') {
-                int *p = va_arg(ap, int *);
-                *p = atoi(str);
-                while (*str == ' ') str++;
-                if (*str == '-' || *str == '+') str++;
-                while (*str >= '0' && *str <= '9') str++;
-                count++;
-            }
-            fmt++;
-        } else if (*fmt == *str) {
-            fmt++;
-            str++;
-        } else {
-            break;
+    while (*fmt) {
+        unsigned int value = 0;
+        int base, digit, neg = 0;
+        char conversion;
+        const char *start;
+
+        if (isspace((unsigned char)*fmt)) {
+            while (isspace((unsigned char)*fmt)) fmt++;
+            while (isspace((unsigned char)*str)) str++;
+            continue;
         }
+        if (*fmt != '%' || fmt[1] == '%') {
+            if (*fmt == '%') fmt++;
+            if (!*str) { input_failure = 1; break; }
+            if (*fmt++ != *str++) break;
+            continue;
+        }
+        conversion = *++fmt;
+        if (!conversion) break;
+        fmt++;
+        if (conversion != 'd' && conversion != 'i' && conversion != 'u'
+            && conversion != 'o' && conversion != 'x' && conversion != 'X') break;
+        while (isspace((unsigned char)*str)) str++;
+        if (!*str) { input_failure = 1; break; }
+        if (*str == '-' || *str == '+') neg = (*str++ == '-');
+        base = conversion == 'o' ? 8
+             : (conversion == 'x' || conversion == 'X') ? 16 : 10;
+        if (conversion == 'i') base = *str == '0' ? 8 : 10;
+        if ((base == 16 || conversion == 'i') && str[0] == '0'
+            && (str[1] == 'x' || str[1] == 'X')) {
+            base = 16;
+            str += 2;
+        }
+        start = str;
+        while ((digit = scan_digit((unsigned char)*str)) >= 0 && digit < base) {
+            value = value * base + digit;
+            str++;
+        }
+        if (str == start) break;
+        if (neg) value = 0U - value;
+        if (conversion == 'd' || conversion == 'i')
+            *va_arg(ap, int *) = (int)value;
+        else
+            *va_arg(ap, unsigned int *) = value;
+        count++;
     }
     va_end(ap);
-    return count;
+    return count == 0 && input_failure ? -1 : count;
 }
 
 /** A stub: there is no shell, so `command` is not run and the answer is
@@ -1188,7 +1240,7 @@ double atof(const char *s)
 
 /**
  * The 64-bit signed division that i386 code calls and libgcc would supply,
- * as it would the three functions after it: the quotient of `a` by `b`,
+ * as it would the four functions after it: the quotient of `a` by `b`,
  * rounded toward zero. A `b` of 0 gives 0 where hardware would fault.
  *
  * The magnitudes are negated as unsigned values, which is defined for
@@ -1246,6 +1298,16 @@ unsigned long long __udivdi3(unsigned long long a, unsigned long long b)
     }
 
     return result;
+}
+
+/** Return the unsigned quotient and store the remainder at `remainder`.
+ * Like __udivdi3, division by zero gives quotient 0 and remainder `a`. */
+unsigned long long __udivmoddi4(unsigned long long a, unsigned long long b,
+                              unsigned long long *remainder)
+{
+    unsigned long long quotient = __udivdi3(a, b);
+    *remainder = a - quotient * b;
+    return quotient;
 }
 
 /** The remainder of `a` by `b`, with the sign of `a`; `a` itself when `b` is

@@ -62,7 +62,7 @@ Outside `src/`:
 
 `malloc` hands out memory between the process's first break and its current one, in pieces aligned to 8 bytes. When a request does not fit, it moves the break by the shortfall rounded up to 64 KiB, and returns NULL if `brk` refuses. The kernel reserves the addresses at once and gives each page its frame at first touch, so the zone that the engine allocates at start costs memory only as the game fills it.
 
-A `FILE` is a descriptor with no buffer, and `fopen` creates a file with mode 0666 less the umask. `printf` writes at most 1023 bytes a call, and `sscanf` reads only `%d`. `__divdi3` and its three kin do the 64-bit division that i686 code calls and no libgcc supplies. The headers define the rest inline, some as stubs that always fail.
+A `FILE` is a descriptor with no buffer, and `fopen` creates a file with mode 0666 less the umask. `printf` writes at most 1023 bytes a call, and `sscanf` reads signed and unsigned decimal, octal and hexadecimal integers, with C whitespace matching. The integer limits and the `ssize_t` and `off_t` types follow the architecture; `ll` output conversions read 64 bits on both. `__divdi3` and its four kin do the 64-bit division that i686 code calls and no libgcc supplies. The headers define the rest inline, some as stubs that always fail.
 
 ### The platform layer
 
@@ -141,6 +141,7 @@ No script brings in a new doomgeneric, since `src/` is a copy and not a pinned t
 
 * `tests/run doom`, in the `full` tier on both architectures, boots the os-real system from a disk and needs the WAD at `ports/doom/doom1.wad`. Without the WAD the game must exit with status 255. Started from `/root`, it must still be running after ten seconds with `/fb` open and a zone of at least 10 MiB. A demo played to its end must exit with status 0, and a demo recorded through the port's `fopen` must have mode 644.
 * `tests/run uefi` boots by OVMF with the console on the framebuffer. Doom, started over SSH, must put a picture of more than 64 colors on the screen, and the console's colors must return when it is killed.
+* `sh tests/host/doom_libc_mutate.sh --check`, also run by `tests/run host`, links the port's runtime with a freestanding fixture and executes it on Linux for i686 and x86-64. It checks integer limits and types, 64-bit output, integer scanning, empty sorts, small `getcwd` buffers and update streams. Without `--check`, eight compiled faults must fail before restored runs pass.
 * `tests/run host` runs `tests/host/doom_platform_hosttest.c`, which builds `doomgeneric_rach2.c` and `src/i_system.c` with the device calls simulated and checks the arguments, the zone's size, and the order of the callbacks, the closes and the report at exit; and `tests/host/oplmusic_hosttest.c`, which plays songs built in memory through the music player and checks the instrument table, the MIDI reader's parameters, tempo, loops and a song of two tracks.
 * `sh tests/host/doom_platform_mutate.sh` compiles four faults into a copy of the platform layer and `src/i_system.c`; six of the ten faults of `sh tests/host/userland_mutate.sh` are in the music player and the MIDI reader; and `sh tests/system/doom_mutate.sh` puts two into the tree for `tests/run doom`. Each fault must fail its test, which must pass before it and after the source is restored.
 * No test checks the sound, or the picture beyond its colors.

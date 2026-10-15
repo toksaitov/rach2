@@ -35,13 +35,12 @@ static inline int isatty(int fd) {
     return fd >= 0 && fd <= 2;
 }
 
-/** A stub: "/" in `buf`, which must hold 2 bytes, whatever the working
- * directory is. */
+/** A stub: write "/" to `buf`, whatever the working directory is. Return
+ * NULL without writing when `buf` is NULL or `size` is less than 2. */
 static inline char *getcwd(char *buf, size_t size) {
-    if (buf && size > 0) {
-        buf[0] = '/';
-        buf[1] = '\0';
-    }
+    if (!buf || size < 2) return NULL;
+    buf[0] = '/';
+    buf[1] = '\0';
     return buf;
 }
 

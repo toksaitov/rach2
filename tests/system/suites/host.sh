@@ -241,6 +241,13 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: the page cache with sys_sync's bounded wait" >&2
         fail=1
     fi
+    if sh tests/host/doom_libc_mutate.sh --check >"$VDIR/doom_libc.rlog" 2>&1; then
+        echo "hosttest: result: pass: Doom C library on both architectures"
+    else
+        cat "$VDIR/doom_libc.rlog"
+        echo "hosttest: result: fail: Doom C library on both architectures" >&2
+        fail=1
+    fi
     if sh tests/host/krffs_tools_mutate.sh --check >"$VDIR/krffs_tools.rlog" 2>&1; then
         echo "hosttest: result: pass: krffs host tools' refusals, replace and edits"
     else

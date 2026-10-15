@@ -63,7 +63,9 @@ static inline void qsort(void *base, size_t nmemb, size_t size,
                          int (*compar)(const void *, const void *)) {
     char *arr = base;
     size_t i, j;
-    char *temp = malloc(size);
+    char *temp;
+    if (nmemb < 2 || size == 0) return;
+    temp = malloc(size);
     if (!temp) return;
     for (i = 0; i < nmemb - 1; i++) {
         for (j = 0; j < nmemb - i - 1; j++) {

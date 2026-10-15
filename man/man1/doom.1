@@ -1,4 +1,4 @@
-.Dd September 24, 2026
+.Dd October 15, 2026
 .Dt DOOM 1
 .Os
 .Sh NAME
@@ -52,6 +52,11 @@ can start from any directory.
 Arguments are forwarded to the engine.
 .Fl iwad Ar path
 overrides the default WAD; a relative path uses the current directory.
+.Fl spechit Ar N
+sets the emulated base address for an overflow of the engine's list of
+special map lines.
+Its value accepts decimal, octal with a leading 0, or hexadecimal with a
+leading 0x.
 .Pp
 The zone allocation starts at 16 MiB.
 The platform suggests whole MiB of free memory minus 8 MiB;

@@ -28,10 +28,10 @@ extern FILE *stdout;
 extern FILE *stderr;
 
 /**
- * Open `path` by the first letter of `mode`: "r" reads; "r+", exactly,
- * reads and writes; "w" writes a file created or emptied; and "a" writes at
- * the end of a file created when it is missing. A '+' after "w" or "a" is
- * ignored, and so is "b". A file created has mode 0666 less the umask.
+ * Open `path`: "r" reads; "w" writes a file created or emptied; and "a"
+ * writes at the end of a file created when it is missing. A '+' also
+ * permits the other direction; "b" is ignored. A file created has mode
+ * 0666 less the umask.
  * Returns NULL when the open fails or no memory is left for the FILE, which
  * is never freed.
  */
@@ -61,7 +61,7 @@ int fflush(FILE *f);
 /**
  * Format as the C library does and write the result to descriptor 1 in one
  * write. The flags, the width and the precision are read and ignored; ll
- * reads a long; %f, %e, %g and their capitals print `<float>`; and an
+ * reads a long long; %f, %e, %g and their capitals print `<float>`; and an
  * unknown conversion prints '?' and takes an int. At most 1023 bytes are
  * written, and the bytes formatted are returned.
  */
@@ -75,10 +75,14 @@ int puts(const char *s);
 int putchar(int c);
 
 /**
- * Read only %d, which skips spaces and takes a sign and digits; any other
- * conversion takes nothing and stores nothing. Any other character of the
- * format must equal the next of `str`, so a space matches only a space.
- * Returns the %d conversions made, each counted even when no digit follows.
+ * Read %d, %i, %u, %o, %x and %X into int or unsigned int objects.
+ * Conversions skip C whitespace and take an optional sign; %i selects the
+ * base from a leading 0 or 0x. Format whitespace matches any amount of
+ * input whitespace, literals match exactly, and %% matches '%'. Widths,
+ * length modifiers and assignment suppression are unsupported. Returns
+ * the assignments made, or EOF when input ends before any assignment.
+ * A failed conversion leaves its destination unchanged; overflow is not
+ * diagnosed.
  */
 int sscanf(const char *str, const char *fmt, ...);
 
@@ -154,7 +158,7 @@ int snprintf(char *str, size_t size, const char *fmt, ...);
 /**
  * Format into `str`, of `size` bytes, and terminate it. %d, %u and %x take
  * a width, a precision and the 0 flag, %o a precision and the 0 flag, and
- * %s a width, right-aligned; the - flag is ignored. ll reads a long,
+ * %s a width, right-aligned; the - flag is ignored. ll reads a long long,
  * %f, %e, %g and their capitals give `<float>`, and an unknown conversion
  * gives '?' and takes an int. Returns the characters stored, without the
  * terminator, rather than the length the whole result would need; a `size`
