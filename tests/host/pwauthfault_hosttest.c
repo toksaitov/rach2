@@ -1,7 +1,11 @@
 /**
- * Check complete lock parsing, echo failures and failed credential cleanup.
- * System-call substitutes inject failures into the included library. Files
- * and captured diagnostics use a private directory on the host file system.
+ * Check the parse of the pid in a lock file, the password read when echo
+ * cannot be turned off, and the report of a lock or temporary file that
+ * cannot be removed.
+ *
+ * `utils/pwauth.c` is included whole, with its system calls replaced by
+ * stand-ins that fail when a row asks. The lock and the target file are made
+ * in a private directory under `/tmp`.
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -18,6 +22,13 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+/*
+ * Each fault flag is nonzero while its failure is wanted; `Resume_read` and
+ * `Read_fail` fail one call and clear themselves. `Mode_error` is the errno
+ * `tcgetattr` fails with, or 0. `Unlink_fail` names the one path whose
+ * removal fails, and a failed flush sets it to `Unlink_after_flush`. `Input`
+ * is standard input, given out a byte at a time.
+ */
 static int Failed, Read_calls, Echo_calls, Echo_fail, Resume_read;
 static int Mode_error, Isatty_fail;
 static int Pid_write_fail, Flush_fail, Read_fail, Read_short;
@@ -26,7 +37,12 @@ static const unsigned char *Input;
 static size_t Input_len, Input_pos;
 static void resume_prompt(void);
 
-/** Inject read errors, short reads and a continue during password input. */
+/**
+ * Read standard input from `Input` a byte at a time, or, once while
+ * `Resume_read` is set, deliver a continue with echo failing and return
+ * `EINTR`. Other descriptors are read through `read`, failing once with `EIO`
+ * while `Read_fail` is set and a byte at a time while `Read_short` is.
+ */
 static ssize_t fault_read(int fd, void *buf, size_t n)
 {
     if (fd == 0) {
@@ -52,7 +68,10 @@ static ssize_t fault_read(int fd, void *buf, size_t n)
     return read(fd, buf, Read_short && n > 1 ? 1 : n);
 }
 
-/** Fail the acquisition write without intercepting diagnostic writes. */
+/**
+ * Fail every write but those to standard error with `EIO` while
+ * `Pid_write_fail` is set.
+ */
 static ssize_t fault_write(int fd, const void *buf, size_t n)
 {
     if (Pid_write_fail && fd != 2) {
@@ -62,7 +81,7 @@ static ssize_t fault_write(int fd, const void *buf, size_t n)
     return write(fd, buf, n);
 }
 
-/** Leave the selected file present when cleanup is attempted. */
+/** Fail the removal of `Unlink_fail` with `EIO`; remove any other path. */
 static int fault_unlink(const char *path)
 {
     if (Unlink_fail && strcmp(path, Unlink_fail) == 0) {
@@ -72,7 +91,10 @@ static int fault_unlink(const char *path)
     return unlink(path);
 }
 
-/** Fail a replacement flush before publication. */
+/**
+ * Fail with `EIO` while `Flush_fail` is set, and from then on fail the removal
+ * of `Unlink_after_flush` when it is set.
+ */
 static int fault_fsync(int fd)
 {
     if (Flush_fail) {
@@ -85,12 +107,17 @@ static int fault_fsync(int fd)
     return fsync(fd);
 }
 
-/** Model a foreground terminal and count echo-setting attempts. */
+/** Return this process group, so the reader is always in the foreground. */
 static pid_t fault_tcgetpgrp(int fd)
 {
     (void)fd;
     return getpgrp();
 }
+
+/**
+ * Fail with `Mode_error` when it is set; otherwise report modes with only
+ * `ECHO` on.
+ */
 static int fault_tcgetattr(int fd, struct termios *modes)
 {
     (void)fd;
@@ -102,6 +129,8 @@ static int fault_tcgetattr(int fd, struct termios *modes)
     modes->c_lflag = ECHO;
     return 0;
 }
+
+/** Count a mode change, and fail it with `EIO` while `Echo_fail` is set. */
 static int fault_tcsetattr(int fd, int action, const struct termios *modes)
 {
     (void)fd;
@@ -115,7 +144,10 @@ static int fault_tcsetattr(int fd, int action, const struct termios *modes)
     return 0;
 }
 
-/** Keep the guest signal policy separate from the host's signal numbers. */
+/**
+ * Change no disposition and report a zeroed old one, so the library's handlers
+ * never reach the host process.
+ */
 static int fault_sigaction(int sig, const struct sigaction *act, struct sigaction *old)
 {
     (void)sig;
@@ -125,6 +157,8 @@ static int fault_sigaction(int sig, const struct sigaction *act, struct sigactio
     }
     return 0;
 }
+
+/** Change no mask and report an empty old one. */
 static int fault_sigprocmask(int how, const sigset_t *set, sigset_t *old)
 {
     (void)how;
@@ -135,18 +169,25 @@ static int fault_sigprocmask(int how, const sigset_t *set, sigset_t *old)
     return 0;
 }
 
-/** Authentication and entropy are outside these failure-path tests. */
+/**
+ * Fail the hash. No row reaches authentication or salt, so `crypt`,
+ * `getspnam` and `getrandom` are stand-ins that fail.
+ */
 static char *fault_crypt(const char *key, const char *salt)
 {
     (void)key;
     (void)salt;
     return NULL;
 }
+
+/** Find no shadow entry. */
 static struct spwd *fault_getspnam(const char *name)
 {
     (void)name;
     return NULL;
 }
+
+/** Fail with `EIO`, as a source of no entropy. */
 static ssize_t fault_getrandom(void *buf, size_t n, unsigned flags)
 {
     (void)buf;
@@ -186,13 +227,13 @@ static ssize_t fault_getrandom(void *buf, size_t n, unsigned flags)
 #undef tcgetattr
 #undef tcsetattr
 
-/** Deliver a continue at the injected read boundary. */
+/** Run the library's `SIGCONT` handler, as a resume during the read would. */
 static void resume_prompt(void)
 {
     pwauth_cont_handler(SIGCONT);
 }
 
-/** Record a failed assertion. */
+/** Count a failed check and print its name. */
 static void check(int ok, const char *name)
 {
     if (!ok) {
@@ -201,7 +242,11 @@ static void check(int ok, const char *name)
     }
 }
 
-/** Check the parser over exact file bytes, including embedded NULs. */
+/**
+ * Write `len` bytes of `data` to a temporary file and require
+ * `cred_parse_pid` to return `want` and, on 1, the pid `pid`. Exits 2 if the
+ * file cannot be made.
+ */
 static void parse_case(const void *data, size_t len, int want, long pid, const char *name)
 {
     FILE *f = tmpfile();
@@ -219,7 +264,11 @@ static void parse_case(const void *data, size_t len, int want, long pid, const c
     fclose(f);
 }
 
-/** Check that neither an initial nor a resumed echo failure accepts input. */
+/**
+ * Require a failure to turn echo off, at the start or on a resume, to fail
+ * the password read with the password empty and no byte read, and a working
+ * terminal to give the password.
+ */
 static void echo_cases(void)
 {
     char password[32];
@@ -246,7 +295,12 @@ static void echo_cases(void)
           "working echo permits input");
 }
 
-/** Refuse mode errors even when isatty would hide them as ENOTTY. */
+/**
+ * Read the password with `isatty` failing and `tcgetattr` failing with each of
+ * `EIO`, `EBADF`, `EINTR` and `ENOTTY`, then succeeding. Each error but
+ * `ENOTTY` must stop the read before it reads; `ENOTTY` reads with no mode
+ * change; and a working `tcgetattr` turns echo off and on again.
+ */
 static void mode_cases(void)
 {
     static const int errors[] = {EIO, EBADF, EINTR, ENOTTY, 0};
@@ -276,7 +330,10 @@ static void mode_cases(void)
     Isatty_fail = 0;
 }
 
-/** Capture a library diagnostic without intercepting stdio internals. */
+/**
+ * Point descriptor 2 at a new temporary file and return it, with the old
+ * descriptor 2 in `*saved`. Exits 2 if it cannot.
+ */
 static FILE *capture(int *saved)
 {
     FILE *f = tmpfile();
@@ -288,6 +345,11 @@ static FILE *capture(int *saved)
     }
     return f;
 }
+
+/**
+ * Put descriptor 2 back from `saved`, close `f`, and return 1 when the text
+ * written to it has both `path` and `detail`.
+ */
 static int captured(FILE *f, int saved, const char *path, const char *detail)
 {
     char buf[2048];
@@ -306,7 +368,11 @@ static int captured(FILE *f, int saved, const char *path, const char *detail)
 }
 
 /**
- * Require failed rollback to name the remaining file and preserve the target.
+ * Require an acquire whose pid write fails, and whose lock then cannot be
+ * removed, to report the lock by name and fail with it left in place; and a
+ * rewrite whose flush fails, and whose temporary file then cannot be removed,
+ * to report that file, return `CRED_UNCHANGED`, make the release fail, and
+ * leave the target unchanged.
  */
 static void cleanup_cases(void)
 {
@@ -359,7 +425,7 @@ static void cleanup_cases(void)
     rmdir(dir);
 }
 
-/** Run each failure-path group under the host sanitizers. */
+/** Run the rows and return 1 if any failed, 0 otherwise. */
 int main(void)
 {
     char late[96];

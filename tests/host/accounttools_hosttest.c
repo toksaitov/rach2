@@ -1,4 +1,11 @@
-/** Check account input and descriptor cleanup before identity changes. */
+/**
+ * Check the policy file of `sudo`, the name `login` reads, and the descriptors
+ * `login`, `su` and `sudo` close before they change identity.
+ *
+ * The three programs are included whole, each `main` renamed. Their file,
+ * read, close, identity and exec calls are replaced by models, so the host's
+ * identity never changes and no program is run.
+ */
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,15 +21,20 @@
 #include <sys/stat.h>
 #include "pwauth.h"
 
+/*
+ * `Open_fds` is 1 for each descriptor the model holds open. `Drop_calls`
+ * counts the identity changes since `reset_fds`, and `Drop_dirty` those made
+ * while a descriptor above 2 was open.
+ */
 static int Failed, Open_fds[1024], Drop_calls, Drop_dirty;
 static uid_t Caller;
-static const char *Policy;
+static const char *Policy; /* the bytes of /etc/sudoers, or NULL for none */
 static size_t Policy_size;
-static const char *Input;
+static const char *Input; /* standard input, which `account_read` gives out */
 static size_t Input_size, Input_at;
-static int Read_error;
+static int Read_error; /* nonzero to fail every read with `EIO` */
 
-/** Record failed assertions. */
+/** Count a failed check and print its name. */
 static void check(int ok, const char *name)
 {
     if (!ok) {
@@ -31,7 +43,10 @@ static void check(int ok, const char *name)
     }
 }
 
-/** Supply complete policy bytes through a real stdio stream. */
+/**
+ * Open `Policy` as a temporary stdio stream with every byte in it, or return
+ * NULL for a missing file when `Policy` is NULL. Exits 2 if it cannot.
+ */
 static FILE *account_fopen(const char *path, const char *mode)
 {
     FILE *f;
@@ -49,7 +64,10 @@ static FILE *account_fopen(const char *path, const char *mode)
     return f;
 }
 
-/** Supply login bytes and distinguish read failure from partial EOF. */
+/**
+ * Read the next byte of `Input`, one per call; return 0 at its end, or -1
+ * with `EIO` while `Read_error` is set.
+ */
 static ssize_t account_read(int fd, void *buf, size_t len)
 {
     (void)fd;
@@ -65,7 +83,10 @@ static ssize_t account_read(int fd, void *buf, size_t len)
     return 1;
 }
 
-/** Model every descriptor permitted by Rach2, including the last one. */
+/**
+ * Mark `fd` closed in the model, which covers every descriptor Rach2 allows,
+ * from 0 to 1023.
+ */
 static int account_close(int fd)
 {
     if (fd >= 0 && fd < 1024) {
@@ -73,6 +94,8 @@ static int account_close(int fd)
     }
     return 0;
 }
+
+/** Return 1 when only descriptors 0, 1 and 2 are open, and 0 otherwise. */
 static int descriptors_clean(void)
 {
     int i;
@@ -84,7 +107,7 @@ static int descriptors_clean(void)
     return Open_fds[0] && Open_fds[1] && Open_fds[2];
 }
 
-/** Observe descriptor state at each identity-changing call. */
+/** Count an identity change, and whether a descriptor above 2 was open. */
 static int drop_identity(void)
 {
     Drop_calls++;
@@ -93,26 +116,36 @@ static int drop_identity(void)
     }
     return 0;
 }
+
+/** Return `Caller`, the real uid the row chooses. */
 static uid_t account_getuid(void)
 {
     return Caller;
 }
+
+/** Record an identity change with `drop_identity` and succeed. */
 static int account_setuid(uid_t uid)
 {
     (void)uid;
     return drop_identity();
 }
+
+/** As `account_setuid`. */
 static int account_setgid(gid_t gid)
 {
     (void)gid;
     return drop_identity();
 }
+
+/** As `account_setuid`. */
 static int account_setgroups(size_t n, const gid_t *groups)
 {
     (void)n;
     (void)groups;
     return drop_identity();
 }
+
+/** As `account_setuid`. */
 static int account_setresuid(uid_t a, uid_t b, uid_t c)
 {
     (void)a;
@@ -120,6 +153,8 @@ static int account_setresuid(uid_t a, uid_t b, uid_t c)
     (void)c;
     return drop_identity();
 }
+
+/** As `account_setuid`. */
 static int account_setresgid(gid_t a, gid_t b, gid_t c)
 {
     (void)a;
@@ -127,6 +162,8 @@ static int account_setresgid(gid_t a, gid_t b, gid_t c)
     (void)c;
     return drop_identity();
 }
+
+/** Return root's entry, with `/test-shell` as its shell, for any name. */
 static struct passwd *account_getpwnam(const char *name)
 {
     static struct passwd pw;
@@ -138,6 +175,8 @@ static struct passwd *account_getpwnam(const char *name)
     pw.pw_gid = 0;
     return &pw;
 }
+
+/** Fail the exec, so that `su` and `sudo` return 1 to the test. */
 static int account_execve(const char *path, char *const args[], char *const env[])
 {
     (void)path;
@@ -145,6 +184,8 @@ static int account_execve(const char *path, char *const args[], char *const env[
     (void)env;
     return -1;
 }
+
+/** Fail the exec, as `account_execve` does. */
 static int account_execle(const char *path, const char *arg, ...)
 {
     (void)path;
@@ -152,7 +193,10 @@ static int account_execle(const char *path, const char *arg, ...)
     return -1;
 }
 
-/** Authentication is outside these parser and descriptor tests. */
+/**
+ * Fail the password read. No row reaches authentication, so the `pwauth.h`
+ * calls the programs make are stand-ins.
+ */
 int pwauth_read_password(const char *prompt, char *buf, size_t size)
 {
     (void)prompt;
@@ -160,12 +204,16 @@ int pwauth_read_password(const char *prompt, char *buf, size_t size)
     (void)size;
     return -1;
 }
+
+/** Refuse every password, as for a wrong one. */
 int pwauth_verify(const char *name, const char *password)
 {
     (void)name;
     (void)password;
     return 0;
 }
+
+/** Refuse every password, as for a wrong one. */
 int pwauth_check(const char *stored, const char *password)
 {
     (void)stored;
@@ -208,7 +256,10 @@ int pwauth_check(const char *stored, const char *password)
 #undef execve
 #undef execle
 
-/** Pass exact physical lines to sudo's authorization function. */
+/**
+ * Require `permitted(1000)`, over `len` bytes of policy file `data`, to
+ * return `want`.
+ */
 static void policy_case(const char *data, size_t len, int want, const char *name)
 {
     Policy = data;
@@ -216,7 +267,11 @@ static void policy_case(const char *data, size_t len, int want, const char *name
     check(permitted(1000) == want, name);
 }
 
-/** Check newline and EOF through the same bounded login buffer. */
+/**
+ * Read `len` bytes of `data` with `read_line` into a buffer of `size` bytes,
+ * at most 7. Require it to return `want`, and on 0 a terminated name equal
+ * to `text`; the byte after the buffer must stay untouched.
+ */
 static void line_case(const char *data, size_t len, size_t size, int want, const char *text,
                       const char *name)
 {
@@ -232,7 +287,7 @@ static void line_case(const char *data, size_t len, size_t size, int want, const
     check(buf[size] == 'x', "login buffer boundary preserved");
 }
 
-/** Fill all descriptors before invoking each program's cleanup path. */
+/** Mark every descriptor open and clear the identity-change counts. */
 static void reset_fds(void)
 {
     int i;
@@ -242,7 +297,7 @@ static void reset_fds(void)
     Drop_calls = Drop_dirty = 0;
 }
 
-/** Exercise source entry points without changing the host identity. */
+/** Run the rows and return 1 if any failed, 0 otherwise. */
 int main(void)
 {
     char comment[133], line[133];

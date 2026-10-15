@@ -444,18 +444,18 @@ tests/host/poll_select_hosttest.c:main lines 183 a test's rows, each a case, rea
 
 tests/host/pwauth_hosttest.c:check_fork complexity 31 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:check_fork lines 101 a test's rows, each a case, read as one table
-tests/host/pwauth_hosttest.c:check_masked lines 122 a test's rows, each a case, read as one table
+tests/host/pwauth_hosttest.c:check_masked lines 114 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:check_release complexity 27 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:check_release lines 101 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:check_report_blocks complexity 29 a test's rows, each a case, read as one table
-tests/host/pwauth_hosttest.c:check_report_blocks lines 123 a test's rows, each a case, read as one table
-tests/host/pwauth_hosttest.c:check_restore_reentry lines 123 a test's rows, each a case, read as one table
+tests/host/pwauth_hosttest.c:check_report_blocks lines 114 a test's rows, each a case, read as one table
+tests/host/pwauth_hosttest.c:check_restore_reentry lines 110 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:check_rewrite complexity 48 a test's rows, each a case, read as one table
-tests/host/pwauth_hosttest.c:check_rewrite lines 175 a test's rows, each a case, read as one table
+tests/host/pwauth_hosttest.c:check_rewrite lines 163 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:check_teardown complexity 32 a test's rows, each a case, read as one table
-tests/host/pwauth_hosttest.c:check_teardown lines 133 a test's rows, each a case, read as one table
+tests/host/pwauth_hosttest.c:check_teardown lines 130 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:main complexity 51 a test's rows, each a case, read as one table
-tests/host/pwauth_hosttest.c:main lines 240 a test's rows, each a case, read as one table
+tests/host/pwauth_hosttest.c:main lines 209 a test's rows, each a case, read as one table
 
 tests/host/readfile_hosttest.c:put_node params 8 a test's rows, each a case, read as one table
 

@@ -1,21 +1,19 @@
 /**
- * pwauthatexit_hosttest: an acquire that cannot register its release.
+ * pwauthatexit_hosttest: an acquire of the credential lock that cannot
+ * register its release.
  *
  * host-deps: utils/pwauth.c vendor/musl/musl-1.2.5/src/crypt/crypt_sha512.c
  *
- * The credential library promises that an ordinary `exit` cannot leak the
- * writer's lock, and it keeps that promise with `atexit`. `atexit` can fail:
- * musl has thirty-two registrations in `.bss` and allocates a block for the
- * next thirty-two, so a writer that arrives when that allocation cannot be made
- * gets a refusal. An acquire that shrugged one off would hold a lock with
- * nothing left to drop it, and the next writer would wait ten seconds, refuse,
- * and send an operator looking for a process that has already gone.
+ * `utils/pwauth.c` drops a writer's lock at an ordinary `exit` through
+ * functions it registers with `atexit`, and `atexit` can fail: musl has
+ * thirty-two registrations in `.bss` and allocates a block for the next
+ * thirty-two, so a registration fails when that allocation does. An acquire
+ * that went on after the failure would hold a lock that nothing drops, and
+ * the next writer would wait ten seconds and refuse, with the holder gone.
  *
- * The case therefore needs an `atexit` that fails, and it is a program of its
- * own, not a case inside `pwauth_hosttest` because that failure cannot
- * be scoped: the stand-in replaces the real one for the whole process, and
- * every other case in that program needs a release that is registered. One
- * binary per contradiction is cheaper than a switch that has to be right.
+ * The stand-in `atexit` replaces the host's for the whole process, and every
+ * row of `pwauth_hosttest` needs its release registered, so this case is a
+ * program of its own.
  *
  * Returns the failed-check count (0 == pass).
  */
@@ -44,20 +42,18 @@ static void fail(const char *what)
     Failed++;
 }
 
+static void (*Registered)(void); /* the one registration taken, or NULL */
+static int Atexit_calls;         /* calls of `atexit`, all from the library */
+
 /**
- * The host's `atexit(3)`, accepting the first registration and refusing the
+ * The host's `atexit(3)`, taking the first registration and refusing the
  * rest.
  *
- * The library registers two functions and needs both, so refusing the second is
- * the partial failure that leaves one of them installed with no transaction
- * behind it. The accepted one is kept, not really registered, since this
- * program has replaced the machinery that would have run it, and is called by
- * hand at the point the walk would have reached it. Nothing else here registers
- * anything, so the count belongs entirely to the library.
+ * The library registers two functions and needs both, so refusing the second
+ * leaves one of them registered with no transaction held. The one taken is
+ * kept in `Registered`, since this function replaces the host's and nothing
+ * else would run it; `main` calls it.
  */
-static void (*Registered)(void);
-static int Atexit_calls;
-
 int atexit(void (*function)(void))
 {
     Atexit_calls++;
@@ -70,16 +66,12 @@ int atexit(void (*function)(void))
     return -1;
 }
 
-/** The disposition this program installs, recognizable by its address alone. */
+/** The `SIGPIPE` handler this program installs, known by its address. */
 static void keep_marker(int sig)
 {
     (void)sig;
 }
 
-/**
- * The host's `getspnam(3)` and `getrandom(2)`, as `pwauth_hosttest` supplies
- * them: neither is reached by an acquire, and both must resolve for the link.
- */
 char *__crypt_sha512(const char *key, const char *setting, char *output);
 
 /**
@@ -94,6 +86,10 @@ char *crypt(const char *key, const char *setting)
     return __crypt_sha512(key, setting, output);
 }
 
+/**
+ * The host's `getspnam(3)`, finding no entry. An acquire reaches neither this
+ * nor `getrandom`, and both must resolve for the link.
+ */
 struct spwd *getspnam(const char *name)
 {
     (void)name;
@@ -101,6 +97,7 @@ struct spwd *getspnam(const char *name)
     return NULL;
 }
 
+/** The host's `getrandom(2)`, failing with `EIO`. */
 ssize_t getrandom(void *buffer, size_t length, unsigned int flags)
 {
     (void)buffer;
@@ -119,6 +116,17 @@ static int present(const char *path)
     return stat(path, &info) == 0;
 }
 
+/**
+ * Acquire a lock with the second registration refused, and require the
+ * acquire to fail, to leave no lock file, and to have tried both
+ * registrations. Then call the one function registered, as `exit` would: no
+ * transaction was held, so it must leave alone a `SIGPIPE` disposition it
+ * never saved, where putting back its zeroed copy would impose the default on
+ * the rest of `exit`.
+ *
+ * The library prints the refusal, so standard error goes to `/dev/null`
+ * during the acquire, to keep the log of a pass empty.
+ */
 int main(void)
 {
     char dir[] = "/tmp/pwauthatexit_hosttest.XXXXXX";
@@ -133,8 +141,6 @@ int main(void)
     }
     snprintf(lock, sizeof(lock), "%s/lock", dir);
 
-    /* The refusal prints, and that line is the point of the refusal rather than
-     * a fault, so it is kept out of a log every other test leaves empty. */
     if (saved >= 0 && quiet >= 0) {
         dup2(quiet, 2);
     }
@@ -150,9 +156,6 @@ int main(void)
         fail("an acquire that could not register its release took the lock anyway");
         cred_txn_end();
     }
-    /* The refusal has to leave the name as it found it. An acquire that created
-     * the lock and then gave up without removing it would hand every later
-     * writer the stale lock this program exists to prevent. */
     if (present(lock)) {
         fail("a refused acquire left its lock behind");
         unlink(lock);
@@ -161,11 +164,6 @@ int main(void)
         fail("the library did not attempt the second registration");
     }
 
-    /* The half that survives the partial failure. One function is registered
-     * and no transaction was ever held, so when the walk reaches it, it must
-     * put nothing back: the disposition it saved is a zeroed `struct sigaction`
-     * that would impose the default on the rest of `exit`, over whatever this
-     * program installed for itself. */
     if (Registered == NULL) {
         fail("the library registered nothing at all");
     } else {

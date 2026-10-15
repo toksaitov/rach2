@@ -17,10 +17,10 @@
  * was removed, and the control that makes the refusals mean something is the
  * last case, where removing the file by hand lets the next acquire succeed.
  *
- * The library is a guest source, so three symbols it leans on are supplied
- * here, not by the host: `crypt`, over the vendored musl SHA-512 the guest
- * verifies with; `getspnam`, whose reader path is proved in the guest against a
- * real `/etc/shadow`; and `getrandom`, which no host call can stand in for,
+ * The library is a guest source, so three symbols it uses are supplied here,
+ * not by the host: `crypt`, over the vendored musl SHA-512 the guest verifies
+ * with; `getspnam`, whose reader path is proved in the guest against its
+ * `/etc/shadow`; and `getrandom`, which no host call can stand in for,
  * since the property that matters is the kernel's refusal to hand out untrusted
  * entropy. Their declarations come from `tests/host/compat`, on the include
  * path of `tests/system/suites/host.sh` alone.
@@ -34,15 +34,16 @@
  * release's own flush is a lock gone from the file system that may come back
  * with the next boot.
  *
- * The last two are interposed calls, not stand-ins, and both read the
- * signal mask from inside a stretch the library blocks it across, since
- * restoring a mask and never taking one look the same from outside a function.
- * `snprintf` forwards to `vsnprintf` and is the only call inside either window
- * where the library publishes state a death handler acts on; `getpid` goes to
- * the raw system call and is the only one inside the release registered with
- * `atexit`, which runs after the last case here and can be watched no other
- * way. The mask is a property of the thread, so reading it at a call reads it
- * for the statement.
+ * `snprintf` and `getpid` are interposed calls, not stand-ins: each does what
+ * the host's does and also reads the signal mask from inside a stretch the
+ * library blocks it across, since restoring a mask and never taking one look
+ * the same from outside a function. `snprintf` forwards to `vsnprintf` and is
+ * the only call inside either window where the library publishes state a death
+ * handler acts on; `getpid` goes to the raw system call and is the only one
+ * inside the release registered with `atexit`, which runs after the last case
+ * here and can be watched no other way. The mask is a property of the thread,
+ * so reading it at a call reads it for the statement. `tcsetattr` is
+ * interposed too, to raise a signal inside a terminal restore.
  *
  * Returns the failed-check count (0 == pass).
  */
@@ -102,10 +103,8 @@ static char Lock[192];
 static char Log[192];
 static char Self[512];
 
-/* The arguments this program runs itself under. The first reports one
- * inherited signal disposition from the far side of an exec; the second reports
- * the signal mask from after the registered release has run, which is a moment
- * no case inside this process can reach. */
+/* The first argument that runs this program as the helper of one case, for a
+ * moment no case inside this process can reach; `main` describes each. */
 #define HELPER_PIPE "report-sigpipe"
 #define HELPER_EXIT "report-exit-mask"
 #define HELPER_KEEP "report-pipe-kept"
@@ -164,7 +163,7 @@ char *crypt(const char *key, const char *setting)
  *
  * That is enough to check the one piece of `pwauth_verify` that is the
  * library's own, that a failed lookup denies, not falls through to the
- * comparison. Resolving a real account is the guest's assertion.
+ * comparison. Resolving an account is checked in the guest.
  */
 struct spwd *getspnam(const char *name)
 {
@@ -177,9 +176,9 @@ struct spwd *getspnam(const char *name)
  * The host's `getrandom(2)`: a refusal, matching the kernel's answer on a CPU
  * that exposes neither RDSEED nor RDRAND.
  *
- * The draw is deliberately not exercised from here. A positive result would be
- * this stub agreeing with itself, and the fail-closed half needs a kernel that
- * really has no trusted entropy, which is what `tests/run noentropy` boots.
+ * The draw is not exercised from here. A positive result would be this stub
+ * agreeing with itself, and the fail-closed half needs a kernel with no
+ * trusted entropy, which is what `tests/run noentropy` boots.
  */
 ssize_t getrandom(void *buffer, size_t length, unsigned int flags)
 {
@@ -192,10 +191,10 @@ ssize_t getrandom(void *buffer, size_t length, unsigned int flags)
 }
 
 /**
- * The host's `fsync(2)`: a success, or `-EIO` on the call the case under way
- * asked to fail.
+ * The host's `fsync(2)`: a success, or -1 with `EIO` on the call the case under
+ * way asked to fail.
  *
- * Nothing here needs a real flush, since every file this test writes lives in a
+ * No case needs the data flushed, since every file this test writes is in a
  * temporary directory it removes. What it needs is a writeback error on demand:
  * `Fsync_fail_at` counts from the start of each case, so in a replacement it is
  * 1 for the flush before the rename and 2 for the flush after it, and in a
@@ -255,12 +254,12 @@ int fsync(int fd)
  * and the mask in force now, 0 when every one of them agrees, and -1 when the
  * mask cannot be read.
  *
- * The whole mask and not just the four, because "the caller's mask came back"
- * is the claim being checked and a test of the four alone would pass a library
- * that put three of them back and kept the fourth, or that blocked something it
- * was never asked to. It is also the difference between a restore and a mask
- * that was never taken, which is why the interposed calls above read the mask
- * from inside each window, not only around it.
+ * It compares the whole mask and not just the four deaths, because "the
+ * caller's mask came back" is the claim being checked, and a test of the four
+ * alone would pass a library that put three of them back and kept the fourth,
+ * or that blocked something it was never asked to. A comparison cannot tell a
+ * restore from a mask that was never taken, which is why the interposed calls
+ * above read the mask from inside each window, not only around it.
  */
 #ifndef NSIG
 #define NSIG 32
@@ -290,21 +289,28 @@ static int mask_changed(const sigset_t *before)
  * `pwauth_tty_restore` puts the saved modes back and clears the flag that says
  * it must. A handler runs with only its own signal blocked, so a second death
  * can land between those two statements, and it enters the restore again on its
- * way out; whether the terminal ends up usable depends entirely on which of the
- * two comes first. That window is a couple of instructions wide and cannot be
- * hit by sending signals from outside, so it is entered from within: armed with
- * a call number, this raises one from inside that call. The number matters,
- * since the prompt's own echo-off is a `tcsetattr` too; the restore is the one
- * after it. The signal raised is deliberately not the one the case sends: a
- * handler runs with its own signal blocked, so raising that one from inside it
- * would only mark it pending and no second handler would run at all.
+ * way out; whether the terminal ends up usable depends on which of the two
+ * comes first. That window is a couple of instructions wide and cannot be hit
+ * by sending signals from outside, so it is entered from within: armed with a
+ * call number, this raises one from inside that call. The number matters, since
+ * the prompt's own echo-off is a `tcsetattr` too; the restore is the one after
+ * it. The signal raised is not the one the case sends: a handler runs with its
+ * own signal blocked, so raising that one from inside it would only mark it
+ * pending and no second handler would run at all.
+ *
+ * The signal is raised after the modes are in force: the window is the one
+ * between a restore taking effect and the clearing of the flag that records
+ * it, and a signal raised before the `ioctl` would run while the terminal was
+ * still quiet, which is a different moment.
  *
  * It forwards, through the `ioctl` the libc's own `tcsetattr` is a wrapper for,
  * because two other cases here turn echo off over a pseudo-terminal and read it
- * back: a stand-in that quietly did nothing would leave the terminal untouched
- * and both of them passing for the wrong reason. What this case asks is how
- * many restores reached this point, which is one if the second death skipped
- * the work and two if it did it.
+ * back: a stand-in that did nothing would leave the terminal untouched and both
+ * of them passing for the wrong reason. The request numbers are kept as
+ * `unsigned long`, since they have the high bit set and an `int` would
+ * sign-extend them into a request no driver answers. What this case asks is
+ * how many restores reached this point, which is one if the second death
+ * skipped the work and two if it did it.
  */
 static volatile sig_atomic_t Tcs_raise_at;
 static volatile sig_atomic_t Tcs_raise_sig = SIGHUP;
@@ -312,10 +318,7 @@ static volatile sig_atomic_t Tcs_calls;
 
 int tcsetattr(int fd, int actions, const struct termios *modes)
 {
-/* unsigned long, not int: these request numbers carry the high bit, and an int
- * array would sign-extend them into a request no driver answers, so every
- * forwarded call would fail and the interposition would quietly stop
- * working. */
+/* unsigned long: the request numbers have the high bit set. */
 #ifdef TIOCSETA
     static const unsigned long how[] = {TIOCSETA, TIOCSETAW, TIOCSETAF};
 #else
@@ -331,11 +334,6 @@ int tcsetattr(int fd, int actions, const struct termios *modes)
         return -1;
     }
     rc = ioctl(fd, how[actions], modes);
-    /* After the modes are in force, not before. The window being entered is the
-     * one between a restore taking effect and the flag that records it being
-     * cleared; a signal raised ahead of the `ioctl` would run while the
-     * terminal was still quiet, which is a different moment and not the one at
-     * issue. */
     if (Tcs_raise_at != 0 && Tcs_calls == Tcs_raise_at) {
         raise(Tcs_raise_sig);
     }
@@ -355,13 +353,18 @@ int tcsetattr(int fd, int actions, const struct termios *modes)
  * just before leaving `main` therefore reads the mask at the one instant that
  * says whether the teardown took it.
  *
- * The real answer comes from the raw system call, which is what musl's own
- * `getpid` is; going through the libc entry point here would be this function
- * calling itself. It has no sanitizer instrumentation, because the
- * library's own death handler reaches `getpid` through `cred_txn_mine`, and a
- * function a signal handler reaches must not enter the sanitizer runtime to
- * allocate a shadow frame on its way to a system call. Everything it shares
- * with that context is `sig_atomic_t` for the same reason.
+ * The pid comes from the raw system call, which is what musl's own `getpid`
+ * is; going through the libc entry point here would be this function calling
+ * itself. It has no sanitizer instrumentation, because the library's own death
+ * handler reaches `getpid` through `cred_txn_mine`, and a function a signal
+ * handler reaches must not enter the sanitizer runtime to allocate a shadow
+ * frame on its way to a system call. Everything it shares with that context
+ * is `sig_atomic_t` for the same reason.
+ *
+ * With `Getpid_raise` set, the case that needs a signal inside the acquire
+ * has it raise `SIGPIPE` on the first call after `Getpid_raise_when`, the lock,
+ * exists: the window in which `SIGPIPE` is still fatal and a lock is already
+ * there to be stranded.
  */
 static volatile sig_atomic_t Getpid_watch;
 static volatile sig_atomic_t Getpid_mask_obs = -2;
@@ -369,8 +372,8 @@ static volatile sig_atomic_t Getpid_raise;
 static char Getpid_raise_when[192];
 
 /* cppcheck cannot evaluate __has_attribute, so the support test is by compiler,
- * not by feature; an unrecognized compiler simply keeps the
- * instrumentation, which costs correctness nothing here. */
+ * not by feature; an unrecognized compiler keeps the instrumentation, which
+ * costs correctness nothing here. */
 #if defined(__clang__) || (defined(__GNUC__) && __GNUC__ >= 8)
 #define INTERPOSED_UNINSTRUMENTED __attribute__((no_sanitize("address", "undefined")))
 #else
@@ -386,10 +389,6 @@ pid_t getpid(void)
         Getpid_watch = 0;
         Getpid_mask_obs = deaths_blocked();
     }
-    /* Armed only by the case that needs a signal delivered inside the acquire.
-     * The named file is the lock, so the raise happens on the first call after
-     * the exclusive create has succeeded, which is exactly the window in which
-     * SIGPIPE is still fatal and a lock already exists to be stranded. */
     if (Getpid_raise && access(Getpid_raise_when, F_OK) == 0) {
         Getpid_raise = 0;
         raise(SIGPIPE);
@@ -401,6 +400,7 @@ pid_t getpid(void)
 /**
  * The host's `snprintf(3)`, and the interposed call that watches the signal
  * mask.
+ *
  * The library publishes two pieces of state a death handler then acts on: the
  * lock file's path and the temporary file's name. Neither is one store, so both
  * are written with the four deaths blocked, and this is where that is checked.
@@ -524,8 +524,8 @@ static int temps_left(void)
 /**
  * Push the file's modification time back by `seconds`.
  *
- * The backdated cases exist because an age bound was the rule this phase
- * deleted: a lock an hour old must be refused exactly as a fresh one is.
+ * The library refuses a lock whatever its age, so the backdated cases require
+ * a lock an hour old to be refused exactly as a fresh one is.
  */
 static void backdate(const char *path, long seconds)
 {
@@ -554,8 +554,7 @@ static void capture_start(void)
     }
 }
 
-/** Restore file descriptor 2 and read what the library printed into `buffer`.
- * */
+/** Restore descriptor 2 and read what the library printed into `buffer`. */
 static void capture_stop(char *buffer, size_t size)
 {
     fflush(stderr);
@@ -590,8 +589,7 @@ static void pipe_capture_start(void)
     Pipe_fd[1] = -1;
 }
 
-/** Restore file descriptor 2 and read what the library printed into `buffer`.
- * */
+/** Restore descriptor 2 and read what the library printed into `buffer`. */
 static void pipe_capture_stop(char *buffer, size_t size)
 {
     ssize_t n;
@@ -626,7 +624,7 @@ static void nap(long ms)
  * was reaped, 0 on a timeout, having killed it.
  *
  * The cases below hand a child a descriptor it is meant to block on, so a
- * blocking wait would turn a regression into a hung gate, not a failed one.
+ * blocking wait would turn a regression into a hung run, not a failed case.
  */
 static int wait_bounded(pid_t pid, int *status, long ms)
 {
@@ -692,7 +690,7 @@ static int read_until(int fd, const char *needle, long ms)
  * Open a pseudo-terminal and write its slave's name into `name`. Returns the
  * master, or -1.
  *
- * The prompt cases need a real terminal, since everything they are about is
+ * The prompt cases need a terminal, since everything they are about is
  * `tcsetattr` and the process group that owns it, and a pipe on file descriptor
  * 0 would take the library's other path entirely.
  */
@@ -847,11 +845,21 @@ static void check_salt_map(void)
  * Before it every failure removes the temporary file and leaves the target byte
  * for byte as it was, so each failing case checks the target as well as the
  * return; after it the replacement is live, and a flush that fails there is
- * reported as published, not as unchanged. The refusal with no
- * transaction held is first, because a caller that forgot the lock must not be
- * able to publish.
+ * reported as published, not as unchanged. The refusal with no transaction
+ * held is first, because a caller that forgot the lock must not be able to
+ * publish. The capture of a report has the library call and nothing else
+ * inside it, since a `fail` there would be written into the log the report
+ * is read from.
+ *
  * A directory at the temporary path must remain in place and produce a
- * diagnostic naming the failed removal and required manual cleanup.
+ * diagnostic naming the failed removal and the manual cleanup it needs. A
+ * directory at the destination makes the rename fail: it is the one failure
+ * that reaches the abort path with a complete temporary file in hand, so it
+ * proves the abort removes it, which a body that reported success and left
+ * the file would not pass. The two flushes are told apart by which one fails:
+ * the first is a refusal that changed nothing, and the second a replacement
+ * that is already live, which the caller must not be able to report as
+ * unchanged.
  */
 static void check_rewrite(void)
 {
@@ -868,8 +876,6 @@ static void check_rewrite(void)
         return;
     }
 
-    /* The capture window has the library call and nothing else: a `fail`
-     * inside it would be written into the file the report is read from. */
     capture_start();
     rc = cred_rewrite(Target, "usurped\n", 8);
     capture_stop(report, sizeof(report));
@@ -954,11 +960,6 @@ static void check_rewrite(void)
         fail("cred_rewrite created the target it said it could not read");
     }
 
-    /* A rename that cannot happen, made so by a directory standing at the
-     * destination. It is the one failure that reaches the abort path with a
-     * complete temporary file in hand, so it is what proves the abort is an
-     * abort: a body that reported success and left the temporary file where it
-     * was would pass every other case here. */
     snprintf(blocked, sizeof(blocked), "%s/blocked", Dir);
     snprintf(blocked_tmp, sizeof(blocked_tmp), "%s.tmp.%d", blocked, (int)getpid());
     if (mkdir(blocked, 0700) != 0) {
@@ -981,9 +982,6 @@ static void check_rewrite(void)
     }
     rmdir(blocked);
 
-    /* The two flushes, told apart by which one fails. The first is a refusal
-     * that changed nothing; the second is a replacement that is already live,
-     * and the caller must not be able to report it as unchanged. */
     Fsync_calls = 0;
     Fsync_fail_at = 1;
     capture_start();
@@ -1031,16 +1029,16 @@ static void check_rewrite(void)
 }
 
 /**
- * What a `fork` under a held transaction does, which is nothing.
+ * A child forked under a held transaction, which must not act on it.
  *
  * The state is file-scope, so a child inherits it while holding nothing at all:
- * the lock file names its parent. Both ordinary ways out of that child ran the
- * release before the owner was recorded, and one keystroke reaches them, since
- * `^C` at a terminal is delivered to every process in the foreground group. So
- * the cases are the two ways out and the three entry points: a child that exits
+ * the lock file names its parent. Both ordinary ways out of that child, `exit`
+ * and a death, reach the release, and one keystroke reaches them, since `^C`
+ * at a terminal is delivered to every process in the foreground group. So the
+ * cases are the two ways out and the three entry points: a child that exits
  * and a child that is killed must leave the lock where it is, and its own
  * `cred_txn_end`, `cred_rewrite` and `cred_txn_begin_at` must all decline to
- * act on a transaction that is not its.
+ * act on a transaction that is not its own.
  */
 static void check_fork(void)
 {
@@ -1303,21 +1301,24 @@ static void check_refusal(const char *what, const char *body, const char *expect
 }
 
 /**
- * That the set the library actually installs is the set it means to.
+ * The dispositions an acquire installs: a handler for each signal whose
+ * default action ends the process, except `SIGKILL` and signals 32 to 34,
+ * which musl reserves, and one for `SIGPIPE`; none for the others.
  *
  * A loop installing dispositions has no obvious reason to read what `sigaction`
  * returned, and this libc refuses three signals outright, so a signal the
- * library believes it covers but never installed is the worst of both: the
+ * library's list covers but that was never installed is the worst of both: the
  * contract says a death is handled, and the writer dies with its lock held. The
  * question is therefore asked of the dispositions themselves, not of the
  * predicate that chose them.
  *
  * Every signal is set to a known disposition first, and whatever the acquire
  * changes is what it claimed. The expected set is written out here rather than
- * borrowed from the library, since a test that asked the library what it
- * intended and then checked it did that would agree with any intention. The
- * work happens in a child because it rewrites every disposition in the process,
- * which nothing else in this file would survive.
+ * taken from the library, since a test that took its list from the library
+ * would agree with any list. `SIGPIPE` is on the list of signals not claimed
+ * as a death, but it has a handler of its own, so it is expected to be taken.
+ * The work happens in a child because it rewrites every disposition in the
+ * process, which nothing else in this file would survive.
  *
  * Only the signals this host has are asked about, which is fewer than the guest
  * has: Darwin stops at 32 where the guest goes to 64, so a signal the host will
@@ -1378,8 +1379,6 @@ static void check_death_set_installed(void)
             } else {
                 taken = now.sa_handler != SIG_IGN;
             }
-            /* SIGPIPE is claimed, but by a disposition of its own, so it is
-             * listed as unclaimed here and checked apart. */
             if (sig == SIGPIPE) {
                 expected = 1;
             }
@@ -1426,17 +1425,17 @@ static void check_death_set_installed(void)
  * A password reader started in the background, and the terminal it does not
  * own.
  *
- * `su &` is one keystroke, and this kernel raises nothing for a `tcsetattr`
+ * `su &` takes one command, and this kernel raises nothing for a `tcsetattr`
  * from a background process group: only the read is guarded, by `SIGTTIN`. So a
  * reader that took echo away before reading would silence a terminal belonging
  * to the shell that started it and then stop at the first byte, leaving that
- * shell echoing nothing and no program running that knows how to put it back.
+ * shell echoing nothing and no program running that would put it back.
  * Killing the stopped job does not undo it either, since the modes are the
  * terminal's and not the process's.
  *
  * The reader must therefore leave the modes alone until it owns the
- * terminal, and pick them up on the resume that a `fg` sends, which is the
- * path that already asks the question. The case builds the shape a shell
+ * terminal, and take them on the resume that a `fg` sends, the path that
+ * already checks for the foreground. The case builds the shape a shell
  * builds: a session leader holding the terminal, and the reader in a process
  * group of its own. Both halves are asserted, because either alone would
  * pass for the wrong reason: the terminal still echoes, and the reader
@@ -1538,6 +1537,14 @@ static void check_background_prompt(void)
  * The helper takes the terminal as its controlling one and its own session,
  * because the resume touches the modes only while the process is the
  * foreground group; without that it would return early and prove nothing.
+ *
+ * The prompt on the master shows that the reader has taken echo away, the
+ * first `tcsetattr`; the restore the signal provokes is the second. After a
+ * death three calls are due: the echo-off, the restore the death began, and
+ * the restore the second death made because the flag was still up; two means
+ * the second death found the flag down and skipped the work. After a resume
+ * two are due, and a third would be the resume putting echo back off inside
+ * the dying process's restore.
  */
 static void check_restore_reentry(const char *inject)
 {
@@ -1580,8 +1587,6 @@ static void check_restore_reentry(const char *inject)
 
         return;
     }
-    /* The prompt on the master says the reader has taken echo away, which is
-     * the first tcsetattr; the restore the signal provokes is the second. */
     if (!read_until(master, "Password: ", 20000)) {
         fail("the reader the restore-reentry case interrupts never prompted");
         kill(child, SIGKILL);
@@ -1620,10 +1625,6 @@ static void check_restore_reentry(const char *inject)
     } else if (strcmp(inject, "death") == 0 && (int)answer < 3) {
         char said[128];
 
-        /* Three: the prompt's echo-off, the restore the death began, and the
-         * restore the second death did because the flag was still up. Two means
-         * the second death found the flag already down and skipped it, which is
-         * the terminal left quiet with nobody to fix it. */
         snprintf(said, sizeof(said),
                  "a death inside a restore skipped it (%d calls where three were due)",
                  (int)answer);
@@ -1631,18 +1632,11 @@ static void check_restore_reentry(const char *inject)
     } else if (strcmp(inject, "cont") == 0 && (int)answer != 2) {
         char said[128];
 
-        /* Two: the echo-off and the restore. A third would be the resume
-         * putting echo back off inside the dying process's restore, which is
-         * what disarming it before the restore exists to prevent. */
         snprintf(said, sizeof(said),
                  "a resume inside a restore touched the terminal (%d calls where two were due)",
                  (int)answer);
         fail(said);
     }
-    /* The terminal itself is the verdict, not the number of calls: a resume
-     * reaches `tcsetattr` too and puts echo back OFF, so a case that counted
-     * would call that a restore. The modes are read from the slave after the
-     * reader is gone; the master is still open, so the line still exists. */
     {
         int check = open(slave, O_RDWR | O_NOCTTY);
         struct termios ended;
@@ -1667,21 +1661,22 @@ static void check_restore_reentry(const char *inject)
 }
 
 /**
- * A signal outside the four a writer expects, sent while it holds a
+ * A signal outside the usual four deaths, sent while a writer holds a
  * transaction.
  *
  * This kernel terminates a process for every signal but four it ignores and
  * four it stops for, and `cred_may_signal` lets a caller signal a process whose
  * real uid matches its own, which a setuid program keeps from whoever ran it.
  * So `SIGUSR1` is as fatal to a writer as `SIGTERM`, and as easy for an
- * unprivileged user to send. Handling only the four that arrive by habit would
- * leave every other signal as a way to strand the credential database: the
- * writer dies where no registered function runs, and the lock stays in `/etc`
- * until root removes it.
+ * unprivileged user to send. Handling only the usual four would leave every
+ * other signal as a way to strand the credential database: the writer dies
+ * where no registered function runs, and the lock stays in `/etc` until root
+ * removes it.
  *
- * The child holds a transaction and takes the signal. It must die of it, since
- * a death is still a death, and the lock must be gone, which only happens if
- * the handler ran and left through `exit` to reach the registered release.
+ * The child holds a transaction and takes the signal. It must end through
+ * `exit`, not the default action, and the lock must be gone, which happens
+ * only if the handler ran and left through `exit` to reach the registered
+ * release.
  */
 static void check_unlisted_death(void)
 {
@@ -1803,12 +1798,12 @@ static void check_pipe_during_acquire(void)
  * A refused acquire that cannot report, and must repair itself anyway.
  *
  * Every diagnostic is a write, and a write to a standard error that is a full
- * pipe with a reader that is not reading BLOCKS: `SIGPIPE` answers a reader
- * that has gone, not one that is merely slow. The library has the four death
- * signals across the acquire, so a report issued before the repair would leave
- * the writer stopped inside that write, holding a lock it had already decided
- * to give up, and deaf to everything but `SIGKILL`, which is the one signal
- * that leaves the lock exactly where it is.
+ * pipe with a reader that is not reading blocks: `SIGPIPE` answers a reader
+ * that has gone, not one that is merely slow. The library blocks the four
+ * death signals across the acquire, so a report issued before the repair would
+ * leave the writer stopped inside that write, holding a lock it is giving up,
+ * and open to nothing but `SIGKILL`, which is the one signal that leaves the
+ * lock exactly where it is.
  *
  * Both halves are forced at once: `RLIMIT_FSIZE` of zero makes the write of the
  * holder pid fail, and a pipe filled to capacity, whose read end this process
@@ -1818,7 +1813,7 @@ static void check_pipe_during_acquire(void)
  * must already be gone while it is still stuck, which is only true if the
  * unlink came first, and it must then die of an ordinary `SIGTERM` rather than
  * needing `SIGKILL`, which is only true if the mask went back first. That the
- * pid-write path creates a lock at all, and removes it, is `check_lock`'s; this
+ * pid-write path removes its lock is checked by `check_lock_ownership`; this
  * case is about the order of the last three steps.
  *
  * The child says when it is ready, on a pipe of its own, and it says so after
@@ -1827,6 +1822,12 @@ static void check_pipe_during_acquire(void)
  * could still be filling when the signal arrived, die of it as any process
  * would, leave no lock because it had not made one yet, and satisfy both
  * assertions on an implementation with the fault in it.
+ *
+ * The child fills the pipe through a non-blocking descriptor, since a blocking
+ * one would stop it before the acquire, and then makes the descriptor blocking
+ * again for the library. Past the ready token it has only the acquire left,
+ * which ends stuck in a write that never completes, so after a pause the case
+ * must find it alive and blocked, and the lock already gone.
  */
 static void check_report_blocks(void)
 {
@@ -1866,10 +1867,6 @@ static void check_report_blocks(void)
         if (setrlimit(RLIMIT_FSIZE, &limit) != 0) {
             _exit(81);
         }
-        /* Fill it without blocking, then put the descriptor back the way the
-         * library will find it. Filling through a blocking descriptor would
-         * simply stop here, and the case would never reach the acquire it
-         * exists to watch. */
         if (fcntl(2, F_SETFL, O_NONBLOCK) != 0) {
             _exit(82);
         }
@@ -1921,9 +1918,6 @@ static void check_report_blocks(void)
         }
     }
     close(ready[0]);
-    /* Past the ready token the child has only the acquire left, and the acquire
-     * ends stuck in a write that never completes, so this settles rather than
-     * races: what follows must find it alive and blocked. */
     nap(500);
     if (waitpid(child, &status, WNOHANG) == child) {
         fail("the writer the blocked-report case watches finished instead of blocking");
@@ -1931,8 +1925,6 @@ static void check_report_blocks(void)
 
         return;
     }
-    /* The ordering assertion, made while it is still stuck: the repair happened
-     * before the report it is stuck inside. */
     if (present(Lock)) {
         fail("an acquire still reporting its refusal has not yet removed its lock");
     }
@@ -1962,6 +1954,7 @@ static void check_report_blocks(void)
  * The retry budget is two here, not the compiled-in ten, so the refusal
  * arrives in about two seconds; that the wait is bounded at all is checked with
  * the clock, since a lock that never waited would pass every other assertion.
+ * After the refusals, the control: with the file gone, the same call succeeds.
  */
 static void check_lock(void)
 {
@@ -2019,8 +2012,6 @@ static void check_lock(void)
     check_refusal("an acquire took a lock whose contents do not parse", "not a pid\n",
                   "(no holder recorded)", 1);
 
-    /* The control the five refusals rest on: with the file gone, the same call
-     * succeeds. */
     unlink(Lock);
     if (cred_txn_begin_at("pwauth_hosttest", Lock, 2) != 0) {
         fail("an acquire failed with no lock file in the way");
@@ -2071,9 +2062,8 @@ static void check_lock(void)
  * the same death with a lock on top: a writer reports as it goes, and a
  * diagnostic into a pipe nobody reads would end it where no `atexit` runs, with
  * the lock file left in `/etc` for every later writer to wait ten seconds and
- * be
- * refused by. So there are two cases, one per lifetime, and both are children,
- * since what is being guarded against is a death.
+ * be refused by. So there are two cases, one per lifetime, and both are
+ * children, since what is being guarded against is a death.
  */
 static void check_sigpipe(void)
 {
@@ -2153,9 +2143,9 @@ static void check_sigpipe(void)
  *
  * `cred_txn_end` must need no descriptor of its own. The transaction already
  * holds the lock's, so closing it frees the slot the ownership check needs; an
- * ownership check that opened a second one read every failure, `EMFILE`
+ * ownership check that opened a second one would read every failure, `EMFILE`
  * included, as another writer's lock, which is the one answer that declines to
- * unlink. A process holding the lock in its last free slot would then strand it
+ * unlink, and a process holding the lock in its last free slot would strand it
  * for everyone and report success. The child is the one that fills its table,
  * since a test that filled its own could not say what it found.
  *
@@ -2164,7 +2154,7 @@ static void check_sigpipe(void)
  * would send the next writer into a wait and a refusal nobody warned it of. The
  * unreadable lock is made here with a symbolic link that resolves to itself,
  * which is an `open` no retry helps, standing in for the exhausted table the
- * first case arranges for real.
+ * first case arranges.
  *
  * The third is the answer between those two. A removal that did not reach the
  * disk is neither a clean finish nor a lock left behind: the lock is gone from
@@ -2325,14 +2315,13 @@ static void check_sigpipe_exec(void)
 }
 
 /* The mask this program started with. Every case must give it back, and it is
- * captured, not assumed empty: the mask is inherited, so a harness that
- * ran this test with something blocked would otherwise turn every comparison
- * into a failure blaming the library for its own caller's doing. */
+ * captured, not assumed empty: the mask is inherited, so a harness that ran
+ * this test with something blocked would otherwise turn every comparison into
+ * a failure blaming the library for its own caller's doing. */
 static sigset_t Start_mask;
 static char Exit_lock[192];
 
-/** The disposition the kept-SIGPIPE helper installs after ending its
- * transaction, recognizable only by its address. */
+/** The `SIGPIPE` handler the helpers install, known only by its address. */
 static void keep_marker(int sig)
 {
     (void)sig;
@@ -2354,10 +2343,10 @@ static void report_restore_count(void)
  * inherited.
  *
  * Two bytes: whether the disposition this image installed before the acquire is
- * back, and whether the death signals are back to the default. Registered
- * before the library's, so it runs after them, and it runs in the child because
- * a `fork` has the registrations across while the parent leaves through
- * `_exit` and runs none of them.
+ * back, and whether the death signals are back to the default. It is
+ * registered before the library's functions, so it runs after them, and it
+ * runs in the child because a `fork` carries the registrations across while
+ * the parent leaves through `_exit` and runs none of them.
  */
 static void report_heir(void)
 {
@@ -2376,10 +2365,11 @@ static void report_heir(void)
  * Report, from after the registered release has run, whether the disposition
  * this program installed for itself is still the one in force.
  *
- * Registered before the library's, so it runs after them. A writer that ended
- * its transaction has already put `SIGPIPE` back, and whatever it installed
- * afterwards belongs to it; the release still to come must not reach back and
- * overwrite that with the copy it saved at the acquire.
+ * It is registered before the library's functions, so it runs after them. A
+ * writer that ended its transaction has already put `SIGPIPE` back, and
+ * whatever it installed afterwards belongs to it; the release still to come
+ * must not reach back and overwrite that with the copy it saved at the
+ * acquire.
  */
 static void report_pipe_kept(void)
 {
@@ -2394,7 +2384,15 @@ static void report_pipe_kept(void)
 
 /**
  * Report, from after the registered release has run, whether it gave the mask
- * back. Registered with `atexit` before the library's own, so it runs last.
+ * back, whether the mask was blocked inside it, and whether an acquire made
+ * at that point is refused.
+ *
+ * It is registered with `atexit` before the library's two functions, so it
+ * runs after both: the last moment of the process, and the one a function
+ * registered by an application before it first called the library would also
+ * have. An acquire here could never be released, since the walk of registered
+ * functions only moves downwards and the release is already behind it, so the
+ * library must refuse it.
  */
 static void report_exit_mask(void)
 {
@@ -2402,12 +2400,6 @@ static void report_exit_mask(void)
 
     answer[0] = mask_changed(&Start_mask) == 0 ? 'y' : 'n';
     answer[1] = Getpid_mask_obs == 1 ? 'y' : (Getpid_mask_obs == -2 ? '?' : 'n');
-    /* Registered before the library's two, so this runs after both: the last
-     * moment of the process, and the one a function registered by an
-     * application before it ever called the library would also occupy. An
-     * acquire here can never be released, since the walk of registered
-     * functions only moves downwards and the release is already behind it, so
-     * the library must refuse it. */
     answer[2] = cred_txn_begin_at("pwauth_hosttest", Exit_lock, 0) != 0 ? 'y' : 'n';
     (void)write(1, answer, sizeof(answer));
 }
@@ -2427,9 +2419,15 @@ static void report_exit_mask(void)
  * this program, which registers its own reporter before taking a transaction,
  * so the library's own registrations (its exit marker and then its release,
  * both later than the reporter) run first and the reporter runs last and sees
- * what they left. The same case proves the
- * registered release does its job at all, since the child exits holding a
- * transaction it never ends and the lock must be gone anyway.
+ * what they left. The same case proves the registered release does its job at
+ * all, since the child exits holding a transaction it never ends and the lock
+ * must be gone anyway.
+ *
+ * The read of the report is bounded by `poll`, not only the wait after it: a
+ * writer that wedges inside the registered release still holds the pipe's
+ * write end, so a blocking read would never return. Nothing in the host suite
+ * imposes an outer time limit, so an unbounded read here would turn a detected
+ * fault into a hung run.
  */
 static void check_exit_mask(void)
 {
@@ -2464,12 +2462,6 @@ static void check_exit_mask(void)
     answer[0] = '?';
     answer[1] = '?';
     answer[2] = '?';
-    /* Bounded, and not merely followed by a bounded wait. The failure this case
-     * exists to catch is a writer that wedges inside the registered release,
-     * and such a writer still holds the pipe's write end, so a blocking read
-     * would never return and the wait below would never be reached. Nothing in
-     * the host suite imposes an outer timeout, so an unbounded read here
-     * turns a detected fault into a hung gate. */
     {
         struct pollfd waiting;
 
@@ -2518,18 +2510,18 @@ static void check_exit_mask(void)
  * The library supports a `fork` under a held transaction and says what an heir
  * owes: nothing to the lock, which is its parent's, and it must not release it.
  * What it does owe is everything local. It inherited a writable descriptor on
- * the lock file and five dispositions its own program never asked for, and if
+ * the lock file and the dispositions its own program never asked for, and if
  * the registered release skips those along with the release itself, then every
  * later registered function and the flush of every stream in that child runs
- * under this library's signal policy, and one of sixteen descriptors is held by
- * a file the child has no business in.
+ * under this library's signal policy, with a descriptor open on a file the
+ * child has no business with.
  *
  * The heir is a grandchild of this process: the middle image takes the
  * transaction and leaves through `_exit`, which runs no registered function, so
  * the reporter runs once and in the child that inherited. The parent's lock
- * must still be there afterwards, which is the half the older fork case already
- * covers and is repeated here because this case would otherwise pass on a
- * library that released it.
+ * must still be there afterwards, which `check_fork` also checks and is
+ * repeated here because this case would otherwise pass on a library that
+ * released it.
  */
 static void check_heir(void)
 {
@@ -2684,16 +2676,16 @@ static void check_pipe_kept(void)
  *
  * The lock file becomes this process's when the exclusive create returns, and
  * the state that says so goes in several calls later; the temporary file's name
- * reaches the handler's reach one byte at a time. A death served inside either
- * window acts on state that describes neither situation. The first strands a
- * lock file in `/etc` that no `atexit` runs to remove and that every later
- * writer refuses to remove for it. The second is worse and is why the mask is
- * here at all: the temporary's name is the target's with a suffix, so the
- * truncation at one exact length is the credential database itself, and the
- * handler unlinks whatever name it reads.
+ * is copied where the handler reads it one byte at a time. A death served
+ * inside either window acts on state that describes neither situation. The
+ * first strands a lock file in `/etc` that no `atexit` runs to remove and that
+ * every later writer refuses to remove for it. The second is worse and is why
+ * the mask is here at all: the temporary's name is the target's with a
+ * suffix, so the truncation at one exact length is the credential database
+ * itself, and the handler unlinks whatever name it reads.
  *
  * Neither window can be entered on demand, so what is checked is the mask that
- * makes them uninhabitable, read from inside each one. The caller's mask must
+ * keeps a death out of them, read from inside each one. The caller's mask must
  * also come back, which is the second half of every case here: a library that
  * blocked a signal for the length of a program would be a worse bug than the
  * one it closed. That half is checked on the paths that fail as well as the
@@ -2705,6 +2697,14 @@ static void check_pipe_kept(void)
  * the unlink durable are one step, and a death between them would leave through
  * the registered release, which finds the lock already gone and reports a clean
  * finish, so the flush would be owed to nobody.
+ *
+ * The baseline is the mask this program started with, not whatever is in force
+ * on arrival. Reading it here would let a leak from an earlier case become the
+ * thing every comparison measures against, and every one of them would then
+ * pass on a library that never gave the mask back; assuming it empty would
+ * instead blame the library whenever a harness ran this test with a signal
+ * already blocked. So it is captured once, in `main`, and a difference on
+ * arrival is reported as an earlier case's fault.
  */
 static void check_masked(void)
 {
@@ -2713,14 +2713,6 @@ static void check_masked(void)
     sigset_t caller;
     int rc;
 
-    /* The baseline is the one this program started with, not whatever is in
-     * force on arrival. Reading it here would let a leak from an earlier case
-     * become the thing every comparison below measures against, and every one
-     * of them would then pass on a library that never gave the mask back;
-     * assuming it empty would instead blame the library whenever a harness ran
-     * this test with a signal already blocked. So it is captured once, in main,
-     * and a discrepancy on arrival is an earlier case's fault and is said so.
-     */
     caller = Start_mask;
     if (mask_changed(&caller) != 0) {
         fail("a case before this one left the signal mask altered");
@@ -2841,14 +2833,11 @@ static void check_masked(void)
  * could unlink and recreate the file a successor already had open and had
  * written; the successor's rename is by name, and it would publish the other
  * one's bytes over the credential database. With the pid in the name there is
- * no
- * such file to meet on. The second case is the other half: a replacement
- * refused
+ * no such shared file, and a directory standing at the shared name must not
+ * stop a replacement. The last case is the other half: a replacement refused
  * because the lock is not this transaction's must change nothing at all, its
- * own
- * leftover temporary included, which means the lock is checked before the
- * create
- * begins by removing whatever stands at the name.
+ * own leftover temporary included, which means the lock is checked before the
+ * create begins by removing whatever stands at the name.
  */
 static void check_temp_name(void)
 {
@@ -2885,8 +2874,6 @@ static void check_temp_name(void)
         fail("a replacement's temporary file is not named for the writer that made it");
     }
 
-    /* A directory at the shared name, which the library must have no use for.
-     * */
     snprintf(shared, sizeof(shared), "%s.tmp", Target);
     if (mkdir(shared, 0700) != 0) {
         fail("could not stand a directory at the shared temporary name");
@@ -2947,6 +2934,11 @@ static void check_temp_name(void)
  * and reported as an exit status, because only the reader can take it without a
  * race: this terminal belongs to the reader's session, and a driver that waited
  * for the reader to be gone would be asking a terminal that no longer exists.
+ *
+ * The pipe's file status flags are shared with the reader's descriptor 2, so
+ * the fill turns blocking back on before the reader can reach the write the
+ * fill is for. Draining the pipe afterwards lets the reader finish the newline
+ * it is blocked on.
  */
 static void check_teardown(void)
 {
@@ -3025,8 +3017,6 @@ static void check_teardown(void)
         return;
     }
 
-    /* The flags are shared with the reader's own file descriptor 2, so blocking
-     * goes back on before the reader can reach the write this fill is for. */
     memset(filler, 'x', sizeof(filler));
     fcntl(report[1], F_SETFL, O_NONBLOCK);
     for (chunks = 0; chunks < 65536; chunks++) {
@@ -3049,7 +3039,6 @@ static void check_teardown(void)
     }
     nap(300);
 
-    /* Draining is what lets the reader finish the newline it is blocked on. */
     for (waited = 0; waited < 10000; waited += 50) {
         char sink[512];
         pid_t got;
@@ -3085,14 +3074,44 @@ static void check_teardown(void)
     close(master);
 }
 
+/**
+ * Run every case in a private directory under `/tmp` and return the failed
+ * check count, at most 100; or, when the first argument names a helper, run
+ * that helper for the case that execs it.
+ *
+ * `HELPER_PIPE`, for `check_sigpipe_exec`, returns 0 when `SIGPIPE` arrives at
+ * the new image with the default disposition. `HELPER_BG`, for
+ * `check_background_prompt`, becomes the session leader that owns the terminal
+ * `argv[2]` and runs the reader in a process group of its own, as a shell's `&`
+ * does; it writes whether the terminal still echoes and whether the reader
+ * stopped on `SIGTTIN` at its first read. `HELPER_TTY`, for
+ * `check_restore_reentry`, registers `report_restore_count` and takes the
+ * terminal as its controlling one with standard input and standard error on it,
+ * so the prompt reaches the terminal the case watches while standard output
+ * stays the pipe the reporter answers on. It takes a transaction on `argv[3]`,
+ * so the death handler leaves through `exit` and the reporter runs, and arms
+ * the interposed `tcsetattr` to raise a second death, or a `SIGCONT` when
+ * `argv[4]` is `cont`, from inside the restore.
+ *
+ * `HELPER_HEIR`, for `check_heir`, registers `report_heir`, installs a
+ * `SIGPIPE` handler of its own, takes a transaction on `argv[2]` and forks; the
+ * child leaves through `exit` and this image through `_exit`, so the registered
+ * functions run once, in the heir. `HELPER_KEEP`, for `check_pipe_kept`, takes
+ * and ends a transaction, installs a `SIGPIPE` handler of its own, and lets the
+ * reporter registered before the library's functions say whether it survived
+ * the release. `HELPER_EXIT`, for `check_exit_mask`, registers its reporter
+ * first, so the library's release, registered second and run first, has
+ * finished when it looks, and leaves through `exit` holding a transaction.
+ *
+ * After the last case no signal may be left blocked. The mask is process-wide
+ * and outlives the case that changed it, so a leak is a fault in the library
+ * and would also disarm the comparisons in `check_masked`.
+ */
 int main(int argc, char **argv)
 {
     char template[] = "/tmp/pwauth_hosttest.XXXXXX";
     char *dir;
 
-    /* Run as the helper of check_sigpipe_exec, which is this same program on
-     * the far side of an exec: report whether SIGPIPE arrived at the new image
-     * still carrying the disposition a transaction installed. */
     if (argc > 1 && strcmp(argv[1], HELPER_PIPE) == 0) {
         struct sigaction inherited;
 
@@ -3102,10 +3121,6 @@ int main(int argc, char **argv)
 
         return inherited.sa_handler == SIG_DFL ? 0 : 92;
     }
-    /* Run as the helper of check_background_prompt: become the session leader
-     * that owns the terminal, then run the reader in a process group of its
-     * own, which is what a shell's `&` produces. The reader must leave the
-     * terminal alone and stop on SIGTTIN at its first read. */
     if (argc > 2 && strcmp(argv[1], HELPER_BG) == 0) {
         struct termios seen;
         char answer[2];
@@ -3149,10 +3164,6 @@ int main(int argc, char **argv)
 
         return 0;
     }
-    /* Run as the helper of check_restore_reentry: take a transaction so the
-     * death handler leaves through exit and the reporter runs, prompt on the
-     * pseudo-terminal named in argv[2] so echo is taken away, and arm the
-     * interposed tcsetattr to fire a second death from inside the restore. */
     if (argc > 3 && strcmp(argv[1], HELPER_TTY) == 0) {
         char secret[64];
         int slave;
@@ -3168,9 +3179,6 @@ int main(int argc, char **argv)
 #ifdef TIOCSCTTY
         (void)ioctl(slave, TIOCSCTTY, 0);
 #endif
-        /* Standard input and standard error, not standard output: the prompt
-         * goes to fd 2 and must reach the terminal the case is watching, while
-         * fd 1 stays the pipe the reporter answers on. */
         if (dup2(slave, 0) < 0 || dup2(slave, 2) < 0) {
             return 94;
         }
@@ -3180,8 +3188,6 @@ int main(int argc, char **argv)
         if (cred_txn_begin_at("pwauth_hosttest", argv[3], 0) != 0) {
             return 95;
         }
-        /* The resume only touches the terminal while this process is its
-         * foreground group, so the case that injects one must arrange that. */
         if (argc > 4 && strcmp(argv[4], "cont") == 0) {
             Tcs_raise_sig = SIGCONT;
         }
@@ -3190,10 +3196,6 @@ int main(int argc, char **argv)
 
         return 0;
     }
-    /* Run as the helper of check_heir: take a transaction, fork, and let the
-     * child leave through exit while this image leaves through _exit, so the
-     * registered functions run once and in the heir. The heir must drop what it
-     * inherited and must not touch the lock, which is this image's. */
     if (argc > 2 && strcmp(argv[1], HELPER_HEIR) == 0) {
         struct sigaction mine;
         pid_t heir;
@@ -3222,9 +3224,6 @@ int main(int argc, char **argv)
         (void)waitpid(heir, &status, 0);
         _exit(0);
     }
-    /* Run as the helper of check_pipe_kept: end the transaction, then install a
-     * disposition of this program's own, and let the reporter registered before
-     * the library's say whether it survived the release that runs after it. */
     if (argc > 2 && strcmp(argv[1], HELPER_KEEP) == 0) {
         struct sigaction mine;
 
@@ -3247,9 +3246,6 @@ int main(int argc, char **argv)
 
         return 0;
     }
-    /* Run as the helper of check_exit_mask: register the reporter first, so the
-     * library's release (registered second, run first) has finished by the time
-     * it looks, then leave through exit holding a transaction. */
     if (argc > 2 && strcmp(argv[1], HELPER_EXIT) == 0) {
         if (sigprocmask(SIG_BLOCK, NULL, &Start_mask) != 0) {
             return 96;
@@ -3315,11 +3311,6 @@ int main(int argc, char **argv)
     check_temp_name();
     check_teardown();
 
-    /* No case may end with a signal blocked. The mask is process-wide and
-     * outlives the case that changed it, so a leak here is both a defect in the
-     * library and the thing that would quietly disarm the comparisons in
-     * check_masked; asserting it once at the end names whichever case is at
-     * fault by the fact that the run got this far without saying so. */
     if (mask_changed(&Start_mask) != 0) {
         fail("the suite ended with the signal mask altered");
     }
