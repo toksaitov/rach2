@@ -208,8 +208,7 @@ static void mouse_irq_handler(isr_params_t *params)
         if (!(flags & 0xC0)) { /* no X or Y overflow */
             uint8_t buttons = flags & 0x07;
 
-            /* PS/2 Y grows upward; negate so positive dy is forward. */
-            mouse_push_packet(buttons, dx, -dy);
+            mouse_push_packet(buttons, dx, dy);
         }
 
         packet_index = 0;

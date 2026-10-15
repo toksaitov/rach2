@@ -61,6 +61,9 @@ elif fault == "mouse-aux":
     new = "    if (!(status & PS2_STATUS_OUTPUT_FULL)) {\n" \
           "        return;\n    }\n    data = inb(PS2_DATA_PORT);\n" \
           "    if (!(status & PS2_STATUS_MOUSE_DATA)) {\n        return;\n    }\n"
+elif fault == "mouse-y":
+    old = "            mouse_push_packet(buttons, dx, dy);\n"
+    new = "            mouse_push_packet(buttons, dx, -dy);\n"
 elif fault == "dma-stop":
     old = "    if (channel > 7 || channel == 4)\n"
     new = "    if (channel > 7)\n"
@@ -110,6 +113,8 @@ select_fault()
             failure='echo leaves cursor at 0x0100' ;;
         mouse-aux) test=ps2mouse; file=arch/x86/ps2mouse.c
             failure='keyboard byte leaves the data port unread' ;;
+        mouse-y) test=ps2mouse; file=arch/x86/ps2mouse.c
+            failure="the packet's dy is -3" ;;
         kbd-aux) test=ps2kbd; file=arch/x86/ps2kbd.c
             failure='mouse byte leaves the data port unread' ;;
         insyde) test=power; file=arch/x86/power.c
@@ -121,7 +126,7 @@ select_fault()
 }
 
 faults='frames gfx-enter gfx-exit setup-speaker setup-transfer setup-dma scale
-    callback cursor mouse-aux dma-stop kbd-aux insyde pm-answers'
+    callback cursor mouse-aux mouse-y dma-stop kbd-aux insyde pm-answers'
 if [ "${1:-}" = --texts ]; then
     for fault in $faults; do
         select_fault "$fault"

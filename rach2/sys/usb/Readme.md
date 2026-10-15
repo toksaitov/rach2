@@ -101,7 +101,7 @@ A keyboard or mouse has one interrupt IN transfer outstanding, of the endpoint's
 
 A boot keyboard's report is 8 bytes: modifier bits, a reserved byte and six key usages. `hid.c` keeps each device's previous report and sends the difference as set-1 make and break codes, with the 0xE0 prefix for the right Ctrl and Alt, the GUI and Application keys, the arrows, the editing keys, and the keypad's Enter and slash. The table covers usages 0x04 to 0x65, and a usage without a code sends nothing. A report whose key slots hold an error usage, 0x01 to 0x03, which a keyboard sends when it cannot tell which keys are down, has its modifiers read and its keys ignored, so the held keys stay down. When a keyboard goes, `hid_gone` releases every key it had down.
 
-A boot mouse's report is at least 3 bytes: three buttons and signed X and Y. Y is negated, as `ps2mouse.c` negates the PS/2 report's, so the two mice give the queue opposite signs for the same movement ([terminals](../tty/Readme.md)).
+A boot mouse's report is at least 3 bytes: three buttons and signed X and Y. Y is negated, since a USB report's is positive toward the user and the queue's, like the PS/2 report's, away from the user, so the two mice give the queue the same sign for the same movement ([terminals](../tty/Readme.md)).
 
 ### Hubs
 

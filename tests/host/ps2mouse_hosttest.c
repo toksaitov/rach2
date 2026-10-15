@@ -103,14 +103,15 @@ int main(void)
     CHECK("empty buffer leaves the data port unread", interrupt(PS2_STATUS_MOUSE_DATA, 0xAA) == 0);
     CHECK("empty buffer leaves the packet", packet_index == 1);
 
-    /* The rest of the packet: X is -2 and Y, positive upward, is -3. */
+    /* The rest of the packet: X is -2 and Y, positive away from the user,
+     * is -3. */
     CHECK("byte 1 is read", interrupt(MOUSE_BYTE, 0xFE) == 1);
     CHECK("byte 2 is read", interrupt(MOUSE_BYTE, 0xFD) == 1);
     CHECK("three mouse bytes make one packet", pushes == 1);
     CHECK("the packet starts the next at byte 0", packet_index == 0);
     CHECK("the packet has the left button", pushed_buttons == 0x01);
     CHECK("the packet's dx is -2", pushed_dx == -2);
-    CHECK("the packet's dy is 3, Y negated", pushed_dy == 3);
+    CHECK("the packet's dy is -3, as the wire gives it", pushed_dy == -3);
 
     CHECK("the handler writes no port", port_writes == 0);
 

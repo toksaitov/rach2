@@ -178,7 +178,7 @@ void hid_report(int device, int kind, const uint8_t *report, int length)
         if (length < MOUSE_REPORT) {
             return;
         }
-        /* A USB mouse's Y grows downward, the PS/2 queue's upward. */
+        /* Negated: a USB report's Y is positive toward the user. */
         input_mouse((int)(int8_t)report[1], -(int)(int8_t)report[2], report[0] & 0x07);
         return;
     }

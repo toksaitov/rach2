@@ -64,7 +64,7 @@ void input_key(uint8_t scancode);
  */
 void input_mouse(int dx, int dy, int buttons);
 
-/** Whether any mouse exists, of any kind. `/dev/mouse` opens when one does. */
+/** Whether any mouse exists, of any kind. `/mouse` opens when one does. */
 int input_mouse_present(void);
 
 /** Say that a mouse of some kind has been found. */

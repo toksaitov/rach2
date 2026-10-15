@@ -9,12 +9,12 @@
 #include "lib/kdef.h"
 
 /*
- * One movement packet, as a read of `/dev/mouse` returns it.
+ * One movement packet, as a read of `/mouse` returns it.
  */
 struct mouse_packet {
     uint8_t buttons; /* bit 0 left, bit 1 right, bit 2 middle */
-    int8_t dx;       /* X movement delta */
-    int8_t dy;       /* Y movement delta, its sign as the driver gave it */
+    int8_t dx;       /* X movement delta, positive to the right */
+    int8_t dy;       /* Y movement delta, positive away from the user */
 };
 
 /**
@@ -23,11 +23,12 @@ struct mouse_packet {
  *
  * The PS/2 driver calls this when it has assembled three bytes; the USB class
  * driver calls it with a report it decoded. One queue, because a program
- * reading `/dev/mouse` is reading movement rather than a particular device.
+ * reading `/mouse` is reading movement rather than a particular device.
  * The deltas are clamped to -128 to 127 and the buttons to their low three
- * bits. Each driver negates its device's Y: the PS/2 report's is positive
- * upward and the USB report's positive downward, so the two give `dy` the
- * opposite sign for the same movement.
+ * bits. A positive `dy` is a movement away from the user, as the PS/2
+ * report's Y has it; the USB class driver negates its report's Y, which is
+ * positive toward the user, so the two mice give the same `dy` for the same
+ * movement.
  */
 void mouse_push_packet(uint8_t buttons, int dx, int dy);
 

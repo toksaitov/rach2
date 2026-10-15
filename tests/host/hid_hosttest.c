@@ -237,7 +237,7 @@ int main(void)
     keys(2, 0, 0x04, 0, 0);
     CHECK("a second keyboard's first report is a press, not a hold", sent(1, 0x1E, 0, 0, 0));
 
-    /* A USB mouse's Y grows downward, the kernel's queue's upward. */
+    /* A USB report's Y is positive toward the user, and is negated. */
     mouse[0] = 0x01;
     mouse[1] = (unsigned char)5;
     mouse[2] = (unsigned char)3;

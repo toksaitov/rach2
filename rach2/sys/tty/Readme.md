@@ -57,7 +57,7 @@ The keymap is US English (`EN_us` and `EN_us_shift` in `kbd.c`).
 
 ### Mice
 
-The PS/2 mouse (`sys/arch/x86/ps2mouse.c`, IRQ 12, vector 44) assembles three-byte packets, finding the first byte by its bit 3, always set, and drops a packet with an overflow bit set; `rach2.nomouse` on the kernel command line skips it. A USB boot mouse's reports come from `hid.c`. Both put packets in the one queue of `sys/mouse.c`: 64 slots, each a button byte (left, right and middle in bits 0 to 2) and two signed byte movements clamped to -128 through 127. A packet that finds the queue full is dropped, and nothing in the queue says which mouse moved. `/mouse` fails with ENODEV until a mouse of either kind has been found (`input_mouse_found`); an open empties the queue and restarts the PS/2 packet framing.
+The PS/2 mouse (`sys/arch/x86/ps2mouse.c`, IRQ 12, vector 44) assembles three-byte packets, finding the first byte by its bit 3, always set, and drops a packet with an overflow bit set; `rach2.nomouse` on the kernel command line skips it. A USB boot mouse's reports come from `hid.c`. Both put packets in the one queue of `sys/mouse.c`: 64 slots, each a button byte (left, right and middle in bits 0 to 2) and two signed byte movements clamped to -128 through 127, X positive to the right and Y positive away from the user. The PS/2 wire's Y has that sign already; `hid.c` negates a USB report's, which is positive toward the user. A packet that finds the queue full is dropped, and nothing in the queue says which mouse moved. `/mouse` fails with ENODEV until a mouse of either kind has been found (`input_mouse_found`); an open empties the queue and restarts the PS/2 packet framing.
 
 ### COM1
 
@@ -93,7 +93,6 @@ Closing the master posts SIGHUP to the slave's foreground group and hangs the sl
 * One modifier state serves every keyboard: two keyboards share Shift, Ctrl and Alt, and a release on either releases the modifier for both.
 * The keymap is US English. Caps Lock, Num Lock, the function keys and the keypad's digit keys produce no byte.
 * While a program owns `/fb`, each key also reaches the console's discipline when a session owns the console, and waits there as type-ahead for the next reader.
-* The two mice give opposite signs of vertical movement. `hid.c` turns a USB report's Y, positive downward, into positive upward; `ps2mouse.c` turns the PS/2 wire's Y, positive upward, into positive downward.
 * TIOCSWINSZ on the console or a slave stores the size and posts no SIGWINCH; only the master's posts it.
 * Packet mode sends only TIOCPKT_DATA, never the status bytes for a flush or a stop of output.
 
