@@ -19,7 +19,8 @@
  * master writes that takes bytes out of the slave's discipline, a signal
  * char's flush or an erase; and slave output is data for it. In packet mode
  * a master read begins with the status byte, and TCFLSH on the master drops
- * the slave's output.
+ * the slave's output. A read that does not wait ends the console latency
+ * span.
  */
 #define WAIT_QUEUE_HOSTTEST
 #define wq_wait_event model_wait_event
@@ -39,7 +40,7 @@ static struct pty pair;
 static fd_entry_t master, slave;
 static int failures, irq_enabled = 1, pending_signal, switches;
 static int recording, recorded_waits, read_stamps, serial_pos, serial_len;
-static int copy_calls, copy_failure;
+static int copy_calls, copy_failure, spans;
 static const char *serial_bytes;
 static void (*scheduled_action)(void);
 static const char *wake_detail;
@@ -204,12 +205,14 @@ void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds)
     *nanoseconds = 0;
 }
 
-/** Nothing: no row reads a latency. */
+/** Count the console latency spans recorded. */
 void latency_span(int kind, uint32_t from, uint32_t to)
 {
-    (void)kind;
     (void)from;
     (void)to;
+    if (kind == LAT_CONSOLE) {
+        spans++;
+    }
 }
 
 /** Whether the console's latency is recorded: `recording`. */
@@ -342,7 +345,7 @@ static void setup_pair(void)
     producer.sid = 1;
     poller.waiter.proc = &poller;
     current_proc = &consumer;
-    pending_signal = switches = recording = copy_calls = copy_failure = 0;
+    pending_signal = switches = recording = copy_calls = copy_failure = spans = 0;
     irq_enabled = 1;
     pty_init_pool();
     CHECK(pty_alloc() == &pair, "production allocation initializes the pair");
@@ -588,6 +591,22 @@ static void packet_mode(void)
     CHECK(ptm_flush(&pair, 3) == -EINVAL, "TCFLSH takes 0, 1 and 2");
 }
 
+/** A read that does not wait ends the latency span its input started, as a
+ * read that waits does, so the next span starts from later input. */
+static void nonblocking_latency(void)
+{
+    unsigned char out[4];
+
+    setup_pair();
+    current_proc = &producer;
+    CHECK(ptm_write(&master, "a", 1) == 1 && pair.slave.ready_us != 0,
+          "input written to the master starts a latency span");
+    CHECK(tty_read(&pair.slave, out, sizeof(out), 1) == 1 && out[0] == 'a',
+          "a read that does not wait takes the input");
+    CHECK(spans == 1 && pair.slave.ready_us == 0,
+          "a read that does not wait ends the latency span");
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {
@@ -600,6 +619,7 @@ int main(void)
     wake_kinds();
     input_room();
     packet_mode();
+    nonblocking_latency();
     printf("tty-test: result: %d failures\n", failures);
     return failures ? 1 : 0;
 }

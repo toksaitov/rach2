@@ -94,6 +94,21 @@ elif case == 'signal-room':
                     '        wq_wake(t->space_wq, WQ_ROOM);\n    }\n', '')
 elif case == 'erase-room':
     replace('tty.c', '    if (n_tty_held(&t->ldisc) < held) {', '    if (signo != 0 && held) {')
+elif case == 'nonblock-latency':
+    replace('tty.c', '            n = tty_take(t, kbuf, count);\n'
+                    '            kirq_restore(flags);\n'
+                    '            usb_stamp_read();\n'
+                    '            return n;\n'
+                    '        }\n'
+                    '        kirq_restore(flags);\n'
+                    '        return -EAGAIN;',
+            '            n = n_tty_read(&t->ldisc, kbuf, count);\n'
+            '            kirq_restore(flags);\n'
+            '            usb_stamp_read();\n'
+            '            return n;\n'
+            '        }\n'
+            '        kirq_restore(flags);\n'
+            '        return -EAGAIN;')
 else:
     raise SystemExit('tty-mutation: unknown mutation: ' + case)
 PY
@@ -101,7 +116,7 @@ PY
 
 faults='split-queue flush termios-flush partial-slave partial-master
     latency-lock veol-byte line-end slot-reset input-kind echo-kind room-kind
-    output-kind flush-kind signal-room erase-room'
+    output-kind flush-kind signal-room erase-room nonblock-latency'
 if [ "${1:-}" = --texts ]; then
     for case_name in $faults; do
         RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/tty "$case_name" >/dev/null || exit 1
@@ -227,6 +242,7 @@ for case_name in $faults; do
         flush-kind) expected='an input flush is room for the master and no data' ;;
         signal-room) expected='a signal char the master writes into full input is room for the master' ;;
         erase-room) expected='an erase the master writes is room for the master' ;;
+        nonblock-latency) expected='a read that does not wait ends the latency span' ;;
     esac
     run_phase fixed
     mutate

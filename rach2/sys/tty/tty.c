@@ -153,14 +153,28 @@ static int tty_ready_cond(void *arg)
     return n_tty_readable(&t->ldisc);
 }
 
+/** Copy up to `count` bytes of readable input to `kbuf`, and record the
+ * time since the input became readable (ready_us) in the console latency
+ * span, LAT_CONSOLE, clearing ready_us so that the next span starts from
+ * later input. The caller has interrupts off. */
+static int tty_take(struct tty *t, unsigned char *kbuf, int count)
+{
+    int n = n_tty_read(&t->ldisc, kbuf, count);
+
+    if (t->ready_us) {
+        latency_span(LAT_CONSOLE, t->ready_us, timer_now_us());
+        t->ready_us = 0;
+    }
+    return n;
+}
+
 /**
  * After a wake the readiness test and the copy run in one interrupts-off
  * step, so an input IRQ cannot change the queue mid-read. Another reader
  * woken by the same line may have taken it, and a read of the empty queue
  * would then return 0, which means end of file; such a reader waits again.
- * A blocking read that returns input records the time since the input became
- * readable (ready_us) in the console latency span, LAT_CONSOLE, and clears
- * ready_us; a non-blocking read leaves it.
+ * Every read that returns input or end of file, blocking or not, ends the
+ * console latency span (`tty_take`).
  *
  * While the USB latency record is on, a reader about to park logs `latency:
  * reader waiting`, and a console reader arms the record, under the same
@@ -181,7 +195,7 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
     if (nonblock) {
         flags = kirq_save();
         if (tty_ready_cond(t)) {
-            n = n_tty_read(&t->ldisc, kbuf, count);
+            n = tty_take(t, kbuf, count);
             kirq_restore(flags);
             usb_stamp_read();
             return n;
@@ -209,11 +223,7 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
         }
         flags = kirq_save();
         if (n_tty_readable(&t->ldisc)) {
-            n = n_tty_read(&t->ldisc, kbuf, count);
-            if (t->ready_us) {
-                latency_span(LAT_CONSOLE, t->ready_us, timer_now_us());
-                t->ready_us = 0;
-            }
+            n = tty_take(t, kbuf, count);
             kirq_restore(flags);
             usb_stamp_read();
             return n;
