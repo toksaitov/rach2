@@ -1,5 +1,7 @@
 /*
- * exfat_hosttest.c: the exfat driver over the buffer cache over an image.
+ * exfat_hosttest.c: the exFAT driver, rach2/sys/fs/exfat.c, over the buffer
+ * cache and the disk model of compat/devmodel.c, on the volumes
+ * mkexfatfixture.c builds.
  *
  * host-deps: rach2/sys/fs/exfat.c rach2/sys/fs/bcache.c rach2/sys/block/chain.c
  * host-deps: rach2/sys/fs/fatcommon.c
@@ -8,22 +10,15 @@
  * host-deps: tests/host/compat/pressure_host.c tests/host/compat/fixdir_host.c
  * host-seconds: 450
  *
- * The volumes are mkexfatfixture's, built here on every run, in the test's
- * own fixture directory (compat/fixdir_host.c), or in the one a mutation
- * proof names with FIXDIR, so that runs at once do not share one. The
- * well-formed volume must read back what the builder wrote, through every
- * shape: the contiguous file, the file chained over clusters that are not
- * adjacent, the file whose tail past ValidDataLength reads as zeros, the
- * empty file, the name of four entries, the set with vendor entries, the
- * set that straddles a sector, the set that crosses a cluster boundary,
- * and the directory of two levels; a name is found by any case through
- * the volume's up-case table, and in each of the table's three forms.
- * Each malformed variant is refused at mount with the field named, mounts
- * read-only with the reason named, has its set skipped, or fails at the
- * file it damages. The last row: a volume the host's own tools formatted
- * and filled mounts and lists every file in its manifest with the right bytes
- * and times. The write rows, the costs of a create, the durability rows and
- * the interruption matrix follow, each described where it is defined.
+ * The builder is compiled and run on every run, in the test's own fixture
+ * directory (compat/fixdir_host.c), or in the one a mutation proof names
+ * with FIXDIR, so that runs at once do not share one. The rows read the
+ * well-formed volume back through every shape of file and set, mount each
+ * damaged volume, mount a volume the host's own tools wrote, run the write
+ * sequences and stop each after every write, bound the cost of creates in
+ * a large directory, check what a sync and an unlink leave on the medium,
+ * and mount dirty volumes. Each function's comment says what its rows
+ * require.
  *
  * With `--scan-cost` or `--barriers` the program runs only the cost rows, or
  * only the rows that judge the driver's barriers, and ends at the first
@@ -60,17 +55,20 @@ extern unsigned long fwrite(const void *buf, unsigned long size, unsigned long n
 extern void *popen(const char *cmd, const char *mode);
 extern int pclose(void *f);
 
-#define IMG_BYTES (65536u * 512u) /* 32 MiB: the fixture is 16, the external volume 16 */
+/* The largest image, 32 MiB: the fixture is 16, the external volume 16. */
+#define IMG_BYTES (65536u * 512u)
 
 /* ---- what the driver needs of the kernel ---- */
 
 static process_t proc_a;
 struct percpu cpu_table[NR_CPUS] = {{.current = &proc_a}};
 
-/* The kernel's records go to the log the runner keeps, so a refusal or a
-   skipped set names its reason there. */
 extern int vsnprintf(char *s, unsigned long n, const char *fmt, __builtin_va_list ap);
+/* The last kernel record, which a dirty row reads for the reason it names. */
 static char last_klog[400];
+/** Print a kernel record to the log the runner keeps, so that a mount that
+ *  fails or a set skipped names its reason there, and keep it in
+ *  `last_klog`. */
 void klog(int level, const char *subsystem, const char *fmt, ...)
 {
     __builtin_va_list ap;
@@ -81,19 +79,23 @@ void klog(int level, const char *subsystem, const char *fmt, ...)
     __builtin_va_end(ap);
     printf("klog: %s: %s\n", subsystem, last_klog);
 }
+/** End the test: no row expects a panic. */
 void k_panic(const char *msg)
 {
     printf("exfat_hosttest: panic: %s\n", msg);
     exit(1);
 }
+/** Make `wq` empty. */
 void wait_queue_init(wait_queue_t *wq)
 {
     __builtin_memset(wq, 0, sizeof(*wq));
 }
+/** A wake, which has nobody to wake: no row sleeps. */
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
 }
+/** A sleep, which ends the test with a failure: no row may sleep. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
@@ -102,32 +104,38 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     printf("exfat_hosttest: FAIL: a row reached the sleeping wait\n");
     exit(1);
 }
+/** An uninterruptible sleep, which fails as `wq_wait_event` does. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     return wq_wait_event(wq, cond, arg);
 }
+/** The time of day, which stands still. */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
     *seconds = 1788264000; /* 2026-09-01 12:00:00 UTC */
     *nanoseconds = 0;
 }
 
+/** Whether the caller holds a mount's namespace lock: 0 here. */
 int vfs_ns_held_by_caller(void)
 {
     return 0;
 }
 
+/** A device's failure, which nothing here records. */
 void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
 {
     (void)dev;
     (void)lba;
     (void)rc;
 }
+/** Take the mount's namespace lock for the current process, recursively. */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
     mnt->ns_holder = (int)current_proc->pid;
     mnt->ns_depth++;
 }
+/** Let go of one level of the mount's namespace lock. */
 void vfs_ns_unlock(struct vfs_mount *mnt)
 {
     if (--mnt->ns_depth == 0) {
@@ -139,14 +147,17 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
 
 /* `image` is what the device answers, its medium with the writes pending
    since the last barrier over it; `medium` is what a crash keeps, through
-   the model in tests/host/compat/devmodel.c. */
+   the model in tests/host/compat/devmodel.c. `snaps` has the states the
+   medium can be in at one stop. */
 static unsigned char image[IMG_BYTES];
 static unsigned char medium[IMG_BYTES];
 static unsigned char snap[IMG_BYTES];
-static unsigned char snaps[DEVMODEL_KEEP_MOST + 2][IMG_BYTES]; /* the states at one stop */
+static unsigned char snaps[DEVMODEL_KEEP_MOST + 2][IMG_BYTES];
 static struct devmodel model;
 static uint64_t image_sectors;
 
+/** The device's read, through the model: what the device answers. Returns
+ *  0, or -5 (EIO) past the image. */
 static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
 {
     (void)d;
@@ -159,9 +170,10 @@ static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
 static int writes_made;
 static int stop_after = -1;
 
-/* Writes go to the model, pending until the driver's next barrier.
-   `stop_after` is the interruption matrix's crash: the writes after that
-   many fail, and what the crash leaves is the model's snapshot. */
+/** The device's write: to the model, pending until the driver's next
+ *  barrier. `stop_after` is the interruption matrix's crash: the writes
+ *  after that many fail with -5 (EIO), and what the crash leaves is the
+ *  model's snapshot. */
 static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void *buf)
 {
     (void)d;
@@ -181,8 +193,9 @@ static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void
     return rc;
 }
 
-/* The medium as it stands, with nothing pending: what the rows that judge
-   the image directly see, since a barrier came before them. */
+/** Make every pending write durable, so that the image is the medium with
+ *  nothing pending: what the rows that judge the image directly see, since
+ *  a barrier came before them. */
 static void settle(void)
 {
     if (model.npending) {
@@ -192,6 +205,8 @@ static void settle(void)
 
 static block_device_t dev = {512, 32768u, BLOCK_FAULT_SAFE, 0, 0, 0, img_read, img_write, 0, 0, 0};
 
+/** A transfer of the block layer, through the device's own read or
+ *  write. */
 int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *data)
 {
     if (write) {
@@ -204,9 +219,11 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
 
 static int fails;
 /* Set by a mode a mutation proof runs: the first failure ends the run,
-   since the proof asks only whether a row fails. */
+   since the proof judges only whether a row fails. */
 static int first_failure_ends;
 
+/** Count a failed check and print `what`; in a mode a proof runs, end the
+ *  run. */
 static void check(int ok, const char *what)
 {
     if (!ok) {
@@ -220,7 +237,10 @@ static void check(int ok, const char *what)
 
 static int builder_built;
 
-/* Load an image file into the device; its size is the device's. */
+/** Load the image file `path` into the device, whose size becomes the
+ *  file's. A stop in force ends first, and the cache drains into the old
+ *  image before the new one replaces it. Returns 0, or -1 for a file that
+ *  does not open or is not a whole number of sectors. */
 static int load_file(const char *path)
 {
     void *f = fopen(path, "rb");
@@ -230,7 +250,7 @@ static int load_file(const char *path)
         return -1;
     }
     stop_after = -1;
-    model.stopped = 0; /* a stop is over: the cache drains into the old image */
+    model.stopped = 0;
     bcache_sync(&dev);
     n = fread(image, 1, IMG_BYTES, f);
     fclose(f);
@@ -247,7 +267,8 @@ static int load_file(const char *path)
     return 0;
 }
 
-/** Build the named fixture and load it into the image. */
+/** Build the fixture with the builder's option `opt` and load it into the
+ *  device; the builder is compiled at the first call. */
 static void load(const char *opt)
 {
     char cmd[2048];
@@ -277,7 +298,8 @@ static struct vfs_mount mnt;
 
 #define OPS (vfs_exfat_type.ops)
 
-/* Mount the loaded image with `flags` and `options`; the constructor's rc. */
+/** Mount the loaded image with `flags` and `options`. Returns what the
+ *  driver's mount returns. */
 static int mount_image(uint32_t flags, const char *options)
 {
     __builtin_memset(&mnt, 0, sizeof(mnt));
@@ -288,6 +310,7 @@ static int mount_image(uint32_t flags, const char *options)
     return vfs_exfat_type.mount(&mnt, &dev, flags, options);
 }
 
+/** Let go of the root and unmount, when a mount has a root. */
 static void unmount_image(void)
 {
     if (mnt.root) {
@@ -296,15 +319,16 @@ static void unmount_image(void)
     }
 }
 
-/* Resolve a path from the root, one component at a time; the node held,
-   or NULL with the errno in `*err`. */
+/** Resolve `path` from the root, one component at a time. Returns the node
+ *  held, or NULL with the error in `*err`, -ENOENT when nothing is
+ *  mounted. */
 static void *walk(const char *path, int *err)
 {
     void *cur = mnt.root;
     char comp[300];
 
     if (!cur) {
-        *err = -ENOENT; /* nothing mounted */
+        *err = -ENOENT;
         return 0;
     }
     OPS->hold(&mnt, cur);
@@ -339,7 +363,9 @@ static void *walk(const char *path, int *err)
 
 static unsigned char back[262144];
 
-/* Read a file whole through the driver: the byte count, or a negative rc. */
+/** Read the file `node` whole through the driver into `buf` of `cap`
+ *  bytes. Returns the byte count, -1 when it does not open, or the read's
+ *  negative error. */
 static long read_all(void *node, unsigned char *buf, uint32_t cap)
 {
     void *h;
@@ -367,7 +393,8 @@ static long read_all(void *node, unsigned char *buf, uint32_t cap)
     return (long)done;
 }
 
-/* A damaged file: one read gives `sound` bytes, and the next answers EIO. */
+/** Whether a read of the damaged file `node` gives `sound` bytes and the
+ *  next, at `sound`, EIO. */
 static int read_then_fail(void *node, long sound)
 {
     void *h;
@@ -382,7 +409,8 @@ static int read_then_fail(void *node, long sound)
     return got == sound && then == -EIO;
 }
 
-/* The bytes of `path` equal `want` for `n` bytes, and the file is that long. */
+/** Check that the file `path` is `n` bytes long and its bytes are `want`;
+ *  `what` names the check. */
 static void check_bytes(const char *path, const unsigned char *want, long n, const char *what)
 {
     int err;
@@ -398,7 +426,7 @@ static void check_bytes(const char *path, const unsigned char *want, long n, con
     check(got == n && memcmp(back, want, (unsigned long)n) == 0, what);
 }
 
-/* Every name readdir lists in `dir`, joined by '|' into `out`. */
+/** Every name readdir lists in `dir`, each followed by '|', in `out`. */
 static void listing(void *dir, char *out, unsigned long cap)
 {
     uint32_t cursor = 0;
@@ -416,6 +444,18 @@ static void listing(void *dir, char *out, unsigned long cap)
     }
 }
 
+/**
+ * The well-formed volume, built with `opt` for one of the up-case table's
+ * three forms, which `what_form` names, read-only. It must mount; list every
+ * file of the root and no system entry; read hello.txt, chained.bin through
+ * the FAT across its gaps, valid.bin with zeros past its valid length, the
+ * empty file, the name of four entries, the set with vendor entries, the
+ * set that straddles a sector, the set that crosses a cluster boundary, and
+ * dir/sub/leaf.txt; find a name by another case through the up-case table,
+ * outside ASCII and past the table's first run too; walk ".." up to the
+ * root; decode the timestamps and the mode; give ENOENT for a missing name;
+ * and report the geometry and the bitmap's free count in statfs.
+ */
 static void well_formed_rows(const char *opt, const char *what_form)
 {
     int err;
@@ -518,6 +558,7 @@ static void well_formed_rows(const char *opt, const char *what_form)
     unmount_image();
 }
 
+/** The volume built with `opt` fails to mount with EINVAL. */
 static void refused_row(const char *opt, const char *what)
 {
     load(opt);
@@ -525,6 +566,8 @@ static void refused_row(const char *opt, const char *what)
     unmount_image();
 }
 
+/** The volume built with `opt`, mounted writable, mounts read-only and
+ *  still reads hello.txt. */
 static void readonly_row(const char *opt, const char *what)
 {
     load(opt);
@@ -533,6 +576,8 @@ static void readonly_row(const char *opt, const char *what)
     unmount_image();
 }
 
+/** The volume built with `opt` mounts, and the damaged set of `path` is
+ *  skipped: not found and not listed, while the sets after it read. */
 static void skipped_row(const char *opt, const char *path, const char *what)
 {
     int err;
@@ -547,6 +592,23 @@ static void skipped_row(const char *opt, const char *path, const char *what)
     unmount_image();
 }
 
+/**
+ * The damaged volumes. A FAT too short or inside the boot regions, a short
+ * bitmap, an up-case table that fails its checksum or ends in a run with no
+ * count, and 4 KiB sectors fail the mount. A main boot region that fails its
+ * checksum, alone or with a root of its own, a backup that fails, two
+ * regions that disagree, MediaFailure and a second bitmap mount read-only.
+ * A set that fails its checksum, its SecondaryCount, its NameLength or its
+ * hash, a valid length past the length, and a stream without
+ * AllocationPossible are skipped. A chain that leaves the heap reads its
+ * first cluster then EIO; a looped chain reads what it has; a stream
+ * shorter than its length reads its chain then EIO. An unknown critical
+ * entry in the root mounts and the sets after it read. Timestamps without a
+ * valid offset read as UTC, and with an offset are taken back to UTC; the
+ * dirty bit over a clean tree mounts read-only. The mount options umask=,
+ * uid= and gid= shape the mode and the ids, and an unknown option is
+ * EINVAL.
+ */
 static void damaged_rows(void)
 {
     int err;
@@ -642,9 +704,10 @@ static void damaged_rows(void)
     check(mount_image(VFS_MS_RDONLY, "nosuch=1") == -EINVAL, "an unknown option is EINVAL");
 }
 
-/* The gate: the volume the host's own tools wrote lists its manifest with
-   the right bytes and times. Skipped, and said so, where the host has no
-   such tools. */
+/** A volume the host's own tools made and filled (mkexfat_external.sh)
+ *  mounts and has every file of its manifest, with its size, its
+ *  modification time within two seconds, and its bytes. The rows are
+ *  skipped, and say so, on a host without those tools. */
 static void external_rows(void)
 {
     char cmd[2048], line[600];
@@ -724,6 +787,7 @@ static void external_rows(void)
 
 static unsigned char pattern[8192];
 static char check_out[16384];
+/** Fill `pattern`, the bytes the write sequences write. */
 static void fill_pattern(void)
 {
     unsigned i;
@@ -733,7 +797,8 @@ static void fill_pattern(void)
     }
 }
 
-/* Mount the loaded image writable; the constructor's rc. */
+/** Mount the loaded image writable, and take its namespace lock as the
+ *  system call layer would. Returns 0, or -1 when the mount fails. */
 static int mount_rw(void)
 {
     __builtin_memset(&mnt, 0, sizeof(mnt));
@@ -744,10 +809,11 @@ static int mount_rw(void)
     if (vfs_exfat_type.mount(&mnt, &dev, 0, "") != 0) {
         return -1;
     }
-    vfs_ns_lock(&mnt); /* the test stands in for the syscall layer */
+    vfs_ns_lock(&mnt);
     return 0;
 }
 
+/** Create the file `name` in `dir`. Returns its node, held, or NULL. */
 static void *make_file(void *dir, const char *name)
 {
     void *n = 0;
@@ -758,6 +824,9 @@ static void *make_file(void *dir, const char *name)
     return n;
 }
 
+/** Write `count` bytes of `buf` at `off` of the file `node` through a
+ *  description of its own. Returns 0, or the write's error, or -1 for a
+ *  short write or an open that fails. */
 static int write_at(void *node, const unsigned char *buf, uint32_t count, uint64_t off)
 {
     void *h;
@@ -771,8 +840,8 @@ static int write_at(void *node, const unsigned char *buf, uint32_t count, uint64
     return got == (int32_t)count ? 0 : (got < 0 ? got : -1);
 }
 
-/* Dump the image and walk it with the host reader; the check's exit
-   status, its output in `out`. */
+/** Write the image `what` to exfat_write.img and walk it with the host
+ *  checker. Returns the check's exit status, with its output in `out`. */
 static int run_check_on(const unsigned char *what, char *out, unsigned long cap)
 {
     char cmd[2048], line[300];
@@ -803,20 +872,20 @@ static int run_check_on(const unsigned char *what, char *out, unsigned long cap)
     return rc == -1 ? -1 : (rc >> 8) & 0xff;
 }
 
-/* The image the device answers, settled: what a checker sees after a clean
-   end, where every write reached the medium. */
+/** Check the image the device answers, settled: what a checker sees after
+ *  a clean end, where every write reached the medium. */
 static int run_check(char *out, unsigned long cap)
 {
     settle();
     return run_check_on(image, out, cap);
 }
 
-/* Make `what` the device's whole state, medium and all, for a mount over
-   a crash state. */
+/** Make `what` the device's whole state, medium and all, for a mount over
+ *  a crash state. What the cache still holds of the stopped run drains into
+ *  the image about to be replaced, so the cache is empty for the
+ *  snapshot. */
 static void load_snapshot(const unsigned char *what)
 {
-    /* What the cache still holds of the stopped run drains into the image
-       about to be replaced, so the cache is empty for the snapshot. */
     stop_after = -1;
     model.stopped = 0;
     bcache_sync(&dev);
@@ -828,7 +897,7 @@ static void load_snapshot(const unsigned char *what)
     devmodel_load(&model);
 }
 
-/* The image kept under a name, for the external checker run by hand. */
+/** Keep the image as exfat_KIND_NAME.img, for the checker run by hand. */
 static void dump_named(const char *kind, const char *name)
 {
     char path[2048];
@@ -842,8 +911,8 @@ static void dump_named(const char *kind, const char *name)
     }
 }
 
-/* Read the crash state back from the dump: the cache's dirty buffers go
-   into the image the dump replaces, so nothing of them survives. */
+/** Read the crash state back from the dump: the cache's dirty buffers go
+ *  into the image the dump replaces, so nothing of them survives. */
 static void load_dump(void)
 {
     stop_after = -1;
@@ -855,9 +924,10 @@ static void load_dump(void)
     }
 }
 
-/* The findings the driver's own order may leave behind a stop, and no
-   other: lost clusters, orphan secondaries, a checksum-only set, a
-   surplus tail; the three the check repairs, and the one it counts. */
+/** Whether the check's output `out` has only the findings the driver's own
+ *  order may leave behind a stop: lost clusters, orphan secondaries, a
+ *  checksum-only set and a surplus tail; the three the driver's check
+ *  repairs, and the one it counts. */
 static int findings_allowed(const char *out)
 {
     static const char *const allowed[] = {"check: OK: ",
@@ -890,6 +960,7 @@ static int findings_allowed(const char *out)
 
 /* ---- the sequences ---- */
 
+/** Create "w one.txt" and write "hello" to it. */
 static int seq_create(void)
 {
     void *n = make_file(mnt.root, "w one.txt");
@@ -905,6 +976,8 @@ static int seq_create(void)
     return 0;
 }
 
+/** Create "w two.bin" and write 2010 bytes, then 3000 more after them,
+ *  across a cluster boundary. */
 static int seq_extend(void)
 {
     void *n = make_file(mnt.root, "w two.bin");
@@ -921,6 +994,8 @@ static int seq_extend(void)
     return rc;
 }
 
+/** Create "w three.bin", write 10 bytes, then 5 at 6000, so that zeros lie
+ *  between them across a cluster boundary. */
 static int seq_gap(void)
 {
     void *n = make_file(mnt.root, "w three.bin");
@@ -931,12 +1006,15 @@ static int seq_gap(void)
     }
     rc = write_at(n, pattern, 10, 0);
     if (rc == 0) {
-        rc = write_at(n, pattern + 10, 5, 6000); /* zeros between, across a cluster */
+        rc = write_at(n, pattern + 10, 5, 6000);
     }
     OPS->put(&mnt, n);
     return rc;
 }
 
+/** Create "w four.txt", write 6010 bytes, and truncate it to 700, grow it
+ *  to 1000 inside the last cluster and to 6600 across a cluster, then cut
+ *  it to 0 and grow it to 5000. */
 static int seq_truncate(void)
 {
     void *n = make_file(mnt.root, "w four.txt");
@@ -950,10 +1028,10 @@ static int seq_truncate(void)
     if (rc == 0 && OPS->open(&mnt, n, 0, &h) == 0) {
         rc = OPS->truncate(&mnt, h, 700);
         if (rc == 0) {
-            rc = OPS->truncate(&mnt, h, 1000); /* a grow inside the last cluster */
+            rc = OPS->truncate(&mnt, h, 1000);
         }
         if (rc == 0) {
-            rc = OPS->truncate(&mnt, h, 6600); /* and one across a cluster */
+            rc = OPS->truncate(&mnt, h, 6600);
         }
         if (rc == 0) {
             rc = OPS->truncate(&mnt, h, 0);
@@ -967,6 +1045,12 @@ static int seq_truncate(void)
     return rc;
 }
 
+/**
+ * Create "w five.txt", write 100 bytes, unlink it while a description holds
+ * it, and write 4200 bytes through that description. Another file written
+ * meanwhile, "w six.txt", must not take the held file's clusters, so the
+ * held file must still read its own bytes afterwards.
+ */
 static int seq_unlink(void)
 {
     void *n = make_file(mnt.root, "w five.txt");
@@ -980,11 +1064,9 @@ static int seq_unlink(void)
     if (rc == 0 && OPS->open(&mnt, n, 0, &h) == 0) {
         rc = OPS->unlink(&mnt, mnt.root, "w five.txt");
         if (rc == 0) {
-            rc = write_at(n, pattern, 4200, 0); /* through the description, held */
+            rc = write_at(n, pattern, 4200, 0);
         }
         if (rc == 0) {
-            /* Another file written meanwhile must not take the held
-               file's clusters: its bytes are still its own afterwards. */
             void *o = make_file(mnt.root, "w six.txt");
 
             rc = o ? write_at(o, pattern + 100, 4200, 0) : -1;
@@ -1002,6 +1084,8 @@ static int seq_unlink(void)
     return rc;
 }
 
+/** Make "Dir One" with a file in it, require ENOTEMPTY of its rmdir, then
+ *  unlink the file and remove the directory. */
 static int seq_mkdir(void)
 {
     void *d = 0, *n;
@@ -1028,6 +1112,8 @@ static int seq_mkdir(void)
     return rc;
 }
 
+/** Rename "r1.txt" in place to "R1x.txt", across to "dir/moved name.txt",
+ *  and back over the file "over.txt". */
 static int seq_rename(void)
 {
     void *n = make_file(mnt.root, "r1.txt");
@@ -1040,13 +1126,13 @@ static int seq_rename(void)
     rc = write_at(n, pattern, 40, 0);
     OPS->put(&mnt, n);
     if (rc == 0) {
-        rc = OPS->rename(&mnt, mnt.root, "r1.txt", mnt.root, "R1x.txt"); /* in place */
+        rc = OPS->rename(&mnt, mnt.root, "r1.txt", mnt.root, "R1x.txt");
     }
     if (rc == 0 && OPS->lookup(&mnt, mnt.root, "dir", &d) != 0) {
         rc = -1;
     }
     if (rc == 0) {
-        rc = OPS->rename(&mnt, mnt.root, "R1x.txt", d, "moved name.txt"); /* across */
+        rc = OPS->rename(&mnt, mnt.root, "R1x.txt", d, "moved name.txt");
     }
     if (rc == 0) {
         o = make_file(mnt.root, "over.txt");
@@ -1056,7 +1142,7 @@ static int seq_rename(void)
         }
     }
     if (rc == 0) {
-        rc = OPS->rename(&mnt, d, "moved name.txt", mnt.root, "over.txt"); /* over a file */
+        rc = OPS->rename(&mnt, d, "moved name.txt", mnt.root, "over.txt");
     }
     if (d) {
         OPS->put(&mnt, d);
@@ -1064,9 +1150,9 @@ static int seq_rename(void)
     return rc;
 }
 
-/* A write past the valid length of the fixture's valid.bin, whose bytes
-   past it are junk on the disk: the gap is zeroed before the length is
-   published. */
+/** A write past the valid length of the fixture's valid.bin, whose bytes
+ *  past it are junk on the disk: the gap is zeroed before the length is
+ *  published. */
 static int seq_vdl(void)
 {
     void *n;
@@ -1080,8 +1166,8 @@ static int seq_vdl(void)
     return rc;
 }
 
-/* The fixture's contiguous hello.txt grows: its run into the FAT, the
-   flag cleared, then the chain joined to. */
+/** The fixture's contiguous hello.txt grows: its run into the FAT, the
+ *  flag cleared, then the chain joined to. */
 static int seq_nofat(void)
 {
     void *n;
@@ -1095,15 +1181,15 @@ static int seq_nofat(void)
     return rc;
 }
 
-/* A file already on the medium, unlinked. Its name and its chain were
-   durable before the unlink, so the flush between the retirement and the
-   frees is all that keeps a crash from leaving the name over free
-   clusters. In the other unlinks here that flush has help: a file unlinked
-   right after its creation still has its publication pending in the block
-   the retirement rewrites, and a held file's clusters go at its last put,
-   after later barriers. The write rows require the name gone afterwards,
-   since neither the content oracle nor the walk sees an unlink that
-   answered 0 and left the file in place. */
+/** A file already on the medium, unlinked. Its name and its chain were
+ *  durable before the unlink, so the flush between the retirement and the
+ *  frees is all that keeps a crash from leaving the name over free
+ *  clusters. In the other unlinks here that flush has help: a file unlinked
+ *  right after its creation still has its publication pending in the block
+ *  the retirement rewrites, and a held file's clusters go at its last put,
+ *  after later barriers. The write rows require the name gone afterwards,
+ *  since neither the content oracle nor the walk sees an unlink that
+ *  answered 0 and left the file in place. */
 static int seq_unlink_synced(void)
 {
     void *n = make_file(mnt.root, "w seven.txt");
@@ -1123,8 +1209,9 @@ static int seq_unlink_synced(void)
     return rc;
 }
 
-/* The fixture's straddle.txt, whose file and stream entries lie in two
-   sectors: a change is two writes, the file entry's last. */
+/** The fixture's straddle.txt, whose file and stream entries lie in two
+ *  sectors: a change is two writes, the file entry's last. Its mode is
+ *  changed, then a write at 9 changes its lengths too. */
 static int seq_straddle(void)
 {
     void *n;
@@ -1137,18 +1224,18 @@ static int seq_straddle(void)
     st.mode = 0555;
     rc = OPS->setattr(&mnt, n, VFS_SET_MODE, &st);
     if (rc == 0) {
-        rc = write_at(n, pattern, 100, 9); /* the lengths change too */
+        rc = write_at(n, pattern, 100, 9);
     }
     OPS->put(&mnt, n);
     return rc;
 }
 
-/* The fixture's crossing.txt, whose set crosses the root's first cluster
-   into its second: unlinked, then made again with the same name, so the new
-   set takes the freed slots and crosses the same boundary. The retire and
-   the store each write two cache blocks, and each needs a barrier between
-   them: without it a crash can leave a set in use with a secondary never
-   written or already retired. */
+/** The fixture's crossing.txt, whose set crosses the root's first cluster
+ *  into its second: unlinked, then made again with the same name, so the
+ *  new set takes the freed slots and crosses the same boundary. The retire
+ *  and the store each write two cache blocks, and each needs a barrier
+ *  between them: without it a crash can leave a set in use with a secondary
+ *  never written or already retired. */
 static int seq_crossing(void)
 {
     void *n;
@@ -1166,11 +1253,11 @@ static int seq_crossing(void)
     return rc;
 }
 
-/* The fixture's crossing.txt renamed within the root to a name of as many
-   entries, read, and renamed back. Its stream entry is in its file entry's
-   sector and its name entry in the next, so a rewrite in place would leave
-   a stop with the new name under the old hash, a fault the check does not
-   repair. */
+/** The fixture's crossing.txt renamed within the root to a name of as many
+ *  entries, read, and renamed back. Its stream entry is in its file entry's
+ *  sector and its name entry in the next, so a rewrite in place would leave
+ *  a stop with the new name under the old hash, a fault the check does not
+ *  repair. */
 static int seq_crossing_rename(void)
 {
     void *n;
@@ -1193,6 +1280,8 @@ static int seq_crossing_rename(void)
     return rc;
 }
 
+/* The write sequences, by name. Each runs on a writable mount of the
+   fixture built with --junk, and returns 0, or nonzero when a call fails. */
 static const struct {
     const char *name;
     int (*run)(void);
@@ -1212,9 +1301,10 @@ static const struct {
     {"crossing-rename", seq_crossing_rename},
 };
 
-/* Files made and remade: what a program rewriting a set of files does, the
-   set found, truncated and written again, many times over. Not in the
-   matrix, which would stop after each of its hundreds of writes. */
+/** Files made and remade: what a program rewriting a set of files does,
+ *  the set found, truncated and written again, many times over. Not in the
+ *  matrix, which would stop after each of its hundreds of writes. Returns
+ *  0, or -1 at the first call that fails. */
 static int rewrite_rows_run(void)
 {
     unsigned i, round;
@@ -1259,9 +1349,23 @@ static int rewrite_rows_run(void)
    rename it, so the oracle does not require that file of them. */
 static int judging_crossing;
 
-/* The content oracle: after a stop, every file a sequence wrote reads,
-   within its published length, the bytes written to it or zeros, and the
-   fixture's own files are intact and reachable. */
+/**
+ * The content oracle: after a stop, every file a sequence wrote reads,
+ * within its published length, the bytes written to it or zeros, and the
+ * fixture's own files are intact and reachable. A file a sequence has not
+ * made yet is passed over. The bytes written are the pattern, except that
+ * "w one.txt" holds "hello"; "w three.bin" its two writes with zeros
+ * between; "w four.txt" zeros at 5000 bytes, regrown from nothing after the
+ * cut to zero, and at 1000 or 6600 the first 700 bytes and zeros, grown
+ * from 700 by truncate; "over.txt" of 20 bytes, before the rename over it,
+ * and "w six.txt" the pattern from 100 on; valid.bin the fixture's bytes,
+ * zeros past 5000 and at 7000 the ten bytes the vdl sequence writes;
+ * hello.txt its twelve bytes and then what the nofat sequence writes; and
+ * straddle.txt its nine bytes and then the hundred the straddle sequence
+ * writes at 9. In the last three, zeros stand where the sequence has not
+ * yet written. Returns 1 when every file passes, and 0 after a message
+ * naming the one that does not.
+ */
 static int oracle_ok(void)
 {
     static const char *const names[] = {"w one.txt", "w two.bin", "w three.bin", "w four.txt",
@@ -1296,31 +1400,24 @@ static int oracle_ok(void)
             } else if (f == 2) {
                 want = i < 10 ? pattern[i] : (i >= 6000 ? pattern[10 + i - 6000] : 0);
             } else if (f == 3 && got == 5000) {
-                want = 0; /* regrown from nothing after the truncate to zero */
+                want = 0;
             } else if (f == 3 && (got == 1000 || got == 6600)) {
-                want = i < 700 ? pattern[i] : 0; /* grown from 700 by truncate */
+                want = i < 700 ? pattern[i] : 0;
             } else if (f == 4 && got == 20) {
-                want = pattern[100 + i]; /* over.txt before the rename over it */
+                want = pattern[100 + i];
             } else if (f == 7) {
                 want = pattern[100 + i];
             } else if (f == 8) {
-                /* valid.bin: the fixture's bytes, zeros past 5000, and at
-                   7000 the ten bytes the vdl sequence writes, or zeros
-                   before it has. */
                 want = i < 5000 ? (unsigned char)(0x40 + i) : 0;
                 if (i >= 7000 && i < 7010 && back[i] == pattern[i - 7000]) {
                     want = back[i];
                 }
             } else if (f == 9) {
-                /* hello.txt: its twelve bytes, then what the nofat sequence
-                   writes past them, or zeros before it has. */
                 want = i < 12 ? (unsigned char)"hello exfat\n"[i] : pattern[i - 12];
                 if (i >= 12 && back[i] == 0) {
                     want = 0;
                 }
             } else if (f == 10) {
-                /* straddle.txt: its nine bytes, then the hundred the
-                   straddle sequence writes at 9, or zeros before it has. */
                 want = i < 9 ? (unsigned char)"straddle\n"[i] : pattern[i - 9];
                 if (i >= 9 && back[i] == 0) {
                     want = 0;
@@ -1362,7 +1459,8 @@ static int oracle_ok(void)
     return 1;
 }
 
-/* The volume walked clean, or with the findings a stop may leave. */
+/** The name of a state that kept `keep` of `pending` writes: "none",
+ *  "all" or "the newest N", the last in a buffer the next call reuses. */
 static const char *keep_name(int keep, int pending)
 {
     static char text[40];
@@ -1377,18 +1475,20 @@ static const char *keep_name(int keep, int pending)
     return text;
 }
 
-/* One stop's states, judged: the walk of each and the content oracle,
-   with none, the newest one, two, and so on, or all of the writes pending
-   since the driver's last barrier kept, each a state a drive that keeps
-   writes pending can leave. */
+/**
+ * One stop of sequence `i`, which `stage` names, judged: the walk of each
+ * state and the content oracle, with none, the newest one, two, and so on,
+ * or all of the writes pending since the driver's last barrier kept, each a
+ * state a drive that keeps writes pending can leave. Every state is taken
+ * before any is loaded, since loading one settles the model's pending
+ * writes.
+ */
 static void judge_stop(unsigned i, const char *stage)
 {
     int keeps, keep;
 
     check(!model.overflow, "the model held every pending write");
     keeps = model.npending < DEVMODEL_KEEP_MOST ? model.npending : DEVMODEL_KEEP_MOST;
-    /* Every state is taken before any is loaded, since loading one settles
-       the model's pending writes. */
     for (keep = 0; keep <= keeps; keep++) {
         devmodel_snapshot(&model, keep, snaps[keep]);
     }
@@ -1427,6 +1527,8 @@ static void judge_stop(unsigned i, const char *stage)
     }
 }
 
+/** Check the settled image: with `allow_stop_states`, only the findings a
+ *  stop may leave; otherwise a clean walk. */
 static void check_consistent(const char *what, int allow_stop_states)
 {
     int rc = run_check(check_out, sizeof(check_out));
@@ -1437,11 +1539,12 @@ static void check_consistent(const char *what, int allow_stop_states)
     }
 }
 
-/* What a sync promises: a file written and then synced, through `fsync`,
-   the mount's `sync` or the unmount, is on the medium the moment the call
-   returns, so a crash right after, one that keeps nothing of what was
-   still pending, keeps the file. A sync that does not reach the medium
-   passes every other row, since the cache answers the reads. */
+/** What a sync promises: a file written and then synced, through `fsync`
+ *  (`how` 0), the mount's `sync` (1) or the unmount (2), is on the medium
+ *  the moment the call returns, so a crash right after, one that keeps
+ *  nothing of what was still pending, keeps the file. A sync that does not
+ *  reach the medium passes every other row, since the cache answers the
+ *  reads. */
 static void durability_row(int how, const char *what)
 {
     void *n;
@@ -1483,6 +1586,7 @@ static void durability_row(int how, const char *what)
     unmount_image();
 }
 
+/** `durability_row` for each of the three syncs. */
 static void durability_rows(void)
 {
     fill_pattern();
@@ -1491,8 +1595,8 @@ static void durability_rows(void)
     durability_row(2, "a file is written and the volume unmounted");
 }
 
-/* The clusters the bitmap in `img` says are in use; on the fixture's
-   volumes the bitmap is cluster 2, the first of the heap. */
+/** The clusters the bitmap in `img` says are in use; on the fixture's
+ *  volumes the bitmap is cluster 2, the first of the heap. */
 static uint32_t used_clusters(const unsigned char *img)
 {
     uint32_t heap = img[88] | (img[89] << 8) | (img[90] << 16) | ((uint32_t)img[91] << 24);
@@ -1546,7 +1650,7 @@ static void free_durability_row(void)
     unmount_image();
 }
 
-/* The cache's gets so far: each one finds its block or fills it. */
+/** The cache's gets so far: each one finds its block or fills it. */
 static uint64_t cache_gets(void)
 {
     return bcache_stat_hits() + bcache_stat_fills();
@@ -1557,26 +1661,25 @@ static uint64_t cache_gets(void)
  * counted in the device's writes and barriers and the cache's gets.
  *
  * A create scans its directory twice, once for the name and once for room,
- * and entry 27 of milestone 50 found three costs of that scan that grew
- * with the directory, each fixed in exfat.c and each a count here. The
- * filler entry at the last slot of a sector was written again at every scan
- * that passed it: a device write for each full sector, forty and more for
- * each of the creates measured, where the fixed driver writes a filler
- * once, when the run of free slots first reaches it. Every 32-byte entry
- * was a cache get of its own: six hundred and more gets a scan here, where
- * one get per cache block is about a dozen. And every set a scan passed
- * had its name hashed through a walk of the up-case table from its start
- * for each character. This volume's table is larger than the 16 KiB a
- * mount keeps, so it is read through the cache and each walk costs a get;
- * the fixed driver reads the mappings of the first 2048 code points once,
- * at mount. With a table the mount keeps, which the recommended one is,
- * the walk costs processor time alone and no count sees it.
+ * and three costs of that scan would grow with the directory; exfat.c
+ * avoids each, and each is a count here. A scan that wrote the filler entry
+ * at the last slot of a sector again each time it passed would make a
+ * device write for each full sector, forty and more for each of the creates
+ * measured; the driver writes a filler once, when the run of free slots
+ * first reaches it. A cache get for every 32-byte entry would be six
+ * hundred and more gets a scan here, where one get per cache block is about
+ * a dozen. And a hash of each set's name that walked the up-case table from
+ * its start for each character would cost a get per walk on this volume,
+ * whose table is larger than the 16 KiB a mount keeps and is read through
+ * the cache; the driver reads the mappings of the first 2048 code points
+ * once, at mount. With a table the mount keeps, which the recommended one
+ * is, such a walk costs processor time alone and no count sees it.
  *
- * The bounds are several times what the fixed driver takes and far under
- * what each old path takes: the twenty creates after the first two
- * hundred, one of which grows the directory, take at most 60 writes, 4
+ * The bounds are several times what the driver takes and far under what
+ * each of the three costs would take: the twenty creates after the first
+ * two hundred, one of which grows the directory, take at most 60 writes, 4
  * barriers and 4000 gets, and a lookup of the last name at most 200 gets.
- * tests/host/exfat_scan_mutate.sh puts each old path back in turn and
+ * tests/host/exfat_scan_mutate.sh puts each of the three back in turn and
  * requires its row to fail.
  */
 static void scan_cost_rows(void)
@@ -1669,6 +1772,37 @@ static void require_unlinked_gone(const char *sequence)
     }
 }
 
+/**
+ * The write rows. Each sequence runs on a fresh writable mount: the dirty
+ * bit is on the image from the mount, the sequence succeeds, its files read
+ * what was written, the files it unlinks are gone, the unmount is clean and
+ * clears the dirty bit, and the walk finds the volume consistent. Then, on
+ * fresh mounts:
+ *
+ * - the extend and rename sequences run again and their files read back:
+ *   the extended file across the cluster boundary, the renamed names gone,
+ *   and the file renamed over another with the source's bytes;
+ * - a held file renamed into another directory is the same node under its
+ *   new name, since its advisory locks are found by the node
+ *   (rach2/sys/fs/lock.Readme.md);
+ * - a create of a name that up-cases like an existing one is EEXIST;
+ * - two hundred files made and remade twice leave a consistent volume;
+ * - the unlink of the set with a vendor allocation frees that allocation's
+ *   clusters too;
+ * - a volume filled to its last cluster answers ENOSPC, and a contiguous
+ *   file cannot grow on it; its stream still says NoFatChain, since the
+ *   write that failed wrote nothing, and the percent in use in the boot
+ *   sector is the bitmap's, rounded down;
+ * - no set the driver makes has its file entry in a sector's last slot, so
+ *   its file and stream entries share a sector. The rule is read over the
+ *   twenty sets made past the fixture's end marker, in the root's first two
+ *   clusters, since the fixture's own straddle.txt breaks it on purpose;
+ * - neither a mount and a write, while the dirty bit is on the main boot
+ *   sector, nor the clean unmount writes the backup boot region;
+ * - a root that holds a critical entry the driver does not know is frozen,
+ *   a create or a mkdir in it fails with EROFS, while a directory below it
+ *   takes a file.
+ */
 static void write_rows(void)
 {
     unsigned i;
@@ -1694,7 +1828,6 @@ static void write_rows(void)
         check_consistent(what, 0);
         dump_named("seq", sequences[i].name);
     }
-    /* What the sequences left, read through the reader mounted fresh. */
     load("--junk");
     check(mount_rw() == 0, "a writable mount for the read-back");
     check(seq_extend() == 0 && seq_rename() == 0, "extend and rename again");
@@ -1710,8 +1843,6 @@ static void write_rows(void)
     n = walk("/over.txt", &err);
     check(n && read_all(n, back, sizeof(back)) == 40 && memcmp(back, pattern, 40) == 0,
           "and the file renamed over another has the source's bytes");
-    /* The node is the file's while it is held, under a new name in another
-       directory too: its advisory locks are found by it (lock.Readme.md). */
     {
         void *d = walk("/dir", &err);
 
@@ -1743,8 +1874,6 @@ static void write_rows(void)
     check(OPS->prepare_unmount(&mnt) == 0, "the rewrite rows' clean unmount");
     unmount_image();
     check_consistent("the volume is consistent after the rewrites", 0);
-    /* A vendor allocation's clusters go with its set, and the percent in
-       use on the disk is the bitmap's. */
     load("--junk");
     check(mount_rw() == 0, "a writable mount for the vendor and boot-state rows");
     check(OPS->unlink(&mnt, mnt.root, "vendor.txt") == 0,
@@ -1753,8 +1882,6 @@ static void write_rows(void)
     unmount_image();
     check_consistent("and its vendor clusters are not left allocated", 0);
 
-    /* A contiguous file extended on a full volume: ENOSPC, and its stream
-       still says NoFatChain, since nothing was written. */
     load("--junk");
     check(mount_rw() == 0, "a writable mount for the ENOSPC rows");
     {
@@ -1766,7 +1893,6 @@ static void write_rows(void)
             rc = write_at(big, pattern, 8192, at);
             at += 8192;
         }
-        /* The last clusters, one at a time, so that none is left free. */
         rc = 0;
         while (big && rc == 0) {
             struct vfs_stat st2;
@@ -1812,7 +1938,8 @@ static void write_rows(void)
         heap = image[88] | (image[89] << 8) | (image[90] << 16) | ((uint32_t)image[91] << 24);
         spc = image[109];
         clusters = image[92] | (image[93] << 8) | (image[94] << 16) | ((uint32_t)image[95] << 24);
-        bitmap = image + ((uint64_t)heap + (0u << spc)) * 512; /* the bitmap is cluster 2 */
+        /* The bitmap is cluster 2, the first of the heap. */
+        bitmap = image + ((uint64_t)heap + (0u << spc)) * 512;
         for (c = 0; c < clusters; c++) {
             if (bitmap[c / 8] & (1u << (c % 8))) {
                 used++;
@@ -1821,11 +1948,6 @@ static void write_rows(void)
         check(image[112] == (unsigned char)(used * 100u / clusters),
               "the percent in use on the disk is the bitmap's, rounded down");
     }
-    /* The placement rule: no set this driver makes has its file entry in a
-       sector's last slot, so its file and stream entries share a sector.
-       The fixture's own straddle.txt is one, on purpose; the rule is read
-       over the entries made here, past the fixture's end marker, in the
-       root's first two clusters. */
     load("--junk");
     {
         uint32_t root_cluster, heap, spc, fat, second, first_new = 0, at_last = 0, made = 0;
@@ -1853,7 +1975,6 @@ static void write_rows(void)
         }
         check(OPS->prepare_unmount(&mnt) == 0, "the placement rows' unmount");
         unmount_image();
-        /* The root's second cluster, through the FAT, once it exists. */
         second = image[fat * 512 + root_cluster * 4] |
                  (image[fat * 512 + root_cluster * 4 + 1] << 8) |
                  (image[fat * 512 + root_cluster * 4 + 2] << 16) |
@@ -1871,8 +1992,6 @@ static void write_rows(void)
         check(made == 20 && at_last == 0,
               "twenty files created and no file entry of theirs in a sector's last slot");
     }
-    /* The backup boot region is never written: not while the dirty bit is
-       on the main sector, and not by the clean unmount. */
     load("--junk");
     memcpy(back, image + 12 * 512, 12 * 512);
     check(mount_rw() == 0 && seq_create() == 0 && memcmp(back, image + 12 * 512, 12 * 512) == 0,
@@ -1880,8 +1999,6 @@ static void write_rows(void)
     check(OPS->prepare_unmount(&mnt) == 0 && memcmp(back, image + 12 * 512, 12 * 512) == 0,
           "and so does the clean unmount");
     unmount_image();
-    /* A frozen directory: the root holding a critical entry this driver
-       does not know refuses every change with EROFS. */
     load("--unknown-critical");
     check(mount_rw() == 0, "the volume with an unknown critical entry mounts writable");
     check(OPS->create(&mnt, mnt.root, "x.txt", 0644, &n) == -EROFS &&
@@ -1894,9 +2011,25 @@ static void write_rows(void)
     unmount_image();
 }
 
-/* Every sequence stopped after each of its writes; the image walked each
-   time, allowed only what the order of writes leaves behind, and the
-   crash state read for what was written. */
+/**
+ * The interruption matrix. Each sequence runs once for the count of its
+ * writes and barriers; the mount's own write of the dirty bit is not
+ * counted. The sequence is then stopped after each of its writes, and
+ * `judge_stop` judges every state the medium can be in at the stop: a
+ * barrier left out widens what is pending at the stops after it, and one of
+ * the states then shows the write that should have waited. The stop before
+ * the last write of each sequence is kept, with every pending write on it,
+ * as exfat_stop_NAME.img for the external checker.
+ *
+ * Then each barrier of the sequence fails in turn: the model puts the older
+ * half of what is pending on the medium and the driver is told. The run goes
+ * on to its end, whatever the driver answers, and the medium with every
+ * write on it must be a state the walk allows. The run is then stopped at
+ * the failure and after each of the three writes that follow, and each stop
+ * is judged as above, since what the driver does to undo a failed step has
+ * an order of its own. The model's count of writes restarts with the
+ * sequence's, so that the count at the failure places the stops.
+ */
 static void matrix_pass(void)
 {
     unsigned i;
@@ -1911,18 +2044,13 @@ static void matrix_pass(void)
             check(0, "the matrix's volume mounts");
             return;
         }
-        writes_made = 0; /* the mount's own dirty-bit write is not a stop */
+        writes_made = 0;
         model.barriers = 0;
         sequences[i].run();
         n = writes_made;
         OPS->put(&mnt, mnt.root);
         OPS->unmount(&mnt);
         barriers = model.barriers;
-        /* Every stop, and at each the three states the medium can be in:
-           none, only the newest, or all of the writes pending since the
-           driver's last barrier. A barrier left out widens what is pending
-           at the stops after it, and one of the states then shows the
-           write that should have waited. */
         for (k = 1; k <= n; k++) {
             char stage[60];
 
@@ -1947,11 +2075,6 @@ static void matrix_pass(void)
             judge_stop(i, stage);
             total++;
         }
-        /* Each barrier of the sequence made to fail, the driver's answer
-           whatever it is, and the medium judged with half of what was
-           pending at it; then the machine stopped at each of the four
-           writes after the failure, since what the driver does to undo a
-           failed step has an order of its own. */
         for (b = 1; b <= barriers; b++) {
             char what[200];
             int failed_at, j;
@@ -1962,7 +2085,7 @@ static void matrix_pass(void)
                 return;
             }
             writes_made = 0;
-            model.writes = 0; /* the model's count of the failure is this count */
+            model.writes = 0;
             stop_after = -1;
             model.barriers = 0;
             model.fail_barrier = b;
@@ -2013,8 +2136,10 @@ static void matrix_pass(void)
 
 static unsigned char image_before[IMG_BYTES];
 
-/* A volume under the dirty bit mounted writable: the check runs, repairs
-   or refuses. `want_ro` says which; `what` names the row. */
+/** Load the volume built with `opt`, keep its image in `image_before`, and
+ *  mount it writable: the driver's check runs, and repairs or fails. The
+ *  mount must end read-only when `want_ro` is set and writable otherwise;
+ *  `what` names the row. */
 static void dirty_mount(const char *opt, int want_ro, const char *what)
 {
     load(opt);
@@ -2022,12 +2147,34 @@ static void dirty_mount(const char *opt, int want_ro, const char *what)
     check(mount_rw() == 0 && ((mnt.flags & VFS_MS_RDONLY) != 0) == want_ro, what);
 }
 
+/**
+ * The dirty volumes, mounted writable. A clean tree under the dirty bit
+ * mounts writable, keeps the bit until the clean unmount clears it, and
+ * walks clean. A set that fails only its checksum, orphan secondaries, a
+ * surplus tail, orphans in the second cluster of a contiguous directory,
+ * and the three repairable states at once are repaired: each volume mounts
+ * writable and walks without its fault after the clean unmount, the files
+ * beside the fault read, and the cluster freed from a surplus tail is free
+ * in statfs. A duplicate name whose earlier set fails only its checksum
+ * mounts read-only and is named as the duplicate. A lost chain of two
+ * clusters leaves the volume writable, with 23 clusters in use in statfs,
+ * the fixture's 21 and the chain's 2; the unmount writes nothing past the
+ * boot sector, and the walk counts the chain as lost and finds nothing else.
+ *
+ * Each fault of `faults` mounts read-only, names in the kernel log the
+ * reason beside it, and writes nothing; a loop is named as a cluster reached
+ * twice, since the chain returns to a cluster already marked. Then each
+ * write of each repair of `repairs` is a stop in turn, at which the mount
+ * ends read-only or fails. The state left must be one the walk allows, and
+ * a read-only mount of it reads at least 4096 bytes of chained.bin; where
+ * hello.txt, whose set the checksum repair rewrites, is found, it reads its
+ * 12 bytes right.
+ */
 static void dirty_rows(void)
 {
     int err;
     void *n;
     struct vfs_statfs sf;
-    /* Each fault and the reason the check must name for it. */
     static const char *const faults[][2] = {
         {"--dirty-overlap", "a cluster reached twice"},
         {"--dirty-short-stream", "a stream shorter than its length"},
@@ -2035,7 +2182,7 @@ static void dirty_rows(void)
         {"--dirty-wrong-name-length", "units past NameLength"},
         {"--dirty-critical", "a critical entry this driver does not know"},
         {"--dirty-dup", "two names that up-case alike in one directory"},
-        {"--dirty-loop", "a cluster reached twice"}, /* the loop returns to a marked cluster */
+        {"--dirty-loop", "a cluster reached twice"},
         {"--dirty-chain-out", "a chain outside the heap"},
         {"--dirty-hash-and-checksum", "the name hash"},
         {"--dirty-swallow", "an entry of the set that is not an in-use secondary"},
@@ -2102,7 +2249,7 @@ static void dirty_rows(void)
     check_consistent("and the walk finds none of the three", 0);
 
     dirty_mount("--dirty-lost", 0, "a lost chain leaves the volume writable");
-    check(OPS->statfs(&mnt, &sf) == 0 && sf.bfree == 4064 - 23, /* 21 of the fixture, 2 lost */
+    check(OPS->statfs(&mnt, &sf) == 0 && sf.bfree == 4064 - 23,
           "with the chain counted as allocated");
     check(OPS->prepare_unmount(&mnt) == 0, "its clean unmount");
     unmount_image();
@@ -2130,8 +2277,6 @@ static void dirty_rows(void)
         unmount_image();
     }
 
-    /* The recursive matrix: each repair's write a stop; the state left is
-       one the walk allows, the files reachable. */
     for (f = 0; f < sizeof(repairs) / sizeof(repairs[0]); f++) {
         int nwrites;
 
@@ -2151,7 +2296,7 @@ static void dirty_rows(void)
             load(repairs[f]);
             writes_made = 0;
             stop_after = k;
-            (void)mount_rw(); /* the check's write fails at the stop: read-only, or refused */
+            (void)mount_rw();
             if (mnt.root) {
                 OPS->put(&mnt, mnt.root);
                 OPS->unmount(&mnt);
@@ -2176,8 +2321,6 @@ static void dirty_rows(void)
                 if (n) {
                     OPS->put(&mnt, n);
                 }
-                /* The set the checksum repair rewrites reads once the
-                   repair is on the disk, and its bytes are never wrong. */
                 n = walk("/hello.txt", &err);
                 if (n) {
                     long h = read_all(n, back, sizeof(back));
@@ -2196,13 +2339,17 @@ static void dirty_rows(void)
     }
 }
 
+/**
+ * Run every row; or with `--scan-cost` or `--barriers`, the modes the
+ * mutation proofs run, only the rows a proof judges, the first failure
+ * ending the run. Returns 0 when every check passed, 1 otherwise, and 2 for
+ * an unknown mode.
+ */
 int main(int argc, char **argv)
 {
     proc_a.pid = 1;
     devmodel_init(&model, medium, image, IMG_BYTES);
     if (argc > 1) {
-        /* The modes the mutation proofs run: the rows a proof judges and
-           no other, the first failure ending the run. */
         first_failure_ends = 1;
         if (strncmp(argv[1], "--scan-cost", 12) == 0) {
             scan_cost_rows();
