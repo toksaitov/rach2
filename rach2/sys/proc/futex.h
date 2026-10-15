@@ -22,11 +22,6 @@
  */
 long sys_futex(isr_params_t *params);
 
-/** Wake up to `n` waiters on `uaddr` in the current address space, as
- * FUTEX_WAKE without FUTEX_PRIVATE_FLAG does; the number woken, or -EFAULT
- * when the word's page cannot be brought in. */
-int futex_wake_address(uintptr_t uaddr, uint32_t n);
-
 /**
  * Whether the futex call `params` describes, which a signal ended with
  * EINTR, may be restarted: a wait with no timeout may, and a timed one may

@@ -283,11 +283,6 @@ static int futex_wake(uintptr_t uaddr, uint32_t n, uint32_t bitset, int flags_op
     return woken;
 }
 
-int futex_wake_address(uintptr_t uaddr, uint32_t n)
-{
-    return futex_wake(uaddr, n, FUTEX_MATCH_ANY, 0);
-}
-
 int futex_restartable(const isr_params_t *params)
 {
     int cmd = (int)SC_ARG(params, 1) & ~(FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME);
