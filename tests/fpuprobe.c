@@ -270,7 +270,8 @@ static void install(int signo, void (*h)(int))
     struct k_sigaction ka;
 
     ka.handler = h;
-    ka.flags = SA_SIGINFO | SA_RESTORER; /* the rt frame its restorer returns from */
+    /* SA_SIGINFO asks for the rt frame, which the restorer returns from. */
+    ka.flags = SA_SIGINFO | SA_RESTORER;
     ka.restorer = sig_restorer;
     ka.mask[0] = 0;
     ka.mask[1] = 0;
@@ -316,7 +317,7 @@ static int damage_pipe[2];
  *
  * The handler of an SA_SIGINFO signal is given the ucontext as its third
  * argument. Its `uc_mcontext` starts 40 bytes in, and its `fpstate` word,
- * 184 bytes further, holds the address of the `_fpstate_64`, the `fxsave64`
+ * 184 bytes further, is the address of the `_fpstate_64`, the `fxsave64`
  * image, with MXCSR 24 bytes into it. A byte goes down the pipe after the
  * write, so that the parent counts the child's SIGSEGV only once the frame
  * was damaged.
@@ -352,7 +353,7 @@ static void damage_siginfo_handler(int sig, void *info, void *ucontext)
  * rt frame: the return address, the signal number, the siginfo and ucontext
  * pointers, the 128-byte siginfo, and the ucontext at byte 144. The
  * ucontext's `uc_mcontext` starts 20 bytes in, and its `fpstate` word, 76
- * bytes further, holds the address of the `_fpstate_32`, whose `fxsave`
+ * bytes further, is the address of the `_fpstate_32`, whose `fxsave`
  * image starts at byte 112 with MXCSR 24 bytes into it. A byte goes down the
  * pipe after the write, so that the parent counts the child's SIGSEGV only
  * once the frame was damaged.

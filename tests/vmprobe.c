@@ -194,7 +194,8 @@ PROBE_START void _start(void)
 
         if (!sys_failed((long)p)) {
             unsigned long old = sys_brk(0);
-            unsigned long got = sys_brk(p + PAGE); /* would overlap [p, p+PAGE) */
+            /* A break at p + PAGE would overlap [p, p + PAGE). */
+            unsigned long got = sys_brk(p + PAGE);
 
             check(got == old, "brk refuses to grow over an mmap region");
             check(got != p + PAGE, "brk did not honor the colliding request");

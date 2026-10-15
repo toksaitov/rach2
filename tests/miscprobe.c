@@ -160,8 +160,7 @@ PROBE_START void _start(void)
         check(umask(0022) == 0027, "umask() returns the value just set");
     }
 
-    /* times: the return is a positive tick count, and no CPU time in the
-       tms is negative or more than the ticks since boot. */
+    /* times: a positive tick count, and CPU times within it. */
     {
         long tms[4];
         long t;

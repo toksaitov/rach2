@@ -115,7 +115,12 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
-/** The probe, entered with `sp` at argc. It reads at most 64 auxv pairs. */
+/**
+ * The probe, entered with `sp` at argc. It reads at most 64 auxv pairs.
+ * AT_MINSIGSTKSZ must exceed 512 bytes: a signal frame has the
+ * floating-point state, 512 bytes at the least, and the registers and the
+ * siginfo above it.
+ */
 void probe_main(unsigned long *sp)
 {
     int argc;
@@ -155,7 +160,7 @@ void probe_main(unsigned long *sp)
     }
     check(argv[argc] == 0, "argv not NULL-terminated");
 
-    /* envp[] sits just past argv's NULL. */
+    /* envp[] begins just past argv's NULL. */
     envp = (char **)&argv[argc + 1];
     while (envp[envc]) {
         puts_("  envp: ");
@@ -165,7 +170,7 @@ void probe_main(unsigned long *sp)
     }
     check(envc >= 1, "no envp entries");
 
-    /* The auxv pairs sit just past envp's NULL. */
+    /* The auxv pairs begin just past envp's NULL. */
     auxv = (unsigned long *)&envp[envc + 1];
     for (i = 0; i < 128; i += 2) {
         unsigned long type = auxv[i];
@@ -212,8 +217,6 @@ void probe_main(unsigned long *sp)
     check(clktck == 100, "AT_CLKTCK != 100");
     check(saw_secure && secure == 0, "AT_SECURE missing or nonzero");
     check(entry != 0, "AT_ENTRY == 0");
-    /* A frame is the floating-point state, 512 bytes at the least, and the
-       registers and siginfo above it. */
     check(minsigstksz > 512, "AT_MINSIGSTKSZ missing or smaller than a frame");
 
     /* AT_RANDOM: 16 bytes in the initial stack page, not all zero. */
