@@ -984,13 +984,21 @@ int acpi_gas_read(const struct acpi_gas *g, uint32_t *value)
                  : bytes == 2 ? (uint32_t)*(volatile uint16_t *)m
                               : (uint32_t)*(volatile uint8_t *)m;
         return 0;
-    case ACPI_SPACE_PCI:
+    case ACPI_SPACE_PCI: {
         /* Bus 0: device in bits 32 to 47, function 16 to 31, offset 0 to 15. */
-        *value =
-            pci_read_config32(0, (uint8_t)((g->address >> 32) & 0x1Fu),
-                              (uint8_t)((g->address >> 16) & 0x7u), (uint8_t)(g->address & 0xFCu));
-        *value >>= 8u * (uint32_t)(g->address & 3u);
+        uint8_t dev = (uint8_t)((g->address >> 32) & 0x1Fu);
+        uint8_t fn = (uint8_t)((g->address >> 16) & 0x7u);
+        uint8_t off = (uint8_t)(g->address & 0xFFu);
+
+        if (bytes == 1) {
+            *value = pci_read_config8(0, dev, fn, off);
+        } else if (bytes == 2) {
+            *value = pci_read_config16(0, dev, fn, (uint8_t)(off & 0xFEu));
+        } else {
+            *value = pci_read_config32(0, dev, fn, (uint8_t)(off & 0xFCu));
+        }
         return 0;
+    }
     default:
         return -1;
     }

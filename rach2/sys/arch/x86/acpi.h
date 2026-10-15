@@ -252,9 +252,9 @@ const struct acpi_info *acpi_get(void);
 /**
  * Read the register `g` describes into `*value`, in its own space and
  * width: an I/O port, memory, or PCI configuration space of bus 0. A PCI
- * register is read as the doubleword that holds it, shifted down to its
- * offset, with the bytes above it left in. 0, or -1 for a register this
- * kernel cannot reach.
+ * register of 2 or 4 bytes is read at its offset rounded down to that
+ * width, as `acpi_gas_write` writes it. 0, or -1 for a register this kernel
+ * cannot reach.
  */
 int acpi_gas_read(const struct acpi_gas *g, uint32_t *value);
 
