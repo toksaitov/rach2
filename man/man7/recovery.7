@@ -77,12 +77,15 @@ With
 .Ql rach2.fsck
 on the boot line, init first runs
 .Ql e2fsck -p
-on each of
-.Pa /dev/disk0p1
-through
-.Pa /dev/disk0p4
+on each partition
+.Pa /dev/disk Ns Ar N Ns Pa p Ns Ar M ,
+for each disk
+.Ar N
+from 0 to 7 and partition
+.Ar M
+from 1 to 15,
 whose superblock has the ext2 magic, and reports
-.Dl init: e2fsck: /dev/disk0pN: status S
+.Dl init: e2fsck: /dev/diskNpM: status S
 Status 0 means clean, 1 repaired, 4 faults left and 8 an error.
 Without the token a recovery boot repairs nothing.
 The network is configured by the kernel from the

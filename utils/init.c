@@ -450,19 +450,24 @@ static pid_t spawn_shell(void)
 }
 
 #ifdef INIT_METAL
+/* The kernel's own limits on disks and on a disk's partition numbers, DISK_MAX
+ * in rach2/sys/block/disk.h and PART_MAX in rach2/sys/block/partition.h. */
+#define DISK_NODES 8
+#define PART_NODES 15
+
 /**
- * Check each ext2 partition of the first disk with `e2fsck -p` before
+ * Check each ext2 partition of every disk with `e2fsck -p` before
  * anything runs from the disk.
  *
  * An image without `/sbin/e2fsck` skips this, which leaves the recovery
  * system, whose root needs nothing from the disk, as the one that runs it.
  * `main` calls it only when the boot line has `rach2.fsck`, since a person who
  * booted recovery to look, or an installer that booted it to write, did not
- * ask for a repair. The partitions are the nodes `/dev/disk0p1` to
- * `/dev/disk0p4`, and a partition is an ext2 one when byte 56 of its
- * superblock, which starts at byte 1024 of the partition, has the magic. A
- * fork that fails is retried up to five times a second apart, because a check
- * skipped is a repair not made.
+ * ask for a repair. The partitions are the nodes `/dev/diskNpM` for every disk
+ * number and partition number the kernel can give, disk by disk, and a
+ * partition is an ext2 one when byte 56 of its superblock, which starts at
+ * byte 1024 of the partition, has the magic. A fork that fails is retried up
+ * to five times a second apart, because a check skipped is a repair not made.
  *
  * `e2fsck -p` repairs what needs no question and leaves the rest for a
  * person; its status is the record, on the console and so in the boot log: 0
@@ -471,19 +476,19 @@ static pid_t spawn_shell(void)
  */
 static void check_ext2_partitions(void)
 {
-    static const char *const nodes[] = {"/dev/disk0p1", "/dev/disk0p2", "/dev/disk0p3",
-                                        "/dev/disk0p4"};
-    unsigned i;
+    int i;
 
     if (access("/sbin/e2fsck", X_OK) != 0) {
         return;
     }
-    for (i = 0; i < sizeof(nodes) / sizeof(nodes[0]); i++) {
+    for (i = 0; i < DISK_NODES * PART_NODES; i++) {
         unsigned char sector[512]; /* a raw window reads whole sectors */
-        int fd = open(nodes[i], O_RDONLY);
+        char node[24];
         pid_t pid;
-        int status = 0, tries;
+        int fd, status = 0, tries;
 
+        snprintf(node, sizeof(node), "/dev/disk%dp%d", i / PART_NODES, i % PART_NODES + 1);
+        fd = open(node, O_RDONLY);
         if (fd < 0) {
             continue;
         }
@@ -502,13 +507,13 @@ static void check_ext2_partitions(void)
 
             argv[0] = (char *)"e2fsck";
             argv[1] = (char *)"-p";
-            argv[2] = (char *)nodes[i];
+            argv[2] = node;
             argv[3] = 0;
             execve("/sbin/e2fsck", argv, environ);
             _exit(127);
         }
         if (pid < 0) {
-            fprintf(stderr, "init: e2fsck: %s: fork failed\n", nodes[i]);
+            fprintf(stderr, "init: e2fsck: %s: fork failed\n", node);
             continue;
         }
         while (waitpid(pid, &status, 0) < 0) {
@@ -517,7 +522,7 @@ static void check_ext2_partitions(void)
                 break;
             }
         }
-        fprintf(stderr, "init: e2fsck: %s: status %d\n", nodes[i],
+        fprintf(stderr, "init: e2fsck: %s: status %d\n", node,
                 WIFEXITED(status) ? WEXITSTATUS(status) : 8);
     }
 }
@@ -580,8 +585,6 @@ static int boot_wants_userland_network(void)
 #define DISK_KEYS_FILE  "/boot/recovery_authorized_keys"
 #define DISK_KEYS_MOUNT "/mnt/recovery-partition"
 #define DISK_KEYS_MAX   16384
-/* The kernel's own limit on disks, DISK_MAX in rach2/sys/block/disk.h. */
-#define DISK_NODES      8
 /* The recovery partition's label as it is in its FAT32 boot sector, at byte
  * 71, padded to 11 bytes: tools/image/mkdisk_grub.sh gives it, and the boot
  * loader's core finds the partition by it when the boot partition does not

@@ -77,13 +77,16 @@ When the boot line includes
 .Ql rach2.fsck ,
 init runs
 .Ql e2fsck -p
-on each partition from
-.Pa /dev/disk0p1
-through
-.Pa /dev/disk0p4
+on each partition
+.Pa /dev/disk Ns Ar N Ns Pa p Ns Ar M ,
+for each disk
+.Ar N
+from 0 to 7 and partition
+.Ar M
+from 1 to 15,
 whose superblock has the ext2 magic number.
 It records the result as:
-.Dl init: e2fsck: /dev/disk0pN: status S
+.Dl init: e2fsck: /dev/diskNpM: status S
 See
 .Xr recovery 7 .
 .Pp

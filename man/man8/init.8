@@ -91,10 +91,13 @@ With
 .Ql rach2.fsck
 on the boot line, it first runs
 .Ql e2fsck -p
-on each of
-.Pa /dev/disk0p1
-through
-.Pa /dev/disk0p4
+on each partition
+.Pa /dev/disk Ns Ar N Ns Pa p Ns Ar M ,
+for each disk
+.Ar N
+from 0 to 7 and partition
+.Ar M
+from 1 to 15,
 whose superblock has the ext2 magic.
 Its console session is a shell without a login, since the image has no
 accounts of the machine's; see
@@ -247,7 +250,7 @@ to the first.
 .El
 .Sh DIAGNOSTICS
 The recovery file system check reports its status as:
-.Dl init: e2fsck: /dev/disk0pN: status S
+.Dl init: e2fsck: /dev/diskNpM: status S
 .Sh SEE ALSO
 .Xr login 1 ,
 .Xr bootlog 4 ,
