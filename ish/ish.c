@@ -111,10 +111,10 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
         return 0;
     }
 
-    char *stdin_file = ish_extract_last_stdin_redirection_file(arguments);
+    char *stdin_file = ish_extract_first_stdin_redirection_file(arguments);
     int stdin_descriptor = !stdin_file ? -1 : open(stdin_file, Standard_Input_File_Flags);
 
-    char *stdout_file = ish_extract_last_stdout_redirection_file(arguments);
+    char *stdout_file = ish_extract_first_stdout_redirection_file(arguments);
     int stdout_descriptor = !stdout_file ? -1 : creat(stdout_file, Standard_Output_File_Mode);
 
     if ((stdin_file && stdin_descriptor < 0) || (stdout_file && stdout_descriptor < 0)) {

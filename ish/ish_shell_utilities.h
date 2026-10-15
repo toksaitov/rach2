@@ -47,9 +47,9 @@ char *ish_get_first_environment_variable(const char *key, unsigned long key_leng
  * A later search for `>` stops at that null, which is why a line that
  * redirects both streams must write `>` first.
  */
-char *ish_extract_last_stdin_redirection_file(char **arguments);
+char *ish_extract_first_stdin_redirection_file(char **arguments);
 
-/** As `ish_extract_last_stdin_redirection_file`, for the first `>`. */
-char *ish_extract_last_stdout_redirection_file(char **arguments);
+/** As `ish_extract_first_stdin_redirection_file`, for the first `>`. */
+char *ish_extract_first_stdout_redirection_file(char **arguments);
 
 #endif
