@@ -1,3 +1,8 @@
+/*
+ * krffs_file_system.c: the layout of an empty file system, as
+ * krffs_file_system.h declares it.
+ */
+
 #include "krffs_file_system.h"
 
 #include "krffs_node.h"

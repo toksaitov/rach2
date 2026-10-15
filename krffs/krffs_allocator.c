@@ -1,3 +1,7 @@
+/*
+ * krffs_allocator.c: the first-fit allocator of krffs_allocator.h.
+ */
+
 #include "krffs_allocator.h"
 
 #include "krffs_file_system.h"
@@ -79,7 +83,6 @@ struct krffs_node *krffs_allocate_reserved_node(struct krffs_file_system *file_s
     return result;
 }
 
-/** Resize a reserved node and update its logical data length. */
 struct krffs_node *krffs_resize_reserved_node(struct krffs_file_system *file_system,
                                               struct krffs_node *node, uint64_t size)
 {
@@ -108,7 +111,6 @@ struct krffs_node *krffs_resize_reserved_node(struct krffs_file_system *file_sys
 
         if (next_node != file_system->node && next_node->type == KRFFS_Free_Node &&
             next_node->size >= difference) {
-            /* Grow into the trailing free block. */
             node->size += difference;
             node->data_size = size;
 
@@ -138,7 +140,6 @@ struct krffs_node *krffs_resize_reserved_node(struct krffs_file_system *file_sys
 
             krffs_sync_mapping(next_node, sizeof(*next_node));
         } else {
-            /* No adjacent room, so relocate to a fresh block. */
             result = krffs_allocate_reserved_node(file_system, size, node);
 
             if (result) {
@@ -156,7 +157,6 @@ struct krffs_node *krffs_resize_reserved_node(struct krffs_file_system *file_sys
         result = node;
 
         if (next_node->type == KRFFS_Free_Node) {
-            /* Merge the freed tail into the adjacent free block. */
             node = krffs_get_next_node(file_system, node);
 
             krffs_initialize_free_node(node, difference + next_node->size, size_with_header);

@@ -1,3 +1,7 @@
+/*
+ * krffs_file_system.h: the handle of a mapped KRFFS region, the constants of
+ * the format, and the layout of an empty file system.
+ */
 #ifndef KRFFS_FILE_SYSTEM_H
 #define KRFFS_FILE_SYSTEM_H
 
@@ -6,21 +10,20 @@
 
 struct krffs_node;
 
-/**
- * Magic value at the start of each metadata node, used to identify the file
- * system and check its consistency. The bytes are the ASCII codes of `K` and
- * `R`.
- */
+/** The magic number every node begins with: the ASCII codes of `K` and `R`. */
 static const uint16_t KRFFS_File_System_Magic = 0x4B52;
 
-/** Name of the file system's root node. */
+/** The root node's name, which is empty. */
 static const char KRFFS_File_System_Root_Node_Name[] = "";
 
-/** Mode of the file system's root node. */
+/** The mode `mkfs.krffs` gives the root: 0755, with no type bits. */
 static const uint16_t KRFFS_File_System_Root_Node_Mode = 0755;
 
 /**
- * File system handle. Nodes point into the pages mapped from the backing file.
+ * A KRFFS region mapped into memory: `node` is the root, at the first byte of
+ * the mapping, and `size` is the region's length in bytes. Every node a tool
+ * holds is a pointer into the mapping, so a store into a node is a store
+ * into the file.
  */
 struct krffs_file_system {
     struct krffs_node *node;
@@ -28,8 +31,10 @@ struct krffs_file_system {
 };
 
 /**
- * Initializes the file system, writing a root metadata node followed by a
- * free-space node that spans the rest of the mapping.
+ * Writes an empty file system over the region of `file_system`, which must be
+ * at least two headers: a root node (`krffs_initialize_root_node`), whose
+ * header is not synced, and one free node over the rest, whose header is.
+ * Returns `file_system`.
  */
 struct krffs_file_system *krffs_initialize_file_system(struct krffs_file_system *file_system);
 
