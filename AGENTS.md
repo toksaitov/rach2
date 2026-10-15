@@ -22,7 +22,7 @@ This file states the rules in force; their history is in commit messages and `de
 * Claude Code does the work: code, tests and prose. Codex does work only when the owner asks for it.
 * The owner's Claude Code session is also the manager of the process, as the section of that name says. The workers are the Claude Code sessions of the five accounts.
 * Codex reviews the whole diff of a phase once the phase's last issue has landed, and otherwise only when the owner asks. Only the owner's accounts are signed in to Codex, so the manager runs the review, one unit after another between its checks, and each finding it keeps becomes a `bug` issue. Nothing waits for the review: no push, no issue, no night's run and no milestone's close.
-* Claude Code may run at most three helpers at once, each Claude Opus 5.5 at xhigh effort in a git worktree of its own, as `CLAUDE.md` says; it starts no other subagents. Codex, one Astra instance at xhigh effort at a time, is used for review. A helper or Codex does its work itself and starts no subagents.
+* Claude Code may run at most three helpers at once, each Claude Opus 5.5 in a git worktree of its own, at the effort `CLAUDE.md` gives; it starts no other subagents. Codex, one Astra instance at xhigh effort at a time, is used for review. A helper or Codex does its work itself and starts no subagents.
 
 ## Work
 
