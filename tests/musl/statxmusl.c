@@ -1,21 +1,22 @@
 /**
- * statx, which GNU libc and musl call first for every stat.
+ * statxmusl: check that statx agrees with fstatat on every kind of file.
  *
- * Each row asks the raw statx and the raw fstatat64 (newfstatat on x86-64)
- * about one object and
- * requires them to agree: the type and permission bits, the inode, the link
- * count, the owner, the size, the blocks, the three times, and the device
- * numbers, which statx splits into major and minor numbers that makedev
- * joins again. The objects are a regular file, a directory, a FIFO,
- * /dev/null (major 1, minor 3), /proc/self followed and not, a pipe named by
- * its descriptor with AT_EMPTY_PATH, and the working directory named by
- * AT_FDCWD and an empty path, and on x86-64 a file whose times are 2^31
- * seconds, which statx reports whole. The mask reports the basic set. Then the
- * refusals: a flag statx does not take, both sync flags at once, the
- * reserved mask bit, a missing file, and an empty path without
- * AT_EMPTY_PATH.
+ * On i686 both GNU libc and musl call statx first for every stat, since its
+ * times are 64 bits wide. Each row asks the raw statx and the raw fstatat64
+ * (newfstatat on x86-64) about one object and requires them to agree: the
+ * type and permission bits, the inode, the link count, the owner, the size,
+ * the blocks, the three times, and the device numbers, which statx splits
+ * into major and minor numbers that makedev joins again. The objects are a
+ * regular file, a directory, a FIFO, /dev/null (major 1, minor 3), /proc/self
+ * followed and not, a pipe named by its descriptor with AT_EMPTY_PATH, and
+ * the working directory named by AT_FDCWD and an empty path, and on x86-64 a
+ * file whose times are 2^31 seconds, which statx reports whole. The mask
+ * reports the basic set. Then the errors: a flag statx does not take, both
+ * sync flags at once, the reserved mask bit, a missing file, and an empty
+ * path without AT_EMPTY_PATH.
  *
- * Prints "STATXMUSL OK" on success and "STATXMUSL FAIL (detail)" otherwise.
+ * Prints `STATXMUSL OK` and exits 0 on success, and prints
+ * `STATXMUSL FAIL (detail)` and exits 1 otherwise.
  */
 
 #define _GNU_SOURCE
@@ -139,8 +140,11 @@ static int refused(const char *path, int flags, unsigned mask, int err)
     return raw_statx(AT_FDCWD, path, flags, mask, &sx) == -1 && errno == err;
 }
 
-/** A regular file just written agrees in both calls on its type, size and
- * mode, and on x86-64 on a time past 2^31 seconds. */
+/**
+ * Write a regular file and check that both calls agree on it and report its
+ * type, size and mode, and on x86-64 a time of 2^31 seconds. Returns 0, or 1
+ * once the failure is reported.
+ */
 static int regular_file(void)
 {
     struct statx sx;
@@ -168,10 +172,13 @@ static int regular_file(void)
     return 0;
 }
 
-/** The kinds of file, each asked of both calls: a regular file, a
- * directory, a FIFO, a device, a symbolic link followed and not, a pipe and
- * the working directory by an empty path, and a relative path with a sync
- * flag. */
+/**
+ * Check each kind of file with both calls: a regular file, a directory, a
+ * FIFO, a device, a symbolic link followed and not, a pipe and the working
+ * directory by an empty path, and a relative path with a sync flag. Leaves
+ * the working directory at /tmp. Returns 0, or 1 once the failure is
+ * reported.
+ */
 static int kinds(void)
 {
     struct statx sx, tmp;

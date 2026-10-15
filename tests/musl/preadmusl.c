@@ -1,7 +1,8 @@
 /**
- * Positioned reads and writes: pread64 and pwrite64, which musl's and GNU
- * libc's pread and pwrite are, with the offset split over ESI and EDI, or on
- * x86-64 whole in R10.
+ * preadmusl: check positioned reads and writes, and lseek of /proc files.
+ *
+ * musl's and GNU libc's pread and pwrite are pread64 and pwrite64, with the
+ * offset split over ESI and EDI on i686, or whole in R10 on x86-64.
  *
  * The rows read and write a file at offsets and require the descriptor's own
  * offset to stay where lseek left it, a write past the end to leave a hole of
@@ -12,12 +13,13 @@
  * call 19 (both lseek, call 8, on x86-64), and not with SEEK_END;
  * /proc/self/mem seeks to an address of the stack, above 4 GiB on x86-64, and
  * on i686 a write of it 4 GiB past an address is EIO; a writable /proc/sys file
- * reads nothing at 4 GiB. Then each refusal, in Linux's order: a negative
- * offset before the descriptor, a pipe, a socket and the terminal that cannot
- * seek, a descriptor open for the other direction, an end past the signed
- * range, and a directory.
+ * reads nothing at 4 GiB. Then each error, in Linux's order: a negative offset
+ * before the descriptor, a pipe, a socket and the terminal that cannot seek, a
+ * descriptor open for the other direction, an end past the signed range, and
+ * a directory.
  *
- * Prints "PREADMUSL OK" on success and "PREADMUSL FAIL (detail)" otherwise.
+ * Prints `PREADMUSL OK` and exits 0 on success, and prints
+ * `PREADMUSL FAIL (detail)` and exits 1 otherwise.
  */
 
 #define _GNU_SOURCE
@@ -70,7 +72,10 @@ static int offset_is(int fd, off_t want)
     return lseek(fd, 0, SEEK_CUR) == want;
 }
 
-/** Reads and writes of a file at offsets, and the offset they leave alone. */
+/**
+ * Check reads and writes of a file at offsets, and the descriptor's offset,
+ * which they leave alone. Returns 0, or 1 once the failure is reported.
+ */
 static int file_rows(void)
 {
     char buf[32];
@@ -124,7 +129,10 @@ static int file_rows(void)
     return 0;
 }
 
-/** A /proc snapshot and /dev/zero read at offsets. */
+/**
+ * Check a /proc snapshot, /dev/zero and /dev/null read at offsets. Returns 0,
+ * or 1 once the failure is reported.
+ */
 static int device_rows(void)
 {
     char whole[64], part[16], next[8], at[8];
@@ -166,7 +174,8 @@ static const char mem_mark[] = "procseek";
  * SEEK_SET and SEEK_CUR move the offset, by _llseek and by the old call 19
  * (both lseek on x86-64), and the read after each finds the bytes at the offset
  * returned, so an offset returned and not kept fails; SEEK_END is EINVAL, and
- * an address of /proc/self/mem reads what the probe has there.
+ * an address of /proc/self/mem reads what the probe has there. Returns 0, or
+ * 1 once the failure is reported.
  */
 static int proc_seek_rows(void)
 {
@@ -199,6 +208,7 @@ static int proc_seek_rows(void)
  * the probe has there; on i686, where no address passes 32 bits, a write at
  * 4 GiB past a variable's address is EIO and leaves the variable; and
  * /proc/sys/kernel/hostname, open for writing too, reads nothing at 4 GiB.
+ * Returns 0, or 1 once the failure is reported.
  */
 static int wide_proc_rows(void)
 {
@@ -227,7 +237,10 @@ static int wide_proc_rows(void)
     return 0;
 }
 
-/** Each refusal, in the order Linux makes them. */
+/**
+ * Check each error, in the order Linux checks for them. Returns 0, or 1 once
+ * the failure is reported.
+ */
 static int refusal_rows(void)
 {
     char buf[8];

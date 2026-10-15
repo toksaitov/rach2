@@ -1,23 +1,25 @@
 /**
- * truncate by path: truncate64, which musl's and GNU libc's truncate are,
- * with the length in ECX and EDX, and the older call 92 with a signed 32-bit
- * length in ECX. On x86-64 both are truncate, call 76, with the whole length
- * in RSI.
+ * truncmusl: check truncate by path through both of its system calls.
+ *
+ * On i686 musl's and GNU libc's truncate is truncate64, call 193, with the
+ * length in ECX and EDX, and the older call 92 takes a signed 32-bit length
+ * in ECX. On x86-64 both are truncate, call 76, with the whole length in RSI.
  *
  * The rows shorten and lengthen a file through both, and require an
  * extension to read as zeros and a descriptor open on the file to see each
  * new length, including one the file has to move to reach. An unprivileged
- * caller's truncation drops the set-id bits, one the file has to move for
+ * caller's truncation clears the set-id bits, one the file has to move for
  * included, a privileged caller's keeps them, and a caller without write
- * permission is refused. A file that has to move is made afresh for the row,
- * empty, with a second empty file made right after it, so that nothing
- * behind its node is free, the method tests/fdstale.c describes. Then each
- * refusal, in Linux's order: a negative length before the path is looked at,
- * a missing file, a directory, a device, a /proc file, a file used as a
+ * permission fails with EACCES. A file that has to move is made afresh for
+ * the row, empty, with a second empty file made right after it, so that
+ * nothing behind its node is free, the method tests/fdstale.c describes. Then
+ * each error, in Linux's order: a negative length before the path is looked
+ * at, a missing file, a directory, a device, a /proc file, a file used as a
  * directory, a path too long, and a length past what the file system can
  * hold.
  *
- * Prints "TRUNCMUSL OK" on success and "TRUNCMUSL FAIL (detail)" otherwise.
+ * The program runs as root. It prints `TRUNCMUSL OK` and exits 0 on success,
+ * and prints `TRUNCMUSL FAIL (detail)` and exits 1 otherwise.
  */
 
 #define _GNU_SOURCE
@@ -129,7 +131,11 @@ static int as_user(off_t length, int want, int err)
            WEXITSTATUS(status) == 0;
 }
 
-/** Lengths through both calls, as a descriptor open on the file sees them. */
+/**
+ * Check lengths set through both calls, as a descriptor open on the file sees
+ * them, and a length the file must move to reach. Returns 0, or 1 once the
+ * failure is reported.
+ */
 static int length_rows(void)
 {
     char buf[16];
@@ -174,7 +180,10 @@ static int length_rows(void)
     return 0;
 }
 
-/** The set-id bits and write permission, as root and as uid 1000. */
+/**
+ * Check the set-id bits and write permission, as root and as uid 1000.
+ * Returns 0, or 1 once the failure is reported.
+ */
 static int identity_rows(void)
 {
     if (chmod(FILE_PATH, 06777) != 0 || truncate(FILE_PATH, 3) != 0 || !mode_is(06777)) {
@@ -193,7 +202,10 @@ static int identity_rows(void)
     return 0;
 }
 
-/** Each refusal, in the order Linux makes them. */
+/**
+ * Check each error, in the order Linux checks for them. Returns 0, or 1 once
+ * the failure is reported.
+ */
 static int refusal_rows(void)
 {
     char *longpath;

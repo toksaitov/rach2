@@ -1,21 +1,20 @@
 /**
- * The descriptor forms of the calls that take a path, which are what GNU
- * libc's fstat and futimens are: fstatat64 with an empty path and
- * AT_EMPTY_PATH, and utimensat with a NULL path.
+ * fdcallmusl: check the descriptor forms of the calls that take a path.
  *
- * musl reaches few of them: its fstat is fstat64 (fstat on x86-64), and its
- * fstatat turns an empty path into that as well. So the rows call the kernel
- * by number, with the layout the kernel writes, and require the empty-path
- * form to report what fstat64 reports for the same descriptor, byte for byte,
- * on
- * each kind of descriptor there is: a file, a directory, a pipe, a socket, a
- * device and the terminal. With AT_FDCWD the empty path is the working
- * directory, which must report what a path to it reports.
+ * GNU libc's fstat and futimens are these forms: fstatat64 with an empty path
+ * and AT_EMPTY_PATH, and utimensat with a NULL path. musl makes few of them:
+ * on x86-64 its fstat is fstat and its fstatat makes an empty path with
+ * AT_EMPTY_PATH an fstat too, and on i686 both make statx. So the rows call
+ * the kernel by number, with the layout the kernel writes, and require the
+ * empty-path form to report what fstat64 reports for the same descriptor,
+ * byte for byte, on each kind of descriptor there is: a file, a directory, a
+ * pipe, a socket, a device and the terminal. With AT_FDCWD the empty path is
+ * the working directory, which must report what a path to it reports.
  *
  * utimensat with a NULL path sets the times of the file the descriptor is
  * open on, and so does an empty path with AT_EMPTY_PATH; musl's futimens is
- * the same call. The rows set explicit times and read them back, and ask for
- * each refusal Linux makes of a NULL path: a flag, AT_FDCWD, a descriptor
+ * the same call. The rows set explicit times and read them back, and check
+ * each error Linux returns for a NULL path: a flag, AT_FDCWD, a descriptor
  * that is not open, and a nanosecond count out of range, besides the pipe
  * that has no times to set. Two UTIME_OMIT return 0 before anything else is
  * looked at.
@@ -25,7 +24,8 @@
  * process substitution reads it, and a file opened by its link starts a
  * description of its own at offset 0; /dev/stdin is descriptor 0's file.
  *
- * Prints "FDCALLMUSL OK" on success and "FDCALLMUSL FAIL (detail)" otherwise.
+ * Prints `FDCALLMUSL OK` and exits 0 on success, and prints
+ * `FDCALLMUSL FAIL (detail)` and exits 1 otherwise.
  */
 
 #define _GNU_SOURCE
@@ -144,7 +144,10 @@ static int same_as_fstat(int fd, unsigned int type, const char *path)
     return memcmp(&by_fd, &by_empty, sizeof(by_fd)) == 0 && (by_fd.st_mode & 0170000) == type;
 }
 
-/** The empty path on each kind of descriptor. */
+/**
+ * Check fstatat with an empty path on each kind of descriptor, with AT_FDCWD,
+ * and its errors. Returns 0, or 1 once the failure is reported.
+ */
 static int stat_rows(void)
 {
     struct kstat by_path, by_empty;
@@ -241,7 +244,7 @@ static int times_are(int fd, const char *path, long sec, long nsec)
            (long)st.st_mtime_sec == sec && (long)st.st_mtime_nsec == nsec;
 }
 
-/** Both times of `kt` set to `sec` and `nsec`. */
+/** Set both times of `kt` to `sec` and `nsec`. */
 static void set_both(struct ktimespec *kt, long sec, long nsec)
 {
     kt[0].tv_sec = sec;
@@ -250,7 +253,12 @@ static void set_both(struct ktimespec *kt, long sec, long nsec)
     kt[1].tv_nsec = nsec;
 }
 
-/** utimensat with a NULL path, and with an empty one and AT_EMPTY_PATH. */
+/**
+ * Check utimensat with a NULL path, and with an empty one and AT_EMPTY_PATH,
+ * on `fd`, a descriptor open on `FILE_PATH`, and the errors for a NULL path.
+ * Makes `DIR_PATH` for the working-directory row. Returns 0, or 1 once the
+ * failure is reported.
+ */
 static int utimens_rows(int fd)
 {
     struct ktimespec kt[2];
@@ -329,7 +337,10 @@ static int utimens_rows(int fd)
     return 0;
 }
 
-/* Opens of descriptors by their links. */
+/**
+ * Check opens of descriptors by their links in /dev/fd and /proc/self/fd, and
+ * /dev/stdin. Returns 0, or 1 once the failure is reported.
+ */
 static int fd_link_rows(void)
 {
     char path[32], buf[8];

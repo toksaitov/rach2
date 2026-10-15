@@ -1,21 +1,27 @@
 /**
- * Every stat path reports the times the file system stores.
+ * statmusl: check that every stat path reports the times the file system has.
  *
- * This kernel fills a stat buffer in four places: `krffs_fill_stat64` for a
+ * The kernel fills a stat buffer in four places: `krffs_fill_stat64` for a
  * path, `fstat_fill` for a descriptor, `do_old_stat` for the narrower stat(2)
- * ABI that only i386 has, and `synth_stat` for `/dev` and `/proc`. All four
- * zeroed the three times, and a fix to one of them would leave the others
- * reporting 1970, so each is asked here separately, not trusted to share code.
+ * ABI that only i386 has, and `synth_stat` for /dev and /proc. A fault in one
+ * leaves the others right, so each is reached here by a call of its own. On
+ * i686 musl's stat, lstat, fstat and fstatat all make statx, which fills
+ * through the same code; on x86-64 they make stat, lstat, fstat and
+ * newfstatat.
  *
- * The times are SET with `utimensat`, which is the one call that already wrote
- * them before this milestone, so this probe stands on its own: it proves the
- * reporting without needing anything to stamp. Two paths cannot be proved that
- * way and are not asked to be: `utimensat` reports success for the root without
- * modifying it, and refuses a synthetic path with EROFS. The root is proved
- * where creating a file in it stamps it (see the stamping probe); a synthetic
- * node is proved here against the boot time instead, which is what it reports.
+ * The times are set with `utimensat`, so the probe needs no other call to
+ * stamp a file. Two kinds of node cannot be checked that way:
+ * `utimensat` succeeds for the KRFFS root without changing its times, and
+ * fails with EROFS for a synthetic node. stampmusl checks the root, where a
+ * file made in it stamps it. A synthetic node reports the boot time, and the
+ * probe computes that as the real time less the time since boot, instead of
+ * comparing two synthetic nodes, which a fill that returned the same wrong
+ * constant for both would pass. On a machine whose clock could not be read
+ * the real time is the time since boot, so the computed boot time is zero,
+ * which is also what a synthetic node reports then.
  *
- * Prints "STATMUSL OK" on success and "STATMUSL FAIL (detail)" otherwise.
+ * Prints `STATMUSL OK` and exits 0 on success, and prints
+ * `STATMUSL FAIL (detail)` and exits 1 otherwise.
  */
 
 #define _GNU_SOURCE
@@ -30,12 +36,10 @@
 #if !defined __x86_64__
 /*
  * The old stat(2) struct, as the kernel writes it (struct linux_stat in
- * rach2/sys/syscall.c). It is declared here because musl never issues that call
- * on i386: stat() goes to statx, which this kernel does not have, and falls
- * back to fstatat64. So the only way to ask the old fill anything is to ask for
- * it by number, and a fill nothing exercises is a fill nobody notices is wrong.
- * x86-64 has no narrower stat: its stat(2) is the whole struct, which musl's
- * stat reaches, and the rows of the old struct are built for i686 alone.
+ * rach2/sys/arch/i686/uabi.h). musl never makes that call, since its stat on
+ * i386 goes to statx, so the probe makes it by number. x86-64 has no narrower
+ * stat: its stat(2) is the whole struct, which musl's stat reaches, and the
+ * rows of the old struct are built for i686 alone.
  */
 struct old_stat {
     unsigned long st_dev;
@@ -75,7 +79,8 @@ static int fail(const char *what)
     return 1;
 }
 
-/** Whether a stat's three times are the instant set above. */
+/** Whether a stat's access and modification times are `WHEN_SEC` and
+ * `WHEN_NSEC`. */
 static int times_match(const struct stat *st)
 {
     return (long)st->st_mtim.tv_sec == WHEN_SEC && (long)st->st_mtim.tv_nsec == WHEN_NSEC &&
@@ -83,10 +88,10 @@ static int times_match(const struct stat *st)
 }
 
 /**
- * Whether a stat's ctime is the moment `utimensat` ran, which is the one of the
- * three that call sets to NOW, not to what it was handed. Bounded rather
- * than compared: it is a real instant, so the test is that it lies between two
- * readings of the clock taken around the call.
+ * Whether a stat's ctime is the moment `utimensat` ran: that call sets ctime
+ * to the current time, whatever times it was given. The time is checked to
+ * lie between `before` and `after`, two readings of the clock taken around
+ * the call.
  */
 static int ctime_between(const struct stat *st, long before, long after)
 {
@@ -128,7 +133,7 @@ int main(void)
     }
     after = (long)time(NULL);
 
-    /* stat64, through a path. */
+    /* stat, through a path. */
     if (stat(PATH, &st) != 0 || !times_match(&st)) {
         close(fd);
         return fail("stat did not report the times that were set");
@@ -137,22 +142,19 @@ int main(void)
         close(fd);
         return fail("stat did not report the attribute-change time");
     }
-    /* lstat64: the same node, the other entry point. */
+    /* lstat: the same node, the other entry point. */
     if (lstat(PATH, &st) != 0 || !times_match(&st)) {
         close(fd);
         return fail("lstat did not report the times that were set");
     }
-    /* fstat64, through the descriptor: a different fill entirely. */
+    /* fstat, through the descriptor: a different fill. */
     if (fstat(fd, &st) != 0 || !times_match(&st)) {
         close(fd);
         return fail("fstat did not report the times that were set");
     }
     close(fd);
 
-    /* fstatat64 (300), which needs a real directory descriptor and a RELATIVE
-     * name to reach: musl turns fstatat(AT_FDCWD, "/abs", ...) into a plain
-     * stat, so the obvious spelling of this assertion would have tested the
-     * call above a second time. */
+    /* A relative name: on x86-64 musl makes fstatat(AT_FDCWD, ...) a stat. */
     dirfd = open("/", O_RDONLY | O_DIRECTORY);
     if (dirfd < 0) {
         return fail("could not open the root directory");
@@ -167,8 +169,7 @@ int main(void)
     }
     close(dirfd);
 
-    /* A directory, which reports its own times and its own type. The old ABI
-     * reported every KRFFS node as a regular file until this milestone. */
+    /* A directory, which reports its own times and its own type. */
     if (mkdir(DIR, 0755) != 0) {
         return fail("could not create the directory");
     }
@@ -213,15 +214,7 @@ int main(void)
     }
 #endif
 
-    /* A synthetic node reports the BOOT time, and the probe works out what that
-     * should be instead of taking the answer from the thing it is testing: the
-     * real time now, minus the time since boot, is when this machine started. A
-     * fill returning a stable wrong constant passes a check that only asks
-     * whether two synthetic nodes agree, so the value is computed here.
-     *
-     * On a machine whose clock could not be read this comes out at zero, and
-     * that is the documented fallback, not a failure: the two clocks
-     * then report the same thing and the difference between them is nothing. */
+    /* A synthetic node: the boot time, the real time less the uptime. */
     if (clock_gettime(CLOCK_REALTIME, &now) != 0 || clock_gettime(CLOCK_MONOTONIC, &uptime) != 0) {
         return fail("clock_gettime failed");
     }
@@ -249,8 +242,7 @@ int main(void)
         return fail("a synthetic node's time moved between two stats");
     }
 
-    /* And through a DESCRIPTOR on a synthetic node, which is a fifth place the
-     * kernel fills a stat: fstat_fill's own branches, not krffs_fill_stat64. */
+    /* fstat of a synthetic node, through fstat_fill's own branches. */
     fd = open("/dev/null", O_RDONLY);
     if (fd < 0) {
         return fail("could not open /dev/null");
