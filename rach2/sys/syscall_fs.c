@@ -4447,13 +4447,14 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf, uint32_t 
 }
 
 /**
- * The datagram is copied into a kernel buffer and consumed under one hold of
- * `net_lock`, and only then spread across the buffers. A system call runs with
- * interrupts enabled (net.h), so without the hold the receive interrupt could
- * put the next datagram in the socket between two buffers, and the caller would
- * get a prefix of one message and bytes of another. The sender is read under
- * the same hold, so it is this datagram's, and a datagram gone between the wait
- * and the hold counts as one of no bytes.
+ * The datagram at the head of the queue is copied into a kernel buffer, its
+ * sender read and the datagram consumed under one hold of `net_lock`, and only
+ * then spread across the buffers. A system call runs with interrupts enabled
+ * (net.h), so without the hold the timer could switch to another reader of the
+ * same socket after the copy: the two would copy one datagram and consume two,
+ * and the sender reported could be the next datagram's. The receive interrupt
+ * appends only at the tail, so it cannot change the datagram at the head. A
+ * datagram gone between the wait and the hold counts as one of no bytes.
  *
  * The spread runs with interrupts on, through `copy_to_user`, and reads each
  * iovec from user memory as it goes, so a buffer may point at the caller's own
