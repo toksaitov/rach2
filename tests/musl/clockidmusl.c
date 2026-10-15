@@ -1,5 +1,6 @@
 /**
- * The eight clocks, their resolutions, and the sleeps against them.
+ * clockidmusl: check the eight clocks, their resolutions, and the sleeps
+ * against them.
  *
  * Every row judges what the kernel counts. Time since boot is read within the
  * tick: two readings of `CLOCK_MONOTONIC` differ by less than a tick, raw and
@@ -9,8 +10,8 @@
  * progress and one for a tick the fine clock counts before its interrupt is
  * taken; the CPU clocks advance while this process spins and agree with what
  * `times` reports; a CPU clock by process id, the form `clock_getcpuclockid`
- * returns, reads that process's time, and an id of no process is refused. A
- * child blocked after reporting its own CPU time has a clock by id that reads
+ * returns, reads that process's time, and an id of no process fails with ESRCH.
+ * A child blocked after reporting its own CPU time has a clock by id that reads
  * what it reported, or one tick more, and that advances by the three ticks it
  * spins between two reports. Real time and time since boot resolve to the
  * microsecond, and the coarse and CPU clocks to the 10 ms tick, and on i686 the
@@ -22,15 +23,16 @@
  * boot, boot time and real time alike; a relative one must take at least its
  * interval of time since boot; a time already past returns without waiting. A
  * signal ends a relative sleep with a remainder no greater than the interval,
- * and an absolute one with none written. The raw and coarse clocks and the
- * thread CPU clock cannot be slept on, and a bad clock or request is refused.
- * Real time set past 2^31 seconds reads back whole, fine and coarse; on x86-64
- * a relative sleep of 2^32 seconds and an absolute one to 2^62 seconds wait
- * until a signal ends them. The caller's CPU clock returns at once for a time
- * it has reached, and a sleep on it for an interval ends once another thread of
- * the process, spinning, has advanced it that far.
+ * and an absolute one with none written. A sleep on the raw and coarse clocks
+ * and the thread CPU clock fails with EOPNOTSUPP, and a bad clock or request
+ * with EINVAL. Real time set past 2^31 seconds reads back whole, fine and
+ * coarse; on x86-64 a relative sleep of 2^32 seconds and an absolute one to
+ * 2^62 seconds wait until a signal ends them. The caller's CPU clock returns at
+ * once for a time it has reached, and a sleep on it for an interval ends once
+ * another thread of the process, spinning, has advanced it that far.
  *
- * Prints "CLOCKIDMUSL OK" on success and "CLOCKIDMUSL FAIL (detail)" otherwise.
+ * It prints "CLOCKIDMUSL OK" and exits 0 on success, or prints "CLOCKIDMUSL
+ * FAIL (detail)" and exits 1 at the first failure.
  */
 
 #define _GNU_SOURCE
@@ -71,6 +73,7 @@ struct kts {
  * nanoseconds of time since boot. */
 #define SPIN_BOUND_NS 10000000000LL
 
+/* The count of SIGALRM deliveries to on_alarm. */
 static volatile sig_atomic_t alarms;
 
 /** Report one failed check and return 1, the probe's failure status. */
@@ -81,7 +84,7 @@ static int fail(const char *what)
     return 1;
 }
 
-/** A clock's reading in nanoseconds, or -1 when it cannot be read. */
+/** Return the reading of clock `clk` in nanoseconds, or -1 on failure. */
 static long long ns_of(clockid_t clk)
 {
     struct timespec ts;
@@ -92,26 +95,32 @@ static long long ns_of(clockid_t clk)
     return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
-/** A kernel timespec as nanoseconds. */
+/** Convert a kernel timespec to nanoseconds. */
 static long long ns_kts(const struct kts *ts)
 {
     return (long long)ts->sec * 1000000000LL + ts->nsec;
 }
 
-/** A time in nanoseconds as a kernel timespec. */
+/** Convert a time in nanoseconds to a kernel timespec. */
 static void to_kts(long long ns, struct kts *ts)
 {
     ts->sec = (long)(ns / 1000000000LL);
     ts->nsec = (long)(ns % 1000000000LL);
 }
 
-/** The raw clock_nanosleep: 0, or -1 with errno set. */
+/**
+ * Make the raw clock_nanosleep with the kernel timespecs `req` and `rem`.
+ * Returns 0, or -1 with errno set.
+ */
 static long sleep_raw(long clk, long flags, const struct kts *req, struct kts *rem)
 {
     return syscall(SYS_CLOCK_NANOSLEEP, clk, flags, req, rem);
 }
 
-/** Spend a while in user mode without a system call. */
+/**
+ * Spend a while in user mode without a system call. Returns the sum the loop
+ * computed, so that the compiler keeps the loop.
+ */
 static unsigned int spin(void)
 {
     volatile unsigned int x = 0;
@@ -123,8 +132,10 @@ static unsigned int spin(void)
     return x;
 }
 
-/** Spin until clock `clk` has advanced by `want` ns, or for SPIN_BOUND_NS of
- * time since boot; returns how far it advanced. */
+/**
+ * Spin until clock `clk` has advanced by `want` ns, or for `SPIN_BOUND_NS` of
+ * time since boot. Returns how far it advanced, in nanoseconds.
+ */
 static long long spin_until(clockid_t clk, long long want)
 {
     long long start = ns_of(clk);
@@ -145,7 +156,7 @@ static void on_alarm(int sig)
     alarms++;
 }
 
-/** Arm a single SIGALRM `usec` microseconds from now. */
+/** Arm a single SIGALRM `usec` microseconds from now; 0 disarms the timer. */
 static void alarm_in(long usec)
 {
     struct itimerval it;
@@ -156,9 +167,11 @@ static void alarm_in(long usec)
     setitimer(ITIMER_REAL, &it, NULL);
 }
 
-/** Send SIGALRM every `usec` microseconds until `alarm_in(0)`: a sleep
- * begun after one alarm, by a process descheduled between the arming and
- * the call, is still ended by the next. */
+/**
+ * Send SIGALRM every `usec` microseconds until `alarm_in(0)`, so that a sleep
+ * begun after one alarm, by a process descheduled between the arming and the
+ * call, is still ended by the next.
+ */
 static void alarm_every(long usec)
 {
     struct itimerval it;
@@ -168,7 +181,10 @@ static void alarm_every(long usec)
     setitimer(ITIMER_REAL, &it, NULL);
 }
 
-/** The eight clocks, their resolutions, and the CPU clocks by id. */
+/**
+ * Check the eight clocks, their resolutions, and the CPU clocks by id.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int clocks(void)
 {
     static const clockid_t boot_clocks[] = {CLOCK_MONOTONIC_RAW, CLOCK_BOOTTIME};
@@ -276,8 +292,11 @@ static int clocks(void)
     return 0;
 }
 
-/** Report the child's own CPU time on `fd`, wait for a byte on `go`, spin
- * three ticks, report again and wait to be killed. */
+/**
+ * Run in the forked child: report its own CPU time on `fd`, wait for a byte
+ * on `go`, spin three ticks, report again and wait to be killed. Does not
+ * return.
+ */
 static void child_reports(int fd, int go)
 {
     long long own;
@@ -296,10 +315,13 @@ static void child_reports(int fd, int go)
     _exit(0);
 }
 
-/** A child's CPU clock by id, read each time the child has reported its own
- * time and blocked: at least what it reported and at most one tick more, and
- * three ticks further on after it spins. The parent does not run meanwhile,
- * so a clock that read the caller's time does not advance. */
+/**
+ * Check a child's CPU clock by id, read each time the child has reported its
+ * own time and blocked: at least what it reported and at most one tick more,
+ * and three ticks further on after it spins. The parent does not run
+ * meanwhile, so a clock that read the caller's time does not advance.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int child_clock(void)
 {
     long long own[2];
@@ -349,7 +371,10 @@ static int child_clock(void)
     return 0;
 }
 
-/** The sleeps against each clock, their remainders and their refusals. */
+/**
+ * Check the sleeps against each clock, their remainders and their errors.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int sleeps(void)
 {
     static const long nosleep[] = {CLOCK_THREAD_CPUTIME_ID, CLOCK_MONOTONIC_RAW,
@@ -433,10 +458,13 @@ static int sleeps(void)
     return 0;
 }
 
+/* Nonzero while spinner is to go on spinning. */
 static volatile int spinning;
 
-/** Spin until `spinning` is cleared: another thread of the process, whose
- * time the process's CPU clock counts. */
+/**
+ * Run as another thread of the process, whose time the process's CPU clock
+ * counts: spin until `spinning` is cleared.
+ */
 static void *spinner(void *arg)
 {
     (void)arg;
@@ -447,10 +475,10 @@ static void *spinner(void *arg)
 }
 
 /**
- * A sleep of 50 ms on the process CPU clock, while another thread of the
- * process spins, returns 0 once the clock has advanced that far. A SIGALRM
- * ten seconds on ends the sleep with EINTR if the clock is not read while
- * the caller sleeps.
+ * Check that a sleep of 50 ms on the process CPU clock, while another thread
+ * of the process spins, returns 0 once the clock has advanced that far. A
+ * SIGALRM ten seconds on ends the sleep with EINTR if the clock is not read
+ * while the caller sleeps. Returns 0, or 1 after the failure is printed.
  */
 static int cpu_sleep_sibling(void)
 {
@@ -504,7 +532,10 @@ static void real_set_back(struct timespec t, const struct timespec *mono0)
 /* The real time the wide row sets: ten seconds past 2^31, early 2038. */
 #define PAST_2038 (((time_t)1 << 31) + 10)
 
-/** Whether `clk` reads from `least` seconds to a minute past PAST_2038. */
+/**
+ * Return 1 when `clk` reads from `least` seconds to a minute past
+ * `PAST_2038`, and 0 otherwise.
+ */
 static int reads_past_2038(clockid_t clk, time_t least)
 {
     struct timespec t;
@@ -512,12 +543,12 @@ static int reads_past_2038(clockid_t clk, time_t least)
     return clock_gettime(clk, &t) == 0 && t.tv_sec >= least && t.tv_sec <= PAST_2038 + 60;
 }
 
-/*
- * Times past 32 bits. Real time set to ten seconds past 2^31 reads back
- * whole, fine and coarse, the coarse clock as much as two ticks earlier, and
- * is set back after. On x86-64, whose raw calls
- * take a long, a relative sleep of 2^32 seconds and an absolute sleep to 2^62
- * seconds of time since boot each wait until a signal ends them.
+/**
+ * Check times past 32 bits. Real time set to ten seconds past 2^31 reads back
+ * whole, fine and coarse, the coarse clock as much as two ticks earlier, and is
+ * set back after. On x86-64, whose raw calls take a long, a relative sleep of
+ * 2^32 seconds and an absolute sleep to 2^62 seconds of time since boot each
+ * wait until a signal ends them. Returns 0, or 1 after the failure is printed.
  */
 static int wide_times(void)
 {
