@@ -4,7 +4,7 @@
 #
 # mkext2_overlay_test.sh: what an overlay adds to a volume of
 # tools/image/mkext2.sh has the same modes whatever the umask it was made
-# under.
+# under, and a failing mke2fs or debugfs leaves its diagnostic on stderr.
 #
 # A copy of mkext2.sh runs in a private tree with the built stager, the
 # set-id guard's source and an allowlist of the test's own, over a manifest
@@ -22,6 +22,11 @@
 # the two, each node's path, mode, owner and size, must be the same, with
 # /usr/libexec 0755, /tmp 1777 as the manifest asks, and the data file and
 # /tmp/scratch 0644; and the file the link names must keep its mode.
+#
+# Two more volumes are made from the manifest alone, each with a stand-in
+# first on the path for mke2fs or for debugfs that writes a line and exits
+# with status 1. mkext2.sh must fail, write its own message and the line,
+# and leave no image under the target's name.
 #
 # With --mutate each fault below is put into the copy of mkext2.sh and must
 # fail its row; the rows run again on the copy as it is at the end.
@@ -127,6 +132,38 @@ volume() {
         awk '{ print $1, $2, $3, $4, $5 }' > "$work/$2.nodes"
 }
 
+# fails TOOL: a directory of mke2fs, debugfs and e2fsck that run the
+# programs mkext2.sh would find, but for TOOL, which writes a line to stderr
+# and exits with status 1.
+fails() {
+    rm -rf "$work/fail-$1"
+    mkdir "$work/fail-$1"
+    for t in mke2fs debugfs e2fsck; do
+        if [ "$t" = "$1" ]; then
+            printf '#!/bin/sh\necho "injected failure in %s" >&2\nexit 1\n' "$t"
+        else
+            printf '#!/bin/sh\nexec "%s" "$@"\n' \
+                "$(sh -c '. "$1" && command -v "$2"' sh "$repo/tools/setup/e2fsprogs_path.sh" "$t")"
+        fi > "$work/fail-$1/$t"
+        chmod 0755 "$work/fail-$1/$t"
+    done
+}
+
+# refused TOOL TEXT: whether mkext2.sh, with TOOL failing, fails, writes
+# TEXT and TOOL's line, and leaves no image; when it does not, the last
+# lines it wrote are shown.
+refused() {
+    fails "$1"
+    rm -f "$work/fail.ext2"
+    if (cd "$work" && PATH="$work/fail-$1:$PATH" sh tools/image/mkext2.sh \
+            "$work/overlay-test.manifest" "$work/fail.ext2" 16) > "$work/fail-$1.log" 2>&1 ||
+        ! grep -qF "$2" "$work/fail-$1.log" ||
+        ! grep -qF "injected failure in $1" "$work/fail-$1.log" || [ -e "$work/fail.ext2" ]; then
+        tail -n 3 "$work/fail-$1.log" | sed 's/^/mkext2-overlay-test:   /'
+        return 1
+    fi
+}
+
 # mode NAME PATH: the mode, with its type, that NAME.nodes lists for PATH.
 mode() {
     [ -f "$work/$1.nodes" ] || return 0
@@ -160,6 +197,10 @@ rows() {
     fi
     [ -n "$(find "$work/outside" -perm 0666)" ] ||
         fail 'the file a link names outside the tree keeps its mode'
+    refused mke2fs 'mkext2: mke2fs failed with status 1' ||
+        fail 'a failing mke2fs leaves its diagnostic and no image'
+    refused debugfs 'mkext2: debugfs refused a command (status 1):' ||
+        fail 'a failing debugfs leaves its diagnostic and no image'
 }
 
 # fault NAME OLD NEW EXPECT: the copy of mkext2.sh with its one line OLD
@@ -189,6 +230,12 @@ if [ "$mutate" -ge 1 ]; then
     fault links-followed "$line" \
         '    find "$TREE" \( -perm -020 -o -perm -002 \) -exec chmod go-w {} +' \
         'the file a link names outside the tree keeps its mode'
+    fault mke2fs-status '    > "$MKLOG" 2>&1 || MKSTATUS=$?' '    > "$MKLOG" 2>&1' \
+        'a failing mke2fs leaves its diagnostic and no image'
+    fault debugfs-status \
+        'debugfs -w -f "$SCRIPT" "$TMP" > "$WORK/debugfs.log" 2>&1 || DBSTATUS=$?' \
+        'debugfs -w -f "$SCRIPT" "$TMP" > "$WORK/debugfs.log" 2>&1' \
+        'a failing debugfs leaves its diagnostic and no image'
     cp "$work/saved/mkext2.sh" "$work/tools/image/mkext2.sh"
 fi
 if [ "$mutate" -eq 2 ]; then
@@ -201,4 +248,4 @@ if [ "$failures" -ne 0 ]; then
     echo "mkext2-overlay-test: result: fail: $failures"
     exit 1
 fi
-echo 'mkext2-overlay-test: result: pass: an overlay adds the same modes under umask 022 and 002'
+echo 'mkext2-overlay-test: result: pass: an overlay adds the same modes under umask 022 and 002, and a failing mke2fs or debugfs leaves its diagnostic'

@@ -160,11 +160,11 @@ fi
 # with dir_index off, are fixed, so that one manifest makes one image.
 PROFILE="sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize"
 : > "$TMP"
+MKSTATUS=0
 E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 -O "$PROFILE" "$@" \
     -E hash_seed=52616368-3200-4578-7432-000000000002 \
     -U 52616368-3200-4578-7432-000000000001 -L rach2 -d "$TREE" "$TMP" "${SIZE}M" \
-    > "$MKLOG" 2>&1
-MKSTATUS=$?
+    > "$MKLOG" 2>&1 || MKSTATUS=$?
 grep -v '128-byte inodes cannot handle dates beyond 2038' "$MKLOG" >&2 || true
 [ "$MKSTATUS" -eq 0 ] || { echo "mkext2: mke2fs failed with status $MKSTATUS" >&2; exit 1; }
 
@@ -226,8 +226,8 @@ awk '{
 if [ -n "$OVERLAY" ]; then
     printf 'set_inode_field / %s @1\n' atime mtime ctime >> "$SCRIPT"
 fi
-debugfs -w -f "$SCRIPT" "$TMP" > "$WORK/debugfs.log" 2>&1
-DBSTATUS=$?
+DBSTATUS=0
+debugfs -w -f "$SCRIPT" "$TMP" > "$WORK/debugfs.log" 2>&1 || DBSTATUS=$?
 if [ "$DBSTATUS" -ne 0 ] || grep -v '^debugfs' "$WORK/debugfs.log" | grep -q .; then
     echo "mkext2: debugfs refused a command (status $DBSTATUS):" >&2
     grep -v '^debugfs' "$WORK/debugfs.log" | head -3 >&2
