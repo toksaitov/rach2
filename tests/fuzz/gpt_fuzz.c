@@ -11,11 +11,11 @@
 #include "../fuzz/fuzz.h"
 
 #define DISK_SECTORS 8192u
-/* The largest array the parser accepts, so every table the kernel would
-   read is one this harness can hold: 128 entries of 128 bytes. A smaller
-   buffer here would refuse the seed before a single entry was parsed. */
+/* The largest array the parser accepts, 128 entries of 128 bytes, so that
+   every table the kernel would read is one this harness can hold. */
 #define ARRAY_MAX    GPT_MAX_ARRAY_BYTES
 
+/** Store `v` at `p`, little-endian. */
 static void wr32(uint8_t *p, uint32_t v)
 {
     p[0] = (uint8_t)v;
@@ -24,6 +24,15 @@ static void wr32(uint8_t *p, uint32_t v)
     p[3] = (uint8_t)(v >> 24);
 }
 
+/**
+ * Take the input's first sector as the header and the bytes after it as the
+ * entry array, both padded with zeros, set both checksums, and parse the
+ * entries of a header the reader accepts.
+ *
+ * The array's checksum covers the size the header gives; a header whose
+ * count and entry size exceed `ARRAY_MAX` gets the checksum of the whole
+ * buffer, and its entries are not parsed.
+ */
 int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
 {
     uint8_t header[512];
@@ -41,9 +50,6 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
     }
     count = gpt_entry_count(header);
     entry_size = gpt_entry_size(header);
-    /* The array's checksum covers what the header says is there; a header
-       whose numbers exceed the array on offer is left for the reader to
-       refuse, with the checksum of what is there. */
     bytes = (count <= ARRAY_MAX && entry_size <= ARRAY_MAX && count * entry_size <= ARRAY_MAX)
                 ? count * entry_size
                 : ARRAY_MAX;

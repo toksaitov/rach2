@@ -1,8 +1,9 @@
 /**
  * Fuzz harness for the KRFFS core (sys/fs/krffs.c): the input is the volume,
- * reached through a memory backend as the host test reaches it. The walk
- * lists the root, walks to each entry and reads it; a node the core refuses
- * is its answer, and the sanitizers watch what it reads on the way.
+ * reached through a memory backend as the host test reaches it. The harness
+ * lists the root, walks to each entry and reads it. A call that fails has
+ * rejected the volume, which is a valid result; the faults the harness exists
+ * to find are the reads and writes out of bounds that the sanitizers report.
  *
  * fuzz-deps: rach2/sys/fs/krffs.c rach2/sys/lib/kstring.c
  * fuzz-deps: rach2/sys/lib/kctypes.c
@@ -10,6 +11,7 @@
 #include "../../rach2/sys/fs/krffs.h"
 #include "fuzz.h"
 
+/** The kernel log: discarded. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -17,11 +19,13 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
+/** The console: discarded. */
 void console_printf(const char *format, ...)
 {
     (void)format;
 }
 
+/** A fixed time of day, 1000000000 seconds after the epoch. */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
     *seconds = 1000000000;
@@ -32,6 +36,7 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 static unsigned char image[IMAGE_MAX];
 static uint32_t image_size;
 
+/** Read `size` bytes at `offset` of the image; -1 past its end. */
 static int memory_read(void *ctx, uint64_t offset, void *buffer, uint32_t size)
 {
     (void)ctx;
@@ -42,6 +47,7 @@ static int memory_read(void *ctx, uint64_t offset, void *buffer, uint32_t size)
     return 0;
 }
 
+/** Write `size` bytes at `offset` of the image; -1 past its end. */
 static int memory_write(void *ctx, uint64_t offset, const void *buffer, uint32_t size)
 {
     (void)ctx;
@@ -52,6 +58,7 @@ static int memory_write(void *ctx, uint64_t offset, const void *buffer, uint32_t
     return 0;
 }
 
+/** Nothing to flush: the image is memory. */
 static int memory_sync(void *ctx)
 {
     (void)ctx;
@@ -60,6 +67,11 @@ static int memory_sync(void *ctx)
 
 static const krffs_backend_t memory_backend = {memory_read, memory_write, memory_sync};
 
+/**
+ * Take the input, cut to `IMAGE_MAX` bytes, as the volume, and list up to
+ * 64 entries of its root, while `krffs_readdir_at` returns 1 for an entry;
+ * walk to each and read the first 4 KiB of each file.
+ */
 int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
 {
     krffs_mount_t mount;
@@ -82,8 +94,6 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
         uint64_t node;
         unsigned j;
 
-        /* One entry read: the walk answers 1 for an entry and 0 at the end,
-           so the loop runs while it answers 1. */
         if (krffs_readdir_at(&mount, "/", i, name, sizeof(name), &is_dir) != 1) {
             break;
         }

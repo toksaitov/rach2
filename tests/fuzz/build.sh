@@ -2,11 +2,11 @@
 #
 # tests/fuzz/build.sh MODE [NAME...]: build the fuzz harnesses under
 # tests/fuzz, each a NAME_fuzz.c that defines the entry fuzz.h declares and
-# names the kernel sources it links in `fuzz-deps:` comment lines, as the
-# host tests do with `host-deps:`.
+# names the sources it links in `fuzz-deps:` comment lines, as the host tests
+# do with `host-deps:`.
 #
 #   replay   a program that replays the files on its command line under
-#            ASan and UBSan, with fuzz.h's main; the host tier runs each
+#            ASan and UBSan, with fuzz.h's main; the host suite runs each
 #            over its corpus under tests/fuzz/corpus/NAME
 #   fuzz     the libFuzzer program, built with clang, for the long runs
 #

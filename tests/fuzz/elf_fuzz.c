@@ -5,9 +5,10 @@
  *
  * Includes elf.c directly, as the host test does, with the page and VMA
  * calls stubbed over a pool of host frames, and loads the input through a
- * read callback over its bytes. A load that fails is the loader refusing an
- * image; what the sanitizers look for is a read past the image, a write
- * past a frame, or arithmetic that wraps on the way.
+ * read callback over its bytes. A load that fails has rejected the image,
+ * which is a valid result; the faults the harness exists to find are a read
+ * past the image, a write past a frame and arithmetic that wraps, which the
+ * sanitizers report.
  */
 #include "proc/elf.c"
 #include "arch/i686/mmu.h"
@@ -22,6 +23,12 @@ extern void *malloc(unsigned long n);
 static unsigned frame_count;
 static unsigned char *frames[FRAMES];
 
+/**
+ * Map a frame at `virt_addr` in `dir`, from the pool, and return its
+ * synthetic physical address, the frame's index plus one times `PAGE_SIZE`.
+ * Returns 0 when the pool is spent, no table covers the address, or the
+ * host allocation fails.
+ */
 uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
 {
     uintptr_t phys;
@@ -53,6 +60,7 @@ uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t addr)
     return pt ? (uintptr_t)(pt->pages[addr / PAGE_SIZE % 1024] & ~0xFFFu) : 0;
 }
 
+/** Change nothing: the harness does not model page permissions. */
 void paging_set_exec(page_dir_t *dir, uintptr_t addr, bool exec)
 {
     (void)dir;
@@ -60,6 +68,7 @@ void paging_set_exec(page_dir_t *dir, uintptr_t addr, bool exec)
     (void)exec;
 }
 
+/** Change nothing: the harness does not model page permissions. */
 void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable)
 {
     (void)dir;
@@ -67,8 +76,11 @@ void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable)
     (void)writable;
 }
 
-/* Synthetic frame numbers map to host buffers; a host pointer is never cut
-   to 32 bits. */
+/**
+ * The host buffer of the frame at synthetic address `phys`, or NULL for an
+ * address the pool has not given out. The synthetic addresses map to host
+ * buffers, so that a host pointer is never cut to 32 bits.
+ */
 void *kmap_temp(uintptr_t phys)
 {
     if (phys == 0 || phys / PAGE_SIZE > frame_count) {
@@ -77,6 +89,7 @@ void *kmap_temp(uintptr_t phys)
     return frames[phys / PAGE_SIZE - 1];
 }
 
+/** Zero the frame at `phys`; -1 when it was not given out. */
 int paging_zero_frame(uintptr_t phys)
 {
     void *page = kmap_temp(phys);
@@ -88,16 +101,19 @@ int paging_zero_frame(uintptr_t phys)
     return 0;
 }
 
+/** Nothing to undo: `kmap_temp` maps nothing. */
 void kunmap_temp(void *va)
 {
     (void)va;
 }
 
+/** No address space is modelled. */
 void vm_init(vm_space_t *vm)
 {
     (void)vm;
 }
 
+/** Accept every region: no address space is modelled. */
 int vm_insert(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type)
 {
     (void)vm;
@@ -108,6 +124,7 @@ int vm_insert(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_
     return 0;
 }
 
+/** The kernel's memset, one byte at a time. */
 void *k_memset(void *ptr, int c, size_t n)
 {
     unsigned char *d = ptr;
@@ -118,6 +135,7 @@ void *k_memset(void *ptr, int c, size_t n)
     return ptr;
 }
 
+/** The kernel's memcpy, one byte at a time. */
 void *k_memcpy(void *dest, const void *src, size_t n)
 {
     unsigned char *d = dest;
@@ -134,6 +152,7 @@ void *k_memcpy(void *dest, const void *src, size_t n)
 static unsigned char img_buf[IMAGE_MAX];
 static uint32_t img_size;
 
+/** Copy up to `count` image bytes at `off` to `dst`; the number copied. */
 static int image_read(void *ctx, void *dst, uint32_t count, uint32_t off)
 {
     uint32_t avail;
@@ -155,6 +174,7 @@ static int image_read(void *ctx, void *dst, uint32_t count, uint32_t off)
 static page_dir_t dir;
 static page_table_t tables[2];
 
+/** Load the input, cut to `IMAGE_MAX` bytes, as a program image. */
 int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
 {
     elf_image_t out;

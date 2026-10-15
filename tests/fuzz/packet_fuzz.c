@@ -1,6 +1,7 @@
 /**
  * Fuzz harness for the receive path (ethernet_rx and ip_rx, with ARP, ICMP,
- * UDP, TCP and the raw sockets stubbed to count): the input is a frame.
+ * UDP, TCP and the raw and packet sockets stubbed to count): the input is a
+ * frame.
  *
  * fuzz-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
@@ -13,6 +14,7 @@
 #undef main
 #include "../fuzz/fuzz.h"
 
+/** Receive the input, cut to 1514 bytes, as one frame. */
 int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
 {
     if (size > 1514) {

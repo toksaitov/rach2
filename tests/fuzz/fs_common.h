@@ -14,15 +14,18 @@
 #include "../../rach2/sys/lib/kerrno.h"
 #include "../../rach2/sys/proc/process.h"
 
+/* The one process, current on the one processor. */
 process_t proc_a;
 struct percpu cpu_table[NR_CPUS] = {{&proc_a}};
 
+/** A kernel panic: trap, so that the fuzzer reports the input. */
 void k_panic(const char *s)
 {
     (void)s;
     __builtin_trap();
 }
 
+/** The kernel log: discarded. */
 void klog(int level, const char *sys, const char *fmt, ...)
 {
     (void)level;
@@ -30,16 +33,19 @@ void klog(int level, const char *sys, const char *fmt, ...)
     (void)fmt;
 }
 
+/** Clear the wait queue `wq`. */
 void wait_queue_init(wait_queue_t *wq)
 {
     __builtin_memset(wq, 0, sizeof(*wq));
 }
 
+/** Wake nothing: no process waits. */
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
 }
 
+/** A wait, which fails at once with -1, since nothing could wake it. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
@@ -48,16 +54,19 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return -1;
 }
 
+/** `wq_wait_event`, which fails at once. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     return wq_wait_event(wq, cond, arg);
 }
 
+/** 0: the caller holds no mount's namespace lock. */
 int vfs_ns_held_by_caller(void)
 {
     return 0;
 }
 
+/** A failed device request: ignored. */
 void vfs_device_failed(block_device_t *d, uint64_t lba, int rc)
 {
     (void)d;
@@ -65,12 +74,14 @@ void vfs_device_failed(block_device_t *d, uint64_t lba, int rc)
     (void)rc;
 }
 
+/** Take the namespace lock of `mnt` for the current process, once more. */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
     mnt->ns_holder = (int)current_proc->pid;
     mnt->ns_depth++;
 }
 
+/** Release one level of the namespace lock of `mnt`. */
 void vfs_ns_unlock(struct vfs_mount *mnt)
 {
     if (mnt->ns_depth > 0) {
@@ -81,6 +92,7 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
     }
 }
 
+/** A fixed time of day, 1000000000 seconds after the epoch. */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
     *seconds = 1000000000;
@@ -92,6 +104,7 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 static unsigned char fs_image[FS_IMAGE_MAX];
 static uint64_t fs_image_bytes;
 
+/** Read `count` sectors at `lba` from the volume; -EIO past its end. */
 static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
 {
     (void)d;
@@ -102,6 +115,7 @@ static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
     return 0;
 }
 
+/** Write `count` sectors at `lba` into the volume; -EIO past its end. */
 static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void *buf)
 {
     (void)d;
@@ -117,6 +131,7 @@ static block_device_t fs_dev = {512, 0, BLOCK_FAULT_SAFE, 0, 0, 0, img_read, img
 /* The return code of the last mount, for a harness that reads it. */
 static int fs_last_mount_rc;
 
+/** A block request, served at once by the device's own read or write. */
 int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *data)
 {
     if (write) {

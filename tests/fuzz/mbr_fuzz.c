@@ -8,6 +8,8 @@
 #include "block/mbr.c"
 #include "../fuzz/fuzz.h"
 
+/** Parse the input's first sector as a table, and put a table that parses
+ * through `mbr_take`, the two boot partition checks and the gap check. */
 int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
 {
     uint8_t sector[512];

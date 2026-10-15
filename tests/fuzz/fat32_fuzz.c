@@ -30,11 +30,13 @@ static const unsigned char *seed;
 static unsigned long seed_bytes;
 static unsigned long fat_at, data_at;
 
+/** The little-endian 16-bit value at `p`. */
 static uint32_t le16_at(const unsigned char *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8);
 }
 
+/** The little-endian 32-bit value at `p`. */
 static uint32_t le32_at(const unsigned char *p)
 {
     return le16_at(p) | (le16_at(p + 2) << 16);
@@ -63,6 +65,10 @@ static void scatter(const unsigned char *data, unsigned long size, unsigned long
     __builtin_memset(fs_image + at + have, 0, len - have);
 }
 
+/**
+ * Build the seed volume on the first call, scatter the input into a copy of
+ * it and exercise the driver over the result.
+ */
 int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
 {
     if (seed == 0) {

@@ -13,6 +13,8 @@
 #include "fs_common.h"
 #include "fuzz.h"
 
+/** Exercise the driver over the input, cut to `FS_IMAGE_MAX` bytes and
+ * padded with zeros to a whole sector. */
 int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
 {
     if (size > FS_IMAGE_MAX) {

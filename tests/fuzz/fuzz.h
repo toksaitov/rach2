@@ -2,20 +2,15 @@
 #define _FUZZ_H_
 
 /**
- * What every harness under tests/fuzz defines: one entry that takes an
- * input and its length, runs the parser under test over it, and returns 0.
- * libFuzzer calls it from its own main; built with FUZZ_REPLAY, the main
- * below calls it once for each file named on the command line, which is
- * how the host tier replays a committed corpus in seconds without libFuzzer.
+ * The entry every harness under tests/fuzz defines: it takes an input and its
+ * length, runs the parser under test over it, and returns 0. libFuzzer calls
+ * it from its own main; built with FUZZ_REPLAY, the main below calls it once
+ * for each file named on the command line, which is how the host suite
+ * replays a committed corpus without libFuzzer.
  *
- * The length is the host's size_t, spelled as unsigned long: the kernel's
- * headers define size_t as the machine's 32-bit one, and this is the one
- * place the two meet.
- *
- * The replay buffer is one byte larger than `FUZZ_INPUT_MAX`, so a file that
- * fills it is seen to be too long rather than replayed short: an input the
- * fuzzer found and a replay shortened is a different input, and a regression
- * test that passes on it proves nothing.
+ * The length is the host's size_t, written as unsigned long, its type on the
+ * 64-bit hosts the harnesses are built on, because this header includes no
+ * system header.
  */
 int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size);
 
@@ -31,6 +26,15 @@ extern int printf(const char *format, ...);
 
 #define FUZZ_INPUT_MAX (4u << 20)
 
+/**
+ * Replay each file named on the command line through the harness, in order.
+ *
+ * Returns 0 when every file was replayed, and 2 when one cannot be opened or
+ * read or is longer than `FUZZ_INPUT_MAX` bytes. The buffer is one byte
+ * larger than that, so a file that fills it is seen to be too long rather
+ * than replayed short: a shortened input is a different input from the one
+ * the fuzzer found, and a regression test that passes on it proves nothing.
+ */
 int main(int argc, char **argv)
 {
     unsigned char *buf = malloc(FUZZ_INPUT_MAX + 1);

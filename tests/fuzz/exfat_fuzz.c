@@ -34,6 +34,7 @@ static const unsigned char *seed;
 static unsigned long seed_bytes;
 static unsigned long fat_at, heap_at;
 
+/** The little-endian 32-bit value at `p`. */
 static uint32_t le32_at(const unsigned char *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
@@ -85,6 +86,10 @@ static void boot_checksum(unsigned char *region)
     }
 }
 
+/**
+ * Build the seed volume on the first call, scatter the input into a copy of
+ * it, recompute both boot checksums and exercise the driver over the result.
+ */
 int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
 {
     if (seed == 0) {
