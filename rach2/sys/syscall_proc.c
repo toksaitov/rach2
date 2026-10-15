@@ -1,7 +1,8 @@
 /*
- * The process arm of the system call layer: exit, exec, fork and wait,
- * signals, identities, sessions, limits and the address space. Registered
- * by syscall.c; what it shares with the other arms is in syscall_internal.h.
+ * The process system calls: exit, exec, fork and wait, signals, identities,
+ * sessions, limits, scheduling and the address space. Each architecture's
+ * systab.c puts the handlers in its table; what they share with the other
+ * system call files is in syscall_internal.h.
  */
 #include "arch/arch.h"
 #include "arch/uabi.h"
@@ -71,8 +72,8 @@
 #include "network/ip/ip.h"
 #include "network/ip/icmp.h"
 #include "network/net.h"
-#include "network/netconf.h" /* net_ip_addr for getsockname */
-#include "cmdline.h"         /* kcmdline_has, for the ENOSYS trace flag */
+#include "network/netconf.h"
+#include "cmdline.h" /* kcmdline_has, for the rach2.stackoverrun test switch */
 #include "mm/filemap.h"
 #include "mm/mm.h"
 #include "fs/tmpfs.h"
@@ -81,10 +82,8 @@
 #include "syscall_internal.h"
 
 /**
- * Restore text mode if `pid` owns the framebuffer.
- *
- * Called when a process is killed (Ctrl-C) so the dead owner does not strand
- * the screen in graphics mode.
+ * Called as a process ends, by exit or by a signal, so that an owner that
+ * has ended does not leave the screen in graphics mode.
  */
 void fb_release_if_owner(uint32_t pid)
 {
@@ -98,10 +97,11 @@ void fb_release_if_owner(uint32_t pid)
  * programs the debug shell starts run on. */
 extern char stack[];
 
-/*
- * A process's kernel stack comes from the heap at fork, KERNEL_STACK_SIZE
- * of pages with an unmapped guard page below them, and goes back when the
- * zombie is reaped; the one reaping is never the one whose stack it is.
+/**
+ * Prepare the kernel stacks, which needs nothing: a process's kernel stack
+ * comes from the heap at fork, KERNEL_STACK_SIZE of pages with an unmapped
+ * guard page below them, and goes back when the zombie is reaped; the one
+ * reaping is never the one whose stack it is.
  */
 void init_kstacks(void)
 {}
@@ -145,14 +145,11 @@ static void kstack_free(uintptr_t top)
 }
 
 /**
- * The pid of the running thread when `addr` lies in the page below its
- * kernel stack, or -1.
- *
- * That page is the guard `kstack_alloc` leaves below a stack it gives, or
- * the one loader.s leaves below the boot stack, which process 0, the first
- * program and the programs the debug shell starts run on. An access there
- * is the stack running out; the double fault's handler and the page
- * fault's ask with the address the processor left in CR2.
+ * The page below the stack is the guard `kstack_alloc` leaves below a stack
+ * it gives, or the one loader.s leaves below the boot stack, which process
+ * 0, the first program and the programs the debug shell starts run on. The
+ * double fault's handler and the page fault's call this with the address
+ * the processor left in CR2.
  */
 int kstack_overrun_pid(uintptr_t addr)
 {
@@ -169,7 +166,7 @@ int kstack_overrun_pid(uintptr_t addr)
  * KERNEL_STACK_SIZE holds fewer than sixteen of its frames. */
 #define KSTACK_DESCENT_MAX 4096u
 
-/* One frame of the overrun test's descent: a quarter page of locals, the
+/** One frame of the overrun test's descent: a quarter page of locals, the
  * lowest byte written, so every page the descent reaches is touched. */
 static uint32_t kstack_descend(uint32_t depth)
 {
@@ -182,7 +179,8 @@ static uint32_t kstack_descend(uint32_t depth)
     return kstack_descend(depth + 1) + frame[0];
 }
 
-/* The overrun test's descent, on the stack of the running thread. */
+/** The overrun test's descent, on the stack of the running thread; it does
+ * not return, and the kernel panics if the descent comes back. */
 static void kstack_overrun_run(void)
 {
     klog(KLOG_INFO, "kstack", "overrun: pid %d descends its stack at 0x%x", (int)current_proc->pid,
@@ -192,9 +190,8 @@ static void kstack_overrun_run(void)
 }
 
 /**
- * Test switch: run a thread down its kernel stack until the guard below it
- * faults. `rach2.stackoverrun=fork` on the boot line runs a thread on a
- * stack `kstack_alloc` gives, as a fork's child has one, and
+ * `rach2.stackoverrun=fork` on the boot line runs a thread on a stack
+ * `kstack_alloc` gives, as a fork's child has one, and
  * `rach2.stackoverrun=boot` descends the boot stack as process 0. The fault
  * is a double fault, since the page fault's own frame cannot be pushed, and
  * its handler reports the thread and stops the machine. The thread's record
@@ -246,16 +243,14 @@ static void proc_release(process_t *p)
     free_process(p);
 }
 
-/* Fork child return point in isr_handler.s */
-
 /*
  * Init process tracking from kernel.c. A real init's death is fatal
  * (panic_init_died); an init exiting under the debug shell returns to it.
  */
 extern volatile uint32_t init_pid;
 
-/* Shell loop from kernel.c - the debug shell, reached when an init exits while
- * the debug shell is the supervisor (rescue mode or the no-init test image). */
+/* The debug shell's loop, in kernel.c, reached when an init exits while the
+ * debug shell is the supervisor (rescue mode or the no-init test image). */
 extern void shell_loop(void);
 
 extern void shell_reset_input(void);
@@ -269,13 +264,12 @@ extern bool debug_shell_is_home;
 extern void panic_init_died(uint32_t pid);
 
 /**
- * Release every descriptor a dying process still has.
- *
- * Drops each socket reference and each shared open-file description (the
- * seek offset), and clears the slot. Called from both exit paths (sys_exit
- * here and terminate_current_process via an extern), so sockets, port
- * bindings, TCBs, and OFDs are freed however a process dies. Idempotent: a
- * second call sees an empty table (fd_free skips free slots).
+ * Each descriptor drops its socket reference and its open-file description
+ * (the seek offset), and its slot is cleared. `proc_files_put` calls it when
+ * the last reference to the table goes, which both ends of a process reach
+ * (`proc_exit_cleanup`), so sockets, port bindings, TCBs and descriptions
+ * are freed however a process ends. A second call finds every slot free and
+ * does nothing.
  */
 void release_fd_table(fd_table_t *table)
 {
@@ -487,33 +481,45 @@ void proc_group_exit(int32_t code)
 }
 
 /**
- * End the calling thread with the encoded wait status `code`, and with the
- * last thread the process. Does not return.
- *
  * A thread that is not its process's last only releases what it holds and
  * leaves. The last one releases the process's session, reparents the
  * children to init, publishes the zombie and wakes its parent, then
- * reschedules. Every thread gives up its address space at its end
- * (`proc_exit_cleanup`); a normal child leaves its descriptor-table storage,
- * record and stack to do_wait. A real init's exit is fatal
- * (panic_init_died); an init exiting under the debug shell returns to it.
+ * reschedules. Every thread gives up its address space and its descriptors
+ * at its end (`proc_exit_cleanup`); its record and kernel stack go when it
+ * is reaped. A real init's exit is fatal (panic_init_died); an init exiting
+ * under the debug shell returns to it.
  *
  * The plain status line goes out only where the debug shell is the supervisor.
  * There it is how a person, and the harness in its no-token mode, read a
  * transient init's outcome. On an image running `/sbin/init` and a login shell
  * every process exit would print it, a forked child's included, and the shell
- * already answers the question through `$?`. The line that hands the shell back
- * below is not gated: the probe runner scores probes from that one.
+ * already answers the question through `$?`. The line that hands the shell
+ * back is printed whenever an init returns to the shell: the probe runner
+ * scores probes from that one.
+ *
+ * In the harness build an init's exit reports its status to QEMU's
+ * isa-debug-exit device at once, before the scheduler can switch to a child
+ * that is ready, so the runner reads the init's own exit code. A real
+ * /sbin/init that exits leaves no reaper, and the kernel panics before the
+ * scheduler can give the processor to a ready process and run on with no
+ * PID 1.
  *
  * An init exiting under the debug shell first ends every other user process
  * through `proc_end_others`, then returns without scheduling: a child left
  * runnable would take the processor, and the exited init, a zombie, would
- * never be picked again to make the return. A process that is not init
- * leaves through the scheduler as a zombie its parent reaps; when nothing is
- * ready at that moment, since its parent may be gone, it idles for the next
- * interrupt with interrupts off between checks and schedules on its own,
- * because the timer's preemption is deferred inside a call. A halt there
- * kept the machine forever.
+ * never be picked again to make the return. Its record is freed and replaced
+ * by the idle record with interrupts off, since an interrupt handler between
+ * the two would count its entry in the freed record, and the shell's command
+ * line and stdin-wait state are cleared in the same window, so a keyboard
+ * interrupt cannot append to a stale command buffer or find a stale stdin
+ * waiter; `shell_loop` clears them again on entry. The shell then runs from
+ * the top of the boot stack.
+ *
+ * A process that is not init leaves through the scheduler as a zombie its
+ * parent reaps; when nothing is ready at that moment, since its parent may be
+ * gone, it idles for the next interrupt with interrupts off between checks
+ * and schedules on its own, because the timer's preemption is deferred
+ * inside a call.
  */
 int32_t exit_current(int32_t code)
 {
@@ -547,20 +553,11 @@ int32_t exit_current(int32_t code)
     }
 
 #ifdef RACH2_HARNESS
-    /* Harness build: the instant the probe (run as init) exits, report its
-     * status to QEMU's isa-debug-exit device and stop, BEFORE schedule() can
-     * switch to a still-READY child and bypass this path, so the runner always
-     * reads a real exit code. */
     if (is_init) {
         harness_exit((uint8_t)status);
     }
 #endif
 
-    /* A real /sbin/init must never exit; if it does there is no reaper, so the
-     * kernel panics. Halt BEFORE schedule(), or a still-READY process would
-     * take the CPU and the system would run on with a dead PID 1. Only when the
-     * debug shell is the supervisor (rescue, or the no-init test image) does an
-     * exited init instead return to it, below. */
     if (is_init && !debug_shell_is_home) {
         panic_init_died(exiting_pid); /* never returns */
     }
@@ -573,8 +570,6 @@ int32_t exit_current(int32_t code)
          exiting_pid, status);
     console_puts("Init process exited. Returning to kernel debug shell.");
 
-    /* Freed and replaced with interrupts off: a handler between the two
-     * would count its entry in the record just freed. */
     arch_irq_disable();
     free_process(current_proc);
 
@@ -583,17 +578,11 @@ int32_t exit_current(int32_t code)
     current_proc = proc_idle;
     current_proc->state = PROC_RUNNING;
 
-    /* Clear the shell's command line and stdin-wait state while interrupts
-     * are still off, so a keyboard IRQ cannot append to a stale command
-     * buffer or see a dangling stdin waiter. shell_loop resets again on
-     * entry as the catch-all. */
     shell_reset_input();
     arch_irq_enable();
 
     sched_disable();
 
-    /* Move to a fresh kernel stack and jump to shell_loop. Safe because we
-     * are in kernel mode and init has been torn down. */
     arch_run_on_stack((uintptr_t)stack + KERNEL_STACK_SIZE, shell_loop);
 }
 
@@ -678,8 +667,8 @@ struct exec_setid {
 /**
  * Read the program's file of the KRFFS root through `ofd`, the description
  * its new address space keeps: at the node the file is at now, under the
- * root's lock, which a relocation takes, and not a directory, as
- * `krffs_read` refuses one.
+ * root's lock, which a relocation takes, and not a directory, which
+ * `krffs_read` does not read either. The count read, or a negative value.
  */
 static int exec_held_read(const struct open_file *ofd, void *dst, uint32_t count, uint32_t off)
 {
@@ -697,9 +686,11 @@ static int exec_held_read(const struct open_file *ofd, void *dst, uint32_t count
 
 /**
  * An `elf_read_fn` over an `exec_file`. A whole page of a mounted file at a
- * page's offset, which is what the loader asks for in a segment, comes from
- * the file page cache when it has it, and is kept there when it has not, so
- * a program started again reads no page of its text from the disk.
+ * page's offset, which is what the loader reads of a segment, comes from the
+ * file page cache when it has it, and is kept there when it has not, so a
+ * program started again reads no page of its text from the disk. The count
+ * read, or a negative value; a failed read of a mount is -1 and leaves its
+ * error in `f->err`.
  */
 static int exec_file_read(void *ctx, void *dst, uint32_t count, uint32_t off)
 {
@@ -755,16 +746,19 @@ static void exec_file_close(struct exec_file *f)
     }
 }
 
+/* The most of a script's first line that execve reads to parse it. */
+#define EXEC_SHEBANG_MAX 128
+
 /*
  * Where execve has the program's path, the new image's arguments and the
  * new image itself until it commits.
  *
  * Each call has a workspace of its own in the heap, which the caller's record
  * points at until the call ends, so a record freed during one gives it back
- * too. It is not one for the machine: a program on a mounted volume is read
- * through the buffer cache, which sleeps, so a second execve runs while the
- * first is inside a read, and a shared workspace let the second overwrite the
- * first's arguments, its open file and the reference its resolution held.
+ * too. A program on a mounted volume is read through the buffer cache, which
+ * sleeps, so a second execve runs while the first is inside a read, and a
+ * workspace shared by the two would let the second overwrite the first's
+ * arguments, its open file and the reference its resolution holds.
  * `in_syscall` stops the timer from scheduling; it does not stop a call that
  * gives the processor up.
  *
@@ -774,10 +768,6 @@ static void exec_file_close(struct exec_file *f)
  * on, so every limit and every failure of the load is found while there is
  * still a caller to return an error to.
  */
-
-/* A script's first line, read here to be parsed. */
-#define EXEC_SHEBANG_MAX 128
-
 struct exec_state {
     struct exec_file prog; /* the file being read */
     struct exec_setid id;
@@ -830,33 +820,31 @@ static void exec_release(void)
 /**
  * Rewrite an exec of a script into an exec of its interpreter.
  *
- * A file whose first two bytes are `#!` names the program that should run it,
- * and Linux's rule is what everything expects: the rest of that line is the
- * interpreter and at most one argument, and the program then runs as
- * `interpreter [argument] script original-arguments...`. Without this, an exec
- * of a script fails with `ENOEXEC` and only a shell, which reads the file
- * itself, can run one. A DHCP client execs its lease script directly, so the
- * machine needs it.
- *
- * One level only. A script whose interpreter is itself a script is refused,
- * not followed, because a chain of them is a loop nobody can see the
- * end of, and nothing here needs one.
+ * A file whose first two bytes are `#!` names the program that runs it. As
+ * on Linux, the rest of that line is the interpreter, named here by an
+ * absolute path, and at most one argument, which is all that follows the
+ * name less the blanks around it; the program then runs as
+ * `interpreter [argument] script original-arguments...`, so that a program
+ * such as a DHCP client can exec a script directly. A first line that fills
+ * the buffer without ending is -ENOEXEC and is not cut short, since a
+ * truncated interpreter name may name a different program that exists.
+ * `exec_script` follows one level only.
  *
  * The arguments on the new stack are rewritten as Linux's `load_script`
  * rewrites them: argv[0] is taken away, and the script's path, the argument
  * and the interpreter are put below the rest, under the limits the caller's
  * strings met. The caller's `path` becomes the interpreter's. The script is
- * read through `read` over `ctx`: the root's reader by path, or the mount's
- * over an open handle.
+ * read through `read` over `ctx`, which `exec_script` makes `exec_file_read`
+ * over the program it opened.
  *
- * The interpreter's path is made canonical, with `s->path_end` saying how
- * it named a directory by its end (`canonicalize_named`), which the open of
- * the interpreter answers for.
+ * The interpreter's path is made canonical, as a path from a caller is, with
+ * `s->path_end` saying how it named a directory by its end
+ * (`canonicalize_named`), which the open of the interpreter answers for.
  *
  * @param argc the argument count, updated when the vector grows.
  * @return 1 when rewritten, 0 when the file is not a script, or a negative
- *         errno for one whose first line names nothing or whose arguments no
- *         longer fit.
+ *         errno for one whose first line is too long, names nothing or names
+ *         a relative path, or whose arguments no longer fit.
  */
 static int32_t exec_shebang(struct exec_state *s, uint32_t *argc,
                             int (*read)(void *, void *, uint32_t, uint32_t), void *ctx)
@@ -879,9 +867,6 @@ static int32_t exec_shebang(struct exec_state *s, uint32_t *argc,
             break;
         }
     }
-    /* A line that filled the buffer without ending is refused, not cut:
-       a truncated interpreter name may name a different program that exists,
-       and the kernel would then check and run that one. */
     if (i == n && n == EXEC_SHEBANG_MAX) {
         return -ENOEXEC;
     }
@@ -903,8 +888,6 @@ static int32_t exec_shebang(struct exec_state *s, uint32_t *argc,
             p++;
         }
         if (*p) {
-            /* The remainder is ONE argument, trailing blanks removed, which is
-               what Linux passes and what every `#!/bin/sh -e` line means. */
             char *end = p;
 
             while (*end) {
@@ -939,11 +922,6 @@ static int32_t exec_shebang(struct exec_state *s, uint32_t *argc,
 
     k_strncpy(s->path, interp, sizeof(s->path) - 1);
     s->path[sizeof(s->path) - 1] = '\0';
-    /* Normalized the way a path from a caller is normalized. The check that
-       keeps an exec out of the synthetic mounts reads the first component and
-       does not collapse `.` or `..`, so an interpreter named
-       `/bin/../dev/something` would pass it while the file system resolved the
-       name it really wrote. */
     rc = canonicalize_named(s->path, &s->path_end);
     return rc < 0 ? rc : 1;
 }
@@ -1260,11 +1238,12 @@ static int32_t exec_open(struct exec_file *f, const char *path, int end, struct 
  * `s` has open is not an ELF image: `exec_shebang` rewrites the arguments,
  * and the interpreter is opened in the script's place, as the program the new
  * address space keeps, which is Linux's exe for a script. A set-id script runs
- * as its invoker: the interpreter is what runs, it is not set-id, and
- * honouring the script's bits is a hole Unix closed long ago, since the
- * interpreter can be made to read a different file than the one whose bits
- * were checked. One level only: an interpreter that is itself a script is
- * refused. 0, -ENOEXEC, or an error of the open or the read.
+ * as its invoker, as on Linux: the interpreter is what runs, it is not
+ * set-id, and the script's bits would be unsafe, since the interpreter can
+ * be made to read a different file than the one whose bits were checked. An
+ * interpreter that is itself a script is -ENOEXEC: nothing here needs a
+ * chain of them, and a chain could loop. 0, -ENOEXEC, or an error of the
+ * open or the read.
  */
 static int32_t exec_script(struct exec_state *s)
 {
@@ -1300,7 +1279,7 @@ static int32_t exec_script(struct exec_state *s)
  * Whether the calling thread has a tracer that is not privileged
  * (`ptrace_tracer_privileged`), which could write the new image's memory and
  * registers at the exec's stop and so act with any ids or capabilities the
- * image would be given. Linux's `ptracer_capable` asks the same of the
+ * image would be given. Linux's `ptracer_capable` makes the same test of the
  * credentials the tracer had when it attached.
  */
 static int exec_traced(void)
@@ -1312,7 +1291,7 @@ static int exec_traced(void)
  * Whether the calling thread's working directory, root and umask are shared
  * with a process outside its thread group, which could change them under
  * the new image once it had the ids its set-id bits give, as Linux's
- * `check_unsafe_exec` asks: more records share them than threads of the
+ * `check_unsafe_exec` tests: more records share them than threads of the
  * caller's process do.
  */
 static int exec_fs_shared(void)
@@ -1343,9 +1322,8 @@ static int exec_fs_shared(void)
  * that is not privileged whose thread has a tracer that is not
  * (`exec_traced`), or whose directories and umask another process shares
  * (`exec_fs_shared`), since either could change the image once it had the
- * ids; Linux's
- * `cap_bprm_creds_from_file` ignores the bits in the same cases for a
- * caller without CAP_SETUID. No tracer that is not root can attach while
+ * ids; Linux's `cap_bprm_creds_from_file` ignores the bits in the same cases
+ * for a caller without CAP_SETUID. No tracer that is not root can attach while
  * the exec runs (`ptrace_attach`), and an exec that applies the bits for
  * such a caller holds off CLONE_FS in the threads that share its directories
  * (`fork_fs`) until its workspace goes, so the choice made here holds until
@@ -1699,9 +1677,9 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
  * once `exec_open` has gone on from the link to that program's file: Chromium
  * runs its children by executing /proc/self/exe, and the program they run is
  * named by that path, not the link's, in its comm, and in its own link where
- * its file has no present path to give. A process chroot put in a directory
- * has no /proc, and its path was left for the resolver to refuse. 0, or the
- * link's error.
+ * its file has no present path to give. For a process chroot put in a
+ * directory, a path under /proc is not in the synthetic /proc, so the path
+ * stays as the walk resolved it. 0, or the link's error.
  */
 static int32_t exec_link_name(char *path)
 {
@@ -1770,15 +1748,16 @@ int32_t proc_fs_unshare(void)
  * Replace the current process image with a new program, in the workspace
  * `s`; the body of `sys_execve`.
  *
- * Its arguments are path, argv[] and envp[]. Does not return on success. Makes
- * the new image's address space, resolves the path and checks the execute
- * right, keeping the program's file with the address space, copies the path,
- * argv and envp onto the new stack's pages, resolves a `#!` script to its
- * interpreter, builds the new image, with the dynamic linker it names, in that
- * address space, sets aside the storage of a descriptor table of the caller's
- * own, ends the process's other threads, and only then commits, so every
- * refusal and every failure of the load returns to the caller with its image
- * and its descriptor table intact.
+ * The call's arguments are path, argv[] and envp[]. Makes the new image's
+ * address space, resolves the path and checks the execute right, keeping the
+ * program's file with the address space, copies the path, argv and envp onto
+ * the new stack's pages, resolves a `#!` script to its interpreter, builds the
+ * new image, with the dynamic linker it names, in that address space, sets
+ * aside the storage of a descriptor table of the caller's own, ends the
+ * process's other threads, and only then commits, so every refusal and every
+ * failure of the load returns to the caller with its image and its descriptor
+ * table intact. Returns 0 once the image is committed, with the return frame
+ * at the new image's entry, or a negative errno.
  */
 static int32_t exec_run(isr_params_t *params, struct exec_state *s)
 {
@@ -1873,7 +1852,7 @@ long sys_execve(isr_params_t *params)
 #define CLONE_DETACHED       0x00400000u
 #define CLONE_CHILD_SETTID   0x01000000u
 
-/* What a fork or a clone asks of `do_fork`: the clone flags, the stack
+/* What a fork or a clone gives `do_fork`: the clone flags, the stack
  * pointer the child starts with or 0 for the parent's, the parent's address
  * CLONE_PARENT_SETTID names, the child's addresses CLONE_CHILD_SETTID and
  * CLONE_CHILD_CLEARTID name, each 0 for none, and the TLS base
@@ -1901,11 +1880,10 @@ static int vfork_done(void *arg)
 }
 
 /**
- * Wait, as the parent, until the child `pid` made with CLONE_VFORK lets the
- * parent go. The child runs on the parent's memory, its stack included,
- * until it calls execve or ends, so the parent must not run before. Other
- * signals wait for the end as well; only SIGKILL cuts it short, as Linux's
- * killable wait does, and the parent then dies on the way out.
+ * The child runs on the parent's memory, its stack included, until it calls
+ * execve or ends, so the parent must not run before. A signal other than
+ * SIGKILL does not end the wait; SIGKILL does, as in Linux's killable wait,
+ * and the parent then dies on its way out.
  */
 void proc_vfork_wait(uint32_t pid)
 {
@@ -1950,7 +1928,7 @@ static struct mm *fork_mm(struct mm *mm, uint32_t flags)
  * CLONE_FS, and otherwise a copy, with holds of its own on the working
  * directory's mount and on the root. 0; -EAGAIN for CLONE_FS while a
  * thread without root that shares the record is in an exec that applies
- * set-id bits (`exec_ids`), as Linux's `copy_fs` refuses it during an exec;
+ * set-id bits (`exec_ids`), as Linux's `copy_fs` fails during such an exec;
  * or -ENOMEM.
  */
 static int fork_fs(process_t *child, process_t *parent, uint32_t flags)
@@ -1998,14 +1976,15 @@ static int32_t fork_nproc(const process_t *parent)
 /**
  * What a child takes of `parent` besides its memory, files and signals: the
  * session and the process group, which it keeps until it or the parent calls
- * setsid or setpgid, the nice value, the OOM score adjustment and its floor,
- * the persona, the no_new_privs flag, the seccomp mode and filters, the
- * limits, the credentials, and the
- * program name, which `execve` sets and a child that never execs would
- * otherwise never have: a daemon that forks itself into the background is
- * such a child, and without it shows in `ps` and in /proc/<pid>/stat with no
- * name. The dumpable flag comes with the address space (`fork_mm`). A thread
- * shares its process's adjustment, since the group it joins keeps it.
+ * setsid or setpgid, the nice value and the I/O priority, the OOM score
+ * adjustment and its floor, the persona, the no_new_privs flag, whether it
+ * gave up its capabilities, the seccomp mode and filters, the limits, the
+ * credentials, and the program name, which `execve` sets and a child that
+ * never execs would otherwise never have: a daemon that forks itself into
+ * the background is such a child, and without it shows in `ps` and in
+ * /proc/<pid>/stat with no name. The dumpable flag comes with the address
+ * space (`fork_mm`). A thread shares its process's adjustment, since the
+ * group it joins keeps it.
  */
 static void fork_ids(process_t *child, const process_t *parent)
 {
@@ -2076,7 +2055,7 @@ static int32_t fork_files(process_t *child, process_t *parent, uint32_t flags)
 }
 
 /** Give `child` the directories and the descriptor table of `parent`, each
- * shared or copied as `flags` asks (`fork_fs`, `fork_files`); 0, or the
+ * shared or copied as `flags` says (`fork_fs`, `fork_files`); 0, or the
  * error of the first that failed. */
 static int32_t fork_shares(process_t *child, process_t *parent, uint32_t flags)
 {
@@ -2086,7 +2065,7 @@ static int32_t fork_shares(process_t *child, process_t *parent, uint32_t flags)
 }
 
 /**
- * Store the child's id where CLONE_CHILD_SETTID and CLONE_PARENT_SETTID ask:
+ * Store the child's id where CLONE_CHILD_SETTID and CLONE_PARENT_SETTID say:
  * in the child's address space through its regions, in a writable one only,
  * a private page taking a copy of its own and a shared one written in place,
  * and in the parent's. A failed store leaves the word as it was, as Linux's
@@ -2113,7 +2092,7 @@ static void fork_store_ids(process_t *child, const struct fork_req *req)
 /**
  * Lay out `child`'s kernel stack for its first switch, from the parent's
  * trap frame `params`: the architecture copies the frame with 0 for fork's
- * result and the new stack pointer a clone asks for, and above it what its
+ * result and the new stack pointer a clone gives, and above it what its
  * `switch_context` pops on the way back to user mode (`arch_fork_frame`).
  */
 static void fork_frame(process_t *child, const isr_params_t *params, const struct fork_req *req)
@@ -2134,13 +2113,24 @@ static void fork_frame(process_t *child, const isr_params_t *params, const struc
  * child starts with and the addresses of the ids clone stores: the parent's
  * CLONE_PARENT_SETTID word, stored before the child runs, and the child's
  * CLONE_CHILD_SETTID word and the CLONE_CHILD_CLEARTID address its thread end
- * clears. -EINTR when a SIGKILL came for the caller while the child was
- * built. The child has the parent's TLS base, since its frame keeps the
+ * clears. The child has the parent's TLS base, since its frame keeps the
  * parent's %gs selector and its address space has the same addresses,
  * unless CLONE_SETTLS names another, and the floating-point registers as
  * they are now, since the parent's record has only what they were at its
  * last switch away. The parent gets the child's PID in the parent's PID
  * namespace; the vfork wait names the child by the kernel's.
+ *
+ * The child is PROC_UNUSED while it is built, neither runnable nor seen by
+ * the other calls, since the building may sleep and a switch to it before
+ * its frame is laid out would run nothing; it becomes ready at the end. The
+ * table `alloc_process` gave it, with stdio descriptions of its own, goes
+ * first, before any failure path, since the child takes a copy of the
+ * parent's table or the table itself. The result is -EINTR when a SIGKILL
+ * is pending for the caller, which an exit_group or an exec by another
+ * thread sends, or its process is ending or in another thread's exec, since
+ * a child made then would outlive its process's end; nothing between that
+ * test and the child's start sleeps. A failure gives back everything built
+ * for the child so far.
  */
 static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
 {
@@ -2163,14 +2153,8 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     if (!child) {
         return -ENOMEM; /* a record the heap could not give */
     }
-    /* Not runnable, and no process to the other calls, while it is built,
-     * since the building may sleep and a switch to it before its frame is
-     * laid out would run nothing; it becomes ready at the end. */
     child->state = PROC_UNUSED;
 
-    /* alloc_process gave the child a table with its own stdio open-file
-     * descriptions; it goes now, before any failure path, since the child
-     * takes a copy of the parent's table or the table itself below. */
     proc_files_put(child);
 
     child->mm = fork_mm(parent->mm, req->flags);
@@ -2188,8 +2172,7 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
         return -ENOMEM;
     }
     child->kernel_stack = child_kstack_base + KERNEL_STACK_SIZE;
-    /* A thread's parent, and that of a CLONE_PARENT child, is the caller's
-     * process's parent. */
+    /* A thread's or a CLONE_PARENT child's parent is the caller's parent. */
     child->parent_pid =
         (req->flags & (CLONE_THREAD | CLONE_PARENT)) ? parent->parent_pid : parent->tgid;
     fork_ids(child, parent);
@@ -2205,9 +2188,6 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
         goto fail_built;
     }
     fork_store_ids(child, req);
-    /* A SIGKILL, which an exit_group or an exec by another thread sends,
-     * refuses the child, since one made now would outlive its process's end;
-     * nothing after this sleeps. */
     if (((parent->sig_pending | parent->tg->pending) & KSIG_BIT(SIGKILL)) || parent->tg->exiting ||
         parent->tg->exec_task) {
         rc = -EINTR;
@@ -2236,9 +2216,6 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     return (int32_t)pid;
 
 fail_built:
-    /* Everything built for the child so far goes back: the descriptor table,
-     * the directories, the kernel stack and the address space, then the
-     * record. */
     proc_files_put(child);
     proc_fs_put(child);
     kstack_free(child->kernel_stack);
@@ -2247,6 +2224,8 @@ fail_built:
     return rc;
 }
 
+/** fork: make a child with a copy-on-write copy of the caller's memory,
+ * whose end sends the caller SIGCHLD (`do_fork`). */
 long sys_fork(isr_params_t *params)
 {
     struct fork_req req = {SIGCHLD, 0, 0, 0, 0, 0};
@@ -2267,8 +2246,10 @@ long sys_vfork(isr_params_t *params)
     return do_fork(params, &req);
 }
 
-/** The clone `sys_clone` describes, from the arguments of `clone` or of
- * `clone3`, the registers of `params` aside. */
+/** Make the clone `sys_clone` describes, from the arguments of `clone` or of
+ * `clone3`; `params` is the caller's frame, which the child's is copied from.
+ * The child's id, -EINVAL for a set of flags `sys_clone` does not take, or
+ * the error of `arch_clone_tls` or of `do_fork`. */
 static int32_t clone_with(isr_params_t *params, uint32_t flags, uintptr_t newsp, uintptr_t ptid,
                           unsigned long tls, uintptr_t ctid)
 {
@@ -2324,8 +2305,7 @@ static int32_t clone_with(isr_params_t *params, uint32_t flags, uintptr_t newsp,
  * Linux ignores it. CLONE_SYSVSEM and CLONE_DETACHED are ignored: a
  * process's semaphore adjustments are its own, which threads share, and
  * Linux ignores the second. The CLONE_NEW flags give the child new
- * namespaces (`ns_fork`); a cgroup namespace and any other flag are refused
- * with EINVAL.
+ * namespaces (`ns_fork`); a cgroup namespace and any other flag are EINVAL.
  */
 long sys_clone(isr_params_t *params)
 {
@@ -2344,7 +2324,7 @@ long sys_clone(isr_params_t *params)
 #define CA_TLS            7
 #define CLONE_ARGS_FIELDS 8
 
-/* How much of a larger structure Linux knows, through set_tid, set_tid_size
+/* How much of a larger structure Linux defines, through set_tid, set_tid_size
  * and cgroup; past it the bytes must be zero, and at most a page is read. */
 #define CLONE_ARGS_KNOWN 88
 
@@ -2414,11 +2394,11 @@ long sys_clone3(isr_params_t *params)
 /* The options of waitpid, wait4 and waitid. */
 #define WNOHANG 1
 
-#define WUNTRACED 2 /* also report a child that has STOPPED; waitid's WSTOPPED */
+#define WUNTRACED 2 /* also report a child that has stopped; waitid's WSTOPPED */
 
 #define WEXITED 4 /* report a child that has exited, which wait4 always does */
 
-#define WCONTINUED 8 /* also report a child that has CONTINUED */
+#define WCONTINUED 8 /* also report a child that has continued */
 
 #define WNOWAIT 0x01000000 /* waitid: report the event and leave it */
 
@@ -2537,7 +2517,7 @@ static void sig_irq_restore(uint32_t flags);
  * another reaper has taken, or that fork is still building, is no child
  * (`PROC_UNUSED`).
  *
- * Linux's __WCLONE asks for the children that report their end with a signal
+ * Linux's __WCLONE selects the children that report their end with a signal
  * other than SIGCHLD, unless __WALL is beside it, and every child here
  * reports with SIGCHLD, so it selects none.
  */
@@ -2579,7 +2559,7 @@ static void wait_fill(struct wait_report *r, const process_t *p, int32_t status,
  * time, with its reaped children's, to the children's totals of the caller's
  * process, which its thread group keeps, and give back its address space,
  * kernel stack and record (`proc_release`). The zombie no longer runs on its
- * kernel stack, and this is the single release point for a per-fork stack.
+ * kernel stack, so the stack can go with the record.
  */
 static void wait_reap(process_t *p)
 {
@@ -2797,10 +2777,10 @@ static int wait_child(process_t *p, int options, struct wait_report *out)
 
 /**
  * The shared core of waitpid, wait4 and waitid: find a child `idtype` and
- * `id` select that has an event `options` asks for, fill `out` with it and
- * return its pid, holding the event for the caller until it has copied the
- * report out and calls `wait_done`. The threads the caller's process traces
- * are waited for too, as `wait_tracee` reports them.
+ * `id` select that has one of the events `options` lists, fill `out` with it
+ * and return its pid, holding the event for the caller until it has copied
+ * the report out and calls `wait_done`. The threads the caller's process
+ * traces are waited for too, as `wait_tracee` reports them.
  *
  * The events are an exit (WEXITED), which reaps the zombie; a stop
  * (WUNTRACED), reported once, while the child is stopped; and a continue
@@ -2810,6 +2790,14 @@ static int wait_child(process_t *p, int options, struct wait_report *out)
  * The exit's si_code is CLD_EXITED with the exit status, or CLD_KILLED or
  * CLD_DUMPED with the signal; a stop's is CLD_STOPPED with the stop signal,
  * and a continue's CLD_CONTINUED with SIGCONT.
+ *
+ * Every selected child is looked at until one has an event. Without WNOHANG
+ * the caller then sleeps on its process's child queue, which an exit, a stop
+ * or a continue wakes, until a child has an event or a signal interrupts. The
+ * test of `signal_pending`, the joining of the queue and the change to
+ * PROC_BLOCKED are one step with interrupts off, so a wake or a signal posted
+ * from an interrupt is either seen by the test or finds the caller blocked
+ * and wakes it.
  *
  * Returns the pid; 0 with WNOHANG when a selected child has nothing to
  * report; -ECHILD when no child is selected; or -EINTR when a signal the
@@ -2823,8 +2811,6 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
     while (1) {
         int have_child = 0;
 
-        /* Scan ALL selected children for a reportable event (a zombie to
-         * reap, or a stop/continue to report), not just the first. */
         for (p = proc_list; p; p = p->next) {
             if (wait_selects_tracee(idtype, id, options, p)) {
                 have_child = 1;
@@ -2843,13 +2829,6 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
         if (!have_child) {
             return -ECHILD;
         }
-        /* A child exists but has no reportable event. WNOHANG returns 0;
-         * otherwise block on the process's child queue until a child changes
-         * state (an exit, stop or continue wakes the queue) or a signal
-         * interrupts. Lost-wakeup-safe: the signal_pending check, joining the
-         * queue and the PROC_BLOCKED transition are one interrupts-off step,
-         * so a wake or a signal posted from an IRQ either is seen here or
-         * finds us BLOCKED and wakes us. */
         if (options & WNOHANG) {
             return 0;
         }
@@ -2930,11 +2909,11 @@ static int32_t do_wait(int pid, int __user *status, int options, uintptr_t rusag
     return ok ? (int32_t)seen : -EFAULT;
 }
 
-/*
- * sys_waitpid - wait for a child to change state.
- * Its arguments are pid (-1 = any child), status pointer and options.
- * Returns the PID of the child reaped, or reported stopped or continued, 0
- * (WNOHANG, none ready), or -errno.
+/**
+ * waitpid: wait for a child to change state (`do_wait`). Its arguments are
+ * pid (-1 for any child), the status pointer and the options. Returns the
+ * PID of the child reaped, or reported stopped or continued, 0 under WNOHANG
+ * when none is ready, or -errno.
  */
 long sys_waitpid(isr_params_t *params)
 {
@@ -2942,10 +2921,10 @@ long sys_waitpid(isr_params_t *params)
                    0);
 }
 
-/*
- * sys_wait4 - like waitpid plus an optional rusage out-pointer, which
- * receives the child's CPU time. Its arguments are pid, status, options
- * and rusage. musl's wait/waitpid are implemented on top of this.
+/**
+ * wait4: waitpid with an optional rusage pointer, which receives the
+ * child's CPU time. Its arguments are pid, status, options and rusage.
+ * musl's wait and waitpid make this call.
  */
 long sys_wait4(isr_params_t *params)
 {
@@ -3059,12 +3038,12 @@ long sys_waitid(isr_params_t *params)
  * process, every thread's, for RUSAGE_SELF, the calling thread's for
  * RUSAGE_THREAD, and the totals of the children the process has reaped,
  * each with the children those reaped, for RUSAGE_CHILDREN: the ticks
- * `times` reports, as timevals. `ru_maxrss` is
- * the larger of the present address space's resident size and the most any
- * earlier one had when it ended, in kilobytes, or for RUSAGE_CHILDREN the
- * most a reaped child reported. The other counters, through context
- * switches, are not kept and are zero. -EINVAL for any other `who`, Linux's
- * RUSAGE_BOTH among them, -EFAULT for a structure that cannot be written.
+ * `times` reports, as timevals. `ru_maxrss` is the larger of the present
+ * address space's resident size and the most any earlier one had when it
+ * ended, in kilobytes, or for RUSAGE_CHILDREN the most a reaped child
+ * reported. The other counters, through context switches, are not kept and
+ * are zero. -EINVAL for any other `who`, Linux's RUSAGE_BOTH among them,
+ * -EFAULT for a structure that cannot be written.
  */
 long sys_getrusage(isr_params_t *params)
 {
@@ -3100,12 +3079,12 @@ long sys_getrusage(isr_params_t *params)
     return 0;
 }
 
-/*
- * Identity (the i386 *32 variants, 199-202): the four getters read the PCB
- * credentials, all zero (root) until a login server drops them, as the
- * caller's user namespace maps them (`uid_seen`), unsigned, so that an id
- * past 2^31 is not an error on x86-64. The setters and the group
- * list live with the rest of the id family near do_chown.
+/**
+ * getuid: the caller's real uid. The four id getters, on i386 the 32-bit
+ * calls 199 to 202, read the ids of the caller's record as its user
+ * namespace maps them (`uid_seen`, `gid_seen`), and return them unsigned, so
+ * that an id past 2^31 is not an error on x86-64. The setters and the group
+ * list are later in this file.
  */
 long sys_getuid(isr_params_t *params)
 {
@@ -3113,25 +3092,28 @@ long sys_getuid(isr_params_t *params)
     return (long)uid_seen(current_proc->ruid);
 }
 
+/** geteuid: the caller's effective uid, as `sys_getuid` gives an id. */
 long sys_geteuid(isr_params_t *params)
 {
     (void)params;
     return (long)uid_seen(current_proc->euid);
 }
 
+/** getgid: the caller's real gid, as `sys_getuid` gives an id. */
 long sys_getgid(isr_params_t *params)
 {
     (void)params;
     return (long)gid_seen(current_proc->rgid);
 }
 
+/** getegid: the caller's effective gid, as `sys_getuid` gives an id. */
 long sys_getegid(isr_params_t *params)
 {
     (void)params;
     return (long)gid_seen(current_proc->egid);
 }
 
-/* The default action for a signal whose disposition is SIG_DFL. */
+/** The default action for a signal whose disposition is SIG_DFL. */
 static enum ksig_default ksig_default_action(int signo)
 {
     switch (signo) {
@@ -3161,21 +3143,23 @@ static enum ksig_default ksig_default_action(int signo)
     }
 }
 
-/* The 64-bit sa_mask the user installed (two 32-bit words, signals 1..64). */
+/** The 64-bit sa_mask the user installed (two 32-bit words, signals 1..64). */
 static uint64_t sigact_mask(const struct k_sigaction *sa)
 {
     return (uint64_t)sa->mask[0] | ((uint64_t)sa->mask[1] << 32);
 }
 
-/* The signal masks are 64-bit, so a read-modify-write is two stores on i386;
- * signal_post runs from IRQ context (Ctrl-C) as well as from a syscall, so a
- * mutation an interrupt can meet half done is made with interrupts off.
- * Returns the prior IF so the caller can restore it. */
+/** Turn interrupts off for a change of the signal sets. The signal masks are
+ * 64-bit, so a read-modify-write is two stores on i386; signal_post runs from
+ * IRQ context (Ctrl-C) as well as from a syscall, so a mutation an interrupt
+ * can meet half done is made with interrupts off. Returns the prior IF so
+ * the caller can restore it. */
 static uint32_t sig_irq_save(void)
 {
     return kirq_save();
 }
 
+/** Put back the interrupt flag `sig_irq_save` returned. */
 static void sig_irq_restore(uint32_t flags)
 {
     kirq_restore(flags);
@@ -3185,8 +3169,8 @@ static void sig_irq_restore(uint32_t flags)
 #define SIG_STOPS (KSIG_BIT(SIGSTOP) | KSIG_BIT(SIGTSTP) | KSIG_BIT(SIGTTIN) | KSIG_BIT(SIGTTOU))
 
 /** Make `t` runnable if it sleeps, clearing its timed wake: an
- * interruptible wait then asks `signal_pending` whether to end with -EINTR,
- * and any wait that goes on arms its own deadline again. */
+ * interruptible wait then calls `signal_pending` to learn whether to end
+ * with -EINTR, and any wait that goes on arms its own deadline again. */
 static void sig_wake(process_t *t)
 {
     if (t && t->state == PROC_BLOCKED) {
@@ -3295,8 +3279,6 @@ static process_t *sig_taker(process_t *target, int signo)
 }
 
 /**
- * Make `mask`, less SIGKILL and SIGSTOP, the current thread's blocked mask.
- *
  * A signal sent to the process wakes one thread (`sig_taker`), which may be
  * this one. When the new mask blocks a signal still pending for the process
  * that the old mask did not, this thread will not take it, so another thread
@@ -3324,7 +3306,7 @@ void signal_set_blocked(uint64_t mask)
     sig_irq_restore(flags);
 }
 
-/*
+/**
  * Post signal `signo` to the process `target` is a thread of, with the
  * siginfo `info`: set the process's pending bit, keeping `info` when the
  * signal was not already pending, and wake the thread `sig_taker` chooses,
@@ -3395,11 +3377,12 @@ void signal_force(process_t *target, int signo, const struct k_siginfo *info)
     signal_post_thread(target, signo, info);
 }
 
-/** Post deferred kernel debug hits before reading the thread's and process's
- * pending signals, so a signal wait can dequeue them with their siginfo.
- * A deferred user hit stays out of these sets until user return forces it.
- * Called on the thread's stack with the big lock held. Read with interrupts
- * off, since a 64-bit read is two loads on i686. */
+/** The signals pending for the current thread and its process, read after
+ * the deferred kernel debug hits are posted, so a signal wait can dequeue
+ * them with their siginfo. A deferred user hit stays out of these sets until
+ * the return to user mode delivers it. Called on the thread's stack with the
+ * big lock held. Read with interrupts off, since a 64-bit read is two loads
+ * on i686. */
 static uint64_t sig_pending_now(void)
 {
     uint32_t flags = sig_irq_save();
@@ -3411,7 +3394,7 @@ static uint64_t sig_pending_now(void)
     return set;
 }
 
-/* The siginfo of a signal a process sends to `target`: `code` SI_USER for
+/** The siginfo of a signal a process sends to `target`: `code` SI_USER for
  * kill and SI_TKILL for tkill and tgkill, with the sender's pid and real uid
  * as the target's namespaces see them. */
 static void sender_info(struct k_siginfo *info, int32_t code, const process_t *target)
@@ -3422,19 +3405,17 @@ static void sender_info(struct k_siginfo *info, int32_t code, const process_t *t
     info->uid = current_proc ? ns_uid_from_kernel(proc_userns(target), current_proc->ruid) : 0;
 }
 
-/** Non-zero if the current process has a pending signal that is neither
- * blocked nor ignored: one that is caught, or whose default action terminates
- * or stops the process; or if its tracer asked for a stop with
- * PTRACE_INTERRUPT, which, as a stop signal would, ends the wait so the stop
- * is taken on the way back to user mode (`ptrace_return_stops`). Blocking
- * syscall loops call this on the thread's stack with the big lock held.
- * Post a deferred kernel hit before testing its mask and disposition. A
- * deferred user hit interrupts regardless of either, but stays deferred
- * until user return forces it.
- * Posting can make this thread ready and clear its wakeup_tick; a caller
- * that keeps waiting must rearm its deadline. No wait queue is changed.
- * The x86-64 debug interrupt stack calls only debugreg_defer; a user debug
- * exception moves to the thread's stack before entering C. */
+/** A stop the tracer asked for with PTRACE_INTERRUPT ends a wait as a stop
+ * signal would, so the stop is taken on the way back to user mode
+ * (`ptrace_return_stops`). Blocking syscall loops call this on the thread's
+ * stack with the big lock held. A deferred kernel debug hit is posted before
+ * its mask and disposition are tested; a deferred user hit interrupts
+ * whatever either says, but stays deferred until the return to user mode
+ * delivers it. Posting can make this thread ready and clear its
+ * `wakeup_tick`, so a caller that keeps waiting must arm its deadline again.
+ * No wait queue is changed. The x86-64 debug interrupt stack calls only
+ * `debugreg_defer`; a user debug exception moves to the thread's stack
+ * before entering C. */
 int signal_pending(void)
 {
     uint64_t deliverable;
@@ -3452,9 +3433,6 @@ int signal_pending(void)
     deliverable = sig_pending_now() & ~current_proc->sig_blocked;
     debug_pending = arch_debug_pending();
     sig_irq_restore(flags);
-    /* Only a signal that would ACT interrupts a wait: a caught handler, a
-     * default terminate or a default stop. A pending signal that is ignored
-     * (SIG_IGN or a default-ignore like SIGCHLD) must NOT cause -EINTR. */
     for (signo = 1; signo <= KSIG_MAX; signo++) {
         struct k_sigaction *sa;
 
@@ -3466,9 +3444,9 @@ int signal_pending(void)
             continue;
         }
         if (sa->handler == KSIG_DFL && ksig_default_action(signo) == KSIG_DEFAULT_IGNORE) {
-            continue; /* default ignore (SIGCHLD/SIGCONT/...): does not interrupt */
+            continue;
         }
-        return 1; /* caught, or default terminate/stop: it acts, so it interrupts */
+        return 1;
     }
     return debug_pending;
 }
@@ -3490,14 +3468,14 @@ int signal_pending(void)
  *
  * The exception cannot extend a sender's reach beyond its own session, because
  * `setsid` only ever creates a session and never joins one, so a process cannot
- * move into a session to reach something. What it does expose is narrow and
- * worth naming: a member of a session may make a root process in that same
- * session run its `SIGCONT` handler at a time of the member's choosing.
+ * move into a session to reach something. It does expose one narrow thing: a
+ * member of a session may make a root process in that same session run its
+ * `SIGCONT` handler at a time of the member's choosing.
  *
  * The signo 0 existence probe keeps the strict rule. The exception exists for
- * resuming a stopped job, not for discovering what is running, and POSIX asks
- * for permission on the probe too. `tty_signal_group` stays unchecked: those
- * signals come from the terminal, not from a process.
+ * resuming a stopped job, not for discovering what is running, and POSIX
+ * requires permission for the probe too. `tty_signal_group` stays unchecked:
+ * those signals come from the terminal, not from a process.
  */
 static int cred_may_signal(const process_t *target, int signo)
 {
@@ -3511,11 +3489,12 @@ static int cred_may_signal(const process_t *target, int signo)
            current_proc->euid == target->ruid || current_proc->euid == target->suid;
 }
 
-/* Post signo to a process group: pid==0 is the caller's group, pid<-1 the group
- * (-pid). Signals every member the caller may signal; the POSIX outcome: 0 if
- * any member took it, -EPERM if members exist but none may be signalled,
- * -ESRCH if the group is empty. signo 0 only probes. A member that has ended
- * and is not yet reaped counts and discards the signal, as on Linux. */
+/** Post `signo` to every member of the process group `pgid` the caller may
+ * signal, which kill(2) selects with a pid of 0 or below -1. The POSIX
+ * outcome: 0 if any member may be signalled, -EPERM if members exist but none
+ * may be, -ESRCH if the group is empty. signo 0 only probes. A member that
+ * has ended and is not yet reaped counts and discards the signal, as on
+ * Linux. */
 static int32_t kill_group(int pgid, int signo)
 {
     int found = 0;
@@ -3544,12 +3523,13 @@ static int32_t kill_group(int pgid, int signo)
     return allowed ? 0 : -EPERM;
 }
 
-/* kill(2): pid > 0 a single process, which the id of any of its threads
+/** kill(2): pid > 0 a single process, which the id of any of its threads
  * names; pid == 0 the caller's process group; pid < -1 the group (-pid).
- * (pid == -1 "all processes" is not supported here.) signo 0 just probes
- * existence and permission. A process whose threads have all ended exists
- * until its parent reaps it, and takes a signal and discards it, as on
- * Linux, where `kill -0` of a zombie succeeds. */
+ * pid == -1, every process, is -ESRCH, since it is not supported here.
+ * signo 0 just probes existence and permission. A process whose threads
+ * have all ended exists until its parent reaps it, and takes a signal and
+ * discards it, as on Linux, where `kill -0` of a zombie succeeds. 0,
+ * -EINVAL, -ESRCH or -EPERM. */
 static int32_t do_kill(int pid, int signo)
 {
     process_t *target;
@@ -3616,6 +3596,7 @@ static int32_t do_tkill(int tgid, int tid, int signo)
     return 0;
 }
 
+/** kill takes pid and signal (`do_kill`). */
 long sys_kill(isr_params_t *params)
 {
     return do_kill((int)SC_ARG(params, 0), (int)SC_ARG(params, 1));
@@ -3627,7 +3608,8 @@ long sys_tkill(isr_params_t *params)
     return do_tkill(0, (int)SC_ARG(params, 0), (int)SC_ARG(params, 1));
 }
 
-/** tgkill takes tgid, tid and signal; a tgid of 0 is -EINVAL. */
+/** tgkill takes tgid, tid and signal; a tgid that is not positive is
+ * -EINVAL. */
 long sys_tgkill(isr_params_t *params)
 {
     if ((int)SC_ARG(params, 0) <= 0) {
