@@ -579,6 +579,15 @@ syscalls: $(MANCHECK)
 	    || { rm -f $(SYSCALLS_MD).tmp; exit 1; }
 	mv $(SYSCALLS_MD).tmp $(SYSCALLS_MD)
 
+# `make programs-md`: man/programs.md, the list of the programs, from the
+# manifests, the recipes and BusyBox's applet table; PROGRAMS_MD names
+# another file to write, which tools/verify/check.sh compares with it.
+PROGRAMS_MD = man/programs.md
+.PHONY: programs-md
+programs-md: $(BUSYBOX_STAMP)
+	sh man/programs.sh $(BUSYBOX_STAGE)/applet_tables-main.h > $(PROGRAMS_MD).tmp
+	mv $(PROGRAMS_MD).tmp $(PROGRAMS_MD)
+
 test-image: $(TEST_IMAGE)
 os-simple-image: $(OS_SIMPLE_IMAGE)
 os-real-image: $(OS_REAL_IMAGE)

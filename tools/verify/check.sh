@@ -38,7 +38,8 @@
 #  13. the dev-log index (prosecheck devlog): it names every finished
 #      milestone, and names the newest last
 #  14. the test registry against the run- targets in tests/system/suites.mk,
-#      and rach2/syscalls.md against what `make syscalls` writes
+#      rach2/syscalls.md against what `make syscalls` writes, and
+#      man/programs.md against the output of man/programs.sh
 #  16. the suites' waits and criteria (tools/verify/suitecheck.sh): no sleep
 #      for a number of seconds, no wait= step, no upper bound on a duration
 #      in a probe, except an interval marked with a reason the file
@@ -607,6 +608,16 @@ fi
 if grep -q 'no sentence in suites.mk' "$VDIR/_inventory.md"; then
     echo "  FAIL: a suite has no \`tests/run NAME\` sentence in suites.mk:"
     grep 'no sentence' "$VDIR/_inventory.md" | sed 's/:.*//; s/^/    /'
+    regfail=1
+fi
+# The generated list of programs: man/programs.md is `make programs-md`, which
+# builds BusyBox first for its applet table.
+if ! make -s -C "$REPO" programs-md PROGRAMS_MD="$VDIR/_programs.md" >"$VDIR/verify_programs.log" 2>&1; then
+    echo "  FAIL: man/programs.sh failed; see $VDIR/verify_programs.log"
+    regfail=1
+elif ! cmp -s "$VDIR/_programs.md" "$REPO/man/programs.md"; then
+    echo "  FAIL: man/programs.md is not man/programs.sh's output; regenerate it with \`make programs-md\`"
+    diff "$REPO/man/programs.md" "$VDIR/_programs.md" | head -5 | sed 's/^/    /'
     regfail=1
 fi
 if [ "$regfail" -eq 0 ]; then

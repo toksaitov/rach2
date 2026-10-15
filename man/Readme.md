@@ -14,6 +14,10 @@ A page is `man/manN/NAME.N`, in the directory of its section: `man1` for program
 
 `man/aliases` lists the names a page answers for besides its own, one `NAME SECTION TARGET` a line. Every BusyBox applet is an alias of its family page, `busybox-DIR` in section 1 or 8 for the applets of BusyBox's source directory `DIR`; every member of a system call family is an alias of the family's page; and a call's 32-bit form is an alias of the plain call. `man/recovery` lists the pages the recovery image stages, one `NAME SECTION` a line: the programs the installer and the recovery menu direct a person to, and `man(1)`.
 
+### The list of programs
+
+[`programs.md`](programs.md) lists the programs of the musl and GNU systems with their pages, and the vendored projects with their versions and licenses. `man/programs.sh` writes it from the image manifests, `utils/programs.mk`, BusyBox's applet table, the pages and `man/aliases`, the recipes and source lists of the GNU layer, and the vendored build scripts; the licenses and the purposes of the five GNU programs that are not ports, which no file states in a form a script can read, are tables in the script. `make programs-md` builds BusyBox if it is not built and writes the file again.
+
 ### Rendering
 
 `make man` runs `man/render.sh` on each page that changed. It refuses a page that `mandoc -T lint` warns about, renders it with `mandoc -T ascii` with the operating system named as Rach2, removes the backspace overstrikes that mark bold and underline, and writes the text gzipped, under the plain name, to `build/man/catN/NAME.N`. It also writes an HTML rendering to `build/man/html/NAME.N.html` for reading off the machine. `mandoc` is a required build tool: `tools/setup/preflight.sh` refuses a build without it.
@@ -29,4 +33,5 @@ BusyBox's `man` applet is not built. It finds a page only as a file, so every al
 ## Tests
 
 * `tests/run style` runs `make mancheck` for both architectures' system call tables. A program staged by the os-real, os-simple, metal disk or recovery manifest or built by `utils/programs.mk` needs a page or an alias in section 1 or 8, a BusyBox applet the same, and a registered system call one in section 2. An alias whose target is not a page, a page `mandoc -T lint` warns about, and a page `man/recovery` names that the recovery manifest does not stage each fail the check.
+* `tests/run style` also runs `man/programs.sh` and fails when its output differs from `programs.md`.
 * `tests/run man` boots the os-real image and reads every staged page and every alias through a pipe; each must equal the staged page, or its target's, byte for byte. It reads `rach2(7)` on the console under the pager and requires its first and last lines. It then boots the recovery image and reads every page that image stages the same way.
