@@ -1,6 +1,12 @@
 #!/bin/sh
-# Prove the installed acceptance rows against staged and compiled faults, for
-# the architecture ARCH names: its kernel, its bootctl and its emulator.
+# installed_mutate.sh [--texts]: show that installed_test.sh catches five
+# faults, for the architecture ARCH names: its kernel, its bootctl and its
+# emulator.
+#
+# Four faults are put into metal_accept.sh and one is compiled into bootctl.
+# Each must fail its row with the expected message, and the row must pass
+# again once the source is restored and bootctl rebuilt to the same bytes.
+# --texts checks that the text each fault replaces is once in its source.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
 cd "$repo"
@@ -58,6 +64,7 @@ cp "$bootctl" "$work/bootctl.saved"
 child=
 changed=
 
+# Stop the process group of the running row, and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -70,12 +77,14 @@ stop_child()
     fi
 }
 
+# Build bootctl again from its source.
 rebuild()
 {
     rm -f "$tree/utils/sbin/bootctl"
     make -s -C utils "../$tree/utils/sbin/bootctl" "ARCH=$RACH2_ARCH"
 }
 
+# Put back the saved sources and rebuild bootctl from them.
 restore()
 {
     cp "$work/accept.saved" "$accept"
@@ -85,6 +94,7 @@ restore()
     changed=
 }
 
+# On exit: stop the row and restore any source a fault changed.
 cleanup()
 {
     stop_child
@@ -97,6 +107,8 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE ROW EXPECTED: run installed_test.sh's ROW; EXPECTED is
+# `pass`, or the text the failing row must print.
 run_phase()
 {
     phase=$1

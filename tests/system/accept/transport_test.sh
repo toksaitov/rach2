@@ -1,5 +1,16 @@
 #!/bin/sh
-# Run the complete acceptance script against a private SSH fixture.
+# transport_test.sh: run the whole of metal_accept.sh against a stand-in for
+# ssh, which answers each command the script sends as a machine would, in 17
+# cases, once with root's key and once through su_command.sh.
+#
+# A case fails a command, a transfer, a hash or a check of the stick, or
+# boots an ext2 root whose check found a fault, and the script must then
+# exit 1 and never print PASS; RACH2_ACCEPT_DD and RACH2_ACCEPT_BOOTLOG,
+# which the script refuses, must exit 2. With --mutate, two faults in a
+# private copy of the script must be caught: a failed command left
+# unrecorded, and a stick matched by the prefix of its node, which writes
+# disk10 when disk1 is named. --texts checks that the text each fault
+# replaces is once in metal_accept.sh.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
@@ -197,6 +208,9 @@ RACH2_ACCEPT_PASSWORD=unused-fixture-value
 export PATH ACCEPT_FIXTURE RACH2_ACCEPT_KEY RACH2_ACCEPT_PASSWORD
 unset RACH2_ACCEPT_DD RACH2_ACCEPT_BOOTLOG RACH2_ACCEPT_FAT_IMAGE
 
+# check CASE STATUS: run the private script for CASE under $phase and
+# $RACH2_ACCEPT_SU, and require STATUS (1 means any failure) and the lines
+# the case must print.
 check()
 {
     ACCEPT_CASE=$1
@@ -258,6 +272,7 @@ check()
     esac
 }
 
+# Run every case with root's key and then through su.
 cases()
 {
     for RACH2_ACCEPT_SU in 0 1; do

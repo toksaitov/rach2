@@ -1,5 +1,14 @@
 #!/bin/sh
-# Text commands for acceptance, authenticated by the owner through su.
+# su_command.sh KEY HOST PORT USER KNOWN-HOSTS COMMAND: run COMMAND as root
+# on an acceptance machine, through su in an SSH session as USER, and print
+# what it printed and exit with its status.
+#
+# runner/ptydrive gives ssh a pseudo-terminal and answers su's one password
+# prompt from $RACH2_ACCEPT_PASSWORD, which never appears in an argument or a
+# transcript. COMMAND's output is printed from between two markers, so that
+# su's prompt and the session's other output are left out. The status is 1
+# when the session fails, the prompt was not answered exactly once, or the
+# markers are missing.
 set -eu
 
 if [ "$#" -ne 6 ] || [ -z "${RACH2_ACCEPT_PASSWORD:-}" ]; then
@@ -34,6 +43,7 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# Print $1 quoted for a shell.
 quote()
 {
     printf "'"

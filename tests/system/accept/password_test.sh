@@ -1,5 +1,13 @@
 #!/bin/sh
-# Use only a dummy secret, real PTYs and private compiled copies of the driver.
+# password_test.sh: check that su_command.sh answers the password prompt
+# without the password reaching any transcript, against fixtures/pty_secret.c
+# in place of ssh, with a dummy password, real pseudo-terminals and private
+# builds of runner/ptydrive.c, in seven cases of prompt and echo.
+#
+# With --mutate, three faults compiled into the driver must each be caught:
+# a second prompt answered, the password written raw, and a wrong count of
+# prompts. --texts checks that the text each fault replaces is once in
+# ptydrive.c.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
@@ -104,12 +112,16 @@ export PATH TMPDIR RACH2_ACCEPT_PASSWORD
 unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
 
 
+# Build the private driver for $phase.
 compile()
 {
     "${CC:-cc}" -O2 -Wall -Wextra -Werror -o "$work/build/tests/system/ptydrive" "$work/ptydrive.c"
     cp "$work/build/tests/system/ptydrive" "$work/$phase.ptydrive"
 }
 
+# check CASE STATUS COMMAND [OUTPUT]: run su_command.sh over the fixture's
+# CASE with COMMAND, and require STATUS, no byte of the password in any
+# transcript, and the counts and output the case must give.
 check()
 {
     PTY_SECRET_CASE=$1
@@ -163,6 +175,7 @@ check()
     esac
 }
 
+# Run the seven cases.
 cases()
 {
     check good 7 "printf '%s' \"a 'quote' and a dollar \\\$\"; exit 7" \

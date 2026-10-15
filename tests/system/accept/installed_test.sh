@@ -1,5 +1,15 @@
 #!/bin/sh
-# Boot the acceptance disk and ext2 rows on a small installed root.
+# installed_test.sh [KERNEL [HARNESS [WORK [ROW]]]]: boot a disk with a
+# small installed ext2 root and run on it the rows of metal_accept.sh that
+# read the command line, the disk and the ext2 root.
+#
+# The rows are copied out of metal_accept.sh between marker lines, most of
+# them its section comments, so that the script and the test cannot
+# differ. The disk is built by tools/image/mkdisk_grub.sh, with an MBR, and
+# with a GUID table for the `gpt` row. The `candidate` and `gpt` rows must
+# pass, and three rows must fail: a root on the wrong partition, a root
+# mounted read-only, and a boot from the fallback slot. ROW runs one row;
+# the default is all five.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
@@ -86,12 +96,15 @@ RACH2_DISK_TABLE=gpt RACH2_DISK_APPEND='rach2.rescue' RACH2_DISK_DHCP_APPEND='' 
     RACH2_DISK_RECOVERY_MB=8 RACH2_DISK_EXT2_MB=8 RACH2_DISK_EXT2_IMAGE="$volume" \
     sh tools/image/mkdisk_grub.sh "$kernel" "$work/gpt.base.disk" > "$work/gpt.disk.log" 2>&1
 
+# Report $1 and exit 1.
 fail()
 {
     echo "metal-installed: $1" >&2
     exit 1
 }
 
+# run_row ROW STATUS: prepare the disk for ROW, boot it, and require the
+# acceptance status STATUS and the lines ROW must print.
 run_row()
 {
     row=$1

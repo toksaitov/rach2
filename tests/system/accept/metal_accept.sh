@@ -1,25 +1,26 @@
 #!/usr/bin/env sh
 
 #
-# metal_accept.sh: the scripted half of the metal acceptance, run over SSH.
+# metal_accept.sh: the scripted half of the acceptance of a real machine,
+# run from the development host over SSH.
 #
-# The acceptance for this milestone has two halves and they cannot be merged.
-# One half needs a person in the room: a cable pulled and put back, a cold
-# power cycle, a sound heard, a screen photographed, Windows booting with the
-# stick out. The other half is every fact a machine can report about itself,
-# and there is no reason for a person to read those off a screen and copy them
-# down. This is that half.
+# The acceptance has two halves. One needs a person at the machine: a cable
+# pulled and put back, a cold power cycle, a sound heard, a screen
+# photographed. The other is every fact the machine can report about
+# itself, which this script reads and records.
 #
-# It is written to be run against the laptop from the development host once SSH
-# answers, and it is run against QEMU first so that the script itself is not
-# being debugged on the machine it is meant to measure. Nearly everything it
-# does is a read, and it issues no command the read-only build's allowlist
-# would refuse; its file writes use the root and the selected test stick.
+# It is run against the Lenovo once SSH answers, and the metal suite runs it
+# against QEMU, so that the script is not debugged on the machine it
+# measures. Nearly everything it does is a read, and it issues no command
+# the read-only build's allowlist would refuse; it writes files only on the
+# root and on the stick named by its serial.
 #
-# Its output is a record, not a verdict on everything. Where a baseline exists
-# (dev-log/24-metal/baseline.md, what Windows measured before Rach2 existed on
-# that machine) it compares and says so; where none exists it reports the
-# number so the record has it.
+# Its output is a record of notes and FAIL lines. Where a baseline exists
+# (dev-log/24-metal/baseline.md, what Windows measured on the Lenovo before
+# Rach2 was installed) it compares and says so; where none exists it
+# reports the number so that the record has it. It prints `metal-accept:
+# PASS` and exits 0, or `metal-accept: FAIL (N)` and exits 1; a usage error
+# exits 2.
 #
 # The key is the demonstration one the RAM images carry, unless
 # `RACH2_ACCEPT_KEY` names another, and the account is root unless
@@ -66,15 +67,16 @@ umask 077
 LOCAL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept.XXXXXX")
 
 # The MBR's SHA-256 as Windows measured it, from dev-log/24-metal/baseline.md.
-# Kept here, not read from the document so this script is one file to
-# copy to a development host, and stated in both places so a change to one is
-# visible against the other.
+# It is kept here and not read from the document, so that this script is one
+# file to copy to a development host, and it is stated in both places so that
+# a change to one is visible against the other.
 BASELINE_MBR_SHA256="652ad40fe72061185cf3a69c1a9a45394f68374f409153e082b7c1fa04c107d3"
 BASELINE_SECTORS="1953525168"
 BASELINE_MODEL="Samsung SSD 870 EVO 1TB"
 
-# Release mounts before removing their temporary directories. A failed
-# unmount leaves its directory in place.
+# On exit, remove what the script left on the machine: the stick's file, its
+# mount, the loop device, and the temporary directories, each mount released
+# before its directory is removed. A failed unmount leaves its directory.
 MACHINE_TMP=""
 MACHINE_MOUNTED=""
 MACHINE_LOOP=""
@@ -113,6 +115,7 @@ if [ ! -f "$KEY" ]; then
 fi
 
 fails=0
+# Record $1 as a note, or as a failure that is counted.
 note() {
     echo "  $1"
 }
@@ -121,6 +124,8 @@ bad() {
     echo "  FAIL: $1"
 }
 
+# Run $1 on the machine as the account, over SSH, with its status.
+#
 # A connection the machine refused, or that ended before the two sides had
 # exchanged their identification, is tried again, three times a second
 # apart: a machine slow to answer, under a loaded emulator in the
@@ -148,6 +153,8 @@ account() {
     done
 }
 
+# Run $1 on the machine as root: through su_command.sh when
+# RACH2_ACCEPT_SU is 1, and otherwise as the account, which must be root.
 try_run() {
     if [ "$USE_SU" = 1 ]; then
         if run_output=$(sh "$REPO/tests/system/accept/su_command.sh" \
@@ -165,8 +172,9 @@ try_run() {
     fi
 }
 
-# A file retains failure across subshells and pipelines. Required commands
-# cannot become successful verdicts when a caller tests only their output.
+# Run $1 as root, a command the acceptance requires. A failure is recorded in
+# a file, which keeps it across subshells and pipelines, so that the run
+# fails even when a caller tests only the command's output.
 run() {
     if try_run "$1"; then
         return 0
@@ -178,6 +186,8 @@ run() {
     fi
 }
 
+# Make a temporary directory on the machine for a transfer through su, in
+# TRANSFER_TMP, and check that its name is a plain one.
 transfer_directory() {
     TRANSFER_TMP=$(account 'mktemp -d /tmp/accept-transfer.XXXXXX') || return 1
     case "$TRANSFER_TMP" in
@@ -189,10 +199,14 @@ transfer_directory() {
     esac
 }
 
+# put LOCAL REMOTE and get REMOTE LOCAL: copy a file to or from the machine.
+#
 # The machine has no sftp server, so a file goes over as the standard input of
 # a command that writes it, and comes back as the standard output of one that
-# reads it. Both temporary directories are on /tmp's file system: moving the
-# image avoids a second MiB on a small RAM root, where KRFFS has no hard links.
+# reads it. Through su, the file passes through a directory the account owns
+# and is moved as root. Both temporary directories are on /tmp's file system,
+# so that the move takes no second copy of the image on a small RAM root,
+# where KRFFS has no hard links.
 put() {
     if [ "$USE_SU" != 1 ]; then
         account "cat > $2" < "$1"
@@ -225,8 +239,11 @@ get() {
     return "$transfer_status"
 }
 
-# Compare a unique file before and after unmount. The rehearsal supplies the
-# FAT image to mtools for a host read while the guest volume is unmounted.
+# Write a file with a unique text to the stick's volume, $VOLNODE, and
+# compare it with the text after an unmount and a mount. When
+# RACH2_ACCEPT_FAT_IMAGE names the volume's image, as the metal suite's
+# rehearsal does, mtools also reads the file from it while the volume is
+# unmounted. The file is removed afterwards; a failure returns 1.
 stick_witness() {
     printf 'fat acceptance %s\n' "${LOCAL_TMP##*/}" > "$LOCAL_TMP/stick.expected" || return 1
     MACHINE_TMP=$(run 'mktemp -d /tmp/accept.XXXXXX') || return 1
@@ -284,7 +301,7 @@ stick_witness() {
 
 echo "metal-accept: $HOST:$PORT"
 
-# ---- that it is reachable at all, which is the milestone's whole point ----
+# ---- that it is reachable at all, and as root ----
 if [ "$(run 'echo ALIVE')" != "ALIVE" ]; then
     echo "metal-accept: FAIL: no SSH answer" >&2
     exit 1
@@ -325,9 +342,8 @@ note "uptime ticks: $(run 'cat /proc/uptime')"
 note "boot line: $CMDLINE"
 note "identity: $(run 'id')"
 
-# ---- the network, which is the thing that was ported. The address is on the
-#      boot line, since this kernel publishes no interface file, and the fact
-#      that this session exists at all is the stronger evidence anyway. ----
+# ---- the network: the address the boot line gives. That this session
+#      exists is the evidence that the network works. ----
 note "address given: $(printf '%s\n' "$CMDLINE" | tr ' ' '\n' | grep '^rach2.ip=' || echo none)"
 
 # ---- entropy, which dropbear's host key depends on ----
@@ -350,22 +366,21 @@ else
     mounted="$(echo "$identity0" | awk '{print $5}')"
 
     note "disk: policy=$policy"
-    # Two kernels answer here. The stick's, milestone 25's, is built
-    # read-only because the disk under it may be somebody's Windows, and it
-    # mounts nothing from that disk. The installed one, whose boot line names
-    # a root on a disk (rach2.root=disk, rach2.root=ext2, or a partition by
+    # Two kernels answer here. The one a stick boots is built read-only,
+    # because the disk under it may hold another system, and it mounts
+    # nothing from that disk. The installed one, whose boot line names a root
+    # on a disk (rach2.root=disk, rach2.root=ext2, or a partition by
     # identity, as the installer names it: rach2.root=MBRID=ID,N on an MBR
     # disk and rach2.root=GPTID=GUID,N on a GUID table), writes that root and
-    # is built read-write; a read-only kernel there would be a system that
-    # cannot take a file.
+    # is built read-write; a read-only kernel there could not take a file.
     if [ "$INSTALLED" = 1 ]; then
         [ "$policy" = "read-write" ] || bad "the installed kernel is not the read-write build"
     else
         [ "$policy" = "read-only" ] || bad "the running kernel is not the read-only build"
     fi
 
-    # The registry is current; the optional boot diagnostic may be not-asked
-    # even when the installed root is mounted from this disk.
+    # The registry in /proc/disk says whether disk0 is mounted; the boot
+    # diagnostic, which is optional, is not read.
     if [ -z "$disk0" ]; then
         if [ "$INSTALLED" = 1 ]; then
             bad "disk: the installed root has no disk0 in the registry"
@@ -392,8 +407,8 @@ else
         window="$(run 'if [ -b /dev/disk0 ]; then echo published; else echo absent; fi')"
         case "$window" in
             published)
-                # A hash of a pipe can succeed after dd fails or reads nothing.
-                # Keep the sector until its read status and length are checked.
+                # A hash of a pipe can succeed after dd fails or reads nothing,
+                # so the sector is kept in a file until its length is checked.
                 # shellcheck disable=SC2016
                 sector="$(run 'f=$(mktemp /dev/shm/accept-mbr.XXXXXX) || exit 1; trap '"'"'rm -f "$f"'"'"' EXIT; /bin/busybox dd if=/dev/disk0 of="$f" bs=512 count=1 >/dev/null 2>&1 && [ "$(wc -c < "$f")" = 512 ] && sha256sum "$f"')" || sector=""
                 mbr="$(printf '%s\n' "$sector" | awk '{print $1}')"
@@ -414,12 +429,11 @@ else
         esac
         echo "$DISK" | awk '$1 == "part" && $2 == 0' | while read -r line; do note "disk: $line"; done
 
-        # The baseline describes ONE drive. Against that drive every number
-        # must agree, and a disagreement is the finding this script exists for.
-        # Against any other drive, including the one QEMU provides when this
-        # script is rehearsed, there is nothing to compare, and the note says
-        # so; a script that failed there would be a script nobody could
-        # rehearse.
+        # The baseline describes one drive. Against that drive every number
+        # must agree, and a disagreement is a failure. Against any other drive,
+        # including the one QEMU provides in the rehearsal, there is nothing to
+        # compare, and the note says so; a script that failed there could not
+        # be rehearsed.
         if [ "$model" = "$BASELINE_MODEL" ]; then
             note "disk: this is the drive the baseline describes; comparing"
             [ "$sectors" = "$BASELINE_SECTORS" ] \
@@ -450,12 +464,12 @@ if [ -s "$BOOTLOG_OUT" ]; then
     fi
 fi
 
-# ---- the USB hardware, read out of the log this machine already wrote. The
-#      kernel takes the inventory from configuration space at boot, so there is
-#      nothing to ask for here that is not already saved above. What matters on
-#      this notebook is the routing line: its firmware decides whether the USB2
-#      pins belong to the xHCI or to the companion EHCI, and a controller with
-#      no pins looks exactly like a machine with nothing plugged in. ----
+# ---- the USB hardware, read out of the boot log saved above. The kernel
+#      takes the inventory from configuration space at boot, so there is
+#      nothing more to ask the machine for. On the Lenovo the routing line
+#      matters: its firmware decides whether the USB2 pins belong to the xHCI
+#      or to the companion EHCI, and a controller with no pins looks like a
+#      machine with nothing plugged in. ----
 if grep -q 'usb: controller:' "$BOOTLOG_OUT" 2>/dev/null; then
     for pattern in 'usb: controller:' 'usb: routing:' 'usb: ready:' 'usb: port:' \
                    'usb: device:' 'usb: absent:' 'usb: refused:'; do
@@ -463,11 +477,10 @@ if grep -q 'usb: controller:' "$BOOTLOG_OUT" 2>/dev/null; then
             note "$line"
         done
     done
-    # Whether the stack got as far as a device is the question this machine
-    # exists to answer, so it is asked here rather than left to a reader of the
-    # lines above. It is a note and not a failure: a machine with nothing
-    # plugged into it is not broken, and which it was is for the person who
-    # plugged something in.
+    # Whether the stack reached a device is said here rather than left to a
+    # reader of the lines above. It is a note and not a failure: a machine
+    # with nothing plugged into it is not broken, and the person who plugged
+    # something in knows which it was.
     if grep -q 'usb: refused:' "$BOOTLOG_OUT"; then
         bad "the USB controller was refused; the line above says why"
     elif grep -q 'usb: device: port' "$BOOTLOG_OUT"; then
@@ -483,16 +496,14 @@ else
     bad "the boot log has no usb inventory; this kernel predates it"
 fi
 
-# ---- which interrupts this machine takes, and by which road. Written here
-#      and run in milestone 43: on this notebook the question is whether the
-#      APIC came up at all, whether the two controllers took their message
-#      vectors or stayed on their legacy lines, and whether the 8259's own
-#      interrupts still arrive with the APIC between them and the processor.
+# ---- which interrupts this machine takes, and by which path: whether the
+#      local APIC came up, whether the USB and audio controllers took message
+#      vectors or stayed on their legacy lines, and whether the timer ticks.
 #      Almost every line is a note: a machine whose firmware leaves it on
-#      legacy lines is not broken, and what it did is the record this
-#      milestone is for. One thing is a failure, and it is the kernel's own
-#      claim: a timer vector that has taken nothing, which would mean the
-#      8259's interrupts stopped when the APIC came up. ----
+#      legacy lines is not broken, and what it did is the record. The
+#      failures are the timer's vector, 32, having taken nothing, a boot log
+#      with no line about the local APIC, and the kernel's own `lapic:
+#      timer:` line, which it logs when no tick arrives. ----
 INTR="$(run 'cat /proc/interrupts 2>/dev/null')"
 if [ -z "$INTR" ]; then
     bad "/proc/interrupts is not there; this kernel predates it"
@@ -500,7 +511,7 @@ else
     echo "$INTR" | while read -r line; do note "interrupts: $line"; done
     timer="$(echo "$INTR" | awk -F'\t' '$1 == "32:" { print $2 }')"
     # By the device's name and not by a number: a vector is given to a device
-    # when it enables its messages, so the number is whatever came next.
+    # when it enables its messages, so the number is the next one free.
     usb_vector="$(echo "$INTR" | awk -F'\t' '$4 ~ /xhci/ { print $2 }')"
     audio_vector="$(echo "$INTR" | awk -F'\t' '$4 ~ /hda/ { print $2 }')"
     fallback="$(echo "$INTR" | awk -F'\t' '$1 == "FBK:" { print $2 }')"
@@ -514,12 +525,11 @@ else
     esac
     note "interrupts: usb vector ${usb_vector:-none}, audio vector ${audio_vector:-none}"
     note "interrupts: spurious ${spurious:-none}, usb fallback ${fallback:-none}"
-    # The fallback count is a note and not a verdict on this machine. Under
-    # the emulator it is zero, because a message sent is a message the
-    # processor has already latched by the time the timer's pump looks. On
-    # hardware the event is in memory while the message is still on its way,
-    # and a count that is small beside the vector's own is that race and not a
-    # lost edge. What milestone 43 does with the number is read it.
+    # The fallback count is a note and not a failure. Under the emulator it
+    # is zero, because the processor has latched a message by the time the
+    # timer's pump looks. On hardware the event is in memory while the
+    # message is still on its way, and a count that is small beside the
+    # vector's own is that race and not a lost edge.
     if [ -n "$usb_vector" ] && [ "${fallback:-0}" != "0" ]; then
         note "interrupts: the timer's pump found the work of $fallback of $usb_vector messages"
     fi
@@ -535,19 +545,19 @@ else
     fi
 fi
 
-# ---- and that nothing on this machine has been refused a command ----
+# ---- the boot log: the rows above read the one copy saved from it ----
 note "boot log: inventory checks used the snapshot above"
 
-# ---- the partitions as mounts. Written for milestone 36 and run in milestone
-#      43: the partition nodes the MBR gives this machine, the boot partition
-#      mounted read-only through the shell with its files the sizes bootctl
-#      reports for its slots, and, when the boot line has rach2.blocklag=N,
-#      the lag check through the shell: a read through the lag device sleeps
-#      its reader while a loop in another shell keeps counting, which is the
-#      scheduler's part of the block path and the thing no host test can
-#      show. A machine with no slot report has no sealed disk and this is a
-#      note there; a machine whose bootctl answers has the sealed layout and
-#      owes its three partitions. ----
+# ---- the partitions as mounts: the partition nodes the table gives this
+#      machine, the boot partition mounted read-only through the shell with
+#      its files the sizes bootctl reports for its slots, and, when the boot
+#      line has rach2.blocklag=N, the lag check through the shell: a read
+#      through the lag device sleeps its reader while a loop in another
+#      shell keeps counting, which is the scheduler's part of the block path
+#      and what no host test can show. A machine with no slot report has no
+#      installed disk and this is a note there; a machine whose bootctl
+#      answers has the installed layout and must have its three
+#      partitions. ----
 NODES="$(run 'ls /dev 2>/dev/null' | grep '^disk0p[1-4]$' | tr '\n' ' ')"
 if [ "$INSTALLED" = 1 ]; then
     SLOTS=$(run 'bootctl status 2>/dev/null')
@@ -571,7 +581,8 @@ else
         done
     fi
     # A RAM boot may have a data stick at disk0. An installed boot requires
-    # its boot files; cleanup must preserve any failure in reading them.
+    # its boot files, and the cleanup in the remote command keeps a failure
+    # to read them.
     # shellcheck disable=SC2016 # The remote shell preserves its read status.
     BOOT_COMMAND='mkdir -p /mnt/accept-boot && mount -r -t vfat /dev/disk0p1 /mnt/accept-boot && grep "^/dev/disk0p1 /mnt/accept-boot vfat ro" /proc/mounts && ls -l /mnt/accept-boot/boot /mnt/accept-boot/boot/grub; status=$?; umount /mnt/accept-boot || status=1; rmdir /mnt/accept-boot || status=1; exit "$status"'
     if [ "$INSTALLED" = 1 ] || [ -n "$SLOTS" ]; then
@@ -625,8 +636,8 @@ else
         *)
             # 64 KiB in eight-sector requests is sixteen sleeps of N ticks
             # each, so the read takes at least 16N ticks by the machine's own
-            # clock; a loop that counted nothing meanwhile is a reader that
-            # never slept, and a read that failed is said so and not counted.
+            # clock; a loop that counted nothing meanwhile means a reader that
+            # never slept, and a read that failed is reported and not counted.
             # shellcheck disable=SC2016
             OUT="$(run 'rm -f /tmp/accept-lag-ok /tmp/accept-lag-bad; t0=$(cut -d" " -f1 /proc/uptime); (if dd if=/dev/disk0p1 of=/dev/null bs=65536 count=1 2>/dev/null; then touch /tmp/accept-lag-ok; else touch /tmp/accept-lag-bad; fi) & i=0; while [ ! -f /tmp/accept-lag-ok ] && [ ! -f /tmp/accept-lag-bad ]; do i=$((i + 1)); done; t1=$(cut -d" " -f1 /proc/uptime); if [ -f /tmp/accept-lag-ok ]; then echo "ok $i $t0 $t1"; else echo "bad $i $t0 $t1"; fi; rm -f /tmp/accept-lag-ok /tmp/accept-lag-bad')"
             # shellcheck disable=SC2086
@@ -648,13 +659,13 @@ else
     esac
 fi
 
-# ---- the ext2 root, once milestone 43 has made it: the candidate's command
-#      line names it, the mount table has it writable on the third partition,
-#      the boot came from the candidate slot, the boot log shows either no
-#      check or a clean one, and the volume takes a write that survives a
-#      sync. A boot after a power cut checks the root and records
-#      `ext2: check: clean`; a check that found lost blocks, orphans or a fault
-#      is the failure. A krffs root in the mount table skips this row. ----
+# ---- the ext2 root, once the installer has made it: the mount table has it
+#      writable on the third partition, the boot came from the candidate
+#      slot, the boot log shows either no check or a clean one, and the
+#      volume takes a write that survives a sync. A boot after a power cut
+#      checks the root and records `ext2: check: clean`; a check that found
+#      lost blocks, orphans or a fault is the failure. A krffs root in the
+#      mount table skips this row. ----
 if [ "$ROOT_TYPE" = ext2 ]; then
     OUT="$MOUNTS"
     case "$OUT" in
@@ -673,10 +684,10 @@ if [ "$ROOT_TYPE" = ext2 ]; then
             bad "the ext2 root's check found a fault: $(grep 'ext2: check' "$BOOTLOG_OUT" | head -1)"
         fi
     fi
-    # Read back through the same cache: that the bytes reached the disk is
-    # what the procedure's reboot after a write shows, not this call.
-    # The remote shell removes its file on its own exit, so a connection cut
-    # after the mktemp leaves nothing behind either.
+    # The file is read back through the same cache; that the bytes reached
+    # the disk is shown by the reboot after a write in the procedure. The
+    # remote shell removes its file on its own exit, so a connection cut
+    # after the mktemp leaves nothing behind.
     # shellcheck disable=SC2016 # the machine expands these, not this script
     OUT="$(run 'f=$(mktemp /root/accept.XXXXXX) && trap '"'"'rm -f "$f"'"'"' EXIT && echo accept > "$f" && sync && cat "$f"')"
     if [ "$OUT" = "accept" ]; then
@@ -690,11 +701,10 @@ fi
 
 note "scratch: the image row uses a temporary file on the root"
 
-# ---- a file system in a file, which milestone 44 made possible: an image on
-#      the root, attached to a loop device, mounted, written, read back,
-#      unmounted, detached, and judged here by the host's own checker. The
-#      image is built here and taken away again, so the machine is left as it
-#      was found. ----
+# ---- a file system in a file: an image on the root, attached to a loop
+#      device, mounted, written, read back, unmounted, detached, and judged
+#      here by the host's own checker. The image is built here and taken away
+#      again, so the machine is left as it was found. ----
 FILESYSTEMS=$(run 'cat /proc/filesystems')
 if [ -z "$FILESYSTEMS" ]; then
     bad "the machine gave no file-system list"
@@ -766,14 +776,12 @@ else
     fi
 fi
 
-# ---- a flash drive, when one is plugged in. Written in milestone 40 and run
-#      in milestone 43 with the owner's stick, formatted with a GUID table and
-#      then with an MBR: the kernel names it, reports it as a block device,
-#      BusyBox finds its volume by label, and the volume takes a file and
-#      gives it back after an unmount that flushed the stick's own cache. A
-#      machine with nothing plugged in is a note, not a failure. The pull from
-#      under a mount and the boot from a Rach2 stick need a person in the
-#      room and are in dev-log/40-usbdisk/hardware.md.
+# ---- a flash drive, when one is plugged in: the kernel names it, reports
+#      it as a block device, BusyBox finds its volume, and the volume takes a
+#      file and gives it back after an unmount that flushed the stick's own
+#      cache. A machine with nothing plugged in is a note, not a failure. The
+#      pull from under a mount and the boot from a Rach2 stick need a person
+#      at the machine and are in dev-log/40-usbdisk/hardware.md.
 #      The stick is whichever disk slot holds one: the kernel reclaims a slot
 #      only when its next stick is found, so the machine's first stick may be
 #      disk1 for a while. A stick whose table has a Rach2 recovery ISO in it,
@@ -859,9 +867,9 @@ if [ -n "$STICK" ]; then
             bad "stick: writes and unmounts did not increase flushes (${before:-?} to ${after:-?})"
         fi
     fi
-    # A KRFFS volume of the stick, which milestone 44 made mountable: a
-    # partition blkid does not name is tried as one, and the first that mounts
-    # is read, written and unmounted. A stick with no such volume says so.
+    # A KRFFS volume of the stick: a partition blkid does not name is tried as
+    # one, and the first that mounts is read, written and unmounted. A stick
+    # with no such volume is a note.
     KVOL=""
     for part in 1 2 3 4; do
         node="/dev/${STICK}p${part}"
@@ -884,9 +892,9 @@ if [ -n "$STICK" ]; then
         else
             bad "stick: the KRFFS volume on $KVOL did not read and write: $OUT"
         fi
-        # Every field the format publishes is written after the bytes it
-        # publishes have reached the medium, which on a stick is a flush and
-        # not a write the device has merely taken.
+        # KRFFS writes each field that publishes data after the data has
+        # reached the medium, which on a stick takes a flush, not only a write
+        # the device has taken.
         if [ -n "$before" ] && [ -n "$after" ] && [ "$after" -gt "$before" ]; then
             note "stick: writing it put the device's own cache on the medium ($before to $after)"
         else
@@ -901,10 +909,9 @@ if [ -n "$STICK" ]; then
     fi
 fi
 
-# ---- a hub, when one is plugged in. Written in milestone 41 and run in
-#      milestone 43 with the owner's hub: what the hub said it is, which
-#      devices came up behind it and at what path, a low-speed device behind
-#      a high-speed hub, the translator per port if the hub has them, and a
+# ---- a hub, when one is plugged in: what the hub said it is, which devices
+#      came up behind it and at what path, a low-speed device behind a
+#      high-speed hub, the translator per port if the hub has them, and a
 #      SuperSpeed hub's two halves. Each is a line in the record; a machine
 #      with no hub is a note. ----
 HUBLINES="$(grep 'usb: hub:' "$BOOTLOG_OUT" 2>/dev/null | sed 's/^.*usb: hub: /hub: /' || true)"
