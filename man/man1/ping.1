@@ -46,17 +46,21 @@ The default DNS server is
 The resolver retries for about six seconds unless a matching response
 arrives.
 .Pp
-Each request uses the kernel's private
-.Dv SC_PING
-socket operation, described in
+Each request uses the kernel's private socket operation 0x1001,
+.Dv SC_PING_DATA ,
+described in
 .Xr ping 2 ,
-through a direct
+which takes the destination, the data size and the hop limit.
+musl has no wrapper for it, so
+.Nm
+issues it through a direct
 .Xr socketcall 2
-on i686, or Rach2's call 400 on x86-64, which has no socketcall, since musl
-has no wrapper for it.
+on i686, or Rach2's call 400 on x86-64, which has no socketcall.
 The kernel sends an echo of 56 bytes of data, 84 with its headers, as
 iputils sends by default, or the size of
 .Fl s ,
+with the hop limit 64 or that of
+.Fl t ,
 and waits for the reply for up to four attempts of a second each; a signal
 ends the wait.
 .Nm
