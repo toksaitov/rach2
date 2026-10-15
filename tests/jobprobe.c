@@ -4,8 +4,8 @@
  * The probe establishes, through raw system calls, that:
  *   * a process is its own session and group leader by default (getpgrp ==
  *     getsid == getpid for the init process);
- *   * a forked child does not lead its group, and setpgid(0,0) moves it
- *     into a group of its own;
+ *   * a forked child is in its parent's group and session but does not
+ *     lead the group, and setpgid(0,0) moves it into a group of its own;
  *   * setsid on a non-group-leader child opens a new session (sid == pgid ==
  *     pid);
  *   * the session leader claims the console as its controlling terminal,
@@ -69,6 +69,11 @@ static void sys_exit(int status)
 static int getpid(void)
 {
     return syscall1(SYS_GETPID, 0);
+}
+/** The caller's parent's pid. */
+static int getppid(void)
+{
+    return syscall1(SYS_GETPPID, 0);
 }
 /** The caller's process group. */
 static int getpgrp(void)
@@ -172,31 +177,34 @@ static void check(int cond, const char *msg)
 }
 
 /**
- * A child's body for `run_child`: it checks that it does not lead its group
- * and that getsid(0) and getsid of its own pid agree, then moves to a group
- * of its own with setpgid(0, 0) and checks getpgrp and getpgid(0). Returns 0
- * when every check passes, or 10 to 14 for the first that fails.
+ * A child's body for `run_child`: it checks that it is in its parent's group
+ * and session and does not lead its group, then moves to a group of its own
+ * with setpgid(0, 0) and checks getpgrp and getpgid(0). The parent waits for
+ * it, so getpgid and getsid of the parent's pid answer for a live process.
+ * Returns 0 when every check passes, or 10 to 15 for the first that fails.
  */
 static int child_setpgid(void)
 {
     int me = getpid();
-    int parent_pgrp;
+    int parent = getppid();
 
-    parent_pgrp = getpgrp();
-    if (parent_pgrp == me) {
+    if (getpgrp() != getpgid(parent)) {
         return 10;
     }
-    if (getsid(0) != getsid(me)) {
+    if (getpgrp() == me) {
         return 11;
     }
-    if (setpgid(0, 0) != 0) {
+    if (getsid(0) != getsid(parent) || getsid(me) != getsid(parent)) {
         return 12;
     }
-    if (getpgrp() != me) {
+    if (setpgid(0, 0) != 0) {
         return 13;
     }
-    if (getpgid(0) != me) {
+    if (getpgrp() != me) {
         return 14;
+    }
+    if (getpgid(0) != me) {
+        return 15;
     }
     return 0;
 }

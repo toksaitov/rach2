@@ -194,11 +194,15 @@ PROBE_START void _start(void)
 
         if (!sys_failed((long)p)) {
             unsigned long old = sys_brk(0);
-            /* A break at p + PAGE would overlap [p, p + PAGE). */
-            unsigned long got = sys_brk(p + PAGE);
 
-            check(got == old, "brk refuses to grow over an mmap region");
-            check(got != p + PAGE, "brk did not honor the colliding request");
+            check(p >= old, "mmap placed the page above the break");
+            if (p >= old) {
+                /* A break at p + PAGE would overlap [p, p + PAGE). */
+                unsigned long got = sys_brk(p + PAGE);
+
+                check(got == old, "brk refuses to grow over an mmap region");
+                check(got != p + PAGE, "brk did not honor the colliding request");
+            }
             sys_munmap(p, PAGE);
         }
     }
