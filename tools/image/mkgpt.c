@@ -113,7 +113,7 @@ static unsigned int seed;
 /**
  * Write to `p` the GUID of entry `index` under `seed`, made without a random
  * source, so that two runs with one seed write the same bytes. Without
- * `--guid`, the disk's own GUID is made as index 99.
+ * `--guid`, the disk's own GUID is made as index ENTRIES, which no entry has.
  *
  * The index goes into the first eight bytes and the seed into the last
  * eight, so that two GUIDs are equal only when their indexes and their
@@ -272,8 +272,8 @@ static int list_table(const char *path)
  * Put the partition one SPEC argument describes into `array`, at index
  * `used`, the number of SPECs before it, or at the index the SPEC names. The
  * partition must lie inside the usable range `[first_usable, last_usable]`
- * and its entry must be empty. The name is LABEL, or `RACH2` followed by the
- * character `'0' + used`. Return 0, or 1 after a line on stderr.
+ * and its entry must be empty. The name is LABEL, or `RACH2` followed by
+ * `used` in decimal. Return 0, or 1 after a line on stderr.
  */
 static int put_entry(unsigned char *array, const char *arg, int used,
                      unsigned long long first_usable, unsigned long long last_usable)
@@ -282,6 +282,7 @@ static int put_entry(unsigned char *array, const char *arg, int used,
     unsigned long long count;
     char kind[16];
     char spec[128];
+    char name[16];
     char *label = 0;
     unsigned int at;
     int slot;
@@ -332,18 +333,13 @@ static int put_entry(unsigned char *array, const char *arg, int used,
     unique_guid(e + 16, at);
     put64(e + 32, start);
     put64(e + 40, start + count - 1u);
+    if (!label) {
+        sprintf(name, "RACH2%d", used);
+        label = name;
+    }
     /* The name is UTF-16LE: each ASCII byte is the low byte of a code unit. */
-    if (label) {
-        for (k = 0; label[k]; k++) {
-            e[56 + k * 2] = (unsigned char)label[k];
-        }
-    } else {
-        e[56] = 'R';
-        e[58] = 'A';
-        e[60] = 'C';
-        e[62] = 'H';
-        e[64] = '2';
-        e[66] = (unsigned char)('0' + used);
+    for (k = 0; label[k]; k++) {
+        e[56 + k * 2] = (unsigned char)label[k];
     }
     return 0;
 }
@@ -401,7 +397,7 @@ int main(int argc, char **argv)
                     "START:SIZE:KIND[@INDEX][=LABEL] ...");
     }
     if (!given_guid) {
-        unique_guid(disk_guid, 99u);
+        unique_guid(disk_guid, ENTRIES);
     }
     f = fopen(argv[1], "r+b");
     if (!f) {
