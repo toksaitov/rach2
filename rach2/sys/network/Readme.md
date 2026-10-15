@@ -13,7 +13,7 @@ A program uses Linux's socket calls, each with its page in the manual: [socket(2
 * The network-interface requests of [ioctl(2)](../../../man/man2/ioctl.2): addresses, masks, flags, routes and ARP entries.
 * [netlink(7)](../../../man/man7/netlink.7): the requests of `ip`, glibc's `getifaddrs` and `ss`.
 * `/proc/net/*` in [proc(5)](../../../man/man5/proc.5) and `/sys/class/net` in [sysfs(5)](../../../man/man5/sysfs.5).
-* The boot line: the command-line table of [the kernel Readme](../../Readme.md) lists `rach2.ip=`, `rach2.gateway=`, `rach2.ifaddr=`, `rach2.netconsole`, `rach2.nonet` and `rach2.nicfail=`.
+* The boot line: [cmdline.md](../../cmdline.md) lists `rach2.ip=`, `rach2.gateway=`, `rach2.ifaddr=`, `rach2.netconsole`, `rach2.nonet` and `rach2.nicfail=`.
 
 With no address option the first interface takes QEMU's user network, SLIRP: 10.0.2.15/24 through 10.0.2.2 (`net.h`). `rach2.ip=A.B.C.D/prefix` replaces it, with no gateway unless `rach2.gateway=A.B.C.D` gives one, and `rach2.ip=none` leaves the interface unconfigured for a DHCP client. `netconf_apply` (`netconf.c`) refuses an option given twice, a gateway with no address or beside `none`, a number above 255 or with a leading zero, trailing text, a prefix outside 1 to 30, a first octet of 0, 127, or 224 and above, the subnet's network or broadcast address, and a gateway that is not another host of the subnet; a refusal logs `net: address refused: REASON` and keeps the SLIRP configuration. `rach2.ifaddr=MAC,A.B.C.D/prefix[,GATEWAY]`, once per card, configures the card with that station address under the same rules, after the probe, whatever order the cards were found in; a token that does not parse, is longer than 79 characters or names no card is logged and skipped.
 

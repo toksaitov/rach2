@@ -29,7 +29,7 @@ A program drives audio with `ioctl` on a console descriptor: `KIOCSOUND` sounds 
 
 ### The debug shell
 
-The kernel debug shell, described in the [kernel's Readme](../../Readme.md), passes a line whose first word is `audio` to `audio_debug.c`, which prints to the console and the serial port and not to the kernel log:
+The kernel debug shell, described in [run.Readme.md](../../run.Readme.md), passes a line whose first word is `audio` to `audio_debug.c`, which prints to the console and the serial port and not to the kernel log:
 
 * `audio` or `audio info`: the active driver, and whether it plays samples.
 * `audio test scale [ms]`: the notes 262, 294, 330, 349 and 392 Hz through a callback, as signed 16-bit stereo at 48000 Hz, or 44100 Hz on SB16; 2000 ms by default and at least 100.

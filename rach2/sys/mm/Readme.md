@@ -27,7 +27,7 @@ The calls that change a process's regions are in `sys/syscall_proc.c`. [brk(2)](
 
 * i686 has `mmap2`, whose offset is in pages, and not i386's older `mmap`, 90; x86-64's `mmap` takes the offset in bytes. Both reach `ksys_mmap_pgoff`.
 * [fork(2)](../../../man/man2/fork.2) and [execve(2)](../../../man/man2/execve.2) make and replace address spaces, [ptrace(2)](../../../man/man2/ptrace.2) and `/proc/PID/mem` reach another process's pages, `shmat` and `shmdt` map System V segments ([the IPC Readme](../ipc/Readme.md)), and [prctl(2)](../../../man/man2/prctl.2) sets the dumpable flag an address space keeps.
-* `/proc/meminfo`, `/proc/slabinfo` and `/proc/PID/maps` report what this code counts ([proc(5)](../../../man/man5/proc.5)); `/dev/mem` maps device memory ([mem(4)](../../../man/man4/mem.4)); `/dev/framefail` fails a frame allocation on purpose ([bootlog(4)](../../../man/man4/bootlog.4)). [memory(7)](../../../man/man7/memory.7) gives the boot's memory report as a user reads it, and [the kernel's document](../../Readme.md) the boot-line switches `rach2.framefail`, `rach2.framehigh`, `rach2.fswindow` and `rach2.fsdisk`.
+* `/proc/meminfo`, `/proc/slabinfo` and `/proc/PID/maps` report what this code counts ([proc(5)](../../../man/man5/proc.5)); `/dev/mem` maps device memory ([mem(4)](../../../man/man4/mem.4)); `/dev/framefail` fails a frame allocation on purpose ([bootlog(4)](../../../man/man4/bootlog.4)). [memory(7)](../../../man/man7/memory.7) gives the boot's memory report as a user reads it, and [cmdline.md](../../cmdline.md) the boot-line switches `rach2.framefail`, `rach2.framehigh`, `rach2.fswindow` and `rach2.fsdisk`.
 
 ### The kernel's layout
 

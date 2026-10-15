@@ -29,7 +29,7 @@ The manual describes what a user sees: [acpi(4)](../../../../man/man4/acpi.4) th
 
 ### The boot line
 
-The platform reads these words of the kernel command line, which [the kernel's Readme](../../../Readme.md) describes:
+The platform reads these words of the kernel command line, which [cmdline.md](../../../cmdline.md) lists with the rest:
 
 * `rach2.nomsi` (`lapic.c`): the local APIC is not enabled. No device sends messages, the I/O APIC is not used, the 8259 pair delivers every line, the 8254 ticks, and the kernel runs on one processor.
 * `noapic` (`platform.c`): the I/O APIC is not used. Devices still send messages to the local APIC, but lines 0 to 15 come through the 8259 pair and the 8254 ticks, so the kernel runs on one processor.
@@ -55,7 +55,7 @@ Each architecture's `loader.s` calls `k_main(magic, info)` in `boot.c` ([the ker
 * Multiboot passes one structure with pointers to the command line, the loader's name, the modules and the memory map. A pointer is followed only below 4 GiB: as the physical address itself on i686, where paging is still off, and through the direct map of the first 4 GiB that `loader.s` built on x86-64.
 * multiboot2 passes a list of tags, read up to 1 MiB (`MB2_INFO_MAX`). Under UEFI the EFI memory map takes the place of the loader's own: its types become Multiboot's, the loader's and the boot services' memory counted as usable, since neither runs again. A tag of the EFI tables or of the EFI map sets the record's `uefi`, and a tag of the RSDP, ACPI 2.0's in preference to 1.0's, is copied into the kernel's image; the record's `acpi_rsdp` is the physical address of that copy. Multiboot passes no RSDP, and `acpi_init` then searches the BIOS area.
 
-The record keeps copies of what it points at, since the loader's memory goes to the frame allocator; [the kernel's Readme](../../../Readme.md) gives its limits. `k_main` then records the modules in `module_table` (`module.c`), starts the framebuffer console when the loader left a framebuffer of direct or indexed color, and calls `kernel_main`. Once the kernel's page tables are in force, the console draws through a mapping of the framebuffer, write-combining where the page attribute table allows it and uncached otherwise.
+The record keeps copies of what it points at, since the loader's memory goes to the frame allocator: up to `BOOT_MMAP_MAX`, 256, memory-map entries, `BOOT_MODULE_MAX`, 8, modules with their command lines, and `BOOT_CMDLINE_MAX`, 512, bytes of command line (`sys/boot.h`). `k_main` then records the modules in `module_table` (`module.c`), starts the framebuffer console when the loader left a framebuffer of direct or indexed color, and calls `kernel_main`. Once the kernel's page tables are in force, the console draws through a mapping of the framebuffer, write-combining where the page attribute table allows it and uncached otherwise.
 
 ### The processor and its vectors
 

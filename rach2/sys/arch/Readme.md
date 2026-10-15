@@ -104,7 +104,7 @@ On x86-64 a program makes the call with `syscall`. `init_tss` (`percpu.c`) sets 
 
 ### The system call tables
 
-`systab.c` fills the shared table of `SYSCALL_TABLE_SIZE`, 463 entries on both, from `sysnr.h`, which has Linux's numbers for the architecture; the handlers are shared, and the table decides which numbers a program reaches. [The kernel's document](../../Readme.md) gives the count each table registers, and [syscalls(2)](../../../man/man2/syscalls.2) the numbers.
+`systab.c` fills the shared table of `SYSCALL_TABLE_SIZE`, 463 entries on both, from `sysnr.h`, which has Linux's numbers for the architecture; the handlers are shared, and the table decides which numbers a program reaches. [syscalls.md](../../syscalls.md) lists the calls each table registers, with their numbers, and [syscalls(2)](../../../man/man2/syscalls.2) gives the registers.
 
 `sys_ia32.c` has i686's forms of the calls to which i386 passes a 64-bit offset or length in two registers, low word first: `truncate64`, `ftruncate64`, `pread64`, `pwrite64`, `fallocate`, `fadvise64` and `fadvise64_64`. Each joins the halves and calls the shared `ksys_` core (`sys/syscall_internal.h`). i686 also has `socketcall`, 102, beside the direct socket calls, and x86-64 has none. x86-64's `systab.c` has adapters for the calls it makes another way: `accept` and `semop` as `accept4` and `semtimedop`, and Rach2's own [ping(2)](../../../man/man2/ping.2), 400, which i386 reaches as `socketcall`'s operations 0x1000 and 0x1001.
 

@@ -105,7 +105,7 @@ There is no wireless driver, and the stack is IPv4 alone. On i686 an e1000 or RT
 
 ## QEMU
 
-`rach2/run.sh` and the suites boot QEMU's `qemu-system-i386` or `qemu-system-x86_64`, as `ARCH` selects. `run.sh` gives the `pc` machine with `-cpu max`, COM1 on the terminal, the image as a boot module, an RTL8139 or an e1000 on the user network, the speaker or an SB16 or HDA, and a disk on IDE or AHCI ([the kernel's Readme](Readme.md)). The suites attach these ([the suites](../tests/system/suites.md)):
+`rach2/run.sh` and the suites boot QEMU's `qemu-system-i386` or `qemu-system-x86_64`, as `ARCH` selects. `run.sh` gives the `pc` machine with `-cpu max`, COM1 on the terminal, the image as a boot module, an RTL8139 or an e1000 on the user network, the speaker or an SB16 or HDA, and a disk on IDE or AHCI ([run.Readme.md](run.Readme.md)). The suites attach these ([the suites](../tests/system/suites.md)):
 
 | What | QEMU option | Driven by | Suites, for example |
 | --- | --- | --- | --- |
