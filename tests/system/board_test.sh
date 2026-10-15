@@ -1,6 +1,7 @@
 #!/bin/sh
-# board_test.sh: check group creation and rollback against a local gh fixture.
-# --mutate omits rollback in a private copy; --texts checks that fault's text.
+# board_test.sh: check group creation, rollback and take's choice of the
+# first assignee against a local gh fixture. --mutate omits rollback, then
+# reverses take's order, in a private copy; --texts checks the faults' texts.
 
 set -eu
 case ${1:-} in
@@ -24,8 +25,18 @@ fault()
     sed 's/; group_rollback;/; :;/' "$repo/tools/flow/board.sh" > "$work/board.sh"
     ! cmp -s "$repo/tools/flow/board.sh" "$work/board.sh"
 }
+
+# take_fault: let the latest assignment keep an issue in the private copy,
+# refusing missing fault text.
+take_fault()
+{
+    sed 's/last\[l\] < last\[who\]/last[l] > last[who]/' \
+        "$repo/tools/flow/board.sh" > "$work/board.sh"
+    ! cmp -s "$repo/tools/flow/board.sh" "$work/board.sh"
+}
 if [ "$mode" = texts ]; then
     fault
+    take_fault
     exit 0
 fi
 
@@ -34,6 +45,10 @@ cat > "$work/bin/gh" <<'EOF'
 set -eu
 printf '%s\n' "$*" >> "$BOARD_TEST_WORK/calls"
 case "$1 $2" in
+    'api user')
+        echo "$BOARD_TEST_ME" ;;
+    'api --paginate')
+        printf '%s\n' "$BOARD_TEST_TIMELINE" | tr , '\n' ;;
     'api graphql')
         case "$*" in
             *'field(name: "Status")'*)
@@ -44,6 +59,13 @@ case "$1 $2" in
             *) exit 2 ;;
         esac ;;
     'issue view')
+        if [ -n "$BOARD_TEST_ME" ]; then
+            case "$*" in
+                *'.assignees[].login'*) printf '%s\n' "$BOARD_TEST_NOW" | tr , '\n' ;;
+                *) echo no ;;
+            esac
+            exit 0
+        fi
         [ "$BOARD_TEST_FAIL" != validate ] || exit 1
         if [ -f "$BOARD_TEST_WORK/grouped-2" ]; then
             case $BOARD_TEST_FAIL in
@@ -70,6 +92,7 @@ case "$1 $2" in
             *'--remove-label grouped')
                 [ "$BOARD_TEST_FAIL/$3" != remove/1 ] || exit 1
                 rm -f "$BOARD_TEST_WORK/grouped-$3" ;;
+            *'--add-assignee '*|*'--remove-assignee '*) ;;
             *) exit 2 ;;
         esac ;;
     'project item-add')
@@ -86,8 +109,9 @@ esac
 EOF
 chmod +x "$work/bin/gh"
 BOARD_TEST_WORK=$work/state
+BOARD_TEST_ME=
 PATH=$work/bin:$PATH
-export BOARD_TEST_WORK PATH
+export BOARD_TEST_WORK BOARD_TEST_ME PATH
 
 # row FAILURE: check the exit status, queue labels and group left by one call.
 row()
@@ -136,7 +160,30 @@ row()
     esac
 }
 
-# rows: check successful creation, each failed step and failed cleanup.
+# take_row NAME ME NOW TIMELINE: take issue 7 as ME, with the accounts NOW
+# assigned and TIMELINE the assignees of its assignment events in order, and
+# check that ME keeps it only when NAME begins `keep`.
+take_row()
+{
+    BOARD_TEST_FAIL=none BOARD_TEST_ME=$2 BOARD_TEST_NOW=$3 BOARD_TEST_TIMELINE=$4
+    export BOARD_TEST_FAIL BOARD_TEST_NOW BOARD_TEST_TIMELINE
+    rm -f "$BOARD_TEST_WORK/"*
+    result=0
+    sh "$work/board.sh" take 7 > "$work/out" 2> "$work/err" || result=$?
+    BOARD_TEST_ME=
+    case $1 in
+        keep*)
+            [ "$result" -eq 0 ] && [ -f "$BOARD_TEST_WORK/status" ] &&
+                ! grep -q 'remove-assignee' "$BOARD_TEST_WORK/calls" ;;
+        *)
+            [ "$result" -ne 0 ] && [ ! -f "$BOARD_TEST_WORK/status" ] &&
+                grep -q "remove-assignee $2\$" "$BOARD_TEST_WORK/calls" &&
+                grep -q '^board: #7: taken by zed first$' "$work/err" ;;
+    esac
+}
+
+# rows: check successful creation, each failed step and failed cleanup, and
+# which of two accounts assigned in the same second keeps an issue.
 rows()
 {
     failed=
@@ -147,6 +194,17 @@ rows()
             failed="$failed $test"
         fi
     done
+    while read -r test me now timeline; do
+        if ! take_row "$test" "$me" "$now" "$timeline"; then
+            echo "board-test: failed: $test" >&2
+            cat "$work/err" >&2
+            failed="$failed $test"
+        fi
+    done <<'ROWS'
+yield-later alpha zed,alpha zed,alpha
+keep-earlier zed zed,alpha zed,alpha
+yield-again alpha zed,alpha alpha,zed,alpha
+ROWS
     [ -z "$failed" ]
 }
 rows || exit 1
@@ -157,8 +215,14 @@ if [ "$mode" = mutate ]; then
         exit 1
     fi
     grep -q '^board-test: failed: label2$' "$work/mutated.out"
+    take_fault
+    if rows > "$work/mutated.out" 2>&1; then
+        echo 'board-test: fault passed: latest assignment kept the issue' >&2
+        exit 1
+    fi
+    grep -q '^board-test: failed: yield-later$' "$work/mutated.out"
     cp "$repo/tools/flow/board.sh" "$work/board.sh"
     rows || exit 1
-    echo 'board-test: result: pass: rollback fault caught and restored'
+    echo 'board-test: result: pass: rollback and take faults caught and restored'
 fi
-echo 'board-test: result: pass: 14 rows'
+echo 'board-test: result: pass: 17 rows'

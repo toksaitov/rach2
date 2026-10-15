@@ -167,22 +167,23 @@ unassign()
 }
 
 # first N: print the account, of those assigned to N now, whose latest
-# assignment is the earliest, the lesser login on a tie, or the one account
-# assigned when the timeline does not show its assignment yet.
+# assignment is the earliest, or the one account assigned when the timeline
+# does not show its assignment yet. Assignments are compared by their places
+# in the timeline, which lists events in the order they happened; two in the
+# same second have equal timestamps but distinct places.
 first()
 {
     now=$(gh issue view "$1" --repo "$REPO" --json assignees --jq '.assignees[].login') ||
         return 1
     events=$(gh api --paginate "repos/$REPO/issues/$1/timeline" \
-        --jq '.[] | select(.event == "assigned") | "\(.created_at) \(.assignee.login)"') ||
+        --jq '.[] | select(.event == "assigned") | .assignee.login') ||
         return 1
     printf '%s\n' "$events" | awk -v now="$(printf '%s\n' "$now" | tr '\n' ' ')" '
         BEGIN { n = split(now, a, " "); for (i = 1; i <= n; i++) cur[a[i]] = 1 }
-        ($2 in cur) { last[$2] = $1 }
+        ($1 in cur) { last[$1] = NR }
         END {
             for (l in last)
-                if (who == "" || last[l] < last[who] ||
-                    (last[l] == last[who] && l < who))
+                if (who == "" || last[l] < last[who])
                     who = l
             if (who == "" && n == 1)
                 who = a[1]

@@ -277,10 +277,10 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         fail=1
     fi
     if sh tests/system/board_test.sh >"$VDIR/board.rlog" 2>&1; then
-        echo "hosttest: result: pass: board group creation and rollback"
+        echo "hosttest: result: pass: board groups, rollback and take"
     else
         cat "$VDIR/board.rlog"
-        echo "hosttest: result: fail: board group creation and rollback" >&2
+        echo "hosttest: result: fail: board groups, rollback and take" >&2
         fail=1
     fi
     if sh tests/system/install_accounts_test.sh >"$VDIR/install_accounts.rlog" 2>&1; then
