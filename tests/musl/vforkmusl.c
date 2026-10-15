@@ -1,6 +1,6 @@
 /**
- * clone(CLONE_VM|CLONE_VFORK) and vfork, as glibc's posix_spawn, system and
- * popen start their children.
+ * vforkmusl: check clone(CLONE_VM|CLONE_VFORK) and vfork, the calls glibc's
+ * posix_spawn, system and popen start their children with.
  *
  * A child made with CLONE_VM|CLONE_VFORK on a stack of its own shares the
  * parent's memory, and the parent does not run again until the child has
@@ -12,7 +12,9 @@
  * calls _exit. A child's exec that fails comes back to the child, whose
  * store of the error the parent then reads. system and popen run a command.
  *
- * Prints "VFORKMUSL OK" on success and "VFORKMUSL FAIL (detail)" otherwise.
+ * The program runs itself as the program the child becomes, with the
+ * arguments `wait FD`. It prints "VFORKMUSL OK" and exits 0 on success, or
+ * prints "VFORKMUSL FAIL (detail: errno N)" and exits 1 at the first failure.
  */
 
 #define _GNU_SOURCE
@@ -28,9 +30,16 @@
 
 static const char *const SELF = "/musl/vforkmusl";
 
+/* A word a child that shares the parent's memory stores before its exec. */
 static volatile int word;
+
+/* The errno of the child's failed exec, stored in the shared memory. */
 static volatile int exec_errno;
+
+/* The stack of the clone children; the parent does not run while one does. */
 static char stack[16384];
+
+/* Bytes the parent checks after a child's exec, to see its memory is whole. */
 static char guard[64] = "the parent's bytes";
 
 /* The pipe the program the child becomes waits on, and the number of its
@@ -38,12 +47,18 @@ static char guard[64] = "the parent's bytes";
 static int msg[2];
 static char msg_arg[16];
 
+/** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
 {
     printf("VFORKMUSL FAIL (%s: errno %d)\n", what, errno);
     return 1;
 }
 
+/**
+ * Store 42 in `word` and exec this program as the waiter. Runs in the clone
+ * child, in the parent's memory; returns only through `_exit(127)` when the
+ * exec fails.
+ */
 static int run_waiter(void *arg)
 {
     (void)arg;
@@ -52,8 +67,11 @@ static int run_waiter(void *arg)
     _exit(127);
 }
 
-/** The program the child becomes: wait up to 5 s for the byte its parent
- * writes on `fd` once it runs again; 5 when it came, 6 when it did not. */
+/**
+ * Run as the program the child becomes: wait up to 5 s for the byte the
+ * parent writes on `fd` once it runs again. Returns 5 when the byte came and
+ * 6 when it did not, the exit status the parent reads.
+ */
 static int wait_for_parent(int fd)
 {
     struct pollfd pfd;
@@ -64,6 +82,10 @@ static int wait_for_parent(int fd)
     return poll(&pfd, 1, 5000) == 1 && read(fd, &c, 1) == 1 ? 5 : 6;
 }
 
+/**
+ * Exec a program that does not exist, store the errno in `exec_errno` and
+ * exit with status 126. Runs in the clone child, in the parent's memory.
+ */
 static int run_missing(void *arg)
 {
     (void)arg;

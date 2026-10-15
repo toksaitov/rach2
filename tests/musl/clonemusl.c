@@ -1,16 +1,17 @@
 /**
- * clone in the form GNU libc's fork uses, set_tid_address, and futex within
- * one address space.
+ * clonemusl: check clone in the form GNU libc's fork uses, set_tid_address,
+ * and futex within one address space.
  *
  * glibc makes every child with clone(CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID
  * | SIGCHLD), never with fork, and reads the child's id from the word the
- * kernel stores in the child's memory; a child that finds the parent's id
- * there sends raise() to the parent. glibc also calls futex in a process of
- * one thread, from pthread_once. The probe checks that the child's copy of the
- * word holds the child's id and the parent's copy is untouched, that the
- * parent's CLONE_PARENT_SETTID word holds the child's id, that CLONE_SIGHAND
- * without CLONE_VM is refused, and that futex compares, times out on both
- * clocks no sooner than asked, and refuses what it does not implement. A
+ * kernel stores in the child's memory; a child that found the parent's id
+ * there would send its raise() to the parent. glibc also calls futex in a
+ * process of one thread, from pthread_once. The program checks that the
+ * child's copy of the word has the child's id and the parent's copy is
+ * unchanged, that the parent's CLONE_PARENT_SETTID word has the child's id,
+ * that CLONE_SIGHAND without CLONE_VM fails with EINVAL, and that futex
+ * compares, times out on both clocks no sooner than asked, and returns EINVAL
+ * or ENOSYS for what it does not take. A
  * timed wait that a handler with SA_RESTART interrupts ends with EINTR, as
  * Linux ends one, and is not restarted with its whole timeout again.
  *
@@ -18,7 +19,8 @@
  * fields are a long's width: on i386 that is not musl's, whose seconds are 64
  * bits wide.
  *
- * Prints "CLONEMUSL OK" on success and "CLONEMUSL FAIL (detail)" otherwise.
+ * It prints "CLONEMUSL OK" and exits 0 on success, or prints "CLONEMUSL FAIL
+ * (detail)" and exits 1 at the first failure.
  */
 
 #define _GNU_SOURCE
@@ -44,13 +46,14 @@
 #define FUTEX_PRIVATE_FLAG   128
 #define FUTEX_CLOCK_REALTIME 256
 
+/** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
 {
     printf("CLONEMUSL FAIL (%s)\n", what);
     return 1;
 }
 
-/* The raw call's result: the value, or -errno. */
+/** Make system call `n` with six arguments. Returns its value, or -errno. */
 static long raw(long n, long a, long b, long c, long d, long e, long f)
 {
     long r = syscall(n, a, b, c, d, e, f);
@@ -72,13 +75,18 @@ struct kts {
 #define CLONE_TLS_CTID(tls, ctid) (long)(tls), (long)(ctid)
 #endif
 
+/**
+ * Make the futex call `op` on `word` with `val`, the timeout `ts` (relative
+ * or absolute, as `op` says, or null) and `val3`. Returns its value, or
+ * -errno.
+ */
 static long futex(volatile uint32_t *word, int op, uint32_t val, const struct kts *ts,
                   uint32_t val3)
 {
     return raw(SYS_futex, (long)word, op, (long)val, (long)ts, 0, (long)val3);
 }
 
-/** A clock's reading in nanoseconds. */
+/** Return the reading of the clock `clk` in nanoseconds. */
 static long long ns_of(clockid_t clk)
 {
     struct timespec ts;
@@ -87,23 +95,29 @@ static long long ns_of(clockid_t clk)
     return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
-/** A time in nanoseconds as a kernel timespec. */
+/** Convert a time in nanoseconds to a kernel timespec. */
 static void to_kts(long long ns, struct kts *ts)
 {
     ts->sec = (long)(ns / 1000000000LL);
     ts->nsec = (long)(ns % 1000000000LL);
 }
 
+/* The count of SIGALRM deliveries to on_alarm. */
 static volatile sig_atomic_t alarms;
 
+/** Count one SIGALRM in `alarms`. */
 static void on_alarm(int sig)
 {
     (void)sig;
     alarms++;
 }
 
-/* A wait of five seconds on `word`, which holds 7, that a SIGALRM with
- * SA_RESTART interrupts 20 ms in; the raw call's result. */
+/**
+ * Wait five seconds on `word`, which must be 7, with a SIGALRM handler
+ * installed with SA_RESTART and a timer that delivers the signal 20 ms in.
+ * Returns the futex call's value, or -errno; SIGALRM is back at its default
+ * action on return.
+ */
 static long interrupted_wait(volatile uint32_t *word)
 {
     struct sigaction sa;
