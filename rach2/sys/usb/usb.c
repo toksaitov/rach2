@@ -464,11 +464,12 @@ int usb_init(void)
  *
  * Each controller gets a vector of its own. The handler is the one pump and
  * drains them all, so which vector a message arrived on does not matter, but
- * two controllers sharing a vector could not both be told to stop. On the
- * line path the handler is registered before the line is enabled, since a
- * level line the firmware left asserted would otherwise reach no handler.
- * The latency record is set up here too, on when `rach2.usblatency` is on
- * the boot line.
+ * two controllers sharing a vector could not both be told to stop. A
+ * controller whose messages will not enable gives its vector back, handler
+ * and all, before it tries the line. On the line path the handler is
+ * registered before the line is enabled, since a level line the firmware left
+ * asserted would otherwise reach no handler. The latency record is set up
+ * here too, on when `rach2.usblatency` is on the boot line.
  */
 static void usb_interrupts_start(void)
 {
@@ -503,6 +504,7 @@ static void usb_interrupts_start(void)
                 klog(KLOG_INFO, "usb", "interrupts: xhci%d: messages on vector %d", n, vector);
                 continue;
             }
+            isr_free_vector(vector);
         }
         irq = xhci_line_irq(hc);
         if (irq > 0) {

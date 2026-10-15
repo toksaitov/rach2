@@ -477,6 +477,24 @@ int isr_alloc_vector(void)
 }
 
 /**
+ * Give a message vector back: empty its chain of handlers and mark it free.
+ * A vector outside the pool, or one not given, is left alone.
+ */
+void isr_free_vector(int vector)
+{
+    int i;
+
+    if (vector < ISR_MSI_FIRST || vector > ISR_MSI_LAST || !_vector_taken[vector]) {
+        return;
+    }
+    for (i = 0; i < ISR_MAX_VECTOR_HANDLERS; i++) {
+        _isr_handlers[vector][i] = 0;
+        _isr_names[vector][i] = 0;
+    }
+    _vector_taken[vector] = 0;
+}
+
+/**
  * Append `handler` to a vector's chain.
  *
  * `name` is what /proc/interrupts calls this handler; it is a literal that

@@ -65,7 +65,7 @@ The record keeps copies of what it points at, since the loader's memory goes to 
 | --- | --- |
 | 0 to 31 | the processor's exceptions |
 | 32 to 47 | lines 0 to 15, line `N` on 32 + `N`, through the 8259 pair or the I/O APIC |
-| 48 to 63 | devices' messages, given out lowest first by `isr_alloc_vector` |
+| 48 to 63 | devices' messages, given out lowest first by `isr_alloc_vector` and back by `isr_free_vector` |
 | 128 (0x80) | the system call gate, on i686 alone |
 | 240 (0xF0) | the interprocessor interrupt |
 | 255 (0xFF) | the local APIC's spurious vector |

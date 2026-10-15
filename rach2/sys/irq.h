@@ -52,6 +52,13 @@ void set_isr_handler(uint8_t vector, isr_handler_t handler, const char *name);
  */
 int isr_alloc_vector(void);
 
+/**
+ * Give back a vector from `isr_alloc_vector`, with every handler registered
+ * on it, as a driver does when its device will not send messages after all.
+ * The vector's next taker starts with an empty chain.
+ */
+void isr_free_vector(int vector);
+
 /** The count of interrupts taken on a device's vector; 0 for a vector
  * outside `ISR_DEVICE_FIRST` to `ISR_DEVICE_LAST`. */
 uint32_t isr_vector_count(int vector);
