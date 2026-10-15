@@ -2983,6 +2983,9 @@ static int fat_mount_on(struct fat_mount *fm, struct vfs_mount *mnt, block_devic
     }
 
     root = node_take(fm);
+    if (!root) {
+        return -ENOMEM;
+    }
     root->is_dir = 1;
     root->first = fm->root_cluster;
     mnt->priv = fm;

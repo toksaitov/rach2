@@ -124,8 +124,8 @@ rach2/sys/fs/ext2.c:map_alloc nesting 5 one file system operation over the on-di
 rach2/sys/fs/ext2.c:punch_level params 8 the parameters are one level's cursor in a recursive walk
 
 rach2/sys/fs/fat32.c:fat_check_volume lines 110 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/fat32.c:fat_mount_on complexity 42 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/fat32.c:fat_mount_on lines 127 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/fat32.c:fat_mount_on complexity 43 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/fat32.c:fat_mount_on lines 130 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/fat32.c:fat_rename complexity 52 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/fat32.c:fat_rename lines 160 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/fat32.c:fat_truncate complexity 35 one file system operation over the on-disk format, each step a rule of the format
