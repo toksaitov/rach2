@@ -7,8 +7,8 @@
  * The FAT host tests write through this model so that a barrier the driver
  * leaves out changes what a crash leaves behind: reads see every write, as
  * a drive's cache answers them; `block_flush` is the barrier that makes the
- * pending writes durable, or fails the Nth time it is asked and keeps half
- * of them; and a snapshot at a cut is the durable image with none, only the
+ * pending writes durable, or fails at the Nth call and keeps half of them;
+ * and a snapshot at a cut is the durable image with none, only the
  * newest, or all of the writes pending since the last barrier, each a state
  * the medium can be in after a crash there.
  */
@@ -17,6 +17,7 @@
 
 #include "lib/kint.h"
 
+/* The most writes pending between two barriers; one more sets `overflow`. */
 #define DEVMODEL_PENDING_MAX 4096
 
 /* What a snapshot keeps of the writes pending at the cut: the newest N of
@@ -40,7 +41,7 @@ struct devmodel {
     struct devmodel_write pending[DEVMODEL_PENDING_MAX];
     int npending;
     int overflow;     /* more pending writes than the list holds */
-    int barriers;     /* flushes asked for since the load */
+    int barriers;     /* flushes made since the load */
     int fail_barrier; /* the barrier that fails, or 0 */
     int failed;       /* whether one did */
     int writes;       /* writes since the load, refused ones included */
@@ -52,21 +53,28 @@ struct devmodel {
 /* The model `block_flush` reaches. */
 extern struct devmodel *devmodel_current;
 
-/** Make `m` the model over `bytes` of medium, both images the test's own. */
+/** Make `m` the model over `bytes` of medium, both images the test's own,
+ * and the one `block_flush` reaches. `m` is zeroed or was made before; the
+ * writes still pending in it are freed. */
 void devmodel_init(struct devmodel *m, unsigned char *durable, unsigned char *visible,
                    uint64_t bytes);
 
-/** Start again: the visible image copied to the medium, nothing pending. */
+/** Start again: the visible image copied to the medium, nothing pending, the
+ * counts at 0 and the model running; `fail_barrier` and `cut_at` stay. */
 void devmodel_load(struct devmodel *m);
 
-/** A read answers the visible image. */
+/** Read `count` sectors at `lba` from the visible image: 0, or -5 (EIO)
+ * past the end. */
 int devmodel_read(struct devmodel *m, uint64_t lba, uint32_t count, void *buf);
 
-/** A write is pending, and visible, unless the cut has been reached. */
+/** Write `count` sectors at `lba` into the visible image and the pending
+ * list: 0, or -5 (EIO) past the end, at or after the cut, when the list is
+ * full, or when the copy cannot be allocated. */
 int devmodel_write(struct devmodel *m, uint64_t lba, uint32_t count, const void *buf);
 
-/** The barrier: the pending writes reach the medium, or half do and it
- * fails. */
+/** The barrier: 0 when the pending writes reach the medium; -5 (EIO) at or
+ * after the cut, with none landing, or at the failing barrier, with the
+ * older half landing. */
 int devmodel_barrier(struct devmodel *m);
 
 /** The medium as a crash at the cut leaves it with the newest `keep`

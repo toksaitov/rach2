@@ -1,10 +1,10 @@
 /*
  * devmodel.c: a host device with pending and durable writes; see devmodel.h.
  *
- * It also answers the two calls the FAT drivers make into the block layer,
- * which `blockmax_host.c` answers for the tests that need no model: the
- * most sectors a request moves, and the device's flush, which is the
- * model's barrier here.
+ * It also defines the calls the FAT drivers make into the block layer,
+ * which `blockmax_host.c` defines for the tests that need no model: the
+ * most sectors a request moves, the device's flags, a request with flags,
+ * and the device's flush, which is the model's barrier here.
  */
 
 #include "devmodel.h"
@@ -93,8 +93,9 @@ int devmodel_write(struct devmodel *m, uint64_t lba, uint32_t count, const void 
     return 0;
 }
 
-/* Put pending writes 0 to `n` on the medium, in the order they were made,
-   which keeps a sector's versions in order, and drop them from the list. */
+/** Put the first `n` pending writes on the medium, in the order they were
+ * made, which keeps a sector's versions in order, and drop them from the
+ * list. */
 static void settle(struct devmodel *m, int n)
 {
     int i;
@@ -139,6 +140,7 @@ void devmodel_snapshot(const struct devmodel *m, int keep, unsigned char *out)
     }
 }
 
+/** The device's own `max_sectors`, or BLOCK_REQ_SECTORS when it is 0. */
 uint32_t block_max_sectors(block_device_t *device)
 {
     return device->max_sectors ? device->max_sectors : BLOCK_REQ_SECTORS;

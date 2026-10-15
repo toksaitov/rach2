@@ -13,7 +13,7 @@
 #include "fixdir_host.h"
 
 #define FIX_PATH_MAX 1024
-#define FIX_NAMES    64
+#define FIX_NAMES    64 /* the names fix_path keeps a path for */
 
 #ifndef FIXDIR
 /* The characters a shell passes through unchanged, which a directory the
@@ -24,8 +24,8 @@
  * room for the paths in it. */
 #define FIX_TMP_MAX 100
 
-static char own[FIX_PATH_MAX];
-static int passed;
+static char own[FIX_PATH_MAX]; /* the test's own directory; empty until made */
+static int passed;             /* set by fix_passed */
 
 /** Whether $TMPDIR, `tmp`, can hold the fixture directory: an absolute path
  * of at most FIX_TMP_MAX characters, each one a shell passes unchanged. */

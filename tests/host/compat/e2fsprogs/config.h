@@ -2,7 +2,8 @@
  * Configure unix_io.c for the host alignment fixture.
  *
  * Use host types and headers, with threads and optional device operations
- * disabled. The 64-bit calls are stubs even on hosts without those names.
+ * disabled. With ALIGNMENT_TEST_64 the port calls pread64 and pwrite64,
+ * which the test replaces with its model, so a host without them builds it.
  */
 
 #ifndef RACH2_E2FSPROGS_TEST_CONFIG_H

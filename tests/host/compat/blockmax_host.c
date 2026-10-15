@@ -1,12 +1,14 @@
 /*
  * The calls the buffer cache and the FAT drivers make into the block layer
- * on the host: the most a device takes in one request, read from the record
- * itself, since a host test's devices have no partition views over them,
- * and the device's flush, which a fake device has nothing to do for.
+ * on the host: the most a device takes in one request and its flags, read
+ * from the record itself, since a host test's devices have no partition
+ * views over them; the device's flush, which a fake device has nothing to do
+ * for; and a request with flags, whose flags a test reads back.
  */
 
 #include "block/block.h"
 
+/** The device's own `max_sectors`, or BLOCK_REQ_SECTORS when it is 0. */
 uint32_t block_max_sectors(block_device_t *device)
 {
     return device->max_sectors ? device->max_sectors : BLOCK_REQ_SECTORS;

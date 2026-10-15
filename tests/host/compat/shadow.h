@@ -21,6 +21,8 @@ struct spwd {
     unsigned long sp_flag;
 };
 
+/** The shadow entry of `name`; the host test that compiles the library
+ * defines it. */
 struct spwd *getspnam(const char *name);
 
 #endif /* _HOSTCOMPAT_SHADOW_H_ */

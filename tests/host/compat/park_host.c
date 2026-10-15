@@ -23,10 +23,10 @@
 
 static ucontext_t caller, call;
 static void (*entry)(void);
-static char *stack;
+static char *stack; /* the call's stack, NULL when no call is started */
 static int running, returned;
 
-/* The first frame on the call's own stack. When the call returns, it
+/** The first frame on the call's own stack. When the call returns, it
  * switches to `caller`, the context of the last `park_run` or
  * `park_resume`, and is never resumed; its stack is then freed. */
 static void start(void)
@@ -36,7 +36,7 @@ static void start(void)
     swapcontext(&call, &caller);
 }
 
-/* Switch into the call until it returns or parks: 1 when it returned, and
+/** Switch into the call until it returns or parks: 1 when it returned, and
  * then its stack is freed. */
 static int enter(void)
 {

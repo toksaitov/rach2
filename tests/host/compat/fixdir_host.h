@@ -4,13 +4,14 @@
 /*
  * The directory a host test keeps its fixtures in (fixdir_host.c). A test
  * compiled with FIXDIR, as a mutation proof compiles one, has the directory
- * FIXDIR names. Any other has one of its own, made the first time it is asked
- * for, so that two runs at once, of one test or of two, never write the same
- * file. It is made under $TMPDIR when that is an absolute path of at most 100
- * characters, each a letter, a digit or one of / . _ + -, which a shell
- * passes through unchanged, so a test may put the path in a command unquoted;
- * under /tmp otherwise. The header includes nothing, since the kernel headers
- * the tests include define types the C library's headers would define again.
+ * FIXDIR names. Any other has one of its own, made at the first call of
+ * fix_dir, so that two runs at once, of one test or of two, never write the
+ * same file. It is made under $TMPDIR when that is an absolute path of at
+ * most 100 characters, each a letter, a digit or one of / . _ + -, which a
+ * shell passes through unchanged, so a test may put the path in a command
+ * unquoted; under /tmp otherwise. The header includes nothing, since the
+ * kernel headers the tests include define types the C library's headers
+ * would define again.
  */
 
 /** The fixture directory; a test that cannot have one is ended. */

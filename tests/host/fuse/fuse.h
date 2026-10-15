@@ -1,3 +1,7 @@
+/*
+ * The part of libfuse 2's <fuse.h> that krffs's FUSE operations use, so that
+ * krffs_fuse_hosttest.c builds them on a host without libfuse.
+ */
 #ifndef TEST_FUSE_H
 #define TEST_FUSE_H
 
@@ -31,7 +35,10 @@ struct fuse_operations {
     int (*chown)(const char *, uid_t, gid_t);
     int (*statfs)(const char *, struct statvfs *);
 };
+/** Mount and serve `ops`; the host test defines it to count the call. */
 int fuse_main(int argc, char **argv, const struct fuse_operations *ops, void *data);
+
+/** The identity of the caller of the request under way; fixed in the test. */
 struct fuse_context *fuse_get_context(void);
 
 #endif

@@ -75,7 +75,8 @@ static int ncalls, nseeks, invalid_calls, handler_calls;
 static size_t handler_size;
 static int handler_actual;
 static errcode_t handler_error;
-static ext2_loff_t position;
+static ext2_loff_t position; /* the offset of the next read or write */
+/* How the model answers the positional calls and the read and write calls. */
 static enum reply_kind positional_reply, stream_reply;
 static struct struct_io_channel channel;
 static struct unix_private_data private_data;
@@ -91,7 +92,12 @@ static int failed;
         }                                                   \
     } while (0)
 
-/** Record one call, then transfer its requested or injected byte count. */
+/**
+ * Record one call, then transfer its requested or injected byte count: the
+ * count moved, or -1 with errno EINVAL for a call outside the device or not
+ * in whole sectors, and EIO when the reply for its kind is an error. A call
+ * past the record's room counts as invalid.
+ */
 static ssize_t transfer(enum call_kind kind, int fd, void *buf, size_t size, ext2_loff_t offset)
 {
     enum reply_kind reply = kind < CALL_READ ? positional_reply : stream_reply;
@@ -123,26 +129,32 @@ static ssize_t transfer(enum call_kind kind, int fd, void *buf, size_t size, ext
     return (ssize_t)actual;
 }
 
+/** pread(2) for unix_io.c: `transfer`. */
 static ssize_t model_pread(int fd, void *buf, size_t size, off_t offset)
 {
     return transfer(CALL_PREAD, fd, buf, size, offset);
 }
 
+/** pread64 for unix_io.c: `transfer`. */
 static ssize_t model_pread64(int fd, void *buf, size_t size, ext2_loff_t offset)
 {
     return transfer(CALL_PREAD64, fd, buf, size, offset);
 }
 
+/** pwrite(2) for unix_io.c: `transfer`. */
 static ssize_t model_pwrite(int fd, const void *buf, size_t size, off_t offset)
 {
     return transfer(CALL_PWRITE, fd, (void *)buf, size, offset);
 }
 
+/** pwrite64 for unix_io.c: `transfer`. */
 static ssize_t model_pwrite64(int fd, const void *buf, size_t size, ext2_loff_t offset)
 {
     return transfer(CALL_PWRITE64, fd, (void *)buf, size, offset);
 }
 
+/** read(2) for unix_io.c: `transfer` at `position`, which advances by the
+ * count moved. */
 static ssize_t model_read(int fd, void *buf, size_t size)
 {
     ssize_t actual = transfer(CALL_READ, fd, buf, size, position);
@@ -152,6 +164,8 @@ static ssize_t model_read(int fd, void *buf, size_t size)
     return actual;
 }
 
+/** write(2) for unix_io.c: `transfer` at `position`, which advances by the
+ * count moved. */
 static ssize_t model_write(int fd, const void *buf, size_t size)
 {
     ssize_t actual = transfer(CALL_WRITE, fd, (void *)buf, size, position);
@@ -161,6 +175,9 @@ static ssize_t model_write(int fd, const void *buf, size_t size)
     return actual;
 }
 
+/** Set `position` to `offset` and return it, counting the seek; -1 with
+ * errno EINVAL for another descriptor, a `whence` other than SEEK_SET, or
+ * an offset outside the device. */
 ext2_loff_t ext2fs_llseek(int fd, ext2_loff_t offset, int whence)
 {
     nseeks++;
@@ -173,7 +190,7 @@ ext2_loff_t ext2fs_llseek(int fd, ext2_loff_t offset, int whence)
     return position;
 }
 
-/** Cache allocation and channel opening are outside this fixture. */
+/** Abort: cache allocation and channel opening are outside this fixture. */
 errcode_t io_channel_alloc_buf(io_channel io, int count, void *ptr)
 {
     (void)io;
@@ -185,12 +202,14 @@ errcode_t io_channel_alloc_buf(io_channel io, int count, void *ptr)
 /** Emit the header's C99 inline definition for the unused cache code. */
 extern inline errcode_t ext2fs_free_mem(void *ptr);
 
+/** Abort: the raw calls under test read no environment. */
 char *ext2fs_safe_getenv(const char *name)
 {
     (void)name;
     abort();
 }
 
+/** Abort: the fixture sets the channel's alignment itself. */
 int ext2fs_get_dio_alignment(int fd)
 {
     (void)fd;
@@ -212,6 +231,7 @@ static errcode_t read_error(io_channel io, unsigned long block, int count, void 
     return error;
 }
 
+/** The write error handler: `read_error`. */
 static errcode_t write_error(io_channel io, unsigned long block, int count, const void *buf,
                              size_t size, int actual, errcode_t error)
 {
@@ -244,6 +264,8 @@ static void reset_device(unsigned char *bounce)
     positional_reply = stream_reply = REPLY_FULL;
 }
 
+/** Whether call `index` was recorded with this kind, size, offset and
+ * buffer. */
 static int call_is(int index, enum call_kind kind, size_t size, ext2_loff_t offset, const void *buf)
 {
     return index < ncalls && calls[index].kind == kind && calls[index].size == size &&
@@ -372,7 +394,10 @@ static void failed_transfers(unsigned char *buf, unsigned char *bounce, const ch
     }
 }
 
-/** Force an even address two bytes beyond a sector boundary. */
+/**
+ * Run the rows with a buffer aligned to a sector and one at an even address
+ * two bytes past a sector boundary. Returns the count of failed checks.
+ */
 int main(void)
 {
     unsigned char *allocation = malloc(LARGE_SIZE + 2 * SECTOR);
