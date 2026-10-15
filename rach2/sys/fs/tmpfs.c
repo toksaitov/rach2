@@ -1,5 +1,7 @@
 /*
- * tmpfs.c: a file system in memory, as tmpfs.h describes it.
+ * The tmpfs of tmpfs.h, a file system in memory. Its operations take no
+ * lock of their own; the type sets `ns_serialised`, so the namespace changes
+ * and a description's uses of a file run under the mount's namespace lock.
  */
 
 #include "tmpfs.h"
@@ -47,13 +49,15 @@ struct tmpfs_dirent {
  * A node. `refs` counts the holds of lookups, descriptions, working
  * directories and mounts, and for a directory the hold each subdirectory has
  * on it through `parent`; `links` the names that name it. It is freed when
- * both are gone.
+ * both are gone. A directory's names are in `entries`, in the order they
+ * were made or renamed into it; a symbolic link's target is in `target`,
+ * NULL for any other node.
  */
 struct tmpfs_node {
     struct tmpfs_node *parent; /* a directory's own, held; the root's is itself */
     struct tmpfs_dirent *entries;
     uint32_t nentries;
-    uint32_t subdirs;
+    uint32_t subdirs;  /* the directories among the names */
     uint32_t next_off; /* a directory's place for its next name, 0 for 2 */
     uint32_t refs;
     uint32_t links;
@@ -64,21 +68,25 @@ struct tmpfs_node {
     uint32_t seals; /* the TMPFS_SEAL_ bits a regular file has */
     uint64_t ino;
     int64_t atime, atime_ns, mtime, mtime_ns, ctime, ctime_ns;
-    struct shmem data;
+    struct shmem data; /* a regular file's bytes */
     char *target;
     char *label; /* a memfd's name, for /proc/PID/fd; NULL for a named file */
 };
 
+/* The state of a mount, in its `priv`. */
 struct tmpfs_mount {
     struct tmpfs_node *root;
-    uint64_t next_ino;
+    uint64_t next_ino;        /* the last inode number given; the root's is 1 */
     struct shmem_quota quota; /* the pages its files hold, against size= */
 };
 
+/* The times `stamp` sets: access, modification and change. */
 #define STAMP_A 1
 #define STAMP_M 2
 #define STAMP_C 4
 
+/** Set the times of `n` that `which`, of the STAMP_ bits, chooses to the
+ * current time. */
 static void stamp(struct tmpfs_node *n, int which)
 {
     int64_t s, ns;
@@ -98,15 +106,18 @@ static void stamp(struct tmpfs_node *n, int which)
     }
 }
 
+/** Whether `n` is a directory. */
 static int is_dir(const struct tmpfs_node *n)
 {
     return (n->mode & T_IFMT) == T_IFDIR;
 }
 
-/* A new node in the directory `dir`, or of no directory for the root and a
- * memfd; owned as Linux's `inode_init_owner` owns one: by the caller's
- * effective ids, but with the group of a setgid directory, which passes the
- * bit on to a new directory. */
+/** A new node of `mode` for the directory `dir`, or of no directory for the
+ * root and a memfd, with no hold, no name, the next inode number and the
+ * seal TMPFS_SEAL_SEAL; NULL when the heap has no room. It is owned as
+ * Linux's `inode_init_owner` owns one: by the caller's effective ids, but
+ * with the group of a setgid directory, which passes the bit on to a new
+ * directory. */
 static struct tmpfs_node *new_node(struct vfs_mount *mnt, const struct tmpfs_node *dir,
                                    uint32_t mode)
 {
@@ -155,6 +166,8 @@ static void settle(struct tmpfs_node *n)
     }
 }
 
+/** The link in the list of names of `d` that points at the entry `name`, or
+ * NULL when there is none. */
 static struct tmpfs_dirent **find(struct tmpfs_node *d, const char *name)
 {
     struct tmpfs_dirent **link;
@@ -174,7 +187,7 @@ static struct tmpfs_dirent **find(struct tmpfs_node *d, const char *name)
     return NULL;
 }
 
-/* An entry for the name `name`, from the heap and in no directory yet; NULL
+/** An entry for the name `name`, from the heap and in no directory yet; NULL
  * when the heap has no room for it. */
 static struct tmpfs_dirent *new_entry(const char *name)
 {
@@ -213,9 +226,10 @@ static void renumber(struct tmpfs_node *d)
 
 /**
  * Put the entry `e` for `n` at the end of `d`, so a directory lists its
- * names in the order they were made, at the directory's next place. A
- * directory takes a hold on `d` as its parent and lets go of the one on the
- * parent it had, which a rename moves it from.
+ * names in the order they were made, at the directory's next place. `n`
+ * gains a link, and `d` new modification and change times. A directory
+ * takes a hold on `d` as its parent and lets go of the one on the parent it
+ * had, which a rename moves it from.
  */
 static void link_entry(struct tmpfs_node *d, struct tmpfs_dirent *e, struct tmpfs_node *n)
 {
@@ -249,8 +263,8 @@ static void link_entry(struct tmpfs_node *d, struct tmpfs_dirent *e, struct tmpf
     stamp(d, STAMP_M | STAMP_C);
 }
 
-/* Add the name `name` for `n` at the end of `d`: 0, or -ENOSPC when the heap
- * has no room for the entry. */
+/** Add the name `name` for `n` at the end of `d`: 0, or -ENOSPC when the
+ * heap has no room for the entry. */
 static int add_entry(struct tmpfs_node *d, const char *name, struct tmpfs_node *n)
 {
     struct tmpfs_dirent *e = new_entry(name);
@@ -262,7 +276,9 @@ static int add_entry(struct tmpfs_node *d, const char *name, struct tmpfs_node *
     return 0;
 }
 
-/* Take the name at `link` out of `d`; the node's link count drops. */
+/** Take the name at `link` out of `d` and free its entry. The node it named
+ * loses a link and is returned, for the caller to settle; both have new
+ * change times, and `d` a new modification time. */
 static struct tmpfs_node *remove_entry(struct tmpfs_node *d, struct tmpfs_dirent **link)
 {
     struct tmpfs_dirent *e = *link;
@@ -281,11 +297,15 @@ static struct tmpfs_node *remove_entry(struct tmpfs_node *d, struct tmpfs_dirent
     return n;
 }
 
+/** The directory `dir`, or the root of `mnt` for NULL. */
 static struct tmpfs_node *dir_of(struct vfs_mount *mnt, void *dir)
 {
     return dir ? (struct tmpfs_node *)dir : ((struct tmpfs_mount *)mnt->priv)->root;
 }
 
+/** The `lookup` of tmpfs: `.`, `..`, the parent, which at the root is the
+ * root, or a name in the directory, held; -ENOTDIR for a node that is no
+ * directory, or -ENOENT. */
 static int tmpfs_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
 {
     struct tmpfs_node *d = dir_of(mnt, dir);
@@ -311,12 +331,15 @@ static int tmpfs_lookup(struct vfs_mount *mnt, void *dir, const char *name, void
     return 0;
 }
 
+/** The `hold` of tmpfs: one more hold on `node`. */
 static void tmpfs_hold(struct vfs_mount *mnt, void *node)
 {
     (void)mnt;
     ((struct tmpfs_node *)node)->refs++;
 }
 
+/** The `put` of tmpfs: one hold fewer, and the node freed when it has no
+ * hold and no name left (`settle`). */
 static void tmpfs_put(struct vfs_mount *mnt, void *node)
 {
     struct tmpfs_node *n = (struct tmpfs_node *)node;
@@ -326,6 +349,11 @@ static void tmpfs_put(struct vfs_mount *mnt, void *node)
     settle(n);
 }
 
+/** The `getattr` of tmpfs. A directory has two links and one for each
+ * subdirectory, and a size of DIRENT_BYTES for each name and for `.` and
+ * `..`; a symbolic link's size is its target's length; any other node has
+ * the size of its bytes and the 512-byte blocks of the pages that hold
+ * them. */
 static int tmpfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     struct tmpfs_node *n = (struct tmpfs_node *)node;
@@ -358,7 +386,7 @@ static int tmpfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 
 /**
  * Whether the seals of `n` allow its size to become `size`: F_SEAL_SHRINK
- * refuses a smaller one and F_SEAL_GROW a larger one, as on Linux. 0 or
+ * forbids a smaller one and F_SEAL_GROW a larger one, as on Linux. 0 or
  * -EPERM.
  */
 static int seals_allow_size(const struct tmpfs_node *n, uint64_t size)
@@ -370,6 +398,13 @@ static int seals_allow_size(const struct tmpfs_node *n, uint64_t size)
     return 0;
 }
 
+/**
+ * The `setattr` of tmpfs. A change of the execute bits under
+ * TMPFS_SEAL_EXEC is -EPERM. A size change is -EISDIR on a directory,
+ * -EINVAL on any other node but a regular file, -EPERM where the seals
+ * forbid the size, or what `shmem_truncate` answers, and on success sets
+ * the modification time. Every call that succeeds sets the change time.
+ */
 static int tmpfs_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
 {
     struct tmpfs_node *n = (struct tmpfs_node *)node;
@@ -417,6 +452,9 @@ static int tmpfs_setattr(struct vfs_mount *mnt, void *node, int what, const stru
     return 0;
 }
 
+/** The `open` of tmpfs: the node, held once more, is the handle. -ENXIO for
+ * a device node, which open(2) opens as the /dev device of its number
+ * without calling the type. */
 static int tmpfs_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
 {
     struct tmpfs_node *n = (struct tmpfs_node *)node;
@@ -431,11 +469,14 @@ static int tmpfs_open(struct vfs_mount *mnt, void *node, int flags, void **handl
     return 0;
 }
 
+/** The `release` of tmpfs: the open's hold put back. */
 static void tmpfs_release(struct vfs_mount *mnt, void *handle)
 {
     tmpfs_put(mnt, handle);
 }
 
+/** The `read` of tmpfs: bytes of a regular file (`shmem_read`), which sets
+ * its access time; -EISDIR for a directory, -EINVAL for any other node. */
 static int32_t tmpfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
                           uint64_t offset)
 {
@@ -452,8 +493,11 @@ static int32_t tmpfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32
     return shmem_read(&n->data, buf, count, offset);
 }
 
-/* A write under F_SEAL_WRITE or F_SEAL_FUTURE_WRITE is EPERM, and one past
- * the end under F_SEAL_GROW is EPERM whole, as on Linux. */
+/** The `write` of tmpfs: bytes of a regular file (`shmem_write`), which sets
+ * its modification and change times; -EISDIR for a directory, -EINVAL for
+ * any other node. A write under F_SEAL_WRITE or F_SEAL_FUTURE_WRITE is
+ * -EPERM, and one past the end under F_SEAL_GROW is -EPERM whole, as on
+ * Linux. */
 static int32_t tmpfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                            uint64_t offset)
 {
@@ -474,6 +518,9 @@ static int32_t tmpfs_write(struct vfs_mount *mnt, void *handle, const void *buf,
     return shmem_write(&n->data, buf, count, offset);
 }
 
+/** The `truncate` of tmpfs: a regular file's new size (`shmem_truncate`),
+ * which sets its modification and change times; -EISDIR for a directory,
+ * -EINVAL for any other node, or -EPERM where the seals forbid the size. */
 static int tmpfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
     struct tmpfs_node *n = (struct tmpfs_node *)handle;
@@ -489,6 +536,7 @@ static int tmpfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     return shmem_truncate(&n->data, size);
 }
 
+/** The `fsync` of tmpfs, which has nothing to write: 0. */
 static int tmpfs_fsync(struct vfs_mount *mnt, void *handle)
 {
     (void)mnt;
@@ -501,6 +549,7 @@ static int tmpfs_fsync(struct vfs_mount *mnt, void *handle)
  * "..", and the names follow at their places, which removing a name does not
  * change, so a program that removes names while it lists them, as `rm -r`
  * does, misses none. The cursor goes past the place of the name returned.
+ * 1 with `ent` filled, 0 at the end, or -ENOTDIR.
  */
 static int tmpfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
                          struct vfs_dirent *ent)
@@ -539,7 +588,8 @@ static int tmpfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
  * Make `name` in `dir` a node of the type the S_IF bits of `mode` give, a
  * regular file for none, with the device number `rdev` for a device. The
  * node comes back held. A directory and a symbolic link have operations of
- * their own and are EINVAL here.
+ * their own and are -EINVAL here; a name already there is -EEXIST, and a
+ * heap with no room -ENOSPC.
  */
 static int make_node(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
                      uint32_t rdev, void **node)
@@ -575,18 +625,22 @@ static int make_node(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     return 0;
 }
 
+/** The `create` of tmpfs: `make_node` with no device number. */
 static int tmpfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
                         void **node)
 {
     return make_node(mnt, dir, name, mode, 0, node);
 }
 
+/** The `mknod` of tmpfs: `make_node`. */
 static int tmpfs_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
                        uint32_t rdev, void **node)
 {
     return make_node(mnt, dir, name, mode, rdev, node);
 }
 
+/** The `unlink` of tmpfs: the name `name` taken out of `dir`, and its node
+ * freed when nothing holds it; -ENOENT, or -EISDIR for a directory. */
 static int tmpfs_unlink(struct vfs_mount *mnt, void *dir, const char *name)
 {
     struct tmpfs_node *d = dir_of(mnt, dir);
@@ -602,6 +656,9 @@ static int tmpfs_unlink(struct vfs_mount *mnt, void *dir, const char *name)
     return 0;
 }
 
+/** The `mkdir` of tmpfs: a new directory `name` in `dir` with the permission
+ * bits of `mode`, owned as `new_node` says; -EEXIST, or -ENOSPC when the heap
+ * has no room. */
 static int tmpfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 {
     struct tmpfs_node *d = dir_of(mnt, dir);
@@ -622,6 +679,8 @@ static int tmpfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint3
     return rc;
 }
 
+/** The `rmdir` of tmpfs: the empty directory `name` taken out of `dir`, and
+ * freed when nothing holds it; -ENOENT, -ENOTDIR, or -ENOTEMPTY. */
 static int tmpfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
 {
     struct tmpfs_node *d = dir_of(mnt, dir);
@@ -642,7 +701,7 @@ static int tmpfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     return 0;
 }
 
-/* Whether directory `a` is `d` or one of the directories above it. */
+/** Whether directory `a` is `d` or one of the directories above it. */
 static int is_above(const struct tmpfs_node *a, const struct tmpfs_node *d)
 {
     for (;;) {
@@ -658,9 +717,12 @@ static int is_above(const struct tmpfs_node *a, const struct tmpfs_node *d)
 
 /**
  * Move the name `oldname` in `olddir` to `newname` in `newdir`, replacing a
- * file or an empty directory there. The new name's entry is had from the
- * heap before either directory changes, so a rename the heap cannot serve
- * answers -ENOSPC with both names as they were.
+ * file or an empty directory there; a rename of a name to another name of
+ * the same node does nothing. The new name's entry is taken from the heap
+ * before either directory changes, so a rename the heap cannot serve
+ * answers -ENOSPC with both names as they were. -ENOENT, -ENOTDIR or
+ * -EISDIR for a directory and a file in each other's place, -ENOTEMPTY,
+ * and -EINVAL for a directory moved below itself.
  */
 static int tmpfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
                         const char *newname)
@@ -708,6 +770,9 @@ static int tmpfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname
     return 0;
 }
 
+/** The `link` of tmpfs: a new name `name` in `dir` for the file `node`,
+ * which has a new change time; -EPERM for a directory, -EEXIST, or
+ * -ENOSPC. */
 static int tmpfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
 {
     struct tmpfs_node *d = dir_of(mnt, dir);
@@ -727,6 +792,8 @@ static int tmpfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *
     return rc;
 }
 
+/** The `readlink` of tmpfs: the target into `buf`, cut to `cap` bytes, with
+ * no terminator; its length, or -EINVAL for a node that is no link. */
 static int tmpfs_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
     struct tmpfs_node *n = (struct tmpfs_node *)node;
@@ -745,9 +812,10 @@ static int tmpfs_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t
 }
 
 /**
- * The mount's size is its blocks and the pages its files hold the blocks in
- * use, as Linux counts a tmpfs's use, so that df shows an empty /dev/shm
- * empty; a mount without a size has the machine's frames as its blocks.
+ * The `statfs` of tmpfs, in blocks of a page. The mount's limit is its
+ * blocks and the pages its files hold the blocks in use, as Linux counts a
+ * tmpfs's use, so that df shows an empty /dev/shm empty; a mount without a
+ * limit has the machine's frames as its blocks.
  */
 static int tmpfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 {
@@ -770,8 +838,10 @@ static int tmpfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
  * fallocate(2), as Linux's tmpfs takes it: the pages of the range made, the
  * size grown to its end unless FALLOC_FL_KEEP_SIZE, and with
  * FALLOC_FL_PUNCH_HOLE the range made to read as zeros and its whole pages
- * freed. A growth a seal refuses, or a hole in a file sealed against
- * writing, is -EPERM, and any other mode -EOPNOTSUPP.
+ * freed. A growth a seal forbids, or a hole in a file sealed against
+ * writing, is -EPERM, any other mode -EOPNOTSUPP, and a node that is not a
+ * regular file -ENODEV; a failed allocation answers the error of
+ * `shmem_allocate`.
  */
 static int tmpfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset,
                            uint64_t len)
@@ -809,12 +879,14 @@ static int tmpfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, u
     return 0;
 }
 
+/** The `sync` of tmpfs, which has nothing to write: 0. */
 static int tmpfs_sync(struct vfs_mount *mnt)
 {
     (void)mnt;
     return 0;
 }
 
+/** The first half of a tmpfs unmount, which has nothing to write: 0. */
 static int tmpfs_prepare_unmount(struct vfs_mount *mnt)
 {
     (void)mnt;
@@ -823,7 +895,7 @@ static int tmpfs_prepare_unmount(struct vfs_mount *mnt)
 
 /**
  * Free the tree under `top`, the unmount's end: nothing holds a node of it,
- * since the common layer refuses an unmount while anything does.
+ * since the VFS answers EBUSY to an unmount while anything does.
  *
  * The walk is a loop over the parent links and not a recursion, since a tree
  * may be as deep as a path is long and the kernel stack is 16 KiB. It goes
@@ -853,6 +925,8 @@ static void free_tree(struct tmpfs_node *top)
     }
 }
 
+/** The second half of a tmpfs unmount: the tree, the root and the mount's
+ * state freed. */
 static void tmpfs_unmount(struct vfs_mount *mnt)
 {
     struct tmpfs_mount *tm = (struct tmpfs_mount *)mnt->priv;
@@ -866,13 +940,16 @@ static void tmpfs_unmount(struct vfs_mount *mnt)
     mnt->root = NULL;
 }
 
+/** The `path` of tmpfs: the path of the directory `node` from the mount's
+ * root, built from the end of `buf`, each directory's name in front of the
+ * path so far, and moved to its start. -ENOENT for a directory taken out of
+ * its parent, or -ENAMETOOLONG when the path does not fit `cap`. */
 static int tmpfs_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
     struct tmpfs_node *root = ((struct tmpfs_mount *)mnt->priv)->root;
     struct tmpfs_node *n = (struct tmpfs_node *)node;
     uint32_t len = 0;
 
-    /* Built from the end: each directory's name before the path so far. */
     if (cap < 2) {
         return -ENAMETOOLONG;
     }
@@ -906,6 +983,8 @@ static int tmpfs_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap
     return 0;
 }
 
+/** The `symlink` of tmpfs: a link `name` in `dir`, mode 0777, to a copy of
+ * `target`; -EEXIST, or -ENOSPC when the heap has no room. */
 static int tmpfs_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char *target)
 {
     struct tmpfs_node *d = dir_of(mnt, dir);
@@ -934,7 +1013,7 @@ static int tmpfs_symlink(struct vfs_mount *mnt, void *dir, const char *name, con
     return rc;
 }
 
-/* The value of the option `name=` in `options`, or NULL; the value ends at
+/** The value of the option `name=` in `options`, or NULL; the value ends at
  * the next comma. */
 static const char *option(const char *options, const char *name)
 {
@@ -959,7 +1038,7 @@ static const char *option(const char *options, const char *name)
     return NULL;
 }
 
-/* The root's permission bits, in octal from mode=, or 1777. */
+/** The root's permission bits, in octal from mode=, or 1777. */
 static uint32_t root_mode(const char *options)
 {
     const char *p = option(options, "mode");
@@ -1019,6 +1098,9 @@ static int64_t size_pages(const char *options)
     return (int64_t)(n > (size_t)~(size_t)0 ? (size_t)~(size_t)0 : n);
 }
 
+/** The constructor of tmpfs: a mount whose files may hold the pages size=
+ * gives, with a root directory of the mode mode= gives, owned by the caller;
+ * -EINVAL for a size that is no number, or -ENOMEM. */
 static int tmpfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
                        const char *options)
 {
@@ -1106,10 +1188,10 @@ const char *tmpfs_label(void *node)
 }
 
 /**
- * A remount takes a new size=, as Linux's tmpfs does; one smaller than the
- * pages the files hold is -EINVAL. A tmpfs has nothing on a device to
- * settle, and the VFS refuses every write to a read-only mount, so the
- * flags change nothing here.
+ * The `remount` of tmpfs takes a new size=, as Linux's tmpfs does; one
+ * smaller than the pages the files hold is -EINVAL. A tmpfs has nothing on
+ * a device to settle, and the wrappers answer EROFS to every write to a
+ * read-only mount, so the flags change nothing here.
  */
 static int tmpfs_remount(struct vfs_mount *mnt, uint32_t flags, const char *options)
 {
