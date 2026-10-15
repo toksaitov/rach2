@@ -21,7 +21,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `grow` (full tier; needs qemu, mke2fs, e2fsck, qemu-img; 512 MiB): a 1 GiB ext2 root grown by `growroot` on the recovery system to a partition the size of the installed machine's disk, its writes checked against the grow set, a grow killed and repaired, one interrupted between the entry and the grow, and the memory it needs.
 * `drill` (full tier; needs qemu, ssh, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the recovery drill, boots of one disk that carries the same three partitions the sealed disk has.
 * `account` (full tier; needs qemu; 128 MiB): accounts created, authenticated, changed and deleted on both images, since both have account tools now and they are different code.
-* `large` (full tier; needs qemu, mke2fs, e2fsck, mformat; 128 MiB): a file past 4 GiB on ext2 and on exFAT, written, read back after a remount, sought, sized, truncated, appended and shared between two descriptors, and a write past each format's limit refused by name.
+* `large` (full tier; needs qemu, mke2fs, e2fsck, mformat, either hdiutil and newfs_exfat or mkfs.exfat and fsck.exfat; 128 MiB): a file past 4 GiB on ext2 and on exFAT, written, read back after a remount, sought, sized, truncated, appended and shared between two descriptors, and a write past each format's limit refused by name.
 * `usb` (core tier; needs qemu; 128 MiB): the USB stack, in five boots.
 * `raw-e1000` (full tier; needs qemu; 128 MiB): the raw suite's card half on the e1000 card.
 * `raw` (full tier; needs qemu; 128 MiB): the raw ICMP socket, which is what `ping` and `traceroute` are.

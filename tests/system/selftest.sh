@@ -90,6 +90,8 @@ failing|-|full
 leaky|-|full
 parting|-|full
 needy|a-command-that-does-not-exist|full
+choosy|sh+a-command-that-does-not-exist/another-command-that-does-not-exist|full
+either|a-command-that-does-not-exist/sh+cat|full
 imagey|hdiutil|full
 slow1|-|full
 slow2|-|full
@@ -165,6 +167,10 @@ run-parting:
 	 i=0; while [ ! -s "$$RACH2_QEMU_LEDGER" ] && [ $$i -lt 100 ]; do sleep 0.1; i=$$((i+1)); done
 run-needy:
 	@echo "needy ran"
+run-choosy:
+	@echo "choosy ran"
+run-either:
+	@echo "either ran"
 run-imagey:
 	@echo "imagey ran"
 run-slow1:
@@ -385,6 +391,12 @@ out=$(run needy); rc=$?
 check "a missing tool refuses before building" 1 "$rc"
 check "and names the tool" 1 "$(printf '%s\n' "$out" | grep -c 'a-command-that-does-not-exist')"
 check "and nothing was prepared" 0 "$(printf '%s\n' "$out" | grep -c 'run: preparing')"
+out=$(run choosy); rc=$?
+check "a tool entry none of whose choices is installed whole refuses" 1 "$rc"
+check "and names every choice" 1 "$(printf '%s\n' "$out" | grep -c 'choosy needs either sh and a-command-that-does-not-exist or another-command-that-does-not-exist,')"
+out=$(run either); rc=$?
+check "a tool entry with one choice installed whole runs" 0 "$rc"
+check "and its suite ran" 1 "$(printf '%s\n' "$out" | grep -c 'either ran')"
 
 # The host's own refusals, tried and not looked up: a checker that refuses a
 # socket bind stops the run before the build, and so does a disk image that

@@ -224,11 +224,12 @@ fi
 
 # exfatprogs (Linux) or the system's fsck_exfat (macOS) checks an exFAT
 # volume this kernel wrote (tests/run exfat runs it when it is there); the
-# suite's own reader judges the volume without it.
+# suite's own reader judges the volume without it. tests/run large needs
+# exfatprogs' mkfs.exfat and fsck.exfat, or macOS's hdiutil and newfs_exfat.
 if command -v fsck.exfat >/dev/null 2>&1 || command -v fsck_exfat >/dev/null 2>&1; then
     row "[PASS]" "exfatprogs" "fsck.exfat or fsck_exfat present"
 else
-    row "[----]" "exfatprogs" "optional, for fsck.exfat over tests/run exfat; $(hint exfatprogs)"
+    row "[----]" "exfatprogs" "optional, for fsck.exfat over tests/run exfat and for tests/run large; $(hint exfatprogs)"
 fi
 
 # FUSE mounts a KRFFS image on the host (make -C krffs mount); nothing in the

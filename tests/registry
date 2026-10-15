@@ -4,10 +4,12 @@
 #
 # The make target is `run-` and the name, so it is not written here. The
 # runtime tools are the external commands the suite needs beyond the build
-# toolchain; `-` means none. The tier is `core` for the set `make test` runs
-# and `full` for the rest; `tests/run all` runs both. The images are what
-# the suite writes under build/images, as globs separated by commas, and
-# the field is left out for a suite whose files are named after it:
+# toolchain, separated by commas; `-` means none. An entry of choices, such as
+# `a+b/c+d`, is met when the host has every command of one choice: here a and
+# b, or c and d. The tier is `core` for the set `make test` runs and `full`
+# for the rest; `tests/run all` runs both. The images are what the suite
+# writes under build/images, as globs separated by commas, and the field is
+# left out for a suite whose files are named after it:
 # `NAME-test*`, `NAME.*`, `NAME-*` and `NAME/*`, and for a second-card
 # twin, `NAME-e1000`, the plain suite's names with `-e1000` before the
 # extension. The runner refuses a glob two suites declare, and fails a run
@@ -50,7 +52,7 @@ fdlock|qemu|full
 grow|qemu,mke2fs,e2fsck,qemu-img|full||512
 drill|qemu,ssh,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 account|qemu|full
-large|qemu,mke2fs,e2fsck,mformat|full
+large|qemu,mke2fs,e2fsck,mformat,hdiutil+newfs_exfat/mkfs.exfat+fsck.exfat|full
 usb|qemu|core
 raw-e1000|qemu|full
 raw|qemu|full

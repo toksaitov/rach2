@@ -385,6 +385,17 @@ suite_proves() {
             print text
         }' "$REPO/tests/system/suites.mk"
 }
+# A tools field in words: `a,b+c/d+e` is "a, either b and c or d and e".
+tools_prose() {
+    echo "$1" | awk -F, '{
+        for (i = 1; i <= NF; i++) {
+            e = $i; gsub(/\+/, " and ", e)
+            if (index(e, "/")) { gsub(/\//, " or ", e); e = "either " e }
+            printf "%s%s", (i > 1 ? ", " : ""), e
+        }
+        print ""
+    }'
+}
 # The suites as Markdown, one line each in the registry's order: the tier,
 # the tools, the memory, and what the suite proves. tests/system/suites.md
 # is this output, and `tests/run style` compares the two.
@@ -394,7 +405,7 @@ inventory() {
     echo "One line per suite, in the order the pool starts them, from \`tests/run inventory\`: the tier, the external commands the suite needs, \`qemu\` being the emulator of the architecture \`ARCH\` names, the most guest memory its machines ask for at once, the architectures it runs on when it does not run on both, and what it proves, which is the sentence in \`tests/system/suites.mk\` that names it. \`tests/run style\` compares this file with that output."
     echo
     for s in $(suite_names); do
-        tools=$(suite_tools "$s" | sed 's/,/, /g')
+        tools=$(tools_prose "$(suite_tools "$s")")
         case "$tools" in
             -) tools="needs nothing beyond the build" ;;
             *) tools="needs $tools" ;;
@@ -488,9 +499,9 @@ usage_names() {
 
 # What the host must let the run do, tried and not merely looked up.
 # `tools/setup/hostcheck.c` binds a TCP, a UDP and a Unix socket when a chosen
-# suite boots a machine, and attaches a disk image when one names hdiutil; a
-# refusal stops the run before the build. `RACH2_HOSTCHECK` names another
-# checker, which is how the runner's own test drives a refusal.
+# suite boots a machine, and attaches a disk image when one names hdiutil and
+# the host has it; a refusal stops the run before the build. `RACH2_HOSTCHECK`
+# names another checker, which is how the runner's own test drives a refusal.
 check_host() {
     checker="${RACH2_HOSTCHECK:-}"
     if [ -z "$checker" ]; then
@@ -549,20 +560,30 @@ check_space() {
     fi
 }
 
-# Every external command a suite needs, before anything is built for it.
+# Every external command a suite needs, before anything is built for it. An
+# entry with alternatives, `a+b/c+d`, is met when every command of one of
+# them is installed.
 check_tools() {
     tools=$(suite_tools "$1")
     [ "$tools" = "-" ] && return 0
-    oldifs=$IFS; IFS=,
-    for tool in $tools; do
-        IFS=$oldifs
-        [ "$tool" = qemu ] && tool=$RACH2_QEMU
-        command -v "$tool" >/dev/null 2>&1 || {
-            echo "run: $1 needs $tool and it is not installed" >&2
-            return 1
-        }
+    for entry in $(echo "$tools" | tr ',' ' '); do
+        met=""
+        for choice in $(echo "$entry" | tr '/' ' '); do
+            has=1
+            for tool in $(echo "$choice" | tr '+' ' '); do
+                [ "$tool" = qemu ] && tool=$RACH2_QEMU
+                command -v "$tool" >/dev/null 2>&1 || { has=""; break; }
+            done
+            [ -n "$has" ] && { met=1; break; }
+        done
+        [ -n "$met" ] && continue
+        case "$entry" in
+            *[/+]*) echo "run: $1 needs $(tools_prose "$entry"), which this host does not have" >&2 ;;
+            *) [ "$entry" = qemu ] && entry=$RACH2_QEMU
+               echo "run: $1 needs $entry and it is not installed" >&2 ;;
+        esac
+        return 1
     done
-    IFS=$oldifs
 }
 
 # A registered machine may close inherited descriptors. Check its saved
@@ -1047,7 +1068,7 @@ sockets="--no-sockets"
 machines=""
 for suite in "$@"; do
     case ",$(suite_tools "$suite")," in
-        *,hdiutil,*) diskimage="--diskimage" ;;
+        *[,/+]hdiutil[,/+]*) command -v hdiutil >/dev/null 2>&1 && diskimage="--diskimage" ;;
     esac
     case ",$(suite_tools "$suite")," in
         *,qemu,*|*,qemu-system-*) machines=1 ;;
