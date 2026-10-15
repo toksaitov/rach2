@@ -87,7 +87,6 @@ rach2/sys/fs/bcache.c:get complexity 35 one file system operation over the on-di
 rach2/sys/fs/bcache.c:get lines 101 one file system operation over the on-disk format, each step a rule of the format
 
 rach2/sys/fs/devfs.c:devfs_open complexity 34 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/devfs.c:devfs_open lines 101 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/exfat.c:chain_at params 7 the parameters are one level's cursor in a recursive walk
 rach2/sys/fs/exfat.c:check_dir complexity 44 one file system operation over the on-disk format, each step a rule of the format
@@ -150,12 +149,12 @@ rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over
 rach2/sys/fs/procfs.c:procfs_fd_ino complexity 33 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_kind_name complexity 31 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_open complexity 100 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_open lines 247 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_open lines 244 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_readlink_fd complexity 27 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_readlink_fd lines 142 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_readlink_fd lines 137 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/synthfs.c:synth_classify complexity 55 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/synthfs.c:synth_classify lines 171 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/synthfs.c:synth_classify lines 128 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/synthfs.c:synth_classify_pid complexity 28 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/synthfs.c:synth_sys_path complexity 32 a dispatcher, one arm per command, read as a table
 
