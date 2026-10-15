@@ -182,13 +182,12 @@ short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
 
 /** One scan, with a record for each queue it may name: a wait here ends at
  * once. */
-int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, int has_deadline, uint32_t deadline)
+int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d)
 {
     struct wait_queue **wqs = kzalloc(sizeof(*wqs) * (n ? n : 1u));
     int rc;
 
-    (void)has_deadline;
-    (void)deadline;
+    (void)d;
     if (!wqs) {
         return -ENOMEM;
     }
@@ -197,12 +196,14 @@ int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, int has_deadline, uint32
     return rc;
 }
 
-/** Every wait has a deadline, which a model wait does not read: 0. */
-uint32_t poll_ms_deadline(int timeout_ms, int *has_deadline)
+/** Every wait has a deadline, which a model wait does not read: tick 0. */
+void poll_ms_deadline(int timeout_ms, struct poll_deadline *d)
 {
     (void)timeout_ms;
-    *has_deadline = 1;
-    return 0;
+    d->set = 1;
+    d->tick = 0;
+    d->sec = 0;
+    d->nsec = 0;
 }
 
 /** No row's wait has a signal mask: 0. */

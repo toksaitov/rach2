@@ -754,8 +754,8 @@ long sys_epoll_ctl(struct isr_params *params)
 
 /**
  * A wait on the set `epfd` for at most `max` events into the user array
- * `uevents`, until the tick `deadline` when `has_deadline`. Returns the
- * events copied, 0 at the deadline, -EBADF, -EINVAL, -EFAULT, -EINTR or
+ * `uevents`, until the deadline `d` when it is set. Returns the events
+ * copied, 0 at the deadline, -EBADF, -EINVAL, -EFAULT, -EINTR or
  * -ENOMEM, as `sys_epoll_wait` gives them.
  *
  * The scan takes each event it reports, so that a second waiter does not
@@ -766,8 +766,7 @@ long sys_epoll_ctl(struct isr_params *params)
  * events copied before it, or EFAULT when there are none, as Linux's
  * does.
  */
-static int32_t epoll_wait_common(int epfd, uintptr_t uevents, int max, int has_deadline,
-                                 uint32_t deadline)
+static int32_t epoll_wait_common(int epfd, uintptr_t uevents, int max, struct poll_deadline *d)
 {
     struct epoll *ep = epoll_of(epfd);
     struct epoll_scan sc;
@@ -794,7 +793,7 @@ static int32_t epoll_wait_common(int epfd, uintptr_t uevents, int max, int has_d
         sc.queues = sc.grow;
         sc.grow = 0;
         sc.n = 0;
-        rc = poll_wait(scan_set, &sc, sc.queues, has_deadline, deadline);
+        rc = poll_wait(scan_set, &sc, sc.queues, d);
         if (rc <= 0 || sc.grow == 0) {
             break;
         }
@@ -815,34 +814,34 @@ static int32_t epoll_wait_common(int epfd, uintptr_t uevents, int max, int has_d
 
 long sys_epoll_wait(struct isr_params *params)
 {
-    int has_deadline;
-    uint32_t deadline = poll_ms_deadline((int)SC_ARG(params, 3), &has_deadline);
+    struct poll_deadline d;
 
-    return epoll_wait_common((int)SC_ARG(params, 0), SC_ARG(params, 1), (int)SC_ARG(params, 2),
-                             has_deadline, deadline);
+    poll_ms_deadline((int)SC_ARG(params, 3), &d);
+    return epoll_wait_common((int)SC_ARG(params, 0), SC_ARG(params, 1), (int)SC_ARG(params, 2), &d);
 }
 
 long sys_epoll_pwait(struct isr_params *params)
 {
-    int has_deadline;
-    uint32_t deadline = poll_ms_deadline((int)SC_ARG(params, 3), &has_deadline);
-    int32_t rc = poll_mask_set(SC_ARG(params, 4), USER_LEN32(SC_ARG(params, 5)));
+    struct poll_deadline d;
+    int32_t rc;
 
+    poll_ms_deadline((int)SC_ARG(params, 3), &d);
+    rc = poll_mask_set(SC_ARG(params, 4), USER_LEN32(SC_ARG(params, 5)));
     if (rc != 0) {
         return rc;
     }
-    return poll_mask_done(epoll_wait_common((int)SC_ARG(params, 0), SC_ARG(params, 1),
-                                            (int)SC_ARG(params, 2), has_deadline, deadline));
+    return poll_mask_done(
+        epoll_wait_common((int)SC_ARG(params, 0), SC_ARG(params, 1), (int)SC_ARG(params, 2), &d));
 }
 
 /** The timespec is read as four 32-bit words, the seconds' low word first,
  * so that i386 and x86-64 read it alike. */
 long sys_epoll_pwait2(struct isr_params *params)
 {
-    int has_deadline = 0;
-    uint32_t deadline = 0;
+    struct poll_deadline d;
     int32_t rc;
 
+    d.set = 0;
     if (SC_ARG(params, 3)) {
         /* struct __kernel_timespec: 64-bit seconds and nanoseconds. */
         uint32_t ts[4];
@@ -863,12 +862,12 @@ long sys_epoll_pwait2(struct isr_params *params)
         if (ms > 0x7FFFFFFFu) {
             ms = 0x7FFFFFFFu;
         }
-        deadline = poll_ms_deadline((int)ms, &has_deadline);
+        poll_ms_deadline((int)ms, &d);
     }
     rc = poll_mask_set(SC_ARG(params, 4), USER_LEN32(SC_ARG(params, 5)));
     if (rc != 0) {
         return rc;
     }
-    return poll_mask_done(epoll_wait_common((int)SC_ARG(params, 0), SC_ARG(params, 1),
-                                            (int)SC_ARG(params, 2), has_deadline, deadline));
+    return poll_mask_done(
+        epoll_wait_common((int)SC_ARG(params, 0), SC_ARG(params, 1), (int)SC_ARG(params, 2), &d));
 }

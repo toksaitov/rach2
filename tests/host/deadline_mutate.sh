@@ -13,8 +13,11 @@
 # the first tick at or after their end, measured from where in the tick in
 # progress they began, seconds to count a hundred ticks and any part of a tick
 # to round up, a zero timeout to end at once, the longest ppoll timeout to end
-# 0x7FFFFFFF ticks ahead across the wrap and not be reached where it began, and
-# a deadline to be reached at its tick and not before;
+# 0x7FFFFFFF ticks ahead across the wrap and not be reached where it began, a
+# deadline to be reached at its tick and not before, a poll or ppoll whose
+# deadline tick has come before time since boot reached its end, after a lost
+# tick, to move to the tick at which it does, and a ppoll of the clamped length
+# to end at its tick alone;
 # process_timer_hosttest requires a due timer to post SIGALRM to its process,
 # running or asleep, and be armed again for its interval, an interval of one
 # tick included, a single alarm to be left disarmed, a sleeper to wake at its
@@ -229,8 +232,8 @@ prove poll-clamp poll_deadline_hosttest io/poll.c \
     '    return now + ticks;' \
     'the longest ppoll timeout ends 0x7FFFFFFF ticks ahead across the wrap|and its deadline is not reached at the tick it began'
 prove ppoll-nsec poll_deadline_hosttest io/poll.c \
-    '    return tick_deadline(ticks, ((uint32_t)ts->tv_nsec % 10000000u + 999u) / 1000u);' \
-    '    return tick_deadline(ticks, (uint32_t)ts->tv_nsec % 10000000u / 1000u);' \
+    '    d->tick = tick_deadline(ticks, ((uint32_t)ts->tv_nsec % 10000000u + 999u) / 1000u);' \
+    '    d->tick = tick_deadline(ticks, (uint32_t)ts->tv_nsec % 10000000u / 1000u);' \
     'a ppoll of 1 ns from tick 1000 ends at 1001'
 prove ppoll-sec poll_deadline_hosttest io/poll.c \
     '    ticks = sec * 100u + (uint32_t)ts->tv_nsec / 10000000u;' \
@@ -265,8 +268,8 @@ prove tick-round-one poll_deadline_hosttest io/poll.c \
     '    ticks += (phase_ns / 1000u + us + 9998u) / 10000u;' \
     'a ppoll of 1 ns from tick 1000 ends at 1001'
 prove ppoll-nsec-one poll_deadline_hosttest io/poll.c \
-    '    return tick_deadline(ticks, ((uint32_t)ts->tv_nsec % 10000000u + 999u) / 1000u);' \
-    '    return tick_deadline(ticks, ((uint32_t)ts->tv_nsec % 10000000u + 998u) / 1000u);' \
+    '    d->tick = tick_deadline(ticks, ((uint32_t)ts->tv_nsec % 10000000u + 999u) / 1000u);' \
+    '    d->tick = tick_deadline(ticks, ((uint32_t)ts->tv_nsec % 10000000u + 998u) / 1000u);' \
     'a ppoll of 1 ns from tick 1000 ends at 1001'
 prove select-zero poll_deadline_hosttest io/poll.c \
     '    return (int)(tv->tv_sec * 1000 + (tv->tv_usec + 999) / 1000);' \
@@ -276,6 +279,26 @@ prove select-sec poll_deadline_hosttest io/poll.c \
     '    return (int)(tv->tv_sec * 1000 + (tv->tv_usec + 999) / 1000);' \
     '    return (int)(tv->tv_sec * 100 + (tv->tv_usec + 999) / 1000);' \
     'a select of 1 s and 11 ms from tick 1000 ends at 1102'
+prove poll-held poll_deadline_hosttest io/poll.c \
+    '    if (sec > d->sec || (sec == d->sec && nsec >= d->nsec)) {' \
+    '    if (sec >= d->sec) {' \
+    'where the clock is short of its end, and the deadline moves to 1003|a ppoll of 15 ms from there moves to 1003 as well'
+prove poll-held-due poll_deadline_hosttest io/poll.c \
+    '    due = (uint64_t)d->sec * 100u + ((uint32_t)d->nsec + 9999999u) / 10000000u;' \
+    '    due = (uint64_t)d->sec * 100u + (uint32_t)d->nsec / 10000000u;' \
+    'where the clock is short of its end, and the deadline moves to 1003'
+prove poll-end poll_deadline_hosttest io/poll.c \
+    '    deadline_end(d, timeout_ms / 1000, timeout_ms % 1000 * 1000000L);' \
+    '    deadline_end(d, timeout_ms / 1000, 0);' \
+    'where the clock is short of its end, and the deadline moves to 1003'
+prove ppoll-end poll_deadline_hosttest io/poll.c \
+    '        deadline_end(d, ts->tv_sec, ts->tv_nsec);' \
+    '        deadline_end(d, ts->tv_sec, 0);' \
+    'a ppoll of 15 ms from there moves to 1003 as well'
+prove ppoll-end-clamp poll_deadline_hosttest io/poll.c \
+    '    if ((unsigned long)ts->tv_sec < 21474836ul) {' \
+    '    if ((unsigned long)ts->tv_sec <= 21474836ul) {' \
+    'a ppoll of 21474836 s, the clamp, ends at its tick alone'
 
 prove tick-running process_timer_hosttest proc/process.c \
     '        if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {' \

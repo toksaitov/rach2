@@ -100,6 +100,11 @@ A timeout ends at the first 10 ms timer tick at or after its end, measured from
 where in the tick in progress the call is, so a timeout never expires
 before the time asked, up to the limits below, and at most a tick after
 it.
+As in
+.Xr poll 2 ,
+the wait also lasts until
+.Dv CLOCK_MONOTONIC
+has advanced by the timeout after a lost tick.
 Timeouts are not written back.
 .Pp
 The raw
@@ -115,7 +120,8 @@ The raw
 .Nm pselect6
 call requires nonnegative seconds and nanoseconds from 0 through 999999999.
 Its deadline calculation caps seconds at 21474836 and the total interval
-at 2147483646 ticks.
+at 2147483646 ticks, and a timeout of 21474836 seconds or more ends at its
+tick without the clock's check.
 .Pp
 A non-null
 .Fa sigmask

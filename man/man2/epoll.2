@@ -121,7 +121,10 @@ of 64-bit seconds and nanoseconds; negative seconds are
 .Er EINVAL ,
 and a timeout longer than 2147483647 milliseconds, about 24.8 days, is
 shortened to that.
-A timeout ends at the first 10 ms tick at or after its end, as
+A timeout ends at the first 10 ms tick at or after its end, and not
+before
+.Dv CLOCK_MONOTONIC
+has advanced by it, as
 .Xr poll 2
 describes.
 .Pp
