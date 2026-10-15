@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd October 15, 2026
 .Dt SIGACTION 2
 .Os
 .Sh NAME
@@ -50,7 +50,8 @@ or
 neither can be caught, ignored, or blocked.
 .Pp
 The kernel accepts signal numbers 1 through 64.
-Numbers 1 through 31 have their Linux i386 meanings.
+Numbers 1 through 31 have their Linux meanings, which are the same on
+i386 and x86-64.
 Musl reserves numbers 32 through 34 and rejects them in
 .Fn sigaction .
 Pending signals occupy one bit each; repeated instances coalesce, and
@@ -143,9 +144,20 @@ The calls that wait for a signal or a deadline are never restarted:
 .Fn clock_nanosleep ,
 .Fn poll ,
 .Fn ppoll ,
-.Fn select
-and
+.Fn select ,
 .Fn pselect ,
+.Fn epoll_wait ,
+.Fn epoll_pwait ,
+.Fn epoll_pwait2 ,
+.Nm rt_sigtimedwait ,
+which
+.Fn sigwait ,
+.Fn sigwaitinfo
+and
+.Fn sigtimedwait
+make, and a
+.Xr futex 2
+wait with a timeout,
 nor are the System V calls that wait for a semaphore or a message:
 .Fn semop ,
 .Fn semtimedop ,
@@ -199,7 +211,7 @@ the handler receives pointers to a
 .Vt siginfo_t
 and a
 .Vt ucontext_t
-in Linux's i386 layouts.
+in Linux's layouts for the architecture.
 The
 .Vt siginfo_t
 has the signal number and code:
@@ -413,8 +425,8 @@ calls or
 .Nm sigreturn ;
 each supplies a restorer address when installing an action.
 .Pp
-The frames are Linux's: a plain handler's holds the return address, the
-signal number, a
+The frames are Linux's.
+On i386 a plain handler's holds the return address, the signal number, a
 .Vt struct sigcontext
 and the upper word of the mask to restore; an
 .Dv SA_SIGINFO
@@ -423,6 +435,16 @@ the
 .Vt siginfo_t
 and the
 .Vt ucontext_t .
+On x86-64 every handler, with
+.Dv SA_SIGINFO
+or without, has the one frame
+.Vt struct rt_sigframe :
+the return address, the
+.Vt ucontext_t ,
+whose registers are a
+.Vt struct sigcontext ,
+and the
+.Vt siginfo_t .
 The floating-point state lies above the frame.
 On i386 it is
 .Vt struct _fpstate_32 :
@@ -451,15 +473,19 @@ image with those 48 bytes zero, and the state is 64-byte aligned; under
 the
 .Ic fnsave
 image is alone and the magic word is 0xFFFF.
-On x86-64 the state is the XSAVE image alone, or without XSAVE the
+On x86-64 the state is the XSAVE image alone, with the software bytes,
+.Dv FP_XSTATE_MAGIC2
+and XSTATE_BV as on i386, or without XSAVE the
 .Ic fxsave64
 image, 64-byte aligned.
-The handler starts with the signal number in EAX and, with
+On i386 the handler starts with the signal number in EAX and, with
 .Dv SA_SIGINFO ,
-the two pointers in EDX and ECX on i386, and with them in RDI, RSI and RDX
-and RAX zero on x86-64; on both with the direction and trap flags clear
-and the initial floating-point state.
-Both return calls restore the saved general registers, instruction and
+the two pointers in EDX and ECX.
+On x86-64 every handler starts with the signal number in RDI, the two
+pointers in RSI and RDX, and RAX zero.
+On both it starts with the direction and trap flags clear and the initial
+floating-point state.
+The return calls restore the saved general registers, instruction and
 stack pointers, the processor flags a program may change, the
 floating-point state, and the saved mask; the rt form restores the
 alternate stack as well.

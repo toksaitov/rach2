@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd October 15, 2026
 .Dt KILL 2
 .Os
 .Sh NAME
@@ -44,7 +44,16 @@ if members exist but none is permitted, and returns
 .Er ESRCH
 if no member exists.
 .Pp
-A caller with effective user ID 0 may signal any target.
+A privileged caller may signal any target: one with effective user ID 0
+in the first user namespace that has not given up its capabilities with
+.Fn capset ,
+as
+.Xr capget 2
+describes.
+A process of another user namespace has no such privilege, where Linux
+lets a process privileged in a user namespace signal the processes of
+that namespace and of the ones nested in it; see
+.Xr unshare 2 .
 Otherwise, either the caller's real or effective user ID must match the
 target's real or saved user ID.
 For
@@ -125,6 +134,8 @@ also returns this error for
 0 when there is no current process.
 .El
 .Sh SEE ALSO
+.Xr capget 2 ,
 .Xr getuid 2 ,
 .Xr sigaction 2 ,
+.Xr unshare 2 ,
 .Xr wait 2
