@@ -12,27 +12,28 @@
 # STATE/since records, and it has no label `reviewed` yet. A number written to
 # STATE/queue, one a line, is reviewed next, finished or not.
 #
-# A review is one run of a reviewer's command-line program, which AGENT
-# names, through the adapter for it in `review`. For `codex`, the default and
-# so far the only one, it is `codex exec` with gpt-6-astra at xhigh effort as
-# the lead, which decides how to review and may start at most three subagents
-# at a time, gpt-6.1-sol at high effort, in a read-only sandbox in a worktree
-# of this clone at master's newest commit, for at most three hours. Its
-# prompt is reviewer.txt with the phase filled in, and its answer is JSON in
-# the form reviewer.json gives. Each finding becomes a `bug` issue that says
-# `Part of #P`, linked as a sub-issue while the phase has room, for the
-# manager to triage; a comment on the phase gives the summary and the issues
-# filed, and the phase gets the label `reviewed`. A review that fails or
-# reaches its limit says so on the phase, files nothing and is not repeated
-# unless queued; one that ends on the account's usage limit is repeated after
-# fifteen minutes. Nothing waits for a review.
+# A review is one run of a reviewer's command-line program, which AGENT names,
+# through the adapter for it in `review`. For `codex`, the default and so far
+# the only one, it is `codex exec` with gpt-6-astra at xhigh effort as the lead,
+# which decides how to review and may start at most three subagents at a time,
+# gpt-6.1-sol at high effort, in a read-only sandbox in a worktree of this clone
+# at master's newest commit, for at most three hours. Its prompt is reviewer.txt
+# with the phase filled in, and the text of the phase and its issues in a file
+# beside the output, since the sandbox has no network; its answer is JSON in the
+# form reviewer.json gives. Each finding becomes a `bug` issue that says
+# `Part of #P`, linked as a sub-issue while the phase has room, for the manager
+# to triage; a comment on the phase gives the summary and the issues filed, and
+# the phase gets the label `reviewed`. A review that fails or reaches its limit
+# says so on the phase, files nothing and is not repeated unless queued; one
+# that ends on the account's usage limit is repeated after fifteen minutes.
+# Nothing waits for a review.
 #
 # STATE, `~/flow/reviewer` unless given, holds the log `loop.log`, `since`,
-# `queue`, `failed`, the worktree `wt`, the process group of the review that
-# is running in `session`, and each review's output as `r-P-TIME.jsonl`,
-# `.err` and `.json`. `touch STATE/stop` ends the loop after the review that
-# is running, and a loop that starts while a review of the loop before it
-# still runs waits for that review to end.
+# `queue`, `failed`, the worktree `wt`, the process group of the review that is
+# running in `session`, and each review's issue texts and output as
+# `r-P-TIME.issues`, `.jsonl`, `.err` and `.json`. `touch STATE/stop` ends the
+# loop after the review that is running, and a loop that starts while a review
+# of the loop before it still runs waits for that review to end.
 
 # shellcheck disable=SC2016 # the dollars are GraphQL's, jq's and perl's
 REPO=toksaitov/rach2
@@ -162,9 +163,13 @@ review()
     commit=$(git -C "$state/wt" rev-parse --short HEAD)
     title=$(gh issue view "$p" --repo "$REPO" --json title --jq .title) &&
         issues=$(members "$p" | awk -F '\t' '{ print "* #" $1 " " $4 }') || return 75
-    prompt=$(P=$p TITLE=$title COMMIT=$commit ISSUES=$issues perl -0pe '
-        s/\@PHASE\@/$ENV{P}/g; s/\@TITLE\@/$ENV{TITLE}/g;
-        s/\@COMMIT\@/$ENV{COMMIT}/g; s/\@ISSUES\@/$ENV{ISSUES}/g' "$state/run/reviewer.txt")
+    for n in "$p" $(printf '%s\n' "$issues" | sed 's/^\* #\([0-9]*\) .*/\1/'); do
+        gh issue view "$n" --repo "$REPO" --json number,title,body \
+            --jq '"## #\(.number) \(.title)\n\n\(.body)\n"' || return 75
+    done > "$base.issues"
+    prompt=$(P=$p TITLE=$title COMMIT=$commit ISSUES=$issues TEXTS=$base.issues perl -0pe '
+        s/\@PHASE\@/$ENV{P}/g; s/\@TITLE\@/$ENV{TITLE}/g; s/\@COMMIT\@/$ENV{COMMIT}/g;
+        s/\@ISSUES\@/$ENV{ISSUES}/g; s/\@TEXTS\@/$ENV{TEXTS}/g' "$state/run/reviewer.txt")
     started=$(date +%s)
     case $agent in
         codex)
