@@ -3,7 +3,7 @@
 # board.sh: the operations the worker and manager loops make on the board.
 #
 # Usage: board.sh next
-#        board.sh take N
+#        board.sh take N [GROUP]
 #        board.sh mine N
 #        board.sh release N [STATUS]
 #        board.sh ready AFTER N...
@@ -20,12 +20,19 @@
 # prints nothing and fails, so that a caller does not take a part of the board
 # for the whole.
 #
-# `take N` assigns N to this account and reads the issue's timeline. Of the
-# accounts assigned now, the one whose latest assignment is the earliest keeps
-# the issue. When that is another account, `take` unassigns this one and exits
-# 1, so that no issue has two writers; otherwise it sets N In progress. A step
-# that fails after the assignment unassigns this account again, so that a
-# failed take leaves the issue as it found it.
+# `take N [GROUP]` assigns N to this account and reads the issue's timeline.
+# Of the accounts assigned now, the one whose latest assignment is the
+# earliest keeps the issue. When that is another account, `take` unassigns
+# this one and exits 1, so that no issue has two writers; otherwise it sets N
+# In progress. A step that fails after the assignment unassigns this account
+# again, unless N was this account's before, so that a failed take leaves the
+# issue as it found it. Without GROUP, `take` refuses a member of a group,
+# before the assignment and again after it, since `group` may label N while
+# a loop holds a listing of `next` that has N in it. With GROUP, it takes N
+# only as a member of that group: N has the label `grouped` and is listed in
+# GROUP's body, and GROUP is open and assigned to this account. A member that
+# is this account's already is taken again, for a session that resumes the
+# group; no other path assigns a member, so it is this group worker's.
 #
 # `mine N` prints `yes` while N is open and assigned to this account and `no`
 # otherwise; it prints nothing and fails when GitHub cannot be reached, so
@@ -47,8 +54,12 @@
 # its members N..., at most eight of them, each open, unassigned, in no other
 # group and not filed by ci. The group is an issue titled `group: TITLE` with
 # the label `group`, whose body lists the members one a line as `* #N`. Each
-# member gets the label `grouped`, which keeps it out of `next`, and the group
-# is set Ready, for `ready` or `order` to place. It prints the group's number.
+# member gets the label `grouped`, which keeps it out of `next` and `take`,
+# and the group is set Ready, for `ready` or `order` to place. It prints the
+# group's number. `group` labels the members before it reads their assignees
+# again, as `take` assigns before it reads the label, so that of a take and a
+# grouping that overlap, at least one sees the other and fails; when a member
+# was taken, `group` removes the labels and makes no group.
 #
 # `done` sets Done on every closed issue whose Status is not, and fails when
 # the listing of the board fails.
@@ -177,25 +188,59 @@ first()
         }'
 }
 
+# member N G: print why N cannot be taken as a member of group G, or nothing
+# when it can.
+member()
+{
+    gh issue view "$2" --repo "$REPO" --json state,labels,assignees,body --jq '
+        if .state != "OPEN" then "#'"$2"' is closed"
+        elif any(.labels[]; .name == "group") | not then "#'"$2"' is not a group"
+        elif any(.assignees[]; .login == "'"$me"'") | not then
+            "#'"$2"' is not this account'"'"'s"
+        elif any(.body | split("\n")[]; . == "* #'"$1"'") | not then
+            "#'"$2"' does not list it"
+        else empty end'
+}
+
+# labelled N: print `yes` when N has the label `grouped` and `no` otherwise.
+labelled()
+{
+    gh issue view "$1" --repo "$REPO" --json labels \
+        --jq 'if any(.labels[]; .name == "grouped") then "yes" else "no" end'
+}
+
+# refuse N WHY: say WHY on stderr and exit 1, first unassigning this account
+# from N when this take assigned it.
+refuse()
+{
+    [ "$added" != yes ] || unassign "$1" "$me"
+    echo "board: #$1: $2" >&2
+    exit 1
+}
+
 take()
 {
-    me=$(gh api user --jq .login)
+    me=$(gh api user --jq .login) added=no
+    had=$(gh issue view "$1" --repo "$REPO" --json assignees \
+        --jq 'if any(.assignees[]; .login == "'"$me"'") then "yes" else "no" end')
+    grouped=$(labelled "$1")
+    if [ -z "$2" ] && [ "$grouped" = yes ]; then
+        refuse "$1" "it is a member of a group; take it with board.sh take $1 GROUP"
+    fi
+    if [ -n "$2" ]; then
+        [ "$grouped" = yes ] || refuse "$1" "it is in no group"
+        reason=$(member "$1" "$2")
+        [ -z "$reason" ] || refuse "$1" "$reason"
+    fi
     gh issue edit "$1" --repo "$REPO" --add-assignee "$me" > /dev/null
-    if ! who=$(first "$1"); then
-        unassign "$1" "$me"
-        echo "board: #$1: cannot read who was assigned first" >&2
-        exit 1
+    [ "$had" = yes ] || added=yes
+    who=$(first "$1") || refuse "$1" "cannot read who was assigned first"
+    [ "$who" = "$me" ] || refuse "$1" "taken by $who first"
+    if [ -z "$2" ]; then
+        grouped=$(labelled "$1") || refuse "$1" "cannot read its labels"
+        [ "$grouped" = no ] || refuse "$1" "it joined a group while it was taken"
     fi
-    if [ "$who" != "$me" ]; then
-        unassign "$1" "$me"
-        echo "board: #$1: taken by $who first" >&2
-        exit 1
-    fi
-    if ! set_status "$1" "In progress"; then
-        unassign "$1" "$me"
-        echo "board: #$1: cannot set it In progress" >&2
-        exit 1
-    fi
+    set_status "$1" "In progress" || refuse "$1" "cannot set it In progress"
 }
 
 mine()
@@ -247,6 +292,30 @@ order()
     echo
 }
 
+# why N: print why N cannot join a group, or nothing when it can. An issue
+# labelled `grouped` is in another group, unless `grouping` is set, when the
+# label is this grouping's own.
+why()
+{
+    gh issue view "$1" --repo "$REPO" --json state,assignees,labels,title --jq '
+        if .state != "OPEN" then "closed"
+        elif (.assignees | length) > 0 then "assigned"
+        elif "'"$grouping"'" == "" and any(.labels[]; .name == "grouped") then
+            "in a group"
+        elif (.title | startswith("ci:")) then "filed by ci"
+        else empty end'
+}
+
+# ungroup N...: remove the label `grouped` from each N, or say that it could
+# not.
+ungroup()
+{
+    for n; do
+        gh issue edit "$n" --repo "$REPO" --remove-label grouped > /dev/null ||
+            echo "board: #$n: could not remove the label grouped; remove it by hand" >&2
+    done
+}
+
 group()
 {
     title=$1
@@ -257,24 +326,39 @@ group()
     fi
     body="Members, each fixed in a commit of its own, as the Work section of AGENTS.md says:
 "
+    grouping=
     for n; do
-        why=$(gh issue view "$n" --repo "$REPO" --json state,assignees,labels,title --jq '
-            if .state != "OPEN" then "closed"
-            elif (.assignees | length) > 0 then "assigned"
-            elif any(.labels[]; .name == "grouped") then "in a group"
-            elif (.title | startswith("ci:")) then "filed by ci"
-            else empty end')
-        if [ -n "$why" ]; then
-            echo "board: #$n is $why, so it cannot join a group" >&2
+        reason=$(why "$n")
+        if [ -n "$reason" ]; then
+            echo "board: #$n is $reason, so it cannot join a group" >&2
             exit 1
         fi
         body="$body
 * #$n"
     done
-    url=$(gh issue create --repo "$REPO" --title "group: $title" --label group --body "$body")
+    marked=
     for n; do
-        gh issue edit "$n" --repo "$REPO" --add-label grouped > /dev/null
+        if ! gh issue edit "$n" --repo "$REPO" --add-label grouped > /dev/null; then
+            # shellcheck disable=SC2086 # a list of issue numbers
+            ungroup $marked
+            echo "board: #$n: cannot label it grouped" >&2
+            exit 1
+        fi
+        marked="$marked $n"
     done
+    grouping=yes
+    for n; do
+        if ! reason=$(why "$n") || [ -n "$reason" ]; then
+            ungroup "$@"
+            echo "board: #$n is ${reason:-unreadable} now, so no group was made" >&2
+            exit 1
+        fi
+    done
+    if ! url=$(gh issue create --repo "$REPO" --title "group: $title" --label group --body "$body"); then
+        ungroup "$@"
+        echo "board: cannot create the group" >&2
+        exit 1
+    fi
     gh project item-add "$BOARD" --owner "$OWNER" --url "$url" > /dev/null
     set_status "${url##*/}" Ready
     echo "${url##*/}"
@@ -302,7 +386,8 @@ done_()
 
 case "$1" in
     next) next ;;
-    take|mine) [ -n "$2" ] || exit 2; board_ids=$(ids); "$1" "$2" ;;
+    take) [ -n "$2" ] || exit 2; board_ids=$(ids); take "$2" "$3" ;;
+    mine) [ -n "$2" ] || exit 2; board_ids=$(ids); mine "$2" ;;
     release) [ -n "$2" ] || exit 2; board_ids=$(ids); release "$2" "${3:-Ready}" ;;
     ready) [ -n "$3" ] || exit 2; board_ids=$(ids); shift; ready "$@" ;;
     order) [ -n "$2" ] || exit 2; board_ids=$(ids); shift; order "$@" ;;
