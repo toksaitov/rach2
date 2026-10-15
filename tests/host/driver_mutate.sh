@@ -1,6 +1,7 @@
 #!/bin/sh
-# Prove the sb16, vga_gfx and vga_text host tests with private mutations of
-# rach2/sys/audio/sb16.c, audio_debug.c, display/vga_gfx.c and vga_text.c.
+# Prove the sb16, vga_gfx, vga_text and ps2mouse host tests with private
+# mutations of rach2/sys/audio/sb16.c, audio_debug.c, display/vga_gfx.c,
+# vga_text.c and arch/x86/ps2mouse.c.
 #
 # Usage: driver_mutate.sh [FAULT...] | --texts
 # With no FAULT it proves every fault.
@@ -53,6 +54,12 @@ elif fault == "callback":
           "    } else {\n" \
           "        ring_read_to_buffer(fill_buffer, SB16_BUFFER_SIZE);\n    }"
     new = "    ring_read_to_buffer(fill_buffer, SB16_BUFFER_SIZE);"
+elif fault == "mouse-aux":
+    old = "    if (!(status & PS2_STATUS_OUTPUT_FULL) || !(status & PS2_STATUS_MOUSE_DATA)) {\n" \
+          "        return;\n    }\n    data = inb(PS2_DATA_PORT);\n"
+    new = "    if (!(status & PS2_STATUS_OUTPUT_FULL)) {\n" \
+          "        return;\n    }\n    data = inb(PS2_DATA_PORT);\n" \
+          "    if (!(status & PS2_STATUS_MOUSE_DATA)) {\n        return;\n    }\n"
 elif fault == "scale":
     old = "    if (audio->type == AUDIO_DRIVER_SB16) {\n" \
           "        sample_rate = 44100;\n    }"
@@ -86,12 +93,14 @@ select_fault()
             failure='programs maximum scan line\|text clear excludes interrupts' ;;
         cursor) test=vga_text; file=display/vga_text.c
             failure='echo leaves cursor at 0x0100' ;;
+        mouse-aux) test=ps2mouse; file=arch/x86/ps2mouse.c
+            failure='keyboard byte leaves the data port unread' ;;
         *) echo "driver-mutation: unknown fault: $1" >&2; exit 1 ;;
     esac
 }
 
 faults='frames gfx-enter gfx-exit setup-speaker setup-transfer setup-dma scale
-    callback cursor'
+    callback cursor mouse-aux'
 if [ "${1:-}" = --texts ]; then
     for fault in $faults; do
         select_fault "$fault"

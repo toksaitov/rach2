@@ -216,6 +216,10 @@ static void mouse_irq_handler(isr_params_t *params)
     }
 }
 
+/* A host test compiles the handler without the bring-up, whose `cli` and
+ * `sti` it can neither assemble on every host nor run. */
+#ifndef RACH2_HOSTTEST
+
 /**
  * Interrupts are off so that the handshake's bytes are not taken by a stray
  * IRQ 12. The output buffer is drained first of what the firmware left in
@@ -311,6 +315,8 @@ int init_mouse(void)
 
     return 0;
 }
+
+#endif /* !RACH2_HOSTTEST */
 
 /** `mouse_clear_packets` calls this when the queue is emptied, so that half
  * a packet assembled before is not finished with the bytes after. */

@@ -182,7 +182,7 @@ Both boot reports read and print and configure nothing. `platform_report` runs t
 
 ## Tests
 
-`tests/run host` ([host tests](../../../../tests/host/Readme.md)) runs these over models of the hardware: `acpi_hosttest.c` (QEMU's `pc` and `q35` tables, tables made wrong, and the `\_S5` search), `mbinfo_hosttest.c` (both loaders' forms, the EFI memory map among them), `board_hosttest.c`, `power_hosttest.c` (the vendor that sends the Insyde reset, by a copy of `power.c`'s rule), `smbios_hosttest.c`, `lapic_hosttest.c`, `refclock_hosttest.c`, `udelay_hosttest.c`, `rtc_hosttest.c` (`cmos.c` with `pit.c`), `pcimsi_hosttest.c` (`pciconf.c` with `sys/pci.c`), `fpuframe_hosttest.c` and `fpuframe64_hosttest.c` (`fpu.c`'s images and frames on each architecture), and `debugreg_hosttest.c`.
+`tests/run host` ([host tests](../../../../tests/host/Readme.md)) runs these over models of the hardware: `acpi_hosttest.c` (QEMU's `pc` and `q35` tables, tables made wrong, and the `\_S5` search), `mbinfo_hosttest.c` (both loaders' forms, the EFI memory map among them), `board_hosttest.c`, `power_hosttest.c` (the vendor that sends the Insyde reset, by a copy of `power.c`'s rule), `smbios_hosttest.c`, `lapic_hosttest.c`, `refclock_hosttest.c`, `udelay_hosttest.c`, `ps2mouse_hosttest.c` (the mouse's IRQ 12 handler), `rtc_hosttest.c` (`cmos.c` with `pit.c`), `pcimsi_hosttest.c` (`pciconf.c` with `sys/pci.c`), `fpuframe_hosttest.c` and `fpuframe64_hosttest.c` (`fpu.c`'s images and frames on each architecture), and `debugreg_hosttest.c`.
 
 These suites boot the kernel ([the tests Readme](../../../../tests/Readme.md)):
 
