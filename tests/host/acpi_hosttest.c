@@ -853,6 +853,22 @@ static void fadt_rows(void)
     CHECK(logged("X_DSDT 0x500000000 unreadable"), "the unreadable X_DSDT is named");
 }
 
+/** PCI registers of fewer than four bytes: each read takes its byte or its
+ * word from the double word that holds it, as configuration space does. */
+static void pci_read_rows(void)
+{
+    struct acpi_gas g = {ACPI_SPACE_PCI, 8, 0, 0, 0x1F00030045ull};
+    uint32_t v = 0;
+
+    printf("pci reads\n");
+    CHECK(acpi_gas_read(&g, &v) == 0 && v == 0x03,
+          "a one-byte PCI read takes the byte at its offset");
+    g.bit_width = 16;
+    g.address = 0x1F00030046ull;
+    CHECK(acpi_gas_read(&g, &v) == 0 && v == 0xA01F,
+          "a two-byte PCI read takes the word at its offset");
+}
+
 /** The kernel's windows on physical memory: once all are made, a read of a
  * register outside them fails and maps nothing, however often it is made,
  * and one inside them is still read. */
@@ -947,6 +963,7 @@ int main(void)
     madt_rows();
     madt_full_rows();
     fadt_rows();
+    pci_read_rows();
     window_rows();
     s5_rows();
     if (fails) {
