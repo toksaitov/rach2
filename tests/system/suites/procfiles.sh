@@ -57,12 +57,12 @@ if [ -z "$KERNEL" ] || [ -z "$TEST_IMAGE" ] || [ -z "$DISK" ] || [ -z "$REAL" ] 
     exit 2
 fi
 
-LOGS="$TEST_IMAGE.ram.log $TEST_IMAGE.window.log $TEST_IMAGE.disk.log $REAL.applets.log $REAL.applets.plain"
+LOGS="$DISK.ram.log $DISK.window.log $DISK.fsdisk.log $DISK.applets.log $DISK.applets.plain"
 # shellcheck disable=SC2086
 rm -f $LOGS
 
 QPID=""
-FEED="$TEST_IMAGE.procfiles.feed"
+FEED="$DISK.feed"
 
 # The console is driven through tests/system/drive.sh: a line is typed when
 # the output it answers has arrived, under a bound.
@@ -144,13 +144,13 @@ mount_boot() {
 # The carriage returns the serial console writes are stripped: the value is
 # compared whole, and a stray one would fail every comparison for a reason that
 # has nothing to do with what was mounted.
-mount_boot "$TEST_IMAGE.ram.log" ""
-ram=$(sed -n 's/^PROCPROBE ROOTMOUNT //p' "$TEST_IMAGE.ram.log" | tr -d '\r' | head -1)
-mount_boot "$TEST_IMAGE.window.log" "rach2.fswindow"
-window=$(sed -n 's/^PROCPROBE ROOTMOUNT //p' "$TEST_IMAGE.window.log" | tr -d '\r' | head -1)
-mount_boot "$TEST_IMAGE.disk.log" "rach2.fsdisk rach2.rescue" \
+mount_boot "$DISK.ram.log" ""
+ram=$(sed -n 's/^PROCPROBE ROOTMOUNT //p' "$DISK.ram.log" | tr -d '\r' | head -1)
+mount_boot "$DISK.window.log" "rach2.fswindow"
+window=$(sed -n 's/^PROCPROBE ROOTMOUNT //p' "$DISK.window.log" | tr -d '\r' | head -1)
+mount_boot "$DISK.fsdisk.log" "rach2.fsdisk rach2.rescue" \
     -drive "file=$DISK,format=raw,if=ide,index=0,media=disk"
-disk=$(sed -n 's/^PROCPROBE ROOTMOUNT //p' "$TEST_IMAGE.disk.log" | tr -d '\r' | head -1)
+disk=$(sed -n 's/^PROCPROBE ROOTMOUNT //p' "$DISK.fsdisk.log" | tr -d '\r' | head -1)
 
 echo "procfiles-test: ram    : $ram"
 echo "procfiles-test: window : $window"
@@ -177,7 +177,7 @@ echo "procfiles-test: the three mounts each name their own source: OK"
 # And the programs, on the image that has them. The tokens are written split
 # because the console echoes what is typed; each line is typed once the one
 # before it has answered with its token.
-DRIVE_LOG="$REAL.applets.log"
+DRIVE_LOG="$DISK.applets.log"
 boot_driven -kernel "$KERNEL" -initrd "$REAL" \
     -net nic,model=rtl8139 -net "user,hostfwd=tcp::$FWD_PORT-:22"
 # Each applet waits for its token and prompt under an explicit bound.
@@ -237,8 +237,8 @@ wait "$PEER_PID" 2>/dev/null || true
 
 # The console writes CRLF. Every check below reads this copy instead, so a
 # trailing carriage return cannot turn a field into one that matches nothing.
-PLAIN_LOG="$REAL.applets.plain"
-tr -d '\r' <"$REAL.applets.log" >"$PLAIN_LOG"
+PLAIN_LOG="$DISK.applets.plain"
+tr -d '\r' <"$DISK.applets.log" >"$PLAIN_LOG"
 
 # Each applet's own exit status, captured before anything reads its output, so
 # an applet that printed a plausible row and then failed does not pass.
@@ -313,7 +313,7 @@ if [ "$nd_rx_bytes" = "0" ] || [ "$nd_tx_bytes" = "0" ]; then
 fi
 echo "procfiles-test: /proc/net/dev prints sixteen numeric counters and has carried traffic: OK"
 
-mypid=$(sed -n 's/^MYPID:\([0-9][0-9]*\).*/\1/p' "$REAL.applets.log" | tr -d '\r' | head -1)
+mypid=$(sed -n 's/^MYPID:\([0-9][0-9]*\).*/\1/p' "$DISK.applets.log" | tr -d '\r' | head -1)
 if [ -z "$mypid" ]; then
     echo "procfiles-test: FAIL: the shell did not report its own pid" >&2
     exit 1
