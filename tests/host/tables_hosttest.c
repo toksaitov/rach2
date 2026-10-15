@@ -1,6 +1,6 @@
 /**
- * Host test for the descriptor tables' double fault task (entry 248 of
- * milestone 50).
+ * Host test of the double fault task in the i686's descriptor tables, and of
+ * the gates and segments around it.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-pointer-to-int-cast
@@ -36,6 +36,7 @@ extern int printf(const char *format, ...);
 
 static int fails;
 
+/** Count a failure and print `row` when `ok` is 0. */
 static void check(int ok, const char *row)
 {
     if (!ok) {
@@ -46,21 +47,25 @@ static void check(int ok, const char *row)
 
 /* ---- what the tables reach outside themselves ---- */
 
+/** Nothing: the host has no GDT register. */
 void _load_gdt(gdt_ptr_t *gdt)
 {
     (void)gdt;
 }
 
+/** Nothing: the host has no task register. */
 void _load_tss(uint16_t selector)
 {
     (void)selector;
 }
 
+/** Nothing: the host has no IDT register. */
 void _load_idt(idt_ptr_t *idt)
 {
     (void)idt;
 }
 
+/** Nothing: the host has no interrupt controller. */
 void init_pic(void)
 {}
 
@@ -148,23 +153,26 @@ static void (*const exception_stub[32])(void) = {
     isr11, isr12, isr13, isr14, isr15, isr16, isr17, isr18, isr19, isr20, isr21,
     isr22, isr23, isr24, isr25, isr26, isr27, isr28, isr29, isr30, isr31};
 
-/* The address as the tables keep it. */
+/** The address `p` as the tables keep it, cut to 32 bits. */
 static uint32_t addr_of(const void *p)
 {
     return (uint32_t)(uintptr_t)p;
 }
 
+/** The address of the function `fn`, cut to 32 bits. */
 static uint32_t fn_addr(void (*fn)(void))
 {
     return (uint32_t)(uintptr_t)fn;
 }
 
+/** The handler's offset in the IDT gate of `vector`. */
 static uint32_t gate_offset(int vector)
 {
     return (uint32_t)idt_descriptors[vector].offset_low |
            ((uint32_t)idt_descriptors[vector].offset_high << 16);
 }
 
+/** The base of processor 0's GDT entry `index`. */
 static uint32_t gdt_base(int index)
 {
     return (uint32_t)gdt_descriptors[0][index].base_low |
@@ -172,12 +180,14 @@ static uint32_t gdt_base(int index)
            ((uint32_t)gdt_descriptors[0][index].base_high << 24);
 }
 
+/** The limit of processor 0's GDT entry `index`. */
 static uint32_t gdt_limit(int index)
 {
     return (uint32_t)gdt_descriptors[0][index].limit_low |
            ((uint32_t)(gdt_descriptors[0][index].flags_and_limit_high & 0x0Fu) << 16);
 }
 
+/** Build the tables and run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {
     const int df = DOUBLE_FAULT_TSS_SELECTOR >> 3;

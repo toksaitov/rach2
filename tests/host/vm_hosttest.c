@@ -1,18 +1,18 @@
 /**
- * Dual-target host test for the VMA address-space operations (mm/vm.c).
+ * Host test of the regions of an address space, mm/vm.c, run under the
+ * sanitizers.
  *
  * host-deps: rach2/sys/mm/vm.c
  *
- * Exercises insert with overlap and alignment rejection, find by address,
- * overlap detection, the four munmap cases (full cover, left trim, right
- * trim, middle split), the array's growth past what it starts with, the
- * merging of neighbours, mprotect's splits and merges and its refusal of a
- * gap and of write to a region that may never be written, which keeps that
- * mark, the search for a free range, the bytes a range covers, and the file
- * a region maps: its pages through splits and merges, its references, and
- * its release, which waits for vm_file_reap after the last one goes.
- * Returns the failed-check count (0 == all passed). Run natively under
- * AddressSanitizer/UBSan.
+ * The rows check an insert, which fails for an empty, unaligned or
+ * overlapping range; the search by address and the test of overlap; the
+ * four cases of munmap (full cover, left trim, right trim, middle split);
+ * the growth of a stack; the array's growth past what it starts with; the
+ * merging of neighbours; mprotect's splits and merges, and its failure for
+ * a gap and for write to a region that may never be written, which keeps
+ * that mark; the search for a free range; the bytes a range covers; and the
+ * file a region maps: its pages through splits and merges, its references,
+ * and its release, which waits for vm_file_reap after the last one goes.
  */
 
 #include "mm/vm.h"
@@ -23,16 +23,19 @@
 void *malloc(unsigned long n);
 void free(void *p);
 
+/** The host's malloc. */
 void *kmalloc(size_t n)
 {
     return malloc(n);
 }
 
+/** The host's free. */
 void kfree(void *p)
 {
     free(p);
 }
 
+/** Copy `n` bytes from `src` to `dest`; `dest`. */
 void *k_memcpy(void *dest, const void *src, size_t n)
 {
     unsigned char *d = dest;
@@ -44,6 +47,7 @@ void *k_memcpy(void *dest, const void *src, size_t n)
     return dest;
 }
 
+/** Copy `n` bytes from `src` to `dest`, which may overlap; `dest`. */
 void *k_memmove(void *dest, const void *src, size_t n)
 {
     unsigned char *d = dest;
@@ -66,6 +70,7 @@ static int fails;
 /* A mapped file that counts its releases, for the cases below. */
 static int released;
 
+/** A fill that leaves the frame as it is; 0. */
 static int no_fill(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
 {
     (void)f;
@@ -74,6 +79,7 @@ static int no_fill(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
     return 0;
 }
 
+/** Count a release of the file. */
 static void count_release(struct vm_file *f)
 {
     (void)f;
@@ -89,9 +95,9 @@ static void count_release(struct vm_file *f)
 
 #define PG 0x1000u
 
-/* A region that may never be written keeps VM_PROT_NOWRITE through
- * mprotect's splits and merges, and write over a range that reaches it
- * is refused with nothing changed, as a gap is. */
+/** A region that may never be written keeps VM_PROT_NOWRITE through
+ * mprotect's splits and merges, and mprotect for write over a range that
+ * reaches it fails, changing nothing, as it does for a gap. */
 static void nowrite_rows(void)
 {
     vm_space_t p = {0};
@@ -112,11 +118,13 @@ static void nowrite_rows(void)
     vm_free(&p);
 }
 
-/* A region that maps a file: a split gives the upper part the file's later
- * pages and a reference of its own; the pieces join again only where the pages
- * continue, and regions that meet in the address space with pages that do not
- * continue stay apart; a copy for fork takes references of its own, and the
- * file waits for vm_file_reap after its last reference goes. */
+/**
+ * A region that maps a file: a split gives the upper part the file's later
+ * pages and a reference of its own; the pieces join again only where the
+ * pages continue, and regions that meet in the address space with pages
+ * that do not continue stay apart; a copy for fork takes references of its
+ * own, and the file waits for vm_file_reap after its last reference goes.
+ */
 static void file_rows(void)
 {
     vm_space_t m = {0};
@@ -141,13 +149,10 @@ static void file_rows(void)
     CHECK(vm_remove(&m, 0x42000, 0x43000) == 0);
     hi = vm_find(&m, 0x43000);
     CHECK(hi != NULL && hi->pgoff == 6);
-    /* The gap is filled from the file's page 4 at 0x41000: page 5 is
-     * gone, so it does not join the region above. */
+    /* Page 4 at 0x41000 does not join the region above, at page 6. */
     CHECK(vm_insert_file(&m, 0x41000, 0x42000, VM_PROT_READ, VM_DATA, &file, 4) == 0);
     CHECK(m.count == 2 && m.vmas[0].end == 0x42000);
-    /* The file's page 9 at 0x42000 meets the region below in the address
-     * space but does not follow its page 4, nor lead to the page 6 above,
-     * so it stays a region of its own with a reference of its own. */
+    /* Page 9 at 0x42000 continues neither neighbour and stays apart. */
     CHECK(vm_insert_file(&m, 0x42000, 0x43000, VM_PROT_READ, VM_DATA, &file, 9) == 0);
     CHECK(m.count == 3 && m.vmas[1].start == 0x42000 && m.vmas[1].end == 0x43000 &&
           m.vmas[1].pgoff == 9 && file.refs == 4);
@@ -163,7 +168,7 @@ static void file_rows(void)
     CHECK(released == 1);
 }
 
-/* The last region to let go of a file leaves it for vm_file_reap, which
+/** The last region to let go of a file leaves it for vm_file_reap, which
  * releases each file it finds once: a removal must not sleep in the
  * release while the regions are half changed. */
 static void reap_rows(void)
@@ -185,6 +190,20 @@ static void reap_rows(void)
     vm_free(&m);
 }
 
+/**
+ * Run every row; the exit status is the count of failed checks, at most 100.
+ *
+ * A stack grows down to a page below it at or above its limit, and the
+ * pages between come into the region, to fault in later. A page at or above
+ * the stack's start is no growth, and a space with no stack has none to
+ * grow. A stack does not grow onto or past another region below it, and its
+ * growth counts against an address-space limit.
+ *
+ * mprotect cuts a region in three and merges it back, changes both regions
+ * a range covers, and fails for a range with a gap, changing nothing. The
+ * free range found is the highest that fits below hi and at or above lo; a
+ * hole a removal left is used again, and 0 is returned when nothing fits.
+ */
 int main(void)
 {
     vm_space_t vm = {0};
@@ -236,8 +255,7 @@ int main(void)
     CHECK(r != NULL && r->start == 0x11000 && r->end == 0x13000);
     CHECK(vm_find(&vm, 0x13000) == NULL);
 
-    /* Middle split: insert a 4-page region and punch the middle two pages out,
-     * leaving the low and high pages as two separate regions. */
+    /* Middle split: a hole in a region of four pages leaves two regions. */
     CHECK(vm.count == 1); /* [0x11000,0x13000) */
     CHECK(vm_insert(&vm, 0x40000, 0x44000, VM_PROT_READ | VM_PROT_WRITE, VM_ANON) == 0);
     CHECK(vm.count == 2);
@@ -255,8 +273,7 @@ int main(void)
     CHECK(vm_remove(&vm, 0x80000, 0x81000) == 0);
     CHECK(vm.count == 3);
 
-    /* Stack growth: a one-page stack at the top, growable down to the
-     * stack_limit. */
+    /* Stack growth: a stack of one page at the top, its limit below. */
     {
         vm_space_t s = {0};
         vma_t *st;
@@ -271,51 +288,44 @@ int main(void)
         CHECK(st != NULL && st->start == 0xBFFFE000u && st->end == 0xC0000000u);
         CHECK(s.count == 1); /* grown in place, not a new region */
 
-        /* A page far below (but still at/above the limit) jumps start down to
-         * it; the gap pages are now inside the region and fault in lazily. */
+        /* A page far below, above the limit, takes the start down to it. */
         CHECK(vm_grow_stack(&s, 0xBF800000u, 0xFFFFFFFFu) == 1);
         CHECK(vm_find(&s, 0xBF800000u) != NULL);
-        CHECK(vm_find(&s, 0xBFF00000u) != NULL); /* a gap page, now covered */
+        CHECK(vm_find(&s, 0xBFF00000u) != NULL); /* a page of the gap, in the region */
 
-        /* At the limit is allowed; below it is refused. */
+        /* Growth to the limit succeeds, and below it fails. */
         CHECK(vm_grow_stack(&s, 0xBF7FF000u, 0xFFFFFFFFu) == 1);
         CHECK(vm_grow_stack(&s, 0xBF7FE000u, 0xFFFFFFFFu) == 0);
         CHECK(vm_find(&s, 0xBF7FF000u) != NULL);
         CHECK(vm_find(&s, 0xBF7FE000u) == NULL);
 
-        /* A page at or above the current start is not a growth (already mapped
-         * region or above the stack entirely). */
-        CHECK(vm_grow_stack(&s, 0xBF7FF000u, 0xFFFFFFFFu) == 0); /* equals start now */
+        /* A page at or above the stack's start is no growth. */
+        CHECK(vm_grow_stack(&s, 0xBF7FF000u, 0xFFFFFFFFu) == 0); /* the stack's start */
 
         /* With no stack region, growth always fails. */
         vm_init(&s);
         CHECK(vm_grow_stack(&s, 0xBFFFE000u, 0xFFFFFFFFu) == 0);
 
-        /* Growth must not swallow another region sitting in the growth window:
-         * a (hostile) segment mapped just below the stack blocks growth past
-         * it. */
+        /* Another region below the stack stops its growth. */
         vm_init(&s);
         s.stack_limit = 0xBF7FF000u;
         CHECK(vm_insert(&s, 0xBFFFF000u, 0xC0000000u, VM_PROT_READ | VM_PROT_WRITE, VM_STACK) == 0);
         CHECK(vm_insert(&s, 0xBF900000u, 0xBF901000u, VM_PROT_READ, VM_DATA) == 0);
         /* One page down is still clear: allowed. */
         CHECK(vm_grow_stack(&s, 0xBFFFE000u, 0xFFFFFFFFu) == 1);
-        /* Down to/over the planted region is refused; the stack stays put. */
+        /* Growth onto or past that region fails, and the stack stays. */
         CHECK(vm_grow_stack(&s, 0xBF900000u, 0xFFFFFFFFu) == 0);
         CHECK(vm_grow_stack(&s, 0xBF8FF000u, 0xFFFFFFFFu) == 0);
         CHECK(vm_find(&s, 0xBFFFE000u) != NULL && vm_find(&s, 0xBF900000u) != NULL);
         CHECK(vm_find(&s, 0xBF8FF000u) == NULL); /* stack did not jump the region */
-        /* Growth counts against an address-space limit: with the regions at
-           three pages, a limit of four allows one page of growth and refuses
-           the next. */
+        /* With three pages mapped, a limit of four allows one page more. */
         CHECK(vm_total(&s) == 3 * PG);
         CHECK(vm_grow_stack(&s, 0xBFFFD000u, 4 * PG) == 1);
         CHECK(vm_grow_stack(&s, 0xBFFFC000u, 4 * PG) == 0);
         vm_free(&s);
     }
 
-    /* Growth: three times what the array starts with, each found after, and
-     * a copy holds the same regions in an array of its own. */
+    /* The array grows to three times its first size; a copy has its own. */
     {
         vm_space_t g = {0};
         vm_space_t c = {0};
@@ -357,9 +367,7 @@ int main(void)
         vm_free(&m);
     }
 
-    /* mprotect: a cut in the middle makes three regions, a cut back merges
-     * them, a range across two regions changes both, and a gap is refused
-     * with nothing changed. */
+    /* mprotect. */
     {
         vm_space_t p = {0};
         vma_t *r;
@@ -387,8 +395,7 @@ int main(void)
         vm_free(&p);
     }
 
-    /* The free range: the highest that fits below hi and at or above lo, a
-     * hole left by a removal used again, and none when nothing fits. */
+    /* The free range. */
     {
         vm_space_t f = {0};
 

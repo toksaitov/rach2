@@ -6,19 +6,19 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -DRACH2_HOST_X86_64
  *
- * A base at or above USER_ADDR_MAX, the end of user space, is refused with
- * EPERM by ARCH_SET_FS, ARCH_SET_GS and clone's CLONE_SETTLS, and changes
- * neither the process record nor a register; the last user address below
- * it, and 0, are taken. ARCH_SET_FS loads the null selector into FS and
- * then writes the record's `tls_base` and FS's base, ARCH_SET_GS loads it
- * into GS and then writes the record's `gs_base` and the kernel GS base
- * register, where the program's base waits during a call; neither touches
- * the other register's selector or the kernel's own GS base. A selector
- * load in the model leaves a base no call asks for, as a load may on a
- * processor, so a base written before the load fails. ARCH_GET_FS and
- * ARCH_GET_GS read the registers, which a selector the program loaded may
- * have changed, not the record. An address that cannot be written is
- * EFAULT, another code EINVAL, and a call with no process ESRCH.
+ * A base at or above USER_ADDR_MAX, the end of user space, makes ARCH_SET_FS,
+ * ARCH_SET_GS and clone's CLONE_SETTLS fail with EPERM, and changes neither the
+ * process record nor a register; the last user address below it, and 0, are
+ * taken. ARCH_SET_FS loads the null selector into FS and then writes the
+ * record's `tls_base` and FS's base, ARCH_SET_GS loads it into GS and then
+ * writes the record's `gs_base` and the kernel GS base register, where the
+ * program's base waits during a call; neither touches the other register's
+ * selector or the kernel's own GS base. A selector load in the model leaves a
+ * base no call asks for, as a load may on a processor, so a base written before
+ * the load fails. ARCH_GET_FS and ARCH_GET_GS read the registers, which a
+ * selector the program loaded may have changed, not the record. An address that
+ * cannot be written is EFAULT, another code EINVAL, and a call with no process
+ * ESRCH.
  */
 #include "arch/x86_64/tls.c"
 #include "lib/kstring.h"
@@ -38,13 +38,13 @@ static int failures;
 #define LOADED_BASE 0xBADBA5Eul
 #define USER_SEL    0x2Bu
 
-/* The address copy_to_user refuses. */
+/* The address at which copy_to_user fails. */
 #define BAD_ADDR 0x1000ul
 
 static const unsigned long refused[] = {USER_ADDR_MAX, USER_ADDR_MAX + 1, ~0ul};
 static const unsigned long taken[] = {0, 0x401000ul, USER_ADDR_MAX - 1};
 
-/** Record a failed row without ending the others. */
+/** Count a failure and print `row` when `ok` is 0. */
 static void check(int ok, const char *row)
 {
     if (!ok) {
@@ -69,26 +69,31 @@ static uint64_t *msr_of(uint32_t msr)
     }
 }
 
+/** The model's register `msr`. */
 uint64_t msr_read(uint32_t msr)
 {
     return *msr_of(msr);
 }
 
+/** Write `value` to the model's register `msr`. */
 void msr_write(uint32_t msr, uint64_t value)
 {
     *msr_of(msr) = value;
 }
 
+/** The model's FS selector. */
 unsigned int x86_64_fs_read(void)
 {
     return fs_sel;
 }
 
+/** The model's GS selector. */
 unsigned int x86_64_gs_read(void)
 {
     return gs_sel;
 }
 
+/** A load into FS: the selector `sel`, and a base no call asks for. */
 void x86_64_fs_load(unsigned int sel)
 {
     fs_sel = sel;
@@ -130,6 +135,7 @@ static void setup(void)
     cpu_table[0].current = &proc;
 }
 
+/** arch_prctl with the code `code` and the address `addr`. */
 static long prctl(unsigned long code, unsigned long addr)
 {
     frame.rdi = code;
@@ -145,6 +151,8 @@ static int unchanged(void)
            gs_base == 0xFFFFFFFF80100000ul && fs_sel == USER_SEL && gs_sel == USER_SEL;
 }
 
+/** CLONE_SETTLS fails with -EPERM for a base past user space, leaving
+ * the base unset, and takes a user base. */
 static void run_clone(void)
 {
     uintptr_t base;
@@ -161,6 +169,9 @@ static void run_clone(void)
     }
 }
 
+/** ARCH_SET_FS and ARCH_SET_GS fail with -EPERM for a base past user
+ * space and change nothing; a user base goes into the record and the
+ * register, with the null selector loaded first. */
 static void run_set(void)
 {
     unsigned int i;
@@ -184,6 +195,8 @@ static void run_set(void)
     }
 }
 
+/** ARCH_GET_FS and ARCH_GET_GS read the registers, not the record, and
+ * give -EFAULT for an address that cannot be written. */
 static void run_get(void)
 {
     setup();
@@ -200,6 +213,9 @@ static void run_get(void)
           "a get to an address that cannot be written");
 }
 
+/** Another code gives -EINVAL and a call with no process -ESRCH, each
+ * changing nothing. `arch_tls_set` writes FS's base, and `arch_tls_get`
+ * reads it back. */
 static void run_other(void)
 {
     setup();
@@ -211,6 +227,7 @@ static void run_other(void)
     check(fs_base == 0x401000ul && arch_tls_get() == 0x401000ul, "the thread pointer");
 }
 
+/** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {
     run_clone();

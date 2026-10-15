@@ -1,6 +1,7 @@
 /**
- * Host test for the processors proc/smp.c interrupts to drop a page's
- * translation or give up an address space.
+ * Host test of proc/smp.c: the processors it interrupts to drop a page's
+ * translation or give up an address space, to stop, and the start of the
+ * others at boot.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
@@ -16,10 +17,15 @@
  * to a thread of the directory answers by loading it again; a processor in
  * another directory is left alone; and before the directory is freed, the
  * idle processor that kept it is interrupted and gives it up for the
- * kernel's. tests/host/smp_mutate.sh compiles a shootdown that interrupts
- * idle processors, one that skips every processor, and a release that
- * interrupts none, and requires each to fail its row. Returns 0 when every
- * row passes, 1 otherwise.
+ * kernel's. A stop asks every other processor and waits a second for one
+ * that does not stop. At boot the wait for a started processor ends at
+ * `CPU_ONLINE_WAIT_US`, and a processor that comes after it stops,
+ * neither online nor counted.
+ *
+ * tests/host/smp_mutate.sh compiles a shootdown that interrupts idle
+ * processors, one that skips every processor, and a release that interrupts
+ * none, and requires each to fail its row. Returns 0 when every row passes,
+ * 1 otherwise.
  */
 
 #include "proc/smp.c"
@@ -32,6 +38,7 @@ extern void free(void *ptr);
 
 static int fails;
 
+/** Count a failure and print `row` when `ok` is 0. */
 static void check(int ok, const char *row)
 {
     if (!ok) {
@@ -54,6 +61,9 @@ static uintptr_t ipi_page[NR_CPUS];
 static int takes_stop[NR_CPUS];
 static unsigned long waited_us;
 
+/** Count an interrupt sent to `cpu` and answer its requests at once, as
+ * `smp_service` would: a stop when `takes_stop` says so, a page to drop,
+ * and a directory to give up for the kernel's. */
 void platform_cpu_ipi(int cpu)
 {
     struct percpu *c = &cpu_table[cpu];
@@ -79,12 +89,14 @@ void platform_cpu_ipi(int cpu)
 static int cpu_count = 1;
 static void (*late_entry)(int cpu);
 
+/** `cpu_count`, whatever `limit`. */
 int platform_cpu_count(int limit)
 {
     (void)limit;
     return cpu_count;
 }
 
+/** Keep `entry` in `late_entry` for the row to call after the wait; 0. */
 int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu))
 {
     (void)cpu;
@@ -93,11 +105,13 @@ int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu))
     return 0;
 }
 
+/** The host's calloc. */
 void *kzalloc(size_t size)
 {
     return calloc(1, size);
 }
 
+/** The host's free. */
 void kfree(void *p)
 {
     free(p);
@@ -109,6 +123,7 @@ void kfree(void *p)
 static void *guarded[NR_CPUS * 2];
 static int nguarded;
 
+/** `count` zeroed pages from the host heap, kept in `guarded`. */
 void *kalloc_guarded(uint32_t count)
 {
     void *p = calloc(count, PAGE_SIZE);
@@ -119,6 +134,7 @@ void *kalloc_guarded(uint32_t count)
     return p;
 }
 
+/** 0: the command line has no values. */
 int kcmdline_value(const char *key, char *out, unsigned int outlen)
 {
     (void)key;
@@ -127,20 +143,24 @@ int kcmdline_value(const char *key, char *out, unsigned int outlen)
     return 0;
 }
 
+/** Nothing: no idle task runs. */
 void setup_process_stack(process_t *proc, void (*entry_point)(void))
 {
     (void)proc;
     (void)entry_point;
 }
 
+/** Nothing: no idle task runs. */
 void sched_idle_loop(void)
 {}
 
+/** Add `usec` to the time waited, without waiting. */
 void k_udelay(uint32_t usec)
 {
     waited_us += usec;
 }
 
+/** Nothing: no row reads the log. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -148,19 +168,21 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
+/** Print `str` and count a failure. */
 void k_panic(const char *str)
 {
     printf("smp-hosttest: panic: %s\n", str);
     fails++;
 }
 
+/** 0: the directories have no physical address. */
 uintptr_t get_page_dir_phys(page_dir_t *dir)
 {
     (void)dir;
     return 0;
 }
 
-/* The processor's primitives, which the host has none of. */
+/** Exchange `*p` and `value` on the host's one thread; the old value. */
 unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
 {
     unsigned int old = *p;
@@ -169,17 +191,20 @@ unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
     return old;
 }
 
+/** Nothing: the host's one thread does not spin. */
 void arch_relax(void)
 {}
 
 /* Where a processor that stops goes on the host: back to the row. */
 static jmp_buf stopped;
 
+/** Jump back to the row, as the processor that stops. */
 void arch_stop(void)
 {
     longjmp(stopped, 1);
 }
 
+/** Compare and exchange `*p` on the host's one thread; the old value. */
 unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
 {
     unsigned int was = *p;
@@ -190,16 +215,19 @@ unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, uns
     return was;
 }
 
+/** 0: the host has no translation root. */
 uintptr_t arch_space_root(void)
 {
     return 0;
 }
 
+/** Nothing: the host has no translation root. */
 void arch_space_load(uintptr_t root)
 {
     (void)root;
 }
 
+/** Nothing: the host has no TLB. */
 void arch_tlb_flush_page(uintptr_t va)
 {
     (void)va;
@@ -208,11 +236,13 @@ void arch_tlb_flush_page(uintptr_t va)
 /* The global tick a started processor's accounting begins from. */
 volatile uint32_t kernel_ticks;
 
+/** 0: the host has no interrupt flag. */
 uint32_t kirq_save(void)
 {
     return 0;
 }
 
+/** Nothing: the host has no interrupt flag. */
 void kirq_restore(uint32_t flags)
 {
     (void)flags;
@@ -240,6 +270,7 @@ static void place(int c, page_dir_t *dir, process_t *p)
     ipi_page[c] = 0;
 }
 
+/** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {
     _kernel_dir = KERNEL_DIR;

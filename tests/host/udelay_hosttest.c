@@ -9,15 +9,15 @@
  * reads that follow; and reads with no latch pending that return the live
  * count a byte at a time, which is what the chip does.
  *
- * The case the notebook produced: an interrupt handler that latches the
- * counter itself, the tick's clock or the USB handler's stamps, running
- * between the wait's latch and its reads. The model stages it whenever a
- * latch is pending at a read taken with interrupts enabled: the handler
- * consumes the latch, and the wait's reads come back live and torn across a
- * borrow, 256 below the truth. The wait then believes the counter dropped
- * further than it did and ends early. With the sample taken under interrupts
- * off the handler cannot get between the latch and the reads, and the wait
- * takes its full time whatever is armed.
+ * The fault the test looks for is an interrupt handler that latches the
+ * counter itself, as the tick's clock and the USB handler's stamps do,
+ * running between the wait's latch and its reads. The model runs one
+ * whenever a latch is pending at a read taken with interrupts on: the
+ * handler takes the latch, and the wait's reads come back live and torn
+ * across a borrow, 256 below the true count. The wait would then count a
+ * larger drop than the counter made and end early. With the sample taken
+ * with interrupts off the handler cannot run between the latch and the
+ * reads, and the wait takes its full time whatever is armed.
  */
 
 #include "../../rach2/sys/arch/x86/udelay.c"
@@ -48,7 +48,8 @@ static int reads_with_irq_on;
 static int handler_armed;
 static int tears;
 
-/* Every port access costs the counter three of its counts. */
+/** Move the counter down `counts` counts, reloading it at zero; every port
+ * access costs three. */
 static void counter_runs(uint32_t counts)
 {
     while (counts-- > 0) {
@@ -60,6 +61,7 @@ static void counter_runs(uint32_t counts)
     }
 }
 
+/** Turn the model's interrupts off; 0x200, IF, when they were on. */
 uint32_t kirq_save(void)
 {
     uint32_t was = irq_off ? 0 : 0x200u;
@@ -68,6 +70,7 @@ uint32_t kirq_save(void)
     return was;
 }
 
+/** Turn the model's interrupts on when `flags` has IF. */
 void kirq_restore(uint32_t flags)
 {
     if (flags & 0x200u) {
@@ -75,6 +78,8 @@ void kirq_restore(uint32_t flags)
     }
 }
 
+/** A port write, which runs the counter; 0x00 to port 0x43 latches
+ * channel 0. */
 void outb(uint16_t port, uint8_t val)
 {
     counter_runs(3);
@@ -85,6 +90,8 @@ void outb(uint16_t port, uint8_t val)
     }
 }
 
+/** A read of port 0x40, channel 0: the latched count a byte at a time, or
+ * the live count when no latch is held; 0 for any other port. */
 uint8_t inb(uint16_t port)
 {
     uint8_t value;
@@ -108,8 +115,7 @@ uint8_t inb(uint16_t port)
         counter_runs(3);
         return value;
     }
-    /* Live: the low byte now, and the high byte after the counter has moved
-       past a borrow, which is the torn reading. */
+    /* Live: the high byte is read after the counter passed a borrow. */
     if (latch_byte == 0) {
         value = (uint8_t)(live & 0xFFu);
         latch_byte = 1;
@@ -122,6 +128,8 @@ uint8_t inb(uint16_t port)
     return value;
 }
 
+/** Reset the model with the counter at `start`, interrupts on and no
+ * handler armed. */
 static void model_reset(uint32_t start)
 {
     live = start;
@@ -134,16 +142,23 @@ static void model_reset(uint32_t start)
     tears = 0;
 }
 
-/* The counts a wait of `usec` must let pass, as the wait computes them. */
+/** The counts a wait of `usec` must let pass, as the wait computes them. */
 static uint32_t counts_for(uint32_t usec)
 {
     return (usec * PIT_COUNTS_PER_SEC + 999999u) / 1000000u;
 }
 
+/**
+ * Run every row; the exit status is the count of failed checks, at most 100.
+ *
+ * With no handler armed a wait lets its counts pass and few more, across the
+ * reload too, and takes every sample of the counter with interrupts off.
+ * With the handler armed no sample is torn and the wait takes its full time,
+ * and so does a wait longer than one pass of the counter.
+ */
 int main(void)
 {
-    /* A quiet counter: the wait lets at least its counts pass, and every
-       sample of the counter was taken with interrupts off. */
+    /* A quiet counter. */
     model_reset(9000u);
     k_udelay(500u);
     CHECK("a wait lets its counts pass", descended >= counts_for(500u));
@@ -155,16 +170,14 @@ int main(void)
     k_udelay(200u);
     CHECK("a wait across the reload lets its counts pass", descended >= counts_for(200u));
 
-    /* The handler armed: with interrupts held off around each sample it
-       never gets between a latch and its reads, no sample is torn, and the
-       wait takes its full time. */
+    /* The handler armed. */
     model_reset(9000u);
     handler_armed = 1;
     k_udelay(2000u);
     CHECK("an interrupt that latches the counter cannot tear a sample", tears == 0);
     CHECK("and the wait takes its full time", descended >= counts_for(2000u));
 
-    /* Windows longer than one pass are made of passes, each measured. */
+    /* A wait longer than one pass of the counter. */
     model_reset(9000u);
     handler_armed = 1;
     k_udelay(5000u);

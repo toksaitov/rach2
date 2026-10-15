@@ -1,5 +1,5 @@
 /**
- * Host test for the initial stack of a new image (proc/uimage.c).
+ * Host test of the initial stack of a new image, proc/uimage.c.
  *
  * host-deps: rach2/sys/proc/uimage.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/kheap_host.c
@@ -88,6 +88,7 @@ uintptr_t alloc_frame(void)
     return 0;
 }
 
+/** Give back the frame at `phys`; one not taken is a failure. */
 void free_frame(uintptr_t phys)
 {
     uint32_t i = phys / PAGE_SIZE - 1u;
@@ -99,6 +100,8 @@ void free_frame(uintptr_t phys)
     }
 }
 
+/** The pool's page of the frame at `phys`, counted as an open temporary
+ * mapping; NULL while `kmap_fails` is set. */
 void *kmap_temp(uintptr_t phys)
 {
     if (kmap_fails) {
@@ -108,18 +111,22 @@ void *kmap_temp(uintptr_t phys)
     return pool[phys / PAGE_SIZE - 1u];
 }
 
+/** Close a temporary mapping. */
 void kunmap_temp(void *va)
 {
     (void)va;
     kmaps_open--;
 }
 
+/** Zero the frame at `phys`; 0. */
 int paging_zero_frame(uintptr_t phys)
 {
     k_memset(pool[phys / PAGE_SIZE - 1u], 0, PAGE_SIZE);
     return 0;
 }
 
+/** Record the mapping of the frame at `phys` at `virt` with `flags` in the
+ * test's directory; -1 once `maps_left` is spent. */
 int map_user_frame(page_dir_t *d, uintptr_t virt, uintptr_t phys, uint32_t flags)
 {
     CHECK(d == &dir, "a frame is mapped into the directory given");
@@ -142,6 +149,8 @@ static int is_bad(const char *p)
     return p >= bad && p < bad + sizeof(bad);
 }
 
+/** Copy `n` bytes from the host address `src`; -EFAULT for an address in
+ * `bad`. */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     if (is_bad(src)) {
@@ -171,6 +180,7 @@ int strnlen_user(const char *src, uint32_t n)
     return -ENAMETOOLONG;
 }
 
+/** Nothing: no other process runs. */
 void sched_service_point(void)
 {}
 
@@ -626,6 +636,7 @@ static void row_failures(void)
     end_row("failures: every frame is mapped or given back");
 }
 
+/** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {
     row_one_page();

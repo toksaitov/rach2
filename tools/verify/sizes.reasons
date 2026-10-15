@@ -486,7 +486,7 @@ tests/host/usb_hosttest.c:quiesce_rows lines 256 a test's rows, each a case, rea
 tests/host/usbdisk_hosttest.c:main complexity 35 a test's rows, each a case, read as one table
 
 tests/host/vm_hosttest.c:main complexity 49 a test's rows, each a case, read as one table
-tests/host/vm_hosttest.c:main lines 262 a test's rows, each a case, read as one table
+tests/host/vm_hosttest.c:main lines 213 a test's rows, each a case, read as one table
 
 tests/host/xhci_hosttest.c:doorbell_rung complexity 26 a test's rows, each a case, read as one table
 tests/host/xhci_hosttest.c:endpoint_doorbell complexity 38 a test's rows, each a case, read as one table

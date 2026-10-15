@@ -1,7 +1,7 @@
 /**
- * Host test for the two range checks of mm/paging.c and arch/i686/mmu.c, for
- * its temporary mappings, and for the panic of a supervisor fault in a
- * kernel stack's guard page.
+ * Host test of the range checks of `map_mmio` and `premap_kernel_window`, of
+ * the temporary mappings, and of the panic for a supervisor fault in a
+ * kernel stack's guard page, on i686.
  *
  * host-deps: rach2/sys/mm/frame.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
@@ -12,14 +12,14 @@
  * host-cflags: -U__SIZE_TYPE__ -D__SIZE_TYPE__=unsigned
  * host-cflags: -U__PTRDIFF_TYPE__ -D__PTRDIFF_TYPE__=int
  *
- * `map_mmio` and `premap_kernel_window` each take a range of the 32-bit
- * address space, and each promises in its header to refuse a range that
- * runs past the top of it (entry 140 of milestone 50). Neither is reachable
- * with such a range from the kernel's callers, so only a test can show the
- * refusals. lib/kint.h and lib/kdef.h take `uintptr_t` and `size_t` from
- * the compiler's own names for them, which the flags above make 32 bits
- * wide, as they are on an i686, so every sum in the two functions wraps at
- * 2^32 as it does there.
+ * `map_mmio` (mm/paging.c) and `premap_kernel_window` (arch/i686/mmu.c)
+ * each take a range of the 32-bit address space, and each fails, as its
+ * header says, for a range that runs past the top of it. No caller in the
+ * kernel passes such a range, so only a test can show the failures.
+ * lib/kint.h and lib/kdef.h take `uintptr_t` and `size_t` from the
+ * compiler's own names for them, which the flags above make 32 bits wide, as
+ * they are on an i686, so every sum in the two functions wraps at 2^32 as it
+ * does there.
  *
  * paging.c and the i686's mmu.c are included whole, which reaches the MMIO
  * region's next free page. The processor primitives they call through arch.h,
@@ -29,33 +29,32 @@
  * be reached after the heap exists, and a row that reaches it fails.
  *
  * The rows: a register page mapped at the MMIO region's start; two spans
- * that begin in the first page and end within the last one, whose rounding
- * up by the old `+ PAGE_SIZE - 1` wraps to a few bytes, refused with the
- * region's next page unmoved; a region that wraps, refused; a window below
- * the top given its two tables; a window that runs past the top of the
- * address space, refused with no table made; a window that ends exactly at
- * the top given its table; and a window at address 0, given its table,
- * which is the regression a868ba10 fixed.
+ * that begin in the first page and end within the last one, whose page
+ * count rounded up by `+ PAGE_SIZE - 1` would wrap to a few bytes, which
+ * fail with the region's next page unmoved; a region that wraps, which
+ * fails; a window below the top given its two tables; a window that runs
+ * past the top of the address space, which fails and makes no table; a
+ * window that ends exactly at the top given its table; and a window at
+ * address 0, given its table.
  *
  * Five rows hold the temporary mappings to their contract on i686: a
  * released slot stays mapped and no caller is given it again until a sweep,
  * which comes only when no slot is free and unmaps every released slot with
- * one change of kernel mappings, so 1024 mappings make one change where they
- * made 2048; a held slot survives the sweeps; and a mapping is refused when
- * every slot is held.
+ * one change of kernel mappings, so 1024 mappings make one change; a held
+ * slot survives the sweeps; and a mapping fails when every slot is held.
  *
- * Two rows drive the page fault handler with a supervisor write fault
- * (entry 248 of milestone 50): at an address in the guard page below the
- * running thread's kernel stack, which `kstack_overrun_pid` answers with
- * the thread's pid, it must panic as that stack's overrun, and at the
- * stack's lowest byte, above the guard, with the handler's general panic.
- * Each runs in a forked child, whose exit status says which panic came.
+ * Two rows drive the page fault handler with a supervisor write fault: at an
+ * address in the guard page below the running thread's kernel stack, which
+ * `kstack_overrun_pid` answers with the thread's pid, it must panic as that
+ * stack's overrun, and at the stack's lowest byte, above the guard, with the
+ * handler's general panic. Each runs in a forked child, whose exit status
+ * says which panic came.
  *
- * tests/host/paging_mutate.sh compiles the old rounding, the old loop bounded
- * by `va_start + size`, the refusal without its exception for address 0, the
- * handler without its test of the guard page, and four faults of the temporary
- * mappings, and requires each to fail its row. Returns 0 when every row passes,
- * 1 otherwise.
+ * tests/host/paging_mutate.sh compiles the rounding by `+ PAGE_SIZE - 1`,
+ * the loop bounded by `va_start + size`, the range check without its
+ * exception for address 0, the handler without its test of the guard page,
+ * and four faults of the temporary mappings, and requires each to fail its
+ * row. Returns 0 when every row passes, 1 otherwise.
  */
 
 #include "mm/paging.c"
@@ -71,6 +70,7 @@ extern void _exit(int status);
 
 static int fails;
 
+/** Count a failure and print `row` when `ok` is 0. */
 static void check(int ok, const char *row)
 {
     if (!ok) {
@@ -86,8 +86,10 @@ uintptr_t mem_reserved_ptr;
 
 static int tables_given;   /* page tables the heap gave since a row began */
 static int boot_carves;    /* calls to the boot allocator, which must be none */
-static int refusals_noted; /* the refusals map_mmio recorded */
+static int refusals_noted; /* calls to klog, one for each range that failed */
 
+/** A zeroed page from the host heap, counted as a page table; 0 for more
+ * than one page. `*phys` is set to 0. */
 void *kalloc_pages(uint32_t count, uintptr_t *phys)
 {
     if (phys) {
@@ -100,12 +102,14 @@ void *kalloc_pages(uint32_t count, uintptr_t *phys)
     return calloc(1, PAGE_SIZE);
 }
 
+/** Free a page `kalloc_pages` gave. */
 void kfree_pages(void *p, uint32_t count)
 {
     (void)count;
     free(p);
 }
 
+/** The boot allocator: counts the call and gives 0. */
 uintptr_t mem_reserve(size_t size, bool align)
 {
     (void)size;
@@ -114,6 +118,7 @@ uintptr_t mem_reserve(size_t size, bool align)
     return 0;
 }
 
+/** The boot allocator: counts the call and gives 0. */
 void *mem_reserve_ptr(size_t size, bool align)
 {
     (void)size;
@@ -122,6 +127,7 @@ void *mem_reserve_ptr(size_t size, bool align)
     return 0;
 }
 
+/** Count the record and print nothing. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -134,6 +140,7 @@ void klog(int level, const char *subsystem, const char *format, ...)
  * when its text contains this and 43 when it does not. */
 static const char *expect_panic;
 
+/** Whether the string `hay` contains `needle`. */
 static int contains(const char *hay, const char *needle)
 {
     const char *h;
@@ -153,6 +160,8 @@ static int contains(const char *hay, const char *needle)
     return 0;
 }
 
+/** With `expect_panic` set, exit 42 when `str` contains it and 43 when it
+ * does not; otherwise print `str` and exit 1. */
 void k_panic(const char *str)
 {
     if (expect_panic) {
@@ -162,13 +171,13 @@ void k_panic(const char *str)
     exit(1);
 }
 
+/** Nothing: the host has no task state segment. */
 void tss_set_double_fault_dir(uint32_t dir)
 {
     (void)dir;
 }
 
-/* The page fault handler, which the fault rows call, reaches these too; no
- * row takes the paths that call them. */
+/** Nothing: the fault handler calls it on a path no row takes. */
 void signal_force(process_t *target, int signo, const struct k_siginfo *info)
 {
     (void)target;
@@ -176,11 +185,13 @@ void signal_force(process_t *target, int signo, const struct k_siginfo *info)
     (void)info;
 }
 
+/** 0: the page-cache window is empty. */
 uint32_t pc_window_size(void)
 {
     return 0;
 }
 
+/** 0, as for an address the page cache does not back. */
 int pc_fault(uintptr_t fault_address, int write)
 {
     (void)fault_address;
@@ -188,11 +199,13 @@ int pc_fault(uintptr_t fault_address, int write)
     return 0;
 }
 
+/** Nothing: no row maps a file. */
 void vm_file_get(struct vm_file *f)
 {
     (void)f;
 }
 
+/** Nothing: no row maps a file. */
 void vm_file_put(struct vm_file *f)
 {
     (void)f;
@@ -203,28 +216,33 @@ void vm_file_put(struct vm_file *f)
 #define GUARD_PAGE 0xC0104000u
 #define GUARD_PID  7
 
+/** `GUARD_PID` for an address in `GUARD_PAGE`, -1 for any other. */
 int kstack_overrun_pid(uintptr_t addr)
 {
     return addr - GUARD_PAGE < PAGE_SIZE ? GUARD_PID : -1;
 }
 
+/** 0: the command line has no flags. */
 int kcmdline_has(const char *flag)
 {
     (void)flag;
     return 0;
 }
 
+/** `most`, the largest heap. */
 size_t kheap_size_for(uint64_t managed, uint64_t most)
 {
     (void)managed;
     return (size_t)most;
 }
 
+/** Nothing: the heap is the host's. */
 void kheap_init(size_t bytes)
 {
     (void)bytes;
 }
 
+/** Nothing: the rows call the handler directly. */
 void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
 {
     (void)vector;
@@ -232,11 +250,13 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
     (void)name;
 }
 
+/** Nothing: no row faults in user mode. */
 void terminate_current_process(int32_t signo)
 {
     (void)signo;
 }
 
+/** 0: no address is in a mapping. */
 vma_t *vm_find(vm_space_t *vm, uintptr_t addr)
 {
     (void)vm;
@@ -244,6 +264,7 @@ vma_t *vm_find(vm_space_t *vm, uintptr_t addr)
     return 0;
 }
 
+/** 0: no stack grows. */
 int vm_grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit)
 {
     (void)vm;
@@ -252,12 +273,15 @@ int vm_grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit)
     return 0;
 }
 
+/** Nothing: no file waits to be released. */
 void vm_file_reap(void)
 {}
 
+/** Nothing: memory is never short. */
 void mem_balance(void)
 {}
 
+/** 1: memory is never short. */
 int mem_may_take(int user_page)
 {
     (void)user_page;
@@ -267,13 +291,13 @@ int mem_may_take(int user_page)
 /* The fault address the handler reads, which the fault rows set. */
 static uint32_t fault_cr2;
 
+/** The fault address a fault row set, as CR2 would have it. */
 uintptr_t arch_fault_address(void)
 {
     return fault_cr2;
 }
 
-/* The processor's translation root, its cached translations and its
- * interrupt flag, which the host has none of. */
+/** 0: the host has no translation root. */
 uintptr_t arch_space_root(void)
 {
     return 0;
@@ -284,6 +308,7 @@ uintptr_t arch_space_root(void)
 static int space_loads;
 static int kernel_changes;
 
+/** Count a reload of the translation root. */
 void arch_space_load(uintptr_t root)
 {
     (void)root;
@@ -297,21 +322,25 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t va)
     (void)va;
 }
 
+/** Count a change of kernel mappings. */
 void smp_kernel_mapping_changed(void)
 {
     kernel_changes++;
 }
 
+/** Nothing: the host has no TLB. */
 void arch_tlb_flush_page(uintptr_t va)
 {
     (void)va;
 }
 
+/** 0: the host has no interrupt flag. */
 uint32_t kirq_save(void)
 {
     return 0;
 }
 
+/** Nothing: the host has no interrupt flag. */
 void kirq_restore(uint32_t flags)
 {
     (void)flags;
@@ -324,8 +353,8 @@ static page_dir_t test_dir;
 /* The table index of a kernel virtual address. */
 #define TABLE_OF(va) ((uint32_t)(va) / PAGE_SIZE / 1024u)
 
-/* Drop the table at `index`, if the directory has one, so a row can ask
- * whether a window made it again. */
+/** Drop the table at `index`, if the directory has one, so that a row can
+ * ask whether a window made it again. */
 static void drop_table(uint32_t index)
 {
     free(test_dir.logical_page_tables[index]);
@@ -477,7 +506,8 @@ static void temp_rows(void)
 
 /**
  * Drive the page fault handler in a forked child with a supervisor write
- * fault at `addr`, which must panic with a text containing `text`.
+ * fault at `addr`, which must panic with a text containing `text`. `what` is
+ * the row's text.
  */
 static void fault_row(uint32_t addr, const char *text, const char *what)
 {
@@ -513,6 +543,7 @@ static void fault_rows(void)
               "a supervisor fault at the stack's lowest byte panics as any kernel fault");
 }
 
+/** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {
     _kernel_dir = &test_dir;
