@@ -31,6 +31,7 @@ This file states the rules in force; their history is in commit messages and `de
 * Several related issues may go in one change, each a commit of its own. Helpers may write parts of it; the session that pushes runs the check below once, for all of it.
 * Work in your clone on a local branch named for the issue, such as `42-ahci-timeout`.
 * Build the whole task first. Write every part, compile as you go, and check a detail by hand only when reading and reasoning cannot settle it. Start no suite or other long run while the task is being built.
+* Wait for a long command by running it in the foreground, or in the background with the tool's own notice when it ends. Never wait by polling the process table: a loop such as `until ! pgrep -f 'tests/run'` finds its own command line and never ends.
 * Then rebase onto `origin/master` and check the task once, ordering the steps by cause and effect, so that nothing is checked before a later step changes it:
   1. The compile and `tests/run style`, which are fast and catch mechanical faults.
   2. The suites the change could affect, as one `RACH2_WORKERS=4 tests/run A B C`, and again with `ARCH=x86_64` when the change touches code that differs between the architectures.
