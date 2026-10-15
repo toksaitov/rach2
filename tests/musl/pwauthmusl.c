@@ -2274,15 +2274,15 @@ static int check_high_signals(void)
             return fail("could not reap the writer the high-signal case signals");
         }
         if (WIFSIGNALED(status)) {
-            return fail("a writer sent a signal above 34 took the default action");
+            return fail("a writer sent a handled signal took the default action");
         }
         if (!WIFEXITED(status)) {
-            return fail("a writer sent a signal above 34 ended in no known way");
+            return fail("a writer sent a handled signal ended in no known way");
         }
         if (present("/etc/.pwlock")) {
             unlink("/etc/.pwlock");
 
-            return fail("a writer sent a signal above 34 left its lock behind");
+            return fail("a writer sent a handled signal left its lock behind");
         }
     }
 

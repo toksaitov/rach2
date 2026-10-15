@@ -134,15 +134,13 @@ static int lock_rows(int fd)
     return 0;
 }
 
-int main(void)
+/** Root's passwd and shadow entries, and crypt of the right and a wrong
+ * password against the shadow hash. 0, or 1 once the failure is reported. */
+static int account_rows(void)
 {
     struct passwd *pw;
     struct spwd *sp;
     char *hash;
-    struct rlimit rl;
-    char host[64];
-    int fd, nfd, fl;
-    uid_t ru, eu, su;
 
     pw = getpwnam("root");
     if (!pw || pw->pw_uid != 0 || pw->pw_gid != 0) {
@@ -160,18 +158,43 @@ int main(void)
         printf("AUTHMUSL FAIL (crypt against shadow)\n");
         return 1;
     }
-    if (strcmp(crypt("wrong", sp->sp_pwdp), sp->sp_pwdp) == 0) {
+    hash = crypt("wrong", sp->sp_pwdp);
+    if (!hash) {
+        printf("AUTHMUSL FAIL (crypt of a wrong password)\n");
+        return 1;
+    }
+    if (strcmp(hash, sp->sp_pwdp) == 0) {
         printf("AUTHMUSL FAIL (crypt accepts a wrong password)\n");
         return 1;
     }
+    return 0;
+}
 
-    if (getrlimit(RLIMIT_NOFILE, &rl) != 0 || rl.rlim_cur != 1024) {
+int main(void)
+{
+    struct rlimit rl;
+    char host[64];
+    int fd, nfd, fl;
+    uid_t ru, eu, su;
+
+    if (account_rows() != 0) {
+        return 1;
+    }
+
+    if (getrlimit(RLIMIT_NOFILE, &rl) != 0) {
+        printf("AUTHMUSL FAIL (getrlimit RLIMIT_NOFILE)\n");
+        return 1;
+    }
+    if (rl.rlim_cur != 1024) {
         printf("AUTHMUSL FAIL (RLIMIT_NOFILE=%ld)\n", (long)rl.rlim_cur);
         return 1;
     }
 
-    if (sethostname("rachtest", 8) != 0 || gethostname(host, sizeof(host)) != 0 ||
-        strcmp(host, "rachtest") != 0) {
+    if (sethostname("rachtest", 8) != 0 || gethostname(host, sizeof(host)) != 0) {
+        printf("AUTHMUSL FAIL (hostname round-trip)\n");
+        return 1;
+    }
+    if (strcmp(host, "rachtest") != 0) {
         printf("AUTHMUSL FAIL (hostname round-trip: %s)\n", host);
         return 1;
     }

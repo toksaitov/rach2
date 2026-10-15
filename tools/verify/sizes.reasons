@@ -531,8 +531,7 @@ tests/musl/addusermusl.c:check_injection complexity 33 a test's rows, each a cas
 tests/musl/addusermusl.c:check_injection lines 107 a test's rows, each a case, read as one table
 tests/musl/addusermusl.c:check_refusals complexity 27 a test's rows, each a case, read as one table
 
-tests/musl/authmusl.c:main complexity 42 a test's rows, each a case, read as one table
-tests/musl/authmusl.c:main lines 102 a test's rows, each a case, read as one table
+tests/musl/authmusl.c:main complexity 34 a test's rows, each a case, read as one table
 
 tests/musl/callsmusl.c:rtcs complexity 26 a test's rows, each a case, read as one table
 

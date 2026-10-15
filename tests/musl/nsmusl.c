@@ -165,7 +165,9 @@ static int nspid_is(const char *who, const char *want)
     const char *line, *nl;
 
     snprintf(path, sizeof(path), "/proc/%s/status", who);
-    get(path, buf, sizeof(buf));
+    if (get(path, buf, sizeof(buf)) < 0) {
+        return 0;
+    }
     line = strstr(buf, "NSpid:\t");
     nl = line ? strchr(line, '\n') : NULL;
     return nl && (size_t)(nl - line - 7) == strlen(want) && !strncmp(line + 7, want, strlen(want));
@@ -492,9 +494,11 @@ static int empty_root(void)
     long pid;
 
     fd = open("/proc/self/status", O_RDONLY | O_CLOEXEC);
-    lseek(fd, 5, SEEK_SET);
+    if (fd < 0 || lseek(fd, 5, SEEK_SET) != 5) {
+        return fail("open and seek a file for its fdinfo");
+    }
     snprintf(path, sizeof(path), "/proc/self/fdinfo/%d", fd);
-    if (fd < 0 || get(path, buf, sizeof(buf)) <= 0 || strcmp(buf, "pos:\t5\nflags:\t02000000\n")) {
+    if (get(path, buf, sizeof(buf)) <= 0 || strcmp(buf, "pos:\t5\nflags:\t02000000\n")) {
         return fail("a file of fdinfo has the offset and the flags");
     }
     if (setgid(1000) != 0 || setuid(1000) != 0 || prctl(PR_SET_DUMPABLE, 1) != 0 ||

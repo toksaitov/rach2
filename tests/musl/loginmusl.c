@@ -421,7 +421,6 @@ static int check_wedges(void)
 
         return fail("could not continue the stopped login");
     }
-    (void)write(in[1], PROBE_USER "\n" PROBE_PASS "\n", 0);
     (void)write(in[1], PROBE_USER "\n", strlen(PROBE_USER) + 1);
     (void)write(in[1], PROBE_PASS "\n", strlen(PROBE_PASS) + 1);
     close(in[1]);
