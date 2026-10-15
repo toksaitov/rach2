@@ -1,5 +1,5 @@
 /**
- * AF_UNIX sockets as GNU libc and its programs use them.
+ * unixmusl: check AF_UNIX sockets as GNU libc and its programs use them.
  *
  * A stream pair carries bytes both ways, ends with the end of input when one
  * end closes, and gives EPIPE to a write after that; shutdown(SHUT_WR) ends the
@@ -12,7 +12,7 @@
  * longer than that. A child that becomes user and group 1000 reads the pair's
  * creator from SO_PEERCRED, and the byte it writes reaches the creator's end,
  * which has SO_PASSCRED, with the child's pid, uid and gid; an unprivileged
- * thread that is not the leader may name its process's id in SCM_CREDENTIALS. A
+ * thread that is not the leader may give its process's id in SCM_CREDENTIALS. A
  * listener bound to a path makes a socket file, accepts a connection queued
  * before the accept, and both ends report the names; a second bind of the path
  * fails with EADDRINUSE, and a connect to the file after the listener is gone
@@ -21,21 +21,22 @@
  * empty socket fails with EAGAIN, and poll reports the socket readable once a
  * byte arrives. An accept given an address and no length pointer fails with
  * EFAULT. A listener shut down for reading gives up the connection queued
- * before, then fails an accept with EINVAL and refuses a connect. A connect
- * waiting for room in a full queue finishes when listen makes the backlog
- * larger. A datagram socket refuses a connect with EPERM while it is connected
- * to another; one that connects elsewhere or disconnects drops its queued
- * messages, and the peer it left gets ECONNRESET. A chain of a thousand
- * datagram pairs, each queued in the pair before, closes from its head. A
- * datagram send waiting for room fails with EPIPE when the receiver shuts down
- * reading. A stream whose peer's queue is full polls writable once it is shut
- * down for writing, and the write then fails with EPIPE. A recvfrom given an
- * address and no length pointer fails with EFAULT and leaves the message for
- * the next receive. A descriptor of a KRFFS file in /tmp, sent before a write
- * moves the file and received after the sender's close and the unlink, has the
- * file's size and reads its bytes.
+ * before, then fails an accept with EINVAL and a connect with ECONNREFUSED. A
+ * connect waiting for room in a full queue finishes when listen makes the
+ * backlog larger. A connect to a datagram socket connected to another fails
+ * with EPERM; a datagram socket that connects elsewhere or disconnects drops
+ * its queued messages, and the peer it left gets ECONNRESET. A chain of a
+ * thousand datagram pairs, each queued in the pair before, closes from its
+ * head. A datagram send waiting for room fails with EPIPE when the receiver
+ * shuts down reading. A stream whose peer's queue is full polls writable once
+ * it is shut down for writing, and the write then fails with EPIPE. A recvfrom
+ * given an address and no length pointer fails with EFAULT and leaves the
+ * message for the next receive. A descriptor of a KRFFS file in /tmp, sent
+ * before a write moves the file and received after the sender's close and the
+ * unlink, has the file's size and reads its bytes.
  *
- * Prints "UNIXMUSL OK" on success and "UNIXMUSL FAIL (detail)" otherwise.
+ * It prints "UNIXMUSL OK" and exits 0 on success, or prints "UNIXMUSL FAIL
+ * (detail: errno N)" and exits 1 at the first failure.
  */
 
 #define _GNU_SOURCE
@@ -59,12 +60,14 @@
 #define DGRAM_PATH "/tmp/unixmusl.dg"
 #define FROM_PATH  "/tmp/unixmusl.from"
 
+/** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
 {
     printf("UNIXMUSL FAIL (%s: errno %d)\n", what, errno);
     return 1;
 }
 
+/** Fill `*a` with the address of the file `path`, and return its length. */
 static socklen_t path_addr(struct sockaddr_un *a, const char *path)
 {
     memset(a, 0, sizeof(*a));
@@ -73,7 +76,9 @@ static socklen_t path_addr(struct sockaddr_un *a, const char *path)
     return (socklen_t)(offsetof(struct sockaddr_un, sun_path) + strlen(path) + 1);
 }
 
-/* Send the descriptor `fd` over `s` with one byte of data. */
+/**
+ * Send the descriptor `fd` over `s` with one byte of data. Returns 0, or -1.
+ */
 static int send_fd(int s, int fd)
 {
     union {
@@ -101,7 +106,10 @@ static int send_fd(int s, int fd)
     return sendmsg(s, &msg, 0) == 1 ? 0 : -1;
 }
 
-/* The descriptor sent over `s`, or -1. */
+/**
+ * Receive one byte and a descriptor sent with SCM_RIGHTS over `s`. Returns
+ * the new descriptor, or -1.
+ */
 static int recv_fd(int s)
 {
     union {
@@ -132,6 +140,11 @@ static int recv_fd(int s)
     return fd;
 }
 
+/**
+ * Check a stream pair: bytes both ways, the end of input and EPIPE after one
+ * end closes, and shutdown(SHUT_WR). Returns 0, or 1 after the failure is
+ * printed.
+ */
 static int stream_pair(void)
 {
     int sv[2];
@@ -171,6 +184,11 @@ static int stream_pair(void)
     return 0;
 }
 
+/**
+ * Check that a datagram pair and a sequenced-packet pair keep the boundaries
+ * of messages, and that a datagram too long for the buffer is cut with
+ * MSG_TRUNC. Returns 0, or 1 after the failure is printed.
+ */
 static int message_pairs(void)
 {
     struct msghdr msg;
@@ -221,7 +239,8 @@ static int message_pairs(void)
  * In a child of the pair's creator, whose effective ids are `uid` and `gid`:
  * become user and group 1000, read the creator's credentials from `mine`
  * with SO_PEERCRED, which a pair saves when it is made, and write a byte for
- * the creator to read with the child's own. 0, or the step that failed.
+ * the creator to read with the child's own. Returns 0, or the number of the
+ * step that failed.
  */
 static int peer_child(int mine, pid_t creator, uid_t uid, gid_t gid)
 {
@@ -239,10 +258,11 @@ static int peer_child(int mine, pid_t creator, uid_t uid, gid_t gid)
 }
 
 /**
- * The credentials a pair carries, between its creator and a child of other
- * ids: the child's SO_PEERCRED reports the creator, and the byte the child
- * writes reaches the creator's end, which has SO_PASSCRED, with the child's
- * pid, uid and gid in SCM_CREDENTIALS.
+ * Check the credentials a pair carries, between its creator and a child of
+ * other ids: the child's SO_PEERCRED reports the creator, and the byte the
+ * child writes reaches the creator's end, which has SO_PASSCRED, with the
+ * child's pid, uid and gid in SCM_CREDENTIALS. Returns 0, or 1 after the
+ * failure is printed.
  */
 static int creds(void)
 {
@@ -296,6 +316,11 @@ static int creds(void)
     return 0;
 }
 
+/**
+ * Check that a descriptor sent with SCM_RIGHTS reaches a child that has closed
+ * its own ends of the pipe, and that the child writes through it; then the
+ * credentials of `creds`. Returns 0, or 1 after the failure is printed.
+ */
 static int rights_and_creds(void)
 {
     int sv[2], p[2];
@@ -332,8 +357,11 @@ static int rights_and_creds(void)
     return creds();
 }
 
-/* Send one byte over `*arg` with SCM_CREDENTIALS naming the process, from
- * a thread that is not the leader: 0, or the errno of the refusal. */
+/**
+ * Run as a thread that is not the leader: send one byte over the socket at
+ * `*arg` with SCM_CREDENTIALS that have the process's id. Returns null when
+ * the send succeeded, or the errno of its failure.
+ */
 static void *send_creds(void *arg)
 {
     union {
@@ -365,8 +393,11 @@ static void *send_creds(void *arg)
     return (void *)(long)(sendmsg(*(int *)arg, &msg, 0) == 1 ? 0 : errno);
 }
 
-/* An unprivileged thread other than the leader may name its process's id,
- * getpid's, in SCM_CREDENTIALS. */
+/**
+ * Check that an unprivileged thread other than the leader may give its
+ * process's id, getpid's, in SCM_CREDENTIALS. Returns 0, or 1 after the failure
+ * is printed.
+ */
 static int thread_creds(void)
 {
     pid_t pid = fork();
@@ -392,6 +423,12 @@ static int thread_creds(void)
     return 0;
 }
 
+/**
+ * Check a listener bound to a path and one bound to an abstract name: the
+ * socket file, the names both ends report, EADDRINUSE for a second bind, and
+ * ECONNREFUSED once the listener is gone. Returns 0, or 1 after the failure is
+ * printed.
+ */
 static int named(void)
 {
     struct sockaddr_un a, got;
@@ -471,7 +508,7 @@ static int named(void)
     return 0;
 }
 
-/* The address of the abstract name `name`, and its length. */
+/** Fill `*a` with the address of the abstract name `name`; return its size. */
 static socklen_t abstract_addr(struct sockaddr_un *a, const char *name)
 {
     memset(a, 0, sizeof(*a));
@@ -480,7 +517,10 @@ static socklen_t abstract_addr(struct sockaddr_un *a, const char *name)
     return (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + strlen(name));
 }
 
-/* A listener on the abstract name `name`, and a client connected to it. */
+/**
+ * Make a listener on the abstract name `name` into `*l`, and a client
+ * connected to it into `*c`. Returns 0, or -1.
+ */
 static int abstract_pair(const char *name, int *l, int *c)
 {
     struct sockaddr_un a;
@@ -495,6 +535,10 @@ static int abstract_pair(const char *name, int *l, int *c)
     return 0;
 }
 
+/**
+ * Check an accept given an address and no length, and a listener shut down
+ * for reading. Returns 0, or 1 after the failure is printed.
+ */
 static int listening(void)
 {
     struct sockaddr_un got;
@@ -532,6 +576,7 @@ static int listening(void)
     return 0;
 }
 
+/* The count of SIGALRM deliveries to on_alarm. */
 static volatile sig_atomic_t alarms;
 
 /** Count a SIGALRM. */
@@ -541,7 +586,10 @@ static void on_alarm(int sig)
     alarms++;
 }
 
-/** Whether process `pid` sleeps, by its state in /proc/<pid>/stat. */
+/**
+ * Return 1 when process `pid` is asleep, state S in /proc/<pid>/stat, and 0
+ * otherwise.
+ */
 static int sleeping(pid_t pid)
 {
     char path[64], line[256], *state;
@@ -562,11 +610,13 @@ static int sleeping(pid_t pid)
     return state && state[1] == ' ' && state[2] == 'S';
 }
 
-/** The child `pid`'s status, waited for without sleeping for up to 15 s: a
- * process that runs keeps the kernel from idling, and an idle kernel looks
- * at a sleeping wait again at every interrupt, which would let the child's
- * connect finish without its wake. The child's id, or 0 when it has not
- * ended. */
+/**
+ * Wait for the child `pid` without sleeping, for up to 15 s, and store its
+ * status in `*status`. A process that runs keeps the kernel from idling, and
+ * an idle kernel looks at a sleeping wait again at every interrupt, which
+ * would let the child's connect finish without its wake. Returns the child's
+ * id, or 0 when it has not ended.
+ */
 static pid_t reap_running(pid_t pid, int *status)
 {
     struct timespec start, now;
@@ -580,11 +630,14 @@ static pid_t reap_running(pid_t pid, int *status)
     return got;
 }
 
-/* A connect waiting for room in a listener's queue finishes when listen
- * makes the backlog larger. The connect has no time limit of its own, only
- * a 10 s alarm, and listen runs once it is seen asleep; a connect the alarm
- * wakes finds the room and finishes, so the child fails when the alarm
- * fired, and only listen's wake passes the row. */
+/**
+ * Check that a connect waiting for room in a listener's queue finishes when
+ * listen makes the backlog larger. The connect has no time limit of its own,
+ * only a 10 s alarm, and listen runs once it is seen asleep; a connect the
+ * alarm wakes finds the room and finishes, so the child fails when the alarm
+ * fired, and only listen's wake passes the row. Returns 0, or 1 after the
+ * failure is printed.
+ */
 static int backlog_growth(void)
 {
     struct sockaddr_un a;
@@ -628,6 +681,12 @@ static int backlog_growth(void)
     return 0;
 }
 
+/**
+ * Check a connect to a datagram socket connected to another, which fails
+ * with EPERM, and a datagram socket that connects elsewhere or disconnects,
+ * which drops its queued messages and leaves its old peer ECONNRESET.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int datagram_peers(void)
 {
     struct sockaddr_un a;
@@ -673,11 +732,14 @@ static int datagram_peers(void)
     return 0;
 }
 
-/* A send waiting for room in a full datagram queue fails with EPIPE when
- * the receiver shuts down reading. The send has no time limit of its own,
- * only a 10 s alarm, and the shutdown comes once it is seen asleep; a send
- * the alarm wakes finds the shutdown and fails with EPIPE too, so the child
- * fails when the alarm fired, and only the shutdown's wake passes the row. */
+/**
+ * Check that a send waiting for room in a full datagram queue fails with
+ * EPIPE when the receiver shuts down reading. The send has no time limit of
+ * its own, only a 10 s alarm, and the shutdown comes once it is seen asleep;
+ * a send the alarm wakes finds the shutdown and fails with EPIPE too, so the
+ * child fails when the alarm fired, and only the shutdown's wake passes the
+ * row. Returns 0, or 1 after the failure is printed.
+ */
 static int full_receiver_shut(void)
 {
     int sv[2];
@@ -722,9 +784,12 @@ static int full_receiver_shut(void)
     return 0;
 }
 
-/* A chain of datagram pairs, each pair's two sockets queued in the pair
- * before and closed in the caller, closes from its head; a kernel that
- * nested a close for each pair would run off its stack. */
+/**
+ * Check that a chain of a thousand datagram pairs, each pair's two sockets
+ * queued in the pair before and closed in the caller, closes from its head;
+ * a kernel that nested a close for each pair would run off its stack.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int chain_close(void)
 {
     int next[2] = {-1, -1};
@@ -755,6 +820,10 @@ static int chain_close(void)
     return 0;
 }
 
+/**
+ * Check that a datagram sent to a name arrives with the sender's name.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int datagram_names(void)
 {
     struct sockaddr_un to, from, got;
@@ -787,6 +856,11 @@ static int datagram_names(void)
     return 0;
 }
 
+/**
+ * Check that a nonblocking receive on an empty socket fails with EAGAIN, and
+ * that poll reports the socket readable once a byte arrives. Returns 0, or 1
+ * after the failure is printed.
+ */
 static int waiting(void)
 {
     struct pollfd pfd;
@@ -813,8 +887,11 @@ static int waiting(void)
     return 0;
 }
 
-/* A stream socket whose peer's queue is full polls writable once it is
- * shut down for writing, so the caller can learn of the EPIPE. */
+/**
+ * Check that a stream socket whose peer's queue is full polls writable once
+ * it is shut down for writing, so the caller can learn of the EPIPE.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int shut_writable(void)
 {
     static char block[65536];
@@ -846,8 +923,11 @@ static int shut_writable(void)
     return 0;
 }
 
-/* A recvfrom given an address and no length pointer fails with EFAULT
- * before it takes the message, which the next receive gets. */
+/**
+ * Check that a recvfrom given an address and no length pointer fails with
+ * EFAULT before it takes the message, which the next receive gets.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int recvfrom_no_length(void)
 {
     struct sockaddr_un got;
@@ -880,14 +960,15 @@ static int recvfrom_no_length(void)
 #define GROW_BYTES   1024
 #define REFILL_BYTES 1000
 
-/*
- * A descriptor of a KRFFS file in flight while a write moves the file. The
- * holder count must find the descriptor by the node the file has after the
+/**
+ * Check a descriptor of a KRFFS file in flight while a write moves the file.
+ * The holder count must find the descriptor by the node the file has after the
  * move, so that the file outlives its name and its last descriptor, and the
  * descriptor received must be installed with that node. The file made just
- * behind it leaves it no room to grow where it is, so the write moves it;
- * the file written after the name goes takes the place of a file freed
- * there, so a freed file does not read back as it was.
+ * behind it leaves it no room to grow where it is, so the write moves it; the
+ * file written after the name goes takes the place of a file freed there, so a
+ * freed file does not read back as it was. Returns 0, or 1 after the failure is
+ * printed.
  */
 static int moved_in_flight(void)
 {
@@ -940,9 +1021,12 @@ static int moved_in_flight(void)
     return 0;
 }
 
-/* SCM_RIGHTS, and then SCM_CREDENTIALS, each into a control buffer of
- * CMSG_LEN, short of CMSG_SPACE on x86-64: the length the receive reports
- * stays inside the buffer. */
+/**
+ * Check SCM_RIGHTS, and then SCM_CREDENTIALS, each received into a control
+ * buffer of CMSG_LEN, short of CMSG_SPACE on x86-64: the length the receive
+ * reports stays inside the buffer. Returns 0, or 1 after the failure is
+ * printed.
+ */
 static int short_control(void)
 {
     union {
