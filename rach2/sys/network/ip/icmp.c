@@ -1,39 +1,32 @@
 /*
- * icmp.c - Internet Control Message Protocol (echo only).
+ * icmp.c: ICMP, as icmp.h describes it: echo requests answered, the
+ * kernel's own ping, the destination unreachables this machine sends, and
+ * the errors it takes. An echo message is, big-endian, type (1 byte), code
+ * (1), checksum (2), identifier (2), sequence (2) and data.
  *
- * Echo format (big-endian): type(1) code(1) checksum(2) id(2) seq(2) data(N).
- *
- * Receiving an echo request: copy it back, flip the type to reply, recompute
- * the checksum, and send. Receiving an echo reply: if it matches the ping in
- * flight (source, id, and sequence), mark it answered.
- *
- * icmp_ping sends a request and waits for the reply. A process waits by
- * sleeping on a wait queue that icmp_rx wakes, because the timer skips
- * schedule() while in_syscall is set: a poll with sti/hlt from inside a syscall
- * gives no other process any CPU at all for as long as the wait lasts, so on a
- * machine several people can log into, any one of them could stop the rest.
- * The boot shell polls: it runs with the scheduler stopped and no process to
+ * A process that pings sleeps on a wait queue that icmp_rx wakes, because
+ * the timer does not switch away from a process inside a system call
+ * (`sched_preempt`): a poll with sti and hlt inside a call would give no
+ * other process the processor for as long as the wait lasts, so on a machine
+ * several people can log into, any one of them could stop the rest. The
+ * debug shell polls: it runs with the scheduler stopped and no process to
  * block, so there is nothing to yield to.
  *
  * The wait is bounded twice over, and both halves are necessary. The
- * process arms wakeup_tick so the timer makes it runnable, since a BLOCKED
- * process nothing wakes is one schedule() never picks again; and the deadline
- * is also in the wait predicate, since the wait ends only on a true condition
- * or a signal it acts on: a sleeper whose condition is still false waits
- * again, its deadline armed again by `wq_wait`, and once the deadline has
- * passed the timer would wake it at every tick and the wait would never end.
- * Both read the one deadline word, so a timer that has fired implies a
- * predicate that is true.
+ * process arms `wakeup_tick` so that the timer makes it runnable, since a
+ * PROC_BLOCKED process nothing wakes is one schedule() never picks again;
+ * and the deadline is also in the wait's condition, since the wait ends only
+ * on a true condition or a signal it acts on: a sleeper whose condition is
+ * still false waits again, its deadline armed again by `wq_wait`, and once
+ * the deadline has passed the timer would wake it at every tick and the wait
+ * would never end. Both read the one deadline word, so a timer that has
+ * fired implies a condition that is true.
  *
- * There is one in-flight request for the whole machine; a program that needs
+ * There is one ping in flight for the whole machine; a program that needs
  * echo exchanges of its own opens a raw socket (socket/raw.c). The slot is
- * claimed under net_lock and released on every exit path, and a second caller
- * is refused with -EBUSY rather than queued, since a queue would need a
- * fairness rule and would leave a shell command waiting with nothing to show
- * why.
- *
- * The first request on a cold ARP cache is dropped, so we retry a few times:
- * the early attempt warms the cache and a later one gets through.
+ * claimed under net_lock and released on every way out, and a second caller
+ * is refused with -EBUSY and not queued, since a queue would need a fairness
+ * rule and would leave a shell command waiting with nothing to show why.
  */
 
 #include "../../klog.h"
@@ -51,7 +44,7 @@
 #include "../driver/netdev.h"
 #include "../udp/udp.h"
 
-/* Outgoing echo reply (sized for a full datagram) and request buffers. */
+/* The echo reply being sent, sized for a full datagram, and the request. */
 static uint8_t icmp_reply_buf[1500];
 static uint8_t icmp_echo_buf[8 + ICMP_PING_DATA_MAX];
 
@@ -67,14 +60,17 @@ static uint8_t icmp_error_buf[8 + ICMP_QUOTE_MAX];
 static uint32_t icmp_error_credit = ICMP_ERROR_BURST;
 static uint32_t icmp_error_last;
 
-/* Identifier we stamp on our own echo requests. */
+/* The identifier of the kernel's own echo requests. */
 #define ICMP_PING_ID 0x5243 /* 'RC' */
 
-/* Per-attempt timeout (ticks) and number of attempts. */
+/* The wait for each request's answer, in ticks, and the requests sent. */
 #define ICMP_PING_WAIT     100 /* 1 s at 100 Hz */
 #define ICMP_PING_ATTEMPTS 4
 
-/* The one in-flight ping, matched against incoming replies. */
+/* The one ping in flight, which an echo reply is matched against: whether
+ * it is in flight and answered, the answer's length and hop limit, the
+ * sequence and peer it waits for, and the tick its wait ends at, never 0;
+ * `ping_seq` is the sequence of the next request. */
 static volatile int ping_active = 0;
 static volatile int ping_replied = 0;
 static volatile uint16_t ping_reply_len; /* the ICMP bytes of the reply */
@@ -84,7 +80,8 @@ static volatile uint32_t ping_peer_ip = 0;
 static volatile uint32_t ping_deadline = 0;
 static uint16_t ping_seq = 0;
 
-/* Where a sleeping pinger waits, and what icmp_rx wakes. */
+/* Where a sleeping pinger waits, and what icmp_rx wakes; initialized by the
+ * first ping. */
 static wait_queue_t ping_wq;
 static int ping_wq_ready = 0;
 
@@ -92,11 +89,12 @@ static int ping_wq_ready = 0;
 extern volatile uint32_t kernel_ticks;
 
 /**
- * A router's report that a datagram of ours was too big for a link with the
- * MTU at bytes 6 and 7, which quotes the datagram's IP header and at least
- * its first eight bytes (RFC 792): for a TCP segment, the connection's
- * ports and the segment's sequence number, which the connection keeps the
- * MTU for (`tcp_path_mtu`).
+ * Take a router's report that a datagram from this machine was too big for
+ * a link, whose MTU is at bytes 6 and 7. The report quotes the datagram's IP
+ * header and at least its first eight bytes (RFC 792): for a TCP segment,
+ * the connection's ports and the segment's sequence number, which
+ * `tcp_path_mtu` finds the connection by. A quote too short for them, or of
+ * another protocol, is ignored.
  */
 static void icmp_too_big(const uint8_t *data, uint16_t len)
 {
@@ -124,9 +122,9 @@ void icmp_count_out(uint8_t type)
 }
 
 /**
- * Pass a port unreachable to UDP: the datagram it quotes says which of our
- * ports sent it and to which peer. A quote too short to hold the ports, or of
- * another protocol, is ignored.
+ * Pass a port unreachable to UDP: the datagram it quotes says which of this
+ * machine's ports sent it and to which peer. A quote too short to hold the
+ * ports, or of another protocol, is ignored.
  */
 static void icmp_refused(const uint8_t *data, uint16_t len)
 {
@@ -166,17 +164,6 @@ static int icmp_error_allowed(void)
     return 1;
 }
 
-/**
- * Send a destination unreachable for `dgram`, quoting its header and as much
- * of the rest as fits, which `traceroute` reads to match the answer to its
- * probe and a UDP client to its socket.
- *
- * The caller has checked that the datagram was addressed to this machine and
- * not broadcast. No error goes to a source of 0.0.0.0, a broadcast or a
- * group, which is no single host, and none past the rate limit, which an
- * error to this machine's own address is not held to, as Linux does not
- * limit the errors it sends over its loopback.
- */
 void icmp_unreachable(const uint8_t *dgram, uint16_t len, uint8_t code)
 {
     uint32_t src = read32be(dgram + 12);
@@ -198,18 +185,10 @@ void icmp_unreachable(const uint8_t *dgram, uint16_t len, uint8_t code)
 }
 
 /**
- * Handle one received ICMP datagram: answer echo requests, match echo replies.
- *
- * An echo request is reflected back to its source: the payload is copied
- * verbatim, the type is changed to reply, and the checksum is recomputed.
- * An echo reply is accepted only if it matches the single ping in flight by
- * source address, identifier, and sequence; a match sets `ping_replied`. A
- * report that a TCP segment was too big for a link on its path goes to
- * `icmp_too_big`.
- *
- * @param src_ip source address of the datagram, host byte order.
- * @param ttl the hop limit the datagram arrived with, which a ping reports.
- * @param len ICMP length; datagrams shorter than the 8-byte header are dropped.
+ * An echo request is copied whole, its type changed to reply and its
+ * checksum recomputed. A fragmentation-needed report shorter than 36 bytes,
+ * the ICMP header, a 20-byte IP header and eight bytes of the segment, is
+ * ignored.
  */
 void icmp_rx(uint32_t src_ip, uint32_t dst_ip, uint8_t ttl, const uint8_t *data, uint16_t len)
 {
@@ -271,7 +250,8 @@ static int ping_done(void *arg)
 }
 
 /**
- * Release the in-flight slot. Called on every exit path from `icmp_ping`.
+ * Release the slot of the ping in flight. Called on every way out of
+ * `icmp_ping_data` once it has the slot.
  *
  * Under `net_lock` because `icmp_rx` reads the same words from an interrupt,
  * and it clears the arming too: a deadline left armed wakes this process early
@@ -290,31 +270,15 @@ static void ping_release(void)
 }
 
 /**
- * Send an ICMP echo request to `dst_ip` and wait for the matching reply.
- *
- * Claims the machine's one in-flight slot for the whole call and releases it as
- * its last act on every path, so a killed pinger cannot strand it: the signal
- * makes the blocked process runnable, the wait breaks with `-EINTR`, and the
- * release runs before the syscall returns. A caller that finds the slot held
- * sends nothing and gets `-EBUSY`.
- *
- * A process sleeps for the reply; the boot shell, which has no process and no
- * scheduler, polls with sti/hlt. The first request on a cold ARP cache is
- * dropped, so up to `ICMP_PING_ATTEMPTS` are sent; an early attempt warms the
- * cache. Each request is built and sent under `net_lock`, and its deadline is
- * moved off 0, `wakeup_tick`'s "not sleeping" value, as `sys_nanosleep` moves
- * its own: a deadline of 0 would arm nothing, and the sleeper would never be
- * made runnable again. Whether a reply came is read from `ping_replied`, since
- * a wait that returns does not say whether the reply or the deadline ended it.
- *
- * The request carries `size` bytes of data, each its own offset in the data
- * modulo 256, as iputils fills them, and leaves with the hop limit `ttl`.
- * The reply's ICMP length, which a peer may make shorter or longer than the
- * request, goes to `*got`, and the hop limit it arrived with to `*got_ttl`,
- * when `got` is not NULL.
- *
- * @return round-trip time in ticks, `-ETIMEDOUT` if every attempt expired,
- *         `-EBUSY` if another ping has the slot, or `-EINTR` on a signal.
+ * The slot is claimed for the whole call and released as its last act on
+ * every path, so a killed pinger cannot strand it: the signal makes the
+ * blocked process runnable, the wait breaks with -EINTR, and the release
+ * runs before the system call returns. Each request is built and sent under
+ * `net_lock`, and its deadline is moved off 0, `wakeup_tick`'s "not
+ * sleeping" value, as `sys_nanosleep` moves its own: a deadline of 0 would
+ * arm nothing, and the sleeper would never be made runnable again. Whether a
+ * reply came is read from `ping_replied`, since a wait that returns does not
+ * say whether the reply or the deadline ended it.
  */
 int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got, uint8_t *got_ttl)
 {
@@ -363,7 +327,6 @@ int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got, u
         start = kernel_ticks;
         ping_deadline = start + ICMP_PING_WAIT;
         if (ping_deadline == 0) {
-            /* 0 is `wakeup_tick`'s "not sleeping" sentinel. */
             ping_deadline = 1;
         }
 

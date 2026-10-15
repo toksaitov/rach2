@@ -1,14 +1,9 @@
 /*
- * ip.c - Internet Protocol (IPv4).
- *
- * The 20-byte header has the source and destination addresses, the upper
- * protocol number, a TTL, and a one's complement checksum over the header.
- * Multi-byte fields are big-endian on the wire; we keep IP addresses as
- * host-endian uint32_t (10.0.2.15 is 0x0A00020F) and convert at the wire
- * boundary.
- *
- * We do not implement fragment reassembly, so any fragment (MF set or a
- * nonzero fragment offset) is dropped.
+ * ip.c: the IPv4 layer, as ip.h describes it: the checks of a received
+ * datagram, the transmit and its choice of interface, the datagrams held for
+ * ARP, and the loopback ring. The 20-byte header has the source and
+ * destination addresses, the protocol number, a TTL, and a one's complement
+ * checksum over the header, its multi-byte fields big-endian.
  */
 
 #include "../../klog.h"
@@ -28,14 +23,9 @@
 #include "../../lib/kstring.h"
 
 /**
- * Compute the one's complement checksum over `len` bytes of `buf`.
- *
- * Sums 16-bit big-endian words, four bytes a turn, into a 32-bit accumulator,
- * which cannot overflow before 65536 words, folds the carries back into the
- * low 16 bits once at the end, and returns the one's complement of the
- * result. An odd trailing byte is padded with a zero low byte. A header that
- * already has a valid checksum sums to zero, so callers verify by checking
- * the result against zero.
+ * The words are summed four bytes a turn into a 32-bit accumulator, which
+ * cannot overflow before 65536 words, and the carries are folded back into
+ * the low 16 bits once at the end.
  */
 uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
 {
@@ -50,7 +40,7 @@ uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
     for (; i + 1 < len; i = (uint16_t)(i + 2)) {
         sum += (uint32_t)(((uint32_t)buf[i] << 8) | buf[i + 1]);
     }
-    if (len & 1) { /* odd length: pad the last byte with zero */
+    if (len & 1) {
         sum += (uint32_t)buf[len - 1] << 8;
     }
     while (sum >> 16) {
@@ -61,38 +51,19 @@ uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
 }
 
 /**
- * Validate one received IPv4 datagram and dispatch it to the upper protocol.
+ * A broadcast is given to UDP and to nothing else: a DHCP server may answer
+ * a machine that has no address yet by broadcast, and a renewal's refusal
+ * arrives as one. Answering a broadcast echo request would make this machine
+ * one of the many that reply to one packet, at whatever address the sender
+ * claimed, and a broadcast TCP segment is not a connection anyone opened.
  *
- * Drops anything malformed or not for us: a short buffer, a non-4 version, an
- * IHL or total length that does not fit the frame, a fragment (we do no
- * reassembly), a bad header checksum, or a destination that is neither an
- * address of this machine's interfaces nor a broadcast. An unconfigured
- * interface owns no address, so 0.0.0.0 matches none: a packet addressed to
- * nobody is not one addressed to this machine. Options are skipped using IHL;
- * the payload handed to the upper layer starts at the header end and runs to
- * `total_len`.
- *
- * A broadcast is delivered to UDP and to nothing else: a DHCP server may
- * answer a machine that has no address yet by broadcast, and a renewal's
- * refusal arrives as one. Answering a broadcast echo request would make this
- * machine one of the many that reply to one packet, at whatever address the
- * sender claimed, and a broadcast TCP segment is not a connection anyone
- * opened. Raw sockets see each datagram delivered, header included, before
- * the protocol's own handler, which still runs.
- *
- * `from_loopback` is nonzero only for the ring `ip_loop_drain_from` feeds; a
- * packet off the wire (`from_loopback == 0`) whose source is an address of
- * this machine or a `127/8` loopback address is a martian, a spoof no real
- * peer sends, and is dropped before any reply can be steered onto the
- * loopback ring or emitted carrying a loopback source. A genuine loopback
- * datagram has our own source by design, so the check depends on the delivery
- * path, not on the value. A packet off the wire addressed to `127/8` is
- * dropped too, as Linux drops it: a socket bound to 127.0.0.1 is reachable
- * from this machine alone.
- *
- * Each datagram counts in `net_mib` as received, and a dropped one by its
- * reason. A multicast datagram, for a group no socket here can join, counts
- * only as received, as Linux counts one for a group it has not joined.
+ * A datagram from the wire whose source is an address of this machine or in
+ * 127/8 is a martian, a spoof no peer sends, and is dropped before any reply
+ * can be steered onto the loopback ring or sent with a loopback source. A
+ * datagram on the loopback ring has this machine's source by design, so the
+ * check depends on the path the datagram came by and not on its source. One
+ * from the wire to 127/8 is dropped too, so that a socket bound to 127.0.0.1
+ * is reachable from this machine alone.
  */
 void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
 {
@@ -107,13 +78,12 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
         return;
     }
 
-    /* Version must be 4. */
     if ((data[0] >> 4) != 4) {
         net_mib.ip_in_hdr_errors++;
         return;
     }
 
-    /* IHL is in 32-bit words; minimum 5 (20 bytes). Options are skipped. */
+    /* IHL counts 32-bit words; 5, 20 bytes, is a header with no options. */
     ihl = data[0] & 0x0F;
     hdr_len = (uint16_t)(ihl * 4);
     if (hdr_len < IP_HDR_SIZE || hdr_len > len) {
@@ -127,14 +97,13 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
         return;
     }
 
-    /* Drop fragments: MF set (0x2000) or a nonzero offset ([12:0]). */
+    /* MF is bit 13 of the field, 0x2000, and the fragment offset bits 12-0. */
     frag = read16be(data + 6);
     if (frag & 0x3FFF) {
         net_mib.ip_in_discards++;
         return;
     }
 
-    /* Verify the header checksum (a valid header sums to zero). */
     if (ip_checksum(data, hdr_len) != 0) {
         net_mib.ip_in_hdr_errors++;
         return;
@@ -146,7 +115,7 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
         if ((dst_ip & 0xF0000000u) != 0xE0000000u) {
             net_mib.ip_in_addr_errors++;
         }
-        return; /* not addressed to us */
+        return;
     }
 
     src_ip = read32be(data + 12);
@@ -187,7 +156,7 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
     }
 }
 
-/* Identification counter for outgoing packets. */
+/* The identification field of the next datagram sent. */
 static uint16_t ip_id_counter = 0;
 
 /* TX assembly buffer at file scope. */
@@ -199,7 +168,8 @@ extern volatile uint32_t kernel_ticks;
  * neighbour queue keeps them, so that the first datagram to a host not yet in
  * the ARP cache leaves when the reply comes and is not lost: a ping's first
  * request, a connect's SYN. A slot is free when its length is 0, or once its
- * datagram has waited longer than any reply takes. */
+ * datagram has waited longer than any reply takes, IP_HOLD_TICKS, three
+ * seconds; `since` is the tick the datagram was put in. */
 #define IP_HOLD_SLOTS 4
 #define IP_HOLD_TICKS 300
 static struct ip_hold {
@@ -212,7 +182,9 @@ static struct ip_hold {
 
 /**
  * Keep the datagram of `len` bytes in `ip_tx_buf` for `hop` on `out`, in a
- * free slot, or in place of the one held longest when none is free.
+ * free slot, or in place of the one held longest when none is free. A
+ * datagram put out of its slot counts in `arp_stats`: as `res_failed` when
+ * it was past its wait, as `unres_discards` when it was not.
  */
 static void ip_hold_put(struct netdev *out, uint32_t hop, uint16_t len)
 {
@@ -269,21 +241,19 @@ void ip_hold_forget(struct netdev *nd)
     }
 }
 
-/* The loopback ring: datagrams addressed to ourselves, copied whole and
+/* The loopback ring: datagrams addressed to this machine, copied whole and
  * delivered by `ip_loop_drain_from`, from the timer tick, the idle wait, or a
- * system call's exit. head is the next slot to fill, tail the next to
- * deliver; both only grow, so head - tail is the queue depth and the indices
- * wrap through the modulo. A full ring drops the datagram, exactly as a full
- * NIC ring would.
+ * system call's exit. `loop_head` is the next slot to fill and `loop_tail`
+ * the next to deliver; both only grow, so their difference is the queue's
+ * depth and a slot is the counter modulo the ring's size. A full ring
+ * refuses the datagram, as a full card's ring would.
  *
- * The ring has room for a send window's worth of full frames, since a local
- * TCP connection fills it with exactly that before the first acknowledgement
- * can come back. */
-/* The ring's slots. This must be a power of two: `loop_head` and `loop_tail`
- * are 32-bit counters that wrap, and a size that does not divide 2^32 moves
- * every slot's place at the wrap, which loses frames and delivers others
- * twice without refusing anything. 64 is also more than the 45 segments a
- * window's worth of data puts in the ring in one system call. */
+ * The slots are a power of two: the two counters are 32 bits and wrap, and a
+ * size that does not divide 2^32 moves every slot's place at the wrap, which
+ * loses frames and delivers others twice without refusing anything. 64 is
+ * more than the 45 full segments of a send window, which a local TCP
+ * connection puts in the ring in one system call, before the first
+ * acknowledgement can come back. */
 #define LOOP_RING_SLOTS 64u
 static uint8_t loop_ring[LOOP_RING_SLOTS][IP_HDR_SIZE + 1500];
 static uint16_t loop_ring_len[LOOP_RING_SLOTS];
@@ -305,14 +275,16 @@ static uint32_t loop_head, loop_tail;
 /**
  * The interface a broadcast to `dst` leaves by: the card whose subnet `dst`
  * is the broadcast address of, or the first card for the limited broadcast,
- * 255.255.255.255, which names no card.
+ * 255.255.255.255, which names no card, and for an address no card's subnet
+ * has. The limited broadcast is judged first, since it is also the subnet
+ * broadcast of a card on 128.0.0.0/1.
  */
 static struct netdev *ip_broadcast_iface(uint32_t dst)
 {
     int i;
 
     if (dst == 0xFFFFFFFFu) {
-        return netdev_first(); /* a card in 128.0.0.0/1 would claim it */
+        return netdev_first();
     }
     for (i = 0; i < netdev_count(); i++) {
         struct netdev *nd = netdev_at(i);
@@ -331,45 +303,6 @@ static struct netdev *ip_broadcast_iface(uint32_t dst)
     return netdev_first();
 }
 
-/**
- * Build an IPv4 datagram around `payload` and hand it to the link layer.
- *
- * The interface is chosen first, since its address is the source the
- * datagram has and the only address a reply can come back to. A subnet's
- * broadcast leaves by the card on that subnet and the limited broadcast by
- * the first card (`ip_broadcast_iface`); any other datagram leaves by the
- * interface `netdev_route` picks, which reaches on-subnet destinations
- * directly and the rest through the gateway. A destination no interface
- * reaches returns `-ENETUNREACH`.
- *
- * A datagram addressed to ourselves, at an interface's address or in 127/8,
- * never touches ARP or the wire: it is copied onto the loopback ring for
- * `ip_loop_drain_from` to deliver later. One to 127/8 needs no route and
- * leaves from 127.0.0.1 unless its sender holds another address of this
- * machine; one from 127/8 to an address no interface here has is refused
- * with `-EINVAL`, since a card would carry a loopback source onto the wire.
- * Delivery is deferred because the stack's shared transmit buffers and
- * protocol state are single-threaded by the interrupt discipline (net.h);
- * handing the datagram straight back to ip_rx here would reenter TCP under
- * the sender's own call frame.
- *
- * A broadcast goes to the wire's all-ones hardware address, with no ARP and
- * no gateway, and only for UDP: a broadcast SYN is one machine asking every
- * machine on the wire to answer, and a broadcast echo request is one packet
- * answered by all of them, at whatever address the sender claimed. Whether a
- * datagram may be broadcast at all is the socket's permission, checked before
- * it gets here. Everything else resolves the next hop's MAC by ARP. On an ARP
- * miss it sends a request, holds this datagram until the reply comes, for at
- * most three seconds (`ip_hold_put`), and returns 0, since a datagram that is
- * lost when no reply comes is not an error a sender is told about.
- *
- * The 1500-byte MTU includes the 20-byte IPv4 header. Payloads above 1480
- * bytes return `-EMSGSIZE` before routing or queueing. Transmit sets DF and
- * does not fragment.
- *
- * The return value is contracted in ip.h: the conditions a caller must hear
- * about are errnos, and the ARP miss is not one of them.
- */
 /**
  * Put the datagram of `total_len` bytes in `ip_tx_buf` on the loopback ring,
  * counted as `lo`'s traffic, as Linux counts it: 0, or -ENOBUFS when the
@@ -424,6 +357,25 @@ int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
     return ip_tx_from(0, dst_ip, proto, payload, plen, ttl);
 }
 
+/**
+ * The interface is chosen first, since its address is the datagram's source
+ * and the only address a reply can come back to; a datagram to 127/8 needs
+ * no route. A datagram to this machine never touches ARP or the wire, and
+ * its delivery waits for the drain: the stack's shared transmit buffers and
+ * protocol state depend on the interrupt discipline of net.h, and a datagram
+ * given straight back to `ip_rx` here would enter TCP again inside the
+ * sender's own call.
+ *
+ * A broadcast goes with no ARP and no gateway, and only for UDP: a broadcast
+ * SYN is one machine asking every machine on the wire to answer, and a
+ * broadcast echo request is one packet answered by all of them, at whatever
+ * address the sender claimed. Whether a datagram may be broadcast at all is
+ * the socket's permission, checked before it gets here. A datagram held for
+ * ARP is reported sent, since a datagram lost when no reply comes is not an
+ * error a sender is told about. A frame `ethernet_tx` finds too long is
+ * EMSGSIZE, which no retry passes, and a frame the driver refused is
+ * ENOBUFS.
+ */
 int ip_tx_from(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
                uint8_t ttl)
 {
@@ -504,7 +456,7 @@ int ip_tx_from(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
         int sent = ethernet_tx(out, dst_mac, ETH_TYPE_IP, ip_tx_buf, total_len);
 
         if (sent == ETHERNET_TX_TOOLONG) {
-            return -EMSGSIZE; /* the frame's own limit, which no retry passes */
+            return -EMSGSIZE;
         }
         if (sent != NETDEV_TX_OK) {
             net_mib.ip_out_discards++;
@@ -548,26 +500,20 @@ uint32_t ip_loop_delivered(int from)
 }
 
 /**
- * Deliver queued loopback datagrams, counting them under `from`, the caller's
- * `IP_LOOP_FROM_*` value.
- *
- * Called from the 100 Hz timer interrupt through `ip_loop_drain`, from the
- * idle wait, and at a system call's exit. Each runs with interrupts off,
- * after any syscall-context sender has left its net_lock critical section,
- * so every delivery sees quiescent stack state: the same discipline under
- * which the NIC hands frames up. A delivery may itself transmit (an ACK, an
- * echo reply) and enqueue onto this ring; the tail advances only after ip_rx
- * returns, so such an enqueue can never overwrite the datagram being read,
- * and a drain called from inside a delivery returns at once, leaving the
- * reply to the drain already running. The budget, four times the ring's
- * slots, bounds one call's work so a reply chain cannot starve the timer.
+ * Each caller has interrupts off and has left any `net_lock` bracket of its
+ * own, so every delivery finds the stack at rest, as a card's interrupt
+ * does. A delivery may itself send onto this ring (an acknowledgement, an
+ * echo reply); the tail advances only after `ip_rx` returns, so such a send
+ * never overwrites the datagram being read. The budget, four times the
+ * ring's slots, bounds one call's work, so that a chain of replies cannot
+ * hold the timer.
  */
 void ip_loop_drain_from(int from)
 {
     unsigned budget = LOOP_RING_SLOTS * 4;
 
     if (loop_draining) {
-        return; /* a reply built inside a delivery: the outer drain takes it */
+        return;
     }
     loop_draining = 1;
     while (loop_tail != loop_head && budget--) {
