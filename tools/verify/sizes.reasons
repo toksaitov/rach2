@@ -305,57 +305,56 @@ tests/host/acpi_hosttest.c:madt_rows complexity 38 a test's rows, each a case, r
 tests/host/acpi_hosttest.c:qemu_pc_rows complexity 31 a test's rows, each a case, read as one table
 tests/host/acpi_hosttest.c:qemu_q35_rows complexity 28 a test's rows, each a case, read as one table
 
-tests/host/ahci_hosttest.c:main lines 176 a test's rows, each a case, read as one table
+tests/host/ahci_hosttest.c:main lines 147 a test's rows, each a case, read as one table
 
-tests/host/ata_hosttest.c:main lines 156 a test's rows, each a case, read as one table
+tests/host/ata_hosttest.c:main lines 129 a test's rows, each a case, read as one table
 
 tests/host/bcache_hosttest.c:main complexity 115 a test's rows, each a case, read as one table
-tests/host/bcache_hosttest.c:main lines 679 a test's rows, each a case, read as one table
+tests/host/bcache_hosttest.c:main lines 595 a test's rows, each a case, read as one table
 
 
 tests/host/bootctl_hosttest.c:main complexity 43 a test's rows, each a case, read as one table
-tests/host/bootctl_hosttest.c:main lines 558 a test's rows, each a case, read as one table
+tests/host/bootctl_hosttest.c:main lines 454 a test's rows, each a case, read as one table
 
 tests/host/dhcpmsg_hosttest.c:reply params 7 a test's rows, each a case, read as one table
 
 tests/host/diskinfo_hosttest.c:main complexity 33 a test's rows, each a case, read as one table
-tests/host/diskinfo_hosttest.c:main lines 299 a test's rows, each a case, read as one table
+tests/host/diskinfo_hosttest.c:main lines 262 a test's rows, each a case, read as one table
 
 tests/host/e1000_hosttest.c:main complexity 63 a test's rows, each a case, read as one table
 tests/host/e1000_hosttest.c:main lines 408 a test's rows, each a case, read as one table
 
-tests/host/exfat_hosttest.c:dirty_rows lines 170 a test's rows, each a case, read as one table
+tests/host/exfat_hosttest.c:dirty_rows lines 165 a test's rows, each a case, read as one table
 tests/host/exfat_hosttest.c:dirty_rows nesting 5 a test's rows, each a case, read as one table
-tests/host/exfat_hosttest.c:matrix_pass lines 108 a test's rows, each a case, read as one table
 tests/host/exfat_hosttest.c:oracle_ok complexity 42 a test's rows, each a case, read as one table
 tests/host/exfat_hosttest.c:well_formed_rows complexity 41 a test's rows, each a case, read as one table
 tests/host/exfat_hosttest.c:write_rows complexity 54 a test's rows, each a case, read as one table
-tests/host/exfat_hosttest.c:write_rows lines 221 a test's rows, each a case, read as one table
+tests/host/exfat_hosttest.c:write_rows lines 204 a test's rows, each a case, read as one table
 
 tests/host/ext2_hosttest.c:dirty_rows complexity 37 a test's rows, each a case, read as one table
-tests/host/ext2_hosttest.c:dirty_rows lines 143 a test's rows, each a case, read as one table
-tests/host/ext2_hosttest.c:matrix_rows lines 119 a test's rows, each a case, read as one table
+tests/host/ext2_hosttest.c:dirty_rows lines 133 a test's rows, each a case, read as one table
+tests/host/ext2_hosttest.c:matrix_rows lines 101 a test's rows, each a case, read as one table
 tests/host/ext2_hosttest.c:oracle_after complexity 30 a test's rows, each a case, read as one table
 tests/host/ext2_hosttest.c:publication_ok nesting 5 a test's rows, each a case, read as one table
 tests/host/ext2_hosttest.c:read_rows complexity 57 a test's rows, each a case, read as one table
-tests/host/ext2_hosttest.c:read_rows lines 138 a test's rows, each a case, read as one table
+tests/host/ext2_hosttest.c:read_rows lines 135 a test's rows, each a case, read as one table
 tests/host/ext2_hosttest.c:refusal_rows complexity 69 a test's rows, each a case, read as one table
-tests/host/ext2_hosttest.c:refusal_rows lines 373 a test's rows, each a case, read as one table
-tests/host/ext2_hosttest.c:refusal_write_rows lines 128 a test's rows, each a case, read as one table
+tests/host/ext2_hosttest.c:refusal_rows lines 360 a test's rows, each a case, read as one table
+tests/host/ext2_hosttest.c:refusal_write_rows lines 124 a test's rows, each a case, read as one table
 
 tests/host/fat32_hosttest.c:long_rows complexity 53 a test's rows, each a case, read as one table
-tests/host/fat32_hosttest.c:long_rows lines 181 a test's rows, each a case, read as one table
+tests/host/fat32_hosttest.c:long_rows lines 175 a test's rows, each a case, read as one table
 tests/host/fat32_hosttest.c:well_formed_rows complexity 72 a test's rows, each a case, read as one table
-tests/host/fat32_hosttest.c:well_formed_rows lines 214 a test's rows, each a case, read as one table
+tests/host/fat32_hosttest.c:well_formed_rows lines 203 a test's rows, each a case, read as one table
 tests/host/fat32_hosttest.c:write_rows complexity 70 a test's rows, each a case, read as one table
-tests/host/fat32_hosttest.c:write_rows lines 206 a test's rows, each a case, read as one table
+tests/host/fat32_hosttest.c:write_rows lines 200 a test's rows, each a case, read as one table
 
 tests/host/fatname_hosttest.c:main complexity 59 a test's rows, each a case, read as one table
-tests/host/fatname_hosttest.c:main lines 126 a test's rows, each a case, read as one table
+tests/host/fatname_hosttest.c:main lines 122 a test's rows, each a case, read as one table
 
-tests/host/gpt_hosttest.c:main lines 186 a test's rows, each a case, read as one table
+tests/host/gpt_hosttest.c:main lines 168 a test's rows, each a case, read as one table
 
-tests/host/grubslot_hosttest.c:main lines 240 a test's rows, each a case, read as one table
+tests/host/grubslot_hosttest.c:main lines 153 a test's rows, each a case, read as one table
 
 tests/host/hid_hosttest.c:main lines 124 a test's rows, each a case, read as one table
 
@@ -373,7 +372,7 @@ tests/host/krffs_hosttest.c:every_stop_file_is_whole params 8 a test's rows, eac
 tests/host/krffs_hosttest.c:every_stop_is_zero_filled nesting 6 a test's rows, each a case, read as one table
 tests/host/krffs_hosttest.c:every_stop_keeps_its_bytes nesting 6 a test's rows, each a case, read as one table
 tests/host/krffs_hosttest.c:main complexity 59 a test's rows, each a case, read as one table
-tests/host/krffs_hosttest.c:main lines 544 a test's rows, each a case, read as one table
+tests/host/krffs_hosttest.c:main lines 476 a test's rows, each a case, read as one table
 
 tests/host/kstring_hosttest.c:main complexity 70 a test's rows, each a case, read as one table
 tests/host/kstring_hosttest.c:main lines 171 a test's rows, each a case, read as one table
@@ -389,28 +388,28 @@ tests/host/mbinfo_hosttest.c:row_framebuffers lines 143 a test's rows, each a ca
 tests/host/mbinfo_hosttest.c:row_multiboot complexity 32 a test's rows, each a case, read as one table
 tests/host/mbinfo_hosttest.c:row_multiboot lines 117 a test's rows, each a case, read as one table
 
-tests/host/mbr_hosttest.c:main lines 178 a test's rows, each a case, read as one table
+tests/host/mbr_hosttest.c:main lines 165 a test's rows, each a case, read as one table
 
 tests/host/mkexfatfixture.c:build complexity 69 a fixture builder, the volume written in on-disk order
-tests/host/mkexfatfixture.c:build lines 421 a fixture builder, the volume written in on-disk order
-tests/host/mkexfatfixture.c:build_volume_image lines 139 a fixture builder, the volume written in on-disk order
+tests/host/mkexfatfixture.c:build lines 375 a fixture builder, the volume written in on-disk order
+tests/host/mkexfatfixture.c:build_volume_image lines 127 a fixture builder, the volume written in on-disk order
 tests/host/mkexfatfixture.c:check_boot complexity 42 a fixture builder, the volume written in on-disk order
 tests/host/mkexfatfixture.c:check_boot lines 134 a fixture builder, the volume written in on-disk order
 tests/host/mkexfatfixture.c:check_dir complexity 76 a fixture builder, the volume written in on-disk order
-tests/host/mkexfatfixture.c:check_dir lines 291 a fixture builder, the volume written in on-disk order
+tests/host/mkexfatfixture.c:check_dir lines 284 a fixture builder, the volume written in on-disk order
 tests/host/mkexfatfixture.c:check_dir nesting 6 a fixture builder, the volume written in on-disk order
 tests/host/mkexfatfixture.c:load_objects complexity 38 a fixture builder, the volume written in on-disk order
-tests/host/mkexfatfixture.c:load_objects lines 114 a fixture builder, the volume written in on-disk order
+tests/host/mkexfatfixture.c:load_objects lines 113 a fixture builder, the volume written in on-disk order
 tests/host/mkexfatfixture.c:load_objects nesting 6 a fixture builder, the volume written in on-disk order
 tests/host/mkexfatfixture.c:read_path complexity 33 a fixture builder, the volume written in on-disk order
 tests/host/mkexfatfixture.c:set_build params 10 a fixture builder, the volume written in on-disk order
 
 tests/host/mkfatfixture.c:build_fat complexity 78 a fixture builder, the volume written in on-disk order
-tests/host/mkfatfixture.c:build_fat lines 444 a fixture builder, the volume written in on-disk order
+tests/host/mkfatfixture.c:build_fat lines 390 a fixture builder, the volume written in on-disk order
 tests/host/mkfatfixture.c:check_image complexity 29 a fixture builder, the volume written in on-disk order
 tests/host/mkfatfixture.c:chk_bpb complexity 31 a fixture builder, the volume written in on-disk order
 tests/host/mkfatfixture.c:chk_dir complexity 56 a fixture builder, the volume written in on-disk order
-tests/host/mkfatfixture.c:chk_dir lines 187 a fixture builder, the volume written in on-disk order
+tests/host/mkfatfixture.c:chk_dir lines 181 a fixture builder, the volume written in on-disk order
 tests/host/mkfatfixture.c:chk_dir nesting 5 a fixture builder, the volume written in on-disk order
 
 tests/host/modlayout_hosttest.c:main lines 154 a test's rows, each a case, read as one table
@@ -432,10 +431,9 @@ tests/host/netdev_hosttest.c:main lines 131 a test's rows, each a case, read as 
 
 tests/host/packet_hosttest.c:main lines 132 a test's rows, each a case, read as one table
 
-tests/host/pagecache_hosttest.c:main lines 121 a test's rows, each a case, read as one table
 
 tests/host/partition_hosttest.c:main complexity 41 a test's rows, each a case, read as one table
-tests/host/partition_hosttest.c:main lines 178 a test's rows, each a case, read as one table
+tests/host/partition_hosttest.c:main lines 165 a test's rows, each a case, read as one table
 
 tests/host/pcimsi_hosttest.c:main complexity 37 a test's rows, each a case, read as one table
 tests/host/pcimsi_hosttest.c:main lines 167 a test's rows, each a case, read as one table
@@ -467,10 +465,8 @@ tests/host/rtc_hosttest.c:main lines 169 a test's rows, each a case, read as one
 tests/host/rtl8168_hosttest.c:main complexity 98 a test's rows, each a case, read as one table
 tests/host/rtl8168_hosttest.c:main lines 689 a test's rows, each a case, read as one table
 
-tests/host/sectorcopy_hosttest.c:check_copy lines 118 a test's rows, each a case, read as one table
 
 tests/host/synthfs_hosttest.c:main complexity 41 a test's rows, each a case, read as one table
-tests/host/synthfs_hosttest.c:main lines 101 a test's rows, each a case, read as one table
 
 tests/host/syscall_hosttest.c:clock_ids complexity 32 a test's rows, each a case, read as one table
 tests/host/syscall_hosttest.c:clock_sleeps lines 104 a test's rows, each a case, read as one table
