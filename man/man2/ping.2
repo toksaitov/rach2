@@ -50,7 +50,8 @@ Operation 0x1000 sends no data with the hop limit 64.
 The call sends an ICMP echo request and waits for a reply.
 It makes at most four attempts, each with a deadline of 100 ticks
 or one second.
-The first attempt may populate the ARP cache without sending the echo.
+A request to a next hop not in the ARP cache waits for the ARP reply
+and is sent when it comes.
 The caller sleeps while waiting, allowing other processes to run.
 .Pp
 Only one call may be in progress on the machine.
@@ -73,7 +74,8 @@ Each tick is 10 ms; a result of zero is valid.
 Earlier attempts are not included.
 Operation 0x1001 returns the length of the reply's ICMP message, its
 8-byte header and its data, which a peer may make other than the
-request's.
+request's, in bits 0 to 15, and the hop limit of the reply's IPv4
+header in bits 16 to 23.
 On failure,
 .Fn syscall
 returns -1 and sets

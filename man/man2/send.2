@@ -147,8 +147,12 @@ interface's address as its source; the limited broadcast,
 Flags do not affect datagram sends.
 .Pp
 The stack does not fragment outgoing datagrams.
-An unresolved next-hop hardware address causes an ARP request and the
-current datagram is discarded, although the send reports success.
+A datagram to a next hop whose hardware address is not in the ARP cache
+causes an ARP request and waits for the reply in one of four slots kept
+for the whole machine, for at most 300 ticks; it is sent when the reply
+comes, and the send reports success at once.
+When the four slots are full, the datagram that has waited longest is
+discarded.
 .Ss Raw and packet sockets
 Flags do not affect raw or packet sends.
 A raw ICMP send requires an explicit IPv4 destination.
