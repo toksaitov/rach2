@@ -232,8 +232,8 @@ static int user_check(const struct user_arch *a, const char *name, const unsigne
     e_phnum = r16(d + (wide ? 56 : 44));
     if (e_type != ET_EXEC)
         problem(name,
-                "e_type is %u, not ET_EXEC; this kernel loads no "
-                "other kind",
+                "e_type is %u, not ET_EXEC, which the images require "
+                "of every program",
                 e_type);
     if (e_machine != a->machine)
         problem(name, "e_machine is %u, not %s", e_machine, a->machine_name);
@@ -263,9 +263,6 @@ static int user_check(const struct user_arch *a, const char *name, const unsigne
         if (p_type != PT_LOAD)
             continue;
         loads++;
-        if (loads > ELF_MAX_SEGS) {
-            /* Reported once, after the loop, with the count. */
-        }
         if (p_filesz > p_memsz)
             problem(name, "a segment's file size exceeds its memory size");
         if (p_offset > wrap - p_filesz || p_vaddr > wrap - p_memsz) {
