@@ -51,13 +51,15 @@ Its path is the one the descriptor's
 .Li *at
 calls resolve against: a directory of a file system that rebuilds its
 path is named where it is now, after a rename too.
-A directory a descriptor refers to is not removed, as
+On KRFFS, FAT32 and exFAT a directory a descriptor refers to is not
+removed, as
 .Xr rmdir 2
-says, except on tmpfs, where
+says.
+ext2 and tmpfs remove it, and
 .Fn fchdir
 of a directory removed since returns
-.Er ENOENT
-and Linux enters the removed directory.
+.Er ENOENT ,
+where Linux enters the removed directory.
 A descriptor on anything but a directory returns
 .Er ENOTDIR .
 Entering takes search permission on the directory, as
@@ -79,14 +81,13 @@ and
 .Pa /proc
 take no reference.
 KRFFS, the boot root and a mounted volume, counts no reference to a node;
-the working directory keeps the mount and the node all the same, and
+the working directory keeps the mount and the node all the same.
 .Xr rmdir 2
 refuses a directory that is a process's working directory with
-.Er EBUSY ,
-as ext2, FAT32 and exFAT do; tmpfs removes it, and the working directory
-keeps its path.
-Linux removes it and leaves the working directory on the removed
-directory.
+.Er EBUSY
+on KRFFS, FAT32 and exFAT.
+ext2 and tmpfs remove it, as Linux does, and leave the working directory
+on the removed directory, with its path kept.
 On a mounted KRFFS volume
 .Fn chdir
 keeps the directory from removal, by an open record as an
@@ -184,7 +185,7 @@ The path is empty or a component or synthetic process directory is missing.
 A symbolic link has an empty target.
 The directory
 .Fn fchdir
-names is outside the process's root, or tmpfs removed it.
+names is outside the process's root, or ext2 or tmpfs removed it.
 .It Er ENOMEM
 Path lookup cannot allocate a file-system node, a mounted KRFFS volume
 cannot allocate the open record that keeps the directory during the

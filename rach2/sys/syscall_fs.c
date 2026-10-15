@@ -1322,8 +1322,8 @@ static int names_tree_root(const char *path)
  * root of the mount table, with `*outside` set, when `outside` is not NULL.
  * Returns 0, -ENOTDIR for a descriptor on anything but a directory, -EBADF
  * for a boot-root directory that no longer resolves to its node, -ENOENT for
- * one outside the process's root without `outside` or one tmpfs removed, or
- * -ENAMETOOLONG.
+ * one outside the process's root without `outside` or one ext2 or tmpfs
+ * removed, or -ENAMETOOLONG.
  */
 static int fd_dir_path(fd_entry_t *entry, char *out, uint32_t cap, int *outside)
 {
@@ -4993,10 +4993,10 @@ long sys_chdir(isr_params_t *params)
  * The working directory's path is the one the descriptor's `*at` calls
  * resolve against (`fd_dir_path`), so it follows a directory a type can name
  * after a rename; a descriptor on anything but a directory is -ENOTDIR, and
- * one on a directory tmpfs removed since is -ENOENT. Entering takes search
- * permission on the directory, which a synthetic one grants everybody, and
- * the mount hold chdir takes. A descriptor opened with O_PATH does as well as
- * any other.
+ * one on a directory ext2 or tmpfs removed since is -ENOENT. Entering takes
+ * search permission on the directory, which a synthetic one grants
+ * everybody, and the mount hold chdir takes. A descriptor opened with O_PATH
+ * does as well as any other.
  */
 long sys_fchdir(isr_params_t *params)
 {
