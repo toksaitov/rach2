@@ -1,22 +1,24 @@
+/*
+ * n_tty.h: the N_TTY line discipline, the canonical and raw input editor and
+ * the output processor of a terminal, with the kernel termios it works from.
+ *
+ * The discipline has no kernel dependencies: its state is one fixed-size
+ * structure, and echo and output leave through a byte sink the caller
+ * supplies, so it compiles freestanding and hosted. The kernel points the sink
+ * at the console (the screen and the serial port) or at a pty's master ring
+ * and acts on the signals it recognizes; the host test collects the sink's
+ * bytes in a buffer.
+ */
 #ifndef _N_TTY_H_
 #define _N_TTY_H_
 
 #include "../lib/kint.h"
 
 /*
- * The N_TTY line discipline: the cooked/raw input editor and output
- * processor of a terminal. It is pure logic over a fixed-size state, with
- * echo and output emitted through a caller-supplied byte sink, so it
- * compiles freestanding and hosted. The kernel wires the sink to the console
- * (VGA + serial) or to a pty's master ring and acts on the recognized
- * signals; the host test captures the sink into a buffer.
- */
-
-/*
  * Kernel termios: the TCGETS/TCSETS struct, the 19-c_cc prefix of musl's
- * larger userspace struct termios (NCCS=32 plus speeds). The kernel
- * reads/writes only this prefix; baud lives in c_cflag, and the termios2 of
- * TCGETS2 adds the speeds its codes name. 36 bytes.
+ * larger userspace struct termios (NCCS=32 plus speeds). The kernel reads and
+ * writes only this prefix; the baud rate is a code in c_cflag, and the
+ * termios2 of TCGETS2 adds the speeds its codes stand for. 36 bytes.
  */
 #define KNCCS 19
 struct ktermios {
@@ -28,8 +30,8 @@ struct ktermios {
     uint8_t c_cc[KNCCS];
 };
 
-/* c_cc indices (i386/asm-generic; verified against the vendored musl
- * headers). */
+/* c_cc indices: Linux's values on i386 and x86-64, which musl's headers
+ * use. */
 #define VINTR   0
 #define VQUIT   1
 #define VERASE  2
@@ -100,6 +102,8 @@ struct n_tty {
     unsigned char line[N_TTY_LINE_MAX]; /* the canonical line under edit */
     int line_len;
     unsigned char rq[N_TTY_READ_MAX]; /* ring of bytes ready for read() */
+    /* 1 at the slot of a committed line's last byte, where a canonical read
+     * stops; 0 elsewhere. */
     unsigned char rq_end[N_TTY_READ_MAX];
     unsigned int rq_head; /* monotonic; slot = head & (SIZE-1) */
     unsigned int rq_tail;
@@ -108,38 +112,98 @@ struct n_tty {
     struct n_tty_counters counters;
 };
 
-/** Reset to default cooked-mode termios and empty buffers. */
+/**
+ * Reset `t` to the default canonical termios, empty buffers and zeroed
+ * counters. The defaults are a standard tty's: ICRNL input, OPOST and ONLCR
+ * output, 38400 baud with eight-bit characters, ISIG and ICANON with ECHO,
+ * ECHOE, ECHOK and ECHOCTL, the conventional control characters (^C, ^\, DEL,
+ * ^U, ^D, ^Z, ^W) and VMIN 1.
+ */
 void n_tty_init(struct n_tty *t);
 
-/** Process one received input byte; sets `*signo` to a NTTY_SIG* code or 0. */
+/**
+ * Process one received input byte.
+ *
+ * Applies the input flags (ISTRIP, IGNCR, ICRNL, INLCR), then the ISIG signal
+ * characters, then either canonical line editing (ERASE, WERASE, KILL, EOF,
+ * newline and EOL) or, in raw mode, queues the byte. Echo and any output go
+ * through `out`. `*signo` is set to an NTTY_SIG* code when a signal character
+ * fires, else 0.
+ *
+ * A signal character is echoed and discards all unread input (the line under
+ * edit, committed lines and a pending EOF), so input typed before the signal
+ * does not survive it, as Linux does without NOFLSH. A `c_cc` entry of 0 is
+ * disabled (the _POSIX_VDISABLE convention) and never matches a NUL byte.
+ * VEOF commits the line so far; on an empty line it marks end of file at the
+ * current stream position, so it is read back in order with the input around
+ * it. An ordinary character is dropped when the line has one byte left, which
+ * is kept for the newline or VEOL that ends it.
+ */
 void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx, int *signo);
 
-/** Nonzero when a read would not block, 0 when it would. */
+/**
+ * Whether a read would return now: nonzero if so, 0 if it would block.
+ *
+ * In canonical mode any queued byte is readable, and a pending EOF is too (the
+ * read returns 0). In raw mode a pending EOF (a hangup: the master closed) is
+ * readable as well, so a blocked reader drains the queue and then returns 0
+ * instead of waiting for VMIN bytes that will never arrive; otherwise VMIN 0
+ * never blocks and a VMIN > 0 read waits until at least VMIN bytes are there.
+ *
+ * VTIME is stored (a TCSETS with it does not fail) but not implemented: a
+ * program that sets VMIN > 0 with VTIME > 0 gets a plain blocking read for
+ * VMIN bytes, without the inter-byte timeout that would let it return short.
+ */
 int n_tty_readable(const struct n_tty *t);
 
-/** Whether the discipline can take a whole line more without dropping. */
+/**
+ * Whether the discipline can take a whole line more without dropping: the
+ * bytes it holds plus N_TTY_LINE_MAX fit the read queue. A feeder that stops
+ * when this is false leaves its bytes where they are, and the sender waits
+ * instead of losing them.
+ */
 int n_tty_has_room(const struct n_tty *t);
 
 /** The bytes the discipline holds, the read queue and the line under edit:
  * what `n_tty_has_room` counts as taken. */
 unsigned int n_tty_held(const struct n_tty *t);
 
-/** Install `tio`. Returns nonzero when a read would not block, since a
- * partial canonical line is readable once ICANON is off. */
+/** Install `tio`. Returns nonzero when a read would not block, so the caller
+ * can wake a reader the change made ready: a partial canonical line is
+ * readable once ICANON is off. */
 int n_tty_set_termios(struct n_tty *t, const struct ktermios *tio);
 
-/** Discard every unread byte, the partial line and a pending EOF. */
+/** Discard every unread byte, the partial line and a pending EOF, counting
+ * them in `flush_bytes`. */
 void n_tty_flush(struct n_tty *t);
 
-/** Copy available input into `buf`; returns the byte count, 0 at
- * end-of-file. */
+/**
+ * Copy available input into `buf`; returns the byte count, 0 at end of file.
+ *
+ * A canonical read returns at most one line and stops at a pending EOF, which
+ * it reports as a 0-length read once the head reaches the EOF position, so
+ * input committed before the EOF is returned first and input committed after
+ * it next. A raw read returns up to `count` bytes with no line structure: the
+ * queue, then a partial canonical line a mode switch could not queue.
+ */
 int n_tty_read(struct n_tty *t, unsigned char *buf, int count);
 
-/** Count of bytes queued for reading (the TIOCINQ value); a canonical read
- * returns only the first line of them. */
+/**
+ * Count of bytes queued for reading (the TIOCINQ value).
+ *
+ * In canonical mode only completed lines reach the queue (the line under edit
+ * is not counted), and a read returns only the first of them; a pending EOF
+ * has no bytes, so EOF alone counts as 0. In raw mode the count includes a
+ * partial line a mode switch could not queue.
+ */
 int n_tty_inq(const struct n_tty *t);
 
-/** Emit one output byte through OPOST processing. */
+/**
+ * Emit one output byte through OPOST processing.
+ *
+ * With OPOST set, ONLCR maps `\n` to CR LF and OCRNL maps `\r` to `\n`; any
+ * other byte, or output with OPOST clear, passes through unchanged.
+ */
 void n_tty_output(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx);
 
 #endif /* _N_TTY_H_ */

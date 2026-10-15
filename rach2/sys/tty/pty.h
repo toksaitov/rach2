@@ -1,27 +1,22 @@
-#ifndef _PTY_H_
-#define _PTY_H_
-
-#include "../lib/kint.h"
-#include "../proc/wait_queue.h"
-#include "tty.h"
-
 /*
- * Pseudo-terminals: the mechanism a network login (dropbear) uses to give a
- * remote user a real terminal. A pty is a pair of endpoints:
+ * pty.h: pseudo-terminals, the /dev/ptmx and /dev/pts/N pairs a network login
+ * (dropbear) uses to give a remote user a terminal.
  *
- *   * the SLAVE is a full tty (a struct tty with the N_TTY line discipline): a
+ * A pty is a pair of ends:
+ *
+ *   * the slave is a full tty (a struct tty with the N_TTY line discipline): a
  *     process opens /dev/pts/N, makes it its controlling terminal, and reads
- *     cooked lines / writes output exactly as it would the console;
- *   * the MASTER is what the login server drives: it opens /dev/ptmx, writes
- *     the bytes the remote user typed (which the slave discipline cooks and
- *     echoes) and reads back the slave's output (and that echo).
+ *     cooked lines and writes output as it would on the console;
+ *   * the master is the end the login server holds: it opens /dev/ptmx,
+ *     writes the bytes the remote user typed (which the slave discipline cooks
+ *     and echoes) and reads back the slave's output (and that echo).
  *
  * Data flow:
  *   master write(b) -> tty_input_char(&slave, b)   (discipline cooks + echoes)
  *   slave  read     <- the cooked line
  *   slave  write(b) -> tty_write(&slave)           (OPOST/ONLCR output)
  *   master read     <- the slave output + the echo (the m_buf ring below)
- * Both the slave's echo and its output leave through the slave's SINK, which
+ * Both the slave's echo and its output leave through the slave's sink, which
  * pushes into m_buf; the master reads m_buf. The slave has no polled input
  * source (pump == NULL); it is fed by master writes, not a serial port, so the
  * console's interrupt-side drain never touches a pty.
@@ -32,6 +27,12 @@
  * every tty service (termios, winsize, ISIG, sessions/job-control) on its
  * struct tty.
  */
+#ifndef _PTY_H_
+#define _PTY_H_
+
+#include "../lib/kint.h"
+#include "../proc/wait_queue.h"
+#include "tty.h"
 
 #define PTY_BUF_SIZE 4096 /* slave->master ring; power of two for the mask */
 
@@ -47,6 +48,7 @@ struct pty {
     unsigned char m_buf[PTY_BUF_SIZE]; /* slave output + echo, read by the master */
     uint32_t m_head;                   /* bytes consumed by the master read end */
     uint32_t m_tail;                   /* bytes produced by the slave sink */
+    /* The master's readers, writers and pollers; the slave's space_wq. */
     wait_queue_t m_read_wq;
 
     int master_open; /* the master descriptor is open */
@@ -56,8 +58,9 @@ struct pty {
     int writing;     /* a slave write is in progress, which no other enters */
 
     /* Ownership of the slave (/dev/pts/N), the state a login server sets
-     * with chown/chmod before handing the terminal to the user. Stamped from
-     * the opener's effective ids at allocation; stat reports it. */
+     * with chown/chmod before handing the terminal to the user. Set at
+     * allocation to the opener's effective uid, group PTY_GID and mode 0620;
+     * stat reports it. */
     uint32_t uid;
     uint32_t gid;
     uint16_t mode; /* permission bits only; the type is S_IFCHR */
@@ -68,56 +71,67 @@ struct pty {
     uint32_t mtime;
 };
 
-/* Empty the list of live ptys; called once at boot. Each pair is allocated
+/** Empty the list of live ptys; called once at boot. Each pair is allocated
  * from the heap when its master opens. */
 void pty_init_pool(void);
 
-/*
- * open("/dev/ptmx"): allocate a pty pair and install the MASTER endpoint on a
+/**
+ * open("/dev/ptmx"): allocate a pty pair and install the master end on a
  * fresh descriptor (locked until unlockpt). Returns the master fd (>= 0), or
- * -errno (-ENFILE if the heap has no room for a pair, -EMFILE if the fd table
- * is full, -ENOMEM if the heap has no room for the descriptor).
+ * -errno (-ESRCH with no current process, -ENFILE if the heap has no room for
+ * a pair, -EMFILE if the fd table is full, -ENOMEM if the heap has no room
+ * for the descriptor).
  */
 int pty_open_master(int flags);
 
-/*
- * open("/dev/pts/N"): install the SLAVE endpoint of pty N on a fresh
- * descriptor. Returns the slave fd (>= 0), or -errno (-ENXIO if N is
- * unallocated, -EIO if the pair is still locked, -EMFILE if the fd table is
- * full, -ENOMEM if the heap has no room for the descriptor). The descriptor
- * has only the access the open mode asks for, also when /dev/tty resolves
- * to the slave. As on Linux, a session leader without a controlling
- * terminal that opens a slave no session has, without O_NOCTTY, makes it
- * its controlling terminal, with its own group in the foreground; BusyBox's
- * telnetd relies on this, where an ssh server uses TIOCSCTTY.
+/**
+ * open("/dev/pts/N"): install the slave end of pty N on a fresh descriptor.
+ * Returns the slave fd (>= 0), or -errno (-ESRCH with no current process,
+ * -ENXIO if no pty N has its master open, -EIO if the pair is still locked,
+ * -EMFILE if the fd table is full, -ENOMEM if the heap has no room for the
+ * descriptor). The descriptor has only the access of its open mode, also
+ * when /dev/tty resolves to the slave. As on Linux, a session leader
+ * without a controlling terminal that opens a slave no session has, without
+ * O_NOCTTY, makes it its controlling terminal, with its own group in the
+ * foreground; BusyBox's telnetd relies on this, where an ssh server uses
+ * TIOCSCTTY.
  */
 int pty_open_slave(int index, int flags);
 
 /** Index of the pty whose slave is session `sid`'s controlling terminal, or
- * -1. */
+ * -1 (always for `sid` 0). /dev/tty opens the caller's controlling pty
+ * through this. */
 int pty_session_slave(int sid);
 
-/** Atomically make `keep` the sole controlling terminal of session `sid`. */
+/**
+ * Make `keep` the sole controlling terminal of session `sid`, with `pgid` in
+ * the foreground, and release every other terminal the session controls (the
+ * console and any other pty slave), in one interrupts-off region. Does
+ * nothing when `sid` is 0 or `keep` is NULL. The caller has authorized the
+ * claim: TIOCSCTTY checks leadership and ownership, and the implicit claims
+ * by a read or an open require the terminal to be free and the caller a
+ * session leader.
+ */
 void tty_make_sole_ctty(struct tty *keep, int sid, int pgid);
 
-/* The slave tty behind a FD_TYPE_PTS descriptor (for the shared tty ioctls), or
- * NULL if e is not a pty slave. */
+/** The slave tty behind a FD_TYPE_PTS descriptor (for the shared tty ioctls),
+ * or NULL if e is not a pty slave. */
 struct tty *pty_slave_tty(struct fd_entry *e);
 
-/* The slave index N (in /dev/pts/N) behind a FD_TYPE_PTS descriptor, or -1 if e
- * is not a pty slave; lets /proc/<pid>/fd readlink and fstat report the right
- * name. */
+/** The slave index N (in /dev/pts/N) behind a FD_TYPE_PTS descriptor, or -1 if
+ * e is not a pty slave; lets /proc/<pid>/fd readlink and fstat report the
+ * right name. */
 int pty_slave_index(struct fd_entry *e);
 
-/* Whether pty `index` exists and its master is open (for /dev/pts
+/** Whether pty `index` exists and its master is open (for /dev/pts
  * stat/getdents). */
 int pty_is_allocated(int index);
 
 /** One past the highest index a live pty has, for a walk of `/dev/pts`. */
 int pty_index_limit(void);
 
-/* The allocated pty behind /dev/pts/N, or NULL: the ownership fields for the
- * stat/chown/chmod paths. */
+/** The pty behind /dev/pts/N when its master is open, or NULL: the ownership
+ * fields for the stat/chown/chmod paths. */
 struct pty *pty_get(int index);
 
 /**
@@ -129,8 +143,12 @@ struct pty *pty_get(int index);
  */
 int tty_controlling(int sid, uint32_t *dev, int *fg_pgid);
 
-/** Release any pty slave controlled by dying session leader `sid` (sid ==
- * pid). */
+/**
+ * Release every pty slave whose session is `sid` when `sid` is `pid`, a
+ * session leader that is ending, so a later session can claim the same
+ * /dev/pts/N with TIOCSCTTY instead of finding a dead owner. The exit paths
+ * call it beside the console's release.
+ */
 void pty_release_leader(int sid, int pid);
 
 #endif /* _PTY_H_ */

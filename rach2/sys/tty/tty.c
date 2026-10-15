@@ -1,13 +1,13 @@
 /*
- * tty.c: the terminal object, an N_TTY line discipline over a wait-queue of
- * readers, plus the one console_tty wired to the VGA screen and the serial
- * port.
+ * tty.c: the terminal object, an N_TTY line discipline with a queue of
+ * waiting readers, and console_tty, which writes to the screen (VGA text or
+ * the framebuffer console, display/fbcon.c) and to the serial port.
  *
- * The discipline (n_tty.c) is pure and host-tested; this file is the kernel
- * glue that blocks/wakes readers, posts ISIG signals, and drives real
- * hardware. A reader parks in tty_read until tty_input_char (from the
- * keyboard IRQ or the serial pump) completes a line; output and echo flow
- * through a per-tty sink.
+ * The discipline (n_tty.c) has no kernel dependencies and is host-tested;
+ * this file makes readers wait and wakes them, posts the signals the
+ * discipline recognizes, and drains the console's serial ring. A reader waits
+ * in tty_read until tty_input_char (from the keyboard drivers or the serial
+ * drain) completes a line; output and echo leave through each tty's sink.
  */
 
 #include "tty.h"
@@ -33,19 +33,14 @@
 #define TTY_PUMP_BUDGET 64
 #define TTY_ECHO_MAX    64
 
-/* A sink that discards: a tty initialized without one still has a valid (never
- * NULL) sink, so the discipline's echo/output never jumps through NULL. */
+/** A sink that discards: tty_init installs it when the caller gives none, so
+ * the discipline's echo and output never call through NULL. */
 static void null_sink(void *ctx, unsigned char c)
 {
     (void)ctx;
     (void)c;
 }
 
-/**
- * Initialize a terminal with default termios, window size and input wait.
- * An input producer may set `space_wq` to be woken for room: after a flush,
- * a termios change, or an input byte that took bytes out of the discipline.
- */
 void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx)
 {
     n_tty_init(&t->ldisc);
@@ -62,7 +57,8 @@ void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx)
     t->fg_pgid = 0;
 }
 
-/** Post a signal to every live, user member of process group `pgid`. */
+/** A live user process is one that is not a zombie and still has an address
+ * space (space_root), which a kernel thread and a process in teardown lack. */
 void tty_signal_group(int pgid, int signo)
 {
     process_t *p;
@@ -89,27 +85,17 @@ static void tty_deliver_signal(struct tty *t, int signo)
     tty_signal_group(t->fg_pgid, signo);
 }
 
-/**
- * Report whether the caller is a background process on this tty.
- *
- * True when this tty is the caller's controlling terminal (same session) but
- * the caller's group is not the foreground group: a background process whose
- * tty I/O must be gated by SIGTTIN/SIGTTOU.
- */
 int tty_is_background(struct tty *t, int sid, int pgid)
 {
     return t->sid != 0 && t->sid == sid && t->fg_pgid != 0 && t->fg_pgid != pgid;
 }
 
 /**
- * Publish the controlling session and foreground group as one indivisible step.
- *
- * The interrupt-side drain (tty_console_poll) gates on sid != 0 and then
- * delivers ISIG to fg_pgid by value, so a torn update (sid already set while
- * fg_pgid is still the stale 0) would route a serial ^C/^Z to group 0 and
- * drop it.
- * Interrupts off makes the two stores atomic against that drain. Used both to
- * claim the console (exec) and to release it (sid = pgid = 0).
+ * The interrupt-side drain (tty_console_poll) drains the console only while
+ * its sid is nonzero, and then delivers a signal to fg_pgid by value, so a
+ * torn update (sid already set while fg_pgid is still 0) would send a serial
+ * ^C or ^Z to group 0, which drops it. With interrupts off the two stores are
+ * one step to that drain.
  */
 void tty_set_session(struct tty *t, int sid, int pgid)
 {
@@ -122,19 +108,11 @@ void tty_set_session(struct tty *t, int sid, int pgid)
 }
 
 /**
- * Report whether (sid, pid) is the session leader that owns the console.
- *
- * True iff the session has the controlling terminal (console_tty.sid ==
- * sid) and the process is that session's leader (sid == pid). This is the
- * exact condition under which a process exiting, being killed, or replacing
- * its image must release (and on a successful exec re-publish) the
- * controlling terminal, so the interrupt-side serial drain never targets a
- * session that is vanishing. It is true for the session leader that owns the
- * console: the login shell a real init spawned (which `setsid`s and claims
- * the console via TIOCSCTTY), a program the kernel debug shell exec'd (for
- * which `exec_program` publishes the sid), or any later leader that claimed
- * it via TIOCSCTTY; it is false for a mere job-group member of the owning
- * session, whose exit must not pull the terminal out from under the shell.
+ * It holds for the login shell an init started (which calls setsid and claims
+ * the console with TIOCSCTTY), for a program the kernel shell ran (for which
+ * `exec_program` publishes the sid), and for any later leader that claimed
+ * the console with TIOCSCTTY. It does not hold for a member of a job group in
+ * the owning session, whose exit must leave the terminal to the shell.
  */
 int tty_console_owned_by_leader(int sid, int pid)
 {
@@ -161,7 +139,7 @@ void tty_input_char(struct tty *t, unsigned char c)
     }
 }
 
-/* The read-sleep predicate: drain the polled input source (if any) into the
+/** The read-sleep predicate: drain the polled input source (if any) into the
  * discipline, then report whether a read can now proceed. wq_wait_event calls
  * this with interrupts off before each sleep, so the serial drain and the
  * readiness test cannot be split by a waker. */
@@ -176,17 +154,13 @@ static int tty_ready_cond(void *arg)
 }
 
 /**
- * Block until a line is readable, then copy up to `count` bytes into `kbuf`.
- *
- * Returns the byte count, 0 at EOF, or -EINTR if a signal cut the wait short.
- * When `nonblock` is set the read never parks: it drains the polled source and,
- * if nothing is ready (and the discipline is not at EOF, which reads as ready),
- * returns -EAGAIN instead of waiting.
- *
  * After a wake the readiness test and the copy run in one interrupts-off
  * step, so an input IRQ cannot change the queue mid-read. Another reader
  * woken by the same line may have taken it, and a read of the empty queue
  * would then return 0, which means end of file; such a reader waits again.
+ * A blocking read that returns input records the time since the input became
+ * readable (ready_us) in the console latency span, LAT_CONSOLE, and clears
+ * ready_us; a non-blocking read leaves it.
  *
  * While the USB latency record is on, a reader about to park logs `latency:
  * reader waiting`, and a console reader arms the record, under the same
@@ -231,7 +205,7 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
             rc = wq_wait_event(&t->input_wq, tty_ready_cond, t);
         }
         if (rc != 0) {
-            return rc; /* -EINTR: a signal cut the wait short */
+            return rc;
         }
         flags = kirq_save();
         if (n_tty_readable(&t->ldisc)) {
@@ -303,7 +277,7 @@ short tty_poll(struct tty *t, short events, wait_queue_t **wq)
         }
     }
     if (events & POLLOUT) {
-        revents = (short)(revents | POLLOUT); /* the console is always writable */
+        revents = (short)(revents | POLLOUT);
     }
     return revents;
 }
@@ -323,16 +297,12 @@ int tty_inq(struct tty *t)
 }
 
 /**
- * Install a termios; with `flush_input`, discard the unread input first.
- *
  * Interrupts are off so an input IRQ feeding the discipline never reads a
  * half-written termios. A switch out of canonical mode can make a partial
  * line readable, so a reader parked on the tty is woken when the discipline
  * reports something to read. The console's flush also empties the serial
  * ring: input taken from the port but not yet in the discipline is input
  * the program asked to discard.
- * Wake the optional input-producer queue to recheck space after a flush or
- * mode change.
  */
 void tty_set_termios(struct tty *t, const struct ktermios *kt, int flush_input)
 {
@@ -354,7 +324,6 @@ void tty_set_termios(struct tty *t, const struct ktermios *kt, int flush_input)
     kirq_restore(flags);
 }
 
-/** Discard unread input with interrupts off and wake input producers. */
 void tty_flush_input(struct tty *t)
 {
     uint32_t flags;
@@ -368,12 +337,6 @@ void tty_flush_input(struct tty *t)
     kirq_restore(flags);
 }
 
-/**
- * Set an EOF marker after queued input and wake readers.
- *
- * Canonical reads consume this marker once. The endpoint must maintain
- * persistent hangup state for subsequent reads and other blocked readers.
- */
 void tty_hangup(struct tty *t)
 {
     uint32_t flags;
@@ -385,12 +348,12 @@ void tty_hangup(struct tty *t)
     wq_wake_all(&t->input_wq);
 }
 
-/* the system console: VGA screen + COM1 serial */
+/* the system console: the screen and COM1 */
 
 /**
  * The console's output: the screen and the serial line together.
  *
- * A serial terminal mirrors what is on the VGA console. OPOST and ONLCR in the
+ * A serial terminal mirrors what is on the screen. OPOST and ONLCR in the
  * discipline have already expanded '\n' to CR LF, so the raw console call is
  * the one to use: `console_putc` would expand it again. It goes through a
  * console call and not through the writers under it so the kernel log tracks
@@ -403,7 +366,7 @@ static void console_sink(void *ctx, unsigned char c)
     console_putc_raw((char)c);
 }
 
-/* When the discipline has no room for a line, ordinary bytes wait in the
+/** When the discipline has no room for a line, ordinary bytes wait in the
  * ring; a signal character behind them does not, since what it does first
  * is discard everything typed before it. The ring is searched for one, the
  * bytes before it are discarded as the character would have discarded them,
@@ -533,7 +496,7 @@ static void console_pump_irq(struct tty *t)
     }
 }
 
-/* The serial driver's receive notify, run from the port's interrupt with
+/** The serial driver's receive notify, run from the port's interrupt with
  * interrupts off once bytes are in the ring. It does what the tick does
  * (tty_console_poll), so a parked reader learns of input at once and a
  * session nobody reads for has its bytes moved into the discipline at once;
@@ -575,9 +538,6 @@ void tty_console_counters(struct console_counters *out)
 }
 
 /**
- * Service the console's serial port, from the timer tick and from the port's
- * interrupt, both with interrupts off.
- *
  * The UART's bytes go to the ring first, so a port whose interrupt is not
  * enabled is still served every tick. A reader or poller parked on the
  * console, which nothing else would tell of serial input while another

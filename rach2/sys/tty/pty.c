@@ -1,10 +1,11 @@
 /*
- * pty.c: pseudo-terminals. The /dev/ptmx + /dev/pts/N master/slave pairs a
- * network login uses to hand a remote user a real terminal. See pty.h for the
- * data-flow model. The slave is a full struct tty (the N_TTY discipline plus
- * sessions and job control), so it reuses every terminal service; the master
- * reads a byte ring (m_buf) of the slave's output and the discipline's echo.
- * Each endpoint is a descriptor with its own file_ops.
+ * pty.c: pseudo-terminals, the /dev/ptmx and /dev/pts/N master and slave pairs
+ * a network login gives a remote user as a terminal; pty.h has the data flow.
+ *
+ * The slave is a full struct tty (the N_TTY discipline plus sessions and job
+ * control), so it reuses every terminal service; the master reads a byte ring
+ * (m_buf) of the slave's output and the discipline's echo. Each endpoint is a
+ * descriptor with its own file_ops.
  */
 
 #include "pty.h"
@@ -45,6 +46,7 @@ void pty_init_pool(void)
     ptys = NULL;
 }
 
+/** The live pty with index `index`, or NULL. */
 static struct pty *pty_by_index(int index)
 {
     struct pty *p;
@@ -57,7 +59,8 @@ static struct pty *pty_by_index(int index)
     return NULL;
 }
 
-/* Off the list and back to the heap; nothing refers to it after this. */
+/** Unlink `p` from the list of live ptys and free it; no descriptor may
+ * refer to it any more. */
 static void pty_free(struct pty *p)
 {
     struct pty **link = &ptys;
@@ -71,20 +74,21 @@ static void pty_free(struct pty *p)
     kfree(p);
 }
 
+/** The bytes in the master ring that the master has not read. */
 static uint32_t pty_m_avail(struct pty *p)
 {
     return p->m_tail - p->m_head;
 }
 
-/* The bytes the master ring can still take. */
+/** The bytes the master ring can still take. */
 static uint32_t pty_m_room(struct pty *p)
 {
     return PTY_BUF_SIZE - pty_m_avail(p);
 }
 
-/* The most bytes one byte of the slave's output can become in the ring:
- * output processing turns a newline into two bytes and a tab into as many as
- * eight spaces, and raw output is a byte for a byte. */
+/** The room one byte of the slave's output is given in the ring: 8 under
+ * OPOST, where n_tty_output makes at most two bytes of one (ONLCR's CR LF),
+ * and 1 for raw output, which is a byte for a byte. */
 static uint32_t pts_growth(const struct pty *p)
 {
     return (p->slave.ldisc.tio.c_oflag & OPOST) ? 8u : 1u;
@@ -154,8 +158,8 @@ static struct pty *pty_alloc(void)
     p->uid = current_proc ? current_proc->euid : 0;
     p->gid = PTY_GID;
     p->atime = p->mtime = pty_now();
-    p->mode = 0620;                         /* crw--w----, the Unix98 slave default */
-    tty_init(&p->slave, pty_slave_sink, p); /* slave.pump stays NULL */
+    p->mode = 0620; /* crw--w----, the Unix98 slave default */
+    tty_init(&p->slave, pty_slave_sink, p);
     wait_queue_init(&p->m_read_wq);
     p->slave.space_wq = &p->m_read_wq;
     p->next = ptys;
@@ -163,15 +167,16 @@ static struct pty *pty_alloc(void)
     return p;
 }
 
+/** Whether `e`'s open file description is non-blocking. */
 static int fd_is_nonblock(fd_entry_t *e)
 {
     return e->ofd && (e->ofd->status_flags & OFD_NONBLOCK);
 }
 
-/* the MASTER endpoint */
+/* the master end */
 
-/* A master reader can stop blocking: the slave produced output, or every slave
- * descriptor has closed (EOF). */
+/** A master reader can stop blocking: the slave produced output, or every
+ * slave descriptor has closed (EOF). */
 static int ptm_readable(void *arg)
 {
     struct pty *p = (struct pty *)arg;
@@ -187,7 +192,8 @@ static int ptm_readable(void *arg)
  * user memory, which may fault, after they are restored. In packet mode
  * (TIOCPKT) the bytes follow a status byte, TIOCPKT_DATA, 0, as on Linux,
  * which also sends the byte alone for a flush or a stop of the slave's
- * output; this driver sends only the first kind.
+ * output; this driver sends only the first kind. Each piece taken from the
+ * ring wakes a slave writer waiting for room.
  */
 static int32_t ptm_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -205,7 +211,7 @@ static int32_t ptm_read(fd_entry_t *e, char __user *buf, uint32_t count)
     }
     while (pty_m_avail(p) == 0) {
         if (p->slave_opens == 0) {
-            return 0; /* EOF: every slave has closed and the ring is drained */
+            return 0;
         }
         if (fd_is_nonblock(e)) {
             return -EAGAIN;
@@ -235,7 +241,7 @@ static int32_t ptm_read(fd_entry_t *e, char __user *buf, uint32_t count)
             p->m_head++;
         }
         kirq_restore(flags);
-        wq_wake(&p->slave.input_wq, WQ_ROOM); /* a slave writer waiting for room */
+        wq_wake(&p->slave.input_wq, WQ_ROOM);
         if (copy_to_user((void __user *)(buf + lead + got), kbuf, chunk) != 0) {
             return (got > 0) ? (int32_t)(lead + got) : -EFAULT;
         }
@@ -244,7 +250,7 @@ static int32_t ptm_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return (int32_t)(lead + got);
 }
 
-/* Whether the slave's discipline can take a line: the master's write wait. */
+/** Whether the slave's discipline can take a line: the master's write wait. */
 static int ptm_has_room(void *arg)
 {
     struct pty *p = (struct pty *)arg;
@@ -252,7 +258,7 @@ static int ptm_has_room(void *arg)
     return n_tty_has_room(&p->slave.ldisc);
 }
 
-/* The offset of the first signal character in `bytes`, or -1: VINTR, VQUIT
+/** The offset of the first signal character in `bytes`, or -1: VINTR, VQUIT
  * or VSUSP with ISIG on, a disabled (zero) one never matching. */
 static int signal_char_at(const struct n_tty *ld, const uint8_t *bytes, int n)
 {
@@ -336,12 +342,13 @@ static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
         }
         done += chunk;
     }
-    /* The echo just pushed into m_buf: wake any master reader/poller once. */
     wake_master(p, &pushed);
     return (int32_t)done;
 }
 
-/** Report output, input space and slave hangup on the same master queue. */
+/** Report the master's readiness, all on m_read_wq: POLLIN when the ring has
+ * output or every slave has closed, POLLHUP once every slave has closed, and
+ * POLLOUT while the slave's discipline has room for a line. */
 static short ptm_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct pty *p = (struct pty *)e->priv;
@@ -354,7 +361,7 @@ static short ptm_poll(fd_entry_t *e, short events, struct wait_queue **wq)
         revents |= (short)(events & POLLIN);
     }
     if (p->slave_opens == 0) {
-        revents |= POLLHUP; /* every slave hung up */
+        revents |= POLLHUP;
     }
     if (n_tty_has_room(&p->slave.ldisc)) {
         revents |= (short)(events & POLLOUT);
@@ -401,6 +408,12 @@ static int32_t ptm_packet(struct pty *p, uint32_t request, uintptr_t arg)
     return 0;
 }
 
+/**
+ * The master's ioctls: TIOCGPTN, TIOCSPTLCK, the window size (TIOCSWINSZ
+ * sends SIGWINCH to the slave's foreground group), TIOCPKT and TIOCGPKT,
+ * TCFLSH, and FIONREAD, the bytes of the ring not yet read. A bad user
+ * pointer is -EFAULT, and any other request -ENOTTY.
+ */
 static int32_t ptm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     struct pty *p = (struct pty *)e->priv;
@@ -431,7 +444,6 @@ static int32_t ptm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
             0) {
             return -EFAULT;
         }
-        /* A resize notifies the slave's foreground group (SIGWINCH). */
         if (p->slave.fg_pgid != 0) {
             tty_signal_group(p->slave.fg_pgid, SIGWINCH);
         }
@@ -477,9 +489,10 @@ static void ptm_close(fd_entry_t *e)
 
 static const struct file_ops ptm_ops = {ptm_read, ptm_write, ptm_poll, ptm_ioctl, ptm_close};
 
-/* the SLAVE endpoint */
+/* the slave end */
 
-/** Include persistent master closure in every slave read wait. */
+/** The slave reader's wait condition: the master has closed, which stays
+ * true, or the discipline has input to read. */
 static int pts_read_ready(void *arg)
 {
     struct pty *p = (struct pty *)arg;
@@ -557,7 +570,7 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return n;
 }
 
-/* A slave writer can go on: the ring has room for a byte of output at its
+/** A slave writer can go on: the ring has room for a byte of output at its
  * largest, or the master has closed. */
 static int pts_has_room(void *arg)
 {
@@ -566,7 +579,7 @@ static int pts_has_room(void *arg)
     return !p->master_open || pty_m_room(p) >= pts_growth(p);
 }
 
-/* A slave writer may begin: no other write is in progress, or the master
+/** A slave writer may begin: no other write is in progress, or the master
  * has closed. */
 static int pts_write_free(void *arg)
 {
@@ -642,7 +655,7 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
         return 0;
     }
     if (!p->master_open) {
-        return -EIO; /* hung up: nobody will ever read the output */
+        return -EIO;
     }
     if ((p->slave.ldisc.tio.c_lflag & TOSTOP) &&
         tty_is_background(&p->slave, (int)current_proc->sid, (int)current_proc->pgid)) {
@@ -689,9 +702,9 @@ static short pts_poll(fd_entry_t *e, short events, struct wait_queue **wq)
         *wq = &p->slave.input_wq;
     }
     if (!p->master_open) {
-        revents |= POLLHUP; /* the master hung up */
+        revents |= POLLHUP;
     } else if (pty_m_room(p) < pts_growth(p)) {
-        revents &= (short)~POLLOUT; /* until the master reads */
+        revents &= (short)~POLLOUT;
     }
     return revents;
 }
@@ -712,7 +725,7 @@ static void pts_close(fd_entry_t *e)
         p->slave_opens--;
     }
     if (p->slave_opens == 0) {
-        wq_wake_all(&p->m_read_wq); /* master read now returns EOF */
+        wq_wake_all(&p->m_read_wq);
         if (!p->master_open) {
             pty_free(p);
         }
@@ -758,7 +771,7 @@ int pty_open_master(int flags)
     return fd;
 }
 
-/* Whether session `sid` has a controlling terminal: the console or a slave. */
+/** Whether session `sid` has a controlling terminal: the console or a slave. */
 static int session_has_ctty(int sid)
 {
     return console_tty.sid == sid || pty_session_slave(sid) >= 0;
@@ -775,10 +788,10 @@ int pty_open_slave(int index, int flags)
     }
     p = index < 0 ? NULL : pty_by_index(index);
     if (!p || !p->master_open) {
-        return -ENXIO; /* no such pty */
+        return -ENXIO;
     }
     if (p->locked) {
-        return -EIO; /* not unlocked yet (unlockpt not called) */
+        return -EIO;
     }
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
@@ -835,13 +848,6 @@ int tty_controlling(int sid, uint32_t *dev, int *fg_pgid)
     return 0;
 }
 
-/**
- * Return the index of the allocated pty whose slave is the controlling terminal
- * of session `sid` (slave.sid == sid), or -1.
- *
- * /dev/tty resolves through this to the caller's controlling pty rather than
- * unconditionally the console.
- */
 int pty_session_slave(int sid)
 {
     struct pty *p;
@@ -858,19 +864,12 @@ int pty_session_slave(int sid)
 }
 
 /**
- * Atomically make `keep` the sole controlling terminal of session `sid`.
- *
- * In one interrupts-off region, publish `keep` as the session's terminal (sid
- * and foreground group pgid) and drop every other terminal the session
- * controls: the console and any other pty. The whole claim-and-release is
- * atomic against the console's interrupt-side drain, which gates on
- * console_tty.sid. That drain must never observe the new terminal claimed
- * while the old console is still owned by the same session; the transient
- * would let it drain serial input or deliver ISIG for a terminal the session
- * no longer uses. Lives here because it must reach both console_tty and the
- * list of ptys. The caller has already authorized the claim: TIOCSCTTY checks
- * leadership and ownership, and the implicit read-claims require the terminal
- * to be free and the caller a session leader.
+ * The claim and the release are one step to the console's interrupt-side
+ * drain, which drains only while console_tty.sid is nonzero. That drain must
+ * not run between the claim of the new terminal and the release of the
+ * console, or it would drain serial input or deliver a signal for a terminal
+ * the session no longer uses. The function is in this file because
+ * it reaches both console_tty and the list of ptys.
  */
 void tty_make_sole_ctty(struct tty *keep, int sid, int pgid)
 {
@@ -938,15 +937,9 @@ int pty_slave_index(struct fd_entry *e)
 }
 
 /**
- * Disassociate any pty slave controlled by session leader `sid` on its death.
- *
- * Only a session leader (sid == pid) owns a controlling terminal. When that
- * leader exits or dies, POSIX requires its controlling terminal be released, so
- * a later session can claim the same /dev/pts/N via TIOCSCTTY instead of seeing
- * a stale, dead owner. Called beside the console release on the leader-death
- * paths (sys_exit, terminate_current_process, exec_fail_destroyed). A pty has
- * no interrupt-side drain, so the release matters here only for correctness
- * and reuse.
+ * POSIX releases a session leader's controlling terminal when the leader
+ * exits. A pty has no interrupt-side drain, so the release here matters only
+ * for a later claim of the same slave.
  */
 void pty_release_leader(int sid, int pid)
 {
