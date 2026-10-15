@@ -1,19 +1,20 @@
 /*
- * gptdisk_hosttest.c: the user-space GUID table over an image file.
+ * gptdisk_hosttest.c: the GUID table reader and writer of utils/gptdisk.c,
+ * over an image file.
  *
  * An installed disk is an image written to a disk larger than itself, which
  * leaves the table's backup where the image ended. The image here is a file
  * of 2048 sectors with a table built byte by byte, made 4096 sectors long
- * the way a larger disk is; the table is read from its primary, rewritten
- * with the backup in the last sectors, read again from that backup alone,
- * and grown into the space, and a partition that would lie under the backup
- * is refused. The identity's text form is checked both ways.
+ * as a larger disk is. The table is read from its primary, rewritten with
+ * the backup in the last sectors, read again from that backup alone, and
+ * grown into the space, and a partition that would lie under the backup is
+ * refused. The disk GUID's text form is checked both ways.
  *
- * The source is included with its `write` counted, so that a write can be
- * stopped after any number of sectors' worth of calls: after every prefix of
- * a rewrite, from either copy, one copy must still read. A copy whose entry
- * size is a multiple of 8 and not of 128, which the kernel refuses, must not
- * be the one read.
+ * The source is included with its `write` counted, so that a rewrite can be
+ * stopped after any number of calls: after every prefix of a rewrite, from
+ * either copy, one copy must still read. A copy whose entry size is a
+ * multiple of 8 and not of 128, which the kernel refuses, must not be the
+ * one read.
  */
 #define _POSIX_C_SOURCE 200809L
 #include <fcntl.h>
@@ -22,9 +23,9 @@
 #include <string.h>
 #include <unistd.h>
 
-static int writes_left = -1;
+static int writes_left = -1; /* calls `write` may still make; -1, no limit */
 
-/** `write`, refused once `writes_left` calls have been allowed. */
+/** `write`, failing with -1 once `writes_left` calls have been allowed. */
 static ssize_t counted_write(int fd, const void *buf, size_t n)
 {
     if (writes_left == 0) {
@@ -58,12 +59,15 @@ static int fails;
 
 static unsigned char image[IMAGE * SECTOR];
 
+/** The little-endian 32-bit field at `p`. */
 static uint32_t get32(const unsigned char *p)
 {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
-/** Entry `index` of the image's array: a type byte, a range and its GUID. */
+/** Write entry `index` of the image's primary array, at sector 2: a type
+ *  GUID of sixteen `type` bytes, a partition GUID of sixteen bytes of
+ *  `index + 1`, and the sectors `first` through `last`. */
 static void entry(unsigned index, unsigned char type, uint64_t first, uint64_t last)
 {
     unsigned char *e = image + 2 * SECTOR + index * 128;
@@ -77,7 +81,10 @@ static void entry(unsigned index, unsigned char type, uint64_t first, uint64_t l
     gptdisk_put64(e + 40, last);
 }
 
-/** The header at `lba` of the image, its array at `array`. */
+/** Write a header at sector `lba` of the image, naming `other` as the other
+ *  copy and `array` as its array's first sector: 128 entries of 128 bytes,
+ *  the usable range 34 through 2014, disk GUID bytes 0x10 to 0x1F, and the
+ *  checksum of the primary array. */
 static void header(uint64_t lba, uint64_t other, uint64_t array)
 {
     unsigned char *h = image + lba * SECTOR;
@@ -105,8 +112,10 @@ static void header(uint64_t lba, uint64_t other, uint64_t array)
  * Rewrite the table on `fd`, read from its backup when `from_backup` (its
  * primary header zeroed first) and from its primary otherwise (its backup
  * header zeroed first), with entry 3 grown, and stop the writes after each
- * count of calls in turn: whatever the count, a copy must read, since the
- * one copy that checks, the one the rewrite started from, is written last.
+ * count of calls in turn, 0 to 4. Each stopped rewrite must fail, and
+ * whatever the count, a copy must read, since the one copy that checks, the
+ * one the rewrite started from, is written last. The disk is put back as it
+ * was before returning.
  */
 static void check_prefixes(int fd, int from_backup)
 {
@@ -152,7 +161,8 @@ static void check_prefixes(int fd, int from_backup)
 /**
  * Give the primary of the table on `fd` 120 entries of 136 bytes with valid
  * checksums, the backup left at 128: the kernel refuses an entry size that is
- * not a multiple of 128, so the reader must take the backup.
+ * not a multiple of 128, so the reader must take the backup. The changed
+ * primary is left on the disk.
  */
 static void check_entry_size(int fd)
 {
@@ -177,6 +187,18 @@ static void check_entry_size(int fd)
           gptdisk_read(fd, DISK, &g) == 1 && g.from_backup && g.entry_size == 128);
 }
 
+/**
+ * Build the image, a protective MBR with boot code and a table of three
+ * partitions with the root at entry 3, in a file of 4096 sectors, and run
+ * the rows: the CRC32 of the standard check string; the table read from its
+ * primary; the rewrite that moves the backup to the disk's end and keeps
+ * the boot code; the backup read alone; the root grown to the backup; a
+ * partition under the backup and a disk larger than the file refused; the
+ * stopped rewrites of `check_prefixes` from either copy; the entry size of
+ * `check_entry_size`; and the disk GUID's text and a node's disk number.
+ * Returns 0 when every check passed, 1 when one failed, and 2 when the
+ * image file could not be made.
+ */
 int main(void)
 {
     static struct gptdisk g;

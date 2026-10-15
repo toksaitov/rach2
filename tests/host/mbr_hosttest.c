@@ -1,15 +1,14 @@
 /**
- * Host test for the MBR parse and the boot-partition judgement
- * (sys/block/mbr.c).
+ * mbr_hosttest.c: the MBR parse and the boot partition judgements of
+ * rach2/sys/block/mbr.c, over tables built in a buffer.
  *
  * host-deps:
  *
- * The parser and the picker are pure, so every malformed table the kernel
- * must refuse is crafted here: a missing signature, empty and zero-start
- * entries, a wrong type byte, a range past the disk, a range whose 32-bit
- * arithmetic would wrap, and a boot partition overlapping the KRFFS one. The
- * accepted case is the GRUB disk's shape (FAT first, KRFFS second). Returns
- * the failed-check count (0 == pass).
+ * The functions read no device, so every malformed table the kernel must
+ * refuse is built here: a missing signature, empty and zero-start entries, a
+ * wrong type byte, a range past the disk, a range whose 32-bit end would
+ * wrap, and a boot partition overlapping the KRFFS one. The accepted case is
+ * the GRUB disk's shape, FAT first and KRFFS second.
  */
 
 #include "block/mbr.c"
@@ -25,8 +24,7 @@ static int fails;
         }              \
     } while (0)
 
-/* The named form, for cases where one failure among many needs telling
- * apart. */
+/* CHECK that also prints `what` when the check fails. */
 #define CHECKN(cond, what)                  \
     do {                                    \
         if (!(cond)) {                      \
@@ -35,7 +33,9 @@ static int fails;
         }                                   \
     } while (0)
 
-/** Write entry `i` of the table in `sector` as {type, start, count}. */
+/** Write entry `i` of the table in `sector`: the type byte, the first sector
+ *  and the sector count, little-endian at offsets 4, 8 and 12 of the 16-byte
+ *  entry, and zeros in the rest. */
 static void set_entry(uint8_t *sector, int i, uint8_t type, uint32_t start, uint32_t count)
 {
     uint8_t *e = sector + 446 + i * 16;
@@ -51,6 +51,38 @@ static void set_entry(uint8_t *sector, int i, uint8_t type, uint32_t start, uint
     }
 }
 
+/**
+ * Run the rows. Returns the count of failed checks, at most 255.
+ *
+ * `mbr_parse` refuses a sector without the 0x55AA signature and reads the
+ * GRUB disk's shape: FAT at 2048 for 32768 sectors, KRFFS at 34816.
+ * `mbr_bootpart_pick` takes that shape with entry 0 of type 0x0C, 0x0B or
+ * 0xEF (an EFI system partition, as on a disk set up to boot by UEFI), and
+ * then refuses it with one fact changed at a time: type 0x83; a start at
+ * sector 0, which has the boot code; an empty entry; a KRFFS index of 0,
+ * which is the boot partition's own, or outside the table; a disk too
+ * short for the entry; a start and count whose 32-bit sum wraps, which the
+ * check must catch by subtraction; and a KRFFS range overlapping entry 0
+ * from either side.
+ *
+ * `mbr_bootpart_ok`, which a boot from a RAM image uses with no root to
+ * compare against, takes a lone FAT entry 0 and one beside a root and a
+ * third partition, even when the third overlaps the root and not entry 0.
+ * It refuses an overlap with entry 0, a start inside the post-MBR gap, a
+ * type that is not FAT, an empty entry, an entry past the disk's end, and a
+ * count whose 32-bit end would wrap; an entry that ends at the disk's last
+ * sector is taken.
+ *
+ * `mbr_gap_clear` refuses a partition inside LBA 1 through 2047 or on its
+ * last sector, and takes one that starts at 2048. A table with a partition
+ * in the gap describes a disk where writing GRUB destroys a file system;
+ * entry 0 of such a table is still a boot partition by `mbr_bootpart_ok`,
+ * which is why the two judgements are separate.
+ *
+ * `mbr_take` passes over an entry at sector 0, one past a 10000-sector
+ * medium and one overlapping an entry already taken, takes the rest in
+ * table order, and reports how many it passed over.
+ */
 int main(void)
 {
     uint8_t sector[512];
@@ -61,51 +93,46 @@ int main(void)
         sector[i] = 0;
     }
 
-    /* No signature: the parse itself is refused. */
     CHECK(mbr_parse(sector, parts) == -1);
 
     sector[510] = 0x55;
     sector[511] = 0xAA;
 
-    /* The GRUB disk's shape: FAT at 2048 for 32768, KRFFS at 34816. */
     set_entry(sector, 0, 0x0c, 2048, 32768);
     set_entry(sector, 1, 0x7f, 34816, 96256);
     CHECK(mbr_parse(sector, parts) == 0);
     CHECK(parts[0].type == 0x0c && parts[0].start_lba == 2048 && parts[0].sector_count == 32768);
     CHECK(parts[1].start_lba == 34816);
     CHECK(mbr_bootpart_pick(parts, 1, 131072) == 0);
-    parts[0].type = 0x0b; /* the other FAT32 type byte is accepted too */
+    parts[0].type = 0x0b;
     CHECK(mbr_bootpart_pick(parts, 1, 131072) == 0);
-    parts[0].type = 0xef; /* and an EFI system partition, a converted disk's */
+    parts[0].type = 0xef;
     CHECK(mbr_bootpart_pick(parts, 1, 131072) == 0);
 
-    /* Rejections, each one flipped fact at a time from the accepted shape. */
     parts[0].type = 0x83;
-    CHECK(mbr_bootpart_pick(parts, 1, 131072) == -1); /* not FAT-typed */
+    CHECK(mbr_bootpart_pick(parts, 1, 131072) == -1);
     parts[0].type = 0x0c;
 
     parts[0].start_lba = 0;
-    CHECK(mbr_bootpart_pick(parts, 1, 131072) == -1); /* boot code lives at 0 */
+    CHECK(mbr_bootpart_pick(parts, 1, 131072) == -1);
     parts[0].start_lba = 2048;
 
     parts[0].sector_count = 0;
-    CHECK(mbr_bootpart_pick(parts, 1, 131072) == -1); /* empty */
+    CHECK(mbr_bootpart_pick(parts, 1, 131072) == -1);
     parts[0].sector_count = 32768;
 
-    CHECK(mbr_bootpart_pick(parts, 0, 131072) == -1); /* KRFFS is entry 0 */
+    CHECK(mbr_bootpart_pick(parts, 0, 131072) == -1);
     CHECK(mbr_bootpart_pick(parts, -1, 131072) == -1);
     CHECK(mbr_bootpart_pick(parts, 4, 131072) == -1);
 
-    CHECK(mbr_bootpart_pick(parts, 1, 30000) == -1); /* runs past the disk */
+    CHECK(mbr_bootpart_pick(parts, 1, 30000) == -1);
 
-    /* A count that would wrap 32-bit addition: subtraction must catch it. */
     parts[0].start_lba = 0xFFFFF000u;
     parts[0].sector_count = 0x2000u;
     CHECK(mbr_bootpart_pick(parts, 1, 131072) == -1);
     parts[0].start_lba = 2048;
     parts[0].sector_count = 32768;
 
-    /* Partial overlap with the KRFFS range, from either side. */
     parts[1].start_lba = 30000;
     CHECK(mbr_bootpart_pick(parts, 1, 131072) == -1);
     parts[1].start_lba = 100;
@@ -115,7 +142,6 @@ int main(void)
     parts[1].sector_count = 96256;
     CHECK(mbr_bootpart_pick(parts, 1, 131072) == 0);
 
-    /* ---- the index-free judgement a RAM-root boot uses ---- */
     {
         struct mbr_part t[MBR_PART_COUNT];
         int k;
@@ -142,7 +168,7 @@ int main(void)
         t[2].sector_count = 131072;
         CHECKN(mbr_bootpart_ok(t, 1290240) == 0, "nor does a third partition");
 
-        t[2].start_lba = 200000; /* inside the root, clear of entry 0 */
+        t[2].start_lba = 200000;
         CHECKN(mbr_bootpart_ok(t, 1290240) == 0,
                "a third partition overlapping the root is not entry 0's business");
         t[2].start_lba = 2048 + 131071;
@@ -177,10 +203,6 @@ int main(void)
                "a count that would wrap the 32-bit end is refused, not wrapped");
         t[0].sector_count = 131072;
 
-        /* The boot loader's gap is nobody's partition. A table that puts one
-           there describes a disk where writing GRUB would destroy a file
-           system, and this project's own fixture did exactly that until
-           milestone 25, so the case is real, not theoretical. */
         CHECKN(mbr_gap_clear(t) == 0, "a table that leaves LBA 1 through 2047 alone is clear");
         t[3].type = 0x0c;
         t[3].start_lba = 64;
@@ -201,9 +223,6 @@ int main(void)
         t[0].sector_count = 131072;
     }
 
-    /* The publishable entries on a medium: an entry at sector zero, one past
-       the medium and one overlapping an earlier one are passed over with the
-       rest still taken, and how many were passed over is reported. */
     {
         struct mbr_part four[MBR_PART_COUNT];
         struct mbr_range taken[MBR_PART_COUNT];
@@ -213,14 +232,14 @@ int main(void)
         four[0].start_lba = 2048;
         four[0].sector_count = 4096;
         four[1].type = 0x07;
-        four[1].start_lba = 0; /* the table's own sector */
+        four[1].start_lba = 0;
         four[1].sector_count = 100;
         four[2].type = 0x83;
-        four[2].start_lba = 3000; /* over the first */
+        four[2].start_lba = 3000;
         four[2].sector_count = 100;
         four[3].type = 0x83;
         four[3].start_lba = 8000;
-        four[3].sector_count = 4096; /* past a 10000-sector medium */
+        four[3].sector_count = 4096;
         CHECK(mbr_take(four, 10000, taken, &refused) == 1);
         CHECK(taken[0].start_lba == 2048 && taken[0].sector_count == 4096);
         CHECK(refused == 3);

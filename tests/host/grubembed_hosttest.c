@@ -1,15 +1,16 @@
 /*
- * grubembed_hosttest.c: the BIOS boot partition grubembed writes the GRUB
- * core over, found in a GUID table it is given.
+ * grubembed_hosttest.c: the BIOS boot partition that tools/image/grubembed.c
+ * writes the GRUB core over, found in a GUID table it is given.
  *
  * host-deps: utils/grubslot.c
  *
  * The source is included so that the table's reader is called directly on
  * an image file. A table this project builds, its partition over sectors 34
  * to 2047, is taken. A table whose checksums match and whose partition
- * starts at sector 2, over its own entry array, is refused, and so is one
- * whose partition ends past the last usable sector: the core is written over
- * the whole partition, and either would be written over the table.
+ * starts at sector 2, over its own entry array, is refused, and so are one
+ * whose partition starts before the first usable sector and one whose
+ * partition ends past the last: the core is written over the whole
+ * partition, and each would put it over the table.
  */
 #define main grubembed_main
 #include "../../tools/image/grubembed.c"
@@ -27,6 +28,7 @@ static int fails;
 
 static unsigned char disk[64 * SECTOR];
 
+/** Store `v` little-endian in the four bytes at `p`. */
 static void put32(unsigned char *p, uint32_t v)
 {
     p[0] = (unsigned char)v;
@@ -35,6 +37,7 @@ static void put32(unsigned char *p, uint32_t v)
     p[3] = (unsigned char)(v >> 24);
 }
 
+/** Store `v` little-endian in the eight bytes at `p`. */
 static void put64(unsigned char *p, uint64_t v)
 {
     put32(p, (uint32_t)v);
@@ -44,7 +47,10 @@ static void put64(unsigned char *p, uint64_t v)
 /**
  * Build a table of 128 entries of 128 bytes whose first usable sector is
  * `first_usable` and whose BIOS boot partition is `start` to `last`, with
- * its checksums, and read it back through grubembed's reader.
+ * its checksums, in a temporary file of 64 sectors, and read it back through
+ * grubembed's reader. Returns what `bios_boot_partition` returns, with
+ * `first` and `count` as it set them; exits with status 2 when the file
+ * cannot be made.
  */
 static int find(uint64_t first_usable, uint64_t start, uint64_t last, unsigned long *first,
                 unsigned long *count)
@@ -79,6 +85,8 @@ static int find(uint64_t first_usable, uint64_t start, uint64_t last, unsigned l
     return rc;
 }
 
+/** Run the four rows of the opening comment. Returns 0 when every check
+ *  passed and 1 otherwise. */
 int main(void)
 {
     unsigned long first = 0, count = 0;

@@ -1,5 +1,6 @@
 /*
- * partition_hosttest.c: the partition service over disks in memory.
+ * partition_hosttest.c: the partition tables rach2/sys/block/partition.c
+ * reads, over disks in memory.
  *
  * host-deps: rach2/sys/block/partition.c rach2/sys/block/gpt.c
  * host-deps: rach2/sys/block/mbr.c
@@ -39,9 +40,12 @@ static int fails;
 
 static unsigned char disk[DISK_SECTORS * SECTOR];
 static unsigned char work[PART_WORK_BYTES];
-static int unreadable_lba = -1;
+static int unreadable_lba = -1; /* the sector a read fails at; -1, none */
 static int reads;
 
+/** The reader `part_scan` calls: copy `count` sectors from `lba` of `disk`
+ *  into `buf`. Returns 0, or -1 for a range past the disk or one that
+ *  covers `unreadable_lba`. */
 static int read_disk(void *ctx, uint64_t lba, uint32_t count, void *buf)
 {
     unsigned char *out = (unsigned char *)buf;
@@ -63,6 +67,7 @@ static int read_disk(void *ctx, uint64_t lba, uint32_t count, void *buf)
     return 0;
 }
 
+/** Store `v` little-endian in the four bytes at `p`. */
 static void wr32(unsigned char *p, uint32_t v)
 {
     p[0] = (unsigned char)v;
@@ -71,13 +76,15 @@ static void wr32(unsigned char *p, uint32_t v)
     p[3] = (unsigned char)(v >> 24);
 }
 
+/** Store `v` little-endian in the eight bytes at `p`. */
 static void wr64(unsigned char *p, uint64_t v)
 {
     wr32(p, (uint32_t)v);
     wr32(p + 4, (uint32_t)(v >> 32));
 }
 
-/** An MBR entry `index` in the sector at `lba`. */
+/** Write entry `index` of the MBR or EBR in the sector at `lba`, with its
+ *  type, start and count as the table stores them, and sign the sector. */
 static void mbr_entry(uint64_t lba, int index, unsigned type, uint32_t start, uint32_t count)
 {
     unsigned char *e = disk + lba * SECTOR + 446 + index * 16;
@@ -89,14 +96,16 @@ static void mbr_entry(uint64_t lba, int index, unsigned type, uint32_t start, ui
     disk[lba * SECTOR + 511] = 0xAA;
 }
 
+/** Zero the disk and make every sector readable. */
 static void blank(void)
 {
     memset(disk, 0, sizeof(disk));
     unreadable_lba = -1;
 }
 
-/* ---- GPT building ---- */
-
+/** Write entry `index` of the primary array, at sector 2: a type GUID that
+ *  is not zero, a partition GUID of bytes `index * 16 + 1` onward, the
+ *  sectors `first` through `last`, and `name` as its UTF-16 label. */
 static void gpt_entry(unsigned index, uint64_t first, uint64_t last, const char *name)
 {
     unsigned char *e = disk + 2 * SECTOR + index * ENTRY_SIZE;
@@ -114,6 +123,10 @@ static void gpt_entry(unsigned index, uint64_t first, uint64_t last, const char 
     }
 }
 
+/** Write a sound header at sector `my_lba`, naming `alternate` as the other
+ *  copy and `array_lba` as its array's first sector: 128 entries of 128
+ *  bytes, the usable range 34 through `DISK_SECTORS - 34`, disk GUID bytes
+ *  0xD0 to 0xDF, and the checksum of the primary array. */
 static void gpt_header(uint64_t my_lba, uint64_t alternate, uint64_t array_lba)
 {
     unsigned char *h = disk + my_lba * SECTOR;
@@ -155,7 +168,9 @@ static void gpt_type(unsigned index, const unsigned char *type)
     }
 }
 
-/** A whole GPT disk: protective MBR, the entries given, both headers. */
+/** Finish a GUID table over the primary array as it stands: the protective
+ *  MBR, the primary header, a copy of the array before the last sector, and
+ *  the backup header in the last sector. */
 static void gpt_disk(void)
 {
     uint64_t backup_array = DISK_SECTORS - 1 - ARRAY_SECS;
@@ -169,7 +184,8 @@ static void gpt_disk(void)
     gpt_header(DISK_SECTORS - 1, 1, backup_array);
 }
 
-/** Give the header at `lba` the usable range `first` to `last`, and its CRC. */
+/** Give the header at `lba` the usable range `first` to `last`, and its
+ *  checksum again. */
 static void gpt_usable(uint64_t lba, uint64_t first, uint64_t last)
 {
     unsigned char *h = disk + lba * SECTOR;
@@ -180,12 +196,14 @@ static void gpt_usable(uint64_t lba, uint64_t first, uint64_t last)
     wr32(h + 16, gpt_crc32(h, 92));
 }
 
+/* The type GUID of a BIOS boot partition, as the table stores it. */
 static const unsigned char type_bios[16] = {0x48, 0x61, 0x68, 0x21, 0x49, 0x64, 0x6f, 0x6e,
                                             0x74, 0x4e, 0x65, 0x65, 0x64, 0x45, 0x46, 0x49};
 
 /**
- * The installed disk's GPT with its BIOS boot partition at `first` to `last`
- * as entry 4, and both headers' usable range `low` to `high`.
+ * Build the installed disk's GUID table, boot, recovery and root, with its
+ * BIOS boot partition at `first` to `last` as entry 4, and both headers'
+ * usable range `low` to `high`.
  */
 static void bios_disk(uint64_t first, uint64_t last, uint64_t low, uint64_t high)
 {
@@ -201,9 +219,20 @@ static void bios_disk(uint64_t first, uint64_t last, uint64_t low, uint64_t high
 }
 
 /**
- * Where `/dev/grubcore` is on a GPT disk: the one BIOS boot partition, taken
- * from whichever header served, and never over sector 0, a header or an entry
- * array, whatever the usable range claims.
+ * Check where `/dev/grubcore` is on a GPT disk: the one BIOS boot partition,
+ * taken from whichever header served, and never over sector 0, a header or
+ * an entry array, whatever the usable range says.
+ *
+ * The rows find entry 4 at LBA 34 through 2047 from the primary header and,
+ * with the primary damaged, the same window from the backup. A table with no
+ * such entry, and one with two, has no window, since which of two is meant
+ * is not known. Usable ranges that reach into the table's own sectors let
+ * an entry be taken over the primary array, sector 0, the primary header,
+ * the backup array and the backup header, and none of them is a window: the
+ * primary array is kept out when the backup served and did not read it, and
+ * the backup array when the primary served. On a table edited in place, an
+ * entry ending at the last 32-bit sector is a window and one a sector longer
+ * is not, and an MBR table has none.
  */
 static void bios_boot_rows(void)
 {
@@ -220,7 +249,6 @@ static void bios_boot_rows(void)
     CHECK("its BIOS boot partition is found", part_bios_boot(&t, &first, &count, &number) == 0);
     CHECK("as entry 4, exactly LBA 34 through 2047", number == 4 && first == 34 && count == 2014);
 
-    /* The primary damaged: the backup serves, and the window is the same. */
     disk[1 * SECTOR + 20] ^= 0xFF;
     CHECK("with the primary header damaged",
           part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0 && t.backup_used == 1 &&
@@ -229,7 +257,6 @@ static void bios_boot_rows(void)
     CHECK("the backup gives the same window",
           part_bios_boot(&t, &first, &count, &number) == 0 && first == 34 && count == 2014);
 
-    /* No such partition, and two of them. */
     bios_disk(34, 2047, 34, DISK_SECTORS - 34u);
     gpt_type(3, (const unsigned char *)"0123456789abcdef");
     gpt_disk();
@@ -245,7 +272,6 @@ static void bios_boot_rows(void)
     CHECK("and has no window, since which one is meant is not known",
           part_bios_boot(&t, &first, &count, &number) == -1);
 
-    /* A usable range that reaches into the table's own sectors. */
     bios_disk(2, 2047, 2, DISK_SECTORS - 34u);
     CHECK("an entry over the primary array reads",
           part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0 && t.backup_used == 0);
@@ -280,8 +306,6 @@ static void bios_boot_rows(void)
           part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0 &&
               part_bios_boot(&t, &first, &count, &number) == 0);
 
-    /* A table this kernel builds by hand: past 32 bits of sector address,
-       and an MBR. */
     t.parts[3].start_lba = 0xFFFFFF00u;
     t.parts[3].sector_count = 0x100;
     t.gpt.last_usable = 0x1FFFFFFFFull;
@@ -293,6 +317,34 @@ static void bios_boot_rows(void)
     CHECK("an MBR table has none", part_bios_boot(&t, &first, &count, &number) == -1);
 }
 
+/**
+ * Run the rows. Returns 0 when every check passed and 1 otherwise.
+ *
+ * - A blank disk has no table, an unreadable sector 0 is `PART_UNREAD`, and
+ *   a signature with no entries is no table.
+ * - An MBR with three primaries and an extended partition whose chain of
+ *   three EBRs holds three logical partitions: its id, the six partitions
+ *   numbered 1, 2, 4, 5, 6 and 7, and no GUID or label for an MBR entry. A
+ *   chain whose last link points back at the extended partition's start
+ *   ends, keeping the partitions before it and counting the loop as
+ *   refused, and a logical partition past its extended one is refused.
+ * - Primaries that overlap an earlier one, run past the disk, or start on
+ *   the MBR are refused, and the one sound entry is taken.
+ * - A GUID table of six entries, with the disk GUID and each entry's range,
+ *   GUID and label; the GUID's text form both ways, refusing a short text
+ *   and a wrong separator. With the primary header or the primary array
+ *   damaged the backup serves; with both copies damaged the table is
+ *   `PART_GPT_BAD` with no partitions.
+ * - The installed disk, the EFI system partition, recovery, the root and the
+ *   BIOS boot partition as entries 1 to 4 and a fifth that the MBR's four
+ *   records have no room for, given by `part_gpt_as_mbr` with types 0xEF,
+ *   0x0C, 0x83 and 0xDA, which `mbr_bootpart_ok` takes. An entry past 32
+ *   bits of address leaves its record empty, and an MBR table is not given
+ *   this way.
+ * - `bios_boot_rows`.
+ * - A GUID table with three entries more than `PART_MAX` keeps the first
+ *   `PART_MAX` and counts the rest.
+ */
 int main(void)
 {
     static struct part_table t;
@@ -300,7 +352,6 @@ int main(void)
     uint8_t guid[16];
     int i;
 
-    /* ---- nothing ---- */
     blank();
     CHECK("a blank disk reads", part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0);
     CHECK("and has no table", t.kind == PART_NONE && t.count == 0);
@@ -314,7 +365,6 @@ int main(void)
     CHECK("a signature with no entries is no table",
           part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0 && t.kind == PART_NONE);
 
-    /* ---- an MBR with primaries and a chain of logical partitions ---- */
     blank();
     wr32(disk + 440, 0x1acef00du);
     mbr_entry(0, 0, 0x0C, 64, 64);
@@ -345,29 +395,25 @@ int main(void)
     CHECK("logical 7", t.parts[5].number == 7 && t.parts[5].start_lba == 520);
     CHECK("an MBR entry has no GUID", t.parts[0].guid[0] == 0 && t.parts[0].label[0] == '\0');
 
-    /* A chain that points back at itself ends. */
     mbr_entry(512, 1, 0x05, 0, 128); /* next at ext_start itself */
     CHECK("a looping chain reads", part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0);
     CHECK("keeps the partitions before the loop", t.count == 6);
     CHECK("and counts the loop as refused", t.refused == 1);
 
-    /* A logical partition outside its extended partition is refused. */
     mbr_entry(512, 1, 0, 0, 0);
     mbr_entry(512, 0, 0x83, 8, 4000);
     CHECK("a logical partition past the extended one reads",
           part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0);
     CHECK("and is refused", t.count == 5 && t.refused == 1);
 
-    /* Overlap and disk end on primaries. */
     blank();
     mbr_entry(0, 0, 0x83, 64, 64);
-    mbr_entry(0, 1, 0x83, 100, 64);   /* overlaps entry 1 */
-    mbr_entry(0, 2, 0x83, 4000, 200); /* past the disk */
-    mbr_entry(0, 3, 0x83, 0, 64);     /* starts on the MBR */
+    mbr_entry(0, 1, 0x83, 100, 64);
+    mbr_entry(0, 2, 0x83, 4000, 200);
+    mbr_entry(0, 3, 0x83, 0, 64);
     CHECK("bad primaries read", part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0);
     CHECK("one taken, three refused", t.count == 1 && t.refused == 3);
 
-    /* ---- a GPT with six entries ---- */
     blank();
     for (i = 0; i < 6; i++) {
         char name[8];
@@ -395,23 +441,17 @@ int main(void)
     CHECK("and a wrong separator",
           part_guid_parse("24232221:2625-2827-292a-2b2c2d2e2f30", guid) == -1);
 
-    /* The primary header damaged: the backup serves. */
     disk[1 * SECTOR + 20] ^= 0xFF;
     CHECK("a damaged primary reads", part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0);
     CHECK("from the backup", t.kind == PART_GPT && t.backup_used == 1 && t.count == 6);
-    /* The primary array damaged: the backup serves too. */
     disk[1 * SECTOR + 20] ^= 0xFF;
     disk[2 * SECTOR + 40] ^= 0xFF;
     CHECK("a damaged primary array reads", part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0);
     CHECK("from the backup", t.kind == PART_GPT && t.backup_used == 1 && t.count == 6);
-    /* Both damaged: a GPT that cannot be read, and no partitions. */
     disk[(DISK_SECTORS - 1) * SECTOR + 20] ^= 0xFF;
     CHECK("both damaged reads", part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0);
     CHECK("as a bad GPT", t.kind == PART_GPT_BAD && t.count == 0);
 
-    /* The installed disk: the EFI system partition, recovery, the root and
-     * the BIOS boot partition in the sectors before the first, as entries
-     * 1 to 4, and a fifth the MBR's records have no room for. */
     {
         static const unsigned char esp[16] = {0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11,
                                               0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b};
@@ -455,7 +495,6 @@ int main(void)
 
     bios_boot_rows();
 
-    /* More entries than the service keeps. */
     blank();
     for (i = 0; i < PART_MAX + 3; i++) {
         gpt_entry((unsigned)i, 64 + (uint64_t)i * 64, 64 + (uint64_t)i * 64 + 32, "x");
