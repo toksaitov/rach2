@@ -1,15 +1,16 @@
 #!/usr/bin/env sh
 
 #
-# reset_test.sh: each restart mechanism, on its own.
+# reset.sh: each restart mechanism, on its own.
 #
-# The kernel asks the machine to restart three ways, most of the machine first:
-# the firmware's own SMI handler, then the chipset reset register, then the
-# keyboard controller pulse. That order was chosen for a laptop whose chipset
-# register may not act, and the risk in choosing it is plain: if only the first
-# mechanism is ever exercised, nobody finds out the later ones do not work
-# until the machine they were written for refuses to restart, which over SSH
-# looks exactly like a kernel that died.
+# The kernel asks the machine to restart up to four ways (`power_reset`,
+# rach2/sys/arch/x86/power.c): the FADT's reset register, where the FADT has
+# one, then the firmware's own SMI handler, then the chipset reset register,
+# then the keyboard controller pulse. The order of the last three was chosen
+# for a laptop whose chipset register may not act. If only the first
+# mechanism were ever exercised, nobody would find out that a later one does
+# not work until the machine it was written for refused to restart, which
+# over SSH looks like a kernel that died.
 #
 # So each is booted with the ones before it left out (`rach2.resetskip=N`), and
 # each must restart the machine on its own.
