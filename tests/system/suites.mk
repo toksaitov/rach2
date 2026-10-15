@@ -1639,11 +1639,11 @@ run-installer-repair: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTY
 	    $(INSTALLER_DISK) $(INSTALLER_REPAIR_PORT) $(PTYDRIVE) krffs/rach2_demo_ed25519 repair \
 	    $(INSTALLER_EXT2) $(INSTALLER_MBR_DISK)
 # `tests/run uefi`: the machine booted by UEFI firmware, OVMF, from its
-# installed disk and that disk's recovery entry, from the install stick's
-# image as a USB device and from the recovery ISO as a CD, each answering SSH,
-# installed from the stick onto a 4 TiB NVMe disk whose root grows past
-# 2 TiB, and booted by SeaBIOS after recovery writes a damaged primary GUID
-# table again.
+# installed disk, from that disk's recovery entry, from the same disk with its
+# boot partition's menu deleted, from the install stick's image as a USB
+# device and from the recovery ISO as a CD, each answering SSH, installed from
+# the stick onto a 4 TiB NVMe disk whose root grows past 2 TiB, and booted by
+# SeaBIOS after recovery writes a damaged primary GUID table again.
 # The disk is a GPT disk as the disk builder makes one for a machine, with the
 # installer's root, the metal system whose init starts the SSH server.
 UEFI_DIR = $(IMAGES_DIR)/uefi

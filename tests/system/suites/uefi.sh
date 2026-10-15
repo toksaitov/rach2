@@ -24,12 +24,16 @@
 # 2. The same disk's recovery entry, armed for one boot on the host: the
 #    recovery system comes up from partition 2 and answers SSH, and its
 #    `bootctl` reads the boot partition by its node.
-# 3. The install stick's image as a USB device: the firmware boots its EFI
+# 3. The same disk with the menu deleted from its EFI system partition, the
+#    file the image opens first: the image finds the recovery partition by
+#    its label and opens the menu there, and the recovery system comes up
+#    and answers SSH.
+# 4. The install stick's image as a USB device: the firmware boots its EFI
 #    boot image, an MBR partition of type 0xEF, and the recovery system
 #    answers SSH.
-# 4. The recovery ISO as a CD: the firmware boots its second El Torito
+# 5. The recovery ISO as a CD: the firmware boots its second El Torito
 #    entry, and the recovery system answers SSH.
-# 5. The installed disk's BIOS core replaced from the running machine. The
+# 6. The installed disk's BIOS core replaced from the running machine. The
 #    disk boots by SeaBIOS, whose path is the BIOS core in the BIOS boot
 #    partition; `bootctl grub` writes GRUB's GPT core into the partition's
 #    tail not in use, and the entry sector, the partition's first, is left
@@ -39,7 +43,7 @@
 #    and the disk still boots by OVMF, whose path does not use the core. The
 #    table's sectors before the partition and the backup table at the disk's
 #    end are the same bytes after both installs.
-# 6. An install onto a 4 TiB NVMe disk, past the 2 TiB an MBR addresses. The
+# 7. An install onto a 4 TiB NVMe disk, past the 2 TiB an MBR addresses. The
 #    stick boots by OVMF beside the disk, `rach2-install` is answered over SSH
 #    and grows the root into the whole disk, and the disk then boots by OVMF
 #    alone; on i686 both boots are by SeaBIOS, since OVMF gives the controller's
@@ -51,7 +55,7 @@
 #    of the table's first four entries finds that root, whose entry runs past
 #    2 TiB. The disk is a sparse file, and QEMU turns the zeroed blocks the
 #    grow writes, its new groups' inode tables, back into holes.
-# 7. A GPT disk whose primary header does not check, which GRUB's BIOS core
+# 8. A GPT disk whose primary header does not check, which GRUB's BIOS core
 #    cannot boot: it reads no backup table. The stick boots by SeaBIOS beside
 #    it, since OVMF, as EDK2's firmware does, writes such a primary again from
 #    the backup when it reads the disk; the recovery system must name the
@@ -318,7 +322,34 @@ else
 fi
 stop_machine
 
-# ---- 3: the install stick's image as a USB device ----
+# ---- 3: the same disk with its menu deleted ----
+# The firmware still starts GRUB's image from partition 1, but the image's
+# first `configfile` finds no menu and returns. Nothing on partition 1 can
+# boot a kernel now, so a recovery system that answers came through the last
+# two lines of tools/image/grub-efi-embed.cfg and partition 2's own menu.
+NOMENU="$DIR/nomenu.img"
+cp "$DISK" "$NOMENU"
+ESP_AT=$("$REPO/build/tools/image/mkgpt" --list "$NOMENU" | awk '$1 == 1 { print $3 }')
+LOGM="$DIR/nomenu.log"
+if [ -n "$ESP_AT" ] && mdel -i "$NOMENU@@$ESP_AT" ::/boot/grub/grub.cfg; then
+    boot_uefi "$LOGM" -drive "file=$NOMENU,format=raw,if=ide,index=0,media=disk"
+    if "$RUNUTIL" until "$LOGM" "SSH is on" 240; then
+        OUT=$(key_ssh 'grep -o rach2.slot=recovery /proc/cmdline; echo NOMENU""LOGIN' || true)
+        case "$OUT" in
+            *"rach2.slot=recovery"*NOMENULOGIN*)
+                note "with partition 1's menu deleted, the image opens the recovery partition's menu and recovery answers SSH: OK" ;;
+            *) bad "the recovery system of the disk with no menu: $OUT" ;;
+        esac
+    else
+        bad "the disk with partition 1's menu deleted never reached recovery by UEFI; see $LOGM"
+    fi
+else
+    bad "could not delete the menu from the EFI system partition of $NOMENU"
+fi
+stop_machine
+rm -f "$NOMENU"
+
+# ---- 4: the install stick's image as a USB device ----
 cp "$STICK" "$DIR/stick.img"
 LOG3="$DIR/stick.log"
 boot_uefi "$LOG3" -device qemu-xhci,id=xhci \
@@ -340,7 +371,7 @@ else
 fi
 stop_machine
 
-# ---- 4: the recovery ISO as a CD ----
+# ---- 5: the recovery ISO as a CD ----
 cp "$ISO" "$DIR/recovery.iso"
 LOG4="$DIR/cd.log"
 boot_uefi "$LOG4" -cdrom "$DIR/recovery.iso"
@@ -360,7 +391,7 @@ else
 fi
 stop_machine
 
-# ---- 5: the BIOS core replaced, booted by BIOS and then by UEFI ----
+# ---- 6: the BIOS core replaced, booted by BIOS and then by UEFI ----
 # The window is the BIOS boot partition as the table gives it, and its tails
 # are what `grubslot.h` lays out: T = min((N - 1) / 2, 1023) sectors at W + 1
 # and W + 1 + T for a partition of N sectors from LBA W.
@@ -460,7 +491,7 @@ else
 fi
 stop_machine
 
-# ---- 6: an install onto a sparse 4 TiB NVMe disk ----
+# ---- 7: an install onto a sparse 4 TiB NVMe disk ----
 BIG="$DIR/big.img"
 BIG_DRIVE="file=$BIG,if=none,id=big,format=raw,discard=unmap,detect-zeroes=unmap"
 rm -f "$BIG"
@@ -545,7 +576,7 @@ fi
 stop_machine
 rm -f "$BIG"
 
-# ---- 7: a disk whose primary GUID table does not check ----
+# ---- 8: a disk whose primary GUID table does not check ----
 DAMAGED="$DIR/damaged.img"
 cp "$DISK" "$DAMAGED"
 # Four bytes of the primary header's checksum, at byte 16 of LBA 1.
@@ -587,4 +618,4 @@ if [ "$fail" -ne 0 ]; then
     echo "uefi-test: result: FAIL" >&2
     exit 1
 fi
-echo "uefi-test: result: the installed disk, its recovery entry, the stick and the CD boot by UEFI; the disk's BIOS core is replaced twice and boots by either firmware; an install grows its root past 2 TiB on a 4 TiB NVMe disk; a disk whose primary table was damaged boots by SeaBIOS once recovery writes it again"
+echo "uefi-test: result: the installed disk, its recovery entry, the stick and the CD boot by UEFI; the disk whose menu was deleted reaches recovery through its partition 2; the disk's BIOS core is replaced twice and boots by either firmware; an install grows its root past 2 TiB on a 4 TiB NVMe disk; a disk whose primary table was damaged boots by SeaBIOS once recovery writes it again"

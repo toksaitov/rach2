@@ -40,7 +40,7 @@ selfbuild|qemu,mformat,mmd,mcopy|full|selfbuild-test*,selfbuild.*,selfbuild/*
 installer-repair|qemu,qemu-system-x86_64,qemu-img,xorriso,shasum,ssh,ssh-keygen,mcopy,mmd,mdeltree,mtype,minfo,debugfs|full
 installer|qemu,xorriso,shasum,ssh,ssh-keygen,mformat,mcopy,mtype,mdel|full|installer-test*,installer.*,installer/*|512
 menu|qemu,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
-uefi|qemu-system-x86_64,xorriso,ssh,mformat,mmd,mcopy|full||512
+uefi|qemu-system-x86_64,xorriso,ssh,mformat,mmd,mcopy,mdel|full||512
 installer-rehearse|qemu,qemu-img,xorriso,shasum|full||512
 selfbuild-ext2|qemu,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 sealed|qemu,ssh,mformat,mmd,mcopy|full
