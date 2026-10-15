@@ -2707,9 +2707,12 @@ static int syscall_restartable(syscall_fn_t fn, const isr_params_t *params)
  * Report a call this kernel does not have, when `rach2.trace=enosys` is on
  * the command line: a missing call is otherwise invisible, -ENOSYS going back
  * in a register with nothing printed, so a program that fails for want of one
- * fails for no stated reason. Each number is reported once per process, a
- * number past the table as one in it, so a program that makes a missing call
- * in a loop prints one line and the console stays readable.
+ * fails for no stated reason. A number in the table is reported unless the
+ * process that last reported it makes it again; the numbers past the table
+ * share one entry, so one of them is reported unless it and its process are
+ * the last reported. A program that makes one missing call in a loop prints
+ * one line, but two processes alternating on one number, or one process
+ * alternating between two numbers past the table, print a line each time.
  */
 static void syscall_missing(uint32_t syscall_num)
 {

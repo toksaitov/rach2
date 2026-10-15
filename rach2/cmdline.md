@@ -27,7 +27,7 @@ The line is a list of words separated by spaces and tabs (`sys/cmdline.c`). A fl
 | `rach2.nomsi`, `noapic`, `maxcpus=N` | Take every interrupt through the 8259 pair; keep the 8259 pair and the 8254's tick where there is an I/O APIC; start at most `N` processors, the boot processor counted ([the PC platform](sys/arch/x86/Readme.md)). |
 | `rach2.nofxsr`, `rach2.noxsave` | Save the floating-point state with `fnsave` (i686 only) or with `fxsave`, in place of the richer form the processor has ([the PC platform](sys/arch/x86/Readme.md)). |
 | `rach2.board=NAME`, `rach2.nosci`, `rach2.resetskip=N` | Try only the named board's power profile, which the chipset must still match; leave its system control interrupt unmasked; skip the first `N` reset methods ([the PC platform](sys/arch/x86/Readme.md)). |
-| `rach2.trace=enosys` | Log each system call number the kernel does not have, once a process. |
+| `rach2.trace=enosys` | Log a system call number the kernel does not have, except when the process that last logged it makes it again; the numbers past the table share one such record. |
 | `rach2.usblatency` | Print the times of keystrokes against the drain of USB events, and count the pumps and `getrandom` bytes before a blocked console reader runs. |
 
 These options exist for the suites, which use them to bring about a fault or a boundary on demand:
