@@ -38,6 +38,18 @@ changes = {
               'seize refuses upper bits without attaching'),
     'step': ('    int stepping = leaving && (self->ptrace & PT_STEP);',
              '    int stepping = 0;', 'syscall single step reports TRAP_TRACE'),
+    'trapped-ids': ('    chld.pid = pid_seen_by(tracer, self->pid);\n    chld.uid = ns_uid_from_kernel(proc_userns(tracer), self->ruid);',
+                    '    chld.pid = self->pid;\n    chld.uid = self->ruid;',
+                    'trap notice has tracee ids as tracer sees them'),
+    'resume-ids': ('    } else {\n        tracer_info(info);\n    }',
+                   '    } else {\n        k_memset(info, 0, sizeof(*info));\n        info->code = SI_USER;\n        info->pid = self->tracer;\n    }',
+                   'resumed signal has tracer ids as tracee sees them'),
+    'syscall-ids': ('        tracer_info(&info);\n        signal_post_thread(self, sig, &info);',
+                    '        k_memset(&info, 0, sizeof(info));\n        info.code = SI_USER;\n        info.pid = pid_seen_by(self, self->tracer);\n        signal_post_thread(self, sig, &info);',
+                    'syscall stop signal has tracer ids as tracee sees them'),
+    'end-receiver': ('    proc_child_info(p, tracer, &info);',
+                     '    proc_child_info(p, get_process(p->parent_pid), &info);',
+                     'end notice is made for the tracer'),
     'switch': ('    } else if (dr7_live[cpu]) {',
                '    } else if (old && (old->debugreg[7] & DR7_ENABLES)) {',
                'detach then switch clears hardware enables'),
@@ -130,7 +142,7 @@ PY
 select_kind()
 {
     case "$1" in
-        ptrace) source=proc/ptrace.c; faults='regset listen return-stops return-kill options seize step' ;;
+        ptrace) source=proc/ptrace.c; faults='regset listen return-stops return-kill options seize step trapped-ids resume-ids syscall-ids end-receiver' ;;
         debugreg) source=arch/x86/debugreg.c; faults='switch stale migration delivery kernel-step pending pending-saved pending-stale pending-step dequeue dequeue-repeat user-force user-entry user-origin user-status user-wait-post user-wait-cpu user-wait-saved user-wait-stale user-wait-kernel user-wait-no-thread user-no-status-origin user-no-status-code user-no-status-dr6 user-no-status-capture user-no-status-stale user-no-status-repeat-cpu user-no-status-repeat-saved user-no-status-wait' ;;
         *) echo 'ptrace-proof: usage: ptrace_mutate.sh [ptrace|debugreg [--check]]' >&2; exit 2 ;;
     esac

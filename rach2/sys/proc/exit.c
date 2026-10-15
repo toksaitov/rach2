@@ -87,7 +87,7 @@ int proc_exit_cleanup(int32_t status)
     if (parent) {
         struct k_siginfo info;
 
-        proc_child_info(leader, &info);
+        proc_child_info(leader, parent, &info);
         signal_post_info(parent, SIGCHLD, &info);
         wq_wake_all(&parent->tg->chld);
         if (parent->state == PROC_BLOCKED) {

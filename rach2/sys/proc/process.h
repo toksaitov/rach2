@@ -596,10 +596,11 @@ void signal_force(process_t *target, int signo, const struct k_siginfo *info);
  * made through it. Defined in syscall_proc.c. */
 void signal_set_blocked(uint64_t mask);
 
-/** The siginfo of the SIGCHLD a child's end sends: CLD_EXITED with the exit
- * code, or CLD_KILLED or CLD_DUMPED with the signal, from its wait status,
- * and the child's pid and real uid as its parent's namespaces see them. */
-void proc_child_info(const process_t *child, struct k_siginfo *info);
+/** The siginfo of the SIGCHLD a child's end sends to `receiver`, its parent
+ * or its tracer: CLD_EXITED with the exit code, or CLD_KILLED or CLD_DUMPED
+ * with the signal, from its wait status, and the child's pid and real uid as
+ * the receiver's namespaces see them. */
+void proc_child_info(const process_t *child, const process_t *receiver, struct k_siginfo *info);
 
 /**
  * The tick `ticks` after `now` at which a real-time timer is due, never 0,

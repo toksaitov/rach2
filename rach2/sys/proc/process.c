@@ -345,7 +345,7 @@ void reparent_children(uint32_t dead_pid)
             if (p->state == PROC_ZOMBIE && p->pid == p->tgid && p->tg->live == 0) {
                 struct k_siginfo info;
 
-                proc_child_info(p, &info);
+                proc_child_info(p, init, &info);
                 signal_post_info(init, SIGCHLD, &info);
                 wq_wake_all(&init->tg->chld);
             }
@@ -396,15 +396,13 @@ void setup_process_stack(process_t *proc, void (*entry_point)(void))
     arch_context_init(proc, entry_point);
 }
 
-void proc_child_info(const process_t *child, struct k_siginfo *info)
+void proc_child_info(const process_t *child, const process_t *receiver, struct k_siginfo *info)
 {
     uint32_t status = (uint32_t)child->exit_code;
 
-    const process_t *parent = get_process(child->parent_pid);
-
     k_memset(info, 0, sizeof(*info));
-    info->pid = parent ? pid_seen_by(parent, child->pid) : child->pid;
-    info->uid = parent ? ns_uid_from_kernel(proc_userns(parent), child->ruid) : child->ruid;
+    info->pid = pid_seen_by(receiver, child->pid);
+    info->uid = ns_uid_from_kernel(proc_userns(receiver), child->ruid);
     if ((status & 0x7Fu) == 0) {
         info->code = CLD_EXITED;
         info->status = (int32_t)((status >> 8) & 0xFFu);

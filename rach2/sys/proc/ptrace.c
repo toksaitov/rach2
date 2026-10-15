@@ -86,8 +86,8 @@ static int ptrace_stop(uint32_t status, const struct k_siginfo *info)
     self->ptrace_status = status;
     k_memset(&chld, 0, sizeof(chld));
     chld.code = CLD_TRAPPED;
-    chld.pid = self->pid;
-    chld.uid = self->ruid;
+    chld.pid = pid_seen_by(tracer, self->pid);
+    chld.uid = ns_uid_from_kernel(proc_userns(tracer), self->ruid);
     chld.status = (int32_t)((status >> 8) & 0xFF);
     signal_post_info(tracer, SIGCHLD, &chld);
     wq_wake_all(&tracer->tg->chld);
@@ -125,6 +125,24 @@ void ptrace_return_stops(void)
     }
 }
 
+/**
+ * Fill `info` as the siginfo of a signal the current thread's tracer gave it
+ * on resuming it: SI_USER, with the tracer's process ID and real user ID as
+ * the thread's namespaces see them, 0 for a tracer that has gone.
+ */
+static void tracer_info(struct k_siginfo *info)
+{
+    process_t *self = current_proc;
+    const process_t *tracer = self->tracer ? get_process(self->tracer) : NULL;
+
+    k_memset(info, 0, sizeof(*info));
+    info->code = SI_USER;
+    if (tracer) {
+        info->pid = pid_seen_by(self, self->tracer);
+        info->uid = ns_uid_from_kernel(proc_userns(self), tracer->ruid);
+    }
+}
+
 int ptrace_signal_stop(int signo, struct k_siginfo *info)
 {
     process_t *self = current_proc;
@@ -140,9 +158,7 @@ int ptrace_signal_stop(int signo, struct k_siginfo *info)
     if (sig == signo) {
         *info = self->ptrace_info;
     } else {
-        k_memset(info, 0, sizeof(*info));
-        info->code = SI_USER;
-        info->pid = self->tracer;
+        tracer_info(info);
     }
     if (self->sig_blocked & KSIG_BIT(sig)) {
         signal_post_thread(self, sig, info);
@@ -237,9 +253,7 @@ void ptrace_syscall_stop(isr_params_t *tf, uint32_t nr, int leaving)
         self->orig_nr = -1;
     }
     if (sig > 0 && sig <= KSIG_MAX) {
-        k_memset(&info, 0, sizeof(info));
-        info.code = SI_USER;
-        info.pid = pid_seen_by(self, self->tracer);
+        tracer_info(&info);
         signal_post_thread(self, sig, &info);
     }
 }
@@ -300,7 +314,7 @@ void ptrace_exit_notify(process_t *p)
     if (!(p->ptrace & PT_TRACED) || tracer == NULL) {
         return;
     }
-    proc_child_info(p, &info);
+    proc_child_info(p, tracer, &info);
     signal_post_info(tracer, SIGCHLD, &info);
     wq_wake_all(&tracer->tg->chld);
 }
@@ -319,7 +333,7 @@ static void ptrace_parent_notify(const process_t *t)
     if (parent == NULL) {
         return;
     }
-    proc_child_info(t, &info);
+    proc_child_info(t, parent, &info);
     signal_post_info(parent, SIGCHLD, &info);
     wq_wake_all(&parent->tg->chld);
 }

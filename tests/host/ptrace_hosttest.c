@@ -9,7 +9,9 @@
  * -ESRCH without reaching its registers. The test's `schedule` records a
  * stop and ends it, so that the status and siginfo of a single step over a
  * system call can be checked without a guest; the guest test ptracemusl
- * checks the system call's result and the next instruction as well.
+ * checks the system call's result and the next instruction as well. The
+ * namespace stubs translate an id by adding a different amount for the
+ * tracer and the tracee, so that a siginfo shows whose view it was given in.
  */
 #include "proc/ptrace.c"
 
@@ -24,9 +26,11 @@ struct percpu cpu_table[NR_CPUS] = {{.current = &self}};
 process_t *proc_list = &self;
 uint32_t proc_dead_threads;
 static int failures, resume_on_copy, register_reads, wakes;
-static int stops, listen_interrupts, kill_on_resume;
+static int stops, listen_interrupts, kill_on_resume, resume_signo;
 static uint32_t stop_status;
-static struct k_siginfo stop_info;
+static struct k_siginfo stop_info, posted_info;
+static struct userns self_ns, tracee_ns;
+static const process_t *posted_to, *child_info_receiver;
 
 /** Count a failure and print `row` when `ok` is 0. */
 static void check(int ok, const char *row)
@@ -133,6 +137,7 @@ void schedule(void)
         }
         return;
     }
+    current_proc->ptrace_signo = resume_signo;
     current_proc->ptrace_status = 0;
     current_proc->state = PROC_RUNNING;
 }
@@ -144,8 +149,8 @@ void sched_make_ready(process_t *t)
     wakes++;
 }
 
-/** Reset the tracer, pid 10 with uid 0, as the current thread, and its
- * tracee, pid 11, seized and in a group stop. */
+/** Reset the tracer, pid 10 with uid 5, as the current thread, and its
+ * tracee, pid 11 with uid 7, seized and in a group stop. */
 static void setup(void)
 {
     k_memset(&self, 0, sizeof(self));
@@ -153,11 +158,13 @@ static void setup(void)
     k_memset(&self_group, 0, sizeof(self_group));
     k_memset(&tracee_group, 0, sizeof(tracee_group));
     self.pid = self.tgid = 10;
+    self.ruid = 5;
     self.tg = &self_group;
     self.state = PROC_RUNNING;
     self_group.live = 1;
     self.next = &tracee;
     tracee.pid = tracee.tgid = 11;
+    tracee.ruid = 7;
     tracee.tg = &tracee_group;
     tracee.mm = &space;
     tracee.state = PROC_STOPPED;
@@ -166,7 +173,9 @@ static void setup(void)
     tracee.ptrace_status = (PTRACE_EVENT_STOP << 16) | (SIGSTOP << 8) | 0x7f;
     cpu_table[0].current = &self;
     wakes = register_reads = resume_on_copy = 0;
-    stops = listen_interrupts = kill_on_resume = 0;
+    stops = listen_interrupts = kill_on_resume = resume_signo = 0;
+    posted_to = child_info_receiver = NULL;
+    k_memset(&posted_info, 0, sizeof(posted_info));
 }
 
 /** On the way back to user mode, a tracee whose listening stop
@@ -193,12 +202,55 @@ static void return_stops(void)
 }
 
 /**
+ * The siginfo of a trace stop's SIGCHLD has the tracee's ids as the tracer
+ * sees them; a signal the tracer resumes with in place of the stop's has the
+ * tracer's ids as the tracee sees them, at a signal-delivery stop and at a
+ * system-call stop; and the SIGCHLD of a tracee's end is made for the tracer,
+ * not for the parent.
+ */
+static void namespace_ids(void)
+{
+    struct k_siginfo info;
+    isr_params_t frame;
+
+    setup();
+    cpu_table[0].current = &tracee;
+    k_memset(&info, 0, sizeof(info));
+    check(ptrace_signal_stop(SIGUSR1, &info) == 0 && posted_to == &self &&
+              posted_info.code == CLD_TRAPPED && posted_info.pid == 211 && posted_info.uid == 2007,
+          "trap notice has tracee ids as tracer sees them");
+
+    setup();
+    cpu_table[0].current = &tracee;
+    resume_signo = SIGUSR2;
+    k_memset(&info, 0, sizeof(info));
+    check(ptrace_signal_stop(SIGUSR1, &info) == SIGUSR2 && info.code == SI_USER &&
+              info.pid == 110 && info.uid == 1005,
+          "resumed signal has tracer ids as tracee sees them");
+
+    setup();
+    cpu_table[0].current = &tracee;
+    tracee.ptrace |= PT_SYSCALL;
+    resume_signo = SIGUSR2;
+    k_memset(&frame, 0, sizeof(frame));
+    ptrace_syscall_stop(&frame, 20, 1);
+    check(posted_to == &tracee && posted_info.code == SI_USER && posted_info.pid == 110 &&
+              posted_info.uid == 1005,
+          "syscall stop signal has tracer ids as tracee sees them");
+
+    setup();
+    tracee.parent_pid = 1;
+    ptrace_exit_notify(&tracee);
+    check(child_info_receiver == &self && posted_to == &self, "end notice is made for the tracer");
+}
+
+/**
  * Run every row; 0 when each passes, 1 otherwise. A register-set request
  * rechecks the tracee after its copy slept; PTRACE_INTERRUPT releases a
  * listening tracee; PTRACE_SETOPTIONS and PTRACE_SEIZE fail with -EINVAL
  * for an option above bit 31; a single step over a system call reports
- * TRAP_TRACE with no TRACESYSGOOD mark; and the stops on the way back to
- * user mode.
+ * TRAP_TRACE with no TRACESYSGOOD mark; the stops on the way back to user
+ * mode; and the ids of the siginfo records ptrace sends.
  */
 int main(void)
 {
@@ -242,22 +294,22 @@ int main(void)
     check(stop_status == ((SIGTRAP << 8) | 0x7f) && stop_info.code == TRAP_TRACE,
           "syscall single step reports TRAP_TRACE without syscall marker");
     return_stops();
+    namespace_ids();
     printf("ptrace-hosttest: result: %s\n", failures ? "fail" : "pass");
     return failures != 0;
 }
 
-/** NULL for every process; the stubs that take a namespace ignore it. */
+/** The tracee's user namespace for the tracee, the tracer's for any other. */
 struct userns *proc_userns(const process_t *p)
 {
-    (void)p;
-    return NULL;
+    return p == &tracee ? &tracee_ns : &self_ns;
 }
 
-/** The kernel id `id` itself. */
+/** The kernel id `id` plus 1000 in the tracee's user namespace, plus 2000 in
+ * the tracer's. */
 uint32_t ns_uid_from_kernel(const struct userns *ns, uint32_t id)
 {
-    (void)ns;
-    return id;
+    return id + (ns == &tracee_ns ? 1000 : 2000);
 }
 
 /** The PID `pid` itself. */
@@ -266,17 +318,19 @@ uint32_t pid_named(uint32_t pid)
     return pid;
 }
 
-/** The kernel id `pid` itself, whatever `p`. */
+/** The kernel id `pid` plus 100 as the tracee sees it, plus 200 as any
+ * other process does. */
 uint32_t pid_seen_by(const process_t *p, uint32_t pid)
 {
-    (void)p;
-    return pid;
+    return pid + (p == &tracee ? 100 : 200);
 }
 
-/** A zeroed siginfo for the notice of a child's change. */
-void proc_child_info(const process_t *p, struct k_siginfo *info)
+/** A zeroed siginfo for the notice of a child's change; the receiver it is
+ * made for is recorded. */
+void proc_child_info(const process_t *p, const process_t *receiver, struct k_siginfo *info)
 {
     (void)p;
+    child_info_receiver = receiver;
     k_memset(info, 0, sizeof(*info));
 }
 
@@ -304,20 +358,20 @@ void wq_wake_all(wait_queue_t *wq)
     (void)wq;
 }
 
-/** Nothing: no row checks a signal sent to a process. */
+/** Record the receiver and the siginfo of a signal sent to a process. */
 void signal_post_info(process_t *p, int sig, const struct k_siginfo *info)
 {
-    (void)p;
     (void)sig;
-    (void)info;
+    posted_to = p;
+    posted_info = *info;
 }
 
-/** Nothing: no row checks a signal sent to a thread. */
+/** Record the receiver and the siginfo of a signal sent to a thread. */
 void signal_post_thread(process_t *p, int sig, const struct k_siginfo *info)
 {
-    (void)p;
     (void)sig;
-    (void)info;
+    posted_to = p;
+    posted_info = *info;
 }
 
 /** Nothing: the guest test ptracemusl checks the trap flag. */

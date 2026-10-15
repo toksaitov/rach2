@@ -537,7 +537,7 @@ old
     if (!(p->ptrace & PT_TRACED) || tracer == NULL) {
         return;
     }
-    proc_child_info(p, &info);
+    proc_child_info(p, tracer, &info);
 new
     if (!(p->ptrace & PT_TRACED) || tracer == NULL) {
         return;

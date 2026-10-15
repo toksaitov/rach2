@@ -213,9 +213,10 @@ process_t *get_process(uint32_t pid)
 }
 
 /** The model's siginfo of a child's end is not read. */
-void proc_child_info(const process_t *p, struct k_siginfo *info)
+void proc_child_info(const process_t *p, const process_t *receiver, struct k_siginfo *info)
 {
     (void)p;
+    (void)receiver;
     (void)info;
 }
 
