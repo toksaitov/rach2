@@ -84,30 +84,30 @@ rach2/sys/display/vga_gfx.c:vga_set_mode params 9 the parameters are the fields 
 rach2/sys/fs/bcache.c:bcache_shrink complexity 28 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/bcache.c:sync_batches nesting 5 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/bcache.c:get complexity 35 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/bcache.c:get lines 119 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/bcache.c:get lines 101 one file system operation over the on-disk format, each step a rule of the format
 
 rach2/sys/fs/devfs.c:devfs_open complexity 34 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/devfs.c:devfs_open lines 101 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/exfat.c:chain_at params 7 the parameters are one level's cursor in a recursive walk
 rach2/sys/fs/exfat.c:check_dir complexity 44 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/exfat.c:check_dir lines 167 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/exfat.c:check_dir lines 161 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/exfat.c:check_dir nesting 6 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/exfat.c:check_dir params 8 the parameters are one level's cursor in a recursive walk
 rach2/sys/fs/exfat.c:ex_check_volume complexity 26 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/exfat.c:ex_check_volume lines 153 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/exfat.c:ex_check_volume lines 145 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/exfat.c:ex_mount_on complexity 87 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/exfat.c:ex_mount_on lines 259 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/exfat.c:ex_mount_on lines 251 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/exfat.c:ex_rename complexity 53 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/exfat.c:ex_rename lines 194 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/exfat.c:ex_rename lines 180 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/exfat.c:ex_truncate complexity 30 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/exfat.c:ex_truncate lines 131 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/exfat.c:ex_truncate lines 121 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/exfat.c:ex_truncate nesting 5 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/exfat.c:ex_write complexity 36 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/exfat.c:ex_write lines 145 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/exfat.c:ex_write lines 129 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/exfat.c:free_slots nesting 6 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/exfat.c:set_read complexity 50 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/exfat.c:set_read lines 140 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/exfat.c:set_read lines 139 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/exfat.c:upcase_check complexity 28 one file system operation over the on-disk format, each step a rule of the format
 
 rach2/sys/fs/ext2.c:check_dir complexity 31 one file system operation over the on-disk format, each step a rule of the format
@@ -115,38 +115,36 @@ rach2/sys/fs/ext2.c:check_level params 8 the parameters are one level's cursor i
 rach2/sys/fs/ext2.c:dirent_write params 7 the parameters are one level's cursor in a recursive walk
 rach2/sys/fs/ext2.c:ext2_check_volume complexity 26 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2.c:ext2_mount_on complexity 62 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/ext2.c:ext2_mount_on lines 175 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/ext2.c:ext2_mount_on lines 165 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2.c:ext2_rename complexity 63 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/ext2.c:ext2_rename lines 222 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/ext2.c:ext2_rename lines 215 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2.c:ext2_write complexity 30 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/ext2.c:map_alloc lines 118 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/ext2.c:map_alloc lines 106 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2.c:map_alloc nesting 5 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2.c:punch_level params 8 the parameters are one level's cursor in a recursive walk
 
-rach2/sys/fs/fat32.c:fat_check_volume lines 110 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/fat32.c:fat_check_volume lines 104 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/fat32.c:fat_mount_on complexity 43 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/fat32.c:fat_mount_on lines 130 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/fat32.c:fat_mount_on lines 126 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/fat32.c:fat_rename complexity 52 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/fat32.c:fat_rename lines 160 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/fat32.c:fat_rename lines 149 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/fat32.c:fat_truncate complexity 35 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/fat32.c:fat_truncate lines 132 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/fat32.c:fat_truncate lines 121 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/fat32.c:fat_write complexity 33 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/fat32.c:fat_write lines 118 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/fat32.c:fat_write lines 112 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/fat32.c:walk_dir complexity 45 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/fat32.c:walk_dir lines 141 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/fat32.c:walk_dir lines 137 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/fat32.c:walk_dir nesting 5 one file system operation over the on-disk format, each step a rule of the format
 
 rach2/sys/fs/fat32name.c:fat32_name_short complexity 26 a parser over an external format, one check per field in the format's order
 
 rach2/sys/fs/fatcommon.c:fat_name_units complexity 29 a parser over an external format, one check per field in the format's order
 
-rach2/sys/fs/krffs.c:krffs_allocate_err lines 115 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_allocate_err nesting 5 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_repair_at complexity 42 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/krffs.c:krffs_repair_at lines 130 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/krffs.c:krffs_repair_at lines 116 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_repair_at nesting 5 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_resize_at complexity 27 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/krffs.c:krffs_resize_at lines 123 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over the on-disk format, each step a rule of the format
 
 rach2/sys/fs/procfs.c:procfs_fd_ino complexity 33 a dispatcher, one arm per command, read as a table
@@ -162,7 +160,7 @@ rach2/sys/fs/synthfs.c:synth_classify_pid complexity 28 a dispatcher, one arm pe
 rach2/sys/fs/synthfs.c:synth_sys_path complexity 32 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/vfs.c:resolve_path complexity 80 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/vfs.c:resolve_path lines 284 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/vfs.c:resolve_path lines 268 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/vfs.c:resolve_path nesting 5 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/vfs.c:resolve_path params 7 the parameters are one level's cursor in a recursive walk
 
