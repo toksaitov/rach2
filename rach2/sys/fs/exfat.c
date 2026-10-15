@@ -1320,15 +1320,29 @@ static int refused(const char *field)
  * A mount is how a program tests whether a volume is of a type, and the
  * installer tries every partition of every removable disk with this type to
  * find the one with its image. A record for each partition that was never
- * exFAT would put `exfat: refused: FileSystemName` in front of a person
+ * exFAT would put `exfat: refused: BootChecksum` in front of a person
  * installing a machine. The fields that only say "not this file system",
- * the name, the jump and the boot signature, end the mount here; a volume
- * whose name says exFAT and that breaks a rule is still logged through
- * `refused`.
+ * the name, the jump and the boot signature, end the mount here, as
+ * `exfat_boot_sector` tests them; a volume whose boot sector is exFAT's and
+ * that breaks a rule is still logged through `refused`.
  */
 static int not_exfat(void)
 {
     return -EINVAL;
+}
+
+/** 1 when the boot sector `b` has exFAT's FileSystemName, jump and boot
+ * signature, else 0. */
+static int exfat_boot_sector(const uint8_t *b)
+{
+    uint32_t i;
+
+    for (i = 0; i < 8; i++) {
+        if (b[3 + i] != (uint8_t)"EXFAT   "[i]) {
+            return 0;
+        }
+    }
+    return b[0] == 0xEB && b[1] == 0x76 && b[2] == 0x90 && le16(b + 510) == 0xAA55;
 }
 
 /** The boot checksum of the region at sector `first`, into `*sum`: the
@@ -1475,7 +1489,9 @@ K_NOINLINE static int upcase_check(struct ex_mount *em, uint32_t *sum)
  * or the errors `vfs_exfat_type` lists in exfat.h.
  *
  * Both boot regions are read and checked before any field is trusted. When
- * the main region fails its checksum, the backup's fields describe the
+ * both fail their checksums, the volume is refused as `BootChecksum` only
+ * when one of its two boot sectors is exFAT's, and otherwise as not exFAT.
+ * When the main region fails its checksum, the backup's fields describe the
  * volume, with the main's VolumeFlags and PercentInUse, since by the
  * specification the backup's are stale. VolumeDirty stays set on the disk
  * for the writable life of the mount, as Linux's driver keeps it; the clean
@@ -1533,6 +1549,9 @@ static int ex_mount_on(struct ex_mount *em, struct vfs_mount *mnt, block_device_
         }
     }
     if (!main_ok && !backup_ok) {
+        if (!exfat_boot_sector(b) && !exfat_boot_sector(b2)) {
+            return not_exfat();
+        }
         return refused("BootChecksum");
     }
     if (!main_ok) {
@@ -1547,21 +1566,13 @@ static int ex_mount_on(struct ex_mount *em, struct vfs_mount *mnt, block_device_
     } else if (!agree) {
         readonly_why = "the two boot regions disagree";
     }
-    for (i = 0; i < 8; i++) {
-        if (b[3 + i] != (uint8_t)"EXFAT   "[i]) {
-            return not_exfat();
-        }
-    }
-    if (b[0] != 0xEB || b[1] != 0x76 || b[2] != 0x90) {
+    if (!exfat_boot_sector(b)) {
         return not_exfat();
     }
     for (i = 11; i < 64; i++) {
         if (b[i] != 0) {
             return refused("MustBeZero");
         }
-    }
-    if (le16(b + 510) != 0xAA55) {
-        return not_exfat();
     }
     if (b[108] != 9) {
         return refused("BytesPerSectorShift"); /* a valid exFAT this kernel does not read */

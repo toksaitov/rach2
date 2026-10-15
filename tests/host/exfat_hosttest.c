@@ -592,12 +592,47 @@ static void skipped_row(const char *opt, const char *path, const char *what)
     unmount_image();
 }
 
+/** Load the fixture with the FileSystemName of the main and the backup boot
+ *  sector replaced by `main` and `backup` where given, and both stored
+ *  checksums broken, and mount it: the constructor's rc, with the record of
+ *  the mount alone in `last_klog`. */
+static int mount_failing_boot(const char *main, const char *backup)
+{
+    load("");
+    if (main) {
+        memcpy(image + 3, main, 8);
+    }
+    if (backup) {
+        memcpy(image + 12 * 512 + 3, backup, 8);
+    }
+    image[11 * 512] ^= 1;
+    image[23 * 512] ^= 1;
+    devmodel_load(&model);
+    last_klog[0] = 0;
+    return mount_image(VFS_MS_RDONLY, "");
+}
+
+/** Two boot regions that both fail their checksums are refused as
+ *  BootChecksum when either boot sector is exFAT's, and with no record when
+ *  neither is. */
+static void boot_rows(void)
+{
+    check(mount_failing_boot(0, 0) == -EINVAL && strstr(last_klog, "refused: BootChecksum"),
+          "two boot regions failing their checksums are refused as BootChecksum");
+    check(mount_failing_boot("MSDOS5.0", 0) == -EINVAL &&
+              strstr(last_klog, "refused: BootChecksum"),
+          "and so when only the backup boot sector is exFAT's");
+    check(mount_failing_boot("MSDOS5.0", "MSDOS5.0") == -EINVAL && last_klog[0] == 0,
+          "a volume of another type is refused with no record");
+}
+
 /**
  * The damaged volumes. A FAT too short or inside the boot regions, a short
  * bitmap, an up-case table that fails its checksum or ends in a run with no
  * count, and 4 KiB sectors fail the mount. A main boot region that fails its
  * checksum, alone or with a root of its own, a backup that fails, two
  * regions that disagree, MediaFailure and a second bitmap mount read-only.
+ * Two regions that both fail are refused as `boot_rows` says.
  * A set that fails its checksum, its SecondaryCount, its NameLength or its
  * hash, a valid length past the length, and a stream without
  * AllocationPossible are skipped. A chain that leaves the heap reads its
@@ -627,6 +662,7 @@ static void damaged_rows(void)
         "--main-bad-root",
         "a main region that fails and whose root differs is read from the backup, read-only");
     readonly_row("--bad-backup-checksum", "a bad backup checksum mounts read-only");
+    boot_rows();
     readonly_row("--regions-disagree", "two regions that disagree mount read-only");
     readonly_row("--media-failure", "MediaFailure mounts read-only");
     readonly_row("--second-bitmap", "a second bitmap entry mounts read-only");

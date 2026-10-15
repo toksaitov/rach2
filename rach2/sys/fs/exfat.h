@@ -14,8 +14,9 @@
  * checks both boot regions' checksums and the boot sector field by field
  * before the mount is published. It returns -EINVAL with the record
  * `exfat: refused: BootChecksum` when both boot regions fail their
- * checksums, with no record when the name, jump or boot signature is not
- * exFAT's or the options are not vfat's, and with `exfat: refused: WHAT`
+ * checksums and either boot sector is exFAT's, with no record when the
+ * name, jump or boot signature is not exFAT's or the options are not
+ * vfat's, and with `exfat: refused: WHAT`
  * for any other field out of range or root object that breaks the format;
  * -EIO when the device fails a read, and -ENOMEM. It mounts read-only, with
  * the reason recorded, a volume one of whose boot regions fails its
