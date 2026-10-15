@@ -4,9 +4,8 @@
  * The format is in krffs.c, which addresses nodes by their offset from the
  * first byte of the region and reaches the medium through a backend. This
  * file is the other backend, over a block device through the buffer cache,
- * and the VFS type that `mount(2)` places. The root file system is not this:
- * it is a mapped image with a pointer interface, and it never comes through
- * here.
+ * and the VFS type that `mount(2)` places. The boot root is a mapped image
+ * with a pointer interface, in krffs.c, and never comes through here.
  */
 
 #include "krffsmount.h"
@@ -30,21 +29,22 @@
  * one. */
 struct krffs_open {
     struct krffs_open *next;
-    uint64_t offset;
-    int refs;
-    int nameless; /* unlinked while open: freed at the last close */
-    int pins;     /* O_PATH descriptions that keep the node, opening nothing */
+    uint64_t offset; /* where the node is now, which a move updates */
+    int refs;        /* opens not yet released */
+    int nameless;    /* unlinked while open: freed at the last close */
+    int pins;        /* O_PATH descriptions that keep the node, opening nothing */
 };
 
 /* A mounted volume, allocated at mount and freed at unmount. */
 struct krffs_volume {
     block_device_t *dev;
     struct vfs_mount *mnt;
-    krffs_mount_t fs;
-    int writable;
-    struct krffs_open *opens;
+    krffs_mount_t fs;         /* the region, which is the whole device */
+    int writable;             /* set at mount; VFS_MS_RDONLY in mnt->flags stops writes later */
+    struct krffs_open *opens; /* the open records, one per node */
 };
 
+/** The volume of the mount `mnt`. */
 static struct krffs_volume *vol_of(struct vfs_mount *mnt)
 {
     return (struct krffs_volume *)mnt->priv;
@@ -60,6 +60,8 @@ static void *handle_of(uint64_t offset)
     return (void *)(uintptr_t)(offset + 1);
 }
 
+/** The node offset `handle_of` encoded in `handle`; a NULL handle, which the
+ * VFS passes for the mount root, is offset 0. */
 static uint64_t offset_of(struct vfs_mount *mnt, void *handle)
 {
     (void)mnt;
@@ -77,6 +79,11 @@ static uint64_t offset_of(struct vfs_mount *mnt, void *handle)
  * One buffer is held at a time, which is inside the cache's hold rules.
  */
 
+/**
+ * Copy `size` bytes at `offset` of the volume `ctx` into `buffer`, a cache
+ * block at a time. 0, or -1 for a block the cache cannot give or bytes past
+ * the end of the device. May sleep in the cache.
+ */
 static int volume_read(void *ctx, uint64_t offset, void *buffer, uint32_t size)
 {
     struct krffs_volume *vol = ctx;
@@ -108,9 +115,14 @@ static int volume_read(void *ctx, uint64_t offset, void *buffer, uint32_t size)
     return 0;
 }
 
-/*
- * A write goes into the cache and reaches the device at the sync the format
- * asks for, which is what keeps the order a stop must survive: the file
+/**
+ * Copy `size` bytes of `buffer` to `offset` of the volume `ctx`, into the
+ * cache's buffers, which it marks dirty. 0, or -1 for a volume mounted
+ * read-only, a block the cache cannot give, or bytes past the end of the
+ * device.
+ *
+ * A write goes into the cache and reaches the device at the format's next
+ * sync point, which is what keeps the order a stop must survive: the file
  * system syncs between a write and the field that publishes it.
  */
 static int volume_write(void *ctx, uint64_t offset, const void *buffer, uint32_t size)
@@ -148,12 +160,12 @@ static int volume_write(void *ctx, uint64_t offset, const void *buffer, uint32_t
     return 0;
 }
 
-/*
+/**
  * The format's sync point: the cache's dirty buffers to the device, and then
- * the device's own cache to the medium. A stick answers a write as soon as
- * it has taken it, so a volume whole on the wire is not yet whole on the
- * medium, and the order this file system's protocol rests on would be an
- * order the medium never saw.
+ * the device's own cache to the medium; 0, or -1 if either fails. A stick
+ * answers a write as soon as it has taken it, so a volume whole on the wire
+ * is not yet whole on the medium, and the order this file system's protocol
+ * rests on would be an order the medium never saw.
  */
 static int volume_sync(void *ctx)
 {
@@ -165,7 +177,7 @@ static int volume_sync(void *ctx)
     return block_flush(vol->dev) == 0 ? 0 : -1;
 }
 
-/*
+/**
  * The mount's lock and the writable check for write, truncate and setattr;
  * the namespace operations arrive locked. Returns 0 with the lock held, or
  * -EROFS with it released. Decided under the lock, so a writer queued behind
@@ -189,7 +201,9 @@ static int begin_write(struct vfs_mount *mnt)
  *
  * The core's namespace operations take a path, which is what the ring is
  * searched by; the mount table hands out a directory and a name, so they are
- * put back together here, as the root's adapter does.
+ * put back together here, as the root's adapter does. 0, or -ENAMETOOLONG
+ * when the path does not fit in `cap` bytes or the directory's path cannot
+ * be made.
  */
 static int join(struct vfs_mount *mnt, void *dir, const char *name, char *path, uint32_t cap)
 {
@@ -219,6 +233,11 @@ static const krffs_backend_t volume_backend = {volume_read, volume_write, volume
 
 /* The operations. */
 
+/**
+ * The node `name` names in the directory `dir`: `dir` itself for `.`, its
+ * parent for `..`, the root's parent being the root, and otherwise its
+ * child, or -ENOENT. A handle is no resource, so nothing is held.
+ */
 static int kv_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
 {
     struct krffs_volume *vol = vol_of(mnt);
@@ -243,6 +262,15 @@ static int kv_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **
     return 0;
 }
 
+/**
+ * The attributes of `node` from its header, or -EIO when it cannot be read.
+ *
+ * The root directory's mode is the format's, S_IFDIR and 0755, not the
+ * node's, since the root node keeps the dirty flag in the same field. A
+ * directory has two links and any other node one. The inode number is the
+ * offset plus one, unique at any moment, so a node that moves gets a new
+ * number.
+ */
 static int kv_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     struct krffs_volume *vol = vol_of(mnt);
@@ -254,8 +282,6 @@ static int kv_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     }
     k_memset(st, 0, sizeof(*st));
     if (at == 0) {
-        /* The root directory's mode is the format's, not the node's: the
-         * root node keeps the dirty flag in the same field. */
         st->mode = KRFFS_S_IFDIR | 0755u;
         st->nlink = 2;
     } else {
@@ -264,7 +290,6 @@ static int kv_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     }
     st->uid = head.uid;
     st->gid = head.gid;
-    /* The offset, unique at any moment; a moved node gets a new number. */
     st->ino = at + 1;
     st->size = head.data_size;
     st->atime_sec = head.access_time.seconds;
@@ -316,6 +341,7 @@ static uint64_t follow_moves(const struct krffs_open *handle)
  * The record tracks the node's current offset and remains allocated until
  * its last open reference is released. The caller holds the namespace
  * lock from lookup through registration, so `node` cannot become stale.
+ * 0, or -ENOMEM when a new record cannot be allocated.
  */
 static int kv_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
 {
@@ -340,7 +366,9 @@ static int kv_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
 
 /**
  * Free a record that no open and no pin keeps, and reap its file when it
- * was unlinked meanwhile.
+ * was unlinked meanwhile and the mount is still writable; on a read-only
+ * mount the node stays, without a name, for a later repair
+ * (`krffs_repair_at` or `fsck.krffs`).
  *
  * Remove the record before reaping, which may sleep under the mount lock.
  */
@@ -426,7 +454,8 @@ static void kv_unpin(struct vfs_mount *mnt, void *token)
  * Read an open file under the mount lock.
  *
  * The open record retains its identity across relocation and reuse of the
- * old offset, including while the caller waits for the lock.
+ * old offset, including while the caller waits for the lock. Returns the
+ * bytes read, 0 at an offset past 4 GiB or the end of the file, or -EIO.
  */
 static int32_t kv_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
                        uint64_t offset)
@@ -445,13 +474,17 @@ static int32_t kv_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t 
     return got < 0 ? -EIO : (int32_t)got;
 }
 
+/* The cursor of a listing that has passed its last entry. */
 #define KRFFS_DIR_END 0xFFFFFFFFu
 
 /**
  * Read one directory entry under the mount lock through its open handle.
  *
  * The cursor is the next node's offset. Zero starts at the root, which
- * is not an entry; returning to it ends the walk.
+ * is not an entry; returning to it ends the walk. The entry's inode number
+ * is its offset plus one, as `kv_getattr` gives it. Returns 1 with `ent`
+ * filled, 0 at the end, -EIO for a header that cannot be read, or -ENOTDIR
+ * for a handle that is not a directory.
  */
 static int kv_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vfs_dirent *ent)
 {
@@ -512,7 +545,9 @@ static int kv_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, str
  *
  * Resolve the handle after taking the mount lock. If the node moves,
  * repoint its references from the resolved offset to the new offset,
- * including when the operation fails after relocation.
+ * including when the operation fails after relocation. Returns the bytes
+ * written; -EROFS on a read-only mount; -EFBIG for a write that would reach
+ * past 4 GiB; -ENOSPC when the file could not grow; or -EIO.
  */
 static int32_t kv_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                         uint64_t offset)
@@ -552,7 +587,9 @@ static int32_t kv_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
  *
  * Resolve the handle after taking the mount lock. If the node moves,
  * repoint its references from the resolved offset to the new offset,
- * including when the operation fails after relocation.
+ * including when the operation fails after relocation. Returns 0; -EROFS on
+ * a read-only mount; -EFBIG for a size of 4 GiB or more; -ENOSPC when the
+ * file could not grow; or -EIO.
  */
 static int kv_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
@@ -601,13 +638,13 @@ static int kv_fsync(struct vfs_mount *mnt, void *handle)
 }
 
 /**
- * The errno of a creation the core refused: -ENOSPC for a volume with no
- * room; -EINVAL for a directory whose identifier another directory has
+ * The errno of a creation that failed in the core: -ENOSPC for a volume with
+ * no room; -EINVAL for a directory whose identifier another directory has
  * (`KRFFS_ETAKEN`), the answer for a name the file system cannot hold; and
- * -EIO for a medium that refused a read, a write or a sync, which a device
- * removed during the creation does. A path the core could not use is -EIO
- * too: the directory the name goes in is held, so only a failed read loses
- * it.
+ * -EIO for a read, a write or a sync of the medium that failed, which a
+ * device removed during the creation causes. A path the core could not use
+ * is -EIO too: the directory the name goes in is held, so only a failed
+ * read loses it.
  */
 static int made_errno(int rc)
 {
@@ -617,13 +654,15 @@ static int made_errno(int rc)
     return rc == KRFFS_ENOSPACE ? -ENOSPC : -EIO;
 }
 
-/* The owner a node is made with: the caller's effective ids, which the core
- * writes before the node's name, and root's when there is no caller. */
+/** The owner a node is made with: the caller's effective user id, which the
+ * core writes before the node's name, and root's when there is no caller. */
 static uint32_t maker_uid(void)
 {
     return current_proc ? current_proc->euid : 0;
 }
 
+/** The group a node is made with: the caller's effective group id, even in
+ * a set-group-ID directory, and root's when there is no caller. */
 static uint32_t maker_gid(void)
 {
     return current_proc ? current_proc->egid : 0;
@@ -636,7 +675,9 @@ static uint32_t maker_gid(void)
  * A name that is already there answers -EEXIST. The core would answer
  * success, which would make this a creation of somebody else's file: its
  * mode, its owner and the caller's O_EXCL all belong to the open that finds
- * it.
+ * it. Otherwise -EROFS on a read-only mount, -ENAMETOOLONG for a path that
+ * does not fit, `made_errno`'s answer for a creation that failed in the
+ * core, and -EIO when the new node cannot be found.
  */
 static int kv_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode, void **node)
 {
@@ -670,8 +711,8 @@ static int kv_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_
 /**
  * A FIFO or a socket `name` in `dir`, made as `kv_create` makes a file, with
  * its type and permission bits and its owner on the medium before its name.
- * A device node has a number the format has no field for, and is refused
- * with EPERM.
+ * A device node has a number the format has no field for, and answers
+ * -EPERM. Otherwise the errors are `kv_create`'s.
  */
 static int kv_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
                     uint32_t rdev, void **node)
@@ -715,7 +756,9 @@ static int kv_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t
  * A name taken off a file somebody has open leaves the node, which keeps
  * that reader's file alive, and the last close frees it. The open record is
  * looked up again after the writes, which sleep: if a last close freed it
- * meanwhile, the node goes here.
+ * meanwhile, the node goes here. 0, -EROFS on a read-only mount,
+ * -ENAMETOOLONG, or -EIO for a name that is not removed, a directory among
+ * them.
  */
 static int kv_unlink(struct vfs_mount *mnt, void *dir, const char *name)
 {
@@ -756,9 +799,9 @@ static int kv_unlink(struct vfs_mount *mnt, void *dir, const char *name)
 
 /**
  * A directory `name` in `dir`, with the caller's `mode` and identity on the
- * medium before its name, as `kv_create` makes a file. A refusal of the core
- * is `made_errno`'s, -EINVAL among them for a name whose directory
- * identifier another directory has.
+ * medium before its name, as `kv_create` makes a file. A failure in the core
+ * answers `made_errno`'s errno, -EINVAL among them for a name whose
+ * directory identifier another directory has.
  */
 static int kv_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 {
@@ -780,8 +823,8 @@ static int kv_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t
 /**
  * Whether the node at `at` is some process's working directory, which the
  * process record keeps as the mount and the node's handle (`vfs_cwd_set`).
- * The record holds nothing here, since this type counts no handles, so a
- * removal looks for it in the records themselves.
+ * This type counts no handles, so the working directory takes no hold on
+ * the node, and a removal looks for it in the records themselves.
  */
 static int cwd_at(struct vfs_mount *mnt, uint64_t at)
 {
@@ -801,7 +844,9 @@ static int cwd_at(struct vfs_mount *mnt, uint64_t at)
  * A directory a descriptor has open or pinned, or that is a process's
  * working directory, stays, with -EBUSY: this file system has no name for a
  * directory nobody can reach, and freeing it would leave its offset in the
- * allocator's hands while the holder still refers to it.
+ * allocator's hands while the holder still refers to it. Otherwise 0,
+ * -EROFS on a read-only mount, -ENAMETOOLONG, or -ENOTEMPTY for any
+ * removal that fails in the core.
  */
 static int kv_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
 {
@@ -831,8 +876,10 @@ static int kv_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
  *
  * A rename over a file somebody has open removes it as surely as an unlink
  * does, so the name comes off it here and the node stays for whoever has it
- * open, where the core would free it under them. A directory that is open
- * there answers -EISDIR.
+ * open, where the core would free it under them. As in `kv_unlink`, the
+ * open record is looked up again after the writes, which sleep. A directory
+ * that is open there answers -EISDIR. Otherwise 0, -EROFS on a read-only
+ * mount, -ENAMETOOLONG, or -EIO for a rename that failed in the core.
  */
 static int kv_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
                      const char *newname)
@@ -868,7 +915,6 @@ static int kv_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
             }
             krffs_stamp_at(&vol->fs, krffs_parent_offset(&vol->fs, dst), KRFFS_STAMP_DATA);
             krffs_orphan_at(&vol->fs, dst);
-            /* Looked up again after the writes, which sleep, as in unlink. */
             o = open_at(vol, dst);
             if (o) {
                 o->nameless = 1;
@@ -882,7 +928,11 @@ static int kv_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
 
 /**
  * The attributes a volume keeps: the permission bits, the owner and the
- * times. The type field of the mode is the node's kind and is not changed.
+ * times, under the mount's lock, with a new change time. The type field of
+ * the mode is the node's kind and is not changed. The root's attributes
+ * are the format's, and a call for it answers 0 and changes nothing.
+ * Returns 0, -EROFS on a read-only mount, or -EIO for a header that cannot
+ * be read; a store that fails is not reported.
  */
 static int kv_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
 {
@@ -896,7 +946,7 @@ static int kv_setattr(struct vfs_mount *mnt, void *node, int what, const struct 
     }
     if (at == 0 || krffs_head(&vol->fs, at, &head) != 0) {
         vfs_ns_unlock(mnt);
-        return at == 0 ? 0 : -EIO; /* the root's mode is the format's */
+        return at == 0 ? 0 : -EIO;
     }
     if (what & VFS_SET_MODE) {
         krffs_set_mode_at(&vol->fs, at, (uint16_t)st->mode);
@@ -917,6 +967,8 @@ static int kv_setattr(struct vfs_mount *mnt, void *node, int what, const struct 
     return 0;
 }
 
+/** The volume's size and free bytes in 1 KiB blocks, KRFFS_FILE_SYSTEM_MAGIC
+ * and the longest name; always 0. */
 static int kv_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 {
     struct krffs_volume *vol = vol_of(mnt);
@@ -939,8 +991,9 @@ static int kv_sync(struct vfs_mount *mnt)
  * The unmount that wrote the clean flag is not happening after all.
  *
  * The flag says a volume nobody is writing, and this one is still mounted
- * and writable. It goes back on; a volume that will not take it is one no
- * check would repair after a stop, so the mount takes no more writes.
+ * and writable. It goes back on; a volume where that write or its flush
+ * fails is one no check would repair after a stop, so the mount takes no
+ * more writes.
  */
 static void kv_abort_unmount(struct vfs_mount *mnt)
 {
@@ -962,7 +1015,8 @@ static void kv_abort_unmount(struct vfs_mount *mnt)
  *
  * Earlier writes must reach the medium before the cleared flag can.
  * A mount made read-only before preparation keeps its dirty flag. If the
- * clear fails, the flag may already be on the device; refuse further writes.
+ * clear fails, the flag may already be on the device, and the mount takes no
+ * more writes. Returns 0, the sync's -errno, or -EIO.
  */
 static int kv_prepare_unmount(struct vfs_mount *mnt)
 {
@@ -983,6 +1037,8 @@ static int kv_prepare_unmount(struct vfs_mount *mnt)
     return 0;
 }
 
+/** Free the open records left and the volume, after the unmount has
+ * written everything back; the mount has no private state after it. */
 static void kv_unmount(struct vfs_mount *mnt)
 {
     struct krffs_volume *vol = vol_of(mnt);
@@ -997,6 +1053,8 @@ static void kv_unmount(struct vfs_mount *mnt)
     mnt->priv = 0;
 }
 
+/** The canonical path of the directory `node` within the volume; 0, or
+ * -ENAMETOOLONG for any path the core cannot make. */
 static int kv_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
     struct krffs_volume *vol = vol_of(mnt);
@@ -1044,14 +1102,23 @@ static const struct vfs_ops krffs_volume_ops = {
  *
  * The region is the whole device, since the format records no size of its
  * own: the ring tiles what it was made in, and a device larger than the image
- * fails the chain check rather than mounting short. Every refusal says which
- * rule the volume broke.
+ * fails the chain check rather than mounting short. Every failed mount logs
+ * which rule the volume broke.
  *
  * A writable mount of a volume left dirty repairs it first. The backward
  * links are what a stop leaves wrong, and once they are repaired the chain
  * must pass the strict check; a writable mount then sets the dirty flag. A
  * read-only mount does not repair, and its walkers never read a backward
- * link, so its chain need only be walkable.
+ * link, so its chain need only be walkable. The grain is the cache's block,
+ * what the cache puts on the medium at a time, so a write of a field whose
+ * changed bytes fall in two blocks fails rather than reach the medium in two
+ * pieces.
+ *
+ * Returns 0; -EINVAL for a volume smaller than two headers, one whose first
+ * node lacks the magic number or the root type, or a malformed ring; -EFBIG
+ * for a volume of 4 GiB or more; -ENOMEM; or -EIO when the first node cannot
+ * be read, a repair fails, or the dirty flag cannot be set. A failed mount
+ * frees what it made.
  */
 static int krffs_volume_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
                               const char *options)
@@ -1080,9 +1147,6 @@ static int krffs_volume_mount(struct vfs_mount *mnt, block_device_t *dev, uint32
     vol->fs.backend = &volume_backend;
     vol->fs.ctx = vol;
     vol->fs.size = (uint32_t)bytes;
-    /* What the cache puts on the medium at a time: a field whose changed
-     * bytes fall in two of these is refused rather than published in two
-     * pieces (krffs.Readme.md). */
     vol->fs.grain = BCACHE_BLOCK_BYTES;
     mnt->priv = vol;
 

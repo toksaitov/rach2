@@ -9,6 +9,7 @@
 
 struct vfs_type;
 
+/* The type `krffs`, whose uses are serialised under the mount's lock. */
 extern const struct vfs_type vfs_krffs_volume_type;
 
 #endif /* _KRFFSMOUNT_H_ */
