@@ -98,6 +98,33 @@ static int ps2_wait_output(void)
 }
 
 /**
+ * Spin until the 8042 output buffer has a byte from the mouse, ready to read.
+ *
+ * A keyboard byte waiting in the buffer is read and dropped: the buffer holds
+ * one byte, so the mouse's cannot arrive until the keyboard's is taken. A key
+ * pressed while the mouse is brought up is lost.
+ *
+ * @return 0 when a mouse byte is present, -1 on timeout.
+ */
+static int ps2_wait_mouse_output(void)
+{
+    int timeout = PS2_TIMEOUT;
+    uint8_t status;
+
+    while (timeout-- > 0) {
+        status = inb(PS2_STATUS_PORT);
+        if ((status & PS2_STATUS_OUTPUT_FULL) == 0) {
+            continue;
+        }
+        if (status & PS2_STATUS_MOUSE_DATA) {
+            return 0;
+        }
+        inb(PS2_DATA_PORT);
+    }
+    return -1;
+}
+
+/**
  * Write a command byte to the 8042 controller's command port.
  *
  * @return 0 on success, -1 if the input buffer never drains.
@@ -114,11 +141,13 @@ static int ps2_send_command(uint8_t cmd)
  * Send a byte to the mouse through the 8042 auxiliary port.
  *
  * Each command must be prefixed with PS2_CMD_WRITE_MOUSE so the
- * controller routes the following data byte to the auxiliary device.
- * A MOUSE_RESEND reply means the mouse saw a framing error, and a timeout
- * means the controller or the mouse did not answer; either way the command
- * is tried again, three times in all. Any other byte is returned to the
- * caller, since some commands answer with data and not an ACK.
+ * controller routes the following data byte to the auxiliary device. The
+ * reply is the next byte the status marks as the mouse's, and a keyboard
+ * byte before it is dropped. A MOUSE_RESEND reply means the mouse saw a
+ * framing error, and a timeout means the controller or the mouse did not
+ * answer; either way the command is tried again, three times in all. Any
+ * other byte is returned to the caller, since some commands answer with
+ * data and not an ACK.
  *
  * @return the mouse's response byte, or -1 after three failed tries.
  */
@@ -138,7 +167,7 @@ static int mouse_send_command(uint8_t cmd)
         }
         outb(PS2_DATA_PORT, cmd);
 
-        if (ps2_wait_output() < 0) {
+        if (ps2_wait_mouse_output() < 0) {
             continue;
         }
 
@@ -153,6 +182,27 @@ static int mouse_send_command(uint8_t cmd)
     }
 
     return -1;
+}
+
+/**
+ * Reset the mouse and read the two bytes it sends after its ACK, 0xAA for a
+ * passed self-test and 0x00 for its device ID. Their values are not checked,
+ * and a timeout on either is tolerated.
+ *
+ * @return 0 when the mouse answered the reset, -1 when it did not.
+ */
+static int mouse_reset(void)
+{
+    if (mouse_send_command(MOUSE_CMD_RESET) < 0) {
+        return -1;
+    }
+    if (ps2_wait_mouse_output() == 0) {
+        inb(PS2_DATA_PORT);
+    }
+    if (ps2_wait_mouse_output() == 0) {
+        inb(PS2_DATA_PORT);
+    }
+    return 0;
 }
 
 /**
@@ -215,8 +265,9 @@ static void mouse_irq_handler(isr_params_t *params)
     }
 }
 
-/* A host test compiles the handler without the bring-up, whose `cli` and
- * `sti` it can neither assemble on every host nor run. */
+/* A host test compiles the handler and the mouse's commands without the
+ * bring-up, whose `cli` and `sti` it can neither assemble on every host nor
+ * run. */
 #ifndef RACH2_HOSTTEST
 
 /**
@@ -283,17 +334,8 @@ int init_mouse(void)
     }
     outb(PS2_DATA_PORT, config);
 
-    response = mouse_send_command(MOUSE_CMD_RESET);
-    if (response < 0) {
+    if (mouse_reset() < 0) {
         klog(KLOG_WARN, "mouse", "the device did not answer its reset");
-    } else {
-        /* Reset emits 0xAA (self-test pass) then 0x00 (device ID). */
-        if (ps2_wait_output() == 0) {
-            inb(PS2_DATA_PORT); /* 0xAA */
-        }
-        if (ps2_wait_output() == 0) {
-            inb(PS2_DATA_PORT); /* 0x00 */
-        }
     }
 
     response = mouse_send_command(MOUSE_CMD_SET_DEFAULTS);
