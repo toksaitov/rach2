@@ -1,21 +1,25 @@
+/* pagecache.c: the page cache of pagecache.h, and its build for the host
+ * tests. */
+
 #include "pagecache.h"
 
 #ifdef PAGECACHE_HOSTTEST
 
 /*
- * Host test build: no real frames, page tables, or device. Each slot
- * points at a static page, mapping is a no-op, and the backing is a fake the
- * test supplies. The bookkeeping (hash, clock, dirty tracking, eviction
- * order) is what runs. The system stdlib is avoided so it does not redefine
- * kint.h's types.
+ * The host tests' build has no frames, page tables or device: each slot
+ * points at a static page, mapping does nothing, and the test supplies the
+ * backing. The bookkeeping (hash, clock, dirty tracking, eviction order) is
+ * what runs. The system stdlib is avoided so it does not redefine kint.h's
+ * types.
  */
 #define PC_PAGE_SIZE 4096u
 
 static uint8_t pc_host_pages[PC_SLOTS][PC_PAGE_SIZE];
 
-/* The record a failed write-back raises has no reader here: the test
-   counts the write it sees fail. */
 #define KLOG_ERR 3
+
+/** The record a failed writeback leaves has no reader here: the test counts
+ * the write it sees fail. */
 static void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -23,6 +27,7 @@ static void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
+/** Map nothing: the host tests' pages are not mapped. */
 static void pc_platform_map(uintptr_t va, uintptr_t phys, int writable)
 {
     (void)va;
@@ -30,6 +35,7 @@ static void pc_platform_map(uintptr_t va, uintptr_t phys, int writable)
     (void)writable;
 }
 
+/** Unmap nothing. */
 static void pc_platform_unmap(uintptr_t va)
 {
     (void)va;
@@ -46,16 +52,19 @@ static void pc_platform_unmap(uintptr_t va)
 #define PC_PAGE_SIZE  PAGE_SIZE
 
 /* The window's size when no device memory BAR lies inside it: 512 MiB, the
-   window's whole region in the kernel's layout (paging.h), and the ceiling
-   on a mounted disk file system, sized for the machine that boots from its
-   own disk, not for a test image. */
+ * window's whole region in the kernel's layout (cpu.h), and the ceiling on a
+ * mounted disk file system, sized for the machine that boots from its own
+ * disk, not for a test image. */
 #define PC_WINDOW_CAP 0x20000000u
 
+/** Map the frame at `phys` at the window address `va`, writable when
+ * `writable` says (`map_kernel_frame`). */
 static void pc_platform_map(uintptr_t va, uintptr_t phys, int writable)
 {
     map_kernel_frame(va, phys, writable);
 }
 
+/** Unmap the window address `va` (`unmap_kernel_frame`). */
 static void pc_platform_unmap(uintptr_t va)
 {
     unmap_kernel_frame(va);
@@ -63,29 +72,31 @@ static void pc_platform_unmap(uintptr_t va)
 
 #endif
 
-/* The hash maps a page number to its slot for O(1) lookup; it is twice the slot
-   count, so PC_SLOTS must be a power of two. */
+/* The hash maps a page number to its slot for O(1) lookup; it is twice the
+ * slot count, so PC_SLOTS must be a power of two. An entry is a slot's
+ * index, PC_HASH_EMPTY, or PC_HASH_DELETED for a removed one. */
 #define PC_HASH_SIZE    (PC_SLOTS * 2u)
 #define PC_HASH_EMPTY   (-1)
 #define PC_HASH_DELETED (-2)
 
-/* One resident page: its backing offset, its frame, and the clock/dirty state.
-   `page` is where the backing reads and writes the bytes (the kernel's address
-   of the frame, `phys_to_virt` of it, or a static page on the host); `phys` is
-   the frame to map at the window virtual address. */
+/* One slot of the cache: its backing offset, its frame, and the clock and
+ * dirty state. `page` is where the backing reads and writes the bytes (the
+ * kernel's address of the frame, `phys_to_virt` of it, or a static page on
+ * the host); `phys` is the frame to map at the window address, 0 while the
+ * slot has none. */
 struct pc_entry {
     uint32_t disk_off;
     uintptr_t phys;
     void *page;
-    uint8_t valid;
-    uint8_t dirty;
-    uint8_t accessed;
-    uint8_t pinned;
+    uint8_t valid;    /* the slot holds the page at `disk_off` */
+    uint8_t dirty;    /* written since its last writeback */
+    uint8_t accessed; /* touched since the clock hand last passed */
+    uint8_t pinned;   /* a fill or a writeback is in flight */
 };
 
 static struct pc_entry pc_slots[PC_SLOTS];
 static int32_t pc_hash[PC_HASH_SIZE];
-static uint32_t pc_tombs;
+static uint32_t pc_tombs; /* PC_HASH_DELETED entries in the hash */
 
 static uint32_t pc_capacity = PC_SLOTS; /* live slots; the test may shrink this */
 static uint32_t pc_clock;               /* clock hand over [0, pc_capacity) */
@@ -101,7 +112,7 @@ static uint32_t pc_writebacks;
 static uint32_t pc_resident_frames; /* slots holding a frame */
 
 /* Whether a slot has a frame: on the host every slot has its buffer from
-   the start and `phys` is never set. */
+ * the start and `phys` is never set. */
 #ifdef PAGECACHE_HOSTTEST
 #define PC_HAS_STORAGE(e) ((e)->page != 0)
 #else
@@ -128,7 +139,7 @@ static int pc_slot_storage(struct pc_entry *e)
         return 1;
     }
     if (!mem_may_take(0)) {
-        return 0; /* the reserve's: a resident page gives way instead */
+        return 0;
     }
     frame = alloc_kernel_frame();
     if (!frame) {
@@ -141,6 +152,7 @@ static int pc_slot_storage(struct pc_entry *e)
 #endif
 }
 
+/** Give slot `e`'s frame back, if it has one; on the host, nothing. */
 static void pc_slot_release(struct pc_entry *e)
 {
 #ifdef PAGECACHE_HOSTTEST
@@ -155,13 +167,16 @@ static void pc_slot_release(struct pc_entry *e)
 #endif
 }
 
+/** The page number of the backing offset `disk_off`, the hash's key. */
 static uint32_t pc_page_of(uint32_t disk_off)
 {
     return disk_off / PC_PAGE_SIZE;
 }
 
 /**
- * Rebuilds the lookup hash from the valid slots, clearing every tombstone.
+ * Rebuild the lookup hash from the valid slots, clearing every tombstone.
+ * The table has more entries than there are slots, so an empty one is
+ * found within the table's length.
  */
 static void pc_hash_rebuild(void)
 {
@@ -177,8 +192,6 @@ static void pc_hash_rebuild(void)
             uint32_t h = pc_page_of(pc_slots[i].disk_off) & (PC_HASH_SIZE - 1u);
             uint32_t probes = 0;
 
-            /* The table has more entries than there are slots, so an
-             * empty one is found within the table's length. */
             while (pc_hash[h] != PC_HASH_EMPTY) {
                 h = (h + 1u) & (PC_HASH_SIZE - 1u);
                 if (++probes == PC_HASH_SIZE) {
@@ -191,7 +204,7 @@ static void pc_hash_rebuild(void)
 }
 
 /**
- * Returns the slot caching `disk_off`'s page, or -1 on a miss.
+ * The slot that caches `disk_off`'s page, or -1 on a miss.
  */
 static int32_t pc_hash_find(uint32_t disk_off)
 {
@@ -212,7 +225,7 @@ static int32_t pc_hash_find(uint32_t disk_off)
 }
 
 /**
- * Inserts `slot` under `disk_off`'s page. The key must be absent (callers
+ * Insert `slot` under `disk_off`'s page. The key must be absent (callers
  * insert only after a miss), so the first empty or tombstoned bucket takes
  * it.
  */
@@ -230,9 +243,9 @@ static void pc_hash_insert(uint32_t disk_off, uint32_t slot)
 }
 
 /**
- * Removes `disk_off`'s page from the hash, leaving a tombstone. Rebuilds the
- * table once tombstones pass half the slot count, so probe chains stay short
- * and an insert always finds a bucket.
+ * Remove `disk_off`'s page from the hash, leaving a tombstone. The table is
+ * rebuilt once tombstones pass half the slot count, so probe chains stay
+ * short and an insert always finds a bucket.
  */
 static void pc_hash_remove(uint32_t disk_off)
 {
@@ -256,16 +269,19 @@ static void pc_hash_remove(uint32_t disk_off)
 }
 
 /**
- * Write a resident page while reserving its slot and frame.
+ * Write the resident page of `e` back if it is dirty, with the slot pinned
+ * meanwhile: 0 when it is clean or written, -1 when the slot is pinned or
+ * the write fails, which leaves the page dirty.
  *
- * Return -1 if the slot is pinned or the write fails. Test pinned before
- * dirty, since an in-flight write temporarily clears dirty. Kernel system
- * calls switch processes only when they yield or sleep, and page faults
- * run with interrupts off, so the pin is acquired before another caller
- * can enter. The backing writer may sleep with the pin held.
+ * The pin is tested before the dirty mark, since a write in flight clears
+ * the mark for its length. A system call switches processes only when it
+ * yields or sleeps, and a page fault runs with interrupts off, so the pin
+ * is taken before another caller can enter. The backing's write may sleep
+ * with the pin held.
  *
- * Re-protect and clear dirty before writing. A concurrent store faults and
- * marks the page dirty again; a successful write must leave that mark set.
+ * The page is mapped read-only and its mark cleared before the write, so a
+ * store meanwhile faults and marks the page dirty again, and a successful
+ * write leaves that mark set.
  */
 static int pc_writeback(struct pc_entry *e)
 {
@@ -293,17 +309,14 @@ static int pc_writeback(struct pc_entry *e)
 }
 
 /**
- * Write back a dirty page and invalidate its cache entry.
+ * Write back the page of `slot` if it is dirty, as `pc_writeback` does, and
+ * then unmap it and empty the slot, which keeps its frame. Returns 0 when
+ * the slot is emptied or was empty, and -1, with the page kept, when the
+ * slot is pinned, the writeback fails, or a store dirtied the page again
+ * during the write.
  *
- * Keep the slot and frame reserved until writeback completes. Make the
- * mapping read-only and clear the dirty flag before the write so a
- * concurrent store marks the page dirty again.
- *
- * Return 0 if the slot is invalidated or was already invalid. Return -1
- * and retain the page if the slot is pinned, writeback fails, or the page
- * is dirtied again.
- * Invalidate the slot before removing its hash entry, since removal may
- * rebuild the hash from valid slots.
+ * The slot is emptied before its hash entry is removed, since the removal
+ * may rebuild the hash from the valid slots.
  */
 static int pc_evict(uint32_t slot)
 {
@@ -324,18 +337,18 @@ static int pc_evict(uint32_t slot)
 }
 
 /**
- * Returns a slot to fill: a free one within the live capacity, else the clock
- * victim (written back first). A victim whose writeback fails is left dirty and
- * skipped, so a clean victim is still found; returns -1 only if no victim could
- * be freed. Never returns a pinned slot.
+ * A slot to fill, never a pinned one: an empty slot within the live
+ * capacity that has a frame, else one a frame can be had for, else the
+ * clock's victim, written back first. When no frame can be had, a resident
+ * page gives way. The clock passes a slot reclaim emptied of its frame, and
+ * a victim whose writeback fails is left dirty and passed, so a clean
+ * victim is still found; -1 only when no victim could be emptied.
  */
 static int32_t pc_get_slot(void)
 {
     uint32_t i;
     uint32_t scanned;
 
-    /* An empty slot with a frame first, then one a frame can be had for;
-       when no frame can be had, a resident page gives way below. */
     for (i = 0; i < pc_capacity; ++i) {
         if (!pc_slots[i].valid && !pc_slots[i].pinned && PC_HAS_STORAGE(&pc_slots[i])) {
             return (int32_t)i;
@@ -351,7 +364,7 @@ static int32_t pc_get_slot(void)
         uint32_t v = pc_clock;
         pc_clock = (pc_clock + 1u) % pc_capacity;
         if (pc_slots[v].pinned || !PC_HAS_STORAGE(&pc_slots[v])) {
-            continue; /* held, or a slot reclaim emptied of its frame */
+            continue;
         }
         if (pc_slots[v].accessed) {
             pc_slots[v].accessed = 0;
@@ -360,12 +373,13 @@ static int32_t pc_get_slot(void)
         if (pc_evict(v) == 0) {
             return (int32_t)v;
         }
-        /* Writeback failed: leave the page dirty and try another victim. */
     }
 
     return -1;
 }
 
+/** A hit is a write to a page mapped read-only, the only fault a resident
+ * page of the window takes: the page is made writable and marked dirty. */
 int pc_fault(uintptr_t fault_address, int write)
 {
     uintptr_t page_va = fault_address & ~(uintptr_t)(PC_PAGE_SIZE - 1u);
@@ -377,14 +391,12 @@ int pc_fault(uintptr_t fault_address, int write)
         return 0;
     }
     if (page_va - PCWIN_BASE >= pc_fs_size) {
-        return 0; /* past the backed size: a wild kernel pointer */
+        return 0;
     }
     disk_off = (uint32_t)(page_va - PCWIN_BASE);
 
     slot = pc_hash_find(disk_off);
     if (slot >= 0) {
-        /* Hit: the only fault on a present window page is a write to one mapped
-           read-only, so upgrade it to writable and record the write. */
         e = &pc_slots[slot];
         e->accessed = 1;
         if (write) {
@@ -396,14 +408,14 @@ int pc_fault(uintptr_t fault_address, int write)
 
     slot = pc_get_slot();
     if (slot < 0) {
-        return 0; /* a dirty victim could not be written back */
+        return 0;
     }
     e = &pc_slots[slot];
     e->pinned = 1;
     e->disk_off = disk_off;
     if (pc_read(disk_off, e->page) != 0) {
         e->pinned = 0;
-        return 0; /* the fill read failed */
+        return 0;
     }
     e->valid = 1;
     e->dirty = (uint8_t)(write ? 1 : 0);
@@ -421,8 +433,6 @@ uint32_t pc_shrink(uint32_t want, int can_write, uint32_t *written)
     uint32_t got = 0;
     int pass;
 
-    /* Clean pages go first, whatever their age, then, with `can_write`,
-       dirty ones written back; a page whose writeback fails stays. */
     for (pass = 0; pass < (can_write ? 2 : 1) && got < want; ++pass) {
         uint32_t i;
 
@@ -454,11 +464,9 @@ uint32_t pc_resident(void)
 }
 
 /**
- * Write dirty resident pages, preserving stores made during each write.
- *
- * Report busy slots and failed writes separately, so a competing sync
- * can wait for in-flight writes without retrying a write failure forever.
- * Continue with other slots and preserve both result bits.
+ * Busy slots and failed writes are reported apart, so that a competing sync
+ * can wait for the writes in flight without trying a failed write again for
+ * ever. A failure does not stop the walk over the other slots.
  */
 int pc_sync(void)
 {
@@ -480,12 +488,14 @@ int pc_sync(void)
     return result;
 }
 
+/** The size is clamped to the window before it is rounded up to a page, so
+ * that the rounding cannot overflow; the window's span is page-aligned, so
+ * the rounded size never passes it. The window maps whole pages, so the
+ * file system's last partial page is a full page there. */
 void pc_set_backing(pc_read_fn read, pc_write_fn write, uint32_t fs_size)
 {
     uint32_t i;
 
-    /* A backing switch is a remount, not a sync: drop every resident frame
-       without writeback, since the new backing has nothing to do with it. */
     for (i = 0; i < PC_SLOTS; ++i) {
         if (pc_slots[i].valid) {
             pc_platform_unmap(PCWIN_BASE + pc_slots[i].disk_off);
@@ -499,10 +509,6 @@ void pc_set_backing(pc_read_fn read, pc_write_fn write, uint32_t fs_size)
 
     pc_read = read;
     pc_write = write;
-    /* Clamp to the window first (so the round-up cannot overflow), then round
-       up to whole pages: the window maps page-grained, so the file system's
-       last partial page is a full mappable page. The window span is
-       page-aligned, so the rounded size never exceeds it. */
     if (fs_size > pc_window_span) {
         fs_size = pc_window_span;
     }
@@ -523,7 +529,6 @@ int pc_set_capacity(uint32_t slots)
     }
     for (i = slots; i < PC_SLOTS; ++i) {
         if (pc_slots[i].valid && pc_evict(i) != 0) {
-            /* Still dirty: the capacity keeps covering it for reclaim. */
             stuck = i + 1;
             rc = -1;
         }
@@ -558,6 +563,7 @@ uint32_t pc_stat_writebacks(void)
 
 #ifdef PAGECACHE_HOSTTEST
 
+/** The host tests' window is 256 MiB, and each slot has its static page. */
 void init_pagecache(void)
 {
     uint32_t i;
@@ -597,6 +603,10 @@ void *pc_test_page(uint32_t disk_off)
  * address. The comparison is made in 64 bits, a 64-bit BAR's high dword
  * included, so it means the same on either architecture; on x86-64 the
  * window lies above any physical address and is always the cap.
+ *
+ * The limit is rounded down to a page: a BAR's base need only be 16-byte
+ * aligned, but the window's span must be page-aligned, so that a file
+ * system's size rounded up to a page never passes it.
  */
 static uint32_t pc_probe_window_size(void)
 {
@@ -637,30 +647,31 @@ static uint32_t pc_probe_window_size(void)
         }
     }
 
-    /* Floor to a page: a clamping BAR base need only be 16-byte aligned, but
-       the window span must be page-aligned so a page-rounded file-system size
-       never exceeds it. */
     limit &= ~(uint64_t)(PC_PAGE_SIZE - 1u);
 
     return (uint32_t)(limit - PCWIN_BASE);
 }
 
+/**
+ * The window's page tables must exist before the first fork copies the
+ * kernel's entries: on i686 `mmu_init` made every table of the kernel's
+ * gigabyte and `premap_kernel_window` finds them, and on x86-64 it makes
+ * them. No frame is taken: a slot gets its frame when it is first filled
+ * and gives it back under memory pressure, so the cache is a target the
+ * machine's free memory sets and not a reservation. The capacity is half of
+ * what the caches together may hold under pressure, and never more slots
+ * than there are.
+ */
 void init_pagecache(void)
 {
     uint32_t i;
 
     pc_window_span = pc_probe_window_size();
 
-    /* The window's page tables must exist before the first fork copies the
-       kernel PDEs; `init_paging` made every table of the kernel's gigabyte,
-       so this finds them present. */
     if (premap_kernel_window(PCWIN_BASE, pc_window_span) != 0) {
         k_panic("pagecache: window pre-map failed");
     }
 
-    /* No frame is taken here: a slot gets its frame when it is first filled
-       and gives it back under memory pressure, so the cache is a target the
-       machine's free memory sets and not a reservation. */
     for (i = 0; i < PC_SLOTS; ++i) {
         pc_slots[i].phys = 0;
         pc_slots[i].page = 0;
@@ -669,8 +680,6 @@ void init_pagecache(void)
         pc_slots[i].accessed = 0;
         pc_slots[i].pinned = 0;
     }
-    /* Half of what the caches together may hold under pressure, and never
-       more slots than there are. */
     pc_capacity =
         mem_cache_target() / 2u > PC_SLOTS ? PC_SLOTS : (uint32_t)(mem_cache_target() / 2u);
     if (pc_capacity < 1u) {

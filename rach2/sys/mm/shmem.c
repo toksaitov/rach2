@@ -13,9 +13,10 @@
 /* The most pages a file in memory has, SHMEM_MAX_SIZE of them. */
 #define SHMEM_MAX_PAGES ((uint32_t)(SHMEM_MAX_SIZE / PAGE_SIZE))
 
-/* Make the directory reach leaf `n - 1`; 0, or -ENOSPC. The length doubles
- * from 4; the largest file's directory has 4194304 entries, 16 MiB, which a
- * write near its end asks for and the heap may refuse. */
+/** Make the directory reach leaf `n - 1`; 0, or -ENOSPC. The length doubles
+ * from 4; the largest file's directory has 4194304 entries, 16 MiB on i686
+ * and 32 MiB on x86-64, which a write near its end needs and the heap may
+ * not have. */
 static int reach(struct shmem *sh, uint32_t n)
 {
     uint32_t cap = sh->nleaves ? sh->nleaves : 4u;
@@ -41,7 +42,7 @@ static int reach(struct shmem *sh, uint32_t n)
     return 0;
 }
 
-/* The table's entry for page `i`, or NULL when its leaf is missing; with
+/** The table's entry for page `i`, or NULL when its leaf is missing; with
  * `make`, the leaf is made, and NULL means no memory or `i` past the pages
  * a file in memory may have. */
 static uintptr_t *slot(struct shmem *sh, uint32_t i, int make)
@@ -63,7 +64,8 @@ static uintptr_t *slot(struct shmem *sh, uint32_t i, int make)
     return &sh->leaves[leaf][i % SHMEM_LEAF];
 }
 
-/* Count a frame the table takes, or 0 when the quota has no room for it. */
+/** Count a frame the table takes: 1, or 0 when the quota has no room for
+ * it. */
 static int take_page(struct shmem *sh)
 {
     if (sh->quota) {
@@ -76,7 +78,7 @@ static int take_page(struct shmem *sh)
     return 1;
 }
 
-/* Count a frame the table gives back. */
+/** Count a frame the table gives back. */
 static void give_page(struct shmem *sh)
 {
     if (sh->quota) {
@@ -85,7 +87,7 @@ static void give_page(struct shmem *sh)
     sh->held--;
 }
 
-/* The frame of page `i`, made and zeroed when there is none; 0 when none
+/** The frame of page `i`, made and zeroed when there is none; 0 when none
  * can be had, the quota has no room, or `i` is past the pages a file in
  * memory may have: a mapping asks for its page by an offset the caller
  * chose. */
@@ -207,8 +209,6 @@ int shmem_truncate(struct shmem *sh, uint64_t size)
             sh->leaves[leaf] = NULL;
         }
     }
-    /* The part of the last page past the new end reads as zeros if the
-     * file grows again, as in Linux. */
     last = keep ? shmem_resident(sh, keep - 1u) : 0;
     if (size % PAGE_SIZE && last) {
         uint8_t *page = kmap_temp(last);

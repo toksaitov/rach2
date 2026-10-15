@@ -31,6 +31,8 @@
 #define FC_BUCKETS 1024u
 #define FC_FILES   256u
 
+/* A cached page: which page of which file, the size and the modification
+ * time the file had when the page was read, and the frame of the copy. */
 struct fc_page {
     struct fc_page *next;            /* the bucket's list */
     struct fc_page *older, *younger; /* the use order */
@@ -76,6 +78,7 @@ static int fc_file_of(struct vfs_mount *mnt, void *node, struct fc_file *f)
     return 1;
 }
 
+/** The bucket of page `pgoff` of the file `ino` of `mnt`. */
 static uint32_t fc_bucket(const struct vfs_mount *mnt, uint64_t ino, uint32_t pgoff)
 {
     return ((uint32_t)(uintptr_t)mnt >> 4 ^ (uint32_t)ino * 2654435761u ^ pgoff * 40503u) %
@@ -175,8 +178,8 @@ static int fc_read(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, void
 }
 
 /** Keep a copy of page `pgoff` of `f`, from the frame `phys` or, when it is
- * 0, from `buf`, unless free memory is short or a change has been told of
- * since `epoch`. */
+ * 0, from `buf`, in place of any it had, unless fewer than a quarter of the
+ * frames are free or a change has been recorded since `epoch`. */
 static void fc_store(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, const void *buf,
                      uint32_t epoch)
 {

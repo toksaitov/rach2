@@ -19,14 +19,15 @@ int filecache_read(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys);
  * buffer `buf` of a page, as exec reads a program. */
 int filecache_read_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, void *buf);
 
-/** The count of the changes the cache has been told of, taken before a page
- * is read for `filecache_store`. */
+/** The count of the changes recorded so far (`filecache_forget`,
+ * `filecache_forget_mount`), taken before a page is read for
+ * `filecache_store`. */
 uint32_t filecache_epoch(void);
 
 /** Keep a copy of the frame `phys`, page `pgoff` of the file `e` is open on
- * as it was just read, while free memory allows and no change has been told
- * of since `filecache_epoch` gave `epoch`, which the read might have missed
- * part of. */
+ * as it was just read, while a quarter of the frames are free and no change
+ * has been recorded since `filecache_epoch` gave `epoch`, since the read
+ * might have seen part of one. Only an ext2 regular file's page is kept. */
 void filecache_store(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys, uint32_t epoch);
 
 /** The same for page `pgoff` of the file `node` of `mnt`, from the kernel

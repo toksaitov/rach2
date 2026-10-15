@@ -27,8 +27,8 @@
  * every such mapping of the file maps, so that a store through one is seen
  * through all. A page is read from the file at its first touch and written
  * back whole, up to the file's size, which a mapping does not change. Every
- * page in memory is written back, since the kernel does not ask the page
- * tables which pages were stored to. It is found by its mount and inode
+ * page in memory is written back, since the kernel does not read from the
+ * page tables which pages were stored to. It is found by its mount and inode
  * number, as the calls on the file's descriptors find it.
  */
 struct dshare {
@@ -99,7 +99,7 @@ static uintptr_t filemap_share(struct vm_file *f, uint32_t pgoff)
     return shmem_map_page(m->sh, pgoff);
 }
 
-/* The KRFFS root node the mapping's file is now, or NULL for a file of
+/** The KRFFS root node the mapping's file is now, or NULL for a file of
  * another type, whose copy of the descriptor has no node. The copy keeps
  * the node the file was opened on, which a relocation leaves behind; the
  * description's is the one `vfs_repoint` moves. */
@@ -109,6 +109,8 @@ static void *filemap_node(const struct filemap *m)
                                                                           : NULL;
 }
 
+/** The pages in memory of the file `ino` of `mnt`, or NULL when no shared
+ * mapping has them. */
 static struct dshare *dshare_of(const struct vfs_mount *mnt, uint64_t ino)
 {
     struct dshare *ds;
@@ -199,8 +201,9 @@ static int dshare_write_page(struct dshare *ds, struct filemap *m, uint32_t i, u
 }
 
 /** Write the pages of `ds` from page `first` up to page `end` back through
- * `m`'s copy of the descriptor (`dshare_write_page`). Returns 0 or the
- * first failure. */
+ * `m`'s copy of the descriptor (`dshare_write_page`). Returns 0, also when
+ * `m` has no description, -ENOMEM when no buffer can be had, or the first
+ * failure. */
 static int dshare_write_back(struct dshare *ds, struct filemap *m, uint32_t first, uint32_t end)
 {
     uint8_t *buf;
@@ -225,6 +228,8 @@ static int dshare_write_back(struct dshare *ds, struct filemap *m, uint32_t firs
     return rc;
 }
 
+/** The condition `dshare_sync` waits for: no writer's release is writing
+ * the pages of `arg`, a dshare, back. */
 static int dshare_settled(void *arg)
 {
     return ((const struct dshare *)arg)->leaving == 0;
