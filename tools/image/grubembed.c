@@ -126,7 +126,7 @@ static int bios_boot_partition(FILE *f, unsigned long *first, unsigned long *cou
 
     if (fseek(f, SECTOR, SEEK_SET) != 0 || fread(header, 1, SECTOR, f) != SECTOR ||
         memcmp(header, "EFI PART", 8) != 0) {
-        fprintf(stderr, "grub_embed: the disk has a protective MBR and no GUID header\n");
+        fprintf(stderr, "grubembed: the disk has a protective MBR and no GUID header\n");
         return 1;
     }
     header_size = r32(header + 12);
@@ -135,18 +135,18 @@ static int bios_boot_partition(FILE *f, unsigned long *first, unsigned long *cou
     size = r32(header + 84);
     if (header_size < 92 || header_size > SECTOR || size < 128 || entries == 0 ||
         (uint64_t)entries * size > GPT_ARRAY_MAX) {
-        fprintf(stderr, "grub_embed: the GUID header's sizes are not ones this reads\n");
+        fprintf(stderr, "grubembed: the GUID header's sizes are not ones this reads\n");
         return 1;
     }
     memset(header + 16, 0, 4);
     if (crc32_of(header, header_size) != crc) {
-        fprintf(stderr, "grub_embed: the GUID header's checksum does not match\n");
+        fprintf(stderr, "grubembed: the GUID header's checksum does not match\n");
         return 1;
     }
     if (fseek(f, (long)(r64(header + 72) * SECTOR), SEEK_SET) != 0 ||
         fread(array, 1, (size_t)entries * size, f) != (size_t)entries * size ||
         crc32_of(array, (size_t)entries * size) != r32(header + 88)) {
-        fprintf(stderr, "grub_embed: the GUID entry array does not read or check\n");
+        fprintf(stderr, "grubembed: the GUID entry array does not read or check\n");
         return 1;
     }
     first_usable = r64(header + 40);
@@ -162,7 +162,7 @@ static int bios_boot_partition(FILE *f, unsigned long *first, unsigned long *cou
         last = r64(e + 40);
         if (start < 2 || start < first_usable || start < array_end || last < start ||
             last > last_usable || last - start + 1 > 0xFFFFFFFFu) {
-            fprintf(stderr, "grub_embed: the BIOS boot partition's range is not one this "
+            fprintf(stderr, "grubembed: the BIOS boot partition's range is not one this "
                             "writes\n");
             return 1;
         }
@@ -170,7 +170,7 @@ static int bios_boot_partition(FILE *f, unsigned long *first, unsigned long *cou
         *count = (unsigned long)(last - start + 1);
         return 0;
     }
-    fprintf(stderr, "grub_embed: the GUID table has no BIOS boot partition\n");
+    fprintf(stderr, "grubembed: the GUID table has no BIOS boot partition\n");
     return 1;
 }
 
@@ -209,12 +209,12 @@ int main(int argc, char **argv)
     }
     boot = read_file(argv[2], &boot_len);
     if (boot == NULL || boot_len < SECTOR) {
-        fprintf(stderr, "grub_embed: cannot read a full sector from %s\n", argv[2]);
+        fprintf(stderr, "grubembed: cannot read a full sector from %s\n", argv[2]);
         return 1;
     }
     core = read_file(argv[3], &core_len);
     if (core == NULL || core_len == 0) {
-        fprintf(stderr, "grub_embed: cannot read %s\n", argv[3]);
+        fprintf(stderr, "grubembed: cannot read %s\n", argv[3]);
         return 1;
     }
     core_sectors = (core_len + SECTOR - 1) / SECTOR;
@@ -222,7 +222,7 @@ int main(int argc, char **argv)
 
     f = fopen(argv[1], "r+b");
     if (f == NULL || fread(mbr, 1, SECTOR, f) != SECTOR) {
-        fprintf(stderr, "grub_embed: cannot read the MBR of %s\n", argv[1]);
+        fprintf(stderr, "grubembed: cannot read the MBR of %s\n", argv[1]);
         return 1;
     }
 
@@ -240,19 +240,19 @@ int main(int argc, char **argv)
         }
         if (first_lba != 0 && core_sectors >= first_lba) {
             fprintf(stderr,
-                    "grub_embed: core.img needs %lu sectors but the gap "
+                    "grubembed: core.img needs %lu sectors but the gap "
                     "before LBA %lu has only %lu\n",
                     core_sectors, first_lba, first_lba - 1);
             return 1;
         }
     }
     if (grubslot_window(core_lba, room, &w, why, sizeof(why)) != 0) {
-        fprintf(stderr, "grub_embed: %s\n", why);
+        fprintf(stderr, "grubembed: %s\n", why);
         return 1;
     }
     if (core_sectors - 1 > w.tail) {
         fprintf(stderr,
-                "grub_embed: core.img is %lu sectors and a tail slot after "
+                "grubembed: core.img is %lu sectors and a tail slot after "
                 "its entry sector has %lu; the disk would boot but could not "
                 "have its boot loader replaced\n",
                 core_sectors, (unsigned long)w.tail);
@@ -268,7 +268,7 @@ int main(int argc, char **argv)
     if (fseek(f, 0, SEEK_SET) != 0 || fwrite(boot, 1, 440, f) != 440 ||
         fseek(f, (long)(core_lba * SECTOR), SEEK_SET) != 0 ||
         fwrite(core, 1, core_sectors * SECTOR, f) != core_sectors * SECTOR || fclose(f) != 0) {
-        fprintf(stderr, "grub_embed: cannot write %s\n", argv[1]);
+        fprintf(stderr, "grubembed: cannot write %s\n", argv[1]);
         return 1;
     }
     free(boot);
