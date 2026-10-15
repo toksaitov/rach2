@@ -35,7 +35,7 @@ These variables change a run:
 
 A run that boots machines claims a block of host ports, so several clones on one host can run the same network suite at once; [the system tests' Readme](system/Readme.md) describes the claim and the other rules the runner keeps.
 
-The fault proofs, the scripts that compile a deliberate fault into the kernel or a program and require a test to catch it, are run by hand as `sh tests/system/NAME.sh` or `sh tests/system/accept/NAME.sh`; the system tests' Readme lists them.
+The fault proofs, the scripts that compile a deliberate fault into the kernel or a program and require a test to catch it, are run by hand as `sh tests/host/NAME.sh`, `sh tests/system/NAME.sh` or `sh tests/system/accept/NAME.sh`; [the host tests' Readme](host/Readme.md) and the system tests' Readme list them.
 
 ### By hand
 
@@ -58,14 +58,14 @@ Ten probes also run on an installed root, as `tests/run ext2` and `tests/run sel
 * `vfsprobe` reads the root's type from `/proc/mounts`: KRFFS refuses a hard link with `EPERM`, and ext2 keeps the inode, bytes and link count through a second name and its removal. `/vp` and `/procx` must be absent.
 * `dnstest` needs `/etc/hosts`, or `/hosts` where `/etc/hosts` does not exist, to list `127.0.0.1 localhost`, `10.0.2.2 gateway`, `10.0.2.3 dns` and `10.0.2.15 rach2`. With `--live` it also needs working DNS.
 * `devprobe` needs `/dev/console` as descriptor 0, its executable named `devprobe`, and the VGA framebuffer with no other owner; `/devprobe < /dev/console` gives a login shell's run that.
-* `orphanprobe` must be the kernel's init process, which `exec /orphanprobe` at the debug shell of a rescue boot makes it; a process started over SSH cannot be.
+* `orphanprobe` must be the kernel's init process, which `exec /orphanprobe` at the debug shell of a boot with `rach2.rescue` makes it; a process started over SSH cannot be.
 * `modeprobe` needs `/suidhelper`, root, and a writable working directory for its `mp_*` files. An argument gives the directory whose file system it tests.
 
 `sh tests/system/manual_probes.sh KEY ADDRESS probes DIR` stages the probes on an installed ext2 root over SSH, after `tools/dev/machine_identity.sh` has found the slot and kernel that `RACH2_MEASURE_SLOT` and `RACH2_MEASURE_KERNEL` name. It refuses a root that has a name the probes use, runs the nine that do not need the init role, removes what it staged but `/orphanprobe`, and prints the console steps for that one; its `clean` mode removes it afterwards.
 
 ## Results
 
-The runner prints one line when a run starts, with its architecture, worker count, memory budget, timeout factor, accelerator and processor count. Each suite prints `run: NAME: starting (idle limit N s)`, a progress line every minute while it runs, and its output, ending with `run: NAME: PASS in Ns` or `run: NAME: FAIL in Ns`. A suite in the pool holds its output and prints it whole when it ends, so the output of suites that run at once is not mixed; only the start and progress lines appear between them.
+The runner prints one line when a run starts, with its architecture, worker count, memory budget, timeout factor, accelerator and processor count. Each suite prints `run: NAME: starting (idle limit N s)`, a progress line every minute while it runs, and its output, ending with `run: NAME: PASS in Ns` or `run: NAME: FAIL in Ns`. A suite in the pool keeps its output and prints it whole when it ends, so the output of suites that run at once is not mixed; only the start and progress lines appear between them.
 
 The last line is the run's verdict:
 

@@ -115,4 +115,4 @@ To update a port, verify the new tarball's signature with `gpgv` and the key the
 
 ## Tests
 
-`tests/run gnu` (`ARCH=x86_64 tests/run gnu` for x86-64) builds the root image, boots it, logs in over OpenSSH, and has each port and program do its main job on the machine, one row each; [`tests/system/Readme.md`](../../tests/system/Readme.md) lists the rows. It is in the full tier. The `check` steps of the subdirectories' scripts test their programs on the build host.
+`tests/run gnu` (`ARCH=x86_64 tests/run gnu` for x86-64) builds the root image, boots it, logs in over OpenSSH, and has each port and program do its main job on the machine, one row each; [`tests/system/gnu_rows.sh`](../../tests/system/gnu_rows.sh) has the rows. It is in the full tier. The `check` steps of the subdirectories' scripts test their programs on the build host.

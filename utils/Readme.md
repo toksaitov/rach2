@@ -8,7 +8,7 @@ A program's options and behavior are in its manual page, linked below. This sect
 
 ### File programs
 
-`true`, `false`, `echo`, `yes`, `cat`, `pwd`, `touch`, `mkdir`, `rm`, `mv`, `cp` and `ls` are teaching versions of the POSIX programs, each one short file. Only os-simple stages them; the other images run BusyBox's applets of the same names. [busybox-coreutils(1)](../man/man1/busybox-coreutils.1) describes both, and `man/aliases` points each name at that page.
+`true`, `false`, `echo`, `yes`, `cat`, `pwd`, `touch`, `mkdir`, `rm`, `mv`, `cp` and `ls` are teaching versions of the POSIX programs, each one short file. os-simple stages all twelve and the test image `echo`; the BusyBox images run BusyBox's applets of the same names. [busybox-coreutils(1)](../man/man1/busybox-coreutils.1) describes both, and `man/aliases` points each name at that page.
 
 ### Network programs
 
@@ -26,7 +26,7 @@ A program's options and behavior are in its manual page, linked below. This sect
 
 * `init-shell` starts a shell on the console with no login. Only test images stage it.
 * `init-login` starts `/bin/login` and nothing else. os-simple and os-real use it.
-* `init-metal` is `init-login` with the network, the system log and an SSH server that it supervises, for a machine with nobody at its console: the metal image, the sealed disk's root and the GNU root use it.
+* `init-metal` is `init-login` with the network, the system log and an SSH server that it supervises, for a machine with nobody at its console: the metal kernel's RAM root, the root of the sealed disk that the installer writes ([disk(7)](../man/man7/disk.7)), and the GNU root ([`vendor/gnu/`](../vendor/gnu/Readme.md)) use it.
 * `init-recovery` starts a shell on the console with `init-metal`'s services beside it, for the recovery system, whose accounts have no passwords.
 
 ### Accounts

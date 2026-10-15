@@ -6,7 +6,7 @@ ISH is the command shell of the os-simple and test images: a static program for 
 
 `ish` reads command lines from standard input and prints no prompt; `ish -c COMMAND` runs one command and exits with its status. The syntax, the builtins, the order redirections must be written in and the exit statuses are in [ish(1)](../man/man1/ish.1).
 
-The os-simple image stages the binary as `/bin/ish` and `/bin/sh`, and both of its accounts, `root` and `test`, have `/bin/ish` as their shell (`krffs/manifests/os-simple.manifest`). The test image stages it as `/ish`, which `musl/ishmusl` runs, and as `/bin/sh`, which musl's `system` and `popen` start. The os-real, os-real-gnu and metal disk images stage the source under `/src/ish` for the build on Rach2, and use BusyBox's `sh`.
+The os-simple image stages the binary as `/bin/ish` and `/bin/sh`, and both of its accounts, `root` and `test`, have `/bin/ish` as their shell (`krffs/manifests/os-simple.manifest`). The test image stages it as `/ish`, which `musl/ishmusl` runs, and as `/bin/sh`, which musl's `system` and `popen` start. The `os-real`, `os-real-gnu`, `rach2-metal-disk` and `grub-test` manifests stage the source under `/src/ish` for the build on Rach2, and use BusyBox's `sh`.
 
 ## Design
 

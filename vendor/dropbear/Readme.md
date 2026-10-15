@@ -24,7 +24,7 @@ ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost
 ssh -i krffs/rach2_test_ed25519 -p 2222 test@localhost
 ```
 
-The [krffs Readme](../../krffs/Readme.md) has the development keys and passwords. On a RAM root the host keys are lost at shutdown, so each boot presents a new one. The metal and recovery systems start the server from their init, as dropbear(8) and [sshd.conf(5)](../../man/man5/sshd.conf.5) say.
+The [krffs Readme](../../krffs/Readme.md) describes the development keys and passwords. On a RAM root the host keys are lost at shutdown, so each boot presents a new one. The metal and recovery systems start the server from their init, as dropbear(8) and [sshd.conf(5)](../../man/man5/sshd.conf.5) say.
 
 ## Sources and license
 

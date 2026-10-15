@@ -35,4 +35,4 @@ GCC, binutils, GMP, MPFR and MPC follow the toolchain's lines in `sources.txt`, 
 
 ## Tests
 
-The `check` steps run with every build. On Rach2, the `gcc` and `gdb` rows of `tests/run gnu` compile, run and debug programs; [`tests/system/Readme.md`](../../../tests/system/Readme.md) describes them.
+The `check` steps run with every build. On Rach2, the `gcc` and `gdb` rows of `tests/run gnu` compile, run and debug programs; [`tests/system/gnu_rows.sh`](../../../tests/system/gnu_rows.sh) has them.

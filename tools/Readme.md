@@ -6,7 +6,7 @@ The programs and scripts under `tools/` prepare a machine to build Rach2 and che
 
 ### Setting up a machine
 
-A build needs GNU Make, a host C compiler, the cross toolchain of its architecture (`i686-elf` for `make`, `x86_64-elf` for `make ARCH=x86_64`), e2fsprogs 1.43 or later, mandoc, `ssh-keygen`, awk, sed, tar, gzip, bzip2 and patch. `tests/run style` adds cppcheck, ShellCheck, clang and clang-format. The suites add QEMU, OVMF (its UEFI firmware for x86-64), xorriso for the ISOs and sticks, and the commands `tests/registry` lists for each suite, which `tests/run` looks for before it builds: mtools, `qemu-img`, python3, `nc` and `shasum` among them. `tests/run` runs one architecture's suites, i686's unless `ARCH=x86_64` is set. The default `make` downloads nothing; only the GNU layer of the `gnu` suite fetches its tarballs, with curl ([fetch.sh](../vendor/gnu/fetch.sh)). Install the packages below, then run `sh tools/setup/doctor.sh`.
+A build needs GNU Make, a host C compiler, the cross toolchain of its architecture (`i686-elf` for `make`, `x86_64-elf` for `make ARCH=x86_64`), e2fsprogs 1.43 or later, mandoc, `ssh-keygen`, awk, sed, tar, gzip, bzip2 and patch. `tests/run style` adds cppcheck, ShellCheck, clang and clang-format. The suites add QEMU, OVMF (its UEFI firmware for x86-64), xorriso for the ISOs and sticks, and the commands `tests/registry` lists for each suite, which `tests/run` looks for before it builds: mtools, `qemu-img`, python3, `nc` and `shasum` among them. `tests/run` runs one architecture's suites, i686's unless `ARCH=x86_64` is set. The default `make` downloads nothing; only the GNU layer, which the `gnu` suite builds, fetches its tarballs, with curl or wget ([fetch.sh](../vendor/gnu/fetch.sh)). Install the packages below, then run `sh tools/setup/doctor.sh`.
 
 #### macOS
 
@@ -49,7 +49,7 @@ Make the x86-64 toolchain the same way from `x86_64-linux-gnu`, the host's own c
 
 #### The testing host
 
-The suites, the sets and the analyses run on the testing host, a Windows machine with an AMD Ryzen 9 7950X3D, 32 threads and 200 GB of memory, running Ubuntu 26.04 under WSL2. The Windows user's `.wslconfig` gives WSL 128 GB (`memory=128GB`), sets `nestedVirtualization=true`, and sets both idle timeouts to -1; the scheduled task `Rach2 WSL` starts WSL when Windows boots, with nobody logged in. The distribution's disk, a file that grows, is under `D:\WSL\Ubuntu-26.04`. When its drive fills, Linux turns its root read-only part way through a run, so before a run of any suite but `style` and `host`, `tests/run` asks Windows for the drive's free space and refuses a run below `RACH2_MIN_FREE_GIB`, 40 by default. The host is set up as Debian and Ubuntu above, with the analysers that `tests/run style` and `make analyze` skip elsewhere:
+The suites, the sets and the analyses run on the testing host, a Windows machine with an AMD Ryzen 9 7950X3D, 32 threads and 200 GB of memory, running Ubuntu 26.04 under WSL2. The Windows user's `.wslconfig` gives WSL 128 GB (`memory=128GB`), sets `nestedVirtualization=true`, and sets both idle timeouts to -1; the scheduled task `Rach2 WSL` starts WSL when Windows boots, with nobody logged in. The distribution's disk, a file that grows, is under `D:\WSL\Ubuntu-26.04`. When its drive fills, Linux turns its root read-only part way through a run, so before a run of any suite but `style` and `host`, `tests/run` asks Windows for the drive's free space and refuses a run below `RACH2_MIN_FREE_GIB` ([tests/Readme.md](../tests/Readme.md)). The host is set up as Debian and Ubuntu above, with the analysers that `tests/run style` and `make analyze` skip elsewhere:
 
     sudo apt install clang-tidy sparse pmccabe
 
@@ -225,7 +225,7 @@ A stick image is a hybrid ISO from `mkiso.sh`, padded to a 1 MiB boundary and fo
 
 #### Names of keyed artifacts
 
-[keyname.sh](image/keyname.sh) `PATH` refuses an artifact whose name disagrees with the tree: a name with `-with-key` while `krffs/recovery_authorized_keys` is absent, or one without it while the key is present. The rules of the recovery image, the recovery ISO, the sealed disk, the os-real GRUB disk and the install stick run it, since Make chooses those names when it starts. [krffs/Readme.md](../krffs/Readme.md) describes the recovery key and `make release`.
+[keyname.sh](image/keyname.sh) `PATH` refuses an artifact whose name disagrees with the tree: a name with `-with-key` while `krffs/recovery_authorized_keys` is absent, or one without it while the key is present. The rules of the recovery image, the recovery ISO, the sealed disk, the os-real GRUB disk and the install stick run it, since Make chooses those names when it starts. [krffs/Readme.md](../krffs/Readme.md) describes the recovery key list, and [the section below](#working-an-installed-machine-from-the-host) `make release`.
 
 ### The console's font: `font/`
 

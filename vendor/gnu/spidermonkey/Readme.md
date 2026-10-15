@@ -4,7 +4,7 @@ This directory builds `js`, the shell of SpiderMonkey, Firefox's JavaScript engi
 
 ## Sources and license
 
-[`../sources-extra.txt`](../sources-extra.txt) pins Firefox's ESR source tarball, the Rust components (`rustc`, `cargo`, the standard library for the x86-64 build host, and the i686 standard library), and the cbindgen crate, and its header says how each digest was verified. cargo fetches cbindgen's dependencies from crates.io and checks each against the crate's `Cargo.lock`; Firefox's own crates are in its source. SpiderMonkey is under the Mozilla Public License 2.0. Rust and cbindgen run only on the build host.
+[`../sources-extra.txt`](../sources-extra.txt) gives the digests of Firefox's ESR source tarball, the Rust components (`rustc`, `cargo`, the standard library for the x86-64 build host, and the i686 standard library), and the cbindgen crate, and its header says how each digest was verified. cargo fetches cbindgen's dependencies from crates.io and checks each against the crate's `Cargo.lock`; Firefox's own crates are in its source. SpiderMonkey is under the Mozilla Public License 2.0. Rust and cbindgen run only on the build host.
 
 ## Local changes
 
@@ -32,4 +32,4 @@ The i686 shell needs a processor with SSE2.
 
 ## Tests
 
-The `check` step runs with every build. On Rach2, the `js` row of `tests/run gnu` runs a script of the same kind and requires the same line; [`tests/system/Readme.md`](../../../tests/system/Readme.md) describes it.
+The `check` step runs with every build. On Rach2, the `js` row of `tests/run gnu` runs a script of the same kind and requires the same line; [`tests/system/gnu_rows.sh`](../../../tests/system/gnu_rows.sh) has it.

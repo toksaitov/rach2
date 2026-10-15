@@ -4,7 +4,7 @@ This directory gives the [GNU layer](../Readme.md) a web browser: Debian's `chro
 
 ## Sources and license
 
-The packages come from Debian 13 (trixie) and its security suite, which has the newer Chromium, as snapshot.debian.org has them at one fixed time. [`fetch_chromium.sh`](fetch_chromium.sh) pins that time (`SNAPSHOT`), the SHA-256 of each suite's `InRelease` (`SUITES`), and the primary fingerprint of each archive key (`KEYS`); the keys themselves are pinned in [`../sources-extra.txt`](../sources-extra.txt). The indices and packages are kept in `../downloads/debian`, which Git ignores, and checked again every time a step uses them.
+The packages come from Debian 13 (trixie) and its security suite, which has the newer Chromium, as snapshot.debian.org has them at one fixed time. [`fetch_chromium.sh`](fetch_chromium.sh) records that time (`SNAPSHOT`), the SHA-256 of each suite's `InRelease` (`SUITES`), and the primary fingerprint of each archive key (`KEYS`); the keys themselves are listed with their digests in [`../sources-extra.txt`](../sources-extra.txt). The indices and packages are kept in `../downloads/debian`, which Git ignores, and checked again every time a step uses them.
 
 Chromium is under the BSD 3-clause license, with its third-party code under their own licenses. Each package installs its terms as `/usr/share/doc/PACKAGE/copyright`.
 
@@ -26,4 +26,4 @@ Choose a new snapshot time, record each suite's `InRelease` digest after `gpgv` 
 
 ## Tests
 
-The `check` step runs with every build. On Rach2, the `chromium` row of `tests/run gnu` resolves the browser's libraries through the loader's cache and has the test account run it with its sandbox on a local page; [`tests/system/Readme.md`](../../../tests/system/Readme.md) describes it.
+The `check` step runs with every build. On Rach2, the `chromium` row of `tests/run gnu` resolves the browser's libraries through the loader's cache and has the test account run it with its sandbox on a local page; [`tests/system/gnu_rows.sh`](../../../tests/system/gnu_rows.sh) has it.
