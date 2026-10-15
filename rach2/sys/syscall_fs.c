@@ -9747,14 +9747,15 @@ static void stat_root_times(struct linux_stat *kst)
  * by its end and reached something else, or the walk's errors, -ENOENT,
  * -ENOTDIR and -EACCES among them.
  *
- * "/", for a process without a root of its own (`names_tree_root`), is
- * reported without a walk as the KRFFS root directory: mode 0755, inode 1,
- * and the root's stored times, which a name made in it stamps, so a program
- * watching the directory sees the change. A file of /dev, /proc or /sys, or
- * of another mounted type, is filled from the stat64 the wider calls give,
- * narrowed. The walk keeps its mount's lock until the node is read, as
- * `do_stat64`'s does. A KRFFS root file has a link count of 1, since KRFFS
- * has no hard links.
+ * "/", for a process without a root of its own (`names_tree_root`) on a
+ * KRFFS boot root, is reported without a walk as that root directory: mode
+ * 0755, inode 1, owner 0, and the root's stored times, which a name made in
+ * it stamps, so a program watching the directory sees the change. On a root
+ * of another type, ext2 among them, "/" is walked like any other path. A
+ * file of /dev, /proc or /sys, or of another mounted type, is filled from
+ * the stat64 the wider calls give, narrowed. The walk keeps its mount's lock
+ * until the node is read, as `do_stat64`'s does. A KRFFS root file has a
+ * link count of 1, since KRFFS has no hard links.
  */
 static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st, int follow)
 {
@@ -9776,17 +9777,14 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
 
     k_memset(&kst, 0, sizeof(kst));
 
-    if (names_tree_root(pathbuf)) {
+    if (names_tree_root(pathbuf) && vfs_root_mount()->type == &vfs_krffs_type) {
         path_buf_put(pathbuf);
         kst.st_mode = S_IFDIR | 0755; /* drwxr-xr-x */
         kst.st_nlink = 1;
         kst.st_ino = 1;
         kst.st_blksize = 4096;
         stat_root_times(&kst);
-        if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
-            return -EFAULT;
-        }
-        return 0;
+        return old_stat_put(st, &kst, dir);
     }
 
     {

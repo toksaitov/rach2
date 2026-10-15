@@ -145,6 +145,57 @@ static unsigned st_field(int off)
     return v;
 }
 
+#if !defined __x86_64__
+/* Offsets in i386's old struct stat, 64 bytes, which SYS_OLDSTAT fills. */
+#define OSTAT_SIZE  64
+#define OSTAT_INO   4
+#define OSTAT_MODE  8
+#define OSTAT_UID   12
+#define OSTAT_GID   14
+#define OSTAT_MTIME 40
+
+/**
+ * Fail unless the old stat(2) of "/" reports the inode, mode, owner, group
+ * and modification time that the stat of "/" just left in `stbuf` reports,
+ * the ids narrowed to the old struct's 16 bits. The old call has a
+ * shortcut of its own for the KRFFS root, which must not answer for a root
+ * of another type.
+ */
+static void check_old_stat_root(void)
+{
+    unsigned char old[OSTAT_SIZE];
+    unsigned ino, mtime;
+    unsigned short mode, uid, gid;
+
+    if (syscall2(SYS_OLDSTAT, (long)"/", (long)old) != 0) {
+        fail("the old stat of the root");
+    }
+    __builtin_memcpy(&ino, old + OSTAT_INO, 4);
+    __builtin_memcpy(&mode, old + OSTAT_MODE, 2);
+    __builtin_memcpy(&uid, old + OSTAT_UID, 2);
+    __builtin_memcpy(&gid, old + OSTAT_GID, 2);
+    __builtin_memcpy(&mtime, old + OSTAT_MTIME, 4);
+    if (ino != st_field(KSTAT_INO) || mode != (unsigned short)st_field(KSTAT_MODE) ||
+        uid != (unsigned short)st_field(KSTAT_UID) || gid != (unsigned short)st_field(KSTAT_GID) ||
+        mtime != st_field(KSTAT_MTIME)) {
+        fail("the old stat of the root reports what stat of the root does");
+    }
+}
+#endif
+
+/** stat(2) of "/", into `stbuf`, and on i686 the old stat(2) of it checked
+ * against that (`check_old_stat_root`): the root's inode number. */
+static unsigned stat_root(void)
+{
+    if (xstat("/") != 0) {
+        fail("stat of the root");
+    }
+#if !defined __x86_64__
+    check_old_stat_root();
+#endif
+    return st_field(KSTAT_INO);
+}
+
 /** Whether the getdents64 records in the first `n` bytes of `b` name `name`,
  * walked by d_reclen. */
 static int dirents_contain(const unsigned char *b, int n, const char *name)
@@ -322,10 +373,7 @@ PROBE_START void _start(void)
     {
         unsigned root_ino;
 
-        if (xstat("/") != 0) {
-            fail("stat of the root");
-        }
-        root_ino = st_field(KSTAT_INO);
+        root_ino = stat_root();
         if (xstat("/..") != 0 || st_field(KSTAT_INO) != root_ino || xstat("/vp/..") != 0 ||
             st_field(KSTAT_INO) != root_ino) {
             fail("dot-dot at the root is the root");

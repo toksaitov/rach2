@@ -701,8 +701,8 @@ tests/usbdiskprobe.c:part_hold lines 118 a probe, one sequence of steps in the o
 
 tests/usbprobe.c:probe_main complexity 31 a probe, one sequence of steps in the order the log records them
 
-tests/vfsprobe.c:_start complexity 103 a probe, one sequence of steps in the order the log records them
-tests/vfsprobe.c:_start lines 276 a probe, one sequence of steps in the order the log records them
+tests/vfsprobe.c:_start complexity 102 a probe, one sequence of steps in the order the log records them
+tests/vfsprobe.c:_start lines 273 a probe, one sequence of steps in the order the log records them
 
 tools/image/fatchains.c:print_chain complexity 29 an inspector's check, one walk over the format it reads
 
