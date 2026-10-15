@@ -477,8 +477,8 @@ uint64_t krffs_node_ino(const krffs_node_t *node)
 }
 
 /**
- * Find the reserved node with logical id `id`, for "..", the directory of a
- * node and the climb of `krffs_node_path_at`; KRFFS_NO_NODE when there is
+ * Find the reserved directory with logical id `id`, for "..", a node's
+ * directory and the climb of `krffs_node_path_at`; KRFFS_NO_NODE when there is
  * none or a read fails.
  *
  * Answers KRFFS_NO_NODE for KRFFS_ROOT_ID: the root is not a reserved node
@@ -499,7 +499,7 @@ static uint64_t krffs_find_offset_by_id(krffs_mount_t *mount, uint64_t id)
         if (krffs_brief(mount, offset, &brief) != 0) {
             return KRFFS_NO_NODE;
         }
-        if (brief.type == KRFFS_RESERVED_NODE && brief.id == id) {
+        if (brief.type == KRFFS_RESERVED_NODE && KRFFS_IS_DIR(brief.mode) && brief.id == id) {
             return offset;
         }
         offset = krffs_step(mount, offset, brief.size);

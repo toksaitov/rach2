@@ -362,7 +362,7 @@ tests/host/krffs_hosttest.c:every_stop_file_is_whole params 8 a test's rows, eac
 tests/host/krffs_hosttest.c:every_stop_is_zero_filled nesting 6 a test's rows, each a case, read as one table
 tests/host/krffs_hosttest.c:every_stop_keeps_its_bytes nesting 6 a test's rows, each a case, read as one table
 tests/host/krffs_hosttest.c:main complexity 59 a test's rows, each a case, read as one table
-tests/host/krffs_hosttest.c:main lines 477 a test's rows, each a case, read as one table
+tests/host/krffs_hosttest.c:main lines 478 a test's rows, each a case, read as one table
 
 tests/host/kstring_hosttest.c:main complexity 70 a test's rows, each a case, read as one table
 tests/host/kstring_hosttest.c:main lines 153 a test's rows, each a case, read as one table

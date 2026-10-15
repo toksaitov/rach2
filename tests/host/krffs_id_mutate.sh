@@ -13,6 +13,8 @@
 #   taken-is-bad      that refusal answers KRFFS_EBAD, which the adapters
 #                     report as a full or a failing volume; the test requires
 #                     KRFFS_ETAKEN.
+#   parent-is-file    a parent lookup accepts an earlier non-directory with
+#                     the directory's id; dot-dot must reach the directory.
 #   copy-times-rule   a copy being filled for a move writes its access time
 #                     under the rule, so a node whose field falls across a
 #                     unit cannot be moved there; the test moves one with the
@@ -52,6 +54,9 @@ text = path.read_text()
 # Each fault is the code as it stood before its fix, in the one function it
 # lived in.
 faults = {
+    'parent-is-file': ('static uint64_t krffs_find_offset_by_id(krffs_mount_t *mount, uint64_t id)',
+                       'brief.type == KRFFS_RESERVED_NODE && KRFFS_IS_DIR(brief.mode) && brief.id == id',
+                       'brief.type == KRFFS_RESERVED_NODE && brief.id == id'),
     'new-id-rule': ('int krffs_create_node_at(krffs_mount_t *mount, const char *path, '
                     'uint16_t mode,',
                     '    rc |= krffs_put_new_u64(mount, node, KRFFS_FIELD_ID, '
@@ -106,7 +111,7 @@ PY
 }
 
 faults='new-id-rule id-taken taken-is-bad mkdir-id-rule copy-times-rule
-    copy-length-rule new-times-rule'
+    copy-length-rule new-times-rule parent-is-file'
 if [ "${1:-}" = --texts ]; then
     for fault in $faults; do
         RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/fs/krffs.c "$fault" >/dev/null || exit 1
@@ -200,6 +205,7 @@ for fault in $faults; do
         new-id-rule) message='a node whose id falls across a block is made with the whole-unit rule on' ;;
         id-taken) message="a second directory with the first one's identifier is refused" ;;
         taken-is-bad) message='with the result of a taken identifier, which names no full or failing volume' ;;
+        parent-is-file) message="dot-dot skips a non-directory with the parent's id" ;;
         mkdir-id-rule) message='a directory whose id falls across a block is made with the whole-unit rule on' ;;
         copy-times-rule) message='a file that has to move where its field falls across a block moves with the whole-unit rule on' ;;
         copy-length-rule) message="a node made over a removed node's length across a block is made with the whole-unit rule on" ;;

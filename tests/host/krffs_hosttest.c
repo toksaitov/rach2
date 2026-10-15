@@ -1064,6 +1064,65 @@ static void id_collision_rows(void)
     check(krffs_chain_is_valid(&mount) == 1, "the chain is sound after the refusal");
 }
 
+/**
+ * Check parent lookup when an earlier non-directory has the directory's id.
+ *
+ * The file name's DJB hash equals the mixed id of the directory name. Each
+ * node is made through the core, with the non-directory first in the ring.
+ * A socket also checks that directory lookup compares the whole mode type.
+ */
+static void parent_id_collision_rows(void)
+{
+    static const uint16_t modes[] = {0644, KRFFS_S_IFIFO | 0644, KRFFS_S_IFSOCK | 0644};
+    const char *file = "/Qraaf`{k>y";
+    const char *dir = "/dirkwyusovoyvxvwmj";
+    const char *child = "/dirkwyusovoyvxvwmj/child";
+    const char *leaf = "/dirkwyusovoyvxvwmj/child/leaf";
+    uint32_t i;
+
+    check(krffs_calculate_djb_hash((const uint8_t *)file + 1) ==
+              krffs_mix_id(KRFFS_ROOT_ID, dir + 1),
+          "the non-directory name hash equals the directory id");
+    for (i = 0; i < sizeof(modes) / sizeof(modes[0]); i++) {
+        krffs_mount_t mount;
+        uint64_t file_at;
+        uint64_t dir_at;
+        uint64_t child_at;
+        uint64_t leaf_at;
+        char path[64];
+
+        make_image(image, IMAGE_SIZE);
+        mount = mount_over(&memory_backend, image, IMAGE_SIZE);
+        check(krffs_create_node_at(&mount, file, modes[i], 0, 0) == 0,
+              "the non-directory with the colliding hash is made first");
+        check(krffs_mkdir_at(&mount, dir, 0755, 0, 0) == 0,
+              "a non-directory id does not prevent directory creation");
+        check(krffs_mkdir_at(&mount, child, 0755, 0, 0) == 0 && krffs_create_at(&mount, leaf) == 0,
+              "the colliding directory has a child and grandchild");
+        file_at = krffs_walk(&mount, file);
+        dir_at = krffs_walk(&mount, dir);
+        child_at = krffs_walk(&mount, child);
+        leaf_at = krffs_walk(&mount, leaf);
+        check(file_at != KRFFS_NO_NODE && dir_at != KRFFS_NO_NODE && file_at < dir_at,
+              "the non-directory precedes the directory in the ring");
+        check(krffs_walk(&mount, "/dirkwyusovoyvxvwmj/child/..") == dir_at,
+              "dot-dot skips a non-directory with the parent's id");
+        check(krffs_walk(&mount, "/dirkwyusovoyvxvwmj/child/../child/leaf") == leaf_at,
+              "a walk continues through the directory after dot-dot");
+        check(krffs_parent_offset(&mount, child_at) == dir_at &&
+                  krffs_parent_offset(&mount, leaf_at) == child_at &&
+                  krffs_parent_offset(&mount, dir_at) == 0,
+              "parent offsets find directories and the root");
+        check(krffs_node_path_at(&mount, child_at, path, sizeof(path)) == 0 &&
+                  k_strcmp_name((const uint8_t *)path, child),
+              "the child's path uses the directory with its parent's id");
+        check(krffs_node_path_at(&mount, leaf_at, path, sizeof(path)) == 0 &&
+                  k_strcmp_name((const uint8_t *)path, leaf),
+              "the grandchild's path uses the directory with its ancestor's id");
+        check(krffs_chain_is_valid(&mount) == 1, "the colliding ids leave a valid chain");
+    }
+}
+
 /* The fields of a header whose values a node is made or moved with: the
    mode, the owner, the group, the three times and the length. */
 static const uint32_t across_fields[] = {KRFFS_FIELD_MODE,     KRFFS_FIELD_UID,   KRFFS_FIELD_GID,
@@ -1314,6 +1373,7 @@ int main(void)
     ino_lifetime_rows();
     straddle_create_rows();
     id_collision_rows();
+    parent_id_collision_rows();
     across_rows();
     freed_write_rows();
 
