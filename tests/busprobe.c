@@ -1,5 +1,5 @@
 /**
- * Every IDE drive, and a disk past 128 GiB.
+ * busprobe: every IDE drive, and a disk past 128 GiB.
  *
  * Mode `four`: the suite attaches a disk of a different size on each of
  * the four IDE positions, each with one FAT32 partition. This requires
@@ -11,8 +11,8 @@
  * cannot address. The disk must be listed at its full size, the partition
  * mounted, a file written and read back, so the 48-bit commands moved it.
  *
- * Prints "BUSPROBE OK" or "BUSPROBE FAIL: reason". Freestanding; direct system
- * calls (probe.h).
+ * Prints "BUSPROBE OK" and exits 0, or "BUSPROBE FAIL: " and the reason and
+ * exits 1.
  */
 
 #include "probe.h"
@@ -22,6 +22,7 @@
 #define O_CREAT  0100
 #define O_TRUNC  01000
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -31,12 +32,14 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
+/** Print "BUSPROBE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why)
 {
     syscall3(SYS_WRITE, 1, (long)"BUSPROBE FAIL: ", 15);
@@ -44,6 +47,7 @@ static void fail(const char *why)
     syscall2(SYS_EXIT, 1, 0);
 }
 
+/** Non-zero when a line of `text` begins with `line`. */
 static int has_line(const char *text, const char *line)
 {
     const char *p;
@@ -65,6 +69,8 @@ static int has_line(const char *text, const char *line)
     return 0;
 }
 
+/** Read the file `path` into `buf`, at most `cap` - 1 bytes, and end it with
+ * a NUL: the count read, or -1 when the open fails. */
 static int slurp(const char *path, char *buf, int cap)
 {
     int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
@@ -85,6 +91,8 @@ static int slurp(const char *path, char *buf, int cap)
     return total;
 }
 
+/** Write `text`, at most 64 bytes, to the file `path` and read it back; fail
+ * with `path` as the reason when a step fails or the bytes differ. */
 static void write_and_read_back(const char *path, const char *text)
 {
     static char back[64];
@@ -114,7 +122,8 @@ static void write_and_read_back(const char *path, const char *text)
     }
 }
 
-/* Mount `node` at `at` as FAT32, write `text` as `name` there, unmount. */
+/** Mount `node` at `at` as FAT32, write `text` as `name` there and read it
+ * back, and unmount; fail when a step fails. */
 static void mount_write(const char *node, const char *at, const char *name, const char *text)
 {
     static char path[64];
@@ -142,6 +151,8 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/** The probe, entered with `sp` at argc: mode `big` when the first argument
+ * begins with 'b', and mode `four` otherwise. */
 void probe_main(unsigned long *sp)
 {
     static char text[8192];

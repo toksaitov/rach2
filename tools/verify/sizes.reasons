@@ -519,13 +519,12 @@ tests/krffsprobe.c:write_rows complexity 84 a probe, one sequence of steps in th
 tests/krffsprobe.c:write_rows lines 379 a probe, one sequence of steps in the order the log records them
 
 tests/lagprobe.c:run_mounted complexity 30 a probe, one sequence of steps in the order the log records them
-tests/lagprobe.c:run_mounted lines 103 a probe, one sequence of steps in the order the log records them
 
 tests/loadprobe.c:probe_main complexity 33 a probe, one sequence of steps in the order the log records them
 tests/loadprobe.c:probe_main nesting 5 a probe, one sequence of steps in the order the log records them
 
 tests/loopdevprobe.c:probe_main complexity 110 a probe, one sequence of steps in the order the log records them
-tests/loopdevprobe.c:probe_main lines 469 a probe, one sequence of steps in the order the log records them
+tests/loopdevprobe.c:probe_main lines 448 a probe, one sequence of steps in the order the log records them
 
 tests/loopprobe.c:tcp_ports complexity 27 a probe, one sequence of steps in the order the log records them
 tests/loopprobe.c:tcp_ports lines 169 a probe, one sequence of steps in the order the log records them

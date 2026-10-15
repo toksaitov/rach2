@@ -1,12 +1,13 @@
 /**
  * loopdevprobe: a file system in a file, through a loop device.
  *
- * The disk's one partition is a FAT32 volume carrying two images: a FAT32 one
- * and an ext2 one, each with a file of known bytes in it. The probe mounts
- * that volume, attaches an image to /dev/loop0 through /dev/loop-control,
- * mounts the device, reads what is in it, writes a file, unmounts, detaches,
- * attaches again and reads back what it wrote, which is what says the write
- * reached the file and not only the cache.
+ * The disk's one partition is a FAT32 volume with the images: a FAT32, an ext2
+ * and a KRFFS one, each with a file of known bytes in it, and for the refusals
+ * a second FAT32 image and a file whose length is not whole sectors. The probe
+ * mounts that volume, attaches an image to /dev/loop0 through
+ * /dev/loop-control, mounts the device, reads what is in it, writes a file,
+ * unmounts, detaches, attaches again and reads back what it wrote, which is
+ * what says the write reached the file and not only the cache.
  *
  * It then asks for everything the attachment refuses: the same file twice, a
  * write and a truncation of an attached file, a detach with a mount on it, an
@@ -23,14 +24,20 @@
  * LOOP_CLR_FD detaches it.
  *
  * `loopdevprobe pull` is the stick's row: the image lives on a volume of a
- * stick, and the harness pulls the stick while the image is mounted. What the
- * machine owes then is an error from the read in flight, an unmount of the
- * mount over the device that has gone, and an unmount of the volume the file
- * was on, since the attachment let go of it when its medium went.
+ * stick, and the harness pulls the stick while the image is mounted. The row
+ * then requires an error from the read in flight, an unmount of the mount
+ * over the device that has gone, and an unmount of the volume the file was
+ * on, since the attachment let go of it when its medium went.
  *
- * `loopdevprobe vfat`, `ext2` and `krffs` name the type inside the image.
- * Prints "LOOPPROBE OK (type)" or "LOOPPROBE FAIL: reason". Freestanding;
- * direct system calls (probe.h).
+ * `loopdevprobe durable` fills the cache through a KRFFS image until its
+ * dirty blocks are written back by eviction alone, and requires the device
+ * to have synced every write it made. `loopdevprobe ext2back` attaches an
+ * image that lives on an ext2 volume, and refuses it a second device under
+ * a second name.
+ *
+ * `loopdevprobe vfat`, `ext2` and `krffs` name the type inside the image,
+ * `vfat` with no argument. Prints "LOOPPROBE OK (type)", the type or the
+ * mode, and exits 0, or "LOOPPROBE FAIL: " and the reason and exits 1.
  */
 
 #include "probe.h"
@@ -50,6 +57,7 @@
 #define EROFS  30
 #define ELOOP  40
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status) __attribute__((noreturn));
 static void sys_exit(int status)
 {
@@ -57,6 +65,7 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -67,12 +76,14 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
+/** Print "LOOPPROBE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why) __attribute__((noreturn));
 static void fail(const char *why)
 {
@@ -81,6 +92,7 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
+/** Print "LOOPPROBE FAIL: ", `why` and the number `n` it got, and exit 1. */
 static void fail_with(const char *why, int n) __attribute__((noreturn));
 static void fail_with(const char *why, int n)
 {
@@ -104,6 +116,7 @@ static void fail_with(const char *why, int n)
     sys_exit(1);
 }
 
+/** Whether the strings `a` and `b` are equal. */
 static int streq(const char *a, const char *b)
 {
     size_t i;
@@ -141,7 +154,8 @@ static int control(const char *line)
     return rc < 0 ? rc : 0;
 }
 
-/** What /proc/loop says, into `buffer`. */
+/** What /proc/loop says, into `buffer` of `cap` bytes and NUL-ended; the
+ * count read. A failed open or read fails the probe. */
 static int loop_lines(char *buffer, int cap)
 {
     int fd = syscall3(SYS_OPEN, (long)"/proc/loop", O_RDONLY, 0);
@@ -159,6 +173,7 @@ static int loop_lines(char *buffer, int cap)
     return n;
 }
 
+/** Whether the string `hay` contains the string `needle`. */
 static int contains(const char *hay, const char *needle)
 {
     int i;
@@ -188,7 +203,8 @@ static int read_number(const char *text)
 
 /**
  * The number after `name` in /proc/disk, which is how a row counts what the
- * drivers did without a device of its own to watch.
+ * drivers did without a device of its own to watch. A /proc/disk without
+ * `name` fails the probe.
  */
 static int proc_disk_number(const char *name)
 {
@@ -201,8 +217,7 @@ static int proc_disk_number(const char *name)
     if (fd < 0) {
         fail_with("opening /proc/disk", fd);
     }
-    /* Read to the end: /proc hands out a record at a time, and the count this
-       row wants is not in the first of them. */
+    /* Read to the end, since the count is past the first record. */
     n = 0;
     for (;;) {
         int got = syscall3(SYS_READ, fd, (long)(buffer + n), (int)sizeof(buffer) - 1 - n);
@@ -242,6 +257,7 @@ static int proc_disk_number(const char *name)
     return -1;
 }
 
+/** Fail unless the file `path` begins with the bytes of `want`. */
 static void expect_file(const char *path, const char *want)
 {
     char buffer[256];
@@ -267,10 +283,6 @@ static void expect_file(const char *path, const char *want)
 
 PROBE_SP_ENTRY;
 
-/*
- * The pull row reads until the stick is not there any more; the hold is
- * said after the first read, so the pull lands on a process reading.
- */
 /** The struct loop_info64 of the device open on `dev`, into `info`; the
  * errno, or 0. */
 static int loop_status(int dev, unsigned char *info)
@@ -323,8 +335,10 @@ static void set_fd_rows(const char *image, int index)
 }
 
 /**
- * The rows of Linux's loop ioctls over `image`, which holds a file system of
- * `type`, as the header says.
+ * The rows of Linux's loop ioctls over `image`, which has a file system of
+ * `type`, as the file's opening comment describes them. The node's mode has
+ * the block device's type bits, and st_rdev has the major and the minor in
+ * its low two bytes, as Linux encodes them.
  */
 static void ioctl_rows(const char *image, const char *type)
 {
@@ -339,8 +353,7 @@ static void ioctl_rows(const char *image, const char *type)
     }
     syscall1(SYS_CLOSE, ctl);
     node[9] = (char)('0' + index);
-    /* The mode's type bits, and the device number's major and minor in the
-       low two bytes of st_rdev, as Linux encodes them. */
+    /* A block device of major 7, the minor the index. */
     if (syscall2(SYS_STAT, (long)node, (long)st) != 0 || (st[KSTAT_MODE + 1] & 0xF0) != 0x60 ||
         st[KSTAT_RDEV + 1] != 7 || st[KSTAT_RDEV] != index) {
         fail("a loop device's node is not a block device of major 7");
@@ -385,6 +398,43 @@ static void ioctl_rows(const char *image, const char *type)
     set_fd_rows(image, index);
 }
 
+/**
+ * The probe, entered with `sp` at argc: the mode or the type the first
+ * argument names, `vfat` with none.
+ *
+ * `durable`: the device writes the backing file and syncs it, so a write
+ * through a loop device is durable when it returns. The row fills the cache
+ * so that dirty blocks of the image are written back by eviction alone, with
+ * no sync and no unmount, and the device must have synced every write it
+ * made, as /proc/loop counts them.
+ *
+ * `ext2back`: the volume the file lives on need not be a FAT one, and a file
+ * is named by its mount and its node rather than by a path, so a hard link
+ * to an attached image is the same file and a second device over it is
+ * refused.
+ *
+ * `pull` reads until the stick is not there any more; `LOOPPROBE HOLDING`
+ * is printed after the first read, so the pull lands on a process reading.
+ * The device's slot is still taken after the pull, since a mount may still
+ * be standing on the device and an attachment would put another file under
+ * it.
+ *
+ * The type rows: the same file asked for on another device is refused, one
+ * file, one device, whatever it is called; and another file on the device
+ * that is taken is refused, since the slot is taken. A device on a file
+ * that lives on a device on a file is deeper than the four buffers a process
+ * may hold can serve, and is ELOOP. The control node refuses a command with
+ * no number, one whose number is not a device, one with something after the
+ * number, and a command it does not know. A device attached read-only makes
+ * the mount over it read-only whatever the mount asked for, and /proc/loop
+ * says so. The image is then copied onto the root, which is memory and has
+ * no device under it at all: a loop device reads its file through the file
+ * system that has it, so where the file lives does not matter. The root
+ * keeps no count on a node of its own: its rule for a file somebody holds is
+ * the descriptor tables, and an attachment is not one, so an unlink of the
+ * file under the device, a rename over it and an open that truncates it are
+ * each refused while the device stands on it.
+ */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
@@ -402,11 +452,7 @@ void probe_main(unsigned long *sp)
     syscall2(SYS_MKDIR, (long)"/m", 0755);
     syscall2(SYS_MKDIR, (long)"/l", 0755);
 
-    /* A write through a loop device is durable when it returns, and not when
-       something later flushes: the device writes the backing file and syncs
-       it. The row fills the cache so that dirty blocks of the image are
-       written back by eviction alone, with no sync and no unmount, and the
-       drivers' flush count must move. */
+    /* `durable`: each write the device makes is synced when it returns. */
     if (streq(type, "durable")) {
         int filler;
         int block_at;
@@ -441,9 +487,7 @@ void probe_main(unsigned long *sp)
             }
         }
         syscall1(SYS_CLOSE, filler);
-        /* Every write the device made, and every sync it owed for one. The
-           blocks reached it by eviction alone: nothing here asked for a sync
-           or an unmount. */
+        /* Every write the device made by eviction, and a sync for each. */
         {
             char line[256];
             int writes = 0;
@@ -479,10 +523,7 @@ void probe_main(unsigned long *sp)
         sys_exit(0);
     }
 
-    /* The volume the file lives on need not be a FAT one, and a file is named
-       by its mount and its node rather than by a path: a hard link to an
-       attached image is the same file and a second device over it is
-       refused. */
+    /* `ext2back`: an image on an ext2 volume, and a hard link to it. */
     if (streq(type, "ext2back")) {
         rc = syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/m", (long)"ext2", 0, 0);
         if (rc != 0) {
@@ -570,8 +611,7 @@ void probe_main(unsigned long *sp)
             }
         }
 
-        /* The slot is still taken: a mount may still be standing on the
-           device, and an attachment here would put another file under it. */
+        /* The slot is still taken. */
         if (control("attach 0 /m/fat.img") != -EBUSY) {
             fail("a device whose stick went took another file");
         }
@@ -627,8 +667,7 @@ void probe_main(unsigned long *sp)
 
     /* Everything the attachment refuses. */
     {
-        /* The same file, asked for on another device: one file, one device,
-           whatever it is called. */
+        /* The same file, asked for on another device. */
         char again[64];
         int at;
 
@@ -643,8 +682,7 @@ void probe_main(unsigned long *sp)
             fail("the same file was attached twice");
         }
     }
-    /* Another file, on the device that is taken: the slot is the reason, not
-       the file. */
+    /* Another file, on the device that is taken. */
     if (control("attach 0 /m/odd2.img") != -EBUSY) {
         fail("the device that is taken took another file");
     }
@@ -673,14 +711,12 @@ void probe_main(unsigned long *sp)
     if (control("attach 1 /m/odd.bin") != -EINVAL) {
         fail("a file whose length is not whole sectors was attached");
     }
-    /* A device on a file that lives on a device on a file: deeper than the
-       four buffers a process may hold can serve, and refused for it. */
+    /* A device on a file on a device on a file is ELOOP. */
     if (control("attach 1 /l/inner.bin") != -ELOOP) {
         fail("a device was made to stand on another one");
     }
 
-    /* What the control node is not: a command with no number, one with a
-       number that is not a device, and one with something after it. */
+    /* The control node refuses malformed commands. */
     if (control("detach x") != -EINVAL) {
         fail("a detach with no number was taken");
     }
@@ -700,8 +736,7 @@ void probe_main(unsigned long *sp)
         fail("a command that is not one was taken");
     }
 
-    /* A device that will not write: the mount over it is read-only whatever
-       the mount asked for, and /proc/loop says which. */
+    /* A read-only device makes a read-only mount, and /proc/loop says so. */
     if (control("attach ro 1 /m/odd2.img") != 0) {
         fail("attaching a device that will not write");
     }
@@ -726,8 +761,7 @@ void probe_main(unsigned long *sp)
         fail("detaching the device that will not write");
     }
 
-    /* A write through the mount, then the same bytes read back from the file
-       after a detach and a fresh attachment. */
+    /* A write, read back after a detach and a fresh attachment. */
     fd = syscall3(SYS_OPEN, (long)"/l/made.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         fail_with("creating a file inside the image", fd);
@@ -777,9 +811,7 @@ void probe_main(unsigned long *sp)
     }
     syscall1(SYS_CLOSE, fd);
 
-    /* The same image, copied onto the root, which is memory and has no
-       device under it at all: a loop device reads its file through the file
-       system holding it, so where that file lives does not matter. */
+    /* The same image, copied onto the root, which has no device under it. */
     {
         char block[4096];
         int from = syscall3(SYS_OPEN, (long)image, O_RDONLY, 0);
@@ -804,10 +836,7 @@ void probe_main(unsigned long *sp)
     if (rc != 0) {
         fail_with("attaching an image that lives in memory", rc);
     }
-    /* The root keeps no count on a node of its own: its rule for a file
-       somebody holds is the descriptor tables, and an attachment is not one.
-       So a removal of the file under this device, by either name it can be
-       removed by, is refused while the device stands on it. */
+    /* Neither an unlink nor a rename over it removes the attached file. */
     if (syscall1(SYS_UNLINK, (long)"/ram.img") != -EBUSY) {
         fail("the file under an attached device was unlinked");
     }
@@ -826,7 +855,7 @@ void probe_main(unsigned long *sp)
             fail("removing the spare file");
         }
     }
-    /* And an open that truncates is a change of its length like any other. */
+    /* An open that truncates is a change of its length like any other. */
     if (syscall3(SYS_OPEN, (long)"/ram.img", O_WRONLY | O_TRUNC, 0) != -EBUSY) {
         fail("an attached image was truncated by an open");
     }

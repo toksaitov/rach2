@@ -1,19 +1,14 @@
 /**
- * Disk-backed page-cache integrity probe.
+ * blockprobe: the data of files on a disk-backed KRFFS root, written through
+ * the page cache and read back.
  *
- * On a KRFFS mounted from a real disk through the page cache (rach2.fsdisk),
- * writes several files whose combined size exceeds the resident cache, each one
- * filled with a position-dependent pattern, fsyncs them, then reads every file
- * back and checks every byte. Because the working set is larger than the cache,
- * writing later files evicts and writes back the earlier files' dirty pages,
- * and reading them back re-fills from the disk; a dropped-dirty,
- * freed-while-mapped, or mis-mapped page then shows up as a checksum mismatch,
- * not a mere crash. Each file stays well under the cache budget, so
- * this exercises eviction across files without the single-file grow-relocation
- * limit. Prints "BLOCKPROBE OK" and exits 0 on success, or exits 1 on any
- * mismatch.
- *
- * Freestanding; direct system calls (probe.h).
+ * On a KRFFS mounted from a disk through the page cache (rach2.fsdisk), it
+ * writes NFILES files, each filled with a pattern of its index and the byte
+ * offset, fsyncs each, then reads every file back and checks every byte. A
+ * page whose dirty data was dropped, or that was read into the wrong file
+ * or at the wrong offset, shows up as a mismatch. Prints "BLOCKPROBE OK"
+ * and exits 0 on success, or prints "BLOCKPROBE FAIL: " and the step, and
+ * exits 1.
  */
 
 #include "probe.h"
@@ -23,11 +18,10 @@
 #define O_CREAT  0x40
 #define O_TRUNC  0x200
 
-/* Twenty-four 256 KiB files: 6 MiB of working set against a 4 MiB cache
-   forces eviction across files, while each file stays well under the cache
-   budget. The count grew with the cache (it was eight files against 1 MiB);
-   a working set the cache can hold outright proves nothing about eviction
-   or write-back. */
+/* Twenty-four 256 KiB files, 6 MiB in all. The page cache holds PC_SLOTS
+   pages, 8 MiB, or an eighth of memory when that is less (init_pagecache in
+   rach2/sys/mm/pagecache.c), so the files outgrow it only on a machine of
+   under 48 MiB. */
 #ifndef NFILES
 #define NFILES 24u
 #endif
@@ -37,12 +31,14 @@
 
 static unsigned char buf[FILE_SIZE];
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -52,15 +48,15 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
-/* "/bpNN", the file's index in two decimal digits. It was one byte, '0' + n,
-   which ran past '9' into punctuation for the files past the tenth: unique,
-   but a name nobody could read in a diagnostic. */
+/** Write "/bpNN", the file index `n` in two decimal digits, to `out`, which
+ * has room for six bytes; `n` is under 100. */
 static void path_of(char *out, unsigned n)
 {
     out[0] = '/';
@@ -71,13 +67,15 @@ static void path_of(char *out, unsigned n)
     out[5] = '\0';
 }
 
-/* A byte that depends on the file index and the byte offset, so a page that
-   lands in the wrong file or at the wrong offset is caught. */
+/** A byte that depends on the file index and the byte offset, so a page that
+ * lands in the wrong file or at the wrong offset is caught. */
 static unsigned char pattern(unsigned file, size_t off)
 {
     return (unsigned char)((off * 31u + 7u) ^ (file * 131u) ^ (off >> 11));
 }
 
+/** Write all `n` bytes of `p` to `fd`: 0, or -1 when a write fails or
+ * writes nothing. */
 static int write_all(int fd, const unsigned char *p, size_t n)
 {
     size_t off = 0;
@@ -91,6 +89,8 @@ static int write_all(int fd, const unsigned char *p, size_t n)
     return 0;
 }
 
+/** Read `n` bytes from `fd` into `p`: 0, or -1 when a read fails or meets
+ * the end of the file first. */
 static int read_all(int fd, unsigned char *p, size_t n)
 {
     size_t off = 0;
@@ -104,6 +104,8 @@ static int read_all(int fd, unsigned char *p, size_t n)
     return 0;
 }
 
+/** The probe: write and fsync every file, then read each back, compare it
+ * with its pattern and unlink it. */
 PROBE_START void _start(void)
 {
     char path[8];

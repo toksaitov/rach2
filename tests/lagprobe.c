@@ -1,11 +1,15 @@
 /**
- * The sleeping block path, proved from user space.
+ * lagprobe: the sleeping block path, proved from user space.
  *
  * `lagprobe sleep`, under `rach2.blocklag=N`: a child counts time in 10 ms
  * steps and feeds a pipe while the parent reads 64 KiB from `/dev/disk0p1`,
  * which the lag device answers N ticks late per request. The read succeeding
- * proves the path; the pipe holding counts proves the parent slept while the
- * child ran; the elapsed time proves the lag was real.
+ * proves the path; the bytes in the pipe prove the parent slept while the
+ * child ran; the lag device's count of sixteen late answers proves the lag
+ * was taken on each page, and the elapsed time is printed.
+ *
+ * `lagprobe write`, under the lag: a sector written to /dev/bootpart and
+ * read back, each through the lag.
  *
  * `lagprobe deadline`, under a lag above the deadline: the read fails in
  * deadline time with EIO, the kernel's record says the slot was quarantined
@@ -32,8 +36,9 @@
  * so the volume's dirty flag is on the disk, and written and synced until a
  * write fails; the mount goes read-only, and it unmounts.
  *
- * `lagprobe writers`: two children write files on the lagged volume while
- * the parent syncs it; each file reads back as its own bytes.
+ * `lagprobe writers [TYPE]`: two children write files on the lagged volume,
+ * FAT32 or the type TYPE names, while the parent syncs it; each file reads
+ * back as its own bytes.
  *
  * `lagprobe pool`, under `rach2.blockpool=2` with the lag: three readers
  * and a writer on two slots, of which the disk may hold one, so whoever
@@ -66,8 +71,8 @@
  * file's bytes must read back whole after a sync, the mount must still
  * take a write, and the buffer cache must have shrunk.
  *
- * Prints "LAGPROBE OK" or "LAGPROBE FAIL: reason". Freestanding; direct system
- * calls (probe.h).
+ * With no argument the mode is `sleep`. Prints "LAGPROBE OK" and exits 0, or
+ * "LAGPROBE FAIL: " and the reason and exits 1.
  */
 
 #include "probe.h"
@@ -80,12 +85,14 @@
 #define O_WRONLY 1
 #define O_RDWR   2
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -95,12 +102,14 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
+/** Print "LAGPROBE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why)
 {
     syscall3(SYS_WRITE, 1, (long)"LAGPROBE FAIL: ", 15);
@@ -108,7 +117,7 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
-/* A decimal, without a newline. */
+/** Write `n` in decimal, without a newline. */
 static void putnum(unsigned n)
 {
     char digits[12];
@@ -130,7 +139,7 @@ struct timeval {
     long usec;
 };
 
-/* Milliseconds since boot, from gettimeofday. */
+/** The time of day in milliseconds, modulo 2^32, from gettimeofday. */
 static unsigned now_ms(void)
 {
     struct timeval tv;
@@ -140,7 +149,8 @@ static unsigned now_ms(void)
 
 static unsigned char sector_buf[64 * 1024];
 
-/* One read of `len` bytes from the start of /dev/disk0p1; bytes or -errno. */
+/** One read of `len` bytes from the start of /dev/disk0p1 into the sector
+ * buffer; bytes or -errno. */
 static int read_part(unsigned len)
 {
     int fd = syscall3(SYS_OPEN, (long)"/dev/disk0p1", O_RDONLY, 0);
@@ -154,11 +164,13 @@ static int read_part(unsigned len)
     return r;
 }
 
-/*
+/**
  * The sleep row: a reader of sixteen pages through the lag device, each
  * answered after its lag, with a sibling that must run while the reader
  * sleeps. The lag device counts the answers, so the count is the proof and
- * the time is only printed.
+ * the time is only printed. First, the MBR behind this boot has two
+ * entries, so /dev/disk0p2 opens and /dev/disk0p3, a node for an empty
+ * entry, does not.
  */
 static void run_sleep(void)
 {
@@ -169,8 +181,7 @@ static void run_sleep(void)
     int lagged;
     int got;
 
-    /* The MBR behind this boot has two entries; a third node would be a
-       node for an empty entry. */
+    /* Two MBR entries: a node for the second and none for a third. */
     fd = syscall3(SYS_OPEN, (long)"/dev/disk0p2", O_RDONLY, 0);
     if (fd < 0) {
         fail("the second partition node");
@@ -220,12 +231,21 @@ static void run_sleep(void)
     puts("LAGPROBE OK");
 }
 
-/* The lag is 700 ticks, the deadline 500: each read must fail with EIO
- * because the deadline quarantined its request, which the block layer
- * counts, and not because the lag answered, which would have returned the
- * sector; and each request must have been in flight for the deadline's
- * ticks, which the layer counts too. */
 #define DEADLINE_TICKS 500
+
+/**
+ * The deadline row. The lag is 700 ticks, the deadline 500: each read must
+ * fail with EIO because the deadline quarantined its request, which the
+ * block layer counts, and not because the lag answered, which would have
+ * returned the sector; and each request must have been in flight for the
+ * deadline's ticks, which the layer counts too, since a deadline cut short
+ * would fail the read sooner with the same EIO and the same records. At
+ * least one quarantine and one release must be the read's own; the boot's
+ * own lagged requests and their late answers may land inside the window
+ * too, so an exact count would depend on the timing. The second read comes
+ * after the late completion has freed the quarantined slot, 200 ticks after
+ * the deadline.
+ */
 static void run_deadline(void)
 {
     int quarantines = disk_counter("disk-quarantines ");
@@ -236,18 +256,13 @@ static void run_deadline(void)
     if (read_part(512) != -EIO) {
         fail("the first read past the deadline was not EIO");
     }
-    /* The request was in flight for the whole deadline before it was
-       quarantined, which the block layer counts in ticks: a deadline cut
-       short would fail the read sooner, with the same EIO and the same
-       records. */
+    /* In flight for the whole deadline, which the block layer counts. */
     puts("LAGPROBE first read: ticks in flight:");
     say_numbers((unsigned)(disk_counter("disk-wait-ticks ") - waited), 0, 0, 0);
     if (disk_counter("disk-wait-ticks ") - waited < DEADLINE_TICKS) {
         fail("the first read was failed before the deadline's ticks");
     }
-    /* At least one of each: the read's own. The boot's own lagged requests
-       and their late answers may land inside the window too, so an exact
-       count is the timing's and not the contract's. */
+    /* At least one of each, the read's own. */
     puts("LAGPROBE first read: quarantined, released:");
     say_numbers((unsigned)(disk_counter("disk-quarantines ") - quarantines),
                 (unsigned)(disk_counter("disk-releases ") - releases), 0, 0);
@@ -255,8 +270,7 @@ static void run_deadline(void)
         disk_counter("disk-releases ") - releases < 1) {
         fail("the first read was not quarantined and released");
     }
-    /* Let the late completion land and free the quarantined slot: the lag
-     * answers 200 ticks after the deadline. */
+    /* The late completion frees the quarantined slot within the wait. */
     start = now_ms();
     while (now_ms() - start < 3000u) {
     }
@@ -279,7 +293,7 @@ static void run_deadline(void)
     puts("LAGPROBE OK");
 }
 
-/* A sector written through the lag and read back: the kernel copies a write
+/** A sector written through the lag and read back: the kernel copies a write
  * into the request page before the device sleeps on it, and this is that
  * copy observed from user space. The offset is 256 KiB into the partition:
  * inside even the small fixture partition, and clear of what it reads. */
@@ -326,16 +340,10 @@ static void run_write(void)
     puts("LAGPROBE OK");
 }
 
-/* The mounted half, under `rach2.blocklag=N` with the FAT32 partition on
- * /dev/disk0p2: two children read the same cold block at once and the
- * cache counts one waiting for the busy buffer; two processes sharing one
- * description through fork read a file to its end and between them see
- * every byte once; and a child runs rmdir on the target while the parent's
- * mount sleeps in the constructor and gets EBUSY. */
-
 #define MS_RDONLY 1
 #define EBUSY     16
 
+/** Sleep for `ms` milliseconds. */
 static void sleep_ms(int ms)
 {
     long ts[2];
@@ -345,6 +353,7 @@ static void sleep_ms(int ms)
     syscall2(SYS_NANOSLEEP, (long)ts, 0);
 }
 
+/** The raw wait status of the child `pid`; fail when the wait fails. */
 static int wait_status(int pid)
 {
     int status = 0;
@@ -355,7 +364,7 @@ static int wait_status(int pid)
     return status;
 }
 
-/* The number after `label` in /proc/disk, or -1. */
+/** The number after `label` in /proc/disk, or -1. */
 static int disk_counter(const char *label)
 {
     static char text[2048];
@@ -391,9 +400,9 @@ static int disk_counter(const char *label)
     return -1;
 }
 
-/* `lagprobe root`, under `rach2.fsdisk rach2.blocklag=N`: the root is the
-   disk's KRFFS partition, read through the real device, which /proc/mounts
-   says by naming the partition as the root's source. */
+/** `lagprobe root`, under `rach2.fsdisk rach2.blocklag=N`: the root is the
+ * disk's KRFFS partition, read through the real device, which /proc/mounts
+ * says by naming the partition as the root's source. */
 static void run_root(void)
 {
     static char text[512];
@@ -416,7 +425,8 @@ static void run_root(void)
     puts("LAGPROBE OK");
 }
 
-/* Whether /proc/mounts says the mount on /lb is `ro`. */
+/** Whether /proc/mounts says the mount on /lb is `ro`; fail when the file
+ * cannot be read. */
 static int lb_read_only(void)
 {
     static char text[1024];
@@ -446,10 +456,10 @@ static int lb_read_only(void)
     return ro;
 }
 
-/* `lagprobe blockfail`, under `rach2.blocklag=3 rach2.blockfail=3`: the
-   third write through the lag fails, which is inside the first write to
-   the mounted volume; the mount goes read-only with a record, /proc/mounts
-   says `ro`, and the next write answers EROFS. */
+/** `lagprobe blockfail`, under `rach2.blocklag=3 rach2.blockfail=3`: the
+ * third write through the lag fails, which is inside the first write to
+ * the mounted volume; the mount goes read-only with a record, /proc/mounts
+ * says `ro`, and the next write answers EROFS. */
 static void run_blockfail(void)
 {
     int fd;
@@ -477,11 +487,11 @@ static void run_blockfail(void)
     puts("LAGPROBE OK");
 }
 
-/* `lagprobe latefail`, under `rach2.blocklag=3 rach2.blockfail=12`: the
-   create succeeds, so the dirty flag was written; then 4 KiB at a time is
-   written and synced until the device fails a write. The mount goes
-   read-only, and the unmount succeeds; the suite then reads the dirty flag
-   from the disk, which the driver does not clear on a read-only mount. */
+/** `lagprobe latefail`, under `rach2.blocklag=3 rach2.blockfail=12`: the
+ * create succeeds, so the dirty flag was written; then 4 KiB at a time is
+ * written and synced until the device fails a write. The mount goes
+ * read-only, and the unmount succeeds; the suite then reads the dirty flag
+ * from the disk, which the driver does not clear on a read-only mount. */
 static void run_latefail(void)
 {
     static char block[4096];
@@ -521,17 +531,12 @@ static void run_latefail(void)
     puts("LAGPROBE OK");
 }
 
-/* `lagprobe writers`, under the lag with the FAT32 partition mounted for
-   writing: two children each create a file and extend it eight times, and
-   the parent syncs the volume twenty times while they do; every write
-   sleeps in the lag, so the requests interleave. Each file must read back
-   as its own bytes, whole, every sync must return 0, and the volume must
-   unmount clean. The sync's turn under the lock is not observable from
-   here: the driver's assertion at every mutation is what catches a write
-   outside it. */
 #define WRITER_CHUNK  4096
 #define WRITER_ROUNDS 8
 
+/** A writer of `lagprobe writers`: create `path` and write WRITER_ROUNDS
+ * chunks of bytes counting up from `fill`; exit 0, 2 when the create fails
+ * and 3 when a write is short. */
 static void writer(const char *path, unsigned char fill)
 {
     static unsigned char chunk[WRITER_CHUNK];
@@ -553,6 +558,7 @@ static void writer(const char *path, unsigned char fill)
     sys_exit(0);
 }
 
+/** Fail unless `path` has exactly the bytes `writer` wrote with `fill`. */
 static void check_written(const char *path, unsigned char fill)
 {
     static unsigned char storage[WRITER_CHUNK];
@@ -579,8 +585,19 @@ static void check_written(const char *path, unsigned char fill)
     syscall1(SYS_CLOSE, fd);
 }
 
-static const char *writers_type = "vfat"; /* or the type the third argument names */
+/* The type `writers` mounts: vfat, or the type the second argument names. */
+static const char *writers_type = "vfat";
 
+/**
+ * `lagprobe writers`, under the lag with the second partition mounted for
+ * writing: two children each create a file and extend it eight times, and
+ * the parent syncs the volume twenty times while they do; every write
+ * sleeps in the lag, so the requests interleave. Each file must read back
+ * as its own bytes, whole, every sync must return 0, and the volume must
+ * unmount clean. The sync's turn under the lock cannot be seen from here:
+ * the driver's assertion at every mutation is what catches a write outside
+ * it.
+ */
 static void run_writers(void)
 {
     int a, b, s;
@@ -622,9 +639,12 @@ static unsigned char parent_marks[PATTERN_SECTORS];
 static unsigned char child_marks[PATTERN_SECTORS];
 static int pipe_fds[2];
 
-/* Read `fd` one sector at a time to the end and mark each sector received
-   in `marks`; a sector whose 128 fields do not all say the same number, or
-   a number out of range, or a short read, fails the probe. */
+/** Read `fd` one sector at a time to the end and mark each sector received
+ * in `marks`; a sector whose 128 fields do not all say the same number, or
+ * a number out of range, or a short read, fails the probe. The reader that
+ * finishes a sector keeps the processor and would take the description
+ * again before the other wakes, so a tick's sleep after each lets the two
+ * alternate, which is what the marks then show. */
 static void mark_sectors(int fd, unsigned char *marks)
 {
     int n, i, v;
@@ -644,16 +664,27 @@ static void mark_sectors(int fd, unsigned char *marks)
             }
         }
         marks[v]++;
-        /* The reader that finishes a sector keeps the CPU and would take
-           the description again before the other wakes; a tick's sleep
-           lets the two alternate, which is what the marks then show. */
-        sleep_ms(10);
+        sleep_ms(10); /* so that the two readers alternate */
     }
     if (n < 0) {
         fail("a read of pattern.bin failed");
     }
 }
 
+/**
+ * The mounted half, under `rach2.blocklag=N` with the FAT32 partition on
+ * /dev/disk0p2. A child runs rmdir on the target while the parent's mount
+ * sleeps in the constructor on the lag, and gets EBUSY, since the slot has
+ * the covered node. Two children read the same cold block at once, and the
+ * cache counts one waiting for the busy buffer. Two processes sharing one
+ * description through fork read pattern.bin to its end a sector at a time,
+ * each marking the sectors it received by the number every sector carries
+ * in each of its 128 fields; the child's marks come back through a pipe,
+ * and every sector must be marked by exactly one of the two. Last, the
+ * whole-disk window is on the real disk and the mount is on the lag wrapper
+ * over it, so the claim on the disk must compare the disk under both, and
+ * a writer of /dev/disk0 is EBUSY.
+ */
 static void run_mounted(void)
 {
     int pid, pid2, fd, before, after;
@@ -664,8 +695,7 @@ static void run_mounted(void)
         fail("mkdir /lm");
     }
 
-    /* The constructor sleeps on the lag; a child that removes the target
-       meanwhile must be refused, because the slot holds the covered node. */
+    /* rmdir of the target while the constructor sleeps is EBUSY. */
     pid = syscall1(SYS_FORK, 0);
     if (pid == 0) {
         sleep_ms(30);
@@ -681,8 +711,7 @@ static void run_mounted(void)
         fail("rmdir of the target while the constructor slept was not EBUSY");
     }
 
-    /* Two readers of one cold block: the second sleeps on the busy buffer
-       and the cache counts the wait. */
+    /* Two readers of one cold block: the cache counts the second's wait. */
     before = disk_counter("waits");
     pid = syscall1(SYS_FORK, 0);
     pid2 = pid == 0 ? 0 : syscall1(SYS_FORK, 0);
@@ -701,11 +730,7 @@ static void run_mounted(void)
         fail("no busy-buffer wait was counted");
     }
 
-    /* One description shared through fork: each side reads one sector at
-       a time until the end and marks which sectors it received, by the
-       number every sector of pattern.bin carries in each of its 128 fields;
-       the child's marks come back through a pipe, and every sector must
-       be marked by exactly one of the two. */
+    /* One description shared through fork gives each sector to one side. */
     fd = syscall3(SYS_OPEN, (long)"/lm/pattern.bin", O_RDONLY, 0);
     if (fd < 0) {
         fail("open the shared file");
@@ -748,8 +773,7 @@ static void run_mounted(void)
                         : "the child read nothing through the shared description");
     }
 
-    /* The whole-disk window is on the real disk and the mount is on the lag
-       wrapper over it; the claim must compare the disk under both. */
+    /* A whole-disk writer over the mounted range is EBUSY. */
     if (syscall3(SYS_OPEN, (long)"/dev/disk0", O_RDWR, 0) != -EBUSY) {
         fail("a whole-disk writer opened over a mounted range");
     }
@@ -761,7 +785,8 @@ static void run_mounted(void)
     puts("LAGPROBE OK");
 }
 
-/* Whether /proc/mounts lists `dir` with `ro` among its options. */
+/** Whether /proc/mounts lists `dir` with `ro` among its options; fail when
+ * the file cannot be read. */
 static int mount_is_ro(const char *dir)
 {
     static char text[1024];
@@ -795,8 +820,9 @@ static int mount_is_ro(const char *dir)
     return ro;
 }
 
-/* On the FAT32 volume mounted at `dir`: a file written and synced, a
- * second file created after the sync, and the mount still writable. */
+/** On the volume mounted at `dir`: the file `first` written and synced, the
+ * file `second` created after the sync, and the mount still writable; fail
+ * otherwise. */
 static void write_and_sync(const char *dir, const char *first, const char *second)
 {
     int fd;
@@ -819,7 +845,7 @@ static void write_and_sync(const char *dir, const char *first, const char *secon
     }
 }
 
-/* Read the whole of `path` into the sector buffer, in 4 KiB pieces; bytes
+/** Read the whole of `path` into the sector buffer, in 4 KiB pieces; bytes
  * or -errno. */
 static int read_file(const char *path)
 {
@@ -836,14 +862,14 @@ static int read_file(const char *path)
     return r < 0 ? r : total;
 }
 
-/* A child that exits 0 when `got` is `want`. */
+/** End a child with 0 when `got` is `want`, and 1 otherwise. */
 static int child_result(int got, int want)
 {
     sys_exit(got == want ? 0 : 1);
     return 0;
 }
 
-/* Three readers and a writer on a pool of two slots, the device's share
+/** Three readers and a writer on a pool of two slots, the device's share
  * one: the raw reads of the first partition go one at a time through the
  * raw window, the two readers of files on the mounted volume and the
  * parent's write and sync join them, and whoever finds the share taken
@@ -884,7 +910,8 @@ static void run_pool(void)
     puts("LAGPROBE OK");
 }
 
-/* One block of `path` at `offset`, into the sector buffer; bytes or -errno. */
+/** One 4 KiB block of `path` at `offset`, into the sector buffer; bytes,
+ * -errno, or -1 when the seek fails. */
 static int read_block_at(const char *path, int offset)
 {
     int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
@@ -902,7 +929,7 @@ static int read_block_at(const char *path, int offset)
     return r;
 }
 
-/* Sixteen readers of sixteen distinct blocks, queued for the one request
+/** Sixteen readers of sixteen distinct blocks, queued for the one request
  * the disk may hold; each must get its block, however long it waited. */
 static void run_queue(void)
 {
@@ -935,7 +962,7 @@ static void run_queue(void)
     puts("LAGPROBE OK");
 }
 
-/* A field of /proc/meminfo, in kilobytes, or 0xFFFFFFFF when absent. */
+/** A field of /proc/meminfo, in kilobytes, or 0xFFFFFFFF when absent. */
 static unsigned meminfo_kb(const char *key)
 {
     static char text[2048];
@@ -975,7 +1002,7 @@ static unsigned meminfo_kb(const char *key)
 
 #define ENOMEM 12
 
-/* Four numbers on one line, for a row that fails to say what it saw. */
+/** Four numbers on one line, for a row that fails to say what it saw. */
 static void say_numbers(unsigned a, unsigned b, unsigned c, unsigned d)
 {
     unsigned v[4];
@@ -1003,14 +1030,17 @@ static void say_numbers(unsigned a, unsigned b, unsigned c, unsigned d)
     line[n++] = '\n';
     syscall3(SYS_WRITE, 1, (long)line, n);
 }
+
 #define DIRTY_BYTES (1024 * 1024)
 
-/* A megabyte left dirty in the buffer cache of the KRFFS volume, whose
+/** A megabyte left dirty in the buffer cache of the KRFFS volume, whose
  * writes stay dirty until a sync where the FAT32 volume's go through, then
  * the machine's memory taken a page at a time until the caches must give
  * their frames back, which a page fault does with clean frames only, and
  * one more mapping, the system call in which dirty buffers are written
- * back; the file whole and the mount writable after. */
+ * back; the file whole and the mount writable after. The commands, the
+ * flushes, the ticks requests spent in flight and the lag's answers are
+ * printed at the end. */
 static void run_dirty(void)
 {
     unsigned total, buffers_before, buffers_after;
@@ -1082,8 +1112,6 @@ static void run_dirty(void)
     if (syscall2(SYS_UMOUNT2, (long)"/ly", 0) != 0) {
         fail("umount2 of the volume");
     }
-    /* The row's cost, for the record: the commands, the flushes, the ticks
-       requests spent in flight and the lag's answers. */
     puts("LAGPROBE dirty: commands, flushes, wait ticks, lag completions:");
     say_numbers((unsigned)disk_counter("disk-commands "), (unsigned)disk_counter("disk-flushes "),
                 (unsigned)disk_counter("disk-wait-ticks "),
@@ -1091,10 +1119,11 @@ static void run_dirty(void)
     puts("LAGPROBE OK");
 }
 
-/* The raw reader's request holds the one slot the first partition's device
+/** The raw reader's request takes the one slot the first partition's device
  * may have and is never answered; the mount of the same partition then
- * waits for that slot, and both must end at the reader's deadline. The
- * second partition is another device on the same pool and still writes. */
+ * waits for that slot, and both must end at the reader's deadline, the one
+ * quarantine releasing the reader and the waiter behind it. The second
+ * partition is another device on the same pool and still writes. */
 static void run_dead(void)
 {
     int quarantines = disk_counter("disk-quarantines ");
@@ -1119,8 +1148,7 @@ static void run_dead(void)
     if (wait_status(a) != 0) {
         fail("the raw reader of the partition that never answers was not EIO");
     }
-    /* One deadline: the reader's request was the one quarantined, and the
-     * reader and the waiter behind it were the two released by it. */
+    /* One quarantine, and two released by it. */
     if (disk_counter("disk-quarantines ") - quarantines != 1 ||
         disk_counter("disk-releases ") - releases != 2) {
         fail("the reader and the waiter were not the two released by the one deadline");
@@ -1142,7 +1170,7 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
-/* Whether the strings `a` and `b` are equal. */
+/** Whether the strings `a` and `b` are equal. */
 static int same(const char *a, const char *b)
 {
     while (*a && *a == *b) {
@@ -1162,6 +1190,8 @@ static const struct {
     {"dead", run_dead},   {"queue", run_queue},         {"dirty", run_dirty},
 };
 
+/** The probe, entered with `sp` at argc: the mode the first argument names,
+ * `sleep` with none; a second argument is the type `writers` mounts. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
