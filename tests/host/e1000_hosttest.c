@@ -1,15 +1,16 @@
 /**
- * Host test for the e1000 driver (sys/network/driver/e1000.c).
+ * Test the e1000 driver, sys/network/driver/e1000.c, against a software model
+ * of the chip.
  *
  * host-deps:
  *
- * Unlike the RTL8168GU, this card is emulated, so the driver can be run
- * before it is believed and a boot proves the ordinary path. What a boot
- * cannot reach is everything the card does when something is wrong: QEMU
- * never reports a receive error, never splits a frame across descriptors,
- * never reports a length outside the buffer, never stops answering a reset,
- * and never leaves a transmit descriptor unfinished. Those are the failures a
- * driver is written for and the ones nothing else would catch.
+ * Unlike the RTL8168GU, this card is emulated, so a boot runs the driver and
+ * proves the ordinary path. What a boot cannot reach is everything the card
+ * does when something is wrong: QEMU never reports a receive error, never
+ * splits a frame across descriptors, never reports a length outside the
+ * buffer, never stops answering a reset, and never leaves a transmit
+ * descriptor unfinished. Those are the failures a driver is written for and
+ * the ones nothing else would catch.
  *
  * So a software model of the chip answers every register the driver touches,
  * moves descriptors the way the manual says the card does, and records every
@@ -17,12 +18,12 @@
  * thing at a time, and asserts what the driver did.
  *
  * What it proves: the bring-up sequence and its order, the EEPROM read
- * protocol and the register-pair preference, the refusal of an unusable
+ * protocol and the register-pair preference, the rejection of an unusable
  * station address, each of the four receive checks failing on its own, ring
  * wrap in both directions, the transmit descriptor contract, the bounded
  * stall, and that a card that is not in the machine is not touched at all.
  *
- * Returns the failed-check count (0 == pass).
+ * The test exits with the number of failed checks, at most 255.
  */
 
 /* The kernel headers this pulls in define uintptr_t themselves, so the test
@@ -33,7 +34,7 @@
 /* The stubs the driver links against.                                 */
 /* ------------------------------------------------------------------ */
 
-/* Recorded delivery from the driver's receive path. */
+/* The last frame the driver's receive path delivered, and the deliveries. */
 static unsigned char rx_last[2048];
 static unsigned rx_last_len;
 static unsigned rx_calls;
@@ -42,6 +43,7 @@ static unsigned rx_calls;
  * inside. */
 struct netdev;
 
+/** Record a frame delivered, and count it. */
 void ethernet_rx(struct netdev *nd, const unsigned char *data, unsigned short len)
 {
     (void)nd;
@@ -54,6 +56,7 @@ void ethernet_rx(struct netdev *nd, const unsigned char *data, unsigned short le
     }
 }
 
+/** Send nothing and return 0, NETDEV_TX_OK; no row sends through Ethernet. */
 int ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short type,
                 const unsigned char *payload, unsigned short plen)
 {
@@ -65,52 +68,59 @@ int ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short typ
     return 0;
 }
 
-/* The refusal counters the drivers report to. The interface owns them; here
-   they are counted so a check can say which one the driver reached. */
+/* The counters of frames the drivers drop or find in error. The interface
+   owns them; here they are counted so a check can say which one the driver
+   reached. */
 static unsigned note_rx_errors;
 static unsigned note_rx_drops;
 
+/** Count a frame in error. */
 void ethernet_note_rx_error(struct netdev *nd)
 {
     (void)nd;
     note_rx_errors++;
 }
 
+/** Count a frame dropped. */
 void ethernet_note_rx_drop(struct netdev *nd)
 {
     (void)nd;
     note_rx_drops++;
 }
 
+/** Discard console text. */
 void k_puts(const char *s)
 {
     (void)s;
 }
 
+/** Discard console text. */
 void k_printf(const char *fmt, ...)
 {
     (void)fmt;
 }
 
-/* The driver's real delay reads the 8254; the model supplies its own, so this
- * exists only to satisfy the link. */
+/** Wait: never reached, since the model's `udelay` takes the driver's waits;
+ * the kernel's measures against a hardware counter. It completes the link. */
 void k_udelay(unsigned int usec)
 {
     (void)usec;
 }
 
-/* The kernel's interrupt bracket. There are no interrupts here, so the flag is
-   a token; what the test holds the driver to is that every lock it takes it
-   releases, which the balance below checks. */
+/* The network lock's balance: locks taken and not released, and whether a
+   release ever came without a lock. The test holds the driver to releasing
+   every lock it takes. */
 static int lock_depth;
 static int lock_ever_negative;
 
+/** Take the network lock: count it and return 0 as the saved flags. */
 unsigned int net_lock(void)
 {
     lock_depth++;
     return 0;
 }
 
+/** Release the network lock, noting a release without a lock. */
 void net_unlock(unsigned int flags)
 {
     (void)flags;
@@ -120,7 +130,7 @@ void net_unlock(unsigned int flags)
     }
 }
 
-/* The PCI surface the probe uses. The model presents one e1000 whose memory
+/* The PCI calls the probe makes. The model presents one e1000 whose memory
  * window is the second BAR, so the probe's walk has to step over an I/O BAR
  * to find it. */
 static int pci_present = 1;
@@ -130,8 +140,7 @@ static unsigned char pci_irq_line = 11;
 #include "pci.h"
 #include "network/driver/e1000.h"
 
-/* The driver reports what it found through the kernel log, which this test
-   has no use for; the records are dropped. */
+/** Discard a kernel log record; no row reads the driver's report. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -139,15 +148,19 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
-/* The driver's reset goes through the card's I/O window, which is what this
-   is. The model supplies its own `wio`, so nothing here is reached; it
-   exists to satisfy the link. */
+/**
+ * Write a 32-bit I/O port: the card's I/O window, which the driver's reset goes
+ * through. Never reached, since the model's `wio` takes those writes; it
+ * completes the link.
+ */
 void pci_io_write32(uint16_t port, uint32_t v)
 {
     (void)port;
     (void)v;
 }
 
+/** Find the model's one e1000 on line `pci_irq_line`, unless `pci_present`
+ * is clear. */
 int pci_find_device_by_id(unsigned short vendor, unsigned short device, pci_device_t *out)
 {
     int i;
@@ -169,16 +182,19 @@ int pci_find_device_by_id(unsigned short vendor, unsigned short device, pci_devi
     return 1;
 }
 
+/** Report whether `bar` is a memory BAR. */
 int pci_bar_is_memory(unsigned int bar)
 {
     return bar != 0 && (bar & 1u) == 0;
 }
 
+/** Report whether `bar` is a 64-bit memory BAR. */
 int pci_bar_is_64bit(unsigned int bar)
 {
     return (bar & 0x6u) == 0x4u;
 }
 
+/** Return the address of `bar`, without its flag bits. */
 unsigned int pci_bar_address(unsigned int bar)
 {
     return pci_bar_is_memory(bar) ? (bar & ~0xfu) : (bar & ~0x3u);
@@ -202,17 +218,19 @@ uint64_t pci_bar_address64(const pci_device_t *dev, int i)
     return phys;
 }
 
-static int pci_master_enabled;
-static int pci_memory_enabled;
+static int pci_master_enabled; /* the command word's bus-master bit */
+static int pci_memory_enabled; /* the command word's memory-space bit */
 
 static void model_record(unsigned off, unsigned value);
 
+/** Set the bus-master bit. */
 void pci_enable_bus_master(pci_device_t *dev)
 {
     (void)dev;
     pci_master_enabled = 1;
 }
 
+/** Set the memory-space bit. */
 void pci_enable_memory_space(pci_device_t *dev)
 {
     (void)dev;
@@ -224,6 +242,7 @@ void pci_enable_memory_space(pci_device_t *dev)
    stop and not before. */
 #define MODEL_BUSMASTER_OFF 0x40000000u
 
+/** Clear the bus-master bit, and log it at MODEL_BUSMASTER_OFF. */
 void pci_disable_bus_master(pci_device_t *dev)
 {
     (void)dev;
@@ -231,25 +250,29 @@ void pci_disable_bus_master(pci_device_t *dev)
     model_record(MODEL_BUSMASTER_OFF, 0);
 }
 
+/** Enable the card's interrupts: a no-op. */
 void pci_enable_interrupts(pci_device_t *dev)
 {
     (void)dev;
 }
 
-/* The mapping the driver asks for. A test can refuse it to reach the driver's
- * refusal. */
+/* The mapping the driver asks for. A row can make it fail, to reach the
+ * driver's handling of that. */
 static int map_refused;
 static unsigned map_size_asked;
 
+/** Map `size` bytes at `phys` one to one, or fail with 0 while `map_refused`
+ * is set; record the size asked for. */
 uintptr_t map_mmio(uintptr_t phys, size_t size)
 {
     map_size_asked = size;
     return map_refused ? 0 : phys;
 }
 
-static unsigned char isr_vector_registered;
-static int isr_handler_registered;
+static unsigned char isr_vector_registered; /* the vector of the last handler */
+static int isr_handler_registered;          /* a handler was registered */
 
+/** Record the vector of a handler registered, and that there was one. */
 void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
 {
     isr_vector_registered = vector;
@@ -273,7 +296,7 @@ static unsigned model_reg[MODEL_REGS];
 static unsigned model_accesses;
 
 /* What the model does out of the ordinary, so a test can break one thing at a
- * time and watch the driver refuse, not hang. */
+ * time and watch the driver fail, not hang. */
 static int model_stuck_reset;  /* CTRL.RST never clears */
 static int model_stuck_eeprom; /* EERD never reports done */
 static int model_swallow_tx;   /* the transmit engine never runs */
@@ -283,7 +306,7 @@ static int model_dead_window;  /* every read answers all ones */
    card completing synchronously, a driver that never drained would look the
    same as one that did. */
 static unsigned model_tx_completes_after;
-static unsigned short model_eeprom[64];
+static unsigned short model_eeprom[64]; /* the words EERD reads */
 
 /* The recorded write sequence. */
 struct wr {
@@ -293,8 +316,9 @@ struct wr {
 
 #define MODEL_LOG_MAX 512
 static struct wr model_log[MODEL_LOG_MAX];
-static unsigned model_log_len;
+static unsigned model_log_len; /* writes logged, MODEL_LOG_MAX and past it */
 
+/** Log a write of `value` to `off`; the first MODEL_LOG_MAX are kept. */
 static void model_record(unsigned off, unsigned value)
 {
     if (model_log_len < MODEL_LOG_MAX) {
@@ -311,6 +335,11 @@ static void model_tx_drain(void);
  * inside. */
 struct e1000;
 
+/**
+ * Read the model's register at `off`: all ones while `model_dead_window` is
+ * set, CTRL with its reset bit cleared unless `model_stuck_reset` holds it, and
+ * ICR cleared by the read.
+ */
 static unsigned m_r32(struct e1000 *e, unsigned off)
 {
     (void)e; /* the model presents one card */
@@ -334,6 +363,12 @@ static unsigned m_r32(struct e1000 *e, unsigned off)
     return model_reg[off / 4];
 }
 
+/**
+ * Write the model's register at `off`, and log the write. A write of EERD with
+ * the start bit completes the read at once unless `model_stuck_eeprom` is set;
+ * a write of IMC clears its bits from IMS; a write of TDT runs the transmit
+ * engine.
+ */
 static void m_w32(struct e1000 *e, unsigned off, unsigned value)
 {
     (void)e;
@@ -368,6 +403,8 @@ static void m_w32(struct e1000 *e, unsigned off, unsigned value)
    went this way and not the other. */
 #define MODEL_IO_MARK 0x80000000u
 
+/** Write the model's register at `off` through the I/O window, and log the
+ * write with MODEL_IO_MARK. */
 static void m_wio(struct e1000 *e, unsigned off, unsigned value)
 {
     (void)e;
@@ -378,6 +415,8 @@ static void m_wio(struct e1000 *e, unsigned off, unsigned value)
 
 static void model_tx_finish(void);
 
+/** Wait no time: count down `model_tx_completes_after`, and finish what the
+ * transmit engine took when it reaches 0. */
 static void m_udelay(unsigned usec)
 {
     (void)usec;
@@ -391,8 +430,8 @@ static void m_udelay(unsigned usec)
 
 /* ------------------------------------------------------------------ */
 
-/* Two of the kernel's own, which the driver reaches and this test does not
- * build: a fill, and the nth card of an identity on the bus. */
+/** Fill `n` bytes at `ptr` with `c`: the kernel's k_memset, which the driver
+ * calls and this test does not build. */
 void *k_memset(void *ptr, int c, size_t n)
 {
     unsigned char *q = (unsigned char *)ptr;
@@ -403,6 +442,7 @@ void *k_memset(void *ptr, int c, size_t n)
     return ptr;
 }
 
+/** Copy `n` bytes from `src` to `dest`: the kernel's k_memcpy. */
 void *k_memcpy(void *dest, const void *src, size_t n)
 {
     unsigned char *d = (unsigned char *)dest;
@@ -415,6 +455,7 @@ void *k_memcpy(void *dest, const void *src, size_t n)
     return dest;
 }
 
+/** Find card `nth` of an identity on the bus: the model has at most one. */
 bool pci_find_nth_by_id(uint16_t vendor, uint16_t device, int nth, pci_device_t *out)
 {
     return nth == 0 ? pci_find_device_by_id(vendor, device, out) : false;
@@ -430,6 +471,7 @@ bool pci_find_nth_by_id(uint16_t vendor, uint16_t device, int nth, pci_device_t 
 static unsigned char frames[FRAME_COUNT][4096] __attribute__((aligned(4096)));
 static unsigned frames_taken;
 
+/** Give the next of the FRAME_COUNT frames, or NULL when all are taken. */
 void *alloc_kernel_frame(void)
 {
     if (frames_taken >= FRAME_COUNT) {
@@ -438,6 +480,7 @@ void *alloc_kernel_frame(void)
     return &frames[frames_taken++][0];
 }
 
+/** Free a frame: a no-op; the frames are not reused. */
 void free_kernel_frame(void *frame)
 {
     (void)frame;
@@ -460,26 +503,16 @@ extern int printf(const char *fmt, ...);
         }                                   \
     } while (0)
 
+/* The model's register access, which model_reset installs as the driver's. */
 static const struct e1000_io model_io = {m_r32, m_w32, m_wio, m_udelay};
 
 /* The model's own transmit head, which is the index the card would be
    fetching from. The driver writes TDH once at setup and never again. */
 static unsigned model_tdh;
-static unsigned model_tx_sent;
+static unsigned model_tx_sent; /* frames the transmit engine sent */
 static unsigned char model_tx_last[E1000_TX_BUF_SIZE];
 static unsigned model_tx_last_len;
 
-/**
- * Send every transmit descriptor between the model's head and the driver's
- * tail, and hand each one back.
- *
- * Writing the tail is what starts this on real hardware, so the model does it
- * from the tail write: without it the driver would wait for a done bit
- * nothing ever sets, which is exactly what the stall case tests. The frame
- * bytes are read out of the driver's own buffer rather than through the
- * descriptor's address, because that address is a kernel 32-bit value and
- * this test runs on a host whose pointers may be wider.
- */
 /** Give back every descriptor the engine has taken but not yet finished. */
 static void model_tx_finish(void)
 {
@@ -490,6 +523,19 @@ static void model_tx_finish(void)
     }
 }
 
+/**
+ * Send every transmit descriptor between the model's head and the driver's
+ * tail, and hand each one back, unless `model_swallow_tx` is set; with
+ * `model_tx_completes_after` set, the descriptors go back when m_udelay counts
+ * it down.
+ *
+ * Writing the tail is what starts this on real hardware, so the model does it
+ * from the tail write: without it the driver would wait for a done bit nothing
+ * ever sets, which is what the stall case tests. The frame bytes are read out
+ * of the driver's own buffer rather than through the descriptor's address,
+ * because that address is a kernel 32-bit value and this test runs on a host
+ * whose pointers may be wider.
+ */
 static void model_tx_drain(void)
 {
     unsigned tdt = model_reg[E1000_TDT / 4] % E1000_RING_SIZE;
@@ -521,8 +567,8 @@ static void model_tx_drain(void)
 static unsigned model_rdh;
 
 /**
- * Put one frame into the receive ring the way the card would, including
- * refusing to when the ring is full.
+ * Put one frame into the receive ring the way the card would, with the
+ * descriptor's `status` and `errors` bytes, or none when the ring is full.
  *
  * The card owns the descriptors from its head up to the driver's tail, and
  * stops when the two meet. Honouring that is what makes this a model rather
@@ -556,7 +602,19 @@ static int model_deliver(const unsigned char *data, unsigned len, unsigned char 
     return 1;
 }
 
-/** Put the model and the driver back to a cold-power state. */
+/**
+ * Put the model and the driver back to a cold-power state.
+ *
+ * The window pointer and the PCI record are part of that state, and are what
+ * `e1000_stop` reads to decide whether a register may be written at all; a
+ * reset that left them set would be a driver that remembers a card the machine
+ * no longer has. Every register the driver reads is then seeded with a value
+ * that is wrong for the driver, so a driver that skips a write, or keeps bits
+ * it should clear, fails a check it would pass against registers of zeroes. The
+ * register pair has a valid station address, the QEMU case and the one the
+ * driver prefers, and the EEPROM a different one, so a driver that reads the
+ * wrong source is seen to.
+ */
 static void model_reset(void)
 {
     unsigned i;
@@ -592,10 +650,6 @@ static void model_reset(void)
     rx_calls = 0;
     rx_last_len = 0;
     e1000s[0].up = 0;
-    /* The window pointer and the PCI record are part of a cold-power state
-       and are what `e1000_stop` reads to decide whether a register may be
-       written at all. A reset that left them set would be a driver that
-       remembers a card the machine no longer has. */
     e1000s[0].mmio = 0;
     e1000s[0].pci.vendor_id = 0;
     e1000s[0].pci.device_id = 0;
@@ -611,9 +665,6 @@ static void model_reset(void)
         e1000s[0].mac[i] = 0;
     }
 
-    /* Every register the driver reads is seeded with a value that is wrong
-     * for us. A driver that skips a write, or preserves bits it should clear,
-     * then fails a check it would pass against a register file of zeroes. */
     for (i = 0; i < MODEL_REGS; i++) {
         model_reg[i] = 0xa5a5a5a5u;
     }
@@ -621,19 +672,16 @@ static void model_reset(void)
     model_reg[E1000_ICR / 4] = 0;
     model_reg[E1000_EERD / 4] = 0;
 
-    /* The station address the card presents in its register pair, with the
-     * valid bit set: this is the QEMU case and the one the driver prefers. */
     model_reg[E1000_RAL0 / 4] = 0x00125452u; /* 52 54 12 00 */
     model_reg[E1000_RAH0 / 4] = E1000_RAH_AV | 0x00005634u;
 
-    /* A different address in the EEPROM, so a driver that reads the wrong
-     * source is visible rather than merely working. */
     model_eeprom[0] = 0x5452;
     model_eeprom[1] = 0xbbaa;
     model_eeprom[2] = 0xddcc;
 }
 
-/** The index of the first write to `off` at or after `from`, or -1. */
+/** Return the index of the first logged write to `off` at or after `from`,
+ * or -1. */
 static int find_write(unsigned from, unsigned off)
 {
     unsigned i;
@@ -646,7 +694,8 @@ static int find_write(unsigned from, unsigned off)
     return -1;
 }
 
-/** The index of the first write to `off` with every bit of `bits` set. */
+/** Return the index of the first logged write to `off`, at or after `from`,
+ * with every bit of `bits` set, or -1. */
 static int find_write_bits(unsigned from, unsigned off, unsigned bits)
 {
     unsigned i;
@@ -662,6 +711,57 @@ static int find_write_bits(unsigned from, unsigned off, unsigned bits)
 /* The interface this model's card is brought up for. */
 static struct netdev model_iface;
 
+/**
+ * Run the rows, each on a model put back to its cold state:
+ *
+ *   * the bring-up completes on a healthy model, with the whole window mapped,
+ *     the handler on the card's own line and the station address from the
+ *     register pair;
+ *   * the bring-up order: interrupts masked, and the receiver and transmitter
+ *     turned off, before the reset, which goes through the I/O window; each
+ *     ring programmed before its engine starts; and the receive and control
+ *     bits and the multicast table as the driver means them;
+ *   * with no valid address in the pair, the station address comes from the
+ *     EEPROM and is written back so that the card filters to it;
+ *   * the bounded failures: a reset or an EEPROM read that never completes, an
+ *     all-zero or group station address, and a window that reads back all ones
+ *     or will not map;
+ *   * a card that is not in the machine costs no register access and leaves the
+ *     PCI command word alone;
+ *   * receive: a whole frame reaches the stack and its descriptor goes back
+ *     cleared, and each of the four checks fails on its own: an error bit, a
+ *     frame split across descriptors, a frame too short for an Ethernet header,
+ *     and a length past the buffer. A split frame is two descriptors, one
+ *     without end-of-packet and one with it; a driver that judged each on its
+ *     own would hand the second half up as a whole frame, so both are dropped,
+ *     and the frame after them is delivered. Every frame is delivered across a
+ *     ring wrap;
+ *   * transmit: the descriptor contract; a short frame padded with zeroes; an
+ *     over-length frame dropped without a descriptor; and a card that never
+ *     finishes, counted as a stall and bounded, with one descriptor left
+ *     unsubmitted, since the card reads head equal to tail as nothing to do and
+ *     a driver that filled every entry would wrap the tail onto the head and
+ *     lose the whole queue;
+ *   * a driver that never came up neither sends nor receives;
+ *   * stop turns off the receiver and transmitter and masks interrupts, then
+ *     revokes bus mastering last; a second stop is safe, as the interface
+ *     requires, though no path calls it twice. Every failure of e1000_init
+ *     comes before it takes the bus, so a bring-up that failed at the reset
+ *     never took it, and a card that started is left unable to master the bus.
+ *     On an absent card, where init wrote nothing, stop writes nothing;
+ *   * stop waits for what the card accepted, so the last log line a remote
+ *     reader waits for is sent, and a card that never finishes costs the wait
+ *     and no more;
+ *   * an interrupt line past the sixteen a PIC can deliver is rejected with no
+ *     handler installed, and line 15 is taken;
+ *   * the link's speed and duplex come from STATUS, where 2 and 3 both encode a
+ *     gigabit and a driver that read the field as a table would get the second
+ *     wrong; a card with no link says so, and a card never found cannot be
+ *     asked and leaves the caller's answer alone;
+ *   * the driver's table, and every network lock taken is released.
+ *
+ * Returns the number of failed checks, at most 255.
+ */
 int main(void)
 {
     int a, b, c;
@@ -672,7 +772,6 @@ int main(void)
         frame[i] = (unsigned char)(i & 0xff);
     }
 
-    /* ---- the bring-up completes on a healthy model ---- */
     model_reset();
     {
         int rc = e1000_init(&model_iface, 0);
@@ -691,7 +790,6 @@ int main(void)
               e1000s[0].mac[3] == 0x00 && e1000s[0].mac[4] == 0x34 && e1000s[0].mac[5] == 0x56,
           "the station address came from the register pair");
 
-    /* ---- the bring-up order ---- */
     a = find_write_bits(0, E1000_IMC, 0xffffffffu);
     b = find_write_bits(0, E1000_CTRL | MODEL_IO_MARK, E1000_CTRL_RST);
     CHECK(a >= 0 && b >= 0 && a < b, "interrupts are masked before the reset");
@@ -748,7 +846,6 @@ int main(void)
         CHECK(cleared, "every multicast table entry is cleared");
     }
 
-    /* ---- the station address from the EEPROM, and written back ---- */
     model_reset();
     model_reg[E1000_RAH0 / 4] = 0; /* no valid address in the pair */
     CHECK(e1000_init(&model_iface, 0) == NETDEV_UP,
@@ -761,7 +858,6 @@ int main(void)
               model_reg[E1000_RAL0 / 4] == 0xbbaa5452u,
           "the address read from the EEPROM is published so the card can filter to it");
 
-    /* ---- the bounded failures ---- */
     model_reset();
     model_stuck_reset = 1;
     CHECK(e1000_init(&model_iface, 0) == NETDEV_FAILED, "a reset that never completes is refused");
@@ -793,7 +889,6 @@ int main(void)
     map_refused = 1;
     CHECK(e1000_init(&model_iface, 0) == NETDEV_FAILED, "a window that will not map is refused");
 
-    /* ---- a card that is not in the machine is not touched ---- */
     model_reset();
     pci_present = 0;
     CHECK(e1000_init(&model_iface, 0) == NETDEV_ABSENT, "an absent card reports itself absent");
@@ -801,7 +896,6 @@ int main(void)
     CHECK(!pci_memory_enabled && !pci_master_enabled,
           "an absent card leaves the PCI command word alone");
 
-    /* ---- receive: an ordinary frame ---- */
     model_reset();
     CHECK(e1000_init(&model_iface, 0) == NETDEV_UP,
           "the bring-up completes before the receive checks");
@@ -815,7 +909,6 @@ int main(void)
     CHECK((e1000s[0].rx_ring[0].sta_err & 0xffu) == 0,
           "the descriptor's status is cleared before it goes back");
 
-    /* ---- receive: each of the four checks fails on its own ---- */
     model_reset();
     CHECK(e1000_init(&model_iface, 0) == NETDEV_UP,
           "the bring-up completes before the refusal checks");
@@ -828,10 +921,6 @@ int main(void)
 
     model_reset();
     CHECK(e1000_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes");
-    /* A split frame is two descriptors: one without end-of-packet and one
-       with it. A driver that judged each on its own would refuse the first
-       and hand the second up as a whole frame, which is the second half of
-       something presented as all of it. Both halves must be refused. */
     model_deliver(frame, 100, E1000_RXD_STAT_DD, 0);
     model_deliver(frame + 100, 60, E1000_RXD_STAT_DD | E1000_RXD_STAT_EOP, 0);
     e1000_irq(0);
@@ -840,8 +929,6 @@ int main(void)
     CHECK(note_rx_drops == 2 && note_rx_errors == 0,
           "a split frame is reported to the interface as a drop, not an error");
 
-    /* And the receiver comes back: the frame after a split one is delivered
-       normally, so the discard ends where the split frame ends. */
     model_deliver(frame, 80, E1000_RXD_STAT_DD | E1000_RXD_STAT_EOP, 0);
     e1000_irq(0);
     CHECK(rx_calls == 1 && rx_last_len == 80,
@@ -862,7 +949,6 @@ int main(void)
     CHECK(rx_calls == 0 && e1000s[0].rx_dropped == 1,
           "a length past the end of the buffer is refused, not trusted");
 
-    /* ---- receive: the ring wraps ---- */
     model_reset();
     CHECK(e1000_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes before the wrap check");
     {
@@ -878,7 +964,6 @@ int main(void)
     CHECK(e1000s[0].rx_cur == (E1000_RING_SIZE + 5) % E1000_RING_SIZE,
           "the read index wrapped rather than ran off the ring");
 
-    /* ---- transmit: the descriptor contract ---- */
     model_reset();
     CHECK(e1000_init(&model_iface, 0) == NETDEV_UP,
           "the bring-up completes before the transmit checks");
@@ -899,14 +984,12 @@ int main(void)
               "the descriptor points at the buffer the frame was copied into");
     }
 
-    /* ---- transmit: a short frame is padded ---- */
     model_reset();
     CHECK(e1000_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes");
     e1000_tx_frame(&e1000s[0], frame, 20);
     CHECK(model_tx_last_len == 60, "a short frame is padded to the Ethernet minimum");
     CHECK(model_tx_last[59] == 0, "the padding is zeroed, not whatever the buffer held");
 
-    /* ---- transmit: an over-length frame is refused ---- */
     model_reset();
     CHECK(e1000_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes");
     CHECK(e1000_tx_frame(&e1000s[0], frame, E1000_FRAME_MAX + 1) == NETDEV_TX_DROPPED,
@@ -915,7 +998,6 @@ int main(void)
           "a frame larger than the card's own maximum is refused");
     CHECK(e1000s[0].tx_head == 0, "a refused frame consumes no descriptor");
 
-    /* ---- transmit: a card that never finishes stalls, bounded ---- */
     model_reset();
     CHECK(e1000_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes");
     model_swallow_tx = 1;
@@ -933,13 +1015,9 @@ int main(void)
           "a ring the card never drains is counted as a stall, not a hang");
     CHECK(e1000s[0].tx_packets == E1000_RING_SIZE - 1,
           "one descriptor is left unsubmitted, so a full ring is not an empty one");
-    /* The whole point of that spare descriptor. The card reads head equal to
-       tail as nothing to do, so a driver that filled every entry would wrap
-       the tail onto the head and lose the entire outstanding queue. */
     CHECK(model_reg[E1000_TDT / 4] != model_reg[E1000_TDH / 4],
           "a full ring never looks empty to the card");
 
-    /* ---- a driver that is not up does nothing ---- */
     model_reset();
     CHECK(e1000_tx_frame(&e1000s[0], frame, 64) == NETDEV_TX_DROPPED,
           "a driver that never came up refuses the frame rather than swallowing it");
@@ -947,7 +1025,6 @@ int main(void)
     CHECK(e1000s[0].tx_packets == 0 && rx_calls == 0,
           "a driver that never came up neither sends nor receives");
 
-    /* ---- stop: the order, and what it leaves ---- */
     model_reset();
     CHECK(e1000_init(&model_iface, 0) == NETDEV_UP,
           "the bring-up completes before the stop checks");
@@ -977,9 +1054,6 @@ int main(void)
         CHECK(!e1000s[0].up, "a stopped driver no longer reports itself up");
     }
 
-    /* Twice. No current path calls it twice, but the interface says it must
-       be safe to, and a second call must write nothing new: the card has
-       already been told, and the write log is what says so. */
     {
         unsigned mark = model_log_len;
 
@@ -988,12 +1062,6 @@ int main(void)
         CHECK(model_log_len > mark, "a second stop is still a stop");
     }
 
-    /* On a card that never finished starting, which is how the probe calls it
-       after a failed bring-up. The failure is arranged for a point AFTER the
-       driver has enabled bus mastering, because a failure before that leaves
-       nothing to revoke and would pass whatever stop did. The station address
-       is read after the rings are programmed and the bus is taken, so an
-       address the card will not report fails there. */
     model_reset();
     model_stuck_reset = 1;
     CHECK(e1000_init(&model_iface, 0) == NETDEV_FAILED,
@@ -1012,8 +1080,6 @@ int main(void)
               "a card that was started and then stopped is left unable to master the bus");
     }
 
-    /* And on a machine that has no such card at all, where init wrote
-       nothing: stop must write nothing either. */
     model_reset();
     pci_present = 0;
     CHECK(e1000_init(&model_iface, 0) == NETDEV_ABSENT, "the card is absent");
@@ -1024,7 +1090,6 @@ int main(void)
         CHECK(model_accesses == mark, "stopping an absent card costs no register access");
     }
 
-    /* ---- stop waits for what the card already took ---- */
     model_reset();
     CHECK(e1000_init(&model_iface, 0) == NETDEV_UP,
           "the bring-up completes before the drain check");
@@ -1038,7 +1103,6 @@ int main(void)
           "stop waits for what the card accepted before silencing it, so the last log "
           "line a remote reader is waiting for is sent and not discarded");
 
-    /* A card that never finishes costs the wait and no more. */
     model_reset();
     CHECK(e1000_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes");
     model_swallow_tx = 1;
@@ -1046,7 +1110,6 @@ int main(void)
     e1000_stop(&e1000s[0]);
     CHECK(!pci_master_enabled, "a card that never finishes is still stopped, bounded");
 
-    /* ---- a line this kernel cannot deliver ---- */
     model_reset();
     pci_irq_line = 20;
     CHECK(e1000_init(&model_iface, 0) == NETDEV_FAILED,
@@ -1059,7 +1122,6 @@ int main(void)
     pci_irq_line = 15;
     CHECK(e1000_init(&model_iface, 0) == NETDEV_UP, "the last line a PIC can deliver is accepted");
 
-    /* ---- the link ---- */
     model_reset();
     CHECK(e1000_init(&model_iface, 0) == NETDEV_UP,
           "the bring-up completes before the link checks");
@@ -1078,8 +1140,6 @@ int main(void)
         model_reg[E1000_STATUS / 4] = E1000_STATUS_LU;
         CHECK(e1000_link(&e1000s[0], &link) && link.mbps == 10, "ten megabit is reported as ten");
 
-        /* Both 2 and 3 encode a gigabit, and a driver that read the field as
-           a table would get the second of them wrong. */
         model_reg[E1000_STATUS / 4] = E1000_STATUS_LU | (3u << 6);
         CHECK(e1000_link(&e1000s[0], &link) && link.mbps == 1000,
               "the second encoding of a gigabit is a gigabit too");
@@ -1089,7 +1149,6 @@ int main(void)
               "a card with no link says so, which is not the same as not saying");
     }
 
-    /* A card that was never found cannot be asked. */
     model_reset();
     pci_present = 0;
     CHECK(e1000_init(&model_iface, 0) == NETDEV_ABSENT, "the card is absent");
@@ -1102,7 +1161,6 @@ int main(void)
         CHECK(link.up == 42, "and leaves the caller's answer untouched");
     }
 
-    /* ---- the driver's table ---- */
     CHECK(e1000_netdev.tx == e1000_op_tx, "the table names the transmit path");
     CHECK(e1000_netdev.poll == 0, "the table leaves poll empty, because this card interrupts");
     CHECK(e1000_netdev.init == e1000_init, "the table names the bring-up");
