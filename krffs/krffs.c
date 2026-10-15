@@ -1,3 +1,8 @@
+/*
+ * krffs.c: the KRFFS FUSE driver, which mounts an image as one flat
+ * directory.
+ */
+
 #include "krffs.h"
 
 #include <fcntl.h>
@@ -13,10 +18,18 @@
 #include <unistd.h>
 #endif
 
-/** Capacity of the on-stack buffer that has the file system file path. */
+/** The bytes of the image path that `main` keeps; a longer path is cut. */
 #define KRFFS_PATH_BUFFER_LENGTH 1024
 
-/** Validate the complete node ring before mounting it. */
+/**
+ * Reports whether the region of `fs` is a whole ring of nodes, walked from
+ * offset 0: each node has the magic number and a `size` of at least a header
+ * that ends inside the region; the first is the root, and each after it is
+ * free or reserved with the `size` of the node before as its
+ * `previous_node_size`; a node that is not free has a NUL in its name and a
+ * `data_size` that fits it; and the root's `previous_node_size` is the
+ * last node's `size`. Returns 1 or 0.
+ */
 static int valid_node_ring(struct krffs_file_system *fs)
 {
     uint64_t position = 0;
@@ -53,18 +66,18 @@ static int valid_node_ring(struct krffs_file_system *fs)
 }
 
 /**
- * Mounts a KRFFS file in a file under FUSE.
+ * krffs IMAGE MOUNT_POINT [FUSE_OPTIONS]: mounts the KRFFS image IMAGE, the
+ * whole file, under FUSE.
  *
- * `krffs <file> <mount point> <FUSE options>`. The first argument names the
- * backing file; the rest are FUSE's mount point and options. When `<file>` is
- * absent, or either of the first two arguments looks like an option (begins
- * with `-`), the arguments pass to FUSE untouched.
+ * With fewer than two arguments, or when the first or the second begins with
+ * `-`, every argument goes to `fuse_main` as it is. Otherwise the image must
+ * be a regular file of at least two headers that passes `valid_node_ring`.
+ * It is mapped, its descriptor is closed, and the mapping becomes
+ * `KRFFS_File_System`. Then `argv[1]` is replaced by `-s`, so that FUSE runs
+ * the handlers, which take no lock, one at a time, and `fuse_main` runs.
  *
- * The backing file must be a regular file at least two nodes long and have
- * a valid node ring. It is opened, mapped, validated, and then closed; the
- * mapping survives the close. The mapped file system is published through
- * `KRFFS_File_System` before `fuse_main` runs. `argv[1]` is rewritten to `-s`
- * so FUSE runs single-threaded.
+ * Returns what `fuse_main` returns, or `EXIT_FAILURE` when the image cannot
+ * be opened, mapped, checked or closed.
  */
 int main(int argc, char **argv)
 {
@@ -73,10 +86,6 @@ int main(int argc, char **argv)
     int file_descriptor = -1;
     struct krffs_file_system file_system = {.node = NULL};
 
-    /*
-        Without our `<file>` argument, or when an argument is an option, pass
-        everything untouched to FUSE.
-     */
     if (argc < 3) {
         exit_status = fuse_main(argc, argv, &krffs_operations, NULL);
 
@@ -92,9 +101,6 @@ int main(int argc, char **argv)
         }
     }
 
-    /*
-        Copy the path before we overwrite `argv[1]` ahead of the FUSE call.
-     */
     char path[KRFFS_PATH_BUFFER_LENGTH + 1];
     path[KRFFS_PATH_BUFFER_LENGTH] = '\0';
     strncpy(path, argv[1], KRFFS_PATH_BUFFER_LENGTH);
@@ -134,11 +140,6 @@ int main(int argc, char **argv)
 
     file_system.size = file_info.st_size;
 
-    /*
-        Map the file into memory. After a successful `krffs_map_file`, writes to
-        `file_system.node` reach the file (eagerly, or on `krffs_unmap_file` or
-        `krffs_sync_mapping`).
-     */
     if ((file_system.node = krffs_map_file(file_descriptor, 0, file_system.size)) == (void *)-1) {
         fprintf(stderr, "Failed to map the file system file at '%s' into memory.\n", path);
 
@@ -155,9 +156,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        The mapping outlives the descriptor, so close it now.
-     */
     if (PLATFORM_PREFIX(close(file_descriptor)) == -1) {
         fprintf(stderr, "Failed to close the file system file at '%s'.\n", path);
 
@@ -167,10 +165,6 @@ int main(int argc, char **argv)
     }
     file_descriptor = -1;
 
-    /*
-        `-s` forces FUSE single-threaded; this overwrites our `<file>` argument,
-        which FUSE no longer needs.
-     */
     argv[1] = "-s";
 
     File_System_Store = file_system;

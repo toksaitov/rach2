@@ -21,7 +21,7 @@ krffs/fsviz.krffs.c:main complexity 87 one procedure over a file format, in the 
 krffs/fsviz.krffs.c:main lines 420 one procedure over a file format, in the order the format is read
 krffs/fsviz.krffs.c:main nesting 6 one procedure over a file format, in the order the format is read
 
-krffs/krffs.c:main lines 133 one procedure over a file format, in the order the format is read
+krffs/krffs.c:main lines 105 one procedure over a file format, in the order the format is read
 
 krffs/krffs_fuse_operations.c:krffs_create nesting 5 one procedure over a file format, in the order the format is read
 krffs/krffs_fuse_operations.c:krffs_mknod nesting 5 one procedure over a file format, in the order the format is read

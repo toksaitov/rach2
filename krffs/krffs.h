@@ -1,3 +1,7 @@
+/*
+ * krffs.h: the headers of the KRFFS FUSE driver and the file system it has
+ * open, for krffs.c alone, since it defines that variable.
+ */
 #ifndef KRFFS_H
 #define KRFFS_H
 
@@ -8,7 +12,10 @@
 #include "krffs_platform.h"
 #include "krffs_utilities.h"
 
-/** The currently opened KRFFS file system, backed by `File_System_Store`. */
+/**
+ * The file system the FUSE handlers work on: NULL until `main` maps the
+ * image, then `File_System_Store`.
+ */
 struct krffs_file_system *KRFFS_File_System = NULL;
 static struct krffs_file_system File_System_Store;
 

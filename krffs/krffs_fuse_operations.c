@@ -1,3 +1,7 @@
+/*
+ * krffs_fuse_operations.c: the FUSE handlers of krffs_fuse_operations.h.
+ */
+
 #include "krffs_fuse_operations.h"
 
 #include "krffs_allocator.h"
@@ -12,16 +16,17 @@
 
 extern struct krffs_file_system *KRFFS_File_System;
 
+/**
+ * Fills `stat_buffer` from `node` with `file_type` as the type and
+ * `hard_links_count` links. The mode takes the node's 07777 bits, or at the
+ * root only the 0777 bits, since the dirty flag there is the set-user-ID bit.
+ */
 static inline void fill_stat_buffer_for_node(struct PLATFORM_STAT *stat_buffer,
                                              struct krffs_node *node, uint16_t file_type,
                                              uint16_t hard_links_count)
 {
     stat_buffer->st_nlink = hard_links_count;
     stat_buffer->st_size = node->data_size;
-    /* Take the type from `file_type` and the 07777 permission and set-id bits
-       from the node; on the root node keep the nine bits alone, so the reserved
-       dirty-mount flag there (which overlaps the setuid bit) never leaks into
-       the user-visible mode. */
     stat_buffer->st_mode =
         file_type |
         (node->mode & (KRFFS_File_System && node == KRFFS_File_System->node ? 0777u : 07777u));
@@ -112,11 +117,6 @@ int krffs_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, PLATFO
 
                 struct krffs_node *node = KRFFS_File_System->node;
                 do {
-                    /* Skip an orphan: a node the kernel took out of the
-                       namespace by clearing its name while a descriptor still
-                       held it, which a shutdown can leave behind. It is
-                       unreachable by lookup here too, so it must not appear in
-                       a listing as a blank entry. */
                     if (node->type == KRFFS_Reserved_Node && node->name[0] != '\0') {
                         filler(buffer, (const char *)node->name, NULL, 0);
                     }
@@ -304,12 +304,11 @@ int krffs_create(const char *path, mode_t mode, struct fuse_file_info *file_info
 }
 
 /**
- * Copies `size` bytes into a node's data at `offset` and syncs what changed.
- *
- * A write that starts past the old end of file leaves a gap, which POSIX
- * requires to read as zeroes, so the gap is cleared and synced before the
- * payload goes down. `old_data_size` is the size the node had before the
- * caller grew it.
+ * Copies `size` bytes from `buffer` into the data of `node` at `offset`,
+ * syncs them, and sets the modification time. The node must already have
+ * room for them. When `offset` is past `old_data_size`, the data size before
+ * the caller grew the node, the gap is cleared and synced first, since POSIX
+ * has a gap read as zero bytes.
  */
 static void krffs_write_into_node(struct krffs_node *node, const char *buffer, size_t size,
                                   PLATFORM_OFF_T offset, uint64_t old_data_size)
@@ -331,7 +330,6 @@ static void krffs_write_into_node(struct krffs_node *node, const char *buffer, s
     node->modification_time = krffs_get_current_node_time();
 }
 
-/** Write bytes and clear any gap after the old EOF. */
 int krffs_write(const char *path, const char *buffer, size_t size, PLATFORM_OFF_T offset,
                 struct fuse_file_info *file_info)
 {
@@ -402,8 +400,6 @@ int krffs_fsync(const char *path, int is_data_sync, struct fuse_file_info *file_
 
             result = -ENOENT;
         }
-
-        /* Writes go straight to the mapping; there is no buffer to flush. */
     }
 
     return result;
@@ -538,7 +534,6 @@ int krffs_unlink(const char *path)
     return result;
 }
 
-/** Set requested timestamps and preserve fields marked UTIME_OMIT. */
 int krffs_utimens(const char *path, const struct timespec time[2])
 {
     int result = 0;
@@ -600,9 +595,6 @@ int krffs_chmod(const char *path, mode_t mode)
 
             result = -ENOENT;
         } else {
-            /* Update the 07777 permission and set-id bits, as the kernel's
-               chmod does; on the root node update the nine bits alone, so the
-               reserved dirty-mount flag there is neither forged nor cleared. */
             uint16_t writable = node == KRFFS_File_System->node ? 0777u : 07777u;
 
             node->mode = (uint16_t)((node->mode & (uint16_t)~writable) | (mode & writable));
@@ -615,7 +607,6 @@ int krffs_chmod(const char *path, mode_t mode)
     return result;
 }
 
-/** Preserve an owner or group passed as its minus-one sentinel. */
 int krffs_chown(const char *path, uid_t uid, gid_t gid)
 {
     int result = 0;
