@@ -1,9 +1,19 @@
+/*
+ * stamp.c: the keystroke latency record: for the latest keystroke, when its
+ * event was drained, when it reached the input layer and when a reader took
+ * it, logged once under `rach2.usblatency`.
+ */
+
 #include "usb.h"
 
 #include "../klog.h"
 #include "../lib/kirq.h"
 #include "../timer.h"
 
+/* Whether the record is on; the last pump's handler entry and drain, in
+ * microseconds, whether an interrupt ran it and whether it took events; the
+ * console reader about to wait and whether one is; and whether a keystroke
+ * waits for its read. */
 static int recording;
 static int pump_took;
 static uint32_t pump_entry, pump_event;
@@ -12,6 +22,11 @@ static uint32_t reader;
 static int waiting;
 static int pending;
 
+/* One keystroke: its pump's handler entry and drain and its wake, in
+ * microseconds of `timer_now_us`; the pumps and the `getrandom` bytes between
+ * the wake and the reader's dispatch; whether an interrupt ran the pump;
+ * whether a waiting console reader was armed for it; and whether that reader
+ * has been dispatched. */
 struct usb_stamp {
     uint32_t entry, event, wake;
     uint32_t pumps, work;
@@ -20,15 +35,14 @@ struct usb_stamp {
 
 static struct usb_stamp stamp;
 
-/** Turn diagnostic records on or off and discard any earlier reader or
- * keystroke. */
 void usb_stamp_init(int enabled)
 {
     recording = enabled;
     waiting = pending = pump_took = 0;
 }
 
-/** Record a pump and count pumps after a wake but before its dispatch. */
+/** A pump between a tracked keystroke's wake and its reader's dispatch is
+ * counted, up to the counter's limit. */
 void usb_stamp_pump(uint32_t entry, uint32_t event, int msi, int took)
 {
     if (pending && stamp.tracked && !stamp.dispatched && stamp.pumps != 0xffffffffu) {
@@ -40,7 +54,7 @@ void usb_stamp_pump(uint32_t entry, uint32_t event, int msi, int took)
     pump_took = took;
 }
 
-/** Arm one blocked console reader while interrupts are disabled. */
+/** Arming a reader drops any keystroke not yet read. */
 void usb_stamp_wait(uint32_t pid)
 {
     reader = pid;
@@ -48,7 +62,6 @@ void usb_stamp_wait(uint32_t pid)
     pending = 0;
 }
 
-/** Freeze the work counts when the scheduler selects the recorded reader. */
 void usb_stamp_dispatch(uint32_t pid)
 {
     if (pending && stamp.tracked && reader == pid) {
@@ -57,7 +70,7 @@ void usb_stamp_dispatch(uint32_t pid)
     }
 }
 
-/** Count bytes completed by getrandom before the woken reader is selected. */
+/** The count stops at its limit rather than wrapping. */
 void usb_stamp_work(uint32_t bytes)
 {
     uint32_t flags;
@@ -76,7 +89,6 @@ void usb_stamp_work(uint32_t bytes)
     kirq_restore(flags);
 }
 
-/** Snapshot the pump that delivered the key, keeping only the latest key. */
 void usb_stamp_wake(void)
 {
     if (!pump_took) {
@@ -94,13 +106,12 @@ void usb_stamp_wake(void)
 }
 
 /**
- * Print the latest keystroke once, with elapsed times as diagnostics only.
- *
- * The controller supplies no timestamp. Times are relative to the software
- * drain, including negative entry offsets. A slow read remains reportable.
- * Counts stop at the recorded reader's dispatch, before interrupts can delay
- * its return through the terminal code. One console reader and one keystroke
- * are tracked; type-ahead and concurrent readers are not per-byte records.
+ * The controller gives no time of its own, so the times are measured from
+ * the drain that took the event: the handler's entry, which came before it,
+ * is negative, and a slow read is reported however long it took. The counts
+ * stop at the reader's dispatch, before interrupts can delay its return
+ * through the terminal. One console reader and one keystroke are followed;
+ * type-ahead and concurrent readers are not recorded byte by byte.
  */
 void usb_stamp_read(void)
 {
@@ -127,7 +138,6 @@ void usb_stamp_read(void)
          result.dispatched, (int)result.pumps, (int)result.work);
 }
 
-/** Return whether the boot enabled keystroke diagnostics. */
 int usb_stamp_recording(void)
 {
     return recording;

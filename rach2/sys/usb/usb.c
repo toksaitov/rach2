@@ -1,18 +1,15 @@
 /*
- * usb.c: what USB hardware this machine has, and the stack's entry points.
+ * usb.c: the USB stack's entry points: the inventory of USB controllers, the
+ * bring-up of every xHCI, the pump that drains them from the timer and from
+ * their interrupts, and the stop.
  *
- * The inventory is taken from PCI configuration space before any driver runs,
- * because the two machines this kernel runs on answer differently. QEMU
- * presents whichever controller the command line asked for. The notebook
- * presents an Intel Lynx Point-LP xHCI and a companion EHCI, and its firmware
- * decides which of the two owns each USB2 pin. The inventory writes nothing:
- * reading configuration space cannot disturb a controller the firmware is
- * still driving, which matters on a machine booted through the compatibility
- * support module, where system management mode may be emulating a PS/2
- * keyboard out of a USB one at the time it runs.
- *
- * The rest is the bring-up of every xHCI, the one pump that drains them from
- * the timer and from their interrupts, and the stop.
+ * The inventory reads PCI configuration space alone, before any driver runs,
+ * and writes nothing, so it cannot disturb a controller the firmware is still
+ * driving: on a machine booted through the compatibility support module,
+ * system management mode may be emulating a PS/2 keyboard from a USB one at
+ * that time. On an Intel chipset with a companion EHCI the firmware decides
+ * which of the two controllers owns each USB 2 pin, and the inventory logs
+ * that routing as the firmware left it.
  */
 
 #include "usb.h"
@@ -47,11 +44,6 @@
 
 #define PCI_VENDOR_INTEL 0x8086
 
-/**
- * The name of a register interface, or `other` for one this kernel does not
- * know. The byte itself is recorded beside the name, so an unknown controller
- * is still identified by the record.
- */
 const char *usb_interface_name(uint8_t prog_if)
 {
     switch (prog_if) {
@@ -69,7 +61,9 @@ const char *usb_interface_name(uint8_t prog_if)
 }
 
 /**
- * Record one controller, and its port routing when it is an Intel xHCI.
+ * Log one controller, with its interface byte beside the interface's name so
+ * an unknown one is still identified, and its port routing when it is an
+ * Intel xHCI.
  */
 static void report_one(const pci_device_t *dev)
 {
@@ -113,9 +107,9 @@ void usb_report_controllers(void)
 
 /*
  * How long the ports are given to settle before they are read. The USB
- * specification asks for a hundred milliseconds between a connect and
- * anything done about it, and a machine that has just started has every
- * device already connected.
+ * specification requires a hundred milliseconds between a connect and a
+ * reset, and a machine that has just started has every device already
+ * connected.
  */
 #define USB_SETTLE_MS 100u
 
@@ -134,15 +128,17 @@ static int usb_up;
 
 static void usb_interrupts_start(void);
 
-/** The configured interrupt source of each controller, or neither. */
+/* Each controller's interrupt source: its message vector or its line's IRQ,
+ * -1 for the one it does not use, and both -1 when the timer alone pumps it. */
 static struct {
     int msi_vector;
     int line_irq;
 } interrupt_sources[XHCI_MAX_CONTROLLERS];
 static int interrupt_source_count;
 
-/* Interrupts handled, timer drains without observed pending interrupts,
- * and the interrupt count at which rach2.msidrop disables delivery. */
+/* Interrupts handled, timer drains that took events with no interrupt
+ * pending, and the interrupt count at which `rach2.msidrop` silences the
+ * controllers, 0 when it is not set. */
 static uint32_t usb_messages;
 static uint32_t usb_fallback;
 static uint32_t msi_drop_after;
@@ -160,6 +156,8 @@ static int pump_saw_pending;
  * printed once and not every tick. */
 static int pump_enabled_interrupts;
 
+/* When the interrupt handler was last entered, in microseconds of
+ * `timer_now_us`, for the latency record. */
 static uint32_t stamp_entry;
 
 /**
@@ -221,7 +219,7 @@ static void report_ports(void)
     }
 }
 
-/* Whether interrupts are on, for the pump's check that it did not enable
+/** Whether interrupts are on, for the pump's check that it did not enable
  * them. */
 static int usb_irq_on(void)
 {
@@ -242,19 +240,19 @@ static int usb_irq_on(void)
  *
  * Every controller is advanced and drained in each pass, so a machine with
  * two keeps both moving. The handler's drain acknowledges the interrupt first,
- * in the same call (xhci_interrupt_take); the timer's has nothing to
+ * in the same call (`xhci_interrupt_take`); the timer's has nothing to
  * acknowledge.
  *
  * After a drain that took events, `pump_saw_pending` records whether an
- * interrupt for this stack is already pending, read at the APIC or the 8259
- * and not at the xHCI, whose own pending bit is set whether or not a message
- * was sent; a message sent while the tick held interrupts off waits in the
- * request register. It is read after the drain, because the controller
- * answers a doorbell the step writes inside that same write, so an event and
- * its message can appear mid-pump, and read again at the end: the event and
- * its message are two transactions, and the message may still be on its way
- * when the event is in memory. Without that a race would count as a lost
- * edge.
+ * interrupt for this stack is already pending, read at the interrupt
+ * controller (`interrupt_pending`) and not at the xHCI, whose own pending bit
+ * is set whether or not an interrupt was raised; one raised while the tick
+ * held interrupts off waits in a request register. It is read after the
+ * drain, because the controller answers a doorbell the step writes inside
+ * that same write, so an event and its message can appear mid-pump, and read
+ * again at the end: the event and its message are two transactions, and the
+ * message may still be on its way when the event is in memory. Without that
+ * a race would count as a lost edge.
  *
  * Returns the number of events taken.
  */
@@ -296,10 +294,11 @@ static int usb_pump(uint32_t elapsed_ms, int from_interrupt)
 }
 
 /**
- * Return whether any configured USB interrupt source is pending.
+ * Whether any controller's interrupt has been raised and not yet taken.
  *
- * A controller's MSI vector is checked at the local APIC, and its PCI line at
- * the 8259.
+ * A controller's message vector is checked at the local APIC, and its PCI
+ * line at the local APIC and the I/O APIC when the I/O APIC routes the
+ * lines, or at the 8259 otherwise (`isr_line_pending`).
  */
 static int interrupt_pending(void)
 {
@@ -329,8 +328,9 @@ static int interrupt_pending(void)
  * timer's pump is all that is left: it is how the fallback is seen to work on
  * a machine whose interrupts stop.
  *
- * The router ends a message at the APIC after this returns, and a line at the
- * 8259 before this runs; either way it then lets a woken reader run.
+ * The router ends a message, and a line the I/O APIC routes, at the local
+ * APIC after this returns, and a line through the 8259 before this runs;
+ * either way it then lets a woken reader run.
  */
 static void usb_msi_handler(isr_params_t *params)
 {
@@ -351,7 +351,7 @@ static void usb_msi_handler(isr_params_t *params)
 }
 
 /**
- * Which controller `rach2.hcfail=N` refuses at its bring-up, or -1.
+ * Which controller `rach2.hcfail=N` makes fail its bring-up, or -1.
  *
  * A controller that is present and will not start is the case the bring-up
  * loop exists for, and no QEMU machine has one. This makes the Nth controller
@@ -374,25 +374,22 @@ static int hcfail_at(void)
 }
 
 /**
- * Bring every controller up on its own, then the stack.
- *
- * A controller whose bring-up fails is given back to its firmware, since one
- * this kernel does not drive should keep whatever the firmware was doing for
- * it.
- * It is then taken out of the table, so nothing asks it about its ports, and
- * the ones after it move up, so the walk steps back onto the one that took
- * its place. The others still come up: a machine whose second controller is
- * broken keeps the sockets on its first. `rach2.hcfail=N` counts controllers
- * in the order they are tried, since a controller left out changes the index
- * of every one after it.
+ * Each controller is brought up on its own. One whose bring-up fails is given
+ * back to its firmware, which keeps whatever it was doing with it, and is
+ * taken out of the table, so nothing reads its ports; the ones after it move
+ * up, so the walk steps back onto the one that took its place. The others
+ * still come up: a machine whose second controller is broken keeps the
+ * sockets on its first. `rach2.hcfail=N` counts controllers in the order they
+ * are tried, since a controller left out changes the index of every one
+ * after it.
  *
  * From the stack's start the timer drains the controllers and steps the
  * devices, and this only waits: for the ports to settle, then for what is
  * plugged in to be enumerated, so a machine that boots with a keyboard has one
  * before the first process runs. The controllers' own interrupts come last,
- * since a message that arrived while the rings were being built would have
- * found a stack that was not ready for it; a controller whose interrupts
- * cannot be enabled stays on the timer.
+ * since an interrupt raised while the rings were being built would have found
+ * a stack that was not ready for it; a controller whose interrupts cannot be
+ * enabled stays on the timer.
  */
 int usb_init(void)
 {
@@ -451,16 +448,19 @@ int usb_init(void)
 }
 
 /**
- * Take the controller's interrupts as messages, or on its line, or leave it
+ * Take each controller's interrupts as messages, or on its line, or leave it
  * to the timer.
  *
- * `rach2.nomsi` and a processor whose APIC was refused both leave messages
- * off; the controller then raises its interrupts on the PCI line the
- * firmware routed for it, through the 8259, which is the stack every machine
- * had before the local APIC existed and a path eighty times faster than the
- * timer's pump alone for a stick. A controller that names no line is left
- * to the timer. `rach2.msidrop=N` silences the controller after N messages,
- * which is how a machine that loses its edges is staged.
+ * Messages need the local APIC, which is off under `rach2.nomsi` and on a
+ * processor without a usable one, a free vector, and an MSI capability the
+ * controller can enable. Without them the controller raises its interrupts on
+ * the PCI line the firmware routed for it, through the I/O APIC when one is
+ * in use and the 8259 otherwise, as under `rach2.nomsi`; a stick moves data
+ * many times faster that way than on the timer's pump alone, which finds each
+ * completion at the next 10 ms tick. A controller with no line is left to the
+ * timer.
+ * `rach2.msidrop=N` silences the controllers after N interrupts, which is how
+ * a machine that loses its interrupts is staged.
  *
  * Each controller gets a vector of its own. The handler is the one pump and
  * drains them all, so which vector a message arrived on does not matter, but
@@ -519,12 +519,6 @@ static void usb_interrupts_start(void)
     }
 }
 
-/**
- * Advance the USB stack by one 10 ms timer tick.
- *
- * Count drains with work but no observed pending USB interrupt.
- * A message still in transit can also increase this count.
- */
 void usb_poll(void)
 {
     if (!usb_up) {
