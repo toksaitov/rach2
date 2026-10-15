@@ -1,21 +1,25 @@
 /*
- * calibprobe: fixed work for the runner's calibration of the emulator's
- * rate, timed by the host's clock around each part.
+ * calibprobe: fixed work for tests/system/calibrate.sh, which times each part
+ * by the host's clock to measure the emulator's rate.
+ *
+ * `calibprobe compute` or `calibprobe storage` runs one part:
  *
  * * `compute`: a 32-bit xorshift generator run for a fixed count, the
- *   last value printed so the work is not optimised away; the same
+ *   last value printed so that the compiler keeps the work; the same
  *   instructions every time, so a slower run is the emulator's rate.
  * * `storage`: 32 MiB read raw from `/dev/disk0` in 32 KiB reads, the
  *   whole-disk node the boot publishes under `rach2.diskdiag`.
  *
- * Each part prints `CALIB PART DONE` and `CALIBPROBE OK`, or `CALIBPROBE
- * FAIL: reason`. Freestanding; direct system calls (probe.h).
+ * Prints `CALIB COMPUTE DONE N` or `CALIB STORAGE DONE`, then `CALIBPROBE
+ * OK`, or `CALIBPROBE FAIL: reason` and exits 1. Freestanding; direct system
+ * calls (probe.h).
  */
 
 #include "probe.h"
 
 #define O_RDONLY 0
 
+/** Write the string `s` to standard output. */
 static void put(const char *s)
 {
     int n = 0;
@@ -26,6 +30,7 @@ static void put(const char *s)
     syscall3(SYS_WRITE, 1, (long)s, n);
 }
 
+/** Write `v` in decimal to standard output. */
 static void putnum(unsigned v)
 {
     char buf[12];
@@ -39,6 +44,7 @@ static void putnum(unsigned v)
     put(&buf[i]);
 }
 
+/** Print "CALIBPROBE FAIL: `why`" and exit 1. */
 static void fail(const char *why)
 {
     put("CALIBPROBE FAIL: ");
@@ -47,6 +53,7 @@ static void fail(const char *why)
     syscall1(SYS_EXIT, 1);
 }
 
+/** Whether the strings `a` and `b` are equal. */
 static int same(const char *a, const char *b)
 {
     while (*a && *a == *b) {
@@ -60,6 +67,7 @@ static int same(const char *a, const char *b)
    reference host; the host's clock around the run is the measurement. */
 #define COMPUTE_ROUNDS 100000000u
 
+/** The compute part: `COMPUTE_ROUNDS` rounds of xorshift, then its line. */
 static void part_compute(void)
 {
     unsigned x = 2463534242u;
@@ -75,8 +83,14 @@ static void part_compute(void)
     put("\n");
 }
 
+/* The buffer of each read of the storage part. */
 static char big[32768];
 
+/**
+ * The storage part: read 32 MiB of /dev/disk0, then print its line. Fails the
+ * probe when the node does not open, as without `rach2.diskdiag`, or when a
+ * read returns an error or the end of the disk first.
+ */
 static void part_storage(void)
 {
     int fd = syscall3(SYS_OPEN, (long)"/dev/disk0", O_RDONLY, 0);
@@ -101,6 +115,11 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/**
+ * The probe's entry, from `PROBE_SP_ENTRY` with the initial stack at `sp`:
+ * the argument count, then the argument pointers. Runs the part given as
+ * `argv[1]`, or fails the probe when there is no such part.
+ */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];

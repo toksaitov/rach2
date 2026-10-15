@@ -1,17 +1,21 @@
 /**
- * Probes that a user touch of the page-cache window is killed, not honored.
+ * winprobe: a user read of the page-cache window ends the process with
+ * SIGSEGV and leaves the kernel running.
  *
- * `PCWIN_BASE` (0xD0000000 on i686, 0xFFFFC20000000000 on x86-64) is the base
- * of the kernel-only demand-paged disk window. A user process has no business
- * there; the segments are flat, so the read reaches the fault handler, which
- * must treat a user-mode in-window fault as an illegal access and segfault the
- * process. The window branch is for the supervisor-mode faults the file system
- * raises, not for ring 3: serving a ring-3 fault would map a supervisor-only
- * page it loops on, or, with no disk backing, panic the whole kernel. The
- * "still alive" line must NEVER appear.
+ * `PCWIN_BASE` (0xD0000000 on i686, 0xFFFFC20000000000 on x86-64, the
+ * `KVA_PCWIN` of each architecture's cpu.h) is the base of the kernel's
+ * demand-paged disk window. Its pages are supervisor-only or not present, so
+ * the read faults, and the page fault handler (rach2/sys/mm/paging.c) serves
+ * a window fault only in supervisor mode, for the file systems; a user-mode
+ * one gets SIGSEGV. A handler that served the user fault would map a
+ * supervisor-only page, on which the read faults again without end, or would
+ * panic when the disk cannot fill the page.
  *
- * Run as a standalone boot (it kills itself); the harness then checks that the
- * kernel survived and the shell came back. Freestanding; direct system calls
+ * Prints "winprobe: about to read the page-cache window" and dies on signal
+ * 11. `tests/run fault` expects both, and then runs a program that prints,
+ * which a kernel that went down with the fault cannot; the line the probe
+ * prints when the read returns, "winprobe: ERROR still alive after window
+ * read", is that suite's `--never` text. Freestanding; direct system calls
  * (probe.h).
  */
 
@@ -25,17 +29,20 @@
 #define PCWIN_BASE 0xD0000000u
 #endif
 
+/** write(2). */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
+/** exit(2); does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -45,12 +52,17 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write the string `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
+/**
+ * The probe's entry: one read at `PCWIN_BASE`, which ends the process. When
+ * the read returns, prints the error line and exits 0.
+ */
 PROBE_START void _start(void)
 {
     volatile unsigned *win = (volatile unsigned *)PCWIN_BASE;
@@ -58,11 +70,9 @@ PROBE_START void _start(void)
 
     puts("winprobe: about to read the page-cache window");
 
-    sink = *win; /* illegal from ring 3: the kernel must kill us, not panic */
+    sink = *win; /* a fault from ring 3: SIGSEGV */
     (void)sink;
 
-    /* If the window branch wrongly served a ring-3 fault, we would reach
-     * here. */
     puts("winprobe: ERROR still alive after window read");
     sys_exit(0);
 }
