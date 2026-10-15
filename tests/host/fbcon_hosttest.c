@@ -30,14 +30,17 @@ static uint16_t vram[16384];
 extern int printf(const char *format, ...);
 extern void *memset(void *s, int c, unsigned long n);
 
+/** The adapter's store hook of vga_text.c, which these rows do not count. */
 void vga_text_hosttest_stored(void)
 {}
 
+/** No interrupts here: nothing to save. */
 uint32_t kirq_save(void)
 {
     return 0;
 }
 
+/** Nothing to restore. */
 void kirq_restore(uint32_t flags)
 {
     (void)flags;
@@ -51,17 +54,19 @@ bool vga_graphics_mode = false;
 #include "display/vga_font.c"
 #include "kio.c"
 
-/* No processor here has begun a panic, so the console takes its lock. */
+/** No processor here has begun a panic, so the console takes its lock. */
 int k_panicking(void)
 {
     return 0;
 }
 
+/** The adapter's font load, which a framebuffer console does not make. */
 int vga_font_load(void)
 {
     return 0;
 }
 
+/** Discard the log: the rows read the pixels. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -71,6 +76,7 @@ void klog(int level, const char *subsystem, const char *format, ...)
 
 static unsigned int port_writes;
 
+/** Count a port write; the adapter's ports reach no device here. */
 void outb(uint16_t port, uint8_t val)
 {
     (void)port;
@@ -81,8 +87,9 @@ void outb(uint16_t port, uint8_t val)
 /* The framebuffer: room for 2560x1600 at 32 bits, with the 64 bytes past
  * each line that `use_rgb` gives the pitch. */
 static uint8_t screen[(2560 * 4 + 64) * 1600];
-static int reachable = 1;
+static int reachable = 1; /* 0: the framebuffer cannot be mapped */
 
+/** The framebuffer's mapping: `screen`, or NULL when it is out of reach. */
 volatile uint8_t *fbcon_window(void)
 {
     return reachable ? screen : NULL;
@@ -98,8 +105,9 @@ static int failures;
         }                                             \
     } while (0)
 
-static struct boot_framebuffer fb;
+static struct boot_framebuffer fb; /* the loader's framebuffer record */
 
+/** Write `s` to the console a character at a time. */
 static void put(const char *s)
 {
     while (*s) {
@@ -149,6 +157,7 @@ static int use_rgb(uint32_t w, uint32_t h, uint8_t bpp)
     return 0;
 }
 
+/** The pixel at (`px`, `py`) as its `fb_bytes` bytes, little-endian. */
 static uint32_t pixel_at(uint32_t px, uint32_t py)
 {
     const uint8_t *p = screen + py * fb.pitch + px * fb_bytes;
@@ -196,6 +205,8 @@ static int cell_shows(uint32_t col, uint32_t row, unsigned char ch, uint32_t fg,
 #define GREY  0xAAAAAAu
 #define BLACK 0x000000u
 
+/** The console takes a 1280x800 framebuffer, clears it whole and fills it
+ * with 80x25 cells; framebuffers it cannot draw on are not taken. */
 static void row_init(void)
 {
     uint32_t px, py;
@@ -246,6 +257,7 @@ static void row_init(void)
     reachable = 1;
 }
 
+/** Glyphs in their colors, the cursor's lines, and letters from UTF-8. */
 static void row_glyphs(void)
 {
     use_rgb(1280, 800, 32);
@@ -265,6 +277,9 @@ static void row_glyphs(void)
     CHECK(cell_shows(3, 0, 0xC9, GREY, BLACK, 0), "a box corner, which the adapter's own font had");
 }
 
+/** Pixels of 16, 24 and 8 bits. The 8-bit framebuffer is indexed, with a
+ * palette whose nearest entries are not at the colors' own numbers, and
+ * then with no palette. */
 static void row_pixel_sizes(void)
 {
     CHECK(use_rgb(1024, 768, 16) == 0, "a 16-bit framebuffer is taken");
@@ -281,8 +296,6 @@ static void row_pixel_sizes(void)
     put("\033[0m\033[45mM");
     CHECK(cell_shows(0, 0, 'M', GREY, 0xAA00AAu, 0), "magenta in three bytes a pixel");
 
-    /* Indexed, eight bits, with a palette whose nearest entries are not at
-       the colors' own numbers. */
     {
         unsigned i;
 
@@ -344,6 +357,13 @@ static void row_double(void)
           "and one of more than 64 rows gives 64");
 }
 
+/**
+ * A scroll draws the lines that moved and leaves a blank cell under a blank
+ * one alone: a pixel is marked in a blank cell that stays blank and in the
+ * cell of a line that moves. Two hundred scrolls then pass the end of the
+ * adapter's memory, where the console copies the screen to its front, and
+ * the scrollback shows the page before.
+ */
 static void row_scroll(void)
 {
     char line[16];
@@ -360,10 +380,8 @@ static void row_scroll(void)
     }
     CHECK(cell_shows(0, 0, 'a', GREY, BLACK, 0) && cell_shows(0, 24, 'y', GREY, BLACK, 0),
           "a screen of lines a to y");
-    /* A pixel marked in a blank cell that stays blank. */
     marked = (grid_top + 10 * 16 + 3) * fb.pitch + (grid_left + 70 * 8 + 3) * 4;
     screen[marked] = 0x77;
-    /* And in the cell of a line that moves. */
     screen[(grid_top + 3) * fb.pitch + (grid_left + 3) * 4] = 0x77;
     put("\nz");
     CHECK(cell_shows(0, 0, 'b', GREY, BLACK, 0) && cell_shows(0, 23, 'y', GREY, BLACK, 0) &&
@@ -372,7 +390,6 @@ static void row_scroll(void)
     CHECK(screen[marked] == 0x77, "a blank cell under a blank one is not drawn again");
     CHECK(cell_shows(0, 0, 'b', GREY, BLACK, 0), "a cell whose line moved is drawn again");
 
-    /* Past the end of the adapter's memory: the copy to its front. */
     for (n = 0; n < 200; n++) {
         line[0] = '0' + n % 10;
         line[1] = '\0';
@@ -475,6 +492,7 @@ static void row_picture(void)
           "and the cells are drawn again, one written while the picture had the screen too");
 }
 
+/** Run the rows: 0 when every check passes, 1 otherwise. */
 int main(void)
 {
     row_init();

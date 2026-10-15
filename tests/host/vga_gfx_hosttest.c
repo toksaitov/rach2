@@ -1,8 +1,8 @@
 /**
  * VGA mode transitions with a pending keyboard interrupt at each port access,
  * and the console's font loaded into the adapter's character memory: each
- * glyph at its character's 32 bytes, read back as written, and refused in a
- * graphics mode.
+ * glyph at its character's 32 bytes, read back as written, and not loaded in
+ * a graphics mode.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  */
@@ -22,21 +22,25 @@ bool fbcon_active = false;
 static int gfx_begins, gfx_ends;
 static const uint8_t *gfx_palette_seen, *gfx_frame_seen;
 
+/** Count the framebuffer console giving the screen to mode 13h. */
 void fbcon_gfx_begin(void)
 {
     gfx_begins++;
 }
 
+/** Count the framebuffer console taking the screen back. */
 void fbcon_gfx_end(void)
 {
     gfx_ends++;
 }
 
+/** Record the palette handed to the framebuffer console. */
 void fbcon_gfx_palette(const uint8_t *rgb)
 {
     gfx_palette_seen = rgb;
 }
 
+/** Record the frame handed to the framebuffer console. */
 void fbcon_gfx_frame(const uint8_t *pixels)
 {
     gfx_frame_seen = pixels;
@@ -44,18 +48,20 @@ void fbcon_gfx_frame(const uint8_t *pixels)
 
 extern int printf(const char *format, ...);
 static int failures;
-static uint32_t masked;
-static uint8_t crtc[256];
-static uint8_t index_reg;
+static uint32_t masked;   /* the modelled interrupt flag: 1 when masked */
+static uint8_t crtc[256]; /* the CRTC's registers */
+static uint8_t index_reg; /* the CRTC register selected */
 static unsigned int accesses;
-static unsigned int inject_at;
-static unsigned int echoes;
+static unsigned int inject_at; /* the access that raises the interrupt */
+static unsigned int echoes;    /* interrupts delivered */
 static unsigned int clears;
-static int pending;
-static int expected_mode;
-static int font_row; /* the font's own load, which no mode change is part of */
+static int pending;       /* an interrupt raised and not yet delivered */
+static int expected_mode; /* the mode the transition under way publishes */
+static int font_row;      /* the font's own load, which no mode change is part of */
 static unsigned int unmasked_accesses;
 
+/* Values of `inject_at` that raise the interrupt when register 9 is selected
+ * on the way into mode 13h or on the way out. */
 #define INJECT_ENTRY 0xFFFFFFFFu
 #define INJECT_EXIT  0xFFFFFFFEu
 
@@ -67,7 +73,8 @@ static unsigned int unmasked_accesses;
         }                                          \
     } while (0)
 
-/** Echo updates both cursor registers and leaves cursor-low selected. */
+/** Deliver a pending interrupt unless masked: its keyboard echo writes both
+ * cursor registers and leaves cursor-low selected. */
 static void deliver_echo(void)
 {
     if (pending && !masked) {
@@ -111,7 +118,7 @@ uint8_t inb(uint16_t port)
     return value;
 }
 
-/** Save the caller's interrupt state. */
+/** Mask interrupts and return the mask the caller had. */
 uint32_t kirq_save(void)
 {
     uint32_t old = masked;
@@ -119,7 +126,8 @@ uint32_t kirq_save(void)
     return old;
 }
 
-/** Require complete publication and font copying before interrupts resume. */
+/** Require complete publication and font copying before interrupts resume,
+ * then restore the mask `flags` and deliver a pending interrupt. */
 void kirq_restore(uint32_t flags)
 {
     unsigned int i, j;
@@ -144,14 +152,20 @@ void kirq_restore(uint32_t flags)
     deliver_echo();
 }
 
-/** The transition must include clearing the text display. */
+/** Count a clear of the text display, which must run with interrupts
+ * masked. */
 void k_cls(void)
 {
     CHECK(masked, "text clear excludes interrupts");
     clears++;
 }
 
-/** Run entry and exit, with a repeated call to each, from either flag state. */
+/**
+ * Run entry and exit, with a repeated call to each, from the interrupt mask
+ * `initial_mask`, raising the interrupt at access `point` (0 for none, or
+ * INJECT_ENTRY or INJECT_EXIT). Returns the port accesses of one entry and
+ * one exit.
+ */
 static unsigned int row_transition(unsigned int point, uint32_t initial_mask)
 {
     unsigned int i, j, total;
@@ -237,7 +251,8 @@ static void row_fbcon(void)
     font_row = 0;
 }
 
-/** Try every port boundary, including font mapping and palette restoration. */
+/** Try every port boundary, including font mapping and palette restoration:
+ * 0 when every check passes, 1 otherwise. */
 int main(void)
 {
     unsigned int point, total;

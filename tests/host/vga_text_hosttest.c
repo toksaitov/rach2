@@ -5,20 +5,18 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
  *
- * The adapter's memory is an array here, every store to it is counted, and
- * its ports are recorded, so the rows count what each operation costs. A
- * byte is one cell. A scroll is the new line's eighty cells and the start
- * address, with the rows above left in the cells they were in. The copy to
- * the front of the memory comes only when the window would pass its end,
- * once in 180 scrolls, and carries its content. A scroll back and a clear
- * redraw the screen. A held cursor is placed once, at the release. The
- * twenty-five rows the start address selects are the history's live lines
- * throughout, including across the copy. And the console's own byte path,
- * `k_putc` and the writers over it, costs the same, which is what the
- * driver was rewritten for. A byte in the last column leaves the wrap
- * pending, as the terminfo's xenl says: a full last row does not scroll,
- * which tmux's status line needs. The driver and the console are included
- * whole to reach their state.
+ * The adapter's memory is an array here, every store to it is counted, and its
+ * ports are recorded, so the rows count what each operation costs. A byte is
+ * one cell. A scroll is the new line's eighty cells and the start address, with
+ * the rows above left in the cells they were in. The copy to the front of the
+ * memory comes only when the window would pass its end, once in 180 scrolls,
+ * and carries its content. A scroll back and a clear redraw the screen. A held
+ * cursor is placed once, at the release. The twenty-five rows the start address
+ * selects are the history's live lines throughout, including across the copy.
+ * And the console's own byte path, `k_putc` and the writers over it, costs the
+ * same. A byte in the last column leaves the wrap pending, as the terminfo's
+ * xenl says: a full last row does not scroll, which tmux's status line needs.
+ * The driver and the console are included whole to reach their state.
  */
 #include "lib/kint.h"
 
@@ -32,7 +30,7 @@ extern int printf(const char *format, ...);
 
 static unsigned int stores;
 
-/* The driver's one store to the adapter's memory, counted. */
+/** Count the driver's one store to the adapter's memory. */
 void vga_text_hosttest_stored(void)
 {
     stores++;
@@ -41,10 +39,11 @@ void vga_text_hosttest_stored(void)
 /* The flag register's stand-in: the console keeps interrupts off around a
    byte, and the rows watch that it does. */
 static int masked;
-static int inject_echo;
-static int echo_pending;
+static int inject_echo;  /* the next selection of 0x0E raises an echo */
+static int echo_pending; /* a keyboard interrupt raised, not delivered */
 static void deliver_echo(void);
 
+/** Mask interrupts and return the mask the caller had. */
 uint32_t kirq_save(void)
 {
     uint32_t old = (uint32_t)masked;
@@ -53,6 +52,7 @@ uint32_t kirq_save(void)
     return old;
 }
 
+/** Restore the mask `flags` and deliver a pending echo. */
 void kirq_restore(uint32_t flags)
 {
     masked = (int)flags;
@@ -67,14 +67,14 @@ bool vga_graphics_mode = false;
 #include "display/vga_font.c"
 #include "kio.c"
 
-/* No processor here has begun a panic, so the console takes its lock. */
+/** No processor here has begun a panic, so the console takes its lock. */
 int k_panicking(void)
 {
     return 0;
 }
 
-/* No framebuffer: the console stays on the adapter, which fbcon_hosttest.c
-   replaces. */
+/** No framebuffer, so the console stays on the adapter; fbcon_hosttest.c
+ * gives one. */
 volatile uint8_t *fbcon_window(void)
 {
     return NULL;
@@ -82,13 +82,13 @@ volatile uint8_t *fbcon_window(void)
 
 static int font_reads_back;
 
-/* The adapter's character memory: whether the glyphs read back as written. */
+/** The adapter's character memory: whether the glyphs read back as written. */
 int vga_font_load(void)
 {
     return font_reads_back;
 }
 
-/* The font's load is said in the kernel log, which the rows do not read. */
+/** Discard the kernel log, where the font's load is reported. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -96,6 +96,8 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
+/* The CRTC's port writes, the writes of the start address's two bytes, the
+ * register selected, and the start address and cursor location in cells. */
 static unsigned int port_writes;
 static unsigned int start_writes;
 static uint8_t crtc_index;
@@ -111,8 +113,9 @@ static int failures;
         }                                                \
     } while (0)
 
-/* The CRTC as the driver sees it: an index port and a data port, of which
-   the start address and the cursor location are kept. */
+/** The CRTC as the driver sees it: an index port and a data port, of which
+ * the start address and the cursor location are kept. Selecting the cursor's
+ * high byte raises the echo `inject_echo` asks for. */
 void outb(uint16_t port, uint8_t val)
 {
     port_writes++;
@@ -321,7 +324,6 @@ static void row_scrollback(void)
     CHECK(_follow_live, "end returns to the live lines");
     CHECK(window_shows_viewport(), "the return shows the live lines, the byte among them");
 
-    /* Fill the history, go to its oldest line, and scroll once more. */
     for (n = 0; n < VGA_TEXT_SCROLLBACK_LINES; n++) {
         k_scroll_down();
     }
@@ -339,8 +341,8 @@ static void row_scrollback(void)
 /**
  * The console's own path: a byte through `k_putc` is one cell and one
  * placement, a line through `k_puts` is its cells and one placement, and
- * the work runs with interrupts off. `k_printf` reads its arguments off an
- * i386 stack and is not run here.
+ * the work runs with interrupts off. `k_printf` writes through `k_putc`
+ * inside one hold and is not run here.
  */
 static void row_console(void)
 {
@@ -530,6 +532,7 @@ static void row_wrap(void)
           "a cursor move cancels the wrap");
 }
 
+/** Run the rows: 0 when every check passes, 1 otherwise. */
 int main(void)
 {
     row_clear();
