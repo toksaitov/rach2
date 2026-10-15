@@ -152,22 +152,6 @@ int krffs_chown(const char *path, uid_t uid, gid_t gid);
 int krffs_statfs(const char *path, struct statvfs *statvfs_buffer);
 
 /** The handlers above, as `fuse_main` takes them. */
-static struct fuse_operations krffs_operations = {.getattr = krffs_getattr,
-                                                  .readdir = krffs_readdir,
-                                                  .open = krffs_open,
-                                                  .read = krffs_read,
-                                                  .mknod = krffs_mknod,
-                                                  .create = krffs_create,
-                                                  .mkdir = krffs_mkdir,
-                                                  .write = krffs_write,
-                                                  .fsync = krffs_fsync,
-                                                  .truncate = krffs_truncate,
-                                                  .unlink = krffs_unlink,
-                                                  .rmdir = krffs_rmdir,
-                                                  .rename = krffs_rename,
-                                                  .utimens = krffs_utimens,
-                                                  .chmod = krffs_chmod,
-                                                  .chown = krffs_chown,
-                                                  .statfs = krffs_statfs};
+extern const struct fuse_operations krffs_operations;
 
 #endif

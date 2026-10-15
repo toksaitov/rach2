@@ -130,7 +130,7 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    if (file_info.st_size < sizeof(*file_system.node) * 2) {
+    if ((uint64_t)file_info.st_size < sizeof(*file_system.node) * 2) {
         fprintf(stderr, "The file at '%s' is not big enough to contain a file system.\n", path);
 
         exit_status = EXIT_FAILURE;

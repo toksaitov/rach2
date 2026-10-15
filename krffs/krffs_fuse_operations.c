@@ -231,6 +231,9 @@ int krffs_getattr(const char *path, struct PLATFORM_STAT *stat_buffer)
 int krffs_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, PLATFORM_OFF_T offset,
                   struct fuse_file_info *file_info)
 {
+    (void)offset;
+    (void)file_info;
+
     int result = 0;
 
     struct krffs_node *directory = find_node(path);
@@ -259,12 +262,16 @@ int krffs_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, PLATFO
 
 int krffs_open(const char *path, struct fuse_file_info *file_info)
 {
+    (void)file_info;
+
     return find_node(path) ? 0 : -ENOENT;
 }
 
 int krffs_read(const char *path, char *buffer, size_t size, PLATFORM_OFF_T offset,
                struct fuse_file_info *file_info)
 {
+    (void)file_info;
+
     int result = 0;
 
     struct krffs_node *node = find_node(path);
@@ -297,6 +304,8 @@ int krffs_read(const char *path, char *buffer, size_t size, PLATFORM_OFF_T offse
 
 int krffs_mknod(const char *path, mode_t mode, dev_t device)
 {
+    (void)device;
+
     struct krffs_node *directory;
     const char *name;
     struct krffs_node *node;
@@ -318,6 +327,8 @@ int krffs_mknod(const char *path, mode_t mode, dev_t device)
 
 int krffs_create(const char *path, mode_t mode, struct fuse_file_info *file_info)
 {
+    (void)file_info;
+
     struct krffs_node *directory;
     const char *name;
     struct krffs_node *node;
@@ -391,6 +402,8 @@ static void krffs_write_into_node(struct krffs_node *node, const char *buffer, s
 int krffs_write(const char *path, const char *buffer, size_t size, PLATFORM_OFF_T offset,
                 struct fuse_file_info *file_info)
 {
+    (void)file_info;
+
     int result = 0;
 
     struct krffs_node *node = find_node(path);
@@ -430,6 +443,9 @@ int krffs_write(const char *path, const char *buffer, size_t size, PLATFORM_OFF_
 
 int krffs_fsync(const char *path, int is_data_sync, struct fuse_file_info *file_info)
 {
+    (void)is_data_sync;
+    (void)file_info;
+
     return find_node(path) ? 0 : -ENOENT;
 }
 
@@ -692,3 +708,21 @@ int krffs_statfs(const char *path, struct statvfs *statvfs_buffer)
 
     return result;
 }
+
+const struct fuse_operations krffs_operations = {.getattr = krffs_getattr,
+                                                 .readdir = krffs_readdir,
+                                                 .open = krffs_open,
+                                                 .read = krffs_read,
+                                                 .mknod = krffs_mknod,
+                                                 .create = krffs_create,
+                                                 .mkdir = krffs_mkdir,
+                                                 .write = krffs_write,
+                                                 .fsync = krffs_fsync,
+                                                 .truncate = krffs_truncate,
+                                                 .unlink = krffs_unlink,
+                                                 .rmdir = krffs_rmdir,
+                                                 .rename = krffs_rename,
+                                                 .utimens = krffs_utimens,
+                                                 .chmod = krffs_chmod,
+                                                 .chown = krffs_chown,
+                                                 .statfs = krffs_statfs};

@@ -4,13 +4,15 @@
  * mapping of a scratch image file, with tests/host/fuse/fuse.h in place of
  * libfuse's header, and with krffs/stageimage.krffs.c to stage nodes as the
  * image scripts do. The image file is in a directory of the test's own
- * (compat/fixdir_host.c), kept when a row fails.
+ * (compat/fixdir_host.c), kept when a row fails. The warnings that
+ * krffs/Makefile makes errors are errors here too, so a driver that
+ * `make -C krffs mount` cannot build fails the test.
  *
  * host-deps: krffs/krffs_fuse_operations.c krffs/krffs_allocator.c
  * host-deps: krffs/krffs_node.c krffs/krffs_file_system.c
  * host-deps: krffs/krffs_utilities.c krffs/krffs_platform.c
  * host-deps: tests/host/compat/fixdir_host.c
- * host-cflags: -I tests/host/fuse
+ * host-cflags: -I tests/host/fuse -Wall -Wextra -Werror
  */
 #define main krffs_mount_main
 #include "../../krffs/krffs.c"

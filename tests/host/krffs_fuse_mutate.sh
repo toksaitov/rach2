@@ -111,8 +111,9 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 # run_phase PHASE: compile the test over the copy as $work/PHASE and run it for
-# at most 60 seconds. A phase named for a fault must fail each of its rows;
-# any other must pass. Exit if not.
+# at most 60 seconds, with its warnings not errors, since a fault may leave a
+# function unused. A phase named for a fault must fail each of its rows; any
+# other must pass. Exit if not.
 run_phase()
 {
     phase=$1
@@ -121,7 +122,7 @@ run_phase()
     if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 \
         -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all \
         -g -O1 -Wno-empty-body -ffreestanding -I krffs -I tests/host/compat \
-        -DFIXDIR="\"$work/fixtures\"" $extra -I "$work/no-fuse" -MMD -MF "$binary.d" \
+        -DFIXDIR="\"$work/fixtures\"" $extra -Wno-error -I "$work/no-fuse" -MMD -MF "$binary.d" \
         -o "$binary" "$test" $deps >"$binary.compile.log" 2>&1; then
         cat "$binary.compile.log" >&2
         exit 1
