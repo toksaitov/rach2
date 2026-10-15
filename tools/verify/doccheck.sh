@@ -33,7 +33,9 @@
 # that has been built. mancheck and programs.md read BusyBox's applet table,
 # so a tree without BusyBox's build is refused rather than made to build it:
 # on the testing host every clone and copy has one, and the owner's computer
-# reaches its copy there with `tools/dev/testing.sh run`.
+# reaches its copy there with `tools/dev/testing.sh run`. Make takes the
+# build that is there as current (`-o`), so a comment changed in one of its
+# prerequisites, such as mk/arch.sh, does not rebuild musl and BusyBox.
 #
 # Usage: doccheck.sh [BASE]
 # Exit: 0 when every check passes; 1 when one fails; 2 when the change is not
@@ -159,7 +161,8 @@ if [ "$code" -ne 0 ]; then
     exit 2
 fi
 
-if [ ! -f vendor/busybox/.stamp ]; then
+stamp=vendor/busybox/.stamp
+if [ ! -f "$stamp" ]; then
     echo "doccheck: this tree has no BusyBox build, whose applets the manual's check reads; run doccheck on the testing host" >&2
     exit 2
 fi
@@ -186,10 +189,10 @@ run "dev-log index" build/tools/verify/prosecheck devlog
 run "links" sh tools/verify/linkcheck.sh
 # shellcheck disable=SC2046 # one path a word
 run "dev-log checklists' links" sh tools/verify/linkcheck.sh $(find dev-log -name checklist.md | sort)
-run "manual" make -s mancheck
+run "manual" make -s -o "$stamp" mancheck
 sh tests/run inventory > "$work/suites.md" 2>/dev/null
 run "tests/system/suites.md is tests/run inventory" same "$work/suites.md" tests/system/suites.md
-make -s programs-md PROGRAMS_MD="$work/programs.md" >/dev/null 2>&1
+make -s -o "$stamp" programs-md PROGRAMS_MD="$work/programs.md" >/dev/null 2>&1
 run "man/programs.md is make programs-md" same "$work/programs.md" man/programs.md
 make -s syscalls SYSCALLS_MD="$work/syscalls.md" >/dev/null 2>&1
 run "rach2/syscalls.md is make syscalls" same "$work/syscalls.md" rach2/syscalls.md
