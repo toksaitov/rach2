@@ -1,7 +1,7 @@
 # shellcheck shell=sh disable=SC2034 # build_port.sh reads the variables
 # The runtime of the GNU system, which every other port depends on. It is
 # installed from the toolchain rather than built: the whole sysroot that
-# build_toolchain.sh made, which is glibc 2.44 with its loader, LOADER, at
+# build_toolchain.sh made, which is glibc with its loader, LOADER, at
 # /lib/ld-linux.so.2 on i686 and /lib64/ld-linux-x86-64.so.2 on x86-64, and
 # its shared libraries in /lib, their headers and static libraries in /usr,
 # and libxcrypt's libcrypt.so.1 in /usr/lib, so that the root is also the

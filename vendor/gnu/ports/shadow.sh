@@ -1,18 +1,17 @@
 # shellcheck shell=sh disable=SC2034 # build_port.sh reads the variables
-# shadow, the account tools Debian has from it that BusyBox has not:
-# useradd, usermod and userdel, groupadd, groupmod and groupdel, gpasswd,
-# chsh, chfn and chage, chgpasswd, newusers, vipw and vigr, pwck and grpck,
-# faillog, and the conversions to and from the shadow files, with
-# /etc/login.defs. passwd, su, login, chpasswd and nologin stay BusyBox's
-# and newgrp util-linux's, so the port keeps its own out of the root. chsh,
-# chfn and gpasswd are set-id root, as Debian's are: the manifest installs
-# them with that bit from build/vendor/gnu/setid, since a file the overlay
-# adds has none. make install leaves chage set-id root as well, and a set-id
-# file the manifest does not declare fails the set-id guard, so the port
-# clears every bit it leaves and chage is root's tool. There is no PAM,
-# SELinux, ACL, audit, tcb, logind, nscd, sssd or libbsd, and no subordinate
-# ids, which newuidmap and newgidmap would need, or lastlog, which shadow
-# builds only on request.
+# shadow, the account tools Debian has from it that BusyBox has not: useradd,
+# usermod and userdel, groupadd, groupmod and groupdel, gpasswd, chsh, chfn
+# and chage, chgpasswd, newusers, vipw and vigr, pwck and grpck, faillog, and
+# the conversions to and from the shadow files, with /etc/login.defs. passwd,
+# su, login, chpasswd and nologin stay BusyBox's and newgrp util-linux's, so
+# the port keeps its own out of the root. chsh, chfn and gpasswd are set-id
+# root, as Debian's are: the manifest installs them with that bit from setid/
+# of the layer's build tree, since a file the overlay adds has none. make
+# install leaves chage set-id root as well, and a set-id file the manifest
+# does not declare fails the set-id guard, so the port clears every bit it
+# leaves and chage is root's tool. There is no PAM, SELinux, ACL, audit, tcb,
+# logind, nscd, sssd or libbsd, and no subordinate ids, which newuidmap and
+# newgidmap would need, or lastlog, which shadow builds only on request.
 VERSION=4.20.2
 CONFIGURE_ARGS="--without-libpam --without-selinux --without-acl --without-attr --without-audit \
 --without-tcb --without-nscd --without-sssd --without-libbsd --without-su --without-btrfs \

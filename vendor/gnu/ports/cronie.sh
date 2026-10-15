@@ -1,17 +1,17 @@
 # shellcheck shell=sh disable=SC2034 # build_port.sh reads the variables
-# cronie, the cron daemon Fedora and Debian have, with crontab(1). init
-# starts crond at boot where the root has it. The crontabs are in
-# /var/spool/cron/crontabs, where Debian keeps them, and crontab is set-id
-# to the group crontab, which may write that directory, as Debian's cronie
-# is: the manifest installs it with that bit from build/vendor/gnu/setid,
-# since a file the overlay adds has none, and the port keeps it out of the
-# root. An empty /etc/cron.deny lets every user have a crontab, which
-# cronie allows otherwise only to root. make install makes no /etc/crontab
-# and no /etc/cron.d, and crond logs an error for each one missing when it
-# starts and whenever a crontab changes, so the port gives the system's
-# crontab with no job and an empty directory. There is no PAM, no SELinux
-# and no anacron. cronie's declarations have the empty parameter lists that
-# C23 reads as taking no arguments, so it is compiled as C17.
+# cronie, the cron daemon Fedora and Debian have, with crontab(1). init starts
+# crond at boot where the root has it. The crontabs are in
+# /var/spool/cron/crontabs, where Debian keeps them, and crontab is set-id to
+# the group crontab, which may write that directory, as Debian's cronie is:
+# the manifest installs it with that bit from setid/ of the layer's build
+# tree, since a file the overlay adds has none, and the port keeps it out of
+# the root. An empty /etc/cron.deny lets every user have a crontab, which
+# cronie allows otherwise only to root. make install makes no /etc/crontab and
+# no /etc/cron.d, and crond logs an error for each one missing when it starts
+# and whenever a crontab changes, so the port gives the system's crontab with
+# no job and an empty directory. There is no PAM, no SELinux and no anacron.
+# cronie's declarations have the empty parameter lists that C23 reads as
+# taking no arguments, so it is compiled as C17.
 VERSION=1.7.2
 CONFIGURE_ARGS="--sysconfdir=/etc --localstatedir=/var --disable-anacron --with-inotify --without-pam --without-selinux --without-audit --with-editor=/usr/bin/vi"
 CACHE="SPOOL_DIR=/var/spool/cron/crontabs"

@@ -4,10 +4,10 @@
 # and libcap; without DNS over HTTPS, the statistics channel's libraries,
 # LMDB and GSSAPI. The server and its tools are built and left out of the
 # root, which runs no name server. A library of the build links against
-# another of its own, which the linker finds through -rpath-link. BIND gives
-# OpenSSL its own allocator, and OpenSSL 4 runs its cleanup again from its
-# library's destructor, after BIND has freed the allocator's pool, so every
-# program aborted at its exit and lost the output it had not flushed; the
+# another of its own, which the linker finds through -rpath-link. BIND would
+# give OpenSSL its own allocator, and OpenSSL 4 runs its cleanup again from
+# its library's destructor, after BIND has freed the allocator's pool, which
+# aborts every program at its exit before it flushes its output; so the
 # recipe builds a copy of the tree with that call taken out, and OpenSSL
 # keeps its own allocator.
 VERSION=9.20.4

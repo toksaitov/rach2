@@ -2,8 +2,8 @@
 # CMake, the build system generator, with ccmake on the root's ncurses and
 # the libraries its release carries, curl among them over the root's
 # OpenSSL. CMake is built with CMake: the recipe bootstraps one for the build
-# host into build/vendor/gnu/host, which the ports built with CMake also run,
-# and that one builds the root's for the target.
+# host into host/ of the layer's build tree, which the ports built with CMake
+# also run, and that one builds the root's for the target.
 VERSION=4.3.4
 DEPENDS="openssl ncurses"
 

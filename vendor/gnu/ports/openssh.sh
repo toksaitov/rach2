@@ -1,20 +1,19 @@
 # shellcheck shell=sh disable=SC2034 # build_port.sh reads the variables
 # OpenSSH: the server, the client, ssh-keygen, sftp-server and the rest, with
 # OpenSSL for its cryptography and zlib for compression. The configuration is
-# in /etc/ssh, the server's privilege-separated child runs as the user sshd
-# in /var/empty, and there is no PAM. The child that talks to a client before
-# it authenticates runs in the rlimit sandbox, with no descriptor to open and
-# no process to fork; the sandbox's limit of 0 on file growth this kernel
-# takes and does not enforce (prlimit64(2)). configure would choose the
-# seccomp sandbox for a Linux target, which this kernel does not have, and
-# takes the rlimit sandbox only when a test program shows that poll and
-# select work under a descriptor limit of 0, which a cross build cannot run;
-# they do on this kernel, as limitprobe checks, and port_build gives
-# configure that answer. A session's path, which a command run without a
-# login shell keeps, is the one /etc/profile gives a login, with what is
-# installed under /usr/local first, as Debian's server gives it. The programs
-# are installed without the build host's strip and without host keys, which
-# the target makes itself.
+# in /etc/ssh, the server's privilege-separated child runs as the user sshd in
+# /var/empty, and there is no PAM. The child that talks to a client before it
+# authenticates runs in the rlimit sandbox, whose limits of 0 leave it no
+# descriptor to open, no process to fork and no file to grow, as this kernel
+# enforces them (prlimit64(2)). The recipe asks for that sandbox in place of
+# the seccomp sandbox configure chooses for a Linux target, and configure
+# accepts it only when a test program shows that poll and select work under a
+# descriptor limit of 0, which a cross build cannot run; they do on this
+# kernel, as limitprobe checks, and port_build gives configure that answer. A
+# session's path, which a command run without a login shell keeps, is the one
+# /etc/profile gives a login, with what is installed under /usr/local first,
+# as Debian's server gives it. The programs are installed without the build
+# host's strip and without host keys, which the target makes itself.
 VERSION=10.5p1
 DEPENDS="openssl zlib"
 CONFIGURE_ARGS="--sysconfdir=/etc/ssh --with-privsep-user=sshd --with-privsep-path=/var/empty --without-pam --with-sandbox=rlimit --disable-strip --with-mantype=man --with-default-path=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin --with-superuser-path=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"

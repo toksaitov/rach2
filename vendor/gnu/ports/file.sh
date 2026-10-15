@@ -5,7 +5,7 @@
 # host's path; the recipe gives it the file it has just built instead, run
 # through the root's loader as Perl's recipe runs its programs. Files that
 # zlib and xz compressed are looked into with -z; the sandbox file makes
-# with libseccomp is left out, since the kernel has no seccomp.
+# with libseccomp is left out, since libseccomp is not ported.
 VERSION=5.48
 DEPENDS="zlib xz"
 CONFIGURE_ARGS="--enable-zlib --enable-xzlib --disable-bzlib --disable-zstdlib --disable-lzlib

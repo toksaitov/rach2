@@ -2,9 +2,9 @@
 # Git, with curl for the HTTP transports, OpenSSL, zlib, Perl, and PCRE2 for
 # git grep -P, and without Tcl/Tk, gettext, Python or expat: there is no
 # gitk, git gui, translation, or push over WebDAV. Git is built by its own
-# Makefile in the source tree, set by config.mak. Its Rust parts are still
-# optional in 2.55 and are left out, since no Rust compiler for the target is
-# built here; Git uses its C versions of them. HOST_CPU is the target's
+# Makefile in the source tree, set by config.mak. Its Rust parts are
+# optional and are left out, since no Rust compiler for the target is built
+# here; Git uses its C versions of them. HOST_CPU is the target's
 # processor, which the Makefile would otherwise take from the build host, and
 # curl's flags come from the root's curl-config. The dashed forms of the
 # built-in commands are left out and the other links to git are symbolic.
