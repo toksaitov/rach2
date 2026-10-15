@@ -75,5 +75,7 @@ jobs:
       - name: result
         run: |
           for arch in i686 x86_64; do
-              [ -f "$RUNNER_TEMP/results/night-$arch/failed" ] && [ ! -s "$RUNNER_TEMP/results/night-$arch/failed" ] || exit 1
+              [ -f "$RUNNER_TEMP/results/night-$arch/done" ] &&
+                  [ -f "$RUNNER_TEMP/results/night-$arch/failed" ] &&
+                  [ ! -s "$RUNNER_TEMP/results/night-$arch/failed" ] || exit 1
           done
