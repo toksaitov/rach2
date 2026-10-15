@@ -1,35 +1,37 @@
 /**
- * tmpfs, mounted by a program and at /dev/shm.
+ * tmpfsmusl: check tmpfs, mounted by a program and at /dev/shm, and binds.
  *
  * A tmpfs mounted with mode=0700 on a directory in /tmp has that mode at its
  * root and tmpfs's magic in statfs. A file is written and read back; a
  * directory, a hard link and a symbolic link are made and read; a rename
  * replaces a file whose other name keeps the old bytes. /proc/mounts has the
- * mount's line and /proc/filesystems has "nodev\ttmpfs". umount2 refuses the
- * mount while a file on it is open and succeeds after the close, and a new
- * mount there is empty. A second mount takes 512 nested directories and is
- * unmounted with them. /dev/shm is a directory of mode 1777 that /dev lists as
- * one, with tmpfs's magic and its line in /proc/mounts with nosuid and nodev; a
- * file is made, written, read and removed there as shm_open makes one; a
- * working directory there climbs to /dev by "..", /dev/pts/../shm is the same
- * directory, and umount2 refuses /dev/shm with EBUSY. A tmpfs with a file of
- * two pages takes a size= at a remount that they fit in, which statfs gives,
- * and refuses a smaller one.
+ * mount's line and /proc/filesystems has "nodev\ttmpfs". umount2 of the mount
+ * fails with EBUSY while a file on it is open and succeeds after the close,
+ * and a new mount there is empty. A second mount takes 512 nested directories
+ * and is unmounted with them. /dev/shm is a directory of mode 1777 that /dev
+ * lists as one, with tmpfs's magic and its line in /proc/mounts with nosuid
+ * and nodev; a file is made, written, read and removed there as shm_open makes
+ * one; a working directory there climbs to /dev by "..", /dev/pts/../shm is
+ * the same directory, and umount2 of /dev/shm fails with EBUSY. A remount of
+ * a tmpfs with a file of two pages takes a size= that they fit in, which
+ * statfs gives, and fails with EINVAL for a smaller one.
  *
  * A bind of a directory of a tmpfs shows it at another directory: a file made
  * through the bind is in the source with the same device and inode, an
- * exclusive flock through one path refuses one through the other, ".." at the
- * bind's root climbs to the parent of the directory it covers, a bind remounted
- * read-only refuses a write while its source takes one, mountinfo gives the
- * bind its root within the file system, and the source's mount is busy until
- * the bind is unmounted. A bind of a directory of the KRFFS root shows a file
- * made through it as its source does after the file grows enough for KRFFS to
- * move it, and so does a descriptor opened before the growth, whose fstat
- * reaches the file where it is now; and the bind's root is busy to rmdir until
- * the bind is unmounted. A recursive bind of /dev has its devices and /dev/shm,
- * which are unmounted in turn with /dev/mqueue.
+ * exclusive flock through one path blocks one through the other, ".." at the
+ * bind's root climbs to the parent of the directory it covers, a write to a
+ * bind remounted read-only fails while its source takes one, mountinfo gives
+ * the bind its root within the file system, and the source's mount is busy
+ * until the bind is unmounted. A bind of a directory of the KRFFS root shows a
+ * file made through it as its source does after the file grows enough for
+ * KRFFS to move it, and so does a descriptor opened before the growth, whose
+ * fstat reaches the file where it is now; and the bind's root is busy to rmdir
+ * until the bind is unmounted. A recursive bind of /dev has its devices and
+ * /dev/shm, which are unmounted in turn with /dev/mqueue.
  *
- * Prints "TMPFSMUSL OK" on success and "TMPFSMUSL FAIL (detail)" otherwise.
+ * The program runs as root, since it mounts. It prints `TMPFSMUSL OK` and
+ * exits 0 on success, and prints `TMPFSMUSL FAIL (detail)` and exits 1
+ * otherwise.
  */
 
 #define _GNU_SOURCE
@@ -109,7 +111,7 @@ static int entries(const char *dir)
     return n;
 }
 
-/** Whether the file at `path` holds exactly `want`. */
+/** Whether the file at `path` has exactly `want` in it. */
 static int holds(const char *path, const char *want)
 {
     char buf[32];
@@ -136,7 +138,7 @@ static int link_is(const char *path, const char *want)
     return n == (ssize_t)strlen(want) && memcmp(target, want, (size_t)n) == 0;
 }
 
-/** Write `text` to a new file at `path`. */
+/** Write `text` to a new file at `path`. Returns 1, or 0 on failure. */
 static int put(const char *path, const char *text)
 {
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -148,6 +150,11 @@ static int put(const char *path, const char *text)
     return ok;
 }
 
+/**
+ * Mount a tmpfs with mode=0700 on `DIR_PATH` and check its root, a file, a
+ * directory, the two kinds of link, a rename, the /proc files and the
+ * unmounts. Returns 0, or 1 once the failure is reported.
+ */
 static int placed(void)
 {
     struct stat st;
@@ -196,9 +203,9 @@ static int placed(void)
 }
 
 /**
- * A tree as deep as a working directory's path allows: 512 nested
+ * Check a tree as deep as a working directory's path allows: 512 nested
  * directories, each made from the one above it, and an unmount that frees
- * them all.
+ * them all. Returns 0, or 1 once the failure is reported.
  */
 static int deep(void)
 {
@@ -219,6 +226,11 @@ static int deep(void)
     return 0;
 }
 
+/**
+ * Check /dev/shm: its kind, mode and magic, its line in /proc/mounts, a file
+ * in it, ".." from it, and that it does not unmount. Returns 0, or 1 once the
+ * failure is reported.
+ */
 static int shm(void)
 {
     struct stat st;
@@ -275,8 +287,12 @@ static int mountinfo_has(const char *text)
     return found;
 }
 
-/** A bind of a directory of a tmpfs: the file made through it is the
- * source's, and a lock through one path meets a lock through the other. */
+/**
+ * Mount a tmpfs on `BIND_SRC` and bind a directory of it on `BIND_DST`, and
+ * check that a file made through the bind is the source's and that a lock
+ * through one path blocks a lock through the other. The mounts stay for
+ * `bound_mount`. Returns 0, or 1 once the failure is reported.
+ */
 static int bound(void)
 {
     struct stat a, b;
@@ -305,8 +321,11 @@ static int bound(void)
     return 0;
 }
 
-/** The bind's place and flags: ".." at its root, a read-only remount of it
- * alone, its root in mountinfo, and its source's mount busy under it. */
+/**
+ * Check the bind's place and flags: ".." at its root, a read-only remount of
+ * it alone, its root in mountinfo, and its source's mount busy under it; then
+ * unmount both. Returns 0, or 1 once the failure is reported.
+ */
 static int bound_mount(void)
 {
     char cwd[64];
@@ -329,8 +348,11 @@ static int bound_mount(void)
     return 0;
 }
 
-/** A recursive bind of /dev has its devices and /dev/shm, and is unmounted
- * from the bottom, /dev/shm and /dev/mqueue first. */
+/**
+ * Check that a recursive bind of /dev has its devices and /dev/shm, and is
+ * unmounted from the bottom, /dev/shm and /dev/mqueue first. Returns 0, or 1
+ * once the failure is reported.
+ */
 static int rbound(void)
 {
     struct stat a, b;
@@ -347,8 +369,11 @@ static int rbound(void)
     return 0;
 }
 
-/** A tmpfs with a file of two pages: a remount takes a size= they fit in,
- * which statfs gives, and refuses a smaller one. */
+/**
+ * Check a remount of a tmpfs with a file of two pages: it takes a size= that
+ * they fit in, which statfs gives, and fails with EINVAL for a smaller one.
+ * Returns 0, or 1 once the failure is reported.
+ */
 static int resized(void)
 {
     static char two[8192];
@@ -375,7 +400,10 @@ static int resized(void)
     return 0;
 }
 
-/** A bind of a directory of the KRFFS root, whose files move as they grow. */
+/**
+ * Check a bind of a directory of the KRFFS root, whose files move as they
+ * grow. Returns 0, or 1 once the failure is reported.
+ */
 static int kbound(void)
 {
     static char big[65536];

@@ -1,11 +1,13 @@
 /**
- * System V IPC and POSIX message queues, through musl, which reaches the
- * System V objects through ipc(2), and through the direct calls GNU libc
- * makes.
+ * ipcmusl: check System V IPC and POSIX message queues.
+ *
+ * The System V calls are made through musl, which reaches them through
+ * ipc(2) on i686 and through the direct calls on x86-64, and through the
+ * direct calls GNU libc makes.
  *
  * A private segment of 8192 bytes is attached, written, and read by a child
  * that attaches it by its id; IPC_STAT counts both attachments, and
- * /proc/self/maps and /proc/sysvipc/shm name it. A segment removed while
+ * /proc/self/maps and /proc/sysvipc/shm list it. A segment removed while
  * attached keeps its memory and the key IPC_PRIVATE until its last detach,
  * after which its id is EINVAL. A read-only attachment cannot be made
  * writable with mprotect. The direct shmget, shmat and shmdt do the same as
@@ -13,19 +15,18 @@
  *
  * A set of two semaphores takes SETVAL and GETALL, and IPC_STAT gives its
  * count and the time it changed, each where Linux's struct has it; a
- * decrement past 0 with
- * IPC_NOWAIT is EAGAIN, one with a timeout EAGAIN after it, and one that
- * waits is let through by the parent's increment; a child's SEM_UNDO
- * decrement is undone at its exit; removing the set wakes a waiter with
- * EIDRM.
+ * decrement past 0 with IPC_NOWAIT is EAGAIN, one with a timeout EAGAIN after
+ * it, and one that waits is let through by the parent's increment; a child's
+ * SEM_UNDO decrement is undone at its exit; removing the set wakes a waiter
+ * with EIDRM.
  *
  * A queue takes messages of types 2, 1 and 1: a negative type receives the
  * lowest, type 0 the first; a longer message is E2BIG unless MSG_NOERROR
  * cuts it, an empty queue with IPC_NOWAIT ENOMSG. On x86-64 a capacity past
  * 32 bits is taken whole and a count of semaphore operations past it is
  * E2BIG, neither cut to its low word; and a thousand segments of 16 TiB,
- * which tmpfs refuses, are each ENOMEM and leave the kernel's heap as it
- * was, so that a refused one gives back its file's node.
+ * too large for tmpfs, are each ENOMEM and leave the kernel's heap as it
+ * was, so a failed one gives back the node of its file.
  *
  * A POSIX queue of four messages of 64 bytes gives the higher priority
  * first; a full queue with O_NONBLOCK is EAGAIN; an empty one with a
@@ -33,9 +34,10 @@
  * when a message reaches the queue empty; poll reports a message; the
  * name goes with mq_unlink. /dev/mqueue lists the queue as a file with its
  * mode and its messages' bytes as its size, reading it gives its status
- * line, and unlinking a queue's file takes its name.
+ * line, and unlinking a queue's file removes its name.
  *
- * Prints "IPCMUSL OK" on success and "IPCMUSL FAIL (detail)" otherwise.
+ * Prints `IPCMUSL OK` and exits 0 on success, and prints
+ * `IPCMUSL FAIL (detail)` and exits 1 otherwise.
  */
 
 #define _GNU_SOURCE
@@ -95,8 +97,12 @@ static int child_status(pid_t pid)
     return WEXITSTATUS(status);
 }
 
-/** A segment shared with a child, counted, named, removed while attached
- * and refused after; a read-only attachment; the direct calls. */
+/**
+ * Check a segment shared with a child: its count of attachments, its lines in
+ * /proc, its removal while attached and its id after the last detach; then a
+ * read-only attachment made by the direct calls. Returns 0, or 1 once the
+ * failure is reported.
+ */
 static int shm_rows(void)
 {
     struct shmid_ds ds;
@@ -160,7 +166,11 @@ static unsigned long heap_used(void)
     return v;
 }
 
-/** On x86-64, segments too large for tmpfs, refused without a trace. */
+/**
+ * Check on x86-64 that a thousand segments too large for tmpfs each fail with
+ * ENOMEM and leave the kernel's heap as it was. Returns 0, or 1 once the
+ * failure is reported.
+ */
 static int oversized_rows(void)
 {
     unsigned long before = heap_used(), after;
@@ -179,8 +189,11 @@ static int oversized_rows(void)
 }
 #endif
 
-/** A child's view: a wait for the semaphore, which the parent lets through,
- * then a SEM_UNDO decrement undone at its exit. */
+/**
+ * Wait for semaphore 0 of `id`, which the parent lets through, then make a
+ * SEM_UNDO decrement of semaphore 1 for the exit to undo. Runs in the forked
+ * child. Returns 0, or 1 when a semop failed, as the exit status.
+ */
 static int sem_child(int id)
 {
     struct sembuf take = {0, -1, 0}, undo = {1, -1, SEM_UNDO};
@@ -189,7 +202,10 @@ static int sem_child(int id)
 }
 
 #if defined __x86_64__
-/** On x86-64, a count of operations past 32 bits is E2BIG and runs none. */
+/**
+ * Check on x86-64 that a count of operations past 32 bits is E2BIG and runs
+ * none. Returns 0, or 1 once the failure is reported.
+ */
 static int sem_wide_count(int id)
 {
     struct sembuf give = {0, 1, 0};
@@ -202,8 +218,11 @@ static int sem_wide_count(int id)
 }
 #endif
 
-/** The set's waiters: one the parent lets through, whose SEM_UNDO
- * decrement is undone at its exit, and one the set's removal wakes. */
+/**
+ * Check two waiters of the set `id`: one the parent lets through, whose
+ * SEM_UNDO decrement is undone at its exit, and one the set's removal wakes.
+ * Removes the set. Returns 0, or 1 once the failure is reported.
+ */
 static int sem_waiters(int id)
 {
     struct sembuf give = {0, 1, 0}, wait0 = {0, -1, 0};
@@ -232,8 +251,11 @@ static int sem_waiters(int id)
     return 0;
 }
 
-/** A set of two: values, refusals, a timeout, a waiter let through, an
- * undo, and a waiter woken by the set's removal. */
+/**
+ * Check a set of two semaphores: values, IPC_STAT, errors, a timeout, a
+ * waiter let through, an undo, and a waiter woken by the set's removal.
+ * Returns 0, or 1 once the failure is reported.
+ */
 static int sem_rows(void)
 {
     struct sembuf take = {0, -1, IPC_NOWAIT};
@@ -266,7 +288,10 @@ static int sem_rows(void)
     return sem_waiters(id);
 }
 
-/** A queue's order by type, a cut message, and an empty queue. */
+/**
+ * Check a System V queue's order by type, a cut message, and an empty queue.
+ * Returns 0, or 1 once the failure is reported.
+ */
 static int msg_rows(void)
 {
     struct {
@@ -308,12 +333,13 @@ static int msg_rows(void)
     return 0;
 }
 
+/* The signal number, si_code and value of the last mq_notify signal. */
 static volatile int mq_signo, mq_code, mq_value;
 
 /**
- * /dev/mqueue while the queue /ipcfiles holds one message of 4 bytes: its
- * file, its status line and its entry; and a second queue whose file's
- * unlink takes its name.
+ * Check /dev/mqueue while the queue /ipcfiles has one message of 4 bytes: its
+ * file, its status line and its entry; and a second queue whose name goes
+ * with an unlink of its file. Returns 0, or 1 once the failure is reported.
  */
 static int mq_files(void)
 {
@@ -354,6 +380,7 @@ static int mq_files(void)
     return 0;
 }
 
+/** Record the signal, si_code and value of an mq_notify signal. */
 static void on_mq(int sig, siginfo_t *si, void *ctx)
 {
     (void)ctx;
@@ -362,8 +389,10 @@ static void on_mq(int sig, siginfo_t *si, void *ctx)
     mq_value = si->si_value.sival_int;
 }
 
-/** A POSIX queue: priorities, a full queue, a timeout, a notification, poll
- * and the name's removal. */
+/**
+ * Check a POSIX queue: priorities, a full queue, a timeout, a notification,
+ * poll and the name's removal. Returns 0, or 1 once the failure is reported.
+ */
 static int mq_rows(void)
 {
     struct mq_attr attr = {0, 4, 64, 0};

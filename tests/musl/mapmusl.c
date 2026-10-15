@@ -1,39 +1,41 @@
 /**
- * File mappings, shared mappings, mremap and madvise.
+ * mapmusl: check file mappings, shared mappings, mremap and madvise.
  *
  * A private mapping of a file reads the file's bytes, including a second page
  * and zeros past the end; a store changes the mapping and not the file; the
  * mapping outlives the descriptor it was made from; a child after fork sees the
- * parent's bytes and its own stores stay its own. A shared anonymous mapping
- * and a shared mapping of a file in /dev/shm carry a child's store to the
- * parent, and a store through the mapping of the file reaches read(2), and
- * after a truncation and a growth a write to the file is seen through the
- * mapping. On x86-64 a truncation takes out of a mapping of a file of 4 GiB and
- * a page, cut to 4 GiB, the last page alone, and a mapping of a file or of
- * shared memory of 16 TiB is EOVERFLOW and one of a page less is made;
- * mprotect, getrusage, a shrink and a move each pass terabytes without pages in
- * the run's time and reach the page beyond them. mprotect will not make a
- * shared mapping of a file opened read-only writable, and will a private one.
+ * parent's bytes and its own stores stay its own. Through a shared anonymous
+ * mapping and a shared mapping of a file in /dev/shm the parent sees a child's
+ * store, a store through the mapping of the file reaches read(2), and after a
+ * truncation and a growth a write to the file is seen through the mapping. On
+ * x86-64 a truncation to 4 GiB of a file of 4 GiB and a page takes the last
+ * page alone out of a mapping of it, and a mapping of a file or of shared
+ * memory of 16 TiB is EOVERFLOW and one of a page less is made; mprotect,
+ * getrusage, a shrink and a move each pass terabytes without pages in the
+ * run's time and reach the page beyond them. mprotect will not make a shared
+ * mapping of a file opened read-only writable, and will a private one.
  * Shared anonymous memory ignores a raw mmap2's page offset (mmap's, in bytes,
  * on x86-64), a file's offset whose last page would not fit in 32 bits is
  * EOVERFLOW, and a page of a file in memory past its end is never backed.
  * mremap without MREMAP_MAYMOVE does not grow a mapping into the one after it,
  * and with the flag moves the mapping with its bytes. A shrink in place keeps
  * the bytes of the page it keeps and frees the two pages it cuts:
- * MAP_FIXED_NOREPLACE maps them again, and the byte stored in them before reads
- * as zero. mremap refuses an old length that would wrap past the end of memory,
- * leaving the mapping; a fixed mremap that shrinks a mapping is held to
- * RLIMIT_AS by what it leaves; madvise(MADV_DONTNEED) gives a private anonymous
- * mapping zero pages again, and madvise and msync refuse a length that would
- * round up to 0. A write through /proc/self/mem to a read-only page a fork
- * shared leaves the page read-only. On an ext2 root, a shared mapping of a file
- * carries a child's store to the parent, a store to read(2), a write(2) to the
- * mapping without losing a store beside it, and its stores to the file after
- * munmap and after a mapper's exit; on the KRFFS root, one that may be written
- * is ENODEV, and a read-only one through a descriptor open for writing may not
- * be made writable.
+ * MAP_FIXED_NOREPLACE maps them again, and the byte stored in them before
+ * reads as zero. mremap fails with EINVAL for an old length that would wrap
+ * past the end of memory, and leaves the mapping; a fixed mremap that shrinks
+ * a mapping is held to RLIMIT_AS by what it leaves; madvise(MADV_DONTNEED)
+ * gives a private anonymous mapping zero pages again, and madvise and msync
+ * fail with EINVAL for a length that would round up to 0. A write through
+ * /proc/self/mem to a read-only page a fork shared leaves the page read-only.
+ * On an ext2 root, through a shared mapping of a file the parent sees a
+ * child's store, read(2) sees a store, the mapping sees a write(2) without
+ * losing a store beside it, and its stores reach the file after munmap and
+ * after a mapper's exit; on the KRFFS root, one that may be written is ENODEV,
+ * and a read-only one through a descriptor open for writing may not be made
+ * writable.
  *
- * Prints "MAPMUSL OK" on success and "MAPMUSL FAIL (detail)" otherwise.
+ * Prints `MAPMUSL OK` and exits 0 on success, and prints
+ * `MAPMUSL FAIL (detail)` and exits 1 otherwise.
  */
 
 #define _GNU_SOURCE
@@ -67,12 +69,14 @@
 #endif
 #define EXT2_MAGIC 0xEF53
 
+/** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
 {
     printf("MAPMUSL FAIL (%s: errno %d)\n", what, errno);
     return 1;
 }
 
+/** Wait for the child `pid`; whether it exited with status 0. */
 static int wait_ok(pid_t pid)
 {
     int status;
@@ -80,6 +84,11 @@ static int wait_ok(pid_t pid)
     return waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
+/**
+ * Check a private mapping of a file of two pages: its bytes and zeros past
+ * the end, a store that stays out of the file, a fork's copy, and a mapping
+ * from an offset. Returns 0, or 1 once the failure is reported.
+ */
 static int private_file(void)
 {
     static char block[PAGE + 100];
@@ -131,6 +140,12 @@ static int private_file(void)
     return 0;
 }
 
+/**
+ * Check that the parent sees a child's store through a shared anonymous
+ * mapping and through a shared mapping of a file in /dev/shm, and that read
+ * sees a store through the second. Returns 0, or 1 once the failure is
+ * reported.
+ */
 static int shared(void)
 {
     char *anon = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
@@ -178,10 +193,13 @@ static int shared(void)
     return 0;
 }
 
-/* A truncation takes the pages past the new end out of every mapping of a
-   file in memory: after the file shrinks to nothing and grows again, a
-   write to it is seen through the mapping, which maps the file's page and
-   no longer the one the truncation freed. */
+/**
+ * Check that a truncation takes the pages past the new end out of every
+ * mapping of a file in memory: after the file shrinks to nothing and grows
+ * again, a write to it is seen through the mapping, which maps the file's
+ * page and no longer the one the truncation freed. Returns 0, or 1 once the
+ * failure is reported.
+ */
 static int truncated_shared(void)
 {
     char *m;
@@ -206,13 +224,17 @@ static int truncated_shared(void)
 }
 
 #if defined __x86_64__
-/* A truncation's cut and the bound on a mapping's pages at x86-64's widths.
-   Of a file of 4 GiB and a page, truncated to 4 GiB, whose offset in bytes
-   passes 32 bits, only the last page is taken out, and the first stays in
-   memory, as mincore reports of each. The kernel numbers the pages of a file or of
-   shared memory in 32 bits, so a mapping of either is EOVERFLOW at 2^32
-   pages, 16 TiB, as Linux's sum of the offset and the pages is at 32 bits,
-   and is made at a page less. */
+/**
+ * Check a truncation's cut and the bound on a mapping's pages at x86-64's
+ * widths. Returns 0, or 1 once the failure is reported.
+ *
+ * Of a file of 4 GiB and a page, truncated to 4 GiB, whose offset in bytes
+ * passes 32 bits, only the last page is taken out, and the first stays in
+ * memory, as mincore reports of each. The kernel numbers the pages of a file
+ * or of shared memory in 32 bits, so a mapping of either is EOVERFLOW at 2^32
+ * pages, 16 TiB, as Linux's sum of the offset and the pages is at 32 bits,
+ * and is made at a page less.
+ */
 static int truncated_wide(void)
 {
     const size_t four = (size_t)1 << 32, huge = (size_t)1 << 44;
@@ -250,7 +272,7 @@ static int truncated_wide(void)
     return 0;
 }
 
-/* 1 if the child `pid` died of SIGSEGV. */
+/** Wait for the child `pid`; whether it died of SIGSEGV. */
 static int died_of_segv(pid_t pid)
 {
     int status;
@@ -259,17 +281,22 @@ static int died_of_segv(pid_t pid)
            WTERMSIG(status) == SIGSEGV;
 }
 
-/* Walks over terabytes with a page at the far end. Each walk steps past the
-   page tables a range lacks, so it finishes inside the run's bound, where a
-   step for every page of 64 TiB would take minutes, and it reaches the page
-   beyond them: mprotect of 64 TiB makes it read-only, getrusage finishes,
-   a shrink to half takes it out, and a move of 32 TiB carries the page a
-   read brought in, which mincore finds in memory at its new place. The
-   mprotect and the shrink each run in a child of their own, which has the
-   page in its tables before the call and touches it after with no fork
-   between: a fork would write-protect the page for copying, or leave out one
-   outside the regions, and hide a walk that missed it. The mprotect's child
-   writes the page first, so that it is its own and writable. */
+/**
+ * Check walks over terabytes with a page at the far end. Returns 0, or 1 once
+ * the failure is reported.
+ *
+ * Each walk steps past the page tables a range lacks, so it finishes inside
+ * the run's time limit, where a step for every page of 64 TiB would take
+ * minutes, and it reaches the page beyond them: mprotect of 64 TiB makes it
+ * read-only, getrusage finishes, a shrink to half takes it out, and a move of
+ * 32 TiB takes along the page a read brought in, which mincore finds in
+ * memory at its new place. The mprotect and the shrink each run in a child of
+ * their own, which has the page in its tables before the call and touches it
+ * after with no fork between: a fork would write-protect the page for
+ * copying, or leave out one outside the regions, and hide a walk that missed
+ * it. The mprotect's child writes the page first, so that it is its own and
+ * writable.
+ */
 static int huge_walks(void)
 {
     const size_t big = (size_t)1 << 46, half = big / 2;
@@ -341,21 +368,25 @@ static int huge_walks(void)
     return 0;
 }
 #else
+/** Nothing to check on i686, where a mapping cannot reach 4 GiB. */
 static int truncated_wide(void)
 {
     return 0;
 }
 
+/** Nothing to check on i686, whose address space is 4 GiB. */
 static int huge_walks(void)
 {
     return 0;
 }
 #endif
 
-/* A shared mapping of a file opened read-only may never be written:
-   mprotect refuses write with EACCES, since stores through the mapping
-   would reach the file. A private mapping of the same descriptor may be
-   written, its stores its own. */
+/**
+ * Check that a shared mapping of a file opened read-only cannot be made
+ * writable: mprotect fails with EACCES, since stores through the mapping
+ * would reach the file. A private mapping of the same descriptor may be
+ * written, its stores its own. Returns 0, or 1 once the failure is reported.
+ */
 static int readonly_shared(void)
 {
     char *ro, *priv;
@@ -388,12 +419,17 @@ static int readonly_shared(void)
     return 0;
 }
 
-/* The page offset of a raw mmap2. Shared anonymous memory ignores it; an
-   offset of 2^31 pages would double the length of the memory's table of
-   pages until the length wrapped to zero, and the first touch would not end.
-   A file's offset whose last page would not fit in 32 bits is EOVERFLOW,
-   and the page of a file in memory 2^31 pages in, past the end of the
-   empty file, is never backed: a child that touches it dies of SIGSEGV. */
+/**
+ * Check the page offset of a raw mmap2. Returns 0, or 1 once the failure is
+ * reported.
+ *
+ * Shared anonymous memory ignores it; an offset of 2^31 pages would double
+ * the length of the memory's table of pages until the length wrapped to zero,
+ * and the first touch would not end. A file's offset whose last page would
+ * not fit in 32 bits is EOVERFLOW, and the page of a file in memory 2^31
+ * pages in, past the end of the empty file, is never backed: a child that
+ * touches it dies of SIGSEGV.
+ */
 static int offsets(void)
 {
     char *m = (char *)MMAP_PAGES(PAGE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1,
@@ -431,6 +467,10 @@ static int offsets(void)
     return 0;
 }
 
+/**
+ * Check mremap's growth, move and shrink, its EINVAL for a length that wraps,
+ * and madvise and msync. Returns 0, or 1 once the failure is reported.
+ */
 static int remaps(void)
 {
     char *m = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -491,18 +531,23 @@ static int remaps(void)
     return 0;
 }
 
+/* Where `on_segv` returns to, set by `forced_write` around its store. */
 static sigjmp_buf segv_jump;
 
+/** Return from a SIGSEGV to `segv_jump`. */
 static void on_segv(int sig)
 {
     (void)sig;
     siglongjmp(segv_jump, 1);
 }
 
-/* A write through /proc/self/mem to a page a fork left copy-on-write, in a
-   region mprotect has made read-only since, goes into a page of this
-   process's own that stays read-only: a store from the program after it
-   faults, since the region allows none. */
+/**
+ * Check that a write through /proc/self/mem to a page a fork left
+ * copy-on-write, in a region mprotect has made read-only since, goes into a
+ * page of this process's own that stays read-only: a store from the program
+ * after it faults, since the region allows none. Returns 0, or 1 once the
+ * failure is reported.
+ */
 static int forced_write(void)
 {
     char *m = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -539,8 +584,11 @@ static int forced_write(void)
     return 0;
 }
 
-/* The pages this process's regions cover, the first number of
-   /proc/self/statm, read with no allocation that would change it. */
+/**
+ * The pages this process's regions cover, the first number of
+ * /proc/self/statm, read with no allocation that would change it; 0 when it
+ * cannot be read.
+ */
 static unsigned long mapped_pages(void)
 {
     char text[64];
@@ -559,10 +607,12 @@ static unsigned long mapped_pages(void)
     return strtoul(text, NULL, 10);
 }
 
-/* A fixed mremap that shrinks a mapping of 64 pages to one is held to
-   RLIMIT_AS by what it leaves, 63 pages less than now: under a limit 32
-   pages below the present size it succeeds, with the pages between left
-   for the stack to grow into. */
+/**
+ * Check that a fixed mremap that shrinks a mapping of 64 pages to one is held
+ * to RLIMIT_AS by what it leaves, 63 pages less than now: under a limit 32
+ * pages below the present size it succeeds, with the pages between left for
+ * the stack to grow into. Returns 0, or 1 once the failure is reported.
+ */
 static int remap_limit(void)
 {
     struct rlimit old, lim;
@@ -595,8 +645,12 @@ static int remap_limit(void)
     return 0;
 }
 
-/* A writable shared mapping `m` of a file `fd` of the KRFFS root, which
-   has no write-back, is refused, and a read-only one stays read-only. */
+/**
+ * Check that `m`, the result of a writable shared mmap of `fd`, a file of the
+ * KRFFS root, which has no write-back, failed with ENODEV, and that a
+ * read-only shared mapping stays read-only. Returns 0, or 1 once the failure
+ * is reported.
+ */
 static int krffs_shared(int fd, char *m)
 {
     if (m != MAP_FAILED || errno != ENODEV) {
@@ -610,9 +664,12 @@ static int krffs_shared(int fd, char *m)
     return 0;
 }
 
-/* A shared mapping `m` of two pages of a file `fd` on ext2 maps the file's
-   pages: a child's store is seen, read and write see the mapping's stores
-   and it sees theirs, and every store reaches the file. */
+/**
+ * Check that `m`, a shared mapping of two pages of `fd`, a file on ext2, maps
+ * the file's pages: a child's store is seen, read and write see the mapping's
+ * stores and it sees theirs, and every store reaches the file. Unmaps `m`.
+ * Returns 0, or 1 once the failure is reported.
+ */
 static int ext2_shared(int fd, char *m)
 {
     char buf[8];
@@ -657,7 +714,11 @@ static int ext2_shared(int fd, char *m)
     return 0;
 }
 
-/* A shared mapping of a file of the root, on ext2 or on KRFFS. */
+/**
+ * Check a shared mapping of a file of the root, by `ext2_shared` or
+ * `krffs_shared` as the root's type is. Returns 0, or 1 once the failure is
+ * reported.
+ */
 static int root_shared(void)
 {
     struct statfs sfs;
