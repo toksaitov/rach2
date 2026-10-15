@@ -487,11 +487,10 @@ int main(int argc, char **argv)
         }
         if (!grub_ok(text)) {
             fprintf(stderr, "check-grubembed: %s: %s\n", argv[2], why);
+            free(text);
             return 1;
         }
-        printf("check-grubembed: OK (%s reaches partition 1 and then "
-               "partition 3)\n",
-               argv[2]);
+        printf("check-grubembed: OK (%s finds RACH2BOOT and then RACH2RECOV by label)\n", argv[2]);
         free(text);
         return 0;
     }
