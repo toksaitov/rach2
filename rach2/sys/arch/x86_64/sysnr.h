@@ -275,9 +275,9 @@
 
 /* Rach2's own call, which Linux does not have: ping(2), the ICMP echo that
  * i386 reaches as socketcall's operations 0x1000 and 0x1001. x86-64 has no
- * socketcall, so the two operations have this number, in the gap from 335
- * to 423 that Linux leaves empty on x86-64 for good: those numbers are the
- * 32-bit time64 calls of the other architectures. */
+ * socketcall, so the two operations have this number, among the numbers
+ * from 335 to 423, which Linux does not use on x86-64: its table ends at
+ * 334 and resumes at 424. */
 #define SYS_RACH2_PING 400
 
 #endif /* _X86_64_SYSNR_H_ */

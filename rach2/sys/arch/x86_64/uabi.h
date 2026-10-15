@@ -59,8 +59,8 @@ struct shmid64_ds {
     unsigned long unused4, unused5;
 };
 
-/* Linux x86-64 keeps the word after each of a semaphore set's times, as
- * i386 keeps them for the times' high halves. */
+/* Linux x86-64 has an unused word after each of a semaphore set's times,
+ * where i386 has each time's high half. */
 struct semid64_ds {
     struct ipc64_perm perm;
     long otime;

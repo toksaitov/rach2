@@ -10,20 +10,20 @@
 #include "../../mm/usercopy.h"
 #include "../../proc/process.h"
 
-/** The thread pointer of ../arch.h: FS's base. */
+/** x86-64's thread pointer is FS's base, IA32_FS_BASE. */
 void arch_tls_set(uintptr_t base)
 {
     msr_write(MSR_FS_BASE, base);
 }
 
-/** The running thread's thread pointer as it is now: FS's base, which a
- * selector loaded into FS may have changed since the record was written. */
+/** The processor's FS base, which a selector loaded into FS may have
+ * changed since the record was written. */
 uintptr_t arch_tls_get(void)
 {
     return (uintptr_t)msr_read(MSR_FS_BASE);
 }
 
-/** Clone's TLS argument on x86-64: the base itself, which must be a user
+/** Clone's TLS argument on x86-64 is the base itself, which must be a user
  * address, as ARCH_SET_FS takes one. */
 long arch_clone_tls(unsigned long arg, uintptr_t *base_out)
 {
@@ -58,14 +58,11 @@ long sys_arch_prctl(isr_params_t *params)
         }
         x86_64_gs_load(0);
         current_proc->regs.gs_base = addr;
-        /* In the kernel the program's GS base waits in this MSR for the
-         * `swapgs` of the return. */
+        /* While the kernel runs, the program's GS base is in this MSR. */
         msr_write(MSR_KERNEL_GS_BASE, addr);
         return 0;
     case ARCH_GET_FS:
     case ARCH_GET_GS:
-        /* The bases as they are now, which a selector the program loaded
-         * may have changed. */
         base = msr_read(code == ARCH_GET_FS ? MSR_FS_BASE : MSR_KERNEL_GS_BASE);
         if (copy_to_user((void __user *)addr, &base, sizeof(base)) != 0) {
             return -EFAULT;

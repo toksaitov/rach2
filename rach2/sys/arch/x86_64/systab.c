@@ -85,9 +85,9 @@
 #include "../../ipc/mqueue.h"
 #include "../../syscall_internal.h"
 
-/* Run `handler` with the frame's argument register `reg` set to `value`,
+/** Run `handler` with the frame's argument register `reg` set to `value`,
  * and put the register back after, since the return restores it to the
- * program. */
+ * program; return what the handler returns. */
 static long with_arg(isr_params_t *params, uint64_t *reg, uint64_t value,
                      long (*handler)(isr_params_t *))
 {
@@ -100,21 +100,21 @@ static long with_arg(isr_params_t *params, uint64_t *reg, uint64_t value,
     return rc;
 }
 
-/* accept(2): accept4 with no flags. */
+/** accept(2): accept4 with no flags. */
 static long sys_accept_noflags(isr_params_t *params)
 {
     return with_arg(params, &params->r10, 0, sys_accept4);
 }
 
-/* semop(2): semtimedop with no time limit. */
+/** semop(2): semtimedop with no time limit. */
 static long sys_semop_untimed(isr_params_t *params)
 {
     return with_arg(params, &params->r10, 0, sys_semtimedop_time64);
 }
 
-/* Rach2's ping(2): socketcall's operations 0x1000 and 0x1001, the operation
- * in RDI and a pointer to its arguments, longs here, in RSI; any other
- * operation is a socket call x86-64 makes directly. */
+/** Rach2's ping(2): socketcall's operations 0x1000 and 0x1001, the operation
+ * in RDI and a pointer to its arguments, longs here, in RSI. Any other
+ * operation is a socket call x86-64 makes directly, and -EINVAL here. */
 static long sys_rach2_ping(isr_params_t *params)
 {
     if (params->rdi != 0x1000u && params->rdi != 0x1001u) {
@@ -123,6 +123,9 @@ static long sys_rach2_ping(isr_params_t *params)
     return sys_socketcall(params);
 }
 
+/** `syscall_entry` gives its frame the vector SYSCALL_VECTOR, though no
+ * gate has it, and calls `_isr_router`, which runs the handler registered
+ * on that vector here, `dispatch`. */
 void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *params))
 {
     table[SYS_READ] = sys_read;

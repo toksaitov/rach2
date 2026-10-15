@@ -24,8 +24,11 @@
  * arch_prctl(2), Linux x86-64's 158: RDI the code, RSI the base to set or the
  * user address to store it at. A base must be a user address, below
  * USER_ADDR_MAX, as Linux requires: -EPERM otherwise. Setting a base loads
- * the null selector into its register first, as Linux does. -EFAULT for an
- * address to store at that cannot be written, -EINVAL for any other code.
+ * the null selector into its register first, as Linux does. ARCH_GET_FS and
+ * ARCH_GET_GS store the bases the processor has, which a selector the
+ * program loaded may have changed since the record was written. -EFAULT for
+ * an address to store at that cannot be written, -EINVAL for any other
+ * code, -ESRCH with no current process.
  */
 long sys_arch_prctl(isr_params_t *params);
 
