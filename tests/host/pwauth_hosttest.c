@@ -1306,11 +1306,10 @@ static void check_refusal(const char *what, const char *body, const char *expect
  * which musl reserves, and one for `SIGPIPE`; none for the others.
  *
  * A loop installing dispositions has no obvious reason to read what `sigaction`
- * returned, and this libc refuses three signals outright, so a signal the
- * library's list covers but that was never installed is the worst of both: the
- * contract says a death is handled, and the writer dies with its lock held. The
- * question is therefore asked of the dispositions themselves, not of the
- * predicate that chose them.
+ * returned, and this libc fails it for three signals, so a signal on the
+ * library's list may never be installed: the contract says a death is handled,
+ * and the writer dies with its lock held. The test therefore reads the
+ * dispositions themselves, not the predicate that chose them.
  *
  * Every signal is set to a known disposition first, and whatever the acquire
  * changes is what it claimed. The expected set is written out here rather than
@@ -1320,11 +1319,10 @@ static void check_refusal(const char *what, const char *body, const char *expect
  * The work happens in a child because it rewrites every disposition in the
  * process, which nothing else in this file would survive.
  *
- * Only the signals this host has are asked about, which is fewer than the guest
- * has: Darwin stops at 32 where the guest goes to 64, so a signal the host will
- * not accept at all is skipped, not counted as unclaimed. What that
- * leaves unchecked here is the upper range, and it is checked where it matters,
- * in the guest, by `tests/musl/pwauthmusl.c`.
+ * Only the signals this host has are checked, which may be fewer than the
+ * guest's 64: Darwin stops at 32. A signal whose `sigaction` fails on the host
+ * is skipped, not counted as unclaimed, and the upper range is checked in the
+ * guest by `tests/musl/pwauthmusl.c`.
  */
 static void check_death_set_installed(void)
 {
@@ -1795,7 +1793,8 @@ static void check_pipe_during_acquire(void)
 }
 
 /**
- * A refused acquire that cannot report, and must repair itself anyway.
+ * Check that a refused acquire whose report blocks has removed its lock and
+ * restored the mask before the report.
  *
  * Every diagnostic is a write, and a write to a standard error that is a full
  * pipe with a reader that is not reading blocks: `SIGPIPE` answers a reader
@@ -2671,8 +2670,8 @@ static void check_pipe_kept(void)
 }
 
 /**
- * Where a death signal may not be served, and that the caller's mask comes back
- * from every one of them.
+ * Check that the death signals are blocked in the two windows where one may
+ * not be served, and that the caller's mask comes back from every call.
  *
  * The lock file becomes this process's when the exclusive create returns, and
  * the state that says so goes in several calls later; the temporary file's name
@@ -2686,17 +2685,17 @@ static void check_pipe_kept(void)
  *
  * Neither window can be entered on demand, so what is checked is the mask that
  * keeps a death out of them, read from inside each one. The caller's mask must
- * also come back, which is the second half of every case here: a library that
- * blocked a signal for the length of a program would be a worse bug than the
- * one it closed. That half is checked on the paths that fail as well as the
- * ones that succeed, since an early return is exactly where a restore is
+ * also come back, which is the second half of every case here, since a library
+ * that blocked a signal for the length of a program would stop the program's
+ * own handling of it. That half is checked on the paths that fail as well as
+ * the ones that succeed, since an early return is where a restore is
  * forgotten: a refused acquire, an acquire that cannot create its lock at all,
  * a replacement that aborts, and the release.
  *
  * The release is here for a third reason. Its unlink and the flush that makes
  * the unlink durable are one step, and a death between them would leave through
  * the registered release, which finds the lock already gone and reports a clean
- * finish, so the flush would be owed to nobody.
+ * finish, and the flush would never be made.
  *
  * The baseline is the mask this program started with, not whatever is in force
  * on arrival. Reading it here would let a leak from an earlier case become the
