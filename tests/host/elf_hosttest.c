@@ -16,12 +16,14 @@
  * read callback. Both loads must retain their own segment geometry and
  * bytes. A position-independent image is read for its layout and
  * interpreter and loaded at a base, and read as an interpreter is, with its
- * own PT_INTERP not read. Exits with the count of failed checks, at most
- * 100.
+ * own PT_INTERP not read. Each failed check prints a line on stderr, and
+ * the test exits with their count, at most 100.
  */
 
 #include "proc/elf.c"
 #include "arch/i686/mmu.h"
+
+extern int dprintf(int fd, const char *format, ...);
 
 static int fails;
 /* Whether `alloc_user_page` was called since the flag was cleared. */
@@ -32,12 +34,13 @@ static int map_frames;
 static unsigned frame_count;
 static unsigned char frames[4][PAGE_SIZE];
 
-/** Count a failure when `cond` is false. */
-#define CHECK(cond)    \
-    do {               \
-        if (!(cond)) { \
-            fails++;   \
-        }              \
+/** Count and print a failure when `cond` is false. */
+#define CHECK(cond)                                                             \
+    do {                                                                        \
+        if (!(cond)) {                                                          \
+            dprintf(2, "elf-hosttest: failed: line %d: %s\n", __LINE__, #cond); \
+            fails++;                                                            \
+        }                                                                       \
     } while (0)
 
 /** Note that allocation was reached and fail it in the rejection rows; with
@@ -315,6 +318,16 @@ static void reentrant_load(void)
     }
 }
 
+/** Count and print a failure, naming the row `row`, unless `elf_check`
+ * accepts the image exactly when `accept` is nonzero. */
+static void check_bound(const char *row, int accept)
+{
+    if (!elf_check(img_buf, img_size) != !accept) {
+        dprintf(2, "elf-hosttest: failed: elf_check: %s\n", row);
+        fails++;
+    }
+}
+
 /**
  * `elf_check` bounds the program header table without wrapping.
  *
@@ -329,22 +342,22 @@ static void header_table_bounds(void)
     base_image(1);
     set_load(0, 0x100u, 0x08048000u, 0x100u, 0x100u, 5u);
     e = (Elf32_Ehdr *)img_buf;
-    CHECK(elf_check(img_buf, img_size));
+    check_bound("one header", 1);
 
     e->e_phoff = 0xfffffff0u;
     e->e_phnum = 1;
-    CHECK(!elf_check(img_buf, img_size));
+    check_bound("offset near 2^32", 0);
 
     e->e_phoff = (uint32_t)sizeof(Elf32_Ehdr);
     e->e_phnum = 0xffffu;
-    CHECK(!elf_check(img_buf, img_size));
+    check_bound("65535 headers", 0);
 
     e->e_phnum = 1;
     e->e_phentsize = 0;
-    CHECK(!elf_check(img_buf, img_size));
+    check_bound("zero e_phentsize", 0);
 
     e->e_phentsize = (uint16_t)sizeof(Elf32_Phdr);
-    CHECK(elf_check(img_buf, img_size));
+    check_bound("one header again", 1);
 }
 
 /** Make program header `i` a PT_INTERP naming `path`, whose bytes, NUL
@@ -538,5 +551,6 @@ int main(void)
     header_table_bounds();
     dynamic_images();
 
+    dprintf(1, "elf-hosttest: result: %s: %d failures\n", fails ? "fail" : "pass", fails);
     return (fails > 100) ? 100 : fails;
 }

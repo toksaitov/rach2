@@ -75,12 +75,14 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# run_phase PHASE zero|nonzero: compile elf_hosttest.c over the copy as
-# $work/PHASE, run it, and exit unless its status is zero or nonzero as asked.
+# run_phase PHASE STATUS MESSAGE...: compile elf_hosttest.c over the copy as
+# $work/PHASE, run it for at most 10 seconds, and exit unless it ends with
+# STATUS and its log contains every MESSAGE.
 run_phase()
 {
     phase=$1
     expected=$2
+    shift 2
     binary="$work/$phase"
     if ! "${CC:-cc}" -std=c99 -g -O1 -ffreestanding -DRACH2_HOSTTEST \
         -fsanitize=address,undefined -fno-sanitize-recover=all \
@@ -90,23 +92,25 @@ run_phase()
         exit 1
     fi
     cksum "$work/proc/elf.c" "$binary" >"$binary.artifacts"
-    "$binary" >"$binary.log" 2>&1 &
+    perl -e 'alarm 10; exec @ARGV or die "elfcheck-mutation: exec: $!\n"' \
+        "$binary" >"$binary.log" 2>&1 &
     child=$!
     status=0
     wait "$child" || status=$?
     child=
+    cat "$binary.log"
+    [ "$status" -eq "$expected" ] || exit 1
+    for message; do
+        grep -Fq "$message" "$binary.log" || exit 1
+    done
     echo "elfcheck-mutation: result: $phase status $status"
-    if [ "$expected" = zero ]; then
-        [ "$status" -eq 0 ] || exit 1
-    else
-        [ "$status" -ne 0 ] || exit 1
-    fi
 }
 
 echo "elfcheck-mutation: logs: $work"
-run_phase fixed zero
+run_phase fixed 0 'elf-hosttest: result: pass: 0 failures'
 apply_fault "$work"
-run_phase wrapping-sum nonzero
+run_phase wrapping-sum 2 'elf-hosttest: failed: elf_check: offset near 2^32' \
+    'elf-hosttest: failed: elf_check: zero e_phentsize'
 restore
-run_phase restored zero
+run_phase restored 0 'elf-hosttest: result: pass: 0 failures'
 cmp "$work/elf.saved" "$work/proc/elf.c"
