@@ -41,6 +41,7 @@
 #define O_RDWR    2
 #define O_CREAT   0100
 #define O_TRUNC   01000
+#define O_APPEND  02000
 
 /* ioctl request codes */
 #define KIOCSOUND     0x4B2F
@@ -1004,7 +1005,7 @@ FILE *fopen(const char *path, const char *mode)
     int fd;
 
     if (mode[0] == 'w') flags = O_WRONLY | O_CREAT | O_TRUNC;
-    else if (mode[0] == 'a') flags = O_WRONLY | O_CREAT;
+    else if (mode[0] == 'a') flags = O_WRONLY | O_CREAT | O_APPEND;
     else if (mode[0] == 'r' && mode[1] == '+') flags = O_RDWR;
 
     fd = open(path, flags, 0666);
