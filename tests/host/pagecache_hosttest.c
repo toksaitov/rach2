@@ -1,18 +1,22 @@
 /**
- * Dual-target host test for the page-cache bookkeeping (mm/pagecache.c).
+ * pagecache_hosttest.c: the bookkeeping of the page cache,
+ * rach2/sys/mm/pagecache.c, over a model disk of 64 pages.
  *
  * host-deps:
  *
- * Built with PAGECACHE_HOSTTEST and PC_SLOTS=4, which includes pagecache.c
- * directly (so the static hash, clock, and eviction logic are reachable) and
- * swaps the frame/mapping layer for static pages. A fake array stands in for
- * the disk: a fault must fill the right page once, a re-touch within
- * residency must hit (not re-read), an eviction must write back iff dirty,
- * and a dirty page thrashed out and re-read must come back with its bytes
- * intact. The writer models a sleep while another cache operation runs.
- * pagecache_mutate.sh also extracts and compiles the production sys_sync
- * for the bounded busy wait and failure rows, with controlled tick and
- * scheduling stubs. Return 0 when every check passes, or 1 on failure.
+ * Built with PAGECACHE_HOSTTEST and PC_SLOTS=4, it includes pagecache.c
+ * whole, so the static hash, clock and eviction code are reachable, and the
+ * frame and mapping layer is replaced by static pages. An array stands in
+ * for the disk: a fault must fill the right page once, a second touch while
+ * the page is resident must hit without a read, an eviction must write back
+ * only a dirty page, and a dirty page evicted and read again must come back
+ * with its bytes. The writer can sleep while another cache operation runs.
+ *
+ * Compiled with PAGECACHE_SYNC_HOSTTEST as well, as pagecache_mutate.sh
+ * compiles it, the test also runs `sys_sync`, which the script extracts
+ * from rach2/sys/syscall_fs.c into syscall_sync.inc, with the clock tick
+ * and the scheduler replaced, for the rows of its bounded wait and its
+ * failures.
  */
 #define PAGECACHE_HOSTTEST
 #define PC_SLOTS 4u
@@ -25,6 +29,7 @@ void k_panic(const char *s);
 
 extern int dprintf(int fd, const char *format, ...);
 
+/** The kernel's panic: stop the test with a trap. */
 void k_panic(const char *s)
 {
     (void)s;
@@ -41,21 +46,23 @@ static int fails;
         }                                                          \
     } while (0)
 
-/* A fake disk of 64 pages, with per-page read/write counters so the test can
-   assert the access pattern, not just the final bytes. */
+/* A model disk of 64 pages, with read and write counts for each page, so the
+   rows check the pattern of access as well as the final bytes. */
 #define FAKE_PAGES 64u
 static uint8_t fake_disk[FAKE_PAGES][PC_PAGE_SIZE];
 static uint32_t fake_reads[FAKE_PAGES];
-static uint32_t fake_writes[FAKE_PAGES];
-static uint32_t fake_attempts[FAKE_PAGES];
+static uint32_t fake_writes[FAKE_PAGES];   /* writes that stored their page */
+static uint32_t fake_attempts[FAKE_PAGES]; /* writes, failed ones included */
 static void (*fake_write_pause)(uint32_t disk_off, const void *page);
 
-/* Fault injection for the writeback paths: fail one page's writes, or all of
-   them, so the retain-on-failure machinery can be exercised. */
+/* The faults of the writeback paths: fail one page's writes, or all of them,
+   so the rows reach the code that keeps a page whose write failed. */
 #define FAKE_NO_FAIL 0xFFFFFFFFu
 static uint32_t fake_write_fail = FAKE_NO_FAIL;
 static int fake_write_fail_all;
 
+/** The backing's read: copy the page at `disk_off` into `page`, counting
+ *  the read. Returns 0, or -1 past the disk. */
 static int fake_read(uint32_t disk_off, void *page)
 {
     uint32_t p = disk_off / PC_PAGE_SIZE;
@@ -71,10 +78,13 @@ static int fake_read(uint32_t disk_off, void *page)
 }
 
 /**
- * Sample a page, then suspend before returning the write status.
+ * The backing's write: store `page` at `disk_off` unless a fault fails it,
+ * then call `fake_write_pause` before returning the status. Returns 0, or -1
+ * for a failed write and past the disk.
  *
- * The callback models another process running during a sleeping write.
- * Clear it before entry so competing writebacks cannot recurse forever.
+ * The pause stands for another process running during a sleeping write. It
+ * is cleared before it is called, so a writeback it starts does not pause
+ * again and the calls cannot recurse without end.
  */
 static int fake_write(uint32_t disk_off, const void *page)
 {
@@ -102,9 +112,9 @@ static int fake_write(uint32_t disk_off, const void *page)
     return failed ? -1 : 0;
 }
 
-/* Stand in for the CPU touching window page `p`: fault it (read or write), and
-   on a write scribble `marker` into the cached bytes, as a store through the
-   window would. */
+/** Stand in for the CPU touching window page `p`: fault it, for a read or
+ *  a write, and on a write store `marker` in the cached page's first byte,
+ *  as a store through the window would. */
 static void touch(uint32_t p, int write, uint8_t marker)
 {
     uint32_t va = PCWIN_BASE + p * PC_PAGE_SIZE;
@@ -118,6 +128,9 @@ static void touch(uint32_t p, int write, uint8_t marker)
     }
 }
 
+/* What runs while a writeback of page 0 sleeps: a reclaim, a miss that
+   could reuse the slot, a sync of the clean or the redirtied page, and an
+   eviction of the redirtied page. */
 enum write_race {
     RACE_RECLAIM,
     RACE_REUSE,
@@ -227,24 +240,28 @@ static volatile uint32_t kernel_ticks;
 static uint32_t sync_waits;
 static uint32_t sync_yields;
 static uint32_t sync_mounts;
-static uint32_t sync_release;
+static uint32_t sync_release; /* the wait that ends the competing write */
 
-/* No file is mapped shared here, so the mapped pages have nothing to give
- * the cache. */
+/** No file is mapped shared here, so the mapped pages have nothing to give
+ *  the cache. */
 static void filemap_sync_all(void)
 {}
 
+/** Count the sync of the mounts. */
 static void vfs_sync_all(void)
 {
     ++sync_mounts;
 }
 
+/** Count a yield to the scheduler. */
 void schedule(void)
 {
     ++sync_yields;
 }
 
-/** Complete the competing write only after the caller has waited. */
+/** Wait a tick; at wait number `sync_release` complete the competing write,
+ *  redirtying page 0 and unpinning its slot, so it ends only after the
+ *  caller has waited. */
 void idle_wait_irq_on(void)
 {
     ++kernel_ticks;
@@ -258,11 +275,14 @@ void idle_wait_irq_on(void)
 #include "syscall_sync.inc"
 
 /**
- * Run the actual syscall with a busy page, a failed write, or both.
+ * Run the kernel's `sys_sync` with a busy page, a failed write, or both,
+ * and with a busy page that is never released.
  *
  * A busy page starts clean, as it does during writeback, then becomes dirty
- * before the writer releases it. A stuck slot must stop at the tick bound,
- * including across counter wrap. Failure alone must return without waiting.
+ * before the writer releases it, and the sync must write it. A stuck slot
+ * must stop the wait at its bound of 3000 ticks, the tick count wrapping on
+ * the way. A failure alone must return without waiting, and a later sync
+ * writes the failed page.
  */
 static void test_sync_wait(void)
 {
@@ -317,6 +337,32 @@ static void test_sync_wait(void)
 }
 #endif
 
+/**
+ * Run the rows, on a cache of four slots over the model disk, each page of
+ * which has its number in its first byte. Returns 0 when every check passed
+ * and 1 otherwise.
+ *
+ * - A read fault fills its page once and a second touch is a hit; the
+ *   cached bytes are the disk's; a fault past the file system's size is
+ *   refused, as for a wild pointer.
+ * - Four pages fit the cache, and a fifth evicts a clean page with no
+ *   writeback.
+ * - Pages 0 to 7 are written, pages 8 to 31 read, far past the cache's four
+ *   slots, and pages 0 to 7 read again: each written page was written back
+ *   once and reads back its marker, and no page only read is written.
+ * - `pc_sync` writes back a dirty page and protects it again, so a second
+ *   sync with no store between writes nothing.
+ * - A failed writeback never drops a dirty page: a sync reports it and the
+ *   page stays dirty, and a later sync writes its bytes.
+ * - A shrink whose writebacks all fail is reported by `pc_set_capacity`,
+ *   which keeps the capacity over the four dirty slots, so a reclaim, and
+ *   not only a sync, which scans every slot, can still reach them. Reads far
+ *   past one slot then write each of the four through the reclaim alone; had
+ *   the capacity fallen to one, slots 1 to 3 would be out of its reach and
+ *   never written.
+ * - `test_sleeping_writeback`, and with PAGECACHE_SYNC_HOSTTEST
+ *   `test_sync_wait`.
+ */
 int main(void)
 {
     uint32_t p;
@@ -332,8 +378,6 @@ int main(void)
     init_pagecache();
     pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
 
-    /* A read fault fills its page once; a re-touch within residency is a
-     * hit. */
     touch(0, 0, 0);
     CHECK(fake_reads[0] == 1);
     CHECK(pc_stat_reads() == 1);
@@ -341,17 +385,13 @@ int main(void)
     CHECK(fake_reads[0] == 1);
     CHECK(pc_stat_reads() == 1);
 
-    /* The cached bytes match the backing. */
     {
         uint8_t *pg = (uint8_t *)pc_test_page(0);
         CHECK(pg != 0 && pg[0] == 0);
     }
 
-    /* A fault past offset 0..fs_size is refused (a wild pointer). */
     CHECK(pc_fault(PCWIN_BASE + FAKE_PAGES * PC_PAGE_SIZE, 0) == 0);
 
-    /* Filling four distinct pages fits the cache; the fifth evicts a clean page
-       with no writeback. */
     touch(1, 0, 0);
     touch(2, 0, 0);
     touch(3, 0, 0);
@@ -360,11 +400,6 @@ int main(void)
     CHECK(pc_stat_evictions() == 1);
     CHECK(pc_stat_writebacks() == 0);
 
-    /* The eviction probe: write a distinct marker to pages 0..7, thrash the
-       cache by reading pages 8..31 (a working set far past the 4-frame
-       capacity), then re-read 0..7. Each dirty page must have been written back
-       and must read back with its marker; the clean pages must never be
-       written. */
     for (p = 0; p < 8; ++p) {
         touch(p, 1, (uint8_t)(0x80u + p));
     }
@@ -383,8 +418,6 @@ int main(void)
         CHECK(fake_writes[p] == 0);
     }
 
-    /* pc_sync writes back a dirty page and re-protects it, so a second sync
-     * with no new write does nothing. */
     touch(40, 1, 0xBBu);
     pc_sync();
     CHECK(fake_writes[40] == 1);
@@ -395,9 +428,6 @@ int main(void)
         CHECK(pc_stat_writebacks() == wb);
     }
 
-    /* Writeback-failure paths: a failed disk write must never drop a dirty
-       page. A failed writeback on sync is reported and the page stays dirty;
-       once the disk recovers, a later sync flushes it with its bytes intact. */
     init_pagecache();
     pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
     touch(20, 1, 0xC0u);
@@ -408,10 +438,6 @@ int main(void)
     CHECK(pc_sync() == 0);
     CHECK(fake_disk[20][0] == 0xC0u);
 
-    /* A shrink whose writebacks all fail is reported by pc_set_capacity, which
-       must keep the capacity covering the stuck dirty frames so the RECLAIM
-       path (not just sync, which scans every slot) can still reach them. Four
-       dirty pages fill the four-frame cache with no eviction. */
     init_pagecache();
     pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
     touch(21, 1, 0xC1u);
@@ -420,14 +446,8 @@ int main(void)
     touch(24, 1, 0xC4u);
     fake_write_fail_all = 1;
     CHECK(pc_set_capacity(1) == -1);
-    /* the failed writes did not land */
     CHECK(fake_writes[21] == 0 && fake_writes[24] == 0);
     fake_write_fail_all = 0;
-    /* Drive a working set far past one frame: only if the four stuck frames
-       stayed inside the capacity can eviction reach and flush them. Had
-       capacity collapsed to 1, slots 1..3 would be unreachable here and never
-       written. No pc_sync: this proves the retain invariant through the reclaim
-       path alone. */
     for (p = 30; p < 40; ++p) {
         touch(p, 0, 0);
     }
