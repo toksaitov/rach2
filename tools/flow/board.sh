@@ -5,7 +5,7 @@
 # Usage: board.sh next
 #        board.sh take N [GROUP]
 #        board.sh mine N
-#        board.sh release N [STATUS]
+#        board.sh release N [STATUS|owner]
 #        board.sh ready AFTER N...
 #        board.sh order N...
 #        board.sh group TITLE N...
@@ -40,9 +40,11 @@
 #
 # `release N [STATUS]` hands N back: it sets STATUS, Ready unless given, then
 # unassigns this account and removes the label `grouped`, so that N returns to
-# the queue as an issue of its own. A step that fails exits 1 with N still
-# assigned to this account, so that its worker keeps it and can release it
-# again.
+# the queue as an issue of its own. `release N owner` sets Backlog and adds
+# the label `owner`, which marks a decision that AGENTS.md gives the owner and
+# that the manager sends to the owner's phone. A step that fails exits 1 with
+# N still assigned to this account, so that its worker keeps it and can
+# release it again.
 #
 # `ready AFTER N...` moves each N after AFTER on the board, the first N after
 # AFTER and each later one after the one before, and then sets it Ready, so
@@ -257,13 +259,17 @@ mine()
 release()
 {
     me=$(gh api user --jq .login)
-    if ! set_status "$1" "$2"; then
-        echo "board: #$1: cannot set it $2; it is still assigned to $me" >&2
+    status=$2 label=
+    if [ "$status" = owner ]; then
+        status=Backlog label=owner
+    fi
+    if ! set_status "$1" "$status"; then
+        echo "board: #$1: cannot set it $status; it is still assigned to $me" >&2
         exit 1
     fi
     if ! gh issue edit "$1" --repo "$REPO" --remove-assignee "$me" \
-        --remove-label grouped > /dev/null; then
-        echo "board: #$1: set $2, but cannot unassign $me; release it again" >&2
+        --remove-label grouped ${label:+--add-label "$label"} > /dev/null; then
+        echo "board: #$1: set $status, but cannot unassign $me; release it again" >&2
         exit 1
     fi
 }
