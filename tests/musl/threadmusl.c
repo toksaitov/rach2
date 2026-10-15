@@ -868,6 +868,9 @@ static int lost_status_row(void)
     for (i = 0; i < 500 && !(waiter_tid && sleeping(waiter_tid)); i++) {
         usleep(10000);
     }
+    if (i == 500) {
+        return fail("the wait was never seen asleep before its status page went");
+    }
     if (munmap(status_page, 4096) != 0 || write(p[1], "x", 1) != 1 ||
         pthread_join(t, &result) != 0 || (long)result != EFAULT) {
         return fail("a wait whose status page went while it slept did not fail with EFAULT");
