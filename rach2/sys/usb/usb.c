@@ -410,7 +410,7 @@ int usb_init(void)
         if (refuse || xhci_read_caps(hc) != 0 || xhci_own(hc) != 0 || xhci_halt_reset(hc) != 0 ||
             xhci_scratchpads(hc) != 0 || xhci_start(hc) != 0) {
             if (refuse) {
-                klog(KLOG_WARN, "usb", "refused: xhci%d: rach2.hcfail=%d", n, n);
+                klog(KLOG_WARN, "usb", "refused: xhci%d: rach2.hcfail=%d", n, seen - 1);
             } else {
                 klog(KLOG_WARN, "usb", "refused: xhci%d: %s", n, xhci_error(hc));
             }
