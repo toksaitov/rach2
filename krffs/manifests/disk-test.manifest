@@ -1,32 +1,35 @@
-# Disk-integrity test image: the blockprobe on a real-disk KRFFS.
+# The disk of `tests/run disk` and of the other suites that boot a KRFFS root
+# on disk: probes the kernel's debug shell runs from it.
 #
-# Built into a partitioned disk by mkdisk.sh and booted with rach2.fsdisk +
-# rach2.rescue, so the kernel mounts KRFFS from the disk through the page cache
-# and the debug shell runs `exec /blockprobe`. blockprobe writes several files
-# whose combined size exceeds the resident cache, fsyncs, reads them back, and
-# checks every byte; its "BLOCKPROBE OK" token on the serial is the test result.
+# mkdisk.sh builds it, and a suite boots it with rach2.fsdisk and
+# rach2.rescue, so the kernel mounts the KRFFS from the disk through the page
+# cache. In `tests/run disk` the debug shell runs `exec /blockprobe`, which
+# writes files larger together than the page cache, syncs them, and reads
+# every byte back; its "BLOCKPROBE OK" on the serial line is the result.
+# ahciprobe is the queue suite's, and lagprobe that of the mount, fatwrite
+# and exfat suites.
 file 0755 /blockprobe build/tests/blockprobe
 file 0755 /ahciprobe build/tests/ahciprobe
 
-# And procprobe, which `tests/run procfiles` runs from the same rescue shell:
-# /proc/mounts must name the disk on a boot that mounted one, and this is the
-# only image here that does.
+# procprobe, which `tests/run procfiles` runs from the debug shell on the boot
+# whose root is this disk, to check that /proc/mounts lists the disk.
 file 0755 /procprobe build/tests/procprobe
 
-# The same disk carries dirtyprobe, which `tests/run crash` runs from the same
-# rescue shell. It proves no set-id clear reaches the root node, whose spare
-# mode bit is the dirty-mount flag, and that claim needs a disk: the flag is
-# never set on the RAM mount, and stat reports the root with a fixed mode. The
-# probe syncs after every attempt so a spurious clear reaches the platter, and
-# the offline fsck after the kill is what reads the verdict.
+# dirtyprobe, which `tests/run crash` runs from the debug shell. It checks
+# that no clearing of the set-id bits reaches the root node, whose spare mode
+# bit is the dirty-mount flag, which needs a disk: the flag is never set on
+# the RAM mount, and stat reports the root with a fixed mode. The probe syncs
+# after every attempt, so that a wrong clear reaches the disk, and the suite
+# judges the image with fsck.krffs after it kills the machine.
 file 0755 /dirtyprobe build/tests/dirtyprobe
 
-# bootprobe proves /proc/cmdline and the two raw disk windows. `make
-# bootpart-test` boots this disk three times: once as built (one KRFFS
-# partition, so /dev/bootpart must be absent); once with the MBR rewritten by
-# tests/system/fixtures/mkbootfixture.py to add a FAT-typed partition of known bytes, where the
-# device must carry them; and once mounting a RAM image instead of the disk,
-# where both /dev/bootpart and /dev/grubcore must be present anyway.
+# bootprobe checks /proc/cmdline and the two raw disk devices. `tests/run
+# bootpart` boots this disk three times: as built, with one KRFFS partition,
+# where /dev/bootpart must be absent; with a FAT partition of known bytes that
+# tests/system/fixtures/mkfixture.c adds to the MBR, where the device must
+# read those bytes; and with a RAM root in place of the disk, where both
+# /dev/bootpart and /dev/grubcore must be present. fdstale is the fdlock
+# suite's, which runs bootprobe too.
 file 0755 /bootprobe build/tests/bootprobe
 file 0755 /fdstale build/tests/fdstale
 file 0755 /lagprobe build/tests/lagprobe

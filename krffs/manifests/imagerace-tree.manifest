@@ -1,4 +1,4 @@
-# The tree `tests/run imagerace` builds for itself: the programs of one
-# directory, staged to prove that a changed source reaches the image through
-# exactly its target, and that the directory is judged by the programs in it.
+# The second image of `tests/run imagerace`: the programs of one directory
+# the suite makes, staged to check that a changed program restages the image
+# and that a file made beside the programs does not.
 exec-dir 0755 / build/tests/system/imagerace.tree/bin

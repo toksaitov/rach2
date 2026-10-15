@@ -1,33 +1,33 @@
-# The metal profile: the image the Lenovo G50-70 boots from a USB stick.
+# rach2-metal.manifest: the RAM root of the metal kernel, which the Lenovo
+# G50-70 boots from a USB stick.
 #
-# The machine has no USB driver of its own, so whatever GRUB loads as the boot
-# module IS the machine: nothing persists, and every byte here costs RAM under
-# the kernel's 32 MiB direct map. So this profile carries what a bring-up needs
-# and nothing else: a shell, an SSH server, the account files, and the keys.
+# The metal kernel is built read-only at the disk, so the module GRUB loads
+# is the whole system: nothing written to it survives a reboot, and every
+# byte here takes RAM. So the image has what bringing up a machine needs and
+# nothing else: a shell, an SSH server, the account files and the keys.
 #
-# What os-real has and this does not, each for the same reason (it cannot be
-# used on a machine with no writable disk, or it is not needed to bring the
-# hardware up): the compiler and its sysroot, pdpmake, the /src trees, Doom,
-# and bootctl, which writes a boot partition this profile never has.
+# What os-real has and this does not, each because a machine with no
+# writable disk cannot use it or bringing up the hardware does not need it:
+# the compiler and its system root, pdpmake, the /src trees, Doom, and
+# bootctl, which writes a boot partition this system does not have.
 #
-# The account files are os-real's, so one password opens either image, and the
-# authorized keys are the same pair the SSH capstone uses.
+# The account files are os-real's, so one password opens either image, and
+# so are the authorized keys.
 
 dir 0755 /bin
 file 0755 /bin/audiotest build/utils/audiotest
 file 0755 /bin/busybox build/vendor/busybox/busybox
 file 0755 /bin/sh build/vendor/busybox/busybox
 
-# The three applets that need the set-id bit come from busybox's second build,
-# which holds only login, passwd and su, exactly as os-real stages them.
+# The three applets that need the set-id bit come from BusyBox's second
+# build, which has only login, passwd and su, as in os-real.
 file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid
 file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid
 file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid
 
 file 0755 /bin/ping build/utils/ping
-# The boot log, under the name a person expects. This machine has no
-# console to watch it scroll past, so reading it afterwards is the only
-# way to see it; `klogctl` does not exist here, and the log is a device.
+# dmesg, which prints the kernel's log from /dev/bootlog
+# (krffs/dmesg.script).
 file 0755 /bin/dmesg krffs/dmesg.script
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 # Attaches a file to a loop device so a file system in a file can be mounted
@@ -49,23 +49,18 @@ text 0644 /etc/group root:x:0:\ntest:x:1000:\n
 text 0644 /etc/shells /bin/sh\n
 dir 0755 /etc/rach2
 text 0644 /etc/rach2/limits # The limits every session starts with: a name, the soft value and the\n# hard one; unlimited for none. Root may raise them.\nnproc 256 512\nnofile 1024 1024\nas unlimited unlimited\n
-# The stub resolver reads these two (utils/resolv.c). Without them a name is
-# unresolvable and only numeric addresses work, which is what the first LAN
-# session found. The nameserver is the one this LAN's router hands out rather
-# than the router itself, because that router forwards nothing: it gives
-# clients Cloudflare's resolvers, and a machine that assumed the gateway would
-# answer would fail for a reason nobody could see. The resolver reads the first
-# `nameserver` line; the second is here for a reader, not for the code.
-# Numeric addresses never touch this file.
+# The resolvers the image starts with, which a DHCP lease replaces
+# (krffs/udhcpc-default.script). They are public ones and not the gateway,
+# since a router need not answer queries itself. utils/resolv.c reads the
+# first `nameserver` line, and musl's resolver up to three.
 text 0644 /etc/resolv.conf nameserver 1.1.1.1\nnameserver 1.0.0.1\n
 text 0644 /etc/hosts 127.0.0.1 localhost\n
 text 0644 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOME:-/root}"\ncd "$HOME"\n
 
-# The network configuration `ifup -a` reads, in the file Debian put it in and
-# busybox's ifup expects. `dhcp` is what the sealed machine carries: it comes up
-# wherever it is plugged in, which is the whole reason DHCP is here. A static
-# stanza is the other half of the same file and is what a machine with a fixed
-# address would say instead.
+# The network configuration `ifup -a` reads, in the file where Debian keeps
+# it and BusyBox's ifup reads it. `dhcp` brings the machine up on whatever
+# network it is plugged into; a `static` stanza in the same file would give
+# it a fixed address instead.
 dir 0755 /etc/network
 text 0644 /etc/network/interfaces auto eth0\niface eth0 inet dhcp\n
 
@@ -77,18 +72,18 @@ dir 0755 /etc/network/if-up.d
 dir 0755 /etc/network/if-down.d
 dir 0755 /etc/network/if-post-down.d
 
-# The script udhcpc runs when a lease arrives or ends. udhcpc learns the lease
-# and this turns it into an address, a route and a resolver.
-# /var/run: where `ifup` records which interfaces it has brought up. It writes
-# the file through a temporary beside it, so the directory must be there.
 dir 0755 /var
 # Where init puts what its services print, once the console is the login's.
 dir 0755 /var/log
+# Where `ifup` records the interfaces it has brought up. It writes the file
+# through a temporary beside it, so the directory must exist.
 dir 0755 /var/run
 
 dir 0755 /usr
 dir 0755 /usr/share
 dir 0755 /usr/share/udhcpc
+# The script udhcpc runs when a lease arrives or ends, which turns the lease
+# into an address, a route and a resolver.
 file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
 
 dir 0755 /root

@@ -1,7 +1,8 @@
-# fsync durability test image: persistprobe on a real-disk KRFFS.
+# The disk of `tests/run persist` and `persist-ahci`: persistprobe on a KRFFS
+# root on disk.
 #
-# Built into a partitioned disk by mkdisk.sh and booted twice against one scratch
-# copy with rach2.fsdisk + rach2.rescue. The first boot writes and fsyncs
-# /persist.txt; the second reads it back, proving fsync pushed the write through
+# mkdisk.sh builds it, and the suite boots it twice with rach2.fsdisk and
+# rach2.rescue. The first boot writes /persist.txt and calls fsync; the
+# second reads the file back, which shows that fsync took the write through
 # the page cache to the disk.
 file 0755 /persistprobe build/tests/persistprobe

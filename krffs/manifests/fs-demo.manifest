@@ -1,1 +1,3 @@
+# The KRFFS and ext2 demonstration volumes, krffs.img and ext2.img in the
+# sealed disk's /demo: one file, hello.txt.
 file 0644 /hello.txt krffs/demo/hello.txt

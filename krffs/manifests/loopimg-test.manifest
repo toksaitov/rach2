@@ -1,6 +1,6 @@
 # The KRFFS image `tests/run loopdev` mounts through a loop device: one file
-# whose bytes the probe knows, and one of whole sectors for the row that asks
-# for a device standing on a device. The suite writes both before it builds
-# the image.
+# whose bytes the probe knows, and one of whole sectors, which the probe tries
+# to attach to a second loop device and must be refused. The suite writes
+# both before it builds the image.
 file 0644 /hello.txt build/tests/system/loopimg/hello.txt
 file 0644 /inner.bin build/tests/system/loopimg/inner.bin

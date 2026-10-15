@@ -1,42 +1,42 @@
-# os-real.manifest: a real Unix-like environment.
+# os-real.manifest: the system built on BusyBox, with Dropbear, TinyCC,
+# pdpmake, the manual and the sources.
 #
-# busybox is the shell and the coreutils: its standalone ash dispatches the applets
-# in-process (KRFFS has no symlinks, so there are no /bin/<applet> links). dropbear
-# is the SSH server and client. /etc is a real login + name-resolution config, /root
-# is the home directory, and Doom is staged when it and its WAD are present. Host
-# paths are relative to the repo root (mkimage.sh cd's there).
+# BusyBox is the shell and the utilities: its standalone ash runs an applet
+# in its own process, so there are no /bin/APPLET links, which KRFFS could
+# not hold. Dropbear is the SSH server and client. /etc has the account and
+# name-resolution files, /root is root's home, and Doom is staged when it
+# and its WAD are present. Host paths are relative to the repository root,
+# where the image scripts run.
 
-# /bin: the shell and the programs. busybox is staged at /bin/busybox (its compiled
-# exec path, which standalone ash re-execs) and at /bin/sh (the login shell that
-# /sbin/init forks and dropbear runs). dropbearmulti dispatches the server, the
-# client, and keygen on argv[1]: dropbearmulti {dropbear,dbclient,dropbearkey}.
+# /bin: the shell and the programs. BusyBox is staged at /bin/busybox, the
+# path compiled into it, which standalone ash runs again for an applet, and
+# at /bin/sh, the accounts' login shell, which Dropbear runs too.
+# dropbearmulti runs the server, the client or the key maker by its first
+# argument: dropbearmulti {dropbear,dbclient,dropbearkey}.
 dir 0755 /bin
 file 0755 /bin/audiotest build/utils/audiotest
-# This busybox stays unprivileged. A setuid one would run every one of its
-# BB_SUID_REQUIRE and BB_SUID_MAYBE applets as root unless a config file
-# confined it, and that config path tripped a busybox use-after-free the
-# kernel's strict munmap faults (dev-log/15-privilege has the story). The answer
-# is busybox's own: two binaries, and the set-id bit on the one that needs it.
-# `su`, `passwd` and `login` are compiled out of THIS build, so a bare `su`
-# resolves to the set-id build staged below and to nothing else.
+# This BusyBox has no set-id bit. A set-user-ID BusyBox would run each of
+# its BB_SUID_REQUIRE and BB_SUID_MAYBE applets as root unless a
+# configuration file confined it, so there are two binaries, as BusyBox
+# provides for, and the set-id bit is on the one that needs it. `su`,
+# `passwd` and `login` are compiled out of this one, so a bare `su` finds the
+# set-id build staged below and nothing else.
 file 0755 /bin/busybox build/vendor/busybox/busybox
 file 0755 /bin/sh build/vendor/busybox/busybox
-# The account tools are busybox's, from the second build: one binary holding
-# only login, passwd and su, staged three times under those names because KRFFS
-# has no symlinks and busybox dispatches on argv[0]. It carries the set-id bit
-# and the main busybox does not, which is the whole reason there are two.
+# The account programs are BusyBox's, from the second build: one binary with
+# only login, passwd and su, staged under the three names, since KRFFS has no
+# symbolic links and BusyBox chooses the applet by argv[0]. It has the set-id
+# bit, and the main BusyBox does not.
 file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid
 file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid
 file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid
-# Ours, and reachable as a bare `ping` only because busybox's applet is gone:
-# that one opens a raw socket, which is root's here, and this one asks the
-# kernel to ping instead, so any account can run it.
+# The project's ping, which a bare `ping` finds because BusyBox's applet is
+# not built: that one opens a raw socket, which only root may open here, and
+# this one asks the kernel to send the echo, so any account can run it.
 file 0755 /bin/ping build/utils/ping
-# The boot log, under the name a person expects. Linux's `dmesg` reads a ring
-# buffer through `klogctl`, which this kernel does not have; the log here is
-# `/dev/bootlog`, a device root can read, so this script prints that. busybox's
-# applet is off for the same reason, and it would answer before this file if it
-# were not.
+# dmesg, which prints the kernel's log from `/dev/bootlog`, a device root can
+# read (krffs/dmesg.script). BusyBox's applet is turned off; the shell would
+# run it in place of this file if it were not.
 file 0755 /bin/dmesg krffs/dmesg.script
 file 0755 /bin/man krffs/man.script
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
@@ -45,20 +45,19 @@ file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 file 0755 /bin/loopctl build/utils/loopctl
 optional-file 0755 /bin/doom build/ports/doom/doom
 
-# The compiler, and the sysroot it looks in when it runs. /bin/tcc is an
-# ordinary program: nothing here execs it as root, so it is not in the guard's
-# trusted list the way /bin/sh and /bin/login are. What it needs is the parts of
-# a C toolchain that live outside the compiler: musl's headers and library, the
-# startup objects, and tcc's own runtime and headers. Those paths are not a
-# choice made here; they were baked into the binary at configure time
-# (vendor/tcc/Readme.md), and /lib/tcc/include comes BEFORE /include because
-# musl expects the compiler to provide stdarg.h and friends.
+# The compiler, and the system root it reads when it runs. /bin/tcc is an
+# ordinary program: nothing here runs it as root, so it is not in the set-id
+# guard's list of trusted paths, as /bin/sh and /bin/login are. It needs the
+# parts of a C toolchain outside the compiler: musl's headers and library,
+# the startup objects, and tcc's own runtime and headers. Their paths are
+# compiled into tcc by its configure (vendor/tcc/Readme.md), and
+# /lib/tcc/include is searched before /include, since musl expects the
+# compiler to provide stdarg.h and the other headers of the compiler.
 file 0755 /bin/tcc build/vendor/tcc/tcc
-# The same compiler under the name a makefile's built-in rules reach for. KRFFS
-# has no symlinks, so it is staged twice, the way the account tools are.
+# The same compiler under the name a makefile's built-in rules use. KRFFS has
+# no symbolic links, so it is staged twice, as the account programs are.
 file 0755 /bin/cc build/vendor/tcc/tcc
-# And the make that drives them, which is what turns a pile of commands into a
-# build (vendor/pdpmake/Readme.md).
+# pdpmake, as make (vendor/pdpmake/Readme.md).
 file 0755 /bin/make build/vendor/pdpmake/make
 dir 0755 /lib
 dir 0755 /lib/tcc
@@ -70,18 +69,18 @@ file 0644 /lib/crti.o vendor/musl/install/lib/crti.o
 file 0644 /lib/crtn.o vendor/musl/install/lib/crtn.o
 tree 0644 /include vendor/musl/install/include
 
-# The source of this project's own tools, staged so the machine can build them.
-# A student who changes one of these and compiles it has the shortest possible
-# loop between reading a program and running their version of it.
+# The sources of the project's utilities, staged so that the machine can
+# build them, and a student can change a program and run the changed one on
+# the machine.
 tree 0644 /src/utils utils
 
-# The kernel's and the shell's sources too, each tree carrying the guest.mk
-# that pdpmake reads, so the machine can rebuild its own kernel and shell
-# (tests/run selfbuild proves both from a copy of these trees). /src is
-# root-owned, read-only source media: root builds in place, every other
-# account copies its tree home first. The dir
-# lines write down the modes of the directories the trusted files sit under,
-# which the set-id sweep requires of every path root reads through.
+# The kernel's and the shell's sources, each tree with the guest.mk that
+# pdpmake reads, so that the machine can build its own kernel and shell
+# (`tests/run selfbuild` builds both). /src is root's and read-only to every
+# other account: root builds in place, and another account copies a tree to
+# its home first. The dir lines give the modes of the directories above the
+# trusted files, which the set-id sweep requires for every path root reads
+# through.
 dir 0755 /src
 dir 0755 /src/utils
 dir 0755 /src/rach2
@@ -90,37 +89,37 @@ dir 0755 /src/ish
 tree 0644 /src/rach2 rach2
 tree 0644 /src/ish ish
 
-# /sbin/init (PID 1): the kernel boots it; it forks a session child that execs
-# /bin/login and nothing else, so the console is behind a password. This is the
-# init-login artifact: the one built with the shell table compiled out, so an
-# image missing /bin/login refuses rather than falling back to a root shell.
-# The way back into a broken image is booting with rach2.rescue. init reaps
-# orphans too, so the shells dropbear forks per SSH session never leak once the
-# session closes, and /bin/login execs the account's shell (/bin/sh) in place
-# after the identity drop.
+# /sbin/init, process 1, which the kernel starts: it forks a session child
+# that runs /bin/login and nothing else, so the console is behind a password.
+# It is init-login, built with the shell table compiled out, so an image
+# without /bin/login refuses rather than falling back to a root shell. A
+# boot with rach2.rescue is the way back into a broken image. init also reaps
+# orphans, so the shells Dropbear forks for SSH sessions do not remain after
+# a session closes, and /bin/login runs the account's shell, /bin/sh, in its
+# own process once it has changed to the account's identity.
 dir 0755 /sbin
 file 0755 /sbin/init build/utils/sbin/init-login
 # mke2fs makes an ext2 volume in a file, which a loop device then mounts,
-# since this kernel writes no disk node.
+# since the kernel's disk nodes refuse writes outside a recovery build.
 file 0755 /bin/mke2fs build/vendor/e2fsprogs/mke2fs
 # The periodic sync init keeps running: sleep thirty seconds, sync(2), for ever.
 file 0755 /bin/update build/utils/update
 
-# bootctl puts a machine-built kernel into the boot partition's
-# candidate slot as a one-boot trial (dev-log/23-install/plan.md). It is
-# root-only by its device: /dev/bootpart is mode 0600, so no set-id bit here.
+# bootctl puts a kernel the machine built into the boot partition's
+# candidate slot for one trial boot (bootctl(8)). Only root can use it, since
+# /dev/bootpart is 0600, so it has no set-id bit.
 file 0755 /bin/bootctl build/utils/sbin/bootctl
 
-# /etc: a real login + name-resolution config. dropbear reads passwd and validates
-# the login shell against shells; busybox ash reads profile on a login shell. The
-# shadow file holds the real $6$ hashes (generated by krffs/gen_demo_password.sh
-# when absent), kept 0600 root so the permission bits deny it to everyone else;
-# passwd keeps world-readable x fields, which is what the split shadow exists
-# for.
-# A file to read on a fresh system, the same one the sealed disk carries.
+# A file to read on a fresh system, the one the sealed disk has.
 dir 0755 /demo
 text 0644 /demo/hello.txt hello, world\n
 
+# /etc: the account and name-resolution files. Dropbear reads passwd and
+# checks the login shell against shells; BusyBox's ash reads profile in a
+# login shell. The shadow file has the $6$ hashes that
+# krffs/gen_demo_password.sh makes, at 0600 and root's, so its mode keeps it
+# from every other account; passwd, which all may read, has x in its
+# password fields, which is what the separate shadow file is for.
 dir 0755 /etc
 dir 0700 /etc/dropbear
 text 0644 /etc/motd Rach2\n\nThe log of this boot is in /dev/bootlog, for root.\nWhat the services print is in /var/log/services.\nType su to become root.\n\n
@@ -135,11 +134,10 @@ text 0644 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOME:-/root}"\n
 text 0644 /etc/resolv.conf nameserver 10.0.2.3\n
 text 0644 /etc/hosts 127.0.0.1   localhost\n10.0.2.2    gateway\n10.0.2.3    dns\n10.0.2.15   rach2\n
 
-# The network configuration `ifup -a` reads, in the file Debian put it in and
-# busybox's ifup expects. `dhcp` is what the sealed machine carries: it comes up
-# wherever it is plugged in, which is the whole reason DHCP is here. A static
-# stanza is the other half of the same file and is what a machine with a fixed
-# address would say instead.
+# The network configuration `ifup -a` reads, in the file where Debian keeps
+# it and BusyBox's ifup reads it. `dhcp` brings the machine up on whatever
+# network it is plugged into; a `static` stanza in the same file would give
+# it a fixed address instead.
 dir 0755 /etc/network
 text 0644 /etc/network/interfaces auto eth0\niface eth0 inet dhcp\n
 
@@ -151,18 +149,18 @@ dir 0755 /etc/network/if-up.d
 dir 0755 /etc/network/if-down.d
 dir 0755 /etc/network/if-post-down.d
 
-# The script udhcpc runs when a lease arrives or ends. udhcpc learns the lease
-# and this turns it into an address, a route and a resolver.
-# /var/run: where `ifup` records which interfaces it has brought up. It writes
-# the file through a temporary beside it, so the directory must be there.
 dir 0755 /var
 # Where init puts what its services print, once the console is the login's.
 dir 0755 /var/log
+# Where `ifup` records the interfaces it has brought up. It writes the file
+# through a temporary beside it, so the directory must exist.
 dir 0755 /var/run
 
 dir 0755 /usr
 dir 0755 /usr/share
 dir 0755 /usr/share/udhcpc
+# The script udhcpc runs when a lease arrives or ends, which turns the lease
+# into an address, a route and a resolver.
 file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
 dir 0755 /usr/share/man
 file 0644 /usr/share/man/aliases man/aliases
@@ -173,26 +171,24 @@ tree 0644 /usr/share/man/cat5 build/man/cat5
 tree 0644 /usr/share/man/cat7 build/man/cat7
 tree 0644 /usr/share/man/cat8 build/man/cat8
 
-# /root: the home directory plus the SSH login's authorized_keys (the demo pubkey,
-# generated by krffs/gen_demo_key.sh when absent; the directory modes are the strict
-# 0755/0700/0600 dropbear's pubkey check insists on).
+# /root, root's home, with the SSH login's authorized_keys, the demo keys that
+# krffs/gen_demo_key.sh writes. Dropbear accepts a key only from a file, and
+# directories above it, that no account but its owner and root may write.
 dir 0700 /root
 dir 0700 /root/.ssh
 file 0600 /root/.ssh/authorized_keys krffs/authorized_keys
 
-# /home/test: the unprivileged demo user's home and SSH login. Owned by
-# 1000:1000 with 0700/0600 modes, deliberately stricter than dropbear's pubkey
-# check requires (it only insists the files be owned by the user or root and not
-# group- or other-writable), so the permission bits protect it from root-owned
-# files and vice versa. The kernel now enforces those bits, so this is a real
-# second account, not a label.
+# /home/test, below /tmp: the test account's home and SSH login, owned by
+# 1000:1000 at 0700 and 0600, so that no account but it and root may read
+# them.
 
-# The one sticky directory the tree ships. The bit is enforced: any account may
-# create in /tmp, and only the file's owner (or root) may remove or rename what
-# is there, which is what makes it shareable between root and test.
+# The one sticky directory of the image: any account may make files in /tmp,
+# and only a file's owner or root may remove or rename one, so root and the
+# test account can share it.
 dir 1777 /tmp
 dir 0755 /home
 dir 0700:1000:1000 /home/test
 dir 0700:1000:1000 /home/test/.ssh
 file 0600:1000:1000 /home/test/.ssh/authorized_keys krffs/test_authorized_keys
+# Doom's game data, when the tree has it.
 optional-file 0644 /demo/doom1.wad ports/doom/doom1.wad

@@ -1,43 +1,41 @@
-# The recovery profile: the image partition 2 holds, for the day the machine's
-# own root will not mount.
+# rach2-recovery.manifest: the recovery system's RAM root, on partition 2 of
+# an installed disk, for when the machine's own root will not mount.
 #
-# It is the metal profile with the repair tools and one fewer assumption. The
-# kernel it boots with is the recovery build, the only one that may write the
-# whole disk; this image mounts nothing from that disk, which is what lets it
-# rewrite the root from underneath. Everything it needs arrives over SSH or is
-# typed at its console, so what it carries is a shell on the console, a
-# server, account files that authenticate nobody, the key it was built with
-# when it was built with one, the programs that repair a disk (`reflash` for
-# the raw device, `bootctl` for the boot partition, `rach2-install` and
-# `rach2-recover` for the root, `growroot` with `e2fsck` and `resize2fs` for
-# the file system, and `diskctl`, `growset` and `growboot` beside them), and
-# the pages of this manual that describe them.
+# It is the metal image with the programs that repair a disk. The kernel it
+# boots with is the recovery build, the only one that may write the whole
+# disk, and this image mounts nothing from that disk, which is what lets it
+# rewrite the root. Everything it needs arrives over SSH or is typed at its
+# console, so it has a shell on the console, a server, account files that
+# authenticate nobody, the key it was built with if it was built with one,
+# the programs that repair a disk (`reflash` for the raw device, `bootctl`
+# for the boot partition, `rach2-install` and `rach2-recover` for the root,
+# `growroot` with `e2fsck` and `resize2fs` for the file system, and
+# `diskctl`, `growset` and `growboot` beside them), and the pages of the
+# manual that describe them.
 
 dir 0755 /bin
 file 0755 /bin/busybox build/vendor/busybox/busybox
 file 0755 /bin/sh build/vendor/busybox/busybox
 file 0755 /bin/man krffs/man.script
 
-# Two of the set-id applets come from busybox's second build, which holds only
-# login, passwd and su. `login` is not staged: this system says it has no login
-# program, and a set-id one sitting in the image would be a claim the image did
-# not keep. Every account here has `*` for a password, so it could authenticate
-# nobody in any case; `su` and `passwd` stay because a person at the shell uses
-# them on the machine they are repairing.
+# Two of the set-id applets come from BusyBox's second build, which has only
+# login, passwd and su. `login` is not staged, since this system has no
+# login: its init starts a shell on the console. Every account here has `*`
+# for a password, so none could log in in any case; `su` and `passwd` stay
+# because a person at the shell uses them on the machine being repaired.
 file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid
 file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid
 
 file 0755 /bin/ping build/utils/ping
-# The boot log, under the name a person expects. This machine has no
-# console to watch it scroll past, so reading it afterwards is the only
-# way to see it; `klogctl` does not exist here, and the log is a device.
+# dmesg, which prints the kernel's log from /dev/bootlog
+# (krffs/dmesg.script).
 file 0755 /bin/dmesg krffs/dmesg.script
 
-# The two repair programs. `reflash` writes a declared number of bytes from an
-# ssh pipe onto a raw device, which is how a whole root partition arrives;
-# `bootctl` repairs the boot partition, the kernel slots and the menu, which the
-# metal profile deliberately leaves out because it has no boot partition to
-# repair and this image is booted from one.
+# The two repair programs. `reflash` writes a declared number of bytes from
+# an ssh pipe onto a raw device, which is how a whole root partition
+# arrives; `bootctl` repairs the boot partition, the kernel slots and the
+# menu, which the metal image leaves out, having no boot partition, while
+# this image boots from a disk that has one.
 file 0755 /bin/reflash build/utils/reflash
 file 0755 /bin/bootctl build/utils/sbin/bootctl
 # `growroot` enlarges the root's partition entry into the free space after it
@@ -45,8 +43,9 @@ file 0755 /bin/bootctl build/utils/sbin/bootctl
 file 0755 /bin/growroot build/utils/growroot
 file 0755 /bin/growset build/utils/growset
 file 0755 /bin/growboot build/utils/growboot
-# `diskctl reread` is the step of that which an install without a grow still
-# needs: the kernel reads the table a whole-disk write has just replaced.
+# `diskctl reread` makes the kernel read again the partition table that a
+# write of the whole disk has replaced, which an install needs even without
+# a grow.
 file 0755 /bin/diskctl build/utils/diskctl
 # The installer itself, a shell program: it reads the manifest on the stick,
 # checks the image against it, asks which disk, writes it and reads it back.
@@ -56,43 +55,40 @@ file 0755 /bin/rach2-install utils/rach2-install
 file 0755 /bin/rach2-recover utils/rach2-recover
 
 dir 0755 /sbin
-# The ext2 checker, for the day the machine's own root was not unmounted:
-# `init` here runs it on each partition node with the ext2 magic before anything else,
-# and it can be run by hand over SSH. The resizer beside it is what `growroot`
-# runs after it has enlarged the root's partition entry; the two are the
-# programs of e2fsprogs this system stages, because checking and growing are
-# the uses recovery has for it.
+# The ext2 checker, for a root that was not unmounted: when the boot line has
+# rach2.fsck, init runs it on each ext2 partition before anything else, and
+# it can be run by hand over SSH. The resizer beside it is what `growroot`
+# runs after it has enlarged the root's partition entry. They are the only
+# programs of e2fsprogs here, since checking and growing are the uses
+# recovery has for it.
 file 0755 /sbin/e2fsck build/vendor/e2fsprogs/e2fsck
 file 0755 /sbin/resize2fs build/vendor/e2fsprogs/resize2fs
-# The recovery system boots to a shell. A login here was never a boundary: the
-# person choosing this entry has the machine in their hands, and the image has
-# no accounts of the machine's to check against anyway. What it did instead was
-# stand between someone whose machine will not start and the tools that repair
-# it. The installed system keeps its login; this is not that system.
+# The recovery system starts a shell on the console without a login: the
+# person who chose this boot has the machine in hand, and the image has none
+# of the machine's accounts to check a password against. The installed
+# system keeps its login.
 #
-# The recovery init: a shell at the console, and the network and the optional
-# SSH server beside it. Neither of the other two variants does both, and using
-# the metal one here asked for a login this image has no password to answer,
-# which would have left the rescue system impossible to enter by any route.
+# init-recovery runs that shell with the network and the optional SSH server
+# beside it; init-shell starts no network, and init-metal asks for a login,
+# which this image has no password for.
 #
-# Whether the server runs is decided by whether this image was built with a
-# key. A root update cannot be done from the running system, since the kernel
-# refuses to write a partition whose file system is mounted, so a recovery that
-# answers nothing can only be updated at its keyboard: right for an image built
-# for somebody else, wrong for one built to work on.
+# The server runs when this image was built with a key, or when the
+# installer put one on the recovery partition. A root cannot be updated from
+# the running system, since the kernel refuses to write a partition whose
+# file system is mounted, so a recovery system with no key can be updated
+# only at its keyboard: right for an image built for somebody else, wrong
+# for one built to work on.
 file 0755 /sbin/init build/utils/sbin/init-recovery
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 dir 0700 /etc/dropbear
 dir 0755 /root
 dir 0700 /root/.ssh
-# The key, when this build has one, and a file nothing generates: that is the
-# point of it. `krffs/authorized_keys` is made by `gen_demo_key.sh` whenever it
-# is missing, so its absence could never mean anything; this one is absent
-# until a person puts a key in it. `optional-file` stages it when it is there
-# and says nothing when it is not, which is the whole difference between a
-# recovery system that answers the network and one that does not.
-#
-# For development: `make recovery-key` copies this tree's own key into it.
+# The key, when this build has one, from a file no build makes by itself:
+# `krffs/authorized_keys` is made by `gen_demo_key.sh` whenever it is
+# missing, while this file exists only once a person, or `make recovery-key`
+# with this tree's own keys, has written it. `optional-file` stages it when
+# it is there and skips it when it is not, and that decides whether the
+# recovery system answers the network.
 optional-file 0600 /root/.ssh/authorized_keys krffs/recovery_authorized_keys
 # The periodic sync init keeps running: sleep thirty seconds, sync(2), for ever.
 file 0755 /bin/update build/utils/update
@@ -106,30 +102,25 @@ text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\ntest:x:1000:1000:test:/home
 text 0600 /etc/shadow root:*:0:0:99999:7:::\ntest:*:0:0:99999:7:::\n
 text 0644 /etc/group root:x:0:\ntest:x:1000:\n
 text 0644 /etc/shells /bin/sh\n
-# The stub resolver reads these two (utils/resolv.c). Without them a name is
-# unresolvable and only numeric addresses work, which is what the first LAN
-# session found. The nameserver is the one this LAN's router hands out rather
-# than the router itself, because that router forwards nothing: it gives
-# clients Cloudflare's resolvers, and a machine that assumed the gateway would
-# answer would fail for a reason nobody could see. The resolver reads the first
-# `nameserver` line; the second is here for a reader, not for the code.
-# Numeric addresses never touch this file.
+# The resolvers the image starts with, which a DHCP lease replaces
+# (krffs/udhcpc-default.script). They are public ones and not the gateway,
+# since a router need not answer queries itself. utils/resolv.c reads the
+# first `nameserver` line, and musl's resolver up to three.
 text 0644 /etc/resolv.conf nameserver 1.1.1.1\nnameserver 1.0.0.1\n
 text 0644 /etc/hosts 127.0.0.1 localhost\n
 text 0644 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOME:-/root}"\ncd "$HOME"\n
 
-# The network configuration `ifup -a` reads, in the file Debian put it in and
-# busybox's ifup expects. `dhcp` is what the sealed machine carries: it comes up
-# wherever it is plugged in, which is the whole reason DHCP is here. A static
-# stanza is the other half of the same file and is what a machine with a fixed
-# address would say instead.
+# The network configuration `ifup -a` reads, in the file where Debian keeps
+# it and BusyBox's ifup reads it. `dhcp` brings the machine up on whatever
+# network it is plugged into; a `static` stanza in the same file would give
+# it a fixed address instead.
 dir 0755 /etc/network
 text 0644 /etc/network/interfaces auto eth0\niface eth0 inet dhcp\n    post-up /bin/rescue-static &\n
 
-# What the line above runs. A recovery image that took no address is a machine
-# nobody can reach, and the one case where nothing can hand one out and nothing
-# can be chosen at a menu is a damaged boot partition on a network with no DHCP
-# server. This waits for the lease and takes the fixed address if none arrives.
+# What the post-up command above runs: it waits for a lease and takes the
+# sealed disk's fixed address if none arrives, so that a machine whose boot
+# partition is damaged can be reached on a network with no DHCP server
+# (krffs/rescue-static.script).
 file 0755 /bin/rescue-static krffs/rescue-static.script
 
 # The four directories `ifup` runs through run-parts. It treats a failure of any
@@ -140,18 +131,18 @@ dir 0755 /etc/network/if-up.d
 dir 0755 /etc/network/if-down.d
 dir 0755 /etc/network/if-post-down.d
 
-# The script udhcpc runs when a lease arrives or ends. udhcpc learns the lease
-# and this turns it into an address, a route and a resolver.
-# /var/run: where `ifup` records which interfaces it has brought up. It writes
-# the file through a temporary beside it, so the directory must be there.
 dir 0755 /var
 # Where init puts what its services print, once the console is the login's.
 dir 0755 /var/log
+# Where `ifup` records the interfaces it has brought up. It writes the file
+# through a temporary beside it, so the directory must exist.
 dir 0755 /var/run
 
 dir 0755 /usr
 dir 0755 /usr/share
 dir 0755 /usr/share/udhcpc
+# The script udhcpc runs when a lease arrives or ends, which turns the lease
+# into an address, a route and a resolver.
 file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
 # The pages man/recovery lists: what the installer and the recovery menu direct
 # a person to, readable here with man(1). mancheck requires each.

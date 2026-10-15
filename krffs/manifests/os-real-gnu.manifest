@@ -24,9 +24,9 @@
 #   own, 65534 as on Debian, which programs and scripts name.
 # * /etc/profile gives a prompt of the user, the machine and the directory,
 #   and a session on a terminal other than a dumb one the C.UTF-8 locale,
-#   the console's among them, whose screen draws UTF-8;
-#   and it gives the user a D-Bus session bus, which the browser asks for,
-#   at ~/.dbus/session_bus_socket, starting one where none answers there.
+#   the console's among them, whose screen draws UTF-8; and it gives the
+#   user a D-Bus session bus, which the browser asks for, at
+#   ~/.dbus/session_bus_socket, starting one where none answers there.
 #   It leaves the directory as it is: login, su - and sshd start a session
 #   in the home directory, and a login shell started elsewhere, as tmux
 #   starts each window's, stays where it was started.
@@ -131,11 +131,10 @@ dir 0755 /etc/rach2
 text 0644 /etc/rach2/limits # The limits every session starts with: a name, the soft value and the\n# hard one; unlimited for none. Root may raise them.\nnproc 256 512\nnofile 1024 1024\nas unlimited unlimited\n
 # The path OpenSSH's server gives a session too, which finds what is
 # installed under /usr/local, then GCC, GNU make and the rest of the GNU
-# system before the musl programs of /bin. The
-# prompt's escapes are bash's, which BusyBox's ash takes too, and it is
-# exported so that a shell started from the login shell has it. The console
-# draws ASCII alone, so only a session on another terminal, over SSH, gets
-# the UTF-8 locale that glibc builds in.
+# system before the musl programs of /bin. The prompt's escapes are bash's,
+# which BusyBox's ash takes too, and it is exported so that a shell started
+# from the login shell has it. A session on any terminal but a dumb one, the
+# console's among them, gets the C.UTF-8 locale that glibc builds in.
 text 0644 /etc/profile export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin\nexport HOME="${HOME:-/root}"\nexport PS1='\u@\h:\w\$ '\ncase "$TERM" in dumb|'') ;; *) export LANG=C.UTF-8 ;; esac\nif [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -x /usr/bin/dbus-daemon ]; then\n    export DBUS_SESSION_BUS_ADDRESS="unix:path=$HOME/.dbus/session_bus_socket"\n    dbus-send --session --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.GetId 2>/dev/null ||\n        { mkdir -p "$HOME/.dbus" && chmod 700 "$HOME/.dbus" &&\n          dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork --nopidfile >/dev/null 2>&1; }\nfi\n
 text 0644 /etc/resolv.conf nameserver 10.0.2.3\n
 text 0644 /etc/hosts 127.0.0.1   localhost\n127.0.1.1   rach2\n

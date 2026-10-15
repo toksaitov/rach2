@@ -1,15 +1,16 @@
-# Credential-durability test image: creddisk on a real-disk KRFFS.
+# The disk of `tests/run cred-persist`: creddisk on a KRFFS root on disk.
 #
-# Built into a partitioned disk by mkdisk.sh and booted three times against one
-# scratch copy with rach2.fsdisk + rach2.rescue. The first boot publishes both
-# files, the second reads them back and clears the lock its cut-off writer left,
-# the third reads back that release. Each file is staged root-owned at a mode the
-# replacement must reproduce, the shape /etc/shadow carries; the two modes differ
-# so the inheritance is read rather than assumed.
+# mkdisk.sh builds it, and the suite boots it three times with rach2.fsdisk
+# and rach2.rescue. The first boot replaces both files and stops while it
+# holds the lock; the second reads the files back, reports and removes the
+# lock the first left, and takes and releases one of its own; and the third
+# checks that no lock is left. Each file is root's, at a mode the replacement
+# must keep, as /etc/shadow is; the two modes differ, so that the probe can
+# tell which one each file kept.
 file 0755 /creddisk build/tests/musl/creddisk
 text 0600 /credtarget original\n
 text 0640 /credalso original\n
 
-# The lock's directory, since the probe takes the transaction the shipped
-# writers take, at the path compiled into the library.
+# The lock's directory: the probe takes the lock the system's writers of
+# account files take, at the path compiled into the library.
 dir 0755 /etc

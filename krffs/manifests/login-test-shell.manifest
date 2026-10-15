@@ -1,15 +1,16 @@
-# login-test-shell.manifest: the permissive twin, identical but for the init it
-# declares, which is the one that still walks a shell table.
+# login-test-shell.manifest: the permissive image of `tests/run login`, the
+# same as login-test-strict.manifest but for its init, init-shell, which
+# starts a shell on the console.
 #
-# It is what makes the strict image's silence mean something. This boot must
-# print uid=0 at the console, and that is the exact shape of the defect the
-# strict init removes: `id` is a standalone-ash applet, so uid=0 on a console
-# nobody authenticated at is an unprivileged nobody's root shell. Without this
-# half, a strict image that failed to boot at all for some unrelated reason
-# would pass the test by printing nothing.
+# This boot must print uid=0 at the console. `id` is a standalone-ash
+# applet, so uid=0 on a console nobody logged in at is a root shell nobody
+# authenticated, the fault the strict init removes. This image shows that
+# the boot works, so that the strict image's printing nothing means
+# something: a strict image that failed to boot for an unrelated reason
+# would otherwise pass by printing nothing.
 #
-# tests/system/suites/login.sh boots this and its strict twin. Host paths are relative to
-# the repo root (mkimage.sh cd's there).
+# tests/system/suites/login.sh boots this image and the strict one. Host
+# paths are relative to the repository root, where mkimage.sh runs.
 
 dir 0755 /bin
 file 0755 /bin/busybox build/vendor/busybox/busybox

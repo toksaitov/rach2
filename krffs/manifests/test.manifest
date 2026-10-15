@@ -1,82 +1,84 @@
-# test.manifest: the automated end-to-end test image.
+# test.manifest: the image the guest suites boot to run the probes.
 #
-# The freestanding syscall probes (build/tests) at the root, the musl integration
-# programs (build/tests/musl) under /musl, a minimal /etc the musl file and auth
-# probes read, and the small name-resolution config the network probes read.
-# `make test` boots this image and asserts every probe's success token. Host
-# paths are relative to the repo root (mkimage.sh cd's there).
+# The freestanding system call probes of build/tests at the root, the musl
+# programs of build/tests/musl under /musl, the /etc the musl file and
+# account probes read, and the name-resolution files the network probes
+# read. A suite boots this image, runs probes and checks each one's success
+# token. Host paths are relative to the repository root, where mkimage.sh
+# runs.
 
 exec-dir 0755 / build/tests
 
-# The ISH shell, which `ishmusl` runs with -c to read back the status it
-# reports for a command that could not be run. It is the same binary os-simple
-# stages as its login shell.
+# The ISH shell, which `ishmusl` runs with -c and in its input mode to read
+# the statuses it reports. It is the program os-simple stages as its login
+# shell.
 file 0755 /ish build/ish/ish
-# musl's system(3) and popen(3) exec /bin/sh literally, so the spawn probe needs
-# one to exec. ISH is this project's own shell and handles the -c form the
-# ishmusl probe already exercises; it is staged under both names, since KRFFS
-# has no symlinks.
+# musl's system(3) and popen(3) run /bin/sh -c, so the spawn probe needs a
+# /bin/sh. ISH takes the -c form, and it is staged under both names, since
+# KRFFS has no symbolic links.
 dir 0755 /bin
 file 0755 /bin/sh build/ish/ish
-# And one program for that shell to run, named absolutely by the probe: ISH has
-# only `cd` and `exit` as builtins, so a command that produces output has to be
-# a real program.
+# A program for that shell to run, which the probe names by its full path:
+# ISH has only `cd` and `exit` as builtins, so a command that prints has to
+# be a program.
 file 0755 /bin/echo build/utils/echo
 
-# suidprobe's fixtures: the same helper binary staged at several modes and
-# owners. exec-dir above already placed a plain 0755 /suidhelper (the "plain"
-# control); these add the setuid-root copy suidprobe execs to gain root, a
-# setuid copy owned by a non-root uid (the bit grants that owner's identity), a
-# setgid copy owned by a non-root group, and a setuid-but-no-x copy the execute
-# check must still refuse. Explicit modes and owners override the exec-dir
-# default for these paths.
+# suidprobe's fixtures: the one helper program at several modes and owners.
+# The exec-dir line above stages a plain 0755 /suidhelper, the control;
+# these are the set-user-ID root copy suidprobe runs to become root, a
+# set-user-ID copy owned by another account, whose identity the bit gives, a
+# set-group-ID copy owned by another group, and a set-user-ID copy with no
+# execute bit, which the execute check must refuse.
 file 04755:0:0 /suidhelper.suid build/tests/suidhelper
 file 04755:5:0 /suidhelper.u5   build/tests/suidhelper
 file 02755:0:5 /suidhelper.sgid build/tests/suidhelper
 file 04644:0:0 /suidhelper.nox  build/tests/suidhelper
 
-# sudoprobe's fixtures: the reference sudo (utils/sudo.c, the coursework answer
-# key) staged setuid root, and a sudoers listing uid 1000. sudoprobe drops to
-# 1000, runs sudo to become root, and to 1001 to be refused. Shipped only here;
-# neither shipped image carries a sudo, deliberately, since writing one is the
-# exercise this fixture is the answer key to.
+# sudoprobe's fixtures: the reference sudo of utils/sudo.c, the answer to the
+# coursework exercise, set-user-ID root, and a sudoers file that lists uid
+# 1000. sudoprobe runs sudo as uid 1000 to become root, and as 1001 to be
+# refused. No other image stages this program, since writing one is the
+# exercise.
 file 04755:0:0 /sudo build/utils/sbin/sudo
 text 0644 /etc/sudoers # uids permitted to run sudo\n1000\n
 
-# pwauthmusl's target: the setuid-root su (utils/su.c), the same binary and the
-# same mode os-simple carries, so the probe drives what a user runs rather than
-# a copy of it. The probe's own account is `probe` below, whose
-# shell is the /idreport helper the exec-dir sweep already staged, so a su run
-# reports the identity, the working directory, the argv[0] and the environment
-# it was given and exits non-zero on the first item that does not match.
+# pwauthmusl's target: the set-user-ID root su of utils/su.c, the program and
+# the mode os-simple stages, so the probe runs what a user runs. The probe's
+# account is `probe` below, whose shell is the /idreport helper the exec-dir
+# line stages, so a run of su reports the identity, the working directory,
+# argv[0] and the environment it was given, and exits nonzero at the first
+# that does not match. passwd, adduser, adduser-crash and login are the
+# programs passwdmusl, addusermusl and loginmusl run.
 file 04755:0:0 /su build/utils/sbin/su
 file 04755:0:0 /passwd build/utils/sbin/passwd
 file 0755:0:0 /adduser build/utils/sbin/adduser
 file 0755:0:0 /adduser-crash build/utils/sbin/adduser-crash
 file 0755:0:0 /login build/utils/sbin/login
 
-# The probe account's home. It is a real directory and not the image root,
-# because a chdir to the directory the caller is already in would prove nothing
-# about what a login su does; the probe runs su from /musl and requires the
-# login form to land here and the non-login form not to. 0700 owned by the
-# account, so entering it is the target's privilege and not the caller's.
+# The probe account's home. It is a directory of its own and not the image's
+# root, since a change to the directory the caller is in already would show
+# nothing about a login su; the probe runs su from /musl and requires the
+# login form to arrive here and the other form not to. It is 0700 and the
+# account's, so entering it takes the target's privilege and not the
+# caller's.
 dir 0755 /home
 dir 0700:1000:1000 /home/probe
 
-# The sticky /tmp the systems ship, where the musl probes make their files.
+# The sticky /tmp of the system images, where the musl probes make their
+# files.
 dir 1777 /tmp
 
-# searchprobe's fixtures: a root-owned tree whose modes the probe flips to prove
-# search is charged on every directory a path enters. Staged rather than minted
-# because the execve cases need a real program under the denied ancestor and a
-# freestanding probe cannot mint an ELF; the directories that hold it come with
-# it, and the probe asserts these modes before it flips anything. Everything the
-# probe's mutations aim at it mints and removes itself, so this tree is what it
-# finds on every run. Every directory here is 0777, because the probe denies by
-# turning one of them into 0666: read and write stay granted, so only the
-# missing execute bit can account for a refusal. /sp_denied/shared keeps its
-# 0777 while /sp_denied is denied, so a refusal below it can only be the
-# ancestor's search bit.
+# searchprobe's fixtures: a root-owned tree whose modes the probe changes to
+# check that search permission is needed on every directory a path enters.
+# The tree is staged, not made by the probe, because the execve cases need a
+# program under the denied directory and a freestanding probe cannot write
+# an ELF file; the directories that hold it are staged with it, and the
+# probe checks these modes before it changes any. What the probe's cases
+# change it makes and removes itself, so it finds this tree on every run.
+# Every directory is 0777, because the probe denies by turning one of them
+# into 0666: read and write stay granted, so only the missing execute bit
+# can explain a refusal. /sp_denied/shared keeps its 0777 while /sp_denied is
+# denied, so a refusal below it can only be the parent's search bit.
 dir  0777 /sp_denied
 dir  0777 /sp_denied/deep
 dir  0777 /sp_denied/shared
@@ -84,35 +86,35 @@ text 0644 /sp_denied/leaf.txt one level down\n
 text 0644 /sp_denied/deep/leaf.txt two levels down\n
 file 0755 /sp_denied/prog build/tests/hello
 
-# stickyprobe's pair: one sticky directory and one plain one, differing in the
-# single bit whose enforcement the probe tests, so that a denial in the first
-# cannot be ownership or a missing write bit talking. They are staged rather
-# than minted for the one reason minting cannot cover: `dir 1777` is how the
-# shipped /tmp gets its bit, and nothing else in the tree reads that bit back,
-# so the probe asserts both of these modes before it does anything. Everything
-# the probe's cases aim at, and the two further sticky directories the
-# directory-owner and write-check clauses need, it mints and removes itself.
+# stickyprobe's pair: one sticky directory and one plain one, which differ in
+# the one bit the probe tests, so that a denial in the first cannot come from
+# the owner or a missing write bit. They are staged rather than made by the
+# probe because `dir 1777` is how the system images' /tmp gets its bit, and
+# nothing else reads that bit back, so the probe checks both modes before it
+# does anything. What the probe's cases change, and the two other sticky
+# directories its cases of a directory's owner and of the write check need,
+# it makes and removes itself.
 dir 1777 /st_sticky
 dir 0777 /st_plain
 
 dir 0755 /musl
 exec-dir 0755 /musl build/tests/musl
-# suidmusl's setuid-root copy: the plain 0755 /musl/suidmusl above is the
-# parent that drops to 1000 and execs this to prove libc's view of a set-id
-# exec (getresuid, getauxval(AT_SECURE), the saved-id dance).
+# suidmusl's set-user-ID root copy: the plain 0755 /musl/suidmusl above is
+# the parent, which changes to uid 1000 and runs this copy to check what the
+# C library reports of a set-id exec: getresuid, getauxval(AT_SECURE) and the
+# saved IDs.
 file 04755:0:0 /musl/suidmusl.suid build/tests/musl/suidmusl
 # Its execute-only copy, which uid 1000 may run and not read, so an exec of
 # it must leave the process not dumpable.
 file 0111:0:0 /musl/suidmusl.xonly build/tests/musl/suidmusl
 
-# A minimal /etc: catfile reads motd and lists the directory, permmusl opens
-# motd, and authmusl resolves root through passwd to uid 0. Both shadow lines
-# are fixed, committed test credentials, not secrets: the probes need a known
-# hash to verify against. Root's password is "rach2" and the probe account's is
-# "probepass", two different ones on purpose, so offering root's to `su probe`
-# is a wrong password rather than a lucky one. The probe account is uid 1000
-# with /idreport as its shell and /home/probe as its home; /etc/group gives it
-# the group its gid names.
+# A small /etc: catfile reads motd and lists the directory, permmusl opens
+# motd, and authmusl resolves root through passwd to uid 0. The shadow lines
+# are fixed test credentials, committed, since the probes need known hashes
+# to check. Root's password is "rach2" and probe's is "probepass", so that
+# root's offered to `su probe` is a wrong password. The probe account is uid
+# 1000 with /idreport as its shell and /home/probe as its home; /etc/group
+# has the group of its gid.
 dir 0755 /etc
 text 0644 /etc/motd Welcome to Rach2 (test image).\n
 text 0644 /etc/hostname rach2\n
