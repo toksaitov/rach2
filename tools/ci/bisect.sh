@@ -7,6 +7,8 @@
 #
 # GOOD passed ci on ARCH and BAD failed it; ITEM... is what failed, as
 # tools/ci/run.sh names it: `build`, `style`, `host`, a suite, or a set's name.
+# The report's `unfinished-core` and `unfinished-night` repeat the whole run
+# through tools/ci/run.sh, including its build and the night's separate bigmem.
 # A commit is tested by building it and running those items, the build alone
 # when `build` is among them. A test passes, fails, or cannot be made: a
 # commit that cannot be checked out, or that does not build when the failure
@@ -30,7 +32,10 @@ repo=$GITHUB_REPOSITORY
 logs="$RUNNER_TEMP/bisect"
 mkdir -p "$logs"
 attempt=0
+run_kind=""
 case " $items " in
+    *" unfinished-core "*) run_kind=core; test_items="" ;;
+    *" unfinished-night "*) run_kind=night; test_items="" ;;
     *" build "*) test_items="" ;;
     *" core "*) test_items=core ;;
     *" all "*) test_items=all ;;
@@ -55,6 +60,12 @@ tested() { # tested COMMIT
     log="$logs/$attempt-$(short "$1")"
     git checkout -q --detach "$1" > "$log.log" 2>&1 || { mv "$log.log" "$log.untestable.log"; return 2; }
     echo "ci: bisect: testing $(git log -1 --format='%h %s' "$1")"
+    if [ -n "$run_kind" ]; then
+        if sh tools/ci/run.sh "$run_kind" "$log.run" >> "$log.log" 2>&1; then
+            mv "$log.log" "$log.passed.log"; return 0
+        fi
+        mv "$log.log" "$log.failed.log"; return 1
+    fi
     if ! make >> "$log.log" 2>&1; then
         if [ -z "$test_items" ]; then
             mv "$log.log" "$log.failed.log"; return 1

@@ -7,7 +7,8 @@
 # DIR has one directory for each architecture, `KIND-ARCH`, written by
 # tools/ci/run.sh. An architecture passed only when its directory has
 # `done` and an empty `failed`; a missing or unfinished one is a failure of
-# the runner. For each architecture the commit SHA gets the status
+# the runner, named `unfinished-core` or `unfinished-night` so that bisection
+# repeats that kind of run. For each architecture the commit SHA gets the status
 # `ci/KIND/ARCH`, and once everything below has been done, `ci/KIND`, which
 # tells a later run that this commit has been tested and reported. A failure
 # is filed as an issue with the label `bug`, titled by the run's kind, its
@@ -84,10 +85,10 @@ for arch in i686 x86_64; do
     if [ -f "$result/done" ] && [ -s "$result/failed" ]; then
         items=$(sort -u "$result/failed" | tr '\n' ' ' | sed 's/ $//')
     else
-        items=runner
+        items=unfinished-$kind
     fi
     case " $items " in
-        *" build "*|*" style "*|*" runner "*|*" core "*|*" default "*)
+        *" build "*|*" style "*|*" runner "*|*" core "*|*" default "*|*" unfinished-core "*)
             [ "$kind" = core ] && held="$held $arch: $items;" ;;
     esac
     good=$(last_pass "$arch") || { lost "the last pass on $arch"; good=""; }
