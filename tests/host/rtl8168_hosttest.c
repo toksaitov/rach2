@@ -53,9 +53,9 @@ static unsigned model_log_len;
  * the first delivery and running `rx_hook` before the copy. */
 void ethernet_rx(struct netdev *nd, const unsigned char *data, unsigned short len)
 {
-    (void)nd;
     unsigned i;
 
+    (void)nd;
     if (rx_calls == 0) {
         rx_first_at = model_log_len;
     }

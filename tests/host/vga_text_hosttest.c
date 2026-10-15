@@ -21,7 +21,6 @@
 #include "lib/kint.h"
 
 #define VGA_TEXT_HOSTTEST
-#define KIO_HOSTTEST
 
 static uint16_t vram[16384];
 #define VGA_TEXT_BUFFER vram

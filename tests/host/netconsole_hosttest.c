@@ -87,9 +87,9 @@ int netdev_running(const struct netdev *nd)
 int ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short type,
                 const unsigned char *payload, unsigned short plen)
 {
-    (void)out;
     unsigned i;
 
+    (void)out;
     tx_attempts++;
     if (link_down || refuse_all) {
         return NETDEV_TX_DROPPED;

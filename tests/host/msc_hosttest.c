@@ -89,11 +89,9 @@ static struct {
     /* TEST UNIT READY commands seen, per unit. */
     int tests_seen[4];
     uint32_t last_block; /* what READ CAPACITY reports */
-    /* The block size READ CAPACITY reports; a knob that no answer reads, the
-     * model never stalls MODE SENSE; and whether MODE SENSE reports write
-     * protection. */
+    /* The block size READ CAPACITY reports, and whether MODE SENSE reports
+     * write protection. */
     uint32_t block_size;
-    int mode_sense_stalls;
     int write_protect;
     int sync_illegal;   /* SYNCHRONIZE CACHE answers ILLEGAL REQUEST */
     int sync_fails;     /* and this one fails outright */
