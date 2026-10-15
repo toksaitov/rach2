@@ -93,14 +93,21 @@ int main(void)
 
     CHECK(parse((char *)"config", (char *)"/tmp/m", 0, &arg) == BOOTVERB_CONFIG,
           "config with a path is a verb");
+    CHECK(parse((char *)"grub", (char *)"/tmp/g", 0, &arg) == BOOTVERB_GRUB,
+          "grub with a path is a verb");
+    CHECK(parse((char *)"fallback", 0, 0, &arg) == BOOTVERB_FALLBACK, "fallback is a verb");
     CHECK(parse((char *)"trial", (char *)"candidate", 0, &arg) == BOOTVERB_TRIAL,
           "trial with an entry is a verb");
     CHECK(parse((char *)"trial", (char *)"candidate", (char *)"x", &arg) == BOOTVERB_NONE,
           "trial with a surplus argument is refused");
     CHECK(parse((char *)"config", (char *)"/tmp/m", (char *)"x", &arg) == BOOTVERB_NONE,
           "config with a surplus argument is refused");
-    CHECK(parse((char *)"env", (char *)"a", (char *)"b", 0) == BOOTVERB_ENV,
-          "a caller that wants neither operand may pass NULL for both");
+    {
+        char *argv[] = {(char *)"bootctl", (char *)"env", (char *)"a", (char *)"b"};
+
+        CHECK(bootverb_parse(4, argv, 0, 0) == BOOTVERB_ENV,
+              "a caller that wants neither operand may pass NULL for both");
+    }
     CHECK(parse((char *)"cancel", 0, 0, &arg) == BOOTVERB_CANCEL, "cancel is a verb");
 
     CHECK(parse((char *)"env", (char *)"next_entry", 0, &arg) == BOOTVERB_ENV,
@@ -144,10 +151,10 @@ int main(void)
     {
         static char *const names[] = {(char *)"status", (char *)"commit", (char *)"cancel",
                                       (char *)"kernel", (char *)"config", (char *)"trial",
-                                      (char *)"env"};
-        int i;
+                                      (char *)"env",    (char *)"grub",   (char *)"fallback"};
+        unsigned i;
 
-        for (i = 0; i < 7; i++) {
+        for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
             CHECK(bootverb_known(names[i]),
                   "every verb the parser takes is also one the diagnostic knows");
         }
