@@ -465,7 +465,8 @@ static const char *path_of(const struct usb_device_state *d)
 
 /**
  * Take the device at entry `i` down, and everything below it first: a
- * running device's class driver is told, and the entry closes if the
+ * running device's class driver is told, as is a keyboard's or mouse's whose
+ * report endpoint halted (ST_HALTED), and the entry closes if the
  * controller gave it a slot and is freed otherwise. Nothing for an entry that
  * is free, closing or a tombstone.
  *
@@ -484,7 +485,7 @@ static void device_gone(int i)
         return;
     }
     subtree_gone(i);
-    if (d->state == ST_RUNNING) {
+    if (d->state == ST_RUNNING || d->state == ST_HALTED) {
         klog(KLOG_INFO, "usb", "device: port %s: gone", path_of(d));
         if (d->interface.kind == USB_KIND_STORAGE) {
             msc_detach(d->hc, d->slot);
@@ -1852,12 +1853,15 @@ int usb_core_describe(int index, char *out, int size)
     struct usb_device_state *d;
     int at = 0;
     const char *speed = "unknown";
+    uint32_t flags;
 
     if (index < 0 || index >= USB_MAX_DEVICES || out == 0 || size < 8) {
         return 0;
     }
+    flags = kirq_save();
     d = dev_at(index);
     if (d->state != ST_RUNNING) {
+        kirq_restore(flags);
         return 0;
     }
     switch (d->speed) {
@@ -1891,5 +1895,6 @@ int usb_core_describe(int index, char *out, int size)
     at = put_num(out, size, at, (uint32_t)d->interface.protocol, 10);
     at = put_str(out, size, at, "\n");
     out[at] = '\0';
+    kirq_restore(flags);
     return at;
 }

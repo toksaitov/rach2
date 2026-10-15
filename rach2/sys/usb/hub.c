@@ -944,8 +944,8 @@ int hub_completion(const struct usb_completion *completion)
  * the change report and a port's for its bit; then, with the change report
  * out again once the last answer is acted on, the next step of a reset the
  * core asked for, one request at a time. A status read that cannot go out is
- * owed again, its change bit put back; a warm reset that cannot go out is
- * dropped.
+ * owed again, its change bit put back, and a power-on is owed until it goes
+ * out; a warm reset that cannot go out is dropped.
  */
 static void step_hub(struct hub *h, uint32_t elapsed_ms)
 {
@@ -1031,12 +1031,12 @@ static void step_hub(struct hub *h, uint32_t elapsed_ms)
                 p->warm = 0;
             }
             if (p->power_on_ms != 0) {
-                p->power_on_ms = (p->power_on_ms > elapsed_ms) ? p->power_on_ms - elapsed_ms : 0;
-                if (p->power_on_ms == 0) {
-                    if (request(h, TYPE_CLASS_PORT_OUT, REQ_SET_FEATURE, PORT_POWER, i + 1, 0,
-                                REQ_POWER_ON, i + 1) == 0) {
-                        return;
-                    }
+                if (p->power_on_ms > elapsed_ms) {
+                    p->power_on_ms -= elapsed_ms;
+                } else if (request(h, TYPE_CLASS_PORT_OUT, REQ_SET_FEATURE, PORT_POWER, i + 1, 0,
+                                   REQ_POWER_ON, i + 1) == 0) {
+                    p->power_on_ms = 0;
+                    return;
                 }
             }
         }

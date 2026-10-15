@@ -24,10 +24,12 @@
  * acknowledgement comes back short; a reset that completes and one that
  * never does, with the port refused and forgotten when its device leaves;
  * the speed read from the status word; a disconnection closing the device
- * below; a hub pulled with two devices below closing both children before
- * itself; a hub with twenty ports keeping all twenty, a device on port twenty
- * named through its translator; and a hub that stalls its descriptor request
- * closed.
+ * below, and its class driver told when its report endpoint had halted; a hub
+ * pulled with two devices below closing both children before itself; a
+ * power-on after an over-current asked for again until it is queued;
+ * `/proc/usb` reading the table with interrupts off; a hub with twenty ports
+ * keeping all twenty, a device on port twenty named through its translator;
+ * and a hub that stalls its descriptor request closed.
  *
  * No hosted headers: the kernel headers define the fixed-width types, and
  * the libc calls are declared by hand as the other host tests declare them.
@@ -184,6 +186,7 @@ static struct {
     unsigned int hub_change;
     int alt_refuse;        /* SET_INTERFACE is stalled */
     int power_on_refuse;   /* SET_FEATURE(PORT_POWER) on a port that is off is stalled */
+    int power_on_unqueued; /* that many of those requests are not queued */
     int pull_on_open;      /* the next device opened is pulled while its Enable Slot is out */
     int connect_on_read;   /* a device lands on this port just after its status is read */
     int short_after_clear; /* the status read after a clear on this port is short */
@@ -754,11 +757,61 @@ static void model_change(int port)
 }
 
 /**
+ * Answer SET_PORT_FEATURE on `port`: power, a warm reset or a reset. Return
+ * -1 for a power-on the row says is not queued, and 0 otherwise.
+ */
+static int set_port_feature(int device, int feature, int port, uint32_t generation)
+{
+    if (feature == 8) {
+        if (port >= 1 && port <= MODEL_PORTS && model.port_powered_off[port - 1] &&
+            model.power_on_unqueued > 0) {
+            model.power_on_unqueued--;
+            return -1;
+        }
+        model.power_requests++;
+        model.last_power_ms = model.now_ms;
+        if (port >= 1 && port <= MODEL_PORTS && model.port_powered_off[port - 1]) {
+            if (model.power_on_refuse) {
+                answer(device, 1, USB_XFER_STALLED, 0, 0, generation);
+                return 0;
+            }
+            model.port_powered_off[port - 1] = 0;
+            model.power_ons++;
+        }
+    } else if (feature == 28 && port >= 1 && port <= MODEL_PORTS) {
+        /* BH_PORT_RESET: the link returns to U0, both reset changes set. */
+        model.warm_resets++;
+        if (model.port_kind[port - 1] == KIND_NONE) {
+            answer(device, 1, USB_XFER_OK, 0, 0, generation);
+            return 0;
+        }
+        model.port_link[port - 1] = 0;
+        model.port_enabled[port - 1] = 1;
+        model.port_change[port - 1] |= 0x30u;
+        answer(device, 1, USB_XFER_OK, 0, 0, generation);
+        model_change(port);
+        return 0;
+    } else if (feature == 4 && port >= 1 && port <= MODEL_PORTS) {
+        /* A hub stalls a reset while C_PORT_RESET is unacknowledged. */
+        if (model.port_change[port - 1] & 16u) {
+            answer(device, 1, USB_XFER_STALLED, 0, 0, generation);
+            return 0;
+        }
+        model.reset_requests++;
+        model.port_in_reset[port - 1] = 1;
+        model.port_reset_reads[port - 1] = 0;
+    }
+    answer(device, 1, USB_XFER_OK, 0, 0, generation);
+    return 0;
+}
+
+/**
  * Take a transfer on an open slot and answer it as what is at the slot's
- * location would; return -1 for a slot not open. A hub's change endpoint is
- * answered when a change is reported, and any other endpoint but the
- * control endpoint, 1, stays out. On endpoint 1 the standard requests are
- * answered for both kinds; a keyboard stalls everything else. A SuperSpeed
+ * location would; return -1 for a slot not open, or for a power-on the row
+ * says is not queued. A hub's change endpoint is answered when a change is
+ * reported, and any other endpoint but the control endpoint, 1, stays out.
+ * On endpoint 1 the standard requests are answered for both kinds; a
+ * keyboard stalls everything else. A SuperSpeed
  * hub has the USB 3 hub descriptor and stalls a request for the USB 2 one,
  * as the specification's hubs do, and a USB 2 hub the other way round. A
  * warm reset on an empty port reports nothing.
@@ -984,45 +1037,7 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
         return 0;
     }
     if (setup[0] == 0x23 && setup[1] == 3) { /* SET_PORT_FEATURE */
-        int feature = setup[2];
-        int port = setup[4];
-
-        if (feature == 8) {
-            model.power_requests++;
-            model.last_power_ms = model.now_ms;
-            if (port >= 1 && port <= MODEL_PORTS && model.port_powered_off[port - 1]) {
-                if (model.power_on_refuse) {
-                    answer(device, 1, USB_XFER_STALLED, 0, 0, transfer->generation);
-                    return 0;
-                }
-                model.port_powered_off[port - 1] = 0;
-                model.power_ons++;
-            }
-        } else if (feature == 28 && port >= 1 && port <= MODEL_PORTS) {
-            /* BH_PORT_RESET: the link returns to U0, both reset changes set. */
-            model.warm_resets++;
-            if (model.port_kind[port - 1] == KIND_NONE) {
-                answer(device, 1, USB_XFER_OK, 0, 0, transfer->generation);
-                return 0;
-            }
-            model.port_link[port - 1] = 0;
-            model.port_enabled[port - 1] = 1;
-            model.port_change[port - 1] |= 0x30u;
-            answer(device, 1, USB_XFER_OK, 0, 0, transfer->generation);
-            model_change(port);
-            return 0;
-        } else if (feature == 4 && port >= 1 && port <= MODEL_PORTS) {
-            /* A hub stalls a reset while C_PORT_RESET is unacknowledged. */
-            if (model.port_change[port - 1] & 16u) {
-                answer(device, 1, USB_XFER_STALLED, 0, 0, transfer->generation);
-                return 0;
-            }
-            model.reset_requests++;
-            model.port_in_reset[port - 1] = 1;
-            model.port_reset_reads[port - 1] = 0;
-        }
-        answer(device, 1, USB_XFER_OK, 0, 0, transfer->generation);
-        return 0;
+        return set_port_feature(device, setup[2], setup[4], transfer->generation);
     }
     if (setup[0] == 0x23 && setup[1] == 1) { /* CLEAR_PORT_FEATURE */
         int feature = setup[2];
@@ -1063,16 +1078,23 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
     return 0;
 }
 
-/** Return 0: the core masks interrupts, and the host has none. */
+/* The times the core masked interrupts, and how many masks are in force. */
+static int irq_saves;
+static int irq_depth;
+
+/** Count a mask and return 0: the host has no interrupts to mask. */
 uint32_t kirq_save(void)
 {
+    irq_saves++;
+    irq_depth++;
     return 0;
 }
 
-/** Do nothing, as `kirq_save` does. */
+/** Count the mask's end. */
 void kirq_restore(uint32_t flags)
 {
     (void)flags;
+    irq_depth--;
 }
 
 #include "../../rach2/sys/usb/core.c"
@@ -1363,6 +1385,81 @@ static void concurrent_changes(void)
           closes == 1 && model.power_offs == 1 && model.warm_resets == 0 && running_count() == 1);
 }
 
+/** Read `/proc/usb`'s lines for a keyboard on port 2 of the hub. */
+static void proc_usb_lines(void)
+{
+    char line[96];
+    int i;
+    int found = 0;
+    int saves = irq_saves;
+
+    line[0] = '\0';
+    for (i = 0; i < USB_MAX_DEVICES; i++) {
+        if (usb_core_describe(i, line, (int)sizeof(line)) > 0 && contains(line, "class 3")) {
+            found = contains(line, "port 1.2 ");
+        }
+    }
+    CHECK("/proc/usb gives the keyboard's location as 1.2", found);
+    CHECK("and reads the device table with interrupts off",
+          irq_saves == saves + USB_MAX_DEVICES && irq_depth == 0);
+}
+
+/** Pull a keyboard whose report endpoint halted before it is quiesced. */
+static void halted_pulled(void)
+{
+    int i;
+    int kbd;
+    int hub_index = -1;
+    int kbd_index = -1;
+
+    model_reset();
+    model.port_kind[1] = KIND_KBD;
+    pump(2000);
+    kbd = slot_of_kind(KIND_KBD);
+    for (i = 0; i < USB_MAX_DEVICES; i++) {
+        if (dev_at(i)->state == ST_RUNNING && dev_at(i)->interface.kind == USB_KIND_HUB) {
+            hub_index = i;
+        }
+        if (dev_at(i)->state == ST_RUNNING && kbd != 0 && dev_at(i)->slot == kbd) {
+            kbd_index = i;
+        }
+    }
+    CHECK("a keyboard is running behind the hub", hub_index >= 0 && kbd_index >= 0);
+    if (hub_index < 0 || kbd_index < 0) {
+        return;
+    }
+    model.hold_commands = 1;
+    answer(kbd, dev_at(kbd_index)->ep_dci, USB_XFER_STALLED, 8, 8, 0);
+    pump(100);
+    CHECK("a keyboard whose report transfer stalls waits halted",
+          dev_at(kbd_index)->state == ST_HALTED);
+    model.port_kind[1] = KIND_NONE;
+    usb_core_hub_port(hub_index, 1, 0);
+    CHECK("pulled while halted, its class driver is told",
+          hid_gone_count == 1 && hid_gone_slot[0] == kbd_index + 1);
+    model.hold_commands = 0;
+    pump(1000);
+    CHECK("and its slot is closed", closes == 1 && close_order[0] == kbd);
+}
+
+/** Power a port on after an over-current, the request not queued at the
+ * first two tries. */
+static void power_on_unqueued(void)
+{
+    model_reset();
+    model.port_kind[1] = KIND_KBD;
+    pump(2000);
+    model.power_on_unqueued = 2;
+    model.port_over_current[1] = 1;
+    model.port_change[1] |= 8u;
+    model_change(2);
+    pump(500);
+    model.port_over_current[1] = 0;
+    pump(1500);
+    CHECK("a power-on that cannot be queued is asked for again until it is",
+          model.power_on_unqueued == 0 && model.power_ons == 1);
+}
+
 /**
  * Run the rows and print the result; return 1 when a row failed.
  *
@@ -1389,7 +1486,6 @@ static void concurrent_changes(void)
  */
 int main(void)
 {
-    char line[96];
     int hub;
     int kbd;
     int port;
@@ -1418,18 +1514,7 @@ int main(void)
     CHECK("its port was reset through the hub and the reset change cleared",
           model.reset_requests == 1 && model.reset_clears == 1);
     CHECK("and both are running", running_count() == 2);
-    line[0] = '\0';
-    {
-        int i;
-        int found = 0;
-
-        for (i = 0; i < USB_MAX_DEVICES; i++) {
-            if (usb_core_describe(i, line, (int)sizeof(line)) > 0 && contains(line, "class 3")) {
-                found = contains(line, "port 1.2 ");
-            }
-        }
-        CHECK("/proc/usb gives the keyboard's location as 1.2", found);
-    }
+    proc_usb_lines();
 
     /* Power: one request per port, ganged or not, then the power-good wait. */
     model_reset();
@@ -1670,6 +1755,8 @@ int main(void)
         CHECK("and the hub stays", running_count() == 1);
     }
 
+    halted_pulled();
+
     /* A hub pulled with two devices below: both children close before it. */
     model_reset();
     model.port_kind[1] = KIND_KBD;
@@ -1840,6 +1927,8 @@ int main(void)
     pump(3000);
     CHECK("and the port is left off", model.power_requests == port + 1 && model.power_ons == 0);
     CHECK("with nothing enumerated on it", running_count() == 1 && model.reset_requests == kbd);
+
+    power_on_unqueued();
 
     /* A multi-TT hub's alternate setting 1, selected or stalled. */
     model_reset();

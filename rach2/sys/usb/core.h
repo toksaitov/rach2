@@ -256,8 +256,8 @@ int usb_core_row(int index, struct usb_sys_row *row);
  * hub's port, from 1, joined by dots, and the identifiers in hex.
  *
  * Returns the number of bytes written, or zero when `index` names no running
- * device or `size` is less than 8. Called in process context, with no lock
- * taken.
+ * device or `size` is less than 8. Called in process context; the entry, and
+ * the path buffer the pump's records share, are read with interrupts off.
  */
 int usb_core_describe(int index, char *out, int size);
 
