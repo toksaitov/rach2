@@ -19,7 +19,7 @@
 # strace; lsof; tmux; cron running a user's crontab; zip and unzip; Python with
 # its standard library's modules; GnuPG signing, verifying, encrypting and
 # decrypting; GNU make building a small project; GNU sed configured with
-# autoconf's configure, which reads the root's site file, and made; GCC and G++
+# autoconf's configure, which names the build from uname, and made; GCC and G++
 # compiling and linking a C and a C++ program that run; GDB stopping at a
 # breakpoint, stepping, printing a variable and a backtrace; the SpiderMonkey
 # shell running a script in its JIT; D-Bus's system bus and a login's session
