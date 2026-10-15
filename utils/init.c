@@ -29,7 +29,6 @@
 #include <unistd.h>
 #include <time.h>
 #include <signal.h>
-#include <unistd.h>
 #include <sys/reboot.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
