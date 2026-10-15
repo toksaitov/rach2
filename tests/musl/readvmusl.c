@@ -1,30 +1,28 @@
 /**
- * Buffered reading, which is `readv` seen from where a program stands.
+ * readvmusl: check readv, which musl's stdio fills its buffer with.
  *
- * musl's stdio fills its buffer with `readv`, not `read` whenever it
- * wants more than a single byte, so before this kernel had that call every
- * program reading through `fgets`, `fread` or `scanf` failed, and several
- * programs in this tree read a byte at a time to avoid it. busybox's `chpasswd`
- * is the one that forced the issue: it reads its input with `xmalloc_fgetline`
- * and exited without a message.
+ * musl's stdio reads with `readv`, not `read`, whenever it wants more than a
+ * single byte, so every program that reads through `fgets`, `fread` or
+ * `scanf` depends on the call; BusyBox's `chpasswd`, for one, reads its input
+ * with `xmalloc_fgetline`.
  *
- * The buffers are filled in order, and the probe pins what that costs behind
- * each kind of descriptor. A regular file is read again per buffer, since its
- * read returns at once and its bytes carry no boundary. A pipe is read again
- * only while it says it has more, so a walk never parks for input nobody has
- * written. A datagram socket is not read again at all: one message is copied
- * out across the buffers it reaches, and the next read starts the next message.
- * A terminal is not read again either, for the same kind of reason: the line is
- * its unit.
- * A reader that asked for more than it got must still go round again, which is
- * what musl's stdio does and what the buffered cases here demonstrate.
+ * The buffers are filled in order, and the probe checks how far each kind of
+ * descriptor goes. A regular file is read again for each buffer, since its
+ * read returns at once and its bytes have no boundary. A pipe is read again
+ * only while it has more, so a read never waits for input nobody has written.
+ * A datagram socket is not read again at all: one message is copied out
+ * across the buffers it reaches, and the next read starts the next message.
+ * A terminal is not read again either, since the line is its unit. A reader
+ * that asked for more than it got must go round again, which is what musl's
+ * stdio does and what the buffered cases here show.
  *
  * The rest is the edges: the whole vector list is checked before a byte is
- * taken, so a bad address in a later buffer refuses the call with the input
- * still queued; a list that asks for nothing still checks the descriptor; and a
- * negative count is refused.
+ * taken, so a bad address in a later buffer fails the call with the input
+ * still queued; a list that asks for nothing still checks the descriptor; and
+ * a negative count fails with EINVAL.
  *
- * Prints "READVMUSL OK" on success and "READVMUSL FAIL (detail)" otherwise.
+ * Prints `READVMUSL OK` and exits 0 on success, and prints
+ * `READVMUSL FAIL (detail)` and exits 1 otherwise.
  */
 
 #define _GNU_SOURCE
@@ -52,7 +50,7 @@ static int fail(const char *what)
 }
 
 /**
- * Make a pipe holding `text`, returning its read end, or -1.
+ * Make a pipe with `text` in it, and return its read end, or -1.
  *
  * The writing end is closed before the caller reads, so a reader that asks for
  * more than was written sees end of input instead of blocking for a writer
@@ -78,7 +76,8 @@ static int pipe_holding(const char *text)
 }
 
 /**
- * Make a file holding `text`, returning a descriptor open for reading, or -1.
+ * Make the file `SCRATCH` with `text` in it, and return a descriptor open on
+ * it for reading, or -1.
  */
 static int file_holding(const char *text)
 {
@@ -98,7 +97,8 @@ static int file_holding(const char *text)
 }
 
 /**
- * The buffered reads, which is what the kernel call is for.
+ * Check `fgets` and `fread` through stdio on a pipe, the reads the call is
+ * for. Returns 0, or 1 once the failure is reported.
  */
 static int check_buffered(void)
 {
@@ -158,7 +158,9 @@ static int check_buffered(void)
 }
 
 /**
- * A regular file, which is the one thing filled buffer after buffer.
+ * Check a regular file, the one kind of descriptor read again for each
+ * buffer: the order of the buffers, a zero-length buffer, and the end of the
+ * file. Returns 0, or 1 once the failure is reported.
  */
 static int check_file(void)
 {
@@ -222,14 +224,15 @@ static int check_file(void)
 }
 
 /**
- * A pipe, which fills every buffer the bytes it has reach and stops there.
+ * Check a pipe, which fills every buffer its bytes reach and stops there.
+ * Returns 0, or 1 once the failure is reported.
  *
- * The case that matters is the second one: the pipe has exactly what the
- * first buffer takes and its writer is still open, so reading on would have
- * nothing to return and would park until something wrote again. The walk asks
- * whether there is more before it takes any, so it stops. If that regressed
- * this probe would not fail, it would hang, and the suite's timeout is the
- * failure.
+ * The second case is the one that matters: the pipe has exactly what the
+ * first buffer takes and its writer is still open, so a further read would
+ * have nothing to return and would wait until something wrote again. The
+ * kernel checks whether there is more before it reads on, so it stops. A
+ * fault there makes the probe hang, not fail, and the suite's time limit
+ * reports it.
  */
 static int check_stream(void)
 {
@@ -277,16 +280,25 @@ static int check_stream(void)
 }
 
 /**
- * A datagram socket, where the message and not the buffer is the unit.
+ * Check a datagram socket, where the message and not the buffer is the unit.
+ * Returns 0, or 1 once the failure is reported.
  *
- * One datagram fills as many buffers as it reaches, because reading it twice
- * would take the NEXT one and copying it out once would drop whatever did not
- * fit. Two are sent to this socket before either is read, so the second is
- * proof that the first read consumed exactly one message: the second `readv`
- * must return the other datagram whole, and not the tail of the first.
+ * One datagram fills as many buffers as it reaches, because a second read
+ * would take the next datagram, and a copy into the first buffer alone would
+ * drop whatever did not fit. A datagram longer than the buffers loses its
+ * tail, as it does for a `read` too small for it, and the next read starts a
+ * new message: a read after it must return the next datagram whole, not the
+ * tail of the last.
  *
- * Loopback, so the case needs no network device; the kernel turns a datagram
- * addressed to 127.0.0.1 around through its own ring.
+ * A caller may point a buffer at its own vector list, so that the message
+ * rewrites the descriptors after it, with addresses nothing checked. The
+ * aliasing payload does that: four bytes for the first buffer, then a
+ * descriptor of an address in the user window that no mapping backs (8 bytes
+ * on i386, 16 on x86-64), then bytes for the kernel to put there. The call
+ * must return, not fault in kernel mode, with what it copied before it
+ * stopped.
+ *
+ * The socket is on loopback, so the case needs no network device.
  */
 static int check_datagram(void)
 {
@@ -336,8 +348,7 @@ static int check_datagram(void)
         return fail("the datagram arrived out of order across the buffers");
     }
 
-    /* A datagram longer than the buffers loses its tail, the way a `read` too
-     * small for one loses it, and the NEXT read still starts a new message. */
+    /* A datagram longer than the buffers. */
     if (sendto(fd, "0123456789", 10, 0, (struct sockaddr *)&me, sizeof(me)) != 10) {
         close(fd);
 
@@ -356,15 +367,7 @@ static int check_datagram(void)
         return fail("the truncated datagram has the wrong bytes");
     }
 
-    /* A caller may point a buffer AT its own vector list, so that the message
-     * rewrites the destinations behind it. The addresses that lands are ones
-     * nothing checked, and the kernel must not write through them blind. This
-     * payload is built to do exactly that: four bytes for the first buffer,
-     * then the bytes of a descriptor naming an address inside the user window
-     * that no mapping backs, 8 on i386 and 16 on x86-64, then four more bytes
-     * for the kernel to put there. It must come back, not fault in kernel mode,
-     * and what it returns is whatever it managed before it gave up.
-     */
+    /* A buffer that aliases the vector list. */
     {
         struct iovec alias[3];
         struct iovec forged = {(void *)0x30000000, 4};
@@ -395,8 +398,7 @@ static int check_datagram(void)
         }
     }
 
-    /* And the remainder was dropped with the message, not left to answer the
-     * next read: nothing is waiting now. */
+    /* The tail went with its message, so the next read is the next message. */
     if (sendto(fd, "TAIL", 4, 0, (struct sockaddr *)&me, sizeof(me)) != 4) {
         close(fd);
 
@@ -414,14 +416,15 @@ static int check_datagram(void)
 }
 
 /**
- * A terminal, which hands back one line however many buffers were offered.
+ * Check a terminal, which returns one line however many buffers are given.
+ * Returns 0, or 1 once the failure is reported.
  *
- * The line is the unit a terminal reads in, so filling a second buffer with the
- * line after it would answer a question the reader did not ask: a program that
- * asked for one line and got two has consumed input it will not look at.
- * Two lines are written into the master before either is read, and the first
- * buffer is exactly the size of the first line: filled to its end, so nothing
- * but the rule itself stops the read from going on to the line behind it.
+ * The line is the unit a terminal reads in, so a program that asked for one
+ * line and got two would have consumed input it will not look at. Two lines
+ * are written into the master with two writes before either is read, so both
+ * are complete and waiting, and the first buffer is exactly the size of the
+ * first line: only the rule of one line to a read stops the read from going
+ * on to the second.
  */
 static int check_terminal(void)
 {
@@ -447,9 +450,6 @@ static int check_terminal(void)
 
         return fail("could not open the pty slave");
     }
-    /* Two writes, so both lines are cooked and waiting before the read: a
-     * discipline that had only the first would stop the walk by itself and the
-     * case would prove nothing about the rule. */
     if (write(master, "one\n", 4) != 4 || write(master, "two\n", 4) != 4) {
         close(slave);
         close(master);
@@ -462,10 +462,7 @@ static int check_terminal(void)
     parts[1].iov_base = two;
     parts[1].iov_len = sizeof(two);
     got = readv(slave, parts, 2);
-    /* Closing the master hangs the slave up, which signals the group the slave
-     * belongs to, and here that is this probe's own. The terminal is finished
-     * with, so the hangup is ignored across the two closes, not allowed
-     * to kill the run. */
+    /* Closing the master hangs up the slave and sends SIGHUP to this group. */
     signal(SIGHUP, SIG_IGN);
     close(slave);
     close(master);
@@ -481,7 +478,14 @@ static int check_terminal(void)
 }
 
 /**
- * The edges, which are about refusing without taking anything.
+ * Check the edges, where the call fails without taking input. Returns 0, or 1
+ * once the failure is reported.
+ *
+ * A bad address in the second buffer fails the call, and the bytes the first
+ * buffer would have taken are still there afterwards. There are two kinds of
+ * bad address: one below the user window, and one inside it that no mapping
+ * backs, which a range check alone would let through and only a write to it
+ * would find, by which time the input would be gone.
  */
 static int check_edges(void)
 {
@@ -494,11 +498,7 @@ static int check_edges(void)
     parts[0].iov_base = one;
     parts[0].iov_len = sizeof(one);
 
-    /* A bad address in the second buffer refuses the call, and the bytes the
-     * first buffer would have taken are still there afterwards. Two kinds of
-     * bad: one below the user window, and one inside it that no mapping backs,
-     * which a range check alone would let through and only a write to it would
-     * discover, by which time the input would be gone. */
+    /* A bad address in the second buffer, below the window and inside it. */
     fd = pipe_holding("KEEPTHIS");
     if (fd < 0) {
         return fail("could not make the pipe the refusal case uses");
@@ -563,22 +563,22 @@ static int check_edges(void)
 }
 
 /**
- * A destination shared by a fork, which is where the check before the read has
- * something to do.
+ * Check a destination shared by a fork, where the check before the read has
+ * something to do. Returns 0, or 1 once the failure is reported.
  *
  * Every page a child inherits is present, read-only and marked copy-on-write
- * until it is written. `readv` promises to check each destination is writable
+ * until it is written. `readv` checks that each destination is writable
  * before it takes a byte, and a check that only asked whether the page was
- * present would answer yes about a page nothing may write to yet. The child
- * reads into a buffer it has not touched since the fork, and the bytes must
- * arrive.
+ * present would pass a page nothing may write to yet. The child reads into a
+ * buffer it has not touched since the fork, and the bytes must arrive. The
+ * buffer is the middle page of three, since a buffer sharing a page with
+ * anything else the child writes would be made private by that write before
+ * the read.
  */
 static int check_shared(void)
 {
     struct iovec parts[2];
-    /* Three pages, so the middle one can be used alone. A buffer sharing a page
-     * with anything else the child writes would be made private by that write
-     * before the read got there, and the case would prove nothing. */
+    /* Three pages, so the middle one can be used alone. */
     static char arena[3 * 4096];
     char *inherited = arena + (4096 - ((unsigned long)arena % 4096));
     int status = 0;
@@ -617,7 +617,7 @@ static int check_shared(void)
 }
 
 /**
- * Run the cases and report.
+ * Run the cases in order, stopping at the first failure.
  */
 int main(void)
 {

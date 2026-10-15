@@ -1,5 +1,5 @@
 /**
- * Advisory locks between processes.
+ * lockmusl: check advisory locks between processes.
  *
  * A child's write lock over bytes 10 to 29 makes the parent's lock over
  * byte 25 fail with EAGAIN, while a lock beside it succeeds; F_GETLK reports
@@ -7,23 +7,23 @@
  * lock in two: the parent's lock on either side fails, and F_GETLK reports
  * the child's pid with bytes 10 to 14 and with bytes 20 to 29. The child's
  * close of another descriptor of the file drops what is left. A child's locks
- * of the largest offset and of every byte before it join into one F_GETLK
- * reports with a length of 0. F_SETLKW waits until the holder unlocks: the
- * child that asks is seen asleep, with nothing taken, before the parent
- * unlocks. Two processes that each wait for the other's lock, the parent
+ * of the largest offset and of every byte before it join into one, which
+ * F_GETLK reports with a length of 0. F_SETLKW waits until the holder
+ * unlocks: the child that asks is seen asleep, with nothing taken, before the
+ * parent unlocks. Two processes each wait for the other's lock, the parent
  * asking only once the child is seen asleep in its wait: one of the two waits
  * fails with EDEADLK and the other takes the lock, and neither fails in any
  * other way. A thread's F_SETLKW whose descriptor another thread closes
  * during the wait fails with EBADF when the holder lets go, and leaves the
  * byte free, and so does one whose file a write moves during the wait. A
  * process that clone makes with CLONE_FILES shares its parent's descriptor
- * table, which owns the locks: F_GETLK in another process names the one of
- * the two that took each lock, a close by the child drops the parent's lock
- * too, and the child's exit leaves the table's locks. A lock is on the file:
- * a child's lock on a file leaves free another file whose name hashes
- * alike, and a lock taken before a rename, or before a write that moves the
- * file on the KRFFS root, refuses a child's lock through an open after it.
- * A flock LOCK_EX on one open makes LOCK_EX|LOCK_NB on another fail with
+ * table, which owns the locks: F_GETLK in another process reports which of
+ * the two took each lock, a close by the child drops the parent's lock too,
+ * and the child's exit leaves the table's locks. A lock is on the file: a
+ * child's lock on a file leaves free another file whose name hashes alike,
+ * and a lock taken before a rename, or before a write that moves the file on
+ * the KRFFS root, blocks a child's lock through an open after it. A flock
+ * LOCK_EX on one open makes LOCK_EX|LOCK_NB on another fail with
  * EWOULDBLOCK, and a dup shares the lock. A description's lock stays
  * through the close of one of its two descriptors, as another open's
  * LOCK_EX|LOCK_NB finds, and goes at the last close. An open file
@@ -33,7 +33,8 @@
  * the file's device and inode number as stat gives them, and none of them
  * once the descriptors are closed.
  *
- * Prints "LOCKMUSL OK" on success and "LOCKMUSL FAIL (detail)" otherwise.
+ * Prints `LOCKMUSL OK` and exits 0 on success, and prints
+ * `LOCKMUSL FAIL (detail)` and exits 1 otherwise.
  */
 
 #define _GNU_SOURCE
@@ -56,12 +57,18 @@
 /* The directory of the rows about which file a lock is on. */
 #define KEY_DIR   "/tmp/lockmusl.d"
 
+/** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
 {
     printf("LOCKMUSL FAIL (%s: errno %d)\n", what, errno);
     return 1;
 }
 
+/**
+ * Make the fcntl record-lock command `cmd` on `fd` with a lock of `type` over
+ * the `len` bytes from `start`, a `len` of 0 reaching the end of the file.
+ * Returns fcntl's result.
+ */
 static int lk(int fd, int cmd, short type, off_t start, off_t len)
 {
     struct flock fl;
@@ -74,11 +81,13 @@ static int lk(int fd, int cmd, short type, off_t start, off_t len)
     return fcntl(fd, cmd, &fl);
 }
 
+/** Write a byte to the pipe `fd`, a signal to the process at the other end. */
 static void post(int fd)
 {
     (void)write(fd, "x", 1);
 }
 
+/** Read a byte from the pipe `fd`: wait for the other end's `post`. */
 static void await(int fd)
 {
     char c;
@@ -153,6 +162,11 @@ static int seen_asleep(pid_t pid)
     return 0;
 }
 
+/**
+ * Check a child's lock of bytes 10 to 29 of `fd`, its split by an unlock of
+ * the middle, and its release by a close of another descriptor of the file.
+ * Returns 0, or 1 once the failure is reported.
+ */
 static int records(int fd)
 {
     int to_child[2], to_parent[2];
@@ -225,6 +239,11 @@ static int records(int fd)
     return 0;
 }
 
+/**
+ * Check that F_SETLKW on `fd` waits until the holder unlocks, and that of two
+ * processes that wait for each other's lock one takes it and the other's
+ * wait fails with EDEADLK. Returns 0, or 1 once the failure is reported.
+ */
 static int waits(int fd)
 {
     struct pollfd pfd;
@@ -297,7 +316,8 @@ static int waits(int fd)
 /**
  * Locks that reach the largest offset: a child's lock of the last byte alone
  * and its lock of every byte before it join into one lock of the whole file,
- * which F_GETLK reports from byte 0 with a length of 0.
+ * which F_GETLK reports from byte 0 with a length of 0. Returns 0, or 1 once
+ * the failure is reported.
  */
 static int largest(int fd)
 {
@@ -340,6 +360,8 @@ static int largest(int fd)
     return 0;
 }
 
+/* The waiting thread's descriptor, its F_SETLKW's result and errno, and its
+ * thread id, 0 until the thread has stored it. */
 static int waiter_fd, waiter_rc, waiter_errno;
 static volatile pid_t waiter_tid;
 
@@ -365,8 +387,11 @@ static int thread_sleeping(pid_t tid)
     return state && state[1] == ' ' && state[2] == 'S';
 }
 
-/** Say this thread's id in `waiter_tid`, and wait for a write lock of byte
- * 50 through `waiter_fd`. */
+/**
+ * Store this thread's id in `waiter_tid`, and wait for a write lock of byte
+ * 50 through `waiter_fd`, with the result left in `waiter_rc` and
+ * `waiter_errno`.
+ */
 static void *wait_for_byte(void *arg)
 {
     (void)arg;
@@ -424,7 +449,8 @@ static int byte_held_at(const char *path, off_t at)
  * A thread waits in F_SETLKW for a byte a child holds, and the main thread,
  * once it sees the thread asleep, closes the descriptor it waits through.
  * When the child lets go, the wait gains the lock, lets it go for the close,
- * and fails with EBADF, and a second child can take the byte.
+ * and fails with EBADF, and a second child can take the byte. Returns 0, or 1
+ * once the failure is reported.
  */
 static int closed_wait(void)
 {
@@ -480,6 +506,7 @@ static int closed_wait(void)
     return 0;
 }
 
+/* The stack of the process of `shared_table`, and the pipes to and from it. */
 static char sharer_stack[16384] __attribute__((aligned(16)));
 static int to_sharer[2], from_sharer[2];
 
@@ -487,7 +514,8 @@ static int to_sharer[2], from_sharer[2];
  * The process of `shared_table`, which shares its parent's descriptor table:
  * it locks byte 72 of the file whose descriptor `arg` points to, and when
  * the parent says so closes a descriptor of the file it opens for that; then
- * it exits when the parent says so.
+ * it exits when the parent says so. Returns its exit status: 0, 1 when the
+ * lock failed, or 2 when the open failed.
  */
 static int sharer(void *arg)
 {
@@ -518,7 +546,7 @@ static int sharer_fail(const char *what)
     return rc;
 }
 
-/** The process F_GETLK in a child names as the holder of byte `at` of the
+/** The process F_GETLK in a child reports as the holder of byte `at` of the
  * file, or -1 when the child finds the byte free. */
 static pid_t holder_of(off_t at)
 {
@@ -560,9 +588,9 @@ static pid_t holder_of(off_t at)
  * process that clone makes with CLONE_FILES and not CLONE_THREAD shares its
  * parent's table, and so its locks. It locks byte 72 and the parent byte
  * 70, which do not touch and so stay two locks, and F_GETLK in another
- * process names the process that took each. Its close of a descriptor of
+ * process reports the process that took each. Its close of a descriptor of
  * the file drops both, and its exit, while the parent holds byte 74, leaves
- * that lock with the table.
+ * that lock with the table. Returns 0, or 1 once the failure is reported.
  */
 static int shared_table(int fd)
 {
@@ -607,7 +635,8 @@ static int shared_table(int fd)
 /**
  * Two files whose names hash alike are two files: `bC` and `cb` in one
  * directory have one inode number on the KRFFS root, and a child's write
- * lock on byte 0 of one must leave byte 0 of the other free.
+ * lock on byte 0 of one must leave byte 0 of the other free. Returns 0, or 1
+ * once the failure is reported.
  *
  * The child tells the parent it has tried its lock before it judges the
  * attempt, and the parent lets it go and reaps it before it judges its own
@@ -670,8 +699,8 @@ static int byte_held(const char *path)
 
 /**
  * A lock is on the file whatever its name: the parent's write lock on byte
- * 0, taken before a rename, must refuse a child's lock of the byte through
- * an open of the new name.
+ * 0, taken before a rename, must block a child's lock of the byte through
+ * an open of the new name. Returns 0, or 1 once the failure is reported.
  */
 static int renamed(void)
 {
@@ -693,7 +722,8 @@ static int renamed(void)
  * A lock goes where its file goes. Two files made one after the other lie
  * side by side on the KRFFS root, so a write that grows the first past its
  * node moves it; the parent's write lock on byte 0, taken before that
- * write, must refuse a child's lock through an open made after it.
+ * write, must block a child's lock through an open made after it. Returns 0,
+ * or 1 once the failure is reported.
  */
 static int moved(void)
 {
@@ -722,7 +752,8 @@ static int moved(void)
  * 50 of a file whose node another file follows, the main thread closes the
  * descriptor it waits through and grows the file past its node, and when
  * the child that held the byte lets go, the wait fails with EBADF and a
- * second child can take the byte through an open of the file.
+ * second child can take the byte through an open of the file. Returns 0, or 1
+ * once the failure is reported.
  */
 static int closed_wait_moved(void)
 {
@@ -796,7 +827,8 @@ static int closed_wait_moved(void)
  * others answer, since each says its own failure and a fault that breaks
  * two of them is seen in both. The closed wait across a move runs only once
  * a lock has been seen to move with its file: where it does not, the wait
- * never meets the holder's unlock and would sleep for good.
+ * never meets the holder's unlock and would sleep for good. Returns 0, or 1
+ * when a row failed.
  */
 static int which_file(void)
 {
@@ -811,6 +843,11 @@ static int which_file(void)
     return failed;
 }
 
+/**
+ * Check flock between two opens, through a dup and across closes, and open
+ * file description locks against a second open and a POSIX lock. Returns 0,
+ * or 1 once the failure is reported.
+ */
 static int flocks(void)
 {
     int a = open(LOCK_PATH, O_RDWR);
@@ -869,8 +906,10 @@ static int flocks(void)
     return 0;
 }
 
-/* Whether `text`, /proc/locks, has the line of a lock that begins with `head`,
-   was taken by `pid` on the file of `st` and covers `range`. */
+/**
+ * Whether `text`, /proc/locks, has the line of a lock that begins with `head`,
+ * was taken by `pid` on the file of `st` and covers `range`.
+ */
 static int listed(const char *text, const char *head, long pid, const struct stat *st,
                   const char *range)
 {
@@ -881,6 +920,10 @@ static int listed(const char *text, const char *head, long pid, const struct sta
     return strstr(text, want) != NULL;
 }
 
+/**
+ * Read /proc/locks into `buf` of `cap` bytes, terminated. Returns the bytes
+ * read, or -1.
+ */
 static int read_locks(char *buf, int cap)
 {
     int fd = open("/proc/locks", O_RDONLY);
@@ -895,6 +938,11 @@ static int read_locks(char *buf, int cap)
     return n;
 }
 
+/**
+ * Check that /proc/locks lists a flock, a POSIX and an open file description
+ * lock in Linux's columns, and none of them after the close. Returns 0, or 1
+ * once the failure is reported.
+ */
 static int proc_locks(void)
 {
     static char text[8192];
