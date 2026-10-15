@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd October 15, 2026
 .Dt GETPID 2
 .Os
 .Sh NAME
@@ -62,13 +62,15 @@ of 0 selects the target's own process ID, making it a group leader.
 The target must be the caller's process or its child and must not have
 ended or be a session leader; any thread's ID names its process.
 Every thread of the target is moved.
+A parent may change its child's group only before the child successfully
+calls
+.Xr execve 2 .
 Unless the target is forming its own group, the destination group must
 already have a member in the target's session.
 The group's original leader need not still be alive.
 .Pp
-The kernel does not check whether a child has called
-.Xr execve 2
-or whether the child's session differs from the caller's session.
+The kernel does not check whether the child's session differs from the
+caller's session.
 The destination group is checked against the target's session.
 .Pp
 .Fn setsid
@@ -143,6 +145,11 @@ A separate child calls
 and checks that both its session ID and process group ID equal its process ID.
 .Sh ERRORS
 .Bl -tag -width "[EINVAL]"
+.It Bq Er EACCES
+The child selected by
+.Fn setpgid
+has successfully called
+.Xr execve 2 .
 .It Bq Er EINVAL
 .Fn setpgid
 was given a negative

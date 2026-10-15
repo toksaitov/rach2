@@ -4323,6 +4323,20 @@ long sys_exit(isr_params_t *params)
 }
 end
 
+fault setpgid-exec-allowed
+probe schedmusl
+file rach2/sys/syscall_proc.c
+expect SCHEDMUSL FAIL (setpgid after a child's successful exec was not EACCES)
+old
+    if (target->tg != current_proc->tg && target->tg->execed) {
+        return -EACCES;
+    }
+new
+    if (target->tg != current_proc->tg && target->tg->execed) {
+        (void)target;
+    }
+end
+
 fault job-setpgid-exit-killed
 probe jobprobe
 file rach2/sys/syscall_proc.c

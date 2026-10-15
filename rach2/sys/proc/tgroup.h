@@ -38,6 +38,8 @@ struct tgroup {
     uint32_t core_dumping;     /* its core is being written; the others park */
     int32_t exit_code;         /* the wait status the process ends with then */
     struct process *exec_task; /* the thread whose execve ends the others */
+    /* A successful exec since this group was made; fork starts at 0. */
+    uint32_t execed;
     /* The user and system CPU time, in ticks, of the threads that ended. */
     uint32_t utime;
     uint32_t stime;

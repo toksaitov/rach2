@@ -77,6 +77,8 @@ A process is a thread group, `struct tgroup` (`tgroup.h`). Each thread is a reco
 
 Three more parts of a process are counted records of their own, which `clone` shares or copies: the address space, `struct mm`, shared under `CLONE_VM` and copied on write otherwise ([memory](../mm/Readme.md)); the descriptor table, shared under `CLONE_FILES` ([the file system layer](../fs/Readme.md)); and `struct fs_struct` (`process.h`), the working directory, the root directory `chroot` set and the file mode creation mask, shared under `CLONE_FS`. A thread that a C library makes shares all three with the rest of its process.
 
+The thread group's `execed` flag records a successful `execve` since the group was made. `exec_commit` sets it after any change of leader, and a new group starts with it clear. `setpgid` refuses a parent's request for a child whose flag is set with `EACCES`; a process may still change its own group ([getpid(2)](../../../man/man2/getpid.2)).
+
 Process 0, `proc_idle`, is the kernel's own. `kernel_main` (`rach2/kernel.c`) makes it on the boot stack with no address space, and the boot and the debug shell run as it. The first program, and each program the debug shell runs, start on the boot stack too, without a fork (`enter_program` in `rach2/kernel.c`). Each processor also has an idle task (`smp_idle_task` in `smp.c`): a record off the list, with id 0 and a guarded stack of its own, which no system call can reach and no reaper frees.
 
 ### Fork and clone

@@ -13,6 +13,11 @@
  * process; it may set its own user's. A user or a pid with no process fails
  * with ESRCH, and an unknown `which` with EINVAL.
  *
+ * A parent may set its child's process group after a failed exec, but a
+ * successful exec, by the leader or another thread, makes that EACCES.
+ * The new image may still set its own group and the group of a fresh child.
+ * SIGSTOP and waitpid order each check against the child's exec.
+ *
  * `sched_yield` returns 0. Every process has SCHED_OTHER with priority 0, and
  * asking for it, with SCHED_RESET_ON_FORK or not, succeeds; SCHED_FIFO and
  * SCHED_RR fail with EPERM, and the other policies, a priority that does not
@@ -50,6 +55,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <sched.h>
 #include <signal.h>
 #include <stdio.h>
@@ -140,6 +146,99 @@ static int in_child(int (*test)(void))
         return -1;
     }
     return WEXITSTATUS(status);
+}
+
+/**
+ * Check in the new image that it may set its own group and a fresh child's
+ * group, then stop for its parent's checks. Returns 0, or a failed step.
+ */
+static int exec_group_image(void)
+{
+    pid_t child;
+    int status, rc;
+
+    if (setpgid(0, 0) != 0 || getpgrp() != getpid()) {
+        return 1;
+    }
+    child = fork();
+    if (child < 0) {
+        return 2;
+    }
+    if (child == 0) {
+        kill(getpid(), SIGSTOP);
+        _exit(0);
+    }
+    rc = waitpid(child, &status, WUNTRACED) == child && WIFSTOPPED(status) &&
+                 WSTOPSIG(status) == SIGSTOP && setpgid(child, child) == 0 &&
+                 getpgid(child) == child
+             ? 0
+             : 3;
+    kill(child, SIGKILL);
+    waitpid(child, NULL, 0);
+    if (rc != 0) {
+        return rc;
+    }
+    kill(getpid(), SIGSTOP);
+    return 0;
+}
+
+/** Execute this probe's group helper from a new thread; exit on failure. */
+static void *exec_group_thread(void *arg)
+{
+    (void)arg;
+    execl("/musl/schedmusl", "schedmusl", "--exec-group", (char *)NULL);
+    _exit(4);
+}
+
+/**
+ * Check the parent's setpgid before and after its child's exec. With
+ * `threaded`, a non-leader thread executes the image. Returns 0 on success,
+ * or 1 after the failure is printed. All children are reaped before return.
+ */
+static int exec_groups(int threaded)
+{
+    pid_t child = fork();
+    int status, rc = 0;
+    pthread_t thread;
+
+    if (child < 0) {
+        return fail("fork for the exec process group");
+    }
+    if (child == 0) {
+        execl("/schedmusl-no-such-file", "missing", (char *)NULL);
+        if (errno != ENOENT) {
+            _exit(5);
+        }
+        kill(getpid(), SIGSTOP);
+        if (threaded) {
+            if (pthread_create(&thread, NULL, exec_group_thread, NULL) != 0) {
+                _exit(6);
+            }
+            for (;;) {
+                pause();
+            }
+        }
+        exec_group_thread(NULL);
+    }
+    if (waitpid(child, &status, WUNTRACED) != child || !WIFSTOPPED(status) ||
+        WSTOPSIG(status) != SIGSTOP) {
+        rc = fail("the child did not stop after its failed exec");
+    } else if (setpgid(child, child) != 0 || getpgid(child) != child ||
+               setpgid(child, getpgrp()) != 0) {
+        rc = fail("setpgid after a child's failed exec");
+    } else {
+        kill(child, SIGCONT);
+        if (waitpid(child, &status, WUNTRACED) != child || !WIFSTOPPED(status) ||
+            WSTOPSIG(status) != SIGSTOP) {
+            rc = fail("the new image could not set its own or its child's group");
+        } else if (setpgid(child, child) != -1 || errno != EACCES ||
+                   setpgid(child, getpgrp()) != -1 || errno != EACCES || getpgid(child) != child) {
+            rc = fail("setpgid after a child's successful exec was not EACCES");
+        }
+    }
+    kill(child, SIGKILL);
+    waitpid(child, NULL, 0);
+    return rc;
 }
 
 /** Run in a child: return 0 when it inherited the nice value -5, else 1. */
@@ -703,10 +802,14 @@ static int io_priorities(void)
     return 0;
 }
 
-int main(void)
+/** Run the checks, or the new image's helper when --exec-group is given. */
+int main(int argc, char **argv)
 {
-    if (thread_ids() != 0 || priorities() != 0 || scheduling() != 0 || oom_score() != 0 ||
-        io_priorities() != 0) {
+    if (argc == 2 && strcmp(argv[1], "--exec-group") == 0) {
+        return exec_group_image();
+    }
+    if (thread_ids() != 0 || exec_groups(0) != 0 || exec_groups(1) != 0 || priorities() != 0 ||
+        scheduling() != 0 || oom_score() != 0 || io_priorities() != 0) {
         return 1;
     }
     printf("SCHEDMUSL OK\n");

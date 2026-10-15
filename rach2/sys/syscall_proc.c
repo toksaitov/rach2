@@ -1627,6 +1627,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
         exec_take_leader();
     }
     ptimer_delete_all(current_proc->tg);
+    current_proc->tg->execed = 1;
     exec_files(s);
     close_cloexec_fds();
     current_proc->euid = s->euid;
@@ -4704,7 +4705,8 @@ long sys_setsid(isr_params_t *params)
  * already exist in the target's session, else -EPERM: some process must be in
  * it, whether or not its leader is still alive (`pgrp_in_session`). Returns 0;
  * -EINVAL for a negative pgid, -EPERM for a pgid the caller cannot see, and
- * -ESRCH for no such process.
+ * -ESRCH for no such process. A child that has successfully executed a new
+ * image cannot be moved by its parent; the call returns -EACCES.
  */
 long sys_setpgid(isr_params_t *params)
 {
@@ -4730,6 +4732,9 @@ long sys_setpgid(isr_params_t *params)
     }
     if (target->tg != current_proc->tg && target->parent_pid != current_proc->tgid) {
         return -ESRCH;
+    }
+    if (target->tg != current_proc->tg && target->tg->execed) {
+        return -EACCES;
     }
     if (target->sid == target->tgid) {
         return -EPERM;
