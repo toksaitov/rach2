@@ -6261,3 +6261,55 @@ new
             if (cur.node == cur.mnt->root && cur.mnt->covered) {
                 p -= cur.mnt->type->ops->lookup_rest ? 0 : 2;
 end
+
+# Leaks of open file descriptions and pipes, which ofdprobe and pipeprobe
+# judge by the heap's HeapUsed.
+
+fault ofd-close-leaked
+probe ofdprobe
+file rach2/sys/fs/fd.c
+expect FAIL: 300 open/close cycles left the heap as it was
+old
+            if (*link) {
+                *link = rec->next;
+            }
+            kfree(rec);
+new
+            if (*link) {
+                *link = rec->next;
+            }
+end
+
+fault ofd-fork-ref-leaked
+probe ofdprobe
+file rach2/sys/syscall_proc.c
+expect FAIL: 100 forks and the close left the heap as it was
+old
+        fd_ofd_ref(e->ofd);
+        if (e->type == FD_TYPE_SOCKET && e->sock) {
+new
+        fd_ofd_ref(e->ofd);
+        {
+            static const char probe[] = "ofdprobe";
+            uint32_t i = 0;
+
+            while (i < sizeof(probe) && current_proc->comm[i] == probe[i]) {
+                i++;
+            }
+            if (i == sizeof(probe)) {
+                fd_ofd_ref(e->ofd);
+            }
+        }
+        if (e->type == FD_TYPE_SOCKET && e->sock) {
+end
+
+fault pipe-close-leaked
+probe pipeprobe
+file rach2/sys/ipc/pipe.c
+expect FAIL: 100 pipe/close cycles left the heap as it was
+old
+    kfree(p->buf);
+    kfree(p);
+new
+    kfree(p->buf);
+end

@@ -22,7 +22,6 @@
 
 #define AF_INET    2
 #define SOCK_DGRAM 2
-#define O_RDONLY   0
 #define O_RDWR     2
 
 /** End the process with `status`; it does not return. */
@@ -76,45 +75,6 @@ static int open_socket(void)
     args[1] = SOCK_DGRAM;
     args[2] = 0;
     return sock_call(SC_SOCKET, args);
-}
-
-/** The value of the field `key`, with its colon, of /proc/meminfo, in its
- * own units, or 0xFFFFFFFF when the file or the field is absent. */
-static unsigned meminfo(const char *key)
-{
-    static char buf[1024];
-    int fd = syscall3(SYS_OPEN, (long)"/proc/meminfo", O_RDONLY, 0);
-    int n, i;
-
-    if (fd < 0) {
-        return 0xFFFFFFFFu;
-    }
-    n = syscall3(SYS_READ, fd, (long)buf, (int)sizeof(buf) - 1);
-    syscall1(SYS_CLOSE, fd);
-    if (n <= 0) {
-        return 0xFFFFFFFFu;
-    }
-    buf[n] = 0;
-    for (i = 0; i < n; i++) {
-        int k;
-
-        for (k = 0; key[k] && buf[i + k] == key[k]; k++) {
-        }
-        if (!key[k]) {
-            unsigned v = 0;
-
-            i += k;
-            while (buf[i] == ' ') {
-                i++;
-            }
-            while (buf[i] >= '0' && buf[i] <= '9') {
-                v = v * 10 + (unsigned)(buf[i] - '0');
-                i++;
-            }
-            return v;
-        }
-    }
-    return 0xFFFFFFFFu;
 }
 
 static int ack_fd = -1; /* the parent's word that every holder has reported */
@@ -240,7 +200,7 @@ static void crossed(int kind, int per_child, const char *what)
  * HeapPages within two pages of where it was. */
 static void cycle(int kind, const char *what)
 {
-    unsigned used0 = meminfo("HeapUsed:"), pages0 = meminfo("HeapPages:");
+    unsigned used0 = probe_meminfo("HeapUsed:"), pages0 = probe_meminfo("HeapPages:");
     unsigned used1, pages1;
     int i;
 
@@ -263,8 +223,8 @@ static void cycle(int kind, const char *what)
             syscall1(SYS_CLOSE, fd);
         }
     }
-    used1 = meminfo("HeapUsed:");
-    pages1 = meminfo("HeapPages:");
+    used1 = probe_meminfo("HeapUsed:");
+    pages1 = probe_meminfo("HeapPages:");
     if (used1 != used0 || pages1 + 2 < pages0 || pages1 > pages0 + 2) {
         fail(what);
     }
@@ -278,7 +238,7 @@ PROBE_SP_ENTRY;
 void probe_main(unsigned long *sp)
 {
     (void)sp;
-    if (meminfo("HeapUsed:") == 0xFFFFFFFFu) {
+    if (probe_meminfo("HeapUsed:") == 0xFFFFFFFFu) {
         fail("HeapUsed in /proc/meminfo");
     }
     crossed(0, 6, "forty-eight pipes at once");

@@ -656,6 +656,49 @@ static __inline__ long probe_statfs(const char *path, void *buf)
 #endif
 }
 
+/**
+ * The value of the field `key`, with its colon, of /proc/meminfo, in the
+ * field's own units, or 0xFFFFFFFF when the file or the field is absent. A
+ * leak row reads `HeapUsed:`, the bytes in use in the kernel heap, before and
+ * after a loop that makes and frees objects, and requires the two equal.
+ */
+static __inline__ unsigned probe_meminfo(const char *key)
+{
+    static char meminfo_text[1024];
+    int fd = (int)syscall3(SYS_OPEN, (long)"/proc/meminfo", 0, 0);
+    int n, i;
+
+    if (fd < 0) {
+        return 0xFFFFFFFFu;
+    }
+    n = (int)syscall3(SYS_READ, fd, (long)meminfo_text, (long)sizeof(meminfo_text) - 1);
+    syscall1(SYS_CLOSE, fd);
+    if (n <= 0) {
+        return 0xFFFFFFFFu;
+    }
+    meminfo_text[n] = 0;
+    for (i = 0; i < n; i++) {
+        int k;
+
+        for (k = 0; key[k] && meminfo_text[i + k] == key[k]; k++) {
+        }
+        if (!key[k]) {
+            unsigned v = 0;
+
+            i += k;
+            while (meminfo_text[i] == ' ') {
+                i++;
+            }
+            while (meminfo_text[i] >= '0' && meminfo_text[i] <= '9') {
+                v = v * 10 + (unsigned)(meminfo_text[i] - '0');
+                i++;
+            }
+            return v;
+        }
+    }
+    return 0xFFFFFFFFu;
+}
+
 /* The socket operations of socketcall(2), by its numbers, and Rach2's ICMP
  * echo, SC_PING and SC_PING_DATA, with its call (pingcall.h). */
 #include "../utils/pingcall.h"

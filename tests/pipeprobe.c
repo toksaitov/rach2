@@ -11,7 +11,8 @@
  *       (with the signal caught) returns -EPIPE;
  *   (d) blocking across a fork: a writer of more than one buffer blocks until
  *       the forked reader drains it, and every byte arrives intact;
- *   (e) a hundred pipes made and closed in turn each succeed;
+ *   (e) a hundred pipes made and closed in turn each succeed, and leave
+ *       the kernel heap's HeapUsed in /proc/meminfo as it was before them;
  *   (f) identity: the link /proc/self/fd gives for a pipe end is exactly
  *       `pipe:[N]`, the two ends of one pipe give the same N and two pipes
  *       different ones, and fstat reports N as the inode, the high word of
@@ -237,6 +238,7 @@ PROBE_START void _start(void)
     char buf[64];
     struct k_sigaction ka;
     int i, n, pid, status;
+    unsigned used;
 
     for (i = 0; i < BIG; i++) {
         big[i] = (char)(i & 0x7f);
@@ -308,15 +310,19 @@ PROBE_START void _start(void)
               "child read every byte intact");
     }
 
+    used = probe_meminfo("HeapUsed:");
+    check(used != 0xFFFFFFFFu, "HeapUsed in /proc/meminfo");
     for (i = 0; i < 100; i++) {
         int q[2];
         if (do_pipe(q) != 0) {
-            check(0, "pipe() exhausted the pool (leak)");
+            check(0, "pipe() in a pipe/close cycle");
             break;
         }
         syscall1(SYS_CLOSE, q[0]);
         syscall1(SYS_CLOSE, q[1]);
     }
+    check(probe_meminfo("HeapUsed:") == used,
+          "100 pipe/close cycles left the heap as it was (no pipe leak)");
 
     {
         int a[2], b[2];

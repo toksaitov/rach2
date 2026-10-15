@@ -9,8 +9,11 @@
  *       original left off, not from 0;
  *   (b) fork shares the offset: a child advances the offset and the parent's
  *       next read sees the advance;
- *   (c) reference counts: closing one fd leaves the dup working, and after
- *       many open and close cycles and many forks an open still succeeds;
+ *   (c) reference counts: closing one fd leaves the dup working, and the
+ *       kernel heap's HeapUsed in /proc/meminfo is what it was before three
+ *       hundred open and close cycles, and before an open held across a
+ *       hundred forks and then closed, so no cycle and no fork leaves a
+ *       description behind;
  *   (d) FD_CLOEXEC is per-fd: it round-trips through fcntl, and dup2 leaves
  *       the new fd's flag clear.
  *
@@ -93,6 +96,7 @@ PROBE_START void _start(void)
 {
     char buf[16];
     int fd, fd2, pid, status, i, n;
+    unsigned used;
 
     fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
     check(fd >= 0, "open hello.txt");
@@ -124,15 +128,22 @@ PROBE_START void _start(void)
     check(n == 3 && eqn(buf, " wo", 3), "fork shares offset (parent reads ' wo')");
     syscall1(SYS_CLOSE, fd);
 
+    used = probe_meminfo("HeapUsed:");
+    check(used != 0xFFFFFFFFu, "HeapUsed in /proc/meminfo");
     for (i = 0; i < 300; i++) {
         int f = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
         if (f < 0) {
-            check(0, "open/close cycle exhausted the OFD pool (leak)");
+            check(0, "open in an open/close cycle");
             break;
         }
         syscall1(SYS_CLOSE, f);
     }
+    check(probe_meminfo("HeapUsed:") == used,
+          "300 open/close cycles left the heap as it was (no OFD leak)");
 
+    used = probe_meminfo("HeapUsed:");
+    fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
+    check(fd >= 0, "open held across the forks");
     for (i = 0; i < 100; i++) {
         int p = syscall1(SYS_FORK, 0);
         if (p == 0) {
@@ -140,11 +151,9 @@ PROBE_START void _start(void)
         }
         syscall3(SYS_WAITPID, p, (long)&status, 0);
     }
-    fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
-    check(fd >= 0, "open after 100 forks (no fork OFD leak)");
-    if (fd >= 0) {
-        syscall1(SYS_CLOSE, fd);
-    }
+    syscall1(SYS_CLOSE, fd);
+    check(probe_meminfo("HeapUsed:") == used,
+          "100 forks and the close left the heap as it was (no fork OFD leak)");
 
     fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
     check(fd >= 0, "open for cloexec test");
