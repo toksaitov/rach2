@@ -4,25 +4,21 @@
 #include "../lib/kint.h"
 
 /*
- * netif: the interface a program configures the network through.
+ * netif: the interface ioctls, Linux's `SIOC*` requests on a socket, through
+ * which `ifconfig`, `route`, `arp` and a DHCP client read and set each
+ * interface's address, mask, flags and routes and the ARP cache's mappings.
+ * A request names its interface in a `struct ifreq`, `struct rtentry` or
+ * `struct arpreq`, and one that names no interface the caller sees, a card
+ * or `lo`, is ENODEV.
  *
- * Until this existed the machine's address came from the boot line and nothing
- * could change it, which is a machine that must be told where it is before it
- * is switched on. A DHCP client is a program that learns the address after the
- * machine is running, so there has to be a way for a program to set one. This
- * is that way, and it is Linux's: the `SIOCxIF*` ioctls on a socket, with a
- * `struct ifreq` naming the interface.
- *
- * The interface is `eth0` and there is one of it. A request naming anything
- * else is `ENODEV`, not quietly applied to the only one there is.
- *
- * Reading is anyone's; changing is root's. A program that could set this
- * machine's address could take another machine's, and could send from it.
+ * Reading is anyone's; changing is root's, EPERM otherwise, since a program
+ * that could set this machine's address could take another machine's and
+ * send from it.
  */
 
 /* The requests, with Linux's numbers. `ifreq` is 16 bytes of name followed by
  * a union: a sockaddr for the addresses, a short for the flags, an int for the
- * index, 32 bytes in all. */
+ * index, 32 bytes in all on i686 and 40 on x86-64. */
 #define SIOCGIFNAME    0x8910
 #define SIOCGIFCONF    0x8912
 #define SIOCGIFFLAGS   0x8913
@@ -50,7 +46,7 @@
 #define SIOCBRADDBR 0x89a0
 #define SIOCBRDELBR 0x89a1
 
-/* Interface flags, of which this machine has five to report. */
+/* The interface flags this kernel reports, with Linux's values. */
 #define IFF_UP        0x0001
 #define IFF_BROADCAST 0x0002
 #define IFF_LOOPBACK  0x0008
@@ -58,27 +54,26 @@
 #define IFF_MULTICAST 0x1000
 
 /**
- * Handle one interface ioctl on a socket descriptor.
+ * Answer one interface ioctl, which `sys_ioctl` passes for a socket of any
+ * family: the requests above, with the bridge and VLAN ones ENOPKG.
  *
  * `handled` is set to 0 for a request this does not own, so the caller can go
- * on looking; the return value is meaningless in that case.
+ * on looking; the return value is then -ENOTTY and means nothing. System
+ * call context.
  *
  * @param request the ioctl number.
- * @param arg     the user pointer to a `struct ifreq` or `struct rtentry`.
+ * @param arg     the user pointer to a `struct ifreq`, `struct ifconf`,
+ *                `struct rtentry` or `struct arpreq`.
  * @return 0 or a negative errno.
  */
 int32_t netif_ioctl(uint32_t request, uintptr_t arg, int *handled);
 
-/**
- * Whether `name` is this machine's interface.
- *
- * `SO_BINDTODEVICE` names an interface the way the ioctls do, so it is judged
- * the same way and by the same code.
- */
+/** Whether `name` is the name of an interface, a card or `lo`
+ * (`netdev_by_name`), whatever the caller's network namespace. */
 int netif_name_is_ours(const char *name);
 
-/** Whether the interface is administratively up; frames are dropped when
- * not. */
+/** Whether the first interface is up, as an administrator left it; 0 with no
+ * card. */
 int netif_is_up(void);
 
 #endif /* _NETIF_H_ */

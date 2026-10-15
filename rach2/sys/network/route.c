@@ -1,9 +1,9 @@
 /*
- * route.c: the IPv4 routing table.
+ * route.c: the IPv4 routing table, as driver/netdev.h declares it.
  *
- * The routes the interfaces imply are found from them when they are asked
- * for: the subnet of each address, reached on the link, and an interface's
- * gateway as its default route. The routes a program adds, through
+ * The routes the cards imply are found from them when they are asked for:
+ * the subnet of each address, reached on the link, and a card's gateway as
+ * its default route; `lo` has none. The routes a program adds, through
  * SIOCADDRT or RTM_NEWROUTE, are kept in a table of NETDEV_ROUTES. A lookup
  * takes, of the routes of interfaces that are up and have that destination,
  * the one of the longest prefix, then of the lowest metric, then the first
@@ -17,7 +17,8 @@
 
 #define NETDEV_ROUTES 32
 
-/* An added route; `nd` is NULL in a free entry. */
+/* An added route: datagrams for `dst`/`mask` leave by `nd`, to `gw`, or on
+ * the link when it is 0, at `metric`. `nd` is NULL in a free entry. */
 struct added_rt {
     struct netdev *nd;
     uint32_t dst, mask, gw, metric;
@@ -115,7 +116,7 @@ int netdev_route_at(int n, struct netdev_rt *out)
     return 0;
 }
 
-/** The interface of index `index`, or NULL. */
+/** The card of index `index`, or NULL. */
 static struct netdev *dev_of(int index)
 {
     int i;

@@ -4,46 +4,47 @@
 #include "../lib/kint.h"
 
 /*
- * Network subsystem entry point and static configuration.
+ * net: the network stack's entry from the kernel, its default address, its
+ * counters and its lock.
  *
- * The stack defaults to QEMU's SLIRP user network; a real LAN is configured
- * through netconf.h (the RTL8168GU on the Lenovo, the boot line's address). All
- * addresses below are in host byte order; the protocol layers convert to
- * network byte order as they build packets.
+ * The stack defaults to QEMU's SLIRP user network; netconf.h takes another
+ * address from the boot line. Every address here is in host byte order, and
+ * the protocol layers convert to network order as they build packets.
  *
- * Concurrency invariant (transmit path and shared state) Every layer assembles
- * outgoing packets in a file-static buffer (eth_tx_frame, ip_tx_buf,
- * tcp_tx_buf, the ARP/ICMP/UDP buffers), each driver shares one transmit ring,
- * and the TCB pool, socket pool and ARP cache are all shared. None of it is
- * locked, so it is only safe when no two accesses interleave:
+ * Every entry to the kernel takes the big lock (../proc/smp.h), so the stack
+ * runs on one processor at a time, in one of two contexts. Its shared state
+ * has no lock of its own: each layer builds an outgoing packet in a buffer of
+ * its file (`eth_tx_frame`, `ip_tx_buf`, `tcp_tx_buf`, the ARP, ICMP and UDP
+ * buffers), each driver has one transmit ring, and both contexts walk the
+ * lists of sockets and control blocks and the ARP cache.
  *
- *   * IRQ-context senders (the NIC RX handler replying with ACK/RST/ARP/ICMP,
- *     and the timer driving tcp_tick retransmissions) run inside IRQ handlers,
- *     which clear IF on entry and do not nest, so they never interleave.
- *   * Syscall-context senders (sendto, tcp_send, connect, listen, ping) run
- *     with interrupts ENABLED: the syscall stub re-enables IF so the timer and
- *     audio keep running through long syscalls. A NIC or timer IRQ can
- *     therefore fire mid-build and re-enter the stack, corrupting the shared
- *     buffers and pools. To prevent that, syscall-context code brackets every
- *     access to this shared state with net_lock()/net_unlock(), which save IF
- *     and disable interrupts for the duration. (IRQ-context callers already run
- *     with IF=0, so the same bracketing is a harmless no-op there.)
+ *   * Interrupt context: a card's receive handler, which may answer with an
+ *     acknowledgement, a reset, an ARP reply or an ICMP message, and the
+ *     timer tick, which drives `tcp_tick`. Handlers run with interrupts off
+ *     and do not nest, so two of them never interleave.
+ *   * System call context: `sendto`, `connect`, `listen`, a ping and the
+ *     rest, which run with interrupts on, so that the timer and audio keep
+ *     running through a long call. A card's or the timer's interrupt can
+ *     arrive while such a call is half way through building a packet.
  *
- * Every driver's descriptor handoff additionally guards itself (see
- * rtl8139_tx). Do not transmit, allocate a TCB or socket, or touch the ARP
- * cache from syscall context without holding net_lock().
+ * A system call therefore brackets every use of the shared state with
+ * `net_lock` and `net_unlock`, which disable interrupts for the bracket; in a
+ * handler, where interrupts are already off, the bracket changes nothing. A
+ * system call transmits, allocates a control block or a socket, or touches
+ * the ARP cache only inside one. Each driver's transmit takes `net_lock`
+ * around its descriptors as well.
  */
 
-/* The IPv4 configuration a machine boots with when the command line says
-   nothing: QEMU's SLIRP tuple, which is what every test expects. The address
-   actually in force lives in netconf.h (`net_ip_addr` and its two companions),
-   because a real LAN needs a real address and the boot line can give one. */
+/* The address, mask and gateway the first interface takes when the boot
+   line gives none: QEMU's SLIRP network. The configuration in force is in
+   each interface's record, and the first's also in netconf.h's
+   `net_ip_addr`, `net_ip_mask` and `net_ip_gateway`. */
 #define NET_IP_ADDR_DEFAULT    0x0A00020FUL /* 10.0.2.15     */
 #define NET_IP_MASK_DEFAULT    0xFFFFFF00UL /* 255.255.255.0 */
 #define NET_IP_GATEWAY_DEFAULT 0x0A000202UL /* 10.0.2.2      */
 
-/* Our hardware address, filled in by the bound NIC driver at init; the Ethernet
-   and ARP layers read it. */
+/* The first interface's station address, which `netdev_probe` copies in; all
+   zeros with no card. */
 extern uint8_t net_mac[6];
 
 /*
@@ -51,7 +52,7 @@ extern uint8_t net_mac[6];
  * them: the datagrams and segments each layer took in and sent out, and the
  * ones it dropped, by reason. They count from boot and wrap at 2^32, as
  * Linux's do on i386. Every path that changes one runs with interrupts off,
- * under the discipline above, so they need no lock of their own.
+ * as the rule above has it, so they need no lock of their own.
  */
 struct net_mib {
     uint32_t ip_in_receives;       /* every datagram a card or the loopback gave IP */
@@ -89,29 +90,34 @@ struct net_mib {
 
 extern struct net_mib net_mib;
 
-/** Bring the network stack up once at boot, after PCI enumeration and
- * interrupts are ready so the NIC can be probed; 1 if the NIC is up, 0
- * otherwise. */
+/**
+ * Bring the stack up: empty the lists of control blocks and sockets, probe
+ * the cards, give the first the boot line's address (`netconf_publish`), and
+ * give each card that a `rach2.ifaddr=` names the address it gives
+ * (`netconf_apply_by_mac`). Returns 1 when a card came up, 0 when none did.
+ *
+ * Called once, at boot, after PCI enumeration and with interrupts ready,
+ * unless the boot line has `rach2.nonet`.
+ */
 int init_network(void);
 
-/* One-line description of the running stack, for the boot banner. */
+/** The name of the first interface's driver, for the boot log, or "none". */
 const char *net_status(void);
 
-/* One-line reason init_network() returned 0 (valid only after a 0 return). */
+/** Why `init_network` brought no card up, for the boot log: the reason of
+ * the last card that failed, or "no supported network card". */
 const char *net_error(void);
 
-/*
- * Print the network detail lines (NIC IRQ/IO/MAC, IPv4 config) indented under
- * the "  Network... OK" boot banner line. Serial only; call after the OK line.
- */
+/** Log each card's driver, station address, driver detail and IPv4
+ * configuration, then netconsole's state. Called once, at boot, after
+ * `init_network` returned 1. */
 void net_print_info(void);
 
-/*
- * Enter/leave a network critical section from syscall context. net_lock saves
- * the interrupt flag and disables interrupts; net_unlock restores it. See the
- * concurrency note above: syscalls run with interrupts enabled, so any access
- * to the shared TX buffers, the TCB/socket pools or the ARP cache must be
- * bracketed by these. Nesting is safe (each restores the flag it saved).
+/**
+ * Disable interrupts for a bracket around the stack's shared state, and
+ * return the flags `net_unlock` restores at its end. A bracket inside another
+ * is safe, since each restores the flags it saved. The rule for using them is
+ * at the top of this file.
  */
 uint32_t net_lock(void);
 void net_unlock(uint32_t flags);

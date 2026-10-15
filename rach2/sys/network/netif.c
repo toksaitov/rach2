@@ -1,11 +1,12 @@
 /*
- * netif.c: the interface and route ioctls.
+ * netif.c: the interface, route and ARP ioctls, as netif.h describes them,
+ * and netdev.h's `net_ns_seen` and `netdev_seen_count`, which give what the
+ * caller's network namespace sees.
  *
- * The contract is in netif.h. What is here is the `struct ifreq`, `struct
- * rtentry` and `struct arpreq` layouts: the fields of their sockaddrs as
- * offsets, and the structures as C declarations whose types give them the
- * processor's layout. What an address change costs, everything that
- * recorded the old address being told, is in netconf.c.
+ * The `struct ifreq`, `struct rtentry` and `struct arpreq` layouts are here:
+ * the fields of their sockaddrs as offsets, and the structures as C
+ * declarations whose types give them each processor's layout. What a change
+ * of address drops is in netconf.c.
  */
 
 #include "netif.h"
@@ -83,12 +84,6 @@ struct kernel_rtentry {
 
 #define ARPHRD_ETHER 1
 
-/**
- * Whether the first interface is up. An interface is up from the probe until
- * an administrator takes it down, which is what every existing test expects of
- * a machine whose network came up at boot and was never configured.
- */
-
 int netif_is_up(void)
 {
     struct netdev *nd = netdev_first();
@@ -102,6 +97,7 @@ static uint32_t be32(const uint8_t *p)
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
+/** Store `v` at `p` in network order. */
 static void put_be32(uint8_t *p, uint32_t v)
 {
     p[0] = (uint8_t)(v >> 24);
@@ -125,7 +121,8 @@ int netdev_seen_count(void)
  *
  * The name comes out of a caller's `ifreq`, so it is read only as far as the
  * field goes and only up to its terminator; a name that fills the field
- * without one names nothing.
+ * without one names nothing, and so does every name in a network namespace
+ * other than the first.
  */
 static struct netdev *named(const uint8_t *name)
 {
@@ -139,7 +136,7 @@ static struct netdev *named(const uint8_t *name)
         }
     }
     if (i == IFREQ_NAMESIZE - 1 || !net_ns_seen()) {
-        return 0; /* no terminator inside the field, or no interface seen */
+        return 0;
     }
     want[i] = '\0';
     return netdev_by_name(want);
@@ -211,20 +208,25 @@ static int32_t loopback_set(uint32_t request, const uint8_t *ifr, const struct n
  * Handle the requests that read or write an interface.
  *
  * The name is checked first for every one of them but SIOCGIFNAME, which
- * takes an index in the union and answers with a name, because a program that
- * asks about an interface this machine does not have must be told so rather
- * than told about the one it does have. The setters are root's.
+ * takes an index in the union and answers with a name, so that a request
+ * about an interface the caller does not see is ENODEV whatever it asks. The
+ * setters are root's.
  *
  * The setters return without copying the request back, since they only read
  * it and a failed copy would report a refusal for a change already made.
  * SIOCSIFFLAGS sets only whether the interface is up. `lo` takes no change
  * but its own address and mask again and being up, EOPNOTSUPP, and reports
- * Linux's loopback type, MTU and flags. SIOCSIFADDR always
- * passes no mask: the mask that goes with the address is the classful one
- * until SIOCSIFNETMASK arrives, never the one left from the address before,
- * and `ifconfig` issues the two in that order. A subnet's broadcast address
- * follows from the subnet, so SIOCSIFBRDADDR accepts the one the interface
- * already derives and refuses any other.
+ * Linux's loopback type, MTU and flags. SIOCSIFADDR gives
+ * `netconf_set_address` no mask: the mask that goes with the address is the
+ * classful one until SIOCSIFNETMASK arrives, never the one left from the
+ * address before, and `ifconfig` issues the two in that order. A subnet's
+ * broadcast address follows from the subnet, so SIOCSIFBRDADDR accepts the
+ * one the interface already derives, or 255.255.255.255 with no subnet, and
+ * refuses any other with EINVAL.
+ *
+ * Returns 0 or a negative errno: EFAULT for a request that cannot be read
+ * or written back, ENODEV for an interface the caller does not see, EPERM
+ * for a setter without privilege, and the error of the netconf.h call.
  */
 static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
 {
@@ -245,7 +247,7 @@ static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
         struct netdev *at;
 
         if (index < 1 || index > netdev_seen_count()) {
-            return -ENODEV; /* no interface has that index */
+            return -ENODEV;
         }
         at = netdev_at(index - 1);
         if (!at || at->index != index) {
@@ -381,7 +383,7 @@ static int32_t route_ioctl(uint32_t request, uintptr_t arg)
     uintptr_t dev;
     struct netdev *nd;
     int32_t rc;
-    int gateway_route; /* a default route of no metric, which is the gateway */
+    int gateway_route;
 
     if (!current_proc || !proc_privileged(current_proc)) {
         return -EPERM;
@@ -434,7 +436,8 @@ static int32_t route_ioctl(uint32_t request, uintptr_t arg)
  * interface it names or the one whose subnet has the address, ENETUNREACH
  * when none has; a hardware address of another kind than Ethernet is
  * EINVAL, and a published one, for proxy ARP, which this stack does not
- * answer, EOPNOTSUPP. Root only.
+ * answer, EOPNOTSUPP, as is a mapping on `lo`, which resolves nothing. Root
+ * only.
  */
 static int32_t arp_ioctl(uint32_t request, uintptr_t arg)
 {
@@ -470,7 +473,7 @@ static int32_t arp_ioctl(uint32_t request, uintptr_t arg)
             }
         }
         if (nd && nd->loopback) {
-            return -EOPNOTSUPP; /* lo resolves nothing */
+            return -EOPNOTSUPP;
         }
         return nd ? arp_set(nd, ip, req + ARPREQ_HA_ADDR, (flags & ATF_PERM) != 0) : -ENETUNREACH;
     }

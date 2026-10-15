@@ -1,13 +1,13 @@
 /*
- * netconf.c: each interface's IPv4 configuration, parsed from the boot
- * command line and changed at runtime through the interface ioctls.
+ * netconf.c: each interface's IPv4 configuration, as netconf.h describes it,
+ * parsed from the boot line and changed at run time through the interface
+ * ioctls and netlink.
  *
- * The parsing is stricter than an address parser usually is, because the only
- * thing worse than refusing to configure is configuring something other than
- * what the operator wrote. `010.0.0.1` is rejected, not read as 10 or
- * as 8; a quartet over 255 is rejected, not truncated; a trailing
- * character is rejected, not ignored. A refusal of a boot-line option keeps
- * the machine on the network it already had and says so in the boot log.
+ * The parser is strict, so that the address configured is the one the
+ * operator wrote: `010.0.0.1` is refused rather than read as 10 or as 8, a
+ * quartet over 255 is refused rather than truncated, and a trailing
+ * character is refused rather than ignored. A refused boot-line option
+ * leaves the machine on the network it already had, and is logged.
  */
 
 #include "netconf.h"
@@ -20,10 +20,8 @@
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 
-/*
- * Primary IPv4 configuration, initialized to the SLIRP defaults.
- * These values match the first interface after configuration.
- */
+/* The first interface's configuration, the SLIRP network until the boot line
+ * or a program gives another. */
 uint32_t net_ip_addr = NET_IP_ADDR_DEFAULT;
 uint32_t net_ip_mask = NET_IP_MASK_DEFAULT;
 uint32_t net_ip_gateway = NET_IP_GATEWAY_DEFAULT;
@@ -96,16 +94,13 @@ static int mac_equal(const uint8_t *a, const uint8_t *b)
 }
 
 /**
- * Configure interfaces the boot line names by their hardware address.
- *
  * `rach2.ifaddr=52:54:00:12:34:57,10.0.3.5/24` gives that card that address,
- * and a gateway may follow after another comma. The card is named by its
- * hardware address rather than by the order the probe found it in, so a
- * machine whose cards are enumerated the other way round on the next boot
- * still puts each address on the card the operator meant.
- *
- * Report and skip each invalid token, including an oversized value or
- * an unknown hardware address. Continue with subsequent tokens.
+ * and a gateway may follow after another comma. A card found in another
+ * order on the next boot still takes the address the operator meant for it.
+ * The address and prefix are copied out to the comma before they are parsed,
+ * since `netconf_parse_cidr` reads a whole string. The configuration is
+ * written into the card's record directly, without what `addr_publish`
+ * drops, since this runs at boot, before any program has opened a socket.
  */
 void netconf_apply_by_mac(void)
 {
@@ -130,7 +125,6 @@ void netconf_apply_by_mac(void)
         }
         p++;
         {
-            /* netconf_parse_cidr reads a whole string: copy to the comma. */
             char cidr[24];
             int c = 0;
 
@@ -178,7 +172,6 @@ void netconf_apply_by_mac(void)
     }
 }
 
-/** Write the machine's configuration through to the interface it belongs to. */
 void netconf_publish(void)
 {
     struct netdev *nd = netdev_first();
@@ -252,16 +245,6 @@ static int parse_quad(const char **s, uint32_t *ip)
     return 1;
 }
 
-/**
- * Whether `ip` is one this stack must never take as its own or a peer's.
- *
- * The first octet decides all of it. Zero is "this network" and names no host,
- * 127 is loopback, which this stack aliases to its own address, and everything
- * from 224 up is multicast, then the reserved space above it, then the
- * all-ones broadcast at the very end. This is the one judgement of an address,
- * used by the boot line, by the ioctls and by the address cache alike, so they
- * cannot drift into disagreeing about what an address is.
- */
 int netconf_address_is_impossible(uint32_t ip)
 {
     uint32_t top = ip >> 24;
@@ -297,7 +280,6 @@ int netconf_parse_cidr(const char *s, uint32_t *ip, uint32_t *mask)
     if (!parse_quartet(&s, &prefix) || *s != '\0') {
         return 0;
     }
-    /* A /31 or /32 has no host address beside a network and a broadcast. */
     if (prefix < 1u || prefix > 30u) {
         return 0;
     }
@@ -306,7 +288,7 @@ int netconf_parse_cidr(const char *s, uint32_t *ip, uint32_t *mask)
         return 0;
     }
     if ((v & ~m) == 0u || (v & ~m) == (~m & 0xFFFFFFFFu)) {
-        return 0; /* the subnet's own network or broadcast address */
+        return 0;
     }
     *ip = v;
     *mask = m;
@@ -319,7 +301,7 @@ int netconf_gateway_ok(uint32_t gw, uint32_t ip, uint32_t mask)
         return 0;
     }
     if ((gw & mask) != (ip & mask)) {
-        return 0; /* off our subnet, so nothing could reach it */
+        return 0;
     }
     if (gw == ip) {
         return 0;
@@ -329,30 +311,6 @@ int netconf_gateway_ok(uint32_t gw, uint32_t ip, uint32_t mask)
     }
     return 1;
 }
-
-/*
- * The two pieces of state an interface being configured keeps between one
- * ioctl and the next are in its own record, `nd->mask_provisional` and
- * `nd->pending_ip`.
- *
- * `mask_provisional` is whether the mask in force was derived, not given.
- * `ifconfig` sets an address and then a mask, two calls, and between them the
- * interface has the classful mask the address implies. The address is a host
- * under that mask, but it may be a network or broadcast address under the
- * mask still to come. If the mask to come is refused, the derived pair is
- * what would be left running, and an interface answering for a network
- * address is worse than one with no address at all. So the refusal
- * unconfigures instead.
- *
- * `pending_ip` is an address accepted but not yet in force. Some addresses
- * are hosts only under a mask wider than the classful one, and the mask is
- * the caller's next call. Putting such an address in force meanwhile would
- * leave the interface answering for a network address for as long as it takes
- * the next call to arrive, and forever if it never does, because the program
- * making the calls was killed. So it waits there instead and the interface
- * stays unconfigured, which is a state anyone can see and nobody mistakes for
- * working.
- */
 
 int netconf_apply(const char **why)
 {
@@ -379,7 +337,6 @@ int netconf_apply(const char **why)
         *why = "the address is longer than an address can be";
         return NETCONF_REFUSED;
     }
-    /* `none`: the device is probed and IPv4 left for userland to set. */
     if (value[0] == 'n' && value[1] == 'o' && value[2] == 'n' && value[3] == 'e' &&
         value[4] == '\0') {
         if (have_gw) {
@@ -413,7 +370,7 @@ int netconf_apply(const char **why)
 
     net_ip_addr = ip;
     net_ip_mask = mask;
-    net_ip_gateway = gw; /* zero when none was given, which means no route out */
+    net_ip_gateway = gw;
     netconf_publish();
     return NETCONF_APPLIED;
 }
@@ -458,11 +415,6 @@ int netconf_prefix_of(uint32_t mask)
     return n;
 }
 
-/**
- * Whether `ip` is the all-ones address or the broadcast address of any
- * interface's subnet, not only the first's: a machine with two cards is on
- * two subnets and each has its own.
- */
 int netconf_is_broadcast(uint32_t ip)
 {
     return netdev_is_broadcast(ip);
@@ -484,9 +436,10 @@ uint32_t netconf_broadcast(void)
     return net_ip_addr | ~net_ip_mask;
 }
 
-/*
+/**
  * The classful mask an address implies, for the moment between being given an
- * address and being given a mask.
+ * address and being given a mask: 255.0.0.0 below 128, 255.255.0.0 below 192,
+ * and 255.255.255.0 from 192 up.
  *
  * `ifconfig eth0 A.B.C.D` is one ioctl and `netmask M.M.M.M` is the next, so
  * there is a moment with an address and no mask, and a machine that refused to
@@ -514,13 +467,17 @@ static int is_machine(const struct netdev *nd)
 }
 
 /**
- * Update an interface's address and mask.
+ * Put `ip`/`mask` in force on `nd`, with the costs `netconf_set_address`
+ * lists.
  *
- * The caller holds net_lock. On a change, drop the interface's ARP mappings
- * (every mapping, for the first interface) and notify TCP; then clear a
- * gateway that is no longer usable. Connections whose local address remains
- * configured are preserved. Changes to the first interface also update the
- * primary IPv4 globals.
+ * A change, a new address or a new mask under an address, is logged, drops
+ * the ARP mappings of the interface but the permanent ones (of every
+ * interface, for the first) and the datagrams waiting for them, and aborts
+ * the TCP connections whose local address the machine no longer has; a
+ * connection on an address still held is kept. A gateway the subnet does
+ * not have is cleared, change or not, and so are the added routes whose
+ * gateway `nd` no longer reaches. The first interface's values are copied to
+ * `net_ip_addr` and the two after it. The caller holds `net_lock`.
  */
 static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask)
 {
@@ -561,8 +518,8 @@ static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask)
 }
 
 /** Whether `ip`/`mask` may be an address of an interface: a possible
- * address, a contiguous mask short of all ones, and a host of its subnet;
- * 0, or EINVAL. */
+ * address, a contiguous mask other than 0 and all ones, and a host of its
+ * subnet; 0, or -EINVAL. */
 static int addr_valid(uint32_t ip, uint32_t mask)
 {
     if (netconf_address_is_impossible(ip) || !mask_ok(mask) || mask == 0 || mask == 0xFFFFFFFFu ||
@@ -644,18 +601,22 @@ int netconf_del_address(struct netdev *nd, uint32_t ip)
 }
 
 /**
- * Set `nd`'s address and mask.
+ * The whole change runs under `net_lock`, so an interrupt never finds the new
+ * address in force while the control blocks still record the old one. A DHCP
+ * client writes an address of 0 when a lease ends.
  *
- * The whole change runs under net_lock, so an interrupt never finds the new
- * address published while the TCBs still claim the old one. An address of
- * zero, which a DHCP client writes when a lease ends, unconfigures the
- * interface and clears the mask. With a mask of zero the classful mask
- * stands in: an address that is a host under it goes into force at once,
- * and one that is not waits in `pending_ip`, with the interface
- * unconfigured, for the mask the caller sends next. Repeating the address in
- * force with no mask changes nothing, since a DHCP client runs the same
- * `ifconfig` on every renewal and taking the address down would abort every
- * connection each time.
+ * With a mask of 0 the classful mask stands in, and `mask_provisional`
+ * records that it was derived and not given. An address that is a host under
+ * it goes into force at once. One that is not, a host only under a wider mask
+ * still to come, waits in `pending_ip` with the interface unconfigured: put
+ * in force, it would leave the interface answering for a network or
+ * broadcast address until the next call, and for good if the program making
+ * the calls were killed before it. An unconfigured interface is a state
+ * anyone can see and nobody takes for a working one.
+ *
+ * The address in force repeated with no mask changes nothing, since a DHCP
+ * client runs the same `ifconfig` at every renewal, and taking the address
+ * down each time would abort every connection.
  */
 int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask)
 {
@@ -704,7 +665,6 @@ int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask)
     if (!mask_ok(mask) || mask == 0xFFFFFFFFu) {
         rc = -EINVAL;
     } else if (ip == (ip & mask) || ip == (ip | ~mask)) {
-        /* A network address and a broadcast address are not hosts. */
         rc = -EINVAL;
     }
     if (rc == 0) {
@@ -717,13 +677,14 @@ int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask)
 }
 
 /**
- * Set `nd`'s netmask, for the pending address when there is one.
- *
  * A mask with no address is refused, since it would give the interface a
  * subnet broadcast address derived from nothing. A refusal while the mask in
- * force is provisional, or while an address waits for its mask, unconfigures
- * the interface: it would otherwise be left on a pair nobody judged, or with
- * an address nothing will ever put in force.
+ * force is provisional unconfigures the interface: the address is a host
+ * under the classful mask but may be the network or broadcast address of the
+ * subnet the caller meant, and an interface answering for such an address is
+ * worse than one with no address at all. A refusal while an address waits
+ * for its mask unconfigures the interface too, since nothing would put that
+ * address in force.
  */
 int netconf_set_netmask(struct netdev *nd, uint32_t mask)
 {
@@ -739,7 +700,6 @@ int netconf_set_netmask(struct netdev *nd, uint32_t mask)
     ip = nd->pending_ip ? nd->pending_ip : nd->ip;
 
     if (mask == 0) {
-        /* No mask is no subnet, which is what unconfiguring leaves. */
         addr_publish(nd, nd->pending_ip ? 0 : nd->ip, 0);
         nd->mask_provisional = 0;
         nd->pending_ip = 0;
@@ -764,6 +724,8 @@ int netconf_set_netmask(struct netdev *nd, uint32_t mask)
     return rc;
 }
 
+/** With no mask `netconf_gateway_ok` would take almost any address, so a
+ * gateway needs the interface's address and mask first. */
 int netconf_set_gateway(struct netdev *nd, uint32_t gw)
 {
     uint32_t flags;
@@ -777,7 +739,6 @@ int netconf_set_gateway(struct netdev *nd, uint32_t gw)
     if (gw == 0) {
         nd->gateway = 0;
     } else if (nd->ip == 0 || nd->mask == 0) {
-        /* With no subnet, netconf_gateway_ok would accept almost anything. */
         rc = -EINVAL;
     } else if (!netconf_gateway_ok(gw, nd->ip, nd->mask)) {
         rc = -EINVAL;
