@@ -779,14 +779,13 @@ tools/verify/mancheck.c:read_applets nesting 5 an inspector's check, one walk ov
 
 tools/verify/prosecheck.c:c_spans complexity 27 an inspector's check, one walk over the format it reads
 tools/verify/prosecheck.c:hash_comment_lines complexity 29 an inspector's check, one walk over the format it reads
-tools/verify/prosecheck.c:judge_devlog lines 101 an inspector's check, one walk over the format it reads
 tools/verify/prosecheck.c:main complexity 47 an inspector's check, one walk over the format it reads
-tools/verify/prosecheck.c:main lines 184 an inspector's check, one walk over the format it reads
+tools/verify/prosecheck.c:main lines 183 an inspector's check, one walk over the format it reads
 tools/verify/prosecheck.c:md_spans complexity 33 an inspector's check, one walk over the format it reads
 tools/verify/prosecheck.c:normalize complexity 33 an inspector's check, one walk over the format it reads
 tools/verify/prosecheck.c:read_entries complexity 38 an inspector's check, one walk over the format it reads
 tools/verify/prosecheck.c:read_entries nesting 6 an inspector's check, one walk over the format it reads
-tools/verify/prosecheck.c:selftest lines 198 the checker's own selftest, its cases in one table
+tools/verify/prosecheck.c:selftest lines 193 the checker's own selftest, its cases in one table
 tools/verify/prosecheck.c:selftest nesting 6 the checker's own selftest, its cases in one table
 
 utils/adduser.c:main complexity 61 one procedure over a file format, in the order the format is read

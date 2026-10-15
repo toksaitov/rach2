@@ -1,46 +1,49 @@
 /**
  * prosecheck: the checks on the prose this project writes.
  *
- * One lexer serves all of them, which is the point of putting them in one
- * tool: `columns` measures comment lines, `banned` reads comments and
- * string literals for terms that are wrong at any frequency, `count`
- * reports word and phrase totals for the report and baseline drivers, and
- * `devlog` checks the milestone index against the directories beside it.
+ * The checks share one lexer, which is why they are one tool: `columns`
+ * measures comment lines, `banned` reads comments and string literals for
+ * terms that are wrong at any frequency, `count` reports word and phrase
+ * totals for the report and baseline drivers, and `devlog` checks the
+ * milestone index against the directories beside it.
  *
  * `columns [PATH ...]` holds comment lines to 80 columns. AGENTS.md wraps
- * comments at 80 and .clang-format sets 100 for code, so only WHOLE
- * comment lines are measured: a comment trailing a code line is part of a
- * code line and answers to the second rule. A string literal holding a
+ * comments at 80 and .clang-format sets 100 for code, so only lines that are
+ * comment alone are measured: a comment trailing a code line is part of a
+ * code line and is held to the code's limit. A string literal holding a
  * comment delimiter is not a comment either, which is why the scan tracks
  * literals.
  *
  * `banned [PATH ...]` fails on the terms AGENTS.md's register rule names.
- * It reads comments AND string literals, in every language here, because a
- * person reads a test failure message and it does not matter whether that
- * message came from C or from shell.
+ * It reads comments and string literals both, in every language here,
+ * because a person reads a test's failure message whether it came from C or
+ * from shell.
  *
- * `count {c|hash|md} FILE ...` prints `words N` and one `phrase N` line
- * per watched phrase, over the files named. The watch list is measured and
- * never gated: a high multiple is a question to ask, not a defect. Prose
- * is counted one comment at a time, each normalized first (its `*`, slash
- * and `#` decoration removed and its whitespace collapsed), because
- * without that the numbers measure formatting instead of writing: a phrase
- * broken across a line break would not be counted at all, a lone `*` would
- * count as a word, and the two corpora wrap comments differently. Counting
- * per comment also stops a phrase being found across the boundary between
- * two unrelated comments. Strings are excluded here: a string literal is
- * not prose and counting it would move the word totals the rates are
- * computed against.
+ * `count {c|hash|md|all} FILE ...` prints `words N` and one `phrase N` line
+ * per watched phrase, over the files named. The watched phrases are counted
+ * for a person to read and fail nothing, since a high multiple is a question
+ * to ask about the prose. Prose is counted one comment at a time, each
+ * normalized first (its `*`, slash and `#` decoration removed and its
+ * whitespace collapsed); without that the numbers would measure formatting:
+ * a phrase broken across a line break would not be counted at all, a lone
+ * `*` would count as a word, and the two corpora wrap comments differently.
+ * Counting per comment also keeps a phrase from being found across the
+ * boundary between two unrelated comments. Strings are left out of the
+ * counts: a string literal is not prose, and counting it would move the
+ * word totals the rates are computed against.
  *
  * `devlog [DIR]` checks dev-log/Readme.md against the milestone
- * directories. AGENTS.md tells a reader that the last entry is where the
- * tree stands, and nothing a milestone does touches the index, so nothing
- * but a check keeps that sentence true. The rule is equality, not
- * membership: the entries must be exactly the finished milestones, in the
- * directories' numeric order. A directory holding only a plan must have no
- * entry, because an entry states that the milestone happened.
+ * directories. AGENTS.md sends a reader to the index for the milestones in
+ * order, and no milestone's work touches the index, so only a check keeps
+ * it current. The entries must be exactly the finished milestones, in the
+ * directories' numeric order. A directory with only a plan must have no
+ * entry, since an entry states that the milestone happened.
  *
- * `--selftest` runs every rule over fixtures.
+ * `--selftest` runs every rule over fixtures. `watchlist` prints the
+ * watched phrases, for the report driver.
+ *
+ * The exit status is 0 when a check passes, 1 when it finds something or a
+ * file could not be read, and 2 for a wrong usage or when it cannot run.
  *
  * This file states the register rule's terms, so it is exempt from
  * `banned`, as is that rule's own section in AGENTS.md.
@@ -57,31 +60,30 @@
 #define LIMIT    80
 #define MAX_FILE (4 * 1024 * 1024)
 
-/* The root Makefile is named here because it is the build's entry point and
-   sits in no walked directory. */
+/* The roots the checks walk. The root Makefile is named because it is the
+   build's entry point and is in no walked directory. */
 static const char *const ROOTS[] = {"rach2", "utils", "ish",        "krffs",   "tests",
                                     "tools", "mk",    "ports/doom", "Makefile"};
 static const char *const TOP_MD[] = {"CLAUDE.md", "AGENTS.md", "Readme.md"};
 static const char *const SKIP_DIRS[] = {"vendor", "build", ".git"};
 static const char *const SKIP_PATHS[] = {"ports/doom/src"};
 
-/* Wrong at any frequency. Every one of these was either named in the
-   register rule or named by a reader outside this project who had never
-   seen it. A term belongs here only if it has no legitimate use in this
+/* Wrong at any frequency: the terms the register rule in AGENTS.md lists,
+   with "load bearing" for the unhyphenated form. A term belongs here only
+   if it has no legitimate use in this
    domain: "trap" collides with the shell builtin, "sight" with the idiom
    "anywhere in sight", "bench" with a test bench, "gate" with the hardware
    gates at port 0x61, "surface" with an attack surface, and "era" with
-   ordinary English. Of the seven shorthand nouns the rule lists, only
-   "seam" and "timebox" have no legitimate use in this tree. */
+   ordinary English. Of the shorthand nouns the rule discusses, only "seam"
+   and "timebox" have no legitimate use in this tree. */
 static const char *const BANNED[] = {"load-bearing", "load bearing", "worth stating plainly",
                                      "worth noting", "blast radius", "tripwire",
                                      "timebox",      "full stop",    "seam"};
 #define N_BANNED (int)(sizeof(BANNED) / sizeof(BANNED[0]))
 
-/* Ordinary phrases, measured and never gated. The last two are the forms
-   milestone 26 recast `rather than` into, watched for the obvious reason:
-   a cure that concentrates in one phrase is the same fault wearing
-   different words. */
+/* Ordinary phrases, counted for the report and never a failure. The last
+   two are the usual rewrites of `rather than`, watched so that a habit
+   moved from one phrase into another is still seen. */
 static const char *const WATCH[] = {"carries", "holds",     "rather than", "which is",
                                     "not a",   "honest",    "the point",   "in practice",
                                     "worth",   "note that", ", not",       "instead of"};
@@ -97,11 +99,13 @@ static char repo[1024];
 
 /* ---- a growable buffer of normalized spans ---- */
 
+/** A growable list of strings the list owns; `cap` is the array's size. */
 struct spans {
     char **item;
     int n, cap;
 };
 
+/** malloc that exits with status 2 when memory runs out; never NULL. */
 static void *xalloc(size_t n)
 {
     void *p = malloc(n ? n : 1);
@@ -113,6 +117,7 @@ static void *xalloc(size_t n)
     return p;
 }
 
+/** Appends `text`, which the list takes ownership of, to `s`. */
 static void spans_push(struct spans *s, char *text)
 {
     if (s->n == s->cap) {
@@ -124,6 +129,7 @@ static void spans_push(struct spans *s, char *text)
     s->item[s->n++] = text;
 }
 
+/** Frees the strings and the array of `s` and leaves it empty. */
 static void spans_free(struct spans *s)
 {
     int i;
@@ -135,7 +141,7 @@ static void spans_free(struct spans *s)
     s->n = s->cap = 0;
 }
 
-/* One comment, with its decoration gone and its whitespace collapsed:
+/** One comment, with its decoration gone and its whitespace collapsed:
    leading `*`, slash or `#` runs at the start of each line, then every run
    of whitespace becomes one space. Returns a fresh string, or NULL when
    nothing is left. */
@@ -198,10 +204,15 @@ static char *normalize(const char *text, size_t len)
 
 enum span_kind { SPAN_COMMENT, SPAN_STRING };
 
+/* The callback a lexer calls for each span: `line` is the line the span
+   starts on, 1-based, or 0 for a Markdown paragraph, and `body` the text
+   between the delimiters, valid only during the call. */
 typedef void (*span_fn)(void *ctx, enum span_kind kind, int line, const char *body, size_t len);
 
-/* Every comment and string in C source. One state machine, so a `/ *`
-   inside a string and a quote inside a comment are both read correctly. */
+/** Calls `emit` for every comment and string literal in C source. One state
+   machine reads both, so a `/ *` inside a string and a quote inside a
+   comment are both read correctly. A comment open at the end of the text is
+   emitted too; a character literal is not emitted. */
 static void c_spans(const char *text, size_t n, span_fn emit, void *ctx)
 {
     size_t i = 0, start = 0;
@@ -264,8 +275,7 @@ static void c_spans(const char *text, size_t n, span_fn emit, void *ctx)
             i++;
             continue;
         }
-        /* A literal. A backslash escapes the next character, so a trailing
-           backslash cannot end the literal early. */
+        /* In a literal, a backslash escapes the next character. */
         if (ch == '\\') {
             if (i + 1 < n && text[i + 1] == '\n')
                 line++;
@@ -294,12 +304,12 @@ static void c_spans(const char *text, size_t n, span_fn emit, void *ctx)
         emit(ctx, SPAN_COMMENT, start_line, text + start, n - start);
 }
 
-/* The lines carrying a `#` comment, outside quotes: shell, make and Python
-   as this tree writes them. A triple-quoted Python string spans lines,
-   which the per-line quote tracking cannot see, so those lines are found
-   first and skipped; without that, a fixture holding a deliberately
-   over-width `#` line reads as a comment. Fills `mark[]`, one byte per
-   line, 1-based. */
+/** The lines with a `#` comment, outside quotes: shell, make and Python as
+   this tree writes them. A triple-quoted Python string spans lines, which
+   the per-line quote tracking cannot see, so those lines are found first
+   and skipped; without that, a fixture with a deliberately over-width `#`
+   line would read as a comment. Fills `mark[]`, of `max_lines` + 2 bytes,
+   one byte per line, 1-based: 1 for a comment line and 0 otherwise. */
 static void hash_comment_lines(const char *text, size_t n, char *mark, int max_lines)
 {
     int line = 1, depth = 0;
@@ -365,11 +375,14 @@ static void hash_comment_lines(const char *text, size_t n, char *mark, int max_l
 
 /* ---- file reading and the walk ---- */
 
-/* Counts the files the walk reached but could not read. A file skipped in
-   silence is a file that passes every rule, so the count is reported and
+/* Counts the files the walk reached but could not read. A file skipped
+   without a report would pass every rule, so the count is reported and
    fails the run. */
 static long unread;
 
+/** The whole of the file at `path`, NUL-terminated, its length in `*len`,
+   in memory the caller frees. A file that cannot be read, or is longer than
+   MAX_FILE, is reported, counted in `unread`, and gives NULL. */
 static char *read_text(const char *path, size_t *len)
 {
     FILE *f = fopen(path, "rb");
@@ -413,6 +426,7 @@ static char *read_text(const char *path, size_t *len)
     return buf;
 }
 
+/** Whether `s` ends in `suffix`. */
 static int ends_with(const char *s, const char *suffix)
 {
     size_t n = strlen(s), m = strlen(suffix);
@@ -422,13 +436,14 @@ static int ends_with(const char *s, const char *suffix)
 
 enum lang { LANG_NONE, LANG_C, LANG_HASH, LANG_MD };
 
+/** The language of `path` by its name. A makefile is commented with `#`
+   like a shell script, and the build's own files are held to the same
+   80-column rule as the code they build; a file named Makefile has no
+   suffix, so it is matched by name. */
 static enum lang lang_of(const char *path)
 {
     if (ends_with(path, ".c") || ends_with(path, ".h"))
         return LANG_C;
-    /* A makefile is hash-commented like a shell script, and the build's own
-       files answer to the same 80-column rule as the code they build. Named
-       explicitly because they carry no extension. */
     if (ends_with(path, ".sh") || ends_with(path, ".mk") || ends_with(path, ".py") ||
         ends_with(path, "/Makefile") || strcmp(path, "Makefile") == 0)
         return LANG_HASH;
@@ -447,12 +462,19 @@ static const char *relpath(const char *path)
     return path;
 }
 
+/* The callback a walk calls for each file it reaches. */
 typedef void (*file_fn)(void *ctx, const char *path);
 
-/* `is_top` marks the path the caller named. The skipped paths are skipped
-   as descendants, not as roots: `ports/doom/src` is upstream Doom and is
-   left out of this project's prose, and it is also the corpus the report
-   reads, which it asks for by name. */
+/** Calls `visit` for `root`, when it is a file, or for every C, hash and,
+   with `md_too`, Markdown file under it, in name order. Hidden entries and
+   the SKIP_DIRS are passed over, and a symbolic link is reported and not
+   followed, since a link to a directory above would walk the tree again
+   and again. What cannot be read is reported and counted in `unread`.
+
+   `is_top` marks the path the caller named. The SKIP_PATHS are skipped as
+   descendants, not as roots: `ports/doom/src` is upstream Doom and is left
+   out of this project's prose, and it is also the corpus the report reads,
+   which it asks for by name. */
 static void walk_at(const char *root, file_fn visit, void *ctx, int md_too, int is_top)
 {
     DIR *dir;
@@ -520,9 +542,6 @@ static void walk_at(const char *root, file_fn visit, void *ctx, int md_too, int 
         names.item[j + 1] = key;
     }
     for (i = 0; i < names.n; i++) {
-        /* lstat, not stat: a symbolic link to a directory above this one
-           would walk the tree again and again. There are none in this
-           tree, so one that appears is reported rather than followed. */
         if (lstat(names.item[i], &st) != 0) {
             fprintf(stderr, "prosecheck: %s: %s; it was not checked\n", names.item[i],
                     strerror(errno));
@@ -547,6 +566,7 @@ static void walk_at(const char *root, file_fn visit, void *ctx, int md_too, int 
     spans_free(&names);
 }
 
+/** walk_at for a path the caller named. */
 static void walk(const char *root, file_fn visit, void *ctx, int md_too)
 {
     walk_at(root, visit, ctx, md_too, 1);
@@ -554,11 +574,13 @@ static void walk(const char *root, file_fn visit, void *ctx, int md_too)
 
 /* ---- collecting prose ---- */
 
+/** The normalized spans a lexer's callback gathers. */
 struct collect {
     struct spans out;
-    int want_strings;
+    int want_strings; /* nonzero to keep string literals as well */
 };
 
+/** The span_fn that normalizes a span and keeps it in a `struct collect`. */
 static void collect_span(void *ctx, enum span_kind kind, int line, const char *body, size_t len)
 {
     struct collect *c = ctx;
@@ -572,9 +594,9 @@ static void collect_span(void *ctx, enum span_kind kind, int line, const char *b
         spans_push(&c->out, text);
 }
 
-/* The `#` comments and quoted strings of a shell, make or Python file,
-   line by line. A string spanning lines is not tracked, which costs
-   nothing here: it is the same per-line scan the width check uses. */
+/** The `#` comments and quoted strings of a shell, make or Python file,
+   line by line, the same per-line scan the width check uses. A string
+   spanning lines is not tracked. */
 static void hash_spans(const char *text, size_t n, span_fn emit, void *ctx)
 {
     char *mark;
@@ -622,7 +644,7 @@ static void hash_spans(const char *text, size_t n, span_fn emit, void *ctx)
     free(mark);
 }
 
-/* Markdown paragraphs, with code and any exempt section removed. The
+/** Markdown paragraphs, with code and any exempt section removed. The
    exempt section ends at the next heading of the same level or higher;
    Markdown allows up to three spaces before a `#`, so a heading matched by
    its first column alone could be indented by one space and the exemption
@@ -712,7 +734,8 @@ static void md_spans(const char *text, size_t n, const char *path, span_fn emit,
         emit(ctx, SPAN_COMMENT, 0, para, plen);
 }
 
-/* The normalized prose of one file, by language. */
+/** Appends the normalized prose of one file, by language, to `out`; with
+   `strings`, its string literals too. */
 static void prose_of(const char *path, const char *text, size_t n, int strings, struct spans *out)
 {
     struct collect c;
@@ -739,12 +762,13 @@ static void prose_of(const char *path, const char *text, size_t n, int strings, 
 
 /* ---- phrase counting ---- */
 
+/** Whether `c` is a word character: a letter, a digit or `_`. */
 static int is_word(int c)
 {
     return isalnum((unsigned char)c) || c == '_';
 }
 
-/* A word boundary at `at` in `text`, the way a regular expression's `\b`
+/** A word boundary at `at` in `text`, the way a regular expression's `\b`
    decides it: one side a word character and the other not, with the ends
    of the string counting as not. */
 static int boundary(const char *text, size_t len, size_t at)
@@ -755,8 +779,8 @@ static int boundary(const char *text, size_t len, size_t at)
     return before != after;
 }
 
-/* Occurrences of `phrase` in one normalized span, case-insensitive and
-   bounded at both ends, the way the report has always counted them. */
+/** Occurrences of `phrase` in one normalized span, case-insensitive and
+   on a word boundary at both ends. */
 static long count_in(const char *span, const char *phrase)
 {
     size_t slen = strlen(span), plen = strlen(phrase);
@@ -780,6 +804,7 @@ static long count_in(const char *span, const char *phrase)
     return n;
 }
 
+/** Occurrences of `phrase` in all the spans of `s`. */
 static long count_spans(const struct spans *s, const char *phrase)
 {
     long n = 0;
@@ -790,6 +815,7 @@ static long count_spans(const struct spans *s, const char *phrase)
     return n;
 }
 
+/** The words, runs of anything but a space, in all the spans of `s`. */
 static long words_of(const struct spans *s)
 {
     long n = 0;
@@ -813,19 +839,18 @@ static long words_of(const struct spans *s)
 
 /* ---- columns: comment lines wider than the limit ---- */
 
+/** The over-width comment lines found, and the files they are in. */
 struct width_ctx {
     long over, files;
 };
 
-/* The comment lines of one file, and which of them are too wide. What
-   opens a comment LINE differs by language: `#` is a comment in shell,
-   make and Python, and a preprocessor directive in C, so
-   a preprocessor directive carrying a trailing comment is a code line. */
+/** One flag per line of a file, 1-based, nonzero for a line in a comment. */
 struct marks {
     char *line;
-    int max;
+    int max; /* the line count; `line` has max + 2 bytes */
 };
 
+/** The span_fn that flags every line a comment covers in a `struct marks`. */
 static void mark_comment_lines(void *ctx, enum span_kind kind, int line, const char *body,
                                size_t len)
 {
@@ -842,6 +867,11 @@ static void mark_comment_lines(void *ctx, enum span_kind kind, int line, const c
         m->line[line] = 1;
 }
 
+/** The file_fn of `columns`: reports each comment line of a C or hash file
+   wider than LIMIT. A line counts only when it is in a comment and begins
+   with what opens one, which differs by language: `#` is a comment in
+   shell, make and Python and a preprocessor directive in C, so in C a
+   directive with a trailing comment is a code line. */
 static void check_width(void *ctx, const char *path)
 {
     struct width_ctx *w = ctx;
@@ -900,10 +930,13 @@ static void check_width(void *ctx, const char *path)
 
 /* ---- banned: terms wrong at any frequency ---- */
 
+/** The uses of banned terms found. */
 struct banned_ctx {
     long findings;
 };
 
+/** The file_fn of `banned`: prints each banned term a file's comments and
+   strings use, with its count. The EXEMPT_FILES are passed over. */
 static void check_banned(void *ctx, const char *path)
 {
     struct banned_ctx *b = ctx;
@@ -933,11 +966,16 @@ static void check_banned(void *ctx, const char *path)
 
 /* ---- count: the word and phrase totals the report drivers tabulate ---- */
 
+/** The prose gathered for `count`. */
 struct count_ctx {
     struct spans prose;
-    enum lang want;
+    enum lang want; /* the language counted; LANG_NONE for all */
 };
 
+/** The file_fn of `count`: gathers the prose of a file in the language
+   counted. The file stating the register rule is left out of the counts as
+   well as of the ban: its words are the rule's own text, and counting them
+   would move the rates every phrase is measured against. */
 static void collect_file(void *ctx, const char *path)
 {
     struct count_ctx *c = ctx;
@@ -947,10 +985,6 @@ static void collect_file(void *ctx, const char *path)
 
     if (c->want != LANG_NONE && lang_of(path) != c->want)
         return;
-    /* The file stating the register rule is left out of the counts as
-       well as of the ban: its word totals are the rule's own text, and
-       counting them would move the rates every phrase is measured
-       against. */
     for (i = 0; i < (int)(sizeof(EXEMPT_FILES) / sizeof(EXEMPT_FILES[0])); i++)
         if (strcmp(relpath(path), EXEMPT_FILES[i]) == 0)
             return;
@@ -963,13 +997,14 @@ static void collect_file(void *ctx, const char *path)
 
 /* ---- devlog: the index against the milestone directories ---- */
 
+/** A milestone directory of dev-log/. */
 struct milestone {
     char name[128];
-    int number;
-    int finished;
+    int number;   /* the two digits the name begins with */
+    int finished; /* the directory has a Readme.md or a results.md */
 };
 
-/* Writes `a/b` followed by `tail` to `dst`, or exits when the path does
+/** Writes `a/b` followed by `tail` to `dst`, or exits when the path does
    not fit: a shorter path would name another file. */
 static void join_path(char *dst, size_t cap, const char *a, const char *b, const char *tail)
 {
@@ -979,6 +1014,9 @@ static void join_path(char *dst, size_t cap, const char *a, const char *b, const
     }
 }
 
+/** Fills `out` with the milestone directories of `devlog`, sorted by number,
+   and returns their count, or -1 when `devlog` cannot be opened. More than
+   `max` directories, or a name too long, exits with status 2. */
 static int read_milestones(const char *devlog, struct milestone *out, int max)
 {
     DIR *dir = opendir(devlog);
@@ -1044,7 +1082,7 @@ static int read_milestones(const char *devlog, struct milestone *out, int max)
     return n;
 }
 
-/* The milestone names the index lists, in order, ignoring fenced blocks.
+/** The milestone names the index lists, in order, ignoring fenced blocks.
    An entry is `* `NN-name`: ...` at the left margin: an indented bullet is
    a sub-item, and a name without the colon is prose that mentions a
    milestone. */
@@ -1111,7 +1149,12 @@ static int read_entries(const char *text, size_t n, char names[][128], int max)
     return count;
 }
 
-/* The complaints about one index; returns how many were printed. */
+/** Appends to `problems` what is wrong with one index: an entry that is not
+   a directory, one for a milestone not finished, one named twice, and a
+   finished milestone with no entry. When none of those is found, the order
+   is checked, and reported against the first position that differs, since
+   one displaced entry shifts everything after it. Returns the number of
+   problems in the list. */
 static int judge_devlog(struct milestone *dirs, int n_dirs, char entries[][128], int n_entries,
                         struct spans *problems)
 {
@@ -1176,9 +1219,6 @@ static int judge_devlog(struct milestone *dirs, int n_dirs, char entries[][128],
             spans_push(problems, strdup(msg));
         }
     }
-    /* Order is the half a membership check misses, reported against the
-       first position that differs: one displaced entry shifts everything
-       after it. */
     if (problems->n == 0) {
         int same = n_entries == n_expected;
 
@@ -1220,8 +1260,10 @@ static int judge_devlog(struct milestone *dirs, int n_dirs, char entries[][128],
 
 /* ---- the selftest ---- */
 
+/* The selftest's failed cases. */
 static int st_bad;
 
+/** Counts a failed case, and prints `what`, unless `ok`. */
 static void st_check(int ok, const char *what)
 {
     if (!ok) {
@@ -1230,6 +1272,9 @@ static void st_check(int ok, const char *what)
     }
 }
 
+/* The fixtures. Each width fixture has one over-width comment line among
+   over-width code lines; each prose fixture places banned terms where a
+   rule must find them and where it must not. */
 static const char SELFTEST_C[] =
     "/* a short header */\n"
     "/* a block comment line made deliberately longer than eighty columns "
@@ -1271,6 +1316,7 @@ static const char PROSE_MD[] = "# Doc\n\n"
                                "a fenced block with load-bearing inside\n"
                                "```\n";
 
+/** Whether any span of `s` contains `needle`, as a plain substring. */
 static int any_span_has(const struct spans *s, const char *needle)
 {
     int i;
@@ -1281,10 +1327,11 @@ static int any_span_has(const struct spans *s, const char *needle)
     return 0;
 }
 
+/* The selftest's temporary directory. */
 static char st_dir[256];
 
-/* The selftest's fixtures are flat files in one directory, so removing
-   them and the directory is the whole of the cleanup. */
+/** Removes the selftest's fixtures and their directory. The fixtures are
+   flat files in one directory, so that is the whole of the cleanup. */
 static void st_clean(void)
 {
     DIR *dir = opendir(st_dir);
@@ -1304,6 +1351,9 @@ static void st_clean(void)
     rmdir(st_dir);
 }
 
+/** Writes `body` to the file `name` in the selftest's directory and returns
+   its path, in a static buffer the next call overwrites. Exits with status
+   2 when the file cannot be made. */
 static char *st_write(const char *name, const char *body)
 {
     static char path[512];
@@ -1318,6 +1368,9 @@ static char *st_write(const char *name, const char *body)
     return path;
 }
 
+/** Writes a width fixture and checks that the width rule finds exactly one
+   over-width comment line in it. The findings go to stderr and only their
+   count is checked; `want_line` is not used. */
 static void st_widths(const char *name, const char *body, int want_line)
 {
     struct width_ctx w = {0, 0};
@@ -1325,8 +1378,6 @@ static void st_widths(const char *name, const char *body, int want_line)
     char msg[256];
 
     snprintf(path, sizeof(path), "%s", st_write(name, body));
-    /* The findings go to stderr; what is asserted is the count, which is
-       one over-width comment line in each fixture. */
     check_width(&w, path);
     snprintf(msg, sizeof(msg),
              "%s: expected 1 over-width comment line, got "
@@ -1336,6 +1387,11 @@ static void st_widths(const char *name, const char *body, int want_line)
     (void)want_line;
 }
 
+/** Runs the rules against the fixtures, written to a temporary directory
+   under TMPDIR, or /tmp, that is removed afterwards. The register rule's
+   cases read the repository's AGENTS.md and are passed over when it cannot
+   be read. Returns 0 when every case passes, 1 when one fails, and 2 when
+   the directory cannot be made. */
 static int selftest(void)
 {
     struct spans only = {NULL, 0, 0}, both = {NULL, 0, 0};
@@ -1354,8 +1410,7 @@ static int selftest(void)
         return 2;
     }
 
-    /* The width rule. Its findings are the point of the fixtures, so they
-       are counted with the report itself sent to /dev/null. */
+    /* The width rule, its report on stderr sent to /dev/null. */
     devnull = fopen("/dev/null", "w");
     hold = stderr;
     if (devnull != NULL)
@@ -1417,9 +1472,7 @@ static int selftest(void)
                      "the register rule's own text was not exempted");
             spans_free(&body);
 
-            /* The exemption must end at the next heading even when that
-               heading is indented, which Markdown allows: otherwise one
-               space silences the file. */
+            /* The exemption ends at an indented heading too. */
             {
                 char *at = strstr(text, "\n## Comments\n");
 
@@ -1456,7 +1509,7 @@ static int selftest(void)
         }
     }
 
-    /* The dev-log index rules, over a temporary tree. */
+    /* The dev-log index rules, over indexes and directories in memory. */
     {
         static const struct {
             const char *name;
@@ -1508,9 +1561,7 @@ static int selftest(void)
             spans_free(&problems);
         }
 
-        /* The entry pattern: an indented bullet is a sub-item, a name
-           without backticks or without the colon is prose, and a tilde
-           fence hides its contents too. */
+        /* The entry pattern, with each form read_entries passes over. */
         {
             static const char sample[] = "* `25-sealed`: an entry.\n"
                                          "  * `24-metal`: indented, so a sub-item.\n"
@@ -1540,9 +1591,10 @@ static int selftest(void)
 
 /* ---- entry ---- */
 
-/* The tool is run from the repository root by every caller; the root is
-   where CLAUDE.md is. Not finding one is fatal, because a checker that
-   walks a tree it did not find reports the same OK as a clean tree. */
+/** Sets `repo` to the repository root: the nearest directory at or above
+   the working directory that has a CLAUDE.md. Finding none exits with
+   status 2, since a walk of a tree that is not there would report the same
+   OK as a clean tree. */
 static void set_repo(void)
 {
     struct stat st;
@@ -1575,6 +1627,8 @@ static void set_repo(void)
     exit(2);
 }
 
+/** Runs the subcommand `argv[1]` names; the file's header describes each
+   and the exit status. */
 int main(int argc, char **argv)
 {
     int i;
@@ -1694,8 +1748,7 @@ int main(int argc, char **argv)
         for (i = 0; i < N_WATCH; i++) {
             const char *p = WATCH[i];
 
-            /* The report writes a phrase as one field, with its spaces as
-               underscores. */
+            /* One field per phrase, its spaces written as underscores. */
             while (*p != '\0') {
                 putchar(*p == ' ' ? '_' : *p);
                 p++;
