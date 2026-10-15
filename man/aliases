@@ -1,7 +1,13 @@
-# The pages a second name reaches: NAME SECTION TARGET, one a line. The
-# renderer copies TARGET's page under NAME, and mancheck counts NAME as
-# covered. A system call's 32-bit form, a family page's members and an
-# applet of a family page are aliases.
+# The pages a second name reaches: NAME SECTION TARGET, one a line, where
+# TARGET is the page man/manSECTION/TARGET.SECTION. A system call's 32-bit
+# form, a family page's members and an applet of a family page are aliases.
+# No file is made for an alias. The manifests of the images that carry the
+# manual stage this file as it is at /usr/share/man/aliases, and man
+# (krffs/man.script) reads it at each lookup to find the page a name in a
+# section reaches. tools/verify/mancheck.c requires each line to have the
+# three fields, NAME to be no page of its section and to be listed once in
+# it, and TARGET to be a page of that section; a program, applet or call
+# with an alias counts as having a page.
 accept4 2 accept
 add-shell 8 busybox-loginutils
 addgroup 8 busybox-loginutils
