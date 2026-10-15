@@ -11,8 +11,10 @@
 # session with Remote Control, named `rach2 incident`, in a detached tmux(1)
 # session in the clone it is in, with a prompt that waits two and a half
 # minutes and then sends MESSAGE. The session then stays open, so that the
-# owner can open it from the phone and ask about the incident. The next
-# notify.sh replaces it; `tmux kill-session -t rach2-incident` closes it.
+# owner can open it from the phone and ask about the incident. The session
+# gets this script's PATH, since a tmux session gets the environment of the
+# tmux server, which may not find `claude`. The next notify.sh replaces it;
+# `tmux kill-session -t rach2-incident` closes it.
 #
 # It needs the Claude app on the phone, signed in to the same account with
 # notifications allowed; Remote Control accepted on this machine, and `Push
@@ -28,5 +30,5 @@ prompt="First run \`sleep 150\` with the Bash tool, in the foreground. Then call
 
 Then wait for the owner, who may open this session from the phone to ask about the message. Answer from the repository, the board (\`gh\`) and \`sh tools/flow/status.sh\`, and change nothing unless the owner asks."
 tmux kill-session -t rach2-incident 2> /dev/null
-tmux new-session -d -s rach2-incident -x 200 -y 50 \
+tmux new-session -d -s rach2-incident -x 200 -y 50 -e "PATH=$PATH" \
     claude --remote-control "rach2 incident" --allowedTools 'Bash(sleep:*)' "$prompt"
