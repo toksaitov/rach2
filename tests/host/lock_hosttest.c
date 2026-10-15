@@ -1,24 +1,14 @@
 /**
- * Host test for advisory file locks (fs/lock.c).
+ * lock_hosttest.c: the advisory file locks of rach2/sys/fs/lock.c, record
+ * locks, open file description locks and flock locks.
  *
  * host-deps:
  *
- * Includes the source with the wait queue and the heap stood in by the host.
- * Each process of a row has a descriptor table of its own, the owner of its
- * record locks, but for the two that share one. A record lock of one
- * process blocks another's over any byte it covers and F_GETLK reports it;
- * an unlock of its middle splits it and frees the middle; a lock of the
- * same process replaces its own and joins the ranges it touches; a lock to
- * the end of the file covers bytes past any size; a close drops the closing
- * table's locks on that file only. Two processes that share a table are one
- * owner, whose locks F_GETLK names by the process that took each and a
- * close by either drops, and through which a cycle of waits is found; two
- * tables of one process are two owners. An open file description lock
- * conflicts with another description's and with a process's record lock. A
- * flock lock of one description blocks another's, a conversion lets go
- * first, and a description's end frees its locks. A file that moves takes
- * its locks, and the waits for them, with it. Returns the failed-check
- * count.
+ * The test includes the source whole, with the heap and the wait queue
+ * given by the host. Each process of a row has a descriptor table of its
+ * own, the owner of its record locks, except where a row makes two share
+ * one. A sleep runs what the row's other processes do meanwhile, as steps
+ * the row sets before it.
  */
 
 #include "fs/lock.c"
@@ -45,16 +35,19 @@ struct percpu cpu_table[NR_CPUS] = {{.current = &process}};
 static fd_table_t tables[10];
 static fd_table_t *table_of[10];
 
+/** The kernel heap's zeroed allocation, from the C library. */
 void *kzalloc(size_t n)
 {
     return calloc(1, n);
 }
 
+/** Free what `kzalloc` gave. */
 void kfree(void *p)
 {
     free(p);
 }
 
+/** A wake, which does nothing: every sleep runs its step itself. */
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
@@ -66,6 +59,8 @@ void wq_wake_all(wait_queue_t *wq)
 static void (*steps[4])(void);
 static int step;
 
+/** Sleep until `cond(arg)` holds, running the next of `steps` at each
+ *  sleep. Returns 0, or -EINTR when no step is left. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
@@ -90,6 +85,13 @@ static void be(uint32_t pid)
     process.fds = table_of[pid] ? table_of[pid] : &tables[pid];
 }
 
+/**
+ * Make the record-lock request `cmd` of `type` over bytes `start` to `end`
+ * of the file `key` as process `pid`, through the description `ofd` for an
+ * open file description lock or NULL for a process's lock. Returns what
+ * `lock_record` returns, and stores the request as it answered in `out`
+ * when `out` is not NULL.
+ */
 static int32_t as_on(const struct lock_key *key, uint32_t pid, struct open_file *ofd, int cmd,
                      int type, uint64_t start, uint64_t end, struct lock_req *out)
 {
@@ -110,12 +112,14 @@ static int32_t as_on(const struct lock_key *key, uint32_t pid, struct open_file 
     }
 }
 
+/** `as_on` for the file `file`. */
 static int32_t as(uint32_t pid, struct open_file *ofd, int cmd, int type, uint64_t start,
                   uint64_t end, struct lock_req *out)
 {
     return as_on(&file, pid, ofd, cmd, type, start, end, out);
 }
 
+/** The number of locks held, of every file and kind. */
 static int count_locks(void)
 {
     const struct file_lock *l;
@@ -127,6 +131,18 @@ static int count_locks(void)
     return n;
 }
 
+/**
+ * Record locks of separate owners. A write lock of pid 1 blocks pid 2's
+ * read lock over any byte of it, and F_GETLK in pid 2 reports it with its
+ * range and pid, while pid 1 finds no conflict with its own lock. An unlock
+ * of the middle splits the lock in two and frees the middle for pid 2. A
+ * close by pid 2 drops its locks on the file only; pid 1's read lock over
+ * the whole file then meets no other owner's lock, replaces pid 1's pieces
+ * with one lock, and blocks a write past any size. A close of another file
+ * drops nothing. Two adjacent locks of one owner join, and F_GETLK reports
+ * the joined range. A lock type out of range, and F_GETLK of F_UNLCK, are
+ * EINVAL.
+ */
 static void records(void)
 {
     struct lock_req got;
@@ -140,13 +156,10 @@ static void records(void)
     CHECK(as(1, NULL, LOCK_SET, F_UNLCK, 15, 19, NULL) == 0 && count_locks() == 3);
     CHECK(as(2, NULL, LOCK_SET, F_WRLCK, 15, 19, NULL) == 0);
     CHECK(as(2, NULL, LOCK_SET, F_WRLCK, 12, 12, NULL) == -EAGAIN);
-    /* Pid 1's read lock over everything meets pid 2's write locks. */
     CHECK(as(1, NULL, LOCK_SET, F_RDLCK, 0, LOCK_EOF, NULL) == -EAGAIN);
     be(2);
     lock_close(&file);
     CHECK(count_locks() == 2);
-    /* Its own locks give way: a read lock over both of pid 1's pieces, which
-     * are one again. */
     CHECK(as(1, NULL, LOCK_SET, F_RDLCK, 0, LOCK_EOF, NULL) == 0 && count_locks() == 1);
     CHECK(as(3, NULL, LOCK_SET, F_RDLCK, 1000000, 1000000, NULL) == 0);
     CHECK(as(3, NULL, LOCK_SET, F_WRLCK, 1000001, 1000001, NULL) == -EAGAIN);
@@ -167,6 +180,16 @@ static void records(void)
     CHECK(as(4, NULL, LOCK_GET, F_UNLCK, 0, 1, NULL) == -EINVAL);
 }
 
+/**
+ * Open file description locks and flock locks. A description's record lock
+ * conflicts with another description's and with a process's, F_GETLK
+ * reports it with pid -1, and it goes with its description
+ * (`lock_ofd_gone`). A flock lock of one description blocks another's
+ * exclusive and shared locks, and does not meet a record lock. Two shared
+ * flock locks of two descriptions coexist, and a conversion to exclusive
+ * that fails has already let go of the shared lock it had. An operation
+ * that is not one of LOCK_SH, LOCK_EX and LOCK_UN is EINVAL.
+ */
 static void descriptions(void)
 {
     struct open_file a, b;
@@ -185,14 +208,12 @@ static void descriptions(void)
     CHECK(lock_flock(&file, &a, LOCK_EX) == 0);
     CHECK(lock_flock(&file, &b, LOCK_EX | LOCK_NB) == -EAGAIN);
     CHECK(lock_flock(&file, &b, LOCK_SH | LOCK_NB) == -EAGAIN);
-    /* flock and record locks do not meet. */
     CHECK(as(2, NULL, LOCK_SET, F_WRLCK, 0, LOCK_EOF, NULL) == 0);
     be(2);
     lock_close(&file);
     CHECK(lock_flock(&file, &a, LOCK_SH) == 0);
     CHECK(lock_flock(&file, &b, LOCK_SH | LOCK_NB) == 0);
     CHECK(lock_flock(&file, &a, LOCK_EX | LOCK_NB) == -EAGAIN);
-    /* The conversion let go of a's shared lock before it failed. */
     CHECK(count_locks() == 1);
     CHECK(lock_flock(&file, &a, 3) == -EINVAL);
     lock_ofd_gone(&b);
@@ -241,7 +262,7 @@ static void wait_cycle(void)
 static struct open_file shared, holder;
 static int32_t second_result;
 
-/** The second thread sharing a description asks for its lock too. */
+/** The second thread of the shared description requests its lock too. */
 static void second_asks(void)
 {
     second_result = lock_flock(&file, &shared, LOCK_SH);
@@ -429,6 +450,7 @@ static void shared_cycle(void)
     CHECK(count_locks() == 0);
 }
 
+/** Run the rows. Returns the count of failed checks, at most 100. */
 int main(void)
 {
     records();
