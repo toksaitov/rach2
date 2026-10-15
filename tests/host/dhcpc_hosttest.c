@@ -1,6 +1,6 @@
 /**
- * Check DHCP cleanup, masks, resolver updates, claims, descriptor release and
- * the waits of a lease.
+ * Check the DHCP client, utils/dhcpc.c: its cleanup, masks, resolver updates,
+ * claims, descriptor release and the waits of a lease.
  *
  * host-deps: utils/dhcpmsg.c utils/ipcheck.c
  * host-cflags: -I tests/host/compat/netutil
@@ -30,6 +30,21 @@
 #include <net/if.h>
 #include <net/route.h>
 
+/*
+ * The models' state. remove_error: nonzero to fail the removal of the
+ * address with EIO. claim_error, resolver_error, record_error: the errno with
+ * which opening the claim, making the resolver's temporary file and creating
+ * the claim fail, or 0. claim_read_error: nonzero to report a read error on
+ * the claim. overlap: the first resolver writer starts a second, and nested
+ * is set while the second runs. stdio_model: the descriptor rows are
+ * running. console_error, null_error: the errno with which opening
+ * /dev/console and /dev/null fail, or 0. dup_error: the standard descriptor
+ * whose dup2 fails, or -1. descriptors: each standard descriptor, 1 as
+ * inherited, 2 replaced and 0 closed. extra_open: descriptor 10, the device
+ * opened, is open. clock_model: the wait rows' clock, clock_now, is in use.
+ * send_times: the clock at each of the first sixteen requests. address, mask,
+ * gateway: the interface as the ioctls leave it.
+ */
 static char directory[] = "/tmp/dhcpc-test.XXXXXX";
 static int failures, remove_error, claim_error, claim_read_error, resolver_error, record_error;
 static int overlap, nested, stdio_model, console_error, null_error, dup_error;
@@ -37,14 +52,14 @@ static int descriptors[3], extra_open, mask_calls, sleep_calls;
 static int clock_model, polls, sends;
 static time_t clock_now, send_times[16];
 static unsigned long address, mask, gateway;
-/* Whether the model answers SIOCGIFADDR; the rows written before it was
- * modelled read an interface whose address cannot be read. */
+/* Whether the model answers SIOCGIFADDR; while it is clear, an interface's
+ * address cannot be read. */
 static int getaddr_works;
 /* What the parent's end of the handoff pipe answers: 'y', or 0 for an end of
  * file, a parent that died before it published the child. */
 static char handshake_answer = 'y';
-static jmp_buf child_exit;
-static int exit_status;
+static jmp_buf child_exit; /* where model_exit returns to */
+static int exit_status;    /* the status model_exit was given */
 static void overlap_writer(void);
 
 #define CHECK(condition, detail)                               \
@@ -55,7 +70,10 @@ static void overlap_writer(void);
         }                                                      \
     } while (0)
 
-/** Map every utility path into the private test directory. */
+/**
+ * Write into `buffer`, of `size` bytes, the path in the test's directory with
+ * the last component of `path`, and return `buffer`.
+ */
 static const char *local_path(const char *path, char *buffer, size_t size)
 {
     const char *base = strrchr(path, '/');
@@ -64,7 +82,11 @@ static const char *local_path(const char *path, char *buffer, size_t size)
     return buffer;
 }
 
-/** Open a claim or resolver file, or inject a claim-open error. */
+/**
+ * Open a claim or resolver file in the test's directory, or fail the claim's
+ * open with `claim_error`. A file opened for writing while `overlap` is set
+ * starts the second resolver writer.
+ */
 static FILE *model_fopen(const char *path, const char *mode)
 {
     char local[256];
@@ -81,13 +103,16 @@ static FILE *model_fopen(const char *path, const char *mode)
     return f;
 }
 
-/** Report an injected claim read failure. */
+/** Report the stream's error, or one when `claim_read_error` is set. */
 static int model_ferror(FILE *f)
 {
     return claim_read_error || ferror(f);
 }
 
-/** Create an exclusive temporary file and return its suffix to the caller. */
+/**
+ * Create an exclusive temporary file in the test's directory and give its
+ * suffix back in `pattern`, or fail with `resolver_error`.
+ */
 static int model_mkstemp(char *pattern)
 {
     char local[256];
@@ -138,7 +163,8 @@ static int model_fclose(FILE *f)
 }
 
 /**
- * Map regular files and model console or null opens without host devices.
+ * Open a file in the test's directory, or model an open of /dev/console or
+ * /dev/null as descriptor 10 without a host device.
  *
  * `/dev/urandom` is refused, so a transaction id comes from the clock.
  */
@@ -175,7 +201,10 @@ static int model_open(const char *path, int flags, ...)
     return open(local_path(path, local, sizeof(local)), flags, mode);
 }
 
-/** Close a real file, or release a modeled standard descriptor. */
+/**
+ * Close a file, or, in the descriptor rows, mark a standard descriptor or
+ * descriptor 10 closed.
+ */
 static int model_close(int fd)
 {
     if (stdio_model) {
@@ -189,7 +218,10 @@ static int model_close(int fd)
     return close(fd);
 }
 
-/** Replace a standard descriptor or fail at the selected destination. */
+/**
+ * Replace standard descriptor `target` with the device opened, or fail with
+ * EBADF when it is `dup_error`.
+ */
 static int model_dup2(int fd, int target)
 {
     CHECK(stdio_model && fd == 10 && target >= 0 && target < 3,
@@ -202,7 +234,7 @@ static int model_dup2(int fd, int target)
     return target;
 }
 
-/** Rename only private test files. */
+/** Rename a file within the test's directory. */
 static int model_rename(const char *from, const char *to)
 {
     char src[256], dst[256];
@@ -210,7 +242,7 @@ static int model_rename(const char *from, const char *to)
     return rename(local_path(from, src, sizeof(src)), local_path(to, dst, sizeof(dst)));
 }
 
-/** Remove only private test files. */
+/** Remove a file from the test's directory. */
 static int model_remove(const char *path)
 {
     char local[256];
@@ -218,7 +250,15 @@ static int model_remove(const char *path)
     return remove(local_path(path, local, sizeof(local)));
 }
 
-/** Model address retention on an unchanged address and route subnet checks. */
+/**
+ * Model the interface ioctls. SIOCSIFADDR sets the address, and a changed
+ * address gets the mask 255.0.0.0, so a row sees whether the client sets the
+ * mask after it; setting 0, the removal, fails with EIO while `remove_error` is
+ * set. SIOCGIFADDR reads the address while `getaddr_works` is set.
+ * SIOCSIFNETMASK sets the mask. SIOCDELRT clears the gateway and fails with
+ * ESRCH. SIOCADDRT sets the gateway, or fails with EINVAL for one off the
+ * address's subnet. Any other request fails with EINVAL.
+ */
 static int model_ioctl(int fd, unsigned long request, ...)
 {
     struct ifreq *ifr;
@@ -276,7 +316,7 @@ static int model_ioctl(int fd, unsigned long request, ...)
     return -1;
 }
 
-/** Keep the recorded client alive without signalling a host process. */
+/** Report that the recorded client exists, without signalling a process. */
 static int model_kill(pid_t pid, int sig)
 {
     (void)pid;
@@ -337,7 +377,7 @@ static ssize_t model_sendto(int fd, const void *buffer, size_t length, int flags
     return (ssize_t)length;
 }
 
-/** Supply the child side of a successful handoff without forking a process. */
+/** Give descriptors 50 and 51 as the handoff pipe, without making one. */
 static int model_pipe(int fds[2])
 {
     fds[0] = 50;
@@ -345,17 +385,23 @@ static int model_pipe(int fds[2])
     return 0;
 }
 
+/** Return 0, so that the caller goes on as the child. */
 static pid_t model_fork(void)
 {
     return 0;
 }
 
+/** Start no session; return this process's id. */
 static pid_t model_setsid(void)
 {
     return getpid();
 }
 
-/** Read the parent's publication acknowledgement. */
+/**
+ * Read `handshake_answer` from the handoff pipe, the parent's word that it
+ * published the child, or an end of file when it is 0; read any other
+ * descriptor as read does.
+ */
 static ssize_t model_read(int fd, void *buf, size_t count)
 {
     if (fd == 50 && count == 1) {
@@ -368,7 +414,7 @@ static ssize_t model_read(int fd, void *buf, size_t count)
     return read(fd, buf, count);
 }
 
-/** Return a child exit to the descriptor test. */
+/** Record a child's exit status and return to the row's setjmp. */
 static void model_exit(int status)
 {
     exit_status = status;
@@ -435,7 +481,10 @@ static void overlap_writer(void)
     nested = 0;
 }
 
-/** Create a claim using the production format. */
+/**
+ * Write a claim for this process with the address `ip`, in the format dhcpc.c
+ * writes, and mark the interface held; exit with status 2 when it cannot.
+ */
 static void seed_claim(unsigned long ip)
 {
     int fd = model_open(pidpath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -472,7 +521,13 @@ static void check_cleanup(void)
     CHECK(claim_read(&recorded, &present) == 0 && !present, "successful removal releases claim");
 }
 
-/** Reject a failed initial lease when its partial address cannot be removed. */
+/**
+ * Require apply_initial to stop discovery, and keep the claim's record, when a
+ * first lease fails and its address cannot be taken off; to leave the
+ * interface's address when the lease cannot be recorded; and to record nothing
+ * to take off for a fixed address the offer repeats, which was not this
+ * client's to take off.
+ */
 static void check_initial(void)
 {
     struct dhcp_lease lease;
@@ -503,7 +558,6 @@ static void check_initial(void)
     record_error = 0;
     release_interface();
 
-    /* A fixed address the offer repeats was not this client's to take off. */
     address = lease.address;
     getaddr_works = 1;
     seed_claim(0);
@@ -739,6 +793,11 @@ static void check_claim_rewritten(void)
     holding = 0;
 }
 
+/**
+ * Make the test's directory, run the rows and remove the directory; return 0
+ * when every row passes, 1 when one fails, and 2 when the directory cannot be
+ * made.
+ */
 int main(void)
 {
     if (!mkdtemp(directory)) {
