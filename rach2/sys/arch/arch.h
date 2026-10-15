@@ -122,9 +122,10 @@ unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, uns
 void arch_run_on_stack(uintptr_t sp, void (*fn)(void)) K_NORETURN;
 
 /**
- * Enter user mode at `pc` with the stack pointer `sp`, interrupts on and the
- * general registers cleared: how the first program, and the debug shell's
- * own programs, start. Does not return.
+ * Enter user mode at `pc` with the stack pointer `sp` and interrupts on:
+ * how the first program, and the debug shell's own programs, start. x86-64
+ * clears the general registers; i686 leaves them as the kernel had them.
+ * Does not return.
  */
 void arch_enter_user(uintptr_t pc, uintptr_t sp) K_NORETURN;
 
@@ -134,8 +135,8 @@ void arch_tls_set(uintptr_t base);
 
 /** The running thread's thread pointer as it is now, which a fork gives its
  * child: on x86-64 FS's base, which a selector the program loaded into FS
- * changes without the kernel's knowing; on i686 the record's, which only
- * set_thread_area changes. */
+ * changes without the kernel's knowing; on i686 the record's `tls_base`,
+ * which set_thread_area and a tracer's PTRACE_SET_THREAD_AREA change. */
 uintptr_t arch_tls_get(void);
 
 /** Read clone's CLONE_SETTLS argument `arg` into the thread pointer it
@@ -148,8 +149,9 @@ long arch_clone_tls(unsigned long arg, uintptr_t *base_out);
 struct process;
 
 /** Make the saved frame `p` start a new program image: at `entry`, with the
- * stack pointer `sp`, the general registers cleared and the user segments
- * loaded where the architecture has them. */
+ * stack pointer `sp`, the general registers cleared (on i686 all but EAX,
+ * where the call's result goes) and the user segments loaded where the
+ * architecture has them. */
 void arch_exec_frame(isr_params_t *p, uintptr_t entry, uintptr_t sp);
 
 /** Lay out a new process's kernel stack as the context switch expects to
@@ -161,8 +163,11 @@ void arch_context_init(struct process *proc, void (*entry)(void));
  * not 0, for the user stack pointer. */
 void arch_fork_frame(struct process *child, const isr_params_t *params, uintptr_t newsp);
 
-/** Nonzero when the process record's layout is not what the context switch
- * reads at fixed offsets. */
+/** Nonzero when a record that assembly reads at fixed offsets does not have
+ * the layout it expects: on i686 the process record, which switch.s reads,
+ * and on x86-64 the processor's `struct cpu`, which the entry code reads.
+ * GCC makes the same check at build time, and `init_proc` calls this at
+ * every boot, for a kernel TinyCC built, since TinyCC cannot make it. */
 int arch_context_check(void);
 
 /* A system call's handler: given the saved registers, from which it reads
@@ -173,7 +178,8 @@ typedef long (*syscall_fn_t)(isr_params_t *params);
 /** Fill `table`, SYSCALL_TABLE_SIZE entries, with the handler of each system
  * call number the architecture has, and route its system call entry to
  * `dispatch`, which runs the handler the number in the saved registers
- * selects. */
+ * selects: on i686 the gate of `int $0x80`, on x86-64 the vector
+ * `syscall_entry` gives its frame before it calls `_isr_router`. */
 void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *params));
 
 /*
@@ -192,8 +198,16 @@ void arch_ptrace_step(struct process *t, int on);
 
 /** The ptrace(2) requests of this architecture for `t`, the thread `pid`,
  * stopped for the caller: the register sets, the floating-point state, the
- * words of `struct user` and the thread pointer. -EIO for a request it does
- * not have. */
+ * words of `struct user` and the thread pointer (i686's
+ * PTRACE_GET_THREAD_AREA and PTRACE_SET_THREAD_AREA, x86-64's
+ * PTRACE_ARCH_PRCTL). Returns 0 or a negative errno: -EIO for a request it
+ * does not have or a word it refuses, -EFAULT for the caller's memory,
+ * -ESRCH when the thread left its stop while the caller's data was copied
+ * in (`pid` is how it is looked up again), -EINVAL for a floating-point
+ * image the processor would fault on or a thread pointer request refused,
+ * and on x86-64 -EPERM for a base at or above USER_ADDR_MAX. A
+ * PTRACE_SETREGS stops at the first register refused, with those before it
+ * set. */
 long arch_ptrace(struct process *t, uint32_t pid, long request, unsigned long addr,
                  unsigned long data);
 
@@ -206,8 +220,9 @@ long arch_ptrace(struct process *t, uint32_t pid, long request, unsigned long ad
  */
 
 /** The bytes of the register set `type`, with `*unit` the size of its
- * unit, of which a length must be a multiple: -EINVAL for a set the
- * architecture lacks, -ENODEV for one the processor lacks. */
+ * unit, of which a length must be a multiple (on x86-64 always 8): -EINVAL
+ * for a set the architecture lacks, -ENODEV for one the processor lacks,
+ * such as the XSAVE image without XSAVE. */
 long arch_regset_size(unsigned long type, uint32_t *unit);
 
 /** Write all of the register set `type` of `t`, a thread stopped for its
@@ -221,17 +236,20 @@ long arch_regset_set(struct process *t, unsigned long type, const uint8_t *in, u
 
 /** At a switch from `old` to `next`: save a deferred debug exception in
  * `old`, load the hardware breakpoints `next` has, or clear the processor's
- * enables when it has none. */
+ * enables when it has none. The caller holds the big lock with interrupts
+ * off. */
 void arch_debug_switch(struct process *old, const struct process *next);
 
 /** Whether a deferred user debug hit must interrupt a wait regardless of
- * its signal mask or disposition, without posting or consuming the hit.
- * The caller holds the big lock with interrupts off. */
+ * its signal mask or disposition, without posting or consuming the hit; 0
+ * for a stale hit, of a thread whose enables a tracer cleared. The caller
+ * holds the big lock with interrupts off. */
 int arch_debug_pending(void);
 
-/** Post a deferred kernel debug signal in process context, on the thread's
- * stack, keeping a user hit for forced delivery at user return. The caller
- * holds the big lock with interrupts off. */
+/** Post the deferred kernel debug hits as a signal, in process context.
+ * While a user hit is pending this posts nothing, since the kernel hits
+ * share its record: the user hit is forced at the return to user mode. The
+ * caller holds the big lock with interrupts off. */
 void arch_debug_deliver(void);
 
 /** The bytes of the floating-point notes of one thread in a core file. */
@@ -262,8 +280,8 @@ void arch_tlb_flush_page(uintptr_t va);
 /** The address whose access raised the page fault being handled. */
 uintptr_t arch_fault_address(void);
 
-/** A counter of processor cycles, for entropy and for calibration; 0 on a
- * processor without one. */
+/** A counter of processor cycles, for entropy: on x86 the time-stamp
+ * counter, read without a check that the processor has one. */
 uint64_t arch_cycles(void);
 
 /** A value from the processor's entropy source into `out`: `seed` asks for
@@ -281,7 +299,8 @@ void arch_fill_words(void *dst, unsigned long fill, size_t words);
 
 /** Write back the cache lines of the `len` bytes at `p` to memory, for a
  * device that reads them without snooping the cache, and order the writes
- * before what follows. */
+ * before what follows; nothing for a null `p` or a zero `len`. A processor
+ * without CLFLUSH writes back its whole cache. */
 void arch_dma_flush(const volatile void *p, size_t len);
 
 /** Order the processor's earlier memory accesses before its later ones, as
