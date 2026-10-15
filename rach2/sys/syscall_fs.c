@@ -5496,8 +5496,9 @@ static int32_t fstat_fill(fd_entry_t *e, struct user_stat *kst);
 
 /**
  * What a followed /proc/PID/fd/N link reports: the stat of descriptor `fd`
- * of process `pid`, when it is open and not closed; -ENOENT otherwise. The
- * entry is copied, and a description of a file or a directory on a mount is
+ * of process `pid`; 0 on success, -ENOENT when it is absent or closing, or
+ * the error of the mounted type's getattr. The entry is copied, and a
+ * description of a file or a directory on a mount is
  * held for the length of the stat, whose getattr may sleep while the
  * process closes the descriptor and its release puts the node. The other
  * kinds are read without a sleep.
@@ -5507,6 +5508,7 @@ static int32_t synth_fd_stat(int pid, int fd, struct user_stat *kst)
     process_t *p = get_process((uint32_t)pid);
     fd_entry_t e;
     int held;
+    int32_t rc;
 
     if (!p || fd < 0 || fd >= fd_table_cap(p->fds) || p->fds->entries[fd].type == FD_TYPE_NONE ||
         (p->fds->entries[fd].flags & FD_FLAG_CLOSING)) {
@@ -5517,11 +5519,11 @@ static int32_t synth_fd_stat(int pid, int fd, struct user_stat *kst)
     if (held) {
         fd_ofd_ref(e.ofd);
     }
-    fstat_fill(&e, kst);
+    rc = fstat_fill(&e, kst);
     if (held) {
         fd_ofd_unref(e.ofd);
     }
-    return 0;
+    return rc;
 }
 
 /* The inode of /dev/pts, apart from devfs's numbers. */

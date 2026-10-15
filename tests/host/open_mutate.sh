@@ -13,6 +13,7 @@
 # can return, and a sum past the largest signed one among them; and the
 # release of the last holder of a nameless file of the KRFFS root under the
 # root's lock, by a descriptor or a file mapping.
+# Optional arguments select the faults to prove; no arguments prove all.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -32,6 +33,8 @@ if os.environ.get('RACH2_FAULT_TEXTS'):
 path = pathlib.Path(sys.argv[1])
 source = path.read_text()
 changes = {
+    "proc-fd-stat-error": ("    rc = fstat_fill(&e, kst);",
+                           "    fstat_fill(&e, kst);\n    rc = 0;"),
     "registration": ("    entry->ofd->vnode = node;", "    entry->ofd->vnode = NULL;"),
     "node": ("vfs_truncate(ref->mnt, entry->ofd->fhandle, 0)",
              "vfs_truncate(ref->mnt, node, 0)"),
@@ -221,7 +224,7 @@ path.write_text(source)
 PY
 }
 
-faults='node release truncate loop registration unlink-lock rename-lock
+faults='proc-fd-stat-error node release truncate loop registration unlink-lock rename-lock
     rename-unlocked rename-locked-walk rename-relocked chmod-walk-unlocked
     chown-walk-unlocked stat64-walk-unlocked old-stat-walk-unlocked
     fstatat-walk-unlocked access-walk-unlocked utimensat-walk-unlocked
@@ -251,6 +254,8 @@ if [ "${1:-}" = --texts ]; then
     echo 'open-mutation: texts: every fault is once in its source'
     exit 0
 fi
+
+[ "$#" -eq 0 ] || faults="$*"
 
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" open-mutation "$repo/tests/host/open_mutate.sh" "$@"
@@ -323,6 +328,7 @@ for fault in $faults; do
     fault_source "$work/sys" "$fault"
     apply_fault "$source" "$fault"
     case $fault in
+        proc-fd-stat-error) message='a followed descriptor stat returns the getattr error' ;;
         node) message='mounted truncation uses a live open handle' ;;
         release) message='every open handle released' ;;
         truncate) message='only O_TRUNC truncates and clears set-id bits' ;;

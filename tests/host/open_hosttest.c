@@ -223,7 +223,7 @@ static const struct vfs_type pinning_type = {"pinning", 0, &pinning_ops, 1, 0};
 static struct vfs_mount mount;
 static int node, handle, moved;
 static int failures, allocations, opens, releases, refs, leaves, truncates;
-static int open_error, truncate_error, dropped, attrs, relocate;
+static int open_error, truncate_error, getattr_error, dropped, attrs, relocate;
 /* The descriptor a release is under way for, and what happens while the
  * file system's release of its description sleeps. */
 static int releasing = -1;
@@ -600,7 +600,7 @@ int vfs_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st)
     }
     check(mnt == &mount && at == (relocate ? &moved : &node), "attributes use node identity");
     st->mode = 0106777;
-    return 0;
+    return getattr_error;
 }
 
 /** The mkdir rows have a root. */
@@ -1439,13 +1439,10 @@ uint32_t procfs_ino_pid(int pid)
     return 0;
 }
 
-/** The descriptor and process lookups of fstat, which no row reaches: GCC
- * keeps their callers, so a link needs them. */
+/** Find the model process for a followed /proc/PID/fd link. */
 process_t *get_process(uint32_t pid)
 {
-    (void)pid;
-    check(0, "unexpected process lookup");
-    return NULL;
+    return pid == proc.pid ? &proc : NULL;
 }
 
 /** Fail the row: no row looks up a process of /proc. */
@@ -1703,7 +1700,7 @@ static void row_begin(void)
     files.refs = 1;
     proc.euid = 1;
     opens = releases = refs = leaves = dropped = truncates = attrs = relocate = 0;
-    open_error = truncate_error = 0;
+    open_error = truncate_error = getattr_error = 0;
     locking = 1;
     lock_closes = 0;
     lock_closer = 0;
@@ -2272,6 +2269,41 @@ static int model_open(void)
     int fd = fd_alloc(proc.fds);
 
     return fd < 0 ? fd : open_install(&ref, fd, "target", 2);
+}
+
+/**
+ * A followed /proc/PID/fd link returns a mounted file's getattr error and
+ * releases its temporary description reference on success and failure.
+ * Both file and directory descriptors use this path.
+ */
+static void proc_fd_stat_errors(void)
+{
+    int directory;
+
+    for (directory = 0; directory < 2; directory++) {
+        struct user_stat st;
+        struct open_file *ofd;
+        int fd;
+
+        row_begin();
+        fd = model_open();
+        check(fd >= 0, "open a descriptor for a followed stat");
+        if (fd >= 0) {
+            proc.fds->entries[fd].type = directory ? FD_TYPE_DIR : FD_TYPE_FILE;
+            ofd = proc.fds->entries[fd].ofd;
+            getattr_error = -EIO;
+            check(synth_fd_stat((int)proc.pid, fd, &st) == -EIO,
+                  "a followed descriptor stat returns the getattr error");
+            check(ofd->refcount == 1 && releases == 0,
+                  "a failed followed stat releases only its temporary reference");
+            getattr_error = 0;
+            check(synth_fd_stat((int)proc.pid, fd, &st) == 0 && st.st_mode == 0106777,
+                  "a successful followed stat reports the file's attributes");
+            check(ofd->refcount == 1 && releases == 0,
+                  "a successful followed stat releases only its temporary reference");
+        }
+        row_end();
+    }
 }
 
 /**
@@ -3064,6 +3096,7 @@ int main(void)
     chdir_pins();
     attrs_after_move();
     stats_after_move();
+    proc_fd_stat_errors();
     times_after_move();
     open_last_slot();
     loop_handles();

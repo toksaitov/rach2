@@ -520,6 +520,9 @@ sync flags or
 in its mask were, or required attributes cannot be obtained.
 .It Bq Er EIO
 File-system metadata or I/O failed, or a mount's device was removed.
+This includes an attribute read through a followed
+.Pa /proc/PID/fd/N
+link.
 .It Bq Er ELOOP
 Path resolution would follow more than 40 symbolic links.
 .It Bq Er ENAMETOOLONG
