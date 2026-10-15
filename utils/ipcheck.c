@@ -6,7 +6,8 @@
 
 #include "ipcheck.h"
 
-/** Put a refusal in the caller's buffer, if it asked for one. */
+/** Copy the reason `what` into `err`, cut to `errlen - 1` bytes and
+ * terminated; nothing when `err` is NULL or `errlen` is 0. */
 static void say(char *err, size_t errlen, const char *what)
 {
     if (err && errlen > 0) {
@@ -16,11 +17,10 @@ static void say(char *err, size_t errlen, const char *what)
 }
 
 /**
- * Whether an address is one no machine can hold.
- *
- * The kernel refuses these outright, by the same rule: a first octet of 0 is
- * "this network", 127 is the loopback, and 224 and above are multicast and
- * reserved.
+ * Whether `ip` is an address no machine can have: a first octet of 0 is "this
+ * network", 127 is the loopback, and 224 and above are multicast and
+ * reserved. The kernel's test is the same (`netconf_address_is_impossible`),
+ * and `SIOCSIFADDR` fails with EINVAL for such an address.
  */
 static int impossible(unsigned long ip)
 {
@@ -29,9 +29,6 @@ static int impossible(unsigned long ip)
     return first == 0 || first == 127 || first >= 224;
 }
 
-/**
- * Return the supplied mask, or the address's classful mask when it is zero.
- */
 unsigned long ipcheck_mask(unsigned long ip, unsigned long netmask)
 {
     unsigned long first = (ip >> 24) & 0xff;
@@ -49,15 +46,9 @@ unsigned long ipcheck_mask(unsigned long ip, unsigned long netmask)
 }
 
 /**
- * Judge an address, a netmask and a gateway together.
- *
- * A zero netmask selects the address's classful mask for validation. The
- * caller must apply that mask with the address. A zero gateway omits gateway
- * validation.
- *
- * @param err    where the refusal is written, as a phrase the caller prints
- *               after its own prefix.
- * @return 0 when the configuration can be applied, -1 when it cannot.
+ * The host part of a mask that is a run of ones from the top bit is a run of
+ * ones from bit 0, which plus one is a power of two. A /32 mask passes that
+ * test and leaves no host address, so it is tested apart.
  */
 int ipcheck_config(unsigned long address, unsigned long netmask, unsigned long gateway, char *err,
                    size_t errlen)

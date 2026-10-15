@@ -9,7 +9,8 @@
 #include "ipcheck.h"
 #include "netcfg.h"
 
-/** Put a refusal in the caller's buffer, if it asked for one. */
+/** Copy the reason `what` into `err`, cut to `errlen - 1` bytes and
+ * terminated; nothing when `err` is NULL or `errlen` is 0. */
 static void say(char *err, size_t errlen, const char *what)
 {
     if (err && errlen > 0) {
@@ -18,7 +19,8 @@ static void say(char *err, size_t errlen, const char *what)
     }
 }
 
-/** Parse a dotted quad; 0 on refusal, which no usable address is. */
+/** The dotted quad `s` in host byte order, or 0 when `s` is not one; 0.0.0.0
+ * also gives 0, which is no usable address. */
 static unsigned long parse_ip(const char *s)
 {
     unsigned long v = 0;
@@ -72,13 +74,11 @@ static char *word(char *line, char **rest)
 }
 
 /**
- * Whether a name fits an interface field.
- *
  * A name longer than the field would be stored cut and compared whole, so its
  * stanza would never be found; cutting both sides instead would make two long
- * names that begin alike the same interface, which is worse. Since no such
- * interface can exist (the field is the kernel's own), a name that does not fit
- * is a mistake in the file, and saying so is the only useful answer.
+ * names that begin alike the same interface. No interface can have such a
+ * name, since the field is the kernel's, so a name that does not fit is a
+ * mistake in the file.
  */
 int netcfg_name_ok(const char *name)
 {
@@ -87,12 +87,6 @@ int netcfg_name_ok(const char *name)
     return n > 0 && n < NETCFG_NAME_MAX;
 }
 
-/**
- * Copy an interface name into a fixed field, bounded and terminated.
- *
- * `dst` is `NETCFG_NAME_MAX` bytes, which is what an `ifreq` name field is, so
- * a name from the file or the command line can go straight into one.
- */
 void netcfg_set_name(char *dst, const char *src)
 {
     size_t n = strnlen(src, NETCFG_NAME_MAX - 1);
@@ -121,22 +115,6 @@ static int finish_pass(FILE *f, const char *path, int pass)
     return -1;
 }
 
-/**
- * Read interface configuration in two passes through one open stream.
- *
- * `want` has room for `max` entries, with 0 <= count <= max. Its first
- * `count` entries must be zeroed except for valid interface names.
- * With `add_auto` set, append names from auto and allow-hotplug lines.
- * The second pass reads the selected inet stanzas, so stanza order
- * relative to selection lines does not matter.
- *
- * Other address families are ignored. Unsupported methods and invalid
- * address fields set the affected entry's `bad` flag. Callers must
- * check `found` and `bad` before configuring an interface.
- *
- * Return the selected count, or -1 on an open, read, seek, line-length,
- * name, or capacity error.
- */
 int netcfg_read(const char *path, struct netcfg_iface *want, int count, int max, int add_auto)
 {
     FILE *f = fopen(path, "r");
@@ -283,23 +261,14 @@ int netcfg_read(const char *path, struct netcfg_iface *want, int count, int max,
 }
 
 /**
- * Judge a static stanza before any of it is applied.
- *
  * Changing the address ends every connection this machine has, so a stanza
- * that was going to fail at its last line must fail before its first: the way
- * in would otherwise be cut off for nothing. What the file must say is decided
- * here; whether what it says can be applied is `ipcheck_config`, which the DHCP
- * client asks the same question of its leases.
+ * that would fail at its last line must fail before its first, or the way in
+ * is cut off for nothing. What the file must give is decided here; whether
+ * the addresses can be applied is decided by `ipcheck_config`, which the DHCP
+ * client applies to its leases too.
  *
- * The refusal is written into `err`, not printed, so the caller says it
- * in its own voice and a test can tell one refusal from another.
- *
- * A stanza without a netmask is refused. The kernel would derive the classful
- * mask, and an address that looked fine may be that subnet's network or
- * broadcast address: the configuration would then half-apply and leave the
- * machine with neither the address it had nor the one it was given.
- *
- * @return 0 when the stanza can be applied, -1 when it cannot.
+ * A stanza must give a netmask, as netup(8) says, and none is taken from the
+ * address's class.
  */
 int netcfg_check_static(const struct netcfg_iface *s, char *err, size_t errlen)
 {

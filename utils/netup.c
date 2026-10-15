@@ -19,9 +19,9 @@
  * brought up by hand.
  *
  * A `dhcp` stanza runs `dhcpc -b`, which stays in the foreground through its
- * first round of discovery and then holds the lease, or goes on asking for
+ * first round of discovery and then holds the lease, or goes on requesting
  * one, from the background. A `static` stanza is applied here, through the
- * same ioctls.
+ * interface and route ioctls `dhcpc` also uses.
  */
 
 #include <stdio.h>
@@ -52,6 +52,7 @@ static void set_ifr_name(struct ifreq *ifr, const char *name)
     memcpy(ifr->ifr_name, name, n);
 }
 
+/** Put the IPv4 address `ip`, in host byte order, into `ifr`'s address. */
 static void set_ifr_addr(struct ifreq *ifr, unsigned long ip)
 {
     struct sockaddr_in *sin = (struct sockaddr_in *)&ifr->ifr_addr;
@@ -90,10 +91,11 @@ static void restore(int fd, const char *name, unsigned long address, unsigned lo
 }
 
 /**
- * Return the live DHCP pid, zero for no holder, or -1 for an unreadable claim.
- *
- * Only an absent claim or a pid known to have exited permits static
- * configuration. An incomplete claim may belong to a client creating it.
+ * The pid of the DHCP client that holds the interface `name`, as its claim
+ * in `/var/run` says: the pid when that process exists, 0 when there is no
+ * claim or its process has exited, and -1 when the claim cannot be read or
+ * has no pid, as a client creating its claim leaves it for a moment. Only 0
+ * lets a static stanza be applied.
  */
 static long dhcp_holder(const char *name)
 {
@@ -124,15 +126,15 @@ static long dhcp_holder(const char *name)
 /**
  * Apply a static stanza: the address, then the mask, then the route.
  *
- * An interface a DHCP client holds is refused, and the stanza is judged whole
- * before anything changes. The address and mask in force are read first, so
- * that a failure part way can put them back; an unset interface reads as
- * 0.0.0.0, so a failure to read them is a real one and ends the change. A
- * stanza with no gateway removes the default route, since a gateway that
- * belonged to another network would send everything bound off the subnet to
- * a machine that is not there. A stanza with one sets it over the old route
- * without removing that first, so a failure to set it leaves whatever the
- * machine had.
+ * An interface a DHCP client holds is left alone, and the stanza is checked
+ * whole before anything changes. The address and mask in force are read
+ * first, so that a failure part way can put them back; an unset interface
+ * reads as 0.0.0.0, so a failure to read them is a real one and ends the
+ * change. A stanza with no gateway removes the default route, since a
+ * gateway that belonged to another network would send everything bound off
+ * the subnet to a machine that is not there. A stanza with one sets it over
+ * the old route without removing that first, so a failure to set it leaves
+ * whatever the machine had.
  *
  * The route itself is never put back. The kernel drops a gateway that the new
  * address puts on another subnet, and the route in force is not read before
@@ -270,7 +272,7 @@ static int apply_static(const struct netcfg_iface *s)
  * Run `dhcpc -b` for the interface and wait for its first round of discovery.
  *
  * The client exits 0 once it has gone to the background, with a lease or still
- * asking for one; any other status means it did not get that far. The message
+ * requesting one; any other status means it did not get that far. The message
  * for that case gives the status or the signal and nothing more, since a
  * client that stopped early may have left its address on the interface.
  *
