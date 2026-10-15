@@ -27,19 +27,28 @@
 #define KRFFS_FILE_SYSTEM_CHECK_UTILITY_NAME "fsck.krffs"
 
 /**
- * Runs `program` with the one argument `path` and waits for it: `fork` and
- * `execvp` on Unix, `_spawnvp` on Windows. No shell reads `path`, so no byte
- * of it can change the command. Returns the exit status, 127 when the
+ * Runs `program PATH --offset OFFSET --size SIZE` and waits for it: `fork`
+ * and `execvp` on Unix, `_spawnvp` on Windows. No shell reads `path`, so no
+ * byte of it can change the command. Returns the exit status, 127 when the
  * program could not be started, or -1 when `fork` or `waitpid` failed or the
  * program ended on a signal.
  */
-static int krffs_run_check_utility(const char *program, const char *path)
+static int krffs_run_check_utility(const char *program, const char *path, off_t offset, size_t size)
 {
-    const char *argv[3];
+    char offset_text[24];
+    char size_text[24];
+    const char *argv[7];
+
+    snprintf(offset_text, sizeof(offset_text), "%llu", (unsigned long long)offset);
+    snprintf(size_text, sizeof(size_text), "%llu", (unsigned long long)size);
 
     argv[0] = program;
     argv[1] = path;
-    argv[2] = NULL;
+    argv[2] = "--offset";
+    argv[3] = offset_text;
+    argv[4] = "--size";
+    argv[5] = size_text;
+    argv[6] = NULL;
 
 #ifdef WINDOWS
     {
@@ -74,15 +83,31 @@ static int krffs_run_check_utility(const char *program, const char *path)
 }
 
 /**
+ * Runs `fsck.krffs` over the region of `path` at `offset` of `size` bytes,
+ * found on the PATH or else as `./fsck.krffs`. Returns its exit status, or
+ * 127 or -1 as `krffs_run_check_utility` does when it could not run.
+ */
+static int krffs_check_region(const char *path, off_t offset, size_t size)
+{
+    int result = krffs_run_check_utility(KRFFS_FILE_SYSTEM_CHECK_UTILITY_NAME, path, offset, size);
+
+    if (result == -1 || result == 127) {
+        result =
+            krffs_run_check_utility("./" KRFFS_FILE_SYSTEM_CHECK_UTILITY_NAME, path, offset, size);
+    }
+
+    return result;
+}
+
+/**
  * defrag.krffs IMAGE [--offset BYTES --size BYTES]: moves the free space of
  * a KRFFS image to its end, as one free node.
  *
- * `fsck.krffs IMAGE` runs first, found on the PATH or else as `./fsck.krffs`,
- * and a status other than 0 stops the tool; the check is given IMAGE alone,
- * without the region options. Then, from the first free node on, each
- * reserved node is moved down over the free space before it, keeping the
- * order of the reserved nodes, and the free nodes passed are merged. With
- * sizes in bytes:
+ * `fsck.krffs` runs first over the same region, found on the PATH or else as
+ * `./fsck.krffs`, and a status other than 0 stops the tool. Then, from the
+ * first free node on, each reserved node is moved down over the free space
+ * before it, keeping the order of the reserved nodes, and the free nodes
+ * passed are merged. With sizes in bytes:
  *
  *     [free 2][used 5][free 3][used 2]
  *     [used 5][free 2][free 3][used 2]   the reserved node moves down
@@ -91,11 +116,14 @@ static int krffs_run_check_utility(const char *program, const char *path)
  *
  * With no arguments, or with one that begins with `-h`, the usage goes to
  * stderr and the exit status is 0; a first argument that begins with `-` is
- * an error. Returns `EXIT_SUCCESS` or `EXIT_FAILURE`.
+ * an error. Returns `EXIT_SUCCESS`, or `EXIT_FAILURE` for an error, a failed
+ * check, or a node whose write back to the file failed, after the rest of
+ * the moves are made.
  */
 int main(int argc, char **argv)
 {
     int exit_status = EXIT_SUCCESS;
+    int sync_failures = 0;
 
     int file_descriptor = -1;
     struct krffs_file_system file_system = {.node = NULL};
@@ -109,14 +137,14 @@ int main(int argc, char **argv)
     }
 
     if (argc <= 1 || has_help_option) {
-        fprintf(stderr, "Usage: %s <file>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <file> [--offset N --size N]\n", argv[0]);
 
         goto cleanup;
     } else if (argv[1][0] == '-') {
         fprintf(stderr,
                 "The first parameter is invalid.\n"
                 "\n"
-                "Usage: %s <file>\n",
+                "Usage: %s <file> [--offset N --size N]\n",
                 argv[0]);
 
         exit_status = EXIT_FAILURE;
@@ -125,20 +153,6 @@ int main(int argc, char **argv)
     }
 
     char *path = argv[1];
-
-    int fsck_result = krffs_run_check_utility(KRFFS_FILE_SYSTEM_CHECK_UTILITY_NAME, path);
-
-    if (fsck_result == -1 || fsck_result == 127) {
-        fsck_result = krffs_run_check_utility("./" KRFFS_FILE_SYSTEM_CHECK_UTILITY_NAME, path);
-    }
-
-    if (fsck_result != 0) {
-        fprintf(stderr, "Failed to check the file system file at '%s'.\n", path);
-
-        exit_status = EXIT_FAILURE;
-
-        goto cleanup;
-    }
 
     if ((file_descriptor = PLATFORM_PREFIX(open(path, O_RDWR))) == -1) {
         fprintf(stderr, "Failed to open the file system file at '%s'.\n", path);
@@ -169,6 +183,14 @@ int main(int argc, char **argv)
     size_t region_size;
     if (krffs_parse_region_args(argc, argv, (uint64_t)file_info.st_size,
                                 sizeof(*file_system.node) * 2, &region_offset, &region_size) != 0) {
+        exit_status = EXIT_FAILURE;
+
+        goto cleanup;
+    }
+
+    if (krffs_check_region(path, region_offset, region_size) != 0) {
+        fprintf(stderr, "Failed to check the file system file at '%s'.\n", path);
+
         exit_status = EXIT_FAILURE;
 
         goto cleanup;
@@ -239,7 +261,7 @@ int main(int argc, char **argv)
 
                 free_node->size += node->size;
 
-                krffs_sync_mapping(free_node, sizeof(*free_node));
+                sync_failures += krffs_sync_mapping(free_node, sizeof(*free_node)) != 0;
             } while ((node = krffs_get_next_node(&file_system, node)) != file_system.node);
 
             if (reserved_node) {
@@ -251,7 +273,7 @@ int main(int argc, char **argv)
                 reserved_node = free_node;
                 reserved_node->previous_node_size = previous_node->size;
 
-                krffs_sync_mapping(reserved_node, reserved_node_size);
+                sync_failures += krffs_sync_mapping(reserved_node, reserved_node_size) != 0;
 
                 previous_node = reserved_node;
 
@@ -264,7 +286,12 @@ int main(int argc, char **argv)
 
         node->previous_node_size = free_node->size;
 
-        krffs_sync_mapping(node, sizeof(*node));
+        sync_failures += krffs_sync_mapping(node, sizeof(*node)) != 0;
+    }
+
+    if (sync_failures > 0) {
+        fprintf(stderr, "Failed to write the moved nodes back to '%s'.\n", path);
+        exit_status = EXIT_FAILURE;
     }
 
 cleanup:

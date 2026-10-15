@@ -132,8 +132,9 @@ void *krffs_map_file_readonly(int file_descriptor, off_t offset, size_t size);
 /**
  * Writes `size` bytes of a mapping at `address` back to the file and waits
  * for the write: `msync` with `MS_SYNC` on Unix, `FlushViewOfFile` on
- * Windows. On Unix `address` must be a multiple of the page size, or `msync`
- * fails with `EINVAL`. Returns 0, or -1 on failure.
+ * Windows. `msync` takes only an address that is a multiple of the page size,
+ * so on Unix the write starts at the page that holds `address`, which lies in
+ * the mapping because a mapping starts on a page. Returns 0, or -1 on failure.
  */
 int krffs_sync_mapping(void *address, size_t size);
 

@@ -182,7 +182,10 @@ int krffs_sync_mapping(void *address, size_t size)
 #ifdef WINDOWS
     return FlushViewOfFile(address, size) == 0 ? -1 : 0;
 #else
-    return msync(address, size, MS_SYNC);
+    uintptr_t page_size = (uintptr_t)sysconf(_SC_PAGESIZE);
+    uintptr_t start = (uintptr_t)address & ~(page_size - 1);
+
+    return msync((void *)start, size + ((uintptr_t)address - start), MS_SYNC);
 #endif
 }
 

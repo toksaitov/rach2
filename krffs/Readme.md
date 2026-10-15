@@ -11,7 +11,7 @@
 ```text
 mkfs.krffs IMAGE [-f] [--offset BYTES --size BYTES]
 fsck.krffs IMAGE [--strict] [--offset BYTES --size BYTES]
-defrag.krffs IMAGE
+defrag.krffs IMAGE [--offset BYTES --size BYTES]
 edfs.krffs IMAGE POSITION [--set-magic N] [--set-type root|free|reserved]
     [--set-id N] [--set-name NAME] [--set-size N] [--set-prev-size N]
     [--set-data-size N] [--offset BYTES --size BYTES]
@@ -29,7 +29,7 @@ The first five print their usage line for `-h`.
 
 `fsck.krffs` walks the ring and prints a line for each node. A fault that the kernel's order of writes cannot produce is fatal and leaves the image as it was. Four faults that a stopped machine can leave are repaired, each with a message: a backward link the forward chain contradicts, a reserved node with no name, one name on two nodes of a directory, and the dirty flag. [krffs.Readme.md](../rach2/sys/fs/krffs.Readme.md) explains the two kinds and how a repeated name is resolved. `--strict` reports the repairable faults and changes nothing. The exit status is 0 for a clean or repaired image; 1 for a bad argument, an open or mapping that fails, or a root without the magic number or the root type; -10 for a chain that does not return to the root, -11 for a node whose header leaves the region, -12 for a missing magic number, -13 for an unknown type, -14 for a size, data length or name that does not fit, and -15 for repairs owed under `--strict`. A shell sees the negative values as 246 down to 241.
 
-`defrag.krffs` runs `fsck.krffs IMAGE` first, which repairs what it can, and stops if that fails; it looks for `fsck.krffs` on `PATH`, then in the current directory. It then moves the reserved nodes, in order, toward the start of the region, so the free space ends as one node at the end.
+`defrag.krffs` runs `fsck.krffs` over the same region first, which repairs what it can, and stops if that fails; it looks for `fsck.krffs` on `PATH`, then in the current directory. It then moves the reserved nodes, in order, toward the start of the region, so the free space ends as one node at the end. Its status is 1 when the write of a moved node back to the file fails, after it has made the rest of the moves.
 
 `edfs.krffs` sets fields of the node that starts POSITION bytes into the region, to break a test image in a known way or mend one by hand. Numbers are decimal. `--set-name` stores at most 255 bytes and sets the identifier to the name's djb2 hash, in place of any `--set-id`. An option given twice is an error. When no node starts at POSITION, nothing changes and the status is still 0.
 
@@ -174,7 +174,6 @@ An image is staged again when a file it stages changes, and only then. `manifest
 ## Limits
 
 * The FUSE driver takes a whole-file image, and renames no directory.
-* `defrag.krffs` does not pass the region options to `fsck.krffs`, so it works only on a whole-file image.
 * `fsviz.krffs` and `edfs.krffs` follow the ring by each node's size without `fsck.krffs`'s checks, so an image `fsck.krffs` refuses can make them loop or read past the mapping.
 * `edfs.krffs --set-name` on a directory replaces its identifier, which cuts it off from its children.
 * Every tool that opens an image, except `readfile.krffs`, opens it for writing, even `fsviz.krffs` and `fsck.krffs --strict`.
@@ -183,11 +182,11 @@ An image is staged again when a file it stages changes, and only then. `manifest
 
 ## Tests
 
-* `tests/run host` runs `krffs_fuse_hosttest.c` (the FUSE driver over real images, with a stand-in `tests/host/fuse/fuse.h`), `krffs_hash_hosttest.c` (the stager's identifiers against the kernel's vectors), `readfile_hosttest.c` (the reader over regions damaged by hand) and `mkhash_hosttest.c` (musl's SHA-512 crypt against published vectors) under AddressSanitizer and UndefinedBehaviorSanitizer. It also runs `sh tests/host/krffs_tools_mutate.sh --check`: the stager's refusals, a failed `mkimage.sh` keeping the previous image, `fsviz.krffs -t`, `defrag.krffs` closing a hole `edfs.krffs` made, and `edfs.krffs --set-magic`.
+* `tests/run host` runs `krffs_fuse_hosttest.c` (the FUSE driver over real images, with a stand-in `tests/host/fuse/fuse.h`), `krffs_hash_hosttest.c` (the stager's identifiers against the kernel's vectors), `readfile_hosttest.c` (the reader over regions damaged by hand) and `mkhash_hosttest.c` (musl's SHA-512 crypt against published vectors) under AddressSanitizer and UndefinedBehaviorSanitizer. It also runs `sh tests/host/krffs_tools_mutate.sh --check`: the stager's refusals, a failed `mkimage.sh` keeping the previous image, `fsviz.krffs -t`, `defrag.krffs` closing a hole `edfs.krffs` made, in a whole image and in a region of a larger file, and `edfs.krffs --set-magic`.
 * `tests/run style` builds the tools, runs the set-id guard over every manifest, and runs `tools/verify/check_repro.sh`, which stages one manifest twice and requires identical images with the bulk directives' nodes in name order.
 * `tests/run krffscheck` (`tests/system/krffscheck.sh`, needs `python3`) damages images and reads `fsck.krffs`'s verdicts on each fault, then stops a model of the kernel's order of writes after each store and requires every result to be accepted or repaired.
 * `tests/run imagerace` builds one image twice at once, and checks that a changed program restages its image while an unchanged one, or a file made beside it, does not.
 * `crash`, `shutdown`, `krffsmount` and `loopdev` run `fsck.krffs` on volumes the kernel wrote, and `selfbuild` takes the kernel the guest built off its disk with `readfile.krffs`.
-* `sh tests/host/krffs_tools_mutate.sh` puts thirteen faults into private copies of the stager, `fsviz.krffs`, `defrag.krffs`, `edfs.krffs` and `mkimage.sh`; `sh tests/host/krffs_fuse_mutate.sh` puts five faults into the driver and the library, among them the ring check taken out and a lookup that ignores the directory; and `sh tests/system/host_tools_mutate.sh` puts faults into the driver, the host allocator's truncate and the host hashes, among others. Each fault must fail its test.
+* `sh tests/host/krffs_tools_mutate.sh` puts fifteen faults into private copies of the stager, `fsviz.krffs`, `defrag.krffs`, `edfs.krffs`, `mkimage.sh` and `krffs_platform.c`; `sh tests/host/krffs_fuse_mutate.sh` puts five faults into the driver and the library, among them the ring check taken out and a lookup that ignores the directory; and `sh tests/system/host_tools_mutate.sh` puts faults into the driver, the host allocator's truncate and the host hashes, among others. Each fault must fail its test.
 
 [`tests/host/Readme.md`](../tests/host/Readme.md) and [`tests/system/Readme.md`](../tests/system/Readme.md) describe these. Run a suite with `tests/run NAME`, and a mutation script with `sh` from the repository root.

@@ -1,7 +1,8 @@
 #!/bin/sh
 # Prove the KRFFS host tools on private builds: the stager's refusals, the
 # image builder's replace, and what the visualiser, the defragmenter and the
-# node editor print or change.
+# node editor print or change, the defragmenter on a whole image and on a
+# region of a larger file.
 #
 # Each refusal of the stager is driven by a manifest of its own and must end
 # with a non-zero status and the stager's words for it: a malformed path, a
@@ -13,9 +14,9 @@
 #
 # With --check the rows run once, over the tools as they are, which is how
 # the host suite runs them. With no argument each fault below is put into a
-# private copy of one tool, must fail the row named for it, and is restored,
-# touched and rebuilt before every row runs again. The tree's own sources are
-# never changed.
+# private copy of one tool or of krffs_platform.c, which every tool links,
+# must fail the row named for it, and is restored, touched and rebuilt before
+# every row runs again. The tree's own sources are never changed.
 #
 # --texts checks that each fault's text is once in the tree's source, and
 # builds and runs nothing.
@@ -36,6 +37,7 @@ if [ -z "$texts" ]; then
 fi
 child=
 sources='stageimage.krffs.c fsviz.krffs.c defrag.krffs.c edfs.krffs.c mkimage.sh'
+sources="$sources krffs_platform.c"
 if [ -n "$texts" ]; then
     src=krffs
 else
@@ -77,15 +79,16 @@ fi
 
 # The flags krffs/Makefile gives the tools, fsviz's exception among them, and
 # its directory on the include path, so a private copy of a tool's main
-# compiles against the tree's core.
+# compiles against the tree's core and the private krffs_platform.c.
 flags='-O2 -Wall -Wextra -Werror -std=gnu99 -D_FILE_OFFSET_BITS=64 -I krffs'
-core='krffs/krffs_file_system.c krffs/krffs_node.c krffs/krffs_platform.c krffs/krffs_utilities.c'
 
 # The six tools from the private sources, and the image builder's private tree:
 # the script finds its tools under its own ../build/krffs.
 build()
 {
     log="$work/$1.compile.log"
+    core="krffs/krffs_file_system.c krffs/krffs_node.c krffs/krffs_utilities.c"
+    core="$core $work/src/krffs_platform.c"
     # shellcheck disable=SC2086
     if ! { "${CC:-cc}" $flags -o "$work/bin/mkfs.krffs" $core krffs/mkfs.krffs.c &&
         "${CC:-cc}" $flags -o "$work/bin/fsck.krffs" $core krffs/krffs_allocator.c \
@@ -217,7 +220,8 @@ fsviz_row()
 # The defragmenter closes a hole: beta's node is marked free, and afterwards
 # the reserved nodes follow the root in their order with one free node last.
 # The defragmenter runs fsck.krffs first and stops if it fails, so the check
-# of the holed image is part of the row.
+# of the holed image is part of the row. Its status is 1 when a moved node's
+# sync to the file fails, as msync does from an address inside a page.
 defrag_row()
 {
     staged "$dir/defrag.krffs" "$dir/three.manifest" 64
@@ -232,6 +236,41 @@ defrag_row()
         pass defrag-compacts
     else
         fail defrag-compacts "status $rc, before '$before', after '$after'"
+    fi
+}
+
+# The same hole closed in a region of a larger file, 64 KiB at 1 MiB with
+# zeros before and after it, given to every tool as --offset and --size. The
+# check that the defragmenter runs first must read that region too, since the
+# zeros at the start of the file are no file system.
+defrag_region_row()
+{
+    region='--offset 1048576 --size 65536'
+    dd if=/dev/zero of="$dir/region.img" bs=1024 count=1152 2>/dev/null
+    # shellcheck disable=SC2086
+    if "$work/bin/mkfs.krffs" "$dir/region.img" $region >/dev/null 2>&1; then
+        bounded "$dir/region.stage" "$work/bin/stageimage.krffs" "$dir/three.manifest" \
+            "$dir/region.img" $region
+    else
+        rc=1
+    fi
+    dd if="$dir/region.img" of="$dir/region.part" bs=65536 skip=16 count=1 2>/dev/null
+    at=$(python3 "$work/ring.py" at "$dir/region.part" beta)
+    # shellcheck disable=SC2086
+    bounded "$dir/region-hole.log" "$work/bin/edfs.krffs" "$dir/region.img" "$at" \
+        --set-type free $region
+    dd if="$dir/region.img" of="$dir/region.part" bs=65536 skip=16 count=1 2>/dev/null
+    before=$(python3 "$work/ring.py" names "$dir/region.part")
+    # shellcheck disable=SC2086
+    bounded "$dir/region-defrag.log" env PATH="$work/bin:$PATH" "$work/bin/defrag.krffs" \
+        "$dir/region.img" $region
+    dd if="$dir/region.img" of="$dir/region.part" bs=65536 skip=16 count=1 2>/dev/null
+    after=$(python3 "$work/ring.py" names "$dir/region.part")
+    if [ "$before" = 'root alpha free gamma free' ] && [ "$rc" -eq 0 ] &&
+        [ "$after" = 'root alpha gamma free' ]; then
+        pass defrag-region
+    else
+        fail defrag-region "status $rc, before '$before', after '$after'"
     fi
 }
 
@@ -277,6 +316,7 @@ rows()
         >"$dir/three.manifest"
     fsviz_row
     defrag_row
+    defrag_region_row
     edfs_row
 }
 
@@ -363,6 +403,12 @@ apply_fault()
         defrag)
             mutate defrag.krffs.c 'if (free_node) {' 'if (0) {'
             row=defrag-compacts ;;
+        defrag-region)
+            mutate defrag.krffs.c 'argv[2] = "--offset";' 'argv[2] = NULL;'
+            row=defrag-region ;;
+        sync)
+            mutate krffs_platform.c '& ~(page_size - 1);' '& ~(page_size - page_size);'
+            row=defrag-compacts ;;
         edfs)
             mutate edfs.krffs.c 'node->magic = magic;' '(void)magic;'
             row=edfs-magic ;;
@@ -370,7 +416,7 @@ apply_fault()
 }
 
 faults='doubled-slash synthetic-dir synthetic twice tree-twice through-file full'
-faults="$faults dir-id dir-id-implicit replace fsviz defrag edfs"
+faults="$faults dir-id dir-id-implicit replace fsviz defrag defrag-region sync edfs"
 if [ -n "$texts" ]; then
     RACH2_FAULT_TEXTS=1
     export RACH2_FAULT_TEXTS
@@ -428,4 +474,4 @@ for fault in $faults; do
         cmp "$work/$f.saved" "$work/src/$f"
     done
 done
-echo 'krffs-tools-mutation: result: pass: thirteen faults failed their rows; restored rows passed'
+echo 'krffs-tools-mutation: result: pass: fifteen faults failed their rows; restored rows passed'
