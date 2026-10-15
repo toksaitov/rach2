@@ -114,6 +114,28 @@ gives the line above, and
 of it is
 .Fn mq_unlink ,
 by the queue's owner or a privileged caller.
+.Pp
+A descriptor that
+.Fn mq_open
+returns is open on the queue's file, as on Linux:
+.Xr fstat 2
+of it reports what a
+.Xr stat 2
+of the file gives, with no link once the name is gone, and its link in
+.Pa /proc/PID/fd
+reads
+.Ql / Ns Ar NAME ,
+with
+.Ql " (deleted)"
+after the name once the name is gone.
+Its device is that of the first
+.Ql mqueue
+mount of the queue's IPC namespace.
+Where Linux keeps a mount of each namespace's own, a queue of a namespace
+that no mount lists reports the device of another namespace's mount, and
+with no
+.Ql mqueue
+mount at all its descriptor is an anonymous inode of mode 0600.
 Unlike Linux's, an
 .Xr open 2
 with

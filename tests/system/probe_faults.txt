@@ -6131,6 +6131,36 @@ new
         if (i++ == *cursor + 1000u) {
 end
 
+fault mqueue-fd-anon-stat
+probe ipcmusl
+file rach2/sys/syscall_fs.c
+expect IPCMUSL FAIL (fstat of a queue's descriptor gives its file's stat
+old
+    if (mq_fd_ref(entry, &mq)) {
+new
+    if (mq_fd_ref(entry, &mq) && !entry) {
+end
+
+fault mqueue-fd-link-anon
+probe ipcmusl
+file rach2/sys/fs/procfs.c
+expect IPCMUSL FAIL (a queue's /proc/self/fd link reads /NAME
+old
+    const char *qname = mq_fd_name(e, &unlinked);
+new
+    const char *qname = NULL;
+end
+
+fault mqueue-unlink-unmarked
+probe ipcmusl
+file rach2/sys/ipc/mqueue.c
+expect IPCMUSL FAIL (an unlinked queue's link reads /NAME (deleted)
+old
+    q->unlinked = 1;
+new
+    q->unlinked = 0;
+end
+
 fault krffs-bind-refused
 probe tmpfsmusl
 file rach2/sys/fs/vfs.c

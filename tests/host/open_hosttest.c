@@ -373,6 +373,14 @@ struct vfs_mount *vfs_mount_at(int idx)
     return idx == 0 ? &mount : 0;
 }
 
+/** No row opens a message queue. */
+int mq_fd_ref(const struct fd_entry *e, struct vfs_ref *r)
+{
+    (void)e;
+    (void)r;
+    return 0;
+}
+
 /** No row opens a /proc/PID/mem. */
 int procfs_is_mem(const struct fd_entry *e)
 {

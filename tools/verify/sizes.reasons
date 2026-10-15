@@ -144,7 +144,6 @@ rach2/sys/fs/procfs.c:procfs_fd_ino complexity 33 a dispatcher, one arm per comm
 rach2/sys/fs/procfs.c:procfs_kind_name complexity 31 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_open complexity 100 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_open lines 244 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_readlink_fd complexity 27 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_readlink_fd lines 137 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/synthfs.c:synth_classify complexity 26 a dispatcher, one arm per command, read as a table

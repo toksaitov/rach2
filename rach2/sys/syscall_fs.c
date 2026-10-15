@@ -6723,6 +6723,31 @@ long sys_fstatfs64(isr_params_t *params)
 }
 
 /**
+ * Fill `kst`, which has the boot times, with the stat of the anonymous
+ * descriptor `entry`, for `fstat_fill`: a message queue's is its file's, a
+ * namespace's nsfs's file of the namespace, and any other's Linux's
+ * anonymous inode. Returns 0, or the error of the queue's getattr.
+ */
+static int32_t fstat_anon(fd_entry_t *entry, struct user_stat *kst)
+{
+    struct vfs_ref mq;
+
+    if (mq_fd_ref(entry, &mq)) {
+        return vfs_fill_stat64(kst, &mq);
+    }
+    kst->st_nlink = 1;
+    kst->st_blksize = 4096;
+    if (nsfs_ns(entry)) {
+        kst->st_dev = NSFS_DEV;
+        kst->st_mode = S_IFREG | 0444;
+        STAT_SET_INO(kst, nsfs_ns(entry)->inum);
+    } else {
+        kst->st_mode = 0600;
+    }
+    return 0;
+}
+
+/**
  * Fill `kst` with the attributes of what the descriptor `entry` is open on,
  * for fstat64, for fstatat64 and statx with AT_EMPTY_PATH, and for a
  * followed /proc/PID/fd link; 0, or the error of a mounted type's getattr.
@@ -6741,9 +6766,12 @@ long sys_fstatfs64(isr_params_t *params)
  * A network socket is a socket of mode 0666 whose inode is the socket's
  * own, the number /proc/net/tcp shows, and an AF_UNIX socket one of mode
  * 0777. A namespace descriptor is nsfs's file of the namespace, whose inode
- * is the namespace's; any other anonymous descriptor, an eventfd, an epoll
- * or a timerfd among them, is Linux's anonymous inode, mode 0600 with no
- * type bits. A pipe end is a FIFO of mode 0666 with the pipe's own inode.
+ * is the namespace's, and a message queue's descriptor the queue's file in
+ * the mqueue file system (`mq_fd_ref`), which a stat of /dev/mqueue/NAME
+ * gives; any other anonymous descriptor, an eventfd, an epoll or a timerfd
+ * among them, is Linux's anonymous inode, mode 0600 with no type bits
+ * (`fstat_anon`). A pipe end is a FIFO of mode 0666 with the pipe's own
+ * inode.
  *
  * A devfs device reports the identity a stat of its /dev path gives, the
  * mode included, and the console that of /dev/console, which ttyname
@@ -6795,16 +6823,8 @@ static int32_t fstat_fill(fd_entry_t *entry, struct user_stat *kst)
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
         kst->st_ino = entry->priv ? unix_inode(entry) : 0u;
-    } else if (entry->type == FD_TYPE_ANON && nsfs_ns(entry)) {
-        kst->st_dev = NSFS_DEV;
-        kst->st_mode = S_IFREG | 0444;
-        kst->st_nlink = 1;
-        kst->st_blksize = 4096;
-        STAT_SET_INO(kst, nsfs_ns(entry)->inum);
     } else if (entry->type == FD_TYPE_ANON) {
-        kst->st_mode = 0600;
-        kst->st_nlink = 1;
-        kst->st_blksize = 4096;
+        return fstat_anon(entry, kst);
     } else if (entry->type == FD_TYPE_PIPE) {
         pipe_t *pp = (pipe_t *)entry->priv;
         kst->st_mode = 010666; /* S_IFIFO | 0666 */

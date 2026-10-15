@@ -877,7 +877,15 @@ path, a pipe or a FIFO as
 .Ql pipe:[INODE] ,
 a socket as
 .Ql socket:[INODE] ,
-an eventfd, epoll or timerfd descriptor as
+a POSIX message queue as
+.Ql / Ns Ar NAME ,
+the path of its file in the
+.Ql mqueue
+file system, with
+.Ql " (deleted)"
+once
+.Xr mq_unlink 2
+has taken the name, an eventfd, epoll or timerfd descriptor as
 .Ql anon_inode: Ns Ar NAME ,
 and a file of
 .Xr memfd_create 2

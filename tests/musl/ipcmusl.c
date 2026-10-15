@@ -41,7 +41,10 @@
  * when a message reaches the queue empty; poll reports a message; the
  * name goes with mq_unlink. /dev/mqueue lists the queue as a file with its
  * mode and its messages' bytes as its size, reading it gives its status
- * line, and unlinking a queue's file removes its name.
+ * line, and unlinking a queue's file removes its name. fstat of a queue's
+ * descriptor gives what stat of its file gives, and its /proc/self/fd link
+ * reads /NAME, then "/NAME (deleted)" with no link counted once mq_unlink
+ * has taken the name, as on Linux.
  *
  * Prints `IPCMUSL OK` and exits 0 on success, and prints
  * `IPCMUSL FAIL (detail)` and exits 1 otherwise.
@@ -564,10 +567,51 @@ static int cut_rows(void)
 /* The signal number, si_code and value of the last mq_notify signal. */
 static volatile int mq_signo, mq_code, mq_value;
 
+/** Whether the /proc/self/fd link of `fd` reads `want`. */
+static int fd_link_is(int fd, const char *want)
+{
+    char path[32], link[64];
+    ssize_t n;
+
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+    n = readlink(path, link, sizeof(link) - 1);
+    if (n < 0) {
+        return 0;
+    }
+    link[n] = '\0';
+    return strcmp(link, want) == 0;
+}
+
+/**
+ * Check the descriptor `q` of the queue /ipcfiles, whose file's stat is
+ * `st` and which has one message of 4 bytes: fstat gives that stat and the
+ * link reads /ipcfiles, and once mq_unlink has taken the name the link has
+ * " (deleted)" after it and the stat no link. Returns 0, or 1 once the
+ * failure is reported.
+ */
+static int mq_fd_file(mqd_t q, const struct stat *st)
+{
+    struct stat fst;
+
+    if (fstat(q, &fst) != 0 || fst.st_dev != st->st_dev || fst.st_ino != st->st_ino ||
+        fst.st_mode != st->st_mode || fst.st_nlink != 1 || fst.st_size != 4) {
+        return fail("fstat of a queue's descriptor gives its file's stat");
+    }
+    if (!fd_link_is(q, "/ipcfiles")) {
+        return fail("a queue's /proc/self/fd link reads /NAME");
+    }
+    if (mq_unlink("/ipcfiles") != 0 || !fd_link_is(q, "/ipcfiles (deleted)") ||
+        fstat(q, &fst) != 0 || fst.st_nlink != 0 || fst.st_ino != st->st_ino) {
+        return fail("an unlinked queue's link reads /NAME (deleted)");
+    }
+    return 0;
+}
+
 /**
  * Check /dev/mqueue while the queue /ipcfiles has one message of 4 bytes: its
- * file, its status line and its entry; and a second queue whose name goes
- * with an unlink of its file. Returns 0, or 1 once the failure is reported.
+ * file, its status line and its entry; a second queue whose name goes with
+ * an unlink of its file; and the first queue's descriptor (`mq_fd_file`).
+ * Returns 0, or 1 once the failure is reported.
  */
 static int mq_files(void)
 {
@@ -603,8 +647,10 @@ static int mq_files(void)
         mq_open("/ipcfiles2", O_RDWR) != (mqd_t)-1 || errno != ENOENT) {
         return fail("unlinking a queue's file takes its name");
     }
+    if (mq_fd_file(q, &st) != 0) {
+        return 1;
+    }
     mq_close(q);
-    mq_unlink("/ipcfiles");
     return 0;
 }
 

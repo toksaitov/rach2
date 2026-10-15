@@ -45,6 +45,7 @@
 #include "tmpfs.h"
 #include "cpuinfo.h"
 #include "../ipc/sysv.h"
+#include "../ipc/mqueue.h"
 #include "pathbuf.h"
 #include "../syscall.h"
 #include "../network/ethernet/ethernet.h"
@@ -1590,18 +1591,44 @@ static void procfs_file_target(struct procfs_text *t, const fd_entry_t *e)
 }
 
 /**
+ * Append to `t` the /proc link target of the anonymous descriptor `e`: for
+ * a message queue /NAME, the path of its file within the mqueue file
+ * system, with " (deleted)" once mq_unlink has taken the name; for a
+ * namespace "KIND:[INUM]", as nsfs's; and anon_inode:NAME for any other.
+ */
+static void anon_target(struct procfs_text *t, const fd_entry_t *e)
+{
+    int unlinked;
+    const char *qname = mq_fd_name(e, &unlinked);
+
+    if (qname) {
+        ap_ch(t, '/');
+        ap_str(t, qname);
+        if (unlinked) {
+            ap_str(t, " (deleted)");
+        }
+        return;
+    }
+    if (!nsfs_ns(e)) {
+        ap_str(t, "anon_inode:");
+    }
+    ap_str(t, e->priv ? ((const struct anon_obj *)e->priv)->name : "[unknown]");
+}
+
+/**
  * The target of each kind of descriptor is the one Linux's /proc gives: the
  * path of a file or directory (`procfs_file_target`), /dev/console,
  * /dev/NAME for a device, /dev/pts/N, which musl's ttyname_r matches,
- * /dev/ptmx, pipe:[N], socket:[N], and anon_inode:NAME. A socket names its
- * own inode, the same number `/proc/net/tcp` and `fstat` report, so one
- * socket is one thing to a program reading all three. A synthetic directory
- * has its path, a descriptor of a file of /proc or /sys the path of that
- * file, rebuilt from its origin, and an O_PATH descriptor of a /dev or /proc
- * node the path it was opened by. The framebuffer and the mouse have no
- * name, and show "anon_inode:[device]". A descriptor that is closed, whose
- * release waits for another thread's call or is under way, has no link, as
- * it has no entry in the directory's listing and no lookup finds it.
+ * /dev/ptmx, pipe:[N], socket:[N], and for an anonymous descriptor the
+ * target `anon_target` gives. A socket names its own inode, the same number
+ * `/proc/net/tcp` and `fstat` report, so one socket is one thing to a
+ * program reading all three. A synthetic directory has its path, a
+ * descriptor of a file of /proc or /sys the path of that file, rebuilt from
+ * its origin, and an O_PATH descriptor of a /dev or /proc node the path it
+ * was opened by. The framebuffer and the mouse have no name, and
+ * show "anon_inode:[device]". A descriptor that is closed, whose release
+ * waits for another thread's call or is under way, has no link, as it has
+ * no entry in the directory's listing and no lookup finds it.
  */
 int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
 {
@@ -1658,10 +1685,7 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
         ap_ch(t, ']');
         break;
     case FD_TYPE_ANON:
-        if (!nsfs_ns(e)) {
-            ap_str(t, "anon_inode:"); /* a namespace's is "KIND:[INUM]", as nsfs's */
-        }
-        ap_str(t, e->priv ? ((const struct anon_obj *)e->priv)->name : "[unknown]");
+        anon_target(t, e);
         break;
     case FD_TYPE_FILE:
     case FD_TYPE_DIR:

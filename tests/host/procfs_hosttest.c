@@ -357,6 +357,14 @@ int tty_controlling(int sid, uint32_t *dev, int *fg_pgid)
     return 0;
 }
 
+/** No row's descriptor is a message queue's. */
+const char *mq_fd_name(const struct fd_entry *e, int *unlinked)
+{
+    (void)e;
+    (void)unlinked;
+    return NULL;
+}
+
 /** The inode of a Unix socket, which no row's descriptor is: 0. */
 uint32_t unix_inode(const fd_entry_t *e)
 {

@@ -8,9 +8,11 @@
  * a waiter or an open of its file has a reference.
  * A descriptor is an anonymous one whose object refers to the queue; its
  * access mode is the descriptor's read and write flags and its O_NONBLOCK
- * the description's. Messages are kept highest priority first, in the order
- * they came within a priority. A sender or a receiver that waits holds a
- * reference, so the queue outlives its last close while one sleeps on it.
+ * the description's. Its stat is that of the queue's file and its /proc
+ * link the queue's name, as Linux's descriptor is open on that file.
+ * Messages are kept highest priority first, in the order they came within a
+ * priority. A sender or a receiver that waits holds a reference, so the
+ * queue outlives its last close while one sleeps on it.
  *
  * The mqueue file system lists the named queues of one IPC namespace as the
  * files of a directory, as Linux's /dev/mqueue does: a file's attributes are
@@ -78,7 +80,8 @@ struct mq_msg {
  * SIGEV_SIGNAL or SIGEV_NONE, with its signal and value. */
 struct mqueue {
     struct mqueue *next;    /* the list of named queues */
-    char *name;             /* NULL once unlinked */
+    char *name;             /* kept after mq_unlink for the /proc links */
+    int unlinked;           /* the name has left the list */
     const struct ipcns *ns; /* the IPC namespace whose name it is */
     uint32_t refs;
     uint32_t ino;  /* its file's number in the mqueue file system */
@@ -147,7 +150,7 @@ static struct mqueue *mq_find(const char *name)
 }
 
 /** Take `q`'s name away: out of the list, the reference the name held
- * dropped. */
+ * dropped. The string stays for the descriptors' /proc links. */
 static void mq_unname(struct mqueue *q)
 {
     struct mqueue **link = &queues;
@@ -156,8 +159,7 @@ static void mq_unname(struct mqueue *q)
         link = &(*link)->next;
     }
     *link = q->next;
-    kfree(q->name);
-    q->name = NULL;
+    q->unlinked = 1;
     mq_put(q);
 }
 
@@ -196,7 +198,7 @@ static struct mqueue *mq_of(int fd, fd_entry_t **ep)
 {
     fd_entry_t *e = fd_get(current_proc->fds, fd);
 
-    if (!e || e->ops != &mq_ops) {
+    if (!e || e->ops != &mq_ops || !e->priv) {
         return NULL;
     }
     *ep = e;
@@ -961,8 +963,9 @@ static void mqfs_put(struct vfs_mount *mnt, void *node)
     }
 }
 
-/** A queue's file: its owner and mode, and as its size the bytes of its
- * messages; the root: a sticky directory of mode 1777, as Linux's. */
+/** A queue's file: its owner and mode, as its size the bytes of its
+ * messages, and no link once unlinked; the root: a sticky directory of mode
+ * 1777, as Linux's. */
 static int mqfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     const struct mqueue *q = (const struct mqueue *)node;
@@ -970,7 +973,6 @@ static int mqfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 
     (void)mnt;
     k_memset(st, 0, sizeof(*st));
-    st->nlink = 1;
     if (node == &mqfs_root) {
         st->mode = MQFS_S_IFDIR | 01777u;
         st->nlink = 2;
@@ -978,6 +980,7 @@ static int mqfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
         return 0;
     }
     st->mode = MQFS_S_IFREG | q->mode;
+    st->nlink = q->unlinked ? 0u : 1u;
     st->uid = q->uid;
     st->gid = q->gid;
     st->ino = q->ino;
@@ -1102,6 +1105,40 @@ int mq_fd_statfs(const struct fd_entry *e, struct vfs_statfs *st)
         return 0;
     }
     return mqfs_statfs(NULL, st) == 0;
+}
+
+int mq_fd_ref(const struct fd_entry *e, struct vfs_ref *r)
+{
+    struct mqueue *q;
+    struct vfs_mount *m;
+    int i;
+
+    if (!e || e->ops != &mq_ops || !e->priv) {
+        return 0;
+    }
+    q = ((struct mq_file *)e->priv)->q;
+    r->mnt = NULL;
+    for (i = 0; i < vfs_mount_slots(); i++) {
+        m = vfs_mount_at(i);
+        if (m && m->type == &vfs_mqueue_type && !m->bind_of && m->priv &&
+            (!r->mnt || (mqfs_ns(m) == q->ns && mqfs_ns(r->mnt) != q->ns))) {
+            r->mnt = m;
+        }
+    }
+    r->node = q;
+    return r->mnt != NULL;
+}
+
+const char *mq_fd_name(const struct fd_entry *e, int *unlinked)
+{
+    const struct mqueue *q;
+
+    if (!e || e->ops != &mq_ops || !e->priv) {
+        return NULL;
+    }
+    q = ((const struct mq_file *)e->priv)->q;
+    *unlinked = q->unlinked;
+    return q->name;
 }
 
 /** A mount lists the queues of its mounter's IPC namespace, the first one's

@@ -37,6 +37,20 @@ struct vfs_statfs;
  * other descriptor. */
 int mq_fd_statfs(const struct fd_entry *e, struct vfs_statfs *st);
 
+struct vfs_ref;
+/** Fill `r` with the queue's file and a mount it is on, and return 1, when
+ * `e` is the descriptor of a queue: the first mount of the mqueue type that
+ * lists the queue's IPC namespace, or the first of any namespace when none
+ * does, since a queue's inode number is unique over every namespace. Return
+ * 0 for any other descriptor, or when no mqueue file system is mounted. The
+ * node is held by the descriptor, not by `r`. */
+int mq_fd_ref(const struct fd_entry *e, struct vfs_ref *r);
+
+/** The name of the queue the descriptor `e` is open on, without its leading
+ * slash, with `*unlinked` set to 1 once mq_unlink has taken it and to 0
+ * before; NULL for any other descriptor. */
+const char *mq_fd_name(const struct fd_entry *e, int *unlinked);
+
 struct vfs_type;
 /** The type of the mqueue file system, which lists the queues of the IPC
  * namespace that mounted it as the files of one directory. */
