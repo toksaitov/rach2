@@ -23,7 +23,8 @@ typedef char pathbuf_is_one_page[VFS_PATH_MAX == PAGE_SIZE ? 1 : -1];
  * the most paths one of its calls used at once and not for every call. The
  * deepest caller takes four: a rename's two paths, and the target of a link
  * the resolver follows with the path it joins it to. A call that finds all
- * `PATH_BUFS` in use has broken that count, and is refused with a record.
+ * `PATH_BUFS` in use has broken that count; it gets NULL, and the kernel log
+ * a line.
  */
 char *path_buf_get(void)
 {

@@ -84,7 +84,7 @@ int lock_rows(struct lock_row *rows, int max)
     return n;
 }
 
-/* The owner of the calling thread's POSIX record locks: its descriptor
+/** The owner of the calling thread's POSIX record locks: its descriptor
  * table, as Linux's owner is the files_struct, so the threads of a process
  * and the processes that share a table (CLONE_FILES) are one owner. */
 static uintptr_t posix_owner(void)
@@ -92,22 +92,25 @@ static uintptr_t posix_owner(void)
     return (uintptr_t)current_proc->fds;
 }
 
+/** Whether two keys are the same file; `shown` takes no part. */
 static int same_key(const struct lock_key *a, const struct lock_key *b)
 {
     return a->mnt == b->mnt && a->ino == b->ino;
 }
 
+/** Whether `l` is a lock of `kind` that `owner` has on `key`. */
 static int mine(const struct file_lock *l, const struct lock_key *key, int kind, uintptr_t owner)
 {
     return l->kind == kind && l->owner == owner && same_key(&l->key, key);
 }
 
+/** Whether `l` covers any byte of [start, end]. */
 static int overlap(const struct file_lock *l, uint64_t start, uint64_t end)
 {
     return l->start <= end && start <= l->end;
 }
 
-/* The first record lock of another owner that a lock of `type` over
+/** The first record lock of another owner that a lock of `type` over
  * [start, end] conflicts with, or NULL. */
 static struct file_lock *record_conflict(const struct lock_key *key, int kind, uintptr_t owner,
                                          int type, uint64_t start, uint64_t end)
@@ -126,6 +129,7 @@ static struct file_lock *record_conflict(const struct lock_key *key, int kind, u
     return NULL;
 }
 
+/** Take the lock `*link` points at off the list and free it. */
 static void unlink_lock(struct file_lock **link)
 {
     struct file_lock *l = *link;
@@ -134,7 +138,7 @@ static void unlink_lock(struct file_lock **link)
     kfree(l);
 }
 
-/* Join the owner's locks of `l`'s type that touch `l` into it, as Linux
+/** Join the owner's locks of `l`'s type that touch `l` into it, as Linux
  * does, so F_GETLK reports one range where one was asked for. */
 static void merge(struct file_lock *l)
 {
@@ -171,8 +175,8 @@ struct record_want {
 /**
  * Set the lock `w` asks for, F_UNLCK to remove, taken by `pid`: the owner's
  * locks over its bytes are cut back or removed, and the new one takes their
- * place. The records a split needs are had first, so a refusal changes
- * nothing.
+ * place. The records a split needs are allocated first, so a failure changes
+ * nothing. Returns 0, or -ENOLCK when the heap has no room.
  */
 static int32_t record_apply(const struct record_want *w, uint32_t pid)
 {
@@ -244,7 +248,7 @@ static int32_t record_apply(const struct record_want *w, uint32_t pid)
     return 0;
 }
 
-/* Whether a wait by `owner` for a lock of `blocker` would close a cycle:
+/** Whether a wait by `owner` for a lock of `blocker` would close a cycle:
  * the chain of waits from the blocker comes back to `owner`. Of an owner
  * that waits in more than one thread, the chain follows the first wait it
  * finds, as Linux's does. */
@@ -268,6 +272,7 @@ static int deadlock(uintptr_t owner, uintptr_t blocker)
     return 0;
 }
 
+/** Take `me` off the list of waits, if it is there. */
 static void wait_remove(const struct lock_wait *me)
 {
     struct lock_wait **link = &waits;
@@ -280,7 +285,7 @@ static void wait_remove(const struct lock_wait *me)
     }
 }
 
-/* Put `w`, the key of a wait about to sleep, where lock_repoint finds it;
+/** Put `w`, the key of a wait about to sleep, where lock_repoint finds it;
  * waiting_remove takes it away when the wait is over. */
 static void waiting_add(struct lock_waiting *w)
 {
@@ -288,6 +293,7 @@ static void waiting_add(struct lock_waiting *w)
     waiting_keys = w;
 }
 
+/** Take `w` off the list of wait keys, if it is there. */
 static void waiting_remove(const struct lock_waiting *w)
 {
     struct lock_waiting **link = &waiting_keys;
@@ -401,12 +407,15 @@ int32_t lock_record(const struct lock_key *key, struct open_file *ofd, int cmd,
     return record_apply(&want, pid);
 }
 
+/* A flock(2) lock asked for by the description `ofd`, F_UNLCK for none. */
 struct flock_want {
     const struct lock_key *key;
     const struct open_file *ofd;
     int type;
 };
 
+/** Whether a flock(2) lock of another description on the file conflicts
+ * with the one `w` asks for. */
 static int flock_conflict(const struct flock_want *w)
 {
     const struct file_lock *l;
@@ -420,6 +429,7 @@ static int flock_conflict(const struct flock_want *w)
     return 0;
 }
 
+/** The wait condition of flock(2): nothing conflicts with `arg` now. */
 static int flock_free(void *arg)
 {
     return !flock_conflict((const struct flock_want *)arg);

@@ -18,8 +18,9 @@ struct process;
 
 /**
  * A page of `VFS_PATH_MAX` bytes for one path, from the calling process's
- * set, or NULL when the heap has none, which the caller answers with ENOMEM.
- * Outside a process the page is the heap's and goes back to it at the put.
+ * set; NULL, which the caller answers with ENOMEM, when the heap has no page
+ * or every page of the set is in use. Outside a process the page is the
+ * heap's and goes back to it at the put.
  */
 char *path_buf_get(void);
 

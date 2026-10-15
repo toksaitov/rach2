@@ -2,14 +2,14 @@
 #define _FD_H_
 
 /*
- * The per-process file descriptor table: the small array of slots a process
- * indexes by descriptor number to reach whatever it has open. A slot names
- * what it points at (a console, a KRFFS file or directory, a socket, a pipe
- * or tty or pty, a devfs or procfs node) and has the per-descriptor
- * flags; the seek offset and the POSIX status flags live one level down in
- * the shared open-file description so dup, dup2, and fork can hand several
- * descriptors the same open. fd 0/1/2 are wired to the console as stdin,
- * stdout, and stderr.
+ * File descriptor tables and open-file descriptions.
+ *
+ * A process indexes its table by descriptor number. An entry says what the
+ * descriptor refers to (the console, a file or directory, a socket, a pipe,
+ * a terminal, a device, an anonymous object) and has the flags of that
+ * descriptor alone; the seek offset and the status flags are in the
+ * open-file description the entry points at, which dup, dup2 and fork share
+ * between descriptors.
  */
 
 #include "../lib/kint.h"
@@ -24,23 +24,18 @@
 #define FD_TABLE_LIMIT 1024
 #define FD_TABLE_FIRST 16
 
-/*
- * Standard file descriptor numbers
- */
 #define FD_STDIN  0
 #define FD_STDOUT 1
 #define FD_STDERR 2
 
-/*
- * File descriptor types
- */
+/* What a descriptor refers to, which selects how the calls reach it. */
 typedef enum {
-    FD_TYPE_NONE,        /* Slot is free */
-    FD_TYPE_CONSOLE,     /* Console (stdin/stdout/stderr) */
-    FD_TYPE_FILE,        /* Regular file from KRFFS */
-    FD_TYPE_DIR,         /* Directory (for getdents64) */
-    FD_TYPE_FRAMEBUFFER, /* VGA framebuffer device */
-    FD_TYPE_MOUSE,       /* PS/2 mouse device */
+    FD_TYPE_NONE,        /* Slot is free, or reserved when `ofd` is set */
+    FD_TYPE_CONSOLE,     /* The kernel console */
+    FD_TYPE_FILE,        /* File of a mounted file system or the KRFFS root */
+    FD_TYPE_DIR,         /* Directory, for getdents64 */
+    FD_TYPE_FRAMEBUFFER, /* The framebuffer, opened by the name "fb" */
+    FD_TYPE_MOUSE,       /* The mouse, PS/2 or USB, opened by the name "mouse" */
     FD_TYPE_SOCKET,      /* Network socket */
     FD_TYPE_PIPE,        /* Pipe end (backed by file_ops + priv) */
     FD_TYPE_DEVICE,      /* devfs character device (backed by file_ops + priv) */
@@ -48,72 +43,58 @@ typedef enum {
     FD_TYPE_SYNTH_DIR,   /* synthetic directory (/dev, /proc, ...); priv encodes it */
     FD_TYPE_PTM,         /* pty master (/dev/ptmx; file_ops + priv = struct pty) */
     FD_TYPE_PTS,         /* pty slave (/dev/pts/N; file_ops + priv = struct pty) */
-    FD_TYPE_ANON,        /* eventfd, epoll, timerfd (file_ops + priv = struct anon_obj ...) */
+    FD_TYPE_ANON,        /* eventfd, epoll, inotify ... (file_ops + priv = struct anon_obj) */
     FD_TYPE_UNIX,        /* AF_UNIX socket (file_ops + priv = struct unix_sock) */
     FD_TYPE_SYNTH_PATH   /* O_PATH on a /dev or /proc leaf; priv = struct vpath */
 } fd_type_t;
 
-/*
- * File descriptor flags (for open mode)
- */
+/* The flags of one descriptor, in `fd_entry_t.flags`. */
 #define FD_FLAG_READ      0x01
 #define FD_FLAG_WRITE     0x02
 #define FD_FLAG_CLOEXEC   0x08 /* close-on-exec (F_SETFD FD_CLOEXEC, O_CLOEXEC) */
 #define FD_FLAG_PATH      0x10 /* O_PATH: names a file, reads and writes nothing */
 #define FD_FLAG_CLOSING   0x20 /* closed; no lookup finds it until the slot is free */
 #define FD_FLAG_RELEASING 0x40 /* its release has begun, and may be asleep */
-/* O_APPEND/O_NONBLOCK are OFD status flags (OFD_* in struct open_file), not
- * per-descriptor flags; they are shared by dup/dup2/fork. */
 
 /*
- * Open-file-description status flags. POSIX keeps these on the open-file
- * description (so dup/dup2/fork share them, and fcntl(F_SETFL) on one
- * descriptor is visible through its duplicates), unlike FD_CLOEXEC which is
- * per-descriptor. The values are the Linux i386 O_* bits so fcntl passes
- * them straight through.
+ * The status flags of an open-file description, in `status_flags`. POSIX
+ * keeps them on the description, so dup, dup2 and fork share them and
+ * fcntl(F_SETFL) on one descriptor shows through its duplicates; FD_CLOEXEC
+ * belongs to one descriptor. The values are Linux's O_* bits, the same on
+ * i386 and x86-64, so fcntl passes them through.
  */
 #define OFD_APPEND   02000 /* O_APPEND: every write goes to end-of-file */
 #define OFD_NONBLOCK 04000 /* O_NONBLOCK: a would-block returns -EAGAIN */
 
-/*
- * Forward declarations for the types a descriptor can point at.
- */
 struct krffs_node;
 struct socket;
 struct file_ops;
 struct vfs_mount;
 
 /*
- * Open-file description (OFD): the shared, refcounted state behind one or more
- * descriptors, the seek offset plus the POSIX status flags. dup/dup2/fork copy
- * the fd's pointer to this and bump the refcount, so the duplicates share one
- * offset and one set of status flags (the POSIX open-file description
- * semantics) instead of each carrying its own. Allocated from a fixed pool (see
- * fd.c); refcount 0 means the slot is free, and the last referencing close
- * frees it. truncate(2) makes one that no descriptor points at and frees it
- * before it returns.
+ * An open-file description (OFD): the state that the descriptors made from
+ * one open share, the seek offset and the status flags among it. dup, dup2
+ * and fork point a new descriptor at the same description and add a
+ * reference, so the duplicates share one offset, as POSIX requires.
+ * Descriptions are in the heap, on a list of live ones in fd.c, and the last
+ * reference frees one. A call that changes a file by path with the rules of
+ * an open one, truncate(2), and an address space that keeps its program's
+ * file, each hold one that no descriptor points at.
  *
- * There are two offsets because there are two ranges. Everything this kernel
- * opens as a file is under 4 GiB, so `offset` is 32 bits and every path that
- * reads or writes one stays in 32-bit arithmetic. The raw disk windows are
- * not: a whole 250 GB drive needs a 64-bit offset to address its far end,
- * and widening the field every other subsystem uses to reach it would put
- * the whole file, procfs and terminal layer in reach of a change
- * that only the disk windows need. `raw_offset` belongs to those windows
- * alone; nothing else reads it, and it lives here, not in the
- * descriptor so `dup` and `fork` keep sharing one offset the way POSIX says
- * they must.
+ * The raw disk windows of devfs, whose position on a large disk is past
+ * what any other device reaches, keep their position in `raw_offset`, which
+ * no other kind of descriptor reads or writes; `offset` is the position of
+ * every other kind.
  */
 struct open_file {
-    uint32_t refcount;     /* Number of descriptors sharing this OFD */
+    uint32_t refcount;     /* References: descriptors and the holders above */
     uint64_t offset;       /* Shared read/write offset */
-    uint64_t raw_offset;   /* Shared offset for the raw disk windows */
+    uint64_t raw_offset;   /* Shared offset of a raw disk window */
     uint32_t status_flags; /* Shared O_APPEND/O_NONBLOCK (OFD_* above) */
-    /* A description on a mounted file system holds its mount, its node, and
-     * the file system's per-open handle. The last unref releases all three
-     * (fd.c calls vfs_desc_close), which is what makes the file system's
-     * open and release counts match one to one with open(2) and the last
-     * close. NULL vmnt marks every other backing kind. */
+    /* A description of a file of a mounted file system holds its mount, its
+     * node and the file system's handle of the open. The last unref releases
+     * all three through `vfs_desc_close`, so the file system sees one release
+     * for each open. `vmnt` is NULL for every other kind of description. */
     struct vfs_mount *vmnt;
     void *vnode;
     void *fhandle;
@@ -126,12 +107,13 @@ struct open_file {
      * hold the description for the length of the operation, so a sharer
      * cannot use the offset while another sleeps in a disk request with it;
      * pread64 and pwrite64 hold it on a regular file and leave the offset
-     * alone. The wait queue is beside the pool in fd.c. */
+     * alone. The lock's wait queue is in the description's record in fd.c. */
     int busy;
-    /* A node of another type: the canonical path it was opened by, which
-     * the `*at` calls resolve relative names against for a directory whose
-     * type has no `path` operation and `/proc/PID/fd` reports, or "" when
-     * the path did not fit, so that such a call answers ENAMETOOLONG. */
+    /* For a file of a mount other than the KRFFS root, the canonical path
+     * it was opened by, or "" when the path did not fit: what the `*at`
+     * calls resolve a relative name against when the directory's type has
+     * no `path` operation, answering ENAMETOOLONG for "", and what
+     * `/proc/PID/fd` reports. */
     char dirpath[64];
     /* The count of descriptions made when this one was, which tells it
      * from a new description the heap gives the same address after its
@@ -161,22 +143,21 @@ struct open_file {
 #define OFD_WATCH_MADE  8u
 
 /*
- * File descriptor entry. The backing object (type/node/sock, or an ops
- * vtable for pipes/ttys/ptys) and its own reference (sockets are refcounted
- * per descriptor) live here; the seek offset and status flags are shared
- * through the open-file description ofd.
+ * A file descriptor: what it refers to and the descriptor's own flags. A
+ * socket is counted once for each descriptor that has it; the offset and
+ * status flags are in the shared description `ofd`.
  */
 struct devfs_entry;
 
 typedef struct fd_entry {
-    fd_type_t type;                /* Type of this fd (NONE, CONSOLE, FILE) */
-    struct krffs_node *node;       /* Pointer to KRFFS node (for FILE type) */
-    struct socket *sock;           /* Pointer to socket (for SOCKET type) */
-    struct open_file *ofd;         /* Shared open-file description (offset+flags) */
-    const struct file_ops *ops;    /* Backing ops (pipes/ttys/...); NULL = enum dispatch */
-    void *priv;                    /* Backing private object (e.g. a pipe end) */
-    const struct devfs_entry *dev; /* The device table row, for a DEVICE fd */
-    uint32_t flags;                /* Per-fd flags (READ, WRITE, CLOEXEC) */
+    fd_type_t type;
+    struct krffs_node *node;       /* FILE or DIR of the KRFFS root, not "/" */
+    struct socket *sock;           /* For a SOCKET */
+    struct open_file *ofd;         /* Shared open-file description */
+    const struct file_ops *ops;    /* Operations of the object; NULL: by `type` */
+    void *priv;                    /* The object `ops` work on, such as a pipe end */
+    const struct devfs_entry *dev; /* The device table row, for a DEVICE */
+    uint32_t flags;                /* FD_FLAG_* */
 } fd_entry_t;
 
 /*
@@ -196,10 +177,13 @@ typedef struct fd_table {
     int refs;
 } fd_table_t;
 
-/** Close every descriptor's backing object before releasing its slot. */
+/** Release every descriptor of `table`, its object and then its slot, when
+ * the last process that shares the table lets it go; a second call finds
+ * nothing to release (syscall_proc.c). May sleep. */
 void release_fd_table(fd_table_t *table);
 
-/** Give a fresh table its first entries; 0, or -1 when the heap has none. */
+/** Give a new table its first FD_TABLE_FIRST entries, all free; it frees no
+ * old entries. 0, or -1 when `table` is NULL or the heap has no room. */
 int fd_table_init(fd_table_t *table);
 
 /** Free the entries; the descriptors must have been released first. */
@@ -244,12 +228,25 @@ int fd_limit(const fd_table_t *table);
  */
 int fd_table_reach(fd_table_t *table, int fd);
 
-/** Wire fd 0/1/2 as console stdin/stdout/stderr; call after fd_table_init. */
+/**
+ * Open fds 0, 1 and 2 of a table `fd_table_init` made on the console, each
+ * for reading and writing with a description of its own, as Linux gives init
+ * `/dev/console` opened O_RDWR on all three: a program may write through its
+ * standard input, as tmux's server draws through the terminal its client
+ * passes it. Returns 0, or -1 with nothing left open when the heap has no
+ * room.
+ */
 int fd_init_stdio(fd_table_t *table);
 
-/** Reserve the lowest free descriptor: its number; -EMFILE when the table
- * has none below the caller's limit; or -ENOMEM when the heap has no room
- * for the table's growth or the descriptor's open-file description. */
+/**
+ * Reserve the lowest free descriptor, growing the table up to the caller's
+ * limit. The slot gets a new description and stays FD_TYPE_NONE until the
+ * caller sets its type and object; `fd_free` returns it. Returns the
+ * descriptor; -EMFILE when no slot is free below the limit; or -ENOMEM, with
+ * the slot left free, when the heap has no room for the growth or the
+ * description. The calls that make a descriptor return what they get, so
+ * that EMFILE means the limit and ENOMEM the heap, as on Linux.
+ */
 int fd_alloc(fd_table_t *table);
 
 /** 1 when `fd_alloc` would find or make a slot, for a call that must know
@@ -261,7 +258,11 @@ int fd_can_alloc(const fd_table_t *table);
  * contract), with `fd_alloc`'s results. */
 int fd_alloc_from(fd_table_t *table, int minfd);
 
-/** Release a descriptor and its OFD reference; 0 ok, -1 if fd invalid. */
+/** Clear a descriptor's slot and drop its reference to its description,
+ * also for a slot reserved and given no type. The object of the descriptor
+ * is the caller's to release first. 0, or -1 when the slot is free or `fd`
+ * is outside the table. Dropping the last reference closes a description of
+ * a mounted file system, which may sleep. */
 int fd_free(fd_table_t *table, int fd);
 
 /** The entry for fd, or NULL if fd is out of range, free or closing. A
@@ -270,10 +271,10 @@ int fd_free(fd_table_t *table, int fd);
 fd_entry_t *fd_get(fd_table_t *table, int fd);
 
 /**
- * Add or drop a reference to an open-file description. dup/dup2/fork point a
- * new descriptor at an existing OFD and call fd_ofd_ref so the shared seek
- * offset outlives the original; fd_free calls fd_ofd_unref. The OFD frees
- * itself back to the pool when its last reference goes.
+ * Add or drop a reference to an open-file description. The last unref drops
+ * the description's record locks, reports its close to inotify, unpins an
+ * O_PATH node, closes a description of a mounted file system and frees the
+ * description; it may sleep. NULL is ignored.
  */
 void fd_ofd_ref(struct open_file *ofd);
 void fd_ofd_unref(struct open_file *ofd);
@@ -286,16 +287,21 @@ void fd_ofd_unref(struct open_file *ofd);
  */
 struct open_file *fd_ofd_new(void);
 
-/** The description lock (see `busy` above); the lock is uninterruptible and
- * short: one file operation. */
+/** Take or release the description lock (see `busy` above), and with it,
+ * taken first and released last, the namespace lock of the description's
+ * mount when its type serialises every use. The waits sleep and a signal
+ * does not end them; the lock is held for one file operation. */
 void fd_ofd_lock(struct open_file *ofd);
 void fd_ofd_unlock(struct open_file *ofd);
 
-/** Repoint every description field naming `from` at `to`, after a KRFFS
- * relocation moved a node. Called by vfs_repoint, which owns the sweep. */
+/** Repoint the node of every description of `mnt` that names `from` at
+ * `to`, and the handle too on a mounted KRFFS volume, after a growing write
+ * moved a KRFFS node. Called by `vfs_repoint`, which sweeps every holder. */
 void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to);
 
-/** Whether a description of (`mnt`, `node`) is inside an operation now. */
+/** Whether a description of (`mnt`, `node`) is inside an operation now, as
+ * a write or a truncation is for the length of its call: what an attachment
+ * of the file asks before it takes the file. */
 int fd_node_busy(struct vfs_mount *mnt, void *node);
 
 /**
@@ -312,7 +318,7 @@ int fd_ofd_live(const struct open_file *ofd, uint32_t serial);
  * among them, wherever their descriptors are. */
 int fd_ofd_holders(const struct vfs_mount *mnt, const void *node, const struct open_file *going);
 
-/** 1 if fd is allocated, 0 otherwise. */
+/** 1 if `fd` is open and not closing, 0 otherwise. */
 int fd_is_valid(fd_table_t *table, int fd);
 
 /**

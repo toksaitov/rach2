@@ -1,3 +1,4 @@
+/* File descriptor tables and the open-file descriptions they share. */
 #include "fd.h"
 #include "../proc/process.h"
 
@@ -9,14 +10,12 @@
 #include "../mm/kheap.h"
 
 /*
- * An open-file description has one shared seek offset and a refcount of how
- * many descriptors point at it (dup/dup2/fork add references). It is
- * allocated from the heap at open and freed by the last unref, on the list
- * of live descriptions, which the two scans below walk. The wait queue of
- * its lock lives beside it in the record rather than in fd.h, because the
- * wait-queue header includes the process header and the process header
- * includes fd.h; the description is the record's first member, so the one
- * is found from the other.
+ * The record of an open-file description, from the heap, on the list of live
+ * descriptions that the scans below walk. The wait queue of the description
+ * lock is in the record rather than in fd.h, because the wait-queue header
+ * includes the process header and the process header includes fd.h; the
+ * description is the record's first member, so the one is found from the
+ * other.
  */
 struct ofd_rec {
     struct open_file ofd;
@@ -27,16 +26,15 @@ struct ofd_rec {
 static struct ofd_rec *ofds;
 static uint32_t ofd_serials;
 
+/** The record whose first member is `ofd`. */
 static struct ofd_rec *ofd_rec_of(struct open_file *ofd)
 {
     return (struct ofd_rec *)ofd;
 }
 
 /**
- * Allocate a fresh open-file description.
- *
- * Return a heap-allocated description with one reference, zero offsets and
- * cleared status flags, or NULL on allocation failure.
+ * A new open-file description on the live list, with one reference, the next
+ * serial, zero offsets and no status flags; NULL when the heap has no room.
  */
 static struct open_file *ofd_alloc(void)
 {
@@ -65,16 +63,12 @@ void fd_ofd_ref(struct open_file *ofd)
     }
 }
 
+/** The wait condition of the description lock: `arg`'s lock is free. */
 static int ofd_idle(void *arg)
 {
     return ((struct open_file *)arg)->busy == 0;
 }
 
-/**
- * Lock the description and its shared offset, taking the mount's namespace
- * lock first when the file system says its uses must be serialised. Both
- * waits sleep and a signal does not end them.
- */
 void fd_ofd_lock(struct open_file *ofd)
 {
     if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {
@@ -86,9 +80,6 @@ void fd_ofd_lock(struct open_file *ofd)
     ofd->busy = 1;
 }
 
-/**
- * Release the description before the namespace lock it took.
- */
 void fd_ofd_unlock(struct open_file *ofd)
 {
     ofd->busy = 0;
@@ -98,12 +89,6 @@ void fd_ofd_unlock(struct open_file *ofd)
     }
 }
 
-/**
- * Whether any description of the file at (`mnt`, `node`) is inside an
- * operation. A write or a truncation holds its description for the length of
- * the call, so this is how an attachment asks whether one is in flight over
- * the file it is about to take.
- */
 int fd_node_busy(struct vfs_mount *mnt, void *node)
 {
     struct ofd_rec *rec;
@@ -144,10 +129,9 @@ int fd_ofd_holders(const struct vfs_mount *mnt, const void *node, const struct o
 }
 
 /**
- * Repoint node references after relocation.
- *
- * The memory root also uses nodes as open handles. Mounted KRFFS keeps
- * stable open records, which must not change when node offsets change.
+ * The root's adapter, `vfs_krffs_type`, uses the node as the handle of an
+ * open too, so the handle moves with the node; a mounted KRFFS volume's
+ * handle is an open record of its own, which stays where it is.
  */
 void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to)
 {
@@ -166,13 +150,6 @@ void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to)
     }
 }
 
-/**
- * Drop one reference to an open-file description.
- *
- * On the last reference, clear the mounted-file fields, drop an O_PATH
- * description's pin, close the mounted description, remove the record from
- * the live list and free it. Closing a mounted description may sleep.
- */
 void fd_ofd_unref(struct open_file *ofd)
 {
     if (ofd && ofd->refcount > 0) {
@@ -216,15 +193,6 @@ void fd_ofd_unref(struct open_file *ofd)
     }
 }
 
-/**
- * Give a fresh table its first FD_TABLE_FIRST entries, all free.
- *
- * This does not unref any OFDs or free an old array; it is for a fresh table
- * only. A live table is torn down descriptor by descriptor through `fd_free`,
- * which releases each OFD reference.
- *
- * @return 0, or -1 when `table` is NULL or the heap has no room.
- */
 int fd_table_init(fd_table_t *table)
 {
     if (!table) {
@@ -277,10 +245,9 @@ fd_table_t *fd_table_new(void)
 }
 
 /**
- * A copy of `src`'s entries in a table of its own. A slot with no type is
- * either free or reserved by an open of another thread that shares `src`
- * and has not finished, whose description the copy takes no reference to,
- * so it is free in the copy.
+ * A slot with no type is either free or reserved by an unfinished open of
+ * another thread that shares `src`. The copy takes no reference to such a
+ * slot's description, so the slot is cleared in the copy.
  */
 fd_table_t *fd_table_dup(const fd_table_t *src)
 {
@@ -312,8 +279,8 @@ void fd_table_delete(fd_table_t *table)
     kfree(table);
 }
 
-/* The entries moved to an array of `cap`, the new ones free; -ENOMEM when
- * the heap has no room. */
+/** Move the entries to an array of `cap`, the new ones free; 0, or -ENOMEM
+ * when the heap has no room. */
 static int fd_table_resize(fd_table_t *table, int cap)
 {
     fd_entry_t *grown = kzalloc(sizeof(fd_entry_t) * (size_t)cap);
@@ -330,9 +297,9 @@ static int fd_table_resize(fd_table_t *table, int cap)
     return 0;
 }
 
-/* The table grown to at least `want` entries by doubling; -EMFILE when
- * `want` is past the limit, -ENOMEM when the heap has no room. A shared
- * table has every entry already. */
+/** Grow the table by doubling to at least `want` entries; 0, -EMFILE when
+ * `want` is past the caller's limit, or -ENOMEM when the heap has no room.
+ * A shared table has every entry already. */
 static int fd_table_grow(fd_table_t *table, int want)
 {
     int cap = table->cap ? table->cap : FD_TABLE_FIRST;
@@ -369,17 +336,6 @@ int fd_table_reach(fd_table_t *table, int fd)
     return fd_table_grow(table, fd + 1);
 }
 
-/**
- * Initialize the standard console descriptors on an empty descriptor table.
- * Each descriptor owns a separate open-file description.
- *
- * fds 0, 1 and 2 are each open for reading and writing, as Linux gives init
- * `/dev/console` opened O_RDWR on all three: a program may write through its
- * standard input, as tmux's server draws through the terminal its client
- * passes it, and a console that answered POLLOUT only for a writable
- * descriptor left that server waiting with nothing on the screen.
- * Return 0 on success, or -1 after releasing partial allocations on failure.
- */
 int fd_init_stdio(fd_table_t *table)
 {
     int i;
@@ -410,15 +366,8 @@ int fd_init_stdio(fd_table_t *table)
 }
 
 /**
- * Reserve the lowest free descriptor at or above `minfd`.
- *
- * The chosen slot gets a fresh OFD but stays FD_TYPE_NONE; the caller fills in
- * type, node or sock, and flags. A table with no free slot at or above
- * `minfd` grows, up to the limit. Returns the descriptor number; -EMFILE
- * when no slot at or above `minfd` is below the limit; or -ENOMEM when the
- * heap has no room for the growth or the OFD, which leaves the slot free.
- * The calls that make a descriptor return what they get, so that EMFILE
- * means the limit and ENOMEM the heap, as on Linux.
+ * A slot is free when it has no type and no description; one with a
+ * description and no type is reserved by an open that has not finished.
  */
 int fd_alloc_from(fd_table_t *table, int minfd)
 {
@@ -462,15 +411,6 @@ int fd_alloc(fd_table_t *table)
     return fd_alloc_from(table, 0);
 }
 
-/**
- * Release a descriptor and its OFD reference, clearing the slot.
- *
- * A slot with no backing and no reserved OFD is already free; freeing it
- * returns -1. The OFD reference is dropped even when the slot is still
- * typeless, so a slot that `fd_alloc_from` reserved but a caller bailed on
- * before assigning a type does not leak its OFD. Dropping the last reference
- * closes a mounted description, which may sleep.
- */
 int fd_free(fd_table_t *table, int fd)
 {
     if (!table || fd < 0 || fd >= table->cap) {

@@ -1,9 +1,6 @@
 #ifndef _LOCK_H_
 #define _LOCK_H_
 
-#include "../lib/kint.h"
-#include "fd.h"
-
 /*
  * Advisory file locks, of the three kinds Linux has.
  *
@@ -23,6 +20,9 @@
  * the conflict is gone; a wait for a record lock that would close a cycle of
  * waiting owners fails with EDEADLK. lock.Readme.md has the whole contract.
  */
+
+#include "../lib/kint.h"
+#include "fd.h"
 
 /* The file a lock is on: its mount and a number that names the file while a
  * description of it is open. A file of KRFFS, FAT32 or exFAT has its node,

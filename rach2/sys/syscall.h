@@ -1,21 +1,30 @@
 #ifndef _SYSCALL_H_
 #define _SYSCALL_H_
 
+/* What the rest of the kernel calls in the system call layer. */
+
 #include "irq.h"
 
-/**
- * Register the syscall handler and populate the dispatch table.
- */
+/** Fill the dispatch table through `arch_syscall_init`, which routes the
+ * architecture's system call entry to the dispatcher, and read
+ * `rach2.trace=enosys` from the command line. */
 void init_syscall(void);
 
-/** Restore text mode if `pid` owns the framebuffer. */
+/** Give up the framebuffer and restore text mode if the thread group `pid`
+ * owns it, as the end of the process does. */
 void fb_release_if_owner(uint32_t pid);
 
-/* Whether any open descriptor holds this KRFFS node. The debug shell asks
-   before removing or renaming, since it goes below the syscall layer that owns the
-   rule that a held node is orphaned, not freed. */
 struct krffs_node;
+
+/** Whether any descriptor has `node`, a node of the KRFFS root. The debug
+ * shell removes and renames through the file system, below the system call
+ * layer that keeps a held node without a name instead of freeing it, so it
+ * asks here first. */
 int fs_node_is_held(const struct krffs_node *node);
+
+/** Repoint every holder of `from` at `to` (`vfs_repoint`), after a write of
+ * the debug shell grew a file past its extent and moved its node. Nothing is
+ * done when the two are the same or `from` is NULL. */
 void fs_node_moved(const struct krffs_node *from, struct krffs_node *to);
 
 /** The host and domain names of the caller's UTS namespace, which uname
@@ -28,10 +37,10 @@ const char *uts_domainname(void);
 int uts_privileged(void);
 
 /* The fixed fields of uname(2), which /proc/version repeats. The system is
-   named Linux, whose interface the kernel follows, as config.guess, CMake and
-   scripts match the name exactly; the release is the version of the Linux
-   headers the GNU toolchain was built with, and Rach2 names itself in the
-   release's suffix and in the version. */
+ * named Linux, whose interface the kernel follows, as config.guess, CMake and
+ * scripts match the name exactly; the release is the version of the Linux
+ * headers the GNU toolchain was built with, and Rach2 names itself in the
+ * release's suffix and in the version. */
 #define UTS_SYSNAME "Linux"
 #define UTS_RELEASE "6.18.0-rach2"
 #define UTS_VERSION "#1 Rach2 1.0.0"
