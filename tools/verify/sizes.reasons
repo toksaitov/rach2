@@ -29,12 +29,12 @@ krffs/krffs_fuse_operations.c:krffs_readdir nesting 5 one procedure over a file 
 
 krffs/mkfs.krffs.c:main lines 115 one procedure over a file format, in the order the format is read
 
-krffs/stageimage.krffs.c:apply_line lines 116 one procedure over a file format, in the order the format is read
+krffs/stageimage.krffs.c:apply_line lines 108 one procedure over a file format, in the order the format is read
 krffs/stageimage.krffs.c:main complexity 36 one procedure over a file format, in the order the format is read
-krffs/stageimage.krffs.c:main lines 166 one procedure over a file format, in the order the format is read
+krffs/stageimage.krffs.c:main lines 151 one procedure over a file format, in the order the format is read
 krffs/stageimage.krffs.c:stage_file params 7 one procedure over a file format, in the order the format is read
 krffs/stageimage.krffs.c:stage_node params 8 one procedure over a file format, in the order the format is read
-krffs/stageimage.krffs.c:stage_tree lines 127 one procedure over a file format, in the order the format is read
+krffs/stageimage.krffs.c:stage_tree lines 120 one procedure over a file format, in the order the format is read
 
 rach2/kernel.c:check_strings nesting 6 a parser over an external format, one check per field in the format's order
 rach2/kernel.c:kernel_main complexity 58 the boot sequence, in the order the hardware requires

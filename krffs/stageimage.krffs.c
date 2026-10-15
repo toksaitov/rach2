@@ -1,3 +1,9 @@
+/*
+ * stageimage.krffs.c: stageimage.krffs, which writes the directories and
+ * files a manifest lists into a KRFFS image, or into a host directory for the
+ * ext2 builder.
+ */
+
 #include <dirent.h>
 #include <fcntl.h>
 #include <stdbool.h>
@@ -21,27 +27,25 @@
 #include <unistd.h>
 #endif
 
-/* The KRFFS v2 directory type bit (mode & S_IFMT == S_IFDIR marks a directory).
-   The host stat.h S_IFDIR may differ, so the on-disk value is spelled out. */
+/**
+ * The type field of a node's mode and a directory's value in it, as the
+ * kernel writes them; the host's `S_IFDIR` need not be the same.
+ */
 #define KRFFS_MODE_IFDIR 0040000u
 #define KRFFS_MODE_IFMT  0170000u
 
-/**
- * True if `node`'s mode marks it a KRFFS directory.
- */
+/** Returns whether the mode of `node` makes it a directory. */
 static bool is_dir_node(const struct krffs_node *node)
 {
     return (node->mode & KRFFS_MODE_IFMT) == KRFFS_MODE_IFDIR;
 }
 
 /**
- * Reject a guest path that is not clean and absolute.
- *
- * A clean path is absolute, has no empty component (a doubled slash would
- * create one, letting a doubled-slash form of /dev slip past the synthetic
- * namespace check), no `.` or `..` component, and no trailing slash (except
- * the root "/"). The manifest names every path literally, so anything that is
- * not clean is an authoring error.
+ * Returns whether `path` is a clean absolute guest path: `/`, or components
+ * each after a `/`, with no empty one, no `.` or `..`, and no `/` at the end.
+ * A manifest names each path as it is, so any other path is an error in it;
+ * a doubled slash in particular would take a path under `/dev` past
+ * `is_synthetic_path`.
  */
 static bool is_valid_guest_path(const char *path)
 {
@@ -68,16 +72,17 @@ static bool is_valid_guest_path(const char *path)
 }
 
 /**
- * The host path a manifest's `path` is read from.
+ * Returns the host path a manifest's `path` is read from.
  *
  * A manifest names its host files by their i686 paths, build/... and
  * vendor/musl/install/..., so one manifest describes the image of either
- * architecture. The root Makefile of an x86-64 build sets RACH2_PATH_MAP to
- * blank-separated `FROM=TO` pairs, and the first FROM that begins `path` is
- * replaced by its TO: build/utils/cat is then read from
+ * architecture. An x86-64 build (the root Makefile, mk/arch.sh) sets
+ * RACH2_PATH_MAP to blank-separated `FROM=TO` pairs, and the first FROM that
+ * begins `path` is replaced by its TO: build/utils/cat is then read from
  * build/x86_64/utils/cat. With no map, or no FROM that matches, the path is
- * read as it is written. The result is in one of four static buffers, so it
- * is good until the fourth call after this one.
+ * read as it is written. A mapped path is in one of four static buffers, so
+ * it is good until the fourth call after this one; one that does not fit
+ * ends the program.
  */
 static const char *host_path(const char *path)
 {
@@ -126,8 +131,8 @@ static const char *host_path(const char *path)
 }
 
 /**
- * The file `STAGEIMAGE_DEPS` names, opened on the first call, or NULL when it
- * names none.
+ * Returns the file `STAGEIMAGE_DEPS` names, opened for writing on the first
+ * call, or NULL when it names none or cannot be opened.
  */
 static FILE *deps_file(void)
 {
@@ -146,12 +151,11 @@ static FILE *deps_file(void)
 }
 
 /**
- * Record one host input path for the build's dependency tracking.
- *
- * When `STAGEIMAGE_DEPS` names a file, every host path the stager reads or
- * walks is appended there, one per line, absent `optional-file` paths
- * included. The build turns the list into make dependencies, so a changed,
- * added, or removed input restages exactly the images that carry it.
+ * Writes `path`, a host file or directory the stager reads, as a line of the
+ * `STAGEIMAGE_DEPS` file when there is one. The path of an absent
+ * `optional-file` is written too. krffs/mkimage.sh makes the lines into make
+ * dependencies, so a changed, added or removed input restages the images
+ * that read it.
  */
 static void record_input(const char *path)
 {
@@ -161,7 +165,7 @@ static void record_input(const char *path)
 }
 
 /**
- * Record a directory `exec-dir` stages from, as a line of `exec-dir`, a tab
+ * Writes a directory `exec-dir` stages from as a line of `exec-dir`, a tab
  * and the path. The build judges such a directory by the programs in it
  * (krffs/programs.sh) and not by its own time, which every file made beside
  * the programs moves.
@@ -174,11 +178,10 @@ static void record_exec_dir(const char *path)
 }
 
 /**
- * Read a whole file into a `malloc`'d buffer.
- *
- * `*len` is the byte count (no NUL is appended; the data is staged verbatim).
- * Returns NULL if the file is absent or unreadable, which lets `optional-file`
- * skip a missing host input (the Doom WAD, the SSH `authorized_keys`).
+ * Reads the host file `path` whole into a buffer from `malloc`, which the
+ * caller frees, sets `*len` to its length, and records the path with
+ * `record_input`. A NUL follows the data and is not counted. Returns NULL
+ * when the file cannot be opened or read.
  */
 static char *read_whole_file(const char *path, size_t *len)
 {
@@ -213,10 +216,11 @@ static char *read_whole_file(const char *path, size_t *len)
 }
 
 /**
- * Mix a parent id and a node name into a stable node id.
- *
- * This matches the kernel's `krffs_mix_id` (rach2/sys/fs/krffs.c) so a
- * host-staged node and the same node created in-guest get the same id.
+ * Returns the id of a node named `name` in the directory `parent_id`: the
+ * djb2 hash of the name mixed with `parent_id` by the 64-bit FNV prime, and 1
+ * in place of 0. The kernel's `krffs_mix_id` (rach2/sys/fs/krffs.c), which
+ * gives a directory its id, is the same function, so a directory staged here
+ * has the id the kernel would give it.
  */
 static uint64_t krffs_mix_id(uint64_t parent_id, const char *name)
 {
@@ -229,9 +233,9 @@ static uint64_t krffs_mix_id(uint64_t parent_id, const char *name)
 }
 
 /**
- * Find a child named `name` directly inside directory `parent_id`, or NULL.
- *
- * Mirrors the kernel's `krffs_find_child` and is what keeps staging idempotent.
+ * Returns the reserved node named `name` in the directory `parent_id`, or
+ * NULL, matched by name and `parent_id` as the kernel's `krffs_find_child`
+ * matches it.
  */
 static struct krffs_node *find_child(struct krffs_file_system *file_system, uint64_t parent_id,
                                      const char *name)
@@ -249,11 +253,9 @@ static struct krffs_node *find_child(struct krffs_file_system *file_system, uint
 }
 
 /**
- * Find a staged directory whose id is `id`, or NULL.
- *
- * Mirrors the kernel's `krffs_id_taken`: a reserved node with a directory's
- * mode and a name, since a node with no name is an orphan and no path reaches
- * it.
+ * Returns the directory whose `id` is `id`, or NULL. As in the kernel's
+ * `krffs_id_taken`, it is a reserved node with a directory's mode and a name,
+ * since a node with no name is an orphan and no path reaches it.
  */
 static struct krffs_node *find_dir_by_id(struct krffs_file_system *file_system, uint64_t id)
 {
@@ -270,8 +272,8 @@ static struct krffs_node *find_dir_by_id(struct krffs_file_system *file_system, 
 }
 
 /**
- * Write the guest path of the staged directory `node` into `buf`, for a
- * message.
+ * Writes the guest path of the directory `node` into `buf`, of `size` bytes,
+ * for a message.
  *
  * The path is found by the parents' ids, up to the root, whose id is 0. A
  * chain deeper than the walk keeps, or a parent that is not there, ends the
@@ -300,15 +302,14 @@ static void dir_path(struct krffs_file_system *file_system, const struct krffs_n
 }
 
 /**
- * Refuse to stage the directory `path`, named `name` in `parent_id`, when a
- * staged directory already has the id the two mix to. Returns true when the
- * id is free.
+ * Returns whether no directory has the id that `name` in `parent_id` mixes
+ * to, and when one has, reports that the directory `path` would have its id.
  *
- * Two names can mix to one id: `bC` and `cb` have one DJB hash. A child
+ * Two names can mix to one id: `bC` and `cb` have one djb2 hash. A child
  * records its parent by id alone, so a second directory with a taken id would
- * share its children with the first. The kernel refuses to make one
+ * share its children with the first. The kernel does not make one
  * (`krffs_id_taken` in rach2/sys/fs/krffs.c), and an image with one would give
- * it a hierarchy the kernel never builds, so the stager refuses too.
+ * it a hierarchy the kernel never builds, so the stager does not either.
  */
 static bool dir_id_free(struct krffs_file_system *file_system, uint64_t parent_id, const char *name,
                         const char *path)
@@ -329,9 +330,8 @@ static bool dir_id_free(struct krffs_file_system *file_system, uint64_t parent_i
 }
 
 /**
- * Total free space, in bytes (the sum of every free block including headers).
- *
- * Reported at the end so a manifest author sees how much slack an image has.
+ * Returns the sum of the sizes of the free nodes, headers included, which the
+ * summary line reports.
  */
 static uint64_t total_free_space(struct krffs_file_system *file_system)
 {
@@ -348,23 +348,23 @@ static uint64_t total_free_space(struct krffs_file_system *file_system)
 }
 
 /**
- * Reserve one node named `name` inside directory `parent_id`.
+ * Reserves a node named `name` in the directory `parent_id`, with the id
+ * `krffs_mix_id` gives, `mode`, the owner `uid`:`gid`, `data_size` bytes of
+ * `data`, none copied when `data` is NULL, and the fixed staged time as its
+ * three times, and syncs it. Returns its id, or 0, with a message, when the
+ * data is too large or no free node is large enough.
  *
- * The node gets `mode`, the owner `uid`:`gid` (0:0 unless the manifest says
- * otherwise), and an optional `data` payload. Returns the new node's id, or 0
- * on failure (a full image).
+ * The staged time is one second past the epoch: fixed, so that an image
+ * built twice from one tree is one image, and not zero, since pdpmake takes a
+ * modification time of zero for a file that does not exist, and make must
+ * run over the staged sources in place. A file the machine builds gets the
+ * time of its clock, which is later.
  */
 static uint64_t stage_node(struct krffs_file_system *file_system, uint64_t parent_id,
                            const char *name, uint16_t mode, uint32_t uid, uint32_t gid,
                            const char *data, uint64_t data_size)
 {
     struct krffs_node *node;
-    /* Every staged node has this one fixed instant: one second past the
-       epoch. Constant, because an image built twice from one tree must be one
-       image; nonzero, because pdpmake reads a modification time of zero as a
-       file that does not exist, and a student must be able to run make over
-       the staged sources in place. Anything the machine builds is stamped by
-       its real clock and is therefore newer than any staged source. */
     struct krffs_node_time staged_time = {1, 0};
 
     if (data_size > (uint64_t)SIZE_MAX) {
@@ -381,8 +381,6 @@ static uint64_t stage_node(struct krffs_file_system *file_system, uint64_t paren
         return 0;
     }
 
-    /* set_reserved_node_name also stamps the v1 djb id; override it with the v2
-       parent-aware id below. */
     krffs_set_reserved_node_name(node, name);
 
     node->parent_id = parent_id;
@@ -392,8 +390,6 @@ static uint64_t stage_node(struct krffs_file_system *file_system, uint64_t paren
     node->gid = gid;
     node->data_size = data_size;
 
-    /* allocate_reserved_node does not clear the timestamps, so set them to
-       the fixed staged instant, not inherit stale free-block bytes. */
     node->access_time = staged_time;
     node->modification_time = staged_time;
     node->attribute_change_time = staged_time;
@@ -408,16 +404,12 @@ static uint64_t stage_node(struct krffs_file_system *file_system, uint64_t paren
 }
 
 /**
- * Resolve an absolute guest directory path to its node id, creating any missing
- * component as a 0755 directory.
- *
- * The root "/" is id 0. A path like "/root/.ssh" walks "root" then ".ssh",
- * find-or-creating each as a 0755 directory; an existing component that is
- * not a directory is an error (a manifest cannot place a file under a file).
- * A `dir` directive that names the same path later sets its intended mode,
- * so an explicit mode wins whether declared before or after a file places
- * something inside. Returns the final directory id (0 for the root "/"), or
- * (uint64_t)-1 on a malformed path or a non-directory component.
+ * Returns the id of the directory at the absolute guest `path`, 0 for `/`,
+ * and makes each missing component a root-owned 0755 directory; a component
+ * already there keeps its mode and owner. Returns `(uint64_t)-1`, with a
+ * message, for a path that is not absolute or has 256 bytes or more, a
+ * component that is not a directory, since a manifest cannot put a file under
+ * a file, a directory id that is taken, or a full image.
  */
 static uint64_t resolve_dir(struct krffs_file_system *file_system, const char *path)
 {
@@ -473,12 +465,10 @@ static uint64_t resolve_dir(struct krffs_file_system *file_system, const char *p
 }
 
 /**
- * Split an absolute guest path into its parent directory and basename.
- *
- * `dir_out` receives the parent path ("/" for a root-level name); the
- * returned pointer is the basename inside `path_buf` (which is modified in
- * place). Returns NULL on a malformed path (no slash, trailing slash, too
- * long).
+ * Splits the absolute guest `path` into its directory, written to `dir_out`
+ * ("/" for a name in the root), and its last component, returned as a
+ * pointer into `path_buf`, which gets a copy of `path`. Returns NULL when
+ * `path` is not absolute, ends in a slash, or does not fit.
  */
 static char *split_path(const char *path, char *path_buf, size_t bufsz, char *dir_out, size_t dirsz)
 {
@@ -493,7 +483,6 @@ static char *split_path(const char *path, char *path_buf, size_t bufsz, char *di
         return NULL;
     }
     if (slash == path_buf) {
-        /* Root-level name: parent is "/". */
         if (dirsz < 2) {
             return NULL;
         }
@@ -512,10 +501,9 @@ static char *split_path(const char *path, char *path_buf, size_t bufsz, char *di
 }
 
 /**
- * Reject /dev and /proc paths.
- *
- * Those are kernel-synthesized namespaces (devfs and procfs), never backed by
- * KRFFS nodes, so a manifest must not stage anything there.
+ * Returns whether `path` is /dev or /proc or under one. The kernel makes those
+ * with devfs and procfs, and a KRFFS node there is never seen, so a manifest
+ * stages nothing there.
  */
 static bool is_synthetic_path(const char *path)
 {
@@ -524,40 +512,34 @@ static bool is_synthetic_path(const char *path)
 }
 
 /**
- * Stage a directory `path` with `mode` and owner, creating any missing parent
- * as root-owned 0755.
- *
- * Unlike the implicit 0755 directories that `resolve_dir` makes for a file's
- * parents, this sets an explicit mode and owner, and updates both if the
- * directory already exists (so a `dir 0700:1000:1000 /home/test` line wins
- * whether it is declared before or after something is placed inside). Returns
- * false on any failure.
- */
-/*
- * The tree mode, `stageimage MANIFEST --tree DIR`: the manifest is
- * materialised into a host directory instead of an image, one host file or
- * directory per node, and one line `node MODE UID GID PATH` is printed on
- * standard output for each, with the POSIX type bits in the mode.
- * tools/image/mkext2.sh hands the directory to mke2fs and the lines to
- * debugfs, which sets the owners and the set-id bits a build that is not
- * root cannot put on a host file. Every node gets the fixed staged instant
- * as its times, one second after the epoch, so that one manifest makes one
+ * The directory of the tree mode, `stageimage.krffs MANIFEST --tree DIR`, or
+ * NULL when the stager writes an image. In the tree mode each node becomes a
+ * host file or directory under DIR, and a line `node MODE UID GID PATH`, with
+ * the POSIX type bits in MODE, goes to stdout for each. tools/image/mkext2.sh
+ * gives the directory to mke2fs and the lines to debugfs, which sets the
+ * owners and the set-id bits a build that is not root cannot put on a host
+ * file. Every node gets the fixed staged time, so that one manifest makes one
  * image.
  */
 static const char *tree_root;
+/** The lines `tree_note` has printed. */
 static unsigned long tree_nodes;
 
+/** Prints the `node` line of the guest `path` and counts it. */
 static void tree_note(uint16_t mode, uint32_t uid, uint32_t gid, const char *path)
 {
     printf("node 0%o %lu %lu %s\n", (unsigned)mode, (unsigned long)uid, (unsigned long)gid, path);
     tree_nodes++;
 }
 
-/* Make `host_path` and its missing parents. A directory the manifest did
- * not name but a path passes through is a node too, root's and 0755, and is
- * noted so that the image does not keep the builder's identity and umask
- * on it; the last component is noted when `note_last`, which a caller
- * naming the directory itself leaves to its own note. */
+/**
+ * Makes the host directory `host_path` and its missing parents. A directory
+ * made under `tree_root` is a node too, and is noted as root's and 0755, so
+ * that the image does not keep the builder's owner and umask on it; the last
+ * component only when `note_last`, since a caller that names the directory
+ * itself notes it with its own mode. Returns false when the path does not fit
+ * or a `mkdir` fails other than with `EEXIST`.
+ */
 static bool tree_mkdir_p(const char *host_path, bool note_last)
 {
     char buf[1024];
@@ -589,6 +571,11 @@ static bool tree_mkdir_p(const char *host_path, bool note_last)
     return errno == EEXIST;
 }
 
+/**
+ * Makes the directory `path` under `tree_root` and notes it with `mode` and
+ * the owner `uid`:`gid`, also when it was there already. Returns false, with a
+ * message, when it cannot be made.
+ */
 static bool tree_dir(const char *path, uint16_t mode, uint32_t uid, uint32_t gid)
 {
     char host[1024];
@@ -604,6 +591,13 @@ static bool tree_dir(const char *path, uint16_t mode, uint32_t uid, uint32_t gid
     return true;
 }
 
+/**
+ * Writes `data_size` bytes of `data` as the host file of `path` under
+ * `tree_root`, making its directories, and notes it with `mode` and the owner
+ * `uid`:`gid`. A file already there is the same path staged twice, as in an
+ * image; the create with `O_EXCL` and `O_NOFOLLOW` finds that in one step and
+ * follows no link. Returns false, with a message, for that or a failed write.
+ */
 static bool tree_file(const char *path, uint16_t mode, uint32_t uid, uint32_t gid, const char *data,
                       uint64_t data_size)
 {
@@ -625,8 +619,6 @@ static bool tree_file(const char *path, uint16_t mode, uint32_t uid, uint32_t gi
         return false;
     }
     *slash = '/';
-    /* A name already there is the same path staged twice, as in an image;
-       the exclusive create decides that in one step, and follows no link. */
     fd = open(host, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
     if (fd < 0 && errno == EEXIST) {
         fprintf(stderr, "stageimage: '%s' is staged more than once.\n", path);
@@ -645,8 +637,12 @@ static bool tree_file(const char *path, uint16_t mode, uint32_t uid, uint32_t gi
     return true;
 }
 
-/* The fixed instant on every node, directories last, since writing a file
- * moves its directory's time. */
+/**
+ * Sets the access and modification times of `host_path`, and of everything
+ * under it, to the fixed staged time, following no link. A directory is set
+ * after what is in it, since a write in a directory changes its time.
+ * Returns false when a node cannot be read or set.
+ */
 static bool tree_stamp(const char *host_path)
 {
     DIR *d;
@@ -684,6 +680,14 @@ static bool tree_stamp(const char *host_path)
     return ok && utimensat(AT_FDCWD, host_path, times, AT_SYMLINK_NOFOLLOW) == 0;
 }
 
+/**
+ * Stages the directory `path` with `mode` and the owner `uid`:`gid`, making
+ * missing parents as `resolve_dir` does. A directory already at `path` gets
+ * the mode and owner too, so a `dir 0700:1000:1000 /home/test` line counts
+ * whether it comes before or after a line that puts something inside; `/` is
+ * left as it is. Returns false, with a message, for a bad path, a path under
+ * /dev or /proc, a file at `path`, an id that is taken or a full image.
+ */
 static bool stage_dir(struct krffs_file_system *file_system, const char *path, uint16_t mode,
                       uint32_t uid, uint32_t gid)
 {
@@ -745,9 +749,12 @@ static bool stage_dir(struct krffs_file_system *file_system, const char *path, u
 }
 
 /**
- * Stage a file `path` with `mode` and the given payload, creating its parent
- * directories as needed. A path under /dev or /proc is rejected. Returns false
- * on any failure.
+ * Stages the file `path` with `mode`, the owner `uid`:`gid` and `data_size`
+ * bytes of `data`, making missing directories as `resolve_dir` does. Each
+ * image is staged from an empty file system, so a node already at `path`
+ * means the manifest stages the path twice, which is an error. Returns false,
+ * with a message, for that, a bad path, a path under /dev or /proc, or a full
+ * image.
  */
 static bool stage_file(struct krffs_file_system *file_system, const char *path, uint16_t mode,
                        uint32_t uid, uint32_t gid, const char *data, uint64_t data_size)
@@ -783,9 +790,6 @@ static bool stage_file(struct krffs_file_system *file_system, const char *path, 
         return false;
     }
 
-    /* Each image is built fresh, so a name that already exists means the
-     * manifest stages the same path twice; that is an authoring error, not an
-     * update. */
     if (find_child(file_system, dir_id, name) != NULL) {
         fprintf(stderr, "stageimage: '%s' is staged more than once.\n", path);
 
@@ -796,9 +800,9 @@ static bool stage_file(struct krffs_file_system *file_system, const char *path, 
 }
 
 /**
- * Parse a mode field: octal permissions with an optional owner, `0755` or
- * `0700:1000:1000`. The owner defaults to root (0:0), so every existing
- * manifest reads unchanged. Returns false on a malformed token.
+ * Reads a mode field, octal permission bits up to 07777 with an optional
+ * decimal owner, `0755` or `0700:1000:1000`, into `*out`, `*uid` and `*gid`;
+ * the owner is 0:0 when none is given. Returns false for a malformed field.
  */
 static bool parse_mode(const char *s, uint16_t *out, uint32_t *uid, uint32_t *gid)
 {
@@ -835,10 +839,10 @@ static bool parse_mode(const char *s, uint16_t *out, uint32_t *uid, uint32_t *gi
 }
 
 /**
- * Unescape a manifest `text` payload in place, honoring \n, \t, and \\.
- *
- * Returns the new length. The manifest is line-oriented, so a multi-line file
- * (an /etc/hosts, a grub.cfg) is written on one `text` line with \n escapes.
+ * Replaces the escapes \n, \t and \\ of a `text` payload in place, keeps any
+ * other backslash as it is, and returns the new length. A `text` directive
+ * is one line of the manifest, so a file of several lines, such as
+ * /etc/hosts, is written with \n.
  */
 static size_t unescape_text(char *s)
 {
@@ -873,24 +877,29 @@ static size_t unescape_text(char *s)
     return (size_t)(w - s);
 }
 
-/** Order two directory entries by name, for the `qsort` in both stagers. */
+/**
+ * Orders two directory entries by name, for the `qsort` of `stage_exec_dir`
+ * and `stage_tree`.
+ */
 static int compare_names(const void *a, const void *b)
 {
     return strcmp(*(const char *const *)a, *(const char *const *)b);
 }
 
 /**
- * Stage every regular, executable file directly inside host directory `hostdir`
- * into guest directory `guestdir` with `mode`.
+ * Stages each regular file with an execute bit directly in the host
+ * directory `hostdir` into the guest directory `guestdir`, with `mode` and the
+ * owner `uid`:`gid`, so that a manifest stages a built set, such as the
+ * programs in build/utils, without naming each.
  *
- * This stages a whole built set (the test probes in build/tests, the utils
- * in build/utils) without naming each. It is NOT recursive and skips
- * anything that is not a regular executable (via `lstat`, so a symlink is
- * left out too), which is why the GCC-written `.d` dependency files beside
- * the binaries are not staged. The names are read first and staged in sorted
- * order, so one host directory always produces one image: `readdir` order is
- * the file system's, and on APFS it is a hash of the name. Returns false on
- * a host or staging error.
+ * The walk does not descend. A name that begins with `.` is skipped, and so
+ * is anything that `lstat` shows is not a regular file with an execute bit,
+ * such as a symbolic link or a `.d` file the compiler writes beside the
+ * programs.
+ * The names are sorted before they are staged, since `readdir` order is the
+ * host file system's, a hash of the name on APFS, and one host directory must
+ * make one image. The directory is recorded with `record_exec_dir`. Returns
+ * false, with a message, on a host error or a staging error.
  */
 static bool stage_exec_dir(struct krffs_file_system *file_system, const char *guestdir,
                            const char *hostdir, uint16_t mode, uint32_t uid, uint32_t gid)
@@ -910,10 +919,6 @@ static bool stage_exec_dir(struct krffs_file_system *file_system, const char *gu
         return false;
     }
 
-    /* The names are read first and sorted, the way `stage_tree` already does
-       it: readdir order is the host file system's, it differs between machines
-       and between two builds on one machine, and an image built twice from one
-       tree should be one image. */
     errno = 0;
     while ((e = readdir(d)) != NULL) {
         char **grown;
@@ -935,8 +940,7 @@ static bool stage_exec_dir(struct krffs_file_system *file_system, const char *gu
         count++;
         errno = 0;
     }
-    /* readdir returns NULL for the end AND for an error, so a directory read
-       part way would otherwise be staged as if it were whole. */
+    /* readdir returns NULL both at the end and on an error. */
     if (errno != 0) {
         fprintf(stderr, "stageimage: cannot read host dir '%s'.\n", hostdir);
         ok = false;
@@ -960,8 +964,6 @@ static bool stage_exec_dir(struct krffs_file_system *file_system, const char *gu
             ok = false;
             break;
         }
-        /* lstat, not stat, so a symlink is left out: only a real regular file
-         * with an execute bit (the built binaries are 0755) is staged. */
         if (lstat(hostpath, &st) != 0 || !S_ISREG(st.st_mode) ||
             !(st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))) {
             continue;
@@ -998,14 +1000,13 @@ static bool stage_exec_dir(struct krffs_file_system *file_system, const char *gu
 }
 
 /**
- * Make `path` a directory if it is not one already, leaving an existing one
- * exactly as it is. Returns false on a hard error.
- *
- * `stage_dir` re-applies mode and owner to a directory it finds, which is what
- * a `dir` line should do: the manifest said what that directory is. A `tree`
- * must not: it walks INTO directories that other lines declared, and a tree
- * owned by uid 1000 staged under a root-owned 0700 directory would otherwise
- * hand that directory away.
+ * Makes the directory `path` with `stage_dir` when nothing is there, and
+ * leaves a directory already there as it is. `stage_dir` sets the mode and
+ * owner of a directory it finds, as a `dir` line asks; a `tree` walks into
+ * directories other lines made, and a tree owned by uid 1000 under a
+ * root-owned 0700 directory would otherwise give that directory away.
+ * Returns false, with a message, when a file is at `path` or `stage_dir`
+ * fails.
  */
 static bool stage_dir_if_absent(struct krffs_file_system *file_system, const char *path,
                                 uint16_t mode, uint32_t uid, uint32_t gid)
@@ -1033,7 +1034,7 @@ static bool stage_dir_if_absent(struct krffs_file_system *file_system, const cha
                 return false;
             }
 
-            return true; /* somebody else declared it; it is theirs */
+            return true;
         }
 
         return stage_dir(file_system, path, mode, uid, gid);
@@ -1056,36 +1057,35 @@ static bool stage_dir_if_absent(struct krffs_file_system *file_system, const cha
             return false;
         }
 
-        return true; /* somebody else declared it; it is theirs */
+        return true;
     }
 
     return stage_dir(file_system, path, mode, uid, gid);
 }
 
 /**
- * Stage every regular file under `hostdir` into `guestdir`, recursively.
+ * Stages each regular file under the host directory `hostdir` into the guest
+ * directory `guestdir`, with `mode` and the owner `uid`:`gid`, descending into
+ * each directory. It is for a tree of sources, such as the musl headers,
+ * which a manifest could not name one by one; `exec-dir` stages the programs
+ * of one directory. The rules are fixed:
  *
- * `exec-dir` above stages the executables of ONE host directory and is what a
- * tree of build products wants. This is for a tree of SOURCE: the ported musl
- * ships 218 headers across eight directories, and a manifest naming each of
- * them would be regenerated by hand every time the library moved.
+ *   * `mode` is the mode of each file. A directory the walk makes gets 0755
+ *     and the same owner, since a directory needs its execute bit to be
+ *     searched and a header does not; a directory already there is left as
+ *     it is (`stage_dir_if_absent`).
+ *   * Only regular files and directories are staged. Anything else under
+ *     `hostdir`, a symbolic link, a device or a socket, is an error: KRFFS
+ *     has no symbolic links, and dropping one would make the image differ
+ *     from the tree without a word.
+ *   * An empty file is staged as an empty file.
+ *   * A name that begins with `.` is skipped, as in `exec-dir`.
+ *   * The names are sorted, so one host tree makes one image.
+ *   * `hostdir` must be a directory and not a link to one, which would walk
+ *     a tree the manifest did not name.
  *
- * The semantics are fixed, not inferred, because a stager that guesses
- * produces an image nobody can reason about:
- *
- *   * `mode` is the mode of every FILE. Directories this walk creates get 0755
- *     with the same owner, since a directory needs its execute bit to be walked
- *     and a header does not.
- *   * Only regular files are staged. A symlink, device or socket under the host
- *     directory is an ERROR and not a skip: KRFFS has no symlinks, and quietly
- *     dropping one would make the image differ from the tree it was staged from
- *     without saying so.
- *   * A zero-byte file is staged as a zero-byte file. musl ships five, and an
- *     image missing them is one whose `#include` fails for no visible reason.
- *   * The walk is sorted, so one host tree always produces one image.
- *   * A dotfile is skipped, as `exec-dir` skips them.
- *
- * Returns false on any error.
+ * Every directory walked is recorded with `record_input`. Returns false,
+ * with a message, on any error.
  */
 static bool stage_tree(struct krffs_file_system *file_system, const char *guestdir,
                        const char *hostdir, uint16_t mode, uint32_t uid, uint32_t gid)
@@ -1106,9 +1106,6 @@ static bool stage_tree(struct krffs_file_system *file_system, const char *guestd
         return false;
     }
 
-    /* The host directory itself must be a directory and not a link to one:
-       everything below is checked with lstat, and a symlinked root would walk
-       a tree the manifest did not name. */
     if (lstat(hostdir, &root_st) != 0 || !S_ISDIR(root_st.st_mode)) {
         fprintf(stderr,
                 "stageimage: '%s' is not a directory; 'tree' takes "
@@ -1119,8 +1116,6 @@ static bool stage_tree(struct krffs_file_system *file_system, const char *guestd
         return false;
     }
 
-    /* Read the names first, then sort them: readdir order is the file system's
-       and differs between machines, and an image should not. */
     errno = 0;
     while ((e = readdir(d)) != NULL) {
         char **grown;
@@ -1142,9 +1137,7 @@ static bool stage_tree(struct krffs_file_system *file_system, const char *guestd
         count++;
         errno = 0;
     }
-    /* readdir returns NULL for the end AND for an error, and telling them apart
-       is the difference between a complete tree and a prefix of one published
-       as if it were complete. */
+    /* readdir returns NULL both at the end and on an error. */
     if (errno != 0) {
         fprintf(stderr, "stageimage: cannot read host dir '%s'.\n", hostdir);
         ok = false;
@@ -1220,18 +1213,27 @@ static bool stage_tree(struct krffs_file_system *file_system, const char *guestd
 }
 
 /**
- * Apply one manifest line. Returns false on a hard error (a syntax error or a
- * staging failure), true on success or a skipped `optional-file`.
+ * Applies one manifest line, whose fields are split at blanks. A blank line
+ * and a line whose first field begins with `#` are skipped. MODE is octal
+ * permission bits with an optional owner, `0755` or `0700:1000:1000`, root
+ * when none is given, and PATH is an absolute guest path:
  *
- * Directives (the leading token), with MODE an octal permission set carrying
- * an optional owner (`0755` or `0700:1000:1000`, root-owned by default) and
- * absolute guest paths:
- *   dir   MODE PATH               a directory
- *   file  MODE PATH HOSTPATH      a file copied from the host
- *   optional-file MODE PATH HOST  like file, but skipped if HOST is absent
- *   text  MODE PATH TEXT          a file with inline text (\n, \t, \\ honored)
- *   exec-dir MODE GUESTDIR HOST   every executable file in HOST, into GUESTDIR
- *   tree     MODE GUESTDIR HOST   every regular file under HOST, recursively
+ *     dir           MODE PATH           a directory
+ *     file          MODE PATH HOSTPATH  a file copied from the host
+ *     optional-file MODE PATH HOSTPATH  the same, skipped when HOSTPATH
+ *                                       does not exist
+ *     text          MODE PATH TEXT      a file of the rest of the line, with
+ *                                       \n, \t and \\ replaced
+ *     exec-dir      MODE PATH HOSTDIR   the programs directly in HOSTDIR
+ *     tree          MODE PATH HOSTDIR   the regular files under HOSTDIR
+ *
+ * A host path goes through `host_path`. `optional-file` skips only a host
+ * file that does not exist; one that exists and cannot be read is an error,
+ * as for `file`. A `tree` line with a set-user-ID or set-group-ID mode is an
+ * error, since the mode would give privilege to whatever is in the host tree.
+ *
+ * Returns true, or false, with a message, for a malformed line, an unknown
+ * directive or a staging error.
  */
 static bool apply_line(struct krffs_file_system *file_system, char *line)
 {
@@ -1284,11 +1286,6 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
             return false;
         }
         hostpath = host_path(hostpath);
-        /* optional-file skips ONLY a genuinely absent host file. A file that
-           exists but cannot be read (a permission error, a short read) is a
-           real error for both directives, never a silent skip. The absence
-           is recorded before the skip: the input inventory must name the
-           path so its later appearance restages the image. */
         record_input(hostpath);
         if (access(hostpath, F_OK) != 0) {
             if (strcmp(verb, "optional-file") == 0) {
@@ -1320,9 +1317,6 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
             return false;
         }
         hostdir = host_path(hostdir);
-        /* A set-id mode is refused for `exec-dir`'s reason doubled: the set of
-           paths it would privilege is a property of what happens to be in the
-           host tree, and a tree is deeper than one directory. */
         if (mode & 06000) {
             fprintf(stderr,
                     "stageimage: 'tree' stages mode %04o into %s; a "
@@ -1354,17 +1348,24 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
 }
 
 /**
- * Build a KRFFS image from a manifest.
+ * stageimage.krffs MANIFEST IMAGE [--offset BYTES --size BYTES], or
+ * stageimage.krffs MANIFEST --tree DIRECTORY: stages each line of MANIFEST
+ * with `apply_line`, into the KRFFS region of IMAGE, which `mkfs.krffs` has
+ * made, or into DIRECTORY, which must not exist yet, so that nothing an
+ * earlier run left can end up in an image.
  *
- * Reads the line-oriented manifest and stages each entry directly into an
- * already-`mkfs`'d image as v2 nodes (the krffs FUSE mount cannot mkdir, so the
- * whole tree, directories and files alike, is written here). Staging is
- * find-or-create, so a re-run completes a partial image. On a full image the
- * failing node is reported and the build fails; the caller raises the size.
+ * The image is written without mounting it, directories and files alike.
+ * Its root gets the owner 0:0 and the fixed staged time in place of the
+ * builder's and the time of `mkfs.krffs`, so that an image built twice from
+ * one tree is one image, whoever builds it. Only directories are found or
+ * made: a file whose path is already in the image fails as staged more than
+ * once, so a run over a partly staged image stops at the first file it
+ * staged before. A manifest line longer than 2046 bytes, or a full image,
+ * fails with a message. Host paths are read from the current directory, so
+ * the build runs the stager from the top of the tree. At the end one line on
+ * stdout gives the bytes used and free, or the nodes of the tree.
  *
- * Usage: `stageimage.krffs <manifest> <image>`. Host paths in the manifest are
- * resolved against the current directory, so the build runs it from the repo
- * root where `build/...` resolves.
+ * Returns `EXIT_SUCCESS` or `EXIT_FAILURE`.
  */
 int main(int argc, char **argv)
 {
@@ -1377,8 +1378,6 @@ int main(int argc, char **argv)
     uint64_t free_after;
 
     if (argc == 4 && strcmp(argv[2], "--tree") == 0 && argv[1][0] != '-') {
-        /* A fresh directory, so that nothing a previous run left can end up
-           in an image; mke2fs takes whatever is there. */
         if (mkdir(argv[3], 0755) != 0) {
             fprintf(stderr, "stageimage: cannot make '%s' (it must not exist): %s.\n", argv[3],
                     strerror(errno));
@@ -1446,15 +1445,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /* mkfs stamps the root node with the building host's ids and the building
-       host's CLOCK (the course tool's contract). A kernel-bound image boots
-       multi-user, so its root directory belongs to root whoever built it; and
-       its times are the fixed staged instant for the same reason every staged
-       node's are, which is that an image built twice from one tree must be
-       one image. Without this the root node alone carried the moment of the
-       build, and two clean builds of the same commit differed in those
-       twenty-four bytes. The value is the same instant every staged node gets
-       (see stage_file). */
     {
         struct krffs_node_time staged_time = {1, 0};
 
@@ -1479,9 +1469,6 @@ stage:
     while (fgets(line, sizeof(line), manifest) != NULL) {
         size_t n = strlen(line);
 
-        /* A line that exactly fills the buffer with no newline was truncated by
-           fgets; staging its prefix and reading the rest as a bogus directive
-           would both be wrong, so reject it. */
         if (n == sizeof(line) - 1 && line[n - 1] != '\n') {
             fprintf(stderr, "stageimage: manifest line too long (over %d bytes).\n",
                     (int)sizeof(line) - 2);
@@ -1499,7 +1486,6 @@ stage:
         }
     }
 
-    /* An end that was not the end of the file is a read that failed. */
     if (exit_status == EXIT_SUCCESS && ferror(manifest)) {
         fprintf(stderr, "stageimage: cannot read manifest '%s'.\n", argv[1]);
         exit_status = EXIT_FAILURE;
