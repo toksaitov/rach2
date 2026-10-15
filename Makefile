@@ -569,6 +569,15 @@ mancheck: $(MANCHECK) $(BUSYBOX_STAMP)
 	$(MANCHECK) man rach2/sys/arch/x86_64/sysnr.h rach2/sys/arch/x86_64/systab.c $(BUSYBOX_STAGE)/applet_tables-main.h \
 	    utils/programs.mk krffs/manifests/rach2-recovery.manifest krffs/manifests/os-simple.manifest \
 	    krffs/manifests/os-real.manifest krffs/manifests/rach2-metal-disk.manifest
+# `make syscalls` writes rach2/syscalls.md, the calls both tables register
+# with their numbers and pages, or the file SYSCALLS_MD names.
+SYSCALLS_MD = rach2/syscalls.md
+.PHONY: syscalls
+syscalls: $(MANCHECK)
+	$(MANCHECK) --calls man rach2/sys/arch/i686/sysnr.h rach2/sys/arch/i686/systab.c \
+	    rach2/sys/arch/x86_64/sysnr.h rach2/sys/arch/x86_64/systab.c >$(SYSCALLS_MD).tmp \
+	    || { rm -f $(SYSCALLS_MD).tmp; exit 1; }
+	mv $(SYSCALLS_MD).tmp $(SYSCALLS_MD)
 
 test-image: $(TEST_IMAGE)
 os-simple-image: $(OS_SIMPLE_IMAGE)

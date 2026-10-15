@@ -37,7 +37,8 @@
 #      the compile-commands generator)
 #  13. the dev-log index (prosecheck devlog): it names every finished
 #      milestone, and names the newest last
-#  14. the test registry against the run- targets in tests/system/suites.mk
+#  14. the test registry against the run- targets in tests/system/suites.mk,
+#      and rach2/syscalls.md against what `make syscalls` writes
 #  16. the suites' waits and criteria (tools/verify/suitecheck.sh): no sleep
 #      for a number of seconds, no wait= step, no upper bound on a duration
 #      in a probe, except an interval marked with a reason the file
@@ -612,6 +613,18 @@ if [ "$regfail" -eq 0 ]; then
     echo "  PASS ($(wc -l < "$VDIR/_reg.txt" | tr -d ' ') suites, each with its target)"
 else
     fail=1
+fi
+# The generated list of the system calls: rach2/syscalls.md is what
+# `make syscalls` writes from the two kernels' tables.
+if ! make -s -C "$REPO" syscalls SYSCALLS_MD="$VDIR/_syscalls.md" >"$VDIR/verify_syscalls.log" 2>&1; then
+    echo "  FAIL: \`make syscalls\` failed; see $VDIR/verify_syscalls.log"
+    fail=1
+elif ! cmp -s "$VDIR/_syscalls.md" "$REPO/rach2/syscalls.md"; then
+    echo "  FAIL: rach2/syscalls.md is not what \`make syscalls\` writes; run it to regenerate the file"
+    diff "$REPO/rach2/syscalls.md" "$VDIR/_syscalls.md" | head -5 | sed 's/^/    /'
+    fail=1
+else
+    echo "  PASS (rach2/syscalls.md, $(grep -c '^| `' "$VDIR/_syscalls.md") calls)"
 fi
 
 # 15. every product a `run-` target names is built by `prepare-all`, so that a

@@ -25,6 +25,15 @@
  *
  * Exit status: 0 when every name has a page, 1 otherwise, 2 for a file that
  * cannot be read.
+ *
+ *   mancheck --calls MANDIR I686_SYSNR_H I686_SYSTAB_C X86_64_SYSNR_H
+ *            X86_64_SYSTAB_C
+ *
+ * reads no manifest and runs no lint, and prints the Markdown of
+ * `rach2/syscalls.md`: the calls the two tables register, one row a call in
+ * name order, with its number in each table and a link to its page relative
+ * to a directory beside MANDIR. It prints nothing and exits 1 when a call has
+ * no page or no number, and exits 2 for a wrong number of arguments.
  */
 #include <ctype.h>
 #include <dirent.h>
@@ -41,6 +50,7 @@ struct name {
     char section[4]; /* the section a page or alias is in */
     char target[NAME_MAX_LEN];
     const char *from; /* where the inventory got it */
+    long number;      /* a call's number, -1 for none */
 };
 
 static struct name pages[NAMES], aliases[NAMES], wanted[NAMES];
@@ -75,29 +85,37 @@ static int add(struct name *list, int *n, const char *text, const char *section,
     strcpy(list[*n].section, section);
     strcpy(list[*n].target, target ? target : "");
     list[*n].from = from;
+    list[*n].number = -1;
     (*n)++;
     return 1;
 }
 
-static int has_page(const char *text, const char *section)
+/* The page a name is read on: its own, or the one its alias names; NULL for
+   none. */
+static const char *page_of(const char *text, const char *section)
 {
     int i;
 
     for (i = 0; i < npages; i++) {
         if (strcmp(pages[i].text, text) == 0 && strcmp(pages[i].section, section) == 0) {
-            return 1;
+            return pages[i].text;
         }
     }
     for (i = 0; i < naliases; i++) {
         if (strcmp(aliases[i].text, text) == 0 && strcmp(aliases[i].section, section) == 0) {
-            return 1;
+            return aliases[i].target;
         }
     }
-    return 0;
+    return NULL;
 }
 
-/* The pages: man/manN/NAME.N, and a lint of each. */
-static void read_pages(const char *mandir)
+static int has_page(const char *text, const char *section)
+{
+    return page_of(text, section) != NULL;
+}
+
+/* The pages: man/manN/NAME.N, and a lint of each when `lint` is set. */
+static void read_pages(const char *mandir, int lint)
 {
     const char *sections = "12345678";
     const char *s;
@@ -125,6 +143,9 @@ static void read_pages(const char *mandir)
             memcpy(name, e->d_name, len - 2);
             name[len - 2] = '\0';
             add(pages, &npages, name, section, NULL, "page");
+            if (!lint) {
+                continue;
+            }
             snprintf(cmd, sizeof(cmd), "mandoc -T lint -W warning '%s/%s' >/dev/null 2>&1", dir,
                      e->d_name);
             if (system(cmd) != 0) {
@@ -319,22 +340,46 @@ static void read_applets(const char *path)
     fclose(f);
 }
 
-/* The calls the kernel registers, lowercased, and the socket operations,
-   read from one source file. */
-static void read_syscalls_from(const char *header, const char *source)
+/* The number `#define MACRO NUMBER` gives in a header, or -1 for none. */
+static long header_number(const char *header, const char *macro)
+{
+    FILE *f = fopen(header, "r");
+    char line[512];
+    long number = -1;
+
+    if (!f) {
+        return -1;
+    }
+    while (number < 0 && fgets(line, sizeof(line), f)) {
+        char name[NAME_MAX_LEN];
+        long value;
+
+        if (sscanf(line, "#define %63s %ld", name, &value) == 2 && strcmp(name, macro) == 0) {
+            number = value;
+        }
+    }
+    fclose(f);
+    return number;
+}
+
+/* The calls a table registers, lowercased and numbered by the header, and
+   the socket operations with their numbers, read from one source file into
+   `list`. A registered call the header gives no number for is a failure. */
+static void read_syscalls_from(const char *header, const char *source, struct name *list, int *n)
 {
     FILE *f = fopen(source, "r");
     char line[512];
 
-    (void)header; /* the numbers are the header's; the names suffice here */
     if (!f) {
         fail("%s: cannot read", source, "");
         return;
     }
     while (fgets(line, sizeof(line), f)) {
         char *p, *q;
-        char name[NAME_MAX_LEN];
+        char name[NAME_MAX_LEN], macro[NAME_MAX_LEN + 4];
         size_t i, len;
+        long number = -1;
+        int before = *n;
 
         p = strstr(line, "table[SYS_");
         if (p) {
@@ -357,7 +402,7 @@ static void read_syscalls_from(const char *header, const char *source)
             if ((strchr(p, '(') != NULL && strchr(p, '(') < q) || !isdigit((unsigned char)*r)) {
                 continue;
             }
-            (void)strtoul(r, (char **)&r, 0);
+            number = (long)strtoul(r, (char **)&r, 0);
             if (!isspace((unsigned char)*r)) {
                 continue; /* a constant with a suffix, such as SC_ID_KEEP */
             }
@@ -371,15 +416,28 @@ static void read_syscalls_from(const char *header, const char *source)
             name[i] = (char)tolower((unsigned char)p[i]);
         }
         name[len] = '\0';
-        add(wanted, &nwanted, name, "2", NULL, source);
+        if (number < 0) {
+            memcpy(macro, "SYS_", 4);
+            memcpy(macro + 4, p, len);
+            macro[len + 4] = '\0';
+            number = header_number(header, macro);
+            if (number < 0) {
+                fail("%s: no number for %s", header, macro);
+            }
+        }
+        add(list, n, name, "2", NULL, source);
+        if (*n > before) {
+            list[*n - 1].number = number;
+        }
     }
     fclose(f);
 }
 
 /* `sources` names the files the tables and the operations are in, joined
    by colons: an architecture's systab.c registers the calls and
-   syscall_net.c defines the socket operations. */
-static void read_syscalls(const char *header, const char *sources)
+   syscall_net.c defines the socket operations. `header` is the
+   architecture's sysnr.h, and the names go into `list`. */
+static void read_syscalls(const char *header, const char *sources, struct name *list, int *n)
 {
     /* The name each call is recorded as coming from outlives this call: a
        diagnostic prints it when a registered call has no page. So the paths
@@ -391,9 +449,9 @@ static void read_syscalls(const char *header, const char *sources)
 
     while (*p != '\0') {
         const char *q = strchr(p, ':');
-        size_t n = q ? (size_t)(q - p) : strlen(p);
+        size_t len = q ? (size_t)(q - p) : strlen(p);
 
-        if (n >= sizeof(paths[0])) {
+        if (len >= sizeof(paths[0])) {
             fail("%s: a source path is longer than this reads", sources, "");
             return;
         }
@@ -401,11 +459,11 @@ static void read_syscalls(const char *header, const char *sources)
             fail("%s: more source paths than this reads", sources, "");
             return;
         }
-        memcpy(paths[npaths], p, n);
-        paths[npaths][n] = '\0';
-        read_syscalls_from(header, paths[npaths]);
+        memcpy(paths[npaths], p, len);
+        paths[npaths][len] = '\0';
+        read_syscalls_from(header, paths[npaths], list, n);
         npaths++;
-        p = q ? q + 1 : p + n;
+        p = q ? q + 1 : p + len;
     }
 }
 
@@ -459,17 +517,115 @@ static void check_recovery(const char *listpath, const char *manifest)
     fclose(f);
 }
 
+static struct name calls32[NAMES], calls64[NAMES]; /* the i686 and x86-64 tables */
+static int ncalls32, ncalls64;
+
+static long number_in(const struct name *list, int n, const char *text)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        if (strcmp(list[i].text, text) == 0) {
+            return list[i].number;
+        }
+    }
+    return -1;
+}
+
+static int by_text(const void *a, const void *b)
+{
+    return strcmp(((const struct name *)a)->text, ((const struct name *)b)->text);
+}
+
+/* A table cell of a call's number, `none` for a table without the call. */
+static void print_number(long number)
+{
+    if (number < 0) {
+        printf(" none |");
+    } else {
+        printf(" %ld |", number);
+    }
+}
+
+/* `--calls`: the Markdown table of the calls both tables register, one row a
+   name, written to stdout only when every call has a number and a page. */
+static int print_calls(int argc, char **argv)
+{
+    char path[512];
+    int i;
+
+    if (argc != 7) {
+        fprintf(stderr, "usage: mancheck --calls MANDIR I686_SYSNR_H I686_SYSTAB_C "
+                        "X86_64_SYSNR_H X86_64_SYSTAB_C\n");
+        return 2;
+    }
+    read_pages(argv[2], 0);
+    snprintf(path, sizeof(path), "%s/aliases", argv[2]);
+    read_aliases(path);
+    read_syscalls(argv[3], argv[4], calls32, &ncalls32);
+    read_syscalls(argv[5], argv[6], calls64, &ncalls64);
+    if (ncalls32 == 0 || ncalls64 == 0) {
+        fail("%s or %s: no registered call was read", argv[4], argv[6]);
+    }
+    for (i = 0; i < ncalls32; i++) {
+        add(wanted, &nwanted, calls32[i].text, "2", NULL, calls32[i].from);
+    }
+    for (i = 0; i < ncalls64; i++) {
+        add(wanted, &nwanted, calls64[i].text, "2", NULL, calls64[i].from);
+    }
+    qsort(wanted, (size_t)nwanted, sizeof(wanted[0]), by_text);
+    for (i = 0; i < nwanted; i++) {
+        if (!has_page(wanted[i].text, "2")) {
+            fail("%s has no page in section 2 (registered in %s)", wanted[i].text, wanted[i].from);
+        }
+    }
+    if (failures) {
+        fprintf(stderr, "mancheck: %d faults, and no table written\n", failures);
+        return 1;
+    }
+    printf("# The system calls\n\n"
+           "This table lists the calls the two kernels register, one row a call, in name "
+           "order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in "
+           "lower case. A number is the one a program puts in `eax` before `int 0x80` on "
+           "i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the "
+           "call on that architecture. `none` marks a call one kernel "
+           "does not register, and a number with no handler returns `ENOSYS`. The i686 "
+           "kernel registers %d calls and the x86-64 kernel %d. On i686 the socket "
+           "operations, `accept` among them, are also reached through `socketcall`, whose "
+           "page lists them. [syscalls(2)](../%s/man2/syscalls.2) gives the registers that "
+           "hold the arguments, and each call's page says where the call differs from "
+           "Linux.\n\n",
+           ncalls32, ncalls64, argv[2]);
+    printf("`make syscalls` writes this file from `%s` and `%s`, with the numbers in `%s` "
+           "and `%s`, and `tests/run style` fails when the file differs from what it "
+           "writes.\n\n",
+           argv[4], argv[6], argv[3], argv[5]);
+    printf("| Call | i386 | x86-64 | Page |\n|---|--:|--:|---|\n");
+    for (i = 0; i < nwanted; i++) {
+        const char *page = page_of(wanted[i].text, "2");
+
+        printf("| `%s` |", wanted[i].text);
+        print_number(number_in(calls32, ncalls32, wanted[i].text));
+        print_number(number_in(calls64, ncalls64, wanted[i].text));
+        printf(" [%s(2)](../%s/man2/%s.2) |\n", page, argv[2], page);
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     char path[512];
     int i, programs = 0, calls = 0;
 
+    if (argc > 1 && strcmp(argv[1], "--calls") == 0) {
+        return print_calls(argc, argv);
+    }
     if (argc < 8) {
         fprintf(stderr, "usage: mancheck MANDIR SYSNR_H SYSTAB_C[:SYSTAB_C...] APPLETS PROGRAMS_MK "
                         "RECOVERY_MANIFEST MANIFEST...\n");
         return 2;
     }
-    read_pages(argv[1]);
+    read_pages(argv[1], 1);
     snprintf(path, sizeof(path), "%s/aliases", argv[1]);
     read_aliases(path);
     for (i = 0; i < naliases; i++) {
@@ -485,7 +641,7 @@ int main(int argc, char **argv)
             fail("alias %s names no page %s in its section", aliases[i].text, aliases[i].target);
         }
     }
-    read_syscalls(argv[2], argv[3]);
+    read_syscalls(argv[2], argv[3], wanted, &nwanted);
     read_applets(argv[4]);
     read_programs_mk(argv[5]);
     read_manifest(argv[6]);
