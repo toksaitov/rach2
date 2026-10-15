@@ -1,9 +1,6 @@
 /*
- * audio.c - audio subsystem initialization and driver management.
- *
- * A driver is selected by preference at boot: Intel HD Audio (PCI class
- * 0x0403), then Sound Blaster 16 (ISA, probed at 0x220), then the PC
- * speaker as a fallback that cannot play samples.
+ * audio.c: the choice of the audio driver at boot, and the PC speaker's
+ * driver, the fallback that cannot play samples.
  */
 
 #include "audio.h"
@@ -21,56 +18,62 @@ extern void speaker_off(void);
 static bool speaker_playing = false;
 static audio_callback_t speaker_callback = NULL;
 
+/** The speaker needs no setup, so its init always succeeds. */
 static int speaker_init(void)
 {
     return 0;
 }
 
+/** Silence the speaker and clear the playing state. */
 static void speaker_shutdown(void)
 {
     speaker_off();
     speaker_playing = false;
 }
 
+/** Mark the speaker as playing, which it cannot do with samples; the state
+ * is for `is_playing` alone. */
 static int speaker_start(uint32_t sample_rate, audio_format_t format, int channels)
 {
     (void)sample_rate;
     (void)format;
     (void)channels;
-    /* The PC speaker cannot play samples; mark playing only for state. */
     speaker_playing = true;
     return 0;
 }
 
+/** Silence the speaker and clear the playing state. */
 static void speaker_stop(void)
 {
     speaker_off();
     speaker_playing = false;
 }
 
+/** Whether speaker_start was called since the last stop. */
 static bool speaker_is_playing(void)
 {
     return speaker_playing;
 }
 
+/** Record `fn`, which the speaker never calls. */
 static void speaker_set_callback(audio_callback_t fn)
 {
     speaker_callback = fn;
     (void)speaker_callback;
 }
 
+/** Return -1 for any samples: the speaker cannot play them. */
 static int speaker_write(const uint8_t *buffer, size_t size)
 {
     (void)buffer;
     (void)size;
-    /* The PC speaker cannot play arbitrary samples. */
     return -1;
 }
 
+/** Ignore `volume`: the speaker has no volume control. */
 static void speaker_set_volume(int volume)
 {
     (void)volume;
-    /* The PC speaker has no volume control. */
 }
 
 /* The audio_driver_t fields, in the order audio.h declares them: name,
@@ -80,14 +83,6 @@ audio_driver_t speaker_driver = {
     "PC Speaker", AUDIO_DRIVER_SPEAKER, speaker_init,         speaker_shutdown, speaker_start,
     speaker_stop, speaker_is_playing,   speaker_set_callback, speaker_write,    speaker_set_volume};
 
-/**
- * Detect and initialize the best available audio driver.
- *
- * Each candidate is probed in order of preference and the first whose `init`
- * succeeds becomes the active driver: HD Audio, then the platform's own (on a
- * PC, the Sound Blaster 16), then the speaker. `audio` is left NULL and the
- * boot status reads "No audio" if every probe fails.
- */
 void init_audio(void)
 {
     audio = NULL;
@@ -133,12 +128,6 @@ const char *audio_get_boot_status(void)
     return audio_boot_status;
 }
 
-/**
- * Report whether real audio hardware backs the active driver.
- *
- * True only for the SB16 and HD Audio drivers; the PC speaker fallback,
- * which cannot play samples, counts as no real output.
- */
 bool audio_has_real_output(void)
 {
     if (!audio)

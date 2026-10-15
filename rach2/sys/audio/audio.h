@@ -1,13 +1,10 @@
 /*
- * audio.h - common audio driver interface for Rach2.
+ * audio.h: the operations every audio driver provides, and the choice of the
+ * driver at boot.
  *
- * An abstraction layer over three audio backends: Intel HD Audio (HDA, a
- * modern PCI device), Sound Blaster 16 (SB16, classic ISA), and the PC
- * speaker, a beep-only fallback.
- *
- * Detection order at boot: scan PCI for HDA (class 0x0403); else reset
- * SB16 at 0x220 and accept it on a 0xAA response; else fall back to the
- * PC speaker.
+ * There are three backends: Intel HD Audio (HDA, a PCI device of class
+ * 0x0403), the Sound Blaster 16 (SB16, an ISA card whose DSP responds to a
+ * reset with 0xAA) and the PC speaker, which plays no samples.
  */
 
 #ifndef _AUDIO_H_
@@ -31,8 +28,10 @@ typedef enum {
 } audio_driver_type_t;
 
 /*
- * Pull callback: the driver calls it when it needs more samples to play.
- * `buffer` receives `size` bytes of audio samples to fill.
+ * Pull callback: the driver calls it when it needs more samples to play, to
+ * fill `size` bytes at `buffer`. It runs from the driver's interrupt handler
+ * or the timer tick with interrupts off, and from `start` to fill the first
+ * buffers.
  */
 typedef void (*audio_callback_t)(void *buffer, size_t size);
 
@@ -64,8 +63,9 @@ typedef struct audio_driver {
     void (*set_callback)(audio_callback_t fn);
 
     /*
-     * Write samples straight to the audio buffer, an alternative to
-     * callback-driven playback. Returns the byte count written, -1 on error.
+     * Queue samples for playback, an alternative to callback-driven
+     * playback. Returns the bytes queued, fewer than `size` when the queue is
+     * full (the rest is dropped), or -1 when not playing or given no data.
      */
     int (*write)(const uint8_t *buffer, size_t size);
 
@@ -74,7 +74,7 @@ typedef struct audio_driver {
 
 } audio_driver_t;
 
-/* Active audio driver, NULL when no hardware was detected. */
+/* The active audio driver; NULL until init_audio chooses one. */
 extern audio_driver_t *audio;
 
 /* The available drivers, each defined in its own driver file. */
@@ -82,16 +82,24 @@ extern audio_driver_t sb16_driver;
 extern audio_driver_t hda_driver;
 extern audio_driver_t speaker_driver;
 
-/** Detect and initialize the best available audio driver. */
+/**
+ * Choose the audio driver: the first whose `init` succeeds of HD Audio, the
+ * platform's own device (on a PC the Sound Blaster 16) and the PC speaker.
+ * `audio` is left NULL and the boot status reads "No audio" if every probe
+ * fails.
+ */
 void init_audio(void);
 
-/* Name of the active driver, or "None" when none is active. */
+/** Name of the active driver, or "None" when none is active. */
 const char *audio_get_driver_name(void);
 
-/* Short boot-time audio probe summary. */
+/** The boot's summary of the chosen driver, for the log: HDA's with its
+ * codec, the platform device's name, "PC Speaker fallback", or "No audio";
+ * "Not initialized" before init_audio. */
 const char *audio_get_boot_status(void);
 
-/** Report whether real audio (not the PC speaker) is available. */
+/** Whether the active driver plays samples: true for the SB16 and HD Audio
+ * drivers, false for the PC speaker and for none. */
 bool audio_has_real_output(void);
 
 #endif /* _AUDIO_H_ */

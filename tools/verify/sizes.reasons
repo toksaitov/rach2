@@ -55,15 +55,15 @@ rach2/sys/audio/audio_debug.c:audio_debug_handle_command lines 132 a dispatcher,
 rach2/sys/audio/audio_debug.c:audio_run_write_test lines 110 a test routine, one stage after another, read from the top
 rach2/sys/audio/audio_debug.c:audio_run_write_test nesting 5 a test routine, one stage after another, read from the top
 
-rach2/sys/audio/hda.c:hda_debug_dump lines 152 a hardware sequence, the registers written in the order the datasheet requires
+rach2/sys/audio/hda.c:hda_debug_dump lines 151 a hardware sequence, the registers written in the order the datasheet requires
 rach2/sys/audio/hda.c:hda_debug_dump_codec nesting 5 a hardware sequence, the registers written in the order the datasheet requires
 rach2/sys/audio/hda.c:hda_find_output complexity 63 a hardware sequence, the registers written in the order the datasheet requires
-rach2/sys/audio/hda.c:hda_find_output lines 330 a hardware sequence, the registers written in the order the datasheet requires
+rach2/sys/audio/hda.c:hda_find_output lines 309 a hardware sequence, the registers written in the order the datasheet requires
 rach2/sys/audio/hda.c:hda_find_output nesting 6 a hardware sequence, the registers written in the order the datasheet requires
-rach2/sys/audio/hda.c:hda_init lines 142 a hardware sequence, the registers written in the order the datasheet requires
+rach2/sys/audio/hda.c:hda_init lines 130 a hardware sequence, the registers written in the order the datasheet requires
 rach2/sys/audio/hda.c:hda_start complexity 78 a hardware sequence, the registers written in the order the datasheet requires
-rach2/sys/audio/hda.c:hda_start lines 446 a hardware sequence, the registers written in the order the datasheet requires
-rach2/sys/audio/hda.c:ring_render_to_hw_buffer lines 106 a hardware sequence, the registers written in the order the datasheet requires
+rach2/sys/audio/hda.c:hda_start lines 326 a hardware sequence, the registers written in the order the datasheet requires
+rach2/sys/audio/hda.c:ring_render_to_hw_buffer lines 103 a hardware sequence, the registers written in the order the datasheet requires
 
 rach2/sys/block/ahci.c:ahci_build_command params 7 the parameters are the fields of one command; a struct for them would be filled and unpacked once
 rach2/sys/block/ahci.c:ahci_run_command params 7 the parameters are the fields of one command; a struct for them would be filled and unpacked once

@@ -59,7 +59,7 @@
 #define DMA_PAGE_CH1 0x83
 #define DMA_PAGE_CH2 0x81
 #define DMA_PAGE_CH3 0x82
-#define DMA_PAGE_CH4 0x8F /* Unused - cascade */
+#define DMA_PAGE_CH4 0x8F /* unused: the cascade */
 #define DMA_PAGE_CH5 0x8B
 #define DMA_PAGE_CH6 0x89
 #define DMA_PAGE_CH7 0x8A
@@ -122,22 +122,11 @@ static uint16_t dma_get_count_port(uint8_t channel)
 }
 
 /**
- * Program the 8237A for a single transfer on `channel` and unmask it.
- *
- * `buffer` is a physical address and `length` a byte count; both must satisfy
- * dma_address_valid for the channel width. Channels 0-3 are the 8-bit
- * controller; channels 5-7 are the 16-bit controller, where the address and
- * count are expressed in words. Channel 4 is the cascade and is rejected.
- *
- * The 8237A loads its 16-bit address and count registers one byte at a time,
- * sequenced by an internal flip-flop that selects low then high byte. The
- * flip-flop is reset before each pair, and the channel is masked across the
- * reprogramming so the controller does not act on a half-written register.
- *
- * `mode` supplies the transfer-type and direction bits of the mode register;
- * this routine OR's in the low two channel-select bits.
- *
- * @return 0 on success, -1 for an invalid channel or address.
+ * On channels 5-7 the address and count registers are in words. The 8237A
+ * loads its 16-bit address and count registers one byte at a time, sequenced
+ * by an internal flip-flop that selects low then high byte. The flip-flop is
+ * reset before each pair, and the channel is masked across the reprogramming
+ * so the controller does not act on a half-written register.
  */
 int dma_start(uint8_t channel, uint32_t buffer, uint32_t length, uint8_t mode)
 {
@@ -201,9 +190,6 @@ int dma_start(uint8_t channel, uint32_t buffer, uint32_t length, uint8_t mode)
     return 0;
 }
 
-/**
- * Stop transfers on `channel` by setting its single-mask bit.
- */
 void dma_stop(uint8_t channel)
 {
     uint16_t mask_port;
@@ -218,15 +204,12 @@ void dma_stop(uint8_t channel)
 }
 
 /**
- * Report whether [address, address+length) is a legal ISA DMA buffer.
- *
- * ISA DMA reaches only the low 16MB. The controller increments the address
+ * ISA DMA reaches only the low 16 MiB. The controller increments the address
  * register but not the page register, so a transfer may not cross a page
- * boundary: 64KB for 8-bit channels, 128KB for 16-bit channels.
- *
- * An empty transfer is not legal: the count register holds one less than the
- * byte or word count, so a length of zero would program a full sweep. A
- * 16-bit channel counts words, so its address and its length are even.
+ * boundary. An empty transfer is not legal: the count register holds one less
+ * than the byte or word count, so a length of zero would program a full
+ * sweep. A 16-bit channel counts words, so its address and its length are
+ * even.
  */
 bool dma_address_valid(uint32_t address, uint32_t length, bool is_16bit)
 {

@@ -189,29 +189,38 @@ typedef struct {
     uint32_t ioc;       /* Interrupt on completion (bit 0) */
 } __attribute__((packed)) hda_bdl_entry_t;
 
-/* Physical: the most entries a buffer descriptor list may have. */
+/* The most entries a buffer descriptor list may have, a hardware limit. */
 #define HDA_BDL_MAX_ENTRIES 256
 
 /* The connection selector has eight bits; list length has seven. */
 #define HDA_MAX_CONNECTIONS     256
 #define HDA_MAX_RAW_CONNECTIONS 127
 
+/* A widget's connection list as the codec gave it and as expanded. */
 typedef struct {
     uint8_t nid;
-    uint8_t long_form;
-    int raw_count;
-    int count;
-    uint16_t raw[HDA_MAX_RAW_CONNECTIONS];
-    uint16_t nodes[HDA_MAX_CONNECTIONS];
+    uint8_t long_form;                     /* 1 when the entries are 16 bits, 0 for 8 */
+    int raw_count;                         /* entries read into `raw` */
+    int count;                             /* nodes in `nodes`; -1 for a malformed list */
+    uint16_t raw[HDA_MAX_RAW_CONNECTIONS]; /* the entries, ranges unexpanded */
+    uint16_t nodes[HDA_MAX_CONNECTIONS];   /* the node IDs, ranges expanded */
 } hda_connection_report_t;
 
+/* A DAC's format capabilities. */
 typedef struct {
     uint8_t nid;
-    uint8_t source;
-    uint32_t pcm;
-    uint32_t formats;
+    uint8_t source;   /* the node read: the DAC under Format Override, else the AFG */
+    uint32_t pcm;     /* its PCM sizes and rates parameter (0x0A) */
+    uint32_t formats; /* its stream formats parameter (0x0B) */
 } hda_caps_report_t;
 
+/*
+ * What enumeration found and the last stream setup, for /proc/audio. The node
+ * IDs are 0 where there is none; the indices are the connections chosen on
+ * the pin, the mixer and the headphone pin. The formats are read back from
+ * the stream descriptor and the two DACs. caps[] is the DAC and the headphone
+ * DAC; connections[] the pin, the mixer and the headphone pin.
+ */
 typedef struct {
     uint32_t vendor;
     uint8_t codec, afg, pin, dac, mixer, hp_pin, hp_dac;
@@ -227,22 +236,48 @@ typedef struct {
 /** Return cached enumeration and the last stream setup; sends no verbs. */
 const hda_report_t *hda_get_report(void);
 
-/** Periodic service hook; call from the timer tick. */
+/** Refill the stream's next period if the engine has moved on. The timer
+ * tick calls this on every tick, with interrupts off, so playback goes on
+ * where the controller's interrupt does not arrive. */
 void hda_tick(void);
 
-/* Debug helpers; safe to call even if HDA is not active. */
+/*
+ * The dumps of the `audio hda` shell command. Each prints on the console (the
+ * screen and the serial port), and says so when the controller is not set up.
+ */
+
+/** Print the controller's PCI configuration, its registers, the codec path
+ * and the output stream's state. */
 void hda_debug_dump(void);
+
+/** Print the DAC, the mixer and every pin widget of the codec, with their
+ * capabilities, configuration and connection lists. */
 void hda_debug_dump_codec(void);
+
+/** Print the output and headphone pins' control, EAPD, jack sense and chosen
+ * connection. */
 void hda_debug_dump_pins(void);
+
+/** Print the stream's DMA position, the playback counters, the underruns and
+ * the session's throughput. */
 void hda_debug_dump_stats(void);
 
-/* Routing override (kernel debug). */
-void hda_set_output_mode(int mode); /* 0=auto 1=primary 2=hp 3=both */
+/**
+ * Set the output routing the next start uses: 0 automatic (the headphone pin
+ * when its jack senses a plug, else the primary pin), 1 the primary pin, 2 the
+ * headphone pin, 3 both. Another value is ignored. Enumeration sets 1 for a
+ * Conexant codec and 0 for the others.
+ */
+void hda_set_output_mode(int mode);
+
+/** The routing mode hda_set_output_mode set. */
 int hda_get_output_mode(void);
 
-/* Short boot-time driver summary. */
+/** The boot's summary: "Intel HD Audio, codec 0x" and the codec's vendor ID,
+ * or "Intel HD Audio" when no codec was found. */
 const char *hda_get_boot_status(void);
 
+/* The output stream descriptor's registers at one moment. */
 typedef struct {
     uint32_t lpib;
     uint32_t cbl;
@@ -251,7 +286,8 @@ typedef struct {
     uint16_t fmt;
 } hda_stream_debug_snapshot_t;
 
-/* Lightweight stream diagnostics for kernel commands. */
+/** Read the output stream's registers into `*out`; false when the controller
+ * is not mapped or `out` is NULL. */
 bool hda_debug_get_stream_snapshot(hda_stream_debug_snapshot_t *out);
 
 #endif /* _HDA_H_ */

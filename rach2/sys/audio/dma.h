@@ -26,13 +26,26 @@
 
 #define DMA_MODE_AUTOINIT 0x10 /* Auto-initialize after transfer */
 
-/** Program a single DMA transfer on a channel; 0 ok, -1 on error. */
+/**
+ * Program the 8237A for a transfer of `length` bytes at physical address
+ * `buffer` on `channel`, and unmask the channel. `mode` is the transfer-type
+ * and direction bits of the mode register (DMA_MODE_*); the channel-select
+ * bits are added here. Channels 0-3 are the 8-bit controller and 5-7 the
+ * 16-bit one; channel 4 is the cascade. Returns 0, or -1 for channel 4, a
+ * channel above 7, or a buffer that fails dma_address_valid (logged).
+ */
 int dma_start(uint8_t channel, uint32_t buffer, uint32_t length, uint8_t mode);
 
-/** Stop transfers on a channel by masking it. */
+/** Stop transfers on `channel` by setting its mask bit; a channel above 7
+ * is ignored. */
 void dma_stop(uint8_t channel);
 
-/** Report whether a buffer is a legal ISA DMA region for the channel width. */
+/**
+ * Whether `length` bytes at physical `address` are a buffer ISA DMA can move
+ * on a channel of the given width: not empty, below 16 MiB, inside one page
+ * (64 KiB for an 8-bit channel, 128 KiB for a 16-bit one), and for a 16-bit
+ * channel at an even address with an even length.
+ */
 bool dma_address_valid(uint32_t address, uint32_t length, bool is_16bit);
 
 #endif /* _DMA_H_ */

@@ -2,8 +2,8 @@
  * audio_debug.c: the shell's `audio` command.
  *
  * Everything here is printed because a person asked for it at the prompt, so
- * it goes through the console calls: the screen and the serial port, and
- * neither the machine's log nor the wire.
+ * it goes through the console calls to the screen and the serial port, and
+ * not to the kernel log.
  */
 
 #include "../arch/arch.h"
@@ -26,6 +26,7 @@ static volatile uint32_t _tone_half_period = 0;
 static volatile int16_t _tone_amp = 8000;
 static volatile int _tone_channels = 2;
 
+/** Whether the strings `a` and `b` are equal. */
 static bool audio_str_equal(const char *a, const char *b)
 {
     while (*a && *b) {
@@ -39,6 +40,7 @@ static bool audio_str_equal(const char *a, const char *b)
     return *a == *b;
 }
 
+/** Whether `str` begins with `prefix`. */
 static bool audio_str_starts_with(const char *str, const char *prefix)
 {
     while (*prefix) {
@@ -166,10 +168,8 @@ static void audio_stop_playback(void)
 }
 
 /**
- * Spin until `kernel_ticks` reaches `target_ticks`, halting between ticks.
- *
- * The `hlt` parks the CPU until the next interrupt (the timer tick advances
- * kernel_ticks), so the wait does not busy-burn the core.
+ * Wait until `kernel_ticks` reaches `target_ticks`, halting the processor
+ * until each next interrupt (idle_wait_irq_on) instead of spinning.
  */
 static void audio_wait_until(uint32_t target_ticks)
 {
@@ -273,14 +273,14 @@ static void audio_run_scale_test(uint32_t duration_ms)
 }
 
 /**
- * Play the same scale through the blocking write path instead of the callback.
+ * Play the same scale through the driver's write path instead of the callback.
  *
  * Uses 11025 Hz unsigned-8 mono and synthesizes samples in this thread,
- * pushing them with audio->write(). Each timer tick it computes how many frames
- * are due (sample_acc keeps the fractional remainder across ticks so the rate
- * stays exact over time) and writes them in <= sizeof(buf) chunks, halting on a
- * short write until the driver drains. Exercises the write side that the
- * callback test bypasses.
+ * pushing them with audio->write(). Each 10 ms timer tick it computes how many
+ * frames are due (sample_acc keeps the fractional remainder across ticks so
+ * the rate stays exact over time) and writes them in <= sizeof(buf) chunks,
+ * halting until the next interrupt while a write takes nothing. Exercises the
+ * write side that the callback test bypasses.
  */
 static void audio_run_write_test(uint32_t duration_ms)
 {
@@ -520,6 +520,7 @@ void audio_debug_print_help(void)
     console_puts("  audio hda out [auto|primary|hp|both]");
 }
 
+/** Print the active driver's name and whether it plays samples. */
 static void audio_print_summary(void)
 {
     console_printf("Audio driver: %s\n", audio_get_driver_name());
@@ -528,15 +529,10 @@ static void audio_print_summary(void)
 }
 
 /**
- * Handle an `audio ...` shell command line.
- *
- * Recognizes a line whose first token is exactly "audio" (so it does not claim
- * "audioctl" or the like), copies it into a local buffer, tokenizes in place,
- * and dispatches the subcommand. A bare "audio" or an unknown form prints the
- * summary or help text.
- *
- * @return true if the line was an audio command (handled here), false if it
- *         belongs to another handler.
+ * The first word must be `audio` and nothing longer, so the command does not
+ * take `audioctl` or the like. The line is copied into a 128-byte buffer and
+ * split there; a bare `audio` prints the summary, and an unknown form the
+ * help.
  */
 bool audio_debug_handle_command(const char *cmd)
 {

@@ -1,4 +1,4 @@
-/**
+/*
  * Intel HD Audio (HDA) playback driver.
  *
  * Drives audio output on an Intel HDA controller: codec verbs go over the
@@ -21,7 +21,8 @@
 /* HDA MMIO region size (typically 16KB) */
 #define HDA_MMIO_SIZE 0x4000
 
-/* PCI capability IDs and offsets (for power/MSI diagnostics) */
+/* PCI configuration offsets and capability IDs, for power management and the
+ * dump */
 #define PCI_SUBSYSTEM_VENDOR_ID 0x2C
 #define PCI_SUBSYSTEM_ID        0x2E
 
@@ -41,10 +42,11 @@ static uint16_t num_input_streams = 0;
 static uint16_t num_output_streams = 0;
 static uint16_t num_bidir_streams = 0;
 
-/* Physical: the streams the controller's register layout addresses. */
+/* The most streams the controller's register layout addresses, a hardware
+ * limit. */
 #define HDA_MAX_STREAMS 32
-/* DMA position buffer (optional; more reliable than LPIB on some
- * controllers). */
+/* DMA position buffer, two words a stream with the position first (optional;
+ * more reliable than LPIB on some controllers). */
 static volatile uint32_t dma_posbuf[HDA_MAX_STREAMS * 2] __attribute__((aligned(128)));
 static volatile bool dma_posbuf_enabled = false;
 static volatile bool dma_posbuf_use = false;
@@ -71,7 +73,8 @@ static volatile int hda_output_mode = HDA_OUTMODE_AUTO;
 static uint8_t afg_widget_start = 0;
 static uint8_t afg_widget_count = 0;
 
-/* Remember selected connection indices for pins */
+/* The connection indices chosen on the output pin, the headphone pin and the
+ * mixer */
 static uint8_t pin_conn_sel_idx = 0;
 static uint8_t hp_conn_sel_idx = 0;
 static uint8_t mixer_conn_sel_idx = 0;
@@ -93,10 +96,11 @@ static volatile uint16_t rirb_rp = 0;
 /*
  * DMA period and buffer size. BDL entry buffer addresses must be 128-byte
  * aligned, so each period is a multiple of 128 bytes in this contiguous
- * multi-buffer. On real hardware legacy IRQs may not arrive (MSI/IOAPIC
- * routing), so the stream is also serviced from the 100Hz PIT tick; the
- * period is large enough to tolerate occasional missed ticks. 16384 bytes
- * is about 85ms at 48kHz 16-bit stereo (4096 frames). Volatile for DMA.
+ * multi-buffer. The stream's interrupt may not arrive on a real machine
+ * (MSI/IOAPIC routing), so the stream is also serviced from the 100 Hz timer
+ * tick; the period is long enough that a missed tick does not empty it. 16384
+ * bytes is about 85ms at 48kHz 16-bit stereo (4096 frames). The descriptor
+ * list is volatile, since the controller reads it.
  */
 #define HDA_BUFFER_SIZE 16384
 #define HDA_NUM_BUFFERS 2 /* Double-buffered like SB16 */
@@ -126,6 +130,8 @@ static bool hda_probe_log_enabled = false;
 static void hda_probe_log(const char *format, ...);
 static void hda_build_boot_status(void);
 
+/** The bytes queued in the ring; the IRQ side and the write side may both
+ * call it, since it reads each volatile pointer once. */
 static uint32_t ring_available(void)
 {
     uint32_t w = ring_write_ptr;
@@ -136,6 +142,8 @@ static uint32_t ring_available(void)
     return HDA_RING_SIZE - r + w;
 }
 
+/** The bytes the ring can take; one slot stays empty, so a full ring and an
+ * empty one differ. */
 static uint32_t ring_free(void)
 {
     return HDA_RING_SIZE - 1 - ring_available();
@@ -209,7 +217,7 @@ static volatile uint32_t lpib_last = 0;
 static volatile uint32_t lpib_wraps = 0;
 static volatile uint32_t hw_period_last = 0; /* counts HDA_BUFFER_SIZE periods */
 
-/* Diagnostics: number of DMA periods we refilled. */
+/* Diagnostics: the DMA periods refilled since the stream started. */
 static volatile uint32_t hw_fill_count = 0;
 
 /* Forward declarations for MMIO helpers (needed for C89 order). */
@@ -293,14 +301,15 @@ void hda_set_output_mode(int mode)
 static char hda_trace_line[192];
 static unsigned hda_trace_len;
 
+/** Add one character to the trace line, and at a newline emit the line as
+ * one debug record. A line that begins with "HDA: " loses the prefix, since
+ * the record has the subsystem already. */
 static void hda_trace_putc(char c)
 {
     if (c == '\n') {
         const char *text = hda_trace_line;
 
         hda_trace_line[hda_trace_len] = '\0';
-        /* Some fragments name the subsystem themselves, from when this went
-           to the serial port unprefixed; the record already says it. */
         if (hda_trace_len >= 5 && text[0] == 'H' && text[1] == 'D' && text[2] == 'A' &&
             text[3] == ':' && text[4] == ' ') {
             text += 5;
@@ -316,6 +325,8 @@ static void hda_trace_putc(char c)
     }
 }
 
+/** Format a fragment of the bring-up trace (hda_trace_putc); nothing is
+ * printed unless hda_probe_log_enabled is true. */
 static void hda_probe_log(const char *format, ...)
 {
     va_list ap;
@@ -365,14 +376,17 @@ const char *hda_get_boot_status(void)
 }
 
 /**
- * Render `out_frames` of ring-buffer audio into one hardware DMA period.
+ * Render `out_frames` frames of ring audio into one DMA period at `dest`.
  *
- * Converts from the userspace-requested format, rate, and channel count
- * (typically Doom: 11025Hz U8 mono) to the hardware format (typically 48kHz
- * S16 stereo) using a fixed-point 16.16 sample-hold resampler. Mono input is
- * duplicated to both output channels; stereo input is mixed down before
- * resampling. A short ring counts as an underrun and emits silence. Retain
- * only fractional phase on underrun, so silence cannot consume later input.
+ * Converts from the format, rate and channel count AUDIO_START requested
+ * (Doom's is 11025 Hz U8 mono) to the stream's, signed 16-bit stereo at
+ * the rate hda_select_hw_rate chose, with a 16.16 fixed-point sample-and-hold
+ * resampler: each output frame repeats the current input frame, and the
+ * fraction advances by resample_step_fp, taking the next input frame each
+ * time it passes 1.0. Stereo input is mixed down to one sample, which goes to
+ * both output channels. A short ring counts as an underrun and plays silence;
+ * on an underrun only the fraction is kept, so silence cannot consume input
+ * that arrives later.
  */
 static void ring_render_to_hw_buffer(int16_t *dest, uint32_t out_frames)
 {
@@ -410,7 +424,7 @@ static void ring_render_to_hw_buffer(int16_t *dest, uint32_t out_frames)
     }
 
     if (step == 0) {
-        /* Shouldn't happen, but avoid lock-up. */
+        /* A zero step would hold one input frame for ever; play 1:1. */
         step = 1u << 16;
     }
 
@@ -418,7 +432,6 @@ static void ring_render_to_hw_buffer(int16_t *dest, uint32_t out_frames)
         int16_t sample16 = 0;
         uint32_t oi = f * out_ch;
 
-        /* Read current input frame (sample-hold). */
         if (avail_bytes < in_bytes_per_frame) {
             had_underrun = true;
             sample16 = 0;
@@ -445,7 +458,6 @@ static void ring_render_to_hw_buffer(int16_t *dest, uint32_t out_frames)
             }
         }
 
-        /* Mono output duplicates the sample to both channels. */
         if (out_ch == 2) {
             dest[oi] = sample16;
             dest[oi + 1] = sample16;
@@ -460,7 +472,6 @@ static void ring_render_to_hw_buffer(int16_t *dest, uint32_t out_frames)
             local_max = sample16;
         }
 
-        /* Advance resampler: consume input frames as frac crosses 1.0. */
         frac += step;
         while (frac >= (1u << 16)) {
             frac -= (1u << 16);
@@ -501,12 +512,13 @@ static uint8_t hda_clamp_gain(uint8_t gain, uint8_t max);
 /**
  * Refill the DMA period the engine is about to play, if it has advanced.
  *
- * Called from the HDA stream IRQ or, when legacy IRQs are not delivered (the
- * controller is MSI-only), from the PIT tick. Reads the play pointer from the
- * position buffer or LPIB, converts it to an absolute period number, and
- * returns without work if no new period has started. Otherwise it fills the
- * buffer the engine is not currently reading, from the user callback or the
- * ring resampler, and flushes it so the controller sees fresh samples.
+ * Called from the stream's interrupt and from every timer tick (hda_tick),
+ * both with interrupts off. Reads the play pointer from the position buffer
+ * or LPIB, converts it to an absolute period number, counting a wrap of the
+ * buffer when the position comes out lower than the last, and returns without
+ * work if no new period has started. Otherwise it fills the buffer the engine
+ * is not currently reading, from the user callback or the ring resampler, and
+ * flushes it so the controller sees fresh samples.
  */
 static void hda_service_stream(void)
 {
@@ -542,7 +554,6 @@ static void hda_service_stream(void)
         lpib_wraps = 0;
         hw_period_last = (HDA_BUFFER_SIZE != 0) ? (lpib_mod / HDA_BUFFER_SIZE) : 0;
     } else {
-        /* Detect CBL wrap (LPIB goes backwards). */
         if (lpib_mod < lpib_last) {
             lpib_wraps++;
         }
@@ -577,9 +588,9 @@ static void hda_service_stream(void)
 /**
  * Enable EAPD on every EAPD-capable pin in the audio function group.
  *
- * Many laptops gate the speaker amplifier behind EAPD on a pin that is not the
- * one chosen as primary output, so EAPD is set on all of them. The speaker pin
- * gets EAPD plus BTL (0x03); other pins get EAPD alone (0x02).
+ * Many laptops power the speaker amplifier through the EAPD of a pin that is
+ * not the one chosen as primary output, so EAPD is set on all of them. The
+ * speaker pin gets EAPD plus BTL (0x03); other pins get EAPD alone (0x02).
  */
 static void hda_enable_eapd_all(void)
 {
@@ -609,6 +620,8 @@ extern uint32_t hda_test_read(uint32_t offset, int bits);
 extern void hda_test_write(uint32_t offset, uint32_t value, int bits);
 #endif
 
+/** Read the controller's 8-bit register at `offset`; the host test supplies
+ * the register model. */
 static uint8_t hda_read8(uint32_t offset)
 {
 #ifdef RACH2_HOSTTEST
@@ -618,6 +631,7 @@ static uint8_t hda_read8(uint32_t offset)
 #endif
 }
 
+/** Read the controller's 16-bit register at `offset`. */
 static uint16_t hda_read16(uint32_t offset)
 {
 #ifdef RACH2_HOSTTEST
@@ -627,6 +641,7 @@ static uint16_t hda_read16(uint32_t offset)
 #endif
 }
 
+/** Read the controller's 32-bit register at `offset`. */
 static uint32_t hda_read32(uint32_t offset)
 {
 #ifdef RACH2_HOSTTEST
@@ -636,6 +651,7 @@ static uint32_t hda_read32(uint32_t offset)
 #endif
 }
 
+/** Write the controller's 8-bit register at `offset`. */
 static void hda_write8(uint32_t offset, uint8_t value)
 {
 #ifdef RACH2_HOSTTEST
@@ -645,6 +661,7 @@ static void hda_write8(uint32_t offset, uint8_t value)
 #endif
 }
 
+/** Write the controller's 16-bit register at `offset`. */
 static void hda_write16(uint32_t offset, uint16_t value)
 {
 #ifdef RACH2_HOSTTEST
@@ -654,6 +671,7 @@ static void hda_write16(uint32_t offset, uint16_t value)
 #endif
 }
 
+/** Write the controller's 32-bit register at `offset`. */
 static void hda_write32(uint32_t offset, uint32_t value)
 {
 #ifdef RACH2_HOSTTEST
@@ -663,27 +681,31 @@ static void hda_write32(uint32_t offset, uint32_t value)
 #endif
 }
 
-/* Stream descriptor N lives at MMIO 0x80 + N*0x20. */
+/** The MMIO offset of stream descriptor `stream`: 0x80 + stream * 0x20. */
 static uint32_t hda_sd_offset(int stream)
 {
     return 0x80 + (stream * 0x20);
 }
 
+/** Read register `reg` of stream descriptor `stream`. */
 static uint32_t hda_sd_read32(int stream, uint32_t reg)
 {
     return hda_read32(hda_sd_offset(stream) + reg);
 }
 
+/** Write the 32-bit register `reg` of stream descriptor `stream`. */
 static void hda_sd_write32(int stream, uint32_t reg, uint32_t value)
 {
     hda_write32(hda_sd_offset(stream) + reg, value);
 }
 
+/** Write the 16-bit register `reg` of stream descriptor `stream`. */
 static void hda_sd_write16(int stream, uint32_t reg, uint16_t value)
 {
     hda_write16(hda_sd_offset(stream) + reg, value);
 }
 
+/** Write the 8-bit register `reg` of stream descriptor `stream`. */
 static void hda_sd_write8(int stream, uint32_t reg, uint8_t value)
 {
     hda_write8(hda_sd_offset(stream) + reg, value);
@@ -727,15 +749,15 @@ static bool hda_stream_reset(int stream)
     return true;
 }
 
-/* Busy-wait `count` microseconds. */
+/** Busy-wait `count` microseconds (k_udelay). */
 static void hda_delay(int count)
 {
     k_udelay((uint32_t)count);
 }
 
-/* Consecutive non-advancing WALCLK reads after which it is judged dead. A live
- * 24MHz clock changes between reads (one MMIO read is slower than a 41ns tick),
- * so this many identical reads means the wall clock is stuck. */
+/* The identical WALCLK reads in a row after which the wall clock counts as
+ * stopped. A running 24MHz clock changes between two reads, since one MMIO
+ * read takes longer than its 41ns tick. */
 #define HDA_WALCLK_STUCK_READS 100000u
 
 /**
@@ -743,9 +765,10 @@ static void hda_delay(int count)
  *
  * Unlike a timer-driven sleep this works with interrupts disabled (for
  * example inside a syscall), since it only reads the WALCLK register. A
- * controller whose wall clock never advances (a dead or partially powered
- * HBA) would otherwise spin here forever; if it stops ticking, fall back to
- * the POST-port busy-wait so a syscall caller cannot hang.
+ * controller whose wall clock does not advance (one failed or not fully
+ * powered) would hold the caller here for ever, so after
+ * HDA_WALCLK_STUCK_READS identical reads the wait is made with hda_delay
+ * instead.
  */
 static void hda_delay_walclk_us(uint32_t us)
 {
@@ -768,7 +791,7 @@ static void hda_delay_walclk_us(uint32_t us)
         }
         if (now == prev) {
             if (++stalled >= HDA_WALCLK_STUCK_READS) {
-                hda_delay((int)us); /* wall clock is dead: approximate the delay */
+                hda_delay((int)us);
                 return;
             }
         } else {
@@ -782,8 +805,9 @@ static void hda_delay_walclk_us(uint32_t us)
  * Force the controller into PCI power state D0.
  *
  * Some machines leave the HDA controller in D3hot at boot, where its MMIO and
- * streams do not respond. Clears the PMCSR power-state bits and waits for the
- * device to wake. A no-op when there is no PM capability or it is already D0.
+ * streams do not respond. Clears the PMCSR power-state bits and waits 200 ms
+ * for the device to wake. A no-op when there is no PM capability or it is
+ * already D0.
  */
 static void hda_pci_force_d0(pci_device_t *dev)
 {
@@ -812,8 +836,7 @@ static void hda_pci_force_d0(pci_device_t *dev)
     pmcsr &= (uint16_t)~0x3;
     pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(pmcap + 4), pmcsr);
 
-    /* Give the device time to wake up */
-    hda_delay(200000); /* ~200ms worst-case */
+    hda_delay(200000);
 
     pmcsr = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(pmcap + 4));
     hda_probe_log("HDA: PCI PMCSR now 0x%x (D%d)\n", pmcsr, (int)(pmcsr & 0x3));
@@ -822,19 +845,19 @@ static void hda_pci_force_d0(pci_device_t *dev)
 /**
  * Reset the HDA controller and wait for the codecs to come up.
  *
- * Drives GCTL.CRST low then high, polling the bit on each edge, then waits up
- * to about half a second for STATESTS to report a responding codec. Returns
- * false on any handshake timeout.
+ * Drives GCTL.CRST low then high, polling the bit on each edge, then, since
+ * some codecs take 100 to 500 ms to initialize, polls STATESTS every 10 ms
+ * for up to 500 ms until a codec responds, and lets it settle for 50 ms
+ * more. Returns false when the controller does not enter or leave reset; a
+ * codec that never responds is left for hda_find_output to find.
  */
 static bool hda_reset(void)
 {
     int timeout;
 
-    /* Enter reset */
     hda_write32(HDA_GCTL, 0);
     hda_delay(100);
 
-    /* Wait for reset to complete */
     timeout = 10000;
     while ((hda_read32(HDA_GCTL) & HDA_GCTL_CRST) && timeout-- > 0) {
         hda_delay(10);
@@ -844,11 +867,9 @@ static bool hda_reset(void)
         return false;
     }
 
-    /* Exit reset */
     hda_write32(HDA_GCTL, HDA_GCTL_CRST);
     hda_delay(100);
 
-    /* Wait for controller to be ready */
     timeout = 10000;
     while (!(hda_read32(HDA_GCTL) & HDA_GCTL_CRST) && timeout-- > 0) {
         hda_delay(10);
@@ -858,20 +879,18 @@ static bool hda_reset(void)
         return false;
     }
 
-    /* Some codecs take 100-500ms to initialize; poll STATESTS until one
-     * answers, up to 500ms, then let it settle. */
     {
         int wait_count;
         uint16_t sts;
 
         for (wait_count = 0; wait_count < 50; wait_count++) {
-            hda_delay(10000); /* ~10ms per iteration, 500ms total max */
+            hda_delay(10000);
             sts = hda_read16(HDA_STATESTS);
             if (sts != 0) {
                 break;
             }
         }
-        hda_delay(50000); /* ~50ms settle */
+        hda_delay(50000);
     }
 
     return true;
@@ -882,8 +901,8 @@ static bool hda_reset(void)
  *
  * Stops the engine, programs the base and a 256-entry size, resets the read
  * pointer through its set/clear handshake, syncs the write pointer to it, then
- * sets CORBCTL.RUN. The codec is normally driven over ICI; this prepares CORB
- * for the controller's benefit during init.
+ * sets CORBCTL.RUN. The driver sends every verb over ICI, so the CORB runs
+ * with nothing written to it.
  */
 static void hda_setup_corb(void)
 {
@@ -899,8 +918,7 @@ static void hda_setup_corb(void)
 
     hda_write8(HDA_CORBSIZE, 0x02); /* 256 entries */
 
-    /* Reset read pointer: set bit 15, wait for the controller to
-     * acknowledge. */
+    /* Reset the read pointer: set bit 15 and wait for it to read back set. */
     hda_write16(HDA_CORBRP, 0x8000);
     timeout = 1000;
     while (!(hda_read16(HDA_CORBRP) & 0x8000) && timeout-- > 0) {
@@ -925,7 +943,9 @@ static void hda_setup_corb(void)
  *
  * Mirrors CORB setup: stop, program base and 256-entry size, reset the write
  * pointer, sync the software read pointer to it, set the response interrupt
- * count, then set RIRBCTL.RUN.
+ * count, then set RIRBCTL.RUN. The write pointer's reset bit (15) is
+ * write-only and reads back as zero, so there is nothing to poll: a 100 us
+ * delay lets the controller act on it before the pointer is read.
  */
 static void hda_setup_rirb(void)
 {
@@ -940,9 +960,6 @@ static void hda_setup_rirb(void)
 
     hda_write8(HDA_RIRBSIZE, 0x02); /* 256 entries */
 
-    /* Reset the write pointer. Bit 15 is write-only and reads back as zero,
-     * so there is nothing to wait on; the delay is for the controller to act
-     * on it before the pointer is read. */
     hda_write16(HDA_RIRBWP, 0x8000);
     hda_delay(100);
 
@@ -953,7 +970,7 @@ static void hda_setup_rirb(void)
     hda_write8(HDA_RIRBCTL, 0x02); /* RIRBCTL.RUN */
 }
 
-/* Trace the first few verbs to the serial log; counts down to 0. */
+/* The failures of the first three verbs are logged; counts down to 0. */
 static int verb_debug_count = 3;
 
 /**
@@ -1021,18 +1038,23 @@ static uint32_t hda_send_verb(uint8_t caddr, uint8_t nid, uint32_t verb)
     return 0;
 }
 
+/** Read parameter `param` of node `nid` of the chosen codec. */
 static uint32_t hda_get_param(uint8_t nid, uint8_t param)
 {
     return hda_send_verb(codec_addr, nid, HDA_VERB_GET_PARAM | param);
 }
 
 /**
- * Read packed entries at entry offsets and expand ranges in selector order.
+ * Read node `nid`'s connection list into `conn_list`, at most `max_conn`
+ * nodes, expanding ranges in selector order; return the count, or -1.
  *
- * Long entries retain all fifteen NID bits. A range must follow a smaller
- * NID. Malformed lists and lists exceeding the caller's capacity return -1;
- * no caller may route through their partial output. Direct verbs address
- * only seven-bit NIDs, checked separately before querying a connection.
+ * The entries are packed four short or two long ones to a response, and each
+ * response is read at the offset of its first entry. Long entries retain all
+ * fifteen NID bits. A range must follow a smaller NID. Malformed lists and
+ * lists exceeding the caller's capacity return -1; no caller may route
+ * through their partial output. Direct verbs address only seven-bit NIDs,
+ * checked separately before querying a connection (hda_connection_caps).
+ * With `report`, the raw entries and the count are recorded there too.
  */
 static int hda_read_connections(uint8_t nid, uint16_t *conn_list, int max_conn,
                                 hda_connection_report_t *report)
@@ -1089,7 +1111,9 @@ static int hda_get_connections(uint8_t nid, uint16_t *conn_list, int max_conn)
     return hda_read_connections(nid, conn_list, max_conn, NULL);
 }
 
-/** Reject indirect or foreign NIDs before constructing a direct verb. */
+/** The audio widget capabilities of connection `nid`, or 0xF00000 (a widget
+ * type no path takes) for a NID a direct verb cannot address (above 127) or
+ * one outside the function group. */
 static uint32_t hda_connection_caps(uint16_t nid)
 {
     if (nid > 127 || nid < afg_widget_start || nid >= (unsigned)afg_widget_start + afg_widget_count)
@@ -1097,7 +1121,9 @@ static uint32_t hda_connection_caps(uint16_t nid)
     return hda_get_param((uint8_t)nid, HDA_PARAM_AUDIO_CAPS);
 }
 
-/** Read DAC format parameters from the node selected by Format Override. */
+/** Fill `*caps` with DAC `nid`'s format parameters, read from the DAC under
+ * Format Override and from the function group otherwise; all zero for `nid`
+ * 0. */
 static void hda_read_caps(uint8_t nid, hda_caps_report_t *caps)
 {
     uint32_t widgets;
@@ -1142,7 +1168,6 @@ static void hda_capture_report(void)
     }
 }
 
-/** Return cached state without using the immediate command interface. */
 const hda_report_t *hda_get_report(void)
 {
     return &hda_report;
@@ -1151,9 +1176,10 @@ const hda_report_t *hda_get_report(void)
 /**
  * Drive the codec's GPIO pins high to enable external amplifiers.
  *
- * Many laptops gate the speaker amplifier behind a codec GPIO, but which bit
- * varies by board. For bring-up this sets every available GPIO as a high
- * output. Does nothing when the function group reports no GPIOs.
+ * Many laptops switch the speaker amplifier with a codec GPIO, and which one
+ * varies by board, so every GPIO the function group has, up to eight, is made
+ * an output and driven high. Does nothing when the function group reports no
+ * GPIOs.
  */
 static void hda_enable_gpio(void)
 {
@@ -1192,7 +1218,7 @@ static bool is_hdmi_codec(uint32_t vendor_id)
     uint16_t vendor = (vendor_id >> 16) & 0xFFFF;
     uint16_t device = vendor_id & 0xFFFF;
 
-    /* Intel HDMI codecs: vendor 0x8086, device 0x28xx or 0x29xx */
+    /* Intel HDMI codecs: vendor 0x8086, device 0x2800 to 0x2aff */
     if (vendor == 0x8086) {
         if ((device >= 0x2800 && device < 0x2a00) || (device >= 0x2900 && device < 0x2b00)) {
             return true;
@@ -1215,15 +1241,27 @@ static bool is_hdmi_codec(uint32_t vendor_id)
 /**
  * Discover the codec and the widget path to drive for output.
  *
- * Scans codec addresses for a responding analog codec, and takes a responding
- * HDMI codec only when no analog one answers. Finds its audio function group
- * and classifies its output pins by default-device type (speaker, line out,
- * headphone). It selects an output pin
- * (preferring speaker, then line out, then headphone, then any output-capable
- * pin) and traces the pin's connection list back through any mixer or selector
- * to a DAC. The chosen pin, DAC, optional mixer, and headphone pin/DAC are left
- * in the file-scope routing globals. Returns false if no usable codec, pin, or
- * DAC is found.
+ * Takes the first codec in STATESTS that responds and is not an HDMI codec,
+ * reading each one's vendor ID up to three times, 50 ms apart; when none is,
+ * the first codec that responds at all. A Conexant codec (vendor 0x14f1)
+ * starts in the primary output mode, since Conexant laptop codecs route their
+ * jacks unreliably, and any other in the automatic mode. The audio function
+ * group is powered up and its GPIOs driven (hda_enable_gpio).
+ *
+ * The first output-capable pin is the fallback, and every one whose port is
+ * connected is classified by its default device. The output pin is the first
+ * speaker, else line out, else headphone, else the fallback. Its connection
+ * list is traced to a DAC: the connection the pin has selected, as the
+ * firmware left it, first, then the others in order. A DAC is taken; a mixer
+ * or selector is followed one level, its selected input first and then the
+ * first DAC among its inputs. The headphone pin, when it is another pin, gets
+ * its DAC the same way without the mixer level: its selected connection when
+ * that is a DAC, else the first DAC in its list.
+ *
+ * The chosen pin, DAC, optional mixer, and headphone pin/DAC are left in the
+ * file-scope routing globals and the report. Returns false if no usable
+ * codec, function group, pin or DAC is found, or the codec's node counts are
+ * out of range.
  */
 static bool hda_find_output(void)
 {
@@ -1233,10 +1271,10 @@ static bool hda_find_output(void)
     uint8_t start_nid, num_nodes;
     uint8_t fg_start, fg_count;
     uint8_t speaker_pin = 0, hp_pin = 0, line_out_pin = 0;
-    uint8_t fallback_pin = 0; /* Any output-capable pin as fallback */
+    uint8_t fallback_pin = 0;
     uint16_t conn_list[HDA_MAX_CONNECTIONS];
     int num_conn;
-    uint8_t analog_codec_addr = 0xFF; /* Track preferred analog codec */
+    uint8_t analog_codec_addr = 0xFF;
     uint32_t analog_vendor = 0;
 
     audio_fg_nid = dac_nid = pin_nid = mixer_nid = hp_pin_nid = hp_dac_nid = 0;
@@ -1254,14 +1292,12 @@ static bool hda_find_output(void)
             uint32_t vid;
             int retry;
 
-            /* Temporarily set codec_addr to query this codec */
             codec_addr = i;
 
-            /* Try a few times - codec might need more time */
             vid = 0;
             for (retry = 0; retry < 3 && vid == 0; retry++) {
                 if (retry > 0) {
-                    hda_delay(50000); /* 50ms between retries */
+                    hda_delay(50000);
                 }
                 vid = hda_send_verb(i, 0, HDA_VERB_GET_PARAM | HDA_PARAM_VENDOR_ID);
             }
@@ -1287,13 +1323,12 @@ static bool hda_find_output(void)
         }
     }
 
-    /* No analog codec: accept any responding codec instead. */
     if (analog_codec_addr == 0xFF) {
         for (i = 0; i < 15; i++) {
             if (statests & (1 << i)) {
                 uint32_t vid;
                 codec_addr = i;
-                hda_delay(100000); /* Extra long delay */
+                hda_delay(100000);
                 vid = hda_send_verb(i, 0, HDA_VERB_GET_PARAM | HDA_PARAM_VENDOR_ID);
                 if (vid != 0) {
                     analog_codec_addr = i;
@@ -1315,8 +1350,6 @@ static bool hda_find_output(void)
     codec_vendor_id = vendor;
     hda_probe_log("HDA: Using codec %d: 0x%x\n", codec_addr, vendor);
 
-    /* Conexant laptop codecs are often picky about jack routing; default to
-     * primary output. */
     if (((codec_vendor_id >> 16) & 0xFFFF) == 0x14f1) {
         hda_output_mode = HDA_OUTMODE_PRIMARY;
     } else {
@@ -1358,7 +1391,6 @@ static bool hda_find_output(void)
     afg_widget_start = fg_start;
     afg_widget_count = fg_count;
 
-    /* First pass: classify every output-capable pin by default device. */
     for (j = 0; j < fg_count; j++) {
         uint8_t nid = fg_start + j;
         uint32_t caps = hda_get_param(nid, HDA_PARAM_AUDIO_CAPS);
@@ -1379,8 +1411,6 @@ static bool hda_find_output(void)
                     fallback_pin = nid;
                 }
 
-                /* An unconnected pin can still serve as fallback, but is not
-                 * classified by device type. */
                 if (port_conn == HDA_PORT_CONN_NONE) {
                     continue;
                 }
@@ -1396,8 +1426,6 @@ static bool hda_find_output(void)
         }
     }
 
-    /* Select output pin: prefer speaker > line out > headphone > any
-     * fallback */
     if (speaker_pin != 0) {
         pin_nid = speaker_pin;
         hda_probe_log("HDA: Selected speaker pin 0x%x\n", pin_nid);
@@ -1412,7 +1440,6 @@ static bool hda_find_output(void)
         hda_probe_log("HDA: Using fallback pin 0x%x\n", pin_nid);
     }
 
-    /* Also save headphone pin for potential dual output */
     hp_pin_nid = hp_pin;
     speaker_pin_nid = speaker_pin;
 
@@ -1423,21 +1450,17 @@ static bool hda_find_output(void)
 
     hda_probe_log("HDA: pin=0x%x ", pin_nid);
 
-    /* Trace the pin's connection list back to its DAC. */
     num_conn = hda_get_connections(pin_nid, conn_list, HDA_MAX_CONNECTIONS);
 
     if (num_conn > 0) {
         uint8_t pin_sel;
         int pass;
 
-        /* Prefer BIOS/default connection selection first (important on real
-         * hardware) */
         pin_sel = (uint8_t)(hda_send_verb(codec_addr, pin_nid, HDA_VERB_GET_CONN_SEL) & 0xFF);
         if (pin_sel >= num_conn) {
             pin_sel = 0;
         }
 
-        /* Check each connection, but start with the selected one */
         for (pass = 0; pass < num_conn; pass++) {
             int idx;
 
@@ -1475,7 +1498,6 @@ static bool hda_find_output(void)
 
                     mix_num = hda_get_connections(mixer_nid, mix_conn, HDA_MAX_CONNECTIONS);
 
-                    /* Prefer currently selected source on selector widgets */
                     mix_sel =
                         (uint8_t)(hda_send_verb(codec_addr, mixer_nid, HDA_VERB_GET_CONN_SEL) &
                                   0xFF);
@@ -1517,7 +1539,6 @@ static bool hda_find_output(void)
     }
     hda_probe_log("\n");
 
-    /* If we have a headphone pin, find its DAC too */
     if (hp_pin_nid != 0 && hp_pin_nid != pin_nid) {
         uint8_t hp_sel;
         uint16_t hp_conn[HDA_MAX_CONNECTIONS];
@@ -1529,7 +1550,6 @@ static bool hda_find_output(void)
             hp_sel = 0;
         }
 
-        /* Prefer selected connection first */
         if (hp_num > 0) {
             uint32_t caps0 = hda_connection_caps(hp_conn[hp_sel]);
             uint8_t wtype0 = (caps0 >> 20) & 0xF;
@@ -1539,7 +1559,6 @@ static bool hda_find_output(void)
             hp_conn_sel_idx = hp_sel;
         }
 
-        /* If we didn't get a DAC, pick the first DAC in the list */
         if (hp_dac_nid == 0) {
             for (i = 0; i < hp_num; i++) {
                 uint32_t caps = hda_connection_caps(hp_conn[i]);
@@ -1562,12 +1581,15 @@ typedef struct {
     uint16_t format;
 } hda_rate_t;
 
+/* The PCM rates in the order of their bits in the PCM sizes and rates
+ * parameter, each with its stream format word (base, multiplier, divisor). */
 static const hda_rate_t hda_rates[] = {{8000, 0x0500},   {11025, 0x4300},  {16000, 0x0200},
                                        {22050, 0x4100},  {32000, 0x0A00},  {44100, 0x4000},
                                        {48000, 0x0000},  {88200, 0x4800},  {96000, 0x0800},
                                        {176400, 0x5800}, {192000, 0x1800}, {384000, 0x3800}};
 
-/** Intersect the format capabilities of every DAC the driver programs. */
+/** Intersect the format capabilities of every DAC the driver programs: 0
+ * when either has no PCM. */
 static uint32_t hda_common_pcm(void)
 {
     uint32_t pcm = hda_report.caps[0].pcm;
@@ -1610,7 +1632,7 @@ static uint16_t hda_calc_format(uint32_t sample_rate, audio_format_t format, int
 /**
  * HDA interrupt handler: acknowledge the output stream IRQ and refill.
  *
- * Returns immediately if INTSTS does not flag our output stream. Otherwise it
+ * Returns immediately if INTSTS does not flag the output stream. Otherwise it
  * clears the stream's status register (write-1-to-clear) and services the
  * stream to refill the next DMA period.
  */
@@ -1622,7 +1644,7 @@ static void hda_irq_handler(isr_params_t *params)
 
     intsts = hda_read32(HDA_INTSTS);
     if (!(intsts & (1 << output_stream_index))) {
-        return; /* Not our interrupt */
+        return;
     }
 
     sd_sts = hda_read8(hda_sd_offset(output_stream_index) + HDA_SD_STS);
@@ -1641,17 +1663,14 @@ static void hda_irq_handler(isr_params_t *params)
  * Report whether a PCI vendor/device ID is an HDMI audio controller.
  *
  * Init prefers the PCH analog controller and skips HDMI controllers when both
- * are present. Matches known Intel HDMI device IDs and treats all Nvidia and
- * AMD GPU audio functions as HDMI.
+ * are present. Matches known Intel HDMI device IDs, 0x0a0c, 0x0c0c and 0x0d0c
+ * (Haswell), 0x160c (Broadwell), 0x3198 (Gemini Lake), 0x2800 to 0x28ff and
+ * 0x2930 to 0x293f, and treats all Nvidia (0x10de) and AMD (0x1002) GPU audio
+ * functions as HDMI.
  */
 static bool is_hdmi_controller(uint16_t vendor_id, uint16_t device_id)
 {
     if (vendor_id == 0x8086) { /* Intel */
-        /* Intel HDMI audio device IDs:
-         * 0x0a0c, 0x0c0c, 0x0d0c - Haswell
-         * 0x160c - Broadwell
-         * 0x3198 - Gemini Lake
-         * 0x280x, 0x293x - various HDMI */
         if (device_id == 0x0a0c || device_id == 0x0c0c || device_id == 0x0d0c ||
             device_id == 0x160c || device_id == 0x3198 ||
             (device_id >= 0x2800 && device_id < 0x2900) ||
@@ -1659,10 +1678,8 @@ static bool is_hdmi_controller(uint16_t vendor_id, uint16_t device_id)
             return true;
         }
     }
-    /* Nvidia and AMD GPUs also have HDMI audio, but they have different
-     * vendor IDs */
     if (vendor_id == 0x10de || vendor_id == 0x1002) {
-        return true; /* Nvidia or AMD GPU audio */
+        return true;
     }
     return false;
 }
@@ -1676,9 +1693,16 @@ static bool is_hdmi_controller(uint16_t vendor_id, uint16_t device_id)
  * up CORB/RIRB and the DMA position buffer, discovers the output path, and
  * registers the IRQ handler. Returns 0 on success, -1 on any failure.
  *
- * Any other audio controller the machine has is named in the log and not
- * driven. This kernel takes one, and a person looking at a machine with two
- * needs to see that the other was found and passed over rather than missed.
+ * Any other audio controller the machine has is logged and not driven. This
+ * kernel takes one, and a person looking at a machine with two needs to see
+ * that the other was found and passed over rather than missed.
+ *
+ * The handler is registered on the controller's legacy IRQ line, when it is
+ * below 16, and also on a message vector where the machine has an APIC and
+ * the controller a capability for it. The timer tick services the stream as
+ * well, so a machine whose messages do not arrive still plays, and the
+ * handler first reads INTSTS for the stream's bit, so being called twice for
+ * one event costs a register read.
  */
 static int hda_init(void)
 {
@@ -1699,7 +1723,7 @@ static int hda_init(void)
 
         if (is_hdmi_controller(temp_pci.vendor_id, temp_pci.device_id)) {
             hda_probe_log(" (HDMI, skip)\n");
-            hda_pci = temp_pci; /* Save for next skip */
+            hda_pci = temp_pci;
             skip_dev = &hda_pci;
             continue;
         }
@@ -1710,7 +1734,6 @@ static int hda_init(void)
         break;
     }
 
-    /* If all controllers were HDMI, try using the first one anyway */
     if (!found_controller) {
         if (!pci_find_device(PCI_CLASS_MULTIMEDIA, PCI_SUBCLASS_AUDIO, &hda_pci)) {
             hda_probe_log("HDA: No PCI audio device\n");
@@ -1753,8 +1776,6 @@ static int hda_init(void)
     hda_probe_log("OK\n");
 
     hda_base = mapped;
-
-    /* Detect CLFLUSH support for DMA coherency (no-ops in emulators). */
 
     pci_enable_bus_master(&hda_pci);
     pci_enable_memory_space(&hda_pci);
@@ -1801,18 +1822,10 @@ static int hda_init(void)
     if (hda_pci.irq > 0 && hda_pci.irq < 16) {
         register_isr_handler((uint8_t)IRQ_VECTOR(hda_pci.irq), hda_irq_handler, "hda");
 
-        /* INTCTL: global interrupt enable plus our output stream's bit. */
+        /* INTCTL: the global interrupt enable plus the output stream's bit. */
         hda_write32(HDA_INTCTL, 0x80000000 | (1 << output_stream_index));
     }
 
-    /*
-     * And the same handler on a message vector, where the machine has an
-     * APIC and the controller a capability for it. The legacy registration
-     * above and the timer's servicing stay exactly as they were: a machine
-     * whose messages do not arrive is no worse than it was, and the handler
-     * begins by asking the controller whether the interrupt is its own, so
-     * being called twice for one event costs a register read.
-     */
     if (isr_msi_ready() && (msi_vector = isr_alloc_vector()) >= 0 &&
         pci_msi_enable(&hda_pci, (uint8_t)msi_vector) == 0) {
         register_isr_handler((uint8_t)msi_vector, hda_irq_handler, "hda");
@@ -1840,8 +1853,9 @@ static void hda_shutdown(void)
     hda_base = 0;
 }
 
-/* The codec dump, which the `audio` shell command prints for a person who
-   asked for it: the screen and the port, and neither the log nor the wire. */
+/** Print on the console, the screen and the serial port, and not to the
+ * kernel log: the dumps a person asks for with the `audio` shell command, and
+ * hda_start's check of the stream's DMA. */
 static void hda_log(const char *format, ...)
 {
     va_list ap;
@@ -1851,6 +1865,7 @@ static void hda_log(const char *format, ...)
     va_end(ap);
 }
 
+/** The name of widget type `type` in the dumps. */
 static const char *hda_widget_type_name(uint8_t type)
 {
     switch (type) {
@@ -1875,6 +1890,7 @@ static const char *hda_widget_type_name(uint8_t type)
     }
 }
 
+/** The name of a pin's default device `dev` in the dumps. */
 static const char *hda_pin_def_dev_name(uint8_t dev)
 {
     switch (dev) {
@@ -1897,6 +1913,7 @@ static const char *hda_pin_def_dev_name(uint8_t dev)
     }
 }
 
+/** Print node `nid`'s PCM rates, sample sizes and stream formats. */
 static void hda_dump_pcm_caps(uint8_t nid)
 {
     uint32_t pcm = hda_get_param(nid, 0x0A);
@@ -1951,22 +1968,26 @@ static void hda_dump_pcm_caps(uint8_t nid)
     hda_log("\n");
 }
 
+/** The gain steps of an amplifier with capabilities `amp_caps`. */
 static uint8_t hda_amp_steps(uint32_t amp_caps)
 {
     /* Amp caps: bits 14:8 = num steps (0..0x7f). */
     return (uint8_t)((amp_caps >> 8) & 0x7F);
 }
 
+/** The gain steps of node `nid`'s output amplifier. */
 static uint8_t hda_get_out_amp_max(uint8_t nid)
 {
     return hda_amp_steps(hda_get_param(nid, HDA_PARAM_OUTPUT_AMP));
 }
 
+/** The gain steps of node `nid`'s input amplifier. */
 static uint8_t hda_get_in_amp_max(uint8_t nid)
 {
     return hda_amp_steps(hda_get_param(nid, 0x0D)); /* Input amp caps */
 }
 
+/** `gain` limited to `max`, or `gain` itself when `max` is 0. */
 static uint8_t hda_clamp_gain(uint8_t gain, uint8_t max)
 {
     if (max != 0 && gain > max) {
@@ -2009,10 +2030,6 @@ static uint32_t hda_rate_step(uint32_t input, uint32_t output)
     return result ? result : 1;
 }
 
-/**
- * Print the controller's PCI config, MMIO registers, codec path, and stream
- * state to the kernel and serial log for debugging.
- */
 void hda_debug_dump(void)
 {
     uint16_t gcap;
@@ -2055,7 +2072,6 @@ void hda_debug_dump(void)
             cap_ptr = pci_read_config8(hda_pci.bus, hda_pci.device, hda_pci.function, PCI_CAP_PTR);
             hda_log("  PCI: cap ptr=0x%x\n", cap_ptr);
 
-            /* PM / MSI / PCIe quick decode */
             {
                 uint8_t off;
 
@@ -2169,10 +2185,6 @@ void hda_debug_dump(void)
             hda_sd_read32(stream, HDA_SD_BDPU));
 }
 
-/**
- * Print the codec's DAC, mixer, and every pin widget with its capabilities,
- * configuration, and connection list, for debugging.
- */
 void hda_debug_dump_codec(void)
 {
     uint8_t j;
@@ -2251,10 +2263,6 @@ void hda_debug_dump_codec(void)
     }
 }
 
-/**
- * Print the output and headphone pins' control, EAPD, jack-sense, and selected
- * connection, for debugging routing.
- */
 void hda_debug_dump_pins(void)
 {
     uint32_t out_sense = 0;
@@ -2312,10 +2320,6 @@ void hda_debug_dump_pins(void)
     }
 }
 
-/**
- * Print DMA position, playback counters, underruns, and throughput for the
- * current session, for debugging.
- */
 void hda_debug_dump_stats(void)
 {
     uint32_t wal_now;
@@ -2384,7 +2388,7 @@ bool hda_debug_get_stream_snapshot(hda_stream_debug_snapshot_t *out)
     return true;
 }
 
-/* Fill a buffer with silence: 0 for signed samples, 128 for unsigned U8. */
+/** Fill a buffer with silence: 0 for signed samples, 128 for unsigned U8. */
 static void fill_silence(volatile uint8_t *buffer, size_t size, bool is_signed)
 {
     size_t i;
@@ -2408,6 +2412,26 @@ static void fill_silence(volatile uint8_t *buffer, size_t size, bool is_signed)
  * discovered codec path and start DMA. Cache the requested and programmed
  * rates with controller and converter format readbacks for procfs.
  * Return -1 for an unsupported format or a failed stream reset, otherwise 0.
+ *
+ * The session's counters start again; total_bytes_written goes on. The codec
+ * path is set up in order: the function group's power, the DAC, the mixer,
+ * the pin, then EAPD. The headphone DAC gets the same format and stream even
+ * when the headphones stay off, since on many laptops the firmware or codec
+ * moves a speaker pin between DACs with the jack's state. A mixer has the
+ * amplifier of every input unmuted and a selector that of its selected one;
+ * the pin's input amplifier is unmuted too, since some codecs mute the
+ * output through it. The speaker pin gets EAPD and BTL, another pin EAPD
+ * where it has it.
+ *
+ * Under the output mode the headphones then play or stay off: in the
+ * automatic mode they play when the headphone pin senses a plug. With the
+ * headphones alone the primary pin's output is turned off; with them off, the
+ * headphone pin's output is turned off, so the codec neither mutes the
+ * speaker for it nor routes sound to it.
+ *
+ * After RUN the stream's LPIB is read twice, 20 ms apart, and the result
+ * printed on the console (hda_log). When LPIB moved and the DMA position
+ * buffer did not, the buffer is not used for the stream's position.
  */
 static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
 {
@@ -2447,7 +2471,6 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
     current_hw_format = hw_format;
     current_hw_channels = hw_channels;
 
-    /* Reset per-session counters (keep total_bytes_written monotonic). */
     irq_count = 0;
     underrun_count = 0;
     underrun_samples = 0;
@@ -2492,8 +2515,6 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
 
     hda_sd_write32(stream, HDA_SD_CTL, (stream_tag << 20) | HDA_SD_CTL_IOCE);
 
-    /* Configure the codec path in order: AFG power, DAC, [mixer], pin, EAPD. */
-
     hda_send_verb(codec_addr, audio_fg_nid, HDA_VERB_SET_POWER | 0x00);
     hda_delay(50);
 
@@ -2512,11 +2533,6 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
         hda_send_verb(codec_addr, dac_nid, HDA_VERB_SET_AMP_GAIN | 0xB000 | gain);
     }
 
-    /*
-     * On many laptops, the BIOS/codec may switch a speaker pin between multiple
-     * DACs (e.g., internal speaker vs HP) depending on jack state. Configure
-     * the secondary DAC too so we still get sound even if routing changes.
-     */
     if (hp_dac_nid != 0 && hp_dac_nid != dac_nid) {
         uint32_t hp_wcap;
 
@@ -2546,10 +2562,7 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
         if (mix_type == HDA_WIDGET_AUDIO_SEL)
             hda_send_verb(codec_addr, mixer_nid, HDA_VERB_SET_CONN_SEL | mix_conn_sel);
 
-        /* Unmute amps on the widget if present */
         if (mix_wcap & 0x02) { /* AC_WCAP_IN_AMP */
-            /* If it's a mixer, unmute all input indices; if it's a
-             * selector, unmute selected index */
             uint16_t mix_conn[HDA_MAX_CONNECTIONS];
             int mix_num = hda_get_connections(mixer_nid, mix_conn, HDA_MAX_CONNECTIONS);
             int start = (mix_type == HDA_WIDGET_AUDIO_MIX) ? 0 : (int)mix_conn_sel;
@@ -2579,12 +2592,9 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
 
         hda_send_verb(codec_addr, pin_nid, HDA_VERB_SET_CONN_SEL | pin_conn_sel);
 
-        /* Enable output with proper pin control
-         * 0x40 = OUT_EN, 0xC0 = OUT_EN | HP_EN (for headphones) */
+        /* Pin widget control: 0x40 is OUT_EN; 0xC0 adds HP_EN. */
         hda_send_verb(codec_addr, pin_nid, HDA_VERB_SET_PIN_CTRL | 0x40);
 
-        /* Unmute pin amps (some real codecs gate output via AMP-in on the
-         * pin) */
         pin_wcap = hda_get_param(pin_nid, HDA_PARAM_AUDIO_CAPS);
         if (pin_wcap & 0x02) { /* AC_WCAP_IN_AMP */
             uint8_t max_gain_in = hda_get_in_amp_max(pin_nid);
@@ -2596,15 +2606,13 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
             uint8_t max_gain_out = hda_get_out_amp_max(pin_nid);
             uint8_t gain_out = (max_gain_out != 0) ? max_gain_out : 0x7F;
             uint32_t amp = 0xB000 | gain_out;
-            /* Conexant codecs expect the pin OUT amp to be indexed */
+            /* A Conexant codec takes an index on the pin's output amplifier. */
             if (((codec_vendor_id >> 16) & 0xFFFF) == 0x14f1) {
                 amp |= ((uint32_t)pin_conn_sel << 8);
             }
             hda_send_verb(codec_addr, pin_nid, HDA_VERB_SET_AMP_GAIN | amp);
         }
 
-        /* Many laptops gate internal speaker amp behind EAPD/BTL; enable
-         * aggressively. */
         if (pin_nid == speaker_pin_nid) {
             hda_send_verb(codec_addr, pin_nid, HDA_VERB_SET_EAPD | 0x03);
         } else {
@@ -2614,7 +2622,6 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
         }
     }
 
-    /* Optional headphone output (debug/override). */
     {
         bool have_hp = (hp_pin_nid != 0 && hp_pin_nid != pin_nid && hp_dac_nid != 0);
         int mode = (int)hda_output_mode;
@@ -2623,8 +2630,7 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
 
         hp_present = false;
         if (have_hp) {
-            /* Some codecs need the pin powered before pin sense is
-             * meaningful. */
+            /* Some codecs sense a jack only on a powered pin. */
             hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_SET_POWER | 0x00);
             hda_delay(5);
             hp_sense = hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_GET_PIN_SENSE);
@@ -2640,7 +2646,6 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
         hda_report.primary_enabled = mode != HDA_OUTMODE_HP;
 
         if (mode == HDA_OUTMODE_HP && pin_nid != 0) {
-            /* Force primary off when routing to headphones. */
             hda_send_verb(codec_addr, pin_nid, HDA_VERB_SET_PIN_CTRL | 0x00);
         }
 
@@ -2678,11 +2683,8 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
                 }
                 hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_SET_AMP_GAIN | amp);
             }
-            /* Headphone outputs typically only need EAPD */
             hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_SET_EAPD | 0x02);
         } else if (have_hp) {
-            /* Disable HP pin output to avoid speaker auto-mute / phantom
-             * routing. */
             hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_SET_PIN_CTRL | 0x00);
         }
     }
@@ -2714,7 +2716,6 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
     hda_report.hp_format =
         hp_dac_nid ? (uint16_t)hda_send_verb(codec_addr, hp_dac_nid, 0xA0000) : 0;
 
-    /* Quick DMA sanity check: does LPIB advance shortly after RUN? */
     {
         uint32_t lpib0, lpib1;
         uint32_t pos0 = 0, pos1 = 0;
@@ -2746,8 +2747,6 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
             hda_log("  DMA: WARNING: LPIB did not move (PCI BM/D0/IOMMU/BDL?)\n");
         }
 
-        /* Decide whether to use the DMA position buffer for pointer
-         * reporting. */
         if (dma_posbuf_enabled) {
             if (lpib1 != lpib0 && pos1 == pos0) {
                 dma_posbuf_use = false;
@@ -2791,25 +2790,23 @@ static void hda_stop(void)
     lpib_wraps = 0;
     hw_period_last = 0;
 
-    /* Reset ring buffer for next session */
     ring_read_ptr = 0;
     ring_write_ptr = 0;
 }
 
-/**
- * Periodic service hook for systems where HDA stream IRQs are not delivered
- * through the legacy PIC (MSI-only setups). Call from the timer tick.
- */
 void hda_tick(void)
 {
     hda_service_stream();
 }
 
+/** Whether playback is running. */
 static bool hda_is_playing(void)
 {
     return playing;
 }
 
+/** Set the pull callback, NULL for the write path. hda_start chooses the
+ * stream's format by whether one is set, and each refill calls it if set. */
 static void hda_set_callback(audio_callback_t fn)
 {
     user_callback = fn;
@@ -2860,7 +2857,6 @@ static void hda_set_volume(int volume)
 
     mute = (volume == 0) ? 0x80 : 0x00;
 
-    /* DAC output amp */
     if (dac_nid != 0) {
         uint32_t wcap = hda_get_param(dac_nid, HDA_PARAM_AUDIO_CAPS);
         if (wcap & 0x04) { /* AC_WCAP_OUT_AMP */
@@ -2873,7 +2869,6 @@ static void hda_set_volume(int volume)
         }
     }
 
-    /* Mixer if present */
     if (mixer_nid != 0) {
         uint32_t wcap = hda_get_param(mixer_nid, HDA_PARAM_AUDIO_CAPS);
         if (wcap & 0x02) { /* AC_WCAP_IN_AMP */
@@ -2894,7 +2889,6 @@ static void hda_set_volume(int volume)
         }
     }
 
-    /* Pin output amp */
     if (pin_nid != 0) {
         uint32_t wcap = hda_get_param(pin_nid, HDA_PARAM_AUDIO_CAPS);
         if (wcap & 0x04) { /* AC_WCAP_OUT_AMP */
@@ -2910,7 +2904,6 @@ static void hda_set_volume(int volume)
         }
     }
 
-    /* HP DAC and pin if present */
     if (hp_dac_nid != 0) {
         uint32_t wcap = hda_get_param(hp_dac_nid, HDA_PARAM_AUDIO_CAPS);
         if (wcap & 0x04) { /* AC_WCAP_OUT_AMP */
@@ -2938,7 +2931,6 @@ static void hda_set_volume(int volume)
     }
 }
 
-/* Dispatch table registered with the audio subsystem. */
 /* The audio_driver_t fields, in the order audio.h declares them: name,
    type, init, shutdown, start, stop, is_playing, set_callback, write,
    set_volume. */

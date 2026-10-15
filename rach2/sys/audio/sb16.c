@@ -335,7 +335,9 @@ static bool sb16_start_auto_init(void)
  * acknowledges the interrupt and refills the finished half from the callback
  * or the ring buffer; no DMA restart is needed. ring_read_to_buffer() covers
  * any underrun with silence. The 8-bit and 16-bit transfers acknowledge their
- * interrupts through different ports.
+ * interrupts through different ports. current_buffer is the half that was
+ * playing and has just finished; it is refilled, and the other half becomes
+ * current.
  */
 static void sb16_irq_handler(isr_params_t *params)
 {
@@ -354,7 +356,6 @@ static void sb16_irq_handler(isr_params_t *params)
 
     irq_count++;
 
-    /* current_buffer names the half that was playing and just finished. */
     fill_buffer = dma_buffer + (current_buffer * SB16_BUFFER_SIZE);
 
     current_buffer = 1 - current_buffer;
@@ -366,14 +367,6 @@ static void sb16_irq_handler(isr_params_t *params)
     }
 }
 
-/**
- * Probe for an SB16 at `base` and record its DSP version.
- *
- * Resets the DSP and reads the version word; an SB16 reports DSP version 4.xx,
- * so anything below 4 is an older card and is rejected.
- *
- * @return true only if a DSP 4.xx answered at this base.
- */
 bool sb16_probe(uint16_t base)
 {
     sb16_base = base;
@@ -544,11 +537,14 @@ static void sb16_stop(void)
     underrun_samples = 0;
 }
 
+/** Whether playback is running. */
 static bool sb16_is_playing(void)
 {
     return playing;
 }
 
+/** Set the pull callback the interrupt handler and sb16_start call; NULL
+ * plays from the ring buffer. */
 static void sb16_set_callback(audio_callback_t fn)
 {
     user_callback = fn;

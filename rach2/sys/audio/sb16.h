@@ -3,8 +3,9 @@
  *
  * The Sound Blaster 16 is a classic ISA sound card. It plays 8-bit and
  * 16-bit PCM audio, mono or stereo, at sample rates from 5000 to 44100 Hz.
- * The card sits at base I/O port 0x220 on IRQ 5, with 8-bit transfers on
- * DMA channel 1 and 16-bit transfers on DMA channel 5.
+ * The driver looks for it at the I/O bases 0x220, 0x240, 0x260 and 0x280,
+ * and uses IRQ 5, DMA channel 1 for 8-bit and channel 5 for 16-bit
+ * transfers.
  */
 
 #ifndef _SB16_H_
@@ -70,13 +71,18 @@
 #define SB16_MODE_STEREO 0x20 /* Stereo */
 
 /*
- * Buffer size for double-buffering
- * Must be under 64KB and aligned for DMA
- * 160 samples @ 11025Hz = ~14.5ms per buffer
+ * The bytes in each half of the DMA double buffer: 160 8-bit mono samples,
+ * 14.5 ms at 11025 Hz. The whole buffer must lie inside one ISA DMA page
+ * (dma_address_valid).
  */
 #define SB16_BUFFER_SIZE 160
 
-/** Probe for an SB16 at base port `base`; true if detected. */
+/**
+ * Probe for an SB16 at I/O base `base`: reset its DSP and read its version.
+ * True when a DSP of version 4 or later (an SB16) responded; for an older card
+ * it logs the version and returns false. The driver's base port is `base`
+ * afterwards either way.
+ */
 bool sb16_probe(uint16_t base);
 
 #endif /* _SB16_H_ */
