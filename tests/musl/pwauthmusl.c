@@ -1,93 +1,95 @@
 /**
- * The credential library and `su` in the guest, through the ported musl.
+ * pwauthmusl: check the credential library and `su` in the guest, through the
+ * ported musl.
  *
  * link-deps: utils/pwauth.c
  *
- * The host test covers what is pure. This covers what is not: a real
- * kernel, a real `/etc`, two processes racing for one transaction, a real
- * terminal, and the setuid-root `su` staged beside it. Its cases, in the order
- * they run:
+ * The host test covers what is pure. This probe covers what needs the kernel:
+ * the guest's `/etc`, two processes racing for one transaction, a terminal,
+ * and the setuid-root `su` staged beside it. Its cases, in the order they run:
  *
  * The salt draw, first, as the control the no-entropy run inverts: on this
  * boot's `-cpu max` the mint must succeed, produce `PWAUTH_SALT_LEN`
  * characters of the `crypt(3)` alphabet, and produce a different salt the
  * second time.
  *
- * The replacement, where the guest can say what the host cannot: the file is
- * replaced whole, its mode and owner are the original's (root and uid 1000
- * differ here, so the inheritance is a real assertion, not a tautology),
+ * The replacement: the file is replaced whole, its mode and owner are the
+ * original's (root and uid 1000 differ here, so the inheritance is tested),
  * no temporary file is left behind, and a reader holding a descriptor across
- * the rename goes on reading the file it opened, whole. That last one is the
- * guarantee the whole reader-never-locks rule rests on. A second row has a
- * set-id bit, which only this test can: the owner must be set before the mode
- * because a chown clears those bits, and both an owner the writer is not and a
- * set-id bit are needed to see it.
+ * the rename goes on reading the file it opened, whole. The rule that readers
+ * take no lock rests on that last one. A second row has a set-id bit: the
+ * owner must be set before the mode because a chown clears those bits, and
+ * only here can a file have both a set-id bit and an owner the writer is not.
  *
  * A fork under the transaction, since the state is file-scope and a child
  * inherits it while holding nothing: a child that exits, a child a signal
  * kills, and a child that calls the three entry points must all leave the
- * parent's lock exactly where it is. Then a lock cleared out from under a live
- * holder, which is the same rule turned on the library: with another writer's
- * lock at the name, neither the publish nor the release may touch it, and the
- * recorded pid is the only thing that can tell the two files apart, since
- * `st_ino` here is a hash of the name.
+ * parent's lock where it is. Then a lock cleared out from under a live holder,
+ * the same rule turned on the library: with another writer's lock at the name,
+ * neither the publish nor the release may touch it, and the recorded pid is
+ * the only thing that can tell the two files apart, since `st_ino` on the boot
+ * root is derived from a hash of the name.
  *
- * The interleave, the case no `O_EXCL` on a temporary file can pass: two
- * children read and rewrite one file, ordered by a pipe so the second begins
- * its transaction while the first is asleep inside its own. Both lines must
+ * The interleave, which no `O_EXCL` on a temporary file can pass: two children
+ * read and rewrite one file, ordered by a pipe so the second begins its
+ * transaction while the first is asleep inside its own. Both lines must
  * survive. Without the lock the second reads the pre-image and its rename
- * destroys the first one's line, which is the lost update the transaction
- * exists to prevent; the second's acquire is also timed, since a lock that
- * never blocked could pass on ordering luck alone.
+ * destroys the first one's line, the lost update the transaction prevents; the
+ * second's acquire is also timed, since a lock that never blocked could pass on
+ * ordering luck alone.
  *
- * The recovery rules, against the real `/etc/.pwlock` and the compiled-in retry
- * budget, each one an assertion that nothing was broken: a lock naming a reaped
- * child's pid is refused with the file still there and its bytes unchanged, the
- * same lock with its modification time pushed back an hour is refused exactly
- * as the fresh one was (the assertion the deleted age rule fails), and the
- * probe's own removal of the file lets the next acquire succeed. Waiting out
- * that budget twice is most of this probe's running time and is deliberate: the
- * bound itself is checked cheaply on the host, where the budget is a parameter.
+ * The recovery rules, against `/etc/.pwlock` and the compiled-in retry budget,
+ * each one an assertion that nothing was broken: a lock naming a reaped child's
+ * pid is refused with the file still there and its bytes unchanged, the same
+ * lock with its modification time pushed back an hour is refused as the fresh
+ * one was, and the probe's own removal of the file lets the next acquire
+ * succeed. Waiting out that budget twice is most of this probe's running time;
+ * the bound itself is checked on the host, where the budget is a parameter.
  *
- * The stop and continue cycle, which needs a real terminal and so runs over a
+ * The stop and continue cycle, which needs a terminal and so runs over a
  * pseudo-terminal, not this probe's own console: a child in the pty's
  * foreground group reads a password, and the parent drives the master. Nothing
  * typed comes back while the prompt is up, a `^Z` stops the child with the
- * terminal's modes restored (proved by typing while it is stopped and seeing
- * the echo), a continue re-applies echo-off and reprints the prompt, and the
- * child exits 0 only if the password it read is exactly what was typed after
- * the continue: everything typed before it was flushed, and none of it became
- * a password byte.
+ * terminal's modes restored (what is typed while it is stopped is echoed), a
+ * continue re-applies echo-off and reprints the prompt, and the child exits 0
+ * only if the password it read is what was typed after the continue:
+ * everything typed before it was flushed, and none of it became a password
+ * byte.
  *
- * Then the two things one keystroke is not. A suspend character with bytes
- * behind it in the same write, which the discipline does not flush and the read
- * returns before the stop is served; and a continue that arrives without the
+ * Then the cases a single keystroke does not cover. A suspend character with
+ * bytes behind it in the same write, which the discipline does not flush and
+ * the read returns before the stop is served. An over-long run on a pipe, cut
+ * by a stop, then a line that fits. A stop served before the first read, and
+ * one served between asking who owns the terminal and acting on the answer. A
+ * reader that never owns the terminal. And a continue that arrives without the
  * terminal, which is a shell's `bg`, where re-applying echo-off and reprinting
  * would silence a terminal that belongs to the shell.
  *
  * Then a standard error that is a pipe with no reader, which this kernel
- * answers
- * with a `SIGPIPE` whose default action is death: at the prompt that death
- * would
- * leave the console with echo off, and under a transaction it would leave the
- * lock file in `/etc`, since no `atexit` runs on a signal.
+ * answers with a `SIGPIPE` whose default action is death: at the prompt that
+ * death would leave the console with echo off, and under a transaction it
+ * would leave the lock file in `/etc`, since no `atexit` runs on a signal.
  *
- * Then `su` itself, from a uid-1000 caller with the known password on its
- * standard input: the non-login run, whose expectations are the paired half
- * that makes the login run mean something; a wrong password refused with the
- * caller's identity unchanged; and the login run, which must land in the
- * target's home under a leading-dash `argv[0]`. Both runs are made from a
- * working directory of `/musl` with a variable of the caller's own in the
- * environment, so the login run proves the working directory changed and the
- * non-login run proves it did not, and neither may carry the caller's variable
- * through.
+ * Then the signals the host cannot send: those above 32, which must be handled
+ * as deaths, the three musl reserves, which cannot be, and the fault signals,
+ * sent with `kill`.
+ *
+ * Then `su` itself, from a uid-1000 caller with the password on its standard
+ * input: the non-login run, whose expectations are the paired half that makes
+ * the login run mean something; the account's own password made longer than
+ * `PWAUTH_MAX_PASSWORD`, refused; a wrong password refused with the caller's
+ * identity unchanged; and the login run, which must land in the target's home
+ * under a leading-dash `argv[0]`. The runs are made from a working directory of
+ * `/musl` with a variable of the caller's own in the environment, so the login
+ * run shows the working directory changed and the non-login run shows it did
+ * not, and neither may carry the caller's variable through.
  *
  * It snapshots `/etc/passwd`, `/etc/shadow` and `/etc/group` at entry and puts
  * them back byte for byte, removes its own fixtures, and asserts before it does
  * that no lock and no temporary file is left anywhere it touched.
  *
- * Prints "PWAUTHMUSL OK" on success and "PWAUTHMUSL FAIL (detail)" otherwise.
- * Linked against the ported musl and the credential library.
+ * Prints "PWAUTHMUSL OK" on success; any failure prints
+ * "PWAUTHMUSL FAIL (detail)" and exits 1.
  */
 
 #define _GNU_SOURCE /* setresuid, getresuid */
@@ -125,26 +127,28 @@
 #define EXPECT_LOGIN     IDS_1000 " arg0=-idreport cwd=/home/probe" SU_ENVIRONMENT
 #define EXPECT_NON_LOGIN IDS_1000 " arg0=/idreport cwd=/musl" SU_ENVIRONMENT
 
-/* A uid-1000 caller that came back from a refused `su` with its identity
- * changed, and one whose `su` died of a signal: both are the run's own failure,
- * not a status su chose, so they are kept clear of the small statuses
- * su and idreport use. */
+/* The exit statuses of a uid-1000 caller that came back from `su` with its
+ * identity changed, and of one whose `su` died of a signal. Both are failures
+ * of the run itself, and are kept clear of the small statuses su and idreport
+ * use. */
 #define CALLER_BROKEN 127
 #define CALLER_SIGNAL 126
 
+/* The files this probe creates, which `finish` removes. */
 static const char *Fixtures[] = {"/credtxn.txt", "/credbusy.txt", "/credmode.txt", "/credlog.txt",
                                  "/credlost.txt"};
 
-/* No file any of these is replaced through may be left behind: a temporary file
- * outlives a replacement only after a crash. A replacement writes through
- * `<path>.tmp.<pid>`, so each of these is a prefix to sweep for and not a name
- * to look up: a temporary left by one of this probe's children has that
- * child's pid. The lock is checked beside them, since a lock outlives its
- * holder
- * only after a kill. */
+/* The files replaced under a transaction, each swept for a leftover temporary
+ * file, which outlives a replacement only after a crash. A replacement writes
+ * through `<path>.tmp.<pid>`, so each entry is a prefix to sweep for: a
+ * temporary left by one of this probe's children has that child's pid. The
+ * lock is checked beside them, since a lock outlives its holder only after a
+ * kill. */
 static const char *Replaced[] = {"/etc/passwd",  "/etc/shadow",   "/etc/group",
                                  "/credtxn.txt", "/credmode.txt", "/credlost.txt"};
 
+/* The credential databases and their bytes at entry, which `finish` puts
+ * back. */
 static const char *Databases[] = {"/etc/passwd", "/etc/shadow", "/etc/group"};
 static char Snapshot[3][512];
 static ssize_t Snapshot_len[3];
@@ -261,18 +265,15 @@ static int present(const char *path)
 }
 
 /**
- * How many temporary files of `path`'s the directory holding it still has.
+ * Count the temporary files of `path` left in the directory holding it.
  *
- * A replacement writes through `<path>.tmp.<pid>`, so no single name answers
- * whether the directory is clean: a temporary left behind by one of this
- * probe's
- * children is named for that child. This counts every name that begins the way
- * one of `path`'s temporaries does.
+ * A replacement writes through `<path>.tmp.<pid>`, and a temporary left by one
+ * of this probe's children is named for that child, so this counts every name
+ * that begins with the base name of `path` and `.tmp`.
  *
- * `path` must be absolute, and a relative one counts as one temporary rather
- * than none, as does a directory that cannot be opened: a question this helper
- * could not answer fails the probe instead of reporting a directory it never
- * looked in as clean.
+ * `path` must be absolute. A relative one counts as one temporary, as does a
+ * directory that cannot be opened, so that a failure to look fails the probe
+ * instead of passing it.
  */
 static int temps_left(const char *path)
 {
@@ -316,7 +317,7 @@ static int occurrences(const char *haystack, const char *needle)
     return n;
 }
 
-/** Sleep `ms` milliseconds, the probe's one way of letting time pass. */
+/** Sleep `ms` milliseconds. */
 static void nap(long ms)
 {
     struct timespec ts;
@@ -376,9 +377,9 @@ static int check_salt(void)
  * no temporary file left, and a reader that opened before the rename still
  * reading what it opened.
  *
- * The reader is the assertion the library's whole reader-never-locks rule rests
- * on. It has a descriptor across the rename and must read the old file
- * entire, not a prefix of it and not a mixture of the two.
+ * The rule that readers take no lock rests on the reader: holding a descriptor
+ * across the rename, it must read the old file entire, not a prefix of it and
+ * not a mixture of the two.
  *
  * The second row is the one place in the tree where the set-id rule and the
  * replacement idiom meet, and it needs both a set-id bit and an owner the
@@ -470,17 +471,17 @@ static int check_rewrite(void)
 }
 
 /**
- * A `fork` under a held transaction, at the real lock, with the real signals.
+ * A `fork` under a held transaction, at `/etc/.pwlock`, with signals sent.
  *
  * The state is file-scope, so a child inherits it while holding nothing: the
- * lock names its parent. Both ordinary ways out of such a child ran the release
- * once, and one keystroke reaches them, since `^C` at a terminal goes to every
+ * lock names its parent. A child reaches the release by exiting or by a death
+ * signal, and one keystroke sends one, since `^C` at a terminal goes to every
  * process in the foreground group. So a child that exits and a child that a
  * signal kills must leave the lock where it is, and the three entry points must
  * all decline to act on a transaction that is not the child's. The child's own
- * acquire is the `_at` form only to spend no time waiting: what it must show is
- * which refusal it gets, not that the budget is real, which the cases below
- * spend twenty seconds proving.
+ * acquire is the `_at` form with no retries, so that it spends no time waiting:
+ * this case checks which refusal it gets, and `check_recovery` waits out the
+ * budget.
  */
 static int check_fork(void)
 {
@@ -589,14 +590,14 @@ static int check_fork(void)
  * A lock cleared out from under a live holder: neither the publish nor the
  * release may act on the file that took its place.
  *
- * This is the second reason a lock is never broken, turned on the library
- * itself. Root removing a lock the library reported as stale, and the next
- * writer creating its own at the same name, is the whole of the setup, and an
- * unconditional unlink at the end of the first transaction would then take the
- * second writer's lock, and the third writer's after that. Nothing but the
- * recorded pid can tell the two files apart here, which the first assertion
- * shows: `st_ino` on this file system is a hash of the name, so two files that
- * carried one name in turn are indistinguishable by it.
+ * This is the second reason `pwauth.h` gives for never breaking a lock, turned
+ * on the library itself. Root removing a lock the library reported as stale,
+ * and the next writer creating its own at the same name, is the whole of the
+ * setup, and an unconditional unlink at the end of the first transaction would
+ * then take the second writer's lock, and the third writer's after that.
+ * Nothing but the recorded pid can tell the two files apart here, which the
+ * first assertion shows: `st_ino` on the boot root is derived from a hash of
+ * the name, so two files that had one name in turn have one inode number.
  */
 static int check_lost_lock(void)
 {
@@ -719,8 +720,8 @@ static void interleave_first(int notify)
  * read, append and publish.
  *
  * Its acquire is timed, because ordering alone would also come out right by
- * luck; it must really have waited. Its diagnostics go to a file so the parent
- * can check that a wait is announced once and not once per retry.
+ * luck; it must have waited. Its diagnostics go to a file so the parent can
+ * check that a wait is announced once and not once per retry.
  */
 static void interleave_second(int ordered)
 {
@@ -808,13 +809,14 @@ static int check_interleave(void)
 }
 
 /**
- * One refusal against a lock this probe wrote at the real `/etc/.pwlock`: the
- * acquire fails, the file is still there with its bytes unchanged, and the
- * report says which lock it is and what to do about it.
+ * One refusal against a lock this probe wrote at `/etc/.pwlock`: the acquire
+ * fails, the file is still there with its bytes unchanged, and the report says
+ * which lock it is and what to do about it.
  *
- * The acquire waits out the compiled-in retry budget, which is the point: this
- * is the path a real writer takes, with the path and the budget the shipped
- * programs carry, not parameters a test chose.
+ * The acquire waits out the compiled-in retry budget, so this is the path a
+ * writer takes, with the lock path and the budget the shipped programs use
+ * rather than parameters a test chose. Returns 0, or -1 after printing the
+ * failure, which is `what` when the acquire succeeds.
  */
 static int check_refusal(const char *what, const char *body, const char *expected)
 {
@@ -866,8 +868,12 @@ static int check_refusal(const char *what, const char *body, const char *expecte
 }
 
 /**
- * The recovery rules at the real lock path, and the control that makes them
- * mean something: with the file gone, the same acquire succeeds.
+ * The recovery rules at `/etc/.pwlock`, and the control that makes them mean
+ * something: with the file gone, the same acquire succeeds.
+ *
+ * The lock names a reaped pid and is refused; then the same lock with its
+ * modification time an hour back is refused as well, since nothing can tell an
+ * abandoned holder from a stopped one and the library applies no age rule.
  */
 static int check_recovery(void)
 {
@@ -890,8 +896,7 @@ static int check_recovery(void)
     if (check_refusal("an acquire took a lock naming a reaped pid", body, expected) != 0) {
         return -1;
     }
-    /* The assertion the deleted age rule fails: an hour-old lock is still a
-     * lock, since nothing can tell an abandoned holder from a stopped one. */
+    /* The same lock, an hour old. */
     {
         struct timespec ts[2];
 
@@ -927,9 +932,8 @@ static int check_recovery(void)
  * milliseconds pass. Returns 1 when they arrived and 0 otherwise.
  *
  * A caller that waits for a reprinted prompt needs the later copy and not the
- * first, since what it is really waiting out is the flush that precedes the
- * reprint, so the occurrences already in the buffer are counted rather than
- * matched.
+ * first, since what it waits out is the flush that precedes the reprint, so the
+ * occurrences already in the buffer are counted rather than matched.
  *
  * Every read of the master is bounded, because a probe that blocks on a
  * terminal nobody is writing to would hang the whole suite, not fail it.
@@ -1076,11 +1080,13 @@ static int pty_make(char *name, size_t size)
 }
 
 /**
- * The prompt's side of a terminal: the child reads a password on the slave of a
- * pseudo-terminal, and this returns what it exited with.
+ * The prompt's side of a terminal: read a password on the pseudo-terminal
+ * slave `name` and exit 0 if it is `secret`.
  *
  * `setsid` and `TIOCSCTTY` are the handoff `login` and dropbear make, and they
- * are what puts the child in the foreground process group a `^Z` reaches.
+ * are what puts the child in the foreground process group a `^Z` reaches. The
+ * child exits 41 to 44 when a step before the comparison fails, and 45 when the
+ * password is another one.
  */
 static void prompt_child(const char *name, int master)
 {
@@ -1114,7 +1120,12 @@ static void prompt_child(const char *name, int master)
  * modes it found put back, so a stopped process leaves a usable terminal;
  * the continue takes echo away again, discarding what was typed meanwhile
  * instead of letting it become a password byte; and the password read across
- * the whole cycle is exactly what was typed after it.
+ * the whole cycle is what was typed after it.
+ *
+ * The stop handler puts the modes back before the process stops, so what is
+ * typed at the stopped reader is echoed. The reader writes one newline of its
+ * own when it puts the modes back after the read, so a blank line after the
+ * password is expected and a character of the password is not.
  */
 static int check_prompt(void)
 {
@@ -1172,8 +1183,7 @@ static int check_prompt(void)
         return fail("the suspend character did not stop the reader");
     }
 
-    /* The stop handler put the modes back before the process stopped, so a
-     * stopped prompt leaves a terminal that still echoes. */
+    /* A stopped reader leaves a terminal that echoes. */
     if (write(master, "xyz", 3) != 3) {
         close(master);
 
@@ -1205,9 +1215,7 @@ static int check_prompt(void)
     }
     nap(500);
     {
-        /* The reader writes one newline of its own when it puts the modes back,
-         * so a blank line is expected and a character of the password is not.
-         */
+        /* Only the reader's own newline may come back. */
         ssize_t n = drain(master, buffer, sizeof(buffer));
         ssize_t i;
 
@@ -1239,9 +1247,9 @@ static int check_prompt(void)
  * the byte is already in the reader's buffer when the continue arrives, and
  * unless the resume drops the line it is spliced onto what is typed after the
  * reprinted prompt. The reader here exits 0 only if the password it read is
- * exactly what was typed after the continue, so `X` becoming the first
- * character of the password is the failure, and it is one a user meets by
- * typing `^Z` and a shell command in the same breath.
+ * what was typed after the continue, so `X` becoming the first character of the
+ * password is the failure, and a user meets it by typing `^Z` and a shell
+ * command in one burst.
  */
 static int check_prompt_burst(void)
 {
@@ -1310,29 +1318,22 @@ static int check_prompt_burst(void)
 }
 
 /**
- * The shell's side of a continue in the background: a session leader that owns
- * the terminal, a reader in a process group of its own, and a `bg`.
+ * Make the pipe on which a session leader tells its reader that the terminal
+ * is the reader's. Returns what `pipe` returns.
  *
- * It runs the whole case itself because the reader is its child and not the
- * probe's, and reports one line on `report`: the state of `ECHO` on the
- * terminal a second after the continue. `TIOCSPGRP` raises no `SIGTTOU` on this
- * kernel, so taking the terminal back from a background group needs nothing of
- * the shell dance around it.
- */
-/*
  * The reader is forked before the leader has given it the terminal, and a
- * reader that prints its prompt first has the master answering, with an
- * interrupt or a suspend character, a terminal the leader still owns: the
- * signal then lands on the leader, which stops and never reports. So the
- * reader waits on a pipe for the leader's word, given once `tcsetpgrp` has
- * run. `go_make` opens the pair, `go_wait` is the reader's side and
- * `go_give` the leader's.
+ * reader that printed its prompt first would have the master answering, with
+ * an interrupt or a suspend character, a terminal the leader still owns: the
+ * signal would land on the leader, which stops and never reports. So the
+ * reader waits on this pipe for the leader's word, given once `tcsetpgrp` has
+ * run.
  */
 static int go_make(int go[2])
 {
     return pipe(go);
 }
 
+/** The reader's side: wait for the leader's word, then close the pipe. */
 static void go_wait(int go[2])
 {
     char c;
@@ -1342,6 +1343,7 @@ static void go_wait(int go[2])
     close(go[0]);
 }
 
+/** The leader's side: give the word, then close the pipe. */
 static void go_give(int go[2])
 {
     close(go[0]);
@@ -1349,6 +1351,18 @@ static void go_give(int go[2])
     close(go[1]);
 }
 
+/**
+ * The shell's side of a continue in the background: a session leader that owns
+ * the terminal, a reader in a process group of its own, and a `bg`.
+ *
+ * It runs the whole case itself because the reader is its child and not the
+ * probe's, and reports one line on `report`: the state of `ECHO` on the
+ * terminal a second after the continue. A `bg` gives the terminal back to the
+ * shell and only then continues the job. `TIOCSPGRP` raises no `SIGTTOU` on
+ * this kernel, so taking the terminal back from a background group needs none
+ * of the signal handling a shell puts around it. Exits 0 after reporting, and
+ * 51 to 59 when a step fails before the report.
+ */
 static void prompt_bg_leader(const char *name, int master, int report)
 {
     struct termios tio;
@@ -1396,8 +1410,7 @@ static void prompt_bg_leader(const char *name, int master, int report)
         _exit(56);
     }
 
-    /* What `bg` is: the terminal goes back to the shell and only then is the
-     * job continued. */
+    /* `bg`: the terminal goes back to the shell before the continue. */
     if (tcsetpgrp(0, getpid()) != 0) {
         _exit(57);
     }
@@ -1416,23 +1429,26 @@ static void prompt_bg_leader(const char *name, int master, int report)
     _exit(0);
 }
 
+/* Set by a reader before it prompts; the next `tcgetpgrp` clears it and stops
+ * the reader with `SIGTSTP`. */
+static volatile sig_atomic_t Tcg_stop;
+
 /**
- * This image's `tcgetpgrp(3)`, and the stub that stops the reader the instant
- * it has its answer.
+ * This image's `tcgetpgrp(3)`, which stops the reader the moment it has its
+ * answer when `Tcg_stop` is set. Returns the group, or -1 with `errno` set.
  *
  * The library asks who owns the terminal and then acts on the answer, and the
  * answer goes stale if a stop is served in between: a shell can reclaim the
  * terminal and continue the reader in the background, after which acting on the
  * old answer silences a terminal the reader no longer owns. That interval
  * cannot be entered from outside, so it is entered from within. It raises
- * `SIGTSTP`, not `SIGSTOP` deliberately: `SIGTSTP` is the one a
- * keystroke sends and the one the library can defer, and a test using the
- * unblockable signal would be asserting a promise the library does not make.
+ * `SIGTSTP` rather than `SIGSTOP`: `SIGTSTP` is the one a keystroke sends and
+ * the one the library can defer, and a test using the unblockable signal would
+ * check a guarantee the library does not give.
  *
- * It answers from the ioctl the libc's own wrapper uses, so nothing is lost
- * by standing in for it.
+ * It answers from `TIOCGPGRP`, the ioctl musl's own wrapper uses, so nothing is
+ * lost by standing in for it.
  */
-static volatile sig_atomic_t Tcg_stop;
 
 pid_t tcgetpgrp(int fd)
 {
@@ -1522,22 +1538,22 @@ static void prompt_resume_leader(const char *name, int master, int report)
  * served and must not become a password byte. But the stop can also land while
  * the modes are being set or the prompt written, with no read outstanding at
  * all, and then the first read after the resume returns the first character the
- * user genuinely typed. Dropping that one turns a correct password into a
- * refusal, which is a fault the user cannot see the cause of: they type the
- * right thing and are told it is wrong.
+ * user typed. Dropping that one turns a correct password into a refusal, which
+ * is a fault the user cannot see the cause of: they type the right thing and
+ * are told it is wrong.
  *
- * The stub stops the reader at exactly that point. Unlike the stale-owner case
- * the terminal stays with the reader, so what follows is an ordinary `fg` and
- * an ordinary password, and every character of it must survive.
+ * The stub stops the reader at that point. Unlike the stale-owner case the
+ * terminal stays with the reader, so what follows is an ordinary `fg` and an
+ * ordinary password, and every character of it must survive.
  *
  * The continue is not the moment to type. The resume re-applies the echo-off
  * modes with `TCSAFLUSH`, which discards whatever is typed already, and the
  * mode change the stop interrupted does it once more as it returns; each
  * flush is followed by a prompt, so a password typed after the second prompt
  * is the first one no flush can take. Typing on the leader's report alone
- * loses the password whenever the reader has not reached those flushes yet,
- * which is a race the round-robin scheduler used to win and that no
- * scheduling order promises.
+ * would lose the password whenever the reader had not reached those flushes
+ * yet, and no scheduling order rules that out, so the case waits for the
+ * second prompt.
  */
 static int check_prompt_stop_before_read(void)
 {
@@ -1658,7 +1674,7 @@ static void prompt_stale_leader(const char *name, int master, int report)
         _exit(55);
     }
     go_give(go);
-    /* It stops inside the library, one call after it asked who owns this. */
+    /* The stub stops it inside the library, at its `tcgetpgrp`. */
     if (waitpid(reader, &status, WUNTRACED) != reader || !WIFSTOPPED(status)) {
         _exit(56);
     }
@@ -1682,12 +1698,12 @@ static void prompt_stale_leader(const char *name, int master, int report)
 /**
  * A reader stopped between asking who owns the terminal and acting on it.
  *
- * The window the ownership check opens if the two halves are not one step. The
- * reader is the foreground group when it asks, is stopped before it can act,
- * and is continued in the background by a leader that has taken the terminal
- * back. Acting on the stale answer silences a terminal belonging to somebody
- * else, which is the same damage as the background case and reachable the same
- * way, by one `^Z` at a password prompt.
+ * The ownership check opens this window unless asking and acting are one step.
+ * The reader is the foreground group when it asks, is stopped before it can
+ * act, and is continued in the background by a leader that has taken the
+ * terminal back. Acting on the stale answer silences a terminal belonging to
+ * somebody else, which is the same damage as the background case and reachable
+ * the same way, by one `^Z` at a password prompt.
  */
 static int check_prompt_stale_owner(void)
 {
@@ -1737,8 +1753,9 @@ static int check_prompt_stale_owner(void)
 }
 
 /**
- * The child for the overflow-then-resume case: one read, which must come back
- * with the line typed AFTER the stop.
+ * The child for the overflow-then-resume case: one read on `in`, which must
+ * come back with the line typed after the stop. Exits 0 for `secret`, 44 when
+ * the read fails and 45 for another line.
  */
 static void prompt_overflow_child(int in)
 {
@@ -1762,17 +1779,16 @@ static void prompt_overflow_child(int in)
  * The reader refuses an over-long entry instead of storing the prefix it
  * fitted, and it drops the line it has whenever a resume is served. Those two
  * meet here: a resume starts a fresh line, so the overflow that ended the old
- * one must go with it. Left standing, the flag rejects the perfectly good
- * password typed after the continue, and the user is told their entry was too
- * long when it was not, with no way past it but to start the program again.
+ * one must go with it. Left standing, the flag rejects the password that fits,
+ * typed after the continue, and the user is told their entry was too long when
+ * it was not, with no way past it but to start the program again.
  *
- * The channel is a pipe and not a pseudo-terminal, which is the whole reason
- * this case can exist. A terminal here is canonical, so nothing reaches the
- * reader until a newline does and an over-long line therefore ends the read
- * before any stop can be served; on a pipe the bytes arrive as they are
- * written, so the reader can be holding an over-long run when the stop lands.
- * Driving a program by script, which is how these probes and dropbear both run
- * one, is exactly that case.
+ * The channel is a pipe and not a pseudo-terminal, which is why this case can
+ * exist. A terminal here is canonical, so nothing reaches the reader until a
+ * newline does and an over-long line therefore ends the read before any stop
+ * can be served; on a pipe the bytes arrive as they are written, so the reader
+ * can be holding an over-long run when the stop lands. Driving a program by
+ * script, which is how these probes and dropbear both run one, is that case.
  */
 static int check_prompt_overflow_resume(void)
 {
@@ -1797,8 +1813,7 @@ static int check_prompt_overflow_resume(void)
         return fail("could not fork the reader the overflow-resume case interrupts");
     }
 
-    /* More than the reader will keep, and no newline, so it is still collecting
-     * when the stop arrives. */
+    /* Too long to keep, with no newline, so the reader is still collecting. */
     for (i = 0; i < sizeof(filler) - 1; i++) {
         filler[i] = 'a';
     }
@@ -1880,8 +1895,7 @@ static void prompt_unowned_leader(const char *name, int master, int report)
         _exit(54);
     }
     setpgid(reader, reader);
-    /* No tcsetpgrp: the terminal stays this process's, so the reader is a
-     * background group throughout, which is the whole point. */
+    /* No `tcsetpgrp`: the reader is a background group throughout. */
     if (waitpid(reader, &status, WUNTRACED) != reader) {
         _exit(56);
     }
@@ -1905,9 +1919,8 @@ static void prompt_unowned_leader(const char *name, int master, int report)
  *
  * The host test cannot ask this question, since Darwin stops a background
  * `tcsetattr` with `SIGTTOU` before it takes effect and this kernel does not.
- * So it is asked here, where the permission is real. Both halves are asserted:
- * the reader stopped on `SIGTTIN` instead of being handed a byte, and the
- * terminal still echoes.
+ * So it is asked here. Both halves are asserted: the reader stopped on
+ * `SIGTTIN` instead of being handed a byte, and the terminal still echoes.
  */
 static int check_prompt_never_owned(void)
 {
@@ -2047,17 +2060,15 @@ static int check_prompt_background(void)
  * transaction.
  *
  * This kernel raises `SIGPIPE` on a write to a pipe every reader has closed,
- * and
- * its default action ends the process. The prompt is written to file descriptor
- * 2 after echo has been taken away, so that death leaves the console silenced
- * with no program left to restore it; and a writer's diagnostic reaches the
- * same
- * write with the lock held, where the death runs no `atexit` and the lock file
- * stays in `/etc`. So the cases are the two lifetimes, and each is a child,
- * because what is being guarded against is a death, not a return value.
- * The writer's child leaves through `exit`, so the release must have run: a
- * lock
- * still at the name afterwards is exactly the stranded lock this is about.
+ * and its default action ends the process. The prompt is written to file
+ * descriptor 2 after echo has been taken away, so that death would leave the
+ * console silenced with no program left to restore it; and a writer's
+ * diagnostic reaches the same write with the lock held, where the death runs
+ * no `atexit` and the lock file stays in `/etc`. So the cases are the two
+ * lifetimes, and each is a child, because what is checked for is a death, not
+ * a return value. The writer's child leaves through `exit`, so the release
+ * must have run: a lock still at the name afterwards is the stranded lock this
+ * case is about.
  */
 static int check_sigpipe(void)
 {
@@ -2143,10 +2154,11 @@ static int check_sigpipe(void)
  * `/su` on a pipe and reports what the program su execs exited with.
  *
  * It is a process of its own for two reasons. `su` decides from the real uid,
- * so it has to be entered from a real uid-1000 caller; and a refused `su` must
- * leave that caller exactly as it was, which only the caller can say. It exits
- * with the run's status, or with its own code when the run died of a signal or
- * left the caller's identity changed.
+ * so it has to be entered from a caller whose real uid is 1000; and a refused
+ * `su` must leave that caller as it was, which only the caller can say. It
+ * exits with the low seven bits of the run's status, with `CALLER_SIGNAL` when
+ * the run died of a signal, and with `CALLER_BROKEN` when a step of its own
+ * failed or the run left the caller's identity changed.
  */
 static void su_caller(const char *cwd, char *const argv[], char *const envp[], const char *password)
 {
@@ -2212,27 +2224,21 @@ static int run_su(const char *cwd, char *const argv[], char *const envp[], const
 }
 
 /**
- * The signals above the host's reach, and the fault-numbered ones, which only
- * the guest can speak for.
+ * The signals above the host's range, and the fault signals sent with `kill`.
  *
- * The library derives the set it handles from what this kernel does, which
- * terminates a process for every signal but a few, over the whole range 1..64.
- * The host test checks that derivation against the dispositions actually
- * installed, but Darwin stops at 32, so the upper half is unchecked there and
- * is checked here instead. Two claims are made about it. A signal in the upper
- * range must be handled like any other death: the writer leaves through `exit`
- * and its lock is gone. And 32, 33 and 34 must NOT be handled, because this
- * libc reserves them and refuses them from `sigaction`, which is a residue the
- * library names, not one it hides: a writer sent one of those dies of it
- * with the lock behind, exactly as `SIGKILL` leaves one.
+ * The library handles as a death every signal this kernel terminates a process
+ * for, over the whole range 1..64, except the few `pwauth_is_death` leaves out.
+ * The host test checks that set against the dispositions installed, but Darwin
+ * stops at 32, so the upper half is checked here. A signal in the upper range
+ * must be handled like any other death: the writer leaves through `exit` and
+ * its lock is gone. And 32, 33 and 34 must not be handled, because musl
+ * reserves them and its `sigaction` fails for them; a writer sent one dies of
+ * it with the lock behind, as `SIGKILL` leaves one, and `pwauth.h` lists them.
  *
- * The fault numbers are here for a different reason. A real CPU exception on
- * this kernel never reaches a disposition: the exception handler and the
- * page fault path both call `terminate_current_process`, which zombifies the
- * process without consulting `sigacts`. So a `SIGSEGV` a handler can see is
- * one that was sent, which is an ordinary death, and the library handles it
- * like one. Sending them here is what proves that, since nothing in a host
- * test can distinguish a signal this kernel delivers from one it does not.
+ * A CPU exception on this kernel is a forced signal (`signal_force`), which
+ * reaches an installed handler, and a `SIGSEGV`, `SIGILL` or `SIGFPE` can also
+ * be sent by another process; the library handles both as a death. This case
+ * sends them, and the writer must leave through `exit` as for any other.
  */
 static int check_high_signals(void)
 {
@@ -2293,12 +2299,21 @@ static int check_high_signals(void)
 }
 
 /**
- * `su` itself: the non-login run, a refused one, and the login run.
+ * `su` itself: the non-login run, two refused ones, and the login run.
  *
  * The two successful runs differ in one argument and in nothing else, so what
- * the login run proves (a working directory of the target's home and a
- * leading-dash `argv[0]`) is exactly what the non-login run proves is not done.
- * The caller's own variable is in the environment of both, and reaches neither.
+ * the login run shows (a working directory of the target's home and a
+ * leading-dash `argv[0]`) is what the non-login run shows is not done. The
+ * caller's own variable is in the environment of both, and reaches neither.
+ *
+ * The first refusal is of the account's own password made longer than
+ * `PWAUTH_MAX_PASSWORD`, which `passwd` refuses to set and only a written
+ * record can arrange. The limit is the library's, whatever buffer a caller
+ * declares: a password `su` accepted and dropbear refuses is an account that
+ * works at the console and never over the network. A long wrong password would
+ * show nothing, since it is refused for being wrong; the long right one asks
+ * whether the reader stops at the limit every other reader in the image stops
+ * at. The second refusal is of another account's password.
  */
 static int check_su(void)
 {
@@ -2319,11 +2334,7 @@ static int check_su(void)
         return fail("a non-login su did not run the target's shell as it was");
     }
 
-    /* The limit belongs to the library, not to whichever buffer a caller
-     * happened to declare. `su` asks with a buffer of its own size, and an
-     * entry longer than the shortest limit any reader imposes must still be
-     * refused here: a password `su` accepted and dropbear refuses is an account
-     * that works at the console and never over the network. */
+    /* A password longer than any reader in the image takes. */
     {
         char overlong[160];
         char saved[4096];
@@ -2336,12 +2347,7 @@ static int check_su(void)
         }
         overlong[sizeof(overlong) - 1] = '\0';
 
-        /* The account's real password is made this long, which `passwd` would
-         * refuse to do and only a hand-written record can arrange. Feeding a
-         * long WRONG password would prove nothing: it is refused for being
-         * wrong. Feeding the long RIGHT one asks the only question there is,
-         * which is whether the reader stops at the limit every other reader in
-         * the image stops at. */
+        /* The account's own password, made that long in the shadow file. */
         if (slurp("/etc/shadow", saved, sizeof(saved)) < 0) {
             return fail("cannot read the shadow file the long-password case rewrites");
         }
@@ -2428,6 +2434,10 @@ static int finish(void)
     return 0;
 }
 
+/**
+ * Snapshot the databases, run the cases in order until one fails, and clean
+ * up. Returns 0 on success and 1 otherwise.
+ */
 int main(void)
 {
     size_t i;
