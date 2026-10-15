@@ -239,21 +239,26 @@ static int execs(void)
 /**
  * Pass a counter back and forth through two pipes between this process, bound
  * to the first processor, and a child bound to the last, each checking every
- * value it reads. Returns 0, or 1 after printing the failure.
+ * value it reads. Each side closes the ends it does not use and SIGPIPE is
+ * ignored, so that a child that ends early makes this process's read or write
+ * fail. Returns 0, or 1 after printing the failure.
  */
 static int pipes(void)
 {
-    int there[2], back[2], status, i, v;
+    int there[2], back[2], status, i, v, rc;
     pid_t pid;
 
     if (pipe(there) != 0 || pipe(back) != 0) {
         return fail("pipe");
     }
+    signal(SIGPIPE, SIG_IGN);
     pid = fork();
     if (pid < 0) {
         return fail("fork");
     }
     if (pid == 0) {
+        close(there[1]);
+        close(back[0]);
         if (bind_to(cpus - 1) != 0) {
             _exit(2);
         }
@@ -268,24 +273,22 @@ static int pipes(void)
         }
         _exit(0);
     }
-    if (bind_to(0) != 0) {
-        return fail("bind to the first processor");
-    }
-    for (i = 0; i < PIPE_TURNS; i++) {
+    close(there[0]);
+    close(back[1]);
+    rc = bind_to(0) != 0 ? fail("bind to the first processor") : 0;
+    for (i = 0; rc == 0 && i < PIPE_TURNS; i++) {
         v = 2 * i;
         if (write(there[1], &v, sizeof(v)) != sizeof(v) ||
             read(back[0], &v, sizeof(v)) != sizeof(v) || v != 2 * i + 1) {
-            return fail("a value through the pipes was not the one sent");
+            rc = fail("a value through the pipes was not the one sent");
         }
     }
-    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return fail("the pipes' other end did not read every value");
-    }
-    close(there[0]);
     close(there[1]);
     close(back[0]);
-    close(back[1]);
-    return 0;
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return rc != 0 ? rc : fail("the pipes' other end did not read every value");
+    }
+    return rc;
 }
 
 /* The futex the turns pass through: even for the first thread's turn, odd
@@ -322,15 +325,18 @@ static void futex_turns(int parity)
     }
 }
 
-/** Take the odd turns on the last processor; `&unbound` if it cannot bind. */
+/**
+ * Take the odd turns on the last processor, or on any when it cannot bind, so
+ * that the first thread's turns still end. Returns `&unbound` when it could
+ * not bind, and NULL otherwise.
+ */
 static void *futex_last(void *arg)
 {
+    int bound = bind_to(cpus - 1) == 0;
+
     (void)arg;
-    if (bind_to(cpus - 1) != 0) {
-        return &unbound;
-    }
     futex_turns(1);
-    return NULL;
+    return bound ? NULL : &unbound;
 }
 
 /**

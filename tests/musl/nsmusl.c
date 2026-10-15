@@ -334,8 +334,9 @@ static int ipc(void)
 /**
  * Check that a tmpfs mounted in a child's new mount namespace, and a file
  * made in it, are seen by the child and not by this process. Two pipes keep
- * the child in place while this process looks. Returns 0, or 1 after printing
- * the failure.
+ * the child in place while this process looks; a child that fails before its
+ * write closes the only writer of the first, and its status is the failure.
+ * Returns 0, or 1 after printing the failure.
  */
 static int mnt(void)
 {
@@ -361,10 +362,16 @@ static int mnt(void)
         read(down[0], &c, 1);
         _exit(stat("/tmp/nsmnt/inner", &st) == 0 ? 0 : 1);
     }
-    if (read(up[0], &c, 1) != 1 || stat("/tmp/nsmnt/inner", &st) == 0) {
-        rc = fail("the mount is not seen outside its namespace");
+    close(up[1]);
+    close(down[0]);
+    if (read(up[0], &c, 1) == 1) {
+        if (stat("/tmp/nsmnt/inner", &st) == 0) {
+            rc = fail("the mount is not seen outside its namespace");
+        }
+        write(down[1], &c, 1);
     }
-    write(down[1], &c, 1);
+    close(up[0]);
+    close(down[1]);
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         rc = 1;
     }

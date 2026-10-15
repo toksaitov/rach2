@@ -2264,6 +2264,9 @@ static int check_high_signals(void)
             return fail("could not fork the writer the high-signal case signals");
         }
         while (!present("/etc/.pwlock")) {
+            if (waitpid(child, &status, WNOHANG) == child) {
+                return fail("the writer the high-signal case signals did not begin");
+            }
             sleep(1);
         }
         kill(child, handled[i]);
