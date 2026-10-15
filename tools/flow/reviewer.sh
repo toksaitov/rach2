@@ -23,15 +23,20 @@
 # form reviewer.json gives. Each finding becomes a `bug` issue that says
 # `Part of #P`, linked as a sub-issue while the phase has room, for the manager
 # to triage; a comment on the phase gives the summary and the issues filed, and
-# the phase gets the label `reviewed`. A review that fails or reaches its limit
+# the phase gets the label `reviewed`. When one of these steps fails, the loop
+# starts no other review and tries the steps not yet done again every five
+# minutes, so that no finding is lost. A review that fails or reaches its limit
 # says so on the phase, files nothing and is not repeated unless queued; one
 # that ends on the account's usage limit is repeated after fifteen minutes.
 # Nothing waits for a review.
 #
 # STATE, `~/flow/reviewer` unless given, holds the log `loop.log`, `since`,
 # `queue`, `failed`, the worktree `wt`, the process group of the review that is
-# running in `session`, and each review's issue texts and output as
-# `r-P-TIME.issues`, `.jsonl`, `.err` and `.json`. `touch STATE/stop` ends the
+# running in `session`, the review whose findings are being filed in `pending`,
+# and each review's issue texts and output as `r-P-TIME.issues`, `.jsonl`,
+# `.err` and `.json`, with the findings filed in `.filed`, one `I N` a line for
+# finding I filed as issue N, and `.commented` once the summary is on the
+# phase. Removing `pending` abandons the filing. `touch STATE/stop` ends the
 # loop after the review that is running, and a loop that starts while a review
 # of the loop before it still runs waits for that review to end.
 
@@ -110,14 +115,19 @@ drop()
     mv "$state/queue.new" "$state/queue"
 }
 
-# findings P COMMIT ANSWER: file each finding of the JSON file ANSWER as a
-# `bug` issue of phase P, and print the numbers filed.
+# findings P COMMIT BASE: file each finding of BASE.json that BASE.filed does
+# not list as a `bug` issue of phase P, and add it to BASE.filed. Fail when a
+# finding could not be filed.
 findings()
 {
-    answer=$3
-    n=$(jq '.findings | length' "$answer")
-    i=0
+    answer=$3.json
+    n=$(jq '.findings | length' "$answer") || return 1
+    i=0 lost=0
     while [ "$i" -lt "$n" ]; do
+        if grep -q "^$i " "$3.filed" 2> /dev/null; then
+            i=$((i + 1))
+            continue
+        fi
         body="Found by the review of phase #$1 at $2, which \`tools/flow/reviewer.sh\` ran with $agent.
 
 Severity: $(get severity). In \`$(get file):$(get line)\`.
@@ -133,12 +143,14 @@ Part of #$1."
             id=$(gh api "repos/$REPO/issues/${url##*/}" --jq .id) &&
                 gh api -X POST "repos/$REPO/issues/$1/sub_issues" -F sub_issue_id="$id" \
                     > /dev/null 2>&1
-            printf '#%s ' "${url##*/}"
+            echo "$i ${url##*/}" >> "$3.filed"
         else
             log "#$1: could not file finding $i: $(get title)"
+            lost=1
         fi
         i=$((i + 1))
     done
+    return "$lost"
 }
 
 # get FIELD: print FIELD of finding i of the answer that `findings` reads.
@@ -147,8 +159,30 @@ get()
     jq -r ".findings[$i].$1" "$answer"
 }
 
-# review P: review phase P with the agent's adapter, file what it finds, and
-# return 0, 75 when the account's usage limit ended it, or 1 when it failed.
+# finish: file the findings of the review that STATE/pending names, comment
+# its summary on the phase, label the phase `reviewed` and remove
+# STATE/pending. Fail, and keep STATE/pending for the next try, when a step
+# fails.
+finish()
+{
+    read -r p commit took base < "$state/pending" || return 1
+    findings "$p" "$commit" "$base" || return 1
+    if [ ! -e "$base.commented" ]; then
+        filed=$(awk '{ printf "%s#%s", s, $2; s = " " }' "$base.filed" 2> /dev/null)
+        gh issue comment "$p" --repo "$REPO" --body "Review of this phase at $commit by \`tools/flow/reviewer.sh\` with $agent ($LEAD at $LEAD_EFFORT effort, at most $SUBAGENTS subagents at a time of $SUB at $SUB_EFFORT), in $took seconds.
+
+$(jq -r .summary "$base.json")
+
+Filed: ${filed:-none}" > /dev/null || return 1
+        : > "$base.commented"
+    fi
+    gh issue edit "$p" --repo "$REPO" --add-label reviewed > /dev/null || return 1
+    rm -f "$state/pending"
+}
+
+# review P: review phase P with the agent's adapter, file what it finds through
+# STATE/pending and `finish`, and return 0, 75 when the account's usage limit
+# ended it, or 1 when it failed.
 review()
 {
     p=$1
@@ -196,13 +230,8 @@ review()
         gh issue comment "$p" --repo "$REPO" --body "The review of this phase at $commit, by \`tools/flow/reviewer.sh\` with $agent, is incomplete: $why, after $took seconds. Nothing was filed. Its output is \`$base.*\` on the reviewer's machine; write $p to the loop's \`queue\` to run it again." > /dev/null
         return 1
     fi
-    filed=$(findings "$p" "$commit" "$base.json")
-    gh issue comment "$p" --repo "$REPO" --body "Review of this phase at $commit by \`tools/flow/reviewer.sh\` with $agent ($LEAD at $LEAD_EFFORT effort, at most $SUBAGENTS subagents at a time of $SUB at $SUB_EFFORT), in $took seconds.
-
-$(jq -r .summary "$base.json")
-
-Filed: ${filed:-none}" > /dev/null
-    gh issue edit "$p" --repo "$REPO" --add-label reviewed > /dev/null
+    echo "$p $commit $took $base" > "$state/pending"
+    finish || log "#$p: filing incomplete; it is tried again before the next review"
     return 0
 }
 
@@ -253,6 +282,11 @@ main()
                 sleep 60
                 continue ;;
         esac
+        if [ -e "$state/pending" ] && ! finish; then
+            log "filing of the review in $state/pending failed"
+            sleep 300
+            continue
+        fi
         if ! p=$(pick); then
             log "board unreachable"
             sleep 300
