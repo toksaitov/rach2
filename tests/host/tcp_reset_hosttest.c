@@ -40,7 +40,8 @@ extern int printf(const char *fmt, ...);
 
 volatile uint32_t kernel_ticks;
 
-/* The microsecond clock TCP times its round trips by, for `ss -i`. */
+/** Return the microsecond clock TCP times its round trips by, for `ss -i`:
+ * 10000 to a tick. */
 uint32_t timer_now_us(void)
 {
     return kernel_ticks * 10000u;
@@ -59,9 +60,10 @@ uint32_t timer_now_us(void)
 
 uint32_t net_ip_addr = SELF;
 
-static unsigned key_draws;
+static unsigned key_draws; /* the words krandom_u32 has given */
 
-/* The key words in the order `tcp_isn_key` stores them, whenever it asks. */
+/** Return the next key word, in the order `tcp_isn_key` stores them, so that
+ * each draw of four makes the key 00 to 0f. */
 uint32_t krandom_u32(void)
 {
     return 0x03020100u + 0x04040404u * (key_draws++ % 4);
@@ -72,12 +74,14 @@ uint32_t krandom_u32(void)
 static struct {
     uint32_t seq, ack;
     uint8_t flags;
-} segs[MAX_SEGS];
-static unsigned n_segs;
-static unsigned cb_connected, cb_fin, cb_accept, unrefs;
+} segs[MAX_SEGS];       /* the first MAX_SEGS segments ip_tx sent */
+static unsigned n_segs; /* the segments sent, MAX_SEGS and past it */
+static unsigned cb_connected, cb_fin, cb_accept, unrefs; /* calls of each */
 
 uint32_t read32be(const uint8_t *p);
 
+/** Record the sequence and acknowledgement numbers and the flags of a
+ * segment sent, and return 0. */
 int ip_tx(uint32_t dst, uint8_t proto, const uint8_t *payload, uint16_t len, uint8_t ttl)
 {
     (void)dst;
@@ -93,23 +97,27 @@ int ip_tx(uint32_t dst, uint8_t proto, const uint8_t *payload, uint16_t len, uin
     return 0;
 }
 
+/** Count a connection that completed or ended. */
 void socket_tcp_connected(struct socket *sock)
 {
     (void)sock;
     cb_connected++;
 }
 
+/** Count the peer's FIN or the connection's end. */
 void socket_tcp_fin(struct socket *sock)
 {
     (void)sock;
     cb_fin++;
 }
 
+/** Note freed send-ring space: a no-op. */
 void socket_tcp_writable(struct socket *sock)
 {
     (void)sock;
 }
 
+/** Take all `len` bytes delivered in order. */
 uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t len)
 {
     (void)sock;
@@ -117,6 +125,7 @@ uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t l
     return len;
 }
 
+/** Take all `len` bytes that arrived past a hole. */
 uint16_t socket_tcp_hold(struct socket *sock, uint32_t offset, const uint8_t *data, uint16_t len)
 {
     (void)sock;
@@ -125,12 +134,14 @@ uint16_t socket_tcp_hold(struct socket *sock, uint32_t offset, const uint8_t *da
     return len;
 }
 
+/** Make held bytes readable: a no-op. */
 void socket_tcp_release(struct socket *sock, uint32_t n)
 {
     (void)sock;
     (void)n;
 }
 
+/** Count a connection queued on a listener for accept. */
 void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock)
 {
     (void)listen_sock;
@@ -150,6 +161,8 @@ int socket_port_bound(uint16_t port)
     return 0;
 }
 
+/** Return the next socket of `pool`, cleared, of type `type` and with one
+ * reference, or NULL when the pool is used up. */
 struct socket *socket_alloc(int type)
 {
     struct socket *s;
@@ -164,28 +177,33 @@ struct socket *socket_alloc(int type)
     return s;
 }
 
+/** Count a socket released. */
 void socket_unref(struct socket *sock)
 {
     (void)sock;
     unrefs++;
 }
 
+/** Read the big-endian 16-bit field at `p`. */
 uint16_t read16be(const uint8_t *p)
 {
     return (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
 }
 
+/** Read the big-endian 32-bit field at `p`. */
 uint32_t read32be(const uint8_t *p)
 {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
+/** Store `v` at `p` in network byte order. */
 void write16be(uint8_t *p, uint16_t v)
 {
     p[0] = (uint8_t)(v >> 8);
     p[1] = (uint8_t)(v & 0xFF);
 }
 
+/** Store `v` at `p` in network byte order. */
 void write32be(uint8_t *p, uint32_t v)
 {
     p[0] = (uint8_t)(v >> 24);
@@ -194,7 +212,8 @@ void write32be(uint8_t *p, uint32_t v)
     p[3] = (uint8_t)v;
 }
 
-/* The IP header checksum, which `tcp_checksum` reuses for the pseudo-header. */
+/** Return the Internet checksum of `len` bytes at `buf`: the IP header
+ * checksum, which `tcp_checksum` reuses for the pseudo-header. */
 uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
 {
     uint32_t sum = 0;
@@ -212,16 +231,19 @@ uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
     return (uint16_t)~sum;
 }
 
+/** Take the network lock: a no-op, since no interrupt runs in this model. */
 uint32_t net_lock(void)
 {
     return 0;
 }
 
+/** Release the network lock: a no-op. */
 void net_unlock(uint32_t flags)
 {
     (void)flags;
 }
 
+/** Discard a kernel log record. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -229,17 +251,21 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
-/* This machine's addresses: one interface's, and 127/8. */
+/** Report whether `ip` is this machine's: the one interface's address, or an
+ * address of 127/8. */
 int ip_is_local(uint32_t ip)
 {
     return ip != 0 && (ip == net_ip_addr || (ip & 0xFF000000u) == 0x7F000000u);
 }
 
+/** Return the source address for `dst`: 127.0.0.1 for 127/8, else the
+ * interface's address. */
 uint32_t ip_source(uint32_t dst)
 {
     return (dst & 0xFF000000u) == 0x7F000000u ? 0x7F000001u : net_ip_addr;
 }
 
+/** Record a segment sent from `src`, as ip_tx does. */
 int ip_tx_from(uint32_t src, uint32_t dst, uint8_t proto, const uint8_t *payload, uint16_t len,
                uint8_t ttl)
 {
@@ -493,6 +519,7 @@ static void test_isn(void)
     reset_all();
 }
 
+/** Run the cases; return 0 when every check passes and 1 otherwise. */
 int main(void)
 {
     test_established();
