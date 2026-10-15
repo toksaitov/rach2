@@ -18,7 +18,7 @@ Rach2 is an operating system for 32-bit and 64-bit x86 PCs, written to be read b
 
 Two systems run on the same kernel:
 
-* The musl system is on every image, and `make` builds it from this repository alone. Its programs are linked statically with a port of the musl C library: the BusyBox shell and utilities, the Dropbear SSH server, the TinyCC compiler and pdpmake, e2fsprogs, Doom, and Rach2's own programs for login, the network, disks and recovery.
+* The musl system is on every image, and `make` builds it from this repository alone. Its programs are linked statically with a port of the musl C library: the BusyBox shell and utilities, the Dropbear SSH server, the TinyCC compiler and pdpmake, e2fsprogs, and Rach2's own programs for login, the network, disks and recovery. Doom is linked statically with a small C library of its own.
 * The GNU system is a larger root that [`vendor/gnu/`](vendor/gnu/Readme.md) builds on an x86-64 Linux host. Its programs are linked dynamically with glibc: bash, coreutils, OpenSSH, Python, Perl, Git, Vim, tmux and the other ported packages, a native GCC and GDB, the SpiderMonkey JavaScript shell and Chromium's headless shell.
 
 Three lists give the detail:
