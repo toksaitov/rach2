@@ -1,12 +1,11 @@
 /**
- * Exercises the TCP socket path against a host echo server at the SLIRP
+ * tcptest: the TCP socket path, against a host echo server at the SLIRP
  * gateway 10.0.2.2:7777, or at the port its argument names.
  *
  * Connects, sends data and reads it back through `read()`/`write()` on the
- * socket fd (the unified descriptor path), closes gracefully, then verifies
- * that connecting to a closed port fails instead of hanging.
- *
- * Freestanding; direct system calls (probe.h).
+ * socket descriptor, closes, then checks that connecting to a closed port
+ * fails instead of hanging. It exits 0 when the four tests pass and 1
+ * otherwise.
  */
 
 #include "probe.h"
@@ -23,32 +22,38 @@ typedef unsigned char uint8_t;
 #define DST_PORT    7777
 #define CLOSED_PORT 9
 
+/** The write call: the count written, or a negated errno. */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
+/** The read call: the count read, 0 at the end, or a negated errno. */
 static int sys_read(int fd, void *buf, size_t count)
 {
     return syscall3(SYS_READ, (long)fd, (long)buf, (long)count);
 }
 
+/** The close call: 0, or a negated errno. */
 static int sys_close(int fd)
 {
     return syscall1(SYS_CLOSE, (long)fd);
 }
 
+/** The socket operation `call`, an SC_ number, through `sock_call`. */
 static int socketcall(int call, unsigned long *args)
 {
     return (int)sock_call(call, args);
 }
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -57,16 +62,19 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` to standard output. */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     print(s);
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
+/** Write `n` in decimal to standard output. */
 static void print_num(int n)
 {
     char buf[12];
@@ -87,6 +95,7 @@ static void print_num(int n)
         sys_write(STDOUT_FILENO, &buf[--i], 1);
 }
 
+/** Non-zero when the first `n` bytes of `a` and `b` are equal. */
 static int mem_eq(const uint8_t *a, const uint8_t *b, int n)
 {
     int i;
@@ -97,6 +106,8 @@ static int mem_eq(const uint8_t *a, const uint8_t *b, int n)
     return 1;
 }
 
+/** Fill a 16-byte sockaddr_in: family, big-endian port, the IPv4 address
+ * a.b.c.d. */
 static void make_sockaddr(uint8_t *sa, uint16_t port, uint8_t a, uint8_t b, uint8_t c, uint8_t d)
 {
     int i;
@@ -112,6 +123,7 @@ static void make_sockaddr(uint8_t *sa, uint16_t port, uint8_t a, uint8_t b, uint
     sa[7] = d;
 }
 
+/** A TCP socket: its descriptor, or a negated errno. */
 static int make_stream_socket(void)
 {
     unsigned long args[3];
@@ -121,6 +133,7 @@ static int make_stream_socket(void)
     return socketcall(SC_SOCKET, args);
 }
 
+/** Connect `fd` to `port` of the gateway 10.0.2.2: 0, or a negated errno. */
 static int connect_to(int fd, uint16_t port)
 {
     unsigned long args[3];
@@ -132,9 +145,9 @@ static int connect_to(int fd, uint16_t port)
     return socketcall(SC_CONNECT, args);
 }
 
-/** The echo server's port: the first argument when there is one, since the
- * socket suite moves its port with the run's block (tests/run), else
- * DST_PORT. */
+/** The echo server's port: the first argument when there is one, since
+ * tests/system/suites.mk moves the socket suite's port with the run's block
+ * of ports, else DST_PORT. */
 static uint16_t server_port(unsigned long *sp)
 {
     char **argv = (char **)(sp + 1);
@@ -152,6 +165,8 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/** The probe, entered with `sp` at argc: the four tests in order. A failed
+ * socket or connect in test 1 ends it at once with status 1. */
 void probe_main(unsigned long *sp)
 {
     char msg[] = "hello-tcp-echo";
@@ -163,8 +178,7 @@ void probe_main(unsigned long *sp)
     puts("TCP socket test starting...");
     puts("");
 
-    /* Test 1: connect to the echo server. The first SYN may be dropped while
-     * ARP resolves; the SYN retransmission completes the handshake. */
+    /* Test 1: connect to the echo server. */
     print("Test 1: connect to echo server... ");
     fd = make_stream_socket();
     if (fd < 0) {
@@ -208,7 +222,7 @@ void probe_main(unsigned long *sp)
         failed++;
     }
 
-    /* Test 4: connecting to a closed port must fail, not hang. */
+    /* Test 4: connecting to a closed port fails, and does not hang. */
     print("Test 4: connect to closed port fails... ");
     fd2 = make_stream_socket();
     if (fd2 < 0) {

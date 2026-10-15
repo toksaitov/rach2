@@ -1,16 +1,14 @@
 /**
- * Exercises the socket calls of the UDP path: socket, bind, sendto, and
- * recvfrom in both blocking and non-blocking (MSG_DONTWAIT) forms. Acts as a
- * UDP echo client against a host echo server reachable at the SLIRP gateway
- * 10.0.2.2:7777, or at the port its argument names.
- *
- * Freestanding; direct system calls (probe.h).
+ * udptest: the UDP socket calls socket, bind, sendto and recvfrom, made as a
+ * client of a host echo server at the SLIRP gateway 10.0.2.2:7777, or at the
+ * port its argument names. It exits 0 when the five tests pass and 1
+ * otherwise.
  */
 
 #include "probe.h"
 
-/* An address of the kernel's, outside user space: the first megabyte on i386,
- * and on x86-64 the last page of the address space, in the kernel's half. */
+/* An address of the kernel's, outside user space: 1 MiB on i386, where the
+ * kernel is linked, and on x86-64 the last page, in the kernel's half. */
 #if defined __x86_64__
 #define KERNEL_PTR 0xFFFFFFFFFFFFF000ul
 #else
@@ -22,8 +20,6 @@ typedef unsigned short uint16_t;
 typedef unsigned char uint8_t;
 
 #define STDOUT_FILENO 1
-
-/* socketcall sub-calls. */
 
 #define AF_INET      2
 #define SOCK_DGRAM   2
@@ -43,27 +39,32 @@ struct timeval {
     long tv_usec;
 };
 
+/** The write call: the count written, or a negated errno. */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** The gettimeofday call with no time zone: 0, or a negated errno. */
 static int sys_gettimeofday(struct timeval *tv)
 {
     return syscall2(SYS_GETTIMEOFDAY, (long)tv, (long)0);
 }
 
+/** The socket operation `call`, an SC_ number, through `sock_call`. */
 static int socketcall(int call, unsigned long *args)
 {
     return (int)sock_call(call, args);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -72,16 +73,19 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` to standard output. */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     print(s);
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
+/** Write `n` in decimal to standard output. */
 static void print_num(int n)
 {
     char buf[12];
@@ -102,6 +106,7 @@ static void print_num(int n)
         sys_write(STDOUT_FILENO, &buf[--i], 1);
 }
 
+/** Non-zero when the first `n` bytes of `a` and `b` are equal. */
 static int mem_eq(const uint8_t *a, const uint8_t *b, int n)
 {
     int i;
@@ -112,7 +117,8 @@ static int mem_eq(const uint8_t *a, const uint8_t *b, int n)
     return 1;
 }
 
-/* Fill a 16-byte sockaddr_in: family, big-endian port, big-endian IPv4. */
+/** Fill a 16-byte sockaddr_in: family, big-endian port, the IPv4 address
+ * a.b.c.d. */
 static void make_sockaddr(uint8_t *sa, uint16_t port, uint8_t a, uint8_t b, uint8_t c, uint8_t d)
 {
     int i;
@@ -128,7 +134,7 @@ static void make_sockaddr(uint8_t *sa, uint16_t port, uint8_t a, uint8_t b, uint
     sa[7] = d;
 }
 
-/* Busy-wait roughly ms milliseconds using the 100 Hz clock. */
+/** Spin for at least `ms` milliseconds by gettimeofday. */
 static void delay_ms(int ms)
 {
     struct timeval start, now;
@@ -140,9 +146,9 @@ static void delay_ms(int ms)
     } while (elapsed < ms);
 }
 
-/** The echo server's port: the first argument when there is one, since the
- * socket suite moves its port with the run's block (tests/run), else
- * DST_PORT. */
+/** The echo server's port: the first argument when there is one, since
+ * tests/system/suites.mk moves the socket suite's port with the run's block
+ * of ports, else DST_PORT. */
 static uint16_t server_port(unsigned long *sp)
 {
     char **argv = (char **)(sp + 1);
@@ -160,6 +166,15 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/**
+ * The probe, entered with `sp` at argc: the five tests in order. A failed
+ * socket in test 1 ends it at once with status 1.
+ *
+ * Test 4 sends the message and polls for the echo 50 ms later, up to 40
+ * times, sending it again each time no echo has come. A datagram sent
+ * before ARP has the gateway's address waits in the kernel for the reply,
+ * so the first echo can come late.
+ */
 void probe_main(unsigned long *sp)
 {
     unsigned long args[6], rcv_len = 16;
@@ -221,8 +236,7 @@ void probe_main(unsigned long *sp)
         failed++;
     }
 
-    /* Test 4: echo round-trip. Retry the send so the first datagram, which is
-     * dropped while ARP resolves the gateway, does not stall the test. */
+    /* Test 4: echo round trip, sent again until the echo arrives. */
     print("Test 4: sendto + recvfrom echo... ");
     make_sockaddr(dst_sa, server_port(sp), DST_IP_0, DST_IP_1, DST_IP_2, DST_IP_3);
     n = EAGAIN;
@@ -256,7 +270,7 @@ void probe_main(unsigned long *sp)
         failed++;
     }
 
-    /* Test 5: recvfrom into a kernel address must be rejected, not faulted */
+    /* Test 5: recvfrom into a kernel address is refused and does not fault. */
     print("Test 5: recvfrom into a kernel pointer is rejected... ");
     args[0] = (uint32_t)fd;
     args[1] = KERNEL_PTR;

@@ -641,7 +641,7 @@ tests/ownprobe.c:child_main complexity 41 a probe, one sequence of steps in the 
 tests/ownprobe.c:child_main lines 124 a probe, one sequence of steps in the order the log records them
 
 tests/packetprobe.c:_start complexity 145 a probe, one sequence of steps in the order the log records them
-tests/packetprobe.c:_start lines 682 a probe, one sequence of steps in the order the log records them
+tests/packetprobe.c:_start lines 629 a probe, one sequence of steps in the order the log records them
 
 tests/partsprobe.c:probe_main complexity 46 a probe, one sequence of steps in the order the log records them
 tests/partsprobe.c:probe_main lines 116 a probe, one sequence of steps in the order the log records them
@@ -665,7 +665,7 @@ tests/rawprobe.c:_start lines 352 a probe, one sequence of steps in the order th
 
 tests/rmtest.c:_start lines 148 a probe, one sequence of steps in the order the log records them
 
-tests/sockettest.c:_start lines 131 a probe, one sequence of steps in the order the log records them
+tests/sockettest.c:_start lines 130 a probe, one sequence of steps in the order the log records them
 
 tests/stattest.c:_start lines 177 a probe, one sequence of steps in the order the log records them
 
@@ -706,7 +706,7 @@ tests/system/runner/runutil.c:supervise lines 172 a parser over an external form
 
 tests/touchtest.c:_start lines 142 a probe, one sequence of steps in the order the log records them
 
-tests/udptest.c:probe_main lines 126 a probe, one sequence of steps in the order the log records them
+tests/udptest.c:probe_main lines 125 a probe, one sequence of steps in the order the log records them
 
 tests/unlinkdirprobe.c:_start complexity 35 a probe, one sequence of steps in the order the log records them
 tests/unlinkdirprobe.c:_start lines 151 a probe, one sequence of steps in the order the log records them
