@@ -92,7 +92,7 @@ A claim (`devfs_claim` in `devfs.c`) is a mount's sector range on the physical d
 
 ### Locks
 
-The mount table has no lock of its own: the kernel reads and changes it under its one lock ([../../Readme.md](../../Readme.md)), and a system call is not preempted, so a process finds a namespace lock, a description or a buffer held only while its holder sleeps for the disk. The order is a mount's namespace lock, then an open-file description's lock, then buffers of the cache by the cache's rules.
+The mount table has no lock of its own: the kernel reads and changes it under its one lock ([../proc/Readme.md](../proc/Readme.md)), and a system call is not preempted, so a process finds a namespace lock, a description or a buffer held only while its holder sleeps for the disk. The order is a mount's namespace lock, then an open-file description's lock, then buffers of the cache by the cache's rules.
 
 The namespace lock (`vfs_ns_lock`) is taken by every namespace change on a mount, by its constructor and its unmount, and by a writing type around its data operations, so every change to a volume runs under one lock. A caller takes a place in line (`ns_next`) and waits until its place is served (`ns_serving`), so a writer that locks for each call cannot take the lock back before a waiter has had it. The holder may take it again (`ns_depth`), since a type's operations lock for the callers that arrive unlocked and are also reached under the lock. A signal does not end the wait: a waiter that retried without sleeping would never let the holder run. `vfs_ns_held_by_caller` lets the buffer cache pass over a victim whose writeback would take another mount's lock.
 
@@ -100,7 +100,7 @@ The namespace lock (`vfs_ns_lock`) is taken by every namespace change on a mount
 
 `bcache.c` keeps blocks of 4 KiB, eight sectors each, for the disk file systems that are mounted: FAT32, exFAT, ext2, as a mount or as the root, and KRFFS volumes. A KRFFS root on a disk goes through the page cache instead ([../mm/Readme.md](../mm/Readme.md)). The operations are those of Lions' commentary: get a block and hold it, release it, mark it dirty, write it through, write a device's dirty buffers, and drop a device's buffers.
 
-A buffer (`struct bbuf`) is a record and a page of the heap, made when it is needed. The cache makes at most the smaller of half of what the caches together may keep under memory pressure (`mem_cache_target`, a quarter of the frames) and half of the kernel heap's pages, and never fewer than `BCACHE_MIN_BUFFERS`, 16. The heap is 256 MiB on i686, so the cache there has at most 32768 buffers; on x86-64 the heap is an eighth of memory and at least 256 MiB ([../mm/Readme.md](../mm/Readme.md)). The last block of a device whose sector count is not a multiple of eight has only the sectors that exist.
+A buffer (`struct bbuf`) is a record and a page of the heap, made when it is needed. The cache makes at most the smaller of half of what the caches together may keep under memory pressure (`mem_cache_target`, a quarter of the frames) and half of the kernel heap's pages, and never fewer than `BCACHE_MIN_BUFFERS`, 16. On i686, whose heap is 256 MiB, the cache has at most 32768 buffers; [../mm/Readme.md](../mm/Readme.md) gives the heap's size on each architecture. The last block of a device whose sector count is not a multiple of eight has only the sectors that exist.
 
 Every buffer is on the list of all buffers. A keyed buffer is also in a hash index of 4096 buckets by device and block and on a list in release order; an empty one is on the list of empties, a dirty one on the dirty list, and a held one on its holder's list (`bcache_held` in the process record). So a get, a choice of victim and a sync read the few buffers they need and not the whole cache. `cache-visits` counts the buffers these walks read, and `bcache_cost_hosttest.c` keeps it under bounds.
 
@@ -132,7 +132,7 @@ A sector torn in the middle of a write, or a write the disk acknowledged and los
 * `MS_REC` does not show a KRFFS volume below the source.
 * Through a bind of the KRFFS boot root a file's mode, owner and times do not change (`EROFS`), since the root changes them only through the system call layer's own paths.
 * `sysfs` is not a type `mount(2)` finds (`ENODEV`), though its privilege check admits it, and `proc` mounts only over a directory of `/proc`.
-* Access times are not updated; `MS_NOATIME`, `MS_NODIRATIME` and `MS_RELATIME` are recorded and shown.
+* Only tmpfs updates an access time on a read ([Readme.md](Readme.md)); `MS_NOATIME`, `MS_NODIRATIME` and `MS_RELATIME` are recorded and shown and change nothing.
 * A mount that went read-only after a failed write stays read-only until it is unmounted.
 * The cache keeps no list of a mount's own dirty buffers: a sync writes a whole device.
 * One run at a time uses the staging buffer; while it is in use a writer writes its blocks one at a time and a sequential reader fills its block alone.

@@ -1,6 +1,6 @@
 # `io/`: `poll`, `select`, `epoll`, `eventfd`, `timerfd`, POSIX timers and `inotify`
 
-The `io/` directory has the system calls that wait until one of several descriptors is ready, `poll`, `select` and `epoll` with their signal-mask forms, and four kinds of descriptor that name no file, whose readiness those calls report: an eventfd, a 64-bit counter; a timerfd, a timer read through a descriptor; an epoll set; and an inotify instance, a queue of changes to watched files. POSIX timers share the timerfd's timer. Every wait runs in `poll_wait`. The calls follow Linux's ABI on both architectures, for programs such as Dropbear, whose session loop waits in `select`.
+The `io/` directory has the system calls that wait until one of several descriptors is ready, `poll`, `select` and `epoll` with their signal-mask forms, and four kinds of descriptor that refer to no file, whose readiness those calls report: an eventfd, a 64-bit counter; a timerfd, a timer read through a descriptor; an epoll set; and an inotify instance, a queue of changes to watched files. POSIX timers share the timerfd's timer. Every wait runs in `poll_wait`. The calls follow Linux's ABI on both architectures, for programs such as Dropbear, whose session loop waits in `select`.
 
 ## Interfaces
 

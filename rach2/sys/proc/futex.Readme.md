@@ -1,6 +1,6 @@
 # Futexes
 
-A futex is a 32-bit word of user memory on which a thread sleeps until another wakes it, the word having held the value the sleeper expected when it went to sleep. C libraries build their mutexes, condition variables and one-time initialization on it, and enter the kernel only when a lock is contended. `futex.c` has the `futex` call, the robust lists through which a thread's end releases the locks it held, and the rest of a thread's end that concerns futexes, `proc_thread_gone`. The contracts are in [futex(2)](../../../man/man2/futex.2); this document describes how the kernel names a futex, files its waiters and keeps their deadlines.
+A futex is a 32-bit word of user memory on which a thread sleeps until another wakes it, the word having held the value the sleeper expected when it went to sleep. C libraries build their mutexes, condition variables and one-time initialization on it, and enter the kernel only when a lock is contended. `futex.c` has the `futex` call, the robust lists through which a thread's end releases the locks it held, and the rest of a thread's end that concerns futexes, `proc_thread_gone`. The contracts are in [futex(2)](../../../man/man2/futex.2); this document describes how the kernel identifies a futex, files its waiters and keeps their deadlines.
 
 ## Interfaces
 
@@ -20,7 +20,7 @@ A futex is a 32-bit word of user memory on which a thread sleeps until another w
 
 ### Keys and buckets
 
-A futex is named by a key of two words (`futex_key`): the address space, which is the page directory of the caller's process, and the user address. The threads of a process share a page directory, and so do a `vfork` child and its parent, and processes made with `CLONE_VM`. A word in a `VM_SHARED` region, shared anonymous memory or a file of `/dev/shm` mapped `MAP_SHARED`, is named instead by its physical address, the page's frame and the offset in it, with a marker in place of the address space, unless the operation has `FUTEX_PRIVATE_FLAG`. So processes that map the same page name its futexes alike, as a mutex made `PTHREAD_PROCESS_SHARED` needs.
+A futex is identified by a key of two words (`futex_key`): the address space, which is the page directory of the caller's process, and the user address. The threads of a process share a page directory, and so do a `vfork` child and its parent, and processes made with `CLONE_VM`. A word in a `VM_SHARED` region, shared anonymous memory or a file of `/dev/shm` mapped `MAP_SHARED`, is identified instead by its physical address, the page's frame and the offset in it, with a marker in place of the address space, unless the operation has `FUTEX_PRIVATE_FLAG`. So processes that map the same page identify its futexes alike, as a mutex made `PTHREAD_PROCESS_SHARED` needs.
 
 A waiter's record, `struct futex_q`, is on its own kernel stack while it sleeps, filed in one of `FUTEX_BUCKETS`, 64, lists by a hash of its key. Each bucket has a wait queue its waiters sleep on. A wake walks one bucket, so it passes over the waiters of other futexes only when their keys hash alike.
 
@@ -42,7 +42,7 @@ A signal the process acts on ends a wait with `EINTR`. The dispatcher restarts a
 
 1. It walks the thread's robust list, as glibc lays it out (`struct robust_head`): the first entry, the offset from an entry to its futex word, and the entry the thread was taking or giving back. At most `ROBUST_LIST_LIMIT`, 2048, entries are walked, so a list with a loop in it ends. Each word that still has the thread's id gets `FUTEX_OWNER_DIED` in its place, with `FUTEX_WAITERS` kept, and one waiter is woken when the word has waiters, as Linux's `handle_futex_death` does; the next owner learns from `EOWNERDEAD` that the state the lock guarded may be half made.
 2. It takes the pending entry last. When its word has no owner and it is not a priority-inheritance futex, the thread ended between an unlock and the unlock's wake, or between a wake and taking the lock; one waiter is woken, and the word is left as it is.
-3. When another thread shares the address space, it writes 0 to the word that `CLONE_CHILD_CLEARTID` or `set_tid_address` named and wakes one waiter on it, which is how `pthread_join` learns of the end.
+3. When another thread shares the address space, it writes 0 to the word given with `CLONE_CHILD_CLEARTID` or `set_tid_address` and wakes one waiter on it, which is how `pthread_join` learns of the end.
 
 A word's page is made present and writable before the word is read. The read, the comparison and the write are then one step with interrupts off, and the write is a compare-and-exchange, read again when the word changed, so a thread on another processor that takes the lock or sets `FUTEX_WAITERS` meanwhile in user mode does not have its change written over.
 

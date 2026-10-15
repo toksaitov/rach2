@@ -1,6 +1,6 @@
 # tmpfs
 
-`tmpfs.c` is a file system in memory, the type `tmpfs` of `mount(2)`: it stands on no device, and its files go when it is unmounted. The kernel mounts one at `/dev/shm` at boot, where the C libraries' `shm_open` and `sem_open` make their files, and keeps a second, which no path reaches, for the files of `memfd_create(2)` and the segments of System V shared memory. It has every kind of node: regular files, directories, symbolic links, hard links, FIFOs, socket files and device nodes.
+`tmpfs.c` is a file system in memory, the type `tmpfs` of `mount(2)`: it has no device, and its files go when it is unmounted. The kernel mounts one at `/dev/shm` at boot, where the C libraries' `shm_open` and `sem_open` make their files, and keeps a second, which no path reaches, for the files of `memfd_create(2)` and the segments of System V shared memory. It has every kind of node: regular files, directories, symbolic links, hard links, FIFOs, socket files and device nodes.
 
 ## Interfaces
 
@@ -30,9 +30,9 @@ A regular file's bytes are a `struct shmem` (`../mm/shmem.c`, in [../mm/Readme.m
 
 ### The kernel's two mounts
 
-`/dev/shm` is entry 3 of the permanent mounts, mode 1777 with `nosuid` and `nodev`, as Linux systems mount it. `/dev` is synthetic and has no directory to cover, so `/dev/shm` is a nameless mount in `/dev`'s root directory, entered by its name ([vfs.Readme.md](vfs.Readme.md)), and `umount2` of it fails with `EBUSY`.
+`/dev/shm` is entry 3 of the permanent mounts, with the mode and flags Linux systems give it ([vfs.Readme.md](vfs.Readme.md) has the table). `/dev` is synthetic and has no directory to cover, so `/dev/shm` is a nameless mount in `/dev`'s root directory, entered by its name, and `umount2` of it fails with `EBUSY`.
 
-Entry 4, mounted with `mode=0555,size=0`, `nosuid` and `nodev`, has no parent and no path, and `/proc/mounts` does not list it (`vfs_memfd_mount`). Its root stays empty. Each memfd, and each System V segment, a file named `SYSV`, is a node in no directory (`tmpfs_memfd`), made with one hold that its description takes, so it goes with the description's last reference as an unlinked file does.
+Entry 4, mounted with `mode=0555,size=0`, has no parent and no path, and `/proc/mounts` does not list it (`vfs_memfd_mount`). Its root stays empty. Each memfd, and each System V segment, a file named `SYSV`, is a node in no directory (`tmpfs_memfd`), made with one hold that its description takes, so it goes with the description's last reference as an unlinked file does.
 
 ### Seals
 

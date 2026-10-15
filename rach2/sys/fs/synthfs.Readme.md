@@ -4,13 +4,13 @@ The kernel makes `/dev`, `/proc` and `/sys` from its own tables each time a prog
 
 ## Interfaces
 
-`install_permanent` in [vfs.c](vfs.c) mounts the three at boot as permanent entries of the mount table ([vfs.Readme.md](vfs.Readme.md)):
+`install_permanent` in [vfs.c](vfs.c) mounts the three at boot as permanent entries of the mount table; the table in [vfs.Readme.md](vfs.Readme.md) gives their slots and flags. Each has a device number of its own:
 
-| Path | Type | Slot | `st_dev` | Mount flags |
-| --- | --- | ---: | --- | --- |
-| `/dev` | `devfs` | 1 | 5 (`DEVFS_FSID`) | none |
-| `/proc` | `proc` | 2 | 6 (`PROCFS_FSID`) | none |
-| `/sys` | `sysfs` | 5 | 7 (`SYSFS_FSID`) | `ro`, `nosuid`, `nodev`, `noexec` |
+| Path | Type | `st_dev` |
+| --- | --- | --- |
+| `/dev` | `devfs` | 5 (`DEVFS_FSID`) |
+| `/proc` | `proc` | 6 (`PROCFS_FSID`) |
+| `/sys` | `sysfs` | 7 (`SYSFS_FSID`) |
 
 A namespace file reached through `/proc/PID/ns` has device 4 (`NSFS_DEV`), as on Linux. `statfs` gives each mount Linux's magic number for its type ([statfs(2)](../../../man/man2/statfs.2)).
 
@@ -90,7 +90,7 @@ A write is judged whole before its first sector is sent: one that starts at or c
 
 Two writers over one range at once would each write their whole length, each report success, and leave neither image on the disk, so each disk has one writer. A write-capable open of a window `raw_write_window` counts, the whole disk and the two boot windows in every build and a partition in the recovery build, records its range in the disk's `writer_held`, `writer_first` and `writer_last`, and a second such open on that disk fails with `EBUSY` until the first description is closed (`raw_close`). The windows are one disk under several names, so they share the reservation; readers are not counted. `/dev/grubcore` has one open description at a time, readers included (`grubcore_held`): replacing the BIOS core is a read of the tail in use, a write of the other, a read back and a rewrite of the selector, and two of those at once can leave the selector pointing at one image with the other's length, which does not boot. The flag clears at the last close, so a tool that dies does not leave the device locked.
 
-The claim table, `claims` in `devfs.c`, has the sector ranges of the mounted volumes, at most `DEVFS_CLAIMS` (8), on the physical device `block_physical` reaches, so that `/dev/bootpart`, `/dev/disk0p1` and `/dev/disk0` over one range collide. `devfs_window_of` gives a source path's view, backing device and range; a loop device has no backing, since a file has no sectors on a disk, and is its own identity. `devfs_claim` fails with `EBUSY` for a range that overlaps a claim or a writer's range, and with `ENOMEM` when the table is full; a write-capable open over a claimed range fails with `EBUSY`. `devfs_disk_claimed` makes `BLKRRPART` (`disk_rescan`) fail on a disk with a mount, and `devfs_window_alias` makes `/proc/diskstats` count the kernel's own view of an ext2 boot root as the partition node's.
+The claim table, `claims` in `devfs.c`, has the sector ranges of the mounted volumes, by the rules of [vfs.Readme.md](vfs.Readme.md). `devfs_window_of` gives a source path's view, backing device and range; a loop device has no backing, since a file has no sectors on a disk. `devfs_claim` takes a range. `devfs_disk_claimed` makes `BLKRRPART` (`disk_rescan`) fail on a disk with a mount, and `devfs_window_alias` makes `/proc/diskstats` count the kernel's own view of an ext2 boot root as the partition node's.
 
 ### procfs
 
@@ -118,7 +118,7 @@ The links, `/sys/bus/pci/devices/NAME`, `/sys/bus/usb/devices/NAME`, `/sys/class
 
 ## Limits
 
-* The namespaces are fixed. Nothing in them can be created, removed, renamed or given new times (`EROFS`), used as a mount point (`EINVAL`, `target_check` in `vfs.c`) or executed (`EACCES`, `syscall_proc.c`). `/dev/shm` and `/dev/mqueue` are separate mounts that stand in `/dev` by name ([tmpfs.Readme.md](tmpfs.Readme.md), [../ipc/Readme.md](../ipc/Readme.md)).
+* The namespaces are fixed. Nothing in them can be created, removed, renamed or given new times (`EROFS`), used as a mount point (`EINVAL`, `target_check` in `vfs.c`) or executed (`EACCES`, `syscall_proc.c`). `/dev/shm` and `/dev/mqueue` are separate mounts, entered by name from `/dev` ([tmpfs.Readme.md](tmpfs.Readme.md), [../ipc/Readme.md](../ipc/Readme.md)).
 * No device node can be made in `/dev`. A device node on a disk file system opens the devfs device with its number, and a number devfs does not have fails with `ENXIO`.
 * A path does not go on through a link of `/proc`: `/proc/PID/cwd/NAME`, `/proc/PID/root/NAME` and `/proc/PID/fd/N/NAME` fail with `ENOENT`, and `/dev/fd/N/NAME` with `ENOTDIR`, where Linux goes on in the directory the link reaches. The links are followed only as the last component of a path.
 * `/dev/pts` opens and lists, but the listing of `/dev` does not show it.
@@ -128,8 +128,8 @@ The links, `/sys/bus/pci/devices/NAME`, `/sys/bus/usb/devices/NAME`, `/sys/class
 * `/proc/PID/mounts` and `/proc/PID/mountinfo` list the mounts visible in the reader's mount namespace, not in that of process PID.
 * `/proc/filesystems` lists `devfs` and `proc` and not `sysfs`.
 * A listing is consistent only within one `getdents64` call.
-* Disk nodes exist for at most 8 disks of 15 partitions each, and at most 8 mounted volumes claim disk sectors at once (`DEVFS_CLAIMS`); the next mount of a disk fails with `ENOMEM`.
-* A USB device on a fifth controller, on a root port past 255, behind more than five hubs or on a hub port past 15 has no directory in `/sys` (`sysfs_usb_key`).
+* Disk nodes exist for at most 8 disks of 15 partitions each.
+* A USB device on a fifth controller, on a root port past 255, behind more than five hubs or on a hub port past 15 has no directory in `/sys` (`sys_usb_key`).
 * A path below a synthetic mount has at most 7 components and, with the mount's name, fewer than 256 bytes.
 * The framebuffer and the mouse are `/fb` and `/mouse` at the root, outside devfs.
 
