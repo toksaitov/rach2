@@ -6,12 +6,12 @@
  *
  * The HPET's registers are an array here, given to the reader through
  * `refclock_set_registers`, and the PM timer is a counter that moves by a
- * count at each read until a row stops it. A firmware that left the HPET's
- * comparators armed must find them quiet and their status cleared, whatever
- * else happens; an HPET whose counter stands still, as one in an array
- * does, must be refused for the PM timer; a PM timer that stands still must
- * be refused too; a wait must last the counts that cover its time at least;
- * and a wait on a counter that stops must end.
+ * count at each read until a row stops it. Comparators a firmware left armed
+ * must be quiet and their status cleared, whatever else happens; an HPET
+ * whose counter stands still, as one in an array does, must give way to the
+ * PM timer; a PM timer that stands still must not be taken either; a wait
+ * must last at least the counts that cover its time; and a wait on a counter
+ * that stops must end.
  */
 
 #include <stdarg.h>
@@ -31,6 +31,7 @@ static int fails;
         }                                   \
     } while (0)
 
+/** Discard the kernel's log. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -38,6 +39,7 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
+/** Fail the test: the HPET's registers are given by the test, never mapped. */
 uintptr_t map_mmio(uintptr_t phys, size_t size)
 {
     (void)phys;
@@ -50,6 +52,8 @@ uintptr_t map_mmio(uintptr_t phys, size_t size)
 static uint32_t pm_value, pm_moves_for;
 static unsigned long pm_reads;
 
+/** Read the PM timer: count the read, and move the value on by one while
+ * `pm_moves_for` lasts. */
 int acpi_gas_read(const struct acpi_gas *g, uint32_t *value)
 {
     (void)g;
@@ -62,8 +66,9 @@ int acpi_gas_read(const struct acpi_gas *g, uint32_t *value)
     return 0;
 }
 
-static uint32_t regs[0x400 / 4];
+static uint32_t regs[0x400 / 4]; /* the HPET's 1 KiB register block */
 
+/** Run the rows: 0 when every check passes, 1 otherwise. */
 int main(void)
 {
     struct acpi_info a;

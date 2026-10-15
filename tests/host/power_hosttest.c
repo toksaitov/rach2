@@ -20,9 +20,8 @@ extern int printf(const char *fmt, ...);
 #include "../../rach2/sys/arch/x86/smbios.h"
 #include "../../rach2/sys/mm/paging.h"
 
-/* A table above the identity-mapped window is read through a mapping, and
- * `smbios.c` asks for one here. The fixtures below are handed to the reader
- * directly, so this is never called. */
+/** Report a failure: `smbios.c` maps a table above the identity-mapped
+ * window, and the tables here are given to the reader directly. */
 uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
 {
     (void)phys_addr;
@@ -69,8 +68,7 @@ static void present_at(const char *vendor, int index, const char *const *before,
         table[i] = 0;
     }
 
-    /* One BIOS Information structure: type 0, an 0x18-byte formatted area,
-     * a handle, then its strings. */
+    /* Type 0, BIOS Information: 0x18 formatted bytes, then its strings. */
     p[0] = 0;
     p[1] = 0x18;
     p[2] = 0;
@@ -107,44 +105,56 @@ static void present(const char *vendor)
 }
 
 /*
- * The decision, as `power.c` makes it. Kept here rather than reached into,
- * because `power.c` pulls in the whole platform to compile and the rule under
- * test is this one comparison.
+ * The rule of `firmware_takes_smi_reset` in `power.c`: the BIOS vendor
+ * begins with "Insyde". It is kept here rather than reached into, because
+ * `power.c` pulls in the whole platform to compile and the rule under test
+ * is this one comparison.
  */
 static int takes_smi_reset(void)
 {
     return smbios_vendor_is("Insyde");
 }
 
+/**
+ * Run the rows: 0 when every check passes, 1 otherwise.
+ *
+ * The firmware the command belongs to takes it. Another does not: QEMU's is
+ * SeaBIOS, which every suite boots, so that row runs everywhere. A name that
+ * begins the same way and is shorter is another firmware. An empty table
+ * names no firmware, so the command is not sent; the scan for an anchor is
+ * not run, since on this host the region it reads is not this program's.
+ *
+ * The vendor field says which string is the vendor, and it is not always
+ * the first: a firmware that puts its version first would lose its own
+ * reset if the reader took string one, and the reverse must not be read as
+ * though the first string were the vendor. A field of zero names none.
+ *
+ * The vendor is read once and kept: the bytes behind it are changed without
+ * presenting them, which a reader that scanned every time would pick up. A
+ * structure that claims a length past the table's end is not walked. A
+ * string that does not end inside the table is not a string: cutting the
+ * table at the last byte of "Insyde" leaves it with no terminator, and a
+ * reader that supplied one would publish a vendor the firmware never wrote.
+ */
 int main(void)
 {
     printf("power_hosttest: the reset's firmware check\n");
 
-    /* A machine whose firmware is the one the command belongs to. */
     present("Insyde Corp.");
     CHECK(smbios_vendor_is("Insyde"), "an Insyde firmware was not recognised");
     CHECK(takes_smi_reset(), "an Insyde firmware was not sent its own reset");
 
-    /* A machine whose firmware is another. QEMU's is SeaBIOS, which is what
-     * every suite boots, so this is the case that runs everywhere. */
     present("SeaBIOS");
     CHECK(!smbios_vendor_is("Insyde"), "SeaBIOS was taken for Insyde");
     CHECK(!takes_smi_reset(), "a firmware that is not Insyde was sent Insyde's reset");
 
-    /* A name that begins the same way and is not the same firmware. */
     present("Insyd");
     CHECK(!takes_smi_reset(), "a shorter name was taken for Insyde");
 
-    /* A machine whose table is empty: the command is not sent, since nothing
-     * says it belongs there. The scan for an anchor is not run here; on this
-     * host the region it reads is not this program's to read. */
     smbios_set_table(table, 0);
     CHECK(smbios_bios_vendor()[0] == '\0', "an empty table named a vendor");
     CHECK(!takes_smi_reset(), "a machine that names no firmware was sent Insyde's reset");
 
-    /* The vendor field names which string it is, and it is not always the
-     * first. A machine whose firmware puts its version first would lose its
-     * own reset if the reader took string one. */
     {
         static const char *const version_first[1] = {"1.42"};
 
@@ -152,8 +162,6 @@ int main(void)
         CHECK(takes_smi_reset(), "a vendor that is the second string was not read");
     }
 
-    /* And the reverse: a structure whose second string is the vendor must not
-     * be read as though the first one were. */
     {
         static const char *const insyde_first[1] = {"Insyde Corp."};
 
@@ -161,15 +169,10 @@ int main(void)
         CHECK(!takes_smi_reset(), "a string that is not the vendor was taken for one");
     }
 
-    /* A structure that names no vendor names none. */
     present_at("Insyde Corp.", 0, 0, 0);
     CHECK(smbios_bios_vendor()[0] == '\0', "a vendor field of zero named a vendor");
     CHECK(!takes_smi_reset(), "and a machine that names none was sent Insyde's reset");
 
-    /* The vendor is read once and kept, so a second call does not scan again.
-     * The bytes behind it are changed without presenting them, which a reader
-     * that scanned every time would pick up and a reader that kept the answer
-     * cannot. */
     present("Insyde Corp.");
     {
         const char *first = smbios_bios_vendor();
@@ -179,17 +182,11 @@ int main(void)
               "the vendor was read again instead of kept");
     }
 
-    /* A table whose structure claims a length past its end is refused rather
-     * than walked off the end of. */
     present("Insyde Corp.");
     table[1] = 0xFF;
     smbios_set_table(table, table_len);
     CHECK(!takes_smi_reset(), "a structure longer than its table was walked anyway");
 
-    /* A string that does not end inside the table is not a string. Cutting
-     * the table at the last byte of the name leaves "Insyde" running to the
-     * end with no terminator, and a reader that supplied one would publish a
-     * vendor the firmware never wrote. */
     present("Insyde");
     smbios_set_table(table, 0x18 + 6);
     CHECK(smbios_bios_vendor()[0] == '\0', "an unterminated string was published as a vendor");

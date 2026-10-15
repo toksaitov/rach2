@@ -32,7 +32,7 @@ static int fails;
         }                                   \
     } while (0)
 
-/* The reader maps nothing here; every read goes through `mem`. */
+/** Fail the test: with memory given, every read goes through `mem`. */
 uintptr_t map_mmio(uintptr_t phys, size_t size)
 {
     (void)phys;
@@ -46,7 +46,7 @@ uintptr_t map_mmio(uintptr_t phys, size_t size)
 #define REGION_BYTES 0x10000u
 
 static struct {
-    uint64_t at;
+    uint64_t at; /* the physical address of mem[0] */
     uint8_t mem[REGION_BYTES];
 } regions[5];
 
@@ -56,6 +56,8 @@ static struct {
 #define HIGH    3 /* the SMBIOS 3 entry point's, past 4 GiB */
 #define SCANNED 4 /* the scanned entry point's */
 
+/** The reader's physical memory: the `len` bytes at `at`, or NULL when no
+ * region holds them all. */
 static const uint8_t *mem(uint64_t at, uint32_t len)
 {
     int i;
@@ -68,11 +70,13 @@ static const uint8_t *mem(uint64_t at, uint32_t len)
     return 0;
 }
 
+/** The byte at offset `off` of region `r`. */
 static uint8_t *at_of(int r, uint32_t off)
 {
     return regions[r].mem + off;
 }
 
+/** Store the low `n` bytes of `v` at `p`, little-endian. */
 static void put(uint8_t *p, uint64_t v, int n)
 {
     int i;
@@ -82,6 +86,7 @@ static void put(uint8_t *p, uint64_t v, int n)
     }
 }
 
+/** Set byte `at` of the `len` bytes at `p` so that they sum to zero. */
 static void sum_fix(uint8_t *p, int len, int at)
 {
     uint8_t s = 0;
@@ -94,8 +99,8 @@ static void sum_fix(uint8_t *p, int len, int at)
     p[at] = (uint8_t)(0x100u - s);
 }
 
-/* One BIOS Information structure naming `vendor`, then the end of the
- * table, at `p`; its length. */
+/** Write one BIOS Information structure naming `vendor`, then the end of
+ * the table, at `p` in a region still zero; return their length. */
 static uint32_t structures(uint8_t *p, const char *vendor)
 {
     uint32_t n = 0x18, i;
@@ -114,6 +119,8 @@ static uint32_t structures(uint8_t *p, const char *vendor)
     return n;
 }
 
+/** Write at `p` an SMBIOS 2 entry point, `_SM_` with its `_DMI_` part, for
+ * `len` bytes of structures at `table`, both checksums right. */
 static void ep32(uint8_t *p, uint32_t table, uint32_t len)
 {
     p[0] = '_', p[1] = 'S', p[2] = 'M', p[3] = '_';
@@ -125,6 +132,8 @@ static void ep32(uint8_t *p, uint32_t table, uint32_t len)
     sum_fix(p, 0x1F, 4);
 }
 
+/** Write at `p` an SMBIOS 3 entry point, `_SM3_`, for at most `len` bytes
+ * of structures at `table`, its checksum right. */
 static void ep64(uint8_t *p, uint64_t table, uint32_t len)
 {
     p[0] = '_', p[1] = 'S', p[2] = 'M', p[3] = '3', p[4] = '_';
@@ -145,10 +154,11 @@ static const uint8_t acpi_guid[16] = {0x71, 0xE8, 0x68, 0x88, 0xF1, 0xE4, 0xD3, 
 #define LOW_AT    0x7E000000ull
 #define HIGH_AT   0x120000000ull
 
-/*
- * The system table, 64-bit or 32-bit, with `n` of its three tables: an
- * ACPI one, the SMBIOS one and the SMBIOS 3 one, whose entry points are at
- * 0x2000 and 0x2100 of its region.
+/**
+ * Write the system table, 64-bit when `wide` is set and 32-bit otherwise,
+ * with the first `n` of its three configuration entries: an ACPI one, the
+ * SMBIOS one and the SMBIOS 3 one, whose entry points are at 0x2000 and
+ * 0x2100 of its region.
  */
 static void systab(int wide, int n)
 {
@@ -178,11 +188,13 @@ static void systab(int wide, int n)
     }
 }
 
+/** Whether the BIOS vendor the reader found is `want`. */
 static int vendor_is(const char *want)
 {
     return strcmp(smbios_bios_vendor(), want) == 0;
 }
 
+/** Run the rows: 0 when every check passes, 1 otherwise. */
 int main(void)
 {
     uint32_t low_len, high_len, scanned_len;
