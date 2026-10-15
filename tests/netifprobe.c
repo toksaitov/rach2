@@ -880,10 +880,10 @@ static uint32_t link_flags(int index)
  * `netifprobe second`: with two cards, each gateway answers through its own
  * card, and taking the second card down leaves the first serving, which
  * shows that the flag belongs to the interface and not to the stack. The
- * link dump says the same of each card: eth1 down and not running, eth0 up
- * and running, and eth1 up again once it is brought back. The other rows of
- * the two-card machine run, and the probe exits with NETIFPROBE OK; it does
- * not return.
+ * link dump and SIOCGIFFLAGS say the same of each card: eth1 down and not
+ * running, eth0 up and running, and eth1 up again once it is brought back.
+ * The other rows of the two-card machine run, and the probe exits with
+ * NETIFPROBE OK; it does not return.
  */
 static void second_down(void)
 {
@@ -918,6 +918,10 @@ static void second_down(void)
     ifr[17] = 0;
     if (sys_ioctl(fd, SIOCSIFFLAGS, ifr) != 0) {
         fail("the second interface could not be taken down");
+    }
+    set_name("eth1");
+    if (sys_ioctl(fd, SIOCGIFFLAGS, ifr) != 0 || (ifr[16] & (IFF_UP | IFF_RUNNING))) {
+        fail("the second interface said it was up or running while it was down");
     }
     set_name("eth0");
     if (sys_ioctl(fd, SIOCGIFFLAGS, ifr) != 0 || !(ifr[16] & IFF_UP)) {
@@ -995,12 +999,13 @@ PROBE_SP_ENTRY;
  * address in another class takes that class's mask, and that later change
  * does not arm the old connection's reset again.
  *
- * Down is down in both directions: with the interface down the gateway does
- * not answer a ping, and the datagram the suite sends at "NETIFPROBE DOWN"
- * does not arrive. With the interface up again the datagram the suite sends
- * at "NETIFPROBE UP" arrives, which shows that the suite sends one. The
- * second connection, open across that change of address, reads ENETRESET
- * without blocking.
+ * Down is down in both directions: with the interface down SIOCGIFFLAGS
+ * reports neither IFF_UP nor IFF_RUNNING, the gateway does not answer a
+ * ping, and the datagram the suite sends at "NETIFPROBE DOWN" does not
+ * arrive. With the interface up again the datagram the suite sends at
+ * "NETIFPROBE UP" arrives, which shows that the suite sends one. The second
+ * connection, open across that change of address, reads ENETRESET without
+ * blocking.
  *
  * Addresses in 0/8, in 240/4 and of multicast are EINVAL. A default route
  * sets the gateway, a gateway off the subnet is ENETUNREACH as on Linux, and
@@ -1364,8 +1369,8 @@ static void netif_main(void)
         fail("the interface could not be taken down");
     }
     set_name("eth0");
-    if (sys_ioctl(fd, SIOCGIFFLAGS, ifr) != 0 || (ifr[16] & IFF_UP)) {
-        fail("an interface that was taken down still says it is up");
+    if (sys_ioctl(fd, SIOCGIFFLAGS, ifr) != 0 || (ifr[16] & (IFF_UP | IFF_RUNNING))) {
+        fail("an interface that was taken down still says it is up or running");
     }
     args[0] = SLIRP_GW;
     if (socketcall(SC_PING, args) >= 0) {

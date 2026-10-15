@@ -386,10 +386,10 @@ void netdev_stop(struct netdev *nd);
 int netdev_link(const struct netdev *nd, struct netdev_link *out);
 
 /**
- * Whether the interface is running, as `IFF_RUNNING` reports it: the
- * link's state where the card reports one, and 1 where it cannot, `lo`
- * included; 0 for NULL. ethernet.c sends no frame on an interface that is
- * not running.
+ * Whether the interface is running: the link's state where the card
+ * reports one, and 1 where it cannot, `lo` included; 0 for NULL. An
+ * interface that is up and running reports `IFF_RUNNING`. ethernet.c sends
+ * no frame on an interface that is not running.
  */
 int netdev_running(const struct netdev *nd);
 

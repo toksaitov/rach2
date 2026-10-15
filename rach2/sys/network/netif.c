@@ -170,17 +170,17 @@ static uint32_t if_broadcast(const struct netdev *nd)
 }
 
 /** The flags SIOCGIFFLAGS reports: up as an administrator left it, running
- * as `netdev_running` judges the link, and broadcast and multicast, or for
- * `lo` loopback. */
+ * while it is up and `netdev_running` judges the link up, as on Linux, and
+ * broadcast and multicast, or for `lo` loopback. */
 static uint32_t if_flags(struct netdev *nd)
 {
     uint32_t flags = nd->loopback ? IFF_LOOPBACK : IFF_BROADCAST | IFF_MULTICAST;
 
     if (nd->up) {
         flags |= IFF_UP;
-    }
-    if (netdev_running(nd)) {
-        flags |= IFF_RUNNING;
+        if (netdev_running(nd)) {
+            flags |= IFF_RUNNING;
+        }
     }
     return flags;
 }
