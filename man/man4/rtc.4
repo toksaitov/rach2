@@ -80,8 +80,12 @@ A wake alarm in the past.
 .It Bq Er EAGAIN
 A non-blocking read with no alarm come.
 .It Bq Er EIO
-.Dv RTC_RD_TIME
-of a clock that holds no time, such as one whose battery went.
+.Dv RTC_RD_TIME ,
+.Dv RTC_ALM_READ ,
+or
+.Dv RTC_WKALM_RD
+with no wake alarm set, of a clock that holds no time, such as one whose
+battery went; or a wake alarm set while the clock holds none.
 .It Bq Er ENOTTY
 Another ioctl.
 .El

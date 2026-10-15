@@ -1360,9 +1360,10 @@ static void rtc_to_tm(const rtc_time_t *t, int32_t *tm)
 }
 
 /** RTC_WKALM_SET and RTC_WKALM_RD's `struct rtc_wkalrm` at `arg`: whether
- * the alarm is enabled, whether it has come, and its date and time. A set
- * is -EACCES for a caller that is not privileged; 0, -EFAULT, or the error
- * of `devfs_rtc_set_wakealarm`. */
+ * the alarm is enabled, whether it has come, and its date and time. With no
+ * wake alarm set, a read gives the clock's alarm with today's date, and is
+ * -EIO when the clock cannot be read. A set is -EACCES for a caller that is
+ * not privileged; 0, -EFAULT, or the error of `devfs_rtc_set_wakealarm`. */
 static int32_t dev_rtc_wkalarm(uint32_t request, uintptr_t arg)
 {
     uint8_t w[40];
@@ -1370,12 +1371,12 @@ static int32_t dev_rtc_wkalarm(uint32_t request, uintptr_t arg)
     int32_t tm[9];
 
     if (request == RTC_WKALM_RD) {
-        k_memset(w, 0, sizeof(w));
         if (rtc_wake_at >= 0) {
             rtc_time_of_seconds((uint32_t)rtc_wake_at, &t);
-        } else if (rtc_read_clock(&t) == 0) {
-            rtc_alarm_read(&t);
+        } else if (rtc_read_clock(&t) != 0) {
+            return -EIO;
         }
+        k_memset(w, 0, sizeof(w));
         w[0] = (uint8_t)rtc_alarm_read(&t);
         w[1] = rtc_alarms != 0;
         rtc_to_tm(&t, tm);
