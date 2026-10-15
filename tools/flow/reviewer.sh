@@ -162,7 +162,8 @@ review()
     fi
     commit=$(git -C "$state/wt" rev-parse --short HEAD)
     title=$(gh issue view "$p" --repo "$REPO" --json title --jq .title) &&
-        issues=$(members "$p" | awk -F '\t' '{ print "* #" $1 " " $4 }') || return 75
+        m=$(members "$p") || return 75
+    issues=$(printf '%s\n' "$m" | awk -F '\t' 'NF { print "* #" $1 " " $4 }')
     for n in "$p" $(printf '%s\n' "$issues" | sed 's/^\* #\([0-9]*\) .*/\1/'); do
         gh issue view "$n" --repo "$REPO" --json number,title,body \
             --jq '"## #\(.number) \(.title)\n\n\(.body)\n"' || return 75
