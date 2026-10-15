@@ -1,17 +1,18 @@
 /*
  * bootverb.c: bootctl's command line, resolved to a verb and nothing else.
  *
- * Split from the tool so a host test can drive every acceptance and refusal
- * without a boot partition to open. No I/O, no state.
+ * Split from the tool so a host test can drive every line it takes and every
+ * line it does not without a boot partition to open. No I/O, no state.
  */
 
 #include <string.h>
 
 #include "bootverb.h"
 
-/* One catalog serves both entry points. Parsing and diagnosis asked the same
- * question of two separate lists before, so a verb added to one and missed in
- * the other would compile and then report itself as no verb at all. */
+/* One catalog serves both entry points, so a verb cannot be added to the
+ * parser and missed by the diagnosis, where it would compile and then report
+ * itself as no verb at all. The operand counts bound the words after the
+ * verb. */
 static const struct {
     const char *name;
     enum bootverb verb;

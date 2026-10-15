@@ -22,8 +22,8 @@
  * `kernel` validates the named file and the machine's fallback kernel, writes
  * `saved_entry=fallback`, writes the candidate slot, reads it back byte for
  * byte, and sets `next_entry=candidate`, so exactly one reboot tries the new
- * kernel and a power cycle after a crash returns to the fallback. Once it has
- * proved itself, `commit` makes it the saved default.
+ * kernel and a power cycle after a crash returns to the fallback. Once that
+ * kernel has booted, `commit` makes it the saved default.
  *
  * `status` prints the four files' sector extents, what the environment block
  * has, whether a trial is armed or consumed, and which slot this boot came
@@ -76,6 +76,7 @@ static int devfd = -1;
 static const char default_boot_partition[] = "/dev/bootpart";
 static const char *boot_partition = default_boot_partition;
 
+/** Read sector `lba` of the open boot partition into `buf`; 0, or -1. */
 static int dev_read(void *ctx, uint32_t lba, void *buf)
 {
     (void)ctx;
@@ -85,6 +86,7 @@ static int dev_read(void *ctx, uint32_t lba, void *buf)
     return read(devfd, buf, BOOTSLOT_SECTOR) == BOOTSLOT_SECTOR ? 0 : -1;
 }
 
+/** Write `buf` to sector `lba` of the open boot partition; 0, or -1. */
 static int dev_write(void *ctx, uint32_t lba, const void *buf)
 {
     (void)ctx;
@@ -98,14 +100,15 @@ static char cmdline[512];
 static int cmdline_ready;
 
 /**
- * Read `/proc/cmdline` once; everything that asks about it asks this copy.
+ * Read `/proc/cmdline` once, into `cmdline`, which every later look at the
+ * boot line reads.
  *
- * Once, because every question this program asks of the boot line is asked
- * of the same text, and a second read that failed where the first succeeded,
- * on a machine short of memory, would otherwise be taken for a token that is
- * not there.
+ * Once, because every token this program looks for is looked for in the
+ * same text, and a second read that failed where the first succeeded, on a
+ * machine short of memory, would otherwise be taken for a token that is not
+ * there. A line longer than the buffer is cut to fit.
  *
- * @return 0 when the copy is there to read.
+ * @return 0 when the copy is there to read, -1 when the file does not open.
  */
 static int cmdline_load(void)
 {
@@ -126,7 +129,8 @@ static int cmdline_load(void)
     return 0;
 }
 
-/** Whether /proc/cmdline has `token` as a whole word. */
+/** Whether /proc/cmdline has `token` as a whole word; 0 when it does not
+ *  read. */
 static int cmdline_has(const char *token)
 {
     size_t tlen = strlen(token);
@@ -150,9 +154,9 @@ static struct bootslot bs;
  * Load the boot line, then open the boot partition read-write and validate
  * its volume into `bs`. Returns 0, or -1 having said why.
  *
- * The line is read first and a failure to read it is a refusal: the slot
- * checks ask it which entry is running, and an install that could not say
- * that would have nothing to check a commit against.
+ * The line is read first and a failure to read it fails the call: the slot
+ * checks read from it which entry is running, and an install that could not
+ * say that would have nothing to check a commit against.
  */
 static int open_slot(void)
 {
@@ -189,7 +193,8 @@ static int open_slot(void)
     return 0;
 }
 
-/** Print the extent line of file `f`; its field order is a test contract. */
+/** Print the extent line of file `f`, under `name`; its field order is a
+ *  test contract. */
 static void print_extent(const char *name, const struct bootslot_file *f, uint32_t cluster_sectors,
                          uint32_t data_start)
 {
@@ -265,7 +270,8 @@ static void print_booted(void)
     }
 }
 
-/** Print the files' extents, the two environment keys and the booted slot. */
+/** Print the files' extents, the two environment keys and the booted slot;
+ *  0, or 1 having said why not. */
 static int cmd_status(void)
 {
     static uint8_t env[BOOTSLOT_ENV_BYTES];
@@ -296,7 +302,8 @@ static int cmd_status(void)
  * Make the running candidate the saved default.
  *
  * The boot line must have `rach2.slot=candidate`, and `bootslot_commit`
- * requires the empty `next_entry` a consumed trial leaves.
+ * requires the empty `next_entry` a consumed trial leaves. Returns 0, or 1
+ * having said why not.
  */
 static int cmd_commit(void)
 {
@@ -322,9 +329,9 @@ static int cmd_commit(void)
  *
  * The boot line must have `rach2.slot=candidate`, `rach2.slot=fallback` or
  * `rach2.slot=recovery`. A file larger than any slot, or a kernel of the other
- * architecture, is refused before the disk is opened; `bootslot_install`
- * validates the file and the fallback and does the writes the file header
- * lists.
+ * architecture, fails before the disk is opened; `bootslot_install` checks
+ * the file and the fallback and does the writes the file header lists.
+ * Returns 0, or 1 having said why not.
  */
 static int cmd_kernel(const char *path)
 {
@@ -392,8 +399,8 @@ static const char *const ENV_KEYS[] = {"saved_entry", "next_entry"};
 static const char *const ENTRY_IDS[] = {"candidate", "fallback", "recovery"};
 
 /* What `saved_entry` may hold. It is the same set, so the check `cmd_env`
- * makes against it refuses nothing the check against `ENTRY_IDS` allows; the
- * list stands apart because what the stub accepts as a default and what it
+ * makes against it fails for no value the check against `ENTRY_IDS` passes;
+ * the list stands apart because what the stub accepts as a default and what it
  * consumes as a trial are separate rules. The stub reads the saved default
  * for the two kernel entries and for recovery, because a repair is not one
  * boot: rewriting a root takes minutes, and a machine that lost power in the
@@ -405,6 +412,7 @@ static const char *const SAVED_IDS[] = {"candidate", "fallback", "recovery"};
 #define ENTRY_ID_COUNT ((int)(sizeof(ENTRY_IDS) / sizeof(ENTRY_IDS[0])))
 #define SAVED_ID_COUNT ((int)(sizeof(SAVED_IDS) / sizeof(SAVED_IDS[0])))
 
+/** Whether `word` is one of the `count` strings of `list`. */
 static int allowed(const char *const *list, int count, const char *word)
 {
     int i;
@@ -420,15 +428,16 @@ static int allowed(const char *const *list, int count, const char *word)
 /**
  * Stage a boot menu into the rewritable slot.
  *
- * The file is refused before anything is written if it is empty or does not
- * fit the slot, or if the disk has no menu slot, which is all this can check.
+ * The call fails before anything is written if the file is empty or does
+ * not fit the slot, or if the disk has no menu slot, which is all this can
+ * check.
  * It is not a completeness test: a transfer cut after a whole menuentry
  * produces a file that parses, and nothing here can tell it from what the
  * sender meant. A caller who needs that compares a digest.
  *
  * The stub defines the required entries before sourcing this file. The file
  * is unrestricted GRUB script and can change the variables used to select
- * the default or boot a kernel directly.
+ * the default or boot a kernel directly. Returns 0, or 1 having said why not.
  */
 static int cmd_config(const char *path)
 {
@@ -479,13 +488,14 @@ static int cmd_config(const char *path)
 }
 
 /**
- * Read one environment key, or set it.
+ * Read one environment key, or set it to `value` when that is not NULL.
+ * Returns 0, or 1 having said why not.
  *
- * A value is refused when it has a control character, since the block is
- * lines of `key=value` and a newline would write a second assignment nobody
- * asked for. Both keys name a menu entry, so a value must be one `trial` may
- * arm, or the restriction on `trial` would mean nothing. An empty value is
- * refused outright: for `next_entry` it is the marker a trial boot leaves and
+ * A value with a control character fails, since the block is lines of
+ * `key=value` and a newline would write a second assignment nobody asked
+ * for. Both keys name a menu entry, so a value must be one `trial` may arm,
+ * or the restriction on `trial` would mean nothing. An empty value fails
+ * outright: for `next_entry` it is the marker a trial boot leaves and
  * `commit` requires, so a tool that wrote it would let a kernel that never
  * ran be committed. `saved_entry` must also be an entry the stub reads the
  * saved default for, or it would report a default the machine ignores.
@@ -543,7 +553,8 @@ static int cmd_env(const char *key, const char *value)
     return 0;
 }
 
-/** Arm one boot of `id`, and only of an entry the stub defines. */
+/** Arm one boot of `id`, and only of an entry the stub defines; 0, or 1
+ *  having said why not. */
 static int cmd_trial(const char *id)
 {
     if (!allowed(ENTRY_IDS, ENTRY_ID_COUNT, id)) {
@@ -565,8 +576,9 @@ static int cmd_trial(const char *id)
  * Copy the committed candidate into the fallback file and verify the copy.
  *
  * Candidate installs leave the fallback unchanged; this is how a committed
- * kernel becomes the fallback. `bootslot_fallback` refuses while a trial is
- * armed or while the candidate is not the saved default.
+ * kernel becomes the fallback. `bootslot_fallback` fails while a trial is
+ * armed or while the candidate is not the saved default. Returns 0, or 1
+ * having said why not.
  */
 static int cmd_fallback(void)
 {
@@ -588,6 +600,7 @@ static int cmd_fallback(void)
  *
  * Remove the key rather than write the empty marker that `commit` requires.
  * That marker is written when GRUB selects a trial, before loading its kernel.
+ * Returns 0, or 1 having said why not.
  */
 static int cmd_cancel(void)
 {
@@ -602,6 +615,8 @@ static int cmd_cancel(void)
     return 0;
 }
 
+/* Linux's BLKGETSIZE64, a block device's size in bytes, where the headers
+ * lack it. */
 #ifndef BLKGETSIZE64
 #define BLKGETSIZE64 _IOR(0x12, 114, size_t)
 #endif
@@ -628,7 +643,8 @@ struct grubcore {
  * Lay out the window an open `/dev/grubcore` covers, from what the kernel
  * says of it: its first sector on the disk by `HDIO_GETGEO`, as `fdisk` reads a
  * partition's, and its length by `BLKGETSIZE64`. The entry sector's blocklist
- * is not consulted; it is what the window is used to judge.
+ * is not consulted; it is what the window is used to judge. Returns 0, or -1
+ * having said why not.
  */
 static int grubcore_window(int fd, struct grubslot_window *w)
 {
@@ -653,7 +669,8 @@ static int grubcore_window(int fd, struct grubslot_window *w)
  *
  * `grubslot_install` names sectors by their LBA on the disk, as the blocklist
  * does; the window's byte 0 is its first sector, so an LBA before that one is
- * outside it and refused here, and one past its end is refused by the kernel.
+ * outside it and fails here, and one past its end fails in the kernel.
+ * Returns 0, or -1.
  */
 static int grubcore_io(void *ctx, uint32_t lba, uint8_t *buf, int writing)
 {
@@ -684,7 +701,8 @@ static int grubcore_io(void *ctx, uint32_t lba, uint8_t *buf, int writing)
  * GRUB unreachable, and recovery cannot help because GRUB is what loads it.
  * Nothing here defends against that: the exposure is a single sector written
  * after the replacement has been verified, and removing it would take
- * something below GRUB that this machine does not have.
+ * something below GRUB that this machine does not have. Returns 0, or 1
+ * having said why not.
  */
 static int cmd_grub(const char *path)
 {
@@ -749,6 +767,7 @@ static int cmd_grub(const char *path)
     return 0;
 }
 
+/** Print the usage lines on standard error. */
 static void usage(void)
 {
     fprintf(stderr, "usage: bootctl status\n");
@@ -764,7 +783,8 @@ static void usage(void)
 }
 
 /**
- * Resolve the command line and run the verb it names.
+ * Resolve the command line and run the verb it names. Returns the verb's
+ * status, or 1 after the usage lines for a line that names no verb.
  *
  * Kernel installation requires a recognized `rach2.slot=` token; commit
  * requires `rach2.slot=candidate`. Boot-partition commands require readable
