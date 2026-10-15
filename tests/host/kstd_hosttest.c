@@ -1,24 +1,24 @@
 /**
- * Dual-target host test for k_itoa (sys/lib/kstd.c).
+ * kstd_hosttest.c: k_itoa, the kernel's integer formatter (`lib/kstd.c`).
  *
  * host-deps: rach2/sys/lib/kstd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  *
- * k_itoa is the integer formatter behind every kernel and util number print,
- * so it is exercised here natively under AddressSanitizer +
- * UndefinedBehaviorSanitizer across the bases and the signed-edge cases.
- * INT_MIN is the case that matters: negating it in signed `int` is overflow
- * UB, which UBSan flags here in milliseconds, not as a mystery value
- * in QEMU. The buffer-too-small and out-of-range-radix rejections, the
- * returned character count, and the plus force_sign writes are covered too.
- * It depends on k_strreverse and k_strtoupper, compiled in. Returns the
- * failed-check count (0 == pass).
+ * k_itoa converts every number the kernel prints, so it is run here natively
+ * under AddressSanitizer and UndefinedBehaviorSanitizer across the bases and
+ * the signed edges. INT_MIN is the edge that matters: negating it in signed
+ * `int` overflows, which is undefined, and UBSan reports it here. The
+ * rejections of a buffer too small and of a radix out of range, the count
+ * returned, and the plus sign `force_sign` writes are covered too. It
+ * depends on k_strreverse and k_strtoupper, compiled in. Exits with the count
+ * of failed checks, at most 120.
  */
 
 #include "kstd.h"
 
 static int fails;
 
+/** Count a failure when `cond` is false. */
 #define CHECK(cond)    \
     do {               \
         if (!(cond)) { \
@@ -26,7 +26,7 @@ static int fails;
         }              \
     } while (0)
 
-/* Equal NUL-terminated strings? */
+/** Whether the strings `a` and `b` are equal. */
 static int streq(const char *a, const char *b)
 {
     while (*a && *a == *b) {
@@ -36,6 +36,7 @@ static int streq(const char *a, const char *b)
     return *a == *b;
 }
 
+/** Run the checks; the count of failures, at most 120. */
 int main(void)
 {
     char b[64];
@@ -49,8 +50,7 @@ int main(void)
     CHECK(streq(b, "-42"));
     k_itoa(2147483647, b, sizeof(b), 'd', false);
     CHECK(streq(b, "2147483647"));
-    /* INT_MIN: its magnitude must be taken in unsigned arithmetic, since -input
-     * overflows signed int. UBSan catches the unfixed form here. */
+    /* INT_MIN, whose magnitude only unsigned arithmetic holds. */
     k_itoa(-2147483647 - 1, b, sizeof(b), 'd', false);
     CHECK(streq(b, "-2147483648"));
 
@@ -80,8 +80,7 @@ int main(void)
     CHECK(k_itoa(1, b, sizeof(b), 99, false) == 0);
     CHECK(k_itoa(1, b, sizeof(b), 1, false) == 0);
 
-    /* force_sign writes a leading plus on a positive decimal and counts it;
-     * zero and a negative value are written as they are without it. */
+    /* force_sign puts a plus before a positive decimal, and not before 0. */
     CHECK(k_itoa(7, b, sizeof(b), 'd', true) == 3);
     CHECK(streq(b, "+7"));
     CHECK(k_itoa(0, b, sizeof(b), 'd', true) == 2);

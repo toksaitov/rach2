@@ -22,9 +22,9 @@
 extern int printf(const char *fmt, ...);
 
 /* The kernel's integer types, with the pointer-sized one the host's width,
-   so that a pointer into the region below survives the round trip through
-   it: the region is a static array here, which `kmalloc` writes its headers
-   into, and the kernel's 32-bit type would cut its address. */
+ * so that a pointer into the region below survives the round trip through
+ * it: the region is a static array here, which `kmalloc` writes its headers
+ * into, and the kernel's 32-bit type would cut its address. */
 #define _KINT_H_
 typedef signed char int8_t;
 typedef unsigned char uint8_t;
@@ -53,20 +53,25 @@ static unsigned char heap_mem[KVA_HEAP_SIZE] __attribute__((aligned(4096)));
 #define X86_64_REGION 0x8000000000ULL
 
 /* The frames: a counter of those out, and a limit past which none is
-   given, for the row about a shortage inside a run. */
+ * given, for the row about a shortage inside a run. */
 static unsigned frames_out;
 static unsigned frame_limit = 0xffffffffu;
 
 /* The region's pages that have a mapping, as the kernel directory's page
-   tables would say: the guard rows read it, and `kfree_guarded` asks it
-   through `paging_virt_to_phys`. */
+ * tables would say: the guard rows read it, and `kfree_guarded` asks it
+ * through `paging_virt_to_phys`. */
 static unsigned char mapped[KVA_HEAP_SIZE / PAGE_SIZE];
 
+/** The index in the region of the page at `va`. */
 static unsigned region_page(uintptr_t va)
 {
     return (unsigned)((va - KVA_HEAP) / PAGE_SIZE);
 }
 
+/**
+ * A frame's physical address, distinct for each frame out, or 0 at
+ * `frame_limit`.
+ */
 uintptr_t alloc_frame(void)
 {
     if (frames_out >= frame_limit) {
@@ -76,22 +81,26 @@ uintptr_t alloc_frame(void)
     return 0x10000000u + frames_out * PAGE_SIZE;
 }
 
+/** Count a frame given back. */
 void free_frame(uintptr_t phys)
 {
     (void)phys;
     frames_out--;
 }
 
+/** No row takes a kernel frame: NULL. */
 void *alloc_kernel_frame(void)
 {
     return (void *)0;
 }
 
+/** `va` itself while its page of the region has a mapping, 0 otherwise. */
 uintptr_t paging_virt_to_phys(uintptr_t va)
 {
     return mapped[region_page(va)] ? va : 0;
 }
 
+/** Note a mapping of the page at `va`. */
 void map_kernel_frame(uintptr_t va, uintptr_t phys, int writable)
 {
     (void)phys;
@@ -99,6 +108,7 @@ void map_kernel_frame(uintptr_t va, uintptr_t phys, int writable)
     mapped[region_page(va)] = 1;
 }
 
+/** Note that the page at `va` has no mapping. */
 void unmap_kernel_frame(uintptr_t va)
 {
     mapped[region_page(va)] = 0;
@@ -108,6 +118,7 @@ void unmap_kernel_frame(uintptr_t va)
 static uintptr_t premapped_va;
 static size_t premapped_size;
 
+/** Keep the range asked for: 0. */
 int premap_kernel_window(uintptr_t va_start, size_t size)
 {
     premapped_va = va_start;
@@ -115,26 +126,32 @@ int premap_kernel_window(uintptr_t va_start, size_t size)
     return 0;
 }
 
+/* The calls of `k_panic`, which returns here. */
 static unsigned panics;
 
+/** Count a panic and return. */
 void k_panic(const char *message)
 {
     (void)message;
     panics++;
 }
 
+/** The host has no interrupts to mask: 0. */
 uint32_t kirq_save(void)
 {
     return 0;
 }
 
+/** The host has no interrupts to unmask. */
 void kirq_restore(uint32_t flags)
 {
     (void)flags;
 }
 
+/* The records logged. */
 static unsigned klogs;
 
+/** Count a record. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -147,6 +164,7 @@ void klog(int level, const char *subsystem, const char *format, ...)
 
 static int fails;
 
+/** Count and print a failure when `cond` is false; `what` says what held. */
 #define CHECK(cond, what)                   \
     do {                                    \
         if (!(cond)) {                      \
@@ -159,9 +177,11 @@ static int fails;
 #define RESERVE_PAGES (KHEAP_RUNS * KHEAP_RUN_PAGES)
 #define RESERVE_BASE  (KVA_HEAP + (REGION_PAGES - RESERVE_PAGES) * PAGE_SIZE)
 
+/* The single pages `take_singles` took, NULL where one was given back. */
 static void *singles[REGION_PAGES];
 
-/* Take single pages until `kalloc_pages` returns NULL; the count taken. */
+/** Take single pages into `singles` until `kalloc_pages` returns NULL; the
+ * count taken. */
 static unsigned take_singles(void)
 {
     unsigned n = 0;
@@ -176,6 +196,7 @@ static unsigned take_singles(void)
     return n;
 }
 
+/** Give back the first `n` of `singles` still out, as single pages. */
 static void give_singles(unsigned n)
 {
     while (n > 0) {
@@ -380,13 +401,29 @@ static void region_rows(void)
     CHECK(kmalloc((size_t)KVA_HEAP_SIZE) == 0, "an object the size of the region is refused");
 }
 
+/**
+ * Run the rows of the reserve on the small region, then the guard, ends, size
+ * and region rows; the count of failures, at most 255.
+ *
+ * The region gives single pages every page below the reserve and none of it.
+ * With the free pages scattered one in two, as a cache leaves them, no run of
+ * two remains below the reserve, a run of 256 pages comes from the reserve
+ * sixteen times and the seventeenth is refused, one given back lets another
+ * come, and the runs given back keep the reserve closed to single pages. A
+ * large object of `kmalloc` beside the scatter comes from the reserve too, and
+ * its `kfree` gives the run back and keeps the reserve closed, so that the two
+ * ways pages leave the heap agree. `kalloc_pages_try` logs no refusal, since
+ * its callers go on with less. With room below the reserve, a large run is
+ * taken there and the reserve stays whole. A shortage of frames inside a
+ * reserve run gives the run back: the allocation is refused, and once frames
+ * are there again the same run serves.
+ */
 int main(void)
 {
     unsigned n, i, k;
     void *runs[KHEAP_RUNS + 1];
 
-    /* The reserve is closed to single pages from the start: the region
-       gives every page below it and none of it. */
+    /* The reserve is closed to single pages from the start. */
     kheap_init(SMALL_REGION);
     n = take_singles();
     CHECK(n == REGION_PAGES - RESERVE_PAGES,
@@ -394,10 +431,7 @@ int main(void)
     give_singles(n);
     CHECK(frames_out == 0, "and every frame went back");
 
-    /* The free pages scattered as a cache leaves them, one in two: no run
-       of two remains below the reserve, and a run of 256 pages comes from
-       the reserve, sixteen times, the seventeenth refused; one given back
-       lets another come. */
+    /* The free pages scattered one in two, as a cache leaves them. */
     kheap_init(SMALL_REGION);
     n = take_singles();
     for (i = 0; i < n; i += 2) {
@@ -436,9 +470,7 @@ int main(void)
     give_singles(n);
     CHECK(frames_out == 0, "and every frame went back after the scatter");
 
-    /* A large object of `kmalloc` beside the scatter comes from the reserve
-       too, and its `kfree` gives the run back and keeps the reserve closed:
-       the two ways pages leave the heap agree. */
+    /* A large object of `kmalloc` beside the scatter. */
     kheap_init(SMALL_REGION);
     n = take_singles();
     for (i = 0; i < n; i += 2) {
@@ -461,8 +493,7 @@ int main(void)
     give_singles(n);
     CHECK(frames_out == 0, "and every frame went back after the large object");
 
-    /* A refusal is logged by `kalloc_pages` and not by `kalloc_pages_try`,
-       whose callers go on with less. */
+    /* A refusal is logged by `kalloc_pages` and not by `kalloc_pages_try`. */
     kheap_init(SMALL_REGION);
     n = take_singles();
     klogs = 0;
@@ -470,8 +501,7 @@ int main(void)
     CHECK(kalloc_pages_try(1, 0) == 0 && klogs == 1, "and not by the quiet form");
     give_singles(n);
 
-    /* With room below the reserve, a large run is taken there and the
-       reserve stays whole. */
+    /* With room below the reserve, a large run is taken there. */
     kheap_init(SMALL_REGION);
     runs[0] = kalloc_pages(KHEAP_RUN_PAGES, 0);
     CHECK(runs[0] != 0 && (uintptr_t)runs[0] < RESERVE_BASE,
@@ -479,9 +509,7 @@ int main(void)
     CHECK(run_bits == 0, "and the reserve stays whole");
     kfree_pages(runs[0], KHEAP_RUN_PAGES);
 
-    /* A shortage of frames inside a reserve run gives the run back: the
-       allocation is refused, and once frames are there again the same run
-       serves. */
+    /* A shortage of frames inside a reserve run gives the run back. */
     kheap_init(SMALL_REGION);
     n = take_singles();
     for (i = 0; i < n; i += 2) {

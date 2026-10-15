@@ -4,18 +4,17 @@
  * host-deps: rach2/sys/lib/kfmt.c rach2/sys/lib/kstd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  *
- * `k_vprintf` reads its arguments off the stack a word at a time against the
- * conversions it finds in the format string, so a conversion it does not know
- * is not a cosmetic fault: it prints the letters verbatim and consumes no
- * argument, and every field after it in the same message is then read one slot
- * early. The machine on the desk printed `audio: not driven: 8086:a0c at
- * 02x:02x.0` for a format of `%x:%x at %02x:%02x.%d`, which is that fault:
- * three of the five fields are wrong and the text of two is the format's own.
+ * `k_vprintf` takes one argument for each conversion it finds in the format
+ * string, so a conversion it does not know is more than a wrong letter: it is
+ * written as its letter alone and takes no argument, and every field after it
+ * in the same message prints the argument meant for the field before. Without
+ * the `0` flag and the width, a format of `%x:%x at %02x:%02x.%d` prints
+ * `8086:a0c at 02x:02x.0`: three of the five fields are wrong and the text of
+ * two is the format's own.
  *
- * The rows below judge each conversion, the `0` flag and the width that were
- * missing, the cases where padding must not apply, and the end-of-string
- * case where the format stops on its percent. Returns the failed-check count
- * (0 == pass).
+ * The rows below check each conversion, the `0` flag and the width, the cases
+ * where padding does not apply, and the format that ends on its percent.
+ * Exits with the count of failed checks, at most 255.
  */
 
 #include <stdio.h>
@@ -24,10 +23,12 @@
 
 #include "kfmt.h"
 
+/* What the formatter wrote, `used` bytes of it. */
 static char out[512];
 static size_t used;
 static int fails;
 
+/** Count and print a failure when `cond` is false; `what` says what held. */
 #define CHECK(cond, what)                          \
     do {                                           \
         if (!(cond)) {                             \
@@ -36,6 +37,7 @@ static int fails;
         }                                          \
     } while (0)
 
+/** The formatter's output: append `c` to `out`, dropping what does not fit. */
 static void sink(char c)
 {
     if (used + 1 < sizeof(out)) {
@@ -44,7 +46,8 @@ static void sink(char c)
 }
 
 /** Format with the arguments given, each of the type its conversion reads,
- * and compare the whole result. */
+ * and compare the whole result with `want`. `n`, the count of arguments, is
+ * not read; it is the parameter `va_start` needs. */
 static void row(const char *want, const char *format, int n, ...)
 {
     va_list ap;
@@ -62,9 +65,16 @@ static void row(const char *want, const char *format, int n, ...)
     }
 }
 
+/**
+ * Run the rows. Unsigned decimal is checked at an int's width and a long's, so
+ * that a count past the largest int does not print as a negative number. A
+ * conversion the formatter does not know is written as its letter alone, which
+ * `tools/verify/fmtcheck.sh` keeps out of the kernel's messages. Returns the
+ * count of failures, at most 255.
+ */
 int main(void)
 {
-    /* The conversions that always worked. */
+    /* The conversions without a flag or a width. */
     row("42", "%d", 1, 42);
     row("-7", "%d", 1, -7);
     row("ff", "%x", 1, 255);
@@ -76,15 +86,13 @@ int main(void)
     row("A", "%c", 1, 'A');
     row("100%", "100%%", 0);
 
-    /* Unsigned decimal, at an int's width and a long's: a count past the
-       largest int prints as itself, not as a negative number. */
+    /* Unsigned decimal: a count past the largest int prints as itself. */
     row("4000000000", "%u", 1, 4000000000u);
     row("0", "%u", 1, 0u);
     row("4294967295", "%lu", 1, 4294967295ul);
     row("  9", "%3u", 1, 9u);
 
-    /* The `0` flag and the width, which is what a PCI address asks for and
-       what the machine could not print. */
+    /* The `0` flag and the width, which a PCI address needs. */
     row("0f", "%02x", 1, 15);
     row("00", "%02x", 1, 0);
     row("ff", "%02x", 1, 255);
@@ -93,7 +101,7 @@ int main(void)
     row("007", "%03d", 1, 7);
     row("0000ff", "%06x", 1, 255);
 
-    /* The whole message the machine got wrong, with every field in place. */
+    /* A whole message of a PCI device, with every field in place. */
     row("8086:a0c at 00:1f.3", "%x:%x at %02x:%02x.%d", 5, 0x8086, 0xa0c, 0, 0x1f, 3);
 
     /* A width does not disturb the argument after it. */
@@ -102,8 +110,7 @@ int main(void)
     /* The format that stops on its percent writes the sign and stops. */
     row("a%", "a%", 0);
 
-    /* A conversion this does not know is still emitted verbatim, which is
-       what the style check exists to keep out of the tree. */
+    /* A conversion the formatter does not know prints its letter alone. */
     row("q", "%q", 0);
 
     if (fails == 0) {

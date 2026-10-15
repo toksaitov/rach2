@@ -1,16 +1,19 @@
 /**
- * Dual-target host test for the kernel's ChaCha20 keystream CSPRNG.
+ * krandom_hosttest.c: the kernel's random number generator, a ChaCha20
+ * keystream (`lib/krandom.c`).
  *
  * host-deps: rach2/sys/lib/krandom.c
  *
- * Compiles and runs `sys/lib/krandom.c` natively under ASan/UBSan. Returns the
- * failed-check count (0 == all passed), capped so it cannot wrap to a false 0.
+ * Compiles and runs `sys/lib/krandom.c` natively under ASan and UBSan. Exits
+ * with the count of failed checks, capped at 120 so that it cannot wrap to
+ * 0.
  */
 
 #include "krandom.h"
 
 static int fails;
 
+/** Count a failure when `cond` is false. */
 #define CHECK(cond)    \
     do {               \
         if (!(cond)) { \
@@ -18,6 +21,15 @@ static int fails;
         }              \
     } while (0)
 
+/**
+ * Run the checks; the count of failures, at most 120.
+ *
+ * krandom_bytes must fill the n bytes it is given and no more, which ASan
+ * bounds. The stream is used for keys, so its bits are counted: of 4096, the
+ * count set must be within 205 (about 5%) of 2048. A stuck or biased generator
+ * lands far outside, and a uniform one is well within, so that a sound stream
+ * does not fail by chance.
+ */
 int main(void)
 {
     uint32_t a[8];
@@ -50,7 +62,7 @@ int main(void)
     }
     CHECK(differ);
 
-    /* The all-zero seed must NOT lock the generator at zero. */
+    /* The all-zero seed does not lock the generator at zero. */
     krandom_reseed(0, 0, 0, 0);
     nonzero = 0;
     for (i = 0; i < 8; i++) {
@@ -60,8 +72,7 @@ int main(void)
     }
     CHECK(nonzero);
 
-    /* krandom_bytes fills exactly n bytes (ASan guards the bounds) and the
-     * result is not all-zero. */
+    /* krandom_bytes fills n bytes, and not with zeros alone. */
     krandom_reseed(0xC0FFEEu, 0x0BADF00Du, 0x00001234u, 0x00005678u);
     for (i = 0; i < (int)sizeof(buf); i++) {
         buf[i] = 0;
@@ -75,10 +86,7 @@ int main(void)
     }
     CHECK(nonzero);
 
-    /* Monobit sanity (the fail-closed gate trusts this stream for keys): over
-     * 4096 ChaCha keystream bits the set-bit count must be near half (2048). A
-     * stuck or biased generator lands far outside; a uniform one is comfortably
-     * within +/-205 (~5%), wide enough that a healthy stream never flakes. */
+    /* About half of 4096 bits of the stream are set. */
     {
         uint8_t big[512];
         int ones = 0;

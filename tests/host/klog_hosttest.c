@@ -1,5 +1,6 @@
 /**
- * The kernel log, driven on the host (sys/klog.c).
+ * klog_hosttest.c: the kernel log (`klog.c`), its records, its ring and its
+ * four destinations.
  *
  * host-deps: rach2/sys/lib/kfmt.c rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
@@ -25,14 +26,15 @@
  * the case that cannot be staged here.
  */
 
-/* The kernel headers define the fixed-width types themselves, so nothing from
-   the host's stdint may be included alongside them. */
+/* The kernel headers define the fixed-width types themselves, so nothing
+ * from the host's stdint may be included alongside them. */
 extern int printf(const char *fmt, ...);
 
 #include "../../rach2/sys/klog.h"
 
 static int fails;
 
+/** Count and print a failure when `cond` is false; `what` says what held. */
 #define CHECK(what, cond)                 \
     do {                                  \
         if (!(cond)) {                    \
@@ -61,15 +63,16 @@ static int reenter_times;       /* how many more to raise, one per byte */
 static int reenter_after;       /* raise one at this many bytes from now */
 static unsigned serial_offered; /* bytes handed to a port that took none */
 static unsigned ring_at_screen; /* the ring's size when the screen was written */
-static int irq_depth;
-static int irq_pairs;
-static int irq_unbalanced;
+static int irq_depth;           /* the brackets of the interrupts now open */
+static int irq_pairs;           /* the brackets closed */
+static int irq_unbalanced;      /* the closes with none open */
 
-/* Which destination wrote, in the order they were first written to. Counted
-   per destination and not per byte, so a destination that accepted nothing
-   (a wedged port) is still recorded as having been offered the record. */
+/* The calls of each destination. A destination is noted in `order` at its
+ * first call, and not per byte, so a destination that accepted nothing (a
+ * wedged port) is still recorded as having been offered the record. */
 static unsigned screen_calls, serial_calls, net_calls;
 
+/** Note destination `c` in `order`. */
 static void note(char c)
 {
     if (order_len < sizeof(order) - 1) {
@@ -77,13 +80,15 @@ static void note(char c)
     }
 }
 
+/**
+ * The screen's recorder: keep `c`, note the ring's size at the first byte, and
+ * raise the records a row asks for from inside the delivery.
+ */
 void k_putc(char c)
 {
     if (screen_calls++ == 0) {
         note('S');
-        /* Read here rather than after the call: it is the only place from
-           which the order of the ring and the screen can be seen, and the
-           order is what a failing destination depends on. */
+        /* The ring's size now shows whether the ring came first. */
         ring_at_screen = klog_len();
     }
     if (screen_len < CAP) {
@@ -102,6 +107,10 @@ void k_putc(char c)
     }
 }
 
+/**
+ * The serial port's recorder: count `c` as offered and keep it unless the port
+ * is wedged.
+ */
 void serial_out(char c)
 {
     if (serial_calls++ == 0) {
@@ -116,15 +125,16 @@ void serial_out(char c)
     }
 }
 
+/** Whether netconsole has a device: `net_on`. */
 int netconsole_is_enabled(void)
 {
     return net_on;
 }
 
-/* netconsole holds what it is given until it has a device, and sends it
-   then. `net_on` stands for having one: what is recorded is what netconsole
-   was handed, and what would reach the wire is what it was handed while
-   `net_on`. */
+/** netconsole's recorder. netconsole holds what it is given until it has a
+ * device, and sends it then. `net_on` stands for having one: what is
+ * recorded is what netconsole was handed, and what would reach the wire is
+ * what it was handed while `net_on`. */
 void netconsole_putc(char c)
 {
     if (net_calls++ == 0) {
@@ -136,37 +146,42 @@ void netconsole_putc(char c)
 }
 
 /* The stubs the destinations resolve to. The colour setter takes the screen
-   driver's own enumeration, so its header comes first and the definition
-   follows the declaration it is standing in for. */
+ * driver's own enumeration, so its header comes first and the definition
+ * follows the declaration it is standing in for. */
 #include "../../rach2/sys/display/vga_text.h"
 
+/** The screen's colour is not recorded. */
 void set_fore_color(display_color_t color)
 {
     (void)color;
 }
 
 /* The cursor holds the screen's writes take, counted: a record delivered
-   to the screen and a program's console write each hold once and release
-   once, and the count is what says the writers still bracket their
-   bytes. */
+ * to the screen and a program's console write each hold once and release
+ * once, and the count is what says the writers still bracket their
+ * bytes. */
 static int holds, releases;
 
+/** Count a hold of the cursor. */
 void textcon_hold(void)
 {
     holds++;
 }
 
+/** Count a release of the cursor. */
 void textcon_release(void)
 {
     releases++;
 }
 
+/** Open a bracket of the interrupts: 0. */
 unsigned int kirq_save(void)
 {
     irq_depth++;
     return 0;
 }
 
+/** Close a bracket of the interrupts, counting a close with none open. */
 void kirq_restore(unsigned int flags)
 {
     (void)flags;
@@ -184,6 +199,10 @@ volatile unsigned int kernel_ticks;
 
 /* ---- helpers ---- */
 
+/**
+ * Put the ring, the queue, the recorders and the counts back to their initial
+ * state.
+ */
 static void reset(void)
 {
     unsigned i;
@@ -210,6 +229,10 @@ static void reset(void)
     screen[0] = serial[0] = net[0] = order[0] = '\0';
 }
 
+/**
+ * Read the whole ring into `out`, as a string of at most `cap` - 1 bytes; its
+ * length.
+ */
 static unsigned ring_text(char *out, unsigned cap)
 {
     unsigned n = klog_read(out, cap - 1, 0);
@@ -218,6 +241,7 @@ static unsigned ring_text(char *out, unsigned cap)
     return n;
 }
 
+/** Whether the strings `a` and `b` are equal. */
 static int streq(const char *a, const char *b)
 {
     while (*a != '\0' && *a == *b) {
@@ -227,6 +251,7 @@ static int streq(const char *a, const char *b)
     return *a == *b;
 }
 
+/** Whether `needle` occurs in `hay`. */
 static int has(const char *hay, const char *needle)
 {
     const char *p;
@@ -245,8 +270,9 @@ static int has(const char *hay, const char *needle)
     return 0;
 }
 
-/* One of the filler records above, rendered the way the logger renders it,
-   so the ring's contents can be predicted rather than described. */
+/** Write into `out` the filler record `n` of the eviction row as the logger
+ * renders it, so that the ring's contents can be predicted rather than
+ * described; its length. `cap` is not read: a record fits 128 bytes. */
 static unsigned render_fill(char *out, unsigned cap, int n)
 {
     const char *head = "<7>[0.00] fill: record: ";
@@ -276,6 +302,7 @@ static unsigned render_fill(char *out, unsigned cap, int n)
     return len;
 }
 
+/** The newlines in `s`. */
 static unsigned count_lines(const char *s)
 {
     unsigned n = 0;
@@ -292,16 +319,20 @@ static unsigned count_lines(const char *s)
  * The console writes: a record raised in the middle of one waits for its
  * end and follows it whole, for a program's write and for both of the
  * debug shell's calls.
+ *
+ * The bytes a program wrote in one call reach the port together and the
+ * record follows them. Without the bracket the record would end the open
+ * line and split a token a suite waits for, such as `AHCIPROBE OK`. A line
+ * the debug shell prints is one console write too: the banner's
+ * `Type 'help'` is what every suite waits for before it types, and a USB
+ * stick's record is raised in an interrupt. The record is raised at the
+ * line's seventh byte, the `h`.
  */
 static void console_write_rows(void)
 {
     char text[CAP];
 
-    /* A record raised in the middle of a program's console write waits for
-       the write: the bytes the program wrote in one call reach the port
-       together and the record follows them, whole. Without the bracket the
-       record would end the open line and split a token the harness looks
-       for, which is how the pool of twenty split `AHCIPROBE OK`. */
+    /* A record raised in the middle of a program's console write. */
     reset();
     console_write_begin();
     console_putc_raw('A');
@@ -321,12 +352,7 @@ static void console_write_rows(void)
     CHECK("and nothing waits or is held once the write has ended",
           pending_count == 0 && klog_delivering == 0 && console_writing == 0);
 
-    /* A line the debug shell prints is one console write too. The banner's
-       `Type 'help'` is what every suite waits for before it types, and a
-       stick's record, raised by the USB stack in an interrupt in the middle
-       of the line, split it, so the harness waited out its step for a
-       prompt that had been printed. The record is raised at the line's seventh byte,
-       the `h`, where it landed in the usb suite. */
+    /* A record raised in the middle of a line the debug shell prints. */
     reset();
     reenter_after = 7;
     console_puts("Type 'help' for available commands.");
@@ -350,13 +376,45 @@ static void console_write_rows(void)
           pending_count == 0 && klog_delivering == 0 && console_writing == 0);
 }
 
+/**
+ * Run the rows; the count of failures, at most 255.
+ *
+ * A record is the only place most of the formatter's conversions are used, so
+ * the rows check every one. A record is one line: the ring evicts by finding a
+ * newline, so a record with one of its own would be dropped in halves, leaving
+ * a tail with no header, and a newline inside the text is kept as a space. The
+ * formatter reads the byte after a `%`, which for a format that ends on its
+ * percent sign is past the end of the string. A level out of range is clamped
+ * rather than written into the prefix, where a reader parses a single digit.
+ *
+ * netconsole is given records before it has a device to send through: it holds
+ * what it cannot send yet and sends it when a device arrives, and the records
+ * worth having on the wire are the early ones.
+ *
+ * The ring's contents after 2000 records are rebuilt from the records
+ * themselves, since a ring that cleared itself on overflow, or dropped one
+ * record too many, holds whole lines too and would pass the other eviction
+ * checks. A ring that dropped bytes rather than records would leave a line
+ * beginning in the middle of a number.
+ *
+ * A record raised from inside the delivery of another, which is what an
+ * interrupt handler that prints does, tears neither, and both reach every
+ * destination past the ring, the one raised from inside after the line it
+ * landed in: an unplugged device says so once, and a machine that was writing
+ * at that moment would otherwise never say it on its port. Of more such records
+ * than the queue holds, the eight it holds are printed in order and the rest
+ * are counted in a record of their own, so that the log says how many it lost.
+ *
+ * A record takes three brackets of the interrupts, one for the build, one for
+ * the ring append and one for the look at the queue, and a read of the ring
+ * takes one more.
+ */
 int main(void)
 {
     char text[CAP];
     unsigned i;
 
-    /* The shape of a record: the priority, the uptime, the subsystem, the
-       text, and one newline. */
+    /* A record: priority, uptime, subsystem, text and one newline. */
     reset();
     kernel_ticks = 1234;
     klog(KLOG_ERR, "ahci", "command: timed out on port %d", 0);
@@ -364,8 +422,7 @@ int main(void)
     CHECK("the record is the whole line",
           streq(text, "<3>[12.34] ahci: command: timed out on port 0\n"));
 
-    /* Every conversion the kernel formatter has, since a record is the only
-       place most of them are now used. */
+    /* Every conversion the kernel's formatter has. */
     reset();
     klog(KLOG_INFO, "fmt", "%d %b %o %x %X %s %c %%", -5, 5, 8, 255, 255, "text", 'z');
     ring_text(text, sizeof(text));
@@ -414,26 +471,21 @@ int main(void)
     CHECK("and ends in exactly one newline", text[i - 1] == '\n' && text[i - 2] != '\n');
     CHECK("and is one record", count_lines(text) == 1);
 
-    /* One record is one line. A newline inside the text would be a second
-       delimiter, and the ring evicts by finding one: a record carrying its
-       own would be dropped in halves, leaving a tail with no header. */
+    /* One record is one line. */
     reset();
     klog(KLOG_INFO, "nl", "text: %s", "first\nsecond");
     ring_text(text, sizeof(text));
     CHECK("a newline inside the text does not end the record", count_lines(text) == 1);
     CHECK("and is kept as a space", streq(text, "<6>[0.00] nl: text: first second\n"));
 
-    /* A format that ends on its own percent sign. The formatter reads the
-       byte after a `%`, and the byte after the last one is past the end of
-       the string. */
+    /* A format that ends on its own percent sign. */
     reset();
     klog(KLOG_INFO, "pct", "text: 100%");
     ring_text(text, sizeof(text));
     CHECK("a format ending in a percent sign stops there",
           streq(text, "<6>[0.00] pct: text: 100%\n"));
 
-    /* The level is what it was given, and out-of-range is clamped rather than
-       written into the prefix, where a reader parses a single digit. */
+    /* A level out of range is clamped. */
     reset();
     klog(99, "clamp", "level: too large");
     ring_text(text, sizeof(text));
@@ -467,9 +519,7 @@ int main(void)
     klog(KLOG_INFO, "i", "event: happened");
     net[net_len] = '\0';
     CHECK("netconsole gets the whole record", streq(net, "<6>[0.00] i: event: happened\n"));
-    /* Before there is a device to send through, netconsole is still given the
-       record: it holds what it cannot send yet and sends it when a device
-       arrives, and the records worth having on the wire are the early ones. */
+    /* netconsole is given records before it has a device. */
     reset();
     net_on = 0;
     klog(KLOG_INFO, "early", "event: before the network");
@@ -503,10 +553,7 @@ int main(void)
     CHECK("the oldest records were dropped", !has(text, "record: 0 of"));
     CHECK("the newest was kept", has(text, "record: 1999 of"));
     {
-        /* The ring holds the newest records and exactly those. The expected
-           text is rebuilt from the records themselves: a ring that cleared
-           itself on overflow, or dropped one record too many, holds whole
-           lines too and would pass every check above. */
+        /* The ring holds the newest records and only those. */
         char want[KLOG_RING_SIZE + 1];
         char line[128];
         unsigned wlen = 0;
@@ -536,9 +583,7 @@ int main(void)
     }
 
     {
-        /* Every line in the ring is whole: a prefix, a subsystem, and a body.
-           A ring that dropped bytes rather than records would leave one line
-           starting somewhere in the middle of a number. */
+        /* Every line in the ring is a prefix, a subsystem and a body. */
         const char *p = text;
         unsigned whole = 0, lines = 0;
 
@@ -572,11 +617,7 @@ int main(void)
     serial[serial_len] = '\0';
     CHECK("and expands the newline for a terminal", streq(serial, "shell> ls\r\n"));
 
-    /* A record raised from inside the delivery of another, which is what an
-       interrupt handler that prints does. Neither may tear the other, and the
-       one raised from inside must still be printed: an unplugged device says
-       so once, and a machine that was writing at that moment would otherwise
-       never say it on its port. */
+    /* A record raised from inside the delivery of another. */
     reset();
     net_on = 1;
     reenter_from_screen = 1;
@@ -587,8 +628,7 @@ int main(void)
           has(text, "<3>[0.00] irq: landed: in the middle of another record\n"));
     CHECK("and so is the one it interrupted",
           has(text, "<6>[0.00] outer: began: before the interrupt\n"));
-    /* Both reach the destinations past the ring, one whole line after the
-       other: the record raised from inside waits for the line it landed in. */
+    /* The one raised from inside waits for the line it landed in. */
     screen[screen_len] = '\0';
     CHECK("the screen has the record that was interrupted, then the one that "
           "interrupted it",
@@ -603,10 +643,7 @@ int main(void)
           streq(net, "<6>[0.00] outer: began: before the interrupt\n"
                      "<3>[0.00] irq: landed: in the middle of another record\n"));
 
-    /* More records raised from inside one delivery than the queue holds. The
-       eight it holds are printed in order and the ninth is counted, because a
-       log that loses records without saying so is worse than one that says
-       how many. */
+    /* More records raised from inside one delivery than the queue holds. */
     reset();
     reenter_times = 9;
     klog(KLOG_INFO, "outer", "began: before the burst");
@@ -627,8 +664,7 @@ int main(void)
 
     console_write_rows();
 
-    /* The brackets: one build, one ring append, and one look at the queue per
-       record, balanced. */
+    /* The brackets of the interrupts a record takes. */
     reset();
     klog(KLOG_INFO, "b", "check: the brackets");
     CHECK("a record takes three brackets", irq_pairs == 3);

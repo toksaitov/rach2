@@ -1,18 +1,21 @@
 /**
- * Host test for the kernel's record of its longest delays.
+ * latency_hosttest.c: the kernel's record of its longest delays
+ * (`latency.c`).
  *
  * `sys/latency.c` is compiled natively with a clock the test sets, so the
- * record is driven through readings the machine's clock has produced: a
- * later reading that answers less than an earlier one, the backwards step
- * within a tick that entry 47 of milestone 50 found on the Lenovo, must be
- * dropped and not kept as a delay of nearly 2^32 microseconds. Prints
- * nothing on success; the exit status is the number of failed checks.
+ * record is driven through readings the machine's clock can produce: a later
+ * reading that answers less than an earlier one, a step back within a tick
+ * that the Lenovo's clock makes, must be dropped and not kept as a delay of
+ * nearly 2^32 microseconds. Prints nothing on success; the exit status is the
+ * number of failed checks.
  */
 
 #include "../../rach2/sys/latency.c"
 
+/* The clock's reading, in microseconds. */
 static uint32_t clock_us;
 
+/** The clock the test sets: `clock_us`. */
 uint32_t timer_now_us(void)
 {
     return clock_us;
@@ -22,6 +25,7 @@ extern int printf(const char *fmt, ...);
 
 static int fails;
 
+/** Count and print a failure when `cond` is false; `what` says what held. */
 #define CHECK(cond, what)                 \
     do {                                  \
         if (!(cond)) {                    \
@@ -30,6 +34,7 @@ static int fails;
         }                                 \
     } while (0)
 
+/** Run the checks; the count of failures, at most 255. */
 int main(void)
 {
     latency_span(LAT_DISK, 1000, 1450);
@@ -39,8 +44,7 @@ int main(void)
     latency_span(LAT_DISK, 3000, 3900);
     CHECK(latency_max(LAT_DISK) == 900, "a longer one replaces it");
 
-    /* The clock read later answers less: the step is dropped, not kept as
-       the largest delay ever seen. */
+    /* The clock read later answers less, and the step is dropped. */
     latency_span(LAT_DISK, 5000, 4237);
     CHECK(latency_max(LAT_DISK) == 900, "a reading before its start is dropped");
     latency_span(LAT_DISK, 5000, 5000);

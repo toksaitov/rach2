@@ -1,15 +1,16 @@
 /**
- * Dual-target host test for the kernel's pure string and memory routines.
+ * kstring_hosttest.c: the kernel's string and memory routines
+ * (`lib/kstring.c`).
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
- * The routines in `sys/lib/kstring.c` are compiled and run NATIVELY on the
- * host under AddressSanitizer + UndefinedBehaviorSanitizer, and vector-tested.
- * The same .c file is linked into the freestanding kernel (one source, two
- * targets), so a bounds bug surfaces here, in milliseconds, instead of as a
- * mystery fault in QEMU. The test prints nothing; it returns the number of
- * failed checks as its exit status (0 == all passed), which is what
- * tests/system/suites/host.sh asserts.
+ * The routines in `sys/lib/kstring.c` are compiled and run natively on the
+ * host under AddressSanitizer and UndefinedBehaviorSanitizer, and checked
+ * against known results. The same file is linked into the freestanding
+ * kernel, so a bounds fault shows here, with the sanitizer's report, rather
+ * than as a fault in QEMU. The test prints nothing; it returns the number of
+ * failed checks as its exit status, 0 when all passed, which is what
+ * tests/system/suites/host.sh reads.
  */
 
 #include "kstring.h"
@@ -17,6 +18,7 @@
 
 static int fails;
 
+/** Count a failure when `cond` is false. */
 #define CHECK(cond)    \
     do {               \
         if (!(cond)) { \
@@ -24,6 +26,28 @@ static int fails;
         }              \
     } while (0)
 
+/**
+ * Run the checks; the count of failures, at most 120, so that the exit status
+ * cannot wrap to 0.
+ *
+ * k_strreverse of the empty string must do nothing, since its upper index, the
+ * length less one, would wrap to SIZE_MAX and walk off the buffer. A forward
+ * overlap of k_memmove, the destination above the source and inside it, is the
+ * case a plain forward copy gets wrong: it overwrites source bytes before it
+ * reads them, turning "abcdef" into "ababab" instead of "ababcd"; a backward
+ * overlap and disjoint ranges must give what k_memcpy gives. Between two
+ * separate objects, as tcc's compiled struct assignments copy, the overlap test
+ * must not choose the backward copy or trip a sanitizer, whatever the objects'
+ * relative addresses.
+ *
+ * The sweep copies, fills and moves both ways every length to 67 at every
+ * alignment of both buffers: the bytes asked for arrive, and the byte before
+ * and the byte after are untouched. On the kernel's target the words go through
+ * the string instructions and the tail through the byte loop; here the byte
+ * loop is the whole function, so this is the tail's test. The kernel runs the
+ * same sweep on the target, `check_strings` in kernel.c, when `rach2.strings`
+ * is on the boot line.
+ */
 int main(void)
 {
     char buf[32];
@@ -39,7 +63,7 @@ int main(void)
     CHECK(buf[0] == 'A' && buf[1] == 'A' && buf[2] == 'A' && buf[3] == 'A');
     CHECK(k_strlen(buf) == 4);
 
-    /* k_memcpy copies exactly n bytes */
+    /* k_memcpy copies n bytes */
     k_memcpy(buf, "world!", 7);
     CHECK(k_strlen(buf) == 6);
     CHECK(buf[5] == '!');
@@ -49,9 +73,7 @@ int main(void)
     k_strncpy(dst, "ab", 8);
     CHECK(dst[0] == 'a' && dst[1] == 'b' && dst[2] == '\0');
 
-    /* k_strreverse: the empty string must be a no-op (the length-1 upper index
-     * would otherwise wrap to SIZE_MAX and walk off the buffer), then single,
-     * even, and odd lengths reverse correctly. */
+    /* k_strreverse of the empty string and of 1, 2 and 5 characters. */
     {
         char r[16];
         k_strncpy(r, "", 16);
@@ -68,8 +90,7 @@ int main(void)
         CHECK(r[0] == 'e' && r[1] == 'd' && r[2] == 'c' && r[3] == 'b' && r[4] == 'a');
     }
 
-    /* case fold: k_toupper/k_tolower change only their own case; k_strtoupper
-     * folds a whole string and leaves digits and punctuation alone. */
+    /* k_toupper, k_tolower and k_strtoupper change letters alone. */
     CHECK(k_toupper('a') == 'A' && k_toupper('z') == 'Z');
     CHECK(k_toupper('A') == 'A' && k_toupper('5') == '5' && k_toupper('!') == '!');
     CHECK(k_tolower('A') == 'a' && k_tolower('Z') == 'z');
@@ -82,11 +103,7 @@ int main(void)
               u[5] == '\0');
     }
 
-    /* k_memmove over overlapping ranges, both directions. Forward overlap
-     * (destination above the source, inside it) is the case a plain forward
-     * copy corrupts: it overwrites source bytes before reading them, turning
-     * "abcdef" into "ababab" instead of "ababcd". Backward overlap and the
-     * disjoint case must behave exactly like k_memcpy. */
+    /* k_memmove over overlapping ranges, both directions. */
     {
         char m[16];
 
@@ -108,10 +125,7 @@ int main(void)
         CHECK(m[0] == 'a' && m[7] == 'd');
     }
 
-    /* k_memmove between two separate objects, which is the shape tcc's
-     * compiled struct assignments produce. The overlap test must not choose
-     * the backward copy or trip a sanitizer here, whatever the two objects'
-     * relative addresses are. */
+    /* k_memmove between two separate objects, as tcc's struct copies do. */
     {
         char a[8];
         char b[8];
@@ -123,13 +137,7 @@ int main(void)
         CHECK(a[0] == '1' && a[7] == '8');
     }
 
-    /* Every length to 67 at every alignment of both buffers, for the copy,
-     * the fill and the move both ways: the bytes asked for arrive, and the
-     * byte before and the byte after each buffer are untouched. On the
-     * kernel's target the words go through the string instructions and the
-     * tail through the byte loop; here the byte loop is the whole function,
-     * so this is the tail's test, and the same sweep runs on the target at
-     * every boot as the kernel's strings self-test. */
+    /* Every length to 67 at every alignment of both buffers. */
     {
         static unsigned char pat[80], got[80];
         int len, sa, da, i, bad = 0;
@@ -194,7 +202,5 @@ int main(void)
         CHECK(bad == 0);
     }
 
-    /* Bounded so the count never wraps to 0 (a false pass) as an exit
-     * status. */
     return (fails > 120) ? 120 : fails;
 }

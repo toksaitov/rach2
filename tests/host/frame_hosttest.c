@@ -1,5 +1,5 @@
 /**
- * Host test for the physical memory map (mm/frame.c).
+ * frame_hosttest.c: the physical memory map (`mm/frame.c`).
  *
  * host-deps: rach2/sys/mm/frame.c
  *
@@ -17,7 +17,7 @@
  * as a UEFI firmware gives one, of the record's whole BOOT_MMAP_MAX entries,
  * with the reservations the boot makes on it. The reservations are replayed
  * against each and the four numbers checked, and the frame table is placed
- * with `frame_map_place`. Returns the failed-check count (0 == pass).
+ * with `frame_map_place`. Exits with the count of failed checks, at most 50.
  * tests/host/frame_mutate.sh counts the NVS and ACPI types as memory and
  * requires the Lenovo's two rows, and no other, to fail.
  */
@@ -43,6 +43,7 @@ int printf(const char *format, ...);
 
 static int fails;
 
+/** Count a failure and print its line when `cond` is false. */
 #define CHECK(cond)                                        \
     do {                                                   \
         if (!(cond)) {                                     \
@@ -75,10 +76,11 @@ static uint32_t put_entry(uint8_t *buf, uint32_t off, uint64_t addr, uint64_t le
     return BOOT_MMAP_ENTRY;
 }
 
-/* QEMU's map for `mib` MiB of memory, as the kernel recorded it: the low
- * 639 KiB, a hole to 1 MiB, low RAM to 128 KiB short of its end or of
- * 3 GiB, a reserved range there, the firmware's range below 4 GiB, and the
- * rest above 4 GiB when the machine has more than 3 GiB. */
+/** Write into `buf` QEMU's map for `mib` MiB of memory, as the kernel
+ * recorded it: the low 639 KiB, a hole to 1 MiB, low RAM to 128 KiB short
+ * of its end or of 3 GiB, a reserved range there, the firmware's range below
+ * 4 GiB, and the rest above 4 GiB when the machine has more than 3 GiB.
+ * Returns the bytes written. */
 static uint32_t qemu_map(uint8_t *buf, uint32_t mib)
 {
     uint64_t total = MIB(mib);
@@ -97,8 +99,9 @@ static uint32_t qemu_map(uint8_t *buf, uint32_t mib)
     return n;
 }
 
-/* The boot's own reservations on that map: a 5 MiB kernel from 1 MiB, a
- * 10 MiB module after it, and the allocator's break 3 MiB past the module. */
+/** Make the boot's own reservations on that map: a 5 MiB kernel from 1 MiB,
+ * a 10 MiB module after it, and the allocator's break 3 MiB past the
+ * module. */
 static void boot_reservations(struct frame_map *m)
 {
     CHECK(frame_map_reserve(m, 0, MIB(6)) == 0);
@@ -106,6 +109,12 @@ static void boot_reservations(struct frame_map *m)
     CHECK(frame_map_reserve(m, 0, MIB(19)) == 0);
 }
 
+/**
+ * QEMU's maps at 64 MiB to 4 GiB with i686's reach: the usable and unreachable
+ * figures the kernel printed, which together are what QEMU was given less its
+ * fixed holes (the kilobyte at 0x9FC00, the 384 KiB below 1 MiB and the 128 KiB
+ * at the end of low RAM), the top frame, and the boot's reservations.
+ */
 static void qemu_sizes(void)
 {
     static const uint32_t sizes[] = {64, 512, 2048, 3072, 4096};
@@ -122,9 +131,6 @@ static void qemu_sizes(void)
         CHECK(frame_map_build(&m, map, n, 0, REACH_I686) == 0);
         CHECK(m.usable_bytes == KIB(usable[i]));
         CHECK(m.unreachable_bytes == KIB(unreachable[i]));
-        /* The two together are what QEMU was given less its fixed holes: the
-         * kilobyte at 0x9FC00, the 384 KiB below 1 MiB and the 128 KiB at
-         * the end of low RAM. */
         CHECK(m.usable_bytes + m.unreachable_bytes + KIB(513) == MIB(sizes[i]));
         CHECK(!m.from_mem_upper);
         CHECK((uint64_t)m.top_frame * FRAME_PAGE_SIZE ==
@@ -228,6 +234,15 @@ static void lenovo(void)
     CHECK(frame_map_usable(&m, m.top_frame - 1));
 }
 
+/**
+ * Synthetic maps with i686's reach: holes between ranges, and reservations over
+ * a hole, again and inside a range; an overlap of an available entry and a
+ * reserved one, with the entries out of order; two available entries that
+ * overlap; a range crossing 4 GiB, whose arithmetic does not wrap; a range
+ * above 4 GiB; a length that wraps the 64-bit space, which ends at the space's
+ * last byte, one short of the length a wider number would give; a truncated
+ * last entry; no map at all; and more ranges than the map keeps.
+ */
 static void synthetic(void)
 {
     uint8_t map[(FRAME_MAP_RANGES + 1) * BOOT_MMAP_ENTRY];
@@ -259,8 +274,7 @@ static void synthetic(void)
     CHECK(!frame_map_usable(&m, (uint32_t)(MIB(10) / FRAME_PAGE_SIZE)));
     CHECK(frame_map_usable(&m, (uint32_t)(MIB(11) / FRAME_PAGE_SIZE)));
 
-    /* An overlap: the reserved entry wins where the two meet, and the
-     * unordered entries are sorted. */
+    /* An overlap: the reserved entry wins, and the entries are sorted. */
     n = 0;
     n += put_entry(map, n, MIB(8), MIB(8), MAP_USABLE);
     n += put_entry(map, n, MIB(1), MIB(3), MAP_USABLE);
@@ -278,8 +292,7 @@ static void synthetic(void)
     CHECK(frame_map_build(&m, map, n, 0, REACH_I686) == 0);
     CHECK(m.count == 1 && m.usable_bytes == MIB(6));
 
-    /* A range crossing 4 GiB: the part below is usable, the part above is
-     * unreachable, and the arithmetic does not wrap. */
+    /* A range crossing 4 GiB: usable below, unreachable above. */
     n = 0;
     n += put_entry(map, n, MIB(1), MIB(4095) + MIB(512), MAP_USABLE);
     CHECK(frame_map_build(&m, map, n, 0, REACH_I686) == 0);
@@ -295,8 +308,7 @@ static void synthetic(void)
     CHECK(frame_map_build(&m, map, n, 0, REACH_I686) == 0);
     CHECK(m.count == 0 && m.unreachable_bytes == MIB(256) && !m.from_mem_upper);
 
-    /* A length that wraps the 64-bit space ends at the space's last byte,
-     * which is one short of the length a wider number would give. */
+    /* A length that wraps the 64-bit space ends at the space's last byte. */
     n = 0;
     n += put_entry(map, n, 0xFFFFFFFFFFF00000ULL, 0x200000, MAP_USABLE);
     CHECK(frame_map_build(&m, map, n, 0, REACH_I686) == 0);
@@ -415,16 +427,16 @@ static void x86_64_past_reach(void)
     CHECK(frame_map_usable(&m, REACH_X86_64 / FRAME_PAGE_SIZE - 1));
 }
 
-/* The UEFI-shaped map's groups: a run of memory the firmware lists as two
- * entries of two of its types, both usable, then a small region of
- * another type. */
-/* The runs that, with the map's eight other entries, fill the record's
- * BOOT_MMAP_MAX, three entries each, and the entries left over, which the
- * last range above 4 GiB takes as adjacent pieces. */
+/* The UEFI-shaped map's groups, each a run of memory the firmware lists as
+ * two usable entries, then a small region of another type: the number of
+ * groups that, with the map's eight other entries, fill the record's
+ * BOOT_MMAP_MAX, three entries each; the entries left over, which the last
+ * range above 4 GiB takes as adjacent pieces; and a group's span. */
 #define UEFI_GROUPS     ((BOOT_MMAP_MAX - 8u) / 3u)
 #define UEFI_PIECES     ((BOOT_MMAP_MAX - 8u) % 3u)
 #define UEFI_GROUP_SPAN (MIB(16) + KIB(64))
 
+/** The start of the UEFI-shaped map's group `k`. */
 static uint64_t uefi_group(uint32_t k)
 {
     return MIB(1) + (uint64_t)k * UEFI_GROUP_SPAN;
@@ -552,6 +564,7 @@ static void place(void)
     CHECK(frame_map_place(&m, 0, MIB(32), &at) == -1);
 }
 
+/** Run the rows; the count of failed checks, at most 50. */
 int main(void)
 {
     qemu_sizes();
