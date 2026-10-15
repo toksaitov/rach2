@@ -144,6 +144,13 @@ round() {
     rm -f "$out/manifest.head"
 }
 
+# GRUB reads the two embedded configurations with its rescue parser, where a
+# quote mark in a comment or a missing command loses the recovery path with no
+# message, so cfgcheck checks both before any image is built from them.
+make -s -C "$REPO" build/tools/inspect/cfgcheck
+"$REPO/build/tools/inspect/cfgcheck" grubembed "$EMBED"
+"$REPO/build/tools/inspect/cfgcheck" grubefi "$EFI_EMBED"
+
 R1="$REPO/build/grub-regen/round1"
 R2="$REPO/build/grub-regen/round2"
 rm -rf "$REPO/build/grub-regen"

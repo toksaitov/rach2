@@ -550,10 +550,10 @@ fi
 #     itself is tested:
 #       * elfcheck accepts a well-formed kernel and fails each malformed one a
 #         loader would load wrongly;
-#       * cfgcheck accepts the configuration a GRUB core image has and fails
-#         every way of losing the recovery path, and fails every way the
-#         sealed disk's menu and recovery script can describe two different
-#         network setups;
+#       * cfgcheck accepts the configurations of GRUB's core and EFI images
+#         and fails every way of losing the recovery path, and fails every
+#         way the sealed disk's menu and recovery script can describe two
+#         different network setups;
 #       * the compilation-database generator joins wrapped recipes, selects
 #         only compile commands, and does not publish an invalid database;
 #       * suitecheck.sh fails each form of a guessed duration and accepts

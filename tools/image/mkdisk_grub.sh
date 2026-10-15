@@ -450,10 +450,11 @@ cp "$REPO/tools/image/grub-embed.cfg" "$EMBED_CFG"
 # The lines whose absence is silent: a core that cannot reach partition 3 boots
 # every ordinary machine and no damaged one, and one that reaches it first sends
 # every healthy machine to recovery. cfgcheck requires the four lines in their
-# order.
+# order, and the three of the EFI image's configuration in theirs.
 CFGCHECK="$REPO/build/tools/inspect/cfgcheck"
 make -s -C "$REPO" build/tools/inspect/cfgcheck "ARCH=$RACH2_ARCH" || exit 1
 "$CFGCHECK" grubembed "$EMBED_CFG"
+"$CFGCHECK" grubefi "$REPO/tools/image/grub-efi-embed.cfg"
 
 # No entry may name the address twice. The kernel refuses a command line that
 # does, and refuses it by coming up with no address at all, so a build that

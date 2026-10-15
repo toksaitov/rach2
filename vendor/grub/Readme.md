@@ -36,7 +36,7 @@ The images change only through `regen_grub.sh`, a maintainer procedure that need
 sh vendor/grub/regen_grub.sh
 ```
 
-The script runs the container for `linux/amd64`, installs `ca-certificates` from the container's default archive, then points apt at one dated state of the Ubuntu snapshot archive, `SNAPSHOT` in the script or `RACH2_GRUB_SNAPSHOT` in the environment, and installs the three GRUB packages from it. It makes all eight images and the manifest twice, in `build/grub-regen/round1` and `round2`, requires the two rounds to be equal byte for byte, and copies the first into this directory. The container digest and the snapshot identifier fix every input but the `ca-certificates` bootstrap and what it installs, which put trust anchors in the container and no byte in an image; the manifest records their versions as installed.
+The script runs the container for `linux/amd64`, installs `ca-certificates` from the container's default archive, then points apt at one dated state of the Ubuntu snapshot archive, `SNAPSHOT` in the script or `RACH2_GRUB_SNAPSHOT` in the environment, and installs the three GRUB packages from it. It first runs `cfgcheck grubembed` and `cfgcheck grubefi` over the two embedded configurations and stops when either fails. It makes all eight images and the manifest twice, in `build/grub-regen/round1` and `round2`, requires the two rounds to be equal byte for byte, and copies the first into this directory. The container digest and the snapshot identifier fix every input but the `ca-certificates` bootstrap and what it installs, which put trust anchors in the container and no byte in an image; the manifest records their versions as installed.
 
 A new set of images is chosen on purpose and reviewed as a vendored source update is:
 

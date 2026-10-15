@@ -1,24 +1,34 @@
 /**
- * cfgcheck: check the two configuration files a sealed disk depends on.
+ * cfgcheck: check the configuration files a sealed disk depends on.
  *
- * `cfgcheck grubembed CONFIG` checks the configuration built into a GRUB
- * core image. Two builders write core images for this project:
- * tools/image/mkdisk_grub.sh writes the one a disk ships with, and
- * tools/image/mkgrubcore.sh writes the ones `bootctl grub` installs over
- * it. Both embed tools/image/grub-embed.cfg, and what that file says is
- * the difference between a machine that can be repaired when its boot
- * partition is damaged and one that cannot: two pairs of a `search` by
- * label and a `configfile` call, the boot partition's menu first and the
- * recovery partition's second. The order is the whole of it, since the
- * first call opens a menu that never returns, so a file naming the
- * recovery menu first would send every healthy boot to recovery. The early
- * parser these run through has no `if`, which is why they are two pairs and
- * not a test. It is checked on the file and not on the image because
+ * `cfgcheck grubembed CONFIG` checks tools/image/grub-embed.cfg, the
+ * configuration built into GRUB's BIOS core images, and `cfgcheck grubefi
+ * CONFIG` checks tools/image/grub-efi-embed.cfg, the one built into its EFI
+ * image. vendor/grub/regen_grub.sh builds both into the pinned images under
+ * vendor/grub/; tools/image/mkdisk_grub.sh writes those to the disks it
+ * builds, and tools/image/mkgrubcore.sh copies the marked cores that
+ * `bootctl grub` installs over them. What these files say is the difference
+ * between a machine that can be repaired when its boot partition is damaged
+ * and one that cannot. The BIOS file is two pairs of a `search` by label and
+ * a `configfile` call, the boot partition's menu first and the recovery
+ * partition's second. The EFI file opens the menu at `$prefix`, which the
+ * firmware's choice of partition sets, and then has the recovery pair. The
+ * order is the whole of it, since the first call opens a menu that never
+ * returns, so a file naming the recovery menu first would send every healthy
+ * boot to recovery. It is checked on the file and not on the image because
  * grub-mkimage compresses what it embeds. What is required is the whole
  * command list and not the presence of its lines: GRUB takes `;` as a
  * command separator, so anything looking only for the expected lines would
  * pass a file whose first command sent every healthy machine to recovery.
- * A commented-out line reads as an absent one.
+ *
+ * GRUB runs an embedded configuration with the parser of its rescue mode,
+ * which has no `if` and no comments. A line that begins with `#` is run as
+ * a command GRUB does not know, a quote mark in it opens a string that runs
+ * on through the lines below, and a backslash at the end of a line joins the
+ * next line to it. Either takes the commands below into a comment. So a
+ * quote mark (`'` or `"`) or a line-end backslash anywhere in the file,
+ * comments included, fails the check, and a commented-out command reads as
+ * an absent one.
  *
  * `cfgcheck sealednet ADDRESS PREFIX MASK GATEWAY SCRIPT` checks the
  * sealed disk's fixed address against the script that falls back to it.
@@ -37,7 +47,7 @@
  * exact forms, so a command hidden behind `command`, `eval`, a subshell or
  * backticks is rejected rather than ignored.
  *
- * `--selftest` runs both checkers over their own fixtures. Each check
+ * `--selftest` runs the checkers over their own fixtures. Each check
  * exits 0 when it passes and 1 when it fails, with a line on stderr; a
  * usage error exits 2.
  */
@@ -54,6 +64,11 @@
 static const char *const GRUB_WANT[GRUB_LINES] = {
     "search --no-floppy --label RACH2BOOT --set=root", "configfile ($root)/boot/grub/grub.cfg",
     "search --no-floppy --label RACH2RECOV --set=root",
+    "configfile ($root)/boot/grub/recovery.cfg"};
+
+#define GRUB_EFI_LINES 3
+static const char *const GRUB_EFI_WANT[GRUB_EFI_LINES] = {
+    "configfile $prefix/grub.cfg", "search --no-floppy --label RACH2RECOV --set=root",
     "configfile ($root)/boot/grub/recovery.cfg"};
 
 /* Why the last check failed, for the caller's message. */
@@ -86,39 +101,85 @@ static char *trim(char *s)
     return s;
 }
 
-/* ---- grubembed ---- */
+/* ---- grubembed and grubefi ---- */
 
 /**
- * Whether `text`, blank and comment lines aside, is exactly the two
- * searches and two configfile calls of GRUB_WANT, in order. On a failure
- * `why` says so.
+ * Whether `text` has no quote mark and no backslash at the end of a line,
+ * which GRUB's rescue parser would read as the start of a string or the
+ * joining of two lines. On a failure `why` names the line.
  */
-static int grub_ok(const char *text)
+static int grub_plain(const char *text)
+{
+    const char *p;
+    int line = 1;
+
+    for (p = text; *p != '\0'; p++) {
+        if (*p == '\'' || *p == '"') {
+            say("line %d has a quote mark, which opens a string that runs on over "
+                "the commands below it",
+                line);
+            return 0;
+        }
+        if (*p == '\\' && (p[1] == '\0' || p[1] == '\n' || (p[1] == '\r' && p[2] == '\n'))) {
+            say("line %d ends in a backslash, which joins the next line to it", line);
+            return 0;
+        }
+        if (*p == '\n')
+            line++;
+    }
+    return 1;
+}
+
+/** Say in `why` that the commands are not the `n` of `want`, in order. */
+static void say_commands(const char *const *want, int n)
+{
+    size_t len;
+    int i;
+
+    strcpy(why, "the commands are not exactly");
+    for (i = 0; i < n; i++) {
+        const char *before = ", ";
+
+        if (i == 0)
+            before = " ";
+        else if (i == n - 1)
+            before = " then ";
+        len = strlen(why);
+        snprintf(why + len, sizeof(why) - len, "%s'%s'", before, want[i]);
+    }
+}
+
+/**
+ * Whether `text` passes grub_plain and, blank and comment lines aside, is
+ * exactly the `n` commands of `want`, in order. On a failure `why` says
+ * so.
+ */
+static int grub_ok(const char *text, const char *const *want, int n)
 {
     char buf[MAX_TEXT];
     char *line, *save;
-    int n = 0;
+    int i = 0;
 
     if (strlen(text) >= sizeof(buf)) {
         say("the configuration is longer than this checker reads");
         return 0;
     }
+    if (!grub_plain(text))
+        return 0;
     strcpy(buf, text);
     for (line = strtok_r(buf, "\n", &save); line != NULL; line = strtok_r(NULL, "\n", &save)) {
         char *cmd = trim(line);
 
         if (*cmd == '\0' || *cmd == '#')
             continue;
-        if (n >= GRUB_LINES || strcmp(cmd, GRUB_WANT[n]) != 0) {
-            say("the commands are not exactly '%s', '%s', '%s' then '%s'", GRUB_WANT[0],
-                GRUB_WANT[1], GRUB_WANT[2], GRUB_WANT[3]);
+        if (i >= n || strcmp(cmd, want[i]) != 0) {
+            say_commands(want, n);
             return 0;
         }
-        n++;
+        i++;
     }
-    if (n != GRUB_LINES) {
-        say("the commands are not exactly '%s', '%s', '%s' then '%s'", GRUB_WANT[0], GRUB_WANT[1],
-            GRUB_WANT[2], GRUB_WANT[3]);
+    if (i != n) {
+        say_commands(want, n);
         return 0;
     }
     return 1;
@@ -291,14 +352,26 @@ static int script_ok(const char *text, const char *address, const char *mask, co
 
 static int st_bad, st_ran;
 
-/** One case of the GRUB check: `text` must pass when `want_ok` is set. */
+/** One case of the BIOS check: `text` must pass when `want_ok` is set. */
 static void st_grub(const char *name, const char *text, int want_ok)
 {
-    int ok = grub_ok(text);
+    int ok = grub_ok(text, GRUB_WANT, GRUB_LINES);
 
     st_ran++;
     if (ok != want_ok) {
         fprintf(stderr, "check-grubembed: selftest: fail: %s\n", name);
+        st_bad++;
+    }
+}
+
+/** One case of the EFI check: `text` must pass when `want_ok` is set. */
+static void st_efi(const char *name, const char *text, int want_ok)
+{
+    int ok = grub_ok(text, GRUB_EFI_WANT, GRUB_EFI_LINES);
+
+    st_ran++;
+    if (ok != want_ok) {
+        fprintf(stderr, "check-grubefi: selftest: fail: %s\n", name);
         st_bad++;
     }
 }
@@ -315,17 +388,25 @@ static void st_net(const char *name, const char *text, int want_ok)
     }
 }
 
-/** Run every case of both checks; return 0 when all pass, else 1. */
-static int selftest(void)
-{
-    const char *both = "search --no-floppy --label RACH2BOOT --set=root\n"
-                       "configfile ($root)/boot/grub/grub.cfg\n"
-                       "search --no-floppy --label RACH2RECOV --set=root\n"
-                       "configfile ($root)/boot/grub/recovery.cfg\n";
+/* The BIOS configuration as it is, which the cases of both GRUB checks use. */
+static const char st_both[] = "search --no-floppy --label RACH2BOOT --set=root\n"
+                              "configfile ($root)/boot/grub/grub.cfg\n"
+                              "search --no-floppy --label RACH2RECOV --set=root\n"
+                              "configfile ($root)/boot/grub/recovery.cfg\n";
 
-    st_bad = 0;
-    st_ran = 0;
-    st_grub("the configuration itself", both, 1);
+/** The cases of the BIOS check. */
+static void selftest_bios(void)
+{
+    const char *both_slash = "search --no-floppy --label RACH2BOOT --set=root\n"
+                             "configfile ($root)/boot/grub/grub.cfg\n"
+                             "search --no-floppy --label RACH2RECOV --set=root\n"
+                             "configfile ($root)/boot/grub/recovery.cfg\n# \\";
+    const char *both_inner_slash = "# a \\ b\nsearch --no-floppy --label RACH2BOOT --set=root\n"
+                                   "configfile ($root)/boot/grub/grub.cfg\n"
+                                   "search --no-floppy --label RACH2RECOV --set=root\n"
+                                   "configfile ($root)/boot/grub/recovery.cfg\n";
+
+    st_grub("the configuration itself", st_both, 1);
     st_grub("comments and blank lines around it",
             "# a comment\n\nsearch --no-floppy --label RACH2BOOT --set=root\n"
             "configfile ($root)/boot/grub/grub.cfg\n"
@@ -378,7 +459,74 @@ static int selftest(void)
             "configfile ($root)/boot/grub/recovery.cfg\n",
             0);
     st_grub("nothing at all", "", 0);
+    st_grub("an apostrophe in a comment above the commands",
+            "# the boot partition's menu\nsearch --no-floppy --label RACH2BOOT --set=root\n"
+            "configfile ($root)/boot/grub/grub.cfg\n"
+            "search --no-floppy --label RACH2RECOV --set=root\n"
+            "configfile ($root)/boot/grub/recovery.cfg\n",
+            0);
+    st_grub("a double quote in a comment below the commands",
+            "search --no-floppy --label RACH2BOOT --set=root\n"
+            "configfile ($root)/boot/grub/grub.cfg\n"
+            "search --no-floppy --label RACH2RECOV --set=root\n"
+            "configfile ($root)/boot/grub/recovery.cfg\n# say \"hello\n",
+            0);
+    st_grub("a comment that ends in a backslash",
+            "# a comment \\\nsearch --no-floppy --label RACH2BOOT --set=root\n"
+            "configfile ($root)/boot/grub/grub.cfg\n"
+            "search --no-floppy --label RACH2RECOV --set=root\n"
+            "configfile ($root)/boot/grub/recovery.cfg\n",
+            0);
+    st_grub("a comment that ends in a backslash and a carriage return",
+            "# a comment \\\r\nsearch --no-floppy --label RACH2BOOT --set=root\n"
+            "configfile ($root)/boot/grub/grub.cfg\n"
+            "search --no-floppy --label RACH2RECOV --set=root\n"
+            "configfile ($root)/boot/grub/recovery.cfg\n",
+            0);
+    st_grub("a backslash at the end of the file", both_slash, 0);
+    st_grub("a backslash inside a line", both_inner_slash, 1);
+}
 
+/** The cases of the EFI check. */
+static void selftest_efi(void)
+{
+    const char *efi = "configfile $prefix/grub.cfg\n"
+                      "search --no-floppy --label RACH2RECOV --set=root\n"
+                      "configfile ($root)/boot/grub/recovery.cfg\n";
+
+    st_efi("the EFI configuration itself", efi, 1);
+    st_efi("the EFI configuration with comments",
+           "# the menu at the prefix, then recovery\n\nconfigfile $prefix/grub.cfg\n"
+           "search --no-floppy --label RACH2RECOV --set=root\n"
+           "configfile ($root)/boot/grub/recovery.cfg\n",
+           1);
+    st_efi("the BIOS configuration", st_both, 0);
+    st_efi("the EFI recovery pair missing", "configfile $prefix/grub.cfg\n", 0);
+    st_efi("the EFI recovery pair first",
+           "search --no-floppy --label RACH2RECOV --set=root\n"
+           "configfile ($root)/boot/grub/recovery.cfg\n"
+           "configfile $prefix/grub.cfg\n",
+           0);
+    st_efi("the EFI recovery search commented out",
+           "configfile $prefix/grub.cfg\n"
+           "# search --no-floppy --label RACH2RECOV --set=root\n"
+           "configfile ($root)/boot/grub/recovery.cfg\n",
+           0);
+    st_efi("an apostrophe in an EFI comment",
+           "# the firmware's partition\nconfigfile $prefix/grub.cfg\n"
+           "search --no-floppy --label RACH2RECOV --set=root\n"
+           "configfile ($root)/boot/grub/recovery.cfg\n",
+           0);
+    st_efi("an EFI comment that ends in a backslash",
+           "configfile $prefix/grub.cfg\n# then recovery \\\n"
+           "search --no-floppy --label RACH2RECOV --set=root\n"
+           "configfile ($root)/boot/grub/recovery.cfg\n",
+           0);
+}
+
+/** The cases of the script check. */
+static void selftest_net(void)
+{
     st_net("the script as it is",
            "ifconfig eth0 10.0.0.5 netmask 255.0.0.0 || exit 1\n"
            "route add default gw 10.0.0.1 || exit 1\n",
@@ -436,12 +584,22 @@ static int selftest(void)
            "X=`ifconfig eth0 10.0.0.6 netmask 255.0.0.0`\n",
            0);
     st_net("nothing at all", "", 0);
+}
+
+/** Run every case of the checks; return 0 when all pass, else 1. */
+static int selftest(void)
+{
+    st_bad = 0;
+    st_ran = 0;
+    selftest_bios();
+    selftest_efi();
+    selftest_net();
 
     if (st_bad) {
         fprintf(stderr, "cfgcheck: selftest: %d of %d cases failed\n", st_bad, st_ran);
         return 1;
     }
-    printf("cfgcheck: selftest: ok: %d cases, both checkers\n", st_ran);
+    printf("cfgcheck: selftest: ok: %d cases, every checker\n", st_ran);
     return 0;
 }
 
@@ -472,28 +630,42 @@ static char *read_text(const char *path)
     return buf;
 }
 
+/**
+ * Check the GRUB configuration at `path` against the `n` commands of `want`
+ * and report under the name `tag`, with `found` saying what a passing file
+ * does. Return the exit status.
+ */
+static int grub_main(const char *path, const char *tag, const char *const *want, int n,
+                     const char *found)
+{
+    char *text = read_text(path);
+
+    if (text == NULL) {
+        fprintf(stderr, "%s: cannot read %s\n", tag, path);
+        return 1;
+    }
+    if (!grub_ok(text, want, n)) {
+        fprintf(stderr, "%s: %s: %s\n", tag, path, why);
+        free(text);
+        return 1;
+    }
+    printf("%s: OK (%s %s)\n", tag, path, found);
+    free(text);
+    return 0;
+}
+
 /** Run the check the arguments name, as the opening comment says. */
 int main(int argc, char **argv)
 {
     if (argc == 2 && strcmp(argv[1], "--selftest") == 0)
         return selftest();
 
-    if (argc == 3 && strcmp(argv[1], "grubembed") == 0) {
-        char *text = read_text(argv[2]);
-
-        if (text == NULL) {
-            fprintf(stderr, "check-grubembed: cannot read %s\n", argv[2]);
-            return 1;
-        }
-        if (!grub_ok(text)) {
-            fprintf(stderr, "check-grubembed: %s: %s\n", argv[2], why);
-            free(text);
-            return 1;
-        }
-        printf("check-grubembed: OK (%s finds RACH2BOOT and then RACH2RECOV by label)\n", argv[2]);
-        free(text);
-        return 0;
-    }
+    if (argc == 3 && strcmp(argv[1], "grubembed") == 0)
+        return grub_main(argv[2], "check-grubembed", GRUB_WANT, GRUB_LINES,
+                         "finds RACH2BOOT and then RACH2RECOV by label");
+    if (argc == 3 && strcmp(argv[1], "grubefi") == 0)
+        return grub_main(argv[2], "check-grubefi", GRUB_EFI_WANT, GRUB_EFI_LINES,
+                         "opens the menu at the prefix and then finds RACH2RECOV by label");
 
     if (argc == 7 && strcmp(argv[1], "sealednet") == 0) {
         const char *address_s = argv[2], *prefix_s = argv[3];
@@ -572,7 +744,8 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    fprintf(stderr, "usage: cfgcheck grubembed CONFIG | cfgcheck sealednet "
-                    "ADDRESS PREFIX MASK GATEWAY SCRIPT | cfgcheck --selftest\n");
+    fprintf(stderr,
+            "usage: cfgcheck grubembed CONFIG | cfgcheck grubefi CONFIG | cfgcheck sealednet "
+            "ADDRESS PREFIX MASK GATEWAY SCRIPT | cfgcheck --selftest\n");
     return 2;
 }
