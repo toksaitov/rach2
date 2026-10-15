@@ -1,13 +1,14 @@
 /**
- * Host test for the RTL8168GU driver (sys/network/driver/rtl8168.c).
+ * Test the RTL8168GU driver, sys/network/driver/rtl8168.c, against a software
+ * model of the chip.
  *
  * host-deps:
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
  * The chip is not emulated by QEMU or anything else on the development host,
- * so this driver's first execution is on the laptop. That makes this test the
- * only thing standing between a mistake and a machine that cannot be debugged
- * remotely, and it is written to that standard: a software model of the chip
+ * so this driver's first execution is on the laptop. This test is the only
+ * check before a mistake reaches a machine that cannot be debugged remotely,
+ * and it is written to that standard: a software model of the chip
  * answers every register the driver touches with the behavior the reference
  * documents (completion flags that clear, an out-of-band bit that must be
  * cleared, a link list that must be handshaked twice, descriptors whose
@@ -15,14 +16,16 @@
  * the recorded sequence against the reference's own order.
  *
  * What it proves: the bring-up sequence and its order, the four indirect
- * access protocols, the refusal of a chip this driver was not written for,
+ * access protocols, the rejection of a chip this driver was not written for,
  * bounded behavior on every handshake that never completes, the descriptor
  * contract in both directions, ring wrap, and the lost-doorbell path.
  *
  * What it cannot prove, and the laptop must: PCIe ordering, whether DMA
  * reaches the rings, the PHY's analog behavior, whether this board needs the
- * firmware patch the port omits, and whether the chip agrees with the
- * reference at all. Returns the failed-check count (0 == pass).
+ * firmware patch the port omits, and whether the chip behaves as the
+ * reference says at all.
+ *
+ * The test exits with the number of failed checks, at most 255.
  */
 
 /* The kernel headers the driver includes define uintptr_t themselves, so this
@@ -33,7 +36,7 @@
 /* The stubs the driver links against.                                 */
 /* ------------------------------------------------------------------ */
 
-/* Recorded delivery from the driver's receive path. */
+/* The last frame the driver's receive path delivered, and the deliveries. */
 static unsigned char rx_last[2048];
 static unsigned rx_last_len;
 static unsigned rx_calls;
@@ -46,6 +49,8 @@ static void (*rx_hook)(void); /* what the test does while a frame is handed up *
 static unsigned rx_first_at;  /* the model log's length at the first delivery */
 static unsigned model_log_len;
 
+/** Record a frame delivered and count it, noting the write log's length at
+ * the first delivery and running `rx_hook` before the copy. */
 void ethernet_rx(struct netdev *nd, const unsigned char *data, unsigned short len)
 {
     (void)nd;
@@ -64,6 +69,7 @@ void ethernet_rx(struct netdev *nd, const unsigned char *data, unsigned short le
     }
 }
 
+/** Send nothing and return 0, NETDEV_TX_OK; no row sends through Ethernet. */
 int ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short type,
                 const unsigned char *payload, unsigned short plen)
 {
@@ -75,35 +81,40 @@ int ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short typ
     return 0;
 }
 
-/* The refusal counters the drivers report to. The interface owns them; here
-   they are counted so a check can say which one the driver reached. */
+/* The counters of frames the drivers drop or find in error. The interface
+   owns them; here they are counted so a check can say which one the driver
+   reached. */
 static unsigned note_rx_errors;
 static unsigned note_rx_drops;
 
+/** Count a frame in error. */
 void ethernet_note_rx_error(struct netdev *nd)
 {
     (void)nd;
     note_rx_errors++;
 }
 
+/** Count a frame dropped. */
 void ethernet_note_rx_drop(struct netdev *nd)
 {
     (void)nd;
     note_rx_drops++;
 }
 
-/* The kernel's interrupt bracket. There are no interrupts here, so the flag is
-   a token; what the test holds the driver to is that every lock it takes it
-   releases, which the balance below checks. */
+/* The network lock's balance: locks taken and not released, and whether a
+   release ever came without a lock. The test holds the driver to releasing
+   every lock it takes. */
 static int lock_depth;
 static int lock_ever_negative;
 
+/** Take the network lock: count it and return 0 as the saved flags. */
 unsigned int net_lock(void)
 {
     lock_depth++;
     return 0;
 }
 
+/** Release the network lock, noting a release without a lock. */
 void net_unlock(unsigned int flags)
 {
     (void)flags;
@@ -113,36 +124,40 @@ void net_unlock(unsigned int flags)
     }
 }
 
+/** Discard console text. */
 void k_puts(const char *s)
 {
     (void)s;
 }
 
-/* The driver's real delay reads the 8254; the model supplies its own, so this
- * exists only to satisfy the link. */
+/** Wait: never reached, since the model's `udelay` takes the driver's waits;
+ * the kernel's measures against a hardware counter. It completes the link. */
 void k_udelay(unsigned int usec)
 {
     (void)usec;
 }
 
+/** Discard console text. */
 void k_printf(const char *fmt, ...)
 {
     (void)fmt;
 }
 
+/** Read an I/O port as 0. */
 unsigned char inb(unsigned short port)
 {
     (void)port;
     return 0;
 }
 
+/** Write an I/O port: a no-op. */
 void outb(unsigned short port, unsigned char v)
 {
     (void)port;
     (void)v;
 }
 
-/* The PCI surface the probe uses. The model presents one RTL8168 whose first
+/* The PCI calls the probe makes. The model presents one RTL8168 whose first
  * memory window is the second BAR, so the probe's BAR walk has to step over an
  * I/O BAR to find it, exactly as it will on the laptop. */
 static int pci_present = 1;
@@ -151,8 +166,6 @@ static int pci_present = 1;
 #include "isr.h"
 #include "network/driver/rtl8168.h"
 
-/* The driver reports what it found through the kernel log, which this test
-   has no use for; the records are dropped. */
 /* The format of the last line the driver logged, and the values of a link
    line, for the rows that expect one. The argument list is read with the
    compiler's own header, which names no type the kernel's disagree with. */
@@ -164,6 +177,8 @@ static const char *last_link_pause;
 
 static int has(const char *s, const char *sub);
 
+/** Keep the format of a kernel log record, and the speed, duplex and pause of
+ * a link line; discard the rest. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     va_list ap;
@@ -180,8 +195,8 @@ void klog(int level, const char *subsystem, const char *format, ...)
     }
 }
 
-/* Whether `s` contains `sub`; written out, since this test pulls in no host
-   header. */
+/** Report whether `s` contains `sub`, and 0 for a NULL `s`; written out,
+ * since this test pulls in no host header. */
 static int has(const char *s, const char *sub)
 {
     unsigned i, j;
@@ -199,6 +214,8 @@ static int has(const char *s, const char *sub)
     return 0;
 }
 
+/** Find the model's one RTL8168, at bus 1 on line 11, unless `pci_present`
+ * is clear. */
 int pci_find_device_by_id(unsigned short vendor, unsigned short device, pci_device_t *out)
 {
     int i;
@@ -220,16 +237,19 @@ int pci_find_device_by_id(unsigned short vendor, unsigned short device, pci_devi
     return 1;
 }
 
+/** Report whether `bar` is a memory BAR. */
 int pci_bar_is_memory(unsigned int bar)
 {
     return bar != 0 && (bar & 1u) == 0;
 }
 
+/** Report whether `bar` is a 64-bit memory BAR. */
 int pci_bar_is_64bit(unsigned int bar)
 {
     return (bar & 0x6u) == 0x4u;
 }
 
+/** Return the address of `bar`, without its flag bits. */
 unsigned int pci_bar_address(unsigned int bar)
 {
     return pci_bar_is_memory(bar) ? (bar & ~0xfu) : (bar & ~0x3u);
@@ -258,12 +278,14 @@ uint64_t pci_bar_address64(const pci_device_t *dev, int i)
  * set is a storm. */
 static int model_lapic = 1;
 static int model_vector = 48;
-static int model_msi_refuse;
+static int model_msi_refuse; /* nonzero to make pci_msi_enable fail */
 static int model_msi_on;
 static int model_msi_vector = -1;
 static isr_handler_t model_handler;
 static int model_handler_vector = -1;
+/* The handler for the vector was registered when the messages were enabled. */
 static int model_msi_enabled_with_handler;
+/* The write log's length when the messages were turned off, and on below. */
 static unsigned model_msi_disable_at = 0xffffffffu;
 static int model_sticky_status;
 static unsigned model_acks;               /* writes to the status register */
@@ -275,19 +297,23 @@ static unsigned model_edges;            /* messages the chip would send */
 static unsigned model_source_after_ack; /* a source set again as the ack lands */
 static unsigned model_msi_enable_at = 0xffffffffu;
 static int model_arrive_during_drain; /* frames that arrive while the ring is drained */
+/* The receive descriptor the next arrival fills. */
 static unsigned model_arrive_slot = 1;
 static unsigned model_log_len;
 
+/** Report whether the machine can deliver a message: `model_lapic`. */
 int isr_msi_ready(void)
 {
     return model_lapic;
 }
 
+/** Give `model_vector` as the vector allocated. */
 int isr_alloc_vector(void)
 {
     return model_vector;
 }
 
+/** Record the handler registered and its vector. */
 void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
 {
     (void)name;
@@ -295,6 +321,11 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
     model_handler_vector = vector;
 }
 
+/**
+ * Enable the card's messages on `vector`, or fail with -1 while
+ * `model_msi_refuse` is set. Record the write log's length, and whether the
+ * handler for the vector was registered first.
+ */
 int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
 {
     (void)dev;
@@ -308,6 +339,7 @@ int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
     return 0;
 }
 
+/** Turn the card's messages off, and record the write log's length. */
 void pci_msi_disable(const pci_device_t *dev)
 {
     (void)dev;
@@ -315,8 +347,8 @@ void pci_msi_disable(const pci_device_t *dev)
     model_msi_on = 0;
 }
 
-static int pci_master_enabled;
-static int pci_memory_enabled;
+static int pci_master_enabled; /* the command word's bus-master bit */
+static int pci_memory_enabled; /* the command word's memory-space bit */
 
 /* The PCIe capability the link-state disable walks to, and the config-space
  * words it writes. The model presents a card whose link control has both ASPM
@@ -327,6 +359,11 @@ static unsigned short model_link_ctl_dev = 0x0003;
 static unsigned short model_link_ctl_bridge = 0x0003;
 static int model_bridge_present = 1;
 
+/**
+ * Read a configuration byte: the capability pointer, a PCI Express capability
+ * with nothing after it, and the bridge's secondary bus, 1; any other byte
+ * reads 0.
+ */
 unsigned char pci_read_config8(unsigned char bus, unsigned char device, unsigned char function,
                                unsigned char offset)
 {
@@ -348,6 +385,10 @@ unsigned char pci_read_config8(unsigned char bus, unsigned char device, unsigned
     return 0;
 }
 
+/**
+ * Read a configuration word: a status with a capability list, and the link
+ * control of the card on bus 1 or of the bridge; any other word reads 0.
+ */
 unsigned short pci_read_config16(unsigned char bus, unsigned char device, unsigned char function,
                                  unsigned char offset)
 {
@@ -362,6 +403,8 @@ unsigned short pci_read_config16(unsigned char bus, unsigned char device, unsign
     return 0;
 }
 
+/** Write the link control of the card on bus 1 or of the bridge; drop any
+ * other write. */
 void pci_write_config16(unsigned char bus, unsigned char device, unsigned char function,
                         unsigned char offset, unsigned short value)
 {
@@ -376,6 +419,7 @@ void pci_write_config16(unsigned char bus, unsigned char device, unsigned char f
     }
 }
 
+/** Find the PCI Express capability at MODEL_CAP_OFF, and no other. */
 unsigned char pci_find_capability(unsigned char bus, unsigned char device, unsigned char function,
                                   unsigned char cap_id)
 {
@@ -385,6 +429,8 @@ unsigned char pci_find_capability(unsigned char bus, unsigned char device, unsig
     return cap_id == PCI_CAP_ID_PCIE ? MODEL_CAP_OFF : 0;
 }
 
+/** Give the bridge at 0:28.0 as the port above `bus`, unless
+ * `model_bridge_present` is clear. */
 int pci_find_bridge_for_bus(unsigned char bus, pci_device_t *out)
 {
     (void)bus;
@@ -397,30 +443,35 @@ int pci_find_bridge_for_bus(unsigned char bus, pci_device_t *out)
     return 1;
 }
 
+/** Set the bus-master bit. */
 void pci_enable_bus_master(pci_device_t *dev)
 {
     (void)dev;
     pci_master_enabled = 1;
 }
 
+/** Set the memory-space bit. */
 void pci_enable_memory_space(pci_device_t *dev)
 {
     (void)dev;
     pci_memory_enabled = 1;
 }
 
+/** Clear the bus-master bit. */
 void pci_disable_bus_master(pci_device_t *dev)
 {
     (void)dev;
     pci_master_enabled = 0;
 }
 
+/** Map `size` bytes at `phys` one to one. */
 uintptr_t map_mmio(uintptr_t phys, size_t size)
 {
     (void)size;
     return phys;
 }
 
+/* The machine's station address, which net.h declares. */
 unsigned char net_mac[6];
 
 /* ------------------------------------------------------------------ */
@@ -432,7 +483,7 @@ unsigned char net_mac[6];
 static unsigned char model_reg[MODEL_REGS];
 
 /* What the model does out of the ordinary, so a test can break one thing at a
- * time and watch the driver refuse, not hang. */
+ * time and watch the driver fail, not hang. */
 static int model_stuck_eri;      /* the ERI completion flag never moves */
 static int model_stuck_ocp;      /* the PHY-OCP completion flag never moves */
 static int model_stuck_linklist; /* the link list never reports ready */
@@ -440,7 +491,7 @@ static int model_stuck_reset;    /* the reset bit never clears */
 static int model_stuck_fifo;     /* the FIFOs never report empty */
 /* Only the receive FIFO reports empty, the transmit one never does. A chip
    half way through draining is what a wait on "any bit of the mask" would
-   accept and a wait on "all of it" refuses, which is the difference the
+   accept and a wait on "all of it" rejects, which is the difference the
    reference's own condition makes. */
 static int model_half_fifo;
 static int model_swallow_doorbell; /* the doorbell does nothing */
@@ -468,8 +519,10 @@ struct wr {
 
 #define MODEL_LOG_MAX 512
 static struct wr model_log[MODEL_LOG_MAX];
-static unsigned model_log_len;
+static unsigned model_log_len; /* writes logged, MODEL_LOG_MAX and past it */
 
+/** Log a write of `width` bits of `value` to `off`; the first MODEL_LOG_MAX
+ * are kept. */
 static void model_record(unsigned char width, unsigned off, unsigned value)
 {
     if (model_log_len < MODEL_LOG_MAX) {
@@ -480,12 +533,16 @@ static void model_record(unsigned char width, unsigned off, unsigned value)
     model_log_len++;
 }
 
+/** Read the model's 32-bit register at `off`, low byte first, with no side
+ * effect. */
 static unsigned model_r32_raw(unsigned off)
 {
     return (unsigned)model_reg[off] | ((unsigned)model_reg[off + 1] << 8) |
            ((unsigned)model_reg[off + 2] << 16) | ((unsigned)model_reg[off + 3] << 24);
 }
 
+/** Store `v` in the model's 32-bit register at `off`, without logging it or
+ * completing a command. */
 static void model_w32_raw(unsigned off, unsigned v)
 {
     model_reg[off] = (unsigned char)v;
@@ -494,6 +551,11 @@ static void model_w32_raw(unsigned off, unsigned v)
     model_reg[off + 3] = (unsigned char)(v >> 24);
 }
 
+/**
+ * Read the model's byte register at `off`. The command register reads with its
+ * reset bit cleared unless `model_stuck_reset` holds it; MCU reads with the
+ * FIFOs empty and the link list ready unless the model's faults say otherwise.
+ */
 static unsigned char m_r8(unsigned off)
 {
     if (off == R8168_CHIPCMD) {
@@ -519,11 +581,22 @@ static unsigned char m_r8(unsigned off)
     return model_reg[off];
 }
 
+/** Read the model's 16-bit register at `off`. */
 static unsigned short m_r16(unsigned off)
 {
     return (unsigned short)((unsigned)model_reg[off] | ((unsigned)model_reg[off + 1] << 8));
 }
 
+/**
+ * Read the model's 32-bit register at `off`.
+ *
+ * A read of the counter address's low word completes a pending dump or tally
+ * reset unless `model_stuck_counters` is set, and a read of the high word is
+ * counted. TxConfig reads with the model's revision and, unless
+ * `model_stuck_fifo` is set, its FIFO-empty bit. Every window register reads
+ * back what its completed command left, since m_w32 is where a command
+ * completes.
+ */
 static unsigned m_r32(unsigned off)
 {
     if (off == R8168_COUNTERADDRHIGH) {
@@ -547,8 +620,6 @@ static unsigned m_r32(unsigned off)
         }
         return v;
     }
-    /* Every window register reads back what its completed command left: the
-       write handler below is where a command completes. */
     return model_r32_raw(off);
 }
 
@@ -562,6 +633,13 @@ static unsigned short model_mac_ocp[0x10000];
 /* The chip's transmit engine, defined once the driver's rings are in scope. */
 static void model_tx_drain(void);
 
+/**
+ * Write the model's byte register at `off`, and log the write.
+ *
+ * A write of the doorbell runs the chip's transmit engine, model_tx_drain,
+ * which stands in for the DMA the driver waits on, unless
+ * `model_swallow_doorbell` makes it a poll request the chip lost.
+ */
 static void m_w8(unsigned off, unsigned char v)
 {
     model_record(8, off, v);
@@ -569,26 +647,31 @@ static void m_w8(unsigned off, unsigned char v)
         if (model_swallow_doorbell) {
             return; /* a poll request the chip lost */
         }
-        /* The chip's transmit engine: every descriptor it owns is sent and
-           handed back. This is the model standing in for the DMA the driver
-           is waiting on. */
         model_tx_drain();
         return;
     }
     model_reg[off] = v;
 }
 
+/**
+ * Write the model's 16-bit register at `off`, and log the write.
+ *
+ * A status bit clears when it is written, unless `model_sticky_status` holds
+ * the status set for a storm; the acknowledgement numbered
+ * `model_link_change_at_ack` then sets the link source, and every one sets
+ * `model_source_after_ack`, in a status the driver has just cleared. The chip's
+ * interrupt output is the status masked by the mask register, and a message is
+ * sent when that output goes from none set to one set, so a write of the mask
+ * counts an edge only on that transition; counting a write instead would let a
+ * handler that never masked anything pass.
+ */
 static void m_w16(unsigned off, unsigned short v)
 {
     model_record(16, off, v);
     if (off == R8168_INTRSTATUS) {
-        /* A status bit clears when it is written, unless the test holds the
-           status set for a storm. */
         if (!model_sticky_status) {
             unsigned cur = m_r16(off) & ~(unsigned)v;
 
-            /* The link changes the moment after an acknowledgement, so the
-               source is set in a status the driver has just cleared. */
             model_acks++;
             if (model_link_change_at_ack != 0 && model_acks == model_link_change_at_ack) {
                 cur |= R8168_INTR_LINKCHG;
@@ -600,10 +683,6 @@ static void m_w16(unsigned off, unsigned short v)
         return;
     }
     if (off == R8168_INTRMASK) {
-        /* The chip's interrupt output is the status masked by this register,
-           and a message is sent when that output goes from none set to one
-           set. Counting a write instead of a transition would let a handler
-           that never masked anything pass the row below. */
         unsigned short before = m_r16(R8168_INTRSTATUS) & m_r16(R8168_INTRMASK);
         unsigned short after = m_r16(R8168_INTRSTATUS) & v;
 
@@ -615,17 +694,28 @@ static void m_w16(unsigned off, unsigned short v)
     model_reg[off + 1] = (unsigned char)(v >> 8);
 }
 
+/**
+ * Write the model's 32-bit register at `off`, log the write, and complete a
+ * command it gives.
+ *
+ * The chip dumps its tallies only when the command arrives after the address
+ * was written on its own and the high word read back, which is the reference's
+ * order; a command with the address in the same write, or one that never read
+ * the high word, dumps to the old address in the reference's experience, and
+ * here to nowhere.
+ *
+ * A window command completes here: a write by its flag going low, a read by the
+ * flag going high with the data readable; a window the test has stuck never
+ * reaches the state its caller polls for. An OCP command word has the register
+ * in bits 30:16 as reg/2 (the driver forms it as reg << 15 and the register is
+ * always even), so the data's top bit does not reach the address field.
+ */
 static void m_w32(unsigned off, unsigned v)
 {
     model_record(32, off, v);
     model_w32_raw(off, v);
 
     if (off == R8168_COUNTERADDRLOW) {
-        /* The chip dumps only when the command arrives after the address was
-           written on its own and the high word read back, which is the
-           reference's order; a command with the address in the same write,
-           or one that never read the high word, dumps to the old address in
-           the reference's experience, and here to nowhere. */
         if (!(v & (R8168_COUNTER_DUMP | R8168_COUNTER_RESET))) {
             model_counter_addr = v;
             model_counter_addressed = 1;
@@ -635,13 +725,7 @@ static void m_w32(unsigned off, unsigned v)
         }
     }
 
-    /* A command completes here. A write completes by its flag going low, a
-       read by the flag going high with the data readable; a window the test
-       has stuck never reaches the state its caller polls for. */
     if (off == R8168_OCPDR) {
-        /* The command word has the register in bits 30:16 as reg/2 (the
-           driver forms it as reg << 15 and the register is always even), so
-           the data's top bit does not reach the address field. */
         unsigned reg = ((v >> 16) & 0x7fffu) << 1;
 
         if (v & R8168_OCP_FLAG) {
@@ -709,6 +793,7 @@ static void m_w32(unsigned off, unsigned v)
     }
 }
 
+/** Wait no time, and count the wait. */
 static void m_udelay(unsigned usec)
 {
     (void)usec;
@@ -719,8 +804,11 @@ static void m_udelay(unsigned usec)
 
 #include "network/driver/rtl8168.c"
 
-/* A frame arrives while another is handed up: the chip fills the next
- * descriptor and raises the receive source again. */
+/**
+ * While `model_arrive_during_drain` counts frames, fill the next receive
+ * descriptor with a 64-byte frame and raise the receive source again: a frame
+ * that arrives while another is handed up.
+ */
 static void arrive_during_drain(void)
 {
     if (model_arrive_during_drain > 0) {
@@ -748,19 +836,10 @@ extern int printf(const char *fmt, ...);
         }                                   \
     } while (0)
 
+/* The model's register access, which model_reset installs as the driver's. */
 static const struct r8168_io model_io = {m_r8, m_r16, m_r32, m_w8, m_w16, m_w32, m_udelay};
 
-/**
- * Send every transmit descriptor the chip owns and hand it back.
- *
- * The doorbell is what starts this on real hardware, so the model does it
- * from the doorbell write: without it the driver would wait for an ownership
- * bit nothing ever clears, which is exactly what the stall case tests.
- */
-/* The chip writes the block: its tallies, at the address the request named,
-   which here is the driver's own block since the test includes the driver. */
-/* The block's layout is the reference's, by byte offset, so a driver
-   struct that drifted from it would read the wrong fields here. */
+/** Store the 32-bit `v` at byte `off` of `block`, low byte first. */
 static void model_put32(unsigned char *block, unsigned off, unsigned v)
 {
     block[off] = (unsigned char)v;
@@ -769,12 +848,21 @@ static void model_put32(unsigned char *block, unsigned off, unsigned v)
     block[off + 3] = (unsigned char)(v >> 24);
 }
 
+/** Store the 16-bit `v` at byte `off` of `block`, low byte first. */
 static void model_put16(unsigned char *block, unsigned off, unsigned v)
 {
     block[off] = (unsigned char)v;
     block[off + 1] = (unsigned char)(v >> 8);
 }
 
+/**
+ * Write the model's tallies into the tally block, as the chip does at the
+ * address the request named, which here is the driver's own block since the
+ * test includes the driver.
+ *
+ * The block's layout is the reference's, by byte offset, so a driver structure
+ * that drifted from it would read the wrong fields.
+ */
 static void model_counters_complete(void)
 {
     unsigned char *block = (unsigned char *)&r8168_counters;
@@ -789,6 +877,14 @@ static void model_counters_complete(void)
     model_put32(block, 56, model_tally[7]); /* rx_multicast */
 }
 
+/**
+ * Send every transmit descriptor the chip owns and hand it back.
+ *
+ * The doorbell is what starts this on real hardware, so the model does it from
+ * the doorbell write: without it the driver would find the ring full and wait,
+ * bounded, for an ownership bit nothing clears, which is what the stall case
+ * tests.
+ */
 static void model_tx_drain(void)
 {
     unsigned n;
@@ -800,7 +896,20 @@ static void model_tx_drain(void)
     }
 }
 
-/** Put the model and the driver back to a cold-power state. */
+/**
+ * Put the model and the driver back to a cold-power state, then seed the
+ * registers as the chip is found on the laptop.
+ *
+ * The chip is not at its power-on state: another operating system ran before
+ * this kernel, so every register the driver reads is seeded with a value that
+ * is wrong for the driver, the out-of-band bit is set and CPlusCmd has every
+ * bit set. A driver that skips a write, or keeps bits it should clear, fails a
+ * check it would pass against registers of zeroes, and a wrong preserve mask
+ * shows. The permanent station address the chip was built with is in the ERI
+ * words at 0xe0, which is where the driver must take it from; the register pair
+ * has a plausible but wrong address, so a driver that reads the pair is seen
+ * to.
+ */
 static void model_reset(void)
 {
     unsigned i;
@@ -872,11 +981,6 @@ static void model_reset(void)
     r8168_tx_packets = 0;
     r8168_tx_stalls = 0;
     io = &model_io;
-    /* The chip does not arrive from a cold power-on: it arrives from another
-     * operating system, so every register the driver reads is seeded with a
-     * value that is wrong for us. A driver that skips a write, or preserves
-     * bits it should clear, then fails a check it would pass against a
-     * register file of zeroes. */
     for (i = 0; i < MODEL_REGS; i++) {
         model_reg[i] = 0xA5;
     }
@@ -887,15 +991,10 @@ static void model_reset(void)
         model_ephy[i] = 0xA5A5;
     }
     model_reg[R8168_MCU] = R8168_MCU_NOW_IS_OOB;
-    /* CPlusCmd arrives with every bit set, so a wrong preserve mask shows. */
     model_reg[R8168_CPLUSCMD] = 0xFF;
     model_reg[R8168_CPLUSCMD + 1] = 0xFF;
-    /* The permanent station address the chip was built with, which is where
-     * the driver must take it from, not from the register pair. */
     model_eri[0xe0] = 0x7E44D228u;
     model_eri[0xe4] = 0x0000AFE0u;
-    /* The register pair has a plausible but WRONG address, so a driver that
-     * reads it instead of the permanent one is visible. */
     model_w32_raw(R8168_MAC0, 0xDEADBEEFu);
     model_w32_raw(R8168_MAC4, 0x0000BEEFu);
     model_link_ctl_dev = 0x0003;
@@ -903,8 +1002,8 @@ static void model_reset(void)
     model_bridge_present = 1;
 }
 
-/** The index of the first write of `width` to `off` at or after `from`, or
- * -1. */
+/** Return the index of the first logged write of `width` bits to `off`, at or
+ * after `from`, or -1. */
 static int find_write(unsigned from, unsigned char width, unsigned off)
 {
     unsigned i;
@@ -917,7 +1016,8 @@ static int find_write(unsigned from, unsigned char width, unsigned off)
     return -1;
 }
 
-/** As find_write, but the value must match too. */
+/** Return the index of the first logged write of `width` bits of `value` to
+ * `off`, at or after `from`, or -1. */
 static int find_write_value(unsigned from, unsigned char width, unsigned off, unsigned value)
 {
     unsigned i;
@@ -930,7 +1030,8 @@ static int find_write_value(unsigned from, unsigned char width, unsigned off, un
     return -1;
 }
 
-/** The index of the ERI command word that writes `addr`, or -1. */
+/** Return the index of the first logged ERI command, at or after `from`, that
+ * writes `addr`, or -1. */
 static int find_eri_write(unsigned from, unsigned addr)
 {
     unsigned i;
@@ -947,12 +1048,104 @@ static int find_eri_write(unsigned from, unsigned addr)
 /* The interface this model's card is brought up for. */
 static struct netdev model_iface;
 
+/**
+ * Run the rows against the model, most of them after model_reset:
+ *
+ *   * the bring-up completes on a healthy model: decoding and bus mastering on,
+ *     the link power states off at the card and at the port above it, the
+ *     revision read from the chip, the station address from the permanent one
+ *     rather than the register pair, and CPlusCmd keeping exactly the bits the
+ *     reference preserves;
+ *   * the identify and quiesce order: the out-of-band bit cleared, and the link
+ *     list handshaked with one bit cleared and then another set, before any
+ *     reset;
+ *   * the receive gate closed before the reset and opened before the receiver
+ *     is enabled;
+ *   * the start sequence in the reference's order, searched from the last
+ *     unlock, which is the start sequence's own: clock request, CPlusCmd and
+ *     the early-transmit size; the chip-specific table, the EPHY table, the
+ *     ring addresses high half first, and the lock; then the receive and
+ *     transmit configurations, with the interrupt mask left at zero;
+ *   * the exact values the reference writes, and the descriptor contract of the
+ *     receive ring;
+ *   * a different 8168 is rejected, an identifier that differs only in the bits
+ *     the family mask ignores is the same chip and is accepted, a window that
+ *     reads back all ones is an absent device and is rejected, and an absent
+ *     card reports absence;
+ *   * every handshake that never completes is bounded: the FIFOs, one FIFO
+ *     still holding data, the link list, the reset, the ERI window and the PHY
+ *     window;
+ *   * transmit: the descriptor contract, and a short frame padded with zeroes.
+ *     A chip that never answers the doorbell keeps every descriptor; the
+ *     transmit is asynchronous, so the ring takes the first RING_SIZE frames,
+ *     and the frame after them is a counted stall and not a wait without end,
+ *     so the machine does not stop because the wire did. The tick rings the
+ *     doorbell again while frames are outstanding, which recovers a poll
+ *     request the chip lost;
+ *   * a chip that answers takes three ring loads without a stall, and the tick
+ *     reclaims every completed descriptor;
+ *   * receive: the chip gives the length with the frame check sequence, which
+ *     is stripped; an error descriptor is counted and not delivered; a frame
+ *     split across descriptors and a length shorter than the checksum are
+ *     dropped;
+ *   * a full receive ring is drained in one pass and wraps back to its first
+ *     descriptor, and both rings keep the end-of-ring mark on the last
+ *     descriptor alone;
+ *   * a driver that never came up neither sends nor receives;
+ *   * the driver's table, and every network lock taken is released;
+ *   * the card's messages: the vector the machine gave, the handler registered
+ *     before the device is enabled, and the sources unmasked after it. A
+ *     handler acknowledges the status before it drains the ring, and counts an
+ *     entry with nothing to do as idle. A frame that arrives while the first is
+ *     handed up is taken by the next round; frames that keep coming past the
+ *     budget of both rounds are deferred to the tick and counted, which is not
+ *     a storm;
+ *   * the chip's message is an edge: it is sent when the masked sources go from
+ *     none set to one set. A source set again as the acknowledgement lands
+ *     stays set, and a handler that returned with the sources unmasked and one
+ *     of them set would never be entered again, so every frame after it would
+ *     wait for the tick. The handler masks the sources while it runs and
+ *     unmasks them at its end, and that unmask is the edge the next frame is
+ *     announced by; an unmask that changes nothing sends nothing;
+ *   * a status that will not clear while frames arrive is not stuck, since the
+ *     entry's first round did work. With nothing in the rings,
+ *     R8168_STORM_ENTRIES such entries in a row mask the sources and count a
+ *     storm, and the tick still drains the ring. Stop masks the sources before
+ *     it turns the messages off. A card whose messages do not enable, or a
+ *     machine with no usable APIC, is polled;
+ *   * the link: the port advertises pause in both directions with its speeds,
+ *     so a switch with a slower far port asks it to wait rather than drop a run
+ *     of frames, and the advertisement is written before negotiation is
+ *     restarted. A link change the card reports is logged with the speed,
+ *     duplex and pause of one sample, and is not taken for a stuck source; a
+ *     link that dropped is logged as down. The error sources are counted before
+ *     the acknowledgement clears them, since a frame the chip could not send
+ *     has no other record;
+ *   * the storm rule against the driver's own frames: with a source the
+ *     acknowledgement does not clear and nothing received, a frame of the
+ *     driver's own that the chip returns meanwhile, the log's netconsole line
+ *     among them, is no evidence that the source clears, so the entry counts as
+ *     stuck. When a frame arrives during the first round, the second and last
+ *     round acknowledges the receive source again, and the link changes after
+ *     that acknowledgement, the acknowledgement after the rounds logs the
+ *     change rather than clearing it unseen;
+ *   * on a polled card the tick reads the status, logs a link change as the
+ *     handler would, and acknowledges it;
+ *   * the card's own counts: the bring-up zeroes a tally a warm restart kept; a
+ *     dump writes the high word, the address alone and then the command, with
+ *     the high word read back between, for the block at its own aligned
+ *     address; the counts land in the columns the interface cannot keep, with
+ *     no wait when the chip answers at once; a chip that never writes the block
+ *     is reported as not answering after the bounded wait; and a stopped card
+ *     is not asked.
+ *
+ * Returns the number of failed checks, at most 255.
+ */
 int main(void)
 {
     int a, b, c, d, e;
     unsigned i;
 
-    /* ---- the bring-up completes on a healthy model ---- */
     model_reset();
     {
         int rc = rtl8168_init(&model_iface, 0);
@@ -977,9 +1170,6 @@ int main(void)
               (0xFFFFu & R8168_CPCMD_MASK),
           "CPlusCmd kept exactly the bits the reference preserves");
 
-    /* ---- the identify and quiesce order ---- */
-    /* The out-of-band bit must be cleared, and the link list handshaked with
-       one bit cleared and then another set, before any reset. */
     a = find_write(0, 8, R8168_MCU);
     CHECK(a >= 0 && (model_log[a].value & R8168_MCU_NOW_IS_OOB) == 0,
           "the out-of-band bit is cleared");
@@ -991,8 +1181,6 @@ int main(void)
     c = find_write_value(0, 8, R8168_CHIPCMD, R8168_CMD_RESET);
     CHECK(c > b, "the reset follows the handshake");
 
-    /* ---- the receive gate is closed before the reset and opened before the
-           receiver is enabled ---- */
     a = find_write(0, 32, R8168_MISC);
     CHECK(a >= 0 && (model_log[a].value & R8168_MISC_RXDV_GATED) != 0,
           "the receive gate is closed first");
@@ -1011,12 +1199,10 @@ int main(void)
               "the receive gate is open before the receiver is enabled");
     }
 
-    /* ---- the start sequence, in the reference's order ---- */
     {
         int unlock = -1, cfg2 = -1, cpluscmd = -1, maxtx = -1, ephy_last = -1;
         int lock = -1, rxcfg = -1, txcfg = -1, intrmask = -1, ringlo = -1, ringhi = -1;
 
-        /* Search from the last unlock, which is the start sequence's own. */
         for (i = 0; i < model_log_len; i++) {
             if (model_log[i].width == 8 && model_log[i].off == R8168_CFG9346 &&
                 model_log[i].value == R8168_CFG9346_UNLOCK) {
@@ -1031,8 +1217,6 @@ int main(void)
         CHECK(cpluscmd > cfg2, "CPlusCmd follows the power-management writes");
         CHECK(maxtx > cpluscmd, "the early-transmit size follows CPlusCmd");
 
-        /* The chip-specific table, then the EPHY table, then the ring
-           addresses, then the lock: the reference's order. */
         a = find_eri_write((unsigned)maxtx, 0xc8);
         b = find_eri_write((unsigned)maxtx, 0xe8);
         CHECK(a > maxtx && b > a, "the FIFO sizes are written in order");
@@ -1059,7 +1243,6 @@ int main(void)
         CHECK(intrmask > txcfg, "the interrupt mask is left at zero");
     }
 
-    /* ---- the exact values the reference writes ---- */
     CHECK(find_write_value(0, 32, R8168_TXCONFIG, R8168_TXCFG_VALUE) >= 0,
           "TxConfig takes the reference's value");
     CHECK(find_write_value(0, 32, R8168_RXCONFIG, R8168_RXCFG_VALUE) >= 0,
@@ -1084,7 +1267,6 @@ int main(void)
           "the EPHY table landed");
     CHECK((model_ephy[0x04] & 0x0010) == 0x0010, "the EPHY read-modify-write landed");
 
-    /* ---- the ring contract ---- */
     CHECK((r8168_rx_ring[0].opts1 & R8168_DESC_OWN) != 0,
           "every receive descriptor is owned by the chip");
     CHECK((r8168_rx_ring[0].opts1 & R8168_DESC_LEN_MASK) == R8168_RX_BUF_SIZE,
@@ -1094,20 +1276,16 @@ int main(void)
     CHECK((r8168_rx_ring[0].opts1 & R8168_DESC_EOR) == 0,
           "no other receive descriptor ends the ring");
 
-    /* ---- the chip this driver refuses ---- */
     model_reset();
     model_xid_txconfig = 0x5c8u << 20; /* an 8168 that is not the GU */
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_FAILED, "a different 8168 is refused");
     CHECK(r8168_up == 0, "the driver stays down after a refusal");
 
-    /* An identifier differing only in the bits the family mask ignores is the
-       same chip and must be accepted. */
     model_reset();
     model_xid_txconfig = (0x509u | 0x800u) << 20;
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP,
           "an identifier differing outside the mask is accepted");
 
-    /* A window that reads back all ones is an absent device, not a chip. */
     model_reset();
     model_xid_txconfig = 0xfff00000u;
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_FAILED, "an all-ones window is refused");
@@ -1117,7 +1295,6 @@ int main(void)
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_ABSENT,
           "an absent card reports absence, not failure");
 
-    /* ---- every handshake that never completes is bounded ---- */
     model_reset();
     model_stuck_fifo = 1;
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_FAILED,
@@ -1148,7 +1325,6 @@ int main(void)
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_FAILED,
           "a PHY window that never completes is refused");
 
-    /* ---- transmit ---- */
     model_reset();
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP,
           "the bring-up completes before the transmit cases");
@@ -1174,8 +1350,6 @@ int main(void)
               "the frame was copied into the buffer");
     }
 
-    /* A frame under the Ethernet minimum is padded, and the padding is zero,
-     * not whatever the buffer held. */
     {
         unsigned char frame[20];
         unsigned char dirty = 0xAA;
@@ -1192,8 +1366,6 @@ int main(void)
         CHECK(r8168_tx_buf[1][59] == 0, "the padding is zero, not stale bytes");
     }
 
-    /* A chip that never takes the frame is counted and gives up: the machine
-       must not stop because the wire did. */
     model_reset();
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP,
           "the bring-up completes before the stall case");
@@ -1205,11 +1377,6 @@ int main(void)
         for (i = 0; i < sizeof(frame); i++) {
             frame[i] = 1;
         }
-        /* A chip that never answers the doorbell keeps every descriptor. The
-           transmit is asynchronous, so the ring absorbs the first RING_SIZE
-           frames and only then is there nowhere to put one; that is the
-           backpressure a burst meets, and it must be a counted refusal rather
-           than a wait without end. */
         for (f = 0; f < R8168_RING_SIZE; f++) {
             rtl8168_tx(model_iface.dev, frame, (unsigned short)sizeof(frame));
         }
@@ -1219,8 +1386,6 @@ int main(void)
         CHECK(r8168_tx_stalls == 1, "the frame past a full ring is counted, not waited on");
         CHECK(r8168_tx_packets == R8168_RING_SIZE, "and is not counted as sent");
 
-        /* The tick rings the doorbell again for whatever is outstanding, which
-           is what recovers a poll request the chip lost. */
         {
             unsigned before = model_log_len;
 
@@ -1230,7 +1395,6 @@ int main(void)
         }
     }
 
-    /* ---- a working chip drains, and the ring wraps under it ---- */
     model_reset();
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP,
           "the bring-up completes before the drain case");
@@ -1251,7 +1415,6 @@ int main(void)
         CHECK(r8168_tx_tail == r8168_tx_head, "the tick reclaims every completed descriptor");
     }
 
-    /* ---- receive ---- */
     model_reset();
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP,
           "the bring-up completes before the receive cases");
@@ -1261,8 +1424,6 @@ int main(void)
         for (i = 0; i < len; i++) {
             r8168_rx_buf[0][i] = (unsigned char)(i + 3);
         }
-        /* The chip hands the descriptor back with the length INCLUDING the
-           frame check sequence. */
         r8168_rx_ring[0].opts1 = R8168_DESC_FS | R8168_DESC_LS | (len + 4);
         rtl8168_poll(model_iface.dev);
         CHECK(rx_calls == 1, "the frame was delivered");
@@ -1273,7 +1434,6 @@ int main(void)
         CHECK(r8168_rx_packets == 1, "the receive was counted");
     }
 
-    /* An error descriptor is counted and not delivered. */
     {
         unsigned before = rx_calls;
 
@@ -1283,8 +1443,6 @@ int main(void)
         CHECK(r8168_rx_errors == 1, "an error frame is counted");
     }
 
-    /* A frame split across descriptors is dropped rather than
-     * half-delivered. */
     {
         unsigned before = rx_calls;
 
@@ -1294,7 +1452,6 @@ int main(void)
         CHECK(r8168_rx_dropped == 1, "a fragment is counted as dropped");
     }
 
-    /* A length the buffer cannot hold is refused. */
     {
         unsigned before = rx_calls;
 
@@ -1304,7 +1461,6 @@ int main(void)
         CHECK(r8168_rx_dropped == 2, "the short frame is counted as dropped");
     }
 
-    /* ---- the ring wraps, and a full ring is drained in one pass ---- */
     model_reset();
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP,
           "the bring-up completes before the wrap case");
@@ -1323,15 +1479,12 @@ int main(void)
         CHECK((r8168_rx_ring[0].opts1 & R8168_DESC_EOR) == 0,
               "no other descriptor gained the end-of-ring mark");
 
-        /* The next descriptor the driver looks at is the first one again. */
         rx_calls = 0;
         r8168_rx_ring[0].opts1 = R8168_DESC_FS | R8168_DESC_LS | 68;
         rtl8168_poll(model_iface.dev);
         CHECK(rx_calls == 1, "the ring wrapped back to its first descriptor");
     }
 
-    /* The transmit ring wraps too, and the end-of-ring mark lands only on the
-       last descriptor. */
     {
         unsigned char frame[64];
         unsigned n;
@@ -1349,7 +1502,6 @@ int main(void)
               "the first transmit descriptor does not");
     }
 
-    /* ---- a driver that is not up does nothing ---- */
     model_reset();
     {
         unsigned char frame[64];
@@ -1362,7 +1514,6 @@ int main(void)
               "a driver that never came up neither sends nor receives");
     }
 
-    /* ---- the driver's table ---- */
     CHECK(rtl8168_netdev.tx == rtl8168_tx, "the table names the transmit path");
     CHECK(rtl8168_netdev.poll == rtl8168_poll, "the table names the poll path");
     CHECK(rtl8168_netdev.init == rtl8168_init, "the table names the bring-up");
@@ -1377,7 +1528,6 @@ int main(void)
     (void)d;
     (void)e;
 
-    /* ---- the card's messages ---- */
     model_reset();
     rx_calls = 0;
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP,
@@ -1414,8 +1564,6 @@ int main(void)
         CHECK(r8168_msi_entries == 2 && r8168_msi_idle == 1,
               "a message with nothing to do is counted as idle");
 
-        /* A frame that arrives while the first is handed up raises the
-           source again, and the second round takes it. */
         rx_calls = 0;
         rx_hook = arrive_during_drain;
         r8168_rx_ring[1].opts1 = R8168_DESC_FS | R8168_DESC_LS | (len + 4);
@@ -1426,10 +1574,6 @@ int main(void)
         CHECK(rx_calls == 2 && m_r16(R8168_INTRSTATUS) == 0 && r8168_msi_deferred == 0,
               "a frame arriving during the drain is taken by the next round");
 
-        /* Frames keep arriving as fast as the rounds drain, past the
-           budget of both: the bound is reached with work still announced,
-           which is not a storm; the status is acknowledged once more and the
-           rest is left to the tick, counted. */
         rx_calls = 0;
         r8168_rx_ring[3].opts1 = R8168_DESC_FS | R8168_DESC_LS | (len + 4);
         model_arrive_slot = 4;
@@ -1444,13 +1588,6 @@ int main(void)
         CHECK(rx_calls >= 1 && r8168_tick_work >= 1, "and the tick takes what was left, counted");
         model_arrive_during_drain = 0;
 
-        /* A source that comes up as the acknowledgement lands leaves the
-           chip's report standing, and the chip's message is an edge. A
-           handler that returned with the sources unmasked and one of them
-           set would be the last one this card ever ran: every frame after it
-           would wait for the tick. The sources are masked while the handler
-           runs and unmasked at its end, and that unmask is the edge the next
-           frame is announced by. */
         rx_calls = 0;
         model_edges = 0;
         model_source_after_ack = R8168_INTR_RXOK;
@@ -1463,10 +1600,6 @@ int main(void)
               "a source set as the acknowledgement lands stands after the handler");
         CHECK(m_r16(R8168_INTRMASK) == R8168_INTR_ENABLED && model_edges == 1,
               "and the handler's unmask is the edge that arms the next message");
-        /* The edge is the transition and not the write: the sources are
-           already unmasked here, so writing the same mask again over the same
-           set source sends nothing, and a handler that returned without
-           masking would arm nothing either. */
         model_edges = 0;
         m_w16(R8168_INTRMASK, R8168_INTR_ENABLED);
         CHECK(model_edges == 0, "an unmask that changes nothing is not an edge");
@@ -1475,8 +1608,6 @@ int main(void)
     {
         unsigned before = model_log_len;
 
-        /* A status that will not clear while frames arrive is not stuck:
-           the entry's first round did work, whatever the second found. */
         model_sticky_status = 1;
         rx_calls = 0;
         r8168_rx_ring[r8168_rx_cur % R8168_RING_SIZE].opts1 =
@@ -1486,9 +1617,6 @@ int main(void)
         CHECK(rx_calls == 1 && r8168_msi_stuck == 0,
               "an entry that did work in its first round is not counted as stuck");
 
-        /* A status that will not clear, with nothing in the rings: after
-           enough entries in a row the sources are masked and a storm is
-           counted, and the tick's pump goes on. */
         model_reg[R8168_INTRSTATUS] = R8168_INTR_RXOK;
         for (i = 0; i < R8168_STORM_ENTRIES - 1; i++) {
             model_handler(0);
@@ -1530,11 +1658,6 @@ int main(void)
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP && r8168_msi_vector == -1,
           "a machine with no usable APIC stays polled");
 
-    /* ---- the link: what is advertised, and a change logged ---- */
-    /* The port advertises pause in both directions with its speeds, so a
-       switch with a slower far port asks this one to wait rather than
-       dropping a run of frames; a link change the card reports is logged with the
-       speed, duplex and pause resolved, and is not taken for a stuck source. */
     model_reset();
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes for the link rows");
     CHECK(model_phy[R8168_OCP_STD_PHY_BASE + 2 * R8168_MII_ADVERTISE] == 0x0de1,
@@ -1578,8 +1701,6 @@ int main(void)
         model_handler(0);
         CHECK(has(last_klog, "link down"), "a link that dropped is logged as down");
 
-        /* The error sources are counted before the acknowledgement loses
-           them: a frame the chip could not send has no other record. */
         r8168_txerr_reports = 0;
         r8168_rxerr_reports = 0;
         model_reg[R8168_INTRSTATUS] = (unsigned char)(R8168_INTR_TXERR | R8168_INTR_TXOK);
@@ -1594,11 +1715,6 @@ int main(void)
         CHECK(0, "the bring-up registered a handler for the link rows");
     }
 
-    /* ---- the storm rule against the driver's own frames ---- */
-    /* A source the acknowledgement does not clear, with nothing received: a
-       frame of the driver's own that the chip returns meanwhile, the log's
-       netconsole line among them, is not evidence that the source clears,
-       so the entry counts as stuck. */
     model_reset();
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes for the storm rows");
     if (model_handler) {
@@ -1621,12 +1737,6 @@ int main(void)
         model_reg[R8168_INTRSTATUS] = 0;
         r8168_msi_stuck = 0;
 
-        /* A frame arrives during the first round's drain, so the second
-           round, the last, acknowledges the receive source again, and the
-           link changes right after that acknowledgement: the rounds are
-           used up, and only the acknowledgement after them can find the
-           link source. It is logged there, not lost with the status it
-           clears. */
         model_reg[R8168_INTRSTATUS] = R8168_INTR_RXOK;
         model_reg[R8168_PHYSTATUS] = R8168_PHY_LINK | R8168_PHY_100M | R8168_PHY_FULLDUP;
         r8168_rx_ring[r8168_rx_cur % R8168_RING_SIZE].opts1 =
@@ -1650,8 +1760,6 @@ int main(void)
         CHECK(0, "the bring-up registered a handler for the storm rows");
     }
 
-    /* A card whose messages do not enable is polled, and the tick reads the
-       status and logs a link change as the handler would. */
     model_reset();
     model_msi_refuse = 1;
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes polled");
@@ -1664,9 +1772,6 @@ int main(void)
           "the tick logs a link change on a polled card, with the speed and the duplex");
     CHECK(m_r16(R8168_INTRSTATUS) == 0, "and acknowledges the status");
 
-    /* ---- the card's own counts ---- */
-    /* The chip is asked for its tally block at the block's address, and
-       answers with its counts in the columns the interface cannot keep. */
     model_reset();
     model_tally[0] = 34; /* errors of a boot before, which a warm restart keeps */
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes for the counters");
@@ -1712,8 +1817,6 @@ int main(void)
               "the receive columns are the chip's missed frames, alignment errors and multicasts");
         CHECK(udelay_calls == 0, "with no wait when the chip answers at once");
 
-        /* A chip that never writes the block: the wait is bounded and the
-           card is reported as not answering. */
         model_stuck_counters = 1;
         udelay_calls = 0;
         CHECK(rtl8168_counters(model_iface.dev, &out) == 0,
@@ -1721,7 +1824,6 @@ int main(void)
         CHECK(udelay_calls == R8168_COUNTERS_WAIT_STEPS, "after the bounded wait");
         model_stuck_counters = 0;
 
-        /* A stopped card is not asked. */
         rtl8168_stop(model_iface.dev);
         before = model_log_len;
         CHECK(rtl8168_counters(model_iface.dev, &out) == 0 &&
