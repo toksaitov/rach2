@@ -1,20 +1,33 @@
+/*
+ * ata.h: the legacy ATA driver: the probe of the IDE controller's two
+ * channels, the tick that bounds its waits, and the port table a test
+ * replaces.
+ */
 #ifndef _ATA_H_
 #define _ATA_H_
 
 #include "../lib/kint.h"
 
 /**
- * Probe both ATA channels and register each disk that answers IDENTIFY.
+ * Probe both channels of the IDE controller and register each disk that
+ * answers IDENTIFY, as transport `ata` at channel times 2 plus drive.
  *
- * The first disk supplies `block0` if it is unset. Transfers use bus-master
- * DMA when the controller and drive support it, unless `rach2.atapio` selects
- * PIO. Waits sleep in a syscall with interrupts enabled and the scheduler
- * running, and poll otherwise, including during boot. Returns 0 when at least
- * one disk answered, or -1 when none did; an existing `block0` is preserved.
+ * The first disk found becomes `block0` when no other driver has published
+ * one; an existing `block0` is kept. A transfer goes through the bus master
+ * when the controller has one and the drive does DMA, unless `rach2.atapio`
+ * is on the boot line, and through the data port otherwise. A wait for the
+ * drive sleeps inside a system call with interrupts on and the scheduler
+ * running, and polls everywhere else, at boot and in a page fault among
+ * them. Called from `platform_disks_probe` by each probe of the disks.
+ * Returns 0 when at least one disk answered, or -1 when none did.
  */
 int ata_init(void);
 
-/** The tick's call: the channels' clocks and the sleepers' wake. */
+/**
+ * The timer's call, every tick, from its interrupt: advance each channel's
+ * clock and wake the callers asleep on it, so that a wait for an interrupt
+ * the drive never raises ends.
+ */
 void ata_tick(void);
 
 /**
@@ -31,7 +44,7 @@ struct ata_io {
     void (*outs16)(uint16_t port, const void *buffer, uint32_t words);
 };
 
-/** Use `ops` instead of the machine's ports; NULL restores the machine's. */
+/** Use `ops` in place of the machine's ports; NULL restores the machine's. */
 void ata_set_io(const struct ata_io *ops);
 
 #endif

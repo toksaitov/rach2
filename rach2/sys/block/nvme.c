@@ -1,6 +1,7 @@
 /*
- * The NVMe driver. `nvme.h` says what it is for, and `sys/block/Readme.md`
- * describes the queues, the two paths a transfer takes and the recovery.
+ * nvme.c: the NVMe driver: bring-up of the controllers, their admin and I/O
+ * queues, the polled and the interrupt-driven transfer, and recovery.
+ * `sys/block/Readme.md` describes the design.
  */
 
 #include "nvme.h"
@@ -72,9 +73,9 @@
 
 /* The sizes this driver chooses. A queue is one page or less, so it is
    physically contiguous whatever frame it is given; each command slot has a
-   page of its own for its PRP list, which holds the 256 entries a transfer
-   of the block layer's 1 MiB limit needs past its first page. The low three
-   bits of a command identifier are its slot. */
+   page of its own for its PRP list, which has room for the 256 entries a
+   transfer of the block layer's 1 MiB limit needs past its first page. The
+   low three bits of a command identifier are its slot. */
 #define NVME_ADMIN_DEPTH 8u
 #define NVME_IO_DEPTH    16u
 #define NVME_SLOTS       8u
@@ -132,7 +133,7 @@ struct nvme_queue {
     uint16_t depth;
     uint16_t sq_tail;
     uint16_t cq_head;
-    uint16_t phase;
+    uint16_t phase; /* the phase bit of a completion not yet taken */
 };
 
 struct nvme_ctrl;
@@ -156,13 +157,13 @@ struct nvme_ns {
  */
 struct nvme_slot {
     int busy;
-    int flushing;  /* the flush half of a write the request wants durable */
+    int flushing;  /* the flush half of a durable write */
     uint32_t fseq; /* the namespace's `wseq` when this flush was issued */
-    uint16_t cid;
+    uint16_t cid;  /* the slot's index in the low three bits */
     uint8_t opcode;
     struct nvme_ns *ns;
     struct block_request *request;
-    uint32_t generation;
+    uint32_t generation; /* the request's, which its completion gives back */
     volatile int done;
     volatile uint16_t status;
     volatile uint64_t *prp_list;
@@ -175,16 +176,16 @@ struct nvme_ctrl {
     pci_device_t pci;
     uint64_t bar_phys;
     uintptr_t base;
-    int up;        /* brought up, its namespaces taken */
-    int dead;      /* recovery failed; every command answers EIO */
-    int resetting; /* recovery is running; the handler leaves it alone */
-    int vector;    /* -1 while polled */
-    uint32_t stride;
-    uint32_t ready_steps;
+    int up;               /* brought up, its namespaces taken */
+    int dead;             /* out of use; every command answers EIO */
+    int resetting;        /* recovery is running; the handler leaves it alone */
+    int vector;           /* -1 while polled */
+    uint32_t stride;      /* bytes from one doorbell to the next */
+    uint32_t ready_steps; /* polls of CSTS that CAP.TO allows */
     uint32_t max_sectors;
     uint32_t nslots;
-    uint16_t admin_cid;
-    uint16_t seq;
+    uint16_t admin_cid; /* the next admin command's identifier */
+    uint16_t seq;       /* the count the I/O command identifiers are made from */
     struct nvme_queue admin, io;
     struct nvme_slot slots[NVME_SLOTS];
     volatile uint8_t *identify;
@@ -192,33 +193,32 @@ struct nvme_ctrl {
     uint8_t *bounce;
     uint64_t bounce_phys;
     uint8_t strings[72]; /* Identify Controller's bytes 0-71: SN, MN, FR */
-    uint32_t nn;
-    int nns;
-    int next_ns;
+    uint32_t nn;         /* the namespace count Identify gave */
+    int nns;             /* the namespaces taken, in `ns` */
+    int next_ns;         /* the namespace whose turn to issue is next */
     struct nvme_ns ns[NVME_NAMESPACES];
 };
 
 static struct nvme_ctrl nvme_ctrls[NVME_CONTROLLERS];
 static int nvme_nctrls;
-static uint32_t nvme_messages;
+static uint32_t nvme_messages; /* messages the handler has taken */
 
 /* Why the last bring-up step failed, for the line that reports it. */
 static const char *nvme_why = "";
 
-/*
- * The registers as the driver reaches them: through the mapped BAR on a
- * machine, through a model in the host test.
- */
+/** The machine's register read, through the BAR0 mapped at `base`. */
 static uint32_t nvme_mmio_r32(uintptr_t base, uint32_t offset)
 {
     return mmio_read32(base + offset);
 }
 
+/** The machine's register write, through the BAR0 mapped at `base`. */
 static void nvme_mmio_w32(uintptr_t base, uint32_t offset, uint32_t value)
 {
     mmio_write32(base + offset, value);
 }
 
+/* The machine's table, and the table in use, which `nvme_set_io` changes. */
 static const struct nvme_io nvme_mmio_io = {nvme_mmio_r32, nvme_mmio_w32, k_udelay};
 
 static const struct nvme_io *nvme_io = &nvme_mmio_io;
@@ -233,11 +233,13 @@ uint32_t nvme_interrupts(void)
     return nvme_messages;
 }
 
+/** Read `c`'s register at `offset`. */
 static uint32_t nvme_r32(const struct nvme_ctrl *c, uint32_t offset)
 {
     return nvme_io->r32(c->base, offset);
 }
 
+/** Write `value` to `c`'s register at `offset`. */
 static void nvme_w32(const struct nvme_ctrl *c, uint32_t offset, uint32_t value)
 {
     nvme_io->w32(c->base, offset, value);
@@ -256,12 +258,13 @@ static uint64_t nvme_phys(const volatile void *p)
     return (uint64_t)paging_virt_to_phys((uintptr_t)p);
 }
 
-/** A little-endian field of a page the controller wrote. */
+/** A little-endian 32-bit field of a page the controller wrote. */
 static uint32_t nvme_le32(const volatile uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+/** A little-endian 64-bit field of a page the controller wrote. */
 static uint64_t nvme_le64(const volatile uint8_t *p)
 {
     return (uint64_t)nvme_le32(p) | ((uint64_t)nvme_le32(p + 4) << 32);
@@ -280,6 +283,7 @@ static uint32_t nvme_cmd_steps(void)
     return kirq_enabled() ? NVME_CMD_STEPS : NVME_CMD_STEPS_MASKED;
 }
 
+/** Zero every field of `cmd`. */
 static void nvme_cmd_clear(struct nvme_sqe *cmd)
 {
     cmd->cdw0 = cmd->nsid = cmd->cdw2 = cmd->cdw3 = 0;
@@ -287,7 +291,8 @@ static void nvme_cmd_clear(struct nvme_sqe *cmd)
     cmd->cdw10 = cmd->cdw11 = cmd->cdw12 = cmd->cdw13 = cmd->cdw14 = cmd->cdw15 = 0;
 }
 
-/** Copy `cmd` into `q`'s next submission entry and ring its doorbell. */
+/** Copy `cmd` into `q`'s next submission entry, count it for `/proc/disk`,
+ * and ring the queue's doorbell. */
 static void nvme_push(const struct nvme_ctrl *c, struct nvme_queue *q, const struct nvme_sqe *cmd)
 {
     volatile struct nvme_sqe *e = &q->sq[q->sq_tail];
@@ -363,9 +368,11 @@ static int nvme_disable(struct nvme_ctrl *c);
  * within the wait, which leaves the controller stopped and out of use, or
  * when it was out of use already. Admin commands run one at a time, at
  * bring-up and in recovery, so a completion for another identifier is an
- * old one and is passed over.
+ * old one and is passed over. A command not answered may still write into
+ * the page it was given, the identify page among them, so the controller is
+ * stopped and kept out of use, and no later command reads a page it may
+ * still write.
  */
-
 static int nvme_admin(struct nvme_ctrl *c, struct nvme_sqe *cmd, uint32_t *result)
 {
     struct nvme_cqe e;
@@ -394,9 +401,6 @@ static int nvme_admin(struct nvme_ctrl *c, struct nvme_sqe *cmd, uint32_t *resul
         }
         nvme_io->udelay(NVME_POLL_US);
     }
-    /* The command may still write into the page it was given, the identify
-     * page among them, after this: the controller is stopped and out of
-     * use, so that no later command reads a page it may still write. */
     klog(KLOG_WARN, "nvme", "%d: an admin command was not answered; the controller is out of use",
          c->number);
     c->dead = 1;
@@ -404,9 +408,12 @@ static int nvme_admin(struct nvme_ctrl *c, struct nvme_sqe *cmd, uint32_t *resul
     return -1;
 }
 
-/** Ask the controller to identify itself (`cns` 1), namespace `nsid` (0),
- * or its active namespaces (2), into the identify page. Returns what
- * `nvme_admin` does. */
+/**
+ * Ask the controller to identify itself (`cns` 1), namespace `nsid` (0), or
+ * its active namespaces above `nsid` (2), into the identify page. Returns
+ * what `nvme_admin` does, or -1 when the disk policy does not allow
+ * IDENTIFY.
+ */
 static int nvme_identify(struct nvme_ctrl *c, uint32_t cns, uint32_t nsid)
 {
     struct nvme_sqe cmd;
@@ -429,8 +436,8 @@ static int nvme_identify(struct nvme_ctrl *c, uint32_t cns, uint32_t nsid)
 /**
  * Wait for CSTS.RDY to read `want`, for as long as CAP.TO allows. A
  * register that reads all ones is a controller that has gone from the bus,
- * and a fatal status while it is being enabled is one that will not come
- * up; both end the wait at once.
+ * and a fatal status while it is being enabled is one that does not come
+ * up; both end the wait at once. Returns 0, or -1 with `nvme_why` set.
  */
 static int nvme_wait_ready(struct nvme_ctrl *c, uint32_t want)
 {
@@ -459,7 +466,7 @@ static int nvme_wait_ready(struct nvme_ctrl *c, uint32_t want)
 /**
  * Disable the controller and wait until CSTS.RDY reads 0. A controller
  * still on its way up is let finish first, since changing EN before RDY
- * has followed it is undefined.
+ * has followed it is undefined. Returns as `nvme_wait_ready` does.
  */
 static int nvme_disable(struct nvme_ctrl *c)
 {
@@ -472,7 +479,8 @@ static int nvme_disable(struct nvme_ctrl *c)
     return nvme_wait_ready(c, 0);
 }
 
-/** Program the admin queue and enable the controller. */
+/** Program the admin queue and enable the controller. Returns as
+ * `nvme_wait_ready` does. */
 static int nvme_enable(struct nvme_ctrl *c)
 {
     nvme_queue_reset(&c->admin);
@@ -487,7 +495,8 @@ static int nvme_enable(struct nvme_ctrl *c)
 /**
  * Ask for one I/O queue pair and create it: the completion queue first,
  * with its interrupts on vector 0, then the submission queue on it. The
- * messages reach the processor only once `nvme_start` enables them.
+ * messages reach the processor only once `nvme_start` enables them. Returns
+ * 0, or -1 with `nvme_why` set.
  */
 static int nvme_create_io_queues(struct nvme_ctrl *c)
 {
@@ -528,9 +537,10 @@ static int nvme_create_io_queues(struct nvme_ctrl *c)
  * queues are created with interrupts enabled, and until `nvme_start` enables
  * messages they must reach no line. MSI-X is on before the queues are made
  * because a controller may tie a queue's vector only then; QEMU's does, and
- * one whose queue was made with MSI-X off never sends its messages. A BAR
- * the kernel cannot map, one above its addresses on i686 among them, is
- * refused.
+ * one whose queue was made with MSI-X off never sends its messages. Returns
+ * 0, or -1 with `nvme_why` set for a BAR0 the kernel cannot map, one above
+ * its addresses on i686 among them. A mapping made by an earlier call is
+ * kept while BAR0 has not moved.
  */
 static int nvme_map(struct nvme_ctrl *c)
 {
@@ -586,7 +596,8 @@ static void *nvme_page(uint64_t *phys)
  * The pages `c` needs, each taken once and kept for the life of the
  * kernel: the four queues, the identify page, the bounce page and a PRP
  * list for each slot. A controller that failed may still write into what
- * it was given, so nothing given to one is freed.
+ * it was given, so nothing given to one is freed. Returns 0, or -1 with
+ * `nvme_why` set when a page cannot be had.
  */
 static int nvme_alloc(struct nvme_ctrl *c)
 {
@@ -639,9 +650,10 @@ static uint32_t nvme_max_sectors(uint8_t mdts)
 
 /**
  * Read CAP and size the driver's use of the controller: the doorbell
- * stride, the ready timeout, the I/O queue's depth and the slots. A
- * controller without the NVM command set, or whose smallest page is larger
- * than the 4 KiB this driver uses, is refused.
+ * stride, the ready timeout, the I/O queue's depth and the slots. Returns
+ * 0, or -1 with `nvme_why` set for a controller that does not answer, has no
+ * NVM command set, has a smallest page larger than the 4 KiB this driver
+ * uses, or has doorbells or queues this driver cannot use.
  */
 static int nvme_read_cap(struct nvme_ctrl *c)
 {
@@ -681,7 +693,8 @@ static int nvme_read_cap(struct nvme_ctrl *c)
 }
 
 /** Identify the controller and keep what the driver uses of the answer:
- * the strings, MDTS and the number of namespaces. */
+ * the strings, MDTS and the number of namespaces. Returns 0, or -1 with
+ * `nvme_why` set. */
 static int nvme_identify_controller(struct nvme_ctrl *c)
 {
     uint32_t i;
@@ -702,7 +715,8 @@ static int nvme_identify_controller(struct nvme_ctrl *c)
  * Bring `c` up from whatever state firmware left it in: disabled, its
  * admin queue programmed, enabled, identified, and its I/O queue pair
  * created. A controller that fails after it was enabled is disabled again,
- * so it does nothing with the pages it was given.
+ * so it does nothing with the pages it was given. Returns 0, or -1 with
+ * `nvme_why` set.
  */
 static int nvme_bring_up(struct nvme_ctrl *c)
 {
@@ -755,11 +769,13 @@ static int nvme_write(block_device_t *device, uint64_t lba, uint32_t count, cons
 
 /**
  * Identify namespace `nsid` and take it as a disk when the block layer can
- * drive it: blocks of 512 bytes and no metadata. A namespace of 4096-byte
- * blocks is refused: the partition tables on it and the firmware that reads
- * them count in its own blocks, and the block layer counts in 512-byte
- * sectors, so a table written here would be at the wrong place for anyone
- * else. An inactive namespace, of no size, is passed over in silence.
+ * drive it: blocks of 512 bytes and no metadata; any other, and one past
+ * the `NVME_NAMESPACES` a controller publishes, is passed over with a record.
+ * A namespace of 4096-byte blocks is not taken because the partition tables
+ * on it and the firmware that reads them count in its own blocks, and the
+ * block layer counts in 512-byte sectors, so a table written here would be
+ * at the wrong place for anyone else. An inactive namespace, of no size, is
+ * passed over in silence.
  */
 static void nvme_take_namespace(struct nvme_ctrl *c, uint32_t nsid)
 {
@@ -866,6 +882,8 @@ static void nvme_scan_namespaces(struct nvme_ctrl *c)
    and a firmware revision from. */
 static uint16_t nvme_ata_id[256];
 
+/** Lay `chars` characters of `from` into `nvme_ata_id`, two to a word, from
+ * word `first_word`. */
 static void nvme_ata_field(const uint8_t *from, uint32_t chars, uint32_t first_word)
 {
     uint32_t i;
@@ -879,6 +897,7 @@ static void nvme_ata_field(const uint8_t *from, uint32_t chars, uint32_t first_w
  * Register `c`'s namespaces with the disk registry, the first as `block0`
  * when no other driver has published one. The location is the controller's
  * number times four and the namespace's place among those it published.
+ * Returns how many namespaces it registered.
  */
 static int nvme_publish(struct nvme_ctrl *c)
 {
@@ -987,7 +1006,8 @@ struct nvme_xfer {
 };
 
 /** The ATA command the disk policy judges an NVMe command by: a read by a
- * read, a write by a write and a flush by a flush. */
+ * read, a write by a write and a flush by a flush; any other opcode by 0,
+ * which the read-only policy does not allow. */
 static uint8_t nvme_policy_command(uint8_t opcode)
 {
     switch (opcode) {
@@ -1043,7 +1063,7 @@ static int nvme_prps(struct nvme_slot *s, struct nvme_sqe *cmd, const uint8_t *b
 }
 
 /** Build `xf` as the command in slot `s`. Returns 0, or -1 when the disk
- * policy refuses it or its buffer cannot be described. */
+ * policy does not allow it or its buffer cannot be described. */
 static int nvme_build(const struct nvme_ctrl *c, struct nvme_slot *s, const struct nvme_xfer *xf,
                       struct nvme_sqe *cmd)
 {
@@ -1124,10 +1144,11 @@ static void nvme_flushed(struct nvme_ns *ns, uint32_t fseq)
 /**
  * Issue a flush of `ns` as the second half of the write in slot `s`, which
  * the controller has answered: FUA made that write's own blocks durable and
- * no others (NVMe 1.4, Figure 406), and a write the request wants durable
- * must leave every write answered before it on the medium too, as the
- * buffer cache's write after an unflushed one expects. Returns 0, or -1
- * when the flush cannot be built. Called with interrupts masked.
+ * no others (NVMe 1.4, Figure 406), and a durable write, one without
+ * `BLOCK_REQ_NOFLUSH`, must leave every write answered before it on the
+ * medium too, as the buffer cache's write after an unflushed one expects.
+ * Returns 0, or -1 when the flush cannot be built. Called with interrupts
+ * masked.
  */
 static int nvme_flush_half(struct nvme_ctrl *c, struct nvme_slot *s, struct nvme_ns *ns)
 {
@@ -1154,11 +1175,12 @@ static int nvme_flush_half(struct nvme_ctrl *c, struct nvme_slot *s, struct nvme
 /**
  * The controller has answered the command `e` identifies. A request is
  * completed and its slot freed; a polled command is marked done for its
- * caller, who frees the slot. A write the request let go unflushed marks
- * the disk; a write it wants durable, answered while the disk is marked,
+ * caller, who frees the slot. A write whose request has `BLOCK_REQ_NOFLUSH`
+ * marks the disk; a durable write, answered while the disk is marked,
  * has a flush issued in its slot before it is completed; a flush that
  * finishes well clears the mark (`nvme_flushed`). A completion whose
- * identifier matches no command in flight is dropped with a record.
+ * identifier matches no command in flight is dropped with a record. Called
+ * with interrupts masked.
  */
 static void nvme_complete(struct nvme_ctrl *c, const struct nvme_cqe *e)
 {
@@ -1230,7 +1252,8 @@ static struct nvme_ns *nvme_next_waiting(struct nvme_ctrl *c)
  * Issue request `r` of `ns` in slot `s`: a read, a write that is on the
  * medium when it is answered unless the request lets it stay in the disk's
  * cache, or a flush, which notes the count of unflushed writes it covers
- * (`nvme_flushed`).
+ * (`nvme_flushed`). Returns 0, or -1 when the command cannot be built.
+ * Called with interrupts masked.
  */
 static int nvme_issue(struct nvme_ctrl *c, struct nvme_slot *s, struct nvme_ns *ns,
                       struct block_request *r)
@@ -1329,7 +1352,7 @@ static void nvme_slot_fail(struct nvme_slot *s)
  * buffer it was given again: the reset aborts every command in flight, and
  * none of them completes after. A controller that does not stop may still
  * write into those buffers once their owners have them back, so that is a
- * panic, with interrupts masked, as an AHCI engine that will not stop is.
+ * panic, with interrupts masked, as an AHCI engine that does not stop is.
  * One that stops and does not come back is out of use, and every later
  * command answers EIO.
  */
@@ -1565,8 +1588,8 @@ static int nvme_flush_polled(struct nvme_ns *ns)
     return rc;
 }
 
-/** The device's `submit`: queue `r` on its namespace and issue what slots
- * allow. */
+/** The device's `submit`: queue `r` on its namespace and issue what the
+ * free slots allow. Returns 0, or `-EIO` for a range past the disk. */
 static int nvme_submit(block_device_t *device, struct block_request *r)
 {
     struct nvme_ns *ns = (struct nvme_ns *)device->drvdata;
@@ -1601,9 +1624,9 @@ static int nvme_flush_submit(block_device_t *device, struct block_request *r)
 }
 
 /**
- * The controllers' message: every controller on its messages has its
- * completions taken and its waiting requests issued. The vectors of all the
- * controllers share this handler, so it looks at each.
+ * The controllers' message: every controller moved to messages, unless it is
+ * being reset, has its completions taken and its waiting requests issued.
+ * The vectors of all the controllers share this handler, so it looks at each.
  */
 static void nvme_handler(isr_params_t *params)
 {
@@ -1625,7 +1648,8 @@ static void nvme_handler(isr_params_t *params)
 /**
  * Point entry 0 of `c`'s MSI-X table at `vector` and enable MSI-X. The
  * table is in one of the controller's BARs, at an offset the capability
- * gives, and is mapped here.
+ * gives, and is mapped here. Returns 0, or -1 when the controller has no
+ * MSI-X or its table cannot be mapped.
  */
 static int nvme_msix(struct nvme_ctrl *c, uint8_t vector)
 {

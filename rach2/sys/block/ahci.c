@@ -1,3 +1,8 @@
+/*
+ * ahci.c: the AHCI driver: the SATA disks on the first controller in AHCI
+ * mode, polled at boot and on the fault path, driven by its message after.
+ */
+
 #include "../arch/arch.h"
 #include "../klog.h"
 #include "ahci.h"
@@ -25,8 +30,8 @@
    different prog-if and is skipped. */
 #define AHCI_PCI_PROGIF 0x01
 
-/* The ABAR (BAR5) MMIO span: the generic host control block (~0x100 bytes) plus
-   0x80 per port for up to 32 ports; 0x2000 over-covers it. */
+/* The ABAR (BAR5) MMIO span: the generic host control block (0x100 bytes)
+   and 0x80 for each of up to 32 ports, 0x1100 in all; 0x2000 covers it. */
 #define AHCI_ABAR_MAP_SIZE 0x2000
 
 /* Generic host control registers, as offsets from the ABAR. */
@@ -71,14 +76,14 @@
 #define AHCI_PxCMD_FR  0x4000u /* FIS receive running */
 #define AHCI_PxCMD_CR  0x8000u /* command list running */
 
-/* PxCMD.ICC, the interface communication control: writing 1 asks the link to
-   go active; the HBA clears the field when the transition is done. */
+/* PxCMD.ICC, the interface communication control: writing 1 requests that the
+   link go active; the HBA clears the field when the transition is done. */
 #define AHCI_PxCMD_ICC_MASK   0xF0000000u
 #define AHCI_PxCMD_ICC_ACTIVE 0x10000000u
 
-/* PCS, the Intel port control and status word in PCI CONFIG space: one enable
-   bit per port. Not an AHCI register at all, which is why it is easy to miss
-   and why Linux has a named quirk for it. */
+/* PCS, the Intel port control and status word in PCI configuration space:
+   one enable bit per port. It is not an AHCI register, and Linux has a quirk
+   of its own for it (`ahci_intel_pcs_quirk`). */
 #define AHCI_INTEL_PCS 0x92
 
 /* SSTS: DET (bits 0-3) == 3 is device present + PHY ready; IPM (bits 8-11) == 1
@@ -92,10 +97,10 @@
 #define AHCI_SCTL_DET_INIT 0x1u
 #define AHCI_SCTL_DET_NONE 0x0u
 
-/* SCTL.IPM with every link power state forbidden: partial, slumber and
-   DevSleep. Forbidding them host-side also makes the HBA refuse the DEVICE'S
-   requests to enter them, so one write covers both halves of what Windows
-   calls HIPM and DIPM. */
+/* SCTL.IPM with every link power state disabled: partial, slumber and
+   DevSleep. Disabled at the host, they are also denied to the device's
+   requests to enter them, so one write covers both the host's and the
+   device's power management, HIPM and DIPM. */
 #define AHCI_SCTL_IPM_MASK        0xF00u
 #define AHCI_SCTL_IPM_DISABLE_ALL 0x700u
 
@@ -103,24 +108,24 @@
 #define AHCI_GHC_HR 0x00000001u
 
 /* PxSIG, the signature the device leaves after a reset. A plain SATA disk
- * answers 0x00000101; an ATAPI device answers 0xEB140101, a port multiplier
- * 0x96690101, and an enclosure service 0xC33C0101. This driver drives disks. */
+ * answers 0x00000101, which is the one this driver takes; an ATAPI device
+ * answers 0xEB140101, a port multiplier 0x96690101, and an enclosure service
+ * 0xC33C0101. */
 #define AHCI_SIG_ATA   0x00000101u
 #define AHCI_SIG_ATAPI 0xEB140101u
 
-/* Every wait is measured against the timer chip, not counted, because
-   an iteration count is really a bet on the processor's speed: ten million raw
-   register reads are a moment on the QEMU loop and several seconds on the
-   laptop this drives. The budgets: one second for a handshake (the host reset
-   is allowed exactly that by the specification, and the rest are shorter in
-   practice), and at a fine grain for a command thirty seconds with
-   interrupts on and five with them off. A healthy device answers a read in
-   microseconds, but a write here ends with a flush, which waits for the
-   medium, and an emulator's host under load or a disk spinning up can take
-   seconds for that; thirty is the sleeping path's deadline period and
-   Linux's ATA command timeout. With interrupts off the timer does not tick,
-   so every tick of the wait is lost to the clock and to each timer, and the
-   bound is the IDE driver's polled one. */
+/* Every wait is a count of steps of a measured delay (`k_udelay`), not of
+   bare register reads, since how long a read takes depends on the machine:
+   ten million reads are a moment under QEMU and several seconds on real
+   hardware. The bounds: one second for a handshake (the specification allows
+   the host reset that long, and the others are shorter), and, polled
+   every 10 us, thirty seconds for a command with interrupts on and five with
+   them off. A healthy device answers a read in microseconds, but a write here
+   ends with a flush, which waits for the medium, and an emulator's host under
+   load or a disk spinning up can take seconds for that; thirty is the block
+   request deadline's period and Linux's ATA command timeout. With interrupts
+   off the timer does not tick, so the clock and every timer lose each tick of
+   the wait, and the bound is the ATA driver's polled one. */
 #define AHCI_WAIT_POLL_US     100u
 #define AHCI_WAIT_STEPS       10000u
 #define AHCI_CMD_POLL_US      10u
@@ -134,7 +139,7 @@
    for the device to finish its own reset and post its signature, which is
    generous for a disk and short enough that a port with something unresponsive
    on it does not hold up a boot. Both expiries are ordinary answers: an empty
-   port and a device that will not answer are both ports to move past. */
+   port and a device that does not answer are both ports to move past. */
 #define AHCI_RESET_POLL_US 100u
 #define AHCI_LINK_STEPS    10000u
 #define AHCI_READY_STEPS   50000u
@@ -179,7 +184,7 @@ struct ahci_disk {
     /* A polled command is in flight on this port and its status belongs
      * to the caller polling for it. The handler leaves the port alone
      * while this is set, since acknowledging would clear the error bits
-     * that caller reads. */
+     * that the caller reads. */
     int polling;
     struct block_request *queue_head, *queue_tail;
     /* The pages a controller without 64-bit addressing moves a buffer's
@@ -194,7 +199,7 @@ static int ahci_ndisks;
    switched the disks to the interrupt-driven path, -1 before and under
    `rach2.ahcipoll`, which keeps every transfer polled. */
 static int ahci_vector = -1;
-static uint32_t ahci_messages;
+static uint32_t ahci_messages; /* messages the handler has taken */
 
 /* The areas a port is pointed at while it is reset, before the scan knows
    whether it has a disk. Nothing reads them: a port that is kept gets its
@@ -219,7 +224,7 @@ static volatile uint8_t ahci_reset_fis[AHCI_RECV_FIS_SIZE] __attribute__((aligne
 #define AHCI_PxIS_DHRS   0x00000001u
 #define AHCI_PxIE_WANTED (AHCI_PxIS_DHRS | AHCI_PxIS_FATAL)
 
-/* The H2D Register FIS and the ATA commands the polled path issues. */
+/* The H2D Register FIS and the ATA commands this driver issues. */
 #define AHCI_FIS_H2D      0x27u
 #define AHCI_FIS_H2D_C    0x80u /* C bit: this FIS has a command */
 #define ATA_READ_DMA_EXT  0x25u
@@ -228,14 +233,14 @@ static volatile uint8_t ahci_reset_fis[AHCI_RECV_FIS_SIZE] __attribute__((aligne
 #define ATA_IDENTIFY      0xECu
 #define ATA_DEV_LBA       0x40u /* device register: LBA mode */
 
-/* One PRDT entry transfers up to 4 MiB, so cap a single command there. The
-   block layer asks for at most 2048 sectors, a megabyte, which is under it,
-   and a larger request fails closed rather than silently truncating the byte
-   count. */
+/* One PRDT entry transfers up to 4 MiB, so a polled command is held to that.
+   The block layer asks for at most 2048 sectors, a megabyte, which is under
+   it, and a larger request fails rather than having its byte count cut to
+   the entry's 22 bits. */
 #define AHCI_MAX_SECTORS_PER_CMD 8192u
 
-/* The single polled command slot, its 5-dword H2D FIS, and the PRDT offset
-   (after CFIS 64 + ACMD 16 + reserved 48) inside the command table. */
+/* The one command slot this driver uses, its 5-dword H2D FIS, and the PRDT
+   offset (after CFIS 64 + ACMD 16 + reserved 48) inside the command table. */
 #define AHCI_SLOT        0
 #define AHCI_CFL_DWORDS  5
 #define AHCI_CMD_W       (1u << 6)  /* command header: write direction */
@@ -259,8 +264,9 @@ static volatile uint8_t ahci_reset_fis[AHCI_RECV_FIS_SIZE] __attribute__((aligne
  * pool (`alloc_kernel_frame`), one page for each entry of the table, taken
  * when an entry first needs it and kept: a write's piece is copied in when
  * the command is built, and a read's is copied back when it is judged.
- * `to` is where a read's piece goes back, NULL for an entry the controller
- * reaches directly, and `count` the entries of the command in the slot.
+ * `to` is where a read's piece goes back, NULL for a write's piece and for an
+ * entry the controller reaches directly, and `count` the entries of the
+ * command in the slot.
  */
 struct ahci_bounce {
     uint8_t *page[AHCI_PRDT_MAX];
@@ -307,23 +313,15 @@ typedef struct {
 } __attribute__((packed)) ahci_prdt_t;
 
 /* The controller's PCI identity, the ABAR as discovery mapped it (zero until
-   then, and left set if bring-up later fails), and the first port with a
-   disk, -1 until bring-up. Every read and write through the ABAR is volatile
-   at the access; see the io table below. */
+   then, and left set if bring-up later fails), and the port of the
+   controller's first disk, `block0`'s once one is published, -1 until a port
+   is selected. Every read and write through the ABAR is volatile at the
+   access (`mmio_read32`). */
 static pci_device_t ahci_pci;
 static uintptr_t ahci_base;
 static int ahci_port = -1;
 
-/*
- * Everything this driver does to the outside world, in one table.
- *
- * On a machine it is the three calls below: the reads and writes through the
- * mapped ABAR and the delay. PCI configuration is reached directly and is not
- * in the table. A test on another architecture cannot map an ABAR, so it
- * supplies its own table and the driver runs against a model of the
- * controller. That is the only reason the indirection exists, and it is the
- * same arrangement the e1000 driver has.
- */
+/** The machine's register read, through the mapped ABAR. */
 static uint32_t ahci_mmio_r32(uint32_t offset)
 {
     return mmio_read32(ahci_base + offset);
@@ -336,11 +334,13 @@ static uint32_t ahci_hi(uint64_t phys)
     return (uint32_t)(phys >> 32);
 }
 
+/** The machine's register write, through the mapped ABAR. */
 static void ahci_mmio_w32(uint32_t offset, uint32_t value)
 {
     mmio_write32(ahci_base + offset, value);
 }
 
+/* The machine's table, and the table in use, which `ahci_set_io` changes. */
 static const struct ahci_io ahci_mmio_io = {ahci_mmio_r32, ahci_mmio_w32, k_udelay};
 
 static const struct ahci_io *ahci_io = &ahci_mmio_io;
@@ -368,13 +368,13 @@ static uint32_t ahci_port_off(int port, uint32_t reg)
     return AHCI_PORT_BASE + (uint32_t)port * AHCI_PORT_STRIDE + reg;
 }
 
-/* Cache/DMA coherency, a real-hardware requirement. x86 bus-master DMA
-   snoops the caches, so the write-back below changes nothing a correct
-   machine does; it is kept because a machine that does not snoop would
-   otherwise read a stale descriptor, and it costs one pass over a small
-   buffer. */
-/** Evict [addr, addr+size) so a DMA write the CPU is about to read, or a
-   descriptor the HBA is about to read, crosses the cache a line at a time. */
+/**
+ * Write back and evict the lines of [addr, addr+size), so a descriptor the
+ * HBA is about to read, or a buffer it has just written that the processor
+ * is about to read, is in memory and not in a stale line. x86 bus-master DMA
+ * snoops the caches, so on a PC this changes nothing; it is kept for a
+ * machine that does not snoop, and costs one pass over a small buffer.
+ */
 static void ahci_dma_sync(const volatile void *addr, uint32_t size)
 {
     if (!addr || size == 0) {
@@ -383,8 +383,10 @@ static void ahci_dma_sync(const volatile void *addr, uint32_t size)
     arch_dma_flush(addr, size);
 }
 
-/** Poll until every bit of `mask` at `offset` reads 0. Returns 0 on success, -1
-   when the iteration watchdog expires (a wedged HBA). */
+/**
+ * Poll the register at `offset` every 100 us until every bit of `mask` reads
+ * 0. Returns 0, or -1 after a second, the handshake bound: a wedged HBA.
+ */
 static int ahci_wait_clear(uint32_t offset, uint32_t mask)
 {
     uint32_t spin;
@@ -398,12 +400,23 @@ static int ahci_wait_clear(uint32_t offset, uint32_t mask)
     return -1;
 }
 
-/** Find and map the AHCI HBA on the PCI bus. Discovery only, no transfer. */
-/* Why the last bring-up stopped. A silent -1 is no use on a machine whose
-   only account of itself is what it printed, so every failure below names
-   itself and ahci_init prints it. */
+/* Why the last bring-up stopped, which `ahci_init` logs, so that a failed
+   probe says which step failed and not only that one did. */
 static const char *ahci_err = "no SATA controller in AHCI mode on the bus";
 
+/**
+ * Find the first SATA controller in AHCI mode on the bus, map its ABAR, and
+ * turn on its memory decoding. Returns 0, or -1 with `ahci_err` set. Bus
+ * mastering is turned on later, once a port's DMA bases are programmed.
+ *
+ * The ABAR is mapped uncached wherever it is, in a mapping of its own in the
+ * kernel's MMIO region (`map_mmio`), and never reached through the identity
+ * mapping a low ABAR has, which is cacheable. When no controller is found, a
+ * debug line gives what is at 0:31.2, where an Intel PCH has its SATA
+ * controller: the controller is function 2 of a multi-function device, and a
+ * scan reaches it only when function 0 says it has siblings, so "nothing
+ * matched" alone cannot tell an absent controller from one the scan missed.
+ */
 static int ahci_discover(void)
 {
     pci_device_t dev;
@@ -422,11 +435,6 @@ static int ahci_discover(void)
         skip_dev = &skip;
     }
     if (!found) {
-        /* Say what IS at the address a PCH keeps its SATA controller, because
-         * "nothing matched" cannot tell an absent controller from a scan that
-         * never visited it: the controller lives at function 2 of a
-         * multi-function device, and reaching it depends on function 0
-         * advertising its siblings. One direct read settles that in a line. */
         klog(KLOG_DEBUG, "ahci", "no match: 0:31.2 reads %X:%X class %X:%X prog-if %X",
              (unsigned)pci_read_config16(0, 31, 2, PCI_VENDOR_ID),
              (unsigned)pci_read_config16(0, 31, 2, PCI_DEVICE_ID),
@@ -441,7 +449,7 @@ static int ahci_discover(void)
          (unsigned)dev.vendor_id, (unsigned)dev.device_id, (int)dev.bus, (int)dev.device,
          (int)dev.function, (unsigned)dev.prog_if, (unsigned)dev.bar[5]);
 
-    /* ABAR is BAR5. Reject any BAR4 64-bit spill or invalid BAR5 type. */
+    /* The ABAR is BAR5; a 64-bit BAR4 would take BAR5 as its high half. */
     if (pci_bar_is_64bit(dev.bar[4]) || pci_bar_is_64bit(dev.bar[5]) ||
         !pci_bar_is_memory(dev.bar[5])) {
         ahci_err = "the controller's ABAR is not a plain 32-bit memory window";
@@ -452,10 +460,6 @@ static int ahci_discover(void)
         ahci_err = "the controller's ABAR was never programmed";
         return -1;
     }
-    /* Map the ABAR cache-disabled (PCD|PWT) whatever its address: map_mmio
-       gives it a mapping of its own in the kernel's MMIO region, and the
-       driver reads and writes through that one, never through a low ABAR's
-       identity mapping, which stays cacheable. */
     mapped = map_mmio(abar, AHCI_ABAR_MAP_SIZE);
     if (mapped == 0) {
         ahci_err = "the ABAR window could not be mapped";
@@ -463,8 +467,6 @@ static int ahci_discover(void)
     }
     ahci_base = mapped;
 
-    /* Decode MMIO now. Bus-master DMA is enabled only after the selected port's
-       DMA bases are programmed. */
     ahci_pci = dev;
     pci_enable_memory_space(&ahci_pci);
 
@@ -472,19 +474,44 @@ static int ahci_discover(void)
 }
 
 /**
- * Re-establish the SATA link on one port (COMRESET), or report that it is
- * empty. Returns 0 when a device is present and the PHY is ready.
+ * Reset the SATA link on one port (COMRESET) and wait for it to come up.
+ * Returns 0 when a device is present and the PHY is ready, and -1 for a port
+ * with no link after a second.
  *
- * This is the recovery the laptop needs and the reason the HBA reset above can
- * be issued at all. A warm reboot on that machine leaves its SATA link in a
- * state where the port reports a device and the device never becomes ready,
- * and the only way back is to take the link down and bring it up: DET=1 has
- * COMRESET asserted, and the specification requires it held for at least one
- * millisecond, after which DET=0 releases it and the PHY negotiates again.
+ * A warm reboot can leave a link where the port reports a device and the
+ * device never becomes ready, as the Lenovo's does, and the HBA reset of
+ * `ahci_hba_own` leaves every link down; the way back is to take the link
+ * down and bring it up. DET=1 asserts COMRESET, which the specification
+ * requires held for at least a millisecond, and DET=0 releases it, after
+ * which the PHY negotiates again. An empty port is not a failure: every
+ * implemented port is reset at bring-up, and most machines have ports with
+ * nothing on them. Its wait costs the whole second, and its debug line gives
+ * the port's status, which shows whether the wait could be shorter.
  *
- * An empty port is not a failure. Every implemented port is reset at bring-up,
- * and most machines have ports with nothing on them; this reports that plainly
- * so the scan can move on.
+ * The device answers a reset with a FIS that has its signature, and a FIS
+ * arrives only when the port has somewhere to put it and is receiving, so
+ * the reset areas are programmed and FIS receive turned on before the reset;
+ * without them the task file never updates and every port looks like a
+ * device that does not answer. The command engine stays off.
+ *
+ * The port's power comes up before its link. The HBA reset puts every port
+ * at its defaults, and on a controller with staggered spin-up that leaves
+ * PxCMD.SUD at 0, which the specification requires at 1 for a COMRESET to
+ * act (AHCI 1.3.1, 10.4.2). QEMU's model resets ports with spin-up and power
+ * already on, so only hardware shows this. Where the features are absent both
+ * bits read as 1 and the writes change nothing, which is why Linux
+ * (`ahci_power_up`) writes them unconditionally too; the ICC write then sets
+ * the interface itself active.
+ *
+ * Link power management is disabled in the same write that asserts the
+ * reset, and stays disabled. On the Lenovo, a warm reboot with the link power
+ * states enabled left its drive invisible even to the firmware until power
+ * was removed, and disabling them in the storage driver cured it. Linux's
+ * quirk table marks the drive's family, "Samsung SSD 870*", scoped there to
+ * ATI controllers, and its strongest policy, ATA_LPM_MAX_POWER, is this
+ * value: SControl IPM = 7, every transition disabled (libata-sata.c). A
+ * diagnostic that reads a sector an hour after boot must not find that the
+ * link slept in between and the drive never woke.
  */
 static int ahci_port_comreset(int port)
 {
@@ -495,28 +522,12 @@ static int ahci_port_comreset(int port)
     uint32_t sctl = ahci_read32(sctl_off);
     uint32_t spin;
 
-    /* The device answers a reset with a FIS carrying its signature, and a FIS
-     * arrives only if the port has somewhere to put it and is listening. So
-     * the received-FIS area is programmed and FRE turned on before the reset,
-     * not in the start path afterwards; without this the task file
-     * never updates and every port looks like a device that will not answer.
-     * The command engine stays off: nothing is being issued here. */
     ahci_write32(ahci_port_off(port, AHCI_PxCLB), (uint32_t)virt_to_phys(ahci_reset_cmdlist));
     ahci_write32(ahci_port_off(port, AHCI_PxCLBU), ahci_hi(virt_to_phys(ahci_reset_cmdlist)));
     ahci_write32(ahci_port_off(port, AHCI_PxFB), (uint32_t)virt_to_phys(ahci_reset_fis));
     ahci_write32(ahci_port_off(port, AHCI_PxFBU), ahci_hi(virt_to_phys(ahci_reset_fis)));
     pci_enable_bus_master(&ahci_pci);
 
-    /* Bring the port's power state up before asking it for a link. Our own
-     * HBA reset put every port at its reset defaults, and on silicon that
-     * supports staggered spin-up the default is spun DOWN: PxCMD.SUD resets
-     * to 0 and the specification requires it be 1 for the COMRESET below to
-     * act at all (AHCI 1.3.1, 10.4.2). QEMU could never show this, because
-     * its model resets ports with spin-up and power already on, so every
-     * suite passed while the real chip sat dark. Where the features are
-     * absent both bits read as 1 and the writes change nothing, which is why
-     * Linux (ahci_power_up) writes them unconditionally too; the ICC write
-     * then asks the interface itself to go active. */
     {
         uint32_t cmd = ahci_read32(cmd_off) | AHCI_PxCMD_SUD | AHCI_PxCMD_POD;
 
@@ -526,39 +537,15 @@ static int ahci_port_comreset(int port)
 
     ahci_write32(cmd_off, ahci_read32(cmd_off) | AHCI_PxCMD_FRE);
 
-    /* Link power management is forbidden outright, in the same write that
-     * drives the reset and permanently thereafter. This machine's own history
-     * is the reason: with its previous operating system, a warm reboot left
-     * this drive invisible even to the firmware until power was removed, and
-     * disabling the link power states in the storage driver cured it. Linux
-     * documents the same temperament in this drive family (its quirk table
-     * marks "Samsung SSD 870*", scoped there to ATI controllers), and its
-     * strongest policy, ATA_LPM_MAX_POWER, is exactly this value: SControl
-     * IPM = 7, every transition disabled (libata-sata.c). A diagnostic that
-     * reads a sector an hour after boot must not find that the link slept in
-     * between and the drive never woke. */
     sctl = (sctl & ~(AHCI_SCTL_DET_MASK | AHCI_SCTL_IPM_MASK)) | AHCI_SCTL_IPM_DISABLE_ALL;
     ahci_write32(sctl_off, sctl | AHCI_SCTL_DET_INIT);
     /* At least 1 ms with COMRESET asserted. */
     k_udelay(2000);
     ahci_write32(sctl_off, sctl | AHCI_SCTL_DET_NONE);
 
-    /* The link then has to negotiate. A port with nothing on it never reaches
-     * DET=3, so this is bounded and its expiry is an ordinary answer.
-     *
-     * How long that costs is recorded rather than assumed. Each empty port
-     * spends the whole of AHCI_LINK_STEPS here, a second, and the machine
-     * this targets showed 2.19 s between the first port and the disk being
-     * reported. Which ports those were, and what their status said while they
-     * waited, is what decides whether the wait can be cut, so the driver says
-     * so instead of leaving the next reader to guess.
-     */
     for (spin = 0; spin < AHCI_LINK_STEPS; ++spin) {
         if ((ahci_read32(ssts_off) & AHCI_DET_MASK) == AHCI_DET_PRESENT) {
-            /* The errors a link-up necessarily raises are ours to clear, and
-             * clearing them is what leaves the port usable. PxSERR is
-             * write-1-to-clear, so writing back what was read clears exactly
-             * the bits that were set. */
+            /* PxSERR is write-1-to-clear: this clears the link-up's errors. */
             ahci_write32(serr_off, ahci_read32(serr_off));
             return 0;
         }
@@ -572,27 +559,38 @@ static int ahci_port_comreset(int port)
     return -1;
 }
 
-/** Take ownership of the HBA and ensure AHCI mode.
+/**
+ * Take the controller from the firmware, in AHCI mode, and reset it. Returns
+ * 0, or -1 with `ahci_err` set when the reset does not finish in a second.
  *
- * The HBA-wide reset (GHC.HR) is issued here, which it was not before: the
- * driver skipped it while there was no COMRESET, because an HR leaves every
- * SATA link needing re-establishment and a port whose link never comes back
- * reports a device that is not ready (on QEMU's ich9-ahci the port's TFD loses
- * DRDY, 0x50 becoming 0x130). With the per-port COMRESET below, that is a
- * state the driver can get out of, and a reset is worth having: the machine
- * this is being carried to hands the HBA over from firmware that has been
- * using it, and the only way to know what state the registers are in is to put
- * them in a known one.
+ * The reset (GHC.HR) puts the registers in a known state, which matters on a
+ * machine whose firmware has been using the controller. It also leaves every
+ * SATA link down, with a port that reports a device that is not ready (on
+ * QEMU's ich9-ahci the port's TFD loses DRDY, 0x50 becoming 0x130), which the
+ * COMRESET of each port (`ahci_port_comreset`) brings back.
+ *
+ * The BIOS/OS handoff is requested when the controller has it (QEMU's does
+ * not), and a request the firmware does not answer within a second is a
+ * warning and not a failure: Linux never performs the handoff (BOHC appears
+ * in its AHCI driver only as a capability bit's name), so firmware with a
+ * broken handoff semaphore would fail only this kernel, on a controller Linux
+ * takes. AHCI mode is set before the reset, since the specification defines
+ * the registers, GHC.HR among them, only in AHCI mode. The controller's
+ * interrupts stay off through bring-up, which polls; `ahci_start` turns them
+ * on.
+ *
+ * Intel's Lynx Point and Wildcat Point controllers (device IDs 0x8Cxx and
+ * 0x9Cxx), the families the board profiles cover, also have an enable bit
+ * for each port in PCI configuration space (PCS, word 0x92), outside what
+ * GHC.HR resets and what the AHCI specification names; a port whose bit is
+ * clear has no PHY, and no COMRESET can wake it. Every implemented port's bit
+ * is set, as Linux sets them after every controller reset
+ * (`ahci_intel_pcs_quirk`, which its PCI table applies to the Lenovo's
+ * controller, 8086:9c03). Newer Intel platforms moved the register, so the
+ * write is held to those two families.
  */
 static int ahci_hba_own(void)
 {
-    /* BIOS/OS handoff, only when the HBA advertises it (QEMU does not). The
-     * request is made and the answer waited for, but an unanswered request is
-     * a warning, not a refusal: Linux never performs this handoff at
-     * all (BOHC appears in its AHCI driver only as a capability bit's name),
-     * so firmware with a broken handoff semaphore would fail only us, on a
-     * controller Linux would simply take. Asking first is still the polite
-     * order; being refused by silence is not a reason to stop. */
     if (ahci_read32(AHCI_CAP2) & AHCI_CAP2_BOH) {
         ahci_write32(AHCI_BOHC, ahci_read32(AHCI_BOHC) | AHCI_BOHC_OOS);
         if (ahci_wait_clear(AHCI_BOHC, AHCI_BOHC_BOS) != 0) {
@@ -600,30 +598,16 @@ static int ahci_hba_own(void)
         }
     }
 
-    /* AHCI mode before the reset, as the specification requires: the HBA's
-     * registers are only defined in AHCI mode, and that includes GHC.HR. */
     ahci_write32(AHCI_GHC, ahci_read32(AHCI_GHC) | AHCI_GHC_AE);
     ahci_write32(AHCI_GHC, ahci_read32(AHCI_GHC) | AHCI_GHC_HR);
-    /* The HBA clears HR when it has finished; the specification allows it one
-     * second, and a bit that never clears is an HBA this driver cannot use. */
+    /* The HBA clears HR when it is done; the specification allows a second. */
     if (ahci_wait_clear(AHCI_GHC, AHCI_GHC_HR) != 0) {
         ahci_err = "the host reset never completed";
         return -1;
     }
-    /* The reset clears AE, so AHCI mode is set again. Interrupts stay off
-     * through bring-up, which polls; ahci_start turns them on afterwards. */
+    /* The reset clears AE. */
     ahci_write32(AHCI_GHC, (ahci_read32(AHCI_GHC) | AHCI_GHC_AE) & ~AHCI_GHC_IE);
 
-    /* Re-enable the port PHYs the reset may have left disabled. On Intel
-     * controllers of this era a per-port enable lives in PCI configuration
-     * space (PCS, word 0x92), outside everything GHC.HR touches or the AHCI
-     * specification names; a port whose PCS bit is clear has no PHY, and no
-     * COMRESET can wake it. Linux ORs the implemented-port map into PCS after
-     * every controller reset and applies that quirk to this laptop's exact
-     * controller by device id (ahci_intel_pcs_quirk, 8086:9c03 in its PCI
-     * table). Gated to the Lynx Point and Wildcat Point families this
-     * project's board profiles cover, because on newer Intel platforms the
-     * register moved and a blind write here would poke something else. */
     if (ahci_pci.vendor_id == 0x8086 &&
         ((ahci_pci.device_id & 0xFF00u) == 0x8C00u || (ahci_pci.device_id & 0xFF00u) == 0x9C00u)) {
         uint16_t pcs =
@@ -640,7 +624,10 @@ static int ahci_hba_own(void)
     return 0;
 }
 
-/** Stop one port and verify that no old command issue state remains. */
+/**
+ * Stop a port's command engine and FIS receive, and wait for its PxCI and
+ * PxSACT to clear. Returns 0, or -1 when one of them does not in a second.
+ */
 static int ahci_port_stop(int port)
 {
     uint32_t cmd_off = ahci_port_off(port, AHCI_PxCMD);
@@ -667,7 +654,11 @@ static int ahci_port_stop(int port)
     return 0;
 }
 
-/** Mask AHCI interrupts and quiesce every implemented port before reuse. */
+/**
+ * Mask every implemented port's interrupts, stop it, and clear its error
+ * and interrupt status. Returns 0, or -1 with `ahci_err` set when a port
+ * does not stop.
+ */
 static int ahci_quiesce_ports(void)
 {
     uint32_t pi = ahci_read32(AHCI_PI);
@@ -689,10 +680,11 @@ static int ahci_quiesce_ports(void)
 }
 
 /**
- * Wait for a port's device to finish its reset. Returns 0 when it has.
+ * Wait for a port's device to finish its reset. Returns 0 when it has, and
+ * -1 after five seconds.
  *
  * After a COMRESET the device runs its own reset and then posts a D2H FIS
- * carrying its signature; until that has happened the task file reports busy
+ * with its signature; until that has happened the task file reports busy
  * and the signature register has nothing worth reading. Bounded, because a
  * device that never becomes ready is a device this driver must move past,
  * not wait on.
@@ -716,22 +708,26 @@ static int ahci_port_ready(int port)
  *
  * Every implemented port is COMRESET first, because a link that a warm reboot
  * left wedged reports a device that never becomes ready, and the scan would
- * otherwise select it and then fail on the identify. A port that comes back
- * empty is skipped, since most machines have some; the reset itself logs a
- * debug line for a port whose link never came up.
+ * otherwise select it and then fail on the identify. A port with no link,
+ * nothing there or a device that did not negotiate one, is skipped, since
+ * most machines have some; the reset itself logs a debug line for it. A link
+ * is up when DET reads 3, whatever IPM says, as Linux's
+ * `ata_phys_link_online` tests: a link that negotiated and then went to a
+ * low-power interface state is live, and the ICC write in the reset brings it
+ * back.
  *
  * The signature decides what the port has, and only a disk is taken. An
  * optical drive answers the ATAPI signature and would fail every command this
  * driver knows; a port multiplier and an enclosure service answer their own.
- * Naming the one signature this driver drives instead of excluding the ones
- * it happens to know about, means an unfamiliar device is skipped rather than
- * driven as if it were a disk.
+ * Taking the one signature this driver drives, instead of excluding the ones
+ * it knows of, means an unfamiliar device is skipped rather than driven as if
+ * it were a disk.
  *
  * A port that is skipped is stopped again before the scan moves on. The reset
  * had to enable that port's FIS receive engine, and a port left running with
  * no area of its own programmed would write wherever its base registers
- * point. On the machine this targets that is not hypothetical: it has a SATA
- * disk and a bay that may hold an optical drive, which is exactly two ports.
+ * point. The Lenovo has a SATA disk and a bay that may hold an optical drive,
+ * which is two ports.
  *
  * Every port with a disk is kept, up to `AHCI_DISKS`, in port order; the
  * first is `ahci_port`. The function fails only when no port has a disk.
@@ -750,24 +746,15 @@ static int ahci_select_port(void)
             continue;
         }
         if (ahci_port_comreset(p) != 0) {
-            (void)ahci_port_stop(p); /* no link: nothing there, or a device
-                                        that did not negotiate one */
+            (void)ahci_port_stop(p);
             continue;
         }
         ssts = ahci_read32(ahci_port_off(p, AHCI_PxSSTS));
-        /* DET alone decides, as Linux's link-online test does
-         * (ata_phys_link_online checks DET==3 and nothing else): a link that
-         * negotiated and then dropped into a low-power interface state is a
-         * live link, and the ICC write in the reset path asks it back up.
-         * Requiring IPM to read active as well, which this did, silently
-         * discards exactly that disk. */
         if ((ssts & AHCI_DET_MASK) != AHCI_DET_PRESENT) {
             (void)ahci_port_stop(p);
             continue;
         }
-        /* The signature is only valid once the device has finished its own
-         * reset and posted its first FIS; read before that it is all ones,
-         * which is not a signature but a port that has not answered yet. */
+        /* PxSIG reads all ones until the device's first FIS. */
         if (ahci_port_ready(p) != 0) {
             klog(KLOG_WARN, "ahci", "port %d: the device never became ready; skipped", p);
             (void)ahci_port_stop(p);
@@ -799,7 +786,11 @@ static int ahci_select_port(void)
     return 0;
 }
 
-/** Stop `d`'s port engine, program its DMA bases, and restart it. */
+/**
+ * Stop `d`'s port, program its command list and FIS area, clear its error
+ * and interrupt status, turn on bus mastering, and start the port again.
+ * Returns 0, or -1 with `ahci_err` set when the port does not stop.
+ */
 static int ahci_port_start(struct ahci_disk *d)
 {
     int port = d->port;
@@ -810,13 +801,12 @@ static int ahci_port_start(struct ahci_disk *d)
         return -1;
     }
 
-    /* Program the command list and received-FIS bases, both halves. */
     ahci_write32(ahci_port_off(port, AHCI_PxCLB), (uint32_t)virt_to_phys(d->cmdlist));
     ahci_write32(ahci_port_off(port, AHCI_PxCLBU), ahci_hi(virt_to_phys(d->cmdlist)));
     ahci_write32(ahci_port_off(port, AHCI_PxFB), (uint32_t)virt_to_phys(d->recv_fis));
     ahci_write32(ahci_port_off(port, AHCI_PxFBU), ahci_hi(virt_to_phys(d->recv_fis)));
 
-    /* Clear latched errors and interrupt status (write 1 to clear). */
+    /* PxSERR and PxIS are write-1-to-clear. */
     ahci_write32(ahci_port_off(port, AHCI_PxSERR), 0xFFFFFFFFu);
     ahci_write32(ahci_port_off(port, AHCI_PxIS), 0xFFFFFFFFu);
 
@@ -838,17 +828,18 @@ static void ahci_zero(volatile uint8_t *p, uint32_t n)
     }
 }
 
-/** Recover the port after a failed or timed-out command, then report `-EIO`.
+/**
+ * Recover the port after a failed or timed-out command. Returns `-EIO`.
  *
  * AHCI 6.2.2 error recovery: a fatal error stops the command engine and may
  * leave a command outstanding, so without recovery the next command would issue
  * on a stopped engine and wedge the port until a fresh `ahci_init`. Clearing
- * `PxCMD.ST` resets `PxCI`; once `CR` is clear the latched errors clear and the
- * engine restarts, leaving the port able to serve the next command. If the
- * engine will not stop, panic with interrupts masked before a request or a
- * polled caller can release its DMA buffer. The controller may still use the
- * buffer and command table, so neither may be reused. All bounded MMIO, so
- * it is safe at IF=0.
+ * `PxCMD.ST` resets `PxCI`; once `CR` is clear the latched errors are cleared
+ * and the engine restarted, leaving the port able to serve the next command.
+ * An engine that does not stop is a panic, with interrupts masked, before a
+ * request or a polled caller can release its DMA buffer: the controller may
+ * still use the buffer and the command table, so neither may be reused. Every
+ * wait is bounded MMIO, so it is safe with interrupts off.
  */
 static int ahci_io_error(struct ahci_disk *d)
 {
@@ -923,8 +914,9 @@ static void ahci_unbounce(struct ahci_disk *d)
  * table, a piece above 4 GiB moving through the DMA pool on a controller
  * without 64-bit addressing (`ahci_piece`).
  *
- * Returns 0, or -1 when the policy refuses the command or the table cannot
- * describe the buffer.
+ * Returns 0, or -1 when the disk policy does not allow the command or the
+ * table cannot describe the buffer. Every command this driver sends is built
+ * here, so this is the one place the policy is applied.
  */
 static int ahci_build_command(struct ahci_disk *d, uint8_t command, uint64_t lba, uint32_t count,
                               volatile uint8_t *buf, uint32_t bytes, int write)
@@ -934,8 +926,6 @@ static int ahci_build_command(struct ahci_disk *d, uint8_t command, uint64_t lba
     volatile ahci_prdt_t *prdt = (volatile ahci_prdt_t *)(d->cmdtable + AHCI_PRDT_OFFSET);
     uint32_t prdtl = 0;
 
-    /* Every command this driver sends is built here, so the read-only
-     * policy is tested here and nowhere else. */
     if (!diskcmd_allowed(command)) {
         klog(KLOG_WARN, "ahci", "refused: command 0x%X: %s", (unsigned)command,
              diskcmd_policy_banner);
@@ -1019,7 +1009,8 @@ static int ahci_build_command(struct ahci_disk *d, uint8_t command, uint64_t lba
  * bytes it moved into `prdbc`; a completion that moved fewer than requested
  * without raising an error would otherwise pass, and a short write that
  * pc_sync then marks clean is silent data loss. A fatal PxIS error can
- * clear PxCI without setting PxTFD.ERR, so both are tested.
+ * clear PxCI without setting PxTFD.ERR, so both are tested. A read's bytes
+ * in `buf` are evicted from the cache and copied back from the pool's pages.
  */
 static int ahci_judge(struct ahci_disk *d, uint32_t bytes, volatile uint8_t *buf, int write)
 {
@@ -1048,8 +1039,9 @@ static int ahci_judge(struct ahci_disk *d, uint32_t bytes, volatile uint8_t *buf
 }
 
 /**
- * Acknowledge this port before issuing another command. Clear only this
- * port's controller bit so another port's completion remains pending.
+ * Clear `d`'s port interrupt status before another command is issued, and
+ * its bit alone of the controller's, so another port's completion remains
+ * pending.
  */
 static void ahci_acknowledge(struct ahci_disk *d)
 {
@@ -1076,15 +1068,22 @@ static uint32_t ahci_cmd_steps(void)
  *
  * Builds the command through ahci_build_command, waits for the task file to
  * go idle, sets the slot's `PxCI` bit, and busy-polls it clear, watching the
- * fatal `PxIS` bits and `PxTFD` ERR/DF for failure, then verifies the byte
- * count the HBA reports so a short transfer fails instead of passing. The HBA
- * performs the DMA; the CPU only spins on memory-mapped status, bounded by
- * the iteration watchdog. So it neither sleeps nor allocates and is callable
- * with interrupts off, the contract the page-cache window fault needs.
+ * fatal `PxIS` bits for failure, then judges the task file's ERR and DF and
+ * the byte count the HBA reports (`ahci_judge`), so a short transfer fails
+ * instead of passing. The HBA performs the DMA; the processor only spins on
+ * memory-mapped status, in bounded steps. It never sleeps, and allocates
+ * only a page of the DMA pool for an entry that needs one (`ahci_piece`), so
+ * it may be called with interrupts off, which the page-cache window's fault
+ * needs.
+ *
+ * On a port with a queued command active, the active command is finished
+ * first by polling and its request completed (`ahci_drain`), and the queue
+ * is started again after this command, or after a command that could not be
+ * built, which would otherwise leave the queue with no command to advance it.
  *
  * Returns 0 on success, `-EIO` on an error or an expiry, and -1 when the
- * command could not be built: a command the policy refuses, or a buffer the
- * table cannot describe.
+ * command could not be built: a command the disk policy does not allow, or a
+ * buffer the table cannot describe.
  */
 static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, uint32_t count,
                             volatile uint8_t *buf, uint32_t bytes, int write)
@@ -1096,14 +1095,8 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
     uint32_t spin;
     int rc;
 
-    /* A polled command on a port with a queued one active: the fault path
-     * with interrupts off, or a raw window on the recovery kernel. The
-     * active command is finished here first, its request completed, and
-     * the queue resumes once this command is done. */
     ahci_drain(d);
     if (ahci_build_command(d, command, lba, count, buf, bytes, write) != 0) {
-        /* The drain finished what was active, so the queue behind it has
-         * no command to advance it and would wait out its deadlines. */
         ahci_start_next(d);
         return -1;
     }
@@ -1151,10 +1144,12 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
     return rc;
 }
 
-/* A polled command that failed, `why` saying how: the failure is logged,
- * since the caller sees only EIO, and the queue behind it is started again,
- * or every request in it waits out its deadline and the disk is declared
- * stalled with nothing wrong. */
+/**
+ * End a polled command that failed, `why` saying how: recover the port, log
+ * the failure, since the caller sees only `-EIO`, and start the queue behind
+ * it again, or every request in it waits out its deadline and the disk is
+ * declared stalled with nothing wrong. Returns `-EIO`.
+ */
 static int ahci_polled_failed(struct ahci_disk *d, uint8_t command, const char *why)
 {
     int rc = ahci_io_error(d);
@@ -1170,14 +1165,14 @@ static int ahci_polled_failed(struct ahci_disk *d, uint8_t command, const char *
 /*
  * The interrupt-driven path.
  *
- * A request's buffer is described as the polled path describes any
- * buffer: one PRDT entry for a page of i686's identity window, an entry per
- * page otherwise. One command
- * is active per port; the rest wait in the port's queue. The port's
- * interrupt completes the active request and starts the next, so the
- * processor runs someone else during a transfer and two disks progress
- * independently. A write is the transfer and then a flush, so a completed
- * write is on the medium as the polled path's is.
+ * A request's buffer is described as the polled path describes any buffer:
+ * one PRDT entry for a buffer in i686's identity window, an entry per page
+ * otherwise. One command is active per port; the rest wait in the port's
+ * queue. The port's interrupt completes the active request and starts the
+ * next, so the processor runs another process during a transfer and two
+ * disks progress independently. A write is the transfer and then a flush,
+ * unless its request has `BLOCK_REQ_NOFLUSH`, so a completed write is on the
+ * medium as the polled path's is.
  */
 
 /** Issue the command built in `d`'s slot without waiting. */
@@ -1192,7 +1187,8 @@ static void ahci_issue(struct ahci_disk *d)
 
 /**
  * Start the request `r` on `d`: a read, the transfer half of a write, or a
- * flush alone. Returns 0, or -1 when the command could not be built.
+ * flush alone. Returns 0, or -1 when the command could not be built. Called
+ * with interrupts masked and the port idle.
  */
 static int ahci_start_request(struct ahci_disk *d, struct block_request *r)
 {
@@ -1219,8 +1215,8 @@ static int ahci_start_request(struct ahci_disk *d, struct block_request *r)
 
 /**
  * The active command has left the slot: judge it, acknowledge its interrupt,
- * then finish its request or start the flush half of a write. A write asked
- * for with `BLOCK_REQ_NOFLUSH` is finished at its transfer, and the disk is
+ * then finish its request or start the flush half of a write. A write whose
+ * request has `BLOCK_REQ_NOFLUSH` is finished at its transfer, and the disk is
  * marked `unflushed` until a flush, of a write or alone, has finished.
  * Runs from the interrupt, and from the polled path draining the port.
  */
@@ -1253,17 +1249,20 @@ static void ahci_finish_active(struct ahci_disk *d)
     block_request_complete(r, d->active_generation, rc);
 }
 
-/** Start the oldest queued request when the port is idle. */
+/**
+ * Start queued requests, oldest first, while the port is idle: until one is
+ * active, or none is left. A request whose command cannot be built is
+ * completed with `-EIO`.
+ *
+ * Interrupts are masked across the whole of it. Taking a request off the
+ * queue makes it the active one before its command is issued, and an
+ * interrupt arriving in that window would find a request whose command has
+ * not been sent and the slot's bit clear, and complete it as though the disk
+ * had answered; the queue would then hold requests nothing starts, each
+ * waiting out its deadline. The polled path calls this with interrupts on.
+ */
 static void ahci_start_next(struct ahci_disk *d)
 {
-    /* Interrupts are masked across the whole of it. Taking a request off
-     * the queue publishes it as the active one before its command is
-     * issued, and an interrupt arriving in that window finds a request
-     * whose command has not been sent and the slot's bit clear, and
-     * completes it as though the disk had answered. The queue then holds
-     * requests nobody will start, and each waits out its deadline. The
-     * polled path calls this with interrupts on, which is where that
-     * window was reached. */
     uint32_t flags = kirq_save();
 
     while (!d->active && d->queue_head) {
@@ -1282,9 +1281,12 @@ static void ahci_start_next(struct ahci_disk *d)
 }
 
 /**
- * Finish the active command by polling, for a caller that needs the port
- * now and cannot take an interrupt: the fault path with interrupts off.
- * The interrupt that would have completed it finds nothing active.
+ * Finish the active command by polling, with interrupts masked, for a caller
+ * that needs the port at once and cannot take an interrupt: the fault path
+ * with interrupts off. A write's flush half is finished too. A command that
+ * does not leave the slot within five seconds has its request completed with
+ * `-EIO` after the port's recovery. The interrupt that would have completed
+ * the command finds nothing active.
  */
 static void ahci_drain(struct ahci_disk *d)
 {
@@ -1330,7 +1332,8 @@ static void ahci_drain(struct ahci_disk *d)
     kirq_restore(flags);
 }
 
-/** The device's `submit`: queue `r`, and start it when the port is idle. */
+/** The device's `submit`: queue `r`, and start it when the port is idle.
+ * Returns 0, or `-EIO` for a range past the disk. */
 static int ahci_submit(block_device_t *device, struct block_request *r)
 {
     struct ahci_disk *d = (struct ahci_disk *)device->drvdata;
@@ -1354,7 +1357,7 @@ static int ahci_submit(block_device_t *device, struct block_request *r)
 }
 
 /** The device's `flush`: queue `r`, a flush alone, as `submit` queues a
- * transfer, or with `r` NULL flush now by polling, for a caller that
+ * transfer, or with `r` NULL flush at once by polling, for a caller that
  * cannot sleep. */
 static int ahci_flush_submit(block_device_t *device, struct block_request *r)
 {
@@ -1367,7 +1370,9 @@ static int ahci_flush_submit(block_device_t *device, struct block_request *r)
 
 /**
  * The controller's interrupt: every port with a disk whose command has
- * left the slot is finished, and its interrupt status cleared.
+ * left the slot is finished, and its interrupt status cleared. A port with
+ * a polled command in flight is left to its caller, and a fatal error with
+ * the command still in the slot recovers the port and fails the request.
  */
 static void ahci_handler(isr_params_t *params)
 {
@@ -1440,10 +1445,13 @@ void ahci_start(void)
 /* The last IDENTIFY answer, which the registry reads the strings from. */
 static volatile uint16_t ahci_idbuf[BLOCK_SECTOR_SIZE / 2];
 
-/** IDENTIFY `d` and record its 48-bit sector count (words 100-103).
-   Rejects a device whose logical sector is not 512 bytes (IDENTIFY word 106
-   bit 14 valid, bit 12 set), which the block math needs. Returns 0 on success,
-   -1 on a failed IDENTIFY or a bad device. */
+/**
+ * IDENTIFY `d` by polling, into `ahci_idbuf`, and record its 48-bit sector
+ * count (words 100-103). Returns 0, or -1 with `ahci_err` set for a failed
+ * IDENTIFY, a device whose logical sector is not 512 bytes (word 106 bit 14
+ * valid and bit 12 set), which the block math needs, or a capacity of none,
+ * past 48 bits, or of 48 one bits, which is a device that did not answer.
+ */
 static int ahci_identify(struct ahci_disk *d)
 {
     volatile uint16_t *w = ahci_idbuf;
@@ -1463,9 +1471,7 @@ static int ahci_identify(struct ahci_disk *d)
         ahci_err = "the device reported no sectors";
         return -1;
     }
-    /* An all-ones capacity is a device that did not answer, not a disk of
-     * 144 petabytes: the field is 48 bits, so the top 16 must be zero, and a
-     * driver that accepted it would truncate every LBA it later computed. */
+    /* 48 one bits is a device that did not answer, not a disk of 144 PB. */
     if ((d->sectors >> 48) != 0 || d->sectors == 0xFFFFFFFFFFFFull) {
         ahci_err = "the device reported an impossible capacity";
         return -1;
@@ -1473,11 +1479,13 @@ static int ahci_identify(struct ahci_disk *d)
     return 0;
 }
 
-/** Flush the device write cache so a completed write reaches durable media,
-   the durability the dirty-flag and pc_sync write-back contract relies on.
-   The `unflushed` mark is cleared before the command, because the queue
-   starts again before the command returns and a write answered then must
-   leave it set; a failed flush sets it again. */
+/**
+ * Flush the device's write cache by polling, so a completed write is on the
+ * medium, as the buffer cache's dirty flags and `pc_sync` expect. Returns as
+ * `ahci_run_command` does. The `unflushed` mark is cleared before the
+ * command, because the queue starts again before the command returns and a
+ * write answered then must leave it set; a failed flush sets it again.
+ */
 static int ahci_flush(struct ahci_disk *d)
 {
     int rc;
@@ -1490,7 +1498,8 @@ static int ahci_flush(struct ahci_disk *d)
     return rc;
 }
 
-/** The device's read: a polled READ DMA EXT of `count` sectors from `lba`. */
+/** The device's `read`: a polled `READ DMA EXT` of `count` sectors from
+ * `lba`, from any context. */
 static int ahci_read(block_device_t *device, uint64_t lba, uint32_t count, void *buffer)
 {
     struct ahci_disk *d = (struct ahci_disk *)device->drvdata;
@@ -1504,8 +1513,8 @@ static int ahci_read(block_device_t *device, uint64_t lba, uint32_t count, void 
 }
 
 /**
- * The device's write: a polled `WRITE DMA EXT`, then `FLUSH CACHE EXT` for
- * durability.
+ * The device's `write`: a polled `WRITE DMA EXT`, then `FLUSH CACHE EXT` for
+ * durability, from any context.
  */
 static int ahci_write(block_device_t *device, uint64_t lba, uint32_t count, const void *buffer)
 {
@@ -1532,14 +1541,17 @@ static int ahci_write(block_device_t *device, uint64_t lba, uint32_t count, cons
  * that answers is `block0`. The whole probe fails only when no port ends up
  * with a disk, so a machine whose second bay holds a dead drive still boots
  * from its first.
+ *
+ * `block0` is cleared before anything else, so a failed probe leaves no
+ * published device on a controller it has reset, whoever called it;
+ * `ata_init` differs, and keeps a `block0` another driver has published. A
+ * bring-up that fails dumps the registers to the console (`ahci_dump`), so
+ * that one failed boot shows the state behind its failure.
  */
 int ahci_init(void)
 {
     int i, published = 0;
 
-    /* Leave the published device unset until bring-up succeeds, so a failed
-     * probe fails closed whoever called it. ata_init differs: it keeps a
-     * block0 another driver has already published. */
     block0 = 0;
     ahci_base = 0;
     ahci_port = -1;
@@ -1556,10 +1568,6 @@ int ahci_init(void)
     }
     if (ahci_hba_own() != 0 || ahci_quiesce_ports() != 0 || ahci_select_port() != 0) {
         klog(KLOG_ERR, "ahci", "unusable: %s", ahci_err);
-        /* The registers behind the refusal, into the log the machine hands
-         * out afterwards (/dev/bootlog): one failed boot then leaves enough
-         * to decide between every cause the investigation named, instead of
-         * costing another trip to the machine. */
         if (ahci_base) {
             ahci_dump();
         }
@@ -1611,6 +1619,11 @@ int ahci_init(void)
     return 0;
 }
 
+/**
+ * CAP2 says whether a handoff exists, BOHC how it went, and PCS whether the
+ * Intel port PHYs are enabled at all: each is a cause of a machine that finds
+ * no disk, so the dump has all three.
+ */
 void ahci_dump(void)
 {
     uint32_t cap, ghc, pi, vs;
@@ -1627,10 +1640,6 @@ void ahci_dump(void)
     vs = ahci_read32(AHCI_VS);
     console_printf("ahci: CAP=%X GHC=%X PI=%X VS=%X ports=%d active=%d\n", cap, ghc, pi, vs,
                    (int)((cap & AHCI_CAP_NP_MASK) + 1), ahci_port);
-    /* CAP2 says whether a handoff exists, BOHC how it went, and PCS whether
-     * the Intel port PHYs are enabled at all; each is one of the named causes
-     * of a machine that finds no disk, so the dump that decides between them
-     * has to carry all three. */
     console_printf("ahci: CAP2=%X BOHC=%X PCS=%X\n", ahci_read32(AHCI_CAP2), ahci_read32(AHCI_BOHC),
                    (unsigned)pci_read_config16(ahci_pci.bus, ahci_pci.device, ahci_pci.function,
                                                AHCI_INTEL_PCS));

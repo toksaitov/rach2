@@ -1,27 +1,29 @@
 /*
- * usbdisk.c: a stick as a disk of the registry, from its arrival to the
- * last hold on it.
+ * usbdisk.c: a USB stick's logical unit as a disk of the registry, from its
+ * arrival to the last hold on it.
  *
  * Three things happen here. A logical unit the class driver has brought up
  * is registered as a disk, given the lowest free number, and has its
- * partition table read by the partition service, as a SATA disk is; the
- * sectors the service asks for come through the pump, a request at a time,
+ * partition table read by the partition service, as a SATA disk's is; the
+ * sectors the service reads come through the pump, a request at a time,
  * since there is no process to put to sleep there. A stick that has gone
  * stops being served, its nodes are hidden and its cache buffers are dealt
  * with. And a stick that has gone and that nothing holds any more is
- * reclaimed: its number goes back, its node slots go back to devfs for the
- * next stick to take, and the class driver's transport slot goes back when
- * no other logical unit of the same stick still uses it.
+ * reclaimed: its number and its node slots go to the next disk registered,
+ * and the class driver's transport slot goes back when no other logical unit
+ * of the same stick still uses it.
  *
- * Publishing and reclaiming touch what a process inside a syscall may be in
- * the middle of changing, so those run at a syscall entry, before the
- * dispatch, or on a pump pass that did not interrupt a syscall. Reading a
- * partition table is not one of those: the scan advances on every pump pass,
- * since it touches only its own stick. On this one
- * processor a syscall is not preempted, so no count is half updated at
- * either moment; and a process only ever sleeps at a point where each thing
- * it holds has already been recorded in a count `usbdisk_holds` reads, so
- * the processes asleep inside syscalls are counted exactly.
+ * Registering and reclaiming touch what a process inside a system call may
+ * be in the middle of changing, so those run at a system call's entry,
+ * before the dispatch, or on a pump pass that did not interrupt a system
+ * call (`settle`). Reading a partition table is not one of those: the scan
+ * advances on every pump pass, and at its end gives the disk its table and
+ * publishes its whole-disk window, since it touches only its own stick.
+ * Kernel code runs on one processor at a time, under the big lock
+ * (`proc/smp.h`), and a system call is not preempted, so no count is half
+ * updated at either moment; and a process only ever sleeps at a point where
+ * each thing it holds has already been recorded in a count `usbdisk_holds`
+ * reads, so the processes asleep inside system calls are counted exactly.
  */
 
 #include "usbdisk.h"
@@ -51,7 +53,7 @@ struct usbdisk {
     int state;
     int slot;   /* the class driver's slot */
     int lun;    /* the logical unit on it */
-    int marked; /* the cache has been told the device has gone */
+    int marked; /* `close_down` has run: the nodes hidden and the caches told */
     struct disk *disk;
 };
 
@@ -120,11 +122,6 @@ int usbdisk_free(void)
     return free_records;
 }
 
-/**
- * How many things hold stick `n`: descriptors open on its nodes, requests
- * the class driver's device still owns, and on every view the mounts, the
- * cache buffers and the requests. Zero for a record that has no disk yet.
- */
 int usbdisk_holds(int n)
 {
     struct disk *d;
@@ -151,23 +148,23 @@ int usbdisk_holds(int n)
  * The reading of a stick's table, from the pump, where there is no process
  * to put to sleep. The partition service reads through a callback, so it
  * is given one that answers from a cache of sectors fetched the way the
- * pump does everything: a request started, and asked after on the passes
- * that follow. A pass of the service that asks for a sector the cache does
- * not have is a miss; the pass's result is dropped, the sector is fetched,
- * and the service runs again once it has arrived, until a pass asks for
- * nothing new. One table is read at a time, and a second stick waits.
+ * pump does everything: a request started, and checked on the passes that
+ * follow. A pass of the service that reads a sector the cache does not have
+ * is a miss; the pass's result is dropped, the sector is fetched, and the
+ * service runs again once it has arrived, until a pass reads nothing new.
+ * One table is read at a time, and a second stick waits.
  */
 #define SCAN_CACHE_SECTORS 96 /* sector 0, two headers and arrays, the EBR chain */
 
 static struct {
-    int n; /* the record being read, -1 for none */
-    int cached;
+    int n;      /* the record being read, -1 for none */
+    int cached; /* the sectors in `lba` and `sector` */
     uint64_t lba[SCAN_CACHE_SECTORS];
     uint8_t sector[SCAN_CACHE_SECTORS][BLOCK_SECTOR_SIZE];
-    int miss;
+    int miss; /* the pass read a sector not cached, `miss_lba` */
     uint64_t miss_lba;
     uint32_t miss_count;
-    struct block_request *request;
+    struct block_request *request; /* the read in flight, or NULL */
     uint32_t generation;
     uint64_t request_lba;
     uint32_t request_count;
@@ -176,6 +173,11 @@ static struct {
     uint8_t got[BLOCK_REQ_SECTORS * BLOCK_SECTOR_SIZE]; /* what a finished request read */
 } scan = {-1, 0, {0}, {{0}}, 0, 0, 0, 0, 0, 0, 0, {0}, {0}, {0}};
 
+/**
+ * The partition service's read, from the cache. Returns 0, or -1 for a read
+ * of a sector the cache lacks; the first such sector, and the rest of that
+ * read up to a page, is noted as the miss.
+ */
 static int scan_read(void *ctx, uint64_t lba, uint32_t count, void *buf)
 {
     uint8_t *out = (uint8_t *)buf;
@@ -207,7 +209,8 @@ static int scan_read(void *ctx, uint64_t lba, uint32_t count, void *buf)
 }
 
 /** Run the service over the cache: 1 when it finished, 0 when a sector is
- * being fetched, -1 when the cache is full or the stick will not answer. */
+ * being fetched, -1 when the stick has gone, the cache would overflow, or no
+ * request can be had. */
 static int scan_pass(int n)
 {
     struct usbdisk *st = &sticks[n];
@@ -235,7 +238,8 @@ static int scan_pass(int n)
     return 0;
 }
 
-/** The stick has been read: register the table, publish the nodes. */
+/** The stick has been read: give the disk its table and publish its
+ * whole-disk window, or close a stick whose disk or device has gone. */
 static void scan_done(int n)
 {
     struct usbdisk *st = &sticks[n];
@@ -254,7 +258,14 @@ static void scan_done(int n)
          disk_table_name(d), (int)(dev->sector_count / 2048), d->table.count, d->table.refused);
 }
 
-/** Start or advance the one scan in progress; the pump calls it every pass. */
+/**
+ * Start or advance the one scan in progress; the pump calls it every pass.
+ * A table that cannot be read leaves the disk with none (`PART_UNREAD`).
+ *
+ * A stick pulled while its table was being read has a request in flight,
+ * which is the device's until it answers or the deadline quarantines it, so
+ * the scan checks it until one of those and only then lets the stick go.
+ */
 static void scan_advance(void)
 {
     int n, rc;
@@ -274,10 +285,6 @@ static void scan_advance(void)
     }
     n = scan.n;
     if (sticks[n].state != STICK_SCANNING) {
-        /* Pulled while its table was being read: the request in flight is
-         * the device's until it answers or until the deadline quarantines it,
-         * so it is asked after until one of those, and only then is the scan
-         * let go of. */
         int status = 0;
 
         if (scan.request &&
@@ -321,9 +328,10 @@ static void scan_advance(void)
 }
 
 /**
- * Register the unit that arrived as a disk and start reading its table.
- * Nothing here sleeps: the registry and the nodes are made in place, and
- * the table comes through the pump.
+ * Register the unit that arrived as a disk, with its identity from INQUIRY,
+ * and start reading its table; a unit whose device has gone, or that the
+ * registry has no room for, is closed. Nothing here sleeps: the registry
+ * record is made in place, and the table comes through the pump.
  */
 static void bring_up(int n)
 {
@@ -356,7 +364,8 @@ static void bring_up(int n)
     s->state = STICK_SCANNING;
 }
 
-/** The stick has gone: hide its nodes and tell the caches. */
+/** The stick has gone: hide its nodes, and tell the loop devices and the
+ * buffer cache that each of its views has gone. */
 static void close_down(int n)
 {
     struct disk *d = sticks[n].disk;
@@ -376,7 +385,11 @@ static void close_down(int n)
 
 /**
  * Nothing holds the stick any more: its number goes back, and its transport
- * slot with it when no other logical unit of the same stick still holds it.
+ * slot with it when no other logical unit of the same stick has a record.
+ *
+ * The slot is the transport, and a device with several logical units has a
+ * record for each. Releasing it while another unit is still held would leave
+ * that unit's holders addressing storage the next device to arrive can take.
  */
 static void reclaim(int n)
 {
@@ -388,10 +401,6 @@ static void reclaim(int n)
     if (d) {
         disk_release(d);
     }
-    /* The slot is the transport, and a device with several logical units
-     * has a record for each. Releasing it while another unit is still
-     * held would leave that unit's holders addressing storage the next
-     * device to arrive can take. */
     for (k = 0; k < USBDISK_MAX; k++) {
         if (k != n && sticks[k].state != STICK_NONE && sticks[k].slot == sticks[n].slot) {
             shared = 1;
@@ -411,8 +420,10 @@ static void reclaim(int n)
 
 /**
  * Settle what is pending: register what arrived, close what has gone, reclaim
- * what nothing holds. A new stick's partition table is not read here; the
- * scan reads it over the pump passes that follow.
+ * what nothing holds and no scan is reading. A new stick's partition table is
+ * not read here; the scan reads it over the pump passes that follow. Called
+ * where no system call is in progress: at a system call's entry, or from a
+ * pump pass that did not interrupt one.
  */
 static void settle(void)
 {
@@ -463,6 +474,8 @@ void usbdisk_service(void)
     }
 }
 
+/** Append `text` to `out`, of `size` bytes, at `at`, keeping a byte for the
+ * terminator. Returns the new end. */
 static int put(char *out, int size, int at, const char *text)
 {
     while (*text && at < size - 1) {
@@ -471,7 +484,8 @@ static int put(char *out, int size, int at, const char *text)
     return at;
 }
 
-/** Append a 64-bit sector count, which a stick past 2 TiB has. */
+/** Append a 64-bit sector count, which a stick past 2 TiB has, as `put`
+ * appends. */
 static int put_sectors(char *out, int size, int at, uint64_t value)
 {
     char digits[24];
@@ -482,6 +496,7 @@ static int put_sectors(char *out, int size, int at, uint64_t value)
     return at;
 }
 
+/** Append `value` in decimal, as `put` appends. */
 static int putnum(char *out, int size, int at, uint32_t value)
 {
     char digits[12];

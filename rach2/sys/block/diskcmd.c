@@ -1,9 +1,12 @@
 /*
- * diskcmd.c: the disk command allowlist, decided when the kernel is built.
+ * diskcmd.c: the disk command policy, chosen when the kernel is built.
  *
- * Both drivers call `diskcmd_allowed` at the one place a command leaves them
- * for the device: `ahci_run_command` in ahci.c, and `ata_command` in ata.c. A
- * refusal there is final; there is no path around it and no way to ask again.
+ * The ATA driver judges every command in `ata_command`, the AHCI driver in
+ * `ahci_build_command`, and the NVMe driver its I/O commands in `nvme_build`
+ * and Identify in `nvme_identify`; each is the one place such a command
+ * leaves its driver, so a command not allowed there is not issued at all.
+ * The NVMe admin commands that set up its queues touch no medium and are not
+ * judged.
  */
 
 #include "diskcmd.h"
@@ -36,9 +39,6 @@ int diskcmd_allowed_under(int policy, uint8_t command)
     case DISKCMD_IDENTIFY:
         return 1;
     default:
-        /* Everything else, named or not. A command this file has never heard
-         * of is refused for the same reason a write is: nothing knows what it
-         * would do to somebody else's disk. */
         return 0;
     }
 }

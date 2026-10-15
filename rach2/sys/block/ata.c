@@ -1,7 +1,7 @@
 /*
- * The legacy ATA driver: the two channels of an IDE controller, each with
- * a master and a slave, driven by the controller's bus master where there is
- * one and by PIO where there is not.
+ * ata.c: the legacy ATA driver: the two channels of an IDE controller, each
+ * with a master and a slave, driven through the controller's bus master where
+ * there is one and through the data port where there is not.
  *
  * A channel is a pair of port ranges, the command block and the control
  * block, at the legacy addresses or where a controller in native mode says
@@ -10,30 +10,28 @@
  * that answers IDENTIFY with the disk signature is published as a block
  * device and registered with the disk registry; the first found becomes
  * `block0`, unless another driver has already published one. Transfers are
- * `READ DMA` and `WRITE DMA` through the
- * controller's bus master, one command and one completion per request,
- * where the controller has a bus master and the drive answers IDENTIFY
- * with DMA; `READ SECTORS` and `WRITE SECTORS` through the data port, a
- * sector a time, where either is missing. Both are in LBA28 when the
- * sectors lie below 2^28 and in their 48-bit forms above, on a drive that
- * has them; a write is followed by a cache flush.
+ * `READ DMA` and `WRITE DMA` through the controller's bus master, one
+ * command and one completion per request, where the controller has a bus
+ * master and the drive answers IDENTIFY with DMA; `READ SECTORS` and
+ * `WRITE SECTORS` through the data port, a sector a time, where either is
+ * missing. Both are in LBA28 when the sectors lie below 2^28 and in their
+ * 48-bit forms above, on a drive that has them; a write is followed by a
+ * cache flush.
  *
- * The bus master is the PIIX form: a physical region descriptor naming
- * the transfer's memory, its address in one register and its start bit in
- * another, and the drive's interrupt at the end. The memory is the
- * channel's own bounce buffer, one request's worth, aligned so it lies in
- * one 64 KiB region as the bus master requires and static so it lies below
- * the identity map's limit, where its address is its physical address. A
- * caller's buffer is copied into it before a write and out of it after a
- * read, in the caller's own context: a fault-safe device's transfer may
- * not schedule against the caller's memory, since the page cache's window
- * may evict or remap that memory while another process runs, and a
- * sleeping transfer straight into it would move whatever page is there
- * when the engine runs. The processor's cache is coherent
- * with this DMA, so nothing is flushed. The data port path costs a
- * completion a sector, and under a hypervisor each is a round trip through
- * it: a 64 MiB write measured 217 s that way and 25 s emulated, which is
- * what the bus master is here for.
+ * The bus master is the PIIX form: a physical region descriptor giving the
+ * transfer's memory, its address in one register and its start bit in
+ * another, and the drive's interrupt at the end. The memory is the channel's
+ * own bounce buffer, one request's worth, aligned so it lies in one 64 KiB
+ * region as the bus master requires, and static, in the kernel image, so it
+ * is physically contiguous and below 4 GiB. A caller's buffer is copied into
+ * it before a write and out of it after a read, in the caller's own context:
+ * a fault-safe device's transfer may not let another process run against the
+ * caller's memory, since the page cache's window may evict or remap that
+ * memory meanwhile, and a sleeping transfer straight into it would move
+ * whatever page is there when the engine runs. The processor's cache is
+ * coherent with this DMA, so nothing is flushed. The data port costs a
+ * completion a sector, each a round trip through the hypervisor when there
+ * is one; the bus master costs one completion a request.
  *
  * A channel takes one command at a time. A caller that may sleep owns the
  * channel from its first register write to its last, sleeping on the
@@ -51,10 +49,10 @@
  * interrupt, which the drive raises when a sector is ready or a command is
  * done, and by the tick, which bounds a lost interrupt and ends a wait
  * that has lasted `ATA_WAIT_TICKS`. From a page fault, with interrupts off
- * and no timer to bound by, the wait polls and counts iterations, as the
- * whole driver once did. Under a hypervisor every port read is an exit,
- * so a write that was polled to completion cost forty times what it costs
- * emulated; the polls and the ticks waited are counted for `/proc/disk`.
+ * and no timer to bound by, the wait polls and counts its reads. Under a
+ * hypervisor every port read is an exit, which is why a wait that may sleep
+ * reads the status only a few times first; the status reads and the ticks
+ * waited are counted for `/proc/disk`.
  */
 
 #include "../arch/x86/portio.h"
@@ -80,7 +78,7 @@
 
 /* The most one request to the disk may move: 32 KiB, which is also the
  * bounce buffer's size, and which PIO moves a sector at a time through the
- * data port with interrupts off. A request is kept short here where the AHCI
+ * data port with interrupts off. A request is kept short here, where the AHCI
  * disk takes the block layer's whole limit. */
 #define ATA_REQ_SECTORS 64u
 
@@ -143,7 +141,7 @@ struct ata_prd {
 #define ATA_DRIVE_LBA    0x40
 #define ATA_DRIVE_SLAVE  0x10
 
-/* The machine's ports, and whatever a test put in their place. */
+/* The machine's ports, or what a test put in their place (`ata_set_io`). */
 static const struct ata_io ata_port_io = {inb, outb, outd, insw, outsw};
 static const struct ata_io *ata_io = &ata_port_io;
 
@@ -165,11 +163,11 @@ void ata_set_io(const struct ata_io *ops)
    and a read; the bound is the number of rounds. With interrupts off
    there is no timer to bound by, so the watchdog counts rounds instead of
    time: a round's pause is ten thousand `pause` instructions, a few tens
-   of microseconds on the slowest of these machines, so the bound is at
-   least five seconds. The pause is what lets an emulator answer: under a
-   hypervisor every status read is a trap that takes the emulator's lock,
-   and a loop of nothing but reads can hold the emulator's own completion
-   out for as long as the loop runs. */
+   of microseconds at the least on the processors this kernel runs on, so
+   the bound is at least five seconds. The pause is what lets an emulator
+   answer: under a hypervisor every status read is an exit that takes the
+   emulator's lock, and a loop of nothing but reads can keep the emulator's
+   own completion out for as long as the loop runs. */
 #define ATA_POLL_PLAIN  256
 #define ATA_PAUSE_LOOPS 10000
 #define ATA_POLL_LIMIT  200000
@@ -177,7 +175,7 @@ void ata_set_io(const struct ata_io *ops)
 /* How many times a wait that may sleep reads the status first: the
    first sector of a write is ready within these without an interrupt,
    and a DMA command is not, on the emulator or the hardware, so the rest
-   of the wait is the sleep. Each read is a trap under a hypervisor. */
+   of the wait is the sleep. Each read is an exit under a hypervisor. */
 #define ATA_SPIN_BEFORE_SLEEP 8
 
 /* A sleeping wait's bound in ticks, thirty seconds at 100 Hz, the AHCI and
@@ -206,10 +204,10 @@ struct ata_channel {
     wait_queue_t wq;         /* sleepers waiting for the drive's status */
     volatile uint32_t ticks; /* counted by ata_tick, the sleeping wait's clock */
     uint32_t irqs;           /* interrupts taken on this channel */
-    int owner;               /* the caller that holds the channel */
+    int owner;               /* 1 while a caller owns the channel */
     int sleepers;            /* callers asleep for a command, for the tick's count */
     int error_seen; /* a caller without the channel found ERR or DF, which are the owner's */
-    uint16_t bm;    /* the bus master's registers, or 0 for none */
+    uint16_t bm;    /* the bus master's first port, or 0 for none */
     /* The descriptor, aligned to its size, and the bounce buffer, aligned
        to its own so it lies in one 64 KiB region; both in the image's .bss,
        below 4 GiB, and the controller is given `virt_to_phys` of each. */
@@ -217,8 +215,8 @@ struct ata_channel {
     uint8_t bounce[ATA_BOUNCE_BYTES] __attribute__((aligned(ATA_BOUNCE_BYTES)));
 };
 
-/* A sleeping wait: the channel, what the status must show, when the wait
-   began, and its answer. */
+/* A sleeping wait: the channel, what the status must show (`ATA_WANT_`),
+   the channel's `ticks` when the wait began, and its answer, 0 or `-EIO`. */
 struct ata_wait {
     struct ata_channel *ch;
     int want;
@@ -226,8 +224,9 @@ struct ata_wait {
     int rc;
 };
 
-/* What a wait is for: the drive not busy, idle with no data pending, or
-   with a sector to move. */
+/* What a wait is for: the drive not busy; ready, not busy with no data
+   pending; with a sector to move; or idle, with no command in any phase
+   (`ata_status_done`). */
 #define ATA_WANT_NOT_BUSY 0
 #define ATA_WANT_READY    1
 #define ATA_WANT_DATA     2
@@ -251,7 +250,11 @@ static struct ata_drive drives[4];
 static int ata_read(block_device_t *device, uint64_t lba, uint32_t count, void *buffer);
 static int ata_write(block_device_t *device, uint64_t lba, uint32_t count, const void *buffer);
 
-/** Issue `command` to the selected drive of `ch`, unless the policy refuses. */
+/**
+ * Issue `command` to the drive selected on `ch` when the disk policy allows
+ * it, and count it for `/proc/disk`. Returns 1 when it was issued, 0 when the
+ * policy does not allow it.
+ */
 static int ata_command(const struct ata_channel *ch, uint8_t command)
 {
     if (!diskcmd_allowed(command)) {
@@ -281,6 +284,13 @@ static void ata_settle(const struct ata_channel *ch)
  * Read the status once and say whether a wait for `want` is over. Returns
  * 1 with `*rc` set, 0 or `-EIO`, when it is, and 0 while the drive is
  * still busy or, for a wait for data, has none yet.
+ *
+ * A wait for idle ends only with no command in any phase: a drive in a data
+ * phase, PIO or DMA, shows DRQ with BSY clear, and a command written to it
+ * then is ignored or, worse, answered with the other command's data. The
+ * error bits an idle drive shows are the owner's command's, so they do not
+ * fail that wait; they are noted in `error_seen` for the owner, since the
+ * command written next clears them.
  */
 static int ata_status_done(struct ata_channel *ch, int want, int *rc)
 {
@@ -294,11 +304,6 @@ static int ata_status_done(struct ata_channel *ch, int want, int *rc)
         *rc = 0;
         return 1;
     }
-    /* Idle is no command in any phase: a drive in a data phase, PIO or
-       DMA, shows DRQ with BSY clear, and a command written to it then is
-       refused or, worse, answered with the other command's data. The error
-       bits are the owner's command's: they are noted for it, since the
-       command written next clears them. */
     if (want == ATA_WANT_IDLE) {
         if (status & ATA_SR_DRQ) {
             return 0;
@@ -347,16 +352,17 @@ static int ata_can_sleep(void)
     return ata_interrupts_on() && proc_in_syscall() && sched_is_enabled();
 }
 
-/* The condition for a channel's owner to leave. */
+/** The condition a caller waiting for the channel waits on: no owner. */
 static int ata_free(void *arg)
 {
     return ((struct ata_channel *)arg)->owner == 0;
 }
 
 /**
- * Take the channel for one command sequence. Returns 1 with the channel
- * owned, or 0 for a caller that cannot sleep while another owns it, who
- * then waits for the drive alone and uses the data port.
+ * Take the channel for one command sequence. A caller that can sleep waits
+ * on the channel's queue until no one owns it. Returns 1 with the channel
+ * owned, or 0 when another owns it still, as it may for a caller that
+ * cannot sleep, who then waits for the drive alone and uses the data port.
  */
 static int ata_acquire(struct ata_channel *ch)
 {
@@ -375,14 +381,15 @@ static int ata_acquire(struct ata_channel *ch)
     return 1;
 }
 
+/** Give up the channel and wake the callers waiting for it. */
 static void ata_release(struct ata_channel *ch)
 {
     ch->owner = 0;
     wq_wake_all(&ch->wq);
 }
 
-/* The sleeping wait's condition: the status says the wait is over, or the
-   tick says it has lasted long enough to be a drive that never answers. */
+/** The sleeping wait's condition: the status says the wait is over, or the
+ * tick says it has lasted long enough to be a drive that never answers. */
 static int ata_wait_cond(void *arg)
 {
     struct ata_wait *w = arg;
@@ -400,12 +407,15 @@ static int ata_wait_cond(void *arg)
     return 0;
 }
 
-/** Stay off the device for a while, without touching a timer either. */
+/**
+ * Stay off the device for a while, without touching a timer either:
+ * `ATA_PAUSE_LOOPS` `pause` instructions. A host test, whose host may not be
+ * an x86, gives `ata_hosttest_paused` instead, its model of an emulator whose
+ * completion arrives while the driver is off the device.
+ */
 static void ata_pause(void)
 {
 #ifdef ATA_HOSTTEST
-    /* A host test's model of the emulator, whose completion arrives while
-       the driver is off the device; the host may not be an x86. */
     void ata_hosttest_paused(void);
 
     ata_hosttest_paused();
@@ -465,6 +475,8 @@ static int ata_wait_for(struct ata_channel *ch, int want)
     return w.rc;
 }
 
+/** Wait until the drive is not busy; only a drive that never answers is
+ * `-EIO`. */
 static int ata_wait_not_busy(struct ata_channel *ch)
 {
     return ata_wait_for(ch, ATA_WANT_NOT_BUSY);
@@ -475,7 +487,7 @@ static int ata_wait_not_busy(struct ata_channel *ch)
  *
  * This is the wait before a command from a caller that does not own the
  * channel: the owner's command may be in flight, and its data phase, DRQ
- * with BSY clear, is where a second command is refused or answered with
+ * with BSY clear, is where a second command is ignored or answered with
  * the first one's data. The owner's DMA is issued and started with
  * interrupts off, so a caller here sees it either not yet issued or
  * running, never issued and waiting for its engine.
@@ -515,9 +527,11 @@ static void ata_irq(isr_params_t *params)
 }
 
 /**
- * The tick: each channel's clock advances, and a channel with a sleeper is
- * woken so the sleeper re-reads the status, which bounds an interrupt the
- * drive never raised, the first sector of a write among them.
+ * A woken sleeper reads the status again, which ends a wait for an interrupt
+ * the drive never raised, the first sector of a write among them. A channel
+ * with sleepers counts toward `disk-wait-ticks` of `/proc/disk` here, since
+ * this driver's transfers take no request of the block layer, which counts
+ * the ticks its requests wait.
  */
 void ata_tick(void)
 {
@@ -525,9 +539,6 @@ void ata_tick(void)
 
     for (c = 0; c < 2; c++) {
         if (channels[c].sleepers > 0) {
-            /* The counter `/proc/disk` reports as `disk-wait-ticks`: this
-               driver's transfers take no request of the block layer, so
-               the tick counts their sleepers here. */
             block_count_wait_tick();
         }
     }
@@ -545,7 +556,8 @@ void ata_tick(void)
  * Select `d` and program `count` sectors from `lba`, in the 28-bit form
  * when the range lies below 2^28 and the 48-bit form otherwise. Returns
  * the read or write command to issue for that form, 0 or 1 for `write`,
- * through the data port or, for `dma`, through the bus master.
+ * through the data port or, for `dma`, through the bus master. The 48-bit
+ * form puts no address bits in the drive register.
  */
 static uint8_t ata_program(const struct ata_drive *d, uint64_t lba, uint32_t count, int write,
                            int dma)
@@ -566,8 +578,7 @@ static uint8_t ata_program(const struct ata_drive *d, uint64_t lba, uint32_t cou
         }
         return write ? ATA_CMD_WRITE : ATA_CMD_READ;
     }
-    /* The 48-bit form: each register is written twice, the high byte first,
-       and the drive register has no address bits. */
+    /* The 48-bit form writes each register twice, the high byte first. */
     ata_io->out8(ch->io + ATA_REG_DRIVE, (uint8_t)(ATA_DRIVE_SELECT | ATA_DRIVE_LBA | slave));
     ata_io->out8(ch->io + ATA_REG_SECCOUNT, (uint8_t)(count >> 8));
     ata_io->out8(ch->io + ATA_REG_LBA_LOW, (uint8_t)(lba >> 24));
@@ -585,11 +596,21 @@ static uint8_t ata_program(const struct ata_drive *d, uint64_t lba, uint32_t cou
 
 /**
  * Move `count` sectors at `lba` through the bus master, one command and
- * one completion: a write's bytes copied into the bounce buffer first, the
- * descriptor written, the direction set, the command issued, the engine
- * started, the drive waited for, and a read's bytes copied out after.
- * Returns 0, or `-EIO` for a transfer the drive or the bus master
- * reported failed. `count` is at most ATA_REQ_SECTORS, the bounce's size.
+ * one completion: a write's bytes from `src` copied into the bounce buffer
+ * first, the descriptor written, the direction set, the command issued, the
+ * engine started, the drive waited for, and a read's bytes copied out to
+ * `dst` after. `count` is at most ATA_REQ_SECTORS, the bounce's size, and the
+ * caller owns the channel. Returns 0, `-EIO` for a transfer the drive or the
+ * bus master reported failed, or for a read the disk policy does not allow,
+ * and `-EPERM` for a write it does not allow.
+ *
+ * The command is issued and the engine started with interrupts off: a drive
+ * that has the command and not the engine shows DRQ and waits, and a caller
+ * that cannot sleep, arriving on a tick between the two, would wait for that
+ * DRQ to clear until its bound and then fail. A caller without the channel
+ * may have run a command of its own while this one slept, and the status it
+ * found first was this command's: an error it saw (`error_seen`) is this
+ * command's failure.
  */
 static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, const void *src,
                             void *dst)
@@ -617,10 +638,6 @@ static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, c
     ata_io->out8(ch->bm + ATA_BM_STATUS, ATA_BM_ERROR | ATA_BM_INTR);
     ata_io->out32(ch->bm + ATA_BM_PRD, (uint32_t)virt_to_phys(&ch->prd));
     ata_io->out8(ch->bm + ATA_BM_CMD, write ? 0 : ATA_BM_READ);
-    /* From the command to the engine's start with interrupts off: a drive
-       that has the command and not the engine shows DRQ and waits, and a
-       caller that cannot sleep, arriving on a tick between the two, would
-       wait for that DRQ to clear until its bound and then fail. */
     flags = kirq_save();
     ch->error_seen = 0;
     if (!ata_command(ch, ata_program(d, lba, count, write, 1))) {
@@ -634,9 +651,6 @@ static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, c
     status = ata_io->in8(ch->bm + ATA_BM_STATUS);
     ata_io->out8(ch->bm + ATA_BM_CMD, 0);
     ata_io->out8(ch->bm + ATA_BM_STATUS, ATA_BM_ERROR | ATA_BM_INTR);
-    /* A caller without the channel may have run a command of its own
-       while this one slept, and the status it found first was this
-       command's: an error it saw is this command's failure. */
     if (rc != 0 || (status & ATA_BM_ERROR) || ch->error_seen) {
         return -EIO;
     }
@@ -646,6 +660,16 @@ static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, c
     return 0;
 }
 
+/**
+ * Read `count` sectors at `lba` into `buffer`: through the bus master, a
+ * bounce buffer's worth a command, when the drive does DMA and the caller
+ * owns the channel (`owned`); through the data port, up to 256 sectors a
+ * command, otherwise. Returns 0 or `-EIO`.
+ *
+ * The data port's sequence runs with interrupts off, whoever the caller is:
+ * a command left in its data phase while another caller ran would hand that
+ * caller its sectors.
+ */
 static int ata_read_on(struct ata_drive *d, uint64_t lba, uint32_t count, void *buffer, int owned)
 {
     struct ata_channel *ch = d->channel;
@@ -672,9 +696,6 @@ static int ata_read_on(struct ata_drive *d, uint64_t lba, uint32_t count, void *
             count -= chunk;
             continue;
         }
-        /* The data port's sequence runs with interrupts off, whoever the
-           caller is: a chunk left in its data phase while another caller
-           ran would hand that caller its sectors. */
         flags = kirq_save();
         if (ata_wait_idle(ch) != 0) {
             kirq_restore(flags);
@@ -700,6 +721,11 @@ static int ata_read_on(struct ata_drive *d, uint64_t lba, uint32_t count, void *
     return 0;
 }
 
+/**
+ * The device's `read`: whole sectors, from any context, owning the channel
+ * where the caller can sleep for it. Returns 0, or `-EIO` for a range past
+ * the disk or a failed transfer.
+ */
 static int ata_read(block_device_t *device, uint64_t lba, uint32_t count, void *buffer)
 {
     struct ata_drive *d = (struct ata_drive *)device->drvdata;
@@ -716,7 +742,15 @@ static int ata_read(block_device_t *device, uint64_t lba, uint32_t count, void *
     return rc;
 }
 
-/** The write's sectors and the flush after them, owning the channel or not. */
+/**
+ * Write `count` sectors at `lba` from `buffer` as `ata_read_on` reads them,
+ * each command followed by a cache flush. Returns 0, `-EIO`, or `-EPERM`
+ * when the disk policy does not allow the write or the flush.
+ *
+ * The flush waits for the drive to be idle first, so a caller without the
+ * channel flushes behind the owner's command and not into it; and it selects
+ * its drive again, since that caller may have selected the other one.
+ */
 static int ata_write_on(struct ata_drive *d, uint64_t lba, uint32_t count, const void *buffer,
                         int owned)
 {
@@ -765,10 +799,6 @@ static int ata_write_on(struct ata_drive *d, uint64_t lba, uint32_t count, const
             }
             kirq_restore(flags);
         }
-        /* The flush waits for the drive idle first, so a caller without
-           the channel flushes behind the owner's command, not into it; and
-           it selects its drive again, since that caller may have selected
-           the other one. */
         if (ata_wait_idle(ch) != 0) {
             return -EIO;
         }
@@ -789,8 +819,10 @@ static int ata_write_on(struct ata_drive *d, uint64_t lba, uint32_t count, const
 }
 
 /**
- * Write whole sectors, then flush the drive's cache, so a returned write is
- * on the medium; the flush is the 48-bit form on a drive that has it.
+ * The device's `write`: whole sectors, then a flush of the drive's cache, so
+ * a returned write is on the medium; the flush is the 48-bit form on a drive
+ * that has it. Returns as `ata_write_on` does, and `-EIO` for a range past
+ * the disk.
  */
 static int ata_write(block_device_t *device, uint64_t lba, uint32_t count, const void *buffer)
 {
@@ -809,19 +841,20 @@ static int ata_write(block_device_t *device, uint64_t lba, uint32_t count, const
 }
 
 /**
- * IDENTIFY the drive `d` and fill its record. Returns 0 for a disk, -1
- * for an absent drive, a packet device, or a drive that did not answer.
+ * IDENTIFY the drive `d`, with its 256 words in `identify`, and fill its
+ * record. Returns 0 for a disk, -1 for an absent drive, a packet device, a
+ * drive that did not answer, or one the block layer cannot use.
  *
  * A channel with no drive leaves the bus floating, which reads as 0 on
  * emulators and 0xFF on most real hardware; 0xFF has BSY set, so without
- * that check an absent drive would spin out the whole watchdog. A packet
- * device answers IDENTIFY with the ATAPI signature in the LBA registers
- * and is refused, and so, by name, is a drive whose logical sector is not
- * 512 bytes (word 106 bit 14 valid and bit 12 set), which the block math
- * needs; the AHCI driver refuses the same. The 48-bit sector count is
- * words 100-103 when word 83 says the drive has the 48-bit commands, else
- * the 28-bit count in words 60-61; a 28-bit drive is capped at what its
- * commands address.
+ * that check an absent drive would wait out the whole polled bound. A packet
+ * device answers IDENTIFY with the ATAPI signature in the LBA registers and
+ * is passed over. A drive whose logical sector is not 512 bytes (word 106
+ * bit 14 valid and bit 12 set), which the block math needs, is rejected with
+ * a record, as the AHCI driver rejects one, and so is a capacity past what
+ * LBA48 addresses. The 48-bit sector count is words 100-103 when word 83
+ * says the drive has the 48-bit commands, else the 28-bit count in words
+ * 60-61; a 28-bit drive is capped at what its commands address.
  */
 static int ata_identify(struct ata_drive *d, uint16_t *identify)
 {
@@ -879,8 +912,11 @@ static int ata_identify(struct ata_drive *d, uint16_t *identify)
 }
 
 /**
- * Take a channel's ports from the controller's base registers when its
- * prog-if says the channel is in native mode; the legacy ports otherwise.
+ * Take a channel's ports from the IDE controller's base registers when its
+ * prog-if says the channel is in native mode, and leave the legacy ports
+ * otherwise; and take the bus master's ports from the fifth base register,
+ * and turn on bus mastering, when the prog-if says it has one. With no IDE
+ * controller on the bus the legacy ports stay and there is no bus master.
  */
 static void ata_native_ports(void)
 {
@@ -930,6 +966,11 @@ static int same_drive(const uint16_t *a, const uint16_t *b)
     return 1;
 }
 
+/**
+ * `rach2.atapio` keeps a drive on the data port, so its transfers move with
+ * interrupts off rather than through the bus master. A caller can still
+ * sleep then, for the channel and for the cache flush that follows a write.
+ */
 int ata_init(void)
 {
     static uint16_t identify[4][ATA_WORDS_PER_SECTOR];
@@ -939,10 +980,9 @@ int ata_init(void)
     for (c = 0; c < 2; c++) {
         struct ata_channel *ch = &channels[c];
 
-        /* The device control register with nIEN clear: the channel raises
-           its interrupt, and the router's vector for its line takes it. */
         wait_queue_init(&ch->wq);
         register_isr_handler((uint8_t)(ATA_VECTOR_BASE + ch->irq), ata_irq, "ata");
+        /* Device control with nIEN clear: the channel raises its interrupt. */
         ata_io->out8(ch->ctrl, 0x00);
         for (s = 0; s < 2; s++) {
             struct ata_drive *d = &drives[c * 2 + s];
@@ -953,19 +993,12 @@ int ata_init(void)
             if (ata_identify(d, identify[c * 2 + s]) != 0) {
                 continue;
             }
-            /* A channel with a master alone answers for its slave with the
-             * master's own registers on some controllers; a slave that
-             * IDENTIFYs as its master is that echo, not a second disk. */
+            /* Some controllers answer for an absent slave with the master. */
             if (s == 1 && drives[c * 2].present &&
                 same_drive(identify[c * 2], identify[c * 2 + 1])) {
                 continue;
             }
             d->present = 1;
-            /* `rach2.atapio` keeps a drive on the data port, so its
-               transfers move through the port with interrupts off rather
-               than through the bus master. A caller can still sleep here,
-               for the channel and for the cache flush that follows a
-               write. */
             d->dma = ch->bm != 0 && (identify[c * 2 + s][49] & ATA_ID_CAP_DMA) != 0 &&
                      !kcmdline_has("rach2.atapio");
             d->dev.sector_size = BLOCK_SECTOR_SIZE;
