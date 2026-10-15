@@ -283,6 +283,7 @@ static int model_msi_on;
 static int model_msi_vector = -1;
 static isr_handler_t model_handler;
 static int model_handler_vector = -1;
+static int model_freed_vector = -1; /* the vector last given back, -1 for none */
 /* The handler for the vector was registered when the messages were enabled. */
 static int model_msi_enabled_with_handler;
 /* The write log's length when the messages were turned off, and on below. */
@@ -319,6 +320,16 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
     (void)name;
     model_handler = handler;
     model_handler_vector = vector;
+}
+
+/** Record `vector` as given back, and drop the handler registered on it. */
+void isr_free_vector(int vector)
+{
+    model_freed_vector = vector;
+    if (model_handler_vector == vector) {
+        model_handler = 0;
+        model_handler_vector = -1;
+    }
 }
 
 /**
@@ -940,6 +951,7 @@ static void model_reset(void)
     model_msi_vector = -1;
     model_handler = 0;
     model_handler_vector = -1;
+    model_freed_vector = -1;
     model_msi_enabled_with_handler = 0;
     model_msi_disable_at = 0xffffffffu;
     model_sticky_status = 0;
@@ -1650,6 +1662,8 @@ int main(void)
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP,
           "the bring-up completes when the card's messages do not enable");
     CHECK(r8168_msi_vector == -1 && m_r16(R8168_INTRMASK) == 0, "and the sources stay masked");
+    CHECK(model_freed_vector == 48 && model_handler == 0,
+          "and the vector is given back, with the handler");
     r8168_rx_ring[0].opts1 = R8168_DESC_FS | R8168_DESC_LS | (64 + 4);
     rtl8168_poll(model_iface.dev);
     CHECK(rx_calls == 1, "and the tick's pump delivers");

@@ -684,6 +684,11 @@ int isr_alloc_vector(void)
 {
     return -1;
 }
+/** No vector is given out, so none comes back. */
+void isr_free_vector(int vector)
+{
+    (void)vector;
+}
 /** The model has no APIC. */
 int isr_msi_ready(void)
 {

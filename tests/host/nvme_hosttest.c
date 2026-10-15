@@ -757,6 +757,7 @@ uintptr_t map_mmio(uintptr_t phys, size_t size)
 static int lapic_ok, vector_free, nvmepoll;
 static isr_handler_t handler;
 static const char *handler_name;
+static int freed_vector; /* the vector last given back, -1 for none */
 
 /** Whether the local APIC takes messages: `lapic_ok`. */
 int isr_msi_ready(void)
@@ -776,6 +777,13 @@ void register_isr_handler(uint8_t vector, isr_handler_t h, const char *name)
     (void)vector;
     handler = h;
     handler_name = name;
+}
+
+/** Record `vector` as given back, and drop the handler registered on it. */
+void isr_free_vector(int vector)
+{
+    freed_vector = vector;
+    handler = 0;
 }
 
 /** The command line has rach2.nvmepoll while `nvmepoll`, and nothing else. */
@@ -1000,7 +1008,7 @@ static void model_reset(void)
     pci_command = 0;
     controllers = 1;
     msix_ok = msi_ok = lapic_ok = vector_free = 1;
-    msix_vector = msi_vector = -1;
+    msix_vector = msi_vector = freed_vector = -1;
     msix_holds = msix_held_late = 0;
     nvmepoll = 0;
     policy_allows = 1;
@@ -1583,6 +1591,7 @@ static void row_fallbacks(void)
           was_logged("polled: the controller has no message capability") &&
               (ns0()->dev.flags & BLOCK_FAULT_SAFE) && ns0()->dev.submit == 0 &&
               nvme_ctrls[0].vector == -1);
+    CHECK("and gives its vector back, with the handler", freed_vector == 48 && handler == 0);
 
     model_reset();
     vector_free = 0;

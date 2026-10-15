@@ -440,6 +440,12 @@ int isr_alloc_vector(void)
     return -1;
 }
 
+/** No vector is given out, so none comes back. */
+void isr_free_vector(int vector)
+{
+    (void)vector;
+}
+
 /** No token is on the command line. */
 int kcmdline_has(const char *token)
 {
