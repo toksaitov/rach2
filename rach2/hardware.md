@@ -74,8 +74,8 @@ There is no driver for a graphics card's own modes or acceleration. [Display](sy
 
 ## Audio
 
-* Intel High Definition Audio: the first PCI function of class 04:03 that is not a display's HDMI audio. The HDMI functions passed over are Intel 8086:0A0C, 0C0C, 0D0C, 160C, 3198, 2800 to 28FF and 2930 to 293F, and every NVIDIA (10DE) and AMD (1002) function; one of them is taken only when no other audio function exists.
-* Its codec: the first that answers and is not HDMI (Intel 8086:2800 to 2AFF, any NVIDIA or AMD codec). A Conexant codec, vendor 14F1, starts with its output on the primary pin.
+* Intel High Definition Audio: the first PCI function of class 04:03 that is not a display's HDMI audio. The HDMI functions passed over are Intel 8086:0A0C, 0C0C, 0D0C and 160C, and every NVIDIA (10DE) and AMD (1002) function; one of them is taken only when no other audio function exists.
+* Its codec: the first that answers and is not HDMI (Intel 8086:2800 to 28FF and 29FB, any NVIDIA or AMD codec). A Conexant codec, vendor 14F1, starts with its output on the primary pin.
 * The Sound Blaster 16 on the ISA bus: a DSP of version 4 or later at port 0x220, 0x240, 0x260 or 0x280, on IRQ 5 and DMA channels 1 and 5.
 * The PC speaker, through the 8254's channel 2: one square-wave tone, no samples.
 
