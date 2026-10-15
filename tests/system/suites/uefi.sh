@@ -18,7 +18,9 @@
 #    `bootctl` on the running machine reads the EFI system partition's slots
 #    and names the candidate as the booted one. Doom, started over SSH,
 #    draws its picture on the framebuffer, which has its palette's colors
-#    while it runs and the console's few again once it ends.
+#    while it runs and the console's few again once it ends. The disk stages
+#    the game's WAD from ports/doom/doom1.wad, which Git does not track; in a
+#    tree without the file the suite says so and leaves out the Doom rows.
 # 2. The same disk's recovery entry, armed for one boot on the host: the
 #    recovery system comes up from partition 2 and answers SSH, and its
 #    `bootctl` reads the boot partition by its node.
@@ -259,17 +261,21 @@ if "$RUNUTIL" until "$LOG1" "rach2 login:" 240; then
         *"bootctl: booted: candidate"*) note "and bootctl reads the slots and names the candidate: OK" ;;
         *) bad "bootctl on the disk booted by UEFI: $OUT" ;;
     esac
-    key_ssh 'cd /root && setsid doom > /tmp/doom.txt 2>&1 < /dev/null & sleep 8; echo DOOM""UP' > /dev/null || true # interval: the game draws its title within the eight seconds
-    if screen_dump "$DIR/doom.ppm" && [ "$("$SCREENTEXT" --colors "$DIR/doom.ppm")" -gt 64 ]; then
-        note "Doom's picture is on the framebuffer, with the colors of its palette: OK"
+    if [ ! -f "$REPO/ports/doom/doom1.wad" ]; then
+        note "ports/doom/doom1.wad is absent, so the disk has no WAD and the Doom rows do not run; sh ports/doom/fetch_wad.sh says how to get one"
     else
-        bad "the screen did not show Doom's picture while it ran; see $DIR/doom.ppm"
-    fi
-    key_ssh 'killall doom; sleep 2; echo DOOM""GONE' > /dev/null || true # interval: the game has ended and the console drawn within two seconds
-    if screen_dump "$DIR/after.ppm" && [ "$("$SCREENTEXT" --colors "$DIR/after.ppm")" -le 16 ]; then
-        note "and the console has the screen again once the game ends: OK"
-    else
-        bad "the screen kept the picture after the game ended; see $DIR/after.ppm"
+        key_ssh 'cd /root && setsid doom > /tmp/doom.txt 2>&1 < /dev/null & sleep 8; echo DOOM""UP' > /dev/null || true # interval: the game draws its title within the eight seconds
+        if screen_dump "$DIR/doom.ppm" && [ "$("$SCREENTEXT" --colors "$DIR/doom.ppm")" -gt 64 ]; then
+            note "Doom's picture is on the framebuffer, with the colors of its palette: OK"
+        else
+            bad "the screen did not show Doom's picture while it ran; see $DIR/doom.ppm"
+        fi
+        key_ssh 'killall doom; sleep 2; echo DOOM""GONE' > /dev/null || true # interval: the game has ended and the console drawn within two seconds
+        if screen_dump "$DIR/after.ppm" && [ "$("$SCREENTEXT" --colors "$DIR/after.ppm")" -le 16 ]; then
+            note "and the console has the screen again once the game ends: OK"
+        else
+            bad "the screen kept the picture after the game ended; see $DIR/after.ppm"
+        fi
     fi
 else
     bad "the installed disk never reached a login by UEFI; see $LOG1"
