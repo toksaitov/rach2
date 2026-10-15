@@ -112,9 +112,9 @@ struct core_prpsinfo {
 struct core_out {
     core_write_fn write;
     void *ctx;
-    uint64_t done;
+    uint64_t done; /* bytes written, holes not counted */
     uint64_t limit;
-    int32_t err;
+    int32_t err; /* the first error, after which nothing is written */
 };
 
 /* What the file has of a region: its range and protection, and whether it
@@ -126,11 +126,13 @@ struct core_region {
     int of_file;
 };
 
+/** Put `v` at `p` little-endian, the processor's order and ELFDATA2LSB. */
 static void put16(uint8_t *p, uint16_t v)
 {
     k_memcpy(p, &v, sizeof(v));
 }
 
+/** Put `v` at `p` as `put16` does. */
 static void put32(uint8_t *p, uint32_t v)
 {
     k_memcpy(p, &v, sizeof(v));
@@ -193,7 +195,7 @@ void core_note_put(uint8_t **p, const char *name, uint32_t type, const void *des
     *p = q + core_note_bytes(descsz);
 }
 
-/** Put a time in ticks as the timeval of an elf_prstatus. */
+/** Put a time in ticks, 100 a second, as the timeval of an elf_prstatus. */
 static void put_timeval(long *tv, uint32_t ticks)
 {
     tv[0] = (long)(ticks / 100u);
@@ -261,8 +263,9 @@ static void prpsinfo_fill(struct core_prpsinfo *d)
     d->psargs[sizeof(d->psargs) - 1u] = 0;
 }
 
-/** Whether `t` is a thread of the dumping process the core describes: its
- * leader and live threads, which have a frame on their kernel stacks. */
+/** Whether `t` is a thread of the dumping process the core describes: the
+ * dumping thread and every other thread of its process that has not ended,
+ * each of which has a frame on its kernel stack. */
 static int core_thread(const process_t *t)
 {
     return t->tg == current_proc->tg && t->state != PROC_UNUSED &&
@@ -310,7 +313,7 @@ void core_release(void)
     wq_wake_all(&current_proc->tg->gone);
 }
 
-/* The notes are in Linux's order: the dumping thread's status, the
+/** The notes are in Linux's order: the dumping thread's status, the
  * process's information, the auxiliary vector and the thread's
  * floating-point state, which is in the unit's registers until it is saved
  * here, then each other thread's status and the floating-point state it
@@ -399,8 +402,8 @@ static void region_write(struct core_out *o, struct mm *mm, const struct core_re
     kfree(page);
 }
 
-/** The regions of `vm` as the file records them, from the heap, `*count`
- * of them; NULL when the heap has no room. */
+/** The regions of `vm` as the file records them, `*count` of them, in an
+ * array from the heap the caller frees; NULL when the heap has no room. */
 static struct core_region *regions_take(const vm_space_t *vm, uint32_t *count)
 {
     struct core_region *regions = kmalloc((vm->count + 1u) * sizeof(*regions));
@@ -491,6 +494,12 @@ static void shdr_write(struct core_out *o, uint32_t phnum)
     (void)out(o, shdr, sizeof(shdr));
 }
 
+/**
+ * The file is the ELF header, the program headers with the note's first,
+ * the notes, zeros to the next page, the pages of each readable region in
+ * the order of the headers, and with extended numbering the one section
+ * header at the end, where the ELF header's `e_shoff` points.
+ */
 int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_t notes_size,
                    uint64_t limit)
 {

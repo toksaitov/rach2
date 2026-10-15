@@ -47,7 +47,8 @@ void core_release(void);
 uint32_t core_note_bytes(uint32_t descsz);
 
 /** Put the note `type` named `name` with the `descsz` bytes of `desc` at
- * `*p` and step past it. */
+ * `*p` and step past it. `name` with its NUL fits in eight bytes, and `*p`
+ * has room for `core_note_bytes(descsz)`. */
 void core_note_put(uint8_t **p, const char *name, uint32_t type, const void *desc, uint32_t descsz);
 
 /**
@@ -68,11 +69,12 @@ int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_
                    uint64_t limit);
 
 /**
- * Write the core file of the current process through `core_write` as
- * "core" in its working directory, a new file of mode 0600 less the umask,
- * after unlinking whatever had the name, at most `limit` bytes, the soft
- * RLIMIT_CORE. 0, or a negative errno. Defined in syscall_fs.c, which opens
- * files.
+ * Write the core file of the current process, which the signal `signo`
+ * ends, through `core_write` as "core" in its working directory, a new file
+ * of mode 0600 less the umask, after unlinking whatever had the name, at
+ * most `limit` bytes, the soft RLIMIT_CORE. The notes come from
+ * `core_notes`, which first waits for the other threads. 0, or a negative
+ * errno. Defined in syscall_fs.c, which opens files.
  */
 int32_t fs_core_file(int signo, unsigned long limit);
 
