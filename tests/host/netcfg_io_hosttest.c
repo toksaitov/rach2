@@ -1,16 +1,23 @@
 /**
- * Check read and seek failures after a complete interface stanza.
+ * Check that netcfg_read of utils/netcfg.c fails when a read, or the seek
+ * between its two passes, fails after a complete interface stanza.
  *
  * host-deps: utils/ipcheck.c
  *
- * The stream model reports an error after four valid lines in either pass.
- * A failed seek leaves the stream at EOF, as the unchecked rewind did.
+ * The stream model fails a read after four lines of either pass. A failed
+ * seek leaves the stream at its end, so a reader that ignored the failure
+ * would read an empty second pass and return a count with no stanza found.
  */
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
+/*
+ * pass: the pass under way, from 1. lines: the lines read in it.
+ * read_fault: the pass whose fifth read fails, or 0. seek_fault: nonzero to
+ * fail every seek. stream_error: set by a failed read until the next pass.
+ */
 static int pass, lines, read_fault, seek_fault, stream_error;
 static int failures;
 
@@ -22,7 +29,8 @@ static int failures;
         }                                                          \
     } while (0)
 
-/** Open a real stream containing two complete stanzas. */
+/** Open a temporary stream with two complete stanzas, whatever `path` and
+ * `mode` are, and start the first pass; exit with status 2 when it cannot. */
 static FILE *model_fopen(const char *path, const char *mode)
 {
     FILE *f = tmpfile();
@@ -43,7 +51,8 @@ static FILE *model_fopen(const char *path, const char *mode)
     return f;
 }
 
-/** Fail a read after one complete stanza. */
+/** Read a line as fgets does, except that the fifth read of pass
+ * `read_fault` fails with EIO and sets the stream error. */
 static char *model_fgets(char *buffer, int size, FILE *f)
 {
     if (read_fault == pass && lines == 4) {
@@ -55,13 +64,14 @@ static char *model_fgets(char *buffer, int size, FILE *f)
     return fgets(buffer, size, f);
 }
 
-/** Report the injected stream error. */
+/** Report the injected stream error or the stream's own. */
 static int model_ferror(FILE *f)
 {
     return stream_error || ferror(f);
 }
 
-/** Clear stream state on a successful seek, or leave it at EOF on failure. */
+/** Start the next pass and seek as fseek does, or, with `seek_fault` set,
+ * fail with ESPIPE and leave the stream at its end. */
 static int model_fseek(FILE *f, long offset, int whence)
 {
     pass++;
@@ -84,7 +94,8 @@ static int model_fseek(FILE *f, long offset, int whence)
 #undef ferror
 #undef fseek
 
-/** Require each I/O error to reject all selected configuration. */
+/** Require a clean read to find both interfaces and each read or seek error
+ * to make netcfg_read return -1; return 0 when every row passes. */
 int main(void)
 {
     struct netcfg_iface want[2];

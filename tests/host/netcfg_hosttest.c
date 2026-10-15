@@ -1,19 +1,20 @@
 /**
- * Host test for netup's configuration reader (utils/netcfg.c).
+ * Test the configuration reader of netup, utils/netcfg.c, on a file written
+ * for each case.
  *
  * host-deps: utils/netcfg.c utils/ipcheck.c tests/host/compat/fixdir_host.c
  *
  * A machine brings itself up from this file, so a file read wrongly is a
- * machine that comes up wrong or does not come up at all, and the interesting
- * files are the ones nobody would keep in `/etc`: a line with no end, a method
- * this does not implement, a value that is not an address, more interfaces
- * than there is room for. Each is written here and read back through the
- * library. The judgement of a static stanza is checked the same way, because
+ * machine that comes up wrong or does not come up at all, and the files that
+ * matter are the ones nobody would keep in `/etc`: a line with no end, a
+ * method netcfg does not implement, a value that is not an address, more
+ * interfaces than there is room for. Each is written and read back through
+ * the library. The check of a static stanza is tested the same way, because
  * applying half of one leaves a machine with neither the address it had nor
  * the one it was given. The file is written in a directory of the test's own
  * (compat/fixdir_host.c).
  *
- * Returns the failed-check count (0 == pass).
+ * The test exits with the number of failed checks, at most 120.
  */
 
 #include <stdio.h>
@@ -36,7 +37,8 @@ static int fails;
 
 #define IP(a, b, c, d) (((unsigned long)(a) << 24) | ((b) << 16) | ((c) << 8) | (unsigned long)(d))
 
-/** Write one configuration file, and say so if the host will not take it. */
+/** Write `text` as the interfaces file; return 0, or -1 after counting a
+ * failure when the file cannot be opened. */
 static int put(const char *text)
 {
     FILE *f = fopen(PATH, "w");
@@ -51,13 +53,22 @@ static int put(const char *text)
     return 0;
 }
 
-/** Read the file just written, with nothing named on the command line. */
+/** Read the file just written into `want`, cleared first, with no interface
+ * named and each one an auto line names added; return what netcfg_read
+ * returns. */
 static int read_auto(struct netcfg_iface *want, int max)
 {
     memset(want, 0, sizeof(*want) * (size_t)max);
     return netcfg_read(PATH, want, 0, max, 1);
 }
 
+/**
+ * Read ordinary files: one dhcp interface; a static stanza before the auto
+ * line that names it, which a reader of one pass would not bring up; two
+ * interfaces, one named by an `allow-hotplug` line as a Debian file often
+ * has; an interface named by the caller and by `auto`, which is one
+ * interface; and, with add_auto off, only the interface named.
+ */
 static void check_ordinary(void)
 {
     struct netcfg_iface want[4];
@@ -72,9 +83,6 @@ static void check_ordinary(void)
     CHECK(strcmp(want[0].name, "eth0") == 0, "and it is the one named");
     CHECK(want[0].found && want[0].dhcp && !want[0].bad, "read as a dhcp stanza");
 
-    /* The stanza before the line that asks for it: the file does not have to
-       be in a helpful order, and a machine that read it in one pass would
-       bring up nothing here. */
     if (put("# the network\n"
             "\n"
             "iface eth0 inet static\n"
@@ -92,8 +100,6 @@ static void check_ordinary(void)
     CHECK(want[0].netmask == IP(255, 255, 255, 0), "the netmask is read");
     CHECK(want[0].gateway == IP(192, 168, 0, 1), "the gateway is read");
 
-    /* Two interfaces, one of each, and an `allow-hotplug` line in place of an
-       `auto` line, which is what a Debian file often has. */
     if (put("auto eth0\n"
             "allow-hotplug eth1\n"
             "iface eth0 inet dhcp\n"
@@ -107,14 +113,11 @@ static void check_ordinary(void)
     CHECK(want[0].dhcp && !want[1].dhcp, "each keeps its own method");
     CHECK(want[1].address == IP(10, 0, 0, 2), "the second stanza's address is read");
 
-    /* A named interface is brought up whether or not `auto` names it, and the
-       auto line must not add it a second time. */
     memset(want, 0, sizeof(want));
     netcfg_set_name(want[0].name, "eth0");
     n = netcfg_read(PATH, want, 1, 4, 1);
     CHECK(n == 2, "an interface named twice is one interface");
 
-    /* And with add_auto off, only what was named is brought up. */
     memset(want, 0, sizeof(want));
     netcfg_set_name(want[0].name, "eth1");
     n = netcfg_read(PATH, want, 1, 4, 0);
@@ -122,6 +125,11 @@ static void check_ordinary(void)
     CHECK(want[0].found && want[0].address == IP(10, 0, 0, 2), "and it is read");
 }
 
+/**
+ * Read files with stanzas to pass over: an inet6 stanza for the interface
+ * asked for, and stanzas for an interface nobody asked for, which must not be
+ * taken for part of the stanza before them.
+ */
 static void check_ignored(void)
 {
     struct netcfg_iface want[4];
@@ -139,8 +147,6 @@ static void check_ignored(void)
     CHECK(want[0].dhcp && !want[0].bad, "an inet6 stanza for the same name is stepped over");
     CHECK(want[0].address == 0, "and no other stanza's address leaks into it");
 
-    /* A directive outside any stanza this file cares about must not be taken
-       for part of the last one it read. */
     if (put("auto eth0\n"
             "iface eth0 inet static\n"
             "    address 10.1.1.1\n"
@@ -154,6 +160,13 @@ static void check_ignored(void)
           "a later stanza does not overwrite the one before it");
 }
 
+/**
+ * Read files that must be rejected: a method netcfg does not implement, an
+ * address out of range or of five parts, a line longer than the buffer, which
+ * would otherwise be split and its second half read as a directive of its
+ * own, more interfaces than there is room for, and a missing file. A file
+ * that names no interface brings none up.
+ */
 static void check_refusals(void)
 {
     struct netcfg_iface want[2];
@@ -185,8 +198,6 @@ static void check_refusals(void)
     n = read_auto(want, 2);
     CHECK(n == 1 && want[0].bad, "a dotted quintet is not an address");
 
-    /* A line longer than the buffer would otherwise be split, and the second
-       half read as a directive of its own. */
     memset(big, 'x', sizeof(big));
     big[sizeof(big) - 1] = '\0';
     {
@@ -216,6 +227,12 @@ static void check_refusals(void)
     CHECK(n == 0, "a file that names no interface brings none up");
 }
 
+/**
+ * Check netcfg_set_name and netcfg_name_ok at the edge of the 16-byte field,
+ * and that a file is rejected when an auto line or a stanza names an interface
+ * longer than the field: the name would be stored cut and looked for whole,
+ * so its stanza would never be found.
+ */
 static void check_names(void)
 {
     struct netcfg_iface want[2];
@@ -231,9 +248,6 @@ static void check_names(void)
     CHECK(netcfg_name_ok("abcdefghijklmno"), "fifteen do");
     CHECK(!netcfg_name_ok(""), "and a name of nothing is not a name");
 
-    /* A name longer than the field would be stored cut and looked for whole,
-       so its stanza would never be found. No interface can have such a name,
-       so the file is wrong and says so. */
     if (put("auto verylonginterfacename0\n"
             "iface verylonginterfacename0 inet dhcp\n") != 0) {
         return;
@@ -249,10 +263,12 @@ static void check_names(void)
     CHECK(n == -1, "and refused on the stanza as well as the auto line");
 }
 
-/* The refusal must be the one the case is about: a mutation that trips a
-   different rule would otherwise pass for having refused at all. */
+/* The reason netcfg_check_static gave last. A row matches it, so that a
+   fault that breaks a different rule does not pass for the rejection tested. */
 static char refusal[96];
 
+/** Return 1 when netcfg_check_static rejects `s` for a reason that contains
+ * `substring`, and 0 when it accepts `s` or gives another reason. */
 static int refused(const struct netcfg_iface *s, const char *substring)
 {
     refusal[0] = '\0';
@@ -262,6 +278,13 @@ static int refused(const struct netcfg_iface *s, const char *substring)
     return strstr(refusal, substring) != NULL;
 }
 
+/**
+ * Check netcfg_check_static on stanzas it must accept and on each rule it
+ * applies, matching the reason it gives. Loopback, multicast and network-zero
+ * addresses, which no machine can hold and the kernel rejects too, are
+ * rejected even when a wide mask puts them on the address's subnet. A /31 has
+ * no host addresses, and a /30 has two.
+ */
 static void check_static_judgement(void)
 {
     struct netcfg_iface s;
@@ -313,9 +336,6 @@ static void check_static_judgement(void)
     CHECK(refused(&s, "gateway is not a host"),
           "a gateway that is the broadcast address is refused");
 
-    /* The addresses no machine can hold, which the kernel refuses too. A wide
-       enough mask puts one of them on the same subnet as the address, so the
-       on-subnet rule alone would let it through. */
     s.address = IP(10, 0, 0, 5);
     s.netmask = IP(128, 0, 0, 0);
     s.gateway = IP(127, 0, 0, 1);
@@ -329,7 +349,6 @@ static void check_static_judgement(void)
     s.address = IP(0, 1, 2, 3);
     CHECK(refused(&s, "not one a machine can hold"), "and one on network zero");
 
-    /* A /31 has no host addresses at all, and a /30 has two. */
     s.address = IP(10, 0, 0, 1);
     s.netmask = IP(255, 255, 255, 254);
     s.gateway = 0;
@@ -339,6 +358,7 @@ static void check_static_judgement(void)
           "a four-address subnet has two hosts in it");
 }
 
+/** Run the cases; return the number of failed checks, at most 120. */
 int main(void)
 {
     check_ordinary();
