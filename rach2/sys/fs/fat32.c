@@ -66,6 +66,17 @@ struct fat_node {
     uint32_t hint_cluster;
 };
 
+/* A name prepared for the directory at `first`: checked, and either a short
+ * entry alone or long entries in front of an alias no entry of the
+ * directory uses. */
+struct new_name {
+    uint8_t name11[11];
+    uint8_t lower;
+    uint16_t units[FAT_NAME_UNITS];
+    uint32_t count;   /* UTF-16 units, 0 for a short-only name */
+    uint32_t entries; /* long entries, 0 for a short-only name */
+};
+
 struct fat_mount {
     int used;
     block_device_t *dev;
@@ -88,6 +99,7 @@ struct fat_mount {
     uint32_t alloc_hint;
     struct vfs_mount *mnt;
     struct fat_node *nodes; /* the nodes in memory, from the heap */
+    struct new_name nn;     /* the name a create, mkdir or rename is writing */
 };
 
 /* The way a node leaves the mount's list and the heap. */
@@ -1124,17 +1136,6 @@ static int free_slots(struct fat_mount *fm, struct fat_node *dir, uint32_t first
     return 0;
 }
 
-/* A name prepared for the directory at `first`: checked, and either a short
- * entry alone or long entries in front of an alias no entry of the
- * directory uses. */
-struct new_name {
-    uint8_t name11[11];
-    uint8_t lower;
-    uint16_t units[FAT_NAME_UNITS];
-    uint32_t count;   /* UTF-16 units, 0 for a short-only name */
-    uint32_t entries; /* long entries, 0 for a short-only name */
-};
-
 static int alias_taken(struct fat_mount *fm, struct fat_node *dir, uint32_t first,
                        const uint8_t *name11, int *taken)
 {
@@ -1947,7 +1948,7 @@ static int fat_create(struct vfs_mount *mnt, void *dir, const char *name, uint32
     struct fat_node *d = dir ? dir : mnt->root;
     uint32_t dir_cluster = d->first == fm->root_cluster ? 0 : d->first;
     struct fat_node *n;
-    static struct new_name nn; /* one create at a time, under the lock */
+    struct new_name *nn = &fm->nn;
     uint8_t raw[32];
     uint32_t index = 0;
     int rc;
@@ -1961,7 +1962,7 @@ static int fat_create(struct vfs_mount *mnt, void *dir, const char *name, uint32
     if (rc != 0) {
         return rc > 0 ? -EEXIST : rc;
     }
-    rc = prepare_name(fm, d, d->first, name, &nn);
+    rc = prepare_name(fm, d, d->first, name, nn);
     if (rc != 0) {
         return rc;
     }
@@ -1971,17 +1972,17 @@ static int fat_create(struct vfs_mount *mnt, void *dir, const char *name, uint32
     }
     rc = mark_dirty(fm);
     if (rc == 0) {
-        rc = free_slots(fm, d, d->first, nn.entries + 1, &index);
+        rc = free_slots(fm, d, d->first, nn->entries + 1, &index);
     }
     if (rc != 0) {
         node_drop(fm, n);
         return rc;
     }
-    k_memcpy(n->name11, nn.name11, 11);
-    n->lower = nn.lower;
+    k_memcpy(n->name11, nn->name11, 11);
+    n->lower = nn->lower;
     n->is_dir = 0;
     n->dir_cluster = dir_cluster;
-    n->index = index + nn.entries;
+    n->index = index + nn->entries;
     n->first = 0;
     n->size = 0;
     n->attr = 0x20;
@@ -1990,7 +1991,7 @@ static int fat_create(struct vfs_mount *mnt, void *dir, const char *name, uint32
     n->time = n->ctime;
     n->adate = n->cdate;
     entry_of(n, raw);
-    rc = write_name_entries(fm, d->first, index, &nn, raw);
+    rc = write_name_entries(fm, d->first, index, nn, raw);
     if (rc != 0) {
         node_drop(fm, n);
         return rc;
@@ -2088,7 +2089,7 @@ static int fat_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     struct fat_node *d = dir ? dir : mnt->root;
     uint32_t parent_cluster = d->first == fm->root_cluster ? 0 : d->first;
     struct fat_node n;
-    static struct new_name nn;
+    struct new_name *nn = &fm->nn;
     uint32_t c, unused, index = 0;
     uint8_t raw[64];
     int rc;
@@ -2103,12 +2104,12 @@ static int fat_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_
         return rc > 0 ? -EEXIST : rc;
     }
     k_memset(&n, 0, sizeof(n));
-    rc = prepare_name(fm, d, d->first, name, &nn);
+    rc = prepare_name(fm, d, d->first, name, nn);
     if (rc != 0) {
         return rc;
     }
-    k_memcpy(n.name11, nn.name11, 11);
-    n.lower = nn.lower;
+    k_memcpy(n.name11, nn->name11, 11);
+    n.lower = nn->lower;
     rc = mark_dirty(fm);
     if (rc != 0) {
         return rc;
@@ -2136,7 +2137,7 @@ static int fat_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     put16(raw + 32 + 26, parent_cluster & 0xFFFFu);
     rc = fat_put_bytes(fm, cluster_offset(fm, c), raw, 64, 1);
     if (rc == 0) {
-        rc = free_slots(fm, d, d->first, nn.entries + 1, &index);
+        rc = free_slots(fm, d, d->first, nn->entries + 1, &index);
     }
     if (rc == 0) {
         /* The directory's cluster, its chain and its two entries on the
@@ -2146,9 +2147,9 @@ static int fat_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     }
     if (rc == 0) {
         n.dir_cluster = parent_cluster;
-        n.index = index + nn.entries;
+        n.index = index + nn->entries;
         entry_of(&n, raw);
-        rc = write_name_entries(fm, d->first, index, &nn, raw);
+        rc = write_name_entries(fm, d->first, index, nn, raw);
     }
     if (rc != 0) {
         free_chain(fm, c);
@@ -2249,7 +2250,7 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
     uint32_t nd_cluster = nd->first == fm->root_cluster ? 0 : nd->first;
     struct fat_scan src, dst;
     struct fat_node *moved;
-    static struct new_name nn;
+    struct new_name *nn = &fm->nn;
     uint32_t index;
     int got, rc, is_dir, dst_exists;
 
@@ -2317,7 +2318,7 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
     /* The name and its room are decided with the destination still in
      * place, so ENOSPC destroys nothing; the alias avoids the
      * destination's, and its freed slots are simply free. */
-    rc = prepare_name(fm, nd, nd->first, newname, &nn);
+    rc = prepare_name(fm, nd, nd->first, newname, nn);
     if (rc != 0) {
         return rc;
     }
@@ -2327,19 +2328,19 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
     if (moved) {
         moved->refs++;
     }
-    if (od_cluster == nd_cluster && !dst_exists && src.index - src.start == nn.entries) {
+    if (od_cluster == nd_cluster && !dst_exists && src.index - src.start == nn->entries) {
         /* In place: the same entries rewritten under the new name, long
          * ones first and the short one last. */
-        k_memcpy(src.ent.raw, nn.name11, 11);
-        src.ent.raw[12] = nn.lower;
-        rc = write_name_entries(fm, od->first, src.start, &nn, src.ent.raw);
+        k_memcpy(src.ent.raw, nn->name11, 11);
+        src.ent.raw[12] = nn->lower;
+        rc = write_name_entries(fm, od->first, src.start, nn, src.ent.raw);
         if (rc == 0 && moved) {
-            k_memcpy(moved->name11, nn.name11, 11);
-            moved->lower = nn.lower;
+            k_memcpy(moved->name11, nn->name11, 11);
+            moved->lower = nn->lower;
         }
         goto out;
     }
-    rc = free_slots(fm, nd, nd->first, nn.entries + 1, &index);
+    rc = free_slots(fm, nd, nd->first, nn->entries + 1, &index);
     if (rc != 0) {
         goto out;
     }
@@ -2384,17 +2385,17 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
             goto out;
         }
     }
-    k_memcpy(src.ent.raw, nn.name11, 11);
-    src.ent.raw[12] = nn.lower;
-    rc = write_name_entries(fm, nd->first, index, &nn, src.ent.raw);
+    k_memcpy(src.ent.raw, nn->name11, 11);
+    src.ent.raw[12] = nn->lower;
+    rc = write_name_entries(fm, nd->first, index, nn, src.ent.raw);
     if (rc != 0) {
         goto out;
     }
     if (moved) {
-        k_memcpy(moved->name11, nn.name11, 11);
-        moved->lower = nn.lower;
+        k_memcpy(moved->name11, nn->name11, 11);
+        moved->lower = nn->lower;
         moved->dir_cluster = nd_cluster;
-        moved->index = index + nn.entries;
+        moved->index = index + nn->entries;
     }
     rc = 0;
 out:

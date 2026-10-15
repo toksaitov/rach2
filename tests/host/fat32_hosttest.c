@@ -16,8 +16,10 @@
  * pair, the bad checksum falling back to a lower-cased short name, the 0x05
  * short name reachable by its long name, the fragmented file, the empty file,
  * `..` back to the root, and the bytes of every file. The malformed volumes are
- * refused at mount or fail at the file they damage, under AddressSanitizer. No
- * hosted headers: the kernel headers define the fixed-width types.
+ * refused at mount or fail at the file they damage, under AddressSanitizer. A
+ * create, a mkdir and a rename on a second volume, each with the same operation
+ * on the first inside one of its writes, must each write the name it was given.
+ * No hosted headers: the kernel headers define the fixed-width types.
  *
  * With `--barriers` the program runs only the interruption matrix and the
  * durability rows, the rows that judge the driver's barriers, and ends at
@@ -1600,6 +1602,148 @@ static void tree_rows(void)
     unmount_image();
 }
 
+/* ---- two mounts at once ---- */
+
+/* A second volume on a device of its own, read and written in place. The
+   first write after `interleave` is set stands for a write in flight, during
+   which the kernel may run another process: the same operation on the first
+   mount by `proc_b` runs inside it, under that mount's namespace lock. */
+static process_t proc_b;
+static unsigned char image_b[IMG_BYTES];
+static struct vfs_mount mnt_b;
+enum { NOTHING, CREATE, MKDIR, RENAME };
+static int interleave; /* the operation to run inside the next write */
+static int interleaved;
+static char first_name[64];
+
+static int img_b_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
+{
+    (void)d;
+    __builtin_memcpy(buf, image_b + lba * 512, (unsigned long)count * 512);
+    return 0;
+}
+
+static int img_b_write(block_device_t *d, uint64_t lba, uint32_t count, const void *buf)
+{
+    void *n = 0;
+    int op = interleave, rc;
+
+    (void)d;
+    if (op != NOTHING) {
+        interleave = NOTHING;
+        snprintf(first_name, sizeof(first_name), "Made On The First Mount %d.txt", interleaved + 1);
+        cpu_table[0].current = &proc_b;
+        vfs_ns_lock(&mnt);
+        if (op == CREATE) {
+            rc = OPS->create(&mnt, mnt.root, first_name, 0644, &n);
+            if (rc == 0) {
+                OPS->put(&mnt, n);
+            }
+        } else if (op == MKDIR) {
+            rc = OPS->mkdir(&mnt, mnt.root, first_name, 0755);
+        } else {
+            rc = OPS->rename(&mnt, mnt.root, "plain.txt", mnt.root, first_name);
+        }
+        if (rc == 0) {
+            interleaved++;
+        }
+        vfs_ns_unlock(&mnt);
+        cpu_table[0].current = &proc_a;
+    }
+    __builtin_memcpy(image_b + lba * 512, buf, (unsigned long)count * 512);
+    return 0;
+}
+
+static block_device_t dev_b = {512, 8192u, BLOCK_FAULT_SAFE, 0, 0, 0, img_b_read, img_b_write, 0,
+                               0,   0};
+
+/* Whether `name` is in the root of `m`. */
+static int in_root(struct vfs_mount *m, const char *name)
+{
+    void *n;
+
+    if (OPS->lookup(m, m->root, name, &n) != 0) {
+        return 0;
+    }
+    OPS->put(m, n);
+    return 1;
+}
+
+/* A create, a mkdir and a rename on the second mount, each with the same
+   operation on the first inside its first device write, after the new name
+   is prepared and before it is written. Each mount must write the name it
+   was given. */
+static void interleaved_rows(void)
+{
+    void *n = 0;
+    int before;
+
+    load("--junk");
+    __builtin_memcpy(image_b, image, IMG_BYTES);
+    proc_b.pid = 2;
+    check(mount_rw("") == 0, "a writable first mount for the interleaved rows");
+    vfs_ns_unlock(&mnt);
+    __builtin_memset(&mnt_b, 0, sizeof(mnt_b));
+    mnt_b.type = &vfs_vfat_type;
+    mnt_b.dev = &dev_b;
+    mnt_b.ns_holder = -1;
+    check(vfs_vfat_type.mount(&mnt_b, &dev_b, 0, "") == 0, "and a second on a device of its own");
+    vfs_ns_lock(&mnt_b);
+    interleaved = 0;
+
+    interleave = CREATE;
+    check(OPS->create(&mnt_b, mnt_b.root, "Created On The Second Mount.txt", 0644, &n) == 0 &&
+              interleaved == 1,
+          "a create on the second mount with one on the first inside it");
+    if (n) {
+        OPS->put(&mnt_b, n);
+    }
+    check(in_root(&mnt_b, "Created On The Second Mount.txt") && !in_root(&mnt_b, first_name) &&
+              in_root(&mnt, first_name),
+          "the create writes its own name, and the first mount its own");
+
+    interleave = MKDIR;
+    check(OPS->mkdir(&mnt_b, mnt_b.root, "Directory On The Second Mount", 0755) == 0 &&
+              interleaved == 2,
+          "a mkdir with one inside it");
+    check(in_root(&mnt_b, "Directory On The Second Mount") && !in_root(&mnt_b, first_name) &&
+              in_root(&mnt, first_name),
+          "the mkdir writes its own name");
+
+    n = 0;
+    check(OPS->create(&mnt_b, mnt_b.root, "plain.txt", 0644, &n) == 0, "a short name to rename");
+    if (n) {
+        OPS->put(&mnt_b, n);
+    }
+    n = 0;
+    vfs_ns_lock(&mnt);
+    check(OPS->create(&mnt, mnt.root, "plain.txt", 0644, &n) == 0, "and one on the first mount");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    vfs_ns_unlock(&mnt);
+    before = interleaved;
+    interleave = RENAME;
+    check(OPS->rename(&mnt_b, mnt_b.root, "plain.txt", mnt_b.root,
+                      "Renamed On The Second Mount.txt") == 0 &&
+              interleaved == before + 1,
+          "a rename with one inside it");
+    check(in_root(&mnt_b, "Renamed On The Second Mount.txt") && !in_root(&mnt_b, "plain.txt") &&
+              !in_root(&mnt_b, first_name) && in_root(&mnt, first_name),
+          "the rename writes its own name");
+
+    interleave = NOTHING;
+    check(OPS->prepare_unmount(&mnt_b) == 0, "the second mount's clean unmount");
+    OPS->put(&mnt_b, mnt_b.root);
+    OPS->unmount(&mnt_b);
+    bcache_sync(&dev_b);
+    check(bcache_invalidate(&dev_b) == 0, "and the cache keeps none of its blocks");
+    vfs_ns_lock(&mnt);
+    check(OPS->prepare_unmount(&mnt) == 0, "the first mount's clean unmount");
+    unmount_image();
+    check_consistent("and the first volume walks clean", 0);
+}
+
 static void dirty_rows(void)
 {
     void *n;
@@ -2274,6 +2418,7 @@ int main(int argc, char **argv)
     write_rows();
     long_rows();
     tree_rows();
+    interleaved_rows();
     dirty_rows();
     matrix_rows();
     durability_rows();
