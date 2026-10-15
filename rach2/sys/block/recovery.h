@@ -2,62 +2,46 @@
 #define _RECOVERY_H_
 
 /*
- * recovery: the string that says whether this kernel may write its own disk.
+ * recovery.h: whether this kernel was built to write its own disks, and the
+ * string that says so in the built kernel.
  *
- * Milestone 25 splits disk authority in two. Level one is the boot partition
- * and the boot loader's gap, bounded windows every image may write, because
- * installing a kernel or updating GRUB is ordinary work. Level two is the whole
- * device at any offset, which is what reflashing a broken root needs and what
- * no everyday boot has any business doing: a mistake there destroys the
- * machine, not one file.
+ * Writing a whole disk or a partition node at any offset is what reflashing a
+ * broken root needs, and a mistake there destroys the machine. The boot
+ * partition and the boot loader's gap are bounded windows that every build
+ * may write, since installing a kernel or updating GRUB is ordinary work. The
+ * choice is made when the kernel is built, not at boot, because a token on
+ * the kernel command line can be edited at the GRUB prompt: the everyday
+ * kernel compiles a write handler for the disk nodes that returns `-EPERM`
+ * and has no other path, and only a kernel built with `-DRACH2_RECOVERY`
+ * compiles one that writes (`dev_disk_write` in `fs/devfs.c`).
  *
- * The two are told apart at build time, not at boot. A token on the kernel
- * command line would be editable at the GRUB prompt by anyone standing at the
- * machine, which is the same objection this project already recorded when it
- * made the read-only disk policy a compile-time switch. So the everyday kernel
- * compiles a `/dev/disk0` whose write returns `-EPERM` with no way to ask
- * again, and only a kernel built with `-DRACH2_RECOVERY` compiles one that can
- * write at all.
- *
- * This is NOT `RACH2_DISK_READONLY`, and cannot be. That switch is enforced
- * below devfs, in the drivers' command allowlist, so a kernel carrying it
- * cannot write the boot partition either, and both the everyday and the
- * recovery kernel need to. The two switches are independent: this one decides
- * only whether devfs exposes a writable whole-disk node.
- *
- * The banner below is how a built kernel says which of the two it is, the same
- * way the disk policy's does, and `check_recovery.sh` reads it in both
- * directions: a recovery artifact must carry the recovery banner, and an
- * everyday one must not. That catches a kernel built without the switch and
- * offered as recovery, which is the mistake worth catching early; it is not
- * proof against a tampered artifact, since the banner and the handler are
- * separate conditionals on the same macro. `tests/run authority` boots both
- * kernels and is the proof of what they actually do.
+ * This switch is independent of `RACH2_DISK_READONLY`, which is enforced in
+ * the drivers by the command list of `diskcmd.c`, so a kernel built with it
+ * cannot write the boot partition either. This one decides only whether
+ * devfs has a writable disk node.
  */
 
 /**
- * The policy string built into the artifact, for `check_recovery.sh`.
+ * The policy string built into the kernel, "rach2: disk authority: recovery"
+ * or "rach2: disk authority: ordinary", for `check_recovery.sh`.
  *
- * This file makes no decision of its own. Whether the whole-disk write exists
- * is settled by `#ifdef RACH2_RECOVERY` where that handler is written, in
- * `sys/fs/devfs.c`, because the choice is which function body to compile and
- * not a value to test at run time. What lives here is the string that lets the
- * choice be read back off a built kernel, and it is a second conditional on the
- * same macro, which is why the checker catches a
- * mis-built artifact and not a tampered one.
+ * The string makes no decision. The write handler is chosen by its own
+ * `#ifdef RACH2_RECOVERY` in `fs/devfs.c`, and this string is a second
+ * conditional on the same macro, so the checker finds a kernel built without
+ * the switch and offered as recovery, but not a tampered one. `tests/run
+ * authority` boots both kernels and tests what they do.
  */
 extern const char recovery_policy_banner[];
 
 /**
- * Whether this build probes for a disk and publishes its whole-disk window
- * without being asked for it.
+ * Whether this build probes for a disk at boot and publishes its whole-disk
+ * window without `rach2.diskdiag`, and puts the partition nodes under the
+ * writer reservation: 1 in the recovery build, 0 otherwise.
  *
  * The everyday kernel probes only under `rach2.diskdiag`, and otherwise
  * publishes the disks its boot registered, whose writes its handler refuses.
- * The recovery kernel probes always: rewriting the disk is the only reason
- * that build exists, and the moment it is needed is the moment nothing else
- * can repair the machine, which is no time to discover that a menu entry was
- * missing a token.
+ * The recovery kernel always probes, since writing the disk is what it is
+ * built for and a boot entry should not need an extra token for it.
  */
 int recovery_publishes_disk(void);
 

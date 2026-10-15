@@ -71,7 +71,7 @@ rach2/sys/block/ahci.c:ahci_run_command params 7 the parameters are the fields o
 
 rach2/sys/block/gpt.c:gpt_parse_entries params 7 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
 
-rach2/sys/block/loop.c:loop_attach lines 136 one device operation, its steps in the order the layer requires and each undone on the failure of the next
+rach2/sys/block/loop.c:loop_attach lines 123 one device operation, its steps in the order the layer requires and each undone on the failure of the next
 
 rach2/sys/block/partition.c:follow_logical params 7 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
 

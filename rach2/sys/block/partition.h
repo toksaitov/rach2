@@ -1,3 +1,22 @@
+/*
+ * partition.h: the reader of a disk's partition table, one for every disk on
+ * every bus.
+ *
+ * A disk has an MBR, a GPT, or nothing. From an MBR the four primary
+ * entries are taken, numbered 1 to 4, and the logical partitions of its
+ * extended entry are followed through the chain of extended boot records,
+ * numbered from 5 in chain order as other systems number them. From a GPT
+ * every used entry is taken with its type GUID, its own GUID and its name,
+ * from the primary header when it and its array check, otherwise from the
+ * backup at the end of the disk, and numbered by its position in the array
+ * from 1. A partition's number therefore stays the same whatever else is on
+ * the disk.
+ *
+ * The reader is a callback so the same code runs in the kernel over a block
+ * device, in the USB pump over its cache of sectors, and in the host tests
+ * and fuzz harnesses over a table in memory.
+ */
+
 #ifndef _PARTITION_H_
 #define _PARTITION_H_
 
@@ -5,34 +24,16 @@
 #include "gpt.h"
 #include "mbr.h"
 
-/*
- * The partition service: one reader of a disk's table for every disk on
- * every bus.
- *
- * A disk has an MBR, a GPT, or nothing. From an MBR the four primary
- * entries are taken, and the logical partitions of its extended entry are
- * followed through the chain of extended boot records, numbered from 5 in
- * chain order as every other system numbers them. From a GPT every used
- * entry is taken with its type GUID, its own GUID and its name, from the
- * primary header when it and its array check, otherwise from the backup at
- * the end of the disk. A partition's number is its entry's position in the
- * table, counted from 1, so the number is stable across boots whatever
- * else is on the disk.
- *
- * The reader is a callback so the same code runs in the kernel over a block
- * device and in the host test over a table in memory.
- */
-
 /* How many partitions of one disk are kept. A table with more has the
-   rest counted in `refused`, and no number is above this, which keeps the
-   node minors in their range. */
+ * rest counted in `refused`, and no number is above this, which keeps the
+ * node minors in their range. */
 #define PART_MAX 15
 
 #define PART_LABEL_CHARS 36 /* a GPT name, 36 UTF-16 units */
 
 /* What the first sectors turned out to be. */
 #define PART_UNREAD  0 /* sector 0 could not be read */
-#define PART_NONE    1 /* no table: no signature, or a signature and no entries */
+#define PART_NONE    1 /* no table: no signature, or an MBR with no entries */
 #define PART_MBR     2
 #define PART_GPT     3
 #define PART_GPT_BAD 4 /* a protective MBR, and neither header checks */
@@ -42,6 +43,7 @@
 #define PART_MBR_EXTENDED_LBA   0x0F
 #define PART_MBR_EXTENDED_LINUX 0x85
 
+/** One partition taken from a table. */
 struct part_entry {
     int number; /* 1 upward; MBR logical partitions from 5 */
     uint64_t start_lba;
@@ -62,6 +64,7 @@ struct part_gpt_meta {
     uint64_t last_usable;
 };
 
+/** A disk's table as `part_scan` read it. */
 struct part_table {
     int kind; /* PART_* */
     uint32_t mbr_id;
@@ -75,7 +78,8 @@ struct part_table {
     struct part_entry parts[PART_MAX];
 };
 
-/** Read `count` sectors from `lba` into `buf`; 0 on success, else negative. */
+/** Read `count` sectors from `lba` into `buf` for `part_scan`, with `ctx`
+ * the caller's; 0 on success, else negative. */
 typedef int (*part_read_fn)(void *ctx, uint64_t lba, uint32_t count, void *buf);
 
 /* The work area `part_scan` needs: the largest entry array and two sectors. */
@@ -83,6 +87,14 @@ typedef int (*part_read_fn)(void *ctx, uint64_t lba, uint32_t count, void *buf);
 
 /**
  * Read the table of a disk of `disk_sectors` sectors through `read`.
+ *
+ * A sector 0 without the `0x55AA` signature is `PART_NONE`, with `volume`
+ * set when it opens as a FAT or exFAT boot sector does. A signed sector
+ * whose first entry has type `0xEE` is a GUID table's protective MBR; any
+ * other is an MBR. Every entry must be non-empty, inside the range its
+ * table allows, clear of every entry already taken, and numbered at most
+ * `PART_MAX`; one that is not is counted in `refused` and the rest are still
+ * read.
  *
  * Fills `t` and returns 0 when sector 0 was read, whatever it held; -1 when
  * it could not be read, with `kind` `PART_UNREAD`. `work` has

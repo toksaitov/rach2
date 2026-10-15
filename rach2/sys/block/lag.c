@@ -1,21 +1,19 @@
 /*
  * lag.c: the sleeping test device.
  *
- * `rach2.blocklag=N` wraps the boot disk in a device without the fault-safe
- * flag whose requests complete N ticks later, from the timer. Only the
- * partition nodes and the mounts use the wrapper; the root window keeps the
- * real device. It exists so the sleeping path is proved by a device that
- * behaves and by one that does not, before a USB disk exists: with N above
- * the deadline it is a device that never answers in time, which is how the
- * quarantine is exercised without a mutation. `rach2.blockfail=N` beside it
- * makes the Nth write through the wrapper fail with EIO, which is how a
- * mount is seen to go read-only. `rach2.blockdead=P` builds the view of
- * MBR partition P, read from the disk when the wrapper is installed, over a
- * second device that accepts every request and answers none, so a device
- * that stalls has a healthy neighbour on the same pool. The wrapper has a
- * `flush` too, answered after the lag with nothing under it to flush and
- * recorded when it is, so a sync takes a slot of the pool the way a stick's
- * flush does.
+ * `rach2.blocklag=N` wraps disk 0 in a device without the fault-safe flag
+ * whose requests complete N ticks later, from the timer. Only the partition
+ * views and the mounts on them use the wrapper; the whole-disk window keeps
+ * the real device. The sleeping path is tested on it with a device that
+ * answers and with one that does not: with N above the deadline it is a
+ * device that never answers in time, which tests the quarantine without a
+ * mutation. `rach2.blockfail=N` makes the Nth write through the wrapper fail
+ * with EIO, so a test can see a mount go read-only. `rach2.blockdead=P`
+ * builds the view of MBR partition P, read from the disk when the wrapper is
+ * installed, over a second device that accepts every request and answers
+ * none, so a device that stalls has a healthy neighbour on the same pool.
+ * The wrapper has a `flush` too, answered after the lag with nothing under it
+ * to flush, so a sync takes a request of the pool as a stick's flush does.
  */
 
 #include "block.h"
@@ -42,7 +40,7 @@ struct lag_entry {
     int ready; /* the transfer has run; the tick may deliver */
     /* A read lands here at submit and is copied into the request's page
      * only when the completion is delivered, so a kernel that copied out
-     * before the completion would read what the page held before. */
+     * before the completion would read the 0xEE the page was filled with. */
     uint8_t staged[BLOCK_REQ_SECTORS * BLOCK_SECTOR_SIZE];
 };
 
@@ -110,6 +108,13 @@ static int dead_submit(block_device_t *device, struct block_request *request)
     return 0;
 }
 
+/**
+ * Run the transfer now, in the caller's context, which the driver under it
+ * may put to sleep, and hold back only the answer. The timer must not touch
+ * the disk: a polled ATA read inside the tick handler waits on a clock that
+ * cannot advance there. A read's page is filled with 0xEE until the answer
+ * is delivered, and the bytes wait in the slot.
+ */
 static int lag_submit(block_device_t *device, struct block_request *request)
 {
     struct lag_entry *e = lag_claim(request, 0);
@@ -118,17 +123,11 @@ static int lag_submit(block_device_t *device, struct block_request *request)
     if (!e) {
         return -EIO;
     }
-    /* The transfer runs now, in the caller's context, which the driver may
-     * put to sleep; only the answer is held back. The timer must not touch
-     * the disk: a polled ATA read inside the tick handler waits on a clock
-     * that cannot advance there. */
     if (request->write && fail_write_at && ++writes_seen == fail_write_at) {
         e->status = -EIO; /* the write the boot option fails */
     } else if (request->write) {
         e->status = lag_backing->write(lag_backing, request->lba, request->count, request->page);
     } else {
-        /* The page is scrubbed so a copy-out before the completion
-         * returns this and not what the page held before. */
         k_memset(request->page, 0xEE, request->count * BLOCK_SECTOR_SIZE);
         e->status = lag_backing->read(lag_backing, request->lba, request->count, e->staged);
     }
@@ -137,6 +136,13 @@ static int lag_submit(block_device_t *device, struct block_request *request)
     return 0;
 }
 
+/**
+ * Every completion is delivered twice, two ticks apart, and the second copy
+ * reports an error. A request freed between the copies is not live any more,
+ * and one made since at the same address has a generation of its own, so the
+ * request layer must drop the duplicate; a duplicate accepted would fail a
+ * healthy request, so a missing generation check is seen.
+ */
 void block_lag_tick(void)
 {
     int i;
@@ -153,12 +159,6 @@ void block_lag_tick(void)
             continue;
         }
         r = e->request;
-        /* Every completion is delivered twice, two ticks apart, and the
-         * second copy claims an error. A request freed between the copies
-         * is not live any more, and one made since at the same address has
-         * a generation of its own, so the duplicate must be dropped; one
-         * accepted would fail a healthy request, which is what makes the
-         * check's absence visible. */
         if (!e->delivered) {
             e->delivered = 1;
             e->due = lag_ticks + 2;
@@ -195,10 +195,11 @@ block_device_t *block_lag_partition_backing(block_device_t *backing, uint64_t st
 }
 
 /**
- * Read a row's knob as a whole decimal number from 1 to a million ticks or
- * periods, into `*out`. A value with anything after its digits, or past
- * the bound, is refused, since the deadline's arithmetic is signed and a
- * period near the top of the range would expire a request as it was made.
+ * Read the boot option `name` as a whole decimal number from 1 to a million
+ * ticks or periods, into `*out`; 1 when it was, 0 when it is absent or
+ * refused. A value with anything after its digits, or past the bound, is
+ * refused, since the deadline's arithmetic is signed and a period near the
+ * top of the range would expire a request as it was made.
  */
 static int lag_knob(const char *name, uint32_t *out)
 {
@@ -223,6 +224,13 @@ static int lag_knob(const char *name, uint32_t *out)
     return 1;
 }
 
+/**
+ * Installed once: a later call returns the wrapper whatever `backing` is. The
+ * wrapper's deadline is one period of five seconds, since its tests are of a
+ * device that never answers; a test of the deadline's boundary sets the
+ * period with `rach2.lagdeadline=T` ticks and the count with
+ * `rach2.lagperiods=N`.
+ */
 block_device_t *block_lag_wrap(block_device_t *backing)
 {
     char value[16];
@@ -230,7 +238,7 @@ block_device_t *block_lag_wrap(block_device_t *backing)
     int i;
 
     if (lag_backing) {
-        return &lag_device; /* already installed */
+        return &lag_device;
     }
     if (!kcmdline_value("rach2.blocklag", value, sizeof(value))) {
         return backing;
@@ -271,9 +279,6 @@ block_device_t *block_lag_wrap(block_device_t *backing)
     lag_device.max_sectors = 0;      /* a page, the staging it copies through */
     lag_device.deadline_ticks = 500; /* five seconds, the lag its rows are set against */
     lag_device.deadline_limit = 1;   /* one period: its rows test a device that never answers */
-    /* A row about the deadline's boundary sets the period and the periods
-     * itself: `rach2.lagdeadline=T` ticks a period, and
-     * `rach2.lagperiods=N` periods before a request is given up. */
     if (lag_knob("rach2.lagdeadline", &n)) {
         lag_device.deadline_ticks = n;
     }

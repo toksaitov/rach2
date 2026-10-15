@@ -1,7 +1,7 @@
 /*
- * recovery.c: the string a built kernel embeds to say whether it may write its
- * own disk, and the one thing that string implies at boot. The decision about
- * writing itself is where the handler is, in sys/fs/devfs.c.
+ * recovery.c: the string a built kernel has to say whether it may write its
+ * own disks, and whether its boot publishes them. The write handler itself is
+ * chosen in fs/devfs.c.
  */
 
 #include "recovery.h"

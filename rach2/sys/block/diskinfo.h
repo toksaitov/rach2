@@ -1,3 +1,24 @@
+/*
+ * diskinfo.h: what the disks say about themselves, published as the text of
+ * /proc/disk, and the whole-disk nodes /dev/diskN.
+ *
+ * A person deciding how to divide a disk without writing a sector of it
+ * needs the drive's identity, its sector count, what its partition table
+ * says, and hashes of chosen sectors; mounting would answer some of that and
+ * is a write, since a mount marks the volume dirty. The identity comes from
+ * the IDENTIFY answer a driver registers the disk with and is published as
+ * `/proc/disk`. The sectors come through `/dev/diskN`, a root-only window
+ * over the whole disk, and are hashed in userland by BusyBox's `sha256sum`.
+ *
+ * Nothing here writes. The only commands this path issues are IDENTIFY and a
+ * sector read, both of which the read-only build's command list allows, so
+ * the metal kernel runs it unchanged.
+ *
+ * The formatting functions are pure so the host test can reach the cases a
+ * device will not produce on request: a model field with no terminator, an
+ * all-ones serial, a sector count above 2^32, a buffer one byte too short.
+ */
+
 #ifndef _DISKINFO_H_
 #define _DISKINFO_H_
 
@@ -5,41 +26,14 @@
 #include "mbr.h"
 #include "disk.h"
 
-/*
- * diskinfo: what a disk says about itself, read once and published as text.
- *
- * Milestone 24 must decide how to carve a laptop's SSD without writing a
- * sector of it, and that decision needs facts: the drive's identity, how many
- * sectors it has, what its partition table says, and hashes of chosen sectors
- * to compare against the ones Windows reported. Mounting would answer some of
- * that and is forbidden, since the mount stamps a dirty flag and that is a
- * write.
- *
- * So the answer is split in two. The identity comes from an ATA IDENTIFY
- * response, which no sector has; both drivers already ask for it and both
- * threw the answer away, so it is kept here and published as `/proc/disk`. The
- * sectors come through `/dev/disk0`, a root-only read-only window over the
- * whole disk, and are hashed in userland by the busybox the image already
- * has, because a SHA-256 in the kernel would duplicate `sha256sum` to no
- * purpose.
- *
- * Nothing here writes. The only commands this path issues are IDENTIFY and a
- * sector read, both of which the read-only build's allowlist permits, so the
- * metal kernel runs it unchanged.
- *
- * The formatting helpers are pure so the host test can reach the cases a real
- * device will not produce on request: a model field with no terminator, an
- * all-ones serial, a sector count above 2^32, a buffer one byte too short.
- */
-
 /* IDENTIFY string fields, in characters, as ATA lays them out. */
 #define DISKINFO_MODEL_CHARS    DISK_MODEL_CHARS
 #define DISKINFO_SERIAL_CHARS   DISK_SERIAL_CHARS
 #define DISKINFO_FIRMWARE_CHARS DISK_FIRMWARE_CHARS
 
 /* Whether a disk was looked for, and what was found. `not-asked` and
-   `no-device` are kept apart so a script can tell a kernel that was never
-   asked from one that asked and got no answer. */
+ * `no-device` are kept apart so a script can tell a kernel that was never
+ * asked from one that asked and got no answer. */
 #define DISKINFO_NOT_ASKED 0
 #define DISKINFO_NO_DEVICE 1
 #define DISKINFO_PRESENT   2
@@ -49,12 +43,14 @@
 #define DISKINFO_MBR_NONE   1 /* read, but no 0x55AA signature */
 #define DISKINFO_MBR_OK     2
 
-/** What one disk said about itself, filled once and then only read. */
+/** What disk 0 said about itself, filled by the registry and the probe. */
 struct diskinfo {
     int state;          /* DISKINFO_NOT_ASKED / NO_DEVICE / PRESENT */
     int mounted;        /* the root file system is on this disk */
-    const char *driver; /* "ahci", "ata", or "none" */
-    int port;           /* the AHCI port, or -1 for ATA */
+    const char *driver; /* the transport of disk 0, "unknown" when it gave no
+                         * IDENTIFY, or "none" when no disk answered */
+    int port;           /* disk 0's location on its transport, or -1 when
+                         * unknown */
     uint64_t sectors;
     uint32_t sector_size;
     char model[DISKINFO_MODEL_CHARS + 1];
@@ -81,9 +77,9 @@ void diskinfo_ata_string(char *out, int chars, const volatile uint16_t *id, int 
  * Write `v` as decimal into `out`, which has `cap` bytes including the NUL.
  *
  * Written by hand because the kernel links no libgcc: dividing a `uint64_t` by
- * ten would emit a call to `__udivdi3` that does not exist. The sector count
- * is a 48-bit field, so the full range matters even though today's disks fit
- * in 32 bits.
+ * ten would emit a call to `__udivdi3`, which the kernel does not have. An
+ * ATA sector count is a 48-bit field and an NVMe one 64 bits, so the whole
+ * range is needed.
  *
  * @return the number of characters written, or 0 if they would not fit.
  */
@@ -92,7 +88,12 @@ int diskinfo_u64_dec(char *out, int cap, uint64_t v);
 /**
  * Render `d` as the text of `/proc/disk` into `buf`, which has `cap` bytes.
  *
- * One fact per line, a single-token key then values. Truncates rather than
+ * One fact per line, a single-token key then values: the state, the driver,
+ * the build's disk policy, then the drivers' and the buffer cache's
+ * counters, printed whatever the state, since a mount can be on any device
+ * and a test that counts what a write cost the medium has no disk of its own
+ * to ask. A present disk adds its port, identity, size, the raw window's
+ * batch and calls, and its first sector read as an MBR. Truncates rather than
  * overruns, and always terminates.
  *
  * @return the number of characters written, not counting the NUL.
@@ -105,7 +106,8 @@ void diskinfo_record_identify(const char *driver, int port, const volatile uint1
 
 /**
  * Render every registered disk into `buf`, which has `cap` bytes: a line
- * `disk N TRANSPORT LOCATION SECTORS TABLE MODEL`, then one line
+ * `disk N TRANSPORT LOCATION SECTORS TABLE MODEL`, a line
+ * `identity N SECTOR_SIZE removable|fixed mounted|free SERIAL`, then one line
  * `part N M START COUNT ID LABEL` per partition, where ID is the partition's
  * GUID on a GPT and `mbr:` and the type byte on an MBR. Truncates and
  * always terminates. Returns the number of characters written.
@@ -113,7 +115,7 @@ void diskinfo_record_identify(const char *driver, int port, const volatile uint1
 int diskinfo_format_disks(char *buf, int cap);
 
 /* The widest text `diskinfo_format_disks` writes: a line per disk and one
-   per partition, each under these many bytes. */
+ * per partition, each under these many bytes. */
 #define DISKINFO_DISK_LINE   96
 #define DISKINFO_PART_LINE   112
 #define DISKINFO_DISKS_BYTES (DISK_MAX * (DISKINFO_DISK_LINE + PART_MAX * DISKINFO_PART_LINE))
@@ -125,12 +127,12 @@ int diskinfo_format_disks(char *buf, int cap);
 #define DISKINFO_RECORD_BYTES 1024
 
 /**
- * Find a disk, read its first sector once, and publish `/dev/diskN` for
+ * Find a disk, read disk 0's first sector, and publish `/dev/diskN` for
  * every registered disk.
  *
- * Adopts an already-published `block0` instead of probing again, so a machine
- * whose root is on the disk does not get its controller reset underneath a
- * mounted file system. `mounted` says whether that is the case, for the
+ * Uses `block0` when a disk is up and probes only when none is, so a machine
+ * whose root is on the disk does not get its controller reset under a
+ * mounted file system. `mounted` says whether the root is on disk 0, for the
  * report.
  *
  * @return 0 when a disk answered, -1 otherwise.

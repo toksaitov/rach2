@@ -1,5 +1,6 @@
 /*
- * The partition service. `partition.h` says what it reads.
+ * partition.c: the reader of MBR, extended and GUID partition tables, and the
+ * GUID text forms.
  */
 
 #include "partition.h"
@@ -7,22 +8,26 @@
 
 #define SECTOR 512u
 
+/** The little-endian 32-bit value at `p`. */
 static uint32_t le32(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+/** The little-endian 64-bit value at `p`. */
 static uint64_t le64(const uint8_t *p)
 {
     return (uint64_t)le32(p) | ((uint64_t)le32(p + 4) << 32);
 }
 
+/** Whether the MBR type `type` is an extended partition. */
 static int extended_type(uint8_t type)
 {
     return type == PART_MBR_EXTENDED_CHS || type == PART_MBR_EXTENDED_LBA ||
            type == PART_MBR_EXTENDED_LINUX;
 }
 
+/** Make `e` an empty entry. */
 static void clear_entry(struct part_entry *e)
 {
     int i;
@@ -39,13 +44,10 @@ static void clear_entry(struct part_entry *e)
 }
 
 /**
- * Add a partition to `t` unless it lies outside `[low, high]` or overlaps
- * one already taken, in which case it is counted in `refused`. Returns the
- * entry, or NULL when it was refused.
+ * Whether sector `lba` lies inside a partition already taken: the next
+ * record of an extended chain may not, or a write to the partition holding
+ * it would destroy the record.
  */
-/* Whether sector `lba` lies inside a partition already accepted: the next
-   record of an extended chain may not, or the partition holding it would
-   be written over its own table. */
 static int inside_accepted(const struct part_table *t, uint64_t lba)
 {
     int i;
@@ -59,6 +61,14 @@ static int inside_accepted(const struct part_table *t, uint64_t lba)
     return 0;
 }
 
+/**
+ * Add partition `number` to `t` unless it is empty, lies outside
+ * `[low, high]`, overlaps one already taken, or would be past `PART_MAX` in
+ * count or number, in which case it is counted in `refused`. The number is
+ * checked as well as the count, since devfs gives a minor to each number and
+ * a number past the table's would take the next disk's. Returns the entry,
+ * or NULL when it was refused.
+ */
 static struct part_entry *take(struct part_table *t, int number, uint64_t start, uint64_t count,
                                uint64_t low, uint64_t high)
 {
@@ -77,8 +87,6 @@ static struct part_entry *take(struct part_table *t, int number, uint64_t start,
             return 0;
         }
     }
-    /* The count and the number both, since devfs gives a minor per number
-     * and a number past the table's would take the next disk's. */
     if (t->count >= PART_MAX || number < 1 || number > (int)PART_MAX) {
         t->refused++;
         return 0;
@@ -93,13 +101,20 @@ static struct part_entry *take(struct part_table *t, int number, uint64_t start,
 
 /**
  * Follow the chain of extended boot records inside the extended partition
- * at `ext_start` of `ext_count` sectors, taking each logical partition.
+ * at `ext_start` of `ext_count` sectors, taking each logical partition, with
+ * `sector` a buffer of one sector.
  *
  * Each record has the logical partition in its first entry, relative to the
  * record, and the next record in its second, relative to the extended
- * partition. The chain ends at a record without a next entry, at one that
- * cannot be read or has no signature, or after `PART_MAX` records, so a
- * chain that loops ends too.
+ * partition. A logical partition must start after its record, since a
+ * partition that began at the record would be published over the bytes that
+ * describe it, and end inside the extended partition. Each next record must
+ * lie further on, inside the extended partition and outside every partition
+ * taken: a record behind the one being read could lie inside a range already
+ * published, and a write to that partition would destroy the rest of the
+ * chain. Moving forward also ends a loop. The chain ends at a record without
+ * a next entry, at one that cannot be read or has no signature, or after
+ * `PART_MAX` records.
  */
 static void follow_logical(struct part_table *t, part_read_fn read, void *ctx,
                            uint64_t disk_sectors, uint64_t ext_start, uint64_t ext_count,
@@ -123,10 +138,6 @@ static void follow_logical(struct part_table *t, part_read_fn read, void *ctx,
         if (read(ctx, ebr, 1, sector) != 0 || sector[510] != 0x55 || sector[511] != 0xAA) {
             return;
         }
-        /* The record itself is not data: a partition that began at the
-         * EBR would be published over the bytes that name it, and a later
-         * record in the chain would sit inside an accepted range, so
-         * writing the first would destroy the second. */
         if (e0[4] != 0 && le32(e0 + 12) != 0 && le32(e0 + 8) != 0) {
             struct part_entry *e =
                 take(t, number, ebr + le32(e0 + 8), le32(e0 + 12), ebr + 1, ext_last);
@@ -140,10 +151,6 @@ static void follow_logical(struct part_table *t, part_read_fn read, void *ctx,
             return;
         }
         next = ext_start + le32(e1 + 8);
-        /* The chain moves forward. A record behind the one being read can
-         * lie inside a range this walk has already published, and writing
-         * that partition would then destroy the record that names the
-         * rest of the chain. Forward movement also ends a loop. */
         if (next <= ebr || next > ext_last || inside_accepted(t, next)) {
             t->refused++;
             return;
@@ -162,6 +169,12 @@ static int volume_boot_sector(const uint8_t *sector)
            sector[7] == 'T';
 }
 
+/**
+ * Take the primary entries of the signed MBR in `sector`, then the logical
+ * partitions of its first extended entry, read into `spare`; a second
+ * extended entry is refused. An MBR that yields no entry and refuses none
+ * is `PART_NONE`.
+ */
 static void scan_mbr(struct part_table *t, part_read_fn read, void *ctx, uint64_t disk_sectors,
                      uint8_t *sector, uint8_t *spare)
 {
@@ -335,8 +348,8 @@ int part_scan(struct part_table *t, part_read_fn read, void *ctx, uint64_t disk_
     return 0;
 }
 
-/* The type GUIDs `part_gpt_as_mbr` and `part_bios_boot` name, as the table
-   stores them. */
+/* The type GUIDs `part_gpt_as_mbr` and `part_bios_boot` look for, as the
+ * table stores them. */
 static const uint8_t type_efi_system[16] = {0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11,
                                             0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b};
 static const uint8_t type_basic_data[16] = {0xa2, 0xa0, 0xd0, 0xeb, 0xe5, 0xb9, 0x33, 0x44,
@@ -436,10 +449,12 @@ int part_bios_boot(const struct part_table *t, uint64_t *first, uint64_t *count,
 
 static const char hex_digits[] = "0123456789abcdef";
 
+/**
+ * The first three fields are little-endian on the disk; the text form prints
+ * them most significant byte first, and the last two as stored.
+ */
 void part_guid_text(const uint8_t guid[16], char out[37])
 {
-    /* The first three fields are little-endian on the disk; the text form
-       prints them most significant byte first, and the last two as stored. */
     static const int order[16] = {3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15};
     int i, n = 0;
 
@@ -455,6 +470,7 @@ void part_guid_text(const uint8_t guid[16], char out[37])
     out[n] = '\0';
 }
 
+/** The value of the hexadecimal digit `c`, either case, or -1. */
 static int hex_value(char c)
 {
     if (c >= '0' && c <= '9') {
@@ -469,6 +485,7 @@ static int hex_value(char c)
     return -1;
 }
 
+/** Read the text form in the byte order `part_guid_text` writes. */
 int part_guid_parse(const char *text, uint8_t guid[16])
 {
     static const int order[16] = {3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15};

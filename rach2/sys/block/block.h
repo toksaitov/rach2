@@ -1,3 +1,9 @@
+/*
+ * block.h: the block device every disk, partition, stick and loop device is,
+ * the block request that lets a device sleep its caller, and the counters
+ * /proc/disk prints.
+ */
+
 #ifndef _BLOCK_H_
 #define _BLOCK_H_
 
@@ -8,21 +14,13 @@
 
 typedef struct block_device block_device_t;
 
-/**
- * A sector-addressed storage device behind a small read/write vtable.
- *
- * `read` and `write` transfer `count` whole sectors starting at logical block
- * address `lba`, to or from `buffer`, and return 0 on success or a negative
- * errno (`-EIO`) on failure. They are synchronous and polled: a caller may
- * invoke them with interrupts off and without the scheduler running. `drvdata`
- * is the backend's private pointer.
- */
 struct block_request;
 
 /* The device completes a transfer by polling and may be used with interrupts
- * off. ATA, AHCI and every partition view over them have it; a device that
- * sleeps its caller does not, and the page-cache window refuses such a device
- * as a backing store. */
+ * off. ATA always has it, and AHCI and NVMe until `ahci_start` and
+ * `nvme_start` move them to their interrupts; a device that sleeps its caller
+ * does not, and the page-cache window refuses such a device as a backing
+ * store. */
 #define BLOCK_FAULT_SAFE    0x1u
 /* Set by the buffer cache when a write to the device failed; cleared when
  * the cache drops the device at unmount. */
@@ -31,19 +29,19 @@ struct block_request;
  * a partition view over one. Every mount of it is read-only. */
 #define BLOCK_READ_ONLY     0x4u
 /* The device sleeps its caller and answers in the same call: a loop device
- * over a file, whose read is a read of that file through the file system
- * holding it. It is neither of the two above: it may sleep, so it cannot be
- * called with interrupts off, and it must not take a request slot, because
- * the device under it takes one from the same pool of sixteen while it
- * waits. It is called directly, in syscall context only. */
+ * over a file, whose read is a read of that file through the file system it
+ * is on. It may sleep, so it cannot be called with interrupts off, and it
+ * takes no request, because the device under it takes one from the same pool
+ * while it waits. It is called directly, in syscall context only. */
 #define BLOCK_CALLER_SYNC   0x10u
 /* The device has gone: a stick pulled out. Nothing can reach it again, so an
  * unmount writes nothing and only lets go of what it holds. Set by the cache
  * when the disk layer tells it, cleared when the device is published again. */
 #define BLOCK_GONE          0x8u
 /* The device answers a polled `read` or `write` from any context, its queue
- * drained first: a SATA disk on its interrupts. A caller that cannot sleep,
- * a page fault with interrupts off, takes that path instead of a request. */
+ * drained first: an AHCI or NVMe disk on its interrupts. A caller that cannot
+ * sleep, a page fault with interrupts off, takes that path instead of a
+ * request. */
 #define BLOCK_POLLABLE      0x40u
 /* The device stopped answering: every slot of the request pool it held went
  * through its deadline periods unanswered. Its waiters were released with
@@ -56,10 +54,20 @@ struct block_request;
  * write since its last flush; `block_flush` sends a flush only then. */
 #define BLOCK_WRITE_THROUGH 0x80u
 
+/**
+ * A sector-addressed storage device behind a small table of functions.
+ *
+ * `read` and `write` transfer `count` whole sectors starting at logical block
+ * address `lba`, to or from `buffer`, in the call, and return 0 on success or
+ * a negative errno (`-EIO`) on failure. On a `BLOCK_FAULT_SAFE` or
+ * `BLOCK_POLLABLE` device they poll, and a caller may invoke them with
+ * interrupts off and without the scheduler running. `drvdata` is the
+ * driver's private pointer.
+ */
 struct block_device {
-    uint32_t sector_size;
+    uint32_t sector_size; /* always BLOCK_SECTOR_SIZE */
     uint64_t sector_count;
-    uint32_t flags;          /* BLOCK_FAULT_SAFE, or nothing */
+    uint32_t flags;          /* BLOCK_* above */
     uint32_t deadline_ticks; /* sleeping path: the deadline's period in ticks;
                               * 0 means the thirty-second default */
     uint32_t deadline_limit; /* periods in a row a request is waited for
@@ -82,10 +90,10 @@ struct block_device {
      * sleeps its caller, and by polling on a `BLOCK_POLLABLE` disk, for a
      * caller that cannot sleep. */
     int (*flush)(block_device_t *device, struct block_request *request);
-    /* The device this one's bytes live on, or NULL for a device that is its
-     * own medium. A loop device names the device of the file system holding
-     * its file, and the buffer cache reads the chain to decide whether a
-     * caller holding one device's buffer may take another's. */
+    /* The device this one's bytes are on, or NULL for a device that is its
+     * own medium. A loop device's is the device of the mount its file is on,
+     * and the buffer cache reads the chain to decide whether a caller holding
+     * one device's buffer may take another's. */
     block_device_t *backing;
     void *drvdata;
     /* A `BLOCK_WRITE_THROUGH` disk answered a write without its flush, and
@@ -106,7 +114,7 @@ struct block_device {
  * device and nothing stands on it. One is what the four buffers a process may
  * hold can serve: a file system on a loop device holds a buffer of it while
  * the file system under it holds two of the disk, and a second loop device in
- * the middle would want two more than there are. A device whose chain would
+ * the middle would need two more than there are. A device whose chain would
  * be longer is refused where it is attached. */
 #define BLOCK_MAX_DEPTH 1
 
@@ -127,7 +135,8 @@ uint32_t block_flags(block_device_t *device);
 int block_depth(block_device_t *device);
 
 /**
- * Whether `ancestor` is under `device`: its backing, or its backing's.
+ * Whether `ancestor` is under `device`: its backing, or its backing's, as
+ * far as `BLOCK_MAX_DEPTH + 1` levels down. A device is not under itself.
  */
 int block_is_below(block_device_t *ancestor, block_device_t *device);
 
@@ -139,10 +148,12 @@ extern block_device_t *block0;
 /**
  * Bring up the disks and publish the first as `block0`.
  *
- * Runs the AHCI, NVMe and ATA drivers in that order; each registers the
- * disks it finds, and the first disk found is `block0`. Returns 0 when a
- * device answered and `block0` is set, or -1 when none did. Polled and
- * IRQ-free, so it is safe to call before the scheduler runs.
+ * Runs the AHCI, NVMe and platform drivers (on a PC, ATA) in that order;
+ * each registers the disks it finds, the first disk found is `block0`, and
+ * every disk's partition table is then read. Under `rach2.nodisk` it probes
+ * nothing. Returns 0 when a device answered and `block0` is set, or -1 when
+ * none did. Polled and without interrupts, so it may run before the
+ * scheduler does.
  */
 int block_probe(void);
 
@@ -154,31 +165,29 @@ int block_probe(void);
 void block_scan_disks(void);
 
 /**
- * Report a boot disk, probing only if none has been established.
+ * Report a boot disk, probing only if none has been found.
  *
- * `block_probe` resets and re-identifies a controller every time it is called,
- * which is work a boot has no reason to repeat and which several callers do:
- * the disk mount, the diagnostic, and the device discovery that runs before
- * either. This answers from `block0` when a disk has already answered, so a
- * working controller is never reset a second time.
+ * `block_probe` resets and identifies a controller each time it is called,
+ * and several callers need a disk: root selection, boot-device discovery and
+ * the `/proc/disk` probe. This returns at once when `block0` is set, so a
+ * working controller is reset only once.
  *
- * A failure is not remembered: a controller that did not answer at boot can
- * be probed again from the rescue shell, which exists to inspect a machine
- * after a failed start.
+ * A failure is not kept: a controller that did not answer at boot can be
+ * probed again from the debug shell.
  *
  * @return 0 when a device answered and `block0` is set, -1 when none did.
  */
 int block_ready(void);
 
 /**
- * How many commands each driver has issued to the device, and how many of those
- * were cache flushes.
+ * How many commands the drivers have issued to their devices since boot, and
+ * how many of those were cache flushes, for /proc/disk.
  *
- * The raw windows count their own calls into the block interface, which says
- * how well devfs batched but nothing about what the driver did underneath: a
- * driver that broke one 64-sector request into 64 commands would look identical
- * from above and cost exactly the million cache flushes batching exists to
- * avoid. These count where the commands actually leave for the device.
+ * The raw windows count their own calls into the block interface, which shows
+ * how devfs batched but not what the driver did under it: a driver that broke
+ * one 64-sector request into 64 commands would give the same answer from
+ * above, with a flush after each. These are counted where each command is
+ * issued to the device.
  */
 uint64_t block_commands(void);
 uint64_t block_flushes(void);
@@ -188,11 +197,11 @@ void block_count_command(void);
 void block_count_flush(void);
 
 /**
- * The drivers' waits: a poll is one read of a status register while a
- * command is in flight, a wait tick one tick a caller slept for one. A
- * driver that spins reads the status thousands of times a command; one that
- * sleeps reads it a few times and is woken. `/proc/disk` prints both, so a
- * test can require the sleep and not the seconds.
+ * The drivers' waits since boot: a poll is one read of a status register
+ * while a command is in flight, a wait tick one tick a caller slept for one.
+ * A driver that spins reads the status thousands of times a command; one
+ * that sleeps reads it a few times and is woken. `/proc/disk` prints both, so
+ * a test can require the sleep and not the seconds.
  */
 uint64_t block_polls(void);
 uint64_t block_wait_ticks(void);
@@ -203,10 +212,11 @@ void block_count_wait_tick(void);
  * A partition: the sector range `[start_lba, start_lba + sector_count)` of a
  * backing device, presented as its own `block_device`.
  *
- * The view's `read`/`write` add `start_lba` to each request and forward it to
- * the backing device, rejecting any request that runs past the partition. The
- * `device` member is first, so a `block_device_t *` handed to the vtable can be
- * recovered as the enclosing `block_partition_t`.
+ * The view's `read`, `write` and `submit` add `start_lba` to each request
+ * and pass it to the backing device, refusing with `-EIO` an empty request
+ * or one that runs past the partition; its `flush` is the backing's. The
+ * `device` member is first, so a `block_device_t *` given to one of the
+ * view's functions is the enclosing `block_partition_t`.
  */
 typedef struct block_partition {
     block_device_t device;
@@ -215,8 +225,13 @@ typedef struct block_partition {
 } block_partition_t;
 
 /**
- * Initializes `partition` as the `sector_count`-sector slice of `backing` that
- * starts at `start_lba`. After this, `&partition->device` is a usable device.
+ * Initialize `partition` as the `sector_count`-sector slice of `backing` that
+ * starts at `start_lba`, clamped to the sectors `backing` has: a start past
+ * its end gives an empty view whose every request fails. After this,
+ * `&partition->device` is a usable device. The view copies the backing's
+ * flags and deadlines, but `block_flags` and `block_max_sectors` read the
+ * backing's at each call, and `submit` is always present, since a disk gains
+ * `submit` and loses `BLOCK_FAULT_SAFE` after its views exist.
  */
 void block_partition_init(block_partition_t *partition, block_device_t *backing, uint64_t start_lba,
                           uint64_t sector_count);
@@ -231,19 +246,18 @@ void block_partition_init(block_partition_t *partition, block_device_t *backing,
 /**
  * One request on a sleeping device, in pages of its own.
  *
- * The request is allocated for the transfer with a buffer of its own: one
- * page from the identity-mapped window for a transfer of a page, or `pages`
- * heap pages for a larger one, whose physical addresses the device is given
- * for DMA. A write is copied into the buffer before `submit` and a read is
- * copied out after a
+ * The request is allocated for the transfer with a buffer of its own: a frame
+ * of the DMA pool for a transfer of a page or less, or `pages` heap pages for
+ * a larger one, whose physical addresses the device is given. A write is
+ * copied into the buffer before `submit` and a read is copied out after a
  * successful completion, so a completion that arrives after the deadline
- * lands in the request's page and not in memory the caller reused. The
+ * lands in the request's buffer and not in memory the caller reused. The
  * request is held by its caller and by its device and freed when both have
- * let go: quarantined until the late completion, which lets go for the
- * device. Each request takes the next value of a counter as its
- * generation, so no two live requests share one, and a completion naming a
- * request that is no longer live, or a generation that is not its, is
- * dropped with a record.
+ * let go; one given up on is quarantined until the late completion, which
+ * lets go for the device. Each request takes the next value of a counter as
+ * its generation, so no two live requests share one, and a completion naming
+ * a request that is no longer live, or a generation that is not its, is
+ * dropped and logged.
  */
 struct block_request {
     struct block_request *next;   /* the list of live requests */
@@ -253,7 +267,7 @@ struct block_request {
     int write;
     uint64_t lba;
     uint32_t count;      /* sectors, at most the device's `max_sectors` */
-    uint8_t *page;       /* the request's buffer: one page in the window, or
+    uint8_t *page;       /* the request's buffer: a DMA-pool frame, or
                           * `pages` heap pages for a larger transfer */
     uint32_t pages;      /* pages of the buffer */
     int status;          /* 0 or -errno, valid once done */
@@ -274,16 +288,19 @@ struct block_request {
 #define BLOCK_REQ_NOFLUSH 0x1u
 #define BLOCK_REQ_FLUSH   0x2u
 
+/* A request of a device whose `max_sectors` is 0: one page. */
 #define BLOCK_REQ_SECTORS     8u
 /* The most any device may take in one request: 1 MiB, 256 pages of a heap
  * buffer described page by page to the controller. Each driver declares
  * its own limit within this one, and `block_max_sectors` caps it here: the
- * AHCI disk's limit is the whole 2048, the USB stick's 1024, the ATA
- * disk's 64, since it moves a sector at a time through a port. */
+ * AHCI disk's limit is the whole 2048, an NVMe namespace's 8 times 2 to the
+ * power of its controller's MDTS, at most 2048, the USB stick's 1024, and
+ * the ATA disk's 64, since it moves a sector at a time through a port. */
 #define BLOCK_REQ_MAX_SECTORS 2048u
 
-/** The most one request to `device` may move, in sectors: the backing's
- * `max_sectors` through a partition view, or a page's worth. */
+/** The most one request to `device` may move, in sectors: the
+ * `max_sectors` of the device under any partition views, capped at
+ * `BLOCK_REQ_MAX_SECTORS`, or a page's worth when that is 0. */
 uint32_t block_max_sectors(block_device_t *device);
 
 /**
@@ -373,12 +390,12 @@ int block_device_holds(block_device_t *device);
 /** Advance the request deadlines; the timer calls it once per tick. */
 void block_request_tick(void);
 
-/** Quarantines made, callers released with EIO, and the tick of the last
- * release, cumulative since boot, for /proc/disk. */
 /** Completions that found another request in flight, see `disk-overlaps`. */
 uint32_t block_overlaps(void);
 /** Requests in flight now, see `disk-in-flight`. */
 uint32_t block_in_flight(void);
+/** Quarantines made, callers released with EIO, and the tick of the last
+ * release, cumulative since boot, for /proc/disk. */
 uint32_t block_quarantines(void);
 uint32_t block_releases(void);
 uint32_t block_release_tick(void);

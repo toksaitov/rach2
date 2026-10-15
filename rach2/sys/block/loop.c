@@ -1,25 +1,22 @@
 /*
- * A block device over a regular file.
+ * loop.c: block devices over regular files.
  *
- * Its read is a read of the file through the file system holding it, and its
- * write is a write followed by a sync of that file, so a block the buffer
- * cache says it has written is a block the file has taken. That is what lets
- * a file system live in a file: an image on a disk, on a stick, or on a root
- * that is nothing but memory.
+ * A device's read is a read of the file through the file system it is on,
+ * and its write is a write followed by a sync of that file, so a block the
+ * buffer cache has written is in the file. That is what lets a file system
+ * be in a file: an image on a disk, on a stick, or on a root that is only
+ * memory.
  *
- * The device sleeps its caller and answers in the same call, which is the
- * third kind the block layer has (`BLOCK_CALLER_SYNC`): it must not take a
- * slot of the request pool, because the device under it takes one from the
- * same pool of sixteen while it waits. It names that device as the one it
- * stands on, and the buffer cache reads the chain to allow a caller holding
- * one of its blocks to take a block of the device below.
+ * The device sleeps its caller and answers in the same call
+ * (`BLOCK_CALLER_SYNC`): it takes no request of the pool, because the device
+ * under it takes one from the same pool while it waits. It gives that device
+ * as its `backing`, and the buffer cache reads the chain to let a caller
+ * holding one of its blocks take a block of the device below.
  *
- * A file is named by its mount and its node and not by its path, so a hard
- * link to an attached file is the same file and a second attachment of it is
- * refused. While a file is attached it is reached through the device and
- * nowhere else: a write, a truncation and an attribute that would change its
- * length are all refused, since the file system mounted on the device may
- * not have the image move under it.
+ * While a file is attached it is reached through the device and nowhere
+ * else: a write, a truncation and an attribute change that would change its
+ * length are refused, so the image does not move under the file system
+ * mounted on the device.
  */
 
 #include "loop.h"
@@ -44,10 +41,9 @@ struct loop_device {
     void *node;
     void *handle;
     int writable;
-    int in_flight; /* transfers inside the file system holding the file */
-    /* What the device owes its writes and what it has paid: every write is a
-     * write of the file and a sync of it, and /proc/loop reports both so a
-     * test can ask whether the second half happened. */
+    int in_flight; /* transfers inside the file system the file is on */
+    /* Every write is a write of the file and a sync of it, and /proc/loop
+     * reports both counts so a test can see that the sync happened. */
     uint32_t writes;
     uint32_t syncs;
     int release_due;          /* the medium went during a transfer: the last one out releases */
@@ -59,6 +55,7 @@ struct loop_device {
 
 static struct loop_device loops[LOOP_DEVICES];
 
+/** The loop device whose `dev` is `device`. */
 static struct loop_device *loop_of(block_device_t *device)
 {
     return (struct loop_device *)device;
@@ -70,19 +67,12 @@ static void loop_transfer_ended(struct loop_device *loop);
 static void loop_settle(void);
 
 /**
- * A transfer of whole sectors, through the file system holding the file.
- *
- * A short answer is a device error: the file's length fixed the sector count
- * at the attachment and nothing may change it while it is attached, so a read
- * or a write that does not move every byte means the file is not what it was.
- */
-/**
  * Whether a transfer of `count` sectors at `lba` is one this device has.
  *
  * The block layer bounds every request before it calls a device, and this
- * asks the same of what arrives: a device that trusted its caller would read
- * or write past the end of the file it stands on, and a count that wrapped
- * the byte arithmetic would move nothing and report success.
+ * checks the same of what arrives: a device that trusted its caller would
+ * read or write past the end of the file it stands on, and a count that
+ * wrapped the byte arithmetic would move nothing and report success.
  */
 static int loop_bounded(struct loop_device *loop, uint64_t lba, uint32_t count)
 {
@@ -95,6 +85,14 @@ static int loop_bounded(struct loop_device *loop, uint64_t lba, uint32_t count)
     return 1;
 }
 
+/**
+ * Read whole sectors from the file through the file system it is on.
+ *
+ * A short answer is a device error, `-EIO`: the file's length fixed the
+ * sector count at the attachment and nothing may change it while it is
+ * attached, so a transfer that does not move every byte means the file is not
+ * what it was. The same holds for `loop_write`.
+ */
 static int loop_read(block_device_t *device, uint64_t lba, uint32_t count, void *buffer)
 {
     struct loop_device *loop = loop_of(device);
@@ -115,6 +113,11 @@ static int loop_read(block_device_t *device, uint64_t lba, uint32_t count, void 
     return 0;
 }
 
+/**
+ * Write whole sectors into the file and sync it, since the buffer cache
+ * takes a written block to be on the device; `-EROFS` on a read-only
+ * attachment, `-EIO` for a short write or a failed sync.
+ */
 static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, const void *buffer)
 {
     struct loop_device *loop = loop_of(device);
@@ -143,12 +146,10 @@ static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, cons
              (int)(bytes - (wrote < 0 ? 0 : (uint32_t)wrote)));
         return -EIO;
     }
-    /* The cache's promise is that a written block has reached the device, and
-     * this device is a file: the sync above is the half of the write that
-     * makes that true. */
     return 0;
 }
 
+/** Sync the file, in the call; `request` is always NULL for this device. */
 static int loop_flush(block_device_t *device, struct block_request *request)
 {
     struct loop_device *loop = loop_of(device);
@@ -216,6 +217,11 @@ void loop_repoint(struct vfs_mount *mnt, const void *from, void *to)
     }
 }
 
+/**
+ * A file goes by either name: callers that have a node ask with a node, and
+ * callers that have a description ask with the handle the file system gave
+ * its open.
+ */
 int loop_backs(struct vfs_mount *mnt, void *node)
 {
     int i;
@@ -224,9 +230,6 @@ int loop_backs(struct vfs_mount *mnt, void *node)
         if (loops[i].mnt != mnt) {
             continue;
         }
-        /* By either name the file goes under: callers that have a node ask
-         * with a node, and callers that have a description ask with the
-         * handle the file system gave its open. */
         if (loops[i].node == node || loops[i].handle == node) {
             return 1;
         }
@@ -235,13 +238,12 @@ int loop_backs(struct vfs_mount *mnt, void *node)
 }
 
 /**
- * Let go of everything the attachment holds. The buffers go first: a device
- * whose file is released while the cache still has its blocks would write
- * them into a file nobody holds open.
+ * Let go of everything the attachment holds and free the slot. The buffers
+ * go first: a device whose file is released while the cache still has its
+ * blocks would write them into a file nobody holds open.
  *
- * Never called while a transfer is inside the file system holding the file:
- * the caller checks, and a medium that goes during one leaves the release to
- * the transfer on its way out.
+ * Never called while a transfer is inside the file system the file is on:
+ * the callers check `in_flight`.
  */
 static void loop_release(struct loop_device *loop)
 {
@@ -274,9 +276,7 @@ static void loop_unclaim(struct loop_device *loop)
     loop->used = 0;
 }
 
-/**
- * The end of one transfer, and the release the medium's going left owing.
- */
+/** The end of one transfer inside the file system the file is on. */
 static void loop_transfer_ended(struct loop_device *loop)
 {
     loop->in_flight--;
@@ -285,11 +285,12 @@ static void loop_transfer_ended(struct loop_device *loop)
 /**
  * The release a medium's going left owing, done where it can be done.
  *
- * A device that goes is reported from wherever the driver noticed, which can
- * be the interrupt that found the stick missing, and letting go of what the
- * attachment holds takes a mount's lock and can sleep. So the going only
- * marks the device, and this runs at the next command through the control
- * node or the next reading of /proc/loop, both of which are syscalls.
+ * A device that goes is reported from wherever the driver noticed, and
+ * letting go of what the attachment holds takes a mount's lock and can sleep.
+ * So the going only marks the device, and this releases each marked device
+ * with no transfer in flight that nothing holds. It runs from system calls:
+ * the control node's commands and ioctls, a device's ioctls, and the reads of
+ * /proc/loop and /sys/block/loopN/loop.
  */
 static void loop_settle(void)
 {
@@ -316,24 +317,16 @@ void loop_device_gone(block_device_t *device)
         if (!loops[i].used || loops[i].dev.backing != device) {
             continue;
         }
-        /* Nothing can reach the file again, so the device goes with it and
-         * the mount above it can be taken down: an unmount of a device that
-         * has gone writes nothing and only lets go of what it holds. What
-         * this attachment holds goes back the same way, since the volume
-         * holding the file cannot be unmounted while a description of it is
-         * outstanding. */
         klog(KLOG_WARN, "loop", "loop%d: the device under its file has gone", i);
         loops[i].dev.flags |= BLOCK_GONE;
         loops[i].attached = 0;
-        /* The slot stays taken until somebody detaches it: a mount may still
-         * be standing on this device, and a fresh attachment here would put
-         * another file under it. */
         loops[i].release_due = 1;
         bcache_device_gone(&loops[i].dev);
     }
 }
 
-/** Append what fits of `text`, and answer where the next byte goes. */
+/** Append what fits of `text` to `buffer` at `at`, leaving room for a NUL,
+ * and return where the next byte goes. */
 static uint32_t put_text(char *buffer, uint32_t at, uint32_t cap, const char *text)
 {
     while (*text && at + 1 < cap) {
@@ -342,8 +335,8 @@ static uint32_t put_text(char *buffer, uint32_t at, uint32_t cap, const char *te
     return at;
 }
 
-/* Append a number the same way. A 32-bit one: this kernel has no 64-bit
- * division, and an image is addressed in 32 bits anyway. */
+/** Append a 32-bit number the same way, since the kernel has no 64-bit
+ * division. */
 static uint32_t put_number(char *buffer, uint32_t at, uint32_t cap, uint32_t value)
 {
     char digits[24];
@@ -428,12 +421,16 @@ static int loop_resolve(const char *path, struct vfs_ref *ref)
 }
 
 /**
- * Drain backing writes and recheck attachment under the mount lock.
- * Resolution and open run under the same lock. Keep it through publication
- * on success so no writer can relocate the node between these steps. A
- * shared mapping made while the fsync slept is found here too, since mmap
- * does not take the lock: nothing between this check and the publication
- * sleeps.
+ * Sync the file just opened as `handle`, then check again, under the mount's
+ * namespace lock, that its length is whole sectors and that it is not open
+ * elsewhere, attached, or mapped shared. 0, or `-EINVAL` or `-EBUSY`, or what
+ * the sync or the attribute read answered.
+ *
+ * Resolution and open run under the same lock, which the caller keeps
+ * through publication on success, so no writer can relocate the node between
+ * these steps. A shared mapping made while the sync slept is found here too,
+ * since mmap does not take the lock: nothing between this check and the
+ * publication sleeps.
  */
 static int loop_prepare(struct vfs_ref *ref, void *handle, struct vfs_stat *st)
 {
@@ -452,6 +449,18 @@ static int loop_prepare(struct vfs_ref *ref, void *handle, struct vfs_stat *st)
     return rc;
 }
 
+/**
+ * The slot is claimed before the steps that can sleep: a second attach that
+ * found it free would publish over this one, and what the first had opened
+ * would have nobody left to release it. The claim forgets the device the
+ * slot last stood on, so a medium going while those steps sleep does not
+ * match a claim that has published nothing.
+ *
+ * The description keeps the mount, so unmounting the volume the file is on
+ * answers `EBUSY` while the device is attached. The resolution's count of an
+ * operation in progress is given back, as an open gives it back: what the
+ * attachment keeps is the hold and the description, released at the detach.
+ */
 int loop_attach(int index, const char *path, int writable)
 {
     struct vfs_ref ref;
@@ -480,9 +489,6 @@ int loop_attach(int index, const char *path, int writable)
     if (loop->used) {
         return -EBUSY;
     }
-    /* Claimed before the steps below, every one of which can sleep: a second
-     * attach that found this slot free would publish over this one, and what
-     * the first had opened would have nobody left to release it. */
     loop->used = 1;
     loop->attaching = 1;
     loop->attached = 0;
@@ -494,9 +500,6 @@ int loop_attach(int index, const char *path, int writable)
     loop->mnt = 0;
     loop->node = 0;
     loop->handle = 0;
-    /* The device this slot last stood on is not this one's: a medium going
-     * while the steps below sleep must not match a claim that has published
-     * nothing. */
     loop->dev.backing = 0;
 
     rc = loop_resolve(path, &ref);
@@ -521,7 +524,7 @@ int loop_attach(int index, const char *path, int writable)
         vfs_ns_unlock(ref.mnt);
         vfs_ref_release(&ref);
         loop_unclaim(loop);
-        return -EINVAL; /* whole sectors, or the last one is a lie */
+        return -EINVAL; /* whole sectors only */
     }
     if (loop_backs(ref.mnt, ref.node) || filemap_disk_mapped(ref.mnt, st.ino)) {
         vfs_ns_unlock(ref.mnt);
@@ -552,11 +555,6 @@ int loop_attach(int index, const char *path, int writable)
         return rc;
     }
 
-    /* The description keeps the mount, so unmounting the volume holding the
-     * file answers EBUSY while the device is attached. The resolution's own
-     * count of an operation in progress is given back here, the way an open
-     * does it: what the attachment keeps is the hold and the description,
-     * not a syscall that never ends. */
     vfs_desc_open(ref.mnt);
     vfs_leave(ref.mnt);
     loop->index = index;
@@ -583,13 +581,16 @@ int loop_attach(int index, const char *path, int writable)
 
     vfs_ns_unlock(ref.mnt);
 
-    /* The resolver's hold on the node is the attachment's; released at the
-     * detach through the description. */
     klog(KLOG_INFO, "loop", "loop%d: %s, %d bytes, %s", index, loop->path, (int)st.size,
          loop->writable ? "read-write" : "read-only");
     return index;
 }
 
+/**
+ * A slot claimed by an attachment still inside the steps that sleep is
+ * refused: releasing it would free a claim about to publish itself, and the
+ * next attach would then stand a second file under it.
+ */
 int loop_detach(int index)
 {
     struct loop_device *loop;
@@ -601,14 +602,9 @@ int loop_detach(int index)
     if (!loop->used) {
         return -ENOENT;
     }
-    /* A slot claimed by an attachment still inside the steps that sleep:
-     * releasing it here would free a claim that is about to publish itself,
-     * and the next attach would then stand a second file under it. */
     if (loop->attaching) {
         return -EBUSY;
     }
-    /* A device whose medium went has nothing left to write: the detach only
-     * releases what the attachment still holds. */
     if (!loop->attached) {
         if (vfs_device_holds(&loop->dev)) {
             return -EBUSY;
@@ -627,7 +623,7 @@ int loop_detach(int index)
         return -EBUSY; /* a buffer of it is held */
     }
     if (loop->in_flight > 0) {
-        return -EBUSY; /* a transfer is inside the file system holding it */
+        return -EBUSY; /* a transfer is inside the file system the file is on */
     }
     if (bcache_sync(&loop->dev) != 0) {
         return -EIO;
@@ -643,8 +639,8 @@ int loop_detach(int index)
 /**
  * The device number at `*at`, and `*at` moved past it.
  *
- * A number and nothing else: no digits, a digit beyond the devices there are,
- * or anything but a space after it, and the command is not one.
+ * A number and nothing else: no digits, a number beyond the devices there
+ * are, or anything but a space or the end after it, and the answer is -1.
  */
 static int read_index(char **at)
 {
@@ -660,9 +656,6 @@ static int read_index(char **at)
         digits++;
         p++;
     }
-    /* The one place a device number is read. No digits, a number beyond the
-     * devices there are, or anything but the end of the word after it makes
-     * the command invalid. */
     if (digits == 0 || index >= LOOP_DEVICES || (*p != ' ' && *p != '\0')) {
         return -1;
     }
@@ -684,11 +677,7 @@ static int word_is(const char *line, const char *word)
 }
 
 /**
- * The commands /dev/loop-control takes, one per write: `attach N PATH`,
- * `attach - PATH` for the first free device, and `detach N`.
- *
- * A line and not a structure, because the only caller is a program the
- * machine builds itself and a line is what a shell can send.
+ * A line and not a structure, because a line is what a shell can send.
  */
 int loop_control_write(const char *buffer, uint32_t count)
 {
@@ -760,7 +749,8 @@ int loop_control_write(const char *buffer, uint32_t count)
     return -EINVAL;
 }
 
-/* struct loop_info64: the offsets of the fields this driver reads or fills. */
+/* struct loop_info64: its size and the offsets of the fields this driver
+ * reads or fills. */
 #define INFO_SIZE      232u
 #define INFO_INODE     8u
 #define INFO_OFFSET    24u
@@ -819,6 +809,12 @@ static void loop_info_fill(const struct loop_device *loop, uint8_t *info)
     k_strncpy((char *)info + INFO_NAME, loop->path, INFO_NAME_SIZE - 1);
 }
 
+/**
+ * The file's length fixed the capacity at the attachment, and the device
+ * reads through the file system's cache in 512-byte blocks, so
+ * LOOP_SET_CAPACITY succeeds and changes nothing, and LOOP_SET_DIRECT_IO and
+ * LOOP_SET_BLOCK_SIZE accept only what the device already does.
+ */
 int32_t loop_ioctl(int index, int privileged, uint32_t request, uintptr_t arg)
 {
     struct loop_device *loop = &loops[index];
@@ -828,8 +824,6 @@ int32_t loop_ioctl(int index, int privileged, uint32_t request, uintptr_t arg)
     loop_settle();
     if (request == LOOP_SET_CAPACITY || request == LOOP_SET_DIRECT_IO ||
         request == LOOP_SET_BLOCK_SIZE) {
-        /* The file's length fixed the capacity at the attachment; the device
-         * reads through the file system's cache and has 512-byte blocks. */
         if (!loop->attached) {
             return -ENXIO;
         }
@@ -852,8 +846,6 @@ int32_t loop_ioctl(int index, int privileged, uint32_t request, uintptr_t arg)
         return -EPERM;
     }
     if (request == LOOP_CLR_FD) {
-        /* A device still mounted, or open elsewhere, goes when the last of
-         * them does, as Linux makes it. */
         if (vfs_device_holds(&loop->dev) || loop->opens > 1) {
             loop->autoclear = 1;
             return 0;

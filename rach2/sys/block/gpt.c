@@ -1,16 +1,13 @@
 /*
- * gpt.c: the GUID partition table, checked before any of it is used.
+ * gpt.c: the GUID partition table's header and entries, checked before any
+ * of them is used.
  *
  * Everything here is checked arithmetic on numbers a device supplied. A
  * table says where its own entry array is, how many entries it has and how
  * large each one is, and a reader that multiplied those together without
- * looking would compute an offset a stick chose. So every product is bounded
- * first, the array is read whole and covered by its own CRC32, and only then
- * is a single entry looked at.
- *
- * What this publishes is the first four used entries, wherever in the array
- * they lie. A table with more says so and the rest are not published; four is
- * what the kernel's device nodes hold, and it is what an MBR gives as well.
+ * looking would compute an offset the device chose. So every product is
+ * bounded first, and the array is read whole and checked against its CRC32
+ * before an entry is looked at.
  */
 
 #include "gpt.h"
@@ -26,21 +23,22 @@
 
 #define MBR_TYPE_PROTECTIVE 0xEE
 
+/** The little-endian 32-bit value at `p`. */
 static uint32_t read32(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+/** The little-endian 64-bit value at `p`. */
 static uint64_t read64(const uint8_t *p)
 {
     return (uint64_t)read32(p) | ((uint64_t)read32(p + 4) << 32);
 }
 
 /**
- * The CRC32 of the GUID table, which is the one in every zip file: the
- * reflected polynomial 0xEDB88320, starting at all ones and inverted at the
- * end. Computed a bit at a time, because a table is at most sixteen kilobytes
- * and a table of remainders would be four times the size of this function.
+ * The reflected polynomial 0xEDB88320, starting at all ones and inverted at
+ * the end. Computed a bit at a time, because an array is at most sixteen
+ * kilobytes and a table of remainders would be a kilobyte of data.
  */
 uint32_t gpt_crc32(const uint8_t *data, uint32_t length)
 {
@@ -65,9 +63,6 @@ int gpt_protective(const uint8_t *sector)
     if (sector[510] != 0x55 || sector[511] != 0xAA) {
         return 0;
     }
-    /* The protective entry is the first, and the other three are empty on
-     * every table this kernel will meet; a disk with a real partition beside
-     * it is a hybrid, which is read as an MBR and not as this. */
     return sector[446 + 4] == MBR_TYPE_PROTECTIVE;
 }
 
@@ -106,6 +101,14 @@ uint64_t gpt_last_usable(const uint8_t *header)
     return read64(header + 48);
 }
 
+/**
+ * The header must give the sector it was read from, which tells a backup
+ * header from a copy of the primary left at the end of the disk. Its CRC32
+ * covers the header with the CRC field taken as zero. The entry count times
+ * the entry size is bounded before it is computed, since a reader takes an
+ * offset from it, and with the disk's size known the whole array, not only
+ * its first sector, must be on the medium.
+ */
 int gpt_header_ok(const uint8_t *header, uint64_t my_lba, uint64_t disk_sectors)
 {
     uint32_t size;
@@ -129,13 +132,10 @@ int gpt_header_ok(const uint8_t *header, uint64_t my_lba, uint64_t disk_sectors)
     if (size < GPT_HEADER_MIN || size > GPT_HEADER_MAX) {
         return -1;
     }
-    /* The header names the sector it is on, which is what tells a header read
-     * from the backup apart from a copy of the primary left there. */
     if (read64(header + 24) != my_lba) {
         return -1;
     }
 
-    /* The CRC covers the header with its own field taken as zero. */
     stored_crc = read32(header + 16);
     for (i = 0; i < size; i++) {
         copy[i] = header[i];
@@ -161,8 +161,6 @@ int gpt_header_ok(const uint8_t *header, uint64_t my_lba, uint64_t disk_sectors)
     if (entry_size < GPT_ENTRY_MIN || (entry_size & 0x7Fu) != 0) {
         return -1;
     }
-    /* The product is what a reader would compute an offset from, so it is
-     * bounded before it is taken. */
     if (entry_size > GPT_MAX_ARRAY_BYTES / count) {
         return -1;
     }
@@ -175,7 +173,6 @@ int gpt_header_ok(const uint8_t *header, uint64_t my_lba, uint64_t disk_sectors)
     if (array_lba == 0 || (disk_sectors != 0 && array_lba >= disk_sectors)) {
         return -1;
     }
-    /* The array itself must be on the medium, not only its first sector. */
     if (disk_sectors != 0 && (uint64_t)((entry_size * count + BLOCK_SECTOR_SIZE - 1u) /
                                         BLOCK_SECTOR_SIZE) > disk_sectors - array_lba) {
         return -1;
@@ -233,8 +230,6 @@ int gpt_parse_entries(const uint8_t *array, uint32_t count, uint32_t entry_size,
             passed_over++;
             continue;
         }
-        /* A ten-byte read addresses 32 bits of sectors, which is what this
-         * kernel's disks and sticks are read with. */
         if (last > 0xFFFFFFFFu) {
             passed_over++;
             continue;

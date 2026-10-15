@@ -1,12 +1,12 @@
 /*
- * How block devices stand on one another.
+ * chain.c: how block devices stand on one another.
  *
- * A loop device's bytes live in a file on a volume, which lives on a disk, so
+ * A loop device's bytes are in a file on a volume, which is on a disk, so
  * one device can be under another. The buffer cache reads this to decide
  * whether a caller holding one device's block may take another's, and the
  * attachment of a loop device reads it to refuse a chain longer than the four
- * buffers a process may hold can serve. Two functions and no state, in a file
- * of their own so that the cache's tests can have them without the drivers.
+ * buffers a process may hold can serve. The two functions are in a file of
+ * their own so that the cache's host tests can link them without the drivers.
  */
 
 #include "block.h"

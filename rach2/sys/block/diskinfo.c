@@ -1,10 +1,10 @@
 /*
- * diskinfo.c: the disk's own account of itself, kept and rendered as text.
+ * diskinfo.c: disk 0's identity and the registry's disks, rendered as the
+ * text of /proc/disk.
  *
- * The formatting is deliberately dull: fixed keys, one per line, decimal where
- * a number will be pasted into a `dd skip=` and hexadecimal where every
- * reference prints hexadecimal. What reads this is `awk` and `grep` on the
- * machine, so the shape matters more than the prose.
+ * The format is fixed keys, one per line, decimal where a number will be
+ * given to `dd skip=` and hexadecimal where the references print
+ * hexadecimal, since `awk` and `grep` read it on the machine.
  */
 
 #include "../klog.h"
@@ -17,8 +17,8 @@
 
 static struct diskinfo info;
 
-/* Set by diskinfo_record_identify before a probe adopts the device, so the
-   identity survives even when the probe itself is what published block0. */
+/* Set by diskinfo_record_identify before a probe takes the device, so the
+ * identity is kept even when the probe itself published block0. */
 static int identify_seen;
 
 void diskinfo_ata_string(char *out, int chars, const volatile uint16_t *id, int first_word)
@@ -40,6 +40,11 @@ void diskinfo_ata_string(char *out, int chars, const volatile uint16_t *id, int 
     out[last + 1] = '\0';
 }
 
+/**
+ * Long division by ten over 32-bit halves: the remainder of the high half is
+ * folded into the low half a nibble at a time, so no intermediate exceeds 32
+ * bits.
+ */
 int diskinfo_u64_dec(char *out, int cap, uint64_t v)
 {
     char tmp[24];
@@ -52,8 +57,6 @@ int diskinfo_u64_dec(char *out, int cap, uint64_t v)
         tmp[n++] = '0';
     }
     while (v != 0) {
-        /* Long division by ten over 32-bit halves: the kernel links no libgcc,
-         * so a 64-bit divide would be a call to a routine that is not there. */
         uint32_t hi = (uint32_t)(v >> 32);
         uint32_t lo = (uint32_t)(v & 0xFFFFFFFFu);
         uint32_t qhi = hi / 10u;
@@ -61,8 +64,6 @@ int diskinfo_u64_dec(char *out, int cap, uint64_t v)
         uint32_t qlo;
         uint32_t part;
 
-        /* Fold the remainder of the high half into the low half a nibble at a
-         * time, so no intermediate exceeds 32 bits. */
         qlo = 0;
         for (i = 28; i >= 0; i -= 4) {
             part = (rem << 4) | ((lo >> i) & 0xFu);
@@ -91,7 +92,7 @@ static void put(char *buf, int *n, int cap, const char *s)
     }
 }
 
-/** Append `v` as decimal. */
+/** Append `v` as decimal, as `put` does. */
 static void put_dec(char *buf, int *n, int cap, uint64_t v)
 {
     char tmp[24];
@@ -114,13 +115,10 @@ static void put_hex(char *buf, int *n, int cap, uint32_t v, int width)
     }
 }
 
-/*
- * The counters come before the disk's own record and are printed whatever
- * its state: a mount can be on any device the drivers and the buffer cache
- * serve, and a row that counts what a write owed the medium has no disk of
- * its own to ask. The drivers' totals come first, then the cache's: reads
- * served from a buffer, reads that filled one, waits for a buffer another
- * process held, and the buffers its walks of its own lists read.
+/**
+ * The drivers' totals come first, then the cache's: reads served from a
+ * buffer, reads that filled one, waits for a buffer another process held,
+ * and the buffers its walks of its own lists read.
  */
 int diskinfo_format(const struct diskinfo *d, char *buf, int cap)
 {
@@ -252,9 +250,6 @@ int diskinfo_probe(int mounted)
     int i;
 
     info.mounted = mounted;
-    /* Adopt a device the mount already published instead of probing again: a
-     * second bring-up would reset the controller under a mounted file
-     * system. */
     if (!block0 && block_ready() != 0) {
         info.state = DISKINFO_NO_DEVICE;
         info.driver = "none";
@@ -314,13 +309,10 @@ const struct diskinfo *diskinfo_get(void)
 }
 
 /**
- * Render one `disk` line and one `identity` line for each registered disk,
- * with the accepted partitions of each after them.
- *
  * The `identity` line is what a program choosing a disk to write reads: the
- * unit the disk counts in, whether it can be pulled out, whether a mount holds
- * any range of it, and the drive's serial. The serial is last on its line and
- * the model last on the other, since either may hold a space.
+ * unit the disk counts in, whether it can be pulled out, whether a mount
+ * claims any range of it, and the drive's serial. The serial is last on its
+ * line and the model last on the other, since either may contain a space.
  */
 int diskinfo_format_disks(char *buf, int cap)
 {

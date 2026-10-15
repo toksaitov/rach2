@@ -1,9 +1,9 @@
 /*
- * mbr.c: the MBR partition-table parse and the boot-partition judgement.
+ * mbr.c: the MBR partition-table parse and the boot-partition judgements.
  *
  * Pure functions over bytes and records: the caller reads the sector and
- * decides what to mount. tests/host/mbr_hosttest.c drives both functions
- * against crafted tables, the malformed beside the valid.
+ * decides what to publish. tests/host/mbr_hosttest.c drives them with
+ * crafted tables, the malformed beside the valid.
  */
 
 #include "mbr.h"
