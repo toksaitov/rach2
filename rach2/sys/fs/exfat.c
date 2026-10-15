@@ -1592,6 +1592,13 @@ static int ex_mount_on(struct ex_mount *em, struct vfs_mount *mnt, block_device_
             mnt->flags |= VFS_MS_RDONLY;
         }
     }
+    root = node_take(em);
+    if (!root) {
+        return -ENOMEM;
+    }
+    root->is_dir = 1;
+    root->first = em->root;
+    root->length = 0; /* the root's chain is followed to its end */
     if (em->writable) {
         /* VolumeDirty on the disk for the writable life of the mount, as
          * Linux does; the clean unmount clears it last. */
@@ -1601,10 +1608,6 @@ static int ex_mount_on(struct ex_mount *em, struct vfs_mount *mnt, block_device_
         }
         em->dirty_set = 1;
     }
-    root = node_take(em);
-    root->is_dir = 1;
-    root->first = em->root;
-    root->length = 0; /* the root's chain is followed to its end */
     mnt->priv = em;
     mnt->root = root;
     return 0;

@@ -96,8 +96,8 @@ rach2/sys/fs/exfat.c:check_dir nesting 6 one file system operation over the on-d
 rach2/sys/fs/exfat.c:check_dir params 8 the parameters are one level's cursor in a recursive walk
 rach2/sys/fs/exfat.c:ex_check_volume complexity 26 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/exfat.c:ex_check_volume lines 153 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/exfat.c:ex_mount_on complexity 86 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/exfat.c:ex_mount_on lines 256 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/exfat.c:ex_mount_on complexity 87 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/exfat.c:ex_mount_on lines 259 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/exfat.c:ex_rename complexity 53 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/exfat.c:ex_rename lines 194 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/exfat.c:ex_truncate complexity 30 one file system operation over the on-disk format, each step a rule of the format
