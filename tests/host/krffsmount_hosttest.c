@@ -1,14 +1,22 @@
-/**
- * Check mounted KRFFS relocation, O_PATH pins, writeback errors, clean-flag
- * ordering, and the errno a failed creation answers, a directory whose
- * identifier another directory has among them.
+/*
+ * krffsmount_hosttest.c: the mounted KRFFS volume, rach2/sys/fs/krffsmount.c
+ * over rach2/sys/fs/krffs.c, with the descriptor table of fd.c: relocation,
+ * O_PATH pins, writeback errors, the order of the clean flag, and the error
+ * a failed creation returns, a directory whose identifier another directory
+ * has among them.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/fs/lock.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
- * Lock callbacks run queued operations before a waiting caller resumes.
- * Separate arrays model buffer cache, device cache and persistent bytes.
+ * `vfs_ns_lock` runs the operation queued in `waiting` before it gives the
+ * caller the lock, as another process would run while the caller slept.
+ * `cached`, `device` and `medium` model the buffer cache, the device's write
+ * cache and the bytes that survive a power loss.
+ *
+ * The fixture tests/host/fixtures/krffs_open.c includes this file with
+ * `KRFFS_OPEN_TEST` defined, which leaves out the lock, close and wait
+ * functions that macro guards.
  */
 #include "fs/krffs.c"
 #include "fs/krffsmount.c"
@@ -27,6 +35,10 @@ static block_device_t disk;
 static fd_table_t table;
 static struct open_file *descs[3];
 static void (*waiting)(void);
+/* The faults a row sets: `sync_error` and `flush_error` fail every sync or
+   flush, `fail_flush_at` the flush of that count, and `fail_after_move` the
+   second sync after the moved file's old node is free, counted in
+   `syncs_after_free`. `flush_hook` runs at every flush. */
 static int failures, depth, sync_error, flush_error, sync_calls, flush_calls;
 static int check_clean_order, clean_writes, reuse_fd, truncating;
 static int fail_after_move, syncs_after_free, fail_flush_at;
@@ -37,7 +49,7 @@ struct percpu cpu_table[NR_CPUS];
 process_t *proc_list;
 const struct vfs_type vfs_krffs_type = {0};
 
-/** Record every failed invariant. */
+/** Count and print a failed row. */
 static void check(int ok, const char *what)
 {
     if (!ok) {
@@ -80,7 +92,7 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 }
 
 #ifndef KRFFS_OPEN_TEST
-/** Complete queued calls before giving the waiting call its lock. */
+/** Run the operation queued in `waiting`, once, then take the lock. */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
     void (*run)(void) = waiting;
@@ -103,7 +115,10 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
 
 #endif
 
-/** Apply the production descriptor scan to every relocation. */
+/**
+ * Repoint the descriptions from `from` to `to` with fd.c's
+ * `fd_ofd_repoint`, and require the mount lock held.
+ */
 void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to)
 {
     check(depth > 0 || mnt->ns_depth > 0, "relocation holds mount lock");
@@ -132,7 +147,7 @@ void wq_wake_all(wait_queue_t *wq)
     (void)wq;
 }
 
-/** Reject a lock wait, which no row makes. */
+/** Count a failed row, since no row waits for a lock, and return -1. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
@@ -143,7 +158,7 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 }
 
 #ifndef KRFFS_OPEN_TEST
-/** Reject an unexpected description wait. */
+/** Count a failed row, since no row waits on a description, and return 0. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
@@ -174,7 +189,13 @@ void bcache_dirty(struct bbuf *b)
     b->dirty = 1;
 }
 
-/** Copy dirty blocks to the device cache, retaining them on failure. */
+/**
+ * Copy the dirty blocks to the device cache. Fails with -EIO, keeping the
+ * blocks dirty, under `sync_error` or at the fault `fail_after_move` sets.
+ * With `check_clean_order`, a write of block 0 with the dirty flag clear
+ * requires the earlier data on the medium, and is counted in
+ * `clean_writes`.
+ */
 int bcache_sync(block_device_t *dev)
 {
     unsigned i;
@@ -205,7 +226,11 @@ int bcache_sync(block_device_t *dev)
     return 0;
 }
 
-/** Flush the device cache, or report its failure without persisting bytes. */
+/**
+ * Run `flush_hook`, then copy the device cache to the medium; or, under
+ * `flush_error` or at flush `fail_flush_at`, fail with -EIO and copy
+ * nothing.
+ */
 int block_flush(block_device_t *dev)
 {
     (void)dev;
@@ -220,7 +245,11 @@ int block_flush(block_device_t *dev)
     return 0;
 }
 
-/** Format and mount a small volume through the production block backend. */
+/**
+ * Format a 64 KiB volume of a root and one free node, mount it through the
+ * block backend of krffsmount.c, make a descriptor table, and clear the
+ * faults and the counts.
+ */
 static void setup(void)
 {
     krffs_node_t *root = (krffs_node_t *)cached;
@@ -299,7 +328,11 @@ static int open_node(void *node)
     return fd;
 }
 
-/** Move A to B, reuse A for another open file, and prevent growth in place. */
+/**
+ * Write 4096 bytes to the target, which moves it from its first offset, A,
+ * to a new one, B; create a file that takes offset A and open it; and create
+ * a file after the target, so that it cannot grow in place again.
+ */
 static void first_move(void)
 {
     void *reused;
@@ -315,7 +348,11 @@ static void first_move(void)
     create("block-b");
 }
 
-/** Queue a second mover with A before the first mover changes it to B. */
+/**
+ * Queue `first_move` to run when this call takes the lock, then write 8192
+ * bytes or, with `truncating`, truncate to 8192, through the second
+ * description, which still has offset A.
+ */
 static void second_move(void)
 {
     int rc;
@@ -331,7 +368,15 @@ static void second_move(void)
     }
 }
 
-/** Read A after two waiting writers have moved it and another file reuses A. */
+/**
+ * Check that the descriptions of a file follow it through two moves while
+ * another file takes its old offset. A read through the third description
+ * waits while `second_move` and `first_move` run, and must read the file's
+ * bytes at its new place, as must a saved handle; every description is
+ * repointed, the length is the second move's, and the file at the old
+ * offset keeps its own bytes. With `truncate`, the second move is a
+ * truncate.
+ */
 static void relocation(int truncate)
 {
     struct vfs_stat st;
@@ -416,7 +461,12 @@ static void pinned(void)
     teardown();
 }
 
-/** Fail the data sync after relocation and require every holder to follow. */
+/**
+ * Fail the second sync after a grow has moved the target and freed its old
+ * node: the operation must return `EIO`, and the file must stay at its new
+ * place with every description repointed there. With `truncate`, the grow
+ * is a truncate.
+ */
 static void failed_relocation(int truncate)
 {
     void *current;
@@ -443,7 +493,14 @@ static void failed_relocation(int truncate)
     teardown();
 }
 
-/** Require pre-clear durability, flush errors and read-only writeback. */
+/**
+ * Check the unmount's order of writes in four modes. A clean unmount (mode
+ * 0) flushes before and after it clears the dirty flag, and the data is on
+ * the medium before the flag is. A flush that fails before the clear (1)
+ * returns `EIO` and leaves the flag set. On a read-only mount, an fsync (2)
+ * or a sync (3) whose writeback fails returns `EIO` and keeps the block
+ * dirty, a retry writes it, and the unmount leaves the dirty flag.
+ */
 static void durability(void)
 {
     int mode;
@@ -482,7 +539,12 @@ static void durability(void)
     }
 }
 
-/** Fail the clean-flag flush after data is durable and attempt later writes. */
+/**
+ * Fail the unmount's second flush, the one after the clean flag is written,
+ * with the data already durable. The unmount must return `EIO` and make the
+ * mount read-only; a read still works, a write, a truncate and a create are
+ * `EROFS`, and a sync can still finish the writeback.
+ */
 static void failed_clean_flush(void)
 {
     void *node, *handle;
@@ -525,9 +587,8 @@ static void failed_clean_flush(void)
 }
 
 /**
- * A creation tells a failing volume from a full one: a sync the medium
- * refuses makes it EIO, and a volume a file has grown to fill makes it
- * ENOSPC.
+ * A creation tells a failing volume from a full one: a sync that fails
+ * makes it `EIO`, and a volume a file has grown to fill makes it `ENOSPC`.
  */
 static void creation_errors(void)
 {
@@ -583,10 +644,11 @@ static void owner_across(void)
 }
 
 /**
- * A directory whose identifier another directory has is EINVAL. `bC` and
+ * A directory whose identifier another directory has is `EINVAL`. `bC` and
  * `cb` hash alike, so the second in one directory would share the first
- * one's children, and the core refuses it with a result the volume reports
- * as a name the file system cannot hold, not as a full or a failing volume.
+ * one's children, and the core fails it with `KRFFS_ETAKEN`, which the
+ * volume reports as a name the file system cannot hold, not as a full or a
+ * failing volume.
  */
 static void taken_identifier(void)
 {
@@ -599,8 +661,10 @@ static void taken_identifier(void)
     teardown();
 }
 
-/** Remove the directory `name` of the volume's root under the mount's lock,
- * as `do_rmdir` calls the type. */
+/**
+ * Remove the directory `name` of the volume's root under the mount's lock,
+ * as `do_rmdir` calls the type.
+ */
 static int remove_dir(const char *name)
 {
     int rc;
@@ -616,7 +680,7 @@ static int remove_dir(const char *name)
  * process record keeps the directory by the mount and the node's handle and
  * takes no hold, since the volume counts none, so a directory removed under
  * it would give its place to the next node made while the record still
- * names it: once the process has left, the rmdir removes the directory and
+ * points to it: once the process has left, the rmdir removes the directory and
  * the next node made takes that place.
  */
 static void working_directory(void)
@@ -645,20 +709,29 @@ static void working_directory(void)
     teardown();
 }
 
-/** Exercise both relocating operations and the unmount write order. */
-/** fd.c reports a description's close to inotify, and no row watches. */
+/**
+ * Do nothing: fd.c reports a description's close to inotify, and no row
+ * watches.
+ */
 void inotify_desc(struct open_file *ofd, uint32_t mask)
 {
     (void)ofd;
     (void)mask;
 }
 
-/* A mount is its own base here: no test makes a bind mount. */
+/** Return `m`: no row makes a bind mount, so a mount is its own base. */
 const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 {
     return m;
 }
 
+/**
+ * Run every row: relocation by a write and by a truncate, a directory read,
+ * an O_PATH pin, a failed relocation of each kind, the unmount's order of
+ * writes, a failed clean flush, the errors of a creation, an owner across a
+ * block, a taken identifier and a working directory. Returns 1 when a row
+ * failed, else 0.
+ */
 int main(void)
 {
     relocation(0);
