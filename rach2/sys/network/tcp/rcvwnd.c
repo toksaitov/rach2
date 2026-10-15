@@ -1,5 +1,6 @@
 /*
- * rcvwnd.c: the receiver's window-update decision, as a pure function.
+ * rcvwnd.c: the receiver's rule for announcing a reopened window, as
+ * rcvwnd.h describes it.
  *
  * It is a file apart from tcp.c so that a host test can drive the rule at
  * ring and segment sizes the running kernel never uses. It keeps no state,

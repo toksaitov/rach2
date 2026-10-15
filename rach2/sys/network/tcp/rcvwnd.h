@@ -3,6 +3,11 @@
 
 #include "../../lib/kint.h"
 
+/*
+ * rcvwnd: the rule by which a TCP receiver announces a window that reopened
+ * as its reader drained the receive ring.
+ */
+
 /**
  * Decide whether a reopened receive window is worth announcing.
  *
@@ -13,8 +18,9 @@
  * maximum segment size or half the buffer, whichever is smaller, then announce
  * the whole new window at once.
  *
- * A window wider than `most`, the largest the window field says at the
- * connection's scale, is reported as `most`.
+ * A window wider than `most`, the largest the window field can have at the
+ * connection's scale, is reported as `most`. A ring of 0 bytes, or fewer
+ * than `buffered`, gives 0.
  *
  * @param advertised the window last sent to the peer, in bytes.
  * @param buffered   bytes the reader has not taken yet, `tail - head`.
