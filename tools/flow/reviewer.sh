@@ -28,7 +28,7 @@
 # minutes, so that no finding is lost. A review that fails or reaches its limit
 # says so on the phase, files nothing and is not repeated unless queued; one
 # that ends on the account's usage limit is repeated after fifteen minutes.
-# Nothing waits for a review.
+# No push and no issue waits for a review.
 #
 # STATE, `~/flow/reviewer` unless given, holds the log `loop.log`, `since`,
 # `queue`, `failed`, the worktree `wt`, the process group of the review that is

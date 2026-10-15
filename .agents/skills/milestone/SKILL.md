@@ -16,7 +16,7 @@ A milestone runs from its `plan.md` under `dev-log/`. Its phases are issues on t
 
 ## The close
 
-* Once a phase's issues have all closed, the reviewer loop reviews the phase's whole diff while the work goes on, and each finding becomes a `bug` issue. Nothing waits for the review. The owner closes a milestone after a build from clean and a night that passed its last commit whole.
+* Once a phase's issues have all closed, the reviewer loop reviews the phase's whole diff while the work goes on, and each finding becomes a `bug` issue. No push and no issue waits for the review; a night run started by hand waits for it and its findings, as the Work section of `AGENTS.md` says. The owner closes a milestone after a build from clean and a night that passed its last commit whole.
 * The build from clean empties `build/` of everything but `build/vendor/`, and removes the vendor outputs as well only when a port or its toolchain changed.
 * The style suite runs `prosecheck`, the mechanical half of the register rule; the review covers its contextual half.
 * The reviewer's lead divides the diff by contract among its subagents and checks each finding they return against the code before it keeps it. A review that reaches its three hours is incomplete, not clean, and says so on the phase.
