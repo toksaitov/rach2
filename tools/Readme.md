@@ -70,7 +70,7 @@ The accounts are in the `kvm` group, and the runner uses `/dev/kvm` when it can 
 [testing.sh](dev/testing.sh) puts the owner's tree in the copy at `/home/testing/rach2`, or the copy that `RACH2_TESTING_COPY` names, and runs commands there, as the [testing skill](../.agents/skills/testing/SKILL.md) requires:
 
     tools/dev/testing.sh sync
-    tools/dev/testing.sh run tests/run all
+    tools/dev/testing.sh run 'tests/run NAME...'
     tools/dev/testing.sh get PATH...
     tools/dev/testing.sh sh
     tools/dev/testing.sh wait NAME [SEEN]

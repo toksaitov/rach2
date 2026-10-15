@@ -73,13 +73,6 @@ The phase is #73; each task below is a sub-issue, sized for one worker session w
 5. The two checks in `textcheck.sh`, once every component document conforms.
 6. The edit: the whole set read as a new reader would, for contradictions, repetition, links and reading order, and fixed where it fails. The component documents are three issues for the workers, by part of the tree; the manager edits the policy files, `AGENTS.md`, `CLAUDE.md` and the skills.
 
-A document task is checked by `tests/run style`. A comment unit is checked by the build of both architectures, `tests/run style`, `tests/run host` when it changes a host test, and the token comparison, run in the clone with the change in the working tree:
+A document task and a comment unit are checked by `tools/verify/doccheck.sh`, run in a built tree on the testing host with the change in place. It compares each changed C file's tokens with those of `origin/master` once the comments are removed, keeping the inside of every string literal as it is, reads every other changed file for a line that is not a comment, and runs the document checks of `tests/run style`.
 
-    git diff --name-only origin/master -- '*.c' '*.h' | while read -r f; do
-        git show "origin/master:$f" | gcc -fpreprocessed -dD -E -P -x c - |
-            tr -s ' \t\n' '\n\n\n' > ~/tokens.before
-        gcc -fpreprocessed -dD -E -P -x c "$f" | tr -s ' \t\n' '\n\n\n' > ~/tokens.after
-        cmp -s ~/tokens.before ~/tokens.after || echo "differs: $f"
-    done
-
-It prints nothing when no C file's code changed. The writer puts its output, or the word "none", in a comment on the unit's issue, with the list of the files that are not C and were read by hand.
+The writer puts its last line, `doccheck: result: pass`, in a comment on the unit's issue. A unit that has to change code as well is checked as code, as `AGENTS.md` says.

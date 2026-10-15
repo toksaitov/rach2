@@ -32,10 +32,12 @@ This file states the rules in force; their history is in commit messages and `de
 * Work in your clone on a local branch named for the issue, such as `42-ahci-timeout`.
 * Build the whole task first. Write every part, compile as you go, and check a detail by hand only when reading and reasoning cannot settle it. Start no suite or other long run while the task is being built.
 * Wait for a long command by running it in the foreground, or in the background with the tool's own notice when it ends. Never wait by polling the process table: a loop such as `until ! pgrep -f 'tests/run'` finds its own command line and never ends.
-* Then rebase onto `origin/master` and check the task once, ordering the steps by cause and effect, so that nothing is checked before a later step changes it:
-  1. The compile and `tests/run style`, which are fast and catch mechanical faults.
-  2. The suites the change could affect, as one `RACH2_WORKERS=4 tests/run A B C`, and again with `ARCH=x86_64` when the change touches code that differs between the architectures.
-  3. For every fix after that, only the checks it could affect.
+* Then rebase onto `origin/master` and check the task once. The check is set by what the change touches. A change of several kinds takes the check of each, and the `tests/run style` of a change that alters code covers its documents:
+  * Documents and comments alone (Markdown, manual pages, comments in code): `sh tools/verify/doccheck.sh` in a built tree on the testing host, which the owner's loops reach with `tools/dev/testing.sh run`. It takes seconds and refuses a change that alters code. No build and no suite.
+  * Test or tool code: the compile, `tests/run style`, and the test that runs the changed code: `tests/run host` for a host test, or the suite that runs a changed probe, fixture or script.
+  * Kernel or system code: the compile of both architectures, `tests/run style`, and only the suites that run the changed code, as one `RACH2_WORKERS=4 tests/run A B C`, and again with `ARCH=x86_64` when the code differs between the architectures.
+  * A fix after the check repeats only the checks it could affect.
+* ci checks the rest after the push, and the night runs every suite. Do not run a suite that does not run the changed code, nor `tests/run core` or a full set.
 * A suite that fails in that check with the failure already recorded on `master`, in an open `ci:` issue for the same suite and architecture, is not yours. Push past it only when your change does not touch what the failing row tests; otherwise fix the failure, or show that your change passes a narrower check of that behavior. Either way, add your evidence to that issue.
 * Before pushing, look for an open issue with the label `hold`. While one is open, push only a repair toward a passing core run, and name it in that issue. Push with `git push origin HEAD:master`, which `master` takes only as a fast-forward. If another push came first, rebase, look at what it changed, and repeat only the checks it could affect. Never force-push.
 * ci checks `master` after the push. `.github/workflows/ci.yml` runs the build, `tests/run style`, `tests/run host` and `tests/run core` on both architectures, one run at a time, on the newest commit, and `night.yml` runs every suite at 19:00 UTC. A failure becomes an issue titled `ci: KIND: WHAT fails on ARCH`, with the commits since the last pass and the `gh run download` command that fetches the kept logs, and `bisect.yml` then comments with the commit that fails while its parent passes, or says that the range is unresolved or that the failure did not repeat. The next free worker takes the issue, whoever wrote the commit: fix forward when the fix is clear, otherwise revert the named commit and reopen the issue it closed, with the log. Nobody reverts on an unresolved range; narrow it first. A failure that did not repeat is labelled `intermittent` and stays open; nothing is quarantined.
@@ -62,7 +64,7 @@ This file states the rules in force; their history is in commit messages and `de
 
 ## Testing
 
-* Check a change with the suites that cover what it changed, as Work says; ci then checks `master`, and the night runs every suite.
+* Check a change by what it touches, as Work says; ci then checks `master`, and the night runs every suite.
 * Builds and suites run on the testing host: each person's in a clone in their own account there, and the owner's in the copy `tools/dev/testing.sh` syncs from the owner's computer, which itself runs only a compile or one host test. The `testing` skill describes the host.
 * A new test is trusted only after it has been made to fail: the unmodified test passes; a mutation, a deliberate fault compiled into what it runs, makes it fail; with the source restored and the artifact rebuilt, it passes again. A changed test needs no new proof. The `testing` skill has the mechanics.
 * A suite judges what the kernel counts, never the clock; seconds in a suite are completion bounds.
@@ -116,5 +118,5 @@ This file states the rules in force; their history is in commit messages and `de
 
 * `master` changes only by a fast-forward push of checked work, as Work says; the repository's ruleset refuses a force push to it and its deletion. Push no other branch; a helper does not push at all.
 * Commit in scoped units, one logical change each, on your branch, with no attribution of any kind. The message is one line with no trailing period, begins with a capitalised verb in the imperative, and says what the commit does, not how it was arrived at; `git log --oneline -20` shows the style. A commit that finishes an issue adds a blank line and `Closes #N`.
-* A text-only cleanup changes no behavior: every C file it changes is the same sequence of tokens before and after once its comments are removed, which the command in `dev-log/60-docs/plan.md` shows, and every other file it changes differs only in comment lines. Keep the vendored trees out of the diff.
+* A text-only cleanup changes no behavior: every C file it changes is the same sequence of tokens before and after once its comments are removed, which `tools/verify/doccheck.sh` checks, and every other file it changes differs only in comment lines. Keep the vendored trees out of the diff.
 * `tools/git-hooks/commit-msg` refuses a message with an attribution line. `.claude/settings.json` turns off Claude Code's own attribution and turns the hook on when a session starts; `git config core.hooksPath tools/git-hooks` turns it on in any other clone.
