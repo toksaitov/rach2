@@ -1,5 +1,6 @@
 /*
- * hid_hosttest.c: what a report means, with no controller and no keyboard.
+ * hid_hosttest.c: the USB HID class driver, usb/hid.c, fed keyboard and mouse
+ * reports directly, with no controller and no keyboard.
  *
  * A report is a state and a scancode is an event. This class driver turns one
  * into the other and does nothing else. The interesting cases are the ones
@@ -16,20 +17,22 @@ extern int printf(const char *fmt, ...);
 
 #include "../../rach2/sys/usb/hid.h"
 
-/* ---- what the class driver reaches for outside itself ---- */
+/* ---- the functions outside hid.c that it calls ---- */
 
 #include "../../rach2/sys/input.h"
 
-/* Every code the driver sent, in order. */
+/* Every code the driver sent since the last report, in order; codes past
+ * MAX_CODES are dropped. */
 #define MAX_CODES 64
 static unsigned char codes[MAX_CODES];
 static int n_codes;
 
-/* The stamp the input layer takes for the latency record, which this test
-   has no clock for and no interest in. */
+/** Do nothing: hid.c stamps each code for the latency record, which this test
+ * does not check. */
 void usb_stamp_wake(void)
 {}
 
+/** Record a scancode in `codes`, as the input layer would queue it. */
 void input_key(uint8_t scancode)
 {
     if (n_codes < MAX_CODES) {
@@ -43,6 +46,7 @@ static int mouse_dy;
 static int mouse_buttons;
 static int mouse_reports;
 
+/** Record the last mouse movement and buttons, and count the reports. */
 void input_mouse(int dx, int dy, int buttons)
 {
     mouse_dx = dx;
@@ -51,14 +55,17 @@ void input_mouse(int dx, int dy, int buttons)
     mouse_reports++;
 }
 
+/** Return 1: a mouse is present. */
 int input_mouse_present(void)
 {
     return 1;
 }
 
+/** Do nothing: no row checks the announcement of a mouse. */
 void input_mouse_found(void)
 {}
 
+/** Discard the message: no row checks the log. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -80,7 +87,11 @@ static int fails;
         }                                 \
     } while (0)
 
-/** A keyboard report: modifiers and up to six usages. */
+/**
+ * Send keyboard `slot` an 8-byte boot report with modifier byte `mods` and the
+ * key usages `a`, `b` and `c` (0 for none) in the first three key slots,
+ * after clearing `codes`.
+ */
 static void keys(int slot, unsigned mods, int a, int b, int c)
 {
     unsigned char report[8];
@@ -97,7 +108,7 @@ static void keys(int slot, unsigned mods, int a, int b, int c)
     hid_report(slot, HID_KEYBOARD, report, 8);
 }
 
-/** Whether the codes sent are exactly these. */
+/** Return 1 when the driver sent exactly the first `n` of `c0` to `c3`. */
 static int sent(int n, int c0, int c1, int c2, int c3)
 {
     int want[4];
@@ -118,12 +129,21 @@ static int sent(int n, int c0, int c1, int c2, int c3)
     return 1;
 }
 
+/**
+ * Run the rows and print the result; return 1 when a row failed.
+ *
+ * Usage 0x01 (ErrorRollOver) or 0x02 (POSTFail) in a key slot says the
+ * keyboard cannot tell which keys are down. Translating the slots would press
+ * keys that are not down, and storing them would forget the keys that are
+ * and press them again on the next report, so the rows require both kinds to
+ * send nothing and to leave the held keys alone. A keyboard unplugged with
+ * keys held sends no release of its own, so `hid_gone` must send them.
+ */
 int main(void)
 {
     unsigned char mouse[4];
 
-    /* A key pressed, held, and released. The hold sends nothing, which is the
-       difference between a report and an event. */
+    /* A key pressed, held across two reports, and released. */
     keys(1, 0, 0x04, 0, 0); /* 'a' down */
     CHECK("a key pressed sends its make code", sent(1, 0x1E, 0, 0, 0));
     keys(1, 0, 0x04, 0, 0); /* still down */
@@ -158,8 +178,7 @@ int main(void)
     CHECK("an arrow is sent in its two-byte form", sent(2, 0xE0, 0x48, 0, 0));
     keys(1, 0, 0, 0, 0);
 
-    /* The report a keyboard sends when more keys are down than it can tell
-       apart. Translating it would press six keys that do not exist. */
+    /* ErrorRollOver: more keys are down than the keyboard can tell apart. */
     {
         unsigned char rollover[8];
         int i;
@@ -174,8 +193,7 @@ int main(void)
         hid_report(1, HID_KEYBOARD, rollover, 8);
         CHECK("a rollover report's keys are dropped", n_codes == 0);
 
-        /* Its modifier byte is not part of what the keyboard lost count of,
-           and a shift pressed as the rollover happened is still pressed. */
+        /* The modifier byte of a rollover report is still valid. */
         rollover[0] = 0x02;
         n_codes = 0;
         hid_report(1, HID_KEYBOARD, rollover, 8);
@@ -185,16 +203,14 @@ int main(void)
         hid_report(1, HID_KEYBOARD, rollover, 8);
         CHECK("and released", sent(1, 0xAA, 0, 0, 0));
 
-        /* The other two error usages mean the same thing. */
+        /* POSTFail, another error usage, means the same. */
         for (i = 2; i < 8; i++) {
             rollover[i] = 2;
         }
         n_codes = 0;
         hid_report(1, HID_KEYBOARD, rollover, 8);
         CHECK("a post-fail report is dropped as well", n_codes == 0);
-        /* And it leaves the keyboard's state alone. A driver that stored the
-           rollover as if it were six keys would forget what was really down,
-           and press it again on the next report. */
+        /* The keys held before the rollover are still held after it. */
         keys(1, 0, 0x04, 0, 0);
         CHECK("a key still down after a rollover is not pressed again", n_codes == 0);
         keys(1, 0, 0, 0, 0);
@@ -207,8 +223,7 @@ int main(void)
     CHECK("a short keyboard report is dropped", n_codes == 0);
     keys(1, 0, 0, 0, 0);
 
-    /* A keyboard unplugged with a key held. The release is on a device that is
-       no longer there, so this driver has to send it. */
+    /* A keyboard unplugged with keys held: the driver sends their releases. */
     keys(1, 0x01, 0x04, 0x05, 0);
     n_codes = 0;
     hid_gone(1);
@@ -222,7 +237,7 @@ int main(void)
     keys(2, 0, 0x04, 0, 0);
     CHECK("a second keyboard's first report is a press, not a hold", sent(1, 0x1E, 0, 0, 0));
 
-    /* The mouse. Its Y grows downward and the kernel's queue grows upward. */
+    /* A USB mouse's Y grows downward, the kernel's queue's upward. */
     mouse[0] = 0x01;
     mouse[1] = (unsigned char)5;
     mouse[2] = (unsigned char)3;
