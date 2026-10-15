@@ -43,7 +43,7 @@ ISO=$1; DISK=$2; OUT=$3; MKFIX=$4; MKMBR=$5; CHECK=$6; EXTRA=${7:-}
 FREE_MIB=${8:-4}
 
 if [ -z "$CHECK" ]; then
-    echo "usage: mkinstallstick.sh ISO DISK OUT MKEXFATFIXTURE MKMBR STICKCHECK" >&2
+    echo "usage: mkinstallstick.sh ISO DISK OUT MKEXFATFIXTURE MKMBR STICKCHECK [EXTRA [FREE-MIB]]" >&2
     exit 2
 fi
 
