@@ -79,11 +79,14 @@ source=
 test=tests/host/krffs_fuse_hosttest.c
 deps=$(sed -n 's/^.*host-deps: *//p' "$test" | tr '\n' ' ')
 extra=$(sed -n 's/^.*host-cflags: *//p' "$test" | tr '\n' ' ')
-mkdir -p "$work/krffs" "$work/tests/host" "$work/no-fuse"
+mkdir -p "$work/krffs" "$work/tests/host/compat" "$work/no-fuse" "$work/fixtures"
 cp "$test" "$work/tests/host/"
 cp -R tests/host/fuse "$work/tests/host/"
-# shellcheck disable=SC2086
-cp krffs/krffs.c krffs/stageimage.krffs.c krffs/*.h $deps "$work/krffs/"
+cp tests/host/compat/fixdir_host.h "$work/tests/host/compat/"
+cp krffs/krffs.c krffs/stageimage.krffs.c krffs/*.h "$work/krffs/"
+for dep in $deps; do
+    cp "$dep" "$work/$dep"
+done
 printf '#error "krffs-fuse-test: test stub was not selected"\n' > "$work/no-fuse/fuse.h"
 
 # restore: stop the running test and put the saved copy of the faulted
@@ -117,8 +120,8 @@ run_phase()
     # shellcheck disable=SC2086
     if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 \
         -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all \
-        -g -O1 -Wno-empty-body -ffreestanding -I krffs \
-        $extra -I "$work/no-fuse" -MMD -MF "$binary.d" \
+        -g -O1 -Wno-empty-body -ffreestanding -I krffs -I tests/host/compat \
+        -DFIXDIR="\"$work/fixtures\"" $extra -I "$work/no-fuse" -MMD -MF "$binary.d" \
         -o "$binary" "$test" $deps >"$binary.compile.log" 2>&1; then
         cat "$binary.compile.log" >&2
         exit 1

@@ -212,7 +212,7 @@ run_test() {
                 -DRACH2_HOSTTEST -g -O1 -ffreestanding -fsanitize=address,undefined \
                 -fno-sanitize-recover=all -I rach2/sys -I rach2/sys/lib \
                 -I rach2/sys/proc -I utils -I krffs -I tests/host/compat \
-                $extra -o "$WORK/test" "$test_name" $deps > "$log.compile" 2>&1 ||
+                -DFIXDIR="\"$WORK\"" $extra -o "$WORK/test" "$test_name" $deps > "$log.compile" 2>&1 ||
                 fail "$case_name did not compile"
             job "$WORK/test" > "$log.run" 2>&1
             ;;

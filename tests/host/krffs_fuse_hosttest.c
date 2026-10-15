@@ -3,11 +3,13 @@
  * krffs/krffs.c and the callbacks of krffs/krffs_fuse_operations.c, over a
  * mapping of a scratch image file, with tests/host/fuse/fuse.h in place of
  * libfuse's header, and with krffs/stageimage.krffs.c to stage nodes as the
- * image scripts do.
+ * image scripts do. The image file is in a directory of the test's own
+ * (compat/fixdir_host.c), kept when a row fails.
  *
  * host-deps: krffs/krffs_fuse_operations.c krffs/krffs_allocator.c
  * host-deps: krffs/krffs_node.c krffs/krffs_file_system.c
  * host-deps: krffs/krffs_utilities.c krffs/krffs_platform.c
+ * host-deps: tests/host/compat/fixdir_host.c
  * host-cflags: -I tests/host/fuse
  */
 #define main krffs_mount_main
@@ -17,10 +19,12 @@
 #include "../../krffs/stageimage.krffs.c"
 #undef main
 
+#include "fixdir_host.h"
+
 static int failures;
 static int mounted;
 static struct krffs_file_system fixture;
-static char image_path[] = "krffs-fuse.XXXXXX";
+static const char *image_path;
 static char listing[512];
 
 /** Count and print a failed row; the rows after it still run. */
@@ -98,7 +102,7 @@ static void reset_image(void)
  */
 static void mount_result(int valid, const char *what)
 {
-    char *args[] = {"krffs", image_path, "/unused", NULL};
+    char *args[] = {"krffs", (char *)image_path, "/unused", NULL};
     int result;
 
     mounted = 0;
@@ -366,27 +370,27 @@ static void moved_row(void)
 }
 
 /**
- * Map a scratch image file of 64 KiB, run the rows, and remove the file.
- * Returns 0 when every row passed, 1 when one failed, and 2 when the image
- * cannot be made.
+ * Map a scratch image file of 64 KiB in the fixture directory and run the
+ * rows. Returns 0 when every row passed, 1 when one failed, and 2 when the
+ * image cannot be made.
  */
 int main(void)
 {
-    int fd = mkstemp(image_path);
+    int fd;
 
+    image_path = fix_path("krffs-fuse.img");
+    fd = open(image_path, O_RDWR | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) {
         return 2;
     }
     if (ftruncate(fd, 65536) != 0) {
         close(fd);
-        unlink(image_path);
         return 2;
     }
     fixture.size = 65536;
     fixture.node = krffs_map_file(fd, 0, (size_t)fixture.size);
     close(fd);
     if (fixture.node == (void *)-1) {
-        unlink(image_path);
         return 2;
     }
     ring_rows();
@@ -399,7 +403,9 @@ int main(void)
     directory_rows();
     moved_row();
     krffs_unmap_file(fixture.node, (size_t)fixture.size);
-    unlink(image_path);
     printf("krffs-fuse-test: result: %d failures\n", failures);
+    if (failures == 0) {
+        fix_passed();
+    }
     return failures != 0;
 }
