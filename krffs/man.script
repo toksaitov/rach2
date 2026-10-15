@@ -1,29 +1,29 @@
 #!/bin/sh
 # man: read a page of this system's manual.
 #
-# Usage: man [-w] [SECTION] NAME...
+# Usage: man [-w] [-P PAGER] [SECTION] NAME...
 #        man -k WORD...
 #        man -f NAME...
 #
 # The pages are the preformatted, gzipped texts under /usr/share/man/catN,
-# and /usr/share/man/aliases lists the names a page answers for besides
-# its own, one `NAME SECTION TARGET` a line. A name is looked up as an alias
-# first, then as a page, in the section given or in sections 1, 8, 2, 4, 5
-# and 7 in that order. A name this manual has no page for is looked up among
-# the pages of the GNU system's ports under /usr/share/man/gnu/catN, which
+# and /usr/share/man/aliases lists the names a page has besides its own, one
+# `NAME SECTION TARGET` a line. A name is looked up as an alias first, then
+# as a page, in the section given or in sections 1, 8, 2, 4, 5 and 7 in that
+# order. A name this manual has no page for is looked up among the pages of
+# the GNU system's ports under /usr/share/man/gnu/catN, which
 # vendor/gnu/render_man.sh renders from their upstream sources and which
 # describe the upstream programs; the ports' page comes first when the
 # command the path finds by the name is a port's and not BusyBox's, as GNU's
 # ls is on that system. The text goes through the pager on a terminal and
 # straight to standard output otherwise; -P names the pager, in place of
 # MANPAGER and PAGER, an empty one showing the page as it is, and -w prints
-# each page's path instead. -k, which `apropos` is, prints the NAME line of every page whose
-# names or summary hold one of the words, in any case, and -f, which
-# `whatis` is, that of every page one of the names names. The lines are
-# read from the pages themselves, so there is no index to go stale.
-# BusyBox's man applet is not built: it finds a page only as a file, and a
-# file per alias would put four hundred nodes on every root, which the RAM
-# root and a KRFFS disk walk on every lookup.
+# each page's path instead. -k, which `apropos` is, prints the NAME line of
+# every page whose names or summary contain one of the words, in any case,
+# and -f, which `whatis` is, that of every page with one of the names. The
+# lines are read from the pages themselves, so there is no index to go
+# stale. BusyBox's man applet is not built: it finds a page only as a file,
+# and a file for each alias would add hundreds of nodes to every root, which
+# the RAM root and a KRFFS disk walk on every lookup.
 mandir=/usr/share/man
 usage="usage: man [-w] [-P PAGER] [SECTION] NAME... | man -k WORD... | man -f NAME..."
 mode=show

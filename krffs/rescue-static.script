@@ -1,21 +1,21 @@
 #!/bin/sh
 #
-# The address recovery falls back to when nothing hands one out.
+# rescue-static: take the sealed disk's fixed address when no DHCP lease
+# arrives, so that the recovery system can be reached on a network with no
+# DHCP server.
 #
-# The recovery image asks for a lease first, because the machine this disk is
-# in lives on a network that has a server. What this covers is the compound
-# case the milestone cannot otherwise answer: a boot partition damaged badly
-# enough that the machine reached recovery through the core image's own
-# configuration, on a network with no DHCP server. There is no menu entry to
-# choose there without somebody at the keyboard, and walking to the machine is
-# what this whole milestone exists to avoid.
+# The recovery image's /etc/network/interfaces runs this in the background,
+# as a `post-up` command of eth0. A machine whose boot partition is damaged
+# reaches recovery through the boot loader's own configuration, and there is
+# no menu entry to choose there without a person at the keyboard; on a
+# network with no DHCP server, this address is the way in.
 #
-# So the lease is waited for, once, and the fixed address is taken if none
-# arrives. The wait is bounded and the check is on what the interface holds
-# rather than on what the client said, since a client that is still asking has
-# said nothing either way.
+# The lease is waited for once, and the fixed address is taken if none
+# arrives. The wait is bounded, and the test is on the address the interface
+# has rather than on what the client said, since a client that is still
+# asking has said nothing either way.
 #
-# The address is the sealed disk's fixed one, set in the Makefile
+# The address is the sealed disk's fixed one, set in the root Makefile
 # (SEALED_ADDRESS, SEALED_MASK, SEALED_GATEWAY); the sealed disk's build
 # refuses to write a disk whose script and settings disagree.
 
@@ -24,10 +24,9 @@ sleep 25
 ifconfig eth0 | grep -q 'addr:0.0.0.0' || exit 0
 echo "rescue: no lease arrived; taking the fixed address" >&2
 
-# The client is still asking, and it must stop before the address is taken: a
-# lease that arrived afterwards would replace this address and the route under
-# a session that had just been opened to them. So the client goes first, and
-# the address is taken after it has.
+# The client is stopped before the address is taken: a lease that arrived
+# afterwards would replace the address and the route under a session just
+# opened to them.
 pid=$(cat /var/run/udhcpc.eth0.pid 2>/dev/null)
 if [ -n "$pid" ]; then
     kill "$pid" 2>/dev/null

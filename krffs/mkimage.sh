@@ -1,24 +1,25 @@
 #!/usr/bin/env sh
 
 #
-# mkimage.sh: build one KRFFS RAM-disk image out of tree from a manifest.
+# mkimage.sh: build a KRFFS image that fills its file, the form of a RAM
+# root, staged from a manifest.
 #
-# Zeroes a file of the requested size, lays down a fresh KRFFS on it with
-# mkfs.krffs, then stages the manifest with stageimage.krffs. There is no FUSE
-# mount: stageimage writes the whole tree (directories and files) directly as v2
-# nodes, so this works the same on macOS and Linux without a FUSE driver.
+# The image is a file of SIZE_MIB mebibytes, 10 by default, which
+# mkfs.krffs formats and stageimage.krffs fills with the manifest's tree. No
+# file system is mounted, so the build needs neither root nor FUSE.
 #
-# Usage: ./mkimage.sh <manifest> <output.krffs> [size_mib [min_free_kib]]
+# Usage: mkimage.sh MANIFEST OUTPUT [SIZE_MIB [MIN_FREE_KIB]]
 #
-# SIZE_MIB is the image's size in mebibytes. With MIN_FREE_KIB the image must
-# keep at least that many kibibytes free once staged, or the build fails: an
-# image a running system writes to, the recovery system's among them, needs the
-# room, and contents that grow past it would otherwise be found only when a
-# write fails on the machine.
+# With MIN_FREE_KIB the image must keep at least that many kibibytes free once
+# staged, or the build fails: an image a running system writes to, the
+# recovery system's among them, needs the room, and contents that grew past
+# it would otherwise be found only when a write fails on the machine.
 #
-# Run from anywhere; the manifest's `build/...` host paths resolve because this
-# cd's to the repo root first. The KRFFS host tools come from build/krffs (built
-# by `make -C krffs`).
+# The script runs from any directory: it changes to the repository root,
+# against which the manifest's host paths are read. The KRFFS tools must be
+# built in build/krffs/ (`make -C krffs`). Beside OUTPUT it writes OUTPUT.d,
+# the make dependencies of the image, and OUTPUT.programs for an image with
+# `exec-dir` lines.
 #
 
 set -e
@@ -44,15 +45,11 @@ fi
 cd "$REPO"
 mkdir -p "$(dirname "$OUT")"
 
-# Build into a temp file and rename only on success, so a staging failure leaves
-# any previous image intact, not a half-written one that run.sh would
-# boot.
-# The temporaries carry this process's number. Two suites of a parallel test
-# run can build one image at the same moment, and with one fixed name each
-# removed the other's file: the second build then failed and make deleted the
-# image the first had just moved into place, which took two suites down with
-# it. Both builds stage the same manifest, so either result is the image, and
-# the rename is atomic.
+# The image is built in a temporary file and renamed only on success, so a
+# failure leaves the previous image as it was. The temporary names have the
+# process ID, since two suites of a parallel run can build one image at
+# once; both stage the same manifest, so either result is the image, and the
+# rename is atomic.
 TMP="$OUT.new.$$"
 DEPS_TMP="$OUT.d.new.$$"
 trap 'rm -f "$TMP" "$DEPS_TMP" "$OUT.d.list.$$" "$OUT.d.$$" "$OUT.programs.$$"' EXIT INT TERM
@@ -67,14 +64,11 @@ if [ "$MIN_FREE_KIB" -gt 0 ] && { [ -z "$FREE" ] || [ "$FREE" -lt $((MIN_FREE_KI
 fi
 
 # Both halves of the set-id guard, before the rename, so a failing image is
-# never moved into place. The sweep reads the manifest, which is where a
-# declaration lives: what stages a path, from where, at what mode and owner, and
-# for a credential file written inline, what it says. The inventory reads the
-# staged artifact, which is the half the text cannot do: exec-dir privileges a
-# set of paths the manifest never names, and a parser that has drifted from the
-# stager reads a manifest the stager does not. Each catches what the other
-# cannot, so a build that ran only one of them would ship what the other
-# refuses.
+# never moved into place. The sweep reads the manifest: what stages a path,
+# from where, at what mode and owner, and, for a credential file written
+# inline, its text. The inventory reads the staged image, so it sees the
+# paths an `exec-dir` line stages without naming them, and it finds a
+# manifest that the guard's parser reads otherwise than the stager does.
 SETIDCHECK="$REPO/build/tools/inspect/setidcheck"
 if [ ! -x "$SETIDCHECK" ] || [ "$REPO/tools/inspect/setidcheck.c" -nt "$SETIDCHECK" ]; then
     mkdir -p "${SETIDCHECK%/*}"
@@ -84,7 +78,7 @@ fi
 "$SETIDCHECK" --image "$TMP" --manifest "$MANIFEST"
 
 # The programs staged from each `exec-dir` directory, which the dependency
-# file names in place of the directory (krffs/programs.sh). The image is
+# file lists in place of the directory (krffs/programs.sh). The image is
 # touched after them, so that it is the newer of the two: the move keeps the
 # time the stager last wrote it, which is before them, and a make that keeps
 # times to the nanosecond would find the image out of date at once.
@@ -105,20 +99,19 @@ touch "$TMP"
 
 mv "$TMP" "$OUT"
 
-# Publish the staged inputs as a make dependency file beside the image, after
-# the image itself, so a failed build keeps the previous list. A recorded
-# path that exists becomes a prerequisite with an empty rule of its own, so
-# a later deletion marks the image out of date instead of stopping make. A
-# recorded path that is absent (a skipped optional-file) must not be a
-# prerequisite, or its empty rule would restage the image on every run;
-# its nearest existing ancestor directory stands in for it, because that
-# directory's timestamp moves when the file appears.
+# The staged inputs as a make dependency file beside the image, written after
+# the image, so a failed build keeps the previous list. A recorded path that
+# exists becomes a prerequisite with an empty rule of its own, so a later
+# deletion puts the image out of date instead of stopping make. A recorded
+# path that is absent, a skipped optional-file, is not a prerequisite, since
+# its empty rule would restage the image on every run; its nearest existing
+# directory is listed in its place, since that directory's time changes when
+# the file appears.
 if [ -s "$DEPS_TMP" ]; then
     DEPS_LIST="$OUT.d.list.$$"
-    # Absolute paths, for a reason beyond neatness: a relative recorded path
-    # such as `rach2` names the root Makefile's phony component target, and a
-    # phony prerequisite is considered remade on every run, which would
-    # restage the image forever.
+    # The paths are made absolute: a relative recorded path such as `rach2`
+    # is the name of the root Makefile's phony component target, which make
+    # always remakes, so the image would be staged again on every run.
     grep -v '^exec-dir	' "$DEPS_TMP" | sort -u | while IFS= read -r p; do
         case "$p" in
             /*) ;;

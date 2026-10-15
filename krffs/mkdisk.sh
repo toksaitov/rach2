@@ -1,22 +1,20 @@
 #!/usr/bin/env sh
 
 #
-# mkdisk.sh: build one bootable-layout KRFFS disk image out of tree.
+# mkdisk.sh: build a disk image with one KRFFS partition, staged from a
+# manifest.
 #
-# Where mkimage.sh writes a bare KRFFS that fills a file (the RAM-disk module),
-# this writes a real disk image: a 512-byte MBR with one primary KRFFS
-# partition, then a fresh KRFFS laid down inside that partition and staged from
-# a manifest. The partition starts at LBA 2048 (a 1 MiB offset), which is both
-# sector- and page-aligned, so the host mmap the KRFFS tools use is always
-# valid. mkfs.krffs and stageimage.krffs are pointed at the partition with their
-# --offset/--size region arguments; the KRFFS bytes are byte-identical to a
-# module image.
+# Where mkimage.sh writes a KRFFS that fills its file, the form of a RAM
+# root, this writes a disk: a 512-byte MBR with one primary partition, and in
+# it a KRFFS that mkfs.krffs and stageimage.krffs write through their
+# --offset and --size options.
 #
-# Usage: ./mkdisk.sh <manifest> <output.disk> [disk_mb] [partition_mb]
+# Usage: mkdisk.sh MANIFEST OUTPUT [DISK_MIB [PARTITION_MIB]]
 #
-# disk_mb defaults to 64 and partition_mb to 48, matching `make os-real-disk`.
-# Run from anywhere; the manifest's `build/...` host paths resolve because this
-# cd's to the repo root first. The KRFFS host tools come from build/krffs.
+# DISK_MIB is 64 and PARTITION_MIB 48 by default. The script runs from any
+# directory: it changes to the repository root, against which the
+# manifest's host paths are read. The KRFFS tools must be built in
+# build/krffs/.
 #
 
 set -e
@@ -30,21 +28,17 @@ OUT="$2"
 DISK_MB="${3:-64}"
 PART_MB="${4:-48}"
 
-# LBA 2048 == a 1 MiB offset: the standard 1 MiB alignment, also the coarsest
-# mmap granularity across hosts, so the partition byte offset is always valid.
+# The partition starts at LBA 2048, 1 MiB in: the usual alignment, and a
+# multiple of every host's mmap granularity, which the region options need.
 PART_LBA=2048
 SECTOR=512
 PART_OFFSET=$((PART_LBA * SECTOR))
 PART_SIZE=$((PART_MB * 1048576))
 DISK_SIZE=$((DISK_MB * 1048576))
 
-# The kernel maps the KRFFS partition through a fixed virtual window; a
-# partition larger than that window cannot be mounted from disk. The window is
-# capped at 512 MiB (PC_WINDOW_CAP in sys/mm/pagecache.c), so cap the partition
-# to match. This said 256 until milestone 25: the cap was raised when the window
-# moved above the region real firmware uses for MMIO, and this copy of the
-# number was left behind, which put a 500 MiB root out of reach of its own
-# builder.
+# The kernel maps a KRFFS partition through its page-cache window, which is
+# at most 512 MiB (PC_WINDOW_CAP in rach2/sys/mm/pagecache.c); a larger
+# partition cannot be mounted from disk.
 WINDOW_MB=512
 
 if [ -z "$MANIFEST" ] || [ -z "$OUT" ]; then
@@ -70,18 +64,16 @@ fi
 cd "$REPO"
 mkdir -p "$(dirname "$OUT")"
 
-# Build into a temp file and rename only on success, so a staging failure leaves
-# any previous disk intact, not a half-written one.
+# The disk is built in a temporary file and renamed only on success, so a
+# failure leaves any previous disk as it was.
 TMP="$OUT.new.$$"   # unique, so two parallel suites building one disk do not collide
 trap 'rm -f "$TMP"' EXIT INT TERM
 dd if=/dev/zero of="$TMP" bs=1048576 count="$DISK_MB" 2>/dev/null
 
-# Write a minimal MBR: the boot code stays zero (GRUB is installed later), one
-# primary partition entry points at the KRFFS region, and the 0x55AA signature
-# marks the sector valid. Type 0x7F is the reserved "individual/experimental"
-# code, fitting for a custom file system and ignored by host auto-mounters.
-# The project MBR writer's --lba form puts the "use the LBA" sentinel in the
-# CHS fields, which is what this disk has always carried.
+# The MBR has no boot code, one primary partition entry over the KRFFS
+# region and the 0x55AA signature. The type, 0x7f, is the one reserved for
+# experimental use, which a host does not mount by itself. mkmbr's --lba
+# form writes in the CHS fields the value that means "use the LBA".
 MKMBR="$REPO/build/tools/image/mkmbr"
 if [ ! -x "$MKMBR" ] || [ "$REPO/tools/image/mkmbr.c" -nt "$MKMBR" ]; then
     mkdir -p "${MKMBR%/*}"
@@ -92,9 +84,8 @@ fi
 "$TOOLS/mkfs.krffs" "$TMP" --offset "$PART_OFFSET" --size "$PART_SIZE" >/dev/null
 "$TOOLS/stageimage.krffs" "$MANIFEST" "$TMP" --offset "$PART_OFFSET" --size "$PART_SIZE"
 
-# Both halves, as mkimage.sh runs them, the inventory over the partition rather
-# than the whole file: the region is the partition, so the walk needs both
-# bounds or it runs off the wrong end.
+# Both halves of the set-id guard, as mkimage.sh runs them. The inventory
+# reads the partition, so it is given the region's offset and size.
 SETIDCHECK="$REPO/build/tools/inspect/setidcheck"
 if [ ! -x "$SETIDCHECK" ] || [ "$REPO/tools/inspect/setidcheck.c" -nt "$SETIDCHECK" ]; then
     mkdir -p "${SETIDCHECK%/*}"

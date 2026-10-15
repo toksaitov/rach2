@@ -1,18 +1,18 @@
 #!/usr/bin/env sh
 
 #
-# gen_demo_key.sh: ensure the demo SSH keypairs exist for the os-real image's
-# dropbear logins.
+# gen_demo_key.sh: write authorized_keys and test_authorized_keys, the SSH
+# keys the images' root and test accounts accept.
 #
-# There are two keypairs, one per demo account: rach2_demo_ed25519 for root and
-# rach2_test_ed25519 for the unprivileged test user. Both are committed, the
-# project's development keys, so every clone builds images that trust the same
-# keys and any host reaches any development machine; the machines are on a
-# private network. Their public halves become authorized_keys and
-# test_authorized_keys, which the manifests stage into each account's ~/.ssh.
-# A keypair is generated only when it is absent. Set RACH2_REPLACE_KEYS=1 to
-# mint new ones over whatever is there, which is what a machine going somewhere
-# real needs, since the development keys are public.
+# There is a key pair for each account: rach2_demo_ed25519 for root and
+# rach2_test_ed25519 for the test account. Both are committed, as the
+# project's development keys, so that every clone builds images that accept
+# the same keys and any development host reaches any development machine on
+# the private network. Their public halves become authorized_keys and
+# test_authorized_keys, which the manifests stage into each account's
+# ~/.ssh. A key pair is made only when it is absent. RACH2_REPLACE_KEYS=1
+# makes new ones over those there, which a machine for any other network
+# needs, since the development keys are public.
 #
 #   ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost
 #   ssh -i krffs/rach2_test_ed25519 -p 2222 test@localhost
@@ -23,8 +23,8 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Generate keypair $1 and its public-half file $2 for a login as user $3, unless
-# the keypair is already present, as the committed one is.
+# gen_key KEY PUB USER: make the key pair KEY and its public half PUB for a
+# login as USER, unless the pair is present, as the committed one is.
 gen_key() {
     key="$1"
     pub="$2"
@@ -44,8 +44,8 @@ gen_key() {
     fi
     rm -f "$key" "$key.pub"
     ssh-keygen -t ed25519 -N "" -C "rach2-$user" -f "$key" >/dev/null
-    # Stage the public half atomically: a temp copy renamed into place, so an
-    # interrupted run never leaves a partial $pub that a later run trusts.
+    # The public half is copied to a temporary and renamed into place, so an
+    # interrupted run leaves no partial $pub that a later run would accept.
     cp "$key.pub" "$pub.tmp"
     [ -s "$pub.tmp" ] || { echo "gen_demo_key: empty public key for $user." >&2; exit 1; }
     mv "$pub.tmp" "$pub"
@@ -53,16 +53,16 @@ gen_key() {
     echo "gen_demo_key: log in with ssh -i krffs/$key -p 2222 $user@localhost"
 }
 
-# Compose public-half file $2 from generated keypair $1 plus an optional local
-# addition, krffs/$2.extra: a public key belonging to whoever works on this
-# machine, not to the project, so they can reach an image they built
-# without carrying the project's private key between machines. The file is
-# git-ignored, so a clone builds images that trust the demo key alone.
+# add_local_keys KEY PUB: write PUB as the public half of KEY followed by
+# krffs/PUB.extra, if it exists: the public keys of whoever works on this
+# machine, so that they reach an image they built without carrying the
+# project's private key between machines. The .extra file is ignored by git,
+# so a clone builds images that accept the demo key alone.
 #
-# It recomposes, not appends, which is what makes a rebuild idempotent
-# and what lets the addition be removed again by deleting the file. Nothing
-# happens when the generated public half is absent, which is the documented case
-# of a public key dropped in by hand.
+# PUB is written whole each time, not appended to, so a rebuild gives the
+# same file and deleting the .extra file takes its keys out again. Nothing
+# is written when the public half of KEY is absent, the case of a public key
+# put in PUB by hand.
 add_local_keys() {
     key="$1"
     pub="$2"
@@ -70,10 +70,9 @@ add_local_keys() {
 
     [ -f "$key.pub" ] || return 0
 
-    # A private key here would be staged into the image and served to anyone who
-    # asks for the file, so the shape is checked, not trusted: every
-    # non-blank line must name a key type, and the word that appears in every
-    # private key format must not appear at all.
+    # A private key here would be staged into the image, so every line but a
+    # blank or a comment must begin with a key type, and the words PRIVATE
+    # KEY, which every private key format has, must not appear.
     if [ -f "$extra" ]; then
         if grep -q 'PRIVATE KEY' "$extra"; then
             echo "gen_demo_key: krffs/$extra has a PRIVATE key; use the .pub half" >&2
@@ -91,9 +90,8 @@ add_local_keys() {
         [ -f "$extra" ] && cat "$extra"
     } > "$pub.tmp"
     [ -s "$pub.tmp" ] || { echo "gen_demo_key: composed an empty krffs/$pub" >&2; exit 1; }
-    # Publish only a changed composition: an identical file keeps its
-    # timestamp, so a rebuild that regenerates credentials does not restage
-    # the images that carry them.
+    # PUB is replaced only when its contents change, so that it keeps its
+    # time and a rebuild does not restage the images that have it.
     if [ -f "$pub" ] && cmp -s "$pub.tmp" "$pub"; then
         rm -f "$pub.tmp"
     else

@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# The script udhcpc runs when a lease arrives, is renewed, or ends.
+# The script BusyBox's udhcpc runs when a lease arrives, is renewed, or ends.
 #
 # udhcpc does not configure anything itself: it learns a lease and calls this
 # with the answer in the environment. So this is where a lease becomes an
@@ -49,20 +49,19 @@ case "$1" in
 			/bin/busybox ifconfig "$interface" "$ip" || fail=1
 		fi
 
-		# Old default routes go before the new one. The loop ends when the
-		# removal fails, which is what a machine with no default route
-		# answers.
+		# Old default routes go before the new one. The loop ends when a
+		# removal fails, as it does once no default route is left.
 		while /bin/busybox route del default gw 0.0.0.0 dev "$interface" 2>/dev/null; do
 			:
 		done
 
-		# The lease decides the route, including a lease that names none:
+		# The lease decides the route, a lease that names none included:
 		# the old default route goes whether or not this one replaces it,
-		# because a gateway from the network this machine was on before is
+		# because a gateway of the network this machine was on before is
 		# not a gateway here. A lease with no router leaves the machine with
-		# its subnet and nothing beyond it, which is what the lease said, and
-		# it is said out loud because a machine reachable only from its own
-		# subnet looks like a machine that is down.
+		# its subnet and nothing beyond it, as the lease says, and that is
+		# reported, because a machine reachable only from its own subnet
+		# looks like a machine that is down.
 		if [ -n "$router" ]; then
 			for r in $router; do
 				/bin/busybox route add default gw "$r" dev "$interface" || fail=1

@@ -1,20 +1,18 @@
 #!/bin/sh
 #
-# dmesg: what this machine has logged since it started.
+# dmesg: print the kernel's log.
 #
-# Linux's `dmesg` reads the kernel's ring buffer through `klogctl`, a system
-# call this kernel does not have; the log here is a device, `/dev/bootlog`,
-# with a record a line in the form Linux's `dmesg -r` prints: the level in
-# angle brackets, the seconds since boot in square ones, and the text. So this
-# is the command a person expects, over that device, with Linux's options that
-# read the log: the records raw or without their levels, with no time or the
-# time of day, of some levels only, with the facility and level decoded, and
-# followed as they come. BusyBox's own `dmesg` applet is turned off, since it
-# can only fail here.
+# The log is read from the device /dev/bootlog, whose records have the form
+# Linux's `dmesg -r` prints: the level in angle brackets, the seconds since
+# boot in square ones, and the text. This script takes the options of
+# Linux's dmesg that read the log: the records raw or without their levels,
+# with no time or the time of day, of some levels only, with the facility and
+# level decoded, and followed as they come. BusyBox's `dmesg` applet, which
+# reads the log through the syslog call, is turned off.
 #
-# The options that change the buffer, clearing it, resizing it or setting the
-# console's level, are refused rather than ignored: there is no buffer to
-# change, and a caller told nothing would take it as changed.
+# The options that change the log, clearing it, resizing it or setting the
+# console's level, are refused rather than ignored: this script changes
+# nothing, and a caller told nothing would take the change as made.
 
 usage() {
     echo "usage: dmesg [-krtTwx] [-l LEVEL[,LEVEL...]]" >&2

@@ -5,17 +5,15 @@
 #
 # `exec-dir` stages the regular files with an execute bit directly in one
 # host directory, dotfiles left out. An image must be staged again when that
-# set changes, and a directory's own time says that and more: it moves
-# whenever any entry is made or removed in it, and the directories an image
-# stages programs from, build/tests among them, also hold the work
-# directories of proofs and suites. An image that depended on the directory
-# was staged again by every suite of a pooled run at once after one of them
-# made a directory there. So mkimage.sh writes the set it staged to
-# IMAGE.programs, one line per directory, the directory and then the names,
-# and the image's dependency file names that file in place of the
-# directories; the Makefile has this script check the file each time it
-# reads the dependency files, and the file is written again, and the image
-# goes out of date, only when the set is no longer the one recorded.
+# set changes, and a directory's own time changes more often: whenever any
+# entry is made or removed in it, and the directories an image stages
+# programs from, build/tests among them, also have the work directories of
+# proofs and suites. So mkimage.sh writes the set it staged to
+# IMAGE.programs, one line a directory, the directory and then the names,
+# and the image's dependency file lists that file in place of the
+# directories. The root Makefile has this script check the file each time
+# it reads the dependency files, and the file is written again, putting the
+# image out of date, only when the set differs from the one recorded.
 #
 # Usage: programs.sh snapshot DIR...   print the set each DIR holds now
 #        programs.sh check FILE...     write each FILE again whose

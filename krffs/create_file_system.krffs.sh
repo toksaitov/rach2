@@ -1,21 +1,14 @@
 #!/usr/bin/env sh
 
 #
-# create_file_system.krffs.sh
+# create_file_system.krffs.sh: make build/krffs/file_system.krffs, an empty
+# KRFFS of SIZE_MIB mebibytes, 10 by default, for the FUSE driver to mount.
 #
-# Creates an empty file system file of a specified size and initializes a KRFFS
-# file system on it.
-#
-#     Usage:
-#          ./create_file_system.krffs.sh [size in megabytes]
-#
-# Without the size parameter, the file size is set to 10 megabytes.
+# Usage: create_file_system.krffs.sh [SIZE_MIB]
 #
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# The host tools build out of tree to build/krffs/ (mk/build.mk); create the
-# scratch image there too, with the build/krffs mkfs, so nothing lands in the
-# source tree.
+# The image is made beside the host tools, with their mkfs.krffs.
 BUILD="$(cd "$SCRIPT_DIR/.." && pwd)/build/krffs"
 FILE_SYSTEM_FILE="$BUILD/file_system.krffs"
 BLOCK_SIZE="1048576"

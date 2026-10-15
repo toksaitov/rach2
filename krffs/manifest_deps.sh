@@ -1,9 +1,8 @@
 #!/usr/bin/env sh
 #
-# manifest_deps.sh: the host paths a manifest stages, one per line, for the
-# image rules' prerequisites. A rebuilt program the manifest names then
-# rebuilds the image that carries it; before this the image rules took the
-# components as order-only prerequisites and a stale image could boot.
+# manifest_deps.sh: print the host paths a manifest stages, one a line, for
+# the root Makefile to make prerequisites of the manifest's image, so that a
+# rebuilt program restages the image that has it.
 #
 # Usage: manifest_deps.sh MANIFEST
 #
@@ -19,15 +18,14 @@
 # source path is printed whether or not it exists, since its absence is a
 # fault the stager reports.
 #
-# A directory is printed as the files the stager would take from it, and by the
-# same rule the stager uses: `exec-dir` takes the regular executable files of
-# that one directory, `tree` takes every regular file under it, and neither
-# takes a name that begins with a dot. The directory
-# itself is not printed. It would keep its time when a program in it is
-# relinked, and the source trees a `tree` line stages, `utils`, `rach2` and
-# `ish`, are also the names of phony targets, which make holds to be out of
-# date every time: the image was then rebuilt on every invocation, and two
-# suites of a parallel run rebuilt it at once.
+# A directory is printed as the files the stager would take from it, and by
+# the same rule the stager uses: `exec-dir` takes the regular executable
+# files of that one directory, `tree` takes every regular file under it, and
+# neither takes a name that begins with a dot. The directory itself is not
+# printed: its time does not change when a program in it is relinked, and
+# the source trees that `tree` lines stage, `utils`, `rach2` and `ish`, are
+# also the names of phony targets, which make always remakes, so the image
+# would be staged again at every run of make.
 set -u
 [ -n "${1:-}" ] || { echo "usage: manifest_deps.sh MANIFEST" >&2; exit 2; }
 

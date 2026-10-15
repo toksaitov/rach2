@@ -1,5 +1,10 @@
 #!/bin/sh
-# Compose recovery keys from the builder's keys and an operator's public file.
+# gen_recovery_key.sh: write OUTPUT, the recovery system's authorized keys,
+# from BASE, this tree's keys, and the public keys in EXTRA, each of which
+# ssh-keygen must accept. Without EXTRA an existing OUTPUT is kept, and
+# OUTPUT is replaced only when its contents change.
+#
+# Usage: gen_recovery_key.sh BASE OUTPUT [EXTRA]
 set -eu
 if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
     echo "gen-recovery-key: usage: BASE OUTPUT [EXTRA-PUBLIC-KEYS]" >&2

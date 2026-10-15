@@ -1,23 +1,21 @@
 #!/usr/bin/env sh
 
 #
-# gen_demo_password.sh: ensure the demo account passwords and their /etc/shadow
-# exist for the os-real image's logins.
+# gen_demo_password.sh: make the passwords of the images' root and test
+# accounts, and krffs/shadow, which the manifests stage as /etc/shadow.
 #
-# Mints a password per demo account, writes each plaintext to a
-# git-ignored host-side credential file (rach2_demo_password for root,
-# rach2_test_password for the test account), and hashes both into krffs/shadow
-# (git-ignored), which the os-real manifest stages as /etc/shadow. The hashes
-# are SHA-512 crypt ($6$), minted by build/krffs/mkhash.krffs, the vendored
-# musl implementation, so the guest verifies exactly what this script mints.
-# Everything is generated only when krffs/shadow is absent, so present
-# credentials are left as is (idempotent); delete krffs/shadow to mint fresh
-# ones. The aging fields of each line are empty, as adduser(8) writes them:
-# a last change of day 0 tells a reader of shadow(5) that root forced a
-# change at the next login, which OpenSSH's server enforces. A shadow minted
-# with day 0 keeps its hashes and has those fields emptied. A shadow older
-# than this script, which make then runs it for, is touched once it is up to
-# date, so make does not run it again.
+# Each password is written in plain text to a file git ignores,
+# rach2_demo_password for root and rach2_test_password for the test account,
+# and its SHA-512 crypt hash ($6$) to krffs/shadow, also ignored. The hashes
+# are made by build/krffs/mkhash.krffs, which is musl's implementation, so
+# the guest checks the hash this script makes. Nothing is made while
+# krffs/shadow exists, unless RACH2_REPLACE_PASSWORDS=1 is set. The aging
+# fields of each line are empty, as adduser(8) writes them: a last change of
+# day 0 tells a reader of shadow(5) that root forced a change at the next
+# login, which OpenSSH's server enforces. A shadow file with day 0 in a line
+# keeps its hashes and has those fields emptied. A shadow file older than
+# this script, for which make runs it, is touched once it is up to date, so
+# that make does not run it again.
 #
 
 set -e
@@ -37,25 +35,25 @@ older() {
     [ -n "$(find gen_demo_password.sh -newer shadow)" ]
 }
 
-# Already minted and up to date, and nobody asked for them to be replaced: the
-# common case, and the fast one.
+# Made already, up to date, and not to be replaced: the common case, and the
+# fast one.
 if [ -f shadow ] && [ -z "${RACH2_REPLACE_PASSWORDS:-}" ] && ! day_zero && ! older; then
     exit 0
 fi
 
-# One generation at a time: concurrent image targets under make -j must not
-# interleave their writes. mkdir is the portable atomic test-and-set; a holder
-# that minted shadow while we waited satisfies this run too.
+# One run at a time: image targets under make -j must not interleave their
+# writes. mkdir is the portable atomic test-and-set; when another run made
+# shadow while this one waited, the test below finds it and stops.
 until mkdir .gen_demo_password.lock 2>/dev/null; do
     sleep 1
 done
 trap 'rmdir .gen_demo_password.lock' EXIT
 
-# The credentials are minted once and then left alone: every build calls this,
-# and a script that reminted on each call would change the machine's passwords
-# under whoever was using them. Replacing them is therefore something to ask for
-# by name, which is what the sealing session does when it gives a machine
-# passwords of its own.
+# The credentials are made once and then left alone: every build runs this,
+# and a script that made new ones on each run would change the machine's
+# passwords under whoever was using them. Replacing them is asked for by
+# name, with RACH2_REPLACE_PASSWORDS=1, as for a machine given passwords of
+# its own.
 if [ -f shadow ] && [ -z "${RACH2_REPLACE_PASSWORDS:-}" ]; then
     if day_zero; then
         umask 077
@@ -74,49 +72,47 @@ if [ ! -x "$MKHASH" ]; then
     exit 1
 fi
 if [ -f shadow ]; then
-    # The old hashes go before the new plaintext arrives, and not after. The
-    # publication is three files and one rename, so an interruption in the
-    # middle of it leaves something; what it must not leave is new passwords in
-    # the plaintext files beside the old hashes in `shadow`, because the next
-    # ordinary build takes `shadow` being there as the whole answer and would
-    # ship credentials nobody has. With it removed first, an interruption leaves
-    # no `shadow` at all, and the next build mints a complete set.
+    # The old hashes go before the new passwords are written, and not after.
+    # The writing is three files and one rename, so an interruption part way
+    # leaves something; it must not leave new passwords in the plain text
+    # files beside the old hashes in `shadow`, since the next build takes an
+    # existing `shadow` as complete and would stage hashes of passwords
+    # nobody has. With it removed first, an interruption leaves no `shadow`,
+    # and the next build makes a complete set.
     echo "gen_demo_password: replacing the credentials already in krffs/"
     rm -f shadow
 fi
 
-# The demo passwords. These are development credentials for a teaching system:
-# the same on every build, written in plaintext to a git-ignored file, and typed
-# at a console by whoever is sitting at the machine. Short and memorable beats
-# random here, because the one place they are actually used is a person typing
-# them at a laptop across the room; every automated caller reads the file.
+# The development passwords of a teaching system: the same on every build,
+# written in plain text to a file git ignores, and typed at the console by a
+# person at the machine. They are short and easy to type for that person;
+# every automated caller reads the file.
 #
-# Set RACH2_ROOT_PASSWORD or RACH2_TEST_PASSWORD to override, and use a random
-# token for either if this machine is somewhere a demo account matters:
+# RACH2_ROOT_PASSWORD and RACH2_TEST_PASSWORD give others, and a random token
+# suits a machine where a demo account matters, such as the output of
 #
-# RACH2_ROOT_PASSWORD="$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c
-# 20)"
+#   LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 20
 #
-# Those take effect on a tree that has no credentials yet. To replace ones that
-# are already there, which is what a machine going onto a real network needs,
-# set RACH2_REPLACE_PASSWORDS=1 as well; without it this script leaves an
+# They take effect in a tree that has no credentials yet. To replace those a
+# tree has, which a machine for any other network needs, set
+# RACH2_REPLACE_PASSWORDS=1 as well; without it this script leaves an
 # existing krffs/shadow alone whatever else is set.
 #
-# The salts stay random regardless, since nobody types a salt.
+# The salts are random in every case.
 DEFAULT_ROOT_PASSWORD="1qA2wS3eD"
 DEFAULT_TEST_PASSWORD="4rF5tG6yH"
 
-# A random token from the urandom pool: $1 characters of the salt/password
-# alphabet. LC_ALL=C keeps tr byte-oriented whatever the host locale is.
+# random_token N: N random characters of the alphabet of a salt. LC_ALL=C
+# keeps tr working on bytes whatever the host's locale is.
 random_token() {
     LC_ALL=C tr -dc 'A-Za-z0-9./' < /dev/urandom | dd bs=1 "count=$1" 2>/dev/null
 }
 
-# Mint account $1's password $3 into credential file $2 and append the shadow
-# line to shadow.tmp. The password never reaches mkhash's argument list: it is
-# read from stdin, so it stays out of the process table. The credential file is
-# removed first so it is recreated fresh under the 077 umask, never rewritten
-# through a stale loose mode.
+# mint USER FILE PASSWORD: write PASSWORD to FILE and append USER's line to
+# shadow.tmp. mkhash reads the password on its standard input, not from its
+# arguments, so it does not appear in the process table. FILE is removed
+# first, so that it is made again under the 077 umask rather than written
+# through a looser mode it had.
 mint() {
     user="$1"
     file="$2"
@@ -132,8 +128,8 @@ mint() {
     echo "gen_demo_password: wrote krffs/$file"
 }
 
-# Stage the shadow file atomically: both lines into a temp file renamed into
-# place, so an interrupted run never leaves a partial shadow a later run trusts.
+# Both lines go to a temporary file that is renamed into place, so an
+# interrupted run leaves no partial shadow that a later run would accept.
 rm -f shadow.tmp
 mint root rach2_demo_password "${RACH2_ROOT_PASSWORD:-$DEFAULT_ROOT_PASSWORD}"
 mint test rach2_test_password "${RACH2_TEST_PASSWORD:-$DEFAULT_TEST_PASSWORD}"

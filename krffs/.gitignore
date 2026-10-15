@@ -1,22 +1,21 @@
-# The demo key pairs, rach2_demo_ed25519 and rach2_test_ed25519, are committed:
-# they are the project's development keys, the same in every clone. What is
-# made from them, the authorized_keys lists, and the passwords and /etc/shadow
-# from gen_demo_password.sh are made in each tree. Everything this component builds
-# (the host tools, the RAM-disk image, the mount point) goes out of tree to
-# build/krffs/ (mk/build.mk), covered by the repo-root build/ ignore.
+# The credentials each tree makes for itself. The key pairs
+# rach2_demo_ed25519 and rach2_test_ed25519 are committed, the same in every
+# clone; the authorized_keys lists made from them, and the passwords and the
+# shadow file of gen_demo_password.sh, are not. What this component builds
+# is under build/krffs/, which the top-level .gitignore covers.
 authorized_keys
 test_authorized_keys
 rach2_demo_password
 rach2_test_password
 shadow
-# gen_demo_password.sh transients: the lock dir and the pre-rename shadow, left
-# behind only if the script is killed mid-run, ignored so a kill cannot dirty
-# the tree.
+# What gen_demo_password.sh leaves when it is killed part way: its lock
+# directory and the shadow file before its rename.
 shadow.tmp
 .gen_demo_password.lock
 
-# Public keys belonging to whoever works on this machine, appended to the
-# demo key by gen_demo_key.sh. Not the project's, so not committed.
+# The public keys of whoever works on this machine, which gen_demo_key.sh
+# appends to the demo keys, and the recovery system's list that
+# gen_recovery_key.sh writes.
 authorized_keys.extra
 test_authorized_keys.extra
 recovery_authorized_keys
