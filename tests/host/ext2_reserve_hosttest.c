@@ -1,10 +1,14 @@
 /**
- * Check ext2 range admission and per-piece reserved-block limits.
+ * ext2_reserve_hosttest.c: the blocks a write of rach2/sys/fs/ext2.c
+ * reserves: the count it needs, pointer blocks included, decided before any
+ * byte is taken, and the reserved blocks kept from a caller who is not root.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
- * The production writer uses a small memory-backed cache. The mount and inode
- * are constructed directly so the allocator can be tested without preflight.
+ * The test includes ext2.c whole. The mount, a group of 64 blocks and an
+ * inode are built in memory, over a cache model with one buffer for each
+ * block, so that the writer runs without a volume made by mke2fs and
+ * without the mount's check, whose calls panic here.
  */
 #include "fs/vfs.h"
 #include "fs/ext2.c"
@@ -30,7 +34,7 @@ static process_t process;
 struct percpu cpu_table[NR_CPUS] = {{.current = &process}};
 static int failures, writes;
 
-/** Record failed assertions. */
+/** Count and print a failed row. */
 static void check(int ok, const char *what)
 {
     if (!ok) {
@@ -39,14 +43,14 @@ static void check(int ok, const char *what)
     }
 }
 
-/** Fail on a production invariant violation. */
+/** Print the panic's message and exit with status 2. */
 void k_panic(const char *what)
 {
     printf("ext2-reserve-hosttest: panic: %s\n", what);
     exit(2);
 }
 
-/** Ignore production diagnostics. */
+/** Drop the record. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -54,14 +58,14 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
-/** Supply a fixed timestamp. */
+/** A fixed time, one second after the epoch. */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
     *seconds = 1;
     *nanoseconds = 0;
 }
 
-/** Retain the test's inode throughout each row. */
+/** Free `ptr`; a free of the test's own inode fails a row and is skipped. */
 void kfree(void *ptr)
 {
     check(ptr != &file, "writer retains the caller's inode reference");
@@ -70,19 +74,22 @@ void kfree(void *ptr)
     }
 }
 
-/** Supply allocations for linked driver paths. */
+/** Allocate from the C library. */
 void *kmalloc(size_t size)
 {
     return malloc(size);
 }
 
-/** Supply zeroed allocations for linked driver paths. */
+/** Allocate zeroed memory from the C library. */
 void *kzalloc(size_t size)
 {
     return calloc(1, size);
 }
 
-/** Supply the batch's buffer pages; these rows build their batch by hand. */
+/**
+ * Allocate `count` pages from the C library, with no physical address. The
+ * rows set the batch's own pages in `reset`.
+ */
 void *kalloc_pages(uint32_t count, uintptr_t *phys)
 {
     if (phys) {
@@ -91,14 +98,14 @@ void *kalloc_pages(uint32_t count, uintptr_t *phys)
     return malloc(4096ul * count);
 }
 
-/** Give back a page `kalloc_pages` supplied. */
+/** Free pages `kalloc_pages` allocated. */
 void kfree_pages(void *p, uint32_t count)
 {
     (void)count;
     free(p);
 }
 
-/** Mount checking is outside these writer rows. */
+/** Panic: the mount's check, whose workspace this is, is outside the rows. */
 int fat_walk_acquire(uint32_t count)
 {
     (void)count;
@@ -106,7 +113,7 @@ int fat_walk_acquire(uint32_t count)
     return 0;
 }
 
-/** Reject an unexpected mount-check workspace query. */
+/** Panic, as `fat_walk_acquire` does. */
 uint32_t fat_walk_bytes(uint32_t count)
 {
     (void)count;
@@ -114,13 +121,13 @@ uint32_t fat_walk_bytes(uint32_t count)
     return 0;
 }
 
-/** Reject an unexpected mount-check release. */
+/** Panic, as `fat_walk_acquire` does. */
 void fat_walk_release(void)
 {
     k_panic("unexpected mount check");
 }
 
-/** Reject an unexpected mount-check update. */
+/** Panic, as `fat_walk_acquire` does. */
 int fat_walk_test_set(uint32_t block)
 {
     (void)block;
@@ -128,7 +135,7 @@ int fat_walk_test_set(uint32_t block)
     return 0;
 }
 
-/** Reject an unexpected mount-check lookup. */
+/** Panic, as `fat_walk_acquire` does. */
 int fat_walk_marked(uint32_t block)
 {
     (void)block;
@@ -136,14 +143,14 @@ int fat_walk_marked(uint32_t block)
     return 0;
 }
 
-/** Model a recursive namespace lock. */
+/** Take the namespace lock for the test's process, recursively. */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
     mnt->ns_holder = (int)process.pid;
     mnt->ns_depth++;
 }
 
-/** Check lock balance. */
+/** Release one level of the namespace lock; a release with none held fails. */
 void vfs_ns_unlock(struct vfs_mount *mnt)
 {
     check(mnt->ns_depth > 0, "namespace lock is balanced");
@@ -152,80 +159,90 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
     }
 }
 
-/** Return a cache block from the constructed volume. */
+/**
+ * Block `block` of the volume in memory; a block outside it fails a row and
+ * gives NULL.
+ */
 struct bbuf *bcache_get(block_device_t *dev, uint64_t block)
 {
     check(dev == &device && block < TEST_BLOCKS, "cache access is in the volume");
     return block < TEST_BLOCKS ? &buffers[block] : NULL;
 }
 
-/** Supply a block that the writer overwrites completely. */
+/** As `bcache_get`, for a block the writer overwrites whole. */
 struct bbuf *bcache_get_blank(block_device_t *dev, uint64_t block)
 {
     return bcache_get(dev, block);
 }
 
-/** No eviction occurs in this cache model. */
+/** Do nothing: the model evicts no block. */
 void bcache_release(struct bbuf *buffer)
 {
     (void)buffer;
 }
 
-/** Count published cache writes. */
+/** Count a write to the cache in `writes`. */
 void bcache_dirty(struct bbuf *buffer)
 {
     (void)buffer;
     writes++;
 }
 
-/** Count metadata writes outside the batch. */
+/** Count the write, as `bcache_dirty`; the model keeps no order. */
 void bcache_dirty_ordered(struct bbuf *buffer, int order)
 {
     (void)order;
     bcache_dirty(buffer);
 }
 
-/** Complete a write-through request. */
+/** Count the write, which succeeds. */
 int bcache_write(struct bbuf *buffer)
 {
     bcache_dirty(buffer);
     return 0;
 }
 
-/** Complete a write the disk answers before its cache holds it. */
+/** Count the write, which succeeds. */
 int bcache_write_unflushed(struct bbuf *buffer)
 {
     bcache_dirty(buffer);
     return 0;
 }
 
-/** Complete cache synchronization. */
+/** Succeed: the model has nothing to sync. */
 int bcache_sync(block_device_t *dev)
 {
     (void)dev;
     return 0;
 }
 
+/** Succeed: the model has nothing to sync. */
 int bcache_sync_unflushed(block_device_t *dev)
 {
     (void)dev;
     return 0;
 }
 
-/** A cache the rows never fill with dirty buffers. */
+/** Return 0: the rows never fill the cache with dirty buffers. */
 int bcache_dirty_heavy(void)
 {
     return 0;
 }
 
-/** Complete device synchronization. */
+/** Succeed: the model's device has no cache. */
 int block_flush(block_device_t *dev)
 {
     (void)dev;
     return 0;
 }
 
-/** Construct one group with the requested number of free blocks. */
+/**
+ * Build the volume afresh: one group of 64 blocks of 4 KiB, of which the
+ * last `available` are free; its descriptor names the block bitmap at
+ * block 2, the inode bitmap at 3 and the inode table at 4; 8 blocks are
+ * reserved for root. The batch is empty, the file is inode 12, a regular
+ * file of mode 0600 and no blocks, and the caller has euid 1000.
+ */
 static void reset(uint32_t available)
 {
     uint32_t i;
@@ -276,7 +293,15 @@ static void reset(uint32_t available)
     k_memset(payload, 0x6b, sizeof(payload));
 }
 
-/** Check exact admission on both sides of each pointer boundary. */
+/**
+ * Write two blocks from each start in `rows`, which crosses a boundary
+ * between pointer levels or between indirect blocks and needs `needed`
+ * blocks, data and pointer blocks together. With one block too few above
+ * the 8 reserved, a caller who is not root gets `ENOSPC` with nothing
+ * written, counted or changed, and root may take a reserved block. With
+ * exactly enough, the write takes them all, each missing pointer block
+ * counted once, and reads back, and an overwrite needs no free block.
+ */
 static void boundary_rows(void)
 {
     static const struct {
@@ -317,7 +342,12 @@ static void boundary_rows(void)
     }
 }
 
-/** Check existing and pending pointer paths without charging them again. */
+/**
+ * Pointer blocks that exist, or are pending in the batch, are not counted
+ * again: with the double-indirect block on the volume, two blocks into a
+ * new leaf need three; and an append after one that left the
+ * double-indirect block pending needs two.
+ */
 static void existing_rows(void)
 {
     reset(20);
@@ -338,7 +368,13 @@ static void existing_rows(void)
           "pending root is counted once across append calls");
 }
 
-/** Check reservation quotas independently of the range preflight. */
+/**
+ * Call `writeback_piece`, the batch's admission of a piece, directly. A
+ * piece that needs more blocks than are free once an earlier pending
+ * piece's reservation is counted fails with `ENOSPC` and leaves the earlier
+ * piece pending and intact; it then drains and reads back. Root cannot
+ * reserve more blocks than are free.
+ */
 static void reservation_rows(void)
 {
     struct ext2_node before;
@@ -367,7 +403,7 @@ static void reservation_rows(void)
           "root cannot reserve more blocks than are free");
 }
 
-/** Run the focused allocation rows. */
+/** Run the rows; 0 when every row passed. */
 int main(void)
 {
     boundary_rows();
