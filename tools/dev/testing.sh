@@ -64,10 +64,12 @@
 # that the caller reads each result when it lands and waits again with the
 # new count.
 #
-# The host is reached as `ssh testing`. Its ssh server answers in an MSYS
-# shell on Windows; the copy lives in the WSL distribution, so the receiving
-# rsync and the command both start through `wsl.exe`, and MSYS's rewriting of
-# POSIX paths is switched off for the rsync it launches.
+# The host is reached as `ssh testing`. Its ssh server is Windows's OpenSSH,
+# whose default shell, `C:\msys64\sshd_default_shell.cmd`, is a batch file
+# that cmd.exe runs and that starts MSYS's bash with the command; the copy
+# lives in the WSL distribution, so the receiving rsync and the command both
+# start through `wsl.exe`, and MSYS's rewriting of POSIX paths is switched off
+# for the rsync it launches.
 #
 # The rsync here must be the real one, 3.x from Homebrew. macOS ships
 # openrsync under the same name, and it deletes on the host what the filter
@@ -253,17 +255,23 @@ sync_tree()
 # the holder can be watched; if the holder ends first, the ssh is stopped.
 #
 # COMMAND travels in base64, whose letters no shell or command line on the
-# way treats specially, and bash in WSL decodes it and evaluates the text.
-# MSYS's shell parses the ssh command once, and wsl.exe, given `--`, hands
-# the rest of its command line to a shell that parses it again, so a quote
-# in COMMAND written into either line ends the argument it was meant to be
-# part of. `-e` makes wsl.exe start bash with its arguments as given, and
-# MSYS_NO_PATHCONV keeps MSYS from rewriting an argument it takes for a path.
+# way treats specially, and bash in WSL decodes it and runs the text. sshd
+# hands the ssh command to its default shell as `-c "COMMAND"`, and cmd.exe
+# reads that line first: a double quote in the command ends cmd's quoting,
+# so that a `|` or `&` after it starts a Windows program, and cmd expands `%`
+# and, in that batch file, `!`. MSYS's shell parses the line next, and
+# wsl.exe, given `--`, would hand the rest of its command line to a shell
+# that parses it again. So the line has no double quote, `%` or `!`, and its
+# `&&`, `<` and parentheses stay inside cmd's quotes; bash reads the text
+# from a here-string and sources it, where a quoted `eval` would need double
+# quotes; and COMMAND itself is written into no line. `-e` makes wsl.exe
+# start bash with its arguments as given, and MSYS_NO_PATHCONV keeps MSYS
+# from rewriting an argument it takes for a path.
 run_held()
 {
     encoded=$(printf '%s' "$*" | base64 | tr -d '\n')
     exec 5<&0
-    ssh -o BatchMode=yes "$HOST" "MSYS_NO_PATHCONV=1 wsl.exe -e bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg && eval \"\$(printf %s \"\$1\" | base64 -d)\"' bash $encoded" \
+    ssh -o BatchMode=yes "$HOST" "MSYS_NO_PATHCONV=1 wsl.exe -e bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg && . <(base64 -d <<< \$1)' bash $encoded" \
         <&5 3>&- 5<&- &
     command=$!
     exec 5<&-

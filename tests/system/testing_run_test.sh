@@ -1,7 +1,7 @@
 #!/bin/sh
 # testing_run_test.sh: check that `testing.sh run` delivers its command intact.
-# --mutate pastes the command into a quoted argument of a private copy;
-# --texts checks that fault's text.
+# --mutate pastes the command into a quoted argument of a private copy, and
+# then decodes it inside double quotes; --texts checks those faults' texts.
 
 set -eu
 case ${1:-} in
@@ -20,28 +20,43 @@ mkdir -p "$work/bin" "$work/home" "$work/copy" "$work/tree/tools/dev"
 script=$work/tree/tools/dev/testing.sh
 cp "$repo/tools/dev/testing.sh" "$script"
 
-# fault: paste the command into the single-quoted argument of the private copy.
+# fault NAME: write the private copy with fault NAME: `paste` puts the command
+# into the single-quoted argument, and `quoted` decodes it inside double
+# quotes, which cmd.exe on the host misreads.
 fault()
 {
-    cat > "$work/fault.sed" <<'EOF'
-s/eval .* bash \$encoded"/$*'"/
+    case $1 in
+        paste)
+            cat > "$work/fault.sed" <<'EOF'
+s/\. <(base64 .* bash \$encoded"/$*'"/
 EOF
+            ;;
+        quoted)
+            cat > "$work/fault.sed" <<'EOF'
+s/\. <(base64 -d <<< \\\$1)/eval \\"\\$(printf %s \\"\\$1\\" | base64 -d)\\"/
+EOF
+            ;;
+    esac
     sed -f "$work/fault.sed" "$repo/tools/dev/testing.sh" > "$script"
     ! cmp -s "$repo/tools/dev/testing.sh" "$script"
 }
 if [ "$mode" = texts ]; then
-    fault
+    fault paste
+    fault quoted
     exit 0
 fi
 
-# The ssh fixture stands for the host's sshd and MSYS shell: it answers the
-# holder's script at once and keeps the lock until its input ends, and gives
-# any other command line to a shell to parse, as sshd gives it to MSYS's.
+# The ssh fixture stands for the host's sshd and its default shell, a batch
+# file that starts MSYS's bash: it answers the holder's script at once and
+# keeps the lock until its input ends. It refuses any other command line that
+# has a double quote, `%` or `!`, which cmd.exe reads as its own, and gives
+# the rest to a shell to parse, as the batch file gives it to MSYS's.
 cat > "$work/bin/ssh" <<'EOF'
 #!/bin/sh
 [ "$1 $3" = '-o testing' ] || exit 255
 case $4 in
     *'bash -s -- '*) echo held; exec cat > /dev/null ;;
+    *[\"%!]*) echo "ssh fixture: cmd.exe misreads: $4" >&2; exit 255 ;;
 esac
 exec bash -c "$4"
 EOF
@@ -83,6 +98,7 @@ rows()
     failed=0
     row words 0 'a b' '' echo a b || failed=1
     row single 0 ok '' "printf '%s\\n' ok" || failed=1
+    row cmd 0 '%OS% !x! ^' '' "echo '%OS% !x! ^'" || failed=1
     row quotes 0 "it's
 say \"hi\"
 x
@@ -98,7 +114,7 @@ a\\b" '' "printf '%s\\n' \"it's\" 'say \"hi\"' '(x)' 'a\\b' | tr -d '()'" ||
 }
 rows || exit 1
 if [ "$mode" = mutate ]; then
-    fault
+    fault paste
     if rows > "$work/mutated.out" 2>&1; then
         echo 'testing-run-test: fault passed: command pasted into the argument' >&2
         exit 1
@@ -108,8 +124,17 @@ if [ "$mode" = mutate ]; then
         echo 'testing-run-test: fault failed a command without quotes' >&2
         exit 1
     fi
+    fault quoted
+    if rows > "$work/mutated.out" 2>&1; then
+        echo 'testing-run-test: fault passed: command decoded inside double quotes' >&2
+        exit 1
+    fi
+    if ! grep -q '^testing-run-test: failed: words:' "$work/mutated.out"; then
+        echo 'testing-run-test: fault passed a command without quotes' >&2
+        exit 1
+    fi
     cp "$repo/tools/dev/testing.sh" "$script"
     rows || exit 1
-    echo 'testing-run-test: result: pass: pasted command caught and restored'
+    echo 'testing-run-test: result: pass: both faults caught and restored'
 fi
-echo 'testing-run-test: result: pass: 6 rows'
+echo 'testing-run-test: result: pass: 7 rows'
