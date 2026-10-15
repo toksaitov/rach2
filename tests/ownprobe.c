@@ -1,14 +1,15 @@
 /**
- * Verify file ownership: creation stamping, the umask, and the chmod/chown
- * and kill permission rules.
+ * ownprobe: file ownership, the ids a new file is given, the umask, and the
+ * permission rules of chmod, chown and kill.
  *
  * A new file belongs to its creator's effective ids with the file-creation
  * mask applied; chmod is the owner's or root's; a uid change by chown is
- * root's alone while an owner may chgrp only to a group it belongs to; the fd
- * variants obey the same rules through fchmod/fchown; and kill answers EPERM,
- * not ESRCH, for a live process the sender does not own. All state the probe
- * creates is removed and the umask restored, so the shared boot stays clean
- * for the probes that follow.
+ * root's alone, while an owner may chgrp only to a group it belongs to; the
+ * fd variants, fchmod and fchown, obey the same rules; and kill answers
+ * EPERM, not ESRCH, for a live process the sender does not own, except
+ * SIGCONT within the sender's session, and lets a sender reach a process
+ * whose saved uid is its own. The probe removes what it creates and restores
+ * the umask, so that the boot it shares with the probes after it is clean.
  *
  * Prints "OWNPROBE OK" and exits 0 on success; prints the failing step and
  * exits 1 otherwise. Freestanding; direct system calls (probe.h).
@@ -25,6 +26,7 @@ typedef unsigned int u32;
 #define EPERM  1
 #define KEEP   0xFFFFFFFFu
 
+/** The length of the string `s`. */
 static u32 slen(const char *s)
 {
     u32 n = 0;
@@ -35,11 +37,13 @@ static u32 slen(const char *s)
     return n;
 }
 
+/** Write the string `s` to standard output. */
 static void puts_(const char *s)
 {
     syscall3(SYS_WRITE, STDOUT, (long)s, (int)slen(s));
 }
 
+/** Print "OWNPROBE FAIL: `step`" and exit 1. */
 static void fail(const char *step)
 {
     puts_("OWNPROBE FAIL: ");
@@ -48,8 +52,8 @@ static void fail(const char *step)
     syscall3(SYS_EXIT, 1, 0, 0);
 }
 
-/* The stat64 fields this probe reads: mode at offset 16, uid at 24, gid at 28
- * (the i386 struct stat64 layout the kernel fills). */
+/** The 32-bit field at `offset`, one of probe.h's KSTAT_ offsets, of the
+ * stat of `path`; a stat that fails fails the probe. */
 static u32 stat_field(const char *path, int offset)
 {
     static char st[144];
@@ -60,14 +64,24 @@ static u32 stat_field(const char *path, int offset)
     return *(u32 *)(st + offset);
 }
 
-/* The identity-dependent walk runs in a child so the parent stays root. */
+/**
+ * The rows that change the process's ids, run in a child so that the parent
+ * stays root: creation under umask 027 by root and by an effective uid of
+ * 1000, chown as root, then as uid 1000 with the supplementary group 3000
+ * chmod, fchmod, chown and chgrp, and kill. Exits 0, or fails the probe.
+ *
+ * kill of the root parent is EPERM and of the child itself succeeds, which
+ * shows that the uid drop took. SIGCONT reaches the parent within the
+ * session, as a shell resumes a job it started through su, whose real uid
+ * is 0 and the shell's is not; after setsid it is EPERM too. setsid only
+ * creates a session, so no process can move into one to gain that reach.
+ */
 static void child_main(void)
 {
     u32 groups[1];
     int fd;
 
-    /* Creation applies the mask and stamps the creator: umask 027 turns 0666
-     * into 0640 and 0777 into 0750, owned by the effective ids. */
+    /* umask 027 turns 0666 into 0640 and 0777 into 0750, the creator's. */
     syscall3(SYS_UMASK, 027, 0, 0);
     fd = syscall3(SYS_CREAT, (long)"/own.txt", 0666, 0);
     if (fd < 0) {
@@ -96,9 +110,7 @@ static void child_main(void)
         fail("chown dir as root");
     }
 
-    /* Creation stamps the EFFECTIVE id: with ruid 0 and euid 1000, the new
-     * file belongs to 1000, still under the 027 mask. chmod then sets 0666
-     * exactly: the mask applies at creation, never to chmod. */
+    /* Real uid 0, effective 1000: the file is 1000's; chmod is not masked. */
     if (syscall3(SYS_SETREUID, (int)KEEP, 1000, 0) != 0) {
         fail("excursion out");
     }
@@ -143,11 +155,11 @@ static void child_main(void)
     if (syscall3(SYS_CHOWN, (long)"/own.txt", KEEP, 4000) != -EPERM) {
         fail("owner chgrp to foreign group not EPERM");
     }
-    /* A non-owner may not chmod: /hello.txt is root's and we are 1000. */
+    /* A non-owner may not chmod: /hello.txt is root's, the caller 1000. */
     if (syscall3(SYS_CHMOD, (long)"/hello.txt", 0777, 0) != -EPERM) {
         fail("chmod as non-owner not EPERM");
     }
-    /* The fd variants agree for a directory descriptor: /own.d is ours. */
+    /* fchmod on a descriptor of /own.d, the caller's directory. */
     {
         int dfd = syscall3(SYS_OPEN, (long)"/own.d", 0, 0);
         if (dfd < 0) {
@@ -160,10 +172,7 @@ static void child_main(void)
         syscall3(SYS_CLOSE, dfd, 0, 0);
     }
 
-    /* kill: the probe's parent is root; a 1000 sender gets EPERM, not
-     * silence, and may still probe itself. These two are the paired
-     * assertions that prove the uid drop above actually took, so the SIGCONT
-     * case below cannot be read as the rule failing open. */
+    /* kill: the parent is root's, so uid 1000 gets EPERM; itself, 0. */
     {
         int ppid = syscall3(SYS_GETPPID, 0, 0, 0);
 
@@ -177,16 +186,12 @@ static void child_main(void)
             fail("SIGTERM to the root parent not EPERM");
         }
 
-        /* SIGCONT passes within the session, which is what lets a shell resume
-         * a job it started through su: that job's real uid is 0 and the shell's
-         * is not. The probe shares its parent's session here. */
+        /* SIGCONT passes within the session, as a shell resumes a su job. */
         if (syscall3(SYS_KILL, ppid, SIGCONT, 0) != 0) {
             fail("SIGCONT to the root parent in our session");
         }
 
-        /* Leave the session and the exception goes with it, which is what
-         * keeps it from being a way to reach anything at all: setsid only ever
-         * creates a session, so nothing can move into one to gain reach. */
+        /* Out of the session, SIGCONT is EPERM too. */
         if (syscall3(SYS_SETSID, 0, 0, 0) < 0) {
             fail("setsid");
         }
@@ -199,6 +204,16 @@ static void child_main(void)
     syscall3(SYS_EXIT, 0, 0, 0);
 }
 
+/**
+ * The probe's entry, root throughout: runs `child_main`, then the saved-uid
+ * case, then removes what the probe created and restores umask 022.
+ *
+ * The saved-uid case is one nothing in the shipped images reaches, since su
+ * and dropbear both drop all three ids: only a process that keeps an id in
+ * its saved slot can be signalled through it. The parent keeps 1000 there
+ * while it stays root, and the child, uid 1000, sends it signal 0, since a
+ * real signal would reach the probe itself and could end the run.
+ */
 PROBE_START void _start(void)
 {
     int pid, status;
@@ -215,12 +230,7 @@ PROBE_START void _start(void)
         fail("child walk");
     }
 
-    /* The saved-uid arm, which nothing in the shipped images reaches: su and
-     * dropbear both drop all three ids, so only a process that deliberately
-     * parks an identity in its saved slot can be signalled through it. The
-     * parent keeps 1000 there while staying root, and the child probes with
-     * signal 0, not a real one, which would land on this probe's own
-     * init and could end the run. */
+    /* The saved-uid case: 1000 in the parent's saved slot. */
     if (syscall3(SYS_SETRESUID, 0, 0, 1000) != 0) {
         fail("park 1000 in the saved slot");
     }
@@ -246,8 +256,7 @@ PROBE_START void _start(void)
         fail("restore the saved uid");
     }
 
-    /* The parent is still root: remove the probe's droppings and restore the
-     * mask, so the shared boot stays clean for the next probe. */
+    /* Remove what the probe created, and restore the mask. */
     if (syscall3(SYS_UNLINK, (long)"/own.txt", 0, 0) != 0 ||
         syscall3(SYS_UNLINK, (long)"/own.d/e.txt", 0, 0) != 0 ||
         syscall3(SYS_RMDIR, (long)"/own.d", 0, 0) != 0) {

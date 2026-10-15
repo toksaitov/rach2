@@ -1,6 +1,9 @@
 /**
- * Exercises file creation and timestamp updates through `creat` and
- * `utimensat`. Freestanding; direct system calls (probe.h).
+ * touchtest: file creation and timestamp updates through `creat` and
+ * `utimensat`, as `touch` makes them.
+ *
+ * Prints a line for each of the ten tests and exits 0 when every one passed,
+ * 1 otherwise. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
@@ -9,15 +12,13 @@ typedef long time_t;
 
 #define STDOUT_FILENO 1
 
-/* Syscall numbers (32-bit Linux / Rach2 compatible) */
-
-/* Special value for dirfd meaning "use pathname relative to cwd" */
+/* The dirfd that resolves a relative path against the working directory. */
 #define AT_FDCWD (-100)
 
-/* Timespec structure for utimensat */
+/* The times utimensat takes. */
 struct timespec {
-    time_t tv_sec; /* seconds */
-    long tv_nsec;  /* nanoseconds */
+    time_t tv_sec;
+    long tv_nsec;
 };
 
 /* Special nsec value: set to current time */
@@ -34,52 +35,55 @@ struct timespec {
 #define S_IRGRP 0040
 #define S_IROTH 0004
 
+/** write(2). */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
+/** exit(2); does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** creat(2). */
 static int sys_creat(const char *path, unsigned int mode)
 {
     return syscall2(SYS_CREAT, (long)path, (long)mode);
 }
 
+/** open(2) with no mode. */
 static int sys_open(const char *path, int flags)
 {
     return syscall2(SYS_OPEN, (long)path, (long)flags);
 }
 
+/** close(2). */
 static int sys_close(int fd)
 {
     return syscall1(SYS_CLOSE, (long)fd);
 }
 
+/** unlink(2). */
 static int sys_unlink(const char *path)
 {
     return syscall1(SYS_UNLINK, (long)path);
 }
 
 /**
- * Updates a file's access and modification timestamps.
- *
- * @param dirfd `AT_FDCWD` to resolve `pathname` against the cwd, or an open
- * directory fd to resolve it relative to that directory.
- * @param pathname Path to the file.
- * @param times Array of two `timespec` `[atime, mtime]`, or NULL for the
- * current time.
- * @param flags 0 or `AT_SYMLINK_NOFOLLOW`.
+ * utimensat(2): set the access and modification times of `pathname`,
+ * resolved against `dirfd` or, for AT_FDCWD, the working directory, to
+ * `times`, [atime, mtime], or to the time now when `times` is NULL. `flags`
+ * is 0 or AT_SYMLINK_NOFOLLOW.
  */
 static int sys_utimensat(int dirfd, const char *pathname, const struct timespec *times, int flags)
 {
     return syscall4(SYS_UTIMENSAT, (long)dirfd, (long)pathname, (long)times, (long)flags);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t len = 0;
@@ -89,17 +93,20 @@ static size_t strlen(const char *s)
     return len;
 }
 
+/** Write the string `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
+/** Write the string `s` to standard output. */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
+/** Write `n`, 0 to 99, in decimal to standard output. */
 static void print_num(int n)
 {
     if (n >= 10) {
@@ -111,8 +118,8 @@ static void print_num(int n)
 }
 
 /**
- * ELF entry point: runs the creat and utimensat checks, then exits with the
- * count of failures.
+ * The probe's entry: the creat, utimensat and unlink tests in order, then
+ * the count of each verdict; exits 0 when every test passed, 1 otherwise.
  */
 PROBE_START void _start(void)
 {
@@ -210,7 +217,7 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 8: Clean up - unlink first file */
+    /* Test 8: unlink the first file. */
     print("Test 8: unlink(\"touchtest.tmp\")... ");
     result = sys_unlink("touchtest.tmp");
     if (result == 0) {
@@ -233,7 +240,7 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 10: Clean up second file */
+    /* Test 10: unlink the second file. */
     print("Test 10: unlink(\"touchtest2.tmp\")... ");
     result = sys_unlink("touchtest2.tmp");
     if (result == 0) {

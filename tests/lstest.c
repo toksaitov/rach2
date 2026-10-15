@@ -1,9 +1,12 @@
 /**
- * Exercises the getdents64 syscall: open "/", read directory entries, parse
- * the linux_dirent64 stream, and confirm a second call reaches end-of-directory
- * while a bad fd fails. KRFFS is flat, so every file appears in root "/".
+ * lstest: the getdents64 call, as `ls` lists a directory.
  *
- * Freestanding; direct system calls (probe.h).
+ * The probe opens "/", reads its entries, walks the linux_dirent64 records
+ * and prints each, reads again, which gives the end of the directory or more
+ * entries, and requires a descriptor that is not open to fail.
+ *
+ * Prints a line for each test and exits 0 when every one passed, 1
+ * otherwise. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
@@ -33,39 +36,45 @@ typedef long long int64_t;
 
 /** The record format returned by getdents64. */
 struct linux_dirent64 {
-    uint64_t d_ino;    /* 64-bit inode number */
-    int64_t d_off;     /* 64-bit offset to next structure */
-    uint16_t d_reclen; /* Size of this dirent */
-    uint8_t d_type;    /* File type */
-    char d_name[];     /* Filename (null-terminated) */
+    uint64_t d_ino;
+    int64_t d_off;     /* the position the next read resumes from */
+    uint16_t d_reclen; /* this record's length, padding included */
+    uint8_t d_type;
+    char d_name[]; /* NUL-terminated */
 };
 
+/** write(2). */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
+/** exit(2); does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** open(2) with no mode. */
 static int sys_open(const char *pathname, int flags)
 {
     return syscall2(SYS_OPEN, (long)pathname, (long)flags);
 }
 
+/** close(2). */
 static int sys_close(int fd)
 {
     return syscall1(SYS_CLOSE, (long)fd);
 }
 
+/** getdents64(2). */
 static int sys_getdents64(int fd, void *dirp, unsigned int count)
 {
     return syscall3(SYS_GETDENTS64, (long)fd, (long)dirp, (long)count);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t len = 0;
@@ -75,17 +84,20 @@ static size_t strlen(const char *s)
     return len;
 }
 
+/** Write the string `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
+/** Write the string `s` to standard output. */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
+/** Write `n`, 0 or more, in decimal to standard output. */
 static void print_num(int n)
 {
     if (n >= 10) {
@@ -95,6 +107,7 @@ static void print_num(int n)
     sys_write(STDOUT_FILENO, &c, 1);
 }
 
+/** Write `n` as "0x" and eight hexadecimal digits to standard output. */
 static void print_hex(uint32_t n)
 {
     const char *hex = "0123456789abcdef";
@@ -110,6 +123,7 @@ static void print_hex(uint32_t n)
     print(buf);
 }
 
+/** The name of the record type `d_type`, or "???" for one not listed. */
 static const char *get_type_name(uint8_t d_type)
 {
     switch (d_type) {
@@ -133,13 +147,13 @@ static const char *get_type_name(uint8_t d_type)
 }
 
 /**
- * Entry point. Opens "/", reads its entries with getdents64, parses and prints
- * each one, calls getdents64 again to verify end-of-directory, checks that a
- * bad fd fails, then closes the directory.
+ * The probe's entry: opens "/", reads its entries with getdents64, walks and
+ * prints each one, reads again, checks that a bad fd fails, closes the
+ * directory, and prints the count of each verdict.
  */
 PROBE_START void _start(void)
 {
-    char buf[1024]; /* Buffer for directory entries */
+    char buf[1024];
     struct linux_dirent64 *d;
     int fd;
     int nread;
@@ -193,7 +207,7 @@ PROBE_START void _start(void)
         while (pos < nread) {
             d = (struct linux_dirent64 *)(buf + pos);
 
-            /* Sanity check reclen */
+            /* A record of length 0 would not advance. */
             if (d->d_reclen == 0) {
                 puts("  ERROR: d_reclen is 0, breaking");
                 failed++;
@@ -249,7 +263,7 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 5: getdents64 on invalid fd should fail */
+    /* Test 5: getdents64 on a descriptor that is not open fails. */
     print("Test 5: getdents64(999, ...)... ");
     nread = sys_getdents64(999, buf, sizeof(buf));
     if (nread < 0) {

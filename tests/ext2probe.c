@@ -2,20 +2,24 @@
  * ext2probe: the ext2 root's contract from a program.
  *
  * `ext2probe links` mounts /dev/disk0p1, the fixture volume
- * tests/system/mkext2fixture.sh writes, on /e2 and runs the symbolic-link
- * rows the walker must answer: a relative and an absolute target, a link
- * to a directory with `..` through it, a chain of forty followed and one
- * of forty-one refused, `O_NOFOLLOW`, `O_CREAT|O_EXCL` on a dangling link,
- * `lstat` against `stat`, `readlink`, and a dangling link; and the
- * hard-link rows a read-only volume can answer: the count in `stat` and
- * `EPERM` for a directory.
+ * tests/system/mkext2fixture.sh writes, read-only on /e2 and runs the
+ * symbolic-link rows the walker must answer: a relative and an absolute
+ * target, a link to a directory with `..` through it, a chain of forty
+ * followed and one of forty-one refused, `O_NOFOLLOW`, `O_CREAT|O_EXCL` on a
+ * dangling link, `lstat` against `stat`, `readlink`, a dangling link, and
+ * the flags of fstatat and utimensat; the hard-link rows a read-only volume
+ * can answer, the count in `stat` and `EPERM` for a directory, with EROFS,
+ * EXDEV and the KRFFS root's EPERM for the links it cannot make; and the
+ * links of /proc.
  *
  * `ext2probe cost` mounts the same fixture for writing with `MS_SYNCHRONOUS`
- * and counts commands and cache flushes for repeated rewrites and appends
- * through `/proc/disk`. A mount without `sync` writes back, so its writes cost
- * no commands before fsync whether or not ext2 batches them; the ordered
- * write-through of a `sync` mount is what the batching saves commands on.
- * Both counts include fsync, and both files are reopened and checked.
+ * and counts, through `/proc/disk`, the commands and cache flushes of
+ * repeated rewrites and of appends. A mount without `sync` writes back, so
+ * its writes cost no commands before fsync whether or not ext2 batches them;
+ * the batching saves commands on the ordered write-through of a `sync`
+ * mount. Both counts include fsync, and both files are reopened and checked.
+ * `ext2probe cost-append` judges the appends alone, for
+ * tests/system/ext2_batch_mutate.sh.
  *
  * Prints "EXT2PROBE OK (mode)" or "EXT2PROBE FAIL: reason". Freestanding;
  * direct system calls (probe.h).
@@ -46,12 +50,14 @@
 #define ELOOP  40
 
 static void sys_exit(int status) __attribute__((noreturn));
+/** exit(2); does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -62,6 +68,7 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write the string `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
@@ -69,6 +76,7 @@ static void puts(const char *s)
 }
 
 static void fail(const char *why) __attribute__((noreturn));
+/** Print "EXT2PROBE FAIL: `why`" and exit 1. */
 static void fail(const char *why)
 {
     syscall3(SYS_WRITE, 1, (long)"EXT2PROBE FAIL: ", 16);
@@ -76,8 +84,8 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
-/* A failure with the number the row got, for a wrong count or errno. */
 static void fail_with(const char *why, int n) __attribute__((noreturn));
+/** A failure with the number `n` the row got, for a wrong count or errno. */
 static void fail_with(const char *why, int n)
 {
     char digits[12];
@@ -100,6 +108,7 @@ static void fail_with(const char *why, int n)
     sys_exit(1);
 }
 
+/** Whether the strings `a` and `b` are equal. */
 static int streq(const char *a, const char *b)
 {
     while (*a && *a == *b) {
@@ -110,16 +119,17 @@ static int streq(const char *a, const char *b)
 }
 
 /* The stat buffer, in the architecture's layout (probe.h's KSTAT_ offsets).
-   The kernel writes it through the pointer the syscall is given. */
+ * The kernel writes it through the pointer the call is given. */
 static unsigned char st[KSTAT_SIZE];
 
-/* The 32-bit word at `at` in the stat buffer, least significant byte first. */
+/** The 32-bit word at `at` in the stat buffer, least significant byte first. */
 static int st_word(int at)
 {
     return (int)(st[at] | (st[at + 1] << 8) | (st[at + 2] << 16) | (st[at + 3] << 24));
 }
 
-/* The mode word of a stat or lstat. */
+/** stat or lstat, as `call` says, of `path`, with the mode word in `*mode`
+ * on success: the call's result. */
 static int stat_mode(int call, const char *path, int *mode)
 {
     int rc = syscall2(call, (long)path, (long)st);
@@ -130,7 +140,7 @@ static int stat_mode(int call, const char *path, int *mode)
     return rc;
 }
 
-/* The link count. */
+/** The link count of `path`, or -1 when stat fails. */
 static int stat_nlink(const char *path)
 {
     if (syscall2(SYS_STAT, (long)path, (long)st) != 0) {
@@ -139,6 +149,8 @@ static int stat_nlink(const char *path)
     return st_word(KSTAT_NLINK);
 }
 
+/** Open `path` and read up to `cap` bytes of it into `buf` with one read:
+ * the bytes read, or open's or read's negated errno. */
 static int read_all(const char *path, char *buf, int cap)
 {
     int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
@@ -152,6 +164,8 @@ static int read_all(const char *path, char *buf, int cap)
     return n;
 }
 
+/** Fail `what` unless open of `path` with `flags` succeeds when `want` is 0,
+ * or fails with the errno `want` otherwise. */
 static void expect_open(const char *path, int flags, int want, const char *what)
 {
     int fd = syscall3(SYS_OPEN, (long)path, flags, 0644);
@@ -166,7 +180,7 @@ static void expect_open(const char *path, int flags, int want, const char *what)
     }
 }
 
-/* The mode word of the stat buffer. */
+/** The mode word of the stat buffer. */
 static int st_mode(void)
 {
     return st_word(KSTAT_MODE);
@@ -174,6 +188,8 @@ static int st_mode(void)
 
 static char big[512];
 
+/** The rows of `ext2probe links`, on the fixture mounted read-only on /e2;
+ * fails the probe at the first row that fails. */
 static void links_rows(void)
 {
     char buf[64];
@@ -188,8 +204,7 @@ static void links_rows(void)
     if (n != 6 || buf[0] != 'h') {
         fail("an absolute link reads its target");
     }
-    /* A link to a directory, and `..` through it goes to the target's
-       parent, since `..` is physical. */
+    /* A link to a directory; `..` through it is the target's parent. */
     n = read_all("/e2/dirlink/deep.txt", buf, sizeof(buf));
     if (n != 5 || buf[0] != 'd') {
         fail("a link to a directory is walked into");
@@ -207,8 +222,7 @@ static void links_rows(void)
     if (n != -ELOOP) {
         fail_with("a chain of forty-one links answers ELOOP", n);
     }
-    /* Under O_NOFOLLOW a link at the end is the result, and open cannot
-       open a link. */
+    /* O_NOFOLLOW: a link at the end is ELOOP, since open cannot open one. */
     expect_open("/e2/fast", O_RDONLY | O_NOFOLLOW, ELOOP, "O_NOFOLLOW on a link answers ELOOP");
     expect_open("/e2/hello.txt", O_RDONLY | O_NOFOLLOW, 0, "O_NOFOLLOW on a file opens it");
     /* O_CREAT|O_EXCL on a dangling link: the link is there. */
@@ -240,8 +254,7 @@ static void links_rows(void)
     if (read_all("/e2/dangling", buf, sizeof(buf)) != -ENOENT) {
         fail("and to open");
     }
-    /* A link in the middle of a path is always followed, even under
-       O_NOFOLLOW: `fast` becomes the file, and `..` on a file is refused. */
+    /* A link inside a path is followed under O_NOFOLLOW too: ENOTDIR. */
     n = syscall3(SYS_OPEN, (long)"/e2/fast/../hello.txt", O_RDONLY | O_NOFOLLOW, 0);
     if (n != -20) {
         fail_with("a link in the middle of a path is followed to its file", n);
@@ -265,8 +278,7 @@ static void links_rows(void)
     if (syscall2(SYS_LINK, (long)"/e2/hello.txt", (long)"/another") != -EXDEV) {
         fail("a hard link across mounts answers EXDEV");
     }
-    /* O_CREAT through a dangling link is the target's creation, which the
-       read-only mount refuses; it must answer and not loop. */
+    /* O_CREAT through a dangling link creates the target: EROFS here. */
     expect_open("/e2/dangling", O_WRONLY | O_CREAT, EROFS,
                 "O_CREAT through a dangling link creates the target, refused read-only");
     expect_open("/e2/fast", O_WRONLY | O_CREAT | O_EXCL, EEXIST,
@@ -285,7 +297,7 @@ static void links_rows(void)
     if (n != 300 || big[0] != 'x' || big[299] != 'x') {
         fail_with("readlink gives a 300-byte target", n);
     }
-    /* fstatat64 with and without AT_SYMLINK_NOFOLLOW, and an invalid flag. */
+    /* fstatat with and without AT_SYMLINK_NOFOLLOW, and an invalid flag. */
     if (syscall4(SYS_FSTATAT, AT_FDCWD, (long)"/e2/fast", (long)st, AT_SYMLINK_NOFOLLOW) != 0 ||
         (st_mode() & 0170000) != 0120000) {
         fail("fstatat64 with AT_SYMLINK_NOFOLLOW reports the link");
@@ -301,8 +313,7 @@ static void links_rows(void)
         fail("utimensat with AT_SYMLINK_FOLLOW answers EINVAL");
     }
 #if !defined __x86_64__
-    /* The old stat and lstat, whose mode is a 16-bit word at offset 8, which
-       only i386 has. */
+    /* i386's old stat and lstat: the mode is a 16-bit word at offset 8. */
     if (syscall2(SYS_OLDLSTAT, (long)"/e2/fast", (long)st) != 0 ||
         ((st[8] | (st[9] << 8)) & 0170000) != 0120000) {
         fail("the old lstat reports the link");
@@ -319,6 +330,7 @@ static void links_rows(void)
                 "/proc/self/fd/1 under O_CREAT|O_EXCL answers EEXIST");
 }
 
+/* The disk's counts of commands and cache flushes, from /proc/disk. */
 struct disk_counts {
     unsigned commands;
     unsigned flushes;
@@ -326,7 +338,9 @@ struct disk_counts {
 
 static unsigned char cost_block[4096];
 
-/** Read one unsigned counter from a complete procfs line. */
+/** The unsigned counter on the line `key` of the /proc/disk text `text`,
+ * "key value"; a counter that is absent, empty, too large or followed by
+ * other text fails the probe. */
 static unsigned disk_counter(const char *text, const char *key)
 {
     const char *p = text;
@@ -368,7 +382,8 @@ static unsigned disk_counter(const char *text, const char *key)
     fail("a disk counter is absent");
 }
 
-/** Opening `/proc/disk` takes a snapshot without issuing a disk command. */
+/** The disk's counts now. Reading `/proc/disk` takes a snapshot without
+ * issuing a disk command. */
 static struct disk_counts disk_counts(void)
 {
     static char text[8192];
@@ -397,7 +412,9 @@ static void cost_number(unsigned value)
     syscall3(SYS_WRITE, 1, (long)(digits + i), (int)sizeof(digits) - i);
 }
 
-/** Record counts before checking them, including a failing mutation's cost. */
+/** Print the counts of the row `name` since `before`, at the end of its
+ * writes and after its fsync, before they are checked, so that the log has
+ * the cost of a run that fails too. */
 static void cost_report(const char *name, struct disk_counts before, struct disk_counts collected,
                         struct disk_counts committed)
 {
@@ -414,7 +431,8 @@ static void cost_report(const char *name, struct disk_counts before, struct disk
     puts("");
 }
 
-/** Write one whole block with a pattern that identifies its last writer. */
+/** Write one whole block of the byte `pattern`, which identifies its last
+ * writer, to `fd`; a short write fails the probe. */
 static void cost_write(int fd, unsigned char pattern)
 {
     unsigned i;
@@ -427,7 +445,8 @@ static void cost_write(int fd, unsigned char pattern)
     }
 }
 
-/** Create and sync one block before either count begins. */
+/** Create `path`, which may not exist, write one block of `pattern` and
+ * fsync it, before a count begins: the open descriptor. */
 static int cost_create(const char *path, unsigned char pattern)
 {
     int fd = syscall3(SYS_OPEN, (long)path, O_RDWR | O_CREAT | O_EXCL, 0644);
@@ -442,7 +461,8 @@ static int cost_create(const char *path, unsigned char pattern)
     return fd;
 }
 
-/** Reopen and check every byte and the exact file length after the count. */
+/** Reopen `path` after the count and check that it is `blocks` blocks long
+ * and that block i holds the byte `first` + i throughout. */
 static void cost_verify(const char *path, unsigned first, unsigned blocks)
 {
     int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
@@ -468,10 +488,13 @@ static void cost_verify(const char *path, unsigned first, unsigned blocks)
 }
 
 /**
- * Count sixteen rewrites and two appends, including their final fsync.
- * The rewrite permits four commands and two flushes, the cost of one data
- * write and one inode write. Two appends together permit at most the ten
- * commands and five flushes of one append in the former per-call path.
+ * Count sixteen rewrites of one block and two appends, each with its final
+ * fsync. The rewrites may cost four commands and two flushes, the cost of one
+ * data write and one inode write, and none before the fsync. The two appends
+ * together may cost at most ten commands and five flushes, what one append
+ * costs when each write call is written through on its own, and no flush
+ * before the fsync. With `append_only` the rewrites' counts are printed and
+ * not judged.
  */
 static void cost_rows(int append_only)
 {
@@ -530,6 +553,8 @@ static void cost_rows(int append_only)
 
 PROBE_SP_ENTRY;
 
+/** The probe's entry, given the initial stack `sp`: the mode from the first
+ * argument, `links` by default, run on the fixture mounted on /e2. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];

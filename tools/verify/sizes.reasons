@@ -292,14 +292,14 @@ tests/dgramprobe.c:_start lines 505 a probe, one sequence of steps in the order 
 tests/dirprobe.c:_start complexity 61 a probe, one sequence of steps in the order the log records them
 tests/dirprobe.c:_start lines 288 a probe, one sequence of steps in the order the log records them
 
-tests/dirtest.c:_start lines 109 a probe, one sequence of steps in the order the log records them
+tests/dirtest.c:_start lines 108 a probe, one sequence of steps in the order the log records them
 
 tests/dnstest.c:main complexity 30 a probe, one sequence of steps in the order the log records them
 
 tests/dup2test.c:_start lines 179 a probe, one sequence of steps in the order the log records them
 
 tests/ext2probe.c:links_rows complexity 48 a probe, one sequence of steps in the order the log records them
-tests/ext2probe.c:links_rows lines 139 a probe, one sequence of steps in the order the log records them
+tests/ext2probe.c:links_rows lines 134 a probe, one sequence of steps in the order the log records them
 
 tests/host/acpi_hosttest.c:madt_rows complexity 38 a test's rows, each a case, read as one table
 tests/host/acpi_hosttest.c:qemu_pc_rows complexity 31 a test's rows, each a case, read as one table
@@ -639,7 +639,7 @@ tests/netifprobe.c:netif_main lines 563 a probe, one sequence of steps in the or
 tests/netifprobe.c:packet_on_second lines 148 a probe, one sequence of steps in the order the log records them
 
 tests/ownprobe.c:child_main complexity 41 a probe, one sequence of steps in the order the log records them
-tests/ownprobe.c:child_main lines 134 a probe, one sequence of steps in the order the log records them
+tests/ownprobe.c:child_main lines 124 a probe, one sequence of steps in the order the log records them
 
 tests/packetprobe.c:_start complexity 145 a probe, one sequence of steps in the order the log records them
 tests/packetprobe.c:_start lines 682 a probe, one sequence of steps in the order the log records them
@@ -668,7 +668,7 @@ tests/rmtest.c:_start lines 148 a probe, one sequence of steps in the order the 
 
 tests/sockettest.c:_start lines 131 a probe, one sequence of steps in the order the log records them
 
-tests/stattest.c:_start lines 181 a probe, one sequence of steps in the order the log records them
+tests/stattest.c:_start lines 177 a probe, one sequence of steps in the order the log records them
 
 tests/stdintest.c:_start lines 119 a probe, one sequence of steps in the order the log records them
 
@@ -710,7 +710,7 @@ tests/touchtest.c:_start lines 142 a probe, one sequence of steps in the order t
 tests/udptest.c:probe_main lines 126 a probe, one sequence of steps in the order the log records them
 
 tests/unlinkdirprobe.c:_start complexity 35 a probe, one sequence of steps in the order the log records them
-tests/unlinkdirprobe.c:_start lines 164 a probe, one sequence of steps in the order the log records them
+tests/unlinkdirprobe.c:_start lines 151 a probe, one sequence of steps in the order the log records them
 
 tests/usbdiskprobe.c:part_hold complexity 43 a probe, one sequence of steps in the order the log records them
 tests/usbdiskprobe.c:part_hold lines 121 a probe, one sequence of steps in the order the log records them

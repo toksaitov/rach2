@@ -1,22 +1,21 @@
 /**
- * Fills the file system, then proves the space comes back.
+ * diskfull: fill the file system, then see the space come back.
  *
- * A program writing a large file meets a full file system, and what it is told
- * decides whether it can do anything about it: `ENOSPC` says the disk is full
- * and `EIO` says the write itself went wrong. The kernel returned `EIO` for
- * both until this probe was written.
+ * A program writing a large file meets a full file system, and what it is
+ * told decides whether it can do anything about it: `ENOSPC` says the disk is
+ * full, and `EIO` says the write itself went wrong.
  *
- * So: write until the write is refused, require `ENOSPC`, require the file to
- * hold what was written before the refusal, unlink it, and write again. The
- * last step is what a file system that lost the space instead of freeing it
- * would fail.
+ * The probe writes until a write is refused, requires the refusal to be
+ * `ENOSPC` after some bytes were written, unlinks the file, and writes a
+ * block again. The last step is what a file system that lost the space
+ * instead of freeing it would fail.
  *
  * The probe writes to the mounted root, so it needs an image with room to
- * fill; `tests/run diskfull` gives it a small one. It removes its own file
- * whatever happens.
+ * fill; `tests/run diskfull` gives it a small one. It removes its own file on
+ * every path but a failed unlink.
  *
- * Prints "DISKFULL OK" and exits 0. Freestanding; direct system calls
- * (probe.h).
+ * Prints "DISKFULL OK (...)" and exits 0, or "DISKFULL FAIL: " with the
+ * reason and exits 1. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
@@ -30,18 +29,20 @@
 #define ENOSPC 28
 
 #define CHUNK 4096
-/* Larger than any image this runs on, so the loop always reaches the
-   refusal rather than running out of tries. */
+/* TRIES blocks of CHUNK, 32 MiB, are more than any image this runs on holds,
+ * so the loop reaches the refusal rather than running out of tries. */
 #define TRIES 8192
 
 static char block[CHUNK];
 
+/** exit(2); does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -51,17 +52,20 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write the string `s` to standard output. */
 static void print(const char *s)
 {
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
 }
 
+/** Write the string `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     print(s);
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)"\n", 1);
 }
 
+/** Write `v` in decimal to standard output. */
 static void print_num(int v)
 {
     char buf[12];
@@ -83,6 +87,8 @@ static void print_num(int v)
     }
 }
 
+/** Close `fd` unless it is negative, remove the probe's file, print
+ * "DISKFULL FAIL: `why`" and exit 1. */
 static void fail(const char *why, int fd)
 {
     if (fd >= 0) {
@@ -94,6 +100,7 @@ static void fail(const char *why, int fd)
     sys_exit(1);
 }
 
+/** The probe's entry: fill, check the refusal, unlink, and write again. */
 PROBE_START void _start(void)
 {
     int fd, n, i, refused, written;
@@ -134,8 +141,7 @@ PROBE_START void _start(void)
     }
     syscall3(SYS_CLOSE, fd, 0, 0);
 
-    /* The space comes back. A file system that refused the same write again
-       after the file was removed would have lost it, not freed it. */
+    /* The space comes back once the file is removed. */
     if (syscall3(SYS_UNLINK, (long)"/diskfull.tmp", 0, 0) != 0) {
         fail("the file could not be removed", -1);
     }

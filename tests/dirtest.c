@@ -1,40 +1,49 @@
 /**
- * Exercises the getcwd and chdir syscalls at the root. getcwd reports the
- * current directory; chdir to "/", ".", and ".." (whose parent at the root is
- * the root itself) all succeed and leave the working directory at "/"; a
- * nonexistent name fails, and a plain file fails because it is not a directory.
- * Freestanding; direct system calls (probe.h).
+ * dirtest: the getcwd and chdir calls at the root.
+ *
+ * getcwd reports the current directory; chdir to "/", "." and "..", whose
+ * parent at the root is the root itself, all succeed and leave the working
+ * directory at "/"; a name that does not exist fails, and so does a plain
+ * file, which is not a directory.
+ *
+ * Prints a line for each test and exits 0 when every one passed, 1
+ * otherwise. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
 
 #define STDOUT_FILENO 1
 
+/** write(2). */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
+/** exit(2); does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** chdir(2). */
 static int sys_chdir(const char *path)
 {
     return syscall1(SYS_CHDIR, (long)path);
 }
 
 /**
- * Returns the path length including the NUL on success (the path is written
- * into `buf`), or a negative errno on error. This is the Linux getcwd(2) ABI.
+ * getcwd(2) into `buf`: the path's length with its NUL, or a negative errno.
+ * That is the system call's return, as Linux has it, and not the C
+ * library's pointer.
  */
 static int sys_getcwd(char *buf, size_t size)
 {
     return syscall2(SYS_GETCWD, (long)buf, (long)size);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t len = 0;
@@ -44,20 +53,22 @@ static size_t strlen(const char *s)
     return len;
 }
 
+/** Write the string `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
+/** Write the string `s` to standard output. */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
 /**
- * ELF entry point. Runs the getcwd and chdir cases, tallies passes and
- * failures, prints the count, and exits 0 only if all pass.
+ * The probe's entry: the getcwd and chdir tests in order, then the count of
+ * each verdict, as one digit each.
  */
 PROBE_START void _start(void)
 {
@@ -83,7 +94,7 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 2: chdir(".") - stay in current directory */
+    /* Test 2: chdir("."), which stays in the current directory. */
     print("Test 2: chdir(\".\")... ");
     result = sys_chdir(".");
     if (result == 0) {
@@ -94,7 +105,7 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 3: chdir("/") - go to root */
+    /* Test 3: chdir("/"). */
     print("Test 3: chdir(\"/\")... ");
     result = sys_chdir("/");
     if (result == 0) {
@@ -105,7 +116,7 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 4: chdir("..") - parent of root is root */
+    /* Test 4: chdir(".."): the root's parent is the root. */
     print("Test 4: chdir(\"..\")... ");
     result = sys_chdir("..");
     if (result == 0) {
@@ -127,7 +138,7 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 6: chdir("nonexistent") - should fail (ENOENT) */
+    /* Test 6: chdir to a name that does not exist fails. */
     print("Test 6: chdir(\"nonexistent\")... ");
     result = sys_chdir("nonexistent");
     if (result < 0) {
@@ -138,7 +149,7 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 7: chdir("hello.txt") - should fail (ENOTDIR - it's a file) */
+    /* Test 7: chdir to hello.txt, a file, fails. */
     print("Test 7: chdir(\"hello.txt\")... ");
     result = sys_chdir("hello.txt");
     if (result < 0) {
@@ -151,7 +162,6 @@ PROBE_START void _start(void)
 
     puts("");
     print("Results: ");
-    /* Print passed count */
     {
         char num = '0' + passed;
         sys_write(STDOUT_FILENO, &num, 1);

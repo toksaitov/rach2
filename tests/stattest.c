@@ -1,10 +1,17 @@
 /**
- * Exercises the file stat syscalls: sys_stat (106) and sys_stat64 (195) on
- * i386, and stat (4), the only one, on x86-64, where the rows of the old
- * narrow struct are not built.
+ * stattest: the file stat calls, stat (106) and stat64 (195) on i386, and
+ * stat (4), the only one, on x86-64, where the rows of the old narrow struct
+ * are not built.
  *
- * Each is checked against an existing file, the root directory, and a
- * nonexistent path, so both the success and the failure path are covered.
+ * Each is asked about an existing file, the root directory and a path that
+ * does not exist, so that the success and the failure path are both run.
+ * Then two files of one name in two directories have different inode
+ * numbers, the root is inode 1 by every call and through `..`, and the
+ * modification times of back-to-back writes and stamps do not go back and
+ * keep a part below the tick (the time rows print "STATTIME OK" or
+ * "STATTIME FAIL").
+ *
+ * Prints a line for each row and exits 0 when every row passed, 1 otherwise.
  * Freestanding; direct system calls (probe.h).
  */
 
@@ -108,11 +115,13 @@ struct stat64 {
 #define WIDE_CALL  "stat (syscall 4)"
 #endif
 
+/** write(2). */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
+/** exit(2); does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
@@ -120,12 +129,14 @@ static void sys_exit(int status)
 }
 
 #if !defined __x86_64__
+/** i386's old stat(2), call 106, into the narrow struct. */
 static int sys_stat(const char *path, struct stat *buf)
 {
     return syscall2(SYS_OLDSTAT, (long)path, (long)buf);
 }
 #endif
 
+/** Make the three-argument system call `nr`. */
 static int sys_call3(int nr, long a, long b, long c)
 {
     return syscall3(nr, a, b, c);
@@ -137,7 +148,8 @@ static int sys_call4(int nr, long a, long b, long c, long d)
     return syscall4(nr, a, b, c, d);
 }
 
-/* Make DIR and a file NAME inside it; 0 on success. */
+/** Make the directory `dir` and the file `file` inside it: 0, or -1 when a
+ * call fails. */
 static int make_in(const char *dir, const char *file)
 {
     int fd;
@@ -152,11 +164,13 @@ static int make_in(const char *dir, const char *file)
     return sys_call3(SYS_CLOSE, fd, 0, 0) < 0 ? -1 : 0;
 }
 
+/** SYS_STAT into the wide struct: stat64 on i386, stat on x86-64. */
 static int sys_stat64(const char *path, struct stat64 *buf)
 {
     return syscall2(SYS_STAT, (long)path, (long)buf);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t len = 0;
@@ -166,17 +180,20 @@ static size_t strlen(const char *s)
     return len;
 }
 
+/** Write the string `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
+/** Write the string `s` to standard output. */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
+/** Write `n` in decimal to standard output. */
 static void print_num(unsigned int n)
 {
     char buf[12];
@@ -196,6 +213,7 @@ static void print_num(unsigned int n)
     }
 }
 
+/** Write `m` in octal to standard output. */
 static void print_octal(unsigned int m)
 {
     char octal[12];
@@ -216,11 +234,12 @@ static void print_octal(unsigned int m)
     }
 }
 
-/*
- * Two files of one name in two directories are two files, and a tool that
- * finds them sharing an inode number, as `cp -a` does, copies them as hard
- * links of one file. KRFFS keeps a file's on-disk id as the hash of its
- * name alone, so the number reported must be made from more.
+/**
+ * Part C: two files of one name in two directories have different inode
+ * numbers, by every stat call. A tool that finds two files sharing an inode
+ * number, as `cp -a` does, copies them as hard links of one file, and KRFFS
+ * keeps a file's on-disk id as the hash of its name alone, so the number it
+ * reports is made from more. Counts the row in `*passed` or `*failed`.
  */
 static void same_name_rows(int *passed, int *failed)
 {
@@ -250,9 +269,10 @@ static void same_name_rows(int *passed, int *failed)
 }
 
 /**
- * A physical parent walk must report the same root identity as slash.
- *
- * The test image has no /tmp, so the row makes the directory it walks out of.
+ * The root is inode 1, a directory, through `/` and through `/statroot/..`,
+ * by stat, stat64, fstat and fstatat, the 32-bit and 64-bit numbers alike.
+ * The test image has no /tmp, so the row makes the directory it walks out
+ * of. Counts each row in `*passed` or `*failed`.
  */
 static void root_ino_rows(int *passed, int *failed)
 {
@@ -305,27 +325,30 @@ static void root_ino_rows(int *passed, int *failed)
     }
 }
 
-/** Whole modification times: `a` at or after `b`. */
+/** Whether the modification time of `a`, seconds and nanoseconds, is at or
+ * after that of `b`. */
 static int time_not_before(const struct stat64 *a, const struct stat64 *b)
 {
     return a->st_mtime > b->st_mtime ||
            (a->st_mtime == b->st_mtime && a->st_mtime_nsec >= b->st_mtime_nsec);
 }
 
-/** A part below the 10 ms tick of at least a microsecond. */
+/** Whether the modification time has a part below the 10 ms tick of at
+ * least a microsecond. */
 static int below_tick(const struct stat64 *s)
 {
     return s->st_mtime_nsec % 10000000u >= 1000u;
 }
 
 /**
- * KRFFS keeps nanoseconds and the clock adds the PIT's place within the
- * tick, so stamps taken back to back never go back and carry a part below
- * the 10 ms tick, which a clock of whole ticks never gives. They may repeat:
- * under an emulator the tick's interrupt can arrive after the counter has
- * wrapped, and `rtc_realtime` then gives its last reading again rather than
- * an earlier one. No delay separates the first two writes or the fifty
- * stamps. Explicit fractions, including zero, must survive.
+ * The time rows; 1 when they passed. KRFFS keeps nanoseconds and the clock
+ * adds the timer's place within the tick, so stamps taken back to back never
+ * go back and carry a part below the 10 ms tick, which a clock of whole
+ * ticks never gives. They may repeat: a reading that would fall back, as when
+ * the tick's interrupt arrives after the counter has wrapped, is given as
+ * the last reading again (`rtc_realtime`). No delay separates the first two
+ * writes or the fifty stamps. Explicit times keep their fractions, zero
+ * included.
  */
 static int time_rows(void)
 {
@@ -392,7 +415,7 @@ PROBE_START void _start(void)
     puts("Stat syscall test starting...");
     puts("");
 
-    /* ===== Part A: stat64 (syscall 195) tests ===== */
+    /* Part A: the wide call, stat64 (195) on i386 and stat (4) on x86-64. */
     puts("=== Part A: " WIDE_CALL " ===");
     puts("");
 
@@ -410,7 +433,6 @@ PROBE_START void _start(void)
         puts("");
         passed++;
 
-        /* Verify it's a regular file */
         print("        type: ");
         if ((st64.st_mode & S_IFMT) == S_IFREG) {
             puts("regular file (OK)");
@@ -434,7 +456,6 @@ PROBE_START void _start(void)
         puts("");
         passed++;
 
-        /* Verify it's a directory */
         print("        type: ");
         if ((st64.st_mode & S_IFMT) == S_IFDIR) {
             puts("directory (OK)");
@@ -460,7 +481,7 @@ PROBE_START void _start(void)
     puts("");
 
 #if !defined __x86_64__
-    /* ===== Part B: stat (syscall 106) tests ===== */
+    /* Part B: i386's old stat (106). */
     puts("=== Part B: stat (syscall 106) ===");
     puts("");
 
@@ -478,7 +499,6 @@ PROBE_START void _start(void)
         puts("");
         passed++;
 
-        /* Verify it's a regular file */
         print("        type: ");
         if ((st.st_mode & S_IFMT) == S_IFREG) {
             puts("regular file (OK)");
@@ -502,7 +522,6 @@ PROBE_START void _start(void)
         puts("");
         passed++;
 
-        /* Verify it's a directory */
         print("        type: ");
         if ((st.st_mode & S_IFMT) == S_IFDIR) {
             puts("directory (OK)");

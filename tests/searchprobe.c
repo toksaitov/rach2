@@ -1,98 +1,86 @@
 /**
- * Verify that search (x) is charged on every directory a path enters, not
- * only on the target and on its immediate parent.
+ * searchprobe: search permission (x) is charged on every directory a path
+ * enters, not only on the target and its parent.
  *
- * The rule under test: a process that may not search a directory reaches
- * nothing below it, whatever the bits on the leaf say, and cannot learn
- * whether a name below it exists. The fixture is one root-owned tree whose
- * modes the probe's root parent flips between three uid-1000 children, so that
- * a single denied directory is the only difference between a call that works
- * and the same call that does not.
+ * A process that may not search a directory reaches nothing below it,
+ * whatever the bits of the leaf, and cannot learn whether a name below it
+ * exists. The fixture is one root-owned tree whose modes the probe's root
+ * parent changes between three children of uid 1000, so that one denied
+ * directory is the only difference between a call that succeeds and the same
+ * call refused.
  *
- * A denial is 0777 turned into 0666, one bit of the three the caller is judged
- * by. Read and write stay granted, so nothing but the withheld execute bit can
- * account for a refusal. The obvious 0755 turned into 0700 would take the read
- * bit away in the same stroke, and a kernel that charged read where it must
- * charge execute would pass unremarked.
+ * A denial turns 0777 into 0666: read and write stay granted, so nothing but
+ * the execute bit can account for a refusal. 0755 turned into 0700 would take
+ * the read bit away as well, and a kernel that charged read where it must
+ * charge execute would pass.
  *
- * The baseline child runs first, while the tree is 0777 throughout, and does
- * every read and every mutation the denied child will be refused. Without it a
- * later -EACCES could be coming from the leaf's own bits or from the directory
- * the name lands in, and the probe would prove nothing.
+ * The baseline child runs first, while the tree is 0777 throughout, and makes
+ * every read and every change the denied child is refused, so that a later
+ * -EACCES cannot come from the leaf's own bits or from the directory the name
+ * lands in.
  *
- * The denied child then runs with `/sp_denied` at 0666 root and asserts exact
- * errnos, one level down and two, across open, stat, access, chdir, execve,
- * unlink, chmod, chown, utimensat, link, O_CREAT, creat, mkdir, rmdir and
- * rename in both directions, plus the *at forms openat, fstatat64,
- * faccessat, fchmodat, fchownat, utimensat and linkat; unlinkat, renameat
- * and mkdirat reach the same cores as unlink, rename and mkdir, and are not
- * asked here. A name that does not exist under
- * the denied directory must answer -EACCES and not -ENOENT, or a caller probes
- * for existence through a directory it may not search. An openat through a
- * dirfd opened while the ancestor was still searchable must be refused too: a
- * dirfd here is a name, not a capability.
+ * The denied child runs with /sp_denied at 0666 and requires the exact errno
+ * of open, stat, i386's old stat, fstatat, access, faccessat, openat, chdir,
+ * execve, creat, open with O_CREAT, mkdir, rmdir, unlink, rename in both
+ * directions, chmod, fchmodat, fchownat, utimensat and linkat, the reads one
+ * level down and two. unlinkat, renameat and mkdirat reach the same code as
+ * unlink, rename and mkdir, and are not called. A name that does not exist
+ * under the denied directory is -EACCES and not -ENOENT, or a caller could
+ * test for existence through a directory it may not search. An openat through
+ * a directory descriptor opened while the ancestor was searchable is refused
+ * too: the descriptor grants no search of its own.
  *
- * Its mutations run in two rounds, and the two charge different directories.
- * The first aims inside `/sp_denied/shared`, which stays 0777: the directory
- * the name lands in grants write to everyone, so only an ancestor above it can
- * refuse. The second aims directly into `/sp_denied`, which grants write and
- * withholds search, so the only thing left that can refuse is the immediate
- * parent's own execute bit. That second round is what reaches each syscall's
- * own full-path resolve, since the write check walks as far as the parent and
- * stops, and a walk never charges the directory it ends on: a kernel that
- * charged every ancestor but not the parent would answer the first round
- * correctly and let the second one through.
+ * Its changes run in two rounds, which charge different directories. The
+ * first aims inside /sp_denied/shared, which stays 0777 and grants write to
+ * everyone, so only an ancestor above it can refuse. The second aims directly
+ * into /sp_denied, which grants write and withholds search, so only that
+ * parent's execute bit can refuse. The write check walks as far as the parent
+ * and stops, and a walk does not charge the directory it ends on, so the
+ * second round reaches each call's own resolution of the whole path: a kernel
+ * that charged every ancestor but the parent passes the first round and lets
+ * the second through.
+ *
+ * access(2) is charged by the real ids, so the denied child asks it twice,
+ * with a real uid of 0 under an effective 1000 and the other way round, and
+ * the two answers differ, as a set-id program sees them. `..` is physical:
+ * /sp_denied/../sp_up.txt enters the denied directory before it climbs out,
+ * and is refused there. / still resolves, since the root is searchable.
  *
  * The third child runs after the parent moves the denial one level down, so
- * the answer follows the directory that denies, not a decision cached
+ * that the answer follows the directory that denies and not a decision cached
  * from the first walk.
  *
- * `..` is physical: `/sp_denied/../sp_up.txt` enters the denied directory
- * before climbing out of it, so the walk is refused there, exactly as a
- * spelling without the `..` would be. `/` keeps resolving, because the root
- * is always searchable.
- * access(2) is charged by the real ids, so the denied child asks it twice,
- * once holding a real uid of 0 under an effective 1000 and once the other way
- * round, and the two answers must differ: that is the view a set-id program
- * asks for.
+ * chdir is charged twice: the walk enters every directory above the target,
+ * and chdir then requires execute on the target itself. `chdir /sp_denied` in
+ * the denied child and `chdir /sp_denied/deep` in the third name the denied
+ * directory as their target, so chdir's own check refuses them whatever the
+ * walk charged; the two-level chdir and the chdir into the 0777 directory
+ * below it are the rows that test the walk.
  *
- * chdir is charged twice over, and only one of the two charges is this probe's
- * subject: the walk enters every directory above the target, and chdir then
- * demands execute on the target itself. `chdir /sp_denied` in the denied child
- * and `chdir /sp_denied/deep` in the third one name the denied directory as
- * their own target, so chdir's own check refuses them whatever the walk
- * charged. They are kept as coverage of that second rule; the two-level chdir
- * and the chdir into the reachable 0777 directory below are what carry the
- * search claim.
+ * krffs/manifests/test.manifest stages /sp_denied, its two leaves, deep,
+ * shared and the program prog, since a freestanding probe cannot write an ELF
+ * and the execve rows need a program under the denied ancestor. The root
+ * parent creates and removes the rest: the targets of the changes, /sp_out
+ * outside the tree for the renames that leave it, and /sp_up.txt for the `..`
+ * row. The probe leaves the image as the manifest staged it, can run twice in
+ * one boot, and uses no file another probe owns. The parent is root
+ * throughout, which lets it set up and remove a tree no one else can reach.
  *
- * The fixtures split two ways. `/sp_denied`, `/sp_denied/leaf.txt`,
- * `/sp_denied/deep/leaf.txt`, `/sp_denied/shared` and the program
- * `/sp_denied/prog` are staged by `krffs/manifests/test.manifest`: a
- * freestanding probe cannot mint an ELF, the execve cases need a real program
- * under the denied ancestor, and staging it drags in the directories that hold
- * it. Everything the mutations aim at, `/sp_out` outside the tree for the
- * renames that leave it, and `/sp_up.txt` for the lexical `..`, the root parent
- * mints and removes instead, so the probe hands the image back exactly as the
- * manifest staged it, runs twice in one boot, and rests on no file another
- * probe owns. The parent is root throughout, and its override is what lets it
- * stage and unstage a tree it has just made unreachable to everyone else.
+ * After the denied child the parent checks that nothing the child tried was
+ * done: the created names absent, the removed ones present, the chmod'd
+ * file's mode unchanged. That catches a refusal reported after the work was
+ * done, as an unchecked `krffs_create` under a checked `open` would be. Each
+ * rename has a source of its own, so that an absent destination cannot mean
+ * that an earlier case took the source away. linkat has no such check: the
+ * file system has no hard links, so the link could not have been made, and
+ * its -EACCES against the baseline's -EPERM is the evidence.
  *
- * After the denied child the parent asserts that nothing that child attempted
- * was carried out: the created names absent, the removed ones present, the
- * chmod'd file's mode unchanged. That is the only way to catch a refusal
- * reported after the work was already done, which is what an unchecked
- * `krffs_create` under a checked `open` would look like. Each rename is given a
- * source of its own, so that an absent destination cannot mean merely that an
- * earlier case had already taken the source away. linkat is the one call with
- * no such check: this file system has no hard links, so the link it was refused
- * could not have been made on any kernel, and its -EACCES against the
- * baseline's -EPERM is the whole of the evidence.
+ * Every wait checks WIFEXITED before WEXITSTATUS, since a signal death has
+ * the signal in the low bits and would read as exit 0.
  *
- * Every wait checks WIFEXITED before WEXITSTATUS: a signal death has the
- * signal in the low bits and would otherwise decode as exit 0, scoring a
- * crashed child as a passing one. Prints "SEARCHPROBE OK" and exits 0 only
- * when every case passed; any failure names the step and the answer it got,
- * and exits 1. Freestanding; direct system calls (probe.h).
+ * Prints "SEARCHPROBE OK" and exits 0 when every case passed; a failure
+ * prints "SEARCHPROBE FAIL: " with the step and the answer it got, and exits
+ * 1. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
@@ -128,7 +116,7 @@ typedef unsigned int u32;
 #define SHARED    "/sp_denied/shared"
 #define PROG      "/sp_denied/prog"
 
-/* Minted and removed by the root parent: what the first round of mutations
+/* Created and removed by the root parent: what the first round of changes
  * aims at, inside the 0777 directory, and what the second aims at, directly
  * inside the denied one. */
 #define VICTIM  "/sp_denied/shared/victim"
@@ -168,14 +156,16 @@ typedef unsigned int u32;
 #define POUTBL "/sp_out/pbl.txt"
 #define THIRD  "/sp_denied/shared/third.txt"
 
-/* Names that do not exist: the denial must beat the absence. */
+/* Names that do not exist, which the denial answers before their absence. */
 #define NOSUCH      "/sp_denied/nosuch"
 #define DEEP_NOSUCH "/sp_denied/deep/nosuch"
 
-/* The two openable paths a denied ancestor must never cost the caller. */
+/* Two paths of the `..` and root rows: the first enters the denied directory
+ * and is refused, the second is open to everyone. */
 #define UPWARD "/sp_denied/../sp_up.txt"
 #define ROOT   "/"
 
+/** The length of the string `s`. */
 static u32 slen(const char *s)
 {
     u32 n = 0;
@@ -186,12 +176,13 @@ static u32 slen(const char *s)
     return n;
 }
 
+/** Write the string `s` to standard output. */
 static void puts_(const char *s)
 {
     syscall3(SYS_WRITE, STDOUT, (long)s, (int)slen(s));
 }
 
-/* Print a signed decimal, so a failing line has the answer it got. */
+/** Print a signed decimal, so a failing line has the answer it got. */
 static void putd(int v)
 {
     char buf[13];
@@ -209,8 +200,7 @@ static void putd(int v)
     puts_(&buf[i]);
 }
 
-/* Print an unsigned octal with a leading zero: the only readable shape for a
- * mode. */
+/** Print an unsigned octal with a leading zero, the form a mode is read in. */
 static void puto(u32 v)
 {
     char buf[13];
@@ -225,6 +215,7 @@ static void puto(u32 v)
     puts_(&buf[i]);
 }
 
+/** Print "SEARCHPROBE FAIL: `step` (got `got`)" and exit 1. */
 static void fail(const char *step, int got)
 {
     puts_("SEARCHPROBE FAIL: ");
@@ -235,7 +226,8 @@ static void fail(const char *step, int got)
     syscall1(SYS_EXIT, 1);
 }
 
-/* The answer must be exactly `want`: an errno family, not merely a sign. */
+/** Fail `step` unless the answer `got` is `want` itself, the errno and not
+ * only the sign. */
 static void want_eq(const char *step, int got, int want)
 {
     if (got != want) {
@@ -243,7 +235,8 @@ static void want_eq(const char *step, int got, int want)
     }
 }
 
-/* The call must have succeeded (open returns a descriptor, so not just 0). */
+/** Fail `step` unless the call succeeded: `got` is 0 or more, since open
+ * returns a descriptor. */
 static void want_ok(const char *step, int got)
 {
     if (got < 0) {
@@ -251,7 +244,7 @@ static void want_ok(const char *step, int got)
     }
 }
 
-/* Open `path` read-only and close it again, reporting open's own answer. */
+/** Open `path` read-only and close it again: open's answer. */
 static int open_ro(const char *path)
 {
     int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
@@ -262,7 +255,7 @@ static int open_ro(const char *path)
     return fd;
 }
 
-/* As open_ro, but relative to a directory descriptor. */
+/** As `open_ro`, relative to the directory descriptor `dirfd`. */
 static int openat_ro(int dirfd, const char *name)
 {
     int fd = syscall4(SYS_OPENAT, dirfd, (long)name, O_RDONLY, 0);
@@ -273,33 +266,33 @@ static int openat_ro(int dirfd, const char *name)
     return fd;
 }
 
-/* The one stat64 buffer: the kernel writes it, stat_mode reads it back. */
+/* The stat buffer every call here fills, as large as x86-64's struct stat;
+ * `stat_mode` reads it back. */
 static char statbuf[144];
 
-/* stat64's own answer, for the existence assertions. */
+/** SYS_STAT's answer for `path`, for the rows on whether a name exists. */
 static int stat_rc(const char *path)
 {
     return syscall3(SYS_STAT, (long)path, (long)statbuf, 0);
 }
 
 #if !defined __x86_64__
-/* The legacy stat(2) (106), which has its own resolve site. musl builds on
- * stat64, so nothing but a freestanding caller reaches this one, and a mutation
- * that collapsed its walk error went uncaught until this case existed. x86-64
- * has no such call, and its rows are i686's alone. */
+/** The answer of i386's old stat(2), call 106, which resolves its path
+ * separately from stat64. musl calls stat64, so only a freestanding caller
+ * reaches this one. x86-64 has no such call, and its rows are i686's alone. */
 static int old_stat_rc(const char *path)
 {
     return syscall3(SYS_OLDSTAT, (long)path, (long)statbuf, 0);
 }
 #endif
 
-/* fstatat64's own answer, the *at form of the same question. */
+/** fstatat's answer, the *at form of the same question. */
 static int fstatat_rc(int dirfd, const char *path)
 {
     return syscall4(SYS_FSTATAT, dirfd, (long)path, (long)statbuf, 0);
 }
 
-/* The permission bits of `path`; a stat that fails is a setup failure. */
+/** The permission bits of `path`; a stat that fails fails the probe. */
 static u32 stat_mode(const char *path)
 {
     int rc = stat_rc(path);
@@ -310,6 +303,8 @@ static u32 stat_mode(const char *path)
     return *(u32 *)(statbuf + KSTAT_MODE) & 07777u;
 }
 
+/** Fail `step`, printing both modes in octal, unless the permission bits of
+ * `path` are `mode`. */
 static void want_mode(const char *step, const char *path, u32 mode)
 {
     u32 got = stat_mode(path);
@@ -326,10 +321,11 @@ static void want_mode(const char *step, const char *path, u32 mode)
     }
 }
 
-/* Exec `path` in a fresh child and report what became of it: 0 when the
- * program ran and exited 0, or 128 + errno when the exec was refused. The fork
- * is what makes the two answers distinguishable, since a successful exec
- * leaves nothing behind to report it. */
+/** Exec `path` in a new child and report what became of it: the program's
+ * exit status when it ran, 0 for the staged program, or 128 + errno when the
+ * exec was refused. The fork tells the two apart, since a successful exec
+ * leaves nothing behind to report it. A child killed by a signal fails the
+ * probe. */
 static int run_exec(const char *path)
 {
     int pid, status = 0;
@@ -358,22 +354,23 @@ static int run_exec(const char *path)
     return WEXITSTATUS(status);
 }
 
-/* Become uid and gid 1000 outright, with no saved id to swing back on. The
- * gids go first: once the effective uid is 1000 the gid calls are refused. */
+/** Become uid and gid 1000, real, effective and saved, so that no id can be
+ * taken back. The gids go first, since once the effective uid is 1000 the gid
+ * calls are refused. */
 static void drop_to_1000(void)
 {
     want_eq("drop the gids", syscall3(SYS_SETRESGID, 1000, 1000, 1000), 0);
     want_eq("drop the uids", syscall3(SYS_SETRESUID, 1000, 1000, 1000), 0);
 }
 
-/* Dirfds the parent opens while the ancestor is still searchable, inherited by
- * every child across the fork. */
+/* Directory descriptors the parent opens while the ancestor is searchable,
+ * which every child inherits across the fork. */
 static int dfd_denied = -1;
 static int dfd_shared = -1;
 
-/* Everything the denied child is refused, done here while the whole tree is
- * 0777, so that a later -EACCES cannot be the leaf's bits or the bits of the
- * directory the name lands in talking. */
+/** Everything the denied child is refused, done while the whole tree is
+ * 0777, so that a later -EACCES cannot come from the leaf's bits or from the
+ * bits of the directory the name lands in. Exits 0, or fails the probe. */
 static void baseline_child(void)
 {
     int fd;
@@ -400,8 +397,7 @@ static void baseline_child(void)
     want_eq("baseline: exec the staged program", run_exec(PROG), 0);
     want_eq("baseline: exec a missing name", run_exec(NOSUCH), 128 + ENOENT);
 
-    /* The first round's ground: what uid 1000 may do inside the 0777
-     * directory. */
+    /* First round: what uid 1000 may do inside the 0777 directory. */
     fd = syscall3(SYS_CREAT, (long)BL, 0644, 0);
     want_ok("baseline: creat in the 0777 directory", fd);
     syscall3(SYS_CLOSE, fd, 0, 0);
@@ -421,10 +417,7 @@ static void baseline_child(void)
             0);
     want_eq("baseline: unlink in the 0777 directory", syscall3(SYS_UNLINK, (long)BL, 0, 0), 0);
 
-    /* The second round's ground: the same rights directly inside /sp_denied,
-     * which the denied child will find at 0666. Between the two children that
-     * directory loses its execute bit and keeps its write bit, so a refusal
-     * there can be nothing but the search charge. */
+    /* Second round: the same rights directly inside /sp_denied. */
     fd = syscall3(SYS_CREAT, (long)PBL, 0644, 0);
     want_ok("baseline: creat directly under /sp_denied", fd);
     syscall3(SYS_CLOSE, fd, 0, 0);
@@ -441,22 +434,20 @@ static void baseline_child(void)
     syscall1(SYS_EXIT, 0);
 }
 
-/* The same calls with /sp_denied at 0666 root. Every call that enters the
- * directory must answer -EACCES; the paths that never enter it (a lexical
- * `..`, the root) and the questions asked while the real uid is still 0 must
- * go on succeeding, or the rule would be denying more than search. */
+/** The same calls with /sp_denied at 0666 and owned by root. Every call that
+ * enters the directory answers -EACCES; the root, which no path here enters
+ * through it, and access(2) asked with a real uid of 0 still succeed, or the
+ * rule would deny more than search. Exits 0, or fails the probe. */
 static void denied_child(void)
 {
-    /* The effective id alone is 1000: the walk is charged by it, and access(2)
-     * is charged by the real id, which is still 0. */
+    /* The walk is charged by the effective uid 1000, access by the real 0. */
     want_eq("drop the gids", syscall3(SYS_SETRESGID, 1000, 1000, 1000), 0);
     want_eq("drop only the effective uid", syscall3(SYS_SETRESUID, 0, 1000, 0), 0);
     want_eq("denied: open is charged by the effective id", open_ro(LEAF), -EACCES);
     want_eq("denied: access is charged by the real id (root)",
             syscall3(SYS_ACCESS, (long)LEAF, R_OK, 0), 0);
 
-    /* Now the set-id program's own view: real 1000, effective 0. The answers
-     * must swap, which is what makes access(2) worth asking. */
+    /* A set-id program's view, real 1000 and effective 0: the answers swap. */
     want_eq("take the effective id back", syscall3(SYS_SETRESUID, 1000, 0, 0), 0);
     want_ok("denied: open under the effective root", open_ro(LEAF));
     want_eq("denied: access is charged by the real id (1000)",
@@ -482,14 +473,11 @@ static void denied_child(void)
     want_eq("denied: faccessat the two-level leaf",
             syscall4(SYS_FACCESSAT, AT_FDCWD, (long)DEEP_LEAF, R_OK, 0), -EACCES);
 
-    /* A dirfd is a name, not a capability: both were opened while the ancestor
-     * was still searchable. */
+    /* Directory descriptors opened while the ancestor was searchable. */
     want_eq("denied: openat through the denied dirfd", openat_ro(dfd_denied, "leaf.txt"), -EACCES);
     want_eq("denied: openat through the shared dirfd", openat_ro(dfd_shared, "victim"), -EACCES);
 
-    /* The two-level chdir and the chdir into the 0777 directory are the ones
-     * the walk decides; the one-level chdir names the denied directory as its
-     * own target, which chdir's own execute check refuses on its own. */
+    /* chdir's own check on its target refuses the one-level chdir. */
     want_eq("denied: chdir one level", syscall3(SYS_CHDIR, (long)DENIED, 0, 0), -EACCES);
     want_eq("denied: chdir two levels", syscall3(SYS_CHDIR, (long)DEEP, 0, 0), -EACCES);
     want_eq("denied: chdir into the 0777 directory", syscall3(SYS_CHDIR, (long)SHARED, 0, 0),
@@ -498,8 +486,7 @@ static void denied_child(void)
     want_eq("denied: exec the staged program", run_exec(PROG), 128 + EACCES);
     want_eq("denied: exec a missing name", run_exec(NOSUCH), 128 + EACCES);
 
-    /* First round: inside the 0777 directory the baseline child has just
-     * proved writable by uid 1000, so only the ancestor above it can refuse. */
+    /* First round: inside the 0777 directory, so only an ancestor refuses. */
     want_eq("denied: creat", syscall3(SYS_CREAT, (long)NEWFILE, 0644, 0), -EACCES);
     want_eq("denied: open with O_CREAT",
             syscall3(SYS_OPEN, (long)CREATED, O_WRONLY | O_CREAT, 0644), -EACCES);
@@ -519,10 +506,7 @@ static void denied_child(void)
     want_eq("denied: linkat", syscall5(SYS_LINKAT, AT_FDCWD, (long)VICTIM, AT_FDCWD, (long)LNK, 0),
             -EACCES);
 
-    /* Second round: directly inside /sp_denied, which grants write to everyone
-     * and withholds search. The write check walks only as far as this
-     * directory and a walk never charges the one it ends on, so each of these
-     * rests on the syscall's own full-path resolve and on nothing else. */
+    /* Second round: in /sp_denied, which grants write and withholds search. */
     want_eq("denied: creat under the denied parent", syscall3(SYS_CREAT, (long)PNEWFILE, 0644, 0),
             -EACCES);
     want_eq("denied: open with O_CREAT under the denied parent",
@@ -538,9 +522,7 @@ static void denied_child(void)
     want_eq("denied: rename into the denied parent",
             syscall3(SYS_RENAME, (long)POUTSRC, (long)PLANDED, 0), -EACCES);
 
-    /* `..` is physical: the walk enters the denied directory before it can
-     * climb out, so the spelling is refused like any other entry. The root
-     * stays open to everyone. */
+    /* `..` is physical: the walk enters the denied directory first. */
     want_eq("denied: open through the denied directory's ..", open_ro(UPWARD), -EACCES);
     want_ok("denied: open the root", open_ro(ROOT));
     want_eq("denied: search the root", syscall3(SYS_ACCESS, (long)ROOT, X_OK, 0), 0);
@@ -548,11 +530,11 @@ static void denied_child(void)
     syscall1(SYS_EXIT, 0);
 }
 
-/* With the denial moved from /sp_denied down to /sp_denied/deep: the answer
- * follows the directory that denies, not a decision cached from the first
- * walk. As in the denied child, the chdir into the denier itself is refused by
- * chdir's own execute check whatever the walk charged; the open and the stat
- * below it are what the walk decides. */
+/** With the denial moved from /sp_denied down to /sp_denied/deep, the answer
+ * follows the directory that denies and not a decision cached from the first
+ * walk. As in the denied child, chdir's own execute check refuses the chdir
+ * into the denying directory whatever the walk charged; the open and the stat
+ * below it are what the walk decides. Exits 0, or fails the probe. */
 static void moved_child(void)
 {
     int fd;
@@ -575,9 +557,10 @@ static void moved_child(void)
     syscall1(SYS_EXIT, 0);
 }
 
-/* Run one child to completion and require a clean exit 0. WIFEXITED comes
- * first: a signal death has the signal in the low bits and would otherwise
- * decode as exit 0. The child has already named the case it failed. */
+/** Run `body` in a child to its end and fail the probe, as `what`, unless it
+ * exits 0. WIFEXITED comes first, since a signal death has the signal in the
+ * low bits and would read as exit 0. A failing child has already printed the
+ * case it failed. */
 static void run_child(void (*body)(void), const char *what)
 {
     int pid, status = 0;
@@ -589,8 +572,7 @@ static void run_child(void (*body)(void), const char *what)
     }
     if (pid == 0) {
         body();
-        /* Unreachable: every body exits itself. Non-zero so that a body that
-         * ever grew a path out the bottom would fail, not pass. */
+        /* Every body exits itself; one that returns fails with 127. */
         syscall1(SYS_EXIT, 127);
     }
     reaped = syscall3(SYS_WAITPID, pid, (long)&status, 0);
@@ -610,7 +592,8 @@ static void run_child(void (*body)(void), const char *what)
     }
 }
 
-/* Create `path` with `mode`, pinned against the boot shell's umask. */
+/** Create the file `path` with `mode`, which a chmod sets again, since the
+ * umask the boot shell passed down clears bits of the mode creat is given. */
 static void mint_file(const char *path, u32 mode)
 {
     int fd = syscall3(SYS_CREAT, (long)path, (int)mode, 0);
@@ -622,17 +605,27 @@ static void mint_file(const char *path, u32 mode)
     want_eq("chmod a fixture file", syscall3(SYS_CHMOD, (long)path, (int)mode, 0), 0);
 }
 
+/** The same for the directory `path`. */
 static void mint_dir(const char *path, u32 mode)
 {
     want_eq("mint a fixture directory", syscall3(SYS_MKDIR, (long)path, (int)mode, 0), 0);
     want_eq("chmod a fixture directory", syscall3(SYS_CHMOD, (long)path, (int)mode, 0), 0);
 }
 
+/**
+ * The probe's entry, the root parent. It checks the staged modes, creates the
+ * targets of the changes, and opens the two directory descriptors; runs the
+ * baseline child, then the denied child with /sp_denied at 0666, and checks
+ * that the denied changes left nothing done; runs the third child with the
+ * denial on /sp_denied/deep; and removes what it created.
+ *
+ * `victim` and the two movers are root's and 0666, so uid 1000 may write
+ * them without owning them; `mine` is uid 1000's own, so only the ancestor
+ * can refuse its chmod.
+ */
 PROBE_START void _start(void)
 {
-    /* The staged tree is what the manifest declares, before anything flips
-     * a mode: a probe that assumed its fixtures would prove nothing about
-     * them. */
+    /* The staged tree is as the manifest declares it. */
     want_mode("staged /sp_denied", DENIED, 0777);
     want_mode("staged /sp_denied/deep", DEEP, 0777);
     want_mode("staged /sp_denied/shared", SHARED, 0777);
@@ -640,12 +633,7 @@ PROBE_START void _start(void)
     want_mode("staged /sp_denied/deep/leaf.txt", DEEP_LEAF, 0644);
     want_mode("staged /sp_denied/prog", PROG, 0755);
 
-    /* The targets the mutations aim at. `victim` and the two movers are
-     * root-owned and 0666, so uid 1000 has write on them but not ownership;
-     * `mine` is uid 1000's own, so the chmod cases are refused by the ancestor
-     * and by nothing else. Each rename has a source of its own, so that no
-     * later "the destination is not there" can rest on an earlier case having
-     * removed the source. */
+    /* The targets of the changes, each rename with a source of its own. */
     mint_file(VICTIM, 0666);
     mint_file(MOVER, 0666);
     mint_file(MINE, 0644);
@@ -670,9 +658,7 @@ PROBE_START void _start(void)
     want_eq("close /sp_denied to 0666", syscall3(SYS_CHMOD, (long)DENIED, 0666, 0), 0);
     run_child(denied_child, "the denied child");
 
-    /* Refused and nothing done: the check an errno alone cannot make. linkat
-     * is not among them, since a file system with no hard links could not have
-     * made the link on any kernel. */
+    /* Refused and nothing done; linkat is not checked, having no hard links. */
     want_eq("creat left a file behind", stat_rc(NEWFILE), -ENOENT);
     want_eq("O_CREAT left a file behind", stat_rc(CREATED), -ENOENT);
     want_eq("mkdir left a directory behind", stat_rc(NEWDIR), -ENOENT);

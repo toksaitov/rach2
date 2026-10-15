@@ -1,14 +1,15 @@
 /**
- * fsync durability probe (two-boot).
+ * persistprobe: fsync makes a write durable, across two boots of one disk.
  *
- * On a KRFFS mounted from a real disk (rach2.fsdisk), if /persist.txt is absent
- * this is the first boot: it writes a marker, fsyncs and syncs, and reports
- * "PERSISTPROBE OK (wrote)". If /persist.txt is present this is a later boot
- * against the same disk: it reads the marker back and reports "PERSISTPROBE OK
- * (read back)" only when the bytes match. Run twice against one scratch image,
- * the second boot proves fsync actually pushed the write through the page cache
- * to the disk, since a RAM-only or dropped write would leave the file absent.
+ * On a KRFFS mounted from a disk (rach2.fsdisk), a boot that finds no
+ * /persist.txt writes a marker to it, fsyncs and syncs, and reports
+ * "PERSISTPROBE OK (wrote)"; a boot that finds it reads the marker back and
+ * reports "PERSISTPROBE OK (read back)" only when the bytes match. Run twice
+ * against one scratch image, the second boot shows that fsync pushed the
+ * write through the page cache to the disk, since a write kept only in memory
+ * or dropped would leave the file absent.
  *
+ * A failure prints "PERSISTPROBE FAIL: " with the step and exits 1.
  * Freestanding; direct system calls (probe.h).
  */
 
@@ -22,12 +23,14 @@
 static const char MARKER[] = "RACH2 PERSIST MARKER v1\n";
 #define MARKER_LEN (sizeof(MARKER) - 1)
 
+/** exit(2); does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -37,12 +40,15 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write the string `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
+/** The probe's entry: read the marker back if the file exists, else write
+ * it. */
 PROBE_START void _start(void)
 {
     const char *path = "/persist.txt";

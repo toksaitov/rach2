@@ -1,23 +1,23 @@
 /**
- * Removing a directory's files while listing it, the way `rm -rf` does.
+ * unlinkdirprobe: removing a directory's files while listing it, as `rm -rf`
+ * does.
  *
- * This is the shape of a real failure. `rm -rf` opens a directory, reads a
- * batch of names, unlinks them, and reads again from where it left off. If the
- * kernel's directory cursor counts children instead of naming a position that
- * survives deletion, every unlink renumbers the survivors and the second read
- * skips one entry per file already removed. The skipped files stay, `rmdir`
- * then refuses, and the only thing the user sees is "Directory not empty".
+ * `rm -rf` opens a directory, reads a batch of names, unlinks them, and reads
+ * again from where it left off. A directory cursor that counted children
+ * instead of naming a position that survives deletion would renumber the
+ * survivors at every unlink, and the next read would skip one entry for each
+ * file already removed; the skipped files would stay, and `rmdir` would fail
+ * with "Directory not empty".
  *
- * It was found by `tests/run selfbuild`, whose second pass could not remove
- * the kernel source tree it had just copied, and only once that tree had grown
- * enough files that listing it took more than one call.
+ * The probe makes a directory of more entries than one small read holds,
+ * removes them as `rm` does, and requires every name to have been listed and
+ * the directory to be removable afterwards. Each record's `d_off` increases
+ * strictly, and its inode, length and type are checked. Two descriptors on
+ * one directory each have a cursor of their own, and each reports the end
+ * again and again.
  *
- * So this makes a directory with more entries than one modest buffer has,
- * removes them the way `rm` does, and requires the directory to be empty and
- * removable afterwards. A single large read would not reproduce it, which is
- * why the buffer here is deliberately small.
- *
- * Prints "UNLINKDIRPROBE OK" and exits 0 on success. Freestanding; direct
+ * Prints "UNLINKDIRPROBE OK" and exits 0 on success; a failure prints
+ * "UNLINKDIRPROBE FAIL: " with the reason and exits 1. Freestanding; direct
  * system calls (probe.h).
  */
 
@@ -37,12 +37,13 @@ typedef long long int64_t;
 #define DT_REG 8
 #define DT_DIR 4
 
-/* Enough files that one small read cannot hold them all, so the listing takes
-   several calls and the cursor has to survive the unlinks between them. */
+/* Enough files that one small read cannot hold them all, so the listing
+ * takes several calls and the cursor has to survive the unlinks between
+ * them. */
 #define FILE_COUNT 40
 
-/* Deliberately small: the defect hides entirely when every name fits in one
-   read, which is why the tree that found it had to grow first. */
+/* Small, so that the names take several reads: a cursor that loses its place
+ * is not seen when every name fits in one. */
 #define DIRENT_BUF 256
 
 struct linux_dirent64 {
@@ -53,52 +54,62 @@ struct linux_dirent64 {
     char d_name[];
 };
 
+/** write(2). */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
+/** exit(2); does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** open(2) with no mode. */
 static int sys_open(const char *path, int flags)
 {
     return syscall2(SYS_OPEN, (long)path, (long)flags);
 }
 
+/** close(2). */
 static int sys_close(int fd)
 {
     return syscall1(SYS_CLOSE, (long)fd);
 }
 
+/** creat(2). */
 static int sys_creat(const char *path, int mode)
 {
     return syscall2(SYS_CREAT, (long)path, (long)mode);
 }
 
+/** unlink(2). */
 static int sys_unlink(const char *path)
 {
     return syscall1(SYS_UNLINK, (long)path);
 }
 
+/** mkdir(2). */
 static int sys_mkdir(const char *path, int mode)
 {
     return syscall2(SYS_MKDIR, (long)path, (long)mode);
 }
 
+/** rmdir(2). */
 static int sys_rmdir(const char *path)
 {
     return syscall1(SYS_RMDIR, (long)path);
 }
 
+/** getdents64(2). */
 static int sys_getdents64(int fd, void *dirp, unsigned int count)
 {
     return syscall3(SYS_GETDENTS64, (long)fd, (long)dirp, (long)count);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -108,12 +119,14 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write the string `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
+/** Print "UNLINKDIRPROBE FAIL: `why`" and exit 1. */
 static void fail(const char *why)
 {
     sys_write(STDOUT_FILENO, "UNLINKDIRPROBE FAIL: ", 21);
@@ -142,6 +155,8 @@ static void path_for(char *out, int n)
     out[i] = '\0';
 }
 
+/** The probe's entry: the listing with unlinks, the two descriptors, and
+ * the rmdir at the end. */
 PROBE_START void _start(void)
 {
     char path[32];
@@ -172,9 +187,7 @@ PROBE_START void _start(void)
         sys_close(fd);
     }
 
-    /* Now the part that matters: read a batch, unlink what it named, read
-     * again from the cursor the kernel left. This is what `rm -rf` does, and
-     * the cursor has to name a position that the unlinks did not move. */
+    /* Read a batch, unlink what it named, read again from the cursor. */
     fd = sys_open(dir, O_RDONLY | O_DIRECTORY);
     if (fd < 0) {
         fail("could not open the directory");
@@ -194,11 +207,7 @@ PROBE_START void _start(void)
             char victim[32];
             int k = 0;
 
-            /* The record's own fields, checked, not skipped past. The
-             * cursor is what this probe is about: `d_off` names where the next
-             * read resumes, so it must increase strictly, and it must keep
-             * increasing across the unlinks between reads. A cursor that
-             * counted surviving children would go backwards here. */
+            /* d_off, where the next read resumes, increases strictly. */
             if (d->d_off <= last_off) {
                 fail("the cursor did not advance, so a read could repeat or skip entries");
             }
@@ -209,10 +218,7 @@ PROBE_START void _start(void)
             if (d->d_reclen == 0) {
                 fail("an entry came back with no length, which would not advance");
             }
-            /* A root with `.` and `..` on the disk returns them; they are not
-             * this directory's children and are not unlinked below. Each must
-             * come back as a directory: a root that called one of them a
-             * regular file would otherwise be skipped here unjudged. */
+            /* `.` and `..`, where they are listed, are directories. */
             if (d->d_name[0] == '.' &&
                 (d->d_name[1] == '\0' || (d->d_name[1] == '.' && d->d_name[2] == '\0'))) {
                 if (d->d_type != DT_DIR) {
@@ -252,10 +258,7 @@ PROBE_START void _start(void)
         fail("the listing did not name every file, so unlinking during it lost entries");
     }
 
-    /* Two descriptors on one directory must not share a cursor: each has
-     * its own offset in its open file description, and a listing that consumed
-     * another's position would skip entries for reasons no caller could see.
-     * The directory is rebuilt for this, since the loop above emptied it. */
+    /* Two descriptors on one directory, rebuilt with four files. */
     {
         int a, b, na, nb;
 
@@ -280,7 +283,7 @@ PROBE_START void _start(void)
         if (nb != na) {
             fail("the second descriptor saw a different listing, so they share a cursor");
         }
-        /* And each reports the end independently, repeatedly. */
+        /* Each reports the end, and again. */
         if (sys_getdents64(a, buf, sizeof(buf)) != 0) {
             fail("the first descriptor did not report the end");
         }
@@ -300,8 +303,7 @@ PROBE_START void _start(void)
         }
     }
 
-    /* The whole point: the directory must now be empty, and `rmdir` is the
-     * check a user would actually meet. */
+    /* The directory is empty, and rmdir removes it. */
     if (sys_rmdir(dir) != 0) {
         fail("the directory would not be removed, so files were left behind");
     }
