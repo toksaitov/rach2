@@ -877,6 +877,7 @@ static long words_of(const struct spans *s)
 /** The over-width comment lines found, and the files they are in. */
 struct width_ctx {
     long over, files;
+    FILE *report; /* where each line found is reported, or NULL for nowhere */
 };
 
 /** One flag per line of a file, 1-based, nonzero for a line in a comment. */
@@ -948,8 +949,9 @@ static void check_width(void *ctx, const char *path)
                 p++;
             if ((l == LANG_C && (p[0] == '*' || (p[0] == '/' && (p[1] == '*' || p[1] == '/')))) ||
                 (l == LANG_HASH && p[0] == '#')) {
-                fprintf(stderr, "%s:%d: comment line is %lu columns\n", relpath(path), line,
-                        (unsigned long)width);
+                if (w->report != NULL)
+                    fprintf(w->report, "%s:%d: comment line is %lu columns\n", relpath(path), line,
+                            (unsigned long)width);
                 w->over++;
                 reported = 1;
             }
@@ -1295,12 +1297,13 @@ static int judge_devlog(struct milestone *dirs, int n_dirs, char entries[][128],
 
 /* ---- the selftest ---- */
 
-/* The selftest's failed cases. */
-static int st_bad;
+/* The selftest's cases, and those that failed. */
+static int st_cases, st_bad;
 
-/** Counts a failed case, and prints `what`, unless `ok`. */
+/** Counts a case, and a failed one with `what` printed unless `ok`. */
 static void st_check(int ok, const char *what)
 {
+    st_cases++;
     if (!ok) {
         fprintf(stderr, "prosecheck: selftest: %s\n", what);
         st_bad++;
@@ -1412,7 +1415,7 @@ static char *st_write(const char *name, const char *body)
    count is checked; `want_line` is not used. */
 static void st_widths(const char *name, const char *body, int want_line)
 {
-    struct width_ctx w = {0, 0};
+    struct width_ctx w = {0, 0, NULL};
     char path[512];
     char msg[256];
 
@@ -1475,9 +1478,8 @@ static int selftest(void)
     char *path;
     size_t n;
     char *text;
-    FILE *devnull;
-    FILE *hold;
 
+    st_cases = 0;
     st_bad = 0;
     snprintf(st_dir, sizeof(st_dir), "%s/prosecheck-selftest.XXXXXX",
              getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");
@@ -1486,17 +1488,8 @@ static int selftest(void)
         return 2;
     }
 
-    /* The width rule, its report on stderr sent to /dev/null. */
-    devnull = fopen("/dev/null", "w");
-    hold = stderr;
-    if (devnull != NULL)
-        stderr = devnull;
     st_widths("t.c", SELFTEST_C, 2);
     st_widths("t.sh", SELFTEST_SH, 2);
-    if (devnull != NULL) {
-        stderr = hold;
-        fclose(devnull);
-    }
 
     /* The prose rules. */
     path = st_write("p.c", PROSE_C);
@@ -1657,7 +1650,7 @@ static int selftest(void)
         return 1;
     }
     st_clean();
-    printf("prosecheck: selftest OK (28 cases)\n");
+    printf("prosecheck: selftest OK (%d cases)\n", st_cases);
     return 0;
 }
 
@@ -1699,6 +1692,67 @@ static void set_repo(void)
     exit(2);
 }
 
+/** The `devlog` subcommand: checks the index of `dir`, or of the
+   repository's `dev-log` when `dir` is NULL, against its milestones. Returns
+   the exit status. */
+static int check_devlog(const char *dir)
+{
+    char devlog[1100];
+    char index[1200];
+    struct milestone dirs[256];
+    char entries[256][128];
+    struct spans problems = {NULL, 0, 0};
+    int n_dirs, n_entries, done = 0, planned = 0;
+    const char *newest = "none";
+    size_t n;
+    char *text;
+    struct stat st;
+    int i;
+
+    if (dir != NULL)
+        snprintf(devlog, sizeof(devlog), "%s", dir);
+    else
+        snprintf(devlog, sizeof(devlog), "%s/dev-log", repo);
+    if (stat(devlog, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        fprintf(stderr, "prosecheck: %s is not a directory\n", devlog);
+        return 1;
+    }
+    snprintf(index, sizeof(index), "%s/Readme.md", devlog);
+    text = read_text(index, &n);
+    if (text == NULL) {
+        fprintf(stderr, "prosecheck: %s is missing\n", index);
+        return 1;
+    }
+    n_dirs = read_milestones(devlog, dirs, 256);
+    if (n_dirs < 0) {
+        fprintf(stderr, "prosecheck: cannot read %s\n", devlog);
+        free(text);
+        return 1;
+    }
+    n_entries = read_entries(text, n, entries, 256);
+    free(text);
+    judge_devlog(dirs, n_dirs, entries, n_entries, &problems);
+    if (problems.n > 0) {
+        for (i = 0; i < problems.n; i++)
+            fprintf(stderr, "prosecheck: %s\n", problems.item[i]);
+        spans_free(&problems);
+        return 1;
+    }
+    for (i = 0; i < n_dirs; i++) {
+        if (dirs[i].finished) {
+            done++;
+            newest = dirs[i].name;
+        } else {
+            planned++;
+        }
+    }
+    printf("prosecheck: OK (%d finished, newest is %s", done, newest);
+    if (planned > 0)
+        printf(", %d planned", planned);
+    printf(")\n");
+    return 0;
+}
+
 /** Runs the subcommand `argv[1]` names; the file's header describes each
    and the exit status. */
 int main(int argc, char **argv)
@@ -1711,8 +1765,9 @@ int main(int argc, char **argv)
         return selftest();
 
     if (argc >= 2 && strcmp(argv[1], "columns") == 0) {
-        struct width_ctx w = {0, 0};
+        struct width_ctx w = {0, 0, NULL};
 
+        w.report = stderr;
         if (argc > 2) {
             for (i = 2; i < argc; i++)
                 walk(argv[i], check_width, &w, 0);
@@ -1830,56 +1885,8 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    if (argc >= 2 && strcmp(argv[1], "devlog") == 0) {
-        char devlog[1100];
-        char index[1200];
-        struct milestone dirs[256];
-        char entries[256][128];
-        struct spans problems = {NULL, 0, 0};
-        int n_dirs, n_entries, done = 0, planned = 0;
-        const char *newest = "none";
-        size_t n;
-        char *text;
-        struct stat st;
-
-        if (argc > 2)
-            snprintf(devlog, sizeof(devlog), "%s", argv[2]);
-        else
-            snprintf(devlog, sizeof(devlog), "%s/dev-log", repo);
-        if (stat(devlog, &st) != 0 || !S_ISDIR(st.st_mode)) {
-            fprintf(stderr, "prosecheck: %s is not a directory\n", devlog);
-            return 1;
-        }
-        snprintf(index, sizeof(index), "%s/Readme.md", devlog);
-        text = read_text(index, &n);
-        if (text == NULL) {
-            fprintf(stderr, "prosecheck: %s is missing\n", index);
-            return 1;
-        }
-        n_dirs = read_milestones(devlog, dirs, 256);
-        n_entries = read_entries(text, n, entries, 256);
-        free(text);
-        judge_devlog(dirs, n_dirs, entries, n_entries, &problems);
-        if (problems.n > 0) {
-            for (i = 0; i < problems.n; i++)
-                fprintf(stderr, "prosecheck: %s\n", problems.item[i]);
-            spans_free(&problems);
-            return 1;
-        }
-        for (i = 0; i < n_dirs; i++) {
-            if (dirs[i].finished) {
-                done++;
-                newest = dirs[i].name;
-            } else {
-                planned++;
-            }
-        }
-        printf("prosecheck: OK (%d finished, newest is %s", done, newest);
-        if (planned > 0)
-            printf(", %d planned", planned);
-        printf(")\n");
-        return 0;
-    }
+    if (argc >= 2 && strcmp(argv[1], "devlog") == 0)
+        return check_devlog(argc > 2 ? argv[2] : NULL);
 
     fprintf(stderr, "usage: prosecheck columns [PATH ...] | prosecheck "
                     "banned [PATH ...] | prosecheck count {c|hash|md|all} FILE ... | "

@@ -760,8 +760,8 @@ tools/verify/mancheck.c:read_applets nesting 5 an inspector's check, one walk ov
 
 tools/verify/prosecheck.c:c_spans complexity 27 an inspector's check, one walk over the format it reads
 tools/verify/prosecheck.c:hash_comment_lines complexity 29 an inspector's check, one walk over the format it reads
-tools/verify/prosecheck.c:main complexity 47 an inspector's check, one walk over the format it reads
-tools/verify/prosecheck.c:main lines 183 an inspector's check, one walk over the format it reads
+tools/verify/prosecheck.c:main complexity 39 an inspector's check, one walk over the format it reads
+tools/verify/prosecheck.c:main lines 136 an inspector's check, one walk over the format it reads
 tools/verify/prosecheck.c:md_spans complexity 33 an inspector's check, one walk over the format it reads
 tools/verify/prosecheck.c:normalize complexity 33 an inspector's check, one walk over the format it reads
 tools/verify/prosecheck.c:read_entries complexity 38 an inspector's check, one walk over the format it reads
