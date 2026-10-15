@@ -7,16 +7,18 @@
  * eventfd: a descriptor over a 64-bit counter, the simplest way for one
  * thread or process to wake another. A write of eight bytes adds its value
  * to the counter, and a read of eight bytes takes the counter and sets it to
- * zero, or with EFD_SEMAPHORE takes one; a read of zero waits, and so does a
- * write that would carry the counter past 0xfffffffffffffffe. poll reports
+ * zero, or with EFD_SEMAPHORE takes one; a read while the counter is zero
+ * waits, and so does a write that would carry the counter past
+ * 0xfffffffffffffffe. poll reports
  * the descriptor readable while the counter is not zero and writable while
  * another 1 fits.
  */
 
 struct isr_params;
 
-/** eventfd and eventfd2 take the initial value and the flags EFD_CLOEXEC,
- * EFD_NONBLOCK and EFD_SEMAPHORE. */
+/** eventfd2(2) takes the initial value and the flags EFD_CLOEXEC,
+ * EFD_NONBLOCK and EFD_SEMAPHORE, and eventfd(2) the value alone. Returns
+ * the new descriptor, -EINVAL for another flag, -ENOMEM or -EMFILE. */
 long sys_eventfd(struct isr_params *params);
 long sys_eventfd2(struct isr_params *params);
 

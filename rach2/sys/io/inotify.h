@@ -12,17 +12,22 @@
  * made, removed or moved, and the data events of a file opened by a name in
  * it.
  *
- * The file systems do not know of it. The calls that change a file tell it,
- * the namespace operations of `vfs.c` with the directory and the name, and
- * the descriptor calls with the file's mount and inode number, which is what
- * a watch is kept by. Each hook tests `inotify_watches` first, so a machine
- * with no watch pays nothing else.
+ * The file systems do not know of it. The calls that change a file tell it:
+ * the namespace operations of `vfs.c` with the mount, the directory's inode
+ * number and the name, and its attribute changes and the descriptor calls
+ * with the file's mount and inode number, the descriptor calls through the
+ * open file description, which has both. A watch is kept by the base mount
+ * of the file system (`vfs_mount_base`) and the inode number, so a change
+ * seen through a bind mount reaches it. A caller tests `inotify_watches`
+ * before it tells of a change, and `inotify_desc` tests it itself, so a
+ * machine with no watch pays one comparison for each.
  */
 
 struct isr_params;
 struct vfs_mount;
 struct open_file;
 
+/* The event bits and flags of Linux's inotify(7). */
 #define IN_ACCESS        0x00000001u
 #define IN_MODIFY        0x00000002u
 #define IN_ATTRIB        0x00000004u
@@ -61,7 +66,8 @@ void inotify_child(struct vfs_mount *mnt, uint64_t dir_ino, const char *name, ui
 
 /** An event of an open file: to its own watches, and to those of the
  * directory it was opened in, under its name there, when the open recorded
- * them. */
+ * them; nothing while there is no watch, or for a description that is not
+ * of a file of a mount. */
 void inotify_desc(struct open_file *ofd, uint32_t mask);
 
 /** The file `ino` of `mnt` has no name left: IN_DELETE_SELF to its watches,
@@ -69,10 +75,12 @@ void inotify_desc(struct open_file *ofd, uint32_t mask);
 void inotify_gone(struct vfs_mount *mnt, uint64_t ino);
 
 /** `mnt` is being unmounted: IN_UNMOUNT and IN_IGNORED to every watch of a
- * file on it, and the watches go. */
+ * file on it, and the watches go. A watch is kept by the base mount, so the
+ * unmount of a bind mount ends none. */
 void inotify_unmount(struct vfs_mount *mnt);
 
-/** A new cookie, for the IN_MOVED_FROM and IN_MOVED_TO of one rename. */
+/** A new cookie, never 0, for the IN_MOVED_FROM and IN_MOVED_TO of one
+ * rename. */
 uint32_t inotify_cookie(void);
 
 /** Whether the descriptor `fd` of the caller is an inotify instance. */
@@ -83,16 +91,21 @@ int inotify_is(int fd);
  * at `fd`: the file `ino` of `mnt`, a directory when `isdir`, for the events
  * of `mask`. A second watch of the same file by the same instance changes
  * the first, whose descriptor it returns. Returns the watch descriptor,
- * -EEXIST under IN_MASK_CREATE for a file already watched, -ENOSPC past the
- * user's watches, or -ENOMEM.
+ * -EINVAL when `fd` is not an instance, -EEXIST under IN_MASK_CREATE for a
+ * file already watched, -ENOSPC past the user's watches, or -ENOMEM.
  */
 int32_t inotify_watch(int fd, struct vfs_mount *mnt, uint64_t ino, int isdir, uint32_t mask);
 
-/** inotify_init and inotify_init1 take the flags IN_NONBLOCK and IN_CLOEXEC. */
+/** inotify_init1(2) takes the flags IN_NONBLOCK and IN_CLOEXEC, and
+ * inotify_init(2) none. Returns the descriptor of a new instance, -EINVAL
+ * for another flag, -EMFILE past the user's 128 instances or the
+ * descriptors a process may have, or -ENOMEM. */
 long sys_inotify_init(struct isr_params *params);
 long sys_inotify_init1(struct isr_params *params);
 
-/** inotify_rm_watch takes the instance and the watch descriptor. */
+/** inotify_rm_watch(2) takes the instance and the watch descriptor, and
+ * removes the watch with an IN_IGNORED event. Returns 0, -EBADF, or -EINVAL
+ * for a descriptor that is not an instance or a watch it does not have. */
 long sys_inotify_rm_watch(struct isr_params *params);
 
 #endif /* _INOTIFY_H_ */

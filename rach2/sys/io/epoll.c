@@ -125,6 +125,8 @@ static struct epoll *epoll_of(int fd);
 static short epoll_poll(fd_entry_t *e, short events, struct wait_queue **wq);
 static int set_ready(struct epoll *ep, int depth, struct qlist *q);
 
+/** Add `wq`, unless NULL, to the queues `q` has found: kept while there is
+ * room, counted whether or not. */
 static void q_add(struct qlist *q, struct wait_queue *wq)
 {
     if (wq) {
@@ -135,20 +137,20 @@ static void q_add(struct qlist *q, struct wait_queue *wq)
     }
 }
 
-/* Whether the descriptor `e` is an epoll set. */
+/** Whether the descriptor `e` is an epoll set. */
 static int is_set(const fd_entry_t *e)
 {
     return e->ops && e->ops->poll == epoll_poll;
 }
 
-/* Whether the descriptor `e` is the open file the registration `it` was
+/** Whether the descriptor `e` is the open file the registration `it` was
  * made for. */
 static int item_names(const struct epitem *it, const fd_entry_t *e)
 {
     return e && e->ofd == it->ofd && e->ofd->serial == it->serial;
 }
 
-/* Whether the descriptor of an edge-triggered registration, whose wait
+/** Whether the descriptor of an edge-triggered registration, whose wait
  * queue is `wq` with `wakes` counted of the kinds it watches, has changed
  * in a way it watches since `it` was last reported. */
 static int item_woken(const struct epitem *it, const struct wait_queue *wq, uint32_t wakes)
@@ -156,7 +158,7 @@ static int item_woken(const struct epitem *it, const struct wait_queue *wq, uint
     return wq != it->at || wakes != it->wakes;
 }
 
-/* The kinds of change (`wq_wake`) among the events `want`: data for the
+/** The kinds of change (`wq_wake`) among the events `want`: data for the
  * events of input, room for those of output, and a hangup, which every
  * registration watches with EPOLLERR and EPOLLHUP. */
 static uint32_t kinds_of(uint32_t want)
@@ -172,7 +174,7 @@ static uint32_t kinds_of(uint32_t want)
     return kinds;
 }
 
-/*
+/**
  * The events among `want` of the descriptor `e`, its wait queue in `*wq`,
  * and in `*wakes` the wakes the queue has counted of the kinds of change
  * among `want`, which tell a change a registration watching `want` is told
@@ -251,7 +253,7 @@ static uint32_t item_ready(struct epitem *it, int depth, struct qlist *q, struct
     return ready;
 }
 
-/* Record the report of `ready` for `it`, whose descriptor's wait queue is
+/** Record the report of `ready` for `it`, whose descriptor's wait queue is
  * `wq` with `wakes` counted: what an edge-triggered registration is not
  * reported again for, and the end of a one-shot one. */
 static void item_reported(struct epitem *it, uint32_t ready, const struct wait_queue *wq,
@@ -279,7 +281,7 @@ struct epoll_scan {
     uint32_t grow;
 };
 
-/* Take the registration `it` of a set off that set's `holders`. */
+/** Take the registration `it` of a set off that set's `holders`. */
 static void unhold(struct epitem *it)
 {
     struct epitem **link = &it->set->holders;
@@ -293,6 +295,8 @@ static void unhold(struct epitem *it)
     it->set = NULL;
 }
 
+/** Remove the registration at `*link` from `ep`, off the holders of the set
+ * it registers when it registers one, and free it. */
 static void drop_item(struct epoll *ep, struct epitem **link)
 {
     struct epitem *it = *link;
@@ -305,7 +309,7 @@ static void drop_item(struct epoll *ep, struct epitem **link)
     kfree(it);
 }
 
-/* Fill `o` with the event `ready` of `it`, and what its report is about to
+/** Fill `o` with the event `ready` of `it`, and what its report is about to
  * change in `it`. */
 static void took(struct epoll_out *o, const struct epitem *it, uint32_t ready)
 {
@@ -319,7 +323,7 @@ static void took(struct epoll_out *o, const struct epitem *it, uint32_t ready)
     o->wakes = it->wakes;
 }
 
-/* Put back what the report of `o` changed in its registration, when the
+/** Put back what the report of `o` changed in its registration, when the
  * registration is in `ep` still as it was: the event goes to a later
  * wait. */
 static void untook(struct epoll *ep, const struct epoll_out *o)
@@ -345,7 +349,8 @@ static void untook(struct epoll *ep, const struct epoll_out *o)
  * A scan looks into a set once: a set it meets again, by another path or
  * inside itself, gives what the first look found, or nothing while that
  * look is not done, so a cycle ends, and a set deeper than EP_MAX_NESTS is
- * not looked into and gives nothing. `scan_marks` counts the scans.
+ * not looked into and gives nothing. `scan_marks` counts the scans. The
+ * caller has interrupts off.
  */
 static int set_ready(struct epoll *ep, int depth, struct qlist *q)
 {
@@ -374,7 +379,7 @@ static int set_ready(struct epoll *ep, int depth, struct qlist *q)
     return ep->ready;
 }
 
-/*
+/**
  * The scan of a wait: the events of the set's registrations into the wait's
  * array, at most `max`, each taken as it is reported, and the queues to wait
  * on while there are none, those of the sets inside it and of what they
@@ -435,7 +440,7 @@ static int scan_set(void *ctx, struct wait_queue **wqs)
     return (int)sc->n;
 }
 
-/*
+/**
  * The readiness of an epoll set for poll: readable when a wait would report
  * an event, which `set_ready` says without taking it, so an edge-triggered
  * event reported already, or a one-shot registration that is off, does not
@@ -482,7 +487,7 @@ short epoll_poll_set(fd_entry_t *e, short events, struct wait_queue **wqs, uint3
     return ready ? (short)((uint32_t)events & (EPOLLIN | EPOLLRDNORM)) : 0;
 }
 
-/*
+/**
  * The longest chain of sets below the set `inner`, which a path puts
  * `depth` sets below the set `ep` it is to be added to: 0 when it holds no
  * set. The chain goes through every registration of a set (`set`),
@@ -520,7 +525,7 @@ static int sets_below(struct epoll *inner, const struct epoll *ep, int depth)
     return most;
 }
 
-/*
+/**
  * The longest chain of sets above the set `ep`, through every registration
  * of it (`holders`), whichever process made it and whatever became of its
  * number, from `depth` sets above the set a check began at: 0 when no set
@@ -552,7 +557,7 @@ static int sets_above(struct epoll *ep, int depth)
     return most;
 }
 
-/* Take the registration `h` of a set out of the set that has it, and off
+/** Take the registration `h` of a set out of the set that has it, and off
  * the holders of the set it is of. */
 static void drop_holder(struct epitem *h)
 {
@@ -568,7 +573,7 @@ static void drop_holder(struct epitem *h)
     }
 }
 
-/*
+/**
  * The last close of a set, when its open file is closed in every process:
  * its registrations go, and so do the registrations of it in other sets, as
  * Linux removes a file's registrations at its last close.
@@ -589,6 +594,8 @@ static void epoll_close(fd_entry_t *e)
 
 static const struct file_ops epoll_ops = {NULL, NULL, epoll_poll, NULL, epoll_close};
 
+/** The epoll set the caller's descriptor `fd` is, or NULL when `fd` is not
+ * open or not a set. */
 static struct epoll *epoll_of(int fd)
 {
     fd_entry_t *e = fd_get(current_proc->fds, fd);
@@ -596,6 +603,9 @@ static struct epoll *epoll_of(int fd)
     return (e && e->ops == &epoll_ops) ? (struct epoll *)e->priv : NULL;
 }
 
+/** A new set and a descriptor of the caller's on it, close-on-exec under
+ * EPOLL_CLOEXEC: the descriptor, -EINVAL for another flag, -ENOMEM, or
+ * `fd_alloc`'s error. */
 static int32_t make_epoll(uint32_t flags)
 {
     struct epoll *ep;
@@ -637,7 +647,7 @@ long sys_epoll_create1(struct isr_params *params)
     return make_epoll((uint32_t)SC_ARG(params, 0));
 }
 
-/*
+/**
  * Whether adding the set `inner` to `ep` would make a cycle of sets, or a
  * chain of them more than EP_MAX_NESTS deep below its outermost set,
  * counting the sets above `ep` as well as those below `inner`, through the
@@ -744,7 +754,9 @@ long sys_epoll_ctl(struct isr_params *params)
 
 /**
  * A wait on the set `epfd` for at most `max` events into the user array
- * `uevents`, until the tick `deadline` when `has_deadline`.
+ * `uevents`, until the tick `deadline` when `has_deadline`. Returns the
+ * events copied, 0 at the deadline, -EBADF, -EINVAL, -EFAULT, -EINTR or
+ * -ENOMEM, as `sys_epoll_wait` gives them.
  *
  * The scan takes each event it reports, so that a second waiter does not
  * report an edge-triggered or one-shot event again, and the copy to the
@@ -823,12 +835,8 @@ long sys_epoll_pwait(struct isr_params *params)
                                             (int)SC_ARG(params, 2), has_deadline, deadline));
 }
 
-/**
- * epoll_pwait2(2): epoll_pwait with a struct __kernel_timespec timeout, 64-bit
- * seconds and nanoseconds, or none for a null pointer. The seconds are one
- * signed 64-bit value, low word first; a negative one is EINVAL, and a
- * timeout past 2147483647 milliseconds, about 24.8 days, is shortened to it.
- */
+/** The timespec is read as four 32-bit words, the seconds' low word first,
+ * so that i386 and x86-64 read it alike. */
 long sys_epoll_pwait2(struct isr_params *params)
 {
     int has_deadline = 0;

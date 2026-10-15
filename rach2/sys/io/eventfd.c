@@ -32,21 +32,27 @@ struct eventfd {
     wait_queue_t wq;
 };
 
+/** Whether the description of `e` is non-blocking. */
 static int nonblocking(const fd_entry_t *e)
 {
     return e->ofd && (e->ofd->status_flags & OFD_NONBLOCK);
 }
 
+/** The wait condition of a read: the counter of the eventfd `arg` is not
+ * zero. */
 static int readable(void *arg)
 {
     return ((struct eventfd *)arg)->count != 0;
 }
 
+/* A write's addition, the argument of its wait condition `fits`. */
 struct add {
     struct eventfd *ev;
     uint64_t value;
 };
 
+/** The wait condition of a write: the value of the addition `arg` keeps
+ * the counter at EFD_MAX or below. */
 static int fits(void *arg)
 {
     const struct add *a = (const struct add *)arg;
@@ -59,7 +65,8 @@ static int fits(void *arg)
  * the counter as it is read, and the writers woken, before the copy to the
  * caller, as Linux takes it. The copy can sleep in a page fault, and another
  * reader must not find the same value meanwhile; a copy that fails loses
- * the value, as in Linux.
+ * the value, as in Linux. Returns 8, -EINVAL for a buffer under eight
+ * bytes, -EAGAIN, -EINTR or -EFAULT.
  */
 static int32_t eventfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -86,6 +93,12 @@ static int32_t eventfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return (int32_t)sizeof(value);
 }
 
+/**
+ * write(2) of an eventfd: add the eight-byte value at `buf` to the counter,
+ * waiting while the sum would pass EFD_MAX, and wake the readers when the
+ * value is not zero. Returns 8, -EINVAL for a buffer under eight bytes or
+ * the value 0xFFFFFFFFFFFFFFFF, -EFAULT, -EAGAIN or -EINTR.
+ */
 static int32_t eventfd_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     struct eventfd *ev = (struct eventfd *)e->priv;
@@ -116,6 +129,8 @@ static int32_t eventfd_write(fd_entry_t *e, const char __user *buf, uint32_t cou
     return (int32_t)sizeof(a.value);
 }
 
+/** poll of an eventfd: POLLIN while the counter is not zero and POLLOUT
+ * while it is below EFD_MAX, among `events`, and its wait queue. */
 static short eventfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct eventfd *ev = (struct eventfd *)e->priv;
@@ -133,6 +148,7 @@ static short eventfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     return (short)(mask & events);
 }
 
+/** The last close of an eventfd: the counter is freed. */
 static void eventfd_close(fd_entry_t *e)
 {
     kfree(e->priv);
@@ -142,7 +158,9 @@ static void eventfd_close(fd_entry_t *e)
 static const struct file_ops eventfd_ops = {eventfd_read, eventfd_write, eventfd_poll, NULL,
                                             eventfd_close};
 
-/** An eventfd with the counter `count` and the flags `flags`. */
+/** A new eventfd with the counter `count` and the flags `flags`, and a
+ * descriptor of the caller's on it: the descriptor, -EINVAL for another
+ * flag, -ENOMEM, or `fd_alloc`'s error. */
 static int32_t eventfd_open(uint32_t count, uint32_t flags)
 {
     struct eventfd *ev;
@@ -181,7 +199,7 @@ long sys_eventfd2(struct isr_params *params)
     return eventfd_open((uint32_t)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 1));
 }
 
-/* eventfd() has no flags. The register of a second argument is not one of
+/** eventfd has no flags. The register of a second argument is not one of
  * its arguments, and comes back as it went, as every register but the
  * result's does. */
 long sys_eventfd(struct isr_params *params)

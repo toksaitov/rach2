@@ -67,8 +67,8 @@ struct inotify {
     /* The IN_Q_OVERFLOW event, queued once at most, which needs no heap. */
     struct event overflow;
     int overflow_queued;
-    int32_t next_wd;
-    uint32_t uid;
+    int32_t next_wd; /* the watch descriptor tried next, from 1 */
+    uint32_t uid;    /* the real uid of its maker, whose limits it counts in */
 };
 
 int inotify_watches;
@@ -76,6 +76,7 @@ static struct watch *watches;
 static struct inotify *instances;
 static uint32_t cookies;
 
+/** Put `ev` at the tail of the queue of `in` and wake its readers. */
 static void append(struct inotify *in, struct event *ev)
 {
     ev->next = NULL;
@@ -90,6 +91,7 @@ static void append(struct inotify *in, struct event *ev)
     wq_wake(&in->wq, WQ_DATA);
 }
 
+/** Queue the IN_Q_OVERFLOW event of `in`, unless it is queued already. */
 static void queue_overflow(struct inotify *in)
 {
     if (in->overflow_queued) {
@@ -103,6 +105,7 @@ static void queue_overflow(struct inotify *in)
     append(in, &in->overflow);
 }
 
+/** Whether the strings `a` and `b` are equal. */
 static int same_name(const char *a, const char *b)
 {
     while (*a && *a == *b) {
@@ -255,11 +258,13 @@ uint32_t inotify_cookie(void)
     return cookies;
 }
 
+/** Whether the description of `e` is non-blocking. */
 static int nonblocking(const fd_entry_t *e)
 {
     return e->ofd && (e->ofd->status_flags & OFD_NONBLOCK);
 }
 
+/** The wait condition of a read: the instance `arg` has an event queued. */
 static int readable(void *arg)
 {
     return ((struct inotify *)arg)->head != NULL;
@@ -270,7 +275,9 @@ static int readable(void *arg)
  * waiting for the first. A buffer too small for the first is EINVAL, as on
  * Linux. Each record is taken off the queue before its copy, which can sleep
  * in a page fault, so a second reader meanwhile reads the next; a record
- * whose copy fails is lost, and the read returns what was copied before it.
+ * whose copy fails is lost, and the read returns what was copied before it,
+ * or -EFAULT. A read of an empty queue is -EAGAIN when the description is
+ * non-blocking, and -EINTR when a signal ends its wait.
  */
 static int32_t inotify_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -316,6 +323,8 @@ static int32_t inotify_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return done ? (int32_t)done : -EINVAL;
 }
 
+/** poll of an instance: POLLIN among `events` while an event is queued,
+ * and its wait queue. */
 static short inotify_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct inotify *in = (struct inotify *)e->priv;
@@ -326,7 +335,8 @@ static short inotify_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     return (short)((in->head ? POLLIN : 0) & events);
 }
 
-/** FIONREAD: the bytes a read of the whole queue returns. */
+/** FIONREAD writes the bytes a read of the whole queue returns at `arg`,
+ * and is 0 or -EFAULT; another request is -ENOTTY. */
 static int32_t inotify_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     struct inotify *in = (struct inotify *)e->priv;
@@ -476,7 +486,9 @@ long sys_inotify_rm_watch(struct isr_params *params)
     return -EINVAL;
 }
 
-/** An instance with the flags `flags`. */
+/** A new instance with the flags `flags`, and a descriptor of the caller's
+ * on it: the descriptor, -EINVAL for another flag, -EMFILE past the user's
+ * instances, -ENOMEM, or `fd_alloc`'s error. */
 static int32_t inotify_open(uint32_t flags)
 {
     struct inotify *in;
@@ -524,7 +536,7 @@ long sys_inotify_init1(struct isr_params *params)
     return inotify_open((uint32_t)SC_ARG(params, 0));
 }
 
-/* inotify_init() has no arguments, and the register of a first argument,
+/** inotify_init has no arguments, and the register of a first argument,
  * which i386 code keeps its global offset table in, comes back as it
  * went. */
 long sys_inotify_init(struct isr_params *params)

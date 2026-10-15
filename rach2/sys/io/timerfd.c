@@ -106,6 +106,8 @@ static struct spinlock timer_lock = SPINLOCK_INIT;
 static struct ktimer *armed;
 static struct ktimer *cpu_armed;
 
+/** Take `t` off the list of armed timers it is on and mark it disarmed. The
+ * caller holds `timer_lock`. */
 static void disarm(struct ktimer *t)
 {
     struct ktimer **link = t->cpu_tg ? &cpu_armed : &armed;
@@ -119,8 +121,9 @@ static void disarm(struct ktimer *t)
     t->armed = 0;
 }
 
-/* Set `t` to expire `sec` seconds and `sub` ticks after the tick `from`:
- * the part below a whole span first, then the spans. */
+/** Set `t` to expire `sec` seconds and `sub` ticks after the tick `from`:
+ * the part below a whole span first, then the spans. The caller holds
+ * `timer_lock`. */
 static void wait_from(struct ktimer *t, uint32_t from, uint32_t sec, uint32_t sub)
 {
     t->spans = sec / SPAN_SEC;
@@ -130,9 +133,10 @@ static void wait_from(struct ktimer *t, uint32_t from, uint32_t sec, uint32_t su
 static void ptimer_fire(struct ktimer *t);
 static void ptimer_free(struct ktimer **link);
 
-/* An expiration of `t`, due by the tick `now`: counted, with those of an
+/** An expiration of `t`, due by the tick `now`: counted, with those of an
  * interval missed since, and the timer armed again by its interval or
- * disarmed; then its readers woken, or its signal posted. */
+ * disarmed; then its readers woken, or its signal posted. The caller holds
+ * `timer_lock`. */
 static void expire(struct ktimer *t, uint32_t now)
 {
     if (t->isec >= SPAN_SEC) {
@@ -155,7 +159,7 @@ static void expire(struct ktimer *t, uint32_t now)
     }
 }
 
-/* `sec` seconds and `sub` ticks as ticks, at most 0xFFFFFFFF and at least
+/** `sec` seconds and `sub` ticks as ticks, at most 0xFFFFFFFF and at least
  * one, so that a timer of processor time armed for no time expires at the
  * next tick charged. */
 static uint32_t cpu_ticks_of(uint32_t sec, uint32_t sub)
@@ -213,7 +217,7 @@ void timerfd_tick(uint32_t now)
     spin_unlock(&timer_lock);
 }
 
-/*
+/**
  * A time of `sec` seconds and `nsec` nanoseconds, below a second, as whole
  * seconds and ticks below a second, rounded up to a tick so that a timer
  * never expires early. A negative time is none, and a time past TIME_MAX
@@ -238,6 +242,7 @@ static void to_wait(int64_t sec, int32_t nsec, uint32_t *s, uint32_t *sub)
     }
 }
 
+/** The wait condition of a read: the timer `arg` has expirations. */
 static int readable(void *arg)
 {
     return ((struct ktimer *)arg)->count != 0;
@@ -250,7 +255,8 @@ static int readable(void *arg)
  * interrupt adds to it (`timerfd_tick`), and before the copy to the caller,
  * which can sleep in a page fault: an expiration that comes meanwhile is
  * kept for the next read, and a second reader finds none of the ones this
- * read took. A copy that fails loses the count, as in Linux.
+ * read took. A copy that fails loses the count, as in Linux. Returns 8,
+ * -EINVAL for a buffer under eight bytes, -EAGAIN, -EINTR or -EFAULT.
  */
 static int32_t timerfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -282,6 +288,8 @@ static int32_t timerfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return (int32_t)sizeof(n);
 }
 
+/** poll of a timerfd: POLLIN among `events` while it has expirations, and
+ * its wait queue. */
 static short timerfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct ktimer *t = (struct ktimer *)e->priv;
@@ -292,6 +300,7 @@ static short timerfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     return (short)(t->count ? (events & POLLIN) : 0);
 }
 
+/** The last close of a timerfd: the timer is disarmed and freed. */
 static void timerfd_close(fd_entry_t *e)
 {
     struct ktimer *t = (struct ktimer *)e->priv;
@@ -307,6 +316,8 @@ static void timerfd_close(fd_entry_t *e)
 
 static const struct file_ops timerfd_ops = {timerfd_read, NULL, timerfd_poll, NULL, timerfd_close};
 
+/** The timer of the caller's descriptor `fd`, or NULL when `fd` is not open
+ * or not a timerfd. */
 static struct ktimer *timer_of(int fd)
 {
     fd_entry_t *e = fd_get(current_proc->fds, fd);
@@ -352,7 +363,7 @@ long sys_timerfd_create(struct isr_params *params)
     return fd;
 }
 
-/* The timer's setting now: the time to its next expiration and its
+/** The timer's setting now: the time to its next expiration and its
  * interval, both zero when it is disarmed. It is read under the timers'
  * lock, since the tick moves the timer. */
 static void current_setting(const struct ktimer *t, struct setting *s)
@@ -381,7 +392,13 @@ static void current_setting(const struct ktimer *t, struct setting *s)
     spin_unlock_irqrestore(&timer_lock, irq);
 }
 
-/* Arm or disarm `t` from the setting `s`, which `flags` makes absolute. */
+/**
+ * Arm `t` from the setting `s`, absolute on its clock when `flags` has
+ * TFD_TIMER_ABSTIME, or disarm it for a first expiration of zero, dropping
+ * the expirations not read; 0, -EINVAL for a time out of range, or
+ * `clock_now`'s error. A relative time counts from the next tick, so the
+ * part of the tick in progress does not shorten it.
+ */
 static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
 {
     int on = s->vsec != 0 || s->vnsec != 0;
@@ -433,9 +450,12 @@ static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
     return 0;
 }
 
-/* The two widths of struct itimerspec, the interval first: seconds and
- * nanoseconds of a long, 32 bits on i686 and 64 on x86-64, or of 64 bits,
- * the time64 calls' on i686. */
+/**
+ * Read the struct itimerspec at `u` into `s`, the interval first. Its
+ * seconds and nanoseconds are longs, 32 bits on i686 and 64 on x86-64, or
+ * with `wide` 64 bits, the time64 calls' on i686. 0, -EFAULT, or -EINVAL for
+ * nanoseconds outside 0 to 999999999 or a negative time.
+ */
 static int32_t get_setting(uintptr_t u, int wide, struct setting *s)
 {
     if (wide) {
@@ -468,6 +488,8 @@ static int32_t get_setting(uintptr_t u, int wide, struct setting *s)
     return s->isec < 0 || s->vsec < 0 ? -EINVAL : 0;
 }
 
+/** Write `s` to the struct itimerspec at `u`, of the width `wide` selects
+ * (`get_setting`); 0 or -EFAULT. */
 static int32_t put_setting(uintptr_t u, int wide, const struct setting *s)
 {
     if (wide) {
@@ -489,8 +511,10 @@ static int32_t put_setting(uintptr_t u, int wide, const struct setting *s)
     }
 }
 
-/* Arm `t` from the setting at `want`, which `flags` may make absolute, and
- * give the setting it had at `old` when that is not 0. */
+/** Arm `t` from the setting at `want_u`, which `flags` may make absolute,
+ * and write the setting it had to `old_u` when that is not 0; 0, or the
+ * error of the read, the arming or the write. The timer stays as it was
+ * armed when the write of the old setting fails. */
 static int32_t set_and_report(struct ktimer *t, int flags, uintptr_t want_u, uintptr_t old_u,
                               int wide)
 {
@@ -508,6 +532,8 @@ static int32_t set_and_report(struct ktimer *t, int flags, uintptr_t want_u, uin
     return rc;
 }
 
+/** The body of timerfd_settime, of the time64 call when `wide`; returns as
+ * `sys_timerfd_settime` does. */
 static int32_t settime(struct isr_params *params, int wide)
 {
     struct ktimer *t = timer_of((int)SC_ARG(params, 0));
@@ -522,6 +548,8 @@ static int32_t settime(struct isr_params *params, int wide)
     return set_and_report(t, flags, SC_ARG(params, 2), SC_ARG(params, 3), wide);
 }
 
+/** The body of timerfd_gettime, of the time64 call when `wide`; returns as
+ * `sys_timerfd_gettime` does. */
 static int32_t gettime(struct isr_params *params, int wide)
 {
     struct ktimer *t = timer_of((int)SC_ARG(params, 0));
@@ -557,7 +585,8 @@ long sys_timerfd_gettime64(struct isr_params *params)
     return gettime(params, 1);
 }
 
-/* The thread `tid` of the process `tg`, or NULL when it has none. */
+/** The thread `tid` of the process `tg`, or NULL when it has none that has
+ * not ended. */
 static process_t *thread_of(struct tgroup *tg, uint32_t tid)
 {
     process_t *p = get_process(tid);
@@ -565,14 +594,15 @@ static process_t *thread_of(struct tgroup *tg, uint32_t tid)
     return p && p->tg == tg && p->state != PROC_ZOMBIE ? p : NULL;
 }
 
-/*
+/**
  * The signal of the POSIX timer `t`, whose expirations since its last
  * signal are its `count`: posted, with all but one as its overrun; or, while
  * its signal is still pending, added to that signal's overrun, which is what
  * a handler is given, as Linux reports the overrun at delivery. While a
  * signal of the same number from elsewhere is pending, the expirations wait
  * for the next. SIGEV_NONE posts nothing; a signal for a thread
- * SIGEV_THREAD_ID named that has ended goes to the process.
+ * SIGEV_THREAD_ID named that has ended goes to the process. The caller holds
+ * `timer_lock`.
  */
 static void ptimer_fire(struct ktimer *t)
 {
@@ -610,7 +640,7 @@ static void ptimer_fire(struct ktimer *t)
     }
 }
 
-/* The calling process's POSIX timer `id`, or NULL. */
+/** The calling process's POSIX timer `id`, or NULL. */
 static struct ktimer *ptimer_of(int id)
 {
     struct ktimer *t = current_proc->tg->timers;
@@ -621,7 +651,7 @@ static struct ktimer *ptimer_of(int id)
     return t;
 }
 
-/* Take the target of the clock `clock` into `t`: none for real time and time
+/** Take the target of the clock `clock` into `t`: none for real time and time
  * since boot, and for a clock of processor time the process it counts,
  * held, its thread and whether it counts user time alone. 0, or -EINVAL
  * for a clock `clock_cpu_target` refuses. */
@@ -634,17 +664,11 @@ static int32_t ptimer_clock(struct ktimer *t, int clock)
 }
 
 /**
- * timer_create(2): a POSIX timer on the clock its first argument names,
- * notified as the `struct sigevent` at the second says, or by SIGALRM with its
- * id as the value when the second is 0, whose id is stored at the third: the
- * lowest the process does not have. The clock is real time, time since boot, or
- * the processor time of a process or of a thread of the caller's. A thread
- * SIGEV_THREAD_ID names must be one of the caller's process. EINVAL for another
- * clock, notification or signal, EAGAIN past PTIMER_MAX. The id is stored
- * before the timer is on the process's list, since the store can sleep in a
- * page fault, which the timers' lock cannot be held across, and a timer
- * already listed could be deleted by another thread meanwhile; a store that
- * fails is EFAULT with nothing listed.
+ * The id is stored before the timer is on the process's list, since the
+ * store can sleep in a page fault, which the timers' lock cannot be held
+ * across, and a timer already listed could be deleted by another thread
+ * meanwhile. A thread that takes the id while the store sleeps has the next
+ * free one tried.
  */
 long sys_timer_create(struct isr_params *params)
 {
@@ -681,10 +705,6 @@ long sys_timer_create(struct isr_params *params)
         kfree(t);
         return -EINVAL;
     }
-    /* The identifier goes to the caller before the timer is published: a
-     * copy that sleeps in a fault would leave a published timer for another
-     * thread to delete under it. A thread that takes the identifier while
-     * the copy sleeps has the next free one tried. */
     for (;;) {
         irq = spin_lock_irqsave(&timer_lock);
         id = 0;
@@ -719,6 +739,8 @@ long sys_timer_create(struct isr_params *params)
     return 0;
 }
 
+/** The body of timer_settime, of the time64 call when `wide`; returns as
+ * `sys_timer_settime` does. */
 static int32_t ptimer_settime(struct isr_params *params, int wide)
 {
     struct ktimer *t = ptimer_of((int)SC_ARG(params, 0));
@@ -729,6 +751,8 @@ static int32_t ptimer_settime(struct isr_params *params, int wide)
     return set_and_report(t, (int)SC_ARG(params, 1), SC_ARG(params, 2), SC_ARG(params, 3), wide);
 }
 
+/** The body of timer_gettime, of the time64 call when `wide`; returns as
+ * `sys_timer_gettime` does. */
 static int32_t ptimer_gettime(struct isr_params *params, int wide)
 {
     struct ktimer *t = ptimer_of((int)SC_ARG(params, 0));
@@ -768,8 +792,8 @@ long sys_timer_getoverrun(struct isr_params *params)
     return t ? (int32_t)t->overrun : -EINVAL;
 }
 
-/* Take the timer `link` names out of its process's list, disarmed, and
- * free it. */
+/** Take the timer `link` names out of its process's list, disarmed, let go
+ * of the process whose time it counts, and free it. */
 static void ptimer_free(struct ktimer **link)
 {
     struct ktimer *t = *link;

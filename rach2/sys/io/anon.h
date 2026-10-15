@@ -2,10 +2,12 @@
 #define _ANON_H_
 
 /*
- * The descriptors that name no file: eventfd, epoll and timerfd. Each is a
- * descriptor of type FD_TYPE_ANON whose `priv` is an object that begins with
- * this header, whose name /proc/PID/fd reports as "anon_inode:NAME", as
- * Linux does.
+ * The header of the objects behind descriptors that name no file: an
+ * eventfd, an epoll set, a timerfd, an inotify instance, a signalfd, a
+ * message queue and a namespace file. Such a descriptor has type
+ * FD_TYPE_ANON and a `priv` that points at an object beginning with this
+ * header. /proc/PID/fd shows its link as "anon_inode:NAME", as Linux does,
+ * and a namespace file's as its NAME alone, "KIND:[INUM]", as nsfs's.
  */
 struct anon_obj {
     const char *name;

@@ -1,19 +1,15 @@
 /*
- * poll.c - I/O multiplexing (poll/ppoll/select/_newselect/pselect6).
+ * poll.c: the poll core, and poll, ppoll, select, _newselect and pselect6
+ * on it, as poll.h describes them.
  *
- * The poll core scans the polled descriptors for readiness; if none is ready
- * and the timeout has not expired, it parks the process on EVERY polled
- * object's wait queue at once (wq_poll_add), yields, and on any wake re-scans.
- * This is the lost-wakeup-safe discipline generalized to many queues. Each
- * backing answers readiness through its file_ops poll op (pipes, ptys, device
- * and /proc files) or, for the enum-dispatched descriptor types (the console,
- * sockets), a small per-type check here.
- *
- * select() is layered on poll(): the fd_set bitmaps are translated to/from a
- * pollfd array (pure logic in poll_select.c, host-tested), then the same
- * core runs. The i386 calls select, _newselect, poll,
- * pselect6 and ppoll all reach this core, so whichever number musl
- * emits works.
+ * A wait scans the descriptors with interrupts off and, when none is ready
+ * and the deadline has not passed, puts the process on the wait queue of
+ * each (`wq_poll_add`) before interrupts are on again, so that no wake
+ * falls between the scan and the sleep; every wake brings a new scan. A
+ * descriptor answers through its poll operation (pipes, terminals, devices,
+ * /proc files, the anonymous descriptors) or, for the console and sockets,
+ * through a check of its type here. select translates its fd_sets to an
+ * array of pollfd and back (poll_select.c) around the same core.
  */
 
 #include "../lib/kirq.h"
@@ -40,41 +36,41 @@
 
 extern volatile uint32_t kernel_ticks;
 
-/* The timespec of longs ppoll and pselect6 take, 32 bits each on i686. */
+/* The timespec of longs ppoll and pselect6 take, 32 bits each on i686 and
+ * 64 on x86-64. */
 struct poll_timespec {
     long tv_sec;
     long tv_nsec;
 };
 
-/* timeval (select). */
+/* The timeval of longs the select calls take. */
 struct poll_timeval {
     long tv_sec;
     long tv_usec;
 };
 
+/** Turn interrupts off and return the flags that turn them back
+ * (`kirq_save`). */
 static uint32_t irq_save(void)
 {
     return kirq_save();
 }
 
+/** Restore the interrupt flag `flags` that `irq_save` returned. */
 static void irq_restore(uint32_t flags)
 {
     kirq_restore(flags);
 }
 
 /**
- * Compute the readiness of one descriptor.
- *
- * Returns the revents: a subset of `events` for POLLIN/POLLOUT, plus POLLHUP
- * and POLLERR which are always reported. Sets `*wq` to the wait queue whose
- * wake means "re-check me", or NULL if the descriptor is always ready.
- *
- * A regular file or directory never blocks. The console answers through its
- * tty: POLLIN, whose query drains serial input, only for a readable
- * descriptor, so poll(stdout, POLLOUT) never drains serial input, and
- * POLLOUT for any descriptor, as a terminal answers on Linux whatever the
- * descriptor's mode; a write through a read-only one is then EBADF, where a
- * poll that never answered left the caller waiting for good.
+ * A descriptor with a poll operation answers through it, and a socket
+ * through the network stack. A regular file, a directory, the framebuffer
+ * and the mouse are always ready and have no queue. The console answers
+ * through its tty: POLLIN, whose query drains serial input, only for a
+ * readable descriptor, so poll(stdout, POLLOUT) never drains serial input,
+ * and POLLOUT for any descriptor, as a terminal answers on Linux whatever
+ * the descriptor's mode, so that a caller polling a read-only one for output
+ * is not left waiting; its write is then EBADF.
  */
 short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
 {
@@ -97,7 +93,6 @@ short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
         want = (short)(want | (events & POLLOUT));
         return tty_poll(&console_tty, want, wq);
     }
-    /* Framebuffer/mouse: reported ready (no wait queue). */
     return (short)(events & (POLLIN | POLLOUT));
 }
 
@@ -107,12 +102,12 @@ short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
 struct pollfd_scan {
     struct kernel_pollfd *fds;
     uint32_t nfds;
-    int sel;
+    int sel; /* nonzero for select's rule of readiness (`poll_scan`) */
     uint32_t room;
     uint32_t grow;
 };
 
-/*
+/**
  * The readiness of `e` and its wait queues, into `wqs` from `*used` on as
  * far as `room` goes, `*used` counting them all: one queue, or for an epoll
  * set the set's own and those of what it watches, so that a change in any
@@ -143,20 +138,22 @@ static short poll_one(fd_entry_t *e, short events, struct wait_queue **wqs, uint
 }
 
 /**
- * Scan all pollfds once.
+ * One scan of the descriptors of `p`: each entry's revents filled, the wait
+ * queues put in `wqs` as far as `p->room` goes, and the count of entries
+ * ready returned. A negative descriptor is skipped with no events, as POSIX
+ * has it, and one that is not open or was opened with O_PATH is POLLNVAL,
+ * ready, and not waited on. Called with interrupts off (`poll_wait`).
  *
- * Fills revents for each entry, records the wait queues in `wqs[]`, and
- * returns the number that are ready. `sel` selects the readiness rule:
- * poll() counts any non-zero revents, while select() counts an fd only on a
- * revent that projects onto a direction it was selected in (so a write- or
- * except-only fd reporting only POLLHUP is not "ready", matching the fd_set
- * projection and not busy-spinning). Called with interrupts off so the
- * readiness reads and the enqueue that follows cannot be split by a waker.
+ * `p->sel` selects select's rule over poll's: poll counts an entry with any
+ * revents, while select counts one only for an event that projects onto a
+ * direction it was selected in (`pollfd_select_ready`), so a descriptor
+ * selected for writing or exceptions that reports only POLLHUP is not ready,
+ * as the projection onto the fd_sets says, and the wait does not spin.
  *
  * An epoll set has a queue for each descriptor it watches, so the queues
  * can be more than the records the wait has; with nothing ready, the scan
- * says so in `grow` and returns 1 to end the wait, which begins again with
- * a record for each.
+ * says so in `p->grow` and returns 1 to end the wait, which begins again
+ * with a record for each.
  */
 static int poll_scan(struct pollfd_scan *p, struct wait_queue **wqs)
 {
@@ -170,12 +167,12 @@ static int poll_scan(struct pollfd_scan *p, struct wait_queue **wqs)
         short revents;
 
         if (fds[i].fd < 0) {
-            fds[i].revents = 0; /* a negative fd is skipped (POSIX) */
+            fds[i].revents = 0;
             continue;
         }
         e = fd_get(current_proc->fds, fds[i].fd);
         if (!e || (e->flags & FD_FLAG_PATH)) {
-            fds[i].revents = POLLNVAL; /* an invalid or O_PATH fd is reported, not waited on */
+            fds[i].revents = POLLNVAL;
             ready++;
             continue;
         }
@@ -203,28 +200,17 @@ static int deadline_reached(uint32_t deadline)
 }
 
 /**
- * The wait of the poll core: block until `scan` finds an object ready, a
- * signal arrives, or the deadline passes.
- *
- * `has_deadline` == 0 means wait forever. `scan` names the wait queue of each
- * of at most `n` objects in the array it is given and returns how many are
- * ready; it runs with interrupts off, so the readiness it reads and the
- * enqueue that follows cannot be split by a waker.
- *
- * The process is parked on every object's wait queue under the same cli as
- * the scan, so a readiness change cannot be lost. A finite timeout also sets
- * the timer wake, `wakeup_tick`, which proc_wake_sleepers acts on at the
- * deadline: with another process runnable, schedule() does not return here on
- * its own, and a wait on no queue or on objects that never fire would
- * otherwise sleep past its deadline. A computed tick of 0 is stored as 1,
- * since 0 means not sleeping. A process still blocked when schedule()
- * returns, which nothing woke and nothing else could run, idles until the
- * next interrupt, still on every queue so a waker can find it, and leaves the
- * queues after. On return the process is on no queue and its timer wake is
- * cleared.
- *
- * @return the ready count, 0 once the deadline has passed, -EINTR, or
- *         -ENOMEM.
+ * The process goes on every queue the scan named with interrupts still off
+ * from the scan, so that a change of readiness cannot fall between the two
+ * and be lost. A finite timeout also sets the timer wake, `wakeup_tick`,
+ * which `proc_wake_sleepers` acts on at the deadline: with another process
+ * runnable, schedule() does not return here on its own, and a wait on no
+ * queue or on objects that never fire would otherwise sleep past its
+ * deadline. A computed tick of 0 is stored as 1, since 0 means not
+ * sleeping. A process still blocked when schedule() returns, which nothing
+ * woke and nothing else could run, idles until the next interrupt, still on
+ * every queue so a waker can find it, and leaves the queues after. On
+ * return the process is on no queue and its timer wake is cleared.
  */
 int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, int has_deadline, uint32_t deadline)
 {
@@ -258,7 +244,7 @@ int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, int has_deadline, uint32
             break;
         }
         if (has_deadline && deadline_reached(deadline)) {
-            rc = 0; /* timed out */
+            rc = 0;
             break;
         }
 
@@ -285,7 +271,7 @@ int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, int has_deadline, uint32
         current_proc->state = PROC_RUNNING;
     }
 
-    current_proc->wakeup_tick = 0; /* disarm the timer wake */
+    current_proc->wakeup_tick = 0;
     for (i = 0; i < n; i++) {
         wq_poll_remove(wqs[i], &recs[i]);
     }
@@ -296,15 +282,16 @@ int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, int has_deadline, uint32
     return rc;
 }
 
+/** `poll_scan` as a `poll_scan_fn`, whose context is a struct pollfd_scan. */
 static int scan_pollfds(void *ctx, struct wait_queue **wqs)
 {
     return poll_scan((struct pollfd_scan *)ctx, wqs);
 }
 
-/* The poll core over `fds`; `sel` selects the select() per-direction
- * readiness rule over poll()'s. nfds is already bounded to POLL_MAX_FDS by
- * the callers. A wait whose scan found more queues than it had records for
- * begins again with a record for each (`poll_scan`). */
+/** The poll core over the `nfds` entries of `fds`, at most POLL_MAX_FDS,
+ * with select's rule of readiness when `sel` (`poll_scan`); returns as
+ * `poll_wait` does. A wait whose scan found more queues than it had records
+ * for begins again with a record for each. */
 static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, uint32_t deadline,
                    int sel)
 {
@@ -343,10 +330,6 @@ static uint32_t tick_deadline(uint32_t ticks, uint32_t us)
     return now + (ticks > 0x7FFFFFFFu ? 0x7FFFFFFFu : ticks);
 }
 
-/**
- * Convert a poll(2) millisecond timeout to a deadline tick (`tick_deadline`).
- * `*has_deadline` is 0 for an infinite wait (timeout_ms < 0).
- */
 uint32_t poll_ms_deadline(int timeout_ms, int *has_deadline)
 {
     uint32_t ticks;
@@ -361,31 +344,29 @@ uint32_t poll_ms_deadline(int timeout_ms, int *has_deadline)
 }
 
 /**
- * Validate a user timeval: seconds non-negative and tv_usec in [0, 1000000).
- *
- * select rejects anything else with -EINVAL, not silently
- * clamping, and the in-range usec also keeps the conversions below free of
- * signed overflow. musl always passes normalized values; a raw int-0x80
- * caller might not.
+ * Whether the timeval `tv` is one the select calls take: seconds not
+ * negative and microseconds from 0 to 999999. They refuse another with
+ * -EINVAL, as Linux does, and the range keeps the conversions below free of
+ * signed overflow.
  */
 static int tv_valid(const struct poll_timeval *tv)
 {
     return tv->tv_sec >= 0 && tv->tv_usec >= 0 && tv->tv_usec < 1000000;
 }
 
+/** Whether the timespec `ts` is one ppoll and pselect6 take: seconds not
+ * negative and nanoseconds from 0 to 999999999. */
 static int ts_valid(const struct poll_timespec *ts)
 {
     return ts->tv_sec >= 0 && ts->tv_nsec >= 0 && ts->tv_nsec < 1000000000;
 }
 
 /**
- * Convert a timeval to a millisecond timeout for poll_ms_deadline.
- *
- * Saturating: tv_sec is clamped so tv_sec*1000 cannot overflow the signed
- * result (INT_MAX ms is ~24 days, which for a select() timeout is
- * effectively forever), and a negative tv_sec degrades to a non-blocking
- * poll, not an accidental infinite wait. A non-NULL timeval thus
- * always yields a finite deadline; only a NULL one waits forever.
+ * The timeval `tv` as a timeout in milliseconds for `poll_ms_deadline`,
+ * rounded up. Seconds past 2147482 give 2147483647 milliseconds, about 24.8
+ * days, so the product cannot overflow, and negative seconds give 0, a poll
+ * that does not wait. A timeval thus always gives a finite timeout; only a
+ * null one waits without end.
  */
 static int tv_to_ms(const struct poll_timeval *tv)
 {
@@ -398,7 +379,13 @@ static int tv_to_ms(const struct poll_timeval *tv)
     return (int)(tv->tv_sec * 1000 + (tv->tv_usec + 999) / 1000);
 }
 
-/** Convert a timespec to a deadline (NULL == infinite). */
+/**
+ * The deadline tick of the timespec `ts`, the first tick at or after its end
+ * (`tick_deadline`) and at most about 248 days ahead, with `*has_deadline`
+ * 1; none for a NULL `ts`, with `*has_deadline` 0. The seconds are compared
+ * as a long before they are narrowed, since on x86-64 a timeout of 2^32
+ * seconds would read as 0 in 32 bits.
+ */
 static uint32_t ts_deadline(const struct poll_timespec *ts, int *has_deadline)
 {
     uint32_t sec, ticks;
@@ -408,8 +395,6 @@ static uint32_t ts_deadline(const struct poll_timespec *ts, int *has_deadline)
         return 0;
     }
     *has_deadline = 1;
-    /* The seconds are compared at their own width, a long, before they are
-     * narrowed: on x86-64 a timeout of 2^32 seconds would read as 0. */
     sec = (unsigned long)ts->tv_sec > 21474836ul ? 21474836u : (uint32_t)ts->tv_sec;
     ticks = sec * 100u + (uint32_t)ts->tv_nsec / 10000000u;
     if (ticks > 0x7FFFFFFEu) {
@@ -418,8 +403,9 @@ static uint32_t ts_deadline(const struct poll_timespec *ts, int *has_deadline)
     return tick_deadline(ticks, ((uint32_t)ts->tv_nsec % 10000000u + 999u) / 1000u);
 }
 
-/** Shared poll(2) implementation: ufds/nfds plus an already-computed
- * deadline. An nfds of 0 is a sleep until the deadline. */
+/** The body of poll and ppoll: the `nfds` entries at `ufds` waited on until
+ * the tick `deadline` when `has_deadline`, and their revents copied back.
+ * No entries is a sleep until the deadline. Returns as `sys_poll` does. */
 static int32_t poll_common(uintptr_t ufds, uint32_t nfds, int has_deadline, uint32_t deadline)
 {
     struct kernel_pollfd *fds;
@@ -462,15 +448,11 @@ long sys_poll(struct isr_params *params)
 }
 
 /**
- * Install the signal mask a ppoll or pselect6 waits under.
- *
- * `umask` is a user signal set of `size` bytes, or 0 for none. The mask it
- * replaces becomes the thread's saved mask: `deliver_signals` puts it back
- * after the handler a signal runs for this wait, or at once when none runs,
- * and a wait that did not end for a signal puts it back through
- * `poll_mask_done`. Both masks are set through `signal_set_blocked`, which
- * leaves a signal of the process that a mask blocks to another thread.
- * Returns 0, or -EINVAL or -EFAULT.
+ * The mask it replaces becomes the thread's saved mask: `deliver_signals`
+ * puts it back after the handler a signal runs for this wait, or at once
+ * when none runs, and a wait that did not end for a signal puts it back
+ * through `poll_mask_done`. Both masks are set through `signal_set_blocked`,
+ * which leaves a signal of the process that a mask blocks to another thread.
  */
 int32_t poll_mask_set(uintptr_t umask, uint32_t size)
 {
@@ -491,8 +473,6 @@ int32_t poll_mask_set(uintptr_t umask, uint32_t size)
     return 0;
 }
 
-/* The mask back, unless the wait ended for a signal, whose delivery puts it
- * back after its handler. */
 int32_t poll_mask_done(int32_t ret)
 {
     if (current_proc->sigmask_saved && ret != -EINTR) {
@@ -536,12 +516,14 @@ long sys_ppoll(struct isr_params *params)
 }
 
 /**
- * Shared select() core over the three fd_sets. nfds is the highest fd + 1.
+ * The body of the select calls: the descriptors below `nfds` set in the
+ * user fd_sets at `ur`, `uw` and `ue`, each 0 for none, waited on until the
+ * tick `deadline` when `has_deadline`, and the sets the caller gave written
+ * back. Returns as `sys__newselect` does.
  *
- * The whole [0, nfds) range is scanned, and a selected bit whose descriptor
- * is not open fails the call with -EBADF: the scan reports such a descriptor
- * as POLLNVAL, which no fd_set can show, and counts it ready, so the check
- * never hides a real wait.
+ * A set bit whose descriptor is not open fails the call with -EBADF: the
+ * scan reports such a descriptor as POLLNVAL, which no fd_set can show, and
+ * counts it ready, so the wait ends at once.
  */
 static int32_t select_common(int nfds, uintptr_t ur, uintptr_t uw, uintptr_t ue, int has_deadline,
                              uint32_t deadline)
@@ -573,7 +555,6 @@ static int32_t select_common(int nfds, uintptr_t ur, uintptr_t uw, uintptr_t ue,
         return -EFAULT;
     }
 
-    /* fd_sets -> pollfds: one per selected descriptor, `nfds` at most. */
     fds = kmalloc(sizeof(*fds) * (size_t)(nfds ? nfds : 1));
     if (!fds) {
         return -ENOMEM;
@@ -600,7 +581,6 @@ static int32_t select_common(int nfds, uintptr_t ur, uintptr_t uw, uintptr_t ue,
         }
     }
 
-    /* pollfds -> fd_sets; only the sets the caller gave are written back. */
     k_memset(orset, 0, setbytes);
     k_memset(owset, 0, setbytes);
     k_memset(oeset, 0, setbytes);
@@ -638,7 +618,7 @@ long sys__newselect(struct isr_params *params)
         }
         deadline = poll_ms_deadline(tv_to_ms(&tv), &has_deadline);
     } else {
-        deadline = poll_ms_deadline(-1, &has_deadline); /* NULL timeout == wait forever */
+        deadline = poll_ms_deadline(-1, &has_deadline);
     }
     return select_common(nfds, ur, uw, ue, has_deadline, deadline);
 }
