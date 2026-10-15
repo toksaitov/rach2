@@ -145,7 +145,7 @@ boot_watch() {
     QPID=$!
     (sleep "$(scaled 90)") > "$FEED" & # interval: a holder keeps the console's feed open while the machine runs
     FPID=$!
-    wait_count "$1" 1 75 || fail "a matrix boot never reached $1"
+    wait_count "$1" 1 75 || fail "the boot never reached $1"
     cleanup_boot
 }
 

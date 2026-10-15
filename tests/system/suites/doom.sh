@@ -60,7 +60,7 @@ echo "doom-test: the game runs on the disk root and cost the disk ${COMMANDS:-?}
 if [ "$((0x$ZONE))" -ge "$((10 * 1024 * 1024))" ]; then
     echo "doom-test: the zone is 0x$ZONE bytes, sized from the machine's free memory: OK"
 else
-    fail "the zone is 0x$ZONE bytes; the heap did not grow past the fixed 8 MiB"
+    fail "the zone is 0x$ZONE bytes, under the 10 MiB of a zone sized from the free memory"
 fi
 DEMOEXIT="$(grep -a '^DEMOEXIT=' "$LOG" | tail -1 | tr -d '\r' | cut -d= -f2)"
 RECMODE="$(grep -a '^RECMODE=' "$LOG" | tail -1 | tr -d '\r' | cut -d= -f2)"

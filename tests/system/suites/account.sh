@@ -153,16 +153,6 @@ wait_token() {
     "$RUNUTIL" until "$LOG" "$1" "$2"
 }
 
-# wait_count PATTERN COUNT SECONDS: wait up to SECONDS for PATTERN to appear at
-# least COUNT times, for a line printed by more than one step of an arc. The
-# ISH shell does no quote removal, so a marker cannot be split as it is in a
-# busybox shell, and every token it prints is also in the console's echo of
-# the command that printed it.
-wait_count() {
-    "$RUNUTIL" until "$LOG" "$1" "$3" "$2"
-}
-
-
 HARNESS="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/harness"
 # boot_steps STEP...: boot the working image and type the arc's STEPs at its
 # console through the harness: each line is typed once the output it answers

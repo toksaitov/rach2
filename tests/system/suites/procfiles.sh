@@ -421,8 +421,8 @@ echo "procfiles-test: arp shows a resolved neighbour on the real subnet: OK"
 # netstat: the connection the host opened to the guest's server, with the
 # peer address the host end has. Nothing in the guest chose that number.
 if ! awk '$1 == "tcp" && $5 ~ /^10\.0\.2\.2:/ { found = 1 } END { exit !found }' "$PLAIN_LOG"; then
-    echo "procfiles-test: FAIL: netstat did not show the outbound connection's" >&2
-    echo "procfiles-test: peer as the address the peer actually has" >&2
+    echo "procfiles-test: FAIL: netstat did not show the connection the host opened" >&2
+    echo "procfiles-test: with the peer address the host end has" >&2
     grep -A5 "Proto" "$PLAIN_LOG" | head -6 >&2
     exit 1
 fi

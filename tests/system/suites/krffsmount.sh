@@ -290,13 +290,13 @@ echo "krffsmount-test: and the volume still says a check is owed: OK"
 # ---- three volumes at once ----
 build_three
 if run --append "rach2.rescue" --timeout 120 --steptmo 90 \
-    --ok "KRFFSPROBE OK (three)" --never "KRFFSPROBE FAIL" --log "$DISK.two.log" \
+    --ok "KRFFSPROBE OK (three)" --never "KRFFSPROBE FAIL" --log "$DISK.three.log" \
     "expect=Type 'help'" "send=exec /krffsprobe three" "expect=KRFFSPROBE" \
     > /dev/null 2>&1; then
     echo "krffsmount-test: three volumes are mounted at once, each holding only its own files: OK"
 else
-    grep -a 'KRFFSPROBE FAIL' "$DISK.two.log" >&2 || true
-    fail "the two-volume boot"
+    grep -a 'KRFFSPROBE FAIL' "$DISK.three.log" >&2 || true
+    fail "the three-volume boot"
 fi
 
 # ---- a stick pulled from under a mounted volume ----

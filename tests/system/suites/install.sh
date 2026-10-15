@@ -240,7 +240,7 @@ run_pass() {
     RB_AT="$(token_at "$LOG" "PRERB${P}A")"
     SLOT2_AT="$(token_at "$LOG" "rach2.slotB${P}=candidate")"
     LOGEND="$(wc -c < "$LOG" | tr -d ' ')"
-    [ -n "$ARMED_AT" ] || fail "pass $P: the armed-trial commit was not refused, so the trial was never armed or the gate is gone"
+    [ -n "$ARMED_AT" ] || fail "pass $P: the armed-trial commit was not refused, so the trial was never armed or bootctl no longer refuses the commit"
     if [ -z "$RB_AT" ] || [ -z "$SLOT2_AT" ] ||
        [ "$SLOT2_AT" -lt "$RB_AT" ] || [ "$ARMED_AT" -gt "$RB_AT" ]; then
         fail "pass $P: the session tokens are missing or out of order"
