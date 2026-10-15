@@ -3,19 +3,21 @@
 # rach2-install: install this system onto a disk of this machine.
 #
 # It runs from the recovery system booted off the install stick. The stick
-# carries the whole disk image and a manifest naming that image's length and
-# SHA-256; this reads the manifest, hashes the image before it writes anything,
-# lists the disks it could write with what each one is, asks which, asks for
-# the name typed back, writes the image, reads it back and hashes it again,
-# and asks the kernel to read the new table.
+# has the whole disk image and a manifest naming that image's length and
+# SHA-256. This reads the manifest, lists the disks it could write with what
+# each one is, and asks its questions, the last of which is the chosen disk's
+# name typed back. Then it hashes the image, writes it, reads it back and
+# hashes it again, has the kernel read the new table, writes the accounts
+# into the new root, archives them on the recovery partition, and grows the
+# root when the answer to that question was yes.
 #
 # The name is `rach2-install` and not `install` because the shell resolves
 # `install` to BusyBox's own applet before it searches the path.
 #
 # Nothing is written until the question about the target has been answered
-# with the device's own name. Every refusal says which disk and why, because a
-# person standing at a machine with two disks in it needs to know which one was
-# passed over and for what.
+# with the device's own name. Every disk passed over is listed with the
+# reason, because a person standing at a machine with two disks in it needs
+# to know which one was passed over and for what.
 #
 # Usage: rach2-install [--source DIR]
 #        rach2-install --update IMAGE DISK
@@ -30,10 +32,10 @@
 # after the install is still the machine's password. The root is grown again
 # into its partition. The machine is saved to its recovery system for the whole
 # of the write and the new root is armed for one trial boot, so an update cut
-# off by a power cut, or one that does not come up, costs a reboot into
-# recovery rather than a journey. An MBR disk is converted on the way to boot
-# by UEFI as well, when GRUB's EFI image is beside IMAGE: it keeps its MBR,
-# and its boot partition becomes the EFI system partition.
+# off by a power cut, or one that does not come up, costs a reboot into recovery
+# and not a visit to the machine. An MBR disk is converted on the way to boot by
+# UEFI as well, when GRUB's EFI image is beside IMAGE: it keeps its MBR, and its
+# boot partition becomes the EFI system partition.
 #
 # A new install writes the image's table, a GUID table on the images this
 # system builds, and moves its backup to the disk's last sectors, where a
@@ -52,13 +54,16 @@ ARCHIVE_NEEDS="etc/passwd etc/group etc/shadow"
 # The recovery system's key, on the recovery partition, where its init reads it.
 RECOVERY_KEYS_FILE=boot/recovery_authorized_keys
 
+# Prints MESSAGE on stdout as `rach2-install: MESSAGE`, a note of progress.
 say() { echo "$ME: $1"; }
 # Text addressed to the person, with no `rach2-install: ` in front of it. The
 # prefix is for a diagnostic, which says which program is reporting a fault; a
 # question or an explanation is neither. It also costs fifteen columns of an
-# eighty-column screen, and an earlier version of the summary below wrapped
-# because of it and made a mess of the one screen that has to be read.
+# eighty-column screen, enough to wrap the lines of the summary below and make
+# a mess of the one screen that has to be read.
 tell() { echo "$1"; }
+# Prints MESSAGE on stderr as `rach2-install: MESSAGE` and ends the run with
+# status 1; the EXIT trap then puts back what the run changed.
 die() {
     echo "$ME: $1" >&2
     exit 1
@@ -78,21 +83,23 @@ screen_level=""
 # disk or a file system arriving in the middle of a question reads, to the
 # person answering it, as something having gone wrong. The records are still
 # kept and still go out the serial port; only the screen is turned down, and
-# only while this is asking. A panic is below the floor the kernel accepts and
-# shows whatever is set here.
+# only while this runs. The level asked for is 2, the kernel's floor, at which a
+# panic still shows: a middle value would make the screen noisier, since the
+# kernel has usually set the floor already when it started init. The level it
+# had is saved in screen_level for `cleanup`; nothing is changed where
+# /dev/screenlog cannot be written.
 quiet_screen() {
     [ -w /dev/screenlog ] || return 0
     screen_level=$(cat /dev/screenlog 2>/dev/null) || screen_level=""
-    # 2 is the floor the kernel enforces, so a panic still reaches the screen.
-    # Asking for the floor rather than a middle value matters: by the time the
-    # installer runs, the kernel has usually handed the screen over already and
-    # is quieter than this, and a plain set would make it noisier.
+    # 2 is KLOG_CRIT, the lowest level the kernel takes.
     echo 2 > /dev/screenlog 2>/dev/null || screen_level=""
 }
+# Puts back what the run changed and has not yet put back: the screen's
+# level, the terminal's echo, which a run that ends inside a password question
+# leaves off, the four mounts and the directory of the recovery key's copy.
+# The traps call it; it returns 0.
 cleanup() {
     [ -n "$screen_level" ] && echo "$screen_level" > /dev/screenlog 2>/dev/null
-    # A password question turns the terminal's echo off; a run that ends inside
-    # one would otherwise leave a shell nobody can see what they type in.
     [ -n "$echo_off" ] && stty echo 2>/dev/null
     [ -n "$mounted_root" ] && umount "$mounted_root" 2>/dev/null
     [ -n "$mounted_recovery" ] && umount "$mounted_recovery" 2>/dev/null
@@ -110,6 +117,8 @@ trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 quiet_screen
 
+# Prints the opening screen of an install from the stick: what the program
+# does and how to stop it.
 greet() {
     tell "Rach2 installer"
     tell ""
@@ -148,29 +157,37 @@ done
 # `/proc/disk` names each registered disk on a `disk` line and describes it on
 # the `identity` line after it. Both are read here rather than the nodes being
 # guessed, since a disk that has gone leaves its node named and unopenable.
+# Each function below prints nothing for a disk /proc/disk does not list.
 
+# Prints the number of each disk /proc/disk lists, one a line.
 disk_numbers() {
     grep '^disk ' /proc/disk | cut -d' ' -f2
 }
 
+# Prints field FIELD of disk N's `disk` line, counted as the table below
+# counts them.
 disk_field() { # disk_field N FIELD
     grep "^disk $1 " /proc/disk | head -1 | cut -d' ' -f"$2"
 }
 
+# Prints disk N's model, the rest of its `disk` line from field 7.
 disk_model() {
     grep "^disk $1 " /proc/disk | head -1 | cut -d' ' -f7-
 }
 
+# Prints field FIELD of disk N's `identity` line.
 identity_field() { # identity_field N FIELD
     grep "^identity $1 " /proc/disk | head -1 | cut -d' ' -f"$2"
 }
 
+# Prints disk N's serial, the rest of its `identity` line from field 6.
 disk_serial() {
     grep "^identity $1 " /proc/disk | head -1 | cut -d' ' -f6-
 }
 
-# The identity growroot and the boot line name disk N by, `MBRID=ID` or
-# `GPTID=GUID`, by the table the kernel read on it.
+# Prints the identity growroot and the boot line name disk N by, `MBRID=ID` or
+# `GPTID=GUID`, by the table the kernel read on it. Status 1 when `diskctl`
+# cannot read the identity or the disk has neither table.
 disk_identity() { # disk_identity N
     id=$(diskctl id "/dev/disk$1") || return 1
     case "$(disk_field "$1" 6)" in
@@ -191,11 +208,13 @@ MOUNT_STATE=5
 #
 # The stick is found by looking for the manifest rather than by position: the
 # machine may have any number of disks and the stick is not always the last of
-# them. Every partition of every removable disk is tried, and the first that
-# mounts and holds a manifest is the source.
+# them. Each of the first four partitions of every removable disk is tried,
+# and the first that mounts as exFAT and holds a manifest is the source.
 
 # Prints the disk's number and where its volume was mounted, so the caller
-# knows both which disk to leave out of the offer and what to unmount.
+# knows both which disk to leave out of the offer and what to unmount. Status 1
+# when no disk has the manifest, and 2 when a volume it mounted to look would
+# not unmount, since a search that went on would mount the next one over it.
 find_source() {
     for n in $(disk_numbers); do
         [ "$(identity_field "$n" "$FIXED_OR_NOT")" = "removable" ] || continue
@@ -207,8 +226,6 @@ find_source() {
                 echo "$n $MNT"
                 return 0
             fi
-            # A volume this could not let go of is one the disk is still held
-            # by, and a search that went on would mount the next over it.
             umount "$MNT" || {
                 echo "$ME: /dev/disk${n}p${p} would not unmount" >&2
                 return 2
@@ -224,14 +241,9 @@ find_source() {
 # at the install and refreshed at every update, so that a machine whose root
 # no longer reads can still be updated without losing its accounts. The
 # passwords are the hashes the files already hold. The recovery partition is
-# the FAT32 volume that carries the recovery kernel, found by that kernel and
-# not assumed to be a particular entry.
+# the FAT32 volume that holds the recovery kernel, /boot/recovery, found by
+# that file and not assumed to be a particular entry.
 
-# Prints the entry number of DISK's recovery partition and leaves it mounted
-# at $RECOVERY_MNT, with the archive's files readable by root alone; nothing
-# when the disk has none. A volume that was mounted to look and will not
-# unmount stops the command, since the raw writer refuses a disk with a
-# mount on it and nothing here would know to unmount it later.
 # Where DEVICE is mounted other than at this run's own mount points, printed,
 # or a failure when it is mounted nowhere else.
 mounted_elsewhere() { # mounted_elsewhere DEVICE
@@ -241,11 +253,15 @@ mounted_elsewhere() { # mounted_elsewhere DEVICE
 }
 
 # The recovery partition's number goes in recovery_found, empty when the disk
-# has none; it is left mounted at RECOVERY_MNT. It runs in this shell and not
-# in a command substitution, so that `die` ends the run: a partition mounted
-# elsewhere, which a mount here cannot open, may be the recovery partition,
-# and a run that went on without it would write a root with no archive of the
-# machine's configuration behind it.
+# has none; it is left mounted at RECOVERY_MNT, with the archive's files
+# readable by root alone. It runs in this shell and not in a command
+# substitution, so that `die` ends the run: a partition mounted elsewhere,
+# which a mount here cannot open, may be the recovery partition, and a run
+# that went on without it would write a root with no archive of the
+# machine's configuration behind it. A volume that was mounted to look and
+# will not unmount ends the run too, since the raw writer fails on a disk
+# with a mount on it. Status 0 when the disk has a recovery partition and 1
+# when it has none.
 find_recovery() { # find_recovery DISKNUMBER
     recovery_found=""
     for p in 1 2 3 4; do
@@ -266,7 +282,9 @@ find_recovery() { # find_recovery DISKNUMBER
     return 1
 }
 
-# Whether a directory holds every file an update cannot do without.
+# archive_complete [DIR]: whether DIR, or the directory `archive` names when
+# DIR is not given, holds every file of ARCHIVE_NEEDS, the files an update
+# cannot do without.
 archive_complete() {
     for f in $ARCHIVE_NEEDS; do
         [ -f "${1:-$archive}/$f" ] || return 1
@@ -274,9 +292,13 @@ archive_complete() {
     return 0
 }
 
-# Select without renaming: FAT32 can lose both names during a rename.
-# Legacy names count as generation zero, in the old reader's order.
-# New slots require a valid generation, written after all their contents.
+# The archive to read goes in `archive`, empty when there is none, and its
+# generation in `generation`. It is selected without renaming: FAT32 can lose
+# both names during a rename. rach2-config, rach2-config.new and
+# rach2-config.old count as generation zero, tried in that order. The slots
+# rach2-config-a and rach2-config-b require a valid generation, written after
+# all their contents, and the highest wins. The recovery partition must be
+# mounted at RECOVERY_MNT.
 recover_archive() {
     archive=""
     generation=0
@@ -320,13 +342,17 @@ public_keys_readable() { # public_keys_readable DIR
     done
 }
 
-# Copies configuration files and key directories under ROOTDIR to recovery.
-# The chosen archive survives until the new slot is complete and synced.
-# A file the root does not have is left out,
-# except the account files, without which the archive is not one. With
-# MARK, the archive records that an update of the root is in progress and
-# the hash of the image being written, so a retry after a stop takes the
-# archive and not the root, which is the image's by then.
+# Archives the configuration under ROOTDIR on the recovery partition, mounted
+# at RECOVERY_MNT: the files of CONFIG_FILES, both servers' host keys and the
+# accounts' keys. They go into the slot that does not hold the current
+# archive, which stays whole until the new slot is complete and synced and
+# has its generation, one more than the current one. The old archives
+# rach2-config, .new and .old are removed after that. A file the root does
+# not have is left out, except the account files, without which the run ends.
+# With MARK, the slot has a file update-in-progress that holds it, the name
+# and length of the image being written, so a retry after a stop takes the
+# archive and not the root, which is the image's by then. The slot written is
+# left in next_archive; any failure ends the run.
 write_archive() { # write_archive ROOTDIR [MARK]
     recover_archive
     for f in $ARCHIVE_NEEDS; do
@@ -370,8 +396,10 @@ write_archive() { # write_archive ROOTDIR [MARK]
         die "the legacy archives could not be removed"
 }
 
-# FAT32 folds ASCII case in every directory. Check before copying so two
-# distinct names cannot silently replace each other on the recovery volume.
+# check_key_names DIR: prints the two names and exits 1 when two names in DIR,
+# or in a directory below it, differ only in ASCII case: FAT32 folds case, so
+# on the recovery partition one would replace the other without a word. It
+# runs in a subshell, so its `die` ends only the subshell.
 check_key_names() (
     for entry in "$1"/* "$1"/.[!.]* "$1"/..?*; do
         [ -e "$entry" ] || [ -L "$entry" ] || continue
@@ -389,8 +417,13 @@ check_key_names() (
     done
 )
 
-# Numeric UIDs cannot collide by case on FAT32. The first passwd entry owns
-# the archived keys for a shared UID, even when that entry has no keys.
+# archive_account_keys ROOTDIR [check]: copies the .ssh directory of each
+# account of ROOTDIR/etc/passwd with a numeric id and an absolute home into
+# keys/UID of the slot next_archive names. The directory is named by the id,
+# which has no case for FAT32 to fold, and when accounts share an id the
+# first of them in passwd has it, whether or not that account has keys. With
+# `check`, the key names are checked and nothing is copied. It runs in a
+# subshell, and its status is 1 when a check or a copy failed.
 archive_account_keys() (
     seen=" "
     while IFS=: read -r _name _password uid _gid _gecos home _shell; do
@@ -407,8 +440,6 @@ archive_account_keys() (
     done < "$1/etc/passwd"
 )
 
-# FAT32 records neither owners nor modes. Reconstruct them before cp -a
-# puts these files on the new root, where SSH checks their permissions.
 # add_lines FILE TEXT: TEXT's lines appended to FILE, after a newline when
 # FILE's last line has none.
 add_lines() {
@@ -419,20 +450,25 @@ add_lines() {
     printf '%s\n' "$2" >> "$1"
 }
 
-# keep_image_accounts IMAGE DEST: the image's system accounts, those with an id
-# below 1000 whose name and id DEST's etc/passwd does not have, appended to it,
-# with the image's groups below 1000 that DEST's etc/group has neither the name
-# nor the id of, and the image's shadow line of each system account DEST has
-# by the image's name and id and has no shadow line for, an account appended
-# or one an older image gave without a line, `nobody` with its id of 65534
-# among them, as on Linux; an id is compared as a number,
-# and a name or an id the image has twice is taken once. A
-# group comes whether or not an account comes with it, as the GNU root's
-# `crontab` comes alone, but the group of an image account whose name or id the
-# machine gives another stays out. The files an install writes and an update
-# keeps were made for a root that may not have had them, and a program of the
-# image, such as the GNU root's OpenSSH with its `sshd`, does not start without
-# its own.
+# keep_image_accounts IMAGE DEST: adds the image's system accounts to the
+# account files under DEST. The files an install writes and an update keeps
+# were made for a root that may not have had these accounts, and a program of
+# the image, such as the GNU root's OpenSSH with its `sshd`, does not start
+# without its own.
+#
+# An account of IMAGE/etc/passwd with an id below 1000 is appended to
+# DEST/etc/passwd when DEST has neither its name nor its id. A group of
+# IMAGE/etc/group with an id below 1000 is appended to DEST/etc/group when
+# DEST has neither its name nor its id, whether or not an account comes with
+# it, as the GNU root's `crontab` comes alone; but the primary group of an
+# image account whose name or id DEST gives another account stays out. An
+# image shadow line is appended to DEST/etc/shadow for each account, of an id
+# below 1000 or `nobody` with its id of 65534 as on Linux, that DEST has by
+# the image's name and id and has no shadow line for: one appended here, or
+# one an older image gave without a line. An id is compared as a number, and
+# a name or an id the image has twice is taken once. Status 0 with nothing
+# done when IMAGE has no etc/passwd, and 1 when a file could not be read or
+# written.
 keep_image_accounts() {
     [ -f "$1/etc/passwd" ] || return 0
     added=$(awk -F: 'FILENAME == ARGV[1] { name[$1] = 1; id[$3 + 0] = 1; next }
@@ -465,6 +501,10 @@ keep_image_accounts() {
     add_lines "$2/etc/shadow" "$lines"
 }
 
+# Copies the key directory SOURCE, taken from the archive, to DESTINATION with
+# OWNER, mode 700 on its directories and 600 on its files, and ends the run
+# when it cannot. FAT32 records neither owners nor modes, and SSH checks
+# them, so they are set here, before cp -a puts the copy on the new root.
 restore_key_directory() { # restore_key_directory SOURCE DESTINATION OWNER
     if ! { mkdir -p "$2" && cp -R "$1/." "$2/" &&
         chown -R "$3" "$2" &&
@@ -474,8 +514,14 @@ restore_key_directory() { # restore_key_directory SOURCE DESTINATION OWNER
     fi
 }
 
-# Only archived accounts may regain keys. Empty homes must also be made,
-# since a kept home tree replaces all of the image's homes after the write.
+# Puts the archive's host keys and account keys into the copy at `keep`, for
+# an update that takes the configuration from the archive. Each account of
+# keep/etc/passwd with an id of 1000 or more and a home under /home is given
+# that home, empty when the archive has no keys for it, since the copy's home
+# tree replaces all of the image's homes after the write. An account has keys
+# only when the archive has keys/UID for its id. The recovery partition must
+# be mounted at RECOVERY_MNT. It runs in a subshell, and its status is 1 when
+# a home or a key could not be restored.
 restore_archive_keys() (
     recover_archive
     if [ -d "$archive/etc/dropbear" ]; then
@@ -514,19 +560,20 @@ restore_archive_keys() (
 # disk, and the image goes into it as \EFI\BOOT\BOOTX64.EFI beside the
 # kernels, where the image's prefix opens the menu the BIOS core opens.
 #
-# UEFI firmware reads a FAT32 volume only with 65525 clusters or more, and the
-# 64 MiB boot partition the disks installed before have, at eight sectors to a
-# cluster, has 16348. Its file system is made again at one sector to a
-# cluster, with every file it held put back and its serial kept, since the
+# UEFI firmware reads a FAT32 volume only with 65525 clusters or more, and a
+# 64 MiB boot partition made at eight sectors to a cluster has 16348. A boot
+# partition with fewer clusters has its file system made again at one sector
+# to a cluster, with every file it held put back and its serial kept, since the
 # menu finds the kernels' partition by that serial; the files are kept on the
 # recovery partition meanwhile, where an update run again after a stop finds
 # them. A boot partition of less than 33 MiB holds no FAT32 volume of that
 # many clusters, and its disk is left to boot by BIOS alone, as one is when
 # the image is not there or the recovery partition cannot keep the files.
 
-# The clusters of the FAT volume on NODE, as a FAT driver counts them from the
-# boot sector: the data sectors after the reserved ones and the FATs, by the
-# sectors of a cluster.
+# Prints the clusters of the FAT volume on NODE, as a FAT driver counts them
+# from the boot sector: the data sectors after the reserved ones and the FATs,
+# by the sectors of a cluster. A boot sector with no sectors to a cluster
+# prints 0.
 fat_clusters() { # fat_clusters NODE
     dd if="$1" bs=512 count=1 2>/dev/null | od -An -tu1 -v | awk '
         { for (i = 1; i <= NF; i++) b[n++] = $i }
@@ -540,8 +587,11 @@ fat_clusters() { # fat_clusters NODE
         }'
 }
 
-# The volume serial at byte 67 of the boot sector saved in SAVED, written into
-# the boot sector of NODE and its backup, at the sector its byte 50 names.
+# Copies the volume serial, the four bytes at offset 67 of the boot sector
+# saved in the file SAVED, into the boot sector of the FAT32 volume on NODE
+# and into its backup, at the sector that bytes 50 and 51 of NODE's boot
+# sector name. SCRATCH is a file for the sector being changed. Status 1 when
+# a read or a write fails.
 keep_serial() { # keep_serial SAVED NODE SCRATCH
     serial_backup=$(dd if="$2" bs=512 count=1 2>/dev/null | od -An -tu1 -j 50 -N 2 |
         awk '{ print $1 + 256 * $2 }')
@@ -560,7 +610,9 @@ keep_serial() { # keep_serial SAVED NODE SCRATCH
 # partition the BIOS core reads no menu from, and it starts the recovery
 # system from partition 2 by its label instead; the update run again there
 # finds the files and finishes the job (`resume_boot_partition`). Returns 1,
-# with nothing written, when the recovery partition has no room for them.
+# with nothing written to BOOT, when the files could not be kept on the
+# recovery partition, which is mostly for want of room; any other failure
+# ends the run.
 remake_boot_partition() { # remake_boot_partition BOOT
     boot_keep="$RECOVERY_MNT/rach2-boot-keep"
     rm -rf "$boot_keep" || die "an old copy of $1's files could not be removed; nothing was written"
@@ -582,7 +634,8 @@ remake_boot_partition() { # remake_boot_partition BOOT
 }
 
 # Make the file system of BOOT again from the first sector and the files kept
-# in KEEP, and drop KEEP once `bootctl` reads what was made.
+# in KEEP, and drop KEEP once `bootctl` reads what was made. A failure ends
+# the run and leaves KEEP for the update run again.
 rebuild_boot_partition() { # rebuild_boot_partition BOOT KEEP
     boot_kept="its files are kept on the recovery partition, and this update run again \
 from the recovery system puts them back"
@@ -608,6 +661,8 @@ from the recovery system puts them back"
 # recovery partition of the disk being updated, marked whole, and BOOT holds
 # no file system, an empty one or a part of its files. A copy not marked
 # whole was cut short before BOOT was touched, and the next remake removes it.
+# `target` names the disk; a disk with no recovery partition has nothing to
+# finish.
 resume_boot_partition() { # resume_boot_partition BOOT
     find_recovery "$target" || return 0
     mounted_recovery=$RECOVERY_MNT
@@ -619,7 +674,16 @@ resume_boot_partition() { # resume_boot_partition BOOT
     mounted_recovery=""
 }
 
-# Convert the MBR disk being updated, $update_disk, to boot by UEFI as well.
+# Convert the MBR disk being updated, $update_disk, to boot by UEFI as well,
+# with the bootx64.efi beside $update_image; a bootx64.efi.sha256 beside that
+# must agree with it. A disk that cannot be converted is left to boot by BIOS
+# alone, with a note, and the update goes on; an EFI image that fails its
+# checks, or a failure while the boot partition is changed, ends the run.
+#
+# A new loader is written beside the old one and takes its name only once it
+# is whole on the disk, so that a stop part way leaves the old one; UEFI
+# firmware knows the loader by that one name, and the rename's few writes are
+# the only time the disk has none. The same loader is left as it is.
 convert_mbr_disk() {
     efi_image="$(dirname "$update_image")/bootx64.efi"
     boot="${update_disk}p1"
@@ -659,10 +723,6 @@ system is made again, so it boots by BIOS alone"
     mkdir -p "$BOOT_MNT" 2>/dev/null
     mount -t vfat "$boot" "$BOOT_MNT" || die "$boot would not mount; the root is not written"
     mounted_boot=$BOOT_MNT
-    # A new loader is written beside the old one and takes its name only once
-    # it is whole on the disk, so that a stop part way leaves the old one;
-    # UEFI firmware knows the loader by that one name, and the rename's few
-    # writes are the only time the disk has none. The same loader is left.
     efi_dir="$BOOT_MNT/EFI/BOOT"
     if cmp -s "$efi_image" "$efi_dir/BOOTX64.EFI"; then
         say "GRUB's EFI image on $boot is already this one"
@@ -684,8 +744,11 @@ system is made again, so it boots by BIOS alone"
 # A machine that is already installed, given a new root file system. The
 # account files, the SSH policy, the server's host keys and the keys the
 # accounts log in with are copied off the root first. The image goes into the
-# root's own partition and nowhere else, so the table, the boot partition and
-# the recovery partition are left as they are.
+# root's own partition, and no partition moves. Besides the root, the update
+# writes the boot partition's environment block, the root's entry, which
+# growroot grows, and the archive on the recovery partition. The conversion
+# of an MBR disk for UEFI also writes the boot partition's type, its loader
+# and, when it has too few clusters, its file system.
 
 if [ -n "$update_image" ]; then
     [ -f "$update_image" ] || die "$update_image is not a file"
@@ -746,8 +809,8 @@ $update_disk was not installed from here"
         from_archive="the root does not read"
     fi
     if [ -n "$from_archive" ]; then
-        # The archive is the configuration, and the root's partition is
-        # the last ext2 entry of the table when no mount could say which.
+        # The archive is the configuration; when no mount found the root,
+        # the table says which entry is the root's.
         { [ -n "$recovery_entry" ] && [ -n "$archive" ] && archive_complete; } ||
             die "$update_disk carries no root of this system whose accounts can be taken and no \
 whole configuration archived on its recovery partition; its accounts are not there to be kept"
@@ -835,8 +898,10 @@ whole configuration archived on its recovery partition; its accounts are not the
     # partition for the retry, and not the image's on the root. Nothing of
     # the disk may be mounted while its root is written, since the raw writer
     # refuses a disk with a mount on it; the archive is mounted again for its
-    # refresh once the new root has been written and unmounted. If the first
-    # refresh wrote A, write B too so the final unmarked refresh returns to A.
+    # refresh once the new root has been written and unmounted. The marked
+    # archive goes into slot B, written a second time when the first went
+    # into A, so that the unmarked refresh goes into A and a finished update
+    # leaves A current.
     if [ -n "$mounted_recovery" ]; then
         update_mark="$(basename "$update_image") $(stat -c %s "$update_image")"
         write_archive "$keep" "$update_mark"
@@ -878,12 +943,11 @@ whole configuration archived on its recovery partition; its accounts are not the
         die "$update_image does not begin with an ext2 file system"
 
     # The machine is put where it can come back from before its root is
-    # replaced, and that is the recovery system. It used to be the fallback
-    # entry, which was safe while that entry booted a KRFFS root of its own;
-    # both entries boot this root now, so a write cut off by a power cut would
-    # leave the machine with two ways to start a half-written root and no third
-    # way at all. Recovery runs from RAM and needs no root, so it comes up
-    # whatever state this write leaves behind.
+    # replaced, and that is the recovery system, not the fallback entry: both
+    # kernel entries boot this root, so a write cut off by a power cut would
+    # leave the machine with two ways to start a half-written root and no
+    # third way at all. Recovery runs from RAM and needs no root, so it comes
+    # up whatever state this write leaves behind.
     #
     # A trial arms one boot and leaves the saved default alone, so this must be
     # the saved default and not a trial: a machine that lost power during the
@@ -892,9 +956,9 @@ whole configuration archived on its recovery partition; its accounts are not the
         die "the saved boot entry could not be moved to recovery; nothing was written"
     # Any trial already armed would consume itself on the next boot and take the
     # machine off recovery in the middle of this, so this has to succeed before
-    # a byte is written. `cancel` on a machine with nothing armed is not a
-    # failure, and `bootctl` says so by succeeding, so a refusal here is a real
-    # one and the write does not start.
+    # a byte is written. `cancel` on a machine with nothing armed succeeds, so
+    # a failure here means the environment block could not be read or
+    # rewritten, and the write does not start.
     bootctl --target "${update_disk}p1" cancel > /dev/null ||
         die "an armed trial could not be cancelled, so recovery would not hold; nothing was written"
     say "the machine is saved to its recovery system until the new root is tried"
@@ -951,7 +1015,7 @@ whole configuration archived on its recovery partition; its accounts are not the
                 chown "$uid:$gid" "$TARGET_MNT$home"; } || die "$home could not be made"
         done
     fi
-    # Remove image keys even when the account has no retained keys.
+    # The image's keys go from every home outside /home, kept keys or not.
     rm -rf "$TARGET_MNT/root/.ssh" || die "the image's keys for root could not be removed"
     while IFS=: read -r _name _password uid gid _gecos home _shell; do
         case "$home" in /home | /home/*) continue ;; /*) ;; *) continue ;; esac
@@ -1046,8 +1110,8 @@ for n in $(disk_numbers); do
     size=$((sectors * 512))
     # Everything this knows about the disk, on three lines rather than one. A
     # model of forty characters beside a serial of twenty and a size in bytes
-    # made a single line of 132 columns, which an eighty-column screen folds in
-    # the middle of whichever field it reaches first.
+    # would make a single line of 132 columns, which an eighty-column screen
+    # folds in the middle of whichever field it reaches first.
     what="/dev/disk$n, $size bytes"
     what_model="$(disk_model "$n")"
     what_more="$(disk_field "$n" 3), $(identity_field "$n" "$FIXED_OR_NOT"), \
@@ -1093,15 +1157,17 @@ fi
 # confirmation, so a person who changes their mind has not left a disk half
 # written.
 
-# The end of the answers before the last question. Nothing is written yet,
-# and a question asked again would only meet the end again. The read before
-# it may have taken a last line with no newline, which is still an answer.
+# Ends the run when the answers end before the last question. Nothing is
+# written yet, and a question asked again would only meet the end again. A
+# caller calls it only when its read took nothing, since a last line with no
+# newline is still an answer.
 no_answer() {
     die "the answers ended before the questions did; nothing was written"
 }
 
-# A password, twice, with the terminal's echo off. `stty` is put back however
-# this ends, since a shell left with no echo is a shell nobody can use.
+# Asks for a password twice, with the terminal's echo off, until the two are
+# the same and not empty, and leaves it in `password`. `stty` is put back
+# however this ends, since a shell left with no echo is a shell nobody can use.
 ask_password() { # ask_password PROMPT
     while :; do
         echo_off=yes
@@ -1128,7 +1194,8 @@ ask_password() { # ask_password PROMPT
 
 # The name rules are the ones every account file here is read under: a letter
 # first, then letters, digits, hyphen and underscore, at most 32 characters,
-# and not root, whose account this writes itself.
+# and not root, whose account this writes itself. Status 0 when NAME follows
+# them.
 check_name() { # check_name NAME
     case "$1" in
         "" | *[!a-z0-9_-]* | [!a-z]*)
@@ -1140,9 +1207,10 @@ check_name() { # check_name NAME
     return 0
 }
 
-# Why a name was refused, in one clause, naming the rule it broke rather than
-# reciting all of them: a person who typed `ROOT` is helped by being told that
-# names are lowercase and not by the whole sentence about letters and digits.
+# Prints why a name was refused, in one clause, naming the rule it broke rather
+# than reciting all of them: a person who typed `ROOT` is helped by being told
+# that names are lowercase and not by the whole sentence about letters and
+# digits.
 name_fault() { # name_fault NAME
     case "$1" in
         "") echo "a name cannot be empty" ;;
@@ -1252,6 +1320,11 @@ done
 # followed, with a newline added to a last line that has none; that copy is
 # what is written, so the file cannot change between the two and the size
 # judged is the size init reads.
+#
+# The function below prints why FILE will not do as that key file, or nothing
+# when it will: init reads at most 16384 bytes of it, and takes no file that
+# has a NUL byte, a private key, or no line that is neither blank nor a
+# comment.
 recovery_key_fault() { # recovery_key_fault FILE: why FILE will not do, or nothing
     if [ "$(wc -c < "$1")" -gt 16384 ]; then
         echo "is larger than 16384 bytes with its last line ended"
@@ -1317,8 +1390,7 @@ esac
 
 # Everything that was answered, on one screen, before the one step that cannot
 # be taken back. A person who has answered six questions in a row should not
-# have to remember what they said to know what is about to happen.
-# What was answered, before the one step that cannot be taken back. One fact a
+# have to remember what they said to know what is about to happen. One fact a
 # line, and no column that a long model name or serial can push past the edge:
 # the screen is eighty columns, a disk identifies itself in as many characters
 # as it likes, and a line that wraps in the middle of a serial number is worse
@@ -1366,9 +1438,9 @@ while :; do
     tell "That is not /dev/disk$target."
 done
 
-# The generation the answer was given about. A disk that goes and comes back
-# takes a fresh record, so the write below is refused rather than landing on
-# whatever took its place.
+# The disk the answer was given about, by its serial and size. A disk that
+# goes and comes back takes a fresh record, so the write below stops rather
+# than landing on whatever took its place.
 target_serial=$(disk_serial "$target")
 target_sectors=$(disk_field "$target" 5)
 
@@ -1441,16 +1513,16 @@ grep "^part $target " /proc/disk | sed 's/^/  /'
 # system boots: the three files are small and a fresh install knows all of
 # their contents, so each is written whole to a name of its own and renamed
 # into place, which is the write a stop in the middle leaves undone rather than
-# half done. BusyBox's account tools would need a `chroot` this kernel does not
-# have.
+# half done.
 #
-# The root is found rather than assumed: the last partition of the disk that
-# mounts as ext2 and has an `/etc/passwd` is the one the candidate entries
-# boot. The KRFFS root beside it keeps the credentials it was built with, since
-# it is the way back into a machine whose new root will not come up, and so
-# does the recovery partition.
+# The root is found rather than assumed: the highest-numbered of entries 1 to
+# 4 that mounts as ext2 and has an `/etc/passwd` is the root both kernel
+# entries boot. The recovery system's own image keeps the credentials it was
+# built with, since it is the way back into a machine whose new root will not
+# come up.
 
-# Prints the entry number and where it was mounted, and leaves it mounted.
+# Prints the root's entry number on the disk `target` names and where it was
+# mounted, and leaves it mounted. Status 1 when no entry has a root.
 find_root() {
     for p in 4 3 2 1; do
         [ -e "/dev/disk${target}p${p}" ] || continue
@@ -1471,6 +1543,7 @@ root_dir=${found_root#* }
 mounted_root=$root_dir
 say "writing the accounts into the ext2 root at $root_dir"
 
+# Prints PASSWORD's SHA-512 crypt hash, the form /etc/shadow holds.
 hash_of() { # hash_of PASSWORD
     printf '%s\n' "$1" | mkpasswd -m sha512 -P 0
 }
@@ -1479,6 +1552,8 @@ root_hash=$(hash_of "$root_password")
 user_hash=$(hash_of "$user_password")
 [ -n "$root_hash" ] && [ -n "$user_hash" ] || die "the passwords could not be hashed"
 
+# Writes CONTENT to PATH.new with MODE and renames it to PATH, so a stop
+# leaves the old file or the new one whole; a failure ends the run.
 put_file() { # put_file PATH MODE CONTENT
     printf '%s' "$3" > "$1.new" || die "$1 could not be written"
     chmod "$2" "$1.new" || die "$1 could not be given its mode"
@@ -1566,12 +1641,12 @@ say "the accounts are root and $user_name, and root may log in over SSH with a p
 
 # ---- the root's size ----
 #
-# The image is as large as it was built and the disk is usually larger. The
-# root is the last partition, so the space after it is free, and `growroot`
-# puts the entry and then the file system on it: the entry first, then the
-# checker, then the resizer, each of which a run stopped in the middle leaves
-# for the next run to finish. It runs on a volume nothing has mounted, which is
-# why it comes after the accounts and not before them.
+# The image is as large as it was built and the disk is usually larger. The root
+# is the last partition on the disk, so the space after it is free, and
+# `growroot` puts the entry and then the file system on it: the entry first,
+# then the checker, then the resizer, each of which a run stopped in the middle
+# leaves for the next run to finish. It runs on a volume nothing has mounted,
+# which is why it comes after the accounts and not before them.
 
 if [ "$grow" = "yes" ]; then
     spec=$(disk_identity "$target") || die "the disk's identity could not be read"
