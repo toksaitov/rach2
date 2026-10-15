@@ -58,7 +58,9 @@ uint32_t x86_tick_counts(void);
  * tables, GS and `syscall`. */
 void arch_ap_tables(int cpu, uintptr_t stack_top);
 
-/** Load the IDT `init_idt` built, on a started processor. */
+/** Load the IDT `init_idt` built on the running processor: one the boot
+ * processor started, and on x86-64 the boot processor too, from
+ * `init_idt`. */
 void idt_load(void);
 
 /** The local APIC identity of processor `cpu`, as `platform_cpu_count`
