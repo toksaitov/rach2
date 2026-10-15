@@ -9,7 +9,7 @@ A milestone runs from its `plan.md` under `dev-log/`. Its phases are issues on t
 
 ## While a task is built
 
-* Check a task once, at its end, as the Work section of `AGENTS.md` gives for what it touches. A kernel header is also compiled by the host tests, so its check includes `tests/run host`.
+* Check a task once, at its end, as the Work section of `AGENTS.md` gives for what it touches.
 * A Readme whose contract a commit changes is rewritten in that commit.
 * A problem found along the way that the milestone did not set out to fix becomes an issue with the label `bug` the same day, with its severity, how to reproduce it, the contract it breaks, what it depends on, and the test that will show it fixed. The issue is a sub-issue of the milestone's phase, so the milestone that found it fixes it, and the commit that fixes it closes it. Nothing is reported at the end as found and unfixed. `dev-log/50-shortcomings/plan.md` is the record of the problems found before 2026-10-13, and takes no new entries.
 * A step that costs the owner time or a device is checked before it starts: a build from clean, a full set, a Codex round, a hardware sitting, or any run a person waits for. Read what would stop it: `dev-log/50-shortcomings/plan.md`, the milestone's notes and the code the step depends on. Where a form is known to work, use it. A step whose conditions were not checked is not started.
