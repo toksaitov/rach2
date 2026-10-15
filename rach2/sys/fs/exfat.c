@@ -1485,13 +1485,14 @@ K_NOINLINE static int upcase_check(struct ex_mount *em, uint32_t *sum)
  * or the errors `vfs_exfat_type` lists in exfat.h.
  *
  * Both boot regions are read and checked before any field is trusted. When
- * both fail their checksums, the volume is refused as `BootChecksum` only
- * when one of its two boot sectors is exFAT's, and otherwise as not exFAT.
- * When the main region fails its checksum, the backup's fields describe the
- * volume, with the main's VolumeFlags and PercentInUse, since by the
- * specification the backup's are stale. VolumeDirty stays set on the disk
- * for the writable life of the mount, as Linux's driver keeps it; the clean
- * unmount clears it last.
+ * both fail their checksums, the volume is refused as not exFAT when neither
+ * boot sector is exFAT's; as `BytesPerSectorShift` when the main one is and
+ * gives sectors of 1 to 4 KiB, whose regions the checksums over 512-byte
+ * sectors cannot match; and otherwise as `BootChecksum`. When the main
+ * region fails its checksum, the backup's fields describe the volume, with
+ * the main's VolumeFlags and PercentInUse, since by the specification the
+ * backup's are stale. VolumeDirty stays set on the disk for the writable life
+ * of the mount, as Linux's driver keeps it; the clean unmount clears it last.
  */
 static int ex_mount_on(struct ex_mount *em, struct vfs_mount *mnt, block_device_t *dev,
                        uint32_t flags, const char *options)
@@ -1547,6 +1548,9 @@ static int ex_mount_on(struct ex_mount *em, struct vfs_mount *mnt, block_device_
     if (!main_ok && !backup_ok) {
         if (!exfat_boot_sector(b) && !exfat_boot_sector(b2)) {
             return not_exfat();
+        }
+        if (exfat_boot_sector(b) && b[108] > 9 && b[108] <= 12) {
+            return refused("BytesPerSectorShift");
         }
         return refused("BootChecksum");
     }

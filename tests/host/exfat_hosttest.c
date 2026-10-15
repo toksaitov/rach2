@@ -655,7 +655,12 @@ static void damaged_rows(void)
     refused_row("--short-bitmap", "a bitmap shorter than the clusters need is refused");
     refused_row("--bad-upcase-checksum", "an up-case table failing its checksum is refused");
     refused_row("--truncated-upcase-run", "a truncated up-case run is refused");
-    refused_row("--sector-4k", "a 4 KiB logical sector is refused by name");
+    load("--sector-4k");
+    last_klog[0] = 0;
+    check(mount_image(VFS_MS_RDONLY, "") == -EINVAL &&
+              strstr(last_klog, "refused: BytesPerSectorShift"),
+          "a 4 KiB logical sector is refused by name");
+    unmount_image();
     readonly_row("--bad-main-checksum",
                  "a bad main boot checksum with a good backup mounts read-only");
     readonly_row(
