@@ -1,17 +1,12 @@
 /*
- * power.c - stopping the machine: halt, power off, restart.
+ * power.c: stopping the PC: halt, power off, restart, as power.h describes.
  *
- * The kernel knew one way to stop before this file: a single `cli; hlt` in the
- * debug shell's halt command, which an NMI or an SMI resumes straight into
- * whatever follows. A stop has to be a loop, and a machine that can be asked
- * to power off should be asked, not parked.
- *
- * Neither the power-off nor the reset is synchronous. An `out` has no
- * completion signal and the platform acts in its own time, so control returning
- * from one is not proof that it was refused; it is only proof that the machine
- * has not stopped yet. Each path therefore waits before it says anything, and
- * then reports what is actually known: that it asked, that it waited, and that
- * it is parking the CPU instead.
+ * Neither the power off nor the reset is synchronous. An `out` has no
+ * completion signal and the platform acts in its own time, so control
+ * returning from one does not show that it was refused, only that the
+ * machine has not stopped yet. Each path therefore waits before it reports,
+ * and then reports what is known: that it asked, that it waited, and that it
+ * is halting the processor instead.
  */
 
 #include "acpi.h"
@@ -28,8 +23,8 @@
 #include "../../serial.h"
 
 /* The PIIX4 the QEMU `pc` machine has, at 00:01.3, and the two registers
- * that say where its ACPI power management block lives and whether that block
- * is decoding. */
+ * that give the base of its ACPI power management block and say whether that
+ * block is decoding. */
 #define PIIX4_BUS           0
 #define PIIX4_DEVICE        1
 #define PIIX4_FUNCTION      3
@@ -43,8 +38,8 @@
 /* PMREGMISC bit 0: the PM I/O space is decoding. */
 #define PIIX4_PMIOSE 0x01
 
-/* PM1a_CNT sits four bytes into the PM block, and SLP_EN with SLP_TYP 0 is
- * what QEMU's PIIX4 model takes as soft-off. */
+/* PM1a_CNT is four bytes into the PM block, and SLP_EN with SLP_TYP 0 is
+ * what QEMU's PIIX4 model takes as soft off. */
 #define PM1A_CNT_OFFSET 4
 #define PM1A_CNT_SLP_EN 0x2000
 
@@ -55,9 +50,8 @@
 #define RESET_CONTROL_FIRE 0x06
 
 /* The APM control port. Writing it raises an SMI, and the firmware's handler
- * decides what the value means; 0xFB is the reset command on the Insyde
- * firmware this kernel is being carried to. On a machine with no SMM handler
- * for it, which includes QEMU as this kernel runs it, the write is inert. */
+ * decides what the value means; 0xFB is the reset command of Insyde's
+ * firmware, and `power_reset` sends it to no other. */
 #define APM_CONTROL_PORT 0xB2
 #define APM_CMD_RESET    0xFB
 
@@ -69,14 +63,14 @@
 #define KBC_INPUT_FULL   0x02
 #define KBC_PULSE_RESET  0xFE
 
-/* Between reset attempts, not after the last one. A reset that is
- * going to happen happens within milliseconds, so waiting the full settle
- * three times over would only delay the fallback. */
+/* The wait after each reset mechanism before the keyboard controller's
+ * pulse, which the full settle follows, in idle loop iterations. A reset that
+ * is going to happen happens within milliseconds, so a full settle after each
+ * would only delay the next. */
 #define POWER_RESET_SPINS 2000000UL
 
-/* How long to let an asynchronous request land before giving up on it. The
- * unit is an idle loop iteration and the number wants only to be large enough
- * that a machine which is going to stop has stopped. */
+/* How long an asynchronous request is given to act, in idle loop iterations:
+ * long enough that a machine that is going to stop has stopped. */
 #define POWER_SETTLE_SPINS 20000000UL
 
 /**
@@ -181,43 +175,33 @@ static void power_acpi_s5(void)
 }
 
 /**
- * Ask a PIIX4 to remove power. Returns only if the machine is still running.
+ * Ask the chipset to remove power, with the board profile's sleep word or a
+ * PIIX4's. Returns only if the machine is still running.
  *
- * This is QEMU's power-off and not a general one, the fallback for a machine
- * whose ACPI tables gave no \_S5 and whose chipset no board profile matched.
- * The three checks below establish where the PM block is; they do not
- * establish that sleep type 0 means soft-off, which on real hardware is the
- * value \_S5 publishes. On QEMU's PIIX4 model the write below powers the
- * machine off; on a board whose S5 is some other type it could ask for a
- * different sleep state instead of falling through to the halt, which is the
- * one outcome here that the fallback cannot catch.
+ * A nonzero `board_pm1_cnt_port` is the PM1 control register `board_init`
+ * derived from the chipset's own base register after its four checks. The
+ * board's name goes on a line of its own, apart from "powering off", which
+ * the shutdown suite reads.
  *
- * The PM block's base is read out of configuration space, not assumed,
- * because this kernel also boots real hardware from a GRUB disk and the port
- * that means power-off on a PIIX4 means something else, or nothing, elsewhere.
- * Three things are checked and each rules out a different way of being wrong:
- * the device must be the one this code understands, its PM I/O space must be
- * decoding, and the base must have been programmed. That last check is the one
- * worth naming: bit 0 of PMBA is hardwired to 1 as the I/O-space indicator, so
- * it says nothing about whether firmware ever set a base, and a base left at
- * its reset value would send the sleep word to port 4, which is a live DMA
- * controller register on any machine that has one.
+ * Without a profile in force, the PIIX4 path writes QEMU's soft off, sleep
+ * type 0, to a PIIX4 at 00:01.3. Three checks establish where its PM block
+ * is: the device must be a PIIX4, its PM I/O space must be decoding, and the
+ * base must have been programmed. Bit 0 of PMBA is hardwired to 1 as the
+ * I/O-space indicator, so it does not show that firmware set a base, and a
+ * base left at its reset value would send the sleep word to port 4, a DMA
+ * controller register. The checks do not establish that sleep type 0 means
+ * soft off, which on hardware is the value \_S5 gives: on a board whose S5
+ * is another type the write could ask for another sleep state instead of
+ * falling through to the halt, the one outcome here the fallback cannot
+ * catch.
  */
 static void power_acpi_off(void)
 {
-    /* The identified chipset first. `board.c` derived this port from the
-     * controller's own base register and refused unless four checks passed, so
-     * a nonzero port here is one this kernel is entitled to write. The PIIX4
-     * path below stays for a machine no profile matched, which is every
-     * machine this kernel ran on before board.c existed. */
     uint16_t port = board_pm1_cnt_port();
 
     if (port != 0) {
         const board_profile_t *p = board_current();
 
-        /* The token stays exactly what it was: the shutdown suite watches
-         * for it, so the board's name goes on its own line, not into
-         * the middle of a string another program reads. */
         klog(KLOG_INFO, "poweroff", "board %s", board_name());
         klog(KLOG_INFO, "poweroff", "powering off");
         outw(port, board_sleep_word(p));
@@ -253,7 +237,8 @@ static void power_acpi_off(void)
     }
 }
 
-/** Wait, boundedly, for the keyboard controller to accept a command. */
+/** Wait, boundedly, for the keyboard controller to accept a command: 1 when
+ * it will, 0 when its input buffer stays full. */
 static int kbc_ready(void)
 {
     int spins;
@@ -267,11 +252,11 @@ static int kbc_ready(void)
 }
 
 /*
- * The reset's own writes, so that the decision can be watched.
- *
- * A reset does not return, so the only way to see which ports it writes is to
- * put the writes behind something a test can replace. The machine's binding
- * is `outb` and the real firmware's table; a host test supplies its own.
+ * The reset's port writes, its wait between mechanisms, and the firmware's
+ * vendor and ACPI tables it decides from, through one table. `power_mmio`,
+ * the kernel's own binding, is the only one, and nothing replaces it;
+ * tests/host/power_hosttest.c tests the firmware rule on its own copy,
+ * `smbios_vendor_is("Insyde")`, without this file.
  */
 struct power_io {
     void (*outb)(uint16_t port, uint8_t value);
@@ -281,11 +266,13 @@ struct power_io {
     const struct acpi_info *(*acpi)(void);
 };
 
+/** The table's port write, `outb`. */
 static void power_outb(uint16_t port, uint8_t value)
 {
     outb(port, value);
 }
 
+/** The table's wait after a reset mechanism, `power_reset_settle`. */
 static void power_io_settle(void)
 {
     power_reset_settle();
@@ -296,7 +283,8 @@ static const struct power_io power_mmio = {power_outb, kbc_ready, power_io_settl
 static const struct power_io *power_io = &power_mmio;
 
 /**
- * Whether the firmware's own reset command is this firmware's.
+ * Whether the firmware's own reset command is this firmware's: whether the
+ * BIOS vendor begins with "Insyde"; an empty vendor does not.
  *
  * `0xFB` on port `0xB2` is a request to an Insyde firmware's
  * system-management handler. Sent to a machine running another firmware it
@@ -335,9 +323,17 @@ static int firmware_takes_smi_reset(void)
  * firmware intends, including whatever it does about the devices it owns;
  * the chipset register resets the chipset; the keyboard controller pulse is
  * the oldest and the least likely to be wired on a recent laptop. Trying
- * them in the other order would work on QEMU, where the chipset register is
- * the one that acts, and leave the target machine parked at a halt, which
- * over SSH is indistinguishable from a kernel that died.
+ * them in the other order works on QEMU, where the chipset register is the
+ * one that acts, and leaves the Lenovo halted, which over SSH looks the same
+ * as a kernel that died.
+ *
+ * `rach2.resetskip=N`, a single digit, leaves out the first N mechanisms
+ * before the keyboard controller's pulse: the FADT's register, where there
+ * is one, then the firmware's command and the chipset register. It lets a
+ * test show that each later mechanism resets the machine on its own, which
+ * is what makes the sequence a chain of fallbacks; `tests/run reset` boots
+ * each value. It also leaves out an earlier mechanism that misbehaves on a
+ * machine.
  */
 static void power_reset(void)
 {
@@ -352,14 +348,6 @@ static void power_reset(void)
     }
     klog(KLOG_INFO, "reboot", "restarting (skipping %d)", skip);
 
-    /* `rach2.resetskip=N` leaves out the first N mechanisms before the
-     * keyboard controller's pulse: the FADT's register, where there is one,
-     * then the firmware's command and the chipset register. It exists so
-     * the later ones can be shown to work on their own, which is the only
-     * way to know the sequence is a real fallback chain, not a first method
-     * that happens to work everywhere it has been tried; `tests/run reset`
-     * boots each value. It is also the switch to reach for on a machine
-     * where an earlier method makes things worse. */
     if (a->reset_supported && method++ >= skip) {
         klog(KLOG_INFO, "reboot", "acpi: writing 0x%x to the reset register",
              (unsigned)a->reset_value);
@@ -397,21 +385,20 @@ static void power_reset(void)
 }
 
 /**
- * Stop the machine the way `how` asks. Does not return.
+ * The screen shows the log down to KLOG_INFO again, after init turned it
+ * down for the login: the machine either stops and says so, or does not,
+ * and a person at its screen has no log to read afterwards.
+ *
+ * Interrupts stay off from here, as in Linux's `acpi_power_off`: entering
+ * ACPI mode can raise the SCI, whose source no handler here clears, and a
+ * level-triggered line it shares with a device would interrupt the
+ * processor for good before it reached SLP_EN. One processor stops the
+ * machine; the others stop first, so that none goes on writing to a disk or
+ * a device the stop leaves behind.
  */
 void power_stop(int how)
 {
-    /* The screen comes back. It was handed to the login when init started, and
-     * what follows is the end of the machine: either it stops and says so, or
-     * the hardware refuses and the person is looking at a laptop that is still
-     * on with no way left to ask why. There is no log to read afterwards. */
     klog_set_screen_level(KLOG_INFO);
-    /* Interrupts stay off from here, as Linux's `acpi_power_off` has them:
-     * entering ACPI mode can raise the SCI, whose source no handler here
-     * clears, and a level-triggered line it shares with a device would
-     * interrupt the processor for good before it reached SLP_EN. One
-     * processor stops the machine; the others stop first, so that none goes
-     * on writing to a disk or a device the stop leaves behind. */
     arch_irq_disable();
     smp_stop_others();
 

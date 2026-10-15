@@ -1,10 +1,6 @@
 /*
- * board.c: identify the power controller before writing to it.
- *
- * The table below is short and every row is a claim about a real chipset. Two
- * of the three can be met on this desk; the third is the laptop's, and its row
- * is the one that has never been executed, which is why the judgements are
- * pure functions with a host test, not code that is only read.
+ * board.c: identify the power controller before writing to it, as board.h
+ * describes.
  */
 
 #include "portio.h"
@@ -19,26 +15,23 @@
 /*
  * The profiles, in probe order.
  *
- * piix4 reproduces what power.c did before this file existed, field for field:
- * the same function, the same offsets, the same mask, and sleep type 0, which
- * is what QEMU's PIIX4 model takes as soft off.
+ * piix4 is QEMU's `pc` machine, with the values of power.c's own PIIX4 path:
+ * function 0:1.3, base register 0x40 masked to 0xFFC0, decode bit 0 of 0x80,
+ * the SCI fixed at line 9, and sleep type 0, which QEMU's PIIX4 model takes
+ * as soft off.
  *
- * ich9 exists for one reason, and it is the only
- * PCH-shaped power controller available here, so it is what makes the
- * derivation, the decode check, the SCI selection read and the enable
- * handshake provable in QEMU at all (`-machine q35`). Its sleep type is
- * QEMU's convention, not the ICH9 datasheet's.
+ * ich9 is QEMU's `q35` machine, whose ICH9 is the one power controller of a
+ * PCH's layout that QEMU has, so it is the profile through which the base
+ * derivation, the decode check, the SCI selection read and the ACPI enable
+ * are tested under QEMU. Its sleep type is QEMU's convention, not the ICH9
+ * datasheet's.
  *
- * The two Lynx Point rows are the laptop's family, split because the mobile
- * parts are a different device-id range from the desktop ones and the first
- * boot on the real machine matched neither: its SATA controller reports
- * 8086:9c03, which is Lynx Point-LP, so its LPC bridge is in the 0x9c4x range
- * and not the 0x8c4x one this table originally carried. Wildcat Point-LP is
- * the Broadwell refresh of the same chassis and is listed beside it.
- *
- * Their two constants of belief are marked as such: sleep type 7 is the Intel
- * PCH encoding for S5, and 0xA0 is the ACPI enable value the firmware
- * publishes. Neither is measured; only the machine powering off confirms them.
+ * Lynx Point has two rows because its mobile parts, the LP, have device ids
+ * 0x9C40 to 0x9C4F and its desktop parts 0x8C40 to 0x8C5F. Wildcat Point-LP,
+ * the PCH of the Broadwell parts of the same family, has 0x9CC0 to 0x9CCF.
+ * Their sleep type 7 is the Intel PCH encoding for S5, and 0xA0 the ACPI
+ * enable value their firmware publishes; both are constants of the table,
+ * which `board_init` does not read from the machine.
  */
 static const board_profile_t profiles[] = {
     {"piix4", 0, 1, 3, 0x8086, 0x7113, 0x7113, 0xFF, 0xFF, 0x40, 0xFFC0, 0x80, 0, 0, 9, 0, 0, 0},
@@ -53,6 +46,9 @@ static const board_profile_t profiles[] = {
 
 #define BOARD_NPROFILES ((int)(sizeof(profiles) / sizeof(profiles[0])))
 
+/* What `board_init` decided; the profile whose identity matched, kept on a
+ * refusal too; the PM1 control port; and the SCI's line, -1 unless one was
+ * masked. */
 static int board_verdict = BOARD_ABSENT;
 static const board_profile_t *board_found;
 static uint16_t board_port;
@@ -69,7 +65,6 @@ const board_profile_t *board_lookup(const char *name)
         const char *a = profiles[i].name;
 
         for (j = 0; a[j] != '\0' && a[j] == name[j]; j++) {
-            /* compare each byte of the profile's name against the caller's */
         }
         if (a[j] == '\0' && name[j] == '\0') {
             return &profiles[i];
@@ -131,8 +126,7 @@ int board_sci_irq(const board_profile_t *p, uint8_t sci_reg_value)
     case 2:
         return 11;
     default:
-        /* 4 through 7 put the SCI on IOAPIC inputs a PIC-only kernel
-         * cannot receive, and 3 is reserved. */
+        /* 3 is reserved; 4 through 7 are I/O APIC inputs above 15. */
         return -1;
     }
 }
@@ -163,7 +157,8 @@ int board_needs_acpi_enable(const board_profile_t *p, uint16_t pm1_cnt_value)
 }
 
 /**
- * Ask firmware to put the machine into ACPI mode, and wait, boundedly.
+ * Ask firmware to put the machine into ACPI mode, and wait, boundedly, for
+ * SCI_EN in the PM1 control register at `port`.
  *
  * Writing the enable value to the SMI command port raises a system management
  * interrupt, and the firmware's own handler does the work; the only signal
@@ -187,6 +182,24 @@ static int board_acpi_enable(const board_profile_t *p, uint16_t port)
     return 0;
 }
 
+/**
+ * `rach2.board=<name>` restricts the probe to the profile it names, whose
+ * identity the chipset at that profile's address must still have: it
+ * chooses among the rows of the table, and a machine whose chipset has no
+ * row gets none. Once a profile's identity matches, the chipset is that
+ * profile's, so a failed check is a refusal that is reported, not a move to
+ * the next row.
+ *
+ * With ACPI enabled, a power button or a thermal event raises the SCI,
+ * level-triggered, and no handler here clears it, so the processor would
+ * take it for good once interrupts are on. It is masked on the line the
+ * chipset's own selection gives, not on an assumed 9, since masking a line
+ * the firmware gave a device would take that device away.
+ *
+ * When nothing matches, the identity of 0:31.0, where the ICH and PCH
+ * profiles look, goes to the log: on a machine whose only output is its
+ * screen, that is what a new row needs, read from one boot.
+ */
 int board_init(const char **why)
 {
     int i;
@@ -199,9 +212,6 @@ int board_init(const char **why)
     board_port = 0;
     board_sci = -1;
 
-    /* `rach2.board=<name>` names a profile instead of probing for one, for a
-     * machine whose identity this table does not yet know. It still refuses if
-     * the named chipset's own registers do not check out. */
     forced = 0;
     if (kcmdline_value("rach2.board", name, (unsigned int)sizeof(name))) {
         forced = name;
@@ -230,9 +240,6 @@ int board_init(const char **why)
             continue;
         }
 
-        /* From here the chipset IS this profile's, so a failed check is a
-         * refusal that gets reported, not a silent move to the next
-         * row: something is wrong with a machine this code understands. */
         decode = pci_read_config8(p->bus, p->device, p->function, p->decode_reg);
         if (!board_pm_decoding(p, decode)) {
             *why = "the chipset's ACPI range is not decoding";
@@ -269,15 +276,6 @@ int board_init(const char **why)
             pm1 = inw(board_port);
         }
 
-        /*
-         * Mask the SCI, if it is on a line this kernel could take. Nothing
-         * here handles it: with ACPI enabled, a power button or a thermal
-         * event raises a level-triggered interrupt that no handler clears, and
-         * the machine then takes it forever the moment interrupts are enabled.
-         * The line comes from the chipset's own selection instead of being
-         * assumed to be 9, because masking a line the firmware put a device on
-         * would silently take that device away.
-         */
         if ((pm1 & BOARD_PM1_CNT_SCI_EN) != 0 && !kcmdline_has("rach2.nosci")) {
             board_sci =
                 board_sci_irq(p, pci_read_config8(p->bus, p->device, p->function, p->sci_reg));
@@ -292,13 +290,6 @@ int board_init(const char **why)
         return board_verdict;
     }
 
-    /*
-     * Nothing matched, so say what IS there. A machine whose only output is
-     * its screen cannot be asked twice cheaply, and "no profile matched" on
-     * its own costs a rebuild and another trip to the machine to learn one
-     * number. Printing the identity at the one place every profile looks turns
-     * an unknown chipset into a row somebody can add.
-     */
     {
         unsigned v = (unsigned)pci_read_config16(0, 31, 0, PCI_VENDOR_ID);
         unsigned d = (unsigned)pci_read_config16(0, 31, 0, PCI_DEVICE_ID);
