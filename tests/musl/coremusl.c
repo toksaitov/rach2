@@ -1,20 +1,21 @@
 /**
- * Core files, made in /dev/shm, a tmpfs that keeps the holes of a file.
+ * coremusl: check core files, made in /dev/shm, a tmpfs that keeps the holes
+ * of a file.
  *
  * A child that raises its soft RLIMIT_CORE and aborts leaves "core" in its
  * working directory, where a symbolic link had the name: the parent's wait
- * reports SIGABRT with WCOREDUMP, the link's target is never created, and
- * the file is an ELF core of the architecture, i386 or x86-64, whose
- * NT_PRSTATUS names the child and SIGABRT, whose NT_PRPSINFO has the program's
- * name, whose NT_AUXV has the page size, and whose PT_LOAD for the child's data
- * has the word the child stored there. A child whose soft limit is two pages
- * leaves no WCOREDUMP and a file of its own, with the child's notes, that stops
- * before its last segment ends and has no more than two pages of bytes that are
- * not zero, since only a hole reads as zeros without being written. A child of
- * two threads whose main thread aborts while the other spins in user mode
- * leaves WCOREDUMP and a core with a status for each thread, the aborting
- * one's first. One whose limit is 0, and one that is not dumpable, leave no
- * file and no WCOREDUMP.
+ * reports SIGABRT with WCOREDUMP, the link's target is never created, and the
+ * file is an ELF core of the architecture, i386 or x86-64, whose NT_PRSTATUS
+ * has the child's pid and SIGABRT, whose NT_PRPSINFO has the program's name,
+ * whose NT_AUXV has the page size, and whose PT_LOAD for the child's data has
+ * the word the child stored there. A child whose soft limit is two pages leaves
+ * no WCOREDUMP and a file of its own, with the child's notes, that stops before
+ * its last segment ends and has no more than two pages of bytes that are not
+ * zero, since only a hole reads as zeros without being written. A child of two
+ * threads whose main thread aborts while the other spins in user mode leaves
+ * WCOREDUMP and a core with a status for each thread, the aborting one's first.
+ * One whose limit is 0, and one that is not dumpable, leave no file and no
+ * WCOREDUMP.
  *
  * A dump whose last readable region ends in a page never touched is given
  * a zero at its last byte, so the file has its whole length, and that zero
@@ -30,7 +31,8 @@
  * dump writes; the second has the marked page and ends with it, and its wait
  * status has no WCOREDUMP, since the zero no longer fits.
  *
- * Prints "COREMUSL OK" on success and "COREMUSL FAIL (detail)" otherwise.
+ * It prints "COREMUSL OK" and exits 0 on success, or prints "COREMUSL FAIL
+ * (detail: errno N)" and exits 1 at the first failure.
  */
 
 #define _GNU_SOURCE
@@ -104,6 +106,7 @@ typedef Elf32_Nhdr Nhdr;
 #define HOLE_FILL  0xA5
 #define ARGS_FLOOR (STACK_TOP - 4096u)
 
+/* The word an aborting child stores MARK in, for its core to have. */
 static volatile uint32_t marker;
 
 /* The bytes of the note segment of a process of one thread, which the first
@@ -118,15 +121,18 @@ static char alt_stack[65536];
 static char maps_text[16384];
 static unsigned char in_core[1024];
 
+/** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
 {
     printf("COREMUSL FAIL (%s: errno %d)\n", what, errno);
     return 1;
 }
 
-/** Fork a child that sets its soft core limit to `limit`, and with
- * `dumpable` 0 clears its dumpable flag, stores the mark and aborts; the
- * child's pid, with its wait status in `*status`. */
+/**
+ * Fork a child that sets its soft core limit to `limit`, and with `dumpable`
+ * 0 clears its dumpable flag, stores the mark and aborts in `DIR_PATH`.
+ * Returns the child's pid, with its wait status in `*status`, or -1.
+ */
 static pid_t abort_child(rlim_t limit, int dumpable, int *status)
 {
     pid_t pid = fork();
@@ -151,8 +157,10 @@ static pid_t abort_child(rlim_t limit, int dumpable, int *status)
     return pid;
 }
 
-/** Read the whole file at `path` into a buffer from the heap; its size goes
- * to `*size`. NULL when it cannot be read. */
+/**
+ * Read the whole file at `path` into a buffer from the heap, which the caller
+ * frees; its size goes to `*size`. Returns NULL when it cannot be read.
+ */
 static unsigned char *slurp(const char *path, size_t *size)
 {
     struct stat st;
@@ -179,8 +187,11 @@ static unsigned char *slurp(const char *path, size_t *size)
     return buf;
 }
 
-/** Check the notes of `seg`: the child's status and signal, its name and
- * its page size. */
+/**
+ * Check the notes of the segment `seg` of `core`: the status and signal of
+ * `child`, its name and its page size. Returns 0, or 1 after the failure is
+ * printed.
+ */
 static int notes_check(const unsigned char *core, const Phdr *seg, pid_t child)
 {
     const unsigned char *p = core + seg->p_offset;
@@ -219,8 +230,11 @@ static int notes_check(const unsigned char *core, const Phdr *seg, pid_t child)
     return 0;
 }
 
-/** Check the core file of `child`: an ELF core of the architecture whose
- * notes are right and whose memory has the mark at the marker's address. */
+/**
+ * Check the core file of `child`: an ELF core of the architecture whose notes
+ * are right and whose memory has the mark at the marker's address. Sets
+ * `note_bytes`. Returns 0, or 1 after the failure is printed.
+ */
 static int core_check(pid_t child)
 {
     size_t size;
@@ -265,9 +279,11 @@ static int core_check(pid_t child)
     return 0;
 }
 
-/** Check the core file a child whose limit was `limit` bytes left: its
- * notes are the child's, it stops before its last segment ends, and no more
- * than `limit` of its bytes are not zero. */
+/**
+ * Check the core file a child whose limit was `limit` bytes left: its notes are
+ * the child's, it stops before its last segment ends, and no more than `limit`
+ * of its bytes are not zero. Returns 0, or 1 after the failure is printed.
+ */
 static int short_check(pid_t child, size_t limit)
 {
     size_t size, i, end = 0, written = 0;
@@ -316,8 +332,8 @@ static int short_check(pid_t child, size_t limit)
  * end, holes excepted: the ELF header, a program header for the notes and
  * one for each region, the notes, and each page of a readable region that
  * is in memory, the pages `core_write` does not leave as holes. The regions
- * come from /proc/self/maps and the pages from mincore. 0 when either
- * cannot be read.
+ * come from /proc/self/maps and the pages from mincore. Returns 0 when
+ * either cannot be read.
  */
 static uint32_t dump_bytes(void)
 {
@@ -395,9 +411,9 @@ static void hole_dump(int sig)
 /**
  * Fork a child that counts the bytes its dump writes before the zero at its
  * end and aborts in the directory `dir` with a limit of the count less
- * `less`, as `hole_dump` does, its arguments being in the stack's top page;
- * the child's pid, with its wait status in `*status` and its count in
- * `*counted`, 0 when it sent none.
+ * `less`, as `hole_dump` does, its arguments being in the stack's top page.
+ * Returns the child's pid, or -1, with its wait status in `*status` and its
+ * count in `*counted`, 0 when it sent none.
  */
 static pid_t hole_child(const char *dir, rlim_t less, int *status, uint32_t *counted)
 {
@@ -442,11 +458,11 @@ static pid_t hole_child(const char *dir, rlim_t less, int *status, uint32_t *cou
 }
 
 /**
- * Whether the core file at `path` ends with the marked page after the pages
- * before it: 1 when its size is at least the marked page's end and that page
- * is all the mark, 0 when it is not, -1 when the file is no ELF core. The
- * file's size goes to `*size` and the length its program headers give it to
- * `*whole`.
+ * Check whether the core file at `path` ends with the marked page after the
+ * pages before it. Returns 1 when its size is at least the marked page's end
+ * and that page is all the mark, 0 when it is not, and -1 when the file is no
+ * ELF core. The file's size goes to `*size` and the length its program
+ * headers give it to `*whole`.
  */
 static int marked_page(const char *path, size_t *size, size_t *whole)
 {
@@ -479,10 +495,11 @@ static int marked_page(const char *path, size_t *size, size_t *whole)
 }
 
 /**
- * The limit counts the zero a dump that ends in a hole writes at its last
- * byte: the child whose limit is one byte less than its count leaves a file
- * that ends before its marked page, and the child whose limit is its count
- * leaves one that ends with that page, with no WCOREDUMP.
+ * Check that the limit counts the zero a dump that ends in a hole writes at
+ * its last byte: the child whose limit is one byte less than its count
+ * leaves a file that ends before its marked page, and the child whose limit
+ * is its count leaves one that ends with that page, with no WCOREDUMP.
+ * Returns 0, or 1 after the failure is printed.
  */
 static int hole_row(void)
 {
@@ -526,8 +543,10 @@ static int hole_row(void)
 static volatile pid_t spinner;
 static volatile unsigned long spin_count;
 
-/** Store the thread's id and spin in user mode for ever, counting in a
- * register and storing each count in `spin_count`. */
+/**
+ * Store the thread's id in `spinner` and spin in user mode for ever, counting
+ * in a register and storing each count in `spin_count`.
+ */
 static void *spin_thread(void *arg)
 {
     (void)arg;
@@ -536,10 +555,13 @@ static void *spin_thread(void *arg)
     return NULL;
 }
 
-/** The pids of the NT_PRSTATUS notes of the core file at CORE_PATH, at most
- * `most` of them into `pids`; their count, or -1 when it cannot be read. The
- * last note's counting register goes into `*reg` and the word of its memory
- * at the address of `spin_count` into `*mem`, each 0 when not found. */
+/**
+ * Read the pids of the NT_PRSTATUS notes of the core file at `CORE_PATH`, at
+ * most `most` of them, into `pids`. Returns their count, or -1 when the file
+ * cannot be read. The last note's counting register goes into `*reg` and the
+ * word of the core's memory at the address of `spin_count` into `*mem`, each
+ * 0 when not found.
+ */
 static int status_pids(pid_t *pids, int most, unsigned long *reg, unsigned long *mem)
 {
     size_t size;
@@ -587,14 +609,16 @@ static int status_pids(pid_t *pids, int most, unsigned long *reg, unsigned long 
     return count;
 }
 
-/** A child of two threads whose main thread aborts while the other spins in
- * user mode, on another processor where there is one: the wait reports
+/**
+ * Check a child of two threads whose main thread aborts while the other spins
+ * in user mode, on another processor where there is one: the wait reports
  * WCOREDUMP, and the core has a status for each thread, the aborting one's
  * first, so the spinning thread parked for the dump and ended after it. The
- * spinning thread's count in its register, in the core, is the count in
- * memory or one ahead of it: the thread stopped before its memory was
- * copied. A frame left from before, of a thread still running while its
- * memory was copied, is far behind the memory. */
+ * spinning thread's count in its register, in the core, is the count in memory
+ * or one ahead of it: the thread stopped before its memory was copied. A frame
+ * left from before, of a thread still running while its memory was copied, is
+ * far behind the memory. Returns 0, or 1 after the failure is printed.
+ */
 static int threads_row(void)
 {
     pid_t pids[4];
@@ -634,8 +658,10 @@ static int threads_row(void)
     return 0;
 }
 
-/** The children that leave no core file: one whose limit is 0 and one that
- * is not dumpable. */
+/**
+ * Check the children that leave no core file: one whose limit is 0 and one
+ * that is not dumpable. Returns 0, or 1 after the failure is printed.
+ */
 static int no_core_rows(void)
 {
     int status;
