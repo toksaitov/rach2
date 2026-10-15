@@ -13,7 +13,8 @@
 # Two runs of one artifact, on separate copies.
 #
 # The fault run walks the whole life of the machine: it comes up on the ext2
-# root the candidate entries carry and answers a key login; a new kernel
+# root the candidate entries carry, answers a key login and makes a volume in
+# a file with mke2fs that a loop device mounts; a new kernel
 # arrives over the same connection, is installed as a one-boot trial, shows
 # a marker in its own boot, and is committed; a candidate destroyed
 # from the host is caught by the fallback, which boots the same root on the
@@ -320,6 +321,13 @@ cold_boot fault
 case "$(machine 'ps' || true)" in
     *update*) ;;
     *) fail "the installed root runs no update process" ;;
+esac
+# The installed system makes an ext2 volume in a file with mke2fs, and a loop
+# device mounts it writable.
+OUT="$(machine 'mkdir -p /tmp/v && mke2fs -q /root/v.ext2 8M && loopctl attach 0 /root/v.ext2 && mount -t ext2 /dev/loop0 /tmp/v && echo made > /tmp/v/f && umount /tmp/v && mount -t ext2 /dev/loop0 /tmp/v && printf GOT= && cat /tmp/v/f && umount /tmp/v && loopctl detach 0 && rm /root/v.ext2' || true)"
+case "$OUT" in
+    *GOT=made*) ;;
+    *) fail "mke2fs on the installed root made no volume a loop device mounts: $OUT" ;;
 esac
 
 OUT="$(machine 'bootctl status' || true)"

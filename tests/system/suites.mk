@@ -1547,7 +1547,7 @@ $(INSTALLER_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-d
                    $(MANIFEST_DEPS_rach2_metal_disk) \
                    tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils \
                    check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti \
-                   ports/doom
+                   check-e2fsck ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 64 16384 32768
 INSTALLER_DISK = $(IMAGES_DIR)/installer-test.disk
 $(INSTALLER_DISK): $(DEMO_CREDS) $(KERNEL) $(RECOVERY_KERNEL) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) \

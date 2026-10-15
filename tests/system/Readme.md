@@ -100,7 +100,7 @@ A fault proof shows that a test catches the fault it is for. It runs the test on
 Two proofs put a list of faults into the tree, one at a time:
 
 * `probe_faults.sh` proves rows of the `default` suite against the faults listed in `probe_faults.txt`, each a probe, a file, the text replaced and the words the probe prints when its row fails. `-s K/N` runs one share of the list, and `--check` checks the list alone, which `tests/run style` runs.
-* `rows_mutate.sh`: six rows of the runner's self-test, `devprobe`, `sigprobe`, `procprobe`, the `sealed` suite and the `dhcp` suite.
+* `rows_mutate.sh`: seven rows of the runner's self-test, `devprobe`, `sigprobe`, `procprobe`, two of the `sealed` suite and the `dhcp` suite.
 
 These two run no test on the unmodified tree: they require the kernel rebuilt at the end, and for `probe_faults.sh` the programs too, to equal the first build, and leave the passing run to the next full set. The others are:
 

@@ -1,5 +1,5 @@
 #!/bin/sh
-# rows_mutate.sh [--texts]: show that six rows catch the faults they were
+# rows_mutate.sh [--texts]: show that seven rows catch the faults they were
 # written for. Each fault is put alone into the main tree, the product it
 # lives in is rebuilt by the row's own target, and the row that catches it
 # must fail with its own words:
@@ -9,6 +9,7 @@
 #   sigprobe   a one-shot handler entered at zero, by sigprobe
 #   procprobe  two proc files with one inode, by procprobe
 #   sealed     the sealed root without update, by the sealed suite
+#   mke2fs     the sealed root without mke2fs, by the sealed suite
 #   arping     an arping that fails, by the dhcp suite's status step
 #
 # The changed source is restored and touched after each fault, and the trap
@@ -53,6 +54,8 @@ changes = {
     '        f->origin_file = SYNTH_PROC_LOOP;\n'),
 'sealed': ('krffs/manifests/rach2-metal-disk.manifest',
     'file 0755 /bin/update build/utils/update\n', ''),
+'mke2fs': ('krffs/manifests/rach2-metal-disk.manifest',
+    'file 0755 /bin/mke2fs build/vendor/e2fsprogs/mke2fs\n', ''),
 'arping': ('tests/system/suites.mk',
     'send=arping -f -w 5 192.168.90.2 > /tmp/ap',
     'send=arping -f -w 5 -I eth9 192.168.90.2 > /tmp/ap'),
@@ -68,7 +71,7 @@ PY
 if [ "${1:-}" = --texts ]; then
     RACH2_FAULT_TEXTS=1
     export RACH2_FAULT_TEXTS
-    for name in runner devprobe sigprobe procprobe sealed arping; do
+    for name in runner devprobe sigprobe procprobe sealed mke2fs arping; do
         apply_fault "$name" >/dev/null
     done
     echo 'rows-mutation: texts: every fault is once in its source'
@@ -143,7 +146,7 @@ mutate()
         devprobe) changed=rach2/sys/fs/devfs.c ;;
         sigprobe) changed=rach2/sys/syscall_proc.c ;;
         procprobe) changed=rach2/sys/fs/procfs.c ;;
-        sealed) changed=krffs/manifests/rach2-metal-disk.manifest ;;
+        sealed | mke2fs) changed=krffs/manifests/rach2-metal-disk.manifest ;;
         arping) changed=tests/system/suites.mk ;;
     esac
     apply_fault "$1"
@@ -223,6 +226,13 @@ run_row sealed make run-sealed "ARCH=$RACH2_ARCH"
 failed_with 'the installed root runs no update process' "$work/sealed.log" ||
     { echo 'rows-mutation: the sealed row did not fail without update' >&2; exit 1; }
 echo "rows-mutation: result: sealed failed without update, status $status"
+restore
+
+mutate mke2fs
+run_row mke2fs make run-sealed "ARCH=$RACH2_ARCH"
+failed_with 'mke2fs on the installed root made no volume a loop device mounts' "$work/mke2fs.log" ||
+    { echo 'rows-mutation: the sealed row did not fail without mke2fs' >&2; exit 1; }
+echo "rows-mutation: result: mke2fs failed without mke2fs, status $status"
 restore
 
 # The guest has no eth9, so arping exits 2 at once; the guest must print that

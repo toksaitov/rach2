@@ -9,7 +9,7 @@
 # * /demo has a file system of each kind the kernel mounts, for a person at
 #   the console to attach, mount and write.
 # * /etc/resolv.conf and /etc/hosts have no address of QEMU's.
-# * /root is 0755, and there is no /bin/mke2fs.
+# * /root is 0755.
 #
 # tools/inspect/setidcheck.c checks its set-id entries against setid.allow
 # as it does os-real's.
@@ -44,6 +44,9 @@ file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 # Attaches a file to a loop device so a file system in a file can be mounted
 # (utils/Readme.md); it writes /dev/loop-control, which is root's.
 file 0755 /bin/loopctl build/utils/loopctl
+# mke2fs makes an ext2 volume in a file, which a loop device then mounts,
+# since the kernel's disk nodes refuse writes outside a recovery build.
+file 0755 /bin/mke2fs build/vendor/e2fsprogs/mke2fs
 optional-file 0755 /bin/doom build/ports/doom/doom
 
 # The compiler, and the system root it reads when it runs. /bin/tcc is an
