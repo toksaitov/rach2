@@ -44,7 +44,7 @@ The BusyBox images take `su`, `passwd` and `login` from BusyBox's set-id build i
 
 * [bootctl(8)](../man/man8/bootctl.8) manages the boot partition from the running system: it installs a kernel for one trial boot and commits it, writes the boot menu and the GRUB environment block, and replaces GRUB's BIOS core image.
 * [reflash(8)](../man/man8/reflash.8) copies a stream of a declared length onto a raw device, or prints the SHA-256 of a range of one.
-* [diskctl(8)](../man/man8/diskctl.8) asks the kernel to read a disk's table again, prints the disk's identity, moves a GUID table's backup to the disk's last sectors, and gives an MBR's first entry the type of an EFI system partition.
+* [diskctl(8)](../man/man8/diskctl.8) asks the kernel to read a disk's table again, prints the disk's identity, moves a GUID table's backup to the disk's last sectors, shortens an entry of a GUID table, and gives an MBR's first entry the type of an EFI system partition.
 * [growroot(8)](../man/man8/growroot.8) grows an ext2 partition and its file system into the free space after it, from the recovery system.
 * [growset(8)](../man/man8/growset.8) computes the sectors such a grow writes, so that they can be saved before it and checked after it.
 * [growboot(8)](../man/man8/growboot.8) writes, from a backup of a boot partition, a GRUB environment block that boots the recovery entry.

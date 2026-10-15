@@ -1,6 +1,7 @@
 /**
  * The things a program that writes a whole disk needs: `diskctl reread DEV`,
- * `diskctl id DEV`, `diskctl relocate DEV` and `diskctl esp DEV`.
+ * `diskctl id DEV`, `diskctl relocate DEV`, `diskctl shrink DEV N SECTORS`
+ * and `diskctl esp DEV`.
  *
  * A program that writes a whole disk changes the table under a kernel that
  * read the old one at boot, and the nodes for the partitions it just made do
@@ -28,6 +29,13 @@
  * does not check is read from its backup, so the same command writes the
  * primary again, which GRUB's BIOS core needs: it reads no backup.
  *
+ * `shrink` gives entry N of a GUID table SECTORS sectors from its first, no
+ * more than it has, and writes both copies as `relocate` does. The result is
+ * the table of an image whose root is smaller than the disk, so that
+ * `growroot` can be timed growing that root on the disk itself:
+ * `tools/dev/machine_grow.sh` writes such a root and then this table over
+ * sectors it has saved.
+ *
  * `esp` gives entry 1 of an MBR the EFI system partition's type, 0xEF, which
  * UEFI firmware boots from on an MBR disk, and asks the kernel to read the
  * table again. It asks for the reread when the entry has the type already
@@ -41,6 +49,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -172,6 +181,60 @@ static int relocate(int fd, const char *path)
     return 0;
 }
 
+/**
+ * Give entry `text` of the GUID table of the disk open on `fd` a length of
+ * `count` sectors, decimal text, from its first sector, writing both copies
+ * with the backup at the disk's end, and have the table read again. Returns
+ * 0, or 1 having said why not: the disk has no GUID table, the entry is not
+ * a used one, or the length is zero or more than the entry has.
+ */
+static int shrink(int fd, const char *path, const char *text, const char *count)
+{
+    const char *why = "";
+    unsigned char *e;
+    unsigned long entry;
+    unsigned long long sectors, first, length;
+    char *end;
+    int kind = read_table(fd, path);
+
+    if (kind < 0) {
+        return 1;
+    }
+    if (kind == 0) {
+        fprintf(stderr, "diskctl: %s has an MBR and no GUID table\n", path);
+        return 1;
+    }
+    entry = strtoul(text, &end, 10);
+    e = *text >= '1' && *text <= '9' && *end == '\0' && entry <= table.entries
+            ? gptdisk_entry(&table, (int)entry)
+            : NULL;
+    if (!e || !gptdisk_used(e) || gptdisk_le64(e + 40) < gptdisk_le64(e + 32)) {
+        fprintf(stderr, "diskctl: %s: entry %s is not a used entry of its table\n", path, text);
+        return 1;
+    }
+    first = gptdisk_le64(e + 32);
+    length = gptdisk_le64(e + 40) - first + 1;
+    errno = 0;
+    sectors = strtoull(count, &end, 10);
+    if (*count < '1' || *count > '9' || *end != '\0' || errno != 0 || sectors > length) {
+        fprintf(stderr,
+                "diskctl: %s: entry %lu has %llu sectors, and %s is not a length from 1 to that\n",
+                path, entry, length, count);
+        return 1;
+    }
+    gptdisk_put64(e + 40, first + sectors - 1);
+    if (gptdisk_write(fd, &table, &why) != 0) {
+        fprintf(stderr, "diskctl: %s: %s\n", path, why);
+        return 1;
+    }
+    if (reread(fd, path) != 0) {
+        return 1;
+    }
+    printf("diskctl: result: %s: entry %lu is sectors %llu to %llu\n", path, entry, first,
+           first + sectors - 1);
+    return 0;
+}
+
 /** Give entry 1 of the MBR of the disk open on `fd` the type 0xEF, and have
  *  the table read again; 0, or 1 having said why not. */
 static int make_esp(int fd, const char *path)
@@ -208,20 +271,23 @@ static int make_esp(int fd, const char *path)
     return 0;
 }
 
-/** Run the command on DEVICE, opened for writing only for `relocate` and
- *  `esp`. Exits 0, 1 on a failure and 2 on a usage error. */
+/** Run the command on DEVICE, opened for writing only for `relocate`,
+ *  `shrink` and `esp`. Exits 0, 1 on a failure and 2 on a usage error. */
 int main(int argc, char **argv)
 {
     int fd, rc;
     int writing;
+    int shrinking = argc == 5 && strcmp(argv[1], "shrink") == 0;
 
-    if (argc != 3 || (strcmp(argv[1], "reread") != 0 && strcmp(argv[1], "id") != 0 &&
-                      strcmp(argv[1], "relocate") != 0 && strcmp(argv[1], "esp") != 0)) {
+    if (!shrinking &&
+        (argc != 3 || (strcmp(argv[1], "reread") != 0 && strcmp(argv[1], "id") != 0 &&
+                       strcmp(argv[1], "relocate") != 0 && strcmp(argv[1], "esp") != 0))) {
         fprintf(stderr, "usage: diskctl reread DEVICE | diskctl id DEVICE | "
-                        "diskctl relocate DEVICE | diskctl esp DEVICE\n");
+                        "diskctl relocate DEVICE | diskctl shrink DEVICE N SECTORS | "
+                        "diskctl esp DEVICE\n");
         return 2;
     }
-    writing = strcmp(argv[1], "relocate") == 0 || strcmp(argv[1], "esp") == 0;
+    writing = shrinking || strcmp(argv[1], "relocate") == 0 || strcmp(argv[1], "esp") == 0;
     fd = open(argv[2], writing ? O_RDWR : O_RDONLY);
     if (fd < 0) {
         fprintf(stderr, "diskctl: cannot open %s: %s\n", argv[2], strerror(errno));
@@ -231,6 +297,8 @@ int main(int argc, char **argv)
         rc = print_id(fd, argv[2]);
     } else if (strcmp(argv[1], "esp") == 0) {
         rc = make_esp(fd, argv[2]);
+    } else if (shrinking) {
+        rc = shrink(fd, argv[2], argv[3], argv[4]);
     } else if (writing) {
         rc = relocate(fd, argv[2]);
     } else {

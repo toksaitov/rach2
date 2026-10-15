@@ -1,9 +1,9 @@
-.Dd October 3, 2026
+.Dd October 15, 2026
 .Dt DISKCTL 8
 .Os
 .Sh NAME
 .Nm diskctl
-.Nd reread a disk's partition table, print its identity, move its backup table or type its EFI system partition
+.Nd reread a disk's partition table, print its identity, move its backup table, shorten a GUID table entry or type its EFI system partition
 .Sh SYNOPSIS
 .Nm
 .Cm reread Ar DEVICE
@@ -12,14 +12,16 @@
 .Nm
 .Cm relocate Ar DEVICE
 .Nm
+.Cm shrink Ar DEVICE N SECTORS
+.Nm
 .Cm esp Ar DEVICE
 .Sh DESCRIPTION
 The
 .Nm
 command rereads a disk's partition table, prints the identity the boot
 command line names the disk by, moves a GUID table's backup to the
-disk's last sectors, or gives an MBR's first entry the EFI system
-partition's type.
+disk's last sectors, shortens an entry of a GUID table, or gives an MBR's
+first entry the EFI system partition's type.
 The commands are:
 .Bl -tag -width Ds
 .It Cm reread Ar DEVICE
@@ -71,6 +73,24 @@ does.
 The size of the disk is the kernel's, from
 .Pa /proc/disk .
 Writing a whole-disk node requires the recovery kernel.
+.It Cm shrink Ar DEVICE N SECTORS
+Make entry
+.Ar N
+of the disk's GUID table
+.Ar SECTORS
+sectors long from its first sector, rewrite both copies as
+.Cm relocate
+does, with the backup in the disk's last 33 sectors, and read the table
+again.
+.Ar SECTORS
+is a decimal number from 1 to the entry's length; the file system on the
+entry is not looked at.
+.Ql tools/dev/machine_grow.sh
+in the source tree uses it to give a disk the table of an image whose root
+is smaller than the disk, so that
+.Xr growroot 8
+can be timed growing that root.
+Writing a whole-disk node requires the recovery kernel.
 .It Cm esp Ar DEVICE
 Give entry 1 of the disk's MBR the type 0xEF, which UEFI firmware boots
 from on an MBR disk, and read the table again as
@@ -90,10 +110,15 @@ Writing a whole-disk node requires the recovery kernel.
 .Dl diskctl id /dev/disk0
 .Dl diskctl relocate /dev/disk0
 .Pp
-The installer uses all four commands.
+The installer uses
+.Cm reread ,
+.Cm id ,
+.Cm relocate
+and
+.Cm esp .
 .Sh DIAGNOSTICS
 An invalid command or operand count prints:
-.Dl usage: diskctl reread DEVICE | diskctl id DEVICE | diskctl relocate DEVICE | diskctl esp DEVICE
+.Dl usage: diskctl reread DEVICE | diskctl id DEVICE | diskctl relocate DEVICE | diskctl shrink DEVICE N SECTORS | diskctl esp DEVICE
 Diagnostics identify the device.
 A reread refused with
 .Er EBUSY
@@ -115,6 +140,16 @@ include
 .Ql the whole-disk node does not reach the disk's last sector
 and
 .Ql a partition reaches past where the backup table would go .
+A completed
+.Cm shrink
+prints:
+.Dl diskctl: result: DEVICE: entry N is sectors FIRST to LAST
+It refuses an MBR disk as
+.Cm relocate
+does, an entry that is not in use with
+.Ql entry N is not a used entry of its table ,
+and a length outside the entry with
+.Ql entry N has LENGTH sectors, and SECTORS is not a length from 1 to that .
 .Cm esp
 prints
 .Ql diskctl: result: DEVICE: entry 1 is the EFI system partition, type 0xef
