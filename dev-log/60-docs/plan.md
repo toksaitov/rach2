@@ -14,16 +14,16 @@ The documentation grew one milestone at a time. Each change added a paragraph wh
 
 ## The front page
 
-`Readme.md` is the project's front page, read by a colleague who has never seen it. It is about 400 to 600 words, in this order:
+`Readme.md` is the project's front page, read by a colleague who has never seen it. It is about 500 to 700 words, in this order:
 
 1. What Rach2 is and for whom, in one paragraph: an operating system written to be read, on both architectures, and what it runs, in plain words with numbers from `facts.md`.
 2. What a person can do on it, as a short list, each item linking to the component or manual page that has the detail.
-3. Status and the major limits, in a few sentences.
-4. Quick start: what the host needs (with a link to `tools/Readme.md`), the commands from a clone to a booted system in QEMU, and how to log in. Testing is a link to `tests/Readme.md`, not a step of the first boot.
-5. The source and its documentation, in one table of the top-level directories with one line and the Readme of each, followed by a sentence each on `man/`, `dev-log/` and `AGENTS.md`.
-6. License and third-party sources.
+3. What runs on it: the static musl system every image has and the GNU system `vendor/gnu/` builds, a sentence or two each, then links to the lists of programs (`man/programs.md`), system calls (`rach2/syscalls.md`) and hardware (`rach2/hardware.md`).
+4. Status and the major limits, in a few sentences.
+5. Quick start: what the host needs (with a link to `tools/Readme.md`), the commands from a clone to a booted system in QEMU, and how to log in. Testing is a link to `tests/Readme.md`, not a step of the first boot.
+6. The source and its documentation, in one table of the top-level directories with one line and the Readme of each, followed by a sentence each on `man/`, `dev-log/` and `AGENTS.md`, and one sentence on licenses that links the vendored projects in `man/programs.md`.
 
-Image contents, hardware procedures, feature inventories, the reading route through the kernel (which belongs in `rach2/Readme.md`) and milestone history do not belong on it; each goes to the component, manual page or record that owns it.
+The lists themselves, image contents, hardware procedures, feature inventories, the reading route through the kernel (which belongs in `rach2/Readme.md`) and milestone history do not belong on it; each goes to the component, manual page or record that owns it.
 
 ## The component documents
 
