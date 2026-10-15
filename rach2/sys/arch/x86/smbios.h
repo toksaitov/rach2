@@ -28,13 +28,15 @@
  */
 const char *smbios_bios_vendor(void);
 
-/** The UEFI system table the loader passed, at physical `systab`, or 0, and
- * whether its pointers are 64 bits wide (`wide`), in which the firmware's
- * configuration table names the entry point. */
+/** Record the UEFI system table the loader passed, at physical `systab` or
+ * 0 for none, and whether its pointers are 64 bits wide (`wide`); its
+ * configuration table names the entry point. Drops the cached vendor.
+ * Called from `platform_firmware_init`. */
 void smbios_init(uint64_t systab, int wide);
 
 /**
- * Whether the BIOS vendor's name begins with `prefix`, case-sensitively.
+ * Whether the BIOS vendor's name begins with `prefix`, case-sensitively; an
+ * empty `prefix` matches nothing.
  *
  * The vendor strings are the firmware's own text, and a machine's is matched
  * by its beginning because the rest carries a version and a year that differ

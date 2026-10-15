@@ -1,3 +1,4 @@
+/* module.c: the boot modules the loader passed, as module.h describes them. */
 #include "../../klog.h"
 #include "../../module.h"
 #include "../../lib/kstring.h"
@@ -7,12 +8,11 @@ module_info_t module_table[MAX_MODULES];
 uint32_t module_count = 0;
 
 /**
- * Record the boot modules of the boot record in `module_table`: each one's
- * physical range, where the kernel reads it until the boot maps it, and its
- * command line, the record's own copy. Both of Multiboot's forms give a
- * module's addresses in 32 bits.
- *
- * @return the number of modules recorded.
+ * Each module's start and end are its physical range, where the kernel reads
+ * it until the boot maps it, and its command line is the boot record's own
+ * copy. Both of Multiboot's forms give a module's addresses in 32 bits. The
+ * count the loader passed is logged as the loader's view; the boot's
+ * `modules:` line later says what the kernel made of them.
  */
 uint32_t init_modules(const struct boot_info *boot)
 {
@@ -26,9 +26,6 @@ uint32_t init_modules(const struct boot_info *boot)
         return 0;
     }
 
-    /* The loader's view. `modules:` later says what the machine made of them,
-       which is the line a person wants; two subsystems reporting the same
-       count under near-identical names is what a boot log looked like. */
     klog(KLOG_DEBUG, "module", "found %d", boot->modules_passed);
 
     for (i = 0; i < boot->modules && i < MAX_MODULES; i++) {
@@ -41,8 +38,6 @@ uint32_t init_modules(const struct boot_info *boot)
         mod->phys = (uint32_t)bm->start;
         mod->cmdline = bm->cmdline;
 
-        /* The empty brackets at the end of this line are a module with no
-           command line, which is every module this loader is given. */
         klog(KLOG_DEBUG, "module", "%d: 0x%X to 0x%X, %d bytes [%s]", i, mod->start, mod->end,
              mod->size, mod->cmdline ? mod->cmdline : "");
 

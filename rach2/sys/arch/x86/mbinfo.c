@@ -42,21 +42,25 @@
 #define MB_MEM_NVS      4u
 #define MB_MEM_BAD      5u
 
+/** The little-endian 16-bit field at `p`. */
 static uint32_t le16(const uint8_t *p)
 {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8;
 }
 
+/** The little-endian 32-bit field at `p`. */
 static uint32_t le32(const uint8_t *p)
 {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
+/** The little-endian 64-bit field at `p`. */
 static uint64_t le64(const uint8_t *p)
 {
     return (uint64_t)le32(p) | (uint64_t)le32(p + 4) << 32;
 }
 
+/** Store `v` little-endian at `p`; `put64` stores 64 bits. */
 static void put32(uint8_t *p, uint32_t v)
 {
     p[0] = (uint8_t)v;
@@ -84,6 +88,7 @@ static char *copy_string(char *dst, uint32_t size, const uint8_t *src, uint32_t 
     return dst;
 }
 
+/** Clear the record and the copies, before a read fills them. */
 static void reset(struct boot_info *boot, struct boot_store *st)
 {
     k_memset(boot, 0, sizeof(*boot));
@@ -131,6 +136,7 @@ static void map_add(struct boot_info *boot, struct boot_store *st, uint64_t base
     boot->mmap_len = st->mmap_entries * BOOT_MMAP_ENTRY;
 }
 
+/** Empty the map, for a map tag that replaces what came before it. */
 static void map_clear(struct boot_info *boot, struct boot_store *st)
 {
     st->mmap_entries = 0;
@@ -160,6 +166,12 @@ static uint32_t efi_type(uint32_t efi)
     }
 }
 
+/**
+ * Record a module from `start` to `end`, an end before the start taken as
+ * the start, with a copy of the command line of at most `avail` bytes at
+ * `cmdline`, which may be NULL. Every module is counted in `modules_passed`;
+ * one past BOOT_MODULE_MAX is not kept.
+ */
 static void add_module(struct boot_info *boot, struct boot_store *st, uint32_t start, uint32_t end,
                        const uint8_t *cmdline, uint32_t avail)
 {

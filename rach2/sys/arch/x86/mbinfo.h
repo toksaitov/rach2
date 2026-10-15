@@ -12,8 +12,8 @@
  * gets copies of what it keeps, in `struct boot_store`, since the loader's
  * memory goes to the frame allocator once the boot has read it.
  *
- * Pure: no kernel service is called, so tests/host/mbinfo_hosttest.c reads
- * tag lists the test builds.
+ * No kernel service is called, so tests/host/mbinfo_hosttest.c reads tag
+ * lists the test builds.
  */
 
 #include "../../boot.h"
@@ -32,6 +32,8 @@ struct boot_store {
     char cmdline[BOOT_CMDLINE_MAX];
     char loader[64];
     char module_cmdline[BOOT_MODULE_MAX][BOOT_MODULE_CMDLINE_MAX];
+    /* The map in Multiboot's form: BOOT_MMAP_ENTRY bytes an entry, a size
+     * word first, then the base, the length and the type. */
     uint8_t mmap[BOOT_MMAP_MAX * BOOT_MMAP_ENTRY];
     uint32_t mmap_entries;
     /* Entries past BOOT_MMAP_MAX that were not kept. */
@@ -50,16 +52,18 @@ typedef const void *(*mb_reach_fn)(uint64_t phys, uint32_t len);
 
 /**
  * Fill `boot` and `st` from a Multiboot information structure, following its
- * pointers through `reach`. Returns 0, or -1 when a part it names cannot be
- * read, with the rest read.
+ * pointers through `reach`. Returns 0, or -1 when the command line, the
+ * module list or the memory map cannot be read or the map is malformed,
+ * with the rest read. This and `mb2_read` clear `boot` and `st` first, and
+ * the strings and the map `boot` points at are the copies in `st`.
  */
 int mb1_read(const multiboot_info_t *info, mb_reach_fn reach, struct boot_info *boot,
              struct boot_store *st);
 
 /**
  * Fill `boot` and `st` from a multiboot2 tag list. Returns 0, or -1 when the
- * list is cut short or a tag runs past its end, with the tags before it
- * read.
+ * list's length is under 16 bytes or past MB2_INFO_MAX, or the list is cut
+ * short or a tag runs past its end, with the tags before it read.
  *
  * The EFI memory map, which a loader on UEFI passes beside its own map,
  * takes the place of that map: it is the firmware's at the exit from its

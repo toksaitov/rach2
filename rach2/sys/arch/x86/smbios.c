@@ -67,6 +67,9 @@ static const uint8_t smbios3_guid[16] = {0x44, 0x15, 0xFD, 0xF2, 0x94, 0x97, 0x2
 static const uint8_t smbios_guid[16] = {0x31, 0x2D, 0x9D, 0xEB, 0x88, 0x2D, 0xD3, 0x11,
                                         0x9A, 0x16, 0x00, 0x90, 0x27, 0x3F, 0xC1, 0x4D};
 
+/* The vendor as read, and whether it has been; a host test's structures and
+ * their length, NULL for the search; and the UEFI system table's physical
+ * address, 0 for none, and whether its pointers are 64 bits. */
 static char vendor[SMBIOS_VENDOR_MAX];
 static int vendor_read;
 static const uint8_t *forced_table;
@@ -74,6 +77,7 @@ static uint32_t forced_len;
 static uint64_t efi_systab;
 static int efi_64;
 
+/* How physical memory is read: `table_at`, or a host test's reader. */
 static const uint8_t *table_at(uint64_t at, uint32_t len);
 static const uint8_t *(*phys_at)(uint64_t at, uint32_t len) = table_at;
 
@@ -193,27 +197,26 @@ static const uint8_t *find_anchor(void)
 /**
  * Where the structure table is and how long it is, from an anchor.
  *
+ * The 32-bit entry point has the length in two bytes at 0x16 and the
+ * address in four at 0x18; the 64-bit one has the maximum length in four
+ * bytes at 0x0C and the address in eight at 0x10, which `table_at` refuses
+ * past 4 GiB on i686. A region of no length holds no structure, and one
+ * that wraps the address space is not a region.
+ *
  * @return 1 with `*at` and `*len` filled, 0 when the anchor is one this does
  *         not read or names a region that does not fit an address.
  */
 static int table_of(const uint8_t *anchor, uint64_t *at, uint32_t *len)
 {
     if (four_are(anchor, "_SM_")) {
-        /* The 32-bit entry point: the length is two bytes at 0x16 and the
-         * address four at 0x18. */
         *len = (uint32_t)le(anchor + 0x16, 2);
         *at = le(anchor + 0x18, 4);
     } else if (four_are(anchor, "_SM3") && anchor[4] == '_') {
-        /* The 64-bit entry point: the maximum length is four bytes at 0x0C
-         * and the address eight at 0x10, which `table_at` refuses past 4 GiB
-         * on i686. */
         *len = (uint32_t)le(anchor + 0x0C, 4);
         *at = le(anchor + 0x10, 8);
     } else {
         return 0;
     }
-    /* A region of no length holds no structure, and one that wraps the address
-     * space is not a region. */
     if (*len == 0 || *at + *len < *at) {
         return 0;
     }
@@ -292,8 +295,12 @@ static void copy_string(const uint8_t *s, const uint8_t *end, int want, char *ou
     }
 }
 
-/** Read the vendor out of the table, leaving `vendor` empty when there is
- * none. */
+/**
+ * Read the vendor out of the table, leaving `vendor` empty when there is
+ * none. In the first BIOS Information structure, type 0, the byte at offset
+ * 4 is the number of the string that is the vendor, and 0 there means the
+ * structure names none; it is not always the first string.
+ */
 static void read_vendor(void)
 {
     const uint8_t *anchor;
@@ -332,9 +339,6 @@ static void read_vendor(void)
         }
         strings = p + flen;
         if (type == 0) {
-            /* BIOS Information: the byte at offset 4 is the number of the
-             * string that is the vendor, and 0 there means the structure names
-             * none. It is not always the first string. */
             if (flen >= 5 && p[4] != 0) {
                 copy_string(strings, end, (int)p[4], vendor, SMBIOS_VENDOR_MAX);
             }

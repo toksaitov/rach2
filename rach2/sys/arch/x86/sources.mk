@@ -1,7 +1,9 @@
 # sys/arch/x86/sources.mk: the PC platform's files, which i686 and x86-64
-# share: the interrupt controllers, the timers, the firmware's tables, PCI
-# configuration, the serial port, the PS/2 devices, and the drivers of the
-# devices only a PC has, wherever their subsystem keeps them.
+# share: the boot record, the processor's features, the interrupt
+# controllers, the timers, the firmware's tables, PCI configuration, the
+# serial port and the PS/2 devices; and the files outside arch/ that only a
+# PC build compiles: ATA, VGA, the framebuffer console, and the Sound
+# Blaster 16 with its DMA controller.
 
 PC_C_SRC = sys/arch/x86/boot.c \
     sys/arch/x86/mbinfo.c \
