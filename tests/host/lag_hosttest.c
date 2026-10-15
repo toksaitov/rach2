@@ -164,6 +164,9 @@ static int backing_read(block_device_t *device, uint64_t lba, uint32_t count, vo
 
 static block_device_t backing;
 
+/* A second disk, which the wrapper installed over `backing` is not over. */
+static block_device_t other;
+
 static uint32_t generations = 100;
 
 /**
@@ -198,6 +201,8 @@ static void ticks(int n)
  * run the rows. The wrapper delivers each completion after the lag, and a
  * duplicate with an error two ticks later. The rows require that:
  *
+ * - a later wrap of another device returns that device unchanged, and a
+ *   later wrap of the backing returns the wrapper again;
  * - a tick that runs under a transfer does not deliver that transfer's
  *   claimed slot, which is answered after its own lag instead;
  * - two writes, the second submitted from inside the first's transfer, are
@@ -222,6 +227,12 @@ int main(void)
     lag = block_lag_wrap(&backing);
     CHECK(lag == &lag_device, "the wrapper installs over the backing");
     CHECK(lag_delay == 3, "the lag is the three ticks the option named");
+    k_memset(&other, 0, sizeof(other));
+    other.read = backing_read;
+    other.write = backing_write;
+    CHECK(block_lag_wrap(&other) == &other, "another device is returned unchanged");
+    CHECK(lag_backing == &backing, "and the wrapper stays over the backing");
+    CHECK(block_lag_wrap(&backing) == &lag_device, "the backing gets its wrapper again");
 
     for (i = 0; i < REQUESTS; i++) {
         request_init(i, 1);
