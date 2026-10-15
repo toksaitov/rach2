@@ -1,18 +1,15 @@
 /*
- * apicdiag.c: the `rach2.apicdiag` report, which reads and changes nothing.
+ * apicdiag.c: the `rach2.apicdiag` report, which writes no register.
  *
- * Before a kernel that takes interrupts through the local APIC and
- * message-signalled interrupts is installed on a machine, this says what
- * that machine's firmware left behind: whether the processor has an APIC
- * and the model-specific registers to reach it, where `IA32_APIC_BASE`
- * puts its page and whether it is in x2APIC mode, what the APIC's own
- * registers hold, whether `LINT0` is the unmasked external-interrupt entry
- * that keeps the 8259's interrupts arriving, and which of the two devices
- * this kernel drives by message have an MSI capability and where.
- *
- * It runs on the boot line so that the machine it is asked about is the
- * machine that answers. Milestone 43 runs it on the Lenovo before any
- * kernel with MSI is installed there.
+ * It says what a machine's firmware left for a kernel that takes interrupts
+ * through the local APIC and by message: whether the processor has an APIC
+ * and the model-specific registers to reach it, where `IA32_APIC_BASE` puts
+ * its page and whether it is in x2APIC mode, what the APIC's own registers
+ * hold, whether `LINT0` is the unmasked external-interrupt entry that
+ * passes on the 8259's interrupts, and which of the xHCI and HDA
+ * controllers have an MSI or MSI-X capability and where. A word of the boot
+ * line asks for it, so the report comes from the machine that boots, before
+ * the kernel has enabled the APIC or a device's messages.
  */
 
 #include "apicdiag.h"
@@ -32,7 +29,8 @@
 #define LAPIC_LINT0   0x350
 #define LAPIC_LINT1   0x360
 
-/* The MSI and MSI-X capabilities of one device, printed as they are. */
+/** Log the location of `dev`, called `what` in the log, and its MSI and
+ * MSI-X capabilities as their control words have them. */
 static void report_device(const char *what, const pci_device_t *dev)
 {
     uint8_t msi, msix;

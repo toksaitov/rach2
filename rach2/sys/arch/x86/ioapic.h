@@ -34,10 +34,12 @@ int ioapic_init(const struct acpi_info *a);
  */
 int ioapic_route_line(int line, int pci, uint8_t vector, uint8_t dest);
 
-/** Mask the input line `line` was routed to. */
+/** Mask the input ISA line `line` was routed to; nothing for a line not
+ * routed. */
 void ioapic_mask_line(int line);
 
-/** Whether the input of `line` has an interrupt it has not yet sent. */
+/** Whether the input of `line` has an interrupt it has not yet sent; 0 for
+ * a line not routed. */
 int ioapic_line_pending(int line);
 
 #endif /* _IOAPIC_H_ */

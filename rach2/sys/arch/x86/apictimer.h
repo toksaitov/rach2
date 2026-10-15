@@ -20,7 +20,8 @@
 /**
  * Write this processor's `LINT0` and `LINT1`: each masked, but where the
  * MADT gives it as this processor's NMI input, which it then delivers with
- * the polarity the MADT says. `LINT0` carried the 8259's interrupts.
+ * the polarity the MADT says. Masking `LINT0` ends the 8259's interrupts,
+ * which the firmware sends through it as external interrupts.
  */
 void apic_lint_init(const struct acpi_info *a);
 
@@ -28,10 +29,12 @@ void apic_lint_init(const struct acpi_info *a);
 #define APIC_TIMER_VECTOR 32
 
 /**
- * Measure this processor's timer over 20 ms of the reference counter, with
- * interrupts off and the timer masked: its counts in one tick at `hz`
- * ticks a second, and the reference's name in `*against`. 0 when no
- * reference runs or the timer did not count.
+ * Measure this processor's timer over 20 ms of the reference counter
+ * (refclock.h), or of the 8254 through `k_udelay` when there is none, with
+ * interrupts off and the timer masked, and leave the timer stopped: its
+ * counts in one tick at `hz` ticks a second, and the reference's name, or
+ * "pit", in `*against`. 0 when the reference stopped, the timer did not
+ * count, or `hz` is 0.
  */
 uint32_t apic_timer_calibrate(uint32_t hz, const char **against);
 

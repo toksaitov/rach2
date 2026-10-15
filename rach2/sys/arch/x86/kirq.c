@@ -1,11 +1,13 @@
-#include "../../lib/kirq.h"
-
 /*
+ * kirq.c: the interrupt flag saved and restored around a short region, as
+ * ../../lib/kirq.h describes, by pushing and popping the flags register.
+ *
  * On x86-64 the flags register is RFLAGS, pushed and popped whole; its
  * upper half is reserved and zero, so the 32 bits kept are all of it.
  */
 
-/** Return the flags register as it stands, then disable interrupts. */
+#include "../../lib/kirq.h"
+
 uint32_t kirq_save(void)
 {
 #if defined(__x86_64__)
@@ -21,10 +23,6 @@ uint32_t kirq_save(void)
 #endif
 }
 
-/**
- * Load the flags register from `flags`, a value `kirq_save` returned, which
- * enables interrupts again only if they were on at that call.
- */
 void kirq_restore(uint32_t flags)
 {
 #if defined(__x86_64__)

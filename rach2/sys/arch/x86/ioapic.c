@@ -30,10 +30,11 @@
 #define RTE_LEVEL      (1u << 15)
 #define RTE_MASKED     (1u << 16)
 
+/* One I/O APIC the MADT lists and `ioapic_init` made ready. */
 struct ioapic {
-    volatile uint32_t *regs;
-    uint32_t gsi_base;
-    uint32_t inputs;
+    volatile uint32_t *regs; /* its registers, mapped, by 32-bit word */
+    uint32_t gsi_base;       /* the global system interrupt of input 0 */
+    uint32_t inputs;         /* the entries of its redirection table */
     uint8_t id;
 };
 
@@ -47,6 +48,8 @@ static struct {
     uint32_t input;
 } lines[16];
 
+/** Read the internal register `reg` of `c` through its select register and
+ * window. */
 static uint32_t reg_read(const struct ioapic *c, uint32_t reg)
 {
     uint32_t flags = kirq_save();
@@ -58,6 +61,7 @@ static uint32_t reg_read(const struct ioapic *c, uint32_t reg)
     return v;
 }
 
+/** Write `value` to the internal register `reg` of `c`. */
 static void reg_write(const struct ioapic *c, uint32_t reg, uint32_t value)
 {
     uint32_t flags = kirq_save();

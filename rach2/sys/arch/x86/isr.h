@@ -10,8 +10,15 @@
 #include "../../lib/kstring.h"
 
 /*
- * First 32 interrupt handlers
+ * The PC's interrupt and exception entry: the stubs the IDT's vectors name,
+ * which each architecture's isr_handler.s defines, the routing of lines 0
+ * to 15, and the double fault's task. isr.c runs the handler chains of
+ * ../../irq.h.
  */
+
+/* The entry stubs of the processor's exceptions, vectors 0 to 31, but for
+ * the double fault, 8, which i686 takes through a task gate and
+ * x86_64/idt.c declares itself. */
 extern void isr0(void);
 extern void isr1(void);
 extern void isr2(void);
@@ -44,9 +51,7 @@ extern void isr29(void);
 extern void isr30(void);
 extern void isr31(void);
 
-/*
- * First 16 interrupt request handlers
- */
+/* The entry stubs of lines 0 to 15, vectors 32 to 47. */
 extern void irq0(void);
 extern void irq1(void);
 extern void irq2(void);
@@ -82,7 +87,8 @@ extern void msi13(void);
 extern void msi14(void);
 extern void msi15(void);
 
-/* The vector the APIC raises for an interrupt that went away. */
+/* The local APIC's spurious vector, raised for an interrupt that went away,
+ * and the interprocessor interrupt's vector. */
 extern void spurious_isr(void);
 extern void ipi_isr(void);
 
@@ -92,12 +98,17 @@ extern void ipi_isr(void);
 #define ISR_MSI_FIRST 48
 #define ISR_MSI_LAST  63
 
-/*
- * Syscall interrupt handler (int 0x80)
- */
+/* The i686 system call gate, `int $0x80`, vector 128. */
 extern void isr128(void);
 
-/** Clear the handler table and enable interrupts. */
+/**
+ * Clear the handler table, put the shared exception handler on every
+ * exception vector but 2, 8, 14 and 18, the hardware-fault handler on the
+ * NMI (2) and the machine check (18), and on x86-64 the double fault's on
+ * 8, then enable interrupts. The page fault, 14, gets its handler from
+ * `init_paging`, and i686's double fault is a task (`isr_double_fault`).
+ * The boot calls it once, on the boot processor, after the IDT is loaded.
+ */
 void init_isr(void);
 
 /**

@@ -22,6 +22,8 @@
  * stopped. */
 #define CALIBRATE_READS 10000000u
 
+/* The tick rate `apic_timer_start` was given, which the counter's
+ * arithmetic divides a second by. */
 static uint32_t tick_hz = 100;
 
 void apic_lint_init(const struct acpi_info *a)
@@ -108,6 +110,8 @@ static uint32_t apic_elapsed(uint32_t *initial)
     return *initial - cur;
 }
 
+/** The counter's place within the tick, in microseconds: the counts gone
+ * as a share of the initial count; 0 while the timer is stopped. */
 static uint32_t apic_phase_us(void)
 {
     uint32_t initial, gone = apic_elapsed(&initial);
@@ -115,6 +119,7 @@ static uint32_t apic_phase_us(void)
     return initial ? refclock_scale(gone, 1000000u / tick_hz, initial) : 0;
 }
 
+/** The counter's place within the tick, in nanoseconds. */
 static uint32_t apic_phase_ns(void)
 {
     uint32_t initial, gone = apic_elapsed(&initial);
@@ -122,11 +127,14 @@ static uint32_t apic_phase_ns(void)
     return initial ? refclock_scale(gone, 1000000000u / tick_hz, initial) : 0;
 }
 
+/** The tick's period, in microseconds. */
 static uint32_t apic_period_us(void)
 {
     return 1000000u / tick_hz;
 }
 
+/** Whether the timer's vector has been raised at this processor and not
+ * yet taken. */
 static int apic_pending(void)
 {
     return lapic_requested(APIC_TIMER_VECTOR);

@@ -1,3 +1,10 @@
+/*
+ * isr.c: the PC's interrupts and exceptions: the handler chains of
+ * ../../irq.h, the routers the entry stubs call, the signals of the
+ * processor's exceptions, and the routing of lines 0 to 15 through the 8259
+ * pair or the I/O APIC.
+ */
+
 #include "ioapic.h"
 #include "lapic.h"
 #include "../../klog.h"
@@ -16,19 +23,10 @@
 #include "../i686/tss.h"
 #endif
 
-/*
- * Kill the faulting process with `signo` and schedule another; defined in the
- * process layer. Declared here, as in the page-fault handler, so the trap core
- * need not pull in the whole process header.
- */
 #include "../../../kernel.h"
 
-/*
- * The scheduler, and whether this processor is inside a system call.
- * Declared here for the same reason as the kill above: a message vector that
- * woke a reader has to let that reader run, and the trap core need not pull
- * in the whole process header to ask which context it interrupted.
- */
+/* The scheduler's switch from an interrupt handler (proc/sched.h), which
+ * lets a process a device's interrupt woke run. */
 extern void sched_preempt(void);
 
 /* The saved flags register of a frame: EFLAGS, or RFLAGS on x86-64. */
@@ -47,13 +45,13 @@ static volatile uint32_t irq_count = 0;
 static volatile uint32_t vector_count[32];
 
 /*
- * Each vector has a short chain of handlers, not a single slot, so
- * devices that share one PIC line can each install their own. Level-triggered
- * PCI INTx lines are routinely shared: under QEMU's i440fx the HD Audio
- * controller and the RTL8139 NIC both land on IRQ 11. On a shared line every
- * chained handler runs and checks its own device's status, so the device that
- * actually raised the line gets acknowledged; a handler that never runs cannot
- * clear its device, the line stays asserted, and the IRQ storms.
+ * Each vector has a short chain of handlers, so that devices that share one
+ * line can each install their own. PCI's level-triggered INTx lines are
+ * often shared, since a chipset routes many devices' pins to a few lines.
+ * On a shared line every chained handler runs and checks its own device's
+ * status, so the device that raised the line is acknowledged; a handler
+ * that never ran could not clear its device, the line would stay asserted,
+ * and the interrupt would repeat without end.
  */
 static isr_handler_t _isr_handlers[256][ISR_MAX_VECTOR_HANDLERS];
 static uint8_t _vector_taken[256]; /* given to a device by isr_alloc_vector */
@@ -76,6 +74,9 @@ static uint16_t lines_local;
 static uint16_t lines_held;
 static uint16_t lines_pci;
 
+/* The routers the entry stubs of i686/isr_handler.s and
+ * x86_64/isr_handler.s call; x86-64's exceptions and interrupts reach the
+ * first two through `x86_64_route` (x86_64/idt.c). */
 void _isr_router(isr_params_t *params);
 
 void _irq_router(isr_params_t *params);
@@ -123,9 +124,10 @@ static const char *const _exception_names[32] = {"divide error",
                                                  "reserved",
                                                  "reserved"};
 
-/* The floating-point exception an FPU status names, as Linux reports it:
- * invalid operation, then division by zero, overflow, underflow and precision,
- * among the flags `status` raised and `mask` does not mask. */
+/** The si_code of the floating-point exception an FPU status names, as
+ * Linux reports it: invalid operation, then division by zero, overflow,
+ * underflow (with a denormal operand) and precision, among the flags
+ * `status` raised and `mask` does not mask; 0 for none. */
 static int32_t _fpe_code(uint32_t status, uint32_t mask)
 {
     uint32_t raised = status & ~mask;
@@ -208,20 +210,23 @@ static int _exception_signal(const isr_params_t *params, struct k_siginfo *info)
 }
 
 /**
- * Default handler for every CPU exception without a dedicated one.
+ * The handler of every processor exception without one of its own
+ * (`init_isr`).
  *
- * The page-fault vector (14) installs its own handler; the rest of vectors
- * 0-31 share this one. Without it an unhandled exception returns into the
- * faulting instruction, which faults again to a triple fault and a silent
- * reset. A fault taken in user mode (the saved `CS` is at RPL 3) is that
- * process's own, so it gets the signal its cause maps to, forced as Linux
- * forces one: a handler the process installed runs, a tracer takes the stop,
- * and otherwise the process dies and the cause is printed. A fault in kernel
- * mode has no safe recovery and panics.
+ * Without a handler the router would return to the faulting instruction,
+ * which would fault again without end. A fault taken in user mode (the
+ * saved `CS` is at RPL 3) is that process's own, so it gets the signal its
+ * cause maps to, forced as Linux forces one: a handler the process
+ * installed runs, a tracer takes the stop, and otherwise the process dies
+ * and the cause is logged. A fault in kernel mode has no safe recovery and
+ * panics.
  *
- * A debug exception at i686's system-call gate entry is deferred until the
- * syscall has built its user frame, as on x86-64. Other kernel data hits
- * post SIGTRAP for user return and let the memory access go on.
+ * A debug exception in kernel mode, which only i686 takes here, is no
+ * fault of the kernel's. The single-step flag is cleared in the saved
+ * flags; one at the system call gate's entry is deferred until the system
+ * call has built its user frame (`debugreg_defer_user`), as on x86-64; and
+ * a data breakpoint elsewhere posts SIGTRAP for the return to user mode and
+ * lets the access go on.
  */
 static void _exception_handler(isr_params_t *params)
 {
@@ -376,18 +381,13 @@ void isr_double_fault(void)
 #endif
 
 /**
- * Clear the handler table, install the default exception handler, and enable
- * interrupts.
- *
- * Every CPU exception but four gets the shared default, so a fault yields a
- * diagnostic and a contained kill or panic, not a silent triple-fault reset.
- * The page fault, vector 14, has its handler from `init_paging`, and the
- * double fault, vector 8, is taken onto a stack of its own, by a task gate
- * to `isr_double_fault` on i686 and by an interrupt stack to
- * `_double_fault_handler` on x86-64, which reports it and panics: a kernel
- * stack that runs into its guard page raises one, since the page fault's
- * frame cannot be pushed there. The NMI and the machine check, vectors 2
- * and 18, report a fault of the machine and stop it, whatever was running.
+ * Every exception has a handler from here or from `init_paging`, so that a
+ * fault yields a log record and a contained kill or panic, not a fault
+ * repeated without end. The double fault is taken onto a stack of its own,
+ * by a task gate on i686 and by an interrupt stack on x86-64, since a
+ * kernel stack that runs into its guard page raises one: the page fault's
+ * frame cannot be pushed there. The NMI and the machine check report a
+ * fault of the machine and stop it, whatever was running.
  */
 void init_isr(void)
 {
@@ -406,7 +406,7 @@ void init_isr(void)
     register_isr_handler(8, &_double_fault_handler, "double fault");
 #endif
 
-    __asm__ __volatile__("sti"); /* Enable interrupt handling. */
+    __asm__ __volatile__("sti");
 }
 
 /** Route line `line` through the I/O APIC to this processor, when it is
@@ -545,10 +545,10 @@ static void _dispatch(isr_params_t *params)
 }
 
 /**
- * Dispatch a CPU exception/software interrupt to its handler chain.
- *
- * `params` points at the saved register frame on the interrupt stack, so a
- * handler can edit the saved registers (for example, a syscall return value).
+ * Take the big lock and run the handler chain of a processor exception or
+ * a system call; `isr_leave` gives the lock back. `params` is the saved
+ * register frame, so that a handler can change the saved registers, a
+ * system call's result for one.
  */
 void _isr_router(isr_params_t *params)
 {
@@ -607,8 +607,8 @@ void isr_local_router(isr_params_t *params)
     lapic_spurious();
 }
 
-/*
- * The hardware interrupt's dispatch, with the depth `in_interrupt` reads
+/**
+ * Run the chain of a device's interrupt with the depth `in_interrupt` reads
  * kept around it: an allocation made by a handler is the kernel's, whoever
  * was running.
  */
@@ -620,12 +620,22 @@ static void irq_dispatch(isr_params_t *params)
 }
 
 /**
- * Dispatch a hardware IRQ and end it at the controller it came through.
+ * Take the big lock, count a device's interrupt, run its vector's chain and
+ * end it at the controller it came through; `isr_leave` gives the lock
+ * back.
  *
- * Through the 8259, vectors at or above 40 come from the slave PIC and need
- * both PICs acked; the master is always acked. The EOI is sent before the
- * handler chain runs so a fast device can re-raise its line without being
- * lost.
+ * A message from a PCI device, vector 48 and up, has no 8259 line to
+ * acknowledge, and the local APIC's end-of-interrupt comes after the chain.
+ * Nothing is lost either way, since a second message sets the processor's
+ * request bit whether or not this one is still in service. Ending it after
+ * the chain keeps the two halves of one interrupt in one place, and costs
+ * the vectors below it the time the chain runs, which the kernel's own
+ * handlers bound.
+ *
+ * Through the 8259, vectors at or above 40 come from the slave and need
+ * both controllers acknowledged; the master is always acknowledged. The end
+ * is sent before the chain runs, so that a fast device can raise its line
+ * again without being lost.
  *
  * Through the I/O APIC, the local APIC's end-of-interrupt comes after the
  * chain, as a message's does: a level-triggered line is still asserted until
@@ -635,6 +645,11 @@ static void irq_dispatch(isr_params_t *params)
  * vector is in service the local APIC blocks every vector of its
  * priority and below, the lines' included; it is an edge, and is ended
  * first, as through the 8259.
+ *
+ * After any chain but the tick's, a process a device woke runs now, or at
+ * its system call's exit (`sched_preempt`): woken only at the next tick, a
+ * disk's caller that slept for its command would get one command a
+ * scheduler round. The tick's own handler makes its switch itself.
  */
 void _irq_router(isr_params_t *params)
 {
@@ -649,16 +664,6 @@ void _irq_router(isr_params_t *params)
 #endif
 
     if (params->vector >= 48) {
-        /*
-         * A message from a PCI device: the 8259 has no line to acknowledge,
-         * and the APIC's end-of-interrupt comes after the handler chain.
-         * Nothing is lost either way, since a second message sets the
-         * processor's request bit whether or not this one is still in
-         * service and is taken when this returns. Ending it after the chain
-         * keeps the two halves of one interrupt in one place, and costs the
-         * vectors below it the time the chain runs, which is bounded by the
-         * handlers this kernel installs.
-         */
         irq_dispatch(params);
         lapic_eoi();
         sched_preempt(); /* a woken reader runs now, or at the call's exit */
@@ -684,10 +689,6 @@ void _irq_router(isr_params_t *params)
     reset_master_pic();
 
     irq_dispatch(params);
-    /* A process a device woke runs now, or at its call's exit, as on the
-     * APIC path above; woken only at the next tick, a disk's caller that
-     * slept for its command would get one command a scheduler round. The
-     * timer's own handler takes its switch itself. */
     if (params->vector != 32) {
         sched_preempt();
     }
@@ -696,8 +697,9 @@ void _irq_router(isr_params_t *params)
 /**
  * The count of interrupts taken on `vector`, for /proc/interrupts.
  *
- * Vectors below 32 are exceptions and above 63 are the syscall gate and the
- * APIC's spurious vector, none of which this counts.
+ * Vectors below 32 are exceptions, and those above 63 are the system call
+ * gate, the interprocessor interrupt and the APIC's spurious vector, none
+ * of which this counts; their count is 0.
  */
 uint32_t isr_vector_count(int vector)
 {
@@ -727,9 +729,6 @@ uint32_t isr_interrupt_total(void)
     return irq_count;
 }
 
-/** "PIC" for the 8259's sixteen vectors, "IO-APIC" for the I/O APIC's,
- * "LAPIC" for the tick the local APIC's timer raises, and "MSI" for the
- * messages' above. */
 const char *isr_vector_source(int vector)
 {
     if (vector >= ISR_MSI_FIRST) {
