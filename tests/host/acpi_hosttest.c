@@ -8,8 +8,8 @@
  * The parser reads physical memory through the map function it is given,
  * and the kernel's side of it through `map_mmio`. Both are answered here by
  * a model of physical memory: a few regions, each a buffer at a physical
- * address, and a request that is not wholly inside one is refused, as a
- * table past the kernel's reach is. Into the model go the tables QEMU's
+ * address, and a request that is not wholly inside one fails, as one for a
+ * table past the kernel's reach does. Into the model go the tables QEMU's
  * SeaBIOS left for `-machine pc` and `-machine q35` (acpi_qemu_tables.h),
  * at the addresses they had, and tables built here byte by byte with their
  * checksums made right or wrong on purpose: a root table with a bad
@@ -43,9 +43,11 @@ static int fails;
 
 /* ---- the log ---- */
 
-static char log_text[16384];
+static char log_text[16384]; /* every line logged since log_clear */
 static unsigned long log_len;
 
+/** Append `subsystem: message` and a newline to `log_text`; a message is
+ * cut at 255 bytes, and one that would fill the buffer is dropped. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     va_list ap;
@@ -69,12 +71,14 @@ void klog(int level, const char *subsystem, const char *format, ...)
     log_text[log_len] = '\0';
 }
 
+/** Empty the log. */
 static void log_clear(void)
 {
     log_len = 0;
     log_text[0] = '\0';
 }
 
+/** Whether `what` occurs in the log. */
 static int logged(const char *what)
 {
     return strstr(log_text, what) != 0;
@@ -86,15 +90,16 @@ static int logged(const char *what)
 #define REGION_MAX 0x21000u
 
 struct region {
-    uint64_t phys;
-    uint32_t len;
+    uint64_t phys; /* the physical address of mem[0], a page boundary */
+    uint32_t len;  /* whole pages, at most REGION_MAX bytes */
     unsigned char mem[REGION_MAX];
 };
 
 static struct region regions[REGIONS];
 static int nregions;
-static int mmio_calls;
+static int mmio_calls; /* calls of map_mmio */
 
+/** Empty the model and the log: no regions, all of them zeroed. */
 static void model_reset(void)
 {
     int i;
@@ -126,6 +131,7 @@ static unsigned char *region_add(uint64_t phys, uint32_t len)
     return r->mem + (phys - r->phys);
 }
 
+/** The `len` bytes at `phys`, or NULL when no one region holds them all. */
 static unsigned char *model_at(uint64_t phys, uint64_t len)
 {
     int i;
@@ -138,6 +144,7 @@ static unsigned char *model_at(uint64_t phys, uint64_t len)
     return 0;
 }
 
+/** The parser's map function: `model_at`. */
 static const uint8_t *model_map(uint64_t phys, uint32_t len)
 {
     return model_at(phys, len);
@@ -145,6 +152,7 @@ static const uint8_t *model_map(uint64_t phys, uint32_t len)
 
 uintptr_t map_mmio(uintptr_t phys, size_t size);
 
+/** The kernel's mapping: `model_at`, counted. */
 uintptr_t map_mmio(uintptr_t phys, size_t size)
 {
     mmio_calls++;
@@ -153,9 +161,12 @@ uintptr_t map_mmio(uintptr_t phys, size_t size)
 
 /* ---- the ports and configuration space a register may be in ---- */
 
+/* The last port write and the last configuration-space write, with their
+ * widths in bits. */
 static uint32_t last_port, last_port_value, last_port_width;
 static uint32_t last_cfg_dev, last_cfg_fn, last_cfg_off, last_cfg_value, last_cfg_width;
 
+/** Record a port write of `width` bits. */
 static void port_write(uint16_t port, uint32_t value, uint32_t width)
 {
     last_port = port;
@@ -163,42 +174,50 @@ static void port_write(uint16_t port, uint32_t value, uint32_t width)
     last_port_width = width;
 }
 
+/** Record an 8-bit port write. */
 void outb(uint16_t port, uint8_t value)
 {
     port_write(port, value, 8);
 }
 
+/** Record a 16-bit port write. */
 void outw(uint16_t port, uint16_t value)
 {
     port_write(port, value, 16);
 }
 
+/** Record a 32-bit port write. */
 void outd(uint16_t port, uint32_t value)
 {
     port_write(port, value, 32);
 }
 
+/** An 8-bit port read: the port's low byte, so a row sees which was read. */
 uint8_t inb(uint16_t port)
 {
     return (uint8_t)(port & 0xFFu);
 }
 
+/** A 16-bit port read: 0x12 above the port's low byte. */
 uint16_t inw(uint16_t port)
 {
     return (uint16_t)(0x1200u | (port & 0xFFu));
 }
 
+/** A 32-bit port read: 0x123456 above the port's low byte. */
 uint32_t ind(uint16_t port)
 {
     return 0x12345600u | (port & 0xFFu);
 }
 
+/** A configuration read: 0xA0 above the device, function and offset. */
 uint32_t pci_read_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
 {
     (void)bus;
     return 0xA0000000u | ((uint32_t)device << 16) | ((uint32_t)function << 8) | offset;
 }
 
+/** Record a configuration write of `width` bits; the bus is not kept. */
 static void cfg_write(uint8_t device, uint8_t function, uint8_t offset, uint32_t value,
                       uint32_t width)
 {
@@ -209,6 +228,7 @@ static void cfg_write(uint8_t device, uint8_t function, uint8_t offset, uint32_t
     last_cfg_width = width;
 }
 
+/** Record a 32-bit configuration write. */
 void pci_write_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
                         uint32_t value)
 {
@@ -216,6 +236,7 @@ void pci_write_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t o
     cfg_write(device, function, offset, value, 32);
 }
 
+/** Record a 16-bit configuration write. */
 void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
                         uint16_t value)
 {
@@ -223,6 +244,7 @@ void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t o
     cfg_write(device, function, offset, value, 16);
 }
 
+/** Record an 8-bit configuration write. */
 void pci_write_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint8_t value)
 {
     (void)bus;
@@ -231,24 +253,28 @@ void pci_write_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t of
 
 /* ---- tables made here ---- */
 
+/** Store the low 16 bits of `v` at `p`, little-endian. */
 static void put16(unsigned char *p, uint32_t v)
 {
     p[0] = (unsigned char)v;
     p[1] = (unsigned char)(v >> 8);
 }
 
+/** Store `v` at `p`, little-endian. */
 static void put32(unsigned char *p, uint32_t v)
 {
     put16(p, v & 0xFFFFu);
     put16(p + 2, v >> 16);
 }
 
+/** Store `v` at `p`, little-endian. */
 static void put64(unsigned char *p, uint64_t v)
 {
     put32(p, (uint32_t)v);
     put32(p + 4, (uint32_t)(v >> 32));
 }
 
+/** Set byte `at` of the `len` bytes at `p` so that they sum to zero. */
 static void checksum_fix(unsigned char *p, uint32_t len, uint32_t at)
 {
     unsigned char sum = 0;
@@ -265,9 +291,10 @@ static void checksum_fix(unsigned char *p, uint32_t len, uint32_t at)
 #define MADE_AT  0x200000u
 #define MADE_MAX 0x8000u
 
-static unsigned char *made;
-static uint32_t made_used;
+static unsigned char *made; /* the region's bytes at MADE_AT */
+static uint32_t made_used;  /* bytes taken, each table on 16 bytes */
 
+/** Add the region for hand-made tables, empty. */
 static void made_reset(void)
 {
     made = region_add(MADE_AT, MADE_MAX);
@@ -341,6 +368,7 @@ static void rsdp_make(unsigned char *bios, uint32_t at, uint8_t rev, uint32_t rs
 static unsigned char madt_body[1024];
 static uint32_t madt_len;
 
+/** Start an MADT body: the local APIC at 0xFEE00000, PCAT_COMPAT set. */
 static void madt_start(void)
 {
     put32(madt_body, 0xFEE00000u);
@@ -348,6 +376,7 @@ static void madt_start(void)
     madt_len = 8;
 }
 
+/** Append the `len` bytes of entry `e` to the MADT body. */
 static void madt_entry(const unsigned char *e, uint32_t len)
 {
     uint32_t i;
@@ -358,6 +387,8 @@ static void madt_entry(const unsigned char *e, uint32_t len)
     madt_len += len;
 }
 
+/** Append an interrupt source override of ISA line `source` to `gsi`, with
+ * the MPS INTI `flags`. */
 static void madt_override(uint8_t source, uint32_t gsi, uint16_t flags)
 {
     unsigned char e[10] = {2, 10, 0, 0, 0, 0, 0, 0, 0, 0};
@@ -370,11 +401,15 @@ static void madt_override(uint8_t source, uint32_t gsi, uint16_t flags)
 
 /* ---- loading the captured machines ---- */
 
+/** Add the BIOS area, 0xE0000 to 0xFFFFF, empty. */
 static unsigned char *bios_area(void)
 {
     return region_add(0xE0000u, 0x20000u);
 }
 
+/** Load a captured machine into a fresh model: the first page, where the
+ * EBDA's pointer is, the BIOS area with the 20-byte RSDP at `rsdp_at`, and
+ * the tables at `tables_at`. */
 static void machine_load(const unsigned char *rsdp, uint32_t rsdp_at, const unsigned char *tables,
                          uint32_t tables_len, uint32_t tables_at)
 {
@@ -395,6 +430,8 @@ static void machine_load(const unsigned char *rsdp, uint32_t rsdp_at, const unsi
 
 /* ---- the rows ---- */
 
+/** Whether the record lists a table of signature `sig` that passed its
+ * checks (`ok` 1) or failed them (`ok` 0). */
 static int has_table(const struct acpi_info *a, const char *sig, int ok)
 {
     int i;
@@ -529,7 +566,7 @@ static void search_rows(void)
 
 /** A revision 2 RSDP whose RSDT field is zero: the XSDT is read, its
  * entries 64 bits wide, one of them a table past 4 GiB. A bad XSDT falls
- * back to the RSDT; a bad extended checksum refuses the RSDP. */
+ * back to the RSDT; with a bad extended checksum the RSDP is not taken. */
 static void xsdt_rows(void)
 {
     struct acpi_info a;
@@ -798,9 +835,9 @@ static void fadt_rows(void)
     CHECK(logged("X_DSDT 0x500000000 unreadable"), "the unreadable X_DSDT is named");
 }
 
-/** The kernel's windows on physical memory: once all are made, a register
- * outside them is refused and maps nothing, however often it is read, and
- * one inside them is still read. */
+/** The kernel's windows on physical memory: once all are made, a read of a
+ * register outside them fails and maps nothing, however often it is made,
+ * and one inside them is still read. */
 static void window_rows(void)
 {
     struct acpi_gas g = {ACPI_SPACE_MEMORY, 32, 0, 3, 0};
@@ -828,6 +865,8 @@ static void window_rows(void)
 
 /* ---- \_S5 ---- */
 
+/** Whether `acpi_s5_find` reads sleep types `a` and `b` from `aml`, or,
+ * when `a` is negative, finds no \_S5 in it. */
 static int s5(const unsigned char *aml, uint32_t len, int a, int b)
 {
     uint8_t ta = 0xEE, tb = 0xEE;
@@ -838,6 +877,8 @@ static int s5(const unsigned char *aml, uint32_t len, int a, int b)
     return ta == a && tb == b;
 }
 
+/** The \_S5 search over AML made here: each encoding of the package and its
+ * values, and the packages it must not read. */
 static void s5_rows(void)
 {
     const unsigned char qemu[] = {0x08, '_', 'S', '5', '_', 0x12, 0x06, 0x04, 0, 0, 0, 0};
@@ -876,6 +917,8 @@ static void s5_rows(void)
     CHECK(s5(qemu_pc_tables + 0x40 + 36, 8605 - 36, 0, 0), "the captured pc DSDT");
 }
 
+/** Run the rows. The exit status is the count of failed checks, at most
+ * 255. */
 int main(void)
 {
     qemu_pc_rows();
