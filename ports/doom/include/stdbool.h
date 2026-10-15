@@ -1,10 +1,10 @@
 /*
- * stdbool.h - Boolean type for Doom on Rach2
+ * stdbool.h: bool, true and false, as C99 defines them, for Doom on Rach2.
  */
 #ifndef _STDBOOL_H
 #define _STDBOOL_H
 
-/* Use compiler built-in bool if available */
+/* C++ has bool, true and false of its own. */
 #ifndef __cplusplus
 #define bool _Bool
 #define true 1

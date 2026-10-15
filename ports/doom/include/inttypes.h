@@ -1,12 +1,14 @@
 /*
- * inttypes.h - Integer type format macros for Doom on Rach2
+ * inttypes.h: the printf and scanf conversions of the exact-width integer
+ * types, for Doom on Rach2. crt0.c's printf reads an ll argument as a long,
+ * so the 64-bit macros are right only on x86-64, and its sscanf reads only
+ * %d.
  */
 #ifndef _INTTYPES_H
 #define _INTTYPES_H
 
 #include <stdint.h>
 
-/* Format macros for printf/scanf */
 #define PRId8  "d"
 #define PRId16 "d"
 #define PRId32 "d"

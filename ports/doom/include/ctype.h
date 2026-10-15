@@ -1,5 +1,6 @@
 /*
- * ctype.h - Character type functions for Doom on Rach2
+ * ctype.h: the character classes of Doom on Rach2, those of the C locale
+ * for ASCII. toupper and tolower are in crt0.c, and the tests are inline.
  */
 #ifndef _CTYPE_H
 #define _CTYPE_H

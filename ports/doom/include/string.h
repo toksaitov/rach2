@@ -1,6 +1,6 @@
 /*
- * string.h - String functions for Doom on Rach2
- * Functions implemented in crt0.c
+ * string.h: the string functions of Doom on Rach2. crt0.c defines the
+ * functions declared here, a byte at a time, and the rest are inline.
  */
 #ifndef _STRING_H
 #define _STRING_H
@@ -22,7 +22,6 @@ char *strchr(const char *s, int c);
 char *strrchr(const char *s, int c);
 char *strstr(const char *haystack, const char *needle);
 
-/* Additional functions Doom might need */
 static inline char *strncat(char *dest, const char *src, size_t n) {
     char *d = dest;
     while (*d) d++;
@@ -62,6 +61,7 @@ static inline char *strdup(const char *s) {
     return dup;
 }
 
+/** "Error", whatever `errnum` is. */
 static inline char *strerror(int errnum) {
     (void)errnum;
     return "Error";

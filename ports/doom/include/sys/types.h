@@ -1,5 +1,6 @@
 /*
- * sys/types.h - System types for Doom on Rach2
+ * sys/types.h: the POSIX types for Doom on Rach2, each of 32 bits on both
+ * architectures, where x86-64's ssize_t and off_t have 64.
  */
 #ifndef _SYS_TYPES_H
 #define _SYS_TYPES_H

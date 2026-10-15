@@ -1,5 +1,5 @@
 /*
- * signal.h - Signal handling stubs for Doom on Rach2
+ * signal.h: the signal numbers, with Linux's values, for Doom on Rach2.
  */
 #ifndef _SIGNAL_H
 #define _SIGNAL_H
@@ -14,6 +14,7 @@ typedef void (*sighandler_t)(int);
 #define SIG_IGN ((sighandler_t)1)
 #define SIG_ERR ((sighandler_t)-1)
 
+/** A stub: installs nothing and returns SIG_DFL. */
 static inline sighandler_t signal(int signum, sighandler_t handler) {
     (void)signum; (void)handler;
     return SIG_DFL;

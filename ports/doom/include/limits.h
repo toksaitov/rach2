@@ -1,5 +1,7 @@
 /*
- * limits.h - System limits for Doom on Rach2
+ * limits.h: the limits of the integer types, and PATH_MAX, for Doom on
+ * Rach2. LONG_MIN, LONG_MAX and ULONG_MAX are those of a 32-bit long, which
+ * is i386's; on x86-64, where long has 64 bits, they are too small.
  */
 #ifndef _LIMITS_H
 #define _LIMITS_H

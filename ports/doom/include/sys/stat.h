@@ -1,5 +1,6 @@
 /*
- * sys/stat.h - File stat structures for Doom on Rach2
+ * sys/stat.h: struct stat and the file type macros for Doom on Rach2, and
+ * stat, fstat and mkdir as stubs that always fail and return -1.
  */
 #ifndef _SYS_STAT_H
 #define _SYS_STAT_H
