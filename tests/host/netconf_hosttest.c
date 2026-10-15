@@ -1,5 +1,6 @@
 /*
- * netconf_hosttest.c: the boot command line's address, parsed and judged.
+ * netconf_hosttest.c: parse and judge the address the boot command line
+ * gives, and the setters of netconf.c that change it while the machine runs.
  *
  * host-deps: rach2/sys/network/netconf.c rach2/sys/cmdline.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
@@ -7,7 +8,7 @@
  * A wrong address here is not a crash; it is a machine that comes up on a
  * network nobody asked for, which on a remote board is indistinguishable from
  * a machine that did not come up at all. So the refusals matter more than the
- * acceptances, and most of what follows is text that must NOT be taken as an
+ * acceptances, and most of what follows is text that must not be taken as an
  * address: the octal-looking, the out-of-range, the trailing-garbage, the
  * subnet's own network and broadcast, and a gateway that no host on the given
  * subnet could reach.
@@ -34,7 +35,7 @@ extern int memcmp(const void *a, const void *b, __SIZE_TYPE__ n);
    for them and the cases below require them to have been called. */
 static int arp_flushes;
 static int tcp_told;
-static int tcp_told_locked;
+static int tcp_told_locked; /* TCP was last told under the network lock */
 
 void arp_flush(void);
 void tcp_local_addr_changed(void);
@@ -48,12 +49,14 @@ static int lock_unbalanced;
 uint32_t net_lock(void);
 void net_unlock(uint32_t flags);
 
+/** Take the network lock: count it and return 0 as the saved flags. */
 uint32_t net_lock(void)
 {
     lock_depth++;
     return 0;
 }
 
+/** Release the network lock, noting a release without a lock. */
 void net_unlock(uint32_t flags)
 {
     (void)flags;
@@ -63,11 +66,14 @@ void net_unlock(uint32_t flags)
     }
 }
 
+/** Count a flush of the whole ARP cache. */
 void arp_flush(void)
 {
     arp_flushes++;
 }
 
+/** Count that TCP was told of an address change, and note whether it was
+ * told under the network lock. */
 void tcp_local_addr_changed(void)
 {
     tcp_told++;
@@ -88,7 +94,11 @@ static int fails;
 #define IP4(a, b, c, d) \
     (((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | ((uint32_t)(c) << 8) | (uint32_t)(d))
 
-/** Whether `text` is refused as an address and prefix. */
+/**
+ * Return 1 when netconf_parse_cidr rejects `text` and leaves the caller's
+ * values alone, since a caller that ignored the return would otherwise
+ * configure whatever was half parsed; return 0 otherwise.
+ */
 static int cidr_refused(const char *text)
 {
     uint32_t ip = 0xDEADBEEFu, mask = 0xDEADBEEFu;
@@ -96,12 +106,13 @@ static int cidr_refused(const char *text)
     if (netconf_parse_cidr(text, &ip, &mask)) {
         return 0;
     }
-    /* A refusal must leave the caller's values alone, since a caller that
-       ignored the return would otherwise configure whatever was half-parsed. */
     return ip == 0xDEADBEEFu && mask == 0xDEADBEEFu;
 }
 
-/** Whether `text` is refused as a bare address. */
+/**
+ * Return 1 when netconf_parse_addr rejects `text` and leaves the caller's value
+ * alone, and 0 otherwise.
+ */
 static int addr_refused(const char *text)
 {
     uint32_t ip = 0xDEADBEEFu;
@@ -119,13 +130,14 @@ static int addr_refused(const char *text)
 static struct netdev the_iface;
 static struct netdev other_iface;
 
-/* Which addresses this machine's interfaces hold, as this test presents
- * them. */
+/** Report whether `ip` is the address of either interface. */
 int netdev_owns(uint32_t ip)
 {
     return ip != 0 && (ip == the_iface.ip || ip == other_iface.ip);
 }
 
+/** Report whether `ip` is one of `nd`'s addresses, its first or another; 0
+ * for an `ip` of 0. */
 int netdev_holds(const struct netdev *nd, uint32_t ip)
 {
     int i;
@@ -138,17 +150,19 @@ int netdev_holds(const struct netdev *nd, uint32_t ip)
     return ip != 0 && ip == nd->ip;
 }
 
-/* The added routes, which these cases do not make. */
+/** Prune the routes added through `nd`: a no-op, since no row adds one. */
 void netdev_route_prune(struct netdev *nd)
 {
     (void)nd;
 }
 
+/** Report whether `ip` is the broadcast address of `nd`'s subnet. */
 static int is_bcast_of(const struct netdev *nd, uint32_t ip)
 {
     return nd->ip != 0 && nd->mask != 0 && ip == (nd->ip | ~nd->mask);
 }
 
+/** Report the all-ones address and either interface's broadcast address. */
 int netdev_is_broadcast(uint32_t ip)
 {
     if (ip == 0xFFFFFFFFu) {
@@ -157,16 +171,19 @@ int netdev_is_broadcast(uint32_t ip)
     return is_bcast_of(&the_iface, ip) || is_bcast_of(&other_iface, ip);
 }
 
+/** Return the first interface. */
 struct netdev *netdev_first(void)
 {
     return &the_iface;
 }
 
+/** Report the model's two interfaces. */
 int netdev_count(void)
 {
     return 2;
 }
 
+/** Return interface `n`, counted from 0, or NULL past the two. */
 struct netdev *netdev_at(int n)
 {
     if (n == 0) {
@@ -180,8 +197,9 @@ struct netdev *netdev_at(int n)
 void arp_forget_dev(struct netdev *nd);
 
 static int arp_forgets;
-static struct netdev *arp_forgot;
+static struct netdev *arp_forgot; /* the interface of the last forget */
 
+/** Count a forget of the mappings learned on `nd`, and record `nd`. */
 void arp_forget_dev(struct netdev *nd)
 {
     arp_forgets++;
@@ -213,6 +231,10 @@ static void conf_reset(void)
     k_memcpy(other_iface.mac, secondary_mac, 6);
 }
 
+/**
+ * Reset the configuration, take `cmdline` as the boot command line, and return
+ * what netconf_apply returns, with its reason in `*why`.
+ */
 static int apply(const char *cmdline, const char **why)
 {
     conf_reset();
@@ -220,8 +242,8 @@ static int apply(const char *cmdline, const char **why)
     return netconf_apply(why);
 }
 
-static int warnings;
-static int oversized_warnings;
+static int warnings;           /* the warnings logged */
+static int oversized_warnings; /* those for an oversized rach2.ifaddr value */
 
 /** Count rejected tokens and the diagnostic for an oversized value. */
 void klog(int level, const char *subsystem, const char *format, ...)
@@ -238,7 +260,13 @@ void klog(int level, const char *subsystem, const char *format, ...)
     }
 }
 
-/** Check MAC-based configuration and recovery after rejected tokens. */
+/**
+ * Check `rach2.ifaddr`, which configures an interface named by its station
+ * address: each interface gets its own address, mask and gateway, the first's
+ * also being the machine's; one with no gateway clears it; and a value that is
+ * malformed, too long, empty or of an unknown station address is reported once
+ * and passed over, with the valid options after it applied.
+ */
 static void configure_by_mac(void)
 {
     char line[256];
@@ -292,7 +320,12 @@ static void configure_by_mac(void)
     CHECK(other_iface.ip == IP4(10, 0, 3, 9), "valid MAC option after rejected tokens is applied");
 }
 
-/** Check secondary address notifications without changing primary state. */
+/**
+ * Check that changing the second interface's address tells TCP under the
+ * network lock, forgets only that interface's ARP mappings, clears its gateway
+ * and leaves the first interface and the machine's address alone; and that
+ * setting the address it has tells nothing.
+ */
 static void secondary_address_change(void)
 {
     conf_reset();
@@ -313,6 +346,51 @@ static void secondary_address_change(void)
           "removing the secondary address notifies TCP");
 }
 
+/**
+ * Run the rows of configure_by_mac and secondary_address_change, then:
+ *
+ *   * netconf_parse_cidr takes an address with a prefix from /1 to /30 and
+ *     rejects /31, /32 and /0; text that must not become an address, and an
+ *     address that exists but is not a host, is rejected and leaves the
+ *     caller's values alone;
+ *   * netconf_parse_addr takes a bare address for the gateway, and
+ *     netconf_gateway_ok takes only a host on the address's subnet other than
+ *     the address itself;
+ *   * the tuple rule of netconf_apply: no option keeps the SLIRP defaults, an
+ *     address alone has no gateway, and a gateway alone, an option given twice
+ *     or a value that is no address is rejected with a reason; a token that
+ *     only starts or ends with a key is not that key;
+ *   * netconf_format and netconf_prefix_of;
+ *   * an address set while the machine runs forgets the ARP cache, every entry
+ *     of which was learned by a machine at the old address, and tells TCP; an
+ *     address that is not a host, or a mask that is not a run of ones, is
+ *     rejected and tells nothing;
+ *   * an address with no mask takes the classful mask its first byte implies
+ *     until the real one arrives, since `ifconfig` sets the two in separate
+ *     calls, and the other order, the one a machine booted with `none` is
+ *     configured in, works too. An address that is a host only under a wider
+ *     mask waits out of force while the classful mask stands in, and a
+ *     rejection in that state unconfigures the interface rather than leave it
+ *     on a pair nobody judged;
+ *   * reapplying the pair the machine has changes nothing and tells nothing: a
+ *     DHCP client runs the same `ifconfig` on a renewal as on a lease, and a
+ *     machine that tore its connections down at every renewal would drop every
+ *     session on it at the lease interval;
+ *   * an address of 0 unconfigures, as a client does when a lease ends, and
+ *     takes the mask with it;
+ *   * a gateway needs an address first, and must be a host on its subnet;
+ *   * a machine with two cards is on two networks, and configuring one of them
+ *     leaves the other alone: the second interface's address, mask and gateway
+ *     are its own, it can wait for its mask without putting the first out of
+ *     force, and only the ARP mappings learned on it are forgotten. A call
+ *     about no interface, from a caller whose device is gone, configures
+ *     nothing;
+ *   * `rach2.ip=none` leaves IPv4 unset for userland to set, and a gateway
+ *     beside it is rejected;
+ *   * every change leaves the network lock as it found it.
+ *
+ * Returns the number of failed checks, at most 255.
+ */
 int main(void)
 {
     uint32_t ip, mask;
@@ -321,7 +399,6 @@ int main(void)
 
     configure_by_mac();
     secondary_address_change();
-    /* ---- addresses that are addresses ---- */
     ip = 0;
     mask = 0;
     CHECK(netconf_parse_cidr("192.168.1.50/24", &ip, &mask), "a plain LAN address parses");
@@ -340,7 +417,6 @@ int main(void)
     CHECK(netconf_parse_cidr("192.168.1.50/0", &ip, &mask) == 0, "a /0 is refused");
     CHECK(cidr_refused("192.168.1.50/31"), "the /31 refusal leaves the caller's values alone");
 
-    /* ---- text that must not become an address ---- */
     CHECK(cidr_refused("192.168.1.50"), "an address with no prefix is refused");
     CHECK(cidr_refused("192.168.1/24"), "three quartets are refused");
     CHECK(cidr_refused("192.168.1.50.7/24"), "five quartets are refused");
@@ -357,7 +433,6 @@ int main(void)
     CHECK(cidr_refused("hello/24"), "text that is not a number at all is refused");
     CHECK(cidr_refused("192.168.1.50/1024"), "an over-long prefix is refused, not truncated");
 
-    /* ---- addresses that exist but are not hosts ---- */
     CHECK(cidr_refused("192.168.1.0/24"), "the subnet's network address is refused");
     CHECK(cidr_refused("192.168.1.255/24"), "the subnet's broadcast address is refused");
     CHECK(cidr_refused("172.16.4.0/30"), "the network address of a /30 is refused");
@@ -370,7 +445,6 @@ int main(void)
     CHECK(cidr_refused("224.0.0.1/24"), "a multicast address is refused");
     CHECK(cidr_refused("239.255.255.250/24"), "the top of multicast is refused");
 
-    /* ---- bare addresses, for the gateway ---- */
     ip = 0;
     CHECK(netconf_parse_addr("10.0.2.2", &ip) && ip == IP4(10, 0, 2, 2), "a bare address parses");
     CHECK(addr_refused("10.0.2.2/24"), "a prefix on a bare address is refused");
@@ -378,7 +452,6 @@ int main(void)
     CHECK(addr_refused("0.0.0.0"), "the all-zero gateway is refused");
     CHECK(addr_refused("127.0.0.1"), "a loopback gateway is refused");
 
-    /* ---- a gateway has to be reachable ---- */
     CHECK(netconf_gateway_ok(IP4(192, 168, 1, 1), IP4(192, 168, 1, 50), 0xFFFFFF00u),
           "a gateway on our subnet is usable");
     CHECK(netconf_gateway_ok(IP4(10, 0, 0, 1), IP4(192, 168, 1, 50), 0xFFFFFF00u) == 0,
@@ -390,7 +463,6 @@ int main(void)
     CHECK(netconf_gateway_ok(IP4(192, 168, 1, 255), IP4(192, 168, 1, 50), 0xFFFFFF00u) == 0,
           "the broadcast address is not a gateway");
 
-    /* ---- the tuple rule ---- */
     CHECK(apply("", &why) == NETCONF_DEFAULT, "an empty command line keeps the defaults");
     CHECK(net_ip_addr == NET_IP_ADDR_DEFAULT && net_ip_mask == NET_IP_MASK_DEFAULT &&
               net_ip_gateway == NET_IP_GATEWAY_DEFAULT,
@@ -432,7 +504,6 @@ int main(void)
           "a token that merely starts or ends with the key is not the key");
     CHECK(net_ip_addr == IP4(192, 168, 1, 50), "and the real option still took effect");
 
-    /* ---- what the boot line prints ---- */
     netconf_format(IP4(192, 168, 1, 50), text);
     CHECK(text[0] == '1' && text[1] == '9' && text[2] == '2' && text[3] == '.',
           "an address formats back to dotted quad");
@@ -444,7 +515,6 @@ int main(void)
               netconf_prefix_of(0xFFFFFFFCu) == 30,
           "a mask reports its prefix length");
 
-    /* ---- an address set while the machine is running ---- */
     conf_reset();
     net_ip_addr = IP4(10, 0, 2, 15);
     net_ip_mask = IP4(255, 255, 255, 0);
@@ -462,7 +532,6 @@ int main(void)
     CHECK(tcp_told == 1, "and every connection opened from the old address is told");
     CHECK(net_ip_gateway == 0, "a gateway that is no longer on this subnet is not a gateway");
 
-    /* The refusals. Each leaves the machine on the address it had. */
     arp_flushes = 0;
     tcp_told = 0;
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 90, 0), IP4(255, 255, 255, 0)) == -EINVAL,
@@ -479,9 +548,6 @@ int main(void)
     CHECK(arp_flushes == 0 && tcp_told == 0, "and nothing was told about a change "
                                              "that did not happen");
 
-    /* An address with no mask yet. `ifconfig` sets the two in separate calls,
-       so this state exists between them, and the address takes the classful
-       mask its first byte implies until the real one arrives. */
     arp_flushes = 0;
     CHECK(netconf_set_address(&the_iface, IP4(10, 1, 2, 3), 0) == 0,
           "an address with no mask is taken");
@@ -495,8 +561,6 @@ int main(void)
           "and so is one that is not a run of ones");
     CHECK(net_ip_mask == IP4(255, 255, 255, 0), "neither of which moved the one that works");
 
-    /* And the other order, which is the one a machine booted with `none` is
-       configured in: nothing set at all, then an address, then a mask. */
     CHECK(netconf_set_address(&the_iface, 0, 0) == 0, "unconfiguring first");
     CHECK(net_ip_addr == 0 && net_ip_mask == 0, "leaves nothing set");
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 90, 20), 0) == 0,
@@ -505,9 +569,6 @@ int main(void)
     CHECK(net_ip_addr == IP4(192, 168, 90, 20) && net_ip_mask == IP4(255, 255, 255, 0),
           "which is a configured machine");
 
-    /* An address that is a host only under a wider mask, and the mask that
-       justifies it. The pair is not judged while the mask is the classful one
-       standing in for the real one. */
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 1, 0), 0) == 0,
           "an address that is a network address under its classful mask is taken");
     CHECK(net_ip_addr == 0 && net_ip_mask == 0,
@@ -522,10 +583,6 @@ int main(void)
     CHECK(net_ip_addr == IP4(192, 168, 1, 0) && net_ip_mask == IP4(255, 255, 0, 0),
           "leaving the pair that works");
 
-    /* Reapplying the pair the machine already has must change nothing. A DHCP
-       client runs the same `ifconfig` on a renewal as on a lease, and a machine
-       that tore its connections down every renewal would drop every session on
-       it at the lease interval. */
     arp_flushes = 0;
     tcp_told = 0;
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 1, 0), 0) == 0, "the same address again");
@@ -543,8 +600,6 @@ int main(void)
     CHECK(net_ip_mask == IP4(255, 255, 255, 0), "keeps the mask it had, not the classful one");
     CHECK(tcp_told == 1, "and told nothing beyond the one real change");
 
-    /* But a refusal while the mask is still the provisional one unconfigures
-     * instead of leaving the machine on a pair nobody judged. */
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 1, 0), 0) == 0,
           "the waiting address again");
     CHECK(netconf_set_netmask(&the_iface, IP4(255, 255, 255, 0)) == -EINVAL,
@@ -552,7 +607,6 @@ int main(void)
     CHECK(net_ip_addr == 0 && net_ip_mask == 0,
           "leaves the machine unconfigured, not answering for a network address");
 
-    /* Unconfiguring, which is what a client does when a lease ends. */
     arp_flushes = 0;
     tcp_told = 0;
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 90, 20), IP4(255, 255, 255, 0)) == 0,
@@ -566,7 +620,6 @@ int main(void)
     CHECK(netconf_broadcast() == 0xFFFFFFFFu,
           "an unconfigured machine broadcasts to everyone or not at all");
 
-    /* ---- the gateway ---- */
     CHECK(netconf_set_gateway(&the_iface, IP4(192, 168, 90, 1)) == -EINVAL,
           "a gateway needs an address to be on the subnet of");
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 90, 20), IP4(255, 255, 255, 0)) == 0,
@@ -582,11 +635,6 @@ int main(void)
     CHECK(net_ip_gateway == IP4(192, 168, 90, 1), "neither of which moved the one that works");
     CHECK(netconf_set_gateway(&the_iface, 0) == 0 && net_ip_gateway == 0, "zero clears it");
 
-    /* ---- a second interface ---- */
-    /* A machine with two cards is on two networks, and configuring one of
-       them is a statement about that one. Until the setters took an interface
-       every one of these calls wrote the first interface, so `ifconfig eth1`
-       moved eth0 and aborted its connections. */
     conf_reset();
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 90, 20), IP4(255, 255, 255, 0)) == 0 &&
               netconf_set_gateway(&the_iface, IP4(192, 168, 90, 1)) == 0,
@@ -618,8 +666,6 @@ int main(void)
     CHECK(the_iface.gateway == IP4(192, 168, 90, 1) && net_ip_gateway == IP4(192, 168, 90, 1),
           "neither of which moved the first interface's way out");
 
-    /* The address-then-mask pair is the interface's own, so one interface
-       waiting for its mask cannot put the other out of force. */
     CHECK(netconf_set_address(&other_iface, IP4(192, 168, 5, 0), 0) == 0,
           "an address that waits for a wider mask, on the second interface");
     CHECK(other_iface.ip == 0 && the_iface.ip == IP4(192, 168, 90, 20),
@@ -635,9 +681,6 @@ int main(void)
     CHECK(the_iface.ip == IP4(192, 168, 90, 20) && net_ip_addr == IP4(192, 168, 90, 20),
           "and leaves the machine on the first");
 
-    /* No interface is not the first interface. A caller with no device is a
-       caller whose device is gone, and writing the machine's configuration
-       for it would be answering a question about nothing. */
     CHECK(netconf_set_address(0, IP4(10, 0, 4, 5), 0) == -ENODEV &&
               netconf_set_netmask(0, IP4(255, 255, 255, 0)) == -ENODEV &&
               netconf_set_gateway(0, IP4(10, 0, 4, 1)) == -ENODEV,
@@ -645,7 +688,6 @@ int main(void)
     CHECK(net_ip_addr == IP4(192, 168, 90, 20) && net_ip_gateway == IP4(192, 168, 90, 1),
           "and leaves the machine as it was");
 
-    /* ---- rach2.ip=none ---- */
     CHECK(apply("rach2.ip=none", &why) == NETCONF_NONE, "`none` is a configuration of its own");
     CHECK(net_ip_addr == 0 && net_ip_mask == 0 && net_ip_gateway == 0,
           "and it leaves IPv4 unset for userland to set");
