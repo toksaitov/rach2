@@ -44,19 +44,19 @@ CODEX_MODEL=gpt-6.1-sol
 DEADLINE=21600
 
 # claim: take an issue for this account, as the header says, and write its
-# number to STATE/issue; write nothing when none is waiting.
+# number to STATE/issue; write nothing when none is waiting, and fail when the
+# lock cannot be taken. The lock is perl's flock on ~/.rach2-claim.lock, which
+# the redirection after the body opens on descriptor 9 for the length of the
+# call. A flock belongs to the open file description, not to the process that
+# took it, so the lock is held until the descriptor is closed: by the shell
+# when the call ends, or by the kernel when the loop dies.
 claim()
 {
-    lock=$HOME/.rach2-flow.lock
-    until mkdir "$lock" 2> /dev/null; do
-        holder=$(cat "$lock/pid" 2> /dev/null)
-        if [ -n "$holder" ] && ! kill -0 "$holder" 2> /dev/null; then
-            rm -rf "$lock"
-        else
-            sleep 5
-        fi
-    done
-    echo $$ > "$lock/pid"
+    if ! perl -MFcntl=:flock -e 'open(L, ">&=9") && flock(L, LOCK_EX) or
+            die "worker: claim lock: $!\n"' 2>> "$state/loop.log"; then
+        log "claim lock failed"
+        return 1
+    fi
     for n in $(sh "$state/run/board.sh" next | cut -f 1 | head -n 5); do
         if sh "$state/run/board.sh" take "$n" 2>> "$state/loop.log"; then
             echo "$n" > "$state/issue"
@@ -64,8 +64,7 @@ claim()
             break
         fi
     done
-    rm -rf "$lock"
-}
+} 9>> "$HOME/.rach2-claim.lock"
 
 # session ISSUE: run one session on ISSUE with the agent's command.
 session()
@@ -159,7 +158,10 @@ main()
             fi
         fi
         if [ -z "$issue" ]; then
-            claim
+            if ! claim; then
+                sleep 60
+                continue
+            fi
             issue=$(cat "$state/issue" 2> /dev/null)
         fi
         if [ -z "$issue" ]; then
