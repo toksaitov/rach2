@@ -616,13 +616,6 @@ void msc_slot_closed(struct xhci_ctrl *hc, int device)
     (void)device;
 }
 
-/** Do nothing: no endpoint is closed here. */
-void xhci_endpoint_close(struct xhci_ctrl *hc, int device, int endpoint)
-{
-    (void)device;
-    (void)endpoint;
-}
-
 /* The descriptors the two kinds answer with. */
 static const unsigned char keyboard_config[] = {
     9, 2,  34,   0, 1, 1, 0,  0xA0, 50, /* configuration, value 1 */

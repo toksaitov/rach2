@@ -202,8 +202,9 @@ struct xhci_slot {
     int hub_think_time;
     /* The device context the controller reads for this slot, and a ring per
      * endpoint opened on it. Each is one page, taken when the slot or the
-     * endpoint is opened and given back when it closes, and each is read by
-     * the controller at the physical address recorded beside it. */
+     * endpoint is first opened and given back when the slot is disabled, and
+     * each is read by the controller at the physical address recorded beside
+     * it. */
     uint8_t *ctx;
     uintptr_t ctx_phys;
     uint32_t *ring[XHCI_MAX_DCI];
@@ -2479,13 +2480,6 @@ int xhci_endpoint_open(struct xhci_ctrl *hc, int device, const struct usb_endpoi
     xhci_barrier();
     return xhci_command_issue(hc, TRB_TYPE_CONFIG_EP, (uint64_t)virt_to_phys(hc->input_ctx),
                               (uint32_t)device);
-}
-
-void xhci_endpoint_close(struct xhci_ctrl *hc, int device, int endpoint)
-{
-    if (device > 0 && device < (int)hc->nslots && endpoint > 0 && endpoint < XHCI_MAX_DCI) {
-        hc->slots[device].open[endpoint] = 0;
-    }
 }
 
 int xhci_endpoint_reset(struct xhci_ctrl *hc, int device, int endpoint)

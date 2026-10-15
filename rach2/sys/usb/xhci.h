@@ -472,11 +472,6 @@ int xhci_command_busy(struct xhci_ctrl *hc);
  */
 int xhci_endpoint_open(struct xhci_ctrl *hc, int device, const struct usb_endpoint *endpoint);
 
-/** Mark an endpoint closed, so nothing more is submitted on it. No command is
- * issued: the endpoint stays configured at the controller until its slot is
- * disabled. */
-void xhci_endpoint_close(struct xhci_ctrl *hc, int device, int endpoint);
-
 /* An endpoint's state as the controller last reported it, which decides how
  * `usb_core_endpoint_quiesce` stops it: Stop Endpoint on a running one, Reset
  * Endpoint on a halted one, and neither on a stopped one or one in the Error
