@@ -13,7 +13,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `selfbuild-ext2` (full tier; needs qemu, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the self-build on an ext2 root, the os-real system at 48 MiB on a partition at LBA 2048 as the KRFFS disk has it, booted with rach2.root=ext2; the suite reads the volume back with debugfs and e2fsck must find it consistent after the synced stop.
 * `sealed` (full tier; needs qemu, ssh, mformat, mmd, mcopy; 128 MiB): the disk that goes into the laptop, operated the way it will be operated once it is in there.
 * `dhcp-e1000` (full tier; needs qemu; 128 MiB): the dhcp suite's card half on the e1000 card.
-* `dhcp` (full tier; needs qemu; 128 MiB): the machine taking an address it was not told, with the client os-real carries.
+* `dhcp` (full tier; needs qemu; 128 MiB): the machine taking an address it was not told, with both of its clients: BusyBox's `udhcpc`, which `ifup` runs, and os-simple's own `dhcpc`, which its `netup` runs.
 * `netif` (full tier; needs qemu; 128 MiB): the interface ioctls, which is how a program sets this machine's address.
 * `netif-e1000` (full tier; needs qemu; 128 MiB): the netif suite's card half on the e1000 card.
 * `mount` (core tier; needs qemu, mformat, mcopy, mdir; 128 MiB): the mount milestone's suite.

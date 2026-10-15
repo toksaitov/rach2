@@ -992,11 +992,12 @@ run-dgram: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	    "expect=Type 'help'" "send=exec /dgramprobe" \
 	    "expect=DGRAMPROBE OUTSIDE" "udp=$(DGRAM_PORT):outsider" "expect=DGRAMPROBE OK"
 	$(PCAPCHECK) bcast $(DGRAM_PCAP) --port 7500 --dst-ip 255.255.255.255
-# `tests/run dhcp`: the machine taking an address it was not told, with the
-# client os-real carries. It boots with `rach2.ip=none`, so IPv4 is unset and
-# nothing is configured until userland does it, and QEMU's user network is given
-# a network of its own so the address that arrives cannot be the one the machine
-# would have had anyway.
+# `tests/run dhcp`: the machine taking an address it was not told, with both of
+# its clients: BusyBox's `udhcpc`, which `ifup` runs, and os-simple's own
+# `dhcpc`, which its `netup` runs. A boot that is to take a lease has
+# `rach2.ip=none`, so IPv4 is unset and nothing is configured until userland
+# does it, and QEMU's user network is given a network of its own so the address
+# that arrives cannot be the one the machine would have had anyway.
 DHCP_NET = user,id=net0,net=192.168.90.0/24,host=192.168.90.2,dhcpstart=192.168.90.20,dns=192.168.90.3
 TWONET_PCAP_A = $(IMAGES_DIR)/twonet-a$(NIC_TAG).pcap
 TWONET_PCAP_B = $(IMAGES_DIR)/twonet-b$(NIC_TAG).pcap
