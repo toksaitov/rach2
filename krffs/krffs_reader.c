@@ -1,3 +1,7 @@
+/*
+ * krffs_reader.c: the checked path lookup of krffs_reader.h.
+ */
+
 #include "krffs_reader.h"
 
 #include <stdbool.h>
@@ -7,20 +11,24 @@
 #include "krffs_file_system.h"
 #include "krffs_node.h"
 
-/** The type field of a node's mode and two of its values (the kernel's
- * S_IFMT, S_IFDIR and S_IFREG). A regular file's mode may have no type bits;
- * a FIFO and a socket have their own, and the socket's include S_IFDIR's
- * bit, so the field is compared whole. */
+/**
+ * The type field of a node's mode and two of its values, the kernel's
+ * `S_IFMT`, `S_IFDIR` and `S_IFREG`. A regular file's mode may have no type
+ * bits; a FIFO and a socket have their own, and the socket's include
+ * `S_IFDIR`'s bit, so the field is compared whole.
+ */
 #define READER_S_IFMT  0170000u
 #define READER_S_IFDIR 0040000u
 #define READER_S_IFREG 0100000u
 
 /**
- * Validate that `node` lies whole inside the region and describes itself
- * sanely: the magic, a size that covers at least its own header, and an end
- * that does not run past the region. Writes the reason and returns false
- * when it does not, which is how a truncated or corrupted image surfaces as
- * a refusal instead of a read out of bounds.
+ * Reports whether `node` begins inside the region with room for a header,
+ * has the magic number, and has a `size` of at least a header that ends
+ * inside the region. When it does not, the reason is written to `errbuf`.
+ *
+ * The bounds are tested by subtraction from the region's size: a crafted
+ * 64-bit size added to an offset can wrap, and the sum then compares as
+ * inside the region.
  */
 static bool node_is_sane(struct krffs_file_system *file_system, struct krffs_node *node,
                          char *errbuf, size_t errlen)
@@ -30,8 +38,6 @@ static bool node_is_sane(struct krffs_file_system *file_system, struct krffs_nod
     uint64_t offset = (uint64_t)(position - base);
     uint64_t region = (uint64_t)file_system->size;
 
-    /* Subtraction only, never addition: a crafted 64-bit size added to an
-     * offset wraps, and a wrapped sum compares as inside the region. */
     if (offset >= region || region - offset < sizeof(*node)) {
         snprintf(errbuf, errlen, "node at offset 0x%llx runs past the region",
                  (unsigned long long)offset);
@@ -55,10 +61,11 @@ static bool node_is_sane(struct krffs_file_system *file_system, struct krffs_nod
 }
 
 /**
- * Find the reserved child named `name` inside directory `parent_id`, walking
- * every node once with the bounds checks above. Returns NULL with the reason
- * set when the chain is malformed, and NULL with `errbuf` empty when the
- * chain is whole and the child simply is not there.
+ * Returns the reserved node named `name` whose `parent_id` is `parent_id`,
+ * walking forward from the root to the end of the region and checking each
+ * node with `node_is_sane`. Returns NULL with the reason in `errbuf` when a
+ * node fails the check, and NULL with `errbuf` empty when every node passes
+ * and none matches.
  */
 static struct krffs_node *find_child(struct krffs_file_system *file_system, uint64_t parent_id,
                                      const char *name, char *errbuf, size_t errlen)

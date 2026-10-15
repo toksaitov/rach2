@@ -1,3 +1,7 @@
+/*
+ * krffs_platform.h: what the KRFFS host tools take from Unix or Windows: the
+ * POSIX names, the clock, the mapping of an image, and the region arguments.
+ */
 #ifndef KRFFS_PLATFORM_H
 #define KRFFS_PLATFORM_H
 
@@ -40,7 +44,8 @@
 #endif
 
 /**
- * File-information types that differ by platform.
+ * The offset and `stat` types, taken on Windows from the FUSE headers when
+ * they define `FUSE_OFF_T` and `FUSE_STAT`.
  */
 #ifdef WINDOWS
 #ifdef FUSE_OFF_T
@@ -58,83 +63,83 @@
 #define PLATFORM_STAT  stat
 #endif
 
-/**
- * File-system-information count types that differ by platform.
- */
+/** The `statvfs` count types, which have 64-bit names on Windows. */
 #ifdef WINDOWS
 #define fsblkcnt_t fsblkcnt64_t
 #define fsfilcnt_t fsfilcnt64_t
 #endif
 
-/**
- * Defines `S_ISREG` on Windows, which lacks it.
- */
+/** `S_ISREG`, which Windows lacks. */
 #ifdef WINDOWS
 #define S_ISREG(MODE) (((MODE) & S_IFMT) == S_IFREG)
 #endif
 
 /**
- * Reads the current wall-clock time with microsecond precision.
+ * Reads the wall clock into `time_of_day`: `gettimeofday` on Unix, and on
+ * Windows the system time, whose microseconds are its milliseconds times 1000.
  */
 void krffs_get_time_of_day(struct timeval *time_of_day);
 
-/* The alignment a KRFFS region's byte offset must satisfy: 1 MiB. It is the
- * coarsest mmap granularity across hosts (Windows MapViewOfFile needs 64 KiB,
- * Unix a page) and keeps a partition both sector- and page-aligned. */
+/**
+ * The alignment of a region's byte offset, 1 MiB: a multiple of the mapping
+ * granularity of every host (64 KiB for `MapViewOfFile`, a page for `mmap`)
+ * and of the sector size, so a partition there is aligned for both.
+ */
 #define KRFFS_REGION_ALIGN (1024 * 1024)
 
-/* The largest KRFFS region: its size is stored in a uint32_t, so it must stay
- * under 4 GiB. Capped at 4095 MiB to leave the value clear of the 32-bit edge.
+/**
+ * The largest region, 4095 MiB, the most whole MiB a `uint32_t` holds: the
+ * kernel keeps a file system's size in one (`krffs_file_system_t` in
+ * rach2/sys/fs/krffs.h).
  */
 #define KRFFS_MAX_REGION_SIZE (4095u * 1024u * 1024u)
 
 /**
- * Parse the shared `--offset BYTES` and `--size BYTES` region arguments and
- * validate them against a backing file of `file_size` bytes.
+ * Reads the `--offset BYTES` and `--size BYTES` arguments, numbers in any C
+ * base, that place a KRFFS region in a file of `file_size` bytes, such as a
+ * partition of a disk image. Other arguments are skipped, so each tool parses
+ * its own, and of a repeated flag the last counts. The offset defaults to 0
+ * and must be a multiple of `KRFFS_REGION_ALIGN`. The size defaults to the
+ * rest of the file, but a nonzero offset needs one, since a partition does
+ * not reach the end of the disk. The region must lie in the file and be from
+ * `min_size`, the smallest file system the caller can work on, to
+ * `KRFFS_MAX_REGION_SIZE` bytes.
  *
- * A region lets a tool target a KRFFS that lives inside a partition of a larger
- * disk image, not at the start of a whole file. `--offset` defaults to 0
- * and must be a multiple of `KRFFS_REGION_ALIGN`. `--size` defaults to the rest
- * of the file after the offset, but a nonzero `--offset` names a partition that
- * does not extend to the end of the disk, so it requires an explicit `--size`.
- * The region must fit in the file and be at least `min_size` bytes (the caller
- * passes the smallest file system it can hold). A flag with no following value
- * is an error, not a silent default. Other arguments are ignored, so
- * each tool keeps its own option parsing.
- *
- * On success returns 0 and writes `*out_offset` and `*out_size`; on a bad or
- * out of range region returns -1 with a `krffs: detail` message on stderr.
+ * Returns 0 and sets `*out_offset` and `*out_size`, or returns -1, with a
+ * `krffs: detail` message on stderr, for a flag with no number after it or a
+ * region that breaks a rule.
  */
 int krffs_parse_region_args(int argc, char **argv, uint64_t file_size, uint64_t min_size,
                             off_t *out_offset, size_t *out_size);
 
 /**
- * Maps a region of a file into virtual memory.
- *
- * Reads and writes through the returned pages read and write the file. Uses
- * `mmap` on Unix and `MapViewOfFile` on Windows.
+ * Maps `size` bytes of the file open on `file_descriptor`, from `offset`,
+ * shared and writable, so a store into the mapping is a store into the file:
+ * `mmap` on Unix, `MapViewOfFile` on Windows. `offset` must be a multiple of
+ * the mapping granularity. Returns the address, or `(void *)-1` on failure,
+ * as `mmap` does.
  */
 void *krffs_map_file(int file_descriptor, off_t offset, size_t size);
 
 /**
- * Maps a region of a file into virtual memory for reading only.
- *
- * Returns `(void *) -1` on failure, as `mmap` does.
+ * Maps the region as `krffs_map_file` does, for reading only, so a tool that
+ * only reads an image can open it `O_RDONLY`. Returns the address, or
+ * `(void *)-1` on failure.
  */
 void *krffs_map_file_readonly(int file_descriptor, off_t offset, size_t size);
 
 /**
- * Flushes a mapped region back to its backing file.
- *
- * Uses `msync` on Unix and `FlushViewOfFile` on Windows.
+ * Writes `size` bytes of a mapping at `address` back to the file and waits
+ * for the write: `msync` with `MS_SYNC` on Unix, `FlushViewOfFile` on
+ * Windows. On Unix `address` must be a multiple of the page size, or `msync`
+ * fails with `EINVAL`. Returns 0, or -1 on failure.
  */
 int krffs_sync_mapping(void *address, size_t size);
 
 /**
- * Unmaps a region previously mapped by `krffs_map_file`.
- *
- * On Windows the size is ignored and `address` must point to the first mapped
- * page. Uses `munmap` on Unix and `UnmapViewOfFile` on Windows.
+ * Unmaps a mapping from `krffs_map_file` or `krffs_map_file_readonly`:
+ * `munmap` on Unix, `UnmapViewOfFile` on Windows, which ignores `size` and
+ * needs the address the map returned. Returns 0, or -1 on failure.
  */
 int krffs_unmap_file(void *address, size_t size);
 

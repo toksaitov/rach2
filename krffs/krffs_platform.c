@@ -1,3 +1,7 @@
+/*
+ * krffs_platform.c: the Unix and Windows code behind krffs_platform.h.
+ */
+
 #include "krffs_platform.h"
 
 #ifdef WINDOWS
@@ -13,8 +17,9 @@
 #include <string.h>
 
 /**
- * Parse one `unsigned long long` from `s` in any C base; -1 on trailing junk or
- * a value that overflows the type.
+ * Reads `s` as one number in any C base, as `strtoull` does, into `*out`.
+ * Returns 0, or -1 for an empty string, characters after the number or a
+ * value past `unsigned long long`.
  */
 static int krffs_parse_u64(const char *s, uint64_t *out)
 {
@@ -64,9 +69,6 @@ int krffs_parse_region_args(int argc, char **argv, uint64_t file_size, uint64_t 
                 (unsigned long long)offset, (unsigned long long)file_size);
         return -1;
     }
-    /* A nonzero offset means a partition, which does not extend to the end of
-       the disk, so its size must be given, not defaulted to the rest of the
-       file. The size defaults to the rest of the file only for a whole-file FS. */
     if (offset > 0 && !have_size) {
         fprintf(stderr, "krffs: --offset requires an explicit --size\n");
         return -1;
@@ -74,7 +76,6 @@ int krffs_parse_region_args(int argc, char **argv, uint64_t file_size, uint64_t 
     if (!have_size) {
         size = file_size - offset;
     }
-    /* file_size - offset cannot underflow: offset <= file_size above. */
     if (size < min_size || size > file_size - offset || size > (uint64_t)SIZE_MAX) {
         fprintf(stderr,
                 "krffs: region (offset %llu, size %llu) does not fit a %llu-byte "
@@ -83,8 +84,6 @@ int krffs_parse_region_args(int argc, char **argv, uint64_t file_size, uint64_t 
                 (unsigned long long)file_size);
         return -1;
     }
-    /* KRFFS stores its size in a uint32_t, so a region must stay under 4
-     * GiB. */
     if (size > KRFFS_MAX_REGION_SIZE) {
         fprintf(stderr, "krffs: region size %llu exceeds the %u-byte KRFFS limit\n",
                 (unsigned long long)size, (unsigned)KRFFS_MAX_REGION_SIZE);
@@ -98,11 +97,8 @@ int krffs_parse_region_args(int argc, char **argv, uint64_t file_size, uint64_t 
 }
 
 /**
- * Reads the wall-clock time with microsecond precision.
- *
- * Uses `gettimeofday` on Unix; on Windows the FILETIME 100-nanosecond ticks
- * are rebased from the 1601 epoch to the Unix epoch and split into seconds
- * and microseconds.
+ * On Windows the seconds come from the FILETIME count of 100-nanosecond
+ * ticks, less `epoch`, the count from 1601 to 1970.
  */
 void krffs_get_time_of_day(struct timeval *time_of_day)
 {
@@ -125,14 +121,6 @@ void krffs_get_time_of_day(struct timeval *time_of_day)
 #endif
 }
 
-/**
- * Maps `size` bytes of the file at `file_descriptor`, starting at `offset`,
- * into shared read/write memory.
- *
- * Reads and writes through the returned pages read and write the file. Uses
- * `mmap` on Unix and `MapViewOfFile` on Windows. Returns `(void *) -1` on
- * failure.
- */
 void *krffs_map_file(int file_descriptor, off_t offset, size_t size)
 {
 #ifdef WINDOWS
@@ -161,14 +149,6 @@ void *krffs_map_file(int file_descriptor, off_t offset, size_t size)
 #endif
 }
 
-/**
- * Maps a region of a file into virtual memory for reading only.
- *
- * The same call as `krffs_map_file` with the writable protection dropped, so
- * a tool that only reads an image (the extractor) can open it `O_RDONLY` and
- * work on an image whose file permissions allow no write. Returns
- * `(void *) -1` on failure, as `mmap` does.
- */
 void *krffs_map_file_readonly(int file_descriptor, off_t offset, size_t size)
 {
 #ifdef WINDOWS
@@ -197,12 +177,6 @@ void *krffs_map_file_readonly(int file_descriptor, off_t offset, size_t size)
 #endif
 }
 
-/**
- * Flushes `size` bytes of a mapping at `address` back to its file.
- *
- * Uses a synchronous `msync` (`MS_SYNC`) on Unix and `FlushViewOfFile` on
- * Windows. Returns 0 on success and -1 on failure.
- */
 int krffs_sync_mapping(void *address, size_t size)
 {
 #ifdef WINDOWS
@@ -212,13 +186,6 @@ int krffs_sync_mapping(void *address, size_t size)
 #endif
 }
 
-/**
- * Unmaps a region returned by `krffs_map_file`.
- *
- * Uses `munmap` on Unix and `UnmapViewOfFile` on Windows. On Windows `size`
- * is ignored and `address` must be the first mapped page. Returns 0 on
- * success and -1 on failure.
- */
 int krffs_unmap_file(void *address, size_t size)
 {
 #ifdef WINDOWS
