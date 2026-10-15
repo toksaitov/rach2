@@ -208,11 +208,11 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: krffs root data operations under the mount's lock" >&2
         fail=1
     fi
-    # Three rows over functions extracted from sources no host test can
+    # Four rows over functions extracted from sources no host test can
     # compile whole: a new kernel stack cleared and guarded and the end of
     # the other processes before an init under the debug shell hands the
-    # machine back (syscall_proc.c), and the set-id rules of a mounted chown
-    # (syscall_fs.c).
+    # machine back (syscall_proc.c), the set-id rules of a mounted chown
+    # (syscall_fs.c), and the page cache's rows with sys_sync (syscall_fs.c).
     if sh tests/host/kstack_mutate.sh --check >"$VDIR/kstack.rlog" 2>&1; then
         echo "hosttest: result: pass: a new kernel stack is cleared and guarded"
     else
@@ -232,6 +232,13 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
     else
         cat "$VDIR/chown.rlog"
         echo "hosttest: result: fail: the set-id rules of a mounted chown" >&2
+        fail=1
+    fi
+    if sh tests/host/pagecache_mutate.sh --check >"$VDIR/pagecache.rlog" 2>&1; then
+        echo "hosttest: result: pass: the page cache with sys_sync's bounded wait"
+    else
+        cat "$VDIR/pagecache.rlog"
+        echo "hosttest: result: fail: the page cache with sys_sync's bounded wait" >&2
         fail=1
     fi
     if sh tests/host/krffs_tools_mutate.sh --check >"$VDIR/krffs_tools.rlog" 2>&1; then
