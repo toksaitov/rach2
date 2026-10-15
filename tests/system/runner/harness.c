@@ -5,10 +5,10 @@
  * Boots the architecture's QEMU, RACH2_QEMU or else qemu-system-i386, headless
  * with the kernel and a KRFFS initrd, attaches QEMU's isa-debug-exit device
  * (iobase 0xF4), and drives the guest with an expect and send script. With a
- * HARNESS=1 kernel build the kernel writes each process exit status to that
- * port (rach2/sys/kio.c, harness_exit), so QEMU stops with ((status << 1) | 1)
- * and this reads a real exit code: a hang or a triple fault then shows up as a
- * timeout, not as a missing serial marker.
+ * HARNESS=1 kernel build the kernel writes the init process's exit status to
+ * that port (`harness_exit`, rach2/sys/arch/x86/portio.c), so QEMU stops
+ * with ((status << 1) | 1) and this reads an exit code: a hang or a triple
+ * fault then shows as a timeout, not as a missing serial marker.
  *
  * Usage:
  *   harness --kernel K [--initrd I] [--append LINE] [--net NETVAL]
@@ -22,7 +22,10 @@
  *
  *   --bios gives the emulator no kernel, so its firmware boots whatever the
  *   drives and devices hold, in the order their `bootindex` says, which is
- *   how a machine boots from a stick.
+ *   how a machine boots from a stick; --initrd and --append are then left
+ *   out. --drive SPEC adds `-drive SPEC`, and --qemu-arg ARG, or
+ *   --qemu-arg=ARG, adds ARG to QEMU's command line as it is; each may be
+ *   given up to 128 times. --bootwait S is accepted and ignored.
  *
  *   --timeout bounds the run, 60 seconds unless given, and --steptmo each
  *   step that waits for output, 15 unless given; both are multiplied by the
@@ -96,9 +99,8 @@
  *                    then.
  *     udp=PORT:TEXT  send TEXT as one UDP datagram to 127.0.0.1:PORT,
  *                    which a `hostfwd=udp::PORT-:GUESTPORT` forwards into
- *                    the guest. This is the only way a test can put a
- *                    frame on the guest's wire that the guest did not ask
- *                    for.
+ *                    the guest: a frame on the guest's wire that the guest
+ *                    did not ask for
  *     exec=NAME|MARK run "exec NAME" and wait for MARK, typing the line
  *                    again when MARK does not come within the step's
  *                    limit, four times in all
@@ -115,25 +117,28 @@
  * Exit status: 0 when the run passed; 1 when it failed, which is a step
  * that failed, a --never text seen, a --must-exit machine that did not end
  * itself, an --ok token not seen, or a guest status other than 0; 2 for a
- * usage error or when the pipes or the fork for QEMU could not be made; 3
- * when, with no --ok, QEMU never exited by itself, which is a hang.
+ * usage error, a pattern the matcher refuses, a stamp file that cannot be
+ * opened, or pipes or a fork for QEMU that could not be made; 3 when, with
+ * no --ok, QEMU never exited by itself, which is a hang.
  *
- * With no --ok token the status is read off the kernel's "process: exited
- * with status N" record, which `sys_exit` emits only where the debug shell
- * is the supervisor; an image running /sbin/init prints no such line, so a
- * run of one of those is decided with --ok. QEMU's own exit code only
- * confirms that it stopped through isa-debug-exit.
+ * With no --ok token the status is read off the last of the kernel's
+ * "process: exited with status N" records, which `sys_exit` emits only where
+ * the debug shell is the supervisor; an image running /sbin/init prints no
+ * such line, so a run of one of those is decided with --ok. QEMU's own exit
+ * code only confirms that it stopped through isa-debug-exit.
  *
  * Each failed step is reported on standard error when it fails, as
  * `HARNESS: step N STEP failed after S s`, N counting from 1 and S the
  * seconds the step took, and the run ends with the count of failed steps.
  *
- * `harness --selftest` checks the escape decoder, the mouse step's parsing,
- * the probe's wait bounds, the bound on a write the machine does not read
- * and the report of a failed step, without QEMU. `harness --match PATTERN`
- * prints where PATTERN first ends in the text on standard input, or -1,
- * which checks the matcher by hand. `RACH2_TRACE=FILE` records each step's
- * outcome and the final decision.
+ * `harness --selftest` checks, without QEMU, the escape decoder, the mouse
+ * step's parsing, the probe's wait bounds, the bound on a write the machine
+ * does not read, the reading of output written before a timeout, a
+ * `sendfile=` step whose file cannot be read, the end of a step at a
+ * `--never` text, and the report of a failed step. `harness --match
+ * PATTERN` prints where PATTERN first ends in the text on standard input,
+ * or -1, which checks the matcher by hand. `RACH2_TRACE=FILE` records each
+ * step's outcome and the final decision.
  */
 #include <arpa/inet.h>
 #include <errno.h>
@@ -203,7 +208,9 @@ static const char *qemu_binary(void)
     return q != NULL && q[0] != '\0' ? q : "qemu-system-i386";
 }
 
-/** Whether any step needs the monitor. */
+/** Whether any argument is a step that needs the monitor: `key=`, `mouse=`,
+ * `usb=`, `drive=` or `nmi`. Every argument is looked at, an option's value
+ * too. */
 static int steps_need_monitor(int argc, char **argv)
 {
     int i;
@@ -238,7 +245,8 @@ static double scaled(double seconds);
  * the monitor was listening is taken by nobody, and the step that depended on
  * it waits out its whole limit for something that never happened. Returns 0
  * at the prompt, or -1 when the time runs out, the monitor closes because the
- * machine has gone, or a read fails.
+ * machine has gone, or a read fails. A chunk with an error word is kept in
+ * `monitor_reply`, and `monitor_refused` set.
  */
 static int monitor_wait_prompt(int seconds)
 {
@@ -278,7 +286,8 @@ static int monitor_wait_prompt(int seconds)
  *
  * QEMU may not have made the socket yet, so the connection is tried a
  * hundred times, scaled as a deadline is, 50 ms apart. The greeting ends in
- * a prompt, and until that arrives the monitor is not listening.
+ * a prompt, and until that arrives the monitor is not listening. Returns 0,
+ * or -1 with the reason printed.
  */
 static int monitor_open(void)
 {
@@ -330,7 +339,8 @@ static int monitor_open(void)
  * command that was acted on late must not be counted as one that was never
  * acted on. A refused command answers with an error line before the prompt;
  * the step that sent it fails with that line, not with a later expect that
- * waits for a device that was never added or removed.
+ * waits for a device that was never added or removed. Returns 0, or -1 with
+ * the reason printed.
  */
 static int monitor_send(const char *command)
 {
@@ -358,6 +368,8 @@ static int monitor_send(const char *command)
 
 /* ---- the serial buffer ---- */
 
+/* The machine's serial output read so far, NUL-terminated, and the offset
+   past the last match, which an `expect=` step searches from. */
 static unsigned char *buf;
 static size_t buf_len, buf_cap;
 static size_t consumed;
@@ -370,6 +382,8 @@ static int n_never;
 static size_t never_searched;
 static int never_found;
 
+/** Append `n` bytes to `buf`, keeping it NUL-terminated; exits with status
+ * 2 when there is no memory. */
 static void buf_add(const unsigned char *data, size_t n)
 {
     if (buf_len + n + 1 > buf_cap) {
@@ -398,6 +412,7 @@ static long token_end(const unsigned char *hay, size_t len, const char *needle, 
     return -1;
 }
 
+/** Whether the literal `needle` is in the `len` bytes of `hay`. */
 static int contains(const unsigned char *hay, size_t len, const char *needle)
 {
     return token_end(hay, len, needle, 0) >= 0;
@@ -442,15 +457,17 @@ static double now(void)
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
 
-/* ---- the deadline factor ----
- *
- * A set's runner measures the emulator's rate under the load the set makes
- * and passes `RACH2_DEADLINES=scaled` with `RACH2_DEADLINE_FACTOR=F` to
- * every suite; a deadline that bounds completion is multiplied by F here.
- * A process told nothing, or told the mode without a factor, keeps its
- * numbers as written, and so does one given a factor outside 1 to 64. */
+/* ---- the deadline factor ---- */
+
+/* The set's deadline factor, which multiplies every completion bound. */
 static double deadline_factor = 1.0;
 
+/**
+ * Read the deadline factor. tests/run passes its `RACH2_TIMEOUT_FACTOR` to
+ * every suite as `RACH2_DEADLINES=scaled` with `RACH2_DEADLINE_FACTOR=F`. A
+ * process told nothing, told the mode without a factor, or given a factor
+ * outside 1 to 64 keeps the factor 1.
+ */
 static void deadline_factor_read(void)
 {
     const char *mode = getenv("RACH2_DEADLINES");
@@ -464,6 +481,7 @@ static void deadline_factor_read(void)
         deadline_factor = f;
 }
 
+/** A completion bound of `seconds` multiplied by the deadline factor. */
 static double scaled(double seconds)
 {
     return seconds * deadline_factor;
@@ -471,8 +489,10 @@ static double scaled(double seconds)
 
 /* ---- the trace ---- */
 
+/* The file `RACH2_TRACE` names, or NULL. */
 static FILE *tracef;
 
+/** Write a line, formatted as by printf, to the trace file, if there is one. */
 static void trace(const char *fmt, ...)
 {
     va_list ap;
@@ -488,24 +508,24 @@ static void trace(const char *fmt, ...)
 
 /* ---- a small regular expression matcher ----
  *
- * The patterns these suites use are literal text, with `.` appearing only
- * inside addresses; they are still read as patterns, in a small subset of
- * regular expressions and no more. A literal character matches itself, `.`
- * matches any character but a newline, a `[...]` class matches one of its
- * members (with ranges and a leading `^` to negate), `\` escapes the next
- * character, and `*`, `+` and `?` repeat the item before them. `^` and `$`
- * anchor. Anything else is literal.
- *
+ * A step's pattern is read in a small subset of regular expressions. A
+ * literal character matches itself, `.` matches any character but a
+ * newline, a `[...]` class matches one of its members, with ranges, a
+ * leading `^` to negate and a `]` first as a member, `\` escapes the next
+ * character, and `*`, `+` and `?` repeat the item before them. A `^` that
+ * begins the pattern anchors it to where the search starts, and a `$` that
+ * ends it to the end of the output read so far; anything else is literal.
  * The matcher backtracks, since a serial log is small and the patterns are
  * short.
  *
- * A pattern using a construct outside this subset (a group, an
- * alternation, a counted repeat) is refused, not silently taken as
- * literal text: a matcher that quietly never matches would turn a
- * passing suite into a timeout nobody could read. No pattern in this tree
- * uses one.
+ * A pattern with a construct outside this subset, a group, an alternation
+ * or a counted repeat, is refused rather than taken as literal text: a
+ * pattern that never matched would turn a passing suite into a timeout
+ * nobody could read.
  */
 
+/* An item of a pattern: a literal byte, any byte but a newline, or one of a
+   class of bytes, with the repeat that follows it. */
 struct item {
     enum { LITERAL, ANY, CLASS } kind;
     char literal;
@@ -514,17 +534,21 @@ struct item {
     char repeat; /* 0, '*', '+' or '?' */
 };
 
+/* A compiled pattern of `n` items, and whether it is anchored at its start
+   or its end. */
 struct regex {
     struct item item[256];
     int n;
     int anchor_start, anchor_end;
 };
 
+/** Add the byte `c` to the class of `it`. */
 static void class_add(struct item *it, unsigned char c)
 {
     it->set[c >> 3] |= (unsigned char)(1 << (c & 7));
 }
 
+/** Whether the byte `c` is in the class of `it`, negated as `it` says. */
 static int class_has(const struct item *it, unsigned char c)
 {
     int in = (it->set[c >> 3] >> (c & 7)) & 1;
@@ -537,6 +561,7 @@ static int class_has(const struct item *it, unsigned char c)
  *
  * A pattern with a construct outside the subset, or with more items than
  * `re` holds, ends the run with status 2 and a message that names it.
+ * Returns 1.
  */
 static int regex_compile(struct regex *re, const char *pattern)
 {
@@ -633,6 +658,7 @@ static int regex_compile(struct regex *re, const char *pattern)
     return 1;
 }
 
+/** Whether the byte `c` matches `it`, its repeat aside. */
 static int item_matches(const struct item *it, unsigned char c)
 {
     switch (it->kind) {
@@ -695,7 +721,8 @@ static long match_here(const struct regex *re, int k, const unsigned char *text,
     }
 }
 
-/** The end offset of the first match at or after `from`, or -1. */
+/** The end offset of the first match at or after `from`, or -1. A pattern
+ * anchored at its start is tried at `from` alone. */
 static long regex_search(const struct regex *re, const unsigned char *text, size_t len, size_t from)
 {
     size_t at;
@@ -729,6 +756,8 @@ static void on_term(int sig)
         kill(child_pid, SIGTERM);
     _exit(143);
 }
+/* The ends of the machine's serial pipes, and, once it is reaped, its exit
+   status, 128 + N after signal N. */
 static int child_out = -1;
 static int child_in = -1;
 static int child_status;
@@ -736,7 +765,9 @@ static int child_reaped;
 /* Whether the machine was ended by a signal rather than by exiting. A run
    that requires an exit does not accept one. */
 static int child_by_signal;
+/* The console log --log asks for, or NULL. */
 static FILE *logf;
+/* The end of the run on the monotonic clock. */
 static double deadline;
 
 /** The machine's exit status, 128 + N after signal N, or -1 while it runs. */
@@ -851,7 +882,9 @@ static void drain_ready(void)
     }
 }
 
-/** Start a new exchange before publishing input, preserving fast replies. */
+/** Begin an exchange before input is sent: read what is ready, and move
+ * `consumed` and `exchange` past it, so that a reply that comes at once is
+ * searched and older output is not. */
 static void begin_input(void)
 {
     drain_ready();
@@ -859,6 +892,8 @@ static void begin_input(void)
     exchange = buf_len;
 }
 
+/* The limit of a step that waits for output, in seconds, scaled once the
+   options are read. */
 static double steptmo = 15.0;
 
 /* The stamp file: `MATCH N SECONDS` for each `expect=` matched and
@@ -867,6 +902,8 @@ static double steptmo = 15.0;
 static FILE *stampf;
 static int step_number;
 
+/** Write the line `WHAT N SECONDS` for the current step to the stamp file,
+ * if there is one. */
 static void stamp(const char *what)
 {
     if (stampf != NULL) {
@@ -875,6 +912,8 @@ static void stamp(const char *what)
     }
 }
 
+/* The failed steps so far, when the current step began, and the file
+   `step_fail` reports on in place of standard error, or NULL. */
 static int step_failures;
 static double step_started;
 static FILE *failf;
@@ -1115,6 +1154,8 @@ static int send_text(const char *text, int newline)
     return !newline || send_bytes("\n", 1);
 }
 
+/** Begin an exchange and write `text` and a newline; returns as `send_text`
+ * does. */
 static int send_line(const char *text)
 {
     return send_text(text, 1);
@@ -1183,7 +1224,12 @@ static int unescape(const char *in, char *out, size_t cap)
 
 /* ---- main ---- */
 
-/** Split a probe into its boot wait, under the run's timeout, and its exec. */
+/**
+ * Expand the step `probe=NAME` in `arg` into two steps at `steps`:
+ * `boot=Type 'help'`, a wait for the shell's prompt under the run's timeout,
+ * and `execq=NAME`, written into the `size` bytes of `execq`. Returns 1, or
+ * 0 with a message when the name does not fit.
+ */
 static int expand_probe(const char *arg, const char **steps, char *execq, size_t size)
 {
     if ((size_t)snprintf(execq, size, "execq=%s", arg + 6) >= size) {
@@ -1200,16 +1246,21 @@ static int expand_probe(const char *arg, const char **steps, char *execq, size_t
 }
 
 /**
- * Use a pipe as the serial source because the harness has no fake clock.
- * The prompt arrives after the step cap; a short run must still reject it.
- * Where the step must not see it, the child writes it five seconds after the
- * start: a step that waits on the run's timeout of ten seconds rather than its
- * cap sees it and fails the row, while a loaded host that runs the harness a
- * few seconds late does not turn a rejection into a match. A cap or read slice
- * under five seconds passes these rows. Where the step must see the prompt,
- * the child writes it a second after the start, or at once when it has
- * exited. The exited case reaps before reading, so buffered output cannot be
- * missed.
+ * Run `step` against a child that writes the shell's prompt, under a run's
+ * `timeout`, and require it to return `want`. Returns 0 when it does and 1
+ * otherwise.
+ *
+ * A pipe stands in for the serial line, since the harness has no clock to
+ * fake, and the step's limit is 0.05 seconds, so the prompt comes after it.
+ * Where the step must not see the prompt, the child writes it five seconds
+ * after the start: a step that waits on the run's timeout of ten seconds and
+ * not on its limit sees it and fails the row, while a loaded host that runs
+ * the harness a few seconds late does not turn a rejection into a match. A
+ * limit or a read slice under five seconds therefore passes these rows.
+ * Where the step must see the prompt, the child writes it a second after the
+ * start, or at once when `exited` is set; then the child is reaped before
+ * the step reads, which shows that output a reaped machine left in the pipe
+ * is read.
  */
 static int prompt_wait_selftest(const char *step, double timeout, int want, int exited)
 {
@@ -1271,7 +1322,13 @@ static int prompt_wait_selftest(const char *step, double timeout, int want, int 
     return 0;
 }
 
-/** Test the actual probe expansion so restoring its old expect step fails. */
+/**
+ * Check the wait of the steps `probe=` expands into. Its `boot=` step must
+ * take a prompt that comes after the step's limit and before the run's
+ * timeout, from a running child and from one that has exited, and refuse
+ * one after the timeout, while an `expect=` step must refuse it after its
+ * limit. Returns 0 when every case passes and 1 otherwise.
+ */
 static int probe_wait_selftest(void)
 {
     const char *steps[2];
@@ -1995,20 +2052,17 @@ static void step_execq(const char *name, const char *ok)
 /**
  * Run one machine through its steps and decide the run.
  *
- * An empty `--never` text is refused: it is in every stream and in none,
- * depending on how it is read, and a check that cannot fail is worse than
- * none. QEMU starts with -no-reboot, so a triple fault ends it, which is read
- * as a failure, instead of looping; not with -no-shutdown, which would keep
- * the isa-debug-exit device from stopping the machine. The monitor socket is
- * made only when a step needs it.
+ * An empty `--never` text is refused, since all output contains it under one
+ * reading and none under another. QEMU starts with -no-reboot, so a triple
+ * fault ends it, which is read as a failure, instead of looping. The monitor
+ * socket is made only when a step needs it.
  *
  * Once the machine has gone, a step that waits for output is still satisfied
  * by what the machine printed on its way out, read from the pipe first: a
  * probe's last lines and the exit its kernel makes for it arrive together,
  * and the output is what the check is about. An `until=` step is satisfied
- * by a machine that has left. Every other step left is counted as failed and
- * named, since a run that stopped early and reported a pass over the steps it
- * never reached is the report this harness exists to prevent.
+ * by a machine that has left. Every other step left is reported as never run
+ * and counted as failed, so a run that stopped early cannot pass.
  *
  * After the last step the output is read for the grace period, and then the
  * machine's exit is waited for, since `pump` returns when the pipe reaches its
@@ -2024,20 +2078,20 @@ static void step_execq(const char *name, const char *ok)
  * --must-exit a machine that did not end itself by exiting fails it, which is
  * what tells a machine that restarted or halted from one that printed the
  * right line and then sat there. With --ok, which is for a machine that
- * never stops QEMU itself, the token and no failed step pass it, unless the
- * machine stopped on its own with an even status: codes from isa-debug-exit
- * are odd, so QEMU ended by itself and the token alone does not pass. Without
- * --ok a QEMU that never exited is status 3, and otherwise the result is the
- * kernel's `process: exited with status N` line, not QEMU's exit code. The
- * host keeps 8 bits of that code, so ((status << 1) | 1) aliases (status 128
- * gives 1) and a QEMU launch error also gives 1; the serial line is the whole
- * status and also proves the guest ran, and the code only confirms that QEMU
- * stopped through isa-debug-exit. The status must be
- * digits, since text that is not a number would read as status 0, and a
- * number too large for a long is reported rather than read as the prefix
- * that fit. No status line, or a stop that was not through isa-debug-exit,
- * fails the run, and so does a failed step even when the guest then exited
- * cleanly.
+ * never stops QEMU itself, the token and no failed step pass it, unless
+ * QEMU ended by itself with a nonzero even status: a code from
+ * isa-debug-exit is odd, so an even one is QEMU's own failure, and the token
+ * alone does not pass. Without --ok a QEMU that never exited is status 3,
+ * and otherwise the result is the last of the kernel's `process: exited with
+ * status N` lines, not QEMU's exit code. The host keeps 8 bits of that code,
+ * so ((status << 1) | 1) aliases (status 128 gives 1) and a QEMU launch
+ * error also gives 1; the serial line is the whole status and also proves
+ * the guest ran, and the code only confirms that QEMU stopped through
+ * isa-debug-exit. The status must be digits, since text that is not a
+ * number would read as status 0, and a number too large for a long is
+ * reported rather than read as the prefix that fit. No status line, or a
+ * stop that was not through isa-debug-exit, fails the run, and so does a
+ * failed step even when the guest then exited cleanly.
  */
 int main(int argc, char **argv)
 {
@@ -2052,8 +2106,7 @@ int main(int argc, char **argv)
     double timeout = 60.0, grace = 3.0;
     int no_debug_exit = 0, must_exit = 0;
     const char *stamp_path = NULL;
-    /* Every --drive costs two words, so the command line is wider than
-       the option arrays it is built from. */
+    /* Each --drive takes two words of QEMU's command line. */
     char *qemu[MAX_ARGS * 4];
     int nq = 0, i;
     int out_pipe[2], in_pipe[2];

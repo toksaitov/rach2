@@ -17,13 +17,16 @@
  * the glyph of a code outside printable ASCII as '#'. Trailing spaces are
  * left off each line. With --colors it prints instead how many colours the
  * screen has, which tells a picture from the console's sixteen. Exits 0, or
- * 1 with a diagnostic for a file that is no such dump or is too small for
- * the grid.
+ * 1 with a diagnostic for a usage error, a file that is no such dump or is
+ * too small for the grid, or no memory to count the colours.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+/* The console's fewest and most columns and rows, its font's cell, and the
+ * two rows of the cell it draws the cursor in, as fbcon.c and textcon.h
+ * have them. */
 #define MIN_COLS     80
 #define MIN_ROWS     24
 #define MAX_COLS     240
@@ -34,7 +37,7 @@
 #define CURSOR_LAST  14
 
 /* The font's record, as vga_font.h lays it out, in the host's types: the
- * font is compiled from the kernel's own source beside this file. */
+ * kernel's vga_font.c is compiled and linked with this file. */
 struct vga_glyph {
     unsigned char slot;
     unsigned char rows[GLYPH_HEIGHT];
@@ -42,10 +45,11 @@ struct vga_glyph {
 
 extern const struct vga_glyph vga_font_all[256];
 
+/* The dump's pixels, three bytes each in rows of `width`, and its size. */
 static unsigned char *pixels;
 static unsigned long width, height;
 
-/* The colour of the pixel at (x, y), as one number. */
+/** The colour of the pixel at (x, y), as one number. */
 static unsigned long colour(unsigned long x, unsigned long y)
 {
     const unsigned char *p = pixels + (y * width + x) * 3u;
@@ -53,9 +57,12 @@ static unsigned long colour(unsigned long x, unsigned long y)
     return (unsigned long)p[0] << 16 | (unsigned long)p[1] << 8 | p[2];
 }
 
-/* The next number of a PPM header, past white space and comments; 0 on a
- * malformed header, one whose number passes the digits the dimension check
- * after it can judge among them. */
+/**
+ * Read the next number of a PPM header into `*out`, past white space and
+ * `#` comments. Returns 1, or 0 when no digit comes next or the number grows
+ * past ten million, so that a dimension the caller refuses cannot overflow
+ * on the way.
+ */
 static int header_number(FILE *f, unsigned long *out)
 {
     int c = fgetc(f);
@@ -85,8 +92,17 @@ static int header_number(FILE *f, unsigned long *out)
     return 1;
 }
 
-/* The character cell (col, row) shows, from its pixels at `scale` times
- * the font's size with the grid's corner at (left, top). */
+/**
+ * The character the cell at (`col`, `row`) shows, read from its pixels at
+ * `scale` times the font's size with the grid's corner at (`left`, `top`).
+ *
+ * A pixel is set when its colour differs from the cell's top-left pixel. A
+ * cell with none set is a space; otherwise the cell's code is the first
+ * whose glyph has the same rows, with the cursor's two rows left out of the
+ * comparison when both are full. The result is the character for a
+ * printable code, a space for code 0, whose glyph is blank, '#' for any
+ * other code, and '?' when no glyph matches.
+ */
 static char cell_char(unsigned long left, unsigned long top, unsigned long scale, int col, int row)
 {
     unsigned char bits[GLYPH_HEIGHT];
@@ -126,8 +142,8 @@ static char cell_char(unsigned long left, unsigned long top, unsigned long scale
     return '?';
 }
 
-/** The number of colours among the screen's pixels, or 0 when the map of
- * the colours seen cannot be had. */
+/** The number of colours among the screen's pixels, or 0 when there is no
+ * memory for the map of the colours seen. */
 static unsigned long colours(void)
 {
     unsigned char *seen = calloc(1u << 21, 1);
@@ -178,6 +194,10 @@ static int read_dump(const char *path)
     return 0;
 }
 
+/**
+ * Read the dump, then print its colour count, or find the console's grid as
+ * fbcon.c lays it out and print each row of cells as a line.
+ */
 int main(int argc, char **argv)
 {
     unsigned long scale, left, top, cols, rows;

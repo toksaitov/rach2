@@ -678,16 +678,16 @@ tests/system/fixtures/vfs_unmount.c:main complexity 39 a fixture builder, the vo
 tests/system/fixtures/vfs_unmount.c:resolve_path params 7 a fixture builder, the volume written in on-disk order
 
 tests/system/runner/harness.c:main complexity 168 a parser over an external format, one check per field in the format's order
-tests/system/runner/harness.c:main lines 640 a parser over an external format, one check per field in the format's order
+tests/system/runner/harness.c:main lines 537 a parser over an external format, one check per field in the format's order
 tests/system/runner/harness.c:regex_compile complexity 29 a parser over an external format, one check per field in the format's order
 
 tests/system/runner/ptydrive.c:main complexity 47 a parser over an external format, one check per field in the format's order
-tests/system/runner/ptydrive.c:main lines 167 a parser over an external format, one check per field in the format's order
+tests/system/runner/ptydrive.c:main lines 160 a parser over an external format, one check per field in the format's order
 
 tests/system/runner/runtests.c:main complexity 62 a parser over an external format, one check per field in the format's order
-tests/system/runner/runtests.c:main lines 273 a parser over an external format, one check per field in the format's order
+tests/system/runner/runtests.c:main lines 244 a parser over an external format, one check per field in the format's order
 tests/system/runner/runtests.c:marker_at params 8 a parser over an external format, one check per field in the format's order
-tests/system/runner/runtests.c:selftest lines 155 the checker's own selftest, its cases in one table
+tests/system/runner/runtests.c:selftest lines 142 the checker's own selftest, its cases in one table
 
 tests/system/runner/runutil.c:check_token complexity 29 a parser over an external format, one check per field in the format's order
 tests/system/runner/runutil.c:main complexity 36 a parser over an external format, one check per field in the format's order

@@ -1,6 +1,6 @@
 /**
- * deadline: run a command under a wall-clock limit, killing its whole
- * process group when the limit passes.
+ * deadline: run a command under a time limit, and kill its whole process
+ * group when the limit passes.
  *
  * Usage: `deadline SECONDS COMMAND [ARG ...]`. The command runs in a new
  * process group. When it exits in time, its exit status (or 128 plus its
@@ -26,10 +26,10 @@
  * seconds after the signal, whether or not the command itself has ended by
  * then, and returns when the group is gone or five seconds after the kill.
  *
- * This replaces coreutils' gtimeout on macOS, so the suites need no
- * coreutils package. The wait loop polls at 100 ms with `waitpid`; the
- * limit is read from `CLOCK_MONOTONIC`, so a clock step cannot stretch or
- * cut the budget.
+ * The suites use it in place of timeout(1), which macOS has only from the
+ * coreutils package, as gtimeout. The wait loop polls with `waitpid` every
+ * 100 ms, and the limit is measured on `CLOCK_MONOTONIC`, so a step of the
+ * calendar clock cannot lengthen or shorten it.
  */
 #include <errno.h>
 #include <signal.h>
@@ -39,8 +39,10 @@
 #include <time.h>
 #include <unistd.h>
 
+/* The stop signals deadline passes on to its command's group. */
 static const int stops[] = {SIGTERM, SIGINT, SIGHUP};
 
+/* The stop signal deadline has received, or 0 while none has come. */
 static volatile sig_atomic_t caught;
 
 /** Note a stop signal sent to deadline; the wait loop passes it on. */
@@ -49,6 +51,7 @@ static void note_signal(int sig)
     caught = sig;
 }
 
+/** Seconds on `CLOCK_MONOTONIC`. */
 static double now(void)
 {
     struct timespec ts;
@@ -171,6 +174,12 @@ static int supervise(pid_t child, long limit, const sigset_t *blocked)
     }
 }
 
+/**
+ * Check the arguments, start the command as the leader of a new process
+ * group and supervise it. Returns the status `supervise` gives, 125 for a
+ * usage error or a failed fork, and, from the child, 127 when the command
+ * cannot be run.
+ */
 int main(int argc, char **argv)
 {
     long limit;

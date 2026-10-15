@@ -1,3 +1,36 @@
+/**
+ * runutil: the host helper of tests/run and the suites, for what POSIX shell
+ * lacks: a monotonic clock and fractional sleeps, process groups, record
+ * locks, and the supervision of a suite.
+ *
+ * tests/run compiles it with the host's cc, and the suites' make builds it
+ * at build/tests/system/runutil. The first argument names the mode:
+ *
+ *   lock FILE OWNER COMMAND ...    hold the tree's lock through an exec
+ *   ports DIR COUNT COMMAND ...    claim a block of host ports, then exec
+ *   group COMMAND ...              exec in a new process group
+ *   exec COMMAND ...               exec with the default signal actions
+ *   lead COMMAND ...               lead a new group and pass it signals
+ *   watch NAME IDLE LEDGER COMMAND ...
+ *                                  supervise a command
+ *   suite NAME IDLE LEDGER COMMAND ...
+ *                                  supervise a suite
+ *   machine LEDGER COMMAND ...     record a machine and exec it
+ *   machines NAME LEDGER           stop the machines a suite left
+ *   registered LEDGER              print the machines a ledger still has
+ *   killgroup GROUP SIGNAL         signal a group other than init's or ours
+ *   until FILE PATTERN SECS [COUNT]
+ *                                  wait for lines of a file to match
+ *   gone PID SECS                  wait for a process to end
+ *   pgid PID                       print a process's group, or exit 1
+ *   young FILE SECS                exit 0 when FILE changed within SECS
+ *   now                            print the monotonic clock's seconds
+ *   sleep SECS                     sleep, a fraction of a second allowed
+ *
+ * The function of each mode states its contract. Other arguments are
+ * refused with status 2. The process table is read through libproc on
+ * macOS and /proc on Linux.
+ */
 #define _POSIX_C_SOURCE 200809L
 #ifdef __APPLE__
 #define _DARWIN_C_SOURCE
@@ -31,15 +64,17 @@
 #include <dirent.h>
 #endif
 
+/* The stop signal this process has received, or 0; the waits end on it. */
 static volatile sig_atomic_t interrupted;
 
-/** Remember a signal; the main loop stops and reaps the child. */
+/** Record the stop signal `sig` in `interrupted`. */
 static void on_signal(int sig)
 {
     interrupted = sig;
 }
 
-/** Seconds from a clock unaffected by adjustments to the calendar. */
+/** Seconds on `CLOCK_MONOTONIC`, which a change of the calendar clock does
+ * not move; exits with status 2 when the clock cannot be read. */
 static double now(void)
 {
     struct timespec ts;
@@ -50,7 +85,8 @@ static double now(void)
     return ts.tv_sec + ts.tv_nsec / 1000000000.0;
 }
 
-/** Sleep for a fraction of a second, resuming after an unrelated signal. */
+/** Sleep `seconds`, a fraction allowed, resuming after a signal that leaves
+ * `interrupted` 0 and ending after one that sets it. */
 static void pause_for(double seconds)
 {
     struct timespec ts;
@@ -77,10 +113,10 @@ static double bound(double seconds)
     return seconds;
 }
 
-/** The lines of the file at `path` that match `re`, or 0 for a file not
- * there yet, which is one with nothing in it. The file is read whole at
- * each look, since a serial log grows at its end and a token may straddle
- * two reads. */
+/** The number of lines of the file at `path` that match `re`, or 0 for a
+ * file not there yet or one that cannot be read whole. The file is read
+ * whole at each look, since a serial log grows at its end and a token may
+ * straddle two reads. */
 static int matching_lines(const char *path, const regex_t *re)
 {
     FILE *f = fopen(path, "r");
@@ -99,8 +135,7 @@ static int matching_lines(const char *path, const regex_t *re)
     len = (long)fread(text, 1, (size_t)len, f);
     text[len] = 0;
     fclose(f);
-    /* A NUL in a serial log, a line the guest never finished, ends a line
-       and not the text. */
+    /* A NUL, as from a line the guest never finished, ends a line. */
     for (line = text; line < text + len; line++)
         if (*line == 0)
             *line = '\n';
@@ -150,7 +185,8 @@ static int until_token(const char *path, const char *pattern, double seconds, in
 
 /** Whether `pid` is a process that has ended and waits to be reaped: a
  * child of the caller's stays so until the caller waits for it, and can
- * still be signalled, so `kill` alone would call it alive. POSIX ps says. */
+ * still be signalled, so `kill` alone would call it alive. The state is
+ * read from POSIX ps; 0 when ps cannot be run. */
 static int is_zombie(pid_t pid)
 {
     char cmd[64], state[16];
@@ -193,7 +229,8 @@ static int until_gone(pid_t pid, double seconds)
     return 0;
 }
 
-/** Write all bytes, returning failure for a closed destination. */
+/** Write the `len` bytes of `buf` to `fd`, across interrupted and short
+ * writes. Returns 0, or -1 when a write fails, as one to a closed pipe. */
 static int write_all(int fd, const char *buf, size_t len)
 {
     while (len) {
@@ -208,7 +245,8 @@ static int write_all(int fd, const char *buf, size_t len)
     return 0;
 }
 
-/** Restore signals ignored by an asynchronous shell job before exec. */
+/** Give INT, QUIT, TERM, HUP and PIPE their default actions before an exec;
+ * a shell starts a background job with INT and QUIT ignored. */
 static void reset_signals(void)
 {
     signal(SIGINT, SIG_DFL);
@@ -218,8 +256,12 @@ static void reset_signals(void)
     signal(SIGPIPE, SIG_DFL);
 }
 
-/** Execute a command, optionally in a process group of its own.
- * After a failed setpgid, existing membership decides whether exec is safe.
+/**
+ * Exec `argv` with the default signal actions, first moving to a process
+ * group of its own when `group` is set. A `setpgid` that fails is accepted
+ * when the process already leads its group, as after the parent's call;
+ * otherwise the process exits with status 2. An exec that fails exits with
+ * status 127.
  */
 static void execute(char **argv, int group)
 {
@@ -238,6 +280,7 @@ static void execute(char **argv, int group)
     exit(127);
 }
 
+/* The group `lead_exec` started, which `forward_signal` signals. */
 static volatile sig_atomic_t led_group;
 
 /** Pass a signal to the process group `lead_exec` started. */
@@ -246,17 +289,18 @@ static void forward_signal(int sig)
     kill(-(pid_t)led_group, sig);
 }
 
-/** Run a command as the leader of a new process group, pass every INT, TERM
- * and HUP this process receives to that whole group, and return the
- * command's status: its exit status, or 128 plus the number of the signal
- * that ended it. A signal this process ignored when it started stays ignored.
+/** The `lead` mode: run a command as the leader of a new process group,
+ * pass every INT, TERM and HUP this process receives to that whole group,
+ * and return the command's status: its exit status, or 128 plus the number
+ * of the signal that ended it, or 2 when the fork or the wait fails. A
+ * signal this process ignored when it started stays ignored.
  *
  * The signals are blocked from before the fork until the child is in its
  * group, which whichever of the two `setpgid` calls runs first makes, and
- * the handlers know it, so one that arrives in between is neither
- * lost nor sent to a group that does not exist yet; the child takes the
- * default actions before it unblocks them. Sending to the group, and not to
- * the child alone, ends a foreground command of a child shell at once, where
+ * `led_group` is set to it, so one that arrives in between is neither lost nor
+ * sent to a group that does not exist yet; the child takes the default
+ * actions before it unblocks them. Sending to the group, and not to the
+ * child alone, ends a foreground command of a child shell at once, where
  * the shell would run its trap only after that command ended.
  */
 static int lead_exec(char **argv)
@@ -300,6 +344,8 @@ static int lead_exec(char **argv)
     return WEXITSTATUS(status);
 }
 
+/* A process of the table, with `owned` set when it belongs to the command
+ * being stopped or checked. */
 struct process {
     pid_t pid, parent, group;
     int owned;
@@ -325,7 +371,9 @@ static double cpu_seconds(const char *text)
 /** The processor time the children a process has already waited for used,
  * from Linux's /proc, in seconds; 0 where there is no such file. A shell
  * that runs one short command after another keeps no time of its own, so
- * the time its children took is what says it is working. */
+ * the time its children took is what says it is working. The fields are
+ * counted from the last ')', since the command name before it, in
+ * parentheses, may have spaces. */
 static double reaped_cpu(long pid)
 {
     char path[64], text[1024];
@@ -342,14 +390,10 @@ static double reaped_cpu(long pid)
     got = fread(text, 1, sizeof(text) - 1, fp);
     fclose(fp);
     text[got] = 0;
-    /* The command name, in parentheses, may hold spaces; the fields are
-       counted from after its closing one. */
     after = strrchr(text, ')');
     if (!after)
         return 0;
-    /* Fields 16 and 17 of /proc/PID/stat are cutime and cstime, the
-       reaped children's user and system time; the separator found on the
-       loop's last pass is the one before field 16. */
+    /* Fields 16 and 17 of /proc/PID/stat are cutime and cstime, in ticks. */
     for (field = 3; field < 17 && after; field++)
         after = strchr(after + 1, ' ');
     if (!after || sscanf(after, "%ld %ld", &cutime, &cstime) != 2)
@@ -357,12 +401,12 @@ static double reaped_cpu(long pid)
     return (cutime + cstime) / (double)sysconf(_SC_CLK_TCK);
 }
 
-/** The processor time the command's group has used, root and every process
- * in its group, from POSIX ps, with the time of the children each has
- * already reaped where the system reports it, plus the number of processes
- * in the group into `count`; -1 when ps cannot be read. A suite whose
- * machines still burn processor time is working, however silent, and so is
- * one whose processes come and go. */
+/** The seconds of processor time the process `root` and the members of its
+ * group have used, from POSIX ps, with what each has reaped of its
+ * children's where /proc reports it; the number of those processes goes in
+ * `*count`. Returns -1 when ps cannot be run. A suite whose machines still
+ * use processor time is working, however silent, and so is one whose
+ * processes come and go. */
 static double group_cpu(pid_t root, int *count)
 {
     FILE *fp = popen("ps -A -o pid= -o pgid= -o time=", "r");
@@ -384,9 +428,14 @@ static double group_cpu(pid_t root, int *count)
     return total;
 }
 
-/** Save descendants before TERM reparents them, including separate groups.
- * POSIX ps supplies the same fields on macOS and Linux. The command group
- * and machine ledger remain usable if process inspection fails.
+/**
+ * List the process table, from POSIX ps, with `owned` set on `root`, the
+ * members of its group, and every descendant of those, whatever its group.
+ * The caller lists it before the first signal, since a process whose parent
+ * then dies is given another parent and could no longer be traced. Returns
+ * the list, which the caller frees, with its length in `*count`; when ps
+ * cannot be run the list is empty, and the caller still signals the group
+ * and the ledger's machines. Exits with status 2 when memory runs out.
  */
 static struct process *descendants(pid_t root, size_t *count)
 {
@@ -433,6 +482,9 @@ static struct process *descendants(pid_t root, size_t *count)
     return list;
 }
 
+/* A process's identity: its group, its start time, in seconds and
+ * microseconds on macOS and in ticks since boot with `fraction` 0 on Linux,
+ * whether it is a zombie, and its command's name. */
 struct identity {
     pid_t group;
     unsigned long long start, fraction;
@@ -440,9 +492,12 @@ struct identity {
     char command[64];
 };
 
-/** Read a PID's start time and state without treating a zombie as live.
- * A PID alone can identify an unrelated process after reuse. Zero means
- * gone; minus one means inspection was unavailable, not a live process.
+/**
+ * Read the identity of process `pid` into `*id`. A pid alone can name an
+ * unrelated process once it is reused, and the start time tells the two
+ * apart. Returns 1, with `zombie` set for a process that has ended and waits
+ * to be reaped; 0 when there is no such process; and -1 when the table could
+ * not be read, which says nothing of whether the process lives.
  */
 static int process_identity(pid_t pid, struct identity *id)
 {
@@ -495,7 +550,12 @@ static int process_identity(pid_t pid, struct identity *id)
 #endif
 }
 
-/** Record identities beside the PID ledger before the machine execs. */
+/**
+ * Append the identities of `machine` and `relay` to `LEDGER.identity`, a
+ * line `PID GROUP START FRACTION` each. A process whose identity cannot be
+ * read is reported and left out. Returns 0, or -1 when the file cannot be
+ * opened or written.
+ */
 static int record_identity(const char *ledger, pid_t machine, pid_t relay)
 {
     char *path = malloc(strlen(ledger) + 16);
@@ -524,9 +584,12 @@ static int record_identity(const char *ledger, pid_t machine, pid_t relay)
     return result;
 }
 
-/** Match a registered process before signalling a retained ledger PID.
- * A missing identity file permits legacy PID-only ledgers used by the
- * lock recovery fixtures. Every new machine writes an identity file.
+/**
+ * Whether `pid`, read from `ledger`, is still the machine recorded there: a
+ * live process whose group and start time match its line of
+ * `LEDGER.identity`. A ledger with no identity file is one of pids alone, as
+ * the fixtures of the lock's recovery write, and its pids are taken as they
+ * are; `machine_exec` always writes the file.
  */
 static int registered_machine(const char *ledger, pid_t pid)
 {
@@ -554,7 +617,8 @@ static int registered_machine(const char *ledger, pid_t pid)
     return result;
 }
 
-/** List current registered PIDs for the outer runner's cleanup. */
+/** The `registered` mode: print each pid of `ledger` that is still the
+ * machine recorded there, for tests/run to stop at the end of a run. */
 static void registered_pids(const char *ledger)
 {
     FILE *fp = fopen(ledger, "r");
@@ -567,10 +631,15 @@ static void registered_pids(const char *ledger)
     fclose(fp);
 }
 
-/** Check current identities after TERM, allowing fifteen seconds to stop.
- * Old machine and relay PIDs remain in the ledger across many boots.
- * Exited processes and reused PIDs cannot fail or be signalled by this
- * check. A failure prints the matching PID, group, start time and command.
+/**
+ * The `machines` mode: stop the machines of suite `name` that still run when
+ * it ends. Each live process that `LEDGER.identity` records, by pid, group
+ * and start time, is sent SIGTERM, and one still there fifteen seconds later
+ * is reported by pid, group, start time and command and sent SIGKILL. The
+ * file keeps the machines and relays of every boot of the suite, and a
+ * process that has ended, or a pid that is now another process's, is passed
+ * over. Returns 1 when a machine had to be killed and 0 otherwise; a table
+ * that could not be read whole is reported and fails nothing.
  */
 static int check_machines(const char *name, const char *ledger)
 {
@@ -627,7 +696,9 @@ static int check_machines(const char *name, const char *ledger)
     return failed;
 }
 
-/** Signal the command group, saved descendants, and registered machines. */
+/** Send `sig` to the group `root`, to each owned process of the `n` of
+ * `list`, and to each machine `ledger` still records, and to the group such
+ * a machine leads. This process is not sent it. */
 static void signal_owned(pid_t root, struct process *list, size_t n, const char *ledger, int sig)
 {
     size_t i;
@@ -649,9 +720,10 @@ static void signal_owned(pid_t root, struct process *list, size_t n, const char 
     }
 }
 
-/** Match a pipe writer by its kernel identity, not its descriptor number.
- * An open pipe asks for inspection. Only identified live holders can
- * affect the verdict; a vanished or unreadable process cannot fail it.
+/**
+ * Whether process `pid` has a descriptor open on the pipe `token` describes,
+ * matched by the pipe's inode and not by a descriptor number. A process that
+ * has gone or cannot be read holds nothing.
  */
 static int holds_token(pid_t pid, const struct stat *token)
 {
@@ -702,11 +774,13 @@ static int holds_token(pid_t pid, const struct stat *token)
 #endif
 }
 
-/** Collect current pipe holders with valid process groups.
- * The group is read between two descriptor checks. An exiting process
- * whose group or descriptors disappeared is not a named live holder.
- * Inspection can be incomplete; the caller must not infer a failure
- * from an empty result, even when the pipe is still open.
+/**
+ * List the processes that hold the pipe `token`, but for init and this one,
+ * each with its group, which is read between two checks of the descriptor so
+ * that a process that exits meanwhile is left out. Returns the list, which
+ * the caller frees, with its length in `*count`. The list can be incomplete,
+ * as when the table cannot be read or memory runs out, so an empty one says
+ * nothing of whether the pipe is still held.
  */
 static struct process *token_holders(const struct stat *token, size_t *count)
 {
@@ -757,7 +831,8 @@ static struct process *token_holders(const struct stat *token, size_t *count)
     return list;
 }
 
-/** Signal newly inspected holders, rechecking identity before each kill. */
+/** Send `sig` to each process that holds the pipe `token` now, checking
+ * its group and its descriptor again just before. */
 static void signal_token(const struct stat *token, int sig)
 {
     size_t count, i;
@@ -768,10 +843,12 @@ static void signal_token(const struct stat *token, int sig)
     free(list);
 }
 
-/** Mark holders in the runner's group or any of its recorded groups.
- * All ledgers beside the suite's machine ledger belong to the same run.
- * A failed ledger read prevents an outside-group verdict: the checker
- * cannot establish that such a group was never recorded.
+/**
+ * Set `owned` on each of the `count` holders of `list` whose group is
+ * `root`, the runner's own, which this process is in, or one recorded in a
+ * `*.groups` file in the directory of `ledger`; every ledger there is of the
+ * same run. Returns 0, or -1 when a file cannot be read, since then no
+ * holder can be shown to be outside every recorded group.
  */
 static int recorded_holders(struct process *list, size_t count, pid_t root, const char *ledger)
 {
@@ -817,7 +894,13 @@ static int recorded_holders(struct process *list, size_t count, pid_t root, cons
     return result;
 }
 
-/** Stop a command, escalating after two seconds without losing its children. */
+/**
+ * Stop the command whose group is `root`: send SIGTERM to its group, its
+ * descendants, the machines `ledger` records and, with `token`, the holders
+ * of that pipe, and SIGKILL to the same two seconds later. The descendants
+ * are listed before the first signal, so a child that it leaves with a new
+ * parent is still reached.
+ */
 static void stop_owned(pid_t root, const char *ledger, const struct stat *token)
 {
     size_t n;
@@ -832,7 +915,9 @@ static void stop_owned(pid_t root, const char *ledger, const struct stat *token)
     free(list);
 }
 
-/** Return zero for EOF, one for a writer, or two for data or a read error. */
+/** Read a byte of the non-blocking pipe `fd`. Returns 0 at its end, when no
+ * writer holds it, 1 when a writer holds it and it is empty, and 2 when it
+ * gave a byte or the read failed. */
 static int token_open(int fd)
 {
     char byte;
@@ -845,14 +930,22 @@ static int token_open(int fd)
     return n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) ? 1 : 2;
 }
 
-/** Inspect a completed suite without mistaking shutdown for detachment.
- * The inherited writer survives exec, setsid, setpgid and reparenting.
- * Closing inherited descriptors escapes this check. An open pipe with
- * no identifiable holder is inconclusive and cannot fail the suite.
- * A holder outside every recorded group fails immediately, with its PID
- * and group. Recorded groups receive TERM and fifteen seconds to stop,
- * including a QEMU still shutting down under the twenty-worker pool.
- * Only an identified survivor fails when that grace expires.
+/**
+ * After suite `name` has ended, find what still holds its liveness pipe and
+ * stop it. `fd` is the pipe's read end and `token` describes the pipe; the
+ * suite's group is `root`; `stopped` says the suite was stopped already.
+ * Every process of the suite inherits the write end, and keeps it through
+ * exec, setsid, setpgid and a new parent; only one that closes the
+ * descriptors it inherited escapes the check.
+ *
+ * A holder outside every recorded group fails the suite at once, and is
+ * reported by pid and group. The recorded groups are sent SIGTERM, and a
+ * holder still there fifteen seconds later fails the suite, which leaves
+ * time for a QEMU that is shutting down on a loaded host. A pipe that is
+ * held but by no process that can be found, or a group ledger that cannot be
+ * read, is reported as inconclusive and fails nothing. After a failure, a
+ * stop or a signal, the holders are sent SIGKILL for up to two seconds.
+ * Returns 1 when the suite fails the check and 0 otherwise.
  */
 static int check_token(int fd, const struct stat *token, pid_t root, const char *ledger,
                        const char *name, int stopped)
@@ -919,14 +1012,15 @@ static int check_token(int fd, const struct stat *token, pid_t root, const char 
     return failed;
 }
 
-/** Read a file's size; an absent file has no output yet. */
+/** The size of the file at `path`, or 0 when there is none yet. */
 static off_t file_size(const char *path)
 {
     struct stat st;
     return stat(path, &st) == 0 ? st.st_size : 0;
 }
 
-/** Print the last bytes without reading an entire build transcript. */
+/** Copy the last 4096 bytes of the file at `path`, or the whole of a
+ * shorter one, to standard error, and a newline after them. */
 static void last_output(const char *path)
 {
     char buf[4096];
@@ -942,20 +1036,32 @@ static void last_output(const char *path)
     write_all(STDERR_FILENO, "\n", 1);
 }
 
-/** Supervise a command, counting its output, its console transcript and
- * its group's processor time. Console relays append independently, so an
- * active guest keeps a silent suite alive, and so does a group that still
- * burns processor time: a suite is stopped as hung only when it has been
- * silent and idle for the whole limit, since a slow machine writes for
- * minutes without a word and an idle one burns nothing. Working is more
- * than a tenth of a processor over the span since the group was last seen
- * working, or a process come or gone, sampled every ten seconds or twice
- * within a shorter limit: a halted machine still takes a few percent for
- * its timer, under either accelerator, and is not working.
- * The suite's clock is never scaled. Its child group is stopped on a signal
- * too, and output from another suite cannot reset its clock.
- * The parent tries to establish the group before cleanup can need it. The
- * child checks membership before exec; the parent's call may lose to exec.
+/**
+ * The `watch` and `suite` modes: run `cmd` as the leader of a new process
+ * group, copy its output to standard output, and stop it as hung when it has
+ * done nothing for `idle` seconds. Returns the command's exit status, or 128
+ * plus N when signal N ended it; 124 when it was stopped as hung; 128 plus N
+ * when this process received signal N; 1 when `suite` is set and the
+ * liveness check fails; and 2 when the command cannot be started.
+ *
+ * The command is working while it writes output, while `LEDGER.console`, the
+ * transcript its machines' relays append to, grows, and while its group uses
+ * processor time: more than a tenth of a processor over the span since it
+ * was last seen working, or a process started or ended, sampled every ten
+ * seconds or twice within a shorter limit. A slow machine can write nothing
+ * for minutes, and a halted one takes only a few percent for its timer,
+ * under either accelerator, which is not working. When none of the three has
+ * happened for `idle` seconds, which are never multiplied by the deadline
+ * factor, the last output of the command and of the console is printed and
+ * the command is stopped with `stop_owned`, as it is when this process
+ * receives INT, TERM or HUP. A line of progress goes each minute to standard
+ * error, or to descriptor 3 when `RACH2_PROGRESS_FD` is 3 and it is open.
+ *
+ * The group is recorded in `LEDGER.groups` before the wait. With `suite`
+ * set, the command's processes inherit a liveness pipe, which `check_token`
+ * reads when the command has ended. Both the parent and the child call
+ * `setpgid`, so the group exists before any cleanup can need it, whichever
+ * runs first; `execute` checks the child's call.
  */
 static int supervise(char **cmd, const char *name, double idle, const char *ledger, int suite)
 {
@@ -1133,9 +1239,16 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
     return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
 }
 
-/** Keep the machine PID unchanged while a child relays its console.
- * Suites can signal that PID, including with KILL. The relay sees EOF when
- * QEMU closes its output, and both PIDs are recorded for final cleanup.
+/**
+ * The `machine` mode: record this process as a machine in `ledger` and exec
+ * `cmd` in it, with its output going through a relay child to standard
+ * output and to `LEDGER.console`. The machine keeps this process's pid, so a
+ * suite that signals the pid it started signals the machine, SIGKILL too.
+ * Both pids go in the ledger, and their identities in `LEDGER.identity`, for
+ * the cleanup at the suite's end. The relay ends at the end of the machine's
+ * output, and sends the machine SIGTERM when it can no longer write. Returns
+ * 2 when the pipe, the transcript, the relay or the ledger cannot be made;
+ * an exec that fails exits with status 127.
  */
 static int machine_exec(const char *ledger, char **cmd)
 {
@@ -1205,7 +1318,8 @@ static int machine_exec(const char *ledger, char **cmd)
     return 127;
 }
 
-/** Remove the directory the environment variable `name` gives, if it is set. */
+/** Remove, with `rm -rf`, the directory the environment variable `name`
+ * gives, when it is set and not empty. */
 static void remove_named(const char *name)
 {
     const char *path = getenv(name);
@@ -1233,8 +1347,13 @@ static void remove_work(void)
     remove_named("RACH2_RUN_TREE_LOCK");
 }
 
-/** Hold a POSIX record lock through exec. The file remains in the tree;
- * unlinking it would let two callers lock different inodes at the same path.
+/**
+ * The `lock` mode: take a POSIX record lock on the file `path` and exec `cmd`
+ * holding it, so that one run at a time works on the tree. A lock that
+ * another run holds refuses this one with status 1, naming the pid and the
+ * arguments the `pid ` and `args ` lines of the file `owner` give. The lock
+ * file is never removed, since a run that unlinked it would let two others
+ * lock two files at one path.
  */
 static void lock_exec(const char *path, const char *owner, char **cmd)
 {
@@ -1523,7 +1642,7 @@ static void start_command(int argc, char **argv)
         exit(lead_exec(argv + 2));
 }
 
-/** Small POSIX interfaces used by the shell runner on macOS and Linux. */
+/** Run the mode the first argument names, as the opening comment lists. */
 int main(int argc, char **argv)
 {
     start_command(argc, argv);

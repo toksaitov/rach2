@@ -1,40 +1,47 @@
 /**
- * runtests: boot the test image once and run every probe, checking each
- * exits 0.
+ * runtests: boot the test image once and run every probe of `PROBES`,
+ * requiring each to exit 0.
  *
- * Boots the architecture's QEMU headless with the kernel and the test RAM disk,
- * waits for the kernel shell, then `exec`s each probe in turn and scores
- * it from the line that hands the shell back: `sys_exit: init process N
- * exited with status M` or `terminate: init process N killed by signal S`.
- * A probe passes when that line has status 0.
+ * Usage: runtests --kernel K --initrd I [--cpu CPU] [--device DEV]
+ *                 [--append LINE] [--log FILE] [--timeout S] [--steptmo S]
+ *                 [--boottmo S]
+ *        runtests --selftest
  *
- * Not the bare "Process exited with status N", which the kernel prints for
- * every process exit including a forked child's, so neither the first nor
- * the last of them is reliably the probe's own. See score_window below.
- * That line is printed only where the debug shell is the supervisor, which
- * every image this runner boots is; an image running /sbin/init prints
- * none at all.
+ * It boots the architecture's QEMU, RACH2_QEMU or else qemu-system-i386,
+ * headless with the kernel and the test RAM disk, on QEMU's user network
+ * with the card DEV, an rtl8139 unless given, and with `-cpu max` unless CPU
+ * is given, since rngprobe fails without RDSEED and RDRAND. It waits for the
+ * kernel shell, `exec`s each probe in turn and scores it from the line that
+ * hands the shell back: `sys_exit: init process N exited with status M` or
+ * `terminate: init process N killed by signal S`. A probe passes when that
+ * line has status 0. The record `process: exited with status N` does not
+ * decide it, since the kernel prints one for every process that exits, a
+ * forked child's included; see `score_window`.
  *
- * This depends on the test image holding no /sbin/init: without it the
- * kernel falls to the debug shell, which `exec`s each probe as a transient
- * init that returns here on exit. A real image instead boots /sbin/init
- * and never reaches this shell. Do not stage a /sbin/init in the test
- * image, or the harness would hang waiting for a prompt that never comes.
+ * The test image has no /sbin/init, so the kernel falls to its debug shell,
+ * which runs each probe as a transient init and is returned to when the
+ * probe exits. The kernel prints the line only where the debug shell is the
+ * supervisor; an image with /sbin/init never reaches the shell, and a run of
+ * it ends at the boot limit with the shell never seen.
  *
- * `-cpu max` is always passed: the entropy-dependent probe (rngprobe)
- * fails closed without RDSEED and RDRAND. Exit code: 0 if every probe
- * exited 0, else 1.
+ * Besides the probes, the run scores the kernel's `timing:` record and
+ * compares the epoch clockmusl prints with the host's clock. --timeout
+ * bounds the run, 180 seconds unless given, --steptmo each probe, 20, and
+ * --boottmo the wait for the shell, 60, each multiplied by the set's
+ * deadline factor. A probe that does not return within its limit ends the
+ * run, and each probe after it counts as a failure. --log keeps the console
+ * in FILE. The exit status is 0 when every probe and both checks pass, 1
+ * otherwise, 2 for a usage error or a run that could not start, and 3 when
+ * the kernel shell never appeared. `--selftest` checks the scoring on fixed
+ * text.
  *
- * This is the automated end-to-end pass over the test image. Every probe
- * that reports its result as an exit status runs here; the rest have a
- * suite of their own, because each needs something this shared boot does
- * not set up. `tests/run console` types at the console for stdintest and
- * ttyprobe, which block until something is typed. `tests/run fault` runs
- * vmfault, vmro and winprobe, which are killed on purpose and so have no
- * status to report. `tests/run socket` starts a host echo server for
+ * Every probe that reports its result as an exit status runs here; the rest
+ * have a suite of their own, since each needs something this shared boot
+ * does not set up. `tests/run console` types at the console for stdintest
+ * and ttyprobe, which block until something is typed. `tests/run fault`
+ * runs vmfault, vmro and winprobe, which are killed on purpose and so have
+ * no status to report. `tests/run socket` starts a host echo server for
  * udptest and tcptest, and `tests/run ping` answers pingtest.
- *
- * Usage: runtests --kernel K --initrd I [--cpu max] [--timeout S]
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -49,7 +56,8 @@
 #include <unistd.h>
 
 /* One boot runs all of these, in order. See the header for the probes that
-   have a suite of their own. */
+   have a suite of their own. tools/verify/probecheck.sh reads the names from
+   this table's lines that begin with a quoted name. */
 static const char *const PROBES[] = {
     "hello", "filetest", "forktest", "shelltest", "dirtest", "stattest", "touchtest", "rmtest",
     "mvtest", "lstest", "dup2test", "auxvprobe", "tlsprobe", "fsbaseprobe", "errnoprobe", "vmprobe",
@@ -61,29 +69,28 @@ static const char *const PROBES[] = {
        not run. */
     "xsaveprobe",
     /* The four limits: the process table, a process's descriptors, the
-       socket pool and the frames. Each fills the thing, requires the refusal
-       the kernel documents, and then requires the resource back. */
+       socket pool and the frames. Each is filled, the refusal the kernel
+       documents is required, and then the resource is required back. */
     "fdfull", "oomprobe",
     /* The limits prlimit64 keeps: processes per user, descriptors and the
        address space, each refused by name. */
     "limitprobe",
-    /* Hermetic without `--live`, which this does not pass: the resolver's
-       pure helpers and the crafted wire data, not the real internet. */
+    /* Without `--live`, which this does not pass, dnstest runs the
+       resolver's helpers that use no network, on fixed wire data. */
     "dnstest", "trapprobe", "ofdprobe", "waitprobe", "pipeprobe", "pollprobe", "devprobe",
     "jobprobe", "miscprobe", "ptyprobe", "rngprobe", "orphanprobe", "loopprobe", "zombieprobe",
     "exitprobe", "survivorprobe", "procprobe", "suidprobe", "sudoprobe", "modeprobe",
-    /* The musl-linked identity and permission walks: prove the id family
-       and the deny paths through the real libc syscall selection, not just
-       raw int 0x80. */
+    /* The identity and permission calls and their refusals, made through
+       musl, which chooses the system calls itself. */
     "musl/authmusl", "musl/permmusl", "musl/suidmusl",
-    /* After those three, because it rewrites files they read and puts them
-       back. It is also the slowest probe here by a wide margin, and
-       deliberately so: it waits out the credential lock's real retry
-       budget twice and sleeps inside a held transaction once. */
+    /* After those three, since it rewrites files they read and puts them
+       back. It is the slowest probe here: it waits out the credential
+       lock's retry limit twice and sleeps once inside a held
+       transaction. */
     "musl/pwauthmusl",
-    /* After it, and for the same reasons doubled: it drives the shipped
-       setuid passwd, which takes the same lock and rewrites the same
-       files, and it restores all three databases before it exits. */
+    /* After it, for the same reason: it runs the image's setuid passwd,
+       which takes the same lock and rewrites the same files, and it
+       restores all three databases before it exits. */
     "musl/passwdmusl", "musl/addusermusl", "musl/loginmusl", "rebootprobe", "musl/readvmusl",
     "musl/timemusl", "musl/clockmusl", "musl/statmusl", "musl/stampmusl", "musl/execargmusl",
     "musl/spawnmusl", "musl/sigmusl",
@@ -92,8 +99,7 @@ static const char *const PROBES[] = {
     /* Faults to handlers, SA_RESTART, the alternate stack, int3, the
        pending set, sigsuspend's mask and SIGCHLD's siginfo. */
     "musl/sigframemusl",
-    /* How many mappings a process may hold, which the compiler found too
-       few. */
+    /* How many mappings a process may hold. */
     "musl/vmamusl",
     /* The file calls GNU libc makes: paths of PATH_MAX bytes, the
        descriptor forms of the calls that take a path, the namespace
@@ -170,12 +176,11 @@ static const char *const PROBES[] = {
        /musl/statushelper, a fixture and not a probe, which is why that one
        is staged but not listed here. */
     "musl/ishmusl",
-    /* Last: it flips the modes of a staged tree and mints fixtures outside
-       it. It puts every one back, but a probe that mutates shared state
-       belongs where a failure part-way through cannot be another probe's
-       premise. */
+    /* Last, since it changes the modes of a staged tree and makes files
+       outside it. It puts every one back, but a failure part way through
+       would leave them changed for the probes after it. */
     "searchprobe",
-    /* Beside it for the same reason: it mints a tree of its own inside the
+    /* Beside it for the same reason: it makes a tree of its own inside the
        two staged directories of its sticky pair, and two more directories
        at the image root, and removes every one of them again. */
     "stickyprobe"};
@@ -211,15 +216,12 @@ static int not_built_here(const char *probe)
     return 0;
 }
 
-/* The two markers that hand the debug shell back. Both kernel paths carry
-   their own outcome on this line: sys_exit its exit status,
-   terminate_current_process the signal that killed the process.
-   score_window matches them at a line start, not on the trailing phrase
-   alone: a probe writes to the same serial console the kernel does, so a
-   pattern accepting the suffix anywhere lets a probe print "exited with
-   status 0, returning to kernel shell" itself and be credited before it
-   crashes or hangs. Requiring the component prefix and the pid keeps the
-   verdict the kernel's to give. */
+/* The two markers that hand the debug shell back: sys_exit's, with the init
+   process's exit status, and terminate's, with the signal that killed it.
+   `score_window` matches a marker whole, with its component and pid, at the
+   start of a line: a probe writes to the same serial console as the kernel,
+   and one that printed the marker's phrase itself must not be credited with
+   a pass. */
 #define EXIT_HEAD "sys_exit: init process "
 #define EXIT_MID  " exited with status "
 #define EXIT_TAIL ", returning to kernel shell"
@@ -227,8 +229,13 @@ static int not_built_here(const char *probe)
 #define KILL_MID  " killed by signal "
 #define KILL_TAIL ", returning to kernel shell"
 
-/* Match one marker at `at`. Fills `value` with the status or signal and
-   returns the end offset, or -1. */
+/**
+ * Match the marker `head`, a pid, `mid`, a number and `tail` at offset `at`
+ * of the `len` bytes of `text`, the number with an optional minus sign when
+ * `signed_value` is set. Returns the offset past the marker, with the number
+ * in `*value`, or -1 when there is no marker there or its number does not
+ * fit a long.
+ */
 static long marker_at(const unsigned char *text, size_t len, size_t at, const char *head,
                       const char *mid, const char *tail, int signed_value, long *value)
 {
@@ -265,9 +272,11 @@ static long marker_at(const unsigned char *text, size_t len, size_t at, const ch
     return (long)(i + tlen);
 }
 
-/* Past a record's `<N>[seconds.hundredths] ` prefix, or `at` if there is no
-   prefix there. The two markers below are records now, so what begins the
-   line is the prefix and the marker follows it. */
+/**
+ * The offset past a record's prefix, `<N>[SECONDS] `, at `at`, or `at` when
+ * there is none. The kernel writes both markers as records, so the prefix
+ * begins the line and the marker follows it.
+ */
 static size_t past_prefix(const unsigned char *text, size_t len, size_t at)
 {
     size_t i = at;
@@ -285,10 +294,13 @@ static size_t past_prefix(const unsigned char *text, size_t len, size_t at)
     return i + 2;
 }
 
-/* The first marker at or after `from`. `line_start` requires it to begin a
-   line, or to follow the record prefix that does, which is what makes the
-   verdict the kernel's. Returns the end offset, or -1; `which` is 'e' for an
-   exit and 'k' for a kill. */
+/**
+ * Find the first marker at or after `from`. Returns the offset past it, with
+ * 'k' for a kill or 'e' for an exit in `*which` and its number in `*value`,
+ * or -1. With `line_start` set the marker must begin a line or follow the
+ * record prefix that does, which is `score_window`'s rule; without it a
+ * marker anywhere counts, which is `expect_marker`'s.
+ */
 static long find_marker(const unsigned char *text, size_t len, size_t from, int line_start,
                         char *which, long *value)
 {
@@ -317,21 +329,24 @@ static long find_marker(const unsigned char *text, size_t len, size_t from, int 
     return -1;
 }
 
-/* Decide one probe's result from the serial bytes its marker bounds.
-   Scores the status the marker line itself has, never a bare "Process
-   exited with status N": the kernel prints that for every process exit, a
-   forked child's included, so neither the first nor the last of them is
-   reliably the probe's own. A child that outlives its parent prints after
-   it, and a probe that reaps a clean child and then dies on a signal
-   prints no status of its own at all, which is how a crash used to score
-   as a pass. Fills `detail` and returns nonzero when the probe passed. */
+/**
+ * Score one probe from the `len` bytes of serial output in its window.
+ * Returns 1 when the first exit marker at the start of a line has status 0
+ * and no kill marker starts a line, and 0 otherwise, with the status, the
+ * signal or "no exit reported" in `detail`.
+ *
+ * A kill marker decides the window wherever it is, before any exit marker.
+ * Only the marker is read, never a record `process: exited with status N`:
+ * the kernel prints one for every process that exits, a forked child's
+ * included, so a child that outlives its parent prints after it, and a
+ * probe that reaps a clean child and then dies by a signal prints none of
+ * its own.
+ */
 static int score_window(const unsigned char *window, size_t len, char *detail, size_t detail_len)
 {
     size_t at;
     long value;
 
-    /* A kill anywhere in the window decides it, the way the Python
-       original searched for the kill first. */
     for (at = 0; at < len; at++) {
         if (at != 0 && window[at - 1] != '\n')
             continue;
@@ -354,12 +369,13 @@ static int score_window(const unsigned char *window, size_t len, char *detail, s
     return 0;
 }
 
-/* The offset of the first line that begins with `head` and carries `tail`
-   later on that same line, at or after `from`, or -1. `tail` may be null,
-   which asks for `head` alone. Records are matched in two halves because the
-   timestamp between them is not fixed text, and only at a line start, because
-   a probe that printed the text of a record inside its own output must not
-   count as one. */
+/**
+ * The offset of the first line at or after `from` that begins with `head`
+ * and has `tail` later on it, or -1; a null or empty `tail` asks for `head`
+ * alone. A record is matched in two parts, since the time between them is
+ * not fixed text, and only at the start of a line, since a probe that
+ * printed a record's text in its own output must not count as one.
+ */
 static long find_text(const unsigned char *hay, size_t len, size_t from, const char *head,
                       const char *tail)
 {
@@ -395,12 +411,6 @@ static long find_text(const unsigned char *hay, size_t len, size_t from, const c
  * verdict and the rest of the line is the evidence; the delay, the wait and
  * the walk against the tick are measured against time the host owns and are
  * printed for a person, not judged.
- *
- * This replaced a scorer over the dozen checks the kernel used to run at boot.
- * Those are gone: what they proved is exercised by the first program that
- * starts and covered by the host tests and these suites, and the interval rule
- * this needed, to tell a failing check from a fault probe's own error record,
- * went with them.
  */
 static int score_kernel_timing(const unsigned char *buf, size_t buf_len, char *detail, size_t size)
 {
@@ -430,6 +440,19 @@ static int score_kernel_timing(const unsigned char *buf, size_t buf_len, char *d
 
 /* ---- the selftest ---- */
 
+/**
+ * Check the scoring on fixed text, printing each case that fails. Returns 0
+ * when every case passes and 1 otherwise.
+ *
+ * The windows check `score_window`. The scans check the two rules of
+ * `find_marker`, which read the same text differently on purpose: the end
+ * of a window is found wherever the kernel printed its marker, since the
+ * kernel writes it with no newline before it and a probe that dies after a
+ * partial line leaves it inside that line, where a window that did not end
+ * would read as a hang; the score requires the start of a line, so a probe
+ * cannot print itself a pass. A number too long for a long is a marker
+ * under neither rule. The records check `score_kernel_timing`.
+ */
 static int selftest(void)
 {
     static const struct {
@@ -442,8 +465,7 @@ static int selftest(void)
                   "<6>[1.21] sys_exit: init process 4 exited with status 0, "
                   "returning to kernel shell\n",
                   "status=0", 1},
-                 /* The same markers as the kernel wrote them before they were
-                    records, which is what a capture from an older boot holds. */
+                 /* The markers without a record's prefix. */
                  {"clean, unprefixed",
                   "\nProcess exited with status 0\n"
                   "sys_exit: init process 4 exited with status 0, "
@@ -469,9 +491,7 @@ static int selftest(void)
                   "sys_exit: init process 4 exited with status 7, "
                   "returning to kernel shell\n",
                   "status=7", 0},
-                 /* A probe shares the serial console with the kernel, so the
-                    phrase alone must not be a verdict: this one prints it and
-                    then dies. */
+                 /* A probe prints the marker's phrase itself and then dies. */
                  {"probe forges the marker text, then is killed",
                   "probe: exited with status 0, returning to kernel shell\n"
                   "terminate: init process 4 killed by signal 11, "
@@ -495,13 +515,6 @@ static int selftest(void)
             bad++;
         }
     }
-    /* The window's end and the window's score read the same text by two
-       rules, and the difference is deliberate. The end must be found
-       wherever the kernel printed it, because the kernel writes the marker
-       with no leading newline and a probe that dies after a partial line
-       leaves it mid-line; an unbounded window there reads as a hang. The
-       score requires a line start, so a probe cannot print itself a pass.
-       An absurd digit run is not a marker under either rule. */
     {
         static const struct {
             const char *name;
@@ -540,9 +553,6 @@ static int selftest(void)
         }
         n += scan_n;
     }
-    /* The kernel's own checks, read from a transcript: the summary at its
-       level, passed or failed, the count against the records, and an error
-       record inside the group. */
     {
         static const struct {
             const char *name;
@@ -591,14 +601,21 @@ static int selftest(void)
 
 /* ---- the run ---- */
 
+/* The serial output read so far, NUL-terminated, and the offset the waits
+   search from. */
 static unsigned char *buf;
 static size_t buf_len, buf_cap, consumed;
+/* QEMU's process, the ends of its serial pipes, and, once it is reaped, its
+   exit status, 128 + N after signal N. */
 static pid_t child_pid = -1;
 static int child_out = -1, child_in = -1;
 static int child_reaped, child_status;
+/* The transcript --log asks for, or NULL. */
 static FILE *logf;
+/* The end of the run, on the calendar clock. */
 static double deadline;
 
+/** Seconds on the calendar clock. */
 static double now(void)
 {
     struct timeval tv;
@@ -607,15 +624,15 @@ static double now(void)
     return (double)tv.tv_sec + (double)tv.tv_usec / 1e6;
 }
 
-/* ---- the deadline factor ----
- *
- * A set's runner measures the emulator's rate under the load the set makes
- * and passes `RACH2_DEADLINES=scaled` with `RACH2_DEADLINE_FACTOR=F` to
- * every suite; a deadline that bounds completion is multiplied by F here.
- * A process told nothing, or told the mode without a factor, keeps its
- * numbers as written. */
+/* The set's deadline factor, which multiplies every completion bound. */
 static double deadline_factor = 1.0;
 
+/**
+ * Read the deadline factor. tests/run passes its `RACH2_TIMEOUT_FACTOR` to
+ * every suite as `RACH2_DEADLINES=scaled` with `RACH2_DEADLINE_FACTOR=F`. A
+ * process told nothing, told the mode without a factor, or given a factor
+ * outside 1 to 64 keeps the factor 1.
+ */
 static void deadline_factor_read(void)
 {
     const char *mode = getenv("RACH2_DEADLINES");
@@ -629,11 +646,14 @@ static void deadline_factor_read(void)
         deadline_factor = f;
 }
 
+/** A completion bound of `seconds` multiplied by the deadline factor. */
 static double scaled(double seconds)
 {
     return seconds * deadline_factor;
 }
 
+/** Append `n` bytes to `buf`, keeping it NUL-terminated; exits with status
+ * 2 when there is no memory. */
 static void buf_add(const unsigned char *data, size_t n)
 {
     if (buf_len + n + 1 > buf_cap) {
@@ -649,6 +669,7 @@ static void buf_add(const unsigned char *data, size_t n)
     buf[buf_len] = '\0';
 }
 
+/** QEMU's exit status, 128 + N after signal N, or -1 while it runs. */
 static int child_poll(void)
 {
     pid_t got;
@@ -665,6 +686,8 @@ static int child_poll(void)
     return -1;
 }
 
+/** Read QEMU's output into `buf` and the transcript until `until`, the
+ * run's deadline, QEMU's exit or the end of the pipe. */
 static void pump(double until)
 {
     while (now() < until && now() < deadline && child_poll() < 0) {
@@ -692,8 +715,11 @@ static void pump(double until)
     }
 }
 
-/* Wait for the literal text `what` after `consumed`; returns its end
-   offset or -1. Used only for the shell prompt. */
+/**
+ * Wait `window` seconds, and not past the deadline, for the text `what`
+ * after `consumed`. Returns the offset past it, which becomes `consumed`,
+ * or -1 when the time runs out or QEMU exits.
+ */
 static long expect_text(const char *what, double window)
 {
     double stop = now() + window;
@@ -715,9 +741,18 @@ static long expect_text(const char *what, double window)
     }
 }
 
-/* Wait for either shell-return marker after `consumed`. The search does
-   not require a line start, the way the Python runner's own wait did not;
-   the scoring that follows does. */
+/**
+ * Wait `window` seconds, and not past the deadline, for either marker after
+ * `consumed`. Returns the offset past it, which becomes `consumed`, or -1
+ * when the time runs out or QEMU exits.
+ *
+ * A marker is found anywhere, not only at the start of a line as the score
+ * requires: the kernel writes it with no newline before it, so a probe that
+ * dies by a signal after a partial line leaves it inside that line, and a
+ * window that did not end there would read as a hang and stop the rest of
+ * the run. A probe that prints the marker's text itself ends its own window
+ * early and then scores as no exit reported, a failure either way.
+ */
 static long expect_marker(double window)
 {
     double stop = now() + window;
@@ -727,14 +762,6 @@ static long expect_marker(double window)
     for (;;) {
         char which;
         long value;
-        /* Not at a line start, unlike the scoring rule. The kernel writes
-           this marker straight to serial with no leading newline, so a
-           probe that dies by signal after printing a partial line leaves
-           the marker in the middle of one. Requiring a line start here
-           would leave that window unbounded, and the probe would read as
-           a hang and stop the rest of the suite. A probe that prints the
-           text itself ends its own window early and then scores as no
-           exit reported, which is a failure either way. */
         long end = find_marker(buf, buf_len, consumed, 0, &which, &value);
 
         if (end >= 0) {
@@ -747,6 +774,8 @@ static long expect_marker(double window)
     }
 }
 
+/** Write `text` and a newline to QEMU's serial input. A write that fails,
+ * since the machine has gone, is left for the wait after it to find. */
 static void send_line(const char *text)
 {
     if (child_in < 0)
@@ -756,13 +785,26 @@ static void send_line(const char *text)
     }
 }
 
+/**
+ * Boot the test image, run the probes in order, and print each probe's
+ * result, the timing and clock checks and the count of failures.
+ *
+ * A probe's window starts where its output starts, since what was read
+ * before it came from the shell and a marker in it would end the window
+ * before it began, and ends at the marker of its return to the shell. The
+ * marker is on the serial line, so it is read even after a probe that left
+ * the console terminal in raw mode, as ttyprobe can. The host's time is
+ * taken when clockmusl returns, a moment after it printed its epoch, and
+ * the two must agree to 30 seconds: that catches a date wrong by hours, as
+ * from a CMOS clock kept in local time and read as UTC, which clockmusl
+ * cannot see from inside. tests/host/rtc_hosttest.c checks the arithmetic
+ * of the kernel's clock exactly. QEMU is given `-rtc base=utc`, its
+ * default, since the kernel reads the CMOS clock as UTC.
+ */
 int main(int argc, char **argv)
 {
     const char *kernel = NULL, *initrd = NULL, *cpu = "max";
     const char *log = NULL, *append = NULL;
-    /* The card to attach. The RTL8139 is what this suite has always booted
-       against; naming another is how the same probes are run on another
-       driver. */
     const char *device = "rtl8139,netdev=net0";
     double timeout = 180.0, steptmo = 20.0, boottmo = 60.0;
     char *qemu[32];
@@ -811,11 +853,6 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    /* -rtc base=utc is QEMU's default and is passed anyway: this kernel
-       reads the CMOS as UTC (there is no timezone in those registers to
-       read), so a host configured for a local-time RTC would hand the
-       guest a date wrong by its offset, and the clock check below would
-       report it as our bug. */
     qemu[nq++] = (char *)qemu_binary();
     qemu[nq++] = (char *)"-cpu";
     qemu[nq++] = (char *)cpu;
@@ -898,15 +935,8 @@ int main(int argc, char **argv)
             continue;
         }
         snprintf(line, sizeof(line), "exec %s", PROBES[i]);
-        /* The window starts where this probe's output will start. Anything
-           already buffered came from the shell, not from the probe, and a
-           marker left in it would end the window before it began. */
         consumed = start;
         send_line(line);
-        /* The probe runs AS the init process, and only its own exit
-           returns the kernel shell, so that marker bounds the window. The
-           marker is on serial, so it survives a probe that left the
-           console tty in raw mode (ttyprobe). */
         end = expect_marker(steptmo);
         if (end >= 0 && (size_t)end < start) {
             fprintf(stderr,
@@ -929,11 +959,6 @@ int main(int argc, char **argv)
                          sizeof(results[n_results].detail));
         n_results++;
         if (strcmp(PROBES[i], "musl/clockmusl") == 0) {
-            /* Host time AT the probe, not at the end of the suite: the
-               guest printed its epoch a moment ago, so the two are
-               comparable to the second. Sampling after the remaining
-               probes would leave a window minutes wide, and a clock
-               minutes wrong would pass. */
             clock_seen_at = now();
         }
     }
@@ -951,12 +976,6 @@ int main(int argc, char **argv)
     if (logf != NULL)
         fclose(logf);
 
-    /* The clock, end to end. clockmusl checks that its own date is real
-       and advancing; only this side can check it against the clock QEMU
-       handed the machine, which is what catches a date wrong by hours, not
-       by years (a local-time CMOS read as UTC, say). The anchor's own
-       arithmetic is pinned exactly in tests/host/rtc_hosttest.c and not
-       here: that error is under a second and no tolerance would see it. */
     snprintf(clock_detail, sizeof(clock_detail), "the probe printed no epoch");
     {
         const char *want = "CLOCKMUSL EPOCH ";
@@ -987,9 +1006,7 @@ int main(int argc, char **argv)
                results[i].ok ? "PASS" : "FAIL");
     }
 
-    /* A hang breaks the loop, so a short run is a failure in its own right
-       and names what never ran. Printing the smaller count alone would
-       read as a complete suite that happened to be smaller today. */
+    /* Each probe a hang left unrun is a failure, and is named. */
     {
         int missing = 0;
         char names[4096];
@@ -1020,8 +1037,7 @@ int main(int argc, char **argv)
         }
     }
 
-    /* Reported beside the probes, not as one, so the count stays the count
-       of probes. */
+    /* The two checks count as failures but not as probes. */
     printf("  %-12s %-18s %s\n", "timing", selftest_detail, selftest_ok ? "PASS" : "FAIL");
     if (!selftest_ok)
         fails++;

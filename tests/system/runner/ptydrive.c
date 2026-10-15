@@ -1,23 +1,33 @@
 /**
- * Run a command on a sized pseudo-terminal and answer one password prompt.
+ * ptydrive: run a command on a pseudo-terminal of a given size and answer
+ * one password prompt.
  *
- * The password comes from --password-env and is removed from the child's
- * environment before exec. A second prompt stops the command without an
- * answer and returns failure. Matching proceeds byte by byte, including
- * across reads and through several prompts in one read.
+ * Usage: ptydrive [--rows N] [--cols N] [--timeout S] [--prompt-re RE]
+ *                 [--password-env NAME] [--] COMMAND [ARG ...]
  *
- * Output is filtered before stdout: complete passwords are redacted, a
- * possible prefix stays in memory, and an unfinished prefix is redacted at
- * EOF or termination. Carriage returns are omitted before filtering.
- * Empty passwords and passwords containing control bytes are refused.
+ * The terminal is 40 rows by 100 columns unless given. The password is the
+ * value of the environment variable NAME, RACH2_PASSWORD unless given; it is
+ * removed from the command's environment before the exec, and an empty
+ * password or one with a control byte is refused. When the command's output
+ * matches RE, `[Pp]assword:` unless given, the password and a carriage
+ * return are typed, and a second prompt stops the command unanswered. A
+ * prompt is matched byte by byte against the last 256 bytes since the one
+ * before it, so it is found across reads, and each of several prompts in one
+ * read is counted.
  *
- * PROMPTED=N counts prompts seen; ANSWERED=N counts complete answers sent.
- * The driver does not propagate the child's exit status. A timeout emits
- * TIMEDOUT; a repeated prompt or driver error returns nonzero. The suites
- * judge the command's output and the authentication counters separately.
+ * The command's output is copied to standard output without its carriage
+ * returns and with each whole password written as `[redacted]`. A prefix of
+ * the password is held back until it is completed or broken, and one still
+ * held at the end of the output, a timeout or a stop is written as
+ * `[redacted]` too.
  *
- * --prompt-re uses the harness's small pattern syntax. The default
- * [Pp]assword: is a character class followed by a literal.
+ * The run ends when the command closes the terminal, or after S seconds, 60
+ * unless given and multiplied by the set's deadline factor, which prints
+ * `TIMEDOUT`. `PROMPTED=N` then counts the prompts seen and `ANSWERED=N`
+ * the answers sent. The exit status is 0, after a timeout too, 1 after a
+ * second prompt or an answer that could not be written, and 2 for a usage
+ * error or a failure to set up. The command's own status is not reported;
+ * the suites judge its output and the two counts.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -40,6 +50,8 @@
 
 #define TAIL_BYTES 256
 
+/* The output filter: the `length` bytes of the password, and the `used`
+ * bytes of output held in `pending`, which are a prefix of the password. */
 struct secret_filter {
     const unsigned char *password;
     unsigned char *pending;
@@ -48,11 +60,14 @@ struct secret_filter {
 };
 
 /**
- * Relay text without emitting the password, including across read boundaries.
+ * Pass one byte of the command's output through `filter` to standard output.
  *
- * A possible prefix stays in memory until it matches or differs. Carriage
- * returns are omitted before matching so later CR removal cannot join two
- * visible fragments into the password. Passwords contain no control bytes.
+ * A carriage return is dropped. A byte that extends a prefix of the password
+ * is held; a held run that stops being a prefix is written from its first
+ * byte until what is left is one again, and a run that completes the
+ * password is written as `[redacted]`. Carriage returns are dropped before
+ * the match, so output that has the password with one inside it is still
+ * redacted; the password itself has no control bytes.
  */
 static void secret_byte(struct secret_filter *filter, unsigned char byte)
 {
@@ -71,7 +86,8 @@ static void secret_byte(struct secret_filter *filter, unsigned char byte)
 }
 
 /**
- * Discard a possible password prefix at EOF, timeout or forced termination.
+ * Write a held prefix of the password as `[redacted]`, at the end of the
+ * output, a timeout or a stop, and flush standard output.
  */
 static void secret_finish(struct secret_filter *filter)
 {
@@ -83,7 +99,8 @@ static void secret_finish(struct secret_filter *filter)
 }
 
 /**
- * Send every byte of one answer, retrying interrupted and partial writes.
+ * Write the `length` bytes of `text` to `master`, across interrupted and
+ * short writes. Returns 0, or -1 when a write fails.
  */
 static int answer_write(int master, const char *text, size_t length)
 {
@@ -100,17 +117,9 @@ static int answer_write(int master, const char *text, size_t length)
     return 0;
 }
 
-/* ---- the prompt matcher ----
- *
- * A literal character matches itself, `.` matches any character but a
- * newline, `[...]` matches one of its members (ranges and a leading `^` to
- * negate), `\` escapes, and `*`, `+` and `?` repeat. A pattern using a
- * construct outside that subset is refused rather than silently taken as
- * literal text, because a driver that never sees its prompt would hang
- * until the timeout and report a question that was asked as one that was
- * not.
- */
-
+/* An item of the prompt's pattern: a literal byte, any byte but a newline,
+ * or one of a class of bytes in a map of 256 bits, `negate` inverting it,
+ * with `repeat` the '*', '+' or '?' that follows the item, or 0. */
 struct item {
     enum { LITERAL, ANY, CLASS } kind;
     char literal;
@@ -119,14 +128,28 @@ struct item {
     char repeat;
 };
 
+/* The prompt's pattern, compiled. */
 static struct item items[64];
 static int n_items;
 
+/** Add the byte `c` to the class of `it`. */
 static void class_add(struct item *it, unsigned char c)
 {
     it->set[c >> 3] |= (unsigned char)(1 << (c & 7));
 }
 
+/**
+ * Compile `pattern` into `items`.
+ *
+ * A literal character matches itself, `.` any character but a newline, and
+ * `[...]` one of its members, with ranges; `\` escapes the character after
+ * it, and `*`, `+` and `?` repeat the item before them. A pattern with an
+ * unescaped `(`, `)`, `{`, `}`, `|`, `^` or `$` anywhere, inside a class
+ * too, or with more than 64 items ends the program with status 2 and a
+ * message. It is refused rather than read as literal text, since a driver
+ * that never saw its prompt would wait out its timeout and report a prompt
+ * that was shown as one that was not.
+ */
 static void compile_prompt(const char *pattern)
 {
     const char *p;
@@ -204,6 +227,7 @@ static void compile_prompt(const char *pattern)
     }
 }
 
+/** Whether the byte `c` matches `it`, its repeat aside. */
 static int item_matches(const struct item *it, unsigned char c)
 {
     switch (it->kind) {
@@ -218,6 +242,11 @@ static int item_matches(const struct item *it, unsigned char c)
     return 0;
 }
 
+/**
+ * Whether the items from `k` on match the `len` bytes of `text` from `at`.
+ * A `*` or `+` item takes the longest run first and gives back one byte at a
+ * time.
+ */
 static int match_here(int k, const unsigned char *text, size_t len, size_t at)
 {
     const struct item *it;
@@ -250,6 +279,8 @@ static int match_here(int k, const unsigned char *text, size_t len, size_t at)
     return 0;
 }
 
+/** Whether the prompt's pattern matches anywhere in the `len` bytes of
+ * `text`. */
 static int prompt_seen(const unsigned char *text, size_t len)
 {
     size_t at;
@@ -260,6 +291,7 @@ static int prompt_seen(const unsigned char *text, size_t len)
     return 0;
 }
 
+/** Seconds on the calendar clock. */
 static double now(void)
 {
     struct timeval tv;
@@ -268,15 +300,15 @@ static double now(void)
     return (double)tv.tv_sec + (double)tv.tv_usec / 1e6;
 }
 
-/* ---- the deadline factor ----
- *
- * A set's runner measures the emulator's rate under the load the set makes
- * and passes `RACH2_DEADLINES=scaled` with `RACH2_DEADLINE_FACTOR=F` to
- * every suite; a deadline that bounds completion is multiplied by F here.
- * A process told nothing, or told the mode without a factor, keeps its
- * numbers as written. */
+/* The set's deadline factor, which multiplies every completion bound. */
 static double deadline_factor = 1.0;
 
+/**
+ * Read the deadline factor. tests/run passes its `RACH2_TIMEOUT_FACTOR` to
+ * every suite as `RACH2_DEADLINES=scaled` with `RACH2_DEADLINE_FACTOR=F`. A
+ * process told nothing, told the mode without a factor, or given a factor
+ * outside 1 to 64 keeps the factor 1.
+ */
 static void deadline_factor_read(void)
 {
     const char *mode = getenv("RACH2_DEADLINES");
@@ -290,11 +322,23 @@ static void deadline_factor_read(void)
         deadline_factor = f;
 }
 
+/** A completion bound of `seconds` multiplied by the deadline factor. */
 static double scaled(double seconds)
 {
     return seconds * deadline_factor;
 }
 
+/**
+ * Read the options, start the command on a terminal with `forkpty`, and
+ * relay its output and answer its prompt until the end of the run.
+ *
+ * After a timeout or a second prompt the command's group is sent SIGTERM,
+ * which reaches what the command started, since `forkpty` makes the
+ * command a session leader; a command that ignores it, or a descendant that
+ * holds the terminal, would otherwise keep the driver waiting past its
+ * deadline. A command still running five seconds after the end is sent
+ * SIGKILL, and five seconds after that the driver reports without it.
+ */
 int main(int argc, char **argv)
 {
     int rows = 40, cols = 100;
@@ -324,8 +368,6 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--password-env") == 0 && i + 1 < argc)
             password_env = argv[++i];
         else if (strcmp(argv[i], "--") == 0) {
-            /* The end-of-options marker: what follows is the command, even
-               when its first word begins with a dash. */
             if (i + 1 < argc)
                 command = &argv[i + 1];
             break;
@@ -400,8 +442,7 @@ int main(int argc, char **argv)
             continue;
         n = read(master, data, sizeof(data));
         if (n <= 0) {
-            /* A pty reports EIO when the last writer closes it, which is
-               how the command's exit reaches here. */
+            /* The master reads EIO or end of file once the slave closes. */
             break;
         }
         for (at = 0; at < (size_t)n; at++) {
@@ -436,10 +477,6 @@ int main(int argc, char **argv)
     if (timed_out)
         printf("\nTIMEDOUT\n");
     if (timed_out || failed) {
-        /* forkpty puts the command in its own session, so the negative pid
-           reaches whatever it started as well. A command that ignores the
-           signal, or a descendant holding the pty, would otherwise keep
-           this process waiting after its own deadline has passed. */
         if (kill(-pid, SIGTERM) != 0)
             kill(pid, SIGTERM);
     }
