@@ -6,9 +6,9 @@
 /*
  * The 64-bit ARM's part of `arch.h`, for an AArch64 processor at EL1 with
  * 4 KiB pages and 48-bit virtual addresses, entered from EL0 by `svc` and
- * the exceptions. Nothing implements this architecture yet: the header
- * exists so that the shared code is compiled for it (`make check-arch`),
- * and it is what a port begins from.
+ * the exceptions. No code implements this architecture: the header exists
+ * so that the shared code is compiled for it (`make check-arch`), and a
+ * port begins from it.
  */
 
 /* The registers an exception entry saves: x0 to x30, the stack pointer
@@ -79,6 +79,9 @@ uint32_t mmio_read32(uintptr_t a);
 void mmio_write8(uintptr_t a, uint8_t v);
 void mmio_write16(uintptr_t a, uint16_t v);
 void mmio_write32(uintptr_t a, uint32_t v);
+
+/* The kernel's regions, placed after the user range so that the shared code
+ * compiles; a port's MMU code chooses where they are. */
 #define KVA_BASE         USER_ADDR_MAX
 #define KVA_HEAP         KVA_BASE
 #define KVA_HEAP_SIZE    0x10000000u
@@ -90,7 +93,9 @@ void mmio_write32(uintptr_t a, uint32_t v);
 #define KVA_MODULES      (KVA_BASE + 0x38400000u)
 #define KVA_MODULES_SIZE 0x04000000u
 
-/* The page fault: the exception's number and what its syndrome says. */
+/* The page fault: a data or instruction abort, by the number a port's entry
+ * gives it, and what its syndrome in ESR_EL1 says: bit 6 (WnR) of a data
+ * abort marks a write. */
 #define PAGE_FAULT_VECTOR 3
 #define FAULT_WRITE(p)    (((p)->error_code & 0x40u) != 0)
 #define FAULT_USER(p)     FRAME_USER(p)

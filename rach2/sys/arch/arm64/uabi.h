@@ -5,9 +5,10 @@
 
 /*
  * The user structures whose layout no portable declaration gives, for
- * AArch64. Linux gives AArch64 the generic layouts, which differ from
- * x86-64's in struct stat; these are x86-64's, which an ARM64 port replaces
- * with its own. Until then they let the shared code compile.
+ * AArch64. Linux gives AArch64 the generic layouts, which the statfs and
+ * System V IPC records here have. struct stat here is x86-64's, whose fields
+ * differ from the generic struct stat's; an ARM64 port replaces it, and
+ * until then it lets the shared code compile.
  */
 
 /* struct stat, of stat, lstat, fstat and newfstatat. */

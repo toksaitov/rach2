@@ -6,9 +6,9 @@
 /*
  * The 32-bit ARM's part of `arch.h`, for an ARMv7-A processor in SVC mode
  * with short-descriptor paging, entered from user mode by `svc` and the
- * exceptions. Nothing implements this architecture yet: the header exists
- * so that the shared code is compiled for it (`make check-arch`), and it is
- * what a port begins from.
+ * exceptions. No code implements this architecture: the header exists so
+ * that the shared code is compiled for it (`make check-arch`), and a port
+ * begins from it.
  */
 
 /* The registers an exception entry saves: r0 to r12, the user mode's
@@ -80,6 +80,9 @@ uint32_t mmio_read32(uintptr_t a);
 void mmio_write8(uintptr_t a, uint8_t v);
 void mmio_write16(uintptr_t a, uint16_t v);
 void mmio_write32(uintptr_t a, uint32_t v);
+
+/* The kernel's regions, placed after the user range so that the shared code
+ * compiles; a port's MMU code chooses where they are. */
 #define KVA_BASE         USER_ADDR_MAX
 #define KVA_HEAP         KVA_BASE
 #define KVA_HEAP_SIZE    0x10000000u
@@ -91,8 +94,9 @@ void mmio_write32(uintptr_t a, uint32_t v);
 #define KVA_MODULES      (KVA_BASE + 0x38400000u)
 #define KVA_MODULES_SIZE 0x04000000u
 
-/* The page fault: the exception's number and what its syndrome says, the
- * data fault status register, whose bit 11 (WnR) marks a write. */
+/* The page fault: the data abort, by the number a port's entry gives it,
+ * and what the data fault status register says: bit 11 (WnR) marks a
+ * write. */
 #define PAGE_FAULT_VECTOR 3
 #define FAULT_WRITE(p)    (((p)->error_code & 0x800u) != 0)
 #define FAULT_USER(p)     FRAME_USER(p)
