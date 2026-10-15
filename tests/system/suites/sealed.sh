@@ -50,7 +50,7 @@ ROOTPASSWORD="$2"
 PORT="${3:-2297}"
 
 if [ -z "$DISK" ] || [ -z "$ROOTPASSWORD" ]; then
-    echo "usage: sealed_test.sh <sealed-disk> <root password> [ssh port]" >&2
+    echo "usage: sealed.sh <sealed-disk> <root password> [ssh port]" >&2
     exit 2
 fi
 

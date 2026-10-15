@@ -34,7 +34,7 @@ HARNESS="$3"
 MKMBR="$4"
 
 if [ -z "$KERNEL" ] || [ -z "$DISK" ] || [ -z "$HARNESS" ] || [ -z "$MKMBR" ]; then
-    echo "usage: bootline_test.sh <kernel> <disk> <harness> <mkmbr>" >&2
+    echo "usage: bootline.sh <kernel> <disk> <harness> <mkmbr>" >&2
     exit 2
 fi
 

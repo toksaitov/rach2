@@ -43,7 +43,7 @@ DISK="$2"
 TESTPASSWORD="$3"
 
 if [ -z "$KERNEL" ] || [ -z "$DISK" ] || [ -z "$TESTPASSWORD" ]; then
-    echo "usage: make_test.sh <kernel> <disk> <test password>" >&2
+    echo "usage: make.sh <kernel> <disk> <test password>" >&2
     exit 2
 fi
 

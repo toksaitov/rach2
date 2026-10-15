@@ -43,7 +43,7 @@ METAL_IMAGE="$3"
 PORT="${4:-2225}"
 
 if [ -z "$RW_KERNEL" ] || [ -z "$RO_KERNEL" ] || [ -z "$METAL_IMAGE" ]; then
-    echo "usage: diskdiag_test.sh <read-write kernel> <read-only kernel> <metal image> [port]" >&2
+    echo "usage: diskdiag.sh <read-write kernel> <read-only kernel> <metal image> [port]" >&2
     exit 2
 fi
 

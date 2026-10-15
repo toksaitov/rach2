@@ -39,7 +39,7 @@ PORT="${5:-2222}"
 CARD="${6:-rtl8139}"
 
 if [ -z "$KERNEL" ] || [ -z "$DISK" ] || [ -z "$PASSWORD" ] || [ -z "$TESTPASSWORD" ]; then
-    echo "usage: ssh_test.sh <kernel> <disk> <root password> <test password> [port] [card]" >&2
+    echo "usage: ssh.sh <kernel> <disk> <root password> <test password> [port] [card]" >&2
     exit 2
 fi
 

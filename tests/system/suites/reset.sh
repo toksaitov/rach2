@@ -44,7 +44,7 @@ KERNEL="$1"
 IMAGE="$2"
 
 if [ -z "$KERNEL" ] || [ -z "$IMAGE" ]; then
-    echo "usage: reset_test.sh <kernel> <image>" >&2
+    echo "usage: reset.sh <kernel> <image>" >&2
     exit 2
 fi
 

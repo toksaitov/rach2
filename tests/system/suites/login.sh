@@ -41,7 +41,7 @@ PASSWORD="$6"
 
 if [ -z "$KERNEL" ] || [ -z "$STRICT" ] || [ -z "$SHELL_IMAGE" ] || [ -z "$REAL" ] ||
         [ -z "$USER_NAME" ] || [ -z "$PASSWORD" ]; then
-    echo "usage: login_test.sh <kernel> <strict.krffs> <shell.krffs> <os-real.krffs>" >&2
+    echo "usage: login.sh <kernel> <strict.krffs> <shell.krffs> <os-real.krffs>" >&2
     echo "                     <user> <password>" >&2
     exit 2
 fi

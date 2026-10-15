@@ -51,7 +51,7 @@ PASSWORD="$3"
 FLAVOR="${4:-real}"
 
 if [ -z "$KERNEL" ] || [ -z "$DISK" ] || [ -z "$PASSWORD" ]; then
-    echo "usage: account_test.sh <kernel> <image> <password> [real|simple]" >&2
+    echo "usage: account.sh <kernel> <image> <password> [real|simple]" >&2
     exit 2
 fi
 
@@ -69,7 +69,7 @@ case "$FLAVOR" in
     real)   HARNESS_MEDIA="--append rach2.fsdisk --drive file=$WORK,format=raw,if=ide,index=0,media=disk" ;;
     simple) HARNESS_MEDIA="--initrd $WORK" ;;
     *)
-        echo "account_test.sh: $FLAVOR: the flavor is real or simple" >&2
+        echo "account.sh: $FLAVOR: the flavor is real or simple" >&2
         exit 2
         ;;
 esac

@@ -38,7 +38,7 @@ OFFSET=$((2048 * 512))
 SIZE=$((48 * 1024 * 1024))
 
 if [ -z "$KERNEL" ] || [ -z "$DISK" ] || [ -z "$FSCK" ]; then
-    echo "usage: crash_test.sh <kernel> <disk> <fsck.krffs>" >&2
+    echo "usage: crash.sh <kernel> <disk> <fsck.krffs>" >&2
     exit 2
 fi
 

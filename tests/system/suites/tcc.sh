@@ -41,7 +41,7 @@ PASSWORD="$3"
 TESTPASSWORD="$4"
 
 if [ -z "$KERNEL" ] || [ -z "$DISK" ] || [ -z "$PASSWORD" ] || [ -z "$TESTPASSWORD" ]; then
-    echo "usage: tcc_test.sh <kernel> <disk> <root password> <test password>" >&2
+    echo "usage: tcc.sh <kernel> <disk> <root password> <test password>" >&2
     exit 2
 fi
 

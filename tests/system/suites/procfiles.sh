@@ -52,7 +52,7 @@ PEER_PID=""
 
 if [ -z "$KERNEL" ] || [ -z "$TEST_IMAGE" ] || [ -z "$DISK" ] || [ -z "$REAL" ] ||
         [ -z "$USER_NAME" ] || [ -z "$PASSWORD" ] || [ -z "$IMAGE_MB" ]; then
-    echo "usage: procfiles_test.sh <kernel> <test.krffs> <disk.img>" >&2
+    echo "usage: procfiles.sh <kernel> <test.krffs> <disk.img>" >&2
     echo "                         <os-real.krffs> <user> <password> <image-mb>" >&2
     exit 2
 fi

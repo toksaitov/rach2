@@ -36,7 +36,7 @@ FSCK="$3"
 PASSWORD="$4"
 
 if [ -z "$KERNEL" ] || [ -z "$DISK" ] || [ -z "$FSCK" ] || [ -z "$PASSWORD" ]; then
-    echo "usage: shutdown_test.sh <kernel> <disk> <fsck.krffs> <password>" >&2
+    echo "usage: shutdown.sh <kernel> <disk> <fsck.krffs> <password>" >&2
     exit 2
 fi
 

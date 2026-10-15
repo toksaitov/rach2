@@ -40,7 +40,7 @@ DISK="$1"
 ROOTPASSWORD="$2"
 
 if [ -z "$DISK" ] || [ -z "$ROOTPASSWORD" ]; then
-    echo "usage: menu_test.sh <grub-disk> <root password>" >&2
+    echo "usage: menu.sh <grub-disk> <root password>" >&2
     exit 2
 fi
 

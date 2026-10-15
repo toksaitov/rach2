@@ -57,7 +57,7 @@ ROOTPASSWORD="$4"
 
 if [ -z "$KERNEL" ] || [ -z "$DISK" ] || [ -z "$TESTPASSWORD" ] ||
    [ -z "$ROOTPASSWORD" ]; then
-    echo "usage: selfbuild_test.sh <kernel> <disk> <test password> <root password>" >&2
+    echo "usage: selfbuild.sh <kernel> <disk> <test password> <root password>" >&2
     exit 2
 fi
 
@@ -69,7 +69,7 @@ ROOT_TYPE="${SELFBUILD_ROOT:-krffs}"
 case "$ROOT_TYPE" in
     krffs) ROOT_TOKEN="rach2.fsdisk" ;;
     ext2) ROOT_TOKEN="rach2.root=ext2"; . "$REPO/tools/setup/e2fsprogs_path.sh" ;;
-    *) echo "selfbuild_test.sh: SELFBUILD_ROOT is krffs or ext2" >&2; exit 2 ;;
+    *) echo "selfbuild.sh: SELFBUILD_ROOT is krffs or ext2" >&2; exit 2 ;;
 esac
 
 # The space two clean kernel builds need: the copied source tree, the

@@ -25,7 +25,7 @@ RW_KERNEL="$1"
 RO_KERNEL="$2"
 
 if [ -z "$RW_KERNEL" ] || [ -z "$RO_KERNEL" ]; then
-    echo "usage: diskpolicy_test.sh <read-write kernel> <read-only kernel>" >&2
+    echo "usage: diskpolicy.sh <read-write kernel> <read-only kernel>" >&2
     exit 2
 fi
 

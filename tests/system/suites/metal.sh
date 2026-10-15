@@ -43,7 +43,7 @@ OUT="$(dirname "$IMAGE")/metal-test"
 PORT="${3:-2223}"
 
 if [ -z "$KERNEL" ] || [ -z "$IMAGE" ]; then
-    echo "usage: metal_test.sh <kernel> <image> [port]" >&2
+    echo "usage: metal.sh <kernel> <image> [port]" >&2
     exit 2
 fi
 

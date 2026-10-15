@@ -30,7 +30,7 @@ DISK="$1"
 ROOTPASSWORD="$2"
 
 if [ -z "$DISK" ] || [ -z "$ROOTPASSWORD" ]; then
-    echo "usage: grub_test.sh <grub-disk> <root password>" >&2
+    echo "usage: grub.sh <grub-disk> <root password>" >&2
     exit 2
 fi
 

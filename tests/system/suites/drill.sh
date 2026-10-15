@@ -44,7 +44,7 @@ PORT="${3:-2298}"
 RECOVERY="${4:-}"
 
 if [ -z "$DISK" ] || [ -z "$ROOTPASSWORD" ]; then
-    echo "usage: drill_test.sh <grub-disk> <root password> [ssh port] [recovery image]" >&2
+    echo "usage: drill.sh <grub-disk> <root password> [ssh port] [recovery image]" >&2
     exit 2
 fi
 

@@ -54,7 +54,7 @@ ROOTPASSWORD="$2"
 REPAIR_CD="cd /src/rach2"
 
 if [ -z "$DISK" ] || [ -z "$ROOTPASSWORD" ]; then
-    echo "usage: install_test.sh <grub-disk> <root password>" >&2
+    echo "usage: install.sh <grub-disk> <root password>" >&2
     exit 2
 fi
 

@@ -52,7 +52,7 @@ HARNESS_KERNEL="$6"
 
 if [ -z "$KERNEL" ] || [ -z "$TEST_IMAGE" ] || [ -z "$REAL" ] ||
         [ -z "$USER_NAME" ] || [ -z "$PASSWORD" ] || [ -z "$HARNESS_KERNEL" ]; then
-    echo "usage: exitline_test.sh <kernel> <test.krffs> <os-real.krffs>" >&2
+    echo "usage: exitline.sh <kernel> <test.krffs> <os-real.krffs>" >&2
     echo "                        <user> <password> <harness-kernel>" >&2
     exit 2
 fi
