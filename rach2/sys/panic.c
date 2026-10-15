@@ -8,9 +8,11 @@
 #include "klog.h"
 #include "proc/smp.h"
 
-/* The panic picture, 80 columns by 25 rows of the text screen, a background
- * color for each cell. */
-display_color_t _fail_image[] = {
+/* The panic picture, 80 columns by 25 rows, a background color for each
+ * cell. */
+#define FAIL_COLS 80u
+#define FAIL_ROWS 25u
+static const display_color_t _fail_image[FAIL_COLS * FAIL_ROWS] = {
     1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,
     1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,
     1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,
@@ -140,6 +142,38 @@ int k_panicking(void)
 }
 
 /**
+ * Clear the screen to the picture's background, draw the picture at the
+ * screen's center, and return the row that shows the picture's last row.
+ *
+ * The console is at least 80 by 24 (fbcon.c); on 24 rows the picture loses
+ * its first row, which is blank.
+ */
+static unsigned int draw_fail_image(void)
+{
+    unsigned int left = 0, top = 0, skip = 0;
+    unsigned int col, row;
+
+    if (textcon_cols > FAIL_COLS) {
+        left = (textcon_cols - FAIL_COLS) / 2;
+    }
+    if (textcon_rows >= FAIL_ROWS) {
+        top = (textcon_rows - FAIL_ROWS) / 2;
+    } else {
+        skip = FAIL_ROWS - textcon_rows;
+    }
+
+    set_back_color(blue);
+    k_cls();
+    for (row = skip; row < FAIL_ROWS; ++row) {
+        for (col = 0; col < FAIL_COLS; ++col) {
+            textcon_write_cell(left + col, top + row - skip, ' ',
+                               (uint8_t)(_fail_image[row * FAIL_COLS + col] << 4));
+        }
+    }
+    return top + FAIL_ROWS - 1 - skip;
+}
+
+/**
  * The picture is drawn before the record because drawing clears the screen,
  * and a record printed first would be wiped by it. Everything that can fail
  * comes after: the record reaches the ring before it is offered to the serial
@@ -153,16 +187,8 @@ int k_panicking(void)
  */
 void k_panic(const char *str)
 {
-    int i;
-
     k_panic_begin();
-    k_cls();
-    for (i = 0; i < 2000; ++i) {
-        set_back_color(_fail_image[i]);
-        k_putc(' ');
-    }
-    y -= 2;
-
+    y = draw_fail_image() - 1;
     set_back_color(black);
     set_fore_color(white);
 
