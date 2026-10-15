@@ -1,7 +1,7 @@
 #!/bin/sh
-# Prove that fork's kernel stack comes back clear, entry 26 of milestone 50,
-# and with a guard page below it that an overrun is known by, entry 248, and
-# that the boot stack, which is no heap's, is never given back.
+# Prove that fork's kernel stack comes back clear, with a guard page below it
+# that an overrun is known by, and that the boot stack, which is no heap's, is
+# never given back.
 # `kstack_alloc`, `kstack_free` and `kstack_overrun_pid` are extracted
 # unchanged from a private copy of rach2/sys/syscall_proc.c, with
 # KERNEL_STACK_SIZE from rach2/sys/proc/process.h and PAGE_SIZE from
@@ -22,7 +22,7 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FILE FAULT: put FAULT into FILE, a copy of syscall_proc.c; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -88,11 +88,13 @@ cp rach2/sys/arch/i686/cpu.h "$work/cpu.h"
 cp rach2/sys/proc/process.h "$work/process.h"
 cp "$work/syscall_proc.c" "$work/syscall_proc.saved"
 
+# restore: copy the saved syscall_proc.c back over the copy under test.
 restore()
 {
     cp "$work/syscall_proc.saved" "$work/syscall_proc.c"
     touch "$work/syscall_proc.c"
 }
+# cleanup: the exit trap; stop the running test and restore the source.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -107,6 +109,10 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: extract the definitions and functions from
+# the copies into $work/kstack.inc, compile fixtures/kstack.c over it as
+# $work/PHASE, run it for at most 20 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1

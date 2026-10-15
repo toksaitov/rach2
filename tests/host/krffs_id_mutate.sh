@@ -1,17 +1,27 @@
 #!/bin/sh
 # Prove the KRFFS host test's rows about the fields of a node no path reaches
-# yet against the faults they were written for. Entry 15 of milestone 50: a
-# create writes the new node's id under the whole-unit rule again, and a node
-# whose id falls across a 4 KiB unit cannot be made; krffs_hosttest.c makes
-# one with the rule on. Entry 125: mkdir makes a directory whose id another
-# directory has, since `bC` and `cb` mix to one id; the test requires `/cb`
-# refused beside `/bC`. Entry 243: that refusal answers KRFFS_EBAD again,
-# which the adapters report as a full or a failing volume; the test requires
-# KRFFS_ETAKEN. Entry 244: a copy being filled for a move writes its access
-# time or its length under the rule again, or a node being made its
-# modification time, and a node whose field falls across a unit can be
-# neither moved there nor made there with its times; the test makes and
-# moves nodes at such places with the rule on.
+# yet with private mutations of rach2/sys/fs/krffs.c. The faults:
+#
+#   new-id-rule       a create writes the new node's id under the whole-unit
+#                     rule, so a node whose id falls across a 4 KiB unit
+#                     cannot be made; krffs_hosttest.c makes one with the
+#                     rule on.
+#   mkdir-id-rule     mkdir writes the new directory's id the same way.
+#   id-taken          mkdir makes a directory whose id another directory has,
+#                     since `bC` and `cb` mix to one id; the test requires
+#                     `/cb` refused beside `/bC`.
+#   taken-is-bad      that refusal answers KRFFS_EBAD, which the adapters
+#                     report as a full or a failing volume; the test requires
+#                     KRFFS_ETAKEN.
+#   copy-times-rule   a copy being filled for a move writes its access time
+#                     under the rule, so a node whose field falls across a
+#                     unit cannot be moved there; the test moves one with the
+#                     rule on.
+#   copy-length-rule  the same for the copy's length.
+#   new-times-rule    a node being made writes its modification time under
+#                     the rule, so a node whose field falls across a unit
+#                     cannot be made there with its times; the test makes one
+#                     with the rule on.
 #
 # The test is compiled as tests/system/suites/host.sh compiles it, from a
 # private tree laid out as the repository is, so its include of krffs.c
@@ -24,7 +34,7 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FILE FAULT: put FAULT into FILE, a copy of krffs.c; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -121,12 +131,14 @@ cp tests/host/krffs_hosttest.c tests/host/krffs_hash_vectors.h "$work/tests/host
 source="$work/rach2/sys/fs/krffs.c"
 cp "$source" "$work/krffs.saved"
 
+# restore: copy the saved krffs.c back over the private tree.
 restore()
 {
     cp "$work/krffs.saved" "$source"
     touch "$source"
 }
 
+# cleanup: the exit trap; stop the running test and restore the source.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -141,9 +153,10 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# run_phase PHASE pass|fail MESSAGE: compile and run the test. A passing
-# phase must exit 0 with its OK line; a failing one must exit with its count
-# of failures, not a signal, with MESSAGE among them.
+# run_phase PHASE pass|fail MESSAGE: compile the test over the private tree
+# and run it for at most 60 seconds. A passing phase must exit 0 with its OK
+# line; a failing one must exit with its count of failures, not a signal,
+# with MESSAGE among them.
 run_phase()
 {
     phase=$1

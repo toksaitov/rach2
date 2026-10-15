@@ -1,11 +1,20 @@
 #!/bin/sh
-# Compile each old fault privately, then restore and rebuild before passing.
+# Prove the inode numbers KRFFS and the stat calls give, and the harness's last
+# search of an exited guest's output, with private mutations: an open
+# unlinked file's number mixed from its name (orphan); the root node not
+# numbered 1 by krffs_node_ino (root-node); the root answering inode 0 to the
+# old and the wide stat calls of syscall_fs.c (root-old, root-wide); and the
+# harness's search of an exited child's output without the drain of the pipe
+# before it (harness). The stat faults are checked by a program built from
+# krffs_hosttest.c and the stat functions extracted unchanged from
+# syscall_fs.c and vfs.c; the harness fault by the harness's --selftest.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault DIR FAULT: put FAULT into its source in DIR, a tree laid out as
+# sys/ and harness.c; with RACH2_FAULT_TEXTS set, only check its text and
+# write nothing.
 apply_fault()
 {
     python3 - "$1" "$2" <<'PY'
@@ -56,6 +65,8 @@ cp tests/system/runner/harness.c "$work/harness.c"
 for source in sys/fs/krffs.c sys/syscall_fs.c harness.c; do
     cp "$work/$source" "$work/$(basename "$source").saved"
 done
+# restore: copy the saved krffs.c, syscall_fs.c and harness.c back over the
+# private tree.
 restore()
 {
     for source in sys/fs/krffs.c sys/syscall_fs.c harness.c; do
@@ -63,6 +74,7 @@ restore()
         touch "$work/$source"
     done
 }
+# cleanup: the exit trap; stop the running test and restore the sources.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -189,6 +201,10 @@ int main(void)
 ''')
 (w / 'stat.c').write_text('\n\n'.join(parts))
 PY
+# run_phase PHASE KIND STATUS MESSAGE: build $work/PHASE, the harness with its
+# --selftest if KIND is harness and otherwise the stat program from the
+# private tree, run it for at most 15 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1

@@ -1,11 +1,20 @@
 #!/bin/sh
-# Compile the production resolver and open path with a controlled flush wait.
+# Prove that an open of mounted KRFFS during the flush that publishes a moved
+# node follows the move. The resolver and the open path are extracted
+# unchanged from private copies of rach2/sys/fs/vfs.c and syscall_fs.c and
+# compiled into tests/host/fixtures/krffs_open.c, whose threads switch at the
+# flush. The faults: do_open walks without the namespace lock (open-lock); and
+# with that, kv_open in krffsmount.c takes the lock itself, after the walk
+# (late-lock).
+#
+# Usage: krffs_open_mutate.sh [--check | --texts]
+# With --check it compiles and runs the source as it is.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault DIR FAULT: put FAULT into its sources in DIR, a tree laid out as
+# sys/; with RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
     python3 - "$1" "$2" <<'PY'
@@ -79,6 +88,9 @@ cp "$work/sys/fs/vfs.c" "$work/vfs.saved"
 cp "$work/sys/fs/krffsmount.c" "$work/krffsmount.saved"
 cp "$work/sys/syscall_fs.c" "$work/syscall.saved"
 
+# cleanup: stop the running test and put the saved vfs.c, krffsmount.c and
+# syscall_fs.c back; the loop calls it after each fault, and it is the exit
+# trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -96,6 +108,13 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: extract the functions from the private tree
+# into $work/vfs_open.inc and syscall_open.inc, compile the fixture over them
+# as $work/PHASE, run it for at most 10 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE. The thread glue is compiled on its own,
+# with none of the kernel's include directories: glibc's <pthread.h> asks for
+# <sched.h>, which `-I $work/sys/proc` would answer with the kernel's, and the
+# kernel's 32-bit size_t then collides with the host's.
 run_phase()
 {
     phase=$1
@@ -147,10 +166,6 @@ for source, output, names in groups:
             raise SystemExit("krffs-open: unterminated function: " + name)
     (work / output).write_text("\n\n".join(parts) + "\n")
 PY
-    # The thread glue is compiled on its own, with none of the kernel's
-    # include directories: glibc's <pthread.h> asks for <sched.h>, which
-    # `-I $work/sys/proc` would answer with the kernel's, and the kernel's
-    # 32-bit size_t then collides with the host's.
     if ! "${CC:-cc}" -std=c99 -g -O1 -Wall -Wextra -Werror \
         -fsanitize=address,undefined -fno-sanitize-recover=all -pthread \
         -c tests/host/fixtures/krffs_open_threads.c -o "$work/threads.o" \

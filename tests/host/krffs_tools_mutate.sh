@@ -48,6 +48,7 @@ else
     done
 fi
 
+# restore: copy the saved sources back over the private ones.
 restore()
 {
     for f in $sources; do
@@ -56,6 +57,7 @@ restore()
     done
 }
 
+# cleanup: the exit trap; stop the running command and restore the sources.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -116,11 +118,13 @@ bounded()
     child=
 }
 
+# pass ROW: report ROW passed.
 pass()
 {
     echo "krffs-tools: result: pass: $1"
 }
 
+# fail ROW DETAIL: report ROW failed with DETAIL, and count it in $failed.
 fail()
 {
     echo "krffs-tools: result: fail: $1: $2"
@@ -246,6 +250,8 @@ edfs_row()
     fi
 }
 
+# rows PHASE: run every row in a directory $work/PHASE of its own; $failed is
+# the count of rows that failed.
 rows()
 {
     dir="$work/$1"

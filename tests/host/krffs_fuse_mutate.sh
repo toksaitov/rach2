@@ -1,11 +1,13 @@
 #!/bin/sh
-# Compile the FUSE test and its ring-validation mutation in a private tree.
+# Prove krffs_fuse_hosttest.c with one private mutation of krffs/krffs.c: the
+# check of the node ring before FUSE starts taken out. The test is compiled
+# with a fuse.h that stops the build, so that it uses the test's own stub.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# ring_once FILE: the check the fault removes is once in FILE.
+# ring_once FILE: exit unless the check the fault removes is once in FILE.
 ring_once()
 {
     if [ "$(grep -c 'if (!valid_node_ring(&file_system))' "$1" 2>/dev/null)" != 1 ]; then
@@ -37,6 +39,8 @@ source="$work/krffs/krffs.c"
 cp "$source" "$work/krffs.saved"
 printf '#error "krffs-fuse-test: test stub was not selected"\n' > "$work/no-fuse/fuse.h"
 
+# cleanup: stop the running test and put the saved krffs.c back; the script
+# calls it after the fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -53,6 +57,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE: compile the test over the copy as $work/PHASE and run it for
+# at most 60 seconds. The phase `mutated` must fail both of its rows; any
+# other must pass. Exit if not.
 run_phase()
 {
     phase=$1

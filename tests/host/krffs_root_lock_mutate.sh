@@ -1,17 +1,17 @@
 #!/bin/sh
-# Compile the KRFFS root's data operations and the mount's lock, with and
-# without the lock and its line.
+# Prove that the KRFFS root's data operations hold the mount's lock, and that
+# the lock serves its waiters in the order they asked.
 #
 # Usage: sh tests/host/krffs_root_lock_mutate.sh [--check | --texts]
 #
 # The five data operations of the root adapter in rach2/sys/fs/vfs.c, the
 # bodies they call and the namespace lock, with the bind's base it takes, are
 # extracted unchanged from a private copy of the source and compiled with the
-# real KRFFS core into tests/host/fixtures/krffs_root_lock.c, under ASan and
+# KRFFS core into tests/host/fixtures/krffs_root_lock.c, under ASan and
 # UBSan, with the thread glue of tests/host/fixtures/krffs_open_threads.c. The
 # fixture requires each operation to hold the mount's lock wherever it reaches
 # the image, and a holder that lets the lock go and asks again to wait behind
-# a process already waiting (entry 104 of milestone 50). `--check` runs that
+# a process already waiting. `--check` runs that
 # once and stops; the host suite runs it so. The whole proof then takes the
 # lock out of one operation at a time, and then takes the line out of the
 # lock: each fault must fail its own row, and the restored copy, touched and
@@ -20,8 +20,10 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault FILE FAULT: put FAULT into FILE, a copy of vfs.c: an operation's
+# name takes the lock out of kfs_NAME, and `line` makes ns_my_turn serve
+# whoever finds the lock free. With RACH2_FAULT_TEXTS set, only check its
+# text and write nothing.
 apply_fault()
 {
     python3 - "$1" "$2" <<'PY'
@@ -78,12 +80,14 @@ child=
 cp -R rach2/sys "$work/sys"
 cp "$work/sys/fs/vfs.c" "$work/vfs.saved"
 
+# restore: copy the saved vfs.c back over the private tree.
 restore()
 {
     cp "$work/vfs.saved" "$work/sys/fs/vfs.c"
     touch "$work/sys/fs/vfs.c"
 }
 
+# cleanup: the exit trap; stop the running test and restore the source.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -99,8 +103,11 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 # run_phase PHASE STATUS MESSAGE: extract the functions from the private
-# vfs.c, compile the fixture over them, and run it; it must exit with STATUS
-# and print MESSAGE.
+# vfs.c, compile the fixture over them, and run it for at most 10 seconds; it
+# must exit with STATUS and print MESSAGE. The thread glue is compiled on its
+# own, with none of the kernel's include directories, as krffs_open_mutate.sh
+# compiles it: glibc's <pthread.h> asks for <sched.h>, which
+# `-I $work/sys/proc` would answer with the kernel's.
 run_phase()
 {
     phase=$1
@@ -140,10 +147,6 @@ for name in names.split():
         raise SystemExit("krffs-root-lock: unterminated function: " + name)
 (work / "kfs_data.inc").write_text("\n\n".join(parts) + "\n")
 PY
-    # The thread glue is compiled on its own, with none of the kernel's
-    # include directories, as krffs_open_mutate.sh compiles it: glibc's
-    # <pthread.h> asks for <sched.h>, which `-I $work/sys/proc` would answer
-    # with the kernel's.
     if ! "${CC:-cc}" -std=c99 -g -O1 -Wall -Wextra -Werror \
         -fsanitize=address,undefined -fno-sanitize-recover=all -pthread \
         -c tests/host/fixtures/krffs_open_threads.c -o "$work/threads.o" \

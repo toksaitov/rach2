@@ -1,5 +1,6 @@
 #!/bin/sh
-# Compile fixed, faulty and restored k_itoa in a private directory.
+# Prove kstd_hosttest.c's rows on k_itoa with a private mutation of
+# rach2/sys/lib/kstd.c.
 #
 # The fault is a plus `force_sign` counts and does not write. The test's status
 # is its count of failed checks, so the faulty build must end with status 1,
@@ -9,7 +10,7 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FILE: put the fault into FILE, a copy of kstd.c; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -51,6 +52,8 @@ cp -R rach2/sys/arch "$work/arch"
 cp "$work/lib/kstd.c" "$work/kstd.saved"
 child=
 
+# cleanup: stop the running test and put the saved kstd.c back; the script
+# calls it after the fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -66,6 +69,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS: compile kstd_hosttest.c over the copy as
+# $work/PHASE, run it for at most 15 seconds, and exit unless it ends with
+# STATUS.
 run_phase()
 {
     phase=$1

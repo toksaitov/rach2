@@ -1,12 +1,12 @@
 #!/bin/sh
-# mkexfat_external.sh DIR: an exFAT volume another implementation wrote,
-# for the gate of milestone 38: formatted by the host's own tools and filled
-# through the host's own driver, with a manifest of what went in. On this
-# host that is hdiutil (which runs newfs_exfat) and the mount it gives.
+# mkexfat_external.sh DIR: an exFAT volume another implementation wrote, for
+# the rows of exfat_hosttest.c that read one: formatted by the host's own
+# tools and filled through the host's own driver, with a manifest of what went
+# in. On macOS that is hdiutil (which runs newfs_exfat) and the mount it gives.
 # Writes DIR/exfat_external.img, DIR/exfat_external.manifest (name|size|
 # mtime as an epoch second) and the source files under DIR/exfat_src/.
-# Exits 3 when the host has no such tools, which the test reports as a
-# skipped gate, not a pass.
+# Exits 3 when the host has no such tools, which the test reports as rows
+# skipped, not passed.
 set -u
 DIR=${1:?directory}
 command -v hdiutil >/dev/null 2>&1 && command -v newfs_exfat >/dev/null 2>&1 || exit 3
