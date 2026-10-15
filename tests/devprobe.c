@@ -7,10 +7,11 @@
  * -ENOSPC; and /dev/urandom yields a varying stream. A disk's `BLKRRPART`
  * on /dev/null answers ENOTTY, and fstat gives /dev/null the inode the
  * /dev listing does. It then reads /proc/self/stat for the probe's pid and
- * comm, resolves /proc/self/fd/0 to the console, and checks which
- * descriptors of /fb may change the display (`framebuffer`). Prints
- * "DEVPROBE OK" and exits 0 when every check passes, and "DEVPROBE FAIL"
- * with the count of failed checks as its status otherwise.
+ * comm, resolves /proc/self/fd/0 to the console, checks which descriptors
+ * of /fb may change the display (`framebuffer`), and checks that a path past
+ * a file is ENOTDIR or, when the file is gone, ENOENT (`past_a_file`).
+ * Prints "DEVPROBE OK" and exits 0 when every check passes, and "DEVPROBE
+ * FAIL" with the count of failed checks as its status otherwise.
  *
  * Needs: the console as stdin. One row reads /proc/self/fd/0 and requires it
  * to name /dev/console, which is true of a console session and not of one
@@ -21,6 +22,7 @@
 
 #define O_RDONLY    0
 #define O_WRONLY    1
+#define O_RDWR      2
 #define O_DIRECTORY 0200000
 
 /* A linux_dirent64 record has its 64-bit d_ino first, its length at 16 and
@@ -28,11 +30,14 @@
 #define D_RECLEN 16
 #define D_NAME   19
 
+#define ENOENT        2
+#define ENOTDIR       20
 #define ENOSPC        28
 #define EBUSY         16
 #define FB_MODE_13H   0x4601
 #define FB_MODE_TEXT  0x4602
 #define FB_SETPALETTE 0x4603
+#define TIOCGPTN      0x80045430
 
 /** End the process with `status`; it does not return. */
 static void sys_exit(int status)
@@ -186,6 +191,54 @@ static void null_is_not_a_disk(void)
 }
 
 /**
+ * A path that goes on past a file is ENOTDIR when the file is there and
+ * ENOENT when it is not, as on Linux: past /dev/null and a device /dev does
+ * not have, the probe's /proc/self/stat and that of a process that does not
+ * exist, the uevent of the PCI host bridge and of a function no machine the
+ * suites boot has, and a pty's slave while its master is open and after the
+ * master's close has freed the pair.
+ */
+static void past_a_file(void)
+{
+    static char pts[24] = "/dev/pts/";
+    char digits[12];
+    int master, index = -1, n = 9, d = 0;
+
+    check(do_open("/dev/null/x", O_RDONLY) == -ENOTDIR, "/dev/null/x is ENOTDIR");
+    check(do_open("/dev/nosuch/x", O_RDONLY) == -ENOENT, "/dev/nosuch/x is ENOENT");
+    check(do_open("/proc/self/stat/x", O_RDONLY) == -ENOTDIR, "/proc/self/stat/x is ENOTDIR");
+    check(do_open("/proc/1999999999/stat/x", O_RDONLY) == -ENOENT,
+          "/proc/1999999999/stat/x is ENOENT");
+    check(do_open("/sys/bus/pci/devices/0000:00:00.0/uevent/x", O_RDONLY) == -ENOTDIR,
+          "a path past the host bridge's uevent is ENOTDIR");
+    check(do_open("/sys/bus/pci/devices/0000:00:1e.7/uevent/x", O_RDONLY) == -ENOENT,
+          "a path past an absent function's uevent is ENOENT");
+
+    master = do_open("/dev/ptmx", O_RDWR);
+    check(master >= 0 && syscall3(SYS_IOCTL, master, TIOCGPTN, (long)&index) == 0 && index >= 0,
+          "open a pty pair for the past-a-file rows");
+    if (index < 0) {
+        if (master >= 0) {
+            syscall1(SYS_CLOSE, master);
+        }
+        return;
+    }
+    do {
+        digits[d++] = (char)('0' + index % 10);
+        index /= 10;
+    } while (index > 0);
+    while (d > 0) {
+        pts[n++] = digits[--d];
+    }
+    pts[n++] = '/';
+    pts[n++] = 'x';
+    pts[n] = '\0';
+    check(do_open(pts, O_RDONLY) == -ENOTDIR, "a path past a live pty's slave is ENOTDIR");
+    syscall1(SYS_CLOSE, master);
+    check(do_open(pts, O_RDONLY) == -ENOENT, "a path past a freed pty's slave is ENOENT");
+}
+
+/**
  * The ownership of the framebuffer, /fb. The owner leaves graphics mode and
  * enters it again, and can still write. While it owns the display, a second
  * open and a text-mode request on a forked child's inherited descriptor are
@@ -257,7 +310,8 @@ static void framebuffer(void)
     syscall1(SYS_CLOSE, next[1]);
 }
 
-/** The probe: the rows (a) to (f), then `framebuffer`. */
+/** The probe: the rows (a) to (f), then `framebuffer` and `past_a_file`,
+ * whose failures the framebuffer's child would otherwise inherit. */
 PROBE_START void _start(void)
 {
     char buf[64];
@@ -337,6 +391,7 @@ PROBE_START void _start(void)
     }
 
     framebuffer();
+    past_a_file();
     if (fails == 0) {
         puts("DEVPROBE OK");
     } else {

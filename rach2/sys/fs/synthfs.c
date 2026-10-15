@@ -300,13 +300,15 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
     out[pos] = '\0';
 }
 
-/** The kind of the /proc/<pid> file `name` beside stat and cmdline, or 0. */
+/** The kind of the /proc/<pid> file `name`, or 0. */
 static int synth_pid_file(struct comp name)
 {
     static const struct {
         const char *name;
         int kind;
-    } files[] = {{"maps", SYNTH_PROC_MAPS},
+    } files[] = {{"stat", SYNTH_PROC_STAT},
+                 {"cmdline", SYNTH_PROC_CMDLINE},
+                 {"maps", SYNTH_PROC_MAPS},
                  {"smaps", SYNTH_PROC_SMAPS},
                  {"status", SYNTH_PROC_STATUS},
                  {"statm", SYNTH_PROC_STATM},
@@ -367,24 +369,20 @@ static int synth_classify_ns(const struct comp *c, int n, struct vpath *vp)
  * thread's directory under `task` is classified as the process's directory
  * with the thread's id in `vp->tid`: it has the files of /proc/<tid>, the
  * thread's own where a thread has any, and no `task` of its own (`task` is
- * 0 then). No thread has id 0, which is the kernel's idle context.
+ * 0 then). No thread has id 0, which is the kernel's idle context. A path
+ * past a file, or past `exe`, which leads to the program's file, is
+ * VNODE_ENOTDIR.
  */
 static int synth_classify_pid(const struct comp *c, int n, struct vpath *vp, int task)
 {
-    int f = n == 2 ? synth_pid_file(c[1]) : 0;
+    int f = n >= 2 ? synth_pid_file(c[1]) : 0;
 
     if (n == 1) {
         vp->kind = VNODE_PROC_PID;
         return vp->kind;
     }
-    if (n == 2 && comp_eq(c[1], "stat")) {
-        vp->kind = VNODE_PROC_FILE;
-        vp->procfile = SYNTH_PROC_STAT;
-        return vp->kind;
-    }
-    if (n == 2 && comp_eq(c[1], "cmdline")) {
-        vp->kind = VNODE_PROC_FILE;
-        vp->procfile = SYNTH_PROC_CMDLINE;
+    if (n > 2 && (f != 0 || comp_eq(c[1], "exe"))) {
+        vp->kind = VNODE_ENOTDIR;
         return vp->kind;
     }
     if (n == 2 && comp_eq(c[1], "exe")) {
@@ -1177,16 +1175,9 @@ int synth_classify(const char *path, struct vpath *vp)
         if (comp_eq(c[1], "pts")) {
             if (n == 2) {
                 vp->kind = VNODE_PTS_DIR;
-            } else if (n == 3) {
-                int idx = comp_uint(c[2]);
-                if (idx < 0) {
-                    vp->kind = VNODE_ENOENT;
-                } else {
-                    vp->kind = VNODE_PTS;
-                    vp->pts_index = idx;
-                }
             } else {
-                vp->kind = VNODE_ENOENT;
+                vp->pts_index = comp_uint(c[2]);
+                vp->kind = vp->pts_index < 0 ? VNODE_ENOENT : n == 3 ? VNODE_PTS : VNODE_ENOTDIR;
             }
             return vp->kind;
         }
@@ -1197,12 +1188,8 @@ int synth_classify(const char *path, struct vpath *vp)
             vp->kind = n == 2 ? VNODE_DEV_LINK : VNODE_ENOTDIR;
             return vp->kind;
         }
-        if (n == 2) {
-            vp->kind = VNODE_DEV;
-            synth_copy_name(vp, c[1]);
-        } else {
-            vp->kind = VNODE_ENOENT;
-        }
+        vp->kind = n == 2 ? VNODE_DEV : VNODE_ENOTDIR;
+        synth_copy_name(vp, c[1]);
         return vp->kind;
     }
 

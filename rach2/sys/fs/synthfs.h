@@ -147,7 +147,10 @@ const char *synth_ns_name(int kind);
 
 /*
  * A classified path: its kind, and the coordinates of its node, each
- * meaningful for the kinds its comment names.
+ * meaningful for the kinds its comment names. A VNODE_ENOTDIR path keeps
+ * those of the file it goes on past, as far as the classifier read them,
+ * and the rest stay as they began: an empty name, a pid of 0, a pty number
+ * of -1 and a node of 0.
  */
 struct vpath {
     int kind;
@@ -169,8 +172,10 @@ struct vpath {
  * devfs decides; whether a process, a descriptor, a processor or a PCI or
  * USB device exists is for the caller to ask, while an interface and a disk
  * node are looked up (`sysfs_net_index`, `sysfs_block_find`). A path that
- * names nothing is VNODE_ENOENT or, for many paths that go on past a file,
- * VNODE_ENOTDIR.
+ * goes on past a file is VNODE_ENOTDIR, and the caller asks in the same way
+ * whether that file exists, since a path past a missing one is ENOENT. Past
+ * /proc/<pid>/cwd, root or fd/<n>, which may lead to a directory, a path is
+ * VNODE_ENOENT, as is any other path that names nothing.
  */
 int synth_classify(const char *path, struct vpath *vp);
 

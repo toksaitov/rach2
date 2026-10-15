@@ -147,9 +147,9 @@ rach2/sys/fs/procfs.c:procfs_open lines 244 a dispatcher, one arm per command, r
 rach2/sys/fs/procfs.c:procfs_readlink_fd complexity 27 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_readlink_fd lines 137 a dispatcher, one arm per command, read as a table
 
-rach2/sys/fs/synthfs.c:synth_classify complexity 55 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/synthfs.c:synth_classify lines 128 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/synthfs.c:synth_classify_pid complexity 28 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/synthfs.c:synth_classify complexity 43 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/synthfs.c:synth_classify lines 120 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/synthfs.c:synth_classify_pid complexity 26 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/synthfs.c:synth_sys_path complexity 32 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/vfs.c:resolve_path complexity 80 one file system operation over the on-disk format, each step a rule of the format

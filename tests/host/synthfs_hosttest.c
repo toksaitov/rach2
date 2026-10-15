@@ -176,7 +176,8 @@ static void sys_tree(void)
  * number another process might own. A leading '-' is not a digit, so "-1"
  * is not read as SYNTH_PID_SELF (-1). The deepest path of /proc, a thread's
  * descriptor link, is classified whole, and a deeper path is ENOENT or
- * ENOTDIR and is not cut to a shorter one.
+ * ENOTDIR and is not cut to a shorter one; past a file it is ENOTDIR with
+ * the file's process or pty, for the caller to look up.
  */
 static void bounds(void)
 {
@@ -195,12 +196,36 @@ static void bounds(void)
     CHECK(synth_classify("proc/7/task/9/fd/0", &vp) == VNODE_PROC_FD_LINK && vp.procfd == 0 &&
           vp.pid == 7 && vp.tid == 9);
     CHECK(synth_classify("proc/7/task/9/fd/12", &vp) == VNODE_PROC_FD_LINK && vp.procfd == 12);
-    CHECK(synth_classify("proc/7/task/9/stat/junk", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/7/task/9/stat/junk", &vp) == VNODE_ENOTDIR && vp.pid == 7 &&
+          vp.tid == 9);
     CHECK(synth_classify("proc/7/task/9/fd/0/x", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("proc/7/task/9/fd/0/x/y/z", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("proc/7/fd/0/a/b/c/d", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("proc/cmdline/a/b/c/d/e/f", &vp) == VNODE_ENOTDIR);
-    CHECK(synth_classify("dev/pts/1/a/b/c/d", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("dev/pts/1/a/b/c/d", &vp) == VNODE_ENOTDIR && vp.pts_index == 1);
+}
+
+/**
+ * A path past a file is ENOTDIR, with the coordinates of the file for the
+ * caller to look it up: past a device, by its name; past a pty's slave, by
+ * its number; and past a process's file or its exe link, by the process's
+ * id. A path past a pty name that is not a number is ENOENT, and so is one
+ * past cwd or root, since the classifier follows no link.
+ */
+static void past_a_file(void)
+{
+    struct vpath vp;
+
+    CHECK(synth_classify("dev/null/x", &vp) == VNODE_ENOTDIR && eq(vp.name, "null"));
+    CHECK(synth_classify("dev/pts/3", &vp) == VNODE_PTS && vp.pts_index == 3);
+    CHECK(synth_classify("dev/pts/3/x", &vp) == VNODE_ENOTDIR && vp.pts_index == 3);
+    CHECK(synth_classify("dev/pts/x/y", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/5/maps/x", &vp) == VNODE_ENOTDIR && vp.pid == 5);
+    CHECK(synth_classify("proc/5/stat/x", &vp) == VNODE_ENOTDIR && vp.pid == 5);
+    CHECK(synth_classify("proc/self/cmdline/x", &vp) == VNODE_ENOTDIR && vp.pid == SYNTH_PID_SELF);
+    CHECK(synth_classify("proc/7/exe/x", &vp) == VNODE_ENOTDIR && vp.pid == 7);
+    CHECK(synth_classify("proc/7/cwd/x", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/7/root/x", &vp) == VNODE_ENOENT);
 }
 
 /** The path `synth_dir_path` writes back for a directory, a thread's under
@@ -220,16 +245,15 @@ static void paths(void)
 }
 
 /**
- * The rows of the root, /dev and /proc, then those of `bounds`, `paths` and
- * `sys_tree`:
+ * The rows of the root, /dev and /proc, then those of `bounds`,
+ * `past_a_file`, `paths` and `sys_tree`:
  *
  * - the empty path and ordinary names are the KRFFS root's, "devices" and
  *   "proconsul" among them, which only begin as "dev" and "proc" do;
- * - /dev and a device are found, and a path through a device, which is a
- *   leaf, is ENOENT;
+ * - /dev and a device are found;
  * - /proc, /proc/self, a process's directory and its descriptor directory;
  * - /proc/cmdline, the boot line, is a file and not a process;
- * - a process's files, and a path through one;
+ * - a process's files;
  * - the descriptor links /proc/PID/fd/N, which ttyname reads;
  * - a process's exe, cwd and root links, the /proc/sys files, and the task
  *   directory, each thread's entry with the process's id and the thread's
@@ -238,9 +262,10 @@ static void paths(void)
  *   or a descriptor that is not a number is ENOENT and not the root's, so
  *   no file of the root takes its place;
  * - leading, trailing and doubled slashes are skipped;
- * - a `.` or `..` component is ENOENT. The caller resolves them before it
- *   classifies, and one that reaches the classifier fails rather than name
- *   the wrong node.
+ * - a `.` or `..` component is ENOENT, or below /dev ENOTDIR past a device
+ *   of that name, which devfs does not have. The caller resolves them before
+ *   it classifies, and one that reaches the classifier fails rather than
+ *   name the wrong node.
  *
  * Returns the count of failed checks, at most 255.
  */
@@ -257,7 +282,6 @@ int main(void)
     CHECK(synth_classify("dev", &vp) == VNODE_DEV_DIR);
     CHECK(synth_classify("dev/null", &vp) == VNODE_DEV && eq(vp.name, "null"));
     CHECK(synth_classify("dev/urandom", &vp) == VNODE_DEV && eq(vp.name, "urandom"));
-    CHECK(synth_classify("dev/null/x", &vp) == VNODE_ENOENT);
 
     CHECK(synth_classify("proc", &vp) == VNODE_PROC_DIR);
     CHECK(synth_classify("proc/self", &vp) == VNODE_PROC_PID && vp.pid == SYNTH_PID_SELF);
@@ -284,7 +308,6 @@ int main(void)
     CHECK(synth_classify("proc/5/environ", &vp) == VNODE_PROC_FILE &&
           vp.procfile == SYNTH_PROC_ENVIRON);
     CHECK(synth_classify("proc/5/comm", &vp) == VNODE_PROC_FILE && vp.procfile == SYNTH_PROC_COMM);
-    CHECK(synth_classify("proc/5/maps/x", &vp) == VNODE_ENOENT);
 
     CHECK(synth_classify("proc/self/fd/0", &vp) == VNODE_PROC_FD_LINK && vp.pid == SYNTH_PID_SELF &&
           vp.procfd == 0);
@@ -297,7 +320,6 @@ int main(void)
     CHECK(synth_classify("proc/sys/kernel/hostname", &vp) == VNODE_PROC_SYS_FILE &&
           vp.sysent == SYNTH_SYS_HOSTNAME);
     CHECK(synth_classify("proc/sys/net/ipv4/ip_forward", &vp) == VNODE_PROC_SYS_FILE);
-    CHECK(synth_classify("proc/7/exe/x", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("proc/7/task", &vp) == VNODE_PROC_TASK_DIR && vp.pid == 7 && !vp.tid);
     CHECK(synth_classify("proc/7/task/9", &vp) == VNODE_PROC_PID && vp.pid == 7 && vp.tid == 9);
     CHECK(synth_classify("proc/7/task/9/stat", &vp) == VNODE_PROC_FILE &&
@@ -323,11 +345,12 @@ int main(void)
 
     CHECK(synth_classify("proc/7/../9/stat", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("proc/../etc/passwd", &vp) == VNODE_ENOENT);
-    CHECK(synth_classify("dev/../dev/null", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("dev/../dev/null", &vp) == VNODE_ENOTDIR);
     CHECK(synth_classify("proc/7/.", &vp) == VNODE_ENOENT);
-    CHECK(synth_classify("dev/./null", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("dev/./null", &vp) == VNODE_ENOTDIR);
 
     bounds();
+    past_a_file();
     paths();
     sys_tree();
     return fails > 255 ? 255 : fails;

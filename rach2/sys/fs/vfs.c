@@ -14,6 +14,7 @@
 #include "../panic.h"
 #include "../proc/process.h"
 #include "../proc/ns.h"
+#include "../tty/pty.h"
 #include "bcache.h"
 #include "devfs.h"
 #include "fat32.h"
@@ -2351,6 +2352,26 @@ static void synth_put(struct vfs_mount *mnt, void *node)
 }
 
 /**
+ * Whether the file the VNODE_ENOTDIR path `vp` goes on past is there: its
+ * process or thread, its pty, its device of /dev, or the device of its /sys
+ * directory, as far as `vp` names one. A path past a file that is gone is
+ * ENOENT, as on Linux, and not ENOTDIR.
+ */
+static int synth_past_present(const struct vpath *vp)
+{
+    if (vp->pid != 0 && procfs_resolve_id(vp) < 0) {
+        return 0;
+    }
+    if (vp->pts_index >= 0 && !pty_get(vp->pts_index)) {
+        return 0;
+    }
+    if (vp->name[0] != '\0' && devfs_stat(vp->name, 0, 0, 0) != 0) {
+        return 0;
+    }
+    return !SYSFS_KEYED(vp->sysent) || sysfs_device_exists(vp->sysent, vp->syskey);
+}
+
+/**
  * The rest of a path through a synthetic namespace whose root directory
  * `prefix` names, "dev", "proc" or "sys". A `..` inside it is resolved by
  * the text, since the namespace is a table classified by string. A `..`
@@ -2359,8 +2380,9 @@ static void synth_put(struct vfs_mount *mnt, void *node)
  * root that a nameless mount is entered by, as `shm` in /dev after `pts/..`,
  * returns VFS_ROOT with `*left` at that name. Otherwise the whole path,
  * `prefix` and the rest without its `.` and `..`, is classified
- * (`synth_classify`): 0 with a new node held, -ENOENT, -ENOTDIR,
- * -ENAMETOOLONG for a path longer than 255 bytes, or -ENOMEM.
+ * (`synth_classify`): 0 with a new node held, -ENOENT, -ENOTDIR for a
+ * path past a file that is there (`synth_past_present`), -ENAMETOOLONG for
+ * a path longer than 255 bytes, or -ENOMEM.
  */
 static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *rest, void **node,
                       const char **left)
@@ -2424,7 +2446,7 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *res
         return -ENOENT;
     }
     if (kind == VNODE_ENOTDIR) {
-        return -ENOTDIR;
+        return synth_past_present(&vp) ? -ENOTDIR : -ENOENT;
     }
     return synth_take(&vp, node);
 }
