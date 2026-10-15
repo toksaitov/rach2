@@ -1,7 +1,7 @@
 #!/bin/sh
 # exfat.sh: writing exFAT, proved from a program, across a reboot, by the
 # host's reader and the external checker where the host has one, through a
-# crash, from BusyBox, and under a lag with two writers. Six boots on one disk
+# crash, from BusyBox, and under a lag with two writers. Seven boots on one disk
 # whose second partition is an exFAT volume mkexfatfixture built empty.
 #
 # Usage: exfat.sh KERNEL IMAGE HARNESS DISK OSREAL PASSWORD MKEXFATFIXTURE
@@ -185,6 +185,30 @@ else
 fi
 walk_clean "the volume is not consistent after the writers"
 external_check "the external checker's answer at the end" "$LOST"
+
+# ---- 7: a failed write after VolumeDirty was set makes the mount read-only;
+#         it unmounts and leaves the bit on the disk ----
+cp "$DISK" "$DISK.late" || fail "copy the disk"
+if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --drive "file=$DISK.late,format=raw,if=ide,index=0,media=disk" \
+    --append "rach2.blocklag=3 rach2.blockfail=32 rach2.rescue" \
+    --timeout 90 --steptmo 60 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
+    --log "$DISK.latefail.log" \
+    "expect=Type 'help'" "send=exec /lagprobe latefail exfat" \
+    "expect=LAGPROBE" > /dev/null 2>&1 && grep -aq 'vfs: read-only: /lb' "$DISK.latefail.log"; then
+    echo "exfat-test: a mount whose device failed a write after VolumeDirty unmounts: OK"
+else
+    fail "the latefail boot"
+fi
+# VolumeFlags, byte 106 of the main boot sector, bit 1: VolumeDirty.
+flag=$(od -An -tu1 -j $((PART * 512 + 106)) -N1 "$DISK.late" | tr -d ' ')
+if [ $((flag & 2)) -eq 2 ]; then
+    echo "exfat-test: the volume is left marked dirty: OK"
+else
+    fail "the volume is not marked dirty after the failed write (byte 106 is $flag)"
+fi
+rm -f "$DISK.late"
 
 if command -v fsck_exfat >/dev/null 2>&1 || command -v fsck.exfat >/dev/null 2>&1; then
     echo "exfat-test: PASS (with the external checker)"

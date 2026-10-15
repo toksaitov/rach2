@@ -76,7 +76,7 @@ A write that begins past `ValidDataLength` first writes zeros up to its offset w
 
 ### The dirty bit
 
-A writable mount sets `VolumeDirty` in the main boot sector, and it stays set for the mount's life, as Linux's driver keeps it. The mount, each `sync` and the clean unmount also write `PercentInUse`, or `0xFF` while the free count is not known. The clean unmount runs `sync_disk`, writes the percent, and clears the bit last, so a failure before leaves the volume marked dirty, as does a mount that a failed write made read-only. The backup boot region is never written.
+A writable mount sets `VolumeDirty` in the main boot sector, and it stays set for the mount's life, as Linux's driver keeps it. The mount, each `sync` and the clean unmount also write `PercentInUse`, or `0xFF` while the free count is not known. The clean unmount runs `sync_disk`, writes the percent, and clears the bit last, so a failure before leaves the volume marked dirty, as does a mount that a failed write made read-only. On such a mount, the file system's `sync` and unmount preparation skip their metadata writes, so the mount can be unmounted without clearing `VolumeDirty`. The backup boot region is never written.
 
 Before the first change in a directory, the driver reads the directory to its end, and one with a critical entry this driver does not know is frozen: a create, `mkdir`, unlink, `rmdir` or rename in it is `EROFS`, it cannot itself be removed or renamed, and the record `exfat: directory cluster C frozen` gives the entry.
 
@@ -101,5 +101,5 @@ Otherwise three states the order of writes leaves after a crash are repaired, in
 
 ## Tests
 
-* `tests/run exfat` (core) is six boots that write an exFAT volume from a program and from BusyBox, judge it on the host with `mkexfatfixture --check`, read it back after a reboot, and stop a write for the next mount to repair ([`tests/system/suites/exfat.sh`](../../../tests/system/suites/exfat.sh)). `tests/run usbdisk` (core), `large`, `diskrate` and `installer` also mount exFAT volumes.
+* `tests/run exfat` (core) is seven boots that write an exFAT volume from a program and from BusyBox, judge it on the host with `mkexfatfixture --check`, read it back after a reboot, stop a write for the next mount to repair, and unmount after a failed write with the dirty bit still set ([`tests/system/suites/exfat.sh`](../../../tests/system/suites/exfat.sh)). `tests/run usbdisk` (core), `large`, `diskrate` and `installer` also mount exFAT volumes.
 * `tests/run host` runs `exfat_hosttest.c`, the driver over `mkexfatfixture`'s volumes and a device model that keeps every write pending until a flush, and `exfatcheck_hosttest.c`, which proves the host reader. `sh tests/host/exfat_scan_mutate.sh` and `sh tests/host/fat_barriers_mutate.sh` are mutation proofs of the cost rows and of each barrier. [tests/host/Readme.md](../../../tests/host/Readme.md) describes the rows.

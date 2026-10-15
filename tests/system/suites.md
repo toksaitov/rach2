@@ -46,7 +46,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `fatwrite` (core tier; needs qemu, mformat, mcopy, mdir, python3; 128 MiB): FAT32 written from a program, read back after a reboot, judged by the host's walk and mtools, taken through a crash and its repair, written from BusyBox, and written by two processes under the lag.
 * `ssh` (core tier; needs qemu, ssh, nc; 128 MiB): logins over SSH with nobody at the keyboard.
 * `ssh-e1000` (full tier; needs qemu, ssh; 128 MiB): the ssh suite on the e1000 card.
-* `exfat` (core tier; needs qemu, python3; 128 MiB): exFAT written from a program, read back after a reboot, judged by the host's reader and the external checker where the host has one, taken through a crash and its repair, written from BusyBox, and written by two processes under the lag.
+* `exfat` (core tier; needs qemu, python3; 128 MiB): exFAT written from a program, read back after a reboot, judged by the host's reader and the external checker where the host has one, taken through a crash and its repair, written from BusyBox and by two processes under the lag, and unmounted after a failed write with its dirty bit still set.
 * `ext2` (core tier; needs qemu, mke2fs, e2fsck, mtype; 128 MiB): the ext2 driver booted over a fixture disk the host's mke2fs wrote, with the walker's link rows on the mounted volume.
 * `cred-persist` (full tier; needs qemu; 128 MiB): the credential replacement's durability across a reboot.
 * `packet-e1000` (full tier; needs qemu; 128 MiB): the packet suite on the e1000 card.

@@ -3716,15 +3716,16 @@ static int write_boot_state(struct ex_mount *em, int dirty)
     return ex_write_bytes(em, 106, flags, 2, 1);
 }
 
-/** The `sync` of `vfs_ops`: on a mount that set VolumeDirty, `sync_disk` and
- * then the percent in use written, the bit left set; under the mount's
- * namespace lock. 0, or -errno. */
+/** The `sync` of `vfs_ops`: on a writable mount that set VolumeDirty,
+ * `sync_disk` and then the percent in use written, the bit left set; under
+ * the mount's namespace lock. A read-only mount returns 0 without writing
+ * metadata. Otherwise 0, or -errno. */
 static int ex_sync(struct vfs_mount *mnt)
 {
     struct ex_mount *em = em_of(mnt);
     int rc;
 
-    if (!em->writable) {
+    if (!em->writable || (mnt->flags & VFS_MS_RDONLY)) {
         return 0;
     }
     vfs_ns_lock(mnt);

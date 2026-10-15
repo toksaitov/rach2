@@ -32,9 +32,10 @@
  * mounted volume fails, the mount goes read-only, /proc/mounts says so,
  * and the next write answers EROFS.
  *
- * `lagprobe latefail`, under a later `rach2.blockfail`: a file is created,
- * so the volume's dirty flag is on the disk, and written and synced until a
- * write fails; the mount goes read-only, and it unmounts.
+ * `lagprobe latefail [TYPE]`, under a later `rach2.blockfail`: a file is
+ * created, written and synced until a write fails. The mount goes read-only
+ * and unmounts with its dirty flag still set. The type is vfat unless TYPE
+ * names another.
  *
  * `lagprobe writers [TYPE]`: two children write files on the lagged volume,
  * FAT32 or the type TYPE names, while the parent syncs it; each file reads
@@ -84,6 +85,9 @@
 #define O_RDONLY 0
 #define O_WRONLY 1
 #define O_RDWR   2
+
+/* The type `writers` and `latefail` mount, set by the second argument. */
+static const char *volume_type = "vfat";
 
 /** End the process with `status`; it does not return. */
 static void sys_exit(int status)
@@ -487,7 +491,7 @@ static void run_blockfail(void)
     puts("LAGPROBE OK");
 }
 
-/** `lagprobe latefail`, under `rach2.blocklag=3 rach2.blockfail=12`: the
+/** `lagprobe latefail [TYPE]`, under the lag with a later write failing: the
  * create succeeds, so the dirty flag was written; then 4 KiB at a time is
  * written and synced until the device fails a write. The mount goes
  * read-only, and the unmount succeeds; the suite then reads the dirty flag
@@ -500,7 +504,7 @@ static void run_latefail(void)
     if (syscall2(SYS_MKDIR, (long)"/lb", 0755) != 0) {
         fail("mkdir /lb");
     }
-    if (syscall5(SYS_MOUNT, (long)"/dev/disk0p2", (long)"/lb", (long)"vfat", 0, 0) != 0) {
+    if (syscall5(SYS_MOUNT, (long)"/dev/disk0p2", (long)"/lb", (long)volume_type, 0, 0) != 0) {
         fail("the writable mount through the lag");
     }
     fd = syscall3(SYS_OPEN, (long)"/lb/LATE.TXT", O_WRONLY | O_CREAT, 0644);
@@ -585,9 +589,6 @@ static void check_written(const char *path, unsigned char fill)
     syscall1(SYS_CLOSE, fd);
 }
 
-/* The type `writers` mounts: vfat, or the type the second argument names. */
-static const char *writers_type = "vfat";
-
 /**
  * `lagprobe writers`, under the lag with the second partition mounted for
  * writing: two children each create a file and extend it eight times, and
@@ -605,7 +606,7 @@ static void run_writers(void)
     if (syscall2(SYS_MKDIR, (long)"/lw", 0755) != 0) {
         fail("mkdir /lw");
     }
-    if (syscall5(SYS_MOUNT, (long)"/dev/disk0p2", (long)"/lw", (long)writers_type, 0, 0) != 0) {
+    if (syscall5(SYS_MOUNT, (long)"/dev/disk0p2", (long)"/lw", (long)volume_type, 0, 0) != 0) {
         fail("the writable mount through the lag");
     }
     a = syscall1(SYS_FORK, 0);
@@ -1191,7 +1192,8 @@ static const struct {
 };
 
 /** The probe, entered with `sp` at argc: the mode the first argument names,
- * `sleep` with none; a second argument is the type `writers` mounts. */
+ * `sleep` with none; a second argument is the type `writers` or `latefail`
+ * mounts. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
@@ -1199,7 +1201,7 @@ void probe_main(unsigned long *sp)
     unsigned i;
 
     if (argc >= 3) {
-        writers_type = argv[2];
+        volume_type = argv[2];
     }
     for (i = 0; i < sizeof(modes) / sizeof(modes[0]); i++) {
         if (argc < 2 ? i == 0 : same(argv[1], modes[i].name)) {
@@ -1207,6 +1209,6 @@ void probe_main(unsigned long *sp)
             sys_exit(0);
         }
     }
-    fail("usage: lagprobe [sleep|deadline|mounted|root|blockfail|latefail|write|writers [TYPE]|"
-         "pool|dead|queue|dirty]");
+    fail("usage: lagprobe [sleep|deadline|mounted|root|blockfail|latefail [TYPE]|"
+         "write|writers [TYPE]|pool|dead|queue|dirty]");
 }

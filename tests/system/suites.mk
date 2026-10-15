@@ -1500,8 +1500,9 @@ run-gnu: $(DEMO_CREDS) rach2 os-real-gnu-ext2 $(DEADLINE) $(PTYDRIVE) $(RUNUTIL)
 
 # `tests/run exfat`: exFAT written from a program, read back after a reboot,
 # judged by the host's reader and the external checker where the host has
-# one, taken through a crash and its repair, written from BusyBox, and
-# written by two processes under the lag.
+# one, taken through a crash and its repair, written from BusyBox and by
+# two processes under the lag, and unmounted after a failed write
+# with its dirty bit still set.
 EXFAT_DISK = $(IMAGES_DIR)/exfat-test.disk
 run-exfat: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKEXFATFIXTURE) $(MKMBR) $(HARNESS)
 	sh tests/system/suites/exfat.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(EXFAT_DISK) \

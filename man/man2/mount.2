@@ -425,6 +425,10 @@ A KRFFS volume made read-only before preparation keeps that flag set.
 Only then does it release the file system, covered directory, and claim.
 Failure before release restores the mount to active state.
 .Pp
+A FAT32 or exFAT mount made read-only by a failed write can be unmounted
+once its references are released.
+Unmount does not clear the volume's dirty flag.
+.Pp
 A mount whose device has been removed can be unmounted once its
 references are released, without writes to the absent device.
 If a removed ancestor prevents path lookup, the recorded target can
@@ -528,8 +532,8 @@ change propagation and unmount; its mount of
 passes this check and fails with
 .Er ENODEV .
 .It Bq Er EROFS
-An exFAT unmount could not write its metadata after an earlier write
-failure.
+A remount tried to make writable a file system whose device refuses
+writes or has failed a write, or a bind whose file system is read-only.
 .It Bq Er ESRCH
 There is no current process.
 .El
