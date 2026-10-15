@@ -616,7 +616,9 @@ static void creation_errors(void)
 /**
  * A node whose owner falls across a 4 KiB block is made with its maker's
  * ids: a spacer file places a FIFO at offset 3826, whose uid starts at byte
- * 4095, and the caller of uid and gid 1000 owns it once it has a name.
+ * 4095, and the caller of uid and gid 1000 owns it once it has a name. A
+ * chown that would change bytes on both sides of the block is `EIO` and
+ * leaves the owner; one that changes only the byte before it is stored.
  */
 static void owner_across(void)
 {
@@ -640,6 +642,14 @@ static void owner_across(void)
     check(kv_getattr(&mount, node, &st) == 0 && st.uid == 1000 && st.gid == 1000 &&
               (st.mode & 07777) == 0600,
           "a node made across a block has its maker's owner");
+    st.uid = 0x01020304u;
+    check(kv_setattr(&mount, node, VFS_SET_UID, &st) == -EIO,
+          "a chown the block boundary refuses is EIO");
+    check(kv_getattr(&mount, node, &st) == 0 && st.uid == 1000, "and the owner is kept");
+    st.uid = 1001;
+    check(kv_setattr(&mount, node, VFS_SET_UID, &st) == 0 && kv_getattr(&mount, node, &st) == 0 &&
+              st.uid == 1001,
+          "a chown of the byte before the boundary is stored");
     teardown();
 }
 

@@ -932,7 +932,9 @@ static int kv_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
  * the mode is the node's kind and is not changed. The root's attributes
  * are the format's, and a call for it answers 0 and changes nothing.
  * Returns 0, -EROFS on a read-only mount, or -EIO for a header that cannot
- * be read; a store that fails is not reported.
+ * be read or a store that fails, from the medium or because it would change
+ * bytes on both sides of a block boundary. The stores before a failed one
+ * stay, and the change time is stamped either way.
  */
 static int kv_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
 {
@@ -949,22 +951,22 @@ static int kv_setattr(struct vfs_mount *mnt, void *node, int what, const struct 
         return at == 0 ? 0 : -EIO;
     }
     if (what & VFS_SET_MODE) {
-        krffs_set_mode_at(&vol->fs, at, (uint16_t)st->mode);
+        rc |= krffs_set_mode_at(&vol->fs, at, (uint16_t)st->mode);
     }
     if (what & (VFS_SET_UID | VFS_SET_GID)) {
-        krffs_set_owner_at(&vol->fs, at, st->uid, st->gid,
-                           ((what & VFS_SET_UID) ? KRFFS_SET_UID : 0) |
-                               ((what & VFS_SET_GID) ? KRFFS_SET_GID : 0));
+        rc |= krffs_set_owner_at(&vol->fs, at, st->uid, st->gid,
+                                 ((what & VFS_SET_UID) ? KRFFS_SET_UID : 0) |
+                                     ((what & VFS_SET_GID) ? KRFFS_SET_GID : 0));
     }
     if (what & VFS_SET_ATIME) {
-        krffs_set_time_at(&vol->fs, at, KRFFS_SET_ATIME, st->atime_sec, st->atime_nsec);
+        rc |= krffs_set_time_at(&vol->fs, at, KRFFS_SET_ATIME, st->atime_sec, st->atime_nsec);
     }
     if (what & VFS_SET_MTIME) {
-        krffs_set_time_at(&vol->fs, at, KRFFS_SET_MTIME, st->mtime_sec, st->mtime_nsec);
+        rc |= krffs_set_time_at(&vol->fs, at, KRFFS_SET_MTIME, st->mtime_sec, st->mtime_nsec);
     }
     krffs_stamp_at(&vol->fs, at, KRFFS_STAMP_ATTR);
     vfs_ns_unlock(mnt);
-    return 0;
+    return rc == 0 ? 0 : -EIO;
 }
 
 /** The volume's size and free bytes in 1 KiB blocks, KRFFS_FILE_SYSTEM_MAGIC

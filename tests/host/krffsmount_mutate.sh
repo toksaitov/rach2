@@ -69,6 +69,8 @@ else:
                         "    return rc == KRFFS_ENOSPACE ? -ENOSPC : -EIO;"),
         "cwd-by-offset": ("pr->fs->cwd_node == handle_of(at)) {",
                           "pr->fs->cwd_node == (void *)(uintptr_t)at) {"),
+        "setattr-store": ("        rc |= krffs_set_owner_at(&vol->fs,",
+                          "        krffs_set_owner_at(&vol->fs,"),
     }
     old, new = changes[fault]
     if source.count(old) != 1:
@@ -80,7 +82,7 @@ PY
 
 faults='read-identity write-identity truncate-identity write-repoint truncate-repoint
     write-failure truncate-failure flush readonly directory clean-flush pin taken-errno
-    cwd-by-offset'
+    cwd-by-offset setattr-store'
 if [ "${1:-}" = --texts ]; then
     for fault in $faults; do
         RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/fs/krffsmount.c "$fault" >/dev/null || exit 1
@@ -165,6 +167,7 @@ for fault in "$@"; do
         pin) message='pinned node keeps its offset' ;;
         taken-errno) message='a directory whose identifier another directory has is EINVAL' ;;
         cwd-by-offset) message="an rmdir of a process's working directory is EBUSY" ;;
+        setattr-store) message='a chown the block boundary refuses is EIO' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup
