@@ -663,12 +663,45 @@ static void *take_signals(void *arg)
 }
 
 /**
+ * Return 1 when thread `t` of this process is asleep with no signal blocked,
+ * as /proc/self/task/<t>/status gives its state and mask, and 0 otherwise.
+ * A thread of `handler_mask` blocks SIGUSR1 and SIGUSR2 from its creation, so
+ * it is in that state only inside its sigsuspend.
+ */
+static int asleep_unblocked(pid_t t)
+{
+    char path[64], line[128], *v;
+    int asleep = 0, unblocked = 0;
+    FILE *f;
+
+    snprintf(path, sizeof(path), "/proc/self/task/%d/status", (int)t);
+    f = fopen(path, "r");
+    if (!f) {
+        return 0;
+    }
+    while (fgets(line, sizeof(line), f)) {
+        if (!strncmp(line, "State:", 6)) {
+            v = line + 6 + strspn(line + 6, " \t");
+            asleep = *v == 'S';
+        } else if (!strncmp(line, "SigBlk:", 7)) {
+            v = line + 7 + strspn(line + 7, " \t");
+            unblocked = strspn(v, "0") == 16;
+        }
+    }
+    fclose(f);
+    return asleep && unblocked;
+}
+
+/**
  * Two threads asleep in sigsuspend with SIGUSR1 and SIGUSR2 unblocked, while
  * the first thread blocks both, and the two signals sent to the process one
  * after the other, so that the first sleeper may be woken for both. SIGUSR1's
  * handler blocks SIGUSR2 and waits for SIGUSR2's handler, which the other
- * sleeper must be woken to run. Returns 0 when each thread ran one handler,
- * and 1 otherwise.
+ * sleeper must be woken to run. The signals are sent only once both threads
+ * are seen in sigsuspend (`asleep_unblocked`), so a thread that comes late
+ * cannot pass for one that was not woken. Returns 0 when each thread ran one
+ * handler, 2 when the two were not both in sigsuspend within 10 s and no
+ * signal was sent, and 1 otherwise.
  */
 static int handler_mask(void)
 {
@@ -693,9 +726,13 @@ static int handler_mask(void)
         pthread_create(&b, NULL, take_signals, &slots[1]) != 0) {
         return 1;
     }
-    for (i = 0; i < 500 && !(takers[0] && sleeping(takers[0]) && takers[1] && sleeping(takers[1]));
+    for (i = 0; i < 1000 && !(takers[0] && asleep_unblocked(takers[0]) && takers[1] &&
+                              asleep_unblocked(takers[1]));
          i++) {
         usleep(10000);
+    }
+    if (i == 1000) {
+        return 2;
     }
     kill(getpid(), SIGUSR1);
     kill(getpid(), SIGUSR2);
@@ -748,7 +785,7 @@ static void say_threads(pid_t pid)
 /**
  * Run `handler_mask` in a child, where no other thread of the probe can take
  * the two signals, and judge it by the child's status; a child that does not
- * end in 20 s has its threads printed (`say_threads`) before it is killed.
+ * end in 30 s has its threads printed (`say_threads`) before it is killed.
  * Returns 0, or 1 after the failure is printed.
  */
 static int handler_mask_row(void)
@@ -759,14 +796,17 @@ static int handler_mask_row(void)
     if (pid == 0) {
         _exit(handler_mask());
     }
-    for (i = 0; i < 2000 && waitpid(pid, &status, WNOHANG) == 0; i++) {
+    for (i = 0; i < 3000 && waitpid(pid, &status, WNOHANG) == 0; i++) {
         usleep(10000);
     }
-    if (i == 2000) {
+    if (i == 3000) {
         say_threads(pid);
         kill(pid, SIGKILL);
         waitpid(pid, &status, 0);
         return fail("a signal a handler's mask blocked did not wake the other thread");
+    }
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 2) {
+        return fail("the two threads were not seen asleep in sigsuspend");
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return fail("the two signals were not taken by the two threads");
