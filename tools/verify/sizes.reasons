@@ -543,15 +543,14 @@ tests/mountprobe.c:rows_placing complexity 26 a probe, one sequence of steps in 
 tests/mountprobe.c:rows_reading complexity 26 a probe, one sequence of steps in the order the log records them
 
 tests/musl/addusermusl.c:check_concurrent complexity 53 a test's rows, each a case, read as one table
-tests/musl/addusermusl.c:check_concurrent lines 177 a test's rows, each a case, read as one table
+tests/musl/addusermusl.c:check_concurrent lines 168 a test's rows, each a case, read as one table
 tests/musl/addusermusl.c:check_created complexity 27 a test's rows, each a case, read as one table
 tests/musl/addusermusl.c:check_injection complexity 33 a test's rows, each a case, read as one table
-tests/musl/addusermusl.c:check_injection lines 110 a test's rows, each a case, read as one table
+tests/musl/addusermusl.c:check_injection lines 107 a test's rows, each a case, read as one table
 tests/musl/addusermusl.c:check_refusals complexity 27 a test's rows, each a case, read as one table
-tests/musl/addusermusl.c:check_refusals lines 101 a test's rows, each a case, read as one table
 
 tests/musl/authmusl.c:main complexity 42 a test's rows, each a case, read as one table
-tests/musl/authmusl.c:main lines 112 a test's rows, each a case, read as one table
+tests/musl/authmusl.c:main lines 102 a test's rows, each a case, read as one table
 
 tests/musl/callsmusl.c:rtcs complexity 26 a test's rows, each a case, read as one table
 
@@ -580,7 +579,7 @@ tests/musl/ipcmusl.c:shm_rows complexity 26 a probe, one sequence of steps in th
 tests/musl/lchownmusl.c:link_rows complexity 32 a test's rows, each a case, read as one table
 
 tests/musl/loginmusl.c:check_wedges complexity 33 a test's rows, each a case, read as one table
-tests/musl/loginmusl.c:check_wedges lines 160 a test's rows, each a case, read as one table
+tests/musl/loginmusl.c:check_wedges lines 150 a test's rows, each a case, read as one table
 
 tests/musl/memfdmusl.c:sealing complexity 36 a test's rows, each a case, read as one table
 
@@ -588,10 +587,10 @@ tests/musl/opathmusl.c:file_rows complexity 31 a test's rows, each a case, read 
 tests/musl/opathmusl.c:synth_rows complexity 36 a test's rows, each a case, read as one table
 
 tests/musl/passwdmusl.c:check_concurrent complexity 104 a test's rows, each a case, read as one table
-tests/musl/passwdmusl.c:check_concurrent lines 436 a test's rows, each a case, read as one table
+tests/musl/passwdmusl.c:check_concurrent lines 419 a test's rows, each a case, read as one table
 tests/musl/passwdmusl.c:check_concurrent nesting 5 a test's rows, each a case, read as one table
 tests/musl/passwdmusl.c:check_refusals complexity 55 a test's rows, each a case, read as one table
-tests/musl/passwdmusl.c:check_refusals lines 272 a test's rows, each a case, read as one table
+tests/musl/passwdmusl.c:check_refusals lines 258 a test's rows, each a case, read as one table
 
 tests/musl/permmusl.c:main complexity 32 a test's rows, each a case, read as one table
 
@@ -600,21 +599,21 @@ tests/musl/preadmusl.c:file_rows complexity 30 a test's rows, each a case, read 
 tests/musl/ptracemusl.c:memory_and_registers complexity 32 a test's rows, each a case, read as one table
 
 tests/musl/pwauthmusl.c:check_fork complexity 28 a test's rows, each a case, read as one table
-tests/musl/pwauthmusl.c:check_prompt lines 109 a test's rows, each a case, read as one table
+tests/musl/pwauthmusl.c:check_prompt lines 106 a test's rows, each a case, read as one table
 
-tests/musl/readvmusl.c:check_datagram lines 128 a test's rows, each a case, read as one table
+tests/musl/readvmusl.c:check_datagram lines 111 a test's rows, each a case, read as one table
 
 tests/musl/sockflagmusl.c:main complexity 26 a probe, one sequence of steps in the order the log records them
 tests/musl/spawnmusl.c:main complexity 36 a test's rows, each a case, read as one table
-tests/musl/spawnmusl.c:main lines 184 a test's rows, each a case, read as one table
+tests/musl/spawnmusl.c:main lines 140 a test's rows, each a case, read as one table
 
 tests/musl/stackmusl.c:main complexity 32 a test's rows, each a case, read as one table
 
 tests/musl/stampmusl.c:main complexity 69 a test's rows, each a case, read as one table
-tests/musl/stampmusl.c:main lines 355 a test's rows, each a case, read as one table
+tests/musl/stampmusl.c:main lines 332 a test's rows, each a case, read as one table
 
 tests/musl/statmusl.c:main complexity 42 a test's rows, each a case, read as one table
-tests/musl/statmusl.c:main lines 168 a test's rows, each a case, read as one table
+tests/musl/statmusl.c:main lines 155 a test's rows, each a case, read as one table
 
 tests/musl/threadmusl.c:main complexity 37 a test's rows, each a case, read as one table
 tests/musl/threadmusl.c:sharing complexity 36 a test's rows, each a case, read as one table
