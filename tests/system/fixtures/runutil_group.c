@@ -15,8 +15,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const char *mode;   /* the case: assigned, denied, child or session */
-static int barrier[2];     /* the pipe on which the parent releases the child */
+static const char *mode; /* the case: assigned, denied, child or session */
+static int barrier[2];   /* the pipe on which the parent releases the child */
 
 /** Report a failure of the fixture itself and exit 125, a status runutil
  * does not use, so that it is not taken for runutil's own exit 2. */
