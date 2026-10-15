@@ -385,13 +385,13 @@ static void power_reset(void)
 }
 
 /**
- * The screen shows the log down to KLOG_INFO again, after init turned it
- * down for the login: the machine either stops and says so, or does not,
+ * The screen shows the log down to KLOG_INFO again, after the boot turned
+ * it down for the login: the machine either stops and says so, or does not,
  * and a person at its screen has no log to read afterwards.
  *
- * Interrupts stay off from here, as in Linux's `acpi_power_off`: entering
- * ACPI mode can raise the SCI, whose source no handler here clears, and a
- * level-triggered line it shares with a device would interrupt the
+ * Interrupts then go off and stay off, as in Linux's `acpi_power_off`:
+ * entering ACPI mode can raise the SCI, whose source no handler here clears,
+ * and a level-triggered line it shares with a device would interrupt the
  * processor for good before it reached SLP_EN. One processor stops the
  * machine; the others stop first, so that none goes on writing to a disk or
  * a device the stop leaves behind.

@@ -88,9 +88,10 @@ int board_pm_decoding(const board_profile_t *p, uint8_t decode_reg_value);
 
 /**
  * Which interrupt line the SCI is on, or -1 when the line is not one
- * `pic_mask_irq` can mask. A profile without a selection register has its
- * fixed line. Selections 0, 1 and 2 are lines 9, 10 and 11; 4 through 7
- * route the SCI to I/O APIC inputs above 15, and 3 is reserved.
+ * `pic_mask_irq` can mask or `p` is NULL. A profile without a selection
+ * register has its fixed line. Selections 0, 1 and 2 are lines 9, 10 and
+ * 11; 4 through 7 route the SCI to I/O APIC inputs above 15, and 3 is
+ * reserved.
  */
 int board_sci_irq(const board_profile_t *p, uint8_t sci_reg_value);
 

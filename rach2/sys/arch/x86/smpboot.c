@@ -60,8 +60,8 @@ static uint32_t cpu_apic[NR_CPUS];
 static int trampoline_free;
 
 /* What the processor being started takes from the boot one, the shared
- * entry and its stack, and whether it has reached `x86_ap_entry`'s end. One
- * processor starts at a time, so one copy serves each in turn. */
+ * entry and its stack, and whether it has reached that entry. One processor
+ * starts at a time, so one copy serves each in turn. */
 static void (*ap_main)(int cpu);
 static uintptr_t ap_stack;
 static volatile int ap_alive;

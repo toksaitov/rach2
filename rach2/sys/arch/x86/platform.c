@@ -274,12 +274,13 @@ static int ioapic_wanted(const struct acpi_info *a)
 }
 
 /**
- * The boot report comes after the page cache's window is mapped and before
- * the disk and network drivers configure a device: the window's page tables
- * and the report's own device reads take memory, and a figure printed
- * before them is not what the machine has left. The APIC report, under
- * `rach2.apicdiag`, reads what the firmware left in the APIC and in the
- * message capabilities of the xHCI and HDA controllers, and writes nothing.
+ * The boot report, under `rach2.diag`, comes after the page cache's window
+ * is mapped and before the disk and network drivers configure a device:
+ * the window's page tables and the report's own device reads take memory,
+ * and a figure printed before them is not what the machine has left. The
+ * APIC report, under `rach2.apicdiag`, reads what the firmware left in the
+ * APIC and in the message capabilities of the xHCI and HDA controllers, and
+ * writes nothing.
  */
 void platform_report(void)
 {

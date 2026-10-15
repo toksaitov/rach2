@@ -55,8 +55,8 @@ static int _rx_irq_masked; /* and is off from a full ring to a half-empty one */
  * Set once `serial_init` finds a UART at COM1. On a machine without one the
  * port reads 0xFF, a line status that says the transmitter is empty and a
  * byte is waiting, so every byte written would go nowhere and the receive
- * service would fill the ring with 0xFF; while the flag is clear each entry
- * returns at once instead.
+ * service would fill the ring with 0xFF; while the flag is clear the entries
+ * that would reach the port return at once instead.
  */
 static int _serial_port_exists = 0;
 
@@ -120,8 +120,8 @@ static int _serial_detect_port(void)
  * COM1 is set to 115200 baud, a divisor of 1 on the UART's 1.8432 MHz clock
  * over 16, with eight data bits, no parity and one stop bit, and the FIFO
  * on with a 14-byte receive threshold. OUT2 connects the UART's interrupt to
- * its ISA line. Without a UART the port is left alone, and every entry here
- * returns at once.
+ * its ISA line. Without a UART nothing past the probe is written to the
+ * port.
  */
 void serial_init(void)
 {

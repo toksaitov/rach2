@@ -104,7 +104,7 @@ static uint32_t hpet_read(void)
     return hpet[HPET_COUNTER / 4];
 }
 
-/** The PM timer's register as read, 0 when the read fails. */
+/** The PM timer's register, through its generic address. */
 static uint32_t pm_read(void)
 {
     uint32_t v = 0;

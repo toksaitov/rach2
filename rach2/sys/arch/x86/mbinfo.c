@@ -171,7 +171,7 @@ static uint32_t efi_type(uint32_t efi)
  * Record a module from `start` to `end`, an end before the start taken as
  * the start, with a copy of the command line of at most `avail` bytes at
  * `cmdline`, which may be NULL. Every module is counted in `modules_passed`;
- * one past BOOT_MODULE_MAX is not kept.
+ * a module past BOOT_MODULE_MAX is not kept.
  */
 static void add_module(struct boot_info *boot, struct boot_store *st, uint32_t start, uint32_t end,
                        const uint8_t *cmdline, uint32_t avail)

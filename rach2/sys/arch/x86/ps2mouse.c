@@ -116,9 +116,9 @@ static int ps2_send_command(uint8_t cmd)
  * Each command must be prefixed with PS2_CMD_WRITE_MOUSE so the
  * controller routes the following data byte to the auxiliary device.
  * A MOUSE_RESEND reply means the mouse saw a framing error, and a timeout
- * means it did not answer; either way the command is tried again, three
- * times in all. Any other byte is returned to the caller, since some
- * commands answer with data and not an ACK.
+ * means the controller or the mouse did not answer; either way the command
+ * is tried again, three times in all. Any other byte is returned to the
+ * caller, since some commands answer with data and not an ACK.
  *
  * @return the mouse's response byte, or -1 after three failed tries.
  */

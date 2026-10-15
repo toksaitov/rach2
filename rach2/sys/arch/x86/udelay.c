@@ -57,8 +57,9 @@
  */
 #define PIT_STALL_SAMPLES 100000u
 
-/* The wait that replaces the 8254's, NULL while channel 0 counts;
- * `platform_timer_start` sets `refclock_wait_us` here when it does not. */
+/* The wait that replaces the 8254's, or NULL: `platform_timer_start` sets
+ * `refclock_wait_us` here when channel 0 does not count and the HPET or the
+ * PM timer does. */
 void (*udelay_wait)(uint32_t usec);
 
 /**
