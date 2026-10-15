@@ -34,13 +34,17 @@
  * without it a `!=` assignment in a makefile cannot tell a command that
  * worked from one that did not.
  *
- * Twenty `system` and twenty `popen` calls in a row each succeed.
+ * Twenty `system` and twenty `popen` calls in a row each succeed, and leave
+ * as many descriptors open as before them and no child to reap, so that a
+ * descriptor or a zombie leaked by each call shows whatever the sizes of the
+ * kernel's tables.
  *
  * It prints "SPAWNMUSL OK" and exits 0 on success, or prints "SPAWNMUSL FAIL
  * (detail)" and exits 1 at the first failure.
  */
 
 #define _GNU_SOURCE
+#include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -80,6 +84,81 @@ static int canary_intact(const unsigned char *bytes, int count)
     }
 
     return 1;
+}
+
+/**
+ * Return the count of the entries of /proc/self/fd, this process's open
+ * descriptors and the one the count opens, or -1 when it cannot be read.
+ */
+static int open_fds(void)
+{
+    DIR *dir = opendir("/proc/self/fd");
+    struct dirent *e;
+    int n = 0;
+
+    if (dir == NULL) {
+        return -1;
+    }
+    while ((e = readdir(dir)) != NULL) {
+        if (e->d_name[0] != '.') {
+            n++;
+        }
+    }
+    closedir(dir);
+
+    return n;
+}
+
+/**
+ * Run twenty `system` and twenty `popen` calls in a row, and check that each
+ * succeeds and that together they leave as many descriptors open as before
+ * them and no child to reap. Returns 0, or 1 after the failure is printed.
+ */
+static int check_rounds(void)
+{
+    FILE *pipe;
+    char line[128];
+    int round, status, fds = open_fds();
+
+    if (fds < 0) {
+        return fail("/proc/self/fd could not be read");
+    }
+    for (round = 0; round < 20; round++) {
+        status = system("exit 0");
+        if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            char detail[80];
+
+            snprintf(detail, sizeof(detail), "system() failed on round %d of 20", round);
+
+            return fail(detail);
+        }
+    }
+    for (round = 0; round < 20; round++) {
+        pipe = popen("/bin/echo x", "r");
+        if (pipe == NULL || fgets(line, sizeof(line), pipe) == NULL) {
+            if (pipe != NULL) {
+                pclose(pipe);
+            }
+            {
+                char detail[80];
+
+                snprintf(detail, sizeof(detail), "popen() failed on round %d of 20", round);
+
+                return fail(detail);
+            }
+        }
+        if (pclose(pipe) != 0) {
+            return fail("pclose reported a failure for a command that worked");
+        }
+    }
+    if (open_fds() != fds) {
+        return fail("the rounds of system() and popen() left descriptors open");
+    }
+    if (waitpid(-1, NULL, WNOHANG) != -1 || errno != ECHILD) {
+        return fail("the rounds of system() and popen() left a child");
+    }
+
+    return 0;
 }
 
 int main(void)
@@ -188,37 +267,8 @@ int main(void)
         return fail(detail);
     }
 
-    {
-        int round;
-
-        for (round = 0; round < 20; round++) {
-            status = system("exit 0");
-            if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-                char detail[80];
-
-                snprintf(detail, sizeof(detail), "system() failed on round %d of 20", round);
-
-                return fail(detail);
-            }
-        }
-        for (round = 0; round < 20; round++) {
-            pipe = popen("/bin/echo x", "r");
-            if (pipe == NULL || fgets(line, sizeof(line), pipe) == NULL) {
-                if (pipe != NULL) {
-                    pclose(pipe);
-                }
-                {
-                    char detail[80];
-
-                    snprintf(detail, sizeof(detail), "popen() failed on round %d of 20", round);
-
-                    return fail(detail);
-                }
-            }
-            if (pclose(pipe) != 0) {
-                return fail("pclose reported a failure for a command that worked");
-            }
-        }
+    if (check_rounds() != 0) {
+        return 1;
     }
 
     printf("SPAWNMUSL OK\n");
