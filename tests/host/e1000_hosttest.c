@@ -712,6 +712,38 @@ static int find_write_bits(unsigned from, unsigned off, unsigned bits)
 static struct netdev model_iface;
 
 /**
+ * Stop a card whose bring-up failed at the reset, as the probe does.
+ *
+ * Every failure of e1000_init comes before it takes the bus, so the
+ * bus-master bit is clear whatever stop does. The revoke is checked in the
+ * write log instead, where a stop that skipped `pci_disable_bus_master` on a
+ * card that never came up is seen.
+ */
+static void check_failed_stop(void)
+{
+    unsigned mark;
+    int rctl, tctl, imc;
+
+    model_reset();
+    model_stuck_reset = 1;
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_FAILED,
+          "a bring-up that fails at the reset is refused");
+    CHECK(!pci_master_enabled, "and never took the bus in the first place");
+
+    mark = model_log_len;
+    e1000_stop(&e1000s[0]);
+    rctl = find_write(mark, E1000_RCTL);
+    tctl = find_write(mark, E1000_TCTL);
+    imc = find_write_bits(mark, E1000_IMC, 0xffffffffu);
+    CHECK(rctl >= 0 && model_log[rctl].value == 0 && tctl >= 0 && model_log[tctl].value == 0 &&
+              imc >= 0,
+          "the probe's stop of the refused card silences it through its mapped window");
+    CHECK(find_write(mark, MODEL_BUSMASTER_OFF) >= 0,
+          "and clears bus mastering, since the PCI record shows a card was found");
+    CHECK(!pci_master_enabled && !e1000s[0].up, "the refused card is left stopped");
+}
+
+/**
  * Run the rows, each on a model put back to its cold state:
  *
  *   * the bring-up completes on a healthy model, with the whole window mapped,
@@ -747,8 +779,10 @@ static struct netdev model_iface;
  *     revokes bus mastering last; a second stop is safe, as the interface
  *     requires, though no path calls it twice. Every failure of e1000_init
  *     comes before it takes the bus, so a bring-up that failed at the reset
- *     never took it, and a card that started is left unable to master the bus.
- *     On an absent card, where init wrote nothing, stop writes nothing;
+ *     never took it; stopped as the probe stops it, the card is turned off
+ *     through its mapped window and bus mastering is cleared all the same. A
+ *     card that started is left unable to master the bus. On an absent card,
+ *     where init wrote nothing, stop writes nothing;
  *   * stop waits for what the card accepted, so the last log line a remote
  *     reader waits for is sent, and a card that never finishes costs the wait
  *     and no more;
@@ -1062,11 +1096,7 @@ int main(void)
         CHECK(model_log_len > mark, "a second stop is still a stop");
     }
 
-    model_reset();
-    model_stuck_reset = 1;
-    CHECK(e1000_init(&model_iface, 0) == NETDEV_FAILED,
-          "a bring-up that fails at the reset is refused");
-    CHECK(!pci_master_enabled, "and never took the bus in the first place");
+    check_failed_stop();
 
     model_reset();
     model_swallow_tx = 1;
