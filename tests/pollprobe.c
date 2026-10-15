@@ -1,32 +1,33 @@
 /**
- * Exercises I/O multiplexing (poll and select) over pipes from user space.
+ * pollprobe: poll and select over pipes, and the console's modes.
  *
- * Each case runs against pipes:
+ * The cases:
  *   (a) timeout: poll of two empty pipes returns 0 when nothing is ready;
  *   (b) readiness: after a write, poll returns that fd with POLLIN and leaves
  *       the other fd's revents clear;
  *   (c) hangup: polling a read end whose writer has closed reports POLLHUP;
- *   (d) select: the same readable fd is found through an fd_set (proving the
- *       fd_set<->pollfd translation and the _newselect path);
- *   (e) block + wake: a parent that polls with a long timeout is woken the
- *       moment a forked child writes (it does NOT wait out the timeout),
- *       proving poll truly blocks on the pipe wait queue;
+ *   (d) select: the same readable fd is found through an fd_set, through
+ *       the fd_set to pollfd translation and, on i386, _newselect;
+ *   (e) block and wake: a parent that polls with a two-second timeout wakes
+ *       when a forked child writes, without waiting out the timeout, so poll
+ *       sleeps on the pipe's wait queue;
  *   (f) fd contract: a wide nfds with only in-range bits works; a bit naming
  *       a closed fd, past the table or not, is -EBADF; nfds past the fd_set
- *       width is -EINVAL (never a silent truncation);
+ *       width is -EINVAL, not a truncation;
  *   (g) bad timeout: an out-of-range timeval (tv_usec >= 1e6) is -EINVAL;
  *   (h) on x86-64, a ppoll whose timeout is 2^32 seconds waits for its pipe,
- *       which a child writes after 50 ms, and does not end at once, as a
- *       timeout narrowed to 32 bits would;
+ *       which a child writes once the parent sleeps, and does not end at
+ *       once, as a timeout narrowed to 32 bits would;
  *   (i) the console: the kernel's fds 0, 1 and 2 are each open for reading
  *       and writing, as Linux gives init /dev/console, and /dev/console
- *       opened read-only answers POLLOUT, as a terminal does on Linux,
- *       while a write through it is -EBADF. tmux's server draws through the
- *       standard input its client passes it and polls it for POLLOUT first;
- *       a read-only fd 0 whose poll never answered left it waiting with
- *       nothing on the screen.
+ *       opened read-only answers POLLOUT, as a terminal does on Linux, while
+ *       a write through it is -EBADF. tmux's server draws through the
+ *       standard input its client passes it and polls it for POLLOUT first,
+ *       and waits with nothing on the screen if the poll never answers.
  *
- * Prints "POLLPROBE OK". Freestanding; direct system calls (probe.h).
+ * Prints "  FAIL: " and the case for each failure, then "POLLPROBE OK" or
+ * "POLLPROBE FAIL", and exits with the count of failures. Freestanding;
+ * direct system calls (probe.h).
  */
 
 #include "probe.h"
@@ -49,12 +50,14 @@ struct pollfd {
     short revents;
 };
 
+/** exit(2); does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -64,14 +67,17 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write the string `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
+/* The cases that have failed, which is the exit status. */
 static int fails = 0;
 
+/** Unless `cond`, count a failure and print "  FAIL: `msg`". */
 static void check(int cond, const char *msg)
 {
     if (!cond) {
@@ -81,6 +87,7 @@ static void check(int cond, const char *msg)
     }
 }
 
+/** pipe(2), with both ends set to -1 first. */
 static int do_pipe(int fds[2])
 {
     fds[0] = -1;
@@ -88,22 +95,25 @@ static int do_pipe(int fds[2])
     return syscall1(SYS_PIPE, (long)fds);
 }
 
+/** poll(2), with the timeout in milliseconds. */
 static int do_poll(struct pollfd *fds, int nfds, int timeout_ms)
 {
     return syscall3(SYS_POLL, (long)fds, nfds, timeout_ms);
 }
 
 /**
- * Drains `n` bytes from `fd` into `buf`.
+ * Read `n` bytes from `fd` into `buf`.
  *
- * Passing buf as char * keeps the static checker from mistaking the read target
- * (written only through an int-cast syscall arg) for an unused const.
+ * `buf` is a char * and not a const pointer, so that the static checker does
+ * not take the target, which the kernel writes through an integer argument,
+ * for an unused const.
  */
 static int do_read(int fd, char *buf, int n)
 {
     return syscall3(SYS_READ, fd, (long)buf, n);
 }
 
+/** Sleep for `ms` milliseconds (nanosleep(2)). */
 static void msleep(int ms)
 {
     struct {
@@ -116,8 +126,8 @@ static void msleep(int ms)
 }
 
 #if defined __x86_64__
-/* The state letter of process `pid`, from the field after the name in
-   /proc/<pid>/stat, or 0 when it cannot be read. */
+/** The state letter of process `pid`, from the field after the name in
+ * /proc/<pid>/stat, or 0 when it cannot be read. */
 static char state_of(int pid)
 {
     static char path[32], text[256];
@@ -159,18 +169,17 @@ static char state_of(int pid)
 #endif
 
 /**
- * Case (f), the select fd contract, which is never a silent truncation: a
- * wide nfds with only an in-range bit works, a bit for a closed descriptor
- * is -EBADF whether past the table or not, and an nfds past FD_SETSIZE is
- * -EINVAL. `closed` is a descriptor in the table's range that was closed.
+ * Case (f), the select fd contract: a wide nfds with only an in-range bit
+ * works, a bit for a closed descriptor is -EBADF whether past the table or
+ * not, and an nfds past FD_SETSIZE is -EINVAL. `closed` is a descriptor in
+ * the table's range that was closed.
  */
 static void select_contract(int closed)
 {
     unsigned int set[32];
     int i, n;
 
-    /* A large nfds is allowed when no bit names an out-of-range fd: fd 1
-     * (stdout) is writable, so a wide select that includes it returns it. */
+    /* A wide nfds with one bit, for fd 1, which is writable. */
     for (i = 0; i < 32; i++) {
         set[i] = 0;
     }
@@ -178,8 +187,7 @@ static void select_contract(int closed)
     n = syscall5(SYS_SELECT, 64, 0, (long)set, 0, 0);
     check(n == 1 && (set[0] & (1u << 1)) != 0, "wide select with an in-range bit works");
 
-    /* A bit for an fd past the table's sixteen, which nothing has opened,
-     * is a closed descriptor -> -EBADF. */
+    /* fd 17, past the sixteen entries a table starts with, never opened. */
     for (i = 0; i < 32; i++) {
         set[i] = 0;
     }
@@ -187,7 +195,7 @@ static void select_contract(int closed)
     check(syscall5(SYS_SELECT, 18, (long)set, 0, 0, 0) == -EBADF,
           "select bit past the table -> -EBADF");
 
-    /* A bit for a closed in-range fd is also -EBADF, not ignored. */
+    /* A closed fd inside the table. */
     for (i = 0; i < 32; i++) {
         set[i] = 0;
     }
@@ -195,7 +203,6 @@ static void select_contract(int closed)
     check(syscall5(SYS_SELECT, closed + 1, (long)set, 0, 0, 0) == -EBADF,
           "select bit for a closed fd -> -EBADF");
 
-    /* nfds beyond the fd_set width (FD_SETSIZE) is -EINVAL. */
     check(syscall5(SYS_SELECT, 2000, 0, 0, 0, 0) == -EINVAL, "select nfds > FD_SETSIZE -> -EINVAL");
 }
 
@@ -231,10 +238,10 @@ static void console_modes(void)
 
 #if defined __x86_64__
 /**
- * Case (h), a ppoll timeout past 32 bits of seconds. The child writes only
- * once the parent is asleep, in the call: a timeout cut to zero would return
- * at once and never sleep, and the child writes after two seconds anyway, so
- * that such a parent is not left waiting for it.
+ * Case (h), a ppoll timeout past 32 bits of seconds. The child writes once
+ * /proc shows the parent asleep in the call, or after two seconds, so that a
+ * parent whose timeout was cut to zero, which returns at once and never
+ * sleeps, is not left waiting for it.
  */
 static void wide_ppoll(void)
 {
@@ -263,6 +270,7 @@ static void wide_ppoll(void)
 }
 #endif
 
+/** The probe's entry: cases (a) to (i) in order. */
 PROBE_START void _start(void)
 {
     int a[2], b[2];
@@ -280,8 +288,7 @@ PROBE_START void _start(void)
     pfd[1].revents = 0;
     check(do_poll(pfd, 2, 30) == 0, "poll of empty pipes times out -> 0");
 
-    /* (b) readiness: write one end, poll returns it with POLLIN, the other
-     * clear. */
+    /* (b) readiness: the written pipe is POLLIN, the other clear. */
     syscall3(SYS_WRITE, a[1], (long)"x", 1);
     pfd[0].revents = 0;
     pfd[1].revents = 0;
@@ -289,7 +296,7 @@ PROBE_START void _start(void)
     check(n == 1, "poll reports exactly one ready fd");
     check((pfd[0].revents & POLLIN) != 0, "the written pipe is POLLIN");
     check(pfd[1].revents == 0, "the idle pipe stays clear");
-    do_read(a[0], buf, 1); /* drain */
+    do_read(a[0], buf, 1);
 
     /* (c) hangup: close b's write end, poll b[0] -> POLLHUP. */
     syscall1(SYS_CLOSE, b[1]);
@@ -300,8 +307,7 @@ PROBE_START void _start(void)
     check(n == 1 && (pfd[0].revents & POLLHUP) != 0, "closed writer -> POLLHUP");
     syscall1(SYS_CLOSE, b[0]);
 
-    /* (d) select via _newselect: a[0] is drained/empty, write then select
-     * it. */
+    /* (d) select: a[0] made readable again, found through an fd_set. */
     syscall3(SYS_WRITE, a[1], (long)"y", 1);
     {
         unsigned int rset[32];
@@ -310,17 +316,14 @@ PROBE_START void _start(void)
             rset[i] = 0;
         }
         rset[a[0] / 32] = 1u << (a[0] % 32);
-        /* select(nfds, &rset, NULL, NULL, NULL): NULL timeout, but a[0] is
-         * already readable so it returns at once. */
+        /* No timeout, but a[0] is readable, so select returns at once. */
         n = syscall5(SYS_SELECT, a[0] + 1, (long)rset, 0, 0, 0);
         check(n == 1, "select finds the readable fd");
         check((rset[a[0] / 32] & (1u << (a[0] % 32))) != 0, "select set the ready bit");
     }
-    do_read(a[0], buf, 1); /* drain */
+    do_read(a[0], buf, 1);
 
-    /* (e) block + wake: child writes after a delay; the parent's poll must
-     * return woken (well under the 2s timeout), proving it blocked on the wait
-     * queue. */
+    /* (e) block and wake: the child writes after 60 ms. */
     pid = syscall1(SYS_FORK, 0);
     check(pid >= 0, "fork");
     if (pid == 0) {
@@ -343,7 +346,7 @@ PROBE_START void _start(void)
 
     select_contract(a[0]);
 
-    /* (g) an out-of-range timeout is rejected, not silently clamped. */
+    /* (g) an out-of-range timeout is refused, not clamped. */
     {
         long tv[2];
         tv[0] = 0;

@@ -1,20 +1,25 @@
 /**
- * Exercises loopback: the OS talking to itself over 127.0.0.1.
+ * loopprobe: the loopback, the probe's sockets reaching each other through
+ * 127.0.0.1 with no ARP and no wire.
  *
  * The IP layer turns a datagram to 127/8 around through the loopback ring,
- * from 127.0.0.1, so both selves of each exchange live in this one process. A
- * datagram socket connected to 127.0.0.1 reports 127.0.0.1 as its own
- * address. A UDP datagram sent to 127.0.0.1 at our own bound port comes back
- * with the payload intact and the source 127.0.0.1, and a recvfrom given an
- * address and no length pointer fails with EFAULT and leaves the datagram for
- * the next receive; a receive with MSG_PEEK leaves a datagram and a stream's
- * bytes for the next one; a TCP connection to our own listener completes its
- * handshake through the timer-driven ring, moves data both ways, and reports
- * the peer 127.0.0.1; a listener bound to 127.0.0.1 is not reached at the
- * machine's interface address, and a bind to an address the machine lacks is
- * refused; and a connect to a closed loopback port is refused promptly by the
- * reset a matching connection does not answer. Nothing here touches ARP or
- * the wire.
+ * from 127.0.0.1. A datagram socket connected to 127.0.0.1 reports 127.0.0.1
+ * as its own address. A UDP datagram sent to 127.0.0.1 at the socket's own
+ * bound port comes back with the payload intact and the source 127.0.0.1, an
+ * empty datagram comes back as one, and a recvfrom given an address and no
+ * length pointer fails with EFAULT and leaves the datagram for the next
+ * receive. A receive with MSG_PEEK leaves a datagram and a stream's bytes
+ * for the next one. A TCP connection to the probe's own listener completes
+ * its handshake, moves data both ways and reports the peer 127.0.0.1, and
+ * one the server closes at once after accept still connects. A transfer
+ * larger than the ring arrives whole with no datagram dropped, and the round
+ * trips between two processes are delivered by the idle path, not the
+ * timer. A listener bound to 127.0.0.1 is not reached at the machine's
+ * interface address, a bind to an address the machine lacks is refused, and
+ * a connect to a closed port is refused by the reset that answers its SYN.
+ * The rows of TCP ports check a client's bound source port, the one
+ * listener a port may have, ephemeral ports and a shutdown, and two sockets
+ * that dial each other at once open one connection.
  *
  * Prints "LOOPPROBE OK" and exits 0 on success. Freestanding; direct system
  * calls (probe.h).
@@ -45,23 +50,17 @@ typedef unsigned char uint8_t;
 /* The port of the peek rows, for their datagram and their connection. */
 #define PEEK_PORT 7102
 
-/* The ports the bound-port case uses, distinct from every other case here. */
+/* The ports of the bound-port rows of `tcp_ports`. CLOSED_PORT is the same
+ * number; `tcp_refused` runs before those rows, while nothing listens on it. */
 #define BOUND_LISTEN_PORT 7300
 #define BOUND_CLIENT_PORT 7301
 
 /* Where the simultaneous-open case's port pairs start; each round takes two. */
 #define SIM_PORT_A       7310
 #define TCP_PORT         7200
-/* Round trips of one byte. The same rounds run over a pipe first, and both
-   times are printed for a person; the verdict is the kernel's count of who
-   delivered the loopback's datagrams: with a single queued datagram left to
-   the 100 Hz timer each leg would cost a tick, and the idle path, which
-   drains the queue when the processor would otherwise park, is where the
-   legs must be delivered. */
+/* The round trips of `tcp_loop_pingpong`, a byte each way. */
 #define PINGPONG_ROUNDS  200
-/* The round trips over the loopback may not wait for the timer: fewer than
- * a tick, ten milliseconds, each, on any machine. The pipe's time is printed
- * beside them for the record. */
+/* A tick of the 100 Hz timer, in milliseconds. No row reads it. */
 #define PINGPONG_TICK_MS 10
 #define CLOSED_PORT      7300
 
@@ -76,11 +75,13 @@ typedef unsigned char uint8_t;
 #define ECONNREFUSED  111
 #define EADDRNOTAVAIL 99
 
+/** write(2). */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
+/** read(2). */
 static int sys_read(int fd, void *buf, size_t count)
 {
     return syscall3(SYS_READ, (long)fd, (long)buf, (long)count);
@@ -88,27 +89,32 @@ static int sys_read(int fd, void *buf, size_t count)
 
 #define O_RDONLY 0
 
+/** open(2). */
 static int sys_open(const char *path, int flags, int mode)
 {
     return syscall3(SYS_OPEN, (long)path, (long)flags, (long)mode);
 }
 
+/** close(2). */
 static int sys_close(int fd)
 {
     return syscall1(SYS_CLOSE, (long)fd);
 }
 
+/** exit(2); does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** The socket operation `call` on `args` (`sock_call`), as an int. */
 static int socketcall(int call, unsigned long *args)
 {
     return (int)sock_call(call, args);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -117,11 +123,13 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write the string `s` to standard output. */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
+/** Write `v` in decimal to standard output. */
 static void print_u32(uint32_t v)
 {
     char d[12];
@@ -144,6 +152,7 @@ static void print_u32(uint32_t v)
     }
 }
 
+/** Print "LOOPPROBE FAIL (`what`)" and exit 1. */
 static void fail(const char *what)
 {
     print("LOOPPROBE FAIL (");
@@ -152,6 +161,7 @@ static void fail(const char *what)
     sys_exit(1);
 }
 
+/** Whether the `n` bytes at `a` and `b` are the same. */
 static int mem_eq(const uint8_t *a, const uint8_t *b, int n)
 {
     int i;
@@ -162,7 +172,7 @@ static int mem_eq(const uint8_t *a, const uint8_t *b, int n)
     return 1;
 }
 
-/* Fill a 16-byte sockaddr_in: family, big-endian port, big-endian IPv4. */
+/** Fill a 16-byte sockaddr_in: family, big-endian port, big-endian IPv4. */
 static void make_sockaddr(uint8_t *sa, uint16_t port, uint8_t a, uint8_t b, uint8_t c, uint8_t d)
 {
     int i;
@@ -179,13 +189,14 @@ static void make_sockaddr(uint8_t *sa, uint16_t port, uint8_t a, uint8_t b, uint
 }
 
 /* The address every loopback peer reads back as, and the machine's own
-   interface address, which this probe asks for rather than assuming the
-   emulator's. */
+ * interface address, which `learn_addresses` reads from the kernel rather
+ * than assuming the emulator's. */
 static const uint8_t loop_ip[4] = {127, 0, 0, 1};
 static uint8_t own_ip[4];
 
-/* The address `getsockname` reports for a datagram socket connected to
-   a.b.c.d, into `me`. */
+/** The 16-byte sockaddr_in `getsockname` reports for a datagram socket
+ * connected to a.b.c.d, into `me`, which is cleared first. Fails the probe
+ * when a call fails. */
 static void source_for(uint8_t *me, uint8_t a, uint8_t b, uint8_t c, uint8_t d)
 {
     unsigned long args[6];
@@ -195,7 +206,7 @@ static void source_for(uint8_t *me, uint8_t a, uint8_t b, uint8_t c, uint8_t d)
     int i;
 
     for (i = 0; i < 16; i++) {
-        me[i] = 0; /* the kernel fills this; a refusal must not read as an address */
+        me[i] = 0;
     }
 
     args[0] = AF_INET;
@@ -218,8 +229,9 @@ static void source_for(uint8_t *me, uint8_t a, uint8_t b, uint8_t c, uint8_t d)
     sys_close(fd);
 }
 
-/* A datagram socket connected to 127.0.0.1 leaves from 127.0.0.1, and one
-   connected to a documentation address, 192.0.2.1, from the machine's own. */
+/** A datagram socket connected to 127.0.0.1 leaves from 127.0.0.1, and one
+ * connected to a documentation address, 192.0.2.1, from the machine's own,
+ * which goes into `own_ip`; a loopback or zero address there fails. */
 static void learn_addresses(void)
 {
     uint8_t me[16];
@@ -237,7 +249,8 @@ static void learn_addresses(void)
     }
 }
 
-/* The local port `getsockname` reports for `fd`, or -1 when it refuses. */
+/** The local port `getsockname` reports for `fd`, or -1 when it fails. The
+ * address is cleared first, so that a call that writes nothing reads as 0. */
 static int local_port(int fd)
 {
     unsigned long args[6];
@@ -246,7 +259,7 @@ static int local_port(int fd)
     int i;
 
     for (i = 0; i < 16; i++) {
-        me[i] = 0; /* the kernel fills this; a refusal must not read as a port */
+        me[i] = 0;
     }
     args[0] = (uint32_t)fd;
     args[1] = (unsigned long)me;
@@ -256,27 +269,28 @@ static int local_port(int fd)
     return me[2] * 256 + me[3];
 }
 
-/* The three system calls the round-trip row needs, in this file's shape. */
-/* The two descriptors are written by the kernel through `fds`, which the
-   call's memory clobber covers. */
+/** pipe(2) into `fds`, which the kernel writes and the call's "memory"
+ * clobber covers. */
 static int sys_pipe(int *fds)
 {
     return syscall1(SYS_PIPE, (long)fds);
 }
 
+/** fork(2). */
 static int sys_fork(void)
 {
     return syscall0(SYS_FORK);
 }
 
+/** waitpid(2) for `pid`, with no options. */
 static int sys_waitpid(int pid, int *status)
 {
     return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)0);
 }
 
-/* The milliseconds from `a` to `b`, both as `gettimeofday` fills them. The
-   microseconds are subtracted as signed values, so a second that borrows does
-   not wrap through zero and report four billion. */
+/** The milliseconds from `a` to `b`, both as `gettimeofday` fills them. The
+ * microseconds are subtracted as signed values, so a second that borrows
+ * does not wrap through zero and report four billion. */
 static int elapsed_ms(const long *a, const long *b)
 {
     int sec = (int)(b[0] - a[0]);
@@ -285,11 +299,13 @@ static int elapsed_ms(const long *a, const long *b)
     return sec * 1000 + usec / 1000;
 }
 
+/** gettimeofday(2) into `tv`, seconds and microseconds, with no zone. */
 static int sys_gettimeofday(long *tv)
 {
     return syscall2(SYS_GETTIMEOFDAY, (long)tv, (long)0);
 }
 
+/** fcntl(2). */
 static int sys_fcntl(int fd, int cmd, int arg)
 {
     return syscall3(SYS_FCNTL, (long)fd, (long)cmd, (long)arg);
@@ -300,6 +316,7 @@ struct timespec_probe {
     long tv_nsec;
 };
 
+/** Sleep for `ms` milliseconds (nanosleep(2)). */
 static void sys_nanosleep_ms(long ms)
 {
     struct timespec_probe req;
@@ -311,6 +328,14 @@ static void sys_nanosleep_ms(long ms)
     (void)r;
 }
 
+/**
+ * A UDP datagram sent to 127.0.0.1 at the socket's own bound port comes
+ * back with its payload and the source 127.0.0.1:UDP_PORT. A datagram of no
+ * bytes comes back as one, with its source, and the datagram after it
+ * arrives whole; the drained socket then answers EAGAIN. A receive that took
+ * the empty datagram for an empty queue would block, and the runner reports
+ * a probe that never ends.
+ */
 static void udp_loop(void)
 {
     unsigned long args[6];
@@ -360,11 +385,7 @@ static void udp_loop(void)
         fail("udp source port");
     }
 
-    /* A datagram of no bytes is a datagram. UDP has an empty payload, and a
-     * receive slot that read its own emptiness as "nothing here" would build
-     * this one, send it, accept it, deliver it to the right socket, and drop it
-     * at the last step, leaving the recvfrom below blocked forever. A hang here
-     * is a detection too: the runner reports a probe that never returns. */
+    /* A datagram of no bytes. */
     args[0] = (uint32_t)s;
     args[1] = (unsigned long)msg;
     args[2] = 0;
@@ -390,8 +411,7 @@ static void udp_loop(void)
         fail("udp empty source port");
     }
 
-    /* And the slot was cleared by that read, not merely reported: the next
-     * datagram must arrive whole. */
+    /* The receive took the empty datagram: the next arrives whole. */
     args[0] = (uint32_t)s;
     args[1] = (unsigned long)msg;
     args[2] = (uint32_t)strlen(msg);
@@ -413,8 +433,7 @@ static void udp_loop(void)
         fail("udp payload after empty");
     }
 
-    /* And an empty slot is still empty. This is the assertion a fix that made
-     * the slot unconditionally ready would fail while passing both above. */
+    /* The socket is empty. */
     args[0] = (uint32_t)s;
     args[1] = (unsigned long)rbuf;
     args[2] = sizeof(rbuf);
@@ -429,11 +448,10 @@ static void udp_loop(void)
     sys_close(s);
 }
 
-/* A recvfrom given an address and no length pointer fails with EFAULT
-   before it takes the datagram, which the next recvfrom takes whole. The
-   refused call would wait for the datagram in a kernel that takes it first,
-   and such a kernel leaves the receives after it nothing; they give up after
-   two seconds. */
+/** A recvfrom given an address and no length pointer fails with EFAULT
+ * before it takes the datagram, which the next recvfrom takes whole. A
+ * kernel that took the datagram first would leave the receives after it
+ * nothing, and they give up after two seconds. */
 static void udp_no_length(void)
 {
     unsigned long args[6];
@@ -491,8 +509,9 @@ static void udp_no_length(void)
     sys_close(s);
 }
 
-/* recvfrom on `s` into `buf` with `flags`, no address asked for, retried
-   for two seconds while it answers EAGAIN. */
+/** recvfrom on `s` into `buf` with `flags` and MSG_DONTWAIT, no address
+ * asked for, retried every 20 ms for two seconds while it answers EAGAIN:
+ * the bytes received, or the last negated errno. */
 static int recv_spin(int s, char *buf, int len, int flags)
 {
     unsigned long args[6];
@@ -512,8 +531,8 @@ static int recv_spin(int s, char *buf, int len, int flags)
     return n;
 }
 
-/* A datagram peeked at with MSG_PEEK stays queued, whole and with its
-   sender, for the next receive, which takes it. */
+/** A datagram peeked at with MSG_PEEK stays queued, whole and with its
+ * sender, for the next receive, which takes it. */
 static void udp_peek(void)
 {
     unsigned long args[6];
@@ -567,9 +586,9 @@ static void udp_peek(void)
     sys_close(s);
 }
 
-/* A stream's bytes peeked at with MSG_PEEK stay in its ring: one byte peeked,
-   as Chromium checks a connection it keeps idle, and the read after it gets
-   the whole message from its first byte. */
+/** A stream's bytes peeked at with MSG_PEEK stay in its ring: one byte
+ * peeked, as Chromium checks a connection it keeps idle, and the read after
+ * it gets the whole message from its first byte. */
 static void tcp_peek(void)
 {
     unsigned long args[6];
@@ -620,6 +639,9 @@ static void tcp_peek(void)
     sys_close(ls);
 }
 
+/** A TCP connection to the probe's own listener on 127.0.0.1 completes its
+ * handshake, carries a message each way, and reports its peer as
+ * 127.0.0.1:TCP_PORT. */
 static void tcp_loop(void)
 {
     unsigned long args[6];
@@ -702,26 +724,18 @@ static void tcp_loop(void)
     sys_close(ls);
 }
 
-/* More bytes than the ring holds, through the ring, in one process.
- *
- * The loopback ring is a few dozen frames deep. A transfer larger than it is
- * exactly the case that used to stall: the sender filled the ring, every
- * datagram after it was dropped with a line in the log, and the reader waited
- * for bytes that were never delivered. The sender here writes without
- * blocking and the reader takes whatever has arrived, so the two make progress
- * in turn within the one process; what the row requires is that every byte
- * arrives and that the kernel's count of refused datagrams does not rise.
- * Entry 50 of milestone 50. */
+/* The bytes `tcp_loop_bulk` sends, more than the loopback ring holds. */
 #define BULK_BYTES      (256u * 1024u)
-/* The ring's slots, from ip.c, and the least this transfer must reach in it.
- * The floor is what makes the row a measurement and not a hope: a transfer
- * that never pressed the ring proves nothing about its room. */
+/* LOOP_PEAK_FLOOR is the least the ring's high-water mark must reach, so that
+ * the transfer is known to have pressed the ring. LOOP_RING_SLOTS is read by
+ * no row, and the ring has 64 slots (ip.c). */
 #define LOOP_RING_SLOTS 48u
 #define LOOP_PEAK_FLOOR 8u
 
-/* One unsigned counter of /proc/stat, by name. The file is read to its end,
- * since it has a line for each processor before the network's counters: 64
- * of them pass 2 KiB. */
+/** The counter `key` of /proc/stat, `keylen` bytes with its trailing space,
+ * read as an unsigned decimal; fails the probe when the counter is missing.
+ * The file is read to its end, since it has a line for each processor before
+ * the network's counters: 64 of them pass 2 KiB. */
 static uint32_t proc_stat_u32(const char *key, int keylen)
 {
     int fd = sys_open("/proc/stat", O_RDONLY, 0);
@@ -759,24 +773,40 @@ static uint32_t proc_stat_u32(const char *key, int keylen)
     return 0;
 }
 
+/** The datagrams the loopback ring has refused since boot. */
 static uint32_t loop_dropped_now(void)
 {
     return proc_stat_u32("loopback_dropped ", 17);
 }
 
+/** The most datagrams the loopback ring has held at once since boot. */
 static uint32_t loop_peak_now(void)
 {
     return proc_stat_u32("loopback_peak ", 14);
 }
 
-/* The byte the stream carries at offset `n`. Every eight-bit window of the
-   offset reaches the result, so two blocks of the buffer differ wherever their
-   offsets do. */
+/** The byte the stream carries at offset `n`. Every eight-bit window of the
+ * offset reaches the result, so two blocks of the buffer differ wherever
+ * their offsets do, and a replayed buffer or a copy from the wrong place in
+ * the ring does not compare equal. */
 static char stream_byte(uint32_t n)
 {
     return (char)((n * 7u + (n >> 8) * 31u + (n >> 16) * 131u + 1u) & 0xFFu);
 }
 
+/**
+ * More bytes than the loopback ring holds, BULK_BYTES, through the ring
+ * within one process. The client writes without blocking and the server
+ * reads what has arrived, so the two take turns; every byte must arrive in
+ * order, and the kernel's count of datagrams the ring refused must not rise.
+ *
+ * A write offers up to 64 KiB, so that a call puts the most it can in the
+ * ring: a window's worth, 65535 bytes, is 45 segments of 1460 bytes, of the
+ * ring's 64 slots, and a system call's exit delivers the ring once it holds
+ * three or more. The ring's high-water mark is kept since boot, so it can
+ * show that the ring was pressed but not that this transfer pressed it: the
+ * row requires LOOP_PEAK_FLOOR of it and prints it.
+ */
 static void tcp_loop_bulk(void)
 {
     unsigned long args[6];
@@ -786,10 +816,6 @@ static void tcp_loop_bulk(void)
     uint32_t dropped_before, dropped_after;
     int ls, cs, as, n, i;
 
-    /* The byte at stream offset n is derived from the whole of n, not from
-       its low bits: a pattern that repeats every 256 bytes would let a
-       replayed buffer, or a copy taken from the wrong place in the ring, pass
-       every comparison below. */
     for (i = 0; i < (int)sizeof(out); i++) {
         out[i] = stream_byte((uint32_t)i);
     }
@@ -840,11 +866,7 @@ static void tcp_loop_bulk(void)
     while (got < BULK_BYTES && spins < 200000u) {
         spins++;
         if (sent < BULK_BYTES) {
-            /* The stream is `out` repeated, so a write starts where the last
-             * one stopped. A write that takes less than it was offered is
-             * ordinary on a non-blocking socket, and starting again at the
-             * beginning of the buffer would send bytes the reader below is
-             * not expecting and call the kernel wrong for it. */
+            /* A short write is ordinary; the next starts where it ended. */
             uint32_t at = sent % sizeof(out);
             uint32_t want = (uint32_t)sizeof(out) - at;
 
@@ -871,13 +893,6 @@ static void tcp_loop_bulk(void)
     if (dropped_after != dropped_before) {
         fail("the loopback ring refused a datagram during the transfer");
     }
-    /* The writes above are a window's worth each, which is the largest a
-     * single call can put in the ring: 65535 bytes in segments of 1460 is 45
-     * of the 64 slots, and a call's exit drains the ring once it holds three
-     * or more, so this is the pressure the ring is sized for. The refusal
-     * count above is the assertion; the high-water mark below is a mark since
-     * boot, so it can say that the ring has been pressed but not that this
-     * transfer is what pressed it, and it is reported rather than judged. */
     if (loop_peak_now() < LOOP_PEAK_FLOOR) {
         fail("the loopback ring was never pressed in this boot");
     }
@@ -889,19 +904,9 @@ static void tcp_loop_bulk(void)
     sys_close(ls);
 }
 
-/* A closed loopback port must refuse promptly (the RFC 793 reset), not
- * black-hole the SYN until the retransmissions give up. */
-/*
- * A round trip of one byte each way, two hundred times, between two processes
- * over the loopback.
- *
- * Each leg queues one datagram, which is below the threshold a system call's
- * exit delivers at, so the only thing that can deliver it before the next tick
- * is the idle path: the sender blocks in its read, nothing else is runnable,
- * and the processor is about to be parked. Without that, every leg waits for
- * the timer and a local connection turns over one window per tick, which
- * measured 6.0 MB/s on the machine whatever the write size.
- */
+/** The milliseconds PINGPONG_ROUNDS round trips of a byte each way take
+ * between this process and a child over two pipes, the same rounds as the
+ * loopback's without a ring. */
 static int pipe_pingpong_ms(void)
 {
     int up[2], down[2];
@@ -943,20 +948,19 @@ static int pipe_pingpong_ms(void)
     return elapsed_ms(t0, t1);
 }
 
-/*
- * A round trip of one byte each way, two hundred times, between two processes
- * over the loopback, beside the same rounds over a pipe, whose time is
- * printed for a person; the verdict is the kernel's count of the legs the
- * idle path delivered against the legs the timer did.
+/**
+ * PINGPONG_ROUNDS round trips of a byte each way between this process and a
+ * child over a loopback connection, judged by the kernel's count of the legs
+ * the idle path delivered against the legs the timer did.
  *
- * Each loopback leg queues one datagram, which is below the threshold a system
- * call's exit delivers at, so the only thing that can deliver it before the
- * next tick is the idle path: the sender blocks in its read, nothing else is
- * runnable, and the processor is about to be parked. Without that, every leg
- * waits for the timer and a local connection turns over one window per tick,
- * which measured 6.0 MB/s on the machine whatever the write size. The pipe
- * rounds are the same shape without a ring, so their time is what a round trip
- * costs this machine now, and the loopback's is judged against it.
+ * Each leg queues one datagram, below the three at which a system call's exit
+ * delivers the ring, so only the idle path can deliver it before the next
+ * tick: the sender blocks in its read, nothing else is runnable, and the
+ * processor is about to idle. Of the 400 legs at least half must be delivered
+ * by the idle path, and fewer by the timer than by it; a leg left for the
+ * timer costs a tick, and a connection that waits for it turns over one
+ * window a tick. The times of these rounds and of the same rounds over pipes
+ * are printed for a person and not judged.
  */
 static void tcp_loop_pingpong(void)
 {
@@ -1045,18 +1049,15 @@ static void tcp_loop_pingpong(void)
     print(", by the timer ");
     print_u32(tick);
     print("\n");
-    /* Four hundred legs: at least half delivered by the idle path, and
-       fewer by the timer than by it. A machine that parks a datagram for
-       the tick fails here whatever the clock says. */
     if (ms < 0 || base < 0 || idle < 2 * PINGPONG_ROUNDS / 2 || tick > idle) {
         fail("a local round trip waits for the timer");
     }
 }
 
-/* A listener bound to 127.0.0.1 is reached at that address alone: a connect
-   to the machine's interface address on its port is refused, as one from
-   the wire would be, and a connect to 127.0.0.1 is accepted. A bind to an
-   address the machine does not have is refused. */
+/** A listener bound to 127.0.0.1 is reached at that address alone: a
+ * connect to the machine's interface address on its port is refused, as one
+ * from the wire would be, and a connect to 127.0.0.1 is accepted. A bind to
+ * an address the machine does not have is EADDRNOTAVAIL. */
 static void tcp_bound_loopback(void)
 {
     unsigned long args[6];
@@ -1120,6 +1121,9 @@ static void tcp_bound_loopback(void)
     sys_close(ls);
 }
 
+/** A connect to a closed loopback port is refused at once by the reset
+ * that answers its SYN (RFC 793), and not left to wait for the
+ * retransmissions to give up. */
 static void tcp_refused(void)
 {
     unsigned long args[6];
@@ -1144,20 +1148,14 @@ static void tcp_refused(void)
     sys_close(cs);
 }
 
-/*
- * A stream this end shut down for sending has nothing to send on and no
- * reason recorded for it: the send is EPIPE, as POSIX names it, and a read,
- * blocking or not, is the end of input, since the peer closed its end first,
- * not the bare refusal that reads as EPERM. A stream that never connected has
- * no connection, and its read is ENOTCONN. `cs` is a connected client whose
- * peer has closed; `sa` is scratch space of a byte.
- */
-/*
+/**
  * A reader already asleep on a stream another process shuts down wakes with
- * the end of input. The sleeper is inside the socket's wait queue, and the
+ * the end of input. The sleeper is in the socket's wait queue, and the
  * shutdown detaches the socket from its block both ways, so nothing the peer
- * sends afterwards can reach that queue: the wake belongs to the shutdown or
- * it never comes. `cs` is a connected client with nothing to read.
+ * sends afterwards can reach that queue: the shutdown wakes it or nothing
+ * does. `cs` is a connected socket with nothing to read. The child is given
+ * 200 ms to fall asleep, since a shutdown before its read takes the path
+ * `shutdown_rows` covers.
  */
 static void shutdown_wakes_a_sharer(int cs)
 {
@@ -1172,9 +1170,6 @@ static void shutdown_wakes_a_sharer(int cs)
         /* Blocks: the ring is empty and the peer sends nothing. */
         sys_exit(sys_read(cs, &byte, 1) == 0 ? 0 : 1);
     }
-    /* The child is scheduled and parked before the shutdown, which is what
-       this row is about; a shutdown that arrives first takes the early path
-       the rows below cover. */
     sys_nanosleep_ms(200);
     args[0] = (uint32_t)cs;
     args[1] = 2; /* SHUT_RDWR */
@@ -1186,6 +1181,12 @@ static void shutdown_wakes_a_sharer(int cs)
         fail("a reader asleep through a shutdown did not read the end of input");
 }
 
+/**
+ * A stream this end shut down for writing: a send is EPIPE, and a read,
+ * blocking or not, is the end of input, since the peer has closed its end.
+ * A stream that never connected reads ENOTCONN. `cs` is a connected client
+ * whose peer has shut down; `sa` is scratch space of a byte.
+ */
 static void shutdown_rows(int cs, uint8_t *sa)
 {
     unsigned long args[6];
@@ -1223,19 +1224,23 @@ static void shutdown_rows(int cs, uint8_t *sa)
     sys_close(fresh);
 }
 
-/*
- * The local port a client bound, and the exclusivity a listener has.
+/**
+ * The ports of TCP sockets: the one listener a port may have, ephemeral
+ * ports, and the source port a client binds.
  *
- * `bind` before `connect` is how a client pins its source port, and a
- * `tcp_connect` that allocated a fresh ephemeral regardless made that
- * impossible: the peer saw a port nobody asked for. What must still be refused
- * is only the exact triple the connection table keys on, so a second connection
- * from the same bound port to a different peer port is legal and a repeat of
- * the same pairing is not.
+ * Two sockets may bind one port before either listens, and then only one may
+ * listen, since listen makes the check where the listener is published;
+ * once a listener is live, a bind to its port is EADDRINUSE too. A listener
+ * with no port and a bind to port 0 are each given an ephemeral port, 49152
+ * or above, as Linux gives them. A server binds and listens again on
+ * TCP_PORT, whose connection `tcp_loop` closed, since bind and listen refuse
+ * a port only for a live listener; bind does not read SO_REUSEADDR, so a
+ * server that sets it gains nothing.
  *
- * Listener exclusivity is checked where it is published, not at bind,
- * because binding both sockets first and listening afterwards walks past any
- * check that lives only in bind; both orders are tried here.
+ * A client that binds a port before it connects is seen by the server from
+ * that port. A second connection from the same port to the same peer is
+ * EADDRINUSE, since the connection table keys on the local port and the
+ * remote address and port. The shutdown rows then run on this connection.
  */
 static void tcp_ports(void)
 {
@@ -1244,9 +1249,7 @@ static void tcp_ports(void)
     uint32_t salen = 16;
     int ls, cs, as, second;
 
-    /* A listener to dial, and a second socket bound to the same port BEFORE
-     * either listens, which is the order that walks past a check living only
-     * in bind. */
+    /* A listener to dial, and a second socket bound to its port first. */
     args[0] = AF_INET;
     args[1] = SOCK_STREAM;
     args[2] = 0;
@@ -1285,9 +1288,7 @@ static void tcp_ports(void)
         fail("second listener on one port not refused");
     sys_close(second);
 
-    /* And once a listener is live, bind says so too, which is where a server
-     * expects to hear it. That check is the courtesy; the one above is the
-     * invariant. */
+    /* A bind to a live listener's port. */
     args[0] = AF_INET;
     args[1] = SOCK_STREAM;
     args[2] = 0;
@@ -1301,9 +1302,7 @@ static void tcp_ports(void)
         fail("binding a live listener's port was not reported");
     sys_close(second);
 
-    /* A listener with no bound port at all is given an ephemeral one, as
-     * Linux's listen gives it, and a bind to port 0 is given one at the bind,
-     * before any listen: both are what `getsockname` then reports. */
+    /* A listener with no port, then a bind to port 0. */
     args[0] = AF_INET;
     args[1] = SOCK_STREAM;
     args[2] = 0;
@@ -1333,12 +1332,7 @@ static void tcp_ports(void)
         fail("bind to port 0 given no ephemeral port");
     sys_close(second);
 
-    /* A server restarted on a port its own last session still holds. `tcp_loop`
-     * above ran a whole connection on TCP_PORT and closed it, so that port is
-     * held by a TIME_WAIT remnant right now. Refusing on any in-use block,
-     * not on a live listener would fail this, which is what restarting
-     * dropbear or httpd after a session looks like; `setsockopt` is a no-op
-     * here, so `SO_REUSEADDR` would not buy the way out. */
+    /* A server restarted on the port of `tcp_loop`'s closed connection. */
     args[0] = AF_INET;
     args[1] = SOCK_STREAM;
     args[2] = 0;
@@ -1357,7 +1351,7 @@ static void tcp_ports(void)
         fail("a server could not restart on its own last session's port");
     sys_close(second);
 
-    /* And the client, which pins its own source port. */
+    /* A client that binds its source port before it connects. */
     args[0] = AF_INET;
     args[1] = SOCK_STREAM;
     args[2] = 0;
@@ -1387,14 +1381,11 @@ static void tcp_ports(void)
     if (as < 0)
         fail("bound-port accept");
 
-    /* The port the server sees is the one the client asked for, which is the
-     * whole assertion: an ephemeral would be some other number. */
     if (peer[2] != (BOUND_CLIENT_PORT >> 8) || peer[3] != (BOUND_CLIENT_PORT & 0xFF)) {
         fail("the peer port is not the one the client bound");
     }
 
-    /* A second connection from that same port to the same peer is the one
-     * duplicate the table cannot tell apart. */
+    /* A second connection from that port to the same peer. */
     args[0] = AF_INET;
     args[1] = SOCK_STREAM;
     args[2] = 0;
@@ -1424,18 +1415,19 @@ static void tcp_ports(void)
     sys_close(ls);
 }
 
-/*
+/**
  * Simultaneous open (RFC 793): both ends send a SYN and neither has seen an
- * ACK. It is reachable here because loopback is the same machine: two sockets,
- * each bound to the port the other dials, so each SYN arrives at a socket that
- * has already sent its own.
+ * ACK. Two sockets, each bound to the port the other dials, connect without
+ * blocking, so that both SYNs are in flight at once from one process and
+ * each arrives at a socket that has sent its own. Each end answers with a
+ * SYN-ACK at its `iss`, the sequence the peer expects, and the two establish
+ * a connection that carries a message from `a` to `b`.
  *
- * A SYN with no ACK used to fall out of SYN_SENT and be dropped, so both
- * connects hung until their retransmissions gave up. The state machine now
- * answers with a SYN-ACK emitted at `iss`, which is the sequence the peer is
- * waiting on; an implementation that emitted at `iss + 1` instead would leave
- * both ends acknowledging nothing, and this case would hang, not fail,
- * which the runner reports as a probe that never returned.
+ * A round is decided by that message, not by a repeated connect, which is
+ * EISCONN for a block in any state but SYN_SENT, a reset one in CLOSED too.
+ * A round may lose: a tick of the 100 Hz timer between the two connects
+ * delivers the first SYN before `b` has a block, and the reset refuses it.
+ * The probe fails only when all eight rounds lose.
  */
 static void tcp_simultaneous(void)
 {
@@ -1446,11 +1438,6 @@ static void tcp_simultaneous(void)
     char rbuf[32];
     int n;
 
-    /* Retried, because the crossing is a race this probe cannot win outright:
-     * the loopback ring is drained by the 100 Hz timer, so a tick landing
-     * between the two connects delivers the first SYN to a port whose socket
-     * has no block yet and resets it. A round that loses that race is a
-     * refused connect and not a failure; only losing every round is. */
     for (round = 0; round < 8 && !crossed; round++) {
         args[0] = AF_INET;
         args[1] = SOCK_STREAM;
@@ -1476,10 +1463,6 @@ static void tcp_simultaneous(void)
         if (socketcall(SC_BIND, args) != 0)
             fail("simultaneous bind b");
 
-        /* Both non-blocking, which is how two SYNs get to be in flight at once
-         * from one process: a blocking connect would sit inside the first
-         * handshake, and its SYN would reach a port whose socket has no block
-         * yet and earn a reset instead of a crossing SYN. */
         if (sys_fcntl(a, F_SETFL, O_NONBLOCK) < 0 || sys_fcntl(b, F_SETFL, O_NONBLOCK) < 0)
             fail("simultaneous nonblock");
 
@@ -1509,12 +1492,7 @@ static void tcp_simultaneous(void)
             sys_nanosleep_ms(20);
         }
 
-        /* Whether the round crossed is decided by data moving, not by the
-         * connect's answer: a socket this stack reset keeps its block attached
-         * in CLOSED, and a repeated connect reports -EISCONN for any attached
-         * block that is not still in SYN_SENT, so the two outcomes are
-         * indistinguishable from there. A connection that has a payload
-         * crossed; anything else is a lost round. */
+        /* The round crossed when a message reaches `b`. */
         n = 0;
         args[0] = (uint32_t)a;
         args[1] = (unsigned long)msg;
@@ -1547,7 +1525,8 @@ static void tcp_simultaneous(void)
         fail("the crossing SYNs never established a connection that has data");
 }
 
-/** A server may close immediately after accept; connect still succeeds. */
+/** A server that closes a connection at once after accept: the client's
+ * connect still succeeds, and its read is the end of input. */
 static void tcp_accept_close(void)
 {
     unsigned long args[6];
@@ -1604,6 +1583,7 @@ static void tcp_accept_close(void)
         fail("immediate-close child");
 }
 
+/** The probe's entry: each case in turn, then LOOPPROBE OK. */
 PROBE_START void _start(void)
 {
     learn_addresses();

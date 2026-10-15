@@ -1,6 +1,3 @@
-#ifndef PROBE_H
-#define PROBE_H
-
 /*
  * probe.h: the system call interface of the freestanding probes, for the
  * architecture tests/Makefile builds them for.
@@ -37,6 +34,8 @@
  * sigaction, sysinfo and the rest, are declared with longs and pointers,
  * which give Linux's layout on both.
  */
+#ifndef PROBE_H
+#define PROBE_H
 
 typedef __SIZE_TYPE__ size_t;
 
@@ -206,6 +205,8 @@ typedef __SIZE_TYPE__ size_t;
 #define KSTAT_MTIME_NSEC 96
 #define KSTAT_CTIME_NSEC 112
 
+/** Make system call `n` with six arguments through `syscall`: the kernel's
+ * result, or a negated errno. */
 static __inline__ long syscall6(long n, long a, long b, long c, long d, long e, long f)
 {
     long r;
@@ -220,31 +221,37 @@ static __inline__ long syscall6(long n, long a, long b, long c, long d, long e, 
     return r;
 }
 
+/** `syscall6` with the sixth argument zero. */
 static __inline__ long syscall5(long n, long a, long b, long c, long d, long e)
 {
     return syscall6(n, a, b, c, d, e, 0);
 }
 
+/** `syscall6` with the last two arguments zero. */
 static __inline__ long syscall4(long n, long a, long b, long c, long d)
 {
     return syscall6(n, a, b, c, d, 0, 0);
 }
 
+/** `syscall6` with the last three arguments zero. */
 static __inline__ long syscall3(long n, long a, long b, long c)
 {
     return syscall6(n, a, b, c, 0, 0, 0);
 }
 
+/** `syscall6` with the last four arguments zero. */
 static __inline__ long syscall2(long n, long a, long b)
 {
     return syscall6(n, a, b, 0, 0, 0, 0);
 }
 
+/** `syscall6` with the last five arguments zero. */
 static __inline__ long syscall1(long n, long a)
 {
     return syscall6(n, a, 0, 0, 0, 0, 0);
 }
 
+/** `syscall6` with every argument zero. */
 static __inline__ long syscall0(long n)
 {
     return syscall6(n, 0, 0, 0, 0, 0, 0);
@@ -451,6 +458,8 @@ static __inline__ long syscall0(long n)
 #define KSTAT_MTIME_NSEC      76
 #define KSTAT_CTIME_NSEC      84
 
+/** Make system call `n` with no arguments through `int $0x80`: the kernel's
+ * result, or a negated errno. */
 static __inline__ long syscall0(long n)
 {
     long r;
@@ -459,6 +468,7 @@ static __inline__ long syscall0(long n)
     return r;
 }
 
+/** The same with one argument, in EBX. */
 static __inline__ long syscall1(long n, long a)
 {
     long r;
@@ -467,6 +477,7 @@ static __inline__ long syscall1(long n, long a)
     return r;
 }
 
+/** The same with two arguments, in EBX and ECX. */
 static __inline__ long syscall2(long n, long a, long b)
 {
     long r;
@@ -475,6 +486,7 @@ static __inline__ long syscall2(long n, long a, long b)
     return r;
 }
 
+/** The same with three arguments, in EBX, ECX and EDX. */
 static __inline__ long syscall3(long n, long a, long b, long c)
 {
     long r;
@@ -483,6 +495,7 @@ static __inline__ long syscall3(long n, long a, long b, long c)
     return r;
 }
 
+/** The same with four arguments, in EBX, ECX, EDX and ESI. */
 static __inline__ long syscall4(long n, long a, long b, long c, long d)
 {
     long r;
@@ -491,6 +504,7 @@ static __inline__ long syscall4(long n, long a, long b, long c, long d)
     return r;
 }
 
+/** The same with five arguments, in EBX, ECX, EDX, ESI and EDI. */
 static __inline__ long syscall5(long n, long a, long b, long c, long d, long e)
 {
     long r;
@@ -502,10 +516,11 @@ static __inline__ long syscall5(long n, long a, long b, long c, long d, long e)
     return r;
 }
 
-/*
- * The sixth argument goes in EBP, which the compiler may keep the frame in
- * and gives no constraint: it is saved, loaded from memory, and put back
- * around the call.
+/**
+ * The same with six arguments, the sixth in EBP. The compiler may keep the
+ * frame in EBP and has no constraint for it, so EBP is saved, the sixth
+ * argument and the call number are loaded into EBP and EAX from the array
+ * whose address is passed in EAX, and EBP is put back after the call.
  */
 static __inline__ long syscall6(long n, long a, long b, long c, long d, long e, long f)
 {
@@ -549,8 +564,8 @@ static __inline__ long syscall6(long n, long a, long b, long c, long d, long e, 
 
 #endif
 
-/** Whether a system call's result is a negated errno, as an address such as
- * mmap's can be anything else. */
+/** Whether a system call's result is a negated errno, -4095 to -1, since an
+ * address such as mmap's can be any other value. */
 static __inline__ int sys_failed(long r)
 {
     return (unsigned long)r > -4096UL;
@@ -570,18 +585,19 @@ static __inline__ long probe_mmap(long addr, long len, long prot, long flags, lo
 #endif
 }
 
-/*
- * lseek to the 64-bit offset `off` from `whence`, with the offset it reaches
- * in `*result`: on i386 through _llseek, which takes the offset in two words
- * and writes the result, and on x86-64 through lseek, whose offset and result
- * are 64 bits wide. 0, or a negated errno. LLSEEK_NAME names the call in a
- * row's text.
- */
+/* The name of the call `probe_llseek` makes, for a row's text. */
 #if defined __x86_64__
 #define LLSEEK_NAME "lseek"
 #else
 #define LLSEEK_NAME "_llseek"
 #endif
+
+/**
+ * lseek to the 64-bit offset `off` from `whence`, with the offset it reaches
+ * in `*result`: on i386 through _llseek, which takes the offset in two words
+ * and writes the result, and on x86-64 through lseek, whose offset and result
+ * are 64 bits wide. 0, or a negated errno.
+ */
 static __inline__ long probe_llseek(int fd, long long off, int whence, long long *result)
 {
 #if defined __x86_64__
@@ -613,11 +629,9 @@ static __inline__ long probe_ftruncate64(int fd, long long len)
 }
 
 /*
- * statfs of `path` into `buf`: on i386 through statfs64, which takes the
- * size of its 84-byte struct, and on x86-64 through statfs, whose struct of
- * longs is 120 bytes. KSTATFS_SIZE is the larger, and f_type, the magic, is
- * the 32-bit word at the start of either; KSTATFS_FILES and KSTATFS_FFREE
- * are the offsets of the 64-bit inode counts. 0, or a negated errno.
+ * The buffer `probe_statfs` fills: KSTATFS_SIZE bytes, the larger of the two
+ * structs, with f_type, the magic, the 32-bit word at the start of either.
+ * KSTATFS_FILES and KSTATFS_FFREE are the offsets of the 64-bit inode counts.
  */
 #define KSTATFS_SIZE 120
 #if defined __x86_64__
@@ -627,6 +641,12 @@ static __inline__ long probe_ftruncate64(int fd, long long len)
 #define KSTATFS_FILES 32
 #define KSTATFS_FFREE 40
 #endif
+
+/**
+ * statfs of `path` into `buf`: on i386 through statfs64, which takes the
+ * size of its 84-byte struct, and on x86-64 through statfs, whose struct of
+ * longs is 120 bytes. 0, or a negated errno.
+ */
 static __inline__ long probe_statfs(const char *path, void *buf)
 {
 #if defined __x86_64__

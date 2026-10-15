@@ -1,26 +1,29 @@
 /**
- * Exercises the interface ioctls: how a program asks about this machine's
- * network and how it changes it.
+ * netifprobe: the interface ioctls, by which a program reads and changes the
+ * machine's network configuration.
  *
- * A DHCP client learns the address after the machine is running, so there has
- * to be a way for a program to set one, and this is Linux's way: `SIOCxIF*` on
- * a socket with a `struct ifreq`. What matters as much as the setting is what
- * a change costs. Every ARP mapping was learned by a machine at the old
- * address and every open connection recorded it, so this probe holds a TCP
- * connection open across the change and requires it to be aborted rather than
- * left sending from an address the machine no longer has.
+ * A DHCP client learns the address after the machine is running and sets it
+ * as on Linux, with `SIOCxIF*` on a socket and a `struct ifreq`. A change of
+ * address also costs the ARP mappings, learned at the old address, and the
+ * connections, which recorded it, so the probe holds a TCP connection open
+ * across the change and requires it to be aborted with ENETRESET rather than
+ * left sending from an address the machine no longer has. The address is put
+ * back at the end and the gateway pinged, which shows that the machine works
+ * after the change.
  *
- * The machine's address is put back at the end and the gateway pinged, which
- * is what proves the change was survivable, not merely accepted.
+ * On a machine booted with `rach2.ip=none` the probe configures the machine
+ * instead, in the order `ifconfig` uses and a DHCP client runs: an address,
+ * then a mask, then a route.
  *
- * Run on a machine booted with `rach2.ip=none` it does the other half instead:
- * configures an unconfigured machine in the order `ifconfig` does it, an
- * address then a mask then a route, which is the sequence a DHCP client runs
- * and the one a machine that refused to hold an address without a mask could
- * never complete.
+ * `netifprobe second`, on a machine with two cards, takes the second card
+ * down and requires the first to keep serving, and checks that /proc/net/dev,
+ * SO_BINDTODEVICE, a TCP connection's addresses and the packet sockets each
+ * name the right interface.
  *
- * Prints "NETIFPROBE OK" and exits 0 on success. Freestanding; direct system
- * calls (probe.h).
+ * Prints "NETIFPROBE DOWN" and "NETIFPROBE UP", at each of which the suite
+ * sends a datagram from outside, and "NETIFPROBE OK" with exit 0 on success;
+ * a failure prints "NETIFPROBE FAIL: " with the reason and exits 1.
+ * Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
@@ -96,6 +99,7 @@ typedef unsigned char uint8_t;
 #define LOOP_PORT    7400
 #define INBOUND_PORT 9999
 
+/** write(2). */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
@@ -107,57 +111,68 @@ struct pollfd_probe {
     short revents;
 };
 
+/** read(2). */
 static int sys_read(int fd, void *buf, size_t count)
 {
     return syscall3(SYS_READ, (long)fd, (long)buf, (long)count);
 }
 
+/** poll(2), with `timeout` in milliseconds. */
 static int sys_poll(struct pollfd_probe *fds, unsigned int n, int timeout)
 {
     return syscall3(SYS_POLL, (long)fds, (long)n, (long)timeout);
 }
 
+/** open(2) with no mode. */
 static int sys_open(const char *path, int flags)
 {
     return syscall3(SYS_OPEN, (long)path, (long)flags, (long)0);
 }
 
+/** close(2). */
 static int sys_close(int fd)
 {
     return syscall1(SYS_CLOSE, (long)fd);
 }
 
+/** exit(2); does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** ioctl(2). */
 static int sys_ioctl(int fd, uint32_t request, void *arg)
 {
     return syscall3(SYS_IOCTL, (long)fd, (long)request, (long)arg);
 }
 
+/** The socket operation `call` on `args` (`sock_call`), as an int. */
 static int socketcall(int call, unsigned long *args)
 {
     return (int)sock_call(call, args);
 }
 
+/** fork(2). */
 static int sys_fork(void)
 {
     return syscall0(SYS_FORK);
 }
 
+/** setuid(2). */
 static int sys_setuid(int uid)
 {
     return syscall1(SYS_SETUID, (long)uid);
 }
 
+/** waitpid(2). */
 static int sys_waitpid(int pid, int *status, int options)
 {
     return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
+/** Write the string `s` to standard output. */
 static void say(const char *s)
 {
     size_t n = 0;
@@ -168,12 +183,13 @@ static void say(const char *s)
     sys_write(STDOUT_FILENO, s, n);
 }
 
-/*
- * Ping `ip`, retrying a few times.
+/**
+ * Ping `ip`, up to four times: the first answer's result, or the last
+ * failure's.
  *
- * The first echo after an ARP cache is emptied is dropped while the request
- * for the peer's hardware address is still in flight, so one attempt says
- * nothing about whether the machine can reach anything.
+ * The first echo after the ARP cache is emptied is dropped while the request
+ * for the peer's hardware address is in flight, so one attempt does not show
+ * whether the machine can reach anything.
  */
 static int ping_retry(uint32_t ip)
 {
@@ -190,6 +206,7 @@ static int ping_retry(uint32_t ip)
     return r;
 }
 
+/** Print "NETIFPROBE FAIL: `what` (`n`)" and exit 1. */
 static void fail_n(const char *what, int n)
 {
     char buf[12];
@@ -212,6 +229,7 @@ static void fail_n(const char *what, int n)
     sys_exit(1);
 }
 
+/** Print "NETIFPROBE FAIL: `what`" and exit 1. */
 static void fail(const char *what)
 {
     say("NETIFPROBE FAIL: ");
@@ -221,9 +239,9 @@ static void fail(const char *what)
 }
 
 /* struct ifreq: a 16-byte name, then a union whose largest member is a map
-   of longs and pointers. struct rtentry: a pad word of a long, three
-   sockaddrs, the flags, and a pointer to the interface's name. Their sizes and
-   the rtentry's offsets are Linux's for each architecture. */
+ * of longs and pointers. struct rtentry: a pad word of a long, three
+ * sockaddrs, the flags, and a pointer to the interface's name. Their sizes
+ * and the rtentry's offsets are Linux's for each architecture. */
 #if defined __x86_64__
 #define IFREQ_SIZE 40
 #define RT_SIZE    120
@@ -247,6 +265,8 @@ static const char other_dev[] = "eth9";
 static uint8_t sa_listen[16];
 static uint8_t sa_connect[16];
 
+/** Clear `ifr` and put the interface name `name` in it; a name longer than
+ * 15 bytes fails the probe. */
 static void set_name(const char *name)
 {
     int i;
@@ -267,12 +287,15 @@ static void set_name(const char *name)
     }
 }
 
+/** The IPv4 address of the sockaddr_in in `ifr`, in host order. */
 static uint32_t ifr_addr(void)
 {
     return ((uint32_t)ifr[20] << 24) | ((uint32_t)ifr[21] << 16) | ((uint32_t)ifr[22] << 8) |
            (uint32_t)ifr[23];
 }
 
+/** Put the address `ip`, in host order, as a sockaddr_in in `ifr` after the
+ * name `set_name` left there. */
 static void set_ifr_addr(uint32_t ip)
 {
     ifr[16] = AF_INET;
@@ -282,7 +305,8 @@ static void set_ifr_addr(uint32_t ip)
     ifr[23] = (uint8_t)ip;
 }
 
-/** A default route through `gw`, or a route to `dst`/`mask` with no gateway. */
+/** Fill `rt` with the route to `dst`/`mask` through `gw`, which is 0 for no
+ * gateway, and no interface. */
 static void set_route(uint32_t dst, uint32_t gw, uint32_t mask)
 {
     int i;
@@ -319,6 +343,8 @@ static void set_route_dev(const char *dev)
     }
 }
 
+/** Fill the 16-byte sockaddr_in `sa` with `ip` and `port`, both given in
+ * host order. */
 static void set_sockaddr(uint8_t *sa, uint32_t ip, uint16_t port)
 {
     int i;
@@ -335,11 +361,11 @@ static void set_sockaddr(uint8_t *sa, uint32_t ip, uint16_t port)
     sa[7] = (uint8_t)ip;
 }
 
-/*
- * Configure a machine that came up with nothing, in the order `ifconfig` does
- * it: an address, then a mask, then a route. Between the first two the machine
- * has an address with the classful mask its first byte implies, which is the
- * state a machine that refused to hold it could never get out of.
+/**
+ * Configure a machine that came up with no address through `fd`, in the
+ * order `ifconfig` uses: an address, then a mask, then a route, after which
+ * the gateway answers. Between the first two the machine has the address
+ * with the classful mask its first byte implies, so that a mask can follow.
  */
 static void configure_from_nothing(int fd)
 {
@@ -389,14 +415,12 @@ static int holds(const char *hay, const char *needle)
     return 0;
 }
 
-/*
- * `netifprobe second`: the files that report the network report both cards.
- *
- * `/proc/net/dev` is a line per interface and the counters on it are that
- * interface's own, so a machine with two cards whose file names one is a
- * machine counting the second card's traffic on the first. It is read here
- * rather than asserted from the boot log, which says what came up and not what
- * the file says afterwards.
+/**
+ * `netifprobe second`: /proc/net/dev, a line per interface with that
+ * interface's own counters, names both cards, eth0 and eth1. A file that
+ * named one would be counting the second card's traffic on the first. The
+ * file is read, since the boot log says what came up and not what the file
+ * says afterwards.
  */
 static void proc_names_both(void)
 {
@@ -436,7 +460,8 @@ struct sockaddr_ll_probe {
     uint8_t sll_addr[8];
 };
 
-/** Build the link-layer address for an ARP socket on one interface. */
+/** Fill `addr` for an ARP packet socket on the interface `index`, 0 for
+ * every interface. */
 static void set_packet_addr(struct sockaddr_ll_probe *addr, int index)
 {
     int i;
@@ -449,7 +474,10 @@ static void set_packet_addr(struct sockaddr_ll_probe *addr, int index)
     addr->sll_ifindex = index;
 }
 
-/** Check a packet socket's interface, protocol, MAC and returned length. */
+/** getsockname of the packet socket `fd` reports the whole sockaddr_ll, ARP,
+ * and the interface `index`; with an interface, Ethernet and that card's
+ * MAC, which `raw_fd` reads with SIOCGIFHWADDR, and with none, no hardware
+ * address. */
 static void packet_name(int fd, int index, int raw_fd)
 {
     unsigned long args[3];
@@ -482,7 +510,8 @@ static void packet_name(int fd, int index, int raw_fd)
     }
 }
 
-/** Check that SO_BINDTODEVICE preserves a name, a refusal and an unbind. */
+/** SO_BINDTODEVICE on `fd`: "eth1" is set and read back, "eth9" is ENODEV
+ * and leaves "eth1", and an empty name clears it. */
 static void device_option(int fd)
 {
     unsigned long args[5], len;
@@ -515,7 +544,8 @@ static void device_option(int fd)
     }
 }
 
-/** Refuse accept on datagrams and streams that have never listened. */
+/** accept on a stream socket that never listened, and on a datagram socket,
+ * is EINVAL. */
 static void invalid_accept(void)
 {
     unsigned long args[3];
@@ -539,7 +569,8 @@ static void invalid_accept(void)
     }
 }
 
-/** Require the second interface's address at both ends of a TCP connection. */
+/** A TCP connection to the second interface's address has that address,
+ * 10.0.3.5, at both ends, and accept on either connected end is EINVAL. */
 static void tcp_names(void)
 {
     unsigned long args[3], len;
@@ -600,21 +631,19 @@ static void tcp_names(void)
     sys_close(listener);
 }
 
-/*
- * `netifprobe second`: a packet socket is a socket on one interface.
+/**
+ * `netifprobe second`: a packet socket bound to an interface sends and
+ * receives on that interface alone.
  *
- * A machine with two cards is on two networks, and a client watching for a
- * lease on one of them must be given that one's frames and must send on that
- * one. So a socket is bound to the second interface and an ARP request for
- * that subnet's gateway is sent through it: the answer can only come back if
- * the frame left by the second card, since the first card's network has no
- * host at that address, and every datagram the socket is given must say it
- * arrived on the interface the socket is bound to.
- *
- * A second socket is bound to the first interface throughout, and nothing it
- * is given may claim to have arrived on the other one. Until the binding
- * carried an interface both sockets were handed every frame the machine
- * received, and both sent through the first card.
+ * A machine with two cards is on two networks, and a client waiting for a
+ * lease on one of them must be given that one's frames and send on that one.
+ * A socket is bound to the second interface and an ARP request for that
+ * subnet's gateway is sent through it: the answer can come back only if the
+ * frame left by the second card, since the first card's network has no host
+ * at that address, and every datagram the socket is given must say that it
+ * arrived on the second interface. A second socket, bound to the first
+ * interface, may be given nothing that arrived on the other. `raw_fd` is the
+ * descriptor for the interface ioctls.
  */
 static void packet_on_second(int raw_fd)
 {
@@ -660,8 +689,7 @@ static void packet_on_second(int raw_fd)
     packet_name(on_first, 1, raw_fd);
     packet_name(on_second, 2, raw_fd);
 
-    /* The request is built from the second card's own station address, since
-       a reply is addressed to the sender the request names. */
+    /* The reply goes to the sender the request names: the second card. */
     set_name("eth1");
     if (sys_ioctl(raw_fd, SIOCGIFHWADDR, ifr) != 0) {
         fail("the second interface would not report its station address");
@@ -743,7 +771,7 @@ static void packet_on_second(int raw_fd)
              "leave by it");
     }
 
-    /* And whatever the first interface's socket was given arrived there. */
+    /* What the first interface's socket was given arrived there. */
     for (tries = 0; tries < 8; tries++) {
         for (i = 0; i < (int)sizeof(from); i++) {
             ((uint8_t *)&from)[i] = 0;
@@ -769,11 +797,12 @@ static void packet_on_second(int raw_fd)
     sys_close(on_first);
 }
 
-/*
- * `netifprobe second`: with two cards, taking the second down leaves the
- * first serving. An interface an administrator takes down carries nothing
- * itself, and a machine whose other card kept working is what says the flag
- * belongs to the interface and not to the stack.
+/**
+ * `netifprobe second`: with two cards, each gateway answers through its own
+ * card, and taking the second card down leaves the first serving, which
+ * shows that the flag belongs to the interface and not to the stack. The
+ * second card comes back up, the other rows of the two-card machine run,
+ * and the probe exits with NETIFPROBE OK; it does not return.
  */
 static void second_down(void)
 {
@@ -788,9 +817,7 @@ static void second_down(void)
         fail("the raw descriptor the interface is asked through did not open");
     }
 
-    /* A neighbour on each subnet, reached through the interface that is on it.
-       Each answer is an address resolved on that interface and a datagram that
-       left by it, which is what two networks on one machine means. */
+    /* A neighbour on each subnet, reached through the card that is on it. */
     if (ping_retry(SLIRP_GW) < 0) {
         fail("the first interface's gateway did not answer");
     }
@@ -835,6 +862,8 @@ static void second_down(void)
 
 static void netif_main(void);
 
+/** The probe's entry, given the initial stack `sp`: `netifprobe second`
+ * runs `second_down`, and any other command line `netif_main`. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
@@ -848,20 +877,68 @@ void probe_main(unsigned long *sp)
 
 PROBE_SP_ENTRY;
 
+/**
+ * The interface ioctls on a machine with one card, in order; exits with
+ * NETIFPROBE OK, or fails the probe.
+ *
+ * The descriptor is the one BusyBox's `udhcp_read_interface` opens,
+ * AF_INET/SOCK_RAW/IPPROTO_RAW, on which a DHCP client makes only these
+ * ioctls; a raw socket for TCP is EPROTONOSUPPORT. The machine reports
+ * itself: eth0 is index 1 and index 1 is eth0, a name or index it lacks is
+ * ENODEV, and the card has an Ethernet address, 10.0.2.15/24 with the
+ * subnet's broadcast address, an MTU of 1500 and the flags IFF_RUNNING,
+ * IFF_MULTICAST and IFF_UP or IFF_BROADCAST. A machine booted with no
+ * address is configured from nothing (`configure_from_nothing`), and the
+ * probe ends there. The query descriptor refuses bind, connect, listen, read
+ * and write with EOPNOTSUPP, and a poll reports POLLERR at once rather than
+ * leaving a caller waiting.
+ *
+ * A TCP connection to the machine itself is open across the change of
+ * address, so both its ends recorded the old one. A process that is not root
+ * may not set the address (EPERM). After the change a write to one end and a
+ * read of the other are ENETRESET: each end has the reason once and its first
+ * reader takes it, as SO_ERROR does on Linux, so SO_ERROR then reads 0. The
+ * listener survives, since it answers whatever address the machine has, and
+ * accepts a connection to the new address. The same address and mask set
+ * again, as a DHCP client sets them at every renewal, reset nothing. An
+ * address in another class takes that class's mask, and that later change
+ * does not arm the old connection's reset again.
+ *
+ * Down is down in both directions: with the interface down the gateway does
+ * not answer a ping, and the datagram the suite sends at "NETIFPROBE DOWN"
+ * does not arrive. With the interface up again the datagram the suite sends
+ * at "NETIFPROBE UP" arrives, which shows that the suite sends one. The
+ * second connection, open across that change of address, reads ENETRESET
+ * without blocking.
+ *
+ * Addresses in 0/8, in 240/4 and of multicast are EINVAL. A default route
+ * sets the gateway, a gateway off the subnet is ENETUNREACH as on Linux, and
+ * another route goes into the table and out again. A default route with no
+ * gateway is EINVAL and does not remove the gateway the machine has. A route
+ * for an interface the machine lacks is ENODEV. The route to the machine's
+ * own subnet may be added, since it holds, but not removed (EOPNOTSUPP),
+ * since the stack cannot isolate that traffic. The default route is removed
+ * once, and a second removal is ESRCH, which ends the loop in which a DHCP
+ * client's script removes old default routes.
+ *
+ * An address that is a network address under its classful mask and a host
+ * under a wider one, 192.168.1.0, is accepted and not put in force until the
+ * wider mask makes it a host; a mask under which it is a network address is
+ * EINVAL, and one refused while the classful mask still stands leaves the
+ * machine with no address. Last, the machine's address, mask and route are
+ * put back, and the gateway answers once ARP has learned it again.
+ */
 static void netif_main(void)
 {
     unsigned long args[6];
     int fd, listener, client, conn, client2, conn2, pid, status;
     int inbound, tries, got_inbound, r;
-    /* Written by the kernel through a pointer, which is why it is volatile: a
-       reader of this file alone sees only the assignment before the call. */
+    /* The kernel writes it through the pointer getsockopt is given. */
     volatile int err;
     struct pollfd_probe pfd;
     uint32_t optlen;
 
-    /* The descriptor a DHCP client asks through is a raw one: busybox's
-       `udhcp_read_interface` opens AF_INET/SOCK_RAW/IPPROTO_RAW and does
-       nothing with it but these ioctls. So that is what this uses. */
+    /* The descriptor BusyBox's `udhcp_read_interface` makes its ioctls on. */
     args[0] = AF_INET;
     args[1] = SOCK_RAW;
     args[2] = IPPROTO_RAW;
@@ -885,7 +962,7 @@ static void netif_main(void)
     if (sys_ioctl(fd, SIOCGIFINDEX, ifr) != -ENODEV) {
         fail("an interface this machine does not have was not refused");
     }
-    /* And the request that runs the other way: an index in, a name out. */
+    /* An index in, a name out. */
     set_name("");
     ifr[16] = 1;
     if (sys_ioctl(fd, SIOCGIFNAME, ifr) != 0) {
@@ -911,9 +988,7 @@ static void netif_main(void)
         ifr[23] == 0) {
         fail("the hardware address is all zeros");
     }
-    /* A machine booted with `rach2.ip=none` has no address, and configuring it
-       from nothing is the sequence a DHCP client runs. It is a different boot,
-       so it is a different half of this probe. */
+    /* A machine booted with `rach2.ip=none` has no address. */
     set_name("eth0");
     if (sys_ioctl(fd, SIOCGIFADDR, ifr) != 0) {
         fail("the address did not read back");
@@ -947,8 +1022,7 @@ static void netif_main(void)
         fail("an interface that is up and running did not say so");
     }
 
-    /* The query descriptor has ioctls and refuses everything else, rather
-       than answering with a silence a caller would wait in. */
+    /* The query descriptor refuses everything but its ioctls. */
     args[0] = (uint32_t)fd;
     args[1] = (unsigned long)sa_listen;
     args[2] = 16;
@@ -975,8 +1049,7 @@ static void netif_main(void)
         fail("a poll of the query descriptor did not report at once that it is neither");
     }
 
-    /* A connection open across the change. It is to this machine itself, so
-       both ends are here and both recorded the address being changed. */
+    /* A connection to this machine itself, open across the change. */
     args[0] = AF_INET;
     args[1] = SOCK_STREAM;
     args[2] = 0;
@@ -1058,12 +1131,7 @@ static void netif_main(void)
         fail("the address that was set did not read back");
     }
 
-    /* The connection opened from the old address must be gone, and every way of
-       finding that out must say why. A bare failure reads as a permission error
-       in the C library, which is not what happened to a program whose machine
-       changed address under it. Each end has the reason once, and the first
-       reader takes it, as `SO_ERROR` does on Linux, so each check below uses an
-       end whose reason nothing has taken yet. */
+    /* The connection is aborted, and each end reports ENETRESET once. */
     if (sys_write(conn, ifr, 1) != -ENETRESET) {
         fail("a write to the aborted connection did not report why it ended");
     }
@@ -1084,9 +1152,7 @@ static void netif_main(void)
         fail("the reason was reported twice, so nothing took it");
     }
 
-    /* And the listener must have survived it. A listener is not a connection:
-       it answers whatever address this machine has, so a server started before
-       a lease arrived must still be accepting after it. */
+    /* The listener survives and accepts at the new address. */
     args[0] = AF_INET;
     args[1] = SOCK_STREAM;
     args[2] = 0;
@@ -1109,10 +1175,7 @@ static void netif_main(void)
         fail("the listener did not accept after the address changed");
     }
 
-    /* And reapplying the pair the machine already has must not disturb the
-       connection: a DHCP client runs the same `ifconfig` on every renewal, and
-       a machine that reset its sessions each time would drop them at the lease
-       interval. The connection accepted a moment ago is the witness. */
+    /* The same address and mask set again reset nothing. */
     set_name("eth0");
     set_ifr_addr(OTHER_IP);
     if (sys_ioctl(fd, SIOCSIFADDR, ifr) != 0) {
@@ -1137,8 +1200,7 @@ static void netif_main(void)
         fail("reapplying the same address reset a connection");
     }
 
-    /* An address ioctl brings its own mask. Moving from a class C address to a
-       class B one must leave a class B mask, not the /24 that was there. */
+    /* An address in another class takes that class's mask. */
     set_name("eth0");
     set_ifr_addr(0xAC100102UL); /* 172.16.1.2 */
     if (sys_ioctl(fd, SIOCSIFADDR, ifr) != 0) {
@@ -1149,9 +1211,7 @@ static void netif_main(void)
         fail("an address in another class kept the mask of the one before it");
     }
 
-    /* That was a second address change with the first connection's descriptor
-       still open. Its reason was taken already, and a change that aborts
-       nothing must not put another one there. */
+    /* That change does not arm the old connection's reset again. */
     args[0] = (uint32_t)conn;
     args[1] = SOL_SOCKET;
     args[2] = SO_ERROR;
@@ -1176,9 +1236,7 @@ static void netif_main(void)
         fail("the mask did not come back");
     }
 
-    /* Down means down in both directions. The gateway answers a ping while the
-       interface is up, and must not while it is down: a machine whose sockets
-       saw traffic it could not answer would be worse than one that is quiet. */
+    /* Down is down: no ping answered and no datagram received. */
     set_name("eth0");
     set_ifr_addr(SLIRP_IP);
     if (sys_ioctl(fd, SIOCSIFADDR, ifr) != 0) {
@@ -1192,10 +1250,7 @@ static void netif_main(void)
     if (ping_retry(SLIRP_GW) < 0) {
         fail("the gateway did not answer while the interface was up");
     }
-    /* A socket for what the harness will send from outside. Down must mean the
-       machine does not receive either, and the only way to prove that is to
-       have something else put a datagram on the wire: the harness sends one
-       through a host forward when it sees the token below. */
+    /* The socket for the datagrams the suite sends from outside. */
     args[0] = AF_INET;
     args[1] = SOCK_DGRAM;
     args[2] = 0;
@@ -1226,8 +1281,7 @@ static void netif_main(void)
         fail("the gateway answered a machine whose interface was down");
     }
 
-    /* Now the other direction. The token asks the harness for a datagram, and
-       nothing must arrive while the interface is down. */
+    /* At the token the suite sends a datagram, which may not arrive. */
     say("NETIFPROBE DOWN\n");
     for (tries = 0; tries < 60; tries++) {
         pfd.fd = inbound;
@@ -1248,10 +1302,7 @@ static void netif_main(void)
         fail_n("the gateway did not answer after the interface came back up", r);
     }
 
-    /* And with the interface up the same datagram must arrive, or the case
-       above proved only that the harness never sent one. */
-    /* The second connection was open across this address change too, so the
-       nonblocking read path can be held to the same contract on it. */
+    /* The second connection, open across this change, read without blocking. */
     args[0] = (uint32_t)conn2;
     args[1] = (unsigned long)ifr;
     args[2] = 1;
@@ -1260,6 +1311,7 @@ static void netif_main(void)
         fail("a nonblocking read of the aborted connection did not report why it ended");
     }
 
+    /* With the interface up, the datagram the suite sends arrives. */
     say("NETIFPROBE UP\n");
     got_inbound = 0;
     for (tries = 0; tries < 200 && !got_inbound; tries++) {
@@ -1303,10 +1355,7 @@ static void netif_main(void)
         fail("a multicast address was taken");
     }
 
-    /* Routes. A default route sets the gateway; one off the subnet is not a
-     * gateway, and is ENETUNREACH as on Linux; any other route goes in the
-     * table, and comes out of it again.
-     */
+    /* Routes: the default, a gateway off the subnet, another network. */
     set_route(0, OTHER_GW, 0);
     if (sys_ioctl(fd, SIOCADDRT, rt) != 0) {
         fail("a default route was not taken");
@@ -1323,9 +1372,7 @@ static void netif_main(void)
     if (sys_ioctl(fd, SIOCDELRT, rt) != 0) {
         fail("a route to another network was not removed");
     }
-    /* A default route with no gateway is one this stack cannot hold, and it
-       must not be taken as an instruction to remove the one it has: a machine
-       across the room is reached through that gateway. */
+    /* A default route with no gateway is refused and removes nothing. */
     set_route(0, OTHER_GW, 0);
     if (sys_ioctl(fd, SIOCADDRT, rt) != 0) {
         fail("the default route did not go back for the next case");
@@ -1343,8 +1390,7 @@ static void netif_main(void)
         fail("the default route did not go back for the removal cases");
     }
 
-    /* A route names a device, and one this machine does not have must not
-       change the route of the one it does. */
+    /* A route for an interface this machine does not have. */
     set_route(0, SLIRP_GW, 0);
     set_route_dev(other_dev);
     if (sys_ioctl(fd, SIOCADDRT, rt) != -ENODEV) {
@@ -1356,10 +1402,7 @@ static void netif_main(void)
         fail("a removal for an interface this machine does not have was taken");
     }
 
-    /* The subnet this machine is on is reachable by being on it, so adding that
-       route is asking for what is true; removing it is not something this stack
-       can do, and saying it did would be telling an administrator that traffic
-       was isolated when it was not. */
+    /* The route to the machine's own subnet: added, and not removed. */
     set_route(OTHER_IP & OTHER_MASK, 0, OTHER_MASK);
     if (sys_ioctl(fd, SIOCADDRT, rt) != 0) {
         fail("the route to this machine's own subnet was refused");
@@ -1372,16 +1415,12 @@ static void netif_main(void)
     if (sys_ioctl(fd, SIOCDELRT, rt) != 0) {
         fail("the default route was not removed");
     }
-    /* And removing it again must fail. A DHCP client's script removes old
-       default routes in a loop that ends when the removal does, so a removal
-       that always succeeds is a machine that never gets past it. */
+    /* A second removal is ESRCH, which ends a DHCP script's loop. */
     if (sys_ioctl(fd, SIOCDELRT, rt) != -ESRCH) {
         fail("removing a route that is not there succeeded");
     }
 
-    /* A lease whose address is a network or broadcast address under the
-       classful mask but an ordinary host under the mask it comes with. The
-       address ioctl must take it and let the mask that follows settle it. */
+    /* 192.168.1.0: a network address until a wider mask makes it a host. */
     set_name("eth0");
     set_ifr_addr(0xC0A80100UL); /* 192.168.1.0 */
     if (sys_ioctl(fd, SIOCSIFADDR, ifr) != 0) {
@@ -1406,9 +1445,7 @@ static void netif_main(void)
         fail("a mask that would make this address a network address was taken");
     }
 
-    /* And a mask refused while the classful one is still standing in leaves the
-       machine unconfigured instead of answering for a network address that
-       nothing judged. */
+    /* A mask refused under the classful one leaves no address. */
     set_name("eth0");
     set_ifr_addr(0);
     if (sys_ioctl(fd, SIOCSIFADDR, ifr) != 0) {
@@ -1429,9 +1466,7 @@ static void netif_main(void)
         fail("a refused mask left the machine on a pair nobody judged");
     }
 
-    /* Put the machine back where it was, and prove it still works: the ARP
-     * cache was emptied by the change, so this exchange had to learn it again.
-     */
+    /* The machine as it booted, its ARP cache emptied by the changes. */
     set_name("eth0");
     set_ifr_addr(SLIRP_IP);
     if (sys_ioctl(fd, SIOCSIFADDR, ifr) != 0) {

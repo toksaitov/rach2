@@ -1,27 +1,37 @@
 /**
- * Exercises the raw ICMP socket, which is what `ping` and `traceroute` are.
+ * rawprobe: the raw ICMP socket, on which `ping` and `traceroute` are built.
  *
- * A raw socket receives whole IPv4 datagrams of one protocol, header included,
- * and sends a message the caller built with the header supplied for it. What
- * is checked here is the part a working ping would not notice:
+ * A raw socket receives whole IPv4 datagrams of one protocol, header
+ * included, and sends a message the caller built, with the header supplied
+ * for it. The rows check what a working ping would not notice:
  *
- * * an ordinary user is refused one, and a protocol this stack has no path
- *   for is refused too;
- * * a datagram reaches EVERY raw socket, byte for byte the same, and the
- *   kernel's own ICMP still answers: an implementation that handed each
- *   datagram to one socket would pass a test with a single ping in it;
- * * `IP_TTL` is real, which is the whole of what traceroute does to a socket,
- *   and the time-exceeded message a hop limit of one provokes arrives on both
- *   sockets as well;
+ * * an ordinary user is refused one (EPERM), and a protocol with no path
+ *   through this stack is refused too (EPROTONOSUPPORT);
+ * * a datagram reaches every raw socket, byte for byte the same, and the
+ *   kernel's own ICMP still answers: a kernel that handed each datagram to
+ *   one socket would pass a test with a single ping in it;
+ * * `IP_TTL`, the one option traceroute sets, is kept and read back, and the
+ *   time-exceeded message a hop limit of one draws arrives on both sockets;
  * * `IP_HDRINCL` is refused rather than accepted and ignored;
  * * a message past the MTU is refused, and one for an address whose hardware
  *   address is not known yet is accepted, since the request has gone and a
  *   datagram promises no delivery;
- * * the queue is eight deep and the ninth datagram is dropped, not the first.
+ * * the queue is eight deep, and the ninth datagram is dropped, not the first;
+ * * eight more raw sockets open at once, and while two children hold full
+ *   descriptor tables of sockets a socket still opens and the first raw
+ *   socket still receives.
  *
- * Runs on the test image with QEMU's user network: 10.0.2.2 is the gateway and
- * answers, and 10.0.2.3 is the name server. Prints "RAWPROBE OK" and exits 0.
- * Freestanding; direct system calls (probe.h).
+ * For the suite's capture checker (`pcapcheck rawwire`) it also sends raw
+ * datagrams with hop limits 1 to 3, datagram sends with 4 to 6, and a message
+ * with a wrong checksum, which must cross the wire as written. Booted with an
+ * address and no gateway, it checks only that a raw send and a datagram send
+ * off the subnet are ENETUNREACH.
+ *
+ * Runs on the test image with QEMU's user network, where 10.0.2.2 is the
+ * gateway and answers. Prints "RAWPROBE START", then "  FAIL: " and the row
+ * for each failure, then "RAWPROBE OK" and exits 0, or "RAWPROBE FAIL" and
+ * exits with the count of failures. Freestanding; direct system calls
+ * (probe.h).
  */
 
 #include "probe.h"
@@ -71,15 +81,18 @@ struct pollfd_probe {
     short revents;
 };
 
+/** exit(2); does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
+/** close(2). */
 static int sys_close(int fd)
 {
     return syscall1(SYS_CLOSE, fd);
 }
+/** The socket operation `call` on `args` (`sock_call`), as an int. */
 static int socketcall(int call, unsigned long *args)
 {
     return (int)sock_call(call, args);
@@ -89,10 +102,12 @@ static int sys_pipe(int *fds)
 {
     return syscall1(SYS_PIPE, (long)fds);
 }
+/** poll(2), with `timeout` in milliseconds. */
 static int sys_poll(struct pollfd_probe *fds, unsigned int n, int timeout)
 {
     return syscall3(SYS_POLL, (long)fds, (int)n, timeout);
 }
+/** Sleep for `ms` milliseconds (nanosleep(2)). */
 static void nap_ms(int ms)
 {
     long ts[2];
@@ -102,6 +117,7 @@ static void nap_ms(int ms)
     syscall3(SYS_NANOSLEEP, (long)ts, 0, 0);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -110,10 +126,12 @@ static size_t strlen(const char *s)
     }
     return n;
 }
+/** Write the string `s` to standard output. */
 static void say(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
 }
+/** Write `v` in decimal to standard output. */
 static void say_int(int v)
 {
     char b[16];
@@ -137,8 +155,10 @@ static void say_int(int v)
     say(b + i);
 }
 
+/* The rows that have failed, which is the exit status. */
 static int fails = 0;
 
+/** Unless `cond`, count a failed row and print "  FAIL: `msg`". */
 static void check(int cond, const char *msg)
 {
     if (!cond) {
@@ -149,6 +169,7 @@ static void check(int cond, const char *msg)
     }
 }
 
+/** The same, with the value `n` the row got. */
 static void check_n(int cond, const char *msg, int n)
 {
     if (!cond) {
@@ -179,7 +200,8 @@ static uint16_t icmp_checksum(const uint8_t *buf, int len)
     return (uint16_t)(~sum & 0xffffu);
 }
 
-/** Fill `sa` with a sockaddr_in for `ip`, port 0 (a raw socket has none). */
+/** Fill the 16-byte sockaddr_in `out` with `ip` and `port`, both in host
+ * order; a raw socket's port is 0. */
 static void sockaddr_for(uint8_t *out, uint32_t ip, uint16_t port)
 {
     int i;
@@ -196,7 +218,8 @@ static void sockaddr_for(uint8_t *out, uint32_t ip, uint16_t port)
     out[7] = (uint8_t)(ip & 0xff);
 }
 
-/** Open a raw ICMP socket, or return the negative errno. */
+/** Open a raw ICMP socket, with `args` as the call's scratch space: the
+ * descriptor, or the negative errno. */
 static int raw_socket(unsigned long *args)
 {
     args[0] = AF_INET;
@@ -282,14 +305,16 @@ static int contains(const char *hay, int len, const char *needle)
     return 0;
 }
 
+/* The boot line, read from /proc/cmdline. */
 static char cmdline[512];
 
 /**
- * Whether this boot was given an address and no gateway.
+ * Whether this boot was given an address and no gateway: the boot line has
+ * `rach2.ip=` and no `rach2.gateway=`.
  *
- * The same probe runs in both boots and the boot line says which: with no
- * route off the subnet, what can be checked is that the machine says so, and
- * the gateway's answers cannot be waited for.
+ * The suite boots the probe both ways. With no route off the subnet the
+ * probe checks that the machine says so, and cannot wait for the gateway's
+ * answers.
  */
 static int booted_without_a_route(void)
 {
@@ -388,9 +413,7 @@ static void socket_pressure(unsigned long *args, int fd_a)
         sys_close(n);
     }
 
-    /* And the descriptor this process already had still works, which is
-       the property that matters: a machine whose tables are full must
-       not drop the session someone is already using. */
+    /* The raw socket this process opened before still receives. */
     args[0] = GATEWAY_IP;
     n = socketcall(SC_PING, args);
     check_n(n >= 0, "the machine can still reach the gateway", n);
@@ -415,6 +438,13 @@ static void socket_pressure(unsigned long *args, int fd_a)
     }
 }
 
+/**
+ * The probe's entry: the rows in the order of the list above, then the
+ * socket pressure. The queue row closes the second raw socket, so that one
+ * socket counts the replies, and first takes what the earlier rows left
+ * queued; the replies to the sends for the capture checker are taken and
+ * not read.
+ */
 PROBE_START void _start(void)
 {
     unsigned long args[6];
@@ -423,8 +453,7 @@ PROBE_START void _start(void)
 
     say("RAWPROBE START\n");
 
-    /* Whose socket it is. It reads every ICMP datagram the machine receives
-       and sends datagrams no transport layer checked, so it is root's. */
+    /* A raw socket is root's, since it reads every ICMP datagram. */
     pid = syscall1(SYS_FORK, 0);
     if (pid == 0) {
         if (syscall1(SYS_SETUID, 1000) != 0) {
@@ -438,18 +467,14 @@ PROBE_START void _start(void)
     check((status & 0x7f) == 0, "the unprivileged case did not die on a signal");
     check(((status >> 8) & 0xff) == 0, "an ordinary user was refused a raw socket");
 
-    /* And what it is for. A protocol with no path through this stack is
-       refused rather than opened as a socket that can never receive. */
+    /* A protocol with no path through this stack is refused. */
     args[0] = AF_INET;
     args[1] = SOCK_RAW;
     args[2] = IPPROTO_TCP;
     check(socketcall(SC_SOCKET, args) == -EPROTONOSUPPORT,
           "a raw socket for a protocol with no path here was refused");
 
-    /* With an address and no gateway there is no route off the subnet, and
-       that is what this boot is for: the machine must say so rather than send
-       the datagram at nobody. Nothing else here can run, since everything else
-       waits for an answer from a gateway that is not configured. */
+    /* An address and no gateway: no route off the subnet, and no more rows. */
     if (booted_without_a_route()) {
         int fd_r, udp_fd;
 
@@ -501,13 +526,9 @@ PROBE_START void _start(void)
         sys_exit(1);
     }
 
-    /* One datagram, two sockets, and the kernel's own path as well. The ping
-       is the kernel's: it succeeds only if `icmp_rx` saw the reply too, so a
-       delivery that consumed the datagram on the way to the sockets would
-       fail here rather than pass quietly. */
+    /* One echo reply reaches both sockets and the kernel's own ping. */
     args[0] = GATEWAY_IP;
-    /* The ping answers its round-trip time in ticks: zero within one tick,
-       more on a slow host, and negative for a failure. */
+    /* The ping's result is its round-trip time in ticks, or a negated errno. */
     n = socketcall(SC_PING, args);
     check_n(n >= 0, "the kernel's own ping reached the gateway", n);
 
@@ -532,10 +553,7 @@ PROBE_START void _start(void)
               "from the address that answered");
     }
 
-    /* The hop limit, which is the whole of what traceroute does to a socket.
-       A datagram sent with one is dropped by the first router, which answers
-       with a time-exceeded message: it arrives on both sockets too, which is
-       the fan-out proved a second time on a message of another kind. */
+    /* A hop limit of one: the first router's time-exceeded reaches both. */
     {
         int udp_fd;
 
@@ -553,8 +571,7 @@ PROBE_START void _start(void)
         args[4] = sizeof(int);
         check(socketcall(SC_SETSOCKOPT, args) == 0, "IP_TTL is accepted");
 
-        /* Written by the kernel through a pointer, which is why it is
-           volatile: a reader of this file alone sees only the assignment. */
+        /* The kernel writes it through the pointer getsockopt is given. */
         got_ttl = 0;
         n = (int)sizeof(int);
         args[0] = (uint32_t)udp_fd;
@@ -581,9 +598,7 @@ PROBE_START void _start(void)
         sys_close(udp_fd);
     }
 
-    /* What a raw socket refuses. The header option is not implemented, so it
-       is refused rather than accepted and ignored, which would send a
-       datagram whose header the caller believes it wrote. */
+    /* IP_HDRINCL is refused, not accepted and ignored. */
     val = 1;
     args[0] = (uint32_t)fd_a;
     args[1] = SOL_IP;
@@ -592,8 +607,7 @@ PROBE_START void _start(void)
     args[4] = sizeof(int);
     check(socketcall(SC_SETSOCKOPT, args) == -ENOPROTOOPT, "IP_HDRINCL is refused");
 
-    /* A message past the MTU is refused here, not dropped further down where
-       this call would have reported it sent. */
+    /* A message past the MTU is refused by the send itself. */
     sockaddr_for(sa, GATEWAY_IP, 0);
     args[0] = (uint32_t)fd_a;
     args[1] = (unsigned long)icmp;
@@ -603,9 +617,7 @@ PROBE_START void _start(void)
     args[5] = 16;
     check(socketcall(SC_SENDTO, args) == -EMSGSIZE, "a message past the MTU is refused");
 
-    /* And an address whose hardware address is not known yet is accepted: the
-       request has gone out, this datagram is dropped, and a datagram send
-       promises no delivery. It is the permanent conditions that are errors. */
+    /* A send to a neighbour whose address is not resolved is accepted. */
     for (i = 0; i < 8; i++) {
         icmp[i] = 0;
     }
@@ -628,16 +640,13 @@ PROBE_START void _start(void)
     args[5] = 16;
     check(socketcall(SC_SENDTO, args) == 8, "a send to an unresolved neighbour is not an error");
 
-    /* The queue is eight deep. Nine requests are sent and nine replies come
-       back; the first eight are there in the order they arrived and the ninth
-       is gone, which is the rule: what a client has not read yet is what it
-       keeps. */
+    /* Nine replies to a queue eight deep: the first eight are kept. */
     {
         int got = 0;
 
-        sys_close(fd_b); /* one socket for this, so the count is unambiguous */
+        sys_close(fd_b);
         while (raw_take(args, fd_a, frame_a, (int)sizeof(frame_a)) > 0) {
-            ; /* drain what the tests above left */
+            ;
         }
         for (i = 0; i < 9; i++) {
             uint16_t csum;
@@ -674,12 +683,7 @@ PROBE_START void _start(void)
         check_n(got == 8, "a queue eight deep keeps eight and no more", got);
     }
 
-    /* What leaves the machine, for a capture to read: three raw sends with
-       hop limits 1, 2 and 3, three datagram sends with 4, 5 and 6, and one
-       message whose checksum is deliberately wrong. A stack that ignored
-       IP_TTL would send six frames with the same limit, and one that
-       recomputed the checksum would repair the wrong one; neither is visible
-       from inside the machine, which is why this half is read off the wire. */
+    /* For the capture checker: hop limits 1 to 6 and a wrong checksum. */
     {
         int udp_fd, ttl;
 
@@ -759,7 +763,7 @@ PROBE_START void _start(void)
         }
         sys_close(udp_fd);
         while (raw_take(args, fd_a, frame_a, (int)sizeof(frame_a)) > 0) {
-            ; /* the answers to all of that are not this test's business */
+            ;
         }
         val = 64;
         args[0] = (uint32_t)fd_a;
@@ -770,9 +774,7 @@ PROBE_START void _start(void)
         socketcall(SC_SETSOCKOPT, args);
     }
 
-    /* A registration is a record from the heap with its queue: eight raw
-       sockets beside `fd_a`, twice the four the table once held, all open
-       at once, and each closed again. */
+    /* Eight more raw sockets open at once beside `fd_a`, each from the heap. */
     {
         int held[8];
 

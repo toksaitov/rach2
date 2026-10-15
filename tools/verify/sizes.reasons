@@ -287,7 +287,7 @@ tests/credprobe.c:child_main complexity 46 a probe, one sequence of steps in the
 tests/credprobe.c:child_main lines 112 a probe, one sequence of steps in the order the log records them
 
 tests/dgramprobe.c:_start complexity 79 a probe, one sequence of steps in the order the log records them
-tests/dgramprobe.c:_start lines 528 a probe, one sequence of steps in the order the log records them
+tests/dgramprobe.c:_start lines 505 a probe, one sequence of steps in the order the log records them
 
 tests/dirprobe.c:_start complexity 61 a probe, one sequence of steps in the order the log records them
 tests/dirprobe.c:_start lines 288 a probe, one sequence of steps in the order the log records them
@@ -527,11 +527,9 @@ tests/loadprobe.c:probe_main nesting 5 a probe, one sequence of steps in the ord
 tests/loopdevprobe.c:probe_main complexity 110 a probe, one sequence of steps in the order the log records them
 tests/loopdevprobe.c:probe_main lines 469 a probe, one sequence of steps in the order the log records them
 
-tests/loopprobe.c:tcp_loop_bulk lines 108 a probe, one sequence of steps in the order the log records them
 tests/loopprobe.c:tcp_ports complexity 27 a probe, one sequence of steps in the order the log records them
-tests/loopprobe.c:tcp_ports lines 183 a probe, one sequence of steps in the order the log records them
-tests/loopprobe.c:tcp_simultaneous lines 106 a probe, one sequence of steps in the order the log records them
-tests/loopprobe.c:udp_loop lines 114 a probe, one sequence of steps in the order the log records them
+tests/loopprobe.c:tcp_ports lines 169 a probe, one sequence of steps in the order the log records them
+tests/loopprobe.c:udp_loop lines 108 a probe, one sequence of steps in the order the log records them
 
 tests/lstest.c:_start lines 147 a probe, one sequence of steps in the order the log records them
 
@@ -637,8 +635,8 @@ tests/musl/waitidmusl.c:selections complexity 29 a test's rows, each a case, rea
 tests/mvtest.c:_start lines 189 a probe, one sequence of steps in the order the log records them
 
 tests/netifprobe.c:netif_main complexity 132 a probe, one sequence of steps in the order the log records them
-tests/netifprobe.c:netif_main lines 614 a probe, one sequence of steps in the order the log records them
-tests/netifprobe.c:packet_on_second lines 160 a probe, one sequence of steps in the order the log records them
+tests/netifprobe.c:netif_main lines 563 a probe, one sequence of steps in the order the log records them
+tests/netifprobe.c:packet_on_second lines 148 a probe, one sequence of steps in the order the log records them
 
 tests/ownprobe.c:child_main complexity 41 a probe, one sequence of steps in the order the log records them
 tests/ownprobe.c:child_main lines 134 a probe, one sequence of steps in the order the log records them
@@ -650,7 +648,7 @@ tests/partsprobe.c:probe_main complexity 46 a probe, one sequence of steps in th
 tests/partsprobe.c:probe_main lines 116 a probe, one sequence of steps in the order the log records them
 
 tests/pingtest.c:_start complexity 31 a probe, one sequence of steps in the order the log records them
-tests/pingtest.c:_start lines 179 a probe, one sequence of steps in the order the log records them
+tests/pingtest.c:_start lines 154 a probe, one sequence of steps in the order the log records them
 tests/pingtest.c:_start nesting 5 a probe, one sequence of steps in the order the log records them
 
 tests/pipeprobe.c:_start complexity 50 a probe, one sequence of steps in the order the log records them
@@ -664,7 +662,7 @@ tests/ptyprobe.c:_start complexity 39 a probe, one sequence of steps in the orde
 tests/ptyprobe.c:_start lines 171 a probe, one sequence of steps in the order the log records them
 
 tests/rawprobe.c:_start complexity 44 a probe, one sequence of steps in the order the log records them
-tests/rawprobe.c:_start lines 443 a probe, one sequence of steps in the order the log records them
+tests/rawprobe.c:_start lines 352 a probe, one sequence of steps in the order the log records them
 
 tests/rmtest.c:_start lines 148 a probe, one sequence of steps in the order the log records them
 

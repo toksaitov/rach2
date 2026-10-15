@@ -1,19 +1,29 @@
 /**
- * Exercises what a DHCP client needs of an ordinary datagram socket: a peer it
- * can be connected to, and permission to broadcast.
+ * dgramprobe: what a DHCP client needs of an ordinary datagram socket, a peer
+ * it can be connected to and permission to broadcast.
  *
  * A client renews its lease by talking to the server it already has, which is
- * `connect` and `write` on a UDP socket, and it asks for a lease in the first
- * place by broadcasting, which is `SO_BROADCAST`. Both were refused before.
- * What a connected socket hears is as much the point as what it sends: a
- * client connected to its server must not be answered by whoever else is on
- * the wire.
+ * `connect` and `write` on a UDP socket, and asks for a lease in the first
+ * place by broadcasting, which is `SO_BROADCAST`. What a connected socket
+ * hears matters as much as what it sends: a client connected to its server
+ * is not answered by whoever else is on the wire.
  *
- * The peer here is the machine itself over loopback, so both ends of every
- * exchange are in this one process and nothing outside is needed.
+ * The rows, in order: a socket with no peer refuses a write (EDESTADDRREQ);
+ * connected, it writes to its peer and hears its peer alone, neither a third
+ * socket on this machine nor the datagram the suite sends from outside at
+ * "DGRAMPROBE OUTSIDE"; a connect on a descriptor that is not a socket is
+ * ENOTSOCK; AF_UNSPEC disconnects a datagram socket and is EAFNOSUPPORT for a
+ * stream; a packet socket cannot be connected; two sockets share a port only
+ * when both set SO_REUSEADDR, and the reply goes to the one connected to the
+ * sender; a port below 1024 is root's; a broadcast is EACCES until
+ * SO_BROADCAST is set; the options read back; and SO_BINDTODEVICE takes the
+ * machine's interface, by name or as the whole `struct ifreq` BusyBox sends,
+ * and no other.
  *
- * Prints "DGRAMPROBE OK" and exits 0 on success. Freestanding; direct system
- * calls (probe.h).
+ * The peer is the machine itself at its own address, so both ends of the
+ * exchanges are in this process. Prints "DGRAMPROBE OK" and exits 0 on
+ * success; a failure prints "DGRAMPROBE FAIL: " with the reason and exits 1.
+ * Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
@@ -56,27 +66,32 @@ typedef unsigned char uint8_t;
 #define OUTSIDE_PORT 7502
 #define RENEW_PORT   7503
 
+/** write(2). */
 static int sys_write(int fd, const void *data, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)data, (long)count);
 }
 
+/** read(2). */
 static int sys_read(int fd, void *data, size_t count)
 {
     return syscall3(SYS_READ, (long)fd, (long)data, (long)count);
 }
 
+/** close(2). */
 static int sys_close(int fd)
 {
     return syscall1(SYS_CLOSE, (long)fd);
 }
 
+/** exit(2); does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** The socket operation `call` on `args` (`sock_call`), as an int. */
 static int socketcall(int call, unsigned long *args)
 {
     return (int)sock_call(call, args);
@@ -87,6 +102,7 @@ struct timespec_probe {
     long tv_nsec;
 };
 
+/** Sleep for `ms` milliseconds (nanosleep(2)). */
 static void nap(long ms)
 {
     struct timespec_probe ts;
@@ -96,21 +112,25 @@ static void nap(long ms)
     (void)syscall2(SYS_NANOSLEEP, (long)(&ts), (long)0);
 }
 
+/** fork(2). */
 static int sys_fork(void)
 {
     return syscall0(SYS_FORK);
 }
 
+/** setuid(2). */
 static int sys_setuid(int uid)
 {
     return syscall1(SYS_SETUID, (long)uid);
 }
 
+/** waitpid(2). */
 static int sys_waitpid(int pid, int *status, int options)
 {
     return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
+/** Write the string `s` to standard output. */
 static void say(const char *s)
 {
     size_t n = 0;
@@ -121,6 +141,7 @@ static void say(const char *s)
     sys_write(STDOUT_FILENO, s, n);
 }
 
+/** Print "DGRAMPROBE FAIL: `what`" and exit 1. */
 static void fail(const char *what)
 {
     say("DGRAMPROBE FAIL: ");
@@ -140,6 +161,7 @@ static uint8_t buf[64];
 #endif
 static uint8_t ifreq[IFREQ_SIZE];
 
+/** Fill the sockaddr_in `sa` with `ip` and `port`, both in host order. */
 static void set_sockaddr(uint32_t ip, uint16_t port)
 {
     int i;
@@ -156,7 +178,8 @@ static void set_sockaddr(uint32_t ip, uint16_t port)
     sa[7] = (uint8_t)ip;
 }
 
-/** Open and bind, answering -1 instead of failing when the table is full. */
+/** A datagram socket bound to `port`: its descriptor, or -1 when the socket
+ * or the bind fails. */
 static int open_bound_maybe(uint16_t port)
 {
     unsigned long args[6];
@@ -180,6 +203,7 @@ static int open_bound_maybe(uint16_t port)
     return fd;
 }
 
+/** The same, failing the probe when the socket or the bind fails. */
 static int open_bound(uint16_t port)
 {
     unsigned long args[6];
@@ -202,18 +226,17 @@ static int open_bound(uint16_t port)
     return fd;
 }
 
+/** The probe's entry: the rows of the list above, in its order. */
 PROBE_START void _start(void)
 {
     unsigned long args[6];
     int peer, other, client, outside, stream, extra, listener, sender, r, i;
     int fillers[8];
     int pid, status;
-    /* Written by the kernel through a pointer, which is why it is volatile: a
-       reader of this file alone sees only the assignment before the call. */
+    /* The kernel writes it through the pointer getsockopt is given. */
     volatile int on;
     uint16_t client_port;
-    /* Written by the kernel through a pointer, which is why it is volatile: a
-       reader of this file alone sees only the assignment before the call. */
+    /* The kernel writes it through the pointer the call is given. */
     volatile uint32_t optlen;
 
     peer = open_bound(PEER_PORT);
@@ -288,10 +311,7 @@ PROBE_START void _start(void)
         fail("the third socket's datagram did not send");
     }
 
-    /* The peer's reply must arrive and the other one must not. The first read
-       waits, because the loopback ring is drained by the timer and neither
-       datagram is delivered the moment it is sent; the rest do not, and none of
-       them may find anything, whichever order the two arrived in. */
+    /* The peer's reply arrives, in either order, and the other's does not. */
     args[0] = (uint32_t)client;
     args[1] = (unsigned long)buf;
     args[2] = sizeof(buf);
@@ -315,11 +335,7 @@ PROBE_START void _start(void)
         nap(10);
     }
 
-    /* And a sender at another address, which loopback cannot produce: the
-       harness sends one from outside through a host forward when it sees the
-       token. The socket for it is bound to a port the forward names, and
-       connected to the peer here, so what arrives is a datagram from an
-       address that is not its peer's. */
+    /* A sender at another address: the suite's datagram, through a forward. */
     outside = open_bound(OUTSIDE_PORT);
     set_sockaddr(OUR_IP, PEER_PORT);
     args[0] = (uint32_t)outside;
@@ -341,8 +357,7 @@ PROBE_START void _start(void)
         }
         nap(10);
     }
-    /* And the same socket must still hear its peer, or the case above proved
-       only that nothing was sent. */
+    /* The same socket still hears its peer. */
     set_sockaddr(OUR_IP, OUTSIDE_PORT);
     args[0] = (uint32_t)peer;
     args[1] = (unsigned long)"peer";
@@ -364,8 +379,7 @@ PROBE_START void _start(void)
     }
     sys_close(outside);
 
-    /* A call on something that is not a socket says so, whatever is wrong with
-       the address it was given: the descriptor is judged first. */
+    /* The descriptor is checked before the address. */
     args[0] = 1; /* the console */
     args[1] = 0;
     args[2] = 2;
@@ -373,7 +387,7 @@ PROBE_START void _start(void)
         fail("a connect on a descriptor that is not a socket reported the address instead");
     }
 
-    /* Letting go of the peer takes two bytes, which is all a family is. */
+    /* A two-byte AF_UNSPEC address disconnects a datagram socket. */
     set_sockaddr(0, 0);
     sa[0] = AF_UNSPEC;
     args[0] = (uint32_t)client;
@@ -386,9 +400,7 @@ PROBE_START void _start(void)
         fail("a write after disconnecting was not refused");
     }
 
-    /* A stream socket has no disconnect: two bytes is a family and nothing
-       else, and a connection that took them would be dialling this function's
-       own stack. */
+    /* A stream socket has no disconnect. */
     set_sockaddr(0, 0);
     sa[0] = AF_UNSPEC;
     args[0] = AF_INET;
@@ -406,8 +418,7 @@ PROBE_START void _start(void)
     }
     sys_close(stream);
 
-    /* And a packet socket has no peer at all. Eight of them, opened and closed,
-       prove it never took a slot in the UDP binding table on the way. */
+    /* A packet socket has no peer; a datagram socket binds after eight. */
     for (i = 0; i < 8; i++) {
         int pkt;
 
@@ -431,10 +442,7 @@ PROBE_START void _start(void)
         fail("the UDP binding table was exhausted by packet sockets");
     }
 
-    /* Two sockets on one port, which is what a DHCP client's renewal needs: it
-       keeps one bound to port 68 to listen on and opens a second bound to 68 to
-       send the renewal from. Both must ask for that, and the datagram must go
-       to the one connected to the sender, not to the listener. */
+    /* Two sockets on one port, as a DHCP client's renewal binds port 68. */
     listener = open_bound(RENEW_PORT);
     args[0] = AF_INET;
     args[1] = SOCK_DGRAM;
@@ -531,7 +539,7 @@ PROBE_START void _start(void)
         fail("the listener took a datagram the connected socket had asked for");
     }
 
-    /* And closing the sender leaves the listener bound. */
+    /* Closing the sender leaves the listener bound. */
     sys_close(sender);
     set_sockaddr(OUR_IP, RENEW_PORT);
     args[0] = (uint32_t)peer;
@@ -554,8 +562,7 @@ PROBE_START void _start(void)
     }
     sys_close(listener);
 
-    /* And a port below 1024 belongs to root, so an ordinary user cannot take
-       the one a DHCP client or an SSH server answers on. */
+    /* A port below 1024 is root's: uid 1000 binding port 68 is EACCES. */
     pid = sys_fork();
     if (pid == 0) {
         int low;
@@ -587,10 +594,7 @@ PROBE_START void _start(void)
         fail("an ordinary user bound a port below 1024");
     }
 
-    /* And a connect with the binding table full is answered, not searched for.
-       The table is eight slots; filling it and connecting one more must come
-       back at once instead of walking sixteen thousand ports with the
-       machine's interrupts off. */
+    /* A connect beside eight bound sockets answers 0 or EAGAIN. */
     for (i = 0; i < 8; i++) {
         fillers[i] = open_bound_maybe((uint16_t)(7600 + i));
     }
@@ -652,7 +656,7 @@ PROBE_START void _start(void)
         fail("a broadcast was refused after the socket asked to broadcast");
     }
 
-    /* And the options read back, because programs check them. */
+    /* The options read back. */
     on = 0;
     args[0] = (uint32_t)client;
     args[1] = SOL_SOCKET;
@@ -679,8 +683,7 @@ PROBE_START void _start(void)
         fail("SO_REUSEADDR did not read back as set");
     }
 
-    /* A socket can be tied to the interface this machine has, and to no
-     * other. */
+    /* SO_BINDTODEVICE takes the machine's interface and no other. */
     args[0] = (uint32_t)client;
     args[1] = SOL_SOCKET;
     args[2] = SO_BINDTODEVICE;
@@ -699,8 +702,7 @@ PROBE_START void _start(void)
     if (socketcall(SC_SETSOCKOPT, args) != 0) {
         fail("an empty name did not unbind");
     }
-    /* And the shape busybox really sends: a whole `struct ifreq`, with the
-       name at the front. */
+    /* BusyBox sends a whole `struct ifreq`, with the name at the front. */
     for (i = 0; i < IFREQ_SIZE; i++) {
         ifreq[i] = 0;
     }
@@ -713,7 +715,7 @@ PROBE_START void _start(void)
     if (socketcall(SC_SETSOCKOPT, args) != 0) {
         fail("the whole struct ifreq a DHCP client sends was refused");
     }
-    /* And it reads back as the name it is bound to, not as a number. */
+    /* It reads back as the name, five bytes with the NUL. */
     for (i = 0; i < IFREQ_SIZE; i++) {
         ifreq[i] = 0x5c;
     }
