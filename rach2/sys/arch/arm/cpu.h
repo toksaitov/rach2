@@ -94,8 +94,9 @@ void mmio_write32(uintptr_t a, uint32_t v);
 #define KVA_MODULES      (KVA_BASE + 0x38400000u)
 #define KVA_MODULES_SIZE 0x04000000u
 
-/* The page fault: the data abort, by the number a port's entry gives it,
- * and what the data fault status register says: bit 11 (WnR) marks a
+/* The page fault: the data abort, as vector 3 of the numbering a port's
+ * entry gives the exceptions, which need not be the abort's place in the
+ * vector table (4); bit 11 (WnR) of the data fault status register marks a
  * write. */
 #define PAGE_FAULT_VECTOR 3
 #define FAULT_WRITE(p)    (((p)->error_code & 0x800u) != 0)

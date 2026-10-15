@@ -3407,9 +3407,9 @@ static void sender_info(struct k_siginfo *info, int32_t code, const process_t *t
  * whatever either says, but stays deferred until the return to user mode
  * delivers it. Posting can make this thread ready and clear its
  * `wakeup_tick`, so a caller that keeps waiting must arm its deadline again.
- * No wait queue is changed. The x86-64 debug interrupt stack calls only
- * `debugreg_defer`; a user debug exception moves to the thread's stack
- * before entering C. */
+ * No wait queue is changed. On the x86-64 debug interrupt stack the kernel
+ * calls only `debugreg_defer_user` and, when it declines, `debugreg_defer`;
+ * a user debug exception moves to the thread's stack before entering C. */
 int signal_pending(void)
 {
     uint64_t deliverable;

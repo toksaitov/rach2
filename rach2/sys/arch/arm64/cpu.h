@@ -93,9 +93,10 @@ void mmio_write32(uintptr_t a, uint32_t v);
 #define KVA_MODULES      (KVA_BASE + 0x38400000u)
 #define KVA_MODULES_SIZE 0x04000000u
 
-/* The page fault: a data or instruction abort, by the number a port's entry
- * gives it, and what its syndrome in ESR_EL1 says: bit 6 (WnR) of a data
- * abort marks a write. */
+/* The page fault: a data or instruction abort, as vector 3 of the numbering
+ * a port's entry gives the exceptions, since the architecture identifies
+ * them by the exception class in ESR_EL1 instead; bit 6 (WnR) of a data
+ * abort's syndrome marks a write. */
 #define PAGE_FAULT_VECTOR 3
 #define FAULT_WRITE(p)    (((p)->error_code & 0x40u) != 0)
 #define FAULT_USER(p)     FRAME_USER(p)
