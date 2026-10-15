@@ -69,11 +69,13 @@ A directory is never an orphan: `rmdir` fails with `EBUSY` on one that a descrip
 
 The boot line chooses the root and how KRFFS reaches it ([../../Readme.md](../../Readme.md), [krffs.Readme.md](krffs.Readme.md)). `fsync` writes back the file's shared mappings (`filemap_sync_file`) and then calls the type's `fsync` through `vfs_fsync`, which flushes the disk's write cache after a type on a block device has written. A descriptor with no mount, a pipe or a device, writes the page cache.
 
+A KRFFS root on a disk partition is on no mount's device, so no `fsync`, `sync` or `reboot(2)` calls `block_flush` for it. Its pages leave through the disk driver's polled `write`, which returns only when they are on the medium: ATA and AHCI follow each write command with a cache flush, and NVMe sends the write with force unit access, flushing too while the disk has writes answered unflushed ([../block/Readme.md](../block/Readme.md)).
+
 | Where the file is | What `fsync` writes | Disk cache flushed | Survives a reboot |
 | --- | --- | --- | --- |
 | KRFFS root on a RAM module | nothing | no disk | no |
 | KRFFS root through the window, on a RAM module | every dirty page, into the module | no disk | no |
-| KRFFS root on a disk partition | every dirty page of the window | no | yes |
+| KRFFS root on a disk partition | every dirty page of the window | by each page's write | yes |
 | KRFFS volume, FAT32, exFAT | every dirty buffer of the device | yes | yes |
 | ext2 | every pending file of the mount, then every dirty buffer of the device | yes | yes |
 | tmpfs, memfd | nothing | no disk | no |
@@ -84,7 +86,7 @@ The kernel writes back nothing on a timer: [update(8)](../../../man/man8/update.
 
 ## Limits
 
-* No path sends a cache flush to the disk under a KRFFS root: `fsync`, `sync` and `reboot(2)` write its pages and stop there.
+* A KRFFS root on a disk puts each page on the medium with its own write, so a `sync` of many dirty pages waits for a cache flush or a write with force unit access per page, where the buffer cache on an AHCI or NVMe disk writes its run unflushed and flushes once.
 * `fsync` and `fdatasync` are one call, and on every type that writes anything they write the whole device or the whole page cache, not the one file. `syncfs` writes what `sync` writes and, like it, reports no failure.
 * `reboot(2)` writes no volume placed by `mount(2)`.
 * No file system keeps extended attributes: getting, setting and removing one answer `EOPNOTSUPP`, and a list is empty. There are no ACLs, file capabilities, per-user quotas or journal. Of the types that store files, only ext2 and tmpfs have hard links and symbolic links.
