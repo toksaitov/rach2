@@ -36,8 +36,8 @@
  * library then writes every one; the new groups' inode tables, zeroed; the
  * resize inode's double-indirect block and the inode-table block that
  * holds the inode. A volume whose new descriptor table would not fit the
- * reserve is refused, because that grow moves blocks and this tool does
- * not compute where to.
+ * reserve fails, because that grow moves blocks and this tool does not
+ * compute where to.
  *
  * The set is what a grow on an installed machine copies out first.
  * `tests/run grow` checks the set against what a grow in QEMU changed.
@@ -50,27 +50,31 @@
 #include <string.h>
 
 #define SECTOR     512u
-#define MAX_RANGES 65536 /* the ranges one save set holds; more is refused */
+#define MAX_RANGES 65536 /* the ranges one save set holds; more is a failure */
 
+/* A run of the set: blocks until the merge, sectors after it. */
 struct range {
     unsigned long long start, count;
-    const char *what;
+    const char *what; /* what the run holds, or `several` once merged */
 };
 
 static struct range ranges[MAX_RANGES];
 static int nranges;
 
+/** The little-endian 16-bit field at `p`. */
 static unsigned rd16(const unsigned char *p)
 {
     return (unsigned)p[0] | ((unsigned)p[1] << 8);
 }
 
+/** The little-endian 32-bit field at `p`. */
 static unsigned long rd32(const unsigned char *p)
 {
     return (unsigned long)p[0] | ((unsigned long)p[1] << 8) | ((unsigned long)p[2] << 16) |
            ((unsigned long)p[3] << 24);
 }
 
+/** Whether `g`, which is not 0, is a power of `base`, 1 among them. */
 static int is_power(unsigned long g, unsigned long base)
 {
     while (g % base == 0) {
@@ -79,8 +83,8 @@ static int is_power(unsigned long g, unsigned long base)
     return g == 1;
 }
 
-/* With sparse_super, groups 0 and 1 and the powers of 3, 5 and 7 keep a
-   superblock copy, each a power of one base alone. */
+/** Whether group `g` keeps a superblock copy: every group without
+ *  sparse_super, and with it groups 0 and 1 and the powers of 3, 5 and 7. */
 static int has_super(int sparse, unsigned long g)
 {
     if (!sparse || g <= 1) {
@@ -105,6 +109,7 @@ static void add(unsigned long long block, unsigned long long count, const char *
     nranges++;
 }
 
+/** Order two ranges by their start, for `qsort`. */
 static int by_start(const void *a, const void *b)
 {
     const struct range *x = a, *y = b;
@@ -112,12 +117,14 @@ static int by_start(const void *a, const void *b)
     return x->start < y->start ? -1 : x->start > y->start;
 }
 
+/** Read `n` bytes at byte `at` of `f` into `buf`; 0, or -1. */
 static int read_at(FILE *f, unsigned long long at, void *buf, size_t n)
 {
     return fseeko(f, (off_t)at, SEEK_SET) == 0 && fread(buf, 1, n, f) == n ? 0 : -1;
 }
 
-/* Whether sectors [start, end) lie inside the merged, sorted set. */
+/** Whether sectors [start, end) lie inside one range of the merged, sorted
+ *  set. */
 static int inside(unsigned long long start, unsigned long long end)
 {
     int i;
@@ -130,7 +137,7 @@ static int inside(unsigned long long start, unsigned long long end)
     return 0;
 }
 
-/* The number after `key` in a JSON object's text, or -1. */
+/** The number after `key` in a JSON object's text, or -1. */
 static long long json_number(const char *obj, const char *key)
 {
     const char *p = strstr(obj, key);
@@ -197,7 +204,7 @@ static int check_map(const char *path)
  * Compute the write ranges for a supported ext2 grow.
  *
  * Require 4096-byte blocks and a resize inode with enough descriptor reserve
- * to avoid moving blocks. Reject a recorded RAID stride or stripe width,
+ * to avoid moving blocks. Fail for a recorded RAID stride or stripe width,
  * and check each existing group's bitmap positions against the plain layout:
  * the group's start after any superblock, descriptors and reserve. Clearing
  * the recorded stride does not move bitmaps; resize2fs derives its placement
@@ -207,7 +214,8 @@ static int check_map(const char *path)
  * as resize2fs does. Sort and merge the computed ranges and express them in
  * sectors relative to the volume or, with `--lba`, to the disk.
  * With a nonzero `--lba`, include sectors 0 through 7 because the grow test
- * records writes in 4096-byte qcow2 clusters.
+ * records writes in 4096-byte qcow2 clusters. Exits 0; 1 on a failure or an
+ * extent outside the set; 2 on a usage error.
  */
 int main(int argc, char **argv)
 {

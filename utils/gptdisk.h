@@ -23,7 +23,7 @@
 #define GPTDISK_ARRAY_MAX 16384u /* 128 entries of 128 bytes */
 
 struct gptdisk {
-    uint64_t sectors;                       /* the disk's size */
+    uint64_t sectors;                       /* the disk's size in sectors */
     unsigned char mbr[GPTDISK_SECTOR];      /* sector 0, the protective MBR */
     unsigned char header[GPTDISK_SECTOR];   /* the header that checked */
     unsigned char array[GPTDISK_ARRAY_MAX]; /* its entry array */
@@ -35,15 +35,16 @@ struct gptdisk {
 /** The number N of `/dev/diskN`, or -1 when `path` is not such a name. */
 int gptdisk_number(const char *path);
 
-/** The size of disk N in sectors from `/proc/disk`; 0, or -1 when absent. */
+/** Store the size of disk N in sectors, from its `disk` line in `/proc/disk`,
+ *  in `*sectors`; 0, or -1 when the file does not open or has no such line. */
 int gptdisk_sectors(int number, uint64_t *sectors);
 
 /**
  * Read the GUID table of the disk open on `fd`, of `sectors` sectors, into
  * `g`: the primary header and its array when both checksums agree, else the
  * backup at the disk's last sector. Returns 1 for a table read, 0 when
- * sector 0 is not a protective MBR, and -1 when a sector does not read or
- * neither header checks.
+ * sector 0 is not a protective MBR, and -1 for a disk of fewer than three
+ * sectors and when a sector does not read or neither header checks.
  */
 int gptdisk_read(int fd, uint64_t sectors, struct gptdisk *g);
 
@@ -69,11 +70,15 @@ void gptdisk_put64(unsigned char *p, uint64_t v);
  * old primary checks until the new backup is whole, and the new backup while
  * the primary is rewritten. A table read from its backup, whose primary does
  * not check, has the primary written first, for the same reason the other
- * way round. Returns 0, or -1 with `why` set.
+ * way round. On success `g` holds the new primary header. Returns 0, or -1
+ * with `why` set, writing nothing when `fd` does not reach the disk's last
+ * sector, the arrays do not fit around the usable sectors, or a used entry
+ * reaches past the new last usable sector.
  */
 int gptdisk_write(int fd, struct gptdisk *g, const char **why);
 
-/** Whether the backup is already in the disk's last sectors. */
+/** Whether the primary header of `g` already puts the backup in the disk's
+ *  last sectors; 0 for a table read from its backup. */
 int gptdisk_backup_at_end(const struct gptdisk *g);
 
 /** The disk GUID in the 36-character text form, with its terminator. */

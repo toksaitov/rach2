@@ -32,13 +32,14 @@ extern char **environ;
 /* The memory a grow of a 1 GiB root to a partition the size of the
  * installed machine's disk was measured to need, as
  * dev-log/47-storage/notes.md records: resize2fs and e2fsck finished on a
- * QEMU machine of 16 MiB, whose `MemTotal` was then 7232 kB. The two keep
- * their bitmaps as runs, so the volume's size hardly moves the need. */
+ * QEMU machine of 16 MiB whose `MemTotal` read 7232 kB. The two keep their
+ * bitmaps as runs, so the volume's size hardly moves the need. */
 #ifndef GROWROOT_MEMORY_MIB
 #define GROWROOT_MEMORY_MIB 7u
 #endif
 #define GROWROOT_MEMORY_KIB (GROWROOT_MEMORY_MIB * 1024u)
 
+/* Linux's BLKRRPART: read the disk's partition table again. */
 #define BLKRRPART     0x125Fu
 /* The byte offset of the four partition entries in the first sector. */
 #define MBR_ENTRIES   446
@@ -54,20 +55,23 @@ extern char **environ;
 static const unsigned char type_linux[16] = {0xaf, 0x3d, 0xc6, 0x0f, 0x83, 0x84, 0x72, 0x47,
                                              0x8e, 0x79, 0x3d, 0x69, 0xd8, 0x47, 0x7d, 0xe4};
 
+/* A partition entry of `/proc/disk`. */
 struct part {
     int disk, number;
-    unsigned long long start, count;
-    unsigned type;
+    unsigned long long start, count; /* in sectors */
+    unsigned type;                   /* the MBR type byte; 0 on a GUID table */
 };
 
 static struct part parts[128];
 static struct gptdisk gpt_table;
 static int nparts;
-static unsigned long long disk_sectors[16];
-static char disk_table[16][12];
+static unsigned long long disk_sectors[16]; /* by disk number; 0 for no disk */
+static char disk_table[16][12];             /* `mbr`, `gpt`, or another word */
 static int ndisks;
-static int measure;
+static int measure; /* `--measure` was given */
 
+/** Say `growroot: what: detail` on standard error, or `growroot: what` for a
+ *  NULL `detail`, and return 1. */
 static int fail(const char *what, const char *detail)
 {
     if (detail) {
@@ -83,8 +87,9 @@ static int fail(const char *what, const char *detail)
  * The counters cover the machine, so recovery must have no other disk work
  * running for their differences to describe this grow alone. Rach2 time
  * counts delivered 10 ms ticks; masked interrupts can lose ticks, so these
- * timestamps do not independently establish wall time. Does nothing without
- * `--measure`; returns 0, or 1 having said why.
+ * timestamps do not independently establish wall time. `edge` is `before` or
+ * `after`. Does nothing without `--measure`; returns 0, or 1 having said
+ * why.
  */
 static int measured(const char *phase, const char *edge)
 {
@@ -123,7 +128,9 @@ static int measured(const char *phase, const char *edge)
     return 0;
 }
 
-/** `/proc/disk`: the disks and the partition entries the kernel found. */
+/** Read `/proc/disk` into `disk_sectors`, `disk_table` and `parts`: the
+ *  disks and the partition entries the kernel found. 0, or -1 when the file
+ *  does not open. */
 static int read_disks(void)
 {
     FILE *f = fopen("/proc/disk", "r");
@@ -158,7 +165,8 @@ static int read_disks(void)
     return 0;
 }
 
-/** The MBR signature of `/dev/diskN`, read from its first sector. */
+/** The MBR signature of `/dev/diskN`, read from its first sector into
+ *  `*id`; 0, or -1 when the node does not open or read. */
 static int disk_id(int n, unsigned long *id)
 {
     char node[32];
@@ -254,7 +262,7 @@ static int is_ext2(const char *node)
 
 /**
  * Whether disk `n` has the GUID table whose disk GUID is `guid`. The table
- * is read into `table`.
+ * is read into `gpt_table`.
  */
 static int gpt_disk_is(int n, const unsigned char *guid)
 {
@@ -306,7 +314,8 @@ static int find_disk(const char *spec, unsigned long id, const unsigned char *gu
     return disk;
 }
 
-/** Read `/proc/disk` again and require entry `entry` of `disk` at `count`. */
+/** Read `/proc/disk` again and require entry `entry` of `disk` at `count`
+ *  sectors; 0, or 1 having said why not. */
 static int published(int disk, int entry, unsigned long long count, const char *part_node)
 {
     int i;
@@ -324,7 +333,8 @@ static int published(int disk, int entry, unsigned long long count, const char *
     return fail(part_node, "the table read again does not show the new size");
 }
 
-/** Ask the kernel to read the table on `fd` again, and close `fd`. */
+/** Ask the kernel to read the table on `fd`, the disk `dev`, again, and
+ *  close `fd`; 0, or 1 having said why not. */
 static int reread_table(int fd, const char *dev)
 {
     int rc;
@@ -562,7 +572,8 @@ static int mbr_limit(int disk, const struct part *p, unsigned long long *limit)
     return 0;
 }
 
-/** Run `tool` with `arg` on `part_node`, measured as `phase`; its status. */
+/** Run `tool` with `arg` on `part_node`, measured as `phase`; its status,
+ *  or -2 when a measurement fails. */
 static int check_or_grow(const char *phase, const char *tool, const char *arg,
                          const char *part_node)
 {
@@ -593,7 +604,8 @@ static int check_or_grow(const char *phase, const char *tool, const char *arg,
  * retrying. Repairs can write outside the ranges saved for the grow.
  * Writing the table requires the recovery kernel; rereading the table
  * fails while the disk is in use. An entry that already fills its space is
- * left as it is, and its file system is still checked and grown.
+ * left as it is, and its file system is still checked and grown. Exits 0, 1
+ * on a failure and 2 on a usage error.
  */
 int main(int argc, char **argv)
 {

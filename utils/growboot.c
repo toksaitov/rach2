@@ -20,8 +20,8 @@
 
 static struct bootslot slot;
 static FILE *source;
-static uint32_t first;
-static unsigned present;
+static uint32_t first;   /* the environment's first sector, partition-relative */
+static unsigned present; /* a bit for each environment sector in `environment` */
 static unsigned char environment[BOOTSLOT_ENV_BYTES];
 
 /** Read edited sectors from memory and every other sector from the backup. */
@@ -37,7 +37,8 @@ static int read_sector(void *ctx, uint32_t lba, void *buf)
                : -1;
 }
 
-/** Accept only the environment sectors, retaining both entirely in memory. */
+/** Accept only the environment sectors, retaining both entirely in memory;
+ *  -1 for any other sector. */
 static int write_sector(void *ctx, uint32_t lba, const void *buf)
 {
     (void)ctx;
@@ -49,7 +50,8 @@ static int write_sector(void *ctx, uint32_t lba, const void *buf)
     return 0;
 }
 
-/** Validate the backup, prepare both sectors and create a new file. */
+/** Check the backup, prepare both sectors and create a new file. Exits 0, 1
+ *  on a failure and 2 on a usage error. */
 int main(int argc, char **argv)
 {
     struct bootslot_io io;

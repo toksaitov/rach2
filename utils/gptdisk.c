@@ -11,13 +11,18 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+/* Linux's BLKGETSIZE64, a block device's size in bytes, where the headers
+ * lack it. */
 #ifndef BLKGETSIZE64
 #define BLKGETSIZE64 _IOR(0x12, 114, size_t)
 #endif
 
+/* The smallest header and entry the UEFI specification allows; an entry's
+ * size is a multiple of the smallest. */
 #define HEADER_MIN 92u
 #define ENTRY_MIN  128u
 
+/** The little-endian 32-bit field at `p`. */
 static uint32_t le32(const unsigned char *p)
 {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
@@ -28,6 +33,7 @@ uint64_t gptdisk_le64(const unsigned char *p)
     return (uint64_t)le32(p) | (uint64_t)le32(p + 4) << 32;
 }
 
+/** Store `v` in the little-endian 32-bit field at `p`. */
 static void put32(unsigned char *p, uint32_t v)
 {
     p[0] = (unsigned char)v;
@@ -227,7 +233,9 @@ static uint64_t reach(int fd)
     return 0;
 }
 
-/** Fill `out` as the header at `my_lba` whose array is at `array_lba`. */
+/** Fill `out` from the header of `g` as the copy at `my_lba`, whose other
+ *  copy is at `other_lba` and whose array is at `array_lba`, with
+ *  `last_usable` and both checksums. */
 static void make_header(const struct gptdisk *g, unsigned char *out, uint64_t my_lba,
                         uint64_t other_lba, uint64_t array_lba, uint64_t last_usable)
 {
