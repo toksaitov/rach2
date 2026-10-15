@@ -8,10 +8,11 @@
 # unless given, whether committed or not; a file git does not track is not
 # pushed, and is not part of it. It is a document change when each of its
 # files is a Markdown file; a manual page under man/; a C file or header
-# whose tokens, once its comments are removed, are those of BASE; or a shell
-# script, makefile or manifest whose changed lines are all comments or blank.
-# The script names any other file and exits 2, and the change is then checked
-# as code.
+# whose tokens, once its comments are removed, are those of BASE; a shell
+# script whose interpreter line and commands are those of BASE; or a makefile
+# or manifest whose changed lines are all comments or blank lines that its
+# reader skips. The script names any other file and exits 2, and the change
+# is then checked as code.
 #
 # The tokens are those of `-fpreprocessed -E`, which removes the comments and
 # expands nothing, with the white space between tokens made one line break
@@ -19,11 +20,15 @@
 # lines a backslash continues are joined first, and the tokens of each
 # preprocessing directive are set between two empty lines, since a line
 # break ends a directive: a line joined to a directive or split from one
-# changes the list. A deleted file and a new one are compared with an empty
-# file, and a C file the preprocessor fails on, at BASE or in the work tree,
-# is not a document change. Nor is a file whose mode or type changes, such
-# as a script that loses its execute bit, or a new file that is not a plain
-# one of mode 644.
+# changes the list. A C file the preprocessor fails on, at BASE or in the
+# work tree, is not a document change. The commands of a shell script are
+# its text as bash prints it back from a function, which drops the comments
+# and keeps here-documents and quoted text whole. In a makefile, a comment or
+# blank line is skipped only outside a define and when neither it nor the
+# line before ends in a backslash. A deleted file and a new one are compared
+# with an empty file. A file whose mode or type changes, such as a script
+# that loses its execute bit, is not a document change, nor is a new file
+# that is not a plain one of mode 644.
 #
 # The checks are the steps of `tests/run style` that read documents and
 # comments: textcheck.sh, prosecheck's comment width, terms and dev-log
@@ -55,6 +60,9 @@ git rev-parse -q --verify "$BASE^{commit}" >/dev/null || {
 }
 command -v "$TOKCC" >/dev/null 2>&1 || {
     echo "doccheck: $TOKCC not found; TOKCC names the compiler that removes comments" >&2; exit 2
+}
+command -v bash >/dev/null 2>&1 || {
+    echo "doccheck: bash not found; it reads the shell scripts" >&2; exit 2
 }
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/doccheck.XXXXXX") || exit 2
@@ -100,6 +108,50 @@ unparsed() {
     sed "s|^<stdin>:|$1:|; s/^/    /" "$work/pperr" | head -5 >&2
 }
 
+# The interpreter line of the shell script FILE, then its commands as bash
+# prints them back from a function. The script must pass `bash -n` before it
+# becomes the body of that function, so that the eval defines it and runs
+# nothing. Fails when bash cannot parse the script.
+commands() {
+    sed -n '1{/^#!/p;}' "$1"
+    BASH_ENV='' bash -c 'bash -n "$1" 2>/dev/null || exit 1
+eval "doccheck_script() {
+:
+$(cat "$1")
+}" 2>/dev/null && declare -f doccheck_script' sh "$1"
+}
+
+# The numbers of the lines of the makefile on stdin that make skips: blank
+# and comment lines outside a define, where neither the line nor the one
+# before it ends in a backslash. A comment ending in one goes on to the next
+# line, and a recipe line ending in one goes on to a comment after it.
+skipped() {
+    awk '
+    {
+        bs = match($0, /\\+$/) ? RLENGTH % 2 : 0
+        if (!cont && !def && !bs && $0 ~ /^[ \t]*(#.*)?$/) print NR
+        if (!cont && $0 ~ /^[ \t]*((override|export)[ \t]+)*define([ \t]|$)/) def++
+        else if (!cont && def && $0 ~ /^[ \t]*endef([ \t]|$)/) def--
+        cont = bs
+    }'
+}
+
+# Whether every line the diff of FILE removes is numbered in $work/before and
+# every line it adds in $work/after.
+only_skipped() {
+    git diff -U0 "$BASE" -- "$1" | awk -v before="$work/before" -v after="$work/after" '
+    BEGIN {
+        while ((getline n < before) > 0) old[n] = 1
+        while ((getline n < after) > 0) new[n] = 1
+    }
+    /^@@ / {
+        split(substr($2, 2), a, ","); split(substr($3, 2), b, ",")
+        for (i = a[1]; i < a[1] + ((2 in a) ? a[2] : 1); i++) if (!(i in old)) bad = 1
+        for (i = b[1]; i < b[1] + ((2 in b) ? b[2] : 1); i++) if (!(i in new)) bad = 1
+    }
+    END { exit bad }'
+}
+
 # The text of FILE at BASE, or nothing when BASE has no such file.
 at_base() {
     git cat-file -e "$BASE:$1" 2>/dev/null && git show "$BASE:$1"
@@ -140,7 +192,35 @@ while read -r omode nmode _ _ status f; do
         fi
         [ -f "$f" ] && cfiles="$cfiles $f"
         ;;
-    *.sh|*/Makefile|Makefile|*.mk|*.manifest|tests/run)
+    *.sh|tests/run)
+        at_base "$f" > "$work/old"
+        if [ -f "$f" ]; then cat "$f"; fi > "$work/now"
+        if [ "$status" = A ]; then
+            echo "doccheck: $f: a new file" >&2
+            code=1
+        elif ! commands "$work/old" > "$work/before" ||
+            ! commands "$work/now" > "$work/after"; then
+            echo "doccheck: $f: bash cannot parse it, here or at $BASE" >&2
+            code=1
+        elif ! cmp -s "$work/before" "$work/after"; then
+            echo "doccheck: $f: its commands differ from $BASE, not only its comments" >&2
+            code=1
+        fi
+        ;;
+    */Makefile|Makefile|*.mk)
+        if [ "$status" = A ]; then
+            echo "doccheck: $f: a new file" >&2
+            code=1
+        else
+            at_base "$f" | skipped > "$work/before"
+            if [ -f "$f" ]; then skipped < "$f"; fi > "$work/after"
+            if ! only_skipped "$f"; then
+                echo "doccheck: $f: a changed line is one make reads" >&2
+                code=1
+            fi
+        fi
+        ;;
+    *.manifest)
         if [ "$status" = A ]; then
             echo "doccheck: $f: a new file" >&2
             code=1
