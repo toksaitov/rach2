@@ -130,7 +130,7 @@ thread locked the words with; Linux walks it after, and looks for the
 process ID.
 .Nm get_robust_list ,
 number 312 on i386 and 274 on x86-64, stores the list's head and the
-head's size for the thread
+head's size for the thread whose ID in the caller's PID namespace is
 .Fa tid ,
 0 for the caller.
 Another thread's needs a thread of the caller's process, a privileged

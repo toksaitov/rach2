@@ -222,6 +222,13 @@ process_t *get_process(uint32_t pid)
     return pid == 5 ? named : NULL;
 }
 
+/** A thread id in the caller's PID namespace, which in the model is the
+ * kernel's. */
+uint32_t pid_named(uint32_t pid)
+{
+    return pid;
+}
+
 /** A wait that ends at its deadline, noting the tick it was armed for. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {

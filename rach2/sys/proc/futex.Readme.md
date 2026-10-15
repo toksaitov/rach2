@@ -12,7 +12,7 @@ A futex is a 32-bit word of user memory on which a thread sleeps until another w
 
 * `futex` takes four operations, `FUTEX_WAIT`, `FUTEX_WAKE`, `FUTEX_WAIT_BITSET` and `FUTEX_WAKE_BITSET`, each with `FUTEX_PRIVATE_FLAG`, and the bitset wait with `FUTEX_CLOCK_REALTIME`. The word's address must be aligned to four bytes, and a bitset must not be 0; either is `EINVAL`.
 * `set_robust_list` takes the address of the list's head and its size, which must be the size of the head's three words: 12 bytes on i686 and 24 on x86-64.
-* `get_robust_list` gives the head of the caller's list or of another thread's: a thread of the caller's process, any thread to a privileged caller, and a thread that is not privileged and whose real or effective user id is the caller's effective one.
+* `get_robust_list` gives the head of the caller's list or of another thread's, named by its id in the caller's PID namespace: a thread of the caller's process, any thread to a privileged caller, and a thread that is not privileged and whose real or effective user id is the caller's effective one.
 * `proc_thread_gone` (`process.h`) runs at a thread's end and at its `execve` ([processes](Readme.md)).
 * `futex_restartable` (`futex.h`) tells the system call dispatcher whether a `futex` call a signal interrupted may be restarted.
 
@@ -53,7 +53,6 @@ A word's page is made present and writable before the word is read. The read, th
 * A deadline is a whole number of 10 ms ticks.
 * A timed wait that a signal interrupts is not restarted, also when no handler runs; Linux restarts it then with its first deadline.
 * A thread's end walks at most 2048 entries of its robust list.
-* `get_robust_list` takes a thread's kernel id, its id in the first PID namespace, and not its id in the caller's PID namespace.
 
 ## Tests
 
@@ -62,7 +61,8 @@ A word's page is made present and writable before the word is read. The read, th
 * `tests/musl/clonemusl.c` waits and wakes within one address space, times out on both clocks no sooner than asked, refuses a bitset of 0 and `FUTEX_CLOCK_REALTIME` with `FUTEX_WAIT`, and checks that a timed wait a handler with `SA_RESTART` interrupts ends with `EINTR`.
 * `tests/musl/threadmusl.c` runs mutexes and condition variables among four threads, and a process-shared robust mutex in shared memory that a child's thread holds into an `execve`, which the probe then locks with `EOWNERDEAD`.
 * `tests/musl/capmusl.c` checks that a thread without capabilities may not read the robust list of a process that has them.
+* `tests/musl/nsmusl.c` checks that the first process of a new PID namespace reads its own robust list as pid 1.
 
-`tests/system/probe_faults.txt` has the faults these probes must catch: `futex-timed-restart`, `futex-relative-nsec`, `futex-absolute-nsec`, `futex-wait-never-sleeps`, `exec-robust-tid` and `robust-list-ignores-privilege`; `sh tests/system/probe_faults.sh NAME` runs one.
+`tests/system/probe_faults.txt` has the faults these probes must catch: `futex-timed-restart`, `futex-relative-nsec`, `futex-absolute-nsec`, `futex-wait-never-sleeps`, `exec-robust-tid`, `robust-list-ignores-privilege` and `ns-robust-list-kernel-id`; `sh tests/system/probe_faults.sh NAME` runs one.
 
 In `tests/run smp`, two threads on two processors take turns through a futex word (`tests/musl/smpmusl.c`). `tests/run host` runs `tests/host/futex_hosttest.c` ([the host tests](../../../tests/host/Readme.md)), which checks what `futex.c` reads of a thread that may end while it works, the robust futexes a thread's end releases, a wait's deadline, and which interrupted calls are restarted.

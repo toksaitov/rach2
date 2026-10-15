@@ -4,6 +4,7 @@
  */
 #include "futex.h"
 
+#include "ns.h"
 #include "process.h"
 #include "wait_queue.h"
 #include "../mm/mm.h"
@@ -428,7 +429,7 @@ long sys_get_robust_list(isr_params_t *params)
         return -ESRCH;
     }
     if (SC_ARG(params, 0) != 0) {
-        t = get_process((uint32_t)SC_ARG(params, 0));
+        t = get_process(pid_named((uint32_t)SC_ARG(params, 0)));
         if (t == NULL || t->state == PROC_ZOMBIE || t->state == PROC_UNUSED) {
             return -ESRCH;
         }

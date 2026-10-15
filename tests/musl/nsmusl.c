@@ -6,8 +6,9 @@
  * one before, and setns returns to it. A PID namespace numbers its first
  * process 1, whose parent it sees as 0, and that process's child 2; the first
  * process's status file shows it one number, and shows its parent, outside
- * the namespace, both; and a name relative to its descriptor of /proc/self/fd
- * reaches its own descriptor. The caller of unshare keeps its own pid. In a
+ * the namespace, both; get_robust_list of pid 1 gives that process's own
+ * list; and a name relative to its descriptor of /proc/self/fd reaches its
+ * own descriptor. The caller of unshare keeps its own pid. In a
  * new network namespace a connection to the loopback address fails with
  * ENETUNREACH. A mount made in a new mount namespace is not seen outside it,
  * and a new IPC namespace has none of the first's System V objects.
@@ -198,11 +199,15 @@ static int own_fd_dir(void)
 
 /**
  * Check, as the first process of a new PID namespace, that it is pid 1 with
- * parent 0, that its child is 2, that its NSpid line has the one number, and
- * then `own_fd_dir`. Returns 0, or 1 after printing the failure.
+ * parent 0, that its child is 2, that its NSpid line has the one number, that
+ * get_robust_list of pid 1 gives the head it set, and then `own_fd_dir`.
+ * Returns 0, or 1 after printing the failure.
  */
 static int pid_first(void)
 {
+    static long head[3];
+    long *got = NULL;
+    size_t len = 0;
     pid_t pid;
     int status;
 
@@ -219,6 +224,11 @@ static int pid_first(void)
     }
     if (!nspid_is("self", "1")) {
         return fail("its status file shows it the one number");
+    }
+    head[0] = (long)head;
+    if (syscall(SYS_set_robust_list, head, sizeof(head)) != 0 ||
+        syscall(SYS_get_robust_list, 1, &got, &len) != 0 || got != head || len != sizeof(head)) {
+        return fail("get_robust_list of pid 1 gives the first process's own list");
     }
     return own_fd_dir();
 }
