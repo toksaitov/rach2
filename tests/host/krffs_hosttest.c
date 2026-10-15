@@ -1,5 +1,6 @@
-/**
- * krffs_hosttest.c: the file system's core over a backend of its own.
+/*
+ * krffs_hosttest.c: the KRFFS core, rach2/sys/fs/krffs.c, over backends of
+ * the test's own.
  *
  * host-deps: rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -8,20 +9,20 @@
  * backend, so a test can put its own backend under it. Two are used here: a
  * plain memory image, and the same image behind a recorder that keeps every
  * write in order. The rows are the format's contract: what the mount check
- * accepts and what it refuses, the allocator's split, merge and relocation,
+ * accepts and what it rejects, the allocator's split, merge and relocation,
  * the ends of the region, a hole read as zeroes, the directory operations,
- * the orphan reaping, and the order of writes.
+ * the orphan reaping, the order of writes, and the hashes, against the
+ * vectors of krffs_hash_vectors.h.
  *
  * The order rows replay every prefix of the writes an operation makes, which
  * is what a machine stopping in the middle of one leaves on the medium. Each
  * prefix must leave a forward chain that closes with every node sound; the
  * backward link may lag, since it is derived and the check at the next mount
- * rebuilds it. That is the rule krffs.Readme.md states, and these rows are
- * what say the code keeps it.
+ * rebuilds it. That is the rule rach2/sys/fs/krffs.Readme.md states, and
+ * these rows check that the code keeps it.
  *
- * No hosted headers: the kernel headers define the fixed-width types, and the
- * libc calls used here are declared by hand the way the other host tests
- * declare them.
+ * The test includes no hosted header: the kernel headers define the
+ * fixed-width types, and the C library calls it makes are declared below.
  */
 
 #include "../../rach2/sys/fs/krffs.c"
@@ -34,6 +35,7 @@ extern void free(void *p);
 
 /* ---- what krffs.c reaches outside itself ---- */
 
+/** Discard the record. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -41,14 +43,17 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
+/** Discard the text. */
 void console_printf(const char *format, ...)
 {
     (void)format;
 }
 
+/* The time `rtc_realtime` reports, which the rows set. */
 static int64_t fake_seconds = 1000;
 static int64_t fake_nanoseconds;
 
+/** Report `fake_seconds` and `fake_nanoseconds`; either pointer may be NULL. */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
     if (seconds) {
@@ -61,6 +66,7 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 
 static int fails;
 
+/** Count and print a failed row. */
 static void check(int ok, const char *what)
 {
     if (!ok) {
@@ -79,18 +85,21 @@ static void check(int ok, const char *what)
 
 static uint8_t image[IMAGE_SIZE];
 
+/** Copy `size` bytes at `offset` of the image `ctx` into `buffer`. */
 static int memory_read(void *ctx, uint64_t offset, void *buffer, uint32_t size)
 {
     k_memcpy(buffer, (uint8_t *)ctx + offset, size);
     return 0;
 }
 
+/** Copy `size` bytes of `buffer` to `offset` of the image `ctx`. */
 static int memory_write(void *ctx, uint64_t offset, const void *buffer, uint32_t size)
 {
     k_memcpy((uint8_t *)ctx + offset, buffer, size);
     return 0;
 }
 
+/** Do nothing: a memory image has nothing to make durable. */
 static int memory_sync(void *ctx)
 {
     (void)ctx;
@@ -112,13 +121,19 @@ static struct {
 
 static int recorded_count;
 static int recording;
-/* Which write the backend refuses, counted from the start of an operation, or
-   -1 for a backend that refuses none. One write and not every write after it:
-   a device that refuses a block and takes the next is what leaves a change
+/* Which write fails, counted from the start of an operation, or -1 for a
+   backend whose writes all succeed. One write and not every write after it:
+   a device that fails one block and writes the next is what leaves a change
    published over a write that never landed. */
 static int refused_write = -1;
+/* The writes and syncs the backend has seen since the count was cleared. */
 static int writes_seen;
 
+/**
+ * Write through to the image, keeping the write in `recorded` while
+ * `recording` is set; fail with -1 when it is `refused_write`. A write the
+ * recorder cannot keep counts as a failed row.
+ */
 static int record_write(void *ctx, uint64_t offset, const void *buffer, uint32_t size)
 {
     if (writes_seen++ == refused_write) {
@@ -142,10 +157,14 @@ static int record_write(void *ctx, uint64_t offset, const void *buffer, uint32_t
 static int sync_marks[WRITES_MAX];
 static int sync_count;
 
-/* A sync the medium refuses, counted with the writes so a row can refuse
-   either. */
+/* The sync that fails, counted with the writes so that a row can fail
+   either; -1 for none. */
 static int refused_sync = -1;
 
+/**
+ * Mark where the sync fell among the recorded writes while `recording` is
+ * set, and fail with -1 when it is `refused_sync`.
+ */
 static int record_sync(void *ctx)
 {
     if (recording && sync_count < WRITES_MAX) {
@@ -201,6 +220,7 @@ static void make_image(uint8_t *buffer, uint32_t size)
     free_node->data_size = 0;
 }
 
+/** A mount of `size` bytes over `backend`, with no unit of the medium. */
 static krffs_mount_t mount_over(const krffs_backend_t *backend, void *ctx, uint32_t size)
 {
     krffs_mount_t mount;
@@ -213,8 +233,9 @@ static krffs_mount_t mount_over(const krffs_backend_t *backend, void *ctx, uint3
 }
 
 /**
- * Walk the forward chain, asking of every node what the check asks except the
- * backward link, which an interrupted operation is allowed to leave behind.
+ * Walk the forward chain and apply to every node the mount check's tests but
+ * the one of the backward link, which an interrupted operation may leave
+ * behind.
  *
  * Returns 1 if the chain closes with every node sound, 0 if not.
  */
@@ -353,10 +374,10 @@ static int touched_blocks(int from, int to, uint64_t *seen, int cap)
 }
 
 /**
- * What every state a stop can leave must answer: a forward chain that closes,
- * no file claiming a byte nobody wrote, and the whole check once the backward
- * links are rebuilt from that chain, which is what the check at the next
- * mount does.
+ * Whether the state in `image`, read through `mount`, has what every state a
+ * stop can leave must have: a forward chain that closes, no file claiming a
+ * byte nobody wrote, and, once `krffs_repair_at` has done what the check at
+ * the next mount does, the whole check.
  */
 static int image_is_sound(krffs_mount_t *mount, const uint8_t *image)
 {
@@ -382,7 +403,6 @@ static int image_is_sound(krffs_mount_t *mount, const uint8_t *image)
         }
         offset = krffs_next_offset(mount, offset, &head);
     } while (offset != 0 && ++steps < krffs_max_steps(mount));
-    /* What the next mount does with it, and then what that mount requires. */
     if (krffs_repair_at(mount, (uint32_t *)0, (uint32_t *)0, (uint32_t *)0) != 0) {
         return 0;
     }
@@ -476,13 +496,20 @@ static int every_lost_write_is_sound(const uint8_t *before, uint32_t size)
 }
 
 /**
- * Every state a stop can leave, asked whether the file `name` is whole.
+ * Whether, in every state a stop can leave, the file `name` is whole.
  *
  * Whole means what a name promises: the directory it is in, the mode it was
  * made with, a length of at least `bytes`, and those bytes holding `value`. A
  * node that is half made must not be reachable by a name, so a state may have
  * no such node at all unless `must_exist`, which is what a move requires: the
  * file it moves is there before, during and after.
+ *
+ * The states are the one that lost nothing, then one for each block since
+ * the last sync lost whole, then one for each write since it lost alone,
+ * which is the stricter rule the order between fields needs. A state whose
+ * forward chain does not close is left to `every_stop_is_sound`. Each state
+ * is judged after `krffs_repair_at`, since what the check at the next mount
+ * leaves is what a machine coming back up reads.
  */
 static int every_stop_file_is_whole(const uint8_t *before, uint32_t size, const char *name,
                                     int must_exist, uint64_t parent, uint16_t mode, uint32_t bytes,
@@ -500,9 +527,6 @@ static int every_stop_file_is_whole(const uint8_t *before, uint32_t size, const 
         int variant;
 
         build(epoch, before, mark, size);
-        /* -1 is the state that lost nothing; then each block since the last
-           sync, and then each write since it, which is the stricter rule the
-           order between fields asks for. */
         for (variant = -1; variant < seen_count + (prefix - mark); variant++) {
             uint64_t offset = 0;
             uint64_t steps = 0;
@@ -529,10 +553,8 @@ static int every_stop_file_is_whole(const uint8_t *before, uint32_t size, const 
                 }
             }
             if (!forward_chain_closes(&mount)) {
-                continue; /* the row that asks for a chain judges this */
+                continue;
             }
-            /* Judged after the check at the next mount has had it, since that
-               is what a machine coming back up would read. */
             if (krffs_repair_at(&mount, (uint32_t *)0, (uint32_t *)0, (uint32_t *)0) != 0) {
                 return 0;
             }
@@ -581,10 +603,11 @@ static int every_stop_file_is_whole(const uint8_t *before, uint32_t size, const 
 }
 
 /**
- * Every stop, asked whether the file called `name` ever holds, inside the
- * length it publishes, a byte other than the one it was written with: what a
- * shrink that put the surplus's free header on the medium before the shorter
- * length looks like to a reader with the old length in hand.
+ * Whether no state a stop can leave shows the file called `name` holding,
+ * inside the length it publishes, a byte other than `value`, the one it was
+ * written with. Such a byte is what a shrink that put the surplus's free
+ * header on the medium before the shorter length shows a reader with the old
+ * length in hand. The states are those `every_stop_file_is_whole` judges.
  */
 static int every_stop_keeps_its_bytes(const uint8_t *before, uint32_t size, const char *name,
                                       uint8_t value)
@@ -655,9 +678,10 @@ static int every_stop_keeps_its_bytes(const uint8_t *before, uint32_t size, cons
 }
 
 /**
- * Every stop, asked whether a file ever claims a byte past `old_length` that
- * is not a zero: what a length published before the zeroes it counts looks
- * like when a file grows into slack it already had.
+ * Whether no state a stop can leave, losing at most whole blocks, shows a
+ * file claiming a byte past `old_length` that is not a zero: what a length
+ * published before the zeroes it counts shows when a file grows into slack
+ * it already had.
  */
 static int every_stop_is_zero_filled(const uint8_t *before, uint32_t size, uint64_t old_length)
 {
@@ -747,13 +771,20 @@ static int no_name_is_on_two_nodes(krffs_mount_t *mount)
 }
 
 /**
- * Run `what` with the backend refusing one of its calls, and judge what the
- * file system was left with.
+ * Run `what` on `before`, copied into `img`, with one of the backend's calls
+ * failing, and judge what the file system was left with.
  *
- * A non-negative `which` refuses that write; a negative one refuses the sync
- * at that position, since a medium can refuse either. The core must not
- * publish a change over a call that was refused, and what it leaves must be
- * an image a mount can walk with no file half made under a name.
+ * A non-negative `which` fails that write; a negative one fails the call at
+ * position `-which - 1` if it is a sync, since a medium can fail either. The
+ * core must not publish a change over a call that failed, and what it leaves
+ * must be an image a mount can walk with no file half made under a name: the
+ * file the create makes, "second", is in the root with mode 0644 wherever it
+ * has its name.
+ *
+ * An operation that reports success must also leave no name on two nodes,
+ * judged before the check has had the image: a move that could not free the
+ * node it copied from would leave two nodes under one name, and a caller
+ * told the operation succeeded would read whichever the walk reaches first.
  */
 static int survives_refusal(uint8_t *img, const uint8_t *before, uint32_t size,
                             int (*what)(krffs_mount_t *), int which)
@@ -770,7 +801,7 @@ static int survives_refusal(uint8_t *img, const uint8_t *before, uint32_t size,
     if (which >= 0) {
         refused_write = which;
     } else {
-        refused_sync = -which - 1; /* a refused sync, counted the same way */
+        refused_sync = -which - 1;
     }
     answer = what(&mount);
     refused_write = -1;
@@ -779,10 +810,6 @@ static int survives_refusal(uint8_t *img, const uint8_t *before, uint32_t size,
     if (!forward_chain_closes(&mount)) {
         return 0;
     }
-    /* Before the check has had it, and only of an operation that says it
-       worked: a move that could not free the node it copied from would leave
-       two nodes under one name, and a caller told the operation succeeded
-       would read whichever the walk reaches first. */
     if (answer == 0 && !no_name_is_on_two_nodes(&mount)) {
         return 0;
     }
@@ -801,8 +828,6 @@ static int survives_refusal(uint8_t *img, const uint8_t *before, uint32_t size,
                     return 0;
                 }
             }
-            /* A name is only on a node that is finished: the file the row
-               makes is in the root, with the mode it was made with. */
             if (k_strcmp_name(head.name, "second") &&
                 (head.parent_id != 0 || (head.mode & 07777u) != 0644)) {
                 return 0;
@@ -813,27 +838,34 @@ static int survives_refusal(uint8_t *img, const uint8_t *before, uint32_t size,
     return krffs_chain_is_valid(&mount);
 }
 
-/* The three operations the refusal sweep runs, each answering what the core
-   answered: an operation that reports success has made its change, and the
-   sweep holds it to that. */
+/**
+ * Create /second, a name the image does not have, so that the allocator
+ * runs: a create of a name that exists returns success without taking a
+ * node. This and the two operations after it are the ones the sweep of
+ * failing calls runs; each returns what the core returned, and one that
+ * reports success is held to having made its change.
+ */
 static int make_a_file(krffs_mount_t *mount)
 {
-    /* A name the image does not have, so the allocator really runs: creating
-       one that exists answers success without taking a node. */
     return krffs_create_at(mount, "/second");
 }
 
+/** Grow /refused to 3000 bytes. */
 static int grow_a_file(krffs_mount_t *mount)
 {
     return krffs_truncate_at(mount, "/refused", 3000, (uint64_t *)0);
 }
 
+/** Remove /refused. */
 static int remove_a_file(krffs_mount_t *mount)
 {
     return krffs_unlink_at(mount, "/refused");
 }
 
-/** Check the same fixed hashes as the host image stager. */
+/**
+ * Check the kernel's `krffs_calculate_djb_hash` and `krffs_mix_id` against
+ * the vectors krffs_hash_hosttest.c checks the host stager's hashes against.
+ */
 static void hash_rows(void)
 {
 #define HASH_VECTOR(parent, name, djb, mixed)                       \
@@ -849,8 +881,8 @@ static void hash_rows(void)
  *
  * Two regular files of one name in different directories must not share a
  * number: `cp -a` takes a shared number for a hard link and copies the pair
- * as one file, which merged every account's `authorized_keys` when an update
- * copied the kept homes on the recovery system. A directory keeps its id.
+ * as one file. A file's number is its parent's id mixed with its name, and a
+ * directory's number is its id.
  */
 static void ino_rows(void)
 {
@@ -876,8 +908,11 @@ static void ino_rows(void)
 }
 
 /**
- * Open files retain their nodes after unlink, so test the orphan operation
- * that leaves them allocated. Root walks must ignore its missing type bits.
+ * Check the inode numbers of the root and of unlinked open files. The root,
+ * whose mode here has no type bits, is number 1 through every path that
+ * reaches it, by offset and by pointer. An open file keeps its node after
+ * an unlink, which `krffs_orphan_at` leaves allocated, and two such siblings
+ * keep the distinct numbers they had.
  */
 static void ino_lifetime_rows(void)
 {
@@ -927,10 +962,12 @@ static void ino_lifetime_rows(void)
  *
  * A node being made is reached by no path until its name is written, last
  * and after a sync point, so a torn id or parent in it is read by nobody,
- * and the rule is not asked of them: a create whose free node put the id
- * astride a unit was refused before (entry 15 of milestone 50). The spacer
- * puts the next node's id at 4092, four of its bytes on each side of the
- * line, and the new name's hash changes bytes on both sides.
+ * and the rule does not apply to them: a create must succeed where its free
+ * node puts the id astride a unit. The spacer puts the next node's id at
+ * 4092, four of its bytes on each side of the line, and the new name's hash
+ * changes bytes on both sides. A directory is made in the same way, and its
+ * id, which its children name it by, is the mix of its parent's and its
+ * name.
  */
 static void straddle_create_rows(void)
 {
@@ -968,8 +1005,6 @@ static void straddle_create_rows(void)
           "with its whole id and its parent");
     check(krffs_chain_is_valid(&mount) == 1, "the chain is sound after the create");
 
-    /* A directory is a node being made in the same way, and its id is the
-       mix of its parent's and its name, which children name it by. */
     make_image(image, IMAGE_SIZE);
     check(krffs_create_at(&mount, "/spacer") == 0 &&
               krffs_truncate_at(&mount, "/spacer", 3375, (uint64_t *)0) == 0,
@@ -989,16 +1024,16 @@ static void straddle_create_rows(void)
 }
 
 /**
- * Refuse a directory whose identifier another directory already has.
+ * Check that a directory whose identifier another directory already has is
+ * not made.
  *
  * A directory's identifier is its parent's identifier mixed with the DJB
  * hash of its name, and a child names its parent by that identifier alone.
  * `bC` and `cb` hash alike, so a second directory of the two in one parent
- * would share the first one's children (entry 125 of milestone 50). The
- * first is made and given a child; the second must be refused with
- * `KRFFS_ETAKEN`, a result of its own that the adapters report as EINVAL and
- * not as a full or a failing volume (entry 243), the first must keep its
- * child, and the refused name must reach nothing.
+ * would share the first one's children. The first is made and given a
+ * child; the second must fail with `KRFFS_ETAKEN`, a result of its own that
+ * the adapters report as `EINVAL` and not as a full or a failing volume; the
+ * first must keep its child, and the name that failed must reach nothing.
  */
 static void id_collision_rows(void)
 {
@@ -1035,8 +1070,10 @@ static const uint32_t across_fields[] = {KRFFS_FIELD_MODE,     KRFFS_FIELD_UID, 
                                          KRFFS_FIELD_ATIME,    KRFFS_FIELD_MTIME, KRFFS_FIELD_CTIME,
                                          KRFFS_FIELD_DATA_SIZE};
 
-/** Whether the node at `at` has `mode`, the owner and group 1000, and the
- * clock's moment in all three times. */
+/**
+ * Whether the node at `at` has `mode`, the owner and group 1000, and the
+ * clock's moment in all three times.
+ */
 static int has_given_fields(krffs_mount_t *mount, uint64_t at, uint16_t mode)
 {
     krffs_node_t head;
@@ -1069,8 +1106,10 @@ static int holds_bytes(krffs_mount_t *mount, uint64_t at, const char *bytes, uin
     return 1;
 }
 
-/** Grow `/spacer` so that the node after it starts at `at`, with `gap` more
- * bytes of it before that node. */
+/**
+ * Create `/spacer` and grow it so that the node after it starts `gap` bytes
+ * past `at`. Returns 1 when both succeed.
+ */
 static int place_after_spacer(krffs_mount_t *mount, uint64_t at, uint32_t gap)
 {
     return krffs_create_at(mount, "/spacer") == 0 &&
@@ -1087,11 +1126,17 @@ static int place_after_spacer(krffs_mount_t *mount, uint64_t at, uint32_t gap)
  * and the value it is given differs in both of those bytes from what the
  * place had. A node being made is read by nobody until its name is written
  * after every other field, and a copy being filled for a move until its type
- * is, so their fields are written without the rule (entry 244 of milestone
- * 50): a file and a directory must be made at each place with every field
- * they were given, a node must be made over a removed node whose length
- * crosses the line, and a file that has to move to each place must move
- * there with its fields and its bytes.
+ * is, so their fields are written without the rule: a file and a directory
+ * must be made at each place with every field they were given, a node must
+ * be made over a removed node whose length crosses the line, and a file that
+ * has to move to each place must move there with its fields and its bytes.
+ *
+ * For the move, the spacer holds the place and 2000 bytes after it while the
+ * file and a node after the file are made; cut back, it leaves a free node
+ * with a fresh header at the place, and the file, which cannot grow into the
+ * node after it, has to move there. For the removed node, the length of the
+ * file removed has its first two bytes on the two sides of the line, and the
+ * new node's length of 0 changes both.
  */
 static void across_rows(void)
 {
@@ -1131,10 +1176,6 @@ static void across_rows(void)
                   has_given_fields(&mount, at, (uint16_t)(KRFFS_S_IFDIR | 0644)),
               "and the directory is at the place with every field it was given");
 
-        /* The spacer holds the place and 2000 bytes after it while the file
-           and a node after the file are made; cut back, it leaves a free
-           node with a fresh header at the place, and the file, which cannot
-           grow into the node after it, has to move there. */
         make_image(image, IMAGE_SIZE);
         check(place_after_spacer(&mount, at, 2000) &&
                   krffs_create_node_at(&mount, "/mover", 0644, 1000, 1000) == 0,
@@ -1157,9 +1198,6 @@ static void across_rows(void)
         check(krffs_chain_is_valid(&mount) == 1, "the chain is sound after the move");
     }
 
-    /* A node made where a removed file left a length whose first two bytes
-       are on the two sides of the line: the new node's length of 0 changes
-       both. */
     at = 4096 - KRFFS_FIELD_DATA_SIZE - 1;
     make_image(image, IMAGE_SIZE);
     check(place_after_spacer(&mount, at, 0) && krffs_create_at(&mount, "/old") == 0,
@@ -1179,6 +1217,61 @@ static void across_rows(void)
     fake_nanoseconds = 0;
 }
 
+/**
+ * Run the rows of the functions above, then these, and return the count of
+ * failures, at most 255:
+ *
+ * - The mount check. A fresh image is sound; a bad magic, an unknown node
+ *   type, a size that leaves the region or is below a header, data larger
+ *   than its node, a backward link the forward chain contradicts, a root
+ *   whose backward link is not the last node, and a name that fills its
+ *   field, which has no end, are rejected. A free node's length is no fault
+ *   whatever it says: a free node keeps the length of what was removed
+ *   there, and a split leaves one larger than the node between the size it
+ *   publishes and the length it writes after it. A size no region could hold
+ *   allocates nothing, before the arithmetic that adds a header can wrap.
+ * - The operations: a create, a write, a write past the end, whose hole
+ *   reads as zeroes, a truncate, a grow, which reads as zeroes, and a grow
+ *   with a node in the way, which moves the file with its contents; the
+ *   directory operations; a rename; and an orphan, a node no path reaches,
+ *   which the reaper frees.
+ * - A field the medium would reach in two pieces. A backend that puts whole
+ *   blocks on the medium writes a field across two of them in two writes,
+ *   and a stop between them leaves a value nobody wrote, so with the
+ *   whole-unit rule on the core fails such a write. Only the bytes that
+ *   change count: on an owner field that ends one byte into the second
+ *   block, a value that changes one byte on one side of the line is written.
+ * - A rename over an existing name, where the rule fails the source's new
+ *   id, at 4092 across the line, must fail before the destination is
+ *   removed, or it would leave one name where there were two.
+ * - One name on two nodes, as a rename that published its new parent and
+ *   stopped before its new name leaves them. The repair keeps the name on
+ *   the larger, the copy a move was making, but never takes a directory's
+ *   name: its children name it by its id, and clearing it would put a whole
+ *   tree out of reach.
+ * - The ends of the region: the whole free node can be taken and given
+ *   back, and a remainder too small for a header of its own stays in the
+ *   node.
+ * - The order of writes, over free space filled with `POISON`: every stop
+ *   inside a create, a write, a grow, a truncate, a grow of less than a
+ *   header, a move and a removal leaves a chain a mount can walk. A grow of
+ *   less than a header publishes two sizes: the tail's header lands where
+ *   the free node's own header was, so the first size must be on the medium
+ *   before it is written. The file a move copies is filled with a byte of
+ *   its own, so that a copy that did not reach the medium shows in what the
+ *   moved node holds.
+ * - A length raised inside the slack a node already has shows no byte the
+ *   file held before. A shrink whose surplus is large enough for a header of
+ *   its own writes that header inside the bytes the old length counts, so
+ *   the shorter length must be on the medium first, and the file, filled
+ *   with a byte of its own, may show nothing else inside the length it
+ *   publishes.
+ * - A backend that fails one call: each write and each sync of a grow, a
+ *   removal and a create, in turn. A second file right behind the first
+ *   leaves the grow no room, so it must copy the file elsewhere, 64 bytes at
+ *   a time, and free the node it came from, and the count of calls runs well
+ *   past the fields; a call that never happens fails nothing.
+ */
 int main(void)
 {
     static uint8_t before[IMAGE_SIZE];
@@ -1197,8 +1290,6 @@ int main(void)
     straddle_create_rows();
     id_collision_rows();
     across_rows();
-
-    /* ---- the mount check ---- */
 
     make_image(image, IMAGE_SIZE);
     mount = mount_over(&memory_backend, image, IMAGE_SIZE);
@@ -1229,9 +1320,6 @@ int main(void)
     {
         uint64_t data = IMAGE_SIZE;
 
-        /* On a node that has data: the second node of a fresh image is the
-           free one, and a free node keeps the length of whatever was removed
-           there, which the allocator rewrites when it takes it. */
         krffs_create_at(&mount, "/data.bin");
         k_memcpy(image + sizeof(krffs_node_t) + KRFFS_FIELD_DATA_SIZE, &data, sizeof(data));
         check(krffs_chain_is_valid(&mount) == 0, "data larger than its node is refused");
@@ -1240,9 +1328,6 @@ int main(void)
     {
         uint64_t data = IMAGE_SIZE;
 
-        /* And not on one that has none: a free node whose length is larger
-           than the node is what a split leaves between the size it publishes
-           and the length it writes after it. */
         k_memcpy(image + sizeof(krffs_node_t) + KRFFS_FIELD_DATA_SIZE, &data, sizeof(data));
         check(krffs_chain_is_valid(&mount) == 1,
               "a free node's length is not a fault whatever it says");
@@ -1265,8 +1350,6 @@ int main(void)
         make_image(image, IMAGE_SIZE);
     }
     {
-        /* A name that fills its field has no end, and everything that reads
-           a name would read past it. */
         uint64_t offset = sizeof(krffs_node_t);
 
         image[offset + KRFFS_FIELD_TYPE] = KRFFS_RESERVED_NODE;
@@ -1277,15 +1360,11 @@ int main(void)
         make_image(image, IMAGE_SIZE);
     }
 
-    /* A size no region could hold is refused before the arithmetic that adds
-       a header to it can wrap. */
     check(krffs_allocate_at(&mount, (uint64_t)-1, KRFFS_NO_NODE) == KRFFS_NO_NODE,
           "a size larger than the region allocates nothing");
     check(krffs_allocate_at(&mount, IMAGE_SIZE, KRFFS_NO_NODE) == KRFFS_NO_NODE,
           "and neither does one exactly the region's size");
     check(krffs_chain_is_valid(&mount) == 1, "and the chain is what it was before both");
-
-    /* ---- the operations ---- */
 
     check(krffs_create_at(&mount, "/alpha") == 0, "a file is created");
     node = krffs_walk(&mount, "/alpha");
@@ -1309,7 +1388,6 @@ int main(void)
     check(krffs_read_at(&mount, node, buffer, 16, 16) == 0, "a read past the end answers nothing");
     check(krffs_chain_is_valid(&mount) == 1, "the chain is sound after a write");
 
-    /* A write past the end leaves a hole, and a hole reads as zeroes. */
     buffer[0] = 'z';
     check(krffs_write_at(&mount, &node, buffer, 1, 100) == 1,
           "a write past the end grows the file");
@@ -1334,7 +1412,6 @@ int main(void)
           "and the growth is zeroes");
     check(krffs_chain_is_valid(&mount) == 1, "the chain is sound after a grow");
 
-    /* A grow with a node in the way relocates, and the contents move. */
     check(krffs_create_at(&mount, "/beta") == 0, "a second file is created");
     other = krffs_walk(&mount, "/beta");
     check(krffs_write_at(&mount, &other, buffer, 8, 0) == 8, "and written");
@@ -1353,7 +1430,6 @@ int main(void)
               "the moved file has the length the write made");
     }
 
-    /* Directories. */
     check(krffs_mkdir_at(&mount, "/dir", 0755, 0, 0) == 0, "a directory is made");
     check(krffs_mkdir_at(&mount, "/dir", 0755, 0, 0) == -1, "and not twice");
     check(krffs_create_at(&mount, "/dir/inner") == 0, "a file inside it");
@@ -1371,7 +1447,6 @@ int main(void)
     check(krffs_rmdir_at(&mount, "/dir") == 0, "and then the directory is");
     check(krffs_chain_is_valid(&mount) == 1, "the chain is sound after the directory rows");
 
-    /* A rename moves the name, and an orphan is a node no path reaches. */
     check(krffs_rename_at(&mount, "/beta", "/gamma") == 0, "a file is renamed");
     check(krffs_walk(&mount, "/beta") == KRFFS_NO_NODE, "the old name is gone");
     check(krffs_walk(&mount, "/gamma") != KRFFS_NO_NODE, "the new one is not");
@@ -1381,14 +1456,6 @@ int main(void)
     check(krffs_reap_orphans_at(&mount) == 0, "and finds nothing the next time");
     check(krffs_chain_is_valid(&mount) == 1, "the chain is sound after reaping");
 
-    /* ---- a field the medium would reach in two pieces ---- */
-
-    /* A backend that puts whole blocks on the medium writes a field that
-       spans two of them twice, and a stop between the two leaves a value
-       nobody wrote. The core refuses such a write. Only the bytes that
-       change count: a field whose changed byte is on one side of the line is
-       written like any other. The node below is placed so that its owner
-       field ends one byte into the second block. */
     make_image(image, IMAGE_SIZE);
     check(krffs_create_at(&mount, "/spacer") == 0, "a file to place the next one");
     check(krffs_truncate_at(&mount, "/spacer", 3110, (uint64_t *)0) == 0,
@@ -1412,13 +1479,6 @@ int main(void)
         mount.grain = 0;
     }
 
-    /* ---- a rename the whole-unit rule refuses changes nothing ---- */
-
-    /* The id field of a node placed across a block, and a rename over an
-       existing name: the rule refuses the id, and it must refuse before
-       the destination is removed, or a refused rename leaves one name where
-       there were two. The spacer's size puts the next node's id at 4092,
-       four of its bytes on each side of the line. */
     make_image(image, IMAGE_SIZE);
     check(krffs_create_at(&mount, "/spacer") == 0, "a file to place the next one");
     check(krffs_truncate_at(&mount, "/spacer", 3375, (uint64_t *)0) == 0,
@@ -1459,13 +1519,6 @@ int main(void)
         mount.grain = 0;
     }
 
-    /* ---- one name on two nodes, when one of them is a directory ---- */
-
-    /* A rename that published its new parent and stopped before its new name
-       leaves the file it moved beside whatever already had that name there.
-       The repair keeps the larger, which is the copy a move was making, but
-       never a directory's name: its children name it by its id, and clearing
-       it would put a whole tree out of reach. */
     make_image(image, IMAGE_SIZE);
     check(krffs_mkdir_at(&mount, "/both", 0755, 0, 0) == 0, "a directory is made");
     check(krffs_create_at(&mount, "/file") == 0, "and a file beside it");
@@ -1493,8 +1546,6 @@ int main(void)
               "and the file that took its name lost it");
     }
 
-    /* ---- the ends of the region ---- */
-
     make_image(image, IMAGE_SIZE);
     {
         uint32_t before_free = krffs_free_at(&mount);
@@ -1513,7 +1564,6 @@ int main(void)
         check(krffs_chain_is_valid(&mount) == 1, "sound again");
     }
     {
-        /* A remainder too small for a header of its own stays in the node. */
         uint32_t free_bytes = krffs_free_at(&mount);
         uint64_t taken = krffs_allocate_at(&mount, free_bytes - 8, KRFFS_NO_NODE);
 
@@ -1524,8 +1574,6 @@ int main(void)
         check(krffs_chain_is_valid(&mount) == 1, "and the chain is sound");
         krffs_remove_at(&mount, taken);
     }
-
-    /* ---- the order of writes ---- */
 
     make_image(image, IMAGE_SIZE);
     for (i = 2 * (int)sizeof(krffs_node_t); i < (int)IMAGE_SIZE; i++) {
@@ -1572,9 +1620,6 @@ int main(void)
     check(every_stop_is_sound(before, IMAGE_SIZE) && every_lost_write_is_sound(before, IMAGE_SIZE),
           "every stop inside a truncate leaves a chain a mount can walk");
 
-    /* A growth shorter than a header, which is the case the grow publishes two
-       sizes for: the tail's header lands where the free node's own header was,
-       so the first size must be on the medium before it is written. */
     k_memcpy(before, image, IMAGE_SIZE);
     recorded_count = 0;
     sync_count = 0;
@@ -1584,9 +1629,6 @@ int main(void)
     check(every_stop_is_sound(before, IMAGE_SIZE) && every_lost_write_is_sound(before, IMAGE_SIZE),
           "every stop inside a grow of less than a header leaves a chain a mount can walk");
 
-    /* A move: a second file boxes the first in, so the grow relocates it.
-       The file to be moved is filled with a byte of its own, so a copy that
-       did not reach the medium is visible in what the moved node holds. */
     for (i = 0; i < 16; i++) {
         buffer[i] = (char)0xC3;
     }
@@ -1621,8 +1663,6 @@ int main(void)
     check(every_stop_is_sound(before, IMAGE_SIZE) && every_lost_write_is_sound(before, IMAGE_SIZE),
           "every stop inside a removal leaves a chain a mount can walk");
 
-    /* ---- a length raised inside the slack a node already has ---- */
-
     make_image(image, IMAGE_SIZE);
     for (i = 2 * (int)sizeof(krffs_node_t); i < (int)IMAGE_SIZE; i++) {
         image[i] = POISON;
@@ -1652,11 +1692,6 @@ int main(void)
     check(krffs_read_at(&mount, node, buffer, 4, 100) == 4 && buffer[0] == 0 && buffer[3] == 0,
           "and the bytes it grew by are zeroes, not what the file held before");
 
-    /* A shrink that leaves a surplus large enough for a header of its own:
-       that header is written inside the bytes the length still on the medium
-       counts, so the shorter length must be there first. The file is filled
-       with a byte of its own, and no stop may show it holding anything else
-       inside whatever length it publishes. */
     make_image(image, IMAGE_SIZE);
     check(krffs_create_at(&mount, "/cut") == 0, "the file to be cut short is made");
     for (i = 0; i < 4096; i++) {
@@ -1681,8 +1716,6 @@ int main(void)
     check(every_stop_keeps_its_bytes(before, IMAGE_SIZE, "cut", 0x5A),
           "and none of them shows the file holding the allocator's bytes");
 
-    /* ---- a backend that refuses a write ---- */
-
     make_image(image, IMAGE_SIZE);
     for (i = 2 * (int)sizeof(krffs_node_t); i < (int)IMAGE_SIZE; i++) {
         image[i] = POISON;
@@ -1691,10 +1724,6 @@ int main(void)
     krffs_create_at(&mount, "/refused");
     node = krffs_walk(&mount, "/refused");
     krffs_write_at(&mount, &node, buffer, 64, 0);
-    /* A second file right behind the first, so the grow below has no room
-       after it and must copy the file elsewhere and free the node it came
-       from. That freeing is a write like any other and the sweep refuses it
-       in its turn. */
     krffs_create_at(&mount, "/box");
     k_memcpy(before, image, IMAGE_SIZE);
 
@@ -1702,10 +1731,6 @@ int main(void)
         int which;
         int sound = 1;
 
-        /* Every call of each operation, in both kinds: a grow that must move
-           the file writes its bytes 64 at a time and then frees the node it
-           came from, so the count runs well past the fields; a call that
-           never happens refuses nothing. */
         for (which = -120; which < 120; which++) {
             if (!survives_refusal(image, before, IMAGE_SIZE, grow_a_file, which) ||
                 !survives_refusal(image, before, IMAGE_SIZE, remove_a_file, which) ||

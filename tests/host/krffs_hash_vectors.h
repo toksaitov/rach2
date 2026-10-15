@@ -1,11 +1,17 @@
+/*
+ * krffs_hash_vectors.h: fixed results of the KRFFS name hash and the node id
+ * mixed from a parent id and a name, which krffs_hosttest.c checks in the
+ * kernel and krffs_hash_hosttest.c checks in the host stager.
+ */
 #ifndef KRFFS_HASH_VECTORS_H_
 #define KRFFS_HASH_VECTORS_H_
 
 /**
- * Common KRFFS djb2 and parent-id vectors, modulo 2^64.
+ * The vectors, each a parent id, a name, the name's djb2 hash and the mixed
+ * id, all modulo 2^64.
  *
- * A test defines `HASH_VECTOR(parent, name, djb, mixed)` as the check it
- * wants, writes `KRFFS_HASH_VECTORS`, and undefines the macro again. The list
+ * A test defines `HASH_VECTOR(parent, name, djb, mixed)` as its check,
+ * writes `KRFFS_HASH_VECTORS`, and undefines the macro again. The list
  * expands where it is written, so one translation unit may use it more than
  * once.
  */
