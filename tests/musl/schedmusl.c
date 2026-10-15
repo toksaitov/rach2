@@ -1,5 +1,6 @@
 /**
- * How the kernel names and schedules a process, read through musl.
+ * schedmusl: check how the kernel identifies and schedules a process, read
+ * through musl.
  *
  * `gettid` returns the process id, in the process and in a forked child
  * alike, since each of this probe's processes has one thread; in a process
@@ -9,27 +10,28 @@
  * child, and read raw as 20 less itself. Set for a process group it reaches
  * every member, and read for one it is the lowest. A caller of another user
  * may raise its own nice value but not lower it, and may not change root's
- * process; it may set its own user's. No process of a user, a pid or an
- * unknown `which` is refused.
+ * process; it may set its own user's. A user or a pid with no process fails
+ * with ESRCH, and an unknown `which` with EINVAL.
  *
  * `sched_yield` returns 0. Every process has SCHED_OTHER with priority 0, and
  * asking for it, with SCHED_RESET_ON_FORK or not, succeeds; SCHED_FIFO and
- * SCHED_RR are refused with EPERM, and the other policies, a priority that does
- * not suit its policy, and an unknown policy with EINVAL. The priority ranges
+ * SCHED_RR fail with EPERM, and the other policies, a priority that does not
+ * suit its policy, and an unknown policy with EINVAL. The priority ranges
  * are Linux's, and the time slice is one 10 ms tick. The affinity is the
  * processors /proc/cpuinfo lists, by their ids, which need not run without a
  * gap, read raw as the bytes of the longs the highest takes, four on i386 to
  * 32 processors and eight past them and on x86-64; a mask of the last
  * processor alone is accepted, kept, and moves the caller there, as getcpu
- * then says, and one of a processor not started is refused. A caller
- * of another user may not change root's process, and a pid of no process is
- * refused with ESRCH. musl answers the policy and parameter calls with ENOSYS
- * itself, so those rows call the kernel through `syscall`.
+ * then says, and one of a processor not started fails with EINVAL. A caller
+ * of another user may not change root's process, a pid of no process fails
+ * with ESRCH, and a negative pid with EINVAL. musl answers the policy and
+ * parameter calls with ENOSYS itself, so those rows call the kernel through
+ * `syscall`.
  *
  * /proc/self/oom_score_adj reads 0 at first and is root's, mode 0644, while
  * the process is dumpable; a write, opened as a shell's redirection opens
  * it, reads back, a child inherits it, and a value past -1000 to 1000 or
- * text that is no number is refused with EINVAL. A caller of user 1000,
+ * text that is no number fails with EINVAL. A caller of user 1000,
  * made dumpable again after it gave up root, owns its file; it may raise its
  * value and lower it to the floor a privileged write left, but not below,
  * which is EACCES, and with no privileged write before, not below 0; it may
@@ -41,7 +43,8 @@
  * which is EPERM, nor change root's process. musl has no wrapper for these
  * calls, so they go through `syscall`.
  *
- * Prints "SCHEDMUSL OK" on success and "SCHEDMUSL FAIL (detail)" otherwise.
+ * It prints "SCHEDMUSL OK" and exits 0 on success, or prints "SCHEDMUSL FAIL
+ * (detail)" and exits 1 at the first failure.
  */
 
 #define _GNU_SOURCE
@@ -59,10 +62,12 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-/** The processors /proc/cpuinfo lists by their "processor" lines, each id
- * set in `*set`; their count, or 0. The ids need not run from 0 without a
- * gap, since the kernel goes on starting processors past one that does not
- * start. */
+/**
+ * Set in `*set` the id of each processor /proc/cpuinfo lists on a
+ * "processor" line. Returns their count, or 0 when the file cannot be read.
+ * The ids need not run from 0 without a gap, since the kernel goes on
+ * starting processors past one that does not start.
+ */
 static int cpuinfo_ids(cpu_set_t *set)
 {
     char line[256];
@@ -91,7 +96,10 @@ static int fail(const char *what)
     return 1;
 }
 
-/** The thread id: the process id, here and in a child. */
+/**
+ * Check that the thread id is the process id, here and in a child. Returns 0,
+ * or 1 after the failure is printed.
+ */
 static int thread_ids(void)
 {
     pid_t child;
@@ -113,7 +121,10 @@ static int thread_ids(void)
     return 0;
 }
 
-/** Run `test` in a child and return its exit status, or -1. */
+/**
+ * Run `test` in a forked child and return its exit status, or -1 when the
+ * fork failed or the child did not exit.
+ */
 static int in_child(int (*test)(void))
 {
     pid_t child = fork();
@@ -131,14 +142,17 @@ static int in_child(int (*test)(void))
     return WEXITSTATUS(status);
 }
 
-/** A child's view: the nice value it inherited, -5. */
+/** Run in a child: return 0 when it inherited the nice value -5, else 1. */
 static int inherited(void)
 {
     return getpriority(PRIO_PROCESS, 0) == -5 ? 0 : 1;
 }
 
-/** A group of two: set for the group, both have it, and the group reads as
- * its lowest. */
+/**
+ * Run in a child: make a process group of two, check that a nice value set
+ * for the group reaches the other member, and that the group reads as its
+ * lowest. Returns 0, or the number of the step that failed.
+ */
 static int group(void)
 {
     pid_t member;
@@ -165,8 +179,11 @@ static int group(void)
     return rc;
 }
 
-/** A caller of user 1000: it may raise its own nice value and set its
- * user's, and may neither lower its own nor change root's process. */
+/**
+ * Run in a child of root: become user 1000, and check that it may raise its
+ * own nice value and set its user's, and may neither lower its own nor
+ * change root's process. Returns 0, or the number of the step that failed.
+ */
 static int unprivileged(void)
 {
     if (setresgid(1000, 1000, 1000) != 0 || setresuid(1000, 1000, 1000) != 0) {
@@ -187,8 +204,10 @@ static int unprivileged(void)
     return 0;
 }
 
-/** The nice value: kept, clamped, inherited, raw, by group and by user, and
- * the refusals. */
+/**
+ * Check the nice value: kept, clamped, inherited, raw, by group and by user,
+ * and the errors. Returns 0, or 1 after the failure is printed.
+ */
 static int priorities(void)
 {
     errno = 0;
@@ -237,8 +256,10 @@ static int priorities(void)
     return 0;
 }
 
-/** Ask the kernel to set `pid` to `policy` at `priority`; 0, or -1 with
- * errno set. */
+/**
+ * Ask the kernel to set `pid` to `policy` at `priority`. Returns 0, or -1
+ * with errno set.
+ */
 static long set_policy(pid_t pid, int policy, int priority)
 {
     struct sched_param sp;
@@ -247,8 +268,11 @@ static long set_policy(pid_t pid, int policy, int priority)
     return syscall(SYS_sched_setscheduler, (long)pid, (long)policy, &sp);
 }
 
-/** A caller of user 1000 may change neither the policy nor the affinity of
- * root's process. */
+/**
+ * Run in a child of root: become user 1000, and check that it may change
+ * neither the policy nor the affinity of root's process. Returns 0, or the
+ * number of the step that failed.
+ */
 static int not_root(void)
 {
     cpu_set_t set;
@@ -267,8 +291,11 @@ static int not_root(void)
     return 0;
 }
 
-/** Yielding, and the policy and parameter calls that ask for what every
- * process has: SCHED_OTHER at priority 0. */
+/**
+ * Check yielding, and the policy and parameter calls that ask for what every
+ * process has: SCHED_OTHER at priority 0. Returns 0, or 1 after the failure is
+ * printed.
+ */
 static int policy_calls(void)
 {
     struct sched_param sp;
@@ -294,8 +321,10 @@ static int policy_calls(void)
     return 0;
 }
 
-/** The policies and priorities this kernel does not run, each refused with
- * EPERM or EINVAL. */
+/**
+ * Check that the policies and priorities this kernel does not run each fail
+ * with EPERM or EINVAL. Returns 0, or 1 after the failure is printed.
+ */
 static int policy_refusals(void)
 {
     static const int refused[] = {SCHED_BATCH, SCHED_IDLE, SCHED_DEADLINE, 4, 42};
@@ -323,7 +352,10 @@ static int policy_refusals(void)
     return 0;
 }
 
-/** The priority ranges, which are Linux's, and the time slice, one tick. */
+/**
+ * Check the priority ranges, which are Linux's, and the time slice, one
+ * tick. Returns 0, or 1 after the failure is printed.
+ */
 static int ranges(void)
 {
     struct timespec slice;
@@ -343,9 +375,14 @@ static int ranges(void)
     return 0;
 }
 
-/** The affinity: the processors /proc/cpuinfo lists, its raw size, a mask
+/**
+ * Check the affinity: the processors /proc/cpuinfo lists, its raw size, a mask
  * of the last processor alone, which moves the caller there, and one of a
- * processor not started. */
+ * processor not started. The raw size is the mask's bytes as Linux rounds them,
+ * to longs enough for the highest processor: four on i386 up to 32 processors
+ * and eight past them, and eight on x86-64. Returns 0, or 1 after the failure
+ * is printed.
+ */
 static int affinity(void)
 {
     cpu_set_t set, online;
@@ -364,9 +401,6 @@ static int affinity(void)
     if (cpus < 1 || cpus > 64 || last >= 64) {
         return fail("/proc/cpuinfo lists no processor, or one past the 64 the kernel has");
     }
-    /* The mask's bytes as Linux rounds them, to longs enough for the
-       highest processor: four on i386 up to 32 processors and eight past
-       them, and eight on x86-64. */
     mask_bytes = (long)((unsigned)last / (8u * sizeof(long)) + 1u) * (long)sizeof(long);
     memset(&set, 0xFF, sizeof(set));
     if (sched_getaffinity(0, sizeof(set), &set) != 0 || !CPU_EQUAL(&set, &online)) {
@@ -403,9 +437,11 @@ static int affinity(void)
     return 0;
 }
 
-/** Yielding, the policy calls, the ranges, the time slice and the
- * affinity, then the refusals for root's process, for a pid of no process
- * and for a negative pid. */
+/**
+ * Check yielding, the policy calls, the ranges, the time slice and the
+ * affinity, then the errors for root's process, for a pid of no process and
+ * for a negative pid. Returns 0, or 1 after the failure is printed.
+ */
 static int scheduling(void)
 {
     struct timespec slice;
@@ -431,8 +467,10 @@ static int scheduling(void)
 /* The calling process's OOM score adjustment. */
 #define SELF_OOM "/proc/self/oom_score_adj"
 
-/** Read the OOM score adjustment at `path` into `*v`: 0, or -1 when the file
- * cannot be read or has no number and newline. */
+/**
+ * Read the OOM score adjustment at `path` into `*v`. Returns 0, or -1 when
+ * the file cannot be read or has no number and newline.
+ */
 static int oom_read(const char *path, int *v)
 {
     char buf[16];
@@ -452,8 +490,10 @@ static int oom_read(const char *path, int *v)
     return 0;
 }
 
-/** Write `text` to the OOM score adjustment at `path`, opened as a shell's
- * redirection opens it: 0, or -1 with errno set. */
+/**
+ * Write `text` to the OOM score adjustment at `path`, opened as a shell's
+ * redirection opens it. Returns 0, or -1 with errno set.
+ */
 static int oom_write(const char *path, const char *text)
 {
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -470,8 +510,10 @@ static int oom_write(const char *path, const char *text)
     return n == (ssize_t)strlen(text) ? 0 : -1;
 }
 
-/** Give up root for user 1000 and become dumpable again, which makes the
- * process's /proc files its own: 0, or -1. */
+/**
+ * Give up root for user 1000 and become dumpable again, which makes the
+ * process's /proc files its own. Returns 0, or -1.
+ */
 static int become_user(void)
 {
     if (setresgid(1000, 1000, 1000) != 0 || setresuid(1000, 1000, 1000) != 0 ||
@@ -482,9 +524,9 @@ static int become_user(void)
 }
 
 /**
- * A child of root: its adjustment's first value, mode and owner, a write
- * that reads back, a child that inherits it, and the range. 0, or the number
- * of the row that failed, 1 to 5.
+ * Run in a child of root: check its adjustment's first value, mode and owner,
+ * a write that reads back, a child that inherits it, and the range. Returns
+ * 0, or the number of the row that failed, 1 to 5.
  */
 static int root_rows(void)
 {
@@ -518,10 +560,10 @@ static int root_rows(void)
 }
 
 /**
- * A child of root that sets its adjustment to 100 and becomes user 1000,
- * which may raise it and lower it to that floor but not below, and may not
- * open root's process's file for writing. 0, or the number of the row that
- * failed, 6 to 9.
+ * Run in a child of root: set the adjustment to 100 and become user 1000,
+ * and check that the user may raise it and lower it to that floor but not
+ * below, and may not open root's process's file for writing. Returns 0, or
+ * the number of the row that failed, 6 to 9.
  */
 static int user_rows(void)
 {
@@ -545,9 +587,11 @@ static int user_rows(void)
     return 0;
 }
 
-/** A child of root that becomes user 1000 before any privileged write: it
- * may not lower its adjustment below 0. 0, or 1 when it could, 2 when it
- * could not become the user. */
+/**
+ * Run in a child of root: become user 1000 before any privileged write, and
+ * check that the user may not lower its adjustment below 0. Returns 0, or 1
+ * when it could, and 2 when it could not become the user.
+ */
 static int floor_zero(void)
 {
     if (become_user() != 0) {
@@ -559,8 +603,10 @@ static int floor_zero(void)
     return 0;
 }
 
-/** The OOM score adjustment, as `root_rows`, `user_rows` and `floor_zero`
- * try it. */
+/**
+ * Check the OOM score adjustment with `root_rows`, `user_rows` and
+ * `floor_zero`, each in a child. Returns 0, or 1 after the failure is printed.
+ */
 static int oom_score(void)
 {
     static const char *const rows[] = {
@@ -596,14 +642,20 @@ static int oom_score(void)
 #define IOPRIO_CLASS_IDLE  3
 #define IOPRIO(c, l)       ((c) << 13 | (l))
 
-/** A child's view: the I/O priority it inherited, best effort 3. */
+/**
+ * Run in a child: return 0 when it inherited the I/O priority best effort 3,
+ * and 1 otherwise.
+ */
 static int io_inherited(void)
 {
     return syscall(SYS_ioprio_get, IOPRIO_WHO_PROCESS, 0) == IOPRIO(IOPRIO_CLASS_BE, 3) ? 0 : 1;
 }
 
-/** A caller of user 1000: the idle class but not the real-time one, and
- * not root's process. */
+/**
+ * Run in a child of root: become user 1000, and check that it may take the
+ * idle class but not the real-time one, and may not change root's process.
+ * Returns 0, or the number of the step that failed.
+ */
 static int io_unprivileged(void)
 {
     if (setresgid(1000, 1000, 1000) != 0 || setresuid(1000, 1000, 1000) != 0) {
@@ -624,7 +676,10 @@ static int io_unprivileged(void)
     return 0;
 }
 
-/** The I/O priority: its first value, kept, inherited, and the refusals. */
+/**
+ * Check the I/O priority: its first value, kept, inherited, and the errors.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int io_priorities(void)
 {
     if (syscall(SYS_ioprio_get, IOPRIO_WHO_PROCESS, 0) != 0) {
