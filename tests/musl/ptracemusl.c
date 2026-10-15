@@ -1,49 +1,70 @@
 /**
- * ptrace, as GDB drives it.
+ * ptracemusl: check ptrace as GDB and strace drive it.
  *
  * A child that calls PTRACE_TRACEME and stops itself is reported stopped to its
  * parent. The parent reads and changes a word of the child's memory with
  * PEEKDATA and POKEDATA, and through /proc/PID/mem, where a read and a write
- * that run from a page into a hole do the bytes before the hole, and whose
- * descriptor keeps none of the memory of a child that has ended: once a child
- * that touched 16 MiB has ended, and before it is reaped, a read through a
- * descriptor of its memory returns 0 and the free memory /proc/meminfo reports
- * is back; reads the registers with GETREGS and the floating-point state with
- * GETFPXREGS, GETFPREGS on x86-64; steps one instruction with SINGLESTEP, which
- * moves the instruction pointer; plants a breakpoint with POKETEXT on a
- * read-only text page, continues to it, finds the child stopped by SIGTRAP just
- * past it, puts the text back, moves the instruction pointer back with SETREGS
- * and continues. PTRACE_SYSCALL stops the child at the entry and the exit of
- * getpid, with the call's number in orig_eax and its result in eax at the exit
- * (orig_rax and rax on x86-64), and bit 0x80 on the stop signal with
- * PTRACE_O_TRACESYSGOOD. At an entry stop the tracer changes the call through
- * orig_eax: getpid made getppid returns the parent's id, and a write made -1 is
- * not run and returns the eax the tracer set. A tracee SIGKILL reaches at the
- * entry stop of a write writes nothing. At the exit stop of a read a signal
- * interrupted, -1 in orig_eax keeps the read from being restarted after a
- * handler with SA_RESTART. PTRACE_O_TRACEEXEC stops the child after an execve
- * with the exec event, which waitid reports in si_status above the signal, and
- * a /proc/PID/mem descriptor opened before the execve reads nothing of the new
- * image. A debug register set through POKEUSER reads back through PEEKUSER, and
- * DR7 enables a breakpoint on a user address, the last of which a breakpoint
- * may end at, and not on a kernel address. PTRACE_ATTACH stops a running
- * process, which runs on after PTRACE_DETACH, and PTRACE_SEIZE stops for the
- * tracer one that a stop signal has already stopped, which stays stopped after
- * PTRACE_DETACH until SIGCONT. PTRACE_INTERRUPT stops a seized tracee blocked
- * in a read, which is restarted after. The child a seized tracee forks under
- * PTRACE_O_TRACEFORK first stops with PTRACE_EVENT_STOP and SIGTRAP. A signal
- * sent to a process whose first thread its tracer holds stopped wakes the other
- * thread, asleep in pause, which takes it. The usage a tracer's wait4 reports
- * for the end of a traced thread that is not the first has the time of the
- * children its process reaped. A process another process traces, which ends, is
- * reported to its tracer before its parent may reap it, and then to the parent;
- * the tracer's next wait finds nothing left to wait for. A tracee SIGKILL ends
- * sends its tracer, here its parent, a SIGCHLD of CLD_KILLED with the signal.
- * A tracer that moves a stopped tracee's thread pointer, by PTRACE_ARCH_PRCTL
- * on x86-64 and PTRACE_SET_THREAD_AREA on i386, reads it back, and the
- * tracee runs with it; a base past user space is refused on x86-64.
+ * that run from a page into a hole do the bytes before the hole. It reads the
+ * registers with GETREGS and the floating-point state with GETFPXREGS,
+ * GETFPREGS on x86-64; steps one instruction with SINGLESTEP, which moves the
+ * instruction pointer; plants a breakpoint with POKETEXT on a read-only text
+ * page, continues to it, finds the child stopped by SIGTRAP just past it, puts
+ * the text back, moves the instruction pointer back with SETREGS and continues.
+ * A /proc/PID/mem descriptor keeps none of the memory of a child that has
+ * ended: once a child that touched 16 MiB has ended, and before it is reaped, a
+ * read through a descriptor of its memory returns 0 and the free memory
+ * /proc/meminfo reports is back.
  *
- * Prints "PTRACEMUSL OK" on success and "PTRACEMUSL FAIL (detail)" otherwise.
+ * PTRACE_SYSCALL stops the child at the entry and the exit of getpid, with the
+ * call's number in orig_eax and its result in eax at the exit (orig_rax and rax
+ * on x86-64), and bit 0x80 on the stop signal with PTRACE_O_TRACESYSGOOD. At an
+ * entry stop the tracer changes the call through orig_eax: getpid made getppid
+ * returns the parent's id, and a write made -1 is not run and returns the eax
+ * the tracer set. A tracee that SIGKILL reaches at the entry stop of a write
+ * writes nothing. At the exit stop of a read a signal interrupted, -1 in
+ * orig_eax keeps the read from being restarted after a handler with SA_RESTART.
+ * PTRACE_O_TRACEEXEC stops the child after an execve with the exec event, which
+ * waitid reports in si_status above the signal, and a /proc/PID/mem descriptor
+ * opened before the execve reads nothing of the new image. A debug register set
+ * through POKEUSER reads back through PEEKUSER, and DR7 enables a breakpoint on
+ * a user address, the last of which a breakpoint may end at, and fails with
+ * EINVAL for one below user space. PTRACE_ATTACH stops a running process, which
+ * runs on after PTRACE_DETACH, and PTRACE_SEIZE stops for the tracer one that a
+ * stop signal has already stopped, which stays stopped after PTRACE_DETACH
+ * until SIGCONT. PTRACE_LISTEN keeps a seized tracee in the PTRACE_EVENT_STOP
+ * of its group stop until the stop ends, whether the SIGCONT comes before the
+ * listen or after it, and the end makes a new PTRACE_EVENT_STOP with SIGTRAP;
+ * at a signal-delivery stop it fails with EIO. PTRACE_INTERRUPT stops a seized
+ * tracee blocked in a read, which is restarted after. The child a seized tracee
+ * forks under PTRACE_O_TRACEFORK first stops with PTRACE_EVENT_STOP and
+ * SIGTRAP. A signal sent to a process whose first thread its tracer holds
+ * stopped wakes the other thread, asleep in pause, which takes it. The usage a
+ * tracer's wait4 reports for the end of a traced thread that is not the first
+ * has the time of the children its process reaped. A process another process
+ * traces, which ends, is reported to its tracer before its parent may reap it,
+ * and then to the parent; the tracer's next wait finds nothing left to wait
+ * for. A tracee that SIGKILL ends sends its tracer, here its parent, a SIGCHLD
+ * of CLD_KILLED with the signal. A tracer that moves a stopped tracee's thread
+ * pointer, by PTRACE_ARCH_PRCTL on x86-64 and PTRACE_SET_THREAD_AREA on i386,
+ * reads it back, and the tracee runs with it; on x86-64 a base past user space
+ * fails with EPERM or EIO.
+ *
+ * The rows of the debug exception: a single step over a system call instruction
+ * stops after it with the call's result; a system call made on an invalid user
+ * stack returns; the hit of a watchpoint on the word a MOV SS loads, which the
+ * processor delays past the system call after it, stops the tracee at the
+ * call's return, and ends with EINTR a poll that waits forever; and a
+ * watchpoint that the kernel's own access to user memory hits stops the tracee
+ * at its return to user mode, or, when the tracee waits for SIGTRAP in
+ * sigtimedwait, is taken by the wait. PTRACE_INTERRUPT of a tracee in
+ * PTRACE_LISTEN stops it before its next instruction.
+ *
+ * With no argument the program runs every row. With one argument it runs the
+ * row of named_rows that has that name, as tests/system/ptrace_debug_mutate.sh
+ * does. It prints "PTRACEMUSL OK" and exits 0 when the rows pass, or prints
+ * "PTRACEMUSL FAIL (detail: errno N)" and exits 1 at the first failure. Under
+ * QEMU TCG the two MOV SS rows print "ptracemusl: not run: debug exception
+ * preceded system call" and pass.
  */
 
 #define _GNU_SOURCE
@@ -101,8 +122,10 @@ typedef struct user_fpregs_struct fxregs_t;
 typedef struct user_fpxregs_struct fxregs_t;
 #endif
 
+/* The word the parent reads and changes in its traced child. */
 static volatile long target = 1234;
 
+/** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
 {
     printf("PTRACEMUSL FAIL (%s: errno %d)\n", what, errno);
@@ -115,6 +138,7 @@ __attribute__((noinline)) static int marked(int x)
     return x * 3;
 }
 
+/** Wait for `pid` and return 1 when it is stopped by `sig`, and 0 otherwise. */
 static int stopped_by(pid_t pid, int sig)
 {
     int status;
@@ -123,9 +147,10 @@ static int stopped_by(pid_t pid, int sig)
 }
 
 /**
- * A write and a read of 256 bytes through `path`, /proc/PID/mem of a child
- * that has the page `page` and a hole after it, from 128 bytes before the
- * hole: each does the 128 before the hole.
+ * Check a write and a read of 256 bytes through `path`, /proc/PID/mem of a
+ * child that has the page `page` and a hole after it, from 128 bytes before the
+ * hole: each does the 128 before the hole. Returns 0, or 1 after the failure is
+ * printed.
  */
 static int into_hole(const char *path, char *page)
 {
@@ -144,6 +169,12 @@ static int into_hole(const char *path, char *page)
     return ok ? 0 : fail("a transfer through /proc/PID/mem that runs into a hole");
 }
 
+/**
+ * Check PEEKDATA, POKEDATA, /proc/PID/mem and the rows of `into_hole`,
+ * GETREGS, the floating-point state, SINGLESTEP and a breakpoint planted with
+ * POKETEXT, in a child that ends with 0 only when it reads the word the parent
+ * wrote. Returns 0, or 1 after the failure is printed.
+ */
 static int memory_and_registers(void)
 {
     struct user_regs_struct regs, after;
@@ -222,9 +253,11 @@ static int memory_and_registers(void)
     return 0;
 }
 
-/** The exec event stop of `pid`, which waitid reports with the event above
- * the signal in si_status and waitpid with it in the status; 0, or 1 after
- * the failure is reported. */
+/**
+ * Wait for the exec event stop of `pid`, which waitid reports with the event
+ * above the signal in si_status and waitpid with it in the status.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int exec_event(pid_t pid)
 {
     siginfo_t si;
@@ -241,8 +274,11 @@ static int exec_event(pid_t pid)
     return 0;
 }
 
-/* Set debug register `n` of the stopped `pid` to `v`; the raw result. The
- * registers are words of struct user, 4 bytes on i386 and 8 on x86-64. */
+/**
+ * Set debug register `n` of the stopped `pid` to `v`, and return ptrace's
+ * result. The registers are words of struct user, 4 bytes on i386 and 8 on
+ * x86-64.
+ */
 static long debug_set(pid_t pid, int n, unsigned long v)
 {
     struct user u;
@@ -252,12 +288,14 @@ static long debug_set(pid_t pid, int n, unsigned long v)
                   (void *)v);
 }
 
-/*
- * DR7 enables a breakpoint only on user addresses: an execute breakpoint
- * at 0x1000 in DR0, which is not a user address, is refused, and a 4-byte
- * write breakpoint whose last byte is the last user address is taken; DR7
- * is then cleared again. A reserved bit, 12 or on x86-64 32, is refused,
- * since the processor faults on the second when the switch loads it.
+/**
+ * Check that DR7 enables a breakpoint only on user addresses: an execute
+ * breakpoint at 0x1000 in DR0, which is below user space, fails with EINVAL,
+ * and a 4-byte write breakpoint whose last byte is the last user address is
+ * taken; DR7 is then cleared again. DR7 with reserved bit 12, or on x86-64 bit
+ * 32, fails with EINVAL; the processor raises a general-protection fault when a
+ * context switch loads DR7 with bit 32 set. Returns 0, or 1 after the failure
+ * is printed.
  */
 static int debug_bounds(pid_t pid)
 {
@@ -279,8 +317,12 @@ static int debug_bounds(pid_t pid)
     return 0;
 }
 
-/* The stopped `pid`'s debug registers through POKEUSER and PEEKUSER, their
- * bounds, and on x86-64 an option bit past 32 refused; 0, or 1. */
+/**
+ * Check the stopped `pid`'s debug registers through POKEUSER and PEEKUSER, the
+ * bounds of `debug_bounds`, and on x86-64 that PTRACE_SETOPTIONS fails with
+ * EINVAL for an option bit past 32. Returns 0, or 1 after the failure is
+ * printed.
+ */
 static int debug_and_options(pid_t pid)
 {
     unsigned long dr = 0x1000;
@@ -302,8 +344,10 @@ static int debug_and_options(pid_t pid)
     return 0;
 }
 
-/* Run `pid` through syscall stops to getpid's entry, then to its exit with
- * the pid as its result; 0, or 1. */
+/**
+ * Run `pid` through syscall stops to getpid's entry, then to its exit with
+ * the pid as its result. Returns 0, or 1 after the failure is printed.
+ */
 static int getpid_stops(pid_t pid)
 {
     struct user_regs_struct regs;
@@ -325,6 +369,12 @@ static int getpid_stops(pid_t pid)
     return 0;
 }
 
+/**
+ * Check, in a child that calls getpid and then runs `sh -c "exit 6"`, the
+ * rows of `debug_and_options` and `getpid_stops`, the exec event of
+ * PTRACE_O_TRACEEXEC, and that a /proc/PID/mem descriptor opened before the
+ * exec reads nothing after it. Returns 0, or 1 after the failure is printed.
+ */
 static int syscalls_and_exec(void)
 {
     char path[32];
@@ -366,8 +416,11 @@ static int syscalls_and_exec(void)
     return 0;
 }
 
-/* Run the stopped `pid` through syscall stops to the first whose orig_eax
- * is `nr`, which is that call's entry, into `regs`; 0, or -1. */
+/**
+ * Run the stopped `pid` through syscall stops to the first whose orig_eax is
+ * `nr`, which is that call's entry, and store its registers in `*regs`.
+ * Returns 0, or -1.
+ */
 static int syscall_entry(pid_t pid, long nr, struct user_regs_struct *regs)
 {
     do {
@@ -379,12 +432,13 @@ static int syscall_entry(pid_t pid, long nr, struct user_regs_struct *regs)
     return 0;
 }
 
-/*
- * At a system call's entry stop the tracer may change the call through
- * orig_eax: getpid made getppid returns the parent's id, and a write made -1
- * is not run and returns what the tracer left in eax, so the pipe stays
- * empty. On x86-64 a data segment selector other than the null one the
- * kernel keeps is refused with EIO, and not taken without being kept.
+/**
+ * Check that at a system call's entry stop the tracer may change the call
+ * through orig_eax: getpid made getppid returns the parent's id, and a write
+ * made -1 is not run and returns what the tracer left in eax, so the pipe
+ * stays empty. On x86-64 SETREGS fails with EIO for a data segment selector
+ * other than the null one, since the kernel keeps none for a thread.
+ * Returns 0, or 1 after the failure is printed.
  */
 static int syscall_changes(void)
 {
@@ -441,18 +495,20 @@ static int syscall_changes(void)
     return 0;
 }
 
-/** A handler of SIGUSR1 that does nothing, so the signal only interrupts
- * the call it comes during. */
+/**
+ * Do nothing, as the handler of SIGUSR1, so that the signal only interrupts
+ * the call it comes during.
+ */
 static void interrupt_only(int sig)
 {
     (void)sig;
 }
 
-/*
- * A tracer's -1 in orig_eax at the exit stop of a read a signal interrupted
- * keeps the read from being restarted, though the handler that runs has
- * SA_RESTART: the read returns EINTR, and a byte written after it is not
- * read.
+/**
+ * Check that a tracer's -1 in orig_eax at the exit stop of a read a signal
+ * interrupted keeps the read from being restarted, though the handler that
+ * runs has SA_RESTART: the read returns EINTR, and a byte written after it is
+ * not read. Returns 0, or 1 after the failure is printed.
  */
 static int restart_cancelled(void)
 {
@@ -500,6 +556,11 @@ static int restart_cancelled(void)
     return 0;
 }
 
+/**
+ * Check that PTRACE_ATTACH stops a process blocked in a read, and that it reads
+ * the byte written after PTRACE_DETACH. Returns 0, or 1 after the failure is
+ * printed.
+ */
 static int attach(void)
 {
     int p[2];
@@ -529,8 +590,10 @@ static int attach(void)
     return 0;
 }
 
-/** End the child `pid` of a row that failed, so that nothing of the row runs
- * on, and report `what`. */
+/**
+ * Kill and reap the child `pid` of a row that failed, so that nothing of the
+ * row runs on, and report `what`. Returns 1.
+ */
 static int abandon(pid_t pid, const char *what)
 {
     kill(pid, SIGKILL);
@@ -538,7 +601,7 @@ static int abandon(pid_t pid, const char *what)
     return fail(what);
 }
 
-/** MemFree of /proc/meminfo, in KiB, or -1 when it cannot be read. */
+/** Return MemFree of /proc/meminfo, in KiB, or -1 when it cannot be read. */
 static long mem_free_kib(void)
 {
     char text[1024];
@@ -563,14 +626,16 @@ static long mem_free_kib(void)
     return kib;
 }
 
-/*
- * A child touches 16 MiB and waits; the parent opens its /proc/PID/mem, reads
- * a word of it, and lets it end, which waitid with WNOWAIT reports and leaves
- * the child unreaped. Before the reap, with the descriptor still open, a read
- * through it must return 0 and the free memory /proc/meminfo reports must be
- * back within 8 MiB of what it was before the fork: the child's address space
- * went at its end, as Linux's exit_mm drops it, and the descriptor keeps only
- * its record.
+/**
+ * Check that a /proc/PID/mem descriptor keeps none of the memory of a child
+ * that has ended. A child touches 16 MiB and waits; the parent opens its
+ * /proc/PID/mem, reads a word of it, and lets it end, which waitid with WNOWAIT
+ * reports and leaves the child unreaped. Before the reap, with the descriptor
+ * still open, a read through it must return 0 and the free memory /proc/meminfo
+ * reports must be back within 8 MiB of what it was before the fork: the child's
+ * address space went at its end, as Linux's exit_mm drops it, and the
+ * descriptor keeps only its record. Returns 0, or 1 after the failure is
+ * printed.
  */
 static int mem_after_end(void)
 {
@@ -635,9 +700,11 @@ static int mem_after_end(void)
     return rc;
 }
 
-/** Wait up to ten seconds for a change in the child `pid` that waitpid
- * reports: the child's id with its status in `*status`, or 0 when none
- * came, so that a stop that never comes fails its row. */
+/**
+ * Wait up to ten seconds for a change in the child `pid` that waitpid
+ * reports, so that a stop that never comes fails its row. Returns the child's
+ * id with its status in `*status`, or 0 when none came.
+ */
 static pid_t wait_within(pid_t pid, int *status)
 {
     pid_t got = 0;
@@ -649,17 +716,21 @@ static pid_t wait_within(pid_t pid, int *status)
     return got;
 }
 
+/* Set to 1 by on_usr1 when the child's handler has taken a SIGUSR1. */
 static volatile sig_atomic_t usr1_taken;
 
+/** Record a SIGUSR1 in `usr1_taken`. */
 static void on_usr1(int sig)
 {
     (void)sig;
     usr1_taken = 1;
 }
 
-/** The second thread of the child `stopped_leader` makes: it writes its id
- * to the descriptor `*arg`, sleeps until its handler has taken a SIGUSR1,
- * and ends the process with 5. */
+/**
+ * Run as the second thread of the child `stopped_leader` makes: write the
+ * thread's id to the descriptor `*arg`, sleep until the handler has taken a
+ * SIGUSR1, and end the process with 5, or with 1 when the write fails.
+ */
 static void *usr1_sleeper(void *arg)
 {
     pid_t self = (pid_t)syscall(SYS_gettid);
@@ -673,8 +744,10 @@ static void *usr1_sleeper(void *arg)
     _exit(5);
 }
 
-/** The state letter the stat file at `path` gives, 0 when it cannot be
- * read. */
+/**
+ * Return the state letter the stat file at `path` gives, or 0 when it cannot
+ * be read.
+ */
 static char stat_state(const char *path)
 {
     char line[256], *state;
@@ -694,8 +767,10 @@ static char stat_state(const char *path)
     return state && state[1] == ' ' ? state[2] : 0;
 }
 
-/** Whether thread `t` of process `pid` sleeps, by its state in
- * /proc/PID/task/T/stat. */
+/**
+ * Return 1 when thread `t` of process `pid` is asleep, state S in
+ * /proc/PID/task/T/stat, and 0 otherwise.
+ */
 static int sleeping(pid_t pid, pid_t t)
 {
     char path[64];
@@ -704,8 +779,10 @@ static int sleeping(pid_t pid, pid_t t)
     return stat_state(path) == 'S';
 }
 
-/** Whether process `pid` has ended and waits to be reaped, by its state in
- * /proc/PID/stat. */
+/**
+ * Return 1 when process `pid` has ended and waits to be reaped, state Z in
+ * /proc/PID/stat, and 0 otherwise.
+ */
 static int zombie(pid_t pid)
 {
     char path[64];
@@ -715,10 +792,11 @@ static int zombie(pid_t pid)
 }
 
 /**
- * A SIGUSR1 sent to a child whose first thread the parent has stopped with
- * PTRACE_ATTACH: the thread the signal names cannot take it, so the other
+ * Check a SIGUSR1 sent to a child whose first thread the parent has stopped
+ * with PTRACE_ATTACH: the thread the signal names cannot take it, so the other
  * thread, asleep in pause with the signal unblocked, is woken to, and its
- * handler runs and it ends the process with 5.
+ * handler runs and it ends the process with 5. Returns 0, or 1 after the
+ * failure is printed.
  */
 static int stopped_leader(void)
 {
@@ -764,8 +842,11 @@ static int stopped_leader(void)
     return 0;
 }
 
-/* The i386 kernel's struct rusage, which the raw wait4 writes: two timevals
- * of 32-bit seconds and microseconds, then fourteen counters. */
+/*
+ * The kernel's struct rusage, which the raw wait4 writes: two timevals of a
+ * long's seconds and microseconds, then fourteen counters, each a long of the
+ * architecture's width.
+ */
 struct rusage32 {
     long utime_sec;
     long utime_usec;
@@ -774,11 +855,14 @@ struct rusage32 {
     long counters[14];
 };
 
+/* The pipes on which usage_thread reports to the parent and waits for it. */
 static int usage_pipe[2], go_pipe[2];
 
-/** Spend user time until the kernel has charged `ticks` of it to the
- * process, or for a thousand ticks; the sum the loop computed, returned so
- * the compiler keeps the loop. */
+/**
+ * Spend user time until the kernel has charged `ticks` of it to the process,
+ * or for a thousand ticks. Returns the sum the loop computed, so that the
+ * compiler keeps the loop.
+ */
 static unsigned int spin_ticks(long ticks)
 {
     volatile unsigned int x = 0;
@@ -794,8 +878,12 @@ static unsigned int spin_ticks(long ticks)
     return x;
 }
 
-/** The second thread of the child `traced_thread_usage` makes: it writes its
- * id and its process's reaped children's user time, then ends when told. */
+/**
+ * Run as the second thread of the child `traced_thread_usage` makes: write
+ * the thread's id and its process's reaped children's user time to
+ * `usage_pipe`, then end when a byte comes on `go_pipe`. Returns null, or 1
+ * when the write or the read fails.
+ */
 static void *usage_thread(void *arg)
 {
     struct tms tm;
@@ -813,10 +901,11 @@ static void *usage_thread(void *arg)
 }
 
 /**
- * A child reaps a grandchild that spent user time, then starts a second
- * thread, which the parent attaches to and lets end. The parent's wait4 with
- * __WALL reports the thread's end with at least the reaped grandchild's time,
- * which the process keeps, not the thread.
+ * Check the usage reported for the end of a traced thread. A child reaps a
+ * grandchild that spent user time, then starts a second thread, which the
+ * parent attaches to and lets end. The parent's wait4 with __WALL reports the
+ * thread's end with at least the reaped grandchild's time, which the process
+ * keeps, not the thread. Returns 0, or 1 after the failure is printed.
  */
 static int traced_thread_usage(void)
 {
@@ -862,10 +951,11 @@ static int traced_thread_usage(void)
 }
 
 /**
- * The tracer of `tracer_first`: it seizes the child `c`, which is not its
- * own, tells the parent through `to_m`, waits for the word `from_m` brings,
- * then waits for the child's end, which it must see with status 9, and waits
- * again, which must find nothing. Returns 0, or the step that failed.
+ * Run as the tracer of `tracer_first`: seize the child `c`, which is not the
+ * caller's own, tell the parent through `to_m`, wait for the byte `from_m`
+ * brings, then wait for the child's end, which must have status 9, and wait
+ * again, which must find nothing. Returns 0, or the number of the step that
+ * failed.
  */
 static int tracer_side(pid_t c, int to_m, int from_m)
 {
@@ -888,10 +978,12 @@ static int tracer_side(pid_t c, int to_m, int from_m)
 }
 
 /**
- * A child, which a second child traces, ends with 9. Its parent's wait does
- * not reap it while the tracer has not seen the end; once the tracer's wait
- * has reported it, the parent reaps it with its status, and the tracer's
- * next wait answers ECHILD rather than waiting on a tracee that is gone.
+ * Check that a traced process's end is reported to its tracer first. A
+ * child, which a second child traces, ends with 9. Its parent's wait does not
+ * reap it while the tracer has not seen the end; once the tracer's wait has
+ * reported it, the parent reaps it with its status, and the tracer's next
+ * wait answers ECHILD rather than waiting on a tracee that is gone.
+ * Returns 0, or 1 after the failure is printed.
  */
 static int tracer_first(void)
 {
@@ -954,10 +1046,10 @@ static int tracer_first(void)
     return 0;
 }
 
-/*
- * A tracee SIGKILL reaches at the entry stop of a write to a pipe writes
- * nothing, since the call does not run: the pipe then reads its end of
- * input.
+/**
+ * Check that a tracee that SIGKILL reaches at the entry stop of a write to a
+ * pipe writes nothing, since the call does not run: the pipe then reads its
+ * end of input. Returns 0, or 1 after the failure is printed.
  */
 static int killed_at_entry(void)
 {
@@ -992,11 +1084,12 @@ static int killed_at_entry(void)
     return 0;
 }
 
-/*
- * PTRACE_SEIZE of a process a stop signal has stopped, whose stop its
- * parent has already waited for, stops the thread for the tracer with
- * PTRACE_EVENT_STOP and the stop signal, and the process runs on after
- * PTRACE_DETACH and SIGCONT.
+/**
+ * Check that PTRACE_SEIZE of a process a stop signal has stopped, whose stop
+ * its parent has already waited for, stops the thread for the tracer with
+ * PTRACE_EVENT_STOP and the stop signal, that the process stays stopped after
+ * PTRACE_DETACH, and that it runs on after SIGCONT. Returns 0, or 1 after the
+ * failure is printed.
  */
 static int attach_stopped(void)
 {
@@ -1030,14 +1123,10 @@ static int attach_stopped(void)
     return 0;
 }
 
-/*
- * PTRACE_LISTEN holds a seized tracee in its group stop's PTRACE_EVENT_STOP
- * until the stop ends, and the end makes a new PTRACE_EVENT_STOP with
- * SIGTRAP, whichever comes first. A SIGCONT before the listen is strace's
- * start on two processors, which left the tracee stopped for good while the
- * listen did nothing; a SIGCONT after it is the order one processor gave.
- * The SIGCONT is then a signal-delivery stop, which PTRACE_LISTEN refuses
- * with EIO.
+/**
+ * Wait up to ten seconds for `pid` to stop with `want` as its status shifted
+ * right by 8 bits. Returns 0, or 1 after the child is killed and the failure
+ * `what` is printed.
  */
 static int expect_stop(pid_t pid, int want, const char *what)
 {
@@ -1049,8 +1138,11 @@ static int expect_stop(pid_t pid, int want, const char *what)
     return 0;
 }
 
-/* The seize of a stopped `pid`, PTRACE_INTERRUPT ending its PTRACE_LISTEN,
- * a new event stop when the stop ends, and the SIGCONT's own stop. */
+/**
+ * Check the seize of a stopped `pid`, PTRACE_INTERRUPT ending its
+ * PTRACE_LISTEN, a SIGCONT sent before a second PTRACE_LISTEN, the new event
+ * stop the stop's end makes, and the SIGCONT's own stop. Returns 0, or 1.
+ */
 static int listen_first(pid_t pid)
 {
     if (ptrace(PTRACE_SEIZE, pid, NULL, NULL) != 0 ||
@@ -1070,8 +1162,11 @@ static int listen_first(pid_t pid)
     return 0;
 }
 
-/* PTRACE_LISTEN refused at a signal-delivery stop, then the second SIGSTOP's
- * group stop, ended during PTRACE_LISTEN, and the process let run on. */
+/**
+ * Check that PTRACE_LISTEN fails with EIO at a signal-delivery stop, then the
+ * second SIGSTOP's group stop, ended by a SIGCONT sent during PTRACE_LISTEN,
+ * and let the process run on. Returns 0, or 1.
+ */
 static int listen_second(pid_t pid)
 {
     if (ptrace(PTRACE_LISTEN, pid, NULL, NULL) != -1 || errno != EIO) {
@@ -1093,6 +1188,15 @@ static int listen_second(pid_t pid)
     return 0;
 }
 
+/**
+ * Check that PTRACE_LISTEN keeps a seized tracee in the PTRACE_EVENT_STOP of
+ * its group stop until the stop ends, and that the end makes a new
+ * PTRACE_EVENT_STOP with SIGTRAP, with the SIGCONT sent before the listen, as
+ * strace's start can order them on two processors, and after it. The SIGCONT
+ * is then a signal-delivery stop, at which PTRACE_LISTEN fails with EIO. On
+ * x86-64 PTRACE_SEIZE fails with EINVAL for an option bit past 32.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int listen_and_continue(void)
 {
     pid_t pid = fork();
@@ -1120,10 +1224,11 @@ static int listen_and_continue(void)
     return 0;
 }
 
-/*
- * PTRACE_INTERRUPT stops a seized tracee seen asleep in a read of an empty
- * pipe, with PTRACE_EVENT_STOP and SIGTRAP, and the read, restarted when the
- * tracer resumes it, reads the byte written after.
+/**
+ * Check that PTRACE_INTERRUPT stops a seized tracee seen asleep in a read of
+ * an empty pipe, with PTRACE_EVENT_STOP and SIGTRAP, and that the read,
+ * restarted when the tracer resumes it, reads the byte written after.
+ * Returns 0, or 1 after the failure is printed.
  */
 static int interrupt_read(void)
 {
@@ -1165,11 +1270,12 @@ static int interrupt_read(void)
     return 0;
 }
 
-/*
- * A seized tracee with PTRACE_O_TRACEFORK forks: its stop for the event
- * names the new child, whose first stop is PTRACE_EVENT_STOP with SIGTRAP,
- * as strace's -f waits for it, and both run on to their ends, the tracee
- * through the stop its child's SIGCHLD makes.
+/**
+ * Check a seized tracee with PTRACE_O_TRACEFORK that forks: its stop for the
+ * event gives the new child's id, the child's first stop is PTRACE_EVENT_STOP
+ * with SIGTRAP, as strace's -f waits for it, and both run on to their ends, the
+ * tracee through the stop its child's SIGCHLD makes. Returns 0, or 1 after the
+ * failure is printed.
  */
 static int seized_fork(void)
 {
@@ -1220,11 +1326,12 @@ static int seized_fork(void)
     return 0;
 }
 
-/*
- * A tracee that SIGKILL ends tells its tracer, which is its parent here,
- * with a SIGCHLD whose siginfo is CLD_KILLED and the signal, and the wait
- * reports it killed. SIGCHLD is blocked, and the one the stop sent taken,
- * so the siginfo read is the end's.
+/**
+ * Check that a tracee that SIGKILL ends tells its tracer, which is its parent
+ * here, with a SIGCHLD whose siginfo is CLD_KILLED and the signal, and that
+ * the wait reports it killed. The parent blocks SIGCHLD and takes the one the
+ * stop sent before the kill, so the siginfo it reads is that of the end.
+ * Returns 0, or 1 after the failure is printed.
  */
 static int killed_tracee(void)
 {
@@ -1262,7 +1369,12 @@ static int killed_tracee(void)
     return 0;
 }
 
-/* The labels bound exactly one system call and the following instruction. */
+/*
+ * step_call to step_next bound one system call and the instruction after it.
+ * watched_ss loads SS from the word the pointer register addresses, and
+ * watched_call is the system call after it, which a processor runs before it
+ * delivers a debug exception the load raised.
+ */
 extern const char step_call[], step_return[], step_next[], watched_ss[], watched_call[],
     watched_return[];
 #if defined __x86_64__
@@ -1274,6 +1386,7 @@ __asm__(".text\n"
         "watched_ss: movw (%rdi), %ss\n"
         "watched_call: syscall\n"
         "watched_return: int3\n");
+/* The user data selector, the word watched_ss loads into SS. */
 static unsigned short user_ss = 0x2b;
 #else
 __asm__(".text\n"
@@ -1287,7 +1400,11 @@ __asm__(".text\n"
 static unsigned short user_ss = 0x23;
 #endif
 
-/** Stop a child for a row that supplies its registers. */
+/**
+ * Fork a traced child that stops itself with SIGSTOP, for a row that sets its
+ * registers. Returns the child's id, or -1 when the fork failed or the child
+ * did not stop.
+ */
 static pid_t register_child(void)
 {
     pid_t pid = fork();
@@ -1305,7 +1422,10 @@ static pid_t register_child(void)
     return pid;
 }
 
-/** Reap a row's child after its last stop, without running injected code. */
+/**
+ * Kill and reap a row's child after its last stop, so that the code the row
+ * put in its registers does not run.
+ */
 static void finish_register_child(pid_t pid)
 {
     int status;
@@ -1314,8 +1434,12 @@ static void finish_register_child(pid_t pid)
     wait_within(pid, &status);
 }
 
-/** Each interrupt of a listening tracee stops before its next instruction.
- * The chosen instruction increments BX; a late stop changes BX or IP. */
+/**
+ * Check, twice, that PTRACE_INTERRUPT of a tracee in PTRACE_LISTEN stops it
+ * before its next instruction. The tracer points IP at step_return, which
+ * increments BX, so a stop that came late finds BX or IP changed. The child is
+ * killed either way. Returns 0, or 1 after the failure is printed.
+ */
 static int interrupt_listening(pid_t pid)
 {
     struct user_regs_struct regs;
@@ -1344,7 +1468,11 @@ static int interrupt_listening(pid_t pid)
     return 0;
 }
 
-/** Listen at an interrupt stop outside a group stop, then interrupt again. */
+/**
+ * Check PTRACE_LISTEN at an interrupt stop outside a group stop: a child
+ * asleep in pause is seized and interrupted, and then runs the rows of
+ * `interrupt_listening`. Returns 0, or 1 after the failure is printed.
+ */
 static int listen_user_return(void)
 {
     pid_t pid = fork();
@@ -1366,7 +1494,12 @@ static int listen_user_return(void)
     return interrupt_listening(pid);
 }
 
-/** A syscall step stops at its return, before the next user instruction. */
+/**
+ * Check that PTRACE_SINGLESTEP over a system call instruction stops at
+ * step_return with the call's result and TRAP_TRACE, before the increment of
+ * BX runs, and that the next step runs exactly that one instruction.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int step_system_call(void)
 {
     struct user_regs_struct regs;
@@ -1403,7 +1536,12 @@ static int step_system_call(void)
     return 0;
 }
 
-/** A syscall can use an invalid user stack because entry changes stacks. */
+/**
+ * Check that a system call made with the user stack pointer 1 returns its
+ * result and runs on to the int3 at step_next, since the kernel's entry changes
+ * to a kernel stack before it uses one. Returns 0, or 1 after the failure is
+ * printed.
+ */
 static int entry_system_call(void)
 {
     struct user_regs_struct regs;
@@ -1432,10 +1570,16 @@ static int entry_system_call(void)
     return 0;
 }
 
-/** Check a watched MOV SS followed by a syscall with an invalid user stack.
- * QEMU TCG can report the watchpoint before the syscall. That result checks
- * only the user debug entry; the injected-entry proof checks the kernel
- * entry even on a processor model that does not defer the exception. */
+/**
+ * Check a watched MOV SS followed by a system call made with the user stack
+ * pointer 1: the hit, which the processor delays into the call's entry, stops
+ * the child with TRAP_HWBKPT at watched_return with getpid's result. QEMU TCG
+ * reports the hit before the call, which checks only the debug entry from
+ * user mode, and the row then prints that it did not run. On x86-64,
+ * tests/system/ptrace_debug_mutate.sh checks the kernel's debug entry with
+ * int $1 put at syscall_entry, which does not depend on the processor's
+ * delay. Returns 0, or 1 after the failure is printed.
+ */
 static int delayed_debug(void)
 {
     struct user_regs_struct regs;
@@ -1471,10 +1615,16 @@ static int delayed_debug(void)
     return 0;
 }
 
-/** A watched MOV SS interrupts an infinite poll when its hit reaches entry.
- * With no descriptors, poll never reads the watched memory in the kernel;
- * x86-64 passes its address as the unused first argument. The child keeps
- * its valid user stack for the wait. TCG can stop before the call. */
+/**
+ * Check that the hit of a watched MOV SS, delayed into the entry of the poll
+ * after it, ends that poll, which has no descriptors and no timeout, with EINTR
+ * at watched_return. With no descriptors poll reads no user memory, so the
+ * kernel does not touch the watched word; x86-64 passes its address as the
+ * first argument, which a count of 0 leaves unused. The child keeps its valid
+ * user stack for the wait. Under QEMU TCG the hit stops the child before the
+ * call, and the row prints that it did not run. Returns 0, or 1 after the
+ * failure is printed.
+ */
 static int delayed_poll(void)
 {
     struct user_regs_struct regs;
@@ -1517,7 +1667,12 @@ static int delayed_poll(void)
     return 0;
 }
 
-/** A watchpoint on a kernel copy still stops its tracee at the user return. */
+/**
+ * Check that a write watchpoint on `byte`, which the kernel's copy of a read
+ * into it hits, stops the tracee with TRAP_HWBKPT at its return to user mode,
+ * and that the read returns its byte. Returns 0, or 1 after the failure is
+ * printed.
+ */
 static int watched_copy(void)
 {
     static char byte;
@@ -1550,9 +1705,12 @@ static int watched_copy(void)
     return 0;
 }
 
-/** A kernel read of watched memory interrupts an otherwise endless poll.
- * The negative descriptor never becomes ready, and there is no timeout or
- * other signal. The stop must report the watchpoint and the EINTR result. */
+/**
+ * Check that the kernel's read of a watched word ends a poll that has no other
+ * way to end: its one descriptor is negative and never becomes ready, and it
+ * has no timeout and takes no other signal. The stop reports TRAP_HWBKPT and
+ * the call's EINTR. Returns 0, or 1 after the failure is printed.
+ */
 static int watched_poll(void)
 {
     static struct pollfd pfd = {-1, POLLIN, 0};
@@ -1583,9 +1741,13 @@ static int watched_poll(void)
     return 0;
 }
 
-/** Block SIGTRAP, stop for the tracer, then wait for the watched set's hit.
- * The raw rt_sigtimedwait timeout has two native longs on either
- * architecture, unlike musl's i686 timespec with its 64-bit seconds. */
+/**
+ * Block SIGTRAP, stop for the tracer, then wait for the hit of the watchpoint
+ * on the set at `set`. Runs in the forked child and exits 0 when the wait
+ * takes SIGTRAP with TRAP_HWBKPT, and 1 otherwise. The raw rt_sigtimedwait
+ * timeout has two native longs on either architecture, unlike musl's i686
+ * timespec with its 64-bit seconds.
+ */
 static void sigwait_child(sigset_t *set)
 {
     long timeout[2] = {1, 0};
@@ -1604,7 +1766,10 @@ static void sigwait_child(sigset_t *set)
               : 1);
 }
 
-/** A wait on a watched signal set takes the hit without a SIGTRAP stop. */
+/**
+ * Check that a wait on a watched signal set takes the hit itself, so that the
+ * tracer sees no SIGTRAP stop. Returns 0, or 1 after the failure is printed.
+ */
 static int watched_sigwait(void)
 {
     static sigset_t set;
@@ -1632,8 +1797,8 @@ static int watched_sigwait(void)
  * after them, and the tracee, continued, must read the mark through its
  * segment. On x86-64 the requests are PTRACE_ARCH_PRCTL and the fs_base and
  * gs_base words of struct user. A base at or above USER_ADDR_MAX, the end of
- * user space, is refused with EPERM by ARCH_SET_FS and ARCH_SET_GS and with
- * EIO by POKEUSER, SETREGS and SETREGSET, and leaves the bases as they were.
+ * user space, fails with EPERM under ARCH_SET_FS and ARCH_SET_GS and with EIO
+ * under POKEUSER, SETREGS and SETREGSET, and leaves the bases as they were.
  * On i386 the requests are PTRACE_GET_THREAD_AREA and PTRACE_SET_THREAD_AREA:
  * entry 6 is the thread pointer's, entries 7 and 8 read as unused and take
  * only an unused entry, and the others are EINVAL.
@@ -1643,8 +1808,10 @@ static int watched_sigwait(void)
 
 static unsigned long tp_copy[TP_WORDS + 1];
 
-/** The word after the copied ones, read through the thread pointer's
- * segment. */
+/**
+ * Return the word after the copied ones, read through the thread pointer's
+ * segment, FS on x86-64 and GS on i386.
+ */
 static unsigned long tp_mark_word(void)
 {
     unsigned long v;
@@ -1665,9 +1832,10 @@ static unsigned long tp_mark_word(void)
 #define USER_ADDR_MAX 0x00007FFFFFFFF000UL
 #define GS_MARK       0x6B28D1EFUL
 
+/* The block the tracer moves GS's base to; its first word is GS_MARK. */
 static unsigned long gs_block[2] = {GS_MARK};
 
-/** The first word GS's base addresses. */
+/** Return the first word GS's base addresses. */
 static unsigned long gs_word(void)
 {
     unsigned long v;
@@ -1676,9 +1844,15 @@ static unsigned long gs_word(void)
     return v;
 }
 
+/*
+ * The offset in struct user of the register `field`, for PEEKUSER and POKEUSER.
+ */
 #define USER_WORD(field) ((void *)offsetof(struct user, regs.field))
 
-/** The tracee's FS and GS bases through PTRACE_ARCH_PRCTL; 0, or -1. */
+/**
+ * Read the tracee's FS and GS bases through PTRACE_ARCH_PRCTL into `*fs` and
+ * `*gs`. Returns 0, or -1.
+ */
 static int bases_of(pid_t pid, unsigned long *fs, unsigned long *gs)
 {
     return ptrace(PTRACE_ARCH_PRCTL, pid, fs, (void *)ARCH_GET_FS) == 0 &&
@@ -1687,8 +1861,11 @@ static int bases_of(pid_t pid, unsigned long *fs, unsigned long *gs)
                : -1;
 }
 
-/** Each write of a base at or above USER_ADDR_MAX, refused, with the bases
- * `fs` and `gs` of the tracee `pid` left as they were. */
+/**
+ * Check that each write of a base at or above USER_ADDR_MAX fails, and that the
+ * bases `fs` and `gs` of the tracee `pid` stay as they were. Returns 0, or 1
+ * after the failure is printed.
+ */
 static int refused_bases(pid_t pid, unsigned long fs, unsigned long gs)
 {
     static const unsigned long refused[] = {USER_ADDR_MAX, USER_ADDR_MAX + 1, ~0UL};
@@ -1732,6 +1909,13 @@ static int refused_bases(pid_t pid, unsigned long fs, unsigned long gs)
     return 0;
 }
 
+/**
+ * Check the thread pointer on x86-64: ARCH_GET_FS and PEEKUSER read
+ * pthread_self, PTRACE_ARCH_PRCTL fails with EFAULT for a null address and
+ * with EINVAL for an unknown code, the rows of `refused_bases`, and a tracee
+ * continued with its bases moved reads TP_MARK and GS_MARK through them.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int thread_pointer(void)
 {
     unsigned long fs, gs, peek;
@@ -1777,6 +1961,7 @@ static int thread_pointer(void)
     return 0;
 }
 #else
+/* The GDT entry of the thread pointer's segment. */
 #define TLS_ENTRY 6
 
 /* Linux i386's struct user_desc: the flags are its bit fields. */
@@ -1790,8 +1975,11 @@ struct tp_desc {
 #define UD_READ_EXEC_ONLY  0x08u
 #define UD_SEG_NOT_PRESENT 0x20u
 
-/** The entries beside the thread pointer's, read as unused and written
- * only as unused; 0, or 1. */
+/**
+ * Check that entries 7 and 8, beside the thread pointer's, read as unused and
+ * take only an unused entry, and that entries 5 and 9 fail with EINVAL.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int other_entries(pid_t pid)
 {
     struct tp_desc d;
@@ -1818,6 +2006,12 @@ static int other_entries(pid_t pid)
     return 0;
 }
 
+/**
+ * Check the thread pointer on i386: PTRACE_GET_THREAD_AREA reads
+ * pthread_self in entry 6, the rows of `other_entries`, and a tracee
+ * continued with the entry's base moved reads TP_MARK through it.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int thread_pointer(void)
 {
     struct tp_desc d, back;
@@ -1856,7 +2050,6 @@ static int thread_pointer(void)
 }
 #endif
 
-/** Run the ordinary suite, or one debug row for a compiled fault proof. */
 /* The rows a suite may run alone, by the name it passes. */
 static const struct {
     const char *name;
@@ -1867,7 +2060,10 @@ static const struct {
     {"sigwait", watched_sigwait},   {"listen", listen_user_return}, {"tp", thread_pointer},
 };
 
-/* The rows of memory, system calls and attaching; 0, or 1. */
+/**
+ * Run the rows of memory, system calls and attaching, and stop at the first
+ * that fails. Returns 0, or 1.
+ */
 static int first_rows(void)
 {
     return memory_and_registers() || mem_after_end() || syscalls_and_exec() || syscall_changes() ||
@@ -1875,8 +2071,10 @@ static int first_rows(void)
            listen_and_continue() || interrupt_read();
 }
 
-/* The rows of forks, threads, killed tracees and the debug exception; 0, or
- * 1. */
+/**
+ * Run the rows of forks, threads, killed tracees and the debug exception, and
+ * stop at the first that fails. Returns 0, or 1.
+ */
 static int second_rows(void)
 {
     return seized_fork() || stopped_leader() || traced_thread_usage() || tracer_first() ||
