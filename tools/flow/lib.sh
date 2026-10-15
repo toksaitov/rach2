@@ -77,69 +77,24 @@ limited()
 }
 
 # run_session OUT ERR LIMIT COMMAND...: run COMMAND with its output in OUT and
-# its errors in ERR, in a process group of its own, and stop the whole group
-# when it is still running after LIMIT seconds: TERM, then KILL half a minute
-# later. Return COMMAND's status once it ends and `stop_group` has stopped
-# what it left in its group, such as a suite it started in the background;
-# or, when the limit stopped it, 124, after the KILL has gone to the whole
-# group, so that a child that outlives the TERM, such as an emulator, does
-# not outlive the call.
+# its errors in ERR under `session.pl`, in a process group of its own that
+# STATE/session records before COMMAND starts, and stop the whole group when
+# it is still running after LIMIT seconds: TERM, then KILL half a minute
+# later. Return COMMAND's status once it ends and what it left in its group,
+# such as a suite it started in the background, has been stopped and logged;
+# 124 when the limit stopped it; and 125 when the group could not be recorded,
+# and COMMAND did not run.
 #
-# STATE/session has the group's id while COMMAND runs. The watcher, the perl
-# process that enforces the limit, has a group of its own too, so a hangup
-# that ends the loop reaches neither: the session runs on under its limit,
-# and `wait_session` keeps the next loop from starting another beside it. The
-# watcher has no children, and it is stopped by its pid, since it may not have
-# made its group yet.
+# The supervisor that `session.pl` runs leaves the loop's group before it
+# starts anything, so a hangup that ends the loop reaches neither it nor the
+# session: the session runs on under its limit, and `wait_session` keeps the
+# next loop from starting another beside it.
 run_session()
 {
     out=$1 err=$2 limit=$3
     shift 3
-    rm -f "$state/expired"
-    perl -e 'setpgrp(0, 0); exec @ARGV or die "exec $ARGV[0]: $!\n"' "$@" \
-        > "$out" 2> "$err" < /dev/null &
-    pid=$!
-    echo "$pid" > "$state/session"
-    perl -e 'setpgrp(0, 0); sleep $ARGV[0]; kill 0, -$ARGV[1] or exit;
-        open(F, ">", $ARGV[2]) and close(F); kill "TERM", -$ARGV[1];
-        sleep 30; kill "KILL", -$ARGV[1]' "$limit" "$pid" "$state/expired" &
-    watch=$!
-    wait "$pid"
-    status=$?
-    [ -e "$state/expired" ] || kill -TERM "$watch" 2> /dev/null
-    wait "$watch" 2> /dev/null
-    if [ -e "$state/expired" ]; then
-        kill -KILL -"$pid" 2> /dev/null
-        status=124
-    else
-        stop_group "$pid"
-    fi
-    rm -f "$state/expired" "$state/session"
-    return "$status"
-}
-
-# stop_group GROUP: stop the processes left in the process group GROUP after
-# its leader ended, as the limit does: TERM, then KILL to those still there
-# half a minute later. Log each process found: a session should leave none,
-# and one it leaves, such as a `tests/run` that holds the clone's run lock,
-# would keep the next session's suite from running.
-stop_group()
-{
-    kill -0 -"$1" 2> /dev/null || return 0
-    ps -A -o pgid= -o pid= -o args= | awk -v g="$1" '$1 == g { $1 = ""; print }' |
-        while read -r left; do
-            log "session group $1 left $left; stopping it"
-        done
-    kill -TERM -"$1" 2> /dev/null
-    waited=0
-    while kill -0 -"$1" 2> /dev/null && [ "$waited" -lt 30 ]; do
-        sleep 1
-        waited=$((waited + 1))
-    done
-    if kill -0 -"$1" 2> /dev/null; then
-        log "session group $1 outlived the TERM; killing it"
-        kill -KILL -"$1" 2> /dev/null
-    fi
+    perl "$(dirname "$0")/session.pl" "$state/session" "$state/loop.log" "$limit" "$@" \
+        > "$out" 2> "$err" < /dev/null
 }
 
 # wait_session: wait while the process group whose id is in STATE/session is
