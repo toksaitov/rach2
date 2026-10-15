@@ -1146,23 +1146,35 @@ static int expect_stop(pid_t pid, int want, const char *what)
 }
 
 /**
+ * Check that a request on the child `pid` returned 0; otherwise kill the
+ * child and report `what`. Returns 0, or 1 after the failure is printed.
+ */
+static int granted(pid_t pid, long rc, const char *what)
+{
+    return rc == 0 ? 0 : abandon(pid, what);
+}
+
+/**
  * Check the seize of a stopped `pid`, PTRACE_INTERRUPT ending its
  * PTRACE_LISTEN, a SIGCONT sent before a second PTRACE_LISTEN, the new event
- * stop the stop's end makes, and the SIGCONT's own stop. Returns 0, or 1.
+ * stop the stop's end makes, and the SIGCONT's own stop. Returns 0, or 1
+ * after the child is killed and the failure is printed.
  */
 static int listen_first(pid_t pid)
 {
-    if (ptrace(PTRACE_SEIZE, pid, NULL, NULL) != 0 ||
+    if (granted(pid, ptrace(PTRACE_SEIZE, pid, NULL, NULL),
+                "PTRACE_SEIZE of the stopped process") ||
         expect_stop(pid, SIGSTOP | (PTRACE_EVENT_STOP << 8),
                     "the seize of the stopped process was not a group stop") ||
-        ptrace(PTRACE_LISTEN, pid, NULL, NULL) != 0 ||
-        ptrace(PTRACE_INTERRUPT, pid, NULL, NULL) != 0 ||
+        granted(pid, ptrace(PTRACE_LISTEN, pid, NULL, NULL), "PTRACE_LISTEN of the group stop") ||
+        granted(pid, ptrace(PTRACE_INTERRUPT, pid, NULL, NULL), "PTRACE_INTERRUPT of the listen") ||
         expect_stop(pid, SIGSTOP | (PTRACE_EVENT_STOP << 8),
                     "PTRACE_INTERRUPT did not end PTRACE_LISTEN") ||
-        kill(pid, SIGCONT) != 0 || ptrace(PTRACE_LISTEN, pid, NULL, NULL) != 0 ||
+        granted(pid, kill(pid, SIGCONT), "the SIGCONT before the second listen") ||
+        granted(pid, ptrace(PTRACE_LISTEN, pid, NULL, NULL), "the second PTRACE_LISTEN") ||
         expect_stop(pid, SIGTRAP | (PTRACE_EVENT_STOP << 8),
                     "PTRACE_LISTEN after the stop ended made no new event stop") ||
-        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
+        granted(pid, ptrace(PTRACE_CONT, pid, NULL, NULL), "PTRACE_CONT of the event stop") ||
         expect_stop(pid, SIGCONT, "the SIGCONT made no signal-delivery stop")) {
         return 1;
     }
@@ -1172,24 +1184,28 @@ static int listen_first(pid_t pid)
 /**
  * Check that PTRACE_LISTEN fails with EIO at a signal-delivery stop, then the
  * second SIGSTOP's group stop, ended by a SIGCONT sent during PTRACE_LISTEN,
- * and let the process run on. Returns 0, or 1.
+ * and let the process run on. Returns 0, or 1 after the child is killed and
+ * the failure is printed.
  */
 static int listen_second(pid_t pid)
 {
     if (ptrace(PTRACE_LISTEN, pid, NULL, NULL) != -1 || errno != EIO) {
         return abandon(pid, "PTRACE_LISTEN of a signal-delivery stop was taken");
     }
-    if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
+    if (granted(pid, ptrace(PTRACE_CONT, pid, NULL, NULL), "PTRACE_CONT of the SIGCONT's stop") ||
         expect_stop(pid, SIGSTOP, "the second SIGSTOP made no signal-delivery stop") ||
-        ptrace(PTRACE_CONT, pid, NULL, (void *)(long)SIGSTOP) != 0 ||
+        granted(pid, ptrace(PTRACE_CONT, pid, NULL, (void *)(long)SIGSTOP),
+                "PTRACE_CONT with the second SIGSTOP") ||
         expect_stop(pid, SIGSTOP | (PTRACE_EVENT_STOP << 8),
                     "the second stop was not a group stop") ||
-        ptrace(PTRACE_LISTEN, pid, NULL, NULL) != 0 || kill(pid, SIGCONT) != 0 ||
+        granted(pid, ptrace(PTRACE_LISTEN, pid, NULL, NULL), "PTRACE_LISTEN of the second stop") ||
+        granted(pid, kill(pid, SIGCONT), "the SIGCONT during the listen") ||
         expect_stop(pid, SIGTRAP | (PTRACE_EVENT_STOP << 8),
                     "the stop's end during PTRACE_LISTEN made no new event stop") ||
-        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
+        granted(pid, ptrace(PTRACE_CONT, pid, NULL, NULL),
+                "PTRACE_CONT of the second event stop") ||
         expect_stop(pid, SIGCONT, "the second SIGCONT made no signal-delivery stop") ||
-        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0) {
+        granted(pid, ptrace(PTRACE_CONT, pid, NULL, NULL), "PTRACE_CONT to the process's end")) {
         return 1;
     }
     return 0;
@@ -1409,8 +1425,8 @@ static unsigned short user_ss = 0x23;
 
 /**
  * Fork a traced child that stops itself with SIGSTOP, for a row that sets its
- * registers. Returns the child's id, or -1 when the fork failed or the child
- * did not stop.
+ * registers. Returns the child's id, or -1 after the failure of the fork or
+ * the stop is printed.
  */
 static pid_t register_child(void)
 {
@@ -1423,7 +1439,11 @@ static pid_t register_child(void)
         raise(SIGSTOP);
         _exit(2);
     }
-    if (pid < 0 || expect_stop(pid, SIGSTOP, "register child did not stop")) {
+    if (pid < 0) {
+        fail("fork of a register child");
+        return -1;
+    }
+    if (expect_stop(pid, SIGSTOP, "register child did not stop")) {
         return -1;
     }
     return pid;
@@ -1492,11 +1512,13 @@ static int listen_user_return(void)
     if (pid < 0) {
         return fail("fork for listening interrupt");
     }
-    if (ptrace(PTRACE_SEIZE, pid, NULL, NULL) != 0 ||
-        ptrace(PTRACE_INTERRUPT, pid, NULL, NULL) != 0 ||
+    if (granted(pid, ptrace(PTRACE_SEIZE, pid, NULL, NULL),
+                "seizing the child for a listening interrupt") ||
+        granted(pid, ptrace(PTRACE_INTERRUPT, pid, NULL, NULL),
+                "the initial interrupt of the listening child") ||
         expect_stop(pid, SIGTRAP | (PTRACE_EVENT_STOP << 8),
                     "initial interrupt made no event stop")) {
-        return abandon(pid, "seizing the child for a listening interrupt");
+        return 1;
     }
     return interrupt_listening(pid);
 }
@@ -1514,7 +1536,7 @@ static int step_system_call(void)
     pid_t pid = register_child();
 
     if (pid < 0) {
-        return fail("fork for syscall step");
+        return 1;
     }
     if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
         return abandon(pid, "registers before syscall step");
@@ -1555,7 +1577,7 @@ static int entry_system_call(void)
     pid_t pid = register_child();
 
     if (pid < 0) {
-        return fail("fork for syscall entry");
+        return 1;
     }
     if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
         return abandon(pid, "registers before syscall entry");
@@ -1594,7 +1616,7 @@ static int delayed_debug(void)
     pid_t pid = register_child();
 
     if (pid < 0) {
-        return fail("fork for delayed debug exception");
+        return 1;
     }
     if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
         return abandon(pid, "registers before delayed debug exception");
@@ -1639,7 +1661,7 @@ static int delayed_poll(void)
     pid_t pid = register_child();
 
     if (pid < 0) {
-        return fail("fork for delayed poll");
+        return 1;
     }
     if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
         return abandon(pid, "registers before delayed poll");
@@ -1698,8 +1720,11 @@ static int watched_copy(void)
     }
     close(p[0]);
     close(p[1]);
-    if (pid < 0 || expect_stop(pid, SIGSTOP, "watched copy child did not stop")) {
+    if (pid < 0) {
         return fail("fork for watched copy");
+    }
+    if (expect_stop(pid, SIGSTOP, "watched copy child did not stop")) {
+        return 1;
     }
     if (debug_set(pid, 0, (unsigned long)&byte) != 0 || debug_set(pid, 7, 0x10001) != 0 ||
         ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
@@ -1731,8 +1756,11 @@ static int watched_poll(void)
         raise(SIGSTOP);
         _exit(syscall(SYS_poll, &pfd, 1, -1) == -1 && errno == EINTR ? 0 : 1);
     }
-    if (pid < 0 || expect_stop(pid, SIGSTOP, "watched poll child did not stop")) {
+    if (pid < 0) {
         return fail("fork for watched poll");
+    }
+    if (expect_stop(pid, SIGSTOP, "watched poll child did not stop")) {
+        return 1;
     }
     if (debug_set(pid, 0, (unsigned long)&pfd.fd) != 0 || debug_set(pid, 7, 0xf0001) != 0 ||
         ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
@@ -1786,8 +1814,11 @@ static int watched_sigwait(void)
     if (pid == 0) {
         sigwait_child(&set);
     }
-    if (pid < 0 || expect_stop(pid, SIGSTOP, "watched sigwait child did not stop")) {
+    if (pid < 0) {
         return fail("fork for watched sigwait");
+    }
+    if (expect_stop(pid, SIGSTOP, "watched sigwait child did not stop")) {
+        return 1;
     }
     if (debug_set(pid, 0, (unsigned long)&set) != 0 || debug_set(pid, 7, 0xf0001) != 0 ||
         ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || wait_within(pid, &status) != pid ||
@@ -1937,7 +1968,10 @@ static int thread_pointer(void)
         raise(SIGSTOP);
         _exit(tp_mark_word() == TP_MARK && gs_word() == GS_MARK ? 0 : 1);
     }
-    if (pid < 0 || expect_stop(pid, SIGSTOP, "the thread pointer's child did not stop")) {
+    if (pid < 0) {
+        return fail("fork for the thread pointer");
+    }
+    if (expect_stop(pid, SIGSTOP, "the thread pointer's child did not stop")) {
         return 1;
     }
     if (bases_of(pid, &fs, &gs) != 0 || fs != (unsigned long)pthread_self()) {
@@ -2033,7 +2067,10 @@ static int thread_pointer(void)
         raise(SIGSTOP);
         _exit(tp_mark_word() == TP_MARK ? 0 : 1);
     }
-    if (pid < 0 || expect_stop(pid, SIGSTOP, "the thread pointer's child did not stop")) {
+    if (pid < 0) {
+        return fail("fork for the thread pointer");
+    }
+    if (expect_stop(pid, SIGSTOP, "the thread pointer's child did not stop")) {
         return 1;
     }
     if (ptrace(PTRACE_GET_THREAD_AREA, pid, (void *)TLS_ENTRY, &d) != 0 ||

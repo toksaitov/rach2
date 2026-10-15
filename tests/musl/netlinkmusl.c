@@ -411,9 +411,13 @@ static int requests(int fd)
 {
     struct ifinfomsg ifi;
     struct ifaddrmsg ifa;
-    int index = -1, error = 0;
+    int index = -1, error = 0, links;
 
-    if (dump(fd, RTM_GETLINK, 1) < 1 || dump(fd, RTM_GETADDR, 2) < 0) {
+    links = dump(fd, RTM_GETLINK, 1);
+    if (links == 0) {
+        return fail("no link");
+    }
+    if (links < 0 || dump(fd, RTM_GETADDR, 2) < 0) {
         return 1;
     }
     if (dump(fd, RTM_GETROUTE, 3) < 1) {
