@@ -47,7 +47,7 @@ static int list(void)
 
 /**
  * Send `line` to /dev/loop-control as one write. Returns 0, or 1 when the node
- * cannot be opened or the kernel refuses the command.
+ * cannot be opened or the write of the command fails.
  */
 static int command(const char *line)
 {
@@ -88,6 +88,8 @@ static int attach(const char *ro, const char *n, const char *file)
     return command(line);
 }
 
+/** Run the command the arguments name. Exits 0, 1 on a failure and 2 on a
+ *  usage error. */
 int main(int argc, char **argv)
 {
     char line[160];

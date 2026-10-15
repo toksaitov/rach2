@@ -5,9 +5,9 @@
  * A program that writes a whole disk changes the table under a kernel that
  * read the old one at boot, and the nodes for the partitions it just made do
  * not exist until the kernel is told. That is `BLKRRPART` on the whole-disk
- * node, and the kernel refuses it while anything is mounted from the disk or
- * another descriptor is open on it, which is what keeps a reread from moving
- * the windows under a file system.
+ * node, which fails with EBUSY while anything is mounted from the disk or
+ * another descriptor is open on it, and that is what keeps a reread from
+ * moving the windows under a file system.
  *
  * `growroot` does this as one of its steps, and an installer that does not
  * grow needs it on its own; `reread` is that step by itself.
@@ -30,11 +30,12 @@
  *
  * `esp` gives entry 1 of an MBR the EFI system partition's type, 0xEF, which
  * UEFI firmware boots from on an MBR disk, and asks the kernel to read the
- * table again, which it does when the entry has the type already too, since
- * a run before may have written it and failed to have it read. The entry
- * must be a FAT one already, 0x0B, 0x0C or 0xEF: this is the
- * last step of converting an installed MBR disk's boot partition, whose file
- * system the installer has made one UEFI firmware reads.
+ * table again. It asks for the reread when the entry has the type already
+ * too, since an earlier run may have written the type and failed to have
+ * the table read. The entry must be a FAT one already, 0x0B, 0x0C or 0xEF:
+ * this is the last step of converting an installed MBR disk's boot
+ * partition, whose file system the installer has made one UEFI firmware
+ * reads.
  */
 
 #include <errno.h>
@@ -46,6 +47,7 @@
 
 #include "gptdisk.h"
 
+/* Linux's BLKRRPART: read the disk's partition table again. */
 #define BLKRRPART 0x125Fu
 
 static struct gptdisk table;
@@ -107,7 +109,8 @@ static int print_id(int fd, const char *path)
     return 0;
 }
 
-/** Ask the kernel to read the table of the disk open on `fd` again. */
+/** Ask the kernel to read the table of the disk open on `fd` again; 0, or 1
+ *  having said why not. */
 static int reread(int fd, const char *path)
 {
     if (ioctl(fd, BLKRRPART, (void *)0) != 0) {
@@ -130,7 +133,8 @@ static int reread(int fd, const char *path)
 
 /**
  * Move the GUID table's backup of the disk open on `fd` to its end, writing
- * both copies, the primary from the backup when only the backup checked.
+ * both copies, the primary from the backup when only the backup checked,
+ * and have the table read again. Returns 0, or 1 having said why not.
  */
 static int relocate(int fd, const char *path)
 {
@@ -168,7 +172,8 @@ static int relocate(int fd, const char *path)
     return 0;
 }
 
-/** Give entry 1 of the MBR of the disk open on `fd` the type 0xEF. */
+/** Give entry 1 of the MBR of the disk open on `fd` the type 0xEF, and have
+ *  the table read again; 0, or 1 having said why not. */
 static int make_esp(int fd, const char *path)
 {
     unsigned char sector[512];
@@ -203,6 +208,8 @@ static int make_esp(int fd, const char *path)
     return 0;
 }
 
+/** Run the command on DEVICE, opened for writing only for `relocate` and
+ *  `esp`. Exits 0, 1 on a failure and 2 on a usage error. */
 int main(int argc, char **argv)
 {
     int fd, rc;
