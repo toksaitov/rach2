@@ -15,6 +15,8 @@
 
 /* Names. */
 
+/** Whether a FAT name may not have the code point `cp`: a control
+ * character or one of the nine that the long-name rules forbid. */
 static int forbidden(uint32_t cp)
 {
     static const char set[] = "\"*/:<>?\\|";
@@ -91,7 +93,7 @@ int fat_name_units(const char *name, uint16_t *units, uint32_t *count)
         last = cp;
     }
     if (i > 255) {
-        return -ENAMETOOLONG; /* the byte limit, beside the unit limit */
+        return -ENAMETOOLONG;
     }
     if (last == '.' || last == ' ') {
         return -EINVAL;
@@ -102,8 +104,9 @@ int fat_name_units(const char *name, uint16_t *units, uint32_t *count)
 
 /* Names as UTF-8. */
 
-/* One code point into UTF-8; returns the bytes written, 0 when `cap` cannot
- * take them. The caller joins a surrogate pair into one code point first. */
+/** Write the code point `cp` as UTF-8 at `out`: the bytes written, or 0
+ * when `cap` cannot take them. The caller joins a surrogate pair into one
+ * code point first. */
 static int put_utf8(uint32_t cp, char *out, uint32_t cap)
 {
     if (cp < 0x80) {
@@ -140,12 +143,6 @@ static int put_utf8(uint32_t cp, char *out, uint32_t cap)
     return 4;
 }
 
-/**
- * Render UTF-16 `units` (terminated by 0 or by `count`) as UTF-8 into
- * `out`; 0 on success, -ENAMETOOLONG when it does not fit the component,
- * -EINVAL for a name no writer produces: an unpaired surrogate, or a unit
- * after the terminator that is not the 0xFFFF padding.
- */
 int fat_units_utf8(const uint16_t *units, uint32_t count, char *out, uint32_t cap)
 {
     uint32_t i = 0;
@@ -181,8 +178,7 @@ int fat_units_utf8(const uint16_t *units, uint32_t count, char *out, uint32_t ca
 
 /* The mount options. */
 
-/* Whether the text from `key` to `end` is exactly `word`. */
-
+/** Whether the text from `key` to `end` is exactly `word`. */
 static int key_is(const char *key, const char *end, const char *word)
 {
     while (key < end && *word && *key == *word) {
@@ -191,9 +187,10 @@ static int key_is(const char *key, const char *end, const char *word)
     }
     return key == end && *word == '\0';
 }
+
 /* `umask=`, `uid=` and `gid=` are the options Linux's vfat takes and
- * BusyBox passes through; `ro` is the flag given as data. Anything else
- * is refused. */
+ * BusyBox passes through; `ro` is the mount flag, accepted when it is given
+ * as data. */
 int fat_parse_options(const char *options, uint32_t *uid, uint32_t *gid, uint32_t *umask)
 {
     const char *p = options ? options : "";
@@ -224,7 +221,7 @@ int fat_parse_options(const char *options, uint32_t *uid, uint32_t *gid, uint32_
                 uint32_t digit = (uint32_t)(*p - '0');
 
                 if (value > (0xFFFFFFFFu - digit) / (uint32_t)base) {
-                    return -EINVAL; /* past 32 bits */
+                    return -EINVAL;
                 }
                 value = value * (uint32_t)base + digit;
                 p++;
@@ -253,12 +250,12 @@ int fat_parse_options(const char *options, uint32_t *uid, uint32_t *gid, uint32_
     }
     return 0;
 }
+
 /* Timestamps. */
 
-/* A FAT stamp as seconds since 1970. FAT keeps local time with no zone; it
- * is read as UTC. Its years count from 1980, and the days are counted through
- * the Gregorian rule in 32-bit arithmetic. A field out of its range reads as
- * 1980-01-01, as an unset stamp does. */
+/* FAT keeps local time with no zone, and this driver reads it as UTC. The
+ * days are counted in 32-bit arithmetic, since the kernel has no 64-bit
+ * division. */
 int64_t fat_epoch(uint16_t date, uint16_t time)
 {
     uint32_t year = 1980 + (date >> 9);
@@ -289,8 +286,6 @@ int64_t fat_epoch(uint16_t date, uint16_t time)
            (int64_t)((time >> 5) & 0x3F) * 60 + (int64_t)(time & 0x1F) * 2;
 }
 
-/* A FAT stamp from an epoch, the inverse of `fat_epoch`, floored at 1980
- * and capped at the 32-bit limit early in 2106. */
 void fat_stamp(int64_t sec, uint16_t *date, uint16_t *time)
 {
     uint32_t days, rem, year, month, day;
@@ -331,9 +326,7 @@ void fat_stamp(int64_t sec, uint16_t *date, uint16_t *time)
     *time = (uint16_t)(((rem / 3600) << 11) | (((rem / 60) % 60) << 5) | ((rem % 60) / 2));
 }
 
-/* The clock as a FAT stamp: local time read as UTC, two-second resolution
- * in `time`, and in `tenth` the hundredths of a second past `time`'s even
- * second, 0 to 199. */
+/* The stamp is the UTC of `rtc_realtime`, converted as `fat_stamp` does. */
 void fat_now(uint16_t *date, uint16_t *time, uint8_t *tenth)
 {
     int64_t sec, nsec;
@@ -409,6 +402,7 @@ static uint32_t walk_pages;
 static int walk_busy;
 static wait_queue_t walk_wq;
 
+/** The wait condition of `fat_walk_acquire`: no walk holds the bitmap. */
 static int walk_idle(void *arg)
 {
     (void)arg;
@@ -431,18 +425,10 @@ uint32_t fat_walk_bytes(uint32_t cluster_count)
     return (cluster_count + 2 + 7) / 8;
 }
 
-/**
- * Take the walk's lock and a zeroed bitmap for `cluster_count` clusters.
- *
- * One walk runs at a time; a second waits, and a signal does not end the
- * wait. The bitmap is taken in whole pages after the free frames are counted
+/* The bitmap is taken in whole pages after the free frames are counted
  * against them and the reserve, since a walk that took the last frames would
  * starve the cache and the processes the check runs beside; the caller then
- * mounts read-only and says so. The heap's own refusal is the same answer.
- *
- * @return 0 with the lock held until fat_walk_release, or -ENOMEM with it
- *         released.
- */
+ * mounts read-only and says so. The heap's own refusal is the same answer. */
 int fat_walk_acquire(uint32_t cluster_count)
 {
     uint32_t pages = (fat_walk_bytes(cluster_count) + PAGE_SIZE - 1) / PAGE_SIZE;

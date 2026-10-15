@@ -7,7 +7,7 @@
 
 #include "../lib/kerrno.h"
 
-/* Whether a short name may have `c`: a letter, a digit or one of `set`. */
+/** Whether a short name may have `c`: a letter, a digit or one of `set`. */
 static int short_char(uint32_t c)
 {
     static const char set[] = "$%'-_@~`!(){}^#&";
@@ -104,7 +104,7 @@ void fat32_alias(const char *name, uint8_t *name11)
             break;
         }
         if (c == '.' || c == ' ' || (c & 0xC0) == 0x80) {
-            continue; /* dots, spaces, and the tail bytes of a character */
+            continue;
         }
         if (c >= 'a' && c <= 'z') {
             c -= 32;

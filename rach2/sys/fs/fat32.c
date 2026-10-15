@@ -1,14 +1,14 @@
 /*
  * fat32.c: the `vfat` type, read and written. The contract is in fat32.h
- * and fat32.Readme.md; what is here is the volume check, the FAT walk, the
- * directory reader with its long names, the node pool that gives the VFS
- * something to hold, the writer with its order of writes, and the check
- * of a volume that was not unmounted cleanly.
+ * and fat32.Readme.md; what is here is the check of the boot sector, the
+ * FAT walk, the directory reader with its long names, the nodes the VFS
+ * holds, the writer with its order of writes, and the check of a volume
+ * that was not unmounted cleanly.
  *
  * Everything on the volume is reached through the buffer cache in 4 KiB
- * blocks, one buffer held at a time, so the cache's hold rules are met
- * without thought. A cluster is at most 32 KiB and a directory entry is 32
- * bytes, so a read of either is a run of block copies.
+ * blocks, with one buffer held at a time. A cluster is at most 32 KiB and
+ * a directory entry is 32 bytes, so a read of either is a run of block
+ * copies.
  */
 
 #include "fat32.h"
@@ -66,8 +66,8 @@ struct fat_node {
     uint32_t hint_cluster;
 };
 
-/* A name prepared for the directory at `first`: checked, and either a short
- * entry alone or long entries in front of an alias no entry of the
+/* A name that `prepare_name` made for a directory: checked, and either a
+ * short entry alone or long entries in front of an alias no entry of the
  * directory uses. */
 struct new_name {
     uint8_t name11[11];
@@ -80,29 +80,29 @@ struct new_name {
 struct fat_mount {
     int used;
     block_device_t *dev;
-    uint32_t spc;
-    uint32_t reserved;
+    uint32_t spc;      /* sectors per cluster, a power of two to 64 */
+    uint32_t reserved; /* sectors before the first FAT */
     uint32_t nfats;
-    uint32_t total;
-    uint32_t fatsz;
+    uint32_t total; /* sectors in the volume */
+    uint32_t fatsz; /* sectors in one FAT */
     uint32_t root_cluster;
-    uint32_t data_start;
-    uint32_t cluster_count;
-    uint32_t active_fat;
+    uint32_t data_start;    /* the sector of cluster 2 */
+    uint32_t cluster_count; /* data clusters, numbered 2 to cluster_count + 1 */
+    uint32_t active_fat;    /* the FAT that is read: 0, or the one the flags name */
     uint32_t uid, gid, umask;
-    int free_known;
+    int free_known; /* free_clusters has been counted and is kept current */
     uint32_t free_clusters;
     uint32_t fsinfo_sector; /* 0 when the volume has none */
     int mirrored;           /* every FAT write goes to both copies */
     int writable;
-    int dirty_set; /* the dirty flag has been written for this mount */
-    uint32_t alloc_hint;
+    int dirty_set;       /* the dirty flag has been written for this mount */
+    uint32_t alloc_hint; /* where the next first-fit search starts */
     struct vfs_mount *mnt;
     struct fat_node *nodes; /* the nodes in memory, from the heap */
     struct new_name nn;     /* the name a create, mkdir or rename is writing */
 };
 
-/* The way a node leaves the mount's list and the heap. */
+/** Take `n` off the mount's list of nodes and free it. */
 static void node_drop(struct fat_mount *fm, struct fat_node *n)
 {
     struct fat_node **link = &fm->nodes;
@@ -124,11 +124,13 @@ static int names_match(const char *a, const char *b);
 
 /* ---- little-endian fields ---- */
 
+/** The little-endian 16-bit field at `p`. */
 static uint32_t le16(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8);
 }
 
+/** The little-endian 32-bit field at `p`. */
 static uint32_t le32(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
@@ -138,9 +140,12 @@ static uint32_t le32(const uint8_t *p)
 
 /**
  * Copy `len` bytes at byte offset `off` of the volume into `dst`, one cache
- * block at a time. The offset is in sectors times 512 and the volume is
- * bounded to 2 TiB by the constructor, so 64-bit arithmetic here is only
- * multiplication and addition, which the kernel has.
+ * block at a time. 0, or -EIO for a block the cache cannot read or one past
+ * the device's short last block.
+ *
+ * The volume is at most 2 TiB, since its sector count has 32 bits, and the
+ * division by the block size is by a constant power of two, so the kernel
+ * needs no 64-bit division here.
  */
 static int fat_read_bytes(struct fat_mount *fm, uint64_t off, void *dst, uint32_t len)
 {
@@ -161,7 +166,7 @@ static int fat_read_bytes(struct fat_mount *fm, uint64_t off, void *dst, uint32_
         }
         if (in + take > b->bytes) {
             bcache_release(b);
-            return -EIO; /* past the device's short last block */
+            return -EIO;
         }
         k_memcpy(out, b->data + in, take);
         bcache_release(b);
@@ -172,11 +177,13 @@ static int fat_read_bytes(struct fat_mount *fm, uint64_t off, void *dst, uint32_
     return 0;
 }
 
+/** The byte offset on the volume of data cluster `cluster`. */
 static uint64_t cluster_offset(const struct fat_mount *fm, uint32_t cluster)
 {
     return ((uint64_t)fm->data_start + (uint64_t)(cluster - 2) * fm->spc) * BLOCK_SECTOR_SIZE;
 }
 
+/** The bytes in one cluster. */
 static uint32_t cluster_bytes(const struct fat_mount *fm)
 {
     return fm->spc * BLOCK_SECTOR_SIZE;
@@ -210,11 +217,13 @@ static int fat_next(struct fat_mount *fm, uint32_t cluster, uint32_t *next)
 }
 
 /**
- * The cluster `index` clusters into the chain starting at `first`, walked
- * with the cluster count as the bound so a loop ends in EIO; a chain that
- * ends before the index answers ENXIO, which a directory reads as its end
- * and a file as damage. `node` may keep a hint from the last walk, which
- * is used when it is behind the target and updated on the way out.
+ * Find the cluster `index` clusters into the chain at `first`.
+ *
+ * The walk is bounded by the cluster count, so a loop ends in -EIO. A
+ * chain that ends before the index answers -ENXIO, which a directory reads
+ * as its end and a file as damage. `node`, which may be NULL, keeps the
+ * place of its last walk: a walk starts there when it is not past
+ * `index`, and leaves its own place there.
  */
 static int chain_at(struct fat_mount *fm, struct fat_node *node, uint32_t first, uint32_t index,
                     uint32_t *cluster)
@@ -224,7 +233,7 @@ static int chain_at(struct fat_mount *fm, struct fat_node *node, uint32_t first,
     uint32_t steps = 0;
 
     if (index >= fm->cluster_count) {
-        return -EIO; /* a chain longer than the volume is a loop */
+        return -EIO;
     }
     if (node && node->hint_cluster && node->hint_index <= index) {
         c = node->hint_cluster;
@@ -237,10 +246,10 @@ static int chain_at(struct fat_mount *fm, struct fat_node *node, uint32_t first,
             return rc;
         }
         if (n == 0) {
-            return -ENXIO; /* the chain ends before the index */
+            return -ENXIO;
         }
         if (++steps > fm->cluster_count) {
-            return -EIO; /* a loop */
+            return -EIO;
         }
         c = n;
         i++;
@@ -253,8 +262,10 @@ static int chain_at(struct fat_mount *fm, struct fat_node *node, uint32_t first,
     return 0;
 }
 
-/* ---- the node pool ---- */
+/* ---- the nodes ---- */
 
+/** A new node from the heap with one reference, on the mount's list, or
+ * NULL when the heap has none. */
 static struct fat_node *node_take(struct fat_mount *fm)
 {
     struct fat_node *n = kzalloc(sizeof(*n));
@@ -268,7 +279,8 @@ static struct fat_node *node_take(struct fat_mount *fm)
     return n;
 }
 
-/* A node already in the pool for this identity, held once more, or NULL. */
+/** The node in memory with this identity, held once more, or NULL. An
+ * unlinked node has no identity. */
 static struct fat_node *node_find(struct fat_mount *fm, int is_dir, uint32_t dir_cluster,
                                   uint32_t index, uint32_t first)
 {
@@ -286,6 +298,7 @@ static struct fat_node *node_find(struct fat_mount *fm, int is_dir, uint32_t dir
     return 0;
 }
 
+/** The `hold` operation: one more reference to the node. */
 static void fat_hold(struct vfs_mount *mnt, void *node)
 {
     (void)mnt;
@@ -294,6 +307,14 @@ static void fat_hold(struct vfs_mount *mnt, void *node)
 
 static int free_chain(struct fat_mount *fm, uint32_t first);
 
+/**
+ * The `put` operation: drop a reference, and at the last one free the
+ * node, with its chain when it is unlinked.
+ *
+ * The entry of an unlinked file went at the unlink, so a crash before the
+ * chain is freed here leaks its clusters. Takes the mount's namespace lock
+ * to free the chain.
+ */
 static void fat_put(struct vfs_mount *mnt, void *node)
 {
     struct fat_node *n = node;
@@ -302,8 +323,6 @@ static void fat_put(struct vfs_mount *mnt, void *node)
         n->refs--;
     }
     if (n->refs == 0) {
-        /* An unlinked file's clusters go when its last holder does; the
-         * entry went at the unlink, so a crash here leaks them. */
         if (n->unlinked && n->first != 0) {
             struct fat_mount *fm = mnt->priv;
 
@@ -317,14 +336,16 @@ static void fat_put(struct vfs_mount *mnt, void *node)
 
 /* ---- directory entries ---- */
 
+/* One 32-byte directory entry as the volume has it. */
 struct fat_dirent {
     uint8_t raw[32];
 };
 
 /**
- * The entry `index` of the directory whose chain starts at `first` (the
- * root's chain for `first` zero). 1 with the entry copied, 0 past the end
- * of the chain, or a negative errno.
+ * Copy entry `index` of the directory whose chain starts at `first` (the
+ * root's chain for `first` zero) into `ent`, walking with the hint of
+ * `dir`, which may be NULL. 1 with the entry copied, 0 past the end of the
+ * chain, or a negative errno.
  */
 static int dir_entry(struct fat_mount *fm, struct fat_node *dir, uint32_t first, uint32_t index,
                      struct fat_dirent *ent)
@@ -338,7 +359,7 @@ static int dir_entry(struct fat_mount *fm, struct fat_node *dir, uint32_t first,
     }
     rc = chain_at(fm, dir, first, index / per_cluster, &cluster);
     if (rc == -ENXIO) {
-        return 0; /* past the chain's end is the end of the directory */
+        return 0;
     }
     if (rc != 0) {
         return rc;
@@ -349,6 +370,7 @@ static int dir_entry(struct fat_mount *fm, struct fat_node *dir, uint32_t first,
                : -EIO;
 }
 
+/** The checksum of the short name `name11` that its long entries record. */
 static uint8_t short_checksum(const uint8_t *name11)
 {
     uint8_t sum = 0;
@@ -360,7 +382,8 @@ static uint8_t short_checksum(const uint8_t *name11)
     return sum;
 }
 
-/* The 13 code units of one long-name entry, in order. */
+/** Copy the 13 UTF-16 units of the long entry `raw` into `units`, in
+ * order. */
 static void lfn_units(const uint8_t *raw, uint16_t *units)
 {
     static const int at[13] = {1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30};
@@ -370,8 +393,10 @@ static void lfn_units(const uint8_t *raw, uint16_t *units)
         units[i] = (uint16_t)le16(raw + at[i]);
     }
 }
-/* The short name as shown: the base and the extension, lower-cased where
- * the reserved byte's case bits say so, a byte above 0x7F shown as `?`. */
+
+/** Write the short name of the entry `raw` to `out`, 13 bytes, as it is
+ * shown: the base and the extension, lower-cased where the case bits of
+ * byte 12 say so, and a byte above 0x7F shown as `?`. */
 static void short_to_name(const uint8_t *raw, char *out)
 {
     uint8_t lower = raw[12];
@@ -421,17 +446,23 @@ struct fat_scan {
 };
 
 /**
- * The next real entry of a directory at or after entry `*cursor`, with the
- * long name assembled when it checks and the short name otherwise. The
- * cursor moves past the entry returned. 1 with `out` filled, 0 at the end,
- * or a negative errno.
+ * Find the next entry of a directory with a name, at or after entry
+ * `*cursor`, skipping free entries and the volume label.
+ *
+ * The long name is used when its entries check: the first has the
+ * last-entry flag 0x40, the ordinals count down to 1, and each has type 0,
+ * a zero first-cluster field and the checksum of the short entry that
+ * follows. Otherwise, and for a long name past the kernel's component
+ * limit, the entry is listed and opened by its short name. The cursor moves
+ * past the entry returned. 1 with `out` filled, 0 at the end, or a
+ * negative errno.
  */
 static int dir_scan(struct fat_mount *fm, struct fat_node *dir, uint32_t first, uint32_t *cursor,
                     struct fat_scan *out)
 {
     uint16_t units[LFN_MAX_ENTRIES * 13];
-    int lfn_count = 0;  /* entries collected so far */
-    int lfn_expect = 0; /* the ordinal the next entry must carry */
+    int lfn_count = 0;
+    int lfn_expect = 0; /* the ordinal the next long entry must have */
     uint8_t lfn_sum = 0;
     int lfn_ok = 0;
     uint32_t lfn_start = 0;
@@ -447,21 +478,17 @@ static int dir_scan(struct fat_mount *fm, struct fat_node *dir, uint32_t first, 
         }
         (*cursor)++;
         if (e.raw[0] == 0) {
-            return 0; /* the end of the directory */
+            return 0; /* a first byte of 0 ends the directory */
         }
         if (e.raw[0] == 0xE5) {
             lfn_ok = 0;
-            continue; /* deleted */
+            continue; /* 0xE5 marks a free entry */
         }
         attr = e.raw[11];
         if (attr == ATTR_LFN) {
             uint8_t ord = e.raw[0];
             int seq = ord & 0x1F;
 
-            /* The sequence starts with the last entry, flagged 0x40, and
-             * counts down to 1; every entry names the same checksum, has
-             * type 0 and a zero first-cluster field. Anything else ends
-             * the sequence and the short name that follows is shown. */
             if (ord & 0x40) {
                 lfn_count = 0;
                 lfn_expect = seq;
@@ -483,7 +510,7 @@ static int dir_scan(struct fat_mount *fm, struct fat_node *dir, uint32_t first, 
         }
         if (attr & ATTR_VOLUME) {
             lfn_ok = 0;
-            continue; /* the volume label */
+            continue;
         }
         out->ent = e;
         out->index = idx;
@@ -495,8 +522,6 @@ static int dir_scan(struct fat_mount *fm, struct fat_node *dir, uint32_t first, 
             out->start = lfn_start;
             rc = fat_units_utf8(units, (uint32_t)lfn_count * 13, out->name, sizeof(out->name));
             if (rc != 0) {
-                /* A long name past the kernel's component limit is listed
-                 * and opened by its alias, which is then its name. */
                 short_to_name(e.raw, out->name);
             }
         } else {
@@ -506,7 +531,8 @@ static int dir_scan(struct fat_mount *fm, struct fat_node *dir, uint32_t first, 
     }
 }
 
-/* Names compare with ASCII case folded, as FAT does; other bytes exactly. */
+/** Whether two names are the same with ASCII case folded, as FAT compares
+ * them; other bytes compare exactly. */
 static int names_match(const char *a, const char *b)
 {
     while (*a && *b) {
@@ -526,12 +552,15 @@ static int names_match(const char *a, const char *b)
     return *a == *b;
 }
 
+/** The first cluster of the entry `raw`, from its two 16-bit halves. */
 static uint32_t entry_first(const uint8_t *raw)
 {
     return (le16(raw + 20) << 16) | le16(raw + 26);
 }
 
-/* A node for the scanned entry, from the pool or already in it. */
+/** The node for the scanned entry in the directory at `dir_cluster` (0 for
+ * the root): the one in memory, held once more, or a new one; NULL when
+ * the heap has none. */
 static struct fat_node *node_for(struct fat_mount *fm, uint32_t dir_cluster,
                                  const struct fat_scan *sc)
 {
@@ -576,6 +605,7 @@ static struct fat_node *node_for(struct fat_mount *fm, uint32_t dir_cluster,
  * them, and an entry never names a cluster that is free.
  */
 
+/** Whether the eleven bytes of two short names are the same. */
 static int raw_eq(const uint8_t *a, const uint8_t *b)
 {
     int i;
@@ -588,12 +618,14 @@ static int raw_eq(const uint8_t *a, const uint8_t *b)
     return 1;
 }
 
+/** Store `v` at `p` as a little-endian 16-bit field. */
 static void put16(uint8_t *p, uint32_t v)
 {
     p[0] = (uint8_t)v;
     p[1] = (uint8_t)(v >> 8);
 }
 
+/** Store `v` at `p` as a little-endian 32-bit field. */
 static void put32(uint8_t *p, uint32_t v)
 {
     p[0] = (uint8_t)v;
@@ -603,11 +635,13 @@ static void put32(uint8_t *p, uint32_t v)
 }
 
 /**
- * Write back everything dirty on the volume's device and then tell the
- * device to put it on the medium: the point in the order of writes below
- * where what came before must be on the disk before what comes after. A
- * disk that writes through, as this kernel's ATA and AHCI drivers do,
- * has nothing to flush; a stick with a cache of its own is told.
+ * Write back everything dirty on the volume's device and then have the
+ * device put it on the medium: the point in the order of writes where what
+ * came before must be on the disk before what comes after.
+ *
+ * A disk whose driver flushes its cache after each write, as the ATA, AHCI
+ * and NVMe drivers do for a write sent without `BLOCK_REQ_NOFLUSH`, has
+ * nothing more to flush; a USB stick is sent a flush.
  */
 static int sync_disk(struct fat_mount *fm)
 {
@@ -616,8 +650,14 @@ static int sync_disk(struct fat_mount *fm)
     return rc != 0 ? rc : block_flush(fm->dev);
 }
 
-/* `len` bytes of `src` at volume offset `off`, written through (`sync`) or
- * dirtied for writeback, one cache block at a time. */
+/**
+ * Store `len` bytes of `src`, or zeros when `src` is NULL, at byte offset
+ * `off` of the volume, one cache block at a time: written through when
+ * `sync` is nonzero, else dirtied for writeback. 0 or a negative errno.
+ *
+ * A whole block is taken blank rather than read, since all of its bytes
+ * are replaced.
+ */
 static int fat_put_bytes(struct fat_mount *fm, uint64_t off, const void *src, uint32_t len,
                          int sync)
 {
@@ -633,8 +673,6 @@ static int fat_put_bytes(struct fat_mount *fm, uint64_t off, const void *src, ui
         if (take > len) {
             take = len;
         }
-        /* A whole block is not read first: its bytes are about to be
-           replaced, and the zeros of a blank buffer are the zero fill. */
         b = take == BCACHE_BLOCK_BYTES ? bcache_get_blank(fm->dev, blk) : bcache_get(fm->dev, blk);
         if (!b) {
             return -EIO;
@@ -664,14 +702,15 @@ static int fat_put_bytes(struct fat_mount *fm, uint64_t off, const void *src, ui
     return 0;
 }
 
+/** The byte offset on the volume of the entry for `cluster` in FAT `copy`. */
 static uint64_t fat_offset(const struct fat_mount *fm, uint32_t copy, uint32_t cluster)
 {
     return ((uint64_t)fm->reserved + (uint64_t)copy * fm->fatsz) * BLOCK_SECTOR_SIZE +
            (uint64_t)cluster * 4;
 }
 
-/* The FAT copies an entry is written to: the active FAT first, then the
- * mirror when mirroring is on. */
+/** Fill `copies` with the FATs an entry is written to, the active FAT
+ * first and then the mirror when mirroring is on; the count. */
 static int fat_copies(const struct fat_mount *fm, uint32_t *copies)
 {
     int n = 0;
@@ -686,27 +725,27 @@ static int fat_copies(const struct fat_mount *fm, uint32_t *copies)
 /*
  * A batch of FAT entries written through one block at a time.
  *
- * A run of clusters allocated or freed together touches one FAT entry per
- * cluster, and with each entry written through on its own a 64 KiB append
- * on 4 KiB clusters cost some sixty-four synchronous writes before its
- * data, which on the notebook's stick was a writer at 0.65 MB/s beside a
- * stick that takes 8 MB/s. The batch sets the entries dirty in the cache
- * and writes a block through when the next entry lands in another block of
- * that copy, and at the end; each copy has its own block, since the mirror's
- * blocks do not line up with the active FAT's. The order rule holds as it
- * did: a run is whole on the disk, chained and ended, before anything names
- * it, because its batch is flushed before the caller goes on.
+ * A run of clusters allocated or freed together changes one FAT entry for
+ * each cluster, and written through one at a time a 64 KiB append on 4 KiB
+ * clusters is sixty-four synchronous writes before its data. The batch
+ * sets the entries dirty in the cache and writes a block through when the
+ * next entry is in another block of the same copy, and at the end; each
+ * copy has its own block, since the mirror's blocks do not line up with the
+ * active FAT's. A run is still whole on the disk, chained and ended, before
+ * anything names it, since its batch is flushed before the caller goes on.
  */
 struct fat_batch {
     int64_t blk[2]; /* the block of the last entry set in each copy, or -1 */
 };
 
+/** Start `batch` with no block in either copy. */
 static void fat_batch_begin(struct fat_batch *batch)
 {
     batch->blk[0] = -1;
     batch->blk[1] = -1;
 }
 
+/** Write block `blk` of the volume through from the cache. */
 static int fat_flush_block(struct fat_mount *fm, uint64_t blk)
 {
     struct bbuf *b = bcache_get(fm->dev, blk);
@@ -720,6 +759,8 @@ static int fat_flush_block(struct fat_mount *fm, uint64_t blk)
     return rc;
 }
 
+/** Write through the blocks `batch` holds and empty it; 0 or the first
+ * error. */
 static int fat_batch_flush(struct fat_mount *fm, struct fat_batch *batch)
 {
     int i;
@@ -737,8 +778,9 @@ static int fat_batch_flush(struct fat_mount *fm, struct fat_batch *batch)
     return 0;
 }
 
-/* One FAT entry, its reserved high nibble kept, set in every copy: dirty
- * in `batch`, or written through at once when there is none. */
+/** Set the FAT entry of `cluster` to `value` in every copy, keeping its
+ * reserved high four bits: dirty in `batch`, or written through at once
+ * when `batch` is NULL. */
 static int fat_batch_set(struct fat_mount *fm, struct fat_batch *batch, uint32_t cluster,
                          uint32_t value)
 {
@@ -776,16 +818,17 @@ static int fat_batch_set(struct fat_mount *fm, struct fat_batch *batch, uint32_t
     return 0;
 }
 
-/* One FAT entry written through to the active FAT first and then to the
- * mirror when mirroring is on. */
+/** Set the FAT entry of `cluster` to `value`, written through to the active
+ * FAT first and then to the mirror when mirroring is on. */
 static int fat_set(struct fat_mount *fm, uint32_t cluster, uint32_t value)
 {
     return fat_batch_set(fm, 0, cluster, value);
 }
 
-/* The dirty flag, in both places, written before the first metadata change
- * of a mount and cleared at a clean unmount. A cleared bit 27 of entry 1 is
- * dirty; a set bit 0 of byte 65 of the boot sector is dirty. */
+/** Write the dirty flag in both of its places, set when `dirty` is nonzero
+ * and cleared otherwise: bit 27 of FAT entry 1, in each FAT `fat_copies`
+ * names, is clear on a dirty volume, and bit 0 of byte 65 of the boot
+ * sector is set. */
 static int fat_flag(struct fat_mount *fm, int dirty)
 {
     uint8_t raw[4];
@@ -812,6 +855,8 @@ static int fat_flag(struct fat_mount *fm, int dirty)
     return fat_put_bytes(fm, 65, &byte, 1, 1);
 }
 
+/** Set the dirty flag before the first metadata change of the mount; once
+ * it is set, nothing. */
 static int mark_dirty(struct fat_mount *fm)
 {
     int rc;
@@ -826,8 +871,9 @@ static int mark_dirty(struct fat_mount *fm)
     return rc;
 }
 
-/* FSInfo, when the volume has one: the count and the hint this driver
- * keeps, which no reader trusts and every writer keeps current. */
+/** Write the free count and the allocation hint to FSInfo, when the volume
+ * has one and the count is known. The two are advisory: no reader trusts
+ * them, and every writer keeps them current. */
 static int write_fsinfo(struct fat_mount *fm)
 {
     uint8_t raw[8];
@@ -840,8 +886,9 @@ static int write_fsinfo(struct fat_mount *fm)
     return fat_put_bytes(fm, (uint64_t)fm->fsinfo_sector * BLOCK_SECTOR_SIZE + 488, raw, 8, 1);
 }
 
-/* One free cluster, first-fit from the hint and wrapping once, marked as
- * the end of a chain. ENOSPC is decided before anything is written. */
+/** Take one free cluster, first-fit from the hint and wrapping once, and
+ * mark it the end of a chain, in `batch`. -ENOSPC is decided before
+ * anything is written. */
 static int alloc_cluster(struct fat_mount *fm, struct fat_batch *batch, uint32_t *out)
 {
     uint32_t start, c;
@@ -890,13 +937,17 @@ static int alloc_cluster(struct fat_mount *fm, struct fat_batch *batch, uint32_t
     return -ENOSPC;
 }
 
-/* A run of `n` clusters chained together and ended, disconnected from
- * everything; `*first` and `*last` name its ends. `zero` 1 fills them with
- * zeros for writeback, which a file's data sync makes stable before the
- * run is joined; `zero` 2 writes the zeros through, for a directory
- * cluster, which is joined without a sync of its own. A failure frees what
- * was taken. */
-
+/**
+ * Take a run of `n` clusters chained together and ended, joined to nothing,
+ * with `*first` and `*last` its ends.
+ *
+ * `zero` 1 fills the clusters with zeros for writeback, which a file's
+ * data sync makes stable before the run is joined; `zero` 2 writes the
+ * zeros through, for a directory cluster, which is joined without a sync
+ * of its own. -ENOSPC is decided before any FAT sector is written, the run
+ * is on the disk whole when the call returns 0, and a failure frees what
+ * was taken.
+ */
 static int alloc_run(struct fat_mount *fm, uint32_t n, int zero, uint32_t *first, uint32_t *last)
 {
     struct fat_batch batch;
@@ -913,7 +964,7 @@ static int alloc_run(struct fat_mount *fm, uint32_t n, int zero, uint32_t *first
         }
     }
     if (fm->free_clusters < n) {
-        return -ENOSPC; /* decided before any FAT sector is written */
+        return -ENOSPC;
     }
     fat_batch_begin(&batch);
     for (i = 0; i < n && rc == 0; i++) {
@@ -940,20 +991,27 @@ static int alloc_run(struct fat_mount *fm, uint32_t n, int zero, uint32_t *first
         prev = c;
     }
     if (rc == 0) {
-        rc = fat_batch_flush(fm, &batch); /* the run is on the disk, whole */
+        rc = fat_batch_flush(fm, &batch);
     } else {
         fat_batch_flush(fm, &batch);
     }
     if (rc != 0 && *first != 0) {
-        free_chain(fm, *first); /* what was taken goes back */
+        free_chain(fm, *first);
         *first = 0;
     }
     *last = prev;
     return rc;
 }
 
-/* Free the chain at `first` to its end; a chain that leaves the volume or
- * loops is freed as far as it was sound. */
+/**
+ * Free the chain at `first` to its end; a chain that leaves the volume or
+ * loops is freed as far as it was sound.
+ *
+ * What unpublished the chain, a shorter size, a removed entry or an ended
+ * tail, has gone through the cache to the device; the flush puts it on the
+ * medium before a cluster is freed, so that after a crash no name or link
+ * reaches a free cluster.
+ */
 static int free_chain(struct fat_mount *fm, uint32_t first)
 {
     struct fat_batch batch;
@@ -961,10 +1019,6 @@ static int free_chain(struct fat_mount *fm, uint32_t first)
     uint32_t steps = 0;
     int rc;
 
-    /* What unpublished the chain, a shorter size, a removed entry or an
-     * ended tail, went through the cache to the device; a drive with a
-     * cache of its own puts it on the medium here, before a cluster is
-     * freed, so no name or link reaches a free cluster after a crash. */
     rc = block_flush(fm->dev);
     if (rc != 0) {
         return rc;
@@ -993,8 +1047,8 @@ static int free_chain(struct fat_mount *fm, uint32_t first)
     return fat_batch_flush(fm, &batch);
 }
 
-/* The modification stamp: the date and the two-second time; the creation
- * hundredths belong to the creation time and are not touched. */
+/** Set the modification date and time of `n` to now; the hundredths that
+ * `fat_now` also gives belong to the creation time and are dropped. */
 static void stamp_mtime(struct fat_node *n)
 {
     uint8_t tenth;
@@ -1002,7 +1056,7 @@ static void stamp_mtime(struct fat_node *n)
     fat_now(&n->date, &n->time, &tenth);
 }
 
-/* The 32 bytes of a node's entry, from its fields. */
+/** Build the 32 bytes of the entry of `n` in `raw` from its fields. */
 static void entry_of(const struct fat_node *n, uint8_t *raw)
 {
     k_memset(raw, 0, 32);
@@ -1020,8 +1074,9 @@ static void entry_of(const struct fat_node *n, uint8_t *raw)
     put32(raw + 28, n->size);
 }
 
-/* The volume offset of entry `index` of the directory at `first` (the root's
- * chain for zero), or a negative errno. */
+/** Find the byte offset on the volume of entry `index` of the directory at
+ * `first` (the root's chain for zero): 0, or a negative errno, -EIO for an
+ * index past the chain. */
 static int entry_offset(struct fat_mount *fm, uint32_t first, uint32_t index, uint64_t *off)
 {
     uint32_t per_cluster = cluster_bytes(fm) / 32;
@@ -1039,6 +1094,8 @@ static int entry_offset(struct fat_mount *fm, uint32_t first, uint32_t index, ui
     return 0;
 }
 
+/** Write the 32 bytes of `raw` through as entry `index` of the directory
+ * at `dir_first`. */
 static int write_entry_raw(struct fat_mount *fm, uint32_t dir_first, uint32_t index,
                            const uint8_t *raw)
 {
@@ -1051,9 +1108,9 @@ static int write_entry_raw(struct fat_mount *fm, uint32_t dir_first, uint32_t in
     return fat_put_bytes(fm, off, raw, 32, 1);
 }
 
-/* A node's entry rewritten from its fields: the one write that publishes a
- * size, a first cluster or a time. An unlinked node has no entry; its
- * fields stay in the pool for the descriptions that still use it. */
+/** Rewrite the entry of `n` from its fields: the one write that publishes a
+ * size, a first cluster or a time. An unlinked node has no entry, and its
+ * fields stay in memory for the descriptions that still use it. */
 static int write_node_entry(struct fat_mount *fm, struct fat_node *n)
 {
     uint8_t raw[32];
@@ -1065,9 +1122,16 @@ static int write_node_entry(struct fat_mount *fm, struct fat_node *n)
     return write_entry_raw(fm, n->dir_cluster, n->index, raw);
 }
 
-/* The index of `count` free entries in a row in the directory at `first`,
- * growing the directory by zeroed clusters, each chained after the old
- * tail, when the entries are not there. */
+/**
+ * Find `count` free entries in a row in the directory at `first`, and set
+ * `*index` to the first.
+ *
+ * When there are none, the directory grows by zeroed clusters, each chained
+ * after the old tail. The zeroed cluster is on the medium before the chain
+ * names it, since a drive that keeps writes pending could otherwise put the
+ * link first, and a crash between would leave what the cluster held before
+ * as the directory's entries.
+ */
 static int free_slots(struct fat_mount *fm, struct fat_node *dir, uint32_t first, uint32_t count,
                       uint32_t *index)
 {
@@ -1083,7 +1147,7 @@ static int free_slots(struct fat_mount *fm, struct fat_node *dir, uint32_t first
             return got;
         }
         if (got == 0) {
-            break; /* the chain ended: grow it */
+            break;
         }
         if (e.raw[0] == 0 || e.raw[0] == 0xE5) {
             if (run == 0) {
@@ -1115,10 +1179,6 @@ static int free_slots(struct fat_mount *fm, struct fat_node *dir, uint32_t first
         if (rc != 0) {
             return rc;
         }
-        /* The zeroed cluster and its own entry on the medium before the
-         * chain names it: a drive that keeps writes pending could
-         * otherwise put the link first, and a crash between would leave
-         * whatever the cluster held before as the directory's entries. */
         rc = sync_disk(fm);
         if (rc == 0) {
             rc = fat_set(fm, tail, newc);
@@ -1136,6 +1196,8 @@ static int free_slots(struct fat_mount *fm, struct fat_node *dir, uint32_t first
     return 0;
 }
 
+/** Set `*taken` to whether an entry of the directory at `first` has the
+ * short name `name11`; 0 or a negative errno. */
 static int alias_taken(struct fat_mount *fm, struct fat_node *dir, uint32_t first,
                        const uint8_t *name11, int *taken)
 {
@@ -1162,6 +1224,14 @@ static int alias_taken(struct fat_mount *fm, struct fat_node *dir, uint32_t firs
     }
 }
 
+/**
+ * Check `name` for the directory `dir` at `first` and fill `nn`: a short
+ * entry alone when it fits, else its long entries and the lowest-numbered
+ * alias that no entry of the directory has.
+ *
+ * @return 0, the error of `fat_name_units`, -ENOSPC when aliases 1 to
+ *         999999 are all taken, or a read error.
+ */
 static int prepare_name(struct fat_mount *fm, struct fat_node *dir, uint32_t first,
                         const char *name, struct new_name *nn)
 {
@@ -1191,12 +1261,12 @@ static int prepare_name(struct fat_mount *fm, struct fat_node *dir, uint32_t fir
             return 0;
         }
     }
-    return -ENOSPC; /* a million names on one alias */
+    return -ENOSPC;
 }
 
-/* The entries of a name written in order: the long ones, highest ordinal
- * first, then the short entry last, so no reader trusts them before the
- * short entry is there. `raw` is the short entry. */
+/** Write the entries of the name `nn` from entry `index` on: the long ones,
+ * highest ordinal first, then the short entry `raw` last, so that no reader
+ * trusts the long ones before the short entry is there. */
 static int write_name_entries(struct fat_mount *fm, uint32_t dir_first, uint32_t index,
                               const struct new_name *nn, const uint8_t *raw)
 {
@@ -1216,8 +1286,8 @@ static int write_name_entries(struct fat_mount *fm, uint32_t dir_first, uint32_t
     return write_entry_raw(fm, dir_first, index + nn->entries, raw);
 }
 
-/* The entry `name` names in the directory at `first`: 1 with the scan
- * filled, 0 when absent, or a negative errno. */
+/** Find the entry whose long name or alias is `name` in the directory at
+ * `first`: 1 with `sc` filled, 0 when absent, or a negative errno. */
 static int find_entry(struct fat_mount *fm, struct fat_node *dir, uint32_t first, const char *name,
                       struct fat_scan *sc)
 {
@@ -1235,8 +1305,8 @@ static int find_entry(struct fat_mount *fm, struct fat_node *dir, uint32_t first
     }
 }
 
-/* The node in the pool for the entry at (`dir_cluster`, `index`), whatever
- * holds it, or NULL. */
+/** The file node in memory for entry `index` of the directory at
+ * `dir_cluster`, held or not, or NULL. */
 static struct fat_node *node_at(struct fat_mount *fm, uint32_t dir_cluster, uint32_t index)
 {
     struct fat_node *n;
@@ -1249,6 +1319,8 @@ static struct fat_node *node_at(struct fat_mount *fm, uint32_t dir_cluster, uint
     return 0;
 }
 
+/** The directory node in memory whose first cluster is `first`, held or
+ * not, or NULL. */
 static struct fat_node *dir_node_at(struct fat_mount *fm, uint32_t first)
 {
     struct fat_node *n;
@@ -1261,7 +1333,8 @@ static struct fat_node *dir_node_at(struct fat_mount *fm, uint32_t first)
     return 0;
 }
 
-/* Whether the directory at `first` holds anything beyond `.` and `..`. */
+/** Set `*has` to whether the directory at `first` has an entry other than
+ * `.` and `..`; 0 or a negative errno. */
 static int dir_has_entries(struct fat_mount *fm, uint32_t first, int *has)
 {
     uint32_t i;
@@ -1291,11 +1364,17 @@ static int dir_has_entries(struct fat_mount *fm, uint32_t first, int *has)
 
 /* ---- the operations ---- */
 
+/** The driver's mount behind `mnt`. */
 static struct fat_mount *fm_of(struct vfs_mount *mnt)
 {
     return mnt->priv;
 }
 
+/**
+ * The `lookup` operation: the long name or the alias, matched as vfat on
+ * Linux matches them. `.` is the directory itself, and `..` names the
+ * parent by its first cluster, zero for the root.
+ */
 static int fat_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
 {
     struct fat_mount *fm = fm_of(mnt);
@@ -1318,12 +1397,9 @@ static int fat_lookup(struct vfs_mount *mnt, void *dir, const char *name, void *
         if (got == 0) {
             return -ENOENT;
         }
-        /* The long name or the short alias, as vfat on Linux matches. */
         if (names_match(sc.name, name) || names_match(sc.alias, name)) {
             struct fat_node *n;
 
-            /* `..` names the parent by its first cluster, zero for the
-             * root; `.` and `..` are not files in a directory. */
             n = node_for(fm, dir_cluster, &sc);
             if (!n) {
                 klog(KLOG_WARN, "vfat", "node pool full");
@@ -1335,18 +1411,21 @@ static int fat_lookup(struct vfs_mount *mnt, void *dir, const char *name, void *
     }
 }
 
+/**
+ * The `getattr` operation. Every entry reports 0777 less the mount's
+ * umask, as vfat on Linux does: FAT has no execute bit, and a program on a
+ * volume runs unless the mount is `noexec`. The read-only attribute takes
+ * away the write bits.
+ */
 static int fat_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     struct fat_mount *fm = fm_of(mnt);
     struct fat_node *n = node;
 
     k_memset(st, 0, sizeof(*st));
-    /* Every entry reports 0777 less the mount's umask, as vfat on Linux
-     * does: FAT has no execute bit, and a program on a volume runs unless
-     * the mount says noexec. */
     st->mode = (n->is_dir ? FAT_S_IFDIR : FAT_S_IFREG) | (0777u & ~fm->umask);
     if (n->attr & ATTR_READ_ONLY) {
-        st->mode &= ~0222u; /* the one attribute a mode can hold */
+        st->mode &= ~0222u;
     }
     st->uid = fm->uid;
     st->gid = fm->gid;
@@ -1364,6 +1443,7 @@ static int fat_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     return 0;
 }
 
+/** The `open` operation: the handle is the node, held once more. */
 static int fat_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
 {
     (void)mnt;
@@ -1373,11 +1453,14 @@ static int fat_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
     return 0;
 }
 
+/** The `release` operation: drop the reference the open took. */
 static void fat_release(struct vfs_mount *mnt, void *handle)
 {
     fat_put(mnt, handle);
 }
 
+/** The `read` operation. A chain shorter than the size is -EIO, after
+ * whatever was read before it. */
 static int32_t fat_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
                         uint64_t offset)
 {
@@ -1407,11 +1490,11 @@ static int32_t fat_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t
             take = count - done;
         }
         if (n->first == 0) {
-            return -EIO; /* a size with no clusters */
+            return -EIO;
         }
         rc = chain_at(fm, n, n->first, at / cbytes, &cluster);
         if (rc == -ENXIO) {
-            rc = -EIO; /* the chain is shorter than the file claims */
+            rc = -EIO;
         }
         if (rc != 0) {
             return done > 0 ? (int32_t)done : rc;
@@ -1425,6 +1508,8 @@ static int32_t fat_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t
     return (int32_t)done;
 }
 
+/** The `readdir` operation: the cursor is the index of the next 32-byte
+ * entry. */
 static int fat_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
                        struct vfs_dirent *ent)
 {
@@ -1448,7 +1533,7 @@ static int fat_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
         uint32_t first = entry_first(sc.ent.raw);
 
         if (ent->is_dir && first == 0) {
-            first = fm->root_cluster; /* `.` of the root, or `..` naming it */
+            first = fm->root_cluster; /* a first cluster of 0 in `..` is the root */
         }
         ent->ino =
             fat_inode(ent->is_dir, first, d->first == fm->root_cluster ? 0 : d->first, sc.index);
@@ -1456,8 +1541,8 @@ static int fat_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
     return 1;
 }
 
-/* Free clusters counted from the active FAT on the first statfs and kept:
- * a read-only volume cannot change. */
+/** Count the free clusters of the active FAT into `free_clusters`, which
+ * allocation and freeing keep current from then on. */
 static int count_free(struct fat_mount *fm)
 {
     uint64_t off =
@@ -1484,6 +1569,9 @@ static int count_free(struct fat_mount *fm)
     return 0;
 }
 
+/** The `statfs` operation. The first call counts the free clusters, under
+ * the namespace lock so that the count and a first allocation exclude each
+ * other. */
 static int fat_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 {
     struct fat_mount *fm = fm_of(mnt);
@@ -1491,7 +1579,7 @@ static int fat_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
     if (!fm->free_known) {
         int rc;
 
-        vfs_ns_lock(mnt); /* the count and the first allocation exclude */
+        vfs_ns_lock(mnt);
         rc = count_free(fm);
         vfs_ns_unlock(mnt);
         if (rc != 0) {
@@ -1508,10 +1596,12 @@ static int fat_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 
 /* ---- the write operations, under the mount's namespace lock ---- */
 
-/* Every mutation of the volume runs under the mount's namespace lock, and
- * says so: the lock is what keeps two writers, or a writer and a sync, from
- * interleaving across the sleeps the writes make. A caller without it is a
- * defect, found on the first mutation and not by a race. */
+/** Panic unless the calling process holds the mount's namespace lock.
+ *
+ * Every mutation of the volume runs under the lock, which keeps two
+ * writers, or a writer and a sync, from interleaving across the sleeps the
+ * writes make. The check finds a caller without it on its first mutation,
+ * not by a race. */
 static void assert_locked(struct vfs_mount *mnt)
 {
     int me = current_proc ? (int)current_proc->pid : 0;
@@ -1521,9 +1611,9 @@ static void assert_locked(struct vfs_mount *mnt)
     }
 }
 
-/* Whether `name` is in `d`, by long name or alias as the lookup matches:
- * 1, 0, or a negative error. Decided under the lock, so a create that
- * waited behind another's sees what it made. */
+/** Whether `name` is in `d`, by long name or alias as the lookup matches:
+ * 1, 0, or a negative errno. The caller holds the namespace lock, so a
+ * create that waited behind another sees what that one made. */
 static int dir_has_name(struct fat_mount *fm, struct fat_node *d, const char *name)
 {
     uint32_t cursor = 0;
@@ -1541,13 +1631,17 @@ static int dir_has_name(struct fat_mount *fm, struct fat_node *d, const char *na
     }
 }
 
-/* The mount's lock for an operation the common layer does not lock: write,
- * truncate, fsync and sync. The namespace operations arrive locked. */
+/**
+ * Take the mount's namespace lock for an operation the VFS does not lock:
+ * write, truncate and setattr; the namespace operations arrive locked.
+ *
+ * @return 0 with the lock held, or -EROFS with it released when the mount
+ *         is read-only. The test is made under the lock, so a writer
+ *         queued behind one whose write failed finds the mount read-only.
+ */
 static int begin_write(struct vfs_mount *mnt, struct fat_mount *fm)
 {
     vfs_ns_lock(mnt);
-    /* Decided under the lock: a writer queued behind the one whose write
-     * failed finds the mount read-only, not the flags it saw before. */
     if (!fm->writable || (mnt->flags & VFS_MS_RDONLY)) {
         vfs_ns_unlock(mnt);
         return -EROFS;
@@ -1555,8 +1649,10 @@ static int begin_write(struct vfs_mount *mnt, struct fat_mount *fm)
     return 0;
 }
 
-/* Copy `count` bytes of `buf` (or zeros) into the file's clusters at file
- * offset `off`, through the chain at `first`; the clusters must exist. */
+/** Copy `count` bytes of `buf`, or zeros when it is NULL, into the clusters
+ * of the chain at `first` from offset `off`, dirtied for writeback and
+ * walked with the hint of `n`. The clusters must exist; -EIO when the chain
+ * is shorter. */
 static int put_file_bytes(struct fat_mount *fm, struct fat_node *n, uint32_t first, uint64_t off,
                           const uint8_t *buf, uint32_t count)
 {
@@ -1586,17 +1682,30 @@ static int put_file_bytes(struct fat_mount *fm, struct fat_node *n, uint32_t fir
     return 0;
 }
 
-/* Extend the file's chain so that it covers `needed` clusters: the new run
- * is allocated disconnected and zero-filled, and joined to the old tail (or
- * published as the first cluster by the caller's entry write) only after
- * the caller's data is on the disk. Returns the run's first and last
- * clusters. */
+/** Take the run that extends a chain of `have` clusters to `needed`,
+ * zero-filled and joined to nothing, with its ends in `*run_first` and
+ * `*run_last`. The caller joins it to the old tail, or publishes it as the
+ * first cluster in its entry write, after its data is on the disk. */
 static int extend_chain(struct fat_mount *fm, uint32_t have, uint32_t needed, uint32_t *run_first,
                         uint32_t *run_last)
 {
     return alloc_run(fm, needed - have, 1, run_first, run_last);
 }
 
+/**
+ * The `write` operation, in the order of fat32.Readme.md: a new run of
+ * clusters is taken joined to nothing and zero-filled, the bytes go into
+ * the old clusters and the run, a gap past the old size is zeroed, the
+ * data reaches the disk, the run is joined to the old tail and the join
+ * flushed, and the entry is written last with the size.
+ *
+ * A failure before the join frees the run. A join that cannot be ended
+ * again keeps its run, as lost clusters a check frees, rather than leave a
+ * chain that runs into free clusters. A failure of the entry write leaves
+ * the run beyond the size: a surplus tail when it was joined, lost
+ * clusters when it was to be the first. A file is at most 4 GiB less a
+ * byte; a write past it is -EFBIG.
+ */
 static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                          uint64_t offset)
 {
@@ -1605,7 +1714,7 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
     uint32_t cbytes = cluster_bytes(fm);
     uint32_t have, needed, run_first = 0, run_last = 0, tail = 0;
     int joined = 0;
-    struct fat_node run; /* the new run's walk, hinted like a node's */
+    struct fat_node run; /* the hint of the walk over the new run */
     uint64_t end;
     int rc;
 
@@ -1632,16 +1741,13 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
     }
     end = offset + count;
     have = n->size == 0 ? 0 : (n->size - 1) / cbytes + 1;
-    needed = (uint32_t)(end - 1) / cbytes + 1; /* end fits 32 bits, checked above */
+    needed = (uint32_t)(end - 1) / cbytes + 1;
     if (needed > have) {
         rc = extend_chain(fm, have, needed, &run_first, &run_last);
         if (rc != 0) {
             goto out;
         }
     }
-    /* The bytes: the old clusters take the part that lands in them, the
-     * new run the rest; a gap between the old size and the write is
-     * zeroed, in old clusters here and in the run by its zero fill. */
     if (offset > n->size && have > 0) {
         uint64_t gap_end = (uint64_t)have * cbytes < offset ? (uint64_t)have * cbytes : offset;
 
@@ -1672,7 +1778,7 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
     if (rc != 0) {
         goto undo;
     }
-    rc = sync_disk(fm); /* the data reaches the disk before the chain names it */
+    rc = sync_disk(fm);
     if (rc != 0) {
         goto undo;
     }
@@ -1683,16 +1789,16 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
             joined = rc == 0;
         }
         if (rc == 0) {
-            rc = block_flush(fm->dev); /* the join on the medium before the size */
+            rc = block_flush(fm->dev);
         }
         if (rc != 0) {
             goto undo;
         }
     } else if (run_first != 0) {
-        n->first = run_first; /* published with the size, in the one entry write below */
+        n->first = run_first;
     }
     if (run_first != 0) {
-        n->hint_index = needed - 1; /* the tail, for the next append's walk */
+        n->hint_index = needed - 1;
         n->hint_cluster = run_last;
     }
     if (end > n->size) {
@@ -1701,15 +1807,12 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
     stamp_mtime(n);
     rc = write_node_entry(fm, n);
     if (rc != 0) {
-        goto out; /* the chain is joined; the size is the walk's surplus */
+        goto out;
     }
     vfs_ns_unlock(mnt);
     return (int32_t)count;
 undo:
     if (joined && fat_set(fm, tail, FAT_EOC_MIN) != 0) {
-        /* The join is in the cache and may be on the medium: a tail that
-         * cannot be ended again keeps its run, as lost clusters a check
-         * frees, rather than a chain that runs into free ones. */
         goto out;
     }
     if (run_first != 0) {
@@ -1720,6 +1823,16 @@ out:
     return rc;
 }
 
+/**
+ * The `truncate` operation.
+ *
+ * A grow is a write of zeros: a new run is taken zeroed, a gap in the last
+ * old cluster is zeroed, both reach the disk, the run is joined and the
+ * join flushed, and the entry with the new size is written last. A shrink
+ * writes the size first, and the first cluster 0 with it when nothing is
+ * kept, flushes it, then ends the kept part of the chain and frees the
+ * rest, so that no size covers a freed cluster after a crash.
+ */
 static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
     struct fat_mount *fm = fm_of(mnt);
@@ -1748,8 +1861,6 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     have = n->size == 0 ? 0 : (n->size - 1) / cbytes + 1;
     keep = size == 0 ? 0 : (uint32_t)(size - 1) / cbytes + 1;
     if (size > n->size) {
-        /* A grow is a write of zeros: new clusters, zeroed and joined,
-         * then the size. */
         uint32_t run_first = 0, run_last = 0;
 
         if (keep > have) {
@@ -1773,8 +1884,6 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
             }
         }
         if (run_first != 0) {
-            /* The run's zeros are on the disk before the link that
-             * publishes them, whether or not a gap was filled above. */
             rc = sync_disk(fm);
             if (rc != 0) {
                 free_chain(fm, run_first);
@@ -1789,8 +1898,6 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
                 rc = fat_set(fm, tail, run_first);
             }
             if (rc == 0) {
-                /* The link on the medium before the size that counts on
-                 * it, or a crash leaves a chain shorter than its size. */
                 rc = block_flush(fm->dev);
                 if (rc != 0) {
                     (void)fat_set(fm, tail, FAT_EOC_MIN);
@@ -1809,8 +1916,6 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         n->hint_cluster = 0;
         goto out;
     }
-    /* A shrink: the size first (and the first cluster to zero with it),
-     * the retained tail ended, the detached tail freed last. */
     {
         uint32_t old_first = n->first;
         uint32_t cut = 0;
@@ -1822,9 +1927,6 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         stamp_mtime(n);
         rc = write_node_entry(fm, n);
         if (rc == 0) {
-            /* The shorter size on the medium before the tail is cut and
-             * freed: a drive that keeps writes pending could otherwise
-             * free the tail under a size that still covers it. */
             rc = block_flush(fm->dev);
         }
         if (rc != 0) {
@@ -1856,9 +1958,11 @@ out:
     return rc;
 }
 
-/* The attributes the volume can store: the access and modification times,
- * and the write bits as the read-only attribute. A mode change outside the
- * write bits, an owner or a group is EPERM, as Linux's vfat answers. */
+/** The `setattr` operation, for what the volume can store: the access and
+ * modification times, and the write bits as the read-only attribute. A
+ * change of the mode outside the write bits, of the owner or of the group
+ * is -EPERM, as Linux's vfat answers; the root, which has no entry, takes
+ * any change it allows and stores none. */
 static int fat_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
 {
     struct fat_mount *fm = fm_of(mnt);
@@ -1866,7 +1970,7 @@ static int fat_setattr(struct vfs_mount *mnt, void *node, int what, const struct
     int rc;
 
     if (what & ~(VFS_SET_MODE | VFS_SET_ATIME | VFS_SET_MTIME)) {
-        return -EPERM; /* the owner, the group, or a field this call does not store */
+        return -EPERM;
     }
     if (what & VFS_SET_MODE) {
         uint32_t base = 0777u & ~fm->umask;
@@ -1877,7 +1981,7 @@ static int fat_setattr(struct vfs_mount *mnt, void *node, int what, const struct
         }
     }
     if (n->is_dir && n->first == fm->root_cluster) {
-        return 0; /* the root has no entry of its own */
+        return 0;
     }
     rc = begin_write(mnt, fm);
     if (rc != 0) {
@@ -1907,6 +2011,8 @@ static int fat_setattr(struct vfs_mount *mnt, void *node, int what, const struct
     return rc;
 }
 
+/** The `fsync` operation: the whole volume's dirty buffers, written back
+ * and flushed. */
 static int fat_fsync(struct vfs_mount *mnt, void *handle)
 {
     struct fat_mount *fm = fm_of(mnt);
@@ -1919,6 +2025,9 @@ static int fat_fsync(struct vfs_mount *mnt, void *handle)
     return rc;
 }
 
+/** The `sync` operation: the dirty buffers and FSInfo, when the mount has
+ * written anything. The namespace lock is taken first, since the flag
+ * writes of a first mutation may be in flight. */
 static int fat_sync(struct vfs_mount *mnt)
 {
     struct fat_mount *fm = fm_of(mnt);
@@ -1927,7 +2036,7 @@ static int fat_sync(struct vfs_mount *mnt)
     if (!fm->writable || (mnt->flags & VFS_MS_RDONLY)) {
         return 0;
     }
-    vfs_ns_lock(mnt); /* a first mutation's flag writes may be in flight */
+    vfs_ns_lock(mnt);
     if (!fm->dirty_set) {
         vfs_ns_unlock(mnt);
         return 0;
@@ -1940,7 +2049,8 @@ static int fat_sync(struct vfs_mount *mnt)
     return rc;
 }
 
-/* A new file: its entry, free of clusters, in a free slot of `dir`. */
+/** The `create` operation: a new empty file, with no cluster, in free
+ * entries of `dir`. */
 static int fat_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
                       void **node)
 {
@@ -2000,7 +2110,8 @@ static int fat_create(struct vfs_mount *mnt, void *dir, const char *name, uint32
     return 0;
 }
 
-/* Free an entry: 0xE5 in its first byte, the rest kept. */
+/** Free entry `index` of the directory at `dir_first`: 0xE5 in its first
+ * byte, the rest kept. */
 static int free_entry(struct fat_mount *fm, uint32_t dir_first, uint32_t index)
 {
     uint64_t off;
@@ -2013,9 +2124,9 @@ static int free_entry(struct fat_mount *fm, uint32_t dir_first, uint32_t index)
     return fat_put_bytes(fm, off, &e5, 1, 1);
 }
 
-/* The entries of a name freed: the short entry first, then its long entries
- * from the one nearest it back to the first, so a reader never trusts the
- * long ones without the short one. */
+/** Free the entries of the name `sc` found: the short entry first, then its
+ * long entries from the one nearest it back to the first, so that a reader
+ * never trusts the long ones without the short one. */
 static int free_name_entries(struct fat_mount *fm, uint32_t dir_first, const struct fat_scan *sc)
 {
     uint32_t i;
@@ -2033,8 +2144,9 @@ static int free_name_entries(struct fat_mount *fm, uint32_t dir_first, const str
     return 0;
 }
 
-/* The chain of an entry that is gone: freed now, or left to the node's last
- * holder. */
+/** Dispose of the chain at `first` of the file whose entry `index` of the
+ * directory at `dir_cluster` is gone: freed now, or, when a node holds it,
+ * left for the node's last put. */
 static int retire_chain(struct vfs_mount *mnt, struct fat_mount *fm, uint32_t dir_cluster,
                         uint32_t index, uint32_t first)
 {
@@ -2042,7 +2154,7 @@ static int retire_chain(struct vfs_mount *mnt, struct fat_mount *fm, uint32_t di
 
     (void)mnt;
     if (n && n->refs > 0) {
-        n->unlinked = 1; /* the chain goes at the last put */
+        n->unlinked = 1;
         return 0;
     }
     if (n) {
@@ -2051,6 +2163,7 @@ static int retire_chain(struct vfs_mount *mnt, struct fat_mount *fm, uint32_t di
     return first ? free_chain(fm, first) : 0;
 }
 
+/** The `unlink` operation: the name's entries freed, then the chain. */
 static int fat_unlink(struct vfs_mount *mnt, void *dir, const char *name)
 {
     struct fat_mount *fm = fm_of(mnt);
@@ -2083,6 +2196,12 @@ static int fat_unlink(struct vfs_mount *mnt, void *dir, const char *name)
     return retire_chain(mnt, fm, dir_cluster, sc.index, entry_first(sc.ent.raw));
 }
 
+/**
+ * The `mkdir` operation: the new cluster is taken zeroed and ended, with
+ * `.` and `..`, and reaches the medium, with the parent's room for the
+ * name, before the parent's entry is written last; a crash before that
+ * leaks the cluster.
+ */
 static int fat_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 {
     struct fat_mount *fm = fm_of(mnt);
@@ -2114,8 +2233,6 @@ static int fat_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     if (rc != 0) {
         return rc;
     }
-    /* The cluster, zeroed and ended, with `.` and `..`, then the parent's
-     * entry last; a crash before it leaks the cluster. */
     rc = alloc_run(fm, 1, 2, &c, &unused);
     if (rc != 0) {
         return rc;
@@ -2140,9 +2257,6 @@ static int fat_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_
         rc = free_slots(fm, d, d->first, nn->entries + 1, &index);
     }
     if (rc == 0) {
-        /* The directory's cluster, its chain and its two entries on the
-         * medium before the parent's entry names it: a drive that keeps
-         * writes pending could otherwise put the name first. */
         rc = sync_disk(fm);
     }
     if (rc == 0) {
@@ -2158,6 +2272,9 @@ static int fat_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     return 0;
 }
 
+/** The `rmdir` operation. A directory a node holds, as a description or a
+ * working directory does, is -EBUSY. The name is off the medium before
+ * the clusters are freed. */
 static int fat_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
 {
     struct fat_mount *fm = fm_of(mnt);
@@ -2191,16 +2308,13 @@ static int fat_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     }
     held = dir_node_at(fm, first);
     if (held && held->refs > 0) {
-        return -EBUSY; /* a description or a working directory is in it */
+        return -EBUSY;
     }
     rc = mark_dirty(fm);
     if (rc == 0) {
         rc = free_name_entries(fm, d->first, &sc);
     }
     if (rc == 0) {
-        /* The name gone from the medium before its clusters are freed: a
-         * drive that keeps writes pending could otherwise free them under
-         * a name still there. */
         rc = block_flush(fm->dev);
     }
     if (rc != 0) {
@@ -2212,8 +2326,9 @@ static int fat_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     return free_chain(fm, first);
 }
 
-/* Whether the directory at cluster `dir` (0 for the root) is `anc` or lies
- * under it, by the `..` chain up to the root. 1, 0, or a negative error. */
+/** Whether the directory at cluster `dir` (0 for the root) is `anc` or lies
+ * under it, by the `..` entries up to the root: 1, 0, or a negative
+ * errno. */
 static int is_under(struct fat_mount *fm, uint32_t dir, uint32_t anc)
 {
     uint32_t steps = 0;
@@ -2235,11 +2350,19 @@ static int is_under(struct fat_mount *fm, uint32_t dir, uint32_t anc)
     return 0;
 }
 
-/* Rename within one mount. In one directory the entry is rewritten in
- * place; otherwise the destination is freed if it exists, the source entry
- * is freed, a moved directory's `..` is rewritten, and the new entry is
- * written last, so a crash between the two leaves a nameless chain for
- * the walk and never two names on one chain. */
+/**
+ * The `rename` operation, within one mount.
+ *
+ * In one directory, with no destination and a name of as many entries,
+ * the entries are rewritten in place. Otherwise the destination is freed
+ * if it exists, the source's entries are freed and flushed, a moved
+ * directory's `..` is rewritten and flushed, and the new entries are
+ * written last, so a crash between leaves a chain with no name for the
+ * check and never two names on one chain. The new name and its room are
+ * decided with the destination still in place, so -ENOSPC destroys
+ * nothing. The moved node is held through the writes, which sleep, so
+ * that a last close meanwhile does not free it.
+ */
 static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
                       const char *newname)
 {
@@ -2279,7 +2402,7 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
         int dst_dir = (dst.ent.raw[11] & ATTR_DIRECTORY) != 0;
 
         if (od_cluster == nd_cluster && dst.index == src.index) {
-            return 0; /* the same entry under a spelling of its own name */
+            return 0;
         }
         if (is_dir && !dst_dir) {
             return -ENOTDIR;
@@ -2308,29 +2431,22 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
             return rc;
         }
         if (rc) {
-            return -EINVAL; /* into itself or under itself */
+            return -EINVAL;
         }
     }
     rc = mark_dirty(fm);
     if (rc != 0) {
         return rc;
     }
-    /* The name and its room are decided with the destination still in
-     * place, so ENOSPC destroys nothing; the alias avoids the
-     * destination's, and its freed slots are simply free. */
     rc = prepare_name(fm, nd, nd->first, newname, nn);
     if (rc != 0) {
         return rc;
     }
     moved = is_dir ? dir_node_at(fm, entry_first(src.ent.raw)) : node_at(fm, od_cluster, src.index);
-    /* Held through the writes below, which sleep: a last close meanwhile
-     * would free the node this rename is about to update. */
     if (moved) {
         moved->refs++;
     }
     if (od_cluster == nd_cluster && !dst_exists && src.index - src.start == nn->entries) {
-        /* In place: the same entries rewritten under the new name, long
-         * ones first and the short one last. */
         k_memcpy(src.ent.raw, nn->name11, 11);
         src.ent.raw[12] = nn->lower;
         rc = write_name_entries(fm, od->first, src.start, nn, src.ent.raw);
@@ -2359,10 +2475,6 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
     }
     rc = free_name_entries(fm, od->first, &src);
     if (rc == 0) {
-        /* The old names freed on the medium before the new ones are
-         * written: a drive that keeps writes pending could otherwise put
-         * the new names first, and a crash between would leave two names
-         * on one chain, where the order chosen leaves none. */
         rc = block_flush(fm->dev);
     }
     if (rc != 0) {
@@ -2379,7 +2491,7 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
             rc = fat_put_bytes(fm, cluster_offset(fm, c) + 32, dotdot, 32, 1);
         }
         if (rc == 0) {
-            rc = block_flush(fm->dev); /* the new parent link before the new name */
+            rc = block_flush(fm->dev);
         }
         if (rc != 0) {
             goto out;
@@ -2405,23 +2517,27 @@ out:
     return rc;
 }
 
-/* The clean unmount: every dirty buffer written, FSInfo, then the dirty
- * flag cleared in both places. A failure leaves the volume marked dirty
- * and the mount where it was; nothing here is irreversible. */
+/**
+ * The `prepare_unmount` operation, the clean unmount: every dirty buffer
+ * written and flushed, FSInfo with an exact count, then the dirty flag
+ * cleared in both places. A failure sets the flag again and leaves the
+ * mount where it was.
+ *
+ * A mount that went read-only after a failed write is unmounted with the
+ * volume as it is, marked dirty for the next mount's check, and no
+ * metadata written.
+ */
 static int fat_prepare_unmount(struct vfs_mount *mnt)
 {
     struct fat_mount *fm = fm_of(mnt);
     int rc;
 
-    /* A mount that went read-only after a failed write is unmounted with
-     * the volume left as it is, marked dirty for the next mount's check:
-     * the device takes no metadata write, and the data is the cache's. */
     if (!fm->writable || (mnt->flags & VFS_MS_RDONLY)) {
         return 0;
     }
     rc = sync_disk(fm);
     if (rc == 0 && !fm->free_known && fm->fsinfo_sector != 0) {
-        rc = count_free(fm); /* so the count written is exact */
+        rc = count_free(fm);
     }
     if (rc == 0) {
         rc = write_fsinfo(fm);
@@ -2431,7 +2547,7 @@ static int fat_prepare_unmount(struct vfs_mount *mnt)
     }
     if (rc != 0) {
         if (fm->dirty_set) {
-            fat_flag(fm, 1); /* whatever was cleared goes back to dirty */
+            fat_flag(fm, 1);
         }
         return rc;
     }
@@ -2439,6 +2555,7 @@ static int fat_prepare_unmount(struct vfs_mount *mnt)
     return 0;
 }
 
+/** The `unmount` operation: every node and the mount freed. */
 static void fat_unmount(struct vfs_mount *mnt)
 {
     struct fat_mount *fm = fm_of(mnt);
@@ -2451,6 +2568,7 @@ static void fat_unmount(struct vfs_mount *mnt)
     kfree(fm);
 }
 
+/** 0 when the `n` bytes at `a` and `b` are the same, else 1. */
 static int k_memcmp_bytes(const uint8_t *a, const uint8_t *b, uint32_t n)
 {
     uint32_t i;
@@ -2467,28 +2585,28 @@ static int k_memcmp_bytes(const uint8_t *a, const uint8_t *b, uint32_t n)
  *
  * A volume whose dirty flag is set was written by something that did not
  * unmount it. Before the mount is published the directory tree is walked
- * under one bitmap of 2^20 clusters, shared by every mount and used by one
- * walk at a time. The four states this driver's own order leaves behind a
- * crash are found and three of them repaired, each repair a metadata write
- * in an order a second crash cannot make worse: a surplus tail is ended at
- * the size's last cluster and then freed, orphan long-name entries are
- * freed, and a lagging mirror is rewritten from the active FAT. A lost
- * cluster is reported and left. Anything else (a cross-link, a loop, a
- * chain outside the volume or shorter than its size, an empty file with a
- * chain, a wrong `.` or `..`, a name twice in one directory) is a state
- * this driver never leaves, and the volume is mounted read-only with a
- * record naming it.
+ * with the bitmap of fatcommon.h, one bit for each cluster, shared by every
+ * mount and used by one walk at a time. The four states this driver's own
+ * order leaves behind a crash are found and three of them repaired, each
+ * repair a metadata write in an order a second crash cannot make worse: a
+ * surplus tail is ended at the size's last cluster and then freed, orphan
+ * long-name entries are freed, and a lagging mirror is rewritten from the
+ * active FAT. A lost cluster is reported and left. Anything else (a
+ * cross-link, a loop, a chain outside the volume or shorter than its size,
+ * an empty file with a chain, a wrong `.` or `..`, a name twice in one
+ * directory) is a state this driver never leaves, and the volume is
+ * mounted read-only with a record naming it.
  */
 
-#define WALK_DEPTH       32
+#define WALK_DEPTH       32   /* directory levels the walk and `fat_path` follow */
 #define WALK_TAILS       16   /* surplus tails recorded for the repair after the walk */
 #define WALK_DIR_ENTRIES 4096 /* entries compared for a duplicate name */
 
 struct walk_state {
     struct fat_mount *fm;
-    int repaired;  /* repairs written */
-    uint32_t lost; /* clusters marked used that nothing reaches */
-    const char *why;
+    int repaired;    /* repairs written */
+    uint32_t lost;   /* clusters marked used that nothing reaches */
+    const char *why; /* what makes the volume bad, or NULL */
     /* Surplus tails found by the walk, freed only after the whole tree is
      * walked: a tail that a later entry's chain enters is a cross-link,
      * and freeing it first would destroy that entry's clusters. */
@@ -2497,11 +2615,12 @@ struct walk_state {
     uint32_t tail_first[WALK_TAILS];
 };
 
-/* Walk the chain at `first`, marking clusters; `expect` clusters for a
- * file (-1 for a directory). Returns the count, or -1 for a bad chain or
- * for a chain under an empty file, whose entry would still name a freed
- * tail. A surplus tail is walked and marked like the rest of the chain
- * and recorded for the repair that follows the walk. */
+/** Walk the chain at `first`, marking its clusters; `expect` is the
+ * clusters of a file's size, -1 for a directory. The count, or -1 with
+ * `w->why` set for a bad chain, or for a chain under an empty file, whose
+ * entry would still name a freed tail. A surplus tail, the one this
+ * driver's extend leaves behind a crash, is walked and marked like the
+ * rest and recorded for the repair that follows the walk. */
 static long walk_chain(struct walk_state *w, uint32_t first, long expect)
 {
     struct fat_mount *fm = w->fm;
@@ -2527,7 +2646,6 @@ static long walk_chain(struct walk_state *w, uint32_t first, long expect)
         }
         count++;
         if (expect >= 0 && count == expect + 1) {
-            /* The surplus tail this driver's extend leaves behind a crash. */
             if (w->ntails == WALK_TAILS) {
                 w->why = "more surplus tails than the walk repairs";
                 return -1;
@@ -2551,9 +2669,18 @@ static long walk_chain(struct walk_state *w, uint32_t first, long expect)
     return count;
 }
 
-/* One directory: its entries checked, its files' chains walked, its
- * subdirectories returned one at a time through `sub` with `*resume` at
- * the entry after them, so the walk keeps its own small stack. */
+/**
+ * Check the directory at `first`, whose parent is at `parent` (0 for the
+ * root), from entry `*resume` on: its entries checked and its files'
+ * chains walked.
+ *
+ * A subdirectory ends the call with 1, its first cluster in `*sub` and
+ * `*resume` at the entry after it, so that `fat_check_volume` keeps the
+ * stack. The end of the directory is 0, and a bad state -1 with `w->why`
+ * set. Long entries with no short entry after them, as a crash in the
+ * middle of a name leaves, are freed, last first. A duplicate name is
+ * looked for among the first `WALK_DIR_ENTRIES` entries.
+ */
 static int walk_dir(struct walk_state *w, uint32_t first, uint32_t parent, uint32_t *resume,
                     uint32_t *sub)
 {
@@ -2576,8 +2703,6 @@ static int walk_dir(struct walk_state *w, uint32_t first, uint32_t parent, uint3
         }
         if (got == 0 || e.raw[0] == 0 || e.raw[0] == 0xE5) {
             if (lfn_pending) {
-                /* Long-name entries with no short entry after them: what a
-                 * crash in the middle of a name leaves; freed, last first. */
                 uint32_t k;
 
                 for (k = i; k > lfn_start; k--) {
@@ -2653,7 +2778,6 @@ static int walk_dir(struct walk_state *w, uint32_t first, uint32_t parent, uint3
             continue;
         }
         {
-            /* The same name twice in one directory. */
             uint32_t k;
 
             if (i >= WALK_DIR_ENTRIES) {
@@ -2699,7 +2823,9 @@ static int walk_dir(struct walk_state *w, uint32_t first, uint32_t parent, uint3
     }
 }
 
-/* The mirror rewritten from the active FAT, one cache block at a time. */
+/** Rewrite the mirror from the active FAT where the two differ, 512 bytes
+ * at a time: 1 when anything was rewritten, 0 when nothing differed, or a
+ * negative errno. */
 static int rewrite_mirror(struct fat_mount *fm)
 {
     uint32_t other = fm->active_fat == 0 ? 1 : 0;
@@ -2730,8 +2856,18 @@ static int rewrite_mirror(struct fat_mount *fm)
     return differ;
 }
 
-/* The check itself: the walk, the lost count, the mirror; 0 with the
- * volume consistent or repaired, 1 with it bad. */
+/**
+ * Check a volume that was not unmounted cleanly: the walk of the tree, the
+ * repair of the surplus tails it found, the free and lost counts, and the
+ * mirror. 0 with the volume consistent or repaired, 1 with it bad or with
+ * no memory for the bitmap, each with a record.
+ *
+ * The surplus tails are repaired only after the walk has shown that
+ * nothing else reaches them: the size's last cluster is ended first, then
+ * the tail freed. A cluster the walk marked may since be free, since a
+ * repair frees its tail. The free count the walk found is written to
+ * FSInfo.
+ */
 static int fat_check_volume(struct fat_mount *fm)
 {
     struct walk_state w;
@@ -2777,8 +2913,6 @@ static int fat_check_volume(struct fat_mount *fm)
         stack_resume[depth] = 0;
         depth++;
     }
-    /* The surplus tails, now that the walk has shown nothing else reaches
-     * them: the size's last cluster is ended first, then the tail freed. */
     for (i = 0; i < w.ntails; i++) {
         int rc = fat_set(fm, w.tail_prev[i], FAT_EOC_MIN);
 
@@ -2804,16 +2938,12 @@ static int fat_check_volume(struct fat_mount *fm)
                 goto done;
             }
             v = le32(raw) & FAT_MASK;
-            /* A marked cluster can be free: a surplus tail is marked by the
-             * walk and then freed by its repair. */
             if (v == 0) {
                 freecount++;
             } else if (v != FAT_BAD && !fat_walk_marked(c)) {
                 w.lost++;
             }
         }
-        /* The count the walk found is the count FSInfo says from now on;
-         * a crash leaves the sector's count where the last sync put it. */
         fm->free_clusters = freecount;
         fm->free_known = 1;
         if (write_fsinfo(fm) != 0) {
@@ -2846,6 +2976,8 @@ done:
     return 0;
 }
 
+/** Record that the volume is refused for `field` of its boot sector, and
+ * return -EINVAL. */
 static int refuse(const char *field)
 {
     klog(KLOG_WARN, "vfat", "refused: %s", field);
@@ -2853,11 +2985,18 @@ static int refuse(const char *field)
 }
 
 /**
- * The volume check, field by field, before anything is published.
+ * Mount the volume on `dev` into `fm`, which `fat_mount` allocated: the
+ * options, the boot sector checked field by field, FSInfo, and the
+ * dirty-volume check, before anything is published in `mnt`.
+ *
+ * FAT32 is recognised as Linux recognises it, by a zero 16-bit FAT size, a
+ * nonzero 32-bit one, no root entries and version 0, whatever the cluster
+ * count; the 65525 threshold is a rule for formatting. A dirty volume that
+ * fails its check is mounted read-only. On failure the caller frees the
+ * nodes taken.
+ *
+ * @return 0, -EINVAL for a refused field or option, -EIO, or -ENOMEM.
  */
-/* The constructor proper, on a slot already claimed: it sleeps in the
- * cache and in the dirty-volume check, so the slot is taken before it
- * runs and given back when it fails. */
 static int fat_mount_on(struct fat_mount *fm, struct vfs_mount *mnt, block_device_t *dev,
                         uint32_t flags, const char *options)
 {
@@ -2894,8 +3033,6 @@ static int fat_mount_on(struct fat_mount *fm, struct vfs_mount *mnt, block_devic
     version = le16(bpb + 42);
     fm->root_cluster = le32(bpb + 44);
 
-    /* The recognition rule Linux uses: FAT32 is what says it is, whatever
-     * its cluster count; the 65525 threshold is a formatting rule. */
     if (fatsz16 != 0 || fatsz == 0 || root_entries != 0 || version != 0) {
         return refuse("not a FAT32 volume");
     }
@@ -2933,23 +3070,21 @@ static int fat_mount_on(struct fat_mount *fm, struct vfs_mount *mnt, block_devic
     if (fm->root_cluster < 2 || fm->root_cluster >= fm->cluster_count + 2) {
         return refuse("root cluster");
     }
-    /* With mirroring on the first FAT is read; with it off, the one the
-     * flags name. */
-    fm->active_fat = (ext_flags & 0x80) ? (ext_flags & 0xF) : 0;
+    fm->active_fat = (ext_flags & 0x80) ? (ext_flags & 0xF) : 0; /* bit 7: mirroring off */
     if (fm->active_fat >= fm->nfats) {
         return refuse("active FAT");
     }
     fm->mirrored = (ext_flags & 0x80) == 0;
     fm->fsinfo_sector = le16(bpb + 48);
     if (fm->fsinfo_sector >= fm->reserved) {
-        fm->fsinfo_sector = 0; /* not inside the reserved region: none */
+        fm->fsinfo_sector = 0;
     }
     if (fm->fsinfo_sector != 0) {
         uint8_t fi[512];
 
         rc = fat_read_bytes(fm, (uint64_t)fm->fsinfo_sector * BLOCK_SECTOR_SIZE, fi, sizeof(fi));
         if (rc != 0 || le32(fi) != 0x41615252u || le32(fi + 484) != 0x61417272u) {
-            fm->fsinfo_sector = 0; /* no signature: nothing there to keep */
+            fm->fsinfo_sector = 0;
         } else {
             uint32_t hint = le32(fi + 492);
 
@@ -2978,7 +3113,7 @@ static int fat_mount_on(struct fat_mount *fm, struct vfs_mount *mnt, block_devic
             fm->writable = 0;
             mnt->flags |= VFS_MS_RDONLY;
         } else if (dirty && fm->writable) {
-            fm->dirty_set = 1; /* already on the disk; the clean unmount clears it */
+            fm->dirty_set = 1;
         }
     }
 
@@ -2993,6 +3128,8 @@ static int fat_mount_on(struct fat_mount *fm, struct vfs_mount *mnt, block_devic
     return 0;
 }
 
+/** The `mount` operation of the type: a mount allocated from the heap and
+ * `fat_mount_on`, which leaves nothing allocated when it fails. */
 static int fat_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
                      const char *options)
 {
@@ -3013,10 +3150,12 @@ static int fat_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
     return rc;
 }
 
-/* The path of a directory node, rebuilt from the volume: the parent by the
- * `..` entry, the name by the entry in the parent whose first cluster is
- * the child's, up to the root. What a directory descriptor's `*at` calls
- * resolve against, so they follow a rename of the directory. */
+/** The `path` operation: the path of a directory node in the mount, rebuilt
+ * from the volume, the parent by the `..` entry and the name by the entry
+ * in the parent whose first cluster is the child's, up to the root. A
+ * directory descriptor's `*at` calls resolve against it, so they follow a
+ * rename of the directory. -ENAMETOOLONG past `cap` or `WALK_DEPTH`
+ * levels. */
 static int fat_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
     struct fat_mount *fm = fm_of(mnt);

@@ -23,14 +23,16 @@
  * an alias otherwise. A dirty volume is checked at mount and the states
  * this driver's own order leaves are repaired; any other mounts read-only.
  *
- * A node is an entry in a fixed per-mount pool of `FAT32_NODES`, freed at its
- * last put; a lookup that finds the pool full answers ENOMEM. A directory's
- * identity is its first cluster; a file's is its directory's cluster and its
- * entry index, and the inode number reported is built from the same fields so
- * that no two entries share one. Every entry reports the mount's `uid` and
- * `gid` and the mode `0777` less its `umask` option (0755 under the default
- * 022), the options Linux's vfat takes; FAT has no execute bit, so a program
- * on a volume runs unless the mount is `noexec`.
+ * A node is taken from the heap when a lookup first reaches its entry, kept
+ * on the mount's list and freed at its last put; a lookup that cannot take
+ * one answers ENOMEM. A directory's identity is its first cluster; a file's
+ * is its directory's cluster and its entry index, and the inode number
+ * reported is built from the same fields so that no two entries share one.
+ * Every entry reports the mount's `uid` and `gid` and the mode `0777` less
+ * its `umask` option (0755 under the default 022), the options Linux's vfat
+ * takes, without the write bits when the entry has the read-only
+ * attribute; FAT has no execute bit, so a program on a volume runs unless
+ * the mount is `noexec`.
  *
  * Names: a long name is kept when its entries check and its checksum
  * matches the short entry; otherwise the short name is shown, in lower
@@ -40,6 +42,7 @@
  * `getdents64` reports.
  */
 
+/** The `vfat` type, in the VFS's table of mount types. */
 extern const struct vfs_type vfs_vfat_type;
 
 #endif /* _FAT32_H_ */
