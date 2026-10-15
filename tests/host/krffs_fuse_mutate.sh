@@ -3,7 +3,9 @@
 # the KRFFS library under krffs/, one at a time: the check of the node ring
 # before FUSE starts taken out, a child found without its directory, a moved
 # node that loses its directory, a rename that leaves the node in its old
-# directory, and mkdir without its refusal of a taken directory id. The test
+# directory, mkdir without its refusal of a taken directory id, a node made
+# with no request that keeps the free node's owner, the free blocks counted
+# rounding up, and a rename to the same name that frees the node. The test
 # is compiled with a fuse.h that stops the build, so that it uses the test's
 # own stub.
 set -eu
@@ -11,7 +13,7 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-faults='ring parent moved rename mkdir-id'
+faults='ring parent moved rename mkdir-id owner statfs same-name'
 
 # select_fault FAULT: the file FAULT changes, in `file`, the text it replaces,
 # in `old`, the text that replaces it, in `new`, and the rows it must fail,
@@ -45,6 +47,22 @@ zero node size rejected before fuse' ;;
             old='directory_id_taken(directory, name)'
             new='0'
             rows='mkdir refuses a taken directory id' ;;
+        owner)
+            file=krffs/krffs_fuse_operations.c
+            old='node->uid = geteuid();'
+            new=''
+            rows="no request gives the driver's owner" ;;
+        statfs)
+            file=krffs/krffs_fuse_operations.c
+            old='(fsblkcnt_t)(total_free_space / StatFS_Block_Size)'
+            new='(fsblkcnt_t)((total_free_space - 1) / StatFS_Block_Size + 1)'
+            rows='free blocks rounded down
+full image has no free block' ;;
+        same-name)
+            file=krffs/krffs_fuse_operations.c
+            old='if (result == 0 && target && target != node) {'
+            new='if (result == 0 && target) {'
+            rows='rename to the same name keeps the file' ;;
         *)
             echo "krffs-fuse-mutation: unknown fault: $1" >&2
             exit 1 ;;

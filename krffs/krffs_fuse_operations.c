@@ -155,6 +155,29 @@ static size_t count_children(uint64_t directory_id, int directories_only)
 }
 
 /**
+ * Gives `node` the user and group of the request FUSE is serving, or, when
+ * FUSE reports no request, the driver's effective user and group, which
+ * `mkfs.krffs` gives the root (0:0 on Windows).
+ */
+static void set_owner(struct krffs_node *node)
+{
+    struct fuse_context *context = fuse_get_context();
+
+    if (context) {
+        node->uid = context->uid;
+        node->gid = context->gid;
+    } else {
+#ifdef WINDOWS
+        node->uid = 0;
+        node->gid = 0;
+#else
+        node->uid = geteuid();
+        node->gid = getegid();
+#endif
+    }
+}
+
+/**
  * Reserves a node named `name` in `directory` with `mode`, the caller's
  * owner, and the current time as its three times and as the directory's
  * modification and change times. Its id is the djb2 hash of the name, as the
@@ -176,11 +199,7 @@ static struct krffs_node *make_node(struct krffs_node *directory, const char *na
             node->id = krffs_mix_id(directory_id, name);
         }
 
-        struct fuse_context *context = fuse_get_context();
-        if (context) {
-            node->uid = context->uid;
-            node->gid = context->gid;
-        }
+        set_owner(node);
 
         struct krffs_node_time current_node_time = krffs_get_current_node_time();
 
@@ -697,7 +716,7 @@ int krffs_statfs(const char *path, struct statvfs *statvfs_buffer)
             statvfs_buffer->f_bsize = StatFS_Block_Size;
             statvfs_buffer->f_frsize = StatFS_Block_Size;
             statvfs_buffer->f_blocks = (fsblkcnt_t)((total_space - 1) / StatFS_Block_Size + 1);
-            statvfs_buffer->f_bfree = (fsblkcnt_t)((total_free_space - 1) / StatFS_Block_Size + 1);
+            statvfs_buffer->f_bfree = (fsblkcnt_t)(total_free_space / StatFS_Block_Size);
             statvfs_buffer->f_bavail = statvfs_buffer->f_bfree;
             statvfs_buffer->f_files = (fsfilcnt_t)reserved_node_count;
             statvfs_buffer->f_ffree = 0;

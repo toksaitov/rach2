@@ -49,7 +49,8 @@ int krffs_read(const char *path, char *buffer, size_t size, PLATFORM_OFF_T offse
 
 /**
  * Makes an empty node named by `path` with `mode` as it is, type bits
- * included, the owner of the calling process, and the current time as its
+ * included, the user and group of the request, or the driver's effective
+ * user and group when FUSE reports no request, and the current time as its
  * three times and its directory's modification and change times. Its id is
  * the djb2 hash of its name, as the kernel gives a file. `device` is not
  * used. Returns -EEXIST when the name is found and -ENOSPC when no free node
@@ -145,7 +146,7 @@ int krffs_chown(const char *path, uid_t uid, gid_t gid);
 
 /**
  * Fills `statvfs_buffer` in 1024-byte blocks: the region's size, rounded up,
- * and the free space less a header for each free node, rounded up; the
+ * and the free space less a header for each free node, rounded down; the
  * reserved nodes as files, with none free; and names of 255 bytes. A NULL
  * `path` is -EFAULT.
  */

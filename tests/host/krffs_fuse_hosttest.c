@@ -25,6 +25,7 @@
 
 static int failures;
 static int mounted;
+static int no_request;
 static struct krffs_file_system fixture;
 static const char *image_path;
 static char listing[512];
@@ -53,11 +54,14 @@ int fuse_main(int argc, char **argv, const struct fuse_operations *ops, void *da
     return 0;
 }
 
-/** The identity of a request, as FUSE gives it: user 123, group 456. */
+/**
+ * The identity of a request, as FUSE gives it: user 123, group 456, or NULL
+ * while `no_request` is set.
+ */
 struct fuse_context *fuse_get_context(void)
 {
     static struct fuse_context context = {123, 456};
-    return &context;
+    return no_request ? NULL : &context;
 }
 
 /**
@@ -225,7 +229,11 @@ static void slack_row(void)
     check(buffer[15] == 0, "truncate growth clears new byte");
 }
 
-/** Check that an owner or a group of -1 in chown leaves that field alone. */
+/**
+ * Check that an owner or a group of -1 in chown leaves that field alone, and
+ * that a node made with no request has the test's effective user and group,
+ * not the bytes of the free node it came from.
+ */
 static void owner_rows(void)
 {
     struct krffs_node *node;
@@ -239,6 +247,12 @@ static void owner_rows(void)
           "owner-only chown preserves gid");
     check(krffs_chown("/a", (uid_t)-1, (gid_t)-1) == 0 && node->uid == 321 && node->gid == 789,
           "unchanged ownership");
+    no_request = 1;
+    check(krffs_create("/b", 0600, NULL) == 0, "create with no request");
+    no_request = 0;
+    node = krffs_find_node_by_path(&fixture, "/b", 2);
+    check(node && node->uid == geteuid() && node->gid == getegid(),
+          "no request gives the driver's owner");
 }
 
 /**
@@ -284,6 +298,30 @@ static void time_rows(void)
 }
 
 /**
+ * Check the block counts of statfs: the 64 blocks of the image, the free
+ * space rounded down to whole blocks, and no free block once a file has
+ * taken every free byte.
+ */
+static void statfs_rows(void)
+{
+    struct statvfs buffer;
+    uint64_t free_space;
+
+    reset_image();
+    free_space = krffs_calculate_total_free_space(&fixture);
+    check(krffs_statfs("/", &buffer) == 0 && buffer.f_blocks == 64 &&
+              buffer.f_bfree == free_space / 1024,
+          "free blocks rounded down");
+    check(krffs_create("/a", 0600, NULL) == 0, "create the filling file");
+    free_space = krffs_calculate_total_free_space(&fixture);
+    check(krffs_truncate("/a", (off_t)(free_space + sizeof(struct krffs_node))) == 0 &&
+              krffs_count_free_nodes(&fixture) == 0,
+          "take every free byte");
+    check(krffs_statfs("/", &buffer) == 0 && buffer.f_bfree == 0 && buffer.f_bavail == 0,
+          "full image has no free block");
+}
+
+/**
  * Stage `/d/f` and then `/f` with the image stager, which gives every node
  * the id mixed from its directory's and its name, and require the mount to
  * find each by its directory and name: each reads its own bytes, `/d` is a
@@ -315,7 +353,8 @@ static void staged_rows(void)
  * apart from a file of the same name at the root, the root's link count,
  * creation under a missing directory and under a file, the refusals of
  * `rmdir`, `unlink` and `rename` that the kernel makes, a rename across
- * directories, and `mkdir` refusing `/cb`, whose id `/bC` has.
+ * directories, a rename to the same name, and `mkdir` refusing `/cb`, whose
+ * id `/bC` has.
  */
 static void directory_rows(void)
 {
@@ -348,6 +387,9 @@ static void directory_rows(void)
               krffs_read("/b", buffer, sizeof(buffer), 0, NULL) == 2 &&
               memcmp(buffer, "in", 2) == 0,
           "rename across directories");
+    check(krffs_rename("/b", "/b") == 0 && krffs_read("/b", buffer, sizeof(buffer), 0, NULL) == 2 &&
+              memcmp(buffer, "in", 2) == 0,
+          "rename to the same name keeps the file");
     check(krffs_rmdir("/d") == 0 && krffs_getattr("/d", &stat_buffer) == -ENOENT,
           "rmdir an empty directory");
     check(krffs_mkdir("/bC", 0755) == 0 && krffs_mkdir("/cb", 0755) == -EINVAL,
@@ -400,6 +442,7 @@ int main(void)
     hole_row(1);
     slack_row();
     owner_rows();
+    statfs_rows();
     time_rows();
     staged_rows();
     directory_rows();
