@@ -2,13 +2,13 @@
  * Minimal HTTP/1.0 server for Rach2.
  *
  * Serves a status page over the kernel's own TCP/IP stack. The page is a
- * diagnostic readout: it reports the parts of the request the stack actually
- * decoded (the client's `IP:port` from `accept()`, the server's own address
- * and port from `getsockname()` on the connection, the request line, Host and
- * User-Agent from `recv()`) alongside uptime and per-connection counters.
- * Records are added before transmission. They show accepted requests, not
- * completed connection teardown or reclaimed TCP control blocks. Anything
- * reflected from the request is HTML-escaped.
+ * diagnostic readout: it reports the parts of the request the stack decoded
+ * (the client's `IP:port` from `accept()`, the server's own address and port
+ * from `getsockname()` on the connection, the request line, Host and
+ * User-Agent from `recv()`) beside the uptime and the counters of the last
+ * connections. A connection's record is added before its page is sent, so
+ * the records count requests accepted, not connections closed or TCP control
+ * blocks reclaimed. Anything reflected from the request is HTML-escaped.
  *
  * It binds port 80 by default (reachable at the SLIRP address `10.0.2.15:80`)
  * and uses only the blocking socket calls (`socket`, `bind`, `listen`,
@@ -35,31 +35,39 @@
 #define HOST_MAX     48 /* stored Host header length        */
 
 /* Thin libc wrappers under the names the rest of the server calls. */
+
+/** write(2), with the count as an int. */
 static int sys_write(int fd, const void *b, size_t n)
 {
     return (int)write(fd, b, n);
 }
+/** close(2). */
 static int sys_close(int fd)
 {
     return close(fd);
 }
+/** exit(3). */
 static void sys_exit(int s)
 {
     exit(s);
 }
+/** gettimeofday(2) with no time zone. */
 static int sys_gettimeofday(struct timeval *tv)
 {
     return gettimeofday(tv, 0);
 }
+/** send(2) with no flags, with the count as an int. */
 static int sys_send(int fd, const void *b, size_t n)
 {
     return (int)send(fd, b, n, 0);
 }
+/** recv(2) with no flags, with the count as an int. */
 static int sys_recv(int fd, void *b, size_t n)
 {
     return (int)recv(fd, b, n, 0);
 }
 
+/** Write the string `s` to standard output, which is the server's log. */
 static void print(const char *s)
 {
     size_t n = 0;
@@ -68,6 +76,7 @@ static void print(const char *s)
     sys_write(1, s, n);
 }
 
+/** Print `n` in decimal. */
 static void print_uint(unsigned int n)
 {
     char t[12];
@@ -84,6 +93,7 @@ static void print_uint(unsigned int n)
     print(p);
 }
 
+/** Print the address `a`, in network byte order, as a dotted quad. */
 static void print_ip(uint32_t a)
 {
     uint8_t *b = (uint8_t *)&a;
@@ -96,6 +106,7 @@ static void print_ip(uint32_t a)
     print_uint(b[3]);
 }
 
+/** Print the port `p`, in network byte order, in decimal. */
 static void print_port(uint16_t p)
 {
     uint8_t *b = (uint8_t *)&p;
@@ -129,18 +140,21 @@ struct out {
     int cap;
 };
 
+/** Append the byte `c`, or nothing once `cap - 1` bytes are stored. */
 static void put_c(struct out *o, char c)
 {
     if (o->pos < o->cap - 1)
         o->buf[o->pos++] = c;
 }
 
+/** Append the string `s`. */
 static void put_s(struct out *o, const char *s)
 {
     while (*s)
         put_c(o, *s++);
 }
 
+/** Append `v` in decimal. */
 static void put_u(struct out *o, unsigned int v)
 {
     char t[12];
@@ -157,6 +171,7 @@ static void put_u(struct out *o, unsigned int v)
         put_c(o, t[--i]);
 }
 
+/** Append the address `sin_addr`, in network byte order, as a dotted quad. */
 static void put_ip(struct out *o, uint32_t sin_addr)
 {
     uint8_t *b = (uint8_t *)&sin_addr;
@@ -169,6 +184,7 @@ static void put_ip(struct out *o, uint32_t sin_addr)
     put_u(o, b[3]);
 }
 
+/** Append the port `sin_port`, in network byte order, in decimal. */
 static void put_port(struct out *o, uint16_t sin_port)
 {
     uint8_t *b = (uint8_t *)&sin_port;
@@ -217,6 +233,7 @@ static void put_req(struct out *o, const char *s, int max)
 
 /* Request parsing (operates on the raw bytes recv() delivered). */
 
+/** The length of the string `s`. */
 static int str_len(const char *s)
 {
     int n = 0;
@@ -291,15 +308,19 @@ static void copy_request(const char *buf, int len, char *dst, int cap, int methp
 
 /* Live state. */
 
+/* One connection of the `peers` ring. */
 struct peer_rec {
-    uint32_t ip;   /* network byte order */
-    uint16_t port; /* network byte order */
-    uint32_t req_num;
-    uint32_t ts_sec;
-    unsigned int bytes;
+    uint32_t ip;        /* network byte order */
+    uint16_t port;      /* network byte order */
+    uint32_t req_num;   /* the request's number, from 1 */
+    uint32_t ts_sec;    /* the second its request was read, since the epoch */
+    unsigned int bytes; /* the bytes of the reply sent, 0 until it is sent */
     char methpath[METHPATH_MAX];
 };
 
+/* The requests served, the bytes sent, the second the server started, and the
+ * ring of the last `PEER_RING` connections, in which `peer_head` is the slot
+ * the next one takes and `peer_count` the slots in use. */
 static unsigned int served = 0;
 static unsigned int total_bytes = 0;
 static int32_t epoch_sec_start = 0;
@@ -320,10 +341,12 @@ static char cur_methpath[METHPATH_MAX];
 static char cur_agent[AGENT_MAX];
 static char cur_host[HOST_MAX];
 
+/* The page, the response with its headers, and the request as received. */
 static char body[4096];
 static char resp[6144];
 static char reqbuf[2048];
 
+/** The time in seconds since the epoch. */
 static int32_t now_sec(void)
 {
     struct timeval tv;
