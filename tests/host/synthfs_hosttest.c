@@ -1,27 +1,29 @@
 /**
- * Dual-target host test for the synthetic-path classifier (fs/synthfs.c).
+ * synthfs_hosttest.c: the path classifier of rach2/sys/fs/synthfs.c, which
+ * sorts a path among the KRFFS root, /dev, /proc and /sys.
  *
  * host-deps: rach2/sys/fs/synthfs.c
  *
- * The component splitting and the /proc/<pid>/fd/<n> parsing are the
- * fence-post-prone part every path syscall leans on, so they run natively here
- * under ASan/UBSan: a path resolves to the right vnode kind with the right
- * pid/fd, leading/trailing/doubled slashes are tolerated, a non-pid or unknown
- * /proc entry is ENOENT, and an ordinary name stays KRFFS-bound. Returns the
- * failed-check count (0 == pass).
+ * Every path call classifies its path, and the split into components and
+ * the parsing of process ids and descriptor numbers are where an error of
+ * one is easy to make, so the rows run here under the sanitizers. The model
+ * has one network interface, eth0, and no disks.
  */
 
 #include "fs/synthfs.h"
 
 static int fails;
 
-/** The one interface of the model, eth0 with index 2. */
+/** The index of the interface named by the `len` bytes at `name`: 2 for
+ *  eth0, the one interface of the model, and -1 for any other. */
 int sysfs_net_index(const char *name, int len)
 {
     return len == 4 && name[0] == 'e' && name[1] == 't' && name[2] == 'h' && name[3] == '0' ? 2
                                                                                             : -1;
 }
 
+/** The name of the interface `index`, eth0 for any index, into `out` when
+ *  `cap` holds it. */
 void sysfs_net_name(int index, char *out, int cap)
 {
     (void)index;
@@ -34,12 +36,15 @@ void sysfs_net_name(int index, char *out, int cap)
     }
 }
 
+/** The PCI key of eth0's card, 0x18 (bus 0, device 3, function 0), and -1
+ *  for any other index. */
 int sysfs_net_pci_key(int index)
 {
     return index == 2 ? 0x18 : -1;
 }
 
-/* No disks: /sys/block and /sys/dev/block are empty. */
+/** No disk node has a name, since the model has no disks: /sys/block and
+ *  /sys/dev/block are empty. Returns -1. */
 int sysfs_block_find(const char *name, int len, int disk)
 {
     (void)name;
@@ -48,6 +53,7 @@ int sysfs_block_find(const char *name, int len, int disk)
     return -1;
 }
 
+/** No disk node has device numbers. Returns -1. */
 int sysfs_block_devno(const char *name, int len)
 {
     (void)name;
@@ -55,6 +61,7 @@ int sysfs_block_devno(const char *name, int len)
     return -1;
 }
 
+/** The empty name, for a disk node the model does not have. */
 void sysfs_block_name(int key, char *out, int cap)
 {
     (void)key;
@@ -63,12 +70,14 @@ void sysfs_block_name(int key, char *out, int cap)
     }
 }
 
+/** No disk node is on a whole disk. Returns -1. */
 int sysfs_block_whole(int key)
 {
     (void)key;
     return -1;
 }
 
+/** No disk node is a loop device. Returns -1. */
 int sysfs_block_loop(int key)
 {
     (void)key;
@@ -82,7 +91,7 @@ int sysfs_block_loop(int key)
         }              \
     } while (0)
 
-/* Equal NUL-terminated strings? */
+/** Whether the strings `a` and `b` are equal. */
 static int eq(const char *a, const char *b)
 {
     while (*a && *a == *b) {
@@ -101,7 +110,7 @@ static int eq(const char *a, const char *b)
  * device link are found by name, and an interface or attribute it does not
  * have is ENOENT. A processor's directory `cpuN` is found by its number,
  * written without a leading zero, and has no attribute; whether the
- * processor is started is the glue's to ask.
+ * processor is started is for the caller to ask.
  */
 static void sys_tree(void)
 {
@@ -161,26 +170,27 @@ static void sys_tree(void)
     CHECK(synth_classify("sys/devices/system/cpu/cpu1/x", &vp) == VNODE_ENOENT);
 }
 
-/** The parser's bounds, of a number and of a path's depth. */
+/**
+ * The parser's bounds, of a number and of a path's depth. A process id or a
+ * descriptor number past 2147483639 is ENOENT, and is not wrapped to a small
+ * number another process might own. A leading '-' is not a digit, so "-1"
+ * is not read as SYNTH_PID_SELF (-1). The deepest path of /proc, a thread's
+ * descriptor link, is classified whole, and a deeper path is ENOENT or
+ * ENOTDIR and is not cut to a shorter one.
+ */
 static void bounds(void)
 {
     struct vpath vp;
 
-    /* A pid that would overflow or wrap a 32-bit int is rejected, never folded
-     * to a small pid another process might own; the boundary is 2147483639. */
     CHECK(synth_classify("proc/99999999999", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("proc/4294967297", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("proc/2147483639", &vp) == VNODE_PROC_PID && vp.pid == 2147483639);
     CHECK(synth_classify("proc/2147483640", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("proc/7/fd/99999999999", &vp) == VNODE_ENOENT);
 
-    /* A leading '-' is not a digit, so a negative token cannot be read as the
-     * SYNTH_PID_SELF (-1) sentinel. */
     CHECK(synth_classify("proc/-1", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("proc/-1/stat", &vp) == VNODE_ENOENT);
 
-    /* The deepest path, a thread's descriptor link, is whole, and a path
-     * deeper than any is refused rather than cut to a shorter one. */
     CHECK(synth_classify("proc/7/task/9/fd", &vp) == VNODE_PROC_FD_DIR);
     CHECK(synth_classify("proc/7/task/9/fd/0", &vp) == VNODE_PROC_FD_LINK && vp.procfd == 0 &&
           vp.pid == 7 && vp.tid == 9);
@@ -193,8 +203,8 @@ static void bounds(void)
     CHECK(synth_classify("dev/pts/1/a/b/c/d", &vp) == VNODE_ENOENT);
 }
 
-/** A directory's path, a thread's under a process's task directory
- * among them. */
+/** The path `synth_dir_path` writes back for a directory, a thread's under
+ *  its process's task directory among them. */
 static void paths(void)
 {
     char out[64];
@@ -209,35 +219,55 @@ static void paths(void)
     CHECK(eq(out, "/proc/7/task"));
 }
 
+/**
+ * The rows of the root, /dev and /proc, then those of `bounds`, `paths` and
+ * `sys_tree`:
+ *
+ * - the empty path and ordinary names are the KRFFS root's, "devices" and
+ *   "proconsul" among them, which only begin as "dev" and "proc" do;
+ * - /dev and a device are found, and a path through a device, which is a
+ *   leaf, is ENOENT;
+ * - /proc, /proc/self, a process's directory and its descriptor directory;
+ * - /proc/cmdline, the boot line, is a file and not a process;
+ * - a process's files, and a path through one;
+ * - the descriptor links /proc/PID/fd/N, which ttyname reads;
+ * - a process's exe, cwd and root links, the /proc/sys files, and the task
+ *   directory, each thread's entry with the process's id and the thread's
+ *   and no task directory in it; no thread has id 0;
+ * - a name of /proc that is not a process, a file a process does not have,
+ *   or a descriptor that is not a number is ENOENT and not the root's, so
+ *   no file of the root takes its place;
+ * - leading, trailing and doubled slashes are skipped;
+ * - a `.` or `..` component is ENOENT. The caller resolves them before it
+ *   classifies, and one that reaches the classifier fails rather than name
+ *   the wrong node.
+ *
+ * Returns the count of failed checks, at most 255.
+ */
 int main(void)
 {
     struct vpath vp;
 
-    /* Root and ordinary KRFFS names are not synthetic. */
     CHECK(synth_classify("", &vp) == VNODE_KRFFS);
     CHECK(synth_classify("hello.txt", &vp) == VNODE_KRFFS);
     CHECK(synth_classify("etc/passwd", &vp) == VNODE_KRFFS);
-    CHECK(synth_classify("devices/x", &vp) == VNODE_KRFFS); /* not "dev" */
-    CHECK(synth_classify("proconsul", &vp) == VNODE_KRFFS); /* not "proc" */
+    CHECK(synth_classify("devices/x", &vp) == VNODE_KRFFS);
+    CHECK(synth_classify("proconsul", &vp) == VNODE_KRFFS);
 
-    /* /dev. */
     CHECK(synth_classify("dev", &vp) == VNODE_DEV_DIR);
     CHECK(synth_classify("dev/null", &vp) == VNODE_DEV && eq(vp.name, "null"));
     CHECK(synth_classify("dev/urandom", &vp) == VNODE_DEV && eq(vp.name, "urandom"));
-    CHECK(synth_classify("dev/null/x", &vp) == VNODE_ENOENT); /* device is a leaf */
+    CHECK(synth_classify("dev/null/x", &vp) == VNODE_ENOENT);
 
-    /* /proc directories. */
     CHECK(synth_classify("proc", &vp) == VNODE_PROC_DIR);
     CHECK(synth_classify("proc/self", &vp) == VNODE_PROC_PID && vp.pid == SYNTH_PID_SELF);
     CHECK(synth_classify("proc/7", &vp) == VNODE_PROC_PID && vp.pid == 7);
     CHECK(synth_classify("proc/12/fd", &vp) == VNODE_PROC_FD_DIR && vp.pid == 12);
 
-    /* /proc/cmdline: the global boot line, not a pid, and a leaf. */
     CHECK(synth_classify("proc/cmdline", &vp) == VNODE_PROC_CMDLINE);
     CHECK(synth_classify("proc/cmdline/x", &vp) == VNODE_ENOTDIR);
-    CHECK(synth_classify("proc/cmdlinex", &vp) == VNODE_ENOENT); /* not a pid */
+    CHECK(synth_classify("proc/cmdlinex", &vp) == VNODE_ENOENT);
 
-    /* /proc files. */
     CHECK(synth_classify("proc/7/stat", &vp) == VNODE_PROC_FILE && vp.procfile == SYNTH_PROC_STAT &&
           vp.pid == 7);
     CHECK(synth_classify("proc/9/cmdline", &vp) == VNODE_PROC_FILE &&
@@ -256,15 +286,11 @@ int main(void)
     CHECK(synth_classify("proc/5/comm", &vp) == VNODE_PROC_FILE && vp.procfile == SYNTH_PROC_COMM);
     CHECK(synth_classify("proc/5/maps/x", &vp) == VNODE_ENOENT);
 
-    /* /proc/<pid>/fd/<n> magic links: the ttyname path. */
     CHECK(synth_classify("proc/self/fd/0", &vp) == VNODE_PROC_FD_LINK && vp.pid == SYNTH_PID_SELF &&
           vp.procfd == 0);
     CHECK(synth_classify("proc/7/fd/3", &vp) == VNODE_PROC_FD_LINK && vp.pid == 7 &&
           vp.procfd == 3);
 
-    /* The program's link, and the threads' directory, each thread's entry
-     * keeping the process's id and the thread's, with no task directory in
-     * it; no thread has id 0. */
     CHECK(synth_classify("proc/self/exe", &vp) == VNODE_PROC_EXE && vp.pid == SYNTH_PID_SELF);
     CHECK(synth_classify("proc/self/cwd", &vp) == VNODE_PROC_CWD && vp.pid == SYNTH_PID_SELF);
     CHECK(synth_classify("proc/5/root", &vp) == VNODE_PROC_ROOT && vp.pid == 5);
@@ -283,13 +309,10 @@ int main(void)
     CHECK(synth_classify("proc/7/task/x", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("proc/7/task/0", &vp) == VNODE_ENOENT);
 
-    /* Bad /proc entries are ENOENT, never KRFFS (so they don't
-     * shadow-resolve). */
-    CHECK(synth_classify("proc/abc", &vp) == VNODE_ENOENT);     /* not a pid */
-    CHECK(synth_classify("proc/7/bogus", &vp) == VNODE_ENOENT); /* unknown file */
-    CHECK(synth_classify("proc/7/fd/xy", &vp) == VNODE_ENOENT); /* not an fd number */
+    CHECK(synth_classify("proc/abc", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/7/bogus", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/7/fd/xy", &vp) == VNODE_ENOENT);
 
-    /* Slash tolerance: leading, trailing, and doubled slashes. */
     CHECK(synth_classify("/dev/null", &vp) == VNODE_DEV && eq(vp.name, "null"));
     CHECK(synth_classify("dev/", &vp) == VNODE_DEV_DIR);
     CHECK(synth_classify("proc/"
@@ -298,10 +321,6 @@ int main(void)
                          &vp) == VNODE_PROC_FILE &&
           vp.pid == 7);
 
-    /* The classifier requires a lexically pre-normalized path: a '.' or '..'
-     * component is NOT collapsed here (only the KRFFS resolver does that), so a
-     * dot path transiting a synthetic prefix deliberately fails closed rather
-     * than reaching the wrong object. */
     CHECK(synth_classify("proc/7/../9/stat", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("proc/../etc/passwd", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("dev/../dev/null", &vp) == VNODE_ENOENT);
