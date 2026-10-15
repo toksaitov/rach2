@@ -20,8 +20,9 @@
 # sends it, since rsync applies the first rule that matches a name; so a sync
 # from a tree that has no WAD, such as a fresh git worktree, leaves the copy's
 # in place, and a sync from a tree that has one replaces it. `run` syncs and
-# then runs COMMAND in the copy; the command is passed to the remote shell as
-# one string, so quote it as that shell will see it. `get` copies each PATH,
+# then runs COMMAND in the copy; the words of COMMAND are joined with spaces
+# and evaluated by bash there as one string, so quote it as that shell will
+# see it, as run_held describes. `get` copies each PATH,
 # relative to the copy, from the host to the same path here, compressed on the
 # wire, which is how a product that only the Linux host builds, such as the
 # GNU system's ext2 root, reaches this machine. Its runs of zeros are written
@@ -250,10 +251,19 @@ sync_tree()
 # run_held COMMAND: run COMMAND in the copy while the holder lives. The
 # command's ssh runs in the background, with this script's input, so that
 # the holder can be watched; if the holder ends first, the ssh is stopped.
+#
+# COMMAND travels in base64, whose letters no shell or command line on the
+# way treats specially, and bash in WSL decodes it and evaluates the text.
+# MSYS's shell parses the ssh command once, and wsl.exe, given `--`, hands
+# the rest of its command line to a shell that parses it again, so a quote
+# in COMMAND written into either line ends the argument it was meant to be
+# part of. `-e` makes wsl.exe start bash with its arguments as given, and
+# MSYS_NO_PATHCONV keeps MSYS from rewriting an argument it takes for a path.
 run_held()
 {
+    encoded=$(printf '%s' "$*" | base64 | tr -d '\n')
     exec 5<&0
-    ssh -o BatchMode=yes "$HOST" "wsl.exe -- bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg && $*'" \
+    ssh -o BatchMode=yes "$HOST" "MSYS_NO_PATHCONV=1 wsl.exe -e bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg && eval \"\$(printf %s \"\$1\" | base64 -d)\"' bash $encoded" \
         <&5 3>&- 5<&- &
     command=$!
     exec 5<&-
