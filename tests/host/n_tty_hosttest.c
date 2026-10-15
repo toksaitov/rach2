@@ -1,14 +1,15 @@
 /**
- * Dual-target host test for the N_TTY line discipline (tty/n_tty.c).
+ * n_tty_hosttest.c: the N_TTY line discipline (`tty/n_tty.c`).
  *
  * host-deps: rach2/sys/tty/n_tty.c
  *
- * The cooked line editor (ERASE/WERASE/KILL with ECHOE rub-out, the VEOF and
- * newline commit rules), the raw VMIN gating, the ISIG control-char
- * recognition, and the OPOST/ONLCR output mapping are pure state-machine logic
- * every console read leans on, so they run natively here under ASan/UBSan with
- * echo and output captured into a buffer instead of a screen. Returns the
- * failed-check count (0 == pass).
+ * The cooked line editor (ERASE, WERASE and KILL with ECHOE's rub-out, and
+ * the rules by which VEOF and a newline end a line), raw mode's VMIN, the
+ * recognition of ISIG's control characters, and the OPOST and ONLCR mapping
+ * of output have no hardware under them, and every console read goes
+ * through them, so they run natively here under ASan and UBSan with the echo
+ * and the output kept in a buffer instead of a screen. Exits with the count
+ * of failed checks, at most 255.
  */
 
 #include "tty/n_tty.h"
@@ -17,6 +18,7 @@ extern int dprintf(int fd, const char *format, ...);
 
 static int fails;
 
+/** Count a failure when `cond` is false. */
 #define CHECK(cond)    \
     do {               \
         if (!(cond)) { \
@@ -30,6 +32,10 @@ struct cap {
     int len;
 };
 
+/**
+ * The echo and output sink: append `c` to the `struct cap` `ctx`, dropping what
+ * does not fit.
+ */
 static void sink(void *ctx, unsigned char c)
 {
     struct cap *cp = (struct cap *)ctx;
@@ -38,13 +44,13 @@ static void sink(void *ctx, unsigned char c)
     }
 }
 
+/** Empty the bytes kept in `cp`. */
 static void cap_reset(struct cap *cp)
 {
     cp->len = 0;
 }
 
-/* The captured stream equals the first n bytes of expect (and is exactly n
- * long). */
+/** Whether the bytes kept are the first `n` bytes of `expect`, and no more. */
 static int cap_is(const struct cap *cp, const char *expect, int n)
 {
     int i;
@@ -59,7 +65,7 @@ static int cap_is(const struct cap *cp, const char *expect, int n)
     return 1;
 }
 
-/* Feed one byte; return the signal the discipline recognized (0 if none). */
+/** Feed one byte; the signal the discipline recognized, or 0. */
 static int feed(struct n_tty *t, struct cap *cp, unsigned char c)
 {
     int signo = -1;
@@ -67,7 +73,7 @@ static int feed(struct n_tty *t, struct cap *cp, unsigned char c)
     return signo;
 }
 
-/* Feed a NUL-terminated run of bytes, ignoring the per-byte signal. */
+/** Feed the bytes of the string `s`, ignoring the signals. */
 static void feed_str(struct n_tty *t, struct cap *cp, const char *s)
 {
     while (*s) {
@@ -183,6 +189,35 @@ static void default_cflag(void)
     }
 }
 
+/**
+ * Run the rows; the count of failures, at most 255.
+ *
+ * A canonical read returns one line, and a second line waits for the next read.
+ * ERASE on an empty line does nothing, with no underflow and no echo. VEOF on
+ * an empty line is the end of file, read as 0, and once: a following character
+ * starts a line again; in the middle of a line it delivers the partial line. A
+ * ^D on an empty line typed before a later line is read back first, then the
+ * line; a committed line before a ^D comes first, then the end of file. ISIG
+ * flushes the whole input queue, not only the edit line, so a committed line
+ * that was not read does not survive the signal. With INLCR and ICRNL off, NL
+ * becomes CR, an ordinary character, so a lone NL completes no line.
+ *
+ * A partial canonical line becomes readable when ICANON goes off: the bytes
+ * typed before a program switched to raw mode are not lost, the bytes typed
+ * after them follow in order, and the counters say what moved and what was
+ * read. A switch that stays canonical makes nothing readable; the order typed
+ * is kept across the switch, a committed line, then the partial one, then the
+ * raw bytes; and FIONREAD counts what a raw read would get. A partial line the
+ * full queue cannot take at the switch is kept and read after the queue.
+ *
+ * A control character set to 0 is disabled, the _POSIX_VDISABLE convention, so
+ * a NUL is not read as that character: not as VINTR, VEOF or VERASE. In raw
+ * mode a hangup, the master's close, sets the end of file, which reads as
+ * readable, so that a blocked reader returns 0 rather than wait for VMIN bytes
+ * that will not come; bytes still queued are read first. A canonical line
+ * longer than the buffer is capped, its terminator still lands, and the read
+ * returns the capped line at once.
+ */
 int main(void)
 {
     struct n_tty t;
@@ -213,8 +248,7 @@ int main(void)
     CHECK(cap_is(&cp, "ab\b \b\b \bcd\r\n", 12));
     CHECK(n_tty_read(&t, buf, sizeof(buf)) == 0); /* queue drained */
 
-    /* A canonical read returns at most one line; a second line waits its
-     * turn. */
+    /* A canonical read returns one line; the second waits its turn. */
     n_tty_init(&t);
     cap_reset(&cp);
     feed_str(&t, &cp, "hi\nyo\n");
@@ -243,8 +277,7 @@ int main(void)
     n = n_tty_read(&t, buf, sizeof(buf));
     CHECK(n == 3 && buf[0] == 'h' && buf[1] == 'i' && buf[2] == '\n');
 
-    /* ERASE on an empty line is a harmless no-op (no underflow, no stray
-     * echo). */
+    /* ERASE on an empty line does nothing. */
     n_tty_init(&t);
     cap_reset(&cp);
     feed(&t, &cp, t.tio.c_cc[VERASE]);
@@ -269,8 +302,7 @@ int main(void)
     n = n_tty_read(&t, buf, sizeof(buf));
     CHECK(n == 2 && buf[0] == 'a' && buf[1] == 'b');
 
-    /* EOF ordering: an empty-line ^D typed BEFORE a later line is read back
-     * first (read returns 0), then the line, not the other way round. */
+    /* A ^D on an empty line, then a line: the end of file is read first. */
     n_tty_init(&t);
     cap_reset(&cp);
     feed(&t, &cp, t.tio.c_cc[VEOF]);              /* ^D on empty line: EOF at this position */
@@ -279,8 +311,7 @@ int main(void)
     n = n_tty_read(&t, buf, sizeof(buf));
     CHECK(n == 2 && buf[0] == 'x' && buf[1] == '\n'); /* then the line */
 
-    /* The reverse: a committed line, then ^D; the line comes first, then
-     * EOF. */
+    /* A committed line, then ^D: the line comes first, then EOF. */
     n_tty_init(&t);
     cap_reset(&cp);
     feed_str(&t, &cp, "foo\n");
@@ -310,8 +341,7 @@ int main(void)
     CHECK(feed(&t, &cp, t.tio.c_cc[VSUSP]) == NTTY_SIGTSTP);
     CHECK(cap_is(&cp, "^Z", 2)); /* 0x1a | 0x40 == 'Z' */
 
-    /* ISIG flushes the WHOLE input queue, not just the edit line: a line
-     * committed (and unread) before ^C must not survive the signal. */
+    /* ISIG flushes the whole input queue, its committed lines too. */
     n_tty_init(&t);
     cap_reset(&cp);
     feed_str(&t, &cp, "old\n"); /* committed to the read queue, unread */
@@ -343,8 +373,7 @@ int main(void)
     n = n_tty_read(&t, buf, sizeof(buf));
     CHECK(n == 3 && buf[0] == 'h' && buf[1] == 'i' && buf[2] == '\n');
 
-    /* INLCR (with ICRNL off): NL becomes CR, which is an ordinary char, not a
-     * terminator. So no line completes from a lone NL. */
+    /* INLCR with ICRNL off: NL becomes CR, which ends no line. */
     n_tty_init(&t);
     cap_reset(&cp);
     t.tio.c_iflag &= ~ICRNL;
@@ -363,10 +392,7 @@ int main(void)
     n = n_tty_read(&t, buf, sizeof(buf));
     CHECK(n == 2 && buf[0] == 'A' && buf[1] == '\n');
 
-    /* A partial canonical line becomes readable when ICANON goes off: the
-     * bytes typed before a program switched to raw mode are not lost, and
-     * the bytes typed after them follow in order. The counters say what
-     * moved and what was read. */
+    /* A partial canonical line becomes readable when ICANON goes off. */
     n_tty_init(&t);
     cap_reset(&cp);
     feed_str(&t, &cp, "cp b");
@@ -381,9 +407,7 @@ int main(void)
     CHECK(n == 9 && buf[0] == 'c' && buf[3] == 'b' && buf[4] == 'u' && buf[8] == '\n');
     CHECK(t.counters.partial_moved == 4);
     CHECK(t.counters.read_bytes == 9);
-    /* A switch that stays canonical makes nothing readable; the order typed
-     * is kept across the switch, a committed line, then the partial one,
-     * then the raw bytes; and FIONREAD counts what a raw read would get. */
+    /* A switch that stays canonical makes nothing readable. */
     {
         struct ktermios cooked = t.tio;
         struct ktermios raw = t.tio;
@@ -400,8 +424,7 @@ int main(void)
         CHECK(n == 8 && buf[0] == 'o' && buf[3] == '\n' && buf[4] == 'n' && buf[7] == '!');
         CHECK(t.counters.partial_moved == 7);
     }
-    /* A partial line the full queue cannot take at the switch is kept and
-     * read after the queue, not dropped. */
+    /* A partial line the full queue cannot take at the switch is kept. */
     n_tty_init(&t);
     cap_reset(&cp);
     for (i = 0; i < N_TTY_READ_MAX; i++) {
@@ -487,9 +510,7 @@ int main(void)
     n_tty_output(&t, 'q', sink, &cp);
     CHECK(cap_is(&cp, "\nq", 2));
 
-    /* A control char set to 0 is disabled (the _POSIX_VDISABLE convention): an
-     * incoming NUL must not be read as that special. With VINTR disabled, a NUL
-     * raises no signal and joins the line as ordinary data. */
+    /* With VINTR 0, disabled, a NUL raises no signal and is data. */
     n_tty_init(&t);
     cap_reset(&cp);
     t.tio.c_cc[VINTR] = 0;
@@ -512,9 +533,7 @@ int main(void)
     feed(&t, &cp, 0);
     CHECK(t.line_len == 3); /* 'a', 'b', and the NUL, nothing erased */
 
-    /* raw mode: a hangup (the master closed) sets EOF, which must read as
-     * readable so a blocked reader returns 0 instead of waiting for VMIN bytes
-     * that will never arrive. */
+    /* raw mode: a hangup sets EOF, which reads as readable. */
     n_tty_init(&t);
     cap_reset(&cp);
     t.tio.c_lflag &= ~(ICANON | ISIG | ECHO);
@@ -536,8 +555,7 @@ int main(void)
     CHECK(n == 1 && buf[0] == 'a');
     CHECK(n_tty_read(&t, buf, sizeof(buf)) == 0); /* then persistent EOF */
 
-    /* buffer bounds: a canonical line longer than the buffer is capped; the
-     * terminator still lands, and read returns the capped line at once */
+    /* buffer bounds: a canonical line longer than the buffer is capped */
     n_tty_init(&t);
     cap_reset(&cp);
     for (i = 0; i < 300; i++) {

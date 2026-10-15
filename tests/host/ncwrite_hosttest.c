@@ -1,4 +1,7 @@
-/** Check both nc output paths with short writes, interruptions and errors. */
+/**
+ * ncwrite_hosttest.c: the two output paths of `nc` (`utils/nc.c`) under short
+ * writes, an interrupted write and failed writes.
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,11 +10,19 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
+/*
+ * The failures, whether each input has been read, the writes to each output,
+ * the fault's output (-1 for none) and kind, and the bytes each output
+ * received; an output's index is 0 for the socket and 1 for standard output.
+ */
 static int Failed, Input_read, Reply_read, Write_calls[2], Fault_fd, Fault_kind;
 static char Written[2][1024], Input[1024], Reply[1024];
 static size_t Used[2];
 
-/** Return one full chunk from each input. */
+/**
+ * The read stand-in: one chunk of 1024 bytes from standard input or from the
+ * socket, then the end of file. Exits 2 when asked for another size.
+ */
 static ssize_t nc_read(int fd, void *buf, size_t size)
 {
     int *seen = fd == 0 ? &Input_read : &Reply_read;
@@ -25,7 +36,11 @@ static ssize_t nc_read(int fd, void *buf, size_t size)
     return (ssize_t)size;
 }
 
-/** Accept at most seven bytes, with a selected error on either output. */
+/**
+ * The write stand-in: it takes at most seven bytes. The second write to the
+ * output `Fault_fd` fails as `Fault_kind` says: 1 interrupted, 2 with nothing
+ * written, 3 with an I/O error. Exits 2 when an output's buffer is full.
+ */
 static ssize_t nc_write(int fd, const void *buf, size_t n)
 {
     int index = fd == 1 ? 1 : 0;
@@ -54,7 +69,7 @@ static ssize_t nc_write(int fd, const void *buf, size_t n)
     return (ssize_t)n;
 }
 
-/** The test exchanges bytes without using a host network connection. */
+/** The socket stand-in: descriptor 7, with no connection on the host. */
 static int nc_socket(int domain, int type, int protocol)
 {
     (void)domain;
@@ -62,6 +77,7 @@ static int nc_socket(int domain, int type, int protocol)
     (void)protocol;
     return 7;
 }
+/** The connect stand-in, which succeeds. */
 static int nc_connect(int fd, const struct sockaddr *addr, socklen_t len)
 {
     (void)fd;
@@ -69,11 +85,13 @@ static int nc_connect(int fd, const struct sockaddr *addr, socklen_t len)
     (void)len;
     return 0;
 }
+/** The close stand-in, which succeeds. */
 static int nc_close(int fd)
 {
     (void)fd;
     return 0;
 }
+/** The resolver stand-in: 127.0.0.1. */
 int resolve_host(const char *host, unsigned int *out)
 {
     (void)host;
@@ -95,7 +113,13 @@ int resolve_host(const char *host, unsigned int *out)
 #undef connect
 #undef close
 
-/** Run the real main and compare every byte received by both outputs. */
+/**
+ * Run nc's main with the fault `kind` on the output `fd`, as at nc_write, and
+ * check what both outputs received. With no fault or an interrupted write,
+ * the status is 0 and each output has every byte; with a write of nothing or
+ * an error, the status is 1 and the failing output has only its first seven
+ * bytes.
+ */
 static void run_case(int fd, int kind)
 {
     char *args[] = {(char *)"nc", (char *)"127.0.0.1", (char *)"80", NULL};
@@ -119,7 +143,10 @@ static void run_case(int fd, int kind)
     }
 }
 
-/** Require complete writes and a nonzero result after either output fails. */
+/**
+ * Fill both inputs and run the case with no fault, then each fault on each
+ * output; 0 when every case passed, 1 otherwise.
+ */
 int main(void)
 {
     size_t i;

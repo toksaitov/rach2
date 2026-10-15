@@ -1,14 +1,15 @@
 /**
- * Host test for the mkhash password hasher's crypt (krffs/mkhash.krffs.c).
+ * mkhash_hosttest.c: the crypt of the mkhash password hasher
+ * (`krffs/mkhash.krffs.c`).
  *
  * host-deps: vendor/musl/musl-1.2.5/src/crypt/crypt_sha512.c
  *
- * Links the vendored musl SHA-512 crypt exactly as the host tool does and
- * checks it against the published SHA-crypt specification vectors, so a musl
- * bump that changes the algorithm fails here in milliseconds instead of as a
- * login that quietly stops verifying in the guest. Also checks the reject
- * path: a malformed setting must return the `*` failure token, never a hash.
- * Returns the failed-check count (0 == pass).
+ * Links the vendored musl SHA-512 crypt as the host tool does and checks it
+ * against two vectors of the SHA-crypt specification and one of the
+ * project's own, so that a musl update that changes the algorithm fails here
+ * rather than as a login on the guest that no longer verifies. Also checks
+ * the refusal: a malformed setting gives the `*` failure token or NULL, and
+ * never a hash. Exits with the count of failed checks, at most 255.
  */
 
 #include <stdio.h>
@@ -17,8 +18,8 @@
 char *__crypt_sha512(const char *key, const char *setting, char *output);
 
 /**
- * One vector: crypt of `key` under `setting` must produce exactly `want`.
- * Returns 1 on a mismatch (counted by main), 0 on a match.
+ * One vector: crypt of `key` under `setting` must give `want`. Returns 1 on
+ * a mismatch, which main counts, and 0 on a match.
  */
 static int check(const char *key, const char *setting, const char *want)
 {
@@ -32,6 +33,7 @@ static int check(const char *key, const char *setting, const char *want)
     return 0;
 }
 
+/** Check the vectors and the malformed setting; the count of failures. */
 int main(void)
 {
     int failed = 0;

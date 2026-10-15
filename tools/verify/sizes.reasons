@@ -386,7 +386,7 @@ tests/host/lock_hosttest.c:as_on params 8 the parameters are the arguments of on
 tests/host/mbinfo_hosttest.c:row_framebuffers complexity 31 a test's rows, each a case, read as one table
 tests/host/mbinfo_hosttest.c:row_framebuffers lines 143 a test's rows, each a case, read as one table
 tests/host/mbinfo_hosttest.c:row_multiboot complexity 32 a test's rows, each a case, read as one table
-tests/host/mbinfo_hosttest.c:row_multiboot lines 117 a test's rows, each a case, read as one table
+tests/host/mbinfo_hosttest.c:row_multiboot lines 115 a test's rows, each a case, read as one table
 
 tests/host/mbr_hosttest.c:main lines 165 a test's rows, each a case, read as one table
 
@@ -412,7 +412,7 @@ tests/host/mkfatfixture.c:chk_dir complexity 56 a fixture builder, the volume wr
 tests/host/mkfatfixture.c:chk_dir lines 181 a fixture builder, the volume written in on-disk order
 tests/host/mkfatfixture.c:chk_dir nesting 5 a fixture builder, the volume written in on-disk order
 
-tests/host/modlayout_hosttest.c:main lines 154 a test's rows, each a case, read as one table
+tests/host/modlayout_hosttest.c:main lines 117 a test's rows, each a case, read as one table
 
 tests/host/msc_hosttest.c:main complexity 189 a test's rows, each a case, read as one table
 tests/host/msc_hosttest.c:main lines 1110 a test's rows, each a case, read as one table
@@ -420,7 +420,7 @@ tests/host/msc_hosttest.c:xhci_submit complexity 37 a test's rows, each a case, 
 tests/host/msc_hosttest.c:xhci_submit lines 128 a test's rows, each a case, read as one table
 
 tests/host/n_tty_hosttest.c:main complexity 63 a test's rows, each a case, read as one table
-tests/host/n_tty_hosttest.c:main lines 370 a test's rows, each a case, read as one table
+tests/host/n_tty_hosttest.c:main lines 353 a test's rows, each a case, read as one table
 
 tests/host/netconf_hosttest.c:main complexity 57 a test's rows, each a case, read as one table
 tests/host/netconf_hosttest.c:main lines 309 a test's rows, each a case, read as one table

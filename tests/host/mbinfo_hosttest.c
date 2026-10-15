@@ -26,6 +26,7 @@ extern unsigned long strlen(const char *s);
 
 static int fails;
 
+/** Count and print a failure when `cond` is false; `what` says what held. */
 #define CHECK(cond, what)                              \
     do {                                               \
         if (!(cond)) {                                 \
@@ -39,33 +40,40 @@ static struct boot_store store;
 
 /* ---- a tag list ---- */
 
+/* The tag list, the offset of its next byte, and the offset of the tag
+ * being written. */
 static uint8_t mbi[16384] __attribute__((aligned(8)));
 static uint32_t at;
 static uint32_t tag_start;
 
+/** Append the byte `v` to the tag list. */
 static void put8(uint8_t v)
 {
     mbi[at++] = v;
 }
 
+/** Append `v` as 16 little-endian bits. */
 static void put16(uint32_t v)
 {
     put8((uint8_t)v);
     put8((uint8_t)(v >> 8));
 }
 
+/** Append `v` as 32 little-endian bits. */
 static void put32(uint32_t v)
 {
     put16(v & 0xFFFF);
     put16(v >> 16);
 }
 
+/** Append `v` as 64 little-endian bits. */
 static void put64(uint64_t v)
 {
     put32((uint32_t)v);
     put32((uint32_t)(v >> 32));
 }
 
+/** Append the string `s` with its NUL. */
 static void puts_z(const char *s)
 {
     while (*s) {
@@ -74,6 +82,7 @@ static void puts_z(const char *s)
     put8(0);
 }
 
+/** Store `v` as 32 little-endian bits at offset `off` of the tag list. */
 static void set32(uint32_t off, uint32_t v)
 {
     mbi[off] = (uint8_t)v;
@@ -82,6 +91,10 @@ static void set32(uint32_t off, uint32_t v)
     mbi[off + 3] = (uint8_t)(v >> 24);
 }
 
+/**
+ * Start a tag list: fill the buffer with 0xEE, then write a total size of 0,
+ * which `list_end` sets, and the reserved word, 0.
+ */
 static void list_begin(void)
 {
     unsigned i;
@@ -94,6 +107,7 @@ static void list_begin(void)
     put32(0);
 }
 
+/** Start a tag of `type`, its size 0 until `tag_end`. */
 static void tag_begin(uint32_t type)
 {
     tag_start = at;
@@ -101,6 +115,7 @@ static void tag_begin(uint32_t type)
     put32(0);
 }
 
+/** Set the tag's size and pad the list to the next 8-byte boundary. */
 static void tag_end(void)
 {
     set32(tag_start + 4, at - tag_start);
@@ -118,6 +133,7 @@ static uint32_t list_end(void)
     return at;
 }
 
+/** Append a tag of `type` whose data is the string `s`. */
 static void tag_string(uint32_t type, const char *s)
 {
     tag_begin(type);
@@ -125,6 +141,7 @@ static void tag_string(uint32_t type, const char *s)
     tag_end();
 }
 
+/** Append a module tag from `start` to `end` with its command line. */
 static void tag_module(uint32_t start, uint32_t end, const char *cmdline)
 {
     tag_begin(3);
@@ -136,6 +153,10 @@ static void tag_module(uint32_t start, uint32_t end, const char *cmdline)
 
 /* ---- the record ---- */
 
+/**
+ * Read entry `i` of the record's memory map; whether it is there and its size
+ * word is 20.
+ */
 static int map_entry(uint32_t i, uint64_t *base, uint64_t *len, uint32_t *type)
 {
     const uint8_t *e = (const uint8_t *)boot.mmap + i * BOOT_MMAP_ENTRY;
@@ -155,6 +176,7 @@ static int map_entry(uint32_t i, uint64_t *base, uint64_t *len, uint32_t *type)
     return size == 20;
 }
 
+/** Whether entry `i` of the record's map is the range given. */
 static int map_is(uint32_t i, uint64_t base, uint64_t len, uint32_t type)
 {
     uint64_t b, l;
@@ -165,6 +187,11 @@ static int map_is(uint32_t i, uint64_t base, uint64_t len, uint32_t type)
 
 /* ---- the rows ---- */
 
+/**
+ * Check the command line, the loader's name and the basic memory information,
+ * with nothing else in the record, and a command line longer than the record
+ * keeps, which is cut and terminated.
+ */
 static void row_strings_and_meminfo(void)
 {
     list_begin();
@@ -247,8 +274,7 @@ static void row_mmap(void)
     CHECK(map_is(5, 0x100000000ull, 0x40000000, 1), "the memory above 4 GiB");
     CHECK(!boot.uefi && !store.mmap_efi, "multiboot2's own map is not the EFI one");
 
-    /* Entries larger than the specification's 24 bytes are stepped over by
-       the size the tag gives. */
+    /* Entries of 32 bytes, stepped over by the size the tag gives. */
     list_begin();
     tag_begin(6);
     put32(32);
@@ -323,7 +349,8 @@ static void row_mmap_refused(void)
           "a merge that would wrap the length is not made");
 }
 
-/* One EFI memory descriptor of 48 bytes, the size OVMF gives. */
+/** Write one EFI memory descriptor of 48 bytes, the size OVMF gives, of
+ * `pages` 4 KiB pages from `phys`. */
 static void efi_desc(uint32_t type, uint64_t phys, uint64_t pages)
 {
     put32(type);
@@ -416,7 +443,9 @@ static void row_efi_mmap(void)
 /**
  * Check the EFI maps at the reader's limits: descriptors too short, a map past
  * the record's entries cut and counted, the 32-bit system table's tag, and a
- * descriptor size that wraps the tag's offset past 2^32.
+ * descriptor size that wraps the tag's offset past 2^32, which reads no
+ * descriptor, and not the two tags after it, whose bytes a read past the tag
+ * would take for one of a page.
  */
 static void row_efi_mmap_limits(void)
 {
@@ -459,9 +488,7 @@ static void row_efi_mmap_limits(void)
               !boot.efi_systab_64,
           "the 32-bit system table's address is kept");
 
-    /* A descriptor size that wraps past 2^32 from the tag's end reads no
-       descriptor: not the two tags after it, whose bytes a read past the
-       tag would take for one of a page. */
+    /* A descriptor size that wraps past 2^32 from the tag's end. */
     list_begin();
     tag_begin(17);
     put32(0xFFFFFFF0u);
@@ -480,6 +507,11 @@ static void row_efi_mmap_limits(void)
           "an EFI descriptor size that wraps the tag's offset reads nothing");
 }
 
+/**
+ * Check the framebuffer tag of each type: direct color of 32 and 16 bits, one
+ * too short for its color fields, indexed with its palette and with one cut to
+ * its tag, EGA text, and a type the specification does not have.
+ */
 static void row_framebuffers(void)
 {
     uint32_t i;
@@ -627,6 +659,10 @@ static void row_framebuffers(void)
           "an unknown type is no framebuffer");
 }
 
+/**
+ * Write into `out` an RSDP of `revision`, 20 bytes for revision 0 and 36 for 2,
+ * its bytes a pattern after the signature.
+ */
 static void rsdp(int revision, uint8_t *out)
 {
     unsigned i;
@@ -640,6 +676,11 @@ static void rsdp(int revision, uint8_t *out)
     }
 }
 
+/**
+ * Check the two RSDP tags: the second revision's is taken over the first in
+ * either order, the first alone is taken, and a second-revision tag too short
+ * for its RSDP is left out.
+ */
 static void row_rsdp(void)
 {
     uint8_t v1[36], v2[36];
@@ -702,6 +743,11 @@ static void row_rsdp(void)
           "a second-revision tag too short for its RSDP is left out");
 }
 
+/**
+ * Check the module tags: ten modules, of which the record keeps eight and
+ * counts ten, their ends and command lines, one cut to its buffer, and one that
+ * ends before it starts.
+ */
 static void row_modules(void)
 {
     char name[16];
@@ -746,6 +792,12 @@ static void row_modules(void)
           "a module that ends before it starts is empty");
 }
 
+/**
+ * Check lists cut short: a total size that ends inside a tag, no end tag, a tag
+ * under its own header, a total with no room for the end tag or past the
+ * largest list, and end tags too short or past the list. The parser reads the
+ * whole tags before the fault and returns -1.
+ */
 static void row_cut_short(void)
 {
     uint32_t total, cmdline_at;
@@ -776,8 +828,7 @@ static void row_cut_short(void)
     list_end();
     CHECK(mb2_read(mbi, &boot, &store) == -1, "a tag of four bytes stops the list");
 
-    /* A total size with no room for the end tag, and one past the largest
-       list. */
+    /* A total size with no room for the end tag, and one too large. */
     list_begin();
     list_end();
     CHECK(mb2_read(mbi, &boot, &store) == 0, "an empty list reads");
@@ -808,6 +859,10 @@ static void row_cut_short(void)
 #define PHYS_BASE 0x10000u
 static uint8_t phys[8192];
 
+/**
+ * The model's physical memory: the address in `phys` of `len` bytes at `pa`, or
+ * NULL outside it.
+ */
 static const void *reach(uint64_t pa, uint32_t len)
 {
     if (pa < PHYS_BASE || pa + len > PHYS_BASE + sizeof(phys)) {
@@ -816,6 +871,7 @@ static const void *reach(uint64_t pa, uint32_t len)
     return phys + (pa - PHYS_BASE);
 }
 
+/** Store `v` as 32 little-endian bits at `p`. */
 static void pset32(uint8_t *p, uint32_t v)
 {
     p[0] = (uint8_t)v;
@@ -824,12 +880,21 @@ static void pset32(uint8_t *p, uint32_t v)
     p[3] = (uint8_t)(v >> 24);
 }
 
+/** Store `v` as 64 little-endian bits at `p`. */
 static void pset64(uint8_t *p, uint64_t v)
 {
     pset32(p, (uint32_t)v);
     pset32(p + 4, (uint32_t)(v >> 32));
 }
 
+/**
+ * Check a Multiboot structure: the command line at 0x10000, the loader's name
+ * at 0x10100, two modules at 0x10200 with their command lines at 0x10300, the
+ * map at 0x10400, each entry stepped by its size word, and the framebuffer,
+ * direct color and indexed with a palette at 0x10800. A map cut short is read
+ * up to the cut, a command line out of reach is left out, and no flags give an
+ * empty record.
+ */
 static void row_multiboot(void)
 {
     static uint8_t raw[116] __attribute__((aligned(8)));
@@ -843,9 +908,7 @@ static void row_multiboot(void)
     for (i = 0; i < sizeof(raw); i++) {
         raw[i] = 0;
     }
-    /* The command line at 0x10000, the loader's name at 0x10100, two modules
-       at 0x10200 with their command lines at 0x10300, the map at 0x10400 and
-       a palette at 0x10800. */
+    /* The strings at 0x10000 and 0x10100, and the module's at 0x10300. */
     {
         const char *c = "rach2.root=ram";
         const char *l = "qemu";
@@ -951,6 +1014,7 @@ static void row_multiboot(void)
           "a structure without flags gives an empty record");
 }
 
+/** Run the rows; 0 when every check passed, 1 otherwise. */
 int main(void)
 {
     row_strings_and_meminfo();

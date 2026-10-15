@@ -1,5 +1,6 @@
 /**
- * Host test for the boot-module placement check (sys/mm/modlayout.c).
+ * modlayout_hosttest.c: the check of the boot modules' placement
+ * (`mm/modlayout.c`).
  *
  * host-deps:
  *
@@ -9,15 +10,16 @@
  * two modules overlapping each other, and a range that wraps the address
  * space. They are crafted here instead. The accepted cases matter as much:
  * modules placed back to back, out of order, and exactly at the ceiling must
- * all pass, or a legal boot would panic. Returns the failed-check count
- * (0 == pass).
+ * all pass, or a legal boot would panic. Exits with the count of failed
+ * checks, at most 255.
  */
 
 #include "mm/modlayout.c"
 
 static int fails;
 
-/** Equal NUL-terminated strings? (no host string.h here; see the note below) */
+/** Whether the strings `a` and `b` are equal; the host's string.h is not
+ * included, as the note at CHECK says. */
 static int streq(const char *a, const char *b)
 {
     while (*a != '\0' && *a == *b) {
@@ -27,9 +29,10 @@ static int streq(const char *a, const char *b)
     return *a == *b;
 }
 
-/* No stdio here: the kernel's kint.h and the host's headers disagree on
-   uintptr_t, so a kernel-header test reports by exit code alone, as
-   mbr_hosttest.c does. `what` documents the case at its call site. */
+/** Count a failure when `cond` is false. The host's headers are not
+ * included, since the kernel's kint.h and they disagree on uintptr_t, so the
+ * test reports by its exit status alone; `what` documents the case at its
+ * call site. */
 #define CHECK(cond, what) \
     do {                  \
         (void)(what);     \
@@ -45,10 +48,11 @@ static int streq(const char *a, const char *b)
  * Check the panic text `modlayout_describe` writes, which has the rule, the
  * index and the range.
  *
- * The target laptop has no serial port and `k_panic` clears the screen, so
- * what is not in this string is not seen on that machine. An address has as
- * many digits as its width, sixteen on a 64-bit host as on x86-64. The rows
- * also cut the text to a short buffer and to none.
+ * The Lenovo has no serial port and `k_panic` clears the screen, so what is
+ * not in this string is not seen on that machine. An address has as many
+ * digits as its width, sixteen on a 64-bit host as on x86-64. The rows also
+ * cut the text to a short buffer, where it must still be terminated, and to
+ * none.
  */
 static void rows_describe(void)
 {
@@ -70,8 +74,7 @@ static void rows_describe(void)
                             "spans 0x00197000 - 0x02997000"),
           "the past-limit description");
 
-    /* A buffer too small truncates and still terminates: a panic screen
-       with a short message beats a kernel that ran off a buffer. */
+    /* A buffer too small truncates and still terminates. */
     modlayout_describe(MODLAYOUT_OVERLAP, 1, 1u, 2u, tiny, (uint32_t)sizeof(tiny));
     CHECK(tiny[sizeof(tiny) - 1] == '\0', "the truncated description terminates");
     CHECK(streq(tiny, "two boo"), "the truncated description keeps its head");
@@ -90,6 +93,14 @@ static void rows_describe(void)
           "a two-digit index and zero addresses");
 }
 
+/**
+ * Run the rows of `modlayout_check`, then those of the panic text and of
+ * `modlayout_reason`; the count of failures, at most 255. The ranges are
+ * half-open, so modules back to back do not overlap. The walk over pairs must
+ * reach the pair (0,2) and not stop after (0,1). A range that wraps the address
+ * space is caught by its end below its start, before any arithmetic can wrap
+ * with it.
+ */
 int main(void)
 {
     struct modlayout_range m[3];
@@ -101,8 +112,7 @@ int main(void)
     CHECK(modlayout_check(m, 1, KEND, LIMIT, &bad) == MODLAYOUT_OK, "one module");
     CHECK(bad == 0, "no index reported on success");
 
-    /* Back-to-back modules share an edge and do not overlap: the ranges are
-       half-open, so [a,b) beside [b,c) is legal and must pass. */
+    /* Back-to-back modules share an edge, [a,b) beside [b,c), and pass. */
     m[0].start = 0x00300000u;
     m[0].end = 0x00400000u;
     m[1].start = 0x00400000u;
@@ -180,8 +190,7 @@ int main(void)
     m[1].end = 0x00500000u;
     CHECK(modlayout_check(m, 2, KEND, LIMIT, &bad) == MODLAYOUT_OVERLAP, "module inside another");
 
-    /* A third module overlapping only the first: the pairwise walk must reach
-       the (0,2) pair, not stop after (0,1). */
+    /* A third module overlapping only the first, the pair (0,2). */
     m[0].start = 0x00300000u;
     m[0].end = 0x00400000u;
     m[1].start = 0x00800000u;
@@ -192,8 +201,7 @@ int main(void)
           "non-adjacent pair overlaps");
     CHECK(bad == 2, "the non-adjacent overlap names the later module");
 
-    /* A range that wraps the address space: end < start catches it before any
-       arithmetic can wrap with it. */
+    /* A range that wraps the address space has its end below its start. */
     m[0].start = 0xFFFFF000u;
     m[0].end = 0x00001000u;
     CHECK(modlayout_check(m, 1, KEND, LIMIT, &bad) == MODLAYOUT_EMPTY, "wrapping range");

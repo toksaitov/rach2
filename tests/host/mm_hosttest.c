@@ -31,6 +31,7 @@ extern int printf(const char *format, ...);
 page_dir_t *_kernel_dir;
 struct percpu cpu_table[NR_CPUS];
 static page_dir_t kernel_dir;
+/* The directories made, the frees of each part, the reaps, and the rows run. */
 static int dirs, pages_freed, dirs_freed, regions_freed, reaps, rows, failures;
 /* The mount and the nodes of the program's file rows, the descriptions made
  * and released, and whether the holder count found the file at each
@@ -41,6 +42,7 @@ static int exe_opens, exe_closes, refuse_exe;
 static int held_at_close[4];
 static int exe_locks, held_at_lock[4];
 
+/** Count and print a failure when `c` is false. */
 #define CHECK(c, detail)                           \
     do {                                           \
         if (!(c)) {                                \
@@ -49,7 +51,8 @@ static int exe_locks, held_at_lock[4];
         }                                          \
     } while (0)
 
-/* The page tables the resident count walks, which this model has none of. */
+/** The resident count of the page tables, which this model has none of: 0
+ * pages present and 0 dirty. */
 void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned long *present,
                        unsigned long *dirty)
 {
@@ -59,49 +62,58 @@ void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned
     *present = *dirty = 0;
 }
 
+/** The kernel's allocator, from the C library, zeroed. */
 void *kmalloc(size_t size)
 {
     return calloc(1, size);
 }
 
+/** The kernel's zeroed allocator, from the C library. */
 void *kzalloc(size_t size)
 {
     return calloc(1, size);
 }
 
+/** Free a block of the allocators above. */
 void kfree(void *p)
 {
     free(p);
 }
 
+/** A new directory, counted. */
 page_dir_t *clone_page_directory(void)
 {
     dirs++;
     return calloc(1, sizeof(page_dir_t));
 }
 
+/** Every directory's physical address: 0x1000. */
 uintptr_t get_page_dir_phys(page_dir_t *dir)
 {
     (void)dir;
     return 0x1000u;
 }
 
+/** Load `dir`. */
 void switch_page_directory(page_dir_t *dir)
 {
     _curr_dir = dir;
 }
 
+/** The other processors give `dir`, which must not be NULL, back at once. */
 void smp_space_release(const page_dir_t *dir)
 {
     CHECK(dir != NULL, "the other processors are asked to give the directory back");
 }
 
+/** Count a free of the pages. */
 void free_user_pages(page_dir_t *dir)
 {
     CHECK(dir != NULL, "the pages are freed through the directory");
     pages_freed++;
 }
 
+/** Count and free a directory, which must not be the one loaded. */
 void free_page_directory(page_dir_t *dir)
 {
     CHECK(dir != NULL && dir != _curr_dir, "the directory freed is not the one in use");
@@ -109,12 +121,14 @@ void free_page_directory(page_dir_t *dir)
     free(dir);
 }
 
+/** Count a free of the regions. */
 void vm_free(vm_space_t *vm)
 {
     (void)vm;
     regions_freed++;
 }
 
+/** Count a reap of the mapped files. */
 void vm_file_reap(void)
 {
     reaps++;
@@ -158,6 +172,7 @@ void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked)
     }
 }
 
+/** Take a reference to the description `ofd`. */
 void fd_ofd_ref(struct open_file *ofd)
 {
     ofd->refcount++;
@@ -288,6 +303,7 @@ static void program_file(void)
     rows++;
 }
 
+/** Run the rows; 0 when every check passed, 1 otherwise. */
 int main(void)
 {
     _kernel_dir = &kernel_dir;
