@@ -212,11 +212,6 @@ struct xhci_slot {
     uint32_t enqueue[XHCI_MAX_DCI];
     uint32_t cycle[XHCI_MAX_DCI];
     uint8_t open[XHCI_MAX_DCI];
-    /* The length and the generation of the last transfer submitted on each
-     * endpoint. Nothing reads them: a completion takes both from the
-     * transfer's record. */
-    uint32_t asked[XHCI_MAX_DCI];
-    uint32_t generation[XHCI_MAX_DCI];
     /* Two transfer records per endpoint, allocated on first use. */
     struct xhci_td *td[XHCI_TD_DCI];
     /* Each endpoint's packet size, for the TD size field of its blocks. */
@@ -329,7 +324,6 @@ struct xhci_ctrl {
     uint32_t *port_deadline;
     uint32_t *port_connect_at;
     uint8_t *port_connected;
-    uint8_t *port_changed;
 
     struct usb_completion completions[XHCI_COMPLETIONS];
     uint32_t completion_head;
@@ -974,11 +968,9 @@ static void ctrl_free_tables(struct xhci_ctrl *hc)
     kfree(hc->port_deadline);
     kfree(hc->port_connect_at);
     kfree(hc->port_connected);
-    kfree(hc->port_changed);
     hc->port_deadline = 0;
     hc->port_connect_at = 0;
     hc->port_connected = 0;
-    hc->port_changed = 0;
     hc->nslots = 0;
 }
 
@@ -1057,8 +1049,7 @@ int xhci_read_caps(struct xhci_ctrl *hc)
     hc->port_deadline = (uint32_t *)kzalloc(hc->caps.max_ports * sizeof(uint32_t));
     hc->port_connect_at = (uint32_t *)kzalloc(hc->caps.max_ports * sizeof(uint32_t));
     hc->port_connected = (uint8_t *)kzalloc(hc->caps.max_ports);
-    hc->port_changed = (uint8_t *)kzalloc(hc->caps.max_ports);
-    if (!hc->port_deadline || !hc->port_connect_at || !hc->port_connected || !hc->port_changed) {
+    if (!hc->port_deadline || !hc->port_connect_at || !hc->port_connected) {
         hc->err = "the port state could not be allocated";
         return -1;
     }
@@ -1373,7 +1364,6 @@ int xhci_port_status(struct xhci_ctrl *hc, int port, struct usb_port_status *out
     value = r32(hc, portsc_offset(hc, port));
     out->connected = (value & PORTSC_CCS) ? 1 : 0;
     out->enabled = (value & PORTSC_PED) ? 1 : 0;
-    out->changed = hc->port_changed[port];
     out->speed = (int)((value >> PORTSC_SPEED_SHIFT) & PORTSC_SPEED_MASK);
     return 0;
 }
@@ -1544,8 +1534,8 @@ int xhci_command_free(struct xhci_ctrl *hc)
  * completion for any block but the command's is ignored. A Command Ring
  * Stopped event follows earlier command completions and gives the dequeue
  * pointer, which need not be the outstanding command's address. It ends an
- * unanswered abort without replacing a completed result. A port change marks
- * the port changed.
+ * unanswered abort without replacing a completed result. A port change event
+ * is dropped: `port_scan` reads each port's connect bit after the drain.
  *
  * A transfer event gives its block's physical address; the block's ring
  * index finds the transfer, and the transfer's record says what the block was
@@ -1616,15 +1606,6 @@ static void event_dispatch(struct xhci_ctrl *hc, const uint32_t *trb)
             s->hub_multi_tt = 0;
             s->hub_think_time = 0;
             hc->pending_port = -1;
-        }
-        return;
-    }
-    if (type == TRB_TYPE_PORT_CHANGE) {
-        /* The port is in the top byte of the first word, numbered from one. */
-        uint32_t port = ((trb[0] >> 24) & 0xFFu);
-
-        if (port >= 1 && port <= hc->caps.max_ports) {
-            hc->port_changed[port - 1] = 1;
         }
         return;
     }
@@ -1726,7 +1707,7 @@ static void event_dispatch(struct xhci_ctrl *hc, const uint32_t *trb)
 
 /**
  * Read each root port's connect bit, and for a port whose bit changed record
- * the time, by the driver's clock, and mark the port changed.
+ * the time, by the driver's clock.
  * `xhci_port_settled` measures the debounce from that time. Called at the end
  * of every drain.
  */
@@ -1741,7 +1722,6 @@ static void port_scan(struct xhci_ctrl *hc)
         if (now_connected != hc->port_connected[i]) {
             hc->port_connected[i] = (uint8_t)now_connected;
             hc->port_connect_at[i] = hc->now_ms;
-            hc->port_changed[i] = 1;
         }
     }
 }
@@ -1977,7 +1957,6 @@ int xhci_start(struct xhci_ctrl *hc)
         }
     }
     for (i = 0; i < hc->caps.max_ports; i++) {
-        hc->port_changed[i] = 0;
         hc->port_deadline[i] = 0;
         hc->port_connect_at[i] = 0;
         hc->port_connected[i] = 0;
@@ -2778,9 +2757,6 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
     if (s->ep_state[dci] == XHCI_EP_HALTED || s->ep_state[dci] == XHCI_EP_ERROR) {
         return -1; /* nothing runs until the endpoint is reset or moved on */
     }
-    s->asked[dci] = transfer->length;
-    s->generation[dci] = transfer->generation;
-
     if (transfer->setup != 0) {
         if (transfer->length != 0) {
             phys[0] = td_phys((uintptr_t)transfer->buffer);

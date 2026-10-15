@@ -50,7 +50,6 @@
 struct usb_port_status {
     int connected; /* a device is attached */
     int enabled;   /* the port is enabled and may carry transfers */
-    int changed;   /* a change was seen; a root port's stays set */
     int speed;     /* one of the `USB_SPEED_` values, when connected */
 };
 

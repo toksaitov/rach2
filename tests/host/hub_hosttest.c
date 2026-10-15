@@ -356,7 +356,6 @@ int xhci_port_status(struct xhci_ctrl *hc, int port, struct usb_port_status *out
 {
     out->connected = port == 0 && model.root_connected;
     out->enabled = out->connected;
-    out->changed = 0;
     out->speed = model.root_speed;
     return 0;
 }

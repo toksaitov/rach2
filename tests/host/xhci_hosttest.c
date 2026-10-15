@@ -2478,7 +2478,6 @@ int main(void)
     CHECK("every event is taken, wrap and all", hc->event_index == model_event_write);
     CHECK("and the driver's cycle follows the controller's", hc->event_cycle == model_event_cycle);
     CHECK("with the dequeue pointer written back", (reg[RTSOFF + 0x20u + 0x18u] & 0x8u) != 0);
-    CHECK("and the port it named remembered", hc->port_changed[0] == 1);
     CHECK("with the dequeue pointer at the block it stopped on",
           (reg[RTSOFF + 0x20u + 0x18u] & ~0xFu) ==
               ((uint32_t)(uintptr_t)&hc->event_ring[hc->event_index * TRB_WORDS] & ~0xFu));

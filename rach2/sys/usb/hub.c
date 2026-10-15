@@ -180,7 +180,6 @@ static uint32_t hub_slow(void)
 
 struct hub_port {
     uint16_t status;        /* the port status word as last read */
-    uint16_t change;        /* the port change word as last read */
     int known;              /* the status has been read at least once */
     uint32_t connect_ms;    /* when the connection was first seen */
     int reset;              /* one of the RESET_ values */
@@ -582,7 +581,6 @@ static void port_read(struct hub *h, int port)
     int now = (status & PORT_STAT_CONNECTION) != 0;
 
     p->status = status;
-    p->change = change;
     if (!p->known || was != now) {
         p->connect_ms = hub_ms;
     }
@@ -1134,7 +1132,6 @@ int hub_port_status(struct xhci_ctrl *hc, int owner, int port, struct usb_port_s
 
     out->connected = 0;
     out->enabled = 0;
-    out->changed = 0;
     out->speed = USB_SPEED_FULL;
     if (h == 0 || port < 0 || port >= h->ports) {
         return -1;
@@ -1146,7 +1143,6 @@ int hub_port_status(struct xhci_ctrl *hc, int owner, int port, struct usb_port_s
     out->connected =
         (p->status & PORT_STAT_CONNECTION) != 0 && !p->off && p->power_on_ms == 0 && !p->warm;
     out->enabled = (p->status & PORT_STAT_ENABLE) != 0;
-    out->changed = p->change != 0;
     /* A SuperSpeed hub's ports have SuperSpeed devices and nothing else. */
     out->speed = h->super                             ? USB_SPEED_SUPER
                  : (p->status & PORT_STAT_LOW_SPEED)  ? USB_SPEED_LOW

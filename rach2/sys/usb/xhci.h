@@ -302,10 +302,10 @@ int xhci_command_done(struct xhci_ctrl *hc, struct usb_command_result *out);
  *
  * A command completion ends the command in flight; a transfer event is
  * matched to its transfer, whose completion is queued for `xhci_poll`; a port
- * change marks the port changed. At most one ring's worth of events is taken
- * in a call, and a transfer event that finds the completion queue full stays
- * on the ring for the next call. Returns 0 on a controller that is not
- * running.
+ * change event is dropped, since the scan reads every port's connect bit. At
+ * most one ring's worth of events is taken in a call, and a transfer event
+ * that finds the completion queue full stays on the ring for the next call.
+ * Returns 0 on a controller that is not running.
  */
 int xhci_events(struct xhci_ctrl *hc);
 
