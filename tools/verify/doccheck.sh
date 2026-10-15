@@ -16,7 +16,9 @@
 # The tokens are those of `-fpreprocessed -E`, which removes the comments and
 # expands nothing, with the white space between tokens made one line break
 # and the inside of every string and character literal kept as it is. A
-# deleted file and a new one are compared with an empty file.
+# deleted file and a new one are compared with an empty file. A file whose
+# mode or type changes, such as a script that loses its execute bit, is not
+# a document change, nor is a new file that is not a plain one of mode 644.
 #
 # The checks are the steps of `tests/run style` that read documents and
 # comments: textcheck.sh, prosecheck's comment width, terms and dev-log
@@ -80,15 +82,24 @@ at_base() {
     git cat-file -e "$BASE:$1" 2>/dev/null && git show "$BASE:$1"
 }
 
-git diff --name-only --diff-filter=A "$BASE" -- > "$work/new"
-git diff --name-only "$BASE" -- > "$work/files"
+git diff --raw --no-renames "$BASE" -- > "$work/files" || exit 2
 if [ ! -s "$work/files" ]; then
     echo "doccheck: no file differs from $BASE"; exit 0
 fi
 
 code=0
 cfiles=""
-while read -r f; do
+while read -r omode nmode _ _ status f; do
+    omode=${omode#:}
+    if [ "$status" = A ] && [ "$nmode" != 100644 ]; then
+        echo "doccheck: $f: a new file of mode $nmode, not a plain file" >&2
+        code=1
+        continue
+    elif [ "$status" != A ] && [ "$status" != D ] && [ "$omode" != "$nmode" ]; then
+        echo "doccheck: $f: its mode changes from $omode to $nmode" >&2
+        code=1
+        continue
+    fi
     case "$f" in
     *.md|man/man[1-9]/*)
         ;;
@@ -102,7 +113,7 @@ while read -r f; do
         [ -f "$f" ] && cfiles="$cfiles $f"
         ;;
     *.sh|*/Makefile|Makefile|*.mk|*.manifest|tests/run)
-        if grep -qxF "$f" "$work/new"; then
+        if [ "$status" = A ]; then
             echo "doccheck: $f: a new file" >&2
             code=1
         elif git diff -U0 "$BASE" -- "$f" | grep -E '^[-+]' | grep -v -E '^(\+\+\+|---) ' |
