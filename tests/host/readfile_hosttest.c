@@ -1,15 +1,14 @@
 /**
- * Dual-target host test for the KRFFS path walk the extractor runs.
+ * Host test of the KRFFS path walk of the extractor, krffs/krffs_reader.c.
  *
  * host-deps: krffs/krffs_reader.c
  *
- * `krffs_read_regular` is what `readfile.krffs` uses to pull a guest-built
- * artifact out of a disk image, so it must refuse a malformed or truncated
- * image with the reason named, not read out of bounds. The regions
- * here are crafted by hand in memory, byte for byte in the on-disk node
- * layout, which is what lets each case hold exactly one defect: a chain the
- * real stager would never write cannot be produced by calling the real
- * stager. Returns the failed-check count (0 == all passed).
+ * `readfile.krffs` takes a file a guest built out of a disk image with
+ * `krffs_read_regular`, which must fail on a malformed or truncated image
+ * with the reason in its message, and never read outside the image. The
+ * test writes each region in memory by hand, byte for byte in the node
+ * layout on the disk, so that each case has one defect; the stager writes
+ * no such chain.
  */
 
 #include <stdint.h>
@@ -54,7 +53,8 @@ static size_t put_node(size_t offset, uint8_t type, uint64_t id, const char *nam
     return offset + (size_t)size;
 }
 
-/** Build the well-formed region: root, a directory, a file in it, free. */
+/** Write the well-formed region: the root, the directory "d", the file "f"
+ * in it with "hello", and a free node to the end; return its file system. */
 static struct krffs_file_system build_region(void)
 {
     struct krffs_file_system file_system;
@@ -76,6 +76,8 @@ static struct krffs_file_system build_region(void)
     return file_system;
 }
 
+/** Run every check; the exit status is the count of failed checks, at most
+ * 100, so that it never wraps to 0. */
 int main(void)
 {
     struct krffs_file_system file_system;
@@ -83,76 +85,67 @@ int main(void)
     uint64_t size = 0;
     char reason[256];
 
-    /* The well-formed region: the file reads back byte-exact through its
-     * two-component path. */
+    /* The well-formed region: /d/f reads back as it was written. */
     file_system = build_region();
     CHECK(krffs_read_regular(&file_system, "/d/f", &data, &size, reason, sizeof(reason)) == 0);
     CHECK(size == 5 && data != 0 && memcmp(data, "hello", 5) == 0);
 
-    /* A missing path is a refusal that names the missing component. */
+    /* A missing path fails with the missing component named. */
     file_system = build_region();
     CHECK(krffs_read_regular(&file_system, "/d/absent", &data, &size, reason, sizeof(reason)) != 0);
     CHECK(strstr(reason, "absent") != 0);
 
-    /* A directory is refused; this reads files. */
+    /* A path to a directory fails. */
     file_system = build_region();
     CHECK(krffs_read_regular(&file_system, "/d", &data, &size, reason, sizeof(reason)) != 0);
     CHECK(strstr(reason, "directory") != 0);
 
-    /* A truncated region: the walk must refuse the node that runs past the
-     * end, not read through it. */
+    /* A truncated region fails at the node that runs past its end. */
     file_system = build_region();
     file_system.size = (off_t)(sizeof(struct krffs_node) + 8);
     CHECK(krffs_read_regular(&file_system, "/d/f", &data, &size, reason, sizeof(reason)) != 0);
     CHECK(strstr(reason, "region") != 0);
 
-    /* A node whose size field escapes the region while its header fits:
-     * the walk must name that node, not report the path missing after
-     * skipping over the region's end. */
+    /* A node whose header fits and whose size runs past the region fails. */
     file_system = build_region();
     ((struct krffs_node *)(region + sizeof(struct krffs_node)))->size = REGION_BYTES * 2;
     CHECK(krffs_read_regular(&file_system, "/d/f", &data, &size, reason, sizeof(reason)) != 0);
     CHECK(strstr(reason, "leaves the region") != 0);
 
-    /* A size of UINT64_MAX: added to any offset it would wrap and compare
-     * as inside the region, so the check must subtract instead of add. */
+    /* A size of UINT64_MAX, which added to an offset would wrap. */
     file_system = build_region();
     ((struct krffs_node *)(region + sizeof(struct krffs_node)))->size = (uint64_t)-1;
     CHECK(krffs_read_regular(&file_system, "/d/f", &data, &size, reason, sizeof(reason)) != 0);
     CHECK(strstr(reason, "leaves the region") != 0);
 
-    /* A data size of UINT64_MAX: added to the header size it would wrap the
-     * same way. */
+    /* A data size of UINT64_MAX, which added to the header would wrap. */
     file_system = build_region();
     ((struct krffs_node *)(region + 2 * sizeof(struct krffs_node)))->data_size = (uint64_t)-1;
     CHECK(krffs_read_regular(&file_system, "/d/f", &data, &size, reason, sizeof(reason)) != 0);
     CHECK(strstr(reason, "claims") != 0);
 
-    /* A malformed chain: a zero node size cannot advance the walk. */
+    /* A node size of 0, which would not advance the walk. */
     file_system = build_region();
     ((struct krffs_node *)(region + sizeof(struct krffs_node)))->size = 0;
     CHECK(krffs_read_regular(&file_system, "/d/f", &data, &size, reason, sizeof(reason)) != 0);
     CHECK(strstr(reason, "leaves the region") != 0);
 
-    /* A malformed chain: a wrong magic is a refusal, not a guess. */
+    /* A wrong magic number. */
     file_system = build_region();
     ((struct krffs_node *)(region + sizeof(struct krffs_node)))->magic = 1;
     CHECK(krffs_read_regular(&file_system, "/d/f", &data, &size, reason, sizeof(reason)) != 0);
     CHECK(strstr(reason, "malformed") != 0);
 
-    /* A file whose claimed data does not fit its node: refused before the
-     * caller can copy bytes that belong to the next node. */
+    /* A file whose data size is larger than its node. */
     file_system = build_region();
     ((struct krffs_node *)(region + 2 * sizeof(struct krffs_node)))->data_size = 4096;
     CHECK(krffs_read_regular(&file_system, "/d/f", &data, &size, reason, sizeof(reason)) != 0);
     CHECK(strstr(reason, "claims") != 0);
 
-    /* A relative or empty path never walks at all. */
+    /* A relative path and the root alone fail. */
     file_system = build_region();
     CHECK(krffs_read_regular(&file_system, "d/f", &data, &size, reason, sizeof(reason)) != 0);
     CHECK(krffs_read_regular(&file_system, "/", &data, &size, reason, sizeof(reason)) != 0);
 
-    /* Bounded so the count never wraps to 0 (a false pass) as an exit
-     * status. */
     return (fails > 100) ? 100 : fails;
 }

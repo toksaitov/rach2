@@ -1,3 +1,7 @@
+/**
+ * Host test of `rm`, utils/rm.c, run through its entry point on host files
+ * with an `unlink` that fails for one path.
+ */
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -13,10 +17,10 @@ static int saved_cwd = -1;
 static char fixture[] = "/tmp/rach2-rm-hosttest.XXXXXX";
 
 /**
- * Inject EACCES for one unlink; use host files and directories otherwise.
+ * unlink(2), but -1 with EACCES for the path `denied`.
  *
- * This models a link in a non-writable parent without depending on the
- * test process's uid. It does not test kernel permission enforcement.
+ * The failure stands for a link in a directory the caller cannot write,
+ * whatever the test's uid; the kernel's permission checks are not tested.
  */
 static int denied_unlink(const char *path)
 {
@@ -33,7 +37,8 @@ static int denied_unlink(const char *path)
 #undef main
 #undef unlink
 
-/** Remove known fixtures independently of the utility under test. */
+/** Remove every fixture the rows make, without `rm`, and the fixture
+ * directory; registered with atexit. */
 static void cleanup(void)
 {
     unlink("locked/link");
@@ -54,7 +59,8 @@ static void cleanup(void)
     rmdir(fixture);
 }
 
-/** Stop on a fixture error so it cannot count as a utility failure. */
+/** Exit 2 with `message` when `ok` is 0, so that a fault in a fixture is
+ * not counted as a fault of `rm`. */
 static void require(int ok, const char *message)
 {
     if (!ok) {
@@ -63,6 +69,7 @@ static void require(int ok, const char *message)
     }
 }
 
+/** Count a check, and a failure with `message` when `ok` is 0. */
 static void check(int ok, const char *message)
 {
     ++checks;
@@ -72,6 +79,7 @@ static void check(int ok, const char *message)
     }
 }
 
+/** Make the file `path` with the bytes "keep\n". */
 static void create_file(const char *path)
 {
     int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
@@ -81,6 +89,7 @@ static void create_file(const char *path)
     require(close(fd) == 0, "close file");
 }
 
+/** Whether target/keep still has its bytes. */
 static int target_intact(void)
 {
     char bytes[6];
@@ -95,6 +104,7 @@ static int target_intact(void)
     return n == 5 && memcmp(bytes, "keep\n", 5) == 0;
 }
 
+/** Whether `path` does not exist, as a link or anything else. */
 static int missing(const char *path)
 {
     struct stat st;
@@ -102,6 +112,7 @@ static int missing(const char *path)
     return lstat(path, &st) == -1 && errno == ENOENT;
 }
 
+/** Run `rm`, with -r when `recursive`, on `path`; its exit status. */
 static int run_rm(const char *path, int recursive)
 {
     char *argv[4];
@@ -117,11 +128,14 @@ static int run_rm(const char *path, int recursive)
 }
 
 /**
- * Check denied symlink unlinks at the operand and inside a directory tree.
+ * Run every row in a new directory under /tmp; 0 when each passes, 1
+ * otherwise, and 2 when a fixture cannot be made.
  *
- * The target must retain its bytes, and the link must remain. Also check
- * successful link and file unlinks, a dangling link, missing input, and
- * recursive directory removal through the production command entry point.
+ * A symbolic link whose unlink is denied, as an operand and inside a tree
+ * removed with -r, fails the command, stays a link and leaves its target's
+ * bytes alone. The command removes a link, a file and a tree with a
+ * dangling link in it, needs -r for a directory, and fails on a missing
+ * operand.
  */
 int main(void)
 {

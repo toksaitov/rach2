@@ -1,13 +1,15 @@
 /**
- * Check ptrace requests across a sleeping copy and a listening stop.
+ * Host test of ptrace requests across a copy that sleeps and a listening
+ * stop.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
- * The iovec copy can resume the tracee before returning. Both register-set
- * directions must then answer ESRCH without reading its registers. The
- * scheduler reports a stop and resumes it, so the syscall step's status
- * and siginfo can be checked without a guest. Guest ptracemusl checks the
- * syscall result and the next instruction as well.
+ * The copy of a register-set request's iovec can sleep, and the tracee can
+ * be resumed meanwhile; the request, in either direction, must then answer
+ * -ESRCH without reaching its registers. The test's `schedule` records a
+ * stop and ends it, so that the status and siginfo of a single step over a
+ * system call can be checked without a guest; the guest test ptracemusl
+ * checks the system call's result and the next instruction as well.
  */
 #include "proc/ptrace.c"
 
@@ -26,7 +28,7 @@ static int stops, listen_interrupts, kill_on_resume;
 static uint32_t stop_status;
 static struct k_siginfo stop_info;
 
-/** Record each independent assertion. */
+/** Count a failure and print `row` when `ok` is 0. */
 static void check(int ok, const char *row)
 {
     if (!ok) {
@@ -35,13 +37,15 @@ static void check(int ok, const char *row)
     }
 }
 
-/** Find one of the two modeled threads. */
+/** The tracer or the tracee by `pid`, NULL for any other. */
 process_t *get_process(uint32_t pid)
 {
     return pid == self.pid ? &self : pid == tracee.pid ? &tracee : NULL;
 }
 
-/** Copy an iovec, then model a resume by another tracer thread. */
+/** Copy `len` bytes from the host address `src` and return 0; with
+ * `resume_on_copy` set, resume the tracee once, as another thread of the
+ * tracer could while the copy sleeps. */
 int copy_from_user(void *dst, const void __user *src, size_t len)
 {
     k_memcpy(dst, src, len);
@@ -52,26 +56,26 @@ int copy_from_user(void *dst, const void __user *src, size_t len)
     return 0;
 }
 
-/** Copy a result into the test's resident buffer. */
+/** Copy `len` bytes to the host address `dst` and return 0. */
 int copy_to_user(void __user *dst, const void *src, size_t len)
 {
     k_memcpy(dst, src, len);
     return 0;
 }
 
-/** Allocate the real request's temporary register-set buffer. */
+/** The host's malloc, for a request's buffer of a register set. */
 void *kmalloc(size_t bytes)
 {
     return malloc(bytes);
 }
 
-/** Free the request's temporary buffer. */
+/** The host's free. */
 void kfree(void *p)
 {
     free(p);
 }
 
-/** Supply a single word as the architecture's register set. */
+/** One word, the size and unit of every register set. */
 long arch_regset_size(unsigned long type, uint32_t *unit)
 {
     (void)type;
@@ -79,7 +83,8 @@ long arch_regset_size(unsigned long type, uint32_t *unit)
     return sizeof(unsigned long);
 }
 
-/** Count register reads; a resumed tracee must never reach this call. */
+/** Zero the set's word in `out` and count an access to the registers,
+ * which a resumed tracee must never reach. */
 void arch_regset_get(const process_t *t, unsigned long type, uint8_t *out)
 {
     (void)t;
@@ -88,7 +93,7 @@ void arch_regset_get(const process_t *t, unsigned long type, uint8_t *out)
     register_reads++;
 }
 
-/** Count register writes by the same rule as reads. */
+/** Count an access to the registers, as `arch_regset_get` does; 0. */
 long arch_regset_set(process_t *t, unsigned long type, const uint8_t *in, uint32_t len)
 {
     (void)t;
@@ -99,8 +104,14 @@ long arch_regset_set(process_t *t, unsigned long type, const uint8_t *in, uint32
     return 0;
 }
 
-/** Record a stop, then model the tracer's requests while the tracee sleeps.
- * A listening tracee resumes inside ptrace_stop after PTRACE_INTERRUPT. */
+/**
+ * Record the current thread's stop status and siginfo, as the tracer would
+ * read them, and act for the tracer while the tracee sleeps. While
+ * `listen_interrupts` is above 0 the tracer puts the tracee in a listening
+ * stop and sends PTRACE_INTERRUPT, which resumes it inside `ptrace_stop`,
+ * and with `kill_on_resume` SIGKILL is then pending. Otherwise the stop
+ * ends: its status is cleared and the thread runs.
+ */
 void schedule(void)
 {
     isr_params_t request;
@@ -126,14 +137,15 @@ void schedule(void)
     current_proc->state = PROC_RUNNING;
 }
 
-/** Count requests that make a listening tracee runnable. */
+/** Make `t` ready and count the wakeup. */
 void sched_make_ready(process_t *t)
 {
     t->state = PROC_READY;
     wakes++;
 }
 
-/** Initialize a privileged tracer and its stopped child. */
+/** Reset the tracer, pid 10 with uid 0, as the current thread, and its
+ * tracee, pid 11, seized and in a group stop. */
 static void setup(void)
 {
     k_memset(&self, 0, sizeof(self));
@@ -157,7 +169,9 @@ static void setup(void)
     stops = listen_interrupts = kill_on_resume = 0;
 }
 
-/** A resumed listen reports every interrupt before leaving the return path. */
+/** On the way back to user mode, a tracee whose listening stop
+ * PTRACE_INTERRUPT ended stops again, as an event stop of SIGTRAP, for each
+ * interrupt; SIGKILL ends the stops with PT_INTERRUPT still set. */
 static void return_stops(void)
 {
     setup();
@@ -178,7 +192,14 @@ static void return_stops(void)
           "kill ends return stop sequence");
 }
 
-/** Exercise regset revalidation, listen interruption, options and stepping. */
+/**
+ * Run every row; 0 when each passes, 1 otherwise. A register-set request
+ * rechecks the tracee after its copy slept; PTRACE_INTERRUPT releases a
+ * listening tracee; PTRACE_SETOPTIONS and PTRACE_SEIZE fail with -EINVAL
+ * for an option above bit 31; a single step over a system call reports
+ * TRAP_TRACE with no TRACESYSGOOD mark; and the stops on the way back to
+ * user mode.
+ */
 int main(void)
 {
     struct kernel_iovec iov;
@@ -225,34 +246,34 @@ int main(void)
     return failures != 0;
 }
 
-/** Treat every modeled uid as belonging to the initial namespace. */
+/** NULL for every process; the stubs that take a namespace ignore it. */
 struct userns *proc_userns(const process_t *p)
 {
     (void)p;
     return NULL;
 }
 
-/** Preserve a modeled uid. */
+/** The kernel id `id` itself. */
 uint32_t ns_uid_from_kernel(const struct userns *ns, uint32_t id)
 {
     (void)ns;
     return id;
 }
 
-/** Preserve a modeled process id. */
+/** The PID `pid` itself. */
 uint32_t pid_named(uint32_t pid)
 {
     return pid;
 }
 
-/** Preserve a process id in the observer's namespace. */
+/** The kernel id `pid` itself, whatever `p`. */
 uint32_t pid_seen_by(const process_t *p, uint32_t pid)
 {
     (void)p;
     return pid;
 }
 
-/** Supply an empty child notification. */
+/** A zeroed siginfo for the notice of a child's change. */
 void proc_child_info(const process_t *p, struct k_siginfo *info)
 {
     (void)p;
@@ -271,19 +292,19 @@ void kirq_restore(uint32_t flags)
     (void)flags;
 }
 
-/** A stopped thread must be resumed by the scheduler model. */
+/** A failure: the test's `schedule` ends every stop. */
 void idle_wait_irq_off(void)
 {
     check(0, "unexpected idle wait");
 }
 
-/** The waiting tracer is represented by the recorded stop. */
+/** Nothing: the tracer is told of a stop through `schedule`. */
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
 }
 
-/** Process notifications need no delivery in this request model. */
+/** Nothing: no row checks a signal sent to a process. */
 void signal_post_info(process_t *p, int sig, const struct k_siginfo *info)
 {
     (void)p;
@@ -291,7 +312,7 @@ void signal_post_info(process_t *p, int sig, const struct k_siginfo *info)
     (void)info;
 }
 
-/** Thread notifications need no delivery in this request model. */
+/** Nothing: no row checks a signal sent to a thread. */
 void signal_post_thread(process_t *p, int sig, const struct k_siginfo *info)
 {
     (void)p;
@@ -299,14 +320,14 @@ void signal_post_thread(process_t *p, int sig, const struct k_siginfo *info)
     (void)info;
 }
 
-/** The guest test checks the real trap flag. */
+/** Nothing: the guest test ptracemusl checks the trap flag. */
 void arch_ptrace_step(process_t *p, int on)
 {
     (void)p;
     (void)on;
 }
 
-/** Architecture-specific requests are outside this model. */
+/** -EIO: no row makes a request of the architecture's own. */
 long arch_ptrace(process_t *p, uint32_t pid, long request, uintptr_t addr, unsigned long data)
 {
     (void)p;
@@ -317,7 +338,7 @@ long arch_ptrace(process_t *p, uint32_t pid, long request, uintptr_t addr, unsig
     return -EIO;
 }
 
-/** Siginfo packing is outside these rows. */
+/** Nothing: no row writes a siginfo to the user. */
 void sigframe_fill_siginfo(uint8_t *buf, int sig, const struct k_siginfo *info)
 {
     (void)buf;
@@ -325,26 +346,26 @@ void sigframe_fill_siginfo(uint8_t *buf, int sig, const struct k_siginfo *info)
     (void)info;
 }
 
-/** Siginfo unpacking is outside these rows. */
+/** Nothing: no row reads a siginfo from the user. */
 void sigframe_take_siginfo(const uint8_t *buf, struct k_siginfo *info)
 {
     (void)buf;
     (void)info;
 }
 
-/** The modeled address space is static. */
+/** Nothing: the tracee's address space is static. */
 void mm_get(struct mm *mm)
 {
     (void)mm;
 }
 
-/** The modeled address space is static. */
+/** Nothing: the tracee's address space is static. */
 void mm_put(struct mm *mm)
 {
     (void)mm;
 }
 
-/** Tracee memory access is outside these rows. */
+/** -EIO: no row reads or writes the tracee's memory. */
 int32_t paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int write)
 {
     (void)mm;

@@ -1,11 +1,13 @@
 /**
- * Run the production scheduler and wait-queue wake path without a CPU switch.
+ * Host test of the scheduler's selection and the wait queue's wakeups,
+ * proc/sched.c and proc/wait_queue.c, with no switch of the processor.
  *
  * host-deps:
  *
- * Interrupt flags, floating-point saves and the stack switch are stand-ins.
- * Selection, process states, wake marks and cursors are the kernel's code.
- * These rows judge dispatch order and counts, independent of host speed.
+ * The interrupt flag, the floating-point saves and the switch of stacks are
+ * the test's; the selection, the process states, the wake marks and the
+ * scheduler's cursors are the kernel's. The rows judge the order of
+ * dispatch and the counts, never the host's speed.
  */
 #define WAIT_QUEUE_HOSTTEST
 
@@ -33,7 +35,7 @@ static int failures;
         }                                                        \
     } while (0)
 
-/** Model the interrupt mask around scheduler state changes. */
+/** Clear the model's interrupt flag and return what it was. */
 uint32_t kirq_save(void)
 {
     uint32_t flags = irq_flags;
@@ -42,55 +44,59 @@ uint32_t kirq_save(void)
     return flags;
 }
 
-/** Restore the caller's interrupt mask. */
+/** Set the model's interrupt flag to `flags`. */
 void kirq_restore(uint32_t flags)
 {
     irq_flags = flags;
 }
 
-/** No row waits for an interrupt. */
+/** Nothing: no row waits for an interrupt. */
 void arch_idle(void)
 {}
 
+/** Nothing: no row waits for an interrupt. */
 void arch_idle_masked(void)
 {}
 
-/** No process here arms a timer of processor time, which posts a signal. */
+/** Nothing: no process arms a timer of processor time, which would post a
+ * signal. */
 void signal_post(process_t *target, int signo)
 {
     (void)target;
     (void)signo;
 }
 
-/** No suspend to idle holds the processes here. */
+/** 1: no suspend to idle holds a process. */
 int suspend_lets_run(const struct process *p)
 {
     (void)p;
     return 1;
 }
 
-/** Nor a POSIX timer on a clock of processor time. */
+/** Nothing: no process has a POSIX timer on a clock of processor time. */
 void ptimer_cpu_tick(const struct process *p, int user)
 {
     (void)p;
     (void)user;
 }
 
-/** Check the mask at the outgoing floating-point save. */
+/** Check that interrupts are off and that `area` is the outgoing
+ * process's. */
 void fpu_save(void *area)
 {
     CHECK(!irq_flags, "floating-point save with interrupts on");
     CHECK(area == current_proc->fpu, "save belongs to outgoing process");
 }
 
-/** Check the mask at the incoming floating-point restore. */
+/** Check that interrupts are off and that `area` is not the outgoing
+ * process's. */
 void fpu_restore(const void *area)
 {
     CHECK(!irq_flags, "floating-point restore with interrupts on");
     CHECK(area != current_proc->fpu, "restore belongs to incoming process");
 }
 
-/** Check the mask at the debug registers' switch; no row sets any. */
+/** Check that interrupts are off; no row sets a debug register. */
 void arch_debug_switch(struct process *old, const struct process *next)
 {
     (void)old;
@@ -98,7 +104,8 @@ void arch_debug_switch(struct process *old, const struct process *next)
     CHECK(!irq_flags, "debug register switch with interrupts on");
 }
 
-/** Record a dispatch; the host remains on the test's stack. */
+/** Check the states of a dispatch from `old` to `next` and count it; the
+ * test stays on its own stack. */
 void switch_context(process_t *old, process_t *next)
 {
     CHECK(!irq_flags, "switch with interrupts on");
@@ -108,69 +115,74 @@ void switch_context(process_t *old, process_t *next)
     switches++;
 }
 
-/** One processor: the run queues' lock is the interrupt mask alone. */
+/** One processor: the run queues' lock is the interrupt flag alone. */
 uint32_t spin_lock_irqsave(struct spinlock *lock)
 {
     (void)lock;
     return kirq_save();
 }
 
+/** Restore the interrupt flag to `flags`. */
 void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
 {
     (void)lock;
     kirq_restore(flags);
 }
 
+/** Nothing: one processor needs no lock. */
 void spin_lock(struct spinlock *lock)
 {
     (void)lock;
 }
 
+/** Nothing: one processor needs no lock. */
 void spin_unlock(struct spinlock *lock)
 {
     (void)lock;
 }
 
-/** Nor a big lock to let go around an idle wait, or another processor to
- * wake. */
+/** 0: there is no big lock to let go around an idle wait. */
 int bkl_drop(void)
 {
     return 0;
 }
 
+/** Nothing: there is no big lock. */
 void bkl_take(int depth)
 {
     (void)depth;
 }
 
+/** Nothing: there is no other processor to wake. */
 void smp_kick(int cpu)
 {
     (void)cpu;
 }
 
-/** The idle task's loop is never run here. */
+/** Nothing: no row runs the idle task's loop. */
 void arch_irq_disable(void)
 {}
 
-/** No signal is pending in the wait-return row. */
+/** 0: no signal is pending. */
 int signal_pending(void)
 {
     return 0;
 }
 
-/** These rows deliver no loopback traffic. */
+/** 0: no loopback packet is pending. */
 int ip_loop_pending(void)
 {
     return 0;
 }
 
-/** An idle network drain is not needed by a selection row. */
+/** Nothing: no loopback packet is pending. */
 void ip_loop_drain_from(int from)
 {
     (void)from;
 }
 
-/** Reset seven records with process zero running and the rest ready. */
+/** Reset seven processes, 0 running and the rest ready, on one list, with
+ * interrupts on and the scheduler started. */
 static void setup(void)
 {
     unsigned i;
@@ -198,7 +210,9 @@ static void setup(void)
     sched_enable();
 }
 
-/** Wake through the same queue operation used by device completions. */
+/** Block `p` on a queue and wake it with `wq_wake_all`, as a device's
+ * completion does; check that it is ready, marked woken, and off the
+ * queue. */
 static void wake(process_t *p)
 {
     wait_queue_t queue;
@@ -211,7 +225,9 @@ static void wake(process_t *p)
     CHECK(!queue.head, "wake empties queue");
 }
 
-/** A late-list sleeper precedes the next spinner only once. */
+/** Without wakes the selection rotates through the list. A woken process
+ * is chosen ahead of the next in turn once; the selection after it is
+ * ordinary, and a second woken process waits for the one after that. */
 static void priority(void)
 {
     unsigned i;
@@ -235,7 +251,8 @@ static void priority(void)
     CHECK(irq_flags == 0x200, "enabled interrupts restored");
 }
 
-/** Two repeated wakeups cannot postpone a spinner beyond two rotations. */
+/** Two processes woken before every selection never keep one of the other
+ * five from running for fourteen selections, two rotations. */
 static void fairness(void)
 {
     unsigned step, i;
@@ -258,14 +275,20 @@ static void fairness(void)
     }
 }
 
-/** A true condition returns without leaving a wake for an unrelated yield. */
+/** A condition that is always true. */
 static int ready(void *arg)
 {
     (void)arg;
     return 1;
 }
 
-/** Cover wait return, ineligible states and a current sleeper waking idle. */
+/**
+ * A wait whose condition is true returns and clears the wake mark; a
+ * blocked, stopped or dead process is not selected, whatever its mark; the
+ * running process keeps no mark through a selection; with no process ready
+ * nothing is switched and interrupts stay off; and a current process woken
+ * after it blocked runs again with no switch.
+ */
 static void states(void)
 {
     wait_queue_t queue;
@@ -299,7 +322,13 @@ static void states(void)
     CHECK(current_proc->state == PROC_RUNNING, "current sleeper runs after wake");
 }
 
-/** A removed cursor and syscall deferral preserve ordinary selection. */
+/**
+ * A stopped scheduler selects nothing. In a system call a preemption only
+ * marks the process, and the exit from the call takes it with interrupts
+ * still off. A cursor whose process was removed resumes at its successor.
+ * A selection over an empty list restores the interrupt flag, and one with
+ * no current process returns.
+ */
 static void lifecycle(void)
 {
     setup();
@@ -333,7 +362,6 @@ static void lifecycle(void)
     schedule();
 }
 
-/** Run the bounded scheduling rows with the production selection code. */
 /**
  * A processor's tick counts the global ticks it has not counted yet: three
  * after two were lost, none when its own tick comes before the next global
@@ -361,6 +389,7 @@ static void accounting(void)
     cpu->current = saved;
 }
 
+/** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {
     priority();
@@ -375,7 +404,7 @@ int main(void)
     return 0;
 }
 
-/** The scheduling test does not record USB input. */
+/** Nothing: no row records USB input. */
 void usb_stamp_dispatch(uint32_t pid)
 {
     (void)pid;

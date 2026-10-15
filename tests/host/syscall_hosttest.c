@@ -1,13 +1,15 @@
 /**
- * Exercise completed connects, framebuffer ownership, the clocks, their
- * rollover and resolutions, and the sleeps and the interval timer: their
- * deadlines, masks, remainders, clamps and argument checks.
+ * Host test of system calls of syscall.c and syscall_net.c: a connect whose
+ * handshake ended, the framebuffer's owner, the clocks with their wrap and
+ * resolutions, and the sleeps and the interval timer, with their deadlines,
+ * masks, remainders, clamps and checks of arguments.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  *
- * Unused syscall exports are private so the native compiler removes their
- * hardware paths. User pointers are offsets into a checked byte array.
+ * The system calls no row makes are declared static before the sources are
+ * included, so that the compiler removes them and the hardware they reach. A
+ * user pointer is an offset into the array `user`, which every copy checks.
  */
 #include "isr.h"
 #include "network/socket/socket.h"
@@ -103,20 +105,23 @@ static int sibling_runs;
         }                                                   \
     } while (0)
 
-/** Refuse every range outside the model's user memory. */
+/** Whether [addr, addr + len) lies in the model's user memory, `user`;
+ * address 0 does not. */
 int user_range_ok(uintptr_t addr, size_t len)
 {
     return addr && addr <= sizeof(user) && len <= sizeof(user) - addr;
 }
 
-/** Model mapped user pages after the range check. */
+/** Whether the range lies in user memory, every page of which is
+ * mapped. */
 int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
 {
     (void)write;
     return user_range_ok(addr, len);
 }
 
-/** Copy the syscall result without truncating a native pointer. */
+/** Copy `len` bytes to the offset `dst` of user memory; 0, or -EFAULT
+ * outside it. */
 int copy_to_user(void __user *dst, const void *src, size_t len)
 {
     uint32_t at = (uint32_t)(unsigned long)dst;
@@ -126,7 +131,8 @@ int copy_to_user(void __user *dst, const void *src, size_t len)
     return 0;
 }
 
-/** Copy a socket address from the same arena. */
+/** Copy `len` bytes from the offset `src` of user memory; 0, or -EFAULT
+ * outside it. */
 int copy_from_user(void *dst, const void __user *src, size_t len)
 {
     uint32_t at = (uint32_t)(unsigned long)src;
@@ -209,7 +215,7 @@ void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds)
     *nanoseconds = (int64_t)kernel_second_ticks * 10000000;
 }
 
-/* The PIT's place within the tick, which the model's time since boot adds;
+/* The timer's place within the tick, which the model's time since boot adds;
  * and, when not 0, the reading in nanoseconds the clock keeps after a lost
  * tick put the tick count behind it, which it reads until the count passes. */
 static int64_t mono_phase_ns, mono_held_ns;
@@ -241,7 +247,6 @@ void rtc_tick_phase(uint32_t *ticks, uint32_t *phase_ns)
 static process_t other;
 static struct tgroup group, other_group;
 
-/** Find the model's processes: this one and pid 9. */
 /** Each process here is one thread, whose CPU time is the process's. */
 void proc_cpu_time(const process_t *p, uint32_t *user, uint32_t *sys)
 {
@@ -249,6 +254,7 @@ void proc_cpu_time(const process_t *p, uint32_t *user, uint32_t *sys)
     *sys = p->stime;
 }
 
+/** Find the model's processes: this one and pid 9. */
 process_t *get_process(uint32_t pid)
 {
     if (pid == proc.pid) {
@@ -257,7 +263,8 @@ process_t *get_process(uint32_t pid)
     return pid == 9 ? &other : NULL;
 }
 
-/** Record the actual request to enter graphics mode. */
+/** Count an entry to graphics mode and set mode 13h; NULL, no
+ * framebuffer. */
 uint8_t *fb_enter(void)
 {
     enters++;
@@ -265,47 +272,48 @@ uint8_t *fb_enter(void)
     return NULL;
 }
 
-/** Record the request that would restore the text display. */
+/** Count an exit to text mode. */
 void fb_exit(void)
 {
     exits++;
     gfx_current.mode = GFX_MODE_NONE;
 }
 
-/** Record palette writes without accessing a hardware port. */
+/** Count a write of the palette. */
 void fb_set_palette(const uint8_t *data)
 {
     (void)data;
     palettes++;
 }
 
-/** Resolve the only socket descriptor in the model. */
+/** The socket's entry for descriptor 3, NULL for any other. */
 fd_entry_t *fd_get(fd_table_t *table, int fd)
 {
     (void)table;
     return fd == 3 ? &entry : NULL;
 }
 
-/** No network interrupt runs in this model. */
+/** 0: no network interrupt runs. */
 uint32_t net_lock(void)
 {
     return 0;
 }
 
-/** Balance the network critical section. */
+/** Nothing: no network interrupt runs. */
 void net_unlock(uint32_t flags)
 {
     (void)flags;
 }
 
-/** Datagram allocation is not used by these stream rows. */
+/** 0: no row binds a datagram socket. */
 uint16_t udp_bind_ephemeral(struct socket *s)
 {
     (void)s;
     return 0;
 }
 
-/** Start a connection with completion before or during the wait. */
+/** Give `s` the test's control block, in the state `completion` at once
+ * when `immediate` is set and SYN_SENT otherwise; 0. */
 int tcp_connect(struct socket *s, uint32_t ip, uint16_t port)
 {
     (void)ip;
@@ -315,7 +323,8 @@ int tcp_connect(struct socket *s, uint32_t ip, uint16_t port)
     return 0;
 }
 
-/** Deliver the final state before the caller next evaluates its predicate. */
+/** A wait in which the handshake ends: put the state `completion` and
+ * check that `ready` is then true; 0, or -EINTR when it is not. */
 int wq_wait_event(wait_queue_t *q, int (*ready)(void *), void *arg)
 {
     (void)q;
@@ -325,7 +334,14 @@ int wq_wait_event(wait_queue_t *q, int (*ready)(void *), void *arg)
     return ready(arg) ? 0 : -EINTR;
 }
 
-/** A FIN before scheduling must pass both the wait and the return check. */
+/**
+ * A blocking connect whose handshake ends ESTABLISHED, or CLOSE_WAIT after
+ * a FIN that came before the caller ran, returns 0, and one that ends
+ * CLOSED gives -ECONNREFUSED; each waits through its predicate. A
+ * nonblocking connect returns 0 when the handshake ended at once and
+ * -EINPROGRESS otherwise, and `connect_done` is false while the handshake
+ * runs and true once the socket has no connection.
+ */
 static void connects(void)
 {
     int i;
@@ -357,7 +373,12 @@ static void connects(void)
     CHECK(connect_done(&sock), "removed connection wakes caller");
 }
 
-/** A stale descriptor cannot alter another process's mode or palette. */
+/**
+ * The framebuffer's owner enters graphics mode once however often it asks,
+ * and gives it up with a text request. A process that is not the owner gets
+ * -EBUSY for every request and changes nothing on the owner's display. A
+ * palette not in user memory gives -EFAULT, and an unknown request -ENOTTY.
+ */
 static void framebuffer(void)
 {
     proc.pid = proc.tgid = 1;
@@ -455,7 +476,7 @@ static void clock_to(uint32_t tick)
  * pending as a blocked or ignored signal does, once for `wake_unacted`; and
  * otherwise to two ticks short of the deadline, leaving the sleeper blocked
  * for the halts to carry to it. A woken sleeper is READY, or RUNNING for
- * `switch_back`, as the real `schedule` leaves it when it switches back.
+ * `switch_back`, as the kernel's `schedule` leaves it when it switches back.
  *
  * No row yields a thousand times. A sleep that does, one that returns before
  * its clock moves to a caller that sleeps again until it has, is a fault the
@@ -751,11 +772,11 @@ static void sleep_edges(void)
  * blocks until 1102, one of 1 ns from 1150 until 1151, and one of 1 ms begun
  * 4 ms into tick 1300 until 1301, 6 ms later, where one of 7 ms waits until
  * 1302. A negative second, a negative nanosecond count and one of a whole
- * second are refused. A sleeper that a signal wakes, and that the scheduler
- * switches back to, runs again at once rather than halting, so a sleep of
- * 30 ms begun at 8000 with a signal at 8001 leaves 20 ms. The deadline's
- * tick may come just before the sleep masks, after a yield or after a halt
- * that another interrupt ended; the sleep sees it at once, from 8100 and
+ * second fail with -EINVAL. A sleeper that a signal wakes, and that the
+ * scheduler switches back to, runs again at once rather than halting, so a
+ * sleep of 30 ms begun at 8000 with a signal at 8001 leaves 20 ms. The
+ * deadline's tick may come just before the sleep masks, after a yield or after
+ * a halt that another interrupt ended; the sleep sees it at once, from 8100 and
  * 8200 alike.
  */
 static void sleep_races(void)
@@ -920,8 +941,8 @@ static void sleep_held_clock(void)
  * that the longest timer set at 0x80000001 still lies ahead of it, and
  * seconds past the clamp are shortened to it rather than wrapped. An interval
  * of a second and more reads back whole. An interval of a whole second in
- * microseconds is refused, and so is a getitimer of a timer other than the
- * three. `alarm` rounds the seconds left to the nearest, a half second
+ * microseconds fails with -EINVAL, and so does a getitimer of a timer other
+ * than the three. `alarm` rounds the seconds left to the nearest, a half second
  * up, and to 1 when under a second is left, and leaves no interval.
  */
 static void timer_first_expiry(void)
@@ -990,8 +1011,12 @@ static void timer_first_expiry(void)
     CHECK(call_alarm(0) == 5, "alarm reports 4.5 s left as 5");
 }
 
-/** Read coarse time since boot, which counts the uptime and its ticks here,
- * across the tick wrap and the following whole-second boundary. */
+/**
+ * Coarse time since boot reads the uptime and its ticks across the wrap of
+ * the tick count and into the next second, and leaves interrupts as it found
+ * them. Real time reads the model's; clock 12 gives -EINVAL, and a null
+ * timespec -EFAULT.
+ */
 static void clocks(void)
 {
     isr_params_t p;
@@ -1068,8 +1093,8 @@ static int32_t cpu_clock_id(uint32_t id, int thread, uint32_t which)
  * the 250 ticks of user and 120 of system time the process was charged. A
  * process's CPU clock by id reads that process's time, pid 0 reading the
  * caller's; one clock reads user time alone. A thread clock names only the
- * caller, a clock of no such process and a descriptor's clock are refused,
- * and so are ids 8 and above. With the PIT 41 us into the tick, time since
+ * caller, and a clock of no such process, a descriptor's clock and ids 8 and
+ * above fail with -EINVAL. With the timer 41 us into the tick, time since
  * boot, raw and boot time read 42.050041 s and the coarse clock 42.05 s. Real
  * time and time since boot resolve to the microsecond and the coarse and CPU
  * clocks to the tick, and a resolution may be asked for with no timespec to
@@ -1213,13 +1238,13 @@ static void cpu_clock_sibling(void)
  *
  * The raw and coarse clocks and the thread CPU clock cannot be slept on
  * (EOPNOTSUPP), nor a thread clock by id (EINVAL); an unknown clock and a bad
- * request are refused. An interval sleeps as nanosleep does, three ticks from
- * tick 1000 until 1004, but writes nothing on completion; a signal leaves the
- * whole interval. An absolute time of time since boot, 10.035 s, is reached at
- * tick 1004 from tick 1000, the first tick that reads it; one of real time is
- * counted from the boot's epoch, 1000010.02 s reached at 1002; a time already
- * past returns at once, and a signal leaves no remainder. The caller's CPU
- * clock returns at once for a time it has reached, and a signal ends a wait
+ * request fail with EINVAL. An interval sleeps as nanosleep does, three ticks
+ * from tick 1000 until 1003, but writes nothing on completion; a signal leaves
+ * the whole interval. An absolute time of time since boot, 10.035 s, is reached
+ * at tick 1004 from tick 1000, the first tick that reads it; one of real time
+ * is counted from the boot's epoch, 1000010.02 s reached at 1002; a time
+ * already past returns at once, and a signal leaves no remainder. The caller's
+ * CPU clock returns at once for a time it has reached, and a signal ends a wait
  * for one it has not, leaving the ticks still due of an interval. A signal is
  * pending in each row that must return without sleeping, so a fault that makes
  * one sleep ends it at once instead of waiting out a deadline the model never
@@ -1333,7 +1358,7 @@ static void clock_sleeps(void)
     cpu_clock_sibling();
 }
 
-/** Run the independent syscall state cases. */
+/** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {
     proc.tg = &group;

@@ -1,25 +1,23 @@
 /**
- * Host test for the digest reflash verifies with (utils/sha256.c).
+ * Host test of the SHA-256 that `reflash --verify` prints, utils/sha256.c.
  *
  * host-deps: utils/sha256.c
  *
- * `reflash --verify` reads a range of a disk back and prints its SHA-256, and
- * an installer decides from that whether what reached the disk is what the
- * stick carried. A digest that is subtly wrong would make every install fail,
- * or, worse, make a wrong one pass if the same fault were on both sides; the
- * host's own `shasum` is on the other side, so the vectors below are the
- * published ones rather than anything this tree computes.
+ * `reflash --verify` reads a range of a disk back and prints its SHA-256,
+ * and an installer compares it with the digest of the image it wrote. A
+ * wrong digest would fail every install, or pass a wrong one if the same
+ * fault were on both sides. The host's own `shasum` is on the other side,
+ * so the vectors below are the published ones, not digests this tree
+ * computes.
  *
  * The vectors are FIPS 180-4's two and the standard million-a test, plus the
  * empty message and the block-boundary lengths where the padding rule decides
  * whether one block or two are added: 55 bytes fit their length field in the
  * same block, 56 do not, and 64 is a whole block with nothing left.
  *
- * The million-a test is fed a thousand bytes at a time and again one byte at a
- * time, which is the same message through every boundary the buffer has and is
- * how a digest taken over a disk arrives: in whatever pieces the reads gave.
- *
- * Returns the failed-check count (0 == pass).
+ * The million-a test is fed a thousand bytes at a time, and 200 bytes fed
+ * one at a time must give the digest of the same bytes fed at once: a
+ * digest taken over a disk arrives in whatever pieces the reads gave.
  */
 
 #include <stdio.h>
@@ -49,6 +47,8 @@ static void digest(const void *p, size_t n, char out[65])
     sha256_hex(d, out);
 }
 
+/** Count a failure, with `what` and the digest got, when the digest of
+ * the string `message` is not the hex string `want`. */
 static void vector(const char *message, const char *want, const char *what)
 {
     char got[65];
@@ -60,6 +60,8 @@ static void vector(const char *message, const char *want, const char *what)
     }
 }
 
+/** Run every vector; the exit status is the count of failed checks, at most
+ * 255. */
 int main(void)
 {
     static unsigned char big[1000];

@@ -22,9 +22,8 @@
  * A tick that wakes a sleeper still posts the sleeper's alarm and a later
  * process's. Across the count's wrap, a timer armed again onto tick 0 is due
  * at 1, the tick before 0 serves nothing due after it, and tick 5 posts that
- * timer and wakes the sleeper, whose deadline is 5.
- * `proc_alarm_at` moves a tick that wraps to 0, the value of a disarmed timer,
- * to 1.
+ * timer and wakes the sleeper, whose deadline is 5. `proc_alarm_at` moves a
+ * tick that wraps to 0, the value of a disarmed timer, to 1.
  */
 #include "lib/kint.h"
 struct process;
@@ -82,6 +81,7 @@ void signal_post(process_t *target, int signo)
     }
 }
 
+/** Run every check; 0 when each passes, 1 otherwise. */
 int main(void)
 {
     proc_list = &sleeper;
