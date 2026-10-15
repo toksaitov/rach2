@@ -10,18 +10,21 @@
  * This is the same algorithm as `tools/verify/sha256.c`, which the build's own
  * scripts use, written again here because that one is a host program with a
  * `main` and this is a unit that `reflash` links. Neither is derived from the
- * other, so a mistake in one is caught by the vectors both are held to.
+ * other. `tests/host/sha256_hosttest.c` holds this one to the published
+ * vectors, and the build holds the host program to the digest of every
+ * pinned tarball it checks.
  */
 #ifndef SHA256_H
 #define SHA256_H
 
 #include <stddef.h>
 
+/* A digest in progress. */
 struct sha256 {
-    unsigned long h[8];
-    unsigned long long bytes;
-    unsigned char block[64];
-    size_t fill;
+    unsigned long h[8];       /* the hash words, each held to 32 bits */
+    unsigned long long bytes; /* the message bytes taken so far */
+    unsigned char block[64];  /* the block being filled */
+    size_t fill;              /* the bytes in `block` */
 };
 
 /** Begin a digest. */

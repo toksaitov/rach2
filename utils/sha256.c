@@ -12,6 +12,7 @@
 
 #define M32 0xFFFFFFFFUL
 
+/* The round constants of FIPS 180-4, section 4.2.2. */
 static const unsigned long K[64] = {
     0x428a2f98UL, 0x71374491UL, 0xb5c0fbcfUL, 0xe9b5dba5UL, 0x3956c25bUL, 0x59f111f1UL,
     0x923f82a4UL, 0xab1c5ed5UL, 0xd807aa98UL, 0x12835b01UL, 0x243185beUL, 0x550c7dc3UL,
@@ -25,6 +26,7 @@ static const unsigned long K[64] = {
     0x5b9cca4fUL, 0x682e6ff3UL, 0x748f82eeUL, 0x78a5636fUL, 0x84c87814UL, 0x8cc70208UL,
     0x90befffaUL, 0xa4506cebUL, 0xbef9a3f7UL, 0xc67178f2UL};
 
+/** The 32-bit word `x` rotated right by `n` bits, 0 < `n` < 32. */
 static unsigned long ror(unsigned long x, int n)
 {
     return ((x >> n) | (x << (32 - n))) & M32;

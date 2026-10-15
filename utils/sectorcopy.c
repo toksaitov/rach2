@@ -12,7 +12,8 @@
  * requests. */
 #define CHUNK (2048 * SECTORCOPY_SECTOR)
 
-/** Put a refusal in the caller's buffer, if it asked for one. */
+/** Copy `what` into the caller's buffer, cut to fit and terminated, when it
+ *  gave one. */
 static void say(char *err, size_t errlen, const char *what)
 {
     if (err && errlen > 0) {
@@ -21,17 +22,8 @@ static void say(char *err, size_t errlen, const char *what)
     }
 }
 
-/**
- * Read a decimal number that has to fit 64 bits.
- *
- * Nothing here is signed: an offset into a disk and a count of bytes are both
- * quantities, and a minus sign in either is a mistake to report, not a large
- * number to wrap into. Overflow is caught before it happens, so a number too
- * large for 64 bits is refused, not silently reduced. An empty text is
- * refused as well.
- *
- * @return 0 when `out` has the number, -1 when the text is not one.
- */
+/** The overflow test comes before each digit is taken in, so the sum never
+ *  wraps. */
 int sectorcopy_parse_u64(const char *text, unsigned long long *out)
 {
     unsigned long long v = 0;
@@ -60,19 +52,8 @@ int sectorcopy_parse_u64(const char *text, unsigned long long *out)
     return 0;
 }
 
-/**
- * Judge where the write would land, before a byte of it is read.
- *
- * The length is taken as an argument so that this can be answered first: a
- * stream's length is not known until it ends, so a tool that read first and
- * checked afterwards would already have written part of a disk it was never
- * allowed to touch. The offset and the length must be whole numbers of
- * sectors, the length nonzero, and the range inside a device that reports a
- * size. Every comparison is a subtraction rather than an addition, since
- * `offset + count` can wrap for numbers the parser accepts.
- *
- * @return 0 when the write fits, -1 with the reason in `err`.
- */
+/** Every comparison is a subtraction rather than an addition, since
+ *  `offset + count` can wrap for numbers the parser accepts. */
 int sectorcopy_bounds(unsigned long long device, unsigned long long offset,
                       unsigned long long count, char *err, size_t errlen)
 {
@@ -118,24 +99,11 @@ int sectorcopy_step(unsigned long long done, unsigned long long total, unsigned 
 }
 
 /**
- * Copy exactly `count` bytes from the stream to the device.
- *
  * A read from a pipe returns whatever has arrived, and a raw device takes whole
  * sectors, so the two are joined here, not passed through to each other:
- * bytes accumulate until there is a full `CHUNK` or the count is reached, and
- * only whole sectors are written. The stream must end exactly where it said it
- * would. A short one leaves the disk holding part of an image and the rest of
- * what was there before, which is worse than either, so it is a failure and
- * says how far it got; the whole sectors gathered before it ended are written
- * first, so the count reported is what the disk holds. A longer one means the
- * length this was told is not the length of the thing being written, and the
- * bytes past the count are not written at all: after the count one more read
- * must find the end of the stream, and one that fails is a failure too, since
- * it proves nothing either way.
- *
- * @param written set to the number of bytes written, on success and failure
- *                alike, so a caller can say how far a broken transfer got.
- * @return 0 when the whole count reached the device.
+ * bytes accumulate until there is a full `CHUNK` or the count is reached.
+ * A count that is not a whole number of sectors, which `sectorcopy_bounds`
+ * fails first, leaves bytes held at the end and fails here too.
  */
 int sectorcopy_run(const struct sectorcopy_io *io, unsigned long long count,
                    unsigned long long *written, char *err, size_t errlen)
@@ -199,7 +167,6 @@ int sectorcopy_run(const struct sectorcopy_io *io, unsigned long long count,
         }
     }
     if (held != 0) {
-        /* Not whole sectors, which sectorcopy_bounds already refuses. */
         say(err, errlen, "the stream ended inside a sector");
         return -1;
     }

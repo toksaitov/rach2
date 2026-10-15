@@ -1,14 +1,13 @@
 /**
- * Write a stream onto a raw device:
+ * reflash: write a stream onto a raw device,
  * `reflash [-p] [--verify] DEVICE OFFSET BYTES`.
  *
- * Read the image from standard input.
- *
- * Obtain the target partition's start and size from the machine's
- * partition table. OFFSET is its starting sector multiplied by 512.
- * BYTES is the image's uncompressed length and must fit the partition.
- * Both values must be multiples of 512. The program checks the device
- * boundary; it does not check which partition the range occupies.
+ * The image comes from standard input. To write a partition of a whole disk,
+ * take its start and size from the machine's partition table: OFFSET is its
+ * starting sector multiplied by 512, and BYTES, the image's uncompressed
+ * length, must fit the partition. Both values must be multiples of 512. The
+ * program checks the device's end; it does not check which partition the
+ * range occupies.
  *
  * `-p` prints how far the write has got, on standard error, every sixteen
  * mebibytes and once at the end: a person watching an install of a gibibyte
@@ -21,8 +20,8 @@
  * that range; it does not establish that the chosen offset is correct.
  *
  * Only a kernel built for recovery may write the whole disk; on any other
- * the device refuses, and this reports that refusal, not a partial
- * write.
+ * the write to the device fails, and this reports that failure, not a
+ * partial write.
  */
 
 #include <errno.h>
@@ -73,8 +72,9 @@ static void note(void *ctx, unsigned long long done, unsigned long long total, u
 }
 
 /**
- * Read `count` bytes at `offset` back from the open device and print their
- * digest.
+ * Read `count` bytes at `offset` back from the open device `path` and print
+ * their digest, with progress lines when `show` is set. Returns 0, or 1
+ * having said why not.
  *
  * The read is in the same units the write used, and a short read is a failure:
  * a device that stops answering part way through must not yield the digest of
