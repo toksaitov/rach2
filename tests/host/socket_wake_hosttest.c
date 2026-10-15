@@ -208,6 +208,15 @@ void tcp_window_update(struct socket *sock)
     (void)sock;
 }
 
+/** Report every host range brought in: no row receives into a buffer. */
+int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
+{
+    (void)addr;
+    (void)len;
+    (void)write;
+    return 1;
+}
+
 /** Unbind a UDP socket: a no-op. */
 void udp_unbind(struct socket *sock)
 {
