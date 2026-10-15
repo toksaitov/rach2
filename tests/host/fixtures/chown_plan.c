@@ -3,8 +3,9 @@
  *
  * tests/host/chown_mutate.sh extracts `vfs_chown_plan` and the three
  * credential helpers it calls unchanged from a copy of
- * rach2/sys/syscall_fs.c into chown_plan.inc, with `struct vfs_stat` and
- * the `VFS_SET_` masks from rach2/sys/fs/vfs.h and `EPERM` from
+ * rach2/sys/syscall_fs.c into chown_plan.inc, with the `proc_privileged`
+ * macro from rach2/sys/proc/process.h, `struct vfs_stat` and the
+ * `VFS_SET_` masks from rach2/sys/fs/vfs.h and `EPERM` from
  * rach2/sys/lib/kerrno.h. The chown by path and the chown by descriptor
  * both decide through that plan for every volume but the boot root, so
  * these rows are their rule: a directory keeps its set-id bits, setuid goes
@@ -12,26 +13,30 @@
  * group-execute is set beside it, which is the rule `cred_kill_setid`
  * applies on the boot root. That the two calls reach the plan is shown on
  * an ext2 root by `modeprobe`, not here. The caller's record has only the
- * fields the helpers read.
+ * fields the helpers and the macro read.
  */
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
+/** A user namespace other than the first, which the macro tests only for
+ * presence. */
+struct userns {
+    uint32_t level;
+};
+
 struct fixture_proc {
     uint32_t euid;
     uint32_t egid;
     uint32_t nocaps;
+    struct userns *userns; /* NULL in the first user namespace */
     uint32_t ngroups;
     uint32_t groups[8];
 };
 
 static struct fixture_proc caller;
 static struct fixture_proc *current_proc = &caller;
-
-/* `cred_privileged` calls this. The macro in rach2/sys/proc/process.h also
- * requires that the process have no user namespace, which this record lacks. */
-#define proc_privileged(p) ((p)->euid == 0 && !(p)->nocaps)
+static struct userns child_ns = {1};
 
 #include "chown_plan.inc"
 
@@ -51,9 +56,10 @@ static void check(int ok, const char *what)
 }
 
 /** Set the caller's effective ids and one supplementary group, or none when
- * `group` is 0. */
+ * `group` is 0, in the first user namespace. */
 static void as_caller(uint32_t euid, uint32_t egid, uint32_t group)
 {
+    caller.userns = NULL;
     caller.euid = euid;
     caller.egid = egid;
     caller.ngroups = group ? 1u : 0u;
@@ -101,6 +107,28 @@ static void privileged_rows(void)
     check(what == (VFS_SET_UID | VFS_SET_GID) && st.uid == 2000 && st.gid == 2000 &&
               st.mode == (FILE_MODE | 0644u),
           "root gives a file to any owner and group, and a mode without set-id bits stays");
+}
+
+/** Root of a user namespace other than the first has no privilege over a
+ * file, and is held to an owner's rules. */
+static void namespace_rows(void)
+{
+    struct vfs_stat st;
+    int what;
+
+    as_caller(0, 0, 0);
+    caller.userns = &child_ns;
+    st = attrs(FILE_MODE | 04755u, 1000, 1000);
+    what = vfs_chown_plan(&st, 0, 0);
+    check(what == -EPERM && st.uid == 1000 && st.gid == 1000 && st.mode == (FILE_MODE | 04755u),
+          "root of another user namespace may not take a file it does not own");
+    st = attrs(FILE_MODE | 0644u, 0, 0);
+    what = vfs_chown_plan(&st, 1000, UNCHANGED);
+    check(what == -EPERM && st.uid == 0,
+          "root of another user namespace may not give its file away");
+    what = vfs_chown_plan(&st, UNCHANGED, 555);
+    check(what == -EPERM && st.gid == 0,
+          "root of another user namespace may not give its file to a group it is not in");
 }
 
 /** An owner without privilege changes the group within its own groups, and
@@ -151,6 +179,7 @@ static void stranger_rows(void)
 int main(void)
 {
     privileged_rows();
+    namespace_rows();
     owner_rows();
     stranger_rows();
     if (fails) {
