@@ -35,10 +35,11 @@
 # label `grouped`, and sets STATUS, Ready unless given, so that N returns to
 # the queue as an issue of its own.
 #
-# `ready AFTER N...` sets each N Ready and moves it after AFTER on the board,
-# the first N after AFTER and each later one after the one before. `order N...`
-# sets each N Ready, moves the first to the top of the board and each later
-# one after the one before, ahead of every issue it does not name.
+# `ready AFTER N...` moves each N after AFTER on the board, the first N after
+# AFTER and each later one after the one before, and then sets it Ready, so
+# that no worker finds it Ready in its old place. `order N...` does the same
+# with the first N moved to the top of the board, ahead of every issue it does
+# not name.
 #
 # `group TITLE N...` makes a group, one issue that a worker takes in place of
 # its members N..., at most eight of them, each open, unassigned, in no other
@@ -215,8 +216,8 @@ ready()
     shift
     for n; do
         i=$(item "$n")
-        set_status "$n" Ready
         move "$i" "$prev"
+        set_status "$n" Ready
         prev=$i
         printf '%s ' "$n"
     done
@@ -228,8 +229,8 @@ order()
     prev=
     for n; do
         i=$(item "$n")
-        set_status "$n" Ready
         move "$i" "$prev"
+        set_status "$n" Ready
         prev=$i
         printf '%s ' "$n"
     done
