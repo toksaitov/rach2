@@ -8,9 +8,11 @@
 # architecture, `bigmem` last and alone; tools/ci/report.sh files what fails
 # as core runs do, under the status `ci/night/ARCH`. A run that a person
 # cancels reports nothing. GitHub cancels a job that passes its time limit
-# too, so each architecture's step has a limit of its own, which leaves time
-# inside the job's for the report; an architecture that runs out of time is
-# reported as unfinished.
+# too, so each architecture has 340 minutes of its own inside the job's,
+# which leave time for the report. At the limit timeout(1) sends TERM to the
+# run's process group, and run.sh ends once tests/run has stopped its
+# machines, so that the next architecture starts on a free tree; the
+# architecture that ran out of time is reported as unfinished.
 name: night
 
 on:
@@ -49,17 +51,14 @@ jobs:
           fetch-depth: 0
 
       - name: i686
-        timeout-minutes: 340
-        continue-on-error: true
         env:
           ARCH: i686
-        run: sh tools/ci/run.sh night "$RUNNER_TEMP/results/night-i686" || true
+        run: timeout -k 60 340m sh tools/ci/run.sh night "$RUNNER_TEMP/results/night-i686" || true
 
       - name: x86_64
-        timeout-minutes: 340
         env:
           ARCH: x86_64
-        run: sh tools/ci/run.sh night "$RUNNER_TEMP/results/night-x86_64" || true
+        run: timeout -k 60 340m sh tools/ci/run.sh night "$RUNNER_TEMP/results/night-x86_64" || true
 
       - name: keep the i686 result
         if: always()

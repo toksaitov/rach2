@@ -13,7 +13,10 @@
 # without which a reader takes the run as unfinished. The night runs
 # `bigmem`, which needs the host alone, as a run of its own after the rest,
 # so that the other suites share the host with the day's runs. The exit
-# status is 0 when nothing failed.
+# status is 0 when nothing failed. A TERM to the run's process group, which
+# timeout(1) sends at the workflow's time limit, ends the run without `done`
+# once the step it interrupts has stopped, so that tests/run stops its
+# machines before the next run starts; the status is then 143.
 #
 set -u
 
@@ -31,10 +34,23 @@ mkdir -p "$out/kept"
 : > "$out/log"
 : > "$out/start"
 
+# The shell runs this trap only after the pipeline it waits for has ended.
+trap 'echo "ci: $kind: stopped on $ARCH" | tee -a "$out/log"; exit 143' TERM
+
+# Copy standard input to standard output and to FILE..., as tee does, but
+# ignore TERM, so that what a stopping tests/run prints reaches the log and
+# its writes do not end it by SIGPIPE before its machines are stopped. It
+# runs only as an element of a pipeline, a subshell of its own, which it
+# replaces with tee, so that the shell waits for tee itself.
+copy() { # copy [-a] FILE...
+    trap '' TERM
+    exec tee "$@"
+}
+
 # Run a command with its output on the job's log and in DIR/log, and return
 # the command's own status, which a pipe into tee would lose.
 step() {
-    { "$@" 2>&1; echo "$?" > "$out/rc"; } | tee -a "$out/log"
+    { "$@" 2>&1; echo "$?" > "$out/rc"; } | copy -a "$out/log"
     return "$(cat "$out/rc")"
 }
 
@@ -47,7 +63,7 @@ step() {
 run_set() { # run_set NAME ARGS...
     name=$1; shift
     : > "$out/set.log"
-    { tests/run "$@" 2>&1; echo "$?" > "$out/rc"; } | tee "$out/set.log" | tee -a "$out/log"
+    { tests/run "$@" 2>&1; echo "$?" > "$out/rc"; } | copy "$out/set.log" | copy -a "$out/log"
     rc=$(cat "$out/rc")
     [ "$rc" = 0 ] && return 0
     failed=$(awk '
