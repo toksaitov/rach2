@@ -4,37 +4,38 @@
  * Of the set-id programs here, `su`, `sudo` and this one, it is the only one
  * that writes. It is setuid root because `/etc/shadow` is 0600 root, and it
  * decides what its caller may do from the real uid: this binary is 04755, so
- * `geteuid()` is 0 for everyone who runs it and a test on the effective uid
- * would authorize the world. The rule is general, and `sudo` follows it too: a
- * set-id program takes its authority from the real uid and uses the effective
- * one only to act.
+ * `geteuid()` is 0 for everyone who runs it, and a test of the effective uid
+ * would let everyone through. `sudo` follows the same rule: a set-id program
+ * takes its authority from the real uid and uses the effective one only to
+ * act.
  *
- * Usage: `passwd [user]`, the account defaulting to the caller's own. Naming
- * another account is the administrative exception and needs `getuid() == 0`.
- * Root changes any password without proving the old one; everyone else proves
- * the account's current password first.
+ * Usage: `passwd [--] [user]`, the account defaulting to the caller's own.
+ * Naming another account needs a real uid of 0. Root changes any password
+ * without giving the old one; everyone else gives the account's current
+ * password first.
  *
- * Read and authenticate before acquiring the credential lock. Under the lock,
- * reread both databases and recheck the target's uniqueness, the caller's
- * ownership, and the stored hash. Build the replacement from the current shadow
- * file, preserving its other fields, and validate the resulting record before
- * publication.
+ * The program reads and authenticates before it takes the credential lock.
+ * Under the lock it reads both databases again and checks again that the
+ * target is named once, that a caller other than root still has the target's
+ * uid, and that the stored hash is the one read before the prompts. It builds
+ * the replacement from the current shadow file, keeping every other field,
+ * and checks the resulting record before it publishes it.
  *
- * A name that appears more than once in either database is refused, naming the
- * file that has it, and nothing is changed. musl's parsers all stop at the
- * first match, so a duplicate is an error nowhere and an ambiguity everywhere:
- * which line authenticates a login and which one a change rewrites would be
- * decided by file order, and the two decisions can pick different lines, so the
- * account would go on answering to a password this program reported as changed.
+ * A name that appears more than once in either database is an error, which
+ * names the file that has it, and nothing is changed. musl's parsers all stop
+ * at the first match, so which line authenticates a login and which one a
+ * change rewrites would be decided by file order, the two can be different
+ * lines, and the account would go on taking a password this program reported
+ * as changed.
  *
- * The salt is minted after the old password is accepted and before the new one
- * is asked for, so a machine with no trusted entropy refuses without first
- * collecting a secret it cannot use. Nothing here hashes with an untrusted salt
- * and nothing falls back. The new password is read twice and must agree, and an
- * empty one is refused: an empty shadow field admits everyone.
+ * The salt is made after the old password is accepted and before the new one
+ * is asked for, so a machine with no trusted entropy fails before it collects
+ * a secret it cannot use. Nothing here hashes with an untrusted salt, and
+ * nothing falls back to one. The new password is read twice and must match,
+ * and an empty one is not accepted, since it would let anyone in.
  *
- * The credential library manages signal dispositions during password input
- * and the transaction.
+ * The credential library manages the signal dispositions during password
+ * input and during the transaction.
  */
 
 #define _GNU_SOURCE /* crypt */
@@ -54,38 +55,38 @@
 #define SHADOW_FILE "/etc/shadow"
 
 /* Room for either database read whole. The staged images hold a handful of
- * accounts; a file past this is refused, not truncated. */
+ * accounts; a larger file is an error, not truncated. */
 #define TEXT_MAX 16384
 
-/* The longest shadow record the readers can use, and where the number comes
- * from. musl's `getspnam` reads a line into a 256-byte buffer, and its loop
- * refuses a matching record whose last character is not a newline: an
- * over-long line comes back from `fgets` without one and is rejected with
- * `ERANGE`, and so is a well-formed last line in a file that simply lacks a
- * final newline. Either way the caller sees NULL, which `pwauth_verify` and
- * dropbear both read as "no such account". So a record of 255 bytes or more
- * with its newline, or a target line with no newline after it, is one this
- * program must refuse to write, not publish and call changed. */
+/* The longest shadow record, without its newline, that the readers can use.
+ * musl's `getspnam` reads a line into a 256-byte buffer and fails with
+ * `ERANGE` on a matching record whose last character is not a newline: a line
+ * too long comes back from `fgets` without one, and so does a well-formed last
+ * line in a file that has no final newline. Either way the caller gets NULL,
+ * which `pwauth_verify` and Dropbear both take as "no such account". So a
+ * record of 255 bytes or more before its newline, or a target line with no
+ * newline after it, is one this program must not publish and call changed. */
 #define SHADOW_RECORD_MAX 254
 
-/* A shadow line is a name, a hash and seven aging fields. The hash is the only
- * one this program rewrites, and the rest are carried across untouched. */
+/* A shadow line is a name, a hash and seven numeric fields. The hash is the
+ * only one this program rewrites, and the rest are copied unchanged. */
 #define SHADOW_FIELDS 9
 
 /* A passwd record musl will parse: six colons, so seven fields. */
 #define PASSWD_FIELDS 7
 
 /**
- * Read the whole of `path` into `buffer`, terminating it. Returns the length,
- * or -1 having said why.
+ * Read the whole of `path` into `buffer`, of `size` bytes, terminating it.
+ * Returns the length, or -1 after a diagnostic for a file that cannot be
+ * read, does not fit, or has a NUL byte.
  *
  * The file is read whole because every question here is about the whole of it:
  * how many lines have a name, and what the other lines are, since they must
  * come through byte for byte.
  *
  * Read through `read` and not `fread`, to keep the credential text out of a
- * second buffer that nothing here would clear. A file holding a NUL byte is
- * refused, not shortened: every parse below stops at the first NUL, so the
+ * second buffer that nothing here would clear. A file with a NUL byte is an
+ * error, not shortened: every parse below stops at the first NUL, so the
  * rewrite would publish the database with the rest cut off.
  */
 static long slurp(const char *path, char *buffer, size_t size)
@@ -131,8 +132,8 @@ static long slurp(const char *path, char *buffer, size_t size)
 /**
  * How many lines of `text` name `user` in their first colon-separated field.
  *
- * Counting instead of finding, because the count is what decides whether the
- * answer means anything, and the parse is the same either way.
+ * It counts rather than finds, because only a count of one makes the line
+ * found mean anything, and the parse is the same either way.
  */
 static int count_entries(const char *text, const char *user)
 {
@@ -178,19 +179,19 @@ static int all_digits(const char *text)
 
 /**
  * Read the uid out of the `n` colon-separated fields of a passwd record into
- * `*out`. Returns 1 when the record is one musl's parser will accept, and so
- * one every reader in the image resolves.
+ * `*out`. Returns 1 when the record is one musl's parser accepts, and so one
+ * every reader in the image resolves, and 0 otherwise.
  *
- * `__getpwent_a` walks six colons and then reads the uid and the gid with a
- * digit loop that must land exactly on the next colon, so a record with fewer
+ * `__getpwent_a` needs six colons, and reads the uid and the gid with a digit
+ * loop that must end exactly at the next colon, so a record with fewer
  * fields, or one whose uid reads `1000junk`, is skipped entirely: `getpwnam`
  * and `getpwuid` answer as if the account were not there. A parser here that
  * accepted it would authenticate against a name no reader can resolve and
  * publish a password for an account nobody can enter, then report success. The
- * arithmetic wraps the way musl's does instead of saturating the way `strtoul`
- * does, so the two cannot disagree about which uid an absurd field names. An
- * empty numeric field is refused although musl reads it as 0, because a blank
- * uid silently meaning root is not a thing to carry into a credential writer.
+ * arithmetic wraps as musl's does instead of saturating as `strtoul` does, so
+ * the two agree about which uid an absurd field names. An empty numeric field
+ * is rejected although musl reads it as 0, because a credential writer should
+ * not take a blank uid to mean root.
  */
 static int record_uid(char *const *field, int n, uid_t *out)
 {
@@ -211,12 +212,12 @@ static int record_uid(char *const *field, int n, uid_t *out)
 /**
  * Copy the name of the account whose uid is `uid` out of `text` into `out`.
  * Returns 0 when exactly one line has it, and -1 when none or several do or
- * the name does not fit in `out`; a name too long is a refusal, not a match,
- * so a 0 never leaves `out` unset.
+ * the name does not fit in `out`; a name too long returns -1, not a match, so
+ * a 0 always leaves `out` set. A line of 512 bytes or more is skipped.
  *
- * The caller's name is taken from the same image the replacement is built from,
- * so a `getpwuid` racing the rewrite cannot name an account this program is
- * about to remove from under itself.
+ * The caller's name is taken from the same text the replacement is built
+ * from, so it agrees with that text, where a `getpwuid` racing another
+ * writer's rewrite could answer from a different file.
  */
 static int name_of_uid(const char *text, uid_t uid, char *out, size_t size)
 {
@@ -263,8 +264,8 @@ static int name_of_uid(const char *text, uid_t uid, char *out, size_t size)
 }
 
 /**
- * Copy `user`'s line out of `text` into `out`, without its newline. Returns 0
- * when a line named it and the line fit.
+ * Copy the first line of `text` that names `user` into `out`, without its
+ * newline. Returns 0 when a line named it and the line fit, and -1 otherwise.
  */
 static int line_of(const char *text, const char *user, char *out, size_t size)
 {
@@ -298,7 +299,7 @@ static int line_of(const char *text, const char *user, char *out, size_t size)
  *
  * It catches a file whose last line has no terminator: the reader rejects a
  * matching record that does not end in one, so publishing it would leave an
- * account that answers to nothing while this program reported the password
+ * account that no password opens while this program reported the password
  * changed.
  */
 static int line_terminated(const char *text, const char *user)
@@ -324,16 +325,17 @@ static int line_terminated(const char *text, const char *user)
 
 /**
  * True when `line` is a shadow record this program may rewrite: nine
- * colon-separated fields, with every aging field empty or decimal.
+ * colon-separated fields, the ninth ending the line, with every field after
+ * the hash empty or decimal.
  *
- * A record that does not parse is refused, not replaced, because a
+ * A record that does not parse is left as it is, not replaced, because a
  * replacement that keeps a malformed line's shape publishes a file that this
  * program calls changed and that every reader goes on rejecting: `getspnam`
- * wants the nine fields, so the account would answer to no password at all and
- * the user would be told their new one was set. Only the target's own line is
+ * needs the nine fields, so the account would take no password at all and the
+ * user would be told their new one was set. Only the target's own line is
  * checked. The rest come through byte for byte and are not this program's to
- * judge, and refusing the whole file for a line nobody asked about would make
- * one bad record lock every account out of a password change.
+ * judge, and failing the whole file for a line nobody asked about would let
+ * one bad record stop every account's password change.
  */
 static int shadow_line_ok(const char *line)
 {
@@ -354,7 +356,6 @@ static int shadow_line_ok(const char *line)
             }
         }
         if (!stop) {
-            /* The last field is the only one that may end the line. */
             return n == SHADOW_FIELDS - 1;
         }
         field = stop + 1;
@@ -364,9 +365,9 @@ static int shadow_line_ok(const char *line)
 }
 
 /**
- * Copy the hash field of `user`'s line in the shadow `text` into `out`.
- * Return 0 after copying the hash. Return -1 if the account is absent or the
- * hash does not fit.
+ * Copy the hash field of the first line of the shadow `text` that names
+ * `user` into `out`. Returns 0, or -1 if the account is absent or the hash
+ * does not fit.
  */
 static int hash_of(const char *text, const char *user, char *out, size_t size)
 {
@@ -403,9 +404,9 @@ static int hash_of(const char *text, const char *user, char *out, size_t size)
  * Write into `out` the shadow `text` with `user`'s hash field replaced by
  * `hash`. Returns the length, or -1 when it would not fit.
  *
- * Every other byte of the file comes through untouched, the aging fields of the
- * changed line included: this program has one field's worth of business in a
- * file it must otherwise reproduce exactly.
+ * Every other byte of the file comes through unchanged, the other fields of
+ * the changed line included: this program changes one field of a file it
+ * must otherwise reproduce exactly.
  */
 static long replace_hash(const char *text, const char *user, const char *hash, char *out,
                          size_t size)
@@ -460,18 +461,18 @@ static long replace_hash(const char *text, const char *user, const char *hash, c
  * with a dash, which is otherwise a usage error. Naming one's own account is
  * the same request as naming none; naming another needs real uid 0.
  *
- * The lock is taken once nothing is left to type, and held across a reread, a
- * recheck and the publish, which is microseconds, not however long a person
- * takes to choose a password. Under it the caller's claim is checked again,
- * not only the record: a caller that is not root must still have the target's
- * uid, since while the password was typed the account may have been removed,
- * renamed or had its uid given to somebody else. The target must still be
- * named by exactly one passwd line, since `getpwnam` takes the first of two and
- * the hash would then authenticate somebody else's uid, and its stored hash
- * must be the one read before the prompts.
+ * The lock is taken once nothing is left to type, and held across a second
+ * read, a second check and the publish, which take microseconds, not however
+ * long a person takes to choose a password. Under it the caller's claim is
+ * checked again, not only the record: a caller that is not root must still
+ * have the target's uid, since while the password was typed the account may
+ * have been removed, renamed or had its uid given to somebody else. The target
+ * must still be named by exactly one passwd line, since `getpwnam` takes the
+ * first of two and the hash would then authenticate somebody else's uid, and
+ * its stored hash must be the one read before the prompts.
  *
  * The record about to be published is measured and parsed as a reader will
- * meet it: a longer hash can push it past `SHADOW_RECORD_MAX`, and the file
+ * read it: a longer hash can push it past `SHADOW_RECORD_MAX`, and the file
  * may have been edited meanwhile in a way that leaves the hash alone (an aging
  * field turned to junk, the last newline removed), which `replace_hash` would
  * copy through.

@@ -1,32 +1,33 @@
 /**
- * su: become another user (root by default) after proving their password.
+ * su: become another user (root by default) after giving their password.
  *
  * This is Rach2's su, the companion to the reference sudo: a small setuid-root
  * program that authenticates against `/etc/shadow` and then runs a shell as
- * the target. It is os-simple's way up. os-real climbs through busybox's own
- * su instead, from a second build of three applets, since making the whole
- * megabyte setuid would hand every applet in it root. The two images run the
- * same job in this project's code and in the code a real system ships.
+ * the target. os-simple stages it, as do the test images. The BusyBox images
+ * stage BusyBox's own su instead, from a second build of three applets, since
+ * making the whole BusyBox binary setuid would give every applet in it root.
+ * So the two images do the same job, one in this project's code and one in
+ * the code a real system ships.
  *
  * Usage: `su [-] [-l|--login] [user] [-c command]`, user defaulting to root.
- * The caller proves the target's password (root is exempt, as always), read
- * through the credential library so the terminal does not echo it; su resolves
- * the target through `getpwnam`, verifies the `/etc/shadow` hash, drops to the
- * target's group and then user (the order matters: privilege to set the gid is
- * gone once the uid drops), builds the target's environment from nothing rather
- * than inherit the caller's (the shell expands variables like `PATH` and `PS1`,
- * so a carried-over one could run the caller's code as the target), and execs
- * the target's shell.
+ * A caller other than root gives the target's password, read through the
+ * credential library so the terminal does not echo it; su resolves the target
+ * through `getpwnam`, checks the `/etc/shadow` hash, sets the target's group
+ * and then its user (in that order, since the right to set the gid is gone
+ * once the uid has changed), builds the target's environment from nothing
+ * rather than keep the caller's (the shell expands variables such as `PATH`
+ * and `PS1`, so one carried over could run the caller's code as the target),
+ * and execs the target's shell.
  *
- * Login mode is three things and is entered by a bare `-`, by `-l`, or by
- * `--login`: the target's home becomes the working directory, `argv[0]` becomes
+ * Login mode is entered by a bare `-`, by `-l`, or by `--login`, and does three
+ * things: the target's home becomes the working directory, `argv[0]` becomes
  * a `-` followed by the shell's base name (`-sh` for `/bin/sh`), which is how a
  * shell here is told it is a login shell, and the environment is the one su
- * already builds from nothing. A home that cannot be entered is fatal rather
- * than a warning: the directory and the dash are the whole of `-`, so
- * continuing would run a login shell in the caller's directory and call it a
- * login. The home is entered as the target, so one the target cannot reach
- * refuses the login instead of being opened with root's privilege. Without
+ * builds from nothing in any case. A home that cannot be entered is fatal
+ * rather than a warning: the directory and the dash are all that `-` changes,
+ * so continuing would run a login shell in the caller's directory and call it
+ * a login. The home is entered as the target, so one the target cannot reach
+ * fails the login instead of being opened with root's privilege. Without
  * login mode the working directory stays the caller's and `argv[0]` is the
  * shell's path.
  *
@@ -34,10 +35,9 @@
  * image's accounts have none to add.
  *
  * The password comparison, the terminal handling, and the signal handling
- * belong to `pwauth.c`, which is also what `passwd`, `adduser` and `login`
- * authenticate through. su holds no credential lock: a reader takes none, so no
- * stuck writer can keep anyone out of the box. There is no PAM or login.defs
- * policy layer.
+ * belong to `pwauth.c`, which `login` and `passwd` use too. su takes no
+ * credential lock: no reader takes one, so no stuck writer can keep anyone
+ * from logging in. There is no PAM or login.defs policy layer.
  */
 
 #define _GNU_SOURCE /* setgroups */
@@ -50,7 +50,7 @@
 
 #include "pwauth.h"
 
-/* Rach2 permits descriptors 0 through 1023. */
+/* Descriptors on Rach2 are 0 to 1023 (`FD_TABLE_LIMIT`, rach2/sys/fs/fd.h). */
 #define MAX_FD 1024
 
 /** Print the usage line and return the exit status a usage error takes. */
@@ -78,11 +78,12 @@ static const char *base_name(const char *path)
  * Parse the arguments, authenticate the caller as the target, and exec the
  * target's shell as the target.
  *
- * Every argument is accounted for: an unrecognized option is a usage error,
- * never a discarded one, and a second operand is one too. The real root user
- * bypasses password verification. Other callers must authenticate the target
- * account. An unknown target is reported before prompting. Every descriptor
- * above standard error is closed before the identity changes.
+ * Every argument is accounted for: an unknown option is a usage error, never
+ * one ignored, and so is a second operand; both exit 2. A caller whose real
+ * uid is 0 gives no password, and any other caller must give the target
+ * account's. An unknown target is reported before the prompt. Every
+ * descriptor above standard error is closed before the identity changes. Any
+ * other failure exits 1; on success the shell runs in the program's place.
  */
 int main(int argc, char **argv)
 {

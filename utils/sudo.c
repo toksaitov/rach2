@@ -1,24 +1,23 @@
 /**
  * sudo: run a command as root, if the real user is permitted.
  *
- * This is Rach2's reference sudo, the answer key to the coursework exercise:
- * the kernel gives a setuid program everything it needs and nothing more, and
- * a working sudo is about a hundred lines on top of it. It is staged only into
- * the test image, where `sudoprobe` tests it; the os-real image ships `su` and
- * leaves this for the student to write.
+ * This is Rach2's reference sudo, the answer to a coursework exercise: with
+ * the kernel's set-uid exec, a working sudo is about a hundred lines. Only the
+ * test image stages it, for `sudoprobe`; the other images stage `su` and
+ * leave sudo for the student to write.
  *
  * The program runs setuid root (the exec gave it effective uid 0 while the real
  * uid is still the caller's). It reads `/etc/sudoers`, a list of the numeric
- * uids allowed to use it, one per line, `#` starting a comment. The check is
- * against the REAL uid, the identity the caller cannot forge, not the effective
- * uid the setuid bit just handed over. A permitted caller gets a clean
- * environment (an attacker must not steer a root program through PATH or the
- * like), root in all three uids and gids, and the requested command; anyone
- * else is refused.
+ * uids allowed to use it, one per line; any other line, a `#` comment among
+ * them, permits nobody. The check is of the real uid, which the caller cannot
+ * change, and not of the effective uid the set-uid bit gave. A permitted
+ * caller gets a fixed environment, so that no variable of the caller's, `PATH`
+ * among them, can steer a root program, root as all three uids and gids, and
+ * the command; anyone else gets an error and status 1.
  *
  * Usage: `sudo <command> [args...]`, where `<command>` is a path: it is not
- * looked up in `PATH`. Deliberately omitted, and left for the exercise to add:
- * per-command rules, a password prompt, and TTY handling.
+ * looked up in `PATH`. Left out for the exercise to add: per-command rules, a
+ * password prompt, and terminal handling.
  */
 
 #define _GNU_SOURCE /* setresuid */
@@ -30,7 +29,7 @@
 
 #define SUDOERS "/etc/sudoers"
 
-/* Rach2 permits descriptors 0 through 1023. */
+/* Descriptors on Rach2 are 0 to 1023 (`FD_TABLE_LIMIT`, rach2/sys/fs/fd.h). */
 #define MAX_FD 1024
 
 /* A fixed, minimal environment for the command: never the caller's, which a
@@ -38,9 +37,10 @@
 static char *const clean_env[] = {(char *)"PATH=/bin:/usr/bin", (char *)"HOME=/root", NULL};
 
 /**
- * Read one line into `line`, returning its length, -1 at the end or on a read
- * error, or -2 for a line this reader refuses: one with a NUL byte or longer
- * than the buffer.
+ * Read one line of `f` into `line`, of `size` bytes, without its newline.
+ * Returns its length, -1 at the end or on a read error, or -2 for a line it
+ * does not accept, one with a NUL byte or longer than `size - 1`, which it
+ * reads to its end.
  */
 static int sudoers_line(FILE *f, char *line, size_t size)
 {
@@ -94,11 +94,12 @@ static int line_names_uid(const char *line, unsigned long uid)
 }
 
 /**
- * Return 1 when a complete line of /etc/sudoers names `uid` and nothing else.
+ * Return 1 when a complete line of /etc/sudoers names `uid` and nothing else,
+ * and 0 otherwise.
  *
- * Blank lines and comments are skipped, and a line this reader refuses is
- * skipped rather than read in part. A missing or unreadable file permits no
- * one.
+ * Blank lines and comments are skipped, and a line `sudoers_line` does not
+ * accept is skipped whole rather than read in part. A missing or unreadable
+ * file permits no one.
  */
 static int permitted(unsigned long uid)
 {
@@ -132,6 +133,8 @@ static int permitted(unsigned long uid)
  * in `/etc/sudoers`.
  *
  * Every descriptor above standard error is closed before the identity changes.
+ * Exits 2 for a usage error and 1 for a caller not listed or a failure to
+ * become root or to exec; on success the command runs in the program's place.
  */
 int main(int argc, char **argv)
 {

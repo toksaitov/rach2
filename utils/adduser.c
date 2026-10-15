@@ -1,23 +1,23 @@
 /**
  * adduser: create an account in `/etc/shadow`, `/etc/group` and `/etc/passwd`.
  *
- * Root's, and deliberately not setuid: it refuses a caller whose `getuid()` is
- * not 0 before it opens anything. Having no set-id bit means its real and
- * effective uids are the same and there is nothing here to confuse, but it
- * tests the real uid all the same, because that is the rule every program in
- * this tree that decides an identity question follows.
+ * It is root's program and has no set-id bit: a caller whose `getuid()` is
+ * not 0 gets an error before anything is opened. Without a set-id bit its real
+ * and effective uids are the same, but it tests the real uid all the same,
+ * because that is the rule every program in this tree that decides an
+ * identity question follows.
  *
- * Usage: `adduser [-u number] [-s shell] name`. The shell defaults to
- * `/bin/sh` and is not checked for existence, since an account may legitimately
- * be created before the program it logs in to is staged.
+ * Usage: `adduser [-u number] [-s shell] [--] name`. The shell defaults to
+ * `/bin/sh` and is not checked for existence, since an account may be created
+ * before the program it logs in to is staged.
  *
  * It writes three databases and a home directory and holds one transaction
- * across all four. Every check is made against the one image read under the
+ * across all four. Every check is made against the one copy read under the
  * lock: the name must be absent from all three files, the number must be free
  * as a uid and as a gid, and with no `-u` the lowest number at or above
  * `ADDUSER_FIRST_UID` free in both is chosen. Choosing a number outside the
- * lock is exactly how two concurrent runs hand out the same uid, so the read,
- * the choice and the writes are one transaction, not three.
+ * lock is how two concurrent runs hand out the same uid, so the read, the
+ * choice and the writes are one transaction, not three.
  *
  * `/etc/shadow` is in the absence check and not only in the write list. It is
  * published first, so a crash after that one rename leaves the name there and
@@ -29,28 +29,29 @@
  *
  * The publication order is chosen so that every prefix of it is a consistent
  * system, because the lock excludes another writer and only the order survives
- * a crash: KRFFS has no journal, a replacement publishes one file at a time,
- * and a failure part way through publishes nothing further while undoing
- * nothing already published. So: shadow with a locked `!` field, then group,
- * then the home directory, then passwd. The account becomes visible only at the
- * last step, so no interruption leaves a passwd field of `x` with no shadow
- * entry, nor a gid that names no group. A failure says which prefix it
- * published (`report_partial`), a later run names the files that hold the name
- * (`refuse_present`), and root removes those lines by hand.
+ * a crash: neither KRFFS nor ext2 has a journal, a replacement publishes one
+ * file at a time, and a failure part way through publishes nothing further
+ * while undoing nothing already published. So: shadow with a locked `!` field,
+ * then group, then the home directory, then passwd. The account becomes
+ * visible only at the last step, so no interruption leaves a passwd field of
+ * `x` with no shadow entry, nor a gid that names no group. A failure says
+ * which prefix it published (`report_partial`), a later run names the files
+ * that have the name (`refuse_present`), and root removes those lines by hand.
  *
  * It never resumes a partial account and never rolls one back. Resuming would
- * mean deciding that a partial state is a residue instead of something an
- * operator wrote by hand, and adopting a uid it did not choose; rolling back
- * would mean a second series of replacements, each able to fail the way the
- * first did, on files another writer may since have changed. So a name present
- * in some of the three files is refused, naming exactly the files that hold it.
+ * mean deciding that a partial state is the remains of a crashed run instead
+ * of something an operator wrote by hand, and adopting a uid it did not
+ * choose; rolling back would mean a second series of replacements, each able
+ * to fail the way the first did, on files another writer may since have
+ * changed. So a name present in some of the three files is an error that
+ * names exactly the files that have it.
  *
- * The transaction is dropped before the password program is exec'd: the lock
- * is a file, it outlives `execve`, and a transaction carried across the exec
- * would leave `passwd` waiting on its own predecessor's lock until it refused.
- * Until that `passwd` succeeds the field stays `!` and the account cannot be
- * entered, which is why shadow is written first and why a failure there needs
- * nothing undone.
+ * The transaction is ended before the password program is exec'd: the lock is
+ * a file, it outlives `execve`, and a transaction carried across the exec
+ * would leave `passwd` waiting for the lock of the program that ran it until
+ * it gave up. Until that `passwd` succeeds the field stays `!` and the account
+ * cannot be entered, which is why shadow is written first and why a failure
+ * there needs nothing undone.
  */
 
 #include <stdio.h>
@@ -68,7 +69,7 @@
 #define SHADOW_FILE "/etc/shadow"
 #define GROUP_FILE  "/etc/group"
 
-/* Room for a database read whole; a file past this is refused, not
+/* Room for a database read whole; a larger file is an error, not
  * truncated. */
 #define TEXT_MAX 16384
 
@@ -94,8 +95,9 @@
 #define PUBLISHED_PASSWD 4
 
 /**
- * Read the whole of `path` into `buffer`, terminating it. Returns the length,
- * or -1 having said why.
+ * Read the whole of `path` into `buffer`, of `size` bytes, terminating it.
+ * Returns the length, or -1 after a diagnostic for a file that cannot be
+ * read, does not fit, or has a NUL byte.
  *
  * Read through `read` and not `fread`: the file is wanted whole, and a direct
  * read is one call, not a buffered layer over the same bytes.
@@ -273,11 +275,12 @@ static long append_line(char *text, size_t size, const char *line)
 }
 
 /**
- * Say what was published and that none of it was undone, then return `status`.
+ * Say what was published and that none of it was undone, then return `status`;
+ * with nothing published, say nothing.
  *
- * Where this program fails instead of crashing there is someone to tell, so it
- * tells them: a partial account is not repaired by the next run, and the files
- * it names are the ones root edits.
+ * A failure that is not a crash can be reported, and it is: a partial account
+ * is not repaired by the next run, and the files this names are the ones root
+ * edits.
  */
 static int report_partial(int published, int status)
 {
@@ -298,14 +301,14 @@ static int report_partial(int published, int status)
 }
 
 /**
- * Say what is live but may not be on the platter, and return this program's
+ * Say what is live but may not be on the disk, and return this program's
  * failing status.
  *
  * `CRED_UNFLUSHED` is not a failed write: the replacement is already the file
- * the system authenticates against, and only the writeback is in doubt. So the
- * publication counts, and what stops is the rest of it, since building the next
- * file on one that may not survive a power cut would multiply the ways a reboot
- * could disagree with what this program just reported.
+ * the system authenticates against, and only the write-back is in doubt. So
+ * the publication counts, and what stops is the rest of it, since building the
+ * next file on one that may not survive a power cut would add ways for a
+ * reboot to disagree with what this program just reported.
  */
 static int report_unflushed(int published)
 {
@@ -316,13 +319,14 @@ static int report_unflushed(int published)
 }
 
 /**
- * Refuse `name` for the databases that already hold it, and say which.
- * Returns 1 when one did, which is this program's failing status.
+ * Report the databases that already have `name`, the flags saying which.
+ * Returns 1 when any has it, which is this program's failing status, and 0
+ * otherwise.
  *
- * The refusal distinguishes a live account from a residue because the two want
- * different repairs: an account that exists is not this run's business, while a
- * name in some of the files is a crashed run's leftovers, and root removes
- * those lines by hand.
+ * The message tells a live account from a crashed run's leftovers, because
+ * the two need different repairs: an account that exists is not this run's
+ * business, while a name in some of the files is what a crashed run left, and
+ * root removes those lines by hand.
  */
 static int refuse_present(const char *name, int in_shadow, int in_group, int in_passwd)
 {
@@ -359,11 +363,12 @@ static int refuse_present(const char *name, int in_shadow, int in_group, int in_
 
 /**
  * Hand the new account to the password program, which is what gives it a
- * password at all. Does not return except on failure.
+ * password at all. Returns 1, after a diagnostic, only when the program
+ * cannot be executed.
  *
  * The transaction is already released: the lock is a file and survives an
- * `execve`, so a program that kept it here would hold its own successor off
- * for the ten tries the library makes before refusing.
+ * `execve`, so a program that kept it here would hold `passwd` off for the ten
+ * tries the library makes before it gives up.
  */
 static int hand_to_passwd(const char *name)
 {
@@ -378,17 +383,18 @@ static int hand_to_passwd(const char *name)
 }
 
 #ifdef ADDUSER_CRASH_POINT
-/* The crash build, staged in the test image alone and never in a shipped
- * image. It takes a leading count and dies the instant that publication has
- * landed, inside the transaction and through `_exit`, so it leaves exactly the
- * residue and exactly the lock a real crash leaves. Everything it adds is
- * under `ADDUSER_CRASH_POINT`, so the shipped binary has neither the argument
- * nor the code.
+/* The crash build, which only the test image stages. It takes a leading
+ * count, a `PUBLISHED_*` value, and exits through `_exit` as soon as that
+ * publication is made, inside the transaction, so it leaves the files and
+ * the lock a crash at that point leaves. Everything it adds is under
+ * `ADDUSER_CRASH_POINT`, so the shipped binary has neither the argument nor
+ * the code.
  */
 static int Crash_after = 0;
 
 /**
- * Die if publication `published` is the one this build was told to stop after.
+ * Exit at once, with status 9, if `published` is the publication this run
+ * was told to stop after.
  */
 static void crash_check(int published)
 {
@@ -401,14 +407,15 @@ static void crash_check(int published)
 #endif
 
 /**
- * Create an account and hand it to `passwd`.
+ * Create an account and hand it to `passwd`. Exits 1 on any failure; on
+ * success `passwd` runs in its place.
  *
  * The name must be usable in every database and short enough for the console
- * to read: `login` refuses an over-long line instead of answering for its
- * prefix, so an account named past `PWAUTH_MAX_NAME` is one nobody could
- * enter at the keyboard.
+ * to read: `login` rejects an over-long line instead of reading its prefix,
+ * so an account named past `PWAUTH_MAX_NAME` is one nobody could enter at the
+ * keyboard.
  *
- * The home directory counts as published the instant it exists, before it has
+ * The home directory counts as published as soon as it exists, before it has
  * its owner, so a failure or a kill between the two still reports the
  * directory it left. The owner is set before the mode, since setting an owner
  * clears the set-id bits of whatever mode was there.
