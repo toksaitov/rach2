@@ -504,10 +504,12 @@ The flush selector is outside 0 through 2, the foreground group ID
 is not positive, or an interface address, mask, broadcast address, or
 gateway is invalid.
 Adding a default route with gateway zero is invalid.
-The audio driver refused the rate, format or channel count of
+The audio driver refused the arguments of
 .Dv AUDIO_START :
-Sound Blaster 16 takes rates from 5000 through 44100 and HDA those
-through 384000 that its codec can play.
+HDA refuses a rate of 0 or above 384000, an unknown format, a channel
+count other than 1 or 2, and a format its codec cannot play;
+Sound Blaster 16 refuses only a rate outside 5000 through 44100;
+the PC speaker refuses nothing.
 .Dv AUDIO_WRITE
 was given a zero size, or no stream is playing.
 .It Bq Er EIO

@@ -10,7 +10,7 @@ The boot calls `init_audio` (`audio.c`) once, unless the command line has `rach2
 
 ### The driver interface
 
-`audio_driver_t` has `init`, `shutdown`, `start`, `stop`, `is_playing`, `set_callback`, `write` and `set_volume`. `start(rate, format, channels)` takes a rate in samples per second, `AUDIO_U8` (unsigned 8-bit) or `AUDIO_S16LE` (signed 16-bit little-endian), and one or two channels; it stops a stream already playing and returns 0, -EINVAL for a rate, format or channel count the device does not take, or -EIO when the device fails. There is one stream for the machine. A caller feeds it in one of two ways:
+`audio_driver_t` has `init`, `shutdown`, `start`, `stop`, `is_playing`, `set_callback`, `write` and `set_volume`. `start(rate, format, channels)` takes a rate in samples per second, `AUDIO_U8` (unsigned 8-bit) or `AUDIO_S16LE` (signed 16-bit little-endian), and one or two channels, and returns 0, -EINVAL for parameters the driver refuses, or -EIO when the device fails. Each driver checks its own: HDA refuses a rate of 0 or above 384000, an unknown format, a channel count other than 1 or 2 and a format its codec cannot play; the SB16 refuses only a rate outside 5000 to 44100 Hz, plays any format other than `AUDIO_S16LE` as unsigned 8-bit and any channel count other than 2 as mono; the speaker refuses nothing. HDA checks before it stops a stream already playing, the SB16 after. There is one stream for the machine. A caller feeds it in one of two ways:
 
 * With a callback set by `set_callback` before `start`, the driver calls it to fill a whole DMA period: twice during `start`, then once for each period played. Those later calls run in interrupt context, from the device's interrupt or, on HDA, the timer tick, so the callback must not sleep. A period is 16384 bytes on HDA and 160 bytes on SB16.
 * With no callback, `write` copies bytes into the driver's ring, 8192 bytes on HDA and 1280 on SB16, and returns how many it took. That may be fewer than offered, or 0 when the ring is full, and the caller retries the rest; -EINVAL means the stream is not playing or the buffer is empty, and the speaker's `write` is always -EOPNOTSUPP. The interrupt side takes only whole frames, and a period it cannot fill is completed with silence.
@@ -74,7 +74,7 @@ Each DAC's capabilities are its Supported PCM Size, Rates and Supported Stream F
 
 ### PC speaker
 
-`sys/speaker.h` declares `speaker_on(hz)` and `speaker_off()`. `sys/arch/x86/speaker.c` programs channel 2 of the 8254 in mode 3, a square wave, with 1193182 divided by the frequency, clamped to 0xFFFF (about 18 Hz), and sets bits 0 and 1 of port 0x61 to connect the channel to the speaker; 0 Hz and `speaker_off` clear them. `speaker_driver` in `audio.c` accepts `start` and plays nothing: its `write` returns -1 and it never calls a callback.
+`sys/speaker.h` declares `speaker_on(hz)` and `speaker_off()`. `sys/arch/x86/speaker.c` programs channel 2 of the 8254 in mode 3, a square wave, with 1193182 divided by the frequency, clamped to 0xFFFF (about 18 Hz), and sets bits 0 and 1 of port 0x61 to connect the channel to the speaker; 0 Hz and `speaker_off` clear them. `speaker_driver` in `audio.c` accepts `start` with any arguments and plays nothing: its `write` returns -EOPNOTSUPP and it never calls a callback.
 
 ## Limits
 

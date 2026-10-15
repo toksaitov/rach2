@@ -49,9 +49,10 @@ typedef struct audio_driver {
     /*
      * Start playback. `sample_rate` is samples per second (e.g. 11025,
      * 22050, 44100); `format` is AUDIO_U8 or AUDIO_S16LE; `channels` is
-     * 1 (mono) or 2 (stereo). Returns 0 on success, -EINVAL for a rate,
-     * format or channel count the device does not take, or -EIO when the
-     * device fails to start.
+     * 1 (mono) or 2 (stereo). Returns 0 on success, -EINVAL for arguments
+     * the driver refuses, or -EIO when the device fails to start. Each driver
+     * checks only what its device needs: HDA all three, the SB16 the rate
+     * alone, and the PC speaker nothing.
      */
     int (*start)(uint32_t sample_rate, audio_format_t format, int channels);
 
