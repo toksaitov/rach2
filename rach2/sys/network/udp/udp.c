@@ -1,11 +1,8 @@
 /*
- * udp.c - User Datagram Protocol.
- *
- * Header (8 bytes, big-endian): src_port, dst_port, length, checksum.
- * A heap-allocated binding list maps destination ports to sockets, each
- * bound to one address of this machine or to any (`local_ip` 0).
- * udp_rx looks up the address and port and hands the payload to
- * socket_udp_deliver.
+ * udp.c: UDP, as udp.h describes it: the list of bindings, which maps a port
+ * at an address of this machine, or at any (`local_ip` 0), to a socket, and
+ * the datagrams received and sent. The 8-byte header is, big-endian, the
+ * source port, destination port, length and checksum.
  */
 
 #include "../../klog.h"
@@ -20,8 +17,8 @@
 #include "../../lib/kstring.h"
 #include "../../mm/kheap.h"
 
-/* Maps a destination UDP port to the socket that should receive its data:
-   one record from the heap per bound socket, on a list. */
+/* A destination port and the socket that receives its datagrams: one record
+   from the heap for each binding, on a list, the newest first. */
 typedef struct udp_binding {
     struct udp_binding *next;
     uint16_t port;
@@ -36,6 +33,7 @@ static uint8_t udp_tx_buf[UDP_HDR_SIZE + 1500];
 /* Next ephemeral port to try (kept inside the 49152-65535 range). */
 static uint16_t udp_next_ephemeral = 49152;
 
+/** Whether a binding has `port`, at any address. */
 static int udp_port_in_use(uint16_t port)
 {
     const udp_binding_t *b;
@@ -48,19 +46,8 @@ static int udp_port_in_use(uint16_t port)
     return 0;
 }
 
-/**
- * Bind a socket to a UDP port so udp_rx can route inbound datagrams to it.
- *
- * A binding takes the port at the socket's `local_ip`, and so meets another
- * on the same port when either is to any address or both are to the same
- * one, as on Linux: 127.0.0.1 and an interface's address may each have a
- * server on port 53. A port met that way may be shared only when the new
- * socket and every binding it meets enable `SO_REUSEADDR`, and every one was
- * created under the caller's effective uid. The function updates the binding
- * list under `net_lock`.
- *
- * @return 0 on success, -1 on a conflict, -ENOMEM with no memory.
- */
+/** Two bindings to different addresses do not meet, as on Linux:
+ * 127.0.0.1 and an interface's address may each have a server on port 53. */
 int udp_bind(uint16_t port, struct socket *sock)
 {
     udp_binding_t *b;
@@ -103,15 +90,12 @@ int udp_bind(uint16_t port, struct socket *sock)
 }
 
 /**
- * Bind a socket to a free ephemeral port in the 49152-65535 range.
- *
- * Scans forward from udp_next_ephemeral, wrapping at the top of the range, and
- * binds the first free port. A send from a socket without a port
- * (`dgram_send`), a `bind` to port 0 and a `connect` call this. The port is
- * recorded in `sock->local_port`, so the socket's later sends do not bind a
- * fresh port each time and its close unbinds it.
- *
- * @return the bound port, or 0 if none could be allocated.
+ * The scan goes forward from `udp_next_ephemeral`, wrapping at the top of
+ * the range, and stops at the first failure to allocate, since no other port
+ * would help. A send from a socket without a port (`dgram_send`), a `bind`
+ * to port 0 and a `connect` call this. The port is recorded in
+ * `sock->local_port`, so that the socket's later sends do not bind a fresh
+ * port each time and its close unbinds it.
  */
 uint16_t udp_bind_ephemeral(struct socket *sock)
 {
@@ -127,7 +111,7 @@ uint16_t udp_bind_ephemeral(struct socket *sock)
             int rc = udp_bind(port, sock);
 
             if (rc == -ENOMEM) {
-                return 0; /* no port would help */
+                return 0;
             }
             if (rc == 0) {
                 sock->local_port = port;
@@ -139,8 +123,6 @@ uint16_t udp_bind_ephemeral(struct socket *sock)
 }
 
 /**
- * Remove every binding `sock` has, under `net_lock`.
- *
  * Bindings are matched by socket and not by port: two sockets may share a
  * port, and releasing the first entry with that port would take the other
  * one's binding away and leave this one's behind.
@@ -166,26 +148,12 @@ void udp_unbind(struct socket *sock)
 }
 
 /**
- * Demultiplex one received UDP datagram to its bound socket.
- *
- * Called with interrupts off from `ip_rx`. Drops the datagram if it is
- * shorter than the header, if its length field is below the header's size or
- * above the bytes received (a short length would underflow the payload
- * length and hand adjacent receive memory to user space), or if no socket
- * takes it. The checksum is not verified. The payload is handed to
- * socket_udp_deliver along with the sender's address and port.
- *
- * A socket bound to an address takes only datagrams to that address. A port
- * may have more than one socket on it. The one connected to the sender takes
- * the datagram, because it asked for that sender by name, and a renewal's
- * answer must not go to a socket that is merely listening; otherwise the
- * first unconnected one bound to the datagram's address takes it, or the
- * first bound to any address.
- *
- * @param data the UDP header followed by its payload.
- * @param len  bytes actually received, the upper bound on the wire length.
- * @return -1 when no socket has the port, which `ip_rx` answers with a port
- *         unreachable, and 0 otherwise, a malformed datagram included.
+ * A length field below the header's size would underflow the payload's
+ * length and hand the receive memory after it to user space. The socket
+ * connected to the sender takes the datagram before any other, because it
+ * asked for that sender by name, and a renewal's answer must not go to a
+ * socket that is merely listening. The payload goes to `socket_udp_deliver`
+ * with the sender's address and port.
  */
 int udp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
 {
@@ -238,12 +206,6 @@ int udp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
     return 0;
 }
 
-/**
- * Report a port unreachable from `remote_ip` for a datagram sent from
- * `local_port` to `remote_port`: a socket connected to that peer takes
- * ECONNREFUSED as its pending error and its waiters wake. An unconnected
- * socket is not told, as Linux tells none without IP_RECVERR.
- */
 void udp_refused(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port)
 {
     const udp_binding_t *b;
@@ -260,15 +222,9 @@ void udp_refused(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port)
 }
 
 /**
- * Build a UDP datagram around the payload and hand it to IP for transmission.
- *
- * The maximum payload is 1472 bytes, leaving room for the IPv4 and UDP
- * headers within the 1500-byte MTU. Larger payloads return `-EMSGSIZE`: from
- * here above 1500 bytes, the transmit buffer's size, and from `ip_tx` below.
- * The checksum field is left zero, which IPv4 permits to disable checksumming.
- * The shared TX buffer is filled and queued under net_lock, since an
- * IRQ-context sender must not reenter it (net.h). The return value is the
- * contract in udp.h.
+ * The largest payload is 1472 bytes, the 1500-byte MTU less the IPv4 and UDP
+ * headers. The shared transmit buffer is filled and sent under `net_lock`,
+ * since a sender in an interrupt must not enter it at the same time (net.h).
  */
 int udp_tx(const struct socket *sock, uint32_t dst_ip, uint16_t dst_port, const uint8_t *payload,
            uint16_t plen)
