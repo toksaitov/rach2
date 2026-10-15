@@ -49,7 +49,6 @@ static page_table_t *alloc_page_table(void)
 
     table = mem_reserve_ptr(sizeof(page_table_t), true);
     if (table) {
-        /* mem_reserve marks the frame too once the table exists. */
         frame_take_boot((uintptr_t)table / PAGE_SIZE);
         k_memset(table, 0, sizeof(page_table_t));
     }
@@ -84,8 +83,6 @@ static page_dir_t *alloc_page_dir(void)
 
     dir = mem_reserve_ptr(sizeof(page_dir_t), true);
     if (dir) {
-        /* Mark the frames as used in the table. page_dir_t is 8KB (2 pages),
-         * so mark both frames. */
         uintptr_t frame = (uintptr_t)dir / PAGE_SIZE;
         uintptr_t num_frames = (sizeof(page_dir_t) + PAGE_SIZE - 1) / PAGE_SIZE;
         uintptr_t i;
@@ -412,7 +409,7 @@ pte_t *mmu_user_table(page_dir_t *dir, uintptr_t va, int create)
         dir->phys_page_tables[table_index] = (uint32_t)table_phys(table) | PTE_P | PTE_W | PTE_U;
         dir->logical_page_tables[table_index] = table;
     } else if (!(dir->phys_page_tables[table_index] & PTE_U)) {
-        dir->phys_page_tables[table_index] |= PTE_U; /* make table user-accessible */
+        dir->phys_page_tables[table_index] |= PTE_U;
     }
     return table->pages;
 }
@@ -458,12 +455,10 @@ void free_user_pages(page_dir_t *dir)
             continue;
         }
 
-        /* Skip shared kernel page tables */
         if (table == _kernel_dir->logical_page_tables[dir_idx]) {
             continue;
         }
 
-        /* A private page table: check each page. */
         for (page_idx = 0; page_idx < 1024; page_idx++) {
             pte_t pte = table->pages[page_idx];
             uintptr_t virt_addr;
@@ -477,22 +472,16 @@ void free_user_pages(page_dir_t *dir)
             virt_addr = ((uintptr_t)dir_idx << 22) | ((uintptr_t)page_idx << 12);
             phys_addr = PTE_ADDR(pte);
 
-            /* Skip identity-mapped kernel region (first 32MB) */
             if (virt_addr < HARD_MEMORY_LIMIT) {
                 continue;
             }
 
             if (phys_addr == 0 || phys_addr == table_phys(table)) {
-                /* Clear the garbage entry but don't try to free frame */
                 table->pages[page_idx] = 0;
                 continue;
             }
 
-            /* Drop this mapping's reference; the frame returns to the pool only
-             * when its last reference (e.g. a COW-sharing sibling) is gone. */
             frame_unref(phys_addr);
-
-            /* Clear page table entry */
             table->pages[page_idx] = 0;
 
             paging_flush_dir(dir, virt_addr);
@@ -501,12 +490,9 @@ void free_user_pages(page_dir_t *dir)
 }
 
 /**
- * Free a page directory and all its private page tables. Call this after
- * free_user_pages() to release the directory structures themselves; the
- * directory and its private page tables go back to the heap.
- *
- * The kernel directory and the active one are refused and so left in place:
- * a caller switches to another directory first.
+ * Give a page directory and its private page tables back to the heap,
+ * after `free_user_pages` has dropped its pages. The kernel directory and
+ * the one loaded are left in place: a caller switches to another first.
  */
 void free_page_directory(page_dir_t *dir)
 {
@@ -517,19 +503,14 @@ void free_page_directory(page_dir_t *dir)
         return;
     }
 
-    /* Free all private page tables (not shared with kernel) */
     for (dir_idx = 0; dir_idx < 1024; dir_idx++) {
         table = dir->logical_page_tables[dir_idx];
         if (!table) {
             continue;
         }
-
-        /* Skip shared kernel page tables */
         if (table == _kernel_dir->logical_page_tables[dir_idx]) {
             continue;
         }
-
-        /* A private page table: back to the heap. */
         free_page_table(table);
         dir->logical_page_tables[dir_idx] = NULL;
         dir->phys_page_tables[dir_idx] = 0;

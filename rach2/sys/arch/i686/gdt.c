@@ -1,3 +1,8 @@
+/*
+ * gdt.c: each processor's GDT, built and loaded, and the base of its TLS
+ * entry.
+ */
+
 #include "gdt.h"
 #include "tss.h"
 #include "../x86/smpboot.h"
@@ -44,19 +49,14 @@ void init_gdt_cpu(uint32_t cpu)
     _gdt_set_descriptor(gdt, 2, 0, 0xFFFFFFFF, 0x92, 0xCF); /* Kernel data */
     _gdt_set_descriptor(gdt, 3, 0, 0xFFFFFFFF, 0xFA, 0xCF); /* User code */
     _gdt_set_descriptor(gdt, 4, 0, 0xFFFFFFFF, 0xF2, 0xCF); /* User data */
-    /* TSS descriptor: access 0x89 = present, DPL 0, type 0x9 (32-bit TSS
-     * available) */
+    /* The TSS: access 0x89, present, DPL 0, an available 32-bit TSS. */
     _gdt_set_descriptor(gdt, 5, (uint32_t)&kernel_tss[cpu], tss_limit, 0x89, 0x00);
-    /* TLS descriptor (entry 6): same shape as user data (present, DPL 3, 4 GB
-     * R/W data); base is reprogrammed at runtime by set_thread_area and the
-     * context switch. Present from boot so loading 0x33 into %gs never faults
-     * even before a thread has set its area. */
+    /* TLS: as user data, present from boot so that %gs can load 0x33. */
     _gdt_set_descriptor(gdt, GDT_TLS_ENTRY, 0, 0xFFFFFFFF, 0xF2, 0xCF);
     /* The double fault's TSS, entry 7: the same access byte as entry 5's. */
     _gdt_set_descriptor(gdt, DOUBLE_FAULT_TSS_SELECTOR >> 3, (uint32_t)&double_fault_tss[cpu],
                         tss_limit, 0x89, 0x00);
-    /* The processor's own segment, entry 8: present, DPL 0, read/write data,
-     * byte granular, just long enough for its record. */
+    /* The processor's own: DPL 0 data, byte granular, as long as its record. */
     _gdt_set_descriptor(gdt, GDT_PERCPU_ENTRY, (uint32_t)&cpus[cpu], sizeof(cpus[cpu]) - 1, 0x92,
                         0x40);
 

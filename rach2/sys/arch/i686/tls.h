@@ -4,16 +4,17 @@
 #include "../../lib/kint.h"
 
 /*
- * Thread-local storage, the i386 way: a GDT descriptor whose base is the
- * thread control block, reached through %gs. This mirrors Linux's i386
- * set_thread_area(2) and struct user_desc mechanism, the same syscall and ABI
- * musl's __set_thread_area calls from __init_tls. See ../tls.Readme.md.
+ * i686 thread-local storage: GDT entry 6, whose base is the thread pointer,
+ * reached through %gs and set by set_thread_area(2) with a struct user_desc,
+ * as on Linux i386, which musl's __set_thread_area calls. See
+ * ../tls.Readme.md.
  */
 
 /*
- * The descriptor a set_thread_area caller passes (Linux i386 struct user_desc).
- * The bitfield word is kept as a plain uint32_t with the bit masks below so the
- * layout matches exactly what the C library pushes on the stack.
+ * Linux i386's struct user_desc, the argument of set_thread_area and of
+ * clone's CLONE_SETTLS. Linux declares the flags as bit-fields; here they are
+ * one word read with the masks below, so that the layout does not depend on
+ * the compiler's order of bit-fields.
  */
 struct user_desc {
     uint32_t entry_number;
@@ -34,8 +35,16 @@ typedef struct user_desc user_desc_t;
 #define UD_SEG_NOT_PRESENT 0x20u /* bit 5    : descriptor not present     */
 #define UD_USEABLE         0x40u /* bit 6    : AVL bit                    */
 
-/** Validate a user_desc and output its TLS base; 0 ok, -1 if
- * unrepresentable. */
+/**
+ * Check the descriptor `u` and store the base it asks for in `*base_out`.
+ *
+ * The descriptor must ask for the one TLS entry the kernel has: entry -1,
+ * any free one, or GDT_TLS_ENTRY, as a present, 32-bit, writable data
+ * segment. The limit, its granularity and the usable bit are ignored, since
+ * the entry always has a 4 GiB limit.
+ *
+ * @return 0, or -1 for a null argument or a descriptor refused.
+ */
 int tls_resolve_base(const user_desc_t *u, uint32_t *base_out);
 
 #endif /* _TLS_H_ */

@@ -1,3 +1,7 @@
+/*
+ * The i686 Global Descriptor Table: the nine entries each processor has,
+ * and the selectors the kernel and user mode load from them.
+ */
 #ifndef _GDT_H_
 #define _GDT_H_
 
@@ -30,9 +34,10 @@ typedef struct gdt_ptr gdt_ptr_t;
 #define GDT_ENTRY_COUNT 9
 
 /**
- * Thread-local-storage descriptor slot. `set_thread_area` programs its base to
- * the per-process TCB and the context switch rewrites it on every switch.
- * Mirrors the dedicated TLS GDT entry Linux i386 uses (GDT_ENTRY_TLS_MIN).
+ * The TLS entry, a user data segment whose base is the running thread's
+ * thread pointer: `set_thread_area` writes it, and switch.s writes the
+ * incoming thread's at every switch. Linux i386's first TLS entry,
+ * GDT_ENTRY_TLS_MIN, is also 6.
  */
 #define GDT_TLS_ENTRY    6
 #define GDT_TLS_SELECTOR ((GDT_TLS_ENTRY << 3) | 3) /* index 6, RPL 3 -> 0x33 */
@@ -63,9 +68,10 @@ struct i686_cpu {
 /** Each processor's Global Descriptor Table. */
 extern gdt_descriptor_t gdt_descriptors[NR_CPUS][GDT_ENTRY_COUNT];
 
-/** Build the boot processor's GDT and load it: the loader calls this before
- * the first C code, so that %fs has the processor's own segment from then
- * on, and the boot calls it again with the rest of the processor's tables. */
+/** Build the boot processor's GDT and load it: loader.s calls this before
+ * k_main, so that %fs has the processor's own segment from the first C code
+ * on, and `platform_cpu_init` (x86/platform.c) calls it again with the rest of
+ * the processor's tables. */
 void init_gdt(void);
 
 /** Build processor `cpu`'s GDT and load it on the processor running this. */

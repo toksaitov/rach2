@@ -1,7 +1,7 @@
 /*
- * context.c: what an i686's switch_context (switch.s) finds on a kernel
- * stack, built for a process's first switch, and the record's offsets it
- * reads.
+ * context.c: the i686 thread frames of ../arch.h: the kernel stack a new or
+ * forked thread's first switch_context (switch.s) finds, an exec's user
+ * frame, and the check of the record's offsets switch.s reads.
  */
 
 #include "../arch.h"
@@ -18,9 +18,10 @@ extern void isr_return(void);
 /* The offsets switch.s reads from the process record, as `.set` values
  * there and as numbers here; a field added before one of them stops the
  * GNU build. TinyCC cannot fold an offset into an array size, so a kernel it
- * builds finds the change at boot, in `init_proc`, which checks every
- * build. A host test compiles the record with 64-bit pointers, where the
- * offsets differ, and skips the compile-time check. */
+ * builds finds the change at boot, in `init_proc` (proc/process.c), which
+ * calls `arch_context_check` in every build. A host test compiles the
+ * record with 64-bit pointers, where the offsets differ, and skips the
+ * compile-time check. */
 #define PROC_OFF(field)       ((uint32_t)&((process_t *)0)->field)
 #define PROC_OFF_REGS_ESP     48u
 #define PROC_OFF_KERNEL_STACK 56u
@@ -47,7 +48,8 @@ void switch_space(const process_t *next);
 
 /**
  * Load the page directory `next` runs in, unless it is the one this
- * processor has loaded and no shootdown passed it by; switch.s calls it. A
+ * processor has loaded and no shootdown has marked it stale; switch.s calls
+ * it. A
  * record with none, an idle task or a kernel thread, runs in whatever is
  * loaded, whose kernel half is every directory's, so a process that blocks
  * and wakes again on this processor finds its directory still loaded
@@ -69,11 +71,9 @@ void switch_space(const process_t *next)
 }
 
 /**
- * Prime a new process's kernel stack for its first context switch.
- *
- * `switch_context` restores callee-saved registers and rets, so it expects
- * the stack to look as if it had pushed them. The frame this builds, from
- * high to low address:
+ * `switch_context` pops the callee-saved registers and returns, so a new
+ * thread's stack is laid out as if it had pushed them, from high to low
+ * address:
  *
  *     [entry_point]  return address (where execution begins)
  *     [ebp]          saved EBP (0 for a new process)
@@ -94,12 +94,11 @@ void arch_context_init(process_t *proc, void (*entry_point)(void))
 }
 
 /**
- * Lay out `child`'s kernel stack for its first switch, from the parent's
- * trap frame `params`: the frame, with 0 in EAX, fork's return, and the new
- * stack pointer `newsp` a clone asks for, when it asks; above it the return
- * address `isr_return` and the four registers `switch_context` pops. When
- * the child is first scheduled, switch_context pops EDI, ESI, EBX and EBP,
- * returns to isr_return, and the frame takes it to user mode.
+ * The child's stack has a copy of the parent's frame at its top, with fork's
+ * 0 in EAX and `newsp` as the user stack pointer when it is not 0, and below
+ * it the return address `isr_return` (isr_handler.s) and the four registers
+ * `switch_context` pops; its first switch returns to isr_return, which takes
+ * the frame back to user mode.
  */
 void arch_fork_frame(process_t *child, const isr_params_t *params, uintptr_t newsp)
 {
@@ -131,7 +130,7 @@ void arch_exec_frame(isr_params_t *p, uintptr_t entry, uintptr_t sp)
     p->ecx = 0;
     p->esi = 0;
     p->edi = 0;
-    p->gs = 0x23; /* the user data segment, GDT entry 4 at ring 3 */
+    p->gs = 0x23; /* the user data selector, GDT entry 4 at RPL 3 */
     p->fs = 0x23;
     p->es = 0x23;
     p->ds = 0x23;

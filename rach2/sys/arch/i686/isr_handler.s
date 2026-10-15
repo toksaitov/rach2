@@ -1,11 +1,11 @@
-# Interrupt entry stubs, one per vector, written out in full.
+# The i686 interrupt entry: a stub for each vector, and the common entries
+# and returns the stubs jump to.
 #
-# Every stub was once produced by a GAS .macro. The stubs are explicit now so
-# that one source assembles under both toolchains that build this kernel:
-# GNU as, and tcc's assembler, whose directive set has no .macro. Each stub
-# disables interrupts, pushes an error code slot and its vector number, and
-# jumps to the common handler, so the handler always finds the same frame,
-# reading from the stack pointer toward higher addresses:
+# The stubs are written out in full because tcc's assembler, one of the two
+# that assemble this kernel, has no .macro. Each stub disables interrupts,
+# pushes an error code slot and its vector number, and jumps to the common
+# handler, so the handler always finds the same frame, reading from the stack
+# pointer toward higher addresses:
 # [vector][error code][iret frame].
 #
 # Two shapes exist because the CPU pushes an error code for some exceptions
@@ -252,14 +252,17 @@ isr128:
     pushl $128
     jmp isr_common_handler
 
-# Common ISR handler
+# The common entry of the exceptions and the system call: it completes the
+# frame of struct isr_params (cpu.h) with the general and segment registers,
+# loads the kernel's selectors, and calls _isr_router (isr.c) with
+# interrupts off. A system call's handler (_syscall_handler, syscall.c) sets
+# in_syscall before it enables interrupts, so a timer interrupt never finds a
+# frame half built, and disables them again before it returns here.
 .globl isr_common_handler
 isr_common_handler:
     pusha
 
-    # Save the interrupted segment registers individually so the per-process
-    # %gs TLS pointer survives this interrupt/syscall. Pushed ds, es, fs, gs so
-    # gs lands at the lowest frame address (struct isr_params: gs, fs, es, ds).
+    # ds, es, fs, gs, so that gs has the lowest address, as isr_params has it.
     movw %ds, %ax
     pushl %eax
     movw %es, %ax
@@ -269,8 +272,6 @@ isr_common_handler:
     movw %gs, %ax
     pushl %eax
 
-    # Run the kernel with the kernel data selector in ds/es/gs and the
-    # processor's own segment in fs.
     movw $0x10, %ax
     movw %ax, %ds
     movw %ax, %es
@@ -279,31 +280,22 @@ isr_common_handler:
     movw $0x40, %ax
     movw %ax, %fs
 
-    # Enter the router with IF=0. The syscall handler (_syscall_handler) sets
-    # the per-process in_syscall flag and only THEN does sti, closing the window
-    # in which a timer IRQ could preempt a half-built trapframe; it cli's again
-    # before returning here, so the epilogue restores segments/%gs atomically and
-    # iret restores the caller's IF. IRQ stubs run with IF=0 throughout.
-    pushl %esp          # Push pointer to isr_params_t structure
+    pushl %esp          # the frame, an isr_params_t *
     call _isr_router
-    addl $4, %esp       # Clean up pushed pointer
+    addl $4, %esp
 
-# Fork child return point - child processes jump here after switch_context
-# Stack must contain: isr_params_t (gs, fs, es, ds, pusha regs, vector,
-# error, iret frame)
+# The return through the frame at the stack pointer, where a forked child's
+# first switch also lands (arch_fork_frame, context.c). isr_leave (isr.c)
+# delivers a pending signal on a return to user mode, which may rewrite the
+# frame or end the thread, and gives back the big lock the entry took; then
+# the segment registers the entry saved, the TLS selector in gs among them,
+# are loaded again, and iret restores IF from the saved EFLAGS.
 .globl isr_return
 isr_return:
-    # Before returning to user mode, deliver any pending signal: this may rewrite
-    # the trapframe (run a handler) or not return at all (default-terminate). It
-    # is a no-op when returning to kernel mode (it checks the saved CS RPL). Then
-    # give back the big lock the entry took (isr_leave, isr.c). Runs with IF=0,
-    # so it cannot be preempted. esp still points at the trapframe.
     pushl %esp
     call isr_leave
     addl $4, %esp
 
-    # Restore each saved segment register from its own slot (popped gs, fs, es,
-    # ds), so the interrupted context's %gs TLS pointer is put back exactly.
     popl %eax
     movw %ax, %gs
     popl %eax
@@ -314,10 +306,7 @@ isr_return:
     movw %ax, %ds
 
     popa
-    addl $8, %esp
-
-    # iret restores EFLAGS (including IF) from the saved frame; no explicit sti,
-    # so no timer IRQ can preempt between sti and iret.
+    addl $8, %esp          # the vector and the error code
     iret
 
 # IRQ stubs: IRQ 0 through 15, remapped to vectors 32 through 47.
@@ -635,13 +624,14 @@ isr_paranoid_handler:
     addl $4, %esp
     jmp local_return
 
-# Common IRQ handler
+# The common entry of the device interrupts: the frame and selectors of
+# isr_common_handler, _irq_router (isr.c), and the same return, all with
+# interrupts off. The router may have switched threads, so the frame
+# isr_leave and the pops find is the resumed thread's.
 .globl irq_common_handler
 irq_common_handler:
     pusha
 
-    # Save the interrupted segment registers individually (see isr_common_handler)
-    # so the per-process %gs TLS pointer survives the IRQ. gs at the lowest slot.
     movw %ds, %ax
     pushl %eax
     movw %es, %ax
@@ -659,18 +649,14 @@ irq_common_handler:
     movw $0x40, %ax
     movw %ax, %fs
 
-    pushl %esp          # Push pointer to isr_params_t structure
+    pushl %esp          # the frame, an isr_params_t *
     call _irq_router
-    addl $4, %esp       # Clean up pushed pointer
+    addl $4, %esp
 
-    # Deliver any pending signal before returning to user (no-op in kernel mode;
-    # the IRQ may have switched processes, so esp/current_proc are the resumed
-    # process's), and give back the big lock. IF is still 0.
     pushl %esp
     call isr_leave
     addl $4, %esp
 
-    # Restore each saved segment register from its own slot (gs, fs, es, ds).
     popl %eax
     movw %ax, %gs
     popl %eax
@@ -682,6 +668,4 @@ irq_common_handler:
 
     popa
     addl $8, %esp
-
-    # iret restores EFLAGS (including IF); no explicit sti before iret.
     iret

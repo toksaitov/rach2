@@ -1,3 +1,8 @@
+/*
+ * tls.c: the i686 thread pointer of ../arch.h, set_thread_area(2) and
+ * clone's CLONE_SETTLS argument, all through GDT entry GDT_TLS_ENTRY.
+ */
+
 #include "tls.h"
 
 #include "gdt.h"
@@ -9,29 +14,15 @@
 #include "../../proc/process.h"
 #include "../../syscall.h"
 
-/*
- * proc/switch.s hard-codes the TLS GDT entry (6) and selector (0x33) as .set
- * constants it cannot share with these headers. Fail the build if the C
- * definitions ever drift from those asm literals.
- */
+/* switch.s has the TLS selector, 0x33 for entry 6, as a `.set` constant it
+ * cannot take from gdt.h; the build stops if gdt.h's values differ. */
 typedef char tls_gdt_entry_matches_asm[(GDT_TLS_ENTRY == 6) ? 1 : -1];
 typedef char tls_gdt_selector_matches_asm[(GDT_TLS_SELECTOR == 0x33) ? 1 : -1];
 
-/**
- * Validate a Linux i386 struct user_desc and return its base address.
- *
- * The descriptor must ask for the one TLS slot the kernel has: a present,
- * 32-bit, writable data segment in GDT entry GDT_TLS_ENTRY; a request for
- * any other entry or kind of segment is refused. Only the base is taken: the
- * limit, its granularity bit and the usable bit are ignored, since the slot
- * always has a 4 GiB limit.
- *
- * musl's __set_thread_area passes entry_number = -1 (allocate) with flags =
- * 0x51 (seg_32bit | limit_in_pages | useable); an explicit GDT_TLS_ENTRY is
- * also accepted so a caller can reprogram the same slot.
- *
- * @return 0 with `*base_out` set, or -1 for a refused descriptor or a NULL
- *         argument.
+/*
+ * musl's __set_thread_area passes entry -1 with the flags 0x51 (32-bit,
+ * limit in pages, usable); GDT_TLS_ENTRY, the number written back, is also
+ * taken, so that a caller can set the same entry again.
  */
 int tls_resolve_base(const user_desc_t *u, uint32_t *base_out)
 {
@@ -47,13 +38,13 @@ int tls_resolve_base(const user_desc_t *u, uint32_t *base_out)
         return -1;
     }
     if (u->flags & UD_CONTENTS_MASK) {
-        return -1; /* code/stack segment requested, not our data TLS slot */
+        return -1;
     }
     if (u->flags & UD_READ_EXEC_ONLY) {
-        return -1; /* TLS must be writable */
+        return -1;
     }
     if (u->flags & UD_SEG_NOT_PRESENT) {
-        return -1; /* we keep the TLS slot present */
+        return -1;
     }
 
     *base_out = u->base_addr;
@@ -73,13 +64,17 @@ uintptr_t arch_tls_get(void)
 }
 
 /**
- * Set up thread-local storage (set_thread_area(2), Linux i386).
+ * set_thread_area(2), as on Linux i386: the argument points at a struct
+ * user_desc, which `tls_resolve_base` checks. The base goes into the running
+ * processor's entry GDT_TLS_ENTRY and the record's `tls_base`, which switch.s
+ * writes into the entry at every switch to the thread, and GDT_TLS_ENTRY is
+ * written back into the descriptor's `entry_number`, from which the C
+ * library makes the selector it loads into %gs; the %gs that the entry to
+ * the kernel saved is left as it was.
  *
- * The argument points at a struct user_desc. Validates it, programs the shared
- * TLS GDT descriptor (entry GDT_TLS_ENTRY) and this process's PCB base, then
- * writes the chosen entry number back so the C library can load (entry_number
- * << 3) | 3 into %gs. The base is reapplied to the GDT on every context switch
- * (switch.s). Returns 0 or a negative errno on a bad pointer/request.
+ * Returns 0; -ESRCH with no current process; -EINVAL for a descriptor
+ * refused; -EFAULT when the descriptor cannot be read, or when the entry
+ * number cannot be written back, in which case the base is already set.
  */
 long sys_set_thread_area(isr_params_t *params)
 {
@@ -88,12 +83,9 @@ long sys_set_thread_area(isr_params_t *params)
     uint32_t base = 0;
 
     if (!current_proc) {
-        return -ESRCH; /* TLS is only meaningful for a user process */
+        return -ESRCH;
     }
 
-    /* Read the descriptor through the fault-checked helper (it range-checks the
-     * full struct internally, so the prior explicit user_access_ok is
-     * redundant). */
     if (copy_from_user(&desc, (const void __user *)uptr, sizeof(user_desc_t)) != 0) {
         return -EFAULT;
     }
@@ -102,12 +94,9 @@ long sys_set_thread_area(isr_params_t *params)
         return -EINVAL;
     }
 
-    /* Program the descriptor now and remember the base so the context switch
-     * can reprogram entry GDT_TLS_ENTRY for this process when it is resumed. */
     gdt_set_tls(base);
     current_proc->tls_base = base;
 
-    /* Report the allocated slot back (musl reads user_desc.entry_number). */
     desc.entry_number = GDT_TLS_ENTRY;
     if (copy_to_user((void __user *)uptr, &desc.entry_number, sizeof(desc.entry_number)) != 0) {
         return -EFAULT;

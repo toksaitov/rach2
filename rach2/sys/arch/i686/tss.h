@@ -1,3 +1,5 @@
+/* The i686 task state segments: each processor's kernel TSS and its double
+ * fault TSS. */
 #ifndef _TSS_H_
 #define _TSS_H_
 
@@ -85,7 +87,7 @@ void tss_set_kernel_stack(uint32_t stack);
 /**
  * Give every processor's double fault task the page directory at physical
  * `dir`, which the processor loads into CR3 when it switches to the task.
- * `init_paging` gives it the kernel's before it turns paging on.
+ * `mmu_start` (mmu.c) gives it the kernel's before it turns paging on.
  */
 void tss_set_double_fault_dir(uint32_t dir);
 

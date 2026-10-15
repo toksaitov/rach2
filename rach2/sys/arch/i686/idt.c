@@ -1,3 +1,5 @@
+/* idt.c: the gates of the i686 IDT, and its loading. */
+
 #include "idt.h"
 #include "tss.h"
 #include "../x86/lapic.h"
@@ -15,17 +17,12 @@ static void _idt_set_desciptor(size_t index, uint32_t offset, uint16_t segment_s
                                uint8_t flags);
 
 /**
- * Builds the IDT and loads it into the IDTR.
- *
- * Installs gates for the 32 CPU exception vectors (0..31), programs the PIC,
- * installs the 16 hardware IRQ vectors remapped to 32..47, and the syscall
- * trap at vector 0x80. Exception and IRQ gates use flags 0x8E (present,
- * DPL=0, 32-bit interrupt gate); the breakpoint and overflow gates, vectors 3
- * and 4, and the syscall gate use 0xEE, DPL 3, so user mode reaches them with
- * `int3`, `into` and `int 0x80`. These gates target the kernel code segment
- * 0x08 and run on the stack in use, or on the process's kernel stack when
- * they come from ring 3. The PIC is remapped before its IRQ gates are
- * installed.
+ * Every gate but the double fault's names a stub of isr_handler.s, with
+ * flags 0x8E (present, DPL 0, 32-bit interrupt gate), except that the
+ * breakpoint and overflow gates, vectors 3 and 4, and the system call's gate
+ * have 0xEE, DPL 3, so that user mode reaches them with `int3`, `into` and
+ * `int 0x80`. These gates enter the kernel code segment 0x08 on the stack in
+ * use, or on the thread's kernel stack when they come from ring 3.
  *
  * The double fault, vector 8, has a task gate, flags 0x85 (present, DPL 0,
  * task gate), which names the double fault's TSS instead of a handler: the
@@ -42,8 +39,7 @@ void init_idt(void)
     _idt_set_desciptor(0, (uintptr_t)&isr0, 0x08, 0x8E);
     _idt_set_desciptor(1, (uintptr_t)&isr1, 0x08, 0x8E);
     _idt_set_desciptor(2, (uintptr_t)&isr2, 0x08, 0x8E);
-    /* The breakpoint and overflow gates are DPL 3, so a user `int3` or
-     * `into` reaches its own handler and not a general-protection fault. */
+    /* DPL 3, so that a user int3 or into reaches its handler, not #GP. */
     _idt_set_desciptor(3, (uintptr_t)&isr3, 0x08, 0xEE);
     _idt_set_desciptor(4, (uintptr_t)&isr4, 0x08, 0xEE);
     _idt_set_desciptor(5, (uintptr_t)&isr5, 0x08, 0x8E);
@@ -111,20 +107,18 @@ void init_idt(void)
     _idt_set_desciptor(62, (uintptr_t)&msi14, 0x08, 0x8E);
     _idt_set_desciptor(63, (uintptr_t)&msi15, 0x08, 0x8E);
 
-    /* The vector the APIC raises for an interrupt that went away. Without a
-       descriptor it would be a general-protection fault instead. */
+    /* The APIC's spurious vector; without a gate it would raise #GP. */
     _idt_set_desciptor(255, (uintptr_t)&spurious_isr, 0x08, 0x8E);
 
     /* The interprocessor interrupt (proc/smp.c). */
     _idt_set_desciptor(IPI_VECTOR, (uintptr_t)&ipi_isr, 0x08, 0x8E);
 
-    /* 0xEE: DPL=3 gate so user mode can invoke int 0x80. */
+    /* DPL 3, so that user mode can make int 0x80. */
     _idt_set_desciptor(128, (uintptr_t)&isr128, 0x08, 0xEE);
 
     _load_idt(&idt_address);
 }
 
-/** Load the IDT `init_idt` built, on a processor the boot one started. */
 void idt_load(void)
 {
     _load_idt(&idt_address);

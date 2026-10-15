@@ -36,7 +36,7 @@ struct cpu_regs {
     uint32_t edi;
     uint32_t esi;
     uint32_t ebp;
-    uint32_t esp_dummy; /* Ignored by popal */
+    uint32_t esp_dummy;
     uint32_t ebx;
     uint32_t edx;
     uint32_t ecx;
@@ -144,12 +144,10 @@ typedef uint32_t pte_t;
 #define KVA_BASE         0xC0000000u
 #define KVA_HEAP         0xC0000000u
 #define KVA_HEAP_SIZE    0x10000000u
-/* The page-cache window sat at USER_ADDR_MAX until the first real machine:
- * its firmware places device MMIO from 0xC0500000, and since the window is
- * sized down to the lowest BAR above its base, a window starting there was
- * five megabytes long, smaller than any disk worth mounting. So it starts
- * a quarter of the way up, past the gap where that firmware's
- * identity-mapped MMIO lives. */
+/* The page-cache window starts a quarter of the way up the layout, not at
+ * USER_ADDR_MAX: the window ends at the lowest device memory BAR above its
+ * base (mm/pagecache.c), and firmware such as the Lenovo's places BARs from
+ * 0xC0500000, which would leave a window of five megabytes. */
 #define KVA_PCWIN        0xD0000000u
 #define KVA_MMIO         0xF0000000u
 #define KVA_MMIO_SIZE    0x08000000u

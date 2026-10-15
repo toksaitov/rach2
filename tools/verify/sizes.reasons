@@ -44,7 +44,7 @@ rach2/kernel.c:process_command lines 408 a dispatcher, one arm per command, read
 rach2/kernel.c:process_command nesting 6 a dispatcher, one arm per command, read as a table
 rach2/kernel.c:root_spec_matches complexity 31 a parser over an external format, one check per field in the format's order
 
-rach2/sys/arch/i686/systab.c:arch_syscall_init lines 295 a table, one entry per system call number
+rach2/sys/arch/i686/systab.c:arch_syscall_init lines 287 a table, one entry per system call number
 
 rach2/sys/arch/x86_64/mmu.c:free_user_pages nesting 5 a walk over the four levels of the page tables, each page's case inside it
 

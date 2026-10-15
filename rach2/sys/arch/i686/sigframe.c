@@ -221,8 +221,7 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
         return -1;
     }
 
-    /* The handler starts with the initial floating-point state, as a fresh
-     * image does. */
+    /* The handler starts with the initial floating-point state. */
     fpu_reset();
     tf->user_esp = frame_addr;
     tf->eip = sa->handler;
@@ -288,8 +287,7 @@ int sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask)
     tf->gs = user_seg(sc->gs);
     tf->eflags = (tf->eflags & ~FIX_EFLAGS) | (sc->eflags & FIX_EFLAGS);
 
-    /* A frame's alternate stack comes back as sigaltstack would take it,
-     * except that a stack in use or too small is left as it is. */
+    /* The frame's alternate stack, as sigaltstack would take it if unused. */
     if (rt && !sigframe_on_altstack(tf->user_esp)) {
         if (frame.rt.uc.ss_flags & SS_DISABLE) {
             current_proc->altstack_on = 0;

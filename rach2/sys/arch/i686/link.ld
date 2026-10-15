@@ -1,3 +1,5 @@
+/* The i686 kernel's link: its sections from 1 MiB, where the loader puts it. */
+
 ENTRY(_start)
 
 SECTIONS {

@@ -208,7 +208,7 @@
 #define SYS_ADJTIMEX            124
 #define SYS_CLOCK_GETRES_TIME64 406
 
-/* Auth/identity, resource, and tail syscalls a login server touches. */
+/* Names, limits and identities. */
 #define SYS_SETHOSTNAME   74
 #define SYS_SETDOMAINNAME 121
 #define SYS_SETRLIMIT     75
@@ -223,9 +223,8 @@
 #define SYS_DUP3          330
 #define SYS_PRLIMIT64     340
 
-/* Durability: flush the disk-backed page cache (a no-op when KRFFS is the RAM
-   module). fsync/fdatasync flush per the open fd; sync and syncfs flush
-   everything. */
+/* Write-back and space: fsync and fdatasync write back one open file, sync
+ * and syncfs every mounted file system (syscall_fs.c). */
 #define SYS_SYNC      36
 #define SYS_FSYNC     118
 #define SYS_FDATASYNC 148
@@ -253,21 +252,21 @@
 
 /* Stop the machine, after the same flush sync(2) does. Root only. */
 #define SYS_REBOOT      88
-/* Hard and symbolic links: real on ext2, EPERM on the other types. */
+/* Hard and symbolic links, which ext2 and tmpfs have; on a file system
+ * without them the calls are -EPERM. */
 #define SYS_LINK        9
 #define SYS_LINKAT      303
 #define SYS_SYMLINK     83
 #define SYS_SYMLINKAT   304
-/* The 2-/3-arg privilege drop and restore a login server uses (seteuid).
- * musl remaps the whole legacy 16-bit id family to the *32 forms on i386
- * (src/internal/syscall.h), so only the *32 numbers are wired; the 16-bit
- * ABI (narrower ids, 0xFFFF keep-sentinel) is left to ENOSYS. */
+/* setreuid, setregid, setresuid and setresgid by their 32-bit numbers,
+ * which musl calls on i386 (src/internal/syscall.h); the 16-bit forms,
+ * whose ids are narrower and whose "keep" is 0xFFFF, are not in the table. */
 #define SYS_SETREUID32  203
 #define SYS_SETREGID32  204
 #define SYS_SETRESUID32 208
 #define SYS_SETRESGID32 210
-/* chmod/chown the session pty (dropbear) and arbitrary KRFFS paths (busybox).
- * Both legacy 16-bit-id and *32 chown numbers, since musl issues the former. */
+/* The mode and owner calls; the 16-bit chown numbers take 32-bit ids here,
+ * as their *32 forms do. */
 #define SYS_CHMOD       15
 #define SYS_FCHMOD      94
 #define SYS_FCHMODAT    306

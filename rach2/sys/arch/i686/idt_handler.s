@@ -1,3 +1,5 @@
+# void _load_idt(idt_ptr_t *p): lidt, for idt.c.
+
 .text
 
 .globl _load_idt

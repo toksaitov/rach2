@@ -185,7 +185,6 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_RT_SIGPROCMASK] = sys_rt_sigprocmask;
     table[SYS_RT_SIGRETURN] = sys_rt_sigreturn;
     table[SYS_SIGRETURN] = sys_sigreturn;
-    /* Identity: the four getters read the PCB credentials. */
     table[SYS_GETUID32] = sys_getuid;
     table[SYS_GETGID32] = sys_getgid;
     table[SYS_GETEUID32] = sys_geteuid;
@@ -291,12 +290,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_LINKAT] = sys_linkat;
     table[SYS_SYMLINK] = sys_symlink;
     table[SYS_SYMLINKAT] = sys_symlinkat;
-    /* Of the set-id family only the *32 forms are wired: musl remaps the whole
-     * legacy 16-bit family to them on i386, and the 16-bit ABI's narrower ids
-     * and 0xFFFF keep-sentinel differ, so serving those numbers with 32-bit
-     * semantics would lie to a raw caller. They fall to ENOSYS instead. The
-     * ownership calls below are wired under both numbers, since `chown` takes
-     * its ids the same way in each. */
+    /* No 16-bit set-id numbers: their ids and their "keep" differ (sysnr.h). */
     table[SYS_SETREUID32] = sys_setreuid;
     table[SYS_SETREGID32] = sys_setregid;
     table[SYS_SETRESUID32] = sys_setresuid;
@@ -327,8 +321,6 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_CLOCK_GETRES_TIME64] = sys_clock_getres_time64;
     table[SYS_SET_ROBUST_LIST] = sys_set_robust_list;
     table[SYS_GET_ROBUST_LIST] = sys_get_robust_list;
-    /* musl's exit() issues exit_group(); for a single-threaded process it is
-     * exactly _exit(). */
     table[SYS_EXIT_GROUP] = sys_exit_group;
     table[SYS_SOCKET] = sys_socket;
     table[SYS_SOCKETPAIR] = sys_socketpair;

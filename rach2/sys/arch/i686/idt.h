@@ -1,3 +1,4 @@
+/* The i686 Interrupt Descriptor Table, which every processor shares. */
 #ifndef _IDT_H_
 #define _IDT_H_
 
@@ -38,7 +39,14 @@ extern idt_descriptor_t idt_descriptors[256];
 /** The IDTR operand pointing at `idt_descriptors`. */
 extern idt_ptr_t idt_address;
 
-/** Builds the IDT and loads it into the IDTR. */
+/**
+ * Build the IDT and load it on this processor: gates for the exceptions,
+ * the 8259's sixteen lines on vectors 32 to 47 (it calls `init_pic`, which
+ * moves them there), the messages on 48 to 63, the local APIC's spurious
+ * vector and IPI_VECTOR, and the system call's `int 0x80`. The boot calls
+ * it once, from `platform_cpu_init`; a processor started later loads the
+ * same table with `idt_load`.
+ */
 void init_idt(void);
 
 #endif

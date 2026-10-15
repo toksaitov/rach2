@@ -1,3 +1,6 @@
+/* tss.c: each processor's kernel TSS and double fault TSS, set up and
+ * loaded. */
+
 #include "tss.h"
 #include "gdt.h"
 #include "../x86/isr.h"
@@ -27,18 +30,17 @@ extern void _load_tss(uint16_t selector);
  *
  * On the i386 the TSS supplies the ring 0 stack the CPU switches to on a
  * privilege change: ss0/esp0 are read when a trap or interrupt crosses from
- * ring 3 to ring 0. The kernel uses one TSS for all tasks and switches
- * between them by software, so only ss0/esp0 and the I/O map base of
- * `kernel_tss` matter, and it is where the processor saves what was running
- * when it switches to the double fault's task.
+ * ring 3 to ring 0. Each processor has one TSS for every thread, and the
+ * kernel switches threads by software, so only ss0/esp0 and the I/O map
+ * base of `kernel_tss` matter, and it is where the processor saves what was
+ * running when it switches to the double fault's task.
  *
  * That switch is the kernel's one hardware task switch. The gate of vector
  * 8 names the processor's `double_fault_tss`, which starts `isr_double_fault`
  * in the kernel's segments and the processor's own %fs, with interrupts off,
  * on a stack of its own, since a double fault may come from a kernel stack
- * that has run out. Its page directory is the kernel's, which `init_paging`
- * gives it (`tss_set_double_fault_dir`) before paging is on; until then the
- * processor loads no directory from it.
+ * that has run out. Its page directory is the kernel's, which `mmu_start`
+ * gives it (`tss_set_double_fault_dir`) before paging is on.
  *
  * iomap_base is set to sizeof(tss_t), past the end of the segment, which the
  * CPU reads as an empty I/O permission bitmap: every port access from ring 3

@@ -224,11 +224,12 @@ static int user_poke(process_t *t, unsigned long off, unsigned long v)
     return debugreg_poke(t, (unsigned)((off - USER_DEBUGREG) / 4u), v);
 }
 
-/** PTRACE_GETFPREGS and friends: copy the floating-point state of `t`, the
- * thread `pid`, to or from the user at `data`, as the 108-byte
- * `user_i387_struct` or, with `fx`, the 512-byte `fxsave` image. -EIO for
- * the image on a processor without FXSR, -EINVAL for one `fxrstor` would
- * fault on, -ESRCH for a thread that left its stop during the copy. */
+/** PTRACE_GETFPREGS, SETFPREGS, GETFPXREGS and SETFPXREGS: copy the
+ * floating-point state of `t`, the thread `pid`, to or from the user at
+ * `data`, as the 108-byte `user_i387_struct` or, with `fx`, the 512-byte
+ * `fxsave` image. -EIO for the image on a processor without FXSR, -EINVAL for
+ * one `fxrstor` would fault on, -ESRCH for a thread that left its stop during
+ * the copy. */
 static int fp_access(uint32_t pid, process_t *t, uintptr_t data, int fx, int set)
 {
     uint8_t buf[FX_SIZE];

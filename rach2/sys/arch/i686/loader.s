@@ -32,12 +32,11 @@
 .text
 .align 4
 
-# Multiboot header
+# The Multiboot header: the magic, the flags and their checksum.
 .long MULTIBOOT_MAGIC
 .long MULTIBOOT_FLAGS
 .long MULTIBOOT_CHECKSUM
 
-# multiboot2 header
 .align 8
 .long MULTIBOOT2_MAGIC
 .long MULTIBOOT2_I386
@@ -66,52 +65,56 @@ _start:
     call init_gdt
     call k_main
 
+# Where k_main would return to, which it does not.
 .globl k_halt
 k_halt:
     hlt
     jmp k_halt
 
+# void k_stop(void): stop this processor for good, interrupts off; the end
+# of a panic (panic.c).
 .globl k_stop
 k_stop:
     cli
     hlt
     jmp k_stop
 
-# Enter user mode (ring 3)
-# void arch_enter_user(uintptr_t pc, uintptr_t sp)
-# Arguments: eip at 4(%esp), esp at 8(%esp)
-.set USER_CODE_SEG, 0x1B  # User code segment selector (GDT index 3 | RPL 3)
-.set USER_DATA_SEG, 0x23  # User data segment selector (GDT index 4 | RPL 3)
+# void arch_enter_user(uintptr_t pc, uintptr_t sp), of ../arch.h: an iret
+# to ring 3 at pc, with the stack pointer sp, IF set in EFLAGS and the user
+# data selector in every data segment register. The general registers keep
+# what the kernel left in them.
+.set USER_CODE_SEG, 0x1B  # GDT entry 3, RPL 3
+.set USER_DATA_SEG, 0x23  # GDT entry 4, RPL 3
 
 .globl arch_enter_user
 arch_enter_user:
-    cli                    # Disable interrupts during transition
+    cli
 
-    movl 4(%esp), %ecx     # User EIP
-    movl 8(%esp), %edx     # User ESP
+    movl 4(%esp), %ecx     # pc
+    movl 8(%esp), %edx     # sp
 
-    # Set data segment registers to user data segment
     movw $USER_DATA_SEG, %ax
     movw %ax, %ds
     movw %ax, %es
     movw %ax, %fs
     movw %ax, %gs
 
-    # Build iret stack frame for ring 3 transition
-    pushl $USER_DATA_SEG   # SS
-    pushl %edx             # ESP
-    pushfl                 # EFLAGS
-    popl %eax              # Get EFLAGS
-    orl $0x200, %eax       # Enable interrupts in user mode
-    pushl %eax             # Push modified EFLAGS
-    pushl $USER_CODE_SEG   # CS
-    pushl %ecx             # EIP
+    # The frame iret pops for a change of privilege: EIP, CS, EFLAGS, ESP, SS.
+    pushl $USER_DATA_SEG
+    pushl %edx
+    pushfl
+    popl %eax
+    orl $0x200, %eax       # IF
+    pushl %eax
+    pushl $USER_CODE_SEG
+    pushl %ecx
 
-    iret                   # Transition to ring 3
+    iret
 
 # The boot stack, which the boot, process 0, the debug shell and the first
-# program run on, and the page below it: its guard, which k_main unmaps once
-# paging is on, so that running past the stack's base faults.
+# program run on, and the page below it: its guard, which guard_boot_stack
+# (kernel.c) unmaps once paging is on, so that running past the stack's
+# base faults.
 .bss
 .balign 4096
 .globl stack_guard
