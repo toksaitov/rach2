@@ -1,6 +1,6 @@
 /*
- * usbdisk_hosttest.c: a stick as a disk of the registry, from its arrival
- * to its last hold.
+ * usbdisk_hosttest.c: rach2/sys/block/usbdisk.c, a stick as a disk of the
+ * registry, from its arrival to its last hold.
  *
  * host-deps: rach2/sys/block/disk.c rach2/sys/block/partition.c
  * host-deps: rach2/sys/block/gpt.c rach2/sys/lib/kstring.c
@@ -14,7 +14,8 @@
  * several requests; a stick that is pulled is closed at once and reclaimed
  * only when the last hold goes; a stick pulled while its table is being
  * read is reclaimed too; a plug after a pull takes the number back; and
- * two units of one device are two disks.
+ * two units of one device are two disks. One row checks disk.c's limit on a
+ * device's size.
  */
 extern int printf(const char *fmt, ...);
 extern void *memset(void *p, int c, unsigned long n);
@@ -39,13 +40,15 @@ static int fails;
 #define SECTOR         512u
 #define MEDIUM_SECTORS 8192u
 
-/* ---- the class driver: one device with up to two units ---- */
-
+/* The class driver: one device with up to two units, each with a medium in
+   memory, and the releases of the device. */
 static unsigned char medium[MSC_MAX_LUNS][MEDIUM_SECTORS * SECTOR];
 static block_device_t unit[MSC_MAX_DEVICES][MSC_MAX_LUNS];
 static int unit_present[MSC_MAX_DEVICES][MSC_MAX_LUNS];
 static int releases;
 
+/** The block device of unit `lun` of device `index`, or NULL when the unit
+ *  is not present. */
 block_device_t *msc_lun_device(int index, int lun)
 {
     if (index < 0 || index >= MSC_MAX_DEVICES || lun < 0 || lun >= MSC_MAX_LUNS ||
@@ -55,6 +58,8 @@ block_device_t *msc_lun_device(int index, int lun)
     return &unit[index][lun];
 }
 
+/** The inquiry answer of a present unit: vendor "Q", product "S", and the
+ *  medium's size. */
 int msc_lun_ident(int index, int lun, struct msc_ident *out)
 {
     if (!msc_lun_device(index, lun)) {
@@ -68,6 +73,7 @@ int msc_lun_ident(int index, int lun, struct msc_ident *out)
     return 0;
 }
 
+/** Release device `index`: count the release and mark its units gone. */
 void msc_release(int index)
 {
     int lun;
@@ -78,8 +84,8 @@ void msc_release(int index)
     }
 }
 
-/* ---- the request layer: one request in flight, answered next pass ---- */
-
+/* The request layer: one request in flight, answered at the next pass of the
+   pump. `device_holds` is its holds of a device. */
 static struct block_request the_request;
 static int request_live;
 static uint64_t request_lba;
@@ -88,6 +94,8 @@ static int request_lun;
 static int requests_started;
 static int device_holds;
 
+/** Start a read of `count` sectors at `lba` of `device`, or return NULL while
+ *  a request is in flight. A request's generation is its number. */
 struct block_request *block_request_begin(block_device_t *device, uint64_t lba, uint32_t count,
                                           uint32_t *generation)
 {
@@ -111,6 +119,13 @@ struct block_request *block_request_begin(block_device_t *device, uint64_t lba, 
     return &the_request;
 }
 
+/**
+ * End the request in flight, copying its sectors from the medium of its unit
+ * on device 0, and return 1: every call finds an end.
+ *
+ * The status is -5 (EIO) when the unit is gone or the range runs past the
+ * medium, and 0 otherwise.
+ */
 int block_request_ended(struct block_request *r, uint32_t generation, void *buffer, int *status)
 {
     unsigned char *out = (unsigned char *)buffer;
@@ -133,6 +148,7 @@ int block_request_ended(struct block_request *r, uint32_t generation, void *buff
     return 1;
 }
 
+/** A request in the call, which fails with -5 (EIO). */
 int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *buffer)
 {
     (void)device;
@@ -143,14 +159,15 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
     return -5;
 }
 
-/* The disk layer's scan takes a lock and drops a moved view's cached
-   blocks; on the host one scan runs at a time and no cache exists. */
+/** Drop a moved view's cached blocks, which the disk layer's scan does under
+ *  a lock; on the host one scan runs at a time and no cache exists. */
 int bcache_invalidate(block_device_t *dev)
 {
     (void)dev;
     return 0;
 }
 
+/** A wait returns at once: one scan runs at a time here. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
@@ -159,19 +176,20 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
+/** Wake nobody. */
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
 }
 
+/** The request layer's holds of a device: `device_holds`. */
 int block_device_holds(block_device_t *device)
 {
     (void)device;
     return device_holds;
 }
 
-/* ---- the block layer's views and physical identity ---- */
-
+/** A view's read, which fails with -5 (EIO); no row reads through a view. */
 static int view_read(block_device_t *device, uint64_t lba, uint32_t count, void *buffer)
 {
     (void)device;
@@ -181,6 +199,8 @@ static int view_read(block_device_t *device, uint64_t lba, uint32_t count, void 
     return -5;
 }
 
+/** Set up a view of `sector_count` sectors at `start_lba` of `backing`, read
+ *  through `view_read` and with no write. */
 void block_partition_init(block_partition_t *partition, block_device_t *backing, uint64_t start_lba,
                           uint64_t sector_count)
 {
@@ -196,88 +216,99 @@ void block_partition_init(block_partition_t *partition, block_device_t *backing,
     partition->device.drvdata = partition;
 }
 
+/** No lag wrapper: a view's backing is `backing`. */
 block_device_t *block_lag_partition_backing(block_device_t *backing, uint64_t start_lba)
 {
     (void)start_lba;
     return backing;
 }
 
+/** Every device is its own disk. */
 block_device_t *block_physical(block_device_t *dev)
 {
     return dev;
 }
 
-/* ---- devfs, the caches and the mounts as counters ---- */
-
+/* devfs, the caches and the mounts, as counters. */
 static int nodes_made, parts_named, published;
 static int mount_holds, cache_holds, gone_told;
 
+/** Make a disk's nodes: count it. */
 void devfs_disk_nodes(struct disk *d)
 {
     (void)d;
     nodes_made++;
 }
 
+/** Name a disk's partition nodes: count it. */
 void devfs_disk_part_nodes(struct disk *d)
 {
     (void)d;
     parts_named++;
 }
 
+/** Publish a disk: mark its whole window present and count it. */
 void devfs_disk_publish(struct disk *d)
 {
     d->whole.present = 1;
     published++;
 }
 
+/** A disk is claimed while a mount holds it. */
 int devfs_disk_claimed(const struct disk *d)
 {
     (void)d;
     return mount_holds != 0;
 }
 
+/** Tell the cache a device has gone: count it. */
 void bcache_device_gone(block_device_t *dev)
 {
     (void)dev;
     gone_told++;
 }
 
+/** Tell the loop devices a device has gone; none stands on a stick here. */
 void loop_device_gone(block_device_t *dev)
 {
     (void)dev;
 }
 
+/** The cache's holds of a device: `cache_holds`. */
 int bcache_device_holds(block_device_t *dev)
 {
     (void)dev;
     return cache_holds;
 }
 
+/** The mounts' holds of a device: `mount_holds`. */
 int vfs_device_holds(block_device_t *dev)
 {
     (void)dev;
     return mount_holds;
 }
 
-/* ---- the rest of the kernel ---- */
-
 static int in_syscall;
 
+/** Whether the caller is in a system call: `in_syscall`. */
 int proc_in_syscall(void)
 {
     return in_syscall;
 }
 
+/** Interrupts are never masked here: return 0. */
 uint32_t kirq_save(void)
 {
     return 0;
 }
 
+/** Nothing to restore. */
 void kirq_restore(uint32_t flags)
 {
     (void)flags;
 }
 
+/** The kernel log; the records are dropped. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -285,6 +316,7 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
+/** An ATA IDENTIFY string, which is empty: a stick has no IDENTIFY words. */
 void diskinfo_ata_string(char *out, int chars, const volatile uint16_t *id, int first_word)
 {
     (void)chars;
@@ -293,6 +325,7 @@ void diskinfo_ata_string(char *out, int chars, const volatile uint16_t *id, int 
     out[0] = '\0';
 }
 
+/** Record a disk's IDENTIFY words; nothing is kept. */
 void diskinfo_record_identify(const char *driver, int port, const volatile uint16_t *id,
                               uint64_t sectors)
 {
@@ -302,6 +335,8 @@ void diskinfo_record_identify(const char *driver, int port, const volatile uint1
     (void)sectors;
 }
 
+/** Write `v` in decimal at `out`, `cap` bytes with the NUL, and return its
+ *  length; 0 with an empty string when it does not fit. */
 int diskinfo_u64_dec(char *out, int cap, uint64_t v)
 {
     int n = 0, i;
@@ -324,8 +359,7 @@ int diskinfo_u64_dec(char *out, int cap, uint64_t v)
 
 #include "../../rach2/sys/block/usbdisk.c"
 
-/* ---- the media ---- */
-
+/** Write `v` at `p` as a little-endian 32-bit word. */
 static void wr32(unsigned char *p, uint32_t v)
 {
     p[0] = (unsigned char)v;
@@ -334,13 +368,15 @@ static void wr32(unsigned char *p, uint32_t v)
     p[3] = (unsigned char)(v >> 24);
 }
 
+/** Write `v` at `p` as a little-endian 64-bit word. */
 static void wr64(unsigned char *p, uint64_t v)
 {
     wr32(p, (uint32_t)v);
     wr32(p + 4, (uint32_t)(v >> 32));
 }
 
-/** An MBR with two partitions on unit `lun`. */
+/** An MBR on unit `lun` with two partitions: type 0x0C, 2048 sectors at 64,
+ *  and type 0x07, 4096 sectors at 2112. */
 static void mbr_medium(int lun)
 {
     unsigned char *s = medium[lun];
@@ -412,7 +448,7 @@ static void gpt_medium(int lun)
     }
 }
 
-/** Run the pump until nothing is pending or `limit` passes have run. */
+/** Return 1 while a stick's table is being read, and 0 otherwise. */
 static int scanning(void)
 {
     int i;
@@ -425,6 +461,8 @@ static int scanning(void)
     return 0;
 }
 
+/** Run the pump until nothing is pending or `limit` passes have run, and
+ *  return the passes run. */
 static int passes(int limit)
 {
     int n = 0;
@@ -439,6 +477,8 @@ static int passes(int limit)
     return n;
 }
 
+/** Plug unit `lun` of device `slot`: make it present with the medium's size,
+ *  and tell the layer it arrived. */
 static void plug(int slot, int lun)
 {
     unit_present[slot][lun] = 1;
@@ -506,6 +546,18 @@ static void size_rows(void)
     CHECK("and one of 2^55 - 1 is registered", disk_register(&huge, "nvme", 0, 0) != 0);
 }
 
+/**
+ * Run the rows, and return 1 when any check failed.
+ *
+ * An MBR stick is registered as disk 0, and its table read through the pump
+ * in one request. Pulled under a mount, it is closed at once and reclaimed
+ * when the hold goes. A GPT stick plugged after it takes number 0 again, and
+ * its table takes several requests. Ten plugs and pulls of a stick nobody
+ * holds leave every record free, one registry record serving them all. A
+ * stick pulled while its table is being read is reclaimed with nothing
+ * published. Then the rows of two units, of where a stick is registered
+ * from, and of the registry's size limit.
+ */
 int main(void)
 {
     struct disk *d;
@@ -513,7 +565,6 @@ int main(void)
 
     printf("usbdisk_hosttest: the stick as a disk of the registry\n");
 
-    /* An MBR stick: registered, its table read through the pump. */
     mbr_medium(0);
     plug(0, 0);
     CHECK("an arrival is pending", pending);
@@ -530,7 +581,6 @@ int main(void)
     CHECK("and nothing is pending", !pending && scan.n < 0);
     CHECK("one record is taken", usbdisk_free() == USBDISK_MAX - 1);
 
-    /* Pulled under a mount: closed at once, reclaimed when the hold goes. */
     mount_holds = 1;
     usbdisk_left(0);
     passes(4);
@@ -544,8 +594,6 @@ int main(void)
           releases == 1 && usbdisk_free() == USBDISK_MAX);
     CHECK("and its number is free", disk_count() == 1 && disk_at(0) == 0);
 
-    /* A GPT stick plugged after: the number comes back, the table takes
-       several requests. */
     gpt_medium(0);
     before = requests_started;
     plug(0, 0);
@@ -557,7 +605,6 @@ int main(void)
     CHECK("the fourth entry is named", d && d->table.parts[3].label[0] == 'D');
     CHECK("and no node was made again", nodes_made == 1);
 
-    /* Ten plugs and pulls of a stick nobody holds. */
     usbdisk_left(0);
     passes(4);
     for (i = 0; i < 10; i++) {
@@ -571,7 +618,6 @@ int main(void)
     CHECK("and each was reclaimed", releases == 12 && usbdisk_teardowns() == 12);
     CHECK("and one registry record served them all", disk_count() == 1);
 
-    /* Pulled while the table is being read: reclaimed, nothing published. */
     published = 0;
     mbr_medium(0);
     plug(0, 0);

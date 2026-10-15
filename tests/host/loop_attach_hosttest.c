@@ -1,12 +1,14 @@
 /**
- * Check loop attachment across KRFFS relocation and extent reuse.
+ * loop_attach_hosttest.c: loop attachment, of rach2/sys/block/loop.c, across
+ * the relocation of a KRFFS file and the reuse of its old extent.
  *
  * host-deps: rach2/sys/block/chain.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
- * The production KRFFS core moves the file during a modeled namespace-lock
- * wait. VFS dispatch, description counts and cache I/O are substitutes.
+ * The test includes the kernel's krffs.c and loop.c. The KRFFS core moves
+ * the file while the attachment waits for a modelled namespace lock; VFS
+ * dispatch, description counts and cache I/O are stubs.
  */
 #include "fs/krffs.c"
 #include "block/loop.c"
@@ -20,12 +22,19 @@ static struct vfs_mount mount, other_mount;
 static block_device_t disk;
 const struct vfs_type vfs_krffs_type = {0};
 static krffs_node_t *original, *relocated;
+/* What runs while the attachment waits for the namespace lock. */
 static void (*waiting)(void);
+/* The failed checks, the namespace lock's depth, the open handles, the
+   published descriptions, the active resolver operations, whether the
+   writer's descriptor is busy, and the resolutions. */
 static int failures, depth, opened, refs, active, busy, resolves;
+/* The faults a row sets: an open's error, a sync's error, a path resolving
+   on another mount, a missing path, a shared mapping of the file, and a
+   shared mapping made during the sync. */
 static int open_error, sync_error, switch_mount, missing, mapped, map_in_sync;
 static char payload[4096], replacement[512], output[512];
 
-/** Record failed assertions. */
+/** Count a failed check and print `what`. */
 static void check(int ok, const char *what)
 {
     if (!ok) {
@@ -34,7 +43,7 @@ static void check(int ok, const char *what)
     }
 }
 
-/** Ignore production diagnostics. */
+/** The kernel log; the records are dropped. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -42,7 +51,7 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
-/** Ignore the core's debug listing. */
+/** The console; output is dropped. */
 void console_printf(const char *format, ...)
 {
     (void)format;
@@ -125,7 +134,8 @@ int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     return 0;
 }
 
-/** Root KRFFS uses its node pointer as the open handle. */
+/** Open a node, whose handle is its node pointer as on the KRFFS root;
+ *  fails with `open_error` when it is set. */
 int vfs_open_node(struct vfs_mount *mnt, void *node, int flags, void **handle)
 {
     (void)mnt;
@@ -182,8 +192,8 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
     return rc;
 }
 
-/** Supply successful or failed backing syncs, during which another process
- * may map the file shared. */
+/** Sync the backing file and return `sync_error`; with `map_in_sync` the
+ * file is mapped shared during the sync, as another process could map it. */
 int vfs_fsync(struct vfs_mount *mnt, void *handle)
 {
     (void)mnt;
@@ -369,8 +379,7 @@ static void error_rows(void)
     }
 }
 
-/** Exercise relocation, reuse and attachment cleanup. */
-/* The loop ioctls copy a status block; no row here issues one. */
+/** Copy a loop ioctl's status block in, which fails: no row issues one. */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     (void)dst;
@@ -379,6 +388,7 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
     return -1;
 }
 
+/** Copy a loop ioctl's status block out, which fails: no row issues one. */
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
     (void)dst;
@@ -387,6 +397,8 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
     return -1;
 }
 
+/** Run the relocation row and the error rows, and return 1 when any check
+ *  failed. */
 int main(void)
 {
     relocation_row();
