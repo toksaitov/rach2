@@ -1,3 +1,7 @@
+/*
+ * futex.c: futex(2), the robust lists, and the part of a thread's end that
+ * concerns futexes, as futex.h and futex.Readme.md describe them.
+ */
 #include "futex.h"
 
 #include "process.h"
@@ -13,6 +17,8 @@
 #include "../rtc.h"
 #include "../timer.h"
 
+/* The operations of futex(2) and its flags, Linux's values; FUTEX_MATCH_ANY
+ * is the bitset of a plain wait or wake, which meets every other. */
 #define FUTEX_WAIT           0
 #define FUTEX_WAKE           1
 #define FUTEX_WAIT_BITSET    9
@@ -50,16 +56,18 @@ static const char futex_shared_space;
 struct futex_q {
     const void *space; /* the address space's page directory, or shared memory */
     uintptr_t uaddr;   /* the address in it, or the frame and offset */
-    uint32_t bitset;
-    int woken;
-    int timed;
-    uint32_t target; /* the tick the sleep ends at, with `timed` */
+    uint32_t bitset;   /* a wake's bitset must meet it */
+    int woken;         /* a wake marked it and took it off its list */
+    int timed;         /* the wait has a deadline */
+    uint32_t target;   /* the tick the sleep ends at, with `timed` */
     struct futex_q *next;
 };
 
+/* Each bucket's waiters, the newest first, and the queue they sleep on. */
 static struct futex_q *_waiters[FUTEX_BUCKETS];
 static wait_queue_t _queues[FUTEX_BUCKETS];
 
+/** The bucket a futex named `space` and `uaddr` is filed in. */
 static uint32_t futex_bucket(const void *space, uintptr_t uaddr)
 {
     return (uint32_t)((((uintptr_t)space >> 4) ^ (uaddr >> 2) ^ (uaddr >> 12)) % FUTEX_BUCKETS);
@@ -107,7 +115,7 @@ static uint32_t futex_ticks_until(const struct kernel_timespec *at, int realtime
 
 /**
  * The name of the futex at `uaddr`, whose page is resident: its address space
- * and address, or, when `shared` and a shared mapping holds the page, the
+ * and address, or, when `shared` and the page is in a shared mapping, the
  * page's frame and the offset in it, which every process mapping that page
  * names alike. A futex word in memory two processes share, a
  * PTHREAD_PROCESS_SHARED mutex in /dev/shm among them, is named the second
@@ -134,6 +142,7 @@ static void futex_key(uintptr_t uaddr, int shared, const void **space, uintptr_t
     }
 }
 
+/** The wait's condition: the waiter was woken, or its deadline has come. */
 static int futex_q_done(void *arg)
 {
     const struct futex_q *q = (const struct futex_q *)arg;
@@ -166,8 +175,8 @@ static void futex_unlink(struct futex_q *q, uint32_t bucket)
  * is fixed before the word's page is brought in, so the time a fault sleeps
  * counts against it, and a deadline the fault outlasted ends the call.
  * Returns 0 when woken, -EAGAIN when the word differs, -ETIMEDOUT at the
- * deadline, -EINTR for a signal and -EFAULT for an address the process
- * cannot read.
+ * deadline, -EINTR for a signal, -EINVAL for a timeout out of range and
+ * -EFAULT for an address or a timeout the process cannot read.
  */
 static int32_t futex_wait(uintptr_t uaddr, uint32_t val, const struct kernel_timespec __user *utime,
                           uint32_t bitset, int absolute, int flags_op)
@@ -237,7 +246,8 @@ static int32_t futex_wait(uintptr_t uaddr, uint32_t val, const struct kernel_tim
 
 /* Wake up to `n` waiters on the futex at `uaddr` whose bitset meets
  * `bitset`, named as `futex_key` names it with `flags_op`; the number
- * woken. */
+ * woken, or -EFAULT when a futex that may be shared has a page that cannot
+ * be brought in. */
 static int futex_wake(uintptr_t uaddr, uint32_t n, uint32_t bitset, int flags_op)
 {
     const void *space;
@@ -341,12 +351,12 @@ static void robust_release(uintptr_t uaddr, uint32_t tid, int pending)
 }
 
 /**
- * Walk the robust list of the current thread `p`, which is ending, and
- * release each futex on it that the thread still holds, then the one it was
- * taking or giving back, a waiter of which is also woken when it has no
- * owner and is not a priority-inheritance futex. The list is circular
- * through its head; the low bit of an entry marks a priority-inheritance
- * futex and is not part of the address.
+ * Walk the robust list of the current thread `p`, which is ending or
+ * committing an execve, and release each futex on it that the thread still
+ * holds, then the one it was taking or giving back, a waiter of which is
+ * also woken when it has no owner and is not a priority-inheritance futex.
+ * The list is circular through its head; the low bit of an entry marks a
+ * priority-inheritance futex and is not part of the address.
  */
 static void robust_exit(process_t *p)
 {
@@ -404,10 +414,6 @@ long sys_set_robust_list(isr_params_t *params)
 }
 
 /**
- * get_robust_list: the head and length of the robust list of the thread
- * the first argument names, the caller for 0, into the words the second and
- * third point at.
- *
  * The head is read from the thread's record before anything is copied out: a
  * copy may sleep to bring the caller's page in, and the thread may end and
  * its record be freed meanwhile.
