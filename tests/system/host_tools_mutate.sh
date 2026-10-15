@@ -1,10 +1,21 @@
 #!/bin/sh
-# Prove the host-tool regression tests with restored, rebuilt source mutations.
+# host_tools_mutate.sh [CASE...] | --texts: show that the host tests and the
+# build's scripted tests each catch a fault in what they test, and pass again
+# with the source restored.
+#
+# Each CASE puts one fault into one source, and select_case gives the words
+# its test must print: krffs and its FUSE operations under the host tests of
+# tests/host, check.sh under verify_temp_test.sh, the link rules under
+# build_inputs_test.sh, and the probe lists under tools/verify/probecheck.sh.
+# The test runs on the tree as it is, with the fault, and with the source
+# restored; a probe a case adds is built, and the tree is built again once it
+# is removed. The default is every case. --texts checks that each fault is
+# once in its source.
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$REPO"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault CASE FILE: put CASE's fault into FILE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -147,6 +158,8 @@ stop_job() {
         active=
     fi
 }
+# Stop the job and put back the changed source, or remove the probe a case
+# added and what was built from it.
 restore() {
     stop_job
     if [ -n "$source_file" ]; then
@@ -166,6 +179,7 @@ restore() {
 trap restore 0
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
+# Report $* with the logs' directory and exit 1.
 fail() { echo "host-tools-proof: $*; logs: $WORK" >&2; exit 1; }
 # Run a command as the leader of a new process group, made by `runutil
 # group`, and end it with perl's alarm after 120 seconds. The group's id is
@@ -183,6 +197,9 @@ job() {
     stop_job
     return "$status"
 }
+# run_test PHASE: run the case's test, with its output in CASE.PHASE.run. A
+# host test is compiled under the sanitizers with the sources and flags its
+# own comments list; a script is given test_arg.
 run_test() {
     phase=$1
     log="$WORK/$case_name.$phase"

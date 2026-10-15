@@ -1,11 +1,21 @@
 #!/bin/sh
-# Prove cross-call counts; an optional revision also measures the starting code.
+# ext2_batch_mutate.sh [REVISION | --texts]: show that ext2probe's cost rows
+# count the disk commands of ext2's write-back batch, on the kernel, probe
+# and emulator of the architecture ARCH names.
+#
+# The fault makes rach2/sys/fs/ext2.c write the batch at every call, as if
+# each call were synchronous. The `cost` and `cost-append` rows must then
+# fail with their command counts, and pass again with the source restored
+# and the kernel the same as the first build. A passing row also requires
+# e2fsck to accept the disk and the two files to have the bytes the probe
+# wrote. With REVISION, the ext2.c of that git revision must fail both rows
+# as well. --texts checks that the fault is once in its source.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault SOURCE: put the fault into SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -54,6 +64,7 @@ cp "$source" "$work/source.saved"
 child=
 changed=
 
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -66,12 +77,14 @@ stop_child()
     fi
 }
 
+# Remove ext2's object and the kernel, and make the kernel again.
 rebuild()
 {
     rm -f "build$ARCH_SUFFIX/rach2/sys/fs/ext2.o" "$kernel"
     make -s rach2 "ARCH=$RACH2_ARCH"
 }
 
+# Put back the saved ext2.c and touch it.
 restore()
 {
     cp "$work/source.saved" "$source"
@@ -79,6 +92,7 @@ restore()
     changed=
 }
 
+# Stop the boot and, when a fault is in the source, restore it and rebuild.
 cleanup()
 {
     stop_child
@@ -92,6 +106,8 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# check_disk PHASE: copy the ext2 root out of PHASE's disk, require e2fsck to
+# pass it, and require the bytes of /cost-rewrite and /cost-append.
 check_disk()
 {
     phase=$1
@@ -117,6 +133,10 @@ print('ext2-batch-mutation: result: disk bytes and file lengths match')
 PY
 }
 
+# run_phase PHASE EXPECTED [MODE [FAILURE]]: build the kernel, boot it on a
+# copy of the disk and run ext2probe MODE, `cost` by default. With EXPECTED
+# `pass` the row must pass and the disk be checked; otherwise it must fail
+# with the FAILURE command count, `rewrite` by default.
 run_phase()
 {
     phase=$1

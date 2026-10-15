@@ -1,5 +1,16 @@
 #!/bin/sh
-# Run the helper's boot preparation and repair over a private FAT image.
+# machine_grow_boot.sh [--mutate | --texts]: check prepare_boot and
+# keep_recovery of tools/dev/machine_grow.sh on a private FAT image, with
+# bootctl, growboot and reflash built natively.
+#
+# A boot partition whose environment already starts recovery must not be
+# written. One whose environment header is zeroed must be repaired with its
+# 1024 bytes alone, from the copy prepare_boot made; a repair torn after one
+# sector must fail, and the retry must finish it. An environment that starts
+# the candidate must be rewritten in place, and growboot must refuse to
+# write its input. --mutate makes keep_recovery rewrite an environment that
+# is already right, then makes the repair write nothing, and requires each
+# to fail its row; --texts checks that each fault changes the script.
 # Extracted functions use and assign these variables.
 # shellcheck disable=SC2034,SC2016,SC2154
 set -eu
@@ -10,6 +21,7 @@ if [ "${1:-}" != --texts ]; then
 fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-grow-boot.XXXXXX")
 echo "machine-grow-boot: logs: $work"
+# Report $* and exit 1.
 fail() { echo "machine-grow-boot: failed: $*" >&2; exit 1; }
 [ "$#" = 0 ] || [ "$*" = --mutate ] || [ "$*" = --texts ] || fail 'usage: machine_grow_boot.sh [--mutate | --texts]'
 cp "$repo/tools/dev/machine_grow.sh" "$work/original.sh"
@@ -46,6 +58,7 @@ if [ "$*" = --texts ]; then
     echo 'machine-grow-boot: texts: every fault is once in its source'
     exit 0
 fi
+# Put the unmutated script back.
 # shellcheck disable=SC2329
 cleanup() { cp "$work/original.sh" "$work/source.sh"; }
 trap cleanup EXIT
@@ -106,6 +119,8 @@ else:
         sys.exit(1)
 PY
 
+# Copy hash_slice, prepare_boot and keep_recovery whole from source.sh into
+# functions.sh, with the guest's /bin/growboot replaced by the native build.
 extract()
 {
     awk '
@@ -116,8 +131,10 @@ extract()
     sed "s|/bin/growboot|$work/growboot|g" "$work/extracted.sh" > "$work/functions.sh"
 }
 
-# These adapters replace only disk I/O and the guest command-line pathname.
-# FAT parsing, environment editing and the shell's decisions are production.
+# The functions below replace only the disk's reads and writes and the path
+# of the guest's command line; the FAT parsing, the editing of the
+# environment and the decisions are the script's own. dd ARGS: io.py for a
+# read addressed in bytes, the host's dd otherwise.
 # shellcheck disable=SC2329
 dd()
 {
@@ -126,12 +143,16 @@ dd()
         *) command dd "$@" ;;
     esac
 }
+# Copy the disk's 64 MiB boot partition to current-boot.img.
 # shellcheck disable=SC2329
 read_boot()
 {
     command dd if="$disk" of="$work/current-boot.img" bs=1048576 skip=1 count=64 2>"$work/read.log"
     [ "$(wc -c < "$work/current-boot.img" | tr -d ' ')" = 67108864 ] || fail 'short boot read'
 }
+# reflash ARGS: the native reflash for --verify, and otherwise a write
+# through io.py, which logs it and, with GROW_BOOT_TEAR=1, writes only its
+# first sector and fails.
 # shellcheck disable=SC2329
 reflash()
 {
@@ -141,6 +162,8 @@ reflash()
         python3 "$work/io.py" write "$work" "$@"
     fi
 }
+# bootctl --target DEVICE ARGS: the native bootctl, on a copy of the boot
+# partition read now when DEVICE is the disk's first partition.
 # shellcheck disable=SC2329
 bootctl()
 {
@@ -153,6 +176,8 @@ bootctl()
     fi
 }
 
+# rows PHASE: run the boot rows on the functions of source.sh, with the
+# output in PHASE.log; status 1 when a row fails.
 rows()
 {
     phase=$1

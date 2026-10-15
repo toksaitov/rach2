@@ -1,5 +1,21 @@
 #!/bin/sh
-# Exercise real log writes and the calculator through the production functions.
+# machine_grow_space_test.sh [--mutate | --texts]: check the work directory,
+# the log writes and the plan check of tools/dev/machine_grow.sh on the
+# host, through the script's own functions.
+#
+# alert, prepare_work, hash_file, check_plan, run_logged and run_measured are
+# copied out of the script, with /proc/mounts, /dev/console and growset
+# replaced by files and a native build. The work directory must be on the
+# store, and the store a mounted exFAT volume. A failed command, and a log
+# write that fails under a file size limit, must be reported, the second on
+# the console too. The plan of a 1 GiB seed for the Samsung's size must be
+# accepted, a range list growset cannot write reported as a write and not as
+# an unsupported geometry, and a target smaller than the seed refused. The
+# measured grow must unmount the store and mount it again, report a failure,
+# and refuse more than 64 KiB of output. --mutate puts the work directory in
+# /tmp, ignores a failed log write, and calls a failed growset an unsupported
+# geometry, and requires each to fail its row; --texts checks that each
+# fault changes the script.
 # shellcheck disable=SC2034,SC2016,SC2154
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -10,6 +26,7 @@ fi
 proof=$(mktemp -d "${TMPDIR:-/tmp}/rach2-grow-space.XXXXXX")
 proof=$(CDPATH='' cd -- "$proof" && pwd -P)
 echo "machine-grow-space-test: logs: $proof"
+# Report $* and exit 1.
 fail() { echo "machine-grow-space-test: failed: $*" >&2; exit 1; }
 [ "$#" = 0 ] || [ "$*" = --mutate ] || [ "$*" = --texts ] || fail 'usage: machine_grow_space_test.sh [--mutate | --texts]'
 cp "$repo/tools/dev/machine_grow.sh" "$proof/original.sh"
@@ -65,6 +82,8 @@ seed_line=$(sha256sum "$proof/store/seed.ext2")
 seed_hash=${seed_line%% *}
 export proof seed_hash
 
+# Copy the six functions whole from source.sh into functions.sh, with their
+# host paths replaced.
 extract()
 {
     awk '
@@ -141,6 +160,8 @@ printf 'plan\n' > "$proof/plan/grow.plan"
 cp "$proof/ranges.txt" "$proof/plan/ranges.txt"
 cp "$proof/ranges.txt" "$proof/work/ranges.txt"
 
+# run_case CASE STATUS DIAGNOSTIC: run CASE of case.sh, which must exit with
+# STATUS and print DIAGNOSTIC to its output or the console file.
 run_case()
 {
     case_name=$1
@@ -153,6 +174,7 @@ run_case()
     [ "$case_result" = "$expected" ] || fail "$case_name returned $case_result, expected $expected"
     grep -q "$diagnostic" "$proof/$phase-$case_name.log" "$proof/console" || fail "$case_name diagnostic"
 }
+# rows PHASE: run every case on the functions of source.sh.
 rows()
 {
     phase=$1
@@ -182,6 +204,8 @@ rows()
 export repo
 sed -n '/^run_case()/,/^# Run rows/p' "$0" | sed '$d' > "$proof/rows.sh"
 sed -n '/^extract()/,/^cat > /p' "$0" | sed '$d' > "$proof/extract.sh"
+# run_rows PHASE: run rows in a new shell, with its functions read from this
+# file.
 run_rows()
 {
     sh -eu -c 'fail() { echo "machine-grow-space-test: failed: $*" >&2; exit 1; }; . "$proof/extract.sh"; . "$proof/rows.sh"; rows "$1"' sh "$1"

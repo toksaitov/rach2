@@ -1,11 +1,15 @@
 #!/bin/sh
-# Execute check.sh's directory setup and ABI write against planted links.
+# verify_temp_test.sh: check that tools/verify/check.sh makes a private log
+# directory of its own for each run, fails when it cannot make one, and
+# writes its ABI check's source there without following a symbolic link
+# planted in the fixed directory /tmp/rach2_verify.
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/verify-temp-test.XXXXXX")
 trap 'rm -rf "$WORK"' 0
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
+# Report $* and exit 1.
 fail() { echo "verify-temp-test: $*" >&2; exit 1; }
 mkdir "$WORK/rach2_verify"
 chmod 0777 "$WORK/rach2_verify"
@@ -13,7 +17,7 @@ printf 'keep this file\n' > "$WORK/victim"
 cp "$WORK/victim" "$WORK/expected"
 ln -s "$WORK/victim" "$WORK/rach2_verify/_abi.c"
 ln -s "$WORK/victim" "$WORK/rach2_verify/verify_build.log"
-# Redirect the old fixed /tmp name into this test's private directory. The
+# The fixed name /tmp/rach2_verify is moved into this test's directory. The
 # setup is the lines from VDIR= to the one that prints the directory; without
 # both, the copy would run the rest of check.sh, this test's call included.
 if ! grep -q '^VDIR=' "$REPO/tools/verify/check.sh" ||

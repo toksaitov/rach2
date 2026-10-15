@@ -1,5 +1,22 @@
 #!/bin/sh
-# Rehearse the recovery procedure on a 64 MiB root, including both backups.
+# grow_machine.sh HARNESS ISO INSTALLER_DISK SEALED DIRECTORY [space |
+# space-mutate]: rehearse the grow procedure of tools/dev/machine_grow.sh in
+# QEMU on a 64 MiB root, booted from the recovery stick, with the backups on
+# an exFAT store.
+#
+# The target is the sealed disk's first 130 MiB, its boot environment set to
+# start recovery, and a 64 MiB root, under a qcow2 overlay. `save` must back
+# up the ranges and the boot partition without changing the target, and a
+# `grow` before the host has checked the backup must be refused. The host
+# then reads and checks the backup and writes host.sha256; `grow` must grow
+# an 8 MiB seed to 64 MiB, `restore` must bring back every byte but the boot
+# environment's, and every write must be in the saved sectors. With
+# RACH2_GROW_SMALL=1 a bad plan and a corrupt boot copy must also be refused
+# with no target byte written; then each of save, grow, restore and the
+# repair of the boot environment is cut at a completed transfer, and a retry
+# must restore every byte and the target must boot without the stick; and
+# machine_grow_full_test.sh and machine_grow_space.sh run. `space` and
+# `space-mutate` give the prepared directory to machine_grow_space.sh.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -14,6 +31,7 @@ echo "grow-machine-test: logs: $work"
 current_log=
 started=$(date +%s)
 small=${RACH2_GROW_SMALL:-0}
+# Report $*, print the current boot's log, and exit 1.
 fail()
 {
     echo "grow-machine-test: failed: $*" >&2
@@ -29,8 +47,9 @@ sh tools/image/mkinstallstick.sh "$iso" "$installer_disk" "$work/stick.img" \
     > "$work/stick.make.log" 2>&1 || fail 'the recovery stick with extra space'
 dd if="$sealed" of="$work/base.raw" bs=1048576 count=130 2>"$work/prefix.log"
 [ "$(wc -c < "$work/base.raw" | tr -d ' ')" = 136314880 ] || fail 'the boot and recovery prefix'
-# The original fixture boots recovery from its own disk. Its ext2 root has
-# owner data but no installed userland; boot checks must identify this slot.
+# The fixture boots recovery from its own disk: the boot partition's GRUB
+# environment saves the entry recovery, and the root has owner data and no
+# installed userland.
 dd if="$work/base.raw" of="$work/boot.vol" bs=1048576 skip=1 count=64 2>"$work/boot-copy.log"
 { printf '# GRUB Environment Block\nsaved_entry=recovery\n'; } > "$work/grubenv"
 env_length=$(wc -c < "$work/grubenv" | tr -d ' ')
@@ -54,8 +73,10 @@ cat "$work/original.ext2" >> "$work/base.raw"
     2048:131072:0c:boot 133120:131072:0c 266240:131072:83 > "$work/mbr.log"
 sh tools/dev/machine_grow_plan.sh "$work/seed.ext2" 397312 GROWTEST 1acef00d "$work/plan"
 tar -C "$work/plan" -cf "$work/grow-tools.tar" grow.plan ranges.txt machine_grow.sh programs.sha256 seed.sha256
-# Faults exist only in this private helper. The VM is stopped at a completed
-# transfer boundary while the enclosing operation still has work to do.
+# machine-cut.sh is a copy of the script with cut points: with GROW_TEST_CUT
+# set to save, grow, restore or repair, the guest stops after a completed
+# transfer while the action still has work to do. The faults are only in
+# this copy.
 awk '
     /^check_plan$/ {
         print "cut() {"
@@ -88,7 +109,8 @@ for point in 'cut save' 'cut grow' 'cut restore' 'cut repair'; do
 done
 awk 'NR == FNR {n++; next} FNR == n {$1 += $2} {print}' \
     "$work/plan/ranges.txt" "$work/plan/ranges.txt" > "$work/plan/bad-ranges.txt"
-# A same-length corruption before the initial checksum is made.
+# corrupt-boot.sh changes the boot copy's last byte before its checksum is
+# made.
 awk '/    sync$/ && !done {print "    printf x | dd of=\"$saved/boot.img\" bs=1 seek=67108863 conv=notrunc"; done=1} {print}' \
     "$work/plan/machine_grow.sh" > "$work/plan/corrupt-boot.sh"
 tar -C "$work/plan" -cf "$work/grow-tests.tar" machine-cut.sh bad-ranges.txt corrupt-boot.sh
@@ -105,6 +127,10 @@ fi
 qemu-img create -q -f qcow2 -o cluster_size=4096 -F raw \
     -b "$work/base.raw" "$work/disk.qcow2"
 
+# boot NAME STEPS...: boot the recovery stick with the target and the store
+# attached, unpack the plan from the store, and run STEPS. A
+# `machine-grow: failed:` line fails the boot, except in the save and
+# rejected boots, whose steps expect failures.
 boot()
 {
     current_log="$work/$1.log"
@@ -127,8 +153,8 @@ boot()
         'expect=GROW_SETUP' "$@" || fail 'the recovery boot'
 }
 
-# The complete guest helper must reject both bad inputs before writing the
-# target. The byte comparison after the boot covers all rejected attempts.
+# The unchanged script must refuse the bad plan and the corrupt boot copy
+# before it writes the target; the comparison after the boot covers both.
 if [ "$small" = 1 ]; then
     boot rejected \
         'send=cp /tmp/grow-plan/ranges.txt /tmp/grow-plan/good-ranges.txt && cp /tmp/grow-plan/bad-ranges.txt /tmp/grow-plan/ranges.txt && sh /tmp/grow-plan/machine_grow.sh save /dev/disk0 /mnt/grow /tmp/grow-plan; test "$?" = 1 && test ! -e /mnt/grow/saved.pending && echo BAD_RANGE_""REFUSED' \
@@ -183,7 +209,9 @@ grep -q 'growroot: entry: /dev/disk0p3 from 16384 to 131072 sectors' "$current_l
 grep -q 'growroot: measure: resize ' "$current_log" || fail 'the resize measurement is absent'
 echo 'grow-machine-test: the temporary seed grows from 8 to 64 MiB with recovery saved: OK'
 
-# The seed and boot environment add writes to the grow tool's metadata set.
+# check_writes NAME: require every extent the overlay has written to be in a
+# saved range of the plan or in the boot partition, sectors 2048 to 133119,
+# whose environment the grow writes beside the seed.
 check_writes()
 {
     qemu-img map --output=json "$work/disk.qcow2" > "$work/$1.map"
@@ -227,8 +255,9 @@ dd if="$work/base.raw" of="$work/normalized.raw" bs=512 skip="$env_sector" \
 cmp "$work/base.raw" "$work/normalized.raw" || fail 'a byte outside the boot environment was not restored'
 echo 'grow-machine-test: result: a missing table and the complete root are restored; recovery remains saved'
 
-# No stick is attached: GRUB, the recovery kernel and its RAM image must all
-# boot from the repaired target. Mount and read the restored owner file too.
+# disk_boot NAME: boot the target with no stick attached, so that GRUB, the
+# recovery kernel and its RAM image all come from it; recovery must be the
+# saved entry, and the restored root must have the owner file.
 disk_boot()
 {
     current_log="$work/$1-boot.log"
@@ -255,8 +284,8 @@ for point in save grow restore repair; do
     qemu-img create -q -f qcow2 -o cluster_size=4096 -F raw \
         -b "$work/$backing.raw" "$work/disk.qcow2"
     if [ "$point" = repair ]; then
-        # The grown fixture has a missing MBR. Restore that sector so bootctl
-        # reaches the damaged header and its diagnostic proves the condition.
+        # The grown target's MBR is zero; it is written back first, so that
+        # bootctl reads the zeroed environment and reports its header.
         boot "$point-cut" \
             "send=dd if=/mnt/grow/saved/backup.bin of=/tmp/mbr bs=512 count=1 && reflash /dev/disk0 0 512 < /tmp/mbr && diskctl reread /dev/disk0 && dd if=/dev/zero of=/tmp/bad-env bs=512 count=2 && reflash /dev/disk0 $((env_sector * 512)) 1024 < /tmp/bad-env && echo ENV_\"\"DAMAGED" \
             'expect=ENV_DAMAGED' \
@@ -277,8 +306,7 @@ for point in save grow restore repair; do
             'send=test ! -e /mnt/grow/saved && test -d /mnt/grow/saved.pending && mv /mnt/grow/saved.pending /mnt/grow/interrupted-save && sh /tmp/grow-plan/machine_grow.sh save /dev/disk0 /mnt/grow /tmp/grow-plan && echo SAVE_""RETRIED' \
             'expect=SAVE_RETRIED' \
             'send=umount /mnt/grow && echo GROW_MACHINE_""DONE'
-        # Extract and compare the retried backup with the previously verified
-        # host copy. A new manifest is acknowledged only after those checks.
+        # The retried backup must be the same as the host copy checked before.
         mkdir "$work/retried-copy"
         for name in backup.bin boot.img grow.plan ranges.txt SHA256SUMS; do
             "$mkexfat" --check "$work/store.img" 2048 --read "saved/$name" > "$work/retried-copy/$name"
@@ -307,7 +335,7 @@ for point in save grow restore repair; do
 done
 echo "grow-machine-test: result: interruption matrix completed in $(($(date +%s) - started)) seconds"
 
-# The space proof keeps all phases in one full RAM root. Its extra boots
-# and full native transfer remain outside the ordinary tier.
+# The replay of the Samsung's ranges, and machine_grow_space.sh, which runs
+# every phase in one full RAM root, run only with RACH2_GROW_SMALL=1.
 sh tests/system/machine_grow_full_test.sh
 sh tests/system/machine_grow_space.sh "$harness" "$work" space

@@ -1,8 +1,16 @@
 #!/bin/sh
-# Build real targets with private link inputs and check each incremental link.
-# The fixture is i686's, its compiler, linker script and musl, whatever ARCH
-# the run that starts it is for, in the environment or in the flags of the
-# make that runs a suite, which tests/run gives ARCH.
+# build_inputs_test.sh [all|libraries|kernel]: check that the build relinks a
+# program when one of its link inputs changes, and only then.
+#
+# Private copies of musl's libc.a and start files and of libgcc.a each get a
+# marker symbol. Two utilities and dnstest are linked against them; an idle
+# build must relink nothing, and a changed input must relink all three with its
+# new marker. The kernel is linked with a private linker script, whose edit must
+# reach the kernel, and the kernel a loader reads must have no debug sections
+# while kernel.debug keeps them. The fixture is i686's, its compiler, linker
+# script and musl, whatever ARCH the run that starts it is for, in the
+# environment or in the flags of the make that runs a suite, which tests/run
+# gives ARCH.
 set -eu
 unset ARCH MAKEFLAGS MFLAGS
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
@@ -12,6 +20,7 @@ WORK=$(mktemp -d "$REPO/build/build-inputs.XXXXXX")
 trap 'rm -rf "$WORK"' 0
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
+# Report $* and exit 1.
 fail() { echo "build-inputs-test: $*" >&2; exit 1; }
 cc=$(command -v i686-elf-gcc)
 future=$(($(date +%Y) + 2))
@@ -29,6 +38,8 @@ for input in libc.a crt1.o crti.o crtn.o libgcc.a; do
     cp "$original" "$WORK/$input.original"
     chmod u+w "$original"
 done
+# set_marker INPUT VALUE: give the private INPUT the marker symbol
+# build_INPUT with VALUE; its path is left in `changed`.
 set_marker() {
     input=$1
     value=$2
@@ -48,6 +59,7 @@ for input in libc.a crt1.o crti.o crtn.o libgcc.a; do
     set_marker "$input" 1
 done
 marker_flags=-Wl,-u,build_libc_a,-u,build_libgcc_a
+# Make the two utilities and dnstest against the private inputs.
 link_programs() {
     make --no-print-directory -C utils "BUILD=$WORK/utils" \
         "PREFIX=$WORK/musl" "LIBGCC=$WORK/libgcc.a" "EXTRA=$marker_flags" \

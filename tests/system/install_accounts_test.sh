@@ -21,9 +21,9 @@
 # image's system group that no new account comes with, as the GNU root's
 # `crontab` comes, must be added alone; and a system account the machine has
 # by the image's name and id, with no shadow line, `nobody`'s of id 65534
-# among them, must get the image's. With
-# --mutate each fault below is put into the copy of the functions and must
-# fail its row; the rows run again on the functions as they are at the end.
+# among them, must get the image's. With --mutate each fault below is put
+# into the copy of the functions and must fail its row; the rows run again
+# on the functions as they are at the end.
 #
 # --texts puts each fault into the copy and runs no row.
 #
@@ -61,6 +61,7 @@ cat "$work/add_lines.sh" "$work/keep_image_accounts.sh" > "$work/function.saved"
 cp "$work/function.saved" "$work/function.sh"
 
 failures=0
+# fail ROW: report that ROW failed and count it.
 fail() {
     echo "install-accounts-test: failed: $1"
     failures=$((failures + 1))
@@ -96,6 +97,7 @@ machine_passwd='root:x:0:0:root:/root:/bin/sh\nowner:x:1001:1001:owner:/home/own
 machine_group='root:x:0:\nowner:x:1001:\n'
 machine_shadow='root:$6$a:0:0:99999:7:::\nowner:$6$b:0:0:99999:7:::\n'
 
+# Run every row on the copy of the functions.
 rows() {
     files "$work/image" "$image_passwd" "$image_group" "$image_shadow"
     files "$work/dest" "$machine_passwd" "$machine_group" "$machine_shadow"

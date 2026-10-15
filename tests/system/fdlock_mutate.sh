@@ -1,12 +1,24 @@
 #!/bin/sh
-# Prove the descriptor regressions with compiled faults and restored builds,
+# fdlock_mutate.sh [--direct] [FAULT...] | --texts: show that `tests/run
+# fdlock` catches seven compiled faults in the locking of open descriptors,
 # on the kernel, probes and emulator of the architecture ARCH names.
+#
+# `namespace` takes the namespace lock out of rach2/sys/fs/fd.c's operations
+# on a file system whose namespace is serialised. `raw-read` and `raw-write`
+# let a raw device's read or write run without the shared offset held;
+# `lseek` and `llseek` take the descriptor lock out of a raw device's seeks;
+# `readv` makes read_ready call the device's read without read_ops. `orphan`
+# makes vfs.c truncate a krffs file by its path, which an unlinked file no
+# longer has. Each fault must fail the suite with its row's words, and the
+# suite must pass with the source restored. --direct runs `make run-fdlock`
+# in place of `tests/run fdlock`. The default is every fault, without
+# `llseek` on x86-64. --texts checks that each fault is once in its source.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FAULT SOURCE: put FAULT into SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -140,6 +152,7 @@ for source in rach2/sys/fs/fd.c rach2/sys/syscall_fs.c rach2/sys/fs/vfs.c; do
 done
 cc -O2 -Wall -Wextra -Werror tests/system/runner/runutil.c -o "$work/runutil"
 
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -152,6 +165,7 @@ stop_child()
     fi
 }
 
+# Put back the saved copy of the changed source and touch it.
 restore()
 {
     if [ -n "$changed" ]; then
@@ -161,6 +175,7 @@ restore()
     fi
 }
 
+# Stop the boot and, when a fault is in the source, restore it and rebuild.
 cleanup()
 {
     stop_child
@@ -176,12 +191,17 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# Remove the three changed objects, the kernel and fd_hosttest, so that make
+# builds them again.
 force_rebuild()
 {
     rm -f "$tree"/rach2/sys/fs/fd.o "$tree"/rach2/sys/fs/vfs.o \
         "$tree"/rach2/sys/syscall_fs.o "$tree"/rach2/kernel build/tests/host/fd_hosttest
 }
 
+# run_phase PHASE EXPECTED: build the kernel, the probes and fd_hosttest and
+# run the suite. With EXPECTED `pass` it must pass; otherwise it must fail
+# and its logs must have EXPECTED.
 run_phase()
 {
     phase=$1

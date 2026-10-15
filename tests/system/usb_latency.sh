@@ -1,5 +1,12 @@
 #!/bin/sh
-# The two USB wake-to-dispatch rows, also run by suites/usb.sh.
+# usb_latency.sh KERNEL IMAGE HARNESS: the USB suite's two rows of the path
+# from a keystroke's interrupt to its dispatch, which suites/usb.sh runs.
+#
+# Each row boots with a USB keyboard on an xHCI controller and
+# `rach2.usblatency`, and runs keylatprobe, once beside a spinning loop and
+# once beside a loop that reads getrandom. checkers/usblatency.awk judges
+# the record, after usb_latency_test.sh has checked the checker; a
+# `usb: pump:` line fails the row. The exit status is 0 when both pass.
 set -eu
 kernel=$1
 image=$2

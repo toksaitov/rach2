@@ -48,7 +48,9 @@ trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
 fails=0
+# say TEXT: print a progress line.
 say() { echo "dryrun-test: $1"; }
+# bad TEXT: report a failed row and count it in `fails`.
 bad() { echo "dryrun-test: FAIL: $1" >&2; fails=$((fails + 1)); }
 
 mkdir -p "$WORK/mk"
@@ -93,6 +95,7 @@ row()
     say "$label: $want: OK"
 }
 
+# Run the five rows.
 rows()
 {
     row 'no flags' built
@@ -113,8 +116,8 @@ rows
 [ "$fails" = 0 ] || { echo 'dryrun-test: FAIL: the fixed rule did not pass' >&2; exit 1; }
 say 'the fixed rule passes every row'
 
-# The mutation is the rule this entry was written for: the first word of
-# MAKEFLAGS searched for the letter, which reads --no-print-directory as -n.
+# The fault is a rule that looks for the letter n in the first word of
+# MAKEFLAGS, which reads --no-print-directory as -n.
 cat > "$WORK/mk/dryrun.mk" <<'EOD'
 DRY_RUN := $(findstring n,$(firstword $(MAKEFLAGS)))
 EOD

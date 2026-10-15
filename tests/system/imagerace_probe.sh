@@ -1,8 +1,18 @@
 #!/bin/sh
-# Exercise the root image rule with a compiled probe in a private tree, the
-# i686 one whatever ARCH the run that starts it is for: neither the
-# architecture, in the environment or in the make flags tests/run gives it,
-# nor the path map an x86-64 make exports reaches the tree.
+# imagerace_probe.sh [--mutate | --texts]: check that an edited probe reaches
+# the test image in one make, in a private copy of the root Makefile, mk/
+# and the makefiles of tests/ and krffs/. The tree is i686's whatever ARCH
+# the run that starts it is for: neither the architecture, in the environment
+# or in the make flags tests/run gives it, nor the path map an x86-64 make
+# exports reaches the tree.
+#
+# The image stages conloadprobe alone. After one make it must have the
+# probe's bytes; after an edit a second later, one make must rebuild the
+# probe and restage it; a third make and a dry run must not rebuild the
+# image. --mutate drops the Makefile's rule that makes a staged program of
+# tests/ wait for the tests component, requires the edit to miss the image,
+# and requires the rows to pass again with the rule restored and the same
+# probe built. --texts checks that the rule is once in the Makefile.
 set -eu
 unset ARCH RACH2_ARCH RACH2_PATH_MAP MAKEFLAGS MFLAGS
 
@@ -19,9 +29,9 @@ case ${1:-} in
     *) echo 'imagerace-probe: usage: [--mutate | --texts]' >&2; exit 2 ;;
 esac
 
-# drop_delegation MAKEFILE: print MAKEFILE without the rule that hands the
-# musl programs to tests/Makefile, the fault; fail unless the rule is there
-# once.
+# drop_delegation MAKEFILE: print MAKEFILE without the rule that makes the
+# staged programs of tests/, but the musl ones, wait for the tests component;
+# that is the fault. Fail unless the rule is there once.
 drop_delegation()
 {
     awk '
@@ -44,7 +54,7 @@ work=$(mktemp -d "$repo/build/tests/system/imagerace-probe.XXXXXX")
 tree=$work/tree
 child=
 
-# Stop the build before restoring the private sources it reads.
+# Stop the build, then put back the private Makefile and probe source.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -63,14 +73,16 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# A failed setup or build must not count as a detected stale image.
+# Report $* and exit 1, so that a failed setup or build is never taken for a
+# stale image.
 fail()
 {
     echo "imagerace-probe: $*" >&2
     exit 1
 }
 
-# Keep each complete build log and let cleanup wait for its make process.
+# build LOG ARGS...: make ARGS with the whole output in LOG, in the
+# background so that cleanup can stop it; a failure prints LOG and fails.
 build()
 {
     log=$1
@@ -86,7 +98,8 @@ build()
     fi
 }
 
-# Omit components absent from the one-probe manifest, not the tests sub-make.
+# image_make LOG [ARGS...]: make the private tree's test image, taking every
+# component but tests as up to date, since the manifest stages one probe.
 image_make()
 {
     build "$@" -C "$tree" -j32 -o preflight -o krffs -o rach2 \
@@ -114,8 +127,10 @@ build "$work/tools.log" -C "$tree/krffs" -j4 -o libc-check \
     ../build/krffs/mkfs.krffs ../build/krffs/stageimage.krffs \
     ../build/krffs/readfile.krffs
 
-# Compare extracted bytes after one make; also require a real probe rebuild.
-# Edits are a second apart because GNU Make 3.81 compares whole seconds.
+# check_phase PHASE: build the image, edit the probe, and require one make to
+# rebuild the probe and stage its bytes, and later makes to rebuild nothing.
+# Status 1 when the image keeps the old probe. The edit is a second after the
+# build, since GNU Make 3.81 compares whole seconds.
 check_phase()
 {
     phase=$1

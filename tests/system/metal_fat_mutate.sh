@@ -1,12 +1,21 @@
 #!/bin/sh
-# Prove the FAT acceptance row with corrupt disk bytes and a stale cache, on the
-# kernels and suite of the architecture ARCH names.
+# metal_fat_mutate.sh [--texts]: show that the FAT row of `tests/run metal`
+# catches two compiled faults in bcache_invalidate, on the kernels and suite
+# of the architecture ARCH names.
+#
+# Both faults make bcache_invalidate write to the disk a changed copy of each
+# cached sector that begins with the row's text `fat acceptance `. `disk`
+# then drops the cached block, so the remount reads the changed bytes;
+# `cached` keeps it, so the remount reads the cached bytes while the host
+# reads the changed ones. Each must fail its row, and the restored kernels
+# must match the first builds and pass. --texts checks that each fault
+# applies to its source.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault SOURCE FAULT: put FAULT into SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -78,6 +87,8 @@ child=
 recorder=
 changed=
 
+# Stop the suite's process group, wait until it is gone and for the
+# recorder, and remove the fifo.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -96,6 +107,7 @@ stop_child()
     rm -f "$work/output"
 }
 
+# Remove bcache's objects and both kernels, and make the kernels again.
 rebuild()
 {
     rm -f "$tree"/rach2/sys/fs/bcache.o "$tree"/rach2/kernel \
@@ -103,6 +115,7 @@ rebuild()
     make -s rach2 rach2-metal "ARCH=$RACH2_ARCH"
 }
 
+# Put back the saved bcache.c, touch it, and rebuild.
 restore()
 {
     cp "$work/source.saved" "$source"
@@ -112,6 +125,7 @@ restore()
     changed=
 }
 
+# Stop the suite and, when a fault is in the source, restore it.
 cleanup()
 {
     stop_child
@@ -124,6 +138,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE EXPECTED: run the metal suite, its output recorded through
+# a fifo. With EXPECTED `pass` the FAT row must pass; otherwise the suite
+# must fail and print EXPECTED, and the metal log must show the fault.
 run_phase()
 {
     phase=$1

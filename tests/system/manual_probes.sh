@@ -2,36 +2,38 @@
 #
 # manual_probes.sh KEY ADDRESS MODE DIR
 #
-# What the machine sitting runs over SSH, as root, against an installed
-# machine. Every mode but `clean` first runs tools/dev/machine_identity.sh,
-# so RACH2_MEASURE_SLOT and RACH2_MEASURE_KERNEL must name the slot and the
-# kernel the machine is running, and the record says which kernel answered.
-# DIR receives the logs, under a directory of this run's own. RACH2_PROBE_PORT
-# names another SSH port, for a rehearsal against a machine in the emulator.
+# The probes and measurements a person runs over SSH, as root, against an
+# installed machine. Every mode but `clean` first runs
+# tools/dev/machine_identity.sh, so RACH2_MEASURE_SLOT and RACH2_MEASURE_KERNEL
+# must name the slot and the kernel the machine is running, and the record says
+# which kernel answered. DIR receives the logs, under a directory of this run's
+# own. RACH2_PROBE_PORT names another SSH port, for a rehearsal against a
+# machine in the emulator.
 #
-# probes  Entry 51 of dev-log/50-shortcomings/plan.md: the ten probes that
-#         tests/Readme.md lists for an installed root, on the machine's ext2
-#         root, with the prerequisites that list gives each. The executables
-#         are copied from build/tests and compared byte for byte on the
-#         machine; a name the machine already has is refused unless it has
-#         the same bytes, and so is a name a probe reserves. Nine run over
-#         SSH, and what this script staged is removed after them. orphanprobe
-#         must be the kernel's init, which no SSH child can be, so it is left
-#         at /orphanprobe and the console steps for it are printed. devprobe
-#         switches the machine's screen to graphics mode and back.
+# probes  The ten probes that tests/Readme.md lists for an installed root,
+#         on the machine's ext2 root, with the prerequisites that list gives
+#         each. The executables are copied from build/tests and compared
+#         byte for byte on the machine; a name the machine already has is
+#         refused unless it has the same bytes, and so is a name a probe
+#         reserves. Nine run over SSH, and what this script staged is removed
+#         after them. orphanprobe must be the kernel's init, which no SSH
+#         child can be, so it is left at /orphanprobe and the console steps
+#         for it are printed. devprobe switches the machine's screen to
+#         graphics mode and back.
 # clean   Remove /orphanprobe once its console run is done.
-# writes  Entry 49: the disk commands and cache flushes of 2000 calls of
-#         4 KiB through one open file, appended to a new file and then
-#         rewritten in place, each run ended by one fsync, read from
-#         /proc/disk around each; three runs.
-# pipe    Entry 26: `dd` of 128 MiB in 1 MiB reads from the root's own
-#         partition, the device /proc/mounts names for /, into `sha256sum`,
+# writes  The disk commands and cache flushes of 2000 calls of 4 KiB through
+#         one open file, appended to a new file and then rewritten in place,
+#         each run ended by one fsync, read from /proc/disk around each;
+#         three runs.
+# pipe    `dd` of 128 MiB in 1 MiB reads from the root's own partition, the
+#         device /proc/mounts names for /, into `sha256sum`,
 #         three runs, each timed by the machine's clock and by this host's
 #         around its SSH command. An installed boot publishes the partitions
 #         and not the whole disk, so the partition is what the pipe reads.
 #
 # The exit status is 0 when every probe or run passed.
 set -eu
+# Print the usage and exit 2.
 usage()
 {
     echo 'usage: manual_probes.sh KEY ADDRESS probes|clean|writes|pipe DIR' >&2
@@ -69,6 +71,7 @@ reserved='d e g h m work nope unlinkdir vp procx rach2-probes'
 staged=
 ran=
 
+# remote COMMAND: run COMMAND on the machine as root over SSH.
 remote()
 {
     ssh -i "$key" -p "$port" -o BatchMode=yes -o ConnectTimeout=10 \
@@ -76,6 +79,7 @@ remote()
         "root@$address" "$1"
 }
 
+# host_sum FILE: print FILE's SHA-256, as this host computes it.
 host_sum()
 {
     shasum -a 256 <"$1" | cut -d ' ' -f 1

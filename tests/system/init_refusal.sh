@@ -2,15 +2,14 @@
 #
 # init_refusal.sh: a root whose /sbin/init cannot be read halts the boot.
 #
-# The kernel falls to its debug shell, which authenticates nobody, only when
-# the root it mounted has no /sbin/init at all. Any other failure to look the
-# program up, a symbolic link loop or an I/O error, is a machine with an init
-# it cannot reach, and the boot halts with a line saying so (entry 123 of the
-# shortcomings list). The root here is an ext2 volume whose /sbin/init is a
-# symbolic link to itself, which the walk follows until it answers ELOOP.
-# The row asserts both halves the bootline suite asserts of every refusal:
-# the refusal is printed, and no shell is reached in the ten seconds the
-# machine is left running after it.
+# The kernel falls to its debug shell, which authenticates nobody, only when the
+# root it mounted has no /sbin/init at all. Any other failure to look the
+# program up, a symbolic link loop or an I/O error, is a machine with an init it
+# cannot reach, and the boot halts with a line saying so. The root here is an
+# ext2 volume whose /sbin/init is a symbolic link to itself, which the walk
+# follows until it answers ELOOP. The row asserts both halves the bootline suite
+# asserts of every refusal: the refusal is printed, and no shell is reached in
+# the ten seconds the machine is left running after it.
 #
 # Usage: init_refusal.sh KERNEL HARNESS MKMBR OUT
 #
@@ -21,6 +20,7 @@
 set -u
 KERNEL=$1; HARNESS=$2; MKMBR=$3; OUT=$4
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
+# Report $1 and exit 1.
 fail() { echo "init-refusal: FAIL: $1" >&2; exit 1; }
 
 . "$REPO/tools/setup/e2fsprogs_path.sh"

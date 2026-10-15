@@ -1,10 +1,21 @@
 #!/bin/sh
+# install_keys_mutate.sh [--texts]: show that the installer suite catches
+# three faults in utils/rach2-install, built in a private copy of the tree,
+# on the kernel, images and emulator of the architecture ARCH names.
+#
+# `keys` takes the archiving of the machine's Dropbear keys out of
+# write_archive, which row 17 must catch. `archive` makes the update rebuild
+# the archive slot it was chosen from, which leaves no complete copy when the
+# update stops, and row archive-stop must catch it. `case` takes out the
+# refusal of two key names that differ only in case, which row archive-keys
+# must catch. The installer suite must pass on the installer as it is and
+# after each restoration. --texts checks that each fault is in the installer.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_keys ARGS...: put one fault into its source; with
+# apply_keys SOURCE: put the `keys` fault into SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_keys()
 {
@@ -26,7 +37,7 @@ PY
 }
 
 
-# apply_archive ARGS...: put one fault into its source; with
+# apply_archive SOURCE: put the `archive` fault into SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_archive()
 {
@@ -48,7 +59,7 @@ PYOLD
 }
 
 
-# apply_case ARGS...: put one fault into its source; with
+# apply_case SOURCE: put the `case` fault into SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_case()
 {
@@ -104,6 +115,7 @@ source="$work/tree/utils/rach2-install"
 cp "$source" "$work/installer.saved"
 child=
 
+# Stop the running suite's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -114,12 +126,14 @@ stop_child()
     fi
 }
 
+# Put back the private tree's saved installer and touch it.
 restore()
 {
     cp "$work/installer.saved" "$source"
     touch "$source"
 }
 
+# Stop the suite and restore the installer.
 cleanup()
 {
     stop_child
@@ -130,8 +144,11 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Each phase rebuilds the images which stage the installer. The source tree
-# and build outputs are private so an interrupted proof cannot affect a suite.
+# run_phase PHASE STATUS [FAILURE]: rebuild the images that stage the
+# installer and run the installer suite on them, which must exit with STATUS:
+# 0 with the archive and key rows passed, or 1 with `FAIL: FAILURE`. The
+# tree and its build outputs are private, so a run that is stopped leaves
+# the main tree's images as they were.
 run_phase()
 {
     phase=$1

@@ -1,13 +1,14 @@
 #!/bin/sh
-# Prove sigprobe's timer rows with faults compiled into the kernel, on the
-# kernel, probe and emulator of the architecture ARCH names.
+# itimer_mutate.sh [--texts]: show that sigprobe's timer rows catch four
+# faults compiled into the kernel, on the kernel, probe and emulator of the
+# architecture ARCH names.
 #
 # Usage: sh tests/system/itimer_mutate.sh [--texts]
 #
 # sigprobe arms the real-time timer of setitimer(2) and requires a blocked
 # single alarm not to end a sleep and its handler to run once unblocked, an
 # interval timer to end three sleeps, and a timer other than the three to be
-# refused (entries 212 and 215). The kernel is built as it is, where the
+# refused. The kernel is built as it is, where the
 # probe must pass; with the tick's SIGALRM taken out of proc_wake_sleepers,
 # where the single alarm's handler row must fail; with the timer left
 # disarmed after it fires, where the interval's row must fail; with
@@ -17,7 +18,7 @@
 # the probe must pass and the kernel must be the first one byte for byte.
 # The probe boots alone from a 2 MiB image, which is checked to hold the
 # built probe. The trap stops the probe's machine before it restores the
-# sources.
+# sources. --texts checks that each fault is once in its source.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -101,6 +102,7 @@ cp rach2/sys/syscall_proc.c "$work/syscall_proc.saved"
 child=
 changed=
 
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -113,6 +115,8 @@ stop_child()
     fi
 }
 
+# Remove the objects of the three sources and the kernel, and make the
+# kernel again.
 rebuild()
 {
     rm -f "$tree"/rach2/sys/proc/process.o "$tree"/rach2/sys/syscall.o \
@@ -121,6 +125,7 @@ rebuild()
     make -s rach2 "ARCH=$RACH2_ARCH"
 }
 
+# Put back the saved copies of the three sources and touch them.
 restore()
 {
     cp "$work/process.saved" rach2/sys/proc/process.c
@@ -130,6 +135,7 @@ restore()
     changed=
 }
 
+# Stop the boot and, when a fault is in a source, restore it and rebuild.
 cleanup()
 {
     stop_child
@@ -143,6 +149,8 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_probe EXPECTED: boot the kernel and run sigprobe. With EXPECTED `pass`
+# it must pass; otherwise it must fail the row named in `detail`.
 run_probe()
 {
     expected=$1
@@ -170,6 +178,7 @@ run_probe()
     echo "itimer-mutation: result: $phase status $status"
 }
 
+# run_phase PHASE EXPECTED: build the kernel, keep a copy, and run the probe.
 run_phase()
 {
     phase=$1

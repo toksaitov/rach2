@@ -1,6 +1,17 @@
 #!/bin/sh
 # shellcheck disable=SC2034,SC2016 # Extracted functions use these variables.
-# Exercise the machine's checks with real seed files and complete boot reads.
+# machine_grow_check.sh [--mutate | --texts]: check check_plan and
+# check_boot_copy of tools/dev/machine_grow.sh with real seed file systems
+# and a complete read of the 64 MiB boot partition.
+#
+# For an 8 MiB seed and a 1 GiB seed grown to the Samsung's size, check_plan
+# must pass on the plan growset makes and fail when the last range starts one
+# length later. check_boot_copy must pass on an exact copy of the boot
+# partition and fail on one whose last byte differs, with SHA256SUMS made
+# again over it. --mutate takes each check out of a copy of the script in
+# turn, requires its row to fail with its own diagnostic, and requires the
+# rows to pass with the copy restored; --texts checks that each check is in
+# the script.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 if [ "${1:-}" != --texts ]; then
@@ -9,6 +20,7 @@ if [ "${1:-}" != --texts ]; then
 fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-grow-check.XXXXXX")
 echo "machine-grow-check: logs: $work"
+# Report $* and exit 1.
 fail() { echo "machine-grow-check: failed: $*" >&2; exit 1; }
 [ "$#" = 0 ] || [ "$*" = --mutate ] || [ "$*" = --texts ] || fail 'usage: machine_grow_check.sh [--mutate | --texts]'
 cp "$repo/tools/dev/machine_grow.sh" "$work/original.sh"
@@ -39,6 +51,7 @@ if [ "$*" = --texts ]; then
     echo 'machine-grow-check: texts: every fault is once in its source'
     exit 0
 fi
+# Put the unmutated script back.
 # shellcheck disable=SC2329
 cleanup() { cp "$work/original.sh" "$work/source.sh"; }
 trap cleanup EXIT
@@ -66,10 +79,11 @@ dd if=/dev/zero of="$work/disk" bs=1048576 count=65 2>"$work/disk.log"
 printf x | dd of="$work/disk" bs=1 seek=68157439 conv=notrunc 2>>"$work/disk.log"
 dd if="$work/disk" of="$work/saved/boot.original" bs=1048576 skip=1 count=64 2>>"$work/disk.log"
 
+# Copy hash_file, hash_slice, check_plan and check_boot_copy whole from
+# source.sh into checks.sh, with the guest's /bin/growset replaced by the
+# native build; hash_slice reads extents through the native reflash.
 extract()
 {
-    # Extract complete production functions; adapt only the guest binary path
-    # to its native build. The extent reader is the real reflash verifier.
     awk '
         /^(hash_file|hash_slice|check_plan|check_boot_copy)\(\)/ {copy = 1}
         copy {print}
@@ -78,6 +92,8 @@ extract()
     sed "s|/bin/growset|$work/growset|g" "$work/functions.sh" > "$work/checks.sh"
 }
 
+# rows PHASE: run the plan and boot rows on the functions of source.sh, with
+# the output in PHASE.log; status 1 when a check accepted its fault.
 rows()
 {
     phase=$1
@@ -108,7 +124,7 @@ rows()
         cp "$saved/boot.original" "$saved/boot.img"
         check_boot_copy
         printf y | dd of="$saved/boot.img" bs=1 seek=67108863 conv=notrunc 2>"$work/corrupt.log"
-        # Authenticate the corrupted copy just as the old save did.
+        # The corrupted copy gets a matching SHA256SUMS, as `save` writes one.
         (cd "$saved" && sha256sum boot.img > SHA256SUMS && sha256sum -c SHA256SUMS)
         if (check_boot_copy) >"$work/$phase-boot.log" 2>&1; then
             fail 'same-length boot corruption accepted'

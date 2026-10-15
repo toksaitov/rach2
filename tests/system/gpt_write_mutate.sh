@@ -1,33 +1,32 @@
 #!/bin/sh
-# Prove the GPT disk-write refusal row with recovery kernels built privately,
-# for the architecture ARCH names, on its test image and its emulator.
+# gpt_write_mutate.sh: show that the row of gpt_write_refusal.sh catches
+# three compiled faults, with recovery kernels built privately for the
+# architecture ARCH names, on its test image and its emulator.
 #
 # Usage: sh tests/system/gpt_write_mutate.sh [--texts]
 #
-# tests/system/gpt_write_refusal.sh types the recovery shell's `disk write`
-# at its GPT and MBR disks and requires the refusal and an unchanged disk, or
-# on the one disk whose last sector nothing holds the round-trip. The
-# recovery kernel is built seven times from a private copy of rach2/ and mk/,
-# never from the main tree's sources or into its build/: as it is, where the
-# row must pass; with the refusal taken out, so that the command writes the
-# backup header's sector, where the row must fail on the GPT disk with no
-# protective MBR and that disk must differ from its copy; restored, where it
-# must pass; with the read of the last sector taken out, so that a disk whose
-# LBA 1 says nothing is taken for one without a table, where the row must fail
-# on the GPT disk with neither a protective MBR nor a primary header (entry
-# 172); restored again; with the check of the MBR's entries taken out, where
-# the row must fail on the MBR disk whose partition reaches the last sector
-# (entry 195); and restored once more. The GPT faults are judged on the disks
-# with no protective MBR because the MBR check refuses any disk with one, and
-# the row runs those two first because it stops at its first failure (entry
-# 206).
-# Each restored kernel must be identical to the first. The trap stops the
-# row's process group before it restores the private source.
+# tests/system/gpt_write_refusal.sh types the recovery shell's `disk write` at
+# its GPT and MBR disks and requires the refusal and an unchanged disk, or on
+# the one disk whose last sector nothing holds the round-trip. The recovery
+# kernel is built seven times from a private copy of rach2/ and mk/, never from
+# the main tree's sources or into its build/: as it is, where the row must pass;
+# with the refusal taken out, so that the command writes the backup header's
+# sector, where the row must fail on the GPT disk with no protective MBR and
+# that disk must differ from its copy; restored, where it must pass; with the
+# read of the last sector taken out, so that a disk whose LBA 1 says nothing is
+# taken for one without a table, where the row must fail on the GPT disk with
+# neither a protective MBR nor a primary header; restored again; with the check
+# of the MBR's entries taken out, where the row must fail on the MBR disk whose
+# partition reaches the last sector; and restored once more. The GPT faults are
+# judged on the disks with no protective MBR because the MBR check refuses any
+# disk with one, and the row runs those two first because it stops at its first
+# failure. Each restored kernel must be identical to the first. The trap stops
+# the row's process group before it restores the private source.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_refusal ARGS...: put one fault into its source; with
+# apply_refusal SOURCE: take the GPT refusal out of SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_refusal()
 {
@@ -53,7 +52,7 @@ PY
 }
 
 
-# apply_backup ARGS...: put one fault into its source; with
+# apply_backup SOURCE: take the read of the last sector out of SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_backup()
 {
@@ -79,7 +78,7 @@ PY
 }
 
 
-# apply_mbr ARGS...: put one fault into its source; with
+# apply_mbr SOURCE: take the check of the MBR's entries out of SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_mbr()
 {
@@ -126,6 +125,7 @@ source="$tree/rach2/kernel.c"
 child=
 changed=
 
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -138,6 +138,7 @@ stop_child()
     fi
 }
 
+# Put back the saved kernel.c of the private tree and touch it.
 restore()
 {
     cp "$work/kernel.saved" "$source"
@@ -145,6 +146,7 @@ restore()
     changed=
 }
 
+# Stop the row and, when a fault is in the private source, restore it.
 cleanup()
 {
     stop_child
@@ -157,13 +159,17 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE EXPECTED [DISK]: build the recovery kernel in the private
+# tree and run the row on it. With EXPECTED `pass` the row must pass;
+# otherwise it must fail, with the round-trip on DISK's console and DISK
+# changed. The object is removed first, since a source restored within the
+# second its object was built reads as up to date to a make that compares
+# whole seconds.
 run_phase()
 {
     phase=$1
     expected=$2
     disk=${3:-b}
-    # The object goes first: a source restored within the second its object
-    # was built reads as up to date to a make that compares whole seconds.
     rm -f "$tree/build$ARCH_SUFFIX/rach2-recovery/kernel.o" \
         "$tree/build$ARCH_SUFFIX/rach2-recovery/kernel"
     make -s -j8 -C "$tree/rach2" COMPONENT=rach2-recovery KEXTRA=-DRACH2_RECOVERY \

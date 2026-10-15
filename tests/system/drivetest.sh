@@ -10,14 +10,13 @@
 # gets its line; one that never becomes ready fails the step within its
 # bound; a token printed before the step began does not satisfy it; the
 # harness's `until=` ends when the run's token arrives; and a `wait=` step,
-# which slept for a number of seconds, is refused as unknown.
+# which would sleep for a number of seconds, is refused as unknown.
 #
 # `tests/run drive` runs this. It boots nothing.
 #
 set -u
 # The checks time the harness's and drive.sh's bounds as written, so the
-# set's deadline factor, which scales them, is unset here: this suite is
-# the measurement of the mechanism, not a user of it.
+# set's deadline factor, which scales them, is unset here.
 unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
 # The harness's fake machine is named qemu-system-i386, the emulator the
 # harness runs when RACH2_QEMU is unset, so an architecture's is dropped.
@@ -28,6 +27,7 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-drive.XXXXXX")
 [ -d "$WORK" ] || { echo "drivetest: no scratch directory" >&2; exit 1; }
 HARNESS="$REPO/build/tests/system/harness"
 PIDS=""
+# Kill the fake machines and feeders and remove the scratch directory.
 cleanup() {
     for p in $PIDS; do kill "$p" 2>/dev/null; done
     rm -rf "$WORK"
@@ -39,6 +39,7 @@ trap 'cleanup; exit 129' HUP
 
 fails=0
 total=0
+# check NAME EXPECTED ACTUAL: one check, which passes when the two are equal.
 check() {
     total=$((total + 1))
     if [ "$2" = "$3" ]; then
@@ -106,6 +107,7 @@ boot() {
     drive_feed "$CPID"
     PIDS="$PIDS $DRIVE_FPID"
 }
+# Stop the feeder and the console.
 stop() {
     drive_stop
     kill "$CPID" 2>/dev/null
@@ -153,12 +155,10 @@ drive_expect 'login:' 3 2>/dev/null; rc=$?
 check "a prompt that never comes fails the step" 1 "$rc"
 stop
 
-# Check the deadline independently of host scheduling. The clock reaches
-# the deadline exactly, then overshoots it in a separate run. A further
-# poll exits with 99, so a missing deadline check cannot hang this fixture.
-# The wall clock was judged here until 2026-09-15, which required the host to
-# schedule this shell within two seconds of the deadline: forty machines on
-# one host do not, and no wider window would have been safe either.
+# The deadline is checked on a clock the row supplies, so the host's
+# scheduling cannot change the result: the clock reaches the deadline exactly
+# in one run and passes it in the other. A further poll exits with 99, so a
+# missing deadline check cannot hang the row.
 for clock_end in 3 9; do
     : > "$WORK/missing.log"
     printf '0\n' > "$WORK/wait.clock"
@@ -207,6 +207,7 @@ stop
 # The harness: `until=60` ends when the run's token arrives; a `wait=` step
 # is refused; a token printed before the until began does not end it; and an
 # until never outlives the run's timeout.
+# harness STEPS...: run the harness on the fake machine with STEPS.
 harness() {
     ( cd "$WORK" && PATH="$WORK/bin:$PATH" "$HARNESS" --kernel none --timeout 90 --grace 0.2 --ok "FAKE OK" "$@" > /dev/null 2>&1 )
 }

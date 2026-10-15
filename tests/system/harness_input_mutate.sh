@@ -1,6 +1,7 @@
 #!/bin/sh
-# Compile the harness fixed, faulty and restored in a private directory, and
-# run its selftest on each.
+# harness_input_mutate.sh [--texts]: compile the harness as it is, with each
+# of five faults, and restored, in a private directory, and run its selftest
+# on each build.
 #
 # The first fault is an input pipe left blocking. The selftest's write to a
 # machine that has stopped reading must then wait for a reader, and the
@@ -12,13 +13,14 @@
 # which the selftest of a step that waits for output after such a text must
 # fail. The fifth is `wait_step` counting a failed step without reporting
 # it, which the selftest of a failed step's report must fail. The fixed and
-# restored builds pass.
+# restored builds pass. --texts checks that each fault is once in
+# harness.c.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_blocking ARGS...: put one fault into its source; with
+# apply_blocking SOURCE: leave the input pipe blocking in SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_blocking()
 {
@@ -42,7 +44,7 @@ PY
 }
 
 
-# apply_drain ARGS...: put one fault into its source; with
+# apply_drain SOURCE: make drain_rest read nothing in SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_drain()
 {
@@ -66,7 +68,7 @@ PY
 }
 
 
-# apply_unread ARGS...: put one fault into its source; with
+# apply_unread SOURCE: make send_file ignore a read error in SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_unread()
 {
@@ -87,7 +89,7 @@ path.write_text(source.replace(old, ""))
 PY
 }
 
-# apply_never ARGS...: put one fault into its source; with
+# apply_never SOURCE: make never_appeared report nothing in SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_never()
 {
@@ -108,7 +110,8 @@ path.write_text(source.replace(old, "    return 0;\n"))
 PY
 }
 
-# apply_report ARGS...: put one fault into its source; with
+# apply_report SOURCE: make wait_step count a failed step without
+# reporting it in SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_report()
 {
@@ -150,6 +153,7 @@ cp tests/system/runner/harness.c "$work/harness.c"
 cp "$work/harness.c" "$work/harness.saved"
 child=
 
+# Stop the selftest, and put back the saved private copy of harness.c.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -165,6 +169,8 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: compile the private copy and run its
+# selftest, which must exit with STATUS and print MESSAGE.
 run_phase()
 {
     phase=$1

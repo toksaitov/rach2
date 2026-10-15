@@ -1,11 +1,18 @@
 #!/bin/sh
-# Boot the staged diagnostic and prove that the proc path is required, on the
-# kernel, programs and emulator of the architecture ARCH names.
+# hda_mutate.sh [--texts]: boot hdaprobe beside audiotest on an Intel HD
+# Audio controller, and show that the probe catches a kernel whose
+# /proc/audio is gone, on the kernel, programs and emulator of the
+# architecture ARCH names.
+#
+# The fault renames synthfs's `audio` node, so hdaprobe's open of /proc/audio
+# must fail; the restored kernel must match the first build and pass. A last
+# phase boots with rach2.noaudio and runs `hdaprobe absent`, which must pass.
+# --texts checks that the fault is once in its source.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault SOURCE: put the fault into SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -49,6 +56,7 @@ cp "$source" "$work/source.saved"
 child=
 changed=
 
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -59,12 +67,14 @@ stop_child()
     fi
 }
 
+# Remove synthfs's object and the kernel, and make the kernel again.
 rebuild()
 {
     rm -f "$tree"/rach2/sys/fs/synthfs.o "$tree"/rach2/kernel
     make -s rach2 "ARCH=$RACH2_ARCH"
 }
 
+# Put back the saved synthfs.c and touch it.
 restore()
 {
     cp "$work/source.saved" "$source"
@@ -72,6 +82,7 @@ restore()
     changed=
 }
 
+# Stop the boot and, when a fault is in the source, restore it and rebuild.
 cleanup()
 {
     stop_child
@@ -85,6 +96,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE EXPECTED: build the kernel and run hdaprobe, or
+# `hdaprobe absent` with rach2.noaudio in the phase `absent`. With EXPECTED
+# `pass` it must pass; otherwise it must fail its open of /proc/audio.
 run_phase()
 {
     phase=$1

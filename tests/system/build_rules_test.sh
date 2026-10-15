@@ -14,14 +14,14 @@
 # the root Makefile, mk/ and the suites' fragment, which parses the rules and
 # runs none of them:
 #
-#   * grub-disk-rule (entry 112): `os-real-grub-disk` has a rule that makes
+#   * grub-disk-rule: `os-real-grub-disk` has a rule that makes
 #     the disk, the disk's rule names the kernel, the recovery kernel, the
 #     recovery image and the ext2 root, and every prerequisite is either a
 #     target of the database or a file of the tree.
-#   * disk-tools (entry 114): the rules of the sealed disk and the GRUB disk
+#   * disk-tools: the rules of the sealed disk and the GRUB disk
 #     name mkmbr, fatchains and grubembed, which they do only when the tools'
 #     names are defined before the rules are read.
-#   * images-include (entry 114): the rules mk/images.mk holds have their
+#   * images-include: the rules mk/images.mk holds have their
 #     names, which they do only when the fragment is included after the root
 #     Makefile has named the recovery ISO, the sealed disk and the tools: the
 #     ISO's rule names the recovery kernel and image, the install stick's
@@ -73,11 +73,13 @@ trap 'rm -rf "$WORK"' 0
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
+# pass ROW: report that ROW passed.
 pass()
 {
     echo "build-rules-test: result: pass: $1"
 }
 
+# fail ROW DETAIL: report that ROW failed and add it to `failed`.
 fail()
 {
     echo "build-rules-test: result: fail: $1: $2"
@@ -167,6 +169,8 @@ guard()
     out=$(MAKEFLAGS='' MFLAGS='' sh "$S/tools/verify/check_sources.sh" 2>&1) || rc=$?
 }
 
+# The three rows of the source-list guard: the tree as it is, a kernel
+# source on disk that is not listed, and the last listed source moved away.
 sources_rows()
 {
     guard
@@ -193,6 +197,9 @@ sources_rows()
     esac
 }
 
+# Plant a marker in each directory under the build tree's build/, run the
+# root `make clean` with no cross compiler on the PATH, and require only the
+# markers of build/man, build/tools and build/vendor to be left.
 clean_row()
 {
     for d in krffs rach2 tests ish utils ports/doom images iso tools man vendor; do
@@ -260,6 +267,7 @@ has() { # has LIST WORD
     esac
 }
 
+# The grub-disk-rule row, on the database base.db.
 grub_disk_row()
 {
     db="$WORK/base.db"
@@ -295,6 +303,7 @@ grub_disk_row()
     pass grub-disk-rule
 }
 
+# The disk-tools row, on the database base.db.
 disk_tools_row()
 {
     db="$WORK/base.db"
@@ -310,6 +319,7 @@ disk_tools_row()
     pass disk-tools
 }
 
+# The images-include row, on the database base.db.
 images_include_row()
 {
     db="$WORK/base.db"
@@ -336,14 +346,16 @@ images_include_row()
     pass images-include
 }
 
+# The key-names row: the database of the build tree with a recovery key,
+# then `make no-recovery-key`. The removal runs for real, in the private
+# tree, over files planted in both architectures' image directories: its
+# recipe is a loop over them, whose names a dry run prints only through the
+# loop's variable.
 key_names_row()
 {
     : >"$C/krffs/recovery_authorized_keys"
     database keyed.db
     keyed_rc=$rc
-    # The removal runs for real, in the private tree, over files planted in
-    # both architectures' image directories: its recipe is a loop over them,
-    # whose names a dry run prints only through the loop's variable.
     for d in build/images build/x86_64/images; do
         mkdir -p "$C/$d"
         for p in rach2-sealed.disk rach2-sealed-with-key.disk os-real-grub.disk \
@@ -384,6 +396,9 @@ key_names_row()
     pass key-names
 }
 
+# The release-guard row: make -n with RELEASE=1, `make release` and a
+# development build in the tree with a key, and RELEASE=1 in the tree
+# without one.
 release_row()
 {
     : >"$C/krffs/recovery_authorized_keys"
@@ -413,6 +428,7 @@ release_row()
     fi
 }
 
+# Run every row; the names of those that failed are left in `failed`.
 rows()
 {
     failed=
@@ -485,9 +501,9 @@ if [ "$mutate" -ne 2 ]; then
 fi
 
 # Each fault, the copy it changes and the row it must fail. The make faults
-# are the states the entries were found in: no rule for the GRUB disk (112),
-# the tools' names defined in mk/images.mk after the disk rules that name
-# them, and the fragment included before the names its own rules take (114).
+# are no rule for the GRUB disk, the tools' names defined in mk/images.mk
+# after the disk rules that name them, and the fragment included before the
+# names its own rules take.
 # shellcheck disable=SC2016
 for fault in unlisted missing clean grub-target tools-late include-early plain-sealed one-arch \
     release; do

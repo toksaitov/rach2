@@ -8,11 +8,11 @@
 # that mentions trailers and one with the diff `git commit -v` adds, whose
 # lines quote attribution after +, - and a space, and 1, with the refusal on
 # stderr, for a message with it, the emoji footer Claude Code writes among
-# them. The copy is run
-# as git runs it, through its own #! line, so a hook that has lost its
-# executable bit fails every row. With --mutate each fault below is put into
-# the copy and must fail exactly its expected rows; the copy is restored from
-# the original before each fault and before the rows run again at the end.
+# them. The copy is run as git runs it, through its own #! line, so a hook
+# that has lost its executable bit fails every row. With --mutate each fault
+# below is put into the copy and must fail exactly its expected rows; the
+# copy is restored from the original before each fault and before the rows
+# run again at the end.
 # --texts puts each fault into the copy and requires only that it changes
 # the hook, and runs no row.
 #

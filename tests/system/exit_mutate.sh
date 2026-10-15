@@ -1,11 +1,24 @@
 #!/bin/sh
-# Prove the two exit callers and their prohibition on waits after publication,
-# on the kernel, probe and emulator of the architecture ARCH names.
+# exit_mutate.sh [--resume WORK | --texts]: show that exitprobe's normal and
+# signal rows catch two faults in each of the kernel's exit callers, the exit
+# system call in rach2/sys/syscall_proc.c and the death by a signal in
+# rach2/kernel.c, on the kernel, probe and emulator of the architecture ARCH
+# names.
+#
+# `remove` takes the caller's call of proc_exit_cleanup out, and `wait` makes
+# the process sleep for two ticks after the cleanup has published its death,
+# which the exit contract forbids. Each fault must fail its row with
+# `EXITPROBE FAIL ROW: reap or release`, or, in the signal row, with the
+# panic of a dying process scheduled again. The restored kernel must match
+# the first build byte for byte and pass; the first build also runs the exec
+# row. --resume continues in the directory WORK, skipping the rows its
+# markers record as passed. --texts checks that each fault is once in its
+# source.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault ROW FAULT: put FAULT into ROW's caller; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -109,6 +122,7 @@ fi
 child=
 changed=
 
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -121,6 +135,8 @@ stop_child()
     fi
 }
 
+# Remove the objects of the three sources and the kernel, and make the
+# kernel again.
 rebuild()
 {
     rm -f "$tree"/rach2/sys/syscall_proc.o "$tree"/rach2/kernel.o \
@@ -128,6 +144,7 @@ rebuild()
     make -s rach2 "ARCH=$RACH2_ARCH"
 }
 
+# Put back the saved copies of the three sources and touch them.
 restore()
 {
     for source in $sources; do
@@ -137,6 +154,7 @@ restore()
     changed=
 }
 
+# Stop the boot and, when a fault is in the source, restore it and rebuild.
 cleanup()
 {
     stop_child
@@ -150,6 +168,8 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# Build the kernel for the phase named by `phase`, keep a copy, and record
+# the checksums of the sources and of what the boot reads.
 build_phase()
 {
     rebuild >"$work/$phase.build.log" 2>&1
@@ -160,6 +180,9 @@ build_phase()
         >"$work/$phase.artifacts"
 }
 
+# run_row ROW EXPECTED: boot the phase's kernel and run exitprobe's ROW.
+# With EXPECTED `pass` the row must pass and the program return to the shell;
+# otherwise it must fail with one of the row's two failures and never pass.
 run_row()
 {
     row=$1

@@ -41,8 +41,8 @@ DRIVE_POLL=${DRIVE_POLL:-0.2}
 # shellcheck source=tests/system/deadline.sh
 . "$REPO/tests/system/deadline.sh"
 
-# The runner supplies a monotonic clock. Direct suite invocations can use
-# the epoch format provided by both BSD date on macOS and GNU date on Linux.
+# The time in seconds: runutil's monotonic clock when RACH2_RUN_UTIL names
+# runutil, and otherwise `date +%s`, which BSD and GNU date both print.
 drive_now() {
     if [ -n "${RACH2_RUN_UTIL:-}" ]; then "$RACH2_RUN_UTIL" now; else date +%s; fi
 }
@@ -56,8 +56,8 @@ drive_size() {
     fi
 }
 
-# Hold the fifo open while process $1 lives, typing the spool files in
-# their order. Runs in the background; `drive_stop` ends it.
+# drive_feed PID: hold the fifo open while process PID lives, typing the spool
+# files in their order. Runs in the background; `drive_stop` ends it.
 drive_feed() {
     rm -f "$DRIVE_FIFO".type.*
     DRIVE_POS=0
@@ -76,8 +76,8 @@ drive_feed() {
     DRIVE_FPID=$!
 }
 
-# Safe under `set -e` and when no feeder was started, which is how the
-# suites' cleanup traps call it.
+# Stop the feeder and remove the spool files. It returns 0, under `set -e`
+# and when no feeder was started, so the suites' cleanup traps can call it.
 drive_stop() {
     if [ -n "$DRIVE_FPID" ]; then
         kill "$DRIVE_FPID" 2>/dev/null || true
@@ -88,11 +88,11 @@ drive_stop() {
     return 0
 }
 
-# Type one line. The cursor moves to the log's end first, before the line is
-# published, so nothing printed before it was typed, the prompt it answers
-# included, can satisfy the step that waits for its answer, and an answer
-# that comes at once is not skipped. A feeder that is gone is a failure
-# here, not a silent line.
+# drive_type LINE: type LINE and a newline. The cursor moves to the log's end
+# first, before the line is published, so nothing printed before it was typed,
+# the prompt it answers included, can satisfy the step that waits for its
+# answer, and an answer that comes at once is not skipped. The status is 1 when
+# the feeder is gone.
 drive_type() {
     if [ -z "$DRIVE_FPID" ] || ! kill -0 "$DRIVE_FPID" 2>/dev/null; then
         echo "drive: the feeder is gone; nothing types at the machine" >&2
@@ -104,15 +104,16 @@ drive_type() {
     mv "$DRIVE_FIFO.type.new" "$(printf '%s.type.%06d' "$DRIVE_FIFO" "$DRIVE_SEQ")"
 }
 
-# Wait up to $2 seconds for the extended regular expression $1 in the log
-# after the cursor; on a match the cursor moves past it. The log is searched
-# as it is, carriage returns included, so a pattern is one line's text and
-# the offsets are the log's own. Fails past the bound with the fresh part's
-# tail on standard error.
+# drive_expect PATTERN SECS: wait up to SECS seconds for the extended regular
+# expression PATTERN in the log after the cursor; on a match the cursor moves
+# past it. The log is searched as it is, carriage returns included, so a pattern
+# is one line's text and the offsets are the log's own. Fails past the bound
+# with the fresh part's tail on standard error.
 drive_expect() {
     drive_expect_raw "$1" "$2"
 }
 
+# drive_expect_raw PATTERN SECS: the wait of drive_expect and drive_prompt.
 drive_expect_raw() {
     deadline=$(( $(drive_now) + $2 ))
     while :; do
@@ -137,18 +138,21 @@ drive_expect_raw() {
     done
 }
 
-# A prompt begins a line, optionally after an absolute or home directory.
-# A daemon can append output after the prompt without making it disappear.
-# Advance only past the prompt, preserving any following output for a wait.
+# drive_prompt SECS: wait up to SECS seconds for a shell prompt, `#`, `$` or
+# `>` and a space at the start of a line, after an optional absolute or home
+# directory. The cursor moves only past the prompt, so output a daemon
+# writes after it is left for the next wait.
 drive_prompt() {
     drive_expect_raw '^((/|~)[^ ]* )?[#$>] ' "$1"
 }
 
+# The same as drive_prompt.
 drive_prompt_raw() {
     drive_prompt "$1"
 }
 
-# Log in as $1 with password $2, each step within $3 seconds, to a prompt.
+# drive_login NAME PASSWORD SECS: log in as NAME with PASSWORD, each step
+# within SECS seconds, and wait for the shell prompt.
 drive_login() {
     drive_expect 'login:' "$3" || return 1
     drive_type "$1"

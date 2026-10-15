@@ -1,11 +1,19 @@
 #!/bin/sh
-# Run the two entry 117 probes and prove the framebuffer rows in QEMU, on the
-# kernel, probes and emulator of the architecture ARCH names.
+# framebuffer_mutate.sh [--texts]: run devprobe and loopprobe, and show that
+# devprobe's framebuffer rows catch two compiled faults in the framebuffer's
+# ioctl in rach2/sys/syscall.c, on the kernel, probes and emulator of the
+# architecture ARCH names.
+#
+# `owner` takes out the check that only the display's owner changes its mode,
+# and `reentry` keeps a request for graphics mode from entering it again.
+# Each must fail devprobe with its row's words, and the restored kernel must
+# match the first build and pass both probes. --texts checks that each fault
+# is once in its source.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault SOURCE FAULT: put FAULT into SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -53,6 +61,7 @@ cp "$source" "$work/syscall.saved"
 child=
 changed=
 
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -65,12 +74,14 @@ stop_child()
     fi
 }
 
+# Remove syscall.c's object and the kernel, and make the kernel again.
 rebuild()
 {
     rm -f "$tree"/rach2/sys/syscall.o "$tree"/rach2/kernel
     make -s -C rach2 "ARCH=$RACH2_ARCH"
 }
 
+# Put back the saved syscall.c and touch it.
 restore()
 {
     cp "$work/syscall.saved" "$source"
@@ -78,6 +89,7 @@ restore()
     changed=
 }
 
+# Stop the boot and, when a fault is in the source, restore it and rebuild.
 cleanup()
 {
     stop_child
@@ -91,6 +103,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_probe PROBE TOKEN EXPECTED: boot the kernel of the phase named by
+# `phase` and run PROBE. With EXPECTED `pass` it must print `TOKEN OK`;
+# otherwise it must fail with the words in `detail`.
 run_probe()
 {
     probe=$1
@@ -120,6 +135,8 @@ run_probe()
     echo "framebuffer-guest: result: $phase $probe status $status"
 }
 
+# run_phase PHASE EXPECTED: build the kernel and run devprobe, and loopprobe
+# too when EXPECTED is `pass`.
 run_phase()
 {
     phase=$1

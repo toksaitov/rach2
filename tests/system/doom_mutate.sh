@@ -1,5 +1,6 @@
 #!/bin/sh
-# Prove the missing-WAD row of `tests/run doom` with compiled faults.
+# doom_mutate.sh: show that the missing-WAD row of `tests/run doom` catches
+# two compiled faults.
 #
 # Two faults are put into the game's sources in turn, each alone: `status`
 # makes the platform's exit report 0 whatever status it is given, and `crash`
@@ -21,7 +22,7 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FAULT SOURCE: put FAULT into SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -101,6 +102,7 @@ cc -O2 -Wall -Wextra -Werror tests/system/runner/runutil.c -o "$work/runutil"
 child=
 changed=
 
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -113,12 +115,15 @@ stop_child()
     fi
 }
 
+# Remove the game's two changed objects and the game, so that make links it
+# again.
 force_rebuild()
 {
     rm -f "$tree/ports/doom/doomgeneric_rach2.o" "$tree/ports/doom/d_iwad.o" \
         "$tree/ports/doom/doom"
 }
 
+# Put back the saved copy of the changed source and touch it.
 restore()
 {
     if [ -n "$changed" ]; then
@@ -128,6 +133,7 @@ restore()
     fi
 }
 
+# Stop the boot and, when a fault is in the source, restore it and rebuild.
 cleanup()
 {
     stop_child
@@ -142,10 +148,10 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# One phase: the game built from the sources as they stand, on its own so
-# that a fault that does not compile stops the proof here, then the suite in
-# a process group of its own. A passing phase must pass; a faulty one must
-# fail with the words given.
+# run_phase PHASE EXPECTED: the game built from the sources as they stand, on
+# its own so that a fault that does not compile stops the proof here, then the
+# suite in a process group of its own. With EXPECTED `pass` the suite must pass;
+# otherwise it must fail and print EXPECTED.
 run_phase()
 {
     phase=$1

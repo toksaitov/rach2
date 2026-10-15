@@ -1,5 +1,8 @@
 #!/bin/sh
-# Check missing programs, stale assignments and helper reasons on small trees.
+# probecheck_test.sh: check tools/verify/probecheck.sh on a small tree in
+# seven cases: complete assignments pass, and a program of tests/ or of
+# tests/musl/ with no suite, an unknown suite, an assignment to a program
+# that is gone, a helper without a reason and a program assigned twice fail.
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/probecheck-test.XXXXXX")
@@ -13,6 +16,7 @@ printf 'default|-|core\nspecial|-|full\n' > "$WORK/tests/registry"
 printf 'beta special\n' > "$WORK/tests/probe-suites"
 printf 'musl/gamma child fixture\n' > "$WORK/tests/probe-helpers"
 : > "$WORK/tests/musl/gamma.c"
+# check STATUS NAME: run probecheck.sh over the tree and require STATUS.
 check() {
     result=0
     PROBECHECK_ROOT="$WORK" sh "$REPO/tools/verify/probecheck.sh" > "$WORK/log" 2>&1 || result=$?

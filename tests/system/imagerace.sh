@@ -1,24 +1,21 @@
 #!/usr/bin/env sh
 #
 # tests/system/imagerace.sh: two builds of one image at the same moment, and
-# the reason two builds meet.
+# the reasons two builds would meet.
 #
 # `tests/run` builds the shared images once before its pool, but a suite in
-# the pool can still find one out of date and rebuild it, and two suites can
-# reach that point together. With one fixed name for each temporary, the
-# second build removed the first's file, failed, and make deleted the image
-# both of them needed: on 2026-09-04 a full run lost the dhcp and procfiles
-# suites that way, three seconds each, while every other suite passed. The
-# temporaries carry the builder's process number now, so both builds finish
-# and the image is whole; on 2026-09-09 the installer and installer-repair
-# suites went down the same way on the sealed disk and the install stick,
-# whose builders still had one fixed name each.
+# the pool that finds one out of date rebuilds it, and two suites can reach
+# that point together. Each builder names its temporaries with its process
+# number, so two builds of one image both finish and leave it whole; with
+# one fixed name, the second build would remove the first's file and fail,
+# and make would delete the image.
 #
-# The suites meet at all because an image is out of date the moment it is
-# built: a manifest's `tree` line stages a source directory, `manifest_deps.sh`
-# printed that directory as a prerequisite, and the Makefile has a phony
-# target of the same name, which make remakes every time. So the last two
-# checks are of the prerequisites themselves.
+# The suites would meet only if an image were out of date the moment it is
+# built: if a prerequisite were a directory with the name of a phony target,
+# which make remakes every time, or if a file written below a staged
+# directory changed the image's prerequisites. The later checks are of the
+# prerequisites themselves, and of the rule that a changed program restages
+# its image.
 #
 # Usage: imagerace.sh MANIFEST OUT SIZE_MB TEST_IMAGE OS_REAL_IMAGE
 set -u
@@ -29,7 +26,9 @@ BUILD=${TESTIMG%/images/*}
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$REPO" || exit 1
 fails=0
+# say TEXT: print a progress line.
 say() { echo "imagerace-test: $1"; }
+# bad TEXT: report a failed check and count it in `fails`.
 bad() { echo "imagerace-test: FAIL: $1" >&2; fails=$((fails + 1)); }
 
 rm -f "$OUT" "$OUT.d"
@@ -55,11 +54,10 @@ else
     exit 1
 fi
 
-# Two suites reach one image at once only because the image is out of date
-# after it has just been built, and it was: every path a manifest stages is a
-# prerequisite of the image, and a `tree` line names a source directory whose
-# name is also a phony target, which make remakes every time. Both halves are
-# checked here: what the script prints, and what make then does with it.
+# Every path a manifest stages is a prerequisite of the image, and a
+# directory among them, such as the source directory of a `tree` line, can
+# have the name of a phony target, which make remakes every time. This check
+# reads what manifest_deps.sh prints, and the next what make does with it.
 for m in krffs/manifests/*.manifest; do
     dirs=""
     for p in $(sh krffs/manifest_deps.sh "$m"); do
@@ -81,13 +79,13 @@ done
 [ "$fails" = 0 ] || exit 1
 say "an image just built is not out of date: OK"
 
-# The shape of the fault of 2026-09-09: a suite writes a fixture below a staged
-# `exec-dir` while the set runs. The stager takes the executables of that one
-# directory and nothing beneath it, so a file in a directory below it may not
-# put the image out of date. A file or a directory made beside the programs
-# may not either, since the image depends on the programs the directory
-# holds and not on its time (krffs/programs.sh); the tree below has those
-# rows, so that this suite does not put the shared image out of date.
+# A suite may write a fixture below a staged `exec-dir` while the set runs. The
+# stager takes the executables of that one directory and nothing beneath it, so
+# a file in a directory below it may not put the image out of date. A file or a
+# directory made beside the programs may not either, since the image depends on
+# the programs the directory holds and not on its time (krffs/programs.sh); the
+# tree below has those rows, so that this suite does not put the shared image
+# out of date.
 mkdir -p "$BUILD/tests/system/imagerace.d"
 : > "$BUILD/tests/system/imagerace.d/marker"
 stale=$(MAKEFLAGS='' make --no-print-directory -n "$TESTIMG" 2>&1 |
@@ -97,17 +95,16 @@ rm -rf "$BUILD/tests/system/imagerace.d"
 [ "$fails" = 0 ] || exit 1
 say "a file written below a staged directory does not put the image out of date: OK"
 
-# And the other half of entry 5 of milestone 50: a staged program rebuilt on
-# a built tree still restages its image, which is the whole reason the staged
-# paths are prerequisites. `make -W` can no longer ask that of the shared
-# tree: a staged path now has a rule of its own that waits for its component
-# and makes make read the file's time again, and that second read takes back
-# the time `-W` supplied. What the production tree can still be asked is its
-# database, which says both halves of the arrangement: the image names the
-# program among its prerequisites, and the program waits for the component
-# that builds it. The behaviour itself, an edited probe reaching the image in
-# one `make`, is proved with a real build against a copy of these makefiles
-# by imagerace_probe.sh at the end of this suite.
+# A staged program rebuilt on a built tree must still restage its image,
+# which is why the staged paths are prerequisites. `make -W` cannot ask that
+# of the shared tree: a staged path has a rule of its own that waits for its
+# component and makes make read the file's time again, and that second read
+# takes back the time `-W` supplied. The tree's database is asked instead,
+# for both halves of the arrangement: the image names the program among its
+# prerequisites, and the program waits for the component that builds it. An
+# edited probe reaching the image in one `make` is checked with a real build
+# against a copy of these makefiles by imagerace_probe.sh at the end of this
+# suite.
 db=$(MAKEFLAGS='' make --no-print-directory -p -n "$TESTIMG" 2>/dev/null)
 printf '%s\n' "$db" | grep -q "^$BUILD/tests/vmprobe: tests\$" ||
     bad "a staged program does not wait for the component that builds it"
@@ -153,6 +150,7 @@ cat > "$TREE/prog.mk" <<'EOP'
 $(TREE)/bin/prog: $(TREE)/prog.c
 	cc -o $@ $(TREE)/prog.c
 EOP
+# treemake ARGS...: make in the private tree, with the output in make.log.
 treemake() { MAKEFLAGS='' make --no-print-directory -f "$TREE/Makefile" TREE="$TREE" MANIFEST="$MANIFEST" "$@" > "$TREE/make.log" 2>&1; }
 treemake "$TREE/tree.krffs" || bad "the tree's first build failed: $(tail -2 "$TREE/make.log" | tr '\n' ' ')"
 grep -aq "IMAGERACE FIRST WORDS" "$TREE/tree.krffs" || bad "the first image does not carry the program's words"

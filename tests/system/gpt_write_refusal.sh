@@ -2,14 +2,14 @@
 #
 # gpt_write_refusal.sh: the recovery shell's `disk write` refuses a GPT disk.
 #
-# `disk write` in the recovery kernel's debug shell proves the whole-disk
+# `disk write` in the recovery kernel's debug shell checks the whole-disk
 # write path by writing the boot disk's last sector and reading it back. Past
 # every MBR partition that sector is scratch space, but on a GUID-partitioned
 # disk it is the backup header, and a disk whose backup header is gone opens
-# only in a repair tool (entry 124 of the shortcomings list). The command
+# only in a repair tool. The command
 # reads LBA 1 first and refuses a disk that has `EFI PART` there, and where
 # LBA 1 has none it reads the last sector and refuses a disk that has it
-# there (entry 172).
+# there.
 #
 # The GPT disks are made as the parts suite's two GPT disks are: 32 MiB,
 # seed 1, six labelled entries. Each is checked to end in its backup header,
@@ -26,15 +26,14 @@
 #   d  one whose primary header's sector is zeroed, so LBA 1 says nothing
 #      and the table is in the backup alone;
 #   e  an MBR disk whose partition reaches the last sector, as a root grown
-#      into the whole disk does, which must be refused and left as it was
-#      (entry 195);
+#      into the whole disk does, which must be refused and left as it was;
 #   f  an MBR disk whose partition ends before the last sector, which must
 #      take the round-trip and change in that sector alone.
 #
 # A protective MBR's entry covers the whole disk, so on b, c and d the MBR
 # check refuses too; on g and h the GPT checks alone keep the disk. They go
 # first so that a GPT check taken out stops the row on a disk it wrote,
-# which is where the mutation test judges it (entry 206).
+# which is where the mutation test judges it.
 #
 # Usage: gpt_write_refusal.sh RECOVERY_KERNEL IMAGE HARNESS MKGPT OUT
 #
@@ -45,6 +44,7 @@
 #
 set -u
 KERNEL=$1; IMAGE=$2; HARNESS=$3; MKGPT=$4; OUT=$5
+# Report $1 and exit 1.
 fail() { echo "gpt-write: FAIL: $1" >&2; exit 1; }
 
 # `gpt_disk DISK [--damage-primary]`: the parts suite's GPT disk.

@@ -13,10 +13,9 @@
 # a set's deadline must hold for the slowest worker.
 #
 # Prints one line, `compute=S storage=S width=W`, seconds to a thousandth, and
-# exits 1 with a reason when a machine did not finish. The calibration's
-# own deadlines are not scaled: this script runs before any factor exists.
-# The kernel, the image and the emulator are those of the architecture ARCH
-# names.
+# exits 1 with a reason when a machine did not finish. The calibration's own
+# deadlines are not scaled, and no suite or run starts it. The kernel, the image
+# and the emulator are those of the architecture ARCH names.
 set -u
 [ $# -eq 2 ] || { echo "usage: calibrate.sh WIDTH DIR" >&2; exit 2; }
 WIDTH=$1; DIR=$2
@@ -52,8 +51,8 @@ while [ "$i" -lt "$WIDTH" ]; do
     i=$((i + 1))
 done
 
-# Every machine's harness, waited for one by one: a machine that printed
-# its lines and then failed is a failed calibration, not a measurement.
+# Wait for every machine's harness, one by one; 1 when any failed, since a
+# machine that printed its lines and then failed is a failed calibration.
 wait_all() {
     rc=0
     for pid in $PIDS; do
@@ -61,6 +60,7 @@ wait_all() {
     done
     return "$rc"
 }
+# Whether every machine's harness is still running.
 alive_all() {
     for pid in $PIDS; do
         kill -0 "$pid" 2>/dev/null || return 1
@@ -82,6 +82,7 @@ release() { # release MATCH-NUMBER FILE
     echo "calibrate: only $n of $WIDTH machines reached step $1" >&2
     return 1
 }
+# Stop every machine's harness and wait for them.
 stop_all() {
     for pid in $PIDS; do
         kill "$pid" 2>/dev/null

@@ -1,4 +1,17 @@
 #!/bin/sh
+# install_stick_test.sh STICK DISK ROOT WORK: check an install stick in QEMU,
+# with a copy of the sealed disk DISK as its target.
+#
+# The stick's exFAT volume must have the root image ROOT byte for byte and a
+# manifest that names DISK. Three boots from the stick follow. The first, by
+# USB, must mount the volume and see both images. The second, by IDE, saves
+# the target's boot and recovery partitions to the volume, updates the
+# target's root from the stick with `rach2-install --update`, which must keep
+# the machine's groups and replace its files and set the next boot to the
+# candidate, and then zeroes both partitions. The third writes the saved
+# copies back. Both partitions must then be as they were and the saved
+# copies the same, and the volume must check clean. A `STICKFAIL` line fails
+# a boot. WORK keeps the logs.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -14,6 +27,7 @@ harness="$repo/build/tests/system/harness"
 runutil="$repo/build/tests/system/runutil"
 child=
 
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -28,12 +42,15 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# Report $1 and exit 1.
 fail()
 {
     echo "install-stick-test: $1" >&2
     exit 1
 }
 
+# boot PHASE BUS TOKEN: boot the stick on BUS, usb or ide, with the target on
+# IDE, run the steps of PHASE.steps, and require TOKEN.
 boot()
 {
     phase=$1

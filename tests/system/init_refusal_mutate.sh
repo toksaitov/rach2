@@ -1,5 +1,6 @@
 #!/bin/sh
-# Prove the init refusal row with kernels built from a private copy, for the
+# init_refusal_mutate.sh: show that the row of init_refusal.sh catches a
+# compiled fault, with kernels built from a private copy for the
 # architecture ARCH names, on its emulator.
 #
 # Usage: sh tests/system/init_refusal_mutate.sh [--texts]
@@ -8,7 +9,7 @@
 # link to itself and requires the kernel to refuse it and halt. The kernel
 # is built three times from a private copy of rach2/ and mk/, never from the
 # main tree's sources or into its build/: as it is, where the row must pass;
-# with the lookup's refusal put back to the old fall-through, which takes any
+# with the lookup's test of -ENOENT widened to any failure, which takes any
 # failure for an absent init and opens the debug shell, where the row must
 # fail and the log must show that shell; and restored, touched and rebuilt,
 # where it must pass again with a kernel identical to the first. The trap
@@ -17,7 +18,7 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault SOURCE: put the fault into SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -61,6 +62,7 @@ source="$tree/rach2/kernel.c"
 child=
 changed=
 
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -73,6 +75,7 @@ stop_child()
     fi
 }
 
+# Put back the saved kernel.c of the private tree and touch it.
 restore()
 {
     cp "$work/kernel.saved" "$source"
@@ -80,6 +83,7 @@ restore()
     changed=
 }
 
+# Stop the row and, when a fault is in the private source, restore it.
 cleanup()
 {
     stop_child
@@ -92,12 +96,15 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE EXPECTED: build the kernel in the private tree and run the
+# row on it. With EXPECTED `pass` the row must pass; otherwise it must fail
+# and its log must show the debug shell. The object is removed first, since
+# a source restored within the second its object was built reads as up to
+# date to a make that compares whole seconds.
 run_phase()
 {
     phase=$1
     expected=$2
-    # The object goes first: a source restored within the second its object
-    # was built reads as up to date to a make that compares whole seconds.
     rm -f "$tree/build$ARCH_SUFFIX/rach2/kernel.o" "$tree/build$ARCH_SUFFIX/rach2/kernel"
     make -s -j8 -C "$tree/rach2" "ARCH=$RACH2_ARCH" >"$work/$phase.build.log" 2>&1 || {
         cat "$work/$phase.build.log" >&2; exit 1;

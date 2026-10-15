@@ -1,12 +1,21 @@
 #!/bin/sh
-# The install stick's fault proofs, on the kernel, recovery system, installer
-# root and emulator of the architecture ARCH names.
+# install_stick_mutate.sh [--texts]: show that install_stick_test.sh catches
+# two faults in the install stick's rule in mk/images.mk, on the kernel,
+# recovery system, installer root and emulator of the architecture ARCH
+# names.
+#
+# The rule is read from a private copy, through a private Makefile whose
+# image names are in the work directory. `root` gives mkinstallstick.sh no
+# root image, which the test must report as missing, and `reserve` gives the
+# volume 4 MiB of free space in place of 256, which the test must report for
+# space. The stick made with the rule restored must be the same as the
+# first. --texts checks that each fault is once in mk/images.mk.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault SOURCE FAULT: put FAULT into SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -51,6 +60,7 @@ cp mk/images.mk "$source"
 cp "$source" "$work/images.saved"
 child=
 
+# Stop the running suite's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -61,12 +71,14 @@ stop_child()
     fi
 }
 
+# Put back the saved copy of images.mk and touch it.
 restore()
 {
     cp "$work/images.saved" "$source"
     touch "$source"
 }
 
+# Stop the test and restore the copy of images.mk.
 cleanup()
 {
     stop_child
@@ -77,6 +89,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: make the stick from the private rule and
+# run install_stick_test.sh on it, which must exit with STATUS and print
+# MESSAGE.
 run_phase()
 {
     phase=$1

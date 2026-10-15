@@ -1,7 +1,15 @@
 #!/bin/sh
-# Run the measurement drivers against private command fixtures: the check of
-# the booted slot and kernel before timing, the load window, the second
-# between load sessions, and inbound cleanup.
+# machine_measure_test.sh [--mutate | --texts]: run the measurement drivers
+# of tools/dev, machine_identity.sh, machine_net_in.sh, machine_load.sh and
+# machine_load_session.sh, on the host against fake ssh, bootctl and other
+# commands.
+#
+# The rows check the identity check of the booted slot and kernel before any
+# timing, the load window and its late completions, the second between the
+# starts of the load sessions, and the removal of the inbound driver's
+# known-hosts file. --mutate puts each of eight faults into a private copy of
+# the drivers and requires its row to fail; --texts checks that each fault is
+# once in its driver.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 if [ "${1:-}" != --texts ]; then
@@ -177,11 +185,15 @@ def env_for(directory, mode, **extra):
     return env
 
 
+# The commands the fake programs recorded for the case in DIRECTORY.
 def commands(directory):
     path = directory / 'commands'
     return path.read_text().split() if path.exists() else []
 
 
+# Run ARGS in a session of its own, with its output in DIRECTORY/output, and
+# return its status and output; with INTERRUPT, send it SIGTERM once the
+# sender has started.
 def run(args, env, directory, interrupt=False):
     log = directory / 'output'
     with log.open('wb') as out:
@@ -356,6 +368,7 @@ def stagger_case(label):
     checks += 1
 
 
+# Run every case, reporting the count under LABEL.
 def cases(label):
     global checks
     checks = 0

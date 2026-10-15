@@ -3,10 +3,10 @@
 # krffscheck.sh: what the offline checker says about images broken on purpose.
 #
 # `fsck.krffs` is the independent judge of every KRFFS volume the kernel
-# writes, so it must ask what the kernel asks before it mounts one. Milestone
-# 44 gave it the backward link and moved its repairs after the walk; these
-# rows are what say it kept them. No machine is booted: the images are built
-# and broken on the host, and each case gets its own copy, because a run that
+# writes, so it must ask what the kernel asks before it mounts one: each
+# node's backward link, and every size before the walk steps by it, with its
+# repairs made after the walk. No machine is booted: the images are built and
+# broken on the host, and each case gets its own copy, because a run that
 # repairs an image leaves it repaired.
 #
 # Usage: krffscheck.sh MKFS FSCK DIR
@@ -15,7 +15,9 @@ MKFS=$1; FSCK=$2; DIR=$3
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$REPO" || exit 1
 fails=0
+# say TEXT: print a progress line.
 say() { echo "krffscheck-test: $1"; }
+# bad TEXT: report a failed row and count it in `fails`.
 bad() { echo "krffscheck-test: FAIL: $1" >&2; fails=$((fails + 1)); }
 
 mkdir -p "$DIR"
@@ -24,10 +26,12 @@ rm -f "$CLEAN"
 dd if=/dev/zero of="$CLEAN" bs=1048576 count=4 2>/dev/null
 "$MKFS" "$CLEAN" > /dev/null || { bad "mkfs.krffs"; exit 1; }
 
-# The node header's fields, from krffs_node.h: the size at 325, the backward
-# link at 333, the mode at 267. A test that computed them from the header
-# would need the header; a test that names them says where they came from,
-# and the first row below fails the moment they move.
+# copy_broken NAME HOW: copy the clean image to NAME.krffs, break it as HOW
+# says, and print its path. The node header's fields are from krffs_node.h:
+# the size at 325, the backward link at 333, the mode at 267. A test that
+# computed them from the header would need the header; a test that names
+# them says where they came from, and the first row below fails the moment
+# they move.
 copy_broken() {
     out="$DIR/$1.krffs"
     cp "$CLEAN" "$out"
@@ -70,6 +74,8 @@ PY
     echo "$out"
 }
 
+# status IMAGE [FLAG]: run fsck.krffs on IMAGE, with its output in IMAGE.log,
+# and print its exit status.
 status() { "$FSCK" "$1" ${2:+"$2"} > "$1.log" 2>&1; echo $?; }
 
 # A fresh image is clean, and says so under both modes.
@@ -462,16 +468,14 @@ for tag, img, stores, present in steps:
         print('krffscheck-test: every stop inside a %s leaves an image the '
               'check accepts or repairs: OK' % tag)
 
-# One rule of the protocol each, put back to front. A row that cannot fail
-# proves nothing, so every one of these must be caught.
+# One rule of the protocol each, put back to front. Every one of these must
+# be caught, which shows that the rows can fail.
 wrong = [
     ('a split published before the tail header was written',
      start, swap(create_alpha, create_alpha[0], create_alpha[1]), ()),
     ('a length published before the bytes it counts',
      after_create, swap(grow_alpha, grow_alpha[-2], grow_alpha[-1]),
      (b'alpha',)),
-    # only a growth shorter than a header overlaps: with a longer one the
-    #  tail's header lands in free space and the order does not matter 
     # Only a growth shorter than a header can overlap: with a longer one the
     # tail's header lands in free space whichever order it is written in.
     ('a grow of less than a header that split first',

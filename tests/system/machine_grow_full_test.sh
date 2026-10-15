@@ -1,12 +1,21 @@
 #!/bin/sh
-# Replay the Samsung's complete range geometry through the real copier.
-# The target is a sparse ordinary file, never a device node.
+# machine_grow_full_test.sh: replay the complete range plan for the Samsung
+# disk, 488397168 sectors, through run_logged and restore_range of
+# tools/dev/machine_grow.sh, with reflash built natively.
+#
+# growset plans the ranges a 1 GiB seed grown to 488130928 sectors at LBA
+# 266240 writes: 1856 ranges of 5932200 sectors in all. Each range of the
+# target is filled with 0xa5 and its backup with a pattern of its own; the
+# restore must put back every byte, leave both ends of each gap zero, and log
+# one completion record per range. The target is a sparse ordinary file,
+# never a device node.
 # shellcheck disable=SC2034,SC2154
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 proof=$(mktemp -d "${TMPDIR:-/tmp}/rach2-grow-full.XXXXXX")
 proof=$(CDPATH='' cd -- "$proof" && pwd -P)
 echo "machine-grow-full-test: logs: $proof"
+# Report $* and exit 1.
 fail() { echo "machine-grow-full-test: failed: $*" >&2; exit 1; }
 cc -O2 -Wall -Wextra -o "$proof/growset" "$repo/tools/inspect/growset.c"
 cc -O2 -Wall -Wextra -I "$repo/utils" -o "$proof/reflash" \

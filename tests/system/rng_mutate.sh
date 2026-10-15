@@ -1,5 +1,12 @@
 #!/bin/sh
-# Recompile the production CPUID helper in the RNG probe for every phase.
+# rng_mutate.sh [--texts]: show that rngprobe catches a fault in kcpu_id,
+# the CPUID helper of rach2/sys/arch/x86/kcpu.c that the probe compiles in:
+# the subleaf operand changed from an input to an output.
+#
+# The probe is built from a private copy of its sources for each phase, for
+# the architecture ARCH names, and must pass, then fail with `RNGPROBE FAIL
+# (cpuid subleaf zero)` under the fault, then pass with the source restored.
+# --texts checks that the operand is once in kcpu.c.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -43,6 +50,7 @@ cp utils/pingcall.h "$work/utils/"
 source="$work/rach2/sys/arch/x86/kcpu.c"
 cp "$source" "$work/saved.c"
 child=
+# Stop the running boot and put back the saved source.
 restore()
 {
     if [ -n "$child" ]; then
@@ -58,6 +66,8 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE: build the probe, stage it in an image, boot it, and
+# require the result PHASE must give.
 run_phase()
 {
     phase=$1

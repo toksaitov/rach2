@@ -1,16 +1,19 @@
 #!/bin/sh
-# Prove mapmusl's rows of a shared mapping of a file on ext2 with rebuilt
-# kernel faults: a mapping released without writing its pages back, a read
-# that does not write them back first, and a write not copied into them. The
-# kernel and the emulator are those of the architecture ARCH names.
-# Each faulted kernel must fail its row on an ext2 root (probe_roots.sh), and
-# the restored kernel must match the first and pass.
+# ext2_map_mutate.sh [--texts]: show that mapmusl's rows of a shared mapping
+# of a file on ext2 catch three compiled kernel faults: a mapping released
+# without writing its pages back, a read that does not write them back first,
+# and a write not copied into them.
+#
+# mapmusl runs on an ext2 root through probe_roots.sh, on the kernel and the
+# emulator of the architecture ARCH names. Each faulty kernel must fail its
+# row with the row's words, and the restored kernel must match the first
+# build and pass. --texts checks that each fault is once in its source.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FAULT: put FAULT into its source; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -66,6 +69,7 @@ done
 child=
 changed=
 
+# Stop the running boot's process group and wait for it.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -75,6 +79,7 @@ stop_child()
     fi
 }
 
+# Put back the saved copies of the two sources and touch them.
 restore()
 {
     for f in rach2/sys/mm/filemap.c rach2/sys/syscall_fs.c; do
@@ -84,6 +89,7 @@ restore()
     changed=
 }
 
+# Stop the boot and, when a fault is in a source, restore it and rebuild.
 cleanup()
 {
     stop_child
@@ -97,8 +103,8 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Run mapmusl on an ext2 root under the kernel built now; $2 is pass, or
-# the words the row prints when it fails.
+# run_phase PHASE EXPECTED: build the kernel and run mapmusl on an ext2 root
+# under it. EXPECTED is `pass`, or the words the row prints when it fails.
 run_phase()
 {
     phase=$1
