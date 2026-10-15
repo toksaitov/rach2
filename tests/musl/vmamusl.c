@@ -1,40 +1,30 @@
 /**
- * How many separate mappings one process may hold, which is a limit a program
- * meets long before it runs out of memory.
+ * vmamusl: check that a process may hold hundreds of mappings at once.
  *
- * A process's address space here is an array of regions that grows as it
- * fills, from sixteen to the limit in rach2/sys/mm/vm.h. Four are spoken for
- * before it runs a line: its code, its data, the heap and the stack. Every
- * anonymous `mmap` after that takes one more, and a C library's allocator
- * reaches for `mmap` once an allocation is large enough, so the regions a
- * process may hold is the number of large allocations a program may hold AT
- * ONCE.
+ * A process's regions are an array in the kernel heap that starts with
+ * `VMA_FIRST` (16) entries and doubles as it fills, up to `VMA_LIMIT`
+ * (rach2/sys/mm/vm.h). A program starts with a region per loaded segment and
+ * one for its stack, and the heap's comes with its first `brk`; every
+ * anonymous `mmap` after that takes one more. A C library's allocator calls
+ * `mmap` for each large allocation, so the number of regions bounds the large
+ * allocations a program may hold at once, well before memory runs out.
  *
- * The compiler is what found the old number too small. Reading musl's 1.9 MB
- * `libc.a`, tcc reported "memory full (malloc)" with physical memory barely
- * touched and the address space almost entirely free: the table was full at
- * twelve usable entries, and malloc's failure said nothing about tables.
+ * The first half takes `WANTED` anonymous pages one at a time and writes to
+ * each, since a mapping nothing touches shows only that an address was
+ * returned. Each page has its index in two bytes, since one byte would repeat
+ * every 256 pages. After the last is taken it checks that every page still
+ * has what was written to it, which fails if two regions overlap.
  *
- * The probe takes mappings one at a time and writes to each, since a mapping
- * nothing touches proves only that a number was returned. It requires more of
- * them than the old ceiling allowed, and requires the ones it took to still
- * hold what was written after the last was taken, which is what would break if
- * the regions overlapped instead of being distinct.
+ * The second half never calls `mmap` itself: it asks malloc for
+ * `SMALL_BLOCK` bytes at a time and keeps every block in a chain until the
+ * end. mallocng maps a new group with `mmap` whenever its groups of that size
+ * are full, so this walk takes many regions while it uses little memory. When
+ * the table is full the kernel logs, once per process, which process used all
+ * its mappings, since malloc's failure alone does not say why.
  *
- * The second half of the probe keeps its blocks in a chain, so nothing is
- * freed until the end and every one is still held when the ceiling is met. It
- * is the case that found the ceiling too low a third time: a program that
- * never calls `mmap` itself, asking the allocator for 1 KB at a time. musl
- * takes a mapping for each block it cannot fit in what it holds, so such a
- * walk stops at the table, not at memory, and it stopped at about 3.1 MB while
- * a single 64 MB request succeeded. What made that hard to see was silence:
- * the kernel refused the mapping and said nothing, so the failure looked like
- * the library's own. The kernel now says which process ran out, on the serial
- * log.
- *
- * Prints "VMAMUSL OK" on success and "VMAMUSL FAIL (detail)" otherwise.
+ * Prints `VMAMUSL OK` and exits 0 on success, and prints
+ * `VMAMUSL FAIL (detail)` and exits 1 otherwise.
  */
-
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,21 +32,13 @@
 #include <unistd.h>
 #include <sys/mman.h>
 
-/* More mappings than the 128-entry table could grant, and comfortably under
- * what the 512-entry one does: this is the boundary that regressing the table
- * to 128 fails, without asking for the exact maximum, which would make the
- * probe fail the day somebody adds a region for a good reason. The table has
- * been outgrown three times: 16 died reading the 1.9 MB libc.a and 64 died
- * linking login, both on the machine's own compiler, and 128 was met by an
- * ordinary program asking for small blocks, which is the case below. */
+/* The pages the first half maps: past the 16 entries the array starts with,
+ * so the array must grow, and far under `VMA_LIMIT`, so a region the kernel
+ * adds to every process does not make the probe fail. */
 #define WANTED 300
 
-/* The other half of the same limit, and the one a program meets without ever
- * calling mmap: musl carves a mapping for each small block it cannot fit in
- * what it already has, so a walk of 1 KB allocations stops at the table long
- * before it stops at memory. It stopped at about 3.1 MB with a table of 128.
- * Eight MiB is the floor asked for here, which 128 cannot reach and 512
- * passes with room to spare. */
+/* The second half's block size, and the total it must reach before malloc
+ * fails. */
 #define SMALL_BLOCK 1024
 #define SMALL_FLOOR (8 * 1024 * 1024)
 
@@ -79,9 +61,6 @@ int main(void)
         if (maps[i] == MAP_FAILED) {
             break;
         }
-        /* Write the mapping's own index, both bytes of it, so a later read
-         * tells them apart rather than merely finding memory: one byte would
-         * repeat every 256 mappings and let a later one alias an earlier. */
         maps[i][0] = (char)(i & 0xff);
         maps[i][1] = (char)((i >> 8) & 0xff);
         maps[i][4095] = (char)(0xff - (i & 0xff));

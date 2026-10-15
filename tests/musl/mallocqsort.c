@@ -1,24 +1,27 @@
 /**
- * Exercises the demand-paged address space through real musl malloc and qsort.
+ * mallocqsort: check demand-paged memory through musl's malloc and qsort.
  *
- * The allocator drives both paging paths: a small array fills heap pages via
- * `brk`, and a large request is serviced straight from `mmap2`, with every page
- * backed lazily and zero-filled by the fault handler. The program fills an
- * array of `N` ints with an LCG sequence, `qsort()`s it, and confirms the
- * result is non-decreasing. It then makes a 256 KB allocation (the mallocng
- * mmap path) and writes a byte pattern across it, checking the first and last
- * bytes so the anonymous-mapping path is exercised end to end (map, write,
- * free/munmap).
+ * The program fills an array of `N` ints, 16 KiB, with a linear congruential
+ * sequence, sorts it with `qsort`, and checks that the result does not
+ * decrease. It then allocates 256 KiB, above mallocng's threshold of 131052
+ * bytes for an allocation of its own `mmap`, writes a byte pattern across it,
+ * and checks the first and last bytes. Both allocations are anonymous
+ * mappings whose pages the fault handler backs with zeroed frames on first
+ * touch; mallocng takes the pages of its own bookkeeping with `brk`.
  *
- * Prints "MALLOC QSORT OK" on success, or a "MALLOC QSORT FAIL: ..." line that
- * names the failed step. Linked statically against the ported musl (crt1 +
- * libc.a + crtn); see tests/musl/build.sh.
+ * It prints `MALLOC QSORT OK` on success, or a `MALLOC QSORT FAIL` line that
+ * names the failed step. Linked statically against the ported musl (crt1,
+ * libc.a and crtn); see tests/musl/build.sh.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+/**
+ * Compare the ints at `a` and `b` for `qsort`: negative, zero or positive as
+ * the first is less than, equal to or greater than the second.
+ */
 static int cmp_int(const void *a, const void *b)
 {
     int x = *(const int *)a;
@@ -36,7 +39,6 @@ int main(void)
     int ok = 1;
     int lo, hi;
 
-    /* ~16 KB: several demand-paged heap pages via brk. */
     a = malloc(N * sizeof *a);
     if (!a) {
         printf("MALLOC QSORT FAIL: malloc\n");
@@ -60,7 +62,6 @@ int main(void)
     hi = a[N - 1];
     free(a);
 
-    /* 256 KB: large enough that mallocng services it straight from mmap. */
     {
         size_t big = 256u * 1024u;
         unsigned char *p = malloc(big);

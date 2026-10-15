@@ -1,13 +1,11 @@
 /**
- * Drives a real musl pipe and fork round-trip through the kernel.
+ * pipemusl: check a pipe between a parent and its forked child through musl.
  *
- * Exercises musl's `pipe`, `fork`, `read`, `write`, `close`, and `waitpid`
- * wrappers end to end, not just the freestanding probe. The parent writes a
- * line into the pipe and closes the write end; the forked child reads it back
- * and exits 0 only if the eleven bytes match "hello, pipe". The child's exit
- * status decides the result token.
- *
- * Staged into test.krffs as /musl/pipemusl.
+ * The parent writes the eleven bytes "hello, pipe" into the pipe and closes
+ * the write end; the child reads once and exits 0 only if the bytes match.
+ * The child's exit status decides the token: `PIPEMUSL OK`, or a
+ * `PIPEMUSL FAIL` line naming the step that failed. Staged into the test
+ * image as /musl/pipemusl.
  */
 #include <unistd.h>
 #include <stdio.h>

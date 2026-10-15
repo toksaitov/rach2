@@ -1,18 +1,21 @@
 /**
- * RLIMIT_STACK, kept and used by execve, read through musl.
+ * stackmusl: check that RLIMIT_STACK is kept, inherited and applied by execve.
  *
- * The limit starts at 8 MiB soft and unlimited hard, is kept as set, refuses
- * a soft value past the hard one, refuses an unprivileged caller a higher
- * hard one, and passes to a child. An exec keeps it and gives the new image
- * a stack that may grow to its size: this program runs itself, and its `deep`
- * half recurses through a number of mebibytes of stack. Twelve fit under a
- * limit of 16 MiB, past the 8 MiB the stack once had whatever the limit;
- * one does not fit under 256 KiB, and the child dies of SIGSEGV. The new
- * image reads back the limit it was started with.
+ * The limit starts at 8 MiB soft and unlimited hard and is kept as set. A
+ * soft value past the hard one fails with EINVAL, a raise of the hard limit
+ * by an unprivileged caller fails with EPERM, and a child inherits the
+ * limit. An exec keeps it and gives the new image a stack that may grow to
+ * its size: the program runs itself, and its `deep` half recurses through a
+ * given number of mebibytes of stack. 12 MiB fit under a limit of 16 MiB,
+ * more than the default 8 MiB; 1 MiB does not fit under 256 KiB, and the
+ * child dies of SIGSEGV. The new image also checks that it was started with
+ * the limit its parent set.
  *
- * Prints "STACKMUSL OK" on success and "STACKMUSL FAIL (detail)" otherwise.
+ * Prints `STACKMUSL OK` and exits 0 on success, and prints
+ * `STACKMUSL FAIL (detail)` and exits 1 otherwise. Run as
+ * `stackmusl deep MIB LIMIT`, it is the `deep` half: it exits 2 when its soft
+ * limit is not `LIMIT` bytes, and 0 after recursing through `MIB` MiB.
  */
-
 #define _GNU_SOURCE
 #include <errno.h>
 #include <signal.h>
@@ -59,8 +62,12 @@ static int set_stack(rlim_t soft, rlim_t hard)
     return setrlimit(RLIMIT_STACK, &rl);
 }
 
-/** A child of root that lowers its hard limit and becomes user 1000 may not
- * raise the hard limit again. */
+/**
+ * Lower the hard stack limit, become user 1000, and check that raising the
+ * hard limit again fails with EPERM. Runs in a forked child of root. Returns
+ * 0 when it does, or the number of the step that went wrong, 1 to 3, as the
+ * child's exit status.
+ */
 static int unprivileged(void)
 {
     if (set_stack(1 * MIB, 2 * MIB) != 0) {
