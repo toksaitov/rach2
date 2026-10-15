@@ -49,6 +49,15 @@ refresh()
     return 0
 }
 
+# limited OUT ERR: succeed when the session whose output is OUT and whose
+# errors are ERR ended on the account's usage limit, and print the start of
+# its message. Only the last lines are read: the agent's final message
+# is there, and earlier lines can quote the limit's text, as this file does.
+limited()
+{
+    tail -n 2 "$1" "$2" 2> /dev/null | grep -o 'hit your [a-z]* limit[^"\\]*' | head -n 1 | grep .
+}
+
 # run_session OUT ERR LIMIT COMMAND...: run COMMAND with its output in OUT and
 # its errors in ERR, in a process group of its own, and stop the whole group
 # when it is still running after LIMIT seconds: TERM, then KILL half a minute

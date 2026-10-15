@@ -74,8 +74,8 @@ $(tail -n 10 "$state/manager.log" 2> /dev/null)"
             *) line="check failed with status $status: $line" ;;
         esac
         echo "$(date -u '+%F %T') $line" >> "$state/manager.log"
-        if tail -n 40 "$state/c-$t.jsonl" | grep -q 'hit your session limit\|hit your usage limit'; then
-            log "limit: $(grep -o 'resets [^"]*' "$state/c-$t.jsonl" | head -n 1)"
+        if why=$(limited "$state/c-$t.jsonl" "$state/c-$t.err"); then
+            log "limit: $why"
         fi
         sleep "$PERIOD"
     done

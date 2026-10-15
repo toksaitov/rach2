@@ -156,8 +156,8 @@ main()
         [ "$issue" = "$ran" ] || runs=0
         ran=$issue
         session "$issue"
-        if tail -n 40 "$last.jsonl" "$last.err" | grep -q 'hit your session limit\|hit your usage limit'; then
-            log "limit: $(grep -o 'resets [^"]*' "$last.jsonl" | head -n 1)"
+        if why=$(limited "$last.jsonl" "$last.err"); then
+            log "limit: $why"
             sleep 900
             continue
         fi
