@@ -166,7 +166,7 @@ static void model_issue(uint32_t v)
         reg[R_IS] |= 1u;
     }
     if (fatal_status) {
-        reg[P0 + P_TFD] = 0x81; /* BSY and ERR set */
+        reg[P0 + P_TFD] = 0x41; /* DRDY and ERR set, BSY clear */
     }
 }
 
@@ -230,10 +230,6 @@ static void model_w32(uint32_t off, uint32_t v)
         return;
     }
     if (off == R_IS || off == P0 + P_IS || off == P0 + P_SERR) {
-        reg[off] &= ~v;
-        return;
-    }
-    if (off == P0 + P_IS || off == P0 + P_SERR) {
         reg[off] &= ~v;
         return;
     }
