@@ -1,13 +1,13 @@
 #!/bin/sh
-# Compile fixed, faulty and restored boot-slot sources in a private directory.
-# The test includes bootslot.c, so the private copy comes first on the
-# include path.
+# Prove bootslot_hosttest.c with private mutations of utils/bootslot.c, the
+# boot partition's slots. The test includes bootslot.c, so the private copy
+# comes first on the include path.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FILE FAULT: put FAULT into FILE, a copy of bootslot.c; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -80,6 +80,8 @@ child=
 cp utils/bootslot.c "$work/bootslot.saved"
 cp "$work/bootslot.saved" "$work/bootslot.c"
 
+# cleanup: stop the running test and put the saved bootslot.c back; the loop
+# calls it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -95,6 +97,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: compile bootslot_hosttest.c over the copy as
+# $work/PHASE, run it for at most 10 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1

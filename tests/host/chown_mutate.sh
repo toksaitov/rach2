@@ -1,10 +1,10 @@
 #!/bin/sh
-# Prove the set-id rules of a chown on a mounted file system, entry 48 of
-# milestone 50. `vfs_chown_plan` and the credential helpers it calls,
-# `cred_privileged`, `cred_in_suppl` and `cred_in_group`, are extracted
-# unchanged from a private copy of rach2/sys/syscall_fs.c, with
-# `struct vfs_stat` and the `VFS_SET_` masks from rach2/sys/fs/vfs.h and
-# `EPERM` from rach2/sys/lib/kerrno.h, and compiled under ASan and UBSan in
+# Prove the set-id rules of a chown on a mounted file system with private
+# mutations of rach2/sys/syscall_fs.c. `vfs_chown_plan` and the credential
+# helpers it calls, `cred_privileged`, `cred_in_suppl` and `cred_in_group`, are
+# extracted unchanged from a private copy of rach2/sys/syscall_fs.c, with
+# `struct vfs_stat` and the `VFS_SET_` masks from rach2/sys/fs/vfs.h and `EPERM`
+# from rach2/sys/lib/kerrno.h, and compiled under ASan and UBSan in
 # tests/host/fixtures/chown_plan.c.
 #
 # Usage: chown_mutate.sh [--check | --texts]
@@ -18,8 +18,9 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault FILE FAULT: put FAULT into vfs_chown_plan in FILE, a copy of
+# syscall_fs.c; with RACH2_FAULT_TEXTS set, only check its text and write
+# nothing.
 apply_fault()
 {
     python3 - "$1" "$2" <<'PY'
@@ -77,11 +78,13 @@ cp rach2/sys/fs/vfs.h "$work/vfs.h"
 cp rach2/sys/lib/kerrno.h "$work/kerrno.h"
 cp "$work/syscall_fs.c" "$work/syscall_fs.saved"
 
+# restore: copy the saved syscall_fs.c back over the copy under test.
 restore()
 {
     cp "$work/syscall_fs.saved" "$work/syscall_fs.c"
     touch "$work/syscall_fs.c"
 }
+# cleanup: the exit trap; stop the running test and restore the source.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -96,6 +99,10 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: extract the functions and definitions from
+# the copies into $work/chown_plan.inc, compile fixtures/chown_plan.c over it
+# as $work/PHASE, run it for at most 20 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1

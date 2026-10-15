@@ -1,11 +1,12 @@
 #!/bin/sh
-# Compile fixed, faulty and restored utility sources in a private directory.
+# Prove the pwauthfault, accounttools, initpolicy and ncwrite host tests with
+# private mutations of utils/pwauth.c, login.c, su.c, sudo.c, init.c and nc.c.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault DIR FAULT: put FAULT into its source under DIR; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -151,6 +152,8 @@ cp -R utils "$work/utils"
 cp -R "$work/utils" "$work/saved"
 child=
 
+# stop_child: end the process group of the running test, if there is one, and
+# wait until none of its processes is left.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -163,6 +166,7 @@ stop_child()
     fi
 }
 
+# restore: copy the saved sources back over the copy under test.
 restore()
 {
     for file in pwauth.c login.c su.c sudo.c init.c nc.c; do
@@ -171,6 +175,7 @@ restore()
     done
 }
 
+# cleanup: the exit trap; stop the running test and restore the sources.
 cleanup()
 {
     stop_child
@@ -181,6 +186,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE TEST STATUS MESSAGE: compile TEST_hosttest.c over the copy
+# as $work/PHASE, run it in a process group of its own for at most 15 seconds,
+# and exit unless it ends with STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1

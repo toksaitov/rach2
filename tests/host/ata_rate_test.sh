@@ -1,5 +1,10 @@
 #!/bin/sh
-# Compile the ATA model rows, optionally proving their write-count checks.
+# Compile and run ata_hosttest.c for the diskrate suite; with --mutate, also
+# prove its two write-count checks with private mutations of ata.c.
+#
+# Usage: ata_rate_test.sh [--mutate | --texts]
+# The faults: `pio` turns off the DMA path of ata_write_on, and `spin` raises
+# ATA_SPIN_BEFORE_SLEEP from 8 status reads to 512.
 set -eu
 case "${1-}" in
     '') [ "$#" -eq 0 ] ;;
@@ -55,6 +60,8 @@ source="$work/rach2/sys/block/ata.c"
 cp "$source" "$work/ata.saved.c"
 child=
 
+# restore: stop the running test and put the saved ata.c back; it is also the
+# exit trap.
 restore()
 {
     if [ -n "$child" ]; then
@@ -70,6 +77,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE: compile ata_hosttest.c over the copy and run it for at most
+# 30 seconds. A PHASE ending in -mutated must fail with $failure in its log and
+# a binary that differs from the fixed one; any other must pass. Exit if not.
 run_phase()
 {
     phase=$1

@@ -1,13 +1,14 @@
 #!/bin/sh
-# Compile the core file's writer before, during and after each fault: its
-# descriptor left open to the processes that share the table, and the zero
-# at the end of a file that ends in a hole written past the limit.
+# Prove corefile_hosttest.c with private mutations of the core file's writer
+# in rach2/sys/syscall_fs.c: its descriptor left open to the processes that
+# share the table, and the zero at the end of a file that ends in a hole
+# written past the limit.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FILE FAULT: put FAULT into FILE, a copy of syscall_fs.c; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -57,6 +58,8 @@ mkdir "$work/vendor"
 cp rach2/vendor/multiboot.h "$work/vendor/multiboot.h"
 cp "$work/sys/syscall_fs.c" "$work/syscall_fs.saved"
 
+# cleanup: stop the running test and put the saved syscall_fs.c back; the
+# loop calls it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -72,6 +75,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: compile corefile_hosttest.c over the copy as
+# $work/PHASE, run it for at most 10 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1

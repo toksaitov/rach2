@@ -1,7 +1,7 @@
 #!/bin/sh
 # Prove the ATA driver's sleeping wait bound of thirty seconds with a private
-# mutation of `ATA_WAIT_TICKS` in rach2/sys/block/ata.c: the bound put back to
-# five seconds, which gives up on a write a loaded host ends after ten.
+# mutation of `ATA_WAIT_TICKS` in rach2/sys/block/ata.c: the bound cut to five
+# seconds, which gives up on a DMA read the drive ends after ten.
 #
 # Usage: ata_wait_mutate.sh [--check | --texts]
 # With --check it compiles and runs the unmodified test alone.
@@ -10,7 +10,7 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FILE FAULT: put FAULT into FILE, a copy of ata.c; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -56,6 +56,8 @@ source="$work/rach2/sys/block/ata.c"
 cp "$source" "$work/source.saved"
 child=
 
+# cleanup: stop the running test's process group and put the saved ata.c
+# back; run_phase calls it after each run, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -74,6 +76,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: compile ata_hosttest.c over the copy as
+# $work/PHASE, run it for at most 60 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1

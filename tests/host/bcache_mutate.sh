@@ -1,17 +1,17 @@
 #!/bin/sh
-# Prove the rows of tests/host/bcache_cost_hosttest.c against the faults they
-# were written for, entries 25 and 40 of milestone 50: the hold rules walking
-# every buffer of the cache on every get, the victim chosen by a walk of every
-# buffer, a sync walking the cache again for every run it writes, and the
-# cache's cap at half the kernel heap's pages taken out; against a sync's
-# batch kept by insertion sort, which shifted the whole batch for each block
-# of a file written in order, and a sync that gathers 128 blocks a walk with
-# room for all of them; against the cap held at half of i686's region,
-# as it was before the boot sized the region from the memory on x86-64; and
-# against a visit counter that answers 0, which only the rows' lower bounds
-# can see. Each fault is compiled into a private copy of
-# rach2/sys/fs/bcache.c, one at a time, and must fail each row its case names;
-# the copy restored, touched and rebuilt must pass.
+# Prove the rows of tests/host/bcache_cost_hosttest.c with private mutations of
+# rach2/sys/fs/bcache.c. The faults: the hold rules walk every buffer of the
+# cache on every get (hold-walk); the victim is chosen by a walk of every
+# buffer (victim-walk); a sync's batch is one block, so it walks the cache
+# again for every run it writes (sync-rescan); a sync keeps its batch by
+# insertion sort, which shifts the whole batch for each block of a file
+# written in order (insertion-sort); a sync gathers 128 blocks a walk whatever
+# room the heap has (small-batch); the cache's cap at half the kernel heap's
+# pages is gone (cap), or is half of i686's region, `KHEAP_FLOOR`, whatever
+# the heap's region is (fixed-cap); and the visit counter answers 0, which
+# only the rows' lower bounds can see (uncounted). Each fault is compiled into
+# the copy, one at a time, and must fail each row its case names; the copy
+# restored, touched and rebuilt must pass.
 # The test is compiled as tests/system/suites/host.sh compiles it, in a
 # private tree laid out as the repository is, so its host-deps lines and its
 # relative includes resolve to the private copy.
@@ -21,7 +21,7 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FILE FAULT: put FAULT into FILE, a copy of bcache.c; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -151,11 +151,13 @@ cp tests/host/bcache_cost_hosttest.c "$work/tests/host/bcache_cost_hosttest.c"
 source="$work/rach2/sys/fs/bcache.c"
 cp "$source" "$work/bcache.saved"
 
+# restore: copy the saved bcache.c back over the copy under test.
 restore()
 {
     cp "$work/bcache.saved" "$source"
     touch "$source"
 }
+# cleanup: the exit trap; stop the running test and restore the source.
 cleanup()
 {
     if [ -n "$child" ]; then

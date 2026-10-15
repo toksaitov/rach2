@@ -5,16 +5,16 @@
 # Usage: sh tests/host/deadline_mutate.sh [--texts]
 #
 # wait_queue_hosttest requires a wait that a wake does not end to arm the
-# caller's deadline again before it blocks again (entry 217), and a wake to be
+# caller's deadline again before it blocks again, and a wake to be
 # counted for the kinds of change it names and no others, each time it comes,
 # every kind for wq_wake_all, the count of the kinds asked for to be read back,
-# and a wake that names none to wake its waiters still (entry 246);
+# and a wake that names none to wake its waiters still;
 # poll_deadline_hosttest requires the poll, ppoll and select timeouts to end at
 # the first tick at or after their end, measured from where in the tick in
 # progress they began, seconds to count a hundred ticks and any part of a tick
 # to round up, a zero timeout to end at once, the longest ppoll timeout to end
 # 0x7FFFFFFF ticks ahead across the wrap and not be reached where it began, and
-# a deadline to be reached at its tick and not before (entry 216);
+# a deadline to be reached at its tick and not before;
 # process_timer_hosttest requires a due timer to post SIGALRM to its process,
 # running or asleep, and be armed again for its interval, an interval of one
 # tick included, a single alarm to be left disarmed, a sleeper to wake at its
@@ -22,8 +22,8 @@
 # process to be left alone, a tick that wakes a sleeper to post the sleeper's
 # alarm and a later process's still, a timer armed again onto tick 0 across the
 # wrap to be due at 1, a timer and a sleeper due past the wrap to wait for it
-# and be served after it, and an alarm tick that wraps to 0 to be moved to 1
-# (entries 212 and 215). Each test is compiled against a private copy of
+# and be served after it, and an alarm tick that wraps to 0 to be moved to 1.
+# Each test is compiled against a private copy of
 # rach2/sys as it is, where it must pass; with each fault below, where it must
 # fail every row the fault names; and restored, touched and compiled again,
 # where it must pass. The trap stops the test before it restores the source.
@@ -50,6 +50,8 @@ if [ -z "$texts" ]; then
 fi
 child=
 
+# restore: copy the saved wait_queue.c, poll.c and process.c back over the
+# private tree.
 restore()
 {
     for source in $sources; do
@@ -58,6 +60,7 @@ restore()
     done
 }
 
+# cleanup: the exit trap; stop the running test and restore the sources.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -72,9 +75,10 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# run_phase PHASE TEST EXPECTED DETAILS: compile tests/host/TEST.c against the
-# private tree and run it; a pass must exit 0, a fail must exit nonzero and
-# print each of DETAILS, which are separated by `|`.
+# run_phase PHASE TEST EXPECTED DETAILS: compile tests/host/TEST.c with its
+# host-deps, each kernel source taken from the private tree, and run it for at
+# most 10 seconds. EXPECTED is pass or fail: a pass must exit 0, a fail must
+# exit nonzero and print each of DETAILS, which are separated by `|`.
 run_phase()
 {
     phase=$1
@@ -82,7 +86,6 @@ run_phase()
     expected=$3
     details=$4
     binary="$work/$phase"
-    # The test's host-deps, a kernel source taken from the private tree.
     deps=
     listed=$(grep -oE 'host-deps:[^*]*' "tests/host/$test.c" | sed 's/host-deps://')
     for dep in $listed; do
