@@ -1,5 +1,7 @@
 /*
- * fat32_hosttest.c: the vfat driver over the buffer cache over an image.
+ * fat32_hosttest.c: the FAT32 driver, rach2/sys/fs/fat32.c, over the buffer
+ * cache and the disk model of compat/devmodel.c, on volumes mkfatfixture
+ * builds.
  *
  * host-deps: rach2/sys/fs/fat32.c rach2/sys/fs/bcache.c rach2/sys/block/chain.c
  * host-deps: rach2/sys/fs/fat32name.c rach2/sys/fs/fatcommon.c
@@ -8,18 +10,20 @@
  * host-deps: tests/host/compat/pressure_host.c tests/host/compat/fixdir_host.c
  * host-seconds: 300
  *
- * The volumes are mkfatfixture's, built here on first use the way the bootctl
- * test builds them, in the test's own fixture directory (compat/fixdir_host.c),
- * or in the one a mutation proof names with FIXDIR, so that runs at once do not
- * share one. The well-formed volume (`--vfs`) must read back exactly what the
- * builder wrote: the long names, the one across a 4 KiB boundary, the surrogate
- * pair, the bad checksum falling back to a lower-cased short name, the 0x05
- * short name reachable by its long name, the fragmented file, the empty file,
- * `..` back to the root, and the bytes of every file. The malformed volumes are
- * refused at mount or fail at the file they damage, under AddressSanitizer. A
- * create, a mkdir and a rename on a second volume, each with the same operation
- * on the first inside one of its writes, must each write the name it was given.
- * No hosted headers: the kernel headers define the fixed-width types.
+ * The volumes are mkfatfixture's, built here on first use the way the
+ * bootctl test builds them, in the test's own fixture directory
+ * (compat/fixdir_host.c), or in the one a mutation proof names with FIXDIR,
+ * so that two runs at once share none. The well-formed volume (`--vfs`)
+ * must read back what the builder wrote: the long names, the one across a
+ * 4 KiB boundary, the surrogate pair, the bad checksum falling back to a
+ * lower-cased short name, the 0x05 short name reachable by its long name,
+ * the fragmented file, the empty file, `..` back to the root, and the bytes
+ * of every file. The malformed volumes fail the mount or fail at the file
+ * they damage, under AddressSanitizer. A create, a mkdir and a rename on a
+ * second volume, each with the same operation on the first inside one of
+ * its writes, must each write the name it was given. The test includes no
+ * hosted header: the kernel headers define the fixed-width types, and the
+ * C library calls it makes are declared below.
  *
  * With `--barriers` the program runs only the interruption matrix and the
  * durability rows, the rows that judge the driver's barriers, and ends at
@@ -50,6 +54,7 @@ extern int fclose(void *f);
 process_t proc_a;
 struct percpu cpu_table[NR_CPUS] = {{.current = &proc_a}};
 
+/** Print the panic's message and exit with status 3. */
 void k_panic(const char *s)
 {
     printf("fat32_hosttest: panic: %s\n", s);
@@ -59,6 +64,7 @@ void k_panic(const char *s)
 static char last_log[128];
 extern int vsnprintf(char *s, unsigned long n, const char *fmt, __builtin_va_list ap);
 
+/** Keep the record in `last_log`, where `bpb_row` reads it. */
 void klog(int level, const char *sys, const char *fmt, ...)
 {
     __builtin_va_list ap;
@@ -70,14 +76,17 @@ void klog(int level, const char *sys, const char *fmt, ...)
     __builtin_va_end(ap);
 }
 
+/** Clear the queue. */
 void wait_queue_init(wait_queue_t *wq)
 {
     __builtin_memset(wq, 0, sizeof(*wq));
 }
+/** Do nothing: no process sleeps in this test. */
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
 }
+/** Return -1 at once, as an interrupted wait does. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
@@ -95,10 +104,12 @@ static unsigned char image[IMG_BYTES];
 static unsigned char medium[IMG_BYTES];
 static unsigned char image_before[IMG_BYTES];
 static unsigned char snap[IMG_BYTES];
-static unsigned char snaps[DEVMODEL_KEEP_MOST + 2][IMG_BYTES]; /* the states at one stop */
+/* The states the medium can be in at one stop of the matrix. */
+static unsigned char snaps[DEVMODEL_KEEP_MOST + 2][IMG_BYTES];
 static struct devmodel model;
 static int reads_made;
 
+/** Read `count` sectors at `lba` from the model, counting the read. */
 static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
 {
     (void)d;
@@ -113,6 +124,12 @@ static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
 static int writes_made;
 static int stop_after = -1;
 
+/**
+ * Write `count` sectors at `lba` to the model, pending until the next
+ * barrier. Once `stop_after` writes are made, every later write fails with
+ * -5 (EIO); the write that reaches the count is the last to land, and marks
+ * the model stopped.
+ */
 static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void *buf)
 {
     (void)d;
@@ -124,13 +141,16 @@ static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void
     writes_made++;
     rc = devmodel_write(&model, lba, count, buf);
     if (stop_after >= 0 && writes_made >= stop_after) {
-        model.stopped = 1; /* the Nth write is the last thing that lands */
+        model.stopped = 1;
     }
     return rc;
 }
 
-/* The medium as it stands, with nothing pending: what the tests that judge
-   the image directly see, since a barrier came before them. */
+/**
+ * Make every pending write durable, so that the image is the medium with
+ * nothing pending: what the rows that judge the image directly see, since
+ * a barrier came before them.
+ */
 static void settle(void)
 {
     if (model.npending) {
@@ -140,6 +160,7 @@ static void settle(void)
 
 static block_device_t dev = {512, 8192u, BLOCK_FAULT_SAFE, 0, 0, 0, img_read, img_write, 0, 0, 0};
 
+/** Call the device's read or write. */
 int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *data)
 {
     if (write) {
@@ -152,9 +173,10 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
 
 static int fails;
 /* Set by the mode a mutation proof runs: the first failure ends the run,
-   since the proof asks only whether a row fails. */
+   since the proof judges only whether a row fails. */
 static int first_failure_ends;
 
+/** Count and print a failed row; end the run when `first_failure_ends`. */
 static void check(int ok, const char *what)
 {
     if (!ok) {
@@ -166,6 +188,7 @@ static void check(int ok, const char *what)
     }
 }
 
+/** Whether the two strings are equal. */
 static int streq(const char *a, const char *b)
 {
     while (*a && *a == *b) {
@@ -177,13 +200,18 @@ static int streq(const char *a, const char *b)
 
 static int builder_built;
 
-/** Build the named fixture and load it into the image. */
+/**
+ * Build the fixture the builder's option `opt` names and load it into the
+ * image and the model. The builder is compiled once a run, so that an edited
+ * builder is the one that runs. What the cache still holds of the previous
+ * image is written into that image before it is replaced, so that the cache
+ * empties, and a stop is over. Exits the test when a step fails.
+ */
 static void load(const char *opt)
 {
     char cmd[2048];
     void *f;
 
-    /* Built once per run, so an edited builder is the one that runs. */
     if (!builder_built) {
         fix_format(cmd, sizeof(cmd), "cc -O2 -o %s/mkfatfixture tests/host/mkfatfixture.c",
                    fix_dir());
@@ -198,8 +226,6 @@ static void load(const char *opt)
         printf("fat32_hosttest: fixture builder failed for %s\n", opt);
         exit(1);
     }
-    /* Whatever the cache still holds of the previous image goes into that
-       image before it is replaced, so the cache empties; a stop is over. */
     stop_after = -1;
     model.stopped = 0;
     bcache_sync(&dev);
@@ -218,7 +244,11 @@ static void load(const char *opt)
 
 static struct vfs_mount mnt;
 
-/* Mount the loaded image read-only with `options`; the constructor's rc. */
+/**
+ * Mount the loaded image read-only with `options`, and take the namespace
+ * lock, which the test holds in place of the system call layer while the
+ * mount is up. Returns the mount's result.
+ */
 static int mount_image(const char *options)
 {
     int rc;
@@ -230,11 +260,12 @@ static int mount_image(const char *options)
     mnt.ns_holder = -1;
     rc = vfs_vfat_type.mount(&mnt, &dev, VFS_MS_RDONLY, options);
     if (rc == 0) {
-        vfs_ns_lock(&mnt); /* the test stands in for the syscall layer */
+        vfs_ns_lock(&mnt);
     }
     return rc;
 }
 
+/** Drop the root and unmount, when a mount is up. */
 static void unmount_image(void)
 {
     if (mnt.root) {
@@ -245,7 +276,10 @@ static void unmount_image(void)
 
 #define OPS (vfs_vfat_type.ops)
 
-/* Resolve `path` under the root by lookup per component; the node, or NULL. */
+/**
+ * Resolve `path` under the root by a lookup per component. Returns the node,
+ * held, which the caller puts; or NULL with the lookup's error in `*err`.
+ */
 static void *walk(const char *path, int *err)
 {
     void *cur = mnt.root;
@@ -279,7 +313,10 @@ static void *walk(const char *path, int *err)
     return cur;
 }
 
-/* Read a whole file into `buf`; the byte count, or a negative errno. */
+/**
+ * Read a whole file into `buf`, at most `cap` bytes; the count, or a
+ * negative errno, -1 when the open fails.
+ */
 static int read_all(void *node, unsigned char *buf, uint32_t cap)
 {
     void *h;
@@ -303,12 +340,16 @@ static int read_all(void *node, unsigned char *buf, uint32_t cap)
     return total;
 }
 
-/* Count the entries a directory lists and note whether `name` is among
-   them; a listing that ends in an error returns that errno, and every inode
-   number listed goes into `inos` (at most 64) when it is given. */
+/* The inode numbers `list_dir` collects, `ino_count` of them. */
 static uint64_t inos[64];
 static int ino_count;
 
+/**
+ * Count the entries a directory lists and set `*seen` when `name` is among
+ * them. Every inode number listed but those of `.` and `..` goes into
+ * `inos`, while it has room. Returns the count, the error that ended the
+ * listing, or -1 when the open fails.
+ */
 static int list_dir(void *dir, const char *name, int *seen)
 {
     void *h;
@@ -334,7 +375,7 @@ static int list_dir(void *dir, const char *name, int *seen)
     return got < 0 ? got : count;
 }
 
-/* Every inode number collected so far is distinct. */
+/** Whether every inode number in `inos` is distinct. */
 static int inos_distinct(void)
 {
     int i, j;
@@ -351,6 +392,26 @@ static int inos_distinct(void)
     return 1;
 }
 
+/**
+ * Mount the `--vfs` volume read-only and read it back:
+ *
+ * - long names, with ASCII case folded, by their aliases too, and the bytes
+ *   behind them; a surrogate pair; a bad checksum, whose short name is
+ *   shown lower-cased by the case bits; a 0x05 short name; a listing of
+ *   fifteen entries, without the label or the deleted entry;
+ * - long names no writer produces, which are not names and are shown by
+ *   their aliases; and the 58 entries the root, /sub and /many list, whose
+ *   inode numbers must be distinct. The walks of the aliases keep their
+ *   nodes, so each alias is walked again and put twice;
+ * - times: local time read as UTC, hundredths added to the creation
+ *   second, and a field out of range reading as 1980-01-01;
+ * - the long name across the 4 KiB boundary;
+ * - the fragmented file, across its jump, whole and in pieces, and a
+ *   second read served by the cache;
+ * - the empty file, the owner and mode the mount options give, `..` back
+ *   to the root by cluster zero and to a deeper parent, statfs, and the
+ *   errors of a missing name and of a file searched as a directory.
+ */
 static void well_formed_rows(void)
 {
     unsigned char buf[2048];
@@ -365,7 +426,6 @@ static void well_formed_rows(void)
     load("--vfs");
     check(mount_image("umask=022,uid=7,gid=9") == 0, "the well-formed volume mounts");
 
-    /* Long names, case folding, and the bytes behind them. */
     n = walk("/long name with spaces.txt", &err);
     check(n != 0, "a long name is found");
     check(n && read_all(n, buf, sizeof(buf)) == 27 &&
@@ -418,7 +478,6 @@ static void well_formed_rows(void)
     check(seen, "the listing shows the long name");
     check(count == 15, "the root lists fifteen entries: no label, no deleted entry");
 
-    /* Long names no writer produces are not names; the alias is shown. */
     check(walk("/badord.txt", &err) != 0 && list_dir(mnt.root, "BADORD.TXT", &seen) > 0 && seen,
           "a long name with a reserved ordinal bit is shown by its alias");
     check(walk("/badattr.txt", &err) != 0 && list_dir(mnt.root, "BADATTR.TXT", &seen) > 0 && seen,
@@ -441,8 +500,6 @@ static void well_formed_rows(void)
     }
     check(ino_count == 58 && inos_distinct(),
           "no two of the 58 entries listed share an inode number");
-    /* The four walks above put their nodes back through the pool row's
-       release; here each is put at once. */
     for (i = 0; i < 4; i++) {
         static const char *const aliases[] = {"/badord.txt", "/badattr.txt", "/badpad.txt",
                                               "/lone.txt"};
@@ -454,8 +511,6 @@ static void well_formed_rows(void)
         }
     }
 
-    /* Times: local time read as UTC, hundredths added to the creation
-       second, and a field out of range reading as 1980-01-01. */
     n = walk("/stamp.txt", &err);
     check(n && OPS->getattr(&mnt, n, &st) == 0 && st.mtime_sec == 946684798 &&
               st.ctime_sec == 1583323201 && st.ctime_nsec == 500000000,
@@ -478,8 +533,6 @@ static void well_formed_rows(void)
         OPS->put(&mnt, n);
     }
 
-    /* The fragmented file reads across its jump, whole and in pieces, and
-       a second read of it is served by the cache. */
     n = walk("/frag.bin", &err);
     check(n != 0, "the fragmented file is found by its folded name");
     ok = n && read_all(n, buf, sizeof(buf)) == 1536;
@@ -507,7 +560,6 @@ static void well_formed_rows(void)
         OPS->put(&mnt, n);
     }
 
-    /* The empty file, the attributes, and the mount's identity. */
     n = walk("/BOOT/EXTRA/EMPTY", &err);
     check(n != 0, "the empty file is found");
     check(n && read_all(n, buf, sizeof(buf)) == 0, "and reads as empty");
@@ -523,7 +575,6 @@ static void well_formed_rows(void)
               "a directory reports the umask's mode");
     }
 
-    /* `..` back up: the subdirectory's parent is the root by cluster zero. */
     sub = walk("/sub", &err);
     check(sub != 0, "the subdirectory is found");
     if (sub) {
@@ -555,7 +606,6 @@ static void well_formed_rows(void)
         OPS->put(&mnt, n);
     }
 
-    /* What the volume is. */
     {
         struct vfs_statfs sf;
 
@@ -569,14 +619,19 @@ static void well_formed_rows(void)
     unmount_image();
 }
 
+/**
+ * The default fixture, a valid FAT32 of 8032 clusters, far below the 65525
+ * the specification names for formatting, must mount and read. With
+ * mirroring off, the second FAT active and the first wrong, the kernel
+ * file must read through the second. The reserved high bits of a FAT entry
+ * must be masked before the entry is judged.
+ */
 static void small_and_active_rows(void)
 {
     unsigned char buf[64];
     void *n;
     int err;
 
-    /* The default fixture is a valid FAT32 of 8032 clusters, far below the
-       65525 the specification names for formatting; it must mount. */
     load("");
     check(mount_image("") == 0, "a valid FAT32 below 65525 clusters mounts");
     n = walk("/BOOT/GRUB/GRUB.CFG", &err);
@@ -586,8 +641,6 @@ static void small_and_active_rows(void)
     }
     unmount_image();
 
-    /* Mirroring off, the second FAT active, the first wrong: the kernel
-       file reads only when the active FAT is the one followed. */
     load("--active-second");
     check(mount_image("") == 0, "the active-second volume mounts");
     n = walk("/BOOT/KERNEL", &err);
@@ -606,8 +659,6 @@ static void small_and_active_rows(void)
     }
     unmount_image();
 
-    /* The reserved high bits of a FAT entry are masked before it is
-       judged. */
     load("--unmasked");
     check(mount_image("") == 0, "the unmasked volume mounts");
     n = walk("/BOOT/KERNEL", &err);
@@ -625,8 +676,11 @@ static void small_and_active_rows(void)
     unmount_image();
 }
 
-/* Patch `width` bytes at `off` of the loaded volume's boot sector to
-   `value` and mount: the constructor must answer EINVAL and name `field`. */
+/**
+ * Load the `--vfs` volume, set `width` bytes at `off` of its boot sector to
+ * `value`, little-endian, and mount: the mount must fail with `EINVAL` and
+ * log "refused: " and `field`.
+ */
 static void bpb_row(unsigned off, int width, uint32_t value, const char *field)
 {
     char want[96];
@@ -637,7 +691,7 @@ static void bpb_row(unsigned off, int width, uint32_t value, const char *field)
         image[off + (unsigned)i] = (unsigned char)(value >> (8 * i));
     }
     if (off == 32) {
-        image[19] = 0; /* the 32-bit total counts only when the 16-bit one is zero */
+        image[19] = 0; /* the 32-bit total counts when the 16-bit one is 0 */
         image[20] = 0;
     }
     bcache_invalidate(&dev);
@@ -649,6 +703,16 @@ static void bpb_row(unsigned off, int width, uint32_t value, const char *field)
     }
 }
 
+/**
+ * Each field of the boot sector the driver checks, when wrong, fails the
+ * mount with `EINVAL` and a log line that names it, as does a total of
+ * sectors for a cluster count no 28-bit FAT can name; the builder's
+ * malformed boot sectors fail it too. A looped directory lists to `EIO` at
+ * the volume's bound. A file whose chain leaves the data region reads its
+ * sound clusters and fails with `EIO` at the bad link, as does a read past
+ * a chain shorter than the file's size. An unknown mount option is
+ * `EINVAL`, and a writable mount is accepted.
+ */
 static void malformed_rows(void)
 {
     void *n;
@@ -675,7 +739,6 @@ static void malformed_rows(void)
     {
         uint64_t saved = dev.sector_count;
 
-        /* Sectors enough for a cluster count no 28-bit FAT can name. */
         dev.sector_count = 0xFFFFFFFFu;
         bpb_row(32, 4, 0xFFFFFFF0u, "cluster count");
         dev.sector_count = saved;
@@ -759,6 +822,10 @@ extern char *strstr(const char *hay, const char *needle);
 extern int strncmp(const char *a, const char *b, unsigned long n);
 extern unsigned long strlen(const char *s);
 
+/**
+ * Mount the loaded image read-write with `options`, and take the namespace
+ * lock in place of the system call layer. Returns the mount's result.
+ */
 static int mount_rw(const char *options)
 {
     int rc;
@@ -775,7 +842,11 @@ static int mount_rw(const char *options)
     return rc;
 }
 
-/* The image to a file and the check over it; its output in `out`. */
+/**
+ * Write the image `what` to a file and run `mkfatfixture --check` over it,
+ * its output in `out`, at most `cap` bytes. Returns the check's exit
+ * status, or -1; exits the test when the file or the check cannot be made.
+ */
 static int run_check_on(const unsigned char *what, char *out, unsigned long cap)
 {
     char cmd[2048], line[300];
@@ -805,16 +876,21 @@ static int run_check_on(const unsigned char *what, char *out, unsigned long cap)
     return rc == -1 ? -1 : (rc >> 8) & 0xff;
 }
 
-/* The image the device answers, settled: what a checker sees after a clean
-   end, where every write reached the medium. */
+/**
+ * Run the check over the image the device answers, settled: what a checker
+ * sees after a clean end, where every write reached the medium.
+ */
 static int run_check(char *out, unsigned long cap)
 {
     settle();
     return run_check_on(image, out, cap);
 }
 
-/* The findings the driver's own order may leave behind a crash, and the
-   dirty flag of a mounted volume; anything else is a fault. */
+/**
+ * Whether every line of the check's output `out` is a finding the driver's
+ * own order may leave behind a crash, or the dirty flag of a mounted
+ * volume; anything else is a fault.
+ */
 static int findings_allowed(const char *out)
 {
     const char *p = out;
@@ -838,8 +914,12 @@ static int findings_allowed(const char *out)
 
 static char check_out[16384];
 
-/* The volume is consistent: no finding at all (`mounted` allows the dirty
-   flag's two lines). */
+/**
+ * Check that the volume is consistent: no finding at all. With `mounted`,
+ * the dirty flag's lines and a FSInfo count are allowed too, since a
+ * mounted volume is dirty by design and its FSInfo lags until a sync or
+ * the unmount writes it.
+ */
 static void check_consistent(const char *what, int mounted)
 {
     int rc = run_check(check_out, sizeof(check_out));
@@ -852,8 +932,6 @@ static void check_consistent(const char *what, int mounted)
         while (*p) {
             const char *nl = strstr(p, "\n");
 
-            /* A mounted volume is dirty by design, and its FSInfo lags
-               until a sync or the unmount writes it. */
             if (strncmp(p, "check: OK: ", 11) != 0 && strncmp(p, "check: FAIL: ", 13) != 0 &&
                 strncmp(p, "check: dirty: ", 14) != 0 && strncmp(p, "check: fsinfo: ", 15) != 0) {
                 ok = 0;
@@ -869,6 +947,7 @@ static void check_consistent(const char *what, int mounted)
     }
 }
 
+/** Create `name`, mode 0644, under `dir`; the node, held, or NULL. */
 static void *make_file(void *dir, const char *name)
 {
     void *n = 0;
@@ -879,6 +958,10 @@ static void *make_file(void *dir, const char *name)
     return n;
 }
 
+/**
+ * Write `n` bytes at `off` through a description. Returns 0, a negative
+ * errno, or -1 for a short write or a failed open.
+ */
 static int write_at(void *node, const void *buf, uint32_t n, uint64_t off)
 {
     void *h;
@@ -899,6 +982,7 @@ static unsigned char back[8192];
    every kind of long name is among them, with entries spanning a sector. */
 static int long_names;
 
+/** The name for `shortname`: itself, or in the long-name pass its long name. */
 static const char *nm(const char *shortname)
 {
     static const char *const map[][2] = {
@@ -934,6 +1018,7 @@ static const char *nm(const char *shortname)
     return shortname;
 }
 
+/** The name of file `i` of the many-files sequence, short or long. */
 static const char *nmf(int i)
 {
     static char name[40];
@@ -942,6 +1027,7 @@ static const char *nmf(int i)
     return name;
 }
 
+/** Fill `pattern` with bytes that repeat only every 256. */
 static void fill_pattern(void)
 {
     unsigned i;
@@ -951,8 +1037,11 @@ static void fill_pattern(void)
     }
 }
 
-/* The sequences of the matrix: each stands alone on a fresh volume and
-   returns the first error. */
+/**
+ * Create a file and write five bytes. This and the sequences after it are
+ * the matrix's: each stands alone on a fresh volume and returns 0 or the
+ * first error.
+ */
 static int seq_create_write(void)
 {
     void *n = make_file(mnt.root, nm("W1.TXT"));
@@ -966,6 +1055,7 @@ static int seq_create_write(void)
     return rc;
 }
 
+/** Write 1200 bytes in two calls, across a cluster. */
 static int seq_extend(void)
 {
     void *n = make_file(mnt.root, nm("W2.TXT"));
@@ -982,6 +1072,7 @@ static int seq_extend(void)
     return rc;
 }
 
+/** Write 10 bytes, then 10 more at 2000, leaving a gap of zeros. */
 static int seq_past_end(void)
 {
     void *n = make_file(mnt.root, nm("W3.TXT"));
@@ -998,8 +1089,10 @@ static int seq_past_end(void)
     return rc;
 }
 
-/* Two writes into one cluster: the second grows the size over bytes that
-   were on the disk as junk until the data reached it. */
+/**
+ * Make two writes into one cluster: the second grows the size over bytes
+ * that are junk on the disk until the data reaches it.
+ */
 static int seq_grow_in_place(void)
 {
     void *n = make_file(mnt.root, nm("W6.TXT"));
@@ -1016,7 +1109,7 @@ static int seq_grow_in_place(void)
     return rc;
 }
 
-/* Twenty files in a new directory, which grows past its first cluster. */
+/** Make twenty files in a new directory, which grows past its first cluster. */
 static int seq_many_files(void)
 {
     void *d;
@@ -1041,6 +1134,10 @@ static int seq_many_files(void)
     return rc;
 }
 
+/**
+ * Write 2010 bytes, then truncate to 700, grow to 1000 inside the last
+ * cluster and to 2600 across a cluster, cut to 0, and grow to 1500.
+ */
 static int seq_truncate(void)
 {
     void *n = make_file(mnt.root, nm("W4.TXT"));
@@ -1054,10 +1151,10 @@ static int seq_truncate(void)
     if (rc == 0 && OPS->open(&mnt, n, 0, &h) == 0) {
         rc = OPS->truncate(&mnt, h, 700);
         if (rc == 0) {
-            rc = OPS->truncate(&mnt, h, 1000); /* a grow inside the last cluster */
+            rc = OPS->truncate(&mnt, h, 1000);
         }
         if (rc == 0) {
-            rc = OPS->truncate(&mnt, h, 2600); /* and one across a cluster */
+            rc = OPS->truncate(&mnt, h, 2600);
         }
         if (rc == 0) {
             rc = OPS->truncate(&mnt, h, 0);
@@ -1071,6 +1168,7 @@ static int seq_truncate(void)
     return rc;
 }
 
+/** Write 1000 bytes to a new file and unlink it. */
 static int seq_unlink(void)
 {
     void *n = make_file(mnt.root, nm("W5.TXT"));
@@ -1087,13 +1185,14 @@ static int seq_unlink(void)
     return rc;
 }
 
-/* A file already on the medium, unlinked. Its name and its chain were
-   durable before the unlink, so the flush `free_chain` begins with is all
-   that keeps a crash from leaving the name over a freed chain. The unlink
-   above follows its file's own creation, whose size and first cluster are
-   still pending in the block the unlink rewrites, and there no order of
-   the two can show a name over a freed chain; rmdir flushes before it
-   frees. */
+/**
+ * Unlink a file already on the medium. Its name and its chain are durable
+ * before the unlink, so the flush `free_chain` begins with is all that
+ * keeps a crash from leaving the name over a freed chain. `seq_unlink`
+ * follows its file's own creation, whose size and first cluster are still
+ * pending in the block the unlink rewrites, and there no order of the two
+ * can show a name over a freed chain; rmdir flushes before it frees.
+ */
 static int seq_unlink_synced(void)
 {
     void *n = make_file(mnt.root, nm("W7.TXT"));
@@ -1113,12 +1212,14 @@ static int seq_unlink_synced(void)
     return rc;
 }
 
-/* A file already on the medium, cut to part of its chain. Its size and its
-   chain were durable before the truncate, so the flush between the shorter
-   size and the cut is all that keeps a crash from leaving the old size over
-   a chain that ends early. The truncate above follows its file's own write,
-   whose size is still pending in the block the truncate rewrites, and there
-   no order of the two can show the old size over the cut chain. */
+/**
+ * Cut a file already on the medium to part of its chain. Its size and its
+ * chain are durable before the truncate, so the flush between the shorter
+ * size and the cut is all that keeps a crash from leaving the old size
+ * over a chain that ends early. `seq_truncate` follows its file's own
+ * write, whose size is still pending in the block the truncate rewrites,
+ * and there no order of the two can show the old size over the cut chain.
+ */
 static int seq_truncate_synced(void)
 {
     void *n = make_file(mnt.root, nm("W8.TXT"));
@@ -1140,6 +1241,7 @@ static int seq_truncate_synced(void)
     return rc;
 }
 
+/** Make D1 and D1/D2, then remove both. */
 static int seq_mkdir_rmdir(void)
 {
     void *d;
@@ -1162,6 +1264,10 @@ static int seq_mkdir_rmdir(void)
     return rc;
 }
 
+/**
+ * Write 700 bytes to a new file and rename it in the root, then into /BOOT;
+ * make a directory and move it into /BOOT as well.
+ */
 static int seq_rename(void)
 {
     void *n = make_file(mnt.root, nm("R1.TXT"));
@@ -1189,6 +1295,7 @@ static int seq_rename(void)
     return rc;
 }
 
+/** Write two files and rename the first over the second. */
 static int seq_rename_over(void)
 {
     void *a = make_file(mnt.root, nm("O1.TXT"));
@@ -1233,8 +1340,10 @@ static const struct sequence sequences[] = {
     {"truncate after a sync", seq_truncate_synced},
 };
 
-/* Read the crash state back from the dump: the cache's dirty buffers go
-   into the image the dump replaces, so nothing of them survives. */
+/**
+ * Read the crash state back from the dump: the cache's dirty buffers go
+ * into the image the dump replaces, so nothing of them survives.
+ */
 static void load_dump(void)
 {
     void *f;
@@ -1252,12 +1361,14 @@ static void load_dump(void)
     devmodel_load(&model);
 }
 
-/* Make `what` the device's whole state, medium and all, for a mount over
-   a crash state. */
+/**
+ * Make `what` the device's whole state, medium and all, for a mount over a
+ * crash state. What the cache still holds of the stopped run drains into
+ * the image about to be replaced, so that the cache is empty for the
+ * snapshot.
+ */
 static void load_snapshot(const unsigned char *what)
 {
-    /* What the cache still holds of the stopped run drains into the image
-       about to be replaced, so the cache is empty for the snapshot. */
     stop_after = -1;
     model.stopped = 0;
     bcache_sync(&dev);
@@ -1269,9 +1380,12 @@ static void load_snapshot(const unsigned char *what)
     devmodel_load(&model);
 }
 
-/* The content oracle: after a stop, every file a data sequence writes
-   reads, within its published size, either the bytes written to it or
-   zeros, never anything else. */
+/**
+ * The content oracle: whether, after a stop, every file a data sequence
+ * writes reads, within its published size, either the bytes written to it
+ * or zeros, and nothing else. The truncate sequence's file may hold any of
+ * its sizes, and one grown by truncation reads zeros past what it kept.
+ */
 static int oracle_ok(void)
 {
     static const char *const names[] = {"W1.TXT", "W2.TXT", "W3.TXT", "W6.TXT", "W4.TXT"};
@@ -1302,9 +1416,9 @@ static int oracle_ok(void)
             } else if (f == 2) {
                 want = i < 10 ? pattern[i] : (i >= 2000 ? pattern[10 + i - 2000] : 0);
             } else if (f == 4 && got == 1500) {
-                want = 0; /* regrown from nothing after the truncate to zero */
+                want = 0;
             } else if (f == 4 && (got == 1000 || got == 2600)) {
-                want = i < 700 ? pattern[i] : 0; /* grown from 700 by truncate */
+                want = i < 700 ? pattern[i] : 0;
             } else {
                 want = pattern[i];
             }
@@ -1323,7 +1437,11 @@ static int oracle_ok(void)
     return 1;
 }
 
-/* The check's listing of the dumped image, for the long names it shows. */
+/**
+ * Run `mkfatfixture --check --list` over the image, for the long names it
+ * shows, its output in `out`. Returns the check's exit status, or -1;
+ * exits the test when the file or the check cannot be made.
+ */
 static int run_check_list(char *out, unsigned long cap)
 {
     char cmd[2048], line[600];
@@ -1351,8 +1469,16 @@ static int run_check_list(char *out, unsigned long cap)
     return rc == -1 ? -1 : (rc >> 8) & 0xff;
 }
 
-/* Long names of every kind, written and read back by name and by alias,
-   listed by the check and by mtools; the names refused; the attributes. */
+/**
+ * Long names of every kind, written and read back by name and by alias,
+ * listed by the check and by mtools; the names that fail with `EINVAL`,
+ * `EEXIST` and `ENAMETOOLONG`; renames with long names, in place at the
+ * same count of entries and moved otherwise; an unlinked long name, whose
+ * entries are freed; a rename of an open file across directories, after
+ * which the description writes at the new place and the new name reaches
+ * the node the file had, as its advisory locks need
+ * (rach2/sys/fs/lock.Readme.md); and the attributes a volume can store.
+ */
 static void long_rows(void)
 {
     struct vfs_stat st;
@@ -1440,8 +1566,6 @@ static void long_rows(void)
               strstr(check_out, "long \xc3\xa9t\xc3\xa9.txt") != 0,
           "the check lists the long names");
 
-    /* Renames with long names: in place at the same entry count, and moved
-       otherwise; the entries of a removed long name are freed. */
     check(OPS->rename(&mnt, mnt.root, "Long Name One.txt", mnt.root, "Long Name Two.txt") == 0 &&
               walk("/Long Name Two.txt", &err) != 0 && walk("/Long Name One.txt", &err) == 0,
           "a long name renamed in place");
@@ -1452,15 +1576,12 @@ static void long_rows(void)
           "a long name unlinked");
     check_consistent("the volume is consistent after the long renames and the unlink", 1);
 
-    /* A rename of an open file: the description writes at the new place. */
     n = walk("/SHORT.TXT", &err);
     boot = walk("/BOOT", &err);
     check(n && boot && OPS->open(&mnt, n, 0, &h) == 0, "an open file to rename");
     check(OPS->rename(&mnt, mnt.root, "SHORT.TXT", boot, "moved name.txt") == 0,
           "renamed across directories while open");
     {
-        /* The node is the file's while it is held, under its new name too:
-           its advisory locks are found by it (lock.Readme.md). */
         void *renamed = walk("/BOOT/moved name.txt", &err);
 
         check(renamed && renamed == n, "the new name of a held file reaches the node it had");
@@ -1484,7 +1605,6 @@ static void long_rows(void)
     }
     check_consistent("the volume is consistent after the open file's rename", 1);
 
-    /* The attributes a volume can store. */
     n = walk("/BOOT/moved name.txt", &err);
     check(n != 0, "the file for the attribute rows");
     if (n) {
@@ -1538,9 +1658,10 @@ static void long_rows(void)
     }
 }
 
-/* A dirty volume at mount: clean, repaired, or refused. */
-/* The free entries of the active FAT, read from the image: the driver's
- * count after a check must agree with the disk. */
+/**
+ * The count of free entries in the first FAT, read from the image, which
+ * the driver's free count must agree with; 0xffffffff when statfs fails.
+ */
 static uint32_t free_in_fat(void)
 {
     uint32_t bps = image[11] | ((uint32_t)image[12] << 8);
@@ -1565,8 +1686,12 @@ static uint32_t free_in_fat(void)
     return n;
 }
 
-/* The directory tree under rename: not into itself, and a held directory
-   follows its move. */
+/**
+ * The directory tree under rename: a directory cannot move into itself,
+ * and a held directory follows its move, so that a setattr through the
+ * held node writes the entry where it now is, as a later mount reads it
+ * from the disk.
+ */
 static void tree_rows(void)
 {
     void *a = 0, *b = 0, *c = 0;
@@ -1592,7 +1717,6 @@ static void tree_rows(void)
     check(OPS->prepare_unmount(&mnt) == 0, "its clean unmount");
     unmount_image();
     check_consistent("and the tree walks clean", 0);
-    /* Read back from the disk, not from the node the rows held. */
     check(mount_image("") == 0 && OPS->lookup(&mnt, mnt.root, "C", &c) == 0 &&
               OPS->getattr(&mnt, c, &st) == 0 && (st.mode & 0222) == 0,
           "which wrote the entry where it now is");
@@ -1616,6 +1740,7 @@ static int interleave; /* the operation to run inside the next write */
 static int interleaved;
 static char first_name[64];
 
+/** Read `count` sectors at `lba` of the second volume. */
 static int img_b_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
 {
     (void)d;
@@ -1623,6 +1748,12 @@ static int img_b_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf
     return 0;
 }
 
+/**
+ * Write `count` sectors at `lba` of the second volume. When `interleave`
+ * names an operation, first run it once on the first mount as `proc_b`,
+ * under that mount's namespace lock, with the new name in `first_name`,
+ * and count it in `interleaved` when it succeeds.
+ */
 static int img_b_write(block_device_t *d, uint64_t lba, uint32_t count, const void *buf)
 {
     void *n = 0;
@@ -1657,7 +1788,7 @@ static int img_b_write(block_device_t *d, uint64_t lba, uint32_t count, const vo
 static block_device_t dev_b = {512, 8192u, BLOCK_FAULT_SAFE, 0, 0, 0, img_b_read, img_b_write, 0,
                                0,   0};
 
-/* Whether `name` is in the root of `m`. */
+/** Whether `name` is in the root of `m`. */
 static int in_root(struct vfs_mount *m, const char *name)
 {
     void *n;
@@ -1669,10 +1800,12 @@ static int in_root(struct vfs_mount *m, const char *name)
     return 1;
 }
 
-/* A create, a mkdir and a rename on the second mount, each with the same
-   operation on the first inside its first device write, after the new name
-   is prepared and before it is written. Each mount must write the name it
-   was given. */
+/**
+ * A create, a mkdir and a rename on the second mount, each with the same
+ * operation on the first inside its first device write, after the new name
+ * is prepared and before it is written. Each mount must write the name it
+ * was given.
+ */
 static void interleaved_rows(void)
 {
     void *n = 0;
@@ -1744,6 +1877,15 @@ static void interleaved_rows(void)
     check_consistent("and the first volume walks clean", 0);
 }
 
+/**
+ * A dirty volume at mount: clean, repaired, or mounted read-only. A
+ * consistent one mounts writable and its clean unmount clears the flag; a
+ * surplus tail, orphan long-name entries and a lagging mirror are repaired;
+ * a cross-link, a surplus tail that is another file's chain, and a file of
+ * size zero with a cluster mount read-only with the image untouched, and a
+ * write to them is `EROFS`. A wrong FSInfo count is not used: the driver
+ * counts the FAT, and the clean unmount rewrites FSInfo.
+ */
 static void dirty_rows(void)
 {
     void *n;
@@ -1825,7 +1967,6 @@ static void dirty_rows(void)
           "and its chain is not freed under the entry");
     unmount_image();
 
-    /* FSInfo's count is not trusted: the driver counts the FAT. */
     load("--fsinfo-wrong");
     {
         struct vfs_statfs sf;
@@ -1838,8 +1979,11 @@ static void dirty_rows(void)
     }
 }
 
-/* What the two sequences on a file its `fsync` put on the medium left: the
-   unlinked file is gone, and the truncated one reads its first 700 bytes. */
+/**
+ * Check what the two sequences on a file its `fsync` put on the medium
+ * left: the unlinked file is gone, and the truncated one reads its first
+ * 700 bytes.
+ */
 static void synced_rows_left(void)
 {
     struct vfs_stat st;
@@ -1856,6 +2000,14 @@ static void synced_rows_left(void)
     }
 }
 
+/**
+ * On the `--junk` volume, run every sequence in turn with the volume
+ * consistent after each, and check what they left; then an unlinked open
+ * file, kept until its last close; a rename over an open file; an rmdir of
+ * a held and of a full directory; `ENOSPC` decided before anything is
+ * written; and the clean unmount, which clears the flags and writes
+ * FSInfo, with mtools reading what was written where it is installed.
+ */
 static void write_rows(void)
 {
     struct vfs_stat st;
@@ -1869,7 +2021,6 @@ static void write_rows(void)
     check(mount_rw("") == 0, "a writable mount of the FSInfo volume");
     check(image[65] == 0, "the boot-sector dirty flag is clear before the first write");
 
-    /* Each sequence in turn, the volume consistent after every one. */
     for (i = 0; i < (int)(sizeof(sequences) / sizeof(sequences[0])); i++) {
         char what[120];
 
@@ -1880,7 +2031,6 @@ static void write_rows(void)
     }
     check((image[65] & 1) == 1, "the boot-sector dirty flag is set by the first write");
 
-    /* What the sequences left. */
     n = walk("/W1.TXT", &err);
     check(n && read_all(n, back, sizeof(back)) == 5 && __builtin_memcmp(back, "hello", 5) == 0,
           "the created file reads back");
@@ -1967,7 +2117,6 @@ static void write_rows(void)
     }
     check(walk("/O1.TXT", &err) == 0, "and the source name is gone");
 
-    /* The open-file cases. */
     n = make_file(mnt.root, "OPEN.TXT");
     check(n && write_at(n, "open", 4, 0) == 0 && OPS->open(&mnt, n, 0, &h) == 0, "an open file");
     check(OPS->statfs(&mnt, &sf) == 0, "the free count before an unlink");
@@ -2015,7 +2164,6 @@ static void write_rows(void)
     check(OPS->rmdir(&mnt, mnt.root, "BOOT") == -ENOTEMPTY,
           "rmdir of a full directory is ENOTEMPTY");
 
-    /* ENOSPC is decided before anything is written. */
     n = make_file(mnt.root, "BIG.BIN");
     check(OPS->statfs(&mnt, &sf) == 0, "the free count before a full write");
     check(n && write_at(n, big, sizeof(big), 0) == 0, "half a megabyte is written");
@@ -2035,8 +2183,6 @@ static void write_rows(void)
           "the free count is what the successful write took");
     check_consistent("the volume is consistent after ENOSPC", 1);
 
-    /* The clean unmount clears the flags and writes FSInfo, and mtools
-       reads what was written. */
     check(OPS->prepare_unmount(&mnt) == 0, "prepare_unmount");
     check((image[65] & 1) == 0, "the boot-sector dirty flag is clear after it");
     unmount_image();
@@ -2066,17 +2212,7 @@ static void write_rows(void)
     }
 }
 
-/* The interruption matrix: every sequence stopped after each of its
-   writes, and at each stop the states the medium can be in, with none,
-   the newest one, two, and so on, or all of the writes pending since the
-   driver's last barrier, each judged by the walk and, for the data
-   sequences, by the content oracle. A barrier the driver leaves out widens
-   what is pending at the stops after it, and one of the states then shows
-   the write that should have waited. Then each barrier of the sequence
-   made to fail, the driver's answer whatever it is, and the medium judged
-   with half of what was pending at it; and the machine stopped at each of
-   the four writes after the failure, the states judged again, since what
-   the driver does to undo a failed step has an order of its own. */
+/** How many of the `pending` writes a state keeps, as a row names it. */
 static const char *keep_name(int keep, int pending)
 {
     static char text[40];
@@ -2091,16 +2227,17 @@ static const char *keep_name(int keep, int pending)
     return text;
 }
 
-/* One stop's states, judged: the walk of each, and the oracle where the
-   sequence has one. */
+/**
+ * Judge the states one stop of sequence `i` can leave: the walk of each,
+ * and the oracle where the sequence has one. Every state is taken before
+ * any is loaded, since loading one settles the model's pending writes.
+ */
 static void judge_stop(int i, const char *stage)
 {
     int keeps, keep;
 
     check(!model.overflow, "the model held every pending write");
     keeps = model.npending < DEVMODEL_KEEP_MOST ? model.npending : DEVMODEL_KEEP_MOST;
-    /* Every state is taken before any is loaded, since loading one settles
-       the model's pending writes. */
     for (keep = 0; keep <= keeps; keep++) {
         devmodel_snapshot(&model, keep, snaps[keep]);
     }
@@ -2117,7 +2254,6 @@ static void judge_stop(int i, const char *stage)
         }
         load_snapshot(snaps[keep]);
         if (i < 5) {
-            /* The content oracle over the crash state, read-only. */
             snprintf(what, sizeof(what),
                      "'%s' %s, %s of the pending writes kept, reads only "
                      "what was written",
@@ -2139,6 +2275,20 @@ static void judge_stop(int i, const char *stage)
     }
 }
 
+/**
+ * One pass of the interruption matrix: every sequence stopped after each
+ * of its writes, and at each stop the states the medium can be in, with
+ * none, the newest one, two, and so on, or all of the writes pending since
+ * the driver's last barrier, each judged by the walk and, for the data
+ * sequences, by the content oracle. A barrier the driver leaves out widens
+ * what is pending at the stops after it, and one of the states then shows
+ * the write that should have waited. Then each barrier of the sequence is
+ * made to fail, the driver's answer whatever it is, and the medium is
+ * judged with the older half of what was pending at it; and the
+ * machine is stopped at each of the four writes after the failure and the
+ * states judged again, since what the driver does to undo a failed step
+ * has an order of its own.
+ */
 static void matrix_pass(void)
 {
     int i, k, total = 0;
@@ -2231,11 +2381,14 @@ static void matrix_pass(void)
     printf("fat32_hosttest: %d stops walked with %s names\n", total, long_names ? "long" : "short");
 }
 
-/* What a sync promises: a file written and then synced, through `fsync`,
-   the mount's `sync` or the unmount, is on the medium the moment the call
-   returns, so a crash right after, one that keeps nothing of what was
-   still pending, keeps the file. A sync that does not reach the medium
-   passes every other row, since the cache answers the reads. */
+/**
+ * The contract of a sync: a file written and then synced, through `fsync`
+ * (`how` 0), the mount's `sync` (1) or the unmount (2), is on the medium
+ * the moment the call returns, so that a crash right after, one that keeps
+ * nothing of what was still pending, keeps the file. A sync that does not
+ * reach the medium passes every other row, since the cache answers the
+ * reads.
+ */
 static void durability_row(int how, const char *what)
 {
     void *n;
@@ -2279,6 +2432,7 @@ static void durability_row(int how, const char *what)
     unmount_image();
 }
 
+/** Run `durability_row` for `fsync`, `sync` and the unmount. */
 static void durability_rows(void)
 {
     fill_pattern();
@@ -2287,6 +2441,7 @@ static void durability_rows(void)
     durability_row(2, "a file is written and the volume unmounted");
 }
 
+/** Run the matrix with short names, then with long names. */
 static void matrix_rows(void)
 {
     fill_pattern();
@@ -2297,6 +2452,10 @@ static void matrix_rows(void)
     long_names = 0;
 }
 
+/**
+ * Hold all forty files of /many at once, with the root and the directory,
+ * and require a held name looked up again to be the held node.
+ */
 static void node_rows(void)
 {
     void *held[40];
@@ -2308,8 +2467,6 @@ static void node_rows(void)
         printf("fat32_hosttest: the node row's mount said %d\n", err);
     }
     check(err == 0, "the volume mounts for the node row");
-    /* All forty files of /MANY held at once, with the root and the
-       directory, past the thirty-two nodes the pool once had. */
     {
         void *many = walk("/many", &err);
         char name[8];
@@ -2345,11 +2502,15 @@ static void node_rows(void)
     unmount_image();
 }
 
+/* The levels of namespace lock held, over every mount. */
 static int ns_locked;
 
-/* The lock as the kernel keeps it: re-entrant by holder, and what the
-   driver's assertion at every mutation reads. The rows call the namespace
-   operations the way the common layer does, with the lock held. */
+/**
+ * Take the namespace lock as the kernel keeps it: re-entrant by holder,
+ * and what the driver's assertion at every mutation reads. The rows call
+ * the namespace operations the way the common layer does, with the lock
+ * held.
+ */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
     mnt->ns_holder = (int)current_proc->pid;
@@ -2357,6 +2518,7 @@ void vfs_ns_lock(struct vfs_mount *mnt)
     ns_locked++;
 }
 
+/** Release one level of the namespace lock. */
 void vfs_ns_unlock(struct vfs_mount *mnt)
 {
     if (--mnt->ns_depth == 0) {
@@ -2365,21 +2527,25 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
     ns_locked--;
 }
 
+/**
+ * A fixed second, 2020-03-04 12:00:00 UTC, whose hundredths move from call
+ * to call, so that a stamp that touches the creation hundredths is seen.
+ */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
     static int calls;
 
-    *seconds = 1583323200; /* 2020-03-04 12:00:00 */
-    /* The hundredths move from call to call, so a stamp that touches the
-       creation hundredths is seen. */
+    *seconds = 1583323200;
     *nanoseconds = (int64_t)(++calls % 100) * 10000000;
 }
 
+/** Return 0, as for a caller that does not hold the namespace lock. */
 int vfs_ns_held_by_caller(void)
 {
     return 0;
 }
 
+/** Do nothing. */
 void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
 {
     (void)dev;
@@ -2387,19 +2553,25 @@ void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
     (void)rc;
 }
 
+/** As `wq_wait_event`. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     return wq_wait_event(wq, cond, arg);
 }
 
+/**
+ * Run every row. With `--barriers`, the mode fat_barriers_mutate.sh runs,
+ * only the matrix and the durability rows run, and the first failure ends
+ * the run; any other argument is a usage error, status 2. Returns 0 when
+ * every row passed and 1 otherwise. The count of failures would make a poor
+ * status, since an exit status keeps its low eight bits and 256 failures
+ * would read as a pass.
+ */
 int main(int argc, char **argv)
 {
     proc_a.pid = 1;
     devmodel_init(&model, medium, image, IMG_BYTES);
     if (argc > 1) {
-        /* The mode tests/host/fat_barriers_mutate.sh runs: the rows that
-           judge the driver's barriers and no other, the first failure
-           ending the run. */
         if (!streq(argv[1], "--barriers")) {
             printf("fat32_hosttest: usage: fat32_hosttest [--barriers]\n");
             return 2;
@@ -2427,8 +2599,6 @@ int main(int argc, char **argv)
         fix_passed();
         return 0;
     }
-    /* Not the count: an exit status keeps its low eight bits, and 256
-       failures would read as a pass. */
     printf("fat32_hosttest: %d failure(s)\n", fails);
     return 1;
 }
