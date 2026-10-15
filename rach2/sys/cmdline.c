@@ -1,8 +1,13 @@
+/*
+ * cmdline.c: the kernel command line's buffer and its lookups, as cmdline.h
+ * describes them.
+ */
 #include "cmdline.h"
 #include "lib/kstring.h"
 
-/* Long enough for any realistic GRUB or QEMU kernel command line; a longer one
- * is truncated, which at worst drops a trailing flag. */
+/* The buffer's bytes, the NUL included. The boot record keeps a line of up
+ * to BOOT_CMDLINE_MAX bytes (boot.h), so a line longer than this loses its
+ * last tokens here. */
 #define KCMDLINE_MAX 256
 
 static char kcmdline[KCMDLINE_MAX];
@@ -20,10 +25,6 @@ void kcmdline_capture(const char *cmdline)
     }
     kcmdline[i] = '\0';
 
-    /* If the source was longer than the buffer, the final token may have been
-       cut mid-word, and a partial token must not spuriously match a flag (a
-       truncated `rach2.disk=ahcix` would otherwise match `rach2.disk=ahci`).
-       Drop the torn trailing token by terminating at the last delimiter. */
     if (cmdline[i] != '\0') {
         while (i > 0 && kcmdline[i - 1] != ' ' && kcmdline[i - 1] != '\t') {
             i--;
@@ -38,11 +39,9 @@ const char *kcmdline_get(void)
 }
 
 /**
- * Walk the tokens, calling nothing: this is the shared scan the two lookups
- * below use so the tokenizing rule lives in one place.
- *
- * On each call it advances `*p` past one token and reports where that token
- * began and how long it was. Returns 0 when the line is exhausted.
+ * Advance `*p` past the next token, delimited by spaces and tabs, and set
+ * `*start` and `*len` to where it begins and how long it is; 0 when the line
+ * has no more. `kcmdline_value_nth` and `kcmdline_count` scan with it.
  */
 static int next_token(const char **p, const char **start, size_t *len)
 {

@@ -1,15 +1,14 @@
+/*
+ * boot.h: the boot record, what the loader handed the kernel, in the form the
+ * shared boot reads, filled by the architecture's entry from its loader's own
+ * form (arch/x86/boot.c, from Multiboot or multiboot2) before it calls
+ * `kernel_main`. Every string and table it points at is the kernel's own
+ * copy, so the loader's memory is free once the entry has read it.
+ */
 #ifndef _BOOT_H_
 #define _BOOT_H_
 
 #include "lib/kint.h"
-
-/*
- * The boot record: what the loader handed the kernel, in the form the shared
- * boot reads, filled by the architecture's entry from its loader's own form
- * (arch/x86/boot.c, from Multiboot or multiboot2) before it calls
- * `kernel_main`. Every string and table it points at is the kernel's own
- * copy, so the loader's memory is free once the entry has read it.
- */
 
 /* The most memory-map entries, modules, and bytes of a command line the
  * record keeps. A loader's map past BOOT_MMAP_MAX entries is cut there, and
@@ -82,7 +81,7 @@ struct boot_info {
     uint64_t acpi_rsdp;
     /* The physical address of the UEFI system table a loader passed, or 0,
      * and whether its pointers are 64 bits wide: the firmware's
-     * configuration table, which names SMBIOS's entry point, is found
+     * configuration table, which gives SMBIOS's entry point, is found
      * through it. */
     uint64_t efi_systab;
     int efi_systab_64;

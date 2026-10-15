@@ -1,11 +1,13 @@
 /*
- * latency.c: the longest delays, as latency.h says.
+ * latency.c: the longest delays, as latency.h describes them.
  */
 
 #include "latency.h"
 
 #include "timer.h"
 
+/* The longest delay of each kind, and the clock's reading at the last tick,
+ * 0 before the first. */
 static uint32_t worst[LAT_COUNT];
 static uint32_t last_tick_us;
 

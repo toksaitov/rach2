@@ -1,6 +1,6 @@
 /*
- * input.c: one keystroke path for two keyboards, and one mouse queue for two
- * mice.
+ * input.c: one keystroke path for two keyboards, and the mouse's presence
+ * and its USB reports.
  *
  * Nothing about deciding where a keystroke goes is particular to the 8042: the
  * modifier state, the Ctrl+C interception, the scrollback keys and the choice
@@ -141,28 +141,6 @@ static void session_key(uint8_t scancode, char c, int was_e0)
     tty_input_char(&console_tty, tc);
 }
 
-/**
- * Route one set-1 scancode.
- *
- * Every code, including the ones consumed here, goes first to the ring a
- * graphics-mode reader drains, since a game needs the modifiers and the
- * releases too. The extended Page Up, Page Down, Home and End scroll the
- * screen whenever the debug shell reads input, and Shift with Page Up or Page
- * Down scrolls it in a session, where any other key returns it to the live
- * screen before it is sent, as on Linux's console. When a reader is parked on
- * the console or a session owns it, Ctrl+C goes through the line discipline
- * like every other key: its ISIG path posts SIGINT to the foreground group and
- * flushes the pending input, as a serial Ctrl+C does. Otherwise Ctrl+C is
- * `shell_interrupt`, out of band, and other keys go to the debug shell's own
- * buffer when it reads.
- *
- * For the discipline, Backspace, '\b' in the keymap, becomes DEL, its erase
- * character, Ctrl with a letter becomes that letter's control byte, Alt puts
- * ESC before a key's character, as Linux's console sends Meta, and the
- * arrows and editing keys become their escape sequences, so line editing, end
- * of file and cursor keys arrive as they would from a terminal. A key nobody
- * is parked for waits in the discipline as type-ahead.
- */
 void input_key(uint8_t scancode)
 {
     char c;
@@ -178,8 +156,7 @@ void input_key(uint8_t scancode)
         return;
     }
 
-    /* Left and right shift, pressed or let go. After E0 they are the shifts
-       a PS/2 keyboard sends around a cursor key for Num Lock, not a key. */
+    /* After E0 a shift code is one a PS/2 keyboard wraps a cursor key in. */
     if ((scancode & 0x7F) == 0x2A || (scancode & 0x7F) == 0x36) {
         if (!was_e0) {
             shift_held = !(scancode & 0x80);
@@ -203,7 +180,7 @@ void input_key(uint8_t scancode)
         return;
     }
 
-    /* The high bit marks a release, and nothing below cares about one. */
+    /* The high bit marks a release. */
     if (scancode & 0x80) {
         return;
     }

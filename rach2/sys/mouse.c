@@ -7,19 +7,14 @@
 #include "mouse.h"
 #include "platform.h"
 
-/* Mouse packet ring buffer */
+/* The queue: the mouse drivers its one producer, at `mouse_tail`, from
+ * interrupt context, and `mouse_read_packets` its one consumer, at
+ * `mouse_head`; a slot stays empty to tell a full queue from an empty one. */
 #define MOUSE_BUF_SIZE 64
 static struct mouse_packet mouse_buf[MOUSE_BUF_SIZE];
 static volatile int mouse_head = 0;
 static volatile int mouse_tail = 0;
 
-/**
- * Append a completed packet to the ring buffer, dropping it when full.
- *
- * Runs in IRQ context, from the driver of whichever mouse moved (the
- * producer); the consumer is mouse_read_packets.
- * Deltas are clamped to the int8_t range the packet struct has.
- */
 void mouse_push_packet(uint8_t buttons, int dx, int dy)
 {
     int next = (mouse_tail + 1) % MOUSE_BUF_SIZE;
@@ -40,15 +35,6 @@ void mouse_push_packet(uint8_t buttons, int dx, int dy)
     }
 }
 
-/**
- * Drain up to max_count packets from the ring buffer into buf.
- *
- * The consumer side of the buffer the mouse drivers fill. It never
- * blocks: it copies whatever packets are present and returns the count,
- * which may be zero.
- *
- * @return the number of packets copied.
- */
 int mouse_read_packets(struct mouse_packet *buf, int max_count)
 {
     int count = 0;

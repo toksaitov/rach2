@@ -1,22 +1,26 @@
+/*
+ * cmdline.h: the kernel command line, kept in a buffer of the kernel's own,
+ * and the lookups of its flags and `key=value` options.
+ */
 #ifndef _CMDLINE_H_
 #define _CMDLINE_H_
 
 /**
- * Capture the multiboot kernel command line into a kernel-owned buffer.
+ * Copy the kernel command line `cmdline` into the kernel's buffer, which
+ * every lookup here reads; the shared boot calls it once, early.
  *
- * The bootloader leaves the command-line string in low memory that the bump
- * allocator may later carve over, so the boot path copies it here once, in the
- * pre-paging window, before anything can clobber it. A NULL or absent command
- * line leaves the captured line empty. A line longer than the buffer is
- * truncated.
+ * The buffer holds 255 bytes. A longer line is cut at the last space or tab
+ * that fits, so that no token is kept in part: a cut `rach2.disk=ahcix` would
+ * otherwise read as `rach2.disk=ahci`. A NULL `cmdline` leaves the line
+ * empty.
  */
 void kcmdline_capture(const char *cmdline);
 
 /**
  * Non-zero if the captured command line contains `flag` as a whole token.
  *
- * Tokens are whitespace-delimited, so `kcmdline_has("rach2.rescue")` matches
- * the standalone argument and not a substring of a longer one.
+ * Tokens are delimited by spaces and tabs, so `kcmdline_has("rach2.rescue")`
+ * matches the standalone argument and not a substring of a longer one.
  */
 int kcmdline_has(const char *flag);
 
@@ -25,14 +29,15 @@ int kcmdline_has(const char *flag);
  *
  * `key` is written without the `=`, and the match is on a whole token, so
  * `rach2.ip` finds `rach2.ip=10.0.0.5/24` and not `norach2.ip=...`. The first
- * occurrence wins; a second one is a contradiction the caller should refuse,
- * so `kcmdline_count` is there to notice it.
+ * occurrence wins; a caller for which a second one is a contradiction finds
+ * it with `kcmdline_count`.
  *
- * A value too long for `out` is refused, not truncated: half an address
- * parses into a different address, and a machine that quietly used one the
- * operator did not write is worse than one that refuses to configure.
+ * A value too long for `out` is not truncated: the call returns 0, since half
+ * an address parses into a different address, and a machine that used one
+ * the operator did not write is worse off than one left unconfigured.
  *
- * @return 1 when the option was present and its value fit, 0 otherwise.
+ * @return 1 when the option was present and its value fit, 0 otherwise, with
+ * `out` empty.
  */
 int kcmdline_value(const char *key, char *out, unsigned int outlen);
 
@@ -46,8 +51,7 @@ int kcmdline_value(const char *key, char *out, unsigned int outlen);
  */
 int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen);
 
-/** How many `key=` tokens the line has; more than one is a
- * contradiction. */
+/** How many `key=` tokens the line has. */
 int kcmdline_count(const char *key);
 
 /** The captured command line, a NUL-terminated string (empty if none). */

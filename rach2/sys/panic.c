@@ -1,9 +1,15 @@
+/*
+ * panic.c: the kernel's stop on an error it cannot recover from, with the
+ * picture it draws and the record that says why.
+ */
 #include "panic.h"
 
 #include "arch/arch.h"
 #include "klog.h"
 #include "proc/smp.h"
 
+/* The panic picture, 80 columns by 25 rows of the text screen, a background
+ * color for each cell. */
 display_color_t _fail_image[] = {
     1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,
     1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,
@@ -90,6 +96,7 @@ display_color_t _fail_image[] = {
     1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,
     1,  1,  1,  1,  1,  1,  1,  1};
 
+/* Halt this processor for good, with interrupts off (loader.s). */
 extern void k_stop(void) K_NORETURN;
 
 /* The first processor to panic, as its number plus one, 0 before any has;
@@ -97,7 +104,7 @@ extern void k_stop(void) K_NORETURN;
 static volatile unsigned int panic_owner;
 static volatile int others_stopped;
 
-/*
+/**
  * Only the first processor to panic reports. A second, which an NMI sent to
  * every processor at once can make, or a panic the stop request did not
  * reach in time, stops without a word, as Linux's does: two records would
@@ -133,17 +140,16 @@ int k_panicking(void)
 }
 
 /**
- * Report what stopped the machine, then stop it.
- *
  * The picture is drawn before the record because drawing clears the screen,
  * and a record printed first would be wiped by it. Everything that can fail
  * comes after: the record reaches the ring before it is offered to the serial
  * port and the wire, so a port that never drains or a controller that never
- * came up cannot take the machine's last words with it. Both of those paths
- * are bounded, which is why a panic can afford to use them at all. The
- * other processors are stopped first, with interrupts off here, so that
- * nothing changes the screen or the state the record describes
- * (`k_panic_begin`).
+ * came up cannot take the record with it. Both of those paths are bounded,
+ * which is why a panic can afford to use them at all. The other processors
+ * are stopped first, with interrupts off here, so that nothing changes the
+ * screen or the state the record describes (`k_panic_begin`). Nothing after
+ * the record runs to write out klog's queue, so the record goes out directly
+ * (`klog_deliver_directly`).
  */
 void k_panic(const char *str)
 {
@@ -160,8 +166,6 @@ void k_panic(const char *str)
     set_back_color(black);
     set_fore_color(white);
 
-    /* Nothing after this runs, so a record waiting in the queue would never
-       be written. */
     klog_deliver_directly();
     klog(KLOG_CRIT, "panic", "stopped: %s", str);
 

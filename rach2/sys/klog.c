@@ -1,18 +1,20 @@
 /*
- * klog.c: one record, four destinations, in an order that survives a failure.
+ * klog.c: the kernel log, each record built whole and offered to four
+ * destinations, the ring first; and the debug shell's console calls.
  *
  * Everything the kernel says about itself is built here into one whole record
  * and then offered to the ring, the screen, the serial port and netconsole, in
- * that order. The order is the point. The ring is the machine's own copy and is
- * written first, so a serial port that stopped draining or an Ethernet
- * controller that never came up cannot take the log with it; the destinations
- * that can fail come after the one that cannot, and each of them is bounded.
+ * that order. The ring is the machine's own copy and is written first, so a
+ * serial port that stopped draining or an Ethernet controller that never came
+ * up cannot take the log with it; the destinations that can fail come after
+ * the one that cannot, and each of them is bounded.
  *
  * A record is formatted whole before any destination sees it. Two things follow
  * from that: a reader never meets half a line, and a record raised by an
  * interrupt handler cannot appear inside one raised by the code it
  * interrupted. It waits in a queue instead, and the delivery it interrupted
  * writes it out when its own record is finished.
+ *
  * The formatter writes through a sink with state of its own, which is the one
  * thing here that two callers cannot share, so the formatting and the ring
  * append each run with interrupts off. Both are short and neither sleeps.
@@ -34,9 +36,9 @@
 #include "lib/kirq.h"
 #include "network/netconsole.h"
 
-/* The timer's tick counter, at 100 Hz. Read for the timestamp and
-   for nothing else; before the timer starts it is zero and a record reads
-   `[0.00]`, which is the truth about a machine that has no clock yet. */
+/* The timer's tick counter, at 100 Hz, read for the timestamp and for
+   nothing else; before the timer starts it is zero, and a record reads
+   `[0.00]`. */
 extern volatile uint32_t kernel_ticks;
 
 /* ---- the record ---- */
@@ -80,6 +82,7 @@ static void build_putc(char c)
     }
 }
 
+/** Take the string `s` into the record; NULL takes nothing. */
 static void build_str(const char *s)
 {
     while (s != 0 && *s != '\0') {
@@ -114,15 +117,15 @@ static void build_u32(uint32_t v)
 /**
  * Build `<level>[seconds.hundredths] subsystem: text` and one newline.
  *
- * The prefix is what BusyBox's klogd reads, so a userland log reader can be
- * added later without the kernel changing what it writes. A record that did
- * not fit ends in `...` before its newline rather than simply stopping, so a
- * reader can tell a cut line from a short one.
+ * The prefix is the form BusyBox's klogd reads. A record that did not fit
+ * ends in `...` before its newline rather than simply stopping, so a reader
+ * can tell a cut line from a short one.
  *
  * Four bytes are held back from the text: three for that mark and one for the
  * newline every record ends with, whatever the format ended with. Trailing
  * spaces are dropped first, which is where a format written with a newline of
- * its own goes: `build_putc` has already turned it into one.
+ * its own goes: `build_putc` has already turned it into one. The record's
+ * newline is written past the sink, which would turn it into a space too.
  */
 static void klog_build(struct klog_record *r, int level, const char *subsystem, const char *format,
                        va_list ap)
@@ -161,8 +164,6 @@ static void klog_build(struct klog_record *r, int level, const char *subsystem, 
         build_putc('.');
         build_putc('.');
     }
-    /* Written past the sink, which turns a newline into a space: this is the
-       one newline a record has, and it is the record's, not the text's. */
     *build_at++ = '\n';
     r->len = (uint32_t)(build_at - r->text);
 }
@@ -172,7 +173,7 @@ static void klog_build(struct klog_record *r, int level, const char *subsystem, 
 static char ring[KLOG_RING_SIZE];
 static uint32_t ring_head;   /* where the next byte goes */
 static uint32_t ring_used;   /* bytes held */
-static uint32_t ring_oldest; /* where the oldest byte held sits */
+static uint32_t ring_oldest; /* where the oldest byte held is */
 /* Bytes ever put in the ring: a reader that keeps its place counts from the
  * first, and the oldest byte held is this less `ring_used`. */
 static uint32_t ring_written;
@@ -180,9 +181,9 @@ static uint32_t ring_written;
 /**
  * Drop whole records from the oldest end until `want` bytes are free.
  *
- * The ring holds records and not bytes: a reader handed the tail of a line it
- * never saw the start of would report a subsystem that never spoke. Records
- * carry no newline of their own but the one that ends them, so the next
+ * The ring holds records and not bytes: the tail of a line, without its
+ * prefix and subsystem, would read as a record of the wrong subsystem or of
+ * none. A record has no newline but the one that ends it, so the next
  * newline is the end of the oldest record.
  */
 static void ring_evict(uint32_t want)
@@ -212,10 +213,10 @@ static void ring_evict(uint32_t want)
 /**
  * Put one record into the ring, dropping as many old ones as it needs.
  *
- * A record longer than the whole ring is refused rather than held in part,
+ * A record longer than the whole ring is dropped rather than held in part,
  * which would leave the ring starting mid-line. It cannot happen while the
- * record maximum is far below the ring size; it is refused rather than
- * trusted.
+ * record maximum is far below the ring size; the check keeps the ring whole
+ * if a change to either size ever lets it.
  */
 static void ring_append(const char *text, uint32_t n)
 {
@@ -236,6 +237,7 @@ static void ring_append(const char *text, uint32_t n)
     ring_written += n;
 }
 
+/** Put the record in the ring, with interrupts off. */
 static void dest_ring(const struct klog_record *r)
 {
     uint32_t flags = kirq_save();
@@ -319,10 +321,10 @@ uint32_t klog_read(char *buf, uint32_t cap, uint32_t offset)
  * line start would not find them. The console and the record destinations
  * write to the same screen and the same port, so this is where the two meet.
  *
- * One flag each, because the two destinations do not take the same records: a
- * DEBUG record closes the port's line and never reaches the screen, and a
- * single flag cleared for both would let the next screen record continue the
- * prompt.
+ * One flag each, this one and `serial_line_open` below, because the two
+ * destinations do not take the same records: a DEBUG record closes the port's
+ * line and never reaches the screen, and a single flag cleared for both would
+ * let the next screen record continue the prompt.
  */
 static int screen_line_open;
 
@@ -339,7 +341,7 @@ static int screen_line_open;
  * stopped. What it drops is `KLOG_DEBUG`. A program that is talking to a
  * person turns it down further for its own run and puts it back: that is what
  * `rach2-install` does, since a routine note arriving in the middle of a
- * question reads as something having gone wrong. `k_panic` and its kind raise
+ * question reads as something having gone wrong. `k_panic` raises
  * `KLOG_CRIT`, which no setting can hide.
  */
 static int screen_level = KLOG_INFO;
@@ -349,6 +351,9 @@ static int screen_level = KLOG_INFO;
    leaves that alone rather than taking the screen back off the person who
    asked for it. */
 static int screen_level_asked_for;
+
+/* Whether the console has left a line open on the port; see
+ * `screen_line_open`. */
 static int serial_line_open;
 
 /* ---- destination 2: the screen ---- */
@@ -433,7 +438,7 @@ static void dest_serial(const struct klog_record *r)
  * the records worth having on the wire are exactly the early ones, from a boot
  * that may not reach a shell. Skipping it until enabled would throw those
  * away. A machine that was never asked for netconsole fills that bounded
- * buffer once and drops the rest, which is what it did before.
+ * buffer once and drops the rest.
  */
 static void dest_net(const struct klog_record *r)
 {
@@ -467,9 +472,9 @@ static const struct klog_dest DESTS[] = {{KLOG_DEBUG, dest_ring},
 /* Set while a record is being written out; see `klog_v`. */
 static int klog_delivering;
 
-/* Set while a program's console write is in progress; see
-   `console_write_begin`. A record raised then waits in the queue as one
-   raised inside another record's delivery does. */
+/* How many console writes are in progress; see `console_write_begin`. A
+   record raised while one is waits in the queue as one raised inside
+   another record's delivery does. */
 static int console_writing;
 
 /*
@@ -479,10 +484,8 @@ static int console_writing;
  * A record from an interrupt handler cannot go out where it is raised: its
  * bytes would land inside the line the interrupted code is part way through.
  * It waits here and goes out when that line is finished, so what a machine
- * says on its port is what its ring has. Without the queue such a record
- * reached the ring only, and an event that happens while the machine is
- * printing was invisible to anything reading the port; that is how a USB
- * device could be unplugged with nothing said about it.
+ * says on its port is what its ring has, an event that happens while the
+ * machine is printing included.
  *
  * Eight is a burst of interrupts across one record. A ninth is counted and
  * dropped, and the count is reported once the queue is empty, because a log
@@ -557,8 +560,6 @@ static void klog_drain(void)
 }
 
 /**
- * Build one record and offer it to the destinations that take its level.
- *
  * The build runs with interrupts off because the formatter writes through
  * sink state that two callers cannot share. The destinations then run with
  * interrupts as this was entered, so a record raised by an interrupt handler
@@ -615,22 +616,16 @@ void klog(int level, const char *subsystem, const char *format, ...)
 /* ---- the console ---- */
 
 /**
- * Bracket a console write, so that a record raised by an interrupt in the
- * middle of it waits for the write to end.
- *
- * Without the bracket the record ends the open line and begins its own,
- * and a token printed in one write reaches the port as two lines: in a
- * pool of twenty machines a lag device's record split `AHCIPROBE OK`, and
- * in the usb suite a stick's record split the shell's `Type 'help'`, and
- * the harness never saw either. Two writers take the bracket, and neither
- * sleeps inside it. The tty's write of the console takes it around each
- * chunk of at most 256 bytes that `sys_write` hands it, so a record waits
- * for at most that chunk's bytes, and a token printed within one chunk is
- * one line of the log; a longer write may still have a record between two
+ * Without the bracket a record raised in the middle of a write ends the open
+ * line and begins its own, and a token printed in one write reaches the port
+ * as two lines, where a harness looking for the token does not find it. Two
+ * writers take the bracket. The tty's write of the console takes it around
+ * each chunk of at most 256 bytes that `sys_write` hands it, so a record
+ * waits for at most that chunk's bytes, and a token printed within one chunk
+ * is one line of the log; a longer write may still have a record between two
  * chunks. The debug shell's `console_puts` and `console_printf` take it
  * around each call, so a line the shell prints in one call is one line of
- * the log. The bracket also holds the screen's cursor, which is then placed
- * once for the write instead of after every byte.
+ * the log.
  */
 void console_write_begin(void)
 {
@@ -641,10 +636,6 @@ void console_write_begin(void)
     kirq_restore(flags);
 }
 
-/**
- * End the bracket and write out what waited, unless a record's delivery is
- * in progress, whose drain will take them.
- */
 void console_write_end(void)
 {
     uint32_t flags = kirq_save();
@@ -660,22 +651,8 @@ void console_write_end(void)
 }
 
 /**
- * Set the lowest-priority record the screen shows; see `screen_level`.
- *
- * `KLOG_CRIT` is the floor, so a panic reaches the screen whatever a caller
- * asks for: a machine that has stopped must be able to say so to the person
- * in front of it. A level past `KLOG_DEBUG` is taken as `KLOG_DEBUG`, and
- * asking for `KLOG_DEBUG` is the same as asking for `KLOG_INFO`: the screen
- * is not one of the destinations a `KLOG_DEBUG` record is offered to.
- */
-/**
- * Let the next record be delivered directly, whatever is in flight.
- *
- * For a machine that is about to stop. A record raised inside another
- * record's delivery, or inside a program's console write, joins the queue and
- * waits for the drain; a panic never returns to drain it, so its record would
- * reach the ring and nothing else. This drops the two flags that would have
- * queued it, which is safe only because nothing after it is expected to run.
+ * A panic never comes back to drain the queue, so a record of its that
+ * joined the queue would reach the ring and nothing else.
  */
 void klog_deliver_directly(void)
 {
@@ -686,6 +663,11 @@ void klog_deliver_directly(void)
     kirq_restore(flags);
 }
 
+/**
+ * `KLOG_CRIT` is the floor so that a panic reaches the screen whatever a
+ * caller asks for: a machine that has stopped must be able to say so to the
+ * person in front of it.
+ */
 void klog_set_screen_level(int level)
 {
     if (level < KLOG_CRIT) {
@@ -697,28 +679,23 @@ void klog_set_screen_level(int level)
     screen_level = level;
 }
 
-/** As `klog_set_screen_level`, and record that a boot line asked for it. */
 void klog_set_screen_level_from_cmdline(int level)
 {
     klog_set_screen_level(level);
     screen_level_asked_for = 1;
 }
 
-/** Whether the boot line named the level. */
 int klog_screen_level_was_asked_for(void)
 {
     return screen_level_asked_for;
 }
 
-/** The level the screen is showing down to. */
 int klog_screen_level(void)
 {
     return screen_level;
 }
 
 /**
- * Write one byte to the screen and the port, expanding the newline.
- *
  * A terminal on the other end of a wire returns to column zero on a carriage
  * return, so a newline written here becomes carriage return and newline on the
  * port. The line discipline has already done that expansion for what it
@@ -740,8 +717,6 @@ void console_putc(char c)
 }
 
 /**
- * As `console_putc`, for a writer that has expanded the newline itself.
- *
  * The line discipline expands a newline to carriage return and newline before
  * it reaches here, so this must pass every byte through unchanged; expanding
  * again would put two carriage returns on the wire for every line.
@@ -755,15 +730,10 @@ void console_putc_raw(char c)
 }
 
 /**
- * Write a string and then a newline.
- *
  * The newline is `k_puts`'s, which this stands in for wherever the shell
  * prints a line: a version without it would drop one at every such call, and
  * the difference would show as a scrambled screen rather than as an error.
  * `console_printf`, like `k_printf`, adds nothing.
- *
- * Each call is one console write (`console_write_begin`), so a record raised
- * while the line goes out follows it whole.
  */
 void console_puts(const char *str)
 {
@@ -778,7 +748,6 @@ void console_puts(const char *str)
     console_write_end();
 }
 
-/** Format and write, as one console write, as `console_puts` is. */
 void console_printf(const char *format, ...)
 {
     va_list ap;

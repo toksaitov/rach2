@@ -1,3 +1,7 @@
+/*
+ * fpu.h: the floating-point register state of a process, saved and loaded
+ * at every switch.
+ */
 #ifndef _FPU_H_
 #define _FPU_H_
 
@@ -7,21 +11,22 @@
 #include "lib/kint.h"
 
 /*
- * fpu: the floating-point register state of a process, saved at every switch.
- *
  * The state is kept eagerly: `schedule` saves the outgoing process's
  * registers into its record and loads the incoming one's before the stack
  * pointer changes, so two programs that both compute in floating point never
- * see each other's registers. The kernel itself computes in none, which is
- * what lets the save and the restore stand at the switch alone. A save area
- * is `fpu_area_size` bytes, which the processor decides at boot, from the
- * heap; the architecture defines the functions (arch/x86/fpu.c on a PC).
+ * see each other's registers. The kernel itself computes in none, so its own
+ * code leaves the registers as the process left them. A save area is
+ * `fpu_area_size` bytes, which `fpu_init` fixes at boot from what the
+ * processor has, from the heap; the architecture defines the functions
+ * (arch/x86/fpu.c on a PC).
  */
 
 /**
  * Choose the format, set the processor up for it, and record the initial
- * state. Runs once at boot, before the first process exists and before the
- * heap.
+ * state. On a PC the format is the x87's own, `fxsave`'s, or XSAVE's with
+ * the components the processor has, the newest it has unless `rach2.noxsave`
+ * or, on i686, `rach2.nofxsr` is on the boot line. Runs once at boot, before
+ * the first process exists and before the heap.
  */
 void fpu_init(void);
 

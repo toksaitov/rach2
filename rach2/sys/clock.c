@@ -2,7 +2,8 @@
  * clock.c: the kernel's real time, kept from one reading of the machine's
  * clock at boot (the anchor, which the platform's clock driver sets through
  * `rtc_anchor`) and the tick since, with the calendar arithmetic the clock
- * drivers and the clock calls share.
+ * drivers and the clock calls share, and the sequence count by which another
+ * processor reads the tick whole.
  */
 
 #include "rtc.h"
@@ -66,8 +67,8 @@ void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint32_t *ticks)
 #define RTC_SECONDS_PER_MINUTE 60
 #define RTC_EPOCH_YEAR         1970
 
-/* The timer runs at 100 Hz (kernel.c calls init_pit(100)), so a tick is 10
- * ms. */
+/* The tick's rate, 100 a second (TICK_HZ in arch/x86/platform.c), and its
+ * length. */
 #define RTC_TICKS_PER_SECOND     100
 #define RTC_NANOSECONDS_PER_TICK 10000000
 
@@ -85,7 +86,6 @@ static int rtc_is_leap(int32_t year)
     return year % 4 == 0;
 }
 
-/** Days in `month` (1..12) of `year`. */
 int32_t rtc_days_in_month(int32_t year, int32_t month)
 {
     static const int32_t days[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
@@ -98,24 +98,15 @@ int32_t rtc_days_in_month(int32_t year, int32_t month)
 }
 
 /**
- * Real time from an anchor: the second a clock reported, the uptime second at
- * which it was read, the uptime now, and the ticks into the current second.
+ * The uptime since the read is added, and not the whole uptime, which would
+ * count the stretch of the boot before the read twice. On a machine that
+ * reads its clock early that error is under a second, which no tolerance
+ * would catch, so `tests/host/rtc_hosttest.c` states the case exactly: a
+ * clock read at uptime 5 saying 1000 says 1002 at uptime 7.
  *
- * Kept apart from the hardware, and from the statics that hold the anchor, so
- * that `tests/host/rtc_hosttest.c` can state the case that matters in one line:
- * a clock read at uptime 5 saying 1000, asked again at uptime 7, says 1002.
- * Adding the whole uptime instead of the time since the READ counts the stretch
- * before the sample twice, and on a machine that reads its clock early that
- * error is under a second, which no tolerance test would catch and a student
- * would never see until it mattered.
- *
- * It counts uptime SECONDS, not ticks because the tick counter is 32
- * bits and wraps after about 497 days, and a difference of ticks would jump
- * back by that whole cycle at the wrap. The sub-second part cannot wrap: it
- * only ever spans one second.
- *
- * With the anchor at zero this is time since boot, which is what a machine with
- * no readable clock reports.
+ * The difference is of uptime seconds and not of ticks, since the 32-bit
+ * tick count wraps after about 497 days and a difference of ticks would jump
+ * back a whole cycle at the wrap. The ticks within a second cannot wrap.
  */
 void rtc_time_from_anchor(int64_t anchor_seconds, uint32_t anchor_uptime, uint32_t uptime,
                           uint32_t subsecond_ticks, int64_t *seconds, int64_t *nanoseconds)
@@ -124,13 +115,9 @@ void rtc_time_from_anchor(int64_t anchor_seconds, uint32_t anchor_uptime, uint32
     *nanoseconds = (int64_t)(subsecond_ticks % RTC_TICKS_PER_SECOND) * RTC_NANOSECONDS_PER_TICK;
 }
 
-/*
- * The anchor: the second the clock reported, and the uptime second at which it
- * was read. Real time is the first plus the seconds elapsed since that read,
- * which is not the same as the first plus the whole uptime: the kernel has been
- * running for a while by the time the clock is sampled, and adding that stretch
- * twice would put the machine ahead with nothing to show for it.
- */
+/* The anchor: the second the clock reported, the uptime second at which it
+ * was read, and whether the boot read it. Real time is the reported second
+ * plus the uptime seconds since the read (`rtc_time_from_anchor`). */
 static int64_t rtc_anchor_seconds;
 static uint32_t rtc_anchor_uptime;
 static int rtc_anchored;
@@ -196,20 +183,15 @@ void rtc_time_of_seconds(uint32_t seconds, rtc_time_t *t)
     t->second = (int32_t)(rest % 60u);
 }
 
-/** Whether the clock was read at boot. */
 int rtc_is_anchored(void)
 {
     return rtc_anchored;
 }
 
 /**
- * The real time at which this machine's clock was read, which is as close to
- * boot as it knows.
- *
- * Reported by the nodes that have no history of their own: a device, a /proc
- * file, a pipe. Zero would be a claim about 1970, and NOW would be worse: a
- * synthetic file whose modification time advanced on every stat would look
- * freshly written to anything comparing times, which is what a make does.
+ * A node with no times of its own reports the read and not the time now,
+ * since a synthetic file whose modification time moved at every stat would
+ * look freshly written to a program comparing times, as make does.
  */
 int64_t rtc_boot_time(void)
 {
@@ -217,14 +199,9 @@ int64_t rtc_boot_time(void)
 }
 
 /**
- * The real time at which this machine booted, which is not the same moment.
- *
- * `rtc_boot_time` is when the clock was READ, some way into the boot; this is
- * that reading less the uptime it was taken at, so it names uptime zero. It is
- * what `/proc/stat`'s `btime` needs: a value that does not move between two
- * reads within one boot, which the read moment does not promise either, but
- * which anything comparing boots would be misled by. Zero when the clock could
- * not be read, the same answer the rest of this file gives.
+ * `rtc_boot_time` is the moment of the read, some way into the boot; this is
+ * that reading less the uptime it was taken at, uptime zero, which is what
+ * `btime` means.
  */
 int64_t rtc_boot_epoch(void)
 {
@@ -294,8 +271,8 @@ uint32_t rtc_ticks_now(void)
     return ticks;
 }
 
-/* The time the anchor keeps now, with the PIT position added to the
- * delivered ticks; the caller has interrupts off. */
+/** The time the anchor keeps now, to the timer's place within the tick, with
+ * nanoseconds that may pass a second; the caller has interrupts off. */
 static void rtc_kept_time(int64_t *seconds, int64_t *nanoseconds)
 {
     uint32_t uptime, ticks, phase_ns;
@@ -307,11 +284,9 @@ static void rtc_kept_time(int64_t *seconds, int64_t *nanoseconds)
 }
 
 /**
- * The current real time: the time the anchor keeps, with the clock's step
- * added. The saved result prevents backward steps if interrupts stay masked
- * across several periods, which the PIC cannot count, or a faulty latch reads
- * zero, until the clock is set. This only supplies now; callers that set an
- * explicit file time keep it.
+ * The last reading is kept as a floor, since a reading can fall back: a
+ * stretch with interrupts off longer than a period loses periods the tick
+ * does not count, and a faulty latch of the counter reads zero.
  */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
@@ -333,11 +308,8 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 static int64_t rtc_mono_seconds;
 static int64_t rtc_mono_nanoseconds;
 
-/**
- * Time since boot, with the PIT's place within the tick, as real time reads
- * it, and never earlier than the reading before it, for the reasons
- * `rtc_realtime` gives. Setting the clock does not move it.
- */
+/** The floor is `rtc_realtime`'s, for the same reasons, kept apart from it
+ * since setting the clock moves that one and not this. */
 void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds)
 {
     uint32_t flags = kirq_save();
@@ -356,10 +328,6 @@ void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds)
     kirq_restore(flags);
 }
 
-/**
- * The current real time to the last tick, without the PIT's place within it:
- * the coarse clock, which costs no latch.
- */
 void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
     uint32_t flags = kirq_save();
@@ -373,15 +341,12 @@ void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds)
 }
 
 /**
- * Make the real time `seconds` and `nanoseconds` now, which clock_settime,
- * settimeofday and stime do for a privileged caller.
- *
  * The anchor stays as the boot read it; the difference between the time it
  * keeps now and the time asked for becomes the step every reading adds, so the
  * clock goes on from the new time at the same rate. A reading after a step
- * back may be earlier than one before it, as the step asks, and the boot epoch
- * moves with the step, as Linux's does, so that a process's start time read
- * from it stays where it was against the clock.
+ * back may be earlier than one before it, and the boot epoch moves with the
+ * step, as Linux's does, so that a process's start time read from it stays
+ * where it was against the clock.
  */
 void rtc_set_realtime(int64_t seconds, int32_t nanoseconds)
 {

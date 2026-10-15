@@ -1,10 +1,14 @@
+/*
+ * kbd.c: the ring of raw scancodes and the US keymaps, as kbd.h describes
+ * them.
+ */
 #include "kbd.h"
 
 /*
- * Raw scancode ring buffer. The input layer is the sole producer (tail), from
- * whichever keyboard interrupt it was called by, and graphics-mode readers are
- * the sole consumer (head); a full ring drops the new code rather than
- * overwrite an unread one.
+ * The scancode ring. The input layer is its one producer, at `tail`, and
+ * the /fb reader its one consumer, at `head`; a slot stays empty to tell a
+ * full ring from an empty one, and a full ring drops the new code rather
+ * than overwrite an unread one.
  */
 #define SCANCODE_BUF_SIZE 64
 static uint8_t scancode_buf[SCANCODE_BUF_SIZE];
@@ -65,7 +69,7 @@ uint8_t EN_us[128] = {
     0,                                                                  /* 0x58: F12 */
     0
 
-    /* All others are undefined... */
+    /* The codes from 0x5A up are 0: no character. */
 };
 
 /* US layout, scancode to character when Shift is held. */
@@ -98,5 +102,5 @@ uint8_t EN_us_shift[128] = {
     0,                                                                 /* 0x58: F12 */
     0
 
-    /* All others are undefined... */
+    /* The codes from 0x5A up are 0: no character. */
 };

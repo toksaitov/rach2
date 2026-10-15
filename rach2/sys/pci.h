@@ -1,8 +1,7 @@
 /*
- * pci.h - PCI bus enumeration for Rach2
- *
- * Functions to scan the PCI bus and find devices by class/subclass.
- * Uses I/O ports 0xCF8 (config address) and 0xCFC (config data).
+ * pci.h: the PCI bus, its configuration space, the search for a device by
+ * class or identity, its base address registers and capabilities, and the
+ * messages it sends in place of an interrupt line.
  */
 
 #ifndef _PCI_H_
@@ -54,7 +53,9 @@
 #define PCI_CMD_INTERRUPT_DIS 0x0400
 
 /*
- * PCI device information structure
+ * A function on the bus as a search finds it: where it is, its identity and
+ * class from its configuration header, its interrupt line register, and its
+ * six base address registers as read.
  */
 typedef struct {
     uint16_t vendor_id;
@@ -71,10 +72,13 @@ typedef struct {
 } pci_device_t;
 
 /*
- * Configuration space, by bus, device, function and offset. The dword read
- * and the dword and word writes are the architecture's, by whatever
- * mechanism its machine has (arch/x86/pciconf.c: ports 0xCF8 and 0xCFC);
- * the narrower reads are taken from a dword.
+ * Configuration space, by bus, device, function and offset, the offset in
+ * the first 256 bytes. The dword read and the writes are the architecture's,
+ * by whatever mechanism its machine has (arch/x86/pciconf.c: the ECAM window
+ * where the platform mapped one, ports 0xCF8 and 0xCFC otherwise); the
+ * narrower reads are taken from a dword. Each access is one load or store,
+ * or runs with interrupts off, so an interrupt handler may make one. A
+ * function that is not there reads as all ones.
  */
 
 /** Read a 32-bit dword from PCI configuration space. */
@@ -90,17 +94,24 @@ uint8_t pci_read_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t 
 void pci_write_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
                         uint32_t value);
 
-/** Write a 16-bit word to PCI configuration space. */
+/**
+ * Write a 16-bit word to PCI configuration space, as one access of a word's
+ * width and not a read and a write of its dword: the status word beside the
+ * command word has bits that a write of one clears, and writing it back
+ * would clear every error the device had latched there.
+ */
 void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
                         uint16_t value);
 
-/** Write an 8-bit byte to PCI configuration space. */
+/** Write an 8-bit byte to PCI configuration space, as one access of a
+ * byte's width, for the reason `pci_write_config16` gives. */
 void pci_write_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
                        uint8_t value);
 
-/*
- * The bus's I/O space, where a device's I/O base address register points:
- * the architecture's (arch/x86/pciconf.c: the processor's own ports).
+/**
+ * Read or write a byte, a word or a dword at `port` of the bus's I/O space,
+ * where a device's I/O base address register points: the architecture's
+ * (arch/x86/pciconf.c: the processor's own ports).
  */
 uint8_t pci_io_read8(uint16_t port);
 uint16_t pci_io_read16(uint16_t port);
@@ -109,12 +120,17 @@ void pci_io_write8(uint16_t port, uint8_t value);
 void pci_io_write16(uint16_t port, uint16_t value);
 void pci_io_write32(uint16_t port, uint32_t value);
 
-/** Find the first device by class and subclass; true and fills `out` on a
- * match. */
+/**
+ * Find the first function by class and subclass, scanning every bus, device
+ * and function in that order; true and fills `out` on a match, false when
+ * none matches. Functions 1 to 7 of a device are read only when function 0's
+ * header says it has several.
+ */
 bool pci_find_device(uint8_t class_code, uint8_t subclass, pci_device_t *out);
 
-/** Find the next class/subclass match after `skip_dev`; NULL `skip_dev`
- * starts from the first slot. */
+/** Find the next class/subclass match after the function `skip_dev` is,
+ * in the same order, so that a caller can walk every function of one class;
+ * NULL `skip_dev` starts from the first slot. */
 bool pci_find_device_skip(uint8_t class_code, uint8_t subclass, pci_device_t *skip_dev,
                           pci_device_t *out);
 
@@ -126,7 +142,7 @@ bool pci_find_device_by_id(uint16_t vendor_id, uint16_t device_id, pci_device_t 
  * The `nth` device of that identity on the bus, counting from zero.
  *
  * A machine may have several cards of one kind, and a driver that takes them
- * all asks for each in turn until this says there are no more.
+ * all calls this with each `nth` in turn until it returns false.
  *
  * @return true with `*out` filled, false when there is no such device.
  */
@@ -141,10 +157,12 @@ bool pci_find_nth_by_id(uint16_t vendor_id, uint16_t device_id, int nth, pci_dev
 bool pci_nth(int nth, pci_device_t *out);
 
 /*
- * PCIe capability walk. The capability list starts at the pointer in config
- * space and is a singly linked list of (id, next) pairs; a bounded walk is
- * the only safe way to read it, because a device answering its own pointer
- * field with garbage would otherwise loop forever.
+ * The capability list, which a status bit says the function has. It starts
+ * at the pointer at 0x34 of configuration space and is a singly linked list
+ * of (id, next) pairs; a bounded walk is the only safe way to read it,
+ * because a device answering its own pointer field with garbage would
+ * otherwise loop forever. The PCI Express capability's link control word
+ * has the ASPM bits.
  */
 #define PCI_STATUS_CAP_LIST     0x0010
 #define PCI_CAP_PTR             0x34
@@ -157,8 +175,9 @@ bool pci_nth(int nth, pci_device_t *out);
 /**
  * Find a capability by id; its configuration-space offset, or 0 if absent.
  *
- * The walk is bounded and refuses an offset outside the capability region, so
- * a malformed list ends the search, not the machine.
+ * The walk follows at most 48 links and stops at a pointer of all ones or
+ * one below the capability region at 0x40, so a malformed list ends the
+ * search, not the machine.
  */
 uint8_t pci_find_capability(uint8_t bus, uint8_t device, uint8_t function, uint8_t cap_id);
 
@@ -175,11 +194,19 @@ uint8_t pci_find_capability(uint8_t bus, uint8_t device, uint8_t function, uint8
  */
 void pci_msi_message(uint8_t vector, uint32_t *address, uint32_t *data);
 
-/** Program one message on `dev` and enable it: 0, or -1 with the reason in
- * the log. The architecture's message controller must be ready. */
+/**
+ * Program one message on `dev`, the architecture's message for `vector`
+ * (`pci_msi_message`), and enable it, with MSI-X disabled and the vector's
+ * own mask cleared where the device has one: 0, or -1 with the reason in the
+ * log when the device has no MSI capability or one that runs past the end of
+ * its configuration space. A device that offers several vectors is told to
+ * use one. The architecture's message controller must be ready, and the
+ * device a bus master, since a message is a memory write.
+ */
 int pci_msi_enable(const pci_device_t *dev, uint8_t vector);
 
-/** Stop `dev` from sending messages. */
+/** Stop `dev` from sending MSI messages, leaving its address and data as
+ * they are; a device with no MSI capability is left alone. */
 void pci_msi_disable(const pci_device_t *dev);
 
 /* The MSI-X capability: its control word's function mask and table size,
@@ -218,7 +245,8 @@ int pci_msix_hold(const pci_device_t *dev);
 int pci_msix_enable(const pci_device_t *dev, uintptr_t table, uint8_t vector);
 
 /**
- * Find the bridge whose secondary bus is `bus`, filling `out`; true if found.
+ * Find the bridge whose secondary bus is `bus`, filling `out`'s place, vendor
+ * and device ID and nothing else; true if found.
  *
  * A PCIe link has two ends, and clearing a link state at one end alone leaves
  * it negotiated at the other, so a driver that must turn L1 off needs the

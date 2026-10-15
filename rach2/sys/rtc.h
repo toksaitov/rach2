@@ -1,3 +1,7 @@
+/*
+ * rtc.h: the time of day, kept from one reading of the machine's clock at
+ * boot and the tick since, and the machine's clock read, set and its alarm.
+ */
 #ifndef _RTC_H_
 #define _RTC_H_
 
@@ -6,15 +10,14 @@
 #include "lib/kint.h"
 
 /*
- * The real-time clock: the time of day the kernel keeps from one reading of
- * the machine's clock at boot and the tick since (clock.c), the clock read
- * and set, and its alarm. The platform's clock driver defines the reading,
- * the setting and the alarm (arch/x86/cmos.c, the PC's MC146818 CMOS clock)
- * and sets the anchor through `rtc_anchor`.
+ * The time the kernel keeps and the calendar arithmetic are clock.c's. The
+ * platform's clock driver defines the reading, the setting and the alarm
+ * (arch/x86/cmos.c, the PC's MC146818 CMOS clock) and sets the anchor
+ * through `rtc_anchor`.
  */
 
-/* A sample decoded into fields, in UTC: what the clock meant, not what it
- * held. */
+/* A time in calendar fields, in UTC: the full year, the month from 1 to 12,
+ * the day from 1, the hour from 0 to 23. */
 typedef struct {
     int32_t year;
     int32_t month;
@@ -35,15 +38,54 @@ void rtc_anchor(int64_t seconds, uint32_t uptime);
  * processor. */
 void rtc_alarm_attach(isr_handler_t handler);
 
+/**
+ * Real time from an anchor, apart from the hardware and from the anchor
+ * kept here, so that a host test can call it: in `*seconds`,
+ * `anchor_seconds`, which the clock read at uptime second `anchor_uptime`,
+ * plus the uptime seconds since, to `uptime`; in `*nanoseconds`, the
+ * `subsecond_ticks` into the current second. With the anchor at zero it is
+ * the time since boot.
+ */
 void rtc_time_from_anchor(int64_t anchor_seconds, uint32_t anchor_uptime, uint32_t uptime,
                           uint32_t subsecond_ticks, int64_t *seconds, int64_t *nanoseconds);
 
+/**
+ * Read the machine's clock at boot, in pairs of samples until two agree, up
+ * to four pairs, and anchor real time to it, with the time in the log as
+ * `rtc: 2026-10-15 12:00:00 UTC`. A clock that cannot be read, holds no
+ * time or never agrees leaves no anchor, real time runs from the epoch, and
+ * the log says `rtc: no clock: times run from the epoch`.
+ */
 void rtc_init(void);
+
+/** Whether the boot read the clock and anchored real time to it. */
 int rtc_is_anchored(void);
+
+/** The real time at which the boot read the clock, which a node with no
+ * times of its own reports (a device, a /proc file, a pipe); 0 with no
+ * anchor. Setting the clock does not move it. */
 int64_t rtc_boot_time(void);
+
+/** The real time of uptime zero, which /proc/stat gives as `btime`: the
+ * anchor less the uptime it was read at, with the step `rtc_set_realtime`
+ * made added; the step alone with no anchor. */
 int64_t rtc_boot_epoch(void);
+
+/**
+ * The real time now, in seconds since 1970 and nanoseconds within the
+ * second: the anchor's time, the time since it to the timer's place within
+ * the tick, and the step `rtc_set_realtime` made. No reading is earlier than
+ * the one before it until the clock is set again. Interrupts are off while it
+ * reads.
+ */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds);
+
+/** The real time to the last tick, without the timer's place within it and
+ * without `rtc_realtime`'s floor: the coarse clock, which reads no timer. */
 void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds);
+
+/** The time since boot, to the timer's place within the tick, never earlier
+ * than the reading before it. Setting the clock does not move it. */
 void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds);
 
 /** The tick count, with a tick whose interrupt is pending counted, and how
@@ -57,6 +99,14 @@ void rtc_tick_phase(uint32_t *ticks, uint32_t *phase_ns);
  * boot processor's handler runs: a wait begun while the tick is pending
  * would end a tick early by the monotonic clock. */
 uint32_t rtc_ticks_now(void);
+
+/**
+ * Make the real time `seconds` and `nanoseconds` now, as clock_settime,
+ * settimeofday and stime do for a privileged caller; the caller checks the
+ * privilege. Real time goes on from it at the tick's rate, its floor starts
+ * over, and `rtc_boot_epoch` moves by the same step. The machine's clock is
+ * not written (`rtc_write_clock`).
+ */
 void rtc_set_realtime(int64_t seconds, int32_t nanoseconds);
 
 /**

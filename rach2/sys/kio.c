@@ -1,3 +1,22 @@
+/*
+ * kio.c: the console's screen as a terminal, and the console's lock.
+ *
+ * `k_putc` runs a small escape-sequence interpreter, so that the screen
+ * takes what a terminal at the other end of the serial line takes. A line
+ * editor (BusyBox ash) and a full-screen program (vi) move the cursor and
+ * erase with `ESC [` sequences; without an interpreter those bytes would
+ * show on the screen as `?[` and the rest of the sequence, and backspace
+ * would never erase. The serial line hands the same bytes to the terminal at
+ * its other end, which interprets them itself.
+ *
+ * Text other than ASCII arrives as UTF-8 and is drawn from the console's
+ * font: code page 437, or the one `k_font_init` loads, which keeps its box
+ * drawing and has the Cyrillic letters. A query for the device's attributes
+ * or the cursor's position is answered as a VT102 answers it; the console's
+ * tty takes the answer with `k_take_answer` and gives it to the program as
+ * input.
+ */
+
 #include "kio.h"
 #include "klog.h"
 #include "panic.h"
@@ -5,24 +24,11 @@
 #include "lib/kirq.h"
 #include "lib/spinlock.h"
 
-/*
- * VT100/ANSI terminal state for the VGA console.
- *
- * k_putc runs a small escape-sequence interpreter so the VGA text screen
- * behaves like the terminal the serial line already gets for free from the host
- * emulator. A line editor (busybox ash) and a full-screen program (vi) move the
- * cursor and erase with `ESC [` sequences; without an interpreter those bytes
- * would land on screen as literal `?[...` garbage, and backspace would never
- * erase. Only this VGA path is interpreted. The serial path hands the same
- * bytes to the host terminal, which interprets them itself.
- *
- * Text other than ASCII arrives as UTF-8 and is drawn from the adapter's
- * font: code page 437, or the one `k_font_init` loads, which keeps its box
- * drawing and has the Cyrillic letters. A query for the device's attributes
- * or the cursor's position is answered as a VT102 answers it; the console's
- * tty takes the answer with `k_take_answer` and gives it to the program as
- * input.
- */
+/* The interpreter's state: where it is in a sequence; a CSI's parameters,
+ * the one being read (`vt_cur`), and whether the CSI is private or has an
+ * intermediate byte, either of which leaves it unexecuted; the bytes of a
+ * string read so far, at most 256; and the cursor `ESC 7` and `CSI s`
+ * saved. */
 
 #define VT_MAX_PARAMS 8
 
@@ -67,7 +73,8 @@ static const uint16_t vt_cp437[128] = {
     0x221E, 0x03C6, 0x03B5, 0x2229, 0x2261, 0x00B1, 0x2265, 0x2264, 0x2320, 0x2321, 0x00F7, 0x2248,
     0x00B0, 0x2219, 0x00B7, 0x221A, 0x207F, 0x00B2, 0x25A0, 0x00A0};
 
-/* The font the adapter draws: its own, or the one k_font_init loads. */
+/* The font the console draws from: the adapter's own, or the one
+ * k_font_init loads. */
 static const uint16_t *vt_font = vt_cp437;
 
 /*
@@ -106,7 +113,7 @@ static bool vt_reverse;
 
 /*
  * ANSI SGR color index (black, red, green, yellow, blue, magenta, cyan, white)
- * mapped to the VGA palette, whose primaries sit at different slots.
+ * mapped to the VGA palette, whose primaries are at other indices.
  */
 static const uint8_t vt_ansi_color[8] = {black, red, green, brown, blue, magenta, cyan, light_grey};
 
@@ -412,13 +419,13 @@ unsigned int k_take_answer(char *buf, unsigned int size)
 /**
  * Execute a completed CSI sequence whose final byte is `c`.
  *
- * Cursor motion (`A`-`H`, `f`, `d`, `G`), erase (`J`, `K`, `X`), color (`m`),
- * and cursor save/restore (`s`, `u`) are handled. The device attributes
- * (`c`) and the status reports (`n`) are answered by `vt_answer_query`; a
- * program such as a browser waits for those answers before it reads the
- * keyboard. A scroll-region set (`r`), mode toggles (`h`, `l`), and anything
- * else are ignored. Coordinates are one-based on the wire and clamped to the
- * screen.
+ * Cursor motion (`A` to `H`, the backquote, `d` and `f`), erase (`J`, `K`,
+ * `X`), color (`m`), and cursor save/restore (`s`, `u`) are handled. The
+ * device attributes (`c`) and the status reports (`n`) are answered by
+ * `vt_answer_query`; a program such as a browser waits for those answers
+ * before it reads the keyboard. A scroll-region set (`r`), mode toggles
+ * (`h`, `l`), and anything else are ignored. Coordinates are one-based on
+ * the wire and clamped to the screen.
  */
 static void vt_dispatch_csi(char c)
 {
@@ -725,34 +732,24 @@ void k_console_size(unsigned int *cols, unsigned int *rows)
 }
 
 /**
- * Write one byte to the VGA console, interpreting VT100/ANSI escapes.
+ * A string, which is an OSC (`ESC ]`), a device control string (`ESC P`) or
+ * an application or privacy string (`ESC _`, `ESC ^`, `ESC X`), is read to
+ * its BEL, its `ESC \`, another control byte or its 256th byte and not
+ * drawn, so the queries a program sends to learn the terminal's features do
+ * not reach the screen. The cursor is placed after every byte, so a
+ * sequence that only moves the cursor still moves it on the screen.
  *
- * A plain byte is drawn by `vga_putc_raw`, and a byte from 0x80 up goes to
- * `vt_utf8`. `ESC` opens an escape sequence: a CSI (`ESC [`) collects
- * semicolon-separated numeric parameters up to its final letter and is
- * executed by `vt_dispatch_csi`; a private CSI (`ESC [ ?`, as in the
- * alternate-screen and cursor-visibility toggles) is swallowed; a charset
- * selector (`ESC (` and kin) swallows its next byte; an OSC (`ESC ]`), a
- * device control string (`ESC P`) and the application and privacy strings
- * (`ESC _`, `ESC ^`, `ESC X`) are swallowed to their BEL or `ESC \`, so the
- * queries a program sends to learn the terminal's features do not reach the
- * screen. The hardware cursor is placed after every byte, so a cursor-only
- * sequence still moves the on-screen caret; a writer of many bytes holds it
- * and it is placed once at the release. The byte's work runs under the
- * console's lock, with interrupts off, since a keyboard's echo arrives
- * through this path from its interrupt and another processor's writes
- * through it from theirs.
+ * The lock is held over the byte's whole work: a keyboard's echo comes from
+ * its interrupt through this same path, and a scroll or an escape sequence
+ * cut in two by it would leave the cursor and the display's start apart. A
+ * byte is one cell and a scroll one line; the copy at the end of the
+ * adapter's memory, once in 180 lines on the VGA, is the one long piece.
  */
 void k_putc(char c)
 {
     unsigned char uc = (unsigned char)c;
     uint32_t flags;
 
-    /* Under the console's lock: a keyboard's echo comes from its interrupt
-       and through this same path, and a scroll or an escape sequence cut in
-       two by it would leave the cursor and the display's start apart. A
-       byte is one cell and a scroll one line; the copy at the memory's end
-       is the one long piece, once in 180 lines. */
     flags = console_lock();
     if (vt_utf_left != 0 && (uc < 0x80 || uc >= 0xC0)) {
         vt_utf_left = 0;
