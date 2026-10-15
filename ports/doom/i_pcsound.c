@@ -1,12 +1,10 @@
 /*
- * i_pcsound.c - Sound module for Doom on Rach2
+ * i_pcsound.c: the sound and music modules of Doom on Rach2.
  *
- * Supports two modes:
- * 1. Real audio (SB16/HDA): Plays actual Doom sound samples + OPL3 music
- * 2. PC Speaker fallback: Maps sound effects to beep frequencies (no music)
- *
- * PC speaker can only play one tone at a time, so we map sfx to frequencies.
- * Real audio mode supports proper sample playback with mixing and OPL3 music.
+ * With a driver that plays samples, the SB16's or the HDA's, the effects are
+ * mixed with the music of the OPL3 player into 11,025 Hz unsigned 8-bit mono
+ * and written to the console with AUDIO_WRITE. Otherwise the effects play on
+ * the PC speaker, one tone at a time, and there is no music.
  */
 
 #include "sounds.h"
@@ -18,17 +16,15 @@
 
 #include <stdint.h>
 
-/*
- * Dummy variables required by i_sound.c when FEATURE_SOUND is defined.
- * These are used for libsamplerate integration which we don't support.
- */
+/* The resampling settings src/i_sound.c binds under FEATURE_SOUND. This
+ * module does not resample, so they are not read. */
 int use_libsamplerate = 0;
 float libsamplerate_scale = 0.65f;
 
-/* Syscall wrappers */
+/* The system call of crt0.c. */
 extern int ioctl(int fd, unsigned long request, ...);
 
-/* ioctl request codes */
+/* The console's sound requests (rach2/sys/syscall.c). */
 #define KIOCSOUND       0x4B2F  /* PC speaker frequency (0 = off) */
 #define AUDIO_GET_INFO  0x4101  /* Get audio driver info */
 #define AUDIO_START     0x4102  /* Start audio playback */
@@ -36,121 +32,103 @@ extern int ioctl(int fd, unsigned long request, ...);
 #define AUDIO_WRITE     0x4104  /* Write audio samples */
 #define AUDIO_SET_VOLUME 0x4105 /* Set volume (0-100) */
 
-/* Audio driver types */
+/* The driver types AUDIO_GET_INFO gives. */
 #define AUDIO_DRIVER_NONE    0
 #define AUDIO_DRIVER_SPEAKER 1
 #define AUDIO_DRIVER_SB16    2
 #define AUDIO_DRIVER_HDA     3
 
-/* Audio formats */
+/* The sample formats AUDIO_START takes. */
 #define AUDIO_U8    0
 #define AUDIO_S16LE 1
 
-/* Audio info structure */
+/* The argument of AUDIO_GET_INFO. */
 struct audio_info {
     uint32_t driver_type;
     uint32_t has_real_audio;
 };
 
-/* Audio start parameters */
+/* The argument of AUDIO_START. */
 struct audio_start_params {
     uint32_t sample_rate;
     uint32_t format;
     uint32_t channels;
 };
 
-/* Audio write parameters */
+/* The argument of AUDIO_WRITE: the samples and their length in bytes. */
 struct audio_write_params {
     const uint8_t *buffer;
     uint32_t size;
 };
 
-/* Get current time in ms */
+/* The platform layer's clock and report (doomgeneric_rach2.c). */
 extern uint32_t DG_GetTicksMs(void);
 extern uint32_t DG_NowUs(void);
 extern void DG_TimeSpent(int what, uint32_t us);
 
-/* Sound state */
 static boolean pcsound_initialized = false;
-static int current_sound_channel = -1;
-static uint32_t current_freq = 0;
+static int current_sound_channel = -1; /* the speaker effect's, or -1 */
+static uint32_t current_freq = 0;      /* the speaker's tone in Hz, 0 silent */
 
-/* Real audio state */
-static boolean use_real_audio = false;
+static boolean use_real_audio = false; /* AUDIO_START succeeded */
 static boolean opl_music_initialized = false;
-static uint32_t audio_sample_rate = 11025;  /* Output rate for DMA-backed audio */
+static uint32_t audio_sample_rate = 11025; /* the output rate in Hz */
 
-/* Sound mixing buffer for real audio (mono, unsigned 8-bit) */
-#define MIX_BUFFER_SIZE 315  /* Max chunk size (~28.6 ms at 11025 Hz) */
+/* One chunk of output, unsigned 8-bit mono: 315 samples are 28.6 ms. */
+#define MIX_BUFFER_SIZE 315
 static uint8_t mix_buffer[MIX_BUFFER_SIZE];
 
 /*
- * OPL timing and resampling
- *
- * We generate output samples based on elapsed time so audio stays aligned
- * with the hardware sample rate even if game ticks jitter. OPL samples are
- * generated at OPL_SAMPLE_RATE and downsampled to OUTPUT_SAMPLE_RATE.
+ * Output is made by the clock: an update makes as many samples as the time
+ * since the last is worth at OUTPUT_SAMPLE_RATE, so that the output keeps
+ * pace with the hardware when frames come unevenly. The music player makes
+ * stereo 16-bit samples at OPL_SAMPLE_RATE, which the mixer averages down.
  */
 #define OPL_SAMPLE_RATE 49716
 #define OUTPUT_SAMPLE_RATE 11025
 #define OPL_BUFFER_SAMPLES (((MIX_BUFFER_SIZE * OPL_SAMPLE_RATE) / OUTPUT_SAMPLE_RATE) + 16)
-static int16_t opl_buffer[OPL_BUFFER_SAMPLES * 2];  /* Stereo 16-bit from OPL */
+static int16_t opl_buffer[OPL_BUFFER_SAMPLES * 2];  /* stereo pairs */
 
-/* Boost music to match SFX loudness at 8-bit output. */
+/* The music's gain in the mix, which makes it about as loud as the effects. */
 #define MUSIC_MIX_GAIN_NUM 6
 #define MUSIC_MIX_GAIN_DEN 1
 
-/* Audio timing state (ms -> samples) */
-static uint32_t last_audio_ms = 0;
-static uint32_t audio_ms_remainder = 0;
-static uint32_t opl_sample_remainder = 0;
+static uint32_t last_audio_ms = 0;        /* the clock at the last update */
+static uint32_t audio_ms_remainder = 0;   /* output samples, in thousandths */
+static uint32_t opl_sample_remainder = 0; /* player samples, in 11025ths */
 
-/* Cap catch-up to avoid overflowing the kernel ring buffer */
-/*
- * Real hardware can run Doom slower than expected, which makes the elapsed time
- * between PCSoundUpdate() calls larger and causes underruns if we clamp too
- * low.
- *
- * Keep this comfortably below the kernel's audio ring capacity (currently
- * 8KB) but large enough to absorb occasional long frames without audible
- * gaps.
- */
+/* The most samples one update makes, some 457 ms, so that a long frame
+ * leaves no gap; what the kernel's ring cannot take is dropped. */
 #define MAX_CATCHUP_SAMPLES (MIX_BUFFER_SIZE * 16)
 
 
-/* Channel state for real audio (8 channels like classic Doom) */
+/* The effects that play with sample output, one to a channel. */
 #define NUM_CHANNELS 8
 
 static struct {
-    const uint8_t *data;    /* Sound sample data */
-    uint32_t length;        /* Sample length in bytes */
-    uint32_t position;      /* Current playback position */
-    int volume;             /* Channel volume (0-255) */
-    boolean active;         /* Is channel playing? */
+    const uint8_t *data;    /* the samples after the lump's header */
+    uint32_t length;        /* in bytes, no more than the lump has */
+    uint32_t position;      /* the next sample */
+    int volume;             /* 0 to 254, twice the engine's */
+    boolean active;
 } channels[NUM_CHANNELS];
 
-/* Doom sound lump header (8 bytes) */
+/* The header of a DS lump, 8 bytes, before its unsigned 8-bit samples. */
 struct doom_sound_header {
-    uint16_t format;        /* Always 3 */
-    uint16_t sample_rate;   /* Usually 11025 */
-    uint32_t num_samples;   /* Number of samples */
+    uint16_t format;        /* 3 */
+    uint16_t sample_rate;   /* ignored; the samples play at 11,025 Hz */
+    uint32_t num_samples;
 };
 
-/*
- * DP (PC speaker) sound lump header (4 bytes)
- * Format: 2 bytes zeros, 2 bytes sample count (little-endian)
- * Each sample is a tone value played at 140 Hz (7.14ms per sample)
- */
+/* The header of a DP lump, the speaker's form of an effect, 4 bytes, before
+ * one tone value for each 1/140 s. */
 struct dp_sound_header {
-    uint16_t zero;          /* Always 0 */
-    uint16_t num_samples;   /* Number of tone samples */
+    uint16_t zero;          /* 0 */
+    uint16_t num_samples;   /* the tone values */
 };
 
-/*
- * DP frequency lookup table (precomputed)
- * Value 0 = silence, Values 1-127 = quarter-tone scale
- * Formula: freq = 175 * 2^((value-1)/24)
- */
+/* The frequency of each DP tone value in Hz: 0 is silence, and 1 to 127 are
+ * quarter tones from 175 Hz, 175 times 2 to the power (value - 1) / 24. */
 static const uint16_t dp_freq_table[128] = {
     0,    175,  180,  185,  191,  196,  202,  208,   /* 0-7 */
     214,  220,  227,  233,  240,  247,  254,  262,   /* 8-15 */
@@ -170,30 +148,26 @@ static const uint16_t dp_freq_table[128] = {
     5432, 5591, 5754, 5922, 6095, 6273, 6456, 6645   /* 120-127 */
 };
 
-/* DP playback timing: 140 Hz = 7.14ms per sample, use 7ms */
+/* A DP tone lasts 1/140 s, taken as 7 ms. */
 #define DP_SAMPLE_MS 7
 
-/* PC speaker DP playback state */
+/* The effect sounding on the speaker. */
 static struct {
-    const uint8_t *data;    /* Pointer to DP tone data */
-    uint16_t length;        /* Total number of samples */
-    uint16_t position;      /* Current sample position */
-    uint32_t last_update;   /* Timestamp of last sample advance */
-    boolean active;         /* Is DP sound playing? */
+    const uint8_t *data;    /* the tone values after the lump's header */
+    uint16_t length;        /* tone values, no more than the lump has */
+    uint16_t position;      /* the tone sounding */
+    uint32_t last_update;   /* the clock in ms when the tone started */
+    boolean active;
 } dp_state;
 
-/*
- * Play a tone on the PC speaker
- */
+/** Sound `freq` Hz on the PC speaker; 0 silences it. */
 static void play_tone(uint32_t freq)
 {
     current_freq = freq;
     ioctl(0, KIOCSOUND, freq);
 }
 
-/*
- * Stop the PC speaker
- */
+/** Silence the PC speaker, unless it is silent already. */
 static void stop_tone(void)
 {
     if (current_freq != 0) {
@@ -202,10 +176,13 @@ static void stop_tone(void)
     }
 }
 
-/*
- * Sound module callbacks
+/**
+ * Ask the console for its audio driver. When the driver plays samples,
+ * start output of 11,025 Hz unsigned 8-bit mono, set the volume to 80 of
+ * 100, since an HDA codec may start muted, and start the music player at
+ * 49,716 Hz; otherwise the effects go to the PC speaker. `use_sfx_prefix`
+ * is ignored. Returns true either way.
  */
-
 static boolean PCSoundInit(boolean use_sfx_prefix)
 {
     struct audio_info info;
@@ -214,7 +191,6 @@ static boolean PCSoundInit(boolean use_sfx_prefix)
 
     (void)use_sfx_prefix;
 
-    /* Initialize channel state */
     for (i = 0; i < NUM_CHANNELS; i++) {
         channels[i].data = NULL;
         channels[i].length = 0;
@@ -223,23 +199,16 @@ static boolean PCSoundInit(boolean use_sfx_prefix)
         channels[i].active = false;
     }
 
-    /* Check for real audio hardware */
     if (ioctl(0, AUDIO_GET_INFO, &info) == 0 && info.has_real_audio) {
         audio_sample_rate = OUTPUT_SAMPLE_RATE;
-        /* Start audio playback - use original mono 8-bit format that was
-         * working */
         params.sample_rate = audio_sample_rate;
-        params.format = AUDIO_U8;     /* 8-bit unsigned (Doom native format) */
-        params.channels = 1;          /* Mono */
+        params.format = AUDIO_U8;
+        params.channels = 1;
 
         if (ioctl(0, AUDIO_START, &params) == 0) {
             use_real_audio = true;
-            /* Ensure hardware amps are unmuted on real devices (HDA codecs
-             * can boot muted). */
             ioctl(0, AUDIO_SET_VOLUME, 80);
 
-            /* Initialize OPL music subsystem at higher rate for quality,
-             * we'll downsample when mixing */
             if (OPLMusic_Init(OPL_SAMPLE_RATE)) {
                 opl_music_initialized = true;
             }
@@ -255,6 +224,7 @@ static boolean PCSoundInit(boolean use_sfx_prefix)
     return true;
 }
 
+/** Stop the music player, the sample output and the speaker. */
 static void PCSoundShutdown(void)
 {
     if (opl_music_initialized) {
@@ -269,21 +239,19 @@ static void PCSoundShutdown(void)
     pcsound_initialized = false;
 }
 
+/**
+ * The lump of an effect: DS and the first six letters of its name with
+ * sample output, DP and the same on the speaker; -1 when the WAD has none.
+ */
 static int PCSoundGetSfxLumpNum(sfxinfo_t *sfxinfo)
 {
     char namebuf[16];
     int lumpnum;
 
-    /*
-     * Build lump name with appropriate prefix:
-     * - "DS" = Digital Sound (for real audio hardware)
-     * - "DP" = Digital sound for PC speaker
-     */
     namebuf[0] = 'D';
     namebuf[1] = use_real_audio ? 'S' : 'P';
     namebuf[2] = '\0';
 
-    /* Concatenate sfxinfo->name */
     {
         int i;
         const char *src = sfxinfo->name;
@@ -298,9 +266,19 @@ static int PCSoundGetSfxLumpNum(sfxinfo_t *sfxinfo)
     return lumpnum;
 }
 
+/**
+ * With sample output, make the samples the time since the last update is
+ * worth, no more than a second's and MAX_CATCHUP_SAMPLES, in chunks of
+ * MIX_BUFFER_SIZE. For each chunk take OPL_SAMPLE_RATE / OUTPUT_SAMPLE_RATE
+ * times as many stereo samples from the music player, average them to mono
+ * and to the output rate, scale them to 8 bits with the music's gain, add
+ * the channels at their volumes, limit each sum to a byte, and write the
+ * chunk with AUDIO_WRITE until a write takes nothing; the rest is dropped.
+ * On the speaker, step the effect sounding by 7 ms tones, and end it after
+ * its last.
+ */
 static void PCSoundUpdate(void)
 {
-    /* Real audio mode: mix active channels and OPL music */
     if (use_real_audio) {
         struct audio_write_params wp;
         uint32_t now_ms;
@@ -366,14 +344,11 @@ static void PCSoundUpdate(void)
                 opl_samples_needed = 0;
             }
 
-            /* Mix all active channels into the buffer */
             mix_t0 = DG_NowUs();
             for (j = 0; j < (int)chunk; j++) {
                 sample_sum = 0;
                 active_count = 0;
 
-                /* Add OPL music (downsample from ~49716 Hz stereo 16-bit to
-                 * 11025 Hz mono 8-bit) */
                 if (opl_samples_needed > 0) {
                     int32_t mono_sum = 0;
                     int count = 0;
@@ -397,8 +372,6 @@ static void PCSoundUpdate(void)
 
                     if (count > 0) {
                         int32_t mono = mono_sum / count;
-                        /* Scale from 16-bit to 8-bit range (volume handled
-                         * by OPL) */
                         mono = mono / 256;
                         mono = (mono * MUSIC_MIX_GAIN_NUM) / MUSIC_MIX_GAIN_DEN;
                         if (mono > 127) mono = 127;
@@ -407,12 +380,10 @@ static void PCSoundUpdate(void)
                     }
                 }
 
-                /* Mix in sound effects */
                 for (i = 0; i < NUM_CHANNELS; i++) {
                     if (channels[i].active && channels[i].position < channels[i].length) {
-                        /* Get sample (unsigned 8-bit, center is 128) */
+                        /* unsigned 8-bit, centered on 128 */
                         int sample = channels[i].data[channels[i].position];
-                        /* Apply volume (0-255) */
                         sample = ((sample - 128) * channels[i].volume / 255);
                         sample_sum += sample;
                         active_count++;
@@ -422,14 +393,12 @@ static void PCSoundUpdate(void)
                     }
                 }
 
-                /* Convert back to unsigned 8-bit, clamp to valid range */
                 sample_sum += 128;
                 if (sample_sum < 0) sample_sum = 0;
                 if (sample_sum > 255) sample_sum = 255;
                 mix_buffer[j] = (uint8_t)sample_sum;
             }
 
-            /* Write mixed buffer to audio device */
             {
                 uint32_t off = 0;
                 DG_TimeSpent(1, DG_NowUs() - mix_t0);
@@ -439,7 +408,7 @@ static void PCSoundUpdate(void)
                     wp.size = chunk - off;
                     w = ioctl(0, AUDIO_WRITE, &wp);
                     if (w <= 0) {
-                        break; /* Ring full or device error; drop remainder */
+                        break; /* the ring is full, or the driver failed */
                     }
                     off += (uint32_t)w;
                 }
@@ -450,18 +419,15 @@ static void PCSoundUpdate(void)
         return;
     }
 
-    /* PC speaker mode: advance DP sound playback */
     if (dp_state.active) {
         uint32_t now = DG_GetTicksMs();
         uint32_t elapsed = now - dp_state.last_update;
 
-        /* Advance samples based on elapsed time (7ms per sample) */
         while (elapsed >= DP_SAMPLE_MS && dp_state.active) {
             dp_state.position++;
             elapsed -= DP_SAMPLE_MS;
             dp_state.last_update += DP_SAMPLE_MS;
 
-            /* Check if sound is finished */
             if (dp_state.position >= dp_state.length) {
                 stop_tone();
                 dp_state.active = false;
@@ -469,35 +435,45 @@ static void PCSoundUpdate(void)
                 break;
             }
 
-            /* Play the next tone */
             {
                 uint8_t tone_val = dp_state.data[dp_state.position];
                 if (tone_val < 128) {
                     play_tone(dp_freq_table[tone_val]);
                 } else {
-                    play_tone(0);  /* Invalid value = silence */
+                    play_tone(0);  /* above 127: silence */
                 }
             }
         }
     }
 }
 
+/**
+ * With sample output, set the volume of `channel` to twice the engine's
+ * `vol`, 0 to 127. The separation `sep` is ignored, and so is the call on
+ * the speaker.
+ */
 static void PCSoundUpdateSoundParams(int channel, int vol, int sep)
 {
-    (void)sep;  /* TODO: stereo panning not yet supported */
+    (void)sep;
 
-    /* Real audio mode: update channel volume */
     if (use_real_audio && channel >= 0 && channel < NUM_CHANNELS) {
-        /* Doom volume is 0-127, we use 0-255 */
         channels[channel].volume = vol * 2;
         return;
     }
 
-    /* PC speaker doesn't support volume or panning */
     (void)channel;
     (void)vol;
 }
 
+/**
+ * Start the effect `sfxinfo` on `channel`. With sample output its DS lump
+ * plays on the channel at `vol`; on the speaker its DP lump replaces the
+ * effect sounding, whatever the channel, and its first tone sounds at once.
+ * The count in a lump's header is trusted no further than the lump's
+ * length. Returns `channel`, or -1 when the module is not started, the
+ * lump is missing, short, of another format or without samples, or, with
+ * sample output, `channel` is out of range.
+ */
 static int PCSoundStartSound(sfxinfo_t *sfxinfo, int channel, int vol, int sep)
 {
     (void)sep;
@@ -506,25 +482,21 @@ static int PCSoundStartSound(sfxinfo_t *sfxinfo, int channel, int vol, int sep)
         return -1;
     }
 
-    /* Real audio mode: load and play actual sound sample */
     if (use_real_audio) {
         int lumpnum;
         byte *lumpdata;
         int lumplen;
         struct doom_sound_header *header;
 
-        /* Validate channel */
         if (channel < 0 || channel >= NUM_CHANNELS) {
             return -1;
         }
 
-        /* Get the sound lump */
         lumpnum = sfxinfo->lumpnum;
         if (lumpnum < 0) {
             return -1;
         }
 
-        /* Cache the lump data */
         lumpdata = W_CacheLumpNum(lumpnum, PU_STATIC);
         if (!lumpdata) {
             return -1;
@@ -532,34 +504,27 @@ static int PCSoundStartSound(sfxinfo_t *sfxinfo, int channel, int vol, int sep)
 
         lumplen = W_LumpLength(lumpnum);
         if (lumplen < 8) {
-            /* Too short to be a valid Doom sound */
             return -1;
         }
 
-        /* Parse the Doom sound header */
         header = (struct doom_sound_header *)lumpdata;
 
-        /* Validate format (Doom uses format code 3) */
         if (header->format != 3) {
             return -1;
         }
 
-        /* Set up channel to play this sound. The header's sample count is
-         * untrusted; clamp it to the bytes that follow the 8-byte header so a
-         * corrupt or crafted lump cannot make playback read past the cache. */
-        channels[channel].data = lumpdata + 8;  /* Skip 8-byte header */
+        channels[channel].data = lumpdata + 8;
         channels[channel].length = header->num_samples;
         if (channels[channel].length > (uint32_t)(lumplen - 8)) {
             channels[channel].length = (uint32_t)(lumplen - 8);
         }
         channels[channel].position = 0;
-        channels[channel].volume = vol * 2;  /* Doom: 0-127, we use 0-255 */
+        channels[channel].volume = vol * 2;
         channels[channel].active = true;
 
         return channel;
     }
 
-    /* PC speaker fallback mode: load and play DP lump */
     (void)vol;
     {
         int lumpnum;
@@ -568,13 +533,11 @@ static int PCSoundStartSound(sfxinfo_t *sfxinfo, int channel, int vol, int sep)
         struct dp_sound_header *header;
         uint8_t tone_val;
 
-        /* Get the DP lump */
         lumpnum = sfxinfo->lumpnum;
         if (lumpnum < 0) {
             return -1;
         }
 
-        /* Cache the lump data */
         lumpdata = W_CacheLumpNum(lumpnum, PU_STATIC);
         if (!lumpdata) {
             return -1;
@@ -582,45 +545,36 @@ static int PCSoundStartSound(sfxinfo_t *sfxinfo, int channel, int vol, int sep)
 
         lumplen = W_LumpLength(lumpnum);
         if (lumplen < 4) {
-            /* Too short to be a valid DP sound */
             return -1;
         }
 
-        /* Parse the DP sound header */
         header = (struct dp_sound_header *)lumpdata;
 
-        /* Validate header (first 2 bytes should be 0) */
         if (header->zero != 0 || header->num_samples == 0) {
             return -1;
         }
 
-        /* Stop any currently playing DP sound */
         if (dp_state.active) {
             stop_tone();
         }
 
-        /* Set up DP playback state. As above, clamp the untrusted sample count
-         * to the bytes that follow the 4-byte header. */
-        dp_state.data = lumpdata + 4;  /* Skip 4-byte header */
+        dp_state.data = lumpdata + 4;
         dp_state.length = header->num_samples;
         if (dp_state.length > (uint32_t)(lumplen - 4)) {
             dp_state.length = (uint16_t)(lumplen - 4);
         }
         if (dp_state.length == 0) {
-            /* Header only, no tone bytes: nothing to play, and the first-tone
-             * read below would step past the lump. */
             return -1;
         }
         dp_state.position = 0;
         dp_state.last_update = DG_GetTicksMs();
         dp_state.active = true;
 
-        /* Start playing the first tone */
         tone_val = dp_state.data[0];
         if (tone_val < 128) {
             play_tone(dp_freq_table[tone_val]);
         } else {
-            play_tone(0);  /* Invalid value = silence */
+            play_tone(0);  /* above 127: silence */
         }
 
         current_sound_channel = channel;
@@ -628,9 +582,10 @@ static int PCSoundStartSound(sfxinfo_t *sfxinfo, int channel, int vol, int sep)
     }
 }
 
+/** Stop the effect on `channel`; on the speaker, only when it is the
+ * channel of the effect sounding. */
 static void PCSoundStopSound(int channel)
 {
-    /* Real audio mode: stop channel */
     if (use_real_audio) {
         if (channel >= 0 && channel < NUM_CHANNELS) {
             channels[channel].active = false;
@@ -638,7 +593,6 @@ static void PCSoundStopSound(int channel)
         return;
     }
 
-    /* PC speaker mode */
     if (channel == current_sound_channel) {
         stop_tone();
         dp_state.active = false;
@@ -646,9 +600,9 @@ static void PCSoundStopSound(int channel)
     }
 }
 
+/** Whether an effect plays on `channel`. */
 static boolean PCSoundSoundIsPlaying(int channel)
 {
-    /* Real audio mode: check channel state */
     if (use_real_audio) {
         if (channel >= 0 && channel < NUM_CHANNELS) {
             return channels[channel].active;
@@ -656,31 +610,27 @@ static boolean PCSoundSoundIsPlaying(int channel)
         return false;
     }
 
-    /* PC speaker mode */
     if (channel == current_sound_channel) {
         return dp_state.active;
     }
     return false;
 }
 
+/** Does nothing: an effect's lump is read when the effect starts. */
 static void PCSoundCacheSounds(sfxinfo_t *sounds, int num_sounds)
 {
     (void)sounds;
     (void)num_sounds;
-    /* Nothing to cache for PC speaker */
 }
 
-/*
- * Supported sound devices
- */
+/* The devices the sound module serves. The Sound Blaster is the engine's
+ * default device, so the module is chosen on every machine. */
 static snddevice_t pcsound_devices[] = {
     SNDDEVICE_PCSPEAKER,
-    SNDDEVICE_SB,  /* Also claim SB so we're selected by default */
+    SNDDEVICE_SB,
 };
 
-/*
- * PC Speaker sound module definition
- */
+/* The sound module src/i_sound.c takes under FEATURE_SOUND. */
 sound_module_t DG_sound_module = {
     pcsound_devices,
     sizeof(pcsound_devices) / sizeof(*pcsound_devices),
@@ -696,27 +646,30 @@ sound_module_t DG_sound_module = {
 };
 
 /*
- * OPL Music module - uses Nuked-OPL3 for FM synthesis
+ * The music module, over the player of i_oplmusic.c. Each call does nothing
+ * unless PCSoundInit started the player.
  */
+
+/** Whether PCSoundInit started the player. */
 static boolean OPLMusicModuleInit(void)
 {
-    /* OPL is already initialized in PCSoundInit when real audio is available */
     return opl_music_initialized;
 }
 
+/** Does nothing: PCSoundShutdown stops the player. */
 static void OPLMusicModuleShutdown(void)
 {
-    /* OPL is shutdown in PCSoundShutdown */
 }
 
+/** Set the music's volume, `vol`, 0 to 127. */
 static void OPLMusicSetVolume(int vol)
 {
-    /* Doom volume is 0-127 */
     if (opl_music_initialized) {
         OPLMusic_SetVolume(vol);
     }
 }
 
+/** Pause the song. */
 static void OPLMusicPause(void)
 {
     if (opl_music_initialized) {
@@ -724,6 +677,7 @@ static void OPLMusicPause(void)
     }
 }
 
+/** Resume the song. */
 static void OPLMusicResume(void)
 {
     if (opl_music_initialized) {
@@ -731,6 +685,7 @@ static void OPLMusicResume(void)
     }
 }
 
+/** The handle of the song lump `data`, of `len` bytes, or NULL. */
 static void *OPLMusicRegister(void *data, int len)
 {
     if (!opl_music_initialized) {
@@ -739,6 +694,7 @@ static void *OPLMusicRegister(void *data, int len)
     return OPLMusic_RegisterSong(data, len);
 }
 
+/** Free the song `handle`. */
 static void OPLMusicUnregister(void *handle)
 {
     if (opl_music_initialized && handle) {
@@ -746,6 +702,7 @@ static void OPLMusicUnregister(void *handle)
     }
 }
 
+/** Play the song `handle`, from its start again at its end when `loop`. */
 static void OPLMusicPlay(void *handle, boolean loop)
 {
     if (opl_music_initialized && handle) {
@@ -753,6 +710,7 @@ static void OPLMusicPlay(void *handle, boolean loop)
     }
 }
 
+/** Stop the song. */
 static void OPLMusicStop(void)
 {
     if (opl_music_initialized) {
@@ -760,6 +718,7 @@ static void OPLMusicStop(void)
     }
 }
 
+/** Whether a song plays and is not paused. */
 static boolean OPLMusicIsPlaying(void)
 {
     if (opl_music_initialized) {
@@ -768,6 +727,7 @@ static boolean OPLMusicIsPlaying(void)
     return false;
 }
 
+/* The devices the music module serves. */
 static snddevice_t music_devices[] = { SNDDEVICE_SB, SNDDEVICE_ADLIB };
 
 music_module_t DG_music_module = {
@@ -783,5 +743,5 @@ music_module_t DG_music_module = {
     OPLMusicPlay,
     OPLMusicStop,
     OPLMusicIsPlaying,
-    NULL,  /* Poll - we generate samples in PCSoundUpdate instead */
+    NULL,  /* Poll: PCSoundUpdate runs the player */
 };

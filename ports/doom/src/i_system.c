@@ -55,7 +55,7 @@
 #include <CoreFoundation/CFUserNotification.h>
 #endif
 
-#define DEFAULT_RAM 16 /* MiB, as upstream; the platform may lower it */
+#define DEFAULT_RAM 16 /* MiB; doomgeneric has 6, Chocolate Doom 16 */
 #define MIN_RAM     6  /* MiB */
 
 /* The zone the platform asks for from what the machine has free, in MiB, or
