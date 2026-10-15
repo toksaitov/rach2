@@ -60,6 +60,8 @@
 # again, as `take` assigns before it reads the label, so that of a take and a
 # grouping that overlap, at least one sees the other and fails; when a member
 # was taken, `group` removes the labels and makes no group.
+# A failure removes the labels attempted by this call and closes any group
+# it created. If cleanup fails, stderr gives the steps left to do.
 #
 # `done` sets Done on every closed issue whose Status is not, and fails when
 # the listing of the board fails.
@@ -306,18 +308,30 @@ why()
         else empty end'
 }
 
-# ungroup N...: remove the label `grouped` from each N, or say that it could
-# not.
-ungroup()
+# group_rollback: undo an incomplete group, keeping its issue open when a
+# member's label could not be removed, and report any cleanup left to do.
+group_rollback()
 {
-    for n; do
-        gh issue edit "$n" --repo "$REPO" --remove-label grouped > /dev/null ||
-            echo "board: #$n: could not remove the label grouped; remove it by hand" >&2
+    [ "$group_done" = no ] || return 0
+    group_ref=${group_url:-group: $title}
+    clean=yes
+    for n in $group_members; do
+        if ! gh issue edit "$n" --repo "$REPO" --remove-label grouped > /dev/null; then
+            echo "board: $group_ref: could not remove grouped from #$n; remove it by hand" >&2
+            clean=no
+        fi
     done
+    [ -n "$group_url" ] || return 0
+    if [ "$clean" = yes ]; then
+        gh issue close "$group_url" --repo "$REPO" --reason 'not planned' > /dev/null ||
+            echo "board: $group_url: could not close the incomplete group; close it by hand" >&2
+    else
+        echo "board: $group_url: incomplete group kept open; remove its members' grouped labels and close it" >&2
+    fi
 }
 
 group()
-{
+(
     title=$1
     shift
     if [ $# -gt 8 ]; then
@@ -336,33 +350,37 @@ group()
         body="$body
 * #$n"
     done
-    marked=
+    group_url=
+    group_members=
+    group_done=no
+    group_status=0
+    trap 'group_status=$?; trap - EXIT; group_rollback; exit "$group_status"' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     for n; do
+        group_members="$group_members $n"
         if ! gh issue edit "$n" --repo "$REPO" --add-label grouped > /dev/null; then
-            # shellcheck disable=SC2086 # a list of issue numbers
-            ungroup $marked
             echo "board: #$n: cannot label it grouped" >&2
             exit 1
         fi
-        marked="$marked $n"
     done
     grouping=yes
     for n; do
         if ! reason=$(why "$n") || [ -n "$reason" ]; then
-            ungroup "$@"
             echo "board: #$n is ${reason:-unreadable} now, so no group was made" >&2
             exit 1
         fi
     done
-    if ! url=$(gh issue create --repo "$REPO" --title "group: $title" --label group --body "$body"); then
-        ungroup "$@"
+    if ! group_url=$(gh issue create --repo "$REPO" --title "group: $title" --label group --body "$body"); then
         echo "board: cannot create the group" >&2
         exit 1
     fi
-    gh project item-add "$BOARD" --owner "$OWNER" --url "$url" > /dev/null
-    set_status "${url##*/}" Ready
-    echo "${url##*/}"
-}
+    gh project item-add "$BOARD" --owner "$OWNER" --url "$group_url" > /dev/null
+    set_status "${group_url##*/}" Ready
+    group_done=yes
+    echo "${group_url##*/}"
+)
 
 done_()
 {

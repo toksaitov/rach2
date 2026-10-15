@@ -276,6 +276,13 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: ci reports and bisection" >&2
         fail=1
     fi
+    if sh tests/system/board_test.sh >"$VDIR/board.rlog" 2>&1; then
+        echo "hosttest: result: pass: board group creation and rollback"
+    else
+        cat "$VDIR/board.rlog"
+        echo "hosttest: result: fail: board group creation and rollback" >&2
+        fail=1
+    fi
     if sh tests/system/install_accounts_test.sh >"$VDIR/install_accounts.rlog" 2>&1; then
         echo "hosttest: result: pass: the installer's kept image accounts"
     else
