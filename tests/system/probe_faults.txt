@@ -369,12 +369,30 @@ file rach2/sys/syscall_proc.c
 expect MAPMUSL FAIL (madvise took a length that rounds up to 0 for an empty range
 old
     if ((addr & (PAGE_SIZE - 1)) != 0 || addr > USER_ADDR_MAX ||
-        SC_ARG(params, 1) > USER_ADDR_MAX - addr || advice == MADV_REMOVE ||
-        advice >= MADV_HWPOISON) {
+        SC_ARG(params, 1) > USER_ADDR_MAX - addr || !madvise_known(advice)) {
 new
     if ((addr & (PAGE_SIZE - 1)) != 0 || addr > USER_ADDR_MAX ||
-        PAGE_UP(SC_ARG(params, 1)) > USER_ADDR_MAX - addr || advice == MADV_REMOVE ||
-        advice >= MADV_HWPOISON) {
+        PAGE_UP(SC_ARG(params, 1)) > USER_ADDR_MAX - addr || !madvise_known(advice)) {
+end
+
+fault madvise-undefined-advice
+probe mapmusl
+file rach2/sys/syscall_proc.c
+expect MAPMUSL FAIL (madvise took an advice Linux does not define
+old
+    return advice <= MADV_DONTNEED || advice == MADV_FREE ||
+new
+    return advice < MADV_REMOVE ||
+end
+
+fault madvise-dontneed-locked-kept
+probe mapmusl
+file rach2/sys/syscall_proc.c
+expect MAPMUSL FAIL (MADV_DONTNEED_LOCKED
+old
+    if (advice == MADV_DONTNEED || advice == MADV_DONTNEED_LOCKED || advice == MADV_FREE) {
+new
+    if (advice == MADV_DONTNEED || advice == MADV_FREE) {
 end
 
 fault msync-length-rounded-first

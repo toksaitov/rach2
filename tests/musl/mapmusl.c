@@ -24,8 +24,10 @@
  * reads as zero. mremap fails with EINVAL for an old length that would wrap
  * past the end of memory, and leaves the mapping; a fixed mremap that shrinks
  * a mapping is held to RLIMIT_AS by what it leaves; madvise(MADV_DONTNEED)
- * gives a private anonymous mapping zero pages again, and madvise and msync
- * fail with EINVAL for a length that would round up to 0. A write through
+ * and madvise(MADV_DONTNEED_LOCKED) give a private anonymous mapping zero
+ * pages again, MADV_COLD keeps its bytes, an advice Linux does not define is
+ * EINVAL, and madvise and msync fail with EINVAL for a length that would round
+ * up to 0. A write through
  * /proc/self/mem to a read-only page a fork shared leaves the page read-only.
  * On an ext2 root, through a shared mapping of a file the parent sees a
  * child's store, read(2) sees a store, the mapping sees a write(2) without
@@ -68,6 +70,11 @@
     syscall(SYS_mmap, 0, len, prot, flags, fd, (unsigned long)(pgoff) * PAGE)
 #endif
 #define EXT2_MAGIC 0xEF53
+
+/* Linux's number, which musl's sys/mman.h does not define. */
+#ifndef MADV_DONTNEED_LOCKED
+#define MADV_DONTNEED_LOCKED 24
+#endif
 
 /** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
@@ -468,8 +475,8 @@ static int offsets(void)
 }
 
 /**
- * Check mremap's growth, move and shrink, its EINVAL for a length that wraps,
- * and madvise and msync. Returns 0, or 1 once the failure is reported.
+ * Check mremap's growth, move and shrink, and its EINVAL for a length that
+ * wraps. Returns 0, or 1 once the failure is reported.
  */
 static int remaps(void)
 {
@@ -511,8 +518,18 @@ static int remaps(void)
     }
     munmap(blocker, PAGE);
     munmap(moved, PAGE);
+    return 0;
+}
 
-    m = mmap(NULL, 2 * PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+/**
+ * Check madvise's advice over a private anonymous mapping, and madvise's and
+ * msync's EINVAL for a length that rounds up to 0. Returns 0, or 1 once the
+ * failure is reported.
+ */
+static int advice(void)
+{
+    char *m = mmap(NULL, 2 * PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
     if (m == MAP_FAILED) {
         return fail("mmap for madvise");
     }
@@ -520,6 +537,17 @@ static int remaps(void)
     m[PAGE] = 'z';
     if (madvise(m, PAGE, MADV_DONTNEED) != 0 || m[0] != 0 || m[PAGE] != 'z') {
         return fail("MADV_DONTNEED");
+    }
+    m[0] = 'z';
+    if (madvise(m, PAGE, MADV_COLD) != 0 || m[0] != 'z') {
+        return fail("MADV_COLD");
+    }
+    if (madvise(m, PAGE, MADV_DONTNEED_LOCKED) != 0 || m[0] != 0 || m[PAGE] != 'z') {
+        return fail("MADV_DONTNEED_LOCKED");
+    }
+    if (madvise(m, PAGE, 5) != -1 || errno != EINVAL || madvise(m, PAGE, 50) != -1 ||
+        errno != EINVAL) {
+        return fail("madvise took an advice Linux does not define");
     }
     if (madvise(m, (size_t)-1, MADV_DONTNEED) != -1 || errno != EINVAL) {
         return fail("madvise took a length that rounds up to 0 for an empty range");
@@ -739,7 +767,7 @@ static int root_shared(void)
 int main(void)
 {
     if (private_file() || shared() || root_shared() || truncated_shared() || truncated_wide() ||
-        huge_walks() || readonly_shared() || offsets() || remaps() || forced_write() ||
+        huge_walks() || readonly_shared() || offsets() || remaps() || advice() || forced_write() ||
         remap_limit()) {
         return 1;
     }

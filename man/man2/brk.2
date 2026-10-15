@@ -351,17 +351,25 @@ is not implemented.
 .Pp
 .Fn madvise ,
 kernel call 219, with
-.Dv MADV_DONTNEED
+.Dv MADV_DONTNEED ,
+.Dv MADV_DONTNEED_LOCKED
 or
 .Dv MADV_FREE
 lets the resident pages of the range go: a private anonymous page reads
 as zeros again, a private page of a file reads the file again, and a
 shared page reads what its shared memory holds.
-Other advice Linux has is accepted and changes nothing, but
-.Dv MADV_REMOVE
-and
-.Dv MADV_HWPOISON ,
-which are refused.
+Any other advice Linux defines from
+.Dv MADV_NORMAL
+(0) to
+.Dv MADV_COLLAPSE
+(25) is accepted and changes nothing, except
+.Dv MADV_REMOVE ,
+which is refused.
+So is every other number: Linux defines none from 5 to 7, and its
+advice from
+.Dv MADV_HWPOISON
+(100) up, which injects memory faults or installs guard pages, is not
+implemented.
 .Pp
 .Fn msync ,
 kernel call 144, writes back the pages of each shared mapping of a file on
@@ -527,9 +535,7 @@ rounded up to pages, a mapping of a file whose last page at the new
 length would not fit in 32 bits, or a new address that is not
 page-aligned, lies outside user space or overlaps the old range; for
 .Fn madvise ,
-.Dv MADV_REMOVE
-or
-.Dv MADV_HWPOISON ;
+an advice it does not accept, as above;
 for
 .Fn msync ,
 an unknown flag, or both

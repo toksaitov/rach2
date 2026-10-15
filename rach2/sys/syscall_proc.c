@@ -6185,22 +6185,37 @@ long sys_mremap(isr_params_t *params)
     return rc;
 }
 
-#define MADV_DONTNEED 4
-#define MADV_FREE     8
-#define MADV_REMOVE   9
-#define MADV_HWPOISON 100
+#define MADV_DONTNEED        4
+#define MADV_FREE            8
+#define MADV_REMOVE          9
+#define MADV_DONTFORK        10
+#define MADV_DONTNEED_LOCKED 24
+#define MADV_COLLAPSE        25
+
+/**
+ * Whether `sys_madvise` takes `advice`: one Linux defines from MADV_NORMAL (0)
+ * to MADV_COLLAPSE, except MADV_REMOVE, which would free the blocks of a file
+ * under a shared mapping and is not implemented. Linux leaves 5 to 7 undefined,
+ * and its advice from MADV_HWPOISON (100) up injects memory faults or installs
+ * guard pages, neither of which Rach2 has.
+ */
+static int madvise_known(uint32_t advice)
+{
+    return advice <= MADV_DONTNEED || advice == MADV_FREE ||
+           (advice >= MADV_DONTFORK && advice <= MADV_COLLAPSE);
+}
 
 /**
  * Advice about a range (madvise(2)). Its arguments are address, length and
- * advice. MADV_DONTNEED and MADV_FREE let the resident pages go: a private
- * anonymous page reads as zeros again, a private page of a file reads the file
- * again, and a shared page reads what the shared memory holds. Those two are
- * EINVAL over device memory, which has no pages to read again, as on Linux for
- * VM_PFNMAP, and so are MADV_REMOVE and every advice from MADV_HWPOISON up.
- * Any other advice is accepted and changes nothing. A range with a page in no
- * region is ENOMEM, as in Linux. A range that runs past user space is EINVAL,
- * judged by the length as given: a length within a page of 4 GiB rounds up to
- * 0, which would pass for an empty range.
+ * advice. MADV_DONTNEED, MADV_DONTNEED_LOCKED and MADV_FREE let the resident
+ * pages go: a private anonymous page reads as zeros again, a private page of a
+ * file reads the file again, and a shared page reads what the shared memory
+ * holds. Those three are EINVAL over device memory, which has no pages to read
+ * again, as on Linux for VM_PFNMAP. Any other advice `madvise_known` takes
+ * changes nothing, and the rest is EINVAL, as Linux refuses an advice it does
+ * not define. A range with a page in no region is ENOMEM, as in Linux. A range
+ * that runs past user space is EINVAL, judged by the length as given: a length
+ * within a page of 4 GiB rounds up to 0, which would pass for an empty range.
  */
 long sys_madvise(isr_params_t *params)
 {
@@ -6212,8 +6227,7 @@ long sys_madvise(isr_params_t *params)
         return -ESRCH;
     }
     if ((addr & (PAGE_SIZE - 1)) != 0 || addr > USER_ADDR_MAX ||
-        SC_ARG(params, 1) > USER_ADDR_MAX - addr || advice == MADV_REMOVE ||
-        advice >= MADV_HWPOISON) {
+        SC_ARG(params, 1) > USER_ADDR_MAX - addr || !madvise_known(advice)) {
         return -EINVAL;
     }
     len = PAGE_UP(SC_ARG(params, 1));
@@ -6223,7 +6237,7 @@ long sys_madvise(isr_params_t *params)
     if (vm_covered(&current_proc->mm->vm, addr, addr + len) != len) {
         return -ENOMEM;
     }
-    if (advice == MADV_DONTNEED || advice == MADV_FREE) {
+    if (advice == MADV_DONTNEED || advice == MADV_DONTNEED_LOCKED || advice == MADV_FREE) {
         uintptr_t at;
 
         for (at = addr; at < addr + len; at = vm_find(&current_proc->mm->vm, at)->end) {
