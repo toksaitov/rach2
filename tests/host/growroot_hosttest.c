@@ -1,12 +1,15 @@
 /**
- * Check the sector growroot validates and writes through its writer.
+ * growroot_hosttest.c: the table sector utils/growroot.c checks and writes
+ * to grow the root partition, its GUID table bound, and its measurements.
  *
  * host-deps: utils/gptdisk.c
  *
- * Device calls use memory; proc files use temporary host streams. The table
- * reread ioctl can stop after the write or publish the new size. Measured
- * runs fork real children; an exec substitute updates shared counters at
- * each simulated tool operation, independently of the measurement calls.
+ * The source is included with its system calls replaced. Device calls are
+ * answered from memory and the /proc files from temporary host streams. The
+ * table reread fails with EBUSY, stopping the run after the write, or
+ * succeeds and publishes the new size. A measured run forks real children,
+ * and the replacement `execve` changes counters shared with the parent for
+ * each tool it stands for, apart from the calls that measure them.
  */
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
@@ -22,11 +25,13 @@
 
 static unsigned char initial[512], current[512], written[512];
 static int read_fault, writer_reads, writes, rereads, failures, opens;
-static int complete;
+static int complete; /* nonzero: the reread succeeds and the run completes */
 static pid_t parent_pid;
+
+/* The machine's counters, in a mapping the forked children share. */
 static struct counters {
-    unsigned long long us, commands, flushes;
-    int tools, bad_args;
+    unsigned long long us, commands, flushes; /* the clock in microseconds */
+    int tools, bad_args;                      /* tools run; wrong arguments */
 } *meter;
 
 #define CHECK(condition, detail)                                  \
@@ -37,7 +42,10 @@ static struct counters {
         }                                                         \
     } while (0)
 
-/** Supply the inventory from before the writer opened the device. */
+/** Open `path` as a temporary stream holding the inventory from before the
+ *  writer opened the device: /proc/meminfo, or /proc/disk with the root's
+ *  length grown once a completed reread published it, and the disk
+ *  counters. Exits with status 2 when no stream can be made. */
 static FILE *fake_fopen(const char *path, const char *mode)
 {
     FILE *f = tmpfile();
@@ -62,7 +70,9 @@ static FILE *fake_fopen(const char *path, const char *mode)
     return f;
 }
 
-/** Distinguish the discovery descriptors from the writer's descriptor. */
+/** Open a device as a descriptor the replacements know: 10 for the disk
+ *  read during discovery, 12 for the disk opened to write, and 11 for the
+ *  root partition, read for its ext2 magic. Counts open descriptors. */
 static int fake_open(const char *path, int flags, ...)
 {
     opens++;
@@ -74,7 +84,10 @@ static int fake_open(const char *path, int flags, ...)
     return 11;
 }
 
-/** Fail the writer's first read, then make a retry succeed if one occurs. */
+/** Read one sector: a superblock with the ext2 magic from the partition,
+ *  `initial` for discovery and `current` for the writer. With `read_fault`
+ *  1 the writer's first read fails with EIO, and with 2 it is a byte short;
+ *  a later read succeeds. */
 static ssize_t fake_read(int fd, void *buffer, size_t size)
 {
     unsigned char *bytes = buffer;
@@ -101,7 +114,8 @@ static ssize_t fake_read(int fd, void *buffer, size_t size)
     return (ssize_t)size;
 }
 
-/** Capture the only device write, without opening a host device. */
+/** Keep the only device write in `written`, and charge it three commands,
+ *  a flush and 20 ms to the counters. */
 static ssize_t fake_write(int fd, const void *buffer, size_t size)
 {
     CHECK(fd == 12 && size == 512, "only a whole MBR sector is written");
@@ -121,7 +135,9 @@ static off_t fake_lseek(int fd, off_t offset, int whence)
     return offset;
 }
 
-/** Publish the larger partition, or simulate a busy disk for table cases. */
+/** The table reread, BLKRRPART (0x125F), charged two commands and 10 ms:
+ *  it publishes the larger partition when `complete` is set and fails with
+ *  EBUSY otherwise. */
 static int fake_ioctl(int fd, unsigned long request, ...)
 {
     CHECK(fd == 12 && request == 0x125Fu, "the kernel is asked to reread the table");
@@ -143,7 +159,8 @@ static int fake_close(int fd)
     return 0;
 }
 
-/** Time advances only when a simulated operation does work. */
+/** The monotonic clock, from `meter->us`, which advances only when a model
+ *  operation does work. */
 static int fake_clock_gettime(clockid_t id, struct timespec *t)
 {
     CHECK(id == CLOCK_MONOTONIC, "measurement uses the monotonic clock");
@@ -152,7 +169,14 @@ static int fake_clock_gettime(clockid_t id, struct timespec *t)
     return 0;
 }
 
-/** Real children simulate each tool; waitpid must collect their updates. */
+/**
+ * Stand for a tool in a forked child: the first two calls must run
+ * `e2fsck -fn` and then `e2fsck -fp` on the root, the third `resize2fs`.
+ * Each charges its own commands, flushes and time to the shared counters
+ * and exits 0; a call with other arguments, or from the parent, is counted
+ * in `bad_args` and exits 125. The parent sees the counts only through the
+ * shared mapping, once `waitpid` has collected the child.
+ */
 static int fake_execve(const char *path, char *const args[], char *const env[])
 {
     int n = meter->tools;
@@ -200,7 +224,8 @@ static int fake_execve(const char *path, char *const args[], char *const env[])
 #undef execve
 #undef clock_gettime
 
-/** Write the fixture's little-endian fields independently of growroot. */
+/** Store `value` little-endian in the four bytes at `p`, written apart from
+ *  growroot's own code. */
 static void put32(unsigned char *p, unsigned long value)
 {
     int i;
@@ -210,7 +235,8 @@ static void put32(unsigned char *p, unsigned long value)
     }
 }
 
-/** Reset discovery and device state for an 8 MiB partition on 64 MiB. */
+/** Reset discovery and device state for an MBR disk of 64 MiB with an 8 MiB
+ *  Linux partition at sector 2048, and the counters to their start. */
 static void fixture(void)
 {
     memset(initial, 0, sizeof(initial));
@@ -234,7 +260,8 @@ static void fixture(void)
     memset(disk_table, 0, sizeof(disk_table));
 }
 
-/** Run the real decision and require every descriptor to be released. */
+/** Run growroot on the root by MBR id, require it to stop with status 1, at
+ *  the failed reread or at a check, and require every descriptor closed. */
 static void invoke(void)
 {
     char *args[] = {"growroot", "MBRID=1,1", NULL};
@@ -243,14 +270,19 @@ static void invoke(void)
     CHECK(opens == 0, "all device descriptors close");
 }
 
-/** A changed table must not reach either the write or the table reread. */
+/** Run growroot and require that it neither wrote nor asked for a reread;
+ *  `detail` names the row. */
 static void refused(const char *detail)
 {
     invoke();
     CHECK(writes == 0 && rereads == 0, detail);
 }
 
-/** Compare every reported edge with work done outside measured(). */
+/** Run growroot with `--measure` to completion, its standard output
+ *  captured, and compare each of the eight measurement lines, before and
+ *  after each of four phases, with the counters the model operations
+ *  changed apart from growroot's `measured`. Exits with status 2 when the
+ *  output cannot be captured. */
 static void measured_run(void)
 {
     static const unsigned long long times[] = {1000000, 1030000, 1030000, 1070000,
@@ -303,7 +335,8 @@ static void measured_run(void)
     fclose(output);
 }
 
-/** Put entry `n` of `t` over sectors `first` to `last`, used, or clear it. */
+/** Put entry `n` of `t` over sectors `first` to `last`, used, or clear it
+ *  when `last` is below `first`. */
 static void gpt_entry(struct gptdisk *t, int n, unsigned long long first, unsigned long long last)
 {
     unsigned char *e = gptdisk_entry(t, n);
@@ -344,7 +377,15 @@ static void gpt_bounds(void)
           "with none after it, the growth reaches the backup array");
 }
 
-/** Cover successful publication, read failures and each checked table field. */
+/**
+ * Run the rows: a valid table written once, from the sector the writer
+ * checked, with only the root's length and ending CHS bytes changed; a
+ * failed or short writer read; and a changed disk id, signature, partition
+ * type, start or length, or a new or extended partition in the space to
+ * grow into, each of which stops the run before the write. Then the rows of
+ * `measured_run` and `gpt_bounds`. Returns 0 when every check passed, 1 when
+ * one failed, and 2 when the shared counters cannot be made.
+ */
 int main(void)
 {
     unsigned char expected[512];
