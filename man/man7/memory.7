@@ -30,7 +30,7 @@ there.
 Virtual memory areas (VMAs) describe the program, the heap and mappings.
 Brk grows or shrinks one heap range.
 Growth reserves addresses only; pages are allocated on first access.
-Mmap2 creates mappings and munmap removes them.
+Mmap2 on i686 and mmap on x86-64 create mappings, and munmap removes them.
 .Pp
 A fault on the page just below the stack region, at or above the limit
 set when the stack was created, grows the stack.

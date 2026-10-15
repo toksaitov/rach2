@@ -11,7 +11,7 @@ Each has an enforced soft value and a hard value that bounds the soft value.
 maintains them;
 .Fn getrlimit ,
 .Fn setrlimit
-and the kernel call
+and, on i686, the kernel call
 .Xr ugetrlimit 2
 use the same table.
 Fork inherits both values and exec preserves them, except that an exec
@@ -51,6 +51,17 @@ The bytes of the stack an exec gives a program, 8 MiB soft by default.
 The bytes of a core file, 0 soft by default, which leaves none, as
 .Xr core 5
 describes.
+.It Dv RLIMIT_FSIZE
+The bytes a file the process writes may reach, no limit by default.
+A write that would pass the soft limit writes the bytes below it, and one
+that starts at the limit fails.
+That write, a truncation past the limit and an
+.Xr fallocate 2
+that would grow the file past it fail with
+.Er EFBIG
+and send
+.Dv SIGXFSZ
+to the calling thread.
 .El
 .Ss Initial limits
 Init reads

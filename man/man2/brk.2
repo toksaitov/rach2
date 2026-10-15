@@ -58,6 +58,8 @@ An unresolved user-mode fault terminates the process with
 .Pp
 The call numbers and registers given below are i386's.
 On x86-64 the calls have Linux's numbers for that architecture,
+.Fn mmap
+9,
 .Fn mprotect
 10,
 .Fn munmap
@@ -72,10 +74,16 @@ On x86-64 the calls have Linux's numbers for that architecture,
 27,
 .Fn madvise
 28,
+.Fn mlock
+149,
+.Fn munlock
+150,
 .Fn mlockall
-151 and
+151,
 .Fn munlockall
-152, and take their arguments in RDI, RSI, RDX, R10, R8 and R9.
+152 and
+.Fn mlock2
+325, and take their arguments in RDI, RSI, RDX, R10, R8 and R9.
 .Ss Program break
 The raw
 .Fn brk
@@ -250,7 +258,9 @@ whose range is free and ends below the stack's growth limit is used as
 it is, and without such a hint the kernel takes the highest free range
 below
 .Ql 0xB0000000
-and above the heap's top, so the ranges
+on i686 or
+.Ql 0x00007F0000000000
+on x86-64 and above the heap's top, so the ranges
 .Fn munmap
 frees are used again.
 .Pp
@@ -278,8 +288,11 @@ kernel call 91, removes the range beginning at the page-aligned
 .Fa addr .
 .Fa length
 must be nonzero; the end is rounded up to a page boundary.
-The range must not wrap or extend beyond
-.Ql 0xC0000000 .
+The range must not wrap or extend beyond the top of user space,
+.Ql 0xC0000000
+on i686 and
+.Ql 0x00007FFFFFFFF000
+on x86-64.
 The call removes, trims or splits overlapping VMAs and frees their
 resident frames in the range.
 Unmapped pages and pages never accessed require no frame release.
@@ -365,9 +378,8 @@ It checks its arguments and the range first.
 .Pp
 Both calls take a page-aligned address and judge the length as it is
 given, before rounding it up to a page boundary: a range that runs past
-.Ql 0xC0000000
-is refused, a length within a page of 4 GiB among them, which rounds up
-to 0.
+the top of user space is refused, a length that would round up to 0 among
+them.
 .Ss Locking and residency
 There is no swap, so every page a process has stays in memory.
 .Fn mlock ,
