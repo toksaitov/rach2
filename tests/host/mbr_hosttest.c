@@ -170,7 +170,7 @@ int main(void)
 
         t[2].start_lba = 200000;
         CHECKN(mbr_bootpart_ok(t, 1290240) == 0,
-               "a third partition overlapping the root is not entry 0's business");
+               "a third partition over the root does not fail the check of entry 0");
         t[2].start_lba = 2048 + 131071;
         CHECKN(mbr_bootpart_ok(t, 1290240) == -1,
                "a third partition overlapping entry 0 disqualifies it");

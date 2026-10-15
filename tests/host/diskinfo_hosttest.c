@@ -253,7 +253,7 @@ int main(void)
 
     put_field(id, 27, 40, "0123456789012345678901234567890123456789");
     diskinfo_ata_string(out, 40, id, 27);
-    CHECK(strlen(out) == 40, "a field that fills its width is terminated by us, not by the device");
+    CHECK(strlen(out) == 40, "a field that fills its width is terminated by diskinfo_ata_string");
     CHECK(out[39] == '9' && out[40] == '\0', "and its last character survives");
 
     for (i = 0; i < 20; i++) {
