@@ -1,8 +1,14 @@
 #!/bin/sh
-# Prove syscall stepping and x86-64 debug entry with one small guest image.
-# QEMU TCG does not defer a MOV SS watchpoint through the next instruction.
-# For the entry proof, inject int $1 before syscall_entry changes GS or RSP;
-# this exercises that entry state without depending on the emulator's delay.
+# ptrace_debug_mutate.sh [--texts]: show that ptracemusl's rows catch faults
+# in system-call stepping, in the delivery of debug exceptions and in the
+# x86-64 debug entry, with one small guest image for the architecture ARCH
+# names.
+#
+# The step row must catch PT_STEP taken out of the test at a system call's
+# exit. QEMU TCG does not defer a MOV SS watchpoint through the next
+# instruction, so for the entry row `int $1` is put before syscall_entry
+# changes GS or RSP, which reaches that entry state without depending on the
+# emulator's delay.
 # The fixed entry must preserve a syscall on an invalid user stack. Removing
 # its interrupt stack must end in a double fault. Choosing GS by the saved CS
 # must reset the machine, a triple fault, before any handler prints. On
@@ -15,12 +21,13 @@
 # The original kernel is restored, rebuilt and required to match and pass at
 # the end. The script holds the tree through runlock.sh, as tests/run does,
 # so no suite builds or boots the tree and no other proof saves a source
-# while a fault is in it.
+# while a fault is in it. --texts checks that each fault is once in its
+# source.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FAULT: put FAULT into its source; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -95,6 +102,7 @@ child=
 changed=
 kvm=
 
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -107,6 +115,7 @@ stop_child()
     fi
 }
 
+# Put back the saved copies of the five sources and touch them.
 restore()
 {
     for file in $sources; do
@@ -115,11 +124,13 @@ restore()
     done
 }
 
+# Make the kernel again.
 rebuild()
 {
     make -s ARCH="$RACH2_ARCH" rach2
 }
 
+# Stop the boot and, when a fault is in the source, restore it and rebuild.
 cleanup()
 {
     stop_child
@@ -133,12 +144,17 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# mutate FAULT: mark the sources changed and put FAULT in.
 mutate()
 {
     changed=1
     apply_fault "$1"
 }
 
+# run_phase PHASE ROW EXPECTED [DETAIL]: build the kernel and run ptracemusl's
+# ROW, under KVM when `kvm` is set. With EXPECTED `pass` it must pass, and
+# under KVM the watchpoint must have been delayed; otherwise it must fail and
+# print DETAIL.
 run_phase()
 {
     phase=$1

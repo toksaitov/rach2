@@ -1,15 +1,15 @@
 #!/bin/sh
-# Prove six rows that earlier milestones added with no recorded run against
-# the fault they catch. Each fault is put back alone into the main tree, the
-# product it lives in is rebuilt by the row's own target, and the row that
-# catches it must fail with its own words:
+# rows_mutate.sh [--texts]: show that six rows catch the faults they were
+# written for. Each fault is put alone into the main tree, the product it
+# lives in is rebuilt by the row's own target, and the row that catches it
+# must fail with its own words:
 #
-#   entry 113  the runner's product check, by the runner's self-test
-#   entry 120  a table entry numbered as a disk node, by devprobe
-#   entry 121  a one-shot handler entered at zero, by sigprobe
-#   entry 138  two proc files with one inode, by procprobe
-#   entry 109  the sealed root without update, by the sealed suite
-#   entry 175  an arping that fails, by the dhcp suite's status step
+#   runner     the runner's product check, by the runner's self-test
+#   devprobe   a table entry numbered as a disk node, by devprobe
+#   sigprobe   a one-shot handler entered at zero, by sigprobe
+#   procprobe  two proc files with one inode, by procprobe
+#   sealed     the sealed root without update, by the sealed suite
+#   arping     an arping that fails, by the dhcp suite's status step
 #
 # The changed source is restored and touched after each fault, and the trap
 # restores it and rebuilds the kernel if the run is stopped, after the row's
@@ -20,11 +20,12 @@
 # kernel, the image and the rows are those of the architecture ARCH names.
 #
 # Usage: sh tests/system/rows_mutate.sh [--texts]
+# --texts checks that each fault is once in its source.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault NAME: put NAME's fault into its source; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -96,6 +97,7 @@ cc -O2 -Wall -Wextra -Werror tests/system/runner/runutil.c -o "$work/runutil"
 child=
 changed=
 
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -108,6 +110,7 @@ stop_child()
     fi
 }
 
+# Put back the saved copy of the changed source and touch it.
 restore()
 {
     if [ -n "$changed" ]; then
@@ -117,6 +120,7 @@ restore()
     fi
 }
 
+# Stop the row and, when a fault is in a source, restore it and rebuild.
 cleanup()
 {
     stop_child
@@ -130,6 +134,8 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# mutate NAME: put NAME's fault into its source, named in `changed`, and
+# touch it.
 mutate()
 {
     case $1 in
@@ -144,8 +150,9 @@ mutate()
     touch "$changed"
 }
 
-# Run a row's command in a process group of its own; its output is kept in
-# $work/NAME.log and printed, and its status is in $status.
+# run_row NAME COMMAND...: run a row's command in a process group of its own;
+# its output is kept in $work/NAME.log and printed, and its status is in
+# $status.
 run_row()
 {
     name=$1
@@ -158,14 +165,15 @@ run_row()
     cat "$work/$name.log"
 }
 
-# True when the row just run failed and its log says why: a non-zero status
-# and a line matching the pattern.
+# failed_with PATTERN LOG: true when the row just run failed and LOG says why,
+# a status other than zero and a line matching PATTERN.
 failed_with()
 {
     [ "$status" -ne 0 ] && grep -Eq -- "$1" "$2"
 }
 
-# One boot of the default suite on the rebuilt kernel. The runner's line for
+# probe_phase NAME RESULT WORDS: one boot of the default suite on the rebuilt
+# kernel. The runner's line for
 # the named probe must end as the second argument says, and this boot's guest
 # log must hold the third: the words the probe prints only when its row
 # fails, or, for a probe the fault kills before the row can report, the
@@ -203,7 +211,7 @@ restore
 # The devprobe fault numbers a table entry as a disk node, in entry_index
 # alone. Without the check in disk_node_of itself, each open of a table
 # device would also add one to a word of kernel memory through the misread
-# node's disk field (entry 207), and the probe could fail on that and not on
+# node's disk field, and the probe could fail on that and not on
 # its row. The sigprobe fault makes the first one-shot delivery jump to
 # address zero, so the probe dies before its row reports.
 probe_phase devprobe 'status=[0-9]+' 'fstat and the /dev listing give /dev/null one inode'

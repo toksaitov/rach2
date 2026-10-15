@@ -1,6 +1,9 @@
 #!/bin/sh
-# Run entry 51's probes with the same fixtures on either root type.
-# Usage: probe_roots.sh KERNEL OUTPUT_PREFIX krffs|ext2 [PROBE...]
+# probe_roots.sh KERNEL OUTPUT_PREFIX krffs|ext2 [PROBE...]: boot KERNEL on a
+# krffs or an ext2 root made from the test manifest, and run each PROBE as
+# init from the debug shell. The default is the ten probes tests/Readme.md
+# lists for an installed root. Each probe staged must be the built one, and
+# each must exit with status 0.
 set -eu
 
 # The build tree of the architecture tests/system/suites.mk names.
@@ -17,6 +20,7 @@ shift 3
 mkdir -p "$(dirname "$prefix")"
 child=
 
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then

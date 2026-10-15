@@ -1,14 +1,21 @@
 #!/bin/sh
-# Prove sigmusl catches a signal frame whose ucontext lacks the saved registers.
-# The fault and the paths are i686's, whatever ARCH the run that starts it is
-# for, in the environment or in the make flags tests/run gives it.
+# sigcontext_mutate.sh [--texts]: show that sigmusl catches a signal frame
+# whose ucontext lacks the saved registers.
+#
+# The fault takes the call of fill_sigcontext out of the i686 sigframe.c, and
+# sigmusl must then fail with the ucontext's cs, esp and fpregs zero, both
+# with FXSR and with rach2.nofxsr; the kernel must differ from the first. The
+# unmodified and restored kernels must pass both, and the restored kernel
+# must match the first. The fault and the paths are i686's, whatever ARCH the
+# run that starts it is for, in the environment or in the make flags
+# tests/run gives it. --texts checks that the fault is once in its source.
 set -eu
 unset ARCH MAKEFLAGS MFLAGS
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault SOURCE: put the fault into SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -46,6 +53,7 @@ cp "$source" "$work/source.saved"
 child=
 changed=
 
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -58,12 +66,14 @@ stop_child()
     fi
 }
 
+# Remove sigframe.c's object and the kernel, and make the kernel again.
 rebuild()
 {
     rm -f build/rach2/sys/arch/i686/sigframe.o build/rach2/kernel
     make -s -C rach2
 }
 
+# Put back the saved sigframe.c, touch it, and mark the source unchanged.
 restore()
 {
     cp "$work/source.saved" "$source"
@@ -71,6 +81,7 @@ restore()
     changed=
 }
 
+# Stop the boot and, when a fault is in the source, restore it and rebuild.
 cleanup()
 {
     stop_child
@@ -84,6 +95,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE EXPECTED: build the kernel and run sigmusl on it with FXSR
+# and with rach2.nofxsr. With EXPECTED `pass` both must pass; otherwise both
+# must fail with the ucontext's registers zero.
 run_phase()
 {
     phase=$1

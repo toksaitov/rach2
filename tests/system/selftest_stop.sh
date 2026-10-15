@@ -1,8 +1,22 @@
 #!/bin/sh
-# Check stop-on-failure from suite events; --mutate proves the checks.
-# FIFOs make the failure wait for slow1 to start and make slow1 wait for
-# slow2. A correct stop leaves slow1 unfinished and slow2 unstarted.
-# Every run compiles its helper; only the unused socket preflight is replaced.
+# selftest_stop.sh [--mutate | --texts]: check, from the events its suites
+# record, that `tests/run` with RACH2_STOP_ON_FAIL stops a set at its first
+# failure.
+#
+# A private tree has a registry of three suites, failing, slow1 and slow2,
+# run two at a time. FIFOs order them: failing waits until slow1 has started,
+# and slow1 waits until slow2 has started. A correct stop fails the set,
+# stops slow1 before its end and names it, and never starts slow2, which it
+# names as not started. tests/run compiles runutil into the tree on every
+# run; the socket preflight, which the suites do not need, is replaced with a
+# program that does nothing.
+#
+# With --mutate two faults are put into the private copies in turn: `status`
+# makes runutil report a status of 0 for any program that exits, and
+# `continue` takes `stopped=1` out of tests/run. Each must fail the checks
+# that slow2 never started and that slow1 did not reach its end, and the
+# restored copies must pass with the helper of the first run. --texts checks
+# that each fault is once in its source.
 set -eu
 
 case ${1:-} in
@@ -43,6 +57,7 @@ cp "$repo/tests/system/runner/runutil.c" "$work/runutil.saved"
 cp "$repo/tests/run" "$work/run.saved"
 cp "$repo/tests/system/runlock.sh" "$repo/tests/system/runlock_exec.sh" "$tree/tests/system/"
 
+# Put the saved runutil.c and tests/run into the private tree and touch them.
 restore()
 {
     cp "$work/runutil.saved" "$source"
@@ -50,6 +65,7 @@ restore()
     touch "$source" "$tree/tests/run"
 }
 
+# Stop the private runner and restore the private tree.
 # shellcheck disable=SC2329
 cleanup()
 {
@@ -80,6 +96,8 @@ run-slow2:
 MK
 echo "selftest-stop: artifacts: $work"
 
+# check NAME EXPECTED ACTUAL: count one check, and report it failed when
+# ACTUAL is not EXPECTED.
 check()
 {
     total=$((total + 1))
@@ -91,6 +109,9 @@ check()
     fi
 }
 
+# check_case PHASE: run the three suites in the private tree, keep the
+# helper and the events, and make every check of a correct stop. Return 1
+# when a check fails, and 125 when the case could not be run.
 check_case()
 {
     phase=$1

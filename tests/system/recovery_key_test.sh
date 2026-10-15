@@ -1,5 +1,16 @@
 #!/bin/sh
-# Check recovery credentials in a KRFFS image without a guest or real keys.
+# recovery_key_test.sh [--mutate | --texts]: check `make recovery-key`, the
+# root Makefile's recipe that composes the recovery system's authorized keys,
+# and the KRFFS image that stages them, with no guest and no real keys.
+#
+# The recipe must keep the default key and a key file a person put in its
+# place, add the keys of RECOVERY_EXTRA_KEYS so that the image trusts both
+# the builder's key and the operator's, leave an unchanged file alone on a
+# second run, and refuse a private key, a missing, an empty, a malformed or
+# a mixed extra file without changing the keys. --mutate drops the extra key
+# in gen_recovery_key.sh, then compiles a stager that keeps only the first
+# line of authorized_keys; each must fail, and the restored sources must make
+# the same image. --texts checks that each fault is once in its source.
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 if [ "${1:-}" != --texts ]; then
@@ -35,7 +46,7 @@ cp "$REPO/krffs/stageimage.krffs.c" "$WORK/stageimage.krffs.c"
 cp "$WORK/krffs/gen_recovery_key.sh" "$WORK/key.source"
 cp "$WORK/stageimage.krffs.c" "$WORK/stager.source"
 
-# /** Restore the private sources after each synchronous command has exited. */
+# Put back the private sources and touch them.
 restore() {
     cp "$WORK/key.source" "$WORK/krffs/gen_recovery_key.sh"
     cp "$WORK/stager.source" "$WORK/stageimage.krffs.c"
@@ -45,7 +56,7 @@ trap restore 0
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
-# /** Report the failed assertion and retain its artifacts. */
+# Report $* with the logs' directory and exit 1.
 fail() {
     echo "recovery-key-test: failed: $*; logs: $WORK" >&2
     exit 1
@@ -80,9 +91,7 @@ for tool in mkfs readfile; do
         $extra > "$tool.build.log" 2>&1
 done
 
-# /**
-#  * Compile the stager from the private source without an incremental cache.
-#  */
+# Compile the stager whole from its private source.
 build_stager() {
     "${CC:-cc}" -O2 -Wall -Wextra -Werror -std=gnu99 -D_FILE_OFFSET_BITS=64 \
         -I "$REPO/krffs" -o bin/stageimage.krffs stageimage.krffs.c \
@@ -91,9 +100,9 @@ build_stager() {
         "$REPO/krffs/krffs_allocator.c"
 }
 
-# /**
-#  * Build an image through the production recipe and compare both identities.
-#  */
+# check_pair PHASE: compose the keys with the operator's through the recipe,
+# stage them into PHASE.krffs through the manifest's directive, and require
+# the image to trust both keys.
 check_pair() {
     phase=$1
     make recovery-key "RECOVERY_EXTRA_KEYS=$WORK/operator.pub" || return 1

@@ -87,6 +87,7 @@ EOF
 chmod 0755 "$work/overlay.sh"
 
 failures=0
+# fail ROW: report that ROW failed and count it.
 fail() {
     echo "mkext2-overlay-test: failed: $1"
     failures=$((failures + 1))
@@ -140,6 +141,7 @@ made() {
     return 1
 }
 
+# Run every row on the copy of mkext2.sh.
 rows() {
     : > "$work/outside"
     chmod 0666 "$work/outside"

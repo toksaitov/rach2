@@ -1,13 +1,22 @@
 #!/bin/sh
-# Compile private kernels and judge the scale from QEMU's PCM recording, made
-# under an instruction clock, as the audio suite's row is, so that the notes'
-# lengths do not depend on the host. The kernels and the emulator are those
-# of the architecture ARCH names.
+# sb16_mutate.sh [--texts]: show that judging the scale from QEMU's PCM
+# recording, as the audio suite's row does, catches two compiled faults in the
+# Sound Blaster 16 code, with kernels built from a private copy for the
+# architecture ARCH names and run on its emulator.
+#
+# The recording is made under an instruction clock, so that the notes'
+# lengths do not depend on the host. `rate` takes the SB16's 44100 Hz rate
+# out of audio_debug.c, so `audio test scale` must fail to start the audio;
+# `refill` makes sb16.c fill its buffer from the ring and never from the
+# callback, so wavcheck must find the notes wrong. For each fault the kernel
+# is built and run as it is, with the fault, and restored, and the restored
+# kernel must match the first. --texts checks that each fault is once in its
+# source.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault SOURCE FAULT: put FAULT into SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -67,6 +76,7 @@ build/tools/inspect/elfcheck:
 MAKE
 source=
 child=
+# Stop the running boot, and put back the saved source when a fault is in it.
 restore()
 {
     if [ -n "$child" ]; then
@@ -84,6 +94,10 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE: build the private kernel and run `audio test scale 2000`
+# on it, with the SB16's output recorded to a WAV file. With the `rate` fault
+# in, the audio must fail to start; otherwise the boot must pass, and
+# wavcheck must fail on the recording of a fault and pass on the others.
 run_phase()
 {
     phase=$1

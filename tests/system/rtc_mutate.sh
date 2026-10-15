@@ -1,15 +1,20 @@
 #!/bin/sh
+# rtc_mutate.sh [--host | --guest] | --texts: show that the host test of the
+# clock, and with --guest the STATTIME row of stattest, catch a fault in
+# rach2/sys/clock.c.
+#
 # Usage: sh tests/system/rtc_mutate.sh [--host|--guest] | --texts
 # The fault takes the PIT's position out of the time between ticks, in
 # rach2/sys/clock.c: the host proof compiles rtc_hosttest.c with a private
 # copy of it, as tests/run host compiles the test, and the guest proof runs
 # STATTIME on the KRFFS test root in all three phases, on the kernel, image
-# and emulator of the architecture ARCH names.
+# and emulator of the architecture ARCH names. --host is the default. --texts
+# checks that the fault is once in its source.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault SOURCE: put the fault into SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -60,6 +65,7 @@ cp "$work/source.saved" "$source"
 child=
 changed=
 
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -72,6 +78,7 @@ stop_child()
     fi
 }
 
+# Put back the saved clock.c and touch it.
 restore()
 {
     cp "$work/source.saved" "$source"
@@ -79,6 +86,8 @@ restore()
     changed=
 }
 
+# Stop the boot and, when the fault is in the source, restore it, and with
+# --guest rebuild the kernel.
 cleanup()
 {
     stop_child
@@ -94,6 +103,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE EXPECTED: compile and run the host test, and with --guest
+# build the kernel and run stattest on the KRFFS root. With EXPECTED `pass`
+# both must pass; otherwise both must fail.
 run_phase()
 {
     phase=$1

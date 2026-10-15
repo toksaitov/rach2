@@ -1,5 +1,16 @@
 #!/bin/sh
-# Check group setup with the actual helper; --mutate proves the error check.
+# runutil_group.sh [--mutate | --texts]: check how runutil's supervisor
+# treats a failed setpgid, with fixtures/runutil_group.c, which compiles
+# runutil.c with setpgid replaced.
+#
+# A command must run in its own group and exit 23 when the parent already
+# put it in one (`assigned`), when its own call succeeds (`child`), and when
+# it leads a session of its own (`session`); when neither call gives it a
+# group (`denied`), runutil must report setpgid's failure and exit 2.
+# --mutate makes runutil fail every failed setpgid, even with the command
+# already in its own group, which must fail the assigned and session cases;
+# the cases must pass again with the source restored. --texts checks that
+# the group check is once in runutil.c.
 set -eu
 
 case ${1:-} in
@@ -25,7 +36,7 @@ fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-runutil-group.XXXXXX")
 child=0
 
-# Stop the current case before restoring the private source used to build it.
+# Stop the current case, then put back the private runutil.c.
 # shellcheck disable=SC2329
 cleanup()
 {
@@ -46,12 +57,15 @@ cp "$repo/tests/system/runner/runutil.c" "$work/runutil.saved"
 cp "$work/runutil.saved" "$work/runutil.c"
 echo "runutil-group: artifacts: $work"
 
+# build NAME: compile the fixture against the private runutil.c as NAME.
 build()
 {
     cc -O2 -Wall -Wextra -Werror -I "$work" \
         "$repo/tests/system/fixtures/runutil_group.c" -o "$work/$1"
 }
 
+# run_case PHASE NAME STATUS: run the case NAME of the build PHASE, which must
+# exit with STATUS and print what that status means.
 run_case()
 {
     phase=$1
@@ -75,6 +89,8 @@ run_case()
     fi
 }
 
+# check_cases PHASE: run the four cases of the build PHASE; status 1 when any
+# failed.
 check_cases()
 {
     result=0

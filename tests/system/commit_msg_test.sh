@@ -97,8 +97,8 @@ if [ "$mutate" -eq 0 ]; then
 fi
 
 # fault NAME ROWS SCRIPT: edit the copy with the sed SCRIPT and require
-# exactly ROWS to fail. A SCRIPT that changes nothing no longer applies to the
-# hook.
+# exactly ROWS to fail. A SCRIPT that changes nothing, since its text is not in
+# the hook, fails.
 fault() {
     sed "$3" "$hook.orig" >"$hook" && chmod 755 "$hook" || return 1
     if cmp -s "$hook" "$hook.orig"; then

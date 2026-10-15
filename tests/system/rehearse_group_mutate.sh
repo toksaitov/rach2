@@ -1,5 +1,7 @@
 #!/bin/sh
-# Prove the rehearsal's first ext2 group (entry 91 of the shortcomings plan).
+# rehearse_group_mutate.sh [ROOT DISK] | --texts: show that the installer
+# rehearsal requires its root's first ext2 group to be whole.
+#
 # The installer root the rehearsal saves from is built with 16384-block
 # groups, so its 64 MiB are one whole group, which growset requires. With the
 # recipe's group size set to mke2fs's default of 32768 blocks, the first group
@@ -16,13 +18,14 @@
 # Usage: sh tests/system/rehearse_group_mutate.sh [ROOT DISK] | --texts
 # ROOT and DISK name the installer root and disk the rehearsal ran, by
 # default installer-root.ext2 and installer-test.disk under the images of
-# the architecture ARCH names, build/images or build/x86_64/images.
+# the architecture ARCH names, build/images or build/x86_64/images. --texts
+# checks that the fault is once in suites.mk.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault SOURCE: give the recipe in SOURCE mke2fs's default group size;
+# with RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
     python3 - "$1" <<'PY'
@@ -74,6 +77,7 @@ cp tests/system/suites.mk "$work/suites.mk.saved"
 cp "$work/suites.mk.saved" "$work/suites.mk"
 child=
 
+# Stop the running suite and wait for it.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -83,6 +87,7 @@ stop_child()
     fi
 }
 
+# Stop the suite and put back the private suites.mk.
 cleanup()
 {
     stop_child
@@ -123,6 +128,7 @@ save_set()
     "$growset" --lba "$root_start" "$1" $((524288 - 33 - root_start)) >"$2" 2>&1
 }
 
+# build_root PHASE: build the root from the private recipe as PHASE.ext2.
 build_root()
 {
     phase=$1

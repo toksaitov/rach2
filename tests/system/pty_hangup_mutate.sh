@@ -1,11 +1,18 @@
 #!/bin/sh
-# Prove that master closure releases both blocked canonical slave readers, on
-# the kernel, probe and emulator of the architecture ARCH names.
+# pty_hangup_mutate.sh [--texts]: show that ptyprobe catches a kernel in
+# which closing a pseudo-terminal's master leaves the slave's blocked
+# canonical readers asleep, on the kernel, probe and emulator of the
+# architecture ARCH names.
+#
+# The fault takes the closed master out of the slave's wait predicate in
+# rach2/sys/tty/pty.c, and ptyprobe must fail its hangup row; the restored
+# kernel must match the first build and pass. --texts checks that the fault
+# is once in its source.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault SOURCE: put the fault into SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -51,6 +58,7 @@ cp "$source" "$work/pty.saved"
 child=
 changed=
 
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -63,12 +71,14 @@ stop_child()
     fi
 }
 
+# Remove pty.c's object and the kernel, and make the kernel again.
 rebuild()
 {
     rm -f "$tree"/rach2/sys/tty/pty.o "$tree"/rach2/kernel
     make -s rach2 "ARCH=$RACH2_ARCH"
 }
 
+# Put back the saved pty.c and touch it.
 restore()
 {
     cp "$work/pty.saved" "$source"
@@ -76,6 +86,7 @@ restore()
     changed=
 }
 
+# Stop the boot and, when a fault is in the source, restore it and rebuild.
 cleanup()
 {
     stop_child
@@ -89,6 +100,8 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_probe EXPECTED: boot the kernel and run ptyprobe. With EXPECTED `pass`
+# it must pass; otherwise it must fail with the words in `detail`.
 run_probe()
 {
     expected=$1
@@ -118,6 +131,7 @@ run_probe()
     echo "pty-hangup: result: $phase $probe status $status"
 }
 
+# run_phase PHASE EXPECTED: build the kernel, keep a copy, and run the probe.
 run_phase()
 {
     phase=$1

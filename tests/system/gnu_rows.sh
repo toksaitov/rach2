@@ -108,11 +108,16 @@ row_glibc() {
         "../usr/share/zoneinfo/Etc/UTC Etc/UTC"
 }
 
+# zlib compresses and decompresses through openssl, and curl names the
+# version it was built with.
 row_zlib() {
     same "a round trip" "$(printf 'zlib row' | openssl zlib | openssl zlib -d)" "zlib row"
     has "curl's zlib" "$(curl -V | head -n 1)" "zlib/1.3.2"
 }
 
+# OpenSSL's version and a SHA-256 digest, the number of certificates in
+# /etc/ssl/cert.pem, and a root of Debian's bundle verified against the
+# default store.
 row_openssl() {
     has "the version" "$(openssl version)" "OpenSSL 4.0.2"
     has "SHA-256" "$(printf abc | openssl dgst -sha256)" "$ABC"
@@ -145,23 +150,28 @@ row_openssh() {
     same "the file sftp fetched" "$(cat "$WORK/sftp.out" 2>&1)" "scp row"
 }
 
+# ncurses: tput moves the cursor on a vt100, and infocmp names its entry.
 row_ncurses() {
     has "tput" "$(tput -T vt100 cup 5 10 | od -An -c | tr -s ' ')" "033 [ 6 ; 1 1 H"
     has "infocmp" "$(infocmp -1 vt100 | sed -n 2p)" "vt100|vt100-am"
 }
 
+# less copies a file to an output that is not a terminal, and its version.
 row_less() {
     printf 'less row\n' > "$WORK/less.txt"
     same "a file through less" "$(less "$WORK/less.txt")" "less row"
     has "the version" "$(less --version | head -n 1)" "less 710"
 }
 
+# vim edits a file in ex mode.
 row_vim() {
     printf 'hello world\n' > "$WORK/vim.txt"
     runs "an edit in ex mode" vim -Nu NONE -i NONE -es -c '%s/world/Rach2/' -c wq "$WORK/vim.txt"
     same "the edited file" "$(cat "$WORK/vim.txt")" "hello Rach2"
 }
 
+# Perl: a hash and a sort, Digest::SHA, a gzip round trip through
+# IO::Compress, and threads that add to a shared counter.
 row_perl() {
     # shellcheck disable=SC2016 # the dollars are Perl's
     same "a hash and a sort" "$(perl -e 'my %h = map { $_ => $_ * $_ } 1 .. 5;
@@ -193,6 +203,8 @@ row_curl() {
     wait "$server" 2> /dev/null
 }
 
+# git makes a repository with one commit, clones it, and finds a Perl
+# pattern with git grep -P.
 row_git() {
     local git=(git -c user.name=rach2 -c user.email=root@rach2)
 
@@ -241,6 +253,8 @@ $doc
 EOF')" "5001"
 }
 
+# GNU grep: an extended pattern, a Perl pattern, a match from a pipe written
+# to /dev/null, as configure runs it, and its version.
 row_grep() {
     same "an extended pattern" "$(printf 'a1\nb22\nc333\n' | grep -E -c '[0-9]{2}')" "2"
     same "a Perl pattern" "$(printf 'a1\nb22\nc333\n' | grep -oP '(?<=b)\d+')" "22"
@@ -249,16 +263,19 @@ row_grep() {
     has "the version" "$(grep --version | head -n 1)" "3.12"
 }
 
+# GNU sed makes a substitution with an extended pattern, and its version.
 row_sed() {
     same "a substitution" "$(echo hello | sed -E 's/(l+)/[\1]/')" "he[ll]o"
     has "the version" "$(sed --version | head -n 1)" "4.10"
 }
 
+# gawk formats a time with strftime and does arithmetic, and its version.
 row_gawk() {
     same "strftime" "$(gawk 'BEGIN { print strftime("%Y", 0, 1), 6 * 7 }')" "1970 42"
     has "the version" "$(gawk --version | head -n 1)" "GNU Awk 5.4.1"
 }
 
+# find prints a match by its name, xargs splits its input, and the version.
 row_findutils() {
     same "find" "$(find /usr/share/terminfo -name vt100 -printf '%f\n' | head -n 1)" "vt100"
     same "xargs" "$(printf 'a b c' | xargs -n 1 | wc -l)" "3"
@@ -266,6 +283,8 @@ row_findutils() {
     has "the version" "$(find --version | head -n 1)" "(GNU findutils) 4.11.0"
 }
 
+# diff reports two files that differ with status 1 and a unified difference,
+# cmp finds a file equal to itself, and the version.
 row_diffutils() {
     printf 'one\ntwo\nthree\n' > "$WORK/a"
     printf 'one\n2\nthree\n' > "$WORK/b"
@@ -276,6 +295,7 @@ row_diffutils() {
     has "the version" "$(diff --version | head -n 1)" "(GNU diffutils) 3.12"
 }
 
+# patch applies a unified difference to a file, and its version.
 row_patch() {
     printf 'one\ntwo\nthree\n' > "$WORK/a"
     printf -- '--- a\n+++ b\n@@ -1,3 +1,3 @@\n one\n-two\n+2\n three\n' > "$WORK/ab.diff"
@@ -284,6 +304,8 @@ row_patch() {
     has "the version" "$(patch --version | head -n 1)" "GNU patch 2.8"
 }
 
+# GNU tar makes a gzip archive of a tree, lists it and extracts it, and its
+# version.
 row_tar() {
     mkdir -p "$WORK/dir" "$WORK/x"
     printf 'tar row\n' > "$WORK/dir/file"
@@ -294,23 +316,26 @@ row_tar() {
     has "the version" "$(tar --version | head -n 1)" "(GNU tar) 1.35"
 }
 
+# gzip compresses and decompresses a file unchanged, and its version.
 row_gzip() {
     seq 1 1000 > "$WORK/in"
     same "a round trip" "$(gzip -c "$WORK/in" | gzip -dc | cksum)" "$(cksum < "$WORK/in")"
     has "the version" "$(gzip --version | head -n 1)" "1.15"
 }
 
+# xz compresses and decompresses a file unchanged, and its version.
 row_xz() {
     seq 1 1000 > "$WORK/in"
     same "a round trip" "$(xz -c "$WORK/in" | xz -dc | cksum)" "$(cksum < "$WORK/in")"
     has "the version" "$(xz --version | head -n 1)" "5.8.4"
 }
 
-# The interfaces, addresses, routes and neighbours, through the netlink
-# route socket: a link asked for by its name, with its counters, a route
-# looked up, the rules and the queueing disciplines. Then the
-# sockets through the socket diagnostics, which ss asks first and complains
-# of when it cannot, a listener among them, and the counts of ss -s.
+# iproute2 through the netlink route socket: the interfaces, addresses,
+# routes and neighbours, a link asked for by its name with its counters, a
+# route looked up, the rules, the queueing disciplines and the interfaces'
+# configuration. Then the sockets through the socket diagnostics, which ss
+# asks first and complains of when it cannot, a listener among them, and the
+# counts of ss -s; and lspci, which reads the PCI devices from /sys.
 row_iproute2() {
     has "ip addr" "$(ip -4 addr show 2>&1)" "inet 10.0.2.15/24"
     has "ip route" "$(ip route show 2>&1)" "default via 10.0.2.2"
@@ -428,8 +453,9 @@ row_procps() {
 # util-linux's programs: the disks and mounts from /sys and /proc and the root
 # /etc/fstab names, a lock taken and waited for, the limits and the I/O class of
 # a process, the login history and the record of the boot that init writes, the
-# formatting and terminal tools jq's tests and scripts use, and the namespaces
-# unshare makes, nsenter enters and lsns lists.
+# formatting and terminal tools jq's tests and scripts use, uuidgen, dmesg,
+# newgrp's set-user-ID mode, and the namespaces unshare makes, nsenter enters
+# and lsns lists.
 row_utillinux() {
     local pid
     has "lsblk" "$(lsblk -dno NAME,TYPE)" "disk"
@@ -475,8 +501,8 @@ row_zstd() {
     has "the version" "$(zstd --version)" "v1.5.7"
 }
 
-# rsync copies a tree, then only what changed, and deletes what the source
-# no longer has; and over SSH to the machine's own server.
+# rsync copies a tree, then only what changed, and deletes what was removed
+# from the source; and over SSH to the machine's own server.
 row_rsync() {
     local rsh="ssh -i $WORK/id -o BatchMode=yes -o StrictHostKeyChecking=no -o LogLevel=ERROR -o UserKnownHostsFile=$WORK/known"
     mkdir -p "$WORK/src/d"
@@ -972,8 +998,8 @@ EOF
 }
 
 # GDB runs a program, stops at a breakpoint, steps, prints a variable and
-# a backtrace, and lets it run to its end; it was built with its text user
-# interface.
+# a backtrace, and lets it run to its end; it stops at a system call named
+# in a catchpoint, and is built with its text user interface.
 row_gdb() {
     cat > "$WORK/g.c" << 'EOF'
 int f(int x)
@@ -999,8 +1025,8 @@ EOF
     has "gdb's text user interface" "$(gdb --configuration)" "--enable-tui"
 }
 
-# The script the shell's build ran: a loop the JIT compiles, and the shell's
-# own report that it ran in JIT code and in Ion.
+# The SpiderMonkey shell runs a loop often enough that the JIT compiles it,
+# and reports that the loop ran in JIT code and in Ion.
 row_js() {
     cat > "$WORK/jit.js" << 'EOF'
 function sum(n) {

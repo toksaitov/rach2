@@ -1,6 +1,8 @@
 #!/bin/sh
-# Prove the fail-closed steps of `tests/run noentropy` with compiled faults, on
-# the kernel and suite of the architecture ARCH names.
+# noentropy_mutate.sh: show that the steps of `tests/run noentropy`, which
+# require the random devices to refuse while the generator is untrusted,
+# catch three compiled faults, on the kernel and suite of the architecture
+# ARCH names.
 #
 # Three faults are put into the kernel in turn, each alone: `urandom` lets
 # the random devices answer a read while the generator is untrusted,
@@ -23,7 +25,7 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FAULT SOURCE: put FAULT into SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -106,6 +108,7 @@ cc -O2 -Wall -Wextra -Werror tests/system/runner/runutil.c -o "$work/runutil"
 child=
 changed=
 
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -118,11 +121,14 @@ stop_child()
     fi
 }
 
+# Remove the two changed objects and the kernel, so that make builds them
+# again.
 force_rebuild()
 {
     rm -f "$tree"/rach2/sys/fs/devfs.o "$tree"/rach2/sys/syscall.o "$tree"/rach2/kernel
 }
 
+# Put back the saved copy of the changed source and touch it.
 restore()
 {
     if [ -n "$changed" ]; then
@@ -132,6 +138,7 @@ restore()
     fi
 }
 
+# Stop the boot and, when a fault is in the source, restore it and rebuild.
 cleanup()
 {
     stop_child
@@ -146,9 +153,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# The kernel with the sources as they stand, built first and on its own so
-# that a fault that does not compile stops the proof here, and its checksum
-# kept beside the phase's logs.
+# build_kernel PHASE: the kernel with the sources as they stand, built first and
+# on its own so that a fault that does not compile stops the proof here, and its
+# checksum kept beside the phase's logs.
 build_kernel()
 {
     force_rebuild
@@ -157,8 +164,9 @@ build_kernel()
     cksum "$tree"/rach2/kernel >"$work/$1.kernel"
 }
 
-# One run of the suite in a process group of its own, its output in the
-# phase's log and its status in $status, and the machines' consoles kept.
+# run_suite PHASE COMMAND...: one run of the suite in a process group of its
+# own, its output in the phase's log and its status in $status, and the
+# machines' consoles kept.
 run_suite()
 {
     phase=$1
@@ -176,7 +184,7 @@ run_suite()
     cat "$work/$phase.log"
 }
 
-# The unmodified suite: every step must pass.
+# pass_phase PHASE: the unmodified suite, in which every step must pass.
 pass_phase()
 {
     build_kernel "$1"
@@ -189,8 +197,9 @@ pass_phase()
     echo "noentropy-mutation: result: $1 status $status"
 }
 
-# A fault compiled in: the kernel must differ from the first build, and with
-# make going on past a failure every step runs and each says what it saw.
+# fault_phase PHASE: a fault compiled in. The kernel must differ from the first
+# build, and with make going on past a failure every step runs and each says
+# what it saw.
 fault_phase()
 {
     phase=$1

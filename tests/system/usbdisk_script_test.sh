@@ -1,6 +1,22 @@
 #!/bin/sh
 # shellcheck disable=SC2034,SC2016 # Extracted functions and literal mutations.
-# Exercise the mutation script's image construction and interrupted command.
+# usbdisk_script_test.sh [--mutate | --texts]: check usbdisk_mutate.sh's
+# build_probe, cleanup and run_logged, copied out of the script and run on
+# their own.
+#
+# The image row builds the probe and its image twice, with a changed
+# assertion in the probe between, and requires the image to have the changed
+# probe; a compiler that fails must stop the build with its status. The FIFO
+# rows interrupt a command that run_logged runs, and require that the command
+# and the FIFO are gone, that the saved vfs.c is put back, and that run_logged
+# works again afterwards. --mutate also runs four faults, each of which must
+# fail its row: `stale` builds the probe only when none is built; `unknown`
+# stages from a manifest that no set-ID allowlist names, which must stop the
+# build before the probe is extracted; the builder is called in a condition,
+# where errexit is off; and `retained` keeps the FIFO after cleanup. The rows
+# of the restored script must pass after each. --texts checks that each fault
+# changes usbdisk_mutate.sh and that the probe has the assertion the image row
+# changes.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 if [ "${1:-}" != --texts ]; then
@@ -53,6 +69,7 @@ cp "$repo/tests/system/usbdisk_mutate.sh" "$root/saved.sh"
 cp "$root/saved.sh" "$root/source.sh"
 "${CC:-cc}" -O2 -Wall -Wextra -Werror -o "$root/runutil" "$repo/tests/system/runner/runutil.c"
 child=
+# Stop the running case and put the saved script back into the copy.
 cleanup_test()
 {
     if [ -n "$child" ]; then
@@ -66,6 +83,8 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# Copy build_probe, cleanup and run_logged out of the copy of the script into
+# functions.sh.
 extract()
 {
     awk '
@@ -75,15 +94,19 @@ extract()
     ' "$root/source.sh" > "$root/functions.sh"
 }
 
-# A conditional caller disables errexit throughout an ordinary shell function.
-# Exec a new shell so the extracted builder has the production failure rules,
-# with the compiler and flags mk/arch.sh gives the mutation script.
+# Run build_probe in a new shell with errexit set, as the script runs it, with
+# the compiler and flags mk/arch.sh gives the script. A function called in a
+# condition runs with errexit off throughout, so it is not called directly.
 image_build()
 {
     sh -eu -c 'REPO=$2; . "$2/mk/arch.sh"; . "$1"; repo=$2; work=$3; build_probe' \
         usbdisk-image "$root/functions.sh" "$repo" "$work"
 }
 
+# image_case NAME: build the image twice in NAME-image, the second time with
+# the probe's assertion changed, and require the second image to have the
+# changed probe; then require a compiler that exits 23 to stop the build with
+# status 23. Return 1 when a check fails.
 image_case()
 {
     work=$root/$1-image
@@ -116,6 +139,10 @@ COMPILER
     echo 'usbdisk-script: result: compiler failure stops with earlier artifacts present'
 }
 
+# fifo_case PHASE: run a 30-second command under run_logged in a phase script
+# and send the script SIGTERM. The command and the FIFO must be gone, the
+# saved vfs.c must be back, and run_logged must then run a command again.
+# Return 1 when a check fails.
 fifo_case()
 {
     phase=$1
@@ -172,6 +199,7 @@ PHASE
     echo "usbdisk-script: result: $phase stopped, restored and resumed"
 }
 
+# rows NAME: extract the functions and run the image row and both FIFO rows.
 rows()
 {
     extract

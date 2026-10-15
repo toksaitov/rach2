@@ -1,9 +1,19 @@
 #!/bin/sh
-# Check the actual runner's verdict and cleanup with unregistered workers.
-# With --mutate every rule is reversed in a compiled copy of the runner and
-# must be caught, and the SSH flood's cleanup proof and the rehearsal's
-# group-size proof run in their mutating forms: together the proofs that
-# entries 90 to 93 of the shortcomings plan name.
+# runutil_owned.sh [--mutate | --texts]: check the runner's verdict and its
+# cleanup when a suite leaves workers the runner did not record, with
+# tests/run and its helper runutil.c in private trees.
+#
+# Each case is a tree whose one suite starts a worker of
+# fixtures/runutil_owned.c in the way the case names, and the runner must
+# give the case's verdict and leave no worker running: a worker in a group or
+# a session of its own must fail the suite as a holder of the output outside
+# the recorded groups, one that will not stop must fail it after 15 seconds,
+# one the pipe inspection cannot see must be reported as inconclusive, and
+# an interrupted run must report its signal. fixtures/runutil_machine.c must
+# tell a live survivor from a zombie or a reused pid. With --mutate each of
+# six rules is reversed in a compiled copy of the helper and must be caught,
+# and the SSH flood's cleanup test and the rehearsal's group-size test run in
+# their mutating forms. --texts checks that each fault is in the helper.
 set -eu
 case ${1:-} in
     '') mutate=0 ;;
@@ -95,8 +105,10 @@ cc -O2 -Wall -Wextra -Werror "$repo/tests/system/fixtures/runutil_owned.c" -o "$
 sentinel=$!
 echo "runutil-owned: artifacts: $work"
 
-# No guest or socket is used. Only the irrelevant socket preflight is a
-# substitute; tests/run, its native helper and the make invocation are real.
+# make_tree NAME MODE: a tree with tests/run, the private helper and a
+# Makefile whose one suite starts a worker in MODE. No guest or socket is
+# used: only the host check, hostcheck.c, is a stand-in, and tests/run, its
+# helper and make are real.
 make_tree()
 {
     tree=$work/$1
@@ -126,8 +138,10 @@ HIDDEN
     printf 'components prepare-all:\n\t@:\nrun-owned:\n\t@./worker %s worker.pid\n' "$2" > "$tree/Makefile" || return 125
 }
 
-# A helper compile per case is also required by the runner's bootstrap;
-# compilation failure cannot fall through to an earlier phase's executable.
+# check_case PHASE MODE: run the suite in a new tree for MODE and require the
+# case's verdict, the worker gone and the sentinel alive; status 125 when the
+# setup fails. Each tree compiles its own helper when the runner starts, so a
+# compile that fails cannot fall back on an earlier phase's executable.
 check_case()
 {
     phase=$1
@@ -203,8 +217,9 @@ check_case()
     echo "runutil-owned: result: $phase $mode passed"
 }
 
-# Compile the production machine check into each fixture binary. Native
-# identities distinguish a live survivor from a zombie or a reused PID.
+# check_machine PHASE CASE: compile the helper's machine check into the
+# fixture and run CASE. The native identities tell a live survivor from a
+# zombie or a reused pid.
 check_machine()
 {
     machine_phase=$1
@@ -221,6 +236,7 @@ check_machine()
     return "$machine_rc"
 }
 
+# check_phase PHASE: build the helper and run every case.
 check_phase()
 {
     mkdir "$work/$1"
@@ -240,8 +256,10 @@ check_phase()
     check_machine "$1" live
 }
 
-# Each fault gets a fresh build and an affected restored case. The final
-# restored phase repeats the complete set with matching helper bytes.
+# prove_mutation LABEL CASE VERDICT: build the helper with its fault, require
+# CASE to fail with the runner's VERDICT line, then require the restored
+# helper to pass CASE and match the first build. The final restored phase
+# repeats every case.
 prove_mutation()
 {
     label=$1

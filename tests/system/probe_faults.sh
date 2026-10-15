@@ -1,12 +1,13 @@
 #!/bin/sh
-# Prove rows of the default suite against the faults they catch. Each fault
-# in tests/system/probe_faults.txt names a probe, a file, a text of that file
-# with the text that replaces it, and the words the probe prints only when
-# the row fails. The fault is put alone into this tree, `make run-default`
-# rebuilds what it changed and boots the suite, and the fault is caught when
-# the suite fails, the runner does not pass the probe, and the boot's log has
-# the probe's words. A fault that hangs the probe is caught the same way: its
-# words come before the hang, and the runner's deadline ends the boot.
+# probe_faults.sh: show that rows of the default suite catch the faults listed
+# for them. Each fault in tests/system/probe_faults.txt names a probe, a file, a
+# text of that file with the text that replaces it, and the words the probe
+# prints only when the row fails. The fault is put alone into this tree,
+# `make run-default` rebuilds what it changed and boots the suite, and the fault
+# is caught when the suite fails, the runner does not pass the probe, and the
+# boot's log has the probe's words. A fault that hangs the probe is caught the
+# same way: its words come before the hang, and the runner's deadline ends the
+# boot.
 #
 # The file is restored and touched after each fault, and the trap restores it
 # and rebuilds whenever a fault was built and the rebuild of the restored
@@ -147,6 +148,7 @@ changed=
 built=
 missed=
 
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -159,6 +161,7 @@ stop_child()
     fi
 }
 
+# Put back the saved copy of the changed file and touch it.
 restore()
 {
     if [ -n "$changed" ]; then
@@ -168,6 +171,7 @@ restore()
     fi
 }
 
+# Stop the suite, restore the file, and rebuild when a fault was built.
 cleanup()
 {
     stop_child

@@ -91,11 +91,13 @@ tools/verify/scripts.sh
 tools/verify/textcheck.sh
 utils/tool'
 
+# pass ROW: report that ROW passed.
 pass()
 {
     echo "style-scope-test: result: pass: $1"
 }
 
+# fail ROW DETAIL: report that ROW failed and add it to $failed.
 fail()
 {
     echo "style-scope-test: result: fail: $1: $2"
@@ -125,6 +127,8 @@ planted()
     esac
 }
 
+# Run every row on the private tree, with the names of those that fail in
+# $failed.
 rows()
 {
     failed=
@@ -161,7 +165,8 @@ rows()
     planted text-doc-link man/Readme.md 6 '[milestone cited]'
 }
 
-# Change one private checker by the named fault.
+# change FAULT: put FAULT into the private copy of its checker; the text it
+# replaces must occur once there.
 change()
 {
     python3 - "$tree/tools/verify" "$1" <<'PY'

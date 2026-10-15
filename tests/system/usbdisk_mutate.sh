@@ -1,5 +1,23 @@
 #!/bin/sh
-# Each kernel, probe and disk is built or copied into private scratch.
+# usbdisk_mutate.sh [--nested | --resume DIRECTORY | --restore DIRECTORY |
+# --texts]: show that usbdiskprobe catches a kernel that keeps a USB stick's
+# mount when the stick is removed, on the kernel, probe and emulator of the
+# architecture ARCH names.
+#
+# The probe holds a nested mount on the stick open, in its holdnested and
+# holdnestedexfat modes, while the harness removes the stick. The default
+# fault, `gone`, makes vfs_mount_gone report no mount as gone, so the probe
+# must fail because the removed mount still resolves or a cached directory
+# still lists; with --nested the fault takes the lookup below a removed
+# parent out of the unmount, so the probe must fail because the removed child
+# mount did not keep its open description. The unmodified and restored
+# kernels must pass both modes, and the restored kernel must match the first.
+# Each kernel, probe and disk is built or copied into a private directory.
+#
+# --resume DIRECTORY runs the fault and restored phases again in a directory
+# a run left, after checking its passing fixed logs and its sums; --restore
+# DIRECTORY runs only the restored phase, after also checking that the fault
+# failed. --texts checks that each fault is once in vfs.c.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -42,6 +60,7 @@ for artifact in "$harness" "$stick" \
     fi
 done
 
+# Print the pattern of the probe's failure under the fault in $fault.
 failure_pattern()
 {
     if [ "$fault" = nested ]; then
@@ -101,6 +120,8 @@ if [ "$resume" -eq 0 ]; then
     printf '%s\n' "$fault" > "$work/fault"
 fi
 
+# Stop the running job and its recorder, remove the FIFO, and put back the
+# saved vfs.c.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -124,6 +145,9 @@ trap 'exit 143' TERM
 
 "${CC:-cc}" -O2 -Wall -Wextra -o "$runner" tests/system/runner/runutil.c
 
+# Build usbdiskprobe from its saved copy, stage it on a private test image
+# made from the usbdisk-proof manifest, and check the image's set-ID files and
+# the staged probe.
 build_probe()
 {
     # shellcheck disable=SC2086 # ARCH_LDFLAGS is empty or one flag
@@ -144,6 +168,9 @@ build_probe()
     cmp "$work/usbdiskprobe" "$work/extracted"
 }
 
+# run_logged LOG COMMAND...: run COMMAND under runutil's watch, which stops it
+# after 120 seconds with no output and no work, with its output copied to LOG
+# and to standard output through a FIFO; return its status.
 run_logged()
 {
     log=$1
@@ -163,6 +190,10 @@ run_logged()
     return "$status"
 }
 
+# run_phase PHASE: build the private kernel and keep a copy, with the sums of
+# the inputs after the fixed build, and run the probe in both modes with the
+# stick removed under it. Under the fault both must fail with the fault's
+# words; otherwise both must pass.
 run_phase()
 {
     phase=$1

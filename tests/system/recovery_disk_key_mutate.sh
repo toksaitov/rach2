@@ -1,6 +1,7 @@
 #!/bin/sh
-# Prove the recovery key rows of the installer suite with faults in a private
-# tree, on the programs and images of the architecture ARCH names.
+# recovery_disk_key_mutate.sh: show that the recovery key rows of the
+# installer suite catch four faults, in a private tree, on the programs and
+# images of the architecture ARCH names.
 #
 # Usage: sh tests/system/recovery_disk_key_mutate.sh [--texts]
 #
@@ -18,8 +19,9 @@
 # it starting the server one turn of its loop late, where row 6c must find
 # init's line that it started the server, the second only because the row
 # reads the log at a console session init forks after its second test for a
-# key; and restored a last time. The trap stops the row's
-# process group and restores both sources.
+# key; and restored a last time. The trap stops the row's process group and
+# restores both sources. --texts checks that each fault is once in its
+# source.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -105,6 +107,7 @@ cp "$init_source" "$work/init.saved"
 cp "$installer_source" "$work/installer.saved"
 child=
 
+# Stop the row's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -117,6 +120,7 @@ stop_child()
     fi
 }
 
+# Put back the private tree's saved init and installer and touch them.
 restore()
 {
     cp "$work/init.saved" "$init_source"
@@ -124,6 +128,7 @@ restore()
     touch "$init_source" "$installer_source"
 }
 
+# Stop the row and restore both sources.
 cleanup()
 {
     stop_child
@@ -134,10 +139,11 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Each phase rebuilds the recovery init and every image that stages it or the
-# installer, from nothing: an image whose staged program changed in the same
-# second as its last build reads as current to make. The rows stage their own
-# recovery image with no key from the init built here.
+# run_phase PHASE STATUS MESSAGE: each phase rebuilds the recovery init and
+# every image that stages it or the installer, from nothing: an image whose
+# staged program changed in the same second as its last build reads as current
+# to make. The rows stage their own recovery image with no key from the init
+# built here.
 run_phase()
 {
     phase=$1
@@ -178,7 +184,7 @@ cat "$work/components.build.log"
 run_phase fixed 0 "$passed"
 grep -Fq 'row 6c: and nothing answers SSH: OK' "$work/fixed.log"
 
-# The recovery init no longer reads the key off its partition.
+# The recovery init does not read the key off its partition.
 key_fault init-mutated
 run_phase init-mutated 1 'FAIL: row 6b: the placed key'
 if cmp -s "$work/fixed.init" "$work/init-mutated.init"; then
@@ -188,7 +194,7 @@ restore
 run_phase init-restored 0 "$passed"
 cmp "$work/fixed.init" "$work/init-restored.init"
 
-# The installer no longer copies the key it was given.
+# The installer does not copy the key it was given.
 key_fault installer-mutated
 run_phase installer-mutated 1 "FAIL: row 6b: the recovery partition's key file holds"
 restore

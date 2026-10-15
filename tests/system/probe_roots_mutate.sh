@@ -1,13 +1,20 @@
 #!/bin/sh
-# Prove the ext2 link, statfs and block-count branches with rebuilt kernel
-# faults, on the kernel, test image and emulator of the architecture ARCH
-# names.
+# probe_roots_mutate.sh [--texts]: show that vfsprobe on an ext2 root catches
+# three compiled faults in rach2/sys/fs/ext2.c, on the kernel, test image and
+# emulator of the architecture ARCH names.
+#
+# `link` makes ext2_link refuse every node, not only a directory; `magic`
+# gives statfs a magic number other than ext2's; `blocks` makes a file's
+# block count unknown. Each faulty kernel must fail vfsprobe on ext2 with the
+# row's words. The unmodified and restored kernels must pass every probe of
+# probe_roots.sh on both roots, and each restored kernel must match the
+# first. --texts checks that each fault is once in ext2.c.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault SOURCE FAULT: put FAULT into SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -64,6 +71,7 @@ cp "$source" "$work/source.saved"
 child=
 changed=
 
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -76,12 +84,14 @@ stop_child()
     fi
 }
 
+# Remove ext2's object and the kernel, and make the kernel again.
 rebuild()
 {
     rm -f "$tree"/rach2/sys/fs/ext2.o "$tree"/rach2/kernel
     make -s rach2 "ARCH=$RACH2_ARCH"
 }
 
+# Put back the saved ext2.c and touch it.
 restore()
 {
     cp "$work/source.saved" "$source"
@@ -89,6 +99,7 @@ restore()
     changed=
 }
 
+# Stop the boot and, when a fault is in the source, restore it and rebuild.
 cleanup()
 {
     stop_child
@@ -102,6 +113,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE EXPECTED: build the kernel and run probe_roots.sh on it.
+# With EXPECTED `pass` every probe must pass on both roots; otherwise
+# vfsprobe on ext2 must fail with the words in `detail`.
 run_phase()
 {
     phase=$1

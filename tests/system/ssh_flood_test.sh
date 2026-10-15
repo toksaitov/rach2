@@ -1,5 +1,15 @@
 #!/bin/sh
-# Exercise the SSH suite's actual flood functions without opening sockets.
+# ssh_flood_test.sh [--mutate | --texts]: check that the SSH suite's flood
+# functions leave none of the children they start, with fake sleep and nc
+# programs and no sockets.
+#
+# The functions and the cleanup traps are copied out of
+# tests/system/suites/ssh.sh and run by a driver that starts the flood and
+# then either stops it or is sent SIGTERM. Either way none of the 80
+# children may be left, nor the flood's directory. --mutate also runs a copy
+# in which flood_start does not record the process ID of a holder's sleep,
+# which must leave children, and then the restored copy; --texts checks that
+# the fault changes the suite.
 set -eu
 case ${1:-} in
     '') mutate=0 ;;
@@ -27,7 +37,8 @@ driver=0
 cp "$repo/tests/system/suites/ssh.sh" "$work/saved.sh"
 cp "$work/saved.sh" "$work/source.sh"
 
-# Stop all proof children before restoring its private copy of the source.
+# Stop the driver, kill every child whose process ID is recorded, and put the
+# saved suite back into the copy.
 # shellcheck disable=SC2329
 cleanup()
 {
@@ -60,8 +71,14 @@ PEER
 chmod +x "$work/bin/sleep" "$work/bin/nc"
 echo "ssh-flood: artifacts: $work"
 
-# Extract cleanup and its traps as well as the two flood functions. Fake
-# sleep and nc retain their PIDs through exec; their records only test cleanup.
+# check_case PHASE MODE: copy flood_start, flood_stop, cleanup, cleanup_boot
+# and the traps that call cleanup out of the copy of the suite, and run a
+# driver that starts the flood and waits until its 80 children have recorded
+# their process IDs. With MODE `success` the driver calls flood_stop; with
+# `signal` it is sent SIGTERM. Return 1 when a child or the flood's directory
+# is left, and 125 when the case could not be run. The fake sleep and nc keep
+# their process IDs through exec, so each record names the process to look
+# for.
 check_case()
 {
     phase=$1

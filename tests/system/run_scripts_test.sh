@@ -77,11 +77,13 @@ EOF
 chmod +x "$work/bin/uname"
 images="$work/rach2/../build/images"
 
+# pass ROW: report that ROW passed.
 pass()
 {
     echo "run-scripts-test: result: pass: $1"
 }
 
+# fail ROW DETAIL: report that ROW failed and add it to `failed`.
 fail()
 {
     echo "run-scripts-test: result: fail: $1: $2"
@@ -149,6 +151,7 @@ refused()
     fi
 }
 
+# Run every row; the names of those that failed are left in `failed`.
 rows()
 {
     failed=

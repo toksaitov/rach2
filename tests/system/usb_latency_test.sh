@@ -1,6 +1,17 @@
 #!/bin/sh
-# Prove the USB record checker with compiled production recorder and scheduler.
-# --mutate adds the faults below; --texts checks their texts and builds nothing.
+# usb_latency_test.sh [--mutate | --texts]: check checkers/usblatency.awk on
+# the records of tests/host/usbstamp_hosttest.c, a host test built with the
+# kernel's USB stamp recorder and scheduler.
+#
+# The host test runs in six modes. The checker must accept the spin, timer
+# and random records and refuse the pump, work and undispatched ones, and it
+# must refuse a record with a malformed field, one with a field twice, one
+# with a field missing, and an empty one. --mutate also builds the host test
+# with each of two faults: `cutoff` makes the recorder give no record when it
+# is read more than 20 ms after the wake, and `dispatch` takes the dispatch
+# stamp out of the scheduler. The checker must then refuse every record, and
+# the restored sources must pass. --texts checks that each fault is once in
+# its source, and builds nothing.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 if [ "${1:-}" != --texts ]; then
@@ -9,7 +20,7 @@ if [ "${1:-}" != --texts ]; then
 fi
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault SYS FAULT: put FAULT into the sources under SYS; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -57,6 +68,8 @@ cp "$work/sys/usb/stamp.c" "$work/stamp.saved"
 cp "$work/sys/proc/sched.c" "$work/sched.saved"
 child=
 
+# Stop the running test, and put back the saved stamp.c and sched.c and touch
+# them.
 restore()
 {
     if [ -n "$child" ]; then
@@ -73,6 +86,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE EXPECTED: build the host test from the private sources and
+# run it, which must exit with EXPECTED, then run it in each mode and judge
+# each record with the checker.
 run_phase()
 {
     phase=$1

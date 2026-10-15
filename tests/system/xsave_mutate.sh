@@ -1,12 +1,21 @@
 #!/bin/sh
-# Prove xsaveprobe and the frame host tests catch faults in the XSAVE code.
+# xsave_mutate.sh [--texts]: show that xsaveprobe and the two signal-frame
+# host tests catch eight compiled faults in the XSAVE code of
+# rach2/sys/arch/x86/fpu.c, on the kernel, test image and emulator of the
+# architecture ARCH names.
+#
+# Each fault is built into the main tree's kernel in turn and must fail the
+# probe, the host tests or both, with the words given for it; the source is
+# restored after each, and the restored kernel must match the first. --texts
+# checks that each fault is once in fpu.c.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 texts=
 [ "${1:-}" != --texts ] || texts=1
-# Replace the one occurrence of $1 in the source with $2.
+# mutate OLD NEW: mark the source changed and replace OLD, which must occur
+# once, with NEW in it; with RACH2_FAULT_TEXTS set, only check the text.
 mutate()
 {
     changed=1
@@ -87,6 +96,7 @@ cp "$source" "$work/source.saved"
 child=
 changed=
 
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -99,12 +109,14 @@ stop_child()
     fi
 }
 
+# Remove fpu.c's object and the kernel, and make the kernel again.
 rebuild()
 {
     rm -f "$tree/rach2/sys/arch/x86/fpu.o" "$tree/rach2/kernel"
     make -s ARCH="$RACH2_ARCH" rach2
 }
 
+# Put back the saved fpu.c, touch it, and mark the source unchanged.
 restore()
 {
     cp "$work/source.saved" "$source"
@@ -112,6 +124,7 @@ restore()
     changed=
 }
 
+# Stop the boot and, when a fault is in the source, restore it and rebuild.
 cleanup()
 {
     stop_child
@@ -125,10 +138,10 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# The two frame host tests, compiled as tests/system/suites/host.sh compiles
-# them; 0 when both pass. The caller's `||` turns errexit off in here, so a
-# compile that fails stops the proof itself, and the last phase's binary is
-# removed first, so that it cannot run in this one's place.
+# Compile and run the two frame host tests as tests/system/suites/host.sh
+# compiles them, and return 0 when both pass. The caller's `||` turns errexit
+# off in here, so a compile that fails exits explicitly, and the last phase's
+# binary is removed first, so that it cannot run in this one's place.
 host_tests()
 {
     failed=0
@@ -147,9 +160,10 @@ host_tests()
     return "$failed"
 }
 
-# Run phase $1: the probe must pass or fail as $2 says, with a failure
-# matching $3 when that is not empty, and the host tests as $4 says, with a
-# failure matching $5.
+# run_phase PHASE PROBE MATCH HOST HOSTMATCH: build the kernel and run
+# xsaveprobe, which must pass or fail as PROBE says, failing with words that
+# match MATCH when it is not empty; then run the host tests, which must pass
+# or fail as HOST says, failing with words that contain HOSTMATCH.
 run_phase()
 {
     phase=$1

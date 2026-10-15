@@ -1,6 +1,7 @@
 #!/bin/sh
-# Prove the service log suite with inits built from a private copy, on the
-# kernel, programs and emulator of the architecture ARCH names.
+# servicelog_mutate.sh [--texts]: show that the service log suite catches two
+# faults in init-shell, with inits built from a private copy, on the kernel,
+# programs and emulator of the architecture ARCH names.
 #
 # Usage: sh tests/system/servicelog_mutate.sh [--texts]
 #
@@ -14,6 +15,7 @@
 # removal at boot taken out, where it must fail on the second boot; and
 # restored again. The kernel, BusyBox and `update` are the main tree's. The
 # trap stops the suite's process group before it restores the private source.
+# --texts checks that each fault is once in utils/init.c.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -25,7 +27,8 @@ export RACH2_QEMU ARCH_BUILD
 abuild=build$ARCH_SUFFIX
 texts=
 [ "${1:-}" != --texts ] || texts=1
-# Change the private init.c where the old text occurs exactly once.
+# mutate OLD NEW: mark the source changed and replace OLD, which must occur
+# once, with NEW in it; with RACH2_FAULT_TEXTS set, only check the text.
 mutate()
 {
     changed=1
@@ -78,6 +81,7 @@ source="$tree/utils/init.c"
 child=
 changed=
 
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -90,6 +94,7 @@ stop_child()
     fi
 }
 
+# Put back the saved init.c, touch it, and mark the source unchanged.
 restore()
 {
     cp "$work/init.saved" "$source"
@@ -97,6 +102,7 @@ restore()
     changed=
 }
 
+# Stop the boot and, when a fault is in the source, restore it.
 cleanup()
 {
     stop_child
@@ -109,13 +115,17 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE EXPECTED MESSAGE: build init-shell from the private tree,
+# keep a copy, and boot the service log suite with it. With EXPECTED `pass`
+# the suite must pass, otherwise it must fail, and either way its output must
+# contain MESSAGE. The program is removed before it is built, since a source
+# restored within the second its program was built reads as up to date to a
+# make that compares whole seconds.
 run_phase()
 {
     phase=$1
     expected=$2
     message=$3
-    # The program goes first: a source restored within the second its program
-    # was built reads as up to date to a make that compares whole seconds.
     rm -f "$tree/build$ARCH_SUFFIX/utils/sbin/init-shell"
     make -s -C "$tree/utils" "../build$ARCH_SUFFIX/utils/sbin/init-shell" "ARCH=$RACH2_ARCH" \
         >"$work/$phase.build.log" 2>&1 || {

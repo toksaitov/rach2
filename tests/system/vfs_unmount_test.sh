@@ -1,5 +1,15 @@
 #!/bin/sh
-# Compile whole production functions with counted filesystem substitutes.
+# vfs_unmount_test.sh [--mutate | --texts]: compile the unmount functions of
+# rach2/sys/fs/vfs.c, copied whole, with the counted file system substitutes
+# of fixtures/vfs_unmount.c, and run its cases under the address and
+# undefined-behavior sanitizers.
+#
+# --mutate also runs four faults in a copy of vfs.c, each of which must fail
+# its case: the lookup below a removed parent taken out of the unmount; a
+# target compared as the caller wrote it rather than as named from the
+# caller's root; a directory target not checked in the walk; and a mount
+# point's attributes read for a directory target. The restored copy must
+# pass. --texts checks that each fault is once in vfs.c.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 if [ "${1:-}" != --texts ]; then
@@ -27,6 +37,8 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase NAME: copy the unmount functions out of the copy of vfs.c, build
+# the fixture with them as NAME, and run it with its output in NAME.log.
 run_phase()
 {
     awk '

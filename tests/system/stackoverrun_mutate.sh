@@ -1,40 +1,40 @@
 #!/bin/sh
-# Prove the memory suite's two stack-overrun rows with faults compiled into
-# private kernels.
+# stackoverrun_mutate.sh [--texts]: show that the memory suite's two
+# stack-overrun rows catch three faults compiled into private kernels.
 #
 # Usage: sh tests/system/stackoverrun_mutate.sh [--texts]
 #
-# The rows (tests/system/stackoverrun_row.sh) boot `rach2.stackoverrun=fork`
-# and `rach2.stackoverrun=boot`, which descend a kernel stack until it runs
-# out, and require the record that names the thread whose stack ran out and
-# the panic `a kernel stack ran out` (entry 248 of milestone 50). A private
-# copy of rach2/ and mk/ is built as it is, where both rows must pass; then
-# with each of three faults in turn, where each row the fault breaks must
-# fail with `the overrun was not reported`, after the descent's announcement,
-# and the other row must pass: `guard-mapped`, kalloc_guarded mapping the
-# guard page below a stack like the pages above it, breaks the fork row;
-# `boot-guard-mapped`, guard_boot_stack leaving the page below the boot stack
-# mapped, breaks the boot row; and `interrupt-gate`, vector 8 given an
-# interrupt gate that runs on the stack in use (on x86-64, its gate without
-# the double fault's interrupt stack), breaks both, since the double
+# The rows (tests/system/stackoverrun_row.sh) boot `rach2.stackoverrun=fork` and
+# `rach2.stackoverrun=boot`, which descend a kernel stack until it runs out, and
+# require the record that names the thread whose stack ran out and the panic
+# `a kernel stack ran out`. A private copy of rach2/ and mk/ is built as it is,
+# where both rows must pass; then with each of three faults in turn, where each
+# row the fault breaks must fail with `the overrun was not reported`, after the
+# descent's announcement, and the other row must pass: `guard-mapped`,
+# kalloc_guarded mapping the guard page below a stack like the pages above it,
+# breaks the fork row; `boot-guard-mapped`, guard_boot_stack leaving the page
+# below the boot stack mapped, breaks the boot row; and `interrupt-gate`, vector
+# 8 given an interrupt gate that runs on the stack in use (on x86-64, its gate
+# without the double fault's interrupt stack), breaks both, since the double
 # fault then faults a third time and QEMU, started with -no-reboot, ends. A
 # fault that does not change the kernel stops the proof. After each fault the
-# copy is restored and rebuilt, both rows must pass, and the kernel must be
-# the first one byte for byte.
+# copy is restored and rebuilt, both rows must pass, and the kernel must be the
+# first one byte for byte.
 #
-# A fault that leaves the guard page mapped leaves the rows no address to
-# name the thread by but a mapped one, where nothing faults, so no layout of
-# the heap can let the fork row pass under it; the thread's record lies above
-# its stack, where the descent does not reach it. The proof needs the test
-# image `tests/run memory` boots, test.krffs under the images of the
-# architecture ARCH names, of which it boots a copy, and its kernels are built
-# for that architecture. It changes nothing in the tree; its kernels, consoles
-# and logs stay under the build/stackoverrun-proof.* directory it prints.
+# A fault that leaves the guard page mapped leaves the rows no address to name
+# the thread by but a mapped one, where nothing faults, so no layout of the heap
+# can let the fork row pass under it; the thread's record lies above its stack,
+# where the descent does not reach it. The proof needs the test image
+# `tests/run memory` boots, test.krffs under the images of the architecture ARCH
+# names, of which it boots a copy, and its kernels are built for that
+# architecture. It changes nothing in the tree; its kernels, consoles and logs
+# stay under the build/stackoverrun-proof.* directory it prints. --texts checks
+# that each fault is once in its source.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault SOURCE FAULT: put FAULT into SOURCE; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -105,6 +105,7 @@ cp "$tree"/images/test.krffs "$work/test.krffs"
 child=
 file=
 
+# Stop the running row's process group.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -183,6 +184,7 @@ fault()
     apply_fault "$work/$file" "$variant"
 }
 
+# Put back the saved copy of the file the last fault changed, and touch it.
 restore()
 {
     cp "$work/saved" "$work/$file"

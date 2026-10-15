@@ -3,9 +3,8 @@
 # tests/system/selftest.sh: check tests/run itself, without booting anything.
 #
 # The runner decides which suites exist, which tools they need, what a failure
-# looks like and whose machine a leak belongs to. Every one of those decisions
-# used to be checked only by the suites happening to work. This runs the runner
-# against a registry and a makefile of its own, in a temporary directory, so a
+# looks like and whose machine a leak belongs to. This runs the runner against
+# a registry and a makefile of its own, in a temporary directory, so that a
 # mistake in the runner is a failure here rather than a puzzling suite result.
 #
 # `tests/run runner` runs this. It boots no machine: every machine it drives is
@@ -46,6 +45,8 @@ trap 'stop_machines; rm -rf "$WORK"' EXIT INT TERM HUP
 
 fails=0
 total=0
+# check NAME EXPECTED ACTUAL: count one check, and report it failed, with the
+# last 30 lines of $out, when ACTUAL is not EXPECTED.
 check() {
     total=$((total + 1))
     if [ "$2" = "$3" ]; then
@@ -73,6 +74,8 @@ cp "$REPO/tests/system/runlock.sh" "$REPO/tests/system/runlock_exec.sh" "$WORK/t
 cp "$REPO/tests/system/runner/runutil.c" "$WORK/tests/system/runner/runutil.c"
 cc -O2 -Wall -Wextra -o "$WORK/runutil" "$REPO/tests/system/runner/runutil.c" || exit 1
 SELFTEST_UTIL=$WORK/runutil
+# The clock and the sleep of the compiled runutil, which the rows use in
+# place of the host's.
 now() { "$SELFTEST_UTIL" now; }
 sleep() { "$SELFTEST_UTIL" sleep "$1"; }
 cp "$REPO/tests/system/deadline.sh" "$WORK/tests/system/deadline.sh"
@@ -275,6 +278,8 @@ RACH2_SELFTEST_UTIL=$SELFTEST_UTIL; export RACH2_SELFTEST_UTIL
 PATH="$WORK/bin:$PATH"; export PATH
 : > "$WORK/machines"
 
+# run ARGS...: run tests/run with ARGS in the fixture's tree, with the
+# stand-ins first on the path and W workers, 2 unless W is set.
 run() { ( cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS="${W:-2}" \
           sh tests/run "$@" 2>&1 ); }
 
@@ -310,8 +315,11 @@ check "a leading run given INT ends at once with its foreground command" "status
 check "and that command is stopped" 0 "$(kill -0 "$(cat "$WORK/hostcheck.pid" 2>/dev/null)" 2>/dev/null && echo 1 || echo 0)"
 kill "$(cat "$WORK/hostcheck.pid" 2>/dev/null)" 2>/dev/null
 
-# The suite supervisor observes both output channels, isolates their clocks,
-# and applies the same rule at every position in the schedule.
+# The idle limit: a limit that is not a whole number of seconds above zero
+# is refused; a suite silent for the limit fails, named with it and with its
+# last output repeated; output from a suite or its console keeps that suite
+# alive, and no other; the limit holds for a serial suite and a pooled one
+# alike; and a set's factor does not scale it.
 for value in 0 00 -1 nope 1.5; do
     out=$(RACH2_IDLE_TIMEOUT=$value run passing); rc=$?
     check "an invalid idle limit ($value) is refused" 2 "$rc"
@@ -446,9 +454,9 @@ out=$(run killed); rc=$?
 check "killing the machine PID stops the actual machine" 0 "$rc"
 check "and leaves no machine or console relay behind" 0 "$(printf '%s\n' "$out" | grep -c 'run: killed: left')"
 # A machine on its way out is not a machine left behind. The suite's rows have
-# passed and its machine is in its last seconds; asking once, the instant the
-# suite returns, fails a suite for a race with a process that is already
-# leaving, which is what it cost on 2026-09-13.
+# passed and its machine is in its last seconds; a check made once, the
+# instant the suite returns, would fail the suite for a race with a process
+# that is already leaving.
 out=$(run parting); rc=$?
 check "a suite whose machine is still leaving passes" 0 "$rc"
 check "and is not named as an owner" 0 "$(printf '%s\n' "$out" | grep -c 'run: parting: left')"
@@ -489,8 +497,10 @@ check "in a make of their own" 1 \
     "$([ "$(cat "$WORK/components.count")" != "$(cat "$WORK/ran.pid")" ] && echo 1 || echo 0)"
 check "and still runs" 1 "$(printf '%s\n' "$out" | grep -c 'passing ran')"
 
-# Scheduling is judged inside the suites. Compiler startup and cleanup are
-# outside the measured interval and cannot turn overlap into a failure.
+# The workers: one runs two suites one after the other, and two run them
+# together. The order and the overlap are judged from the events the suites
+# record, so the runner's compiles and cleanup, which fall outside them,
+# cannot make an overlap look like a failure.
 rm -f "$WORK/events"
 out=$(W=1 run slow1 slow2); rc=$?
 check "one worker runs two suites one after the other" 'slow1-start slow1-end slow2-start slow2-end ' \
@@ -564,8 +574,11 @@ out=$(RACH2_TIMEOUT_FACTOR=3 run notoken passing); rc=$?
 check "a missing token fails at the explicit bound" 1 "$rc"
 check "and names that bound" 1 "$(printf '%s\n' "$out" | grep -c 'notoken: no token within 6 s')"
 
-# Driver bounds are already elapsed seconds. The enclosing supervisor keeps
-# a mutation that scales them again from holding this selftest indefinitely.
+# drive.sh: a bound that `scaled` gave it is in elapsed seconds and is not
+# scaled again, and runutil's watch ends the row should a fault scale it
+# twice. Then drive_prompt and drive_expect over logs written here: a
+# daemon's output after a prompt, a command's echo paused at a redirection, a
+# token from before the command, and a reply that came before the wait.
 cat > "$WORK/driver-bound.sh" <<'DRIVER'
 #!/bin/sh
 REPO=$1
@@ -648,6 +661,7 @@ cat > /dev/null
 wait
 LATE
     chmod +x "$WORK/late/qemu-system-i386"
+    # Run the harness on the late machine with deadlines written as one second.
     late_run() { ( PATH="$WORK/late:$PATH" "$HARNESS_BIN" --kernel none --initrd none --timeout 1 --steptmo 1 --grace 0.2 --ok LATETOKEN "expect=Type 'help'" "expect=LATETOKEN" > /dev/null 2>&1 ); }
     (unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR; late_run); rc=$?
     check "the harness as written gives a late token one second" 1 "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
@@ -812,10 +826,13 @@ mkdir -p "$WORK/ports"
 rm -f "$WORK"/ports-entered.* "$WORK"/ports-release.* "$WORK"/ports-out.*
 # shellcheck disable=SC2016 # $1 and $2 are the inner shell's arguments
 holder='echo "$RACH2_PORT_OFFSET" > "$1"; i=0; while [ ! -e "$2" ] && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i+1)); done'
+# ports_entered NAME: wait until the claim NAME has written its offset.
 ports_entered() {
     i=0
     while [ ! -s "$WORK/ports-entered.$1" ] && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i+1)); done
 }
+# ports_end NAME PID: stop the claim PID when its command has not started,
+# and wait for it.
 ports_end() {
     [ -s "$WORK/ports-entered.$1" ] || kill "$2" 2> /dev/null
     wait "$2"
@@ -1043,10 +1060,8 @@ kill "$machine" 2>/dev/null; wait "$machine" 2>/dev/null
 rm -rf "$WORK/build/.run.lock" "$WORK/oldwork"
 
 # Every way out of the runner says `run: result:`, and a run that began says
-# `run: starting:`. A reader waiting for the result of a run cannot otherwise
-# tell a refusal from a run still going: on 2026-09-14 a refused run left one
-# line in a log, a watcher waited for a result that would never come, and a
-# session sat idle for eight hours.
+# `run: starting:`, so that a reader waiting for the result of a run can tell
+# a refusal from a run still going.
 mkdir -p "$WORK/build/.run.lock"
 printf 'pid %s\npgid %s\nwork %s\nsince now\nargs holding\n' \
     "$$" "$("$SELFTEST_UTIL" pgid $$)" "$WORK" > "$WORK/build/.run.lock/owner"
@@ -1069,9 +1084,9 @@ out=$(run editing); rc=$?
 check "a run whose input changed under it fails" 1 "$rc"
 check "and names the file" 1 "$(printf '%s\n' "$out" | grep -c 'voided: tests/system/suites.mk changed during the run')"
 
-# And it stops there rather than at the end. A set is an hour and more; a
-# source changed in its first minute cost the whole of it until the check ran
-# as the set went, which is what it cost on 2026-09-13.
+# And it stops there rather than at the end: a set takes an hour and more,
+# and the check runs as the set goes, so that a source changed in the set's
+# first minute does not cost the whole of it.
 echo "# the suites' makefile, as the runner sees it" > "$WORK/tests/system/suites.mk"
 out=$(run editing slowish); rc=$?
 check "a set whose source changes under it is stopped there" 1 "$(printf '%s\n' "$out" | grep -c 'stopping the set: the tree changed under it')"
@@ -1123,7 +1138,9 @@ check "progress is visible before a pooled suite finishes" 1 "$seen"
 check "the reporting suite still completes" 0 "$rc"
 check "each pooled suite publishes one result" 2 "$(grep -c '^run: .*: PASS in ' "$WORK/progress.out")"
 
-# None of these optional host commands is part of the runner's runtime.
+# The runner needs none of these optional host commands: each is replaced
+# with one that records its call and fails, and the run must pass without
+# calling any.
 for tool in perl pgrep stat lsof md5 shasum sha256sum; do
     cat > "$WORK/bin/$tool" <<'UNAVAILABLE'
 #!/bin/sh
@@ -1250,6 +1267,10 @@ rm -rf "$WORK/handoff"
 # suite was given is unset, since a run given one claims no block. The bound
 # of 300 tenths of a second only ends a failed test, which then releases the
 # blocks.
+#
+# hold_all_ports: lock all ten port blocks of $WORK/allports, in one chain of
+# runutil locks, around a command that writes allports-held and waits for
+# allports-release.
 hold_all_ports() {
     # shellcheck disable=SC2016 # $1 and $2 are the inner shell's arguments
     set -- sh -c 'echo held > "$1"; i=0; while [ ! -e "$2" ] && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i+1)); done' \

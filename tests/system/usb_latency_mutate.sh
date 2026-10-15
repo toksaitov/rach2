@@ -1,24 +1,26 @@
 #!/bin/sh
-# Prove the two USB wake-to-dispatch rows of tests/system/usb_latency.sh on
-# harness kernels built with each fault. Without the preemption that follows
-# a device interrupt, a reader the keyboard woke waits beside the spinner for
-# the timer, whose tick pumps the controller first, and the spin row must
-# fail its count of pumps. Without the service point in a large random read,
-# the reader waits for the whole eight-mebibyte call, and the random row must
-# fail its count of bytes. The source restored, touched and rebuilt must pass
-# both rows with a kernel equal to the first byte for byte.
+# usb_latency_mutate.sh [--texts]: show that the two USB wake-to-dispatch rows
+# of tests/system/usb_latency.sh catch two faults, on harness kernels built with
+# each. Without the preemption that follows a device interrupt, a reader the
+# keyboard woke waits beside the spinner for the timer, whose tick pumps the
+# controller first, and the spin row must fail its count of pumps. Without the
+# service point in a large random read, the reader waits for the whole
+# eight-mebibyte call, and the random row must fail its count of bytes. The
+# source restored, touched and rebuilt must pass both rows with a kernel equal
+# to the first byte for byte.
 #
 # The kernels are built from a private copy of rach2/ and mk/, so no kernel
 # under build/ is replaced; the test image, the harness and the runner helper
 # are the ones `tests/run usb` built, and must be current. ARCH chooses the
-# architecture, as it does for `tests/run`.
+# architecture, as it does for `tests/run`. --texts checks that each fault is
+# once in its source.
 #
 # Usage: sh tests/system/usb_latency_mutate.sh [--texts]
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault SYS FAULT: put FAULT into the sources under SYS; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -88,6 +90,7 @@ cp "$isr" "$work/isr.c.saved"
 cp "$syscall" "$work/syscall.c.saved"
 child=
 
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -98,6 +101,7 @@ stop_child()
     fi
 }
 
+# Put back the saved isr.c and syscall.c and touch them.
 restore()
 {
     cp "$work/isr.c.saved" "$isr"
@@ -105,6 +109,7 @@ restore()
     touch "$isr" "$syscall"
 }
 
+# Stop the rows and restore the sources.
 cleanup()
 {
     stop_child
@@ -115,6 +120,7 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# build PHASE: build the harness kernel from the private tree and keep a copy.
 build()
 {
     phase=$1
@@ -130,6 +136,9 @@ build()
     cksum "$isr" "$syscall" "$work/$phase.kernel" >"$work/$phase.cksum"
 }
 
+# run_rows PHASE FAILING: build the kernel and run both rows on it. With
+# FAILING empty both must pass; otherwise the FAILING row must fail with an
+# invalid dispatch record.
 run_rows()
 {
     phase=$1
@@ -155,6 +164,7 @@ run_rows()
     echo "usb-latency-mutation: result: $phase status $status"
 }
 
+# mutate FAULT: put FAULT into the private sources.
 mutate()
 {
     apply_fault "$work/rach2/sys" "$1"

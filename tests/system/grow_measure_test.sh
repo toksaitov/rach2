@@ -1,5 +1,9 @@
 #!/bin/sh
-# Require actual counter evidence, while allowing sub-tick phase durations.
+# grow_measure_test.sh: check that checkers/grow_measure.awk accepts the
+# measures of a grow whose phases each took less than a clock tick, and
+# refuses measures whose counts are all zero, a phase's count that differs
+# from its witness's, a missing witness line, a duplicated one, and phases out
+# of order.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 exec python3 - "$repo/tests/system/checkers/grow_measure.awk" <<'PY'
