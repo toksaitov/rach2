@@ -159,15 +159,18 @@ static int mouse_send_command(uint8_t cmd)
  * The IRQ 12 handler, which assembles a three-byte packet one byte an
  * interrupt and puts it in the mouse queue.
  *
- * The 8042 raises IRQ 12 for every auxiliary byte, and status bit 5
- * (PS2_STATUS_MOUSE_DATA) tells a mouse byte from a keyboard byte; a byte
- * the status marks as the keyboard's is read from the data port here and
- * dropped. A packet is framed by byte 0, whose bit 3 is always 1: a byte
- * expected as byte 0 with that bit clear is out of step with the stream and
- * is dropped, which brings the stream back in step. The X and Y movements
- * are 9-bit signed values with their high bits in bits 4 and 5 of byte 0; a
- * set overflow bit, bit 6 or 7, marks a movement that cannot be used, and
- * the whole packet is discarded.
+ * The 8042 raises IRQ 12 for every auxiliary byte. The handler reads the
+ * data port only when status bit 0 (PS2_STATUS_OUTPUT_FULL) says a byte
+ * waits and bit 5 (PS2_STATUS_MOUSE_DATA) says it is the auxiliary
+ * device's. A keyboard byte is left in the output buffer for the keyboard's
+ * IRQ 1 handler, and the packet is left as it was.
+ *
+ * A packet is framed by byte 0, whose bit 3 is always 1: a byte expected as
+ * byte 0 with that bit clear is out of step with the stream and is dropped,
+ * which brings the stream back in step. The X and Y movements are 9-bit
+ * signed values with their high bits in bits 4 and 5 of byte 0; a set
+ * overflow bit, bit 6 or 7, marks a movement that cannot be used, and the
+ * whole packet is discarded.
  */
 static void mouse_irq_handler(isr_params_t *params)
 {
@@ -176,14 +179,10 @@ static void mouse_irq_handler(isr_params_t *params)
 
     (void)params;
     status = inb(PS2_STATUS_PORT);
-    if (!(status & PS2_STATUS_OUTPUT_FULL)) {
+    if (!(status & PS2_STATUS_OUTPUT_FULL) || !(status & PS2_STATUS_MOUSE_DATA)) {
         return;
     }
     data = inb(PS2_DATA_PORT);
-
-    if (!(status & PS2_STATUS_MOUSE_DATA)) {
-        return;
-    }
 
     /* Byte 0 has the always-1 framing bit (bit 3). */
     if (packet_index == 0) {

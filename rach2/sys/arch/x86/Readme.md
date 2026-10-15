@@ -151,7 +151,7 @@ A chipset that matches a row is used only when its ACPI range decodes, its base 
 
 ### The devices
 
-The PS/2 keyboard's handler (`ps2kbd.c`) reads a scancode of set 1 from port 0x60, on line 1, and gives it to the input layer. The mouse's (`ps2mouse.c`) assembles the three-byte packets of the 8042's auxiliary port, on line 12. The 8042 keeps its line raised while a byte waits, and an I/O APIC input misses an edge that comes while it is masked, so once either handler is routed through the I/O APIC, `ps2_waiting` (`platform.c`) raises its vector once when that device's byte already waits. The terminals above them are in [terminals](../../tty/Readme.md).
+The PS/2 keyboard's handler (`ps2kbd.c`) reads a scancode of set 1 from port 0x60, on line 1, and gives it to the input layer. The mouse's (`ps2mouse.c`) assembles the three-byte packets of the 8042's auxiliary port, on line 12, and reads the data port only when status bit 5 marks the waiting byte as the mouse's, so that a keyboard byte is left for line 1. The 8042 keeps its line raised while a byte waits, and an I/O APIC input misses an edge that comes while it is masked, so once either handler is routed through the I/O APIC, `ps2_waiting` (`platform.c`) raises its vector once when that device's byte already waits. The terminals above them are in [terminals](../../tty/Readme.md).
 
 COM1 (`serial.c`) is the 16550 at 0x3F8, found by its scratch register and set to 115200 baud, eight bits, no parity and one stop bit. A byte out is dropped after a bounded wait, so that a port that does not drain delays the kernel and does not stop it. Bytes in are taken on line 4 and at every tick into a ring, which [terminals](../../tty/Readme.md) describes with the rest of the receive path.
 
