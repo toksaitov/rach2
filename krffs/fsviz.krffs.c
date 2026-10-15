@@ -1,3 +1,8 @@
+/*
+ * fsviz.krffs.c: fsviz.krffs, which draws the ring of nodes of a KRFFS image
+ * in a terminal.
+ */
+
 #include <fcntl.h>
 #include <inttypes.h>
 #include <stdbool.h>
@@ -35,12 +40,18 @@
 #include <unistd.h>
 #endif
 
+/**
+ * A grid of characters, `width` columns by `height` rows, stored row by row,
+ * that the drawing is made on before it is shown. `data` is NULL when the
+ * grid could not be allocated.
+ */
 struct viz_buffer {
     char *data;
     int width;
     int height;
 };
 
+/** Allocates the grid of `buffer`, filled with spaces. */
 static void viz_buffer_init(struct viz_buffer *buffer, int width, int height)
 {
     buffer->width = width;
@@ -51,6 +62,7 @@ static void viz_buffer_init(struct viz_buffer *buffer, int width, int height)
     }
 }
 
+/** Frees the grid of `buffer` and leaves it empty. */
 static void viz_buffer_free(struct viz_buffer *buffer)
 {
     free(buffer->data);
@@ -59,6 +71,7 @@ static void viz_buffer_free(struct viz_buffer *buffer)
     buffer->height = 0;
 }
 
+/** Sets the character at column `x` of row `y`, if it is inside the grid. */
 static void viz_buffer_set_char(struct viz_buffer *buffer, int x, int y, char ch)
 {
     if (x >= 0 && x < buffer->width && y >= 0 && y < buffer->height) {
@@ -66,6 +79,7 @@ static void viz_buffer_set_char(struct viz_buffer *buffer, int x, int y, char ch
     }
 }
 
+/** Returns the character at column `x` of row `y`, or a space outside. */
 static char viz_buffer_get_char(struct viz_buffer *buffer, int x, int y)
 {
     if (x >= 0 && x < buffer->width && y >= 0 && y < buffer->height) {
@@ -74,6 +88,10 @@ static char viz_buffer_get_char(struct viz_buffer *buffer, int x, int y)
     return ' ';
 }
 
+/**
+ * Writes `str` from column `x` of row `y`; the characters outside the grid
+ * are dropped.
+ */
 static void viz_buffer_print_string(struct viz_buffer *buffer, int x, int y, const char *str)
 {
     while (*str) {
@@ -81,6 +99,11 @@ static void viz_buffer_print_string(struct viz_buffer *buffer, int x, int y, con
     }
 }
 
+/**
+ * Copies to the termbox screen the part of the grid from column `shift_x` of
+ * row `shift_y`, `screen_width` by `screen_height` cells, from screen row
+ * `screen_y_offset`.
+ */
 static void viz_buffer_render_to_terminal(struct viz_buffer *buffer, int shift_x, int shift_y,
                                           int screen_y_offset, int screen_width, int screen_height)
 {
@@ -94,6 +117,10 @@ static void viz_buffer_render_to_terminal(struct viz_buffer *buffer, int shift_x
     }
 }
 
+/**
+ * Writes at most `max_width` characters of `str` to the termbox screen from
+ * column `x` of row `y`.
+ */
 static void tb_print_string(int x, int y, const char *str, int max_width)
 {
     int count = 0;
@@ -104,13 +131,23 @@ static void tb_print_string(int x, int y, const char *str, int max_width)
 }
 
 /**
- * Visualizes a KRFFS file system image for debugging and teaching.
+ * fsviz.krffs IMAGE [-t] [--offset BYTES --size BYTES]: draws the nodes of a
+ * KRFFS image in ring order as a row of bars, with an arrow from each node
+ * to the next and from the last back to the root.
  *
- * Maps the image at `argv[1]` and draws its node chain (root, free, and
- * reserved nodes) as a horizontal ribbon of labelled bars. With `-h` it
- * prints usage and exits; with `-t` it emits one static text frame to
- * stdout instead of running the interactive termbox view, where the arrow
- * keys (or `h`/`l`) scroll and `+`/`_` rescale the bytes-per-character.
+ * The root is `[* root node]`, a free node `[- free node: --]` and a reserved
+ * node `[# NAME: ##]`, with a character of the bar for each 512 KiB of the
+ * node's `size`, rounded up. In the termbox view the arrow keys or `h` and
+ * `l` scroll; `+` halves and `_` doubles the bytes a character stands for,
+ * between the largest node's size over 60000, at least 2, and the region's
+ * size; and `q` or Ctrl-C quits. With `-t` the drawing goes to stdout as
+ * text instead, once, cut to the characters it uses.
+ *
+ * The root must have the magic number and the root type; the walk then
+ * follows each node's `size` without a check. With no arguments, or with one
+ * that begins with `-h`, the usage goes to stderr and the exit status is 0; a
+ * first argument that begins with `-` is an error. Returns `EXIT_SUCCESS` or
+ * `EXIT_FAILURE`.
  */
 int main(int argc, char **argv)
 {
@@ -196,10 +233,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        The mapping outlives the descriptor: the pages stay backed by the file
-        after `krffs_map_file`, so the descriptor can be closed here.
-     */
     if (PLATFORM_PREFIX(close(file_descriptor)) == -1) {
         fprintf(stderr, "Failed to close the file system file at '%s'.\n", path);
 
@@ -209,10 +242,6 @@ int main(int argc, char **argv)
     }
     file_descriptor = -1;
 
-    /* Validate the file system before walking it: without a correct signature
-     * and root node the node-size fields are garbage, and the chain walk below
-     * would follow them out of the mapping. The size check guards the magic
-     * read itself. */
     if (file_system.size < (off_t)sizeof(struct krffs_node) ||
         file_system.node->magic != KRFFS_File_System_Magic ||
         file_system.node->type != KRFFS_Root_Node) {

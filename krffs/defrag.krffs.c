@@ -1,3 +1,8 @@
+/*
+ * defrag.krffs.c: defrag.krffs, which moves the free space of a KRFFS image
+ * to its end.
+ */
+
 #include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -18,18 +23,15 @@
 #include <sys/wait.h>
 #endif
 
-/* Name of the file system check utility, invoked before defragmenting. */
+/** The checker `main` runs before it changes the image. */
 #define KRFFS_FILE_SYSTEM_CHECK_UTILITY_NAME "fsck.krffs"
 
 /**
- * Run `program` on `path` without a shell and return its exit status.
- *
- * The path is passed as a distinct argv element, so no byte of it is ever
- * interpreted by a shell: this is what closes the command injection a
- * `system()` with the path concatenated into the command string would open.
- * Returns the utility's exit status, or 127 when it could not be launched
- * (so the caller can fall back to a `./`-prefixed name), or -1 on a
- * fork/wait failure.
+ * Runs `program` with the one argument `path` and waits for it: `fork` and
+ * `execvp` on Unix, `_spawnvp` on Windows. No shell reads `path`, so no byte
+ * of it can change the command. Returns the exit status, 127 when the
+ * program could not be started, or -1 when `fork` or `waitpid` failed or the
+ * program ended on a signal.
  */
 static int krffs_run_check_utility(const char *program, const char *path)
 {
@@ -72,19 +74,24 @@ static int krffs_run_check_utility(const char *program, const char *path)
 }
 
 /**
- * Defragments a KRFFS FUSE file system stored in a file.
+ * defrag.krffs IMAGE [--offset BYTES --size BYTES]: moves the free space of
+ * a KRFFS image to its end, as one free node.
  *
- * Runs `fsck.krffs` first and refuses to proceed unless it reports the file
- * system as valid. Maps the file, then slides every free block toward the end
- * by relocating the reserved blocks that follow it, coalescing free blocks as
- * it goes; the order of the reserved blocks is preserved.
+ * `fsck.krffs IMAGE` runs first, found on the PATH or else as `./fsck.krffs`,
+ * and a status other than 0 stops the tool; the check is given IMAGE alone,
+ * without the region options. Then, from the first free node on, each
+ * reserved node is moved down over the free space before it, keeping the
+ * order of the reserved nodes, and the free nodes passed are merged. With
+ * sizes in bytes:
  *
- * Usage:
- *     defrag.krffs -h
- *     defrag.krffs <file>
+ *     [free 2][used 5][free 3][used 2]
+ *     [used 5][free 2][free 3][used 2]   the reserved node moves down
+ *     [used 5][free 5][used 2]           the free nodes merge
+ *     [used 5][used 2][free 5]           the next reserved node moves down
  *
- * Options:
- *     -h    show help and exit
+ * With no arguments, or with one that begins with `-h`, the usage goes to
+ * stderr and the exit status is 0; a first argument that begins with `-` is
+ * an error. Returns `EXIT_SUCCESS` or `EXIT_FAILURE`.
  */
 int main(int argc, char **argv)
 {
@@ -119,9 +126,6 @@ int main(int argc, char **argv)
 
     char *path = argv[1];
 
-    /* Refuse to defragment a file system that fails `fsck.krffs`. Try the
-     * utility by name first (a PATH lookup), then the `./`-prefixed form for a
-     * build that runs the tools out of the current directory. */
     int fsck_result = krffs_run_check_utility(KRFFS_FILE_SYSTEM_CHECK_UTILITY_NAME, path);
 
     if (fsck_result == -1 || fsck_result == 127) {
@@ -153,7 +157,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /* The file system lives in a regular file, not a directory or socket. */
     if (!S_ISREG(file_info.st_mode)) {
         fprintf(stderr, "The file system file at '%s' is not a regular file.\n", path);
 
@@ -162,7 +165,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /* A file system needs at least two nodes: one used and a trailing free. */
     off_t region_offset;
     size_t region_size;
     if (krffs_parse_region_args(argc, argv, (uint64_t)file_info.st_size,
@@ -174,12 +176,6 @@ int main(int argc, char **argv)
 
     file_system.size = region_size;
 
-    /*
-        Map the file into memory. After a successful `krffs_map_file`, writes
-        to memory at `file_system.node` reach the file directly, either right
-        away or at `krffs_unmap_file` or `krffs_sync_mapping`. The kernel backs
-        the mapping with its virtual memory system.
-     */
     if ((file_system.node = krffs_map_file(file_descriptor, region_offset, file_system.size)) ==
         (void *)-1) {
         fprintf(stderr, "Failed to map the file system file at '%s' into memory.\n", path);
@@ -189,7 +185,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /* The mapping outlives the descriptor, so the file can be closed now. */
     if (PLATFORM_PREFIX(close(file_descriptor)) == -1) {
         fprintf(stderr, "Failed to close the file system file at '%s'.\n", path);
 
@@ -199,7 +194,6 @@ int main(int argc, char **argv)
     }
     file_descriptor = -1;
 
-    /* The KRFFS magic signature heads the file when one is present. */
     if (file_system.node->magic != KRFFS_File_System_Magic) {
         fprintf(stderr,
                 "The file system was not found at '%s'. The file system was not "
@@ -210,52 +204,6 @@ int main(int argc, char **argv)
 
         goto cleanup;
     }
-
-    /*
-        Defragment a file system by moving free space between used (reserved)
-        blocks toward the end. Do not change the order of used (reserved)
-        blocks.
-
-        Example
-            node: [type, size in bytes]
-                   free
-                   used
-
-                [free, 2]{  }[used, 5]{     }[free, 3]{   }[used, 2]{  }
-
-            Move the first free block toward the end while relocating reserved
-            (used) blocks. Combine consecutive free blocks to the right.
-
-            Find the first free block.
-
-                [free, 2]{  }[used, 5]{     }[free, 3]{   }[used, 2]{  }
-                ^
-                |
-                -
-
-            Move it one step toward the end.
-
-                [free, 2]{  }[used, 5]{     }[free, 3]{   }[used, 2]{  }
-                |                            ^
-                |____________________________|
-
-            Combine consecutive free blocks.
-
-                [used, 5]{     }[free, 2]{  }[free, 3]{   }[used, 2]{  }
-                                |            ^
-                                |____________|
-                                       +
-
-                [used, 5]{     }[free, 5 (2+3)]{     }[used, 2]{  }
-
-            Continue moving toward the end.
-
-                [used, 5]{     }[free, 5]{     }[used, 2]{  }
-                                |                            ^
-                                |____________________________|
-
-                [used, 5]{     }[used, 2]{  }[free, 5]{     }
-    */
 
     struct krffs_node *node = file_system.node;
     struct krffs_node *previous_node = krffs_get_previous_node(&file_system, node);

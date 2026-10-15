@@ -1,3 +1,8 @@
+/*
+ * fsck.krffs.c: fsck.krffs, which checks a KRFFS image and repairs the faults
+ * that can be repaired.
+ */
+
 #include <fcntl.h>
 #include <inttypes.h>
 #include <stdbool.h>
@@ -19,31 +24,33 @@
 #include <unistd.h>
 #endif
 
+/** The exit statuses of the faults the walk of `main` finds. */
 static const int KRFFS_Invalid_Link_Error = -10, KRFFS_Out_of_Range_Node_Error = -11,
                  KRFFS_Invalid_Magic_Signature_Error = -12, KRFFS_Unknown_Node_Type_Error = -13,
                  KRFFS_Node_Size_Error = -14, KRFFS_Repairs_Needed_Error = -15;
 
-/**
- * One named node, gathered by the walk so the check can find two of them.
- *
- * A file is found by its parent and its name, so a name repeated in one
- * directory is the fault; `hash` is only what sorts the entries, and the names
- * themselves decide.
- */
-/* A directory's type bits in a node's mode, as the kernel writes them. */
+/** The type field of a node's mode and a directory's value in it. */
 #define FSCK_S_IFMT  0170000u
 #define FSCK_S_IFDIR 0040000u
 
+/**
+ * A reserved node with a name, gathered by the walk to find a name repeated
+ * in one directory. A file is found by its parent and its name, so two nodes
+ * with one `parent_id` and one name are the fault.
+ */
 struct krffs_name_entry {
     uint64_t parent_id;
+    /** The djb2 hash of the name, which sorts the entries; the names decide. */
     uint64_t hash;
+    /** The node's byte offset in the region. */
     uint64_t position;
     uint64_t size;
     bool is_dir;
+    /** Set when the node loses the repeated name. */
     bool drop;
 };
 
-/** The node `position` bytes into the mapped file system. */
+/** Returns the node `position` bytes into the region of `file_system`. */
 static struct krffs_node *krffs_node_at(struct krffs_file_system *file_system, uint64_t position)
 {
     return (struct krffs_node *)((char *)file_system->node + position);
@@ -71,57 +78,51 @@ static int krffs_compare_name_entries(const void *left, const void *right)
 }
 
 /**
- * Checks the consistency of a KRFFS file system stored in a file.
+ * fsck.krffs IMAGE [--strict] [--offset BYTES --size BYTES]: checks a KRFFS
+ * image as the kernel checks a volume before it mounts it, and repairs the
+ * faults that can be repaired. It shares no code with the kernel, and the
+ * suites use it to judge the images the kernel writes. A line for each node
+ * goes to stdout and each fault to stderr.
  *
- * Usage: `fsck.krffs <file> [--offset N --size N] [--strict]`, or
- * `fsck.krffs -h` for help. The check maps the file, validates the file system
- * magic and root node, then walks the node list once, verifying that links are
- * consecutive, stay within the file system space, carry a valid signature, name
- * a known node type, and that the last node links back to the first.
+ * The root must have the magic number and the root type. One walk then
+ * follows the ring from the root by each node's `size`, for at most one step
+ * more than the headers the region could hold, and requires of each node the
+ * magic number, a known type, and a `size` of at least a header that ends
+ * inside the region; of a node that is not free, a `data_size` that fits,
+ * since a free node keeps the length of what was removed there; and of a
+ * reserved node, a NUL in its name. A walk that returns to the root has so
+ * spanned the region. A fault of these is fatal: it is reported and the
+ * image is left as it was.
  *
- * The walk asks of every node what the kernel asks of a volume it is about to
- * mount: a size of at least one header that ends inside the region, data that
- * fits in the node holding it, each node's `previous_node_size` the size of
- * the node before it, the root's the size of the last, and the sizes together
- * spanning the region exactly. Without those the checker accepted images the
- * kernel refuses, which is no use as an independent judge of what the kernel
- * writes.
+ * Four faults can be repaired: the dirty flag of an image that was not
+ * cleanly unmounted; an orphan, a reserved node with no name, which a crash
+ * leaves when the last descriptor of an unlinked file was never closed; a
+ * name repeated in one directory, which an interrupted move leaves, since a
+ * move gives the name to a larger node before it frees the smaller; and a
+ * `previous_node_size` that is not the size of the node before. They are
+ * repaired only once the walk has passed. The backward links are rebuilt
+ * from the forward chain first, since freeing a node merges it with the node
+ * before by following that link. Of two nodes with one name, the directory
+ * keeps it, since its children name it by its `id`, or else the larger; the
+ * other loses its name. Every node with no name is then freed with
+ * `krffs_remove_reserved_node`, and the dirty flag is cleared. Under
+ * `--strict` a repairable fault is reported and nothing is changed.
  *
- * Two kinds of fault. A fatal one, an unreadable signature, an unknown type, a
- * size that leaves the region, a data size larger than the node holding it, or
- * a chain that does not close, is reported and the image is left as it was.
- * A repairable one,
- * the dirty flag of an image that was not cleanly unmounted, a reserved node
- * with no name, which is what a crash leaves of a file nothing had a name for
- * any more, a name repeated in one directory by a move that was interrupted,
- * and a backward link that disagrees with the forward chain, is repaired
- * after the walk has passed, and each repair is named. Nothing is
- * repaired before the walk: writing to an image whose structure has not been
- * read through is how a checker damages what it was asked to inspect.
- *
- * `--strict` reports the repairable faults and changes nothing, which is what
- * a test asks when it wants to know that the kernel left an image clean rather
- * than repairable.
- *
- * Returns `EXIT_SUCCESS` on a clean file system, and on the help text and the
- * run with no arguments at all; `EXIT_FAILURE` for the arguments, the open and
- * the mapping, and for a root whose signature or type is wrong. A fault the
- * walk finds yields a specific negative status: `-10` for a nonconsecutive
- * link, `-11` for a link outside the file system space, `-12` for an invalid
- * signature, `-13` for an unknown node type, `-14` for a node whose size or
- * data does not fit the region or whose name never ends, and `-15` for repairs
- * owed under `--strict`. A failure while unmapping or closing is printed and
- * changes nothing.
- * Per-node debug output goes to stdout and can be silenced with `> /dev/null`.
+ * Returns `EXIT_SUCCESS` for an image that passed, and for no arguments or an
+ * argument that begins with `-h`; `EXIT_FAILURE` for a bad argument, an image
+ * that cannot be opened or mapped, a root with the wrong magic number or
+ * type, or no memory; and, which the shell sees as 246 to 241, -10 for a
+ * chain that does not return to the root, -11 for a node outside the region,
+ * -12 for a wrong magic number, -13 for an unknown type, -14 for a size, data
+ * size or name that does not fit, and -15 for a repair owed under
+ * `--strict`. A failure to close or unmap is printed and does not change the
+ * status.
  */
 int main(int argc, char **argv)
 {
     int exit_status = EXIT_SUCCESS;
 
     int file_descriptor = -1;
-    /* Declared here and not beside its use: `cleanup` frees it, and the help
-       text, the argument errors and every failure before the walk jump
-       straight there. */
     struct krffs_name_entry *entries = NULL;
     struct krffs_file_system file_system = {.node = NULL};
 
@@ -193,12 +194,6 @@ int main(int argc, char **argv)
 
     file_system.size = region_size;
 
-    /*
-        Map the file into memory through the kernel's virtual memory system.
-        Writes to `file_system.node` change the shared mapping of the file.
-        `krffs_sync_mapping` asks for them to be written back; unmapping is
-        this host's `munmap` and promises nothing about when they land.
-     */
     if ((file_system.node = krffs_map_file(file_descriptor, region_offset, file_system.size)) ==
         (void *)-1) {
         fprintf(stderr, "Failed to map the file system file at '%s' into memory.\n", path);
@@ -208,10 +203,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        The mapping outlives the descriptor, so close the file now; the pages
-        stay mapped to it.
-     */
     if (PLATFORM_PREFIX(close(file_descriptor)) == -1) {
         fprintf(stderr, "Failed to close the file system file at '%s'.\n", path);
 
@@ -247,9 +238,6 @@ int main(int argc, char **argv)
 
     puts("The filesystem has a correct root node.");
 
-    /* Read before written: the dirty flag is reported here and cleared after
-       the walk, so an image whose chain is broken keeps the evidence of both
-       faults. */
     bool was_dirty = (file_system.node->mode & KRFFS_MODE_DIRTY) != 0;
 
     if (was_dirty) {
@@ -257,8 +245,8 @@ int main(int argc, char **argv)
     }
 
     uint64_t orphans = 0;
-    uint64_t backlinks = 0;  /* backward links the forward chain contradicts */
-    uint64_t duplicates = 0; /* names repeated in one directory */
+    uint64_t backlinks = 0;
+    uint64_t duplicates = 0;
 
     size_t entry_count = 0;
     size_t entry_capacity = 0;
@@ -266,10 +254,6 @@ int main(int argc, char **argv)
     struct krffs_node *previous_node = file_system.node;
     struct krffs_node *node = previous_node;
 
-    /* The walk judges every size before it steps by one, so a node too small
-     * to hold a header ends it. The bound below is the second answer to the
-     * same question: a chain that does not return to the root within the most
-     * nodes the mapping could hold is corrupt, not endless. */
     uint64_t steps = 0;
     uint64_t max_steps = file_system.size / sizeof(struct krffs_node) + 1;
 
@@ -333,10 +317,6 @@ int main(int argc, char **argv)
             break;
         }
 
-        /* A node holds at least its own header and ends inside the region.
-           Checked before the subtraction below and before the walk steps by
-           it: a size under a header would wrap that subtraction, and a size
-           past the region would step outside the mapping. */
         if (node->size < sizeof(struct krffs_node) ||
             node->size > file_system.size - krffs_get_node_relative_position(&file_system, node)) {
             printf("- node at position %" PRIu64 ": a size of %" PRIu64 " bytes in "
@@ -349,13 +329,6 @@ int main(int argc, char **argv)
             break;
         }
 
-        /* A node's data lives between its header and its end, so a data size
-           that does not fit is a node whose bytes are somebody else's. Fatal:
-           nothing in the image says what the size should have been. A free
-           node is not asked: it keeps the length of whatever was removed
-           there, and the allocator publishes the smaller size of a split
-           before it writes the new length, which the kernel's own check
-           passes over for the same reason. */
         if (node->type != KRFFS_Free_Node &&
             node->data_size > node->size - sizeof(struct krffs_node)) {
             printf("- node at position %" PRIu64 ": %" PRIu64 " bytes of data in "
@@ -367,10 +340,6 @@ int main(int argc, char **argv)
             break;
         }
 
-        /* What the kernel checks before it mounts: the backward link is the
-           size of the node before, and the sizes span the region. The forward
-           chain is the truth; a backward link that disagrees is repairable
-           because it can be derived from the walk that just passed it. */
         if (node->type == KRFFS_Reserved_Node) {
             uint32_t i;
 
@@ -403,12 +372,6 @@ int main(int argc, char **argv)
                    krffs_get_node_relative_position(&file_system, node), (unsigned)node->uid,
                    (unsigned)node->gid);
         } else if (node->type == KRFFS_Reserved_Node && node->name[0] == '\0') {
-            /* An orphan: a reserved node no path names, left by a crash between
-               the last unlink or rename and the last close. A writable mount
-               of a volume whose dirty flag is set reaps these; a read-only
-               mount and a clean one leave them where they are. Report them
-               here so an operator reading fsck's output is not left
-               wondering what the space is. */
             orphans++;
             printf("+ orphan node at position %" PRIu64 ": %" PRIu64 " bytes "
                    "(%" PRIu64 " bytes for data, owner %u:%u), to be reclaimed\n",
@@ -458,11 +421,6 @@ int main(int argc, char **argv)
         node = krffs_get_next_node(&file_system, node);
     } while (node != file_system.node);
 
-    /* The chain closed at the root, so `previous_node` is the last node and its
-       size is what the root's backward link must say. That the sizes span the
-       region is not checked separately: the walk steps by each node's size and
-       ends only where the chain returns to the root, and every size is bounded
-       against the region above, so a walk that closes has spanned it. */
     if (exit_status == EXIT_SUCCESS) {
         if (file_system.node->previous_node_size != previous_node->size) {
             printf("! backward link at the root: %" PRIu64 " bytes, "
@@ -472,12 +430,6 @@ int main(int argc, char **argv)
         }
     }
 
-    /* A name repeated in one directory is what an interrupted move leaves. The
-       node the move is making is published under the name before the node it
-       replaces is freed, so a machine that stops between the two keeps both.
-       A move only ever happens to grow a file into a larger node, so the
-       larger of the two is the one the move was making: the smaller loses its
-       name and the orphan pass below reclaims it. */
     if (exit_status == EXIT_SUCCESS && entry_count > 1) {
         size_t i;
 
@@ -501,12 +453,6 @@ int main(int argc, char **argv)
                     continue;
                 }
 
-                /* The larger is the copy a move was making, since a move
-                   only ever makes a node larger. A directory is never the
-                   one that loses its name whatever the sizes say: its
-                   children name it by its identifier, and clearing it would
-                   put a whole tree out of reach. The kernel's own check
-                   makes the same two judgements. */
                 if (entries[i].is_dir != entries[j].is_dir) {
                     keep = entries[i].is_dir ? i : j;
                 } else {
@@ -525,8 +471,6 @@ int main(int argc, char **argv)
         }
     }
 
-    /* Under `--strict` a repairable fault is the answer, and the image is left
-       as it was found. */
     if (exit_status == EXIT_SUCCESS && is_strict &&
         (was_dirty || orphans != 0 || duplicates != 0 || backlinks != 0)) {
         fprintf(stderr,
@@ -536,11 +480,6 @@ int main(int argc, char **argv)
         exit_status = KRFFS_Repairs_Needed_Error;
     }
 
-    /* The backward links, rebuilt from the forward chain the walk validated,
-       and rebuilt first: the passes below free nodes through the allocator,
-       which merges a freed node with the node before it by following that
-       link. A link that disagrees with the chain would merge the wrong two nodes, or
-       a node with itself. */
     if (exit_status == EXIT_SUCCESS && backlinks != 0) {
         struct krffs_node *scan = file_system.node;
         struct krffs_node *behind = NULL;
@@ -563,8 +502,6 @@ int main(int argc, char **argv)
         printf("Rebuilt %" PRIu64 " backward link(s) from the forward chain.\n", fixed);
     }
 
-    /* The node that loses a repeated name has no name left, so the pass below
-       reclaims it with the other nameless nodes. */
     if (exit_status == EXIT_SUCCESS && duplicates != 0) {
         size_t i;
 
@@ -576,20 +513,6 @@ int main(int argc, char **argv)
         printf("Dropped %" PRIu64 " repeated name(s) an interrupted move left.\n", duplicates);
     }
 
-    /* Reclaim every orphan: a reserved node with no name, kept alive in a
-       running system by the descriptors holding it and freed by the last close.
-       A shutdown that closed none of them leaves one here with nothing left to
-       do the freeing. The kernel reaps them at mount; doing it here as well is
-       what makes the offline repair a repair.
-
-       Only after the walk above has validated every node's extent and after
-       the backward links have been rebuilt from it. Calling into the
-       allocator on an image whose links are corrupt is how a checker damages
-       the thing it was asked to inspect; a structurally bad image is
-       reported and left exactly as it was found. One bounded pass: a removal coalesces with
-       whichever neighbours are free, and the merged region begins at the
-       previous node when that was free and at this one otherwise, so the walk
-       resumes there and steps over it by its new size. */
     if (exit_status == EXIT_SUCCESS) {
         uint64_t reclaimed = 0;
         uint64_t walked = 0;

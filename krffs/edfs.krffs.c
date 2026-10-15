@@ -1,3 +1,7 @@
+/*
+ * edfs.krffs.c: edfs.krffs, which sets fields of one node of a KRFFS image.
+ */
+
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -21,33 +25,20 @@
 #endif
 
 /**
- * Edits one node of a KRFFS file system held in a file.
+ * edfs.krffs IMAGE POSITION [--set-magic N] [--set-type root|free|reserved]
+ * [--set-id N] [--set-name NAME] [--set-size N] [--set-prev-size N]
+ * [--set-data-size N] [--offset BYTES --size BYTES]: sets the given fields of
+ * the node that starts POSITION bytes into the region, to break a test image
+ * in a known way or mend one by hand, and syncs its header.
  *
- * The node is located by its byte position relative to the start of the file
- * system, then each `--set-*` option overwrites a field of the on-disk node
- * record in place. The file is mapped writable, so the edit is committed by a
- * `krffs_sync_mapping` of the touched node. `--set-name` also recomputes the
- * node's `id` from the name via the djb hash, matching how the file system
- * derives ids.
- *
- * Usage:
- *
- *     edfs.krffs -h
- *     edfs.krffs <file> <node position> \
- *         [--set-magic <magic>]
- *         [--set-type root|free|reserved]
- *         [--set-id <id>]
- *         [--set-name <name>]
- *         [--set-size <size>]
- *         [--set-prev-size <size>]
- *         [--set-data-size <size>]
- *
- * `--set-magic` sets the node signature to a 16-bit unsigned number,
- * `--set-type` sets the type to `root`, `free`, or `reserved`, `--set-id` sets
- * the id to a 64-bit unsigned number, `--set-name` sets the name to a string of
- * up to 255 bytes, `--set-size`, `--set-prev-size`, and `--set-data-size` set
- * the size, previous-node-size, and data-size fields to 64-bit unsigned
- * numbers, and `-h` prints help and exits.
+ * The node is found by a walk of the ring from the root, which follows each
+ * node's `size` without a check; when no node starts at POSITION, nothing
+ * changes and the status is still 0. The numbers are decimal: the magic
+ * number at most 65535, the others 64 bits. The type is matched in any case.
+ * `--set-name` cuts NAME to 255 bytes and sets `id` to its djb2 hash, in
+ * place of any `--set-id`. An option given twice, an unknown option or a bad
+ * number is an error. With `-h` anywhere the usage goes to stderr and the
+ * exit status is 0. Returns `EXIT_SUCCESS` or `EXIT_FAILURE`.
  */
 int main(int argc, char **argv)
 {
@@ -85,8 +76,6 @@ int main(int argc, char **argv)
     char *end_ptr = NULL;
     int base = 10;
 
-    /* `-h` anywhere requests help, even on its own without a file and
-     * position. */
     {
         int i;
         for (i = 1; i < argc; ++i) {
@@ -116,7 +105,7 @@ int main(int argc, char **argv)
                 magic_value = strtoull(argv[i + 1], &end_ptr, base);
                 if (argv[i + 1] == end_ptr || *end_ptr != '\0' || errno != 0 ||
                     magic_value > 0xFFFFu) {
-                    failed_to_parse_options = true; /* not a 16-bit magic */
+                    failed_to_parse_options = true;
                 } else {
                     magic = (uint16_t)magic_value;
                 }
@@ -201,19 +190,17 @@ int main(int argc, char **argv)
             }
             ++i;
         } else if (strcmp(argv[i], "--offset") == 0 || strcmp(argv[i], "--size") == 0) {
-            ++i; /* a shared region option; krffs_parse_region_args consumes it below */
+            ++i;
         } else {
-            failed_to_parse_options = true; /* an unknown or duplicate option */
+            failed_to_parse_options = true;
         }
     }
 
     if (has_help_option) {
         fprintf(stderr, "Usage: %s <file> <node position> <options>\n", argv[0]);
 
-        goto cleanup; /* help requested: a success exit */
+        goto cleanup;
     } else if (argc <= 2 || failed_to_parse_options) {
-        /* A missing or unparseable argument must report failure, not exit 0 as
-         * if the edit succeeded; a calling script relies on the status. */
         fprintf(stderr,
                 "edfs.krffs: an option or its argument was missing or invalid\n"
                 "Usage: %s <file> <node position> <options>\n",
@@ -272,11 +259,6 @@ int main(int argc, char **argv)
 
     file_system.size = region_size;
 
-    /*
-        Writes to memory at `file_system.node` after a successful
-        `krffs_map_file` reach the file directly, either at once or at
-        `krffs_unmap_file` or `krffs_sync_mapping`.
-     */
     if ((file_system.node = krffs_map_file(file_descriptor, region_offset, file_system.size)) ==
         (void *)-1) {
         fprintf(stderr, "Failed to map the file system file at '%s' into memory.\n", path);
@@ -286,9 +268,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        The mapping survives closing the file; the pages stay backed by it.
-     */
     if (PLATFORM_PREFIX(close(file_descriptor)) == -1) {
         fprintf(stderr, "Failed to close the file system file at '%s'.\n", path);
 

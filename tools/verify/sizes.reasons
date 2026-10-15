@@ -9,16 +9,16 @@ ish/ish.c:ish_run_line complexity 37 a dispatcher, one arm per command, read as 
 ish/ish.c:ish_run_line lines 136 a dispatcher, one arm per command, read as a table
 
 krffs/defrag.krffs.c:main complexity 30 one procedure over a file format, in the order the format is read
-krffs/defrag.krffs.c:main lines 245 one procedure over a file format, in the order the format is read
+krffs/defrag.krffs.c:main lines 186 one procedure over a file format, in the order the format is read
 
 krffs/edfs.krffs.c:main complexity 78 one procedure over a file format, in the order the format is read
-krffs/edfs.krffs.c:main lines 301 one procedure over a file format, in the order the format is read
+krffs/edfs.krffs.c:main lines 289 one procedure over a file format, in the order the format is read
 
 krffs/fsck.krffs.c:main complexity 91 one procedure over a file format, in the order the format is read
-krffs/fsck.krffs.c:main lines 525 one procedure over a file format, in the order the format is read
+krffs/fsck.krffs.c:main lines 444 one procedure over a file format, in the order the format is read
 
 krffs/fsviz.krffs.c:main complexity 87 one procedure over a file format, in the order the format is read
-krffs/fsviz.krffs.c:main lines 420 one procedure over a file format, in the order the format is read
+krffs/fsviz.krffs.c:main lines 412 one procedure over a file format, in the order the format is read
 krffs/fsviz.krffs.c:main nesting 6 one procedure over a file format, in the order the format is read
 
 krffs/krffs.c:main lines 105 one procedure over a file format, in the order the format is read
