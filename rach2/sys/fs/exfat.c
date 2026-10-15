@@ -1,10 +1,6 @@
 /*
- * exfat.c: the `exfat` type, read. The contract is in exfat.h and
- * exfat.Readme.md; what is here is the volume check over both boot
- * regions, the root's objects, the up-case table in its three forms, the
- * entry sets and their invariants, chains with and without the FAT,
- * names, timestamps, and the node pool that gives the VFS something to
- * hold. The writer is phase 4's.
+ * exfat.c: the exFAT file system, read and written through the buffer cache;
+ * the contract is in exfat.h and exfat.Readme.md.
  */
 
 #include "exfat.h"
@@ -38,41 +34,50 @@
 #define UPCASE_LOW  2048u  /* code points whose mapping is kept, walked once */
 #define SET_MAX     19     /* the file entry, the stream, and up to 17 name entries */
 
+/* A file or directory in memory, from the heap, on its mount's list. */
 struct ex_node {
     struct ex_node *next; /* the mount's list of nodes in memory */
     int used;
-    int refs;
+    int refs; /* holds; the last `ex_put` frees the node */
     int is_dir;
     uint32_t dir_cluster; /* the directory holding the set; 0 for the root */
     uint32_t index;       /* the set's file entry, an index in that directory */
     uint32_t parent;      /* a directory's parent directory, 0 for the root */
-    uint32_t first;       /* first cluster; 0 for no clusters or the root */
+    uint32_t first;       /* first cluster; 0 for a file with no clusters */
     uint64_t length;      /* DataLength */
     uint64_t valid;       /* ValidDataLength; bytes past it read as zeros */
     int nofat;            /* the chain is contiguous and the FAT is not read */
     uint16_t attr;
     uint32_t ctime, mtime, atime; /* the timestamp fields as stored */
+    /* The 10 ms counts and the UTC offsets, as stored. */
     uint8_t c10, m10, coff, moff, aoff;
     int unlinked; /* the set is gone; the clusters go at the last put */
-    int scanned;  /* a directory read to its end for a critical entry it cannot hold */
+    int scanned;  /* a directory read to its end and found with no unknown critical entry */
+    /* Where `chain_at` last stopped: an index in the chain and its cluster,
+     * a cluster of 0 for no hint. */
     uint32_t hint_index;
     uint32_t hint_cluster;
 };
 
-#define EXFAT_FROZEN 16 /* directories found holding an unknown critical entry */
+#define EXFAT_FROZEN 16 /* the frozen directories a mount remembers */
 
+/* A mounted volume, from the heap, at `mnt->priv`. */
 struct ex_mount {
     int used;
     block_device_t *dev;
     struct vfs_mount *mnt;
-    uint32_t spc_shift;
+    uint32_t spc_shift; /* log2 of the sectors in a cluster */
+    /* FatOffset, FatLength and ClusterHeapOffset in sectors, ClusterCount,
+     * the root directory's first cluster, and the active FAT, 0 or 1. */
     uint32_t fat_offset, fat_length, heap_offset, clusters, root, active_fat;
-    uint64_t volume_length;
-    uint32_t uid, gid, umask;
+    uint64_t volume_length;   /* in sectors */
+    uint32_t uid, gid, umask; /* the mount's options */
     int writable;
+    /* The allocation bitmap's first cluster and length in bytes. */
     uint32_t bitmap_first;
     uint64_t bitmap_length;
     struct ex_node bitmap_walk; /* the hints of the last walk of the bitmap's chain */
+    /* The up-case table's first cluster and length in bytes. */
     uint32_t upcase_first;
     uint64_t upcase_length;
     /* 0: the stored form held here and walked; 1: uncompressed, indexed
@@ -85,10 +90,12 @@ struct ex_mount {
      * lookup passes and a walk per character is the cost of that scan. */
     int upcase_low_held;
     uint16_t upcase_low[UPCASE_LOW];
-    int free_known;
+    int free_known; /* `free_clusters` has been counted from the bitmap */
     uint32_t free_clusters;
+    /* The cluster a first-fit search starts at. */
     uint32_t alloc_hint;
     int dirty_set; /* VolumeDirty is on the disk for this mount */
+    /* The first clusters of the frozen directories, `nfrozen` of them. */
     uint32_t frozen[EXFAT_FROZEN];
     int nfrozen;
     uint8_t setbuf[256 * 32]; /* one set, other writers' up to 255 secondaries */
@@ -103,7 +110,7 @@ struct ex_mount {
     uint8_t dir_bytes[BCACHE_BLOCK_BYTES];
 };
 
-/* The way a node leaves the mount's list and the heap. */
+/** Take node `n` off the mount's list and free it. */
 static void node_drop(struct ex_mount *em, struct ex_node *n)
 {
     struct ex_node **link = &em->nodes;
@@ -117,37 +124,44 @@ static void node_drop(struct ex_mount *em, struct ex_node *n)
     kfree(n);
 }
 
+/** The little-endian 16-bit field at `p`. */
 static uint16_t le16(const uint8_t *p)
 {
     return (uint16_t)(p[0] | (p[1] << 8));
 }
 
+/** The little-endian 32-bit field at `p`. */
 static uint32_t le32(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+/** The little-endian 64-bit field at `p`. */
 static uint64_t le64(const uint8_t *p)
 {
     return (uint64_t)le32(p) | ((uint64_t)le32(p + 4) << 32);
 }
 
+/** The driver's record of mount `mnt`. */
 static struct ex_mount *em_of(struct vfs_mount *mnt)
 {
     return mnt->priv;
 }
 
+/** The bytes of one cluster. */
 static uint32_t cluster_bytes(const struct ex_mount *em)
 {
     return BLOCK_SECTOR_SIZE << em->spc_shift;
 }
 
+/** The byte offset on the device of cluster `c` of the heap. */
 static uint64_t cluster_offset(const struct ex_mount *em, uint32_t c)
 {
     return ((uint64_t)em->heap_offset + ((uint64_t)(c - 2) << em->spc_shift)) * BLOCK_SECTOR_SIZE;
 }
 
-/* The clusters `bytes` take, by shift: the kernel has no 64-bit division. */
+/** The clusters `bytes` take, rounded up, by shift: the kernel has no 64-bit
+ * division. */
 static uint64_t clusters_of(const struct ex_mount *em, uint64_t bytes)
 {
     uint32_t shift = 9 + em->spc_shift;
@@ -155,6 +169,7 @@ static uint64_t clusters_of(const struct ex_mount *em, uint64_t bytes)
     return (bytes >> shift) + ((bytes & (((uint64_t)1 << shift) - 1)) != 0 ? 1 : 0);
 }
 
+/** Whether `c` is a cluster of the heap, 2 to ClusterCount + 1. */
 static int in_heap(const struct ex_mount *em, uint32_t c)
 {
     return c >= 2 && c < em->clusters + 2;
@@ -162,6 +177,8 @@ static int in_heap(const struct ex_mount *em, uint32_t c)
 
 /* ---- the cache ---- */
 
+/** Copy `len` bytes at byte offset `off` of the device into `dst`, through
+ * the cache a block at a time; 0, or -EIO. */
 static int ex_read_bytes(struct ex_mount *em, uint64_t off, void *dst, uint32_t len)
 {
     uint8_t *out = dst;
@@ -192,7 +209,7 @@ static int ex_read_bytes(struct ex_mount *em, uint64_t off, void *dst, uint32_t 
     return 0;
 }
 
-/* The FAT entry of `c`, from the active FAT. */
+/** The entry of cluster `c` in the active FAT, into `*next`; 0, or -EIO. */
 static int fat_next(struct ex_mount *em, uint32_t c, uint32_t *next)
 {
     uint8_t raw[4];
@@ -208,12 +225,16 @@ static int fat_next(struct ex_mount *em, uint32_t c, uint32_t *next)
     return 0;
 }
 
-/* Cluster `index` of a chain: `first + index` for a contiguous one, and
- * through the FAT otherwise, from the node's last position when it helps.
- * -ENXIO past the chain's end, -EIO for a chain that leaves the heap, a
- * bad or free entry, or a cluster that names itself. A longer loop within
- * a file's length repeats its clusters; the dirty-volume check is what
- * finds it, as on FAT32. */
+/**
+ * Cluster `index` of the chain from `first`, into `*cluster`: `first +
+ * index` for a contiguous chain of `length` bytes (`nofat`), and through the
+ * FAT otherwise, from node `n`'s last position when that lies at or before
+ * `index`. `n` may be NULL; for a FAT chain it is given the new position.
+ * 0, -ENXIO past the chain's end, or -EIO for an index past the volume's
+ * clusters, a chain that leaves the heap, a bad or free entry, or a cluster
+ * that names itself. A longer loop within a file's length repeats its
+ * clusters; the dirty-volume check is what finds it, as on FAT32.
+ */
 static int chain_at(struct ex_mount *em, struct ex_node *n, uint32_t first, int nofat,
                     uint64_t length, uint32_t index, uint32_t *cluster)
 {
@@ -267,8 +288,10 @@ static int chain_at(struct ex_mount *em, struct ex_node *n, uint32_t first, int 
     return 0;
 }
 
-/* ---- the node pool ---- */
+/* ---- the nodes in memory ---- */
 
+/** A new node with one hold, on the mount's list, or NULL when the heap has
+ * no room. */
 static struct ex_node *node_take(struct ex_mount *em)
 {
     struct ex_node *n = kzalloc(sizeof(*n));
@@ -282,6 +305,11 @@ static struct ex_node *node_take(struct ex_mount *em)
     return n;
 }
 
+/**
+ * The node in memory, held once more, of the directory whose first cluster
+ * is `first`, or of the file whose set is entry `index` of the directory at
+ * `dir_cluster`; NULL when there is none. An unlinked node is not found.
+ */
 static struct ex_node *node_find(struct ex_mount *em, int is_dir, uint32_t dir_cluster,
                                  uint32_t index, uint32_t first)
 {
@@ -299,6 +327,7 @@ static struct ex_node *node_find(struct ex_mount *em, int is_dir, uint32_t dir_c
     return 0;
 }
 
+/** The `hold` of `vfs_ops`: one more hold on `node`. */
 static void ex_hold(struct vfs_mount *mnt, void *node)
 {
     (void)mnt;
@@ -309,6 +338,13 @@ static int free_chain(struct ex_mount *em, uint32_t first, int nofat, uint64_t l
 static int write_boot_state(struct ex_mount *em, int dirty);
 static int ex_check_volume(struct ex_mount *em);
 
+/**
+ * The `put` of `vfs_ops`: drop a hold on `node`, and free it with the last.
+ *
+ * An unlinked node's clusters are freed at its last put, under the mount's
+ * namespace lock. Its set went at the unlink, so a crash before this leaves
+ * the clusters lost, for the dirty-volume check to count.
+ */
 static void ex_put(struct vfs_mount *mnt, void *node)
 {
     struct ex_node *n = node;
@@ -317,8 +353,6 @@ static void ex_put(struct vfs_mount *mnt, void *node)
         n->refs--;
     }
     if (n->refs == 0) {
-        /* An unlinked file's clusters go when its last holder does; the
-         * set went at the unlink, so a crash here leaks them. */
         if (n->unlinked && n->first != 0) {
             struct ex_mount *em = mnt->priv;
 
@@ -332,9 +366,13 @@ static void ex_put(struct vfs_mount *mnt, void *node)
 
 /* ---- the system objects ---- */
 
-/* `len` bytes at `off` of a system object whose clusters the FAT chains:
- * the bitmap and the up-case table, whose entries have no flags and so no
- * NoFatChain. */
+/**
+ * Copy `len` bytes at offset `off` of a system object into `dst`: the
+ * allocation bitmap or the up-case table, from cluster `first`, whose
+ * clusters the FAT chains, since their entries have no flags and so no
+ * NoFatChain. `walk` keeps the position in the chain between calls, or is
+ * NULL. 0, or -EIO.
+ */
 static int object_read(struct ex_mount *em, uint32_t first, struct ex_node *walk, uint64_t off,
                        void *dst, uint32_t len)
 {
@@ -367,8 +405,8 @@ static int object_read(struct ex_mount *em, uint32_t first, struct ex_node *walk
 
 /* ---- the up-case table ---- */
 
-/* The stored table read two bytes at a time, from the mount's held copy
- * or through the cache. 1 with a unit, 0 at the end, or an error. */
+/* A reader of the stored up-case table, a unit at a time, from the mount's
+ * held copy or through the cache, a chunk of 512 bytes at a time. */
 struct upcase_reader {
     struct ex_mount *em;
     uint64_t at; /* the chunk's offset in the table */
@@ -376,6 +414,8 @@ struct upcase_reader {
     uint8_t chunk[512];
 };
 
+/** The next unit of the stored table, into `*w`: 1 with a unit, 0 at the
+ * table's end, or -EIO. */
 static int upcase_next(struct upcase_reader *r, uint16_t *w)
 {
     if (r->pos + 2 > r->have) {
@@ -406,8 +446,13 @@ static int upcase_next(struct upcase_reader *r, uint16_t *w)
     return 1;
 }
 
-/* The stored form's runs walked to `unit`: a 0xFFFF followed by a count is
- * that many identity mappings, anything else maps the next unit. */
+/**
+ * The mapping of `unit`, into `*out`, by a walk of the stored table from its
+ * start: a 0xFFFF followed by a count is that many identity mappings, and
+ * any other unit maps the next code point. A unit the table does not reach,
+ * which the check at mount excludes, maps to itself, as does one whose part
+ * of the table cannot be read. Always 0.
+ */
 static int upcase_walk(struct ex_mount *em, uint16_t unit, uint16_t *out)
 {
     struct upcase_reader r;
@@ -442,14 +487,15 @@ static int upcase_walk(struct ex_mount *em, uint16_t unit, uint16_t *out)
             u++;
         }
     }
-    *out = unit; /* past the table, which the check has excluded: identity */
+    *out = unit;
     return 0;
 }
 
 /**
- * The mappings of the code points below `UPCASE_LOW` into the mount's
- * record, by one walk of the stored table from its start; a table that
- * ends before them maps the rest to themselves.
+ * Read the mappings of the code points below `UPCASE_LOW` into the mount's
+ * record, by one walk of the stored table from its start, and mark them
+ * held. A table that ends before them maps the rest to themselves, and in
+ * the uncompressed form a 0xFFFF is a mapping and not a run. 0, or -EIO.
  */
 static int upcase_fill_low(struct ex_mount *em)
 {
@@ -495,6 +541,11 @@ static int upcase_fill_low(struct ex_mount *em)
     return 0;
 }
 
+/**
+ * The up-case mapping of `unit` in the volume's table, into `*out`: from the
+ * mappings held since the mount below `UPCASE_LOW`, by index into an
+ * uncompressed table, or by a walk of a compressed one. 0, or -EIO.
+ */
 static int ex_upcase(struct ex_mount *em, uint16_t unit, uint16_t *out)
 {
     if (em->upcase_low_held && unit < UPCASE_LOW) {
@@ -514,7 +565,8 @@ static int ex_upcase(struct ex_mount *em, uint16_t unit, uint16_t *out)
     return upcase_walk(em, unit, out);
 }
 
-/* The name hash of `n` units, up-cased, as the specification computes it. */
+/** The NameHash of the `n` units at `units`, each up-cased, into `*hash`, as
+ * the specification computes it; 0, or -EIO. */
 static int name_hash(struct ex_mount *em, const uint16_t *units, uint32_t n, uint16_t *hash)
 {
     uint16_t sum = 0;
@@ -536,10 +588,12 @@ static int name_hash(struct ex_mount *em, const uint16_t *units, uint32_t n, uin
 
 /* ---- directories and sets ---- */
 
-/* Entry `index` of the directory at `first` (the root for 0), read through
- * its chain from the mount's copy of the entry's cache block, which a scan
- * reads once per block. 1 with `raw` filled, 0 past the chain's end, or an
- * error. */
+/**
+ * Entry `index` of directory `d`, 32 bytes into `raw`, read through the
+ * directory's chain from the mount's copy of the entry's cache block, which
+ * a scan reads once per block. 1 with `raw` filled, 0 past the chain's end
+ * or for a directory with no cluster, or -EIO.
+ */
 static int dir_entry(struct ex_mount *em, struct ex_node *d, uint32_t index, uint8_t *raw)
 {
     uint32_t per = cluster_bytes(em) / 32;
@@ -574,6 +628,11 @@ static int dir_entry(struct ex_mount *em, struct ex_node *d, uint32_t index, uin
     return 1;
 }
 
+/*
+ * One entry set as `set_read` reads it: its file and stream entries, the
+ * `count` units of its name, and, for a set passed over, why, with
+ * `checksum_only` when the set checksum is its one fault.
+ */
 struct ex_set {
     uint32_t index;   /* of the file entry */
     uint32_t entries; /* the whole set */
@@ -585,6 +644,8 @@ struct ex_set {
     uint32_t count;
 };
 
+/** The SetChecksum of the `count` entries at `entries`, over every byte but
+ * the file entry's own checksum field, bytes 2 and 3. */
 static uint16_t set_checksum(const uint8_t *entries, uint32_t count)
 {
     uint16_t sum = 0;
@@ -599,13 +660,19 @@ static uint16_t set_checksum(const uint8_t *entries, uint32_t count)
     return sum;
 }
 
-/* The set whose file entry is at `index`: 1 with `set` filled when every
- * invariant holds, 0 when the set is passed over with `set->why` naming
- * the first fault (and `set->checksum_only` when the checksum is the only
- * one, which is what a stop inside a straddling change leaves and the
- * dirty-volume check repairs), or an error. `raw` is the file entry
- * already read. The set is streamed entry by entry, so a set with the
- * format's 255 secondaries costs no more memory than one with two. */
+/**
+ * Read the set of directory `d` whose file entry is entry `index`, already
+ * read into `raw`, and check its invariants.
+ *
+ * Returns 1 with `set` filled when every invariant holds; 0 when the set is
+ * passed over, with `set->why` naming the first fault and the record
+ * `exfat: set skipped: WHY`, and `set->checksum_only` when the checksum is
+ * the only one, which is what a stop inside a straddling change leaves and
+ * the dirty-volume check repairs; or -EIO. A set passed over with a stream
+ * still has its file and stream entries and its name in `set`. The set is
+ * streamed entry by entry, so a set with the format's 255 secondaries costs
+ * no more memory than one with two.
+ */
 static int set_read(struct ex_mount *em, struct ex_node *d, uint32_t index, const uint8_t *raw,
                     struct ex_set *set)
 {
@@ -675,8 +742,7 @@ static int set_read(struct ex_mount *em, struct ex_node *d, uint32_t index, cons
             }
             continue;
         }
-        /* The name entries: exactly ceil(NameLength / 15), consecutive,
-         * right after the stream; then benign secondaries only. */
+        /* ceil(NameLength / 15) name entries, then benign secondaries. */
         if (names < want_names) {
             uint32_t m;
 
@@ -751,10 +817,14 @@ static int set_read(struct ex_mount *em, struct ex_node *d, uint32_t index, cons
     return 0;
 }
 
-/* The next valid set at or after `*cursor`: 1 with the set and the cursor
- * past it, 0 at the directory's end, or an error. Entries not in use,
- * the root's system entries, and a set that fails its invariants are
- * passed over; a set is not split across a call. */
+/**
+ * The next valid set of `d` at or after entry `*cursor`: 1 with the set and
+ * the cursor past it, 0 at the directory's end, or -EIO. Entries not in
+ * use, primaries other than a file entry, and a set that fails its
+ * invariants are passed over, the last as one unit, so that nothing inside
+ * it is read as a primary entry of its own; a set is not split across a
+ * call.
+ */
 static int dir_scan(struct ex_mount *em, struct ex_node *d, uint32_t *cursor, struct ex_set *set)
 {
     for (;;) {
@@ -776,8 +846,6 @@ static int dir_scan(struct ex_mount *em, struct ex_node *d, uint32_t *cursor, st
             return rc;
         }
         if (rc == 0) {
-            /* The rejected set is passed over as one unit, so nothing
-             * inside it is read as a primary entry of its own. */
             *cursor += raw[1] >= 2 ? (uint32_t)raw[1] + 1 : 1;
             continue;
         }
@@ -786,6 +854,11 @@ static int dir_scan(struct ex_mount *em, struct ex_node *d, uint32_t *cursor, st
     }
 }
 
+/**
+ * The node, held, of set `set` of directory `d`: the one in memory, or a new
+ * one filled from the set's file and stream entries, whose parent is `d`.
+ * NULL when the heap has no room.
+ */
 static struct ex_node *node_for(struct ex_mount *em, struct ex_node *d, const struct ex_set *set)
 {
     const uint8_t *st = set->stream;
@@ -823,9 +896,12 @@ static struct ex_node *node_for(struct ex_mount *em, struct ex_node *d, const st
 
 /* ---- the operations ---- */
 
-/* The directory whose first cluster is `first`, found by walking the tree
- * from the root, for a parent whose node has been put: a bounded search,
- * rare, that gives the node back held. */
+/**
+ * Find the directory whose first cluster is `first` by a walk of the tree
+ * from `root`, for a parent whose node has been put, and give its node back
+ * held in `*out`. The walk descends at most 32 levels. 0, -ENOENT when no
+ * directory it reaches has that cluster, -ENOMEM, or -EIO.
+ */
 static int find_dir(struct ex_mount *em, struct ex_node *root, uint32_t first, struct ex_node **out)
 {
     uint32_t stack_first[32], stack_cursor[32];
@@ -879,6 +955,8 @@ static int find_dir(struct ex_mount *em, struct ex_node *root, uint32_t first, s
     return -ENOENT;
 }
 
+/** Whether the `n` units at `a` and at `b` up-case alike, into `*same`; 0,
+ * or -EIO. */
 static int units_match(struct ex_mount *em, const uint16_t *a, const uint16_t *b, uint32_t n,
                        int *same)
 {
@@ -903,6 +981,16 @@ static int units_match(struct ex_mount *em, const uint16_t *a, const uint16_t *b
     return 0;
 }
 
+/**
+ * The `lookup` of `vfs_ops`: `name` in directory `dir`, the root for NULL.
+ *
+ * exFAT directories have no `.` and `..` entries: `.` is `dir` itself, and
+ * `..` is the directory this one was found in, which its node remembers,
+ * found by `find_dir` when its node is gone from memory. Any other name is
+ * converted to UTF-16 and hashed, and compared with each set of the same
+ * length and hash by its up-cased units; a name FAT cannot store is
+ * -ENOENT. 0 with the node held, -ENOENT, -ENAMETOOLONG, -ENOMEM, or -EIO.
+ */
 static int ex_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
 {
     struct ex_mount *em = em_of(mnt);
@@ -918,8 +1006,6 @@ static int ex_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **
         return 0;
     }
     if (name[0] == '.' && name[1] == '.' && name[2] == '\0') {
-        /* exFAT directories have no dot entries: the parent is the
-         * directory this one was found in, which its node remembers. */
         struct ex_node *p;
 
         if (d->first == em->root || d->parent == 0) {
@@ -976,9 +1062,12 @@ static int ex_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **
     }
 }
 
-/* The epoch second of an exFAT timestamp: the same bit fields as a DOS
- * date and time, the 10 ms increment, and the UTC offset when its valid
- * bit is set; without one the field is reported as if it were UTC. */
+/**
+ * The epoch second of an exFAT timestamp `ts`, with the nanoseconds of its
+ * 10 ms count `inc` in `*nsec`: the same bit fields as a DOS date and time,
+ * the 10 ms count, which past 199 counts as 0, and the UTC offset `off` when
+ * its valid bit is set; without one the field is reported as if it were UTC.
+ */
 static int64_t ex_epoch(uint32_t ts, uint8_t inc, uint8_t off, int64_t *nsec)
 {
     int64_t sec = fat_epoch((uint16_t)(ts >> 16), (uint16_t)(ts & 0xFFFF));
@@ -997,6 +1086,12 @@ static int64_t ex_epoch(uint32_t ts, uint8_t inc, uint8_t off, int64_t *nsec)
     return sec;
 }
 
+/**
+ * The `getattr` of `vfs_ops`: the mode from the mount's umask and the
+ * read-only attribute, the mount's owner, one link, DataLength as the size,
+ * the inode number of `fat_inode`, and the three times, the access time
+ * without a 10 ms count. Always 0.
+ */
 static int ex_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     struct ex_mount *em = em_of(mnt);
@@ -1018,6 +1113,8 @@ static int ex_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     return 0;
 }
 
+/** The `open` of `vfs_ops`: the handle is the node, held once more; `flags`
+ * is not read. Always 0. */
 static int ex_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
 {
     (void)mnt;
@@ -1027,14 +1124,20 @@ static int ex_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
     return 0;
 }
 
+/** The `release` of `vfs_ops`: the hold `ex_open` took is put. */
 static void ex_release(struct vfs_mount *mnt, void *handle)
 {
     ex_put(mnt, handle);
 }
 
-/* Bytes within ValidDataLength come from the chain; bytes past it and up
- * to DataLength read as zeros, which is what the specification says of a
- * file whose tail was never written. */
+/**
+ * The `read` of `vfs_ops`: up to `count` bytes at `offset`, ending at
+ * DataLength. Bytes within ValidDataLength come from the chain; bytes past
+ * it read as zeros, whatever the disk has, which is what the specification
+ * says of a file whose tail was never written. Returns the bytes read, the
+ * count read before a fault of the chain or the device, -EIO when nothing
+ * was, or -EISDIR.
+ */
 static int32_t ex_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
                        uint64_t offset)
 {
@@ -1065,7 +1168,7 @@ static int32_t ex_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t 
             take = count - done;
         }
         if (at >= n->valid) {
-            k_memset(out + done, 0, take); /* never written: zeros, whatever the disk holds */
+            k_memset(out + done, 0, take);
             done += take;
             continue;
         }
@@ -1086,6 +1189,14 @@ static int32_t ex_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t 
     return (int32_t)done;
 }
 
+/**
+ * The `readdir` of `vfs_ops`: the next set of directory `handle` at
+ * `*cursor`, an entry index, with its name in UTF-8. A name whose UTF-8 form
+ * does not fit the kernel's component is listed by its first 60 units,
+ * without splitting a surrogate pair, and cannot be reached by a path; a
+ * name that cannot be converted is listed as `?`. 1 with `ent` filled, 0 at
+ * the end, -ENOTDIR, or -EIO.
+ */
 static int ex_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vfs_dirent *ent)
 {
     struct ex_mount *em = em_of(mnt);
@@ -1102,9 +1213,6 @@ static int ex_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, str
     }
     rc = fat_units_utf8(set.units, set.count, ent->name, sizeof(ent->name));
     if (rc == -ENAMETOOLONG) {
-        /* A name past the kernel's component: shown by as many of its
-         * first units as fit, whole characters only, and unreachable by
-         * path, as the Readme says. */
         uint32_t keep = 60;
 
         if (set.units[keep - 1] >= 0xD800 && set.units[keep - 1] < 0xDC00) {
@@ -1131,7 +1239,8 @@ static int ex_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, str
     return 1;
 }
 
-/* Free clusters are the bitmap's zero bits, counted once and kept. */
+/** Count the allocation bitmap's clear bits into `free_clusters` and mark
+ * the count known; 0, or -EIO. */
 K_NOINLINE static int count_free(struct ex_mount *em)
 {
     uint32_t c = 0, free_count = 0;
@@ -1160,6 +1269,8 @@ K_NOINLINE static int count_free(struct ex_mount *em)
     return 0;
 }
 
+/** The `statfs` of `vfs_ops`: clusters as the blocks, and the free count,
+ * counted from the bitmap at the first call that needs it; 0, or -EIO. */
 static int ex_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 {
     struct ex_mount *em = em_of(mnt);
@@ -1179,6 +1290,8 @@ static int ex_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
     return 0;
 }
 
+/** The `unmount` of `vfs_ops`: every node in memory and the mount's record
+ * freed. */
 static void ex_unmount(struct vfs_mount *mnt)
 {
     struct ex_mount *em = em_of(mnt);
@@ -1193,31 +1306,34 @@ static void ex_unmount(struct vfs_mount *mnt)
 
 /* ---- the constructor ---- */
 
+/** Log `exfat: refused: FIELD` and return -EINVAL, which fails the mount on
+ * `field`. */
 static int refused(const char *field)
 {
     klog(KLOG_WARN, "exfat", "refused: %s", field);
     return -EINVAL;
 }
 
-/*
- * The volume is not exFAT at all, which is an answer and not a fault.
+/**
+ * The result for a volume that is not exFAT at all: -EINVAL, with no record.
  *
- * A mount is how a caller asks a file system whether a volume is its own, and
- * the installer asks every partition of every removable disk that way to find
- * the one holding its image. A driver that warned on the console each time it
- * was asked about a partition that was never its own would put
- * `exfat: refused: FileSystemName` in front of a person installing a machine,
- * which is what it did until 2026-09-14. The fields that only say "not this
- * file system" answer quietly; a volume that claims to be exFAT and is broken
- * still says so through `refused`.
+ * A mount is how a program tests whether a volume is of a type, and the
+ * installer tries every partition of every removable disk with this type to
+ * find the one with its image. A record for each partition that was never
+ * exFAT would put `exfat: refused: FileSystemName` in front of a person
+ * installing a machine. The fields that only say "not this file system",
+ * the name, the jump and the boot signature, end the mount here; a volume
+ * whose name says exFAT and that breaks a rule is still logged through
+ * `refused`.
  */
 static int not_exfat(void)
 {
     return -EINVAL;
 }
 
-/* The boot checksum of the region at sector `first`: the rotate-and-add
- * sum over its eleven sectors, skipping VolumeFlags and PercentInUse. */
+/** The boot checksum of the region at sector `first`, into `*sum`: the
+ * rotate-and-add sum over its eleven sectors, skipping VolumeFlags and
+ * PercentInUse. 0, or -EIO. */
 K_NOINLINE static int boot_checksum(struct ex_mount *em, uint64_t first, uint32_t *sum)
 {
     uint32_t s = 0;
@@ -1241,8 +1357,12 @@ K_NOINLINE static int boot_checksum(struct ex_mount *em, uint64_t first, uint32_
     return 0;
 }
 
-/* The stored boot checksum at sector `n`: every 32-bit word of the sector
- * repeats it, or the sector is not a checksum sector. */
+/**
+ * The boot checksum stored in sector `n`, into `*sum`: every 32-bit word of
+ * the sector repeats it. A sector whose words differ is not a checksum
+ * sector, and gives its first word with the top bit flipped, so that a sum
+ * equal to that word does not match. 0, or -EIO.
+ */
 K_NOINLINE static int checksum_sector(struct ex_mount *em, uint64_t n, uint32_t *sum)
 {
     uint8_t raw[512];
@@ -1255,17 +1375,22 @@ K_NOINLINE static int checksum_sector(struct ex_mount *em, uint64_t n, uint32_t 
     *sum = le32(raw);
     for (i = 4; i < sizeof(raw); i += 4) {
         if (le32(raw + i) != *sum) {
-            *sum ^= 0x80000000u; /* words that differ match nothing */
+            *sum ^= 0x80000000u;
             return 0;
         }
     }
     return 0;
 }
 
-/* The up-case table checked from its stored bytes: the checksum over them,
- * and the runs expanding to exactly 65536 mappings with no zero-length,
- * truncated or overlong run. Fills the held form when it fits. 0 with the
- * checksum in `sum`, -1 for a table that breaks a rule, or -EIO. */
+/**
+ * Check the up-case table from its stored bytes: the checksum over them, the
+ * runs expanding to exactly 65536 mappings with no zero-length, truncated or
+ * overlong run, and the 128 mappings the specification requires. Sets the
+ * table's form, with the stored bytes held when they fit, and reads the
+ * mappings below `UPCASE_LOW` into the mount's record. 0 with the checksum
+ * in `*sum`, -1 for a table that breaks a rule or whose low mappings cannot
+ * be read, or -EIO.
+ */
 K_NOINLINE static int upcase_check(struct ex_mount *em, uint32_t *sum)
 {
     uint64_t at = 0;
@@ -1313,10 +1438,7 @@ K_NOINLINE static int upcase_check(struct ex_mount *em, uint32_t *sum)
         at += take;
     }
     if (have_pending) {
-        /* A 0xFFFF as the table's last unit is the mapping of U+FFFF to
-         * itself, which the recommended table ends with; a marker needs
-         * a count after it. */
-        u++;
+        u++; /* a 0xFFFF as the last unit maps U+FFFF to itself */
     }
     if (u != 65536) {
         return -1; /* a truncated run, or a table short or long of the units */
@@ -1324,16 +1446,14 @@ K_NOINLINE static int upcase_check(struct ex_mount *em, uint32_t *sum)
     if (have_pending) {
         markers--; /* the last unit was a mapping after all */
     }
-    /* Uncompressed is a table of 65536 explicit units and no run marker;
-     * a compressed table of the same size is walked, not indexed. */
+    /* Uncompressed is 65536 units and no run marker; the rest are walked. */
     em->upcase_form = em->upcase_length <= UPCASE_HELD
                           ? 0
                           : (em->upcase_length == 131072 && markers == 0 ? 1 : 2);
     if (upcase_fill_low(em) != 0) {
         return -1;
     }
-    /* The mandatory mappings: the first 128 code points are themselves,
-     * but a to z are A to Z. */
+    /* The first 128 code points map to themselves, but a to z to A to Z. */
     for (m = 0; m < 128; m++) {
         uint16_t got;
 
@@ -1346,9 +1466,21 @@ K_NOINLINE static int upcase_check(struct ex_mount *em, uint32_t *sum)
     return 0;
 }
 
-/* The constructor proper, on a slot already claimed: it sleeps in the
- * cache and in the dirty-volume check, so the slot is taken before it
- * runs and given back when it fails. */
+/**
+ * The constructor's work on the record `em`, which `ex_mount` frees, with
+ * every node, when this fails: the boot regions and the boot sector's
+ * fields, the root's bitmap and up-case table, and, for a writable mount of
+ * a dirty volume, the check; then the root node, and VolumeDirty set on the
+ * disk for a writable mount. Returns 0 with `mnt->priv` and `mnt->root` set,
+ * or the errors `vfs_exfat_type` lists in exfat.h.
+ *
+ * Both boot regions are read and checked before any field is trusted. When
+ * the main region fails its checksum, the backup's fields describe the
+ * volume, with the main's VolumeFlags and PercentInUse, since by the
+ * specification the backup's are stale. VolumeDirty stays set on the disk
+ * for the writable life of the mount, as Linux's driver keeps it; the clean
+ * unmount clears it last.
+ */
 static int ex_mount_on(struct ex_mount *em, struct vfs_mount *mnt, block_device_t *dev,
                        uint32_t flags, const char *options)
 {
@@ -1389,7 +1521,6 @@ static int ex_mount_on(struct ex_mount *em, struct vfs_mount *mnt, block_device_
     if (rc != 0) {
         return rc;
     }
-    /* Both boot regions, always, before any field is trusted. */
     main_ok = main_sum == stored_main;
     backup_ok = backup_sum == stored_backup;
     for (i = 0; i < 512; i++) {
@@ -1405,8 +1536,6 @@ static int ex_mount_on(struct ex_mount *em, struct vfs_mount *mnt, block_device_
         return refused("BootChecksum");
     }
     if (!main_ok) {
-        /* The backup describes the volume from here on, but the flags
-         * are the main's: the backup's are stale by the specification. */
         readonly_why = "the main boot region fails its checksum; read from the backup";
         for (i = 0; i < 512; i++) {
             if (i != 106 && i != 107 && i != 112) {
@@ -1485,7 +1614,6 @@ static int ex_mount_on(struct ex_mount *em, struct vfs_mount *mnt, block_device_
     } else if (!readonly_why && (le16(b + 106) & 4)) {
         readonly_why = "MediaFailure is set";
     }
-    /* The root's objects: the bitmap of the active FAT, one up-case table. */
     per = cluster_bytes(em) / 32;
     c = em->root;
     for (;;) {
@@ -1580,9 +1708,7 @@ static int ex_mount_on(struct ex_mount *em, struct vfs_mount *mnt, block_device_
                                 : "streamed through the cache");
     em->mnt = mnt;
     em->alloc_hint = 2;
-    if (em->writable && (le16(b + 106) & 2)) {
-        /* Not unmounted cleanly: checked and repaired before the mount is
-         * published, or read-only with the fault named. */
+    if (em->writable && (le16(b + 106) & 2)) { /* VolumeDirty */
         rc = ex_check_volume(em);
         if (rc < 0) {
             return rc;
@@ -1600,8 +1726,6 @@ static int ex_mount_on(struct ex_mount *em, struct vfs_mount *mnt, block_device_
     root->first = em->root;
     root->length = 0; /* the root's chain is followed to its end */
     if (em->writable) {
-        /* VolumeDirty on the disk for the writable life of the mount, as
-         * Linux does; the clean unmount clears it last. */
         rc = write_boot_state(em, 1);
         if (rc != 0) {
             return rc;
@@ -1613,6 +1737,9 @@ static int ex_mount_on(struct ex_mount *em, struct vfs_mount *mnt, block_device_
     return 0;
 }
 
+/** The constructor of `vfs_exfat_type`, whose contract is in exfat.h: the
+ * record from the heap, given to `ex_mount_on` and freed with every node it
+ * took when that fails. */
 static int ex_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, const char *options)
 {
     struct ex_mount *em = kzalloc(sizeof(*em));
@@ -1638,13 +1765,18 @@ static int ex_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, 
  * and its chain written before any entry refers to it; data is written
  * and synced before a length is published; a set is unpublished before its
  * clusters are freed, and the clusters of a node a description holds go
- * at its last put. A set is made or unmade by the in-use bit of its file
- * entry, written last with the checksum over the whole; a change to the
- * file and stream entries is one sector write when they share a sector,
- * and every set this driver makes has them in one. Every metadata write
- * is `bcache_write`.
+ * at its last put. A set is made by the in-use bit of its file entry,
+ * written last with the checksum over the whole, and unmade by clearing
+ * that bit first; a change to the file and stream entries is one sector
+ * write when they share a sector, and every set this driver makes has them
+ * in one. Directory entries, a join of a chain and the boot sector's state
+ * are written through with `bcache_write`; the bits and FAT entries of
+ * clusters allocated or freed together are set in the cache and reach the
+ * disk at the `sync_disk` that comes before anything refers to them.
  */
 
+/** Panic unless the calling process holds the mount's namespace lock, which
+ * every change to the volume is made under. */
 static void assert_locked(struct vfs_mount *mnt)
 {
     int me = current_proc ? (int)current_proc->pid : 0;
@@ -1654,8 +1786,8 @@ static void assert_locked(struct vfs_mount *mnt)
     }
 }
 
-/* The mount's lock for an operation the common layer does not lock, and
- * the read-only decision under it. */
+/** Take the mount's namespace lock for an operation the VFS calls unlocked:
+ * 0 with the lock held, or -EROFS, with it let go, on a read-only mount. */
 static int begin_write(struct vfs_mount *mnt, struct ex_mount *em)
 {
     vfs_ns_lock(mnt);
@@ -1667,11 +1799,12 @@ static int begin_write(struct vfs_mount *mnt, struct ex_mount *em)
 }
 
 /**
- * Write back everything dirty on the volume's device and then tell the
- * device to put it on the medium: the point in the order of writes below
- * where what came before must be on the disk before what comes after. A
- * disk that writes through, as this kernel's ATA and AHCI drivers do,
- * has nothing to flush; a stick with a cache of its own is told.
+ * Write back everything dirty on the volume's device and then flush the
+ * device's own cache: the point in the order of writes where what came
+ * before must be on the medium before what comes after. A disk whose driver
+ * flushes its cache after each write, as the ATA, AHCI and NVMe drivers do
+ * for a write sent without `BLOCK_REQ_NOFLUSH`, has nothing more to flush; a
+ * USB stick is sent SYNCHRONIZE CACHE. 0, or the first failure's -errno.
  */
 static int sync_disk(struct ex_mount *em)
 {
@@ -1680,6 +1813,14 @@ static int sync_disk(struct ex_mount *em)
     return rc != 0 ? rc : block_flush(em->dev);
 }
 
+/**
+ * Copy `len` bytes from `src`, or zeros for NULL, to byte offset `off` of the
+ * device through the cache: each block written through to the device with
+ * `through`, or left dirty for a later sync without. A whole block is not
+ * read first, since its bytes are all replaced and a blank buffer's zeros
+ * are the zero fill. A write to the block of the mount's directory copy
+ * empties the copy. 0, or -errno.
+ */
 static int ex_write_bytes(struct ex_mount *em, uint64_t off, const void *src, uint32_t len,
                           int through)
 {
@@ -1695,8 +1836,6 @@ static int ex_write_bytes(struct ex_mount *em, uint64_t off, const void *src, ui
         if (take > len) {
             take = len;
         }
-        /* A whole block is not read first: its bytes are about to be
-           replaced, and the zeros of a blank buffer are the zero fill. */
         b = take == BCACHE_BLOCK_BYTES ? bcache_get_blank(em->dev, blk) : bcache_get(em->dev, blk);
         if (!b) {
             return -EIO;
@@ -1729,8 +1868,9 @@ static int ex_write_bytes(struct ex_mount *em, uint64_t off, const void *src, ui
     return 0;
 }
 
-/* The FAT entry of `c`, written through, or, for one of a run whose
- * caller syncs before anything refers to it, set in the cache. */
+/** Set the active FAT's entry of cluster `c` to `value`: written through
+ * with `through`, or, for one of a run whose caller syncs before anything
+ * refers to it, set in the cache. 0, or -errno. */
 static int fat_set(struct ex_mount *em, uint32_t c, uint32_t value, int through)
 {
     uint8_t raw[4];
@@ -1745,8 +1885,8 @@ static int fat_set(struct ex_mount *em, uint32_t c, uint32_t value, int through)
     return ex_write_bytes(em, off, raw, 4, through);
 }
 
-/* The bitmap bit of `c`, by way of the bitmap's chain, written through or
- * set in the cache as `fat_set` is. */
+/** Set the bitmap bit of cluster `c` to `on`, found through the bitmap's
+ * chain, written through or set in the cache as `fat_set` is; 0, or -errno. */
 static int bit_set(struct ex_mount *em, uint32_t c, int on, int through)
 {
     uint8_t byte;
@@ -1771,7 +1911,9 @@ static int bit_set(struct ex_mount *em, uint32_t c, int on, int through)
                           through);
 }
 
-/* One free cluster, first-fit from the hint with one wrap, its bit set. */
+/** Take one free cluster, first-fit from the hint with one wrap, into
+ * `*out`: its bit set in the cache, the free count lowered and the hint
+ * moved past it. 0, -ENOSPC, or -errno. */
 static int alloc_cluster(struct ex_mount *em, uint32_t *out)
 {
     uint32_t start, c, tried = 0;
@@ -1811,6 +1953,16 @@ static int alloc_cluster(struct ex_mount *em, uint32_t *out)
     return -ENOSPC;
 }
 
+/**
+ * Free the chain from `first`: the clusters of `length` bytes for a
+ * contiguous chain (`nofat`), and the FAT chain to its end otherwise. A
+ * flush comes first: what unpublished the chain went through the cache to
+ * the device, and a stick with a cache of its own puts it on the medium
+ * there, before a cluster is freed. Each cluster's bit, and for a FAT chain
+ * its entry, are cleared in the cache and reach the disk in runs at the
+ * `sync_disk` at the end rather than one write each; the free count and the
+ * hint follow. 0, or -errno.
+ */
 static int free_chain(struct ex_mount *em, uint32_t first, int nofat, uint64_t length)
 {
     uint32_t c = first;
@@ -1818,9 +1970,6 @@ static int free_chain(struct ex_mount *em, uint32_t first, int nofat, uint64_t l
     uint64_t have = nofat ? clusters_of(em, length) : 0;
     int rc;
 
-    /* What unpublished the chain went through the cache to the device;
-     * a stick with a cache of its own puts it on the medium here, before
-     * a cluster is freed. */
     rc = block_flush(em->dev);
     if (rc != 0) {
         return rc;
@@ -1858,13 +2007,12 @@ static int free_chain(struct ex_mount *em, uint32_t first, int nofat, uint64_t l
         }
         c = next;
     }
-    /* The bits and entries of the whole chain, set in the cache above,
-     * reach the disk in runs here rather than one write each. */
     return steps > 0 ? sync_disk(em) : 0;
 }
 
-/* Whether `n` clusters are free, counted once and kept: ENOSPC is decided
- * before any write, the conversion of a contiguous chain included. */
+/** Whether `n` clusters are free, by the free count, counted from the bitmap
+ * once: 0, -ENOSPC, or -EIO. A caller decides ENOSPC with it before any
+ * write, the conversion of a contiguous chain included. */
 static int room_for(struct ex_mount *em, uint32_t n)
 {
     if (!em->free_known) {
@@ -1877,10 +2025,16 @@ static int room_for(struct ex_mount *em, uint32_t n)
     return em->free_clusters < n ? -ENOSPC : 0;
 }
 
-/* A run of `n` clusters chained through the FAT and ended, disconnected
- * from everything; `zero` 1 fills them with zeros for writeback, 2 writes
- * the zeros through, 0 leaves their bytes. ENOSPC is decided before any
- * write; a failure gives back what was taken. */
+/**
+ * Take a run of `n` clusters, chained through the FAT, ended and joined to
+ * nothing, its first and last clusters in `*first` and `*last`. `zero` 1
+ * fills them with zeros in the cache, 2 writes the zeros through, and 0
+ * leaves their bytes. ENOSPC is decided before any write, and a failure
+ * gives back what was taken. The run's bits and FAT entries are set in the
+ * cache: a caller that writes its data first syncs before it joins the run,
+ * and a run whose zeros are written through, a directory's, is joined at
+ * once, so its sync is here. 0, -ENOSPC, or -errno.
+ */
 static int alloc_run(struct ex_mount *em, uint32_t n, int zero, uint32_t *first, uint32_t *last)
 {
     uint32_t prev = 0, i;
@@ -1927,10 +2081,6 @@ static int alloc_run(struct ex_mount *em, uint32_t n, int zero, uint32_t *first,
         free_chain(em, *first, 0, 0);
         *first = 0;
     }
-    /* The run's bits and entries are set in the cache: a caller that
-     * writes its data first syncs before it joins the run, and a run
-     * written through, a directory's, is joined at once, so its sync is
-     * here. */
     if (rc == 0 && zero == 2) {
         rc = sync_disk(em);
         if (rc != 0) {
@@ -1942,8 +2092,10 @@ static int alloc_run(struct ex_mount *em, uint32_t n, int zero, uint32_t *first,
     return rc;
 }
 
-/* A contiguous chain written into the FAT, so that the flag can be
- * cleared and the chain grown: the run's entries, ended. */
+/** Write the contiguous chain of `length` bytes from `first` into the FAT,
+ * each entry naming the next and the last ended, and sync it, so that it is
+ * on the disk before NoFatChain is cleared and the chain grown; 0, or
+ * -errno. */
 static int chain_into_fat(struct ex_mount *em, uint32_t first, uint64_t length)
 {
     uint64_t n = clusters_of(em, length), i;
@@ -1956,11 +2108,14 @@ static int chain_into_fat(struct ex_mount *em, uint32_t first, uint64_t length)
             return rc;
         }
     }
-    return sync_disk(em); /* the chain is on the disk before the flag is cleared */
+    return sync_disk(em);
 }
 
 /* ---- directory entries and sets ---- */
 
+/** Write `count` entries from `raw` at entry `index` of directory `d`,
+ * through its chain, each cluster's part written through to the device; 0,
+ * or -errno. */
 static int dir_write(struct ex_mount *em, struct ex_node *d, uint32_t index, const uint8_t *raw,
                      uint32_t count)
 {
@@ -1989,6 +2144,7 @@ static int dir_write(struct ex_mount *em, struct ex_node *d, uint32_t index, con
     return 0;
 }
 
+/** The present as an exFAT timestamp, with its 10 ms count in `*tenth`. */
 static uint32_t ex_stamp_now(uint8_t *tenth)
 {
     uint16_t date, time;
@@ -1999,8 +2155,8 @@ static uint32_t ex_stamp_now(uint8_t *tenth)
 
 static int node_publish(struct ex_mount *em, struct ex_node *n);
 
-/* The set at `index` of `d` loaded into the mount's buffer: its entry
- * count, or an error; the count is SecondaryCount + 1 as stored. */
+/** Read the set at entry `index` of `d` into the mount's buffer, with its
+ * entry count, SecondaryCount + 1 as stored, in `*count`; 0, or -EIO. */
 static int set_load(struct ex_mount *em, struct ex_node *d, uint32_t index, uint32_t *count)
 {
     uint32_t k, n;
@@ -2023,16 +2179,22 @@ static int set_load(struct ex_mount *em, struct ex_node *d, uint32_t index, uint
     return 0;
 }
 
-/* The set in the buffer written to `index` of `d`: the entries outside
- * the file entry's sector first, then that sector, whose file entry
- * carries the checksum and, when `publish`, the in-use bit. The file and
- * stream entries share a sector in every set this driver makes; on one
- * that straddles, the stream's sector goes first and the file entry's
- * last, the state between being a checksum the check repairs. When the set
- * reaches past the file entry's sector, a barrier comes before that sector:
- * a drive that holds writes may put sectors on the medium in any order, so
- * without it the file entry could land first, a published set whose
- * secondaries were never written. */
+/**
+ * Write the set in the mount's buffer, `count` entries, to entry `index` of
+ * `d`: the entries past the file entry's sector first, from the last, and
+ * then, in one write, those in that sector, whose file entry has the
+ * checksum and, with `publish`, the in-use bit. The checksum is computed
+ * over the set as published, so an inactive file entry written now matches
+ * once its in-use bit is set. 0, or -errno.
+ *
+ * The file and stream entries share a sector in every set this driver
+ * makes; on one that straddles, the stream's sector goes first and the file
+ * entry's last, the state between being a checksum the check repairs. When
+ * the set reaches past the file entry's sector, a flush comes before that
+ * sector: a drive that holds writes may put sectors on the medium in any
+ * order, so without it the file entry could land first, a published set
+ * whose secondaries were never written.
+ */
 static int set_store(struct ex_mount *em, struct ex_node *d, uint32_t index, uint32_t count,
                      int publish)
 {
@@ -2042,8 +2204,6 @@ static int set_store(struct ex_mount *em, struct ex_node *d, uint32_t index, uin
     int spilled = 0;
     int rc;
 
-    /* The checksum is over the published set, so an inactive file entry
-     * written now matches once its in-use bit is set later. */
     em->setbuf[0] |= 0x80;
     {
         uint16_t sum = set_checksum(em->setbuf, count);
@@ -2054,7 +2214,6 @@ static int set_store(struct ex_mount *em, struct ex_node *d, uint32_t index, uin
     if (!publish) {
         em->setbuf[0] &= 0x7F;
     }
-    /* Entries past the file entry's sector, last first. */
     for (k = count; k-- > 1;) {
         if ((index + k) / per_sector != file_sector) {
             rc = dir_write(em, d, index + k, em->setbuf + k * 32, 1);
@@ -2070,14 +2229,19 @@ static int set_store(struct ex_mount *em, struct ex_node *d, uint32_t index, uin
             return rc;
         }
     }
-    /* The file entry's sector: everything of the set in it, in one write. */
     for (k = 1; k < count && (index + k) / per_sector == file_sector; k++) {
     }
     return dir_write(em, d, index, em->setbuf, k);
 }
 
-/* A change to a node's file and stream entries: the lengths, the first
- * cluster, the flags, the attributes and the times, from the node. */
+/**
+ * Write node `n`'s lengths, first cluster, flags, attributes and times into
+ * its file and stream entries, the set published, by `set_load` and
+ * `set_store`. The root, which has no set, and an unlinked node, whose set
+ * is gone and whose clusters are its holders' until its last put, write
+ * nothing. The directory holding the set is found in memory or by
+ * `find_dir`. 0, or -errno.
+ */
 static int node_publish(struct ex_mount *em, struct ex_node *n)
 {
     struct ex_node d;
@@ -2089,7 +2253,7 @@ static int node_publish(struct ex_mount *em, struct ex_node *n)
         return 0; /* the root has no entry */
     }
     if (n->unlinked) {
-        return 0; /* the set is gone; the clusters are the description's until its last put */
+        return 0;
     }
     k_memset(&d, 0, sizeof(d));
     d.is_dir = 1;
@@ -2153,9 +2317,14 @@ static int node_publish(struct ex_mount *em, struct ex_node *n)
     return set_store(em, &d, n->index, count, 1);
 }
 
-/* A directory that was read to its end once per mount before its first
- * change: one holding a critical entry this driver does not know is
- * frozen, and every change inside it answers EROFS with a record. */
+/**
+ * Whether directory `d` is frozen: 1 when it holds a critical entry this
+ * driver does not know, 0 when not, or -EIO. The directory is read to its
+ * end before its first change in a mount; one found frozen is recorded as
+ * `exfat: directory cluster C frozen` and remembered, up to `EXFAT_FROZEN`
+ * directories, and one found clean is marked `scanned` and not read again.
+ * Every change in a frozen directory is -EROFS.
+ */
 static int dir_frozen(struct ex_mount *em, struct ex_node *d)
 {
     int i;
@@ -2203,11 +2372,15 @@ static int dir_frozen(struct ex_mount *em, struct ex_node *d)
     return 0;
 }
 
-/* The directory grown by one zeroed cluster, chained; a contiguous
- * directory another writer made has its run written into the FAT and its
- * flag cleared first, so that the chain can be followed. */
 #define DIR_MAX_BYTES 0x10000000u /* 256 MiB, the format's limit on a directory */
 
+/**
+ * Grow directory `d` by one cluster, zeroed and chained, and publish its new
+ * length; the root, which has no length, is grown by its chain alone. A
+ * contiguous directory another writer made has its run written into the FAT
+ * and its flag cleared first, so that the chain can be followed. 0, -ENOSPC
+ * for a directory that would pass 256 MiB, or -errno.
+ */
 static int dir_grow_publish(struct ex_mount *em, struct ex_node *d)
 {
     uint32_t tail, newc, unused;
@@ -2285,12 +2458,14 @@ static int dir_grow_publish(struct ex_mount *em, struct ex_node *d)
     return 0;
 }
 
-/* The directory grown by `dir_grow_publish`, the set in `em->setbuf` kept.
- * A create or a rename builds its set there before it asks for the slots,
- * and the growth publishes the directory's new length through the same
- * buffer; without the copy the caller would store the directory's own set
- * in the slots meant for the new one, losing the file and naming the
- * directory inside itself. */
+/**
+ * Grow `d` by `dir_grow_publish`, the set in `em->setbuf` kept, and return
+ * what that does. A create or a rename builds its set there before it looks
+ * for the slots, and the growth publishes the directory's new length through
+ * the same buffer; without the copy the caller would store the directory's
+ * own set in the slots meant for the new one, losing the file and naming the
+ * directory inside itself.
+ */
 static int dir_grow(struct ex_mount *em, struct ex_node *d)
 {
     int rc;
@@ -2301,10 +2476,17 @@ static int dir_grow(struct ex_mount *em, struct ex_node *d)
     return rc;
 }
 
-/* `count` free slots in a row in `d`, growing it; a run that would put the
- * file entry in a sector's last slot starts in the next sector, an
- * inactive entry filling that slot, so the file and stream entries share
- * a sector. */
+/**
+ * Find `count` free entries in a row in `d`, the first in `*index`, growing
+ * the directory when its chain ends first, whether or not the end marker
+ * was seen, so that the run lies in clusters the directory has. A run that
+ * would put its file entry in a sector's last slot starts in the next
+ * sector, so the file and stream entries share a sector. When that slot is
+ * the end marker, an unused file entry (0x05) is written into it, since a
+ * scan stops at the marker and a set past it would be unseen; the zeros
+ * past the new set are the marker then. A slot an earlier run filled is
+ * passed, not written again. 0, or -errno.
+ */
 static int free_slots(struct ex_mount *em, struct ex_node *d, uint32_t count, uint32_t *index)
 {
     uint32_t per_sector = BLOCK_SECTOR_SIZE / 32;
@@ -2320,8 +2502,6 @@ static int free_slots(struct ex_mount *em, struct ex_node *d, uint32_t count, ui
             return rc;
         }
         if (rc == 0) {
-            /* The chain ends here, whether or not the end marker was seen:
-             * the run must lie in clusters the directory has. */
             rc = dir_grow(em, d);
             if (rc != 0) {
                 return rc;
@@ -2334,11 +2514,6 @@ static int free_slots(struct ex_mount *em, struct ex_node *d, uint32_t count, ui
         if (end_seen || !(raw[0] & 0x80)) {
             if (run == 0) {
                 if (i % per_sector == per_sector - 1) {
-                    /* The last slot of a sector: an inactive entry fills it,
-                     * the end marker included, since a scan stops at the
-                     * marker and the set past it would be unseen; the
-                     * zeros past the set are the marker then. A filler an
-                     * earlier run left is passed, not written again. */
                     if (raw[0] == 0x00) {
                         uint8_t filler[32];
 
@@ -2366,8 +2541,13 @@ static int free_slots(struct ex_mount *em, struct ex_node *d, uint32_t count, ui
     }
 }
 
-/* The set for a new name in the mount's buffer: file entry, stream, names.
- * Its entry count, or an error for a name FAT cannot hold. */
+/**
+ * Build in the mount's buffer the set of a new file or directory `name`:
+ * the file entry, its three times the present with each UTC offset valid
+ * and zero; the stream, with `first` and with `length` as both lengths; and
+ * the name entries. The entry count in `*count`; 0, -EINVAL for a name FAT
+ * cannot store, -ENAMETOOLONG, or -EIO.
+ */
 static int set_build(struct ex_mount *em, const char *name, int is_dir, uint32_t first,
                      uint64_t length, uint32_t *count)
 {
@@ -2422,8 +2602,9 @@ static int set_build(struct ex_mount *em, const char *name, int is_dir, uint32_t
     return 0;
 }
 
-/* The set with `name` in `d`, found as lookup finds it: 1 with the set,
- * 0, or an error. */
+/** Find the set named `name` in `d` as `ex_lookup` does: 1 with it in `set`,
+ * 0 when there is none or FAT cannot store the name, -ENAMETOOLONG, or
+ * -EIO. */
 static int find_set(struct ex_mount *em, struct ex_node *d, const char *name, struct ex_set *set)
 {
     uint16_t units[FAT_NAME_UNITS];
@@ -2458,11 +2639,14 @@ static int find_set(struct ex_mount *em, struct ex_node *d, const char *name, st
     }
 }
 
-/* A set unpublished: the file entry inactive first, then the secondaries
- * inactive. When a secondary lies in another sector than the file entry, a
- * barrier comes between them: a drive that holds writes may put sectors on
- * the medium in any order, so without it a secondary's change could land
- * first, under a file entry still in use. */
+/**
+ * Unpublish the set of `count` entries at entry `index` of `d`: the file
+ * entry written inactive first, then the secondaries. When a secondary lies
+ * in another sector than the file entry, a flush comes between them: a
+ * drive that holds writes may put sectors on the medium in any order, so
+ * without it a secondary's change could land first, under a file entry
+ * still in use. 0, or -errno.
+ */
 static int set_retire(struct ex_mount *em, struct ex_node *d, uint32_t index, uint32_t count)
 {
     uint32_t per_sector = BLOCK_SECTOR_SIZE / 32;
@@ -2498,6 +2682,9 @@ static int set_retire(struct ex_mount *em, struct ex_node *d, uint32_t index, ui
     return 0;
 }
 
+/** Whether a change may be made in directory `d`: 0, -EROFS on a read-only
+ * mount or in a frozen directory, or -EIO. The caller holds the mount's
+ * namespace lock, which this asserts. */
 static int writable_dir(struct vfs_mount *mnt, struct ex_mount *em, struct ex_node *d)
 {
     int rc;
@@ -2513,7 +2700,7 @@ static int writable_dir(struct vfs_mount *mnt, struct ex_mount *em, struct ex_no
     return rc ? -EROFS : 0;
 }
 
-/* Whether `d` holds an in-use file entry. */
+/** Whether `d` holds an in-use file entry, into `*has`; 0, or -EIO. */
 static int dir_has_entries(struct ex_mount *em, struct ex_node *d, int *has)
 {
     uint32_t i = 0;
@@ -2539,6 +2726,13 @@ static int dir_has_entries(struct ex_mount *em, struct ex_node *d, int *has)
 
 /* ---- the mutating operations ---- */
 
+/**
+ * The `create` of `vfs_ops`: a new empty file `name` in `dir`, the root for
+ * NULL, its set built, given room and published. `mode` is not kept, since
+ * the mode comes from the mount. The caller holds the mount's namespace
+ * lock. 0 with the node held, -EEXIST, -EROFS, -ENOSPC, -EINVAL for a name
+ * FAT cannot store, -ENAMETOOLONG, -ENOMEM, or -EIO.
+ */
 static int ex_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode, void **node)
 {
     struct ex_mount *em = em_of(mnt);
@@ -2583,6 +2777,14 @@ static int ex_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     return 0;
 }
 
+/**
+ * The `mkdir` of `vfs_ops`: a new directory `name` in `dir`, the root for
+ * NULL. Its one cluster is taken, zeroed through and ended first, and the
+ * set naming it written last, so a crash between leaves the cluster lost and
+ * names nothing; a failure after the cluster was taken frees it. `mode` is
+ * not kept. The caller holds the mount's namespace lock. 0, or the errors of
+ * `ex_create`.
+ */
 static int ex_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 {
     struct ex_mount *em = em_of(mnt);
@@ -2602,8 +2804,6 @@ static int ex_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t
     if (rc == 1) {
         return -EEXIST;
     }
-    /* The cluster first, zeroed through and ended, then the set naming it
-     * last, so a crash between leaks the cluster and names nothing. */
     rc = alloc_run(em, 1, 2, &c, &unused);
     if (rc != 0) {
         return rc;
@@ -2621,8 +2821,13 @@ static int ex_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t
     return rc;
 }
 
-/* The chain of a set that is going: kept for a description that holds
- * the node, freed at its last put; freed now otherwise. */
+/**
+ * Free the clusters of set `set` of `d`, which is going. A vendor
+ * allocation's are freed at once, since they go with the set whoever wrote
+ * it and nothing else would ever free them. The stream's are freed at once
+ * too, unless something holds the node, which is then marked unlinked and
+ * frees them at its last put. 0, or -errno.
+ */
 static int retire_chain(struct ex_mount *em, struct ex_node *d, const struct ex_set *set)
 {
     uint32_t dir_cluster = d->first == em->root ? 0 : d->first;
@@ -2631,8 +2836,6 @@ static int retire_chain(struct ex_mount *em, struct ex_node *d, const struct ex_
     struct ex_node *n;
     uint32_t k;
 
-    /* A vendor allocation names clusters of its own; they go with the set,
-     * whoever wrote it, or nothing would ever free them. */
     for (k = 2; k < set->entries; k++) {
         uint8_t e[32];
         int rc = dir_entry(em, d, set->index + k, e);
@@ -2665,6 +2868,12 @@ static int retire_chain(struct ex_mount *em, struct ex_node *d, const struct ex_
                  : 0;
 }
 
+/**
+ * The `unlink` of `vfs_ops`: the file `name` in `dir`, the root for NULL,
+ * unpublished by `set_retire` and its clusters freed by `retire_chain`. The
+ * caller holds the mount's namespace lock. 0, -ENOENT, -EISDIR, -EROFS, or
+ * -errno.
+ */
 static int ex_unlink(struct vfs_mount *mnt, void *dir, const char *name)
 {
     struct ex_mount *em = em_of(mnt);
@@ -2692,6 +2901,14 @@ static int ex_unlink(struct vfs_mount *mnt, void *dir, const char *name)
     return retire_chain(em, d, &set);
 }
 
+/**
+ * The `rmdir` of `vfs_ops`: the directory `name` in `dir`, the root for
+ * NULL, unpublished and its clusters freed as `ex_unlink` does a file's.
+ * -ENOTEMPTY for one with an in-use file entry, -EBUSY for one whose node is
+ * in memory, held by a description, a working directory or a lookup, and
+ * -EROFS for a frozen one. The caller holds the mount's namespace lock. 0,
+ * -ENOENT, -ENOTDIR, or -errno.
+ */
 static int ex_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
 {
     struct ex_mount *em = em_of(mnt);
@@ -2729,7 +2946,7 @@ static int ex_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     if (held) {
         held->refs--;
         if (held->refs > 0) {
-            return -EBUSY; /* a description or a working directory */
+            return -EBUSY;
         }
     }
     rc = dir_frozen(em, &sub);
@@ -2737,7 +2954,7 @@ static int ex_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
         return rc;
     }
     if (rc) {
-        return -EROFS; /* a frozen directory is not removed */
+        return -EROFS;
     }
     rc = set_retire(em, d, set.index, set.entries);
     if (rc != 0) {
@@ -2746,8 +2963,10 @@ static int ex_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     return retire_chain(em, d, &set);
 }
 
-/* Whether the directory at `dir` (0 for the root) is `anc` or lies under
- * it, by the parents the nodes remember and the tree otherwise. */
+/** Whether the directory whose first cluster is `dir`, 0 for the root, is
+ * the directory at `anc` or lies under it, climbing by the parents the nodes
+ * remember and by `find_dir` for a node not in memory: 1, 0, or `find_dir`'s
+ * -errno. */
 static int is_under(struct ex_mount *em, uint32_t dir, uint32_t anc)
 {
     uint32_t steps = 0;
@@ -2774,7 +2993,7 @@ static int is_under(struct ex_mount *em, uint32_t dir, uint32_t anc)
     return 0;
 }
 
-/* Whether a rename may rewrite the set `src` in place as a new set of
+/** Whether a rename may rewrite the set `src` in place as a new set of
  * `count` entries: the counts agree, and the stream and name entries lie in
  * one sector, so that a stop leaves either name under its own hash, at
  * worst with the checksum the dirty-volume check repairs. Across two
@@ -2787,6 +3006,37 @@ static int fits_in_place(const struct ex_set *src, uint32_t count)
     return count == src->entries && stream / per_sector == last_name / per_sector;
 }
 
+/**
+ * The `rename` of `vfs_ops`: `oldname` in `olddir` to `newname` in `newdir`,
+ * either directory NULL for the root. The caller holds the mount's namespace
+ * lock.
+ *
+ * A destination of the same kind is replaced, a directory only when it is
+ * empty and nothing holds its node, and a rename to another spelling of the
+ * source's own name changes nothing. A rename within one directory, to a
+ * name no other set has and with as many entries as before, whose stream
+ * and name entries lie in one sector (`fits_in_place`), rewrites the set in
+ * place by `set_store`, the name entries first and then the file entry's
+ * sector. Any other finds room at the destination
+ * first, so that -ENOSPC changes nothing; writes the new set with its file
+ * entry inactive; retires a replaced destination, whose clusters wait for
+ * its holders as on an unlink, and then the source; flushes, so that a drive
+ * that keeps writes pending cannot put the publication first; and publishes
+ * the new file entry. A crash between the source's retirement and the
+ * publication leaves the chain with no name, as lost clusters, where the
+ * other order could leave two names on one chain.
+ *
+ * The new set has the source's file and stream entries, so the times, the
+ * chain and the flags stay, and its benign secondaries, a vendor allocation
+ * among them, after the new name entries. A node in memory moves to the new
+ * place, and is held through the writes, which sleep, so that a last close
+ * meanwhile cannot free it.
+ *
+ * Returns 0, -ENOENT, -ENOTDIR, -EISDIR, -ENOTEMPTY, -EBUSY, -EROFS for a
+ * read-only mount or a frozen directory, -EINVAL for a directory moved below
+ * itself or a name FAT cannot store, -ENAMETOOLONG, -ENOSPC, -EIO when the
+ * room found lies inside the destination's set, or -errno.
+ */
 static int ex_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
                      const char *newname)
 {
@@ -2823,7 +3073,7 @@ static int ex_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
         int dst_dir = (le16(dst.file + 4) & ATTR_DIRECTORY) != 0;
 
         if (od_cluster == nd_cluster && dst.index == src.index) {
-            return 0; /* the same set under a spelling of its own name */
+            return 0;
         }
         if (is_dir && !dst_dir) {
             return -ENOTDIR;
@@ -2869,7 +3119,7 @@ static int ex_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
             return rc;
         }
         if (rc) {
-            return -EROFS; /* a frozen directory is not renamed */
+            return -EROFS;
         }
         if (od_cluster != nd_cluster) {
             rc = is_under(em, nd_cluster, sub.first);
@@ -2881,11 +3131,7 @@ static int ex_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
             }
         }
     }
-    /* Held through the writes below, which sleep: a last close meanwhile
-     * would free the node this rename is about to update. */
     moved = node_find(em, is_dir, od_cluster, src.index, le32(src.stream + 20));
-    /* The new set in the buffer: the source's file and stream entries
-     * under the new name, so the times, the chain and the flags stay. */
     rc = set_build(em, newname, is_dir, 0, 0, &count);
     if (rc != 0) {
         goto out;
@@ -2901,8 +3147,6 @@ static int ex_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
         em->setbuf[32 + 3] = nlen;
         em->setbuf[32 + 4] = hash_lo;
         em->setbuf[32 + 5] = hash_hi;
-        /* The benign secondaries the source carried, a vendor allocation
-         * among them, follow the new name entries. */
         for (k = src_names; k < src.entries && count < 256; k++) {
             uint8_t e[32];
 
@@ -2919,23 +3163,19 @@ static int ex_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
         em->setbuf[1] = (uint8_t)(count - 1);
     }
     if (od_cluster == nd_cluster && !dst_exists && fits_in_place(&src, count)) {
-        /* In place: the name entries first, then the file entry's sector. */
         rc = set_store(em, od, src.index, count, 1);
         if (rc == 0 && moved) {
             moved->index = src.index;
         }
         goto out;
     }
-    /* Elsewhere: the room first, so ENOSPC destroys nothing; the new set
-     * written with an inactive file entry; a replaced destination and the
-     * source unpublished; the new file entry published last. */
     rc = free_slots(em, nd, count, &index);
     if (rc != 0) {
         goto out;
     }
     if (dst_exists && dst.index >= index && dst.index < index + count) {
         rc = -EIO;
-        goto out; /* the room found lies inside the destination's set */
+        goto out;
     }
     rc = set_store(em, nd, index, count, 0);
     if (rc != 0) {
@@ -2952,10 +3192,6 @@ static int ex_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
     }
     rc = set_retire(em, od, src.index, src.entries);
     if (rc == 0) {
-        /* The retirements on the medium before the new name is published:
-         * a drive that keeps writes pending could otherwise put the
-         * publication first, and a crash between would leave two names
-         * on one chain, where the order chosen leaves none. */
         rc = block_flush(em->dev);
     }
     if (rc != 0) {
@@ -2986,8 +3222,9 @@ out:
     return rc;
 }
 
-/* Bytes of a file: `count` from `buf` (zeros for NULL) at `off`, through
- * the chain, for writeback. */
+/** Copy `count` bytes from `buf`, or zeros for NULL, to offset `off` of
+ * node `n`'s data, through its chain, into the cache for a later sync; 0,
+ * or -errno. */
 static int put_file_bytes(struct ex_mount *em, struct ex_node *n, uint64_t off, const uint8_t *buf,
                           uint32_t count)
 {
@@ -3020,8 +3257,10 @@ static int put_file_bytes(struct ex_mount *em, struct ex_node *n, uint64_t off, 
     return 0;
 }
 
-/* A contiguous file about to grow: its run into the FAT, the flag
- * cleared and published, then the chain can be joined to. */
+/** Make node `n`'s chain one the FAT describes, for a file about to grow: a
+ * contiguous run is written into the FAT and synced, and NoFatChain cleared
+ * and published; a file with no clusters has the flag cleared in memory
+ * alone. 0, or -errno. */
 static int chain_convert(struct ex_mount *em, struct ex_node *n)
 {
     int rc;
@@ -3038,6 +3277,8 @@ static int chain_convert(struct ex_mount *em, struct ex_node *n)
     return node_publish(em, n);
 }
 
+/** Set node `n`'s modification time to the present, with its UTC offset
+ * valid and zero. */
 static void stamp_mtime(struct ex_node *n)
 {
     uint8_t tenth;
@@ -3047,6 +3288,33 @@ static void stamp_mtime(struct ex_node *n)
     n->moff = 0x80;
 }
 
+/**
+ * The `write` of `vfs_ops`: `count` bytes from `buf` at `offset`, under the
+ * mount's namespace lock, which this takes.
+ *
+ * The clusters the write needs past the file's are counted against the free
+ * count before anything is written, a demand for more clusters than the
+ * volume has being -ENOSPC before the count is cut to 32 bits; then a
+ * contiguous file's run is put into the FAT, and a new run taken and zeroed
+ * in the cache. A write that begins past ValidDataLength first zeroes the
+ * gap within the file's old clusters, the part inside the last of them
+ * included, in pieces of 1 GiB, since the gap can be longer than a 32-bit
+ * count; the new run's zeros are its own fill. The bytes go into the cache,
+ * and `sync_disk` puts them and the zeros on the disk; then the run is
+ * joined to the chain with one FAT entry and a flush, and the new lengths
+ * and modification time published.
+ *
+ * When the join's flush fails, the old tail is ended again and the run
+ * freed; the end reaches the medium at the flush `free_chain` begins with,
+ * before a cluster is freed. A tail that cannot be ended keeps the run, as a
+ * surplus tail the dirty-volume check frees, rather than a chain that runs
+ * into free clusters, and so does a publication that fails. The node's
+ * place in its chain stays good, since a write changes no cluster the chain
+ * had, and the next append walks from there.
+ *
+ * Returns `count`, -EISDIR, -EFBIG past the format's limit of 2^63 - 1
+ * bytes, -EROFS, -ENOSPC, or -errno.
+ */
 static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                         uint64_t offset)
 {
@@ -3079,16 +3347,13 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
     if (needed > have) {
         uint64_t want = needed - have;
 
-        /* A cluster count is 32 bits and the volume has no more than
-         * `clusters` of them. Casting a larger demand would ask for its
-         * low half and put the bytes at the wrong cluster. */
         if (want > (uint64_t)em->clusters) {
             rc = -ENOSPC;
             goto out;
         }
         rc = room_for(em, (uint32_t)want);
         if (rc == 0) {
-            rc = chain_convert(em, n); /* nothing is written before the room is known */
+            rc = chain_convert(em, n);
         }
         if (rc == 0) {
             rc = alloc_run(em, (uint32_t)want, 1, &run_first, &run_last);
@@ -3097,18 +3362,12 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
             goto out;
         }
     }
-    /* A write past the valid length zero-fills the gap in the old clusters
-     * first, including the part inside the last one; the run's zeros are
-     * its own fill. */
     if (offset > n->valid && have > 0) {
         uint64_t gap_end = have * cbytes < offset ? have * cbytes : offset;
 
         if (gap_end > n->valid) {
             uint64_t at = n->valid;
 
-            /* The gap can be longer than a 32-bit count. One cast of it
-             * would clear nothing and then publish a valid length over
-             * clusters that still hold whatever was on the medium. */
             while (at < gap_end) {
                 uint64_t left = gap_end - at;
                 uint32_t piece = left > 0x40000000u ? 0x40000000u : (uint32_t)left;
@@ -3146,7 +3405,7 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
     if (rc != 0) {
         goto undo;
     }
-    rc = sync_disk(em); /* the data and the zeros reach the disk first */
+    rc = sync_disk(em);
     if (rc != 0) {
         goto undo;
     }
@@ -3157,13 +3416,13 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
             joined = rc == 0;
         }
         if (rc == 0) {
-            rc = block_flush(em->dev); /* the join on the medium before the lengths */
+            rc = block_flush(em->dev);
         }
         if (rc != 0) {
             goto undo;
         }
     } else if (run_first != 0) {
-        n->first = run_first; /* published with the lengths below */
+        n->first = run_first;
     }
     if (end > n->length) {
         n->length = end;
@@ -3174,19 +3433,12 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
     stamp_mtime(n);
     rc = node_publish(em, n);
     if (rc != 0) {
-        goto out; /* the chain is joined; the length is the walk's surplus */
+        goto out;
     }
-    /* The hint stays: a write changes no cluster the chain had, so the
-     * position it remembers is still that cluster, and the next append
-     * walks from there rather than from the first cluster again. */
     vfs_ns_unlock(mnt);
     return (int32_t)count;
 undo:
     if (joined && fat_set(em, tail, EX_EOC, 1) != 0) {
-        /* The join is in the cache and may be on the medium: a tail that
-         * cannot be ended again keeps its run, as lost clusters a check
-         * frees, rather than a chain that runs into free ones. The
-         * ending reaches the medium in `free_chain`, before it frees. */
         goto out;
     }
     if (run_first != 0) {
@@ -3197,6 +3449,24 @@ out:
     return rc;
 }
 
+/**
+ * The `truncate` of `vfs_ops`: the file's length made `size`, under the
+ * mount's namespace lock, which this takes; both directions set the
+ * modification time.
+ *
+ * A growth takes the clusters it needs past the file's, unzeroed, since
+ * ValidDataLength stays where it was and the new range reads as zeros;
+ * syncs the run's bits and FAT entries; joins the run to the chain with a
+ * flush before the length that counts on it, so a crash cannot leave a
+ * chain shorter than its length; and publishes the length. A shrink
+ * publishes the shorter lengths, ValidDataLength lowered to `size` when it
+ * was past it, and flushes, so that a drive that keeps writes pending cannot
+ * free the tail under lengths that still cover it; then it ends the kept
+ * chain and frees the rest.
+ *
+ * Returns 0, -EISDIR, -EFBIG past 2^63 - 1 bytes, -EROFS, -ENOSPC, or
+ * -errno.
+ */
 static int ex_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
     struct ex_mount *em = em_of(mnt);
@@ -3220,8 +3490,6 @@ static int ex_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     have = clusters_of(em, n->length);
     keep = clusters_of(em, size);
     if (size > n->length) {
-        /* A grow: new clusters, chained, unzeroed, since the valid length
-         * stays where it was and the new range reads as zeros. */
         uint32_t run_first = 0, run_last = 0;
 
         if (keep > have) {
@@ -3233,7 +3501,7 @@ static int ex_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
             }
             rc = room_for(em, (uint32_t)want);
             if (rc == 0) {
-                rc = chain_convert(em, n); /* nothing is written before the room is known */
+                rc = chain_convert(em, n);
             }
             if (rc == 0) {
                 rc = alloc_run(em, (uint32_t)want, 0, &run_first, &run_last);
@@ -3241,7 +3509,7 @@ static int ex_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
             if (rc != 0) {
                 goto out;
             }
-            rc = sync_disk(em); /* the run's bits and entries, before the join */
+            rc = sync_disk(em);
             if (rc != 0) {
                 free_chain(em, run_first, 0, 0);
                 goto out;
@@ -3254,9 +3522,6 @@ static int ex_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
                     rc = fat_set(em, tail, run_first, 1);
                 }
                 if (rc == 0) {
-                    /* The link on the medium before the length that
-                     * counts on it, or a crash leaves a chain shorter
-                     * than its length. */
                     rc = block_flush(em->dev);
                     if (rc != 0) {
                         (void)fat_set(em, tail, EX_EOC, 1);
@@ -3276,8 +3541,6 @@ static int ex_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         n->hint_cluster = 0;
         goto out;
     }
-    /* A shrink: the lengths first, the retained tail ended, the detached
-     * tail freed last. */
     {
         uint32_t cut_first = 0, tail = 0;
         int was_nofat = n->nofat;
@@ -3307,9 +3570,6 @@ static int ex_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         stamp_mtime(n);
         rc = node_publish(em, n);
         if (rc == 0) {
-            /* The shorter lengths on the medium before the tail is cut and
-             * freed: a drive that keeps writes pending could otherwise
-             * free the tail under lengths that still cover it. */
             rc = block_flush(em->dev);
         }
         if (rc != 0) {
@@ -3332,6 +3592,17 @@ out:
     return rc;
 }
 
+/**
+ * The `setattr` of `vfs_ops`: the mode's write bits, kept as the read-only
+ * attribute, and the access and modification times; the root, which has no
+ * set, changes nothing. A change of owner, group or any other attribute,
+ * and a mode whose other bits differ from the mount's, is -EPERM. A time is
+ * a DOS stamp with its UTC offset valid and zero; the stamp counts two
+ * seconds, so the modification time's odd second goes in its 10 ms count,
+ * whose range of 0 to 199 is for that, and the access time, which has no
+ * such count, drops it. Takes the mount's namespace lock. 0, -EPERM,
+ * -EROFS, or -errno.
+ */
 static int ex_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
 {
     struct ex_mount *em = em_of(mnt);
@@ -3376,8 +3647,6 @@ static int ex_setattr(struct vfs_mount *mnt, void *node, int what, const struct 
 
         fat_stamp(st->mtime_sec, &date, &time);
         n->mtime = ((uint32_t)date << 16) | time;
-        /* The stamp's field holds two seconds; the 10 ms count carries the
-         * odd second, which is what its range of 0 to 199 is for. */
         n->m10 = (uint8_t)((uint32_t)st->mtime_nsec / 10000000u % 100u);
         if (fat_epoch(date, time) == st->mtime_sec - 1) {
             n->m10 = (uint8_t)(n->m10 + 100);
@@ -3389,6 +3658,8 @@ static int ex_setattr(struct vfs_mount *mnt, void *node, int what, const struct 
     return rc;
 }
 
+/** The `fsync` of `vfs_ops`: `sync_disk` of the whole volume, under the
+ * mount's namespace lock; 0, or -errno. */
 static int ex_fsync(struct vfs_mount *mnt, void *handle)
 {
     int rc;
@@ -3400,17 +3671,20 @@ static int ex_fsync(struct vfs_mount *mnt, void *handle)
     return rc;
 }
 
-/* The main boot sector's flags and percent in use, written through; the
- * backup region is never written, and the checksum skips these bytes. */
+/**
+ * Write the main boot sector's PercentInUse and then its VolumeFlags through,
+ * VolumeDirty set by `dirty`; the backup region is never written, and the
+ * boot checksum skips these bytes. The percent goes first, so that the write
+ * which clears the dirty bit is the last of the two, and a stop between them
+ * leaves the volume dirty with a percent that is already right; it is 0xFF
+ * while the free count is not known. 0, or -errno.
+ */
 static int write_boot_state(struct ex_mount *em, int dirty)
 {
     uint8_t flags[2], percent;
     uint32_t used = em->free_known ? em->clusters - em->free_clusters : 0;
     int rc;
 
-    /* The percent first, so that the write which clears the dirty bit is
-     * the last of the two: a stop between them leaves the volume dirty
-     * with a percent that is already right. */
     if (em->free_known) {
         uint32_t u = used, c = em->clusters;
 
@@ -3431,6 +3705,9 @@ static int write_boot_state(struct ex_mount *em, int dirty)
     return ex_write_bytes(em, 106, flags, 2, 1);
 }
 
+/** The `sync` of `vfs_ops`: on a mount that set VolumeDirty, `sync_disk` and
+ * then the percent in use written, the bit left set; under the mount's
+ * namespace lock. 0, or -errno. */
 static int ex_sync(struct vfs_mount *mnt)
 {
     struct ex_mount *em = em_of(mnt);
@@ -3452,9 +3729,10 @@ static int ex_sync(struct vfs_mount *mnt)
     return rc;
 }
 
-/* The clean unmount: every dirty buffer written, the percent in use, then
- * the dirty bit cleared last. A failure leaves the volume marked dirty
- * and the mount where it was. */
+/** The `prepare_unmount` of `vfs_ops`, the clean unmount of a mount that set
+ * VolumeDirty: every dirty buffer written, the percent in use, then the
+ * dirty bit cleared last. A failure leaves the volume marked dirty and the
+ * mount where it was. 0, or -errno. */
 static int ex_prepare_unmount(struct vfs_mount *mnt)
 {
     struct ex_mount *em = em_of(mnt);
@@ -3478,9 +3756,10 @@ static int ex_prepare_unmount(struct vfs_mount *mnt)
  *
  * A volume whose dirty bit is set was written by something that did not
  * unmount it. Before a writable mount is published the tree is walked
- * under the bitmap the FAT drivers share, one walk at a time, seeded with
- * the root's chain, the bitmap's and the up-case table's; every set the
- * tree reaches is checked as the reader checks it and its chain marked.
+ * under the walk bitmap the FAT32, exFAT and ext2 checks share, one walk at
+ * a time, seeded with the root's chain, the bitmap's and the up-case
+ * table's; every set the tree reaches is checked as the reader checks it
+ * and its chain marked.
  * Three states this driver's own order leaves behind a crash are repaired,
  * each a metadata write, in an order a second crash cannot make worse: a
  * set failing only its checksum has it rewritten, orphan secondaries are
@@ -3490,12 +3769,19 @@ static int ex_prepare_unmount(struct vfs_mount *mnt)
  * first fault named.
  */
 
-#define CHECK_DEPTH   32
-#define CHECK_TAILS   16
+#define CHECK_DEPTH   32   /* levels of directories, the root's included */
+#define CHECK_TAILS   16   /* surplus tails recorded for the repair */
 #define CHECK_SETS    16   /* checksum-only sets recorded for the rewrite */
 #define CHECK_ORPHANS 64   /* orphan secondaries recorded, per volume */
-#define CHECK_NAMES   4096 /* names of one directory compared for a duplicate */
+#define CHECK_NAMES   4096 /* names in the directories on the walk's path */
 
+/*
+ * The walk's state: the first fault, or NULL; the repairs made and the lost
+ * clusters; and the repairs to make once the tree is walked: for a surplus
+ * tail, the cluster before it and its first; for a checksum-only set and an
+ * orphan secondary, the first cluster, length and NoFatChain flag of its
+ * directory and its entry index there.
+ */
 struct check_state {
     struct ex_mount *em;
     const char *why;
@@ -3513,11 +3799,14 @@ struct check_state {
     uint8_t orphan_dir_nofat[CHECK_ORPHANS];
 };
 
+/* The name hashes on the walk's path and the entry index of each, a segment
+ * for each directory; static, since one walk runs at a time. */
 static uint16_t check_hashes[CHECK_NAMES];
 static uint32_t check_hash_index[CHECK_NAMES];
 
-/* Mark cluster `c`: a fault when it was marked already or its bitmap bit
- * is clear. */
+/** Mark cluster `c` in the walk bitmap: 0, or -1 with `w->why` set for a
+ * cluster outside the heap, one marked already, or one whose bitmap bit is
+ * clear or cannot be read. */
 static int check_mark(struct check_state *w, uint32_t c)
 {
     uint8_t byte;
@@ -3544,9 +3833,14 @@ static int check_mark(struct check_state *w, uint32_t c)
     return 0;
 }
 
-/* A chain marked: `length` bytes from `first`, contiguous or through the
- * FAT; a FAT chain longer than the length is recorded as a surplus tail
- * and walked to its end; one shorter is a fault. The cluster count, or -1. */
+/**
+ * Mark the chain of `length` bytes from `first`, contiguous with `nofat` and
+ * through the FAT otherwise; a FAT chain of length 0, the root's, is
+ * followed to its end. A FAT chain longer than its length is recorded as a
+ * surplus tail and walked to its end; one shorter, or one that leaves the
+ * heap, loops or ends in a free or bad entry, is a fault. The cluster count,
+ * or -1 with `w->why` set.
+ */
 static long check_chain(struct check_state *w, uint32_t first, int nofat, uint64_t length)
 {
     struct ex_mount *em = w->em;
@@ -3607,10 +3901,17 @@ static long check_chain(struct check_state *w, uint32_t first, int nofat, uint64
     return count;
 }
 
-/* One directory walked from `*resume`: its sets checked, chains marked,
- * orphans and checksum-only sets recorded, names compared. 1 with a
- * subdirectory in `*sub` and `*sub_length`/`*sub_nofat` to descend into,
- * 0 at the end, -1 for a fault. */
+/**
+ * Walk directory `d` from entry `*resume`: its sets checked as the reader
+ * checks them, their chains and vendor allocations marked, orphans and
+ * checksum-only sets recorded, and each name compared with those before it
+ * in the directory, the `*nnames` hashes in `check_hashes` from `base`. A
+ * set whose checksum alone fails is read again with its checksum taken as
+ * right, since it is about to be rewritten, and its name counts against the
+ * others. 1 with a subdirectory in `*sub`, `*sub_length` and `*sub_nofat` to
+ * descend into and `*resume` past it, 0 at the end, -1 with `w->why` set for
+ * a fault.
+ */
 static int check_dir(struct check_state *w, struct ex_node *d, uint32_t *resume, uint32_t *sub,
                      uint64_t *sub_length, int *sub_nofat, uint32_t base, uint32_t *nnames)
 {
@@ -3637,7 +3938,7 @@ static int check_dir(struct check_state *w, struct ex_node *d, uint32_t *resume,
             continue;
         }
         if (raw[0] & 0x40) {
-            /* An in-use secondary outside a set: an orphan, freed later. */
+            /* An in-use secondary outside a set: an orphan. */
             if (w->norphans == CHECK_ORPHANS) {
                 w->why = "more orphan secondaries than the walk repairs";
                 return -1;
@@ -3652,8 +3953,7 @@ static int check_dir(struct check_state *w, struct ex_node *d, uint32_t *resume,
         }
         if (raw[0] == 0x81 || raw[0] == 0x82 || raw[0] == 0x83 || raw[0] == 0xA0 ||
             raw[0] == 0xA1) {
-            /* The bitmap, the up-case table and the label belong to the
-             * root; in another directory they make it invalid. */
+            /* The bitmap, up-case table and label belong to the root alone. */
             if (!is_root && raw[0] != 0xA0 && raw[0] != 0xA1) {
                 w->why = "a root-only critical entry in a subdirectory";
                 return -1;
@@ -3675,8 +3975,6 @@ static int check_dir(struct check_state *w, struct ex_node *d, uint32_t *resume,
                 w->why = set.why;
                 return -1;
             }
-            /* Its checksum will be rewritten; read it again for the walk
-             * with the checksum taken as right. */
             if (w->nsets == CHECK_SETS) {
                 w->why = "more sets to rewrite than the walk repairs";
                 return -1;
@@ -3715,8 +4013,6 @@ static int check_dir(struct check_state *w, struct ex_node *d, uint32_t *resume,
                     if (rc == 1) {
                         int got = set_read(em, d, check_hash_index[m], oraw, &other);
 
-                        /* A set whose checksum alone fails is about to be
-                         * repaired: its name counts against this one. */
                         if ((got == 1 || (got == 0 && other.checksum_only)) &&
                             other.count == set.count) {
                             rc = units_match(em, other.units, set.units, set.count, &same);
@@ -3740,7 +4036,6 @@ static int check_dir(struct check_state *w, struct ex_node *d, uint32_t *resume,
             check_hash_index[base + *nnames] = i;
             (*nnames)++;
         }
-        /* The set's chains: the stream's, and a vendor allocation's. */
         {
             uint32_t first = le32(set.stream + 20);
             uint64_t length = le64(set.stream + 24);
@@ -3783,8 +4078,23 @@ static int check_dir(struct check_state *w, struct ex_node *d, uint32_t *resume,
     }
 }
 
-/* 0 when the volume is consistent or was repaired, 1 when it mounts
- * read-only with the fault named, or a negative error. */
+/**
+ * Check the dirty volume before a writable mount is published, as the
+ * section above says, under the shared walk bitmap, which it gives back.
+ *
+ * The system objects' chains are marked first, then the tree is walked, a
+ * subdirectory's names taking the segment of `check_hashes` after its
+ * parent's, so that the parent's stand when the walk returns to it. Once the
+ * whole tree is walked come the repairs: checksums first, then orphans, then
+ * the surplus tails, each ended before it is freed. Last, the bitmap is
+ * compared with the walk: a bit set that nothing reached is lost and left,
+ * and the tails just freed are marked and free, which is right; the free
+ * count is recounted from the bitmap.
+ *
+ * Returns 0 when the volume is consistent or was repaired, or 1 when it must
+ * mount read-only, with a record of why, a fault of the device or a walk
+ * bitmap the heap cannot give among the reasons.
+ */
 K_NOINLINE static int ex_check_volume(struct ex_mount *em)
 {
     struct check_state w;
@@ -3804,8 +4114,6 @@ K_NOINLINE static int ex_check_volume(struct ex_mount *em)
         return 1;
     }
     klog(KLOG_INFO, "exfat", "check: the volume was not unmounted cleanly; checking");
-    /* The system objects first: the root's chain, the bitmap's, the
-     * up-case table's, disjoint and allocated. */
     if (check_chain(&w, em->root, 0, 0) < 0 ||
         check_chain(&w, em->bitmap_first, 0, em->bitmap_length) < 0 ||
         check_chain(&w, em->upcase_first, 0, em->upcase_length) < 0) {
@@ -3842,8 +4150,6 @@ K_NOINLINE static int ex_check_volume(struct ex_mount *em)
             w.why = "a directory tree deeper than the walk";
             goto done;
         }
-        /* A subdirectory's names take the segment after its parent's, so
-         * the parent's stand when the walk returns. */
         stack_first[depth] = sub;
         stack_resume[depth] = 0;
         stack_length[depth] = sub_length;
@@ -3852,8 +4158,6 @@ K_NOINLINE static int ex_check_volume(struct ex_mount *em)
         stack_names[depth] = 0;
         depth++;
     }
-    /* The repairs, now that the whole tree is walked: checksums first,
-     * then orphans, then the surplus tails, detached before freed. */
     for (i = 0; i < w.nsets; i++) {
         struct ex_node d;
         uint32_t count;
@@ -3909,8 +4213,6 @@ K_NOINLINE static int ex_check_volume(struct ex_mount *em)
         w.repaired++;
         klog(KLOG_WARN, "exfat", "check: surplus tail freed");
     }
-    /* The bitmap against the walk: a bit set that nothing reached is lost
-     * and left; the tails just freed are marked and free, which is right. */
     for (c = 2; c < em->clusters + 2; c++) {
         uint8_t byte;
 
@@ -3943,10 +4245,11 @@ done:
 }
 
 /**
- * The path of a directory node within the mount, from the parents the nodes
- * remember and the names their sets carry, up to the root. A directory more
- * than 64 levels below the root has no path here and is -ENAMETOOLONG, as a
- * path longer than `cap` is.
+ * The `path` of `vfs_ops`: the path of directory `node` within the mount,
+ * from the parents the nodes remember, or `find_dir` finds, and the names
+ * in their sets, up to the root. A directory more than 64 levels below
+ * the root has no path here and is -ENAMETOOLONG, as a path longer than
+ * `cap` is. 0, -ENAMETOOLONG, -ENOENT, -ENOMEM, or -EIO.
  */
 static int ex_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
