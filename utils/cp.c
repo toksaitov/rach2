@@ -1,3 +1,5 @@
+/** cp: copy the bytes of one file to a path. */
+
 #include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>

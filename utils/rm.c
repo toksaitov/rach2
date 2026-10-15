@@ -93,6 +93,10 @@ static int remove_recursive(const char *path)
     return rmdir(path);
 }
 
+/**
+ * Remove each operand: with `-r` by `remove_recursive`, without it by
+ * `unlink`, which refuses a directory. No operand is a usage error, status 1.
+ */
 int main(int argc, char *argv[])
 {
     int i;

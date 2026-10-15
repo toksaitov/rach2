@@ -35,6 +35,11 @@ static void print_entry(const char *name, unsigned char d_type)
     printf("%crw- %s\n", type, name);
 }
 
+/**
+ * List the directory. The status is 1, with a message, when it cannot be
+ * opened, and 0 otherwise; an error while reading ends the list early with
+ * status 0.
+ */
 int main(int argc, char *argv[])
 {
     const char *dir_path = (argc > 1) ? argv[1] : ".";

@@ -7,6 +7,10 @@
 
 #include <stdio.h>
 
+/**
+ * Rename the first operand to the second. The status is 1, with a message,
+ * on a usage error or a failed `rename`.
+ */
 int main(int argc, char *argv[])
 {
     if (argc != 3) {

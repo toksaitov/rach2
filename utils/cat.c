@@ -1,3 +1,8 @@
+/**
+ * cat: copy files, or standard input, to standard output through `read` and
+ * `write`, without stdio.
+ */
+
 #include <unistd.h>
 #include <fcntl.h>
 #include <string.h>

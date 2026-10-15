@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <sys/stat.h>
 
+/** Make each operand a directory. No operand is a usage error, status 1. */
 int main(int argc, char *argv[])
 {
     int i;
