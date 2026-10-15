@@ -3,10 +3,10 @@
  *
  * QEMU's `qemu-xhci` is a controller that works. It resets when told, it has
  * no firmware holding it, it asks for no scratchpad pages and it puts its
- * registers where a driver expects them. The notebook's controller is an Intel
- * one behind firmware that may still own it, and no boot of either machine can
- * produce a reset that never finishes, firmware that never answers, or a
- * request for more scratchpad pages than a kernel has.
+ * registers where a driver expects them. A controller in a laptop may be an
+ * Intel one behind firmware that still owns it, and no boot of QEMU or of a
+ * machine can produce on demand a reset that never finishes, firmware that
+ * never answers, or a request for more scratchpad pages than a kernel has.
  *
  * So the driver is compiled natively and given a model of a controller through
  * the interface it reaches registers by. Each row drives one step of bring-up
@@ -26,16 +26,16 @@ extern int strcmp(const char *left, const char *right);
 
 /* ---- the model ---- */
 
-/* Big enough to hold a register at the far end of the 64 KiB aperture the
-   driver maps, so a row can put a capability list where its next step leaves
-   the window. */
+/* The model's registers, indexed by byte offset. There are enough to hold a
+ * register at the far end of the 64 KiB aperture the driver maps, so a row
+ * can put a capability list where its next step leaves the window. */
 #define REGS 0x10010
 
 static uint32_t reg[REGS];
 
-/* Where this model's controller keeps things. A real controller chooses these
-   and a driver must read them; the model puts them somewhere a driver that
-   assumed the usual values would still be wrong. */
+/* Where this model's controller keeps things. A controller chooses these and
+ * a driver must read them; the model puts them where a driver that assumed
+ * the usual values would be wrong. */
 #define CAPLENGTH 0x20
 #define XECP      0x500
 #define DBOFF     0x800
@@ -55,7 +55,7 @@ static uint32_t reg[REGS];
 #define O_PAGESIZE 0x08
 
 /* The bits this model answers on, named apart from the driver's own names for
-   them: the driver is included at the end of this file and defines its own. */
+ * them: the driver is included further down this file and defines its own. */
 #define M_USBCMD_RS    0x1u
 #define M_USBCMD_HCRST 0x2u
 #define M_USBCMD_INTE  0x00000004u
@@ -70,9 +70,8 @@ static uint32_t reg[REGS];
 #define M_DOORBELL0       DBOFF
 
 /* A port's status and control register, and the bits of it this model answers
-   on. The change bits and the enable bit are write-one-to-clear, which is what
-   makes a careless read-modify-write throw away a connect and disable the
-   port. */
+ * on. The change bits and the enable bit are write-one-to-clear, so a careless
+ * read-modify-write throws away a connect and disables the port. */
 #define M_PORTSC(port)   (OP(0x400u) + (port) * 0x10u)
 #define M_PORTSC_CCS     0x00000001u
 #define M_PORTSC_PED     0x00000002u
@@ -82,23 +81,26 @@ static uint32_t reg[REGS];
 #define M_PORTSC_CSC     0x00020000u
 #define M_PORTSC_PRC     0x00200000u
 
-/* The command ring control register's bits. Two are write-only and one is the
-   controller's own. */
+/* The command ring control register's bits: CS and CA are write-only, and CRR
+ * is the controller's own. LEGCTL_EVENTS are the write-one-to-clear event bits
+ * of the legacy control register. */
 #define M_CRCR_CS     0x2u
 #define M_CRCR_CA     0x4u
 #define M_CRCR_CRR    0x8u
 #define LEGCTL_EVENTS 0xE0000000u
 
-/* What the controller does when a doorbell is rung, set after `xhci.c` is
-   included because it reaches into the driver's own rings. */
+/* What the controller does when doorbell 0 is rung, set after `xhci.c` is
+ * included because it reads the driver's own rings. */
 static void (*on_doorbell)(uint32_t target);
 /* Called when the driver points the command ring somewhere, which is how this
-   model follows it after an abort. */
+ * model follows it after an abort. */
 static void (*on_ring_moved)(void);
 /* Called when a slot's endpoint doorbell is rung. */
 static void (*on_endpoint_doorbell)(uint32_t slot, uint32_t dci);
 
-/* What this run's controller does, set before each row. */
+/* What this run's controller does, set before each row: whether it halts when
+ * told to, the microseconds of `model_udelay` so far, and the delay after
+ * which it halts by itself, 0 for never. */
 static int halts;
 static uint32_t delayed_us;
 static uint32_t halt_after_us;
@@ -108,29 +110,33 @@ static int command_completes;
 static int starts;
 /* Whether a port reset the driver asks for ever finishes. */
 static int port_reset_completes;
-/* Whether the controller stops its command ring when it is asked to. */
+/* Whether the controller stops its command ring when the driver sets CA,
+ * whether it posts the Command Ring Stopped event then, and the aborts the
+ * driver requested. */
 static int abort_completes;
 static int abort_posts_event;
 static unsigned abort_requests;
 static void model_command_stop(void);
 /* How many waits the firmware takes before it gives the controller up, so a
-   row can have a driver that asks once and reads once fail where a driver
-   that waits passes. */
+ * driver that asks once and reads once fails where a driver that waits
+ * passes. Then whether a reset finishes, whether CNR clears with it, and
+ * whether the firmware answers a request for ownership at all. */
 static int handoff_delay;
 static int reset_completes;
 static int cnr_clears;
 static int handoff_answers;
 
 /* Whether the driver read a register between asserting the reset and waiting
-   the millisecond an Intel controller needs. A driver that reads too early
-   gets rubbish out of hardware that has not finished starting, and no
-   emulator will ever show it. */
+ * the millisecond an Intel controller needs. A driver that reads too early
+ * gets garbage from hardware that has not finished starting, which no
+ * emulator shows. */
 static int awaiting_pause;
 static int read_too_early;
 
-/* The power state the model's function is in. A function the firmware parked
-   in D3 answers its configuration space and returns all ones from its
-   registers, which is what makes reading them before waking it useless. */
+/* The power state the model's function is in, 0 for D0 and 3 for D3. A
+ * function the firmware parked in D3 answers its configuration space and
+ * returns all ones from its registers, so reading them before waking it is
+ * useless. */
 static unsigned pm_state;
 
 /* What the driver asked the bus for, so a row can require it. */
@@ -139,7 +145,7 @@ static int bus_master_enabled;
 /* The class and subclass it searched for. */
 static uint8_t searched_class;
 static uint8_t searched_subclass;
-/* Whether the firmware lets this kernel's claim stand at all. */
+/* Whether the controller keeps the OS-owned bit this kernel writes. */
 static int accepts_os_claim;
 /* How many waits the controller takes to become ready, and whether it ever
    does. */
@@ -147,9 +153,10 @@ static int cnr_delay;
 static int becomes_ready;
 
 /* How many times the capability list's head was read: a walk that never ends
-   reads it without limit, and one that gives up reads it a few times. */
+ * reads it without limit, and one that gives up reads it a few times. */
 static unsigned xecp_reads;
 
+/** Read the register at byte offset `off`: all ones in D3, 0 past the model. */
 static uint32_t model_r32(struct xhci_ctrl *hc, uint32_t off)
 {
     if (awaiting_pause) {
@@ -171,9 +178,9 @@ static uint32_t model_r32(struct xhci_ctrl *hc, uint32_t off)
  * The interrupter, as a controller works it: an event sets the pending bit and
  * the busy bit, and raises an interrupt only when the busy bit was clear and
  * both enables are set. The busy bit is cleared by the driver writing it back
- * as one, which is what makes a driver that writes it as zero stop hearing
- * from its controller after the first event. Nothing else here models that,
- * and no machine can be made to show it on demand.
+ * as one, so a driver that writes it as zero hears nothing from its
+ * controller after the first event. No machine can be made to show that on
+ * demand.
  */
 #define IR_BASE    (RTSOFF + 0x20u)
 #define M_IMAN     (IR_BASE + 0x00u)
@@ -193,7 +200,8 @@ static int event_on_iman; /* post an event from inside the acknowledgement */
 
 static void post_event(uint32_t type, uint32_t code, uint32_t slot, uint32_t param0);
 
-/** What the controller does when it has written an event. */
+/** Set the pending and busy bits for an event written, and count an interrupt
+ * raised when the busy bit was clear and the interrupter can raise one. */
 static void model_raise(void)
 {
     int was_busy = model_busy;
@@ -216,6 +224,32 @@ static void model_raise(void)
     model_raises++;
 }
 
+/**
+ * Write `v` to the register at byte offset `off`, with each register's own
+ * rules. IMAN's pending bit and USBSTS's event bit are cleared by writing
+ * them as one, and the rest of USBSTS is the controller's to set; ERDP's busy
+ * bit written as one says the driver is finished with what it was given.
+ * With `event_on_iman` an event is written from inside the acknowledgement,
+ * the window that a handler that drained first would lose.
+ *
+ * HCRST clears itself when the reset has finished, and CNR stays set until
+ * the controller says it is ready; a model that cleared both at once would
+ * pass a driver that never looked at CNR. The firmware answers a request for
+ * ownership by giving up its own claim, and one that never answers leaves its
+ * bit set; a controller that drops the claim rather than taking it can clear
+ * the firmware's bit and still not be this kernel's. A port whose reset
+ * finishes enables itself and sets PRC; one whose reset never finishes keeps
+ * PR set.
+ *
+ * A write to a doorbell past the first is a slot's endpoint doorbell, which
+ * publishes a transfer; the slot is the register's distance from the first.
+ * CRCR's CA and CS are written by software and read as zero, and CRR is the
+ * controller's; a model that stored what was written would let a driver read
+ * back its own abort request as an answer. LEGCTL's event bits are
+ * write-one-to-clear and its enables ordinary, which lets a row require that
+ * the driver both turned the firmware's interrupts off and cleared what they
+ * had raised.
+ */
 static void model_w32(struct xhci_ctrl *hc, uint32_t off, uint32_t v)
 {
     if (off >= REGS) {
@@ -230,10 +264,7 @@ static void model_w32(struct xhci_ctrl *hc, uint32_t off, uint32_t v)
         }
         reg[off] = pending | (v & M_IMAN_IE);
         if (event_on_iman) {
-            /* An event written between the acknowledgement and the drain,
-               which is the window a handler that drained first would lose.
-               The numbers are the port-change event's, spelled here because
-               the driver's own names are defined further down this file. */
+            /* A Port Status Change event, type 34, written by number. */
             event_on_iman = 0;
             post_event(34u, 1u, 0, 1u << 24);
         }
@@ -241,8 +272,6 @@ static void model_w32(struct xhci_ctrl *hc, uint32_t off, uint32_t v)
     }
 
     if (off == OP(O_USBSTS)) {
-        /* The event bit is cleared by writing it as one; the rest of the
-           register is the controller's to set. */
         reg[off] &= ~(v & M_USBSTS_EINT);
         return;
     }
@@ -257,10 +286,6 @@ static void model_w32(struct xhci_ctrl *hc, uint32_t off, uint32_t v)
 
     if (off == OP(O_USBCMD)) {
         if (v & M_USBCMD_HCRST) {
-            /* The reset bit clears itself when the controller has finished,
-               and the controller is not ready until it says so. A model that
-               cleared both at once would pass a driver that never looked at
-               the ready bit. */
             awaiting_pause = 1;
             if (reset_completes) {
                 v &= ~M_USBCMD_HCRST;
@@ -282,16 +307,12 @@ static void model_w32(struct xhci_ctrl *hc, uint32_t off, uint32_t v)
     }
 
     if (off == XECP) {
-        /* The firmware answers a request for ownership by giving up its own
-           claim. One that never answers leaves its bit set. */
         if ((v & LEGSUP_OS_OWNED) && handoff_answers && handoff_delay == 0) {
             v &= ~LEGSUP_BIOS_OWNED;
         } else if (v & LEGSUP_OS_OWNED) {
             v |= (reg[off] & LEGSUP_BIOS_OWNED);
         }
         if (!accepts_os_claim) {
-            /* A controller that drops the claim rather than taking it: the
-               firmware's bit may clear and this kernel still does not own it. */
             v &= ~LEGSUP_OS_OWNED;
         }
         reg[off] = v;
@@ -305,8 +326,6 @@ static void model_w32(struct xhci_ctrl *hc, uint32_t off, uint32_t v)
 
         reg[off] = (v & ~(M_PORTSC_CHANGES | M_PORTSC_PED)) | kept_changes | kept_enable;
         if ((v & M_PORTSC_PR) && port_reset_completes) {
-            /* A port whose reset finishes enables itself and says so. One
-               whose reset never finishes leaves the reset bit standing. */
             reg[off] &= ~M_PORTSC_PR;
             reg[off] |= M_PORTSC_PED | M_PORTSC_PRC;
         }
@@ -323,8 +342,6 @@ static void model_w32(struct xhci_ctrl *hc, uint32_t off, uint32_t v)
 
     if (off > M_DOORBELL0 && off < M_DOORBELL0 + (XHCI_SLOTS + 1) * 4u &&
         ((off - M_DOORBELL0) % 4u) == 0) {
-        /* A doorbell for a slot's endpoint, which is how a transfer is
-           published. Its number is the register's distance from the first. */
         reg[off] = v;
         if (on_endpoint_doorbell) {
             on_endpoint_doorbell((off - M_DOORBELL0) / 4u, v);
@@ -333,10 +350,6 @@ static void model_w32(struct xhci_ctrl *hc, uint32_t off, uint32_t v)
     }
 
     if (off == OP(0x18u)) {
-        /* The command ring register. The abort and stop bits are written by
-           software and read as zero; the running bit belongs to the
-           controller. A model that stored what was written would let a driver
-           read back its own abort request and call it an answer. */
         uint32_t running = reg[off] & M_CRCR_CRR;
 
         if (v & M_CRCR_CA) {
@@ -358,10 +371,6 @@ static void model_w32(struct xhci_ctrl *hc, uint32_t off, uint32_t v)
     }
 
     if (off == LEGCTL) {
-        /* The event bits are write-one-to-clear and the enables are ordinary.
-           Modelling the difference is what lets a row say the driver both
-           turned the firmware's interrupts off and cleared what they had
-           already raised. */
         uint32_t events = reg[off] & ~(v & LEGCTL_EVENTS);
         reg[off] = (v & ~LEGCTL_EVENTS) | (events & LEGCTL_EVENTS);
         return;
@@ -370,6 +379,11 @@ static void model_w32(struct xhci_ctrl *hc, uint32_t off, uint32_t v)
     reg[off] = v;
 }
 
+/**
+ * Let `us` microseconds pass: halt the controller after `halt_after_us`, end
+ * the pause after a reset at a wait of 1 ms or more, and count down the waits
+ * to the controller's ready bit and the firmware's handoff.
+ */
 static void model_udelay(uint32_t us)
 {
     delayed_us += us;
@@ -395,14 +409,17 @@ static void model_udelay(uint32_t us)
 
 static const struct xhci_io model_io = {model_r32, model_w32, model_udelay};
 
-/* ---- what the driver reaches for outside itself ---- */
+/* ---- the functions outside xhci.c that it calls ---- */
 
 #include "../../rach2/sys/pci.h"
 
+/* The function's first two BARs. */
 static uint32_t model_bar0;
 static uint32_t model_bar1;
-/* The controller's configuration space, which is where a chipset keeps the
-   routing of its USB pins, and the maker it says it is. */
+/* The controller's configuration space, indexed by byte offset, which is
+ * where a chipset keeps the routing of its USB pins; the vendor, the
+ * programming interface and the command register it reports; a copy the
+ * EHCI rows restore; and whether the function is on the bus at all. */
 static uint32_t pci_cfg[256];
 static uint16_t model_vendor;
 static uint8_t model_progif;
@@ -410,6 +427,8 @@ static uint16_t model_command;
 static uint32_t saved_cfg[256];
 static int model_present;
 
+/** Record the class searched for, and find the one function when it is a USB
+ * controller, the model is present and no device is to be skipped. */
 bool pci_find_device_skip(uint8_t cls, uint8_t sub, pci_device_t *skip, pci_device_t *out)
 {
     searched_class = cls;
@@ -432,16 +451,19 @@ bool pci_find_device_skip(uint8_t cls, uint8_t sub, pci_device_t *skip, pci_devi
     return 1;
 }
 
+/** Return whether `bar` is a 64-bit memory BAR, as sys/pci.c does. */
 bool pci_bar_is_64bit(uint32_t bar)
 {
     return (bar & 0x6u) == 0x4u;
 }
 
+/** Return whether `bar` is a memory BAR, as sys/pci.c does. */
 bool pci_bar_is_memory(uint32_t bar)
 {
     return (bar & 1u) == 0;
 }
 
+/** Return the address bits of a memory BAR, as sys/pci.c does. */
 uint32_t pci_bar_address(uint32_t bar)
 {
     return bar & ~0xFu;
@@ -465,6 +487,7 @@ uint64_t pci_bar_address64(const pci_device_t *dev, int i)
     return phys;
 }
 
+/** Return 0x70 for the power-management capability, 0 for any other. */
 uint8_t pci_find_capability(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t id)
 {
     (void)bus;
@@ -473,6 +496,7 @@ uint8_t pci_find_capability(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t id)
     return (uint8_t)(id == 0x01 ? 0x70 : 0);
 }
 
+/** Record the vector given, or return -1 when the device has no MSI. */
 int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
 {
     (void)dev;
@@ -483,18 +507,21 @@ int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
     return 0;
 }
 
+/** Record that the device has no vector. */
 void pci_msi_disable(const pci_device_t *dev)
 {
     (void)dev;
     msi_vector = -1;
 }
 
+/** Record the command register's interrupt disable bit cleared. */
 void pci_enable_interrupts(pci_device_t *dev)
 {
     (void)dev;
     intx_enabled = 1;
 }
 
+/** Return the power state at 0x74, the command register at 4, else 0. */
 uint16_t pci_read_config16(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off)
 {
     (void)bus;
@@ -509,6 +536,7 @@ uint16_t pci_read_config16(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off)
     return 0;
 }
 
+/** Take a write of the power state at 0x74; ignore any other. */
 void pci_write_config16(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off, uint16_t v)
 {
     (void)bus;
@@ -519,6 +547,7 @@ void pci_write_config16(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off, uint1
     }
 }
 
+/** Return 0: no byte of configuration space is modelled. */
 uint8_t pci_read_config8(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off)
 {
     (void)bus;
@@ -528,6 +557,7 @@ uint8_t pci_read_config8(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off)
     return 0;
 }
 
+/** Return the word `pci_cfg` has for `off`. */
 uint32_t pci_read_config32(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off)
 {
     (void)bus;
@@ -536,6 +566,7 @@ uint32_t pci_read_config32(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off)
     return pci_cfg[off];
 }
 
+/** Store `v` as the word for `off` in `pci_cfg`. */
 void pci_write_config32(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off, uint32_t v)
 {
     (void)bus;
@@ -544,12 +575,14 @@ void pci_write_config32(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off, uint3
     pci_cfg[off] = v;
 }
 
+/** Record bus mastering enabled. */
 void pci_enable_bus_master(pci_device_t *dev)
 {
     (void)dev;
     bus_master_enabled = 1;
 }
 
+/** Record memory decoding enabled. */
 void pci_enable_memory_space(pci_device_t *dev)
 {
     (void)dev;
@@ -557,14 +590,16 @@ void pci_enable_memory_space(pci_device_t *dev)
 }
 
 /* The window the driver would map. The xHCI registers are reached through
-   the model, never through this address; a companion EHCI's are read and
-   written here directly, as `quiesce_ehci` does, so it has room for them. */
+ * the model, never through this address; a companion EHCI's are read and
+ * written here directly, as `quiesce_ehci` does, so it has room for them.
+ * `udelay_calls` counts the waits of `k_udelay`. */
 static uint32_t window[64];
 static unsigned udelay_calls;
 
 /* The physical address the driver last asked to map. */
 static uint64_t mapped_phys;
 
+/** Record the physical address asked for and return `window`. */
 uintptr_t map_mmio(uintptr_t phys, size_t size)
 {
     (void)size;
@@ -572,15 +607,18 @@ uintptr_t map_mmio(uintptr_t phys, size_t size)
     return (uintptr_t)(unsigned long)window;
 }
 
+/** Count the wait and return at once. */
 void k_udelay(uint32_t us)
 {
     (void)us;
     udelay_calls++;
 }
 
+/* The messages that the controller halted at a stop, and that it did not. */
 static int stop_halted;
 static int stop_timeout;
 
+/** Count the messages of `xhci_stop`; discard the rest. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -595,11 +633,11 @@ void klog(int level, const char *subsystem, const char *format, ...)
 }
 
 /*
- * The kernel heap, as this test supplies it: an arena of pages with a bitmap,
- * and a bump for the plain allocations. A page here is a page of this
- * program's memory and its "physical" address is the address itself, which is
- * what the driver programs into the model's registers and what the model
- * reads back.
+ * The kernel heap, as this test supplies it: an arena of pages with a map of
+ * those taken, and a bump allocator for the plain allocations, with the bytes
+ * used and the allocations live. A page here is a page of this program's
+ * memory and its physical address is the address itself, which is what the
+ * driver programs into the model's registers and what the model reads back.
  */
 #define ARENA_PAGES 1024
 static uint8_t arena[ARENA_PAGES][4096] __attribute__((aligned(4096)));
@@ -608,15 +646,16 @@ static uint8_t bump[256 * 1024];
 static unsigned bump_used;
 static unsigned bump_live;
 
-/* The physical address of a page the driver reaches by another one. A row
-   that wants a buffer's pages out of order sets the map; the ordinary answer
-   is the address itself, as the identity window's is. */
+/* The map from a virtual address to a physical one, or 0 for the identity. A
+ * row that puts a buffer's pages out of order sets it. */
 static uintptr_t (*virt_map)(uintptr_t va);
+/** Return the physical address of `va` through `virt_map`. */
 uintptr_t paging_virt_to_phys(uintptr_t va)
 {
     return virt_map ? virt_map(va) : va;
 }
 
+/** Take one zeroed page of the arena and its address in `phys`, or return 0. */
 void *kalloc_pages(uint32_t count, uintptr_t *phys)
 {
     unsigned i;
@@ -641,6 +680,7 @@ void *kalloc_pages(uint32_t count, uintptr_t *phys)
     return 0;
 }
 
+/** Give back a page of the arena. */
 void kfree_pages(void *p, uint32_t count)
 {
     unsigned i;
@@ -654,6 +694,7 @@ void kfree_pages(void *p, uint32_t count)
     }
 }
 
+/** Take `size` zeroed bytes from the bump, in units of 16, or return 0. */
 void *kzalloc(size_t size)
 {
     unsigned char *p;
@@ -672,27 +713,29 @@ void *kzalloc(size_t size)
     return p;
 }
 
+/** Take `size` bytes, as `kzalloc` does. */
 void *kmalloc(size_t size)
 {
     return kzalloc(size);
 }
 
+/** Give back a bump allocation. The driver gives every one back before it
+ * takes them again, so the bump starts over once nothing is out. */
 void kfree(void *p)
 {
-    /* The driver gives every one of these back before it takes them again,
-     * so the bump starts over once nothing is out. */
     if (p && bump_live > 0 && --bump_live == 0) {
         bump_used = 0;
     }
 }
 
 /* The DMA pool, which a controller whose AC64 is clear has its pages from:
-   an arena of its own, its pages counted out and back. */
+ * an arena of its own, with `pool_out` the pages taken. */
 #define POOL_PAGES 16
 static uint8_t pool[POOL_PAGES][4096] __attribute__((aligned(4096)));
 static uint8_t pool_taken[POOL_PAGES];
 static unsigned pool_out;
 
+/** Take a page of the DMA pool, or return 0 when all are taken. */
 void *alloc_kernel_frame(void)
 {
     unsigned i;
@@ -707,6 +750,7 @@ void *alloc_kernel_frame(void)
     return 0;
 }
 
+/** Give back a page of the DMA pool. */
 void free_kernel_frame(void *frame)
 {
     unsigned i;
@@ -719,6 +763,7 @@ void free_kernel_frame(void *frame)
     }
 }
 
+/** Return 1 when `p` is the start of a page of the DMA pool. */
 static int in_pool(const void *p)
 {
     unsigned i;
@@ -731,8 +776,7 @@ static int in_pool(const void *p)
     return 0;
 }
 
-/* Two of the kernel's own, which the driver reaches and this test does not
- * build: a fill, and the name of a controller's register interface. */
+/** Fill `n` bytes at `ptr` with `c`, as the kernel's `k_memset`. */
 void *k_memset(void *ptr, int c, size_t n)
 {
     unsigned char *p = (unsigned char *)ptr;
@@ -743,6 +787,7 @@ void *k_memset(void *ptr, int c, size_t n)
     return ptr;
 }
 
+/** Name a USB controller's programming interface, as usb/usb.c does. */
 const char *usb_interface_name(uint8_t prog_if)
 {
     switch (prog_if) {
@@ -760,8 +805,8 @@ const char *usb_interface_name(uint8_t prog_if)
 }
 
 /* The driver's barrier, watched: a row that checks how a transfer of several
-   blocks is published looks at the ring at the first barrier of a submission,
-   when every block but the first must be visible and the first not. */
+ * blocks is published looks at the ring at the first barrier of a submission,
+ * when every block but the first must be visible and the first not. */
 static int watch_publish;
 static uint32_t watch_first; /* the ring index of the first block */
 static uint32_t watch_cycle; /* the producer's cycle bit at submission */
@@ -771,21 +816,22 @@ static unsigned watch_blocks; /* how many blocks the watched transfer has */
 static void model_barrier(void);
 #define xhci_barrier() model_barrier()
 /* The host build has no identity-mapped window: a buffer's address is
-   whatever the loader gave it, so every one goes through the map. The
-   driver takes an address below the window's end as its own physical
-   address, which on the host depended on the load address of this program
-   and made the map rows fail on one run in two. */
+ * wherever the loader put it, so every one must go through the map. The
+ * driver takes an address below HARD_MEMORY_LIMIT as its own physical
+ * address, so the limit is 0 here. */
 #include "../../rach2/sys/mm/paging.h"
 #undef HARD_MEMORY_LIMIT
 #define HARD_MEMORY_LIMIT 0u
 #include "../../rach2/sys/usb/xhci.c"
 
+/**
+ * At the first barrier of a watched submission, set `watch_result` to 1 when
+ * the first block is not yet valid and every block after it is, the Link
+ * included, with the cycle the producer has on each side of the Link.
+ */
 static void model_barrier(void)
 {
     if (watch_publish && watch_result < 0) {
-        /* At the first barrier the first block is not yet valid and every
-           block after it is, the Link included, with the cycle the
-           producer has on each side of the Link. */
         uint32_t pos = watch_first;
         uint32_t cycle = watch_cycle;
         unsigned i;
@@ -814,6 +860,7 @@ static void model_barrier(void)
  */
 static struct xhci_ctrl *hc;
 
+/** Run `xhci_discover` and set `hc` to the controller it found. */
 static int discover(void)
 {
     int rc = xhci_discover();
@@ -825,12 +872,14 @@ static int discover(void)
 /* ---- what the controller does with what the driver gave it ---- */
 
 /* Where the model writes its next event, and with which cycle value. It writes
-   into the driver's own event ring, which is the memory the driver handed the
-   controller, reached here by name rather than through the truncated address
-   the driver wrote into `ERSTBA`. */
+ * into the driver's own event ring, which is the memory the driver handed the
+ * controller, reached here by name rather than through the truncated address
+ * the driver wrote into `ERSTBA`. */
 static uint32_t model_event_write;
 static uint32_t model_event_cycle;
 
+/** Write an event of `type` with completion `code` for `slot`, its first word
+ * `param0`, into the event ring, and raise it. */
 static void post_event(uint32_t type, uint32_t code, uint32_t slot, uint32_t param0)
 {
     uint32_t *t = &hc->event_ring[model_event_write * TRB_WORDS];
@@ -847,33 +896,37 @@ static void post_event(uint32_t type, uint32_t code, uint32_t slot, uint32_t par
     model_raise();
 }
 
-/* The command the driver last wrote, so a row can require the right one was
-   issued rather than merely that something was. */
+/* The command the driver last wrote and its slot, so a row can require the
+ * right one was issued rather than merely that something was, and the count
+ * of commands. */
 static uint32_t last_command_type;
 static uint32_t last_command_slot;
 static uint32_t commands_seen;
 
 /* Where the controller has read up to on the command ring, and the cycle value
-   it expects there. Following the ring rather than guessing which block the
-   driver just wrote is what makes the wrap rows mean anything: a model that
-   assumed the block before the enqueue pointer would read the link block as a
-   command every time the ring wrapped. */
+ * it expects there. The model follows the ring rather than guessing which
+ * block the driver just wrote, so the wrap rows mean something: a model that
+ * took the block before the enqueue pointer would read the link block as a
+ * command every time the ring wrapped. */
 static uint32_t model_cmd_dequeue;
 static uint32_t model_cmd_cycle;
-/* The next slot this controller will give out. A real one chooses, and says
-   which in the completion; a model that answered zero would let a driver that
-   ignored the answer pass. */
+/* The next slot this controller will give out. A controller chooses, and says
+ * which in the completion; a model that answered zero would let a driver that
+ * ignored the answer pass. */
 static uint32_t model_next_slot;
 
+/* Where the controller has read up to on each endpoint ring, and its cycle. */
 static uint32_t model_ep_dequeue[XHCI_SLOTS + 1][XHCI_MAX_DCI];
 static uint32_t model_ep_cycle[XHCI_SLOTS + 1][XHCI_MAX_DCI];
 /* What a bulk transfer moves, and what the controller does to one: the
-   medium the blocks read from or write to, the direction of each endpoint,
-   a short packet at block N of a transfer with the bytes it leaves, whether
-   the last block's event follows a short as the specification says or not as
-   QEMU does, a failure at block N with its code and residual, and the state
-   a failure or a stop leaves the endpoint in. The blocks fetched are kept
-   so a row can require which were executed. */
+ * medium the blocks read from or write to and the next byte of it, the
+ * direction of each endpoint, the state a failure or a stop leaves the
+ * endpoint in, the block's position in its transfer, a short packet at block N
+ * of a transfer with the bytes it leaves, whether the last block's event
+ * follows a short as the specification says or not as QEMU does, a failure
+ * at block N with its code and residual, the Stopped events posted, and a
+ * completion code to answer the next command with. The first 64 blocks
+ * fetched are kept so a row can require which were executed. */
 static uint8_t medium[1024 * 1024];
 static uint32_t medium_at;
 static int model_ep_in[XHCI_SLOTS + 1][XHCI_MAX_DCI];
@@ -892,9 +945,13 @@ static int command_answer_code;
 static const uint32_t *model_fetched[64];
 static unsigned model_fetched_n;
 
-/* A transfer event names its block by the physical address the driver
-   recorded for the ring, as a controller knows only that one: a ring from
-   the DMA pool has a physical address that is not its host address here. */
+/**
+ * Write a Transfer Event with `code` and `residual` for block `t` of `slot`'s
+ * `dci` ring, without raising it. The event names the block by the physical
+ * address the driver recorded for the ring, the only one a controller has: a
+ * ring from the DMA pool has a physical address that is not its host address
+ * here.
+ */
 static void post_transfer(uint32_t code, uint32_t residual, uint32_t slot, uint32_t dci,
                           const uint32_t *t)
 {
@@ -919,6 +976,16 @@ static void post_transfer(uint32_t code, uint32_t residual, uint32_t slot, uint3
     }
 }
 
+/**
+ * Run the command ring when doorbell 0 is rung: take each valid block from
+ * the model's dequeue pointer, Links followed, and answer it unless
+ * `command_completes` is clear. Enable Slot is given `model_next_slot`. The
+ * endpoint commands keep the preconditions a controller enforces: a halted
+ * endpoint is not stopped and a running one is not reset (xHCI 1.2, 4.6.9,
+ * 4.6.8). A stop posts the Stopped event for the block the endpoint was on,
+ * before its own completion; Set TR Dequeue Pointer moves the controller's
+ * pointer to the address and cycle the command carries.
+ */
 static void doorbell_rung(uint32_t target)
 {
     if (target != 0) {
@@ -954,12 +1021,6 @@ static void doorbell_rung(uint32_t target)
                 answered = model_next_slot;
                 model_next_slot++;
             }
-            /* The endpoint commands, with the preconditions a controller
-               enforces: a halted endpoint is not stopped, a running one is
-               not reset (xHCI 1.2, 4.6.9, 4.6.8). A stop posts the Stopped
-               event for the block the endpoint was on, before its own
-               completion; a dequeue moves the controller's pointer to the
-               address and cycle the command carries. */
             if (last_command_type == TRB_TYPE_STOP_EP && answered <= XHCI_SLOTS &&
                 edci < XHCI_MAX_DCI) {
                 if (model_ep_halted[answered][edci] || model_ep_error[answered][edci]) {
@@ -1006,16 +1067,16 @@ static void doorbell_rung(uint32_t target)
     }
 }
 
-/* Where the controller has read up to on each endpoint ring, and what it
-   answers a transfer with. A transfer is finished by the block that asks for an
-   event; the model finds that block by walking the ring the way a controller
-   does, rather than by knowing where the driver put it. */
+/* What the controller answers a transfer with, and whether it answers at all.
+ * A transfer is finished by the block that asks for an event; the model finds
+ * that block by walking the ring as a controller does, rather than by knowing
+ * where the driver put it. */
 static int transfer_code;
 static uint32_t transfer_residual;
 static int transfer_answers;
 static int status_code; /* when set, the code the next status stage's event carries */
-/* The controller's step past one block of `slot`'s `dci` ring, Links
-   followed. */
+/** Step the controller past one block of `slot`'s `dci` ring, wrapping with
+ * the cycle at the ring's end. */
 static void model_ep_advance(uint32_t slot, uint32_t dci)
 {
     model_ep_dequeue[slot][dci]++;
@@ -1025,20 +1086,21 @@ static void model_ep_advance(uint32_t slot, uint32_t dci)
     }
 }
 
-/* The driver's addresses are 32 bits wide, the kernel's, and a block names
-   a page by the low word of the host address the test gave it; a row that
-   moves data registers its pages here so the model finds them again. A
-   block naming no registered page moves nothing. */
-/* A 512 KiB transfer's 129 pieces, and pages beyond them for a refusal. */
 #define BIG_PAGES 260 /* a 512 KiB transfer's 129 pieces, and more for a refusal */
+/* The driver's addresses are 32 bits wide, the kernel's, and a block names
+ * a page by the low word of the host address the test gave it; a row that
+ * moves data registers its pages here so the model finds them again. A
+ * block naming no registered page moves nothing. */
 static uint8_t *model_pages[BIG_PAGES + 64];
 static unsigned model_pages_n;
+/** Register page `p` for `model_page_lookup`. */
 static void model_page_register(void *p)
 {
     if (model_pages_n < BIG_PAGES + 64) {
         model_pages[model_pages_n++] = (uint8_t *)p;
     }
 }
+/** Return the byte a block's address `lo` names in a registered page, or 0. */
 static uint8_t *model_page_lookup(uint32_t lo)
 {
     unsigned i;
@@ -1051,6 +1113,7 @@ static uint8_t *model_page_lookup(uint32_t lo)
     return 0;
 }
 
+/** Move `bytes` between block `t`'s page and the medium, as `dci` points. */
 static void model_move(uint32_t slot, uint32_t dci, const uint32_t *t, uint32_t bytes)
 {
     uint8_t *page = model_page_lookup(t[0]);
@@ -1070,6 +1133,18 @@ static void model_move(uint32_t slot, uint32_t dci, const uint32_t *t, uint32_t 
     medium_at += bytes;
 }
 
+/**
+ * Run `slot`'s `dci` ring when its doorbell is rung, as a controller does:
+ * take each valid block, Links followed, until the ring is empty or the
+ * endpoint stops. A Normal block moves its bytes. A failure at block
+ * `fail_at` posts its event and halts the endpoint, or for a block the
+ * controller could not run leaves it in the Error state (xHCI 1.2, 4.8.3).
+ * A short packet at block `short_at` skips the rest of the transfer to the
+ * block without a chain bit, Links followed, whose event is posted only when
+ * `terminal_after_short` is set. A status stage given `status_code` answers
+ * on its own, and a stall there halts the endpoint after a data stage that
+ * answered well.
+ */
 static void endpoint_doorbell(uint32_t slot, uint32_t dci)
 {
     if (slot == 0 || slot > XHCI_SLOTS || dci == 0 || dci >= XHCI_MAX_DCI ||
@@ -1106,9 +1181,6 @@ static void endpoint_doorbell(uint32_t slot, uint32_t dci)
             uint32_t bytes = t[2] & 0x1FFFFu;
 
             if (fail_at == model_td_pos) {
-                /* The block fails: its event, and the endpoint halts there,
-                   or enters the Error state for a block the controller
-                   could not run (xHCI 1.2, 4.8.3). */
                 fail_at = 0;
                 post_transfer(fail_code, fail_left, slot, dci, t);
                 if (fail_code == TRB_COMPLETION_STALL || fail_code == TRB_COMPLETION_TXN_ERROR ||
@@ -1128,9 +1200,6 @@ static void endpoint_doorbell(uint32_t slot, uint32_t dci)
                 if (t[3] & (TRB_ISP | TRB_IOC)) {
                     post_transfer(TRB_COMPLETION_SHORT, short_left, slot, dci, t);
                 }
-                /* The rest of the transfer is skipped, Links followed, to the
-                   block without a chain bit; its event is posted when the
-                   controller is one that does. */
                 while (last[3] & TRB_CHAIN) {
                     model_ep_advance(slot, dci);
                     last = &hc->slots[slot].ring[dci][model_ep_dequeue[slot][dci] * TRB_WORDS];
@@ -1155,8 +1224,6 @@ static void endpoint_doorbell(uint32_t slot, uint32_t dci)
             model_move(slot, dci, t, bytes);
         }
         if (type == TRB_TYPE_STATUS && status_code != 0 && transfer_answers) {
-            /* The status stage answered on its own: a stall there halts
-               the endpoint after a data stage that answered well. */
             post_transfer((uint32_t)status_code, 0, slot, dci, t);
             if (status_code == TRB_COMPLETION_STALL) {
                 model_ep_halted[slot][dci] = 1;
@@ -1175,16 +1242,17 @@ static void endpoint_doorbell(uint32_t slot, uint32_t dci)
     }
 }
 
-/* The driver points the ring somewhere after an abort; the controller reads
-   from where it is told. The address written is truncated on this host, so the
-   model takes the driver's own position rather than decoding it. */
+/** Follow the command ring to where the driver pointed it after an abort. The
+ * address written is truncated on this host, so the model takes the driver's
+ * own position rather than decoding it. */
 static void ring_moved(void)
 {
     model_cmd_dequeue = hc->cmd_enqueue;
     model_cmd_cycle = hc->cmd_cycle;
 }
 
-/** The stop event names the controller's next command, not its last one. */
+/** Post the Command Ring Stopped event, code 24, which names the controller's
+ * next command, not its last one. */
 static void model_command_stop(void)
 {
     post_event(TRB_TYPE_COMMAND_COMPLETE, 24, 0,
@@ -1203,9 +1271,14 @@ static int fails;
         }                                 \
     } while (0)
 
-/* A controller that does everything right, before each row changes one thing
-   about it. Sixteen hc->slots, four ports, 64-byte contexts, no scratchpads, and
-   a legacy capability the firmware has already released. */
+/**
+ * Reset the model to a controller that does everything right, before each row
+ * changes one thing about it: sixteen slots, one interrupter, four ports,
+ * 64-bit addressing, 64-byte contexts, no scratchpads, and a legacy capability
+ * the firmware has already released, behind an Intel chipset that routes two
+ * of nine USB 2 pins to it, the rest to the companion EHCI, and enables one
+ * SuperSpeed pin of four.
+ */
 static void model_reset(void)
 {
     unsigned i;
@@ -1301,9 +1374,6 @@ static void model_reset(void)
         for (c = 0; c < 256; c++) {
             pci_cfg[c] = 0;
         }
-        /* The notebook this was written for: two of nine USB2 pins on this
-           controller, the rest on the companion, and one SuperSpeed pin
-           enabled of four. */
         pci_cfg[0xD0] = 0x00A;
         pci_cfg[0xD4] = 0x1FF;
         pci_cfg[0xD8] = 0x1;
@@ -1321,7 +1391,7 @@ static void model_reset(void)
     xhci_set_io(&model_io);
 }
 
-/* A device on a root port, with no hub above it. */
+/** Return the location of a device on root port `port`, with no hub. */
 static struct usb_location root_at(int port)
 {
     struct usb_location where;
@@ -1337,17 +1407,18 @@ static struct usb_location root_at(int port)
 
 /* ---- a device with a bulk pair, and the buffers the transfer rows use ---- */
 
-/* The rows over a 32 KiB transfer: the buffer the driver is given, whose
-   pages are reached through the map below, and the pages the controller
-   actually moves data to and from, in the order the map chooses. */
+/* The buffer the driver is given in the transfer rows, whose pages are reached
+ * through the map below, and the pages the controller moves data to and from,
+ * in the order `perm` chooses. */
 static uint8_t big[BIG_PAGES * 4096] __attribute__((aligned(4096)));
 static uint8_t shadow[BIG_PAGES * 4096] __attribute__((aligned(4096)));
 static unsigned perm[BIG_PAGES];
 static int map_fail_at; /* the page whose translation fails, from one; 0 for none */
 
-/* The page of `shadow` that stands for a byte of `big`, by the map, as a
-   host pointer; the driver's addresses are the kernel's 32 bits, so the
-   map works on the low word of the address it is given. */
+/** Return the byte of `shadow` that stands for the byte of `big` whose address
+ * has low word `lo`, or 0 outside `big` and on the page set to fail. The
+ * driver's addresses are the kernel's 32 bits, so the map works on the low
+ * word. */
 static uint8_t *shadow_of(uint32_t lo)
 {
     uint32_t base = (uint32_t)(uintptr_t)big;
@@ -1363,6 +1434,7 @@ static uint8_t *shadow_of(uint32_t lo)
     return shadow + perm[page] * 4096 + (lo & 0xFFFu);
 }
 
+/** Map an address in `big` to its page of `shadow`; leave any other. */
 static uintptr_t permuted_map(uintptr_t va)
 {
     uint8_t *p = shadow_of((uint32_t)va);
@@ -1373,12 +1445,17 @@ static uintptr_t permuted_map(uintptr_t va)
     return (uintptr_t)p;
 }
 
-/* The controller's address of a byte of `big`, as the map gives it. */
+/** Return the controller's address of a byte of `big`, as the map gives it. */
 static uint8_t *at_phys(const uint8_t *va)
 {
     return shadow_of((uint32_t)(uintptr_t)va);
 }
 
+/**
+ * Bring up a controller with a high-speed device on root port 0, slot 1, with
+ * bulk IN at DCI 3 and bulk OUT at DCI 4; map `big` onto `shadow` in reverse
+ * page order and fill the medium with bytes that differ from page to page.
+ */
 static void bulk_pair_up(void)
 {
     struct usb_command_result result;
@@ -1419,8 +1496,6 @@ static void bulk_pair_up(void)
     map_fail_at = 0;
     virt_map = permuted_map;
     for (i = 0; i < sizeof(medium); i++) {
-        /* No two pages alike: the page's number enters each byte, so two
-           pages moved to each other's place are a failure. */
         medium[i] = (uint8_t)((i * 7u + 3u) ^ (i >> 12));
     }
     for (i = 0; i < sizeof(shadow); i++) {
@@ -1428,10 +1503,12 @@ static void bulk_pair_up(void)
     }
 }
 
-/* The ring of `dci` as a driver that filled it up to `upto` in its first lap
-   leaves it: those entries carry the first lap's cycle bit, so that after the
-   Link toggles the cycle they are not valid again. A row that starts a
-   transfer near the ring's end sets this up first. */
+/**
+ * Leave the ring of `dci` as a driver that filled it up to `upto` in its first
+ * lap does: those entries carry the first lap's cycle bit, so that after the
+ * Link toggles the cycle they are not valid again. A row that starts a
+ * transfer near the ring's end sets this up first.
+ */
 static void ring_lap_one(uint32_t dci, uint32_t upto)
 {
     uint32_t i;
@@ -1443,15 +1520,15 @@ static void ring_lap_one(uint32_t dci, uint32_t upto)
     model_ep_dequeue[1][dci] = upto;
 }
 
-/* The block at ring index `at` of endpoint `dci` of device one. */
+/** Return the block at ring index `at` of endpoint `dci` of device one. */
 static const uint32_t *block(uint32_t dci, uint32_t at)
 {
     return &hc->slots[1].ring[dci][at * TRB_WORDS];
 }
 
-/* Whether the bytes the controller moved for the transfer at `buffer`,
-   `length` long, match the medium from `from`, page by page where the map
-   put them. */
+/** Return 1 when the bytes the controller moved for the transfer at `buffer`,
+ * `length` long, match the medium from `from`, page by page where the map put
+ * them. */
 static int landed(const uint8_t *buffer, uint32_t length, uint32_t from)
 {
     uint32_t i;
@@ -1464,8 +1541,8 @@ static int landed(const uint8_t *buffer, uint32_t length, uint32_t from)
     return 1;
 }
 
-/* Whether the medium holds, from `from`, the bytes of the transfer at
-   `buffer` as the map placed them. */
+/** Return 1 when the medium holds, from `from`, the bytes of the transfer at
+ * `buffer` as the map placed them. */
 static int arrived(const uint8_t *buffer, uint32_t length, uint32_t from)
 {
     uint32_t i;
@@ -1478,7 +1555,8 @@ static int arrived(const uint8_t *buffer, uint32_t length, uint32_t from)
     return 1;
 }
 
-/** Check descending endpoint indices in both device context sizes. */
+/** Check that Context Entries keeps the highest endpoint index as endpoints
+ * are added in descending order, with 32-byte and 64-byte contexts. */
 static void endpoint_order_rows(void)
 {
     struct usb_location where = root_at(0);
@@ -1544,7 +1622,8 @@ static void stop_rows(void)
     }
 }
 
-/** Retain late slot results before, during and after the controller's stop. */
+/** Check that a late Enable Slot result is kept, and its slot closed, when it
+ * arrives before, during or after the command ring stops on an abort. */
 static void command_deadline_rows(void)
 {
     struct usb_location where = root_at(0);
@@ -1632,14 +1711,10 @@ static void register_range_rows(void)
     CHECK("controller without an interrupter is refused", xhci_read_caps(hc) != 0);
 }
 
-/*
- * A controller whose AC64 is clear takes only 32-bit addresses: its context
- * array and a slot's context and rings come from the DMA pool, below 4 GiB,
- * and go back to it; a transfer's pieces that end above 4 GiB move through
- * pages of the pool kept with the transfer's record, an OUT piece copied in
- * and the table given the page, an IN piece copied back up to the bytes the
- * events counted; a piece below 4 GiB, and every piece on a controller with
- * AC64, is given as it is.
+/**
+ * Check that a controller whose AC64 is clear, which takes only 32-bit
+ * addresses, has its context array and a slot's context and rings from the
+ * DMA pool, below 4 GiB, and gives them back to it.
  */
 static void dma32_pool_rows(void)
 {
@@ -1666,6 +1741,13 @@ static void dma32_pool_rows(void)
     CHECK("and given back when it closes", pool_out == 1);
 }
 
+/**
+ * Check that a transfer's pieces that end above 4 GiB move through pages of
+ * the pool kept with the transfer's record, an OUT piece copied in and the
+ * table given the page, an IN piece copied back up to the bytes the events
+ * counted, and that a piece below 4 GiB, and every piece on a controller with
+ * AC64, is given as it is.
+ */
 static void dma32_bounce_rows(void)
 {
     static uint8_t buf[3 * 4096];
@@ -1735,9 +1817,9 @@ static void dma32_bounce_rows(void)
     ctrl_free_tables(hc);
 }
 
-/* The controller's address of a byte of `big` past 4 GiB: the map's page
-   with bit 32 set, so that a controller without AC64 takes every piece
-   through the pool whatever host addresses the test runs at. */
+/** Return the controller's address of a byte of `big` past 4 GiB: the map's
+ * page with bit 32 set, so that a controller without AC64 takes every piece
+ * through the pool whatever host addresses the test runs at. */
 static uintptr_t high_map(uintptr_t va)
 {
     uintptr_t p = permuted_map(va);
@@ -1746,8 +1828,9 @@ static uintptr_t high_map(uintptr_t va)
 }
 
 /**
- * A controller without AC64, its rings from the DMA pool, moves the pieces
- * of a transfer that lie past 4 GiB through pages of the pool, submitted and
+ * Check that a controller without AC64, its rings from the DMA pool, moves
+ * the pieces of a transfer that lie past 4 GiB through pages of the pool,
+ * submitted and
  * completed as any transfer is: an OUT of 8 KiB from mid-page reaches the
  * medium from the buffer's bytes, and an IN lands in the buffer. The model
  * finds the pool's pages by the addresses the blocks carry, and the
@@ -1805,6 +1888,7 @@ static void dma32_transfer_rows(void)
     xhci_dma32 = 0;
 }
 
+/** Run the rows of a controller without AC64. */
 static void dma32_rows(void)
 {
     dma32_pool_rows();
@@ -1812,10 +1896,12 @@ static void dma32_rows(void)
     dma32_transfer_rows();
 }
 
-/* The companion EHCI rows: one is not taken for an xHCI, one the firmware
-   owns and runs, one already told to stop, and one whose memory window is
-   off. The configuration space the other rows set up is put back after
-   them. */
+/**
+ * Check the companion EHCI rows: one is not taken for an xHCI, one the
+ * firmware owns and runs, one already told to stop, and one whose memory
+ * window is off. The configuration space the other rows set up is put back
+ * after them.
+ */
 static void ehci_rows(void)
 {
     model_reset();
@@ -1823,9 +1909,7 @@ static void ehci_rows(void)
     CHECK("an EHCI is not mistaken for an xHCI", discover() != 0);
 
     memcpy(saved_cfg, pci_cfg, sizeof(pci_cfg));
-    /* A companion EHCI the firmware owns and runs: its capability length is
-       0x20, its first extended capability at 0x40 is not legacy support and
-       links to the one at 0x68, which the firmware never lets go of. */
+    /* CAPLENGTH 0x20; legacy support at 0x68, after a capability at 0x40. */
     model_reset();
     model_progif = 0x20;
     model_command = 0x0002u;
@@ -1876,6 +1960,118 @@ static void ehci_rows(void)
     memcpy(pci_cfg, saved_cfg, sizeof(pci_cfg));
 }
 
+/**
+ * Run the rows and print the result; return 1 when a row failed.
+ *
+ * Bring-up. The scratchpad count is five bits in each half of one word, the
+ * low five at the top, so a driver that read either half alone would ask for
+ * the wrong number of pages. What was taken from the firmware is given back
+ * whether the driver is finished with it or could not use it at all, since a
+ * firmware that emulates a PS/2 keyboard out of a USB one would otherwise
+ * lose that keyboard to a kernel that had given up. A controller that was
+ * started is halted on the way out and its claim is not given back:
+ * restoring the firmware's interrupt sources wakes its system-management
+ * handler, which on a laptop can take twenty seconds in the middle of a
+ * reboot. A bring-up that failed does give the controller back.
+ *
+ * The extended capability list is the controller's, so the driver checks it.
+ * A head outside the mapped window is the one malformed value a single entry
+ * can produce, since a next pointer is a byte and no one hop can leave a 64
+ * KiB aperture; the check is made on every step, not only on the head, and a
+ * walk survives a circle. A controller that is not ready may have nothing
+ * but its own status written, so the driver waits for CNR before it touches
+ * the command register.
+ *
+ * Commands. An abort is a request that the controller answers by stopping
+ * the ring, after which the driver may use the ring again. A command nobody
+ * waits for is aborted at its deadline alone, so the ring is not held for
+ * every device after the one given up on. A completion naming a block the
+ * driver is not waiting on belongs to a command already abandoned and does
+ * not answer the one in flight. The command ring wraps through the link block
+ * at its end with both sides changing cycle there, and the driver follows the
+ * event ring through its wrap rather than stopping at the end.
+ *
+ * Ports and devices. Half of PORTSC's bits are cleared by writing them as
+ * one. A slot context says where a device is with the route string, the root
+ * port, a hub's own words, and the translator's for a device below a
+ * high-speed hub, as the specification gives them. A hub's slot context
+ * gains the hub bit and its port count through the evaluate command, and a
+ * high-speed hub with one translator per port gains the multi-TT bit and its
+ * think time. A low-speed device below that hub has the hub's slot and port
+ * in its third word and the multi-TT bit, without the think time, which is
+ * the hub's alone; a full-speed device two tiers down has the high-speed hub
+ * as its translator. A halted endpoint is reset and its ring pointed at the
+ * block the driver will write next, since an endpoint left alone stays
+ * unusable for the rest of the boot. Slots are numbered from one, so the last
+ * the controller may give out is its own count. The chipset's routing moves
+ * to this controller every pin its mask allows: this kernel has no driver for
+ * the companion EHCI, so a pin left there is a socket nothing can reach, and
+ * a pin the mask does not allow stays out of the record.
+ *
+ * Transfers. A control transfer is three blocks and one event, asked for on
+ * the block that says how much arrived. A halted endpoint takes nothing until
+ * it is reset and moved on, and a status stage that stalls fails the transfer
+ * whatever its data stage said, the bytes being the data stage's. The
+ * endpoint context's interval is derived from the descriptor's, in another
+ * unit and scale, so a driver that copied it would poll a keyboard sixty-four
+ * times too often or too seldom. A bulk endpoint's context type is 2 outward
+ * and 6 inward, against the interrupt endpoint's 3 and 7, and its packet size
+ * is the descriptor's: 64 at full speed, 512 at high speed, 1024 at
+ * SuperSpeed. A transfer carries a number of the caller's, which its
+ * completion gives back, so a caller that gave up on one tells its answer
+ * from the answer it waits for now.
+ *
+ * Completions. More transfer events than the completion queue holds stop the
+ * drain at the queue's end and wait on the event ring for the next pass; a
+ * drain that dropped the ninth would leave its transfer outstanding forever,
+ * which for a hub's change endpoint is a hub that never reports again. A
+ * completion for a closed device is dropped, since its slot may be the next
+ * device's; a stick pulled mid-transfer is a device closed after the
+ * controller wrote its event. A slot handle past the slots the controller
+ * said it had is rejected by everything that takes one, rather than written
+ * past the tables.
+ *
+ * Interrupts. With MSI on, the interrupter moderates nothing, both enables
+ * are set, and the device's capability has the vector it was given. A device
+ * with no MSI leaves the controller as it was, since an interrupter on with
+ * nothing to send loses its events. On the PCI line the firmware routed, the
+ * command register's interrupt disable bit is cleared, both enables are set,
+ * and an event asserts the line through USBSTS's event bit, which the
+ * acknowledgement clears with IMAN's pending bit; a level line left with
+ * either set is taken forever. The acknowledgement writes the pending bit as
+ * one and keeps the enable beside it, since a bare write of the pending bit
+ * clears the enable. The drain writes ERDP's busy bit as one, and only then
+ * does the controller raise another interrupt; written as zero, the bit stays
+ * set and no interrupt follows. A drain that finds nothing still writes it,
+ * since the timer's pump can take the event before the handler's message is
+ * delivered and leave the handler an empty ring with the bit set; the model is
+ * put straight into that state, which its own sequence cannot reach. An event
+ * written between the acknowledgement and the drain is taken by that drain.
+ *
+ * Bulk transfers over the map. An IN transfer starting mid-page is nine
+ * blocks over nine pages, each at the page the map gives, with the packets
+ * left after it, the chain bit on all but the last, the short-packet event on
+ * the intermediate IN blocks and the event on the last, and the bytes landing
+ * where the blocks said; the same OUT asks for no short-packet events. A 512
+ * KiB transfer is one descriptor of 129 blocks, 2048 bytes of the first page,
+ * whole pages between and 2048 of the last, and one piece more than a record
+ * holds is refused before publication. A transfer started three blocks
+ * before the ring's end crosses a Link that has the chain bit. A short packet
+ * on the third block gives one completion, short by the bytes not moved, and
+ * the transfer is retired by the last block's event, or, with no such event
+ * as QEMU does, when it is stopped and dequeued. A failure on the second
+ * block counts the bytes through the block before plus the failing block's
+ * own, halts the endpoint, and keeps the transfer until the reset and the
+ * dequeue are answered. A failed translation and a third transfer with no
+ * record free leave the ring and its pointer untouched. A stop sets the
+ * dequeue to the enqueue pointer with the producer's cycle, and no old block
+ * runs again. With two transfers outstanding, an event for the first has its
+ * generation, not the latest submission's, and an event for no transfer is
+ * dropped and counted. A block the controller could not run leaves the
+ * endpoint in the Error state, which a Set TR Dequeue alone moves on. A held
+ * record outlives the next submission on its endpoint. At the first barrier
+ * of a submission every block but the first is visible and the first is not.
+ */
 int main(void)
 {
     struct usb_location root0 = root_at(0);
@@ -1947,9 +2143,7 @@ int main(void)
     CHECK("32-byte contexts are read from the same field", xhci_read_caps(hc) == 0);
     CHECK("and are 32 bytes", xhci_capabilities(hc)->context_size == 32);
 
-    /* The scratchpad count is five bits in each half of one word, with the
-       low five at the top: a driver that read either half alone would ask for
-       the wrong number of pages. */
+    /* The scratchpad count, five bits in each half of one word. */
     model_reset();
     reg[R_HCSPARAMS2] = (1u << 21) | (3u << 27);
     CHECK("a split scratchpad count is read", xhci_read_caps(hc) == 0);
@@ -2013,10 +2207,7 @@ int main(void)
     CHECK("a controller with no capability list is read", xhci_read_caps(hc) == 0);
     CHECK("and is already this kernel's", xhci_own(hc) == 0);
 
-    /* What was taken from the firmware is given back, whether the driver is
-       finished with it or could not use it at all. A machine whose firmware
-       emulates a PS/2 keyboard out of a USB one would otherwise lose that
-       keyboard to a kernel that had already given up. */
+    /* What was taken from the firmware is given back. */
     model_reset();
     reg[XECP] = 1u | LEGSUP_BIOS_OWNED;
     reg[LEGCTL] = 0x0000E1FEu;
@@ -2029,11 +2220,7 @@ int main(void)
     xhci_release(hc);
     CHECK("giving back twice does nothing the second time", (reg[XECP] & LEGSUP_OS_OWNED) == 0);
 
-    /* A controller that was started is halted on the way out, and its claim
-       is not given back: restoring the firmware's interrupt sources wakes its
-       system-management handler, which on a real machine took twenty seconds
-       in the middle of a reboot. A bring-up that failed is the other case, and
-       it does give the controller back, which the rows above check. */
+    /* A started controller is halted on the way out and its claim kept. */
     model_reset();
     reg[XECP] = 1u | LEGSUP_BIOS_OWNED;
     reg[LEGCTL] = 0x0000E1FEu;
@@ -2060,11 +2247,7 @@ int main(void)
     CHECK("the capability list is read", xhci_read_caps(hc) == 0);
     CHECK("a controller that will not take this kernel's claim is refused", xhci_own(hc) != 0);
 
-    /* The list belongs to the controller, so a driver may not trust it. A
-       head outside the mapped window is the one malformed value a single
-       entry can produce: a next pointer is a byte, so no one hop can leave a
-       64 KiB aperture, and the case a walk has to survive is the circle
-       below. */
+    /* A capability list whose head is outside the mapped window. */
     model_reset();
     reg[R_HCCPARAMS1] = 0x1u | 0x4u | (0x4000u << 16); /* a head at 64 KiB */
     CHECK("the capability list is read", xhci_read_caps(hc) == 0);
@@ -2075,8 +2258,7 @@ int main(void)
     CHECK("the capability list is read", xhci_read_caps(hc) == 0);
     CHECK("a list with no legacy capability leaves the controller ours", xhci_own(hc) == 0);
 
-    /* And a list whose first entry is inside the window but whose next step
-       is not: the check has to be made on every step, not only on the head. */
+    /* A list whose first entry is inside the window and next step is not. */
     model_reset();
     reg[R_HCCPARAMS1] = 0x1u | 0x4u | ((0xFFF8u / 4u) << 16);
     reg[0xFFF8] = 3u | (0x2u << 8);
@@ -2104,8 +2286,7 @@ int main(void)
     reg[OP(O_USBSTS)] &= ~M_USBSTS_HCH;
     CHECK("a controller that never halts is refused", xhci_halt_reset(hc) != 0);
 
-    /* A controller that is not ready yet may have nothing but its own status
-       written, so the driver waits before it touches the command register. */
+    /* The driver waits for CNR before it touches the command register. */
     model_reset();
     reg[OP(O_USBSTS)] |= M_USBSTS_CNR;
     cnr_delay = 5;
@@ -2214,8 +2395,7 @@ int main(void)
     CHECK("abort waits for its event", xhci_command_done(hc, &result) == 0);
     xhci_events(hc);
     CHECK("stop event resolves the unanswered command", xhci_command_done(hc, &result) == -1);
-    /* The abort is a request, and the controller answers it by stopping the
-       ring. Once it has, the driver may use the ring again. */
+    /* An abort is answered by the controller stopping the ring. */
     command_completes = 1;
     CHECK("and once the controller has stopped the ring it is used again",
           xhci_command_issue(hc, TRB_TYPE_NOOP_COMMAND, 0, 0) == 0);
@@ -2234,9 +2414,7 @@ int main(void)
     CHECK("and while the controller still holds the ring nothing is issued on it",
           xhci_command_issue(hc, TRB_TYPE_NOOP_COMMAND, 0, 0) != 0);
 
-    /* A command nobody waits for is aborted by the clock alone: the device
-       that issued it was given up on at its own deadline, and the ring must
-       not stay held for every device after it. */
+    /* A command nobody waits for is aborted at its deadline. */
     model_reset();
     command_completes = 0;
     CHECK("the capability registers are read", xhci_read_caps(hc) == 0);
@@ -2252,8 +2430,7 @@ int main(void)
     CHECK("and the next command is issued",
           xhci_command_issue(hc, TRB_TYPE_NOOP_COMMAND, 0, 0) == 0);
 
-    /* A completion that names a block the driver is not waiting on belongs to
-       a command already abandoned, and must not answer the one in flight. */
+    /* A completion for a block the driver is not waiting on. */
     model_reset();
     command_completes = 0;
     CHECK("the capability registers are read", xhci_read_caps(hc) == 0);
@@ -2265,8 +2442,7 @@ int main(void)
     CHECK("a completion for another command does not finish this one",
           xhci_command_done(hc, &result) == 0);
 
-    /* The command ring wraps through the link block at its end, and both
-       sides change cycle there. */
+    /* The command ring wraps through the link block at its end. */
     model_reset();
     CHECK("the capability registers are read", xhci_read_caps(hc) == 0);
     CHECK("halted and reset", xhci_halt_reset(hc) == 0);
@@ -2287,8 +2463,7 @@ int main(void)
           xhci_command_issue(hc, TRB_TYPE_NOOP_COMMAND, 0, 0) == 0);
     CHECK("with the new cycle", (hc->cmd_ring[3] & TRB_CYCLE) == 0);
 
-    /* The event ring wraps too, and the driver has to follow the controller
-       through it rather than stopping at the end. */
+    /* The event ring wraps, and the driver follows the controller. */
     model_reset();
     CHECK("the capability registers are read", xhci_read_caps(hc) == 0);
     CHECK("halted and reset", xhci_halt_reset(hc) == 0);
@@ -2359,8 +2534,7 @@ int main(void)
     xhci_advance(hc, 1000);
     CHECK("a reset that never finishes is given up on", xhci_port_reset_done(hc, 0) == -1);
 
-    /* The write discipline this register needs, which is the easiest thing in
-       the driver to get wrong: half its bits are cleared by writing them. */
+    /* PORTSC, half of whose bits are cleared by writing them as one. */
     model_reset();
     CHECK("the capability registers are read", xhci_read_caps(hc) == 0);
     CHECK("halted and reset", xhci_halt_reset(hc) == 0);
@@ -2400,10 +2574,7 @@ int main(void)
     xhci_events(hc);
     CHECK("the controller answers", xhci_command_done(hc, &result) == 1);
 
-    /* Where a device is: the route string, the root port, the hub's own
-       words, and the translator's for a device below a high-speed hub. The
-       words are what the specification says; whether a controller schedules
-       from them is the notebook's proof. */
+    /* The slot context words that say where a device is. */
     {
         struct usb_location where;
         const uint32_t *slot = (const uint32_t *)(const void *)&hc->input_ctx[64];
@@ -2465,9 +2636,7 @@ int main(void)
         xhci_events(hc);
         xhci_command_done(hc, &result);
 
-        /* A hub: its own slot context gains the hub bit and its port count,
-           through the evaluate command, and a high-speed hub with one
-           translator per port gains the multi-TT bit and its think time. */
+        /* A hub's slot context, through the evaluate command. */
         where.depth = 0;
         where.route = 0;
         CHECK("a hub on a root port is asked for",
@@ -2498,9 +2667,7 @@ int main(void)
         xhci_command_done(hc, &result);
         hs_hub = hub_slot;
 
-        /* A low-speed device below that hub carries the hub's slot and port
-           in its third word and the multi-TT bit, and nothing of the think
-           time, which is the hub's alone. */
+        /* A low-speed device below that hub. */
         where.depth = 1;
         where.route = 0x2;
         where.tt_device = hs_hub;
@@ -2519,9 +2686,7 @@ int main(void)
         xhci_events(hc);
         xhci_command_done(hc, &result);
 
-        /* A full-speed device below a full-speed hub below that high-speed
-           hub uses the high-speed hub as its translator: what the location
-           names is what is written, two tiers down. */
+        /* A full-speed device below a full-speed hub below that one. */
         where.depth = 2;
         where.route = 0x12; /* port 2 of a full-speed hub on port 1 of the high-speed one */
         where.tt_device = hs_hub;
@@ -2539,8 +2704,7 @@ int main(void)
         xhci_command_done(hc, &result);
     }
 
-    /* Devices, endpoints and the recovery a halted one needs, again on a
-       fresh controller. */
+    /* Devices, endpoints and halt recovery, on a fresh controller. */
     model_reset();
     CHECK("the capability registers are read", xhci_read_caps(hc) == 0);
     CHECK("halted and reset", xhci_halt_reset(hc) == 0);
@@ -2577,9 +2741,7 @@ int main(void)
         CHECK("the controller answers", xhci_command_done(hc, &result) == 1);
     }
 
-    /* A halted endpoint is reset and its ring pointed at the block the driver
-       will write next. Returning an error and leaving the ring alone would
-       leave the endpoint unusable for the rest of the boot. */
+    /* A halted endpoint is reset and its ring moved on. */
     model_ep_halted[1][3] = 1; /* the controller reported the halt */
     CHECK("a halted endpoint is reset", xhci_endpoint_reset(hc, 1, 3) == 0);
     CHECK("with the command that resets one", last_command_type == TRB_TYPE_RESET_EP);
@@ -2599,9 +2761,7 @@ int main(void)
     CHECK("the controller answers", xhci_command_done(hc, &result) == 1);
 
     CHECK("a device the controller never gave out is refused", xhci_device_address(hc, 3) != 0);
-    /* Slots are numbered from one, so the last one the controller may give
-       out is its own count and not one less. A driver whose tables were a
-       slot short would refuse the last slot it is entitled to hand out. */
+    /* The last slot the controller may give out is its own count. */
     CHECK("the last slot the controller may give out is not refused for being last",
           xhci_device_address(hc, (int)hc->nslots) != 0 && hc->slots[hc->nslots].used == 0);
     hc->slots[hc->nslots].used = 1;
@@ -2612,18 +2772,13 @@ int main(void)
     CHECK("the controller answers", xhci_command_done(hc, &result) == 1);
     CHECK("and so is an endpoint on one", xhci_endpoint_reset(hc, 3, 3) != 0);
 
-    /* The pins the chipset will give. A firmware leaves some on the companion
-       controller for an operating system that cannot drive this one; this
-       kernel has no driver for the companion, so a pin left there is a socket
-       nothing can reach. */
+    /* Every pin the chipset allows is routed to this controller. */
     model_reset();
     CHECK("a controller with pins on the companion is taken", discover() == 0);
     CHECK("and every pin the chipset allows is moved to it", pci_cfg[0xD0] == 0x1FF);
     CHECK("with the SuperSpeed pins as well", pci_cfg[0xD8] == 0xF);
 
-    /* Only the pins the mask allows: one the chipset will not move is one the
-       write has no effect on, and writing it anyway would put a pin in the
-       record that was never routed. */
+    /* Only the pins the mask allows. */
     model_reset();
     pci_cfg[0xD0] = 0x001;
     pci_cfg[0xD4] = 0x00F;
@@ -2641,8 +2796,7 @@ int main(void)
     CHECK("and its configuration space is not written",
           pci_cfg[0xD0] == 0x00A && pci_cfg[0xD8] == 0x1);
 
-    /* Transfers. The control transfer is three blocks and one event, and the
-       event is asked for on the block that says how much arrived. */
+    /* Transfers: a control transfer is three blocks and one event. */
     {
         struct usb_transfer transfer;
         struct usb_completion completion;
@@ -2708,8 +2862,7 @@ int main(void)
         CHECK("as a stall, which is the one a caller recovers from",
               completion.status == USB_XFER_STALLED);
 
-        /* The endpoint is halted: nothing is queued on it until it is reset
-           and moved on. */
+        /* The endpoint is halted until it is reset and moved on. */
         transfer_code = TRB_COMPLETION_SUCCESS;
         CHECK("nothing is queued on the halted endpoint", xhci_submit(hc, 1, 1, &transfer) != 0);
         model_ep_halted[1][1] = 1;
@@ -2721,8 +2874,7 @@ int main(void)
         CHECK("and answered", xhci_command_done(hc, &result) == 1 && result.status == USB_XFER_OK);
         xhci_endpoint_retire_all(hc, 1, 1);
 
-        /* A data stage that answers well under a status stage that stalls:
-           the transfer failed, whatever the data stage said. */
+        /* A good data stage under a status stage that stalls. */
         status_code = TRB_COMPLETION_STALL;
         CHECK("a transfer whose status stage stalls is queued",
               xhci_submit(hc, 1, 1, &transfer) == 0);
@@ -2739,8 +2891,7 @@ int main(void)
         CHECK("and answered", xhci_command_done(hc, &result) == 1 && result.status == USB_XFER_OK);
         xhci_endpoint_retire_all(hc, 1, 1);
 
-        /* A short data stage under a stalled status stage: the failure is
-           the outcome and the bytes are the data stage's. */
+        /* A short data stage under a stalled status stage. */
         transfer_code = TRB_COMPLETION_SHORT;
         transfer_residual = 6;
         status_code = TRB_COMPLETION_STALL;
@@ -2798,10 +2949,7 @@ int main(void)
               xhci_poll(hc, &completion) == 0);
     }
 
-    /* The interval the controller schedules from is derived from the one the
-       device asked for, and the two are neither the same unit nor the same
-       scale. A driver that copied the number would poll a keyboard sixty-four
-       times too often or too seldom. */
+    /* The endpoint context's interval, from the descriptor's. */
     CHECK("a full-speed device asking for one millisecond", interval_for(USB_SPEED_FULL, 1) == 3);
     CHECK("a full-speed device asking for ten", interval_for(USB_SPEED_FULL, 10) == 6);
     CHECK("a low-speed device asking for ten", interval_for(USB_SPEED_LOW, 10) == 6);
@@ -2819,8 +2967,7 @@ int main(void)
     CHECK("a high-speed device's", default_packet_size(USB_SPEED_HIGH) == 64);
     CHECK("a SuperSpeed device's", default_packet_size(USB_SPEED_SUPER) == 512);
 
-    /* The device context index of an endpoint, which is what a doorbell
-       names. */
+    /* The device context index of an endpoint, which a doorbell names. */
     {
         struct usb_endpoint ep;
 
@@ -2847,12 +2994,7 @@ int main(void)
 
     /* ---- bulk endpoints, the larger tables, and the generation ---- */
 
-    /*
-     * A stick's two endpoints are bulk, and a bulk endpoint's context type is
-     * 2 outward and 6 inward, against the interrupt endpoint's 3 and 7. The
-     * packet size is the descriptor's and not a number this driver knows: 64
-     * at full speed, 512 at high speed, 1024 at SuperSpeed.
-     */
+    /* Bulk endpoint contexts: their types and packet sizes. */
     model_reset();
     CHECK("the capability registers are read", xhci_read_caps(hc) == 0);
     CHECK("halted and reset", xhci_halt_reset(hc) == 0);
@@ -2909,9 +3051,7 @@ int main(void)
         CHECK("the controller answers", xhci_command_done(hc, &result) == 1);
     }
 
-    /* A transfer carries a number of the caller's, and the completion gives
-       it back: a caller that gave up on one at its deadline tells the answer
-       to that from the answer to what it is waiting for now. */
+    /* A transfer's caller number comes back in its completion. */
     {
         struct usb_transfer transfer;
         struct usb_completion completion;
@@ -2934,11 +3074,7 @@ int main(void)
         CHECK("with the second generation and not the first", completion.generation == 0x52);
     }
 
-    /* More transfer events than the completion queue holds: the drain stops
-       at the queue's end and the rest wait on the event ring for the next
-       pass. A drain that dropped the ninth would leave the transfer it
-       answered outstanding forever, which for a hub's change endpoint is a
-       hub that never reports again. */
+    /* More transfer events than the completion queue holds. */
     {
         struct usb_transfer transfer;
         struct usb_completion completion;
@@ -2950,8 +3086,7 @@ int main(void)
         transfer.length = sizeof(buffer);
         transfer.direction = USB_DIR_IN;
         transfer.generation = 0x60;
-        /* The queue is filled by hand, as eight transfers answered at once
-           would fill it, and one more transfer is answered. */
+        /* The queue filled by hand, and one more transfer answered. */
         hc->completion_head = hc->completion_tail + XHCI_COMPLETIONS;
         CHECK("a transfer is queued against a full queue", xhci_submit(hc, 1, 3, &transfer) == 0);
         CHECK("a drain over a full queue takes nothing", xhci_events(hc) == 0);
@@ -2963,9 +3098,7 @@ int main(void)
         CHECK("and polled then", xhci_poll(hc, &completion) == 1 && completion.generation == 0x60);
     }
 
-    /* A completion for a device that has been closed is dropped: the slot may
-       already belong to the next device, and advancing that device's transfer
-       with this one's completion is the defect the drop exists for. */
+    /* A completion for a device that has been closed is dropped. */
     {
         struct usb_transfer transfer;
         struct usb_completion completion;
@@ -2977,8 +3110,7 @@ int main(void)
         transfer.direction = USB_DIR_IN;
         transfer.generation = 0x53;
         CHECK("a transfer is queued and answered", xhci_submit(hc, 1, 3, &transfer) == 0);
-        /* The controller has written the event; the device goes before the
-           driver reads it, which is what a stick pulled mid-transfer is. */
+        /* The event written, then the device closed before the drain. */
         xhci_device_closed(hc, 1);
         xhci_events(hc);
         CHECK("a completion for a device that has gone is dropped",
@@ -3002,9 +3134,7 @@ int main(void)
             xhci_events(hc);
             CHECK("the controller answers", xhci_command_done(hc, &result) == 1);
         }
-        /* One past the last. A controller that answers with a handle past
-           the slots it said it had is not trusted: everything that takes a
-           handle refuses it rather than writing past the tables. */
+        /* A slot handle one past the last the controller has. */
         CHECK("one more slot is asked for", xhci_device_open(hc, &root0, USB_SPEED_HIGH) == 0);
         xhci_events(hc);
         CHECK("and the controller answers with a handle past the tables",
@@ -3024,8 +3154,7 @@ int main(void)
 
     /* ---- the interrupter ---- */
 
-    /* Turned on, it moderates nothing, both enables are set, and the device's
-       capability is programmed with the vector it was given. */
+    /* MSI on: no moderation, both enables set, the vector programmed. */
     model_reset();
     CHECK("the capability registers are read", xhci_read_caps(hc) == 0);
     CHECK("halted and reset", xhci_halt_reset(hc) == 0);
@@ -3041,9 +3170,7 @@ int main(void)
     CHECK("and the controller's", (reg[OP(O_USBCMD)] & M_USBCMD_INTE) != 0);
     CHECK("the device is told which vector to send", msi_vector == 48);
 
-    /* A device with no MSI capability leaves the controller as it was: a
-       controller with its interrupter on and nothing to send is a controller
-       whose events nobody hears. */
+    /* A device with no MSI capability leaves the controller as it was. */
     model_reset();
     msi_refuses = 1;
     CHECK("the capability registers are read", xhci_read_caps(hc) == 0);
@@ -3054,12 +3181,7 @@ int main(void)
     CHECK("with the interrupter's enable left clear", (reg[M_IMAN] & M_IMAN_IE) == 0);
     CHECK("and the controller's", (reg[OP(O_USBCMD)] & M_USBCMD_INTE) == 0);
 
-    /* The line: the same device raises its interrupts on the PCI line the
-       firmware routed for it, IRQ 7 on the notebook. The command register's
-       interrupt disable bit is cleared, both enables are set, and an event
-       asserts the line through the status register's event bit, which the
-       acknowledgement clears together with the pending bit; a level line
-       left with either set is taken forever. */
+    /* The PCI interrupt line, for a device without MSI. */
     CHECK("the line is named", xhci_line_irq(hc) == 7);
     CHECK("the controller is put on its line", xhci_interrupts_enable_line(hc) == 7);
     CHECK("and says so", xhci_interrupts_on(hc) == 1);
@@ -3093,9 +3215,7 @@ int main(void)
     CHECK("and is not put on one", xhci_interrupts_enable_line(hc) == -1);
     CHECK("with the interrupter's enable left clear", (reg[M_IMAN] & M_IMAN_IE) == 0);
 
-    /* The acknowledgement: the pending bit written as one, the enable beside
-       it kept. A bare write of the pending bit clears the enable, and the
-       controller is silent from then on. */
+    /* The acknowledgement keeps IMAN's enable bit. */
     model_reset();
     CHECK("the capability registers are read", xhci_read_caps(hc) == 0);
     CHECK("halted and reset", xhci_halt_reset(hc) == 0);
@@ -3108,26 +3228,14 @@ int main(void)
     CHECK("the acknowledgement clears the pending bit", (reg[M_IMAN] & M_IMAN_IP) == 0);
     CHECK("and leaves the enable beside it set", (reg[M_IMAN] & M_IMAN_IE) != 0);
 
-    /* The drain says the driver is finished with what it was given, and only
-       then does the controller raise another. This is the second event's row:
-       a dequeue pointer written with the busy bit as zero leaves the
-       controller believing the driver is still reading. */
+    /* The drain writes ERDP's busy bit as one. */
     CHECK("the drain takes the event", xhci_events(hc) == 1);
     CHECK("and writes the dequeue pointer with the busy bit", (reg[M_ERDP] & M_ERDP_EHB) != 0);
     post_event(TRB_TYPE_PORT_CHANGE, TRB_COMPLETION_SUCCESS, 0, 1u << 24);
     CHECK("so the next event raises an interrupt of its own", model_raises == 2);
     CHECK("and it is taken", xhci_events(hc) == 1);
 
-    /*
-     * A drain that finds nothing still says the driver is finished. The
-     * controller sets the busy bit when it raises an interrupt and raises no
-     * other until the driver writes it back, and the timer's pump can take
-     * the event before the handler's message is delivered, which leaves the
-     * handler with an empty ring and the bit still set. The model is put
-     * straight into that state: the busy bit set with nothing in the ring,
-     * which no sequence of its own can produce, because the timer's drain
-     * would have cleared the bit itself.
-     */
+    /* A drain that finds nothing still writes ERDP's busy bit as one. */
     model_reset();
     CHECK("the capability registers are read", xhci_read_caps(hc) == 0);
     CHECK("halted and reset", xhci_halt_reset(hc) == 0);
@@ -3140,9 +3248,7 @@ int main(void)
     post_event(TRB_TYPE_PORT_CHANGE, TRB_COMPLETION_SUCCESS, 0, 1u << 24);
     CHECK("so the controller raises the next interrupt", model_raises == 1);
 
-    /* An event written between the acknowledgement and the drain is taken by
-       that same drain. The model writes it from inside the acknowledgement,
-       which is the window a handler that drained first would leave. */
+    /* An event written between the acknowledgement and the drain. */
     model_reset();
     CHECK("the capability registers are read", xhci_read_caps(hc) == 0);
     CHECK("halted and reset", xhci_halt_reset(hc) == 0);
@@ -3170,11 +3276,7 @@ int main(void)
 
     /* ---- a 32 KiB transfer as one command, its blocks and its bytes ---- */
 
-    /* Nine blocks over nine pages when the buffer starts mid-page, each at
-       the physical page the map gives, with the packets left after it, the
-       chain on all but the last, the short-packet event on the intermediate
-       IN blocks and the event on the last; and the bytes landing page by
-       page where the blocks said. */
+    /* An IN transfer over nine pages, starting mid-page. */
     {
         struct usb_transfer transfer;
         struct usb_completion completion;
@@ -3219,8 +3321,7 @@ int main(void)
         CHECK("and the transfer is retired", xhci_td_retired(hc, 1, 0x100) == 1);
     }
 
-    /* The same OUT: no short-packet events asked for, and the medium holding
-       the bytes from the pages in the map's order. */
+    /* The same OUT, with no short-packet events asked for. */
     {
         struct usb_transfer transfer;
         struct usb_completion completion;
@@ -3229,8 +3330,7 @@ int main(void)
 
         bulk_pair_up();
         for (i = 0; i < 32768; i++) {
-            /* A pattern that differs from page to page, so two pages
-               swapped in the map would show. */
+            /* A pattern that differs from page to page. */
             *at_phys(big + 2048 + i) = (uint8_t)(i * 13u + 5u + (i >> 12) * 37u);
         }
         transfer.setup = 0;
@@ -3251,8 +3351,7 @@ int main(void)
               arrived(big + 2048, 32768, 0));
     }
 
-    /* ---- a 512 KiB transfer as one descriptor of 129 blocks, and one
-       piece more than a record holds refused before publication ---- */
+    /* ---- a 512 KiB transfer, and one piece more than a record holds ---- */
     {
         struct usb_transfer transfer;
         struct usb_completion completion;
@@ -3275,9 +3374,7 @@ int main(void)
                 ioc_at = i + 1;
             }
             total += t[2] & 0x1FFFFu;
-            /* Each block names its piece's physical page, as the map placed
-               it, and its length: 2048 bytes of the first page, whole pages
-               between, and 2048 of the last. */
+            /* Each block names its piece's page and length. */
             if (((uint64_t)t[0] | ((uint64_t)t[1] << 32)) ==
                     (uint64_t)permuted_map((uintptr_t)(big + 2048 + at)) &&
                 (t[2] & 0x1FFFFu) == (i == 0 || i == 128 ? 2048u : 4096u)) {
@@ -3305,9 +3402,7 @@ int main(void)
         CHECK("and nothing of it was published", hc->slots[1].enqueue[3] == first);
     }
 
-    /* A transfer started three blocks before the ring's end: the Link it
-       crosses carries the chain bit, the events land, and the bytes cross
-       the Link and the boundary to the next transfer whole. */
+    /* A transfer started three blocks before the ring's end. */
     {
         struct usb_transfer transfer;
         struct usb_completion completion;
@@ -3336,12 +3431,7 @@ int main(void)
         CHECK("with its bytes after the first's", landed(big + 16384, 16384, 16384));
     }
 
-    /* A short packet on the third block, with the last block's event after
-       it as the specification says: one completion, short by the bytes not
-       moved, the transfer retired by the last block's event and not before;
-       then the same with no such event, as QEMU does: the completion
-       delivered, the transfer unretired until it is stopped and dequeued,
-       and a transfer after that completing. */
+    /* A short packet on the third block, with and without the last event. */
     {
         struct usb_transfer transfer;
         struct usb_completion completion;
@@ -3398,10 +3488,7 @@ int main(void)
                                          completion.generation == 0x106);
     }
 
-    /* A failure on the second block, the controller halting there and
-       posting nothing more: one failed completion with the bytes through
-       the block before plus the failing block's own, the endpoint halted,
-       the transfer owned until the reset and the dequeue are answered. */
+    /* A failure on the second block. */
     {
         struct usb_transfer transfer;
         struct usb_completion completion;
@@ -3443,8 +3530,7 @@ int main(void)
               xhci_poll(hc, &completion) == 1 && completion.status == USB_XFER_OK);
     }
 
-    /* A translation that fails on the fifth page, and a third transfer with
-       no record free: refused with the ring and its pointer untouched. */
+    /* A failed translation, and a third transfer with no record free. */
     {
         struct usb_transfer transfer;
         uint32_t before[XHCI_EP_RING_TRBS * TRB_WORDS];
@@ -3490,9 +3576,7 @@ int main(void)
         transfer_answers = 1;
     }
 
-    /* A stop after a transfer: the dequeue at the enqueue pointer with the
-       producer's cycle, and the next transfer, across the wrap, fetched
-       from there and no old block executed. */
+    /* A stop after a transfer, and the next one across the wrap. */
     {
         struct usb_transfer transfer;
         struct usb_completion completion;
@@ -3566,9 +3650,7 @@ int main(void)
         transfer_answers = 1;
     }
 
-    /* Two transfers outstanding, the event for the first: its generation,
-       not the latest submission's; and an event for no transfer, dropped
-       and counted. */
+    /* Two transfers outstanding, and an event for no transfer. */
     {
         struct usb_transfer transfer;
         struct usb_completion completion;
@@ -3597,8 +3679,7 @@ int main(void)
         transfer_answers = 1;
     }
 
-    /* An endpoint numbered past the first few: its records are there like
-       any other's. */
+    /* An endpoint numbered past the first few has its records. */
     {
         struct usb_transfer transfer;
         struct usb_completion completion;
@@ -3626,9 +3707,7 @@ int main(void)
                                    completion.status == USB_XFER_OK && completion.endpoint == 9);
     }
 
-    /* A block the controller could not run: the endpoint is in the Error
-       state, which a Set TR Dequeue alone moves on; nothing is queued on it
-       until then. */
+    /* A block the controller could not run: the Error state. */
     {
         struct usb_transfer transfer;
         struct usb_completion completion;
@@ -3664,8 +3743,7 @@ int main(void)
         CHECK("and completes", xhci_poll(hc, &completion) == 1 && completion.status == USB_XFER_OK);
     }
 
-    /* A held record outlives the next submission on its endpoint: the data
-       transfer's record is queryable at its wrapper's completion. */
+    /* A held record outlives the next submission on its endpoint. */
     {
         struct usb_transfer transfer;
         struct usb_completion completion;
@@ -3693,9 +3771,7 @@ int main(void)
         CHECK("and answers nothing once released", xhci_td_retired(hc, 1, 0x123) == -1);
     }
 
-    /* The blocks are published whole or not at all: at the first barrier of
-       a submission every block but the first is visible and the first is
-       not. */
+    /* The blocks of a transfer are published whole or not at all. */
     {
         struct usb_transfer transfer;
         struct usb_completion completion;
