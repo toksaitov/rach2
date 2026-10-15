@@ -1,19 +1,19 @@
 /**
  * sha256: print the SHA-256 digest of each argument file as lowercase hex.
  *
- * The vendor builds refuse a tarball whose digest is wrong, and the suites
- * compare staged artifacts by digest, so the hash tool is part of the
- * required tool set. This is FIPS 180-4 SHA-256 in plain C, compiled on
- * first use by the scripts that need it, so the build depends on a host C
- * compiler it already requires instead of on coreutils' sha256sum or
- * Perl's shasum. One line is printed per file: the 64 hex digits, a
- * space, and the file name, the field order the callers cut. The name `-`
- * reads standard input, for callers hashing a pipe.
+ * The vendor builds stop on a tarball whose digest is wrong, and the suites
+ * compare staged artifacts by digest. This is FIPS 180-4 SHA-256 in plain C,
+ * built by make or by the first script that needs it before make has run, so
+ * the build needs only the host C compiler it already requires, and neither
+ * coreutils' sha256sum nor Perl's shasum. One line is printed per file: the
+ * 64 hex digits, two spaces and the file name, the layout of sha256sum, whose
+ * first field the callers cut. The name `-` reads standard input.
  */
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
+/** The 64 round constants of FIPS 180-4, section 4.2.2. */
 static const uint32_t K[64] = {
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -24,18 +24,21 @@ static const uint32_t K[64] = {
     0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
 
+/** The state of one digest in progress. */
 struct sha256 {
-    uint32_t h[8];
-    uint64_t bytes;
-    unsigned char block[64];
-    size_t fill;
+    uint32_t h[8];           /* the hash value H0 to H7 */
+    uint64_t bytes;          /* message bytes hashed so far, padding excluded */
+    unsigned char block[64]; /* the partial block not yet compressed */
+    size_t fill;             /* bytes used in `block`, 0 to 63 between calls */
 };
 
+/** Rotate `x` right by `n` bits, 0 < n < 32. */
 static uint32_t ror(uint32_t x, int n)
 {
     return (x >> n) | (x << (32 - n));
 }
 
+/** Fold the 64-byte block at `p` into the hash value of `s`. */
 static void compress(struct sha256 *s, const unsigned char *p)
 {
     uint32_t w[64], a, b, c, d, e, f, g, h;
@@ -85,6 +88,7 @@ static void compress(struct sha256 *s, const unsigned char *p)
     s->h[7] += h;
 }
 
+/** Start `s` on a new message with the initial hash value of FIPS 180-4. */
 static void init(struct sha256 *s)
 {
     static const uint32_t h0[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
@@ -95,6 +99,7 @@ static void init(struct sha256 *s)
     s->fill = 0;
 }
 
+/** Add `n` bytes at `p` to the message, compressing each block it fills. */
 static void update(struct sha256 *s, const unsigned char *p, size_t n)
 {
     s->bytes += n;
@@ -114,6 +119,11 @@ static void update(struct sha256 *s, const unsigned char *p, size_t n)
     }
 }
 
+/**
+ * Pad the message as FIPS 180-4 section 5.1.1 requires, compress the last
+ * block, and write the 32-byte digest, big-endian, to `out`. `s` is spent
+ * afterwards and must be started again with init.
+ */
 static void final(struct sha256 *s, unsigned char out[32])
 {
     uint64_t bits = s->bytes * 8;
@@ -139,6 +149,12 @@ static void final(struct sha256 *s, unsigned char out[32])
     }
 }
 
+/**
+ * Print the digest of each file named in `argv`. A file that cannot be opened
+ * is reported on standard error and the rest are still hashed. The exit
+ * status is 0 when every file was hashed, 1 when one could not be opened, and
+ * 2 when no file was named.
+ */
 int main(int argc, char **argv)
 {
     int i, bad = 0;
