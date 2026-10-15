@@ -4,9 +4,11 @@
 #include "../../lib/kint.h"
 
 /*
- * The x86's I/O ports: the instructions that read and write them, which the
- * PC's own devices (the 8259, the PIT, the 8042, the serial port, ATA) and
- * the older PCI devices are reached through. No shared code uses them.
+ * portio: the x86's I/O port instructions, which the PC's own devices (the
+ * 8259, the PIT, the 8042, the serial port, ATA) are reached through. Outside
+ * arch/ only the drivers of PC devices include this header: ATA, the Sound
+ * Blaster 16 and its DMA controller, and VGA's text and graphics modes. A PCI
+ * driver reaches its I/O space through `pci_io_read8` and the rest (pci.h).
  */
 
 /** Write byte `val` to I/O port `port`. */

@@ -1,6 +1,6 @@
 /*
- * The x86's I/O port instructions, which the PC's devices are reached
- * through, and the harness's exit through QEMU's isa-debug-exit port.
+ * portio.c: the x86's I/O port instructions, which the PC's devices are
+ * reached through, and the harness's exit through QEMU's isa-debug-exit port.
  */
 
 #include "portio.h"
@@ -13,13 +13,12 @@ void outb(uint16_t port, uint8_t val)
 
 #ifdef RACH2_HARNESS
 /**
- * Report a process exit status to QEMU's isa-debug-exit device (harness only).
- *
- * Writing the status to I/O port 0xF4 makes the test harness read a real exit
- * code instead of scraping the serial log: a hang or triple-fault then surfaces
- * as a wall-clock timeout, not a missing marker. Only ring 0 may write
- * this port, so a ring-3 probe cannot fake it. QEMU exits with the value
- * `((status << 1) | 1)`, so an exit code of 1 means a status of 0.
+ * The status goes to QEMU's isa-debug-exit device at I/O port 0xF4, so the
+ * test harness reads an exit code instead of searching the serial log, and
+ * a hang or a triple fault shows as a timeout, not as a missing marker. Only
+ * ring 0 may write this port, so a ring-3 probe cannot fake it. QEMU exits
+ * with the value `((status << 1) | 1)`, so an exit code of 1 means a status
+ * of 0.
  */
 void harness_exit(uint8_t status)
 {
@@ -64,8 +63,8 @@ uint32_t ind(uint16_t port)
     return result;
 }
 
-/* On x86-64 `rep` counts in the whole of RCX, so the count is widened
- * before the instruction is given it. */
+/** On x86-64 `rep` counts in the whole of RCX, so `insw` and `outsw` widen
+ * the count before the instruction is given it. */
 void insw(uint16_t port, void *buffer, uint32_t count)
 {
 #if defined(__x86_64__)

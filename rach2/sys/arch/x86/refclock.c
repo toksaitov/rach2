@@ -50,6 +50,9 @@
 #define SOURCE_HPET 1
 #define SOURCE_PM   2
 
+/* The counter `refclock_init` took, SOURCE_NONE before; the HPET's
+ * registers, and a host test's in their place; the counts a second; the
+ * counter's bits; and the PM timer's register. */
 static int source;
 static volatile uint32_t *hpet;
 static volatile uint32_t *test_hpet;
@@ -95,11 +98,13 @@ static int counter_runs(uint32_t (*read)(void))
     return now != first && now != mask;
 }
 
+/** The low 32 bits of the HPET's main counter. */
 static uint32_t hpet_read(void)
 {
     return hpet[HPET_COUNTER / 4];
 }
 
+/** The PM timer's register as read, 0 when the read fails. */
 static uint32_t pm_read(void)
 {
     uint32_t v = 0;

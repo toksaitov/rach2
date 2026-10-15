@@ -4,12 +4,11 @@
  * the platform sets (platform.c, refclock.c).
  *
  * The device bring-up sequences in this kernel ask for waits in
- * microseconds and milliseconds, and every one of them is a hardware
- * requirement, not a convenience: a wait that comes up short leaves a
- * chip half-configured in a way that shows on one machine and not another. A
- * loop counting instructions cannot promise a duration on a processor whose
- * speed is unknown, so this measures against the timer chip, which runs at
- * 1.193182 MHz on every PC regardless.
+ * microseconds and milliseconds, and each is a hardware requirement: a wait
+ * that comes up short leaves a chip half-configured in a way that shows on
+ * one machine and not another. A loop counting instructions cannot promise
+ * a duration on a processor whose speed is unknown, so this measures against
+ * the timer chip, which runs at 1.193182 MHz on every PC.
  *
  * Channel 0 is the one the tick already programmed. Reading it with a
  * latch command samples the count without changing it, so this neither
@@ -18,9 +17,9 @@
  *
  * The mode matters to the arithmetic. `init_pit` writes control byte 0x36,
  * which selects mode 3, the square wave generator, and in mode 3 the counter
- * is decremented by TWO on each input clock: it sweeps the reload value down
- * to zero twice per interrupt period, not once. So one count is half an
- * input clock, and the conversion below uses twice the input frequency. An odd
+ * is decremented by two on each input clock: it sweeps the reload value down
+ * to zero twice in each interrupt period. So one count is half an input
+ * clock, and the conversion below uses twice the input frequency. An odd
  * reload (11931 here) makes the two half sweeps differ by one count, which is
  * under one part in ten thousand and is ignored.
  */
@@ -32,23 +31,21 @@
 #include "pit.h"
 
 /* The 8254's input frequency. Where the counter wraps is `pit_reload`, which
- * init_pit publishes, not this file computing the divisor a second
- * time: two copies would agree today and disagree the day the tick rate
- * changes. */
+ * init_pit publishes, so that the divisor is computed in one place. */
 #define PIT_HZ 1193182u
 
-/* Counts per second as READ BACK, which is twice the input clock in mode 3. */
+/* Counts per second as read back, which is twice the input clock in mode 3. */
 #define PIT_COUNTS_PER_SEC (2u * PIT_HZ)
 
 /*
- * The longest single wait this measures in one pass. The bound is arithmetic,
- * not physical: `usec * PIT_COUNTS_PER_SEC` must stay inside 32 bits, and 1000
- * leaves it at about 2.4 billion of the 4.29 billion available. Longer waits
- * are made of repeated passes, and nothing is lost between passes because each
- * pass measures its own counts. What must stay short is the interval between
- * two SAMPLES, not the total: the counter sweeps every 5 ms, and a gap longer
- * than that would hide a whole sweep. The loop below samples every few port
- * reads, so that has orders of magnitude of margin.
+ * The longest single wait this measures in one pass. The bound comes from
+ * the arithmetic: `usec * PIT_COUNTS_PER_SEC` must stay inside 32 bits, and
+ * 1000 leaves it at about 2.4 billion of the 4.29 billion available. Longer
+ * waits are made of repeated passes, and nothing is lost between passes
+ * because each pass measures its own counts. What must stay short is the
+ * interval between two samples: the counter sweeps every 5 ms, and a gap
+ * longer than that would hide a whole sweep. The loop below samples every
+ * few port reads, so that has orders of magnitude of margin.
  */
 #define PIT_WINDOW_USEC 1000u
 
@@ -60,6 +57,8 @@
  */
 #define PIT_STALL_SAMPLES 100000u
 
+/* The wait that replaces the 8254's, NULL while channel 0 counts;
+ * `platform_timer_start` sets `refclock_wait_us` here when it does not. */
 void (*udelay_wait)(uint32_t usec);
 
 /**
@@ -71,8 +70,7 @@ void (*udelay_wait)(uint32_t usec);
  * the latch, leaving the reads to return the live count a byte at a time:
  * a low byte from before a borrow and a high byte from after it reads as a
  * count below the last sample by a whole 256, the drop is overcounted by
- * that much, and the wait ends early. The notebook showed a 2 ms wait
- * measured at 1.36 ms, about six such tears.
+ * that much, and the wait ends early.
  */
 static uint16_t pit_count(void)
 {
@@ -92,7 +90,8 @@ static uint16_t pit_count(void)
  * The counter descends, so the elapsed count between two samples is the drop;
  * when the counter has reloaded since the last sample the drop is taken around
  * the reload value instead. Sampling faster than the counter moves is
- * harmless, since a zero drop simply adds nothing.
+ * harmless, since a zero drop adds nothing. A counter that does not move for
+ * PIT_STALL_SAMPLES samples ends the wait.
  */
 static void udelay_window(uint32_t usec)
 {
@@ -122,6 +121,8 @@ static void udelay_window(uint32_t usec)
     }
 }
 
+/** A wait longer than `PIT_WINDOW_USEC` is a run of windows and a last
+ * shorter one. */
 void k_udelay(uint32_t usec)
 {
     if (udelay_wait) {

@@ -131,6 +131,8 @@ struct bus_reach {
     uint32_t cap;
 };
 
+/** A `pci_each` visit: raise the walk's top bus to a PCI-to-PCI bridge's
+ * subordinate bus, at most to its cap. */
 static void reach_bridge(uint8_t bus, uint8_t dev, uint8_t fn, void *arg)
 {
     struct bus_reach *r = (struct bus_reach *)arg;
@@ -145,6 +147,8 @@ static void reach_bridge(uint8_t bus, uint8_t dev, uint8_t fn, void *arg)
     }
 }
 
+/** A `pci_each` visit: count, in the int at `arg`, and log a function whose
+ * extended configuration space begins with a capability. */
 static void count_extended(uint8_t bus, uint8_t dev, uint8_t fn, void *arg)
 {
     uint32_t cap = pci_read_config32_ext(bus, dev, fn, 0x100);
@@ -162,7 +166,8 @@ static void count_extended(uint8_t bus, uint8_t dev, uint8_t fn, void *arg)
  * window is in place, and at most `ECAM_MAX_BUSES`; and hand it to the
  * configuration functions once its first function reads as mechanism #1
  * reads it. Each function whose extended space begins with a capability is
- * logged, which is the space only ECAM reaches.
+ * logged, which is the space only ECAM reaches. On i686 a window above
+ * 4 GiB is refused.
  */
 static void ecam_init(const struct acpi_info *a)
 {
@@ -221,6 +226,8 @@ void platform_firmware_init(const struct boot_info *boot)
     smpboot_init(boot);
 }
 
+/** A `pci_each` visit: add the function's interrupt line to the set at
+ * `arg` when it has an interrupt pin and the line is below 16. */
 static void note_line(uint8_t bus, uint8_t dev, uint8_t fn, void *arg)
 {
     uint8_t pin = pci_read_config8(bus, dev, fn, PCI_INTERRUPT_PIN);
@@ -266,19 +273,20 @@ static int ioapic_wanted(const struct acpi_info *a)
     return ioapic_init(a) > 0;
 }
 
+/**
+ * The boot report comes after the page cache's window is mapped and before
+ * the disk and network drivers configure a device: the window's page tables
+ * and the report's own device reads take memory, and a figure printed
+ * before them is not what the machine has left. The APIC report, under
+ * `rach2.apicdiag`, reads what the firmware left in the APIC and in the
+ * message capabilities of the xHCI and HDA controllers, and writes nothing.
+ */
 void platform_report(void)
 {
-    /* The boot report, after the page cache's window is mapped and before
-     * the disk and network drivers have configured a device. After, because
-     * the window's page tables and the report's own device peek take
-     * memory, and a figure printed before those is not what the machine has
-     * left. */
     if (kcmdline_has("rach2.diag")) {
         boot_diag_report();
     }
 
-    /* What the machine's firmware left in the APIC and in the two devices
-     * this kernel drives by message, read and printed, nothing written. */
     apic_diag_report();
 }
 
@@ -299,6 +307,22 @@ static int tick_arrives(uint32_t before)
     return kernel_ticks != before;
 }
 
+/**
+ * The local APIC comes up first, so that a device can be told to send its
+ * interrupts as messages; a machine that refuses it keeps every device on
+ * its legacy line. Interrupts are off until both arrangements are in place,
+ * since enabling the APIC moves the path the 8259's interrupts take to the
+ * processor. The 8259 is retired before `LINT0` is written, so that a
+ * request it raised falls while `LINT0` still takes it.
+ *
+ * Once interrupts are on, the tick must arrive within 50 ms, measured by
+ * the 8254's counter or the reference counter, which need no interrupt.
+ * With the I/O APIC, a local APIC timer measured wrong or one that does not
+ * interrupt gives way to the 8254 through the I/O APIC. With the 8259, a
+ * tick that does not arrive is a `LINT0` that the firmware or the emulator
+ * masked, and the entry is written again; without that a masked entry would
+ * show as a machine that boots and never ticks, with nothing said.
+ */
 void platform_timer_start(isr_handler_t tick)
 {
     const struct acpi_info *a = acpi_get();
@@ -307,11 +331,6 @@ void platform_timer_start(isr_handler_t tick)
     int apic;
 
     arch_irq_disable();
-    /* The local APIC, so that a device can be told to send its interrupts
-     * as messages. A machine that refuses leaves every device on its legacy
-     * line, which is the kernel as it was. Interrupts are off across it: it
-     * moves the road the 8259's interrupts take to the processor, and there
-     * is no reason to have one arrive in the middle of the move. */
     lapic_init();
     init_pit(TICK_HZ);
     if (!pit_probe()) {
@@ -323,8 +342,6 @@ void platform_timer_start(isr_handler_t tick)
     apic = ioapic_wanted(a);
     if (apic) {
         counts = apic_timer_calibrate(TICK_HZ, &against);
-        /* The 8259 first, so that its request to the processor falls
-         * while `LINT0` still takes it, and then `LINT0`. */
         pic_retire();
         apic_lint_init(a);
         lines_pci = pci_lines();
@@ -344,14 +361,11 @@ void platform_timer_start(isr_handler_t tick)
         }
         klog(KLOG_INFO, "ioapic", "interrupts: lines through the ioapic, the 8259 masked");
     } else {
-        set_isr_handler(IRQ_VECTOR(0), tick, "pit"); /* install the timer handler on IRQ0 */
+        set_isr_handler(IRQ_VECTOR(0), tick, "pit");
     }
     arch_irq_enable();
 
     if (apic) {
-        /* A timer measured wrong, or one that does not interrupt, would be
-         * a machine that boots and never ticks. The 8254 through the I/O
-         * APIC is what is left. */
         if (tick_arrives(kernel_ticks)) {
             return;
         }
@@ -372,13 +386,6 @@ void platform_timer_start(isr_handler_t tick)
         return;
     }
 
-    /*
-     * The 8259's interrupts now reach the processor through the APIC's
-     * `LINT0`, so the first thing the timer is asked is whether it still
-     * arrives. A masked entry would otherwise show as a machine that boots
-     * and never ticks, with nothing said about why. The wait is measured
-     * against the 8254's own counter, which needs no interrupt.
-     */
     if (lapic_ready() && !tick_arrives(kernel_ticks)) {
         klog(KLOG_ERR, "lapic", "timer: no tick in 50 ms; writing lint0 again");
         lapic_repair_lint0();
@@ -393,12 +400,10 @@ uint32_t platform_timer_hz(void)
     return tick_local ? TICK_HZ : 1193182u / pit_reload;
 }
 
+/** `board_init` also masks the SCI's line: with ACPI on, an unhandled SCI is
+ * level-triggered and would be taken forever. */
 void platform_board_init(void)
 {
-    /* Which power controller this machine has. With ACPI on, an unhandled
-     * SCI is level-triggered and would be taken forever, so the line it sits
-     * on is masked here. A machine no profile matches keeps exactly the
-     * behaviour it had before this existed. */
     const char *why = "";
     int verdict = board_init(&why);
 
@@ -412,13 +417,13 @@ void platform_board_init(void)
 }
 
 /**
- * Take a byte the 8042 has waiting, by raising its vector once, after the
- * handler went on through the I/O APIC. The 8042 keeps its line high while
- * a byte waits and raises no edge for another until that one is read, and
- * an I/O APIC input drops an edge that comes while it is masked, where the
- * 8259 kept it in its request register; so a key pressed before the
- * handler would leave the keyboard silent for good. `aux` asks after the
- * mouse's byte rather than the keyboard's.
+ * When the I/O APIC has the lines, take a byte the 8042 already has waiting
+ * by raising `vector` once, after its handler is installed. The 8042 keeps
+ * its line high while a byte waits and raises no edge for another until
+ * that one is read, and an I/O APIC input drops an edge that comes while it
+ * is masked, where the 8259 keeps it in its request register; so a key
+ * pressed before the handler would leave the keyboard silent for good.
+ * `aux` asks after the mouse's byte rather than the keyboard's.
  */
 static void ps2_waiting(uint8_t vector, int aux)
 {

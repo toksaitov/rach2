@@ -1,11 +1,11 @@
 /*
- * The PC's half of PCI: configuration space, through the memory window the
- * MCFG gives for segment 0 (ECAM, the enhanced configuration access
- * mechanism of PCI Express) where the platform has mapped one, and through
- * configuration mechanism #1 otherwise, which writes the target address to
- * port 0xCF8 and then reads or writes the data at port 0xCFC; the bus's I/O
- * space, which is the processor's own ports; and the message a device sends
- * to raise a vector, a write to the local APIC.
+ * pciconf.c: the PC's half of PCI: configuration space, through the memory
+ * window the MCFG gives for segment 0 (ECAM, the enhanced configuration
+ * access mechanism of PCI Express) where the platform has mapped one, and
+ * through configuration mechanism #1 otherwise, which writes the target
+ * address to port 0xCF8 and then reads or writes the data at port 0xCFC; the
+ * bus's I/O space, which is the processor's own ports; and the message a
+ * device sends to raise a vector, a write to the local APIC.
  *
  * Through ECAM a function's configuration space is 4 KiB of memory at the
  * window's base plus its bus, device and function shifted by 20, 15 and 12
@@ -14,11 +14,11 @@
  *
  * The address port is one register that every access shares, so an access
  * taken apart in the middle by another one reads or writes whatever the
- * second selected. Until this milestone configuration space had one caller,
- * the boot, and no interrupt handler touched it; now the USB handler can
- * silence its controller from inside an interrupt. Every access below is
- * therefore taken with interrupts off, which is two instructions on a path
- * that already costs two port writes.
+ * second selected. An interrupt handler can reach configuration space: the
+ * USB handler silences its controllers from inside an interrupt under
+ * `rach2.msidrop`. Every mechanism #1 access below is therefore taken with
+ * interrupts off, which is two instructions on a path that already costs two
+ * port writes.
  */
 
 #include "lapic.h"
@@ -70,9 +70,6 @@ static uint32_t pci_config_address(uint8_t bus, uint8_t device, uint8_t function
            ((uint32_t)(function & 0x07) << 8) | (offset & 0xFC);
 }
 
-/**
- * Read a 32-bit dword from configuration space.
- */
 uint32_t pci_read_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
 {
     uintptr_t e = ecam_at(bus, device, function, offset & 0xFCu);
@@ -90,9 +87,6 @@ uint32_t pci_read_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_
     return value;
 }
 
-/**
- * Write a 32-bit dword to configuration space.
- */
 void pci_write_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
                         uint32_t value)
 {
@@ -111,14 +105,13 @@ void pci_write_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t o
 }
 
 /**
- * Write a 16-bit word to configuration space.
- *
  * The data port takes an access of the width the register has, at the port
  * offset the register's own address selects, so a halfword write is one
- * `outw` at `0xCFC` or `0xCFE`. It is not a read of the dword and a write of
- * it back: the other half of the dword holding the command word is the
- * status word, whose bits are cleared by writing them as one, and writing it
- * back would clear every fault the bus had latched there.
+ * `outw` at `0xCFC` or `0xCFE`, and through ECAM one 16-bit store. It is not
+ * a read of the dword and a write of it back: the other half of the dword
+ * holding the command word is the status word, whose bits are cleared by
+ * writing them as one, and writing it back would clear every fault the bus
+ * had latched there.
  */
 void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
                         uint16_t value)
@@ -137,10 +130,8 @@ void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t o
     kirq_restore(flags);
 }
 
-/**
- * Write an 8-bit byte to configuration space: one `outb` at the data port's
- * byte the offset selects, for the reason `pci_write_config16` gives.
- */
+/** One `outb` at the data port's byte the offset selects, or one 8-bit
+ * store through ECAM, for the reason `pci_write_config16` gives. */
 void pci_write_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint8_t value)
 {
     uintptr_t e = ecam_at(bus, device, function, offset);
@@ -217,8 +208,9 @@ void pci_io_write32(uint16_t port, uint32_t value)
 #define PCI_MSI_ADDRESS_BASE 0xFEE00000u
 
 /**
- * The message that raises `vector`: a write to the local APIC of this
- * processor, the vector in the data's low byte, fixed delivery, edge.
+ * The message is a write to the local APIC of the processor that enabled
+ * the APIC, the boot processor (`lapic_id`), with the vector in the data's
+ * low byte, fixed delivery and edge trigger.
  */
 void pci_msi_message(uint8_t vector, uint32_t *address, uint32_t *data)
 {

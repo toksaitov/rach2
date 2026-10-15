@@ -16,16 +16,23 @@
  * lines, and with every comparator's interrupt off.
  */
 
-/** Find the counter: 0 when one is ready, -1 when the machine has neither. */
+/**
+ * Find the counter in the tables `a` describes: 0 when one is ready, -1
+ * when the machine has neither. An HPET whose period is out of the
+ * specification's bounds, or a counter that does not move, is refused with
+ * the reason in the log. Called once, at boot, from
+ * `platform_firmware_init`.
+ */
 int refclock_init(const struct acpi_info *a);
 
 /** "hpet" or "pm timer", or NULL before `refclock_init` found one. */
 const char *refclock_name(void);
 
-/** The counts a second. */
+/** The counts a second of the counter `refclock_init` found. */
 uint32_t refclock_hz(void);
 
-/** The counter now, in its own width: `refclock_mask` has its bits. */
+/** The counter now, in its own width, 0 when there is none: `refclock_mask`
+ * has its bits. */
 uint32_t refclock_read(void);
 uint32_t refclock_mask(void);
 
