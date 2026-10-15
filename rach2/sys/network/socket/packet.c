@@ -1,8 +1,6 @@
 /*
- * packet.c: the socket that sees Ethernet, for a DHCP client and `arping`.
- *
- * The contract and the reasoning are in packet.h. What is here is the table of
- * bound sockets and the two directions.
+ * packet.c: AF_PACKET sockets, as packet.h describes them: the list of bound
+ * sockets with their receive queues, and the send.
  */
 
 #include "../../klog.h"
@@ -40,9 +38,10 @@ struct packet_queue {
     int head;  /* the next datagram to be read */
     int count; /* how many are waiting */
     int dropped;
-    int reported;
-    /* The address of the datagram most recently taken, since a receive reports
-       the sender after the datagram it belongs to has gone. */
+    int reported; /* whether a drop has been logged */
+    /* The address of the datagram most recently taken or peeked at, since a
+       receive reports the sender after the datagram it belongs to has gone;
+       `have_last` is 0 until there is one. */
     uint8_t last_src[6];
     uint8_t last_pkttype;
     uint16_t last_proto;
@@ -85,7 +84,6 @@ static struct packet_queue *queue_of(struct socket *sock)
     return b ? &b->q : NULL;
 }
 
-/** Return the bound interface index, or zero for none or every interface. */
 int packet_ifindex(struct socket *sock)
 {
     uint32_t flags = net_lock();
@@ -101,7 +99,6 @@ int packet_bind(struct socket *sock, int ifindex)
     uint32_t flags;
     struct packet_binding *b;
 
-    /* 0 is every interface; any other index must be one of this machine's. */
     if (ifindex != 0 && (ifindex < 1 || ifindex > netdev_seen_count())) {
         return -ENODEV;
     }
@@ -109,7 +106,6 @@ int packet_bind(struct socket *sock, int ifindex)
     flags = net_lock();
     b = binding_of(sock);
     if (b) {
-        /* A move to another interface drops what the old one queued. */
         if (b->ifindex != ifindex) {
             b->q.count = 0;
             b->q.head = 0;
@@ -196,6 +192,9 @@ void packet_flush(struct socket *sock)
     net_unlock(flags);
 }
 
+/** The receive path runs with interrupts off, so the list and the queues
+ * are touched without taking `net_lock`. A full queue drops the
+ * newest frame and keeps the unread ones in order. */
 void packet_rx(struct netdev *nd, uint16_t ethertype, const uint8_t *frame, uint16_t frame_len)
 {
     const uint8_t *payload;
@@ -210,20 +209,17 @@ void packet_rx(struct netdev *nd, uint16_t ethertype, const uint8_t *frame, uint
     len = (uint16_t)(frame_len - ETH_HDR_SIZE);
     copy_len = len > PACKET_SLOT_SIZE ? PACKET_SLOT_SIZE : len;
 
-    /* Runs in the receive interrupt, where interrupts are already off; the
-       table and the queues are touched without taking net_lock again. */
     for (b = packets; b; b = b->next) {
         struct packet_queue *q = &b->q;
         int slot;
 
         if (b->sock->protocol != ethertype) {
-            continue; /* another EtherType, or a socket that asked for none */
+            continue;
         }
         if (b->ifindex != 0 && b->ifindex != arrived_on) {
-            continue; /* another interface's traffic */
+            continue;
         }
         if (q->count == PACKET_QUEUE_SLOTS) {
-            /* Drop the newest, keeping the unread ones in order; log once. */
             q->dropped++;
             if (!q->reported) {
                 q->reported = 1;
@@ -293,7 +289,7 @@ int packet_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len)
     return copy_len;
 }
 
-/* Keep the waiting datagram's address as the one `packet_last_addr`
+/** Keep the waiting datagram's address as the one `packet_last_addr`
  * reports; the caller holds `net_lock` and has found a datagram waiting. */
 static void keep_head_addr(struct packet_queue *q)
 {
@@ -349,10 +345,8 @@ int packet_last_addr(struct socket *sock, uint8_t *sll)
     }
     sll[0] = (uint8_t)(AF_PACKET & 0xff);
     sll[1] = (uint8_t)((AF_PACKET >> 8) & 0xff);
-    /* The frame's own EtherType, not the socket's, which a bind may change. */
     sll[2] = (uint8_t)((q->last_proto >> 8) & 0xff); /* network order */
     sll[3] = (uint8_t)(q->last_proto & 0xff);
-    /* The interface the datagram arrived on, not always the first. */
     sll[4] = q->last_ifindex;
     sll[8] = (uint8_t)PACKET_HATYPE_ETHER;
     sll[10] = q->last_pkttype;
@@ -380,7 +374,6 @@ int packet_send(struct socket *sock, int ifindex, const uint8_t *dst_mac, uint16
     if (ifindex != 0 && (ifindex < 1 || ifindex > netdev_seen_count())) {
         return -ENODEV;
     }
-    /* The Ethernet transmit buffer is shared with the receive interrupt. */
     flags = net_lock();
     b = binding_of(sock);
     if (ifindex == 0 && b) {

@@ -1,9 +1,7 @@
 /*
- * raw.c: AF_INET SOCK_RAW sockets, what `ping` and `traceroute` are built on.
- *
- * The contract and the reasoning are in raw.h. What is here is the table of
- * registered sockets and the receive side; `sendto` in syscall_net.c builds
- * a raw send.
+ * raw.c: AF_INET SOCK_RAW sockets, as raw.h describes them: the list of
+ * registered sockets and their receive queues. `sendto` in syscall_net.c
+ * makes a raw send.
  */
 
 #include "../../klog.h"
@@ -31,7 +29,7 @@ struct raw_queue {
     int head;  /* the next datagram to be read */
     int count; /* how many are waiting */
     int dropped;
-    int reported;
+    int reported; /* whether a drop has been logged */
     uint32_t last_src;
 };
 
@@ -111,6 +109,9 @@ void raw_unregister(struct socket *sock)
     net_unlock(flags);
 }
 
+/** `ip_rx` runs with interrupts off, so the list and the queues are touched
+ * without taking `net_lock`. A full queue drops the newest datagram and
+ * keeps the unread ones in order. */
 void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len)
 {
     uint16_t copy_len = total_len > RAW_SLOT_SIZE ? RAW_SLOT_SIZE : total_len;
@@ -123,7 +124,6 @@ void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len)
     src = ((uint32_t)data[12] << 24) | ((uint32_t)data[13] << 16) | ((uint32_t)data[14] << 8) |
           (uint32_t)data[15];
 
-    /* ip_rx runs with interrupts off, so net_lock is not taken here. */
     for (b = raws; b; b = b->next) {
         struct raw_queue *q = &b->q;
         int slot;
@@ -132,7 +132,6 @@ void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len)
             continue;
         }
         if (q->count == RAW_QUEUE_SLOTS) {
-            /* Drop the newest, keeping the unread ones in order; log once. */
             q->dropped++;
             if (!q->reported) {
                 q->reported = 1;

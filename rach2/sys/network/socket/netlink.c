@@ -1,7 +1,7 @@
 /*
- * netlink.c: NETLINK_ROUTE and NETLINK_SOCK_DIAG sockets. The contract is in
- * netlink.h; what is here is the reading of requests and the building of the
- * answers from the interface records and the sockets.
+ * netlink.c: AF_NETLINK sockets, as netlink.h describes them: the reading of
+ * requests, the changes they ask for, and the answers, built from the
+ * interface records, the route table, the ARP cache and the sockets.
  */
 
 #include "netlink.h"
@@ -159,16 +159,19 @@ struct nl_dgram {
 struct netlink_state {
     struct netlink_state *next; /* every netlink socket's, for the port ids */
     int protocol;
+    /* The port id and the multicast groups the bind set; `bound` is 1 once
+     * there has been one. */
     uint32_t pid;
     uint32_t groups;
     int bound;
-    struct nl_dgram *head, *tail;
+    struct nl_dgram *head, *tail; /* the answers queued, oldest first */
 };
 
 static struct netlink_state *states;
 
-/* An answer being built: the datagram so far and the request's sequence
- * number and port id, which every message of the answer repeats. */
+/* An answer being built: the datagram so far, the request's sequence
+ * number and the socket's port id, which every message of the answer
+ * repeats, and whether a datagram of it could not be queued. */
 struct nl_build {
     struct socket *sock;
     uint8_t buf[NL_DGRAM_MAX];
@@ -182,6 +185,8 @@ struct nl_build {
  * above 2^31, where no process id is. */
 static uint32_t next_port = 0x80000000u;
 
+/** Netlink's integers are in the host's order, which is little-endian on
+ * x86; these store and load them at any alignment. */
 static void put16(uint8_t *p, uint16_t v)
 {
     p[0] = (uint8_t)v;
@@ -204,6 +209,7 @@ static uint32_t get32(const uint8_t *p)
     return (uint32_t)get16(p) | ((uint32_t)get16(p + 2) << 16);
 }
 
+/** The netlink state of `sock`, NULL once it is closed. */
 static struct netlink_state *state_of(struct socket *sock)
 {
     return (struct netlink_state *)sock->netlink;
@@ -258,7 +264,8 @@ void netlink_close(struct socket *sock)
     kfree(st);
 }
 
-/* Whether another netlink socket has port id `pid`; net_lock held. */
+/** Whether a netlink socket other than `self` is bound to port id `pid`.
+ * The caller holds `net_lock`. */
 static int port_taken(const struct netlink_state *self, uint32_t pid)
 {
     const struct netlink_state *o;
@@ -305,7 +312,9 @@ void netlink_name(struct socket *sock, uint8_t *sa)
     put32(sa + 8, st->groups);
 }
 
-/* Queue the datagram built so far, if it has anything. */
+/** Queue the datagram built so far on the socket, if it has anything, and
+ * wake a reader. A datagram that cannot be allocated marks the answer
+ * failed. */
 static void nl_flush(struct nl_build *b)
 {
     struct netlink_state *st = state_of(b->sock);
@@ -335,8 +344,9 @@ static void nl_flush(struct nl_build *b)
     wq_wake(&b->sock->waiters, WQ_DATA);
 }
 
-/* Start a message of `type` in `msg` with `body` bytes of zeroed body;
- * returns where the body starts. */
+/** Start a message of `type` and `flags` in `msg`, NL_MSG_MAX bytes that
+ * this zeroes, with the answer's sequence number and port id and `body`
+ * bytes of body; returns where the body starts. */
 static uint8_t *msg_start(const struct nl_build *b, uint8_t *msg, uint16_t type, uint16_t flags,
                           uint32_t body)
 {
@@ -349,7 +359,8 @@ static uint8_t *msg_start(const struct nl_build *b, uint8_t *msg, uint16_t type,
     return msg + NLMSG_HDRLEN;
 }
 
-/* Append attribute `type` of `len` bytes to `msg`, padded to four. */
+/** Append attribute `type` of `len` bytes to the message `msg`, padded to
+ * four, and add it to the message's length. */
 static void msg_attr(uint8_t *msg, uint16_t type, const void *data, uint16_t len)
 {
     uint32_t at = get32(msg);
@@ -360,6 +371,7 @@ static void msg_attr(uint8_t *msg, uint16_t type, const void *data, uint16_t len
     put32(msg, at + ((4u + len + 3u) & ~3u));
 }
 
+/** A 32-bit attribute, in the host's order. */
 static void msg_attr32(uint8_t *msg, uint16_t type, uint32_t v)
 {
     uint8_t le[4];
@@ -368,7 +380,7 @@ static void msg_attr32(uint8_t *msg, uint16_t type, uint32_t v)
     msg_attr(msg, type, le, 4);
 }
 
-/* An IPv4 address attribute: the address in network order, as it goes on
+/** An IPv4 address attribute: the address in network order, as it goes on
  * the wire. */
 static void msg_attr_ip(uint8_t *msg, uint16_t type, uint32_t ip)
 {
@@ -381,7 +393,7 @@ static void msg_attr_ip(uint8_t *msg, uint16_t type, uint32_t ip)
     msg_attr(msg, type, be, 4);
 }
 
-/* Add the finished message `msg` to the answer, in a new datagram when the
+/** Add the finished message `msg` to the answer, in a new datagram when the
  * current one has no room. An answer whose datagram could not be queued
  * takes nothing more: the bytes it holds are still there, with no room
  * after them. */
@@ -399,6 +411,7 @@ static void nl_append(struct nl_build *b, const uint8_t *msg)
     b->len += len;
 }
 
+/** The prefix length of the netmask `mask`: its leading one bits. */
 static uint32_t prefix_of(uint32_t mask)
 {
     uint32_t n = 0;
@@ -409,13 +422,15 @@ static uint32_t prefix_of(uint32_t mask)
     return n;
 }
 
-/* A link, with its counters in Linux's `struct rtnl_link_stats`, 24 words
- * of which this interface keeps seven: the packets, bytes and drops each
- * way, and the receive errors; and the same in `struct rtnl_link_stats64`,
- * 25 eight-byte words, which Linux sends beside it and iproute2 reads
- * first, and without which it prints a counter of the second set that the
- * first does not have, the drops for other hosts, from memory it never
- * set. */
+/**
+ * Append the message of the link `nd`, with `flags`. Its counters go in
+ * Linux's `struct rtnl_link_stats`, 24 words of which this interface keeps
+ * seven: the packets, bytes and drops each way, and the receive errors. They
+ * go again in `struct rtnl_link_stats64`, 25 eight-byte words, which Linux
+ * sends beside it and iproute2 reads first; without it iproute2 prints a
+ * counter that only the second set has, the drops for other hosts, from
+ * memory it never set.
+ */
 static void link_msg(struct nl_build *b, const struct netdev *nd, uint16_t flags)
 {
     uint8_t msg[NL_MSG_MAX];
@@ -452,9 +467,9 @@ static void link_msg(struct nl_build *b, const struct netdev *nd, uint16_t flags
     nl_append(b, msg);
 }
 
-/* A neighbour, the ARP cache's mapping `row`, on the interface of index
- * `index`. The cache keeps no age, so every mapping is reachable, but for
- * one set by hand as permanent. */
+/** Append a neighbour, the ARP cache's mapping `row`, on the interface of
+ * index `index`. The cache keeps no age, so every mapping is reachable, but
+ * for one set by hand as permanent. */
 static void neigh_msg(struct nl_build *b, const struct arp_row *row, int index)
 {
     uint8_t msg[NL_MSG_MAX];
@@ -469,7 +484,7 @@ static void neigh_msg(struct nl_build *b, const struct arp_row *row, int index)
     nl_append(b, msg);
 }
 
-/* Whether the interface name `name`, in an array of `cap` bytes, is the
+/** Whether the interface name `name`, in an array of `cap` bytes, is the
  * `len` bytes at `text`, which may end at the name's NUL, run on past it, or
  * stop at its last letter, since a netlink string needs no terminator. */
 static int same_name(const char *name, uint32_t cap, const char *text, uint32_t len)
@@ -487,8 +502,8 @@ static int same_name(const char *name, uint32_t cap, const char *text, uint32_t 
     return len == cap || name[len] == '\0';
 }
 
-/*
- * The interface a request for one link names: by the index of its
+/**
+ * The interface a request for one link names, or NULL: by the index of its
  * `ifinfomsg`, or with that 0, by its IFLA_IFNAME attribute, which is how
  * `ip link show eth0` asks. `body` is the request's length past its header.
  */
@@ -527,9 +542,9 @@ static struct netdev *link_asked(const uint8_t *req, uint32_t body)
     return 0;
 }
 
-/*
- * The neighbours a dump request `req` of `body` bytes asks for, from a
- * snapshot of the ARP cache: none for a family other than IPv4 or any, or
+/**
+ * Append the neighbours a dump request `req` of `body` bytes asks for, from
+ * a snapshot of the ARP cache: none for a family other than IPv4 or any, or
  * for the proxy table, which this kernel has none of, and only those of one
  * interface when its `ndmsg` or an NDA_IFINDEX attribute names one.
  */
@@ -569,7 +584,8 @@ static void neigh_dump(struct nl_build *b, const uint8_t *req, uint32_t body)
     }
 }
 
-/* Address `ip`/`mask` of `nd`, its first or, with `secondary`, another. */
+/** Append the address `ip`/`mask` of `nd`, its first or, with `secondary`,
+ * another. */
 static void addr_msg(struct nl_build *b, const struct netdev *nd, uint32_t ip, uint32_t mask,
                      int secondary)
 {
@@ -590,7 +606,7 @@ static void addr_msg(struct nl_build *b, const struct netdev *nd, uint32_t ip, u
     nl_append(b, msg);
 }
 
-/* Every address of `nd`, its first then the others. */
+/** Append every address of `nd`, its first then the others. */
 static void addr_msgs(struct nl_build *b, const struct netdev *nd)
 {
     int i;
@@ -603,8 +619,8 @@ static void addr_msgs(struct nl_build *b, const struct netdev *nd)
     }
 }
 
-/* The route `r` of the table: a subnet an address implies, reached on the
- * link, an interface's gateway, or a route a program added. */
+/** Append the route `r` of the table: a subnet an address implies, reached
+ * on the link, an interface's gateway, or a route a program added. */
 static void route_msg(struct nl_build *b, const struct netdev_rt *r)
 {
     uint8_t msg[NL_MSG_MAX];
@@ -635,7 +651,7 @@ static void route_msg(struct nl_build *b, const struct netdev_rt *r)
     nl_append(b, msg);
 }
 
-/* The destination of an RTM_GETROUTE request, its RTA_DST, or 0 when it
+/** The destination of an RTM_GETROUTE request, its RTA_DST, or 0 when it
  * names none. */
 static uint32_t route_asked(const uint8_t *req, uint32_t body)
 {
@@ -657,11 +673,11 @@ static uint32_t route_asked(const uint8_t *req, uint32_t body)
     return 0;
 }
 
-/* The answer to `ip route get`: the route `dst` takes, as Linux reports a
- * route it looked up (RTM_F_CLONED), through the interface and next hop
- * `netdev_route` chooses, or for an address of this machine or of 127/8 a
- * local route on `lo`, from 127.0.0.1 for 127/8 and from `dst` itself
- * otherwise; -ENETUNREACH when nothing reaches it. */
+/** Append the answer to `ip route get`: the route `dst` takes, as Linux
+ * reports a route it looked up (RTM_F_CLONED), through the interface and
+ * next hop `netdev_route` chooses, or for an address of this machine or of
+ * 127/8 a local route on `lo`, from 127.0.0.1 for 127/8 and from `dst`
+ * itself otherwise. Returns 0, or -ENETUNREACH when nothing reaches it. */
 static int route_get_msg(struct nl_build *b, uint32_t dst)
 {
     uint8_t msg[NL_MSG_MAX];
@@ -705,9 +721,9 @@ static int route_get_msg(struct nl_build *b, uint32_t dst)
     return 0;
 }
 
-/* The three rules every Linux machine starts with, which are what route
- * lookups here amount to: the local addresses, then the main table, then
- * the empty default table. */
+/** Append the three rules every Linux machine starts with, which are what
+ * route lookups here amount to: the local addresses, then the main table,
+ * then the empty default table. */
 static void rule_dump(struct nl_build *b)
 {
     static const uint32_t rules[3][2] = {
@@ -729,8 +745,9 @@ static void rule_dump(struct nl_build *b)
     }
 }
 
-/* A queueing discipline for each interface: `noqueue`, since a frame here
- * goes to the card when it is sent, with no queue in front of it. */
+/** Append a queueing discipline for each interface: `noqueue`, since a
+ * frame here goes to the card when it is sent, with no queue in front of
+ * it. */
 static void qdisc_dump(struct nl_build *b)
 {
     int i;
@@ -753,14 +770,16 @@ static void qdisc_dump(struct nl_build *b)
 }
 
 /*
- * The changes a privileged caller asks for, which `ip` sends, done through
- * the operations the interface ioctls use (netif.c, netconf.c): each answers
- * 0 or a negative errno, which `answer` acknowledges. What an interface here
- * cannot hold is refused with EOPNOTSUPP rather than accepted and dropped:
- * an MTU other than 1500 and a rename.
+ * The changes a privileged caller asks for, which `ip` sends, made through
+ * the operations the interface ioctls use (netif.c, netconf.c, arp.c): each
+ * answers 0 or a negative errno, which `change_answer` acknowledges. What an
+ * interface here cannot hold is refused with EOPNOTSUPP rather than accepted
+ * and dropped: an MTU other than the interface's own and a rename, and on
+ * `lo` being taken down and any change of its addresses, routes or
+ * neighbours.
  */
 
-/* The payload of attribute `type` in the request `req` of `body` bytes past
+/** The payload of attribute `type` in the request `req` of `body` bytes past
  * its header, whose fixed part is `fixed` bytes, with its length in `*len`;
  * NULL when it has none. */
 static const uint8_t *req_attr(const uint8_t *req, uint32_t body, uint32_t fixed, uint16_t type,
@@ -784,7 +803,8 @@ static const uint8_t *req_attr(const uint8_t *req, uint32_t body, uint32_t fixed
     return 0;
 }
 
-/* An IPv4 attribute's address in the host's order, or 0 for none. */
+/** An IPv4 attribute's address in the host's order, or 0 for none or for an
+ * attribute that is not four bytes. */
 static uint32_t req_ip(const uint8_t *req, uint32_t body, uint32_t fixed, uint16_t type)
 {
     uint16_t len;
@@ -795,7 +815,7 @@ static uint32_t req_ip(const uint8_t *req, uint32_t body, uint32_t fixed, uint16
                : 0;
 }
 
-/* The interface of index `index`, or NULL. */
+/** The interface of index `index`, or NULL. */
 static struct netdev *dev_of_index(uint32_t index)
 {
     int i, n = netdev_seen_count();
@@ -810,8 +830,10 @@ static struct netdev *dev_of_index(uint32_t index)
     return 0;
 }
 
-/* RTM_NEWLINK and RTM_SETLINK: up or down by IFF_UP in the change mask, and
- * an MTU or a name only as they are. */
+/** RTM_NEWLINK and RTM_SETLINK: up or down by IFF_UP in the change mask, and
+ * an MTU or a name only as they are. Returns 0, -ENODEV for no such
+ * interface, or -EOPNOTSUPP for another MTU or name or for `lo` taken down,
+ * since it is always up. */
 static int32_t link_change(const uint8_t *req, uint32_t body)
 {
     struct netdev *nd = body >= 16 ? link_asked(req, body) : 0;
@@ -832,15 +854,19 @@ static int32_t link_change(const uint8_t *req, uint32_t body)
     }
     if (get32(req + NLMSG_HDRLEN + 12) & IFF_UP) {
         if (nd->loopback && !(get32(req + NLMSG_HDRLEN + 8) & IFF_UP)) {
-            return -EOPNOTSUPP; /* lo is always up */
+            return -EOPNOTSUPP;
         }
         nd->up = (get32(req + NLMSG_HDRLEN + 8) & IFF_UP) ? 1 : 0;
     }
     return 0;
 }
 
-/* RTM_NEWADDR and RTM_DELADDR: an address of an interface and its prefix,
- * its first or another. */
+/** RTM_NEWADDR and RTM_DELADDR: an address of an interface and its prefix,
+ * its first or another. Returns the result of `netconf_add_address` or
+ * `netconf_del_address`; -ENODEV for no such interface; -EINVAL for an
+ * address of 0 to add; and to add one the interface has, 0, or -EEXIST
+ * with NLM_F_EXCL. On `lo` only that last is answered, and the rest is
+ * EOPNOTSUPP. */
 static int32_t addr_change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_t body)
 {
     struct netdev *nd = body >= 8 ? dev_of_index(get32(req + NLMSG_HDRLEN + 4)) : 0;
@@ -870,8 +896,9 @@ static int32_t addr_change(const uint8_t *req, uint16_t type, uint16_t flags, ui
     return netconf_add_address(nd, ip, mask);
 }
 
-/* The interface a route request is for: the one RTA_OIF names, or, with
- * none named, the one whose subnet has the gateway `gw`, or the first. */
+/** The interface a route request is for: the one RTA_OIF names, NULL when
+ * that is no interface, or, with no RTA_OIF, the one whose subnet has the
+ * gateway `gw`, or the first. */
 static struct netdev *route_dev(const uint8_t *req, uint32_t body, uint32_t gw)
 {
     uint16_t len;
@@ -891,9 +918,10 @@ static struct netdev *route_dev(const uint8_t *req, uint32_t body, uint32_t gw)
     return netdev_first();
 }
 
-/* The default route of `nd`, which is its gateway: set to `gw`, which a
- * route already there refuses with EEXIST unless NLM_F_REPLACE asks, or
- * cleared, which a route not there refuses with ESRCH. */
+/** The default route of `nd`, which is its gateway: set to `gw`, which is
+ * EEXIST with a route already there, unless NLM_F_REPLACE is set or the
+ * route is the same one and NLM_F_EXCL is not; or cleared, which is ESRCH
+ * with no route there. A route to set with no gateway is EINVAL. */
 static int32_t default_route_change(struct netdev *nd, uint16_t type, uint16_t flags, uint32_t gw)
 {
     if (type == RTM_DELROUTE) {
@@ -914,7 +942,8 @@ struct route_req {
     uint32_t dst, mask, gw, metric;
 };
 
-/* A route `r` a program adds to the table by `nd`, or removes from it. */
+/** Add the route `r` to the table by `nd`, or remove it, under `net_lock`:
+ * the result of `netdev_route_add` or `netdev_route_del`. */
 static int32_t added_route_change(struct netdev *nd, uint16_t type, uint16_t flags,
                                   const struct route_req *r)
 {
@@ -927,9 +956,11 @@ static int32_t added_route_change(struct netdev *nd, uint16_t type, uint16_t fla
     return rc;
 }
 
-/* RTM_NEWROUTE and RTM_DELROUTE: the default route of an interface, which is
- * its gateway, the route a subnet implies, which is there while its address
- * is, and any other route, which goes in the table. */
+/** RTM_NEWROUTE and RTM_DELROUTE: the default route of an interface, which
+ * is its gateway, the route a subnet implies, which is there while its
+ * address is, and any other route, which goes in the table. Returns 0 or a
+ * negative errno: -ENODEV for no interface, -EOPNOTSUPP on `lo`, -EINVAL for
+ * a prefix past 32, or that of the change. */
 static int32_t route_change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_t body)
 {
     struct route_req r;
@@ -964,9 +995,12 @@ static int32_t route_change(const uint8_t *req, uint16_t type, uint16_t flags, u
     return added_route_change(nd, type, flags, &r);
 }
 
-/* RTM_DELNEIGH: forget a mapping, which `ip neigh flush` asks for each;
+/** RTM_DELNEIGH: forget a mapping, which `ip neigh flush` asks for each;
  * RTM_NEWNEIGH: store one by hand, permanent when its state says so, which
- * `ip neigh add ... nud permanent` asks. */
+ * `ip neigh add ... nud permanent` asks. Returns the result of `arp_forget`
+ * or `arp_set`; -EINVAL for a request without an address, with an index no
+ * interface has, or, to store, without an interface or a six-byte MAC; or
+ * -EOPNOTSUPP on `lo`. */
 static int32_t neigh_change(const uint8_t *req, uint16_t type, uint32_t body)
 {
     uint32_t ip = req_ip(req, body, 12, NDA_DST);
@@ -990,7 +1024,7 @@ static int32_t neigh_change(const uint8_t *req, uint16_t type, uint32_t body)
     return arp_set(nd, ip, mac, (get16(req + NLMSG_HDRLEN + 8) & NUD_PERMANENT) != 0);
 }
 
-/* Whether `type` asks for a change rather than a reading. */
+/** Whether `type` asks for a change rather than a reading. */
 static int is_change(uint16_t type)
 {
     return type == RTM_NEWLINK || type == RTM_SETLINK || type == RTM_NEWADDR ||
@@ -998,8 +1032,8 @@ static int is_change(uint16_t type)
            type == RTM_NEWNEIGH || type == RTM_DELNEIGH;
 }
 
-/* The answer to the change `req` asks for: EPERM for a caller without
- * privilege, else its handler's. */
+/** Make the change `req` asks for: -EPERM for a caller without privilege,
+ * else its handler's result. */
 static int32_t change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_t body)
 {
     if (!current_proc || !proc_privileged(current_proc)) {
@@ -1020,8 +1054,9 @@ static int32_t change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_
     return -EOPNOTSUPP;
 }
 
-/* The message that ends a dump, or an NLMSG_ERROR of `error` answering the
- * request whose header is `req`, 0 being an acknowledgement. */
+/** Append the message that ends a dump, with `req` NULL, or an NLMSG_ERROR
+ * of `error` answering the request whose header is `req`, 0 being an
+ * acknowledgement. */
 static void end_msg(struct nl_build *b, const uint8_t *req, int32_t error)
 {
     uint8_t msg[NL_MSG_MAX];
@@ -1038,7 +1073,7 @@ static void end_msg(struct nl_build *b, const uint8_t *req, int32_t error)
     nl_append(b, msg);
 }
 
-/* Make the change `req` asks for and acknowledge it: with its error, or
+/** Make the change `req` asks for and acknowledge it: with its error, or
  * with 0 when NLM_F_ACK asks for an acknowledgement. */
 static void change_answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16_t flags,
                           uint32_t body)
@@ -1050,11 +1085,12 @@ static void change_answer(struct nl_build *b, const uint8_t *req, uint16_t type,
     }
 }
 
-/*
- * The IPv4 configuration of the interface of index `index`, or of all and of
- * the default with Linux's -1 and -2, as `ip netconf` reads it: forwarding,
- * the reverse-path filter, multicast forwarding, proxy ARP and the routes
- * through a link that is down, each 0, since this stack does none of them.
+/**
+ * Append the IPv4 configuration of the interface of index `index`, or of all
+ * and of the default with Linux's -1 and -2, as `ip netconf` reads it:
+ * forwarding, the reverse-path filter, multicast forwarding, proxy ARP and
+ * the routes through a link that is down, each 0, since this stack does none
+ * of them.
  */
 static void netconf_msg(struct nl_build *b, uint32_t index, uint16_t flags)
 {
@@ -1070,7 +1106,7 @@ static void netconf_msg(struct nl_build *b, uint32_t index, uint16_t flags)
     nl_append(b, msg);
 }
 
-/* RTM_GETNETCONF: with NLM_F_DUMP, a message for each interface, then all
+/** RTM_GETNETCONF: with NLM_F_DUMP, a message for each interface, then all
  * and the default, for IPv4 or any family; otherwise the one its
  * NETCONFA_IFINDEX names, EINVAL with none and ENODEV for an index no
  * interface has. */
@@ -1110,16 +1146,16 @@ static void netconf_answer(struct nl_build *b, const uint8_t *req, uint16_t flag
     netconf_msg(b, index, 0);
 }
 
-/* Answer the request of `type` and `flags`, whose header is `req` and whose
- * body of `body` bytes follows it. */
+/** Answer the NETLINK_ROUTE request of `type` and `flags`, whose header is
+ * `req` and whose body of `body` bytes follows it. In a network namespace
+ * with no interface, a change or a question about one finds none, and a
+ * dump is empty. */
 static void answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16_t flags,
                    uint32_t body)
 {
     int i, n = netdev_seen_count();
 
     if (!net_ns_seen()) {
-        /* A network namespace with no interface: a change or a question
-         * about one finds none, and a dump is empty. */
         if (is_change(type) || (flags & NLM_F_DUMP) != NLM_F_DUMP) {
             end_msg(b, req, type == RTM_GETROUTE ? -ENETUNREACH : -ENODEV);
         } else {
@@ -1208,6 +1244,8 @@ struct diag_inet {
     uint32_t rqueue, wqueue, uid, inode;
 };
 
+/** Store a 16-bit or 32-bit value in network order, as the ports and
+ * addresses of the diagnostic messages are. */
 static void put_be16(uint8_t *p, uint16_t v)
 {
     p[0] = (uint8_t)(v >> 8);
@@ -1220,7 +1258,7 @@ static void put_be32(uint8_t *p, uint32_t v)
     put_be16(p + 2, (uint16_t)v);
 }
 
-/* Write `d` into `msg` as an inet_diag_msg, the ports and addresses in
+/** Write `d` into `msg` as an inet_diag_msg, the ports and addresses in
  * network order and the cookie its inode; with `protocol` not -1, a raw
  * socket's, the INET_DIAG_PROTOCOL attribute too. Returns `msg`, for the
  * caller to add attributes to and append. */
@@ -1250,7 +1288,7 @@ static uint8_t *inet_diag_msg_of(const struct nl_build *b, uint8_t *msg, const s
     return msg;
 }
 
-/*
+/**
  * The first TCP_INFO_LEN bytes of Linux's `struct tcp_info` for `r`, which
  * `ss -i` prints: the state, the loss recovery, the timeouts in a row, the
  * options and window shifts, the retransmission timeout and the round trip
@@ -1283,7 +1321,7 @@ static void tcp_info_of(const struct tcp_row *r, uint8_t *info)
     put32(info + 100, r->retransmits);
 }
 
-/* The timer of `r` that `ss -o` shows, into `d`: TIME_WAIT's end, a
+/** The timer of `r` that `ss -o` shows, into `d`: TIME_WAIT's end, a
  * retransmission or a zero-window probe, with the milliseconds left. */
 static void tcp_timer_of(const struct tcp_row *r, struct diag_inet *d)
 {
@@ -1301,9 +1339,10 @@ static void tcp_timer_of(const struct tcp_row *r, struct diag_inet *d)
     }
 }
 
-/* The TCP connections whose states are in the mask `wanted`, with the
- * TCP information and the congestion control's name when the mask `ext` of
- * extensions asks for them; 0, or -ENOMEM when they could not be copied. */
+/** Append the TCP connections whose states are in the mask `wanted`, with
+ * the TCP information and the congestion control's name when the mask `ext`
+ * of extensions asks for them; 0, or -ENOMEM when they could not be
+ * copied. */
 static int diag_tcp(struct nl_build *b, uint32_t wanted, uint8_t ext)
 {
     struct tcp_row *rows;
@@ -1344,9 +1383,10 @@ static int diag_tcp(struct nl_build *b, uint32_t wanted, uint8_t ext)
     return 0;
 }
 
-/* The UDP sockets, or with `type` SOCK_RAW the raw ones, whose states are
- * in the mask `wanted`: 1 for a connected socket and 7 for the rest; 0, or
- * -ENOMEM. */
+/** Append the UDP sockets, or with `type` SOCK_RAW the raw ones, whose
+ * states are in the mask `wanted`: 1 for a connected socket and 7 for the
+ * rest. A raw socket's port is its protocol, IPPROTO_RAW for the ioctl
+ * descriptor, which is opened with it. Returns 0, or -ENOMEM. */
 static int diag_dgram(struct nl_build *b, int type, uint32_t wanted)
 {
     struct socket_row *rows;
@@ -1362,7 +1402,7 @@ static int diag_dgram(struct nl_build *b, int type, uint32_t wanted)
         }
         d.sport = rows[i].local_port;
         if (type == SOCK_RAW && d.sport == 0) {
-            d.sport = IPPROTO_RAW; /* the ioctl descriptor is opened with it */
+            d.sport = IPPROTO_RAW;
         }
         d.src = rows[i].local_ip;
         d.dport = rows[i].connected ? rows[i].remote_port : 0;
@@ -1379,8 +1419,9 @@ static int diag_dgram(struct nl_build *b, int type, uint32_t wanted)
     return 0;
 }
 
-/* The AF_UNIX sockets whose states are in the mask `wanted`, with the
- * attributes the mask `show` asks for; 0, or -ENOMEM. */
+/** Append the AF_UNIX sockets whose states are in the mask `wanted`, with
+ * the attributes the mask `show` asks for; 0, or -ENOMEM. A path is given
+ * with its NUL, as Linux keeps it; an abstract name has none. */
 static int diag_unix(struct nl_build *b, uint32_t wanted, uint32_t show)
 {
     struct unix_row *rows;
@@ -1403,8 +1444,6 @@ static int diag_unix(struct nl_build *b, uint32_t wanted, uint32_t show)
         put32(body + 4, r->inode);
         put32(body + 8, r->inode);
         if ((show & UDIAG_SHOW_NAME) && r->name_len > 0) {
-            /* A path is given with its NUL, as Linux keeps it; an abstract
-             * name has none. */
             msg_attr(msg, UNIX_DIAG_NAME, r->path,
                      (uint16_t)(r->path[0] ? r->name_len + 1 : r->name_len));
         }
@@ -1428,7 +1467,7 @@ static int diag_unix(struct nl_build *b, uint32_t wanted, uint32_t show)
     return 0;
 }
 
-/* The protocol of an AF_INET request `r` of `body` bytes: the byte in the
+/** The protocol of an AF_INET request `r` of `body` bytes: the byte in the
  * request, or the INET_DIAG_REQ_PROTOCOL attribute after it, which a
  * protocol numbered past 255 is asked by. */
 static uint32_t diag_protocol(const uint8_t *r, uint32_t body)
@@ -1449,10 +1488,13 @@ static uint32_t diag_protocol(const uint8_t *r, uint32_t body)
     return r[1];
 }
 
-/* Answer a NETLINK_SOCK_DIAG request of `type` and `flags`, whose header
+/** Answer a NETLINK_SOCK_DIAG request of `type` and `flags`, whose header
  * is `req` and whose body of `body` bytes follows it: the dump and its end,
  * or ENOENT for a family or protocol with no sockets here, as Linux answers
- * one no module handles, or ENOMEM when the sockets could not be copied. */
+ * one no module handles, or ENOMEM when the sockets could not be copied. A
+ * type other than SOCK_DIAG_BY_FAMILY is EINVAL and a request that is not a
+ * dump EOPNOTSUPP. In a network namespace other than the first the dump is
+ * empty, since its sockets are in no table. */
 static void diag_answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16_t flags,
                         uint32_t body)
 {
@@ -1465,7 +1507,7 @@ static void diag_answer(struct nl_build *b, const uint8_t *req, uint16_t type, u
         return;
     }
     if (!net_ns_seen()) {
-        end_msg(b, 0, 0); /* its sockets are in no table */
+        end_msg(b, 0, 0);
         return;
     }
     if ((flags & NLM_F_DUMP) != NLM_F_DUMP) {

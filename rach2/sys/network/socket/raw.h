@@ -6,7 +6,8 @@
 struct socket;
 
 /*
- * raw: AF_INET SOCK_RAW sockets, what `ping` and `traceroute` are built on.
+ * raw: AF_INET SOCK_RAW sockets of IPPROTO_ICMP, what `ping` and
+ * `traceroute` are built on.
  *
  * A raw socket receives whole IPv4 datagrams of one protocol, the header
  * included, because that is what the programs parse: busybox `ping` reads the
@@ -21,32 +22,37 @@ struct socket;
  * socket sees on Linux too without a promiscuous device: `ip_rx` has already
  * dropped everything else.
  *
- * A send takes an ICMP message the caller built, checksum included, and this
- * layer supplies the IPv4 header. The checksum is not recomputed: it is the
- * caller's, and a program that deliberately sends a wrong one is testing
- * something.
+ * A send takes an ICMP message the caller built, checksum included:
+ * `sendto` (syscall_net.c) gives it to `ip_tx`, which supplies the IPv4
+ * header. The checksum is not recomputed: it is the caller's, and a program
+ * that sends a wrong one on purpose is testing something.
  *
- * Opening one is restricted to effective uid 0, as on Linux, because it reads
- * every datagram of its protocol the machine receives and sends datagrams no
- * transport layer checked.
+ * Opening one is restricted to a privileged process (`proc_privileged`), as
+ * on Linux, because it reads every datagram of its protocol the machine
+ * receives and sends datagrams no transport layer checked.
  */
 
 /**
- * Register `sock` to receive IPv4 protocol `proto`, or return a negative errno.
- *
- * Called when the socket is created, since a raw socket's protocol is chosen
- * there and not by a later bind.
+ * Register `sock` to receive IPv4 protocol `proto`, with a queue from the
+ * heap, or change the protocol of a registration it has. Returns 0, or
+ * -ENOBUFS with no memory. Called when the socket is created, since a raw
+ * socket's protocol is chosen there and not by a later bind. Takes
+ * `net_lock` itself.
  */
 int raw_register(struct socket *sock, uint8_t proto);
 
-/** Remove a socket from the delivery table; called when the last fd closes. */
+/** Remove a socket's registration and free its queue, when its last
+ * reference goes (`socket_unref`). Takes `net_lock` itself. */
 void raw_unregister(struct socket *sock);
 
 /**
  * Offer one received datagram to every raw socket of its protocol.
  *
- * `data` is the whole datagram, header included, and `total_len` its length.
- * Called from `ip_rx` after the datagram has been accepted for this machine
+ * `data` is the whole datagram, header included, and `total_len` its length;
+ * one shorter than an IP header is ignored, and one past RAW_SLOT_SIZE, 1500
+ * bytes, is cut to that size. A socket whose queue of eight is full drops
+ * it, the newest, and the first such drop is logged. Called with interrupts
+ * off, from `ip_rx`, after the datagram has been accepted for this machine
  * and before the kernel's own handler for the protocol.
  */
 void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len);
@@ -66,13 +72,16 @@ int raw_ready(struct socket *sock);
 /** Bytes in the waiting datagram, or -1 when the queue is empty. */
 int raw_pending(struct socket *sock);
 
-/** Copy up to `len` bytes from `offset` into the waiting datagram, in place. */
+/** Copy up to `len` bytes of the waiting datagram, from `offset` bytes into
+ * it, leaving it in place: the count copied, 0 at or past its end or for a
+ * negative `len`, or -1 when the queue is empty. */
 int raw_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len);
 
 /** Drop the waiting datagram, keeping the address it came from. */
 void raw_consume(struct socket *sock);
 
-/** The source address of the datagram most recently taken, or 0. */
+/** The source address of the datagram most recently taken, or 0 when none
+ * has been. */
 uint32_t raw_last_src(struct socket *sock);
 
 /** The source address of the oldest waiting datagram, or 0 with none. */
