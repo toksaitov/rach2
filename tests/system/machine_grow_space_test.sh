@@ -111,6 +111,8 @@ start=266240
 seed=2097152
 count=488130928
 disk_id=1acef00d
+table=mbr
+identity=MBRID=1acef00d
 case "$1" in
     work)
         prepare_work

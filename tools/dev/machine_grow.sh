@@ -6,7 +6,8 @@
 #
 # Usage: machine_grow.sh save|grow|restore DISK STORE PLAN-DIRECTORY
 #
-# DISK is a whole-disk node, /dev/diskN. STORE is the mount point of an exFAT
+# DISK is a whole-disk node, /dev/diskN, with an MBR or a GUID table, as the
+# plan's disk identifier says. STORE is the mount point of an exFAT
 # volume on another disk, with the seed root as seed.ext2. PLAN-DIRECTORY,
 # copied under /tmp, is what machine_grow_plan.sh made; tools/Readme.md gives
 # the procedure. Run it only after the owner has approved the devices it
@@ -17,7 +18,8 @@
 # checks the copy against the disk; `grow` and `restore` require the host's
 # check of that copy, STORE/saved/host.sha256. `grow` makes the boot
 # partition start recovery, writes the seed and a partition table whose root
-# is the seed's size, and times `growroot --measure`. `restore` writes the
+# is the seed's size, an edited copy of the saved MBR or the GUID table that
+# `diskctl shrink` writes, and times `growroot --measure`. `restore` writes the
 # saved ranges back and checks the result. The exit status is 0 when the
 # action finished, 1 when it failed, and 129, 130 or 143 after a hangup, an
 # interrupt or a termination.
@@ -115,14 +117,30 @@ for value in "$sectors" "$start" "$seed" "$count"; do
     case "$value" in ''|*[!0-9]*|0*) fail 'invalid plan number' ;; esac
     [ "${#value}" -le 10 ] && [ "$value" -le 4294967295 ] || fail 'plan number too large'
 done
-[ "$start" = 266240 ] && [ "$count" = "$((sectors - start))" ] \
-    && [ "$seed" -lt "$count" ] || fail 'unexpected root geometry'
 case "$serial" in ''|*[!A-Za-z0-9_-]*) fail 'invalid serial' ;; esac
-case "$disk_id:$seed_hash" in *[!0-9a-f:]*) fail 'invalid plan hash or disk identifier' ;; esac
-[ "${#disk_id}" = 8 ] && [ "${#seed_hash}" = 64 ] || fail 'short plan hash or disk identifier'
-bytes=$(awk -v end="$sectors" -v root="$start" -v seed="$seed" '
+case "$seed_hash" in *[!0-9a-f]*) fail 'invalid plan hash' ;; esac
+[ "${#seed_hash}" = 64 ] || fail 'short plan hash'
+# The table the disk identifier names: an MBR, whose signature has eight
+# digits, or a GUID table. A GUID table's root ends before the backup array
+# and header in the disk's last 33 sectors, the backup is the last saved
+# range, and the first saved range is sectors 0 to 39, the protective MBR
+# and the primary table in whole 4096-byte blocks, where an MBR's is sector
+# 0 in one block.
+h='[0-9a-f]'
+h4=$h$h$h$h
+# The patterns are meant as globs.
+# shellcheck disable=SC2254
+case "$disk_id" in
+    $h4$h4) table=mbr; table_sectors=8; root_end=$sectors; identity="MBRID=$disk_id" ;;
+    $h4$h4-$h4-$h4-$h4-$h4$h4$h4)
+        table=gpt; table_sectors=40; root_end=$((sectors - 33)); identity="GPTID=$disk_id" ;;
+    *) fail 'invalid disk identifier' ;;
+esac
+[ "$start" = 266240 ] && [ "$count" = "$((root_end - start))" ] \
+    && [ "$seed" -lt "$count" ] || fail 'unexpected root geometry'
+bytes=$(awk -v end="$sectors" -v root="$start" -v seed="$seed" -v table="$table_sectors" '
     NF != 2 || $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ { exit 1 }
-    NR == 1 && ($1 != 0 || $2 != 8) { exit 1 }
+    NR == 1 && ($1 != 0 || $2 != table) { exit 1 }
     NR == 2 && ($1 != root || $2 < seed) { exit 1 }
     $2 == 0 || $1 < previous || $1 + $2 > end { exit 1 }
     NR > 1 && $1 < root { exit 1 }
@@ -145,14 +163,24 @@ awk -v d="$number" -v serial="$serial" '
 ' "$work/disk.before" || fail 'disk serial, sector size or mount state changed'
 if [ "$action" != restore ]; then
     [ "$(diskctl id "$disk")" = "$disk_id" ] || fail 'disk identifier changed'
-    awk -v d="$number" -v s="$start" -v n="$count" '
-        $1 == "part" && $2 == d {
+    # A GUID table's entries are listed by their partition GUIDs, not their
+    # types; entry 4 is the BIOS boot partition before the first megabyte.
+    awk -v d="$number" -v s="$start" -v n="$count" -v table="$table" '
+        $1 == "disk" && $2 == d && $6 == table { kind++ }
+        $1 == "part" && $2 == d && table == "mbr" {
             parts++
             if ($3 == 1 && $4 == 2048 && $5 == 131072 && $6 == "mbr:0c") good++
             if ($3 == 2 && $4 == 133120 && $5 == 131072 && $6 == "mbr:0c") good++
             if ($3 == 3 && $4 == s && $5 == n && $6 == "mbr:83") good++
         }
-        END { if (parts != 3 || good != 3) exit 1 }
+        $1 == "part" && $2 == d && table == "gpt" {
+            parts++
+            if ($3 == 1 && $4 == 2048 && $5 == 131072) good++
+            if ($3 == 2 && $4 == 133120 && $5 == 131072) good++
+            if ($3 == 3 && $4 == s && $5 == n) good++
+            if ($3 == 4 && $4 == 34 && $5 == 2014) good++
+        }
+        END { if (kind != 1 || parts != good || good != (table == "mbr" ? 3 : 4)) exit 1 }
     ' "$work/disk.before" || fail 'the original partition layout changed'
 fi
 saved="$store/saved"
@@ -211,8 +239,9 @@ check_backup()
 }
 
 # Fail unless the seed has the plan's length and digest, and growset, run on
-# the seed and the root's size, gives the plan's ranges. The ranges come from
-# the seed and the target's geometry, not from a digest supplied with them.
+# the seed and the root's size, gives the plan's ranges, with a GUID table's
+# first range widened and its backup added. The ranges come from the seed
+# and the target's geometry, not from a digest supplied with them.
 check_plan()
 {
     [ "$(wc -c < "$store/seed.ext2" | tr -d ' ')" = "$((seed * 512))" ] || fail 'seed length'
@@ -222,6 +251,16 @@ check_plan()
             cat "$work/growset.log" >&2 || :
             fail "creating $work/expected-ranges.txt; growset failed (see $work/growset.log)"
         }
+    if [ "$table" = gpt ]; then
+        awk -v first="$table_sectors" -v end="$sectors" '
+            NR == 1 && $1 == 0 { $2 = first }
+            { print }
+            END { print end - 33, 33 }
+        ' "$work/expected-ranges.txt" > "$work/table-ranges.txt" \
+            || fail "creating $work/table-ranges.txt"
+        mv "$work/table-ranges.txt" "$work/expected-ranges.txt" \
+            || fail "replacing $work/expected-ranges.txt"
+    fi
     cmp "$work/ranges.txt" "$work/expected-ranges.txt" || fail 'ranges differ from the seed and target geometry'
     rm "$work/expected-ranges.txt"
 }
@@ -360,7 +399,7 @@ run_measured()
 {
     umount -n "$store" || fail 'unmounting the backup volume before timing'
     measured_output=$(
-        { if growroot "MBRID=$disk_id,3" --measure; then code=0; else code=$?; fi
+        { if growroot "$identity,3" --measure; then code=0; else code=$?; fi
           printf '\nmachine-grow-status: %s\n' "$code"
         } 2>&1 | head -c 65537
     ) || { mount -n -t exfat "$source_device" "$store"; fail 'capturing the grow output'; }
@@ -429,16 +468,18 @@ case "$action" in
         umount -n "$store" || fail 'the store is busy; close its files before grow'
         mount -n -t exfat "$source_device" "$store" || fail 'remounting the store before grow'
         prepare_boot
-        dd status=none if="$saved/backup.bin" of="$work/mbr" bs=512 count=1 \
-            2>"$work/mbr-read.log" || fail 'saved MBR'
-        [ "$(wc -c < "$work/mbr")" = 512 ] || fail 'short saved MBR'
-        for shift in 0 8 16 24; do
-            octal=$(printf '%03o' "$(((seed >> shift) & 255))")
-            printf '%b' "\\$octal"
-        done > "$work/count"
-        [ "$(wc -c < "$work/count")" = 4 ] || fail 'partition count encoding'
-        dd status=none if="$work/count" of="$work/mbr" bs=1 seek=490 count=4 conv=notrunc \
-            2>"$work/mbr-edit.log" || fail 'preparing the temporary table'
+        if [ "$table" = mbr ]; then
+            dd status=none if="$saved/backup.bin" of="$work/mbr" bs=512 count=1 \
+                2>"$work/mbr-read.log" || fail 'saved MBR'
+            [ "$(wc -c < "$work/mbr")" = 512 ] || fail 'short saved MBR'
+            for shift in 0 8 16 24; do
+                octal=$(printf '%03o' "$(((seed >> shift) & 255))")
+                printf '%b' "\\$octal"
+            done > "$work/count"
+            [ "$(wc -c < "$work/count")" = 4 ] || fail 'partition count encoding'
+            dd status=none if="$work/count" of="$work/mbr" bs=1 seek=490 count=4 conv=notrunc \
+                2>"$work/mbr-edit.log" || fail 'preparing the temporary table'
+        fi
         keep_recovery
         run_logged seed-write.log reflash -p "$disk" "$((start * 512))" "$((seed * 512))" < "$store/seed.ext2" \
             || fail 'writing the temporary seed; restore from the backup'
@@ -447,8 +488,12 @@ case "$action" in
         echo "$seed_result"
         [ "$(printf '%s\n' "$seed_result" | awk '$2 == "sha256" {print $3}')" = "$seed_hash" ] \
             || fail 'the temporary seed differs; restore from the backup'
-        reflash "$disk" 0 512 < "$work/mbr" || fail 'writing the temporary table'
-        diskctl reread "$disk" || fail 'rereading the temporary table'
+        if [ "$table" = mbr ]; then
+            reflash "$disk" 0 512 < "$work/mbr" || fail 'writing the temporary table'
+            diskctl reread "$disk" || fail 'rereading the temporary table'
+        else
+            run_logged table.log diskctl shrink "$disk" 3 "$seed"
+        fi
         run_measured
         run_logged grown-check.log /sbin/e2fsck -fn "${disk}p3"
         echo 'machine-grow: result: the measured grow and read-only check passed; recovery remains saved'

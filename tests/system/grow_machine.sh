@@ -4,8 +4,11 @@
 # QEMU on a 64 MiB root, booted from the recovery stick, with the backups on
 # an exFAT store.
 #
-# The target is the sealed disk's first 130 MiB, its boot environment set to
-# start recovery, and a 64 MiB root, under a qcow2 overlay. `save` must back
+# The target is the first 130 MiB of SEALED, a disk of the machine's layout,
+# its boot environment set to start recovery, and a 64 MiB root, under a
+# qcow2 overlay. Its table is an MBR, or with RACH2_GROW_TABLE=gpt a GUID
+# table, whose backup takes 33 sectors after the root; SEALED must have the
+# same kind. `save` must back
 # up the ranges and the boot partition without changing the target, and a
 # `grow` before the host has checked the backup must be refused. The host
 # then reads and checks the backup and writes host.sha256; `grow` must grow
@@ -15,8 +18,9 @@
 # with no target byte written; then each of save, grow, restore and the
 # repair of the boot environment is cut at a completed transfer, and a retry
 # must restore every byte and the target must boot without the stick; and
-# machine_grow_full_test.sh and machine_grow_space.sh run. `space` and
-# `space-mutate` give the prepared directory to machine_grow_space.sh.
+# machine_grow_full_test.sh and machine_grow_space.sh run, on an MBR only.
+# `space` and `space-mutate` give the prepared directory to
+# machine_grow_space.sh.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -31,6 +35,12 @@ echo "grow-machine-test: logs: $work"
 current_log=
 started=$(date +%s)
 small=${RACH2_GROW_SMALL:-0}
+table=${RACH2_GROW_TABLE:-mbr}
+case "$table" in
+    mbr) sectors=397312; disk_id=1acef00d ;;
+    gpt) sectors=397345; disk_id=1acef00d-0f1e-4d2c-8b3a-c0ffee000001 ;;
+    *) echo "grow-machine-test: RACH2_GROW_TABLE is mbr or gpt, not $table" >&2; exit 1 ;;
+esac
 # Report $*, print the current boot's log, and exit 1.
 fail()
 {
@@ -69,9 +79,22 @@ for kind in original seed; do
         || fail "formatting $kind"
 done
 cat "$work/original.ext2" >> "$work/base.raw"
-"$mkmbr" --lba --id 1acef00d "$work/base.raw" \
-    2048:131072:0c:boot 133120:131072:0c 266240:131072:83 > "$work/mbr.log"
-sh tools/dev/machine_grow_plan.sh "$work/seed.ext2" 397312 GROWTEST 1acef00d "$work/plan"
+if [ "$table" = mbr ]; then
+    "$mkmbr" --lba --id "$disk_id" "$work/base.raw" \
+        2048:131072:0c:boot 133120:131072:0c 266240:131072:83 > "$work/mbr.log"
+else
+    # The entries of tools/image/mkdisk_grub.sh, with the root filling the
+    # disk as on a grown machine. mkgpt writes zeros for the boot code of
+    # the first sector, so GRUB's is put back.
+    dd if=/dev/zero bs=512 count=33 >> "$work/base.raw" 2>"$work/backup-space.log"
+    dd if="$work/base.raw" of="$work/boot-code" bs=440 count=1 2>"$work/boot-code.log"
+    "$repo/build/tools/image/mkgpt" --guid "$disk_id" "$work/base.raw" \
+        "2048:131072:fat=Rach2 boot" "133120:131072:data=Rach2 recovery" \
+        "266240:131072:linux=Rach2 root" "34:2014:bios=BIOS boot" > "$work/gpt.log"
+    dd if="$work/boot-code" of="$work/base.raw" bs=440 count=1 conv=notrunc 2>>"$work/boot-code.log"
+fi
+[ "$(wc -c < "$work/base.raw" | tr -d ' ')" = "$((sectors * 512))" ] || fail 'the target size'
+sh tools/dev/machine_grow_plan.sh "$work/seed.ext2" "$sectors" GROWTEST "$disk_id" "$work/plan"
 tar -C "$work/plan" -cf "$work/grow-tools.tar" grow.plan ranges.txt machine_grow.sh programs.sha256 seed.sha256
 # machine-cut.sh is a copy of the script with cut points: with GROW_TEST_CUT
 # set to save, grow, restore or repair, the guest stops after a completed
@@ -107,7 +130,9 @@ sh -n "$work/plan/machine-cut.sh"
 for point in 'cut save' 'cut grow' 'cut restore' 'cut repair'; do
     grep -q "$point" "$work/plan/machine-cut.sh" || fail "missing $point injection"
 done
-awk 'NR == FNR {n++; next} FNR == n {$1 += $2} {print}' \
+# bad-ranges.txt moves the last range of the grow, before a GUID table's
+# backup, by its own length.
+awk -v table="$table" 'NR == FNR {n++; next} FNR == n - (table == "gpt") {$1 += $2} {print}' \
     "$work/plan/ranges.txt" "$work/plan/ranges.txt" > "$work/plan/bad-ranges.txt"
 # corrupt-boot.sh changes the boot copy's last byte before its checksum is
 # made.
@@ -245,9 +270,11 @@ boot restore \
     'send=umount /mnt/grow && echo GROW_MACHINE_""DONE'
 check_writes restored
 qemu-img convert -f qcow2 -O raw "$work/disk.qcow2" "$work/restored.raw"
-env_sector=$(awk '$2 == "grubenv:" && $9 == 1 && $11 == 1024 {gsub(/,/, "", $5); print $5}' \
-    "$work/host-copy/boot.status")
-case "$env_sector" in ''|*[!0-9]*) fail 'the fixture environment is not one contiguous cluster' ;; esac
+# The environment is one cluster on an MBR disk's boot partition and two of
+# one sector on a GUID table's, which growboot has found consecutive.
+env_sector=$(awk '$2 == "grubenv:" && ($9 == 1 || ($9 == 2 && $6 == 2)) && $11 == 1024 {
+    gsub(/,/, "", $5); print $5 }' "$work/host-copy/boot.status")
+case "$env_sector" in ''|*[!0-9]*) fail 'the fixture environment is not in two consecutive sectors' ;; esac
 env_sector=$((2048 + env_sector))
 cp "$work/restored.raw" "$work/normalized.raw"
 dd if="$work/base.raw" of="$work/normalized.raw" bs=512 skip="$env_sector" \
@@ -336,6 +363,8 @@ done
 echo "grow-machine-test: result: interruption matrix completed in $(($(date +%s) - started)) seconds"
 
 # The replay of the Samsung's ranges, and machine_grow_space.sh, which runs
-# every phase in one full RAM root, run only with RACH2_GROW_SMALL=1.
+# every phase in one full RAM root, run only with RACH2_GROW_SMALL=1, and
+# only on the MBR, since neither depends on the table.
+[ "$table" = mbr ] || exit 0
 sh tests/system/machine_grow_full_test.sh
 sh tests/system/machine_grow_space.sh "$harness" "$work" space

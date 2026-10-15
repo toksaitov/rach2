@@ -296,15 +296,15 @@ An interval read on the machine can be short by timer ticks lost while interrupt
 
 The recovery grow writes a seed root to the installed disk, times `growroot --measure` growing it, and restores the disk. On the host:
 
-    sh tools/dev/machine_grow_plan.sh SEED DISK-SECTORS SERIAL MBR-ID DIRECTORY
+    sh tools/dev/machine_grow_plan.sh SEED DISK-SECTORS SERIAL DISK-ID DIRECTORY
 
-SEED is a clean ext2 root such as `build/images/rach2-metal-disk.ext2`. The disk must have an MBR with 64 MiB FAT partitions at sectors 2048 and 133120 and the root from sector 266240; `save` and `grow` refuse any other layout. The new DIRECTORY receives the plan, the sector ranges that the seed's write and the grow change, as the host's [growset](../man/man8/growset.8) computes them, the seed's digest, a copy of `machine_grow.sh`, and the digests of the recovery programs of `ARCH`, i686 by default. In recovery, as root, with the plan copied under `/tmp`:
+SEED is a clean ext2 root such as `build/images/rach2-metal-disk.ext2`. DISK-ID is what `diskctl id` prints on the machine: an MBR's signature, or the disk GUID of the GUID table that a machine installed from the sealed disk has. The disk must have 64 MiB partitions at sectors 2048 and 133120 and the root from sector 266240 to the disk's end, or on a GUID table to the backup table in its last 33 sectors, with the BIOS boot partition from sector 34; `save` and `grow` refuse any other layout. On a GUID table the saved ranges also include the primary table and the backup, and `grow` writes its temporary table with `diskctl shrink`. The new DIRECTORY receives the plan, the sector ranges that the seed's write and the grow change, as the host's [growset](../man/man8/growset.8) computes them, the seed's digest, a copy of `machine_grow.sh`, and the digests of the recovery programs of `ARCH`, i686 by default. In recovery, as root, with the plan copied under `/tmp`:
 
     sh /tmp/grow-plan/machine_grow.sh save|grow|restore DISK STORE /tmp/grow-plan
 
 STORE is an exFAT volume on another disk with the seed as `seed.ext2`; each action logs to a new `machine-grow.*` directory there, and recomputes the ranges before it writes. `save` copies the ranges and the 64 MiB boot partition to `STORE/saved`; check its `SHA256SUMS` on the host and return that file as `saved/host.sha256`, which `grow` and `restore` require. `grow` unmounts the store while it measures, so close every file on it first. `restore` puts everything back, repeatable after an interruption or power loss.
 
-The install stick's 256 MiB of free space is too little for a full grow. Build the grow's stick with [mkinstallstick.sh](image/mkinstallstick.sh), a tar of the plan as EXTRA, and room for the seed and the saved copy as FREE-MIB, at most 8192; the builder makes the whole volume in host memory. `tests/run grow` rehearses the procedure on a 64 MiB root, and with `RACH2_GROW_SMALL=1` also its interruptions and a full RAM root; run that before a large build.
+The install stick's 256 MiB of free space is too little for a full grow. Build the grow's stick with [mkinstallstick.sh](image/mkinstallstick.sh), a tar of the plan as EXTRA, and room for the seed and the saved copy as FREE-MIB, at most 8192; the builder makes the whole volume in host memory. `tests/run grow` rehearses the procedure on a 64 MiB root, on an MBR and on a GUID table, and with `RACH2_GROW_SMALL=1` also its interruptions and a full RAM root; run that before a large build.
 
 ## Building
 

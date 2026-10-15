@@ -121,6 +121,7 @@ SCREENTEXT      = build/tests/system/screentext
 GROWSET         = build/tools/inspect/growset
 INSTALL_TEST_STICK = $(IMAGES_DIR)/install-test-stick.img
 INSTALLER_MBR_DISK = $(IMAGES_DIR)/installer-test-mbr.disk
+GROW_GPT_DISK = $(IMAGES_DIR)/grow-test-gpt.disk
 # The deadline tool: the suites' wall-clock limit, which kills the process
 # group at the deadline. It is built with the host compiler like the KRFFS
 # tools.
@@ -212,7 +213,7 @@ prepare-images: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HO
                 $(MKFIXTURE) $(MKGPT) $(MKMBR) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) $(RUNUTIL) \
                 $(SCREENTEXT) $(SHA256TOOL) $(WAVCHECK) $(GROWSET) os-real-image os-simple-image \
                 rach2-metal-image rach2-recovery-image $(SEALED_DISK) test-image \
-                $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(INSTALLER_MBR_DISK)
+                $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(INSTALLER_MBR_DISK) $(GROW_GPT_DISK)
 prepare-all: components
 	$(MAKE) --no-print-directory prepare-images prepare-products
 # The commands beyond the build's that the preparation runs, in the registry's
@@ -1573,6 +1574,21 @@ $(INSTALLER_MBR_DISK): $(DEMO_CREDS) $(KERNEL) $(RECOVERY_KERNEL) $(INSTALLER_EX
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
 	    sh tools/image/mkdisk_grub.sh $(ARCH_BUILD)/rach2/kernel $@
+# The same layout on a GUID table, the one a machine installed from the
+# sealed disk has, at one sector to a cluster in the boot partition as on
+# every GUID table; the grow suite takes its first 130 MiB for the machine's
+# fixture. Its name is set with the test sticks', since prepare-images lists
+# it.
+$(GROW_GPT_DISK): $(DEMO_CREDS) $(KERNEL) $(RECOVERY_KERNEL) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) \
+                  tools/image/mkdisk_grub.sh $(DISK_TOOLS) | rach2 rach2-recovery utils krffs
+	@mkdir -p $(IMAGES_DIR)
+	RACH2_DISK_BOOT_MB=64 \
+	RACH2_DISK_RECOVERY_MB=64 \
+	RACH2_DISK_EXT2_MB=64 \
+	RACH2_DISK_EXT2_IMAGE=$(INSTALLER_EXT2) \
+	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
+	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
+	    sh tools/image/mkdisk_grub.sh $(ARCH_BUILD)/rach2/kernel $@
 $(INSTALL_TEST_STICK): $(RECOVERY_ISO) $(INSTALLER_DISK) $(INSTALLER_EXT2) \
                        tools/image/mkinstallstick.sh $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK) \
                        $(SHA256TOOL)
@@ -1934,11 +1950,12 @@ run-large: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
 # system to a partition the size of the installed machine's disk, its
 # writes checked against the grow set, a grow killed and repaired, one
 # interrupted between the entry and the grow, and the memory it needs.
-# Both modes also rehearse the machine's save, grow and restore on a small root.
+# Both modes also rehearse the machine's save, grow and restore on a small root,
+# on an MBR and on a GUID table.
 GROW_DIR = $(IMAGES_DIR)/grow
-run-grow: $(DEMO_CREDS) rach2 tests krffs test-image $(MKMBR) $(GROWSET) $(HARNESS) \
+run-grow: $(DEMO_CREDS) rach2 tests krffs test-image $(MKMBR) $(MKGPT) $(GROWSET) $(HARNESS) \
           utils check-busybox check-dropbearmulti rach2-recovery $(RECOVERY_IMAGE) \
-          $(INSTALLER_MBR_DISK) $(INSTALL_TEST_STICK) $(MKEXFATFIXTURE)
+          $(INSTALLER_MBR_DISK) $(GROW_GPT_DISK) $(INSTALL_TEST_STICK) $(MKEXFATFIXTURE)
 	sh tests/system/grow_measure_test.sh
 	sh tests/system/machine_grow_check.sh
 	sh tests/system/machine_grow_boot.sh
@@ -1946,6 +1963,8 @@ run-grow: $(DEMO_CREDS) rach2 tests krffs test-image $(MKMBR) $(GROWSET) $(HARNE
 	sh tests/system/suites/grow.sh $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(HARNESS) $(MKMBR) $(GROWSET) \
 	    $(GROW_DIR)
 	sh tests/system/grow_machine.sh $(HARNESS) $(RECOVERY_ISO) $(INSTALLER_DISK) $(INSTALLER_MBR_DISK) $(GROW_DIR)
+	RACH2_GROW_TABLE=gpt sh tests/system/grow_machine.sh $(HARNESS) $(RECOVERY_ISO) $(INSTALLER_DISK) \
+	    $(GROW_GPT_DISK) $(GROW_DIR)
 # `tests/run queue`: the AHCI disks on their interrupts: a throttled disk
 # beside a fast one, and the fallback root's faults beside the queue.
 QUEUE_DIR = $(IMAGES_DIR)/queue

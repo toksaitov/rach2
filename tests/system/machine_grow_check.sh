@@ -4,11 +4,12 @@
 # check_boot_copy of tools/dev/machine_grow.sh with real seed file systems
 # and a complete read of the 64 MiB boot partition.
 #
-# For an 8 MiB seed and a 1 GiB seed grown to the Samsung's size, check_plan
-# must pass on the plan growset makes and fail when the last range starts one
-# length later. check_boot_copy must pass on an exact copy of the boot
-# partition and fail on one whose last byte differs, with SHA256SUMS made
-# again over it. --mutate takes each check out of a copy of the script in
+# For an 8 MiB seed and a 1 GiB seed grown to the Samsung's size on an MBR,
+# and the 1 GiB seed grown to that size on a GUID table, check_plan must pass
+# on the ranges machine_grow_plan.sh makes and fail when the last range
+# starts one length later. check_boot_copy must pass on an exact copy of the
+# boot partition and fail on one whose last byte differs, with SHA256SUMS
+# made again over it. --mutate takes each check out of a copy of the script in
 # turn, requires its row to fail with its own diagnostic, and requires the
 # rows to pass with the copy restored; --texts checks that each check is in
 # the script.
@@ -102,13 +103,20 @@ rows()
         # shellcheck disable=SC1091
         . "$work/checks.sh"
         start=266240
-        for profile in small samsung; do
-            store="$work/$profile"
-            if [ "$profile" = small ]; then count=131072; else count=488130928; fi
-            seed=$(( $(wc -c < "$store/seed.ext2") / 512 ))
-            seed_hash=$(hash_file "$store/seed.ext2")
-            "$work/growset" --save --lba "$start" "$store/seed.ext2" "$count" > "$work/generated"
-            awk '$1 == "range" {print $2, $3}' "$work/generated" > "$work/ranges.txt"
+        for profile in small samsung samsung-gpt; do
+            store="$work/${profile%-gpt}"
+            case "$profile" in
+                small) sectors=397312; table=mbr; table_sectors=8; disk_id=1acef00d ;;
+                samsung) sectors=488397168; table=mbr; table_sectors=8; disk_id=1acef00d ;;
+                samsung-gpt)
+                    sectors=488397168; table=gpt; table_sectors=40
+                    disk_id=1acef00d-0f1e-4d2c-8b3a-c0ffee000001
+                    ;;
+            esac
+            sh "$repo/tools/dev/machine_grow_plan.sh" "$store/seed.ext2" "$sectors" GROWTEST \
+                "$disk_id" "$work/$phase-$profile.plan" > "$work/$phase-$profile.plan.log"
+            read -r _ _ _ seed count _ seed_hash < "$work/$phase-$profile.plan/grow.plan"
+            cp "$work/$phase-$profile.plan/ranges.txt" "$work/ranges.txt"
             check_plan
             cp "$work/ranges.txt" "$work/$profile.ranges"
             awk 'NR == FNR {n++; next} FNR == n {$1 += $2} {print}' \
@@ -133,7 +141,7 @@ rows()
     ) >"$work/$phase.log" 2>&1
 }
 rows fixed || { cat "$work/fixed.log" >&2; fail 'fixed checks'; }
-echo 'machine-grow-check: fixed: both geometries and the complete boot copy passed'
+echo 'machine-grow-check: fixed: the three plans and the complete boot copy passed'
 if [ "$#" = 1 ]; then
     for mutation in ranges boot; do
         mutate_source "$mutation"
