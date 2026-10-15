@@ -1,19 +1,11 @@
 /**
- * Userspace stub resolver for the Rach2 network utilities, implementing
- * `netdb.h`.
+ * The stub resolver of the network utilities; netdb.h has the interface.
  *
- * `resolve_host` tries, in order, a numeric literal, the hosts file, then a DNS
- * A query to the nameserver in the resolver config, each looked for under
- * `/etc` first and at the root after, since the test image stages both files
- * at the root. The pure helpers (`rach2_inet_aton`, `hosts_find`,
- * `dns_build_query`, `dns_parse_a`) take buffers and touch no syscalls, so the
- * `dnstest` program can exercise them directly; only `resolve_host` does file
- * and socket I/O.
- *
- * Only the functions declared in `netdb.h` are external; every other symbol
- * is static, so this object links cleanly into each program that needs it
- * (ping, nc, and the dnstest test). Its file and socket I/O goes through the
- * ported musl, the same libc the rest of the utilities link.
+ * `rach2_inet_aton`, `hosts_find`, `dns_build_query` and `dns_parse_a` work
+ * on buffers and make no system call, so the dnstest probe and the host test
+ * drive them directly; only `resolve_host` reads files and uses a socket,
+ * through the ported musl the other utilities link. Every other symbol is
+ * static, so this object links into any program that needs it.
  */
 
 #include "netdb.h"
@@ -30,10 +22,9 @@ typedef unsigned int u32;
 typedef unsigned short u16;
 typedef unsigned char u8;
 
-/* Two locations, tried in that order: os-simple and os-real stage both files
- * under `/etc` and the test image stages them at the root, so a resolver that
- * must work under every image looks in both. This is the same rule `adduser`
- * follows for the password program, and it is written the same way. */
+/* Each file under `/etc`, where os-simple and os-real stage it, and at the
+ * root, where the test image stages it; `read_either` tries them in that
+ * order, as `adduser` looks for the password program. */
 #define RESOLV_CONF     "/etc/resolv.conf"
 #define RESOLV_CONF_ALT "/resolv.conf"
 #define HOSTS_PATH      "/etc/hosts"
@@ -75,8 +66,9 @@ static int str_eq(const char *a, const char *b)
 }
 
 /**
- * Read up to `cap` bytes of `path` into `buf`, returning the byte count or -1,
- * with `errno` set by the `open`, if the file cannot be opened.
+ * Read up to `cap` bytes of `path` into `buf`, returning the byte count, or -1
+ * with `errno` set by `open` when the file cannot be opened. A read error ends
+ * the file early.
  */
 static int read_file(const char *path, char *buf, int cap)
 {
@@ -102,8 +94,8 @@ static int read_file(const char *path, char *buf, int cap)
  * when the file chosen cannot be opened.
  *
  * Only absence (`ENOENT` or `ENOTDIR`) falls through to `alt`. A file that is
- * there and cannot be opened is a deliberate answer, and falling past it to a
- * stale copy in the root would use the configuration somebody took away.
+ * there and cannot be opened may have been made so on purpose, and the copy
+ * at the root would then be configuration somebody took away.
  */
 static int read_either(const char *path, const char *alt, char *buf, int cap)
 {
@@ -116,9 +108,7 @@ static int read_either(const char *path, const char *alt, char *buf, int cap)
     return n;
 }
 
-/**
- * Busy-wait for `ms` milliseconds, measured by gettimeofday.
- */
+/** Busy-wait for `ms` milliseconds, measured by gettimeofday. */
 static void delay_ms(int ms)
 {
     struct timeval start, now;
@@ -131,12 +121,6 @@ static void delay_ms(int ms)
     } while (elapsed < ms);
 }
 
-/**
- * Parse a dotted-quad literal in `s` into the host-order IPv4 address `out_ip`.
- *
- * Accepts exactly four octets each in 0..255. Returns 0 on success, -1 on any
- * malformed input.
- */
 int rach2_inet_aton(const char *s, unsigned int *out_ip)
 {
     u32 ip = 0;
@@ -171,14 +155,7 @@ int rach2_inet_aton(const char *s, unsigned int *out_ip)
     return 0;
 }
 
-/**
- * Look `name` up in the hosts-file text in `buf[0:len]`, returning its address
- * in `out_ip`.
- *
- * Each line is `<address> <name> [name ...]` with `#` starting a comment; the
- * match is case-insensitive on the names. A line whose first token is not a
- * valid address is skipped. Returns 0 on a hit, -1 if `name` is absent.
- */
+/** A word longer than 63 bytes is compared by its first 63. */
 int hosts_find(const char *buf, int len, const char *name, unsigned int *out_ip)
 {
     int i = 0;
@@ -227,15 +204,6 @@ int hosts_find(const char *buf, int len, const char *name, unsigned int *out_ip)
     return -1;
 }
 
-/**
- * Encode an A-record query for `name` with transaction `id` into `buf[0:cap]`,
- * in the DNS wire format (RFC 1035).
- *
- * Writes the 12-byte header (RD set, one question) followed by the QNAME as
- * length-prefixed labels and the QTYPE/QCLASS trailer. Returns the byte length
- * of the message, or -1 if `name` is empty, a label is empty or over 63 bytes,
- * or the message would exceed `cap`.
- */
 int dns_build_query(unsigned char *buf, int cap, const char *name, unsigned short id)
 {
     int pos;
@@ -270,7 +238,7 @@ int dns_build_query(unsigned char *buf, int cap, const char *name, unsigned shor
             label++;
         }
         if (label == 0 || label > 63) {
-            return -1; /* empty or oversize label */
+            return -1;
         }
         if (pos + 1 + label + 1 + 4 > cap) {
             return -1;
@@ -293,13 +261,13 @@ int dns_build_query(unsigned char *buf, int cap, const char *name, unsigned shor
 }
 
 /**
- * Advance past a domain name at offset `pos` and return the position just after
- * it.
+ * The offset just past the domain name at offset `pos` of `resp`, or -1 for a
+ * name that runs past `len` or has a label of a reserved type.
  *
- * Length-prefixed labels are walked; a 0x00 byte or a 0xC0 compression pointer
- * (two bytes) ends the name. Pointers are not followed, since skipping is
- * enough to reach the fixed fields, so this cannot loop. Returns -1 on a
- * truncated or reserved-type name.
+ * A name is length-prefixed labels ended by a zero byte or by a two-byte
+ * compression pointer, whose top two bits are set. Pointers are not
+ * followed, since skipping is enough to reach the fixed fields, so this
+ * cannot loop.
  */
 static int dns_skip_name(const u8 *resp, int len, int pos)
 {
@@ -320,15 +288,6 @@ static int dns_skip_name(const u8 *resp, int len, int pos)
     return -1;
 }
 
-/**
- * Extract the first A record from the DNS response `resp[0:len]` into `out_ip`.
- *
- * The response must match `id`, be a reply (QR set) with RCODE 0 and at least
- * one answer. The question section is skipped, then the answers are walked for
- * an IN A record with a 4-byte RDATA. Returns 0 with `out_ip` set in host
- * order, or -1 on a mismatch, an error response, a message truncated before
- * the record, or absence of an A record.
- */
 int dns_parse_a(const unsigned char *resp, int len, unsigned short id, unsigned int *out_ip)
 {
     int pos, i, qd, an;
@@ -337,7 +296,7 @@ int dns_parse_a(const unsigned char *resp, int len, unsigned short id, unsigned 
         return -1;
     }
     if (((resp[0] << 8) | resp[1]) != (int)id) {
-        return -1; /* not our query */
+        return -1;
     }
     if ((resp[2] & 0x80) == 0) {
         return -1; /* not a response */
@@ -348,11 +307,11 @@ int dns_parse_a(const unsigned char *resp, int len, unsigned short id, unsigned 
     qd = (resp[4] << 8) | resp[5];
     an = (resp[6] << 8) | resp[7];
     if (an < 1) {
-        return -1; /* no answers */
+        return -1;
     }
 
     pos = 12;
-    for (i = 0; i < qd; i++) { /* skip the question section */
+    for (i = 0; i < qd; i++) {
         pos = dns_skip_name(resp, len, pos);
         if (pos < 0 || pos + 4 > len) {
             return -1;
@@ -360,7 +319,7 @@ int dns_parse_a(const unsigned char *resp, int len, unsigned short id, unsigned 
         pos += 4; /* QTYPE + QCLASS */
     }
 
-    for (i = 0; i < an; i++) { /* walk the answers */
+    for (i = 0; i < an; i++) {
         int type, cls, rdlen;
 
         pos = dns_skip_name(resp, len, pos);
@@ -379,15 +338,15 @@ int dns_parse_a(const unsigned char *resp, int len, unsigned short id, unsigned 
                       ((u32)resp[pos + 2] << 8) | (u32)resp[pos + 3];
             return 0;
         }
-        pos += rdlen; /* CNAME or other record */
+        pos += rdlen;
     }
-    return -1; /* no A record present */
+    return -1;
 }
 
 /**
- * Return the first `nameserver <ip>` with a valid address in the first 256
- * bytes of the resolver config, or `DNS_DEFAULT_NS` (SLIRP's built-in
- * forwarder) when there is none or the file cannot be read.
+ * The address of the first `nameserver` line with a valid address in the
+ * first 256 bytes of the resolver configuration, or `DNS_DEFAULT_NS` when
+ * there is none or the file cannot be read.
  */
 static u32 read_nameserver(void)
 {
@@ -439,16 +398,15 @@ static u32 read_nameserver(void)
 }
 
 /**
- * Resolve `name` to an A record by querying `ns` over UDP/53, returning the
- * address in `out_ip`.
+ * Resolve `name` by an A query to the nameserver `ns` on UDP port 53, with
+ * the address in `*out_ip`; 0, or -1.
  *
- * Sends the query and polls for the reply with `MSG_DONTWAIT`, resending
- * periodically: the kernel drops a datagram whose next hop ARP has not yet
- * resolved, so the first one is often lost and a resend is expected. The
- * socket is connected, so only replies from that address and port arrive; one
- * whose id matches is decisive (success, NXDOMAIN, or no A record), and other
- * traffic is ignored until the budget of 30 sends, each polled four times at
- * 50 ms, about 6 s, expires. Returns 0 on success and -1 otherwise.
+ * The query is sent up to 30 times, each followed by four reads with
+ * `MSG_DONTWAIT` 50 ms apart, about six seconds in all, since UDP resends
+ * nothing and a query or its reply can be lost. The socket is connected, so
+ * only datagrams from that address and port arrive. The first response with
+ * the query's id ends the wait, whatever it says (an address, NXDOMAIN, or no
+ * A record); anything else is dropped. The id is taken from the clock.
  */
 static int dns_query(const char *name, u32 ns, unsigned int *out_ip)
 {
@@ -496,14 +454,6 @@ static int dns_query(const char *name, u32 ns, unsigned int *out_ip)
     return got ? rc : -1;
 }
 
-/**
- * Resolve `host` to a host-order IPv4 address in `out_ip`.
- *
- * Tries, in order, a numeric dotted-quad literal, the first 1024 bytes of the
- * hosts file, then a DNS A query to the resolver config's nameserver. Returns
- * 0 on the first hit, or the DNS query's result if neither earlier source
- * matches.
- */
 int resolve_host(const char *host, unsigned int *out_ip)
 {
     char fbuf[1024];

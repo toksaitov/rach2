@@ -25,8 +25,8 @@
  * Return the TCP port in `s`, or 0 when `s` is not one.
  *
  * A port is decimal digits and nothing else, from 1 through 65535; a sign, a
- * trailing character or a value past the range is refused rather than cut to
- * 16 bits. The range is checked at each digit, so a long operand cannot
+ * trailing character or a value past the range gives 0 rather than being cut
+ * to 16 bits. The range is checked at each digit, so a long operand cannot
  * overflow the sum.
  */
 static int parse_port(const char *s)
@@ -46,7 +46,8 @@ static int parse_port(const char *s)
     return *s == '\0' ? (int)p : 0;
 }
 
-/** Write every byte, retrying interruptions. Return -1 on failure. */
+/** Write the `len` bytes of `buf` to `fd`, retrying an interrupted write; 0,
+ * or -1 when a write fails or writes nothing. */
 static int write_all(int fd, const char *buf, size_t len)
 {
     while (len > 0) {
@@ -64,6 +65,12 @@ static int write_all(int fd, const char *buf, size_t len)
     return 0;
 }
 
+/**
+ * Connect to the host and port the operands give, print `nc: connected`, and
+ * run the loop the file comment describes. The status is 1 for a usage
+ * error, a port that is not one, a name that does not resolve, a failed
+ * socket or connect, or a failed write, and 0 when a read ends the loop.
+ */
 int main(int argc, char **argv)
 {
     unsigned int ip;

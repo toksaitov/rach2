@@ -2,23 +2,22 @@
  * Send ICMP echo requests through the Rach2 network stack.
  *
  * `ping [-nq4] [-c count] [-i interval] [-s size] [-t ttl] [-W timeout]
- * [-w deadline] host`,
- * where `host` is an IPv4 address or a name, resolved through `/etc/hosts`,
- * or `/hosts` where there is no `/etc/hosts`, and then DNS (see `resolv.c`).
+ * [-w deadline] host`, where `host` is an IPv4 address or a name, resolved
+ * through `/etc/hosts`, or `/hosts` where there is no `/etc/hosts`, and then
+ * DNS (see `resolv.c`).
  *
  * Each request is the `SC_PING_DATA` socketcall, a Rach2 operation with no
  * libc wrapper, so it is issued through a direct system call (`pingcall.h`):
- * socketcall(2) on i686, and Rach2's own number on x86-64. The kernel
- * sends an echo of `-s` bytes of data, 56 unless asked, with the hop limit of
- * `-t`, 64 unless asked, and sleeps the caller until the reply, for up to four
+ * socketcall(2) on i686, and Rach2's own number on x86-64. The kernel sends
+ * an echo of `-s` bytes of data, 56 by default, with the hop limit of `-t`,
+ * 64 by default, and sleeps the caller until the reply, for up to four
  * attempts of a second each; a signal ends the wait. It returns the reply's
  * ICMP length in the low 16 bits and the hop limit the reply arrived with
- * above them. So the round trip is
- * timed here, on the monotonic clock, and the timeout of `-W` and the deadline
- * of `-w` are an interval timer whose signal ends the wait. Requests go one a
- * second, or one an interval, until the count is sent, the deadline passes or
- * an interrupt comes, and then the statistics are printed, in the form Linux's
- * iputils prints them.
+ * above them, and no time, so the round trip is timed here, on the monotonic
+ * clock. The timeout of `-W` and the deadline of `-w` are an interval timer
+ * whose signal ends the wait. Requests go one a second, or one an interval,
+ * until the count is sent, the deadline passes or an interrupt comes, and
+ * then the statistics are printed, in the form Linux's iputils prints them.
  */
 
 #include <errno.h>
@@ -33,8 +32,9 @@
 #include "netdb.h"    /* resolve_host */
 #include "pingcall.h" /* SYS_PINGCALL, SC_PING_DATA */
 
-/* The most data one request carries: a datagram of the 1500-byte MTU, since
- * the stack does not fragment. */
+/* The most data one request carries: a datagram of the 1500-byte MTU less
+ * the 20-byte IP header and the 8-byte ICMP header, since the stack does not
+ * fragment. The kernel's limit is the same (`ICMP_PING_DATA_MAX`). */
 #define DATA_MAX 1472
 
 #define USAGE                                                                                    \
@@ -45,12 +45,14 @@
 static volatile sig_atomic_t interrupted;
 static volatile sig_atomic_t alarmed;
 
+/** The SIGINT handler: end the run. */
 static void on_interrupt(int sig)
 {
     (void)sig;
     interrupted = 1;
 }
 
+/** The SIGALRM handler: end the wait in progress. */
 static void on_alarm(int sig)
 {
     (void)sig;
@@ -118,8 +120,8 @@ static void print_ms(long long us)
     printf("%lld.%03lld", us / 1000, us % 1000);
 }
 
-/* What the options asked for, in microseconds where a time; 0 for a
- * timeout or deadline not given, and a count of -1 for none. */
+/* The options as given, in microseconds where a time; 0 for a timeout or
+ * deadline not given, and a count of -1 for none. */
 struct options {
     long count, size, ttl;
     long long interval, timeout, deadline;
@@ -271,8 +273,9 @@ static void pause_until(long long from, long long us)
 }
 
 /**
- * Ping `ip` as `o` asks, counting in `t`, from `start` on the monotonic
- * clock; 1 when another ping held the machine's one request, else 0.
+ * Ping `ip` with the options `o`, counting in `t`, from `start` on the
+ * monotonic clock; 1 when another ping is in flight on this machine, which
+ * the kernel answers with EBUSY, else 0.
  */
 static int run(unsigned int ip, const struct options *o, struct tally *t, long long start)
 {
@@ -331,6 +334,12 @@ static void report(const char *host, const struct tally *t, long long us)
     }
 }
 
+/**
+ * Resolve the host, ping it, and print the statistics. The status is 0 when
+ * a reply came and, with both a count and a deadline given, the count's
+ * worth came; 1 when fewer came; and 2 for a usage error, a name that does
+ * not resolve, or another ping in flight.
+ */
 int main(int argc, char **argv)
 {
     struct options o;
