@@ -13,8 +13,8 @@
 # fails with its name and an installation hint before any compilation starts.
 #
 # `--report` runs the full probes, prints one line per tool, and writes no
-# cache. `tools/setup/doctor.sh` remains the wider machine-setup report
-# covering QEMU, OVMF, style, and optional tools.
+# cache. `tools/setup/doctor.sh` is the wider machine-setup report, which
+# covers QEMU, OVMF, the style tools and the optional tools.
 #
 # The cross toolchain checked is the one of the architecture in RACH2_ARCH
 # (mk/arch.sh), which the root Makefile passes: i686-elf-* for i686, the
@@ -42,6 +42,7 @@ TOOLS="make cc ${CROSS}gcc ${CROSS}ld ${CROSS}ar ${CROSS}strip \
 # tools/image/mkext2.sh looks in the same places.
 . "$(dirname "$0")/e2fsprogs_path.sh"
 
+# hint TOOL: print an installation hint for TOOL.
 hint() {
     case "$1" in
         i686-elf-*) echo "brew install i686-elf-gcc i686-elf-binutils, or see tools/Readme.md" ;;
@@ -74,7 +75,8 @@ fingerprint() {
 
 # The full probes: every tool present, the host compiler compiles and links,
 # the cross compiler compiles a freestanding object of its architecture. Under
-# --report each tool gets one line; otherwise the first failure is fatal.
+# --report each tool gets one line; otherwise the first failure ends the
+# probes. The status is 0 when every probe passed and 1 otherwise.
 probe() {
     report=${1-}
     ok=0

@@ -2,17 +2,16 @@
  * hostcheck.c: what the host must let a test run do, tried before anything
  * is built.
  *
- * `tests/run` checks that every command a suite names is installed, and a
- * restricted host session passed that check, built the product, and then
- * lost suites to a socket bind the session was not allowed and to a disk
- * image the session could not attach (entry 17 of milestone 50). So the
- * operations are tried, not the names: unless `--no-sockets` is given, a
- * TCP and a UDP socket bound on the loopback address and a Unix socket
- * bound in the directory given, and, when `--diskimage` is given on a Mac,
- * a sixteen-megabyte image created, attached without a mount and detached
- * with `hdiutil`. A refusal names the operation; the exit status is
- * nonzero on any. The directory's name goes into a shell command, so an
- * apostrophe in it is quoted as the shell wants.
+ * `tests/run` checks that every command a suite names is installed, but a
+ * restricted host session can pass that check, build the product, and then
+ * lose suites to a socket bind the session is not allowed or a disk image
+ * it cannot attach. So the operations are tried, not the names: unless
+ * `--no-sockets` is given, a TCP and a UDP socket bound on the loopback
+ * address and a Unix socket bound in the directory given, and, when
+ * `--diskimage` is given on a Mac, a sixteen-megabyte image created,
+ * attached without a mount and detached with `hdiutil`. A refusal names the
+ * operation; the exit status is nonzero on any. The directory's name goes
+ * into a shell command, so an apostrophe in it is quoted as the shell wants.
  *
  * Usage: hostcheck DIR [--diskimage] [--no-sockets]
  */
@@ -82,8 +81,11 @@ static void try_unix(const char *dir)
     close(s);
 }
 
-/** `dir` inside shell single quotes, an apostrophe written as `'\\''`;
- * 0, or -1 when the quoted form does not fit `out`. */
+/**
+ * Write `dir` into `out`, of `size` bytes, inside shell single quotes, with
+ * each apostrophe written as `'\''`. Return 0, or -1 when the quoted form
+ * does not fit.
+ */
 static int shell_quote(char *out, size_t size, const char *dir)
 {
     size_t n = 0;
@@ -112,9 +114,11 @@ static int shell_quote(char *out, size_t size, const char *dir)
     return 0;
 }
 
-/** Create, attach and detach a sixteen-megabyte image in `dir` with
- * hdiutil, or record the refusal; hdiutil appends `.dmg` to the name it is
- * given, and sixteen megabytes is the least an ExFAT image takes. */
+/**
+ * Create, attach and detach a sixteen-megabyte image in `dir` with hdiutil,
+ * or record the refusal. hdiutil appends `.dmg` to the name it is given, and
+ * sixteen megabytes is the least an ExFAT image takes.
+ */
 static void try_diskimage(const char *dir)
 {
     char q[512];
@@ -141,7 +145,10 @@ static void try_diskimage(const char *dir)
     }
 }
 
-/** The check, its operations chosen by the options. */
+/**
+ * Try the operations the options choose. The exit status is 0 when all
+ * succeed, 1 on a refusal and 2 on a usage error.
+ */
 int main(int argc, char **argv)
 {
     int i, sockets = 1, diskimage = 0;

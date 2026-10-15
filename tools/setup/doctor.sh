@@ -1,14 +1,16 @@
 #!/usr/bin/env sh
 #
-# tools/setup/doctor.sh: the wider Rach2 machine-setup report, run directly.
+# tools/setup/doctor.sh: report which tools of Rach2's build, suites and
+# checks this machine has. Run it directly.
 #
-# Reports each tool as PASS / MISSING / OPTIONAL with an install hint, and exits
-# non-zero if a tool in either required group is absent (or present but
-# broken), so a student or a fresh CI box sees a clear checklist instead of a
-# cryptic failure mid-build.
+# Reports each tool as PASS, MISSING or OPTIONAL with an install hint, and
+# each judge's version beside the recorded one, and exits non-zero if a tool
+# in either required group is absent (or present but broken), so a student or
+# a fresh CI machine sees a checklist instead of a failure in the middle of
+# a build.
 #
-# ASCII-only output: the style check (tools/verify/check.sh) forbids
-# bytes in in-house files, so no checkmarks/Unicode here.
+# The output is ASCII only: the style check (tools/verify/check.sh) forbids
+# other bytes in in-house files, so there are no check marks here.
 #
 set -u
 
@@ -18,7 +20,7 @@ case "$(uname -s)" in
 esac
 
 # hint KEY: an OS-appropriate install suggestion. The i686-elf and x86_64-elf
-# cross toolchains are NOT stock apt packages on Linux, so their hints are
+# cross toolchains are not stock apt packages on Linux, so their hints are
 # spelled out rather than assuming a package manager.
 hint() {
     case "$1" in
@@ -56,11 +58,12 @@ missing=0
 # row STATUS NAME DETAIL: one aligned line.
 row() { printf '  %-10s %-18s %s\n' "$1" "$2" "$3"; }
 
-# req NAME HINTKEY: a tool the build/run needs. It must both EXIST and RUN (a
-# bare `command -v` would PASS a broken Xcode shim that has no real Command Line
-# Tools), so it is probed with --version. Absence/breakage is a failure. The
-# probe's input is closed: bzip2 prints its version and then compresses its
-# standard input, which held this report until its input ended.
+# req NAME HINTKEY: a tool the build or a run needs. It must both exist and
+# run (a bare `command -v` would pass a broken Xcode shim that has no real
+# Command Line Tools), so it is probed with --version, and its absence or a
+# failed probe counts as missing. The probe's input is closed: bzip2 prints
+# its version and then compresses its standard input, which would hold up
+# this report until the input ended.
 req() {
     if command -v "$1" >/dev/null 2>&1 && "$1" --version </dev/null >/dev/null 2>&1; then
         row "[PASS]" "$1" "$(command -v "$1")"
@@ -87,11 +90,11 @@ reqx() {
 }
 
 # opt NAME WHAT HINTKEY: a tool only some tasks need; absence is a note, not
-# a failure, and a plain presence check is enough for one. The three style
-# tools are not among them. `tests/run style` refuses to start without all
-# three, and every milestone's closing run includes that suite, so calling
-# them optional would tell a reader on a fresh machine that a check the
-# project insists on can be skipped.
+# a failure, and a plain presence check is enough for one. The tools of
+# `tests/run style` are not among them: it does not start without them, and
+# every change is checked with it before it is pushed, so calling them
+# optional would tell a reader on a fresh machine that a required check can
+# be skipped.
 opt() {
     if command -v "$1" >/dev/null 2>&1; then
         row "[PASS]" "$1" "$(command -v "$1")"
@@ -197,8 +200,8 @@ req clang-format clang-format
 
 echo
 # A default `make` builds the three RAM images and reaches none of these. The
-# GRUB disks do, and tools/image/mkdisk_grub.sh needs all four mtools
-# commands, so all four are named rather than one standing for the set.
+# GRUB disks do, and tools/image/mkdisk_grub.sh needs all three mtools
+# commands, so all three are named rather than one standing for the set.
 echo "Needed by the GRUB disk suites (grub, menu, install, sealed, drill, selfbuild):"
 opt mformat      "the FAT boot partition" mtools
 opt mmd          "the FAT boot partition" mtools
@@ -229,8 +232,8 @@ else
 fi
 
 # FUSE mounts a KRFFS image on the host (make -C krffs mount); nothing in the
-# default build or the suites needs it. Checked via pkg-config, which is now
-# also optional for the same reason.
+# default build or the suites needs it. It is checked through pkg-config,
+# which is optional for the same reason.
 if ! pkg-config --version >/dev/null 2>&1; then
     row "[----]" "FUSE" "optional; cannot check without pkg-config (pkgconf)"
 elif pkg-config --exists fuse 2>/dev/null; then
@@ -247,6 +250,8 @@ fi
 # decides a check whose verdict depends on the version. The version line is
 # the one the tool's option prints, so the record and the report agree byte
 # for byte or not at all.
+# version_line TOOL: print the line TOOL's version option prints, in the form
+# tools/setup/judges records.
 version_line() {
     case "$1" in
     shellcheck) shellcheck --version 2>/dev/null | sed -n 's/^\(version: .*\)$/\1/p' | head -1 ;;
