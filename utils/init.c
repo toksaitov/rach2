@@ -1809,31 +1809,30 @@ static pid_t spawn_update(void)
     }
 }
 
-/* What `limit_value` returns for a word that is not a limit. */
-#define LIMIT_BAD ((rlim_t) - 2)
-
 /**
- * Parse one limit value of `/etc/rach2/limits`: a decimal number, or
- * `unlimited`, which is `RLIM_INFINITY`. Returns `LIMIT_BAD` for any other
- * word, a number with a sign, or a number at or past `RLIM_INFINITY`.
+ * Parse one limit value of `/etc/rach2/limits` into `*value`: a decimal
+ * number, or `unlimited`, which is `RLIM_INFINITY`. Returns 0, or -1 for any
+ * other word, a number with a sign, or a number at or past `RLIM_INFINITY`.
  */
-static rlim_t limit_value(const char *word)
+static int limit_value(const char *word, rlim_t *value)
 {
     char *end;
     unsigned long long v;
 
     if (strcmp(word, "unlimited") == 0) {
-        return RLIM_INFINITY;
+        *value = RLIM_INFINITY;
+        return 0;
     }
     if (word[0] == '-' || word[0] == '+') {
-        return LIMIT_BAD;
+        return -1;
     }
     errno = 0;
     v = strtoull(word, &end, 10);
     if (*end != '\0' || end == word || errno == ERANGE || v >= (unsigned long long)RLIM_INFINITY) {
-        return LIMIT_BAD;
+        return -1;
     }
-    return (rlim_t)v;
+    *value = (rlim_t)v;
+    return 0;
 }
 
 /**
@@ -1879,9 +1878,7 @@ static void apply_limits(void)
             fprintf(stderr, "init: limits: line %d: %s is not a limit\n", lineno, name);
             continue;
         }
-        rl.rlim_cur = limit_value(soft);
-        rl.rlim_max = limit_value(hard);
-        if (rl.rlim_cur == LIMIT_BAD || rl.rlim_max == LIMIT_BAD) {
+        if (limit_value(soft, &rl.rlim_cur) != 0 || limit_value(hard, &rl.rlim_max) != 0) {
             fprintf(stderr, "init: limits: line %d: a value is not a number\n", lineno);
             continue;
         }
