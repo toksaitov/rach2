@@ -21,12 +21,12 @@
  * each pair share it, and each row still runs.
  *
  * Last, sleeps on the last processor, whose own timer runs out of step with
- * the boot processor's tick, must not end early: each is timed by the
- * time-stamp counter, measured against the clock on the first processor,
- * since a clock read wrong on the last processor would time its own sleeps
- * wrong too, and must last its request less the slack of the clock's
- * reading. A sleep ends at a tick, so each begins after a spin of its own
- * length, at a different place in the tick.
+ * the boot processor's tick, must not end early: a thread on the first
+ * processor reads the clock before it lets each sleep begin and again once
+ * it sees the sleep end, since a clock read wrong on the last processor
+ * would time its own sleeps wrong too, and each must last its request less
+ * the slack of the clock's reading. A sleep ends at a tick, so each begins
+ * after a spin of its own length, at a different place in the tick.
  *
  * Prints "SMPMUSL OK (N processors)" on success and "SMPMUSL FAIL (detail)"
  * otherwise.
@@ -63,11 +63,9 @@
 /* The status an exec of this program with "child" exits with. */
 #define CHILD_STATUS 7
 
-/* The sleeps row: how many, how long the counter is measured for, and how
- * much shorter than its request a sleep may seem, for the clock's reading
- * and the measurement's own. */
+/* The sleeps row: how many, and how much shorter than its request a sleep
+ * may seem, for the clock's reading. */
 #define SLEEPS      60
-#define MEASURE_NS  200000000LL
 #define SLEEP_SLACK 100000LL
 
 static int cpus;
@@ -424,15 +422,6 @@ static int unmaps(void)
     return 0;
 }
 
-/** The time-stamp counter. */
-static unsigned long long tsc(void)
-{
-    unsigned lo, hi;
-
-    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
-    return ((unsigned long long)hi << 32) | lo;
-}
-
 /** CLOCK_MONOTONIC in nanoseconds. */
 static long long mono_ns(void)
 {
@@ -442,74 +431,88 @@ static long long mono_ns(void)
     return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
-/**
- * The clock's time with the counter at the same moment, in `*t`: of sixteen
- * readings of the clock between two of the counter, the one whose two are
- * closest, at their midpoint, so that a preemption between a counter's
- * reading and the clock's skews no rate made from it.
- */
-static long long clock_with_tsc(unsigned long long *t)
-{
-    unsigned long long a, b, best = ~0ull;
-    long long c, clock = 0;
-    int i;
+/* The sleeps row's handshake: the sleeper sets `sleep_ready` after its spin,
+ * or with `sleep_unbound` when it could not be bound; the thread on the
+ * first processor sets `sleep_go` once it has read the clock; and the
+ * sleeper sets `sleep_done` when its sleep returns. */
+static volatile int sleep_ready, sleep_go, sleep_done, sleep_unbound;
 
-    for (i = 0; i < 16; i++) {
-        a = tsc();
-        c = mono_ns();
-        b = tsc();
-        if (b - a < best) {
-            best = b - a;
-            clock = c;
-            *t = a + (b - a) / 2u;
-        }
+/** Wait until `*flag` is set, yielding so that one processor can run both. */
+static void await(volatile int *flag)
+{
+    while (!__atomic_load_n(flag, __ATOMIC_SEQ_CST)) {
+        sched_yield();
     }
-    return clock;
 }
 
 /*
- * The counter's rate, from the clock on the first processor over 200 ms;
- * then on the last, sleeps of 1 to 16 ms, each timed by the counter and
- * begun after a spin of 0 to 10 ms.
+ * On the last processor, sleeps of 1 to 16 ms, each begun after a spin of
+ * 0 to 10 ms on the clock there. The thread on the first processor reads
+ * the clock before `sleep_go` and after `sleep_done`, so the handshake only
+ * lengthens what it measures.
  */
-static int sleeps(void)
+static void *sleeper(void *arg)
 {
     struct timespec req;
-    unsigned long long t0, t1;
-    long long c0, c1, want, took;
-    double per_ns;
+    long long until;
     int i;
 
+    (void)arg;
+    if (bind_to(cpus - 1) != 0) {
+        __atomic_store_n(&sleep_unbound, 1, __ATOMIC_SEQ_CST);
+        __atomic_store_n(&sleep_ready, 1, __ATOMIC_SEQ_CST);
+        return &unbound;
+    }
+    req.tv_sec = 0;
+    for (i = 0; i < SLEEPS; i++) {
+        until = mono_ns() + (i * 3700000LL) % 10000000LL;
+        while (mono_ns() < until) {
+        }
+        req.tv_nsec = (long)(1000000LL + (i * 2770000LL) % 15000000LL);
+        __atomic_store_n(&sleep_ready, 1, __ATOMIC_SEQ_CST);
+        await(&sleep_go);
+        __atomic_store_n(&sleep_go, 0, __ATOMIC_SEQ_CST);
+        nanosleep(&req, NULL);
+        __atomic_store_n(&sleep_done, 1, __ATOMIC_SEQ_CST);
+    }
+    return NULL;
+}
+
+/** Time each of the sleeper's sleeps by the clock on the first processor. */
+static int sleeps(void)
+{
+    pthread_t t;
+    void *rc;
+    long long c0, c1, want;
+    int i;
+
+    sleep_ready = sleep_go = sleep_done = sleep_unbound = 0;
     if (bind_to(0) != 0) {
         return fail("bind to the first processor");
     }
-    req.tv_sec = 0;
-    req.tv_nsec = (long)MEASURE_NS;
-    c0 = clock_with_tsc(&t0);
-    nanosleep(&req, NULL);
-    c1 = clock_with_tsc(&t1);
-    if (c1 <= c0 || t1 <= t0) {
-        return fail("the counter or the clock did not move");
-    }
-    per_ns = (double)(t1 - t0) / (double)(c1 - c0);
-    if (bind_to(cpus - 1) != 0) {
-        return fail("bind to the last processor");
+    if (pthread_create(&t, NULL, sleeper, NULL) != 0) {
+        return fail("pthread_create");
     }
     for (i = 0; i < SLEEPS; i++) {
         want = 1000000LL + (i * 2770000LL) % 15000000LL;
-        req.tv_nsec = (long)want;
-        t0 = tsc() + (unsigned long long)((double)((i * 3700000LL) % 10000000LL) * per_ns);
-        while (tsc() < t0) {
+        await(&sleep_ready);
+        if (sleep_unbound) {
+            break;
         }
-        t0 = tsc();
-        nanosleep(&req, NULL);
-        t1 = tsc();
-        took = (long long)((double)(t1 - t0) / per_ns);
-        if (took + SLEEP_SLACK < want) {
+        __atomic_store_n(&sleep_ready, 0, __ATOMIC_SEQ_CST);
+        c0 = mono_ns();
+        __atomic_store_n(&sleep_go, 1, __ATOMIC_SEQ_CST);
+        await(&sleep_done);
+        c1 = mono_ns();
+        __atomic_store_n(&sleep_done, 0, __ATOMIC_SEQ_CST);
+        if (c1 - c0 + SLEEP_SLACK < want) {
             printf("SMPMUSL FAIL (a sleep of %lld us on the last processor took %lld us)\n",
-                   want / 1000, took / 1000);
+                   want / 1000, (c1 - c0) / 1000);
             return 1;
         }
+    }
+    if (pthread_join(t, &rc) != 0 || rc != NULL) {
+        return fail("the sleeping thread");
     }
     return 0;
 }
