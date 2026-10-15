@@ -5,12 +5,10 @@ compile_commands.json
 # clangd's per-project index cache.
 .cache/
 
-# All build output. Every in-house component builds out of tree into one repo-root
-# build/ directory whose layout mirrors the source tree (mk/build.mk): the objects, the
-# GCC-written .d files, the final binaries, the kernel, the RAM-disk image and mount
-# point, the ISO staging, and the staged capstones under build/vendor/. Nothing
-# build-related lands in the source tree, so this one entry replaces the former
-# per-component ignores.
+# All build output. Every in-house component builds out of tree into one
+# build/ directory at the repository root whose layout follows the source tree
+# (mk/build.mk): the objects, the .d files, the binaries, the kernels, the
+# images, the ISO staging and the vendored binaries under build/vendor/.
 build/
 
 # macOS
