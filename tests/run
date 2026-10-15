@@ -562,9 +562,10 @@ check_space() {
 
 # Every external command a suite needs, before anything is built for it. An
 # entry with alternatives, `a+b/c+d`, is met when every command of one of
-# them is installed.
-check_tools() {
-    tools=$(suite_tools "$1")
+# them is installed. A second argument gives the list in the registry's form
+# for what the first names, which is how the preparation's tools are checked.
+check_tools() { # check_tools NAME [TOOLS]
+    tools=${2:-$(suite_tools "$1")}
     [ "$tools" = "-" ] && return 0
     for entry in $(echo "$tools" | tr ',' ' '); do
         met=""
@@ -1081,6 +1082,16 @@ done
 # A runner that took the tree and then claimed its ports, below, starts again
 # as the same process and has made these checks already.
 if [ "${RACH2_TREE_HELD:-}" != "$$" ]; then
+    # A set prepares every suite's products, so it needs the tools of
+    # `prepare-all` whichever suites it names; `make prepare-tools` prints them.
+    if [ "$#" -gt 1 ]; then
+        prepare_tools=$(make -s -C "$REPO" --no-print-directory "$ARCH_VAR" prepare-tools) || {
+            echo "run: result: refused: the preparation's tools could not be read" >&2; exit 1
+        }
+        check_tools "the preparation" "$prepare_tools" || {
+            echo "run: result: refused: a set prepares every suite's products, and this host cannot build them" >&2; exit 1
+        }
+    fi
     check_host $diskimage $sockets || { echo "run: result: refused: this host cannot run the set" >&2; exit 1; }
     [ -n "$sockets" ] || check_space || exit 1
     check_declarations || exit 1

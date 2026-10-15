@@ -15,7 +15,7 @@ tests/run all              # every suite
 tests/run inventory        # every suite with what it proves, as Markdown
 ```
 
-`tests/registry` lists the suites, one line each, with the external commands each needs and its tier, `core` or `full`; [`system/suites.md`](system/suites.md) is that list with the sentence that says what each suite proves. The core tier exercises every subsystem of the kernel at least once. A suite named `NAME` is the make target `run-NAME` in [`system/suites.mk`](system/suites.mk). The runner refuses an unknown name, a name given twice, a missing command and a set given with another name before it builds anything.
+`tests/registry` lists the suites, one line each, with the external commands each needs and its tier, `core` or `full`; [`system/suites.md`](system/suites.md) is that list with the sentence that says what each suite proves. The core tier exercises every subsystem of the kernel at least once. A suite named `NAME` is the make target `run-NAME` in [`system/suites.mk`](system/suites.mk). The runner refuses an unknown name, a name given twice, a missing command and a set given with another name before it builds anything; a run of two or more suites also needs the commands `make prepare-tools` prints, since it builds every suite's products first.
 
 `ARCH` chooses the architecture, as it does for the build: unset or `i686`, the run builds into `build/` and boots `qemu-system-i386`; `x86_64`, it builds into `build/x86_64/` and boots `qemu-system-x86_64`. `all` and `core` are then the suites the registry lists for that architecture, and naming a suite that does not run on it is refused.
 

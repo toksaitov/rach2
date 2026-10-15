@@ -130,6 +130,8 @@ components:
 	@echo components >> order.log; echo $$PPID >> components.count
 prepare-all: product build/images/shared.img
 	@echo prepared >> order.log; echo $$PPID >> prepared.count
+prepare-tools:
+	@echo $${SELFTEST_PREPARE_TOOLS:--}
 product:
 	@echo built >> product.count; sleep 0.3; touch product
 build/images/shared.img: product
@@ -405,6 +407,15 @@ check "and names every choice" 1 "$(printf '%s\n' "$out" | grep -c 'choosy needs
 out=$(run either); rc=$?
 check "a tool entry with one choice installed whole runs" 0 "$rc"
 check "and its suite ran" 1 "$(printf '%s\n' "$out" | grep -c 'either ran')"
+# A set builds `prepare-all`, so it needs the tools `make prepare-tools`
+# prints, whichever suites it names; a suite run alone builds its own target.
+rm -f "$WORK/prepared.count" "$WORK/components.count" "$WORK/order.log"
+out=$(SELFTEST_PREPARE_TOOLS=a-command-that-does-not-exist run passing either); rc=$?
+check "a set whose preparation lacks a tool refuses before building" 1 "$rc"
+check "and names the preparation and the tool" 1 "$(printf '%s\n' "$out" | grep -c 'the preparation needs a-command-that-does-not-exist and it is not installed')"
+check "and no component was built" 0 "$(cat "$WORK/components.count" "$WORK/prepared.count" 2>/dev/null | wc -l | tr -d ' ')"
+out=$(SELFTEST_PREPARE_TOOLS=a-command-that-does-not-exist run passing); rc=$?
+check "a suite run alone does not need the preparation's tools" 0 "$rc"
 
 # The host's own refusals, tried and not looked up: a checker that refuses a
 # socket bind stops the run before the build, and so does a disk image that

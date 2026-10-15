@@ -40,7 +40,7 @@ BOOT_KERNEL ?= $(ARCH_BUILD)/rach2/kernel
 # read from the registry rather than written out again: `tests/run style`
 # already requires the registry and the targets in this file to name the same
 # suites, so a list derived from one cannot fall behind the other.
-.PHONY: prepare-all prepare-images components harness-kernel \
+.PHONY: prepare-all prepare-images prepare-tools components harness-kernel \
         $(addprefix run-,$(shell awk -F'|' '!/^#/ && NF > 1 { print $$1 }' tests/registry))
 
 # The card the network suites attach. The RTL8139 is the default, which an
@@ -215,6 +215,14 @@ prepare-images: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HO
                 $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(INSTALLER_MBR_DISK)
 prepare-all: components
 	$(MAKE) --no-print-directory prepare-images prepare-products
+# The commands beyond the build's that the preparation runs, in the registry's
+# form: xorriso for the ISOs and the sticks, and mtools for the GRUB disks.
+# `tests/run` reads them from this target and refuses a set on a host that
+# lacks one before it builds anything, since a set prepares every suite's
+# products whichever suites it names.
+PREPARE_TOOLS = xorriso,mformat,mmd,mcopy
+prepare-tools:
+	@echo $(PREPARE_TOOLS)
 # `tests/run addressed`: the address named on the boot line, and the proof that
 # it is the one in force. The address is deliberately not the one SLIRP hands
 # out: a kernel that ignored `rach2.ip=` entirely would still hold 10.0.2.15 and

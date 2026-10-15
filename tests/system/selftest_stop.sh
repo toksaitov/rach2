@@ -85,6 +85,8 @@ printf '%s\n' 'int main(void) { return 0; }' > "$tree/tools/setup/hostcheck.c"
 cat > "$tree/Makefile" <<'MK'
 components prepare-all:
 	@:
+prepare-tools:
+	@echo -
 run-failing:
 	@cp "$$RACH2_RUN_UTIL" helper
 	@read -r ready < ready; echo failing-start >> events; exit 1
