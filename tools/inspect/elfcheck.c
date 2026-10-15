@@ -1,37 +1,42 @@
 /**
- * elfcheck: judge ELF artifacts against what this system will actually load.
+ * elfcheck: check ELF artifacts against what this system's loaders load.
  *
- * Two commands in one tool, because they share one parser. `elfcheck
- * [--arch ARCH] FILE...` judges user executables the way `exec` does: the
- * LOADER half is `elf_load_image`'s contract (rach2/sys/proc/elf.c) rule for
- * rule, and the POLICY half is this project's, refusing `PT_INTERP` and
- * `PT_DYNAMIC`, since the musl roots these artifacts are staged in have no
- * loader for a dynamic program, and exec refuses one whose loader it cannot
- * find. ARCH is `i686`, the default, for ELF32 i386 programs and the window
- * the i686 kernel loads into, or `x86_64` for ELF64 x86-64 programs and the
- * x86-64 window, [64 KiB, 0x00007FFFFFFFE000), below the stack's base, with
- * file offsets held to 32 bits, as the x86-64 loader reads them. `elfcheck
- * --kernel [--tcc] FILE` checks a kernel against what the multiboot loaders
- * (QEMU's -kernel and GRUB) read: the first checksum-valid multiboot header
- * in the search window with exactly the declared flags, exactly two
- * ascending non-overlapping PT_LOAD segments at or above 1 MiB with
- * `p_paddr == p_vaddr`, the entry inside file-backed bytes, and, where a
- * symbol table exists, `_start` equal to the entry and `_end` equal to the
- * image end. `--tcc` accepts the symbol-free TinyCC layout and adds its
- * first-load rules (file offset 0, address exactly 1 MiB). An ELF64 file is
- * held to the x86-64 kernel's profile instead (`kernel_check64`): linked at
- * KVA_IMAGE plus its physical address and loaded by the header's a.out
- * kludge, which copies the file from the header on, byte for byte. TinyCC
- * links it by the same script as GNU ld but writes no symbol table, so
- * there `--tcc` accepts a kernel without one, whose header then gives the
- * entry and the image end the symbols would.
+ * Two commands in one tool, since they share one parser. `elfcheck
+ * [--arch ARCH] FILE...` checks user executables as `exec` would: the
+ * loader part follows the rules of `elf_load_image` (rach2/sys/proc/elf.c),
+ * and the policy part is this project's: an executable must be `ET_EXEC`
+ * with no `PT_INTERP` and no `PT_DYNAMIC`, since the musl roots these
+ * artifacts are staged in have no loader for a dynamic program, and exec
+ * fails on one whose loader it cannot find. ARCH is `i686`, the default,
+ * for ELF32 i386 programs and the window the i686 kernel loads into, or
+ * `x86_64` for ELF64 x86-64 programs and the x86-64 window, [64 KiB,
+ * 0x00007FFFFFFFE000), below the stack's base, with file offsets limited to
+ * the 32 bits the x86-64 loader reads.
  *
- * `--selftest` runs both batteries: the user checker's literal window
- * boundary cases for each architecture (the numbers rach2/sys/proc/elf.c
- * actually has, written out, so a case built out of a wrong constant cannot
- * pass by moving with it), and the kernel checker's synthesized fixture with
- * every malformed variant refused for its own rule, matched against the
- * diagnostic text.
+ * `elfcheck --kernel [--tcc] FILE` checks a kernel against what the
+ * multiboot loaders (QEMU's -kernel and GRUB) read: the first
+ * checksum-valid multiboot header in the search window with exactly the
+ * declared flags, exactly two ascending non-overlapping PT_LOAD segments at
+ * or above 1 MiB with `p_paddr == p_vaddr`, the entry inside file-backed
+ * bytes, and, where a symbol table exists, `_start` equal to the entry and
+ * `_end` equal to the image end. `--tcc` accepts the symbol-free TinyCC
+ * layout and adds its first-load rules (file offset 0, address exactly
+ * 1 MiB). An ELF64 file is checked against the x86-64 kernel's profile
+ * instead (`kernel_check64`): linked at KVA_IMAGE plus its physical address
+ * and loaded by the header's a.out kludge, which copies the file from the
+ * header on, byte for byte. TinyCC links it by the same script as GNU ld
+ * but writes no symbol table, so there `--tcc` accepts a kernel without
+ * one, whose header then gives the entry and the image end the symbols
+ * would.
+ *
+ * `--selftest` runs the cases of both checkers: the user checker's window
+ * boundary cases for each architecture, with the window's numbers written
+ * out as literals so that a case built from a wrong constant cannot pass by
+ * moving with it, and the kernel checker's built fixtures, each malformed
+ * variant of which must fail for its own rule, as its diagnostic shows.
+ *
+ * Each command exits 0 when everything passes and 1 on a finding; a usage
+ * error, an unknown architecture or an unreadable kernel exits 2.
  */
 #include <stdarg.h>
 #include <stdint.h>
@@ -55,24 +60,29 @@
 #define PT_DYNAMIC 2
 #define PT_INTERP  3
 
+/** The little-endian 16-bit value at `p`. */
 static uint32_t r16(const unsigned char *p)
 {
     return p[0] | p[1] << 8;
 }
+/** The little-endian 32-bit value at `p`. */
 static uint32_t r32(const unsigned char *p)
 {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
+/** The little-endian 64-bit value at `p`. */
 static uint64_t r64(const unsigned char *p)
 {
     return (uint64_t)r32(p) | (uint64_t)r32(p + 4) << 32;
 }
 
-/* ---- the user-executable checker (check_elf semantics) ---- */
+/* ---- the user-executable checker ---- */
 
-/* What an architecture's loader takes: the ELF class and machine, the sizes
-   of the header and of a program header, and the window exec loads into,
-   from its floor up to but not including its ceiling. */
+/**
+ * What an architecture's loader takes: the ELF class and machine, the sizes
+ * of the header and of a program header, and the window exec loads into,
+ * from its floor up to but not including its ceiling.
+ */
 struct user_arch {
     const char *name;
     unsigned elf_class, bits, machine;
@@ -88,12 +98,16 @@ static const struct user_arch user_arches[] = {
 static const struct user_arch *const arch_i686 = &user_arches[0];
 static const struct user_arch *const arch_x86_64 = &user_arches[1];
 
+/* The number of findings so far, over every file checked. */
 static int user_problems;
 
-/* The findings of the last check, which the selftest matches a case
-   against. */
+/* The findings of the last user check, for the selftest to match. */
 static char problem_log[1024];
 
+/**
+ * Report a finding about the file `name` on stderr, append it to
+ * `problem_log`, and count it in `user_problems`.
+ */
 static void problem(const char *name, const char *fmt, ...)
 {
     va_list ap;
@@ -167,9 +181,14 @@ static void user_window_problem(const struct user_arch *a, const char *name)
                 (uint32_t)a->user_min, (uint32_t)a->user_max);
 }
 
-/* Returns the number of findings; `quiet` suppresses the report so the
-   selftest can count without printing. The fields are read at the offsets of
-   `a`'s ELF class, so one walk serves both. */
+/**
+ * Check the user executable `d` of `n` bytes, called `name` in the
+ * findings, against the loader of `a` and this project's policy, and return
+ * the number of findings. The fields are read at the offsets of `a`'s ELF
+ * class, so one walk serves both classes. `quiet` sends the findings to
+ * /dev/null in place of stderr, so that the selftest can count them without
+ * printing; `problem_log` has them either way.
+ */
 static int user_check(const struct user_arch *a, const char *name, const unsigned char *d, size_t n,
                       int quiet)
 {
@@ -221,8 +240,7 @@ static int user_check(const struct user_arch *a, const char *name, const unsigne
     if (user_phdr_unusable(a, name, d, n))
         goto out;
 
-    /* The address space a segment must not wrap: 32 bits for ELF32, and
-       for ELF64 the 64 bits a sum of two fields can overflow. */
+    /* A segment must not wrap 32 bits in ELF32, nor 64 bits in ELF64. */
     wrap = wide ? UINT64_MAX : 0xFFFFFFFFull;
     loads = 0;
     end = 0;
@@ -294,10 +312,12 @@ out:
     return user_problems - before;
 }
 
-/* ---- the kernel checker (check_kernel semantics) ---- */
+/* ---- the kernel checker ---- */
 
+/* Why the last kernel check failed. */
 static char kfail[256];
 
+/** Format the reason for a kernel check's failure into `kfail`; return 1. */
 static int kf(const char *fmt, ...)
 {
     va_list ap;
@@ -308,6 +328,7 @@ static int kf(const char *fmt, ...)
     return 1;
 }
 
+/* A PT_LOAD of an i686 kernel, as its program header has it. */
 struct load {
     uint32_t off, vaddr, paddr, filesz, memsz, align;
 };
@@ -358,8 +379,12 @@ static int multiboot_find(const unsigned char *d, size_t n, uint32_t room, uint3
 static int kernel_check64(const unsigned char *d, size_t n, int tcc, char *detail,
                           size_t detail_len);
 
-/* Returns 0 and fills `detail` on success; nonzero with `kfail` set on
-   the first violation. */
+/**
+ * Check the kernel `d` of `n` bytes against what the multiboot loaders
+ * read, as the opening comment says, under the tcc profile when `tcc` is
+ * set. An ELF64 file goes to `kernel_check64`. Return 0 with a summary in
+ * `detail`, or 1 with the first violation in `kfail`.
+ */
 static int kernel_check(const unsigned char *d, size_t n, int tcc, char *detail, size_t detail_len)
 {
     uint32_t e_type, e_machine, e_entry, e_phoff, e_phentsize, e_phnum;
@@ -545,30 +570,40 @@ static int kernel_check(const unsigned char *d, size_t n, int tcc, char *detail,
 
 /* ---- the x86-64 kernel ---- */
 
-/* The x86-64 kernel's link base, which its PT_LOADs' virtual addresses
-   are their physical ones plus (rach2/sys/arch/x86_64/link.ld), and the
-   multiboot flags its header has: page alignment, the memory map and the
-   a.out kludge, bit 16, without which QEMU's -kernel refuses an ELF64. */
+/*
+ * The x86-64 kernel's link base (rach2/sys/arch/x86_64/link.ld), so that a
+ * PT_LOAD's virtual address is its physical one plus KVA_IMAGE, and the
+ * multiboot flags its header has: page alignment, the memory map and the
+ * a.out kludge, bit 16, without which QEMU's -kernel does not load an ELF64.
+ */
 #define KVA_IMAGE         0xFFFFFFFF80000000ull
 #define MULTIBOOT_FLAGS64 0x10003u
 
+/* A PT_LOAD of the x86-64 kernel, as its program header has it. */
 struct load64 {
     uint64_t off, vaddr, paddr, filesz, memsz, align;
 };
 
-/*
- * The x86-64 kernel against what a multiboot loader does with it. The
- * loader reads no ELF header: it finds the multiboot header, copies the
+/**
+ * Check the x86-64 kernel `d` of `n` bytes against what a multiboot loader
+ * does with it, under the tcc profile when `tcc` is set.
+ *
+ * The loader reads no ELF header: it finds the multiboot header, copies the
  * file from `mb_off - (header_addr - load_addr)` to physical `load_addr` up
  * to `load_end_addr`, zeroes to `bss_end_addr` and jumps to the physical
- * `entry_addr`. So each PT_LOAD's file bytes must lie in the file as far
- * from the copy's start as the load lies from `load_addr`, the bytes before
- * the copy's start, the ELF headers of a first load at file offset 0, being
- * the only ones it leaves behind; the copy must
- * reach the end of every load's file bytes and no further than the file,
- * `bss_end_addr` must be the image's end, and `entry_addr` the entry's
- * physical address. The loads are linked at KVA_IMAGE plus their physical
- * addresses. Returns 0 and fills `detail`, or nonzero with `kfail` set.
+ * `entry_addr`. So each PT_LOAD's file bytes must lie as far from the
+ * copy's start in the file as the load lies from `load_addr` in memory; the
+ * only bytes the copy leaves behind are those before its start, the ELF
+ * headers of a first load at file offset 0. The copy must reach the end of
+ * every load's file bytes and go no further than the file or the last
+ * load's file bytes, `bss_end_addr` must be the image's end, and
+ * `entry_addr` the entry's physical address. The loads are linked at
+ * KVA_IMAGE plus their physical addresses. Where a symbol table exists,
+ * `_start` must be the entry and `_end` the image end under either profile;
+ * only the tcc profile accepts a kernel without one.
+ *
+ * Return 0 with a summary in `detail`, or 1 with the first violation in
+ * `kfail`.
  */
 static int kernel_check64(const unsigned char *d, size_t n, int tcc, char *detail,
                           size_t detail_len)
@@ -752,6 +787,7 @@ static int kernel_check64(const unsigned char *d, size_t n, int tcc, char *detai
 
 /* ---- fixtures and the selftest ---- */
 
+/** Write `v` at `p` as a little-endian 32-bit value. */
 static void w32(unsigned char *p, uint32_t v)
 {
     p[0] = (unsigned char)v;
@@ -759,20 +795,25 @@ static void w32(unsigned char *p, uint32_t v)
     p[2] = (unsigned char)(v >> 16);
     p[3] = (unsigned char)(v >> 24);
 }
+/** Write `v` at `p` as a little-endian 16-bit value. */
 static void w16(unsigned char *p, uint32_t v)
 {
     p[0] = (unsigned char)v;
     p[1] = (unsigned char)(v >> 8);
 }
 
+/** Write `v` at `p` as a little-endian 64-bit value. */
 static void w64(unsigned char *p, uint64_t v)
 {
     w32(p, (uint32_t)v);
     w32(p + 4, (uint32_t)(v >> 32));
 }
 
-/* One PT_LOAD user image with the header table inside it, for the window
-   boundary cases. */
+/**
+ * Build in `b` an i686 user image of one PT_LOAD at `vaddr` of `memsz`
+ * bytes, or of its file size when that is larger, with the headers inside
+ * it and the entry at `entry`, for the window cases. Return its size.
+ */
 static size_t craft_user(unsigned char *b, uint32_t entry, uint32_t vaddr, uint32_t memsz)
 {
     uint32_t filesz = 52 + 32;
@@ -801,7 +842,7 @@ static size_t craft_user(unsigned char *b, uint32_t entry, uint32_t vaddr, uint3
     return filesz;
 }
 
-/* The same image as ELF64 x86-64, for the x86-64 window's cases. */
+/** Build in `b` the image of `craft_user` as ELF64 x86-64; return its size. */
 static size_t craft_user64(unsigned char *b, uint64_t entry, uint64_t vaddr, uint64_t memsz)
 {
     uint64_t filesz = 64 + 56;
@@ -830,9 +871,15 @@ static size_t craft_user64(unsigned char *b, uint64_t entry, uint64_t vaddr, uin
     return (size_t)filesz;
 }
 
-/* A minimal kernel-shaped fixture: a text load at 1 MiB, a data+bss load
-   after it, one multiboot header, and a symtab with `_start` and `_end`.
-   `first_off` 0 models the tcc layout. */
+/**
+ * Build in `b` a minimal i686 kernel: a text load of `text_size` bytes at
+ * 1 MiB, a data and .bss load at the next page boundary, one multiboot
+ * header `mb_at` bytes into the text with the entry 12 bytes after it, and
+ * a symbol table with `_start` and `_end`. `first_off` 0 builds the TinyCC
+ * layout, whose first load starts at file offset 0 with the headers;
+ * otherwise the text starts at file offset `first_off`, as GNU ld lays it
+ * out. Return the size.
+ */
 static size_t craft_kernel(unsigned char *b, uint32_t first_off, uint32_t mb_at, uint32_t text_size)
 {
     uint32_t hdr_size = 52 + 2 * 32;
@@ -931,10 +978,13 @@ static size_t craft_kernel(unsigned char *b, uint32_t first_off, uint32_t mb_at,
     return shoff + 3 * 40;
 }
 
-/* The x86-64 kernel's shape: the ELF header and two program headers at
-   file offset 0 and physical 1 MiB, the multiboot header with the a.out
-   kludge right after them, an entry after it, a data and .bss load on the
-   next page, and a symtab with `_start` and `_end`. Returns its size. */
+/**
+ * Build in `b` the x86-64 kernel's shape: the ELF header and two program
+ * headers at file offset 0 and physical 1 MiB, the multiboot header with
+ * the a.out kludge right after them, an entry after it, a data and .bss
+ * load on the next page, and a symbol table with `_start` and `_end`.
+ * Return its size.
+ */
 static size_t craft_kernel64(unsigned char *b)
 {
     uint64_t hdr = 64 + 2 * 56, mb = hdr, entry_off = mb + 32, text_end = entry_off + 16;
@@ -979,8 +1029,7 @@ static size_t craft_kernel64(unsigned char *b)
     w64(b + 120 + 32, data_len);
     w64(b + 120 + 40, data_len + bss_size);
     w64(b + 120 + 48, 0x1000);
-    /* The multiboot header with the a.out kludge's addresses, then a hlt
-       loop at the entry. */
+    /* The multiboot header with the a.out kludge; a hlt loop at the entry. */
     w32(b + mb, MULTIBOOT_MAGIC);
     w32(b + mb + 4, MULTIBOOT_FLAGS64);
     w32(b + mb + 8, (uint32_t)(0 - (MULTIBOOT_MAGIC + MULTIBOOT_FLAGS64)));
@@ -1015,8 +1064,13 @@ static size_t craft_kernel64(unsigned char *b)
     return shoff + 3 * 64;
 }
 
+/* The number of selftest cases that failed. */
 static int st_bad;
 
+/**
+ * One case of the kernel check: the kernel `d` must fail, with `want` in
+ * the reason. `why` describes the case in the selftest's messages.
+ */
 static void st_expect_kernel(const unsigned char *d, size_t n, int tcc, const char *why,
                              const char *want)
 {
@@ -1139,7 +1193,7 @@ static void st_user(void)
 /**
  * The x86-64 kernel rows of the selftest: the fixture accepted under both
  * profiles and without its symbol table under the tcc one, and each fault
- * of the a.out copy, the link address and the symbols refused for its own
+ * of the a.out copy, the link address and the symbols failing for its own
  * rule.
  */
 static void st_kernel64(void)
@@ -1160,8 +1214,7 @@ static void st_kernel64(void)
                 kfail);
         st_bad++;
     }
-    /* Without section headers, as TinyCC writes it: the tcc profile
-       takes it, and the common one wants the symbol table. */
+    /* No section headers, as TinyCC writes it: only the tcc profile passes. */
     memcpy(m64, k64, k64n);
     w64(m64 + 40, 0);
     w16(m64 + 60, 0);
@@ -1191,8 +1244,7 @@ static void st_kernel64(void)
     w32(m64 + mb64 + 20, r32(k64 + mb64 + 24));
     st_expect_kernel(m64, k64n, 0, "an x86-64 copy that runs over .bss",
                      "memory the loader must zero");
-    /* The header moved past the entry, with load_addr at it: the copy
-       starts after `_start`, which it then never loads. */
+    /* The header moved past the entry, with load_addr at it. */
     memcpy(m64, k64, k64n);
     memset(m64 + mb64, 0, 32);
     memcpy(m64 + mb64 + 40, k64 + mb64, 32);
@@ -1212,6 +1264,7 @@ static void st_kernel64(void)
                      "is not the image end");
 }
 
+/** Run every case of both checkers; return 0 when all pass, else 1. */
 static int selftest(void)
 {
     unsigned char good[16384], gnu[16384], mut[16384], big[32768];
@@ -1327,6 +1380,10 @@ static int selftest(void)
 
 /* ---- entry ---- */
 
+/**
+ * Read the whole file `path` into a buffer from malloc, which the caller
+ * frees, and set `*n` to its size. Return NULL when it cannot be read.
+ */
 static unsigned char *read_file(const char *path, size_t *n)
 {
     FILE *f = fopen(path, "rb");
@@ -1350,6 +1407,7 @@ static unsigned char *read_file(const char *path, size_t *n)
     return buf;
 }
 
+/** Run the command the arguments name, as the opening comment says. */
 int main(int argc, char **argv)
 {
     int i, kernel_mode = 0, tcc = 0, first = 1;

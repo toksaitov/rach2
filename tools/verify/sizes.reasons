@@ -740,7 +740,7 @@ tools/inspect/elfcheck.c:kernel_check complexity 61 an inspector's check, one wa
 tools/inspect/elfcheck.c:kernel_check lines 190 an inspector's check, one walk over the format it reads
 tools/inspect/elfcheck.c:selftest lines 239 the checker's own selftest, its cases in one table
 tools/inspect/elfcheck.c:user_check complexity 46 an inspector's check, one walk over the format it reads
-tools/inspect/elfcheck.c:user_check lines 140 an inspector's check, one walk over the format it reads
+tools/inspect/elfcheck.c:user_check lines 118 an inspector's check, one walk over the format it reads
 tools/inspect/elfcheck.c:kernel_check64 complexity 66 an inspector's check, one walk over the format it reads
 tools/inspect/elfcheck.c:kernel_check64 lines 179 an inspector's check, one walk over the format it reads
 

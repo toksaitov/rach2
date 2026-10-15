@@ -3,16 +3,14 @@
 #
 # check_diskpolicy.sh: read a kernel's disk policy off the built artifact.
 #
-# Milestone 24 put Rach2 into a laptop whose SSD has somebody's Windows, and
-# nothing the ordinary kernel does may write that disk. The rule is enforced
-# by a build switch (`-DRACH2_DISK_READONLY`, see rach2/sys/block/diskcmd.c),
-# and a build switch is only as good as the check that the artifact actually
-# got built with it. diskcmd.c has an explicit banner naming the policy, the
-# kernel prints it at boot, and this reads it out of the binary through the
-# binfind byte searcher and requires BOTH halves: the expected banner
-# present, and the other one absent. A kernel built without the switch fails
-# this, which is the case worth catching, and so does one that somehow has
-# both.
+# rach2/sys/block/diskcmd.c compiles one of two strings into the kernel:
+# `rach2: disk policy: read-only` when it is built with -DRACH2_DISK_READONLY,
+# as the metal kernel is, and `rach2: disk policy: read-write` otherwise.
+# This script searches the binary for them with binfind and requires the
+# expected string present and the other absent, so a kernel built with the
+# other policy fails, and so does one that has both strings. mkiso.sh runs it
+# before it builds an ISO around a kernel. The policy itself is described in
+# rach2/sys/block/Readme.md.
 #
 # Usage: check_diskpolicy.sh <kernel> read-only|read-write
 #

@@ -1,38 +1,36 @@
 #!/usr/bin/env sh
 
 #
-# check_link.sh: ask whether a program could link against what an image has.
+# check_link.sh: check that a program could link against what an image has.
 #
 # The guest compiles with tcc, and tcc links what the guest has: musl's
 # `libc.a`, tcc's runtime `libtcc1.a`, and the startup objects. Nothing
-# appends libgcc there the way the host's wrapper does, so a symbol musl
-# references and neither archive defines is not a build-time question at
-# all: it is a student's first link failing with an undefined symbol, which
-# is a bad way to learn about libgcc.
+# appends libgcc there as vendor/musl/muslgcc does on the host, so a symbol
+# musl references and neither archive defines would stop a student's first
+# link in the guest with an undefined symbol.
 #
-# So the question is asked here, on the host, of the very files that will
-# be staged: every undefined symbol in the libraries, minus everything they
-# define between them, must be empty. A weak undefined is not a failure,
-# since a link resolves those to zero, and neither is a symbol the C
-# library itself defines elsewhere in the same archive. A definition counts
-# only when nm reports it with an upper-case type letter: a lower-case one
-# is local to its own object and cannot resolve another object's reference,
-# and this archive holds exactly that case, a local `__udivmoddi4` beside
-# the global one.
+# The script checks the files that will be staged, on the host: the
+# undefined symbols in them, less every symbol they define between them,
+# must be none. A weak undefined symbol is not a failure, since a link
+# resolves it to zero. A definition counts only when nm reports it with an
+# upper-case type letter: a lower-case one is local to its own object and
+# cannot resolve another object's reference, and the staged archives have
+# such a local `__udivmoddi4` beside the global one.
 #
-# Three exclusions, each stated rather than quietly dropped. `main` is
-# provided by the program being compiled. The linker's own symbols
-# (`_GLOBAL_OFFSET_TABLE_` and the section markers) name places in the
-# output image, and tcc defines them as it lays the image out. And an
-# archive member no ordinary link reaches may reference what it likes:
-# `alloca86-bt.o` is the bounds-checking alloca and wants the `bcheck.o`
-# this build leaves out, and a link without `-b` never asks for it.
+# Three kinds of reference are excluded, and the awk program lists them.
+# `main` is defined by the program being compiled. The linker's own symbols
+# (`_GLOBAL_OFFSET_TABLE_` and the section markers) are places in the output
+# image, which tcc defines as it lays the image out. And the references of
+# an archive member no ordinary link reaches are not counted: `alloca86-bt.o`
+# (`alloca86_64-bt.o` on x86-64) is the bounds-checking alloca and references
+# the `bcheck.o` this build leaves out, and only a link with `-b` takes it.
 #
 # The symbols are read with CHECK_LINK_NM, the cross nm of the architecture
 # the files are for, i686-elf-nm when it is not set.
 #
 # Usage: [CHECK_LINK_NM=x86_64-elf-nm] check_link.sh LIB_OR_OBJECT...
-# Exits non-zero if anything would be left undefined.
+# Exits 1 when a symbol would be left undefined or nm fails on a file, and 2
+# on a usage error or when nm is not found.
 #
 
 set -eu

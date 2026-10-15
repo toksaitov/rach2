@@ -1,19 +1,19 @@
 /**
  * binfind: find a byte string in a file, and optionally replace it.
  *
- * `binfind STRING FILE` exits 0 when the file contains the string and 1
- * when it does not. The TinyCC policy check needs to know that the shipped
- * compiler carries its four refusal diagnostics, which is a byte search in
- * a binary. strings(1) piped to grep answered it before, but that put a
- * whole extra host tool in the required set for one search, and the shell
- * text tools differ between platforms on binary input; a hundred lines of
- * C differ nowhere.
+ * `binfind STRING FILE` exits 0 when the file contains the string, 1 when
+ * it does not, and 2 on an error. `make check-tcc` searches the shipped
+ * TinyCC with it for the four diagnostics of its output policy, and
+ * check_diskpolicy.sh and check_recovery.sh search a kernel for its
+ * banners. The shell text tools differ between platforms on binary input,
+ * and strings(1) would be one more host tool for one search; this program
+ * behaves the same on every host. The string is 1 to 4096 bytes.
  *
  * `binfind --offset STRING FILE` prints the byte offset of the first match
  * instead, and `binfind --replace OLD NEW FILE` overwrites the first match
  * in place. The replacement must be the same length as what it replaces:
- * the callers are suite scripts marking a kernel's banner or a staged
- * menu, where every offset after the edit has to stay where it was.
+ * the callers are suite scripts marking a kernel's banner or finding a
+ * staged menu, where every offset after the edit has to stay where it was.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,9 +21,12 @@
 
 #define CHUNK 65536
 
-/* The offset of the first occurrence of `needle`, or -1. Each read keeps
-   the previous block's tail, so a match spanning two reads is still
-   seen. */
+/**
+ * The offset of the first occurrence of the `need` bytes at `needle` in `f`,
+ * from its current position; -1 when there is none, or -2 when the buffer
+ * cannot be allocated. Each read keeps the last `need - 1` bytes of the one
+ * before, so a match across two reads is found.
+ */
 static long find_in(FILE *f, const char *needle, size_t need)
 {
     unsigned char *buf = malloc(CHUNK + need);
@@ -50,6 +53,11 @@ static long find_in(FILE *f, const char *needle, size_t need)
     return -1;
 }
 
+/**
+ * Search, print or replace as the opening comment says. Exit 0 when the
+ * string is found, 1 when it is not, or 2 on a usage error or when the file
+ * cannot be opened or written or the buffer allocated.
+ */
 int main(int argc, char **argv)
 {
     const char *needle, *path;

@@ -3,17 +3,18 @@
 #
 # check_recovery.sh: read a kernel's disk authority off the built artifact.
 #
-# The recovery kernel may write any sector of the disk and the ordinary one
-# may not (see rach2/sys/block/recovery.c). Each build carries an explicit
-# banner naming which it is; this reads the banner out of the binary through
-# the binfind byte searcher and requires the expected one present and the
-# other absent, so a kernel built into the wrong tree fails before anything
-# stages it. This check catches a build mistake, not a tampered kernel: the
-# banner is a string in .rodata and the write handler is a separate
-# conditional. The behavioral proof is `tests/run authority`, which boots
-# both kernels and requires the ordinary one to refuse a write; this check
-# exists so a build mistake is caught before that test runs, not instead of
-# it.
+# rach2/sys/block/recovery.c compiles one of two strings into the kernel:
+# `rach2: disk authority: recovery` when it is built with -DRACH2_RECOVERY,
+# whose disk nodes can be written, and `rach2: disk authority: ordinary`
+# otherwise. This script searches the binary for them with binfind and
+# requires the expected string present and the other absent, so a kernel
+# built into the wrong tree fails before anything stages it.
+#
+# The string and the write handler are separate conditionals, so the check
+# finds a build mistake and says nothing of a kernel edited afterwards.
+# `tests/run authority` runs it on both kernels, then boots them and requires
+# a write by the ordinary one to fail. The authority itself is described in
+# rach2/sys/block/Readme.md.
 #
 # Usage: check_recovery.sh <kernel> recovery|ordinary
 #

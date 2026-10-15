@@ -7,36 +7,39 @@
  * tools/image/mkgrubcore.sh writes the ones `bootctl grub` installs over
  * it. Both embed tools/image/grub-embed.cfg, and what that file says is
  * the difference between a machine that can be repaired when its boot
- * partition is damaged and one that cannot: two `configfile` calls,
- * partition 1 first and partition 3 second. The order is the whole of it,
- * since the first call opens a menu that never returns, so a file naming
- * partition 3 first would send every healthy boot to recovery. The early
- * parser these run through has no `if`, which is why they are a pair and
+ * partition is damaged and one that cannot: two pairs of a `search` by
+ * label and a `configfile` call, the boot partition's menu first and the
+ * recovery partition's second. The order is the whole of it, since the
+ * first call opens a menu that never returns, so a file naming the
+ * recovery menu first would send every healthy boot to recovery. The early
+ * parser these run through has no `if`, which is why they are two pairs and
  * not a test. It is checked on the file and not on the image because
  * grub-mkimage compresses what it embeds. What is required is the whole
- * command list and not the presence of two lines in it: GRUB takes `;` as
- * a command separator, so anything looking only for the two expected lines
- * would pass a file whose first command sent every healthy machine to
- * recovery. A commented-out line reads as an absent one.
+ * command list and not the presence of its lines: GRUB takes `;` as a
+ * command separator, so anything looking only for the expected lines would
+ * pass a file whose first command sent every healthy machine to recovery.
+ * A commented-out line reads as an absent one.
  *
  * `cfgcheck sealednet ADDRESS PREFIX MASK GATEWAY SCRIPT` checks the
  * sealed disk's fixed address against the script that falls back to it.
  * The address is named twice, in two shapes: the Makefile's SEALED_ADDRESS,
  * SEALED_PREFIX and SEALED_GATEWAY, which the disk's documentation and the
  * host's procedures name, and krffs/rescue-static.script, which has the
- * same address as a dotted mask and applies it from userland when a
- * recovery boot gets no lease. Two shapes of one fact drift, and a machine
- * whose record and fallback disagree is unreachable by the wrong one. So
- * they are held together before a disk is written: the prefix and the mask
- * must describe the same subnet, the address must be a host in it, the
- * gateway must be a different host in the same subnet, and the script must
- * RUN exactly those numbers. What is compared is the script's commands and
- * not its text, and the reading fails closed: a segment that mentions
- * `ifconfig` or `route` at all must be one of three exact forms, so a
- * command hidden behind `command`, `eval`, a subshell or backticks is
- * refused rather than ignored.
+ * same address with a dotted mask (SEALED_MASK) and applies it from
+ * userland when a recovery boot gets no lease. Two shapes of one fact
+ * drift, and a machine whose record and fallback disagree is unreachable by
+ * the wrong one. So they are checked together before a disk is written: the
+ * prefix and the mask must describe the same subnet, the address must be a
+ * host in it, the gateway must be a different host in the same subnet, and
+ * the script must run exactly those numbers. What is compared is the
+ * script's commands and not its text, and the reading fails closed: a
+ * segment that mentions `ifconfig` or `route` at all must be one of three
+ * exact forms, so a command hidden behind `command`, `eval`, a subshell or
+ * backticks is rejected rather than ignored.
  *
- * `--selftest` runs both checkers over the fixtures they carry.
+ * `--selftest` runs both checkers over their own fixtures. Each check
+ * exits 0 when it passes and 1 when it fails, with a line on stderr; a
+ * usage error exits 2.
  */
 #include <ctype.h>
 #include <stdarg.h>
@@ -53,8 +56,10 @@ static const char *const GRUB_WANT[GRUB_LINES] = {
     "search --no-floppy --label RACH2RECOV --set=root",
     "configfile ($root)/boot/grub/recovery.cfg"};
 
+/* Why the last check failed, for the caller's message. */
 static char why[512];
 
+/** Format the reason for a failure into `why`. */
 static void say(const char *fmt, ...)
 {
     va_list ap;
@@ -64,6 +69,11 @@ static void say(const char *fmt, ...)
     va_end(ap);
 }
 
+/**
+ * Remove the white space around `s`: the leading spaces and tabs are passed
+ * over, and the trailing spaces, tabs, carriage returns and newlines are
+ * cut in place. Return the first character kept.
+ */
 static char *trim(char *s)
 {
     char *end;
@@ -78,8 +88,11 @@ static char *trim(char *s)
 
 /* ---- grubembed ---- */
 
-/* Nonzero when `text` is exactly the two searches and two configfile
-   calls, in order. */
+/**
+ * Whether `text`, blank and comment lines aside, is exactly the two
+ * searches and two configfile calls of GRUB_WANT, in order. On a failure
+ * `why` says so.
+ */
 static int grub_ok(const char *text)
 {
     char buf[MAX_TEXT];
@@ -113,7 +126,7 @@ static int grub_ok(const char *text)
 
 /* ---- sealednet ---- */
 
-/* A dotted quad as a 32-bit value, or -1. */
+/** The value of the dotted quad `text`, or -1 when it is not one. */
 static long quad(const char *text)
 {
     unsigned long value = 0;
@@ -141,9 +154,11 @@ static long quad(const char *text)
     return *text == '\0' ? (long)value : -1;
 }
 
-/* Split a segment into whitespace tokens, with `(){}` and backticks read
-   as whitespace so a command in a subshell or backticks is seen. Returns
-   the count. */
+/**
+ * Split `segment` in place into at most `max` tokens at spaces and tabs,
+ * with `(){}` and backticks read as white space so that a command in a
+ * subshell or backticks is seen. Return the count.
+ */
 static int tokens_of(char *segment, char **out, int max)
 {
     int n = 0;
@@ -167,6 +182,7 @@ static int tokens_of(char *segment, char **out, int max)
     return n;
 }
 
+/** Whether the `n` tokens of `got` are the `wn` strings of `want`. */
 static int same_tokens(char **got, int n, const char *const *want, int wn)
 {
     int i;
@@ -179,10 +195,22 @@ static int same_tokens(char **got, int n, const char *const *want, int wn)
     return 1;
 }
 
-/* The network commands the script would run must be exactly the two this
-   machine is supposed to run, in order. Every segment of every uncommented
-   line is read, not the first of each: a line can carry more than one
-   command. Returns nonzero when the script agrees. */
+/**
+ * Whether the network commands the script `text` would run are exactly the
+ * two this machine is supposed to run, `ifconfig eth0 ADDRESS netmask MASK`
+ * and then `route add default gw GATEWAY`, beside any number of the bare
+ * `ifconfig eth0` that reads the current address. On a failure `why` says
+ * so.
+ *
+ * Every segment of every uncommented line is read, not the first of each,
+ * since a line can have more than one command. A line is cut into segments
+ * at the shell's separators `||`, `&&`, `;`, `|`, `then`, `else` and `do`,
+ * found as text, as they appear in this script's grammar. The keywords are
+ * looked for in a segment's tokens and not in the segment: tokenizing ends
+ * the segment string at its first token, so a search of the segment
+ * afterwards would see only that, and `command ifconfig ...` would read as
+ * a segment with no network command in it at all.
+ */
 static int script_ok(const char *text, const char *address, const char *mask, const char *gateway)
 {
     static const char *read_form[2] = {"ifconfig", "eth0"};
@@ -213,9 +241,6 @@ static int script_ok(const char *text, const char *address, const char *mask, co
 
         if (*cmd == '\0' || *cmd == '#')
             continue;
-        /* Segment on the shell's separators: || && ; | then else do. The
-           search is textual, the way the separators appear in this
-           script's grammar. */
         while (seg != NULL && *seg != '\0') {
             char *cut = NULL, *at;
             static const char *const seps[] = {"||", "&&", ";", "|", " then ", " else ", " do "};
@@ -233,19 +258,13 @@ static int script_ok(const char *text, const char *address, const char *mask, co
             if (cut != NULL)
                 *cut = '\0';
             n = tokens_of(seg, tok, 16);
-            /* The keywords are looked for in the TOKENS and not in the
-               segment: tokenizing ends the segment string at its first
-               token, so a search of the segment afterwards would see only
-               that, and `command ifconfig ...` would read as a segment
-               with no network command in it at all. */
             mentions = 0;
             for (i = 0; i < n; i++)
                 if (strstr(tok[i], "ifconfig") != NULL || strstr(tok[i], "route") != NULL)
                     mentions = 1;
             if (mentions) {
                 if (same_tokens(tok, n, read_form, 2)) {
-                    /* The read of the current address the fallback
-                       tests. */
+                    /* The read of the current address the fallback tests. */
                 } else if (matched == 0 && same_tokens(tok, n, want0, 5)) {
                     matched = 1;
                 } else if (matched == 1 && same_tokens(tok, n, want1, 5)) {
@@ -272,6 +291,7 @@ static int script_ok(const char *text, const char *address, const char *mask, co
 
 static int st_bad, st_ran;
 
+/** One case of the GRUB check: `text` must pass when `want_ok` is set. */
 static void st_grub(const char *name, const char *text, int want_ok)
 {
     int ok = grub_ok(text);
@@ -283,6 +303,7 @@ static void st_grub(const char *name, const char *text, int want_ok)
     }
 }
 
+/** One case of the script check, on 10.0.0.5/8 through 10.0.0.1. */
 static void st_net(const char *name, const char *text, int want_ok)
 {
     int ok = script_ok(text, "10.0.0.5", "255.0.0.0", "10.0.0.1");
@@ -294,6 +315,7 @@ static void st_net(const char *name, const char *text, int want_ok)
     }
 }
 
+/** Run every case of both checks; return 0 when all pass, else 1. */
 static int selftest(void)
 {
     const char *both = "search --no-floppy --label RACH2BOOT --set=root\n"
@@ -423,6 +445,10 @@ static int selftest(void)
     return 0;
 }
 
+/**
+ * Read the whole file `path` into a string from malloc, which the caller
+ * frees; NULL when it does not open or read.
+ */
 static char *read_text(const char *path)
 {
     FILE *f = fopen(path, "rb");
@@ -446,6 +472,7 @@ static char *read_text(const char *path)
     return buf;
 }
 
+/** Run the check the arguments name, as the opening comment says. */
 int main(int argc, char **argv)
 {
     if (argc == 2 && strcmp(argv[1], "--selftest") == 0)
