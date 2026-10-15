@@ -152,7 +152,7 @@ step_glibc()
 
 step_gcc2()
 {
-    s="$SRC/gcc-16.2.0"
+    s="$SRC/gcc-$(awk '$1 == "gcc" { print $2; exit }' "$DIR/sources.txt")"
     [ -d "$s/gmp" ] || s="$(gcc_source)"
     cd "$(fresh gcc2)"
     "$s/configure" $GCC_COMMON --enable-languages=c,c++ --enable-shared \
