@@ -38,7 +38,13 @@
 # session of the loop before it still runs, as one does after that loop's
 # tmux session is killed, waits for the session to end before it does
 # anything in the clone.
+#
+# While a `hold` issue is open, the loop starts no session on an issue whose
+# work is committed on a branch named for it and waits only for the push,
+# unless the issue is a `ci:` one, whose repair the hold lets through; it
+# looks again every five minutes, and the next session after the hold pushes.
 
+REPO=toksaitov/rach2
 REASONING=high
 CODEX_MODEL=gpt-6.1-sol
 DEADLINE=21600
@@ -70,6 +76,27 @@ claim()
         fi
     done
 } 9>> "$HOME/.rach2-claim.lock"
+
+# waiting N: print the number of the open `hold` issue and succeed when the
+# work on issue N is committed and only its push waits for that hold: a local
+# branch named for N has commits that master lacks, and N is not a `ci:`
+# issue, whose repair the hold lets through. Fail when nothing waits or
+# GitHub cannot be reached, so the loop goes on to the session.
+waiting()
+{
+    unpushed=
+    for b in $(git for-each-ref --format='%(refname:short)' "refs/heads/$1-*"); do
+        [ -z "$(git rev-list -n 1 "origin/master..$b" --)" ] || unpushed=$b
+    done
+    [ -n "$unpushed" ] || return 1
+    hold=$(gh issue list --repo "$REPO" --label hold --state open \
+        --json number --jq '.[0].number // empty') && [ -n "$hold" ] || return 1
+    title=$(gh issue view "$1" --repo "$REPO" --json title --jq .title) || return 1
+    case $title in
+        ci:*) return 1 ;;
+    esac
+    echo "$hold"
+}
 
 # session ISSUE: run one session on ISSUE with the agent's command.
 session()
@@ -171,6 +198,11 @@ main()
         fi
         if [ -z "$issue" ]; then
             log idle
+            sleep 300
+            continue
+        fi
+        if hold=$(waiting "$issue"); then
+            log "#$issue is committed and waits for hold #$hold"
             sleep 300
             continue
         fi
