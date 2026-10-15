@@ -1,17 +1,18 @@
 /**
- * Check standard description allocation, locking across relocation, the
- * descriptor limit of each process that shares a table, the errors of an
- * allocation the limit or the heap refuses, and whether a description is
- * open still.
+ * fd_hosttest.c: the descriptor tables and open file descriptions of
+ * rach2/sys/fs/fd.c, and the process allocation of rach2/sys/proc/process.c
+ * that makes a table.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
- * The namespace substitute completes the writer's relocation when the reader
- * waits for it. The operation takes the namespace recursively, as the root
- * adapter does. A handle captured before that wait still refers to the freed
- * node even though fd_ofd_repoint updated the description.
+ * The heap counts the allocations live in `allocations`; a row that sets
+ * `fail_after` to N lets N more succeed and fails every one after. The
+ * namespace lock of the model completes a pending move of a node, as a
+ * writer that held the lock would, when a description's owner takes it. A
+ * handle read before that wait would still name the old node, though
+ * `fd_ofd_repoint` has updated the description.
  */
 #include "fs/vfs.h"
 #include "lib/kerrno.h"
@@ -44,7 +45,8 @@ static void check(int ok, const char *what)
     }
 }
 
-/** Supply the descriptor allocator with zeroed host memory. */
+/** Zeroed host memory, counted in `allocations`, or NULL once `fail_after`
+ *  has counted down to 0. */
 void *kzalloc(size_t size)
 {
     void *ptr;
@@ -62,7 +64,7 @@ void *kzalloc(size_t size)
     return ptr;
 }
 
-/** Release memory allocated by the descriptor code. */
+/** Free what `kzalloc` gave, and count it. */
 void kfree(void *ptr)
 {
     if (ptr) {
@@ -114,13 +116,13 @@ void path_bufs_free(process_t *p)
     (void)p;
 }
 
-/** Nor have they a seccomp filter. */
+/** These process fixtures have no seccomp filter. */
 void seccomp_release(process_t *p)
 {
     (void)p;
 }
 
-/** No row reparents a child. */
+/** No row reparents a child, so a signal fails the test. */
 void signal_post(process_t *p, int signo)
 {
     (void)p;
@@ -128,6 +130,7 @@ void signal_post(process_t *p, int signo)
     check(0, "unexpected signal");
 }
 
+/** `signal_post`, without the information. */
 void signal_post_info(process_t *p, int signo, const struct k_siginfo *info)
 {
     (void)info;
@@ -140,6 +143,7 @@ uint32_t kirq_save(void)
     return 0;
 }
 
+/** Restore nothing: `kirq_save` masked nothing. */
 void kirq_restore(uint32_t flags)
 {
     (void)flags;
@@ -152,6 +156,7 @@ void arch_context_init(struct process *proc, void (*entry)(void))
     (void)entry;
 }
 
+/** No row switches to a process, so the check of a context passes. */
 int arch_context_check(void)
 {
     return 0;
@@ -163,6 +168,7 @@ int lock_any(void)
     return 0;
 }
 
+/** No description has a lock to drop. */
 void lock_ofd_gone(const struct open_file *ofd)
 {
     (void)ofd;
@@ -175,20 +181,24 @@ void inotify_desc(struct open_file *ofd, uint32_t mask)
     (void)mask;
 }
 
-/** Stop on any architecture check reached by mistake. */
+/** End the test with a failure: no row reaches a panic. */
 void k_panic(const char *message)
 {
     printf("fd_hosttest: fail: unexpected panic: %s\n", message);
     exit(1);
 }
 
-/** Initialize the unused scheduler queue. */
+/** Make `wq` empty; no process sleeps on it. */
 void wait_queue_init(wait_queue_t *wq)
 {
     wq->head = 0;
 }
 
-/** Complete an earlier operation on a shared description. */
+/**
+ * The wait for a busy description: check that it starts busy under one
+ * namespace lock, end the other operation that holds it, as that operation
+ * would while the caller sleeps, and count the wait. Returns 0.
+ */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
@@ -207,7 +217,11 @@ void wq_wake_all(wait_queue_t *wq)
     check(!reader->busy, "wake follows description release");
 }
 
-/** Complete the other description's relocation before granting the lock. */
+/**
+ * Take the namespace lock, counted in `depth`. A move of the node that is
+ * pending is completed first with `fd_ofd_repoint`, as another writer that
+ * held the lock would complete it, and counted as a wait.
+ */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
     if (pending) {
@@ -236,8 +250,9 @@ static const struct open_file *closing;
 static uint32_t closing_serial;
 static int closing_live = -1;
 
-/** No backing resources exist in this lock test; a row that names the
- * description being closed learns whether it is open meanwhile. */
+/** A file system's close, which has nothing to release. For the
+ *  description `closing` names, it records in `closing_live` whether
+ *  `fd_ofd_live` finds it open meanwhile. */
 void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
 {
     (void)mnt;
@@ -248,7 +263,9 @@ void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
     }
 }
 
-/** Model the root adapter's by-value handle and recursive namespace lock. */
+/** An operation of the root's adapter, which takes `handle` by value and
+ *  the namespace lock again, recursively: the handle and the description's
+ *  node must both be the node after its move. */
 static void operation(struct vfs_mount *mnt, void *handle)
 {
     vfs_ns_lock(mnt);
@@ -424,9 +441,9 @@ static void table_copies(void)
 
 /**
  * A descriptor the heap has no room for is ENOMEM, whether its description
- * or the table's growth is refused, and leaves its slot free; a minimum at
- * the limit is EMFILE. The growth dup2 asks for is ENOMEM when the heap has
- * no room, and a destination outside the limit is EBADF.
+ * or the table's growth fails, and leaves its slot free; a minimum at the
+ * limit is EMFILE. The growth a dup2 needs is ENOMEM when the heap has no
+ * room, and a destination outside the limit is EBADF.
  */
 static void allocation_errors(void)
 {
@@ -502,8 +519,8 @@ static void description_holders(void)
 }
 
 /**
- * Whether a description is open still, which an epoll registration asks of
- * the one it was made for: while a reference is left, by the serial it was
+ * Whether a description is open still, which an epoll registration checks
+ * of the one it was made for: while a reference is left, by the serial it was
  * made with and no other, which a later description at its address has; not
  * while its file system closes it after its last reference, nor after.
  */
@@ -534,13 +551,30 @@ static void description_live(void)
           "a description is not open after its last reference");
 }
 
-/** Exercise a waiting independent open, a shared open, and other file types. */
-/* A mount is its own base here: no test makes a bind mount. */
+/** A mount is its own base: no row makes a bind mount. */
 const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 {
     return m;
 }
 
+/**
+ * Run the rows of the functions above, then those of the description lock
+ * and the namespace lock on one description:
+ *
+ * - on the KRFFS root's type the namespace lock comes first and completes a
+ *   pending move, which updates the description's node and handle, so an
+ *   operation that reads the handle after the lock gets the moved node; the
+ *   description lock is let go before the outer namespace lock;
+ * - a description another operation holds is waited for under the
+ *   namespace lock, and a wake follows its release;
+ * - on another type whose descriptions take the namespace lock, a move
+ *   updates the node and leaves the handle, an open record of the type's
+ *   own;
+ * - a type that needs no serialising takes no namespace lock, and a
+ *   description with no mount takes only its own lock.
+ *
+ * Returns 0 when every check passed and 1 otherwise.
+ */
 int main(void)
 {
     fd_table_t table;
