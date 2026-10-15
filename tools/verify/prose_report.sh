@@ -127,7 +127,7 @@ fixture_lines() {
 # The baseline's shape, for --baseline: the in-house counts per population.
 baseline_lines() {
     printf '%s\n' \
-        "# Watched phrases, per population, at the end of milestone 30." \
+        "# Watched phrases, per population, at the commit that wrote this record." \
         "# A record, not a budget: only the banned terms fail a build." \
         "# Regenerate: prose_report.sh --baseline --write" \
         "#" \
