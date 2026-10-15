@@ -18,7 +18,8 @@ struct krffs_node;
  * type and a `data_size` of `size`.
  *
  * With `original_node`, the node being moved by a resize, its name, `id`,
- * mode, owner, times and data are copied in and the header is synced.
+ * `parent_id`, mode, owner, times and data are copied in and the header is
+ * synced.
  * Without it, the other fields keep the bytes the free node had, and the
  * caller sets them and syncs the header.
  *

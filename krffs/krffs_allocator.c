@@ -56,6 +56,7 @@ struct krffs_node *krffs_allocate_reserved_node(struct krffs_file_system *file_s
                 node->name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
 
                 node->id = original_node->id;
+                node->parent_id = original_node->parent_id;
                 node->mode = original_node->mode;
                 node->uid = original_node->uid;
                 node->gid = original_node->gid;
