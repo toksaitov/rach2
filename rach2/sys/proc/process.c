@@ -1,3 +1,7 @@
+/*
+ * process.c: the process list, the making and freeing of records, and the
+ * parts of a process's end and of the timer tick that walk the list.
+ */
 #include "process.h"
 #include "../lib/kstring.h"
 #include "../fs/fd.h"
@@ -14,19 +18,12 @@ extern volatile uint32_t kernel_ticks;
 
 process_t *proc_list;
 process_t *proc_idle;
-static process_t *proc_tail;
+static process_t *proc_tail; /* the last record of proc_list */
 
 struct percpu cpu_table[NR_CPUS];
 
 uint32_t proc_dead_threads;
 
-/**
- * Whether this processor is inside a user process's system call.
- *
- * Asked by the code whose rules depend on it: the ATA driver's wait and
- * reclaim's writeback sleep only inside a call, and the USB disk settles a
- * stick only outside one. The idle process and a kernel thread answer no.
- */
 int proc_in_syscall(void)
 {
     return current_proc != NULL && current_proc->in_syscall != 0;
@@ -36,6 +33,7 @@ int proc_in_syscall(void)
  * it. */
 extern volatile uint32_t init_pid;
 
+/* The next pid `alloc_process` tries, and the last it gave out. */
 static uint32_t next_pid = 0;
 static uint32_t last_pid;
 
@@ -45,11 +43,8 @@ uint32_t proc_last_pid(void)
 }
 
 /**
- * Reset the process table to its boot state and check the record's layout.
- *
- * The architecture's context switch reads fields of the record at fixed
- * byte offsets; `arch_context_check` checks them here for the build whose
- * compiler cannot check them at build time.
+ * The layout is checked at boot in every build, for the kernel TinyCC
+ * builds, since that compiler cannot check it at build time.
  */
 void init_proc(void)
 {
@@ -64,13 +59,11 @@ void init_proc(void)
 }
 
 /**
- * Restart pid numbering at 1, for the boot that is about to start init.
- *
  * `next_pid` starts at 0 and the boot self-tests spawn processes before init
- * exists, but init must be pid 1: `kill(1, ...)` is how the shipped `halt`,
+ * exists, but init must be pid 1: `kill(1, ...)` is how BusyBox's `halt`,
  * `poweroff` and `reboot` ask for a shutdown. `alloc_process` skips any pid
  * that is still live, so a self-test record that outlived its test would
- * push init to the next free number, not collide with it.
+ * push init to the next free number and not collide with it.
  */
 void proc_reclaim_boot_pids(void)
 {
@@ -104,17 +97,11 @@ void process_count_fork(void)
 }
 
 /**
- * A process record from the heap, on the list and ready to run.
- *
- * The new pid is bounded to the positive int range, since the /proc path
- * layer has pid as an int, and any still-live pid is skipped so live
- * pids stay unique. The wrap is unreachable in practice (~2e9 spawns), so
- * the assignment is normally just `next_pid++`. The process starts as the
- * leader of its own session and process group; fork() overrides `sid` and
- * `pgid` to inherit the parent's.
- *
- * Return the process, or NULL if its record, floating-point area,
- * descriptor table or standard descriptions cannot be allocated.
+ * The pid is kept in the positive int range, since the /proc path layer has
+ * a pid as an int, and a pid still in use is skipped, so that the pids in
+ * use stay unique; the wrap comes only after two thousand million records,
+ * and the pid is otherwise `next_pid`. fork gives the child the parent's
+ * session and process group in place of its own.
  */
 process_t *alloc_process(void)
 {
@@ -239,18 +226,14 @@ void free_process(process_t *proc)
 }
 
 /**
- * Wake timed sleepers whose deadline has passed, and post the alarms due.
- *
- * Moves any timed sleeper (nanosleep, poll with a deadline, or a wait-queue
- * wait with one, such as the kernel's ping) whose wakeup tick has arrived
- * from BLOCKED back to READY so the scheduler runs it, and posts SIGALRM to
- * each process whose real-time timer is due, arming the timer again for its
- * interval or leaving it disarmed. `signal_post` makes a blocked process
- * runnable. A nanosleep it wakes then ends with -EINTR if it runs again
- * before its deadline tick and the process acts on SIGALRM, and returns 0 if
- * it first runs at that tick or later; a wait that goes on arms its deadline
- * again. Called from the timer tick. The `(int32_t)` difference is
- * tick-wraparound-safe (~248 days at 100 Hz).
+ * The timed sleepers are nanosleep, poll with a deadline and a wait-queue
+ * wait with one, such as the kernel's ping. `signal_post` makes a blocked
+ * process ready too: a nanosleep it wakes then ends with -EINTR if it runs
+ * again before its deadline tick and the process acts on SIGALRM, and
+ * returns 0 if it first runs at that tick or later; a wait that goes on
+ * arms its deadline again. The `(int32_t)` difference of two ticks is right
+ * across the wrap of the count, for deadlines less than 2^31 ticks away,
+ * about 248 days at 100 Hz.
  */
 void proc_wake_sleepers(uint32_t now)
 {
@@ -269,10 +252,6 @@ void proc_wake_sleepers(uint32_t now)
     }
 }
 
-/**
- * The tick `ticks` after `now` at which an alarm is due: never 0, which
- * `alarm_tick` keeps for a disarmed timer.
- */
 uint32_t proc_alarm_at(uint32_t now, uint32_t ticks)
 {
     uint32_t at = now + ticks;
@@ -336,20 +315,13 @@ isr_params_t *proc_user_frame(const process_t *t)
 }
 
 /**
- * Reparent every child of `dead_pid` onto init, the init of its PID
- * namespace for a child in a namespace below the first (`ns_reaper`), and
- * post each living child the parent-death signal it asked prctl for.
- *
- * Called from a process's death path before its record is reclaimed: a
- * child left with a dead parent's pid would never be matched in `do_wait`,
+ * A child left with a dead parent's pid would never be matched in `do_wait`,
  * and its frames, page directory and record would leak. A child whose
- * threads have all ended has no future exit event to wake init, so init is
- * signalled now to reap it and a wait init is in is woken. No child is
- * adopted when there is no init yet (`init_pid == 0`,
- * the debug-shell-only boot) or when init itself is the one dying, since no
- * other init is left to adopt them; the parent-death signals are posted
- * either way, after the adoption, so a handler that asks for its parent
- * finds init, as on Linux.
+ * threads have all ended has no exit to come that would tell init, so init
+ * is sent SIGCHLD now and its wait woken. When the system's init itself is
+ * ending, no other init is left to adopt the children. The parent-death
+ * signals are posted after the adoption, so that a handler that asks for
+ * its parent finds init, as on Linux.
  */
 void reparent_children(uint32_t dead_pid)
 {
@@ -385,10 +357,7 @@ void reparent_children(uint32_t dead_pid)
 }
 
 /**
- * Set a process's `comm` name from a path's final component.
- *
- * Stores the basename of `path`, truncated to fit `comm`, with null bytes
- * to the end of `comm`, since prctl's PR_GET_NAME and a core file's
+ * The rest of `comm` is cleared since prctl's PR_GET_NAME and a core file's
  * prpsinfo copy all of it: a shorter name must leave nothing of a longer one
  * behind it.
  */
@@ -404,7 +373,7 @@ void proc_set_comm(process_t *p, const char *path)
     base = path;
     for (q = path; *q; q++) {
         if (*q == '/') {
-            base = q + 1; /* keep only the final component */
+            base = q + 1;
         }
     }
     k_memset(p->comm, 0, sizeof(p->comm));
@@ -414,14 +383,12 @@ void proc_set_comm(process_t *p, const char *path)
 }
 
 /**
- * Prime a new process's kernel stack for its first context switch, which
- * returns into `entry_point`: the architecture lays the stack out as its
- * `switch_context` expects to find it (`arch_context_init`).
- *
- * The switch passes the big lock to the thread it enters, and `schedule`
- * gives the processor that thread's depth, so the thread begins holding the
- * lock once, as a forked child and an idle task do; with a depth of 0 its
- * first interrupt would wait for the lock its own processor holds.
+ * The architecture lays the stack out as its `switch_context` finds it
+ * (`arch_context_init`). The switch passes the big lock to the thread it
+ * enters, and `schedule` gives the processor that thread's depth, so the
+ * thread begins holding the lock once, as a forked child and an idle task
+ * do; with a depth of 0 its first interrupt would wait for the lock its own
+ * processor holds.
  */
 void setup_process_stack(process_t *proc, void (*entry_point)(void))
 {

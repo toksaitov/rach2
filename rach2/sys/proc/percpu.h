@@ -1,3 +1,4 @@
+/* The record the shared kernel keeps for each processor, and `current_proc`. */
 #ifndef _PERCPU_H_
 #define _PERCPU_H_
 
@@ -33,7 +34,8 @@ struct page_dir;
  * changes its own `current`, `space` and depths and no other's, so code that
  * runs on a processor reads that processor's. Another processor reads them
  * only while it holds the big lock, which the owner holds whenever it
- * changes them, and writes only the requests (proc/smp.c).
+ * changes them, except when `smp_service` gives up `space` at a request
+ * whose sender waits for it; and it writes only the requests (proc/smp.c).
  */
 struct percpu {
     struct process *current;                    /* the process this processor runs */
@@ -48,7 +50,7 @@ struct percpu {
     volatile unsigned int stop_request;         /* stop for good */
     volatile unsigned int stopped;              /* it took the stop: no more writes */
     const struct page_dir *volatile space_drop; /* a `space` to give up for the kernel's */
-    volatile int space_stale;                   /* a shootdown passed `space` by */
+    volatile int space_stale;                   /* reload `space`: a shootdown skipped it */
     uint32_t kernel_gen;                        /* the kernel mappings it last flushed for */
     volatile uint32_t idle_ticks;               /* ticks that found it in an idle wait */
     volatile uint32_t busy_ticks;               /* ticks that found it running code */

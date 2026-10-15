@@ -1,3 +1,7 @@
+/*
+ * The process record, one for each thread, and the calls that make, find,
+ * signal and end processes.
+ */
 #ifndef _PROCESS_H_
 #define _PROCESS_H_
 
@@ -15,18 +19,15 @@
  * limited. */
 #define PROC_COUNT_POLICY 4096
 
-/* Process states. */
+/* The states of a record. */
 typedef enum {
-    PROC_UNUSED,  /* Slot is free */
-    PROC_READY,   /* Ready to run */
-    PROC_RUNNING, /* Currently executing */
-    PROC_BLOCKED, /* Waiting for I/O or event */
-    PROC_ZOMBIE,  /* Exited, waiting for parent to collect */
-    PROC_STOPPED  /* Job-control stopped (SIGSTOP/SIGTSTP), resumes on SIGCONT */
+    PROC_UNUSED,  /* No process: fork building it, or a reaper freeing it */
+    PROC_READY,   /* On its processor's run queue */
+    PROC_RUNNING, /* Running on a processor */
+    PROC_BLOCKED, /* Asleep on a wait queue or until a tick */
+    PROC_ZOMBIE,  /* Ended; the record waits for its reap */
+    PROC_STOPPED  /* In a job-control or ptrace stop */
 } proc_state_t;
-
-/* The registers `switch_context` saves for a process that is not running,
- * the architecture's (cpu_regs_t in its cpu.h). */
 
 /* A limit as `prlimit64` keeps it: the soft value enforced, the hard one
  * the soft may be raised to, `RLIM_INFINITY` for none. The values are
@@ -36,6 +37,9 @@ struct proc_rlimit {
     unsigned long cur;
     unsigned long max;
 };
+/* The slots of the record's `rlim`, one for each limit the kernel keeps;
+ * prlimit64's resource numbers are Linux's, which differ (`rlimit_slot` in
+ * syscall_proc.c). */
 #define RLIM_NPROC    0
 #define RLIM_NOFILE   1
 #define RLIM_AS       2
@@ -79,9 +83,10 @@ struct fs_struct {
     void *root_node;
     /* File-creation mask (umask(2)), low 9 bits. */
     uint32_t umask;
-    /* The execs in progress, by threads without root that share this, that
-     * apply set-id bits: while there are any, clone with CLONE_FS fails, so
-     * no process outside the thread group comes to share the record before
+    /* The execs in progress, by threads that share this, that apply set-id
+     * bits for a caller without privilege or give back the capabilities a
+     * caller gave up: while there are any, clone with CLONE_FS fails, so no
+     * process outside the thread group comes to share the record before
      * those execs have their new ids (`exec_ids` in syscall_proc.c). */
     int in_exec;
 };
@@ -112,25 +117,31 @@ struct wq_waiter {
 
 struct bbuf; /* the buffer cache's buffer, bcache.h */
 
-/* Process Control Block (PCB). */
+/*
+ * The record of one thread, from the heap (`alloc_process`), on `proc_list`
+ * while it lives. The threads of a process share their thread group
+ * (tgroup.h) and, with CLONE_VM, CLONE_FILES and CLONE_FS, the parts those
+ * flags name.
+ */
 struct process {
-    uint32_t pid;                 /* Process ID */
+    uint32_t pid;                 /* Thread ID; the process ID is `tgid` */
     proc_state_t state;           /* Current state */
-    cpu_regs_t regs;              /* Saved CPU registers */
-    uintptr_t space_root;         /* Page directory physical address */
+    cpu_regs_t regs;              /* What switch_context saves (cpu.h) */
+    uintptr_t space_root;         /* Page directory physical address, or 0 */
     uintptr_t kernel_stack;       /* Top of kernel stack for this process */
     uint32_t parent_pid;          /* Parent process ID */
-    int32_t exit_code;            /* Exit status (for zombie) */
+    int32_t exit_code;            /* Encoded wait status it ended with */
     fd_table_t *fds;              /* Descriptor table, shared under CLONE_FILES */
     struct fs_struct *fs;         /* Directories and umask, shared under CLONE_FS */
-    volatile uint32_t in_syscall; /* Non-zero while a user syscall is executing */
-    /* switch.s reads `regs.esp`, `cr3`, `kernel_stack`, `tls_base` and
-     * `page_dir` at fixed offsets, so a new field goes at the end of the
-     * record. process.c has the same offsets and checks them against the
-     * compiler's, at build time where the compiler can and at boot. */
+    volatile uint32_t in_syscall; /* Nonzero in a system call or an exit */
+    /* i686's switch.s reads `regs.esp`, `kernel_stack` and `tls_base` at
+     * fixed offsets, so a new field goes at the end of the record.
+     * arch/i686/context.c has the same offsets and checks them against the
+     * compiler's, at build time where the compiler can and at boot
+     * (`arch_context_check`, from `init_proc`). */
     uintptr_t tls_base;   /* The thread pointer (arch_tls_set) */
     struct mm *mm;        /* The address space, shared by CLONE_VM (mm/mm.h) */
-    uint32_t wakeup_tick; /* nanosleep: kernel tick to wake a timed sleeper (0 = none) */
+    uint32_t wakeup_tick; /* The tick a timed sleep ends at, 0 for none */
     /* Signal state: the dispositions, `sigacts[signo]` with index 0 unused,
      * which are the thread group's (`tg->action`), and this thread's 64-bit
      * pending and blocked masks (bit signo-1). */
@@ -157,10 +168,10 @@ struct process {
      * saved uid and gid plus the supplementary groups; fork copies them, exec
      * passes the real ids through, applies the file's setuid/setgid bits to
      * the effective ids, and sets the saved ids to the new effective ids (the
-     * POSIX exec rule, set-id or not); the id syscalls move them under the
-     * textbook rules: effective uid 0 sets anything, anyone else only swaps
+     * POSIX exec rule, set-id or not); the id calls change them by the
+     * POSIX rules: a privileged caller sets any, and another only moves
      * among its own three. All zero (root) at boot until a login server
-     * drops. */
+     * drops them. */
     uint32_t ruid;
     uint32_t euid;
     uint32_t suid;
@@ -170,18 +181,18 @@ struct process {
     uint32_t ngroups;             /* live entries in groups[] */
     uint32_t groups[NGROUPS_MAX]; /* supplementary gids */
     /* Set once this process has been reported for running out of mappings, so
-     * the diagnostic is said once and not once per failed call. It belongs to
-     * the process and not to a remembered pid, which a later process reusing
-     * that pid would silence. */
+     * the diagnostic is said once and not once per failed call; an exec
+     * clears it. */
     uint32_t vma_reported;
     /* The floating-point state, saved at every switch away and loaded at
      * every switch to: an area of `fpu_area_size` bytes from
      * `fpu_area_alloc`, which the record owns. */
     uint8_t *fpu;
-    /* The page directory `cr3` names, or NULL for the kernel's: the record
+    /* The page directory `space_root` names, or NULL for none: the record
      * of it, since a directory lives in the heap and its physical address
-     * says nothing about where the kernel reads it. `switch.s` reads this
-     * offset too. */
+     * says nothing about where the kernel reads it. The switch compares it
+     * with the directory the processor has loaded (`switch_space` on i686,
+     * `switch_context` on x86-64). */
     struct page_dir *page_dir;
     /* The list of live records, in the order they were made; the scheduler
      * walks it round-robin. */
@@ -192,16 +203,19 @@ struct process {
     /* The workspace of the `execve` in progress, NULL outside one;
      * `syscall_proc.c` owns its type and gives it back when the call ends. */
     void *exec_ws;
-    /* Interrupt handlers entered and not left on this process's stack;
-     * kept in the record and not in one global, since a handler that
-     * switches away leaves the count with the process it interrupted. */
+    /* Interrupt handlers entered and not left on this process's stack
+     * (`irq_enter` in mm/pressure.c), counted in the record, since a
+     * handler that switches away is left only when the process it
+     * interrupted runs again. */
     uint32_t irq_depth;
-    /* The resource limits `prlimit64` keeps: threads of the real user,
-     * open descriptors, the address space and the stack in bytes; soft and
-     * hard, inherited by fork and exec. */
+    /* The resource limits `prlimit64` keeps, by the RLIM_ slots: threads of
+     * the real user, open descriptors, and in bytes the address space, the
+     * stack, a core file and a file written; soft and hard, inherited by
+     * fork and exec. */
     struct proc_rlimit rlim[RLIM_COUNT];
-    /* Inside `mem_reclaim`: its own allocations, the requests a writeback
-     * needs, may take from the reserve. */
+    /* The depth of `mem_reclaim` calls the process is in: while it is above
+     * 0, its own allocations, the requests a writeback needs, may take from
+     * the reserve. */
     uint32_t reclaiming;
     /* An interrupt asked for a switch while this process was inside a
      * system call; the call's exit takes it. */
@@ -209,7 +223,9 @@ struct process {
     /* The buffer cache's list of the buffers this process holds, kept by
      * the cache so its hold rules are checked against them alone. */
     struct bbuf *bcache_held;
-    /** One preference after a wait-queue wake; consumed when selected. */
+    /* Set by a wait-queue wake (`wq_wake`): the scheduler may prefer the
+     * process once at its next selection, and clears it when it selects the
+     * process or the process blocks again. */
     uint32_t woken;
     /* Whether its sleep is one no signal ends (`wq_wait_event_nointr`),
      * which /proc reports as the state D and counts as blocked. */
@@ -238,9 +254,9 @@ struct process {
     unsigned long altstack_size;
     uint32_t altstack_on;
     /* The mask rt_sigsuspend, pselect6 or ppoll replaced for its wait, with
-     * `sigmask_saved`: the frame of the handler the wait ended for carries
-     * it, so sigreturn puts it back, and a return to user mode with no
-     * handler puts it back at once. */
+     * `sigmask_saved`: the frame of the handler the wait ended for saves it,
+     * so sigreturn puts it back, and a return to user mode with no handler
+     * puts it back at once. */
     uint64_t saved_sigmask;
     uint32_t sigmask_saved;
     /* One more than the number of a system call that returned EINTR and
@@ -372,7 +388,8 @@ typedef struct process process_t;
  * `for (p = proc_list; p; p = p->next)`. */
 extern process_t *proc_list;
 
-/* Process 0, the kernel's idle process, which the debug shell returns to. */
+/* Process 0, the record the boot and the debug shell run as; each
+ * processor's idle task (smp.c) is another record, off the list. */
 extern process_t *proc_idle;
 
 /** The last process ID given out, 0 before the first. */
@@ -381,17 +398,28 @@ uint32_t proc_last_pid(void);
 /* The running process, `current_proc`, is the running processor's
  * (percpu.h). */
 
-/** Whether this processor is inside a user process's system call. */
+/** Whether this processor's current process is inside a system call; no
+ * for the idle process, a kernel thread and no process at all. The ATA
+ * driver's wait and reclaim's writeback sleep only inside a call, and the
+ * USB disk settles a stick only outside one. */
 int proc_in_syscall(void);
 
-/** Reset the process table to its boot state and verify the PCB layout. */
+/** Empty the process list, with no current process on this processor, and
+ * panic when `arch_context_check` finds that a record the architecture's
+ * assembly reads at fixed offsets, the process's on i686 and the
+ * processor's on x86-64, has another layout. */
 void init_proc(void);
 
 /** Restart pid numbering at 1, for the boot that is about to start init. */
 void proc_reclaim_boot_pids(void);
 
-/** A process record from the heap, on the list; NULL when the heap has no
- * room. */
+/** A new record from the heap, at the end of the list and READY: the next
+ * pid not in use, below 2000000000, the leader of a thread group, a session
+ * and a process group of its own, the default limits, a descriptor table
+ * with the standard descriptions, the working directory /, the umask 022,
+ * every processor in its affinity, and this processor's queue. NULL when
+ * the heap has no room for it or one of its parts. Each record counts once
+ * in `process_forks_since_boot`. */
 process_t *alloc_process(void);
 
 /* The bytes of a kernel stack: a process's, an idle task's, and the boot
@@ -399,13 +427,16 @@ process_t *alloc_process(void);
 #define KERNEL_STACK_SIZE 0x4000
 
 /** Take a record off the list and give it back to the heap with its exec
- * workspace, and with its descriptor table when this was the table's last
- * reference and its descriptors were released; the caller drops the address
- * space (`mm_drop`) and frees the kernel stack first. Nothing may refer to
- * the record afterwards. */
+ * workspace, path pages and floating-point area, dropping its references
+ * to its thread group, its directories, its seccomp filters and its
+ * namespaces, and freeing its descriptor table when this was the table's
+ * last reference and its descriptors were released; the caller drops the
+ * address space (`mm_drop`) and frees the kernel stack first. Nothing may
+ * refer to the record afterwards. A NULL `proc` is ignored. */
 void free_process(process_t *proc);
 
-/** Get process by PID; returns the record, or NULL if not found. */
+/** The record whose `pid` is `pid`, a thread's id in the kernel's
+ * numbering, that of the first PID namespace; NULL for none. */
 process_t *get_process(uint32_t pid);
 
 /** The user-mode registers of the thread `t`, which is not running in user
@@ -425,44 +456,63 @@ isr_params_t *proc_user_frame(const process_t *t);
  * thread's, those that have ended included, user and system. */
 void proc_cpu_time(const process_t *p, uint32_t *user, uint32_t *sys);
 
-/* The records of ended threads that are not leaders, which no wait reaps;
- * the next return to user mode frees them (`deliver_signals`). */
+/* The number of records of ended threads that are neither leaders nor
+ * traced, which no wait reaps; the next return to user mode frees them
+ * (`deliver_signals`). */
 extern uint32_t proc_dead_threads;
 
-/** Clear the word CLONE_CHILD_CLEARTID names and wake a futex waiter on it,
- * when another thread shares the address space, and release the robust
- * futexes the thread held; the start of a thread's end. */
+/** Release the robust futexes the thread `p` held, then clear the word
+ * CLONE_CHILD_CLEARTID names and wake a futex waiter on it, when another
+ * thread shares the address space; the start of a thread's end and of its
+ * execve's commit. Defined in futex.c. */
 void proc_thread_gone(process_t *p);
 
 /**
- * Reparent every child of `dead_pid` onto init (`init_pid`), waking init to
- * reap any child that is already a zombie, and post each living child the
- * parent-death signal it asked for. Called from the death paths so an exiting
- * process never orphans a child onto a record about to be freed. No child is
- * adopted when there is no init or when init itself is dying.
+ * Give every child of the process `dead_pid` to init, or to the init of its
+ * PID namespace when it is in one below the first (`ns_reaper`), and post
+ * each child that has not ended the parent-death signal it asked prctl for.
+ * A child that has already ended is reported to its new parent with SIGCHLD
+ * and a wake of the parent's wait. No child goes to the system's init when
+ * there is none (`init_pid` 0, a boot that runs the debug shell alone) or
+ * init itself is the one ending. Called from the end of a process's last
+ * thread, before its record can be reaped.
  */
 void reparent_children(uint32_t dead_pid);
 
-/** End the current thread: release its files and, with the process's last
- * thread, reparent the children onto init, publish the encoded exit status
- * and wake the parent; nonzero when the process ended. See exit.c. */
+/**
+ * End the current thread, whose encoded wait status is `status`: release
+ * what it holds, its address space among them, and when it is the last
+ * thread of its process, make the process ready for its reaper and notify
+ * the parent, or the tracer first when another process traces the leader.
+ * Returns nonzero when the process ended with this thread.
+ *
+ * From the return on, the parent or the tracer may reap the record and the
+ * kernel stack, so the caller must neither block nor let an interrupt
+ * switch it before its last `schedule`, and does not return to user mode.
+ * A death by signal writes its core file before the call, while the address
+ * space is there. Defined in exit.c.
+ */
 int proc_exit_cleanup(int32_t status);
 
 /** Begin the end of the current process: send every other thread SIGKILL,
  * and have the process end with the encoded wait status `code` whichever
- * thread ends last. A process already ending keeps its status. */
+ * thread ends last. A process already ending keeps its status, and one in
+ * another thread's execve is left to it. Defined in syscall_proc.c. */
 void proc_group_exit(int32_t code);
 
 /** End the calling thread with the wait status `code`, and with the last
- * thread the process. Does not return. Defined in syscall_proc.c. */
+ * thread the process. Does not return: an init that ends under the debug
+ * shell goes back to the shell, on the boot stack. Defined in
+ * syscall_proc.c. */
 int32_t exit_current(int32_t code);
 
 /** Let the parent a CLONE_VFORK clone made `p` for run again, at `p`'s
- * execve or end; nothing when no parent waits. */
+ * execve or end; nothing when no parent waits. Defined in syscall_proc.c. */
 void proc_vfork_release(process_t *p);
 
 /** Drop `p`'s reference to its descriptor table and leave it none; the last
- * reference closes every descriptor and frees the table. May sleep. */
+ * reference closes every descriptor and frees the table. May sleep. Defined
+ * in syscall_proc.c, as are the four calls after it. */
 void proc_files_put(process_t *p);
 
 /** Give the calling thread a descriptor table of its own when it shares one:
@@ -482,36 +532,52 @@ int32_t proc_fs_unshare(void);
 void proc_fs_put(process_t *p);
 
 /** Wait, as the parent, until the child `pid` made with CLONE_VFORK calls
- * execve or ends. */
+ * execve or ends, or SIGKILL is pending for the caller; no other signal ends
+ * the wait. */
 void proc_vfork_wait(uint32_t pid);
 
-/** Set a process's `comm` name from the final component of `path`. */
+/** Set `p`'s `comm` to the final component of `path`, cut to 15 bytes,
+ * with null bytes to the end of `comm`. Nothing for a NULL `p` or `path`. */
 void proc_set_comm(process_t *p, const char *path);
 
 /**
- * Wake timed sleepers whose deadline has reached `now`, and post SIGALRM to
- * each process whose real-time timer is due, arming it again for its
- * interval or leaving a single alarm disarmed.
+ * Make ready each process BLOCKED in a timed sleep whose `wakeup_tick` has
+ * come by the tick `now`, clearing it, and post SIGALRM to each process
+ * whose real-time timer is due, arming it again for its interval or leaving
+ * a single alarm disarmed. The boot processor's timer tick calls it.
  */
 void proc_wake_sleepers(uint32_t now);
 
 /**
- * Post signal `signo` to `target`: set its pending bit and wake it if blocked.
- * Delivered on the target's next return to user mode. Defined in
- * syscall_proc.c.
+ * Post `signo` to the process `target` is a thread of, with a siginfo whose
+ * code is SI_KERNEL, as `signal_post_info` does. Defined in syscall_proc.c,
+ * as are the three calls after it.
  */
 void signal_post(process_t *target, int signo);
 
-/* Post `signo` with the siginfo `info` records for its handler. */
+/**
+ * Post `signo` to the process `target` is a thread of, with the siginfo
+ * `info`: set the process's pending bit, keeping `info` when the signal was
+ * not pending already, and wake, whatever the signal's disposition,
+ * `target` when it can take the signal, else another thread that can, else
+ * `target`. Job control acts at once: SIGCONT ends a stop and cancels the
+ * pending stop signals, SIGKILL makes the stopped threads ready, and a stop
+ * signal cancels a pending SIGCONT. A process whose threads have all ended
+ * takes nothing. An interrupt handler may call it. The signal is delivered
+ * at a return to user mode (`deliver_signals`).
+ */
 void signal_post_info(process_t *target, int signo, const struct k_siginfo *info);
 
 /** Post signal `signo` to the thread `t` alone, as tkill and tgkill do,
- * with the siginfo `info`, and wake it. */
+ * with the siginfo `info`, and wake it. A thread that has ended takes
+ * nothing. */
 void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info);
 
-/* Post a signal a processor exception raised: a handler that is blocked or
- * ignored cannot run, so the disposition goes back to default and the signal
- * is unblocked, and the process is killed unless a handler is installed. */
+/** Post to the thread `target` the signal `signo` a processor exception
+ * raised, with `info`. A handler that is ignored or blocked could not run,
+ * so the disposition then goes back to the default and the signal is
+ * unblocked: the process ends unless a handler is installed and not
+ * blocked. */
 void signal_force(process_t *target, int signo, const struct k_siginfo *info);
 
 /** Make `mask`, less SIGKILL and SIGSTOP, the current thread's blocked mask,
@@ -520,7 +586,7 @@ void signal_force(process_t *target, int signo, const struct k_siginfo *info);
  * made through it. Defined in syscall_proc.c. */
 void signal_set_blocked(uint64_t mask);
 
-/* The siginfo of the SIGCHLD a child's end sends: CLD_EXITED with the exit
+/** The siginfo of the SIGCHLD a child's end sends: CLD_EXITED with the exit
  * code, or CLD_KILLED or CLD_DUMPED with the signal, from its wait status,
  * and the child's pid and real uid as its parent's namespaces see them. */
 void proc_child_info(const process_t *child, struct k_siginfo *info);
@@ -532,53 +598,65 @@ void proc_child_info(const process_t *child, struct k_siginfo *info);
 uint32_t proc_alarm_at(uint32_t now, uint32_t ticks);
 
 /**
- * Non-zero if the current process has a pending signal that is neither
- * blocked nor ignored: one that is caught, or whose default action
- * terminates or stops the process; or a stop its tracer asked for with
- * PTRACE_INTERRUPT. Deferred hardware hits count as pending SIGTRAP.
- * Blocking syscall loops poll it so the signal or stop is acted on.
- * Defined in syscall_proc.c.
+ * Non-zero if the current thread, or its process, has a pending signal that
+ * is neither blocked nor ignored: one that is caught, or whose default
+ * action terminates or stops the process; or a stop its tracer asked for
+ * with PTRACE_INTERRUPT. A deferred hardware debug hit counts as a pending
+ * SIGTRAP. Blocking system call loops call it so that the signal or stop is
+ * acted on. A deferred kernel debug hit is posted first, which may make
+ * the thread ready and clear its `wakeup_tick`, so a caller that waits on
+ * arms its deadline again. Called on the thread's stack with the big lock
+ * held. Defined in syscall_proc.c.
  */
 int signal_pending(void);
 
 /**
- * Deliver a pending signal to the current process on the way back to user mode.
- * Called from the ISR/IRQ return path with the trapframe. Defined in
+ * Act on the current thread's pending signals on a return to user mode
+ * through the frame `tf`, and on no other return: ignore them, end or stop
+ * the process, or give one handler its frame; restart a restartable system
+ * call a signal interrupted when no handler runs or the handler has
+ * SA_RESTART; and free the records of ended threads (`proc_dead_threads`).
+ * `isr_leave` calls it after every router, with interrupts off. Defined in
  * syscall_proc.c.
  */
 struct isr_params;
 void deliver_signals(struct isr_params *tf);
 
 /**
- * Context switch between two processes; saves current state to `old`, restores
- * from `new_proc`. Defined in switch.s.
+ * Save the running thread's kernel registers in `old` and resume
+ * `new_proc` where its last switch left it, or at the return its first
+ * frame has (`setup_process_stack`, `arch_fork_frame`). It also gives the
+ * processor `new_proc`'s kernel stack for the next entry from user mode
+ * and its thread pointer, and loads its page directory when the processor
+ * has another loaded. `schedule` calls it with interrupts off and the big
+ * lock held. Defined in switch.s on i686 and in context.c, with switch.s,
+ * on x86-64.
  */
 extern void switch_context(process_t *old, process_t *new_proc);
 
-/** Prime a new process's kernel stack for its first context switch. */
+/** Lay out a new thread's kernel stack for its first switch, which returns
+ * into `entry_point` holding the big lock at depth 1. */
 void setup_process_stack(process_t *proc, void (*entry_point)(void));
 
 /**
- * How many processes have been created since boot.
- *
- * What Linux's `/proc/stat` calls `processes`: a running total, not the number
- * alive now. Bumped once where a process is handed out, so a fork and an exec
- * that replaces an image are counted the way that file counts them.
+ * The records `alloc_process` has given out since boot, each thread a
+ * clone made and the kernel's own at boot counted: what Linux's
+ * `/proc/stat` calls `processes`, a running total and not the number alive
+ * now. An exec makes no record and adds nothing.
  */
 uint32_t process_forks_since_boot(void);
 
 /**
- * How many sleeps a signal has ended before their deadline since boot.
- *
- * `/proc/stat` reports it as `sleeps_interrupted`. A signal that reaches a
- * sleeper is meant to end its sleep where it lands, not at the deadline, and
- * this is the count that says which happened: a sleep the signal cut short
- * raises it, and one that ran its whole length does not. It is a count and
- * not a time, so a test may hold it on any machine.
+ * The nanosleeps a signal has ended before their deadline since boot, which
+ * `/proc/stat` reports as `sleeps_interrupted`. A sleep the signal cut
+ * short counts, and one that ran its whole length does not, so a test can
+ * tell from the count, on a machine of any speed, whether a signal ended a
+ * sleep where it arrived.
  */
 uint32_t process_sleeps_cut_short(void);
 
-/** Count one sleep a signal ended before its deadline. */
+/** Count one sleep a signal ended before its deadline; nanosleep calls it
+ * (syscall.c). */
 void process_count_sleep_cut_short(void);
 
 /** Count one process handed out; `alloc_process` calls it. */
@@ -592,7 +670,8 @@ void process_count_fork(void);
 int kstack_overrun_pid(uintptr_t addr);
 
 /** Test switch `rach2.stackoverrun`: run a thread down its kernel stack
- * until the guard below it faults. Defined in syscall_proc.c. */
+ * until the guard below it faults. Called once, before the first program;
+ * returns at once without the switch. Defined in syscall_proc.c. */
 void kstack_overrun_test(void);
 
 #endif

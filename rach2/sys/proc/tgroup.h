@@ -1,3 +1,4 @@
+/* The thread group: what the threads of one process share. */
 #ifndef _TGROUP_H_
 #define _TGROUP_H_
 
@@ -17,7 +18,8 @@
  * caller's. The thread whose id is the process id, `leader`, keeps its
  * record until the whole group has ended, so the parent reaps the process
  * once, when the last thread is gone; the other threads' records are freed
- * as they end. `refs` counts the records that point at the group.
+ * after they end, at the next return to user mode or, for a traced thread,
+ * by its tracer's wait. `refs` counts the records that point at the group.
  */
 struct ktimer;
 
@@ -25,16 +27,19 @@ struct tgroup {
     uint32_t refs;
     uint32_t live;          /* threads that have not ended */
     struct process *leader; /* its id is the process id */
+    /* The dispositions, by signal number, index 0 unused. */
     struct k_sigaction action[KSIG_MAX + 1];
     uint64_t pending;      /* signals sent to the process, which any thread takes */
     struct ktimer *timers; /* timer_create's, in the order of their ids */
+    /* The siginfo of each signal pending in `pending`, by signal number. */
     struct k_siginfo info[KSIG_MAX + 1];
     uint32_t stop;             /* the signal of a stop in effect, 0 for none */
     uint32_t exiting;          /* exit_group or a fatal signal ends every thread */
     uint32_t core_dumping;     /* its core is being written; the others park */
     int32_t exit_code;         /* the wait status the process ends with then */
     struct process *exec_task; /* the thread whose execve ends the others */
-    uint32_t utime;            /* the CPU time of the threads that ended */
+    /* The user and system CPU time, in ticks, of the threads that ended. */
+    uint32_t utime;
     uint32_t stime;
     wait_queue_t chld; /* threads waiting for a child to change state */
     wait_queue_t gone; /* an execve or a core waiting on the other threads */
