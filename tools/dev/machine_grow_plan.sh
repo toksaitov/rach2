@@ -1,8 +1,18 @@
 #!/bin/sh
-# Prepare bounded ranges from the seed; this command reads only host files.
+#
+# machine_grow_plan.sh: make, on the host, the plan that machine_grow.sh
+# follows on an installed machine.
+#
+# Usage: machine_grow_plan.sh SEED DISK-SECTORS SERIAL MBR-ID DIRECTORY
+#
+# The new DIRECTORY receives grow.plan, the bounded sector ranges the seed's
+# write and the grow change as ranges.txt, the seed's digest, a copy of
+# machine_grow.sh and the digests of the recovery programs. The script reads
+# only files on the host.
 set -eu
 umask 077
 
+# fail TEXT: print the failure and exit 1.
 fail() { echo "machine-grow-plan: failed: $*" >&2; exit 1; }
 [ "$#" = 5 ] || fail 'usage: machine_grow_plan.sh SEED DISK-SECTORS SERIAL MBR-ID DIRECTORY'
 seed=$1

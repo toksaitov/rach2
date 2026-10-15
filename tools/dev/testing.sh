@@ -58,8 +58,7 @@
 # step stuck, or 100 minutes gone, which is before the two hours a background
 # command of an agent may last. It prints the new lines and the reason, so
 # that the caller reads each result when it lands and waits again with the
-# new count; a watch that woke only at a run's end left results unread for
-# hours behind its slower phases.
+# new count.
 #
 # The host is reached as `ssh testing`. Its ssh server answers in an MSYS
 # shell on Windows; the copy lives in the WSL distribution, so the receiving
@@ -78,9 +77,9 @@
 # `run` asks the runner for the emulator. The host's KVM is nested under
 # Hyper-V, and the ATA driver polls a port after every sector it writes, so
 # each poll exits through two hypervisors: a 64 MiB write measured 236 s
-# under that KVM and 25 s emulated on 2026-09-18, and the 4 KiB write rows
-# ran past the runner's silence limit. This is the host's setting, as the
-# worker count is; the runner itself takes KVM wherever it opens.
+# under that KVM and 25 s emulated, and the 4 KiB write rows ran past the
+# runner's silence limit. This is the host's setting, as the worker count is;
+# the runner itself takes KVM wherever it opens.
 set -e
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
@@ -91,6 +90,7 @@ hold=
 holder=
 trap 'release_copy; [ -z "$hold" ] || rm -rf "$hold"' EXIT
 
+# Exit 2 unless the rsync here is rsync 3.
 need_rsync3()
 {
     case "$(rsync --version 2>/dev/null | head -n 1)" in
@@ -117,6 +117,8 @@ hold_script()
 {
     printf "who='%s'\n" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
     cat <<'EOF'
+# probe COPY: print what works in COPY: a live holder of its run lock, and
+# each process with its working directory in it but a person's shell.
 probe()
 {
     lock=$1/build/.run.lock
@@ -140,6 +142,8 @@ probe()
     done
 }
 
+# hold COPY: take the sync lock for COPY, or print its holder, as hold_script
+# describes.
 hold()
 {
     exec 8>> "$1.sync.owner" 9>> "$1.sync.lock" || exit 1

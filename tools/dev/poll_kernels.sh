@@ -1,15 +1,22 @@
 #!/bin/sh
-# Build the two poll orders from one private source tree for measurement.
+#
+# poll_kernels.sh: build, in one private copy of the tree, the kernel as it is
+# and one whose poll removes its waiters before the halt, for measurement.
+#
+# Usage: poll_kernels.sh [--texts]
+#
 # Each kernel's path is printed as RACH2_MEASURE_KERNEL, the name
 # machine_identity.sh takes, so that a measurement driver checks that the
 # machine runs that artifact before it times anything. The kernels are built
-# for the architecture ARCH names.
+# for the architecture ARCH names. --texts only checks that the text the
+# second order changes is once in rach2/sys/io/poll.c, and builds nothing.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault PATH: move the removal of poll's waiters before the halt in
+# PATH, a poll.c; with RACH2_FAULT_TEXTS set, only check the text and write
+# nothing. The status is 1 when the text is not there once.
 apply_fault()
 {
     python3 - "$1" <<'PY'
@@ -73,6 +80,7 @@ poll="$work/rach2/sys/io/poll.c"
 cp "$poll" "$work/poll.saved"
 child=
 
+# Stop a build in progress and put the saved poll.c back in the private tree.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -93,6 +101,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# build ORDER: build the private tree's kernel and keep it and its .config as
+# WORK/ORDER.kernel and WORK/ORDER.config; exit with make's status when the
+# build fails.
 build()
 {
     order=$1

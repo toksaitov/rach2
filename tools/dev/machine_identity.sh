@@ -1,13 +1,15 @@
 #!/bin/sh
 #
-# machine_identity.sh LOG SSH-COMMAND...
+# machine_identity.sh: check that an installed machine runs the named kernel
+# from the named slot, before a measurement driver times anything.
 #
-# The check a measurement driver makes before it times anything: the machine
-# is asked which slot it booted and which kernel that slot holds, and the
-# measurement goes on only when they are the slot and the kernel the caller
-# names. RACH2_MEASURE_SLOT names the slot, candidate or fallback, and
+# Usage: machine_identity.sh LOG SSH-COMMAND...
+#
+# The machine is asked which slot it booted and which kernel that slot holds,
+# and the measurement goes on only when they are the slot and the kernel the
+# caller names. RACH2_MEASURE_SLOT names the slot, candidate or fallback, and
 # RACH2_MEASURE_KERNEL the kernel file on this host, the build the
-# measurement is meant to be of; a caller that names neither is refused.
+# measurement is meant to be of; a caller that leaves either out is refused.
 #
 # The booted slot is `rach2.slot=` on the machine's /proc/cmdline, the value
 # `bootctl status` reports as `booted`. The kernel is the SHA-256 of that
@@ -61,6 +63,7 @@ esac
 sum=$(shasum -a 256 <"$kernel")
 sum=${sum%% *}
 
+# refuse TEXT: write the refusal to LOG and stderr, and exit 1.
 refuse()
 {
     echo "machine-identity: refused: $*" >>"$log"
@@ -70,8 +73,8 @@ refuse()
 
 # The machine's half, sent as one command: the booted slot, the boot
 # environment and extents, and the digest of the booted slot's first SIZE
-# bytes when the slot has an extent. It reports and decides nothing; the
-# first line is a no-op that names the command.
+# bytes when the slot has an extent. It decides nothing; the first line is a
+# no-op that names the command.
 remote=$(sed "s/@SIZE@/$size/" <<'EOF'
 : machine-identity
 slot=$(sed -n 's/.*rach2\.slot=\([a-z]*\).*/\1/p' /proc/cmdline)

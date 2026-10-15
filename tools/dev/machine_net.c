@@ -1,5 +1,6 @@
 /**
- * Measure a TCP transfer on the host or Rach2 with the same receiver.
+ * machine_net: measure a TCP transfer on the host or Rach2 with the same
+ * receiver.
  *
  * local MIB WRITE-BYTES TIMEOUT forks a sender on 127.0.0.1. receive PORT
  * MIB TIMEOUT and send ADDRESS PORT MIB WRITE-BYTES split the ends across
@@ -26,13 +27,22 @@ static unsigned char buffer[65536];
 static volatile sig_atomic_t stopped;
 static pid_t sender = -1;
 
-/** Interrupt blocking calls so the parent can reap its local sender. */
+/**
+ * Record SIG in `stopped`; the handler of SIGALRM, SIGTERM and SIGINT. It is
+ * installed without SA_RESTART, so it interrupts blocking calls and the
+ * parent can reap its local sender.
+ */
 static void stop(int sig)
 {
     stopped = sig;
 }
 
-/** Report a failed operation and stop any sender this process created. */
+/**
+ * Report a failed operation and stop any sender this process created.
+ *
+ * WHAT is printed with errno's message, or with "interrupted or timed out"
+ * once a signal has stopped the run. The process exits with status 1.
+ */
 static void fail(const char *what)
 {
     int saved = errno;
@@ -47,7 +57,10 @@ static void fail(const char *what)
     exit(1);
 }
 
-/** Require an entire decimal argument within the stated bounds. */
+/**
+ * Return the decimal argument S, or exit with status 2 unless the whole of S
+ * is a decimal number from LOW to HIGH.
+ */
 static unsigned number(const char *s, unsigned low, unsigned high)
 {
     char *end;
@@ -62,7 +75,10 @@ static unsigned number(const char *s, unsigned low, unsigned high)
     return (unsigned)value;
 }
 
-/** Rach2 counts delivered 10 ms ticks; lost ticks shorten this interval. */
+/**
+ * Return CLOCK_MONOTONIC in microseconds. Rach2 counts delivered 10 ms
+ * ticks, so ticks lost shorten an interval measured with it.
+ */
 static uint64_t usec(void)
 {
     struct timespec t;
@@ -72,7 +88,10 @@ static uint64_t usec(void)
     return (uint64_t)t.tv_sec * 1000000 + (unsigned long)t.tv_nsec / 1000;
 }
 
-/** Preserve the requested write size across short writes. */
+/**
+ * Write all COUNT bytes of DATA to FD, continuing after short writes and
+ * signals that do not stop the run; fail on an error or once the run stops.
+ */
 static void write_all(int fd, const void *data, size_t count)
 {
     const unsigned char *p = data;
@@ -89,7 +108,11 @@ static void write_all(int fd, const void *data, size_t count)
     }
 }
 
-/** Retry an unrelated signal, but leave when the run's bound expires. */
+/**
+ * Read up to COUNT bytes from FD into DATA and return the count, 0 at end of
+ * file. A read interrupted by a signal that does not stop the run is retried;
+ * an error, or the run's bound expiring, fails.
+ */
 static ssize_t read_some(int fd, void *data, size_t count)
 {
     ssize_t n;
@@ -102,7 +125,12 @@ static ssize_t read_some(int fd, void *data, size_t count)
     return n;
 }
 
-/** Listen on an explicit port; Rach2 does not assign one at TCP listen. */
+/**
+ * Return a TCP socket listening on PORT, on 127.0.0.1 when LOCAL is nonzero
+ * and on every address otherwise, and store its address in ADDRESS.
+ *
+ * The port is explicit, since Rach2 does not assign one at a TCP listen.
+ */
 static int listen_on(struct sockaddr_in *address, unsigned port, int local)
 {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -123,7 +151,11 @@ static int listen_on(struct sockaddr_in *address, unsigned port, int local)
     return fd;
 }
 
-/** Send only after the receiver has started its clock. */
+/**
+ * Connect to ADDRESS and send BYTES bytes in writes of CHUNK bytes, then
+ * close. Nothing is sent before the receiver's 'R', which it writes once its
+ * clock has started.
+ */
 static void transmit(const struct sockaddr_in *address, uint64_t bytes, unsigned chunk)
 {
     unsigned char ready;
@@ -145,7 +177,15 @@ static void transmit(const struct sockaddr_in *address, uint64_t bytes, unsigned
         fail("close sender");
 }
 
-/** Measure complete reads, then require EOF at exactly the declared size. */
+/**
+ * Accept one connection on LISTENER, time the receipt of BYTES bytes, and
+ * print the result.
+ *
+ * The clock starts before the 'R' that releases the sender and stops after
+ * the last byte; end of file must then follow at exactly BYTES, and a local
+ * sender must have exited with status 0. TIMEOUT bounds each wait in select,
+ * in seconds, and 0 sets no bound.
+ */
 static void receive(int listener, uint64_t bytes, unsigned timeout)
 {
     uint64_t start, elapsed, total = 0;
@@ -211,7 +251,11 @@ static void receive(int listener, uint64_t bytes, unsigned timeout)
            (unsigned long long)total, (unsigned long long)elapsed, reads, timeout);
 }
 
-/** Bound every run, including a receiver whose peer never connects. */
+/**
+ * Run the mode the arguments name, bounded by a 180-second alarm, which also
+ * ends a receiver whose peer never connects. The exit status is 0 on success,
+ * 1 on a failure and 2 on a usage error.
+ */
 int main(int argc, char **argv)
 {
     struct sockaddr_in address;

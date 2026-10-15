@@ -1,8 +1,19 @@
 #!/bin/sh
-# Measure one inbound transfer after the receiver has announced its port,
-# once the machine has shown that it runs the slot and the kernel the caller
-# names in RACH2_MEASURE_SLOT and RACH2_MEASURE_KERNEL (machine_identity.sh),
-# asked as RACH2_MEASURE_USER, root by default.
+#
+# machine_net_in.sh: measure one TCP transfer from this host into an
+# installed machine with machine_net.
+#
+# Usage: machine_net_in.sh KEY ADDRESS REMOTE-PROGRAM SENDER MIB WRITE-BYTES
+#                          TIMEOUT DIR
+#
+# The transfer starts once the machine has shown that it runs the slot and
+# the kernel the caller names in RACH2_MEASURE_SLOT and RACH2_MEASURE_KERNEL
+# (machine_identity.sh), asked as RACH2_MEASURE_USER, root by default.
+# REMOTE-PROGRAM, machine_net's absolute path on the machine, receives on port
+# 27158 as RACH2_NET_USER, root by default; SENDER, machine_net on this host,
+# sends after the receiver has announced its port. The logs go to a new
+# net-in.* directory in DIR. RACH2_NET_KNOWN names a known-hosts file to use
+# and keep; without it a scratch file is used and removed.
 set -eu
 [ "$#" -eq 8 ] || {
     echo 'usage: machine_net_in.sh KEY ADDRESS REMOTE-PROGRAM SENDER MIB WRITE-BYTES TIMEOUT DIR' >&2
@@ -59,7 +70,9 @@ work=$(mktemp -d "$directory/net-in.XXXXXX")
 known=${RACH2_NET_KNOWN:-$work/known_hosts}
 receiver=
 
-# The background PID must identify SSH, not a shell waiting for SSH.
+# connect COMMAND: replace the shell with ssh running COMMAND on the machine.
+# The exec makes the PID of a connection started in the background that of
+# ssh, not of a shell waiting for it.
 connect()
 {
     exec ssh -i "$key" -o BatchMode=yes -o ConnectTimeout=10 \
@@ -68,7 +81,8 @@ connect()
         "$account@$address" "$1"
 }
 
-# The exit trap stops only the receiver started by this invocation.
+# Run by the EXIT trap: stop the receiver this invocation started, on the
+# machine and here, and remove the scratch known-hosts file.
 # shellcheck disable=SC2329
 cleanup()
 {
@@ -85,7 +99,7 @@ cleanup()
         kill -TERM "$receiver" 2>/dev/null || :
         wait "$receiver" 2>/dev/null || :
     fi
-    # Remove only our scratch file, after the last cleanup connection uses it.
+    # The scratch file goes last, after the cleanup's connection has used it.
     if [ -z "${RACH2_NET_KNOWN:-}" ]; then
         rm -f "$known"
     fi

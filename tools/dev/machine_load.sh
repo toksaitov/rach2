@@ -1,11 +1,14 @@
 #!/bin/sh
 #
-# machine_load.sh KEY ADDRESS SESSIONS SECONDS [DIR]
+# machine_load.sh: load an installed machine over SSH with sessions that build
+# the kernel tree with the staged TinyCC and pdpmake.
 #
-# The load row of milestone 46, run against an installed machine over SSH:
-# SESSIONS sessions, each copying the kernel tree and building it with the
-# staged TinyCC and pdpmake, each for SECONDS seconds on the guest clock.
-# Each session reports separately. DIR holds the logs; it defaults to the cwd.
+# Usage: machine_load.sh KEY ADDRESS SESSIONS SECONDS [DIR]
+#
+# Each of SESSIONS sessions, run by machine_load_session.sh as
+# RACH2_LOAD_USER, root by default, copies the kernel tree and builds it again
+# and again for SECONDS seconds on the guest clock, and reports separately.
+# DIR holds the logs; it defaults to the current directory.
 #
 # The sessions start a second apart. Dropbear allows five unauthenticated
 # connections from one address at a time (MAX_UNAUTH_PER_IP in the port's

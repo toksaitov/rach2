@@ -3,7 +3,7 @@
 # gen_compile_commands.sh: generate compile_commands.json, the LSP compilation
 # database clangd reads for per-file flags. Run it directly.
 #
-# GCC has no clang-style -MJ, so the databases are generated FROM the build's
+# GCC has no clang-style -MJ, so the databases are generated from the build's
 # own commands: each unit is dry-run (`make -Bn`, or a build script's print
 # mode), wrapped recipe lines are joined back into one command each, and every
 # joined command whose first word is the unit's compiler becomes one entry per
@@ -21,12 +21,14 @@
 # emits a known JSON subset, so a raw control character or a malformed entry
 # is decidable line by line and fails the run instead of leaving an invalid
 # file that reports success. `--selftest` runs the join, selection, escaping,
-# and validation stages on fixtures, including the wrapped Homebrew recipe
-# whose continuation line once matched through its libgcc path and wrote a
-# raw tab into the database.
+# and validation stages on fixtures, including a wrapped Homebrew recipe whose
+# continuation line, taken for a command through its libgcc path, would put a
+# raw tab in the database.
 #
 # The output (compile_commands.json at the repo root) is git-ignored and
 # regenerable; rerun this after adding/removing a source or changing flags.
+#
+# Usage: gen_compile_commands.sh [--selftest]
 #
 set -u
 # The units are i686's but rach2-x86_64, which names its architecture; an
@@ -37,9 +39,9 @@ unset ARCH RACH2_ARCH MAKEFLAGS MFLAGS
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="$REPO/compile_commands.json"
 
-# Escape one string for a JSON double-quoted value. The four escapes cover
-# everything a build command line can carry: backslash, double quote, tab,
-# and carriage return. The validator rejects anything else.
+# Escape one string for a JSON double-quoted value. The escapes cover
+# everything a build command line can have: backslash, double quote, tab,
+# carriage return and newline. The validator rejects anything else.
 json_escape() {
     printf '%s' "$1" | LC_ALL=C awk '
         NR > 1 { printf "\\n" }
@@ -74,7 +76,7 @@ join_continuations() {
 # operand of each compile command, with $2 as the escaped directory and $3
 # the compiler the unit uses: `cross` selects either architecture's elf GCC,
 # i686's or x86-64's, `host` the host compiler, cc or what CC names.
-# Selection keys on the FIRST word of the command: Homebrew installs libgcc
+# Selection keys on the first word of the command: Homebrew installs libgcc
 # under a path containing `i686-elf-gcc`, so matching the whole line would
 # select linker lines and continuation fragments through that path.
 emit_entries() {
@@ -106,7 +108,7 @@ emit_entries() {
 
 # Validate the finished database in $1. The generator writes one JSON array
 # of one-line objects whose strings contain no raw control character and only
-# the four escapes json_escape produces, so validity is a line-by-line check.
+# the escapes json_escape produces, so validity is a line-by-line check.
 # A failure here is a generator defect and the database is not published.
 validate_db() {
     LC_ALL=C awk '
@@ -145,15 +147,24 @@ build_array() {
     echo ']'
 }
 
+# Run the join, selection, escaping and validation stages on fixtures, and
+# exit 0 when every case passes and 1 otherwise. The cases:
+#
+#   1. A wrapped Homebrew recipe: the first command line ends in a backslash,
+#      and its continuation begins with a tab and has the libgcc path under
+#      .../i686-elf-gcc/.... Each C source gives one entry, and the
+#      continuation is not taken for a command of its own.
+#   2. The array built from those entries validates.
+#   3. A raw tab inside a string value is rejected.
+#   4. A malformed entry, a string split by an unescaped quote, is rejected.
+#   5. json_escape escapes a tab, a double quote and a backslash, and nothing
+#      else.
 selftest() {
     st_dir=$(mktemp -d)
     trap 'rm -rf "$st_dir"' EXIT INT TERM
     st_fail=0
 
-    # Case 1: the wrapped Homebrew recipe. The first command line ends in a
-    # backslash; its continuation begins with a tab and carries the libgcc
-    # path under .../i686-elf-gcc/..., the exact shape that once selected the
-    # fragment as its own command and wrote its raw tab into the database.
+    # Case 1: the wrapped Homebrew recipe.
     cat >"$st_dir/dump" <<'EOF'
 mkdir -p ../build/tests/
 /opt/homebrew/bin/i686-elf-gcc -m32 -static -o ../build/tests/dnstest \
@@ -200,8 +211,7 @@ EOF
         st_fail=1
     fi
 
-    # Case 4: a malformed entry (an unescaped quote splits the string) is
-    # rejected.
+    # Case 4: a malformed entry is rejected.
     cat >"$st_dir/bad_quote" <<'EOF'
 [
 {"directory": "/a", "file": "b.c", "command": "x"y"}
@@ -250,7 +260,9 @@ mkdir -p "$DBDIR"
 
 # One unit: its name, the directory its commands run in, the compiler kind,
 # and the command that prints its build. The unit's database is validated
-# before it is published, and its entries join the union.
+# before it is published, and its entries join the union. The script exits 1
+# when the command fails, prints no compile command, or gives a database that
+# does not validate.
 unit() {
     name=$1; dir=$2; kind=$3; shift 3
     if ! ( cd "$dir" && "$@" ) >"$dump_raw" 2>/dev/null; then

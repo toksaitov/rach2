@@ -1,5 +1,14 @@
 #!/bin/sh
-# Run through machine_load.sh's SSH stdin, once for each independent window.
+#
+# machine_load_session.sh: one session of machine_load.sh, which the machine's
+# shell reads from SSH's stdin, once for each session's own time window.
+#
+# Usage: machine_load_session.sh SESSION SECONDS DIRECTORY
+#
+# The session copies /src/rach2 to DIRECTORY and builds it with guest.mk
+# until SECONDS of guest time have passed since it started, then prints
+# `SESSION N builds B failed F before-deadline W late L` for machine_load.sh;
+# a build that finishes after the deadline counts as late.
 set -eu
 session=$1
 seconds=$2
@@ -7,7 +16,9 @@ directory=$3
 cp -r /src/rach2 "$directory"
 cd "$directory"
 
-# /proc/uptime counts delivered ticks. These are not host wall-clock seconds.
+# Print the whole seconds of /proc/uptime, or exit 1 when it does not read as
+# a number. /proc/uptime counts delivered ticks. These are not host
+# wall-clock seconds.
 now()
 {
     value=$(cut -d. -f1 /proc/uptime) || exit 1

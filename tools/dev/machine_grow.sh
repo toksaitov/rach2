@@ -1,12 +1,35 @@
 #!/bin/sh
-# Run from recovery after the owner approves the reported devices.
-# Work and command logs stay beside the backup; only the plan lives in RAM.
+#
+# machine_grow.sh: save the sectors an ext2 grow writes on an installed disk,
+# grow its root in place under a timer, and put the saved sectors back. It
+# runs in the recovery system, as root.
+#
+# Usage: machine_grow.sh save|grow|restore DISK STORE PLAN-DIRECTORY
+#
+# DISK is a whole-disk node, /dev/diskN. STORE is the mount point of an exFAT
+# volume on another disk, with the seed root as seed.ext2. PLAN-DIRECTORY,
+# copied under /tmp, is what machine_grow_plan.sh made; tools/Readme.md gives
+# the procedure. Run it only after the owner has approved the devices it
+# reports. Each run writes its logs to a new machine-grow.* directory on
+# STORE, beside the backup, so only the plan is in RAM.
+#
+# `save` copies the ranges and the 64 MiB boot partition to STORE/saved and
+# checks the copy against the disk; `grow` and `restore` require the host's
+# check of that copy, STORE/saved/host.sha256. `grow` makes the boot
+# partition start recovery, writes the seed and a partition table whose root
+# is the seed's size, and times `growroot --measure`. `restore` writes the
+# saved ranges back and checks the result. The exit status is 0 when the
+# action finished, 1 when it failed, and 129, 130 or 143 after a hangup, an
+# interrupt or a termination.
+#
 set -eu
 umask 077
 work=
 
-# A full transcript must not hide a failure. The console is independent of
-# redirected stdout/stderr and needs no space on either file system.
+# alert TEXT: print a failure on stderr and, when there is one, on
+# /dev/console, so that a failure shows even when the output goes to a
+# transcript; the console needs no space on either file system. A write that
+# fails is ignored.
 alert()
 {
     printf 'machine-grow: failed: %s\n' "$*" >&2 || :
@@ -14,7 +37,11 @@ alert()
         printf 'machine-grow: failed: %s\n' "$*" > /dev/console || :
     fi
 }
+# fail TEXT: alert and exit 1.
 fail() { alert "$*"; exit 1; }
+# The EXIT trap: write the exit status to WORK/result.status once the work
+# directory exists, report a failure, and exit with the status, or with 1
+# when the script stopped before its end with status 0.
 finish()
 {
     result=$?
@@ -52,10 +79,13 @@ case "$store" in /*) ;; *) fail 'the store must be an absolute mount point' ;; e
 [ "$(id -u)" = 0 ] || fail 'root is required'
 [ -b "$disk" ] || fail 'the whole-disk window is not published'
 number=${disk#/dev/disk}
-# Check the mount before creating anything below it. An unmounted directory
-# or a symlink into the target must never become the work destination.
-# Allocate and release a MiB before a target write; a free-space estimate
-# alone does not prove allocation. Later writes still check errors.
+# Resolve STORE, require it to be a mounted exFAT volume on a disk other than
+# DISK, and make the work directory there with copies of the plan, setting
+# `store`, `source_device` and `work`. The mount is checked before anything is
+# created below it, so an unmounted directory or a symlink into the target
+# never becomes the work directory. A MiB is written and removed before any
+# write to the target, since a free-space estimate does not prove allocation;
+# later writes still check their errors.
 prepare_work()
 {
     store=$(CDPATH='' cd -- "$store" && pwd -P) || fail 'the store directory'
@@ -127,13 +157,16 @@ if [ "$action" != restore ]; then
 fi
 saved="$store/saved"
 
+# hash_file FILE: print the SHA-256 of FILE; status 1 when sha256sum fails.
 hash_file()
 {
     hash_line=$(sha256sum "$1") || return 1
     printf '%s\n' "${hash_line%% *}"
 }
 
-# Each dd is bounded by bytes, even when a range starts inside a mebibyte.
+# Write the ranges of ranges.txt, read from DISK, to stdout, with a progress
+# line on stderr every 128 ranges; status 1 when a read fails. Each dd is
+# bounded by bytes, even when a range starts inside a mebibyte.
 pack()
 {
     row=0
@@ -147,7 +180,10 @@ pack()
     done < "$work/ranges.txt"
 }
 
-# Keep the producer's status; a digest alone cannot prove a complete read.
+# Hash the ranges as DISK has them now, and fail unless the digest is the
+# backup's, `backup_hash`, which check_backup sets. The reader's status is
+# kept apart from the pipeline's, since a digest alone cannot prove a
+# complete read.
 check_disk_copy()
 {
     rm -f "$work/read.status"
@@ -161,6 +197,9 @@ check_disk_copy()
     [ "$actual" = "$backup_hash" ] || fail 'the disk ranges differ from the saved copy'
 }
 
+# Fail unless STORE/saved is a whole backup made for this plan: the sizes of
+# its copies, its copies of the plan and the ranges, and its SHA256SUMS. Set
+# `backup_hash` to the digest of backup.bin.
 check_backup()
 {
     [ "$(wc -c < "$saved/backup.bin")" = "$bytes" ] || fail 'short backup'
@@ -171,7 +210,9 @@ check_backup()
     backup_hash=$(hash_file "$saved/backup.bin") || fail 'hashing the backup'
 }
 
-# The seed and actual device size determine the set, not its supplied digest.
+# Fail unless the seed has the plan's length and digest, and growset, run on
+# the seed and the root's size, gives the plan's ranges. The ranges come from
+# the seed and the target's geometry, not from a digest supplied with them.
 check_plan()
 {
     [ "$(wc -c < "$store/seed.ext2" | tr -d ' ')" = "$((seed * 512))" ] || fail 'seed length'
@@ -185,8 +226,11 @@ check_plan()
     rm "$work/expected-ranges.txt"
 }
 
-# reflash's verifier requires every byte of the declared extent to read.
-# Its bounded buffer needs no copy in recovery's four MiB RAM file system.
+# hash_slice FILE OFFSET COUNT: print the SHA-256 of COUNT bytes of FILE from
+# byte OFFSET; status 1 when `reflash --verify` fails or prints a line of
+# another form. reflash's verifier requires every byte of the extent to read,
+# and its bounded buffer needs no copy of the extent in recovery's RAM file
+# system.
 hash_slice()
 {
     slice_result=$(reflash --verify "$1" "$2" "$3") || return 1
@@ -200,6 +244,7 @@ hash_slice()
     '
 }
 
+# Fail unless the boot partition on DISK is the saved boot.img.
 check_boot_copy()
 {
     expected_boot=$(hash_file "$saved/boot.img") || fail 'hashing the boot backup'
@@ -207,8 +252,11 @@ check_boot_copy()
     [ "$actual_boot" = "$expected_boot" ] || fail 'the boot backup differs from the disk'
 }
 
-# Only the 1024-byte prepared environment is copied. growboot reads
-# the saved FAT layout and runs bootctl's editor against a memory overlay.
+# Make WORK/recovery.env from the saved boot partition with growboot: the
+# 1024-byte GRUB environment block with `recovery` as its saved entry and no
+# `next_entry`. Set `env_offset` to the block's byte offset in the partition.
+# growboot reads the saved FAT layout and runs bootctl's editor against a
+# memory overlay, so only the block is copied.
 prepare_boot()
 {
     /bin/growboot "$saved/boot.img" "$work/recovery.env" > "$work/prepared-boot.status" || fail 'preparing recovery from boot.img'
@@ -220,9 +268,15 @@ prepare_boot()
     env_offset=$((env_sector * 512))
 }
 
-# Compare the environment separately so verified recovery is never rewritten
-# while another boot extent is repaired. Invalid headers need not parse:
-# every repair byte comes from the verified backup or its prepared environment.
+# Make the boot partition on DISK the saved one with the prepared environment
+# block, so that it starts recovery. The extent before the block, the block
+# and the extent after it are each compared with their source, written only
+# when they differ, and read back; a block on the disk that is plain text and
+# already saves recovery is kept. Fail unless bootctl then reports recovery
+# saved and no trial armed. The block is compared on its own, so a verified
+# recovery entry is never rewritten while another boot extent is repaired. A
+# damaged header need not parse: every byte written comes from the verified
+# backup or the prepared block.
 keep_recovery()
 {
     for part in prefix environment suffix; do
@@ -279,8 +333,10 @@ keep_recovery()
     grep -q '^bootctl: next_entry: absent$' "$work/boot.status" || fail 'a trial is still armed'
 }
 
-# tee checks every output write; the status file separately checks the
-# producer. Append permits thousands of restore calls without one file each.
+# run_logged LOG COMMAND...: run COMMAND with its output appended to
+# WORK/LOG, and fail when it fails or the log cannot be written. tee checks
+# every write of the output, and the status file keeps the command's own
+# status. Appending lets thousands of restore calls share one file.
 run_logged()
 {
     log_name=$1
@@ -294,9 +350,12 @@ run_logged()
     fi
 }
 
-# Keep the global disk counters free of backup-volume log writes. No file
-# descriptor on the store is held during this bounded in-memory capture.
-# A missing final status or output beyond 64 KiB fails after remounting.
+# Unmount STORE, run `growroot --measure` on the root of DISK with its output
+# held in memory, remount STORE, and write the output to WORK/grow.log and
+# stdout. Fail, after remounting, when the grow fails, its final status line
+# is missing, or its output passes 64 KiB. Unmounting keeps the backup
+# volume's log writes out of the disk counters, and no file descriptor on
+# STORE is open during the capture.
 run_measured()
 {
     umount -n "$store" || fail 'unmounting the backup volume before timing'
@@ -316,8 +375,9 @@ run_measured()
     unset measured_output
 }
 
-# Keep both pipe endpoints' failures, including a status-file write failure.
-# reflash's complete per-range output goes to persistent restore.log.
+# Write `amount` bytes of the backup, from byte `offset`, to DISK at sector
+# `first`; status 1 when the read, the status file or the write fails. The
+# caller logs reflash's whole output for each range in WORK/restore.log.
 restore_range()
 {
     rm -f "$work/restore-read.status" || return 1
