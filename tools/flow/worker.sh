@@ -44,12 +44,13 @@ CODEX_MODEL=gpt-6.1-sol
 DEADLINE=21600
 
 # claim: take an issue for this account, as the header says, and write its
-# number to STATE/issue; write nothing when none is waiting, and fail when the
-# lock cannot be taken. The lock is perl's flock on ~/.rach2-claim.lock, which
-# the redirection after the body opens on descriptor 9 for the length of the
-# call. A flock belongs to the open file description, not to the process that
-# took it, so the lock is held until the descriptor is closed: by the shell
-# when the call ends, or by the kernel when the loop dies.
+# number to STATE/issue; write nothing when none is waiting, and fail, taking
+# nothing, when the lock cannot be taken or the board cannot be read. The lock
+# is perl's flock on ~/.rach2-claim.lock, which the redirection after the body
+# opens on descriptor 9 for the length of the call. A flock belongs to the
+# open file description, not to the process that took it, so the lock is held
+# until the descriptor is closed: by the shell when the call ends, or by the
+# kernel when the loop dies.
 claim()
 {
     if ! perl -MFcntl=:flock -e 'open(L, ">&=9") && flock(L, LOCK_EX) or
@@ -57,7 +58,11 @@ claim()
         log "claim lock failed"
         return 1
     fi
-    for n in $(sh "$state/run/board.sh" next | cut -f 1 | head -n 5); do
+    if ! listed=$(sh "$state/run/board.sh" next); then
+        log "board unreachable"
+        return 1
+    fi
+    for n in $(printf '%s\n' "$listed" | cut -f 1 | head -n 5); do
         if sh "$state/run/board.sh" take "$n" 2>> "$state/loop.log"; then
             echo "$n" > "$state/issue"
             log "took #$n"
