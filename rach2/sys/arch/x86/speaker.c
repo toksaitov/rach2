@@ -13,9 +13,6 @@
 #define SPEAKER_PORT 0x61
 #define PIT_CHANNEL2 0x42
 #define PIT_COMMAND  0x43
-#include "../../kio.h"
-
-static bool _speaker_on = false;
 
 /**
  * Programming PIT channel 2 to mode 3, the square wave, and connecting its
@@ -52,8 +49,6 @@ void speaker_on(uint32_t frequency)
     if ((tmp & 0x03) != 0x03) {
         outb(SPEAKER_PORT, tmp | 0x03);
     }
-
-    _speaker_on = true;
 }
 
 void speaker_off(void)
@@ -63,6 +58,4 @@ void speaker_off(void)
     /* Clear port 0x61 bits 0 (timer gate) and 1 (speaker enable). */
     tmp = inb(SPEAKER_PORT);
     outb(SPEAKER_PORT, tmp & 0xFC);
-
-    _speaker_on = false;
 }
