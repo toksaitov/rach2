@@ -26,6 +26,21 @@ run() {
         --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" "$@"
 }
 
+# lag_run FILE ARG...: boot the test image on the disk image FILE for a row
+# under the lag. The lag device's deadline of
+# five seconds counts the IDE write under it and the flush after the write,
+# which QEMU makes an fdatasync of the image; on a loaded host that can
+# take longer than the deadline, so the disk ignores the guest's flushes
+# (cache=unsafe). Each write still reaches the host's page cache, where
+# every later reader of the file finds it.
+lag_run() {
+    file=$1
+    shift
+    "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
+        --qemu-arg=-cpu --qemu-arg=max \
+        --drive "file=$file,format=raw,if=ide,index=0,media=disk,cache=unsafe" "$@"
+}
+
 # walk_clean WHAT: walk the volume with the host's reader, and fail with WHAT
 # on any finding but the line LOST has. The crash may leave lost clusters,
 # which the mount's check counts and leaves for a host tool; walk_repaired
@@ -176,7 +191,7 @@ cmp -s "$DISK.bb" "$DISK.bb.want" || fail "the program BusyBox copied differs th
 echo "exfat-test: the program BusyBox copied reads identically on the host: OK"
 
 # ---- 6: two writers and a sync at once, under the lag ----
-if run --append "rach2.blocklag=3 rach2.rescue" --timeout 180 --steptmo 120 \
+if lag_run "$DISK" --append "rach2.blocklag=3 rach2.rescue" --timeout 180 --steptmo 120 \
     --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
     "expect=Type 'help'" "send=exec /lagprobe writers exfat" "expect=LAGPROBE" > /dev/null 2>&1; then
     echo "exfat-test: two writers and a sync interleave under the lag and each file is whole: OK"
@@ -189,10 +204,7 @@ external_check "the external checker's answer at the end" "$LOST"
 # ---- 7: a failed write after VolumeDirty was set makes the mount read-only;
 #         it unmounts and leaves the bit on the disk ----
 cp "$DISK" "$DISK.late" || fail "copy the disk"
-if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
-    --qemu-arg=-cpu --qemu-arg=max \
-    --drive "file=$DISK.late,format=raw,if=ide,index=0,media=disk" \
-    --append "rach2.blocklag=3 rach2.blockfail=32 rach2.rescue" \
+if lag_run "$DISK.late" --append "rach2.blocklag=3 rach2.blockfail=32 rach2.rescue" \
     --timeout 90 --steptmo 60 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
     --log "$DISK.latefail.log" \
     "expect=Type 'help'" "send=exec /lagprobe latefail exfat" \

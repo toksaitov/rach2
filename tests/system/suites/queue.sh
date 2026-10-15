@@ -71,7 +71,11 @@ echo "queue-test: the root's faults share the port with the queue: $(grep -a 'AH
 # request: at 16 KiB a second a run of 1 MiB would outlast the four periods
 # and the disk would be declared stalled. The volume is ext2 and not FAT32
 # because ext2 writes a file back in runs, where FAT32 writes each 4 KiB
-# block through as it is written, under the deadline.
+# block through as it is written, under the deadline. A write is the
+# transfer and a flush in one request, and QEMU makes the flush an
+# fdatasync of the image, which on a loaded host can take longer than the
+# request's four periods; the image's node ignores the guest's flushes
+# (cache.no-flush), so the throttle alone sets how long a request takes.
 rm -f "$DIR/late.vol"; : > "$DIR/late.vol"
 E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 \
     -O sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize \
@@ -84,7 +88,7 @@ E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 \
 "$MKMBR" --lba "$DIR/late.disk" 2048:12288:83 > /dev/null || fail "the late disk's table"
 "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-object --qemu-arg=throttle-group,id=tg1,x-bps-total=524288 \
-    --qemu-arg=-blockdev --qemu-arg="driver=file,filename=$DIR/late.disk,node-name=latefile" \
+    --qemu-arg=-blockdev --qemu-arg="driver=file,filename=$DIR/late.disk,node-name=latefile,cache.no-flush=on" \
     --qemu-arg=-blockdev --qemu-arg=driver=raw,file=latefile,node-name=lateraw \
     --qemu-arg=-blockdev --qemu-arg=driver=throttle,throttle-group=tg1,file=lateraw,node-name=late \
     --qemu-arg=-device --qemu-arg=ich9-ahci,id=ahci0 \
@@ -103,11 +107,13 @@ echo "queue-test: a request answered after its deadline is taken as the answer a
 # pays for a burst unevenly: under a period of a hundred ticks, set on the
 # wrapper itself since it keeps its own, a lag of 75 ticks is answered
 # inside the period and no request is overdue; a lag of 125 is overdue
-# once and taken. The record names which.
+# once and taken. The record names which. The deadline counts the IDE
+# transfer under the lag too, and the flush after a write, which the disk
+# keeps from the host (cache=unsafe), as the late row does.
 fat_disk "$DIR/edge.disk"
 edge_boot() { # edge_boot LAG OVERDUE
     "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max \
-        --drive "file=$DIR/edge.disk,format=raw,if=ide,index=0,media=disk" \
+        --drive "file=$DIR/edge.disk,format=raw,if=ide,index=0,media=disk,cache=unsafe" \
         --append "rach2.rescue rach2.blocklag=$1 rach2.lagdeadline=100 rach2.lagperiods=4" --timeout 120 --steptmo 60 \
         --log "$DIR/edge$1.log" --ok "AHCIPROBE OK" --never "AHCIPROBE FAIL" \
         "expect=Type 'help'" "send=exec /ahciprobe edge" "expect=AHCIPROBE OK" > /dev/null 2>&1 \
@@ -128,9 +134,10 @@ echo "queue-test: a request answered inside its period is not overdue and one an
 # slot in the pool a slot not freed leaves nothing to take. The lag makes
 # that request late as well, so it is taken and waits its periods, where
 # a refused one would answer at once and the pool report itself stalled.
+# Its disk keeps the guest's flushes from the host, as the boundary's does.
 fat_disk "$DIR/quar.disk"
 "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max \
-    --drive "file=$DIR/quar.disk,format=raw,if=ide,index=0,media=disk" \
+    --drive "file=$DIR/quar.disk,format=raw,if=ide,index=0,media=disk,cache=unsafe" \
     --append "rach2.rescue rach2.blocklag=500 rach2.lagdeadline=100 rach2.lagperiods=4 rach2.blockpool=1" \
     --timeout 120 --steptmo 60 --log "$DIR/quar.log" \
     --ok "AHCIPROBE OK" --never "AHCIPROBE FAIL" \
