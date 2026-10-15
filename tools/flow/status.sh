@@ -6,13 +6,14 @@
 #
 # It prints master's newest commit, ci's last eight runs, the open issues
 # with their Status, assignees and labels, a line for each worker loop that
-# `workers` lists, and the testing host's load, memory and emulators. A
-# worker's line says whether its loop runs, its last log line, the seconds
-# since its newest session wrote, how many test commands it runs, and its
-# clone's commit and count of changed files. A loop on another host is read
-# over ssh; one whose host is `-` runs on this machine. A loop that sends its
-# tests to its own copy on the testing host, as the owner's loops do, counts
-# the commands that work in that copy.
+# `workers` lists, a line for the reviewer loop of this machine, and the
+# testing host's load, memory and emulators. A worker's line says whether its
+# loop runs, its last log line, the seconds since its newest session wrote,
+# how many test commands it runs, and its clone's commit and count of changed
+# files; the reviewer's, whether it runs, its last log line and its queue. A
+# loop on another host is read over ssh; one whose host is `-` runs on this
+# machine. A loop that sends its tests to its own copy on the testing host, as
+# the owner's loops do, counts the commands that work in that copy.
 
 # shellcheck disable=SC2016 # the dollars are GraphQL's, jq's and the probe's
 REPO=toksaitov/rach2
@@ -65,6 +66,14 @@ grep -v '^#' "$(dirname "$0")/workers" | while read -r name host st; do
         printf '%s' "$probe" | ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" sh -s "$st" 2>&1 | tail -n 1
     fi
 done
+echo "== reviewer"
+st=$HOME/flow/reviewer
+if [ ! -d "$st" ]; then
+    echo "no reviewer loop has run here: no $st"
+else
+    if pgrep -f "$st/run/reviewer.sh" > /dev/null; then loop=runs; else loop="not running"; fi
+    echo "loop $loop: $(tail -n 1 "$st/loop.log" 2> /dev/null) | queue: $(tr '\n' ' ' < "$st/queue" 2> /dev/null)"
+fi
 echo "== testing host"
 printf '%s\n' 'uptime' 'free -g | sed -n 2p' 'echo "qemu $(pgrep -c qemu-system || true)"' |
     ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" 'wsl.exe -u root -- sh -s' 2>&1 | tail -n 3

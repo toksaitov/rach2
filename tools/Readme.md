@@ -79,26 +79,30 @@ The accounts are in the `kvm` group, and the runner uses `/dev/kvm` when it can 
 
 ### The worker and manager loops: `flow/`
 
-The work and the management of the process run as loops: shell scripts that start one agent session after another, so that no session waits on a person and each piece of work is a process that ends. [worker.sh](flow/worker.sh) runs worker sessions in the clone it is in, as the account that clone's `gh` and git use, and [manager.sh](flow/manager.sh) runs the manager's checks. Each runs in a detached tmux session, from a clone of its own. An account on the testing host runs one, with its state in `~/flow`:
+The work and the management of the process run as loops: shell scripts that start one agent session after another, so that no session waits on a person and each piece of work is a process that ends. [worker.sh](flow/worker.sh) runs worker sessions in the clone it is in, as the account that clone's `gh` and git use, [manager.sh](flow/manager.sh) runs the manager's checks, and [reviewer.sh](flow/reviewer.sh) reviews each finished phase. Each runs in a detached tmux session, from a clone of its own. An account on the testing host runs one, with its state in `~/flow`:
 
     tmux new-session -d -s worker 'sh ~/rach2/tools/flow/worker.sh'
 
-The owner's computer runs three, with tmux from Homebrew:
+The owner's computer runs four, with tmux from Homebrew:
 
     git clone https://github.com/toksaitov/rach2 ~/flow/claude/rach2
     git clone https://github.com/toksaitov/rach2 ~/flow/codex/rach2
     git clone https://github.com/toksaitov/rach2 ~/flow/manager/rach2
+    git clone https://github.com/toksaitov/rach2 ~/flow/reviewer/rach2
     tmux new-session -d -s claude 'RACH2_TESTING_COPY=/home/testing/rach2-claude \
         sh ~/flow/claude/rach2/tools/flow/worker.sh -s ~/flow/claude'
     tmux new-session -d -s codex 'RACH2_TESTING_COPY=/home/testing/rach2-codex \
         sh ~/flow/codex/rach2/tools/flow/worker.sh -a codex -s ~/flow/codex'
     tmux new-session -d -s manager 'sh ~/flow/manager/rach2/tools/flow/manager.sh'
+    tmux new-session -d -s reviewer 'sh ~/flow/reviewer/rach2/tools/flow/reviewer.sh'
 
 `touch STATE/stop` ends a loop after its current session; `tmux kill-session -t NAME` ends it at once and leaves that session running. A loop needs `claude` or `codex` signed in, `gh` with the `project` scope, git that can push, and perl. A loop on the owner's computer also needs `ssh testing` and a copy of its own on the host, which `RACH2_TESTING_COPY` names, so that the loops do not refuse each other's syncs.
 
 Before a session, a worker loop that has no issue claims one with [board.sh](flow/board.sh), under a lock shared by the loops of one user on one machine, and keeps its number in `STATE/issue`, since the owner's two loops share one account. The issue may be a group, which `board.sh group` makes from up to eight small issues; the session then takes each member as it starts on it, and `board.sh release` hands one back. The session's prompt, [worker.txt](flow/worker.txt), names the issue, and the session builds, checks and pushes as `AGENTS.md` says; the loop gives the next session the same issue until it is closed or handed back. Claude Code sessions run at high effort, cannot schedule a wakeup, and wait for their helpers; Codex sessions run `gpt-6.1-sol` at high effort without a sandbox, as Claude Code's run with permissions bypassed. The loop stops a session after six hours, with every process in its group, waits fifteen minutes after a usage limit, backs off after sessions that end within two minutes, and slows after three sessions that leave one issue open. It runs from a copy of `tools/flow` taken from `origin/master` and restarts when master's copy changes, so that a change to the loops reaches every machine at its next session.
 
 The manager loop starts a headless Claude Code check with [manager.txt](flow/manager.txt) and the last lines of `STATE/manager.log`, stops a check still running after forty minutes, and starts the next twenty minutes after the last ended. A check triages new `bug` issues, grouping them with `board.sh group` and placing them with `board.sh ready` and `order`, and reads the process through [status.sh](flow/status.sh), which reads the loops that [workers](flow/workers) lists, and warns the owner of an incident with [notify.sh](flow/notify.sh): a push to the phone from an interactive Claude Code session with Remote Control, the only kind that sends one. That session waits two and a half minutes before the push, because Claude Code sends none while its terminal was just typed in, and the prompt a session starts with counts as typing; the owner can then open the session from the phone.
+
+The reviewer loop reviews a phase once all its issues, its sub-issues and those whose body says `Part of #P`, have closed after the loop first started, and any phase whose number is written to `~/flow/reviewer/queue`. A review runs `codex exec` in a read-only worktree of `master`, with `gpt-6-astra` at xhigh effort as the lead, which may start three `gpt-6.1-sol` subagents at a time at high effort, for at most three hours, with the prompt [reviewer.txt](flow/reviewer.txt) and an answer in the form [reviewer.json](flow/reviewer.json) gives. The loop files each finding as a `bug` issue of the phase, comments the summary on the phase and labels it `reviewed`; a review that fails or reaches its limit says so on the phase. Another reviewer's program needs an adapter in `review`, beside the one for `codex`.
 
 ### ci: `ci/`
 
