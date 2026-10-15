@@ -5276,23 +5276,26 @@ static int refuse(const char *field)
  *
  * Each buffer is one page of the heap, which is one cache block, so no
  * buffer needs pages next to another's. A mount that cannot have them all
- * fails with ENOMEM and leaves what it took to `writeback_free`. 0,
- * -ENOMEM, or the error of `sb_store`.
+ * fails with ENOMEM, gives back what it took and leaves `em->wb` NULL, so
+ * that a later remount sets the batch up again. 0, -ENOMEM, or the error of
+ * `sb_store`, after which the batch stays.
  */
 static int writeback_init(struct ext2_mount *em)
 {
+    struct ext2_writeback *wb = kzalloc(sizeof(*wb));
     int i;
 
-    em->wb = kzalloc(sizeof(*em->wb));
-    if (!em->wb) {
+    if (!wb) {
         return -ENOMEM;
     }
     for (i = 0; i < EXT2_WB_DATA + EXT2_WB_META; i++) {
-        em->wb->slot[i] = kalloc_pages(1, 0);
-        if (!em->wb->slot[i]) {
+        wb->slot[i] = kalloc_pages(1, 0);
+        if (!wb->slot[i]) {
+            writeback_free(wb);
             return -ENOMEM;
         }
     }
+    em->wb = wb;
     em->state &= ~EXT2_VALID_FS;
     return sb_store(em);
 }

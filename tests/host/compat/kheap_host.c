@@ -17,6 +17,11 @@ void free(void *p);
  * through the cache: memory is free, but not in one long run. */
 unsigned long kheap_host_largest;
 
+/* The calls of `kalloc_pages` that may still succeed before every later one
+ * fails, or -1 for no limit. A test that sets it stands in for a heap that
+ * runs out part way through a series of allocations. */
+long kheap_host_pages_left = -1;
+
 /** Whether `n` bytes exceed `kheap_host_largest`, when it is set. */
 static int too_large(unsigned long n)
 {
@@ -43,11 +48,17 @@ void kfree(void *p)
 
 /** `count` pages from `malloc`, aligned only as `malloc` aligns, with a
  * physical address of 0 stored through `phys` when it is not NULL; NULL for
- * 0 pages or a size over the limit. */
+ * 0 pages, a size over the limit, or a call past `kheap_host_pages_left`. */
 void *kalloc_pages(uint32_t count, uintptr_t *phys)
 {
     if (phys) {
         *phys = 0;
+    }
+    if (kheap_host_pages_left == 0) {
+        return NULL;
+    }
+    if (kheap_host_pages_left > 0) {
+        kheap_host_pages_left--;
     }
     return count && !too_large(4096ul * count) ? malloc(4096ul * count) : NULL;
 }

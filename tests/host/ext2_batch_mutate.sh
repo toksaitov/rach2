@@ -82,6 +82,7 @@ function = {
     'zero': 'static int writeback_prepare_data(',
     'stage-lock': 'static int ext2_fsync(',
     'reserve-run': 'static int writeback_init(struct ext2_mount *em)\n{',
+    'partial-batch': 'static int writeback_init(struct ext2_mount *em)\n{',
 }.get(fault, 'static int32_t ext2_write(')
 start = source.index(function)
 end = source.index('\n}', start) + 2
@@ -97,6 +98,7 @@ changes = {
     'zero': ('k_memset(data->data, 0, BCACHE_BLOCK_BYTES);',
              'k_memset(data->data, 0xAB, BCACHE_BLOCK_BYTES);'),
     'reserve-run': ('kalloc_pages(1, 0)', 'kalloc_pages(EXT2_WB_DATA + EXT2_WB_META + 1, 0)'),
+    'partial-batch': ('writeback_free(wb);', 'em->wb = wb;'),
 }
 def first(body, old, new):
     if old not in body:
@@ -120,7 +122,7 @@ PYFAULT
 }
 
 faults='bytes data metadata inodes release sticky handoff abort zero
-    stage-lock reserve-run'
+    stage-lock reserve-run partial-batch'
 if [ "${1:-}" = --texts ]; then
     RACH2_FAULT_TEXTS=1 apply_per_call rach2/sys/fs/ext2.c >/dev/null || exit 1
     RACH2_FAULT_TEXTS=1 apply_drain rach2/sys/fs/ext2.c >/dev/null || exit 1
@@ -267,6 +269,7 @@ for fault in $faults; do
         zero) message='FAIL: partial bytes and zeroing precede durable size or hole publication' ;;
         stage-lock) message='FAIL: a draining generation retains mount ownership across I/O' ;;
         reserve-run) message='FAIL: a read-write mount needs no run longer than a reserve run' ;;
+        partial-batch) message="runtime error: store to null pointer" ;;
     esac
     run_phase "$fault-mutated" fault "$message" "$status"
     cmp "$source" "$work/source.saved"

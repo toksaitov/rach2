@@ -2973,8 +2973,11 @@ static void batch_flush_error_row(int barrier, int large)
 #include "ext2_batch_cases.h"
 #include "ext2_batch_lifecycle.h"
 
-/* The host heap's limit on one allocation, 0 for none (compat/kheap_host.c). */
+/* The host heap's limit on one allocation, 0 for none, and the page
+ * allocations it grants before it fails, -1 for no limit
+ * (compat/kheap_host.c). */
 extern unsigned long kheap_host_largest;
+extern long kheap_host_pages_left;
 
 /**
  * Mount read-write under a heap that grants no allocation longer than a
@@ -2998,11 +3001,44 @@ static void reserve_run_row(void)
 }
 
 /**
+ * A remount writable whose batch the heap cannot give fails with `ENOMEM`
+ * and keeps the mount read-only; the next remount, with the heap restored,
+ * sets the whole batch up, and a file written through it leaves a clean
+ * volume. The heap gives one page and refuses the second, so that the
+ * failed remount has taken part of a batch.
+ */
+static void remount_nomem_row(void)
+{
+    int rc;
+    void *f;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    check(mount_ro() == 0, "the remount volume mounts read-only");
+    vfs_ns_lock(&mnt);
+    kheap_host_pages_left = 1;
+    rc = OPS->remount(&mnt, rw_flags, NULL);
+    kheap_host_pages_left = -1;
+    check(rc == -ENOMEM, "a remount writable without the pages of a batch is ENOMEM");
+    check(make_file(mnt.root, "refused", &rc) == 0 && rc == -EROFS,
+          "and the mount stays read-only");
+    check(OPS->remount(&mnt, rw_flags, NULL) == 0, "the next remount writable succeeds");
+    mnt.flags = rw_flags;
+    f = make_file(mnt.root, "after", &rc);
+    check(f && write_at(f, pattern, 5000, 0) == 0, "and a file is written through its batch");
+    if (f) {
+        OPS->put(&mnt, f);
+    }
+    check(unmount_rw() == 0 && e2fsck_clean(wimg), "and the volume unmounts clean");
+}
+
+/**
  * The write batch's rows: the rows of ext2_batch_cases.h and
  * ext2_batch_lifecycle.h, `batch_rows_under` and the cross-call order rows
  * at 16 and 512 buffers, from blocks 11, 1035 and 2059, then the default
- * mount, an rmdir of a held directory, a remount, and the failed drain and
- * flush rows. `main --batch-only` runs only these.
+ * mount, an rmdir of a held directory, a remount, a remount the heap cannot
+ * give a batch, and the failed drain and flush rows. `main --batch-only`
+ * runs only these.
  */
 static void batch_rows(void)
 {
@@ -3031,6 +3067,7 @@ static void batch_rows(void)
     default_mount_row();
     held_rmdir_row();
     remount_row();
+    remount_nomem_row();
     batch_error_row();
     for (barrier = 1; barrier <= 5; barrier++) {
         batch_flush_error_row(barrier, 0);
