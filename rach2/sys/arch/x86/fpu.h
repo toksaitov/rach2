@@ -107,9 +107,9 @@ int fpu_fx_set(void *area, const uint8_t *fx);
 
 /**
  * Make `copy`, a copy of a save area of `fpu_xstate_size` bytes, the image
- * Linux's NT_X86_XSTATE gives: the area, with the 48 bytes at 464 that the
- * processor leaves to software holding XCR0 in their first eight, which is
- * where GDB reads which components the image has.
+ * Linux's NT_X86_XSTATE gives: the area with bytes 416 to 511 zero, but for
+ * XCR0 in the first eight of the 48 at 464 that the processor leaves to
+ * software, where GDB reads which components the image has.
  */
 void fpu_xstate_view(uint8_t *copy);
 

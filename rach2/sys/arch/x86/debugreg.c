@@ -55,10 +55,16 @@ extern void isr128(void);
 /* Whether each processor has debug enables loaded. A tracer's exit can
  * clear a running tracee's saved DR7 without changing that processor's DR7. */
 static volatile unsigned char dr7_live[NR_CPUS];
+
+/* The DR6 bits of the exceptions each processor deferred, with DEFER_USER
+ * for a user hit, until a switch or `debugreg_deliver` takes them. Only its
+ * own processor changes an entry. */
 static volatile unsigned long deferred[NR_CPUS];
 
-/** Save a deferred exception in the outgoing thread and load the next
- * thread's breakpoints. The caller holds the big lock with interrupts off. */
+/** The processor's deferred bits go to the outgoing thread, so that they
+ * follow it to another processor. DR7 is written only when the incoming
+ * thread has enables or the processor still has some loaded, so a switch
+ * between threads without breakpoints writes no debug register. */
 void arch_debug_switch(process_t *old, const process_t *next)
 {
     unsigned int cpu = arch_cpu_id();
@@ -87,8 +93,13 @@ void arch_debug_switch(process_t *old, const process_t *next)
     }
 }
 
-/** Classify DR6 against the current thread's saved enables. A tracer that
- * ended may have cleared them while this processor still had DR7 loaded. */
+/**
+ * Store `dr6` as the current thread's DR6 and classify it as
+ * `debugreg_status` returns it: TRAP_HWBKPT, TRAP_TRACE, 0, or
+ * DEBUGREG_STALE for a breakpoint the thread's saved enables no longer
+ * have, after which the processor's DR7 is cleared. A tracer that ended may
+ * have cleared them while this processor still had DR7 loaded.
+ */
 static int32_t debugreg_code(unsigned long dr6)
 {
     if (current_proc) {
@@ -107,7 +118,6 @@ static int32_t debugreg_code(unsigned long dr6)
     return (dr6 & DR6_BS) ? TRAP_TRACE : 0;
 }
 
-/** Read and clear the processor's debug status for a user exception. */
 int32_t debugreg_status(void)
 {
     unsigned long dr6;
@@ -118,9 +128,6 @@ int32_t debugreg_status(void)
     return debugreg_code(dr6);
 }
 
-/** Save a kernel debug exception without taking a lock or using a thread's
- * stack. Only this processor changes these arrays. Disable its breakpoints
- * until the next switch or user return, so its interrupt stack cannot nest. */
 void debugreg_defer(void)
 {
     unsigned int cpu = arch_cpu_id();
@@ -135,14 +142,11 @@ void debugreg_defer(void)
     deferred[cpu] |= dr6 & (DR6_HITS | DR6_BS);
 }
 
-/** Defer a user watchpoint when pc is the first instruction of system-call
- * entry: isr128 on i686, syscall_entry on x86-64. Intel can report this
- * delayed hit without a DR6 status bit. With saved enables it is a user
- * data breakpoint: TF is clear (the i686 interrupt gate clears it; x86-64
- * FMASK masks it), and DR7 validation forbids kernel addresses and GD.
- * Its signal must be forced even when the thread blocks SIGTRAP.
- * Keep that origin across switches until the syscall returns to user mode.
- * Return 1 for that entry, or 0 without reading DR6 for any other address. */
+/** Intel can report this delayed hit without a DR6 status bit. With the
+ * thread's enables saved it is a user data breakpoint: TF is clear at the
+ * entry (the i686 interrupt gate clears it, and x86-64's FMASK masks it),
+ * and `dr7_valid` forbids kernel addresses and GD. The mark stays with the
+ * thread across switches until the system call returns to user mode. */
 int debugreg_defer_user(uintptr_t pc)
 {
     unsigned int cpu;
@@ -158,15 +162,11 @@ int debugreg_defer_user(uintptr_t pc)
     return 1;
 }
 
-/** Post a deferred debug exception at user return, or a kernel hit before
- * a pending-signal check, on the thread's stack with the big lock held and
- * interrupts off. A switch kept its status in the outgoing thread so it
- * follows that thread to another processor. The syscall exit reports kernel
- * single steps; only a hardware hit with saved enables posts a signal here,
- * as in i686's kernel debug handler. Both deferred copies are cleared even when
- * a detach made the hit stale. A hit delayed from user code forces SIGTRAP
- * even without a DR6 status bit; the saved DR6 contains only reported bits.
- * A kernel copy's hit respects the mask, so a signal wait can take it. */
+/** The system call's exit reports a single step in the kernel, so only a
+ * hardware hit with the thread's enables saved posts a signal here, as in
+ * i686's kernel debug handler. Both records are cleared even when a detach
+ * made the hit stale. A user hit is TRAP_HWBKPT even without a DR6 status
+ * bit; the thread's saved DR6 has only the bits the processor reported. */
 void debugreg_deliver(void)
 {
     unsigned int cpu = arch_cpu_id();
@@ -198,10 +198,8 @@ void debugreg_deliver(void)
     }
 }
 
-/** Whether a deferred user hit must interrupt a wait regardless of the
- * signal mask or disposition. Leave its status for user-return delivery;
- * a stale hit no longer forces a signal. The caller holds the big lock
- * with interrupts off. */
+/** A stale hit, of a thread whose enables a tracer cleared, no longer
+ * forces a signal, and does not interrupt a wait. */
 int arch_debug_pending(void)
 {
     if (!current_proc || !(current_proc->debugreg[7] & DR7_ENABLES)) {
@@ -210,10 +208,10 @@ int arch_debug_pending(void)
     return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DEFER_USER) != 0;
 }
 
-/** Post kernel hits before shared signal code reads the pending sets.
- * Keep a live user hit deferred until user return, so a signal wait cannot
- * take it or restore a blocked mask after it was forced. The caller runs
- * on the thread's stack with the big lock held and interrupts off. */
+/** A live user hit stays deferred until the return to user mode, so that a
+ * signal wait can neither take it nor restore a blocked mask after it was
+ * forced; while one is pending nothing is posted, since the kernel hits
+ * share its record. */
 void arch_debug_deliver(void)
 {
     if (!arch_debug_pending()) {
@@ -221,8 +219,8 @@ void arch_debug_deliver(void)
     }
 }
 
-/** Reload enables cleared by a deferred exception, or by a tracer that
- * ended while the current thread ran on this processor. */
+/** `arch_debug_switch` from the thread to itself does the work, and moves
+ * the processor's deferred bits into the thread. */
 void debugreg_resume(void)
 {
     if (!dr7_live[arch_cpu_id()] || !current_proc || !(current_proc->debugreg[7] & DR7_ENABLES)) {
@@ -233,14 +231,13 @@ void debugreg_resume(void)
 /**
  * Whether the DR7 value `v` sets what a tracer may set with the addresses
  * `t` has in DR0 to DR3: no general-detect or reserved bit, and for each
- * breakpoint it
- * enables an address aligned to its length whose bytes are all user
- * addresses, from USER_ADDR_MIN to the last below USER_ADDR_MAX, a length of
- * 1, 2 or 4 bytes (or 8 on x86-64), and an execute breakpoint of length 1;
- * an I/O breakpoint, which needs CR4.DE, is refused. The scheduler loads
- * what this accepts into the processor, where a breakpoint on a kernel
- * address would fire in the kernel's own code, an execute breakpoint there
- * at every return to it.
+ * breakpoint it enables an address aligned to its length whose bytes are
+ * all user addresses, from USER_ADDR_MIN to the last below USER_ADDR_MAX, a
+ * length of 1, 2 or 4 bytes (or 8 on x86-64), and an execute breakpoint of
+ * length 1; an I/O breakpoint, which needs CR4.DE, is refused. The scheduler
+ * loads what this accepts into the processor, where a breakpoint on a
+ * kernel address would fire in the kernel's own code, an execute
+ * breakpoint there at every return to it.
  */
 static int dr7_valid(const process_t *t, unsigned long v)
 {
@@ -270,13 +267,13 @@ static int dr7_valid(const process_t *t, unsigned long v)
     return 1;
 }
 
-/** Read a saved debug register, including DR7's fixed bit. */
 unsigned long debugreg_peek(const process_t *t, unsigned n)
 {
     return n == 7 ? (t->debugreg[7] | DR7_ONE) : t->debugreg[n];
 }
 
-/** Validate a debug register write before keeping it in the stopped thread. */
+/** An address is checked against the DR7 the thread has, and a DR7 against
+ * the addresses, so the pair is checked whichever is written first. */
 int debugreg_poke(process_t *t, unsigned n, unsigned long v)
 {
     if (n == 4 || n == 5 || n > 7) {

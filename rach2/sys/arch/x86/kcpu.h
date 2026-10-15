@@ -13,11 +13,13 @@
  * that survivable.
  */
 
-/** The four registers `cpuid` leaf `leaf`, subleaf zero, returns. */
+/** The four registers `cpuid` leaf `leaf`, subleaf zero, returns, each
+ * stored through its pointer unless the pointer is NULL. */
 void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d);
 
 /** The four registers `cpuid` leaf `leaf` returns for subleaf `sub`, which
- * the leaves that describe caches and extended features take in ECX. */
+ * the leaves that describe caches and extended features take in ECX; a NULL
+ * pointer is skipped, as in `kcpu_id`. */
 void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d);
 
 /** Whether `cpuid` reports the model-specific registers (leaf 1, EDX bit 5). */
@@ -26,10 +28,11 @@ int kcpu_msr_present(void);
 /** Whether `cpuid` reports a local APIC (leaf 1, EDX bit 9). */
 int kcpu_apic_present(void);
 
-/** The model-specific register `msr`, its halves in `lo` and `hi`. */
+/** The model-specific register `msr`, its halves in `lo` and `hi`, each
+ * stored unless its pointer is NULL. */
 void kcpu_rdmsr(uint32_t msr, uint32_t *lo, uint32_t *hi);
 
-/** Write the model-specific register `msr`. */
+/** Write `hi` and `lo` to the model-specific register `msr`. */
 void kcpu_wrmsr(uint32_t msr, uint32_t lo, uint32_t hi);
 
 #endif /* _KCPU_H_ */

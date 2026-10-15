@@ -116,12 +116,15 @@ static const char *const leaf7_ecx[32] = {0,
                                           "sgx_lc",
                                           0};
 
+/* The text being written: `cap` bytes at `out`, the NUL included, of which
+ * `len` are written and followed by a NUL. */
 struct text {
     char *out;
     uint32_t cap;
     uint32_t len;
 };
 
+/** Append `s` to `t`, as much of it as fits before the NUL. */
 static void put(struct text *t, const char *s)
 {
     while (*s && t->len + 1 < t->cap) {
@@ -130,6 +133,7 @@ static void put(struct text *t, const char *s)
     t->out[t->len] = '\0';
 }
 
+/** Append `v` in decimal. */
 static void put_u32(struct text *t, uint32_t v)
 {
     char digits[11];
@@ -148,6 +152,7 @@ static void put_u32(struct text *t, uint32_t v)
     }
 }
 
+/** Append a line of `name`, which has the tab and colon, and `v`. */
 static void put_field(struct text *t, const char *name, uint32_t v)
 {
     put(t, name);
@@ -155,6 +160,7 @@ static void put_field(struct text *t, const char *name, uint32_t v)
     put(t, "\n");
 }
 
+/** Whether the strings `a` and `b` are equal. */
 static int same(const char *a, const char *b)
 {
     while (*a && *a == *b) {
@@ -164,6 +170,8 @@ static int same(const char *a, const char *b)
     return *a == *b;
 }
 
+/** Append, each after a space, the names of the bits set in `bits` that
+ * `names` has, in bit order. */
 static void put_flags(struct text *t, const char *const names[32], uint32_t bits)
 {
     int i;
@@ -240,6 +248,13 @@ static uint32_t cache_kb(uint32_t max, uint32_t ext_max, int intel)
     return 0;
 }
 
+/**
+ * The family and model are the displayed ones of the processor manuals: the
+ * extended family is added to a family of 15, and the extended model is put
+ * above the model of family 6 and of 15 and up. An extended leaf count
+ * outside 0x80000000 to 0x8000FFFF is another leaf's data, and is taken as
+ * no extended leaves.
+ */
 uint32_t cpuinfo_text(char *out, uint32_t cap, int cpu)
 {
     struct text t;

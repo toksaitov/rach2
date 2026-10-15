@@ -2,9 +2,9 @@
  * cpu.c: the processor primitives of ../arch.h on an x86, 32-bit or 64-bit.
  *
  * Each is one instruction or a short run of them. The same source builds for
- * i686 and x86-64: the operand of a control register move takes the width of
- * a pointer, and `pushf` and `pop` without a size suffix take the width of
- * the mode the assembler is in. The few that differ by mode say so.
+ * i686 and x86-64: the operand of a control register move is as wide as a
+ * pointer, and the few whose instructions differ by mode are written twice,
+ * under `#if defined(__x86_64__)`.
  */
 
 #include "kcpu.h"
@@ -21,7 +21,7 @@ void arch_irq_disable(void)
     __asm__ __volatile__("cli" : : : "memory");
 }
 
-/* `sti` takes effect after the instruction that follows it, so an interrupt
+/** `sti` takes effect after the instruction that follows it, so an interrupt
  * pending at the `sti` is taken once `hlt` has begun waiting, and wakes it. */
 void arch_idle(void)
 {
@@ -45,7 +45,7 @@ void arch_relax(void)
     __asm__ __volatile__("pause" : : : "memory");
 }
 
-/* `xchg` with a memory operand locks the bus by itself, and a locked
+/** `xchg` with a memory operand locks the bus by itself, and a locked
  * instruction is a full barrier on x86. */
 unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
 {
@@ -53,7 +53,7 @@ unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
     return value;
 }
 
-/* `cmpxchg` compares `*p` with EAX, stores `value` when they are equal, and
+/** `cmpxchg` compares `*p` with EAX, stores `value` when they are equal, and
  * leaves what was there in EAX; the lock prefix makes it one step. */
 unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
 {
@@ -138,13 +138,16 @@ uint64_t arch_cycles(void)
 }
 
 /* Whether the processor has RDSEED (CPUID leaf 7, EBX bit 18) and RDRAND
- * (leaf 1, ECX bit 30): -1 until asked, then 0 or 1. A leaf above the
- * highest the processor has returns another leaf's data, which could falsely
- * advertise a bit, and the instruction would then raise #UD, so each leaf is
- * asked only when the highest covers it. */
+ * (leaf 1, ECX bit 30): -1 until asked, then 0 or 1. */
 static int have_rdseed = -1;
 static int have_rdrand = -1;
 
+/**
+ * Set `have_rdseed` and `have_rdrand` from `cpuid`. A leaf above the highest
+ * the processor has returns another leaf's data, which could advertise a bit
+ * it does not have, and the instruction would then raise #UD, so each leaf
+ * is asked only when the highest covers it.
+ */
 static void random_detect(void)
 {
     uint32_t a, b, c, d, max_leaf;
@@ -190,12 +193,14 @@ int arch_random(uint32_t *out, int seed)
     return 1;
 }
 
-/* Whether the processor has CLFLUSH (CPUID leaf 1, EDX bit 19), and the line
- * it flushes, from EBX bits 8 to 15 in units of 8 bytes: -1 until asked.
- * Emulators report none, and the flush then writes back the whole cache. */
+/* Whether the processor has CLFLUSH (CPUID leaf 1, EDX bit 19), -1 until
+ * asked, and the bytes of the line it flushes. Without it `arch_dma_flush`
+ * writes back the whole cache. */
 static int have_clflush = -1;
 static uint32_t clflush_size = 64;
 
+/** Set `have_clflush` and `clflush_size` from `cpuid` leaf 1: the line size
+ * is EBX bits 8 to 15 in units of 8 bytes, or 64 when they are zero. */
 static void clflush_detect(void)
 {
     uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;

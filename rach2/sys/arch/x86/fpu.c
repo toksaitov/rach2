@@ -93,11 +93,13 @@ static uint32_t comp_size[XFEATURE_COUNT];
 static uint32_t comp_offset[XFEATURE_COUNT];
 
 #if !defined(FPU_X86_64)
+/** The little-endian 16-bit value at `p`. */
 static uint32_t get16(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8);
 }
 
+/** Store the low 16 bits of `v` at `p`, little-endian. */
 static void put16(uint8_t *p, uint32_t v)
 {
     p[0] = (uint8_t)v;
@@ -105,16 +107,19 @@ static void put16(uint8_t *p, uint32_t v)
 }
 #endif
 
+/** The little-endian 32-bit value at `p`. */
 static uint32_t get32(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+/** The little-endian 64-bit value at `p`. */
 static uint64_t get64(const uint8_t *p)
 {
     return (uint64_t)get32(p) | ((uint64_t)get32(p + 4) << 32);
 }
 
+/** Store `v` at `p`, little-endian. */
 static void put32(uint8_t *p, uint32_t v)
 {
     p[0] = (uint8_t)v;
@@ -123,6 +128,7 @@ static void put32(uint8_t *p, uint32_t v)
     p[3] = (uint8_t)(v >> 24);
 }
 
+/** Store `v` at `p`, little-endian. */
 static void put64(uint8_t *p, uint64_t v)
 {
     put32(p, (uint32_t)v);
@@ -299,8 +305,9 @@ static int from_linux(const uint8_t *in, void *area)
 #define FN_FOS 24
 #define FN_ST  28
 
-/* The full x87 tag word from the abridged one `fxsave` keeps: two bits per
- * physical register, classified from the register's contents. */
+/** The full x87 tag word of the `fxsave` image `fx`, from the abridged one
+ * it keeps: two bits per physical register, classified from the register's
+ * contents as valid, zero, special or empty. */
 static uint32_t full_tag(const uint8_t *fx)
 {
     uint32_t top = (get16(fx + FX_SWD) >> 11) & 7u;
@@ -328,8 +335,8 @@ static uint32_t full_tag(const uint8_t *fx)
     return tags;
 }
 
-/* The abridged tag byte from a full tag word: a register is in use unless its
- * two bits say empty. */
+/** The abridged tag byte of the full tag word `tags`: a register is in use
+ * unless its two bits say empty. */
 static uint32_t abridged_tag(uint32_t tags)
 {
     uint32_t abridged = 0;
@@ -463,7 +470,9 @@ static void sw_bytes_put(uint8_t *sw)
     put32(sw + 16, area_size);
 }
 
-/** The frame's state without XSAVE. */
+/** Write the state in `area` into a frame without XSAVE, at the user
+ * address `fp`, as Linux's `struct _fpstate`: 0, or -1 when the stack
+ * cannot be written. */
 static int frame_put_legacy(uintptr_t fp, const void *area)
 {
     uint8_t img[FPU_LINUX_SIZE];
@@ -524,7 +533,9 @@ static uint32_t sw_bytes_size(const uint8_t *sw)
     return size;
 }
 
-/** The state of a frame without XSAVE. */
+/** Build `area` from a frame's state without XSAVE at the user address
+ * `fp`: 0, or -1 when the frame cannot be read or `from_linux` refuses
+ * it. */
 static int frame_take_legacy(uintptr_t fp, void *area)
 {
     uint8_t img[FPU_LINUX_SIZE];
@@ -623,8 +634,8 @@ int fpu_frame_take(uintptr_t fp, void *area)
  *
  * `xsave` takes the components its mask in EDX:EAX names, all ones here,
  * which XCR0 cuts to the ones the kernel enabled. `fnsave` leaves the unit
- * initialised, so in the x87 format the state is loaded back: the caller
- * asked for a copy, not a reset.
+ * initialised, so in the x87 format the state is loaded back, and the unit
+ * keeps what it had.
  */
 static void save_state(void *area)
 {
@@ -644,7 +655,7 @@ static void save_state(void *area)
  * configuration. In the x87 format `frstor` raises the exception the unit
  * has pending, in the kernel, so `fnclex` clears it first. The image's own
  * pending bits are loaded with it and are raised by the process's next x87
- * instruction, where they belong.
+ * instruction.
  */
 static void load_state(const void *area)
 {
@@ -699,6 +710,9 @@ static uint64_t xstate_choose(int avx)
     return mask;
 }
 
+/** The loader's CR4 is not promised either way, so each of its bits is set
+ * where the state it enables is saved and cleared where it is not, which
+ * makes an instruction whose registers would leak an invalid opcode. */
 void fpu_cpu_setup(void)
 {
     uintptr_t cr0, cr4;
@@ -706,9 +720,6 @@ void fpu_cpu_setup(void)
     __asm__ __volatile__("mov %%cr0, %0" : "=r"(cr0));
     cr0 = (cr0 | CR0_MP | CR0_NE) & ~(uintptr_t)(CR0_EM | CR0_TS);
     __asm__ __volatile__("mov %0, %%cr0" : : "r"(cr0));
-    /* The loader's CR4 is not promised either way; set each bit where the
-     * state it enables is saved, and clear it where it is not, so an
-     * instruction whose registers would leak is an invalid opcode. */
     __asm__ __volatile__("mov %%cr4, %0" : "=r"(cr4));
     cr4 &= ~(uintptr_t)(CR4_OSFXSR | CR4_OSXMMEXCPT | CR4_OSXSAVE);
     if (have_sse) {
@@ -723,6 +734,17 @@ void fpu_cpu_setup(void)
     }
 }
 
+/**
+ * Every x86-64 processor has FXSR and SSE, and its programs use SSE for
+ * their floating point, so `rach2.nofxsr` is i686's alone. A processor can
+ * have FXSR without SSE, the Pentium II for one; the SSE instructions and
+ * CR4.OSFXSR are for a processor that has both. The XSAVE image begins
+ * with the `fxsave` one, so XSAVE is for a processor whose SSE state is
+ * saved. With XSAVE the header is zero after the `fxsave` image, so the
+ * `xrstor` of the initial state puts every component in its initial
+ * configuration, MXCSR aside, which it loads from the image, and the
+ * `xsave` after it records that state.
+ */
 void fpu_init(void)
 {
     uint32_t max = 0, c = 0, d = 0;
@@ -733,17 +755,11 @@ void fpu_init(void)
     }
     use_fxsr = (d & CPUID_EDX_FXSR) != 0;
 #if !defined(__x86_64__)
-    /* Every x86-64 processor has FXSR and SSE, and its programs use SSE for
-     * their floating point, so the switch is i686's alone. */
     if (use_fxsr && kcmdline_has("rach2.nofxsr")) {
         use_fxsr = 0;
     }
 #endif
-    /* A processor can have FXSR without SSE, the Pentium II for one; the
-     * SSE instructions and CR4.OSFXSR are for a processor that has both. */
     have_sse = use_fxsr && (d & CPUID_EDX_SSE) != 0;
-    /* The XSAVE image begins with the `fxsave` one, so XSAVE is for a
-     * processor whose SSE state is saved. */
     if (have_sse && (c & CPUID_ECX_XSAVE) && max >= CPUID_XSTATE &&
         !kcmdline_has("rach2.noxsave")) {
         xfeatures = xstate_choose((c & CPUID_ECX_AVX) != 0);
@@ -759,8 +775,7 @@ void fpu_init(void)
     if (have_sse) {
         uint32_t mxcsr = 0x1F80u;
 
-        /* `ldmxcsr (%eax)` as bytes: the staged TinyCC's assembler has
-         * `fxsave` and `fxrstor` but not this one. */
+        /* `ldmxcsr (%eax)` as bytes: the staged TinyCC's assembler lacks it. */
         __asm__ __volatile__(".byte 0x0f, 0xae, 0x10" : : "a"(&mxcsr) : "memory");
     }
     if (use_fxsr) {
@@ -775,9 +790,6 @@ void fpu_init(void)
         __asm__ __volatile__("fnsave (%0); frstor (%0)" : : "r"(initial_state) : "memory");
     }
     if (use_xsave) {
-        /* The header is zero after the `fxsave` image, so `xrstor` puts
-         * every component in its initial configuration, MXCSR aside, which
-         * it loads from the image; `xsave` then records that state. */
         load_state(initial_state);
         save_state(initial_state);
     }
