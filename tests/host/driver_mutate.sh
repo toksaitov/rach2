@@ -1,7 +1,8 @@
 #!/bin/sh
-# Prove the dma, sb16, vga_gfx, vga_text and ps2mouse host tests with private
-# mutations of rach2/sys/audio/dma.c, sb16.c, audio_debug.c, display/vga_gfx.c,
-# vga_text.c and arch/x86/ps2mouse.c.
+# Prove the dma, sb16, vga_gfx, vga_text, ps2mouse and power host tests with
+# private mutations of rach2/sys/audio/dma.c, sb16.c, audio_debug.c,
+# display/vga_gfx.c, vga_text.c and arch/x86/ps2mouse.c, power.c and
+# board.c.
 #
 # Usage: driver_mutate.sh [FAULT...] | --texts
 # With no FAULT it proves every fault.
@@ -63,6 +64,12 @@ elif fault == "mouse-aux":
 elif fault == "dma-stop":
     old = "    if (channel > 7 || channel == 4)\n"
     new = "    if (channel > 7)\n"
+elif fault == "insyde":
+    old = '    return smbios_vendor_is("Insyde");\n'
+    new = '    return smbios_vendor_is("Insyd");\n'
+elif fault == "pm-answers":
+    old = "        if (!board_pm_answers(pm1)) {\n"
+    new = "        if (0) {\n"
 elif fault == "scale":
     old = "    if (audio->type == AUDIO_DRIVER_SB16) {\n" \
           "        sample_rate = 44100;\n    }"
@@ -100,12 +107,16 @@ select_fault()
             failure='echo leaves cursor at 0x0100' ;;
         mouse-aux) test=ps2mouse; file=arch/x86/ps2mouse.c
             failure='keyboard byte leaves the data port unread' ;;
+        insyde) test=power; file=arch/x86/power.c
+            failure='a shorter name was taken for Insyde' ;;
+        pm-answers) test=power; file=arch/x86/board.c
+            failure='a PIIX4 whose PM1_CNT reads all ones was written' ;;
         *) echo "driver-mutation: unknown fault: $1" >&2; exit 1 ;;
     esac
 }
 
 faults='frames gfx-enter gfx-exit setup-speaker setup-transfer setup-dma scale
-    callback cursor mouse-aux dma-stop'
+    callback cursor mouse-aux dma-stop insyde pm-answers'
 if [ "${1:-}" = --texts ]; then
     for fault in $faults; do
         select_fault "$fault"

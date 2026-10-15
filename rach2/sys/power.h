@@ -16,15 +16,15 @@
  * Interrupts go off and the other processors are stopped first, and the
  * screen is set to show the records from `KLOG_INFO` up. A power off
  * requests the soft-off state: on a PC by ACPI's \_S5 sleep type, then
- * through the power controller the board profile found (arch/x86/board.c),
- * or else a PIIX4's. A restart requests a reset: on a PC by the FADT's
- * reset register, the Insyde firmware's own command, the chipset's reset
- * port 0xCF9 and the keyboard controller's pulse, in that order, where
- * `rach2.resetskip=N` leaves out the first N before the pulse. No such
- * request has a completion signal, so each is given a while to act before
- * the next. A machine still running after them all says so in the log; it,
- * and a machine asked to halt, logs `halt: system halted` and parks the
- * processor with interrupts off for good.
+ * through the power controller the board profile found (arch/x86/board.c).
+ * A restart requests a reset: on a PC by the FADT's reset register, the
+ * Insyde firmware's own command, the chipset's reset port 0xCF9 and the
+ * keyboard controller's pulse, in that order, where `rach2.resetskip=N`
+ * leaves out the first N before the pulse. No such request has a completion
+ * signal, so each is given a while to act before the next. A machine still
+ * running after them all says so in the log; it, and a machine asked to
+ * halt, logs `halt: system halted` and parks the processor with interrupts
+ * off for good.
  *
  * Nothing here flushes a cache or unmounts a file system; the caller does
  * that before it decides the machine may stop.

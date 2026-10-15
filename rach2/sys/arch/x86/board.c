@@ -15,10 +15,12 @@
 /*
  * The profiles, in probe order.
  *
- * piix4 is QEMU's `pc` machine, with the values of power.c's own PIIX4 path:
- * function 0:1.3, base register 0x40 masked to 0xFFC0, decode bit 0 of 0x80,
- * the SCI fixed at line 9, and sleep type 0, which QEMU's PIIX4 model takes
- * as soft off.
+ * piix4 is QEMU's `pc` machine: function 0:1.3, base register 0x40 masked to
+ * 0xFFC0, decode bit 0 of 0x80, the SCI fixed at line 9, and sleep type 0,
+ * which QEMU's PIIX4 model takes as soft off. Bit 0 of the base register is
+ * hardwired to 1 as the I/O-space indicator, so the mask also drops it, and a
+ * base left at its reset value of 0 is refused rather than read as port 4, a
+ * DMA controller register.
  *
  * ich9 is QEMU's `q35` machine, whose ICH9 is the one power controller of a
  * PCH's layout that QEMU has, so it is the profile through which the base
