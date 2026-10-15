@@ -387,6 +387,27 @@ static void ap_ulong(struct procfs_text *t, unsigned long v)
     }
 }
 
+/** Append `v` in decimal, all 64 bits of it. */
+static void ap_u64(struct procfs_text *t, uint64_t v)
+{
+    char tmp[24];
+
+    (void)diskinfo_u64_dec(tmp, (int)sizeof(tmp), v);
+    ap_str(t, tmp);
+}
+
+/** Append `v` as `ap_u64` does, right-aligned in `width` places. */
+static void ap_u64_width(struct procfs_text *t, uint64_t v, int width)
+{
+    char tmp[24];
+    int n = diskinfo_u64_dec(tmp, (int)sizeof(tmp), v);
+
+    while (n++ < width) {
+        ap_ch(t, ' ');
+    }
+    ap_str(t, tmp);
+}
+
 /** Append `v` as `ap_u32` does, right-aligned in `width` places. */
 static void ap_u32_width(struct procfs_text *t, uint32_t v, int width)
 {
@@ -2110,7 +2131,7 @@ static int procfs_gen_partitions(struct procfs_text *t)
         }
         ap_u32_width(t, major, 4);
         ap_u32_width(t, minor, 9);
-        ap_u32_width(t, kib > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)kib, 11);
+        ap_u64_width(t, kib, 11);
         ap_ch(t, ' ');
         ap_str(t, name);
         ap_ch(t, '\n');
@@ -2293,15 +2314,6 @@ static int procfs_gen_cpuinfo(struct procfs_text *t)
         t->len += (int)cpuinfo_text(t->buf + t->len, CPUINFO_TEXT_MAX, c);
     }
     return t->len;
-}
-
-/** Append `v` in decimal, all 64 bits of it. */
-static void ap_u64(struct procfs_text *t, uint64_t v)
-{
-    char tmp[24];
-
-    (void)diskinfo_u64_dec(tmp, (int)sizeof(tmp), v);
-    ap_str(t, tmp);
 }
 
 /** Append a /proc/stat processor line's columns after its name: `user`,
@@ -3814,9 +3826,9 @@ static int procfs_gen_blockattr(struct procfs_text *t, int node, int key, int at
         ap_ch(t, ':');
         ap_u32(t, row.minor);
     } else if (same_word(name, "size")) {
-        ap_u32(t, row.sectors > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)row.sectors);
+        ap_u64(t, row.sectors);
     } else if (same_word(name, "start")) {
-        ap_u32(t, (uint32_t)row.start);
+        ap_u64(t, row.start);
     } else if (same_word(name, "partition")) {
         ap_u32(t, (uint32_t)row.partno);
     } else if (same_word(name, "removable")) {

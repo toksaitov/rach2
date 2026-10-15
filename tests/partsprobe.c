@@ -16,6 +16,11 @@
  * give a partition's first sector, size, number and device numbers, and
  * /sys/dev/block a link to its directory.
  *
+ * Run as `partsprobe large`, in a boot of its own with one sparse 5 TiB GPT
+ * disk whose one partition starts past sector 2^32, it requires instead
+ * that /proc/disk, /sys/block and /proc/partitions give the disk's size and
+ * the partition's first sector in full, each past 32 bits.
+ *
  * Prints "PARTSPROBE OK" or "PARTSPROBE FAIL: reason". Freestanding; direct
  * system calls (probe.h).
  */
@@ -164,6 +169,33 @@ static void sys_block_rows(void)
     }
 }
 
+/** When the probe's first argument, with `sp` at argc, begins with 'l',
+ * run the checks of mode `large` and exit: the 5 TiB disk's size in sectors
+ * and its partition's first sector in /proc/disk and /sys/block, and its
+ * size in KiB in /proc/partitions. Otherwise return. */
+static void large_disk(const unsigned long *sp, char *text, int cap)
+{
+    int argc = (int)sp[0];
+    char *const *argv = (char *const *)(sp + 1);
+
+    if (argc < 2 || argv[1][0] != 'l') {
+        return;
+    }
+    if (slurp("/proc/disk", text, cap) <= 0 || !has_line(text, "disk 0 ahci 0 10737418240 gpt ") ||
+        !has_line(text, "part 0 1 4294969344 2048 ")) {
+        fail("/proc/disk: the 5 TiB disk and its partition");
+    }
+    if (!reads_as("/sys/block/disk0/size", "10737418240\n") ||
+        !reads_as("/sys/block/disk0/disk0p1/start", "4294969344\n")) {
+        fail("/sys/block: the 5 TiB disk's size and its partition's first sector");
+    }
+    if (slurp("/proc/partitions", text, cap) <= 0 || !has_text(text, " 5368709120 disk0\n")) {
+        fail("/proc/partitions: the 5 TiB disk's size in KiB");
+    }
+    puts("PARTSPROBE OK");
+    syscall2(SYS_EXIT, 0, 0);
+}
+
 /** Write `text` to the new file `path`, read it back and compare; fail,
  * naming `path`, at the first step that does not hold. */
 static void write_and_read_back(const char *path, const char *text)
@@ -211,7 +243,7 @@ PROBE_SP_ENTRY;
  * Check each disk's lines in /proc/disk and the boot log's record of the
  * backup GPT, the nodes and /sys/block, a write read back on a logical and a
  * GPT partition, and BLKRRPART refused with -EBUSY under a mount and done
- * once the mount is gone.
+ * once the mount is gone; or the checks of mode `large` (`large_disk`).
  */
 void probe_main(unsigned long *sp)
 {
@@ -219,7 +251,7 @@ void probe_main(unsigned long *sp)
     static char log[65536];
     int fd;
 
-    (void)sp;
+    large_disk(sp, text, (int)sizeof(text));
     if (slurp("/proc/disk", text, (int)sizeof(text)) <= 0) {
         fail("/proc/disk");
     }

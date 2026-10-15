@@ -5,7 +5,9 @@
 # holding three logical partitions and a fourth primary; disk B a GPT with
 # six labelled partitions, one of them FAT32 and one an ext2 root; disk C
 # the same GPT with its primary header damaged; disk D nothing. One boot
-# runs partsprobe over them all, then the kernel is asked for its root by
+# runs partsprobe over them all, and a second runs it on disk E alone, a
+# sparse 5 TiB GPT whose one partition starts past sector 2^32, since the
+# AHCI driver publishes four disks. Then the kernel is asked for its root by
 # identity: a GPT partition's GUID, the same with the disks swapped so the
 # root's number changes, the same with the clone attached so the identity
 # is ambiguous, an MBR id and entry for a KRFFS root, a label that two disks
@@ -17,7 +19,7 @@ KERNEL=$1; IMAGE=$2; HARNESS=$3; MKMBR=$4; MKGPT=$5; EXT2=$6; DIR=$7
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 fail() { echo "parts-test: FAIL: $1" >&2; exit 1; }
 mkdir -p "$DIR"
-A="$DIR/a.disk"; B="$DIR/b.disk"; C="$DIR/c.disk"; D="$DIR/d.disk"
+A="$DIR/a.disk"; B="$DIR/b.disk"; C="$DIR/c.disk"; D="$DIR/d.disk"; E="$DIR/e.disk"
 
 # Disk A: mkdisk lays the KRFFS partition at LBA 2048 for 48 MiB; the table
 # is then rewritten around it with the id, the FAT32 primary, the extended
@@ -51,6 +53,12 @@ gpt_disk "$C" --damage-primary
 # Disk D: nothing.
 rm -f "$D"
 dd if=/dev/zero of="$D" bs=1048576 count=8 2>/dev/null || fail "the blank disk"
+# Disk E: 5 TiB and sparse, so that its size in sectors and in KiB and its
+# partition's first sector are each past 32 bits.
+rm -f "$E"
+dd if=/dev/zero of="$E" bs=1048576 count=1 seek=$((5 * 1024 * 1024 - 1)) 2>/dev/null \
+    || fail "the 5 TiB disk"
+"$MKGPT" --seed 5 "$E" 4294969344:2048:data=FAR > /dev/null || fail "mkgpt $E"
 
 # `run PORTS ARGS...` boots with the disks named in PORTS on ports 0 upward.
 run() {
@@ -62,6 +70,7 @@ run() {
             A) file=$A ;;
             B) file=$B ;;
             C) file=$C ;;
+            E) file=$E ;;
             *) file=$D ;;
         esac
         set -- "$@" --drive "file=$file,format=raw,if=none,id=drv$n" \
@@ -81,6 +90,11 @@ mtype -i "$A"@@$((112642 * 512)) ::/logical.txt 2>/dev/null | grep -q "logical s
 mtype -i "$B"@@$((8192 * 512)) ::/gpt.txt 2>/dev/null | grep -q "gpt three says hello" \
     || fail "the file written through the GPT partition"
 echo "parts-test: both files are where the nodes said: OK"
+run "E" --initrd "$IMAGE" --append "rach2.disk=ahci rach2.diskdiag rach2.rescue" \
+    --timeout 120 --steptmo 60 --ok "PARTSPROBE OK" --never "PARTSPROBE FAIL" --log "$DIR/large.log" \
+    "expect=Type 'help'" "send=exec /partsprobe large" "expect=PARTSPROBE" > /dev/null 2>&1 \
+    || fail "the 5 TiB disk's boot"
+echo "parts-test: the 5 TiB disk's numbers past 32 bits in /proc/disk, /sys/block and /proc/partitions: OK"
 
 # root_boot WHAT PORTS SPEC WANT NEVER: boot with the disks PORTS and the root
 # named SPEC to the shell, and require the record WANT and, when NEVER is not

@@ -1921,7 +1921,8 @@ run-disks: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
 	sh tests/system/suites/disks.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(DISKS_DISK0) $(DISKS_DISK1)
 # `tests/run parts`: four tables on four AHCI disks (an MBR with logical
 # partitions, a GPT, a GPT read from its backup, a blank disk), the nodes
-# as the tables number them, the table read again, and the root chosen by
+# as the tables number them, the table read again, a 5 TiB disk's numbers
+# past 32 bits in /sys/block and /proc/partitions, and the root chosen by
 # identity: found when the disks are swapped, refused when two disks have it.
 # Then the recovery kernel's `disk write` on five GPT disks, the two above,
 # one whose primary header is zeroed and two with no protective MBR, and on
