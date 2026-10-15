@@ -96,16 +96,6 @@ struct usb_completion;
  */
 int msc_completion(const struct usb_completion *completion);
 
-/** How many sticks are ready to serve requests. */
-int msc_count(void);
-
-/** Whether entry `index` of this driver's table holds a stick that is
- * serving requests. */
-int msc_ready(int index);
-
-/** As `msc_lun_ident`, for logical unit 0. */
-int msc_ident(int index, struct msc_ident *out);
-
 /**
  * Fill `out` with what logical unit `lun` of the stick at entry `index` is:
  * INQUIRY's names, the unit's serial page, its capacity and write protection,
@@ -125,15 +115,11 @@ int msc_lun_ident(int index, int lun, struct msc_ident *out);
 void msc_release(int index);
 
 /**
- * The block device of logical unit 0 of the stick at entry `index`, or NULL
- * when the entry is free or has no such unit. A device whose stick has gone
- * answers every request with `EIO`; the pointer stays valid until the entry
- * is released, because a mount and a held buffer still point at it.
+ * The block device of logical unit `lun` of the stick at entry `index`, or
+ * NULL when the entry is free or has no such unit. A device whose stick has
+ * gone answers every request with `EIO`; the pointer stays valid until the
+ * entry is released, because a mount and a held buffer still point at it.
  */
-struct block_device *msc_block_device(int index);
-
-/** The block device of logical unit `lun` of the stick at `index`, as
- * `msc_block_device`, or NULL. */
 struct block_device *msc_lun_device(int index, int lun);
 
 #endif /* _USB_MSC_H_ */

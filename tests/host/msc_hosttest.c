@@ -863,6 +863,40 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
 
 #include "../../rach2/sys/usb/msc.c"
 
+/* ---- the rows' view of the driver's table ---- */
+
+/** How many sticks are ready to serve requests. */
+static int msc_count(void)
+{
+    int i;
+    int n = 0;
+
+    for (i = 0; i < MSC_MAX_DEVICES; i++) {
+        if (sticks[i].used && sticks[i].state == MSC_STATE_READY) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/** Whether entry `index` holds a stick that is serving requests. */
+static int msc_ready(int index)
+{
+    return sticks[index].used && !sticks[index].closing && sticks[index].state == MSC_STATE_READY;
+}
+
+/** As `msc_lun_ident`, for logical unit 0. */
+static int msc_ident(int index, struct msc_ident *out)
+{
+    return msc_lun_ident(index, 0, out);
+}
+
+/** As `msc_lun_device`, for logical unit 0. */
+static block_device_t *msc_block_device(int index)
+{
+    return msc_lun_device(index, 0);
+}
+
 /* ---- the pump, and the rows ---- */
 
 /**

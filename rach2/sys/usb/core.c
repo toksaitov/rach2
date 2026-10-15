@@ -93,7 +93,6 @@
 #define ST_SET_CONFIG 11
 #define ST_PROTOCOL   15
 #define ST_RUNNING    12
-#define ST_FAILED     13
 #define ST_CLOSING    14
 #define ST_HALTED     16
 /* A device whose slot the controller never gave back. The entry is not free
@@ -1628,8 +1627,7 @@ void usb_core_step(uint32_t elapsed_ms)
     for (i = 0; i < USB_MAX_DEVICES; i++) {
         if (dev_at(i)->state == ST_RUNNING) {
             step_running(dev_at(i));
-        } else if (dev_at(i)->state != ST_FREE && dev_at(i)->state != ST_FAILED &&
-                   dev_at(i)->state != ST_TOMBSTONE) {
+        } else if (dev_at(i)->state != ST_FREE && dev_at(i)->state != ST_TOMBSTONE) {
             step_device(dev_at(i));
         }
     }
@@ -1759,8 +1757,7 @@ int usb_core_idle(void)
 
     for (i = 0; i < USB_MAX_DEVICES; i++) {
         if (dev_at(i)->state != ST_FREE && dev_at(i)->state != ST_RUNNING &&
-            dev_at(i)->state != ST_FAILED && dev_at(i)->state != ST_TOMBSTONE &&
-            dev_at(i)->state != ST_SLOTWAIT) {
+            dev_at(i)->state != ST_TOMBSTONE && dev_at(i)->state != ST_SLOTWAIT) {
             return 0;
         }
     }

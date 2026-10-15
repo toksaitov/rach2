@@ -84,9 +84,6 @@
 #define SENSE_NOT_READY       0x02
 #define SENSE_ILLEGAL_REQUEST 0x05
 #define SENSE_UNIT_ATTENTION  0x06
-#define SENSE_MEDIUM_ERROR    0x03
-#define SENSE_ILLEGAL_REQ     0x05
-#define SENSE_UNIT_ATTENTION  0x06
 
 /* The stages of one command. */
 #define STAGE_IDLE    0
@@ -266,7 +263,6 @@ struct msc_device {
     int finish_status;   /* the status the request is completed with once its transfer is retired */
     int finish_then;     /* 1: REQUEST SENSE follows the retirement, before the completion */
     int finish_command;  /* 1: the command's end is acted on after the retirement */
-    int recover_failed;  /* cleared when recovery begins; nothing sets it */
     struct block_request *queue[MSC_QUEUE];
     int queue_flush[MSC_QUEUE];
     int queue_lun[MSC_QUEUE]; /* the unit each waiting request is for */
@@ -579,7 +575,6 @@ static void recover_begin(struct msc_device *m, const char *why)
         }
     }
     m->recover = RECOVER_RESET;
-    m->recover_failed = 0;
     m->deadline = MSC_STEP_MS;
 }
 
@@ -921,14 +916,6 @@ void msc_release(int index)
     }
 }
 
-int msc_ready(int index)
-{
-    if (index < 0 || index >= MSC_MAX_DEVICES) {
-        return 0;
-    }
-    return sticks[index].used && !sticks[index].closing && sticks[index].state == MSC_STATE_READY;
-}
-
 int msc_lun_ident(int index, int lun, struct msc_ident *out)
 {
     struct msc_device *m;
@@ -959,24 +946,6 @@ int msc_lun_ident(int index, int lun, struct msc_ident *out)
     out->closing = m->closing;
     out->device = m->device;
     return 0;
-}
-
-int msc_ident(int index, struct msc_ident *out)
-{
-    return msc_lun_ident(index, 0, out);
-}
-
-int msc_count(void)
-{
-    int i;
-    int n = 0;
-
-    for (i = 0; i < MSC_MAX_DEVICES; i++) {
-        if (sticks[i].used && sticks[i].state == MSC_STATE_READY) {
-            n++;
-        }
-    }
-    return n;
 }
 
 /**
@@ -1967,9 +1936,4 @@ block_device_t *msc_lun_device(int index, int lun)
         return 0;
     }
     return &sticks[index].luns[lun].block;
-}
-
-block_device_t *msc_block_device(int index)
-{
-    return msc_lun_device(index, 0);
 }
