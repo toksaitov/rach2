@@ -8,9 +8,9 @@
 # mistake in the runner is a failure here rather than a puzzling suite result.
 #
 # `tests/run runner` runs this. It boots no machine: every machine it drives is
-# a shell script on the PATH. It does read three built programs, the harness,
-# ptydrive and hostpeer, so `sh tests/system/selftest.sh` needs a tree that has
-# built those.
+# a shell script on the PATH. It does read four built programs, the harness,
+# runtests, ptydrive and hostpeer, so `sh tests/system/selftest.sh` needs a
+# tree that has built those.
 #
 set -u
 
@@ -693,6 +693,54 @@ else
     echo "  SKIP: the harness, ptydrive and hostpeer are not built; their factor rows did not run"
     fails=$((fails + 1))
 fi
+
+# A runner that gives up on its machine stops it: runtests when the shell
+# never appears, and the harness when its stamp file cannot be opened, each
+# over a machine that ignores its console and sleeps, which only a signal
+# ends. The machine writes its process ID; one killed before it wrote any
+# is gone too.
+RUNTESTS_BIN="$REPO/build/tests/system/runtests"
+mkdir -p "$WORK/silent"
+cat > "$WORK/silent/qemu-system-i386" <<'SILENT'
+#!/bin/sh
+echo $$ >> "$(dirname "$0")/../machines"
+echo $$ > "$(dirname "$0")/pid.tmp" && mv "$(dirname "$0")/pid.tmp" "$(dirname "$0")/pid"
+exec sleep 30
+SILENT
+chmod +x "$WORK/silent/qemu-system-i386"
+# silent_gone: 1 when the silent machine wrote no process ID within a
+# second of its runner's end, or the one it wrote ends within three.
+silent_gone() {
+    i=0
+    while [ ! -s "$WORK/silent/pid" ] && [ "$i" -lt 10 ]; do sleep 0.1; i=$((i + 1)); done
+    if [ ! -s "$WORK/silent/pid" ] || "$SELFTEST_UTIL" gone "$(cat "$WORK/silent/pid")" 3; then
+        echo 1
+    else
+        echo 0
+    fi
+    rm -f "$WORK/silent/pid"
+}
+if [ -x "$RUNTESTS_BIN" ]; then
+    rm -f "$WORK/silent/pid"
+    (
+        unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
+        PATH="$WORK/silent:$PATH" "$RUNTESTS_BIN" --kernel none --initrd none \
+            --boottmo 1 > /dev/null 2>&1
+    ); rc=$?
+    check "runtests gives up on a shell that never appears" 3 "$rc"
+    check "and stops its machine" 1 "$(silent_gone)"
+else
+    echo "  SKIP: runtests is not built; its row did not run"
+    fails=$((fails + 1))
+fi
+rm -f "$WORK/silent/pid"
+(
+    unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
+    PATH="$WORK/silent:$PATH" "$HARNESS_BIN" --kernel none --timeout 5 \
+        --stamp "$WORK/nodir/stamp" "expect=Type 'help'" > /dev/null 2>&1
+); rc=$?
+check "the harness gives up on a stamp file it cannot open" 2 "$rc"
+check "and stops its machine" 1 "$(silent_gone)"
 
 # The harness also starts its search before sending a command. Old output
 # may still be in its pipe, and a fast new reply may precede expect itself;

@@ -687,6 +687,24 @@ static int child_poll(void)
     return -1;
 }
 
+/**
+ * Stop QEMU if it still runs: SIGTERM, then SIGKILL when it has not ended
+ * 0.3 seconds later. `main` registers it with `atexit` once QEMU has
+ * started, so no return from `main` and no `exit` leaves the machine behind.
+ */
+static void child_stop(void)
+{
+    if (child_pid <= 0 || child_poll() >= 0)
+        return;
+    kill(child_pid, SIGTERM);
+    usleep(300000);
+    if (child_poll() < 0) {
+        kill(child_pid, SIGKILL);
+        usleep(300000);
+        child_poll();
+    }
+}
+
 /** Read QEMU's output into `buf` and the transcript until `until`, the
  * run's deadline, QEMU's exit or the end of the pipe. */
 static void pump(double until)
@@ -896,6 +914,7 @@ int main(int argc, char **argv)
         execvp(qemu[0], qemu);
         _exit(127);
     }
+    atexit(child_stop);
     close(in_pipe[0]);
     close(out_pipe[1]);
     child_out = out_pipe[0];
@@ -965,15 +984,7 @@ int main(int argc, char **argv)
     }
 
     pump(now() + 1.0);
-    if (child_poll() < 0) {
-        kill(child_pid, SIGTERM);
-        usleep(300000);
-        if (child_poll() < 0) {
-            kill(child_pid, SIGKILL);
-            usleep(300000);
-            child_poll();
-        }
-    }
+    child_stop();
     if (logf != NULL)
         fclose(logf);
 

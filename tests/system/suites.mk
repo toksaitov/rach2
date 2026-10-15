@@ -2022,8 +2022,9 @@ run-host: check-libc $(E2FSPROGS_STAMP) $(DEADLINE) build/krffs/stageimage.krffs
 # `tests/run runner`: the harness's selftest, then the runner's own, tests/run
 # driven against a registry and a makefile of its own in a temporary
 # directory (tests/system/selftest.sh). It boots no machine and reads nothing
-# from the product, so it needs only the harness and the two helpers.
-run-runner: $(HARNESS) $(PTYDRIVE) $(HOSTPEER)
+# from the product, so it needs only the harness, runtests and the two
+# helpers.
+run-runner: $(HARNESS) $(RUNTESTS) $(PTYDRIVE) $(HOSTPEER)
 	@$(HARNESS) --selftest
 	@./tests/system/selftest.sh
 

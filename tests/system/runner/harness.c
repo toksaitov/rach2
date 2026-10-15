@@ -789,6 +789,24 @@ static int child_poll(void)
 }
 
 /**
+ * Stop the machine if it still runs: SIGTERM, then SIGKILL when it has not
+ * ended 0.4 seconds later. `main` registers it with `atexit` once QEMU has
+ * started, so no return from `main` and no `exit` leaves the machine behind.
+ */
+static void child_stop(void)
+{
+    if (child_pid <= 0 || child_poll() >= 0)
+        return;
+    kill(child_pid, SIGTERM);
+    usleep(400000);
+    if (child_poll() < 0) {
+        kill(child_pid, SIGKILL);
+        usleep(400000);
+        child_poll();
+    }
+}
+
+/**
  * Read what the guest has said into `buf` and the log, until `until` or the
  * deadline.
  *
@@ -2263,6 +2281,7 @@ int main(int argc, char **argv)
         execvp(qemu[0], qemu);
         _exit(127);
     }
+    atexit(child_stop);
     close(in_pipe[0]);
     close(out_pipe[1]);
     if (serial_ends(out_pipe[0], in_pipe[1]) != 0)
@@ -2513,15 +2532,7 @@ int main(int argc, char **argv)
     }
     qemu_rc = child_poll();
     self_exited = qemu_rc >= 0 && !child_by_signal;
-    if (qemu_rc < 0) {
-        kill(child_pid, SIGTERM);
-        usleep(400000);
-        if (child_poll() < 0) {
-            kill(child_pid, SIGKILL);
-            usleep(400000);
-            child_poll();
-        }
-    }
+    child_stop();
     drain_rest();
     if (logf != NULL)
         fclose(logf);
