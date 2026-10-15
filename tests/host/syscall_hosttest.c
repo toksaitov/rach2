@@ -209,17 +209,24 @@ void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds)
     *nanoseconds = (int64_t)kernel_second_ticks * 10000000;
 }
 
-/* The PIT's place within the tick, which the model's time since boot adds. */
-static int64_t mono_phase_ns;
+/* The PIT's place within the tick, which the model's time since boot adds;
+ * and, when not 0, the reading in nanoseconds the clock keeps after a lost
+ * tick put the tick count behind it, which it reads until the count passes. */
+static int64_t mono_phase_ns, mono_held_ns;
 
 /** Time since boot as the clock keeps it: the uptime and its ticks, with the
  * place within the tick, read with interrupts masked. */
 void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds)
 {
     uint32_t flags = kirq_save();
+    int64_t ns = (int64_t)kernel_second_ticks * 10000000 + mono_phase_ns;
 
     *seconds = (int64_t)kernel_uptime_seconds;
-    *nanoseconds = (int64_t)kernel_second_ticks * 10000000 + mono_phase_ns;
+    if (mono_held_ns > *seconds * 1000000000 + ns) {
+        *seconds = mono_held_ns / 1000000000;
+        ns = mono_held_ns % 1000000000;
+    }
+    *nanoseconds = ns;
     kirq_restore(flags);
 }
 
@@ -402,12 +409,24 @@ static void wake(int with_signal)
     }
 }
 
+/** Count `n` ticks, which the uptime counts too. */
+static void ticks_pass(uint32_t n)
+{
+    kernel_ticks += n;
+    kernel_uptime_seconds += n / 100u;
+    kernel_second_ticks += n % 100u;
+    if (kernel_second_ticks >= 100u) {
+        kernel_second_ticks -= 100u;
+        kernel_uptime_seconds++;
+    }
+}
+
 /** One tick of the model's clock, and the timer's wake of a due sleeper; with
  * `sibling_runs`, another thread of the process runs in the tick, which the
  * timer charges to the process. */
 static void tick(void)
 {
-    kernel_ticks++;
+    ticks_pass(1);
     if (sibling_runs) {
         proc.utime++;
     }
@@ -421,7 +440,7 @@ static void tick(void)
 static void clock_to(uint32_t tick)
 {
     if ((int32_t)(tick - kernel_ticks) > 0) {
-        kernel_ticks = tick;
+        ticks_pass(tick - kernel_ticks);
     }
 }
 
@@ -469,7 +488,7 @@ void schedule(void)
         return;
     }
     if (tick_signals) {
-        kernel_ticks++;
+        ticks_pass(1);
         wake(1);
     } else if (wake_at_deadline) {
         clock_to(current_proc->wakeup_tick);
@@ -479,7 +498,7 @@ void schedule(void)
         wake(1);
     } else if (wake_unacted) {
         wake_unacted = 0;
-        kernel_ticks++;
+        ticks_pass(1);
         wake(0);
     } else {
         clock_to(current_proc->wakeup_tick - 2);
@@ -566,6 +585,7 @@ static void model_at(uint32_t tick)
     sleeps = cut_short = halts = unmasked_halts = blocks = unblocked_unmasks = 0;
     unarmed_unmasks = 0;
     blocked_until = first_blocked_until = 0;
+    mono_held_ns = 0;
     current_proc->state = PROC_RUNNING;
     current_proc->wakeup_tick = 0;
 }
@@ -747,21 +767,23 @@ static void sleep_races(void)
     ask_sleep(&p, 0, 15000000);
     model_at(1100);
     rc = sleep_call(&p);
-    CHECK(rc == 0 && blocked_until == 1102, "a sleep of 15 ms from tick 1100 blocks until 1102");
+    CHECK(rc == 0 && first_blocked_until == 1102,
+          "a sleep of 15 ms from tick 1100 blocks until 1102");
     ask_sleep(&p, 0, 1);
     model_at(1150);
     rc = sleep_call(&p);
-    CHECK(rc == 0 && blocked_until == 1151, "a sleep of 1 ns from tick 1150 blocks until 1151");
+    CHECK(rc == 0 && first_blocked_until == 1151,
+          "a sleep of 1 ns from tick 1150 blocks until 1151");
     mono_phase_ns = 4000000;
     ask_sleep(&p, 0, 1000000);
     model_at(1300);
     rc = sleep_call(&p);
-    CHECK(rc == 0 && blocked_until == 1301,
+    CHECK(rc == 0 && first_blocked_until == 1301,
           "a sleep of 1 ms begun 4 ms into a tick ends at the next");
     ask_sleep(&p, 0, 7000000);
     model_at(1300);
     rc = sleep_call(&p);
-    CHECK(rc == 0 && blocked_until == 1302, "and one of 7 ms at the tick after");
+    CHECK(rc == 0 && first_blocked_until == 1302, "and one of 7 ms at the tick after");
     mono_phase_ns = 0;
 
     ask_sleep(&p, -1, 0);
@@ -847,6 +869,42 @@ static int32_t call_alarm(uint32_t seconds)
     k_memset(&p, 0, sizeof(p));
     p.ebx = seconds;
     return sys_alarm(&p);
+}
+
+/**
+ * A sleep lasts its request by time since boot as well as by the tick count.
+ *
+ * After a lost tick the clock keeps a reading ahead of the count, here 8 ms
+ * past tick 1000. A sleep of 15 ms from there has its deadline tick at 1002,
+ * where the clock reads 10.020 s, short of 10.023 s, so it sleeps on to
+ * 1003. A signal at tick 1002 ends it with the 3 ms the clock still lacks as
+ * its remainder.
+ */
+static void sleep_held_clock(void)
+{
+    isr_params_t p;
+    struct kernel_timespec rem;
+    int rc;
+
+    ask_sleep(&p, 0, 15000000);
+    model_at(1000);
+    kernel_uptime_seconds = 10;
+    kernel_second_ticks = 0;
+    mono_held_ns = 10008000000LL;
+    rc = sleep_call(&p);
+    CHECK(rc == 0 && blocked_until == 1003 && kernel_ticks == 1003,
+          "a sleep of 15 ms from a clock 8 ms ahead of tick 1000 ends at 1003");
+
+    ask_sleep(&p, 0, 15000000);
+    model_at(1000);
+    kernel_uptime_seconds = 10;
+    kernel_second_ticks = 0;
+    mono_held_ns = 10008000000LL;
+    post_at_block = wake_at_deadline = 1;
+    rc = sleep_call(&p);
+    rem = remainder();
+    CHECK(rc == -EINTR && rem.tv_sec == 0 && rem.tv_nsec == 3000000 && cut_short == 1,
+          "and a signal at tick 1002 leaves the 3 ms the clock lacks");
 }
 
 /**
@@ -1117,7 +1175,8 @@ static void uptime_at(uint32_t tick)
  * The caller's process CPU clock while another thread of the process lives
  * and runs, charging the process a tick at every tick: it is read again at
  * every tick, so a sleep from 3.7 s of CPU time until 3.75 s, absolute or
- * relative, blocks until the next tick first and returns at tick 3005.
+ * relative, blocks until the next tick first and returns at tick 3005, and
+ * one of 1 ns returns at tick 3001.
  */
 static void cpu_clock_sibling(void)
 {
@@ -1139,6 +1198,13 @@ static void cpu_clock_sibling(void)
               "a sleep on the process CPU clock another thread advances ends when it reaches the "
               "time");
     }
+    proc.utime = 250;
+    proc.stime = 120;
+    ask_clock_sleep(&p, 2, 0, 0, 1);
+    uptime_at(3000);
+    sibling_runs = 1;
+    CHECK(clock_sleep_call(&p) == 0 && first_blocked_until == 3001 && kernel_ticks == 3001,
+          "a sleep of 1 ns on the process CPU clock lasts to its next tick");
     group.live = 0;
 }
 
@@ -1282,6 +1348,7 @@ int main(void)
     sleeps_masked();
     sleep_edges();
     sleep_races();
+    sleep_held_clock();
     timer_first_expiry();
     if (failures)
         return 1;

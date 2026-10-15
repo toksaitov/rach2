@@ -29,18 +29,25 @@ and at most a tick longer: a sleep of 1 ms lasts up to 10 ms, as Linux's
 does with a 100 Hz tick and no high-resolution timer.
 The process blocks until that deadline tick; other runnable processes
 continue to execute.
+The sleep also lasts until
+.Dv CLOCK_MONOTONIC ,
+read at the call, has advanced by the interval: a tick the timer lost
+while the processor could not take it leaves the tick count behind that
+clock, which keeps its last reading, and the sleep then waits for the count
+to catch up.
 A zero interval returns at once.
 .Pp
-Once the deadline tick has come, the call returns 0 even if a signal is
-pending; a pending signal that is not blocked is acted on as the call
-returns.
+Once the deadline tick has come, and the clock has advanced by the
+interval, the call returns 0 even if a signal is pending; a pending signal
+that is not blocked is acted on as the call returns.
 If a signal that is neither blocked nor ignored is pending when the
 process runs before its deadline, the call fails with
 .Er EINTR .
 Unless
 .Fa rem
 is null, the raw call stores there the time left to the deadline tick,
-less how far into the tick in progress the timer is.
+less how far into the tick in progress the timer is, or, once that tick has
+come, the time left until the clock has advanced by the interval.
 A sleep begun again with the remainder has the first sleep's deadline,
 later by the time it takes to begin it.
 .Ss clock_nanosleep

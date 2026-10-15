@@ -90,8 +90,14 @@ changes = {
         '            break;\n'
         '        }'),
     'sleep-deadline': ('syscall',
-        '    return sleep_until(now + ticks, urem);',
-        '    return sleep_until(now + ticks + 1u, urem);'),
+        '    rc = sleep_until(now + ticks, urem);',
+        '    rc = sleep_until(now + ticks + 1u, urem);'),
+    'sleep-held': ('syscall',
+        '    rc = sleep_until_time(KCLOCK_MONO, &end);',
+        '    rc = 0;'),
+    'sleep-held-rem': ('syscall',
+        '        rem.tv_nsec = end.tv_nsec - (long)nsec;',
+        '        rem.tv_nsec = end.tv_nsec;'),
     'sleep-zero': ('syscall',
         '    if (req->tv_sec == 0 && req->tv_nsec == 0) {\n'
         '        return 0;\n'
@@ -327,7 +333,7 @@ PY
 faults='connect-wait connect-result connect-nonblock framebuffer-owner
     framebuffer-reentry clock sleep-mask sleep-block-order sleep-arm-order
     sleep-halt-unmasked sleep-halt-read sleep-left-early sleep-switch
-    sleep-early-return sleep-deadline sleep-zero sleep-nsec sleep-nsec-one
+    sleep-early-return sleep-deadline sleep-held sleep-held-rem sleep-zero sleep-nsec sleep-nsec-one
     sleep-nsec-near sleep-arg-sec sleep-arg-nsec sleep-arg-nsec-neg
     sleep-remainder sleep-last-tick sleep-cut-short sleep-signal-first
     sleep-rearm sleep-wrap sleep-clamp sleep-sec-clamp sleep-unmask
@@ -442,11 +448,13 @@ for mutation in $faults; do
         sleep-switch) detail='a sleeper switched back to after a signal runs again at once' ;;
         sleep-early-return) detail='a sleep with no signal runs to its deadline' ;;
         sleep-deadline) detail='a sleep of three ticks from tick 1000 blocks until 1003' ;;
+        sleep-held) detail='a sleep of 15 ms from a clock 8 ms ahead of tick 1000 ends at 1003' ;;
+        sleep-held-rem) detail='and a signal at tick 1002 leaves the 3 ms the clock lacks' ;;
         sleep-remainder) detail='and the whole request is left' ;;
         sleep-zero) detail='a sleep of zero does not block' ;;
         sleep-nsec) detail='a sleep of 15 ms from tick 1100 blocks until 1102' ;;
-        sleep-nsec-one) detail='a sleep of 1 ns from tick 1150 blocks until 1151' ;;
-        sleep-nsec-near) detail='a sleep of 1 ns from tick 1150 blocks until 1151' ;;
+        sleep-nsec-one) detail='a sleep of 1 ns on the process CPU clock lasts to its next tick' ;;
+        sleep-nsec-near) detail='a sleep of 1 ns on the process CPU clock lasts to its next tick' ;;
         sleep-arg-nsec-neg) detail='a sleep of -1 ns is refused' ;;
         sleep-arg-sec) detail='a sleep of a negative second is refused' ;;
         sleep-arg-nsec) detail='a sleep of 1000000000 ns is refused' ;;

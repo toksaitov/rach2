@@ -1172,73 +1172,6 @@ static int timespec_valid(const struct kernel_timespec *req)
     return req->tv_sec >= 0 && req->tv_nsec >= 0 && req->tv_nsec < 1000000000;
 }
 
-/**
- * Sleep for `req`, to the first tick at or after its end, so a sleep is never
- * shorter than asked and at most a tick longer, up to the clamp in
- * `timespec_ticks`. The end is measured from where in the tick in progress
- * the call is (`rtc_tick_phase`): counting that tick as a whole would make
- * every sleep of a tick or less last two, so that `usleep(1000)` would take
- * 20 ms.
- *
- * A signal's remainder, written to `urem`, is the time left to the deadline
- * tick, so a caller that sleeps again for the remainder ends at the first
- * sleep's deadline, and later by the time it takes to call again.
- */
-static int32_t sleep_for(const struct kernel_timespec *req, struct kernel_timespec __user *urem)
-{
-    uint32_t now, phase_ns, us, ticks;
-
-    rtc_tick_phase(&now, &phase_ns);
-    if (req->tv_sec == 0 && req->tv_nsec == 0) {
-        return 0;
-    }
-    us = phase_ns / 1000u + ((uint32_t)req->tv_nsec + 999u) / 1000u;
-    ticks = timespec_ticks(req) - ((uint32_t)req->tv_nsec + 9999999u) / 10000000u;
-    ticks += (us + 9999u) / 10000u;
-    return sleep_until(now + ticks, urem);
-}
-
-/**
- * Block-and-schedule sleep (nanosleep, 32-bit timespec).
- *
- * Its arguments are const struct timespec* req and struct timespec* rem
- * (optional). Sleeps to the first tick at or after the interval's end through
- * `sleep_for`, which has the rules of the deadline, the signals and the
- * remainder. rem is written as zero on normal completion.
- */
-long sys_nanosleep(isr_params_t *params)
-{
-    const struct kernel_timespec __user *ureq =
-        (const struct kernel_timespec __user *)SC_ARG(params, 0);
-    struct kernel_timespec __user *urem = (struct kernel_timespec __user *)SC_ARG(params, 1);
-    struct kernel_timespec req;
-    int32_t rc;
-
-    if (!current_proc || !ureq) {
-        return -EFAULT;
-    }
-    if (copy_from_user(&req, ureq, sizeof(req)) != 0) {
-        return -EFAULT;
-    }
-    if (!timespec_valid(&req)) {
-        return -EINVAL;
-    }
-    rc = sleep_for(&req, urem);
-    if (rc != 0) {
-        return rc;
-    }
-
-    if (urem) {
-        struct kernel_timespec zero;
-        zero.tv_sec = 0;
-        zero.tv_nsec = 0;
-        if (copy_to_user(urem, &zero, sizeof(zero)) != 0) {
-            return -EFAULT;
-        }
-    }
-    return 0;
-}
-
 /** Whether real time or time since boot, `kind`, read to the microsecond as
  * `clock_gettime` reads it, has reached `when`. */
 static int time_reached(enum kclock_kind kind, const struct kernel_timespec *when)
@@ -1310,6 +1243,112 @@ static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_times
             return rc;
         }
     }
+}
+
+/**
+ * Sleep for `req`, to the first tick at or after its end, so a sleep is never
+ * shorter than asked and at most a tick longer, up to the clamp in
+ * `timespec_ticks`. The end is measured from where in the tick in progress
+ * the call is (`rtc_tick_phase`): counting that tick as a whole would make
+ * every sleep of a tick or less last two, so that `usleep(1000)` would take
+ * 20 ms.
+ *
+ * The sleep also lasts until time since boot, read at the call, has advanced
+ * by `req`. A tick the timer lost while the processor could not take it
+ * leaves the tick count behind that clock, which keeps its last reading
+ * (`rtc_monotonic`), and a sleep counted in ticks alone would end before the
+ * clock showed it had lasted `req`. A sleep that `timespec_ticks` clamps
+ * ends at its tick.
+ *
+ * A signal's remainder, written to `urem`, is the time left to the deadline
+ * tick, so a caller that sleeps again for the remainder ends at the first
+ * sleep's deadline, and later by the time it takes to call again; once that
+ * tick has come, it is the time left until the clock reaches the end.
+ */
+static int32_t sleep_for(const struct kernel_timespec *req, struct kernel_timespec __user *urem)
+{
+    struct kernel_timespec end;
+    uint32_t now, phase_ns, us, ticks;
+    int64_t sec, nsec;
+    int32_t rc;
+
+    if (req->tv_sec == 0 && req->tv_nsec == 0) {
+        return 0;
+    }
+    rtc_monotonic(&sec, &nsec);
+    rtc_tick_phase(&now, &phase_ns);
+    us = phase_ns / 1000u + ((uint32_t)req->tv_nsec + 999u) / 1000u;
+    ticks = timespec_ticks(req) - ((uint32_t)req->tv_nsec + 9999999u) / 10000000u;
+    ticks += (us + 9999u) / 10000u;
+    rc = sleep_until(now + ticks, urem);
+    if (rc != 0 || req->tv_sec >= 21474836L) {
+        return rc;
+    }
+    end.tv_sec = (long)(sec + req->tv_sec);
+    end.tv_nsec = (long)nsec + req->tv_nsec;
+    if (end.tv_nsec >= 1000000000L) {
+        end.tv_sec++;
+        end.tv_nsec -= 1000000000L;
+    }
+    rc = sleep_until_time(KCLOCK_MONO, &end);
+    if (rc != 0 && urem) {
+        struct kernel_timespec rem;
+
+        rtc_monotonic(&sec, &nsec);
+        rem.tv_sec = (long)(end.tv_sec - sec);
+        rem.tv_nsec = end.tv_nsec - (long)nsec;
+        if (rem.tv_nsec < 0) {
+            rem.tv_sec--;
+            rem.tv_nsec += 1000000000L;
+        }
+        if (rem.tv_sec < 0) {
+            rem.tv_sec = 0;
+            rem.tv_nsec = 0;
+        }
+        (void)copy_to_user(urem, &rem, sizeof(rem));
+    }
+    return rc;
+}
+
+/**
+ * Block-and-schedule sleep (nanosleep, 32-bit timespec).
+ *
+ * Its arguments are const struct timespec* req and struct timespec* rem
+ * (optional). Sleeps to the first tick at or after the interval's end through
+ * `sleep_for`, which has the rules of the deadline, the signals and the
+ * remainder. rem is written as zero on normal completion.
+ */
+long sys_nanosleep(isr_params_t *params)
+{
+    const struct kernel_timespec __user *ureq =
+        (const struct kernel_timespec __user *)SC_ARG(params, 0);
+    struct kernel_timespec __user *urem = (struct kernel_timespec __user *)SC_ARG(params, 1);
+    struct kernel_timespec req;
+    int32_t rc;
+
+    if (!current_proc || !ureq) {
+        return -EFAULT;
+    }
+    if (copy_from_user(&req, ureq, sizeof(req)) != 0) {
+        return -EFAULT;
+    }
+    if (!timespec_valid(&req)) {
+        return -EINVAL;
+    }
+    rc = sleep_for(&req, urem);
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (urem) {
+        struct kernel_timespec zero;
+        zero.tv_sec = 0;
+        zero.tv_nsec = 0;
+        if (copy_to_user(urem, &zero, sizeof(zero)) != 0) {
+            return -EFAULT;
+        }
+    }
+    return 0;
 }
 
 /**
