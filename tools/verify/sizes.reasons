@@ -307,25 +307,22 @@ tests/host/acpi_hosttest.c:qemu_q35_rows complexity 28 a test's rows, each a cas
 
 tests/host/ahci_hosttest.c:main lines 176 a test's rows, each a case, read as one table
 
-tests/host/arp_hosttest.c:main lines 110 a test's rows, each a case, read as one table
 tests/host/ata_hosttest.c:main lines 156 a test's rows, each a case, read as one table
 
 tests/host/bcache_hosttest.c:main complexity 115 a test's rows, each a case, read as one table
 tests/host/bcache_hosttest.c:main lines 679 a test's rows, each a case, read as one table
 
-tests/host/board_hosttest.c:main lines 104 a test's rows, each a case, read as one table
 
 tests/host/bootctl_hosttest.c:main complexity 43 a test's rows, each a case, read as one table
 tests/host/bootctl_hosttest.c:main lines 558 a test's rows, each a case, read as one table
 
-tests/host/dhcpmsg_hosttest.c:check_build lines 101 a test's rows, each a case, read as one table
 tests/host/dhcpmsg_hosttest.c:reply params 7 a test's rows, each a case, read as one table
 
 tests/host/diskinfo_hosttest.c:main complexity 33 a test's rows, each a case, read as one table
 tests/host/diskinfo_hosttest.c:main lines 299 a test's rows, each a case, read as one table
 
 tests/host/e1000_hosttest.c:main complexity 63 a test's rows, each a case, read as one table
-tests/host/e1000_hosttest.c:main lines 450 a test's rows, each a case, read as one table
+tests/host/e1000_hosttest.c:main lines 408 a test's rows, each a case, read as one table
 
 tests/host/exfat_hosttest.c:dirty_rows lines 170 a test's rows, each a case, read as one table
 tests/host/exfat_hosttest.c:dirty_rows nesting 5 a test's rows, each a case, read as one table
@@ -360,12 +357,12 @@ tests/host/gpt_hosttest.c:main lines 186 a test's rows, each a case, read as one
 
 tests/host/grubslot_hosttest.c:main lines 240 a test's rows, each a case, read as one table
 
-tests/host/hid_hosttest.c:main lines 130 a test's rows, each a case, read as one table
+tests/host/hid_hosttest.c:main lines 124 a test's rows, each a case, read as one table
 
 tests/host/hub_hosttest.c:main complexity 86 a test's rows, each a case, read as one table
-tests/host/hub_hosttest.c:main lines 636 a test's rows, each a case, read as one table
+tests/host/hub_hosttest.c:main lines 583 a test's rows, each a case, read as one table
 tests/host/hub_hosttest.c:xhci_submit complexity 104 a test's rows, each a case, read as one table
-tests/host/hub_hosttest.c:xhci_submit lines 305 a test's rows, each a case, read as one table
+tests/host/hub_hosttest.c:xhci_submit lines 296 a test's rows, each a case, read as one table
 
 tests/host/kheap_hosttest.c:main lines 124 a test's rows, each a case, read as one table
 
@@ -382,7 +379,7 @@ tests/host/kstring_hosttest.c:main complexity 70 a test's rows, each a case, rea
 tests/host/kstring_hosttest.c:main lines 171 a test's rows, each a case, read as one table
 tests/host/kstring_hosttest.c:main nesting 6 a test's rows, each a case, read as one table
 
-tests/host/lapic_hosttest.c:main lines 163 a test's rows, each a case, read as one table
+tests/host/lapic_hosttest.c:main lines 131 a test's rows, each a case, read as one table
 
 tests/host/lock_hosttest.c:as params 7 the parameters are the arguments of one call the test makes, passed through
 tests/host/lock_hosttest.c:as_on params 8 the parameters are the arguments of one call the test makes, passed through
@@ -419,21 +416,21 @@ tests/host/mkfatfixture.c:chk_dir nesting 5 a fixture builder, the volume writte
 tests/host/modlayout_hosttest.c:main lines 154 a test's rows, each a case, read as one table
 
 tests/host/msc_hosttest.c:main complexity 189 a test's rows, each a case, read as one table
-tests/host/msc_hosttest.c:main lines 1174 a test's rows, each a case, read as one table
+tests/host/msc_hosttest.c:main lines 1110 a test's rows, each a case, read as one table
 tests/host/msc_hosttest.c:xhci_submit complexity 37 a test's rows, each a case, read as one table
-tests/host/msc_hosttest.c:xhci_submit lines 131 a test's rows, each a case, read as one table
+tests/host/msc_hosttest.c:xhci_submit lines 128 a test's rows, each a case, read as one table
 
 tests/host/n_tty_hosttest.c:main complexity 63 a test's rows, each a case, read as one table
 tests/host/n_tty_hosttest.c:main lines 370 a test's rows, each a case, read as one table
 
 tests/host/netconf_hosttest.c:main complexity 57 a test's rows, each a case, read as one table
-tests/host/netconf_hosttest.c:main lines 346 a test's rows, each a case, read as one table
+tests/host/netconf_hosttest.c:main lines 309 a test's rows, each a case, read as one table
 
-tests/host/netconsole_hosttest.c:main lines 135 a test's rows, each a case, read as one table
+tests/host/netconsole_hosttest.c:main lines 125 a test's rows, each a case, read as one table
 
-tests/host/netdev_hosttest.c:main lines 149 a test's rows, each a case, read as one table
+tests/host/netdev_hosttest.c:main lines 131 a test's rows, each a case, read as one table
 
-tests/host/packet_hosttest.c:main lines 143 a test's rows, each a case, read as one table
+tests/host/packet_hosttest.c:main lines 132 a test's rows, each a case, read as one table
 
 tests/host/pagecache_hosttest.c:main lines 121 a test's rows, each a case, read as one table
 
@@ -441,7 +438,7 @@ tests/host/partition_hosttest.c:main complexity 41 a test's rows, each a case, r
 tests/host/partition_hosttest.c:main lines 178 a test's rows, each a case, read as one table
 
 tests/host/pcimsi_hosttest.c:main complexity 37 a test's rows, each a case, read as one table
-tests/host/pcimsi_hosttest.c:main lines 186 a test's rows, each a case, read as one table
+tests/host/pcimsi_hosttest.c:main lines 167 a test's rows, each a case, read as one table
 
 tests/host/pipe_ring_hosttest.c:main lines 111 a test's rows, each a case, read as one table
 
@@ -465,10 +462,10 @@ tests/host/pwauth_hosttest.c:main lines 240 a test's rows, each a case, read as 
 tests/host/readfile_hosttest.c:put_node params 8 a test's rows, each a case, read as one table
 
 tests/host/rtc_hosttest.c:bcd_sample params 7 a test's rows, each a case, read as one table
-tests/host/rtc_hosttest.c:main lines 258 a test's rows, each a case, read as one table
+tests/host/rtc_hosttest.c:main lines 169 a test's rows, each a case, read as one table
 
 tests/host/rtl8168_hosttest.c:main complexity 98 a test's rows, each a case, read as one table
-tests/host/rtl8168_hosttest.c:main lines 781 a test's rows, each a case, read as one table
+tests/host/rtl8168_hosttest.c:main lines 689 a test's rows, each a case, read as one table
 
 tests/host/sectorcopy_hosttest.c:check_copy lines 118 a test's rows, each a case, read as one table
 
@@ -481,14 +478,14 @@ tests/host/syscall_hosttest.c:clock_sleeps lines 104 a test's rows, each a case,
 tests/host/tables_hosttest.c:main complexity 32 a test's rows, each a case, read as one table
 
 tests/host/tcp_hosttest.c:main complexity 141 a test's rows, each a case, read as one table
-tests/host/tcp_hosttest.c:main lines 777 a test's rows, each a case, read as one table
+tests/host/tcp_hosttest.c:main lines 689 a test's rows, each a case, read as one table
 tests/host/tcp_hosttest.c:main nesting 5 a test's rows, each a case, read as one table
 tests/host/tcp_hosttest.c:rx params 8 a test's rows, each a case, read as one table
 
 tests/host/usb_hosttest.c:hub_attach params 8 a test's rows, each a case, read as one table
-tests/host/usb_hosttest.c:main lines 140 a test's rows, each a case, read as one table
+tests/host/usb_hosttest.c:main lines 135 a test's rows, each a case, read as one table
 tests/host/usb_hosttest.c:quiesce_rows complexity 48 a test's rows, each a case, read as one table
-tests/host/usb_hosttest.c:quiesce_rows lines 262 a test's rows, each a case, read as one table
+tests/host/usb_hosttest.c:quiesce_rows lines 256 a test's rows, each a case, read as one table
 
 tests/host/usbdisk_hosttest.c:main complexity 35 a test's rows, each a case, read as one table
 
@@ -497,13 +494,12 @@ tests/host/vm_hosttest.c:main lines 262 a test's rows, each a case, read as one 
 
 tests/host/xhci_hosttest.c:doorbell_rung complexity 26 a test's rows, each a case, read as one table
 tests/host/xhci_hosttest.c:endpoint_doorbell complexity 38 a test's rows, each a case, read as one table
-tests/host/xhci_hosttest.c:endpoint_doorbell lines 101 a test's rows, each a case, read as one table
 tests/host/xhci_hosttest.c:endpoint_doorbell nesting 6 a test's rows, each a case, read as one table
 tests/host/xhci_hosttest.c:main complexity 116 a test's rows, each a case, read as one table
-tests/host/xhci_hosttest.c:main lines 1854 a test's rows, each a case, read as one table
-tests/host/xhci_hosttest.c:model_reset lines 111 a test's rows, each a case, read as one table
+tests/host/xhci_hosttest.c:main lines 1732 a test's rows, each a case, read as one table
+tests/host/xhci_hosttest.c:model_reset lines 108 a test's rows, each a case, read as one table
 tests/host/xhci_hosttest.c:model_w32 complexity 40 a test's rows, each a case, read as one table
-tests/host/xhci_hosttest.c:model_w32 lines 150 a test's rows, each a case, read as one table
+tests/host/xhci_hosttest.c:model_w32 lines 125 a test's rows, each a case, read as one table
 
 tests/idreport.c:match nesting 5 a probe, one sequence of steps in the order the log records them
 tests/idreport.c:match params 7 a probe, one sequence of steps in the order the log records them
