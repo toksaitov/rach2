@@ -17,12 +17,12 @@
 #define PT_SEIZED    0x02u /* the tracer attached with PTRACE_SEIZE */
 #define PT_SYSCALL   0x04u /* it stops at each system call's entry and exit */
 #define PT_STEP      0x08u /* the kernel set TF for PTRACE_SINGLESTEP */
-#define PT_INTERRUPT 0x10u /* PTRACE_INTERRUPT, or a change of its group stop, asks for a stop */
+#define PT_INTERRUPT 0x10u /* PTRACE_INTERRUPT, or a change of its group stop, requests a stop */
 #define PT_START     0x20u /* a seized thread's first stop is still to come */
 #define PT_LISTEN    0x40u /* PTRACE_LISTEN keeps it in its group stop until that changes */
 
 /* The events of a stop, in bits 16-23 of its wait status, and the option bit
- * that asks for each, 1 << event. */
+ * that enables each, 1 << event. */
 #define PTRACE_EVENT_FORK       1
 #define PTRACE_EVENT_VFORK      2
 #define PTRACE_EVENT_CLONE      3
@@ -32,22 +32,41 @@
 #define PTRACE_EVENT_SECCOMP    7
 #define PTRACE_EVENT_STOP       128
 
-/** ptrace takes request, pid, addr and data. */
+/**
+ * ptrace(2) takes the request, the pid, an address and a datum; the pid is
+ * named in the caller's PID namespace. PTRACE_TRACEME makes the caller's parent
+ * its tracer, PTRACE_ATTACH and PTRACE_SEIZE make the caller's process the
+ * tracer of the thread `pid`, PTRACE_KILL sends a tracee SIGKILL, and
+ * PTRACE_INTERRUPT requests a stop of a seized tracee. The other requests need
+ * the tracee in a ptrace stop: the reads and writes of its memory, the resumes
+ * (PTRACE_CONT, PTRACE_SYSCALL, PTRACE_SINGLESTEP, PTRACE_DETACH and
+ * PTRACE_LISTEN), the options, the event message, the siginfo, the register
+ * sets, and the architecture's requests (`arch_ptrace`). A read of memory
+ * stores the word at the datum's address. 0 or the request's result; -ESRCH for
+ * a thread that does not exist or has ended, that the caller's process does not
+ * trace, or that is not stopped for a request that needs the stop; -EPERM for
+ * an attach the caller may not make; -EIO or -EINVAL for a signal, an option or
+ * a stop the request does not take.
+ */
 long sys_ptrace(isr_params_t *params);
 
 /**
  * The stops a traced thread makes as it returns to user mode, before any
- * signal: the first stop of a thread a seized tracer attached, and the stop
- * PTRACE_INTERRUPT asked for, each PTRACE_EVENT_STOP with SIGTRAP, or with
- * the stop signal while its process is stopped, as Linux reports them.
+ * signal: the first stop of a child a seized tracee's clone attached to its
+ * tracer (`ptrace_fork_attach`), and the stop PTRACE_INTERRUPT or a change
+ * of the group stop asked for, each PTRACE_EVENT_STOP with SIGTRAP, or with
+ * the stop signal while its process is stopped, as Linux reports them. A
+ * pending SIGKILL ends them.
  */
 void ptrace_return_stops(void);
 
 /**
  * A signal-delivery stop for `signo`, which the current thread has taken off
  * its pending sets with `*info`: a traced thread stops for its tracer, which
- * may change the signal, or its siginfo, or give none. Returns the signal to
- * act on, 0 for none; SIGKILL and an untraced thread's signal pass.
+ * may change the signal, or its siginfo, or give none. A signal other than
+ * `signo` gets an SI_USER siginfo from the tracer, and one the thread blocks
+ * is posted to it again. Returns the signal to act on, 0 for none; SIGKILL
+ * and an untraced thread's signal pass.
  */
 int ptrace_signal_stop(int signo, struct k_siginfo *info);
 
@@ -57,38 +76,41 @@ int ptrace_signal_stop(int signo, struct k_siginfo *info);
  * the tracer may resume the thread while the process stays stopped. The
  * report answers a stop asked for meanwhile; one asked for during the stop,
  * by a change of the group stop or PTRACE_INTERRUPT, is made as the thread
- * leaves it. Returns nonzero when it stopped.
+ * leaves it. Returns 1 when it took the stop, 0 for an untraced thread or
+ * one that has reported this stop (`stop_seen`).
  */
 int ptrace_group_stop(int signo);
 
 /**
  * Tell the seized tracees among the threads of `tg` that its group stop has
  * begun or ended, as Linux's JOBCTL_TRAP_NOTIFY tells them: each makes a new
- * PTRACE_EVENT_STOP, at once when PTRACE_LISTEN holds it in its stop, else
+ * PTRACE_EVENT_STOP, at once when PTRACE_LISTEN keeps it in its stop, else
  * when its tracer next resumes it, or as it returns to user mode.
  */
 void ptrace_group_change(struct tgroup *tg);
 
 /** The event stop `event` with `msg` for PTRACE_GETEVENTMSG, when the current
- * thread is traced and its options ask for the event. */
+ * thread is traced and its options include the event. */
 void ptrace_event(int event, uint32_t msg);
 
 /**
  * The stop at the entry, or with `leaving` the exit, of system call `nr`, when
- * the current thread's tracer asked for them with PTRACE_SYSCALL; `tf` is its
- * trap frame, and orig_nr is `nr` during the stop. At the entry the result
+ * the current thread's tracer asked for them with PTRACE_SYSCALL: SIGTRAP,
+ * with 0x80 added under PTRACE_O_TRACESYSGOOD. `tf` is the thread's trap
+ * frame, and orig_nr is `nr` during the stop. At the entry the result
  * register is -ENOSYS during the stop, as on Linux, and both stay as the tracer
  * leaves them: the dispatcher runs the call orig_nr then names, or none for -1,
  * with the result register its result. A thread SIGKILL was sent during the
  * entry stop gets -1, so the call does not run, as Linux skips it. A single
  * step over the call stops at its exit with TRAP_TRACE, before the next
- * user instruction, without the TRACESYSGOOD bit.
+ * user instruction, without the TRACESYSGOOD bit. A signal the tracer
+ * resumes the thread with is posted to it.
  */
 void ptrace_syscall_stop(isr_params_t *tf, uint32_t nr, int leaving);
 
 /**
  * Attach the child `child` the current thread makes with the clone flags
- * `flags` to its tracer, when the options ask for the event this clone is;
+ * `flags` to its tracer, when the options include the event this clone is;
  * the child then stops first. Returns the event to report, 0 for none.
  */
 int ptrace_fork_attach(process_t *child, uint32_t flags);
@@ -119,9 +141,14 @@ void ptrace_tracer_gone(uint32_t tgid);
  * since each may make the tracer's requests. 0 for no tracer. */
 int ptrace_tracer_privileged(const process_t *t);
 
-/** The thread `pid` when it is still traced by the caller and stopped for
- * it, or NULL: how a request that copied from the caller's memory, which may
- * sleep, finds its thread again. */
+/**
+ * The thread `pid`, a kernel id, when the caller's process traces it and it
+ * is in a ptrace stop, which the requests other than the attaching ones,
+ * PTRACE_KILL and PTRACE_INTERRUPT need; NULL otherwise. A request calls it
+ * again after a copy from the caller's memory, which may sleep for a page:
+ * meanwhile another thread of the tracer may resume the thread and reap it
+ * when it ends, or SIGKILL may end it, and its record may be gone.
+ */
 process_t *ptrace_tracee(uint32_t pid);
 
 #endif /* _PTRACE_H_ */

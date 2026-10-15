@@ -61,7 +61,8 @@ static int kill_pending(void)
  * The tracer's wait reports the stop once; a SIGCHLD and a wake of the
  * tracer's child queue tell it of the stop. `info` is the siginfo
  * PTRACE_GETSIGINFO reads, none for a stop that is not a signal's. A thread
- * whose tracer has gone does not stop and is no longer traced.
+ * whose tracer has gone does not stop: it is no longer traced, and gets the
+ * stop's own signal back, as though the tracer had resumed it with that.
  */
 static int ptrace_stop(uint32_t status, const struct k_siginfo *info)
 {
@@ -108,9 +109,9 @@ static int ptrace_stop(uint32_t status, const struct k_siginfo *info)
     return self->ptrace_signo;
 }
 
-/** Take each requested event stop before returning to user mode. A tracer
- * can listen and interrupt while ptrace_stop sleeps; recheck on each resume.
- * SIGKILL ends the sequence so signal delivery can terminate the thread. */
+/** The flags are read again after each stop, since the tracer may request
+ * another while the thread is stopped; a pending SIGKILL ends the loop, so
+ * that signal delivery can end the thread. */
 void ptrace_return_stops(void)
 {
     process_t *self = current_proc;
@@ -170,8 +171,9 @@ int ptrace_group_stop(int signo)
 }
 
 /**
- * Request a new PTRACE_EVENT_STOP for the seized thread `t`.
- * A listening tracee must leave its current stop to report the new event.
+ * Request a new PTRACE_EVENT_STOP of the seized thread `t`. A thread that
+ * PTRACE_LISTEN keeps in its stop is let out of it at once, so that it
+ * makes the new one.
  */
 static void ptrace_restop(process_t *t)
 {
@@ -388,7 +390,8 @@ void ptrace_tracer_gone(uint32_t tgid)
 }
 
 /** Resume the stopped thread `t` with the signal `sig`, stepping one
- * instruction with `step` and stopping at system calls with `syscalls`. */
+ * instruction with `step` and stopping at system calls with `syscalls`, and
+ * clear PT_LISTEN; 0, or -EIO for a signal past KSIG_MAX. */
 static int ptrace_resume(process_t *t, unsigned long sig, int step, int syscalls)
 {
     if (sig > KSIG_MAX) {
@@ -420,7 +423,7 @@ static int ptrace_resume(process_t *t, unsigned long sig, int step, int syscalls
  * PTRACE_EVENT_STOP, in its stop, as a stopped process is kept, until the
  * group stop begins again or ends (`ptrace_group_change`), when it makes a
  * new PTRACE_EVENT_STOP; at once, when such a change came before the
- * request. Any other stop is EIO, as on Linux.
+ * request. Any other stop, or a thread not seized, is -EIO, as on Linux.
  */
 static long ptrace_listen(process_t *t)
 {
@@ -436,10 +439,10 @@ static long ptrace_listen(process_t *t)
 
 /**
  * Let the thread `t`, which a tracer has just attached to, out of the park
- * its process's stop holds an untraced thread in (`sig_park`): it goes back
- * through `deliver_signals`, where it makes the stop a ptrace stop, reported
- * as a group stop is, while its process stays stopped, as Linux's attach
- * makes a stopped task trap. A thread that is not parked is left.
+ * in which its process's stop keeps an untraced thread (`sig_park`): it goes
+ * back through `deliver_signals`, where it makes the stop a ptrace stop,
+ * reported as a group stop is, while its process stays stopped, as Linux's
+ * attach makes a stopped task trap. A thread that is not parked is left.
  */
 static void ptrace_unpark(process_t *t)
 {
@@ -484,16 +487,18 @@ int ptrace_tracer_privileged(const process_t *t)
 /**
  * PTRACE_ATTACH and PTRACE_SEIZE: make the caller's process `t`'s tracer.
  * The caller's process needs privilege (`group_privileged`), or the caller
- * its real user ID equal to each of `t`'s three, `t` dumpable and `t` not
- * privileged, as Linux's `__ptrace_may_access` asks when the caller lacks
+ * its real user ID equal to each of `t`'s three user IDs and its real group
+ * ID to each of `t`'s three group IDs, `t` dumpable and `t` not privileged,
+ * as Linux's `__ptrace_may_access` requires when the caller lacks
  * CAP_SYS_PTRACE: a root thread that gave up its capabilities may not trace
- * one that has them.
- * Such a caller is also refused a thread inside execve, which chooses the
- * ids of its new image by the tracer the thread has (`exec_ids` in
- * syscall_proc.c); Linux makes the attach wait for the exec instead. A
- * thread of the caller's own process, a thread with no address space, init,
- * and a thread already traced are refused. ATTACH sends the thread SIGSTOP;
- * SEIZE takes the options in `opts` and stops nothing.
+ * one that has them. Such a caller may not attach to a thread inside
+ * execve either, which sets the ids of its new image according to the
+ * tracer the thread has (`exec_ids` in syscall_proc.c); Linux makes the
+ * attach wait for the exec instead. No caller may attach to a thread of its
+ * own process, a thread with no address space, init, or a thread already
+ * traced. ATTACH sends the thread SIGSTOP; SEIZE takes the options in
+ * `opts` and stops nothing. 0, -EPERM, or -EINVAL for an option SEIZE does
+ * not have.
  */
 static int ptrace_attach(process_t *t, int seize, unsigned long opts)
 {
@@ -533,8 +538,9 @@ static int ptrace_attach(process_t *t, int seize, unsigned long opts)
 /**
  * PTRACE_TRACEME: make the caller's parent its tracer. A privileged caller
  * may not make a parent process that is not privileged (`group_privileged`)
- * its tracer, as Linux's `cap_ptrace_traceme` refuses a parent whose
- * capabilities are fewer.
+ * its tracer, as Linux's `cap_ptrace_traceme` does not let a parent whose
+ * capabilities are fewer trace. 0, or -EPERM for that, for a caller already
+ * traced, or for a parent that has gone.
  */
 static int ptrace_traceme(void)
 {
@@ -551,14 +557,6 @@ static int ptrace_traceme(void)
     return 0;
 }
 
-/**
- * The thread `pid` when the caller's process traces it and it is in a
- * ptrace stop, which the requests other than the attaching ones, KILL and
- * INTERRUPT need; NULL otherwise. A request finds it again after a copy
- * from the caller's memory, which may sleep for a page: meanwhile another
- * thread of the tracer may resume the thread, and reap it when it ends, or
- * SIGKILL end it, and its record may be gone.
- */
 process_t *ptrace_tracee(uint32_t pid)
 {
     process_t *t = get_process(pid);
@@ -577,10 +575,11 @@ process_t *ptrace_tracee(uint32_t pid)
  * bringing a page in may sleep, and the thread may end and drop its own
  * meanwhile; nothing of `t` is read after the access.
  *
- * A caller without effective user ID 0 gets -EIO for an address space that
- * is not dumpable, which an exec made after the attach: an image the caller
- * may not read, or one with ids the caller lacks, as Linux's
- * `ptrace_access_vm` refuses it.
+ * A caller that is not privileged (`proc_privileged`) gets -EIO, as from
+ * Linux's `ptrace_access_vm`, for an address space that is not dumpable:
+ * one that an exec of an image the caller may not read or with ids the
+ * caller lacks, a change of the thread's ids, or PR_SET_DUMPABLE made so
+ * after the attach. 0, or -EIO or -ENOMEM from `paging_access`.
  */
 static int32_t tracee_memory(process_t *t, uintptr_t addr, unsigned long *word, int write)
 {
@@ -597,7 +596,8 @@ static int32_t tracee_memory(process_t *t, uintptr_t addr, unsigned long *word, 
 }
 
 /** PTRACE_GETSIGINFO and PTRACE_SETSIGINFO: the siginfo of the stop of `t`,
- * the thread `pid`, as the 128-byte `siginfo_t`. */
+ * the thread `pid`, as the 128-byte `siginfo_t` at `data`. 0, -EFAULT, or
+ * -ESRCH for a thread gone from its stop during the copy in. */
 static int siginfo_access(uint32_t pid, process_t *t, uintptr_t data, int set)
 {
     uint8_t buf[SIGINFO_SIZE];
@@ -625,7 +625,8 @@ static int siginfo_access(uint32_t pid, process_t *t, uintptr_t data, int set)
  * the bytes moved. The set goes through the heap, since an XSAVE image is
  * larger than a frame of the kernel's stack should be. The copy of the iovec
  * may sleep, and the thread may be reaped meanwhile, so both directions find
- * it again after their copies from the caller (`ptrace_tracee`).
+ * it again after their copies from the caller (`ptrace_tracee`). 0, or
+ * -EFAULT, -EINVAL, -ENOMEM, -ESRCH or the architecture's error.
  */
 static long regset_access(uint32_t pid, process_t *t, unsigned long type, uintptr_t data, int set)
 {
@@ -681,7 +682,8 @@ static long regset_access(uint32_t pid, process_t *t, unsigned long type, uintpt
  * Linux has them. No request uses `t` after a copy that may sleep: one that
  * copies from the caller's memory finds the thread again after the copy
  * (`ptrace_tracee`), one that copies out takes what it copies first, and
- * the memory requests hold the address space themselves (`tracee_memory`).
+ * the memory requests take a reference to the address space themselves
+ * (`tracee_memory`).
  */
 static long ptrace_stopped(process_t *t, uint32_t pid, long request, uintptr_t addr,
                            unsigned long data)
