@@ -1,20 +1,19 @@
 /**
- * Runs the machine out of physical frames, and proves it recovers.
+ * oomprobe: run the machine out of physical frames, and see it recover.
  *
  * A process that touches more pages than there are frames cannot be served:
  * the fault handler has nothing to map, so it kills that process with
  * `SIGKILL`, as Linux's OOM killer does, and not with the SIGSEGV of a bad
- * address, which a handler could catch and return from to fault again. The
- * alternative, a kernel that panics or that hands out a frame it does not
- * have, is the failure this looks for.
+ * address, which a handler could catch and return from to fault again. A
+ * kernel that panicked, or that handed out a frame it does not have, fails.
  *
- * The child does the touching, so the parent is still there afterwards to
- * check the other half: the frames the child held come back, and the parent's
- * own allocation and touch succeed. A kernel that leaked the dead process's
- * frames would fail that second half while passing the first.
+ * A child does the touching, so that the parent is there afterwards to
+ * check the other half: the frames the child held come back, and the
+ * parent's own mapping and touch succeed. A kernel that leaked the dead
+ * process's frames would fail that half while passing the first.
  *
- * Prints "OOMPROBE OK" and exits 0. Freestanding; direct system calls
- * (probe.h).
+ * Prints "OOMPROBE OK (...)" and exits 0, or "OOMPROBE FAIL: " with the
+ * reason and exits 1. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
@@ -33,29 +32,34 @@
 #define WIFSIGNALED(s) (((s) & 0x7F) != 0 && ((s) & 0x7F) != 0x7F)
 #define WTERMSIG(s)    ((s) & 0x7F)
 
-/* One mapping at a time, large enough that a handful of them outruns any
-   machine this boots on, and small enough that the kernel's own limit on
-   mappings per process is not what stops it. */
+/* SPANS mappings of SPAN, 256 MiB in all, more than the machines the probe
+ * boots on have; each is large enough that their number stays well inside
+ * the kernel's limit on mappings per process. */
 #define SPAN  (4u * 1024u * 1024u)
 #define SPANS 64
 
+/** An anonymous private mapping of `len` bytes: its address, or a negated
+ * errno cast to a pointer. */
 static void *sys_mmap(size_t len)
 {
     return (void *)probe_mmap(0, (long)len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1,
                               0);
 }
 
+/** exit(2); does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** fork(2). */
 static int sys_fork(void)
 {
     return syscall0(SYS_FORK);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -65,17 +69,20 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write the string `s` to standard output. */
 static void print(const char *s)
 {
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
 }
 
+/** Write the string `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     print(s);
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)"\n", 1);
 }
 
+/** Write `v` in decimal to standard output. */
 static void print_num(int v)
 {
     char buf[12];
@@ -97,8 +104,9 @@ static void print_num(int v)
     }
 }
 
-/* Map and touch until the machine cannot serve another page. Returns only if
-   the memory never ran out, which is itself a failure. */
+/** Map and touch until the machine cannot serve another page, which kills
+ * the process. Exits 3 when a mapping is refused, the other way a machine
+ * can run out, and 4 when the memory never ran out; does not return. */
 static void eat_memory(void)
 {
     int i;
@@ -108,8 +116,6 @@ static void eat_memory(void)
         char *m = (char *)sys_mmap(SPAN);
 
         if ((size_t)m > (size_t)-4096) {
-            /* The mapping itself was refused, which is the other way a
-               machine can run out. Say so by exiting, not by faulting. */
             sys_exit(3);
         }
         for (p = 0; p < SPAN; p += PAGE) {
@@ -119,6 +125,8 @@ static void eat_memory(void)
     sys_exit(4);
 }
 
+/** The probe's entry: the child runs out of frames, then the parent maps
+ * and touches SPAN bytes of its own. */
 PROBE_START void _start(void)
 {
     int pid, status;
@@ -150,8 +158,7 @@ PROBE_START void _start(void)
         sys_exit(1);
     }
 
-    /* The frames came back with the child. This is the half a kernel that
-       leaked them would fail. */
+    /* The frames came back with the child. */
     m = (char *)sys_mmap(SPAN);
     if ((size_t)m > (size_t)-4096) {
         puts("OOMPROBE FAIL: no mapping after the child died");

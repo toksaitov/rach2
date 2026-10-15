@@ -1,15 +1,16 @@
 /**
- * Probes that fork()/exit()/wait() does not leak physical memory.
+ * forkleak: fork, exit and wait do not leak physical memory.
  *
- * Each fork gives the child a kernel stack. Before this milestone that stack
- * came from the never-freed bump allocator, so every fork/exit/reap cycle lost
- * four frames for good and the pool drained across the kernel's own respawn
- * churn (a steady, unbounded leak that eventually denies fork). The stacks now
- * come from a fixed arena the reap returns to the pool, so the free-frame count
- * is flat across churn. The probe reads sysinfo's freeram after a warm-up, runs
- * many fork/exit/wait cycles, and asserts the free count did not fall.
+ * Each fork gives the child a kernel stack, which comes from the kernel heap
+ * (`kstack_alloc` in syscall_proc.c), and page tables and a record, and the
+ * child's reap gives them back. A kernel that kept any of them would lose
+ * frames at every cycle, and the kernel's own respawning of processes would
+ * drain memory until fork failed. The probe reads sysinfo's freeram after a
+ * warm-up, runs CYCLES fork, exit and wait cycles, and requires the free
+ * memory not to have fallen by more than SLACK.
  *
- * Prints "FORKLEAK OK". Freestanding; direct system calls (probe.h).
+ * Prints "FORKLEAK OK" and exits 0, or "FORKLEAK FAIL: " with the reason and
+ * exits 1. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
@@ -18,8 +19,8 @@
 
 #define WARMUP 8
 #define CYCLES 120
-/* Tolerance (bytes): far below the ~1.6 MB a 120-cycle leak would cost, far
- * above any free-list jitter, so a real leak is unmistakable. */
+/* The fall in free memory allowed, in bytes: well below the 480 KiB a leak
+ * of a page a cycle would cost, and well above the jitter of the allocator. */
 #define SLACK  (64u * 1024u)
 
 /* Linux's sysinfo struct, of longs, sized so the kernel's copy_to_user fits:
@@ -41,32 +42,38 @@ struct sysinfo {
     char _f[20 - 2 * sizeof(long) - sizeof(int)];
 };
 
+/** write(2). */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
+/** exit(2); does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** fork(2). */
 static int sys_fork(void)
 {
     return syscall0(SYS_FORK);
 }
 
+/** waitpid(2). */
 static int sys_waitpid(int pid, int *status, int options)
 {
     return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
+/** sysinfo(2). */
 static int sys_sysinfo(struct sysinfo *si)
 {
     return syscall1(SYS_SYSINFO, (long)si);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -76,12 +83,14 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write the string `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
+/** Print "FORKLEAK FAIL: `why`" and exit 1. */
 static void fail(const char *why)
 {
     sys_write(STDOUT_FILENO, "FORKLEAK FAIL: ", 15);
@@ -89,7 +98,7 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
-/* One fork/exit(0)/wait cycle; fails the probe if fork ran out of memory. */
+/** One cycle of fork, exit(0) and wait; a fork that fails fails the probe. */
 static void churn(void)
 {
     int pid, status;
@@ -106,14 +115,14 @@ static void churn(void)
     }
 }
 
+/** The probe's entry: the warm-up, the count, the cycles and the count. */
 PROBE_START void _start(void)
 {
     struct sysinfo si;
     unsigned long base_free, end_free;
     int i;
 
-    /* Warm the page-table and page-directory free lists so the only frames that
-     * move during the measured loop are the ones a leak would strand. */
+    /* What the first forks take for good is taken before the count. */
     for (i = 0; i < WARMUP; i++) {
         churn();
     }

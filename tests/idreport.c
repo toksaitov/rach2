@@ -1,15 +1,16 @@
 /**
- * The program half of the credential probes: report the identity, working
- * directory, `argv[0]` and environment an exec handed this process, and exit 0
- * only if they match the expectation named on the command line.
+ * idreport: the program half of the credential probes. It reports the
+ * identity, working directory, `argv[0]` and environment an exec handed this
+ * process, and exits 0 only if they match the expectation named on the
+ * command line.
  *
- * It is the shell of the test image's `probe` account, so every path that
- * reaches it reaches it as a shell would: `su` execs the target's shell as
- * `execle(shell, arg0, "-c", command, 0, env)`, which hands this program `-c`
- * and then the string, and in login mode an `argv[0]` of a `-` followed by the
- * shell's base name besides. The expectation is therefore accepted either as a
- * bare argument or after a `-c`, and a login `su` is told apart from a
- * non-login one by nothing but what it says here.
+ * It is the shell of the test image's `probe` and `probe2` accounts, so every
+ * path that reaches it reaches it as a shell would: `su` execs the target's
+ * shell as `execle(shell, arg0, "-c", command, 0, env)`, which hands this
+ * program `-c` and then the string, and in login mode an `argv[0]` of a `-`
+ * followed by the shell's base name besides. The expectation is therefore
+ * accepted either as a bare argument or after a `-c`, and a login `su` is
+ * told apart from a non-login one only by what it reports here.
  *
  * The report is one line on standard error in the same `key=value` vocabulary
  * the expectation uses, so a run's output is a valid expectation string:
@@ -32,8 +33,9 @@
  *
  * Freestanding; direct system calls (probe.h). Staged 0755 at `/idreport` by
  * the test image's `exec-dir` sweep, a helper like `suidhelper` and not a
- * probe: it is run by `tests/musl/pwauthmusl.c` and prints no success token of
- * its own.
+ * probe: the su, login and passwd tests in tests/musl/ (pwauthmusl.c,
+ * loginmusl.c, passwdmusl.c) run it, and it prints no success token of its
+ * own.
  */
 
 #include "probe.h"
@@ -48,11 +50,13 @@ typedef unsigned int u32;
 #define EXIT_ENV_EXTRA 31
 #define EXIT_KEY       40
 
+/** Exit with the status `code`. */
 static void done(int code)
 {
     syscall1(SYS_EXIT, code);
 }
 
+/** Whether the strings `a` and `b` are equal. */
 static int streq(const char *a, const char *b)
 {
     u32 i = 0;
@@ -87,6 +91,7 @@ static int eq_n(const char *s, const char *text, u32 n)
 static char Line[2048];
 static u32 Filled;
 
+/** Append the string `s` to the report, as much of it as fits. */
 static void put(const char *s)
 {
     u32 i = 0;
@@ -97,6 +102,7 @@ static void put(const char *s)
     Line[Filled] = '\0';
 }
 
+/** Append `value` in decimal to the report, as much of it as fits. */
 static void put_u32(u32 value)
 {
     char digits[12];
@@ -112,6 +118,7 @@ static void put_u32(u32 value)
     Line[Filled] = '\0';
 }
 
+/** Write the report to standard error with one write. */
 static void flush(void)
 {
     syscall3(SYS_WRITE, 2, (long)Line, (int)Filled);
@@ -196,6 +203,9 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/** The program's entry, given the initial stack `sp`: report, then match the
+ * first argument that is not `-c` item by item, and exit with the status of
+ * the first mismatch, or 0. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
@@ -247,8 +257,7 @@ void probe_main(unsigned long *sp)
     put("\n");
     flush();
 
-    /* A `-c` is the shell calling convention su reaches this program through;
-     * a bare operand is the same string handed over directly. */
+    /* su gives a shell `-c` before the string; a bare operand is the same. */
     for (i = 1; i < argc; i++) {
         if (streq(argv[i], "-c")) {
             continue;

@@ -1,27 +1,28 @@
 /**
- * Verify the setuid and setgid bits on exec: the way privilege is regained.
+ * suidprobe: the setuid and setgid bits on exec, by which a process gains
+ * privilege.
  *
- * A root parent execs a uid-1000 child that runs the staged helper four ways.
- * A 04755 root-owned helper (`/suidhelper.suid`) must run with the real uid
- * still 1000 but the effective and saved uid 0, the gids untouched, and
- * AT_SECURE 1, and the saved-id dance must let it shed root and take it back.
- * A 04755 helper owned by uid 5 (`/suidhelper.u5`) must grant effective and
- * saved uid 5, proving the bit grants the file owner's identity whoever that
- * is. A 02755 helper owned by group 5 (`/suidhelper.sgid`) must move the
+ * A root parent forks a child of uid 1000 for each of five execs of the
+ * staged helper. A 04755 root-owned helper (`/suidhelper.suid`) runs with the
+ * real uid still 1000 but the effective and saved uid 0, the gids untouched,
+ * and AT_SECURE 1, and can give up root through the saved id and take it
+ * back. A 04755 helper owned by uid 5 (`/suidhelper.u5`) is given effective
+ * and saved uid 5, so the bit grants the file owner's identity, whoever that
+ * is. A 02755 helper owned by group 5 (`/suidhelper.sgid`) moves the
  * effective and saved gid to 5 while the uids stay 1000. An ordinary 0755
- * helper (`/suidhelper`) must leave every id at 1000 with AT_SECURE 0. A
- * 04644 helper (`/suidhelper.nox`, the setuid bit set but no execute bit) must
- * fail to exec at all: the execute check runs first, and the bit without it
+ * helper (`/suidhelper`) leaves every id at 1000 with AT_SECURE 0. A 04644
+ * helper (`/suidhelper.nox`, the setuid bit set but no execute bit) does not
+ * exec at all (EACCES): the execute check runs first, and the bit without it
  * grants nothing. The helper checks each and exits 0 or a step number.
  *
- * The helper is staged by the manifest; this probe only drives it. Prints
- * "SUIDPROBE OK" and exits 0 on success. Freestanding; direct system calls
- * (probe.h).
+ * The manifest stages the helper; this probe only drives it. Prints
+ * "SUIDPROBE OK" and exits 0 on success, or "SUIDPROBE FAIL: " and the step
+ * and exits 1. Freestanding; direct system calls (probe.h).
  *
- * Needs: the set-id fixtures the test image stages at its root,
- * `/suidhelper` and the `.suid`, `.u5` and `.sgid` copies beside it. They
- * are not in the shipped system image, so a run on an installed machine
- * needs them put there first.
+ * Needs the set-id fixtures the test image stages at its root, `/suidhelper`
+ * and the `.suid`, `.u5`, `.sgid` and `.nox` copies beside it. They are not
+ * in the shipped system image, so a run on an installed machine needs them
+ * put there first.
  */
 
 #include "probe.h"
@@ -34,10 +35,11 @@ typedef unsigned int u32;
 /* Linux wait-status decode: a normal exit has the low 7 bits clear and the
  * code in bits 8-15; a signal death has the signal in the low 7 bits. A
  * probe that read WEXITSTATUS without WIFEXITED would decode a SIGSEGV (11) as
- * exit 0 and pass on a crash, exactly the failure it exists to catch. */
+ * exit 0 and pass on a crash. */
 #define WIFEXITED(s)   (((s) & 0x7F) == 0)
 #define WEXITSTATUS(s) (((s) >> 8) & 0xFF)
 
+/** The length of the string `s`. */
 static u32 slen(const char *s)
 {
     u32 n = 0;
@@ -48,11 +50,13 @@ static u32 slen(const char *s)
     return n;
 }
 
+/** Write the string `s` to standard output. */
 static void puts_(const char *s)
 {
     syscall3(SYS_WRITE, STDOUT, (long)s, (int)slen(s));
 }
 
+/** Print "SUIDPROBE FAIL: `step`" and exit 1. */
 static void fail(const char *step)
 {
     puts_("SUIDPROBE FAIL: ");
@@ -61,8 +65,9 @@ static void fail(const char *step)
     syscall1(SYS_EXIT, 1);
 }
 
-/* Exec `path arg` at uid 1000 in a fresh child; return the helper's exit code,
- * or a negative errno if the exec itself was refused. */
+/** Exec `path arg` at uid and gid 1000 in a new child: the helper's exit
+ * status, 128 + errno when the exec itself was refused, or 200 when the ids
+ * could not be dropped. A child killed by a signal fails the probe. */
 static int run_helper(const char *path, const char *arg)
 {
     int pid, status;
@@ -96,7 +101,8 @@ static int run_helper(const char *path, const char *arg)
     return WEXITSTATUS(status);
 }
 
-/* Read the 32-bit mode field of `path` through stat64. */
+/** The 32-bit mode field of the stat of `path`; a stat that fails fails the
+ * probe. */
 static u32 stat_mode(const char *path)
 {
     static char st[144];
@@ -107,18 +113,17 @@ static u32 stat_mode(const char *path)
     return *(u32 *)(st + KSTAT_MODE);
 }
 
+/** The probe's entry: the staged mode, then the five execs in order. */
 PROBE_START void _start(void)
 {
     int rc;
 
-    /* stat reports the full 07777 width: the staged setuid and setgid bits are
-     * visible, not masked off with the nine permission bits. */
+    /* stat reports all of 07777, the setuid bit with the permission bits. */
     if ((stat_mode("/suidhelper.suid") & 07777u) != 04755u) {
         fail("stat did not report the setuid bit");
     }
 
-    /* The setuid-root exec: 1000 in, root out, gids untouched, and the saved
-     * id lets it swing back. The helper returns 0 only if every step has. */
+    /* The setuid-root exec: 1000 in, root out, the gids untouched. */
     rc = run_helper("/suidhelper.suid", "suid");
     if (rc != 0) {
         fail("setuid-root exec did not grant root (see helper step in the code)");
@@ -142,8 +147,7 @@ PROBE_START void _start(void)
         fail("plain exec changed a credential");
     }
 
-    /* The setuid bit without an execute bit grants nothing: the execute check
-     * denies the exec, so the child dies reporting EACCES (128 + 13). */
+    /* The setuid bit without an execute bit: the exec is EACCES. */
     rc = run_helper("/suidhelper.nox", "suid");
     if (rc != 128 + EACCES) {
         fail("setuid without execute bit was not denied");

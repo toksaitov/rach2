@@ -1,6 +1,6 @@
 /*
- * placeprobe: entry 26's placement experiment, the emulator's cost of a
- * read buffer that shares a page with executed code.
+ * placeprobe: the emulator's cost of a read buffer that shares a page with
+ * executed code.
  *
  * Two page-aligned buffers of 64 KiB in `.bss`, `near` and `far`. Before
  * the runs the probe writes one `ret` instruction at `near[0]` and calls
@@ -31,6 +31,7 @@
 #define BUFFER          65536u
 #define READ_AT         16u
 
+/** Write the string `s` to standard output. */
 static void put(const char *s)
 {
     int n = 0;
@@ -41,6 +42,7 @@ static void put(const char *s)
     syscall3(SYS_WRITE, 1, (long)s, n);
 }
 
+/** Write `v` in decimal to standard output. */
 static void putnum(unsigned v)
 {
     char buf[12];
@@ -54,6 +56,7 @@ static void putnum(unsigned v)
     put(&buf[i]);
 }
 
+/** Write `v` as "0x" and its hexadecimal digits to standard output. */
 static void puthex(unsigned long v)
 {
     char buf[20];
@@ -68,6 +71,7 @@ static void puthex(unsigned long v)
     put(&buf[i]);
 }
 
+/** Print "PLACEPROBE FAIL: `why`" and exit 1. */
 static void fail(const char *why)
 {
     put("PLACEPROBE FAIL: ");
@@ -88,12 +92,15 @@ struct stamp {
     long nsec;
 };
 
+/** The milliseconds from `a` to `b`. */
 static unsigned ms_between(const struct stamp *a, const struct stamp *b)
 {
     return (unsigned)((b->sec - a->sec) * 1000 + (b->nsec - a->nsec) / 1000000);
 }
 
-/** One run: the child writes, the parent reads into `buf`; milliseconds. */
+/** One run: the child writes, the parent reads into `buf` and, when `near`,
+ * calls the `ret` in the near buffer after each read; the milliseconds the
+ * reads took. A short or wrong read fails the probe. */
 static unsigned run(unsigned char *buf, int near)
 {
     int p[2];
@@ -160,6 +167,7 @@ static unsigned run(unsigned char *buf, int near)
     return ms_between(&before, &after);
 }
 
+/** Print a run's line, "PLACEPROBE `which` `ms` ms N KiB/s". */
 static void report(const char *which, unsigned ms)
 {
     put("PLACEPROBE ");
@@ -175,6 +183,9 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/** The probe's entry: print the mappings and check that the buffers meet no
+ * code, make the near buffer's first page code with one `ret` and call it,
+ * then the six runs. `sp` is not read. */
 void probe_main(unsigned long *sp)
 {
     unsigned long code_lo = (unsigned long)_start & ~(unsigned long)(PAGE - 1);
@@ -202,9 +213,7 @@ void probe_main(unsigned long *sp)
         ((unsigned long)far_buf < code_hi && (unsigned long)far_buf + BUFFER > code_lo)) {
         fail("a buffer shares a page with the program's own code");
     }
-    /* The near buffer's first page becomes code: one `ret`, called. x86-64
-       maps `.bss` without execute permission, so the page is given it
-       first; i386 pages have no such bit. */
+    /* x86-64 maps .bss without execute; i386 pages have no such bit. */
 #if defined __x86_64__
     if (syscall3(SYS_MPROTECT, (long)near_buf, PAGE, 7) != 0) {
         fail("the near buffer's first page could not be made executable");

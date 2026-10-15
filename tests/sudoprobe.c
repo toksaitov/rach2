@@ -1,21 +1,21 @@
 /**
- * Verify the reference sudo's contract: become root if the real uid is
- * permitted, be refused otherwise, and always with a clean environment.
+ * sudoprobe: the reference sudo's contract, root for a permitted real uid,
+ * a refusal otherwise, and a clean environment.
  *
- * A root parent runs the staged setuid-root `/sudo` two ways. As uid 1000
- * (listed in `/etc/sudoers`), `sudo /suidhelper root` must reach the helper as
+ * A root parent runs the staged setuid-root `/sudo` two ways. As uid 1000,
+ * which `/etc/sudoers` lists, `sudo /suidhelper root` reaches the helper as
  * full root, every uid and gid 0 and the environment cleared to sudo's fixed
- * pair, which the helper checks and reports by exiting 0. As uid 1001 (not
- * listed), sudo must refuse before executing anything, so the helper never
- * runs and the child sees sudo's own refusal exit of 1.
+ * pair, which the helper checks and reports by exiting 0. As uid 1001, which
+ * it does not list, sudo refuses before it executes anything, so the helper
+ * never runs and the child sees sudo's own refusal, exit 1.
  *
- * This gates the coursework: a student's own sudo passes the same probe the
- * reference does. Prints "SUDOPROBE OK" and exits 0 on success. Freestanding;
- * direct system calls (probe.h).
+ * A student's own sudo is held to the same probe as the reference. Prints
+ * "SUDOPROBE OK" and exits 0 on success, or "SUDOPROBE FAIL: " and the step
+ * and exits 1. Freestanding; direct system calls (probe.h).
  *
- * Needs: the test image's sudo arrangement, the staged `sudo` with its
- * policy file and the accounts it names. A run on an installed machine
- * needs them put there first.
+ * Needs the test image's sudo arrangement: the staged `sudo` with its policy
+ * file and the accounts it names. A run on an installed machine needs them
+ * put there first.
  */
 
 #include "probe.h"
@@ -29,6 +29,7 @@ typedef unsigned int u32;
 #define WIFEXITED(s)   (((s) & 0x7F) == 0)
 #define WEXITSTATUS(s) (((s) >> 8) & 0xFF)
 
+/** The length of the string `s`. */
 static u32 slen(const char *s)
 {
     u32 n = 0;
@@ -39,11 +40,13 @@ static u32 slen(const char *s)
     return n;
 }
 
+/** Write the string `s` to standard output. */
 static void puts_(const char *s)
 {
     syscall3(SYS_WRITE, STDOUT, (long)s, (int)slen(s));
 }
 
+/** Print "SUDOPROBE FAIL: `step`" and exit 1. */
 static void fail(const char *step)
 {
     puts_("SUDOPROBE FAIL: ");
@@ -52,8 +55,10 @@ static void fail(const char *step)
     syscall1(SYS_EXIT, 1);
 }
 
-/* Run `/sudo /suidhelper root` at real uid `uid` in a fresh child; return
- * sudo's (or the helper's) exit code. */
+/** Run `/sudo /suidhelper root` with every uid and gid `uid` in a new child:
+ * sudo's or the helper's exit status, 200 when the ids could not be set, or
+ * 201 when sudo could not be executed. A child killed by a signal fails the
+ * probe. */
 static int run_sudo(int uid)
 {
     int pid, status;
@@ -85,6 +90,7 @@ static int run_sudo(int uid)
     return WEXITSTATUS(status);
 }
 
+/** The probe's entry: the permitted uid, then the unlisted one. */
 PROBE_START void _start(void)
 {
     /* A permitted uid becomes root and the helper confirms it (exit 0). */
@@ -92,8 +98,7 @@ PROBE_START void _start(void)
         fail("permitted uid did not reach root through sudo");
     }
 
-    /* A uid absent from sudoers is refused with sudo's own exit of 1, before
-     * the helper is execed. */
+    /* A uid absent from sudoers: sudo's own exit 1, before any exec. */
     if (run_sudo(1001) != 1) {
         fail("unlisted uid was not refused");
     }

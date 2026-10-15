@@ -1,40 +1,47 @@
 /**
- * Exercises the fork+exec+waitpid chain that a shell uses to run a program.
+ * shelltest: the fork, exec and waitpid a shell uses to run a program.
  *
- * The child exec's `hello`; the parent waits and checks its exit status.
- * Freestanding; direct system calls (probe.h).
+ * The child execs `/hello`; the parent waits and requires an exit status of
+ * 0. Prints "All exec syscalls passed!" and exits 0 when it is, and exits 1
+ * otherwise. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
 
 #define STDOUT_FILENO 1
 
+/** write(2). */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
+/** exit(2); does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** fork(2). */
 static int sys_fork(void)
 {
     return syscall0(SYS_FORK);
 }
 
+/** waitpid(2). */
 static int sys_waitpid(int pid, int *status, int options)
 {
     return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
+/** execve(2); returns only on failure, with a negated errno. */
 static int sys_execve(const char *path, char *const argv[], char *const envp[])
 {
     return syscall3(SYS_EXECVE, (long)path, (long)argv, (long)envp);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t len = 0;
@@ -44,17 +51,20 @@ static size_t strlen(const char *s)
     return len;
 }
 
+/** Write the string `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
+/** Write the string `s` to standard output. */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
+/** Write `n` in decimal to standard output. */
 static void print_num(int n)
 {
     char buf[12];
@@ -83,14 +93,12 @@ static void print_num(int n)
 }
 
 /**
- * ELF entry point: runs the fork+exec+waitpid shell pattern.
- *
- * The parent forks; the child exec's `hello`; the parent waits and verifies the
- * child exited with status 0.
+ * The probe's entry: the parent forks, the child execs `/hello`, and the
+ * parent waits and requires the child's status to be 0.
  *
  * The program it execs is staged at the image's root and is named by a path
- * rather than by a bare word, so a run whose working directory is not the
- * root fails on what the kernel did and not on where it was started.
+ * rather than by a bare word, so that a run whose working directory is not
+ * the root fails on what the kernel did and not on where it was started.
  */
 PROBE_START void _start(void)
 {

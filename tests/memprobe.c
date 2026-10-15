@@ -1,34 +1,34 @@
 /**
- * Memory beyond the old 32 MiB window, proved from user space.
+ * memprobe: memory above the kernel's 32 MiB identity window, from user
+ * space.
  *
- * `memprobe MIB`: the probe maps MIB megabytes anonymously, writes each
- * page a pattern of its own index, and reads every page back, so the
- * frames above the window the kernel used to stop at hold what was written
- * and no two pages share a frame. Then it forks: the child rewrites every
- * fourth page and checks the rest, and the parent, once the child has
- * exited, finds every page as it wrote it, which is the copy-on-write copy
- * through the kernel's temporary mappings. Then a child executes
- * `memprobe fresh`, which maps 16 MiB and requires every byte zero, since
- * a frame that held the pattern a moment ago must come back clean. Then
- * the mapping is unmapped, and the free memory `/proc/meminfo` reports must
- * be within 256 KiB of what it was before, the mapping's page tables aside,
- * which stay with the process until it exits, so the frames came back. The
- * mapping and the pattern come first and the fork after, so the fork's page
- * tables and directory, which the kernel takes from its heap, are taken
- * when the frames below the window are already in use. On x86-64 MIB may
- * pass 4096, and a mapping of more memory than lies below 4 GiB has pages in
- * the frames above it, which `tests/run bigmem` asks for.
+ * `memprobe MIB`: the probe maps MIB megabytes anonymously, writes each page
+ * a pattern of its own index, and reads every page back, so that the frames
+ * above the identity window (HARD_MEMORY_LIMIT), which the kernel reaches
+ * only by mapping them, hold what was written and no two pages share a
+ * frame. Then it forks: the child rewrites every fourth page and checks the
+ * rest, and the parent, once the child has exited, finds every page as it
+ * wrote it, which is the copy-on-write copy through the kernel's temporary
+ * mappings. Then a child executes `memprobe fresh`, which maps 16 MiB and
+ * requires every byte zero, since a frame that held the pattern a moment ago
+ * must come back clean. Then the mapping is unmapped, and the free memory
+ * `/proc/meminfo` reports must be within 256 KiB of what it was before, the
+ * mapping's page tables aside, which stay with the process until it exits,
+ * so the frames came back. The mapping and the pattern come first and the
+ * fork after, so that the fork's page tables and directory, which the kernel
+ * takes from its heap, are taken while the frames below the window are in
+ * use. On x86-64 MIB may pass 4096, and a mapping of more memory than lies
+ * below 4 GiB has pages in the frames above it, as `tests/run bigmem` asks.
  *
  * `memprobe fail`, under `rach2.framefail`: with a patterned mapping of its
- * own, the probe arms the count-th frame allocation to fail for each count
- * from one to thirty-two, and forks; then again, and forks a child that
- * execs `memprobe fresh`. A fork or an exec that meets the failure must
- * answer ENOMEM, or the child must exit as it would without it, or, for an
- * exec that met it after the old image was gone, end by the kernel's hand,
- * and after
- * every attempt the parent's pages read as it wrote them, take a write, and
- * the free memory is what it was, so nothing leaked and nothing that
- * survived was changed.
+ * own, for each count from one to thirty-two the probe arms that frame
+ * allocation to fail and forks, and then forks a child that arms it itself
+ * and execs `memprobe fresh`. A fork or an exec that meets the failure
+ * answers ENOMEM, or the child exits as it would without it, or, for an exec
+ * that met it after the old image was gone, the kernel ends the child. After
+ * every attempt the parent's pages read as it wrote them and take a write,
+ * and the free memory is within 64 KiB of what it was, so nothing leaked and
+ * nothing that survived was changed.
  *
  * `memprobe total` prints the MemTotal `/proc/meminfo` reports, in KiB, as
  * `MEMPROBE MemTotal N kB`, for a suite to judge against the machine's size.
@@ -37,12 +37,13 @@
  * page backed through a `read` of `/dev/zero` into it, until the kernel
  * refuses a page, which it does with EFAULT from the read once the free
  * memory is inside the reserve kept for root; then a fork must be refused
- * with ENOMEM, the probe says so, and it sleeps holding what it took until
- * it is killed, ignoring the hangup its shell's exit sends. What the row
- * then shows is that root can still log in beside it.
+ * with ENOMEM, the probe prints "MEMPROBE HOG: fork refused with ENOMEM",
+ * and it sleeps holding what it took until it is killed, ignoring the hangup
+ * its shell's exit sends. The mount suite then logs in as root beside it and
+ * kills it.
  *
- * Prints "MEMPROBE OK" or "MEMPROBE FAIL: reason". Freestanding; direct system
- * calls (probe.h).
+ * Prints "MEMPROBE OK" or "MEMPROBE FAIL: reason". Freestanding; direct
+ * system calls (probe.h).
  */
 
 #include "probe.h"
@@ -68,19 +69,21 @@
 #define TABLE_KIB(pages) (((pages) / 1024 + 1) * 4)
 #endif
 
-/* An anonymous mapping of `len` bytes; its address, or a negated errno. */
+/** An anonymous mapping of `len` bytes; its address, or a negated errno. */
 static unsigned long mmap_anon(unsigned long len)
 {
     return (unsigned long)probe_mmap(0, (long)len, PROT_READ | PROT_WRITE,
                                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 }
 
+/** exit(2); does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -90,11 +93,13 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write the string `s` to standard output. */
 static void print(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
 }
 
+/** Write `v` in decimal to standard output. */
 static void print_num(unsigned long v)
 {
     char tmp[21];
@@ -109,12 +114,14 @@ static void print_num(unsigned long v)
     }
 }
 
+/** Write the string `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
+/** Print "MEMPROBE FAIL: `why`" and exit 1. */
 static void fail(const char *why)
 {
     syscall3(SYS_WRITE, 1, (long)"MEMPROBE FAIL: ", 15);
@@ -122,12 +129,13 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
-/* The value page `i` of a mapping at `base` holds in its word `w`. */
+/** The value page `i` of a mapping holds in its word `w`. */
 static unsigned pattern(unsigned i, unsigned w)
 {
     return (i * 0x9E3779B1u) ^ (w * 0x01000193u) ^ 0xA5A5A5A5u;
 }
 
+/** Write the pattern of page `i` to every 64th word of the page at `p`. */
 static void write_page(unsigned *p, unsigned i)
 {
     unsigned w;
@@ -137,6 +145,8 @@ static void write_page(unsigned *p, unsigned i)
     }
 }
 
+/** Whether the page at `p` holds the pattern of page `i` in every 64th
+ * word. */
 static int check_page(const unsigned *p, unsigned i)
 {
     unsigned w;
@@ -149,7 +159,7 @@ static int check_page(const unsigned *p, unsigned i)
     return 1;
 }
 
-/* The field `key` of /proc/meminfo, in KiB, or 0. */
+/** The field `key`, with its colon, of /proc/meminfo, in KiB, or 0. */
 static unsigned long meminfo_kib(const char *key)
 {
     static char buf[1024];
@@ -187,13 +197,13 @@ static unsigned long meminfo_kib(const char *key)
     return 0;
 }
 
-/* MemFree from /proc/meminfo, in KiB, or 0. */
+/** MemFree from /proc/meminfo, in KiB, or 0. */
 static unsigned long mem_free_kib(void)
 {
     return meminfo_kib("MemFree:");
 }
 
-/* `memprobe total`: the MemTotal /proc/meminfo reports, printed. */
+/** `memprobe total`: print the MemTotal /proc/meminfo reports and exit. */
 static void run_total(void)
 {
     unsigned long total = meminfo_kib("MemTotal:");
@@ -207,6 +217,7 @@ static void run_total(void)
     sys_exit(0);
 }
 
+/** The decimal number at the start of `s`, 0 when there is none. */
 static unsigned parse_mib(const char *s)
 {
     unsigned v = 0;
@@ -218,6 +229,7 @@ static unsigned parse_mib(const char *s)
     return v;
 }
 
+/** Wait for the child `pid`: its wait status, or -1 when waitpid fails. */
 static int wait_status(int pid)
 {
     int status = -1;
@@ -228,7 +240,8 @@ static int wait_status(int pid)
     return status;
 }
 
-/* `memprobe fresh`: 16 MiB mapped, every word zero. */
+/** `memprobe fresh`: 16 MiB mapped, every word zero. Exits 0, 2 when the
+ * mapping fails, or 3 at a word that is not zero. */
 static void run_fresh(void)
 {
     unsigned len = 16u << 20;
@@ -279,7 +292,8 @@ static void arm(unsigned n)
     }
 }
 
-/* The parent's own pages after an attempt: as written, then rewritten. */
+/** Check that the parent's `pages` pages at `base` hold the pattern of the
+ * round `round` after an attempt, then write the next round's. */
 static void survivors(unsigned long base, unsigned pages, unsigned round)
 {
     unsigned i;
@@ -292,6 +306,8 @@ static void survivors(unsigned long base, unsigned pages, unsigned round)
     }
 }
 
+/** `memprobe fail`, the rows of the opening comment; exits with MEMPROBE OK,
+ * or fails the probe. */
 static void run_fail(void)
 {
     unsigned pages = 256;
@@ -335,9 +351,7 @@ static void run_fail(void)
         if (pid == 0) {
             char *args[3];
 
-            /* Armed by the child itself, just before its exec: armed by the
-               parent, the count would be the parent's to disarm, and whether
-               the exec saw it would depend on which of the two ran first. */
+            /* Armed by the child, so the parent's calls cannot spend it. */
             arm(n);
             args[0] = (char *)"memprobe";
             args[1] = (char *)"fresh";
@@ -350,12 +364,9 @@ static void run_fail(void)
         }
         if (pid > 0) {
             status = wait_status(pid);
-            /* A count the exec did not reach would fire on the next
-               allocation here; the child armed it, the parent disarms it. */
+            /* A count the exec did not spend is still armed. */
             arm(0);
-            /* Ran whole, answered ENOMEM, or ended by the kernel: an exec
-               that fails after the old image is gone has nothing to return
-               to and the process ends, which is its contract. */
+            /* Ran, ENOMEM (7), or ended past the old image by a signal. */
             if (status != 0 && status != (7 << 8) && (status & 0x7f) == 0) {
                 fail("an exec that met the failure neither ran nor answered ENOMEM nor ended");
             }
@@ -382,6 +393,7 @@ static void run_fail(void)
 #define SIGHUP 1
 #define EFAULT 14
 
+/** `memprobe hog`, the rows of the opening comment; does not return. */
 static void run_hog(void)
 {
     int zero = syscall3(SYS_OPEN, (long)"/dev/zero", 0, 0);
@@ -450,6 +462,9 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/** The probe's entry, given the initial stack `sp`: `fresh`, `hog`, `total`
+ * and `fail` by their first letters, and otherwise `memprobe MIB`, 64 MiB by
+ * default. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];

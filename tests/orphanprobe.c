@@ -1,57 +1,59 @@
 /**
- * Proves the kernel reparents orphans onto init instead of leaking them.
+ * orphanprobe: the kernel gives orphans to init rather than leaking them.
  *
- * Run as init (the test image boots into the kernel debug shell, which `exec`s
- * this as the init process). Each round forks a child that forks a grandchild
- * and then exits immediately, orphaning the grandchild while it is still the
- * kernel's to track. The kernel must reparent that grandchild onto init (this
- * probe), so the probe reaps BOTH the child and the grandchild: two reaps per
- * round. Without reparenting the grandchild's parent names the dead child, the
- * probe's `waitpid(-1)` never matches it, the round reaps only one, and the
- * grandchild leaks its frames, page directory, and zombie slot.
+ * The probe runs as init: the test image boots into the kernel debug shell,
+ * which `exec`s it as the init process. Each round forks a child that forks a
+ * grandchild and exits at once, which leaves the grandchild an orphan while
+ * the kernel still tracks it. The kernel must give that grandchild to init,
+ * this probe, so the probe reaps both the child and the grandchild: two reaps
+ * a round. A grandchild left with the dead child's pid as its parent would
+ * never match the probe's `waitpid(-1)`, the round would reap only one, and
+ * the grandchild would leak its frames, page directory and record.
  *
  * The reaps block, so each round's processes run and exit before the next
- * round, keeping the live set tiny; ROUNDS far exceeds MAX_PROCS, so a leak
- * would also wedge the table. Prints "ORPHANPROBE OK" only when every round
- * reaped both.
- *
+ * round begins. Prints "ORPHANPROBE OK (...)" and exits 0 when every round
+ * reaped both; a failure prints "ORPHANPROBE FAIL (...)" and exits 1.
  * Freestanding; direct system calls (probe.h).
  *
- * Needs: to be the kernel's designated init process. The debug shell's exec
- * supplies this role on either root type; its PID need not be 1. An ordinary
- * shell or SSH child cannot reap init's orphans. Use a rescue boot for this
- * probe, not a login session.
+ * Needs to be the kernel's designated init process. The debug shell's exec
+ * gives it that role on either root type, and its pid need not be 1. An
+ * ordinary shell or SSH child cannot reap init's orphans, so this probe runs
+ * on a rescue boot, not in a login session.
  */
 
 #include "probe.h"
 
 #define STDOUT_FILENO 1
 
-/* Far past MAX_PROCS (16): a per-round orphan leak fills the table well inside
- * this count, on top of the per-round two-reaps check. */
+/* The rounds, each of which must reap two processes. */
 #define ROUNDS 40
 
+/** write(2). */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
+/** exit(2); does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** fork(2). */
 static int sys_fork(void)
 {
     return syscall0(SYS_FORK);
 }
 
+/** waitpid(2). */
 static int sys_waitpid(int pid, int *status, int options)
 {
     return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t len = 0;
@@ -61,17 +63,20 @@ static size_t strlen(const char *s)
     return len;
 }
 
+/** Write the string `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
+/** Write the string `s` to standard output. */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
+/** Write `n`, 0 or more, in decimal to standard output. */
 static void print_num(int n)
 {
     char buf[12];
@@ -90,6 +95,8 @@ static void print_num(int n)
     }
 }
 
+/** The probe's entry: ROUNDS rounds of a child and an orphaned grandchild,
+ * each reaped by this process. */
 PROBE_START void _start(void)
 {
     int i;
@@ -117,10 +124,7 @@ PROBE_START void _start(void)
             sys_exit(0); /* the child: exits, orphaning the grandchild */
         }
 
-        /* Block-reap both this round's processes: the child directly, and the
-         * grandchild only because the kernel reparented it onto us. The
-         * blocking waits also yield the CPU so the round runs to completion
-         * before the next fork, keeping the live set to a handful. */
+        /* The child, and the grandchild once the kernel gives it to init. */
         got = 0;
         while (got < 2 && sys_waitpid(-1, &status, 0) > 0) {
             got++;

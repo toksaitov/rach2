@@ -1,17 +1,20 @@
 /**
- * Stress signal teardown beside a writer on the same file system.
+ * zombieprobe: the teardown of processes killed by a signal, beside a writer
+ * on the same file system.
  *
- * Forty children open and unlink files, then die by SIGKILL while another
- * child writes. This does not force a contended close and is not a mutation
- * proof. exit_hosttest forces the cleanup waits and checks the terminal state.
+ * ROUNDS children in turn open and unlink files and die by SIGKILL while
+ * another child writes, and each is reaped. This does not force a contended
+ * close and is not a mutation proof; exit_hosttest forces the waits of the
+ * cleanup and checks the state it ends in.
  *
- * Every writer rewrites its file in place, so the file system never fills:
- * a fast machine fills a small module in the victim's first milliseconds,
- * and its creates then fail for space, which is not what the probe is
- * about. A child whose open fails exits with the error's number, so the
- * kernel's exit record says why. Needs a writable working directory. Prints
- * "ZOMBIEPROBE OK" after all children are reaped. Freestanding; direct
- * system calls (probe.h).
+ * Every child rewrites its file in place, so the file system never fills: a
+ * fast machine would fill a small image in the victim's first milliseconds,
+ * and its creates would then fail for want of space, which is not what the
+ * probe is about. A child whose open fails exits with the error's number, so
+ * that the kernel's exit record says why. Needs a writable working
+ * directory. Prints "ZOMBIEPROBE OK" after every child is reaped, or
+ * "ZOMBIEPROBE FAIL: " and the step and exits 1. Freestanding; direct system
+ * calls (probe.h).
  */
 
 #include "probe.h"
@@ -26,6 +29,7 @@
 #define ROUNDS  40
 #define HOLDERS 6
 
+/** The length of the string `s`. */
 static size_t slen(const char *s)
 {
     size_t n = 0;
@@ -35,6 +39,7 @@ static size_t slen(const char *s)
     return n;
 }
 
+/** Write the string `s` to standard output. */
 static void print(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)slen(s));
@@ -42,6 +47,7 @@ static void print(const char *s)
 
 static int wpid; /* the writer, stopped on a failure so the shell returns */
 
+/** Print "ZOMBIEPROBE FAIL: `what`", kill and reap the writer, and exit 1. */
 static void fail(const char *what)
 {
     int status = 0;
@@ -58,9 +64,10 @@ static void fail(const char *what)
 
 static const char *names[HOLDERS] = {"zp0", "zp1", "zp2", "zp3", "zp4", "zp5"};
 
-/* The child that is killed. It fills each fixture and unlinks it while it is
-   still open, so its teardown has that many inodes to free, which is the work
-   that takes the mount's lock and can wait for a buffer the writer holds. */
+/** The child that is killed. It fills each of its files and unlinks it while
+ * it is open, so that its teardown has that many inodes to free, the work
+ * that takes the mount's lock and can wait for a buffer the writer holds;
+ * then it rewrites the first file until it dies. */
 static void victim(void)
 {
     int fds[HOLDERS];
@@ -88,7 +95,8 @@ static void victim(void)
     }
 }
 
-/* The child that holds the file system busy, so the victim's closes wait. */
+/** The child that keeps the file system busy, so that the victim's closes
+ * wait; it rewrites its file until it is killed. */
 static void writer(void)
 {
     int fd = syscall3(SYS_OPEN, (long)"zpw", O_RDWR | O_CREAT | O_TRUNC, 0644);
@@ -109,6 +117,7 @@ static void writer(void)
     }
 }
 
+/** The probe's entry: the writer, then ROUNDS victims killed and reaped. */
 PROBE_START void _start(void)
 {
     int vpid, status, round;

@@ -1,24 +1,33 @@
 /**
- * Reap children that end by exit, by a signal, and by exit after an exec
- * that failed once the program's header had been accepted.
+ * exitprobe: reap children that end by exit, by a signal, and by exit after
+ * an exec that failed once the program's header had been accepted.
  *
- * Each victim observes its parent blocked in waitpid before dying. The parent
- * checks the encoded status, pipe EOF and removal of the process record. A
- * separate supervisor bounds completion with poll, so a lost zombie produces
- * a named failure. No resource, scheduler or reaper is substituted.
+ * Each victim sees its parent asleep in waitpid before it dies. The parent
+ * checks the encoded status, the end of input on a pipe the victim held, and
+ * that the process record is gone. A separate supervisor bounds the whole
+ * with poll, so that a lost zombie gives a named failure. The rows run on the
+ * kernel's own process records, scheduler and reaping, with nothing put in
+ * their place.
+ *
+ * `exitprobe [normal|signal|exec [MS]]` runs one row, or all three, with a
+ * bound of MS milliseconds, 5000 by default. Prints "exitprobe: waiting:
+ * ROW" when the victim sees its parent waiting, then "EXITPROBE OK ROW: ..."
+ * or "EXITPROBE FAIL ROW: ...", and exits 0 when every row passed.
+ * Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
 
+/* The name of the row running, for the result lines. */
 static const char *row;
 
-/** Make a direct i386 system call. */
+/** Make the system call `n` with three arguments. */
 static int call(int n, long a, long b, long c)
 {
     return syscall3(n, a, b, c);
 }
 
-/** Write one string to the serial console. */
+/** Write the string `s` to standard output, the serial console. */
 static void put(const char *s)
 {
     int n = 0;
@@ -28,7 +37,7 @@ static void put(const char *s)
     call(SYS_WRITE, 1, (long)s, n);
 }
 
-/** Print the row and its result as one complete line. */
+/** Print `kind`, the row and `detail` as one line. */
 static void result(const char *kind, const char *detail)
 {
     put(kind);
@@ -45,7 +54,7 @@ static void die(int status)
     }
 }
 
-/** Form the procfs path of one process. */
+/** Write "/proc/`pid`/stat" into `path`. */
 static void proc_path(char *path, int pid)
 {
     const char *prefix = "/proc/";
@@ -69,8 +78,10 @@ static void proc_path(char *path, int pid)
 }
 
 /**
- * Wait for the parent to enter waitpid. It has no other blocking call after
- * fork. The supervisor's poll bounds this handshake and the subsequent reap.
+ * Wait, a millisecond at a time, until /proc shows the process `parent`
+ * asleep, which after its fork can only be in waitpid, and print
+ * "exitprobe: waiting: ROW". The supervisor's poll bounds this wait and the
+ * reap after it.
  */
 static void wait_parent(int parent)
 {
@@ -93,10 +104,14 @@ static void wait_parent(int parent)
 }
 
 /**
- * Keep a pipe writer, an unlinked file and a working directory until death.
- * The truncated ELF passes the header check but has no program headers, so
- * execve fails while it loads the image, which it builds before it gives up
- * the old one, and returns ENOEXEC to the victim, which then exits.
+ * The victim of row `mode`: hold the write end of the reaper's pipe, an
+ * unlinked file and a working directory, wait for the reaper `parent` to
+ * wait, and end: by exit 37, by SIGTERM, or by exit 38 after an exec of the
+ * truncated ELF. That file passes the header check but lacks the program
+ * header it names, so execve fails while it loads the image, which it builds
+ * before it gives up the old one, and returns ENOEXEC. Exits 90 when the
+ * setup fails and 91 when the row's end did not happen. `report` and
+ * `reader` are the descriptors the victim closes.
  */
 static void victim(int mode, int parent, int report, int reader)
 {
@@ -121,7 +136,12 @@ static void victim(int mode, int parent, int report, int reader)
     die(91);
 }
 
-/** Reap the victim and check released descriptors and the removed record. */
+/**
+ * The reaper of row `mode`: fork the victim, wait for it, and check its wait
+ * status, the end of input on the pipe it held, ECHILD for a second wait and
+ * no /proc record. Writes 1 or 0 to `report` and exits 0, or 93 on a
+ * failure, or 92 when the pipe cannot be made.
+ */
 static void reaper(int mode, int report)
 {
     int fds[2], parent, pid, status = -1, ok, fd;
@@ -150,7 +170,10 @@ static void reaper(int mode, int report)
     die(ok ? 0 : 93);
 }
 
-/** Bound the real parent's blocking wait without changing its signal state. */
+/** Run row `mode` in a reaper child and bound it, from outside, with a poll
+ * of `timeout` milliseconds on the reaper's report, so that the reaper's own
+ * blocking wait and signal state are untouched. Prints the row's result line
+ * and returns 1 when it passed. */
 static int run_row(int mode, int timeout)
 {
     struct {
@@ -185,9 +208,10 @@ static int run_row(int mode, int timeout)
 }
 
 /**
- * Write a complete ELF header of the architecture's class with no program
- * header bytes after it: ELF32 i386, entry 0x08048000, or ELF64 x86-64,
- * entry 0x400000, each with one program header named at the header's end.
+ * Make /exit-cwd and write /exit-bad: a complete ELF header of the
+ * architecture's class with no program header bytes after it, ELF32 i386
+ * with entry 0x08048000 or ELF64 x86-64 with entry 0x400000, each naming one
+ * program header at the header's end. Returns 1 when the file was written.
  */
 static int fixture(void)
 {
@@ -209,7 +233,9 @@ static int fixture(void)
     return ok;
 }
 
-/** Run all rows or one selected row, with a bound in milliseconds. */
+/** The probe's entry, given the initial stack `sp`: run all rows or the one
+ * the first argument names, with the bound in milliseconds the second gives;
+ * a bound that is not 1 to 320000 exits 94. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0], first = 0, last = 2, timeout = 5000, i;
