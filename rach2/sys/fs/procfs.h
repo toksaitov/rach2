@@ -57,7 +57,7 @@ uint32_t procfs_task_links(int pid);
  * read.
  *
  * A file is a snapshot: its text is made at the open, and every read of the
- * open-file description is served from it until the last close. The files
+ * open file description is served from it until the last close. The files
  * a write reaches have descriptors of their own, whose reads and writes
  * reach the value as it is then: /proc/<pid>/oom_score_adj and
  * /proc/<pid>/mem, and, opened for writing, a writable /proc/sys or /sys

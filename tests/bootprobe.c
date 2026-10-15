@@ -17,7 +17,7 @@
  * implementation keeping fewer misses it however well it does at 5 GiB, and the
  * boot also walks SEEK_CUR across the 4 GiB line both ways, refuses a seek
  * before the start, and duplicates a descriptor to prove the wide offset is
- * shared through the open-file description. With
+ * shared through the open file description. With
  * `rach2.bootprobe=auth-ordinary` and `rach2.bootprobe=auth-recovery` the
  * probe checks whether the kernel may write its own disk (`auth_case`) and
  * whether the bounded windows batch (`window_batch_case`); with

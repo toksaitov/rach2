@@ -2,13 +2,13 @@
 #define _FD_H_
 
 /*
- * File descriptor tables and open-file descriptions.
+ * File descriptor tables and open file descriptions.
  *
  * A process indexes its table by descriptor number. An entry says what the
  * descriptor refers to (the console, a file or directory, a socket, a pipe,
  * a terminal, a device, an anonymous object) and has the flags of that
  * descriptor alone; the seek offset and the status flags are in the
- * open-file description the entry points at, which dup, dup2 and fork share
+ * open file description the entry points at, which dup, dup2 and fork share
  * between descriptors.
  */
 
@@ -58,7 +58,7 @@ typedef enum {
 #define FD_FLAG_RELEASING 0x40 /* its release has begun, and may be asleep */
 
 /*
- * The status flags of an open-file description, in `status_flags`. POSIX
+ * The status flags of an open file description, in `status_flags`. POSIX
  * keeps them on the description, so dup, dup2 and fork share them and
  * fcntl(F_SETFL) on one descriptor shows through its duplicates; FD_CLOEXEC
  * belongs to one descriptor. The values are Linux's O_* bits, the same on
@@ -73,7 +73,7 @@ struct file_ops;
 struct vfs_mount;
 
 /*
- * An open-file description (OFD): the state that the descriptors made from
+ * An open file description (OFD): the state that the descriptors made from
  * one open share, the seek offset and the status flags among it. dup, dup2
  * and fork point a new descriptor at the same description and add a
  * reference, so the duplicates share one offset, as POSIX requires.
@@ -154,7 +154,7 @@ typedef struct fd_entry {
     fd_type_t type;
     struct krffs_node *node;       /* FILE or DIR of the KRFFS root, not "/" */
     struct socket *sock;           /* For a SOCKET */
-    struct open_file *ofd;         /* Shared open-file description */
+    struct open_file *ofd;         /* Shared open file description */
     const struct file_ops *ops;    /* Operations of the object; NULL: by `type` */
     void *priv;                    /* The object `ops` work on, such as a pipe end */
     const struct devfs_entry *dev; /* The device table row, for a DEVICE */
@@ -272,7 +272,7 @@ int fd_free(fd_table_t *table, int fd);
 fd_entry_t *fd_get(fd_table_t *table, int fd);
 
 /**
- * Add or drop a reference to an open-file description. The last unref drops
+ * Add or drop a reference to an open file description. The last unref drops
  * the description's record locks, reports its close to inotify, unpins an
  * O_PATH node, closes a description of a mounted file system and frees the
  * description; it may sleep. NULL is ignored.
@@ -281,7 +281,7 @@ void fd_ofd_ref(struct open_file *ofd);
 void fd_ofd_unref(struct open_file *ofd);
 
 /**
- * A new open-file description with one reference and no descriptor pointing
+ * A new open file description with one reference and no descriptor pointing
  * at it: for a call that changes a file by path with the rules of an open
  * one, truncate(2), and for the program's file an address space keeps
  * (`fs_exe_open`). NULL when the heap has no room; `fd_ofd_unref` frees it.

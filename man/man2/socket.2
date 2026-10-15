@@ -96,7 +96,7 @@ sets the new descriptor's close-on-exec flag, and
 .Dv SOCK_NONBLOCK
 sets
 .Dv O_NONBLOCK
-on its open-file description.
+on its open file description.
 Any other bit above the low four gives
 .Er EINVAL
 before the family is looked at.
@@ -177,7 +177,7 @@ The process has no free descriptor below its limit.
 .It Bq Er ENOBUFS
 The raw ICMP registration and receive queue cannot be allocated.
 .It Bq Er ENOMEM
-The socket object, a larger descriptor table or an open-file description
+The socket object, a larger descriptor table or an open file description
 cannot be allocated.
 .It Bq Er EOPNOTSUPP
 .Fn socketpair

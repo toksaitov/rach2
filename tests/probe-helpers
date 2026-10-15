@@ -10,7 +10,7 @@ musl/devtest manual device test
 musl/hdaprobe manual audio path and rate diagnostic
 musl/hello manual musl startup smoke test
 musl/mallocqsort manual allocation and sort test
-musl/ofdmusl manual open-file description test
+musl/ofdmusl manual open file description test
 musl/pipemusl manual pipe test
 musl/pollmusl manual poll test
 musl/ptymusl manual pseudo-terminal test

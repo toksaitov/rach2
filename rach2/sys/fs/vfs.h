@@ -39,7 +39,7 @@
  * An operation a type does not have is a NULL pointer, and the wrapper of
  * the operation, below, gives the default answer for it.
  *
- * The lock order is a mount's namespace lock, then an open-file
+ * The lock order is a mount's namespace lock, then an open file
  * description's lock (fd.h), then buffers of the cache by the cache's rules
  * (bcache.h).
  */
@@ -162,7 +162,7 @@ struct vfs_statfs {
  * KRFFS volume, a heap record on the mount's list for FAT32, exFAT and
  * ext2, a heap record of a classified path for the synthetic types.
  * Whoever receives a node from `lookup`, `create`, `mknod` or a mount's
- * root owns one hold on it and must `put` it; open-file descriptions,
+ * root owns one hold on it and must `put` it; open file descriptions,
  * working directories, process roots and covering mounts keep theirs for as
  * long as they refer to it. For a type with empty `hold` and `put` the
  * pointers may be NULL.

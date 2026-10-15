@@ -33,7 +33,7 @@ struct file_ops {
     short (*poll)(fd_entry_t *e, short events, struct wait_queue **wq);
     /* Device/terminal control; request value and arg are the ioctl ABI. */
     int32_t (*ioctl)(fd_entry_t *e, uint32_t request, uintptr_t arg);
-    /* Release the object when the last descriptor of its open-file
+    /* Release the object when the last descriptor of its open file
      * description closes. */
     void (*close)(fd_entry_t *e);
 };

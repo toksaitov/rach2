@@ -10,7 +10,7 @@
  *
  * An end is a descriptor of type FD_TYPE_PIPE whose `ops` is pipe_ops and
  * whose `priv` is the struct pipe. dup, dup2 and fork share an end through
- * its open-file description, and the end is closed (pipe_ops->close) when
+ * its open file description, and the end is closed (pipe_ops->close) when
  * the description's last reference goes.
  *
  * The bytes are in a power-of-two ring with two rising counters, whose

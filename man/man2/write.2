@@ -34,7 +34,7 @@ writes at most that many, so that the count returned is never negative.
 The operation depends on the descriptor's backing object.
 .Ss Regular files
 A regular file is written through its mounted file system at the
-open-file description's offset.
+open file description's offset.
 A positive result advances that offset by the number of bytes written.
 Duplicated descriptors and descriptors inherited through fork share
 the offset and status flags.
@@ -54,7 +54,7 @@ On ext2, allocated overwrites and contiguous appends can remain in a
 bounded mount-wide batch after a successful write.
 Reads and stat see accepted bytes and size immediately.
 The batch drains at fsync, sync, a bound, an attribute or namespace change,
-or the last close of an open-file description.
+or the last close of an open file description.
 Sparse writes and hole fills drain before returning.
 An I/O error after some bytes were accepted returns their count;
 fsync reports the delayed error even after close and reopen.

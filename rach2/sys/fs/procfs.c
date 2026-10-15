@@ -3,7 +3,7 @@
  *
  * Most files are a snapshot: the text is made into a buffer from the heap
  * when the file is opened and served from there, so a read sees one moment,
- * and dup and fork share the snapshot until the open-file description's
+ * and dup and fork share the snapshot until the open file description's
  * last close. The text is built by append functions that grow the buffer
  * and write numbers themselves, since the kernel has no snprintf and i686
  * has no 64-bit division here.

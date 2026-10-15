@@ -1859,7 +1859,7 @@ static int tty_request(uint32_t request)
 }
 
 /**
- * FIONBIO: set O_NONBLOCK on the open-file description of `entry` when the
+ * FIONBIO: set O_NONBLOCK on the open file description of `entry` when the
  * int at `arg` is nonzero, and clear it when it is zero, as F_SETFL does.
  * Linux answers it for every descriptor before the file's own ioctl, and so
  * does sys_ioctl.

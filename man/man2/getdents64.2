@@ -19,7 +19,7 @@ into the
 buffer at
 .Fa dirp .
 It returns complete, variable-length records and advances the cursor
-in the descriptor's shared open-file description.
+in the descriptor's shared open file description.
 The next call continues from that cursor, which
 .Xr lseek 2
 sets back to 0, as
@@ -257,7 +257,7 @@ too.
 .Fa fd
 is invalid, was opened with
 .Dv O_PATH ,
-or its open-file description has no mount.
+or its open file description has no mount.
 .It Bq Er EFAULT
 There is no current process, or
 .Fa count

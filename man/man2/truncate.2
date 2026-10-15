@@ -77,7 +77,7 @@ Linux has no such rule, and returns
 .Er ETXTBSY
 for a program being run, which this kernel does not.
 .Pp
-The file is truncated through an open-file description that no
+The file is truncated through an open file description that no
 descriptor refers to, so the call does what an open for writing,
 .Fn ftruncate
 and
@@ -174,7 +174,7 @@ permission on the file, or the file is under
 .Fa fd
 is not an open descriptor, was opened with
 .Dv O_PATH ,
-or has no mounted open-file description.
+or has no mounted open file description.
 .It Er EBUSY
 The file backs an attached loop device, or path resolution enters a
 mount being mounted or unmounted.
@@ -207,7 +207,7 @@ empty target.
 exFAT could not find the containing directory while updating the file's
 directory entries.
 .It Er ENOMEM
-No memory is left for a path page or an open-file description, or
+No memory is left for a path page or an open file description, or
 exFAT could not allocate a node for the containing directory.
 .It Er ENOSPC
 A KRFFS, FAT32, or exFAT file system has insufficient space to extend

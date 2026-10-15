@@ -36,7 +36,7 @@ sets its close-on-exec flag, and
 .Dv SOCK_NONBLOCK
 sets
 .Dv O_NONBLOCK
-on its open-file description.
+on its open file description.
 Any other bit in
 .Fa flags
 gives
@@ -203,7 +203,7 @@ No descriptor below the process's limit is free for the connection,
 which stays queued.
 .It Er ENOMEM
 The kernel heap has no room for a larger descriptor table or for the
-connection's open-file description; the connection stays queued.
+connection's open file description; the connection stays queued.
 .It Er ENOTSOCK
 .Fa fd
 does not refer to a socket.

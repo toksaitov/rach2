@@ -69,7 +69,7 @@ Each thread is a `struct process` (`sys/proc/process.h`), and the threads of one
 
 ### Files
 
-`sys/fs/` keeps each process's descriptor table and the open-file descriptions its descriptors share. The VFS has the mount table, the path resolver and the operations each file system type provides, so that one resolver and one permission check serve every type. The types are KRFFS, the project's own, ext2, FAT32, exFAT, tmpfs, and `/dev`, `/proc` and `/sys`, which the kernel makes from its own tables. [The file system layer](sys/fs/Readme.md) links the VFS and each type. `sys/ipc/` adds pipes, AF_UNIX sockets and the System V and POSIX queues ([IPC](sys/ipc/Readme.md)), and `sys/io/` the calls that wait for several descriptors at once, `poll`, `select` and `epoll` ([readiness](sys/io/Readme.md)).
+`sys/fs/` keeps each process's descriptor table and the open file descriptions its descriptors share. The VFS has the mount table, the path resolver and the operations each file system type provides, so that one resolver and one permission check serve every type. The types are KRFFS, the project's own, ext2, FAT32, exFAT, tmpfs, and `/dev`, `/proc` and `/sys`, which the kernel makes from its own tables. [The file system layer](sys/fs/Readme.md) links the VFS and each type. `sys/ipc/` adds pipes, AF_UNIX sockets and the System V and POSIX queues ([IPC](sys/ipc/Readme.md)), and `sys/io/` the calls that wait for several descriptors at once, `poll`, `select` and `epoll` ([readiness](sys/io/Readme.md)).
 
 ### Devices
 

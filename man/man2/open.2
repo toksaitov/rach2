@@ -96,7 +96,7 @@ A file backing an attached loop device cannot be truncated.
 .It Dv O_APPEND
 Place each write at the current end of the file.
 .It Dv O_NONBLOCK
-Set nonblocking status on the open-file description.
+Set nonblocking status on the open file description.
 Operations that support this status return
 .Er EAGAIN
 when they would wait.
@@ -120,7 +120,7 @@ In particular, synchronous I/O flags do not cause writes to be flushed.
 .Dv O_APPEND
 and
 .Dv O_NONBLOCK
-belong to the open-file description and are shared by duplicated or
+belong to the open file description and are shared by duplicated or
 inherited descriptors.
 The close-on-exec flag belongs to the individual descriptor.
 .Pp
@@ -237,7 +237,7 @@ as on Linux.
 .Xr mknod 2
 makes all three kinds.
 .Ss Descriptors and close
-An ordinary open starts at offset zero with a new open-file description.
+An ordinary open starts at offset zero with a new open file description.
 On mounted KRFFS, opening a pathname during file relocation waits
 for the move to finish before registering the open handle.
 The handle follows later relocations, including after reuse of an old extent.
@@ -247,7 +247,7 @@ subject to its descriptor resource limit.
 An open that finds no free number below the limit returns
 .Er EMFILE ,
 and one for which the kernel heap has no room to grow the table or for
-the open-file description returns
+the open file description returns
 .Er ENOMEM ,
 as on Linux.
 An open of a path takes its descriptor number before it resolves the
@@ -276,7 +276,7 @@ releases
 .Fa fd ,
 including descriptors 0, 1, and 2, for reuse.
 It drops the descriptor's socket reference and its reference to the
-shared open-file description, and the
+shared open file description, and the
 .Xr fcntl 2
 record locks of the caller's descriptor table on the file, whichever
 descriptor and whichever process sharing the table took them; the
@@ -291,7 +291,7 @@ A failed drain retains the pending inode state and error on the mount;
 close still releases the descriptor, and fsync after reopening reports
 the error.
 Closing a framebuffer descriptor restores text mode only when the caller
-owns the framebuffer and closes the last reference to that open-file
+owns the framebuffer and closes the last reference to that open file
 description, the references children inherited included.
 The same releases occur on descriptor replacement by
 .Xr dup2 2 ,
@@ -645,7 +645,7 @@ The special mouse device was requested but no mouse is available.
 The path is empty, a required component does not exist, or a synthetic
 entry or process no longer exists.
 .It Bq Er ENOMEM
-A file-system node, per-open handle, proc snapshot, open-file description
+A file-system node, per-open handle, proc snapshot, open file description
 or larger descriptor table cannot be allocated, or the copy of the table
 .Dv CLOSE_RANGE_UNSHARE
 asks for.

@@ -40,7 +40,7 @@ as Linux does, while
 .Fn readv
 of zero bytes returns zero for them, as Linux's does.
 .Pp
-Regular files are read at the open-file description's offset.
+Regular files are read at the open file description's offset.
 A positive result advances that offset by the number of bytes read.
 Descriptors shared through duplication or fork share the offset.
 Directories cannot be read with these calls: a nonzero read returns

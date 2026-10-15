@@ -31,7 +31,7 @@ The permitted flags, declared in
 are:
 .Bl -tag -width "O_NONBLOCK"
 .It Dv O_NONBLOCK
-Set nonblocking I/O on both open-file descriptions.
+Set nonblocking I/O on both open file descriptions.
 An empty read with a writer still open returns
 .Er EAGAIN ;
 a write to a full pipe returns
@@ -85,7 +85,7 @@ write posts the signal and returns the byte count.
 .Pp
 Descriptors duplicated or inherited across
 .Xr fork 2
-share their end's open-file description.
+share their end's open file description.
 The end closes only when its last descriptor closes.
 The pipe is freed when both ends have closed.
 .Pp
@@ -136,7 +136,7 @@ Two descriptors are not free below the process's descriptor limit.
 The kernel heap cannot allocate the pipe.
 .It Bq Er ENOMEM
 The kernel heap has no room for a larger descriptor table or for an
-open-file description.
+open file description.
 .It Bq Er ESRCH
 There is no current process.
 .El

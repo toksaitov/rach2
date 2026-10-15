@@ -319,7 +319,7 @@ static struct sysv_perm *sysv_target(int kind, int32_t id, int by_place, int any
 #define SHM_LOCK     11
 #define SHM_UNLOCK   12
 
-/* A segment: its size in bytes, the open-file description of its tmpfs
+/* A segment: its size in bytes, the open file description of its tmpfs
  * file, its attach, detach and change times in seconds, and the pids of its
  * creator and its last operator. */
 struct shm_seg {
@@ -376,7 +376,7 @@ static void shm_reap(void)
 
 /**
  * A new segment of `size` bytes in a tmpfs file; NULL with no memory, or
- * when tmpfs cannot give the file that size. The open-file description
+ * when tmpfs cannot give the file that size. The open file description
  * takes the node and its open once the node is opened, so a failure to set
  * the size after that gives both back through the description's release,
  * and a node not yet opened is put alone.

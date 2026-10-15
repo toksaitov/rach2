@@ -1,4 +1,4 @@
-/* File descriptor tables and the open-file descriptions they share. */
+/* File descriptor tables and the open file descriptions they share. */
 #include "fd.h"
 #include "../proc/process.h"
 
@@ -10,7 +10,7 @@
 #include "../mm/kheap.h"
 
 /*
- * The record of an open-file description, from the heap, on the list of live
+ * The record of an open file description, from the heap, on the list of live
  * descriptions that the scans below walk. The wait queue of the description
  * lock is in the record rather than in fd.h, because the wait-queue header
  * includes the process header and the process header includes fd.h; the
@@ -33,7 +33,7 @@ static struct ofd_rec *ofd_rec_of(struct open_file *ofd)
 }
 
 /**
- * A new open-file description on the live list, with one reference, the next
+ * A new open file description on the live list, with one reference, the next
  * serial, zero offsets and no status flags; NULL when the heap has no room.
  */
 static struct open_file *ofd_alloc(void)

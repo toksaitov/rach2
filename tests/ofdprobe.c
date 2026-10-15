@@ -1,7 +1,7 @@
 /**
- * Probe for refcounted open-file descriptions, from user space.
+ * Probe for refcounted open file descriptions, from user space.
  *
- * Proves that a duplicated or forked descriptor shares one open-file
+ * Proves that a duplicated or forked descriptor shares one open file
  * description (and its seek offset), the Unix way, not each carrying
  * its own:
  *

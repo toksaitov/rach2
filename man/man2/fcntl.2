@@ -31,7 +31,7 @@ The supported commands are:
 Duplicate
 .Fa fd
 onto the lowest unused descriptor at or above the integer argument.
-The new descriptor shares the open-file description and has
+The new descriptor shares the open file description and has
 .Dv FD_CLOEXEC
 clear.
 Return the new descriptor.
@@ -68,7 +68,7 @@ reports
 and
 .Dv O_PATH .
 .It Dv F_SETFL
-Replace the open-file description's
+Replace the open file description's
 .Dv O_APPEND
 and
 .Dv O_NONBLOCK
@@ -113,7 +113,7 @@ to
 and leave the other fields as they were.
 .It Dv F_OFD_SETLK , F_OFD_SETLKW , F_OFD_GETLK
 The same three for open file description locks, which belong to the
-open-file description rather than the descriptor table.
+open file description rather than the descriptor table.
 .Va l_pid
 must be 0.
 .It Dv F_ADD_SEALS
@@ -157,7 +157,7 @@ for every other command, as on Linux.
 .Dv FD_CLOEXEC
 belongs to one descriptor and causes it to close during
 .Xr execve 2 .
-The file offset and status flags belong to the shared open-file
+The file offset and status flags belong to the shared open file
 description, so changes are visible through descriptors duplicated by
 .Xr dup 2
 or inherited by
@@ -402,7 +402,7 @@ the limit.
 The kernel heap has no room for a lock.
 .It Bq Er ENOMEM
 A duplication command found the kernel heap with no room for a larger
-descriptor table, as on Linux, or for the open-file description it makes
+descriptor table, as on Linux, or for the open file description it makes
 for the new descriptor and drops at once to share the old one's, which
 Linux does not make.
 .It Bq Er EPERM

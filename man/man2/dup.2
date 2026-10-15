@@ -19,7 +19,7 @@
 duplicates
 .Fa oldfd
 onto the lowest unused descriptor.
-The descriptors share one open-file description, including the file
+The descriptors share one open file description, including the file
 offset and the
 .Dv O_APPEND
 and
@@ -90,7 +90,7 @@ with no room for the larger table gives
 .Er ENOMEM ,
 as on Linux.
 .Fn dup
-also makes an open-file description for its new descriptor, which it
+also makes an open file description for its new descriptor, which it
 drops at once to share the old one's, and a heap with no room for that
 gives
 .Er ENOMEM
@@ -99,7 +99,7 @@ too; Linux's
 makes no description.
 .Pp
 The kernel releases a pipe, terminal or pseudo-terminal when the last
-descriptor referring to its open-file description is closed.
+descriptor referring to its open file description is closed.
 Socket references are counted separately for each descriptor;
 each duplicate adds a reference.
 Replacing an open destination that holds the last reference to its
@@ -147,7 +147,7 @@ was given equal descriptors or flags other than 0 or
 has no free descriptor below the limit.
 .It Bq Er ENOMEM
 The kernel heap has no room for a larger descriptor table, or for the
-open-file description
+open file description
 .Fn dup
 makes.
 .It Bq Er ESRCH

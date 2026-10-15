@@ -68,14 +68,14 @@ They accept root's writes on ordinary and recovery kernels.
 The metal kernel's read-only ATA, AHCI and NVMe driver policy prevents writes
 through them as well as other writes to those disks.
 .Ss Reservations and mounts
-Each disk permits one write-capable open-file description across its
+Each disk permits one write-capable open file description across its
 whole-disk node and the two boot devices in every build, and across its
 partition nodes as well on the recovery kernel.
 The boot devices share the selected boot disk's reservation.
 A second write-capable open on that disk fails with
 .Er EBUSY .
 .Pa /dev/grubcore
-also permits only one open-file description at a time, including readers.
+also permits only one open file description at a time, including readers.
 .Pp
 A mount claims its sector range.
 A write-capable open overlapping that range fails with

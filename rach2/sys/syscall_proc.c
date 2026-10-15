@@ -257,7 +257,7 @@ extern bool debug_shell_is_home;
 extern void panic_init_died(uint32_t pid);
 
 /**
- * Each descriptor drops its socket reference and its open-file description
+ * Each descriptor drops its socket reference and its open file description
  * (the seek offset), and its slot is cleared. `proc_files_put` calls it when
  * the last reference to the table goes, which both ends of a process reach
  * (`proc_exit_cleanup`), so sockets, port bindings, TCBs and descriptions
@@ -317,7 +317,7 @@ void proc_fs_put(process_t *p)
 
 /**
  * Make `table`, whose entries were copied from another table, a table of its
- * own: each descriptor names the same open-file description, which gains a
+ * own: each descriptor names the same open file description, which gains a
  * reference, so a seek in one process is seen by the other, as POSIX says,
  * and a socket gains one too, so that the two release it independently. A
  * descriptor a sharer closed, which a call of another still holds, is

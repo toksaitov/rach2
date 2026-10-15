@@ -362,7 +362,7 @@ static void fd_close_locks(const fd_entry_t *e)
  * the slot with `fd_free`. May sleep.
  *
  * The record, the path, the framebuffer and an object with operations
- * belong to the open-file description, which dup, dup2 and fork share by
+ * belong to the open file description, which dup, dup2 and fork share by
  * its reference count, so each is released once, when the description's
  * last descriptor closes (`refcount` 1 here, before `fd_free` drops it).
  * The framebuffer goes back to text mode only when the caller's process
@@ -4649,7 +4649,7 @@ long sys_readv(isr_params_t *params)
  * number; the new number, or -EBADF for a descriptor that is not open,
  * -EMFILE or -ENOMEM (`fd_alloc_from`).
  *
- * The copy shares the open-file description, and with it the offset and
+ * The copy shares the open file description, and with it the offset and
  * the status flags, and the object behind it with its vtable; a socket
  * gains a reference. FD_CLOEXEC is clear on the copy and FD_FLAG_PATH is
  * kept, so the copy of an O_PATH descriptor is one too. The source is
@@ -4730,7 +4730,7 @@ static int32_t dup_clear(int fd)
  * -EBUSY. `oldfd` is looked up again after the table grows, since its
  * entries may have moved.
  *
- * The copy shares the open-file description, and with it the offset, as
+ * The copy shares the open file description, and with it the offset, as
  * POSIX has it, and the object behind it with its vtable; a socket gains a
  * reference, and the copy's FD_CLOEXEC is clear.
  *
@@ -8092,7 +8092,7 @@ static int32_t truncate_checks(const struct vfs_ref *ref)
  *
  * The path is resolved through links, to a directory when it named one by
  * its end, `dir` (`resolve_named`), and `truncate_checks` has what is
- * refused. The file is then truncated through an open-file description of
+ * refused. The file is then truncated through an open file description of
  * its own, which no descriptor points at, with the open, the lock and the
  * close of an open for writing and an ftruncate: a KRFFS file that must move
  * to grow repoints the description, so the set-id clear of an unprivileged

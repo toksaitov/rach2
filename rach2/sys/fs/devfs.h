@@ -199,7 +199,7 @@ int devfs_fd_is_raw(struct fd_entry *e);
  *
  * The size needs 64 bits because a whole drive can exceed 4 GiB. The
  * descriptors `devfs_fd_is_raw` names are the only ones that seek and
- * transfer through the open-file description's `raw_offset`.
+ * transfer through the open file description's `raw_offset`.
  */
 int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size);
 

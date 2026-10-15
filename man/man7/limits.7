@@ -96,7 +96,7 @@ Process records are allocated from the kernel heap.
 If the kernel cannot allocate a process record, fork returns
 .Er ENOMEM .
 Sockets and TCP control blocks also come from the heap, and so do a
-descriptor table's growth and each open-file description: a call that
+descriptor table's growth and each open file description: a call that
 makes a descriptor returns
 .Er ENOMEM
 when the heap has no room for them, and
