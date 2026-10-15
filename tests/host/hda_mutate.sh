@@ -37,6 +37,9 @@ changes = {
     "report": ('audio_field(t, " programmed ", r->programmed_rate);', 'audio_field(t, " programmed ", 0);'),
     "underrun": ("                frac &= 0xFFFFu;\n", ""),
     "phase": ("                frac &= 0xFFFFu;", "                frac = 0;"),
+    "ich9": ("device_id == 0x160c) {", "device_id == 0x160c || (device_id >= 0x2930 && device_id < 0x2940)) {"),
+    "crestline": ("device < 0x2900) || device == 0x29fb)", "device < 0x2900))"),
+    "codecrange": ("device < 0x2900) || device == 0x29fb)", "device < 0x2b00) || device == 0x29fb)"),
 }
 old, new = changes[fault]
 if source.count(old) != 1:
@@ -46,7 +49,7 @@ PY
 }
 
 faults='rate32 rate96 capability inheritance fallback shortoffset longoffset
-    width range route report underrun phase'
+    width range route report underrun phase ich9 crestline codecrange'
 if [ "${1:-}" = --texts ]; then
     for fault in $faults; do
         RACH2_FAULT_TEXTS=1 apply_fault rach2/sys "$fault" >/dev/null || exit 1
@@ -127,6 +130,7 @@ for fault in $faults; do
         route) row=route ;;
         report) row=proc-audio ;;
         underrun|phase) row=underrun ;;
+        ich9|crestline|codecrange) row=hdmi ;;
     esac
     run_phase "$fault-mutated" 1 "hda-test: fail: $row:"
     cleanup

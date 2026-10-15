@@ -459,6 +459,24 @@ static void row_route(void)
     check(!hda_find_output(), "invalid list cannot fall back to an unrelated dac");
 }
 
+/** Tell display-only controllers and codecs from those that drive speakers. */
+static void row_hdmi(void)
+{
+    row = "hdmi";
+    check(is_hdmi_controller(0x8086, 0x0a0c) && is_hdmi_controller(0x8086, 0x160c),
+          "haswell and broadwell display controllers are hdmi");
+    check(is_hdmi_controller(0x10de, 0x0e0f) && is_hdmi_controller(0x1002, 0xaa38),
+          "nvidia and amd functions are hdmi");
+    check(!is_hdmi_controller(0x8086, 0x284b), "ich8 controller is analog");
+    check(!is_hdmi_controller(0x8086, 0x293e), "ich9 controller is analog");
+    check(!is_hdmi_controller(0x8086, 0x3198), "gemini lake controller is analog");
+    check(!is_hdmi_controller(0x8086, 0x2668), "ich6 controller is analog");
+    check(is_hdmi_codec(0x80862807) && is_hdmi_codec(0x808629fb), "intel hdmi codecs");
+    check(is_hdmi_codec(0x10de0040) && is_hdmi_codec(0x1002aa01), "nvidia and amd codecs");
+    check(!is_hdmi_codec(0x80862a00) && !is_hdmi_codec(0x80862900), "other intel ids are analog");
+    check(!is_hdmi_codec(0x10ec0269) && !is_hdmi_codec(0x1af40022), "realtek and qemu codecs");
+}
+
 /** Snapshot the real driver report through the procfs formatter. */
 static void row_report(void)
 {
@@ -540,6 +558,7 @@ int main(void)
     row_underrun();
     row_connections();
     row_route();
+    row_hdmi();
     row_report();
     row_dma_check();
     printf("hda-test: result: %s\n", failures ? "fail" : "pass");

@@ -1217,17 +1217,16 @@ static void hda_enable_gpio(void)
  *
  * An HDMI codec has no analog speaker path, so the enumeration below passes
  * over one while any other codec answers, and takes it only when none does.
- * Recognizes Intel HDMI device ID ranges and treats all Nvidia and AMD/ATI
- * codecs as HDMI.
+ * Matches the Intel HDMI codecs, device IDs 0x2800 to 0x28ff and 0x29fb
+ * (Crestline), and treats all Nvidia and AMD/ATI codecs as HDMI.
  */
 static bool is_hdmi_codec(uint32_t vendor_id)
 {
     uint16_t vendor = (vendor_id >> 16) & 0xFFFF;
     uint16_t device = vendor_id & 0xFFFF;
 
-    /* Intel HDMI codecs: vendor 0x8086, device 0x2800 to 0x2aff */
     if (vendor == 0x8086) {
-        if ((device >= 0x2800 && device < 0x2a00) || (device >= 0x2900 && device < 0x2b00)) {
+        if ((device >= 0x2800 && device < 0x2900) || device == 0x29fb) {
             return true;
         }
     }
@@ -1670,18 +1669,18 @@ static void hda_irq_handler(isr_params_t *params)
  * Report whether a PCI vendor/device ID is an HDMI audio controller.
  *
  * Init prefers the PCH analog controller and skips HDMI controllers when both
- * are present. Matches known Intel HDMI device IDs, 0x0a0c, 0x0c0c and 0x0d0c
- * (Haswell), 0x160c (Broadwell), 0x3198 (Gemini Lake), 0x2800 to 0x28ff and
- * 0x2930 to 0x293f, and treats all Nvidia (0x10de) and AMD (0x1002) GPU audio
- * functions as HDMI.
+ * are present. Matches the Intel controllers that serve only the display,
+ * 0x0a0c, 0x0c0c and 0x0d0c (Haswell) and 0x160c (Broadwell), and treats all
+ * Nvidia (0x10de) and AMD (0x1002) GPU audio functions as HDMI. The ICH8
+ * (0x284b) and ICH9 (0x293e) controllers, and the Skylake and later platform
+ * controllers such as Gemini Lake's 0x3198, drive the analog codec, so none of
+ * them is listed.
  */
 static bool is_hdmi_controller(uint16_t vendor_id, uint16_t device_id)
 {
     if (vendor_id == 0x8086) { /* Intel */
         if (device_id == 0x0a0c || device_id == 0x0c0c || device_id == 0x0d0c ||
-            device_id == 0x160c || device_id == 0x3198 ||
-            (device_id >= 0x2800 && device_id < 0x2900) ||
-            (device_id >= 0x2930 && device_id < 0x2940)) {
+            device_id == 0x160c) {
             return true;
         }
     }
