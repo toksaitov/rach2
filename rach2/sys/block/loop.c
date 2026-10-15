@@ -165,14 +165,6 @@ static int loop_flush(block_device_t *device, struct block_request *request)
     return rc == 0 ? 0 : -EIO;
 }
 
-block_device_t *loop_device_at(int index)
-{
-    if (index < 0 || index >= LOOP_DEVICES || !loops[index].used) {
-        return 0;
-    }
-    return &loops[index].dev;
-}
-
 block_device_t *loop_attached_at(int index)
 {
     if (index < 0 || index >= LOOP_DEVICES || !loops[index].attached) {

@@ -24,9 +24,6 @@
 
 struct vfs_mount;
 
-/** The device for `index`, or NULL when nothing is attached there. */
-block_device_t *loop_device_at(int index);
-
 /** The device for `index` when its attachment is complete and its file still
  * there, or NULL: the device reads and writes reach. */
 block_device_t *loop_attached_at(int index);

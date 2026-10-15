@@ -674,13 +674,6 @@ int loop_control_write(const char *buf, uint32_t count)
     return unexpected();
 }
 
-/** No loop device is attached at `index`. */
-block_device_t *loop_device_at(int index)
-{
-    (void)index;
-    return NULL;
-}
-
 /** The injected failure of frame allocations, which no row arms. */
 int paging_framefail_arm(uint32_t count)
 {

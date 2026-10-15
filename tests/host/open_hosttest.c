@@ -162,7 +162,6 @@ static int32_t fs_socket_bind(const char *path, uint32_t mode, struct vfs_ref *r
 static void fs_socket_unbind(struct vfs_ref *ref);
 static int32_t fs_socket_lookup(const char *path, struct vfs_mount **mnt, uint32_t *ino);
 static int32_t fs_read_at(fd_entry_t *e, void *buf, uint32_t count, uint64_t off);
-static block_device_t *loop_device_at(int index);
 static int loop_attach(int index, const char *path, int writable);
 static int loop_detach(int index);
 static int loop_backs(struct vfs_mount *mnt, void *node);

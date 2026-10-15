@@ -516,7 +516,8 @@ or
 .Pa \&..
 and reaches something else.
 .It Bq Er ENXIO
-The source is a loop device with no file attached.
+The source is a loop device with no file attached, whose attachment is still
+being made, or whose file\(aqs device has gone.
 .It Bq Er EPERM
 The caller's effective user ID is not 0, and it is not privileged over its
 own mount namespace, or is and mounts a type other than

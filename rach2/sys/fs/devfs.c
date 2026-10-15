@@ -1987,7 +1987,7 @@ int devfs_window_of(const char *path, block_device_t **view, block_device_t **ba
         return -ENOENT;
     }
     if (dev->ops == &loop_ops) {
-        block_device_t *loop = loop_device_at(devfs_loop_index(dev));
+        block_device_t *loop = loop_attached_at(devfs_loop_index(dev));
 
         if (!loop) {
             return -ENXIO;

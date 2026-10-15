@@ -316,7 +316,7 @@ static void relocation_row(void)
     reused = krffs_resolve("/replacement");
     check(krffs_write_node(&reused, replacement, 512, 0) == 512 && reused == original,
           "another file occupies the old backing location");
-    loop = loop_device_at(0);
+    loop = loop_attached_at(0);
     check(loop && loop->sector_count == sizeof(payload) / 512,
           "attachment uses the relocated file's size");
     check(loop && loop->read(loop, 0, 1, output) == 0 && memcmp(output, payload, 512) == 0,
