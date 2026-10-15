@@ -179,7 +179,7 @@ An image is staged again when a file it stages changes, and only then. `manifest
 * `edfs.krffs --set-name` on a directory replaces its identifier, which cuts it off from its children.
 * Every tool that opens an image, except `readfile.krffs`, opens it for writing, even `fsviz.krffs` and `fsck.krffs --strict`.
 * The stager refuses two directories with one identifier, not two files, which the kernel allows.
-* Nothing builds or tests `vs-dokany/`. It has no project for `stageimage.krffs`, `readfile.krffs` or `mkhash.krffs`, and its `fsck.krffs` project lacks `krffs_allocator.c`, which `fsck.krffs.c` calls.
+* Nothing builds or tests `vs-dokany/`. It has no project for `stageimage.krffs`, `readfile.krffs` or `mkhash.krffs`.
 
 ## Tests
 

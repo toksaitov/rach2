@@ -86,12 +86,14 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\fsck.krffs.c" />
+    <ClCompile Include="..\krffs_allocator.c" />
     <ClCompile Include="..\krffs_file_system.c" />
     <ClCompile Include="..\krffs_node.c" />
     <ClCompile Include="..\krffs_platform.c" />
     <ClCompile Include="..\krffs_utilities.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\krffs_allocator.h" />
     <ClInclude Include="..\krffs_file_system.h" />
     <ClInclude Include="..\krffs_node.h" />
     <ClInclude Include="..\krffs_platform.h" />
