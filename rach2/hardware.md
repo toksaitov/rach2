@@ -6,7 +6,7 @@ This page lists the hardware the Rach2 kernel drives, one class at a time, and t
 
 The kernel is built for one of two architectures, as `ARCH` selects ([the architectures' Readme](sys/arch/Readme.md)):
 
-* i686: 32-bit protected mode, two-level page tables without PAE, so physical memory is used below 4 GiB. The kernel uses no SSE of its own, and it executes `cpuid` and `rdtsc` without first testing for them, so the processor must have both.
+* i686: 32-bit protected mode, two-level page tables without PAE, so physical memory is used below 4 GiB. The kernel uses no SSE of its own. Its code has `cmov` and executes `cpuid` and `rdtsc`, so the processor must have all three; the boot checks for them and stops with `boot: refused: the processor has no cpuid, and this kernel is i686` on COM1, naming `rdtsc` or `cmov` in place of `cpuid` for the one that is absent.
 * x86-64: long mode is required. The boot checks for it and stops with `boot: refused: the processor has no long mode, and this kernel is x86-64` on COM1 when it is absent. Memory is used up to the reach [the memory Readme](sys/mm/Readme.md) gives.
 
 Both kernels use these features where the processor has them, and run without them:

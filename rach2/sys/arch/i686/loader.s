@@ -6,6 +6,11 @@
 # reads the first header and GRUB's multiboot2 command the second, on BIOS
 # or UEFI firmware; on UEFI GRUB leaves the firmware's boot services before
 # it jumps here.
+#
+# The kernel is built for the i686 (-march=i686), so its code has cmov and
+# executes cpuid and rdtsc. Before any of it runs, _start checks that the
+# processor has the three, and on a processor without one it says which on
+# the first serial port and stops.
 
 .set MULTIBOOT_MAGIC,     0x1BADB002
 .set MULTIBOOT_PAGEALIGN, 1
@@ -28,6 +33,15 @@
 .set MULTIBOOT2_EGA_TEXT,  1 << 1
 .set MULTIBOOT2_FB,        5
 .set MULTIBOOT2_OPTIONAL,  1
+
+# EFLAGS.ID, which a processor with cpuid lets software change.
+.set EFLAGS_ID, 1 << 21
+
+# CPUID leaf 1, EDX: the time-stamp counter is bit 4 and cmov bit 15.
+.set CPUID_TSC,  1 << 4
+.set CPUID_CMOV, 1 << 15
+
+.set COM1, 0x3F8
 
 .text
 .align 4
@@ -60,6 +74,37 @@ _start:
     pushl %ebx # the loader's information
     pushl %eax # the loader's magic
 
+    # cpuid, and the two features of its leaf 1 the kernel's code uses.
+    pushfl
+    popl %eax
+    movl %eax, %ecx
+    xorl $EFLAGS_ID, %eax
+    pushl %eax
+    popfl
+    pushfl
+    popl %eax
+    pushl %ecx
+    popfl
+    xorl %ecx, %eax
+    movl $no_cpuid_msg, %esi
+    testl $EFLAGS_ID, %eax
+    jz refuse
+
+    # Leaf 0 gives the highest leaf; without leaf 1 the processor lists no
+    # features, the time-stamp counter among them.
+    xorl %eax, %eax
+    cpuid
+    movl $no_tsc_msg, %esi
+    testl %eax, %eax
+    jz refuse
+    movl $1, %eax
+    cpuid
+    testl $CPUID_TSC, %edx
+    jz refuse
+    movl $no_cmov_msg, %esi
+    testl $CPUID_CMOV, %edx
+    jz refuse
+
     # The boot processor's GDT first, so that %fs has its own segment, which
     # this_cpu() reads, from the first C code on.
     call init_gdt
@@ -78,6 +123,21 @@ k_stop:
     cli
     hlt
     jmp k_stop
+
+# A processor without what this kernel needs cannot run it: write the
+# message at ESI on the first serial port and stop.
+refuse:
+    movb (%esi), %al
+    testb %al, %al
+    jz refuse_stop
+    movw $COM1, %dx
+    outb %al, %dx
+    incl %esi
+    jmp refuse
+refuse_stop:
+    cli
+    hlt
+    jmp refuse_stop
 
 # void arch_enter_user(uintptr_t pc, uintptr_t sp), of ../arch.h: an iret
 # to ring 3 at pc, with the stack pointer sp, IF set in EFLAGS and the user
@@ -118,6 +178,15 @@ arch_enter_user:
     xorl %edi, %edi
     xorl %ebp, %ebp
     iret
+
+.section .rodata
+
+no_cpuid_msg:
+    .asciz "boot: refused: the processor has no cpuid, and this kernel is i686\n"
+no_tsc_msg:
+    .asciz "boot: refused: the processor has no rdtsc, and this kernel is i686\n"
+no_cmov_msg:
+    .asciz "boot: refused: the processor has no cmov, and this kernel is i686\n"
 
 # The boot stack, which the boot, process 0, the debug shell and the first
 # program run on, and the page below it: its guard, which guard_boot_stack

@@ -10,7 +10,9 @@
 # same combination with `rach2.rescue` is allowed, because asking for the debug
 # shell is what that token is for. A root that mounted and whose /sbin/init
 # cannot be read is refused the same way; tests/system/init_refusal.sh is that
-# row, run here on the kernel under test.
+# row, run here on the kernel under test. A processor without what the kernel
+# needs is refused before the kernel's own code runs: cmov or the time-stamp
+# counter on i686, long mode on x86-64.
 #
 # Each refusal is asserted twice: the diagnostic is there, and the machine
 # never reached a shell. A test that looked only for the message would pass on
@@ -145,6 +147,34 @@ if ! sh "$(dirname "$0")/../init_refusal.sh" "$KERNEL" "$HARNESS" "$MKMBR" "$WOR
     exit 1
 fi
 echo "bootline-test: refused, and stopped: a root whose /sbin/init cannot be read"
+
+# A processor that lacks what the kernel needs is refused by name before any
+# of the kernel's own code runs: on i686, QEMU's 486 has no time-stamp counter
+# and its Pentium no cmov; on x86-64, its qemu32 has no long mode. The kernel's
+# first log line must not follow the refusal.
+# boot_cpu MODEL LINE: boot the kernel alone on the processor MODEL, wait up to
+# 25 seconds for LINE, leave the machine running five seconds more and stop it.
+boot_cpu() {
+    rm -f "$LOG"
+    "$QEMU" -cpu "$1" -display none -kernel "$KERNEL" \
+        -serial stdio < /dev/null > "$LOG" 2>&1 &
+    QPID=$!
+    "$RUNUTIL" until "$LOG" "$2" 25 || true
+    # interval: the machine runs on after the line to show it stopped there
+    sleep 5
+    stop_boot
+    grep -q "$2" "$LOG" || fail "the $1 processor was not refused with: $2"
+    if grep -q "boot: Rach2 Booting" "$LOG"; then
+        fail "the $1 processor was refused and the kernel ran on"
+    fi
+    echo "bootline-test: refused, and stopped: the $1 processor"
+}
+if [ "${RACH2_ARCH:-i686}" = x86_64 ]; then
+    boot_cpu qemu32 "boot: refused: the processor has no long mode, and this kernel is x86-64"
+else
+    boot_cpu 486 "boot: refused: the processor has no rdtsc, and this kernel is i686"
+    boot_cpu pentium "boot: refused: the processor has no cmov, and this kernel is i686"
+fi
 
 # And the same combination with rescue asked for, which must reach the shell:
 # that is what the token is for, and the refusal must not stand in its way.
