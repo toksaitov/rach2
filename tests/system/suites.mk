@@ -1580,7 +1580,8 @@ $(INSTALLER_MBR_DISK): $(DEMO_CREDS) $(KERNEL) $(RECOVERY_KERNEL) $(INSTALLER_EX
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
 	    sh tools/image/mkdisk_grub.sh $(ARCH_BUILD)/rach2/kernel $@
 $(INSTALL_TEST_STICK): $(RECOVERY_ISO) $(INSTALLER_DISK) $(INSTALLER_EXT2) \
-                       tools/image/mkinstallstick.sh $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
+                       tools/image/mkinstallstick.sh $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK) \
+                       $(SHA256TOOL)
 	sh tools/image/mkinstallstick.sh $(RECOVERY_ISO) $(INSTALLER_DISK) $@ \
 	    $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK) $(INSTALLER_EXT2)
 # `tests/run installer`: the install stick and the program on it. The stick is

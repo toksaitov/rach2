@@ -58,7 +58,7 @@ $(STICK_IMAGE): $(IMAGES_DIR)/rach2-metal.iso tools/image/mkstick.sh $(MKEXFATFI
 INSTALL_STICK = $(IMAGES_DIR)/rach2-install-stick$(RECOVERY_KEY_TAG).img
 rach2-install-stick: $(INSTALL_STICK)
 $(INSTALL_STICK): $(RECOVERY_ISO) $(SEALED_DISK) $(SEALED_EXT2) mk/images.mk tools/image/mkinstallstick.sh \
-                  $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
+                  $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK) $(SHA256TOOL)
 	@sh tools/image/keyname.sh $@
 	sh tools/image/mkinstallstick.sh $(RECOVERY_ISO) $(SEALED_DISK) $@ \
 	    $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK) $(SEALED_EXT2) 256

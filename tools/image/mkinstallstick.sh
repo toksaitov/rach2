@@ -94,12 +94,13 @@ trap 'rm -f "$NEW" "$VOL" "$MAN" "$EFI" "$EFISUM"' EXIT
 rm -f "$NEW"
 
 # Print the SHA-256 of FILE in hexadecimal, or return 1 with a diagnostic that
-# names WHAT when shasum fails or prints anything but 64 hexadecimal digits.
-# The hash's own status is checked: `shasum | cut` under `set -e` reports the
-# status of `cut`, so a hash that was never taken would be written as an empty
-# field and the stick would have a digest nothing can match.
+# names WHAT when the digest tool (tools/verify/sha256.c, which make builds)
+# fails or prints anything but 64 hexadecimal digits. The hash's own status is
+# checked: `sha256 | cut` under `set -e` reports the status of `cut`, so a
+# hash that was never taken would be written as an empty field and the stick
+# would have a digest nothing can match.
 sha256_of() { # sha256_of FILE WHAT
-    sum_line=$(shasum -a 256 "$1") || {
+    sum_line=$("$REPO/build/tools/verify/sha256" "$1") || {
         echo "mkinstallstick: $2's hash could not be taken" >&2
         return 1
     }
