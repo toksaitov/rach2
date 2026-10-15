@@ -44,9 +44,11 @@ gh run list --repo "$REPO" --limit 8 \
     --json workflowName,status,conclusion,headSha,createdAt,databaseId \
     --jq '.[] | "\(.databaseId) \(.workflowName) \(.status) \(.conclusion // "-") \(.headSha[0:8]) \(.createdAt)"'
 echo "== open issues"
-gh api graphql -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='
-    query($o: String!, $r: String!) { repository(owner: $o, name: $r) {
-        issues(states: OPEN, first: 100) { nodes { number title
+gh api graphql --paginate -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='
+    query($o: String!, $r: String!, $endCursor: String) {
+        repository(owner: $o, name: $r) {
+        issues(states: OPEN, first: 100, after: $endCursor) {
+            pageInfo { hasNextPage endCursor } nodes { number title
             labels(first: 5) { nodes { name } }
             assignees(first: 5) { nodes { login } }
             projectItems(first: 2) { nodes { fieldValueByName(name: "Status") {
