@@ -521,14 +521,13 @@ done:
  * before it writes fails the test instead of hanging it; it waits for
  * "ready", writes "hello", which the slave reads cooked and the master gets
  * back as the echo, and then reads the echo and "world" back on the master.
- * The slave's path is built for an index below 100.
  */
 PROBE_START void _start(void)
 {
     int master, slave, ptn, unlock, pid, status, nb;
-    char path[16];
+    char path[32];
     char mbuf[128];
-    int n, i, p;
+    int n, i;
 
     puts("PTYPROBE START\n");
 
@@ -550,21 +549,7 @@ PROBE_START void _start(void)
         sys_exit(1);
     }
 
-    p = 0;
-    path[p++] = '/';
-    path[p++] = 'd';
-    path[p++] = 'e';
-    path[p++] = 'v';
-    path[p++] = '/';
-    path[p++] = 'p';
-    path[p++] = 't';
-    path[p++] = 's';
-    path[p++] = '/';
-    if (ptn >= 10) {
-        path[p++] = (char)('0' + (ptn / 10));
-    }
-    path[p++] = (char)('0' + (ptn % 10));
-    path[p] = '\0';
+    numbered_path(path, "/dev/pts/", ptn, "");
 
     {
         short ws[4];
