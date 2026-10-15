@@ -1720,6 +1720,21 @@ long sys_ipc(struct isr_params *params)
     }
 }
 
+int sysv_ipc_restartable(const struct isr_params *params)
+{
+    uint32_t call = SC_ARG(params, 0) & 0xFFFFu;
+
+    return call != SEMOP && call != SEMTIMEDOP && call != MSGSND && call != MSGRCV;
+}
+
+/** semop(2), which x86-64 alone has, takes the set, the operations and their
+ * count, and waits with no time limit (`sem_op`). */
+long sys_semop(struct isr_params *params)
+{
+    return sem_op((int32_t)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1),
+                  USER_LEN32(SC_ARG(params, 2)), 0, 0);
+}
+
 /** semget(2) takes the key, the count and the flags (`sem_get`). */
 long sys_semget(struct isr_params *params)
 {

@@ -28,6 +28,13 @@
  * too large for tmpfs, are each ENOMEM and leave the kernel's heap as it
  * was, so a failed one gives back the node of its file.
  *
+ * A semop, a semtimedop, a msgsnd to a full queue and a msgrcv from an empty
+ * one, through musl and on i686 also through the direct calls, each wait
+ * until a child sees the process asleep and sends SIGUSR1, whose handler has
+ * SA_RESTART. Each must end with EINTR, as on Linux, which never restarts
+ * these calls after a handler, and must not take what the child gives once
+ * the handler has answered it.
+ *
  * A POSIX queue of four messages of 64 bytes gives the higher priority
  * first; a full queue with O_NONBLOCK is EAGAIN; an empty one with a
  * timeout ETIMEDOUT; mq_notify's signal comes with SI_MESGQ and its value
@@ -333,6 +340,227 @@ static int msg_rows(void)
     return 0;
 }
 
+/* The runs of the SIGUSR1 handler that interrupts a System V wait, and the
+ * pipe it answers the child on, -1 for none. */
+static volatile int usr1_runs;
+static int usr1_answer = -1;
+
+/** Count a run of the SIGUSR1 handler and answer the child that sent it. */
+static void on_usr1(int sig)
+{
+    (void)sig;
+    usr1_runs++;
+    if (usr1_answer >= 0) {
+        (void)write(usr1_answer, "a", 1);
+    }
+}
+
+/** Whether process `pid` is asleep, state S in /proc/<pid>/stat. */
+static int sleeping(pid_t pid)
+{
+    char path[64], line[256], *state;
+    int fd, n;
+
+    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return 0;
+    }
+    n = (int)read(fd, line, sizeof(line) - 1);
+    close(fd);
+    if (n <= 0) {
+        return 0;
+    }
+    line[n] = '\0';
+    state = strrchr(line, ')');
+    return state && state[1] == ' ' && state[2] == 'S';
+}
+
+/* The kinds of System V wait: for a semaphore, for room in a full queue, and
+ * for a message in an empty one. */
+#define CUT_SEM 0
+#define CUT_SND 1
+#define CUT_RCV 2
+
+/* One System V wait a handler with SA_RESTART interrupts: its kind, and
+ * whether it is made by syscall() with the direct call rather than by musl,
+ * and with a timeout. */
+struct cut_wait {
+    const char *name;
+    int kind;
+    int direct;
+    int timed;
+};
+
+static const struct cut_wait cut_waits[] = {
+    {"semop", CUT_SEM, 0, 0},
+    {"semtimedop", CUT_SEM, 0, 1},
+    {"msgsnd", CUT_SND, 0, 0},
+    {"msgrcv", CUT_RCV, 0, 0},
+#if !defined __x86_64__
+    {"the direct semtimedop_time64", CUT_SEM, 1, 1},
+    {"the direct msgsnd", CUT_SND, 1, 0},
+    {"the direct msgrcv", CUT_RCV, 1, 0},
+#endif
+};
+
+/* A message of a System V queue, as large as one may be. */
+struct cut_msg {
+    long type;
+    char text[8192];
+};
+
+static struct cut_msg cut_msg;
+
+/** Make the wait `w` on the set or queue `id`, and return its result. */
+static long cut_call(const struct cut_wait *w, int id)
+{
+    struct sembuf take = {0, -1, 0};
+    struct timespec ts = {30, 0};
+
+    cut_msg.type = 1;
+    switch (w->kind) {
+    case CUT_SEM:
+#if !defined __x86_64__
+        if (w->direct) {
+            long long ts64[2] = {30, 0};
+
+            return syscall(SYS_semtimedop_time64, id, &take, 1, ts64);
+        }
+#endif
+        return w->timed ? semtimedop(id, &take, 1, &ts) : semop(id, &take, 1);
+    case CUT_SND:
+        return w->direct ? syscall(SYS_msgsnd, id, &cut_msg, 1, 0) : msgsnd(id, &cut_msg, 1, 0);
+    default:
+        return w->direct ? syscall(SYS_msgrcv, id, &cut_msg, 1, 0, 0)
+                         : msgrcv(id, &cut_msg, 1, 0, 0);
+    }
+}
+
+/**
+ * Fork a child that waits up to 3 s to see this process asleep, sends it
+ * SIGUSR1, waits up to 3 s for the handler's byte on `answer`, and only then
+ * ends a wait of `kind` on `id`: it gives the semaphore, takes a message from
+ * the full queue, or sends one to the empty queue. The child exits 0 when
+ * all of that happened, 2 when the process was never seen asleep and 3 when
+ * the handler's byte did not come; it ends the wait in every case.
+ */
+static pid_t signal_then_give(int kind, int id, int answer)
+{
+    pid_t parent = getpid();
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        struct sembuf give = {0, 1, 0};
+        struct pollfd pfd;
+        int tries, code = 0;
+        char c;
+
+        for (tries = 0; tries < 300 && !sleeping(parent); tries++) {
+            usleep(10000);
+        }
+        if (tries == 300) {
+            code = 2;
+        } else {
+            pfd.fd = answer;
+            pfd.events = POLLIN;
+            if (kill(parent, SIGUSR1) != 0 || poll(&pfd, 1, 3000) != 1 ||
+                read(answer, &c, 1) != 1) {
+                code = 3;
+            }
+        }
+        cut_msg.type = 1;
+        if (kind == CUT_SEM) {
+            semop(id, &give, 1);
+        } else if (kind == CUT_SND) {
+            msgrcv(id, &cut_msg, sizeof(cut_msg.text), 0, IPC_NOWAIT);
+        } else {
+            msgsnd(id, &cut_msg, 1, IPC_NOWAIT);
+        }
+        _exit(code);
+    }
+    return pid;
+}
+
+/**
+ * Check that the wait `w`, interrupted by a handler with SA_RESTART, ends
+ * with EINTR: on a set whose semaphore is 0, on a queue filled with two
+ * messages of 8192 bytes, or on an empty queue. Returns 0, or 1 once the
+ * failure is reported.
+ */
+static int cut_row(const struct cut_wait *w)
+{
+    int answer[2];
+    int id, err, status;
+    long n;
+    pid_t pid;
+
+    id = w->kind == CUT_SEM ? semget(IPC_PRIVATE, 1, IPC_CREAT | 0600)
+                            : msgget(IPC_PRIVATE, IPC_CREAT | 0600);
+    cut_msg.type = 1;
+    if (id < 0 || pipe(answer) != 0 ||
+        (w->kind == CUT_SND && (msgsnd(id, &cut_msg, sizeof(cut_msg.text), 0) != 0 ||
+                                msgsnd(id, &cut_msg, sizeof(cut_msg.text), 0) != 0))) {
+        return fail("setup for an interrupted System V wait");
+    }
+    usr1_runs = 0;
+    usr1_answer = answer[1];
+    pid = signal_then_give(w->kind, id, answer[0]);
+    if (pid < 0) {
+        return fail("fork for an interrupted System V wait");
+    }
+    n = cut_call(w, id);
+    err = errno;
+    usr1_answer = -1;
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status)) {
+        return fail("the child that signals and gives");
+    }
+    close(answer[0]);
+    close(answer[1]);
+    if (w->kind == CUT_SEM ? semctl(id, 0, IPC_RMID) != 0 : msgctl(id, IPC_RMID, NULL) != 0) {
+        return fail("removing the object of an interrupted wait");
+    }
+    if (WEXITSTATUS(status) == 2) {
+        printf("IPCMUSL FAIL (%s was never seen asleep)\n", w->name);
+        return 1;
+    }
+    if (usr1_runs != 1 || WEXITSTATUS(status) != 0) {
+        printf("IPCMUSL FAIL (the handler that cut %s did not run once)\n", w->name);
+        return 1;
+    }
+    if (n != -1 || err != EINTR) {
+        printf("IPCMUSL FAIL (%s cut by a handler with SA_RESTART returned %ld, errno %d, "
+               "not EINTR)\n",
+               w->name, n, err);
+        return 1;
+    }
+    return 0;
+}
+
+/**
+ * Check each System V wait of `cut_waits` interrupted by a handler with
+ * SA_RESTART. Returns 0, or 1 once the failure is reported.
+ */
+static int cut_rows(void)
+{
+    struct sigaction sa;
+    size_t i;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_usr1;
+    sa.sa_flags = SA_RESTART;
+    sigemptyset(&sa.sa_mask);
+    if (sigaction(SIGUSR1, &sa, NULL) != 0) {
+        return fail("a SIGUSR1 handler with SA_RESTART");
+    }
+    for (i = 0; i < sizeof(cut_waits) / sizeof(cut_waits[0]); i++) {
+        if (cut_row(&cut_waits[i]) != 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* The signal number, si_code and value of the last mq_notify signal. */
 static volatile int mq_signo, mq_code, mq_value;
 
@@ -456,7 +684,7 @@ static int mq_rows(void)
 
 int main(void)
 {
-    if (shm_rows() || sem_rows() || msg_rows() || mq_rows() || mq_files()) {
+    if (shm_rows() || sem_rows() || msg_rows() || cut_rows() || mq_rows() || mq_files()) {
         return 1;
     }
 #if defined(__x86_64__)

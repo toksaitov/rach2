@@ -120,6 +120,8 @@ A full queue with
 The queue was removed while the caller waited.
 .It Bq Er EINTR
 A signal ended the wait.
+The call is not restarted, even after a handler with
+.Dv SA_RESTART .
 .It Bq Er EINVAL
 A size past 8192, a type below 1, a negative
 .Fa msgsz ,

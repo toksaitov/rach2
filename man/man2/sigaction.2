@@ -145,7 +145,13 @@ The calls that wait for a signal or a deadline are never restarted:
 .Fn ppoll ,
 .Fn select
 and
-.Fn pselect .
+.Fn pselect ,
+nor are the System V calls that wait for a semaphore or a message:
+.Fn semop ,
+.Fn semtimedop ,
+.Fn msgsnd
+and
+.Fn msgrcv .
 .Pp
 A user-mode CPU exception raises its signal as Linux raises it:
 .Dv SIGSEGV

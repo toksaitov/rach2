@@ -2662,21 +2662,26 @@ static uint32_t _enosys_big_pid = 0xFFFFFFFFu;
  * which a signal interrupted with EINTR, may be restarted, by a signal no
  * handler takes or by a handler with SA_RESTART. The calls that are not are
  * the ones Linux never restarts after a handler, which wait for a signal or
- * for a deadline, a timed futex wait among them (`futex_restartable`), and
- * the two returns from a handler, whose result register is the interrupted
- * call's. The call is told by its handler, since its number differs between
- * the architectures.
+ * for a deadline, a timed futex wait among them (`futex_restartable`), or
+ * for a System V semaphore or queue, those through ipc(2) among them
+ * (`sysv_ipc_restartable`); and the two returns from a handler, whose result
+ * register is the interrupted call's. The call is told by its handler, since
+ * its number differs between the architectures.
  */
 static int syscall_restartable(syscall_fn_t fn, const isr_params_t *params)
 {
     if (fn == sys_futex) {
         return futex_restartable(params);
     }
+    if (fn == sys_ipc) {
+        return sysv_ipc_restartable(params);
+    }
     return fn != sys_pause && fn != sys_select && fn != sys_sigreturn && fn != sys__newselect &&
            fn != sys_nanosleep && fn != sys_poll && fn != sys_rt_sigreturn &&
            fn != sys_rt_sigtimedwait && fn != sys_rt_sigsuspend && fn != sys_epoll_wait &&
            fn != sys_clock_nanosleep && fn != sys_pselect6 && fn != sys_ppoll &&
-           fn != sys_epoll_pwait && fn != sys_epoll_pwait2;
+           fn != sys_epoll_pwait && fn != sys_epoll_pwait2 && fn != sys_semop &&
+           fn != sys_semtimedop_time64 && fn != sys_msgsnd && fn != sys_msgrcv;
 }
 
 /**

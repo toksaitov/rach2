@@ -5496,6 +5496,20 @@ new
     if (!q->notify_tgid || q->curmsgs != 2 || q->receivers != 0) {
 end
 
+fault sysv-wait-restarted
+probe ipcmusl
+file rach2/sys/syscall.c
+expect IPCMUSL FAIL (semop cut by a handler with SA_RESTART
+old
+    if (fn == sys_ipc) {
+        return sysv_ipc_restartable(params);
+    }
+new
+    if (fn == sys_ipc || fn == sys_semop) {
+        return 1;
+    }
+end
+
 # The network's tables, which netlinkmusl checks.
 
 fault route-shortest-prefix

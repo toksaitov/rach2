@@ -141,6 +141,8 @@ A semaphore past the set's.
 The set was removed while the caller waited.
 .It Bq Er EINTR
 A signal ended the wait.
+The call is not restarted, even after a handler with
+.Dv SA_RESTART .
 .It Bq Er EINVAL
 No operations, an id with no set, a count outside what
 .Fn semget

@@ -34,10 +34,11 @@ struct sysv_row {
 };
 
 /* The handlers of the System V calls, which arch_syscall_init enters in the
- * table. i686 registers every one; x86-64 has no ipc, and makes its semop a
- * semtimedop with no time limit and its semtimedop sys_semtimedop_time64,
- * since a timespec there is 64-bit (arch/x86_64/systab.c). */
+ * table. i686 registers every one but sys_semop, which only x86-64 has;
+ * x86-64 has no ipc, and its semtimedop is sys_semtimedop_time64, since a
+ * timespec there is 64-bit. */
 long sys_ipc(struct isr_params *params);
+long sys_semop(struct isr_params *params);
 long sys_semget(struct isr_params *params);
 long sys_semctl(struct isr_params *params);
 long sys_shmget(struct isr_params *params);
@@ -49,6 +50,13 @@ long sys_msgsnd(struct isr_params *params);
 long sys_msgrcv(struct isr_params *params);
 long sys_msgctl(struct isr_params *params);
 long sys_semtimedop_time64(struct isr_params *params);
+
+/**
+ * Whether the ipc(2) call `params` describes, which a signal ended with
+ * EINTR, may be restarted: one of its waits, SEMOP, SEMTIMEDOP, MSGSND or
+ * MSGRCV, may not, since Linux never restarts these after a handler.
+ */
+int sysv_ipc_restartable(const struct isr_params *params);
 
 /**
  * Apply and drop the SEM_UNDO adjustments of `tg`, whose last thread is
