@@ -11,11 +11,12 @@
 # assembly, linker-script or awk comment, in an echo or printf message or a
 # make $(error/warning/info) directive, in a Python docstring or message, on
 # any line of a configuration file, or in Markdown prose; Markdown bullets
-# that use "-"; and a leftover "Phase N" or "Part N" diary tag in a code
-# comment or a configuration file. Vocabulary is checked by
-# tools/verify/prosecheck.c, not here, and the half of the register rule
-# that needs a judgement is checked by a person in review. It uses grep,
-# find, awk and sed.
+# that use "-"; a leftover "Phase N" or "Part N" diary tag in a code comment
+# or a configuration file; and, in the component documents, a "##" heading
+# out of the list and order of AGENTS.md or a milestone cited by number.
+# Vocabulary is checked by tools/verify/prosecheck.c, not here, and the
+# half of the register rule that needs a judgement is checked by a person in
+# review. It uses grep, find, awk and sed.
 #
 set -u
 
@@ -52,6 +53,14 @@ prune_find() {
 md_files() {
     ls ./*.md 2>/dev/null
     prune_find -name '*.md' -print
+}
+
+# The component documents: every in-house Readme.md and NAME.Readme.md but the
+# front page. The policy files, the skills, dev-log/, the generated documents
+# and the lists keep their own form and are not among them.
+doc_files() {
+    prune_find '(' -name 'Readme.md' -o -name '*.Readme.md' ')' -print
+    find man ports '(' -name 'Readme.md' -o -name '*.Readme.md' ')' -print 2>/dev/null
 }
 
 # Every in-house shell script, as tools/verify/scripts.sh lists them for the
@@ -174,6 +183,46 @@ config_files() {
             /^    /      { next }
             index($0, " -- ") { print file ":" NR ":  [prose em-dash]" }
             /^[ \t]*- /  { print file ":" NR ":  [use * for the bullet]" }
+        ' "$f"
+    done
+
+    # A component document's "##" headings come from the list in the
+    # Documentation section of AGENTS.md, in its order, each at most once;
+    # "Use" and "Running" share the first place. Fenced code is skipped.
+    doc_files | sort -u | while IFS= read -r f; do
+        [ -f "$f" ] || continue
+        awk -v file="$f" '
+            BEGIN {
+                n = split("Use|Running|Results|Interfaces|Sources and license|" \
+                    "Local changes|Design|Building|Updating|Adding tests|" \
+                    "Limits|Tests", name, "|")
+                for (i = 1; i <= n; i++)
+                    rank[name[i]] = i
+                rank["Running"] = rank["Use"]
+                last = 0
+            }
+            /^[ \t]*```/ { fence = !fence; next }
+            /^[ \t]*~~~/ { fence = !fence; next }
+            fence         { next }
+            /^## / {
+                h = substr($0, 4)
+                if (!(h in rank))
+                    print file ":" NR ":  [heading not in the list]"
+                else if (rank[h] <= last)
+                    print file ":" NR ":  [heading out of order]"
+                else
+                    last = rank[h]
+            }
+        ' "$f"
+    done
+
+    # A component document cites no milestone by number: no "milestone N"
+    # and no link into a milestone's directory under dev-log/.
+    doc_files | sort -u | while IFS= read -r f; do
+        [ -f "$f" ] || continue
+        awk -v file="$f" '
+            tolower($0) ~ /milestones? +[0-9]/ ||
+            /dev-log\/[0-9]/ { print file ":" NR ":  [milestone cited]" }
         ' "$f"
     done
 } >>"$findings"

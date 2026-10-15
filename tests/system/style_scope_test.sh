@@ -11,8 +11,11 @@
 # script. The text check must pass the tree as it is, and must find each fault
 # planted, one at a time, in a kind of file it reads: a non-ASCII byte in
 # tests/registry, a spaced "--" on a manifest line and in an assembly
-# comment, a "Phase" tag in a suppression file, and a spaced "--" in an echo
-# of a script with no suffix.
+# comment, a "Phase" tag in a suppression file, a spaced "--" in an echo
+# of a script with no suffix, and in a component document a heading out of
+# order, one not in the list, a milestone cited by number and a link into a
+# milestone's directory. A vendored Readme with a heading out of the list must
+# not be read.
 #
 # With --mutate each fault below is put into the private copy of one checker,
 # must fail the row named for it, and is restored and touched before every row
@@ -71,8 +74,12 @@ for f in vendor/busybox/busybox-9.9/v.sh vendor/musl/install/w.sh ports/doom/src
     krffs/vendor/t.sh; do
     printf '#!/bin/sh\necho vendored\n' >"$tree/$f"
 done
+printf '# mk\n\nA summary.\n\n## Interfaces\n\n## Tests\n' >"$tree/mk/Readme.md"
+printf '# man\n\nA summary.\n\n## Use\n' >"$tree/man/Readme.md"
+printf '# busybox\n\n## Notes\n' >"$tree/vendor/busybox/busybox-9.9/Readme.md"
 for f in tests/run utils/tool tests/registry krffs/manifests/x.manifest \
-    tools/verify/cppcheck.suppress rach2/sys/arch/i686/loader.s; do
+    tools/verify/cppcheck.suppress rach2/sys/arch/i686/loader.s mk/Readme.md \
+    man/Readme.md; do
     mkdir -p "$tree/saved/$(dirname "$f")"
     cp "$tree/$f" "$tree/saved/$f"
 done
@@ -144,6 +151,14 @@ rows()
     dashes=--
     printf 'echo "a %s b"\n' "$dashes" >"$work/plant"
     planted text-script-dash tests/run 3 '[prose em-dash in a message]'
+    printf '## Design\n' >"$work/plant"
+    planted text-doc-order mk/Readme.md 8 '[heading out of order]'
+    printf '## Notes\n' >"$work/plant"
+    planted text-doc-heading mk/Readme.md 8 '[heading not in the list]'
+    printf 'Milestone 42 added it.\n' >"$work/plant"
+    planted text-doc-milestone mk/Readme.md 8 '[milestone cited]'
+    printf 'See [the plan](../dev-log/42-x/plan.md).\n' >"$work/plant"
+    planted text-doc-link man/Readme.md 6 '[milestone cited]'
 }
 
 # Change one private checker by the named fault.
@@ -175,6 +190,14 @@ faults = {
         "    ch_files | sort -u | while IFS= read -r f; do\n"
         "        [ -f \"$f\" ] || continue\n"
         "        sed 's/\"[^\"]*\"//g' \"$f\" | grep -n ' -- '"),
+    'text-order': ('textcheck.sh',
+        "                    last = rank[h]\n", "                    last = 0\n"),
+    'text-heading': ('textcheck.sh',
+        "if (!(h in rank))", "if (0)"),
+    'text-milestone': ('textcheck.sh',
+        "tolower($0) ~ /milestones? +[0-9]/ ||", "$0 ~ /milestones? +[0-9]/ ||"),
+    'text-docs': ('textcheck.sh',
+        "    find man ports '(' -name", "    find ports '(' -name"),
 }
 name, old, new = faults[fault]
 path = directory / name
@@ -193,13 +216,17 @@ if [ "$mutate" -ne 2 ]; then
 fi
 
 for fault in list-extensionless list-script list-vendored text-ascii text-config \
-    text-diary text-code; do
+    text-diary text-code text-order text-heading text-milestone text-docs; do
     case $fault in
         list-*) copy=scripts.sh; named=scripts-list ;;
         text-ascii) copy=textcheck.sh; named=text-config-ascii ;;
         text-config) copy=textcheck.sh; named=text-config-dash ;;
         text-diary) copy=textcheck.sh; named=text-config-diary ;;
         text-code) copy=textcheck.sh; named=text-code-dash ;;
+        text-order) copy=textcheck.sh; named=text-doc-order ;;
+        text-heading) copy=textcheck.sh; named=text-doc-heading ;;
+        text-milestone) copy=textcheck.sh; named=text-doc-milestone ;;
+        text-docs) copy=textcheck.sh; named=text-doc-link ;;
     esac
     change "$fault"
     if [ "$mutate" -eq 2 ]; then
@@ -225,4 +252,4 @@ if [ "$mutate" -eq 2 ]; then
     echo 'style-scope-test: texts: every fault is once in its source'
     exit 0
 fi
-echo "style-scope-test: result: pass: seven faults failed their rows; restored rows passed"
+echo "style-scope-test: result: pass: eleven faults failed their rows; restored rows passed"

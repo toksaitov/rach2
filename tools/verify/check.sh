@@ -26,7 +26,8 @@
 #      the architecture layer (tools/verify/archcheck.sh): the shared kernel
 #      code compiles for 32- and 64-bit ARM, reaches no architecture's or
 #      platform's own header, and has no assembly
-#   8. text style, in three parts: textcheck.sh for non-ASCII and dashes,
+#   8. text style, in three parts: textcheck.sh for non-ASCII, dashes and
+#      the component documents' headings and citations,
 #      prosecheck for the 80-column comment rule and for the vocabulary a
 #      script can decide (both beside this file).
 #   9. the probe runner's scoring rule (runtests --selftest)
@@ -421,7 +422,7 @@ fi
 
 # Text style: the mechanical natural-text checks (tools/verify/textcheck.sh). It
 # catches non-ASCII bytes, faked em-dashes, and `-` list bullets in the in-house
-# tree.
+# tree, and the headings and milestone citations of the component documents.
 hr "8/22 text style"
 if "$REPO/tools/verify/textcheck.sh" >"$VDIR/verify_text.log" 2>&1; then
     echo "  PASS (textcheck)"
