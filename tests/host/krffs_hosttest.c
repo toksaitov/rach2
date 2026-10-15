@@ -1272,6 +1272,31 @@ static void across_rows(void)
  *   a time, and free the node it came from, and the count of calls runs well
  *   past the fields; a call that never happens fails nothing.
  */
+/**
+ * A write to the offset of a node that has been freed is refused and leaves
+ * the free node as it was. A move whose removal of the old node fails after
+ * it stored the free type leaves the holders that offset, and a write there
+ * would otherwise put the file's bytes, and a length, into free space.
+ */
+static void freed_write_rows(void)
+{
+    krffs_mount_t mount;
+    krffs_node_t head;
+    uint64_t gone;
+
+    make_image(image, IMAGE_SIZE);
+    mount = mount_over(&memory_backend, image, IMAGE_SIZE);
+    check(krffs_create_at(&mount, "/gone") == 0, "a file to remove is created");
+    gone = krffs_walk(&mount, "/gone");
+    check(krffs_remove_at(&mount, gone) == 0, "and its node is freed");
+    check(krffs_write_at(&mount, &gone, "0123456789abcdef", 16, 0) == KRFFS_EBAD,
+          "a write to the freed node is refused");
+    check(krffs_head(&mount, gone, &head) == 0 && head.type == KRFFS_FREE_NODE &&
+              head.data_size == 0,
+          "and the free node is left as it was");
+    check(krffs_chain_is_valid(&mount) == 1, "the chain is sound after the refusal");
+}
+
 int main(void)
 {
     static uint8_t before[IMAGE_SIZE];
@@ -1290,6 +1315,7 @@ int main(void)
     straddle_create_rows();
     id_collision_rows();
     across_rows();
+    freed_write_rows();
 
     make_image(image, IMAGE_SIZE);
     mount = mount_over(&memory_backend, image, IMAGE_SIZE);

@@ -375,10 +375,11 @@ int krffs_read_at(krffs_mount_t *mount, uint64_t node, char *buffer, uint32_t si
  * POSIX has it for a regular file.
  *
  * Returns `size`; KRFFS_EBAD for a null argument or KRFFS_NO_NODE, a header
- * that cannot be read, or a write or sync that failed, which can leave the
- * bytes written and `data_size` not raised; or KRFFS_ENOSPACE when the node
- * had to grow and `krffs_resize_at` failed, which a write that fails during
- * the resize also gives.
+ * that cannot be read, a node that is not reserved, such as one a failed
+ * move freed while its holders kept the offset, or a write or sync that
+ * failed, which can leave the bytes written and `data_size` not raised; or
+ * KRFFS_ENOSPACE when the node had to grow and `krffs_resize_at` failed,
+ * which a write that fails during the resize also gives.
  */
 int krffs_write_at(krffs_mount_t *mount, uint64_t *node, const char *buffer, uint32_t size,
                    uint32_t at);

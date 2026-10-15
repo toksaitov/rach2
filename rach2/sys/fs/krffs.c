@@ -1255,7 +1255,8 @@ int krffs_write_at(krffs_mount_t *mount, uint64_t *node, const char *buffer, uin
     uint64_t old_data_size;
     uint64_t new_size;
 
-    if (!node || *node == KRFFS_NO_NODE || !buffer || krffs_head(mount, *node, &head) != 0) {
+    if (!node || *node == KRFFS_NO_NODE || !buffer || krffs_head(mount, *node, &head) != 0 ||
+        head.type != KRFFS_RESERVED_NODE) {
         return KRFFS_EBAD;
     }
     offset = *node;
