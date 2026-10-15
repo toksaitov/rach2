@@ -120,9 +120,9 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     "seen=class 3 protocol 2" "seen=Type 'help'" "send=exec /mouseprobe" \
     "expect=MOUSEPROBE: move the mouse" \
     mouse=20,-8,0 > /dev/null 2>&1; then
-    note "a mouse moved over USB arrives at /dev/mouse: OK"
+    note "a mouse moved over USB arrives at /mouse: OK"
 else
-    bad "a mouse moved over USB did not arrive at /dev/mouse"
+    bad "a mouse moved over USB did not arrive at /mouse"
 fi
 
 # ---- 5: a device plugged in after the boot is enumerated, and one pulled out
