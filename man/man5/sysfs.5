@@ -288,9 +288,9 @@ holds a link for each disk into its device's directory, which has a
 .Pa stat ,
 .Pa holders ,
 .Pa slaves
-and more; here it holds the disk's directory itself, with the files above,
-and the loop devices are not listed, since they take none of Linux's loop
-requests.
+and more; here it holds the disk's directory itself, with the files above.
+Linux lists every loop device it has made; here a loop device is listed
+only while a file is attached to it.
 Linux suspends to idle with the devices powered down and its clocks of
 time since boot stopped; here the devices stay up, their interrupts are
 taken, and the clocks count on.

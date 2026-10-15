@@ -364,7 +364,8 @@ the last line, is the kernel heap's pages but the buffer cache's, which
 the heap holds, in kibibytes; BusyBox's nmeter reads it to count the memory
 in use.
 .It Pa /proc/mounts
-One line per mount, with six whitespace-separated fields:
+One line for each mount the reader's mount namespace sees, with six
+whitespace-separated fields:
 .Dl SOURCE TARGET TYPE OPTIONS 0 0
 The root, the synthetic
 .Pa /dev
@@ -379,7 +380,8 @@ read-only, and the
 mount at
 .Pa /dev/mqueue
 precede mounts made by programs.
-The source, target, type, and options describe the mounted file system.
+The source, target, type, and options describe the mounted file system;
+a bind mount has the source of the mount it shows.
 Options are comma-separated:
 .Ql ro
 or
@@ -913,7 +915,26 @@ gives it, and to its root directory,
 unless
 .Xr chroot 2
 moved it, for the path of the directory it moved it to.
-A path through either goes on from the path the link holds.
+A path that ends at either goes on from the path the link holds.
+The kernel follows these links, and those under
+.Pa fd ,
+only as the last component of a path: a name below one, as in
+.Pa /proc/PID/cwd/NAME
+or
+.Pa /proc/PID/fd/N/NAME ,
+is
+.Er ENOENT ,
+and a name below
+.Pa /dev/fd/N
+or
+.Pa /dev/stdin
+is
+.Er ENOTDIR ,
+where Linux goes on in the directory the link leads to.
+A
+.Ql ..
+after one is taken from the path as written, back to the directory the
+link is in.
 Reading one, or going through it, needs what
 .Pa exe
 needs.
@@ -1016,14 +1037,14 @@ child excepted; here it sets the one process's.
 .It Pa /proc/PID/mounts
 The text of
 .Pa /proc/mounts ,
-which is the same for every process: the kernel has one table of mounts.
+the reader's mounts, whatever process the file is of.
 .It Pa /proc/PID/mountinfo
 A line for each mount of
 .Pa /proc/mounts ,
 in its order, as util-linux's libmount reads it:
-.Dl ID PARENT MAJOR:MINOR / TARGET OPTIONS - TYPE SOURCE SUPER
-The id is the mount's place in the table plus one; the root is 1 and its
-own parent.
+.Dl ID PARENT MAJOR:MINOR ROOT TARGET OPTIONS - TYPE SOURCE SUPER
+The id is the mount's place in the table plus one; the root mount is 1
+and its own parent.
 .Ar MAJOR : Ns Ar MINOR
 is the device
 .Xr stat 2
@@ -1036,10 +1057,12 @@ gives the mount's files: 0:0 on a KRFFS root, 0:5 for
 the numbers of the node of
 .Pa /dev
 a mount was made from, a partition or a loop device, and the place plus
-16 for another mount.
-The root within the file system is always
-.Pa / ,
-since the kernel has no bind mounts,
+16 for another mount; a bind mount has those of the mount it shows.
+.Ar ROOT
+is the root of the mount within its file system:
+.Pa /
+for a mount of a file system, and for a bind the path of its source
+directory within the file system it shows.
 .Ar OPTIONS
 are those of
 .Pa /proc/mounts ,
@@ -1130,9 +1153,9 @@ Linux's table of the sixteen resource limits, a line of column names and
 a line for each: its name, its soft and hard values or
 .Ql unlimited ,
 and its unit, in Linux's columns.
-The five the kernel keeps, the stack, the core file, the processes, the
-open files and the address space, have the process's values, and the
-others are unlimited, as
+The six the kernel keeps, the file size, the stack, the core file, the
+processes, the open files and the address space, have the process's
+values, and the others are unlimited, as
 .Xr prlimit64 2
 reports them.
 .It Pa /proc/PID/fdinfo
