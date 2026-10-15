@@ -1,11 +1,7 @@
 /*
- * arp.c - Address Resolution Protocol.
- *
- * Cache usable sender mappings by interface and answer requests for the
- * receiving interface's address.
- *
- * All ARP fields are big-endian on the wire; we read and write them with the
- * byte-order helpers.
+ * arp.c: the ARP cache, the mappings learned by interface, and the requests
+ * and replies, as arp.h describes them. The multi-byte fields of an ARP
+ * packet are big-endian and go through byteorder.h.
  */
 
 #include "arp.h"
@@ -19,7 +15,7 @@
 #include "../ip/ip.h"
 
 /* One cached IP-to-MAC mapping. `used` orders the entries by how recently the
-   mapping was learned or looked up, which is what decides who leaves when the
+   mapping was learned or looked up, which decides the one replaced when the
    cache is full. */
 typedef struct arp_entry {
     /* The interface the answer came in on. Two cards may both have a
@@ -29,7 +25,7 @@ typedef struct arp_entry {
     uint32_t ip;
     uint8_t mac[6];
     uint8_t valid;     /* 0 = free slot */
-    uint8_t permanent; /* set by hand: never replaced, changed or flushed */
+    uint8_t permanent; /* set by hand: no packet, flush or full cache replaces it */
     uint32_t used;
 } arp_entry_t;
 
@@ -82,10 +78,9 @@ static uint32_t arp_stamp(void)
 }
 
 /**
- * Return whether `ip` is usable as an ARP sender address on `nd`.
- *
- * Reject addresses excluded by netconf and the network and broadcast
- * addresses of the receiving interface's subnet.
+ * Whether `ip` may be a neighbour's address on `nd`: not an address no host
+ * can have (`netconf_address_is_impossible`), and not the network or
+ * broadcast address of one of `nd`'s subnets. A NULL `nd` has no subnets.
  */
 static int arp_address_is_a_neighbour(struct netdev *nd, uint32_t ip)
 {
@@ -105,22 +100,12 @@ static int arp_address_is_a_neighbour(struct netdev *nd, uint32_t ip)
     return 1;
 }
 
-/* What the cache has done, which /proc/net/stat/arp_cache reports: the
- * mappings stored and dropped, the lookups and their hits, the resolutions
- * that got no answer, and the learned mappings refused for a cache full of
- * permanent ones. */
 struct arp_stats arp_stats;
 
 /* ARP packets are a fixed 28 bytes (Ethernet + IPv4). */
 static uint8_t arp_reply_buf[28];
 static uint8_t arp_req_buf[28];
 
-/**
- * Drop every cached IP-to-MAC mapping, so later traffic re-resolves.
- *
- * Called under `net_lock` when this machine's own address changes, since a
- * mapping learned at the old address may no longer hold.
- */
 void arp_flush(void)
 {
     int i;
@@ -135,13 +120,6 @@ void arp_flush(void)
     ip_hold_forget(0);
 }
 
-/**
- * Drop the mappings learned on one interface, leaving the others.
- *
- * Called under `net_lock` when that interface's address changes. A machine
- * with two cards is on two networks, and the neighbours of the network whose
- * address did not change are still where they were.
- */
 void arp_forget_dev(struct netdev *nd)
 {
     int i;
@@ -175,11 +153,12 @@ int arp_forget(struct netdev *nd, uint32_t ip)
 }
 
 /**
- * Store or refresh an IP-to-MAC mapping: learned from a packet when
- * `permanent` is negative, which leaves a mapping set by hand as it is, and
- * set by hand else, permanent when it is positive.
+ * Store or refresh the mapping of `ip` to `mac` on `nd`: one learned from a
+ * packet when `permanent` is negative, which leaves a permanent mapping of
+ * the address as it is, and one set by hand otherwise, permanent when
+ * `permanent` is positive.
  *
- * Unsolicited packets can supply usable mappings, so a peer can poison the
+ * A packet nobody asked for can supply a mapping, so a peer can poison the
  * cache, though not a permanent mapping.
  *
  * Entries do not age out. A cache of sixteen stays usable on a real network,
@@ -190,8 +169,8 @@ int arp_forget(struct netdev *nd, uint32_t ip)
  * before it learned its gateway unable to reach anything off its own subnet.
  *
  * The datagrams the stack held for the address while it was missing leave
- * once the mapping is stored (`ip_hold_resolved`). 0, or ENOSPC for a cache
- * of permanent mappings alone.
+ * once the mapping is stored (`ip_hold_resolved`). Returns 0, or -ENOSPC
+ * for a cache of permanent mappings alone.
  */
 static int arp_store(struct netdev *nd, uint32_t ip, const uint8_t *mac, int permanent)
 {
@@ -202,7 +181,7 @@ static int arp_store(struct netdev *nd, uint32_t ip, const uint8_t *mac, int per
     for (i = 0; i < ARP_CACHE_SIZE; i++) {
         if (arp_cache[i].valid && arp_cache[i].nd == nd && arp_cache[i].ip == ip) {
             if (arp_cache[i].permanent && permanent < 0) {
-                return 0; /* a mapping set by hand stays as it was set */
+                return 0;
             }
             free_slot = i;
             break;
@@ -236,8 +215,9 @@ static int arp_store(struct netdev *nd, uint32_t ip, const uint8_t *mac, int per
     return 0;
 }
 
-/** Learn the mapping a packet gave, unless one set by hand has the address
- * or the cache is full of them. */
+/** Learn the mapping a packet on `nd` gave, unless its address cannot be a
+ * neighbour's, a permanent mapping has it, or the cache is full of permanent
+ * mappings. */
 static void arp_cache_update(struct netdev *nd, uint32_t ip, const uint8_t *mac)
 {
     if (arp_address_is_a_neighbour(nd, ip)) {
@@ -260,12 +240,13 @@ int arp_set(struct netdev *nd, uint32_t ip, const uint8_t *mac, int permanent)
 }
 
 /**
- * Send an ARP reply to a requester.
+ * Answer, from `nd`, the request of `dst_mac` and `dst_ip` that asked for
+ * `asked`, one of `nd`'s addresses; nothing for a NULL `nd`.
  *
  * The 28-byte ARP packet:
  *   0  hw_type=1 (Ethernet)   2  proto_type=0x0800 (IPv4)
  *   4  hw_len=6   5  proto_len=4   6  op=2 (reply)
- *   8  sender_mac (ours)   14 sender_ip (ours)
+ *   8  sender_mac (nd's)   14 sender_ip (asked)
  *   18 target_mac (requester)   24 target_ip (requester)
  */
 static void arp_send_reply(struct netdev *nd, uint32_t asked, const uint8_t *dst_mac,
@@ -287,14 +268,6 @@ static void arp_send_reply(struct netdev *nd, uint32_t asked, const uint8_t *dst
     ethernet_tx(nd, dst_mac, ETH_TYPE_ARP, arp_reply_buf, 28);
 }
 
-/**
- * Process an Ethernet/IPv4 ARP packet.
- *
- * Require at least 28 bytes, hardware type Ethernet, protocol type IPv4,
- * and address lengths of six and four bytes. Cache a usable sender
- * mapping on `nd`, then answer a request for that interface's address.
- * Call with interrupts disabled.
- */
 void arp_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
 {
     uint16_t hw_type, proto_type, op;
@@ -324,12 +297,6 @@ void arp_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
     }
 }
 
-/**
- * Look up the MAC cached for `ip` on interface `nd`. A hit refreshes the
- * entry's stamp, so the cache is written; call with interrupts off.
- *
- * @return 1 and copies six bytes into `mac_out` on a hit, 0 on a miss.
- */
 int arp_lookup(struct netdev *nd, uint32_t ip, uint8_t *mac_out)
 {
     int i;
@@ -346,13 +313,8 @@ int arp_lookup(struct netdev *nd, uint32_t ip, uint8_t *mac_out)
     return 0;
 }
 
-/**
- * Broadcast an ARP request asking who owns `target_ip`.
- *
- * The sender fields are `nd`'s MAC and IP; the target MAC is left zero, as
- * the resolver does not yet know it. The request is built in a shared buffer,
- * so call with interrupts off.
- */
+/** The target's station address goes as zeros, since it is what the
+ * request asks for. */
 void arp_request(struct netdev *nd, uint32_t target_ip)
 {
     static const uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -364,7 +326,7 @@ void arp_request(struct netdev *nd, uint32_t target_ip)
     arp_req_buf[5] = 4;
     write16be(arp_req_buf + 6, ARP_OP_REQUEST);
     if (!nd) {
-        return; /* no interface reaches that address */
+        return;
     }
     k_memcpy(arp_req_buf + 8, nd->mac, 6);
     write32be(arp_req_buf + 14, netdev_source(nd, target_ip));
