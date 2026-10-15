@@ -15,10 +15,14 @@
 #
 # The tokens are those of `-fpreprocessed -E`, which removes the comments and
 # expands nothing, with the white space between tokens made one line break
-# and the inside of every string and character literal kept as it is. A
-# deleted file and a new one are compared with an empty file. A file whose
-# mode or type changes, such as a script that loses its execute bit, is not
-# a document change, nor is a new file that is not a plain one of mode 644.
+# and the inside of every string and character literal kept as it is. The
+# lines a backslash continues are joined first, and the tokens of each
+# preprocessing directive are set between two empty lines, since a line
+# break ends a directive: a line joined to a directive or split from one
+# changes the list. A deleted file and a new one are compared with an empty
+# file. A file whose mode or type changes, such as a script that loses its
+# execute bit, is not a document change, nor is a new file that is not a
+# plain one of mode 644.
 #
 # The checks are the steps of `tests/run style` that read documents and
 # comments: textcheck.sh, prosecheck's comment width, terms and dev-log
@@ -53,16 +57,22 @@ command -v "$TOKCC" >/dev/null 2>&1 || {
 work=$(mktemp -d "${TMPDIR:-/tmp}/doccheck.XXXXXX") || exit 2
 trap 'rm -rf "$work"' 0
 
-# The tokens of the C text on stdin, one a line, literals kept whole.
+# The tokens of the C text on stdin, one a line, literals kept whole and
+# each directive set between empty lines.
 tokens() {
     "$TOKCC" -fpreprocessed -dD -E -P -x c - 2>/dev/null | awk '
     {
+        line = $0
+        while (line ~ /\\$/ && (getline more) > 0)
+            line = substr(line, 1, length(line) - 1) more
+        directive = line ~ /^[ \t]*#/
+        if (directive) print ""
         out = ""; q = ""; sep = 0
-        for (i = 1; i <= length($0); i++) {
-            c = substr($0, i, 1)
+        for (i = 1; i <= length(line); i++) {
+            c = substr(line, i, 1)
             if (q != "") {
                 out = out c
-                if (c == "\\") { i++; out = out substr($0, i, 1) }
+                if (c == "\\") { i++; out = out substr(line, i, 1) }
                 else if (c == q) q = ""
             } else if (c == " " || c == "\t") {
                 sep = 1
@@ -74,6 +84,7 @@ tokens() {
             }
         }
         if (out != "") print out
+        if (directive) print ""
     }'
 }
 
