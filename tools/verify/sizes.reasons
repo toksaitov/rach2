@@ -726,10 +726,10 @@ tests/vfsprobe.c:_start lines 294 a probe, one sequence of steps in the order th
 tools/image/fatchains.c:print_chain complexity 29 an inspector's check, one walk over the format it reads
 
 tools/image/mkgpt.c:main complexity 54 an inspector's check, one walk over the format it reads
-tools/image/mkgpt.c:main lines 200 an inspector's check, one walk over the format it reads
+tools/image/mkgpt.c:main lines 147 an inspector's check, one walk over the format it reads
 
 tools/image/mkmbr.c:main complexity 53 an inspector's check, one walk over the format it reads
-tools/image/mkmbr.c:main lines 155 an inspector's check, one walk over the format it reads
+tools/image/mkmbr.c:main lines 153 an inspector's check, one walk over the format it reads
 
 tools/image/stickcheck.c:main complexity 29 an inspector's check, one walk over the format it reads
 

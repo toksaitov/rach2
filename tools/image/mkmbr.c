@@ -4,35 +4,30 @@
  * Usage: `mkmbr [--lba] [--id HEX] DISK START:SIZE:TYPE[:boot|:logical] ...`,
  * one argument per partition in table order, at most four primary ones.
  * START and SIZE are whole MiB, TYPE is the hexadecimal partition type
- * byte, and a trailing `:boot` sets the active flag. A specification is
- * refused unless it parses in full, fits the 32-bit LBA fields, lies inside
- * the image, does not overlap an earlier entry, and marks at most one
- * partition active. Only the 64 table bytes and the 0x55aa signature are
- * written; the rest of the first sector, and everything after it, is left
- * exactly as it was, which is what lets the GRUB embed step write its boot
- * code around this table later. `--id` writes the four-byte disk
- * identifier at offset 440 as well, which is how a disk gets the identity
- * `rach2.root=MBRID=` names.
+ * byte, and a trailing `:boot` sets the active flag. A specification is an
+ * error unless it parses in full, fits the 32-bit LBA fields, lies inside
+ * the image, does not overlap an earlier primary entry, and marks at most
+ * one partition active. In the first sector only the 64 table bytes and the
+ * 0x55aa signature are written; the rest of it, and everything after it but
+ * the extended boot records below, is left as it was, so that the GRUB
+ * embed step can write its boot code around this table later. `--id`
+ * writes the four-byte disk identifier at offset 440 as well, which is how
+ * a disk gets the identity `rach2.root=MBRID=` names.
  *
  * A primary entry of type 05 or 0f is an extended partition, and every
- * `:logical` argument after it is a logical partition inside it: each is
- * given by its own START and SIZE, and its extended boot record is written
- * in the sector before it, chained to the next. The logical partitions are
- * numbered from 5 in the order given, as the kernel and every other system
- * number them.
+ * `:logical` argument after it, at most sixteen, is a logical partition
+ * inside it: each is given by its own START and SIZE, and its extended boot
+ * record is written in the sector before it, chained to the next. The
+ * logical partitions are numbered from 5 in the order given, as the kernel
+ * and every other system number them.
  *
- * This replaced parted, and it writes the same bytes parted wrote, CHS
- * fields included, so the disks this builds are byte-identical to the ones
- * built before the change. The CHS values
- * use parted's 4-head, 32-sector translation and saturate at cylinder
- * 1023; nothing boots by them (the kernel's MBR parser and GRUB read the
- * LBA fields alone), but identical bytes make the conversion provable by
- * comparison instead of by argument.
+ * The CHS values use parted's 4-head, 32-sector translation and saturate at
+ * cylinder 1023, so that a table has the bytes parted writes for it. Nothing
+ * boots by them: the kernel's MBR parser and GRUB read the LBA fields alone.
  *
  * `--lba` switches the units to whole sectors and writes the 0xFE 0xFF
- * 0xFF sentinel in both CHS fields, meaning "use the LBA": the form the
- * plain KRFFS disk (krffs/mkdisk.sh) has always carried, where nothing
- * ever reads a geometry.
+ * 0xFF sentinel in both CHS fields, meaning "use the LBA", as the plain
+ * KRFFS disk (krffs/mkdisk.sh) and the suites' test disks do.
  *
  * `mkmbr --list DISK` reads instead of writing: one line per non-empty
  * entry, `INDEX TYPE START SIZE`, the type in hex and the extent in bytes.
@@ -42,7 +37,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* parted's CHS for this geometry: 4 heads, 32 sectors per track. */
+/**
+ * Write to `out` the three CHS bytes of sector `lba` in parted's translation,
+ * 4 heads and 32 sectors a track, saturated at cylinder 1023, head 3,
+ * sector 32.
+ */
 static void chs(unsigned long lba, unsigned char *out)
 {
     unsigned long cyl = lba / (4 * 32);
@@ -59,9 +58,11 @@ static void chs(unsigned long lba, unsigned char *out)
     out[2] = (unsigned char)cyl;
 }
 
-/* Parse one unsigned field strictly: at least one digit, no sign, no
-   overflow, ending at a `:` or at the end of the argument. Returns nonzero
-   and leaves `*p` on the delimiter (or the terminator) on success. */
+/**
+ * Parse one unsigned field at `*p` in `base` into `*out`: at least one
+ * digit, no sign, no overflow, ending at a `:` or at the end of the
+ * argument. Return 1 with `*p` on the `:` or the terminator, or 0.
+ */
 static int field(const char **p, int base, unsigned long *out)
 {
     const char *s = *p;
@@ -77,7 +78,7 @@ static int field(const char **p, int base, unsigned long *out)
     return 1;
 }
 
-/* Require and step over a `:`. */
+/** Step `*p` over a `:` and return 1, or return 0 when `*p` is not on one. */
 static int colon(const char **p)
 {
     if (**p != ':')
@@ -86,10 +87,13 @@ static int colon(const char **p)
     return 1;
 }
 
-/* Print the table: one line per non-empty entry, `INDEX TYPE START SIZE`
-   with the type in hex and the two byte counts in decimal. The suites read
-   a partition's extent this way instead of unpacking the table
-   themselves. */
+/**
+ * Print the four primary entries of the table on `path`: one line per
+ * non-empty entry, `INDEX TYPE START SIZE` with the type in hex and the two
+ * byte counts in decimal. The suites read a partition's extent this way
+ * instead of unpacking the table themselves. Return 0, or 1 after a line on
+ * stderr when the first sector does not read or has no MBR signature.
+ */
 static int list_table(const char *path)
 {
     unsigned char sector[512];
@@ -124,7 +128,11 @@ struct logical {
     unsigned long lba, count, type;
 };
 
-/** Write the entry `e` for `[lba, lba + count)` of `type`. */
+/**
+ * Write the entry `e` for `[lba, lba + count)` of `type`, active when `boot`
+ * is set. Its CHS fields are the LBA sentinel when `lba_units` is set and
+ * parted's values otherwise.
+ */
 static void put_entry(unsigned char *e, int lba_units, unsigned long lba, unsigned long count,
                       unsigned long type, int boot)
 {
@@ -159,15 +167,19 @@ static void put_entry(unsigned char *e, int lba_units, unsigned long lba, unsign
  * one the sector before its partition; a record's first entry is its
  * partition, relative to the record, and its second the next record,
  * relative to the extended partition, covering that record and its
- * partition. Returns 0, or -1 with a message.
+ * partition.
+ *
+ * Each logical partition must lie inside the extended one, after its first
+ * sector, and after the one before it with a sector between them for its
+ * record. Every partition is checked before any record is written, so that
+ * a failure leaves the image as it was. Return 0, or -1 after a line on
+ * stderr.
  */
 static int write_logical(FILE *f, int lba_units, unsigned long ext_lba, unsigned long ext_count,
                          const struct logical *log, int n)
 {
     int i;
 
-    /* Every partition is judged before any record is written, so a
-     * specification refused in the middle leaves the image as it was. */
     for (i = 0; i < n; i++) {
         if (log[i].lba < ext_lba + 1 || log[i].lba + log[i].count > ext_lba + ext_count) {
             fprintf(stderr, "mkmbr: logical partition %d is outside the extended one\n", i + 5);
@@ -200,6 +212,13 @@ static int write_logical(FILE *f, int lba_units, unsigned long ext_lba, unsigned
     return 0;
 }
 
+/**
+ * Write the table the arguments describe, as the opening comment says, or
+ * list one with `--list`. The first sector is written back only after
+ * every argument has been checked and the extended boot records written.
+ * Exit 0, 2 on a usage or specification error, or 1 when the image does not
+ * open, read or write, each failure after a line on stderr.
+ */
 int main(int argc, char **argv)
 {
     unsigned char sector[512];
@@ -286,8 +305,7 @@ int main(int argc, char **argv)
             fclose(f);
             return 2;
         }
-        /* The LBA fields are 32 bits, so the whole partition, end
-           included, must sit below 2 TiB and inside the image. */
+        /* The LBA fields are 32 bits, so a partition must end below 2 TiB. */
         if (lba_units) {
             lba = start_mib;
             count = size_mib;
@@ -350,8 +368,7 @@ int main(int argc, char **argv)
         fclose(f);
         return 1;
     }
-    /* fclose flushes the buffered sector; a full disk surfaces here, and
-       returning success over it would bless a disk with no table. */
+    /* fclose writes the buffered sector, so a full disk fails here. */
     if (fclose(f) != 0) {
         fprintf(stderr, "mkmbr: cannot write the table back\n");
         return 1;

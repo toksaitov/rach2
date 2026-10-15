@@ -5,20 +5,21 @@
  * sectors of 512 bytes. The image is the hybrid ISO followed by an exFAT
  * volume, and what is checked is the finished image and not its parts:
  *
- * * sector 0 carries boot code and the `0x55AA` signature;
- * * the table's entries, judged by `mbr_take`, which is the function the
- *   kernel publishes a stick's partitions with, give exactly three
- *   partitions and pass none over;
+ * * sector 0 has boot code and the `0x55AA` signature;
+ * * the table's entries, judged by `mbr_take` (rach2/sys/block/mbr.c), which
+ *   applies the rules the kernel's `part_scan` applies, give exactly three
+ *   partitions, the table's first three entries, and pass none over;
  * * the second is the volume, of type `0x07`, at `VOLUME-START` for
  *   `VOLUME-SECTORS`, and the first ends before it;
  * * the third is the ISO's EFI boot image, of type `0xEF`, between the
  *   first's end and the volume's start, which UEFI firmware boots a USB
  *   device from;
+ * * the volume starts on a 1 MiB boundary;
+ * * the image ends where the volume ends;
  * * the volume's boot sector is exFAT's, and its `PartitionOffset` and
- *   `VolumeLength` are the entry's start and length, which is what a stick
- *   formatted by any other system carries and what a reader that compares
- *   the two would refuse otherwise;
- * * the image ends where the volume ends.
+ *   `VolumeLength` are the entry's start and length, as on a stick
+ *   formatted by any other system; a reader that compares the two fails
+ *   the volume otherwise.
  *
  * The volume's contents are walked by `mkexfatfixture --check` afterwards;
  * this program reads two sectors and the table, and nothing else.
@@ -41,12 +42,14 @@ extern unsigned long long strtoull(const char *text, char **end, int base);
 
 #define SECTOR 512u
 
+/** Print `what` on stdout after the program's name; return 1. */
 static int fail(const char *what)
 {
     printf("stickcheck: %s\n", what);
     return 1;
 }
 
+/** The little-endian 64-bit value at `p`. */
 static unsigned long long rd64(const unsigned char *p)
 {
     unsigned long long v = 0;
@@ -70,6 +73,15 @@ static int efi_entry_ok(const struct mbr_part *parts, const struct mbr_range *ta
            taken[2].start_lba + taken[2].sector_count <= start;
 }
 
+/**
+ * Check the image as the opening comment says and print one `ok` line with
+ * the three ranges; exit 0, or 1 at the first failure with its line on
+ * stdout.
+ *
+ * `mbr_take` packs the ranges it takes, so `taken[i]` is entry i's range only
+ * when the three taken are the table's first three entries: the first two
+ * must have a type and the fourth must be empty.
+ */
 int main(int argc, char **argv)
 {
     unsigned char table[SECTOR];
@@ -113,9 +125,6 @@ int main(int argc, char **argv)
     if (count != 3) {
         return fail("the table does not give exactly three partitions");
     }
-    /* `mbr_take` packs what it takes, so the three must be the first three
-     * entries for the type read from an entry to be the range's own: with
-     * three taken and the fourth empty, the third is not. */
     if (parts[0].type == 0 || parts[1].type == 0 || parts[3].type != 0) {
         return fail("the three partitions are not the table's first three entries");
     }

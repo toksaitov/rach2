@@ -3,11 +3,11 @@
  *
  *     fatchains IMAGE PATH...
  *
- * Each PATH is `::/dir/name` as mtools spells it, and its line is
- * `PATH <a-b> <c> ...`, one range per run of consecutive clusters, which
- * is the record `mshowfat` printed. That tool aborts at random on the
- * build host (mtools 4.0.49 on macOS, roughly one run in three), so the
- * disk builder verifies its staged chains with this program instead. A
+ * Each PATH is `::/dir/name` as mtools writes it, every component a short
+ * name, and its line is `PATH <a-b> <c> ...`, one range for each run of
+ * consecutive clusters, as `mshowfat` prints it. The disk builder checks
+ * its staged chains with this program because `mshowfat` aborts at random
+ * on the build host (mtools 4.0.49 on macOS, about one run in three). A
  * path that is not there, a chain that ends in a bad entry, a FAT12 volume
  * and a volume whose fields make no sense all exit 1 with a line on stderr.
  */
@@ -21,15 +21,18 @@ static FILE *img;
 static unsigned bytes_per_sector, sectors_per_cluster, reserved, nfats;
 static unsigned root_entries, sectors_per_fat, root_cluster;
 static unsigned long total_sectors, clusters, first_data_sector;
-static unsigned active_fat; /* the FAT read: the one ExtFlags names when mirroring is off */
+/* The FAT read: the one ExtFlags gives with mirroring off, else the first. */
+static unsigned active_fat;
 static int fat32;
 
+/** Print `what` on stderr after the program's name; return 1. */
 static int fail(const char *what)
 {
     fprintf(stderr, "fatchains: %s\n", what);
     return 1;
 }
 
+/** Read `length` bytes at byte `offset` of the image; 0, or -1 if short. */
 static int read_at(unsigned long offset, void *buffer, unsigned length)
 {
     if (fseek(img, (long)offset, SEEK_SET) != 0) {
@@ -38,17 +41,22 @@ static int read_at(unsigned long offset, void *buffer, unsigned length)
     return fread(buffer, 1, length, img) == length ? 0 : -1;
 }
 
+/** The little-endian 16-bit value at `p`. */
 static unsigned le16(const unsigned char *p)
 {
     return p[0] | ((unsigned)p[1] << 8);
 }
 
+/** The little-endian 32-bit value at `p`. */
 static unsigned long le32(const unsigned char *p)
 {
     return le16(p) | ((unsigned long)le16(p + 2) << 16);
 }
 
-/** The FAT entry of `cluster`, or 0 on a read failure. */
+/**
+ * The entry of `cluster` in the FAT `active_fat` selects, its upper four bits
+ * cleared on FAT32, or 0, which no chain continues to, on a read failure.
+ */
 static unsigned long fat_next(unsigned long cluster)
 {
     unsigned char e[4];
@@ -62,11 +70,13 @@ static unsigned long fat_next(unsigned long cluster)
     return fat32 ? le32(e) & 0x0FFFFFFFul : le16(e);
 }
 
+/** Whether the FAT entry `next` marks the end of a chain. */
 static int chain_ends(unsigned long next)
 {
     return fat32 ? next >= 0x0FFFFFF8ul : next >= 0xFFF8ul;
 }
 
+/** The byte offset in the image of data cluster `cluster`, 2 or more. */
 static unsigned long cluster_offset(unsigned long cluster)
 {
     return (first_data_sector + (cluster - 2) * sectors_per_cluster) *
@@ -74,9 +84,11 @@ static unsigned long cluster_offset(unsigned long cluster)
 }
 
 /**
- * The 8.3 name of `component` as a directory entry spells it, upper case;
- * -1 for a component a short entry cannot spell exactly: a base over eight
- * characters, an extension over three, a second dot, or an empty base.
+ * Write to `out` the 8.3 name of `component` as a directory entry stores
+ * it: upper case, the base and the extension each padded with spaces.
+ * Return 0, or -1 for a component a short entry cannot hold exactly: a base
+ * over eight characters, an extension over three, a second dot, or an
+ * empty base.
  */
 static int short_name(const char *component, char out[11])
 {
@@ -100,11 +112,12 @@ static int short_name(const char *component, char out[11])
 }
 
 /**
- * Find `name` (11 bytes, as a directory entry spells it) in the directory
- * whose data is `region` bytes at `offset`; set the entry's first cluster,
- * its size and whether it is a directory. 1 found, 0 not in this region,
- * 2 the directory ended (a zero entry ends the whole directory, not the
- * cluster), -1 a read failure.
+ * Find `name`, 11 bytes as `short_name` writes them, in the directory data
+ * of `region` bytes at `offset`, and set the entry's first cluster, its
+ * size and whether it is a directory. Deleted entries, volume labels and
+ * long-name entries are skipped. Return 1 found, 0 not in this region, 2
+ * the directory ended (a zero entry ends the whole directory, not only the
+ * cluster), or -1 on a read failure.
  */
 static int scan_region(unsigned long offset, unsigned long region, const char name[11],
                        unsigned long *first, unsigned long *size, int *is_dir)
@@ -132,7 +145,12 @@ static int scan_region(unsigned long offset, unsigned long region, const char na
     return 0;
 }
 
-/** As `scan_region`, over the chain starting at `cluster`. */
+/**
+ * As `scan_region`, over the directory whose chain starts at `cluster`.
+ * Return 1 found, -1 on a read failure, or 0 when the directory ends, its
+ * chain ends or leaves the volume, or the walk passes the volume's cluster
+ * count, which only a loop in the chain can do.
+ */
 static int scan_chain(unsigned long cluster, const char name[11], unsigned long *first,
                       unsigned long *size, int *is_dir)
 {
@@ -159,7 +177,14 @@ static int scan_chain(unsigned long cluster, const char name[11], unsigned long 
     return 0;
 }
 
-/** Print the chain of `path` in mshowfat's shape; 0 done, -1 not done. */
+/**
+ * Print the line of `path`: the path and the runs of its chain, as the
+ * file's opening comment says, or the path alone for an empty file. Return
+ * 0, or nonzero after a line on stderr when the path does not begin with
+ * `::/` or is too long, a component is not a short name or is not found, a
+ * component before the last is not a directory, a read fails, or the chain
+ * leaves the volume or loops.
+ */
 static int print_chain(const char *path)
 {
     char copy[512];
@@ -250,6 +275,14 @@ static int print_chain(const char *path)
     return 0;
 }
 
+/**
+ * Read the boot sector of IMAGE and print the line of each PATH in turn.
+ * Exit 0, or 1 at the first failure. The FAT type follows from the cluster
+ * count, as the specification gives it, and a FAT12 volume fails; a volume
+ * with no fixed root directory entries is taken as FAT32. The FAT read is
+ * the active one when FAT32 mirroring is off (ExtFlags bit 7), else the
+ * first, and it must have an entry for every cluster.
+ */
 int main(int argc, char **argv)
 {
     unsigned char bpb[64];
@@ -295,8 +328,7 @@ int main(int argc, char **argv)
         return fail("a FAT12 volume is not supported");
     }
     fat32 = clusters >= 65525 || root_entries == 0;
-    /* The FAT read is the active one when FAT32 mirroring is off (ExtFlags
-     * bit 7), else the first; and it must hold an entry per cluster. */
+    /* ExtFlags: bit 7 turns mirroring off, bits 0-3 give the active FAT. */
     active_fat = 0;
     if (fat32 && (bpb[40] & 0x80)) {
         active_fat = bpb[40] & 0x0F;

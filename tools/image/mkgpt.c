@@ -5,27 +5,27 @@
  * with one SPEC of the form `START:SIZE:KIND[@INDEX][=LABEL]` per partition,
  * at most fifteen. START and SIZE are whole sectors of 512 bytes. KIND selects
  * the type GUID: `fat` an EFI system partition, `data` a basic data
- * partition, which is what a FAT or exFAT volume on a stick carries, `linux`
- * a Linux file system, and `bios` a BIOS boot partition, which holds GRUB's
- * BIOS core on a disk whose sectors after the MBR are the table's. `@INDEX`
- * puts the entry at that index of the array instead of the next free one,
- * which is how a table whose first used entry is not the first entry is
- * built, and `=LABEL` is the entry's name, `RACH2` and the entry's position
- * when absent. The partition GUIDs are made from the entry index and the
- * seed, so two disks built with one seed have the same identities, which
- * is what a test of a cloned disk wants, and two seeds give two sets. The
- * disk's GUID is made from the seed too, unless `--guid` gives it in the
- * 36-character text form, which is how a disk image is given the identity
- * its boot menu names. `--damage-primary` writes the primary header with a
- * wrong checksum after the table is complete, leaving the backup as the
- * table a reader finds.
+ * partition, the type of a FAT or exFAT volume on a stick, `linux` a Linux
+ * file system, and `bios` a BIOS boot partition, which holds GRUB's BIOS
+ * core on a disk whose sectors after the MBR are the table's. `@INDEX`
+ * puts the entry at that index of the array, counted from 0, instead of the
+ * next one, which is how a table whose first used entry is not the first
+ * entry is built, and `=LABEL` is the entry's name, `RACH2` and the SPEC's
+ * position among the SPECs when absent. The partition GUIDs are made from
+ * the entry index and the seed, so two disks built with one seed have the
+ * same identities, as a test of a cloned disk needs, and two seeds give two
+ * sets. The disk's GUID is made from the seed too, unless `--guid` gives it
+ * in the 36-character text form, which is how a disk image is given the
+ * identity its boot menu names. `--damage-primary` writes the primary header
+ * with a wrong checksum after the table is complete, leaving the backup as
+ * the table a reader finds.
  *
  * What is written: a protective MBR whose single entry is type 0xEE over
  * the whole medium, the primary header at sector 1 with the array at sector
- * 2, and the backup array and header at the end, which is where a table's
- * second copy belongs and what a checker looks for. Both headers carry the
- * CRC32 of the whole array and of themselves. The MBR's boot code is zeros;
- * `grubembed` puts GRUB's there afterwards.
+ * 2, and the backup array and header at the end, where the specification
+ * puts a table's second copy. Both headers have the CRC32 of the whole
+ * array and of themselves. The MBR's boot code is zeros; `grubembed` puts
+ * GRUB's there afterwards.
  *
  * `mkgpt --list DISK` reads instead of writing: one line per used entry,
  * `INDEX KIND START SIZE`, with the index counted from 1, the kind by the
@@ -72,6 +72,7 @@ static const struct kind {
       0x49}},
 };
 
+/** The CRC-32 of `length` bytes at `data`, as a GUID table's checksums use. */
 static unsigned long crc32_of(const unsigned char *data, unsigned long length)
 {
     unsigned long crc = 0xFFFFFFFFul;
@@ -90,6 +91,7 @@ static unsigned long crc32_of(const unsigned char *data, unsigned long length)
     return (~crc) & 0xFFFFFFFFul;
 }
 
+/** Store the low 32 bits of `v` at `p`, little-endian. */
 static void put32(unsigned char *p, unsigned long v)
 {
     p[0] = (unsigned char)(v & 0xFFu);
@@ -98,23 +100,30 @@ static void put32(unsigned char *p, unsigned long v)
     p[3] = (unsigned char)((v >> 24) & 0xFFu);
 }
 
+/** Store `v` at `p` as a little-endian 64-bit value. */
 static void put64(unsigned char *p, unsigned long long v)
 {
     put32(p, (unsigned long)(v & 0xFFFFFFFFull));
     put32(p + 4, (unsigned long)((v >> 32) & 0xFFFFFFFFull));
 }
 
-/* A partition GUID that differs per entry without a random source, so two
- * runs of this program on one image produce the same bytes. */
+/* The `--seed` value, 0 by default, from which `unique_guid` makes GUIDs. */
 static unsigned int seed;
 
+/**
+ * Write to `p` the GUID of entry `index` under `seed`, made without a random
+ * source, so that two runs with one seed write the same bytes. Without
+ * `--guid`, the disk's own GUID is made as index 99.
+ *
+ * The index goes into the first eight bytes and the seed into the last
+ * eight, so that two GUIDs are equal only when their indexes and their
+ * seeds are each equal modulo 256. With both folded into every byte, seed 0
+ * at index 7 and seed 16 at index 0 would give one GUID.
+ */
 static void unique_guid(unsigned char *p, unsigned int index)
 {
     int i;
 
-    /* The index and the seed go into different bytes, so that no pair of
-     * them meets in one identity: with both folded into every byte, seed
-     * 0 at index 7 and seed 16 at index 0 gave the same sixteen bytes. */
     for (i = 0; i < 16; i++) {
         p[i] = (unsigned char)(0x40 + i + (i < 8 ? index : seed));
     }
@@ -139,7 +148,10 @@ static int hex_digit(int c)
     return -1;
 }
 
-/** Parse the 36-character text form into `p`; 0 on success, -1 otherwise. */
+/**
+ * Parse the 36-character text form of a GUID into `p`, in the byte order the
+ * table stores; return 0, or -1 when `text` is not in that form.
+ */
 static int parse_guid(const char *text, unsigned char *p)
 {
     int i, n = 0;
@@ -163,18 +175,21 @@ static int parse_guid(const char *text, unsigned char *p)
     return text[n] == '\0' ? 0 : -1;
 }
 
+/** Print `what` on stderr after the program's name; return 1. */
 static int fail(const char *what)
 {
     fprintf(stderr, "mkgpt: %s\n", what);
     return 1;
 }
 
+/** The little-endian 32-bit value at `p`. */
 static unsigned long get32(const unsigned char *p)
 {
     return (unsigned long)p[0] | (unsigned long)p[1] << 8 | (unsigned long)p[2] << 16 |
            (unsigned long)p[3] << 24;
 }
 
+/** The little-endian 64-bit value at `p`. */
 static unsigned long long get64(const unsigned char *p)
 {
     return (unsigned long long)get32(p) | (unsigned long long)get32(p + 4) << 32;
@@ -182,7 +197,9 @@ static unsigned long long get64(const unsigned char *p)
 
 /**
  * Read the header at sector `lba` of `f` into `header` and its array into
- * `array`, and check both checksums. Returns 0, or -1.
+ * `array`, which has room for ARRAY_BYTES. Return 0 when the header has the
+ * signature, 128 entries of 128 bytes, a size of 92 to 512 bytes, and
+ * checksums that match it and the array; -1 otherwise.
  */
 static int read_table(FILE *f, unsigned long long lba, unsigned char *header, unsigned char *array)
 {
@@ -209,7 +226,10 @@ static int read_table(FILE *f, unsigned long long lba, unsigned char *header, un
     return 0;
 }
 
-/** Print the used entries of the table on `path`, as the usage says. */
+/**
+ * Print the used entries of the table on `path`, as the opening comment says
+ * for `--list`; return 0, or 1 after a line on stderr.
+ */
 static int list_table(const char *path)
 {
     static unsigned char array[ARRAY_BYTES];
@@ -249,10 +269,11 @@ static int list_table(const char *path)
 }
 
 /**
- * Put the partition one SPEC argument describes into `array` as the entry
- * after the `used` already there, or at the index the SPEC names, inside
- * the usable range `[first_usable, last_usable]`. Returns 0, or 1 having
- * said why not.
+ * Put the partition one SPEC argument describes into `array`, at index
+ * `used`, the number of SPECs before it, or at the index the SPEC names. The
+ * partition must lie inside the usable range `[first_usable, last_usable]`
+ * and its entry must be empty. The name is LABEL, or `RACH2` followed by the
+ * character `'0' + used`. Return 0, or 1 after a line on stderr.
  */
 static int put_entry(unsigned char *array, const char *arg, int used,
                      unsigned long long first_usable, unsigned long long last_usable)
@@ -311,7 +332,7 @@ static int put_entry(unsigned char *array, const char *arg, int used,
     unique_guid(e + 16, at);
     put64(e + 32, start);
     put64(e + 40, start + count - 1u);
-    /* The name, in UTF-16: "RACH2 N". */
+    /* The name is UTF-16LE: each ASCII byte is the low byte of a code unit. */
     if (label) {
         for (k = 0; label[k]; k++) {
             e[56 + k * 2] = (unsigned char)label[k];
@@ -327,6 +348,12 @@ static int put_entry(unsigned char *array, const char *arg, int used,
     return 0;
 }
 
+/**
+ * Write the table the arguments describe, as the opening comment says, or
+ * list one with `--list`. After a write, print the GUID of each entry and a
+ * summary line on stdout. Exit 0, or 1 after a line on stderr; the image is
+ * written only after every SPEC has been read and checked.
+ */
 int main(int argc, char **argv)
 {
     unsigned char array[ARRAY_BYTES];
@@ -407,9 +434,7 @@ int main(int argc, char **argv)
     }
     array_crc = crc32_of(array, ARRAY_BYTES);
 
-    /* The protective MBR: one entry of type 0xEE over everything past
-     * sector zero, with the CHS fields saturated as every writer sets
-     * them. */
+    /* The protective entry: type 0xEE from LBA 1, CHS 0/0/2 to saturated. */
     memset(mbr, 0, sizeof(mbr));
     mbr[446 + 1] = 0x00;
     mbr[446 + 2] = 0x02;

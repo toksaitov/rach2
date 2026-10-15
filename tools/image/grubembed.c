@@ -1,12 +1,12 @@
 /**
  * grubembed: embed GRUB's i386-pc boot.img and core.img into a disk image.
  *
- * grub-bios-setup wants to resolve the image file to a host block device,
- * which a plain file is not, so this performs the same install directly:
- * it writes boot.img's first 440 bytes to the MBR (keeping the disk
- * identifier and the partition table, as grub-bios-setup does), places
- * core.img where the table leaves room for it, and patches the two
- * pointers grub-bios-setup would patch.
+ * grub-bios-setup installs only on a host block device, which a plain file
+ * is not, so this program does the same install on a file: it writes
+ * boot.img's first 440 bytes to the MBR (keeping the disk identifier and
+ * the partition table, as grub-bios-setup does), places core.img where the
+ * table leaves room for it, and patches the fields below, as
+ * grub-bios-setup does.
  *
  *   boot.img[0x5c]  the 8-byte LBA of core.img's first sector
  *   boot.img[0x64]  the boot drive (0xff: use the BIOS-provided drive)
@@ -15,7 +15,7 @@
  *                   contiguously from its first sector
  *
  * On an MBR disk the room is the post-MBR gap: core.img goes at LBA 1, and
- * this aborts if it would run past the gap into a partition. On a disk
+ * the program fails if it would run past the gap into a partition. On a disk
  * whose MBR is the protective one of a GUID table, the sectors after the
  * MBR are the table's, and the room is the BIOS boot partition: the entry
  * of type 21686148-6449-6E6F-744E-656564454649, read from the primary
@@ -47,6 +47,12 @@
 static const unsigned char bios_boot[16] = {0x48, 0x61, 0x68, 0x21, 0x49, 0x64, 0x6f, 0x6e,
                                             0x74, 0x4e, 0x65, 0x65, 0x64, 0x45, 0x46, 0x49};
 
+/**
+ * Read the whole file `path` into a buffer from malloc and set `*n` to its
+ * length. The buffer has one spare sector after the file's bytes, so that
+ * the caller can pad the last sector in place, and the caller frees it.
+ * Return NULL when the file cannot be opened or read.
+ */
 static unsigned char *read_file(const char *path, size_t *n)
 {
     FILE *f = fopen(path, "rb");
@@ -59,7 +65,6 @@ static unsigned char *read_file(const char *path, size_t *n)
         fclose(f);
         return NULL;
     }
-    /* One spare sector so the caller can pad in place. */
     buf = malloc((size_t)len + SECTOR);
     if (buf == NULL || fread(buf, 1, (size_t)len, f) != (size_t)len) {
         free(buf);
@@ -71,17 +76,22 @@ static unsigned char *read_file(const char *path, size_t *n)
     return buf;
 }
 
+/** The little-endian 32-bit value at `p`. */
 static uint32_t r32(const unsigned char *p)
 {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
+/** The little-endian 64-bit value at `p`. */
 static uint64_t r64(const unsigned char *p)
 {
     return (uint64_t)r32(p) | (uint64_t)r32(p + 4) << 32;
 }
 
-/** The CRC32 a GUID table carries over its header and its array. */
+/**
+ * The CRC-32 of `length` bytes at `data`, the checksum a GUID table keeps
+ * of its header and of its entry array.
+ */
 static uint32_t crc32_of(const unsigned char *data, size_t length)
 {
     uint32_t crc = 0xFFFFFFFFu;
@@ -98,12 +108,13 @@ static uint32_t crc32_of(const unsigned char *data, size_t length)
 }
 
 /**
- * Find the BIOS boot partition of the GUID table on `f`: its first sector
- * in `*first` and its length in `*count`. The partition must lie in the
- * table's usable sectors and after its primary entry array, since the core
- * is written over the whole partition: a table whose checksums match can
- * still name a partition over its own array. Returns 0, or 1 having said
- * why not.
+ * Find the BIOS boot partition of the GUID table on `f`: set its first
+ * sector in `*first` and its length in sectors in `*count`. The primary
+ * header and array are read, and both checksums must match. The partition
+ * must lie in the table's usable sectors and after its primary entry array,
+ * since the core is written over the whole partition, and a table whose
+ * checksums match can still put a partition over its own array. Return 0,
+ * or 1 after a line on stderr.
  */
 static int bios_boot_partition(FILE *f, unsigned long *first, unsigned long *count)
 {
@@ -163,6 +174,7 @@ static int bios_boot_partition(FILE *f, unsigned long *first, unsigned long *cou
     return 1;
 }
 
+/** Store `lo` at `p` as a little-endian 64-bit value with a zero high half. */
 static void w64(unsigned char *p, uint32_t lo)
 {
     int i;
@@ -175,6 +187,11 @@ static void w64(unsigned char *p, uint32_t lo)
         p[i] = 0;
 }
 
+/**
+ * Install boot.img and core.img on the disk, as the file's opening comment
+ * says. Exit 0, 1 after a line on stderr, or 2 on a usage error. The disk
+ * is written only after every check passes.
+ */
 int main(int argc, char **argv)
 {
     unsigned char mbr[SECTOR];
@@ -242,9 +259,6 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* boot.img loads core.img's first sector from core_lba; the diskboot
-       blocklist at the end of that sector names the rest: the next LBA,
-       and every sector but the first. */
     w64(boot + 0x5c, (uint32_t)core_lba);
     boot[0x64] = 0xff;
     w64(core + 0x1f4, (uint32_t)core_lba + 1);
