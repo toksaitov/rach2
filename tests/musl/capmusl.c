@@ -1,27 +1,30 @@
 /**
- * Capabilities, read and given up with capget and capset.
+ * capmusl: check capabilities, read and given up with capget and capset.
  *
- * The kernel keeps them whole. As root the probe has every one, 0 to 40,
- * effective and permitted, and none inheritable. An unknown version is
- * EINVAL, and with no data 0, with version 3 written back into the header;
- * a set between none and all is EINVAL; a header whose version ends a page
+ * The kernel keeps all of them or none. As root the probe has every one, 0 to
+ * 40, effective and permitted, and none inheritable. An unknown version is
+ * EINVAL, and with no data 0, with version 3 written back into the header; a
+ * set between none and all is EINVAL; a header whose version ends a page
  * answers a question about the version. A child that gives them up, as
- * Chromium's zygote does in each process it forks, has none, in capget and
- * in /proc/self/status, and so has a child it forks; it may not bind a port
- * below 1024 nor read a file only another user may, may not take them back,
- * and may not open the memory of, attach to, or read the robust list of its
- * parent, which has them, but may still change the mode of a node root
- * owns. A child that keeps them may not make a parent that gave them up its
- * tracer, nor a parent whose first thread ended with them and whose live
- * thread gave them up, and a thread that gave them up still reads its own
- * process's exe link. An exec gives them back, and the image is then not
- * dumpable, except under no_new_privs or with another process sharing its
- * directories; the exec of a thread of user 1000 that gave up the none it
- * had keeps its parent-death signal and stays dumpable.
+ * Chromium's zygote does in each process it forks, has none, in capget and in
+ * /proc/self/status, and so has a child it forks; it may not bind a port below
+ * 1024 nor read a file only another user may, may not take them back, and may
+ * not open the memory of, attach to, or read the robust list of its parent,
+ * which has them, but may still change the mode of a node root owns. A child
+ * that keeps them may not make a parent that gave them up its tracer, nor a
+ * parent whose first thread ended with them and whose live thread gave them up,
+ * and a thread that gave them up still reads its own process's exe link. An
+ * exec gives them back, and the image is then not dumpable, except under
+ * no_new_privs or with another process sharing its directories; the exec of a
+ * thread of user 1000 that gave up the none it had keeps its parent-death
+ * signal and stays dumpable.
  *
  * The calls go through syscall by number, since musl has no wrapper.
  *
- * Prints "CAPMUSL OK" on success and "CAPMUSL FAIL (detail)" otherwise.
+ * Run with arguments, the program is the image an exec row runs, and judges
+ * its sets by the mode its first argument names. With none it runs the rows,
+ * prints "CAPMUSL OK" and exits 0 on success, or prints "CAPMUSL FAIL
+ * (detail)" and exits 1 at the first failure.
  */
 
 #define _GNU_SOURCE
@@ -45,10 +48,12 @@
 #include <time.h>
 #include <unistd.h>
 
+/* _LINUX_CAPABILITY_VERSION_3, whose data is two cap_data: bits 0-31, 32-63. */
 #define VERSION_3 0x20080522u
 #define HIGH_WORD 0x1FFu /* capabilities 32 to 40 */
 #define SECRET    "/tmp/capmusl.secret"
 
+/* One 32-bit word of each set, as Linux's __user_cap_data_struct. */
 struct cap_data {
     unsigned effective;
     unsigned permitted;
@@ -83,8 +88,10 @@ static int fail(const char *what)
     return 1;
 }
 
-/** Read the caller's two sets into `d`; 0, or -1 with errno set. The
- * header is the version and then a pid, 0 for the caller. */
+/**
+ * Read the caller's sets into the two words of `d`. Returns 0, or -1 with
+ * errno set. The header is the version and then a pid, 0 for the caller.
+ */
 static int get_caps(struct cap_data *d)
 {
     unsigned h[2] = {VERSION_3, 0};
@@ -93,7 +100,10 @@ static int get_caps(struct cap_data *d)
     return (int)syscall(SYS_capget, h, d);
 }
 
-/** Set the caller's two sets to `d`; 0, or -1 with errno set. */
+/**
+ * Set the caller's sets to the two words of `d`. Returns 0, or -1 with errno
+ * set.
+ */
 static int set_caps(const struct cap_data *d)
 {
     unsigned h[2] = {VERSION_3, 0};
@@ -101,7 +111,10 @@ static int set_caps(const struct cap_data *d)
     return (int)syscall(SYS_capset, h, d);
 }
 
-/** Whether `d` is every capability, effective and permitted. */
+/**
+ * Return 1 when `d` is every capability, effective and permitted, and none
+ * inheritable, and 0 otherwise.
+ */
 static int all_of(const struct cap_data *d)
 {
     return d[0].effective == 0xFFFFFFFFu && d[0].permitted == 0xFFFFFFFFu &&
@@ -109,14 +122,14 @@ static int all_of(const struct cap_data *d)
            d[1].inheritable == 0;
 }
 
-/** Whether `d` is no capability at all. */
+/** Return 1 when `d` has no capability at all, and 0 otherwise. */
 static int none_of(const struct cap_data *d)
 {
     return (d[0].effective | d[0].permitted | d[0].inheritable | d[1].effective | d[1].permitted |
             d[1].inheritable) == 0;
 }
 
-/** Give up every capability; 0, or -1 with errno set. */
+/** Give up every capability. Returns 0, or -1 with errno set. */
 static int give_up(void)
 {
     struct cap_data d[2];
@@ -125,7 +138,7 @@ static int give_up(void)
     return set_caps(d);
 }
 
-/** Whether /proc/self/status gives an empty effective set. */
+/** Return 1 when /proc/self/status shows no effective capability, else 0. */
 static int status_has_none(void)
 {
     char buf[2048];
@@ -144,8 +157,10 @@ static int status_has_none(void)
     return line && strncmp(line + 8, "0000000000000000\n", 17) == 0;
 }
 
-/** Whether a TCP socket may be bound to port 81 of the loopback, 1 if so,
- * 0 for EACCES and -1 for anything else. */
+/**
+ * Try to bind a TCP socket to port 81 of the loopback. Returns 1 when the
+ * bind succeeds, 0 for EACCES and -1 for anything else.
+ */
 static int binds_low_port(void)
 {
     struct sockaddr_in a;
@@ -165,10 +180,10 @@ static int binds_low_port(void)
 }
 
 /**
- * The rows about the parent, which has its capabilities, of a child that
- * gave them up: 0, or the index in `dropped_rows` of the row that failed.
- * The attach is a seize, which stops nothing, so a kernel that allows it
- * leaves the parent running.
+ * Run the rows about the parent, which has its capabilities, in a child that
+ * gave them up. Returns 0, or the index in `dropped_rows` of the row that
+ * failed. The attach is a seize, which stops nothing, so a kernel that allows
+ * it leaves the parent running.
  */
 static int reaches_parent(void)
 {
@@ -195,8 +210,9 @@ static int reaches_parent(void)
 }
 
 /**
- * The rows of a child that gave up its capabilities: its exit status is 0,
- * or the index in `dropped_rows` of the row that failed.
+ * Give up the capabilities and run the rows of a child without them. Returns
+ * the child's exit status: 0, or the index in `dropped_rows` of the row that
+ * failed.
  */
 static int dropped(void)
 {
@@ -237,7 +253,10 @@ static int dropped(void)
     return reaches_parent();
 }
 
-/** Run `dropped` in a child; 0, or the index of the row that failed. */
+/**
+ * Run `dropped` in a forked child. Returns 0, or the index in `dropped_rows`
+ * of the row that failed; 1 when the child did not report.
+ */
 static int in_dropped_child(void)
 {
     pid_t pid = fork();
@@ -254,7 +273,7 @@ static int in_dropped_child(void)
                : 1;
 }
 
-/** The process that shares an exec's directories: it waits to be killed. */
+/** Run as the process that shares an exec's directories: wait to be killed. */
 static int sharer(void *arg)
 {
     (void)arg;
@@ -268,8 +287,9 @@ static int sharer(void *arg)
  * Give up every capability in a child, under no_new_privs when `nnp` says
  * so and with another process sharing its directories when `shared` does,
  * and exec this program to judge its sets with `mode`: "all", "none", or
- * "undumpable", every capability and an image that is not dumpable. Whether
- * that image found them so; it kills the sharer, whose pid it is given.
+ * "undumpable", every capability and an image that is not dumpable. Returns 1
+ * when that image found them so, and 0 otherwise; the image kills the sharer,
+ * whose pid it is given.
  */
 static int exec_finds(int nnp, int shared, const char *mode)
 {
@@ -298,9 +318,10 @@ static int exec_finds(int nnp, int shared, const char *mode)
 }
 
 /**
- * A child that keeps its capabilities, whose parent gave its up after the
- * fork, may not make that parent its tracer with PTRACE_TRACEME. Whether
- * the call was refused; a traceme the kernel allowed stops nothing.
+ * Check that a child that keeps its capabilities, whose parent gave its up
+ * after the fork, may not make that parent its tracer with PTRACE_TRACEME.
+ * Returns 1 when the call failed with EPERM, and 0 otherwise; a traceme that
+ * succeeded stops nothing, so the child still exits.
  */
 static int traceme_refused(void)
 {
@@ -335,8 +356,10 @@ static int traceme_refused(void)
 static int leader_go[2];
 static pid_t leader_child;
 
-/** Whether this process's first thread, whose id is its pid, has ended: its
- * stat under the task directory says Z. */
+/**
+ * Return 1 when this process's first thread, whose id is its pid, has ended,
+ * with Z as its state in its stat under the task directory, and 0 otherwise.
+ */
 static int leader_ended(void)
 {
     char path[64], buf[512];
@@ -361,7 +384,8 @@ static int leader_ended(void)
 /**
  * The thread left once the first has ended: it gives up its capabilities,
  * waits to see the first thread ended, lets the child try PTRACE_TRACEME,
- * and ends the process with the child's verdict.
+ * and ends the process with exit status 0 when the child's call failed with
+ * EPERM, 1 when it did not, and 2 when a step of its own failed.
  */
 static void *last_thread(void *arg)
 {
@@ -386,10 +410,10 @@ static void *last_thread(void *arg)
 }
 
 /**
- * A child that keeps its capabilities may not make its parent process its
- * tracer when the process's live thread gave its up, though its first
- * thread, which ended with them, keeps its record. Whether the call was
- * refused.
+ * Check that a child that keeps its capabilities may not make its parent
+ * process its tracer when the process's live thread gave its up, though its
+ * first thread, which ended with them, keeps its record. Returns 1 when the
+ * call failed with EPERM, and 0 otherwise.
  */
 static int traceme_leader_ended_refused(void)
 {
@@ -419,8 +443,11 @@ static int traceme_leader_ended_refused(void)
            WEXITSTATUS(status) == 0;
 }
 
-/** A thread that gives up its capabilities and reads its process's exe
- * link, into the int at `arg`: whether the read succeeded. */
+/**
+ * Run as a thread that gives up its capabilities and reads its process's exe
+ * link. Stores in the int at `arg` 1 when the read succeeded, and 0
+ * otherwise.
+ */
 static void *reads_own_exe(void *arg)
 {
     char link[256];
@@ -429,8 +456,10 @@ static void *reads_own_exe(void *arg)
     return NULL;
 }
 
-/** Whether a thread without capabilities read its own process's exe link
- * while the first thread kept them. */
+/**
+ * Return 1 when a thread without capabilities read its own process's exe
+ * link while the first thread kept them, and 0 otherwise.
+ */
 static int own_exe_readable(void)
 {
     pthread_t t;
@@ -445,7 +474,8 @@ static int own_exe_readable(void)
 /**
  * The exec of a thread of user 1000, which gave up the capabilities it did
  * not have and set a parent-death signal: the image has none to regain, so
- * it keeps the signal and stays dumpable. Whether it did.
+ * it keeps the signal and stays dumpable. Returns 1 when it did, and 0
+ * otherwise.
  */
 static int nothing_regained(void)
 {
@@ -466,7 +496,7 @@ static int nothing_regained(void)
 /**
  * A capget of a header whose version is the last four bytes of a page with
  * no page after it: with no data it answers the version alone, as on Linux,
- * and reads no pid. Whether it did.
+ * and reads no pid. Returns 1 when it did, and 0 otherwise.
  */
 static int version_ends_page(void)
 {
@@ -487,7 +517,7 @@ static int version_ends_page(void)
     return ok;
 }
 
-/** Make the file only user 1000 may read. */
+/** Make the file only user 1000 may read. Returns 1, or 0 on failure. */
 static int make_secret(void)
 {
     int fd = open(SECRET, O_WRONLY | O_CREAT | O_TRUNC, 0600);
@@ -525,8 +555,10 @@ static int judge_image(const char *mode, const char *other)
     return !(found && (strcmp(mode, "all") == 0 ? all_of(d) : none_of(d)));
 }
 
-/** The rows of the calls themselves, run as root: 0, or 1 once the failure
- * is printed. */
+/**
+ * Run the rows of the calls themselves, as root. Returns 0, or 1 after the
+ * failure is printed.
+ */
 static int call_rows(void)
 {
     unsigned h[2] = {0x12345678u, 0};
@@ -553,8 +585,10 @@ static int call_rows(void)
     return 0;
 }
 
-/** The rows of the execs, the traceme and a thread's own exe link: 0, or 1
- * once the failure is printed. */
+/**
+ * Run the rows of the execs, the traceme and a thread's own exe link.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int later_rows(void)
 {
     if (!exec_finds(0, 0, "all")) {
