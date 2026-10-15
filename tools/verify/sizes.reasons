@@ -364,8 +364,8 @@ tests/host/krffs_hosttest.c:every_stop_keeps_its_bytes nesting 6 a test's rows, 
 tests/host/krffs_hosttest.c:main complexity 59 a test's rows, each a case, read as one table
 tests/host/krffs_hosttest.c:main lines 478 a test's rows, each a case, read as one table
 
-tests/host/kstring_hosttest.c:main complexity 70 a test's rows, each a case, read as one table
-tests/host/kstring_hosttest.c:main lines 153 a test's rows, each a case, read as one table
+tests/host/kstring_hosttest.c:main complexity 71 a test's rows, each a case, read as one table
+tests/host/kstring_hosttest.c:main lines 154 a test's rows, each a case, read as one table
 tests/host/kstring_hosttest.c:main nesting 6 a test's rows, each a case, read as one table
 
 tests/host/lapic_hosttest.c:main lines 131 a test's rows, each a case, read as one table

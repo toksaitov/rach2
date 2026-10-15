@@ -193,7 +193,8 @@ int main(void)
                             bad = 7;
                         }
                     }
-                    if (got[da + sa + 1 + len] != pat[da + sa + 1 + len]) {
+                    if (got[da + sa] != pat[da + sa] ||
+                        got[da + sa + 1 + len] != pat[da + sa + 1 + len]) {
                         bad = 8;
                     }
                 }
