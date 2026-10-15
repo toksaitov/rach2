@@ -23,12 +23,14 @@
 #define TRIES 1040
 #define LIMIT 1024
 
+/** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -38,17 +40,20 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` to standard output. */
 static void print(const char *s)
 {
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     print(s);
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)"\n", 1);
 }
 
+/** Write `v` in decimal. */
 static void print_num(int v)
 {
     char buf[12];
@@ -73,6 +78,7 @@ static void print_num(int v)
 static int fds[TRIES];
 static int n_fds;
 
+/** Close every descriptor in `fds`, and empty the list. */
 static void close_all(void)
 {
     int i;
@@ -83,12 +89,17 @@ static void close_all(void)
     n_fds = 0;
 }
 
+/**
+ * Open /hello until the table refuses, and require the refusal to be
+ * -EMFILE after LIMIT less three opens; then close one descriptor and
+ * require an open to take its place. Every descriptor is closed before the
+ * probe exits, 0 when each step held and 1 otherwise.
+ */
 PROBE_START void _start(void)
 {
     int fd, i, refused, opened;
 
-    /* The same file every time: what is being filled is this process's table,
-       not anything the file system holds. */
+    /* The same file every time: what fills is this process's table. */
     refused = 0;
     for (i = 0; i < TRIES; i++) {
         fd = syscall3(SYS_OPEN, (long)"/hello", O_RDONLY, 0);

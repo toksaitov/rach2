@@ -1,17 +1,15 @@
 /**
- * The path and descriptor contract the VFS migration must preserve.
+ * The path and descriptor contract of the VFS.
  *
  * Each row is one promise: the errno a path answers, what a description
  * keeps across unlink and rename, what the synthetic mounts are and are
  * not, and the statfs identities, with the inode counts ext2 keeps and
- * KRFFS does not. The rows run before the migration starts
- * and after every family it moves, so a family that changes an answer is
- * caught the commit it moves.
+ * KRFFS does not.
  *
- * `PHYSICAL_DOTDOT` marks the rows whose correct answer changes when `..`
- * stops being lexical: through a missing or non-directory component a
- * lexical resolver succeeds and a physical one must not. It flipped to 1
- * in the migration commit that removed the lexical step.
+ * `PHYSICAL_DOTDOT` marks the rows whose answer depends on how `..` is
+ * resolved: through a missing or non-directory component a lexical resolver
+ * succeeds and a physical one must not. The kernel's resolver is physical,
+ * and the macro is 1.
  *
  * Needs: root privilege, a writable KRFFS or ext2 root, mounted /proc and
  * /dev, and absent /vp and /procx paths. The root type in /proc/mounts selects
@@ -50,12 +48,14 @@
 #define STATFS_MAGIC_KRFFS 0x4B524646
 #define STATFS_MAGIC_EXT2  0xEF53
 
+/** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -65,12 +65,14 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
+/** Print "VFSPROBE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why)
 {
     syscall3(SYS_WRITE, 1, (long)"VFSPROBE FAIL: ", 15);
@@ -79,7 +81,8 @@ static void fail(const char *why)
 }
 
 /**
- * Read the root type from the mount table independently of statfs.
+ * Read the root type from the mount table independently of statfs, and
+ * return its statfs magic.
  *
  * Match the mountpoint and type fields of a complete line. Missing or
  * unsupported roots fail before the probe creates files.
@@ -125,14 +128,15 @@ static unsigned root_magic(void)
 
 static unsigned char stbuf[KSTAT_SIZE];
 
+/** stat(2) of `path` into `stbuf`: 0, or a negated errno. */
 static int xstat(const char *path)
 {
     stbuf[0] = 0;
     return syscall2(SYS_STAT, (long)path, (long)stbuf);
 }
 
-/* The low 32 bits of a field of the last stat, at its KSTAT_ offset: the
-   mode, the link count, the blocks, the mtime, the inode. */
+/** The low 32 bits of a field of the last stat, at its KSTAT_ offset: the
+ * mode, the link count, the blocks, the mtime, the inode. */
 static unsigned st_field(int off)
 {
     unsigned v;
@@ -141,6 +145,8 @@ static unsigned st_field(int off)
     return v;
 }
 
+/** Whether the getdents64 records in the first `n` bytes of `b` name `name`,
+ * walked by d_reclen. */
 static int dirents_contain(const unsigned char *b, int n, const char *name)
 {
     int off = 0;
@@ -170,7 +176,8 @@ static unsigned char iobuf[512];
 /**
  * A file grown by ftruncate has a hole for its new bytes. Ext2 reports the
  * blocks it holds as st_blocks, none for the hole, so that du and cp see
- * it; KRFFS rounds the size up. st_blocks is the stat64 field at 56.
+ * it; KRFFS rounds the size up. st_blocks counts 512-byte units, at
+ * KSTAT_BLOCKS.
  */
 static void check_blocks(unsigned magic)
 {
@@ -235,9 +242,8 @@ static void check_link(unsigned magic)
 int stat_marked_missing_dotdot(void);
 int stat_marked_file_dotdot(void);
 
-/* The two rows the flip commit changes: `..` through a component that does
- * not resolve. Kept as functions so the marked expectation reads in one
- * place. */
+/** Whether `..` through a missing directory answers as `PHYSICAL_DOTDOT`
+ * says: -ENOENT from a physical resolver, success from a lexical one. */
 int stat_marked_missing_dotdot(void)
 {
     int rc = xstat("/vp/nosuch/../d/f");
@@ -248,6 +254,8 @@ int stat_marked_missing_dotdot(void)
 #endif
 }
 
+/** Whether `..` through a file answers as `PHYSICAL_DOTDOT` says: -ENOTDIR
+ * from a physical resolver, success from a lexical one. */
 int stat_marked_file_dotdot(void)
 {
     int rc = xstat("/vp/d/f/../f");
@@ -258,6 +266,15 @@ int stat_marked_file_dotdot(void)
 #endif
 }
 
+/**
+ * Make /vp/d/f and run the rows in order, failing at the first with its
+ * name: what a path answers, open and openat, the description across unlink
+ * and rename, offsets and sizes, a relocated file, directories, attributes,
+ * the hard link and the blocks, statfs and the working directory; then
+ * remove what it made. A relocated file keeps every description: a second
+ * description on a file that grows past a neighbour made right after it,
+ * so that it cannot grow in place, reads the grown size and the moved bytes.
+ */
 PROBE_START void _start(void)
 {
     int fd, dfd, rc;
@@ -296,8 +313,7 @@ PROBE_START void _start(void)
     if (xstat("/proc") != 0 || xstat("/dev") != 0) {
         fail("the synthetic roots stat");
     }
-    /* The doubled slashes are spelled in pieces: the source convention
-       forbids the two-slash comment marker anywhere. */
+    /* Spelled in pieces: the style check refuses two slashes in a row. */
     if (xstat("/"
               "/vp/"
               "/d/"
@@ -429,10 +445,7 @@ PROBE_START void _start(void)
     syscall1(SYS_CLOSE, fd);
 
     /* ---- a relocated file keeps every description ---- */
-    /* Two descriptions on one file; a neighbour is placed right after it so
-       the growth cannot extend in place and the node moves. The second
-       description must follow the move: its size and its far bytes are the
-       new node's. */
+    /* A neighbour right after the file makes its growth move the node. */
     fd = syscall3(SYS_OPEN, (long)"/vp/d/grow", O_CREAT | O_RDWR, 0644);
     if (fd < 0 || syscall3(SYS_WRITE, fd, (long)"seed", 4) != 4) {
         fail("create the file that will grow");

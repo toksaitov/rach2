@@ -7,7 +7,7 @@
  * privileged caller, and the refusal is -EPERM. Four call sites answer it,
  * unlink, rmdir, and both ends of rename, and the destination end is the one
  * whose omission leaves the attack open while a probe that only tries unlink
- * goes green.
+ * passes.
  *
  * Every denial is paired against the same call in a non-sticky control
  * directory, which is what makes it mean anything: a lone -EPERM could be
@@ -42,7 +42,7 @@
  * `/st_locked` is 01755 and root's: a caller with no write permission there
  * must see -EACCES and not -EPERM. The sticky rule is asked only after the
  * directory's write check, so the bit never turns an access failure into a
- * permission one, and this is the case that pins that order.
+ * permission one, and this is the case that checks that order.
  *
  * The root parent's own cleanup is the privileged clause: it removes from
  * `/st_sticky` every entry the two children were refused.
@@ -57,10 +57,10 @@
  * those directly and a probe that leaves nothing behind rests on no other
  * probe's file and can be run again in the same boot.
  *
- * Exact errnos throughout, never a sign. That rests on the errno translation at
- * unlink and rename: before it both returned a bare -1, which userspace reads
- * as EPERM, so a refusal and a missing file answered alike and -EPERM proved
- * nothing.
+ * Exact errnos throughout, never a sign. The KRFFS core answers every refusal
+ * of an unlink or a rename with a bare -1, and the system calls tell the cases
+ * apart before they call it (syscall_fs.c), so a refusal and a missing file
+ * answer differently and -EPERM is the sticky rule's answer.
  *
  * Each denial is checked to have done nothing and each permission to have
  * been carried out, since an errno alone cannot tell a refusal from a
@@ -112,9 +112,9 @@ typedef unsigned int u32;
 #define S_OTHER  "/st_sticky/other"
 #define S_OTHOWN "/st_sticky/otherown"
 
-/* The same five fixtures in the non-sticky control, at the same modes and the
- * same owners: the four calls the sticky directory refuses must all work here.
- */
+/* The same five fixtures in the non-sticky control, at the same modes and
+ * the same owners: the four calls the sticky directory refuses must all work
+ * here. */
 #define P_VICTIM "/st_plain/victim"
 #define P_MOVER  "/st_plain/mover"
 #define P_MOVED  "/st_plain/moved"
@@ -130,6 +130,7 @@ typedef unsigned int u32;
 /* The victim behind a directory that grants nobody but root write. */
 #define LOCK_VICTIM "/st_locked/victim"
 
+/** The length of the string `s`. */
 static u32 slen(const char *s)
 {
     u32 n = 0;
@@ -140,12 +141,13 @@ static u32 slen(const char *s)
     return n;
 }
 
+/** Write `s` to standard output. */
 static void puts_(const char *s)
 {
     syscall3(SYS_WRITE, STDOUT, (long)s, (int)slen(s));
 }
 
-/* Print a signed decimal, so a failing line has the answer it got. */
+/** Print a signed decimal, so a failing line has the answer it got. */
 static void putd(int v)
 {
     char buf[13];
@@ -163,8 +165,8 @@ static void putd(int v)
     puts_(&buf[i]);
 }
 
-/* Print an unsigned octal with a leading zero: the only readable shape for a
- * mode. */
+/** Print an unsigned octal with a leading zero: the only readable shape for
+ * a mode. */
 static void puto(u32 v)
 {
     char buf[13];
@@ -179,6 +181,7 @@ static void puto(u32 v)
     puts_(&buf[i]);
 }
 
+/** Print "STICKYPROBE FAIL: ", the step and the answer it got, and exit 1. */
 static void fail(const char *step, int got)
 {
     puts_("STICKYPROBE FAIL: ");
@@ -189,7 +192,8 @@ static void fail(const char *step, int got)
     syscall1(SYS_EXIT, 1);
 }
 
-/* The answer must be exactly `want`: an errno family, not merely a sign. */
+/** Fail at `step` unless the answer `got` is exactly `want`: an errno, not
+ * merely a sign. */
 static void want_eq(const char *step, int got, int want)
 {
     if (got != want) {
@@ -197,31 +201,33 @@ static void want_eq(const char *step, int got, int want)
     }
 }
 
-/* The one stat64 buffer: the kernel writes it, the readers below take it
- * apart. */
+/* The one stat buffer, of the larger struct of the two architectures, x86-64's
+ * (probe.h): the kernel writes it, the readers below take it apart. */
 static char statbuf[144];
 
+/** stat(2) of `path` into `statbuf`: 0, or a negated errno. */
 static int stat_rc(const char *path)
 {
     return syscall3(SYS_STAT, (long)path, (long)statbuf, 0);
 }
 
-/* The name must still be there: the check a refused call's errno cannot
- * make. */
+/** Fail at `step` unless the name `path` is still there: the check a
+ * refused call's errno cannot make. */
 static void want_there(const char *step, const char *path)
 {
     want_eq(step, stat_rc(path), 0);
 }
 
-/* The name must be gone: what a permitted removal leaves behind. */
+/** Fail at `step` unless the name `path` is gone: what a permitted removal
+ * leaves behind. */
 static void want_absent(const char *step, const char *path)
 {
     want_eq(step, stat_rc(path), -ENOENT);
 }
 
-/* The permission bits of `path`, and the mode it must read back at. A rename
- * that clobbered a victim would leave the name in place under the source's
- * mode, which existence alone cannot see. */
+/** Fail at `step` unless the permission bits of `path` read back as `mode`.
+ * A rename that clobbered a victim would leave the name in place under the
+ * source's mode, which existence alone cannot see. */
 static void want_mode(const char *step, const char *path, u32 mode)
 {
     u32 got;
@@ -243,7 +249,8 @@ static void want_mode(const char *step, const char *path, u32 mode)
     }
 }
 
-/* Create `path` with `mode`, pinned against the boot shell's umask. */
+/** Create `path` with `mode`, set again by chmod so that the boot shell's
+ * umask leaves no mark on it. */
 static void mint_file(const char *path, u32 mode)
 {
     int fd = syscall3(SYS_CREAT, (long)path, (int)mode, 0);
@@ -255,19 +262,20 @@ static void mint_file(const char *path, u32 mode)
     want_eq("chmod a fixture file", syscall3(SYS_CHMOD, (long)path, (int)mode, 0), 0);
 }
 
+/** Make the directory `path` with `mode`, set again by chmod. */
 static void mint_dir(const char *path, u32 mode)
 {
     want_eq("mint a fixture directory", syscall3(SYS_MKDIR, (long)path, (int)mode, 0), 0);
     want_eq("chmod a fixture directory", syscall3(SYS_CHMOD, (long)path, (int)mode, 0), 0);
 }
 
-/* Hand a fixture to `uid`, which only the root parent may do. */
+/** Hand a fixture to `uid`, which only the root parent may do. */
 static void give_to(const char *path, int uid)
 {
     want_eq("chown a fixture", syscall3(SYS_CHOWN, (long)path, uid, uid), 0);
 }
 
-/* Become `uid` outright, with no saved id to swing back on. The gids go first:
+/** Become `uid` outright, with no saved id to return to. The gids go first:
  * once the effective uid is not 0 the gid calls are refused. */
 static void drop_to(int uid)
 {
@@ -275,7 +283,7 @@ static void drop_to(int uid)
     want_eq("drop the uids", syscall3(SYS_SETRESUID, uid, uid, uid), 0);
 }
 
-/* Create a file of the caller's own at `path` and take it away again. In a
+/** Create a file of the caller's own at `path` and take it away again. In a
  * sticky directory that pair proves two things at once: the caller has write
  * permission there, so nothing below can be refused for want of it, and the
  * entry-owner clause lets a caller remove what it owns. */
@@ -290,9 +298,9 @@ static void own_round_trip(const char *step, const char *path)
     want_eq(step, syscall3(SYS_UNLINK, (long)path, 0, 0), 0);
 }
 
-/* Uid 1000: the four denials in the sticky directory, the same four calls
+/** Uid 1000: the four denials in the sticky directory, the same four calls
  * permitted in the non-sticky one, and the two clauses that let this caller
- * through. */
+ * through. Exits 0, or 1 at the first case that fails. */
 static void user_child(void)
 {
     drop_to(1000);
@@ -301,43 +309,37 @@ static void user_child(void)
     want_eq("sticky: unlink root's file", syscall3(SYS_UNLINK, (long)S_VICTIM, 0, 0), -EPERM);
     want_eq("plain: unlink root's file", syscall3(SYS_UNLINK, (long)P_VICTIM, 0, 0), 0);
 
-    /* Renaming an entry within the directory takes it out of that directory,
-     * whatever it is called. */
+    /* A rename within the directory takes the entry out of it too. */
     want_eq("sticky: rename root's file", syscall3(SYS_RENAME, (long)S_MOVER, (long)S_MOVED, 0),
             -EPERM);
     want_eq("plain: rename root's file", syscall3(SYS_RENAME, (long)P_MOVER, (long)P_MOVED, 0), 0);
 
-    /* Both directories are empty, so a permitted rmdir has nothing else to
-     * refuse it. */
+    /* Both directories are empty, so rmdir has nothing else to refuse. */
     want_eq("sticky: rmdir root's directory", syscall3(SYS_RMDIR, (long)S_RMME, 0, 0), -EPERM);
     want_eq("plain: rmdir root's directory", syscall3(SYS_RMDIR, (long)P_RMME, 0, 0), 0);
 
-    /* The entry-owner clause, and with it the source end of rename: this
-     * caller's own entry leaves the sticky directory both ways. */
+    /* The entry-owner clause and the source end of rename: both ways out. */
     want_eq("sticky: unlink its own file", syscall3(SYS_UNLINK, (long)S_MINE, 0, 0), 0);
     want_eq("sticky: rename its own file", syscall3(SYS_RENAME, (long)S_MYRN, (long)S_MYRN2, 0), 0);
 
-    /* The destination end. The source is this caller's own and the line above
-     * has just shown the source end permits it, so the refusal can only be the
-     * root-owned entry the rename would replace. */
+    /* The destination end: only the root-owned entry it replaces can refuse. */
     want_eq("sticky: rename its own file over root's",
             syscall3(SYS_RENAME, (long)S_MYSRC, (long)S_TARGET, 0), -EPERM);
     want_eq("plain: rename its own file over root's",
             syscall3(SYS_RENAME, (long)P_MYSRC, (long)P_TARGET, 0), 0);
 
-    /* The directory-owner clause: the same caller, a root-owned entry it does
-     * not own, and a sticky directory it does. */
+    /* The directory-owner clause: root's entry in a directory it owns. */
     want_eq("owned: unlink root's file", syscall3(SYS_UNLINK, (long)OWN_VICTIM, 0, 0), 0);
 
-    /* The order of the two checks: no write permission on the directory is
-     * -EACCES, and the sticky rule never gets to speak. */
+    /* No write on the directory: -EACCES, checked before the sticky rule. */
     want_eq("locked: unlink root's file", syscall3(SYS_UNLINK, (long)LOCK_VICTIM, 0, 0), -EACCES);
 
     syscall1(SYS_EXIT, 0);
 }
 
-/* Uid 1001: neither directory's owner and neither entry's owner, so both sticky
- * directories refuse it, the one uid 1000 owns included. */
+/** Uid 1001: neither directory's owner and neither entry's owner, so both
+ * sticky directories refuse it, the one uid 1000 owns included. Exits 0, or 1
+ * at the first case that fails. */
 static void other_child(void)
 {
     drop_to(1001);
@@ -353,7 +355,7 @@ static void other_child(void)
     syscall1(SYS_EXIT, 0);
 }
 
-/* Run one child to completion and require a clean exit 0. WIFEXITED comes
+/** Run one child to completion and require a clean exit 0. WIFEXITED comes
  * first: a signal death has the signal in the low bits and would otherwise
  * decode as exit 0. The child has already named the case it failed. */
 static void run_child(void (*body)(void), const char *what)
@@ -367,8 +369,7 @@ static void run_child(void (*body)(void), const char *what)
     }
     if (pid == 0) {
         body();
-        /* Unreachable: every body exits itself. Non-zero so that a body that
-         * ever grew a path out the bottom would fail, not pass. */
+        /* Every body exits itself; 127 fails one that returns. */
         syscall1(SYS_EXIT, 127);
     }
     reaped = syscall3(SYS_WAITPID, pid, (long)&status, 0);
@@ -388,19 +389,21 @@ static void run_child(void (*body)(void), const char *what)
     }
 }
 
+/**
+ * Check the two staged modes, make the fixtures, run the two children, and
+ * require each refusal to have done nothing and each permitted call to have
+ * been carried out; then remove, as root, every entry the children were
+ * refused. The root-owned fixtures are 0666, so uid 1000 has write on each
+ * file it is refused. Each case has a fixture of its own, so that no later
+ * "the name is gone" can rest on an earlier case having taken it.
+ */
 PROBE_START void _start(void)
 {
-    /* What the manifest staged, before anything else is asked: the whole point
-     * of staging these two is that `dir 1777` must store the bit the shipped
-     * /tmp is written with. */
+    /* What the manifest staged: `dir 1777` stores the bit. */
     want_mode("staged /st_sticky", STICKY, 01777);
     want_mode("staged /st_plain", PLAIN, 0777);
 
-    /* The sticky directory's fixtures. The root-owned ones are 0666, so uid
-     * 1000 has write on the file it is refused and the SVR4 relaxation this
-     * kernel does not adopt would let every refusal through. Each case is given
-     * a fixture of its own, so that no later "the name is gone" can rest on an
-     * earlier case having taken it. */
+    /* The sticky directory's fixtures, one for each case. */
     mint_file(S_VICTIM, 0666);
     mint_file(S_MOVER, 0666);
     mint_file(S_TARGET, 0666);
@@ -410,13 +413,11 @@ PROBE_START void _start(void)
     give_to(S_MINE, 1000);
     mint_file(S_MYRN, 0644);
     give_to(S_MYRN, 1000);
-    /* 0640, not 0644: after a permitted rename over a 0666 victim the mode is
-     * what says which of the two files the surviving name now is. */
+    /* 0640: after a rename over a 0666 victim the mode tells the two apart. */
     mint_file(S_MYSRC, 0640);
     give_to(S_MYSRC, 1000);
 
-    /* The control, staged the same way in a directory that differs by one
-     * bit. */
+    /* The control, staged the same way, one bit apart. */
     mint_file(P_VICTIM, 0666);
     mint_file(P_MOVER, 0666);
     mint_file(P_TARGET, 0666);
@@ -424,8 +425,7 @@ PROBE_START void _start(void)
     mint_file(P_MYSRC, 0640);
     give_to(P_MYSRC, 1000);
 
-    /* The directory-owner clause needs a sticky directory owned by uid 1000,
-     * holding entries it does not own. */
+    /* A sticky directory of uid 1000's, holding entries it does not own. */
     mint_dir(OWNED, 01777);
     give_to(OWNED, 1000);
     want_mode("the minted /st_owned", OWNED, 01777);
@@ -466,9 +466,7 @@ PROBE_START void _start(void)
     want_absent("sticky: the third uid's own file is gone", S_OTHOWN);
     want_absent("owned: the third uid's own file is gone", OWN_OTHOWN);
 
-    /* The privileged clause, and the way the image is handed back as the
-     * manifest staged it: root takes out of the sticky directory every entry
-     * the two children were refused. */
+    /* The privileged clause, which also leaves the image as it was staged. */
     want_eq("root removes the victim", syscall3(SYS_UNLINK, (long)S_VICTIM, 0, 0), 0);
     want_eq("root removes the mover", syscall3(SYS_UNLINK, (long)S_MOVER, 0, 0), 0);
     want_eq("root removes the third uid's victim", syscall3(SYS_UNLINK, (long)S_OTHER, 0, 0), 0);

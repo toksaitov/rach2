@@ -5,8 +5,8 @@
  *
  * `suid`: a setuid-root exec by a uid-1000 caller. The real uid must still be
  * 1000, the effective and saved uid both 0, the gids untouched at 1000, and
- * AT_SECURE 1; then the saved-id dance must work, shedding root to euid 1000
- * and taking it back to 0.
+ * AT_SECURE 1; then the saved uid must let the program shed root to euid 1000
+ * and take it back to 0.
  * `suid5`: a setuid exec whose owner is uid 5, not root: the effective and
  * saved uid become 5, the real uid stays 1000, and AT_SECURE is 1, proving the
  * bit grants the file owner's identity whoever that is.
@@ -14,13 +14,15 @@
  * become 5, all three uids stay 1000, and AT_SECURE is 1.
  * `plain`: an ordinary exec by the same caller. All ids stay 1000 and
  * AT_SECURE is 0.
- * `root`: reached through the reference sudo, which made the caller fully
- * root; every uid must read 0. Any mismatch exits with the failing step
- * number, so the parent probe sees exactly what broke.
+ * `root`: reached through the project's sudo (utils/sudo.c), which made the
+ * caller fully root; every uid and gid must read 0, and the environment must
+ * be sudo's fixed pair, PATH and HOME, which shows that it cleared the
+ * caller's. Any mismatch exits with the failing step number, so the parent
+ * probe sees exactly what broke.
  *
- * Freestanding; direct system calls (probe.h). Staged into the test image at
- * several modes and owners (04755:0, 04755:5, 02755::5, 0755, 04644) by
- * suidprobe's fixtures.
+ * Freestanding; direct system calls (probe.h). The test image stages it at
+ * several modes and owners (04755:0, 04755:5, 02755::5, 0755, 04644;
+ * krffs/manifests/test.manifest), for suidprobe and sudoprobe to run.
  */
 
 #include "probe.h"
@@ -30,6 +32,7 @@ typedef unsigned int u32;
 #define AT_NULL   0
 #define AT_SECURE 23
 
+/** Whether the strings `a` and `b` are equal. */
 static int streq(const char *a, const char *b)
 {
     u32 i = 0;
@@ -40,13 +43,15 @@ static int streq(const char *a, const char *b)
     return a[i] == b[i];
 }
 
+/** exit(2) with `code`, the failing step's number or 0. */
 static void done(int code)
 {
     syscall1(SYS_EXIT, code);
 }
 
-/* Find AT_SECURE by walking past argv and envp to the auxv on the initial
- * stack, exactly as a C runtime would; each is a word of a long's width. */
+/** The AT_SECURE value in the auxiliary vector of the initial stack at
+ * `sp`, found past argv and envp as a C runtime finds it, or 0 when the
+ * vector has none; each word is as wide as a long. */
 static u32 at_secure(unsigned long *sp)
 {
     int argc = (int)sp[0];
@@ -70,6 +75,13 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/**
+ * Read the ids and AT_SECURE, and exit with the number of the first check of
+ * the scenario argv[1] names that fails, or 0: 90 when no scenario is named
+ * and 91 or 92 when the ids cannot be read, 1 to 11 for `suid`, 20 to 23 for
+ * `suid5`, 30 to 34 for `sgid`, 40 to 44 for `plain`, 50 to 56 for `root`,
+ * and 99 for any other name.
+ */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
@@ -145,9 +157,7 @@ void probe_main(unsigned long *sp)
     }
 
     if (streq(argv[1], "root")) {
-        /* Reached through the reference sudo: full root and its clean
-         * environment. Every uid and gid must read 0, and envp must be exactly
-         * sudo's fixed pair, proving it cleared the caller's environment. */
+        /* sudo's environment is two entries, PATH and HOME. */
         char **envp = (char **)(sp + 1 + argc + 1);
 
         if (ruid != 0)

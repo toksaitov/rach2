@@ -9,8 +9,8 @@
  *       original left off, not from 0;
  *   (b) fork shares the offset: a child advances the offset and the parent's
  *       next read sees the advance;
- *   (c) refcount/no-leak: closing one fd leaves the dup working, and many
- *       open/close cycles do not exhaust the OFD pool;
+ *   (c) reference counts: closing one fd leaves the dup working, and after
+ *       many open and close cycles and many forks an open still succeeds;
  *   (d) FD_CLOEXEC is per-fd: it round-trips through fcntl, and dup2 leaves
  *       the new fd's flag clear.
  *
@@ -32,12 +32,14 @@
 /* "hello, world\n": 0-4 hello, 5 ',', 6 ' ', 7 w... */
 #define HELLO "/hello.txt"
 
+/** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -47,6 +49,7 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
@@ -55,6 +58,7 @@ static void puts(const char *s)
 
 static int fails = 0;
 
+/** Count a failure and print `msg` when `cond` is 0. */
 static void check(int cond, const char *msg)
 {
     if (!cond) {
@@ -64,12 +68,14 @@ static void check(int cond, const char *msg)
     }
 }
 
-/** Read `n` bytes from `fd` into `buf`; returns the byte count. */
+/** Read up to `n` bytes from `fd` into `buf`: the byte count, or a negated
+ * errno. */
 static int rd(int fd, char *buf, int n)
 {
     return syscall3(SYS_READ, fd, (long)buf, n);
 }
 
+/** Whether the first `n` bytes of `a` and `b` are equal. */
 static int eqn(const char *a, const char *b, int n)
 {
     int i;
@@ -81,6 +87,8 @@ static int eqn(const char *a, const char *b, int n)
     return 1;
 }
 
+/** Run cases (a) to (d) on /hello.txt, and exit with the count of the
+ * checks that failed. */
 PROBE_START void _start(void)
 {
     char buf[16];
@@ -96,8 +104,7 @@ PROBE_START void _start(void)
     n = rd(fd2, buf, 5); /* must continue from offset 5 */
     check(n == 5 && eqn(buf, ", wor", 5), "dup shares offset (reads ', wor')");
 
-    /* (c) closing the original leaves the dup working (the OFD is still
-     * ref'd). */
+    /* (c) the dup works after the original is closed: the OFD is still held. */
     syscall1(SYS_CLOSE, fd);
     n = rd(fd2, buf, 3); /* offset is now 10: "ld\n" */
     check(n == 3 && eqn(buf, "ld\n", 3), "dup works after original closed");
@@ -120,7 +127,7 @@ PROBE_START void _start(void)
     check(n == 3 && eqn(buf, " wo", 3), "fork shares offset (parent reads ' wo')");
     syscall1(SYS_CLOSE, fd);
 
-    /* (c) many open/close cycles must not exhaust the OFD pool (no leak). */
+    /* (c) open and close cycles leak no description. */
     for (i = 0; i < 300; i++) {
         int f = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
         if (f < 0) {
@@ -130,9 +137,7 @@ PROBE_START void _start(void)
         syscall1(SYS_CLOSE, f);
     }
 
-    /* (c2) fork/waitpid cycles must not leak OFDs either (the child's inherited
-     * descriptions are released on its exit). After many forks, open must still
-     * succeed: a leak of even 3 OFDs per fork would exhaust the pool. */
+    /* (c2) a child's exit releases the descriptions it inherited. */
     for (i = 0; i < 100; i++) {
         int p = syscall1(SYS_FORK, 0);
         if (p == 0) {
@@ -146,8 +151,7 @@ PROBE_START void _start(void)
         syscall1(SYS_CLOSE, fd);
     }
 
-    /* (d) FD_CLOEXEC is per-fd: it round-trips, and dup2 clears it on the new
-     * fd. */
+    /* (d) FD_CLOEXEC is per-fd: it round-trips, and dup2 leaves it clear. */
     fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
     check(fd >= 0, "open for cloexec test");
     syscall3(SYS_FCNTL, fd, F_SETFD, FD_CLOEXEC);

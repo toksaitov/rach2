@@ -537,7 +537,7 @@ tests/lstest.c:_start lines 147 a probe, one sequence of steps in the order the 
 
 tests/memprobe.c:probe_main complexity 31 a probe, one sequence of steps in the order the log records them
 
-tests/modeprobe.c:probe_main lines 144 a probe, one sequence of steps in the order the log records them
+tests/modeprobe.c:probe_main lines 125 a probe, one sequence of steps in the order the log records them
 
 tests/mountprobe.c:rows_flags complexity 28 a probe, one sequence of steps in the order the log records them
 tests/mountprobe.c:rows_flags lines 107 a probe, one sequence of steps in the order the log records them
@@ -634,7 +634,7 @@ tests/musl/vforkmusl.c:main complexity 27 a test's rows, each a case, read as on
 
 tests/musl/waitidmusl.c:selections complexity 29 a test's rows, each a case, read as one table
 
-tests/mvtest.c:_start lines 197 a probe, one sequence of steps in the order the log records them
+tests/mvtest.c:_start lines 189 a probe, one sequence of steps in the order the log records them
 
 tests/netifprobe.c:netif_main complexity 132 a probe, one sequence of steps in the order the log records them
 tests/netifprobe.c:netif_main lines 614 a probe, one sequence of steps in the order the log records them
@@ -666,7 +666,7 @@ tests/ptyprobe.c:_start lines 171 a probe, one sequence of steps in the order th
 tests/rawprobe.c:_start complexity 44 a probe, one sequence of steps in the order the log records them
 tests/rawprobe.c:_start lines 443 a probe, one sequence of steps in the order the log records them
 
-tests/rmtest.c:_start lines 152 a probe, one sequence of steps in the order the log records them
+tests/rmtest.c:_start lines 148 a probe, one sequence of steps in the order the log records them
 
 tests/sockettest.c:_start lines 131 a probe, one sequence of steps in the order the log records them
 
@@ -675,7 +675,7 @@ tests/stattest.c:_start lines 181 a probe, one sequence of steps in the order th
 tests/stdintest.c:_start lines 119 a probe, one sequence of steps in the order the log records them
 
 tests/suidhelper.c:probe_main complexity 51 a probe, one sequence of steps in the order the log records them
-tests/suidhelper.c:probe_main lines 110 a probe, one sequence of steps in the order the log records them
+tests/suidhelper.c:probe_main lines 108 a probe, one sequence of steps in the order the log records them
 
 tests/system/checkers/pcapcheck.c:cmd_bcast complexity 49 an inspector's check, one walk over the format it reads
 tests/system/checkers/pcapcheck.c:cmd_netconsole complexity 48 an inspector's check, one walk over the format it reads
@@ -721,7 +721,7 @@ tests/usbprobe.c:probe_main complexity 31 a probe, one sequence of steps in the 
 tests/usbprobe.c:probe_main lines 113 a probe, one sequence of steps in the order the log records them
 
 tests/vfsprobe.c:_start complexity 103 a probe, one sequence of steps in the order the log records them
-tests/vfsprobe.c:_start lines 294 a probe, one sequence of steps in the order the log records them
+tests/vfsprobe.c:_start lines 290 a probe, one sequence of steps in the order the log records them
 
 tools/image/fatchains.c:print_chain complexity 29 an inspector's check, one walk over the format it reads
 

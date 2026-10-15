@@ -1,14 +1,15 @@
 /**
- * Probes that paths are canonicalized before the synthetic-mount classifier.
+ * Probes that a path is made canonical before the kernel finds the mount it
+ * is on.
  *
- * The classifier decides /dev vs /proc vs KRFFS lexically, while the KRFFS
- * resolver collapses '..'. If the two disagree, a spelling like /x/../proc
- * classifies as KRFFS and then resolves to /proc, so mkdir could create a real
- * KRFFS /proc that shadows the synthetic one. The kernel must canonicalize the
- * absolute path once, before classification, so such a path is recognized as
- * the synthetic mount and refused. The probe makes a real directory, then
- * checks a '..' path through it onto /proc and /dev is refused, and that a '..'
- * path that canonicalizes onto a real device or directory still works.
+ * The kernel collapses the '..' of a path once, as it copies the path in,
+ * and finds the mount from the canonical path. A kernel that found the
+ * mount from the path as written and collapsed '..' afterwards would take
+ * /x/../proc for a path of the KRFFS root and resolve it to /proc, so mkdir
+ * could make a KRFFS /proc that hides the synthetic one. The probe makes a
+ * directory, then checks that a '..' path through it onto /proc and /dev is
+ * refused, and that a '..' path that comes out on a device or a directory
+ * still reaches it.
  *
  * Prints "PATHCANON OK". Freestanding; direct system calls (probe.h).
  */
@@ -22,12 +23,14 @@
 
 #define EACCES 13
 
+/** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -37,12 +40,14 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)"\n", 1);
 }
 
+/** Print "PATHCANON FAIL: " and `why`, and exit 1. */
 static void fail(const char *why)
 {
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)"PATHCANON FAIL: ", 16);
@@ -50,6 +55,13 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
+/**
+ * Run the cases in order and fail at the first that does not hold: mkdir
+ * of /cx/../proc and of /cx/../dev fails; /cx/../dev/null opens the device
+ * and takes a write; /cx/../cx opens the directory; and execve of
+ * /cx/../dev/null fails with -EACCES, the answer for a path on a synthetic
+ * mount, where a path that reached the KRFFS root would fail with -ENOENT.
+ */
 PROBE_START void _start(void)
 {
     int fd;
@@ -58,8 +70,7 @@ PROBE_START void _start(void)
         fail("mkdir /cx");
     }
 
-    /* A '..' path that canonicalizes onto a synthetic mount must be refused,
-     * not create a shadowing KRFFS node. */
+    /* A '..' path onto a synthetic mount is refused and makes no KRFFS node. */
     if (syscall2(SYS_MKDIR, (long)"/cx/../proc", 0755) == 0) {
         fail("mkdir /cx/../proc created a KRFFS shadow of synthetic /proc");
     }
@@ -84,10 +95,7 @@ PROBE_START void _start(void)
     }
     syscall2(SYS_CLOSE, fd, 0);
 
-    /* execve classifies the canonical path like open: a synthetic path is
-     * refused with -EACCES before it can reach KRFFS, so a file a hostile image
-     * placed below the synthetic prefix could never be executed. Reaching KRFFS
-     * instead would fail with -ENOENT, so the errno distinguishes the guard. */
+    /* execve refuses a path on a synthetic mount with -EACCES. */
     {
         char *av[1];
         av[0] = 0;

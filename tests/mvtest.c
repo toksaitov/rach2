@@ -4,16 +4,17 @@
  * as a source with EBUSY, as Linux does, and overwrite an existing
  * destination.
  *
- * The negative cases assert the exact errno, not the sign. The file system
- * reports every refusal as a bare -1, which userspace decodes as EPERM whatever
- * went wrong, so the two directory cases are the ones that matter: a
- * directory SOURCE is -EPERM, the errno POSIX reserves for a rename the file
- * system cannot perform, while a directory DESTINATION under a plain source is
- * -EISDIR. A test that accepted any negative return could not tell them apart.
- * A directory source is refused with -EPERM on KRFFS, whose children name
- * their parent by id, and performed on ext2, which rewrites `..`; the probe
- * reads the root's type from `/proc/mounts`, prints it, and fails the row on
- * a root that is neither.
+ * The negative cases assert the exact errno, not the sign. The KRFFS core
+ * answers every refusal of a rename with a bare -1, so the system call tells
+ * the cases apart before it calls the core (syscall_fs.c), and the two
+ * directory cases are the ones that matter: a directory as the source is
+ * -EPERM, the errno POSIX reserves for a rename the file system cannot
+ * perform, while a directory as the destination under a plain source is
+ * -EISDIR. A test that accepted any negative return could not tell them
+ * apart. A directory source is refused with -EPERM on KRFFS, whose children
+ * name their parent by id, and performed on ext2, which rewrites `..`; the
+ * probe reads the root's type from `/proc/mounts`, prints it, and fails the
+ * row on a root that is neither.
  *
  * Freestanding; direct system calls (probe.h).
  */
@@ -35,52 +36,62 @@
 #define S_IRUSR 0400
 #define S_IWUSR 0200
 
+/** write(2): the bytes written, or a negated errno. */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
+/** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** creat(2): a descriptor, or a negated errno. */
 static int sys_creat(const char *path, unsigned int mode)
 {
     return syscall2(SYS_CREAT, (long)path, (long)mode);
 }
 
+/** open(2) with no mode: a descriptor, or a negated errno. */
 static int sys_open(const char *path, int flags)
 {
     return syscall2(SYS_OPEN, (long)path, (long)flags);
 }
 
+/** close(2): 0, or a negated errno. */
 static int sys_close(int fd)
 {
     return syscall1(SYS_CLOSE, (long)fd);
 }
 
+/** unlink(2): 0, or a negated errno. */
 static int sys_unlink(const char *path)
 {
     return syscall1(SYS_UNLINK, (long)path);
 }
 
+/** mkdir(2): 0, or a negated errno. */
 static int sys_mkdir(const char *path, int mode)
 {
     return syscall2(SYS_MKDIR, (long)path, (long)mode);
 }
 
+/** rmdir(2): 0, or a negated errno. */
 static int sys_rmdir(const char *path)
 {
     return syscall1(SYS_RMDIR, (long)path);
 }
 
+/** rename(2): 0, or a negated errno. */
 static int sys_rename(const char *oldpath, const char *newpath)
 {
     return syscall2(SYS_RENAME, (long)oldpath, (long)newpath);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t len = 0;
@@ -90,14 +101,21 @@ static size_t strlen(const char *s)
     return len;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
-/* Whether the root under the probe is ext2, read from the mount table rather
+
+/**
+ * Whether the root under the probe is ext2, read from the mount table rather
  * than assumed: the two roots answer a directory's rename differently and both
- * answers are right for their file system. */
+ * answers are right for their file system. 1 for ext2 and 0 for KRFFS, the
+ * type of the line whose mount point is a bare slash, matched whole; -1 for
+ * another type, which fails the directory row, or when /proc/mounts cannot be
+ * read.
+ */
 static int root_is_ext2(void)
 {
     static char mounts[2048];
@@ -113,10 +131,7 @@ static int root_is_ext2(void)
         return -1;
     }
     mounts[n] = 0;
-    /* Each line is "device mountpoint type options 0 0"; the root's is the one
-       whose mount point is a bare slash, and the field after it is the type,
-       which is matched whole. A type this probe does not know is -1, which
-       ends it: the answers below are one file system's or the other's. */
+    /* Each line is "device mountpoint type options 0 0". */
     for (i = 0; i < n; i++) {
         if (mounts[i] == ' ' && mounts[i + 1] == '/' && mounts[i + 2] == ' ') {
             const char *t = &mounts[i + 3];
@@ -134,11 +149,13 @@ static int root_is_ext2(void)
     return -1;
 }
 
+/** Write `s` to standard output. */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
+/** Write `n`, from 0 to 99, in decimal. */
 static void print_num(int n)
 {
     if (n >= 10) {
@@ -243,12 +260,7 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 6b: what a directory's rename answers, which the file system under
-     * the probe decides. On the boot root a directory's children reference its
-     * id, so moving it would orphan them and KRFFS refuses with EPERM; ext2
-     * rewrites `..` and moves it, as Linux does. The type was read at the top
-     * and printed; a root that is neither fails this row rather than taking
-     * one of the two answers by default. */
+    /* Test 6b: a directory's rename: -EPERM on KRFFS, done on ext2. */
     print("Test 6b: rename of a directory, the answer this root owes... ");
     if (root == -1) {
         puts("FAILED (the root is neither krffs nor ext2)");
@@ -271,8 +283,7 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 6c: A directory destination under a plain source is -EISDIR, the
-     * other half of the pair, and the case that separates the two errnos. */
+    /* Test 6c: A directory destination under a plain source: -EISDIR. */
     print("Test 6c: rename(file, a directory) == -EISDIR... ");
     if (sys_mkdir("mvtest.dst", 0755) == 0) {
         fd = sys_creat("mvtest.src", S_IRUSR | S_IWUSR);
@@ -297,8 +308,7 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 6d: The root as a source is -EBUSY, as on Linux, not -ENOENT:
-     * the root exists, so "no such file" would be false. */
+    /* Test 6d: The root as a source: -EBUSY, as on Linux, not -ENOENT. */
     print("Test 6d: rename(\"/\", \"mvtest.x\") == -EBUSY... ");
     result = sys_rename("/", "mvtest.x");
     if (result == -EBUSY) {

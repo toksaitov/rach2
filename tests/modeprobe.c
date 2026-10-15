@@ -25,23 +25,24 @@
  *
  * The escalation needs a program and not just a mode, so the probe makes one:
  * the root parent copies the staged `/suidhelper` byte for byte to
- * `/mp_sgid0`, which keeps the fixture out of the manifest and out of phase
- * 3's set-id allowlist. It is chmod'd 02700 and chowned `1000:0`, in that
- * order, and the mode must survive the chown: 02700 has no group-execute,
- * so the clear spares its setgid bit. A uid-1000 child rewrites a byte of the
- * copy and stats it back at 02700, the survival the clear rule deliberately
- * allows, and a grandchild execs it with `suidhelper`'s `plain` scenario,
- * which exits 0 only if all three uids and all three gids read 1000 and
- * AT_SECURE is 0. The same child then chmods the copy 02710 and stats it back
- * at 0710, because an unprivileged caller who is not in the file's group may
- * not store setgid on a non-directory; that is the half no write clear can
- * reach, since the mode needs no write to appear. `/suidhelper.sgid`
- * (02755:0:5) is the paired positive that `suidprobe` still requires in the
- * same image, so the narrowed grant is pinned in both directions.
+ * `/mp_sgid0`, which keeps the fixture out of the manifest and out of the
+ * set-id allowlist (tools/inspect/setid.allow). It is chmod'd 02700 and
+ * chowned `1000:0`, in that order, and the mode must survive the chown:
+ * 02700 has no group-execute, so the clear spares its setgid bit. A uid-1000
+ * child rewrites a byte of the copy and stats it back at 02700, the survival
+ * the clear rule deliberately allows, and a grandchild execs it with
+ * `suidhelper`'s `plain` scenario, which exits 0 only if all three uids and
+ * all three gids read 1000 and AT_SECURE is 0. The same child then chmods
+ * the copy 02710 and stats it back at 0710, because an unprivileged caller
+ * who is not in the file's group may not store setgid on a non-directory;
+ * that is the half no write clear can reach, since the mode needs no write
+ * to appear. `/suidhelper.sgid` (02755:0:5) is the paired positive that
+ * `suidprobe` requires in the same image, so the narrowed grant is checked
+ * in both directions.
  *
- * Every fixture is minted and removed here, not staged. The probes
- * share one boot, and a probe that disarmed `suidprobe`'s staged fixtures
- * would buy itself a green run by breaking a later probe's premise.
+ * Every fixture is minted and removed here, not staged. The probes share one
+ * boot, and a probe that disarmed `suidprobe`'s staged fixtures would pass
+ * by breaking a later probe's premise.
  *
  * Every operation's return value is checked before its mode is asserted, and
  * every wait checks WIFEXITED before WEXITSTATUS: a signal death has the
@@ -125,6 +126,7 @@ typedef unsigned int u32;
  * larger than the child's own 8-byte write. */
 #define FILL_BYTES 64
 
+/** The length of the string `s`. */
 static u32 slen(const char *s)
 {
     u32 n = 0;
@@ -135,12 +137,13 @@ static u32 slen(const char *s)
     return n;
 }
 
+/** Write `s` to standard output. */
 static void puts_(const char *s)
 {
     syscall3(SYS_WRITE, STDOUT, (long)s, (int)slen(s));
 }
 
-/* Print a signed decimal, so a failing line has the answer it got. */
+/** Print a signed decimal, so a failing line has the answer it got. */
 static void putd(int v)
 {
     char buf[13];
@@ -158,8 +161,8 @@ static void putd(int v)
     puts_(&buf[i]);
 }
 
-/* Print an unsigned octal with a leading zero: the only readable shape for a
- * mode. */
+/** Print an unsigned octal with a leading zero: the only readable shape for
+ * a mode. */
 static void puto(u32 v)
 {
     char buf[13];
@@ -174,6 +177,7 @@ static void puto(u32 v)
     puts_(&buf[i]);
 }
 
+/** Print "MODEPROBE FAIL: ", the step and the answer it got, and exit 1. */
 static void fail(const char *step, int got)
 {
     puts_("MODEPROBE FAIL: ");
@@ -184,7 +188,8 @@ static void fail(const char *step, int got)
     syscall1(SYS_EXIT, 1);
 }
 
-/* The answer must be exactly `want`: an errno family, not merely a sign. */
+/** Fail at `step` unless the answer `got` is exactly `want`: an errno, not
+ * merely a sign. */
 static void want_eq(const char *step, int got, int want)
 {
     if (got != want) {
@@ -192,7 +197,8 @@ static void want_eq(const char *step, int got, int want)
     }
 }
 
-/* The call must have succeeded (open returns a descriptor, so not just 0). */
+/** Fail at `step` unless the call succeeded, which for open is a descriptor
+ * and not just 0. */
 static void want_ok(const char *step, int got)
 {
     if (got < 0) {
@@ -200,9 +206,10 @@ static void want_ok(const char *step, int got)
     }
 }
 
-/* The one stat64 buffer: the kernel writes it, the readers below read it. */
+/* The one stat buffer: the kernel writes it, the readers below read it. */
 static char statbuf[KSTAT_SIZE];
 
+/** stat(2) of `path` into `statbuf`; fail when it does not succeed. */
 static void stat_path(const char *path)
 {
     int rc = syscall3(SYS_STAT, (long)path, (long)statbuf, 0);
@@ -212,9 +219,9 @@ static void stat_path(const char *path)
     }
 }
 
-/* Assert the stored 07777 mode of `path`, always through a fresh path lookup:
- * a clear applied to a stale node pointer after a relocating write leaves the
- * real node untouched, and only a re-resolve can see that. */
+/** Assert the stored 07777 mode of `path`, always through a fresh path
+ * lookup: a clear applied to a stale node pointer after a relocating write
+ * leaves the real node untouched, and only a re-resolve can see that. */
 static void want_mode(const char *step, const char *path, u32 mode)
 {
     u32 got;
@@ -241,9 +248,10 @@ static unsigned long kept_mtime_ns;
 static unsigned long kept_ctime;
 static unsigned long kept_ctime_ns;
 
-/* Wait until the clock has left the second the times were stamped in, so that
- * a call which wrongly stores the time of day is caught: ext2 keeps whole
- * seconds, and a store inside the same second would read back unchanged. */
+/** Wait until the clock has left the second the times were stamped in, so
+ * that a call which wrongly stores the time of day is caught: ext2 keeps
+ * whole seconds, and a store inside the same second would read back
+ * unchanged. */
 static void sleep_past_second(void)
 {
     long ts[2];
@@ -253,6 +261,8 @@ static void sleep_past_second(void)
     syscall3(SYS_NANOSLEEP, (long)ts, 0, 0);
 }
 
+/** Keep the stored times of `path` in the kept_ variables, then sleep past
+ * the second they were stamped in. */
 static void keep_times(const char *path)
 {
     stat_path(path);
@@ -263,6 +273,8 @@ static void keep_times(const char *path)
     sleep_past_second();
 }
 
+/** Fail at `step` unless the stored times of `path` are the ones keep_times
+ * kept; the answer printed is the status time's seconds. */
 static void want_times_kept(const char *step, const char *path)
 {
     stat_path(path);
@@ -274,9 +286,9 @@ static void want_times_kept(const char *step, const char *path)
     }
 }
 
-/* The stored owner and group, which a chown row must assert as well as the
- * mode: a path that stored only the mode would pass a row that reads the mode
- * alone. */
+/** Fail at `step` unless `path` is owned by `uid`:`gid`, which a chown row
+ * must assert as well as the mode: a path that stored only the mode would
+ * pass a row that reads the mode alone. */
 static void want_owner(const char *step, const char *path, u32 uid, u32 gid)
 {
     stat_path(path);
@@ -288,8 +300,9 @@ static void want_owner(const char *step, const char *path, u32 uid, u32 gid)
     }
 }
 
-/* The stored size: only its low 32 bits are read, since a KRFFS file cannot
- * reach 4 GB and the rest are always zero. */
+/** Fail at `step` unless the stored size of `path` is `size`: only its low
+ * 32 bits are read, since a KRFFS file cannot reach 4 GB and the rest are
+ * always zero. */
 static void want_size(const char *step, const char *path, u32 size)
 {
     u32 got;
@@ -305,7 +318,8 @@ static void want_size(const char *step, const char *path, u32 size)
  * that the write moved some. */
 static char blob[GROW_BYTES];
 
-/* Write `count` bytes at offset 0 of `path`, which must already exist. */
+/** Write `count` bytes at offset 0 of `path`, which must already exist; fail
+ * at `step` otherwise. */
 static void write_bytes(const char *step, const char *path, u32 count)
 {
     int fd = syscall3(SYS_OPEN, (long)path, O_WRONLY, 0);
@@ -315,7 +329,7 @@ static void write_bytes(const char *step, const char *path, u32 count)
     want_eq(step, syscall3(SYS_CLOSE, fd, 0, 0), 0);
 }
 
-/* Become uid and gid 1000 outright, with no saved id to swing back on. The
+/** Become uid and gid 1000 outright, with no saved id to return to. The
  * gids go first: once the effective uid is 1000 the gid calls are refused. */
 static void drop_to_1000(void)
 {
@@ -323,7 +337,7 @@ static void drop_to_1000(void)
     want_eq("drop the uids", syscall3(SYS_SETRESUID, 1000, 1000, 1000), 0);
 }
 
-/* Mint one fixture: create it, give it `fill` bytes of content, hand it to
+/** Mint one fixture: create it, give it `fill` bytes of content, hand it to
  * `uid`:`gid`, and only then set its mode. The chown comes first because a
  * chown that changes a field clears the set-id bits whoever asks, so the
  * reverse order would store a mode the next call takes away again. */
@@ -341,10 +355,10 @@ static void mint(const char *path, u32 mode, u32 fill, u32 uid, u32 gid)
     want_mode("the fixture did not take its mode", path, mode);
 }
 
-/* Copy `src` to `dst` byte for byte through one read/write loop. A freestanding
- * probe cannot mint an ELF, and the escalation needs a program, not a
- * mode; copying the staged helper keeps the runnable set-id fixture out of the
- * manifest and out of phase 3's allowlist. */
+/** Copy `src` to `dst` byte for byte through one read/write loop. A
+ * freestanding probe cannot mint an ELF, and the escalation needs a program,
+ * not a mode; copying the staged helper keeps the runnable set-id fixture out
+ * of the manifest and out of the set-id allowlist. */
 static void copy_file(const char *src, const char *dst)
 {
     static char buf[4096];
@@ -362,10 +376,10 @@ static void copy_file(const char *src, const char *dst)
     want_eq("close the helper copy", syscall3(SYS_CLOSE, out, 0, 0), 0);
 }
 
-/* Exec `path arg` in a fresh child and report what became of it: the program's
- * own exit code, or 128 + errno when the exec was refused. The fork is what
- * makes the two answers distinguishable, since a successful exec leaves nothing
- * behind to report it. */
+/** Exec `path arg` in a fresh child and report what became of it: the
+ * program's own exit code, or 128 + errno when the exec was refused. The fork
+ * is what makes the two answers distinguishable, since a successful exec
+ * leaves nothing behind to report it. */
 static int run_helper(const char *path, const char *arg)
 {
     int pid, status = 0;
@@ -395,27 +409,47 @@ static int run_helper(const char *path, const char *arg)
     return WEXITSTATUS(status);
 }
 
-/* The no-change gate, then every clear a uid-1000 caller must suffer on its own
- * files. The fixtures were handed over by the root parent, so nothing here is
- * refused for want of a permission and a surviving bit is the kernel's answer,
- * not an unnoticed -EACCES. */
+/**
+ * The no-change rule, then every clear a uid-1000 caller must suffer on its
+ * own files; exits 0, or 1 at the first case that fails. The fixtures were
+ * handed over by the root parent, so nothing here is refused for want of a
+ * permission and a surviving bit is the kernel's answer, not an unnoticed
+ * -EACCES.
+ *
+ * chown(path, -1, -1) needs no right, so it must also take none away, or
+ * this one call would disarm /bin/su from uid 1000. The same call with the
+ * ids it already has named in place of the sentinel is asked too: a rule
+ * written against (uid != -1 || gid != -1) rather than against a field
+ * actually moving passes the first and fails the second, and that kernel
+ * would let chown("/bin/su", 0, 0) from uid 1000 disarm the file. Through
+ * the descriptor the times are checked as well: a call that changes no field
+ * writes nothing, so the status time may not move either.
+ *
+ * A write that grows /mp_grow past its node's data room must move the node,
+ * since /mp_block sits right behind it, and the mode is read through the
+ * path again, the only way to see a clear applied through the pointer the
+ * write left behind. creat(2) on an existing file truncates, as
+ * open(O_WRONLY|O_CREAT|O_TRUNC) does, and the clear goes with the
+ * truncation. The chmod of the 02755 file back to 02755 is the paired
+ * positive for the escalation child's chmod row: this caller is in the
+ * file's group (both are 1000), so the bit it asks for must land, which a
+ * blanket strip on every unprivileged chmod would fail. A group change this
+ * caller may make, to its own group on a file it owns, clears both bits;
+ * a change of owner it may not make must leave the mode, the owner and the
+ * times alone, since a clear that ran before the permission check would
+ * disarm a file the caller could not chown.
+ */
 static void user_child(void)
 {
     int fd;
 
     drop_to_1000();
 
-    /* chown(path, -1, -1) needs no right, so it must also take none away.
-     * Without the no-change gate this one call disarms /bin/su from uid
-     * 1000. */
+    /* chown(path, -1, -1) needs no right, so it may take none away. */
     want_eq("chown(-1, -1) on a root-owned setuid file",
             syscall3(SYS_CHOWN, (long)NOCHG, (int)KEEP, (int)KEEP), 0);
     want_mode("a no-change chown disarmed the file", NOCHG, 04755);
-    /* The same no-change chown spelled with the ids named, not with the
-     * sentinel. A gate written against (uid != -1 || gid != -1) instead of
-     * against a field actually moving passes the line above and fails this one,
-     * and that kernel is the hole: chown("/bin/su", 0, 0) from uid 1000 needs
-     * no right, since nothing changes, and would disarm the file. */
+    /* The same no-change chown with the ids named, not the sentinel. */
     want_eq("chown(0, 0) on a root-owned setuid file", syscall3(SYS_CHOWN, (long)NOCHG, 0, 0), 0);
     want_mode("naming the ids it already had disarmed the file", NOCHG, 04755);
 
@@ -423,10 +457,7 @@ static void user_child(void)
     write_bytes("write in place", INPLACE, 8);
     want_mode("an in-place write kept setuid", INPLACE, 0755);
 
-    /* A write that grows the file past its node's data room. /mp_block sits
-     * immediately behind it, so the node cannot extend and must move; the
-     * assertion below re-resolves the path, which is the only way to see a
-     * clear that was applied through the pointer the write left behind. */
+    /* A write that grows the file past its node's data room moves the node. */
     write_bytes("write past the node", GROW, GROW_BYTES);
     want_mode("a relocating write kept setuid", GROW, 0755);
     want_size("the relocating write lost bytes", GROW, GROW_BYTES);
@@ -437,8 +468,7 @@ static void user_child(void)
     want_mode("O_TRUNC kept setuid", TRUNCME, 0755);
     want_size("O_TRUNC left bytes behind", TRUNCME, 0);
 
-    /* creat(2) on an existing file is open(O_WRONLY|O_CREAT|O_TRUNC): it
-     * truncates, and the clear rides that branch. */
+    /* creat(2) on an existing file truncates it. */
     fd = syscall3(SYS_CREAT, (long)CREATME, 0644, 0);
     want_ok("creat an existing set-id file", fd);
     want_eq("close the recreated file", syscall3(SYS_CLOSE, fd, 0, 0), 0);
@@ -448,9 +478,7 @@ static void user_child(void)
     /* Setgid follows group-execute, the bit exec's grant reads. */
     write_bytes("write the 02755 file", SGIDX, 8);
     want_mode("a write kept setgid with group-execute", SGIDX, 0755);
-    /* The paired positive for the chmod rule below, without which a blanket
-     * strip on every unprivileged chmod would pass: this caller IS in the
-     * file's group (both are 1000), so the bit it asks for must land. */
+    /* This caller is in the file's group, so the setgid it asks for lands. */
     want_eq("chmod the 02755 file back", syscall3(SYS_CHMOD, (long)SGIDX, 02755, 0), 0);
     want_mode("chmod took setgid from a caller inside the group", SGIDX, 02755);
     write_bytes("write the 02645 file", SGIDNOX, 8);
@@ -460,9 +488,7 @@ static void user_child(void)
     write_bytes("write the plain file", PLAIN, 8);
     want_mode("a write disturbed a plain mode", PLAIN, 0755);
 
-    /* The same no-change gate through the descriptor, both spellings, and the
-     * times with it: a call that changes no field writes nothing, so the
-     * status time may not move either. */
+    /* The same no-change rule through the descriptor, with the times. */
     fd = syscall3(SYS_OPEN, (long)FNOCHG, O_RDONLY, 0);
     want_ok("open the root-owned setuid file", fd);
     keep_times(FNOCHG);
@@ -477,17 +503,13 @@ static void user_child(void)
     want_times_kept("a no-change fchown by name moved the times", FNOCHG);
     want_eq("close the root-owned setuid file", syscall3(SYS_CLOSE, fd, 0, 0), 0);
 
-    /* A group this caller may move the file into: it owns the file and the
-     * group is its own, so the call is allowed, and an allowed call that moves
-     * a field clears the set-id bits. It has group-execute, so both go. */
+    /* A group change this caller may make clears both set-id bits. */
     want_eq("give a file its owner's group", syscall3(SYS_CHOWN, (long)GIVEGRP, (int)KEEP, 1000),
             0);
     want_mode("a permitted group change kept the set-id bits", GIVEGRP, 0755);
     want_owner("a permitted group change did not store the group", GIVEGRP, 1000, 1000);
 
-    /* And one it may not make: only a privileged caller changes the owner.
-     * The refusal must leave the mode alone, since a clear that runs before
-     * the permission check would disarm a file the caller could not chown. */
+    /* Only a privileged caller changes the owner; a refusal clears nothing. */
     keep_times(REFUSED);
     want_eq("give a file away as its unprivileged owner",
             syscall3(SYS_CHOWN, (long)REFUSED, 0, (int)KEEP), -EPERM);
@@ -498,9 +520,18 @@ static void user_child(void)
     syscall1(SYS_EXIT, 0);
 }
 
-/* The escalation the mode alone would grant. /mp_sgid0 is a runnable copy of
- * the helper, 02700 and owned 1000:0, so its executor is its owner and the
- * setgid bit is the only thing that could hand out gid 0. */
+/**
+ * The escalation the mode alone would grant; exits 0, or 1 at the first case
+ * that fails. /mp_sgid0 is a runnable copy of the helper, 02700 and owned
+ * 1000:0, so its executor is its owner and the setgid bit is the only thing
+ * that could hand out gid 0.
+ *
+ * One byte is rewritten with the value it already has: the clear rule cares
+ * that a write moved bytes, not which, and the copy has to stay a valid ELF
+ * for the exec. An owner outside the file's group may not store setgid on
+ * it, so the mode that would have granted gid 0 never lands; no write clear
+ * can reach this case, since the mode needs no write to appear.
+ */
 static void escalation_child(void)
 {
     char byte;
@@ -508,9 +539,7 @@ static void escalation_child(void)
 
     drop_to_1000();
 
-    /* Rewrite one byte with the value it already has. The clear rule cares
-     * that a write moved bytes, not which, and the copy has to stay a valid
-     * ELF for the exec below. */
+    /* Rewrite one byte with the value it already has. */
     fd = syscall3(SYS_OPEN, (long)SGID0, O_RDONLY, 0);
     want_ok("open the copy to read a byte", fd);
     want_eq("read a byte of the copy", syscall3(SYS_READ, fd, (long)&byte, 1), 1);
@@ -523,9 +552,7 @@ static void escalation_child(void)
     want_mode("a write took setgid without group-execute", SGID0, 02700);
     want_eq("exec the 02700 copy", run_helper(SGID0, "plain"), 0);
 
-    /* An owner outside the file's group may not store setgid on it, so the
-     * mode that would have granted gid 0 never lands. No write clear can reach
-     * this case: the mode needs no write to appear. */
+    /* An owner outside the file's group may not store setgid on it. */
     want_eq("chmod the copy 02710", syscall3(SYS_CHMOD, (long)SGID0, 02710, 0), 0);
     want_mode("chmod stored setgid for a caller outside the group", SGID0, 0710);
     want_eq("exec the 02710 copy", run_helper(SGID0, "plain"), 0);
@@ -533,7 +560,7 @@ static void escalation_child(void)
     syscall1(SYS_EXIT, 0);
 }
 
-/* Run one child to completion and require a clean exit 0. WIFEXITED comes
+/** Run one child to completion and require a clean exit 0. WIFEXITED comes
  * first: a signal death has the signal in the low bits and would otherwise
  * decode as exit 0. The child has already named the case it failed. */
 static void run_child(void (*body)(void), const char *what)
@@ -547,8 +574,7 @@ static void run_child(void (*body)(void), const char *what)
     }
     if (pid == 0) {
         body();
-        /* Unreachable: every body exits itself. Non-zero so that a body that
-         * ever grew a path out the bottom would fail, not pass. */
+        /* Every body exits itself; 127 fails one that returns. */
         syscall1(SYS_EXIT, 127);
     }
     reaped = syscall3(SYS_WAITPID, pid, (long)&status, 0);
@@ -568,12 +594,44 @@ static void run_child(void (*body)(void), const char *what)
     }
 }
 
-/* The directory the fixtures are made in is the working directory, which the
- * optional first argument sets. With no argument the probe works where it was
- * started, which for the test runner is the root of the boot image; a suite
- * that wants the same rows on another file system passes its mount point. */
 PROBE_SP_ENTRY;
 
+/**
+ * Enter the directory argv[1] names, if any, make the fixtures, run root's
+ * half, the uid-1000 child and the escalation child, and remove every
+ * fixture; exits 0, or 1 at the first case that fails.
+ *
+ * The fixtures are made in the working directory. With no argument the probe
+ * works where it was started, which for the test runner is the root of the
+ * boot image; a suite that runs the same rows on another file system passes
+ * its mount point.
+ *
+ * The supplementary list is emptied here rather than required of the caller.
+ * A child that drops to uid 1000 with root's group 0 still in its list is in
+ * the group of a file owned 1000:0, and the kernel is then right to let it
+ * store setgid, so the escalation row would pass on a hole it cannot see. A
+ * login shell leaves that list holding the primary group; the debug shell the
+ * test runner uses leaves it empty.
+ *
+ * The relocation pair is made first and in this order. `creat` allocates a
+ * node with no room for data, so /mp_grow is followed by the remainder of the
+ * free block it was cut from; allocation is first-fit from the start of the
+ * image and every hole before that block was already too small to hold a
+ * node header, so the next `creat` takes that remainder. Either way /mp_grow
+ * ends up followed by a reserved node, and a write that outgrows it must
+ * relocate, not extend in place.
+ *
+ * Root's own half: a privileged writer keeps the bit, or every root process
+ * would disarm the programs it maintains, while a chown has no such
+ * exemption, asked by the same identity; that pair is the whole difference
+ * between the two rules. A directory is armed after it is made and chowned
+ * after that, so the chown has a bit to take and visibly does not take it.
+ * The same four answers are asked through the descriptor, since a kernel
+ * that wired the rule into the pathname call alone passes every row of the
+ * path and fails these. The escalation's fixture is chmod'd before it is
+ * chowned: 02700 has no group-execute, so the clear the chown runs must spare
+ * its setgid bit.
+ */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
@@ -584,24 +642,12 @@ void probe_main(unsigned long *sp)
         want_eq("enter the directory named on the command line",
                 syscall3(SYS_CHDIR, (long)argv[1], 0, 0), 0);
     }
-    /* The supplementary list is emptied here rather than required of the
-     * caller. A child that drops to uid 1000 with root's group 0 still in its
-     * list is in the group of a file owned 1000:0, and the kernel is then
-     * right to let it store setgid, so the escalation row would pass on a hole
-     * it cannot see. A login shell leaves that list holding the primary group,
-     * which is how this probe failed on a root login and passed under the test
-     * runner. */
+    /* Root's group 0 in the list puts uid 1000 in a 1000:0 file's group. */
     if (syscall3(SYS_GETEUID, 0, 0, 0) == 0) {
         want_eq("empty the supplementary group list", syscall3(SYS_SETGROUPS, 0, 0, 0), 0);
     }
 
-    /* The relocation pair, first and in this order. `creat` allocates a node
-     * with no room for data, so /mp_grow is followed by the remainder of the
-     * free block it was cut from; allocation is first-fit from the start of
-     * the image and every hole before that block was already too small to hold
-     * a node header, so the next `creat` takes that remainder. Either way
-     * /mp_grow ends up followed by a reserved node, and a write that outgrows
-     * it must relocate, not extend in place. */
+    /* The relocation pair, first and in this order: the blocker follows. */
     fd = syscall3(SYS_CREAT, (long)GROW, 0644, 0);
     want_ok("mint the relocation fixture", fd);
     want_eq("close the relocation fixture", syscall3(SYS_CLOSE, fd, 0, 0), 0);
@@ -628,8 +674,7 @@ void probe_main(unsigned long *sp)
     mint(GIVEGRP, 06755, FILL_BYTES, 1000, 0);
     mint(REFUSED, 04755, FILL_BYTES, 1000, 1000);
 
-    /* A directory is armed after it is made, and chowned after that, so the
-     * chown below has a bit to take and visibly does not take it. */
+    /* A directory is armed after it is made, and chowned after that. */
     want_eq("mint the directory", syscall3(SYS_MKDIR, (long)DIRSUID, 0755, 0), 0);
     want_eq("arm the directory", syscall3(SYS_CHMOD, (long)DIRSUID, 04755, 0), 0);
     want_mode("the directory did not take its mode", DIRSUID, 04755);
@@ -637,23 +682,19 @@ void probe_main(unsigned long *sp)
     want_eq("arm the descriptor's directory", syscall3(SYS_CHMOD, (long)FDIRSUID, 04755, 0), 0);
     want_mode("the descriptor's directory did not take its mode", FDIRSUID, 04755);
 
-    /* Root's own half. The write exemption first: a privileged writer keeps the
-     * bit, or every root process would disarm the programs it maintains. */
+    /* Root's own half: a privileged writer keeps the bit. */
     want_mode("the 04755 baseline", ROOTSUID, 04755);
     write_bytes("write as root", ROOTSUID, 8);
     want_mode("a privileged write took the bit", ROOTSUID, 04755);
 
-    /* The chown has no such exemption, and the same identity asks for it. That
-     * pair is the whole difference between the two rules. */
+    /* A chown has no such exemption, asked by the same identity. */
     want_eq("chown a setuid file away", syscall3(SYS_CHOWN, (long)CHOWNED, 1000, 1000), 0);
     want_mode("a chown kept setuid", CHOWNED, 0755);
     want_owner("a chown did not store the owner", CHOWNED, 1000, 1000);
     want_eq("chown the directory away", syscall3(SYS_CHOWN, (long)DIRSUID, 1000, 1000), 0);
     want_mode("a chown took a directory's setuid", DIRSUID, 04755);
 
-    /* The same four answers through the descriptor. One plan decides both, so
-     * a kernel that wired the rule into the pathname call alone passes every
-     * row above and fails these. */
+    /* The same four answers through the descriptor. */
     fd = syscall3(SYS_OPEN, (long)FCHOWNED, O_WRONLY, 0);
     want_ok("open the file to be chowned by descriptor", fd);
     want_eq("fchown a setuid file away", syscall3(SYS_FCHOWN, fd, 1000, 1000), 0);
@@ -686,9 +727,7 @@ void probe_main(unsigned long *sp)
 
     run_child(user_child, "the uid-1000 child");
 
-    /* The escalation's fixture. The chmod comes before the chown on purpose:
-     * 02700 has no group-execute, so the clear the chown runs must spare
-     * its setgid bit, and the assertion after it says so. */
+    /* The escalation's fixture: 02700 keeps its setgid through the chown. */
     copy_file(HELPER, SGID0);
     want_eq("arm the helper copy", syscall3(SYS_CHMOD, (long)SGID0, 02700, 0), 0);
     want_eq("give the helper copy away", syscall3(SYS_CHOWN, (long)SGID0, 1000, 0), 0);

@@ -1,11 +1,12 @@
 /**
  * Exercises the `unlink` syscall: create, verify, and delete files, then
- * confirm that deleting a missing file, a directory, and the root all fail with
- * the errno POSIX names for each.
+ * confirm that deleting a missing file, a directory, the root and a path
+ * through a file all fail with the errno POSIX names for each.
  *
- * The exact errno is the point of the negative cases, not the sign. The file
- * system reports every refusal as a bare -1, which userspace decodes as EPERM,
- * so a test that accepted any negative return could not tell "no such file"
+ * The exact errno is the point of the negative cases, not the sign. The KRFFS
+ * core answers every refusal with a bare -1, so the system call tells the
+ * cases apart before it calls the core (`unlink_named` in syscall_fs.c), and
+ * a test that accepted any negative return could not tell "no such file"
  * from "is a directory" from a permission denial.
  *
  * Freestanding; direct system calls (probe.h).
@@ -27,47 +28,56 @@
 #define S_IRUSR 0400
 #define S_IWUSR 0200
 
+/** write(2): the bytes written, or a negated errno. */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
+/** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** creat(2): a descriptor, or a negated errno. */
 static int sys_creat(const char *path, unsigned int mode)
 {
     return syscall2(SYS_CREAT, (long)path, (long)mode);
 }
 
+/** open(2) with no mode: a descriptor, or a negated errno. */
 static int sys_open(const char *path, int flags)
 {
     return syscall2(SYS_OPEN, (long)path, (long)flags);
 }
 
+/** close(2): 0, or a negated errno. */
 static int sys_close(int fd)
 {
     return syscall1(SYS_CLOSE, (long)fd);
 }
 
+/** unlink(2): 0, or a negated errno. */
 static int sys_unlink(const char *path)
 {
     return syscall1(SYS_UNLINK, (long)path);
 }
 
+/** mkdir(2): 0, or a negated errno. */
 static int sys_mkdir(const char *path, int mode)
 {
     return syscall2(SYS_MKDIR, (long)path, (long)mode);
 }
 
+/** rmdir(2): 0, or a negated errno. */
 static int sys_rmdir(const char *path)
 {
     return syscall1(SYS_RMDIR, (long)path);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t len = 0;
@@ -77,17 +87,20 @@ static size_t strlen(const char *s)
     return len;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
+/** Write `s` to standard output. */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
+/** Write `n`, from 0 to 99, in decimal. */
 static void print_num(int n)
 {
     if (n >= 10) {
@@ -100,8 +113,9 @@ static void print_num(int n)
 
 /**
  * ELF entry point. Creates a file, confirms it exists, unlinks it, and
- * confirms it is gone, then checks that unlinking a missing path and the
- * root directory both fail.
+ * confirms it is gone; then checks the errno of an unlink of a missing path,
+ * of the root, of a directory and of a path through a file, and creates and
+ * removes one more file. Exits 0 when every test passed, else 1.
  */
 PROBE_START void _start(void)
 {
@@ -123,7 +137,7 @@ PROBE_START void _start(void)
     } else {
         puts("FAILED (can't create test file)");
         failed++;
-        /* Can't continue without test file */
+        /* The later tests need the file. */
         goto results;
     }
 
@@ -173,8 +187,7 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 6: Unlink "/": -EISDIR. The root has no type bits in its mode, so it
-     * is refused by identity, not by KRFFS_IS_DIR. */
+    /* Test 6: Unlink "/": -EISDIR. */
     print("Test 6: unlink(\"/\") == -EISDIR... ");
     result = sys_unlink("/");
     if (result == -EISDIR) {
@@ -185,8 +198,7 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 6b: Unlink an ordinary directory: -EISDIR, which is what tells a
-     * caller to use rmdir. Its own fixture, created and destroyed here. */
+    /* Test 6b: Unlink a directory: -EISDIR, the answer that means rmdir. */
     print("Test 6b: unlink(a directory) == -EISDIR... ");
     if (sys_mkdir("rmtest.dir", 0755) == 0) {
         result = sys_unlink("rmtest.dir");
@@ -203,9 +215,7 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 6c: A plain file in the middle of the path is -ENOTDIR, not
-     * -ENOENT. The resolver reports the two separately and unlink must not
-     * flatten them. */
+    /* Test 6c: A file in the middle of the path: -ENOTDIR, not -ENOENT. */
     print("Test 6c: unlink(\"rmtest.plain/child\") == -ENOTDIR... ");
     fd = sys_creat("rmtest.plain", S_IRUSR | S_IWUSR);
     if (fd >= 0) {

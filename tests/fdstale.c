@@ -3,26 +3,24 @@
  * close: across an unlink, across a rename onto its name, and across a write
  * that relocates it.
  *
- * The probe asserted the inverse until this milestone. A KRFFS node was freed
- * the moment its name went, so every operation revalidated the cached pointer
- * and answered -EBADF to keep off the freed free-list metadata, and this file
- * asserted that read, lseek, _llseek and fchmod each did. The node is now kept
- * alive by the descriptor tables and freed by the last close, so those same
- * four calls succeed and report the file the descriptor opened. The credential
+ * A KRFFS node is kept alive by the descriptor tables and freed by the last
+ * close, so read, lseek, _llseek and fchmod through a descriptor whose name
+ * went succeed and report the file the descriptor opened. The credential
  * readers are what rest on it: each is several syscalls long (musl's
  * getspnam_r opens /etc/shadow and then reads it through fgets), the kernel
- * preempts between two syscalls, and a replacement landing in that window used
- * to make su, login and dropbear refuse a correct password.
+ * preempts between two syscalls, and a replacement landing in that window
+ * would make su, login and dropbear refuse a correct password if the reader
+ * lost its file.
  *
  * The control comes first, so that no later result can be credited to a
  * mis-staged fixture: a descriptor with nothing happening to it reads its file
  * and then reads end of file.
  *
- * Unlink under an open descriptor is the case whose assertion inverted. The
- * read returns the original bytes in full, lseek and _llseek to SEEK_END and
- * fstat64 all report the original size, fchmod succeeds, and a fresh open of
- * the name returns -ENOENT. That last one is what separates a lifetime from a
- * lookup that merely forgot to fail.
+ * Unlink under an open descriptor: the read returns the original bytes in
+ * full, lseek and _llseek to SEEK_END and fstat all report the original
+ * size, fchmod succeeds, and a fresh open of the name returns -ENOENT. That
+ * last one is what separates a lifetime from a lookup that merely forgot to
+ * fail.
  *
  * The orphan is hidden from the scans that enumerate by parent id, not only
  * from the resolver. After such an unlink, getdents64 on the parent directory
@@ -34,17 +32,18 @@
  * A rename that fails after its destination was resolved must leave that
  * destination alone, and it is asserted in both the shapes this kernel has.
  * With a descriptor open on the file, renaming a directory onto its name
- * returns -EPERM and the name stays readable, through the held descriptor and
- * through a fresh open alike. An implementation that orphans before it refuses
- * cannot pass that. The other shape refuses for the destination, not the
- * source: renaming a file onto an open directory returns -EISDIR, which the
- * boot root decides once it has looked the destination up and before it
- * counts the destination's holders, so it takes no orphan, and ext2 before it
- * writes anything. The directory's name must survive the refusal; were the
- * refusal moved after the count, the name would still survive, but only
- * because a directory descriptor is not a holder.
+ * returns -EPERM on the boot root and -ENOTDIR on ext2, and the name stays
+ * readable, through the held descriptor and through a fresh open alike. An
+ * implementation that orphans before it refuses cannot pass that. The other
+ * shape refuses for the destination, not the source: renaming a file onto an
+ * open directory returns -EISDIR, which the boot root decides once it has
+ * looked the destination up and before it counts the destination's holders,
+ * so it takes no orphan, and ext2 before it writes anything. The directory's
+ * name must survive the refusal; were the refusal moved after the count, the
+ * name would still survive, but only because a directory descriptor is not a
+ * holder.
  *
- * The rename onto the reader's name is the case the whole change exists for,
+ * The rename onto the reader's name is the case the credential readers need,
  * and it runs across two processes, since a holder scan that looked only at
  * the calling process would pass a single-process version of it. The child
  * opens two files and blocks; the parent writes a replacement, renames it over
@@ -83,12 +82,12 @@
  * is two processes: a repointing that walked only the writer's own table would
  * pass the first and still leave every other table on the freed node.
  *
- * The leak check is the only free-space assertion a probe can make on a file
- * system with no statfs, and it is made in all three shapes, because the
- * release lives at the last close and only a descriptor ever reaches it. First
- * 256 rounds of open, unlink under the descriptor, close, on a 64 KB file: a
- * kernel that orphans and never releases needs 16 MB of a 10 MB image and
- * fails at or before round 160, where a correct one uses one extent 256 times.
+ * The leak check judges free space by whether the image runs out, and it is
+ * made in all three shapes, because the release lives at the last close and
+ * only a descriptor ever reaches it. First 256 rounds of open, unlink under
+ * the descriptor, close, on a 64 KB file: a kernel that orphans and never
+ * releases needs 16 MB of a 10 MB image and fails at or before round 160,
+ * where a correct one uses one extent 256 times.
  * Then the same count of the two shapes that must take no orphan at all: the
  * removal nothing is holding, which is almost every removal, and the write of
  * a new file renamed onto a name, which is what every credential replacement
@@ -101,10 +100,10 @@
  * the directory on the boot root, where ext2 keeps one as it keeps a file.
  * A descriptor of the boot root finds its directory by the node's place, so
  * a directory freed under one would leave it on whatever node the allocator
- * put there next. The case
- * holds the directory each way in turn, as the working directory of a child
- * and then of the caller, and requires the descriptor to go on listing it
- * and the rmdir to succeed once nothing refers to it.
+ * put there next. The case holds the directory each way in turn, as the
+ * working directory of a child and then of the caller, and requires the
+ * descriptor to go on listing it and the rmdir to succeed once nothing
+ * refers to it.
  *
  * Every wait checks WIFEXITED before WEXITSTATUS: a signal death has the
  * signal in the low bits and would otherwise decode as exit 0, scoring a
@@ -189,6 +188,7 @@ typedef unsigned int u32;
 #define LEAK_CHUNK  4096
 #define LEAK_CHUNKS 16
 
+/** The length of the string `s`. */
 static u32 slen(const char *s)
 {
     u32 n = 0;
@@ -199,12 +199,13 @@ static u32 slen(const char *s)
     return n;
 }
 
+/** Write `s` to standard output. */
 static void puts_(const char *s)
 {
     syscall3(SYS_WRITE, STDOUT, (long)s, (int)slen(s));
 }
 
-/* Print a signed decimal, so a failing line has the answer it got. */
+/** Print a signed decimal, so a failing line has the answer it got. */
 static void putd(int v)
 {
     char buf[13];
@@ -222,6 +223,7 @@ static void putd(int v)
     puts_(&buf[i]);
 }
 
+/** Print "FDSTALE FAIL: ", the step and the answer it got, and exit 1. */
 static void fail(const char *step, int got)
 {
     puts_("FDSTALE FAIL: ");
@@ -232,7 +234,8 @@ static void fail(const char *step, int got)
     syscall1(SYS_EXIT, 1);
 }
 
-/* A round-numbered failure: the leak loops are judged by where they stop. */
+/** A failure with its round, since the leak loops are judged by where they
+ * stop: print the step, the round and the answer, and exit 1. */
 static void fail_round(const char *step, int round, int got)
 {
     puts_("FDSTALE FAIL: ");
@@ -245,7 +248,8 @@ static void fail_round(const char *step, int round, int got)
     syscall1(SYS_EXIT, 1);
 }
 
-/* The answer must be exactly `want`: an errno family, not merely a sign. */
+/** Fail at `step` unless the answer `got` is exactly `want`: an errno, not
+ * merely a sign. */
 static void want_eq(const char *step, int got, int want)
 {
     if (got != want) {
@@ -253,7 +257,8 @@ static void want_eq(const char *step, int got, int want)
     }
 }
 
-/* The call must have succeeded (open returns a descriptor, so not just 0). */
+/** Fail at `step` unless the call succeeded, which for open is a descriptor
+ * and not just 0. */
 static void want_ok(const char *step, int got)
 {
     if (got < 0) {
@@ -267,9 +272,11 @@ static char blob[LEAK_CHUNK];
 
 static char rdbuf[LEAK_CHUNK];
 
-/* One stat64 buffer: the kernel writes it, want_fd_size reads it back. */
+/* One stat buffer, of the larger struct of the two architectures, x86-64's:
+ * the kernel writes it, want_fd_size reads it back. */
 static char statbuf[144];
 
+/** Whether the strings `a` and `b` are equal. */
 static int streq(const char *a, const char *b)
 {
     u32 i;
@@ -279,9 +286,9 @@ static int streq(const char *a, const char *b)
     return a[i] == b[i];
 }
 
-/* Read the rest of the file through `fd` and require exactly `len` bytes equal
- * to `want`, then end of file. A short read, a long one, or one byte out of
- * place is a different file or a mixture of two. */
+/** Read the rest of the file through `fd` and require exactly `len` bytes
+ * equal to `want`, then end of file. A short read, a long one, or one byte
+ * out of place is a different file or a mixture of two. */
 static void want_bytes(const char *step, int fd, const char *want, int len)
 {
     int n = syscall3(SYS_READ, fd, (long)rdbuf, (int)sizeof(rdbuf));
@@ -306,8 +313,8 @@ static void want_bytes(const char *step, int fd, const char *want, int len)
     }
 }
 
-/* Open `path` read-only, read it whole, close it: the view by name, which the
- * held descriptor's view is judged against. */
+/** Open `path` read-only, read it whole, close it: the view by name, which
+ * the held descriptor's view is judged against. */
 static void want_named_bytes(const char *step, const char *path, const char *want, int len)
 {
     int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
@@ -317,7 +324,7 @@ static void want_named_bytes(const char *step, const char *path, const char *wan
     want_eq(step, syscall3(SYS_CLOSE, fd, 0, 0), 0);
 }
 
-/* The size fstat64 reports through the descriptor itself. */
+/** Fail at `step` unless fstat through `fd` reports the size `size`. */
 static void want_fd_size(const char *step, int fd, int size)
 {
     int got;
@@ -329,7 +336,7 @@ static void want_fd_size(const char *step, int fd, int size)
     }
 }
 
-/* Create `path` holding `text`, whatever was there before. */
+/** Create `path` holding `text`, whatever was there before. */
 static void mint(const char *path, const char *text)
 {
     int fd = syscall3(SYS_CREAT, (long)path, 0644, 0);
@@ -340,10 +347,11 @@ static void mint(const char *path, const char *text)
     want_eq("close a fixture", syscall3(SYS_CLOSE, fd, 0, 0), 0);
 }
 
-/* Count the entries of `dirpath`, refusing a nameless one and refusing
+/** Count the entries of `dirpath`, refusing a nameless one and refusing
  * `forbidden`. An orphan that kept its parent id and nothing else shows up
- * here as one or the other. One call drains the directories this probe builds,
- * which hold one child at most. */
+ * here as one or the other. One call drains the directories this probe
+ * builds, which hold one child at most. `.` and `..`, which a root that keeps
+ * them on the disk returns and the boot root does not, are not counted. */
 static int dir_entries(const char *step, const char *dirpath, const char *forbidden)
 {
     static char dbuf[1024];
@@ -368,9 +376,7 @@ static int dir_entries(const char *step, const char *dirpath, const char *forbid
             fail(step, pos);
         }
         pos += reclen;
-        /* A root that keeps `.` and `..` on the disk returns them; the boot
-         * root synthesizes neither. What this counts is the children, so the
-         * two are stepped over on whichever root they appear. */
+        /* `.` and `..` are no children, on whichever root lists them. */
         if (streq(name, ".") || streq(name, "..")) {
             continue;
         }
@@ -380,16 +386,18 @@ static int dir_entries(const char *step, const char *dirpath, const char *forbid
     return seen;
 }
 
-/* The rendezvous: up has the child's "I am holding it", down the parent's
- * "I have replaced it". */
+/* The rendezvous: a byte on `up` says the child holds its files, a byte on
+ * `down` that the parent has replaced them. */
 static int up[2];
 static int down[2];
 
+/** Write one byte to `fd`, the other side's signal to go on. */
 static void notify(const char *step, int fd)
 {
     want_eq(step, syscall3(SYS_WRITE, fd, (long)"x", 1), 1);
 }
 
+/** Read one byte from `fd`: block until the other side signals. */
 static void wait_for(const char *step, int fd)
 {
     char c;
@@ -397,6 +405,7 @@ static void wait_for(const char *step, int fd)
     want_eq(step, syscall3(SYS_READ, fd, (long)&c, 1), 1);
 }
 
+/** Fork a child that runs `body`, which exits itself; the child's pid. */
 static int spawn(void (*body)(void), const char *what)
 {
     int pid = syscall1(SYS_FORK, 0);
@@ -406,16 +415,15 @@ static int spawn(void (*body)(void), const char *what)
     }
     if (pid == 0) {
         body();
-        /* Unreachable: every body exits itself. Non-zero so that a body that
-         * ever grew a path out the bottom would fail, not pass. */
+        /* Every body exits itself; 127 fails one that returns. */
         syscall1(SYS_EXIT, 127);
     }
     return pid;
 }
 
-/* Reap one child and require a clean exit 0. WIFEXITED comes first: a signal
- * death would otherwise decode as exit 0. The child has already named the case
- * it failed. */
+/** Reap one child and require a clean exit 0. WIFEXITED comes first: a
+ * signal death would otherwise decode as exit 0. The child has already named
+ * the case it failed. */
 static void reap(int pid, const char *what)
 {
     int status = 0;
@@ -437,7 +445,7 @@ static void reap(int pid, const char *what)
     }
 }
 
-/* Nothing happens to this descriptor, so what it reads is what every later
+/** Nothing happens to this descriptor, so what it reads is what every later
  * case is judged against. */
 static void control_case(void)
 {
@@ -451,8 +459,8 @@ static void control_case(void)
     want_eq("remove the control", syscall3(SYS_UNLINK, (long)CTL, 0, 0), 0);
 }
 
-/* The case whose assertion inverted: the four calls that used to answer -EBADF
- * through a descriptor whose name is gone. */
+/** Unlink under an open descriptor: read, lseek, _llseek, fstat and fchmod
+ * through it succeed and report the file it opened, while the name is gone. */
 static void unlink_case(void)
 {
     int len = (int)slen(HELD_LINE);
@@ -467,8 +475,7 @@ static void unlink_case(void)
     want_eq("lseek SEEK_END through the unlinked descriptor", syscall3(SYS_LSEEK, fd, 0, SEEK_END),
             len);
     {
-        /* _llseek is the path musl's lseek takes: EBX fd, ECX/EDX offset high
-         * and low, ESI result, EDI whence. */
+        /* musl's lseek is _llseek on i386 and lseek itself on x86-64. */
         long long res = -1;
         int r;
 
@@ -530,8 +537,8 @@ static void orphan_truncate_case(void)
     want_eq("remove orphan neighbour", syscall1(SYS_UNLINK, (long)WALL), 0);
 }
 
-/* The orphan is unreachable by name; it must be invisible to the scans that
- * enumerate by parent id as well. */
+/** The orphan is unreachable by name; it must be invisible to the scans
+ * that enumerate by parent id as well. */
 static void orphan_scan_case(void)
 {
     int fd;
@@ -552,7 +559,7 @@ static void orphan_scan_case(void)
     want_eq("close the orphan", syscall3(SYS_CLOSE, fd, 0, 0), 0);
 }
 
-/* Whether the root this probe runs on is the boot root. A rename row below
+/** Whether the root this probe runs on is the boot root. A rename row below
  * owes different answers on the two file systems, and reads the type out of
  * `/proc/mounts` rather than assuming the one it was written on. A root whose
  * line cannot be read is taken for the boot root, which is what an image
@@ -580,16 +587,17 @@ static int root_is_krffs(void)
     return 1;
 }
 
-/* Whether this root performs a directory's rename. The boot root refuses every
- * one of them with EPERM, since its children name their parent by id; ext2
- * moves a directory and answers a rename onto a file with ENOTDIR, which is
- * what POSIX asks for. The row below takes whichever answer its root owes. */
+/** Whether this root performs a directory's rename. The boot root refuses
+ * every one of them with EPERM, since its children name their parent by id;
+ * ext2 moves a directory and answers a rename onto a file with ENOTDIR,
+ * which is what POSIX asks for. The row below takes whichever answer its
+ * root owes. */
 static int root_moves_directories(void)
 {
     return !root_is_krffs();
 }
 
-/* A refusal must destroy nothing, in both the shapes this kernel has: the
+/** A refusal must destroy nothing, in both the shapes this kernel has: the
  * directory source, which the boot root refuses before it looks the
  * destination up and ext2 before it writes anything, and the directory
  * destination, which the boot root refuses with EISDIR once it has looked
@@ -626,15 +634,17 @@ static void failed_rename_case(void)
     want_eq("remove the spared file", syscall3(SYS_UNLINK, (long)KEEP, 0, 0), 0);
 }
 
-/* The child of the cross-process case: it opens both names and then blocks,
- * so the parent's replacement lands squarely between its open and its read. */
+/** The child of the cross-process case: it opens both names and then
+ * blocks, so the parent's replacement lands squarely between its open and
+ * its read. It signals before its opens are judged, so that a failed open
+ * reports itself through the exit status and does not hang the parent on a
+ * byte that never comes. */
 static void reader_child(void)
 {
     int fd_old = syscall3(SYS_OPEN, (long)OLD, O_RDONLY, 0);
     int fd_gone = syscall3(SYS_OPEN, (long)GONE, O_RDONLY, 0);
 
-    /* Before the opens are judged: a failed open must report itself through
-     * the exit status, not hang the parent on a byte that never comes. */
+    /* Signal first: a failed open then cannot hang the parent. */
     notify("the child signals its opens", up[1]);
     want_ok("the child opens the renamed-over name", fd_old);
     want_ok("the child opens the re-created name", fd_gone);
@@ -649,8 +659,8 @@ static void reader_child(void)
     syscall1(SYS_EXIT, 0);
 }
 
-/* The case the change exists for, and the one a single-process version of
- * would not reach: the holder is another process. */
+/** The rename onto a reader's name, with the reader in another process,
+ * which a single-process version would not reach. */
 static void cross_process_case(void)
 {
     int pid;
@@ -679,8 +689,8 @@ static void cross_process_case(void)
     want_eq("remove the re-created name", syscall3(SYS_UNLINK, (long)GONE, 0, 0), 0);
 }
 
-/* The child of the release case: it has the only descriptor on an orphan and
- * exits without closing it. */
+/** The child of the release case: it has the only descriptor on an orphan
+ * and exits without closing it. */
 static void holder_child(void)
 {
     int fd = syscall3(SYS_OPEN, (long)EXITF, O_RDONLY, 0);
@@ -692,6 +702,8 @@ static void holder_child(void)
     syscall1(SYS_EXIT, 0);
 }
 
+/** The release at exit: the holder child exits with the only descriptor on
+ * an orphan, and the name stays gone. */
 static void exit_release_case(void)
 {
     int pid;
@@ -706,8 +718,8 @@ static void exit_release_case(void)
             -ENOENT);
 }
 
-/* The child of the cross-process relocation case: it opens the file before the
- * write that moves it and reads it after. */
+/** The child of the cross-process relocation case: it opens the file before
+ * the write that moves it and reads it after. */
 static void moved_child(void)
 {
     int fd = syscall3(SYS_OPEN, (long)XGROW, O_RDONLY, 0);
@@ -724,11 +736,11 @@ static void moved_child(void)
     syscall1(SYS_EXIT, 0);
 }
 
-/* Relocation with the holder in another process. The two-descriptor case below
- * keeps both in one table, so a repointing that walked only the writer's own
- * process would pass it and still leave every other table on the node the
- * allocator freed. That is the same hole the rename case is two processes for,
- * in the half of the contract a write owns. */
+/** Relocation with the holder in another process. The two-descriptor case
+ * below keeps both in one table, so a repointing that walked only the
+ * writer's own process would pass it and still leave every other table on
+ * the node the allocator freed. That is the same hole the rename case is two
+ * processes for, in the half of the contract a write owns. */
 static void cross_reloc_case(void)
 {
     int pid, fd, writer;
@@ -755,8 +767,8 @@ static void cross_reloc_case(void)
     want_eq("remove the wall behind it", syscall3(SYS_UNLINK, (long)XWALL, 0, 0), 0);
 }
 
-/* The release counts descriptors, not files: a dup'd pair has one orphan and
- * the survivor goes on reading. */
+/** The release counts descriptors, not files: a dup'd pair has one orphan
+ * and the survivor goes on reading. */
 static void dup_case(void)
 {
     int len = (int)slen(DUP_LINE);
@@ -773,8 +785,8 @@ static void dup_case(void)
     want_eq("close the survivor", syscall3(SYS_CLOSE, dupfd, 0, 0), 0);
 }
 
-/* A write through one descriptor moves the file; the other must follow it.
- * See the header for why the wall is what forces the move. */
+/** A write through one descriptor moves the file; the other must follow it.
+ * The opening comment says why the wall is what forces the move. */
 static void reloc_case(void)
 {
     int fd, reader, writer;
@@ -806,7 +818,8 @@ static void reloc_case(void)
     want_eq("remove the wall", syscall3(SYS_UNLINK, (long)WALL, 0, 0), 0);
 }
 
-/* Fill `fd` to 64 KB, the size at which 256 rounds outgrow the image. */
+/** Fill `fd` to 64 KB, the size at which 256 rounds outgrow the image;
+ * fail, naming `step` and `round`, at a short write. */
 static void fill_round(const char *step, int fd, int round)
 {
     int i;
@@ -820,8 +833,8 @@ static void fill_round(const char *step, int fd, int round)
     }
 }
 
-/* An orphan released at the last close costs one extent however often it is
- * made; one that is never released costs 16 MB of a 10 MB image. */
+/** An orphan released at the last close costs one extent however often it
+ * is made; one that is never released costs 16 MB of a 10 MB image. */
 static void leak_by_close_case(void)
 {
     int round;
@@ -845,10 +858,10 @@ static void leak_by_close_case(void)
     }
 }
 
-/* The removal nothing is reading, which is almost every removal. The loop above
- * cannot reach it: it always unlinks under a descriptor, and that descriptor is
- * what releases the orphan. Here there is none, so an orphan taken anyway is
- * never closed and never released. */
+/** The removal nothing is reading, which is almost every removal. The loop
+ * above cannot reach it: it always unlinks under a descriptor, and that
+ * descriptor is what releases the orphan. Here there is none, so an orphan
+ * taken anyway is never closed and never released. */
 static void leak_by_unlink_case(void)
 {
     int round;
@@ -872,9 +885,9 @@ static void leak_by_unlink_case(void)
     }
 }
 
-/* The shape every credential replacement has, onto a name no descriptor has.
- * An orphan made unconditionally is never closed and never released, so this
- * is the loop that catches it. */
+/** The shape every credential replacement has, onto a name no descriptor
+ * has. An orphan made unconditionally is never closed and never released,
+ * so this is the loop that catches it. */
 static void leak_by_rename_case(void)
 {
     int round;
@@ -899,7 +912,7 @@ static void leak_by_rename_case(void)
     want_eq("remove the replaced name", syscall3(SYS_UNLINK, (long)REPL, 0, 0), 0);
 }
 
-/* The child of the directory case: its working directory is the directory
+/** The child of the directory case: its working directory is the directory
  * the parent tries to remove. */
 static void cwd_child(void)
 {
@@ -911,8 +924,8 @@ static void cwd_child(void)
     syscall1(SYS_EXIT, 0);
 }
 
-/* A directory in use is refused with EBUSY, which POSIX permits, on the boot
- * root: while a descriptor has it, one opened for reading and then one
+/** A directory in use is refused with EBUSY, which POSIX permits, on the
+ * boot root: while a descriptor has it, one opened for reading and then one
  * opened with O_PATH, while it is a child's working directory, and while it
  * is the caller's own. The descriptor opened for reading still lists the
  * directory and resolves a relative path through it, and the rmdir succeeds
@@ -957,6 +970,9 @@ static void directory_case(void)
     want_eq("rmdir once nothing refers to the directory", syscall3(SYS_RMDIR, (long)DDIR, 0, 0), 0);
 }
 
+/** Run every case in the order of the opening comment, the cross-process
+ * ones over the two pipes, and print FDSTALE OK; each case exits 1 at its
+ * first failure. */
 PROBE_START void _start(void)
 {
     int i;
