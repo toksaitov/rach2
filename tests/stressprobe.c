@@ -1,19 +1,17 @@
 /**
- * The page cache under load: more data through a disk-backed file system
- * than the cache holds.
+ * stressprobe: the page cache under load, with more data through a
+ * disk-backed file system than the cache holds.
  *
- * On a KRFFS mounted from a real disk (rach2.fsdisk), writes 132 files of 256
+ * On a KRFFS mounted from a disk (rach2.fsdisk), writes 132 files of 256
  * KiB each, 33 MiB, fsyncing each, then reads every file back and checks a
  * pattern that depends on the file and the offset. The page cache holds at
  * most 8 MiB, so once its slots are full the writes and the reads replace
- * pages in it, whatever the machine's memory; that the data round-trips
- * exactly is the proof that a file system larger than the cache works
- * through it. Prints "STRESSPROBE OK n=<files> bytes=<total>" and exits 0,
- * or prints "STRESSPROBE FAIL:" with the step, the file and the call's
- * result or the offset that differs, and exits 1. A file, 256 KiB, is a
+ * pages in it, whatever the machine's memory; data that comes back
+ * unchanged shows that a file system larger than the cache works through
+ * it. Prints "STRESSPROBE OK n=<files> bytes=<total>" and exits 0, or
+ * prints "STRESSPROBE FAIL:" with the step, the file and the call's result
+ * or the offset that differs, and exits 1. A file, 256 KiB, is a
  * thirty-second of the cache's largest size.
- *
- * Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
@@ -23,18 +21,20 @@
 #define O_CREAT  0x40
 #define O_TRUNC  0x200
 
-/* 132 x 256 KiB == 33 MiB, past the 32 MiB physical-RAM cap. */
+/* 132 x 256 KiB == 33 MiB, over four times the most the page cache holds. */
 #define NFILES    132u
 #define FILE_SIZE (256u * 1024u)
 
 static unsigned char buf[FILE_SIZE];
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -44,11 +44,13 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` to standard output, with no newline. */
 static void out(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
 }
 
+/** Write `v` in decimal to standard output. */
 static void out_num(unsigned long v)
 {
     char d[24];
@@ -67,7 +69,8 @@ static void out_num(unsigned long v)
     }
 }
 
-/* "/sNNN" for file N (N < 1000). */
+/** Write "/sNNN" for file `n`, under 1000, to `o`, which has room for six
+ * bytes. */
 static void path_of(char *o, unsigned n)
 {
     o[0] = '/';
@@ -78,6 +81,7 @@ static void path_of(char *o, unsigned n)
     o[5] = '\0';
 }
 
+/** A byte that depends on the file index and the byte offset. */
 static unsigned char pattern(unsigned file, size_t off)
 {
     return (unsigned char)((off * 31u + 7u) ^ (file * 131u) ^ (off >> 11));
@@ -131,6 +135,8 @@ static void fail_at(const char *what, unsigned file, int rc)
     sys_exit(1);
 }
 
+/** The probe: write and fsync every file, then read each back, compare it
+ * with its pattern and unlink it. */
 PROBE_START void _start(void)
 {
     char path[8];

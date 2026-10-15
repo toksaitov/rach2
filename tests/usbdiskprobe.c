@@ -1,6 +1,6 @@
 /**
- * A flash drive as a disk: its nodes, its volumes, and what happens when it
- * is pulled out.
+ * usbdiskprobe: a flash drive as a disk, its nodes, its volumes, and what
+ * happens when it is pulled out.
  *
  * The program takes one word saying which part to run, because the harness
  * has to pull the stick out between some of them and a pulled stick cannot
@@ -29,18 +29,22 @@
  * * `free`: the number of free names `/proc/usb` reports, printed, so the
  *   harness can compare it across a run of plugs and pulls.
  * * `super`: a stick with no partition table mounts through `/dev/disk0`.
- * * `pullread`: `/dev/disk0` read in 32 KiB pieces, `USBDISKPROBE READING`
- *   printed first, until a read answers `EIO`, then `USBDISKPROBE READ
- *   FAILED`; one read of the probe's own goes before them. The harness
- *   pulls the stick during the reads and reads the order of that line and
- *   the kernel's `given back` line.
+ * * `pullread`: `/dev/disk0` read in 32 KiB pieces until a read answers
+ *   `EIO`, `USBDISKPROBE READING` printed once one is in flight, and then
+ *   `USBDISKPROBE READ FAILED`; one read of the probe's own goes before
+ *   them. The harness pulls the stick during the reads and reads the order
+ *   of that line and the kernel's `given back` line.
  * * `throughput`: 16 MiB read from `/dev/disk0` in 32 KiB pieces, timed by
- *   the monotonic clock and printed as `USBDISKPROBE THROUGHPUT N KB/s`.
- *   The number is recorded, not judged: it is what this milestone's
- *   page-sized request gives under the emulator.
+ *   the monotonic clock and printed as `USBDISKPROBE THROUGHPUT N KB/s over
+ *   M ms`.
+ *   The number is printed, not judged: it depends on the emulator and the
+ *   machine.
+ * * `three`, `pullone [N]`, `big` and `luns`: three sticks at once, the pull
+ *   of one of three, a stick past two terabytes, and a device of two logical
+ *   units, as their functions describe.
  *
- * Prints "USBDISKPROBE OK" or "USBDISKPROBE FAIL: reason". Freestanding;
- * direct system calls (probe.h).
+ * Prints "USBDISKPROBE OK" and exits 0, or "USBDISKPROBE FAIL: " and the
+ * reason and exits 1.
  */
 
 #include "probe.h"
@@ -60,6 +64,7 @@
 
 #define MNT "/mnt"
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status) __attribute__((noreturn));
 static void sys_exit(int status)
 {
@@ -67,6 +72,7 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -77,17 +83,20 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` to standard output. */
 static void put(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     put(s);
     put("\n");
 }
 
+/** Write `v` in decimal to standard output. */
 static void putnum(int v)
 {
     char digits[12];
@@ -111,6 +120,7 @@ static void putnum(int v)
     }
 }
 
+/** Print "USBDISKPROBE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why) __attribute__((noreturn));
 static void fail(const char *why)
 {
@@ -119,6 +129,7 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
+/** Print "USBDISKPROBE OK" and exit 0. */
 static void ok(void) __attribute__((noreturn));
 static void ok(void)
 {
@@ -126,6 +137,7 @@ static void ok(void)
     sys_exit(0);
 }
 
+/** Whether the strings `a` and `b` are equal. */
 static int same(const char *a, const char *b)
 {
     while (*a && *a == *b) {
@@ -135,6 +147,7 @@ static int same(const char *a, const char *b)
     return *a == *b;
 }
 
+/** Whether the string `hay` contains the string `needle`. */
 static int contains(const char *hay, const char *needle)
 {
     const char *h;
@@ -156,10 +169,9 @@ static int contains(const char *hay, const char *needle)
 
 static char text[2048];
 
-/** Read a whole small file into `text`; the length, or a negative errno. */
 static int slurp(const char *path);
 
-/* A counter of /proc/disk by its label, or 0 when it is not there. */
+/** A counter of /proc/disk by its label, or 0 when it is not there. */
 static int disk_counter(const char *label)
 {
     int i, j;
@@ -184,6 +196,8 @@ static int disk_counter(const char *label)
     return 0;
 }
 
+/** Read a whole small file, at most 2047 bytes, into `text` and end it with
+ * a NUL; the length, or a negative errno. */
 static int slurp(const char *path)
 {
     int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
@@ -201,6 +215,7 @@ static int slurp(const char *path)
     return n;
 }
 
+/** Sleep for `ms` milliseconds. */
 static void sleep_ms(int ms)
 {
     struct {
@@ -213,21 +228,22 @@ static void sleep_ms(int ms)
     syscall2(SYS_NANOSLEEP, (long)&ts, 0);
 }
 
+/** Mount `source` of `type` at MNT, made first if missing: 0, or a negated
+ * errno. */
 static int mount_at(const char *source, const char *type, int flags)
 {
     syscall2(SYS_MKDIR, (long)MNT, 0755);
     return syscall5(SYS_MOUNT, (long)source, (long)MNT, (long)type, flags, 0);
 }
 
-/* stat's mode, at KSTAT_MODE in the kernel's stat, which is where the other
-   probes read it. S_IFBLK is 0060000. */
+/** The mode of `path`, read at KSTAT_MODE of the kernel's stat, or 0 when
+ * the stat fails. S_IFBLK is 0060000. */
 static unsigned int mode_of(const char *path)
 {
     static unsigned char st[KSTAT_SIZE];
     int i;
 
-    /* Cleared first, so a field the kernel does not fill reads as zero
-       rather than as what the last call left there. */
+    /* Cleared first, so a field the kernel does not fill reads as zero. */
     for (i = 0; i < (int)sizeof(st); i++) {
         st[i] = 0;
     }
@@ -266,6 +282,8 @@ static int free_names(void)
     return -1;
 }
 
+/** `report`: /dev/disk0 is a block device, /proc/usb names it with a size
+ * and counts the free names, which are printed. */
 static void part_report(void)
 {
     if (mode_of("/dev/disk0") == 0) {
@@ -293,10 +311,14 @@ static void part_report(void)
 }
 
 /* The two volumes' nodes: the table's numbering, given by the suite when
-   the entries are not the first two. */
+ * the entries are not the first two. */
 static const char *fat_node = "/dev/disk0p1";
 static const char *exfat_node = "/dev/disk0p2";
 
+/** `volumes`: both volumes mount, read and unmount, and the first sector of
+ * /dev/disk0 is the table the partitions came from: the MBR with the FAT32
+ * and exFAT entries one fixture writes, or the protective MBR in front of
+ * the GUID table the other fixture writes. */
 static void part_volumes(void)
 {
     int fd;
@@ -335,9 +357,7 @@ static void part_volumes(void)
     if ((unsigned char)text[510] != 0x55 || (unsigned char)text[511] != 0xAA) {
         fail("the first sector of /dev/disk0 is not a table");
     }
-    /* And it is the table the two partitions came from: either the MBR with
-       the FAT32 and exFAT entries the fixture wrote, or the protective entry
-       a GUID table sits behind, which is the other fixture. */
+    /* The MBR's entries 0C and 07, or a GUID table's protective EE. */
     {
         unsigned char type0 = (unsigned char)text[446 + 4];
         unsigned char type1 = (unsigned char)text[446 + 16 + 4];
@@ -378,6 +398,10 @@ static int stick_flushes(void)
     return -1;
 }
 
+/** `write`: a file written to the FAT volume, synced, unmounted, and read
+ * back after the volume is mounted again. The unmount tells the stick to
+ * put its own cache on the medium, which its line in /proc/usb counts, since
+ * a volume whole on the wire is not yet whole on the medium. */
 static void part_write(void)
 {
     int fd;
@@ -399,9 +423,7 @@ static void part_write(void)
     }
     syscall1(SYS_CLOSE, fd);
     syscall1(SYS_SYNC, 0);
-    /* The unmount tells the stick to put its own cache on the medium, which
-       its line in /proc/usb counts. A volume whole on the wire is not yet
-       whole on the medium. */
+    /* The unmount flushes the stick's cache, which /proc/usb counts. */
     flushes_before = stick_flushes();
     if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
         fail("the volume would not unmount after the write");
@@ -423,8 +445,7 @@ static void part_write(void)
 }
 
 /** Whether `node` opens and its first sector ends in the 0x55 0xAA of a
- * partition table.
- */
+ * partition table. */
 static int reads_mbr(const char *node)
 {
     unsigned char sector[512];
@@ -439,10 +460,9 @@ static int reads_mbr(const char *node)
     return n == (int)sizeof(sector) && sector[510] == 0x55 && sector[511] == 0xAA;
 }
 
-/** Hold a file on the stick through its pull and the plug of the next one.
- * The next stick may be given the name the pulled one had, or the next, as
- * the held record keeps its name or not, so both nodes are read.
- */
+/** `keep`: hold a file on the stick through its pull and the plug of the
+ * next one. The next stick may be given the name the pulled one had, or the
+ * next, as the held record keeps its name or not, so both nodes are read. */
 static void part_keep(void)
 {
     int fd;
@@ -478,10 +498,16 @@ static void part_keep(void)
     ok();
 }
 
-/** Keep file and directory cache entries across a pull on either volume.
- * `USBDISKPROBE HOLDING` is said after the first read has completed, so
- * the pull the suite makes on the word lands on a process already reading
- * the stick.
+/** `hold` and its forms: keep file and directory cache entries of the volume
+ * `source` of `type` across a pull, with the other volume mounted below it
+ * when `children` is set. `USBDISKPROBE HOLDING` is printed after the first
+ * read has completed, so the pull the suite makes on the word lands on a
+ * process already reading the stick.
+ *
+ * The reads that meet the pull go to the partition's node, which has no
+ * cache in front of it: every one of them is a request on the stick, so the
+ * process is inside such a request when the stick goes. The file stays open
+ * on the mount meanwhile, which is what the unmount must refuse.
  */
 static void part_hold(const char *source, const char *type, int children)
 {
@@ -524,10 +550,7 @@ static void part_hold(const char *source, const char *type, int children)
     if (dir < 0 || syscall3(SYS_GETDENTS64, dir, (long)buf, (int)sizeof(buf)) <= 0) {
         fail("the directory would not list before removal");
     }
-    /* The reads that meet the pull go to the whole node, which has no cache
-       in front of it: every one of them is a request on the stick, so the
-       process is inside such a request when the stick goes. The file stays
-       open on the mount meanwhile, which is what the unmount must refuse. */
+    /* Uncached reads of the partition's node, until the pull. */
     raw = syscall3(SYS_OPEN, (long)source, O_RDONLY, 0);
     if (raw < 0) {
         fail("the partition would not open");
@@ -608,6 +631,8 @@ static void part_hold(const char *source, const char *type, int children)
     ok();
 }
 
+/** `replug`: the FAT volume of the stick plugged back in mounts and has its
+ * file. */
 static void part_replug(void)
 {
     if (mount_at("/dev/disk0p1", "vfat", MS_RDONLY) != 0) {
@@ -625,6 +650,7 @@ static void part_replug(void)
     ok();
 }
 
+/** `free`: print the free names /proc/usb counts. */
 static void part_free(void)
 {
     int free_count = free_names();
@@ -640,6 +666,7 @@ static void part_free(void)
 
 static char big[32768];
 
+/** `throughput`: time 16 MiB of reads of /dev/disk0 and print the rate. */
 static void part_throughput(void)
 {
     struct {
@@ -676,15 +703,17 @@ static void part_throughput(void)
     ok();
 }
 
-/*
- * The pull during a transfer: a child reads the stick in large calls until
- * one fails, and `USBDISKPROBE READING` is said once the block layer counts
- * a request in flight, `disk-in-flight` in /proc/disk. The suite throttles
- * the medium to a budget of 32 KiB and a byte a second after it, and the
- * probe spends the budget with a read of its own before the child starts, so
- * the child's first read cannot leave its data stage before the pull the
- * suite makes on the word, however late the pull comes within the driver's
- * deadline.
+/**
+ * `pullread`, the pull during a transfer: a child reads the stick in large
+ * calls until one fails, and `USBDISKPROBE READING` is printed once the
+ * block layer counts a request in flight, `disk-in-flight` in /proc/disk.
+ * The suite throttles the medium to a budget of 32 KiB and a byte a second
+ * after it, and the probe spends the budget with a read of its own before
+ * the child starts, so the child's first read cannot leave its data stage
+ * before the pull the suite makes on the word, however late the pull comes
+ * within the driver's deadline. The child exits 0 on EIO, 3 on another
+ * error, 4 when the node went before a read failed, and 5 when no read
+ * failed.
  */
 static void part_pullread(void)
 {
@@ -749,6 +778,7 @@ static void part_pullread(void)
     }
 }
 
+/** `super`: a stick with no partition table mounts through /dev/disk0. */
 static void part_super(void)
 {
     if (mount_at("/dev/disk0", "exfat", MS_RDONLY) != 0) {
@@ -760,8 +790,8 @@ static void part_super(void)
     ok();
 }
 
-/*
- * `three`: three sticks at once, each with a FAT32 first partition holding
+/**
+ * `three`: three sticks at once, each with a FAT32 first partition that has
  * the same file, mounted and read one after the other.
  */
 static void part_three(void)
@@ -783,19 +813,18 @@ static void part_three(void)
     ok();
 }
 
-/*
- * `pullone`: with three sticks in, keep reading the middle one's whole node
- * through the queue and say so; the suite pulls it, the read in flight
- * answers EIO, and the two beside it still mount and read.
+/**
+ * `pullone`: with three sticks in, keep reading one stick's whole node and
+ * say so; the suite pulls it, the read in flight answers EIO, the two beside
+ * it still mount and read, and its own partition no longer mounts.
  *
  * `which` is the disk held and pulled, 0, 1 or 2. It is 1 unless a caller
- * names another: a machine with two controllers numbers its disks in the order
- * they were enumerated across both, so which disk is on which controller is
- * the caller's to say.
- * The pull of one stick among three: the reads run until the stick is
- * gone, and `USBDISKPROBE HOLDING` is said after the eighth successful
- * read, which is the fewest the row requires before the pull, so the suite
- * pulls on the word and the count holds whenever the pull lands.
+ * names another: a machine with two controllers numbers its disks in the
+ * order they were enumerated across both, so which disk is on which
+ * controller is the caller's to say. The reads run until the stick is gone,
+ * and `USBDISKPROBE HOLDING` is printed after the eighth successful read,
+ * which is the fewest the row requires before the pull, so the suite pulls
+ * on the word and the count is met whenever the pull lands.
  */
 static void part_pullone(int which)
 {
@@ -856,7 +885,7 @@ static void part_pullone(int which)
     ok();
 }
 
-/*
+/**
  * `big`: a stick past two terabytes, its partition near the end, listed at
  * its size, mounted, written and read back.
  */
@@ -887,7 +916,7 @@ static void part_big(void)
     ok();
 }
 
-/*
+/**
  * `luns`: one device with two logical units, each a disk with a FAT32
  * partition, both listed and both mounted.
  */
@@ -911,6 +940,9 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/** The probe, entered with `sp` at argc: the part the first argument names,
+ * `report` with none. Two more arguments after the part are the nodes of the
+ * FAT and exFAT volumes. An unknown part fails. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
