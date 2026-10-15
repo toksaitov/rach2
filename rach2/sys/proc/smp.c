@@ -26,9 +26,10 @@ static volatile unsigned int bkl_word;
  * drops its translations when it next takes the big lock. */
 static volatile uint32_t kernel_gen;
 
+/* The processors online, the boot processor counted (`smp_cpu_count`). */
 static int cpus_online = 1;
 
-/*
+/**
  * Spin until the big lock is free and take it, answering this processor's
  * requests meanwhile, since the holder may be waiting for the answer to its
  * own. Then drop every translation if a kernel mapping changed since this
@@ -102,8 +103,6 @@ int smp_cpu_count(void)
 }
 
 /**
- * Answer the requests left in this processor's record.
- *
  * A stop is final. A TLB request is answered by dropping the page's
  * translation, or all of them, and then clearing the word, which is what
  * the sender waits for; the processor does not go on with a translation it
@@ -151,11 +150,10 @@ void smp_kick(int cpu)
 }
 
 /**
- * Have every other processor that translates through `dir` drop `va`, and
- * wait for each. The caller holds the big lock, so a processor that runs
- * `dir` is in user mode, idle in the kernel with interrupts on, or waiting
- * for the lock and answering requests: each answers. While this one waits
- * it answers a stop itself.
+ * The caller holds the big lock, so a processor that runs `dir` is in user
+ * mode, idle in the kernel with interrupts on, or waiting for the lock and
+ * answering requests: each answers. While this one waits it answers its own
+ * requests, a stop among them.
  *
  * A processor whose thread has no address space, an idle task or a kernel
  * thread that kept `dir` loaded, is not interrupted. It reaches `dir`'s user
@@ -301,8 +299,9 @@ static process_t *smp_idle_task(int cpu)
  * off: it is online at once, so that the boot processor goes on to the next,
  * and takes work once it has the big lock, which the boot holds until it
  * enters the first program. One that comes after the boot gave up waiting
- * for it finds itself refused (`smp_start`) and stops, uncounted, since the
- * shootdowns would pass it by.
+ * for it finds its `admit` CPU_REFUSED (`smp_start`) and stops: online and
+ * uncounted, it would miss the shootdowns, which are skipped while one
+ * processor is counted.
  */
 static void smp_cpu_main(int cpu)
 {
@@ -338,18 +337,16 @@ static int parse_count(const char *text, int cap)
 #define CPU_ONLINE_WAIT_US 100000
 
 /**
- * Make the idle tasks and start the processors.
- *
  * The boot processor's idle task is made first, since scheduling needs one on
  * every processor: a process that blocks or ends leaves for it when nothing
  * else is ready. Its stack is laid out for a first switch into
  * `sched_idle_loop`; a started processor runs its own from its start.
- * `maxcpus=N` limits the processors to N, the boot one counted, as Linux's
- * does; 0 and 1 both leave it alone. A processor that does not answer is
- * reported, and the next is still tried. The boot admits a processor or
- * refuses it in one compare-and-exchange of its `admit`, which the
- * processor makes too as it comes online, so that one coming as the wait
- * ends is either counted or stopped, never online and uncounted.
+ * `maxcpus=N` limits the processors to N, as Linux's does; 0 and 1 both mean
+ * the boot processor alone. A processor that does not answer is reported,
+ * and the next is still tried. The boot admits a processor or refuses it in
+ * one compare-and-exchange of its `admit`, which the processor makes too as
+ * it comes online, so that one coming as the wait ends is either counted or
+ * stopped, never online and uncounted.
  */
 void smp_start(void)
 {

@@ -1,3 +1,5 @@
+/* wait_queue.c: the sleep on a wait queue and the wake, as wait_queue.h
+ * describes them. */
 #include "../lib/kirq.h"
 #include "../lib/spinlock.h"
 #include "wait_queue.h"
@@ -45,17 +47,19 @@ static void irq_restore(uint32_t flags)
     kirq_restore(flags);
 }
 
-/* Interrupts off. */
+/** Take the wait queues' spinlock; interrupts are off. */
 static void wq_lock(void)
 {
     spin_lock(&wq_spin);
 }
 
+/** Let the wait queues' spinlock go. */
 static void wq_unlock(void)
 {
     spin_unlock(&wq_spin);
 }
 
+/** Make the woken process `p` ready (`sched_make_ready`). */
 static void wq_ready(process_t *p)
 {
     sched_make_ready(p);
@@ -74,7 +78,7 @@ void wait_queue_init(wait_queue_t *wq)
     }
 }
 
-/* Interrupts off. Put `w` on the queue unless it is there. */
+/* Put `w` on the queue unless it is there; `wq_lock` is held. */
 static void wq_enqueue(wait_queue_t *wq, struct wq_waiter *w)
 {
     struct wq_waiter *q;
@@ -88,7 +92,7 @@ static void wq_enqueue(wait_queue_t *wq, struct wq_waiter *w)
     wq->head = w;
 }
 
-/* Interrupts off. Take `w` off the queue if it is there. */
+/* Take `w` off the queue if it is there; `wq_lock` is held. */
 static void wq_dequeue(wait_queue_t *wq, struct wq_waiter *w)
 {
     struct wq_waiter **link = &wq->head;
@@ -176,7 +180,7 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int interruptib
 void wq_poll_add(wait_queue_t *wq, struct wq_waiter *w)
 {
     if (wq && w) {
-        wq_lock(); /* caller holds interrupts off (see wait_queue.h) */
+        wq_lock();
         wq_enqueue(wq, w);
         wq_unlock();
     }

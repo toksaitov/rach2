@@ -1,3 +1,4 @@
+/* The wait queue, on which a process sleeps until a condition holds. */
 #ifndef _WAIT_QUEUE_H_
 #define _WAIT_QUEUE_H_
 
@@ -5,7 +6,7 @@
 #include "process.h"
 
 /*
- * Wait queue: the set of processes blocked waiting for one condition (data on a
+ * A queue is the set of processes blocked waiting for one condition (data on a
  * pipe, a datagram on a socket, a tty line, a disk request). It is the same
  * idea as the Linux kernel wait queue: a sleeper enqueues itself, marks itself
  * BLOCKED, and yields the CPU; a waker (an interrupt handler, the timer, or
@@ -21,9 +22,10 @@
  * process.h): a process sleeps with the record in its own record, and a
  * poller supplies one per watched object, from an array it took from the
  * heap before it began, so entering a queue allocates nothing and no queue
- * has a size. The single-CPU lock between a sleeper
- * and an IRQ waker is just "interrupts off"; there is no second core to
- * race.
+ * has a size. A sleeper's test and block exclude a waker on its own
+ * processor by turning interrupts off, the big lock keeps the other
+ * processors' kernel code out, and the lists are under a spinlock of the
+ * wait queues' as well (wait_queue.c).
  *
  * A wake says what kind of change it is for the pollers of the queue: data
  * to read, room to write, or a hangup or an error. The queue counts the
@@ -38,6 +40,7 @@
 #define WQ_KINDS  3
 
 typedef struct wait_queue {
+    /* The sleepers' and pollers' records, the newest first. */
     struct wq_waiter *head;
     /* The wakes of each kind, in the order of their bits. They wrap. */
     uint32_t wakes[WQ_KINDS];
@@ -51,7 +54,8 @@ typedef struct wait_queue {
  */
 typedef int (*wq_cond_fn)(void *arg);
 
-/* Clear a wait queue to empty. Call once before first use. */
+/** Make `wq` an empty queue, with no wakes counted; a NULL `wq` is
+ * ignored. Called once before the queue's first use. */
 void wait_queue_init(wait_queue_t *wq);
 
 /**
@@ -74,46 +78,49 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg);
  * The same wait with a pending signal ignored, for a lock held by another
  * process and for a transfer a device has in flight for the caller: an
  * interruptible wait returns at once while a signal is pending, and a waiter
- * that then retries never leaves the CPU to the holder it waits for.
+ * that then retries never leaves the CPU to the holder it waits for. Returns
+ * 0, or -EINVAL as `wq_wait_event` does; /proc reports the sleeper in the
+ * state D.
  */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg);
 
-/*
- * Make every process currently blocked on wq runnable, with one preferred
+/**
+ * Make every process currently blocked on `wq` runnable, with one preferred
  * selection by the scheduler, empty the queue, and count the wake for each
  * kind of change among `kinds`. The kinds are those the change can bring to
  * a poller of the queue; a wake for sleepers alone, such as room in a
- * socket's queue for the senders that wait on it, passes none. Safe to call
- * from IRQ context (it disables interrupts around the walk); a woken sleeper
- * re-checks its own condition, so a spurious wake is harmless.
+ * socket's queue for the senders that wait on it, passes none. A NULL `wq`
+ * is ignored. Safe to call from an interrupt handler, since it turns
+ * interrupts off around the walk; a woken sleeper re-checks its own
+ * condition, so a spurious wake is harmless.
  */
 void wq_wake(wait_queue_t *wq, uint32_t kinds);
 
-/* wq_wake for every kind of change: for a queue no poller watches, and for a
- * change of every kind, such as a close. */
+/** wq_wake for every kind of change: for a queue no poller watches, and for
+ * a change of every kind, such as a close. */
 void wq_wake_all(wait_queue_t *wq);
 
-/* The wakes `wq` has counted of the kinds among `kinds`, summed. */
+/** The wakes `wq` has counted of the kinds among `kinds`, summed. */
 uint32_t wq_wakes(const wait_queue_t *wq, uint32_t kinds);
 
-/*
+/**
  * poll/select support: a poller puts a record of its own on every polled
  * object's queue with wq_poll_add, sleeps once, and on any wake takes each
  * record off with wq_poll_remove; a wake of any object's queue wakes it. Both
- * are idempotent (a wake already removed the waiter) and must be called
- * with interrupts off. They do NOT block or change process state; the poll
- * core owns the BLOCKED/schedule()/RUNNING transitions, the same
- * lost-wakeup-safe way wq_wait_event does.
+ * are idempotent (a wake already removed the waiter), ignore a NULL `wq` or
+ * `w`, and must be called with interrupts off. They do not block or change
+ * the process's state; the poll core makes the BLOCKED, schedule() and
+ * RUNNING steps itself, in the order wq_wait_event makes them, so that no
+ * wake is lost.
  */
 void wq_poll_add(wait_queue_t *wq, struct wq_waiter *w);
 void wq_poll_remove(wait_queue_t *wq, struct wq_waiter *w);
 
-/*
- * Non-zero if any process is currently blocked on wq. Used to skip work that
- * is needed only while someone is waiting; for example, polling an
+/**
+ * Nonzero if a sleeper or a poller has a record on `wq`. Used to skip work
+ * that is needed only while someone is waiting; for example, polling an
  * interrupt-less device (the console serial port) for input from the timer
- * tick. Read it with interrupts off if a concurrent waker could change it
- * under you.
+ * tick. A caller that a waker could race reads it with interrupts off.
  */
 int wq_active(const wait_queue_t *wq);
 

@@ -1,3 +1,7 @@
+/*
+ * sched.c: the run queues and the selection, the idle wait, and the
+ * accounting of the timer's ticks, as sched.h describes them.
+ */
 #include "../arch/arch.h"
 #include "sched.h"
 #include "ptrace.h"
@@ -13,8 +17,7 @@
 #include "../usb/usb.h"
 #include "../network/ip/ip.h"
 
-/** Nonzero while preemptive scheduling is enabled; schedule() is a no-op
- * while it is zero. */
+/* Nonzero while the scheduler is on (`sched_enable`). */
 static volatile int _sched_enabled = 0;
 
 /*
@@ -35,8 +38,6 @@ static process_t *_last_sched[NR_CPUS];
  * preferred selection clears it, so the one after it is ordinary. */
 static int _wake_turn[NR_CPUS];
 
-/** Move every processor's round-robin cursor off `p`, which is about to be
- * unlinked, to the record before it. */
 void sched_forget(process_t *p)
 {
     uint32_t flags = spin_lock_irqsave(&sched_lock);
@@ -198,12 +199,6 @@ static int sched_place(const process_t *p)
     return cpu_table[p->cpu].current == p ? p->cpu : sched_choose(p);
 }
 
-/**
- * Make `p`, blocked or stopped, ready to run, on the queue `sched_place`
- * chooses, and wake that processor when it is idle, or halted in place
- * with `p` its current process, so that it looks now rather than at its
- * tick. Every wake of a process goes through here.
- */
 void sched_make_ready(process_t *p)
 {
     uint32_t flags = spin_lock_irqsave(&sched_lock);
@@ -220,13 +215,6 @@ void sched_make_ready(process_t *p)
     }
 }
 
-/**
- * Bind `p` to the processors of `mask`, of which one is started at least,
- * as sched_setaffinity(2) asks. A ready process on the queue of a processor
- * outside the set moves to one inside it; a process running on one outside
- * it leaves at that processor's next selection (`schedule`), which for the
- * caller is now.
- */
 void sched_set_affinity(process_t *p, uint64_t mask)
 {
     uint32_t flags = spin_lock_irqsave(&sched_lock);
@@ -249,25 +237,22 @@ void sched_set_affinity(process_t *p, uint64_t mask)
 }
 
 /**
- * Switch this processor to the next process of its queue, alternating a
- * wake preference with an ordinary round-robin selection.
- *
  * A preferred selection consumes its wake mark without moving the ordinary
- * cursor. At least every second selection advances that cursor, even when
- * sleepers wake repeatedly. A missing wake candidate takes an ordinary turn.
- * A processor whose own queue has nothing to run takes a process from the
- * busiest other queue (`sched_steal`), and with nothing there either it
- * goes on with its current process if that one can still run, or switches
- * to its idle task, which waits for work (`sched_idle_loop`). A current
- * process whose affinity no longer has this processor is made ready on a
- * processor it has, and so leaves; that processor cannot select it before
- * the switch away from it is done, since the big lock is held across it. A
- * current process a suspend to idle holds is made ready where it is, and
- * leaves too: on one processor the suspend's writer was the only one to run,
- * and on several the others' next tick stops what they run. A process that
- * blocks or ends therefore always leaves the processor, and a woken one may
- * run on any processor it may use. Before the idle tasks exist, at boot, a
- * process with nothing to switch to stays, and its caller idles in place.
+ * cursor, and the selection after it is ordinary, so the cursor advances at
+ * least every second selection even when sleepers wake repeatedly; a turn
+ * with no woken candidate is ordinary. A processor steals from another
+ * queue (`sched_steal`) only when its current process is its idle task or
+ * cannot run on, and with nothing to steal, one that cannot run on gives
+ * way to the idle task. A process that blocks or ends therefore always
+ * leaves the processor, and a woken one may run on any processor it may
+ * use.
+ *
+ * A current process whose affinity no longer has this processor is made
+ * ready on a processor it has; that processor cannot select it before the
+ * switch away from it is done, since the big lock is held across it. A
+ * current process a suspend to idle holds is made ready where it is: on
+ * one processor the suspend's writer was the only one to run, and on
+ * several the others' next tick stops what they run.
  *
  * Selection and publication run with interrupts disabled and the run
  * queues' lock held, so a wake cannot race the mark's consumption or a
@@ -275,17 +260,15 @@ void sched_set_affinity(process_t *p, uint64_t mask)
  * already resumed after an idle wait loses its mark before yielding, so
  * that wake cannot prefer it again later.
  *
- * Returns without a switch when scheduling is disabled or there is no
- * current process. The switch runs with interrupts disabled: a timer IRQ
- * landing between publishing current_proc and the stack and CR3 swap inside
- * switch_context would see current_proc == next with next->in_syscall == 0,
- * pass `sched_preempt`'s test, and re-enter schedule() on the old stack with
- * the TLS descriptor already rewritten, corrupting next->regs.esp. So
- * schedule() saves the caller's IF, clears it across the switch, and
- * restores it afterward. Each process does this symmetrically and resumes
- * with its own IF; a process entered for the first time skips the restore:
- * a forked child takes its IF from iret, and a kernel thread's entry
- * enables interrupts itself.
+ * The switch runs with interrupts disabled: a timer interrupt between the
+ * publication of the new current process and the change of stacks inside
+ * switch_context would find `next` current and outside a system call, pass
+ * `sched_preempt`'s test, and enter schedule() again on the old stack,
+ * saving that stack's pointer in next's record. So schedule() saves the
+ * caller's IF, clears it across the switch, and restores it afterward. Each
+ * process does this symmetrically and resumes with its own IF; a process
+ * entered for the first time skips the restore: a forked child takes its
+ * IF from iret, and a kernel thread's entry enables interrupts itself.
  *
  * The big lock stays held across the switch, so no other processor sees
  * the outgoing process before its registers are saved; the depth this
@@ -395,13 +378,11 @@ void schedule(void)
 }
 
 /**
- * The idle task's body, on every processor: switch to whatever its queue,
- * or the busiest other queue, has to run, and with nothing, wait for an
- * interrupt with the big lock let go (`idle_wait_irq_off`). A wake that
- * puts a process on this processor's queue sends it the interprocessor
- * interrupt that ends the wait (`sched_make_ready`). Entered with the big
- * lock held at depth 1, as a started processor takes it and as the first
- * switch to the boot processor's idle task gives it.
+ * A wake that puts a process on this processor's queue sends it the
+ * interprocessor interrupt that ends the wait (`sched_make_ready`). The big
+ * lock is held at depth 1 on entry, as a started processor takes it
+ * (`smp_cpu_main`) and as the first switch to the boot processor's idle
+ * task gives it (`setup_process_stack`).
  */
 void sched_idle_loop(void)
 {
@@ -413,19 +394,16 @@ void sched_idle_loop(void)
 }
 
 /**
- * Preempt from an interrupt handler.
- *
  * A process interrupted in user mode, the idle process and a kernel thread
  * are switched at once. A processor's idle task is not: the interrupt ended
  * its halt, and its loop selects as soon as the handler returns, with the
  * idle marker of the halt cleared first, which a switch from inside the
  * handler would leave set for the process switched to. A process inside a
- * system call is not either: the call's
- * code runs with interrupts on while its own state is half changed, and
- * `sys_exit`, for one, publishes the zombie its parent may reap, kernel
- * stack and all, before it calls `schedule`. The request is kept on the
- * process, and `sched_take_preempt` takes it at the call's exit, so a
- * process that is always inside a call still gives way once per call.
+ * system call is not either: the call's code runs with interrupts on while
+ * its own state is half changed, and `sys_exit`, for one, publishes the
+ * zombie its parent may reap, kernel stack and all, before it calls
+ * `schedule`. The request is kept on the process, so a process that is
+ * always inside a call still gives way once per call.
  */
 void sched_preempt(void)
 {
@@ -439,12 +417,8 @@ void sched_preempt(void)
     schedule();
 }
 
-/**
- * Take the switch an interrupt asked for during the current system call.
- * Called with interrupts off, at the call's exit with the trapframe complete
- * and from `sched_service_point`; the request is cleared before the switch,
- * so a request that arrives during the switch is the next call's.
- */
+/** The request is cleared before the switch, so a request that arrives
+ * during the switch is the next call's. */
 void sched_take_preempt(void)
 {
     if (current_proc && current_proc->need_resched) {
@@ -454,14 +428,11 @@ void sched_take_preempt(void)
 }
 
 /**
- * Give way inside a system call that does not return for a while.
- *
  * A call that loops over a large buffer keeps the processor for the whole
  * loop, since the tick's switch is taken at the call's exit; a reader woken
- * by a keystroke then waits for the loop. Between two pieces of such a
- * loop, with nothing half done, the call takes the switch here as its exit
- * would: interrupts off, the request cleared before the switch, and the
- * process still inside its call.
+ * by a keystroke then waits for the loop. The switch is taken here as the
+ * exit would take it: interrupts off, and the request cleared before the
+ * switch.
  */
 void sched_service_point(void)
 {
@@ -472,7 +443,7 @@ void sched_service_point(void)
 }
 
 /*
- * Each processor's idle marker and two tick counters are in its record
+ * Each processor's idle marker and three tick counters are in its record
  * (percpu.h). They are `volatile` because the timer handler reads the marker
  * from an interrupt that arrives in the middle of the halt it describes. The
  * counters are 32-bit, one aligned store, so a reader never sees half of
@@ -553,11 +524,8 @@ static void sched_account_one(struct percpu *cpu, int user)
 }
 
 /**
- * Count the global ticks this processor has not counted yet, each as
- * `sched_account_one` counts a tick, so that every processor's idle and busy
- * ticks add up to the uptime since it started.
- *
- * The boot processor calls this after it has counted its tick and any the
+ * Each tick is counted as `sched_account_one` counts one. The boot
+ * processor calls this after it has counted its tick and any the
  * clock found lost, and so charges all of them. Another processor's tick is
  * out of step with the boot processor's and charges the global ticks since
  * its last, none or more than one. A tick lost while an interrupt was held
@@ -603,13 +571,11 @@ void sched_task_counts(uint32_t *active, uint32_t *total)
 }
 
 /**
- * Fold the processes running or ready to run into the three averages, once
- * every LOAD_FREQ ticks, as Linux's `calc_load` does: the new average is the
- * old one decayed, plus the count times what the decay took off, rounded up
- * while the count is above it. Linux counts the uninterruptible sleepers
- * as well, which this kernel does not tell apart from the others. The
- * products are taken in 64 bits, since 4096 processes in fixed point times
- * a decay pass 32.
+ * Each average is folded as Linux's `calc_load` folds it: the new average is
+ * the old one decayed, plus the count times what the decay took off, rounded
+ * up while the count is above it. Linux counts the uninterruptible sleepers
+ * as well, and this kernel does not. The products are taken in 64 bits,
+ * since 4096 processes in fixed point times a decay pass 32.
  */
 void sched_load_tick(void)
 {
@@ -644,8 +610,6 @@ void sched_loadavg(uint32_t avg[3])
 }
 
 /**
- * Park the processor until an interrupt, and return with interrupts disabled.
- *
  * Every caller of this one enters with IF already clear, having checked its
  * condition there, and that is what makes the wait free of a lost wakeup:
  * `sti; hlt` issued from IF=0 is atomic against a wake that became pending
@@ -688,15 +652,13 @@ void idle_wait_irq_off(void)
 }
 
 /**
- * Park the processor until an interrupt, and return with interrupts enabled.
- *
- * The callers of this one are already running with IF set, so an interrupt can
- * arrive at any instruction and the `sti` changes nothing; a wake that lands
- * between the marker and the `hlt` costs one more tick of waiting, which is why
- * every such caller re-checks its condition in a loop rather than assuming the
- * halt ended for its own reason. The tick the marker catches in that window
- * is counted idle, which is what the processor is about to be; the error is
- * at most one tick per wait.
+ * The callers run with IF set, so a wake that comes between a caller's test
+ * of its condition and this call is taken at once and leaves the halt to
+ * wait for the next interrupt; that costs at most one more tick of waiting,
+ * which is why every such caller tests its condition again in a loop rather
+ * than assuming the halt ended for its own reason. From the marker to the
+ * `sti; hlt` interrupts are off, so the tick that ends the halt is the
+ * first the marker can catch.
  *
  * The big lock is let go for the halt as in `idle_wait_irq_off`, with
  * interrupts off while it is let go and taken, since an interrupt handler

@@ -1,12 +1,5 @@
-#ifndef _SMP_H_
-#define _SMP_H_
-
-#include "percpu.h"
-
-struct page_dir;
-
 /*
- * The processors past the first, and the one lock for the kernel.
+ * smp.h: the processors past the first, and the one lock for the kernel.
  *
  * Every entry to the kernel, a system call, a fault or an interrupt, takes
  * the big lock (`bkl_enter`), and every return from one gives it back
@@ -17,18 +10,29 @@ struct page_dir;
  * time, as Linux 2.0 and FreeBSD's Giant began. The context switch keeps the
  * lock held and hands the depth from one process to the next (sched.c).
  *
- * The interprocessor interrupts are taken without the lock: a TLB request,
- * which a holder sends and waits for, and the stop, which a panic sends.
- * Each is a word in the target's record and an interrupt that has it look;
- * a processor that waits with interrupts off, for the big lock or for a
- * spinlock, looks itself (`smp_service`).
+ * The interprocessor interrupts are taken without the lock: a TLB request
+ * or a page directory to give up, which a holder sends and waits for, the
+ * stop, which a panic or a power off sends, and a kick that ends an idle
+ * wait. A request is a word in the target's record and an interrupt that
+ * has it look; a processor that waits with interrupts off, for the big lock
+ * or for a spinlock, looks itself (`smp_service`).
  */
+#ifndef _SMP_H_
+#define _SMP_H_
+
+#include "percpu.h"
+
+struct page_dir;
 
 /** Take the big lock on an entry to the kernel, or once more when this
- * processor holds it. */
+ * processor holds it. While it spins, with interrupts off, it answers this
+ * processor's requests (`smp_service`), and once it has the lock it drops
+ * every translation when a kernel mapping changed since this processor
+ * last held it. */
 void bkl_enter(void);
 
-/** Give back what `bkl_enter` took, the lock itself on the outermost. */
+/** Give back what `bkl_enter` took, the lock itself on the outermost; a
+ * panic when this processor does not hold it. */
 void bkl_exit(void);
 
 /** Let go of the big lock whatever the depth, before an idle wait or the
@@ -43,23 +47,27 @@ void bkl_take(int depth);
 /** The processors started and taking work, the boot processor counted. */
 int smp_cpu_count(void);
 
-/** Answer the requests other processors left this one: drop a translation,
- * or stop. Called with interrupts off. */
+/** Answer the requests other processors left this one: stop for good, drop
+ * a translation or every one, or give up a page directory for the
+ * kernel's. Called with interrupts off. */
 void smp_service(void);
 
 /** The interprocessor interrupt's handler, which the platform runs without
- * the big lock: what it asks is in the record (`smp_service`), and the halt
- * it ends was its other purpose. */
+ * the big lock: it answers the requests in this processor's record
+ * (`smp_service`). An interrupt sent only to end an idle halt finds none. */
 void smp_ipi(void);
 
-/** Have `cpu`, idle, look at its run queue now rather than at its tick. */
+/** Send processor `cpu` an interprocessor interrupt, unless it is this one
+ * or not online, so that an idle wait there ends and it selects from its
+ * run queue now rather than at its tick. */
 void smp_kick(int cpu);
 
 /**
  * Drop the translation of the user page `va`, or every user translation
  * for CPU_TLB_ALL, on each other processor that translates through `dir`,
- * and wait until each has. The caller holds the big lock and has changed
- * the page's entry.
+ * and wait until each has; a processor whose current thread has no address
+ * space is marked to load `dir` again at its next switch instead. The
+ * caller holds the big lock and has changed the page's entry.
  */
 void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t va);
 
@@ -89,7 +97,9 @@ void smp_space_release(const struct page_dir *dir);
 void smp_stop_others(void);
 
 /** Make the boot processor's idle task and start the others the firmware
- * lists, as many as `maxcpus=` allows. */
+ * lists, as many as `maxcpus=` allows, the boot one counted; a panic when
+ * the heap has no room for the boot processor's idle task. A processor
+ * that does not start or come online is reported and left out. */
 void smp_start(void);
 
 #endif /* _SMP_H_ */

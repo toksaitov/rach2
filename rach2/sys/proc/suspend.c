@@ -9,8 +9,9 @@
 #include "../klog.h"
 #include "../lib/kerrno.h"
 
-/* The process that suspended, NULL while none has; and the wake events
- * counted, which a suspend waits for the count to move past. */
+/* The process that suspended, NULL while none has; the wake events
+ * counted, which a suspend waits for the count to move past; and the queue
+ * the suspender sleeps on, made at the first suspend. */
 static struct process *suspender;
 static volatile uint32_t wakes;
 static wait_queue_t suspend_wq;
