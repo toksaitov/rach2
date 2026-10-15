@@ -222,7 +222,7 @@ PAGES=$(cd man && echo man1/*.1 man8/*.8)
 cat <<'EOF'
 # The programs of Rach2
 
-Rach2 has two systems. The musl system is the static programs this repository builds against the ported musl libc: the in-house tools, BusyBox, Dropbear, TinyCC, pdpmake, e2fsprogs and Doom. `make` builds it on every supported host, and every image stages it or a part of it. The GNU system is a dynamically linked root of glibc and the programs ported to it, installed over the musl system in an ext2 image; it builds on an x86-64 Linux host only.
+Rach2 has two systems. The musl system is the static programs this repository builds. BusyBox, Dropbear, TinyCC, pdpmake, e2fsprogs and the in-house tools other than `ish` are linked against the ported musl libc; `ish`, the in-house shell, and Doom link no C library and have their own startup code and library routines. `make` builds it on every supported host, and every image stages it or a part of it. The GNU system is a dynamically linked root of glibc and the programs ported to it, installed over the musl system in an ext2 image; it builds on an x86-64 Linux host only.
 
 `man/programs.sh` writes this file from the image manifests, the recipes and the build scripts, and `tests/run style` fails when the two differ. `make programs-md` writes it again.
 
