@@ -9,7 +9,7 @@
  * of the clock's arithmetic and they touch no hardware, so they run natively
  * here over crafted samples: the two encodings, the 12-hour PM flag, a leap
  * year, the fields a dead battery reports, the two reads a boot compares before
- * it believes either, and the anchor a real time is measured from. The
+ * it uses either, and the anchor a real time is measured from. The
  * expected seconds are literal, computed by hand, not by the code under
  * test, because a case that derives its answer the way the implementation does
  * proves only that the implementation is self-consistent.
@@ -42,6 +42,10 @@ static int fails;
 volatile uint32_t kernel_ticks;
 volatile uint32_t kernel_uptime_seconds;
 volatile uint32_t kernel_second_ticks;
+/* The PIT: its count and the status byte of the latch, the byte of the latch
+ * the next read of port 0x40 returns, whether its interrupt is pending, the
+ * pending checks after which the counter wraps (0 for none), and the
+ * modelled interrupt flag. */
 static uint32_t count;
 static uint8_t status;
 static int port_byte;
@@ -69,6 +73,8 @@ void outb(uint16_t port, uint8_t value)
     port_byte = 0;
 }
 
+/** Read the CMOS's data port, or the PIT latch: the status, then the
+ * count's low and high bytes. Either needs interrupts off. */
 uint8_t inb(uint16_t port)
 {
     if (port == 0x71) {
@@ -82,6 +88,7 @@ uint8_t inb(uint16_t port)
     return port_byte == 2 ? (uint8_t)count : (uint8_t)(count >> 8);
 }
 
+/** Mask interrupts and return the mask the caller had. */
 uint32_t kirq_save(void)
 {
     uint32_t old = (uint32_t)irq_disabled;
@@ -90,6 +97,7 @@ uint32_t kirq_save(void)
     return old;
 }
 
+/** Restore the mask `flags`. */
 void kirq_restore(uint32_t flags)
 {
     irq_disabled = (int)flags;
@@ -116,12 +124,14 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
     CHECK(0);
 }
 
+/** No row unmasks a line; a call fails the test. */
 void pic_unmask_irq(uint8_t irq)
 {
     (void)irq;
     CHECK(0);
 }
 
+/** Discard the log. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -137,39 +147,46 @@ unsigned int host_cpu;
 static int ref_on;
 static uint32_t ref_now;
 
+/** The reference counter's name, NULL while it is off. */
 const char *refclock_name(void)
 {
     return ref_on ? "test" : 0;
 }
 
+/** The reference counter: `ref_now`. */
 uint32_t refclock_read(void)
 {
     CHECK(ref_on);
     return ref_now;
 }
 
+/** The reference counter's rate, 1 MHz. */
 uint32_t refclock_hz(void)
 {
     CHECK(ref_on);
     return 1000000u;
 }
 
+/** The reference counter's width, 32 bits. */
 uint32_t refclock_mask(void)
 {
     CHECK(ref_on);
     return 0xFFFFFFFFu;
 }
 
+/** `a` * `b` / `c` in 64 bits. */
 uint32_t refclock_scale(uint32_t a, uint32_t b, uint32_t c)
 {
     return (uint32_t)((uint64_t)a * b / c);
 }
 
+/** No row waits for another processor; a call fails the test. */
 void smp_service(void)
 {
     CHECK(0);
 }
 
+/** No row spins; a call fails the test. */
 void arch_relax(void)
 {
     CHECK(0);
@@ -243,7 +260,7 @@ static void subtick_rows(void)
     CHECK(sec == 42949672LL && ns == 41000);
 }
 
-/*
+/**
  * Setting the clock from a time the anchor keeps of 20.000041 s, with no
  * clock read at boot: the reading is the time set, at the same hardware
  * state, and goes on from it at the ticks' rate; the coarse clock leaves out
@@ -274,7 +291,7 @@ static void set_rows(void)
     CHECK(rtc_boot_epoch() == 979);
 }
 
-/*
+/**
  * Time since boot at the same hardware states as the real-time rows: the
  * PIT's place within the tick is added, a pending wrap counts once, also at
  * the end of a second, a reading is never earlier than the one before, and
@@ -321,7 +338,7 @@ static void monotonic_rows(void)
     CHECK(!irq_disabled);
 }
 
-/*
+/**
  * The microsecond clock on two processors around a tick of the boot
  * processor's at 41 us into its period. Another processor two and a half
  * periods on reads a microsecond short of the period after the tick, since
@@ -365,12 +382,12 @@ static unsigned char bcd(int value)
     return (unsigned char)(((value / 10) << 4) | (value % 10));
 }
 
-/** Fill a BCD, 24-hour sample. */
 /**
  * The CMOS clock written and read back: in BCD with a 12-hour clock, as some
  * firmware keeps it, 23:05:09 on 29 February 2028 is held as 11 PM, a
  * Tuesday, with updates let go after the write; read back, it is the same
- * time; and a year the two digits cannot hold is refused untouched.
+ * time; and a year the two digits cannot hold is rejected, the clock left
+ * untouched.
  */
 static void clock_write_rows(void)
 {
@@ -392,6 +409,8 @@ static void clock_write_rows(void)
     CHECK(rtc_write_clock(&late) == -1 && cmos[0x09] == 0x28);
 }
 
+/** Fill a BCD, 24-hour sample of a running clock with a good battery; `year`
+ * is the two digits the clock keeps. */
 static void bcd_sample(rtc_snapshot_t *raw, int year, int month, int day, int hour, int minute,
                        int second)
 {
@@ -410,10 +429,17 @@ static void bcd_sample(rtc_snapshot_t *raw, int year, int month, int day, int ho
  * Check `rtc_time_from_anchor`, which measures real time from the clock's
  * reading at boot.
  *
- * A clock read at tick 500 saying 1000, asked again at tick 700, is 1002: two
- * seconds later, not seven. Adding every tick since boot would answer 1007
- * here, and on a real boot that error is under a second, which is why it is
- * stated as arithmetic, not left to a tolerance.
+ * A clock read at tick 500 saying 1000, read again at tick 700, is 1002: two
+ * seconds later, not seven. Adding every tick since boot would give 1007
+ * here, and on a booted machine that error is under a second, which is why
+ * it is stated as arithmetic, not left to a tolerance.
+ *
+ * Part of a second survives as nanoseconds: 55 ticks is 550 ms. No anchor
+ * at all is time since boot, which is what a machine with no readable clock
+ * reports. An uptime of a whole tick cycle is why the anchor counts
+ * seconds: 2^32 ticks after the anchor a difference of ticks is zero again,
+ * and real time would jump back 497 days. And the seconds counter's own
+ * wrap, 136 years out, still reads as elapsed time, not as a jump back.
  */
 static void anchor_rows(void)
 {
@@ -424,40 +450,75 @@ static void anchor_rows(void)
     CHECK(sec == 1002LL);
     CHECK(nsec == 0LL);
 
-    /* Part of a second survives as nanoseconds: 55 ticks is 550 ms. */
     rtc_time_from_anchor(1000LL, 5u, 7u, 55u, &sec, &nsec);
     CHECK(sec == 1002LL);
     CHECK(nsec == 550000000LL);
 
-    /* No anchor at all is time since boot, which is what a machine with no
-     * readable clock reports and what this system reported before. */
     rtc_time_from_anchor(0LL, 0u, 2u, 50u, &sec, &nsec);
     CHECK(sec == 2LL);
     CHECK(nsec == 500000000LL);
 
-    /* An uptime of a whole tick cycle. This is the case that made the
-     * anchor count seconds, not ticks: 2^32 ticks after the anchor,
-     * a difference of TICKS is zero again and real time jumps back 497
-     * days. Counted in seconds, 42949672 seconds later is 42949672 seconds
-     * later. */
     rtc_time_from_anchor(1000LL, 0u, 42949672u, 0u, &sec, &nsec);
     CHECK(sec == 1000LL + 42949672LL);
 
-    /* And the seconds counter's own wrap, 136 years out, still reads as
-     * elapsed time, not as a jump backwards. */
     rtc_time_from_anchor(1000LL, 0xFFFFFFF0u, 0x00000009u, 0u, &sec, &nsec);
     CHECK(sec == 1000LL + 25LL);
 }
 
+/**
+ * Run the rows. The exit status is the count of failed checks, at most 100.
+ *
+ * Seconds go back to the calendar the clock keeps, for the 11-minute copy:
+ * the epoch, a leap day, a time of the century and its last second, each
+ * worked out by hand. `timer_clock_check` runs the boot's self-check of the
+ * clock's own fixed readings.
+ *
+ * The decode: the epoch of the century the driver assumes, 2000-01-01, is
+ * 10957 days after 1970-01-01, and 10957 * 86400 is 946684800; the binary
+ * encoding of the same instant reads the same. A leap day, 2024-02-29
+ * 12:00:00 UTC, is 1709208000; a wrong leap rule either rejects the date or
+ * lands a day out. 2100 is not a leap year and 2000 was, and since the
+ * driver assumes the 2000s, 29 February of a year ending in 00 is reachable
+ * only as 2000, which must be accepted. In the twelve-hour encoding 1 PM is
+ * 13:00: the PM bit is the hour's high bit and must come off before the BCD
+ * decode; 2026-08-14 13:05:07 UTC is 1786712707. 12 AM is hour 0 and 12 PM
+ * is hour 12, which a plain "add twelve for PM" gets wrong both ways.
+ *
+ * Fields a clock with no battery reports are rejected, not corrected: a
+ * clock that reads month 0 has no date to correct to. A nibble that is not
+ * a digit, 0x1A as an unmaintained byte has, is not a BCD number. A
+ * twelve-hour sample whose hour is 0 or 13 is not a twelve-hour time. A
+ * NULL calendar is allowed, and the seconds still arrive. The status
+ * registers are judged too: a sample whose date fields are all in range is
+ * how a machine with a dead battery reports, stable, plausible and wrong.
+ *
+ * Two samples of one clock are what the boot read takes before it decodes
+ * either. The registers advance while they are read, so a disagreement,
+ * such as the turn of a minute, is a read to discard, and each status
+ * register is part of the comparison: the decode judges the clock by them,
+ * so a divider that was running in the first read and is not in the second
+ * must not be accepted on the strength of the first. The update-in-progress
+ * flag is left out: the hardware moves it once a second, so counting it
+ * would make every second read disagree with itself. A battery that went
+ * ends the read instead of earning another try: on some parts reading
+ * register D sets the validity bit again, so a dead cell gives a pair that
+ * disagrees (clear, then set) and then a pair that agrees, is in range, and
+ * is whatever the dead cell left. The first sample is the one usable one,
+ * and the driver stops on it.
+ *
+ * `rtc_pair_disposition` is the policy for a pair: a healthy pair is used,
+ * a straddled update is read again, and a clock that says its battery went
+ * ends the read in either order. A pair that both disagrees and says the
+ * contents are lost must stop rather than be read again, which the
+ * comparison alone does not say. The pair after it, which agrees and is in
+ * range, is never taken, since the read has stopped.
+ */
 int main(void)
 {
     rtc_snapshot_t raw;
     rtc_time_t when;
     long long seconds;
 
-    /* Seconds back to the calendar the clock keeps, for the 11-minute
-     * copy: the epoch, a leap day, a time of the century, and its last
-     * second, each worked out by hand. */
     rtc_time_of_seconds(0, &when);
     CHECK(when.year == 1970 && when.month == 1 && when.day == 1 && when.hour == 0 &&
           when.minute == 0 && when.second == 0);
@@ -470,17 +531,13 @@ int main(void)
     CHECK(when.year == 2099 && when.month == 12 && when.day == 31 && when.hour == 23 &&
           when.minute == 59 && when.second == 59);
 
-    /* The clock's own fixed readings, the boot's self-check. */
     CHECK(timer_clock_check());
 
-    /* The epoch itself, in the century this driver assumes: 2000-01-01 is
-     * 10957 days after 1970-01-01, and 10957 * 86400 is 946684800. */
     bcd_sample(&raw, 0, 1, 1, 0, 0, 0);
     CHECK(rtc_decode(&raw, &seconds, &when) == 0);
     CHECK(seconds == 946684800LL);
     CHECK(when.year == 2000 && when.month == 1 && when.day == 1);
 
-    /* Binary encoding of the same instant reads the same. */
     raw.year = 0;
     raw.month = 1;
     raw.day = 1;
@@ -493,22 +550,14 @@ int main(void)
     CHECK(rtc_decode(&raw, &seconds, &when) == 0);
     CHECK(seconds == 946684800LL);
 
-    /* A leap day: 2024-02-29 12:00:00 UTC is 1709208000. A wrong leap rule
-     * either rejects the date or lands a day out. */
     bcd_sample(&raw, 24, 2, 29, 12, 0, 0);
     CHECK(rtc_decode(&raw, &seconds, &when) == 0);
     CHECK(seconds == 1709208000LL);
     CHECK(when.day == 29 && when.hour == 12);
 
-    /* 2100 is not a leap year, and 2000 was: the century rules differ. The
-     * driver assumes the 2000s, so February 29 of a year ending in 00 is
-     * reachable only as 2000, which must be accepted. */
     bcd_sample(&raw, 0, 2, 29, 0, 0, 0);
     CHECK(rtc_decode(&raw, &seconds, &when) == 0);
 
-    /* Twelve-hour encoding. 1 PM is 13:00; the PM bit rides in the hour's high
-     * bit and must come off before the BCD decode, or the hour reads as a
-     * nonsense digit. 2026-08-14 13:05:07 UTC is 1786712707. */
     bcd_sample(&raw, 26, 8, 14, 1, 5, 7);
     raw.hour = (unsigned char)(bcd(1) | RTC_HOUR_PM);
     raw.status_b = 0; /* 12-hour, BCD */
@@ -516,8 +565,6 @@ int main(void)
     CHECK(when.hour == 13);
     CHECK(seconds == 1786712707LL);
 
-    /* 12 AM is hour 0 and 12 PM is hour 12, which is the case a plain
-     * "add twelve for PM" gets wrong in both directions. */
     bcd_sample(&raw, 26, 8, 14, 12, 0, 0);
     raw.status_b = 0; /* 12-hour, BCD */
     CHECK(rtc_decode(&raw, &seconds, &when) == 0);
@@ -528,9 +575,6 @@ int main(void)
     CHECK(rtc_decode(&raw, &seconds, &when) == 0);
     CHECK(when.hour == 12);
 
-    /* Fields a clock with no battery reports. Each must be refused, not
-     * corrected: a machine that believes it is month 0 is a machine that would
-     * build everything or nothing. */
     bcd_sample(&raw, 26, 0, 14, 0, 0, 0);
     CHECK(rtc_decode(&raw, &seconds, &when) != 0);
     bcd_sample(&raw, 26, 13, 1, 0, 0, 0);
@@ -544,13 +588,10 @@ int main(void)
     bcd_sample(&raw, 26, 8, 14, 0, 60, 0);
     CHECK(rtc_decode(&raw, &seconds, &when) != 0);
 
-    /* A nibble that is not a digit is not a BCD number. 0x1A is what a byte
-     * nobody maintains looks like, and it must fail, not decode. */
     bcd_sample(&raw, 26, 8, 14, 0, 0, 0);
     raw.minute = 0x1A;
     CHECK(rtc_decode(&raw, &seconds, &when) != 0);
 
-    /* A twelve-hour sample whose hour is 0 or 13 is not a twelve-hour time. */
     bcd_sample(&raw, 26, 8, 14, 0, 0, 0);
     raw.status_b = 0; /* 12-hour, BCD */
     CHECK(rtc_decode(&raw, &seconds, &when) != 0);
@@ -558,14 +599,10 @@ int main(void)
     raw.status_b = 0; /* 12-hour, BCD */
     CHECK(rtc_decode(&raw, &seconds, &when) != 0);
 
-    /* A NULL out-struct is allowed; the seconds still arrive. */
     bcd_sample(&raw, 0, 1, 1, 0, 0, 0);
     CHECK(rtc_decode(&raw, &seconds, (rtc_time_t *)0) == 0);
     CHECK(seconds == 946684800LL);
 
-    /* What the clock says about ITSELF. Each of these is a sample whose date
-     * fields are perfectly in range, which is exactly how a machine with a dead
-     * battery reports: stable, plausible and wrong. */
     bcd_sample(&raw, 26, 8, 14, 12, 0, 0);
     raw.status_d = 0; /* VRT clear: the battery went */
     CHECK(rtc_decode(&raw, &seconds, &when) != 0);
@@ -581,12 +618,6 @@ int main(void)
 
     anchor_rows();
 
-    /* Two samples of one clock, which is what the boot read takes before it
-     * decodes either. The registers advance while they are being read, so a
-     * disagreement is a read to discard, and the status registers are part of
-     * that: the decode judges the clock by what they say, so a divider that was
-     * the running one in the first read and is not in the second must not be
-     * accepted on the strength of the first. */
     {
         rtc_snapshot_t a;
         rtc_snapshot_t b;
@@ -595,11 +626,9 @@ int main(void)
         b = a;
         CHECK(rtc_snapshots_agree(&a, &b) == 1);
 
-        /* The turn of a minute, which is the disagreement this is here for. */
         b.second = bcd(8);
         CHECK(rtc_snapshots_agree(&a, &b) == 0);
 
-        /* Each status register in turn, since each is a reason to refuse. */
         b = a;
         b.status_a = 0;
         CHECK(rtc_snapshots_agree(&a, &b) == 0);
@@ -610,10 +639,6 @@ int main(void)
         b.status_d = 0;
         CHECK(rtc_snapshots_agree(&a, &b) == 0);
 
-        /* The update-in-progress flag is the exception, and has to be: it is
-         * the one bit in those registers the hardware moves on its own, and it
-         * moves once a second, so counting it would make every second read
-         * disagree with itself for no reason. */
         b = a;
         b.status_a = (unsigned char)(a.status_a | RTC_STATUS_A_UPDATING);
         CHECK(rtc_snapshots_agree(&a, &b) == 1);
@@ -621,12 +646,6 @@ int main(void)
         CHECK(rtc_snapshots_agree(&a, 0) == 0);
         CHECK(rtc_snapshots_agree(0, &b) == 0);
 
-        /* A battery that went ends the read instead of earning another try.
-         * On some parts reading register D SETS the validity bit again, so the
-         * pair a dead cell produces is a disagreement (clear, then set) and the
-         * pair after it agrees, is in range, and is whatever the dead cell
-         * left. The first sample of that sequence is the only usable one, and
-         * this is what the driver stops on. */
         b = a;
         b.status_d = 0;
         CHECK(rtc_contents_lost(&b) == 1);
@@ -635,12 +654,6 @@ int main(void)
         CHECK(rtc_contents_lost(0) == 1);
     }
 
-    /* What the boot read does with a pair, which is the policy, not the
-     * comparison: a healthy pair is used, a straddled update is read again, and
-     * a clock that says its battery went ends the read in either order. That
-     * last one is why this is a function and not two lines in the loop: a pair
-     * that both disagrees AND says the contents are lost must stop rather than
-     * be read again, and nothing in the comparison alone says so. */
     {
         rtc_snapshot_t a;
         rtc_snapshot_t b;
@@ -656,17 +669,11 @@ int main(void)
         b.second = bcd(8);
         CHECK(rtc_pair_disposition(&a, &b) == RTC_PAIR_RETRY);
 
-        /* Clear then set, which is the pair a dead cell hands back when reading
-         * register D sets the bit; and set then clear, the same fact arriving
-         * in the other order. Both stop, and neither is retried. */
         b = a;
         b.status_d = 0;
         CHECK(rtc_pair_disposition(&b, &a) == RTC_PAIR_STOP);
         CHECK(rtc_pair_disposition(&a, &b) == RTC_PAIR_STOP);
 
-        /* And the pair after it, which agrees and is in range and is whatever
-         * the dead cell left: stopping on the valid pair is what keeps this
-         * one from ever being taken. */
         b.status_d = 0;
         CHECK(rtc_pair_disposition(&b, &b) == RTC_PAIR_STOP);
     }
