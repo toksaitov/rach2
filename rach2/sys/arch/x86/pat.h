@@ -16,9 +16,11 @@
  * which set PWT and PCD together or neither, keep theirs.
  *
  * The boot processor runs it before the kernel's tables map the
- * framebuffer, and its answer is `pat_write_combining`'s; a started
- * processor runs it first, before it can draw on the console, and writes
- * the same table when the boot processor did.
+ * framebuffer, from `platform_cpu_init`, and its answer is
+ * `pat_write_combining`'s; a started processor runs it first in
+ * `x86_ap_entry`, before it can draw on the console, and writes the same
+ * table when the boot processor did. Both run it with interrupts off, as
+ * the SDM's procedure for the change requires.
  */
 void pat_setup(void);
 

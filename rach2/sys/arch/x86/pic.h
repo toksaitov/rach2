@@ -3,14 +3,27 @@
 
 #include "../../kio.h"
 
-/** Remaps the 8259 PIC IRQs to vectors 0x20 (master) and 0x28 (slave). */
+/*
+ * pic: the PC's two 8259A interrupt controllers, which deliver lines 0 to
+ * 15 at vectors 32 to 47 until the I/O APIC takes the lines.
+ */
+
+/**
+ * Initialize the pair with the master's lines at vectors 0x20 to 0x27 and
+ * the slave's at 0x28 to 0x2F, every line unmasked but the keyboard's, IRQ
+ * 1, which `kbd_init` unmasks once its handler is installed. Called once,
+ * at boot, from `init_idt`, with interrupts off.
+ */
 void init_pic(void);
 
 /**
- * Unmask master IRQ line `irq` (0..7) once its handler is installed.
+ * Unmask master IRQ line `irq` (0..7) once its handler is installed; a
+ * larger `irq` is ignored.
  *
- * Nothing after `pic_retire`: the I/O APIC then unmasks a line when its
- * handler is registered, and the 8259 stays masked.
+ * The 8259 latches a masked line's request, so a request that came while
+ * the line was masked is delivered once it is unmasked. Nothing after
+ * `pic_retire`: the I/O APIC then unmasks a line when its handler is
+ * registered, and the 8259 stays masked.
  */
 void pic_unmask_irq(uint8_t irq);
 
@@ -22,23 +35,23 @@ void pic_unmask_irq(uint8_t irq);
 void pic_retire(void);
 
 /**
- * Whether IRQ line `irq` (0..15) is raised and not yet dispatched.
+ * Whether IRQ line `irq` (0..15) is raised and not yet dispatched; 0 for a
+ * larger `irq`.
  *
- * Read from the 8259's request register, which is what a message's arrival
- * is read from at the APIC: a line raised while the interrupt flag was held
- * down is waiting here, and a pump that drained its work is not looking at
- * a lost edge.
+ * Read from the 8259's request register, as a message's arrival is read
+ * from the APIC's: a line raised while interrupts were off is waiting here,
+ * and a pump that drained its work is not looking at a lost edge.
  */
 int pic_irq_pending(uint8_t irq);
 
 /**
- * Mask IRQ line `irq` (0..15), master or slave.
+ * Mask IRQ line `irq` (0..15), master or slave; a larger `irq` is ignored.
  *
  * For a line this kernel has no handler for and that a device may assert
- * anyway. The SCI is the case it was written for: with ACPI enabled, a power
- * button or a thermal event raises a level-triggered interrupt that nothing
- * here clears, and an unmasked one would be taken forever. Once the I/O
- * APIC has the lines, the line is held masked there instead.
+ * anyway, such as the SCI: with ACPI enabled, a power button or a thermal
+ * event raises it, level-triggered, nothing here clears it, and an unmasked
+ * one would be taken forever. Once the I/O APIC has the lines, the line is
+ * held masked there instead (`isr_line_hold`).
  */
 void pic_mask_irq(uint8_t irq);
 

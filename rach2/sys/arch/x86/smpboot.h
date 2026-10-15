@@ -42,8 +42,10 @@ extern const char ap_trampoline[];
 extern const char ap_trampoline_end[];
 extern const char ap_mailbox[];
 
-/** Read the boot's memory map for whether the trampoline's pages are free
- * memory, which the firmware does not use. */
+/** Read the boot's memory map for whether the trampoline's pages lie in
+ * memory the firmware gives as available and in nothing it gives as
+ * anything else; without them `platform_cpu_count` keeps the machine on one
+ * processor. Called from `platform_firmware_init`. */
 void smpboot_init(const struct boot_info *boot);
 
 /** The local APIC's counts a tick, or 0 when the APIC does not tick
@@ -59,10 +61,16 @@ void arch_ap_tables(int cpu, uintptr_t stack_top);
 /** Load the IDT `init_idt` built, on a started processor. */
 void idt_load(void);
 
-/** The local APIC identity of processor `cpu`. */
+/** The local APIC identity of processor `cpu`, as `platform_cpu_count`
+ * numbered them. */
 uint32_t smpboot_apic_id(int cpu);
 
-/** The trampoline's C entry, on the processor it started. */
+/**
+ * The trampoline's C entry, on the processor it started, with interrupts
+ * off and the boot processor waiting in `platform_cpu_start`: the
+ * processor's page attribute table, tables, floating point, APIC and tick,
+ * then the entry `platform_cpu_start` was given. Does not return.
+ */
 void x86_ap_entry(int cpu);
 
 #endif /* _SMPBOOT_H_ */

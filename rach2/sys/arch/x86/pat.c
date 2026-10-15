@@ -20,6 +20,8 @@
 #define CR0_NW 0x20000000ul
 #define CR0_CD 0x40000000ul
 
+/* Whether the boot processor's `pat_setup` has run, and whether it made
+ * entry 1 write-combining. */
 static int pat_asked, pat_wc;
 
 /** Whether `cpuid` reports the page attribute table (leaf 1, EDX bit 16). */
@@ -50,7 +52,7 @@ static void tlb_flush(void)
  * running processor (Vol. 3A, 13.11.8): caching off and the caches written
  * back and invalidated, the translations dropped, the table written, and
  * the same again before caching is turned back on, so that no line or
- * translation of the old type survives. Interrupts are off.
+ * translation of the old type survives.
  *
  * The boot processor reads the table back and logs it, and keeps the
  * framebuffer uncached unless entry 1 reads write-combining; a started

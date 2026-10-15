@@ -13,8 +13,8 @@
  * Enabling the APIC with `LINT0` masked would silence the 8259's timer and
  * keyboard, so this driver reads that entry after the APIC is enabled and
  * writes the unmasked external-interrupt value when it finds anything else.
- * `LINT1` is left as the firmware set it until the platform writes the NMI
- * entry the MADT gives.
+ * `LINT1` is left as the firmware set it until the platform writes the
+ * entry the MADT gives (`apic_lint_init`).
  *
  * The APIC's own timer counts down from an initial count at the bus clock
  * divided by sixteen, and in periodic mode reloads and raises its vector
@@ -22,10 +22,11 @@
  * lines (apictimer.c). Every register here is the running processor's own.
  *
  * A processor without an APIC, without the model-specific registers, in
- * x2APIC mode, or with its registers somewhere other than the page this
- * driver maps, is refused by name: the kernel then has no message vectors
- * and every device stays on its legacy line. `rach2.nomsi` refuses in the
- * same way, so a machine that misbehaves has one word on its boot line.
+ * x2APIC mode, or with its registers above 4 GiB, at no address or on a page
+ * that cannot be mapped, is refused by name: the kernel then has no message
+ * vectors and every device stays on its legacy line. `rach2.nomsi` refuses
+ * in the same way, so a machine that misbehaves has one word on its boot
+ * line.
  */
 
 #include "lapic.h"
@@ -72,8 +73,10 @@
 #define ICR_ASSERT          (1u << 14)
 #define ICR_LEVEL           (1u << 15)
 
-/* The page the APIC's registers live on, and zero until `lapic_init` maps
- * it, which is what `lapic_ready` reports and every write here checks. */
+/* The APIC's register page as `lapic_init` mapped it, NULL until then and
+ * while a host test's `io` stands in for it; the host test's access, or
+ * NULL; the boot processor's APIC identity; and whether `lapic_init`
+ * enabled the APIC, which every access but its own checks. */
 static volatile uint32_t *apic;
 static const struct lapic_io *io;
 static uint32_t apic_id;
@@ -88,6 +91,8 @@ void lapic_set_io(const struct lapic_io *ops)
     io = ops;
 }
 
+/** Read the APIC register at offset `reg`, through `io` when a host test
+ * gave one. */
 static uint32_t apic_read(uint32_t reg)
 {
     if (io) {
@@ -96,6 +101,8 @@ static uint32_t apic_read(uint32_t reg)
     return apic[reg / 4];
 }
 
+/** Write the APIC register at offset `reg`, through `io` when a host test
+ * gave one. */
 static void apic_write(uint32_t reg, uint32_t value)
 {
     if (io) {
@@ -106,21 +113,13 @@ static void apic_write(uint32_t reg, uint32_t value)
     (void)apic[LAPIC_ID / 4]; /* a read the write cannot pass */
 }
 
+/** Log why `lapic_init` refused, and return -1. */
 static int refuse(const char *why)
 {
     klog(KLOG_WARN, "lapic", "refused: %s", why);
     return -1;
 }
 
-/**
- * Enable the local APIC, or refuse with the reason named.
- *
- * The order matters, and it is the opposite of what it looks like it should
- * be: the software enable goes first, because a processor whose APIC is
- * software disabled holds every local-vector entry masked and ignores a write
- * that would unmask one. The task priority and `LINT0` are written after it.
- * 0 when the APIC is ready to receive messages, -1 when it is not.
- */
 /**
  * The spurious register `svr` with the software enable and the spurious
  * vector, and with whatever else the firmware set there kept but bit 12. A
@@ -134,6 +133,20 @@ static uint32_t lapic_svr(uint32_t svr)
     return (svr & ~(0xFFu | SVR_EOI_SUPPRESS)) | SVR_SOFTWARE_ENABLE | SPURIOUS_VECTOR;
 }
 
+/**
+ * A base whose upper half is not zero is above 4 GiB, where this kernel's
+ * addresses do not reach, and taking its low half would map another
+ * device's page.
+ *
+ * The software enable comes first, and the local-vector entries after it.
+ * While the spurious register's bit 8 is clear the processor holds the mask
+ * bit of every entry set and ignores a write that would clear one (SDM, the
+ * local APIC's state after it has been software disabled), so an unmasked
+ * `LINT0` written before the enable would be dropped and the 8259's
+ * interrupts would stop at the processor once the APIC came up. The
+ * spurious register is written as read, with the vector and the enable
+ * (`lapic_svr`).
+ */
 int lapic_init(void)
 {
     uint32_t lo = 0, hi = 0, base, lint0;
@@ -154,9 +167,6 @@ int lapic_init(void)
         return refuse("x2apic mode, whose registers this driver does not read");
     }
     if (hi != 0) {
-        /* The upper half of the base is not zero, so the registers are above
-         * 4 GiB and this kernel's addresses do not reach them. Taking the low
-         * half would map some other device's page. */
         return refuse("an apic base above 4 gib");
     }
     base = lo & 0xFFFFF000u;
@@ -175,16 +185,6 @@ int lapic_init(void)
     }
     apic_id = apic_read(LAPIC_ID) >> 24;
 
-    /*
-     * The software enable comes first, and the local-vector entries after it.
-     * While the spurious register's bit 8 is clear the processor holds the
-     * mask bit of every entry set and ignores a write that would reset one
-     * (SDM, the local APIC's state after it has been software disabled), so
-     * an unmasked `LINT0` written before this line would be dropped and the
-     * 8259's interrupts would stop at the processor the moment the APIC came
-     * up. The register is written as read, with the vector and the enable
-     * (`lapic_svr`).
-     */
     apic_write(LAPIC_SVR, lapic_svr(apic_read(LAPIC_SVR)));
     apic_write(LAPIC_TPR, 0);
     lint0 = apic_read(LAPIC_LINT0);
@@ -199,18 +199,8 @@ int lapic_init(void)
     return 0;
 }
 
-/**
- * Whether `vector` is already waiting at this processor.
- *
- * A message the device has sent is latched in the request register until the
- * processor takes it, and is in the in-service register while its handler
- * runs. Either says the interrupt was announced, which is what the USB stack
- * asks before it counts an event as one no message was coming for: a
- * processor inside another interrupt has its flag clear, and a message that
- * arrived a moment earlier is waiting rather than lost.
- *
- * The two registers hold 256 bits each, sixteen to a 16-byte-spaced word.
- */
+/** The request and in-service registers have 256 bits each, 32 to a word,
+ * the words 16 bytes apart. */
 int lapic_pending(uint8_t vector)
 {
     uint32_t word = ((uint32_t)vector / 32u) * 0x10u;
@@ -252,12 +242,8 @@ void lapic_eoi(void)
     }
 }
 
-/**
- * The spurious vector's handler: count it and return.
- *
- * The APIC raises vector 255 when an interrupt it was about to deliver went
- * away, which needs no end-of-interrupt and no work.
- */
+/** The APIC raises vector 255 when an interrupt it was about to deliver
+ * went away, which needs no end-of-interrupt and no work. */
 void lapic_spurious(void)
 {
     spurious_count[arch_cpu_id()]++;
@@ -274,11 +260,6 @@ uint32_t lapic_spurious_count(void)
     return sum;
 }
 
-/**
- * Whether `vector` is in this processor's request register: raised, and
- * not yet taken. Unlike `lapic_pending`, a vector whose handler is running
- * is not counted, which is what the 8259's request register says of a line.
- */
 int lapic_requested(uint8_t vector)
 {
     uint32_t word = ((uint32_t)vector / 32u) * 0x10u;
@@ -296,11 +277,8 @@ void lapic_set_lint(int lint, uint32_t entry)
     }
 }
 
-/**
- * Raise `vector` on this processor, as a device's message would: for an
- * edge an I/O APIC input could not see because it came while the input was
- * masked.
- */
+/** The self shorthand ignores the destination, so the two writes need not
+ * be kept together as `send_command` keeps them. */
 void lapic_self_ipi(uint8_t vector)
 {
     int spins;
@@ -363,12 +341,8 @@ void lapic_send_startup(uint32_t target, uint32_t page)
     send_command(target, ICR_STARTUP | (page & 0xFFu));
 }
 
-/**
- * Program this processor's timer: `vector`, periodic or one-shot, masked or
- * not, counting down from `initial` at the bus clock divided by sixteen.
- * The divide register is written before the initial count, which starts the
- * count.
- */
+/** The divide register is written before the initial count, which starts
+ * the count. */
 void lapic_timer_set(uint8_t vector, int periodic, int masked, uint32_t initial)
 {
     if (!ready) {
@@ -379,7 +353,6 @@ void lapic_timer_set(uint8_t vector, int periodic, int masked, uint32_t initial)
     apic_write(LAPIC_INITIAL, initial);
 }
 
-/** Stop this processor's timer and mask its entry. */
 void lapic_timer_stop(void)
 {
     if (!ready) {

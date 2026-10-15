@@ -38,6 +38,8 @@
  * a processor does. */
 #define AP_START_WAIT_US 1000000
 
+/* The mailbox's offsets, at which trampoline.s reads it: an array size of -1
+ * fails the compile. TinyCC's build skips the check. */
 #if !defined(__TINYC__)
 typedef char ap_mailbox_fits[(__builtin_offsetof(struct ap_mailbox, cr0) == 0 &&
                               __builtin_offsetof(struct ap_mailbox, cr3) == 4 &&
@@ -57,9 +59,9 @@ static uint32_t cpu_apic[NR_CPUS];
 /* Whether the trampoline's pages are free memory in the firmware's map. */
 static int trampoline_free;
 
-/* What the processor being started takes from the boot one: the shared
- * entry and its stack. One processor starts at a time, so one copy serves
- * each in turn. */
+/* What the processor being started takes from the boot one, the shared
+ * entry and its stack, and whether it has reached `x86_ap_entry`'s end. One
+ * processor starts at a time, so one copy serves each in turn. */
 static void (*ap_main)(int cpu);
 static uintptr_t ap_stack;
 static volatile int ap_alive;
@@ -67,12 +69,9 @@ static volatile int ap_alive;
 #define MSR_EFER       0xC0000080u
 #define MMAP_AVAILABLE 1u
 
-/**
- * Whether `[TRAMPOLINE_PHYS, TRAMPOLINE_PHYS + TRAMPOLINE_PAGES pages)` lies
- * in memory the firmware's map gives as available, and in nothing it gives
- * as anything else; the kernel reserves the memory below its image for
- * itself, so nothing else in the kernel has those pages.
- */
+/** One available entry must cover the whole range. The kernel reserves the
+ * memory below its image for itself (kernel.c), so nothing else in the
+ * kernel has those pages. */
 void smpboot_init(const struct boot_info *boot)
 {
     uint64_t start = TRAMPOLINE_PHYS;
@@ -99,6 +98,7 @@ void smpboot_init(const struct boot_info *boot)
     trampoline_free = inside;
 }
 
+/** The running processor's CR0. */
 static uintptr_t read_cr0(void)
 {
     uintptr_t v;
@@ -107,6 +107,7 @@ static uintptr_t read_cr0(void)
     return v;
 }
 
+/** The running processor's CR4. */
 static uintptr_t read_cr4(void)
 {
     uintptr_t v;
@@ -147,12 +148,13 @@ static uint32_t trampoline_root(void)
 }
 
 /**
- * The processors that may be started: the boot processor, then the MADT's
- * enabled ones in its order, at most `limit`. Without the local APIC's tick
- * a started processor would never preempt what it runs, without free pages
- * for the trampoline it cannot be started, and an APIC identity of 255 or
- * more is past what the xAPIC's messages address; each case leaves the
- * machine on one processor, or the processor out, and says so.
+ * The boot processor is index 0, and the MADT's other enabled processors
+ * follow in its order. Each refusal leaves the machine on one processor, or
+ * one processor out, and says so: without the local APIC's tick a started
+ * processor would never preempt what it runs; without the HPET or the PM
+ * timer the others have no counter to read the clock by; without free pages
+ * for the trampoline none can be started; and an APIC identity of 255 or
+ * more is past what the xAPIC's messages address.
  */
 int platform_cpu_count(int limit)
 {
@@ -196,14 +198,13 @@ int platform_cpu_count(int limit)
 }
 
 /**
- * Start processor `cpu` through its APIC: INIT, 10 ms, and two startup
- * messages 200 microseconds apart, as the MultiProcessor Specification
- * gives the sequence; a processor already running ignores the second. The
+ * The processor is started through its APIC: INIT, 10 ms, and two startup
+ * messages 200 microseconds apart, as the MultiProcessor Specification gives
+ * the sequence; a processor already running ignores the second. The
  * trampoline and its mailbox are copied afresh for each processor, which
- * starts with the boot processor's CR0, CR4 and EFER. A processor that does
- * not reach its entry in time is sent INIT
- * again, which holds it, so that it cannot start late on a mailbox meant
- * for the next.
+ * starts with the boot processor's CR0 and CR4, and on x86-64 its EFER. A
+ * processor that does not reach its entry in time is sent INIT again, which
+ * holds it, so that it cannot start late on a mailbox meant for the next.
  */
 int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu))
 {
@@ -250,14 +251,13 @@ int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu))
 }
 
 /**
- * The started processor's first C, from the trampoline, with interrupts
- * off and the boot processor waiting for `ap_alive`: the boot processor's
- * page attribute table (`pat_setup`), its own tables, the
- * floating-point format the boot processor chose (`fpu_cpu_setup`), its
- * APIC with the MADT's NMI inputs and the boot processor's tick,
- * and then the shared start (`smp_cpu_main`), which does not return. The
- * first tick waits for the interrupts the idle loop allows. Nothing here
- * logs, since the big lock is not yet this processor's.
+ * The order: the boot processor's page attribute table (`pat_setup`), the
+ * processor's own tables, the floating-point format the boot processor chose
+ * (`fpu_cpu_setup`), its APIC with the MADT's NMI inputs, and the boot
+ * processor's tick; then `ap_alive` releases the boot processor, and the
+ * shared start (`smp_cpu_main`) runs. The first tick waits for the
+ * interrupts the idle loop allows. Nothing here logs, since the big lock is
+ * not yet this processor's.
  */
 void x86_ap_entry(int cpu)
 {
