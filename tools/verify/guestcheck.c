@@ -1,32 +1,37 @@
 /**
- * guestcheck: hold the guest makefiles equal to the host build they mirror.
+ * guestcheck: check that the guest makefiles build what the host build
+ * builds.
  *
- * The guest builds (rach2/guest.mk, utils/guest.mk, ish/guest.mk) name
- * their sources by hand, because pdpmake reads none of the GNU makefiles
- * that are the host build's authority. A list that drifts builds a kernel
- * missing a file or a program missing its companion source, and the
- * failure would surface inside a booted guest, late and hard to read. This
- * guard runs on the host, inside the style check, and has five contracts:
+ * The guest builds (rach2/guest.mk, utils/guest.mk, ish/guest.mk) are
+ * written for pdpmake, which reads none of the GNU makefiles of the host
+ * build. They share its source manifests, but their rules are their own. A
+ * guest list that differs builds a kernel missing a file or a program
+ * missing its companion source, and the failure would appear only inside a
+ * booted guest, late and hard to read. The check runs on the host, in the
+ * style check, and requires five things:
  *
  *   1. rach2/guest.mk derives OBJS from the shared rach2/sources.mk lists
  *      the host build includes, object for object, loader.o first, no
  *      duplicates, for each architecture; the kernel.objs recipe writes
- *      $(OBJS) whole, and the link reads @kernel.objs plus the tcc runtime
- *      with the architecture's flags: the pinned text address of i686, or
- *      the x86-64 kernel's own linker script and 4 KiB segment alignment,
- *      which its compile adds no SSE register to.
+ *      $(OBJS) whole, and the link reads @kernel.objs and the tcc runtime
+ *      with the architecture's flags: for i686 the pinned text address, and
+ *      for x86-64 the kernel's own linker script, 4 KiB segment alignment
+ *      and a compile with -mno-sse.
  *   2. utils/guest.mk's per-program source map equals the host
  *      utils/Makefile map, including the companion sources (pwauth.c,
- *      resolv.c) and the two -D builds (init-login, adduser-crash).
- *   3. ish/guest.mk's object list equals the host ish/Makefile's OBJECTS.
- *   4. The build fits the machine: the deepest kernel include chain leaves
- *      room in the 16-descriptor table for the compiler's own files, and no
- *      guest recipe line approaches the exec string budget.
- *   5. The os-real manifest stages all three source trees at /src,
- *      root-owned and read-only, so the machine actually has what the
- *      makefiles build, and each staged tree has its guest.mk.
+ *      resolv.c) and the two -D builds (init-login, adduser-crash), and
+ *      each program links to a temporary file and renames it.
+ *   3. ish/guest.mk's object list equals the host ish/Makefile's OBJECTS,
+ *      and ish links through a temporary file too.
+ *   4. The build fits the machine: the deepest kernel include chain and the
+ *      compiler's own files stay within FD_LIMIT descriptors, and no guest
+ *      recipe line, expanded, comes near the exec string budget.
+ *   5. The os-real manifest stages the three source trees at /src,
+ *      root-owned and read-only, and nothing else there, so the machine has
+ *      what the makefiles build, and each staged tree has its guest.mk.
  *
- * Usage: guestcheck [REPO_ROOT]
+ * Usage: guestcheck [REPO_ROOT]; REPO_ROOT is the working directory unless
+ * given. The first failure is printed and ends the run with status 1.
  */
 #include <ctype.h>
 #include <dirent.h>
@@ -37,14 +42,16 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+/* The descriptors a compile may hold, FD_RESERVED of them besides the
+   include chain. */
 #define FD_LIMIT    16
 #define FD_RESERVED 4 /* stdin, stdout, stderr, and the output file */
 
 /* The kernel's execve budget for the argv and environment strings together
    is a quarter of the soft RLIMIT_STACK, and at least UIMAGE_ARGS_MIN, 128
-   KiB (rach2/sys/proc/uimage.h), the figure held here. A recipe reaches the
+   KiB (rach2/sys/proc/uimage.h), the figure used here. A recipe reaches the
    kernel as `sh -c <expanded text>` plus the build environment, so each
-   recipe is expanded the way pdpmake will and the result held under the
+   recipe is expanded the way pdpmake will and the result kept under the
    budget minus this allowance for the environment a login shell exports. */
 #define EXEC_BUDGET   131072
 #define ENV_ALLOWANCE 500
@@ -54,6 +61,7 @@
 
 static char repo[1024];
 
+/** Prints a failure, formatted as printf does, and exits with status 1. */
 static void fail(const char *fmt, ...)
 {
     va_list ap;
@@ -73,9 +81,8 @@ static void fail(const char *fmt, ...)
  * return value to an index walks past the end of the buffer on the first
  * truncation and the next call writes outside it. Every buffer here holds
  * makefile text that is parsed afterwards, so a buffer that fills is a
- * fault to report and not a length to trim: a checker reading a shortened
- * makefile is reading one that is not on disk. `what` names the buffer in
- * the diagnostic.
+ * failure, since a shortened makefile is one that is not on disk. `what`
+ * names the buffer in the diagnostic.
  */
 static void appendf(char *out, size_t out_len, size_t *used, const char *what, const char *fmt, ...)
 {
@@ -94,11 +101,13 @@ static void appendf(char *out, size_t out_len, size_t *used, const char *what, c
 
 /* ---- a list of strings ---- */
 
+/** A growable list of strings the list owns; `cap` is the array's size. */
 struct list {
     char **item;
     int n, cap;
 };
 
+/** malloc that fails the run when memory runs out; never returns NULL. */
 static void *xalloc(size_t n)
 {
     void *p = malloc(n ? n : 1);
@@ -108,6 +117,7 @@ static void *xalloc(size_t n)
     return p;
 }
 
+/** A copy of `s` in memory from xalloc. */
 static char *xstrdup(const char *s)
 {
     char *p = xalloc(strlen(s) + 1);
@@ -116,6 +126,7 @@ static char *xstrdup(const char *s)
     return p;
 }
 
+/** Appends a copy of `s` to `l`. */
 static void push(struct list *l, const char *s)
 {
     if (l->n == l->cap) {
@@ -127,6 +138,7 @@ static void push(struct list *l, const char *s)
     l->item[l->n++] = xstrdup(s);
 }
 
+/** Frees the items and the array of `l` and leaves it empty. */
 static void list_free(struct list *l)
 {
     int i;
@@ -138,6 +150,7 @@ static void list_free(struct list *l)
     l->n = l->cap = 0;
 }
 
+/** Whether `l` has an item equal to `s`. */
 static int has(const struct list *l, const char *s)
 {
     int i;
@@ -148,12 +161,13 @@ static int has(const struct list *l, const char *s)
     return 0;
 }
 
+/** The qsort comparison of two list items, by strcmp. */
 static int cmp_str(const void *a, const void *b)
 {
     return strcmp(*(char *const *)a, *(char *const *)b);
 }
 
-/* Sorts a list's items; an empty list has no array to hand to qsort,
+/** Sorts a list's items; an empty list has no array to hand to qsort,
    whose first argument the C library declares never null. */
 static void list_sort(struct list *l)
 {
@@ -161,7 +175,8 @@ static void list_sort(struct list *l)
         qsort(l->item, (size_t)l->n, sizeof(char *), cmp_str);
 }
 
-/* Whitespace-split `text` onto `out`. */
+/** Appends the whitespace-separated words of `text` to `out`; a word longer
+   than MAX_LINE - 1 bytes is split. */
 static void split_into(struct list *out, const char *text)
 {
     char buf[MAX_LINE];
@@ -182,6 +197,7 @@ static void split_into(struct list *out, const char *text)
     }
 }
 
+/** Writes the items of `l` to `out`, separated by single spaces. */
 static void join_into(char *out, size_t out_len, const struct list *l)
 {
     size_t used = 0;
@@ -194,6 +210,10 @@ static void join_into(char *out, size_t out_len, const struct list *l)
 
 /* ---- reading makefiles ---- */
 
+/**
+ * The whole of the file at `path`, NUL-terminated, in memory the caller
+ * frees; NULL when it cannot be read or is longer than MAX_TEXT.
+ */
 static char *read_file(const char *path)
 {
     FILE *f = fopen(path, "rb");
@@ -222,13 +242,14 @@ static char *read_file(const char *path)
    `ARCH != uname -m` gives on a guest of that architecture. */
 static const char *guest_arch = "i686";
 
-/* Append `path`'s makefile text to `out`, with each `include` line replaced
+/** Append `path`'s makefile text to `out`, with each `include` line replaced
    by the text it names, in turn. As make and pdpmake read them, an include
    names a path relative to the top makefile's directory `dir`, and
    `$(ARCH)` in it is the architecture the guest is read for. An include
    that begins `$(dir $(lastword $(MAKEFILE_LIST)))`, as mk/toolchain.mk's
    of mk/arch.mk does, names a path relative to the including file's own
-   directory, which is what GNU make expands that to there. */
+   directory, which is what GNU make expands that to there. `name` is the
+   file's name for the diagnostics, and includes nest at most four deep. */
 static void inline_text(const char *dir, const char *path, const char *name, char *out,
                         size_t *used, int depth)
 {
@@ -304,8 +325,9 @@ static void inline_text(const char *dir, const char *path, const char *name, cha
     free(text);
 }
 
-/* The makefile text with its `include` lines inlined, which is how the
-   shared source manifests reach the guest makefiles. */
+/** The text of the makefile `name`, relative to the repository, with its
+   `include` lines inlined, which is how the shared source manifests reach
+   the guest makefiles. The caller frees it. */
 static char *guest_text(const char *name)
 {
     char path[1200];
@@ -325,8 +347,8 @@ static char *guest_text(const char *name)
     return out;
 }
 
-/* The whitespace-split value of a backslash-continued macro. Returns 0
-   when the macro is absent. */
+/** Appends the words of macro `name`'s value, with its backslash
+   continuations, to `out`. Returns 0 when the macro is absent. */
 static int read_macro(const char *text, const char *name, struct list *out)
 {
     const char *p = text;
@@ -342,7 +364,6 @@ static int read_macro(const char *text, const char *name, struct list *out)
                 q++;
             if (*q == '=') {
                 q++;
-                /* The value, following its backslash continuations. */
                 for (;;) {
                     char piece[MAX_LINE];
                     size_t plen = (size_t)((p + len) - q);
@@ -377,18 +398,21 @@ static int read_macro(const char *text, const char *name, struct list *out)
     return 0;
 }
 
+/** read_macro, failing the run when the macro is absent. */
 static void need_macro(const char *text, const char *name, struct list *out)
 {
     if (!read_macro(text, name, out))
         fail("no %s macro", name);
 }
 
-/* Every simple macro of the text, as parallel name and value lists. */
+/** Every simple macro of the text, as parallel name and value lists. */
 struct macros {
     struct list name;
     struct list value;
 };
 
+/** Fills `m` with each macro a line of `text` assigns with `=`, its value's
+   words joined by single spaces. */
 static void macros_of(const char *text, struct macros *m)
 {
     const char *p = text;
@@ -427,6 +451,7 @@ static void macros_of(const char *text, struct macros *m)
     }
 }
 
+/** The value of macro `name` in `m`, or "" when it has none. */
 static const char *macro_value(const struct macros *m, const char *name)
 {
     int i;
@@ -437,14 +462,16 @@ static const char *macro_value(const struct macros *m, const char *name)
     return "";
 }
 
+/** Frees the two lists of `m`. */
 static void macros_free(struct macros *m)
 {
     list_free(&m->name);
     list_free(&m->value);
 }
 
-/* One `$(VAR:.a=.b)` reference: fills name, old and new. Returns the
-   length of the reference, or 0. */
+/** The `$(VAR:.a=.b)` reference at `p`: fills `name` (64 bytes), `old` and
+   `new_` (16 bytes each). Returns the length of the reference, or 0 when `p`
+   does not begin one. */
 static size_t subst_ref_at(const char *p, char *name, char *old, char *new_)
 {
     size_t i = 0, n = 0;
@@ -485,7 +512,7 @@ static size_t subst_ref_at(const char *p, char *name, char *old, char *new_)
     return i + 1;
 }
 
-/* Replace one word's suffix, the way a substitution reference does. */
+/** Replace one word's suffix, the way a substitution reference does. */
 static void swap_suffix(char *out, size_t out_len, const char *word, const char *old,
                         const char *new_)
 {
@@ -497,10 +524,8 @@ static void swap_suffix(char *out, size_t out_len, const char *word, const char 
         snprintf(out, out_len, "%s", word);
 }
 
-/* Expand `$(VAR:.a=.b)` tokens against the text's macros: a whole token
-   that is one reference becomes the macro's words with their suffixes
-   swapped. */
-/* The name in a plain reference `$(NAME)` that is the whole of `word`, or 0. */
+/** The name in a plain reference `$(NAME)` that is the whole of `word`,
+   written to `name`; 0 when `word` is not one. */
 static int plain_ref(const char *word, char *name, size_t cap)
 {
     size_t len = strlen(word), n;
@@ -517,8 +542,9 @@ static int plain_ref(const char *word, char *name, size_t cap)
     return 1;
 }
 
-/* The words of macro `name`, with each plain reference in its value
-   replaced by that macro's words in turn, as make expands them. */
+/** The words of macro `name`, with each plain reference in its value
+   replaced by that macro's words in turn, as make expands them, appended to
+   `out`. */
 static void macro_words(const char *text, const char *name, struct list *out, int depth)
 {
     struct list value = {NULL, 0, 0};
@@ -538,6 +564,9 @@ static void macro_words(const char *text, const char *name, struct list *out, in
     list_free(&value);
 }
 
+/** Expand `$(VAR:.a=.b)` tokens against the text's macros: a whole token
+   that is one reference becomes the macro's words with their suffixes
+   swapped, and any other token is copied to `out` as it is. */
 static void expand_tokens(const char *text, const struct list *tokens, struct list *out)
 {
     int i;
@@ -563,7 +592,7 @@ static void expand_tokens(const char *text, const struct list *tokens, struct li
     }
 }
 
-/* Expand substitution references inside one line. */
+/** Expand substitution references inside one line, in place. */
 static void subst_refs(char *line, size_t line_len, const struct macros *m)
 {
     char out[MAX_LINE];
@@ -602,8 +631,8 @@ static void subst_refs(char *line, size_t line_len, const struct macros *m)
     snprintf(line, line_len, "%s", out);
 }
 
-/* Expand macros and substitution references in one makefile line. Three
-   passes, the way a macro naming another macro is resolved. */
+/** Expand macros and substitution references in one makefile line, in
+   place. Three passes, the way a macro naming another macro is resolved. */
 static void expand_line(char *line, size_t line_len, const struct macros *m)
 {
     int pass, i;
@@ -634,17 +663,21 @@ static void expand_line(char *line, size_t line_len, const struct macros *m)
 
 /* ---- explicit rules ---- */
 
+/** One explicit rule: its target, its prerequisites and its recipe lines,
+   each without its leading tab. */
 struct rule {
     char target[256];
     struct list prereqs;
     struct list recipe;
 };
 
+/** A growable list of rules. */
 struct rules {
     struct rule *item;
     int n, cap;
 };
 
+/** The rule for `target` in `r`, or NULL. */
 static struct rule *rule_find(struct rules *r, const char *target)
 {
     int i;
@@ -655,9 +688,10 @@ static struct rule *rule_find(struct rules *r, const char *target)
     return NULL;
 }
 
-/* Every explicit rule of the text: `target: prereqs` and its recipe
-   lines. A line with a `=` before the colon is a macro, not a rule, and a
-   target beginning with a dot is a special target. */
+/** Every explicit rule of the text: `target: prereqs` and its recipe lines,
+   the tab-indented lines that follow, blank lines among them allowed. A line
+   with a `=` before the colon is a macro, not a rule, and a target beginning
+   with a dot is a special target and is left out. */
 static void rules_of(const char *text, struct rules *out)
 {
     const char *p = text;
@@ -692,8 +726,6 @@ static void rules_of(const char *text, struct rules *out)
             memset(&r, 0, sizeof(r));
             snprintf(r.target, sizeof(r.target), "%s", target);
             split_into(&r.prereqs, colon + 1);
-            /* The recipe: the tab-indented lines that follow, with blank
-               lines between them allowed. */
             q = end != NULL ? end + 1 : NULL;
             while (q != NULL && *q != '\0') {
                 const char *rend = strchr(q, '\n');
@@ -738,6 +770,7 @@ static void rules_of(const char *text, struct rules *out)
     }
 }
 
+/** Frees every rule of `r` and its array, and leaves it empty. */
 static void rules_free(struct rules *r)
 {
     int i;
@@ -753,12 +786,12 @@ static void rules_free(struct rules *r)
 
 /* ---- the five contracts ---- */
 
-/* One `make -s -C rach2 TARGET` list: the host build's own answer for the
-   shared source manifest, asked of make so this guard cannot disagree with
-   it by reading the file differently. Printing a list compiles nothing, so
-   CROSS_CC names a command that is always there, as check_sources.sh does,
-   and a machine with one architecture's cross compiler lists the other's
-   sources too. */
+/** The words `make -s -C rach2 TARGET` prints for the guest architecture,
+   appended to `out`: the host build's own reading of the shared source
+   manifest, taken from make so that this check cannot read the file
+   differently. Printing a list compiles nothing, so CROSS_CC names a
+   command that is always there, as check_sources.sh does, and a machine
+   with one architecture's cross compiler lists the other's sources too. */
 static void make_list(const char *target, struct list *out)
 {
     char cmd[1200];
@@ -778,6 +811,8 @@ static void make_list(const char *target, struct list *out)
     split_into(out, buf);
 }
 
+/** Whether the file `path`, relative to the repository, has a line equal to
+   `want`. */
 static int file_has_line(const char *path, const char *want)
 {
     char full[1200];
@@ -804,7 +839,8 @@ static int file_has_line(const char *path, const char *want)
     return found;
 }
 
-/* The flags the architecture's list gives the guest compile and link. The
+/** Check the flags the architecture's list gives the guest compile and link,
+   and that the guest's kernel compile uses them. The
    i686 kernel links at its pinned text address. The x86-64 kernel links by
    sys/arch/x86_64/link.ld, the script the host's link reads, with segments
    congruent modulo 4 KiB as the host's -z max-page-size=0x1000 has them, and
@@ -863,6 +899,9 @@ static void check_arch_flags(const char *text)
     list_free(&ld);
 }
 
+/** Check the first contract for the guest architecture: OBJS against the
+   host's lists, the kernel.objs rule, the link line and the flags. Returns
+   the number of kernel sources. */
 static int check_kernel_lists(void)
 {
     struct list sources = {NULL, 0, 0};
@@ -953,13 +992,15 @@ static int check_kernel_lists(void)
     return count;
 }
 
-/* The host's per-program source map: for each program, the .c files its
+/** The host's per-program source map: for each program, the .c files its
    rule names, or the program's own source when the rule adds none. */
 struct progmap {
     struct list program;
     struct list sources; /* one joined string per program */
 };
 
+/** Fill `map` from utils/Makefile, with the programs UTILITIES and SBIN_PROGS
+   list and their sources sorted. */
 static void host_utils_map(struct progmap *map)
 {
     char *text;
@@ -1026,12 +1067,12 @@ static void host_utils_map(struct progmap *map)
 }
 
 /**
- * The rule for `name` in `file` links to `NAME.new` and renames it into
- * place: the compiler writes into its destination, so a link the machine
- * stops part way would otherwise leave a file newer than its source that
- * the next make calls built. The recipe is those two lines, the link not
- * prefixed with make's `-`, which would carry a failed link on to the
- * rename; a program with no rule is a fault of the makefile.
+ * Check that the rule for `name` in `file` links to `NAME.new` and renames
+ * it into place: the compiler writes into its destination, so a link the
+ * machine stops part way would otherwise leave a file newer than its source
+ * that the next make takes as built. The recipe must be those two lines, the
+ * link not prefixed with make's `-`, which would carry a failed link on to
+ * the rename; a program with no rule fails too.
  */
 static void check_links_through_temporary(const char *file, const struct rule *r, const char *name)
 {
@@ -1050,6 +1091,11 @@ static void check_links_through_temporary(const char *file, const struct rule *r
              file, name, name);
 }
 
+/** Check the second contract: each program's sources in its rule and in its
+   recipe equal the host's, the two -D builds have their defines, and every
+   program links through a temporary file. A rule that names a companion
+   source and a recipe that does not compile it would build a program
+   missing part of its code. Returns the number of programs. */
 static int check_utils(void)
 {
     struct progmap map;
@@ -1101,9 +1147,6 @@ static int check_utils(void)
         list_free(&words);
         list_free(&found);
 
-        /* And the recipe compiles exactly those sources: a rule that
-           names a companion source and a recipe that does not compile it
-           is a program missing half of itself. */
         join_into(line, sizeof(line), &r->recipe);
         expand_line(line, sizeof(line), &m);
         split_into(&words, line);
@@ -1149,6 +1192,9 @@ static int check_utils(void)
     return count;
 }
 
+/** Check the third contract: ish/Makefile derives OBJECTS from ISH_SRC, the
+   guest's OBJS equals ISH_SRC with .c turned to .o, and ish links through a
+   temporary file. Returns the number of objects. */
 static int check_ish(void)
 {
     char *host, hostpath[1200];
@@ -1204,19 +1250,22 @@ static int check_ish(void)
 
 /* ---- the include graph ---- */
 
+/** A C file or header of the kernel and the quoted includes it names. */
 struct node {
-    char path[1024];
-    struct list includes;
-    int depth; /* 0 until computed */
-    int visiting;
+    char path[1024];      /* normalised */
+    struct list includes; /* the normalised paths of the files it includes */
+    int depth;            /* 0 until computed */
+    int visiting;         /* set while depth_of is below this node */
     int is_c;
 };
 
+/** A growable list of nodes. */
 struct graph {
     struct node *item;
     int n, cap;
 };
 
+/** The node for `path` in `g`, or NULL. */
 static struct node *node_find(struct graph *g, const char *path)
 {
     int i;
@@ -1227,7 +1276,8 @@ static struct node *node_find(struct graph *g, const char *path)
     return NULL;
 }
 
-/* `a/b/../c` as `a/c`, so two spellings of one file are one node. */
+/** Rewrite `path`, of 1024 bytes, with `.` and `..` resolved, `a/b/../c` as
+   `a/c`, so that two spellings of one file are one node. */
 static void normalize_path(char *path)
 {
     char out[1024];
@@ -1261,7 +1311,7 @@ static void normalize_path(char *path)
     snprintf(path, 1024, "%s", out);
 }
 
-/* The first byte of `p` that is not a space or a tab, or `e`. */
+/** The first byte of `p` that is not a space or a tab, or `e`. */
 static const char *skip_blanks(const char *p, const char *e)
 {
     while (p < e && (*p == ' ' || *p == '\t'))
@@ -1269,14 +1319,17 @@ static const char *skip_blanks(const char *p, const char *e)
     return p;
 }
 
+/** Add a node to `g` for every C file and header under `dir`, but those in
+   hidden directories and `build`, with the quoted includes each names.
+
+   A directory or file the walk cannot read fails the run: a source left out
+   of the graph can only shorten the deepest include chain, so a file passed
+   over would read as a build that fits. */
 static void scan_includes(struct graph *g, const char *dir)
 {
     DIR *d = opendir(dir);
     struct dirent *ent;
 
-    /* A directory or file the walk cannot read is a fault, not a gap to
-       pass over: a source left out of the graph can only shorten the
-       deepest include chain, so an omission reads as a build that fits. */
     if (d == NULL)
         fail("cannot read the directory %s; the include graph would be "
              "missing whatever is under it",
@@ -1358,8 +1411,8 @@ static void scan_includes(struct graph *g, const char *dir)
     closedir(d);
 }
 
-/* The deepest quoted-include chain reachable from `n`. A cycle counts as
-   zero, the way the compiler's own guards end one. */
+/** The deepest quoted-include chain reachable from `n`, `n` counted. A cycle
+   counts as zero, the way the compiler's own guards end one. */
 static int depth_of(struct graph *g, struct node *n)
 {
     int best = 0, i;
@@ -1384,6 +1437,7 @@ static int depth_of(struct graph *g, struct node *n)
     return n->depth;
 }
 
+/** The deepest quoted-include chain of any kernel C file under rach2/. */
 static int include_depth(void)
 {
     struct graph g;
@@ -1406,6 +1460,9 @@ static int include_depth(void)
     return best;
 }
 
+/** Check the fourth contract: the include chain within FD_LIMIT, and every
+   recipe line of the three guest makefiles, with its macros, `$@` and `$<`
+   expanded, within the exec budget. Returns the include depth. */
 static int check_limits(void)
 {
     int depth = include_depth();
@@ -1436,8 +1493,7 @@ static int check_limits(void)
 
                 snprintf(line, sizeof(line), "%s", rules.item[i].recipe.item[j]);
                 expand_line(line, sizeof(line), &m);
-                /* `$@` and `$<`, the two automatic variables these
-                   recipes use. */
+                /* `$@` and `$<`: the automatic variables the recipes use. */
                 out[0] = '\0';
                 p = line;
                 while ((at = strstr(p, "$@")) != NULL) {
@@ -1472,6 +1528,10 @@ static int check_limits(void)
     return depth;
 }
 
+/** Check the fifth contract: os-real.manifest stages the three trees at /src
+   as `tree 0644`, and has no other line under /src but the directories
+   above them, since a later line could give the source to another owner;
+   and each tree has a regular guest.mk. */
 static void check_staging(void)
 {
     char path[1200];
@@ -1553,6 +1613,7 @@ static void check_staging(void)
     }
 }
 
+/** Check the five contracts, the first and fourth for each architecture. */
 int main(int argc, char **argv)
 {
     int sources, sources64, programs, ish_objects, depth;

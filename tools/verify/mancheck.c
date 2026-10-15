@@ -1,30 +1,34 @@
 /*
- * mancheck: every program, applet and system call has a manual page.
+ * mancheck: check that every program, applet and system call has a manual
+ * page.
  *
  * The inventory comes from four places and the pages from one. The programs
  * are what the manifests stage under /bin and /sbin, by name, an `exec-dir`
  * line expanded to the executable files of its directory, and what
- * `utils/programs.mk` builds; the applets are the names the built BusyBox
- * reports in the applet table its build keeps beside the binary, since the
- * guest binary does not run on the host; the system calls are the names an
- * architecture's table registers, read from its `systab.c` and numbered by
- * its `sysnr.h`, and the socket operations behind `socketcall`, read from
- * `syscall_net.c`. The pages are `man/manN/NAME.N`, and `man/aliases` names the
- * pages a second name reaches, one `NAME SECTION TARGET` a line.
+ * `utils/programs.mk` builds; the applets are the names in the applet table
+ * the BusyBox build keeps beside the binary, since the guest binary does not
+ * run on the host; the system calls are the names an architecture's table
+ * registers, read from its `systab.c` and numbered by its `sysnr.h`, and the
+ * socket operations behind `socketcall`, read from `syscall_net.c`. The pages
+ * are `man/manN/NAME.N`, and `man/aliases` lists the pages a second name
+ * reaches, one `NAME SECTION TARGET` a line.
  *
  * A program needs a page or an alias in section 1 or 8, an applet the same,
  * a call one in section 2. A name the inventory has and the pages lack is
  * printed and the check fails; so is an alias whose target is not a page, and
- * a page `mandoc -T lint` warns about. `man/recovery` names the pages the
+ * a page `mandoc -T lint` warns about. `man/recovery` lists the pages the
  * recovery image must carry, and each must be a page and staged by the
  * recovery manifest. The programs the test images alone stage are not in the
- * inventory: only the manifests named on the command line are read.
+ * inventory: only the manifests named on the command line are read, the
+ * recovery manifest among them.
  *
- *   mancheck MANDIR SYSNR_H SYSTAB_C APPLETS PROGRAMS_MK RECOVERY_MANIFEST
- *            MANIFEST...
+ *   mancheck MANDIR SYSNR_H SYSTAB_C[:SYSTAB_C...] APPLETS PROGRAMS_MK
+ *            RECOVERY_MANIFEST MANIFEST...
  *
- * Exit status: 0 when every name has a page, 1 otherwise, 2 for a file that
- * cannot be read.
+ * SYSTAB_C is a colon-separated list of the files to read the calls and the
+ * socket operations from, and SYSNR_H gives each call its number. The exit
+ * status is 0 when every name has a page, 1 when a name has none or a file
+ * cannot be read, and 2 for a wrong usage.
  *
  *   mancheck --calls MANDIR I686_SYSNR_H I686_SYSTAB_C X86_64_SYSNR_H
  *            X86_64_SYSTAB_C
@@ -45,9 +49,11 @@
 #define NAMES        4096
 #define NAME_MAX_LEN 64
 
+/** A page, an alias, or a name the inventory needs a page for. */
 struct name {
     char text[NAME_MAX_LEN];
     char section[4]; /* the section a page or alias is in */
+    /* an alias's page; empty otherwise */
     char target[NAME_MAX_LEN];
     const char *from; /* where the inventory got it */
     long number;      /* a call's number, -1 for none */
@@ -58,6 +64,10 @@ static int npages, naliases, nwanted;
 static int failures;
 static int programs_listed, applets_read; /* what each inventory source gave */
 
+/**
+ * Prints a finding, `fmt` formatted with the two strings `a` and `b`, on
+ * standard error and counts it.
+ */
 static void fail(const char *fmt, const char *a, const char *b)
 {
     fprintf(stderr, "mancheck: ");
@@ -66,7 +76,12 @@ static void fail(const char *fmt, const char *a, const char *b)
     failures++;
 }
 
-/* Adds a name to a list; returns 0 when the list had it already. */
+/**
+ * Adds a name to a list; returns 0 when the list had it already in the same
+ * section, and 1 otherwise. A name too long, or a list full, is a finding and
+ * is not added. `from` is kept by reference and must outlive the program's
+ * reports.
+ */
 static int add(struct name *list, int *n, const char *text, const char *section, const char *target,
                const char *from)
 {
@@ -90,8 +105,10 @@ static int add(struct name *list, int *n, const char *text, const char *section,
     return 1;
 }
 
-/* The page a name is read on: its own, or the one its alias names; NULL for
-   none. */
+/**
+ * The page `text` is read on in `section`: its own name, or the target of its
+ * alias; NULL when it has neither.
+ */
 static const char *page_of(const char *text, const char *section)
 {
     int i;
@@ -109,12 +126,16 @@ static const char *page_of(const char *text, const char *section)
     return NULL;
 }
 
+/** Whether `text` has a page or an alias in `section`. */
 static int has_page(const char *text, const char *section)
 {
     return page_of(text, section) != NULL;
 }
 
-/* The pages: man/manN/NAME.N, and a lint of each when `lint` is set. */
+/**
+ * Reads the pages, `MANDIR/manN/NAME.N`, and lints each with mandoc when
+ * `lint` is set.
+ */
 static void read_pages(const char *mandir, int lint)
 {
     const char *sections = "12345678";
@@ -156,6 +177,10 @@ static void read_pages(const char *mandir, int lint)
     }
 }
 
+/**
+ * Reads the aliases file at `path`, if there is one. A malformed line, an
+ * alias that is also a page, and an alias listed twice are findings.
+ */
 static void read_aliases(const char *path)
 {
     FILE *f = fopen(path, "r");
@@ -184,7 +209,11 @@ static void read_aliases(const char *path)
     fclose(f);
 }
 
-/* The names of a manifest's /bin and /sbin entries; an exec-dir expanded. */
+/**
+ * Adds the programs a manifest stages: the names of its `file` and
+ * `optional-file` entries directly under /bin and /sbin, and the executable
+ * files of each `exec-dir` host directory that exists.
+ */
 static void read_manifest(const char *path)
 {
     FILE *f = fopen(path, "r");
@@ -251,8 +280,11 @@ static void read_manifest(const char *path)
     fclose(f);
 }
 
-/* UTILITIES and SBIN_PROGS from programs.mk, with their continuation lines.
-   The init variants are one program, /sbin/init. */
+/**
+ * Adds the programs UTILITIES and SBIN_PROGS of programs.mk list, with their
+ * continuation lines. The init variants are one program, /sbin/init, and
+ * adduser-crash, a build of adduser for a probe, has no page.
+ */
 static void read_programs_mk(const char *path)
 {
     FILE *f = fopen(path, "r");
@@ -295,7 +327,10 @@ static void read_programs_mk(const char *path)
     fclose(f);
 }
 
-/* Every quoted name in the applet table the build keeps. */
+/**
+ * Adds every quoted name in the applet table the BusyBox build keeps that is
+ * made of lower-case letters, digits and `_`, `-`, `.` or `[`.
+ */
 static void read_applets(const char *path)
 {
     FILE *f = fopen(path, "r");
@@ -340,7 +375,7 @@ static void read_applets(const char *path)
     fclose(f);
 }
 
-/* The number `#define MACRO NUMBER` gives in a header, or -1 for none. */
+/** The number `#define MACRO NUMBER` gives in `header`, or -1 for none. */
 static long header_number(const char *header, const char *macro)
 {
     FILE *f = fopen(header, "r");
@@ -362,9 +397,13 @@ static long header_number(const char *header, const char *macro)
     return number;
 }
 
-/* The calls a table registers, lowercased and numbered by the header, and
-   the socket operations with their numbers, read from one source file into
-   `list`. A registered call the header gives no number for is a failure. */
+/**
+ * Adds to `list` the calls one source file registers, each
+ * `table[SYS_NAME]` as `name` with the number `header` gives `SYS_NAME`, and
+ * the socket operations it defines, each `#define SC_NAME NUMBER` as `name`
+ * with its number. A registered call the header gives no number for is a
+ * finding. `source` is kept by reference by `add`.
+ */
 static void read_syscalls_from(const char *header, const char *source, struct name *list, int *n)
 {
     FILE *f = fopen(source, "r");
@@ -386,8 +425,7 @@ static void read_syscalls_from(const char *header, const char *source, struct na
             p += strlen("table[SYS_");
             q = strchr(p, ']');
         } else if (strncmp(line, "#define SC_", 11) == 0) {
-            /* A socket operation is `#define SC_NAME NUMBER`; the helper
-             * macros beside them, `SC_BE16(p)` and the like, are not. */
+            /* `SC_BE16(p)` and the other helper macros are not operations. */
             const char *r;
 
             p = line + 11;
@@ -433,16 +471,19 @@ static void read_syscalls_from(const char *header, const char *source, struct na
     fclose(f);
 }
 
-/* `sources` names the files the tables and the operations are in, joined
-   by colons: an architecture's systab.c registers the calls and
-   syscall_net.c defines the socket operations. `header` is the
-   architecture's sysnr.h, and the names go into `list`. */
+/**
+ * Adds to `list` the calls and the socket operations of each file `sources`
+ * lists, joined by colons: an architecture's systab.c registers the calls and
+ * syscall_net.c defines the socket operations. `header` is the
+ * architecture's sysnr.h.
+ *
+ * The path each call is recorded as coming from is printed when the call has
+ * no page, after this function has returned, so the paths are kept in static
+ * storage for the program's life. Up to eight paths of under 512 bytes are
+ * read; more, or a longer one, is a finding.
+ */
 static void read_syscalls(const char *header, const char *sources, struct name *list, int *n)
 {
-    /* The name each call is recorded as coming from outlives this call: a
-       diagnostic prints it when a registered call has no page. So the paths
-       are kept here for the program's life rather than in a buffer this
-       function reuses and then leaves. */
     static char paths[8][512];
     static int npaths;
     const char *p = sources;
@@ -467,7 +508,12 @@ static void read_syscalls(const char *header, const char *sources, struct name *
     }
 }
 
-/* The pages the recovery image must carry, and their staging. */
+/**
+ * Checks each page the list at `listpath` names: it must be a page or an
+ * alias, and `manifest` must stage it with an active `file` line from
+ * build/man/catN/NAME.N to /usr/share/man/catN/NAME.N. A commented line, or
+ * one that stages another file, does not count.
+ */
 static void check_recovery(const char *listpath, const char *manifest)
 {
     FILE *f = fopen(listpath, "r");
@@ -499,8 +545,6 @@ static void check_recovery(const char *listpath, const char *manifest)
         while (fgets(mline, sizeof(mline), m)) {
             char kind[32], mode[32], guest[256], host[512];
 
-            /* An active `file` line staging the rendered page at its path;
-             * a comment or a line naming another file does not count. */
             if (mline[0] == '#' ||
                 sscanf(mline, "%31s %31s %255s %511s", kind, mode, guest, host) != 4) {
                 continue;
@@ -520,6 +564,7 @@ static void check_recovery(const char *listpath, const char *manifest)
 static struct name calls32[NAMES], calls64[NAMES]; /* the i686 and x86-64 tables */
 static int ncalls32, ncalls64;
 
+/** The number of `text` in the `n` names of `list`, or -1 when it is absent. */
 static long number_in(const struct name *list, int n, const char *text)
 {
     int i;
@@ -532,12 +577,13 @@ static long number_in(const struct name *list, int n, const char *text)
     return -1;
 }
 
+/** The `qsort` comparison of two names by their text. */
 static int by_text(const void *a, const void *b)
 {
     return strcmp(((const struct name *)a)->text, ((const struct name *)b)->text);
 }
 
-/* A table cell of a call's number, `none` for a table without the call. */
+/** Prints a table cell of a call's number, `none` for a table without it. */
 static void print_number(long number)
 {
     if (number < 0) {
@@ -547,8 +593,11 @@ static void print_number(long number)
     }
 }
 
-/* `--calls`: the Markdown table of the calls both tables register, one row a
-   name, written to stdout only when every call has a number and a page. */
+/**
+ * The `--calls` mode: prints the Markdown table of the calls both tables
+ * register, one row a name, only when every call has a number and a page.
+ * Returns 0, 1 after a finding, or 2 for a wrong number of arguments.
+ */
 static int print_calls(int argc, char **argv)
 {
     char path[512];
@@ -612,6 +661,14 @@ static int print_calls(int argc, char **argv)
     return 0;
 }
 
+/**
+ * Reads the pages and the inventory and reports each name without a page, or
+ * run the `--calls` mode.
+ *
+ * An inventory source that gave no name at all is a finding too: it is a
+ * wrong file, since a directory given in place of a file opens and reads as
+ * empty.
+ */
 int main(int argc, char **argv)
 {
     char path[512];
@@ -648,8 +705,6 @@ int main(int argc, char **argv)
     for (i = 7; i < argc; i++) {
         read_manifest(argv[i]);
     }
-    /* An inventory source that gave nothing is a wrong file, not an empty
-     * machine: a directory opens and reads as empty. */
     if (applets_read == 0) {
         fail("%s: no applet name was read from the table", argv[4], "");
     }

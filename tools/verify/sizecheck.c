@@ -2,15 +2,14 @@
  * sizecheck: the size limits on functions, read from the source.
  *
  * Every function the first arm of each conditional defines is measured four
- * ways: the lines of
- * its body, the parameters it takes, the deepest block nesting inside it,
- * and, when pmccabe's table is given, its cyclomatic complexity. A function
- * over a limit is a finding unless the reasons file has an entry for it:
- * the file, the function, the measure, the value the entry allows and why
- * a split would make the function worse. The entry is a ratchet: a
- * function may not grow past the value it records, and an entry for a
- * function that is within the limit again is stale and reported, so the
- * file shrinks as the code does and never grows without a reason written.
+ * ways: the lines of its body, comment and blank lines included, the
+ * parameters it takes, the deepest block nesting inside it, and, when
+ * pmccabe's table is given, its cyclomatic complexity. A function over a
+ * limit is a finding unless the reasons file has an entry for it: the file,
+ * the function, the measure, the value the entry allows and why a split
+ * would make the function worse. The value is a ceiling: a function may not
+ * grow past it, and an entry for a function that is within the limit again
+ * is stale and a finding, so an excess is never kept without a reason.
  *
  * A file's text is read as one configuration, the first arm of every
  * preprocessor conditional: the two arms of a `#ifdef` can each open a brace
@@ -33,6 +32,9 @@
  *
  * Usage: sizecheck [--pmccabe TABLE] [--lines N] [--params N] [--nesting N]
  *                  [--complexity N] [--report] REASONS FILE...
+ *
+ * The exit status is 0 when nothing is found, 1 when there are findings, and
+ * 2 when a file cannot be read or parsed.
  */
 #include <ctype.h>
 #include <stdio.h>
@@ -47,24 +49,28 @@
 #define COND_MAX     16 /* nested preprocessor conditionals tracked */
 #define SIG_MAX_LEN  (SIG_LINES * LINE_MAX_LEN + SIG_LINES)
 
+/** One entry of the reasons file. */
 struct reason {
     char file[PATH_MAX_LEN];
     char name[NAME_MAX_LEN];
     char measure[16];
-    long value;
-    int used;
+    long value; /* the ceiling the measure may not pass */
+    int used;   /* set when a function over the limit matched the entry */
 };
 
 static struct reason reasons[REASONS_MAX];
 static int nreasons;
 static int findings;
 static int functions;
-static int excused;
-static int report;
+static int excused; /* excesses an entry allows */
+static int report;  /* nonzero under --report */
 
 static long lim_lines = 100, lim_params = 6, lim_nesting = 4, lim_complexity = 25;
 
-/** pmccabe's table: one line per function, the modified count first. */
+/**
+ * One function's line of pmccabe's table: its file, its name and the modified
+ * complexity, the table's first column.
+ */
 struct complexity {
     char file[PATH_MAX_LEN];
     char name[NAME_MAX_LEN];
@@ -77,9 +83,9 @@ static int ncomplexities;
  * Reads the reasons file into `reasons`.
  *
  * A line is `FILE:FUNCTION MEASURE VALUE REASON`. The reason is what the
- * entry is for, so an entry with no text after the value is refused, as is
- * one this program cannot parse: an unreadable entry that let a function
- * through would be a limit removed by accident.
+ * entry is for, so an entry with no text after the value stops the program
+ * with status 2, as does one it cannot parse: an unreadable entry that let a
+ * function through would be a limit removed by accident.
  */
 static void read_reasons(const char *path)
 {
@@ -147,6 +153,10 @@ static void read_reasons(const char *path)
     fclose(f);
 }
 
+/**
+ * Reads pmccabe's table at `path` into `complexities`. A line that is not
+ * five numbers and `FILE(LINE): NAME` is skipped.
+ */
 static void read_pmccabe(const char *path)
 {
     FILE *f = fopen(path, "r");
@@ -206,6 +216,10 @@ static void read_pmccabe(const char *path)
     fclose(f);
 }
 
+/**
+ * The complexity pmccabe gives function `name` of `file`, or -1 when the
+ * table has no line for it. pmccabe's file name only has to occur in `file`.
+ */
 static long complexity_of(const char *file, const char *name)
 {
     int i;
@@ -219,8 +233,12 @@ static long complexity_of(const char *file, const char *name)
 }
 
 /**
- * A measured excess against the reasons: counted as a finding, or as an excess
- * the file allows.
+ * Judges one measure of a function against its limit and the reasons file.
+ *
+ * A value within `limit` passes. A value over it is an excess the file allows
+ * when an entry for the file, the function and the measure has a ceiling at
+ * least as high, and a finding, printed, otherwise. A matching entry is
+ * marked used.
  */
 static void judge(const char *file, const char *name, const char *measure, long value, long limit)
 {
@@ -296,6 +314,10 @@ static void bare(const char *in, char *out, size_t cap, int *inc)
     out[o] = '\0';
 }
 
+/**
+ * Whether the bare line `code` can end a definition's signature: it ends in
+ * `)`, or has `) K_NORETURN` in it.
+ */
 static int is_definition_end(const char *code)
 {
     size_t n = strlen(code);
@@ -505,6 +527,11 @@ static void scan_body_line(const char *code, int *depth, int *nesting)
     }
 }
 
+/**
+ * Counts a function whose body has ended, prints its measures under
+ * --report, and judges each of them; complexity only when pmccabe's table has
+ * the function.
+ */
 static void finish_function(const char *path, const char *name, long params, int body_lines,
                             int nesting)
 {
@@ -529,7 +556,8 @@ static void finish_function(const char *path, const char *name, long params, int
  * The last `SIG_LINES` lines before a body are kept, since a signature can
  * span several of them. A definition with a longer signature would be
  * measured from the lines that are left, which is a different function, so
- * the file is refused instead.
+ * the program stops with status 2 instead, as it does for a file that ends
+ * inside a body.
  */
 static void check_file(const char *path)
 {
@@ -598,6 +626,11 @@ static void check_file(const char *path)
     fclose(f);
 }
 
+/**
+ * Reads the options, the reasons file and the table, measures every file
+ * named, and reports the stale entries: those no function over its limit
+ * matched. A complexity entry is stale only when a table was given.
+ */
 int main(int argc, char **argv)
 {
     const char *pmccabe = NULL;
