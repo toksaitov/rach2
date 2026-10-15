@@ -35,11 +35,11 @@ esac
 export RACH2_QEMU
 ARCH_VAR="ARCH=$ARCH"
 
-# RACH2_KERNEL=NAME boots every suite on rach2-NAME/kernel in the
-# architecture's build tree, built by the NAME-kernel target of
-# tests/system/suites.mk (ubsan, o2) before the rest of the preparation,
-# since the images the preparation stages hold that kernel; unset, the suites
-# boot rach2/kernel there.
+# RACH2_KERNEL=NAME passes rach2-NAME/kernel in the architecture's build tree
+# to the suites as BOOT_KERNEL, after the NAME-kernel target of
+# tests/system/suites.mk (ubsan, o2) has built it, since neither the
+# preparation nor a suite's own target does; unset, BOOT_KERNEL is
+# rach2/kernel there. tests/system/suites.mk says which boots it replaces.
 KERNEL_VAR=""
 if [ -n "${RACH2_KERNEL:-}" ]; then
     KERNEL_VAR="BOOT_KERNEL=$ARCH_BUILD/rach2-${RACH2_KERNEL}/kernel"
@@ -902,7 +902,7 @@ build_components() {
 }
 prepare() {
     echo "run: preparing"
-    # The named kernel first, since the preparation's disks and sticks have it.
+    # The preparation does not build the kernel RACH2_KERNEL names.
     if [ -n "$KERNEL_VAR" ]; then
         run_make "${RACH2_KERNEL}-kernel" || {
             echo "run: result: refused: the $RACH2_KERNEL kernel did not build" >&2; exit 1

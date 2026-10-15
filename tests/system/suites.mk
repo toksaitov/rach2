@@ -1814,7 +1814,9 @@ HARNESS_KERNEL = $(ARCH_BUILD)/rach2-harness/kernel
 # undefined behaviour is a `ud2` the fault handler panics on with the address,
 # and the -O2 kernel, which a milestone's close boots once through the core
 # tier. `tests/run` builds the one `RACH2_KERNEL` names and passes its path as
-# BOOT_KERNEL, which every suite recipe boots.
+# BOOT_KERNEL, which takes the default kernel's place wherever a recipe boots
+# it directly. The disks GRUB boots carry rach2/kernel, and the harness,
+# recovery and metal kernels stay as they are.
 .PHONY: ubsan-kernel o2-kernel
 ubsan-kernel:
 	$(MAKE) -C rach2 COMPONENT=rach2-ubsan KEXTRA="-fsanitize=undefined -fsanitize-undefined-trap-on-error"
