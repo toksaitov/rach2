@@ -25,7 +25,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 TOOLS="$REPO/build/krffs"
 
 MANIFEST="$1"
@@ -108,7 +108,9 @@ if [ -s "$DEPS_TMP" ]; then
     DEPS_LIST="$OUT.d.list.$$"
     # The paths are made absolute: a relative recorded path such as `rach2`
     # is the name of the root Makefile's phony component target, which make
-    # always remakes, so the image would be staged again on every run.
+    # always remakes, so the image would be staged again on every run. The
+    # root is the physical path, as make's CURDIR is, so that the rule the
+    # root Makefile gives an absolute path is the rule for this one.
     grep -v '^exec-dir	' "$DEPS_TMP" | sort -u | while IFS= read -r p; do
         case "$p" in
             /*) ;;

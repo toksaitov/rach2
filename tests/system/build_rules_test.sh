@@ -36,6 +36,10 @@
 #     build with RELEASE=1 are refused before anything is built, while a
 #     development build is not; in a tree without one RELEASE=1 is not
 #     refused.
+#   * ish-absolute: the test image's dependency file names the shell by its
+#     absolute path, as krffs/mkimage.sh writes it, beside an object newer
+#     than the shell. `make -n` of that path, with make's built-in rules,
+#     runs the ISH sub-make and does not link the object with the host cc.
 #
 # The trees hold copies of the real files, and marker directories stand for
 # build/, so a clean there cannot reach the real one. --mutate puts each fault
@@ -119,8 +123,8 @@ last=${listed##* }
 # parse runs. The database rows read the same tree.
 C="$WORK/clean"
 for f in Makefile tests/registry tests/Makefile tests/system/suites.mk krffs/Makefile \
-    krffs/manifest_deps.sh rach2/Makefile rach2/sources.mk ish/Makefile ish/sources.mk \
-    utils/Makefile utils/programs.mk ports/doom/Makefile rach2/sys/arch/*/sources.mk; do
+    krffs/manifest_deps.sh krffs/programs.sh rach2/Makefile rach2/sources.mk ish/Makefile \
+    ish/sources.mk utils/Makefile utils/programs.mk ports/doom/Makefile rach2/sys/arch/*/sources.mk; do
     mkdir -p "$C/$(dirname "$f")"
     cp "$f" "$C/$f"
 done
@@ -428,6 +432,33 @@ release_row()
     fi
 }
 
+# The ish-absolute row. MAKE is `true`, so the sub-make's line runs under -n
+# and builds nothing, and the planted files are removed after.
+ish_absolute_row()
+{
+    top=$(cd "$C" && pwd -P)
+    shell=$top/build/ish/ish
+    mkdir -p "$C/build/ish" "$C/build/images"
+    : >"$shell"
+    touch -t 200001010000 "$shell"
+    : >"$shell.o"
+    printf '%s: %s\n%s:\n' "$top/build/images/test.krffs" "$shell" "$shell" \
+        >"$C/build/images/test.krffs.d"
+    rc=0
+    (cd "$C" && MAKEFLAGS='' MFLAGS='' make --no-print-directory -n MAKE=true "$shell") \
+        >"$WORK/ish.absolute" 2>&1 || rc=$?
+    rm -rf "$C/build"
+    if [ "$rc" -ne 0 ]; then
+        fail ish-absolute "make -n $shell: status $rc: $(cat "$WORK/ish.absolute")"
+    elif grep -qF -- "-o $shell" "$WORK/ish.absolute"; then
+        fail ish-absolute "make links $shell itself: $(cat "$WORK/ish.absolute")"
+    elif ! grep -qF -- '-C ish' "$WORK/ish.absolute"; then
+        fail ish-absolute "make does not run the ISH sub-make for $shell"
+    else
+        pass ish-absolute
+    fi
+}
+
 # Run every row; the names of those that failed are left in `failed`.
 rows()
 {
@@ -446,6 +477,7 @@ rows()
     fi
     key_names_row
     release_row
+    ish_absolute_row
 }
 
 # Change one private copy where the old text occurs exactly once.
@@ -506,7 +538,7 @@ fi
 # names its own rules take.
 # shellcheck disable=SC2016
 for fault in unlisted missing clean grub-target tools-late include-early plain-sealed one-arch \
-    release; do
+    release ish-absolute; do
     case $fault in
         unlisted)
             copies="$S/tools/verify/check_sources.sh=$WORK/check_sources.saved"
@@ -546,6 +578,10 @@ for fault in unlisted missing clean grub-target tools-late include-early plain-s
             copies="$C/Makefile=$WORK/Makefile.saved"
             mutate "$C/Makefile" '$(error release: refused:' '$(info release: allowed:'
             row='release-guard' ;;
+        ish-absolute)
+            copies="$C/Makefile=$WORK/Makefile.saved"
+            mutate "$C/Makefile" '$(CURDIR)/$(ARCH_BUILD)/ish/ish:' '$(CURDIR)/$(ARCH_BUILD)/ish/ish-gone:'
+            row='ish-absolute' ;;
     esac
     if [ "$mutate" -eq 2 ]; then
         for pair in $copies; do

@@ -357,6 +357,12 @@ $(KERNEL): ask-the-sub-make
 	@$(MAKE) --no-print-directory -C rach2
 $(ARCH_BUILD)/ish/ish: ask-the-sub-make
 	@$(MAKE) --no-print-directory -C ish
+# An image's dependency file names the shell by its absolute path
+# (krffs/mkimage.sh), with no recipe. That path waits for the sub-make here,
+# since without a recipe of its own it would match the built-in rule that
+# links build/ish/ish.o with the host cc.
+$(CURDIR)/$(ARCH_BUILD)/ish/ish: $(ARCH_BUILD)/ish/ish
+	+@:
 # One of the three krffs tools runs the sub-make and the other two wait for
 # it. A rule with several targets is a rule for each target, so one rule for
 # all three would run three sub-makes of one directory at once in a clean
