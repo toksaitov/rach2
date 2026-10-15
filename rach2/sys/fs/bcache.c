@@ -40,7 +40,7 @@ static uint64_t stat_hits, stat_fills, stat_waits;
  * bound. */
 static uint64_t stat_visits;
 
-/* The most buffers the cache makes: half of what the caches together may
+/** The most buffers the cache makes: half of what the caches together may
  * hold under pressure, and never fewer than the floor, since a file system
  * holds up to four at once and a write of one may take one more. Each
  * buffer is a page of the kernel heap, whose region is an eighth of memory
@@ -89,7 +89,7 @@ uint64_t bcache_stat_visits(void)
     return stat_visits;
 }
 
-/* A buffer from the heap, empty and unheld, on the list; NULL when the
+/** A buffer from the heap, empty and unheld, on the list; NULL when the
  * heap has no room for it. */
 static struct bbuf *buffer_new(void)
 {
@@ -118,12 +118,14 @@ static struct bbuf *buffer_new(void)
 #define BHASH 4096
 static struct bbuf *bhash[BHASH];
 
+/** The bucket of the index for block `blk` of `dev`. */
 static unsigned bucket_of(const block_device_t *dev, uint64_t blk)
 {
     return (unsigned)(((uintptr_t)dev >> 4) ^ (uintptr_t)blk ^ (uintptr_t)(blk >> 12)) &
            (BHASH - 1);
 }
 
+/** Put the keyed buffer `b` in its bucket of the index. */
 static void index_add(struct bbuf *b)
 {
     unsigned h = bucket_of(b->dev, b->blk);
@@ -132,7 +134,8 @@ static void index_add(struct bbuf *b)
     bhash[h] = b;
 }
 
-/* Take `b` out of the index before its device is cleared. */
+/** Take `b` out of the index before its device is cleared; an empty
+ * buffer is in no bucket. */
 static void index_del(struct bbuf *b)
 {
     struct bbuf **link;
@@ -150,7 +153,7 @@ static void index_del(struct bbuf *b)
     }
 }
 
-/* The buffer keyed to `blk` of `dev`, or NULL. */
+/** The buffer keyed to `blk` of `dev`, or NULL. */
 static struct bbuf *index_find(const block_device_t *dev, uint64_t blk)
 {
     struct bbuf *b;
@@ -182,7 +185,7 @@ static void lru_del(struct bbuf *b)
     } else if (lru_head == b) {
         lru_head = b->lru_next;
     } else {
-        return; /* not on the list */
+        return;
     }
     if (b->lru_next) {
         b->lru_next->lru_prev = b->lru_prev;
@@ -207,10 +210,10 @@ static void lru_add_tail(struct bbuf *b)
 }
 
 /*
- * The dirty list. A buffer is on it exactly while it is dirty, so a sync and
- * the ordered writes read the few buffers waiting to be written and not the
- * whole cache, which on a machine with memory is tens of thousands of
- * buffers; a sync walked the whole cache once for every metadata write.
+ * The dirty list. A buffer is on it while it is dirty and at no other time,
+ * so a sync and the ordered writes read the few buffers waiting to be
+ * written and not the whole cache, which on a machine with memory is tens
+ * of thousands of buffers.
  */
 
 /** Mark `b` dirty and put it on the dirty list, where it is once. */
@@ -299,6 +302,8 @@ static void buffer_free(struct bbuf *b)
     kfree(b);
 }
 
+/** The pid that holds a buffer for the caller: the current process, or 0
+ * with no process current. */
 static int caller_pid(void)
 {
     return current_proc ? (int)current_proc->pid : 0;
@@ -347,8 +352,9 @@ static void unhold(struct bbuf *b)
     b->holder = -1;
 }
 
-/* The rules that keep holders out of deadlock, checked before a wait or a
- * fill. A violation is a driver defect, not a runtime condition.
+/** Panic when the caller, taking block `blk` of `dev`, would break a rule
+ * that keeps holders out of deadlock; called before a wait or a fill. A
+ * violation is a driver defect, not a runtime condition.
  *
  * Blocks of one device are taken in order, so two processes holding one each
  * cannot each be waiting for the other's. A second device is allowed only
@@ -373,7 +379,7 @@ static void check_hold_rules(block_device_t *dev, uint64_t blk)
             if (!block_is_below(dev, b->dev)) {
                 k_panic("bcache: hold rule: a block on a device that is not under the ones held");
             }
-            continue; /* below it: its blocks are ordered among themselves */
+            continue;
         }
         if (b->blk >= blk) {
             k_panic("bcache: hold rule: a block taken that is not above every held block");
@@ -410,7 +416,7 @@ static int victim_may_be_written(block_device_t *victim, block_device_t *filling
     const struct bbuf *b;
 
     if (!victim || !victim->backing) {
-        return 1; /* its write does not come back through here */
+        return 1;
     }
     for (b = *held_list(); b; b = b->hold_next) {
         stat_visits++;
@@ -431,15 +437,16 @@ static int victim_may_be_written(block_device_t *victim, block_device_t *filling
     return !vfs_ns_held_by_caller();
 }
 
-/* Wait predicate: nobody holds the buffer. */
+/** The wait condition for a busy buffer: nobody holds it. */
 static int busy_gone(void *arg)
 {
     struct bbuf *b = arg;
     return b->holder == -1;
 }
 
-/* One buffer to the device, with the request `flags`; a failure is
- * recorded against the device and leaves the buffer dirty. */
+/** Write the buffer `b` to the device with the request `flags`. A failure
+ * is recorded against the device, through `vfs_device_failed`, and leaves
+ * the buffer dirty and marked failed. */
 static int write_buffer_flags(struct bbuf *b, uint32_t flags)
 {
     int rc = block_request_flags(b->dev, 1, b->blk * BCACHE_BLOCK_SECTORS,
@@ -460,7 +467,8 @@ static int write_buffer_flags(struct bbuf *b, uint32_t flags)
     return 0;
 }
 
-/* One buffer to the device, on the medium when the write is answered. */
+/** Write the buffer `b` to the device, on the medium when the write is
+ * answered. */
 static int write_buffer(struct bbuf *b)
 {
     return write_buffer_flags(b, 0);
@@ -481,13 +489,18 @@ static struct bbuf *fill_keep;
 
 /**
  * Write `first` and the dirty, unheld blocks that follow it on its device
- * in one request, so that a file written back goes to the disk in runs and
- * not a page at a time. A run is as long as the device takes at once and at
- * most half the cache, as a read run is: its buffers are held across the
- * request's sleep and let go together, and a run that held every buffer
- * would leave a miss meanwhile with no buffer to take. A failure is recorded
- * on the first as `write_buffer` does. A run of one, or a device that takes
- * a page, is `write_buffer`. `*last` receives the last block written.
+ * in one request, with the request `flags`, so that a file written back
+ * goes to the disk in runs and not a page at a time. `*last` receives the
+ * last block written.
+ *
+ * A run is as long as the device takes at once and at most half the cache,
+ * as a read run is: its buffers are held across the request's sleep and let
+ * go together, and a run that held every buffer would leave a miss
+ * meanwhile with no buffer to take. Every block of a run has the place in
+ * the order that `first` has, since a `first` and an `after` in one request
+ * would reach the device together. A failure is recorded on `first` as
+ * `write_buffer_flags` does. A run of one, or a device that takes a page,
+ * is `write_buffer_flags`.
  */
 static int write_run(struct bbuf *first, uint64_t *last, uint32_t flags)
 {
@@ -512,15 +525,13 @@ static int write_run(struct bbuf *first, uint64_t *last, uint32_t flags)
     while ((uint32_t)n < most && run_stage && run[n - 1]->bytes == BCACHE_BLOCK_BYTES) {
         struct bbuf *b = index_find(dev, first->blk + (uint64_t)n);
 
-        /* A run has one place in the order: a first and an after in one
-         * request would reach the device together. */
         if (!b || !b->dirty || b->holder != -1 || b->order != first->order) {
             break;
         }
         run[n++] = b;
     }
     if (n == 1) {
-        hold(first); /* held across the request's sleep */
+        hold(first);
         rc = write_buffer_flags(first, flags);
         unhold(first);
         wq_wake_all(&first->wq);
@@ -637,22 +648,26 @@ struct bbuf *bcache_get_blank(block_device_t *dev, uint64_t blk)
     return get(dev, blk, 1, 0);
 }
 
-/*
- * The two gets. A cached block is returned as it is either way; a miss is
- * filled from the device, or, for the blank get, zeroed without a read: a
- * caller about to write the whole block, or wanting zeros in it, would only
- * throw the device's bytes away, and on a stick the read costs as much as
- * the write that follows it. `*fresh`, when asked for, says whether the
- * buffer was keyed to the block by this call.
+/**
+ * The two gets: `bcache_get`, and with `blank` set `bcache_get_blank`.
+ *
+ * A cached block is returned as it is either way; a miss is filled from the
+ * device, or, for the blank get, zeroed without a read. `*fresh`, when
+ * asked for, says whether the buffer was keyed to the block by this call.
  *
  * A miss takes an empty buffer, or a new one while the cache is under its
  * limit, or else the least recently released unheld buffer this caller may
- * take, a dirty one written first. A dirty buffer whose last write failed, or
+ * take, a dirty one written first. A dirty buffer whose last write failed,
  * whose write would take a block this caller may not take while it holds
- * what it holds, is not a candidate. The waits and the writes sleep; the
+ * what it holds, or an `after` whose device has a `first` that cannot be
+ * written now, is not a candidate. The waits and the writes sleep; the
  * lookup starts over after each, since another caller may have filled the
- * block meanwhile. NULL for a block past the device's end, a cache with no
- * buffer to give, or a failed read.
+ * block meanwhile. The buffer is keyed and held before the read sleeps, so
+ * a second process asking for the block waits for it instead of filling a
+ * second one. Every buffer changes hands here, so here a discard mark left
+ * by a device that went while the buffer was held is cleared. NULL for a
+ * block past the device's end, a cache with no buffer to give, or a failed
+ * read.
  */
 static struct bbuf *get(block_device_t *dev, uint64_t blk, int blank, int *fresh)
 {
@@ -683,8 +698,6 @@ again:
         }
         goto again;
     }
-    /* The block after the last one filled: a reader going through the
-     * device in order, whose next blocks are read with this one. */
     if (!blank && dev == ahead_dev && blk == ahead_next && fill_run(dev, blk)) {
         goto again;
     }
@@ -718,23 +731,17 @@ again:
             break;
         }
         if (victim->order == BCACHE_ORDER_AFTER && write_firsts(victim->dev) != 0) {
-            /* The firsts were written, or one failed and is marked: either
-             * way the scan starts over, since the writes slept. */
             goto again;
         }
-        hold(victim); /* held for the write */
+        hold(victim);
         if (write_buffer(victim) == 0) {
             unhold(victim);
             wq_wake_all(&victim->wq);
-            /* The write slept: look again rather than key the block twice. */
             goto again;
         }
         unhold(victim);
         wq_wake_all(&victim->wq);
-        /* The write failed and marked the buffer; the next scan leaves it. */
     }
-    /* Keyed and held before the request sleeps, so a second process asking
-     * for this block waits for this buffer instead of filling a second one. */
     index_del(victim);
     victim->dev = dev;
     victim->blk = blk;
@@ -744,9 +751,6 @@ again:
     }
     set_clean(victim);
     victim->order = 0;
-    /* A mark left by a device that went while this buffer was held for a
-     * fill or a writeback: every buffer changes hands here, so this is the
-     * one place the mark must go. */
     victim->discard = 0;
     hold(victim);
     victim->bytes = block_bytes(dev, blk);
@@ -844,7 +848,7 @@ static int fill_run(block_device_t *dev, uint64_t blk)
             stat_fills++;
         }
         if (i == 0) {
-            fill_keep = b; /* the caller's block: no victim while the run is in */
+            fill_keep = b;
         }
         bcache_release(b);
     }
@@ -855,6 +859,8 @@ static int fill_run(block_device_t *dev, uint64_t blk)
     return index_find(dev, blk) != 0;
 }
 
+/* The stamp orders the buffers for the shrink; the release order is the
+ * list. */
 void bcache_release(struct bbuf *b)
 {
     if (!b || b->holder != caller_pid()) {
@@ -864,7 +870,6 @@ void bcache_release(struct bbuf *b)
     unhold(b);
     b->stamp = ++clock_stamp;
     if (b->discard) {
-        /* The device went while this was held; it may be freed once unheld. */
         make_empty(b);
     } else if (b->dev) {
         lru_del(b);
@@ -873,7 +878,6 @@ void bcache_release(struct bbuf *b)
     wq_wake_all(&b->wq);
 }
 
-/** Mark a held buffer dirty, for the writeback paths to reach the device. */
 void bcache_dirty(struct bbuf *b)
 {
     if (!b || b->holder != caller_pid()) {
@@ -883,7 +887,6 @@ void bcache_dirty(struct bbuf *b)
     set_dirty(b);
 }
 
-/** Mark a held buffer dirty with its place in the device's order. */
 void bcache_dirty_ordered(struct bbuf *b, int order)
 {
     bcache_dirty(b);
@@ -892,7 +895,8 @@ void bcache_dirty_ordered(struct bbuf *b, int order)
     }
 }
 
-/* The two writes through: a held buffer, with the request `flags`. */
+/** The two writes through, `bcache_write` and `bcache_write_unflushed`: a
+ * held buffer, with the request `flags`. */
 static int write_held(struct bbuf *b, uint32_t flags)
 {
     if (!b || b->holder != caller_pid()) {
@@ -906,13 +910,8 @@ static int write_held(struct bbuf *b, uint32_t flags)
     return write_buffer_flags(b, flags);
 }
 
-/**
- * Write a held buffer through to the device now.
- *
- * After a failed write on the device this answers -EROFS without writing, so
- * an operation in progress when the device failed stops at its next metadata
- * write and the read-only transition is not written across.
- */
+/* The -EROFS after a failed write keeps an operation in progress from
+ * writing across the mount's change to read-only. */
 int bcache_write(struct bbuf *b)
 {
     return write_held(b, 0);
@@ -993,17 +992,18 @@ static void batch_sift_up(uint64_t *heap, int at)
 }
 
 /**
- * The lowest `cap` dirty blocks of `dev` above block `after` (all of them
- * when `started` is 0), the `first` ones alone in pass 0, in ascending order
- * in `out`. Returns how many. Block numbers and not buffers: a write of the
- * batch sleeps, and a buffer let go of meanwhile can be given to another
- * block or to the heap.
+ * Gather the lowest `cap` dirty blocks of `dev` above block `after` (all of
+ * them when `started` is 0), the `first` ones alone in pass 0, in ascending
+ * order in `out`. Returns how many. Block numbers and not buffers: a write
+ * of the batch sleeps, and a buffer let go of meanwhile can be given to
+ * another block or to the heap.
  *
  * The batch is gathered in a max-heap, its highest block at `out[0]`, so a
  * block below that one takes its place in at most log2(cap) steps and a
- * block above it costs one comparison. The dirty list has its newest buffer
- * first, so a file written in order lists its blocks in descending order,
- * and an insertion sort shifted the whole batch for each of them.
+ * block above it costs one comparison, and then sorted in place. The dirty
+ * list has its newest buffer first, so a file written in order lists its
+ * blocks in descending order, and each of them would shift a sorted batch
+ * whole.
  */
 static int gather_dirty(block_device_t *dev, int pass, int started, uint64_t after, uint64_t *out,
                         int cap)
@@ -1038,9 +1038,17 @@ static int gather_dirty(block_device_t *dev, int pass, int started, uint64_t aft
 
 static int sync_device(block_device_t *dev, int durable);
 
-/*
+/**
  * The writes of one pass of `bcache_sync`, from batches of `cap` blocks in
  * `batch`, as `sync_pass` describes.
+ *
+ * The batch is gathered again from the start when a scan past the last
+ * block written finds nothing, for what a wait passed over, and after every
+ * wait or write of the `first` buffers, which sleep and leave it stale. A
+ * block written, emptied or keyed again while the batch's writes slept is
+ * skipped. In pass 1, an `after` waits for a `first` another process
+ * holds, or has the firsts written first; -EIO when the only firsts left
+ * are ones whose writes failed.
  */
 static int sync_batches(block_device_t *dev, int pass, uint32_t flags, uint32_t first_flags,
                         uint64_t *batch, int cap)
@@ -1054,9 +1062,9 @@ static int sync_batches(block_device_t *dev, int pass, uint32_t flags, uint32_t 
         n = gather_dirty(dev, pass, started, last, batch, cap);
         if (n == 0) {
             if (!started) {
-                return 0; /* a scan from the start found nothing */
+                return 0;
             }
-            started = 0; /* again from the start, for what a wait passed over */
+            started = 0;
             continue;
         }
         for (i = 0; i < n; i++) {
@@ -1065,7 +1073,7 @@ static int sync_batches(block_device_t *dev, int pass, uint32_t flags, uint32_t 
 
             if (!next || !next->dirty || (pass == 0 && next->order != BCACHE_ORDER_FIRST) ||
                 (started && next->blk <= last)) {
-                continue; /* written, emptied or rekeyed while the batch's writes slept */
+                continue;
             }
             if (pass == 1 && next->order == BCACHE_ORDER_AFTER) {
                 struct bbuf *f = first_dirty(dev);
@@ -1074,7 +1082,7 @@ static int sync_batches(block_device_t *dev, int pass, uint32_t flags, uint32_t 
                     f->waiters++;
                     wq_wait_event_nointr(&f->wq, busy_gone, f);
                     f->waiters--;
-                    break; /* gathered again after the wait */
+                    break;
                 }
                 if (f) {
                     rc = write_firsts(dev);
@@ -1082,16 +1090,16 @@ static int sync_batches(block_device_t *dev, int pass, uint32_t flags, uint32_t 
                         return rc;
                     }
                     if (rc == 0) {
-                        return -EIO; /* the firsts left are ones whose writes failed */
+                        return -EIO;
                     }
-                    break; /* the firsts slept: gathered again */
+                    break;
                 }
             }
             if (next->holder != -1 && next->holder != caller_pid()) {
                 next->waiters++;
                 wq_wait_event_nointr(&next->wq, busy_gone, next);
                 next->waiters--;
-                break; /* the batch is stale after the wait: gathered again */
+                break;
             }
             if (next->holder == caller_pid()) {
                 k_panic("bcache: hold rule: a sync while holding a block of the device");
@@ -1108,7 +1116,7 @@ static int sync_batches(block_device_t *dev, int pass, uint32_t flags, uint32_t 
     }
 }
 
-/*
+/**
  * One pass of `bcache_sync`: the `first` buffers of `dev` in pass 0 and every
  * dirty one in pass 1, written with the request `flags`, except that a run of
  * `first` buffers is written with `first_flags`. Returns 0 or the first
@@ -1117,8 +1125,8 @@ static int sync_batches(block_device_t *dev, int pass, uint32_t flags, uint32_t 
  * The pass gathers every dirty block in one walk when the heap gives a batch
  * that holds them, since a run writes as many as 256 blocks and a batch of
  * 128 contiguous ones is spent by one run: with tens of thousands dirty, a
- * walk for each run was most of what a write-back cost. Without the room it
- * gathers `SYNC_BATCH` blocks a walk.
+ * walk for each run would read every dirty buffer for every run. Without
+ * the room it gathers `SYNC_BATCH` blocks a walk.
  */
 static int sync_pass(block_device_t *dev, int pass, uint32_t flags, uint32_t first_flags)
 {
@@ -1142,27 +1150,20 @@ static int sync_pass(block_device_t *dev, int pass, uint32_t flags, uint32_t fir
     return rc;
 }
 
-/**
- * Write `dev`'s dirty buffers: its `first` buffers in the first pass and
- * everything dirty in the second, each pass in ascending block order, the
- * blocks taken in gathered batches. A `first` dirtied while the second
- * pass slept is written before the next `after` of the device, whatever
- * their block numbers, so the order the marks promise holds across the
- * writes' sleeps; a `first` another process holds is waited for.
- *
- * Any dirty buffer another process holds is waited for, not passed over: a
- * sync that returned over one would report clean what is still in flight.
- * The place reached is kept as a block number, since a buffer let go of
- * during a wait can be given to another block. A sync is called with
- * nothing held, of this device or of any other that would forbid writing
- * it; a caller that breaks that panics.
+/*
+ * A `first` dirtied while the second pass slept is written before the next
+ * `after` of the device, whatever their block numbers, so the order the
+ * marks promise holds across the writes' sleeps. A dirty buffer another
+ * process holds is waited for, not passed over, since a sync that returned
+ * over one would report clean what is still in flight. The place reached is
+ * kept as a block number, since a buffer let go of during a wait can be
+ * given to another block.
  *
  * On a write-through disk a `first` buffer is written with the disk's flush,
  * so it is on the medium before an `after` is written, by this sync, another
  * or a reclaim. The other writes leave the disk's cache to one flush at the
- * sync's end, where a flush after every write was made before; that flush
- * makes the sync durable when it returns, even when a write failed, and its
- * own failure is recorded against the device as a failed write is.
+ * sync's end, which makes the sync durable when it returns, even when a
+ * write failed.
  */
 int bcache_sync(block_device_t *dev)
 {
@@ -1174,15 +1175,16 @@ int bcache_sync_unflushed(block_device_t *dev)
     return sync_device(dev, 0);
 }
 
-/* `bcache_sync`, durable with `durable` set; without it every write leaves
- * the disk's cache to the caller's next flush, in the order written. */
+/** `bcache_sync`, durable with `durable` set, when a run of `first` buffers
+ * is written with the disk's flush and the sync ends with one; without it
+ * every write leaves the disk's cache to the caller's next flush, in the
+ * order written. */
 static int sync_device(block_device_t *dev, int durable)
 {
     int through = (block_flags(dev) & BLOCK_WRITE_THROUGH) != 0;
     uint32_t flags = through ? BLOCK_REQ_NOFLUSH : 0;
     int rc, flushed;
 
-    /* A durable sync writes a run of firsts with the disk's flush. */
     rc = sync_pass(dev, 0, flags, durable ? 0 : flags);
     if (rc == 0) {
         rc = sync_pass(dev, 1, flags, durable ? 0 : flags);
@@ -1233,13 +1235,10 @@ int bcache_device_holds(block_device_t *dev)
     return held;
 }
 
-/**
- * Give back up to `want` buffers: empty ones first, then clean ones oldest
- * first, then, with `can_write`, dirty ones written back where this caller
- * may write them. A buffer a process waits for is left, woken or not, since
- * the waiter has its address. Each pass has a budget, so a buffer dirtied
- * again as fast as it is written cannot keep the shrink here.
- */
+/* A buffer a process waits for is left, woken or not, since the waiter has
+ * its address; so is one dirtied again or waited for while its write slept.
+ * Each pass has a budget, so a buffer dirtied again as fast as it is written
+ * cannot keep the shrink here. */
 uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written)
 {
     uint32_t got = 0;
@@ -1276,14 +1275,14 @@ uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written)
                 int rc;
 
                 if (victim->order == BCACHE_ORDER_AFTER && write_firsts(victim->dev) != 0) {
-                    continue; /* the firsts went out, or one failed: scan again */
+                    continue;
                 }
                 hold(victim);
                 rc = write_buffer(victim);
                 unhold(victim);
                 wq_wake_all(&victim->wq);
                 if (rc != 0 || victim->dirty || victim->waiters > 0) {
-                    continue; /* failed, dirtied again, or waited for meanwhile */
+                    continue;
                 }
                 (*written)++;
             }

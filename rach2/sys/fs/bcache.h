@@ -76,9 +76,17 @@ struct bbuf {
     struct bbuf *dirty_next;
 };
 
-/** Find or read block `blk` of `dev`; returns it held, or NULL on a failed
- * read or an unwritable full cache. May sleep on a sleeping device or a busy
- * buffer. */
+/**
+ * Find or read block `blk` of `dev` and hold it.
+ *
+ * A miss on the block after the last one read from the device reads a run
+ * of the blocks that follow with it. May sleep on the device, on a busy
+ * buffer and on the write of a dirty victim, and panics when the caller
+ * breaks a hold rule.
+ *
+ * @return the buffer, held; NULL for a block past the device's end, a
+ *         failed read, or a full cache with no buffer it may write.
+ */
 struct bbuf *bcache_get(block_device_t *dev, uint64_t blk);
 
 /**
@@ -91,10 +99,13 @@ struct bbuf *bcache_get(block_device_t *dev, uint64_t blk);
  */
 struct bbuf *bcache_get_blank(block_device_t *dev, uint64_t blk);
 
-/** Let a held buffer go and wake whoever waits for it. */
+/** Let a held buffer go and wake whoever waits for it; it becomes the most
+ * recently released. A buffer of a device that went while it was held is
+ * dropped. Panics when the caller does not hold it. */
 void bcache_release(struct bbuf *b);
 
-/** Mark a held buffer for writeback. A place it already has stays. */
+/** Mark a held buffer for writeback. A place it already has stays. Panics
+ * when the caller does not hold it. */
 void bcache_dirty(struct bbuf *b);
 
 /**
@@ -112,8 +123,14 @@ void bcache_dirty(struct bbuf *b);
  */
 void bcache_dirty_ordered(struct bbuf *b, int order);
 
-/** Write a held buffer through to the device now; 0 with the buffer clean,
- * or the write's -errno with it dirty and the failure recorded. */
+/**
+ * Write a held buffer through to the device now.
+ *
+ * @return 0 with the buffer clean; the write's -errno with it dirty and the
+ *         failure recorded; or -EROFS without a write once a write on the
+ *         device has failed, so that an operation in progress when the
+ *         device failed stops at its next metadata write.
+ */
 int bcache_write(struct bbuf *b);
 
 /**
@@ -126,10 +143,20 @@ int bcache_write(struct bbuf *b);
  */
 int bcache_write_unflushed(struct bbuf *b);
 
-/** Write `dev`'s dirty buffers, the `first` ones in a pass of their own
- * and then the rest, each pass in ascending block order and a `first`
- * dirtied meanwhile still before the next `after`; 0, or the first write's
- * -errno with that buffer and the rest still dirty for the next call. */
+/**
+ * Write `dev`'s dirty buffers, the `first` ones in a pass of their own and
+ * then the rest, each pass in ascending block order and in runs, with a
+ * `first` dirtied meanwhile still before the next `after`, and on a
+ * write-through disk end with a flush.
+ *
+ * A dirty buffer another process holds is waited for. The caller holds no
+ * buffer of the device, and none that would forbid writing it; a caller
+ * that does panics. A failed flush is recorded against the device as a
+ * failed write is.
+ *
+ * @return 0, or the first failure's -errno with that buffer and the rest
+ *         still dirty for the next call.
+ */
 int bcache_sync(block_device_t *dev);
 
 /** `bcache_sync` without the disk's flush: every write is answered and has
@@ -138,19 +165,19 @@ int bcache_sync(block_device_t *dev);
  * `block_flush`, a `bcache_sync` or a `bcache_write`. */
 int bcache_sync_unflushed(block_device_t *dev);
 
-/** Drop `dev`'s buffers at unmount; -EBUSY while any is held or dirty. */
+/** Drop `dev`'s buffers at unmount and clear its failed-write mark; -EBUSY,
+ * with nothing dropped, while any is held or dirty. */
 int bcache_invalidate(block_device_t *dev);
 
 /**
- * The device has gone: deal with every buffer that names it.
+ * The device has gone: record it as failed, which takes its mounts
+ * read-only, mark it gone, and deal with every buffer that names it.
  *
- * A clean buffer nobody holds is dropped at once. A dirty one has nowhere
- * left to be written, so the device is recorded as failed, which takes its
- * mounts read-only, and the buffer is dropped rather than kept dirty
- * forever, since an unmount waits for the dirty ones to go. One a process
- * holds is marked to be dropped at its release, because the holder is asleep
- * in a request that is about to fail and its buffer must not be handed to
- * anyone else in the meantime.
+ * A buffer nobody holds is dropped at once, a dirty one too, since it has
+ * nowhere left to be written and an unmount waits for the dirty ones to
+ * go. One a process holds is marked to be dropped at its release, because
+ * the holder is asleep in a request that is about to fail and its buffer
+ * must not be handed to anyone else in the meantime.
  */
 void bcache_device_gone(block_device_t *dev);
 
@@ -159,9 +186,10 @@ int bcache_device_holds(block_device_t *dev);
 
 /**
  * Give back up to `want` buffers, each a frame: empty ones, then clean
- * ones oldest first, then, with `can_write`, dirty ones written back, which
- * sleeps. A buffer a process waits for is left alone. Returns how many
- * went; `*written` counts the writebacks.
+ * ones oldest first, then, with `can_write`, dirty ones written back where
+ * the caller may write them, which sleeps. A buffer a process holds or
+ * waits for is left alone. Returns how many went; `*written` is increased
+ * by the writebacks.
  */
 uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written);
 
@@ -177,12 +205,17 @@ int bcache_dirty_heavy(void);
 /** Fix the most buffers the cache makes, for a test; 0 restores the rule. */
 void bcache_set_limit(uint32_t n);
 
-/* Counters for /proc/disk: reads served from the cache, reads from the
- * device, waits for a busy buffer, and the buffers the cache's walks of its
- * lists have read, which is what its bookkeeping costs. */
+/** Gets served from the cache, for /proc/disk. */
 uint64_t bcache_stat_hits(void);
+
+/** Blocks read from a device into the cache, for /proc/disk. */
 uint64_t bcache_stat_fills(void);
+
+/** Waits for a busy buffer, for /proc/disk. */
 uint64_t bcache_stat_waits(void);
+
+/** The buffers the cache's walks of its lists have read, which is what its
+ * bookkeeping costs, for /proc/disk. */
 uint64_t bcache_stat_visits(void);
 
 #endif
