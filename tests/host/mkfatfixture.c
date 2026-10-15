@@ -94,11 +94,15 @@
 static unsigned char *img;
 static unsigned char *fat, *fat2;
 static const char *opt = "";
+static int opt_known; /* nonzero once `is` has matched the option given */
 
 /** Whether the option given is `name`. */
 static int is(const char *name)
 {
-    return strcmp(opt, name) == 0;
+    if (strcmp(opt, name) != 0)
+        return 0;
+    opt_known = 1;
+    return 1;
 }
 
 /** Store `v` at `p` as a little-endian 16-bit field. */
@@ -920,8 +924,8 @@ static int build_fat(const char *option)
                                    "saved_entry=candidate\n";
     unsigned char env[1024];
 
-    if (option)
-        opt = option;
+    opt = option ? option : "";
+    opt_known = 0;
 
     spc = (is("--cluster8") || is("--cluster8-past-end")) ? 8 : DEFAULT_SPC;
     cbytes = spc * SECTOR;
@@ -1038,7 +1042,7 @@ static int build_fat(const char *option)
         w32(fat + (kernel_first + 3) * 4, 0); /* the first FAT is wrong */
     memcpy(img + (size_t)RESERVED * SECTOR, fat, (size_t)FATSZ * SECTOR);
     memcpy(img + (size_t)(RESERVED + FATSZ) * SECTOR, fat2, (size_t)FATSZ * SECTOR);
-    if (strncmp(opt, "--dirty", 7) == 0) {
+    if (is("--dirty") || strncmp(opt, "--dirty-", 8) == 0) {
         w32(fat + 4, le32_of(fat + 4) & ~0x08000000u);
         w32(fat2 + 4, le32_of(fat2 + 4) & ~0x08000000u);
         bpb[65] |= 1;
@@ -1301,13 +1305,29 @@ static int build_fat(const char *option)
 }
 
 /**
+ * Build the volume for `option` as `build_fat` does, and refuse an option
+ * no part of the build asks for, which is not one the maker knows. Returns
+ * 0, or 2.
+ */
+static int build_known(const char *option)
+{
+    int err = build_fat(option);
+
+    if (err == 0 && opt[0] != '\0' && !opt_known) {
+        fprintf(stderr, "mkfatfixture: unknown option %s\n", opt);
+        return 2;
+    }
+    return err;
+}
+
+/**
  * Build the volume for `option` for a caller that holds it in memory, such
  * as a fuzz harness: the image, with its length in `bytes`, or NULL when
  * memory runs out.
  */
 unsigned char *mkfatfixture_build(const char *option, unsigned long *bytes)
 {
-    if (build_fat(option) != 0) {
+    if (build_known(option) != 0) {
         return NULL;
     }
     *bytes = (unsigned long)TOTAL * SECTOR;
@@ -1342,7 +1362,7 @@ int main(int argc, char **argv)
                         "[offset-sectors] [--list]\n");
         return 2;
     }
-    if (build_fat(argc == 3 ? argv[2] : 0) != 0) {
+    if (build_known(argc == 3 ? argv[2] : 0) != 0) {
         return 2;
     }
     f = fopen(argv[1], "wb");
