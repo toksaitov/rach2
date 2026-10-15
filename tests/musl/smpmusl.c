@@ -119,12 +119,17 @@ static int count_lines(const char *path, const char *prefix)
     return n;
 }
 
-/** Whether /proc/stat has a line that begins with `name` and a space. */
+/**
+ * Whether /proc/stat has a line that begins with `name` and a space.
+ * Returns -1, which matches neither answer, when `name` is too long to check.
+ */
 static int stat_has(const char *name)
 {
     char prefix[16];
 
-    snprintf(prefix, sizeof(prefix), "%s ", name);
+    if (snprintf(prefix, sizeof(prefix), "%s ", name) >= (int)sizeof(prefix)) {
+        return -1;
+    }
     return count_lines("/proc/stat", prefix) == 1;
 }
 
