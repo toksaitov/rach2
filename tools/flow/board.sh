@@ -16,10 +16,10 @@
 # page of the answer is lost, `next` prints nothing and fails, so that a caller
 # does not take a part of the board for the whole.
 #
-# `take N` assigns N to this account and sets it In progress, then reads the
-# issue's timeline. When another account is assigned too and was assigned
-# first, it unassigns this account and exits 1, so that no issue has two
-# writers.
+# `take N` assigns N to this account, sets it In progress, and reads the
+# issue's timeline. Of the accounts assigned now, the one whose latest
+# assignment is the earliest keeps the issue. When that is another account,
+# `take` unassigns this one and exits 1, so that no issue has two writers.
 #
 # `mine N` prints `yes` while N is open and assigned to this account and `no`
 # otherwise; it prints nothing and fails when GitHub cannot be reached, so
@@ -103,18 +103,39 @@ next()
             $1 == "Ready" { r = r $2 "\t" $3 "\n" } END { printf "%s", r }'
 }
 
+# first N: print the account, of those assigned to N now, whose latest
+# assignment is the earliest, the lesser login on a tie, or the one account
+# assigned when the timeline does not show its assignment yet.
+first()
+{
+    now=$(gh issue view "$1" --repo "$REPO" --json assignees --jq '.assignees[].login') ||
+        return 1
+    events=$(gh api --paginate "repos/$REPO/issues/$1/timeline" \
+        --jq '.[] | select(.event == "assigned") | "\(.created_at) \(.assignee.login)"') ||
+        return 1
+    printf '%s\n' "$events" | awk -v now="$(printf '%s\n' "$now" | tr '\n' ' ')" '
+        BEGIN { n = split(now, a, " "); for (i = 1; i <= n; i++) cur[a[i]] = 1 }
+        ($2 in cur) { last[$2] = $1 }
+        END {
+            for (l in last)
+                if (who == "" || last[l] < last[who] ||
+                    (last[l] == last[who] && l < who))
+                    who = l
+            if (who == "" && n == 1)
+                who = a[1]
+            print who
+        }'
+}
+
 take()
 {
     me=$(gh api user --jq .login)
     gh issue edit "$1" --repo "$REPO" --add-assignee "$me" > /dev/null
     set_status "$1" "In progress"
-    now=$(gh issue view "$1" --repo "$REPO" --json assignees --jq '.assignees[].login' | tr '\n' ' ')
-    first=$(gh api --paginate "repos/$REPO/issues/$1/timeline" \
-        --jq '.[] | select(.event == "assigned") | .assignee.login' |
-        awk -v now=" $now" 'index(now, " " $0 " ") { print; exit }')
-    if [ "$first" != "$me" ]; then
+    who=$(first "$1")
+    if [ "$who" != "$me" ]; then
         gh issue edit "$1" --repo "$REPO" --remove-assignee "$me" > /dev/null
-        echo "board: #$1: taken by $first first" >&2
+        echo "board: #$1: taken by $who first" >&2
         exit 1
     fi
 }
