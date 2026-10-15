@@ -1,8 +1,9 @@
 /*
  * The file system arm of the system call layer: descriptors, paths and the
  * credential model, open, read and write, the stat family, links, mounts
- * and directories. Registered by syscall.c; what it shares with the other
- * arms is in syscall_internal.h.
+ * and directories. Its handlers are entered in the table by
+ * `arch_syscall_init` (arch/i686/systab.c, arch/x86_64/systab.c); what it
+ * shares with the other arms is in syscall_internal.h.
  */
 #include "arch/uabi.h"
 #include "../kernel.h"
@@ -75,11 +76,13 @@
 #include "timer.h"
 #include "syscall_internal.h"
 
-/* The pool backing FD_TYPE_SYNTH_DIR descriptors. A 32-bit pid does not fit
- * packed in the fd's priv pointer alongside the kind without truncation, so the
- * (kind, pid, tid) live here (struct synth_dir is in synthfs.h); priv points at
- * a record from the heap, freed when the last descriptor referencing it closes
- * (see fd_release_backing). */
+/**
+ * A record from the heap of the synthetic directory an FD_TYPE_SYNTH_DIR
+ * descriptor is open on, or NULL when the heap has no room. The kind, a
+ * 32-bit pid and the tid do not fit in the descriptor's `priv` pointer, so
+ * `priv` points at the record (struct synth_dir, synthfs.h), which the
+ * release of the description's last reference frees (`fd_release_objects`).
+ */
 static struct synth_dir *synth_dir_alloc(int kind, int pid, int tid)
 {
     struct synth_dir *sd = kzalloc(sizeof(*sd));
@@ -93,8 +96,12 @@ static struct synth_dir *synth_dir_alloc(int kind, int pid, int tid)
     return sd;
 }
 
-/** The classified path of the synthetic directory a descriptor's record `sd`
- * is of, or of no entry for a descriptor with no record. */
+/**
+ * Fill `vp` with the classified path of the synthetic directory whose record
+ * is `sd`, or with VNODE_ENOENT when `sd` is NULL. A directory of /proc/sys
+ * has its entry in the record's `pid`, and a directory of /sys its node and
+ * device in `pid` and `tid`; `vp` has them in `sysent` and `syskey`.
+ */
 static void synth_dir_vpath(const struct synth_dir *sd, struct vpath *vp)
 {
     k_memset(vp, 0, sizeof(*vp));
@@ -126,7 +133,8 @@ static void synth_dir_vpath(const struct synth_dir *sd, struct vpath *vp)
  * the scan never touches the page-cache window, and the node's own mode is
  * the one read of it. A descriptor in flight on an AF_UNIX socket, a file
  * mapping and an address space that runs the file as its program hold the
- * node as a descriptor does, and count as one holder more. The ends of a FIFO
+ * node as a descriptor does; any number of them counts as one holder more,
+ * since every caller asks only whether there is a holder. The ends of a FIFO
  * hold it too, by their descriptions, whose descriptors name a pipe and no
  * node: every description of the FIFO counts, `except`'s only when a
  * descriptor besides it keeps it, since the FIFO's pipe is found by the
@@ -160,11 +168,13 @@ static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
 }
 
 /**
- * Free `node`, an orphan of the KRFFS root whose last holder is `e`, once the
- * locks the description of `e` owns are gone. A lock of the root is keyed by
- * its node's place (`fd_lock_key`), and a node the allocator makes there
- * later must meet none of them; the description's own end drops them only
- * after this, when `fd_free` lets its last reference go.
+ * Free `node`, an orphan of the KRFFS root whose last holder is `e`, after
+ * dropping the record locks of the description of `e` when `e` has its last
+ * reference. A lock of the root is keyed by its node's place
+ * (`fd_lock_key`), and a node the allocator makes there later must meet none
+ * of them; the description's own end drops them only after this, when
+ * `fd_free` lets its last reference go. The caller holds the root's
+ * namespace lock (`fd_release_lock`).
  */
 static void fd_free_orphan(const fd_entry_t *e, krffs_node_t *node)
 {
@@ -178,7 +188,8 @@ static void fd_free_orphan(const fd_entry_t *e, krffs_node_t *node)
  * Free the node of a FIFO of the KRFFS root that lost its name while open,
  * when `e`, an end of it or the reservation of an open of it that did not
  * finish, is the last to hold it: the release of a file's last descriptor
- * frees its orphan, and a FIFO's ends are its descriptors.
+ * frees its orphan, and a FIFO's ends are its descriptors. The caller holds
+ * the root's namespace lock.
  */
 static void fd_fifo_orphan(const fd_entry_t *e)
 {
@@ -199,8 +210,9 @@ static void fd_fifo_orphan(const fd_entry_t *e)
  * Take the lock the release of `e`, a descriptor or a copy of one, needs when
  * the release may free a node of the KRFFS root that lost its name: the
  * root's namespace lock, for a file of the root, or for an end of a FIFO of
- * the root or the reservation of an open of one. The mount locked, or NULL,
- * with nothing taken, for any other descriptor.
+ * the root or the reservation of an open of one. Returns the mount locked,
+ * which the caller unlocks (`vfs_ns_unlock`) once the release is done, or
+ * NULL, with nothing taken, for any other descriptor.
  *
  * The unlink and the rename of a file hold that lock while they count its
  * holders and take its name, and every allocation on the root holds it, so
@@ -263,11 +275,13 @@ static void fd_release_orphan(fd_entry_t *e)
 }
 
 /**
- * Whether any descriptor anywhere has `node`. For callers outside this file.
+ * Whether anything holds the KRFFS root node `node`: a descriptor, an end of
+ * a FIFO, a descriptor in flight, a file mapping or the address space of a
+ * program (`fd_node_holders`).
  *
- * The debug shell removes and renames through the file system directly, below
- * the syscall layer that owns the holder rule, so it asks here rather than
- * carrying its own copy of the answer.
+ * The debug shell removes and renames through the file system directly,
+ * below the system call layer, which keeps the rule that a held node is
+ * orphaned and not freed, so it asks here and keeps no copy of the rule.
  */
 int fs_node_is_held(const krffs_node_t *node)
 {
@@ -275,11 +289,12 @@ int fs_node_is_held(const krffs_node_t *node)
 }
 
 /**
- * Repoint every holder from one node to another, for callers outside this
- * file. The debug shell writes through the file system directly, and a write
- * that grows a file past its extent relocates it; the sweep over
- * descriptors, descriptions, working directories and mounts belongs to the
- * VFS, which is the one place that knows every holder kind.
+ * Move every reference to the KRFFS root node `from` to `to`, where the
+ * file now is; nothing when `from` is NULL or is `to`. The debug shell
+ * writes through the file system directly, and a write that grows a file
+ * past its extent relocates it. The sweep over descriptors, descriptions,
+ * working directories and roots, mounts, loop devices and locks is the
+ * VFS's (`vfs_repoint`), the one place that knows every kind of holder.
  */
 void fs_node_moved(const krffs_node_t *from, krffs_node_t *to)
 {
@@ -362,42 +377,39 @@ static void fd_close_locks(const fd_entry_t *e)
 }
 
 /**
- * Release every backing reference a descriptor holds before its slot is
- * freed, the table's record locks apart.
+ * Release what the descriptor `e` holds besides its slot and the table's
+ * record locks: a node of the KRFFS root that lost its name and has `e` as
+ * its last holder, the record of a synthetic directory, the classified path
+ * an O_PATH descriptor of a /dev or /proc leaf keeps, the framebuffer, the
+ * descriptor's socket reference, and an object with operations (a pipe, a
+ * terminal, a pty). Every release of a descriptor comes here, most by
+ * `fd_release_backing`, so none can miss a kind of backing; the caller frees
+ * the slot with `fd_free`. May sleep.
  *
- * Drops framebuffer ownership, the per-fd socket reference, and an ops-backed
- * object (pipe/tty/pty). Every fd-teardown site routes through this, most of
- * them by `fd_release_backing`, so none can forget a backing kind as new ones
- * are added. It does NOT free the slot; the caller does that with fd_free.
+ * The record, the path, the framebuffer and an object with operations
+ * belong to the open-file description, which dup, dup2 and fork share by
+ * its reference count, so each is released once, when the description's
+ * last descriptor closes (`refcount` 1 here, before `fd_free` drops it).
+ * The framebuffer goes back to text mode only when the caller's process
+ * owns it, so a child that inherited the descriptor and closes it or exits
+ * does not end its parent's graphics mode. The socket reference is counted
+ * for each descriptor (`socket_ref` on dup and fork) and is dropped every
+ * time. No descriptor is both an object with operations and a socket.
  *
- * An ops-backed object rides the shared open-file description: dup/dup2/fork
- * copy the ops/priv pointers and bump the OFD refcount, so the object must
- * be released exactly once, when its LAST descriptor closes (the final OFD
- * reference, refcount about to reach 0). The socket reference, by contrast,
- * is counted per descriptor (socket_ref on dup/fork), so it is always
- * dropped here. No descriptor is both an ops object and a socket.
- *
- * A KRFFS node is a backing kind like any other here. An orphan, a reserved
- * node no path names, is freed by its last holder, under the root's
- * namespace lock (`fd_release_orphan`), and this runs while the closing
- * slot is still populated, which is what the count's `except` is for: the
- * closing descriptor is skipped, not cleared first, so it is counted by
- * every other release until its own has the lock.
+ * An orphan, a reserved node no path names, is freed by its last holder,
+ * under the root's namespace lock (`fd_release_orphan`). This runs while
+ * the closing slot is still populated, which is what the count's `except` is
+ * for: the closing descriptor is skipped where it is, so every other release
+ * counts it until its own has the lock.
  */
 static void fd_release_objects(fd_entry_t *e)
 {
     fd_release_orphan(e);
-    /* A synthetic directory fd's pooled cookie, or an O_PATH leaf's node, is
-     * freed when its last descriptor closes (dup/fork share it via the OFD
-     * refcount, like an ops backing). */
     if ((e->type == FD_TYPE_SYNTH_DIR || e->type == FD_TYPE_SYNTH_PATH) && e->priv && e->ofd &&
         e->ofd->refcount == 1) {
         kfree(e->priv);
         e->priv = NULL;
     }
-    /* Restore text mode only if THIS process actually owns the framebuffer, so
-     * a fork child that merely inherited the fb descriptor cannot clear the
-     * parent's graphics mode when the child closes the fd or exits. */
     if (e->type == FD_TYPE_FRAMEBUFFER && current_proc && fb_owner_pid == current_proc->tgid &&
         e->ofd && e->ofd->refcount == 1) {
         fb_exit();
@@ -412,11 +424,13 @@ static void fd_release_objects(fd_entry_t *e)
 }
 
 /**
- * Release every backing reference a descriptor holds before its slot is
- * freed (`fd_release_objects`), and first, for a close of a descriptor of
- * the calling thread's table, the table's record locks on the file
- * (`fd_close_locks`): the close, the dup2 replacement of an open target, the
- * execve CLOEXEC sweep, and the release of the table by its last sharer.
+ * Release what the descriptor `e` holds before its slot is freed: first,
+ * for a descriptor of the calling thread's table, the table's record locks
+ * on what it is open on (`fd_close_locks`), then its objects
+ * (`fd_release_objects`). The caller frees the slot with `fd_free`. The
+ * close, the dup2 replacement of an open target, the execve CLOEXEC sweep
+ * and the release of a table by its last sharer come here. Nothing when `e`
+ * is NULL. May sleep.
  */
 void fd_release_backing(fd_entry_t *e)
 {
@@ -525,7 +539,8 @@ static struct open_file *ops_offset_held(fd_entry_t *entry)
 }
 
 /** Dispatch an ops-backed write, holding the description of one whose write
- * uses its offset (`ops_offset_held`). */
+ * uses its offset (`ops_offset_held`); -EBADF for a descriptor not open for
+ * writing or an object without a write. */
 static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t count)
 {
     struct open_file *held = ops_offset_held(entry);
@@ -571,24 +586,28 @@ static int32_t fsize_refused(uint64_t end)
  * which moves past what was written, or at `*at` for pwrite64, which leaves
  * it where it was.
  *
+ * Returns the bytes written, or a negative errno: -EBADF for a descriptor
+ * not open for writing or not on a file of a mount, -EFAULT, -EBUSY, -EFBIG,
+ * or the file system's error. Takes the description's lock, and the mount's
+ * namespace lock for a file shared mappings hold; may sleep.
+ *
  * With O_APPEND every write lands at the current end of the file, whatever
  * the offset says and whatever `at` asks for, as Linux's pwrite does. The
  * file system reads the user buffer directly, so its pages are range-checked
  * and faulted in first. A file that backs a loop device is reached through
  * that device and nowhere else, since the file system mounted on it may not
- * have its image change underneath: that is asked before the description is
- * locked, since a return from under the lock leaves a description nobody can
- * use again, and again under it, since an attachment can publish itself
- * while this call waits for the lock. Only a write that moved bytes disarms
- * the set-id bits, through the node as the write left it (a grow relocates a
- * KRFFS file and repoints every holder), and a privileged writer is exempt:
- * that is the CAP_FSETID analogue, without which any root process disarms
- * /bin/su by rewriting it. A file whose pages shared mappings hold in memory
- * has the bytes written copied into them under the mount's namespace lock,
- * held from before the write, so that no write-back of the pages comes
- * between the two (`filemap_file_written`). Under RLIMIT_FSIZE a write that
- * would pass the limit writes what fits, and one that starts at it fails
- * (`fsize_refused`).
+ * have its image change underneath, and is -EBUSY: that is asked before the
+ * description is locked and again under the lock, since an attachment can
+ * publish itself while this call waits for the lock. Only a write that moved
+ * bytes disarms the set-id bits, through the node as the write left it (a
+ * grow relocates a KRFFS file and repoints every holder), and a privileged
+ * writer is exempt: that is the CAP_FSETID analogue, without which any root
+ * process disarms /bin/su by rewriting it. A file whose pages shared
+ * mappings hold in memory has the bytes written copied into them under the
+ * mount's namespace lock, held from before the write, so that no write-back
+ * of the pages comes between the two (`filemap_file_written`). Under
+ * RLIMIT_FSIZE a write that would pass the limit writes what fits, and one
+ * that starts at it fails (`fsize_refused`).
  */
 static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t count,
                           const uint64_t *at)
@@ -664,10 +683,29 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
 /**
  * Write `count` bytes of user buffer `buf` to descriptor `fd`.
  *
- * The shared body of write(2) and writev(2). Dispatches by backing kind: an
- * ops-backed object (pipe/tty/pty/device) through its vtable, a socket to the
- * network, the console through the tty output processor, a KRFFS file, or the
- * framebuffer. Returns the bytes written or a negative errno.
+ * The shared body of write(2) and of each element of writev(2). Returns the
+ * bytes written or a negative errno: -EBADF for a descriptor that is not
+ * open, not open for writing, or of a kind with no write.
+ *
+ * It dispatches by backing kind. An object with operations (a pipe, a
+ * terminal, a pty, a device) writes through them once `write_ops` has
+ * checked that the descriptor was opened for writing, as Linux does. A stream
+ * socket's send copies from the user buffer itself and sleeps for room in
+ * its ring unless the description is non-blocking. A datagram socket sends
+ * to the peer it connected to, -EDESTADDRREQ without one, and a datagram
+ * past 1500 bytes is -EMSGSIZE; a socket of another type is -EOPNOTSUPP.
+ * A file of a mount or of the KRFFS root is `file_write`'s. The framebuffer
+ * takes at most its size, copied in and shown (`fb_present`), and is -EBADF
+ * outside graphics mode.
+ *
+ * The console takes the bytes in pieces through a 256-byte kernel buffer and
+ * writes them through the terminal's output processing (OPOST and ONLCR, so
+ * a bare newline becomes CR LF on the screen and on the serial line). A
+ * fault on the user buffer returns the bytes already written, or -EFAULT
+ * when there are none. A process of a background group of the console's
+ * session writes freely unless TOSTOP is set; with it set, the call is -EIO
+ * when SIGTTOU is blocked or ignored, and otherwise SIGTTOU goes to the
+ * process group and the call is -EINTR.
  */
 static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
 {
@@ -682,10 +720,6 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         return -EBADF;
     }
 
-    /* Backing-ops object (pipe/tty/pty/device): dispatch through its vtable,
-     * but only if the descriptor was opened for writing (a read-only fd ->
-     * -EBADF, as Linux reports). The plain file and enum types below have no
-     * ops and fall through to the enum dispatch. */
     if (entry->ops) {
         return write_ops(entry, buf, count);
     }
@@ -698,14 +732,9 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
             if (!user_buffer_ok((uintptr_t)buf, count, 0)) {
                 return -EFAULT;
             }
-            /* socket_tcp_send copies the user buffer into the socket send ring
-             * itself, blocking on send-ring space unless the fd is
-             * non-blocking; __force strips the __user tag at this boundary. */
             return socket_tcp_send(entry->sock, (const uint8_t __force *)buf, (int)count,
                                    entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
         }
-        /* A datagram socket writes to the peer it connected to, and has
-         * nowhere to send without one. */
         if (entry->sock->type == SOCK_DGRAM) {
             if (!entry->sock->connected) {
                 return -EDESTADDRREQ;
@@ -727,13 +756,9 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         uint32_t done = 0;
 
         if (!(entry->flags & FD_FLAG_WRITE)) {
-            return -EBADF; /* Not writable (e.g., stdin) */
+            return -EBADF;
         }
 
-        /* A background process writing its controlling terminal is stopped with
-         * SIGTTOU only when TOSTOP is set (otherwise background output is
-         * allowed). As with SIGTTIN, a blocked/ignored SIGTTOU makes it -EIO
-         * instead. */
         if ((console_tty.ldisc.tio.c_lflag & TOSTOP) &&
             tty_is_background(&console_tty, (int)current_proc->sid, (int)current_proc->pgid)) {
             if ((current_proc->sig_blocked & KSIG_BIT(SIGTTOU)) ||
@@ -744,13 +769,6 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
             return -EINTR;
         }
 
-        /* Pull the user bytes in through a small kernel bounce buffer, then
-         * emit from kernel memory through the tty output processor
-         * (OPOST/ONLCR, so a bare '\n' becomes CR LF on both the VGA screen and
-         * the serial line), looping until count bytes are done. A bad user
-         * pointer yields -EFAULT only if nothing has been written yet
-         * (otherwise report the bytes already emitted, matching the
-         * return-count convention). */
         while (done < count) {
             uint32_t chunk = count - done;
 
@@ -774,7 +792,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         uint32_t to_copy;
 
         if (!gfx_is_active()) {
-            return -EBADF; /* Not in graphics mode */
+            return -EBADF;
         }
 
         to_copy = count;
@@ -797,14 +815,22 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
 static int size_guarded(struct vfs_mount *mnt, void *node);
 
 /**
- * Truncate an open file to `length` (ftruncate(2)).
+ * Truncate or extend the open file `fd` to `length` bytes: the core of
+ * ftruncate(2) and of i386's ftruncate64, the form musl calls there, whose
+ * handlers give it the length whole; the file system answers a length past
+ * what it can hold. Returns 0 or a negative errno: -EBADF for a descriptor
+ * that is not open on a file of a mount or is an O_PATH one, as on Linux;
+ * -EINVAL for one not open for writing; -EFBIG past RLIMIT_FSIZE, with
+ * SIGXFSZ sent (`fsize_refused`); -EPERM for an immutable or append-only
+ * file (`size_guarded`); -EBUSY for a file that backs a loop device; or the
+ * file system's error. May sleep.
  *
- * The descriptor must be a writable file on a mounted file system, and an
- * O_PATH one is -EBADF, as on Linux. A successful shrink or extend clears
- * set-uid, and set-gid where group execute is set, for an unprivileged
- * caller, like a write. The core of ftruncate(2) and of i386's
- * ftruncate64, the form musl calls there, whose handlers give it the length
- * whole; the file system answers a length past what it can hold.
+ * A change clears set-user-ID, and set-group-ID where group execute is set,
+ * for a caller without privilege, as a write does. Whether the file backs a
+ * loop device is asked before the description is locked and again under the
+ * lock, since an attachment can publish itself while this call waits for
+ * it. Shared mappings of the file lose the pages past the new end
+ * (`filemap_file_truncated`).
  */
 long ksys_ftruncate(int fd, uint64_t length)
 {
@@ -819,7 +845,7 @@ long ksys_ftruncate(int fd, uint64_t length)
         return -EBADF;
     }
     if (!(entry->flags & FD_FLAG_WRITE)) {
-        return -EINVAL; /* ftruncate wants a writable descriptor */
+        return -EINVAL;
     }
     if (!entry->ofd || !entry->ofd->vmnt) {
         return -EBADF;
@@ -830,14 +856,12 @@ long ksys_ftruncate(int fd, uint64_t length)
     if (size_guarded(entry->ofd->vmnt, entry->ofd->vnode)) {
         return -EPERM;
     }
-    /* Before the description is locked: a return from under that lock is a
-     * description nobody can use again. */
     if (loop_backs(entry->ofd->vmnt, entry->ofd->vnode)) {
         return -EBUSY;
     }
     fd_ofd_lock(entry->ofd);
     if (loop_backs(entry->ofd->vmnt, entry->ofd->vnode)) {
-        fd_ofd_unlock(entry->ofd); /* attached while this waited for the lock */
+        fd_ofd_unlock(entry->ofd);
         return -EBUSY;
     }
     rc = vfs_truncate(entry->ofd->vmnt, entry->ofd->fhandle, length);
@@ -858,14 +882,17 @@ long ksys_ftruncate(int fd, uint64_t length)
     return rc;
 }
 
-/** ftruncate(2): the descriptor and the length, in one register, so of 32
- * bits on i686, whose ftruncate64 is in arch/i686/sys_ia32.c. */
+/** ftruncate(2) takes fd and length, the length in one register, so of 32
+ * bits on i686, whose ftruncate64 is in arch/i686/sys_ia32.c; it returns as
+ * `ksys_ftruncate` does. */
 long sys_ftruncate(isr_params_t *params)
 {
     return ksys_ftruncate((int)SC_ARG(params, 0), (uint64_t)SC_ARG(params, 1));
 }
 
-/* write(2) takes fd, buf and count. */
+/** write(2) takes fd, buf and count, a count past Linux's MAX_RW_COUNT
+ * taken as that (`USER_RW_LEN`); the bytes written, or -errno
+ * (`write_fd`). */
 long sys_write(isr_params_t *params)
 {
     return write_fd((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1),
@@ -926,9 +953,12 @@ static int32_t writev_begin(int fd, uintptr_t iov_user, int iovcnt, struct vfs_m
 
 /**
  * Write the `iovcnt` elements of the vector at `iov_user` to `fd`, one at a
- * time, and return the bytes written. A fault, a length Linux refuses or a
- * failed write ends the call: with the error when nothing was written yet,
- * and otherwise with the bytes before it, as a short write does.
+ * time by `write_fd`, and return the bytes written. A short write ends the
+ * call, as writev does. A fault, a length past the signed 32-bit range or
+ * one that would carry the total past it (-EINVAL, as on Linux), or a failed
+ * write ends the call too: with the error when nothing was written yet, and
+ * otherwise with the bytes before it, as a short write does, since a caller
+ * that retried after the error would write those bytes again.
  */
 static int32_t writev_elements(int fd, uintptr_t iov_user, int iovcnt)
 {
@@ -939,9 +969,6 @@ static int32_t writev_elements(int fd, uintptr_t iov_user, int iovcnt)
     for (i = 0; i < iovcnt; i++) {
         int32_t r;
 
-        /* On any fault once bytes were already emitted, report the partial
-         * total (a caller that retried would otherwise duplicate output); only
-         * report the error itself when nothing has been written yet. */
         if (copy_from_user(
                 &iov, (const void __user *)(iov_user + (uint32_t)i * sizeof(struct kernel_iovec)),
                 sizeof(iov)) != 0) {
@@ -950,8 +977,6 @@ static int32_t writev_elements(int fd, uintptr_t iov_user, int iovcnt)
         if (iov.iov_len == 0) {
             continue;
         }
-        /* An individual length past the signed range, or a running total that
-         * would overflow it, is rejected as Linux does (-EINVAL). */
         if (iov.iov_len > 0x7FFFFFFFu || (uint32_t)total > 0x7FFFFFFFu - iov.iov_len) {
             return (total > 0) ? total : -EINVAL;
         }
@@ -965,7 +990,7 @@ static int32_t writev_elements(int fd, uintptr_t iov_user, int iovcnt)
         }
         total += r;
         if ((uint32_t)r < iov.iov_len) {
-            break; /* short write; stop, as writev does */
+            break;
         }
     }
 
@@ -976,7 +1001,9 @@ static int32_t writev_elements(int fd, uintptr_t iov_user, int iovcnt)
  * writev(2) takes fd, the vector and its count. The elements are written in
  * order (`writev_elements`); on a tmpfs file the mount's lock is held across
  * them, and a vector a seal refuses whole is refused before the first
- * (`writev_begin`).
+ * (`writev_begin`). Returns the bytes written, or a negative errno: -EINVAL
+ * for a count below 0 or past IOV_MAX_LOCAL, -EPERM for a vector the seal
+ * refuses, or the error of the first element.
  */
 long sys_writev(isr_params_t *params)
 {
@@ -1045,15 +1072,16 @@ long sys_writev(isr_params_t *params)
  * Put `base` and a slash in front of the relative path of `len` bytes in
  * `buf`, in place: the join of a directory and a name below it.
  *
- * `base` is "/" or "/a/b" with no trailing slash, and not inside `buf`.
- * Returns the new length, or -ENAMETOOLONG when the whole does not fit `size`.
+ * `base` is "/" or "/a/b" with no trailing slash, and not inside `buf`; the
+ * root puts the slash alone in front. Returns the new length, or
+ * -ENAMETOOLONG when the whole does not fit `size`.
  */
 static int path_prepend(char *buf, uint32_t size, uint32_t len, const char *base)
 {
     uint32_t blen = (uint32_t)k_strlen(base);
 
     if (blen <= 1) {
-        blen = 0; /* the root: the slash alone */
+        blen = 0;
     }
     if (blen + 1 + len + 1 > size) {
         return -ENAMETOOLONG;
@@ -1158,9 +1186,16 @@ static void collapse_dots(char *path)
     path[out] = '\0';
 }
 
+/**
+ * Remove the empty and "." components of the absolute path `path`, in
+ * place, and return its length. `path` begins with '/'; the result has no
+ * trailing slash unless it is "/". ".." stays in the path: the walk
+ * resolves it physically, where a missing or unsearchable directory before
+ * it fails, so no spelling of a path reaches past what the caller may see.
+ */
 int canonicalize_abs(char *path)
 {
-    int out = 1; /* path[0] is '/'; out is the current length */
+    int out = 1;
     const char *p = path + 1;
 
     while (*p) {
@@ -1182,9 +1217,6 @@ int canonicalize_abs(char *path)
         if (clen == 1 && comp[0] == '.') {
             continue;
         }
-        /* `..` stays in the path: it is resolved physically by the walk,
-         * where a missing or unsearchable directory before it fails, so a
-         * spelling can no longer reach past what the caller may see. */
         if (out > 1) {
             path[out++] = '/';
         }
@@ -1197,23 +1229,23 @@ int canonicalize_abs(char *path)
 }
 
 /**
- * Re-validate a descriptor's cached KRFFS node before a file operation.
+ * Check, before an operation on it, that the KRFFS root node the descriptor
+ * `entry` has is still a file the descriptor may use: 0, or -EBADF.
  *
- * A held node is never freed now, so this stops being an identity test and
- * becomes what it always was in fact, a resolution. Two shapes are live: an
- * orphan, which no path names and which nothing will free while this descriptor
- * holds it; and a named node, which must still resolve back to itself. Anything
- * else is a descriptor whose file went away by a route that did not consult the
- * holders, and stays -EBADF.
+ * A NULL node is the root directory, or a file of another type, and needs
+ * no check. Two shapes of node are live: an orphan, which no path names and
+ * which nothing frees while the descriptor holds it; and a named node, which
+ * must still resolve back to itself. Anything else, a node no longer
+ * reserved or a name that resolves elsewhere or is too long to build, is a
+ * descriptor whose file went away by a route that did not count the
+ * holders.
  *
- * The old round-trip could not tell a freed node from a different file the
- * allocator later placed at the same address. That hole is closed for every
- * regular-file descriptor by the lifetime, not by this check: no address
- * a descriptor has is handed out while it has it.
- *
- * A NULL node is the root directory and needs no check. A directory is
- * checked the same way, though `rmdir` refuses one a description has: one
- * that fails was removed by a route that did not look for its descriptors.
+ * The check does not tell a freed node from another file the allocator later
+ * placed at the same address. The lifetime rule makes that case impossible
+ * for every regular-file descriptor: no address a descriptor has is handed
+ * out while it has it. A directory is checked the same way, though `rmdir`
+ * fails on one a description has: one that fails the check was removed by a
+ * route that did not look for its descriptors.
  */
 int fd_node_check(fd_entry_t *entry)
 {
@@ -1227,7 +1259,7 @@ int fd_node_check(fd_entry_t *entry)
         return -EBADF;
     }
     if (node->name[0] == '\0') {
-        return 0; /* an orphan: unreachable by name, live for its holders */
+        return 0;
     }
     if (krffs_node_path(node, path, sizeof(path)) != 0) {
         return -EBADF;
@@ -1337,10 +1369,11 @@ static int names_tree_root(const char *path)
  * of a mounted type is named by the type, so the descriptor follows a rename
  * of it, behind the path of the directory the mount covers; a type without a
  * `path` operation keeps the path the directory was opened by. A directory of
- * the KRFFS boot root is named by its node, which must still resolve back to
- * itself: KRFFS nodes are not counted, and though `rmdir` refuses a directory
- * a description has, the test does not rest on that. A path from the root of
- * the mount table becomes the one the calling process has from its own root
+ * the KRFFS boot root is named by its node (`entry->node`, NULL for the root
+ * itself), which must still resolve back to itself: KRFFS nodes are not
+ * counted, and though `rmdir` fails on a directory a description has, the
+ * test does not rest on that. A path from the root of the mount table
+ * becomes the one the calling process has from its own root
  * (`path_in_root`). A directory outside that root keeps its path from the
  * root of the mount table, with `*outside` set, when `outside` is not NULL.
  * Returns 0, -ENOTDIR for a descriptor on anything but a directory, -EBADF
@@ -1350,7 +1383,7 @@ static int names_tree_root(const char *path)
  */
 static int fd_dir_path(fd_entry_t *entry, char *out, uint32_t cap, int *outside)
 {
-    krffs_node_t *dnode = entry->node; /* NULL for the root, and for other types */
+    krffs_node_t *dnode = entry->node;
     int r;
 
     if (entry->type == FD_TYPE_SYNTH_DIR) {
@@ -1478,8 +1511,9 @@ static void path_drop_dot(char *path, int end)
  * memory, -ENOENT for the empty path, which names no file (a call that takes
  * AT_EMPTY_PATH looks for it before copying), -ENAMETOOLONG for either path
  * longer than the buffer, and for a relative path only, since an absolute
- * one does not read `dirfd`, -EBADF for a descriptor that is not open and
- * -ENOTDIR for one that is not a directory.
+ * one does not read `dirfd`, -EBADF for a descriptor that is not open,
+ * -ENOTDIR for one that is not a directory, -ENOMEM when the heap has no
+ * path page, or another error of `fd_dir_path`.
  *
  * A relative path joined to a directory outside the process's root, which
  * a descriptor opened before a chroot may be on, begins with three slashes,
@@ -1653,7 +1687,10 @@ int cred_privileged(void)
 }
 
 /**
- * Drop the set-id bits a modification must not leave standing on `node`.
+ * Drop the set-id bits a modification must not leave standing on the KRFFS
+ * root node `node`: a write or a truncation by a caller without privilege,
+ * or a change of owner or group by any caller. A directory keeps its bits,
+ * as on Linux, and a NULL `node` is ignored.
  *
  * Setuid always goes: a file whose contents or owner just changed no longer
  * grants what its owner meant it to grant. Setgid goes only when the
@@ -1661,12 +1698,12 @@ int cred_privileged(void)
  * without that bit the file cannot hand out a gid, and the pair means the
  * mandatory-lock mark elsewhere in Unix.
  *
- * The root node returns untouched, and by node identity, not by
- * `KRFFS_IS_DIR`: `mkfs` stamps the root a bare 0755 with no type bits, so
- * the directory test reads false on it, and `KRFFS_MODE_DIRTY` shares the
- * setuid position. A clear that reached the root would report an unclean
- * image as cleanly unmounted, which is file-system corruption, not a
- * permission bug, and `chown(path, -1, -1)` is permitted to every caller.
+ * The root directory is skipped by node identity, since `KRFFS_IS_DIR`
+ * reads false on it: `mkfs` stamps the root a bare 0755 with no type bits,
+ * and `KRFFS_MODE_DIRTY` shares the setuid position. A clear that reached
+ * the root would report an unclean image as cleanly unmounted, which
+ * corrupts the file system, and `chown(path, -1, -1)` is permitted to every
+ * caller.
  */
 void cred_kill_setid(krffs_node_t *node)
 {
@@ -1680,10 +1717,13 @@ void cred_kill_setid(krffs_node_t *node)
 }
 
 /**
- * The same rule for a file of another type, through its attributes: a
- * write or a truncation by a caller without the privilege drops the set-id
- * bits, so that a program a group may modify cannot keep root's identity.
- * A directory keeps its bits, as on Linux.
+ * The rule of `cred_kill_setid` for the file `node` of the mount `mnt` of
+ * another type, through the attributes the type reports and sets: a write or
+ * a truncation by a caller without the privilege drops the set-id bits, so
+ * that a program a group may modify cannot keep root's identity. A directory
+ * keeps its bits, as on Linux. Nothing is done for a NULL `mnt` or `node` or
+ * a file whose attributes cannot be read, and a failure to set them is
+ * ignored.
  */
 void vfs_kill_setid(struct vfs_mount *mnt, void *node)
 {
@@ -1724,13 +1764,14 @@ static int cred_in_group(uint32_t gid)
 }
 
 /**
- * The nine-bit permission check over explicit metadata: one identity class is
- * chosen and judged alone, the classic rule. The owner is judged by the owner
- * bits, else a group match (primary or supplementary) by the group bits, else
- * the other bits; an effective uid of 0 passes everything, unless the thread
- * gave up its capabilities (`nocaps`). `use_real` judges by the real ids
- * instead, for access(2), the one call that asks who the process really is,
- * not who it is acting as.
+ * The nine-bit permission check over explicit metadata: 0 when `mode`
+ * grants the caller the `want` bits (CRED_R, CRED_W, CRED_X), else -EACCES.
+ * One identity class is chosen and judged alone, the classic rule. The owner
+ * is judged by the owner bits, else a group match (primary or supplementary)
+ * by the group bits, else the other bits; a uid of 0 passes everything,
+ * unless the thread gave up its capabilities (`nocaps`). `use_real` judges
+ * by the real ids instead of the effective ones, for access(2), the one call
+ * that asks who the process really is, not who it is acting as.
  */
 static int32_t cred_access_bits(uint32_t owner, uint32_t group, uint32_t mode, int want,
                                 int use_real)
@@ -1752,18 +1793,23 @@ static int32_t cred_access_bits(uint32_t owner, uint32_t group, uint32_t mode, i
     return ((uint32_t)want & ~bits & 7u) ? -EACCES : 0;
 }
 
-/* Whether `mnt` is the KRFFS root, whose nodes take the KRFFS-specific
- * paths below; an ext2 root is entry zero as well and goes the way of every
- * other type. */
+/** Whether `mnt` is the KRFFS root, whose nodes take the paths of the system
+ * call layer written for KRFFS; an ext2 root is entry zero of the mount
+ * table as well and goes the way of every other type. */
 int mnt_is_root(const struct vfs_mount *mnt)
 {
     return mnt == vfs_root_mount() && mnt->type == &vfs_krffs_type;
 }
 
 /**
- * The permission check over a node of any type, from the attributes its
- * file system reports: the same nine-bit rule as cred_access_node, plus
- * the execute rule for a regular file.
+ * The permission check of the `want` bits over the node `r` of any type,
+ * from the attributes its file system reports, by the real ids when
+ * `use_real` is set: the nine-bit rule of `cred_access_bits`, as
+ * `cred_access_node` applies it, with its execute rule for anything but a
+ * directory, which needs an execute bit somewhere even for root. A write of
+ * an immutable file is -EPERM for every caller, root too, as Linux's
+ * inode_permission answers. Returns 0, -EACCES, -EPERM, or the error of
+ * reading the attributes.
  */
 int32_t cred_access_ref(const struct vfs_ref *r, int want, int use_real)
 {
@@ -1777,13 +1823,14 @@ int32_t cred_access_ref(const struct vfs_ref *r, int want, int use_real)
         return -EACCES;
     }
     if ((want & CRED_W) && st.flags_known && (st.flags & VFS_FL_IMMUTABLE)) {
-        return -EPERM; /* inode_permission's rule, for root too */
+        return -EPERM;
     }
     return cred_access_bits(st.uid, st.gid, st.mode & 0777u, want, use_real);
 }
 
-/** Whether the inode flags of `node` refuse a change of its size, immutable
- * or append-only, as Linux's do_truncate refuses one. */
+/** Whether the inode flags of `node` on `mnt` forbid a change of its size,
+ * immutable or append-only, as Linux's do_truncate answers -EPERM; never for
+ * a node of the KRFFS root, which keeps no such flags. */
 static int size_guarded(struct vfs_mount *mnt, void *node)
 {
     struct vfs_stat st;
@@ -1793,10 +1840,12 @@ static int size_guarded(struct vfs_mount *mnt, void *node)
 }
 
 /**
- * The permission check over a KRFFS node. The root directory reads as 0755,
- * the fixed identity stat reports (its stored mode has the dirty-mount
- * flag). Executing a regular file demands an execute bit somewhere even for
- * root: root runs programs, not data.
+ * The permission check of the `want` bits over the KRFFS root node `node`,
+ * by the real ids when `use_real` is set (`cred_access_bits`): 0, or
+ * -EACCES. The root directory reads as 0755, the fixed identity stat
+ * reports (its stored mode has the dirty-mount flag). Executing a file that
+ * is not a directory demands an execute bit somewhere even for root: root
+ * runs programs, not data.
  */
 int32_t cred_access_node(const krffs_node_t *node, int want, int use_real)
 {
@@ -1850,7 +1899,9 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
  * an open that then finds no slot; the node is read from `src` under the
  * mount's namespace lock, where a relocation of the KRFFS root moves it; and
  * a FIFO, a socket or a device file is opened as `open_special` opens one,
- * for a description made by O_PATH. The description is a new one.
+ * for a description made by O_PATH. The description is a new one. Returns
+ * the new descriptor, or a negative errno: -ENOENT for a mount being
+ * unmounted, or the open's.
  */
 static int32_t proc_fd_reopen(const struct open_file *src, int flags)
 {
@@ -1933,7 +1984,9 @@ static int32_t proc_fd_share(fd_table_t *fds, int procfd, int flags)
  * descriptor has the access asked for and is no O_DIRECTORY open of what is
  * not a directory; Linux opens a pipe's other end for the other access, and
  * this answers EACCES. Another process's descriptor needs a privileged
- * caller or one with the process's effective user ID.
+ * caller or one with the process's effective user ID. Returns the new
+ * descriptor, or a negative errno: -ENOENT for no such process or
+ * descriptor, -EACCES, -ENOTDIR, or the open's.
  */
 static int32_t proc_fd_open(const struct vpath *vp, int flags)
 {
@@ -1973,21 +2026,32 @@ static int32_t proc_fd_open(const struct vpath *vp, int flags)
 }
 
 /**
- * Open a path that classified as synthetic (/dev or /proc).
+ * Open with `flags` the node of /dev, /proc or /sys that a path classified
+ * as `vp`, and return the descriptor or a negative errno. Nothing is created
+ * there, and no name falls through to KRFFS: a name the class does not know
+ * is -ENOENT.
  *
- * Devices bind their file_ops; directories get a synthetic dir fd; /proc files
- * snapshot their text, but for oom_score_adj and mem, which reach the process
- * at each read. A synthetic mount is never created or fallen through to
- * KRFFS.
+ * A device of /dev binds its file operations (`devfs_open`) after the
+ * nine-bit check against the mode its entry reports, every entry owned by
+ * root: the 0666 devices open for anyone, and the raw boot-partition window,
+ * 0600, for root alone. /dev/pts/N is the slave end of pty N, checked
+ * against the pty's owner, group and mode, so that one user cannot open
+ * another's terminal; `pty_open_slave` takes the descriptor itself and fails
+ * on a pair not allocated or locked.
+ *
+ * A file of /proc or /sys snapshots its text at the open (`procfs_open`),
+ * but for oom_score_adj and mem, which reach the process at each read.
+ * /proc/disk opens for root alone: it has the drive's serial number, and an
+ * image that has the file also has an unprivileged account. A directory gets
+ * a synthetic directory descriptor (`synth_open_dir`), /proc/PID/fd/N
+ * follows its link (`proc_fd_open`), /proc/PID/fdinfo/N opens for a caller
+ * that may read the process, and a namespace link opens its namespace
+ * (`procfs_open_ns`).
  */
 static int32_t synth_open(const struct vpath *vp, int flags)
 {
     switch (vp->kind) {
     case VNODE_DEV: {
-        /* The nine-bit check devices always deserved and only bootpart
-         * needs: every entry is owned root:root, so for the 0666 devices
-         * this grants what it always granted, and the raw boot-partition
-         * window (0600) opens for root alone. */
         uint32_t dmode;
         int want;
 
@@ -2014,10 +2078,6 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         return devfs_open(vp->name, flags);
     }
     case VNODE_PTS:
-        /* /dev/pts/N: the slave end of pty N (pty_open_slave does its own
-         * fd allocation, and rejects an unallocated/locked pair). The open
-         * is permission-checked against the pty's ownership, so one user
-         * cannot open another's terminal. */
         if (flags & O_DIRECTORY) {
             return -ENOTDIR;
         }
@@ -2065,8 +2125,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_SYS_FILE:
         return procfs_open(vp, flags);
     case VNODE_PROC_DISK:
-        /* Root only. The file has the drive's serial number, and an
-         * image that has this file also has an unprivileged account. */
+        /* Root only, checked as a mode of 0400 that root owns. */
         {
             int32_t rc = cred_access_bits(0, 0, 0400u, CRED_R, 0);
             if (rc != 0) {
@@ -2106,14 +2165,25 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     }
 }
 
-/* Open a synthetic directory (/dev, /proc, /proc/<pid>, /proc/<pid>/fd, and
- * a thread's under /proc/<pid>/task). The descriptor keeps a record of its
- * own, taken from the heap and freed at the last close, with the process's
- * pid and, for a thread's directory, the thread's id, as the caller's PID
- * namespace numbers them, which is how its listing, its /proc/PID/fd link
- * and the names relative to it read them, so they stay the thread's. Another
- * user's /proc/PID/fd is EACCES, as Linux keeps a process's descriptors to
- * those who may trace it (`procfs_may_read`). */
+/**
+ * Open a synthetic directory (/dev, /proc, /proc/<pid>, /proc/<pid>/fd, a
+ * thread's under /proc/<pid>/task, a directory of /proc/sys or of /sys) for
+ * reading, and return the descriptor or a negative errno. The descriptor
+ * keeps a record of its own (`synth_dir_alloc`), freed at the last close,
+ * with the process's pid and, for a thread's directory, the thread's id, as
+ * the caller's PID namespace numbers them, which is how its listing, its
+ * /proc/PID/fd link and the names relative to it read them, so they stay
+ * the thread's.
+ *
+ * The directory exists, so flags that contradict that fail. O_CREAT with
+ * O_EXCL is -EEXIST whatever the access mode, since the usual form of an
+ * exclusive create also asks for write access; then write access, or
+ * O_CREAT, which asks for a file, is -EISDIR. Another user's /proc/PID/fd
+ * and /proc/PID/fdinfo are -EACCES, as Linux keeps a process's descriptors
+ * to those who may trace it (`procfs_may_read`). A process, or a device of
+ * /sys, that is gone is -ENOENT, and a record the heap has no room for is
+ * -ENFILE.
+ */
 static int32_t synth_open_dir(const struct vpath *vp, int flags)
 {
     fd_entry_t *e;
@@ -2133,11 +2203,6 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
         !procfs_may_read(pid)) {
         return -EACCES;
     }
-    /* The directory exists, so honour flags that contradict that. An exclusive
-     * create of an existing object is -EEXIST regardless of access mode (the
-     * usual O_CREAT|O_EXCL form implies write access), so that check comes
-     * first; then a directory cannot be opened for writing, nor by O_CREAT,
-     * which asks for a file. */
     if ((flags & O_CREAT) && (flags & O_EXCL)) {
         return -EEXIST;
     }
@@ -2178,12 +2243,12 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
 }
 
 /**
- * Stamps a newly created KRFFS node in `parent` with the creating process's
- * identity: owner and group from the effective ids, permission bits from
- * `mode` with the file-creation mask applied, the type bits kept. The V7
- * creation rule: who you effectively are is whose the file is. A setgid
- * parent gives its group instead, and its setgid bit to a new directory, as
- * Linux's `inode_init_owner` does.
+ * Stamp the KRFFS node `node`, new in the directory `parent`, with the
+ * creating process's identity: owner and group from the effective ids, as
+ * the V7 creation rule gives a file to whoever its creator acts as, and the
+ * permission bits of `mode` with the file-creation mask applied, the type
+ * bits kept. A setgid parent gives its group instead, and its setgid bit to
+ * a new directory, as Linux's `inode_init_owner` does.
  */
 static void krffs_stamp_new_node(krffs_node_t *node, const krffs_node_t *parent, uint32_t mode)
 {
@@ -2215,10 +2280,12 @@ static int name_is(const char *name, const char *lit)
 }
 
 /**
- * The framebuffer descriptor, for an open of the name "fb". One process at a
- * time owns the framebuffer, by its thread group id, which the ioctl, the
- * console read and the last close compare too, so any of its threads may use
- * it; the open switches the display to mode 13h.
+ * The framebuffer descriptor, for an open of the name "fb", or a negative
+ * errno: -EBUSY while another process owns the framebuffer. One process at a
+ * time owns it, by its thread group id, which the ioctl, the console read and
+ * the last close compare too, so any of its threads may use it. The open
+ * switches the display to its graphics mode (`fb_enter`, VGA mode 13h on a
+ * PC) and drops the scancodes the keyboard queued for the shell before it.
  */
 static int32_t open_framebuffer(void)
 {
@@ -2226,7 +2293,7 @@ static int32_t open_framebuffer(void)
     int fd;
 
     if (fb_owner_pid != 0 && fb_owner_pid != current_proc->tgid) {
-        return -EBUSY; /* Already in use */
+        return -EBUSY;
     }
 
     fd = fd_alloc(current_proc->fds);
@@ -2243,13 +2310,15 @@ static int32_t open_framebuffer(void)
     fb_enter();
     fb_owner_pid = current_proc->tgid;
 
-    kbd_clear_scancodes(); /* drop stale scancodes left by the shell */
+    kbd_clear_scancodes();
 
     return fd;
 }
 
 /**
- * The mouse descriptor, for an open of the name "mouse".
+ * The mouse descriptor, read-only, for an open of the name "mouse", with the
+ * packets queued before the open dropped; -ENODEV when no mouse of any kind
+ * was found.
  */
 static int32_t open_mouse(void)
 {
@@ -2257,7 +2326,7 @@ static int32_t open_mouse(void)
     int fd;
 
     if (!input_mouse_present()) {
-        return -ENODEV; /* no mouse of any kind was found */
+        return -ENODEV;
     }
 
     fd = fd_alloc(current_proc->fds);
@@ -2324,9 +2393,10 @@ static int open_device_name(const char *name, int flags, int *result)
  * The target of a symbolic link at `name` whose own target is missing, for
  * O_CREAT to create: as on Linux, the target is what is created. Returns 1
  * with the target's path in `through`, the link's directory in front of a
- * relative one; 0 when `name` is not a link; or a negative errno, ELOOP once
- * `followed` passes the resolver's bound of forty links. `name` may be in
- * `through`, from the link before.
+ * relative one; 0 when `name` is not a link; or a negative errno: ELOOP once
+ * `followed` passes the resolver's bound of forty links, ENOENT for an empty
+ * target, which names nothing, as the resolver answers, ENOMEM, or
+ * ENAMETOOLONG. `name` may be in `through`, from the link before.
  */
 static int open_link_target(const char *name, char *through, uint32_t through_size, int *followed)
 {
@@ -2354,13 +2424,12 @@ static int open_link_target(const char *name, char *through, uint32_t through_si
     tlen = linkref.mnt->type->ops->readlink(linkref.mnt, linkref.node, target, VFS_PATH_MAX);
     vfs_ref_release(&linkref);
     if (tlen == 0) {
-        tlen = -ENOENT; /* an empty target names nothing, as the resolver answers */
+        tlen = -ENOENT;
     }
     if (tlen >= 0 && ++*followed > VFS_LINK_MAX) {
         tlen = -ELOOP;
     }
     if (tlen >= 0 && target[0] != '/') {
-        /* The link's own directory, then the target. */
         uint32_t dlen = (uint32_t)k_strlen(name);
 
         while (dlen > 0 && name[dlen - 1] != '/') {
@@ -2410,11 +2479,16 @@ static int node_make(const struct vfs_ref *parent, const char *leaf, uint32_t mo
  * The missing-file half of O_CREAT: hold the parent of `name`, check its
  * write bit, and make the node under the namespace lock with `node_make`,
  * of the kind the type bits of `mode` give, which an open passes none of.
- * Returns 0 with `ref` on the new node, held by its creation; 1 when another
- * creator held the lock first, so the caller opens what it made; or a
- * negative errno. On a type that sets `ns_serialised`, success retains the
- * namespace lock through open-handle registration; another type's lock is
- * not taken.
+ * Returns 0 with `ref` on the new node, held by its creation, and the parent
+ * node's hold given back; 1 when another creator held the lock first and
+ * O_EXCL is clear, so the caller opens what it made; or a negative errno:
+ * -EROFS under /dev or /proc or on a read-only mount, the permission's, or
+ * the type's.
+ *
+ * The create runs under the parent mount's namespace lock on every type.
+ * The walk takes that lock only on a type that sets `ns_serialised`, and
+ * there success keeps it through the registration of the open handle; on
+ * another type it is taken around `node_make` alone and given back at once.
  */
 static int open_create(const char *name, int flags, uint32_t mode, struct vfs_ref *ref)
 {
@@ -2428,9 +2502,6 @@ static int open_create(const char *name, int flags, uint32_t mode, struct vfs_re
     if (rc != 0) {
         return rc;
     }
-    /* The walk locked the mount only if its type asks to be serialised. The
-     * create runs under the lock on every type, as it always has, so a type
-     * the walk left alone takes it here and gives it back at once. */
     held = parent.mnt->type->ns_serialised;
     if (vfs_synth_vpath(parent.mnt, parent.node)) {
         vfs_walk_unlock(parent.mnt);
@@ -2457,8 +2528,6 @@ static int open_create(const char *name, int flags, uint32_t mode, struct vfs_re
         vfs_ns_unlock(parent.mnt);
     }
     if (rc == -EEXIST && !(flags & O_EXCL)) {
-        /* Another creator held the lock first: the caller opens what it
-         * made. */
         vfs_walk_unlock(parent.mnt);
         vfs_ref_release(&parent);
         return 1;
@@ -2469,7 +2538,7 @@ static int open_create(const char *name, int flags, uint32_t mode, struct vfs_re
         return rc;
     }
     ref->mnt = parent.mnt;
-    ref->node = made; /* held by creation; the parent's hold goes back */
+    ref->node = made;
     if (parent.mnt->type->ops->put) {
         parent.mnt->type->ops->put(parent.mnt, parent.node);
     }
@@ -2538,7 +2607,8 @@ static int32_t open_device(int block, uint32_t rdev, int flags)
  * and the walk's lock released, and the descriptor `fd` the open reserved
  * taken, by a FIFO, or freed, since a device's open takes a descriptor of
  * its own; 0, with all three as they were, for any other node, which the
- * ordinary open takes.
+ * ordinary open takes, and for a node of a mounted type whose attributes
+ * cannot be read, so that the ordinary open reports the error.
  *
  * The checks are open's, in its order: O_CREAT|O_EXCL is EEXIST,
  * O_DIRECTORY is ENOTDIR, then the permission the access mode asks for; a
@@ -2576,7 +2646,7 @@ static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result)
         struct vfs_stat st;
 
         if (vfs_getattr(mnt, ref->node, &st) != 0) {
-            return 0; /* the ordinary open reports the error */
+            return 0;
         }
         type = st.mode & S_IFMT;
         rdev = st.rdev;
@@ -2612,12 +2682,18 @@ static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result)
 }
 
 /**
- * The checks on an existing node of a mounted type, from its attributes in
- * the order open(2) keeps (EEXIST, EISDIR, ENOTDIR), then the mount's EROFS
- * for a write-side request, then permission and loop attachment. A directory
- * is EISDIR to an open for writing, to O_TRUNC, and to O_CREAT, which asks
- * for a file, as on Linux. Truncation uses the open handle in
- * `open_install`. On an error the reference is released.
+ * The checks on an existing node of a mounted type before an open of it with
+ * `flags`, from its attributes, in the order open(2) keeps: EEXIST for
+ * O_CREAT|O_EXCL; ELOOP for a symbolic link itself, which the walk stops at
+ * under O_NOFOLLOW; EISDIR for a directory opened for writing, with O_TRUNC
+ * or with O_CREAT, which asks for a file, as on Linux; ENOTDIR for
+ * O_DIRECTORY on anything else. Then come EROFS for a write-side request on a
+ * read-only mount; EPERM for an append-only file opened for writing without
+ * O_APPEND or with O_TRUNC, as Linux's may_open answers; the permission the
+ * access mode asks for, O_TRUNC asking for write; and EBUSY for O_TRUNC of a
+ * file that backs a loop device. Returns 0, or a negative errno with the
+ * reference released. The truncation is `open_install`'s, through the open
+ * handle.
  */
 static int open_mounted_node(struct vfs_ref *ref, int flags)
 {
@@ -2638,7 +2714,7 @@ static int open_mounted_node(struct vfs_ref *ref, int flags)
     }
     if ((vst.mode & 0170000u) == 0120000u) {
         vfs_ref_release(ref);
-        return -ELOOP; /* the link itself, under O_NOFOLLOW */
+        return -ELOOP;
     }
     if ((vst.mode & 0170000u) == 0040000u && (acc != 0 || (flags & (O_TRUNC | O_CREAT)))) {
         vfs_ref_release(ref);
@@ -2655,7 +2731,7 @@ static int open_mounted_node(struct vfs_ref *ref, int flags)
     if (vst.flags_known && (vst.flags & VFS_FL_APPEND) &&
         ((acc != 0 && !(flags & O_APPEND)) || (flags & O_TRUNC))) {
         vfs_ref_release(ref);
-        return -EPERM; /* may_open's rule for an append-only file */
+        return -EPERM;
     }
     if (flags & O_TRUNC) {
         want |= CRED_W;
@@ -2673,9 +2749,14 @@ static int open_mounted_node(struct vfs_ref *ref, int flags)
 }
 
 /**
- * The same checks on a KRFFS node: O_CREAT|O_EXCL, the directory rules, the
- * permission the access mode asks for, then O_TRUNC, which only ever shrinks
- * and so keeps the node where it is. On an error the reference is released.
+ * The same checks on a node of the KRFFS root: EEXIST for O_CREAT|O_EXCL;
+ * EISDIR for the root or a directory opened for writing, with O_TRUNC or
+ * with O_CREAT, which asks for a file; ENOTDIR for O_DIRECTORY on anything
+ * else; then the permission the access mode asks for, O_TRUNC asking for
+ * write. O_TRUNC of the regular file that is left is done here: a truncation
+ * to zero only shrinks, and a shrink keeps the node where it is; a caller
+ * without privilege loses the file's set-id bits. Returns 0, or a negative
+ * errno with the reference released.
  */
 static int open_root_node(struct vfs_ref *ref, int flags)
 {
@@ -2686,14 +2767,10 @@ static int open_root_node(struct vfs_ref *ref, int flags)
     int32_t crc;
     int rc;
 
-    /* O_CREAT|O_EXCL requires the file not already exist. */
     if ((flags & O_CREAT) && (flags & O_EXCL)) {
         vfs_ref_release(ref);
         return -EEXIST;
     }
-    /* A directory cannot be opened for writing, truncated, or opened by
-     * O_CREAT, which asks for a file (the access mode is the low two
-     * bits); O_DIRECTORY requires one. */
     if (is_dir && (acc != 0 || (flags & (O_TRUNC | O_CREAT)))) {
         vfs_ref_release(ref);
         return -EISDIR;
@@ -2702,8 +2779,6 @@ static int open_root_node(struct vfs_ref *ref, int flags)
         vfs_ref_release(ref);
         return -ENOTDIR;
     }
-    /* The open itself is permission-checked: the access mode asks for
-     * read, write, or both, and truncation is a write. */
     if (acc == 0) {
         want = CRED_R;
     } else if (acc == 1) {
@@ -2720,10 +2795,6 @@ static int open_root_node(struct vfs_ref *ref, int flags)
         return crc;
     }
     if (flags & O_TRUNC) {
-        /* A truncate to zero only ever shrinks, and a shrink keeps the
-         * node where it is. This branch is already past the -EISDIR for
-         * the root and for any directory, so only a regular file
-         * reaches it. */
         rc = vfs_truncate(ref->mnt, node, 0);
         if (rc != 0) {
             vfs_ref_release(ref);
@@ -2737,17 +2808,27 @@ static int open_root_node(struct vfs_ref *ref, int flags)
 }
 
 /**
- * The descriptor for an opened node, in the slot `fd` the open reserved: a
- * directory opens as a FD_TYPE_DIR (its node is the directory whose children
- * getdents lists); a regular file as FD_TYPE_FILE. A path that resolved to
- * the root (e.g. "x/..") is the root directory, stored with a NULL node like
- * a literal "/" open. A node of another type keeps `node` NULL: the
- * description's own fields name it, and the KRFFS-only paths (the holder
- * rule, the set-id clear) have nothing to do with it. Returns the fd or a
- * negative errno, with the reference released and, on an error, the
- * reservation freed. Register the mounted description before truncation so
- * a relocation while waiting updates its node. A failed truncation frees
- * the description and its open handle.
+ * The descriptor for an opened node, in the slot `fd` the open reserved,
+ * with `name`, the path without its leading slash, recorded for a node of a
+ * mounted type (`ofd_record_path`): a directory opens as a FD_TYPE_DIR (its
+ * node is the directory whose children getdents lists); a regular file as
+ * FD_TYPE_FILE. A path that resolved to the root (e.g. "x/..") is the root
+ * directory, stored with a NULL node like a literal "/" open. A node of
+ * another type keeps `node` NULL: the description's own fields name it, and
+ * the KRFFS-only paths (the holder rule, the set-id clear) have nothing to
+ * do with it. Returns the fd or a negative errno, with the reference given
+ * to the description or, on an error, released and the reservation freed.
+ *
+ * The description takes the resolution's hold and one reference on the
+ * mount, which its last close gives back (`vfs_desc_close`). It is
+ * registered before an O_TRUNC of a mounted type's file, so that a
+ * relocation while the truncation waits updates its node; a failed
+ * truncation frees the description and its open handle, and one that
+ * succeeds clears the set-id bits for a caller without privilege. The
+ * access mode is the low two bits of `flags`, read apart from the bits above
+ * them. O_APPEND and O_NONBLOCK are status flags of the description, which
+ * dup and fork share, and O_CLOEXEC, which opendir and fopen's "e" mode rely
+ * on, marks the descriptor.
  *
  * The entry gets its type last, which is what publishes it: until then the
  * slot is a reservation, which no other thread's lookup, close or dup2 can
@@ -2782,8 +2863,6 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
     }
     entry->ofd->offset = 0;
 
-    /* The description takes the resolution's hold and one reference on the
-     * mount; its last close gives all of it back through vfs_desc_close. */
     rc = vfs_open_node(ref->mnt, node, flags, &entry->ofd->fhandle);
     if (rc != 0) {
         fd_free(current_proc->fds, fd);
@@ -2805,9 +2884,6 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
         }
     }
 
-    /* Access mode is the low two bits (O_RDONLY=0/O_WRONLY=1/O_RDWR=2); create,
-     * trunc and cloexec live higher up, so mask before testing; the legacy
-     * `flags == 0` form misreads O_RDONLY|O_CREAT as not-readable. */
     if ((flags & 3) == 1) {
         entry->flags = FD_FLAG_WRITE;
     } else if ((flags & 3) == 2) {
@@ -2816,7 +2892,6 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
         entry->flags = FD_FLAG_READ;
     }
     if (entry->ofd) {
-        /* O_APPEND/O_NONBLOCK are OFD status flags, shared by dup/fork. */
         if (flags & O_APPEND) {
             entry->ofd->status_flags |= OFD_APPEND;
         }
@@ -2825,7 +2900,7 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
         }
     }
     if (flags & O_CLOEXEC) {
-        entry->flags |= FD_FLAG_CLOEXEC; /* opendir() and fopen(.,"e") rely on this */
+        entry->flags |= FD_FLAG_CLOEXEC;
     }
     entry->node = mnt_is_root(entry->ofd->vmnt) && entry->ofd->vnode != krffs_fs->node
                       ? (krffs_node_t *)entry->ofd->vnode
@@ -2859,10 +2934,10 @@ static int32_t open_synth_node(const struct vpath *vp, int flags)
  * created by O_CREAT (ignored otherwise). Opens a legacy device ("fb" or
  * "mouse", `open_device_name`) or resolves a path on any mounted type and
  * installs a descriptor. Returns the fd or -errno. Opening "/" opens the
- * root directory for getdents64. A symbolic
- * link at the end is followed, and one whose target is missing is what
- * O_CREAT creates, as on Linux, unless O_NOFOLLOW, which answers ELOOP, or
- * O_CREAT|O_EXCL, which answers EEXIST for the link. On a type that sets
+ * root directory for getdents64. A symbolic link at the end is followed,
+ * and one whose target is missing is what O_CREAT creates, as on Linux, the
+ * target's path built in a path page of its own; O_NOFOLLOW answers ELOOP
+ * for the link, and O_CREAT|O_EXCL EEXIST. On a type that sets
  * `ns_serialised`, resolution through open-handle registration holds the
  * final mount's namespace lock, which is what keeps a writer from moving the
  * file between the lookup and the registration. O_PATH goes to `open_path`,
@@ -2883,7 +2958,7 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
 {
     struct vfs_ref ref;
     struct vfs_mount *locked;
-    char *through = NULL; /* the path a dangling link's target makes, in a path page */
+    char *through = NULL;
     int followed = 0;
     int fd;
     int rc;
@@ -3079,8 +3154,8 @@ static int32_t remount_call(const isr_params_t *params)
     return n;
 }
 
-/* mount(2) with MS_BIND: the source is a path, as the target is, and MS_REC
- * shows the mounts below it too (`vfs_do_bind`). */
+/** mount(2) with MS_BIND: the source is a path, as the target is, and MS_REC
+ * shows the mounts below it too (`vfs_do_bind`). 0 or a negative errno. */
 static int32_t bind_at(uintptr_t source, const char *target, uint32_t flags)
 {
     char *spath;
@@ -3094,19 +3169,23 @@ static int32_t bind_at(uintptr_t source, const char *target, uint32_t flags)
 }
 
 /**
- * mount(2) takes source, target, type, flags and data.
+ * mount(2) takes source, target, type, flags and data, and returns 0 or a
+ * negative errno.
  *
- * Effective uid 0 is required, or privilege over the caller's mount
- * namespace for proc, sysfs and tmpfs (`mount_privileged`). The strings are
- * copied here; the order of work and every other refusal are the VFS's
- * (vfs_do_mount). `data` may be NULL, which is an empty option string. With
- * MS_REMOUNT the source and the type are not read, as on Linux, and the
- * data goes to the file system, which takes the options a remount may
- * change (`remount_at`); with MS_BIND alone the type and the data are not
- * read (`bind_at`). A change of propagation alone,
- * MS_PRIVATE, MS_SLAVE, MS_SHARED or MS_UNBINDABLE with MS_REC or without,
- * changes nothing: every mount is private to the namespaces that see it,
- * as unshare(1) makes them by default.
+ * The caller must have privilege, or privilege over its mount namespace for
+ * a bind and for proc, sysfs, tmpfs and mqueue (`mount_privileged`), or the
+ * call is -EPERM; a remount needs the privilege itself. The strings are
+ * copied here, the target made an absolute canonical path, a relative one
+ * joined to the working directory as every call that takes a path joins it;
+ * the order of work and every other refusal are the VFS's (vfs_do_mount).
+ * `data` may be NULL, which is an empty option string. With MS_REMOUNT the
+ * source and the type are not read, as on Linux, and the data goes to the
+ * file system, which takes the options a remount may change (`remount_at`);
+ * with MS_BIND alone the type and the data are not read (`bind_at`). A
+ * change of propagation alone, MS_PRIVATE, MS_SLAVE, MS_SHARED or
+ * MS_UNBINDABLE with MS_REC or without, changes nothing: every mount is
+ * private to the namespaces that see it, as unshare(1) makes them by
+ * default.
  */
 long sys_mount(isr_params_t *params)
 {
@@ -3148,8 +3227,6 @@ long sys_mount(isr_params_t *params)
     if (n < 0) {
         return n;
     }
-    /* The target as an absolute canonical path: a relative one is joined
-     * to the working directory, as every other path-taking call does. */
     n = path_from_user(AT_FDCWD, (const char __user *)SC_ARG(params, 1), &tpath);
     if (n != 0) {
         return n;
@@ -3171,9 +3248,11 @@ long sys_mount(isr_params_t *params)
 }
 
 /**
- * umount2(2) takes target and flags. Effective uid 0 is required, and the flags
- * must be zero: MNT_FORCE, MNT_DETACH and UMOUNT_NOFOLLOW are promises this
- * kernel cannot keep and answer EINVAL.
+ * umount2(2) takes target and flags, and returns 0 or a negative errno. The
+ * caller must have privilege, or privilege over its mount namespace
+ * (`mount_privileged`), or the call is -EPERM. The flags must be zero: this
+ * kernel has no MNT_FORCE, MNT_DETACH or UMOUNT_NOFOLLOW, and answers EINVAL
+ * to any flag.
  *
  * A target that names a directory by its end must reach one, which the walk
  * that finds the mount checks (`vfs_do_umount`), so a file named with a
@@ -3212,10 +3291,12 @@ long sys_umount2(isr_params_t *params)
 }
 
 /**
- * The removal rules for a directory on a type other than the root: write
- * permission on the directory, and in a sticky directory the entry's owner,
- * the directory's owner, or root. The root type keeps its own copy of the
- * rule beside its node fields.
+ * The removal rule for the name `leaf` in the directory `parent` of a type
+ * other than the KRFFS root, which has its own copy of the rule beside its
+ * node fields (`cred_sticky_ok`): write permission on the directory, and in
+ * a sticky directory the entry's owner, the directory's owner, or a
+ * privileged caller. A name the directory does not have passes, since no one
+ * owns it. Returns 0, -EACCES, -EPERM, or the type's error.
  */
 static int cred_remove_ref(const struct vfs_ref *parent, const char *leaf)
 {
@@ -3232,7 +3313,7 @@ static int cred_remove_ref(const struct vfs_ref *parent, const char *leaf)
     }
     rc = parent->mnt->type->ops->lookup(parent->mnt, parent->node, leaf, &node);
     if (rc != 0) {
-        return rc == -ENOENT ? 0 : rc; /* a name not there yet is not held by anyone */
+        return rc == -ENOENT ? 0 : rc;
     }
     rc = vfs_getattr(parent->mnt, node, &est);
     if (parent->mnt->type->ops->put) {
@@ -3350,7 +3431,8 @@ static int32_t open_from_user(int dirfd, const char __user *upath, int flags, ui
     return rc;
 }
 
-/* open(2) takes path, flags and the O_CREAT mode. */
+/** open(2) takes path, flags and the O_CREAT mode; the descriptor, or -errno
+ * (`open_from_user`). */
 long sys_open(isr_params_t *params)
 {
     if (!current_proc) {
@@ -3360,12 +3442,12 @@ long sys_open(isr_params_t *params)
                           (uint32_t)SC_ARG(params, 2));
 }
 
-/*
- * openat takes dirfd, path, flags and the O_CREAT mode. musl's openat() issues
- * it; its open() and <stdio.h> use the legacy open on i386, which has the
- * number. An absolute path is taken as-is, a relative path resolves against the
- * cwd (AT_FDCWD) or against the directory the dirfd refers to (see
- * copy_path_at).
+/**
+ * openat takes dirfd, path, flags and the O_CREAT mode; the descriptor, or
+ * -errno (`open_from_user`). musl's openat() issues it; its open() and
+ * <stdio.h> use open(2), whose number i386 and x86-64 both have. An absolute
+ * path is taken as-is, a relative path resolves against the cwd (AT_FDCWD)
+ * or against the directory the dirfd refers to (see copy_path_at).
  */
 long sys_openat(isr_params_t *params)
 {
@@ -3440,10 +3522,14 @@ static int32_t close_fd(int fd)
 }
 
 /**
- * The end of a call's holds (syscall_internal.h). An entry whose release
- * another thread has begun is left to it: two threads whose calls end while
- * one of them sleeps in a release would otherwise both find the entry
- * closing and held by nobody, and release it twice.
+ * At the end of a system call: let go of the descriptors the call held in
+ * its shared table, and release those another sharer closed meanwhile that
+ * no other call holds (`fd_teardown`). May sleep.
+ *
+ * An entry whose release another thread has begun (FD_FLAG_RELEASING) is
+ * left to it: two threads whose calls end while one of them sleeps in a
+ * release would otherwise both find the entry closing and held by nobody,
+ * and release it twice.
  */
 void fd_holds_release(void)
 {
@@ -3509,9 +3595,9 @@ long sys_close_range(isr_params_t *params)
     return 0;
 }
 
-/* close(2) takes fd. Returns 0 or -EBADF. Closing 0, 1 or 2 is legal; a shell
- * or daemon closes one and opens again onto the freed (lowest) number to
- * redirect it. */
+/** close(2) takes fd. Returns 0 or -EBADF (`close_fd`). Closing 0, 1 or 2 is
+ * legal; a shell or daemon closes one and opens again onto the freed
+ * (lowest) number to redirect it. */
 long sys_close(isr_params_t *params)
 {
     if (!current_proc) {
@@ -3523,15 +3609,17 @@ long sys_close(isr_params_t *params)
 /**
  * Flush a file's data to stable storage (fsync(2); also serves fdatasync).
  *
- * Its argument is fd. Validates the descriptor (any open fd but an O_PATH one;
- * the type is not checked). A descriptor on a mounted volume goes to the type's
- * fsync through `vfs_fsync`; any other writes back every dirty page of the
- * disk-backed window via `pc_sync`. That flush is whole-cache, not per-file, a
- * safe superset of the contract. When KRFFS is the RAM module the cache is
- * empty, so the flush is a no-op and the call only validates the fd. Returns 0,
- * -EBADF for a bad descriptor, or -EIO when a disk writeback fails. dropbear
+ * Its argument is fd. Any open descriptor but an O_PATH one is accepted,
+ * whatever its type. A descriptor of a file or directory of a mount, the
+ * KRFFS root among them, writes back the pages shared mappings of the file
+ * hold (`filemap_sync_file`) and goes to the type's fsync (`vfs_fsync`). Any
+ * other writes back every dirty page of the disk-backed window (`pc_sync`):
+ * the whole cache and not one file's pages, which does more than the call
+ * asks. When KRFFS is the RAM module the cache is empty, so that flush does
+ * nothing and the call only checks the descriptor. Returns 0, -EBADF for a
+ * bad descriptor, -EIO when a write-back fails, or the type's error. Dropbear
  * writes its host key with the open/write/fsync/rename idiom and treats an
- * fsync error as fatal, so the -EIO is real backpressure.
+ * fsync error as fatal, so the error must reach the program.
  */
 long sys_fsync(isr_params_t *params)
 {
@@ -3562,16 +3650,18 @@ long sys_fsync(isr_params_t *params)
 /**
  * Flush all buffered file-system writes to stable storage (sync(2)).
  *
- * Takes no argument. Every active mount's `sync` runs and the buffer cache
- * writes its dirty buffers, then every dirty page of the disk-backed window
- * goes back via `pc_sync` (a no-op when KRFFS is the RAM module). Like
- * Linux's sync(2), it returns 0 even if a writeback failed; what failed
- * stays dirty for a later call, and a mount whose device failed a write is
- * read-only from then on. Busy slots are retried after yielding and an
- * interrupt-enabled wait, so an in-flight write can finish and a page
- * dirtied during that write can be flushed. Stop after 3000 ticks (30
- * seconds) if slots remain busy, so a stuck writer cannot hold this call
- * forever. A write failure alone does not cause a wait.
+ * Takes no argument. The pages shared mappings hold are written back
+ * (`filemap_sync_all`), every active mount's `sync` runs and the buffer
+ * cache writes its dirty buffers (`vfs_sync_all`), then every dirty page of
+ * the disk-backed window goes back via `pc_sync` (which does nothing when
+ * KRFFS is the RAM module). Like Linux's sync(2), it returns 0 even if a
+ * write-back failed; what failed stays dirty for a later call, and a mount
+ * whose device failed a write is read-only from then on. Busy slots are
+ * retried after a yield and a wait with interrupts enabled, so a write in
+ * flight can finish and a page dirtied during that write can be flushed.
+ * The retries stop after 3000 ticks (30 seconds) if slots remain busy, so a
+ * stuck writer cannot hold this call forever. A write failure alone causes
+ * no wait.
  */
 long sys_sync(isr_params_t *params)
 {
@@ -3620,8 +3710,8 @@ long sys_syncfs(isr_params_t *params)
  * one register on x86-64 and in two on i386, which only the descriptor, the
  * first on both, matters for here: the page cache fills on demand, so there
  * is nothing to start early, and the call returns 0, as Linux does once it
- * has queued the reads. -EBADF for a descriptor not open
- * for reading, and -EINVAL for one that is not a regular file, as on Linux.
+ * has queued the reads. -EBADF for a descriptor not open for reading, and
+ * -EINVAL for one that is not a regular file, as on Linux.
  */
 long sys_readahead(isr_params_t *params)
 {
@@ -3685,8 +3775,11 @@ long sys_fadvise64(isr_params_t *params)
 #define FS_IOC_GETVERSION (0x80007601u | FS_IOC_LONG)
 
 /**
- * FS_IOC_GETFLAGS, FS_IOC_SETFLAGS and FS_IOC_GETVERSION on a descriptor,
- * which set `*handled`.
+ * The inode-flag requests of ioctl(2), FS_IOC_GETFLAGS, FS_IOC_SETFLAGS and
+ * FS_IOC_GETVERSION, on the descriptor `entry`, with `arg` the user address
+ * of the int they read or write. `*handled` is set when the request was
+ * answered here, and the return is then 0, -EFAULT, -EPERM or the type's
+ * error; otherwise it is 0.
  *
  * Of the types here only ext2 keeps the flags and the generation, and only
  * for a file or a directory; any other descriptor leaves the request to the
@@ -3778,7 +3871,9 @@ static int32_t xattr_call(isr_params_t *params, int how, int32_t result)
     return result;
 }
 
-/* setxattr to fremovexattr, in Linux's order. */
+/** The twelve extended attribute calls, setxattr to fremovexattr in Linux's
+ * order, each by `xattr_call`: set, get and remove are -EOPNOTSUPP and a
+ * list is empty, 0, once the file is found. */
 long sys_setxattr(isr_params_t *params)
 {
     return xattr_call(params, XATTR_FOLLOW, -EOPNOTSUPP);
@@ -3842,7 +3937,7 @@ long sys_fremovexattr(isr_params_t *params)
 /**
  * Add a seek displacement to a file offset without overflowing.
  *
- * The sum of an offset and a displacement leaves the range of the type
+ * The sum of an offset and a displacement can leave the range of the type
  * for offsets a caller may legally ask about, and signed overflow has no
  * value in C to check afterwards, so the bound is tested first and the
  * arithmetic done unsigned.
@@ -3875,8 +3970,11 @@ static int seek_add(uint64_t base, long long off, long long *out)
     return 0;
 }
 
-/** Seek a raw description after any transfer using its offset completes;
- * an offset past `limit`, the largest lseek(2) returns, is -EOVERFLOW. */
+/** Seek the raw disk window `entry` is open on, under the description's
+ * lock, so after any transfer using its offset completes. Returns the new
+ * offset, or -ENXIO for a descriptor that is no raw window, -EOVERFLOW for
+ * an offset past `limit`, the largest lseek(2) returns, or the error of
+ * `raw_seek_resolve`. */
 static long raw_lseek(fd_entry_t *entry, long long offset, int whence, uint64_t limit)
 {
     uint64_t resolved, raw_size;
@@ -3951,7 +4049,8 @@ static int dir_cursor_valid(fd_entry_t *entry, uint32_t target)
  * system the places `dir_cursor_valid` finds, so rewinddir, and seekdir to a
  * place telldir gave, move it, and no type's `readdir` is given a place it did
  * not give. Any other place is -EINVAL, and one past `limit`, the largest
- * offset the call can return, -EOVERFLOW.
+ * offset the call can return, -EOVERFLOW. A directory removed by a route
+ * that did not look for its descriptors is -EBADF (`fd_node_check`).
  */
 static int seek_listing(fd_entry_t *entry, long long off, int whence, uint64_t limit,
                         long long *out)
@@ -3968,7 +4067,7 @@ static int seek_listing(fd_entry_t *entry, long long off, int whence, uint64_t l
         return -EBADF;
     }
     if (entry->type == FD_TYPE_DIR && fd_node_check(entry) != 0) {
-        return -EBADF; /* the directory was removed out from under this fd */
+        return -EBADF;
     }
     fd_ofd_lock(entry->ofd);
     if (whence == 1) {
@@ -4040,10 +4139,23 @@ static int seek_bootlog(fd_entry_t *entry, long long off, int whence, uint64_t l
 }
 
 /**
- * lseek(2): the descriptor, the offset, a signed register's worth, and
- * whence; the new offset, or a negative errno. On i686 the offset is 32
- * bits, a place past 2 GiB is -EOVERFLOW, and _llseek reaches it; on x86-64
- * it is 64.
+ * lseek(2): move the offset of the descriptor in argument 0 by the offset
+ * in argument 1, a signed register's worth, and the whence in argument 2;
+ * the new offset, or a negative errno with the offset unchanged.
+ *
+ * A file of the KRFFS root or of a mounted type takes SEEK_SET, SEEK_CUR
+ * and SEEK_END, the last from the size its getattr gives; any other whence,
+ * and a place before 0, is -EINVAL. The description's lock is held from the
+ * getattr to the store, so a seek through a shared description waits for a
+ * transfer that holds it. A raw disk window, /dev/mem and a loop device seek
+ * by `raw_lseek`, /dev/bootlog by `seek_bootlog`, and a directory or a /proc
+ * file by `seek_listing`. /dev/null, /dev/zero and /dev/full take any seek
+ * and land at 0. A pipe, the console, the mouse and any other device are
+ * -ESPIPE, as POSIX has it for what cannot seek; any other kind of
+ * descriptor, and one opened with O_PATH, is -EBADF.
+ *
+ * The result is a register's worth: on i686 a place at 2 GiB or past it is
+ * -EOVERFLOW, which _llseek reaches, and on x86-64 the offset is 64 bits.
  */
 long sys_lseek(isr_params_t *params)
 {
@@ -4075,8 +4187,6 @@ long sys_lseek(isr_params_t *params)
             seek_rc = seek_bootlog(entry, offset, whence, limit, 1, &at);
             return seek_rc != 0 ? seek_rc : (long)at;
         }
-        /* mem devices (null/zero/full) accept a seek that always lands at 0;
-         * the stream devices (random/urandom) are not seekable. */
         if (devfs_lseek_zero(entry)) {
             entry->ofd->offset = 0;
             return 0;
@@ -4084,7 +4194,7 @@ long sys_lseek(isr_params_t *params)
         return -ESPIPE;
     }
     if (entry->type == FD_TYPE_CONSOLE || entry->type == FD_TYPE_MOUSE) {
-        return -ESPIPE; /* a terminal/mouse is a valid fd, just not seekable */
+        return -ESPIPE;
     }
     if (seeks_listing(entry)) {
         seek_rc = seek_listing(entry, offset, whence, limit, &at);
@@ -4136,7 +4246,7 @@ long sys_lseek(isr_params_t *params)
     }
     if ((uint64_t)at > limit) {
         fd_ofd_unlock(entry->ofd);
-        return -EOVERFLOW; /* a real offset this call cannot return; llseek can */
+        return -EOVERFLOW;
     }
 
     entry->ofd->offset = (uint64_t)at;
@@ -4145,20 +4255,25 @@ long sys_lseek(isr_params_t *params)
 }
 
 /**
- * Whether this is the query descriptor rather than a socket that carries data.
- *
- * A DHCP client opens AF_INET/SOCK_RAW/IPPROTO_RAW to ask the interface
- * ioctls about the machine and does nothing else with it. It has no protocol,
- * so it can send and receive nothing; a raw socket with a protocol is a real
- * one, and the paths below tell them apart here rather than by socket type.
+ * Whether `sock` is the query descriptor: the raw socket socket(2) makes of
+ * AF_INET, SOCK_RAW and IPPROTO_RAW, which stores no protocol. A DHCP
+ * client opens one only to ask the interface ioctls about the machine, and
+ * it sends and receives nothing: bind, sendto, recvfrom, read and readv
+ * fail on it with EOPNOTSUPP. The ICMP raw socket stores its protocol and
+ * is not one, so the two are told apart here and not by the socket's type.
  */
 int sock_is_query(const struct socket *sock)
 {
     return sock->type == SOCK_RAW && sock->protocol == 0;
 }
 
-/** Dispatch an ops-backed read, holding the description of one whose read
- * uses its offset (`ops_offset_held`). */
+/**
+ * Read up to `count` bytes into `buf` through the read method of the object
+ * behind `entry`, holding the description for the length of the read when
+ * the read uses its offset (`ops_offset_held`). Returns the method's
+ * answer, or -EBADF for a descriptor not open for reading or an object
+ * with no read method. May sleep.
+ */
 static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)
 {
     struct open_file *held = ops_offset_held(entry);
@@ -4181,7 +4296,12 @@ static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)
  * Read up to `count` bytes into user buffer `buf` from the file of a mounted
  * type or of the KRFFS root that `entry` is open on: at the description's
  * offset, which moves past what was read, or at `*at` for pread64, which
- * leaves it where it was.
+ * leaves it where it was. Returns the bytes read, 0 at the end of the file,
+ * or a negative errno: -EBADF for a descriptor not open for reading or on
+ * no file, -EFAULT for a buffer the caller cannot write, -EIO when a shared
+ * mapping's pages of the range cannot be written back first
+ * (`filemap_file_reading`), or the type's error. A read of a byte or more
+ * reports IN_ACCESS to inotify.
  *
  * The file system writes straight into the user buffer, so its pages are
  * range-checked and faulted in first. The description is held across the
@@ -4220,12 +4340,47 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
 }
 
 /**
- * Read up to `count` bytes from descriptor `fd` (read(2)).
+ * Read up to `count` bytes of descriptor `fd` into the user's `buf`, for
+ * read(2) and readv(2); the bytes read, 0 at the end, or a negative errno:
+ * -EBADF for a descriptor that is not open, was opened with O_PATH or is not
+ * open for reading, -EFAULT for a NULL or bad buffer. A read of zero bytes
+ * returns 0 once the descriptor is known to be valid and does not look at
+ * `buf`, which may then be NULL, as POSIX allows.
  *
- * Its arguments are fd, buf and count. Returns the bytes read, 0 at end, or
- * -errno. Dispatches by backing kind. A console read (stdin) blocks in the tty
- * line discipline until a cooked line or VMIN raw bytes arrive; in graphics
- * mode it is a non-blocking raw scancode read instead.
+ * The read goes by what is behind the descriptor. An object with a vtable,
+ * a pipe, a pty, a device or a /proc file among them, reads through it
+ * (`read_ops`). A socket reads by its type, a datagram or raw socket one
+ * datagram and a stream socket its bytes, straight into the checked user
+ * buffer, and without waiting under O_NONBLOCK, a status flag of the
+ * description, as recv(2) does; the query socket is -EOPNOTSUPP. A file of
+ * the KRFFS root or of a mounted type is `file_read`'s.
+ *
+ * A console read returns one line, or one burst of raw bytes, of at most
+ * N_TTY_READ_CHUNK bytes, and the caller loops for more. It waits in the
+ * line discipline of `console_tty` until a cooked line or VMIN raw bytes
+ * arrive, unless O_NONBLOCK makes it -EAGAIN, and a pending signal ends the
+ * wait with -EINTR. While a reader waits, or once a session owns the
+ * console, the keyboard interrupt cooks keystrokes into `console_tty` and
+ * not into the kernel shell, so the discipline echoes and edits them and
+ * turns ^C into SIGINT; `stdin_waiting_proc`, set for the length of the
+ * read, keeps the shell's scrollback keys off. A process whose thread group
+ * owns the framebuffer reads raw scancodes instead, for a game's controls,
+ * past the line discipline and without waiting.
+ *
+ * A session leader with no controlling terminal that reads the console
+ * takes it as its only one (`tty_make_sole_ctty`), its group the foreground
+ * and any pty it held dropped, so that a lone program receives ^C. A
+ * process that is not a leader takes nothing, since the terminal would be
+ * left to a leader that may have exited, and once a session owns the
+ * console its foreground group changes only by TIOCSPGRP. A member of a
+ * background group is sent SIGTTIN and the read is -EINTR, to be tried
+ * again in the foreground, or -EIO when SIGTTIN is blocked or ignored, as
+ * POSIX has it. Both checks come before `stdin_waiting_proc` is set, so no
+ * return leaves it set.
+ *
+ * A mouse read returns the whole `struct mouse_packet`s waiting that fit in
+ * `count`, without waiting, and 0 when `count` is less than one packet. A
+ * descriptor of any other kind is -EBADF.
  */
 static int32_t read_fd(int fd, char __user *buf, uint32_t count)
 {
@@ -4240,8 +4395,6 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
         return -EBADF;
     }
 
-    /* A zero-length read is a no-op that returns 0 (even with a NULL buffer,
-     * per POSIX) once the fd is known valid; do not touch buf. */
     if (count == 0) {
         return 0;
     }
@@ -4249,16 +4402,10 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
         return -EFAULT;
     }
 
-    /* Backing-ops object (pipe/tty/pty/device): dispatch through its vtable,
-     * but only if the descriptor was opened for reading (a write-only fd ->
-     * -EBADF). The plain file and enum types below have no ops and fall through
-     * to the enum dispatch. */
     if (entry->ops) {
         return read_ops(entry, buf, count);
     }
 
-    /* read() honors O_NONBLOCK (an OFD status flag) exactly like recv(),
-     * routing to the non-blocking variant. */
     if (entry->type == FD_TYPE_SOCKET) {
         int sock_nonblock;
         if (!entry->sock || !user_buffer_ok((uintptr_t)buf, count, 1)) {
@@ -4268,8 +4415,6 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
             return -EOPNOTSUPP;
         }
         sock_nonblock = entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK);
-        /* socket_*recv write straight into the validated user buffer; __force
-         * strips the __user tag at the boundary. */
         if (entry->sock->type == SOCK_DGRAM || entry->sock->type == SOCK_RAW) {
             if (sock_nonblock) {
                 return socket_try_recv(entry->sock, (uint8_t __force *)buf, (int)count, NULL, NULL,
@@ -4289,17 +4434,10 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
         int n;
 
         if (!(entry->flags & FD_FLAG_READ)) {
-            return -EBADF; /* Not readable (e.g., stdout/stderr) */
+            return -EBADF;
         }
 
-        /*
-         * If the process owns the framebuffer (graphics mode), use non-blocking
-         * raw scancode input for game controls, bypassing the line discipline.
-         */
         if (fb_owner_pid == current_proc->tgid) {
-            /* Non-blocking raw scancode read for games. kbd_read_scancodes
-             * writes into the user buffer; range-check it first, then __force
-             * strips the __user tag at the boundary. */
             if (!user_buffer_ok((uintptr_t)buf, count, 1)) {
                 return -EFAULT;
             }
@@ -4308,48 +4446,26 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
 
         want = count;
         if (want > sizeof(kbuf)) {
-            want = sizeof(kbuf); /* one line/burst per call; caller loops */
+            want = sizeof(kbuf);
         }
 
-        /*
-         * Park on console_tty until a line (cooked) or VMIN bytes (raw)
-         * arrive. Parking marks input_wq active, and once a session owns the
-         * console its sid is nonzero; either condition tells the keyboard
-         * IRQ to cook keystrokes into console_tty, not the kernel
-         * shell, so the byte wakes us (or waits as type-ahead).
-         * stdin_waiting_proc, set across the read below, only suppresses the
-         * scrollback hotkeys while we are parked; tty_read drains the serial
-         * port itself. The discipline echoes, edits, and recognizes ISIG, so
-         * Ctrl-C on the console now arrives as a posted SIGINT, and a
-         * pending signal unwinds the wait with -EINTR.
-         */
-        /* A SESSION LEADER reading the console with no controlling terminal
-         * claims it as its SOLE ctty (its group becomes the foreground, and any
-         * pty it held is dropped), so a lone program receives ^C; a non-leader
-         * does not (it would strand the tty on its since-dead leader). Once a
-         * session owns the console, the foreground is set by TIOCSPGRP. */
         if (console_tty.sid == 0 && (int)current_proc->sid == (int)current_proc->pid) {
             tty_make_sole_ctty(&console_tty, (int)current_proc->sid, (int)current_proc->pgid);
         }
-        /* A BACKGROUND process reading its controlling terminal is stopped with
-         * SIGTTIN (POSIX), unless that would wedge it (SIGTTIN blocked or
-         * ignored), in which case the read fails with -EIO. Decided BEFORE
-         * marking ourselves the console reader, so an early return leaves no
-         * stale flag. */
         if (tty_is_background(&console_tty, (int)current_proc->sid, (int)current_proc->pgid)) {
             if ((current_proc->sig_blocked & KSIG_BIT(SIGTTIN)) ||
                 current_proc->sigacts[SIGTTIN].handler == KSIG_IGN) {
                 return -EIO;
             }
             tty_signal_group((int)current_proc->pgid, SIGTTIN);
-            return -EINTR; /* the SIGTTIN stops us; the read is retried when fg */
+            return -EINTR;
         }
         stdin_waiting_proc = current_proc;
         n = tty_read(&console_tty, kbuf, (int)want,
                      entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
         stdin_waiting_proc = NULL;
         if (n < 0) {
-            return n; /* -EINTR: a signal cut the wait short */
+            return n;
         }
         if (copy_to_user(buf, kbuf, (uint32_t)n) != 0) {
             return -EFAULT;
@@ -4363,12 +4479,9 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
 
         packets_requested = (int)(count / sizeof(struct mouse_packet));
         if (packets_requested <= 0) {
-            return 0; /* Buffer too small for even one packet */
+            return 0;
         }
 
-        /* Read packets from the mouse ring buffer. mouse_read_packets writes
-         * into the user buffer; range-check it, then __force at the boundary.
-         */
         if (!user_buffer_ok((uintptr_t)buf,
                             (uint32_t)packets_requested * sizeof(struct mouse_packet), 1)) {
             return -EFAULT;
@@ -4386,12 +4499,16 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
 }
 
 /**
- * read(2) takes fd, buf and count.
+ * read(2): read up to the count in argument 2 of the descriptor in argument
+ * 0 into the user's buffer in argument 1 (`read_fd`); the bytes read, 0 at
+ * the end, or a negative errno. A count past USER_RW_MAX is taken as
+ * USER_RW_MAX, as on Linux.
  *
- * An eventfd and a timerfd read whole eight-byte counts and refuse a
- * shorter read with EINVAL, as Linux does, and a read of zero bytes among
- * them: such a read goes to their read method, before the zero-length
- * shortcut of `read_fd`, which readv(2) of nothing keeps, as Linux's does.
+ * A read of zero bytes from an anonymous descriptor with a read method goes
+ * to that method, ahead of the zero-length shortcut of `read_fd`: an
+ * eventfd and a timerfd read whole eight-byte counts and fail a shorter
+ * read, zero bytes among them, with EINVAL, as Linux's do. readv(2) of
+ * nothing keeps the shortcut, as Linux's does.
  */
 long sys_read(isr_params_t *params)
 {
@@ -4405,18 +4522,22 @@ long sys_read(isr_params_t *params)
 }
 
 /**
- * Read into `buf` only if that can be done without waiting. Returns the bytes
- * read, 0 when there are none, or a negative errno.
+ * Read up to `count` bytes of descriptor `fd`, whose entry is `entry`, into
+ * `buf`, only as far as that can be done without waiting: the second and
+ * later buffers of a readv(2) of anything whose bytes arrive over time.
+ * Returns the bytes read, 0 when none are waiting or `entry` is NULL, or a
+ * negative errno: -EOPNOTSUPP for the query socket, -EFAULT for a buffer the
+ * caller cannot write, or the read's own.
  *
- * This is what fills the second and later buffers of a `readv` on anything
- * whose bytes arrive, not sit there. Readiness is asked of the backing
- * object itself: the ops vtable answers `poll`, and a stream socket has a
- * non-blocking read of its own. No other process can consume the bytes
- * between the question and the read, since a system call is not preempted
- * here, and an interrupt only adds bytes.
+ * Readiness is asked of the object behind the descriptor: its vtable
+ * answers `poll`, and a stream or raw socket has a read of its own that
+ * does not wait. No other process can take the bytes between the question
+ * and the read: kernel code runs under the big lock, the switch an
+ * interrupt asks for waits for the system call's exit, and an interrupt
+ * only adds bytes. Any other descriptor is read by `read_fd`.
  *
  * A terminal answers 0 whatever it has. Its read returns one line, and a
- * second line into the next buffer would answer a question the reader did not
+ * second line in the next buffer would answer a question the reader did not
  * ask.
  */
 static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf, uint32_t count)
@@ -4460,43 +4581,39 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf, uint32_t 
 }
 
 /**
- * Fill the buffers of a `readv` from one waiting datagram.
+ * Fill the `iovcnt` buffers of the user's iovec array at `iov_user` from one
+ * datagram of the socket `entry` is open on, for readv(2) and recvmsg(2),
+ * waiting for one unless the description has O_NONBLOCK. Returns the bytes
+ * copied, or a negative errno from the wait: -EAGAIN when no datagram
+ * waits under O_NONBLOCK, -EINTR, or the socket's pending error, which the
+ * call takes.
  *
- * A datagram is a message, so it is taken once and copied out in pieces: the
- * buffers are filled in order until the datagram runs out, and what is left
- * over when the buffers run out first is dropped, which is what a `read` too
- * small for a datagram already does. Exactly one datagram is consumed either
- * way, and a datagram of no bytes returns 0 without being end of input.
+ * A datagram is a message, so it is taken once and copied out in pieces:
+ * the buffers are filled in order until the datagram runs out, and what is
+ * left when the buffers run out first is dropped, as a `read` too small for
+ * a datagram drops it. One datagram is consumed either way, unless `peek`
+ * leaves it waiting for the next receive, as MSG_PEEK asks, and one of no
+ * bytes returns 0 without being the end of input. `src_ip` and `src_port`,
+ * when not NULL, are given the datagram's sender, and `whole` its length,
+ * which is more than the bytes copied when the buffers took less, for
+ * MSG_TRUNC.
  *
- * The message is taken out of the socket whole and under one hold, and only
- * then spread across the buffers. Both halves of that are deliberate.
+ * The datagram is copied into a kernel buffer and consumed under one hold
+ * of `net_lock`, and only then spread across the buffers. A system call
+ * runs with interrupts enabled (net.h), so without the hold the receive
+ * interrupt could put the next datagram in the socket between two buffers,
+ * and the caller would get a prefix of one message and bytes of another.
+ * The sender is read under the same hold, so it is this datagram's, and a
+ * datagram gone between the wait and the hold counts as one of no bytes.
  *
- * Taking it under one hold is not optional: a syscall body runs with interrupts
- * ENABLED (only preemption is off, see net.h), so the receive interrupt would
- * otherwise deliver the next datagram over this one between two buffers, and
- * the caller would get a prefix of one message followed by bytes of another.
- *
- * Spreading it afterwards, with interrupts on and through `copy_to_user`, is
- * what keeps a caller's own iovec array from being a weapon. The buffers are
- * read from user memory as the copy goes, so a caller can point one buffer AT
- * its own vector list and have the datagram rewrite the destinations behind it.
- * Those addresses were never checked by the pass that ran before the read.
- * `copy_to_user` refuses an address it cannot fault in, which makes such a
- * caller a process scribbling on itself, not a raw kernel write to
- * whatever it named.
- *
- * The message buffer is one datagram wide on a 16 KB kernel stack. That is the
- * whole of what "a kernel buffer to read into" ever needed to be.
- *
- * `src_ip` and `src_port` report the datagram's sender for a caller that has
- * somewhere to put it, and are NULL for one that has not; the sender is read
- * under the same hold as the copy, since consuming is what publishes it. With
- * `peek` the datagram is copied and left waiting for the next receive, as
- * recvmsg's MSG_PEEK asks. `whole`, when not NULL, is given the datagram's
- * length, which is more than the bytes copied when the buffers took less,
- * for recvmsg's MSG_TRUNC.
- *
- * Returns the bytes copied, or a negative errno.
+ * The spread runs with interrupts on, through `copy_to_user`, and reads
+ * each iovec from user memory as it goes, so a buffer may point at the
+ * caller's own iovec array and the datagram rewrite the destinations after
+ * it, which the check made before the read never saw. `copy_to_user` fails
+ * on an address it cannot fault in, so such a caller writes only its own
+ * memory; the copy stops at the first iovec it cannot read or buffer it
+ * cannot write. The kernel buffer is one datagram, SOCK_RECV_BUF_SIZE
+ * bytes, on the 16 KB kernel stack.
  */
 int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, uint32_t *src_ip,
                     uint16_t *src_port, int peek, int32_t *whole)
@@ -4527,7 +4644,7 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, uint32_t 
     held = net_lock();
     taken = socket_dgram_peek(entry->sock, 0, message, (int)sizeof(message));
     if (taken < 0) {
-        taken = 0; /* it went between the wait and the hold */
+        taken = 0;
     }
     if (peek) {
         socket_dgram_sender(entry->sock, src_ip, src_port);
@@ -4555,7 +4672,7 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, uint32_t 
             chunk = USER_LEN32(iov.iov_len);
         }
         if (copy_to_user((void __user *)iov.iov_base, message + offset, chunk) != 0) {
-            break; /* the caller moved its own buffer out from under itself */
+            break;
         }
         offset += chunk;
         total += (int32_t)chunk;
@@ -4567,56 +4684,37 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, uint32_t 
     return total;
 }
 
-/*
- * Scatter read (readv(2)). The twin of `writev` above, and it exists for the
- * same reason that one does: musl's buffered stdio issues this call rather than
- * `read` whenever it is filling more than a single byte, so without it every
- * program that reads through `fgets`, `fread` or `scanf` fails on this system.
- * That is why several programs in this tree read a byte at a time through
- * `read` instead, and why busybox's `chpasswd`, which reads its input with
- * `xmalloc_fgetline`, exited without a message before this existed.
+/**
+ * readv(2): read from the descriptor in argument 0 into the buffers of the
+ * user's iovec array in argument 1, of the count in argument 2, in order;
+ * the total bytes read, or a negative errno. musl's stdio reads through
+ * this call whenever it asks for more than one byte, so `fgets`, `fread`
+ * and `scanf` depend on it.
  *
- * Its arguments are fd, struct iovec[] and iovcnt. Returns the total bytes read
- * across the iovecs, or a negative errno.
+ * The whole array is checked before a byte is taken, since a read cannot be
+ * undone: a count past IOV_MAX_LOCAL, or buffers of more than 0x7FFFFFFF
+ * bytes in all, is -EINVAL, and an iovec the caller cannot read or a buffer
+ * it cannot write is -EFAULT, with the input still queued. The buffers are
+ * checked by `user_buffer_ok` with write access, which faults their pages
+ * in, so an address inside the user window that is unmapped or read-only
+ * fails here and not half way through. An array that asks for nothing
+ * still checks the descriptor, so a closed one is -EBADF. Once a byte has
+ * been read, a later failure ends the call with the total.
  *
- * The whole vector list is checked before a byte is taken, because a read
- * cannot be undone: a caller that named a bad destination in its last buffer
- * gets -EFAULT with its input still queued, not a partial total over
- * data that is now gone. The check is the one `write` makes of a buffer it is
- * about to hand a driver, `user_buffer_ok` with write access, so an address
- * that is merely inside the user window but unmapped or read-only is refused
- * here and not discovered half way through. A list that asks for nothing still
- * checks the descriptor, so a closed fd is -EBADF and not a quiet zero.
+ * The buffers are filled in order, and how depends on what is behind the
+ * descriptor, since a second read is not always reading on. A regular file
+ * is read again for each buffer: its bytes have no message boundary. A
+ * datagram socket is read once (`readv_dgram`): one datagram is one
+ * message, and a second read would take the next one. Anything else, a
+ * pipe, a stream socket, a device or a /proc file, is read for the first
+ * buffer by the ordinary read, which waits if it must, and for each later
+ * one only while it has bytes waiting (`read_ready`), since a read of an
+ * empty one would wait for input nobody has written. A terminal is read
+ * once: its line discipline returns one line, and a second buffer filled
+ * with the next would return two lines where the reader asked for one.
  *
- * The buffers are then filled in order, and what "in order" costs depends on
- * what is behind the descriptor, because a second read is not always the same
- * thing as reading on.
- *
- * A regular file is read again for each buffer. Its bytes carry no message
- * boundary, so a walk is the single scatter read.
- *
- * A datagram socket is NOT read again: one datagram is one message, and a
- * second read would take the next one while the first one's tail was dropped.
- * The waiting datagram is copied whole into a kernel buffer through
- * `socket_dgram_peek` and consumed at once, under the network lock, and the
- * buffer is then scattered piece by piece, so the whole of it fills as many
- * buffers as it needs and the remainder past the last one is discarded the
- * way a plain `read` discards it.
- *
- * A pipe, a stream socket, a device or a `/proc` file is read again only while
- * it says it has more, since a read of an empty one blocks for input nobody has
- * written. Asking and then reading is safe for two reasons together: no other
- * process runs in between, because a syscall is not preemptible here, and the
- * interrupts that do run can only ADD to what is readable, never take it away.
- * Nothing else empties a pipe or a receive ring.
- *
- * A terminal is read exactly once, and that is not a limitation but its
- * contract: the line discipline hands back one line, and filling a second
- * buffer with the line after it would return two lines where a reader asked
- * for one.
- *
- * Returning less than was asked for is what a reader must already handle, and
- * musl's stdio, which is what issues this call, loops.
+ * The call stops at the first buffer it does not fill. Returning less than
+ * was asked is what a reader must handle, and musl's stdio loops.
  */
 long sys_readv(isr_params_t *params)
 {
@@ -4677,8 +4775,6 @@ long sys_readv(isr_params_t *params)
             return (total > 0) ? total : -EFAULT;
         }
 
-        /* The first buffer is filled by the ordinary read, which waits if it
-         * must; every buffer after it only by one that will not wait. */
         if (total > 0 && !walk) {
             r = read_ready(entry, fd, (char __user *)iov.iov_base, USER_LEN32(iov.iov_len));
             if (r <= 0) {
@@ -4700,11 +4796,17 @@ long sys_readv(isr_params_t *params)
 }
 
 /**
- * Duplicate a descriptor onto the lowest free fd (dup(2)).
+ * dup(2): a copy of the descriptor in argument 0 at the lowest free
+ * number; the new number, or -EBADF for a descriptor that is not open,
+ * -EMFILE or -ENOMEM (`fd_alloc_from`).
  *
- * Its argument is oldfd. Returns the new fd, or -errno. The duplicate SHARES
- * oldfd's open-file description (shared seek offset); a socket gains a
- * reference; the new fd's FD_CLOEXEC is clear.
+ * The copy shares the open-file description, and with it the offset and
+ * the status flags, and the object behind it with its vtable; a socket
+ * gains a reference. FD_CLOEXEC is clear on the copy and FD_FLAG_PATH is
+ * kept, so the copy of an O_PATH descriptor is one too. The source is
+ * looked up again after the allocation, since the table may have grown and
+ * its entries moved, and the fresh description the allocation made is
+ * dropped for the shared one.
  */
 long sys_dup(isr_params_t *params)
 {
@@ -4725,15 +4827,13 @@ long sys_dup(isr_params_t *params)
     if (newfd < 0) {
         return newfd;
     }
-    /* The table may have grown, and its entries moved: the source is looked
-     * up again. */
     entry = fd_get(current_proc->fds, oldfd);
     dst = &current_proc->fds->entries[newfd];
-    fd_ofd_unref(dst->ofd); /* drop the fresh OFD; share oldfd's instead */
+    fd_ofd_unref(dst->ofd);
     dst->type = entry->type;
     dst->node = entry->node;
     dst->sock = entry->sock;
-    dst->ops = entry->ops; /* a dup shares the same backing object + vtable */
+    dst->ops = entry->ops;
     dst->priv = entry->priv;
     dst->dev = entry->dev;
     dst->ofd = entry->ofd;
@@ -4747,12 +4847,13 @@ long sys_dup(isr_params_t *params)
 
 /**
  * Free slot `fd` for dup2 and dup3 to put a copy in, closing the descriptor
- * there if there is one, with every backing it held (`fd_teardown`). -EBUSY
- * when the slot cannot be had: an open has reserved it and not yet filled
- * it, which is when Linux's dup2 answers EBUSY; or a call of another thread
- * sharing the table holds its descriptor, or the descriptor a close left to
- * such a call, or a close of it is still releasing it, where Linux replaces
- * the descriptor and the call or the close keeps its file.
+ * there if there is one, with every backing it held (`fd_teardown`), which
+ * may sleep. Returns 0, or -EBUSY when the slot cannot be had: an open has
+ * reserved it and not yet filled it, which is when Linux's dup2 answers
+ * EBUSY; or a call of another thread sharing the table holds its
+ * descriptor, or the descriptor a close left to such a call, or a close of
+ * it is still releasing it, where Linux replaces the descriptor and the
+ * call or the close keeps its file.
  */
 static int32_t dup_clear(int fd)
 {
@@ -4771,8 +4872,18 @@ static int32_t dup_clear(int fd)
 }
 
 /**
- * dup2(2) takes oldfd and newfd. Returns newfd or -errno. A `newfd` past the
- * end of the table grows it, and a heap with no room for that is ENOMEM.
+ * dup2(2): make the descriptor `newfd`, argument 1, a copy of `oldfd`,
+ * argument 0, closing what `newfd` had open; `newfd`, or a negative errno.
+ * A bad `oldfd`, and a `newfd` that is negative or past the process's
+ * limit, is -EBADF, and when the two are equal the call checks `oldfd` and
+ * changes nothing. A `newfd` past the end of the table grows it, and a heap
+ * with no room for that is -ENOMEM; a slot `dup_clear` cannot free is
+ * -EBUSY. `oldfd` is looked up again after the table grows, since its
+ * entries may have moved.
+ *
+ * The copy shares the open-file description, and with it the offset, as
+ * POSIX has it, and the object behind it with its vtable; a socket gains a
+ * reference, and the copy's FD_CLOEXEC is clear.
  *
  * The replacement of an open `newfd` may sleep (`dup_clear`), and another
  * thread may close `oldfd` meanwhile. The call holds `oldfd`, so the close
@@ -4808,21 +4919,17 @@ long sys_dup2(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    old_entry = fd_get(current_proc->fds, oldfd); /* the entries may have moved */
+    old_entry = fd_get(current_proc->fds, oldfd);
 
     if (dup_clear(newfd) != 0) {
         return -EBUSY;
     }
 
-    /* Duplicate the descriptor: it SHARES the open-file description (so the
-     * seek offset is shared, per POSIX), gaining a reference; a duplicated
-     * socket gains another reference too; and dup2 leaves the new fd's CLOEXEC
-     * clear. */
     new_entry = &current_proc->fds->entries[newfd];
     new_entry->type = old_entry->type;
     new_entry->node = old_entry->node;
     new_entry->sock = old_entry->sock;
-    new_entry->ops = old_entry->ops; /* share the backing object + vtable */
+    new_entry->ops = old_entry->ops;
     new_entry->priv = old_entry->priv;
     new_entry->dev = old_entry->dev;
     new_entry->ofd = old_entry->ofd;
@@ -4837,7 +4944,8 @@ long sys_dup2(isr_params_t *params)
     return newfd;
 }
 
-/** Whether a synthetic node of `kind` is one of the directories. */
+/** Whether a synthetic node of `kind` is one of the directories, a /sys
+ * device link among them, which leads to its device's directory. */
 static int synth_kind_is_dir(int kind)
 {
     return kind == VNODE_DEV_DIR || kind == VNODE_PTS_DIR || kind == VNODE_PROC_DIR ||
@@ -4913,11 +5021,10 @@ static int32_t chdir_mounted(const struct vfs_ref *ref, char *path)
  * that a later relative name classifies right; one of another type as
  * `chdir_mounted` names it; one of the KRFFS boot root by its node. Entering
  * a directory takes search permission on it; anything else is -ENOTDIR. The
- * KRFFS root is a directory whatever its stored mode says: it is the file
- * system's anchor, not a node `mkdir` made. "/" is taken without a walk only
- * when it names the KRFFS boot root itself, which everyone may search; a
- * root chroot gave the process is resolved and checked like any other
- * directory.
+ * KRFFS root is a directory whatever its stored mode says, since no `mkdir`
+ * made it. "/" is taken without a walk only when it names the KRFFS boot
+ * root itself, which everyone may search; a root chroot gave the process is
+ * resolved and checked like any other directory.
  *
  * A type that keeps a node only while it is open, mounted KRFFS, counts no
  * hold for the walk's reference, and the checks between the walk and the
@@ -4926,6 +5033,10 @@ static int32_t chdir_mounted(const struct vfs_ref *ref, char *path)
  * records the node, so an rmdir that comes between finds the pin, and one
  * that comes after finds the working directory, and neither frees the
  * directory the record then names.
+ *
+ * Returns 0, or a negative errno: the walk's, -ENOTDIR, -EACCES, -ENOENT
+ * for a /proc directory whose process has exited or a /sys directory whose
+ * device is gone, -ENAMETOOLONG, or -ENOMEM.
  */
 static int32_t do_chdir(char *path)
 {
@@ -5005,12 +5116,12 @@ static int32_t do_chdir(char *path)
 }
 
 /**
- * Change the current working directory (chdir(2)).
- *
- * Its argument is path. Returns 0 or -errno. Stores the canonical absolute path
- * of the resolved directory (a KRFFS directory, a directory of another mounted
- * file system, or a synthetic /dev or /proc directory); a regular file is
- * -ENOTDIR, a missing path -ENOENT.
+ * chdir(2): make the directory the user's path in argument 0 names the
+ * working directory; 0 or a negative errno (`do_chdir`). The working
+ * directory records the canonical path of the directory the walk reached,
+ * of the KRFFS root, of a mounted type, or of /dev, /proc or /sys. A NULL
+ * path is -EFAULT, a path to anything but a directory -ENOTDIR, and a
+ * missing one -ENOENT.
  */
 long sys_chdir(isr_params_t *params)
 {
@@ -5031,7 +5142,9 @@ long sys_chdir(isr_params_t *params)
 }
 
 /**
- * fchdir(2) takes fd. Make the directory `fd` is open on the working directory.
+ * fchdir(2): make the directory the descriptor in argument 0 is open on the
+ * working directory; 0 or a negative errno, -EBADF for a descriptor that is
+ * not open.
  *
  * The working directory's path is the one the descriptor's `*at` calls
  * resolve against (`fd_dir_path`), so it follows a directory a type can name
@@ -5209,7 +5322,9 @@ static int32_t path_strip(char *path, const char *root)
  * stored just before the root, with nothing between the two that sleeps: a
  * thread that shares both (CLONE_FS) never joins a path from one root to
  * the other. A working directory that moves takes its hold on the new root
- * last, after the old root is let go.
+ * last, after the old root is let go. Returns 0: a working directory whose
+ * new path cannot be made, for want of a page or of room, moves to the new
+ * root as well.
  */
 static int32_t root_enter(const struct vfs_ref *ref, char *buf)
 {
@@ -5239,7 +5354,7 @@ static int32_t root_enter(const struct vfs_ref *ref, char *buf)
 /**
  * chroot(2) takes path. Make the directory `path` names the calling process's
  * root: its absolute paths and the absolute targets of its symbolic links start
- * there, and `..` there stays there (vfs.Readme.md).
+ * there, and `..` there stays there (fs/vfs.Readme.md).
  *
  * The refusals come in Linux's order: the path's own (ENOENT, ENOTDIR,
  * ELOOP, ENAMETOOLONG, EACCES on the way), then `root_check`'s. The working
@@ -5288,13 +5403,16 @@ long sys_chroot(isr_params_t *params)
 }
 
 /**
- * getcwd(2) takes buf and size. Returns the path's length with its NUL, as
- * Linux's system call does, or -errno.
+ * getcwd(2): copy the working directory's path from the process's root,
+ * with its NUL, into the user's buffer in argument 0, of the size in
+ * argument 1; the path's length with its NUL, as Linux's system call
+ * returns, or -EFAULT for a NULL or bad buffer, -EINVAL for a size of 0,
+ * -ERANGE for a path that does not fit, or -ENOMEM when no path page is to
+ * be had.
  *
  * The path is copied into a path page before the copy out, which may sleep
  * on a fault: a thread that shares the working directory (CLONE_FS) may
- * chdir meanwhile, which frees a long path's string. -ENOMEM when no page is
- * to be had.
+ * chdir meanwhile, which frees a long path's string.
  */
 long sys_getcwd(isr_params_t *params)
 {
@@ -5331,13 +5449,11 @@ long sys_getcwd(isr_params_t *params)
 }
 
 /**
- * Report a node's three times into a stat64.
- *
- * KRFFS stores them; before this kernel had a clock nothing read them out, so
- * every file reported the epoch and no build tool could tell a source from the
- * object built from it. Access time is REPORTED but never advanced by a read
- * (see fs/krffs.c): the file system is a write-back page cache, and stamping an
- * atime on every read would dirty a page on every read.
+ * Report the three times a KRFFS node stores into a stat64. No read
+ * advances the access time (`krffs_stamp_at` in fs/krffs.c): the file
+ * system is behind a write-back page cache, and stamping an access time at
+ * every read would dirty a page at every read. One set by utimensat is
+ * reported as it was set.
  */
 static void stat64_node_times(struct user_stat *kst, const krffs_node_t *node)
 {
@@ -5365,7 +5481,9 @@ static void stat64_boot_times(struct user_stat *kst)
     kst->st_ctime_nsec = 0;
 }
 
-/** Fill the common identity of a read-only global proc file. */
+/** Give `kst` the identity of a read-only /proc file that is not a
+ * process's: proc's device, a regular file of mode 0444, and the inode
+ * `inode`. Returns 0, for `synth_stat` to return. */
 static int32_t synth_proc_stat(struct user_stat *kst, uint32_t inode)
 {
     kst->st_dev = PROCFS_FSID;
@@ -5443,9 +5561,9 @@ static void stat64_seen(struct user_stat *kst)
 /**
  * The root directory's own three times, into a stat64.
  *
- * The root is a real node and creating an entry in it stamps its times, so it
- * reports them like any other directory; a machine with no file system mounted
- * has nothing to report but the boot time.
+ * The root is a node like any other, and creating an entry in it stamps its
+ * times, so it reports them as any directory does; a machine with no file
+ * system mounted has nothing to report but the boot time.
  */
 static void stat64_root_times(struct user_stat *kst)
 {
@@ -5456,11 +5574,16 @@ static void stat64_root_times(struct user_stat *kst)
     }
 }
 
-/* A stat64 for a node on a mount that is not the root, from its getattr:
- * the device is the node the mount was made from, or else one the mount's
- * index gives, so a program telling files apart by (st_dev, st_ino) sees
- * two mounts as two devices (`procfs_mount_dev`), and a bind mount as the
- * device of the mount it shows. */
+/**
+ * Fill `kst` for the node `r` holds on a mount that is not the KRFFS root,
+ * from the type's getattr; 0, or the getattr's error. The device is the one
+ * `procfs_mount_dev` gives the mount's entry in the table, a bind mount
+ * taking that of the mount it shows: the device numbers of the node the
+ * mount was made from, or a number of the mount's own, so a program telling
+ * files apart by (st_dev, st_ino) sees two mounts as two devices. A type
+ * that does not count blocks reports the size in 512-byte blocks, rounded
+ * up.
+ */
 static int32_t vfs_fill_stat64(struct user_stat *kst, const struct vfs_ref *r)
 {
     struct vfs_stat st;
@@ -5496,12 +5619,17 @@ static int32_t vfs_fill_stat64(struct user_stat *kst, const struct vfs_ref *r)
     return 0;
 }
 
+/**
+ * Fill `kst` from the node `node` of the KRFFS boot root: its type and
+ * permission bits, owner, group, size and times, the size in 512-byte
+ * blocks, and the inode `krffs_node_ino` gives it. The root node is a
+ * directory of mode 0755 whatever its stored mode says: no mkdir made it,
+ * and a path can reach it through "..".
+ */
 static void krffs_fill_stat64(struct user_stat *kst, krffs_node_t *node)
 {
     k_memset(kst, 0, sizeof(*kst));
     if (node == krffs_fs->node) {
-        /* The root is a directory even if its on-disk mode lacks S_IFDIR (it is
-         * the filesystem anchor); a path can reach it via "..". */
         kst->st_mode = S_IFDIR | 0755;
     } else {
         kst->st_mode = krffs_mode_type(node->mode) | (node->mode & 07777);
@@ -5516,8 +5644,7 @@ static void krffs_fill_stat64(struct user_stat *kst, krffs_node_t *node)
     stat64_node_times(kst, node);
 }
 
-/* Fill a stat64 from an open descriptor (factored from sys_fstat64 so the magic
- * /proc/<pid>/fd/<n> symlinks can stat their target when followed). */
+/* The stat of a descriptor, for `synth_fd_stat`; defined with sys_fstat64. */
 static int32_t fstat_fill(fd_entry_t *e, struct user_stat *kst);
 
 /**
@@ -5550,12 +5677,13 @@ static int32_t synth_fd_stat(int pid, int fd, struct user_stat *kst)
     return 0;
 }
 
-/* Stable /dev/pts inodes (distinct from devfs's): the directory, then one per
- * slave (so a slave's (st_dev, st_ino) identity is consistent for ttyname). */
+/* The inode of /dev/pts, apart from devfs's numbers. */
 #define PTS_INO_DIR 3u
 /* /dev/log's inode, below the slaves' and above the directory's. */
 #define DEV_LOG_INO 4u
 
+/* Slave N's inode is PTS_INO_BASE + N at every stat, so that the
+ * comparison of (st_dev, st_ino) ttyname makes matches. */
 #define PTS_INO_BASE 0x1000u
 
 /** Give `kst` the owner of process `pid`'s files under /proc, as Linux's
@@ -5588,6 +5716,37 @@ static int32_t synth_fd_visible(int rpid, int fd)
     return procfs_may_read(rpid) ? 0 : -EACCES;
 }
 
+/**
+ * Fill `kst` with the attributes stat gives the /dev, /proc or /sys node
+ * `vp`, a /proc link followed to what it names when `follow`. Returns 0, or
+ * -ENOENT for a node that is not there, a process that has exited, a device
+ * that is gone and a pty that is not allocated among them; -ENOTDIR for a
+ * name under a node that is not a directory; or -EACCES for a descriptor's
+ * entry under /proc/PID/fd or /proc/PID/fdinfo of a process the caller may
+ * not read (`synth_fd_visible`), or for a followed namespace link of one.
+ *
+ * Each node has one link, 4096-byte blocks and the boot time for its times;
+ * a task directory has the links `procfs_task_links` counts, and a pty
+ * slave the access and modification times of its pty. A /proc file is a
+ * regular file of mode 0444, root's unless it is a process's, whose files
+ * and directories are owned as `synth_pid_owner` has it; oom_score_adj,
+ * uid_map, gid_map and setgroups are their owner's to write, mode 0644, as
+ * on Linux, and so is a /proc/sys file that can be written. /proc/disk and
+ * a descriptor's fdinfo file are 0400, and a process's fd directory 0500.
+ *
+ * The /proc links, /proc/self, a process's cwd, root and exe, its namespace
+ * links and its descriptors' links, are links of mode 0777 when not
+ * followed. A cwd, root or exe link comes here only unfollowed, since the
+ * walk follows it; one the caller may not read is there, as on Linux, and
+ * one of no process, or the exe of a process with no program, is not.
+ * Followed, /proc/self is the process's directory, a namespace link is
+ * nsfs's file of the namespace, and a descriptor's link is the stat of the
+ * file the descriptor is open on (`synth_fd_stat`).
+ *
+ * A pty slave, /dev/pts/N, is a character device whose mode, owner and
+ * group are kept on the pty, where the login server's chown and chmod put
+ * them.
+ */
 static int32_t synth_stat(const struct vpath *vp, struct user_stat *kst, int follow)
 {
     uint32_t mode = 0, rdev = 0, ino = 0;
@@ -5619,8 +5778,6 @@ static int32_t synth_stat(const struct vpath *vp, struct user_stat *kst, int fol
         kst->st_ino = procfs_ino_dir();
         return 0;
     case VNODE_PROC_CMDLINE:
-        /* /proc/cmdline: the boot command line, a read-only regular
-         * file. */
         kst->st_dev = PROCFS_FSID;
         kst->st_mode = S_IFREG | 0444;
         kst->st_ino = procfs_ino_cmdline();
@@ -5635,8 +5792,6 @@ static int32_t synth_stat(const struct vpath *vp, struct user_stat *kst, int fol
                                                             : procfs_ino_sysvipcdir();
         return 0;
     case VNODE_PROC_NET_DEV:
-        /* /proc/net/dev: what the interface has carried, anyone's to
-         * read. */
         kst->st_dev = PROCFS_FSID;
         kst->st_mode = S_IFREG | 0444;
         kst->st_ino = procfs_ino_netdev();
@@ -5731,7 +5886,6 @@ static int32_t synth_stat(const struct vpath *vp, struct user_stat *kst, int fol
     case VNODE_SYS_FILE:
         return synth_sys_stat(vp, kst, follow);
     case VNODE_PROC_DISK:
-        /* /proc/disk: what the disk reported, root-readable only. */
         kst->st_dev = PROCFS_FSID;
         kst->st_mode = S_IFREG | 0400;
         kst->st_ino = procfs_ino_disk();
@@ -5742,9 +5896,6 @@ static int32_t synth_stat(const struct vpath *vp, struct user_stat *kst, int fol
         char scratch[1];
         int rpid = procfs_resolve_id(vp);
 
-        /* Only an un-followed stat comes here. A link the caller may not
-         * read exists, as on Linux; one of no program or no process does
-         * not. */
         if (rpid < 0 ||
             (vp->kind == VNODE_PROC_EXE
                  ? procfs_readlink_exe(rpid, scratch, 0)
@@ -5762,8 +5913,6 @@ static int32_t synth_stat(const struct vpath *vp, struct user_stat *kst, int fol
         int rpid = procfs_resolve_id(vp);
         int rc = rpid < 0 ? -ENOENT : procfs_readlink_ns(rpid, vp->procfd, scratch, 0);
 
-        /* As on Linux, the link of a process the caller may not read
-         * exists, and following it is refused. */
         if (rc == -ENOENT || (follow && rc < 0)) {
             return rc < 0 ? rc : -ENOENT;
         }
@@ -5788,9 +5937,6 @@ static int32_t synth_stat(const struct vpath *vp, struct user_stat *kst, int fol
         if (procfs_resolve_id(vp) < 0) {
             return -ENOENT;
         }
-        /* /proc/self is a symlink: an un-followed stat (lstat) sees the
-         * link, a followed one resolves to the pid directory.
-         * /proc/<numeric> and /proc/<pid>/fd are real directories. */
         if (vp->kind == VNODE_PROC_PID && vp->pid == SYNTH_PID_SELF && vp->tid == 0 && !follow) {
             kst->st_dev = PROCFS_FSID;
             kst->st_mode = 0120777; /* S_IFLNK | 0777 */
@@ -5813,8 +5959,6 @@ static int32_t synth_stat(const struct vpath *vp, struct user_stat *kst, int fol
         kst->st_mode = S_IFREG | 0444;
         kst->st_ino = procfs_ino_pid(procfs_resolve_id(vp));
         synth_pid_owner(procfs_resolve_id(vp), kst);
-        /* oom_score_adj and the user namespace's maps are their owner's to
-         * write, as on Linux. */
         if (vp->procfile == SYNTH_PROC_OOM_ADJ || vp->procfile == SYNTH_PROC_UID_MAP ||
             vp->procfile == SYNTH_PROC_GID_MAP || vp->procfile == SYNTH_PROC_SETGROUPS) {
             kst->st_mode = S_IFREG | 0644;
@@ -5856,16 +6000,12 @@ static int32_t synth_stat(const struct vpath *vp, struct user_stat *kst, int fol
         kst->st_size = (int64_t)k_strlen(SYNTH_DEV_LOG_TARGET);
         return 0;
     case VNODE_PTS_DIR:
-        /* /dev/pts: a directory. */
         kst->st_dev = DEVFS_FSID;
         kst->st_mode = S_IFDIR | 0755;
         kst->st_ino = PTS_INO_DIR;
         return 0;
     case VNODE_PTS: {
-        /* /dev/pts/N: a slave terminal (S_IFCHR), only if pty N is
-         * allocated. The rdev is the Linux Unix98 pty slave major 136.
-         * Ownership lives on the pty, where the login server's chown/chmod
-         * put it. */
+        /* Linux's major for a Unix98 pty slave is 136. */
         struct pty *pt = pty_get(vp->pts_index);
         if (!pt) {
             return -ENOENT;
@@ -6190,24 +6330,33 @@ static int32_t open_path(const char *name, int flags)
 }
 
 /**
- * readlink core (readlink(2)/readlinkat(2)).
+ * The core of readlink(2) and readlinkat(2): copy the target of the link at
+ * `name`, leading '/' stripped, into the user's `ubuf` of `bufsiz` bytes,
+ * cut to fit and with no NUL, as the call's contract has it; the bytes
+ * copied, or a negative errno. musl's readlink returns the count as it is,
+ * and its ttyname_r appends the NUL and takes a full buffer as truncation.
  *
- * The links are /proc/self, the /proc/<pid>/fd/<n> magic links (which
- * ttyname reads), and the symbolic links of a mounted type that has them,
- * read through the type. The result is the byte count and is NOT
- * NUL-terminated (the readlink contract; musl's readlink passes the count
- * through, and its ttyname_r is what appends a terminator and treats a full
- * buffer as truncation). `name` is the path, leading '/' stripped. A path
- * that named a directory by its end, `dir`, follows a final link and must
- * reach a directory (`resolve_named`), which is no link: -EINVAL, as on
- * Linux.
+ * The links are those of a mounted type that has them, read through the
+ * type, and the synthetic ones: /proc/self, the number of the caller's
+ * process as its PID namespace sees it; a process's exe, cwd and root, its
+ * namespace links, and its descriptors' links, which ttyname reads and
+ * which are -EACCES to a caller that may not read the process's
+ * descriptors; a /sys device link, relative as Linux writes it; and
+ * /dev/log. A process that has exited, or a device that is gone, is
+ * -ENOENT.
+ *
+ * A NULL buffer or a size of 0 is -EINVAL, and so is a node that is not a
+ * link. A path that named a directory by its end, `dir`, follows a final
+ * link and must reach a directory (`resolve_named`), which is no link:
+ * -EINVAL, as on Linux. The target is made in a path page, up to the
+ * resolver's own bound, and no page to be had is -ENOMEM.
  */
 static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz, int dir)
 {
     struct vpath vp;
     struct vfs_ref ref;
     const struct vpath *svp;
-    char *link; /* a target up to the resolver's own bound, in a path page */
+    char *link;
     int n, pid, kind;
 
     if (!ubuf || bufsiz == 0) {
@@ -6228,8 +6377,6 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz,
     }
     svp = vfs_synth_vpath(ref.mnt, ref.node);
     if (!svp) {
-        /* A link on a mounted type: its target from the type, copied out
-         * without the terminator, as readlink(2) does. */
         n = ref.mnt->type->ops->readlink
                 ? ref.mnt->type->ops->readlink(ref.mnt, ref.node, link, VFS_PATH_MAX)
                 : -EINVAL;
@@ -6241,7 +6388,6 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz,
     kind = vp.kind;
 
     if (kind == VNODE_PROC_PID && vp.pid == SYNTH_PID_SELF && vp.tid == 0) {
-        /* /proc/self is a symlink to the caller's numeric pid. */
         uint32_t uv;
         char t[12];
         int tn = 0;
@@ -6283,12 +6429,12 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz,
         n = (int)k_strlen(SYNTH_DEV_LOG_TARGET);
         k_memcpy(link, SYNTH_DEV_LOG_TARGET, (uint32_t)n);
     } else {
-        n = -EINVAL; /* not a symlink */
+        n = -EINVAL;
     }
 
 out:
     if (n >= 0 && (uint32_t)n > bufsiz) {
-        n = (int)bufsiz; /* truncate to the caller's buffer */
+        n = (int)bufsiz;
     }
     if (n >= 0 && copy_to_user(ubuf, link, (uint32_t)n) != 0) {
         n = -EFAULT;
@@ -6297,6 +6443,11 @@ out:
     return n;
 }
 
+/**
+ * readlink(2): copy the target of the link at the user's path in argument 0
+ * into the buffer in argument 1, of the size in argument 2 (`do_readlink`);
+ * the bytes copied, or a negative errno, -EFAULT for a NULL path.
+ */
 long sys_readlink(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 0);
@@ -6318,6 +6469,11 @@ long sys_readlink(isr_params_t *params)
     return rc;
 }
 
+/**
+ * readlinkat(2): readlink(2) of a path relative to the directory descriptor
+ * in argument 0, or to the working directory for AT_FDCWD; the path, the
+ * buffer and its size are arguments 1 to 3.
+ */
 long sys_readlinkat(isr_params_t *params)
 {
     int dirfd = (int)SC_ARG(params, 0);
@@ -6340,7 +6496,8 @@ long sys_readlinkat(isr_params_t *params)
     return rc;
 }
 
-/* Whether a synthetic node is one of /proc's links, by its unfollowed mode. */
+/** Whether the synthetic node `vp` is a link when not followed, by the mode
+ * `synth_stat` gives it: a /proc link, a /sys device link or /dev/log. */
 static int synth_is_link(const struct vpath *vp)
 {
     struct user_stat lst;
@@ -6350,7 +6507,16 @@ static int synth_is_link(const struct vpath *vp)
 
 /**
  * The attributes stat64 and lstat64 report for the user's `path`, a final
- * symbolic link followed when `follow`, copied out to `st`.
+ * symbolic link followed when `follow`, copied out to `st` with the owner
+ * and group the caller's user namespace sees; 0, or a negative errno:
+ * -EFAULT for a NULL argument or a bad buffer, the walk's error for a
+ * missing name or a directory on the way that is not one or may not be
+ * searched, or -ENOTDIR for a path that names a directory by its end, which
+ * follows a final link whatever `follow` says, and reaches anything else.
+ *
+ * The KRFFS root has a fixed identity, inode 1 and mode 0755, and times of
+ * its own, which an entry made in it stamps, so that a program watching the
+ * directory sees the change.
  *
  * The walk takes the lock of the mount it ends on, where the type asks for
  * one, and keeps it until the attributes are read: a node of a mounted
@@ -6377,7 +6543,6 @@ static int32_t do_stat64(const char __user *path, struct user_stat __user *st, i
         follow |= dir;
     }
 
-    /* Build the result in a kernel struct, then copy it out in one shot. */
     k_memset(&kst, 0, sizeof(kst));
 
     {
@@ -6388,7 +6553,7 @@ static int32_t do_stat64(const char __user *path, struct user_stat __user *st, i
 
         path_buf_put(pathbuf);
         if (rc != 0) {
-            return rc; /* missing, not-a-dir, or a denied ancestor */
+            return rc;
         }
         vp = vfs_synth_vpath(ref.mnt, ref.node);
         if (vp) {
@@ -6396,9 +6561,6 @@ static int32_t do_stat64(const char __user *path, struct user_stat __user *st, i
         } else if (!mnt_is_root(ref.mnt)) {
             rc = vfs_fill_stat64(&kst, &ref);
         } else if ((krffs_node_t *)ref.node == krffs_fs->node) {
-            /* The root's identity is fixed: ino 1, 0755, and real times: an
-             * entry created in it stamps them, which is how a program
-             * watching a directory sees it. */
             kst.st_mode = S_IFDIR | 0755;
             kst.st_nlink = 1;
             STAT_SET_INO(&kst, 1);
@@ -6425,19 +6587,24 @@ static int32_t do_stat64(const char __user *path, struct user_stat __user *st, i
     return 0;
 }
 
-/* stat64 follows symlinks; lstat64 does not. On i386 musl maps its
- * stat()/lstat() onto these (via the statx -> *stat64 fallback), so lstat()
- * only works once 196 exists. The follow flag decides whether a symbolic
- * link at the end, on /proc or on a mounted type, is the result or its
- * target; a link the path names as a directory by its end is followed
- * either way (`path_names_dir`), and such a path that reaches anything but a
- * directory is -ENOTDIR. */
+/**
+ * stat64(2), and stat(2) on x86-64: copy out the attributes of the file at
+ * the user's path in argument 0, through a final symbolic link, to the
+ * buffer in argument 1 (`do_stat64`); 0 or a negative errno. musl's stat
+ * comes here on x86-64, and on i386 when statx is missing.
+ */
 long sys_stat64(isr_params_t *params)
 {
     return do_stat64((const char __user *)SC_ARG(params, 0),
                      (struct user_stat __user *)SC_ARG(params, 1), 1);
 }
 
+/**
+ * lstat64(2), and lstat(2) on x86-64: as stat64(2), but a final symbolic
+ * link, on /proc or on a mounted type, is reported itself. A link the path
+ * names as a directory by its end is followed either way
+ * (`path_names_dir`).
+ */
 long sys_lstat64(isr_params_t *params)
 {
     return do_stat64((const char __user *)SC_ARG(params, 0),
@@ -6446,22 +6613,19 @@ long sys_lstat64(isr_params_t *params)
 
 /*
  * The struct statfs a statfs fills, as Linux writes it and musl reads it
- * (`struct user_statfs`, arch/uabi.h).
- *
- * `f_bsize` is the unit `f_blocks` and `f_bfree` are counted in. KRFFS has no
- * block structure at all, so the unit is chosen rather than found: one byte
- * would overflow the 64-bit counts on no disk this machine can hold, and 1024
- * is what `df` prints in by default, so the numbers a person reads are the
- * numbers the kernel holds divided by nothing.
+ * (`struct user_statfs`, in the architecture's uabi.h). `f_bsize` is the
+ * unit `f_blocks` and `f_bfree` count in. KRFFS has no blocks, so the unit
+ * is chosen: 1024, the unit `df` prints in by default, so that `df` prints
+ * the kernel's counts as they are.
  */
 
 #define STATFS_BSIZE 1024u
 
-/* The three permanent mounts and the magic each reports; `/proc/mounts` names
- * these, the tmpfs at /dev/shm, which answers with its own statfs as any
- * mounted volume does, and every volume `mount(2)` has placed. The values are
- * Linux's for the two synthetic ones, so a program that recognises them finds
- * what it expects; KRFFS has no assigned magic and uses its own name. */
+/* The magic numbers statfs reports for the KRFFS boot root and for /proc,
+ * /dev and /sys; a mounted volume, the tmpfs at /dev/shm among them,
+ * answers with its own statfs. The synthetic ones have Linux's numbers, so
+ * a program that recognises them finds what it expects; KRFFS has no
+ * assigned number and reports its own name. */
 #define STATFS_MAGIC_KRFFS 0x4B524646u /* "KRFF" */
 
 #define STATFS_MAGIC_PROC 0x9FA0u
@@ -6470,16 +6634,16 @@ long sys_lstat64(isr_params_t *params)
 #define STATFS_MAGIC_SYSFS 0x62656572u
 
 /**
- * Fill a statfs64 for the boot root or one of the two synthetic mounts;
- * `statfs_fill_mount` answers for a mounted volume from its own statfs.
+ * Copy out to `out` the statfs of the KRFFS boot root or of a synthetic
+ * mount, by its `magic`; 0, or -EFAULT. A mounted volume answers from its
+ * own statfs (`statfs_fill_mount`).
  *
- * Only the root has blocks: it is KRFFS, and the region's size and its free
- * nodes' usable bytes are both real, reported in 1024-byte units because that
- * is what `df` prints in by default. The two synthetic mounts report their own
- * magic and no blocks at all, which is what they have and what Linux reports
- * for them; answering with the root's numbers would tell `df` that `/proc` is
- * a 16 MB file system 77 percent full. `f_files` is zero throughout, which says
- * "not counted" rather than claiming an inode budget this format does not keep.
+ * Only the boot root has blocks: the size of its region and the usable
+ * bytes of its free nodes, in units of STATFS_BSIZE. A synthetic mount
+ * reports its magic and no blocks, which is what it has and what Linux
+ * reports for /proc, /dev and /sys. `f_files` and `f_ffree` are 0, which a
+ * reader takes as not counted, since KRFFS keeps no count of inodes, and
+ * `f_namelen` is KRFFS's longest name for all of them.
  */
 static int32_t statfs_fill(struct user_statfs __user *out, uint32_t magic)
 {
@@ -6509,7 +6673,9 @@ static int32_t statfs_fill(struct user_statfs __user *out, uint32_t magic)
     return 0;
 }
 
-/** A statfs64 from a mount's own statfs, whichever type answered it. */
+/** Copy out to `out` the statfs of the mounted volume `m`, from its type's
+ * statfs, with the free blocks only a privileged writer takes left out of
+ * `f_bavail`; 0, the type's error, or -EFAULT. */
 static int32_t statfs_fill_mount(struct user_statfs __user *out, struct vfs_mount *m)
 {
     struct user_statfs st;
@@ -6535,7 +6701,8 @@ static int32_t statfs_fill_mount(struct user_statfs __user *out, struct vfs_moun
     return 0;
 }
 
-/** Which of the three mounts a classified path belongs to. */
+/** The magic of the mount a synthetic node of `kind` belongs to: /dev's,
+ * /sys's or /proc's, or KRFFS's for VNODE_KRFFS. */
 static uint32_t statfs_magic_for_kind(int kind)
 {
     if (kind == VNODE_DEV_DIR || kind == VNODE_DEV || kind == VNODE_PTS_DIR || kind == VNODE_PTS ||
@@ -6552,9 +6719,14 @@ static uint32_t statfs_magic_for_kind(int kind)
 }
 
 /**
- * The core of statfs(2) in every form: the file system the path `upath` is
- * on, into `out`; the caller has refused a NULL for either. A path that
- * names a directory by its end must reach one (`resolve_named`).
+ * The core of statfs(2) and statfs64(2): copy out to `out` the statfs of
+ * the file system the user's path `upath` is on; 0 or a negative errno. The
+ * caller has refused a NULL for either. The path must name something, so a
+ * path that names nothing is the walk's error, -ENOENT among them, and one
+ * that names a directory by its end must reach one (`resolve_named`). A
+ * node of /dev, /proc or /sys answers with its mount's magic, a node of a
+ * mounted volume with the volume's own statfs, and a node of the KRFFS boot
+ * root with KRFFS's.
  */
 long ksys_statfs(const char __user *upath, struct user_statfs __user *out)
 {
@@ -6566,9 +6738,6 @@ long ksys_statfs(const char __user *upath, struct user_statfs __user *out)
     if (len != 0) {
         return len;
     }
-    /* The path has to name something. Answering for a path that does not exist
-     * would report a file system where there is no file, which is the one thing
-     * a caller uses this call to find out. */
     {
         struct vfs_ref ref;
         const struct vpath *svp;
@@ -6594,10 +6763,19 @@ long ksys_statfs(const char __user *upath, struct user_statfs __user *out)
 }
 
 /**
- * The core of fstatfs(2) in every form: the same numbers, named by the open
- * descriptor `fd`, into `out`, which the caller has refused a NULL for; a
- * /proc file's descriptor answers proc's, and a device's or a synthetic
- * directory's, /proc and /proc/PID among them, answers devfs's.
+ * The core of fstatfs(2) and fstatfs64(2): copy out to `out` the statfs of
+ * the file system descriptor `fd` is open on; 0 or a negative errno, -EBADF
+ * for a descriptor that is not open. The caller has refused a NULL `out`.
+ *
+ * The descriptor's kind decides which mount answers. A /proc file's
+ * descriptor answers proc's, or sysfs's for a /sys file, and a /sys
+ * directory's sysfs's. An O_PATH descriptor on a synthetic leaf answers
+ * devfs's for a device or a pty slave, sysfs's for a /sys node, and proc's
+ * for any other. A device, the console, a pty master and any other
+ * synthetic directory, /proc and /proc/PID among them, answer devfs's. A
+ * file or a directory of a mounted volume answers with the volume's own
+ * statfs, and one of the KRFFS boot root with KRFFS's. Any other
+ * descriptor, a socket, a pipe or a pty slave among them, is -ENOSYS.
  */
 long ksys_fstatfs(int fd, struct user_statfs __user *out)
 {
@@ -6607,9 +6785,6 @@ long ksys_fstatfs(int fd, struct user_statfs __user *out)
     if (!e) {
         return -EBADF;
     }
-    /* The descriptor's own kind decides which mount answers. A socket or a pipe
-     * is on no file system at all, and Linux answers `-ENOSYS` for those rather
-     * than handing back the root's numbers. */
     if (e->type == FD_TYPE_PROC) {
         return statfs_fill(out, procfs_fd_is_sys(e) ? STATFS_MAGIC_SYSFS : STATFS_MAGIC_PROC);
     }
@@ -6665,9 +6840,9 @@ long sys_fstatfs(isr_params_t *params)
 
 /**
  * statfs64(2) of a 32-bit architecture: the path, the caller's
- * sizeof(struct statfs64) and the buffer. The size is checked rather than
- * ignored: a caller built against a different layout would otherwise be
- * handed bytes it would read as different fields.
+ * sizeof(struct statfs64) and the buffer. The size is checked, and any
+ * other is -EINVAL: a caller built against a different layout would
+ * otherwise be handed bytes it would read as different fields.
  */
 long sys_statfs64(isr_params_t *params)
 {
@@ -6682,7 +6857,7 @@ long sys_statfs64(isr_params_t *params)
 }
 
 /** fstatfs64(2) of a 32-bit architecture: the descriptor, the caller's size
- * and the buffer. */
+ * and the buffer; a size other than statfs64's is -EINVAL. */
 long sys_fstatfs64(isr_params_t *params)
 {
     if (SC_ARG(params, 1) != sizeof(struct user_statfs)) {
@@ -6695,18 +6870,50 @@ long sys_fstatfs64(isr_params_t *params)
 }
 
 /**
- * Fill a stat64 from an open descriptor by type.
+ * Fill `kst` with the attributes of what the descriptor `entry` is open on,
+ * for fstat64, for fstatat64 and statx with AT_EMPTY_PATH, and for a
+ * followed /proc/PID/fd link; 0, or the error of a mounted type's getattr.
+ * Where the object has an identity of its own, a socket, a pipe, a device, a
+ * /proc snapshot or a KRFFS node, the inode is that identity, the number the
+ * descriptor's /proc/PID/fd link shows, so that a program can match the two.
+ * An object without times of its own reports the boot time.
  *
- * Shared by sys_fstat64 and the followed /proc/<pid>/fd/<n> path (whose
- * target is just this fd). Where the object has an identity of its own (a
- * socket, a pipe, a device, a /proc snapshot, a KRFFS node), the inode
- * reported here is that identity and is the same number the descriptor's
- * `/proc/<pid>/fd` link carries, so a program reading one can match the other.
+ * A file or a directory of a mounted type is `vfs_fill_stat64`'s. The KRFFS
+ * root directory has the identity a stat of "/" gives, inode 1, mode 0755
+ * and the root's own times. A KRFFS node reports its attributes while
+ * `fd_node_check` finds it live; a descriptor whose file went away by a
+ * route that did not look for its holders reports only the boot times, and
+ * reads nothing of a node that may be the free list's now.
+ *
+ * A network socket is a socket of mode 0666 whose inode is the socket's
+ * own, the number /proc/net/tcp shows, and an AF_UNIX socket one of mode
+ * 0777. A namespace descriptor is nsfs's file of the namespace, whose inode
+ * is the namespace's; any other anonymous descriptor, an eventfd, an epoll
+ * or a timerfd among them, is Linux's anonymous inode, mode 0600 with no
+ * type bits. A pipe end is a FIFO of mode 0666 with the pipe's own inode.
+ *
+ * A devfs device reports the identity a stat of its /dev path gives, the
+ * mode included, and the console that of /dev/console, which ttyname
+ * compares. A /proc file is a regular file of mode 0444 whose inode is that
+ * of the path it was opened by and whose owner is the one `synth_pid_owner`
+ * gives; oom_score_adj, the user namespace's maps and a file a privileged
+ * caller may write have mode 0644, and a /sys file is on sysfs with a size
+ * of 4096.
+ *
+ * A /dev, /proc or /sys directory reports what a stat of its path gives,
+ * from the descriptor's record of its kind, process and thread, or a bare
+ * directory once its process has exited. An O_PATH descriptor on a
+ * synthetic leaf, or on a /proc link under O_NOFOLLOW, reports what an
+ * lstat of its path gives while the node is there, and a bare device or
+ * file once it is gone. A pty slave reports what a stat of /dev/pts/N
+ * gives, which the /proc/self/fd link names, or a character device of mode
+ * 0620 once its pty is gone. Anything else, a pty master, the framebuffer
+ * or the mouse, is a character device of mode 0666 and size 0.
  */
 static int32_t fstat_fill(fd_entry_t *entry, struct user_stat *kst)
 {
     k_memset(kst, 0, sizeof(*kst));
-    stat64_boot_times(kst); /* a node with times of its own overwrites these */
+    stat64_boot_times(kst);
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->ofd &&
         entry->ofd->vmnt && !mnt_is_root(entry->ofd->vmnt)) {
         struct vfs_ref r;
@@ -6716,58 +6923,42 @@ static int32_t fstat_fill(fd_entry_t *entry, struct user_stat *kst)
         return vfs_fill_stat64(kst, &r);
     }
     if (entry->type == FD_TYPE_DIR && entry->node == NULL) {
-        kst->st_mode = S_IFDIR | 0755; /* the root directory */
+        kst->st_mode = S_IFDIR | 0755;
         STAT_SET_INO(kst, 1);
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
-        /* The root has times of its own, so a descriptor on it reports what a
-         * path to it reports; the boot-time default above is for the nodes that
-         * have no history, and the root is not one of them. */
         stat64_root_times(kst);
     } else if (entry->node) {
-        /* A stale fd (its node was unlinked or relocated) would leak freed
-         * free-list bytes through the stat fields; leave the zeroed stat rather
-         * than read a node that is no longer live. */
         if (fd_node_check(entry) == 0) {
             krffs_fill_stat64(kst, entry->node);
         }
     } else if (entry->type == FD_TYPE_SOCKET) {
-        /* A socket fd: programs classify these with S_ISSOCK, and the inode is
-         * the socket's own, the same number /proc/net/tcp and the fd symlink
-         * report, so a program can match a row to a descriptor. */
         kst->st_mode = 0140666; /* S_IFSOCK | 0666 */
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
         kst->st_ino = entry->sock ? entry->sock->inode : 0u;
     } else if (entry->type == FD_TYPE_UNIX) {
-        /* An AF_UNIX socket: S_ISSOCK, and the inode /proc/PID/fd shows. */
         kst->st_mode = 0140777; /* S_IFSOCK | 0777 */
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
         kst->st_ino = entry->priv ? unix_inode(entry) : 0u;
     } else if (entry->type == FD_TYPE_ANON && nsfs_ns(entry)) {
-        /* A namespace: nsfs's file of it, whose inode is the namespace's. */
         kst->st_dev = NSFS_DEV;
         kst->st_mode = S_IFREG | 0444;
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
         STAT_SET_INO(kst, nsfs_ns(entry)->inum);
     } else if (entry->type == FD_TYPE_ANON) {
-        /* eventfd, epoll, timerfd: Linux's anonymous inode, mode 0600 with
-         * no type bits. */
         kst->st_mode = 0600;
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
     } else if (entry->type == FD_TYPE_PIPE) {
-        /* A pipe end: S_ISFIFO, and the pipe's own inode (see fd.h). */
         pipe_t *pp = (pipe_t *)entry->priv;
         kst->st_mode = 010666; /* S_IFIFO | 0666 */
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
         kst->st_ino = pp ? pp->inode : 0u;
     } else if (entry->type == FD_TYPE_DEVICE) {
-        /* A devfs character device: report its identity so fstat matches the
-         * stat of its /dev path (what ttyname compares), the mode included. */
         kst->st_mode = devfs_fd_mode(entry);
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
@@ -6775,11 +6966,6 @@ static int32_t fstat_fill(fd_entry_t *entry, struct user_stat *kst)
         kst->st_rdev = devfs_rdev(entry);
         kst->st_ino = devfs_fd_ino(entry);
     } else if (entry->type == FD_TYPE_PROC) {
-        /* A /proc text snapshot: a regular file whose inode is its origin's,
-         * so fstat matches the stat of the path it was opened by, and whose
-         * mode and owner are too: a process's file is its owner's, as
-         * `synth_pid_owner` has it, and oom_score_adj and a file a
-         * privileged caller may write have mode 0644. */
         uint32_t uid, gid;
         int owned;
 
@@ -6798,9 +6984,6 @@ static int32_t fstat_fill(fd_entry_t *entry, struct user_stat *kst)
             kst->st_mode = 0100644; /* S_IFREG | 0644 */
         }
     } else if (entry->type == FD_TYPE_CONSOLE) {
-        /* stdin/stdout/stderr and /dev/console: report the same identity as
-         * stat("/dev/console") so ttyname's (st_dev, st_ino) comparison
-         * matches. */
         uint32_t cmode = 0, crdev = 0, cino = 0;
         (void)devfs_stat("console", &cmode, &crdev, &cino);
         kst->st_mode = 020666; /* S_IFCHR | 0666 */
@@ -6810,14 +6993,11 @@ static int32_t fstat_fill(fd_entry_t *entry, struct user_stat *kst)
         kst->st_rdev = crdev;
         kst->st_ino = cino;
     } else if (entry->type == FD_TYPE_SYNTH_DIR) {
-        /* A /dev or /proc directory fd: report the SAME identity its path stat
-         * would (so fstat and stat agree on the directory), reconstructed from
-         * the fd's record of its kind, pid and tid. */
         struct vpath vp;
 
         synth_dir_vpath((const struct synth_dir *)entry->priv, &vp);
         if (synth_stat(&vp, kst, 1) != 0) {
-            kst->st_mode = S_IFDIR | 0555; /* the process exited: a bare directory */
+            kst->st_mode = S_IFDIR | 0555;
             kst->st_nlink = 1;
             kst->st_blksize = 4096;
             kst->st_dev = PROCFS_FSID;
@@ -6826,9 +7006,6 @@ static int32_t fstat_fill(fd_entry_t *entry, struct user_stat *kst)
             }
         }
     } else if (entry->type == FD_TYPE_SYNTH_PATH) {
-        /* An O_PATH descriptor on a /dev or /proc leaf, or on a /proc link
-         * under O_NOFOLLOW: what an lstat of its path reports while the node
-         * is there, and a bare device or file once it is gone. */
         const struct vpath *vp = (const struct vpath *)entry->priv;
 
         if (!vp || synth_stat(vp, kst, 0) != 0) {
@@ -6844,22 +7021,17 @@ static int32_t fstat_fill(fd_entry_t *entry, struct user_stat *kst)
             }
         }
     } else if (entry->type == FD_TYPE_PTS) {
-        /* A pty slave: report the SAME identity as stat("/dev/pts/N") so
-         * ttyname's (st_dev, st_ino) comparison matches the /proc/self/fd
-         * readlink. */
         struct vpath vp;
         k_memset(&vp, 0, sizeof(vp));
         vp.kind = VNODE_PTS;
         vp.pts_index = pty_slave_index(entry);
         if (synth_stat(&vp, kst, 1) != 0) {
-            kst->st_mode = 020620; /* S_IFCHR | 0620 (master hung up) */
+            kst->st_mode = 020620; /* S_IFCHR | 0620 */
             kst->st_nlink = 1;
             kst->st_blksize = 4096;
             kst->st_dev = DEVFS_FSID;
         }
     } else {
-        /* A pty master, a framebuffer or a mouse fd: a character device,
-         * size 0. */
         kst->st_mode = 020666; /* S_IFCHR | 0666 */
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
@@ -6867,9 +7039,13 @@ static int32_t fstat_fill(fd_entry_t *entry, struct user_stat *kst)
     return 0;
 }
 
-/*
- * fstat64 takes fd and stat64 buffer. The descriptor's node is stat'd; a root
- * directory fd (node == NULL) reports the root directory.
+/**
+ * fstat64(2), and fstat(2) on x86-64: copy out the attributes of what the
+ * descriptor in argument 0 is open on (`fstat_fill`), an O_PATH
+ * descriptor's included, to the user's buffer in argument 1, with the
+ * owner and group the caller's user namespace sees; 0, -EBADF for a
+ * descriptor that is not open, -EFAULT for a NULL or bad buffer, or the
+ * error of a mounted type's getattr.
  */
 long sys_fstat64(isr_params_t *params)
 {
@@ -7012,11 +7188,14 @@ static int32_t stat_at(int dirfd, const char __user *upath, int flags, struct us
 }
 
 /**
- * fstatat64 takes dirfd, path, stat64 buffer and flags.
- *
- * The attributes are `stat_at`'s; GNU libc's fstat is this call with
- * AT_EMPTY_PATH when statx is missing. AT_NO_AUTOMOUNT is accepted and
- * means nothing here, and any other flag is -EINVAL before the path is read.
+ * fstatat64(2), and newfstatat(2) on x86-64: copy out the attributes
+ * `stat_at` finds for the directory descriptor, the path and the flags of
+ * arguments 0, 1 and 3 to the user's buffer in argument 2, with the owner
+ * and group the caller's user namespace sees; 0 or a negative errno.
+ * AT_NO_AUTOMOUNT is accepted and means nothing here, and any other flag
+ * but AT_SYMLINK_NOFOLLOW and AT_EMPTY_PATH is -EINVAL before the path is
+ * read. GNU libc's fstat is this call with AT_EMPTY_PATH, on i386 when
+ * statx is missing.
  */
 long sys_fstatat64(isr_params_t *params)
 {
@@ -7082,23 +7261,26 @@ struct linux_statx {
 
 typedef char linux_statx_is_256_bytes[sizeof(struct linux_statx) == 256 ? 1 : -1];
 
-/* The major and minor numbers of a device number in Linux's 32-bit
- * encoding, which st_dev and st_rdev have. */
+/** The major number of the device number `dev` in Linux's 32-bit
+ * encoding, which st_dev and st_rdev have: bits 8 to 19. */
 static uint32_t dev_major(uint64_t dev)
 {
     return (uint32_t)(dev >> 8) & 0xFFFu;
 }
 
+/** The minor number of `dev` in the same encoding: bits 0 to 7, and bits
+ * 20 to 31 above them. */
 static uint32_t dev_minor(uint64_t dev)
 {
     return ((uint32_t)dev & 0xFFu) | (((uint32_t)dev >> 12) & 0xFFF00u);
 }
 
 /**
- * Put the attributes of `st` into `sx` as statx reports them: the basic set,
- * the device numbers split into their major and minor numbers, and the times
- * as signed 64-bit seconds: a long's, which is how musl reads i386's 32-bit
- * ones, and all of x86-64's.
+ * Put the attributes of `st` into `sx` as statx reports them: the basic
+ * set, the owner and group the caller's user namespace sees, the device
+ * numbers split into their major and minor numbers, and the times as signed
+ * 64-bit seconds: a long's, which is how musl reads i386's 32-bit ones, and
+ * all of x86-64's.
  */
 static void statx_from_stat64(struct linux_statx *sx, const struct user_stat *st)
 {
@@ -7132,8 +7314,8 @@ static void statx_from_stat64(struct linux_statx *sx, const struct user_stat *st
  * asks for, since the kernel may report more than it is asked, with no birth
  * time, no attributes and no mount id. The two sync flags are accepted and
  * change nothing; both at once, a flag fstatat64 does not take, or
- * STATX__RESERVED in `mask` is EINVAL. GNU libc and musl call this first for
- * every stat and fall back to the stat64 calls on ENOSYS alone.
+ * STATX__RESERVED in `mask` is EINVAL. On i386 GNU libc and musl call this
+ * first for every stat and fall back to the stat64 calls on ENOSYS alone.
  */
 long sys_statx(isr_params_t *params)
 {
@@ -7169,15 +7351,23 @@ long sys_statx(isr_params_t *params)
 #define R_OK 4
 
 /**
- * access core: does the path exist and grant the requested mode?
+ * The core of access(2) and faccessat(2): 0 when the file at `name`,
+ * leading '/' stripped, exists and grants `mode`, an OR of R_OK, W_OK and
+ * X_OK, or F_OK alone, to the caller's real ids; otherwise a negative
+ * errno: -EINVAL for any other bit in `mode`, the walk's error, -EACCES, or
+ * -EROFS for W_OK on a read-only mounted volume. A final symbolic link is
+ * followed, and a path that named a directory by its end, `dir`, must
+ * reach one (`resolve_named`).
  *
- * R/W/X are checked against the object's mode bits by the caller's REAL ids
- * (the credential model access(2) uniquely uses), which is what makes
- * /proc/<pid>/stat reject W_OK while granting F_OK/R_OK. `name` is absolute
- * with the leading '/' stripped, and a path that named a directory by its
- * end, `dir`, must reach one (`resolve_named`). The walk keeps the lock of
- * the mount it ends on until the attributes are read, as `do_stat64`'s does,
- * and for the same reason.
+ * access(2) is the one call judged by the real ids: it exists so that a
+ * set-id program can ask what its invoker could do. The walk charges
+ * search permission the same way, so a set-id program cannot report a
+ * reachability its invoker does not have. A /dev, /proc or /sys node is
+ * judged by the owner, group and mode its stat gives, through a final
+ * link, so W_OK on /proc/PID/stat is -EACCES and R_OK succeeds. R_OK, W_OK
+ * and X_OK are the octal digits the permission check takes. The walk keeps
+ * the lock of the mount it ends on until the attributes are read, as
+ * `do_stat64`'s does, and for the same reason.
  */
 static int32_t do_access(const char *name, int mode, int dir)
 {
@@ -7187,12 +7377,8 @@ static int32_t do_access(const char *name, int mode, int dir)
     int werr;
 
     if (mode & ~(R_OK | W_OK | X_OK)) {
-        return -EINVAL; /* undefined access-mode bits */
+        return -EINVAL;
     }
-    /* access(2) is the one caller judged by the REAL ids: it exists so a
-     * set-id program can ask what its invoker could do. The walk charges
-     * search the same way, so a set-id program cannot report reachability
-     * its caller does not have. */
     werr = resolve_named(name, VFS_WALK_REAL_IDS | VFS_WALK_LOCK, dir, &ref);
     if (werr != 0) {
         return werr;
@@ -7201,21 +7387,18 @@ static int32_t do_access(const char *name, int mode, int dir)
     if (vp) {
         struct user_stat s;
 
-        rc = synth_stat(vp, &s, 1); /* access follows symlinks */
+        rc = synth_stat(vp, &s, 1);
         vfs_walk_unlock(ref.mnt);
         vfs_ref_release(&ref);
         if (rc != 0) {
-            return rc; /* -ENOENT / -ENOTDIR */
+            return rc;
         }
-        /* Synthetic metadata is fixed and root-owned; judge it by the real
-         * ids like any other access(2) answer. */
         return cred_access_bits((uint32_t)s.st_uid, (uint32_t)s.st_gid, s.st_mode & 0777u, mode, 1);
     }
-    /* R_OK/W_OK/X_OK are the same octal digits the checker takes. */
     if (!mnt_is_root(ref.mnt)) {
         rc = cred_access_ref(&ref, mode, 1);
         if (rc == 0 && (mode & W_OK) && (ref.mnt->flags & VFS_MS_RDONLY)) {
-            rc = -EROFS; /* access(2) reports the mount's refusal too */
+            rc = -EROFS;
         }
     } else {
         rc = cred_access_node((krffs_node_t *)ref.node, mode, 1);
@@ -7225,6 +7408,11 @@ static int32_t do_access(const char *name, int mode, int dir)
     return rc;
 }
 
+/**
+ * access(2): whether the caller's real ids may use the file at the user's
+ * path in argument 0 as the mode in argument 1 asks (`do_access`); 0 or a
+ * negative errno, -EFAULT for a NULL path.
+ */
 long sys_access(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 0);
@@ -7246,13 +7434,19 @@ long sys_access(isr_params_t *params)
 }
 
 /**
- * inotify_add_watch takes the instance, the path and the mask.
+ * inotify_add_watch(2): add a watch of the file at the user's path in
+ * argument 1, for the events of the mask in argument 2, to the inotify
+ * instance at the descriptor in argument 0; the watch descriptor, or a
+ * negative errno.
  *
- * The path is resolved through a final link unless IN_DONT_FOLLOW, it must
- * name a directory under IN_ONLYDIR, and the caller must be able to read
- * what it names, as on Linux; `inotify_watch` adds the watch. A node of
- * /dev or /proc can be watched and reports nothing, since no call that
- * changes one tells inotify.
+ * The mask is checked first: IN_MASK_ADD with IN_MASK_CREATE, or a mask
+ * with no event, is -EINVAL. Then the descriptor: -EBADF when it is not
+ * open, -EINVAL when it is no inotify instance. The path is resolved
+ * through a final link unless IN_DONT_FOLLOW, it must name a directory
+ * under IN_ONLYDIR (-ENOTDIR), and the caller must be able to read what it
+ * names (-EACCES), as on Linux; `inotify_watch` adds the watch, with its
+ * own errors. A node of /dev, /proc or /sys can be watched and reports
+ * nothing, since no call that changes one tells inotify.
  */
 long sys_inotify_add_watch(isr_params_t *params)
 {
@@ -7320,6 +7514,11 @@ long sys_inotify_add_watch(isr_params_t *params)
     return rc;
 }
 
+/**
+ * faccessat(2): access(2) of a path relative to the directory descriptor in
+ * argument 0, or to the working directory for AT_FDCWD; the path and the
+ * mode are arguments 1 and 2.
+ */
 long sys_faccessat(isr_params_t *params)
 {
     int dirfd = (int)SC_ARG(params, 0);
@@ -7342,10 +7541,21 @@ long sys_faccessat(isr_params_t *params)
 }
 
 /**
- * The chmod rule over a resolved KRFFS node: the owner or root replaces the
- * permission bits; anyone else is refused. The root node's mode is never
- * touched (its spare bits carry the dirty-mount flag), but the rule still
- * answers, so a non-owner probing `/` gets the correct -EPERM.
+ * chmod of the node `node` of the KRFFS boot root: the owner or a
+ * privileged caller (`cred_privileged`) replaces its permission bits with
+ * those of `mode`, which stamps its attribute-change time, and anyone else
+ * is -EPERM; 0 on success. The root node's mode is never changed,
+ * since its set-user-ID bit is the volume's dirty flag (KRFFS_MODE_DIRTY),
+ * but the rule still answers, so a caller who does not own `/` gets -EPERM.
+ *
+ * An unprivileged caller who stores a mode on a file whose group is not one
+ * of the caller's loses setgid, as chmod(2) has it; a directory keeps it.
+ * That is the third set-id clear POSIX names, after write and chown, and
+ * the one no clear at a write can stand for, since an owner could make a
+ * gid-0 file 02710 by chmod alone and never write it. The clear does not
+ * depend on group-execute, as `cred_kill_setid`'s does, since the caller
+ * chooses that bit in the same call. Setuid needs no rule here: only the
+ * owner may chmod, and the bit grants that owner's own identity.
  */
 static int32_t krffs_chmod_node(krffs_node_t *node, uint32_t mode)
 {
@@ -7355,16 +7565,6 @@ static int32_t krffs_chmod_node(krffs_node_t *node, uint32_t mode)
     if (node != krffs_fs->node) {
         uint32_t want = mode & 07777u;
 
-        /* chmod(2)'s own rule: an unprivileged caller storing a mode on a file
-         * whose group is not one of theirs does not get to keep setgid. This is
-         * the third place POSIX names a set-id clear, after write and chown,
-         * and it is the one no write-clear can stand in for: an owner may mint
-         * 02710 on a gid-0 file they own by chmod alone, with no write ever
-         * running. Deliberately NOT conditioned on group-execute the way
-         * cred_kill_setid is, because the caller is choosing that bit in this
-         * same call, so reading it back as a reason to spare the mode would
-         * defeat the rule. Setuid needs no rule here: only the owner may chmod,
-         * and the setuid grant is that owner's own identity. */
         if (!cred_privileged() && !KRFFS_IS_DIR(node->mode) && !cred_in_group(node->gid)) {
             want &= ~(uint32_t)KRFFS_MODE_SGID;
         }
@@ -7375,11 +7575,20 @@ static int32_t krffs_chmod_node(krffs_node_t *node, uint32_t mode)
 }
 
 /**
- * The chown rule over a resolved KRFFS node, the POSIX split: changing the
- * owner takes root; changing the group takes root, or being the owner and
- * naming one of your own groups. `(id_t)-1` keeps a field, and a no-change
- * value needs no right at all, so `chown(path, -1, -1)` always succeeds on an
- * existing file.
+ * chown of the node `node` of the KRFFS boot root, the POSIX split: a
+ * change of owner takes a privileged caller, and a change of group takes a
+ * privileged caller or the owner naming one of the owner's own groups;
+ * otherwise -EPERM, and 0 on success. `(id_t)-1` keeps a field, and a value
+ * that changes nothing needs no right, so `chown(path, -1, -1)` succeeds on
+ * any file that exists.
+ *
+ * A call that changes either field stamps the node's attribute-change time
+ * once, after both, and clears its set-id bits (`cred_kill_setid`) whoever
+ * asks, as POSIX has it, which is why cp and install chown before they
+ * chmod. Both happen only when a field changes: `chown(path, -1, -1)`
+ * succeeds for every caller and leaves the times alone, and a clear that
+ * ran on it would let any user clear the set-user-ID bit of /bin/su with
+ * one call.
  */
 static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
 {
@@ -7399,17 +7608,6 @@ static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
     if (gid != (uint32_t)-1) {
         node->gid = gid;
     }
-    /* Stamped once, after both fields, and on the same gate the set-id clear
-     * below uses: a chown that changed an owner changed the node's attributes,
-     * whichever of the two it was, and chown(path, -1, -1) changed nothing and
-     * must leave the times alone. Stamping inside the uid branch, which is
-     * where this started, left `chown(path, -1, gid)` unstamped. */
-    /* The set-id clear is not gated on privilege: POSIX drops the bits whoever
-     * asks, which is why cp and install chown before they chmod. Both are gated
-     * on a field ACTUALLY having changed, and that gate has real weight:
-     * chown(path, -1, -1) succeeds for every caller by design, since a value
-     * that changes nothing needs no right, so a clear that ran on it would let
-     * any uid disarm /bin/su with one call. */
     if (uid_changes || gid_changes) {
         krffs_stamp(node, KRFFS_STAMP_ATTR);
         cred_kill_setid(node);
@@ -7418,15 +7616,21 @@ static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
 }
 
 /**
- * chmod core for the chmod/chown family.
+ * The core of chmod(2) and fchmodat(2): set the permission bits of the file
+ * at `name`, leading '/' stripped, through a final symbolic link, to those
+ * of `mode`; 0 or a negative errno. A path that named a directory by its
+ * end, `dir`, must reach one, as in `do_access`.
  *
- * A KRFFS path stores through `krffs_chmod_node` under the owner-or-root rule.
- * A pty slave (`/dev/pts/N`) stores on the pty, the state dropbear moves
- * before handing the terminal to the user. Every other synthetic /dev or
- * /proc object has fixed root-owned metadata: root's request succeeds
- * without a change, anyone else's is refused. `name` is absolute with the
- * leading '/' stripped, and must reach a directory when it named one by its
- * end, `dir`, matching do_access.
+ * A node of the KRFFS boot root follows `krffs_chmod_node`. A node of a
+ * mounted type follows the same rule, the owner or a privileged caller and
+ * otherwise -EPERM, and an unprivileged caller loses setgid on a file or a
+ * directory whose group is not one of the caller's; the read, the check
+ * and the store are one hold of the mount's namespace lock. A pty slave
+ * (/dev/pts/N) stores the bits on the pty, its owner or a privileged caller
+ * only, which dropbear does before it hands the terminal to the user;
+ * -ENOENT when the pty is gone. Every other /dev, /proc or /sys node has
+ * fixed metadata: a caller whose effective uid is 0 succeeds without a
+ * change, and anyone else is -EPERM.
  *
  * The walk takes the lock of the mount it ends on, where the type asks for
  * one, and the lookup, the check and the store are one hold of it: a node of
@@ -7474,7 +7678,7 @@ static int32_t do_chmod(const char *name, uint32_t mode, int dir)
         }
         if (rc == 0) {
             if (!cred_privileged() && !cred_in_group(vst.gid)) {
-                mode &= ~02000u; /* set-gid on a group not one's own is dropped */
+                mode &= ~02000u;
             }
             vst.mode = mode;
             rc = vfs_setattr(ref.mnt, ref.node, VFS_SET_MODE, &vst);
@@ -7586,6 +7790,15 @@ static int32_t chown_synth(const struct vpath *vp, uint32_t uid, uint32_t gid)
  * link either way and must reach a directory (`resolve_named`). The walk
  * keeps its mount's lock through the store, as `do_chmod`'s does, and for
  * the same reason.
+ *
+ * On a mounted type the read, the plan and the store are one step under
+ * the mount's namespace lock. Were the lock taken inside `vfs_setattr`, the
+ * plan would be made from attributes another process can change while this
+ * one waits for the lock: a privileged chown planned over a 0755 file would
+ * store the new owner without the set-id clear the file earned from a chmod
+ * that came in between, and leave a set-id program with an owner the caller
+ * chose. The lock is recursive for its holder, so the calls under it take
+ * it again for nothing.
  */
 static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid, int follow, int dir)
 {
@@ -7610,14 +7823,6 @@ static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid, int follow
         struct vfs_stat vst;
         int what;
 
-        /* The read, the plan and the store are one step under the mount's
-         * namespace lock. Taking the lock inside `vfs_setattr` would leave the
-         * plan made from attributes another process can change while this one
-         * waits for that lock: a privileged chown planned over a 0755 file
-         * would store the new owner without the set-id clear the file earned
-         * from a chmod that landed in between, which is a set-id program with
-         * an owner the caller chose. The lock is recursive for its holder, so
-         * the calls below take it again for nothing. */
         vfs_ns_lock(ref.mnt);
         rc = vfs_getattr(ref.mnt, ref.node, &vst);
         if (rc == 0) {
@@ -7636,7 +7841,11 @@ static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid, int follow
     return rc;
 }
 
-/* chmod(path, mode) and fchmodat(dirfd, path, mode[, flags]) share do_chmod. */
+/**
+ * chmod(2): set the permission bits of the file at the user's path in
+ * argument 0 to those of the mode in argument 1 (`do_chmod`); 0 or a
+ * negative errno, -EFAULT for a NULL path.
+ */
 long sys_chmod(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 0);
@@ -7657,6 +7866,12 @@ long sys_chmod(isr_params_t *params)
     return rc;
 }
 
+/**
+ * fchmodat(2): chmod(2) of a path relative to the directory descriptor in
+ * argument 0, or to the working directory for AT_FDCWD; the path and the
+ * mode are arguments 1 and 2. The system call takes no flags, and a final
+ * symbolic link is followed.
+ */
 long sys_fchmodat(isr_params_t *params)
 {
     int dirfd = (int)SC_ARG(params, 0);
@@ -7678,11 +7893,16 @@ long sys_fchmodat(isr_params_t *params)
     return rc;
 }
 
-/* fchmod(fd, mode): the descriptor form, under the rules do_chmod keeps:
- * a KRFFS node or a node of another mounted file system stores the mode, a
- * pty slave stores it on the pty, and every other descriptor has fixed
- * metadata (root succeeds without a change, anyone else is refused). An
- * O_PATH descriptor is -EBADF, as on Linux. */
+/**
+ * fchmod(2): set the permission bits of what the descriptor in argument 0
+ * is open on to those of the mode in argument 1, under the rules `do_chmod`
+ * keeps; 0 or a negative errno. A node of the KRFFS boot root or of a
+ * mounted type stores the mode, a pty slave stores it on the pty, -EBADF
+ * when the pty is gone, and every other descriptor has fixed metadata, as
+ * its path has: a caller whose effective uid is 0 succeeds without a
+ * change, and anyone else is -EPERM. A descriptor that is not open, or was
+ * opened with O_PATH, is -EBADF, as on Linux.
+ */
 long sys_fchmod(isr_params_t *params)
 {
     int fd = (int)SC_ARG(params, 0);
@@ -7701,7 +7921,6 @@ long sys_fchmod(isr_params_t *params)
     }
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->ofd &&
         entry->ofd->vmnt && entry->ofd->vnode) {
-        /* A node of another type, by the rules chmod(2) keeps for one. */
         struct vfs_stat vst;
         int rc;
 
@@ -7731,11 +7950,9 @@ long sys_fchmod(isr_params_t *params)
         pt->mode = (uint16_t)(mode & 0777u);
         return 0;
     }
-    /* Every other descriptor has fixed metadata root owns, like its path. */
     return current_proc->euid == 0 ? 0 : -EPERM;
 }
 
-/** The path form of chown and lchown takes path, uid and gid. */
 /**
  * The kernel's ids of the owner `*uid` and group `*gid` a chown names in the
  * caller's user namespace (`uid_named`), -1 left as it is. 0, or -EINVAL
@@ -7754,6 +7971,13 @@ static int32_t chown_ids_named(uint32_t *uid, uint32_t *gid)
     return 0;
 }
 
+/**
+ * The path form of chown(2) and lchown(2): change the owner and group of
+ * the file at the user's `upath` to `uid` and `gid`, as the caller's user
+ * namespace names them, through a final symbolic link when `follow`
+ * (`do_chown`); 0 or a negative errno, -EFAULT for a NULL path and -EINVAL
+ * for an id the namespace does not map.
+ */
 static int32_t chown_path(const char __user *upath, uint32_t uid, uint32_t gid, int follow)
 {
     char *path;
@@ -7776,8 +8000,9 @@ static int32_t chown_path(const char __user *upath, uint32_t uid, uint32_t gid, 
 }
 
 /**
- * chown(2), 182 and 212: through a final symbolic link. The 16-bit number
- * takes 32-bit ids here, as its *32 twin does.
+ * chown(2): `chown_path` of the path in argument 0 to the ids in arguments
+ * 1 and 2, through a final symbolic link. On i386 the 16-bit call, 182,
+ * takes 32-bit ids here, as chown32, 212, does.
  */
 long sys_chown(isr_params_t *params)
 {
@@ -7785,7 +8010,9 @@ long sys_chown(isr_params_t *params)
                       (uint32_t)SC_ARG(params, 2), 1);
 }
 
-/** lchown(2), 16 and 198: a final symbolic link itself, as on Linux. */
+/** lchown(2): as chown(2), but a final symbolic link is changed itself,
+ * as on Linux. On i386 the 16-bit call, 16, takes 32-bit ids here, as
+ * lchown32, 198, does. */
 long sys_lchown(isr_params_t *params)
 {
     return chown_path((const char __user *)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 1),
@@ -7852,9 +8079,14 @@ long sys_fchownat(isr_params_t *params)
     return rc;
 }
 
-/* fchown(fd, uid, gid): the descriptor form, under the same ownership rule
- * as the path forms, on the node or the mounted volume the descriptor is
- * open on. An O_PATH descriptor is -EBADF, as on Linux. */
+/**
+ * fchown(2): change the owner and group of what the descriptor in argument
+ * 0 is open on to the ids in arguments 1 and 2 (`chown_fd`), under the rule
+ * of the path forms; 0 or a negative errno, -EBADF for a descriptor that is
+ * not open or was opened with O_PATH, as on Linux, and -EINVAL for an id
+ * the caller's user namespace does not map. On i386 the 16-bit call, 95,
+ * takes 32-bit ids here, as fchown32, 207, does.
+ */
 long sys_fchown(isr_params_t *params)
 {
     int fd = (int)SC_ARG(params, 0);
@@ -7881,7 +8113,11 @@ long sys_fchown(isr_params_t *params)
  * fchownat(2) with AT_EMPTY_PATH, which takes an O_PATH descriptor too: a
  * KRFFS node or a node of a mounted type by the rules of the path forms, a
  * /dev or /proc node opened with O_PATH by `chown_synth`, a pty slave on the
- * pty, and every other kind with fixed root ownership.
+ * pty, -EBADF when the pty is gone, and every other kind with fixed root
+ * ownership: a request that changes nothing succeeds, and any other is
+ * -EPERM. On a mounted type the read, the plan and the store are one step
+ * under the mount's namespace lock, as in `do_chown`, and for the same
+ * reason.
  */
 static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid)
 {
@@ -7893,19 +8129,10 @@ static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid)
     }
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->ofd &&
         entry->ofd->vmnt && entry->ofd->vnode) {
-        /* A node of another type, by the rules chown(2) keeps for one. */
         struct vfs_stat vst;
         int what;
         int rc;
 
-        /* The read, the plan and the store are one step under the mount's
-         * namespace lock. Taking the lock inside `vfs_setattr` would leave the
-         * plan made from attributes another process can change while this one
-         * waits for that lock: a privileged chown planned over a 0755 file
-         * would store the new owner without the set-id clear the file earned
-         * from a chmod that landed in between, which is a set-id program with
-         * an owner the caller chose. The lock is recursive for its holder, so
-         * the calls below take it again for nothing. */
         vfs_ns_lock(entry->ofd->vmnt);
         rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &vst);
         if (rc == 0) {
@@ -7937,8 +8164,6 @@ static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid)
         }
         return 0;
     }
-    /* Every other descriptor has fixed root-owned metadata, like its path:
-     * a no-change request succeeds, a change is refused. */
     if ((uid != (uint32_t)-1 && uid != 0) || (gid != (uint32_t)-1 && gid != 0)) {
         return -EPERM;
     }
@@ -7946,11 +8171,13 @@ static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid)
 }
 
 /**
- * The refusals of truncate(2) for the file `ref` resolved to, in Linux's
- * order: a directory is -EISDIR and anything but a regular file -EINVAL, a
- * read-only mount -EROFS, a caller without write permission -EACCES, and a
- * file a loop device holds -EBUSY. A /proc file is -EACCES to every caller,
- * root included, as an open of one for writing is. Returns 0 or the errno.
+ * The refusals of truncate(2) for the file `ref` resolved to. An immutable
+ * or append-only file of a mounted type is -EPERM before anything else;
+ * then, in Linux's order, a directory is -EISDIR and anything but a regular
+ * file -EINVAL, a read-only mount -EROFS, a caller without write permission
+ * -EACCES, and a file a loop device holds -EBUSY. A /proc file is -EACCES
+ * to every caller, root included, as an open of one for writing is.
+ * Returns 0 or the errno.
  */
 static int32_t truncate_checks(const struct vfs_ref *ref)
 {
@@ -8006,7 +8233,9 @@ static int32_t truncate_checks(const struct vfs_ref *ref)
 
 /**
  * Set the length of the file at `path`, an absolute path in a path page, to
- * `length` bytes, which is not negative, for truncate(2) and truncate64(2).
+ * `length` bytes, which is not negative, for truncate(2) and truncate64(2);
+ * 0 or a negative errno. A length past the caller's RLIMIT_FSIZE is -EFBIG,
+ * with SIGXFSZ (`fsize_refused`), before the path is looked at.
  *
  * The path is resolved through links, to a directory when it named one by
  * its end, `dir` (`resolve_named`), and `truncate_checks` has what is
@@ -8078,9 +8307,11 @@ static int32_t truncate_path(const char *path, long long length, int dir)
 }
 
 /**
- * The core of truncate(2) and of i386's truncate64(2): a negative length is
- * -EINVAL before the path is looked at, as on Linux, and the path is copied
- * into a path page for `truncate_path`.
+ * The core of truncate(2) and of i386's truncate64(2): set the length of the
+ * file `upath` names, relative to the working directory, to `length` bytes.
+ * Returns 0 or a negative errno: -EINVAL for a negative length, before the
+ * path is looked at, as on Linux; -EFAULT for a NULL path; or the errors of
+ * the copy into a path page (`path_from_user_dir`) and of `truncate_path`.
  */
 long ksys_truncate(const char __user *upath, long long length)
 {
@@ -8117,9 +8348,9 @@ long sys_truncate(isr_params_t *params)
  * Walk to the parent of the new name `path`, with or without its leading
  * '/', for a call that makes a node other than a directory there:
  * `vfs_resolve` with VFS_WALK_PARENT, the last name in `leaf` of `leafcap`
- * bytes. The root, which exists and has no last name to make, is -EEXIST,
- * as Linux answers link(2), symlink(2) and mknod(2) there, and bind(2) as
- * EADDRINUSE.
+ * bytes, and on success `parent` held for the caller to release. The root,
+ * which exists and has no last name to make, is -EEXIST, as Linux answers
+ * link(2), symlink(2) and mknod(2) there, and bind(2) as EADDRINUSE.
  */
 static int32_t new_name_parent(const char *path, struct vfs_ref *parent, char *leaf,
                                uint32_t leafcap)
@@ -8152,10 +8383,10 @@ static int name_present(struct vfs_mount *mnt, void *dir, const char *name)
 }
 
 /**
- * Whether the name the path `path` ends in, in a directory of /dev or /proc,
- * exists: -EEXIST when it does, a final link not followed, and the walk's
- * error, -ENOENT for a name the namespace does not have, when it does not.
- * The two synthetic types look whole paths up, so the name is looked up by
+ * Whether the name the path `path` ends in, in a directory of /dev, /proc or
+ * /sys, exists: -EEXIST when it does, a final link not followed, and the
+ * walk's error, -ENOENT for a name the namespace does not have, when it does
+ * not. The synthetic types look whole paths up, so the name is looked up by
  * `path`, and a device name they classify exists only when `synth_stat`
  * finds its device; any other failure of `synth_stat` is of a name that
  * exists.
@@ -8182,9 +8413,9 @@ static int32_t synth_name_exists(const char *path)
  * directory by its end, `end` (`path_names_dir`), as Linux answers it before
  * a read-only mount's EROFS: -EEXIST for a last "." or "..", which exists,
  * and after a slash -EEXIST for a name that exists, a mount point among
- * them, and the lookup's -ENOENT for one that does not, in /dev and /proc
- * too (`synth_name_exists`), where the call's -EROFS comes after. 0 for any
- * other path.
+ * them, and the lookup's -ENOENT for one that does not, in /dev, /proc and
+ * /sys too (`synth_name_exists`), where the call's -EROFS comes after. 0 for
+ * any other path.
  */
 static int32_t make_dir_end(const struct vfs_ref *parent, const char *leaf, int end,
                             const char *path)
@@ -8221,9 +8452,9 @@ static int32_t make_dir_end(const struct vfs_ref *parent, const char *leaf, int 
  * (a KRFFS /dev would shadow the synthetic mount), 0 when nothing does, or
  * the lookup's error. Linux's walk to a new name answers this first, so a
  * name that exists is -EEXIST before the refusals of a read-only mount, of
- * /dev and /proc, of another mount, of a file system without the kind, and
- * of the write permission. A directory of /dev or /proc has the name looked
- * up by `path` (`synth_name_exists`).
+ * /dev, /proc and /sys, of another mount, of a file system without the
+ * kind, and of the write permission. A directory of /dev, /proc or /sys has
+ * the name looked up by `path` (`synth_name_exists`).
  */
 static int32_t new_name_taken(const struct vfs_ref *parent, const char *leaf, const char *path)
 {
@@ -8240,16 +8471,21 @@ static int32_t new_name_taken(const struct vfs_ref *parent, const char *leaf, co
     return rc == 1 ? -EEXIST : rc;
 }
 
-/*
- * A hard link: the source resolved as itself unless `follow`, a directory
- * refused with EPERM, another mount with EXDEV, and the new name made by
- * the type under the namespace lock; a type without links answers EPERM,
- * and KRFFS, the root, is one. A source that named a directory by its end,
- * `olddir`, follows a final link and must reach a directory
- * (`resolve_named`), which is EPERM after it, and a new name that did,
- * `newend`, is `make_dir_end`'s; the root as the new name is EEXIST
- * (`new_name_parent`), and so is a new name that exists (`new_name_taken`),
- * before every refusal after the walks.
+/**
+ * Make the hard link `newname` to `oldname`, both canonical paths: the core
+ * of link(2) and linkat(2). Returns 0 or a negative errno.
+ *
+ * The source is resolved as itself unless `follow`; one that named a
+ * directory by its end, `olddir`, follows a final link and must reach a
+ * directory (`resolve_named`), which is EPERM later. The refusals after the
+ * walks come in this order: the root as the new name, EEXIST
+ * (`new_name_parent`); a new name that named a directory by its end,
+ * `newend`, as `make_dir_end` answers it; a new name that exists, EEXIST
+ * (`new_name_taken`); another mount, EXDEV; a source in /dev, /proc or /sys
+ * or on the KRFFS root, whose types have no links, and a directory, EPERM;
+ * a read-only mount, EROFS; and the parent's write permission. The type
+ * makes the link under the namespace lock, and one without links answers
+ * EPERM.
  */
 static int32_t do_link(const char *oldname, const char *newname, int follow, int olddir, int newend)
 {
@@ -8267,9 +8503,6 @@ static int32_t do_link(const char *oldname, const char *newname, int follow, int
         vfs_ref_release(&src);
         return rc;
     }
-    /* Linux's order: the new name's end, a name that exists, another mount,
-     * then a directory or a type without links, then a read-only mount, then
-     * the parent's write bit. */
     rc = make_dir_end(&parent, leaf, newend, newname);
     if (rc == 0) {
         rc = new_name_taken(&parent, leaf, newname);
@@ -8299,13 +8532,16 @@ out:
     return rc;
 }
 
-/*
- * A symbolic link `newname` to `target`, made by the type under the
- * namespace lock; a type without them answers EPERM. A new name that named a
- * directory by its end, `end`, is `make_dir_end`'s, and the root is EEXIST
- * (`new_name_parent`), and so is a new name that exists (`new_name_taken`),
- * before the refusals of a read-only mount, of /dev and /proc and of a type
- * without symbolic links.
+/**
+ * Make the symbolic link `newname`, a canonical path, to `target`, which is
+ * stored as it is: the core of symlink(2) and symlinkat(2). Returns 0 or a
+ * negative errno: -ENOENT for an empty target, as on Linux; -EEXIST for the
+ * root as the new name (`new_name_parent`); for a new name that named a
+ * directory by its end, `end`, what `make_dir_end` answers; -EEXIST for a
+ * new name that exists (`new_name_taken`); then -EROFS in /dev, /proc and
+ * /sys and on a read-only mount, -EPERM on the KRFFS root and on a type
+ * without symbolic links, and the directory's write permission. The type
+ * makes the link under the namespace lock.
  */
 static int32_t do_symlink(const char *target, const char *newname, int end)
 {
@@ -8314,7 +8550,7 @@ static int32_t do_symlink(const char *target, const char *newname, int end)
     int32_t rc;
 
     if (target[0] == '\0') {
-        return -ENOENT; /* an empty target, as Linux answers */
+        return -ENOENT;
     }
     rc = new_name_parent(newname, &parent, leaf, sizeof(leaf));
     if (rc != 0) {
@@ -8347,7 +8583,9 @@ static int32_t do_symlink(const char *target, const char *newname, int end)
 /**
  * symlink(2) and symlinkat(2) after their arguments: the target is copied as
  * it is, up to `VFS_PATH_MAX` bytes with its terminator, and never resolved;
- * the new name is resolved from `newdirfd`.
+ * the new name is resolved from `newdirfd`. Returns 0 or a negative errno:
+ * -ENOMEM with no path page, the copies' errors, -ENOENT for an empty target
+ * among them, as on Linux, or `do_symlink`'s.
  */
 static int32_t symlink_from_user(const char __user *utarget, int newdirfd, const char __user *unew)
 {
@@ -8361,7 +8599,7 @@ static int32_t symlink_from_user(const char __user *utarget, int newdirfd, const
     }
     rc = strncpy_from_user(target, utarget, VFS_PATH_MAX);
     if (rc == 0) {
-        rc = -ENOENT; /* an empty target, as Linux answers */
+        rc = -ENOENT;
     }
     if (rc > 0) {
         rc = path_from_user_dir(newdirfd, unew, &newpath, &end);
@@ -8374,6 +8612,11 @@ static int32_t symlink_from_user(const char __user *utarget, int newdirfd, const
     return rc;
 }
 
+/**
+ * symlink(2): the target and the new name, which is resolved from the
+ * working directory. -EFAULT for a NULL pointer, or `symlink_from_user`'s
+ * answer.
+ */
 long sys_symlink(isr_params_t *params)
 {
     const char __user *utarget = (const char __user *)SC_ARG(params, 0);
@@ -8385,6 +8628,11 @@ long sys_symlink(isr_params_t *params)
     return symlink_from_user(utarget, AT_FDCWD, unew);
 }
 
+/**
+ * symlinkat(2): the target, the directory descriptor and the new name, which
+ * is resolved from `newdirfd` when it is relative. -EFAULT for a NULL
+ * pointer, or `symlink_from_user`'s answer.
+ */
 long sys_symlinkat(isr_params_t *params)
 {
     const char __user *utarget = (const char __user *)SC_ARG(params, 0);
@@ -8401,7 +8649,9 @@ long sys_symlinkat(isr_params_t *params)
  * link(2) and linkat(2) after their arguments: both paths are copied, which
  * reports a bad pointer as -EFAULT and a bad directory descriptor as -EBADF,
  * before the source is looked up, so a missing source is -ENOENT and not the
- * -EPERM of a file system without links.
+ * -EPERM of a file system without links. `follow` has a final link of the
+ * source followed. Returns 0 or a negative errno, `do_link`'s after the
+ * copies.
  */
 static int32_t link_from_user(int olddirfd, const char __user *uold, int newdirfd,
                               const char __user *unew, int follow)
@@ -8423,6 +8673,11 @@ static int32_t link_from_user(int olddirfd, const char __user *uold, int newdirf
     return rc;
 }
 
+/**
+ * link(2): the old and the new path, each resolved from the working
+ * directory; a final link of the old path is not followed, as on Linux.
+ * -EFAULT for a NULL pointer, or `link_from_user`'s answer.
+ */
 long sys_link(isr_params_t *params)
 {
     const char __user *uold = (const char __user *)SC_ARG(params, 0);
@@ -8434,6 +8689,13 @@ long sys_link(isr_params_t *params)
     return link_from_user(AT_FDCWD, uold, AT_FDCWD, unew, 0);
 }
 
+/**
+ * linkat(2): the old directory descriptor and path, the new ones, and the
+ * flags. AT_SYMLINK_FOLLOW has a final link of the old path followed;
+ * AT_EMPTY_PATH is taken and changes nothing, so an empty old path is
+ * -ENOENT; any other flag is -EINVAL. -EFAULT for a NULL pointer, or
+ * `link_from_user`'s answer.
+ */
 long sys_linkat(isr_params_t *params)
 {
     int olddirfd = (int)SC_ARG(params, 0);
@@ -8445,14 +8707,13 @@ long sys_linkat(isr_params_t *params)
     if (!current_proc || !uold || !unew) {
         return -EFAULT;
     }
-    /* Only AT_SYMLINK_FOLLOW and AT_EMPTY_PATH are defined for linkat. */
     if (flags & ~(AT_SYMLINK_FOLLOW | AT_EMPTY_PATH)) {
         return -EINVAL;
     }
     return link_from_user(olddirfd, uold, newdirfd, unew, (flags & AT_SYMLINK_FOLLOW) != 0);
 }
 
-/* The 64-bit displacement `_llseek` takes as two words. */
+/** The 64-bit displacement `_llseek` takes as two words, high and low. */
 static long long off_from(uint32_t high, uint32_t low)
 {
     return (long long)(((uint64_t)high << 32) | (uint64_t)low);
@@ -8501,25 +8762,28 @@ static int32_t llseek_listing(fd_entry_t *entry, long long off, int whence,
 }
 
 /**
- * The current size of the file an ordinary descriptor is open on.
+ * The current size of the file an ordinary descriptor is open on, into
+ * `*out`: a KRFFS root file's from its node, and another type's from its
+ * file system.
  *
  * A `SEEK_END` resolves against this, so the caller reads it inside the
  * description's lock: a process sharing the description can extend the
  * file while this one waits.
  *
- * @return 0, or -errno when the file is gone or its size cannot be read.
+ * @return 0; -EBADF for a KRFFS root file whose node was unlinked or moved
+ * from under the descriptor (`fd_node_check`) and for a descriptor with no
+ * file; or the file system's error for its size.
  */
 static int file_size_now(fd_entry_t *entry, uint64_t *out)
 {
     if (entry->node) {
         if (fd_node_check(entry) != 0) {
-            return -EBADF; /* the file was unlinked or relocated out from under us */
+            return -EBADF;
         }
         *out = entry->node->data_size;
         return 0;
     }
     if (entry->ofd->vmnt) {
-        /* A file of another type: its size from its own file system. */
         struct vfs_stat vst;
         int rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &vst);
 
@@ -8532,6 +8796,28 @@ static int file_size_now(fd_entry_t *entry, uint64_t *out)
     return -EBADF;
 }
 
+/**
+ * _llseek(2), i386's 64-bit lseek: the descriptor, the high and low words of
+ * the displacement, the address of the 64-bit result and `whence`. Moves the
+ * offset and writes it to `*result`. Returns 0 or a negative errno: -EBADF
+ * for a descriptor that is not open or is an O_PATH one, and for a socket
+ * and any other descriptor that is no file; -ESPIPE for a pipe, a terminal,
+ * the mouse and a device that does not seek; -ENXIO for a disk window whose
+ * size cannot be read; -EINVAL for a bad `whence` or a place before 0;
+ * -EOVERFLOW for a place past the largest offset; -EFAULT for a NULL or bad
+ * `result`.
+ *
+ * A raw disk window moves its own offset (`raw_seek_resolve`), the log seeks
+ * by `llseek_bootlog`, a directory or a /proc file by `llseek_listing`, and
+ * /dev/null, /dev/zero and /dev/full land at 0 and take a NULL `result`. A
+ * file's offset moves under the description's lock, as read and write move
+ * it: every descriptor a dup or a fork made shares the offset, and a seek
+ * from the current place that read it outside the lock would start from a
+ * place another process had already left. SEEK_END reads the size again
+ * inside the lock, since another process on the description may extend the
+ * file while this call waits for it. A NULL `result` is -EFAULT for a file;
+ * musl always passes one.
+ */
 long sys__llseek(isr_params_t *params)
 {
     int fd = (int)SC_ARG(params, 0);
@@ -8611,22 +8897,12 @@ long sys__llseek(isr_params_t *params)
         return seek_rc;
     }
 
-    /* The result pointer is mandatory: a NULL one is a caller bug, not a silent
-     * success (musl always passes a valid loff_t*). */
     if (!result) {
         return -EFAULT;
     }
     off = (long long)(((uint64_t)offset_high << 32) | (uint64_t)offset_low);
-    /* Under the description's lock, as read and write are: the offset is
-     * shared by every descriptor a dup or a fork made, and a seek from
-     * the current position that read it outside the lock would move it
-     * from a place another process had already left. */
     fd_ofd_lock(entry->ofd);
     if (whence == 2) {
-        /* The end is read again here, inside the lock. Another process on
-         * this description can extend the file while this call waits for
-         * it, and an end taken before the wait lands inside what that
-         * process wrote. */
         seek_rc = file_size_now(entry, &size);
         if (seek_rc != 0) {
             fd_ofd_unlock(entry->ofd);
@@ -8741,7 +9017,9 @@ static void pio_view(fd_entry_t *entry, uint64_t at, fd_entry_t *view, struct op
  * `buf`. Reads at the offset and leaves the descriptor's own where it was;
  * `pio_entry` has what it refuses. A regular file is read at the offset
  * under the description's lock, as read(2) reads it, and a device or a
- * /proc snapshot through `pio_view`.
+ * /proc snapshot through `pio_view`. Returns the bytes read, 0 at the end of
+ * the file and for a `count` of 0, whose descriptor is still checked, or a
+ * negative errno.
  */
 long ksys_pread64(int fd, char __user *buf, uint32_t count, long long pos)
 {
@@ -8769,7 +9047,9 @@ long ksys_pread64(int fd, char __user *buf, uint32_t count, long long pos)
  * from. Writes at the offset and leaves the descriptor's own where it was,
  * except that O_APPEND writes at the end of the file, as Linux's pwrite
  * does; the set-id bits and the loop device's file are write's rules
- * (`file_write`). A device is written as pread64 reads it.
+ * (`file_write`). A device is written as pread64 reads it. Returns the bytes
+ * written, 0 for a `count` of 0, whose descriptor is still checked, or a
+ * negative errno.
  */
 long ksys_pwrite64(int fd, const char __user *buf, uint32_t count, long long pos)
 {
@@ -8810,7 +9090,7 @@ long sys_pwrite64(isr_params_t *params)
                          USER_RW_LEN(SC_ARG(params, 2)), SC_SIGNED(params, 3));
 }
 
-/* The position preadv(2) and pwritev(2) take as two registers, low first:
+/** The position preadv(2) and pwritev(2) take as two registers, low first:
  * the high one's bits lie above a long's, so on a 64-bit architecture the
  * low register is the whole position, as Linux's pos_from_hilo has it. */
 static long long pos_from_hilo(unsigned long high, unsigned long low)
@@ -8826,7 +9106,10 @@ static long long pos_from_hilo(unsigned long high, unsigned long low)
  * first, as readv checks it, so a bad element is refused before a byte
  * moves; a vector of no bytes still has the descriptor checked. A short
  * transfer ends the call, and an error after bytes moved returns those
- * bytes. A negative position is -EINVAL.
+ * bytes. Returns the bytes moved or a negative errno: -EINVAL for a
+ * negative position, a count past IOV_MAX_LOCAL or below 0, or a vector of
+ * 2 GiB or more; -EFAULT for a vector or a buffer the caller cannot reach;
+ * or the first element's error.
  */
 static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int write)
 {
@@ -9092,7 +9375,8 @@ static int32_t flock_write(uintptr_t arg, int wide, const struct lock_req *req)
 /**
  * The record-lock commands of fcntl64 on `entry`: `cmd` one of the nine,
  * `arg` the caller's struct flock, 16 bytes with 32-bit offsets for F_GETLK,
- * F_SETLK and F_SETLKW, or struct flock64, 24 bytes, for the rest.
+ * F_SETLK and F_SETLKW, or struct flock64, 24 bytes, for the rest. Returns
+ * 0 or a negative errno.
  *
  * A POSIX lock belongs to the descriptor table and an open file description
  * lock (F_OFD_*, whose `l_pid` must be 0) to the description, as
@@ -9168,7 +9452,8 @@ static int32_t fcntl_lock(fd_entry_t *entry, int cmd, uintptr_t arg)
  * for writing (EPERM), then `arg` must be seals (EINVAL) and the file not
  * sealed against sealing (EPERM), in Linux's order. F_SEAL_WRITE does not
  * wait for writable shared mappings to go, as Linux's does, and is not
- * refused with EBUSY while one exists.
+ * refused with EBUSY while one exists. Returns the seals for F_GET_SEALS,
+ * 0 for F_ADD_SEALS, or a negative errno.
  */
 static int32_t fcntl_seals(const fd_entry_t *entry, int cmd, uint32_t arg)
 {
@@ -9215,16 +9500,22 @@ static int32_t no_copy(int a, int b)
     return -EINVAL;
 }
 
+/** splice(2): `no_copy` of the input and output descriptors, the first and
+ * third arguments. */
 long sys_splice(isr_params_t *params)
 {
     return no_copy((int)SC_ARG(params, 0), (int)SC_ARG(params, 2));
 }
 
+/** tee(2): `no_copy` of the input and output descriptors, the first and
+ * second arguments. */
 long sys_tee(isr_params_t *params)
 {
     return no_copy((int)SC_ARG(params, 0), (int)SC_ARG(params, 1));
 }
 
+/** sendfile(2), and i386's sendfile64: `no_copy` of the output and input
+ * descriptors, the first and second arguments. */
 long sys_sendfile(isr_params_t *params)
 {
     return no_copy((int)SC_ARG(params, 0), (int)SC_ARG(params, 1));
@@ -9242,9 +9533,10 @@ long sys_sendfile(isr_params_t *params)
     (FALLOC_FL_PUNCH_HOLE | FALLOC_FL_COLLAPSE_RANGE | FALLOC_FL_ZERO_RANGE | \
      FALLOC_FL_INSERT_RANGE | FALLOC_FL_UNSHARE_RANGE | FALLOC_FL_WRITE_ZEROES)
 
-/** Whether Linux takes fallocate mode `mode` (vfs_fallocate): one mode at
- * most, a hole punched with the size kept, and a range collapsed, inserted
- * or zeroed by writes without it. A mode it does not take is -EOPNOTSUPP. */
+/** Whether Linux takes fallocate mode `mode` (vfs_fallocate), 1 or 0: one
+ * mode at most, a hole punched with the size kept, and a range collapsed,
+ * inserted or zeroed by writes without it. The caller answers 0 with
+ * -EOPNOTSUPP. */
 static int32_t fallocate_mode_ok(uint32_t mode)
 {
     uint32_t kind = mode & FALLOC_FL_MODE_MASK;
@@ -9266,9 +9558,10 @@ static int32_t fallocate_mode_ok(uint32_t mode)
 }
 
 /** The file type, as st_mode has it, of what `entry` is open on, for
- * fallocate: a file of a mounted file system is regular, a pipe a FIFO, a
- * /proc file regular, a device as devfs gives its mode, and anything else,
- * a socket or a terminal among them, no file at all (0). */
+ * fallocate: a file or a /proc file is regular, a directory of a file
+ * system or of /dev, /proc or /sys a directory, a pipe a FIFO, a device as
+ * devfs gives its mode, and anything else, a socket or a terminal among
+ * them, no file at all (0). */
 static uint32_t fallocate_type(fd_entry_t *entry)
 {
     if (entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_PROC) {
@@ -9288,21 +9581,22 @@ static uint32_t fallocate_type(fd_entry_t *entry)
 
 /**
  * The core of fallocate(2) in every form: give `fd` the range of `len`
- * bytes at `offset` as `mode` asks.
+ * bytes at `offset` as `mode` asks. Returns 0 or a negative errno.
  *
  * A regular file of a mounted file system goes to its type's operation
- * (vfs_fallocate): tmpfs makes the range's pages or punches a hole, as Linux's
- * tmpfs does, and ext2 gives the holes in the range zeroed blocks; any other
- * type, and a block device, is -EOPNOTSUPP, Linux's answer for a file without
- * the operation, after which glibc's posix_fallocate writes the range itself;
- * it does not after -ENOSYS. A range that grows the file past RLIMIT_FSIZE is
- * -EFBIG with SIGXFSZ, as a write's is. The checks before it are
- * Linux's, in its order (ksys_fallocate, vfs_fallocate): -EBADF for a
- * descriptor that is not open, -EINVAL for a negative offset or a length
- * that is not positive, -EOPNOTSUPP for a mode it does not take, -EBADF for
- * a descriptor not open for writing, then by the file's type -ESPIPE for a
- * pipe, -EISDIR for a directory and -ENODEV for anything but a regular file
- * or a block device, and -EFBIG for a range past the largest offset.
+ * (vfs_fallocate), under the description's lock: tmpfs makes the range's
+ * pages or punches a hole, as Linux's tmpfs does, and ext2 gives the holes in
+ * the range zeroed blocks; any other type, and a block device, is
+ * -EOPNOTSUPP, Linux's answer for a file without the operation, after which
+ * glibc's posix_fallocate writes the range itself; it does not after
+ * -ENOSYS. A range that grows the file past RLIMIT_FSIZE is -EFBIG with
+ * SIGXFSZ, as a write's is. The checks before it are Linux's, in its order
+ * (ksys_fallocate, vfs_fallocate): -EBADF for a descriptor that is not open,
+ * -EINVAL for a negative offset or a length that is not positive,
+ * -EOPNOTSUPP for a mode it does not take, -EBADF for a descriptor not open
+ * for writing, then by the file's type -ESPIPE for a pipe, -EISDIR for a
+ * directory and -ENODEV for anything but a regular file or a block device,
+ * and -EFBIG for a range past the largest offset.
  */
 long ksys_fallocate(int fd, uint32_t mode, uint64_t offset, uint64_t len)
 {
@@ -9374,8 +9668,11 @@ long sys_fallocate(isr_params_t *params)
  * MFD_ALLOW_SEALING or MFD_NOEXEC_SEAL, and sealed against a change of its
  * execute bits with MFD_NOEXEC_SEAL; close-on-exec with MFD_CLOEXEC. It goes
  * with its descriptions' last close, and /proc/PID/fd names it
- * "/memfd:NAME (deleted)". A name longer than 249 bytes, MFD_HUGETLB or
- * another unknown flag, and MFD_NOEXEC_SEAL with MFD_EXEC are EINVAL.
+ * "/memfd:NAME (deleted)". Returns the descriptor or a negative errno: a
+ * name longer than 249 bytes, MFD_HUGETLB or another unknown flag, and
+ * MFD_NOEXEC_SEAL with MFD_EXEC are EINVAL; a name the caller cannot reach
+ * is EFAULT, a full descriptor table EMFILE, and the rest ENOMEM or
+ * `tmpfs_memfd`'s.
  */
 long sys_memfd_create(isr_params_t *params)
 {
@@ -9478,16 +9775,33 @@ long sys_flock(isr_params_t *params)
 }
 
 /**
- * Descriptor control (fcntl64).
+ * fcntl64(2) on i386 and fcntl(2) on x86-64: the descriptor, the command
+ * and its argument. Returns what the command gives or a negative errno:
+ * -EBADF for a descriptor that is not open, -EINVAL for a command it does
+ * not take.
  *
- * Its arguments are fd, cmd and arg. Supports the descriptor-flag and
- * status-flag round-trips libc needs: F_DUPFD(_CLOEXEC), F_GETFD/F_SETFD (the
- * close-on-exec bit), and F_GETFL/F_SETFL (access + O_NONBLOCK/O_APPEND on the
- * shared open-file description, which the write and socket paths read).
+ * F_GETFD and F_SETFD read and set the close-on-exec bit, which belongs to
+ * the descriptor. F_GETFL reports the access mode, 0, 1 or 2 for O_RDONLY,
+ * O_WRONLY and O_RDWR, with O_APPEND and O_NONBLOCK, and O_PATH for an
+ * O_PATH descriptor. F_SETFL sets O_APPEND and O_NONBLOCK, which belong to
+ * the open file description a dup or a fork shares, and ignores the other
+ * bits, the access mode and O_CLOEXEC among them, as POSIX allows.
+ *
+ * F_DUPFD and F_DUPFD_CLOEXEC duplicate onto the lowest free descriptor at
+ * or above `arg`, as POSIX requires. The description the allocation gave
+ * the new slot is dropped, and the duplicate shares the source's, and so
+ * the offset, with a reference to it and to a socket; it is close-on-exec
+ * only with F_DUPFD_CLOEXEC. An `arg` at or past the descriptor limit is
+ * -EINVAL, since the table grows to the limit and no further; no free slot
+ * at or above it is -EMFILE, and no room in the heap -ENOMEM. The
+ * allocation may move the table's entries, so the source is looked up again
+ * after it.
+ *
+ * The record locks are `fcntl_lock`'s and the seals `fcntl_seals`'s.
  * F_GETPIPE_SZ gives a pipe's capacity, which bash asks before it writes a
- * here-document into a pipe it reads itself. An O_PATH descriptor takes the
- * commands Linux lets it take, the two duplications, F_GETFD, F_SETFD and
- * F_GETFL, which reports O_PATH, and is -EBADF to the rest.
+ * here-document into a pipe it reads itself, and is -EBADF for anything
+ * else. An O_PATH descriptor takes the commands Linux lets it take, the two
+ * duplications, F_GETFD, F_SETFD and F_GETFL, and is -EBADF to the rest.
  */
 long sys_fcntl64(isr_params_t *params)
 {
@@ -9529,8 +9843,6 @@ long sys_fcntl64(isr_params_t *params)
         }
         return 0;
     case F_GETFL: {
-        /* Report the access mode (O_RDONLY=0/O_WRONLY=1/O_RDWR=2) plus the
-         * OFD status flags we track (O_APPEND, O_NONBLOCK). */
         int rw = entry->flags & (FD_FLAG_READ | FD_FLAG_WRITE);
         int fl;
         if (rw == (FD_FLAG_READ | FD_FLAG_WRITE)) {
@@ -9549,10 +9861,6 @@ long sys_fcntl64(isr_params_t *params)
         return fl;
     }
     case F_SETFL:
-        /* O_APPEND and O_NONBLOCK are the settable status flags; they live
-         * on the open-file description (shared by dup/fork), not the
-         * descriptor. Other bits in arg (access mode, O_CLOEXEC) are
-         * accepted and ignored per POSIX. */
         if (entry->ofd) {
             entry->ofd->status_flags = arg & (OFD_APPEND | OFD_NONBLOCK);
         }
@@ -9561,10 +9869,6 @@ long sys_fcntl64(isr_params_t *params)
     case F_DUPFD_CLOEXEC: {
         int newfd;
         fd_entry_t *dst;
-        /* F_DUPFD duplicates onto the LOWEST free fd >= arg (the POSIX
-         * contract). An arg past the descriptor limit is -EINVAL, since the
-         * table grows to it and no higher; no slot at or above it is
-         * -EMFILE, and no room in the heap -ENOMEM. */
         if (arg >= (uintptr_t)fd_limit(current_proc->fds)) {
             return -EINVAL;
         }
@@ -9572,18 +9876,13 @@ long sys_fcntl64(isr_params_t *params)
         if (newfd < 0) {
             return newfd;
         }
-        entry = fd_get(current_proc->fds, fd); /* the entries may have moved */
+        entry = fd_get(current_proc->fds, fd);
         dst = &current_proc->fds->entries[newfd];
-        /* The duplicate SHARES oldfd's open-file description (so the seek
-         * offset is shared, per POSIX). fd_alloc_from just gave dst a fresh
-         * OFD; drop it and point dst at oldfd's, taking a reference. A
-         * shared socket gains a reference too; FD_CLOEXEC is
-         * per-descriptor. */
         fd_ofd_unref(dst->ofd);
         dst->type = entry->type;
         dst->node = entry->node;
         dst->sock = entry->sock;
-        dst->ops = entry->ops; /* share the backing object + vtable */
+        dst->ops = entry->ops;
         dst->priv = entry->priv;
         dst->dev = entry->dev;
         dst->ofd = entry->ofd;
@@ -9621,11 +9920,8 @@ long sys_fcntl64(isr_params_t *params)
 
 #ifdef ARCH_WANT_OLD_STAT
 /**
- * Copy the three times out of a stat64 into the narrower old stat.
- *
- * The old ABI is a different struct, so every path that fills it fills it
- * separately; before this kernel had a clock they were all zero and the
- * difference did not show.
+ * Copy the three times out of a stat64 into the narrower old stat, a
+ * structure of its own, which every path that fills it fills separately.
  */
 static void stat_times_from_stat64(struct linux_stat *kst, const struct user_stat *s64)
 {
@@ -9670,6 +9966,24 @@ static void stat_root_times(struct linux_stat *kst)
     stat_times_from_stat64(kst, &s64);
 }
 
+/**
+ * The core of the old stat(2) and lstat(2): the file the user path `path`
+ * names, relative to the working directory, into the old `struct linux_stat`
+ * at `st`, a final link followed when `follow` or when the path named a
+ * directory by its end. Returns 0 or a negative errno: -EFAULT for a NULL
+ * pointer or a copy that fails, -ENOTDIR for a path that named a directory
+ * by its end and reached something else, or the walk's errors, -ENOENT,
+ * -ENOTDIR and -EACCES among them.
+ *
+ * "/", for a process without a root of its own (`names_tree_root`), is
+ * reported without a walk as the KRFFS root directory: mode 0755, inode 1,
+ * and the root's stored times, which a name made in it stamps, so a program
+ * watching the directory sees the change. A file of /dev, /proc or /sys, or
+ * of another mounted type, is filled from the stat64 the wider calls give,
+ * narrowed. The walk keeps its mount's lock until the node is read, as
+ * `do_stat64`'s does. A KRFFS root file has a link count of 1, since KRFFS
+ * has no hard links.
+ */
 static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st, int follow)
 {
     struct linux_stat kst;
@@ -9688,7 +10002,6 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
     }
     follow |= dir;
 
-    /* Build the result in a kernel struct, then copy it out in one shot. */
     k_memset(&kst, 0, sizeof(kst));
 
     if (names_tree_root(pathbuf)) {
@@ -9697,8 +10010,6 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
         kst.st_nlink = 1;
         kst.st_ino = 1;
         kst.st_blksize = 4096;
-        /* The root is a real directory with real times: an entry created in it
-         * stamps them, which is how a program watching a directory sees it. */
         stat_root_times(&kst);
         if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
             return -EFAULT;
@@ -9706,9 +10017,6 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
         return 0;
     }
 
-    /* /dev and /proc are synthetic. The old stat(2) ABI is a narrower struct,
-     * so translate the synthetic stat64 result down into it. The walk keeps
-     * its mount's lock until the node is read, as `do_stat64`'s does. */
     {
         struct vfs_ref ref;
         const struct vpath *svp;
@@ -9717,7 +10025,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
 
         path_buf_put(pathbuf);
         if (rc != 0) {
-            return rc; /* missing, not-a-dir, or a denied ancestor */
+            return rc;
         }
         svp = vfs_synth_vpath(ref.mnt, ref.node);
         if (svp) {
@@ -9765,7 +10073,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
         kst.st_mode = node == krffs_fs->node
                           ? S_IFDIR | 0755
                           : (unsigned short)(krffs_mode_type(node->mode) | (node->mode & 07777));
-        kst.st_nlink = 1; /* Always 1 for KRFFS */
+        kst.st_nlink = 1;
         kst.st_uid = (unsigned short)node->uid;
         kst.st_gid = (unsigned short)node->gid;
         kst.st_size = (unsigned long)node->data_size;
@@ -9779,15 +10087,20 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
     return old_stat_put(st, &kst, dir);
 }
 
-/* stat follows symlinks; lstat does not. musl maps SYS_stat and
- * SYS_lstat to the 64-bit forms, 195 and 196, so these two serve a caller
- * that issues the old numbers itself. */
+/**
+ * The old stat(2), 106 on i386: the path and the old stat, a final symbolic
+ * link followed (`do_old_stat`). musl maps SYS_stat and SYS_lstat to the
+ * 64-bit forms, 195 and 196, so this call and `sys_lstat` serve a caller
+ * that issues the old numbers itself.
+ */
 long sys_stat(isr_params_t *params)
 {
     return do_old_stat((const char __user *)SC_ARG(params, 0),
                        (struct linux_stat __user *)SC_ARG(params, 1), 1);
 }
 
+/** The old lstat(2), 107 on i386: `sys_stat` with a final link not
+ * followed. */
 long sys_lstat(isr_params_t *params)
 {
     return do_old_stat((const char __user *)SC_ARG(params, 0),
@@ -9795,10 +10108,13 @@ long sys_lstat(isr_params_t *params)
 }
 #endif /* ARCH_WANT_OLD_STAT */
 
-/*
- * creat(2) takes path and mode. Returns an fd open for writing, or -errno. An
- * existing regular file is truncated to zero by the call; a directory, the root
- * included, is EISDIR.
+/**
+ * creat(2): the path, resolved from the working directory, and the mode.
+ * Returns a descriptor open for writing, or a negative errno. The call is
+ * open(2) with O_WRONLY, O_CREAT and O_TRUNC, made through the same code
+ * (`open_named`), so the -EISDIR for a directory, the root included, the
+ * write check, the truncation of an existing file with its set-id clear,
+ * and the stamp of a new node are open's.
  */
 long sys_creat(isr_params_t *params)
 {
@@ -9815,10 +10131,6 @@ long sys_creat(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    /* creat(2) is open(O_WRONLY|O_CREAT|O_TRUNC), and it is exactly that
-     * call, so the two cannot drift: the EISDIR for a directory, the write
-     * check, the truncate with its set-id clear, and the stamp of a new
-     * node all happen where open does them. */
     rc = open_named(path_name(pathbuf), 1 /* O_WRONLY */ | O_CREAT | O_TRUNC, mode, end);
     path_buf_put(pathbuf);
     return rc;
@@ -9827,12 +10139,14 @@ long sys_creat(isr_params_t *params)
 /**
  * Remove the name `leaf` from the KRFFS root's directory `parent`: the
  * root's half of `unlink_named`, run under the root's namespace lock, which
- * the caller took with its walk and keeps until this returns.
+ * the caller took with its walk and keeps until this returns. Returns 0 or a
+ * negative errno.
  *
  * The directory's write bit is checked before the name is looked up, so a
  * caller who may not write there sees -EACCES and does not learn whether
- * the name exists. The root and a directory are -EISDIR, and anything else
- * -ENOTDIR when the path had a slash after the name (`slash`); the sticky
+ * the name exists. The root and a directory are -EISDIR, the root known by
+ * its node, since its stored mode may lack the directory bits, and anything
+ * else -ENOTDIR when the path had a slash after the name (`slash`); the sticky
  * rule may answer -EPERM, and a file a loop device stands on is -EBUSY: the
  * holder count below is the descriptor tables, which an attachment is not
  * in, and the root has no count of its own to keep the extent.
@@ -9884,19 +10198,18 @@ static int32_t unlink_root_name(const struct vfs_ref *parent, const char *leaf, 
  * Remove the name `path`, an absolute canonical path, which is not a
  * directory: the core of unlink(2) and of unlinkat(2) without AT_REMOVEDIR,
  * `end` saying how the path as written named a directory by its end
- * (`path_names_dir`).
+ * (`path_names_dir`). Returns 0 or a negative errno.
  *
- * Every refusal is decided here, not below, because `krffs_unlink`
- * answers all of them with a bare -1, which the wrapper reports as `EIO`
- * whatever went wrong. A missing component gives `-ENOENT` and a plain file
- * in the middle of the path `-ENOTDIR`, both from the reporting resolver;
- * the root and any directory give `-EISDIR`, which is what tells a caller
- * to use `rmdir`. The root is tested by node identity because it has
- * 0755 with no type bits and would otherwise read as a plain file. A path
- * whose last name is "." or ".." names a directory, -EISDIR, and one with a
- * slash after its last name, `end` PATH_END_SLASH, names one too: a name
- * there that is not a directory, a symbolic link to one among them, is
- * -ENOTDIR, as on Linux.
+ * The walk gives -ENOENT for a missing component and -ENOTDIR for a file in
+ * the middle of the path. The root, a last name of "." or "..", and any
+ * directory are -EISDIR, which tells a caller to use rmdir; an empty path is
+ * -EINVAL, a name in /dev, /proc or /sys -EROFS, and a mount point -EBUSY.
+ * A path with a slash after its last name, `end` PATH_END_SLASH, names a
+ * directory too: a name there that is not one, a symbolic link to one among
+ * them, is -ENOTDIR, as on Linux. On the KRFFS root every refusal is made
+ * before the core is called (`unlink_root_name`), since `krffs_unlink`
+ * answers each with -1, which `kfs_unlink` reports as -EIO; on another type
+ * the removal rules are `cred_remove_ref`'s and the rest the type's.
  *
  * The walk keeps the parent's namespace lock, where its type takes one,
  * until the name is gone: on the KRFFS root the holder count of
@@ -9911,7 +10224,7 @@ static int32_t unlink_named(const char *path, int end)
     int32_t rc;
 
     if (path[0] == '/' && path[1] == '\0') {
-        return -EISDIR; /* the root directory cannot be unlinked */
+        return -EISDIR;
     }
 
     name = path;
@@ -9920,7 +10233,7 @@ static int32_t unlink_named(const char *path, int end)
     }
 
     if (name[0] == '\0') {
-        return -EINVAL; /* empty filename */
+        return -EINVAL;
     }
     rc = vfs_resolve(0, path, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf, sizeof(leaf));
     if (rc != 0) {
@@ -9929,9 +10242,9 @@ static int32_t unlink_named(const char *path, int end)
     if (leaf_is_dot(leaf)) {
         rc = -EISDIR;
     } else if (vfs_synth_vpath(parent.mnt, parent.node)) {
-        rc = -EROFS; /* the synthetic mounts are read-only */
+        rc = -EROFS;
     } else if (vfs_leaf_mount(parent.mnt, parent.node, leaf)) {
-        rc = -EBUSY; /* a mount point cannot be unlinked */
+        rc = -EBUSY;
     } else if (mnt_is_root(parent.mnt)) {
         rc = unlink_root_name(&parent, leaf, end == PATH_END_SLASH);
     } else {
@@ -9959,7 +10272,8 @@ static int32_t do_unlink(const char *path)
     return unlink_named(path, 0);
 }
 
-/* unlink(2) takes path. Returns 0 or -errno. */
+/** unlink(2): the path, resolved from the working directory; -EFAULT for a
+ * NULL path, or `unlink_named`'s answer. */
 long sys_unlink(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 0);
@@ -9990,8 +10304,8 @@ struct core_file {
 };
 
 /** The core file's writer for `core_write`: `len` bytes of `buf` at the
- * file's place, or a hole of `len` bytes for a null `buf`. A short write is
- * a full disk. */
+ * file's place, or a hole of `len` bytes for a null `buf`. Returns 0 or the
+ * write's error; a short write is a full disk, -ENOSPC. */
 static int32_t core_file_put(void *ctx, const void *buf, uint32_t len)
 {
     struct core_file *cf = ctx;
@@ -10090,8 +10404,8 @@ out:
  * waits for the lock is a name that exists here, and not one handed to the
  * file system, which refuses it as it refuses a full volume (ENOSPC on the
  * KRFFS root) or a failing one (EIO on a KRFFS volume). A name that exists
- * in /dev or /proc is -EEXIST too, before the -EROFS of a name that does
- * not, as on Linux.
+ * in /dev, /proc or /sys is -EEXIST too, before the -EROFS of a name that
+ * does not, as on Linux. Returns 0 or a negative errno.
  */
 static int32_t mkdir_in(const struct vfs_ref *parent, const char *leaf, uint32_t mode,
                         const char *path)
@@ -10130,12 +10444,15 @@ static int32_t mkdir_in(const struct vfs_ref *parent, const char *leaf, uint32_t
 }
 
 /**
- * Create the directory `path`, an absolute canonical path, with the
+ * Create the directory `pathbuf`, an absolute canonical path, with the
  * permission bits of `mode` less the umask, as any creation takes them: the
- * core of mkdir(2) and mkdirat(2). Returns 0 or -errno (-EEXIST if it exists,
- * a last name of "." or ".." among them, -ENOENT if a parent is missing).
- * The walk keeps the parent's namespace lock, where its type takes one,
- * until the directory is made (`mkdir_in`).
+ * core of mkdir(2) and mkdirat(2). Returns 0 or a negative errno: -EEXIST
+ * for the root, which `mkdir -p` walks through, and for any name that
+ * exists, a last name of "." or ".." among them; -ENOENT before the root
+ * file system is mounted; the walk's errors, -ENOENT for a missing parent
+ * and -EACCES for an ancestor the caller may not search among them; or
+ * `mkdir_in`'s. The walk keeps the parent's namespace lock, where its type
+ * takes one, until the directory is made (`mkdir_in`).
  */
 static int32_t do_mkdir(const char *pathbuf, uint32_t mode)
 {
@@ -10147,7 +10464,7 @@ static int32_t do_mkdir(const char *pathbuf, uint32_t mode)
         return -ENOENT;
     }
     if (pathbuf[0] == '/' && pathbuf[1] == '\0') {
-        return -EEXIST; /* the root exists; mkdir -p walks through here */
+        return -EEXIST;
     }
     rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf, sizeof(leaf));
     if (rc != 0) {
@@ -10159,7 +10476,12 @@ static int32_t do_mkdir(const char *pathbuf, uint32_t mode)
     return rc;
 }
 
-/* mkdir(2) takes path and mode. */
+/**
+ * mkdir(2): the path, resolved from the working directory, and the mode.
+ * -EFAULT for a NULL path, or `do_mkdir`'s answer. The path is copied with
+ * a last "." put back (`path_put_dot`), so the walk gives "." as the name
+ * and the call answers -EEXIST, as on Linux.
+ */
 long sys_mkdir(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 0);
@@ -10179,8 +10501,8 @@ long sys_mkdir(isr_params_t *params)
     return rc;
 }
 
-/* mkdirat(2) takes dirfd, path and mode; a relative path is resolved from
- * `dirfd` as openat's is. */
+/** mkdirat(2): the directory descriptor, the path and the mode; `sys_mkdir`
+ * with a relative path resolved from `dirfd`, as openat resolves it. */
 long sys_mkdirat(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 1);
@@ -10222,18 +10544,19 @@ static int32_t mknod_kind(uint32_t mode)
 
 /**
  * Make the node `path` names, an absolute canonical path, of a kind
- * `mknod_kind` has passed: the core of mknod(2) and mknodat(2).
+ * `mknod_kind` has passed: the core of mknod(2) and mknodat(2). Returns 0
+ * or a negative errno.
  *
  * The kind is the S_IF type bits of `mode`, a regular file for none; `dev`
  * is a device's number as the call takes it, Linux's 32-bit encoding, which
  * is the kernel's own. The refusals after the kind's and the path's come in
  * Linux's order: the root (EEXIST, `new_name_parent`), a path that named a
  * directory by its end, `end`, as `make_dir_end` answers it, a name that
- * exists (EEXIST, a symbolic link included, `new_name_taken`), then /dev and
- * /proc, where nothing is made (EROFS), a read-only mount, the write
- * permission on the directory, and last a device node made by a caller who
- * is not root (EPERM). A file system that cannot keep the kind answers
- * EPERM.
+ * exists (EEXIST, a symbolic link included, `new_name_taken`), then /dev,
+ * /proc and /sys, where nothing is made (EROFS), a read-only mount, the
+ * write permission on the directory, and last a device node made by a
+ * caller who is not root (EPERM). A file system that cannot keep the kind
+ * answers EPERM.
  */
 static int32_t do_mknod(const char *path, uint32_t mode, uint32_t dev, int end)
 {
@@ -10257,7 +10580,7 @@ static int32_t do_mknod(const char *path, uint32_t mode, uint32_t dev, int end)
     }
     if (vfs_synth_vpath(parent.mnt, parent.node)) {
         vfs_ref_release(&parent);
-        return -EROFS; /* nothing is created under /dev or /proc */
+        return -EROFS;
     }
     if (mnt_is_root(parent.mnt)) {
         rc = cred_access_node((krffs_node_t *)parent.node, CRED_W, 0);
@@ -10281,8 +10604,12 @@ static int32_t do_mknod(const char *path, uint32_t mode, uint32_t dev, int end)
     return rc;
 }
 
-/* mknod(2) takes path, mode and dev. The kind is checked before the path is
- * read. */
+/**
+ * mknod(2): the path, resolved from the working directory, the mode and the
+ * device number. The kind in the mode is checked before the path is read
+ * (`mknod_kind`); then -EFAULT for a NULL path, the copy's errors, or
+ * `do_mknod`'s answer.
+ */
 long sys_mknod(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 0);
@@ -10309,8 +10636,9 @@ long sys_mknod(isr_params_t *params)
     return rc;
 }
 
-/* mknodat(2) takes dirfd, path, mode and dev; a relative path is resolved from
- * `dirfd` as openat's is, after the kind is checked. */
+/** mknodat(2): the directory descriptor, the path, the mode and the device
+ * number; `sys_mknod` with a relative path resolved from `dirfd`, as openat
+ * resolves it. */
 long sys_mknodat(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 1);
@@ -10342,8 +10670,9 @@ long sys_mknodat(isr_params_t *params)
  * description has it, an O_PATH descriptor's or one in flight on a socket
  * among them, or it is a process's working directory. A descriptor of the
  * root finds its directory by the node's place, which the allocator gives
- * the next node it makes once the directory is freed, so `rmdir` refuses a
- * directory in use, as a KRFFS volume and ext2 refuse theirs.
+ * the next node it makes once the directory is freed, so `rmdir` answers
+ * -EBUSY for a directory in use, as a KRFFS volume does (`kv_rmdir`); ext2
+ * removes one and keeps its inode for the holders.
  */
 static int root_dir_in_use(const struct vfs_mount *mnt, const krffs_node_t *dir)
 {
@@ -10402,7 +10731,8 @@ static int32_t rmdir_root_name(const struct vfs_ref *parent, const char *leaf)
  * (-ENOENT, -ENOTDIR, -EBUSY, -ENOTEMPTY). The root is -EBUSY, a last name
  * of "." -EINVAL and one of ".." -ENOTEMPTY once the walk to them is made, as
  * on Linux, whatever the directory holds. A mount point and a process's root
- * are -EBUSY.
+ * are -EBUSY, a directory in /dev, /proc or /sys -EROFS, and any path
+ * -ENOENT before the root file system is mounted.
  *
  * The walk keeps the parent's namespace lock, where its type takes one,
  * until the directory is gone: on the KRFFS root the use `rmdir_root_name`
@@ -10427,7 +10757,7 @@ static int32_t do_rmdir(const char *pathbuf)
     if (leaf_is_dot(leaf)) {
         rc = leaf[1] == '\0' ? -EINVAL : -ENOTEMPTY;
     } else if (vfs_synth_vpath(parent.mnt, parent.node)) {
-        rc = -EROFS; /* the synthetic mounts are read-only */
+        rc = -EROFS;
     } else if (vfs_leaf_mount(parent.mnt, parent.node, leaf) ||
                vfs_leaf_root(parent.mnt, parent.node, leaf)) {
         rc = -EBUSY;
@@ -10497,7 +10827,7 @@ long sys_unlinkat(isr_params_t *params)
     return rc;
 }
 
-/* The renameat2 flag this kernel does: refuse to replace the new name. */
+/* The one renameat2 flag this kernel takes: do not replace the new name. */
 #define RENAME_NOREPLACE 1
 
 /**
@@ -10635,37 +10965,38 @@ static int32_t rename_mounted_names(const struct vfs_ref *opar, const char *olea
  * Rename `old_buf` to `new_buf`, both absolute canonical paths: the core of
  * rename(2), renameat(2) and renameat2(2), whose RENAME_NOREPLACE in `flags`
  * refuses a new name that exists with -EEXIST, decided with the rename under
- * one namespace lock. The directories' write permission is checked before
- * either name is looked up, so a caller without it sees -EACCES where Linux
- * would report the lookups' -ENOENT or -EEXIST. `slash` says that either
- * path had a slash after its last name. Returns 0 or -errno.
+ * one namespace lock. `slash` says that either path had a slash after its
+ * last name. Returns 0 or -errno.
  *
- * As in `unlink`, every refusal is decided here, because `krffs_rename`
- * answers all of them with a bare -1, which the wrapper reports as `EIO`.
- * The two directory cases are the ones POSIX separates and the memory root
- * does not (a mounted KRFFS volume answers `EIO` for both, except `EISDIR`
- * for a directory destination that is open, and ext2 moves directories): a
- * directory SOURCE is `-EPERM`, since a directory's children
- * reference its id and a move would orphan them, so the rename cannot be
- * performed at all; a directory DESTINATION under a plain source is
- * `-EISDIR`, the case that errno is reserved for. The rest follow the
- * reporting resolver: `-ENOENT` for a missing source or destination parent,
- * `-ENOTDIR` for a plain file used as a path component, `-EINVAL` for a
- * destination naming no entry.
- *
- * A last name of "." or ".." in either path, which the walk to its parent
- * returns as the name, is -EBUSY once both walks are made and the two are on
- * one mount, and in the new path -EEXIST under RENAME_NOREPLACE, as on
+ * Either path naming the root is -EBUSY, or -EEXIST for the new path under
+ * RENAME_NOREPLACE, before either path is walked, where Linux walks both
+ * first: the path copy canonicalizes the root to "/", which has no last name
+ * for a walk to the parent to give. The walks give -ENOENT for a missing
+ * parent and -ENOTDIR for a file used as a directory, and two mounts are
+ * -EXDEV, after which a program copies and unlinks. A last name of "." or
+ * ".." in either path, which the walk to its parent returns as the name, is
+ * then -EBUSY, and in the new path -EEXIST under RENAME_NOREPLACE, as on
  * Linux, which checks these before it asks for write access: before the
- * write bits, and before the -EROFS of /dev and /proc, where nothing is
- * renamed. Either path naming the root is answered the same way, -EBUSY, or
- * -EEXIST for the new path under RENAME_NOREPLACE, before either path is
- * walked, where Linux walks both first: the path copy canonicalizes the root
- * to "/", which has no last name for a walk to the parent to give. The
- * identity tests of `rename_root_names` are therefore unreachable today and
- * are kept as defence: freeing the root as a replaced destination would take
- * the file system with it, and that guarantee should not rest on a
- * canonicalizer in another function.
+ * write bits, and before the -EROFS of /dev, /proc and /sys, where nothing
+ * is renamed.
+ *
+ * A rename writes both directories, the entry leaving one and landing in the
+ * other, so both write bits are checked before either name is looked up, as
+ * unlink orders it: a caller without them sees -EACCES where Linux would
+ * report the lookups' -ENOENT or -EEXIST. A mount point at either name is
+ * -EBUSY, after the -ENOENT and -EEXIST of RENAME_NOREPLACE.
+ *
+ * On the KRFFS root every other refusal is made here and in
+ * `rename_root_names`, since `krffs_rename` answers each with -1, which
+ * `kfs_rename` reports as -EIO. Of the two directory cases POSIX separates,
+ * a directory source is -EPERM, since a directory's children refer to its
+ * id and a move would orphan them, and a directory destination under a
+ * plain source is -EISDIR, the case that errno is for. A mounted KRFFS
+ * volume answers -EIO for both, except -EISDIR for a directory destination
+ * that is open, and ext2 moves directories. The root, refused before the
+ * walks, never reaches the identity tests of `rename_root_names`; they keep
+ * a replaced destination that is the root from being freed, which would
+ * take the file system with it, whatever the path copy does.
  *
  * Both names are walked without the namespace lock, which is taken for the
  * lookups and the rename that follow. A walk takes the lock of each mount it
@@ -10718,9 +11049,6 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags, in
         rc = (!leaf_is_dot(oleaf) && (flags & RENAME_NOREPLACE)) ? -EEXIST : -EBUSY;
         goto out;
     }
-    /* A rename writes both directories: the entry leaves one and lands in
-     * the other. Both write bits are checked before the source is even
-     * looked up, as unlink orders it. */
     rc = mnt_is_root(opar.mnt) ? cred_access_node((krffs_node_t *)opar.node, CRED_W, 0)
                                : cred_access_ref(&opar, CRED_W, 0);
     if (rc == 0) {
@@ -10728,13 +11056,13 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags, in
                                    : cred_access_ref(&npar, CRED_W, 0);
     }
     if (rc == 0 && vfs_synth_vpath(opar.mnt, opar.node)) {
-        rc = -EROFS; /* nothing is renamed in /dev or /proc */
+        rc = -EROFS;
     }
     if (rc != 0) {
         goto out;
     }
     if (vfs_leaf_mount(opar.mnt, opar.node, oleaf) || vfs_leaf_mount(npar.mnt, npar.node, nleaf)) {
-        rc = -EBUSY; /* a mount point moves for no one */
+        rc = -EBUSY;
         if (flags & RENAME_NOREPLACE) {
             vfs_ns_lock(opar.mnt);
             rc = rename_noreplace(&opar, oleaf, &npar, nleaf);
@@ -10762,7 +11090,8 @@ out:
  * rename(2), renameat(2) and renameat2(2) after their arguments: both paths
  * are copied, each relative one joined to its own directory, before either
  * is resolved, a last "." kept as the name the walk to the parent returns
- * (`path_put_dot`).
+ * (`path_put_dot`). Returns 0 or a negative errno: the copies' or
+ * `do_rename`'s.
  */
 static int32_t rename_from_user(int olddirfd, const char __user *uold, int newdirfd,
                                 const char __user *unew, int flags)
@@ -10785,7 +11114,8 @@ static int32_t rename_from_user(int olddirfd, const char __user *uold, int newdi
     return rc;
 }
 
-/* rename(2) takes old path and new path. Returns 0 or -errno. */
+/** rename(2): the old and the new path, each resolved from the working
+ * directory; -EFAULT for a NULL path, or `rename_from_user`'s answer. */
 long sys_rename(isr_params_t *params)
 {
     const char __user *old_path = (const char __user *)SC_ARG(params, 0);
@@ -10797,8 +11127,11 @@ long sys_rename(isr_params_t *params)
     return rename_from_user(AT_FDCWD, old_path, AT_FDCWD, new_path, 0);
 }
 
-/* renameat(2) takes old dirfd, old path, new dirfd and new path; each relative
- * path is resolved from its own descriptor. */
+/**
+ * renameat(2): the old directory descriptor and path and the new ones; each
+ * relative path is resolved from its own descriptor. -EFAULT for a NULL
+ * path, or `rename_from_user`'s answer.
+ */
 long sys_renameat(isr_params_t *params)
 {
     const char __user *old_path = (const char __user *)SC_ARG(params, 1);
@@ -10832,7 +11165,7 @@ long sys_renameat2(isr_params_t *params)
                             flags);
 }
 
-/* Special nsec values */
+/* utimensat's tv_nsec for a time set to now, and for a time left alone. */
 #define UTIME_NOW ((1L << 30) - 1L)
 
 #define UTIME_OMIT ((1L << 30) - 2L)
@@ -10840,13 +11173,13 @@ long sys_renameat2(isr_params_t *params)
 /* Timer tick frequency (100 Hz) */
 #define TIMER_FREQUENCY 100
 
-/*
- * get_current_time - the current real time, in seconds and nanoseconds
- *
- * Answered by the clock (sys/arch/x86/rtc.c): the second the CMOS reported at
- * boot plus the ticks since that read, or time since boot on a machine whose
- * clock could not be read, either way with the PIT's place within the tick
- * added and never earlier than the reading before it (`rtc_realtime`).
+/**
+ * The current real time, in seconds and nanoseconds since the epoch, as
+ * `rtc_realtime` (clock.c) gives it: the second the machine's clock gave at
+ * boot plus the time since that read, or the time since boot on a machine
+ * whose clock could not be read, with the timer's place within the tick and
+ * any step a setting of the clock made, and never earlier than the reading
+ * before it.
  */
 void get_current_time(int64_t *seconds, int64_t *nanoseconds)
 {
@@ -11088,15 +11421,13 @@ long sys_utimensat(isr_params_t *params)
     return rc;
 }
 
-/*
- * Linux dirent64 structure for getdents64 syscall
- */
+/* A record of getdents64(2), Linux's struct linux_dirent64. */
 struct linux_dirent64 {
-    uint64_t d_ino;    /* 64-bit inode number */
-    int64_t d_off;     /* offset to next entry */
-    uint16_t d_reclen; /* Size of this dirent */
-    uint8_t d_type;    /* File type */
-    char d_name[1];    /* Filename (variable length, null-terminated) */
+    uint64_t d_ino;    /* inode number */
+    int64_t d_off;     /* the directory's offset after this record */
+    uint16_t d_reclen; /* bytes in the record, a multiple of 8 */
+    uint8_t d_type;    /* a DT_ value, DT_UNKNOWN for a type not given */
+    char d_name[1];    /* the name and its NUL, which run past the struct */
 };
 
 /* Directory entry types */
@@ -11116,7 +11447,8 @@ struct linux_dirent64 {
 
 #endif
 
-/* Format an unsigned decimal into out (NUL-terminated). */
+/** Write `v` in decimal into `out`, which has room for 11 bytes, with its
+ * terminator. */
 static void synth_u32_str(char *out, uint32_t v)
 {
     char tmp[12];
@@ -11139,12 +11471,15 @@ static void synth_u32_str(char *out, uint32_t v)
 }
 
 /**
- * The n-th entry, "." and ".." counted off, of a process's directory, its
- * task directory or its fd directory, from the directory descriptor's
- * record `sd`: fills name/ino/dtype and returns 1, or 0 past the end or
- * once the process, or the thread a thread's directory is of, is gone. A
- * thread's directory has the files of the thread with no `task` among
- * them, and its fd directory the thread's descriptors.
+ * The n-th entry, "." and ".." counted off, of a process's directory or of
+ * its `task`, `fd`, `fdinfo` or `ns` directory, from the directory
+ * descriptor's record `sd`: fills name/ino/dtype and returns 1, or 0 past
+ * the end or once the process, or the thread a thread's directory is of, is
+ * gone, which leaves the directory with "." and ".." alone. A thread's
+ * directory has the files of the thread with no `task` among them, and its
+ * fd directory the thread's descriptors. `task` lists the process's
+ * threads, the leader first, without a thread that has ended and is not yet
+ * reaped unless it is the leader.
  */
 static int synth_proc_dirent(const struct synth_dir *sd, int n, char *name, uint64_t *ino,
                              uint8_t *dtype)
@@ -11167,10 +11502,9 @@ static int synth_proc_dirent(const struct synth_dir *sd, int n, char *name, uint
     id = procfs_resolve_id(&vp);
     pp = id < 0 ? NULL : get_process((uint32_t)id);
     if (!pp) {
-        return 0; /* the process exited: an empty directory (just . and ..) */
+        return 0;
     }
     if (sd->kind == VNODE_PROC_PID) {
-        /* `task`, the last entry, is not in a thread's directory. */
         if (n >= (int)(sizeof(files) / sizeof(files[0])) - (sd->tid != 0 ? 1 : 0)) {
             return 0;
         }
@@ -11197,8 +11531,6 @@ static int synth_proc_dirent(const struct synth_dir *sd, int n, char *name, uint
         return 1;
     }
     if (sd->kind == VNODE_PROC_TASK_DIR) {
-        /* The process's threads, the leader first, which a thread whose end
-         * is still to be reaped is not among unless it is the leader. */
         process_t *t;
 
         for (t = proc_list; t; t = t->next) {
@@ -11321,6 +11653,7 @@ static void synth_put_devno(char *out, uint32_t major, uint32_t minor)
  * disk; /sys/dev/block, a link named MAJOR:MINOR for each disk node; a
  * disk's own, its attributes, `queue`, `device`, a bound loop device's
  * `loop` and its partitions' directories; and the others, their attributes.
+ * 1 with the entry's name, inode and type, or 0 past the last.
  */
 static int synth_sys_block_dirent(int node, int key, int n, char *name, uint64_t *ino,
                                   uint8_t *dtype)
@@ -11477,14 +11810,15 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
 }
 
 /**
- * Entry `n` of /proc/net, or with `stat` of /proc/net/stat: the files of
- * /proc/net, dev, route, arp and tcp, then the ones known by their origin,
- * from SYNTH_PROC_NETUDP, then the directory `stat`; and its two files.
+ * Entry `n` of /proc/net, or with `stat` of /proc/net/stat: 1 with its name,
+ * inode and type, or 0 past the last. /proc/net has dev, route, arp and tcp,
+ * then the files `synth_net_name` names from SYNTH_PROC_NETUDP on, then the
+ * directory `stat`, which has rt_cache and arp_cache. There is no tcp6: the
+ * kernel has no IPv6, and a file that existed and was empty would tell
+ * netstat the family is present with nothing on it.
  */
 static int synth_net_dirent(int stat, int n, char *name, uint64_t *ino, uint8_t *dtype)
 {
-    /* No `tcp6`: there is no IPv6 here, and a file that existed and was
-     * empty would tell netstat the family is present with nothing on it. */
     static const char *const netfiles[] = {"dev", "route", "arp", "tcp"};
     int count = (int)(sizeof(netfiles) / sizeof(netfiles[0]));
     const char *entry;
@@ -11538,10 +11872,21 @@ static int synth_sysvipc_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype
     return 1;
 }
 
-/*
- * The n-th entry of a synthetic directory (its kind, pid and tid from the
- * dir fd's record `sd`): fills name/ino/dtype and returns 1, or 0 past the
- * end. "." and ".." are entries 0 and 1 of every directory.
+/**
+ * The n-th entry of a synthetic directory, from the directory descriptor's
+ * record `sd`, its kind, pid and tid: fills name/ino/dtype and returns 1, or
+ * 0 past the end. "." and ".." are entries 0 and 1 of every directory.
+ *
+ * /dev lists first the mounts that stand in it by name, /dev/shm; then
+ * `log`, the link to the syslog daemon's socket; then the caller's
+ * descriptors, `fd` and the three standard ones (`synth_classify`), each
+ * with the inode lstat reports for it; then the devices `devfs_dirent`
+ * gives, with the registry's inodes. `devfs_dirent` skips a device that is
+ * absent, so a device after an absent one is still listed. /dev/pts has an
+ * entry for each allocated pseudoterminal, named by its index; a directory
+ * of /proc/sys has the entries of the table under it; and /proc has its
+ * files, then a directory for each process. The other directories have
+ * functions of their own.
  */
 static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64_t *ino,
                            uint8_t *dtype)
@@ -11572,7 +11917,6 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
         uint64_t mino = 0;
         int i, named = 0;
 
-        /* The mounts that stand in /dev by name come first: /dev/shm. */
         while (vfs_named_mount(vfs_mount_at(1), named, &dn, &mino)) {
             named++;
         }
@@ -11586,7 +11930,6 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
             return 1;
         }
         n -= named;
-        /* /dev/log, the link to the syslog daemon's socket. */
         if (n == 0) {
             k_strncpy(name, "log", 31);
             *ino = DEV_LOG_INO;
@@ -11594,8 +11937,6 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
             return 1;
         }
         n--;
-        /* The caller's descriptors, /dev/fd and the three standard ones
-         * (`synth_classify`), with what lstat reports of them. */
         if (n < 4) {
             static const char *const fdnames[] = {"fd", "stdin", "stdout", "stderr"};
             struct user_stat fst;
@@ -11614,9 +11955,6 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
             return 1;
         }
         n -= 4;
-        /* Through devfs_dirent, which skips absent entries and reports the
-         * registry inode: two devices are dynamically present now, so a walk
-         * that stopped at the first absent one would hide the second. */
         if (!devfs_dirent(n, &dn, &dino) || !dn) {
             return 0;
         }
@@ -11630,7 +11968,6 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
         return 1;
     }
     if (kind == VNODE_PTS_DIR) {
-        /* /dev/pts: one entry per allocated pty slave, named by its index. */
         int i, c = 0;
         for (i = 0; i < pty_index_limit(); i++) {
             if (pty_is_allocated(i)) {
@@ -11648,7 +11985,6 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
     if (kind == VNODE_SYS_DIR) {
         return synth_sys_dirent(sd->pid, sd->tid, n, name, ino, dtype);
     }
-    /* A directory of /proc/sys: the entries of the table under it. */
     if (kind == VNODE_PROC_SYS_DIR) {
         int i, c = 0;
 
@@ -11733,8 +12069,15 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
     return 0;
 }
 
-/* getdents for a synthetic directory fd: pack records from synth_dirent_at,
- * advancing the fd's offset cursor (same record layout as the KRFFS path). */
+/**
+ * getdents64 on the synthetic directory descriptor `e`: the records of the
+ * entries `synth_dirent_at` gives from the description's offset on, packed
+ * into the user buffer `buf` of `count` bytes as `sys_getdents64` packs
+ * them, with each record's d_off the index of the entry after it and the
+ * offset moved past each record copied. Returns the bytes written, 0 at the
+ * end, -EINVAL when the first record does not fit, or -EFAULT when the
+ * first copy fails.
+ */
 static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count)
 {
     static const struct synth_dir none = {VNODE_ENOENT, 0, 0, 0};
@@ -11758,7 +12101,7 @@ static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count)
         rec_len = (rec_len + 7) & ~7u;
         if (written + rec_len > count) {
             if (written == 0) {
-                return -EINVAL; /* buffer too small for even one entry */
+                return -EINVAL;
             }
             break;
         }
@@ -11780,13 +12123,42 @@ static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count)
 }
 
 /**
- * Read directory entries (getdents64(2)).
+ * getdents64(2): the descriptor, the buffer and its size. Packs a struct
+ * linux_dirent64 for each entry into the buffer from the description's
+ * offset on, and moves the offset past each. A record's `d_type` is the type
+ * the file system gives the entry, DT_UNKNOWN where it gives none, and never
+ * DT_REG for anything but a regular file. Returns the bytes written, 0 only
+ * at the end of the directory, or a negative errno: -EFAULT for a NULL or
+ * bad buffer and for a size of 0; -EBADF for a descriptor that is not open,
+ * is an O_PATH one, or is on a KRFFS root directory removed since
+ * (`fd_node_check`); -ENOTDIR for one that is no directory; -EINVAL when the
+ * first record does not fit; -EIO before the root file system is mounted;
+ * or, with nothing written, the file system's error.
  *
- * Its arguments are fd, dirp buffer and count. Packs linux_dirent64 records
- * into the buffer, one per child, and advances the fd's offset cursor. A
- * record's `d_type` is the type the file system gives the child, DT_UNKNOWN
- * where it gives none, and never DT_REG for anything but a regular file.
- * Returns the bytes written, 0 at end of directory, or -errno.
+ * Each record is built in kernel memory and copied out, and the whole buffer
+ * is checked and faulted in first, so a copy part way through the batch does
+ * not meet an unmapped page. A directory of /dev, /proc or /sys lists from
+ * the process table and the device registry (`synth_getdents`).
+ *
+ * Any other directory is read under the description's lock through its
+ * type's `readdir`, whose cursor is the type's own: on the KRFFS root the
+ * byte offset of the last node returned plus one, and on a mounted type
+ * whatever its `readdir` keeps. The offset takes the cursor only with the
+ * record copied, so an entry that does not fit is read again by the next
+ * call. A cursor is not a count of entries: `rm -rf` reads a batch of names,
+ * unlinks them and reads again, and a cursor that counted entries would skip
+ * as many survivors as the first batch removed, and leave a directory rm
+ * reports as not empty (tests/unlinkdirprobe.c).
+ *
+ * On the KRFFS root a removal moves no other node:
+ * `krffs_remove_reserved_node` only widens free extents, and the allocator
+ * splits a free node and does not shift a reserved one, so a listing
+ * interleaved with removals sees every surviving entry once. Growing a file
+ * can move its node, when the extent after it is not free and large enough
+ * (`krffs_resize_reserved_node`), and a file made during a listing may take
+ * the place a removed one freed; a listing in progress may miss such an
+ * entry or see it twice, a concurrent change of the directory that POSIX
+ * leaves unspecified.
  */
 long sys_getdents64(isr_params_t *params)
 {
@@ -11803,9 +12175,6 @@ long sys_getdents64(isr_params_t *params)
         return -EFAULT;
     }
 
-    /* Each record is built in a kernel buffer and copied out, and the whole
-     * [buf, buf+count) span is range-checked and faulted in once here, so a
-     * copy part way through the batch cannot meet an unmapped page. */
     if (!user_buffer_ok((uintptr_t)buf, count, 1)) {
         return -EFAULT;
     }
@@ -11815,9 +12184,6 @@ long sys_getdents64(isr_params_t *params)
         return -EBADF;
     }
 
-    /* A synthetic directory (/dev, /proc, /proc/<pid>[/fd]) lists from the
-     * process table or device registry, not KRFFS. Bare `ls /` does not merge
-     * these mount names; they are reached by their absolute paths. */
     if (entry->type == FD_TYPE_SYNTH_DIR) {
         return synth_getdents(entry, buf, count);
     }
@@ -11830,38 +12196,9 @@ long sys_getdents64(isr_params_t *params)
         return -EIO;
     }
     if (fd_node_check(entry) != 0) {
-        return -EBADF; /* the directory was removed out from under this fd */
+        return -EBADF;
     }
 
-    /*
-     * The cursor is the type's own: for the KRFFS boot root the byte offset
-     * of the last node returned plus one, for a mounted volume whatever its
-     * readdir keeps. It is NOT a count of the children seen so far. That
-     * distinction is the whole of a fault this had: `rm -rf` reads a batch
-     * of names, unlinks them, and reads again, and a cursor that counted
-     * children renumbered every surviving child when one was removed, so the
-     * second read skipped as many entries as the first read had deleted. The
-     * files left behind then made the directory refuse to be removed, with
-     * `rm` reporting only that it was not empty
-     * (tests/unlinkdirprobe.c).
-     *
-     * What an offset guarantees, exactly. Deleting an entry does not move any
-     * other node: `krffs_remove_reserved_node` only widens free extents, and
-     * allocation splits a free node instead of shifting a reserved one. So a
-     * listing interleaved with deletions, which is the case that matters and
-     * the one `rm` performs, sees every surviving entry once.
-     *
-     * What it does not guarantee. Growing a file CAN move its node: when the
-     * following extent is not free and large enough,
-     * `krffs_resize_reserved_node` allocates elsewhere, copies, and frees
-     * the old node. A child that grows that way while another descriptor is
-     * mid-listing lands at a new offset, and is missed if that offset is
-     * below the cursor or repeated if above. The same is true of a file
-     * created during a listing in space a removed one freed. Both are
-     * concurrent modifications of a directory being read, which POSIX leaves
-     * unspecified, and neither is reachable from the loop this exists for;
-     * the previous count-based cursor failed the case that was reachable.
-     */
     {
         struct open_file *ofd = entry->ofd;
         uint32_t cursor;
@@ -11889,24 +12226,21 @@ long sys_getdents64(isr_params_t *params)
                 return (bytes_written > 0) ? (int32_t)bytes_written : got;
             }
             name_len = (uint32_t)k_strlen(de.name);
-            /* Fixed fields (19 bytes) + name + NUL, padded to 8-byte
-             * align. */
+            /* 19 bytes of fields, the name and its NUL, padded to 8 bytes */
             rec_len = sizeof(uint64_t) + sizeof(int64_t) + sizeof(uint16_t) + sizeof(uint8_t) +
                       name_len + 1;
             rec_len = (rec_len + 7) & ~7;
             if (bytes_written + rec_len > count) {
                 if (bytes_written == 0) {
                     fd_ofd_unlock(ofd);
-                    return -EINVAL; /* buffer too small for even one entry */
+                    return -EINVAL;
                 }
-                break; /* the uncommitted cursor re-reads this entry next */
+                break;
             }
-            /* Build the record in kernel memory, then copy it out through
-             * the helper (no raw write into user space). */
             k_memset(recbuf.bytes, 0, rec_len);
             dirent = &recbuf.rec;
             dirent->d_ino = de.ino;
-            dirent->d_off = (int64_t)cursor; /* next position */
+            dirent->d_off = (int64_t)cursor;
             dirent->d_reclen = (uint16_t)rec_len;
             dirent->d_type = (uint8_t)de.type;
             k_memcpy(dirent->d_name, de.name, name_len + 1);
@@ -11915,19 +12249,20 @@ long sys_getdents64(isr_params_t *params)
                 return (bytes_written > 0) ? (int32_t)bytes_written : -EFAULT;
             }
             bytes_written += rec_len;
-            ofd->offset = cursor; /* committed with the record, not before */
+            ofd->offset = cursor;
         }
         fd_ofd_unlock(ofd);
     }
 
-    /* Nothing written after scanning every node is the end of the directory. A
-     * buffer too small for even one record returned -EINVAL above, so zero
-     * here has only the one meaning. */
     return (int32_t)bytes_written;
 }
 
-/* dup3: like dup2 but oldfd == newfd is -EINVAL and a flag can set
- * O_CLOEXEC on the new descriptor. */
+/**
+ * dup3(2): the old descriptor, the new one and the flags. `sys_dup2`'s
+ * answer, except that `oldfd` equal to `newfd` is -EINVAL, and O_CLOEXEC,
+ * the one flag taken, makes the new descriptor close-on-exec; another flag
+ * is -EINVAL.
+ */
 long sys_dup3(isr_params_t *params)
 {
     int oldfd = (int)SC_ARG(params, 0);
@@ -11987,7 +12322,8 @@ static int kernel_path_cwd(char *buf, const char *path, int *end)
  * once the walk to its parent is made and before the file is: `make_dir_end`'s
  * for such an end, -EEXIST for the root (`new_name_parent`), and -EEXIST for
  * a name that exists (`new_name_taken`), before the -EROFS of a read-only
- * mount and of /dev and /proc that `open_create` would give, as on Linux.
+ * mount and of /dev, /proc and /sys that `open_create` would give, as on
+ * Linux. 0 when the name may be made.
  */
 static int32_t bind_name_check(const char *path, int end)
 {
@@ -12006,15 +12342,16 @@ static int32_t bind_name_check(const char *path, int end)
 }
 
 /**
- * Make the socket file an AF_UNIX bind names. The file is made as O_CREAT
- * with O_EXCL makes one, with the socket type bits; the hold its creation
- * gave is kept for the socket's life, as a working directory keeps its own,
- * so the mount counts it and refuses to go while the socket is bound. A name
- * that exists, or one that names a directory by its end, makes nothing
- * (`bind_name_check`), as on Linux: -ENOENT after a slash for a name nothing
- * has, and -EADDRINUSE, which a name that exists answers, for one that does,
- * for a last "." or "..", and for the root, before a read-only mount's
- * -EROFS.
+ * Make the socket file an AF_UNIX bind names, from the working directory
+ * unless the path is absolute (`kernel_path_cwd`). The file is made as
+ * O_CREAT with O_EXCL makes one, with the socket type bits; the hold its
+ * creation gave is kept for the socket's life, as a working directory keeps
+ * its own, and counted on the mount, so an unmount of it is -EBUSY while the
+ * socket is bound. A name that exists, or one that names a directory by its
+ * end, makes nothing (`bind_name_check`), as on Linux: -ENOENT after a slash
+ * for a name nothing has, and -EADDRINUSE, which a name that exists answers,
+ * for one that does, for a last "." or "..", and for the root, before a
+ * read-only mount's -EROFS.
  */
 int32_t fs_socket_bind(const char *path, uint32_t mode, struct vfs_ref *ref, uint32_t *ino)
 {
@@ -12048,6 +12385,8 @@ int32_t fs_socket_bind(const char *path, uint32_t mode, struct vfs_ref *ref, uin
     return (rc == 1 || rc == -EEXIST) ? -EADDRINUSE : rc;
 }
 
+/** Release the node's hold and the mount's count that `fs_socket_bind`
+ * kept. */
 void fs_socket_unbind(struct vfs_ref *ref)
 {
     struct vfs_mount *mnt = ref->mnt;
@@ -12057,10 +12396,11 @@ void fs_socket_unbind(struct vfs_ref *ref)
 }
 
 /**
- * Find the socket file a connect or a send names: its mount and inode
- * number, after the caller's write permission on it is checked. A name that
- * names a directory by its end must reach one (`resolve_named`), so a socket
- * file so named is -ENOTDIR, as on Linux.
+ * Find the socket file a connect or a send names, from the working
+ * directory unless the path is absolute. A name that names a directory by
+ * its end must reach one (`resolve_named`), so a socket file so named is
+ * -ENOTDIR, as on Linux. The type is checked before the write permission:
+ * a file that is not a socket is -ECONNREFUSED whatever its mode.
  */
 int32_t fs_socket_lookup(const char *path, struct vfs_mount **mnt, uint32_t *ino)
 {
@@ -12098,11 +12438,10 @@ int32_t fs_socket_lookup(const char *path, struct vfs_mount **mnt, uint32_t *ino
 }
 
 /**
- * Read a file mapping's bytes: `count` bytes at `off` into the kernel buffer
- * `buf`, the description's offset untouched. It takes the mount's namespace
- * lock, which a type that moves a file's bytes needs, and not the
- * description's lock: a read into a mapping of the file being read faults
- * here while that lock is held.
+ * Write a shared file mapping's bytes back: -ENODEV for a descriptor that
+ * is not open on a file. It takes the mount's namespace lock, which a type
+ * that moves a file's bytes needs, and not the description's lock, as
+ * `fs_read_at` does.
  */
 int32_t fs_write_at(fd_entry_t *e, const void *buf, uint32_t count, uint64_t off)
 {
@@ -12122,6 +12461,12 @@ int32_t fs_write_at(fd_entry_t *e, const void *buf, uint32_t count, uint64_t off
     return n;
 }
 
+/**
+ * Read a file mapping's bytes: -ENODEV for a descriptor that is not open on
+ * a file. It takes the mount's namespace lock, which a type that moves a
+ * file's bytes needs, and not the description's lock: a read(2) into a
+ * mapping of the file being read faults here while that lock is held.
+ */
 int32_t fs_read_at(fd_entry_t *e, void *buf, uint32_t count, uint64_t off)
 {
     struct open_file *ofd = e->ofd;
