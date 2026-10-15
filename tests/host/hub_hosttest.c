@@ -25,8 +25,9 @@
  * never does, with the port refused and forgotten when its device leaves;
  * the speed read from the status word; a disconnection closing the device
  * below; a hub pulled with two devices below closing both children before
- * itself; a hub with twenty ports publishing fifteen; and a hub that will
- * not give its descriptor refused by name.
+ * itself; a hub with twenty ports keeping all twenty, a device on port twenty
+ * named through its translator; and a hub that stalls its descriptor request
+ * closed.
  *
  * No hosted headers: the kernel headers define the fixed-width types, and
  * the libc calls are declared by hand as the other host tests declare them.
@@ -42,11 +43,11 @@
 
 extern int printf(const char *fmt, ...);
 
-/* ---- the kernel calls the two files reach ---- */
+/* ---- the kernel functions the two files call ---- */
 
 static int full_records; /* records of a device refused for want of an entry */
 
-/* The command line, which a host test does not have: no knob is set. */
+/** Return 0: the boot line has no value for any key. */
 int kcmdline_value(const char *key, char *out, unsigned int outlen)
 {
     (void)key;
@@ -55,6 +56,7 @@ int kcmdline_value(const char *key, char *out, unsigned int outlen)
     return 0;
 }
 
+/** Count the messages that refuse a device because the table is full. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     const char *full = "device: port %s.%d: refused: the device table is full";
@@ -69,6 +71,7 @@ void klog(int level, const char *subsystem, const char *format, ...)
     }
 }
 
+/** Fill `n` bytes at `ptr` with `c`, as the kernel's `k_memset`. */
 void *k_memset(void *ptr, int c, size_t n)
 {
     unsigned char *p = (unsigned char *)ptr;
@@ -80,9 +83,11 @@ void *k_memset(void *ptr, int c, size_t n)
     return ptr;
 }
 
+/* The slots `hid_gone` was called with, the first 16, and the calls. */
 static int hid_gone_slot[16];
 static int hid_gone_count;
 
+/** Do nothing: no row checks a report. */
 void hid_report(int slot, int kind, const uint8_t *report, int length)
 {
     (void)slot;
@@ -91,6 +96,7 @@ void hid_report(int slot, int kind, const uint8_t *report, int length)
     (void)length;
 }
 
+/** Record the slot of a keyboard that went. */
 void hid_gone(int slot)
 {
     if (hid_gone_count < 16) {
@@ -99,6 +105,7 @@ void hid_gone(int slot)
     hid_gone_count++;
 }
 
+/** Return -1: there is no stick in this model. */
 int msc_attach(struct xhci_ctrl *hc, int device, int interface, int ep_in, int ep_out)
 {
     (void)device;
@@ -108,35 +115,42 @@ int msc_attach(struct xhci_ctrl *hc, int device, int interface, int ep_in, int e
     return -1;
 }
 
+/** Do nothing, as `msc_attach` takes no stick. */
 void msc_detach(struct xhci_ctrl *hc, int device)
 {
     (void)hc;
     (void)device;
 }
 
+/** Do nothing, as `msc_attach` takes no stick. */
 void msc_step(uint32_t elapsed_ms)
 {
     (void)elapsed_ms;
 }
 
+/** Return 0: no completion is a stick's. */
 int msc_completion(const struct usb_completion *completion)
 {
     (void)completion;
     return 0;
 }
 
+/** Do nothing: there is no disk. */
 void usbdisk_step(void)
 {}
 
+/** Do nothing: there is no mouse. */
 void input_mouse_found(void)
 {}
 
 /* ---- the model ---- */
 
+/* What answers at a location: nothing, the hub, or a boot keyboard. */
 #define KIND_NONE 0
 #define KIND_HUB  1
 #define KIND_KBD  2
 
+/* The ports the model's hub can have; port n is entry n - 1 of each array. */
 #define MODEL_PORTS 31
 
 static struct {
@@ -144,10 +158,18 @@ static struct {
     int root_speed;
     int hub_protocol; /* the hub's interface protocol byte */
     int hub_ports;    /* what its descriptor claims */
+
+    /* The descriptor's power switching mode, 0 ganged, 1 per port and 2 none,
+     * and its TT think time field. */
     int hub_lpsm;
     int hub_think;
     int hub_pwrgood;    /* in 2 ms units */
     int hub_desc_stall; /* the hub descriptor is refused */
+
+    /* For each port: what is on it and at what speed, whether its reset never
+     * ends, whether it is in reset and the status reads since the reset began,
+     * whether it is enabled, its change word, whether it has an over-current,
+     * and whether its power is off. */
     int port_kind[MODEL_PORTS];
     int port_speed[MODEL_PORTS];
     int port_reset_never[MODEL_PORTS];
@@ -157,6 +179,7 @@ static struct {
     unsigned int port_change[MODEL_PORTS]; /* the change word */
     int port_over_current[MODEL_PORTS];
     int port_powered_off[MODEL_PORTS];
+    /* The hub's own status and change words. */
     unsigned int hub_status;
     unsigned int hub_change;
     int alt_refuse;        /* SET_INTERFACE is stalled */
@@ -165,6 +188,8 @@ static struct {
     int connect_on_read;   /* a device lands on this port just after its status is read */
     int short_after_clear; /* the status read after a clear on this port is short */
     int short_clear_seen;  /* that clear has arrived; the next read is the short one */
+
+    /* Disable Slot fails. */
     int close_refuse;
     int hold_commands; /* no command answers while set */
     int slot_cap;      /* the slots the controller has, 0 for fifteen */
@@ -209,10 +234,13 @@ static struct {
     int hub_depth_sets;         /* SET_HUB_DEPTH requests, a SuperSpeed hub's */
     int hub_depth;              /* the depth the last one carried */
     int hub_depth_before_tell;  /* the depth arrived before the controller was told */
+
+    /* The model's clock, in milliseconds, advanced by `pump`. */
     uint32_t now_ms;
 } model;
 
-/* The slots: what is on each, and where it was opened. */
+/* The slots, from 1, the highest given being `slots_given`: what is on each,
+ * where it was opened, and whether it is open. */
 static struct {
     int kind;
     int speed;        /* what the model has there */
@@ -222,11 +250,14 @@ static struct {
 } slot_of[USB_MAX_DEVICES + 2];
 static int slots_given;
 
+/* The slots closed by Disable Slot, in order, the first 16, and the count. */
 static int close_order[USB_MAX_DEVICES + 2];
 static int closes;
 static int closed_done; /* slots the core took back through `xhci_device_closed` */
 
-/* The command in flight and the completions waiting. */
+/* The command in flight and the completions waiting, a ring of 32 that
+ * `done_head` and `done_tail` count into. The one controller is a token that
+ * is never dereferenced. */
 static int command_pending;
 static struct usb_command_result command_result_pending;
 static struct usb_completion done[32];
@@ -235,6 +266,8 @@ static int done_head, done_tail;
 
 static void model_change(int port);
 
+/** Queue a completion of a transfer on `device` and `endpoint` for
+ * `xhci_poll`. */
 static void answer(int device, int endpoint, int status, uint32_t length, uint32_t residual,
                    uint32_t generation)
 {
@@ -250,25 +283,13 @@ static void answer(int device, int endpoint, int status, uint32_t length, uint32
     done_tail++;
 }
 
-/*
- * The driver's table of controllers, as the stack asks about it. These tests
- * drive the layers above the driver through their own stubs, so there is one
- * controller and its record is never dereferenced.
- */
-/*
- * The identity-mapped frames a device's record lives in. On the host they are
- * pages of this program's memory; nothing here is given to a controller, so
- * the address it would be reached by is the only one that matters.
- */
-/*
- * The driver's table of controllers, as the stack asks about it. These tests
- * drive the layers above the driver through their own stubs, so there is one
- * controller and its record is never dereferenced.
- */
+/* The frames the core takes its device records from. On the host they are
+ * pages of this program's memory, and none is given to a controller. */
 #define FRAME_COUNT 64
 static uint8_t frames[FRAME_COUNT][4096] __attribute__((aligned(4096)));
 static uint8_t frame_taken[FRAME_COUNT];
 
+/** Take a free frame, or return 0 when all are taken. */
 void *alloc_kernel_frame(void)
 {
     unsigned i;
@@ -282,6 +303,7 @@ void *alloc_kernel_frame(void)
     return 0;
 }
 
+/** Give back a frame `alloc_kernel_frame` took. */
 void free_kernel_frame(void *frame)
 {
     unsigned i;
@@ -294,21 +316,25 @@ void free_kernel_frame(void *frame)
     }
 }
 
+/** Return 1: there is one controller. */
 int xhci_controllers(void)
 {
     return 1;
 }
 
+/** Return the one controller for `n` 0, else 0. */
 struct xhci_ctrl *xhci_controller(int n)
 {
     return n == 0 ? the_ctrl : 0;
 }
 
+/** Return 0 for the one controller, else -1. */
 int xhci_number(const struct xhci_ctrl *hc)
 {
     return hc == the_ctrl ? 0 : -1;
 }
 
+/** Take the oldest waiting completion into `out` and return 1, or return 0. */
 int xhci_poll(struct xhci_ctrl *hc, struct usb_completion *out)
 {
     if (done_head == done_tail) {
@@ -319,11 +345,13 @@ int xhci_poll(struct xhci_ctrl *hc, struct usb_completion *out)
     return 1;
 }
 
+/** Return 4 root ports. */
 int xhci_ports(struct xhci_ctrl *hc)
 {
     return 4;
 }
 
+/** Report the hub on root port 0, when connected, at the root's speed. */
 int xhci_port_status(struct xhci_ctrl *hc, int port, struct usb_port_status *out)
 {
     out->connected = port == 0 && model.root_connected;
@@ -333,30 +361,35 @@ int xhci_port_status(struct xhci_ctrl *hc, int port, struct usb_port_status *out
     return 0;
 }
 
+/** Return 1: a root port is settled at once. */
 int xhci_port_settled(struct xhci_ctrl *hc, int port)
 {
     (void)port;
     return 1;
 }
 
+/** Return 0: a root port's reset starts. */
 int xhci_port_reset_begin(struct xhci_ctrl *hc, int port)
 {
     (void)port;
     return 0;
 }
 
+/** Return 1: a root port's reset ends at once. */
 int xhci_port_reset_done(struct xhci_ctrl *hc, int port)
 {
     (void)port;
     return 1;
 }
 
+/** Return 0: the driver issues no command of its own. */
 int xhci_command_busy(struct xhci_ctrl *hc)
 {
     return 0;
 }
 
-/* The controller answering that every slot it has is taken. */
+/** Issue a command that the controller will answer with `USB_NO_SLOTS`, and
+ * count it in `double_issues` when one was already pending. */
 static void command_no_slots(void)
 {
     if (command_pending) {
@@ -368,6 +401,8 @@ static void command_no_slots(void)
     command_result_pending.code = USB_NO_SLOTS;
 }
 
+/** Issue a command that will succeed for `device`, counted as
+ * `command_no_slots` counts. */
 static void command_ok(int device)
 {
     if (command_pending) {
@@ -379,6 +414,11 @@ static void command_ok(int device)
     command_result_pending.code = 0;
 }
 
+/**
+ * Give the pending command's answer in `out` and return 1 for success or -1
+ * for a failure, as the driver does; return 0 while no command is pending or
+ * the row holds the answers.
+ */
 int xhci_command_done(struct xhci_ctrl *hc, struct usb_command_result *out)
 {
     if (!command_pending || model.hold_commands) {
@@ -386,13 +426,15 @@ int xhci_command_done(struct xhci_ctrl *hc, struct usb_command_result *out)
     }
     command_pending = 0;
     *out = command_result_pending;
-    /* As the driver answers: a command the controller refused is not a
-     * command that is still running, and its answer is a failure. */
     return command_result_pending.status == USB_XFER_OK ? 1 : -1;
 }
 
-/** What is at a location: the hub on the root port, or a device on one of
- * its ports. */
+/**
+ * Return what is at a location, the hub on the root port or a device on one
+ * of its ports, and its speed in `speed`. A port above fifteen is written as
+ * fifteen in the route string, and the translator's port number gives the
+ * real one, as it does for a controller.
+ */
 static int kind_at(const struct usb_location *where, int *speed)
 {
     if (where->depth == 0) {
@@ -402,9 +444,6 @@ static int kind_at(const struct usb_location *where, int *speed)
     if (where->depth == 1) {
         int port = (int)(where->route & 0xFu);
 
-        /* A port above fifteen is written as fifteen in the route string, and
-         * the translator's own port number is what says which it really is,
-         * which is how a controller finds it too. */
         if (port == 15 && where->tt_port != 0) {
             port = where->tt_port;
         }
@@ -416,6 +455,11 @@ static int kind_at(const struct usb_location *where, int *speed)
     return KIND_NONE;
 }
 
+/**
+ * Issue Enable Slot for the device at `where` and give it the next slot, or
+ * answer `USB_NO_SLOTS` once `slot_cap` slots are given. With `pull_on_open`
+ * the device is pulled while the command is held unanswered.
+ */
 int xhci_device_open(struct xhci_ctrl *hc, const struct usb_location *where, int speed)
 {
     int n;
@@ -445,12 +489,14 @@ int xhci_device_open(struct xhci_ctrl *hc, const struct usb_location *where, int
     return 0;
 }
 
+/** Issue Address Device, which succeeds. */
 int xhci_device_address(struct xhci_ctrl *hc, int device)
 {
     command_ok(device);
     return 0;
 }
 
+/** Issue Evaluate Context for the packet size, which succeeds. */
 int xhci_device_packet_size(struct xhci_ctrl *hc, int device, int max_packet)
 {
     (void)max_packet;
@@ -458,19 +504,23 @@ int xhci_device_packet_size(struct xhci_ctrl *hc, int device, int max_packet)
     return 0;
 }
 
+/** Return 1 when no command is pending. */
 int xhci_command_free(struct xhci_ctrl *hc)
 {
     return !command_pending;
 }
 
+/** Return 0, so a failure records no controller state. */
 int xhci_interrupts_on(struct xhci_ctrl *hc)
 {
     return 0; /* the model's controller sends no interrupts of its own */
 }
 
+/** Do nothing: there are no registers to record. */
 void xhci_state_record(struct xhci_ctrl *hc)
 {}
 
+/** Record what the controller was told of a hub, and issue the command. */
 int xhci_device_hub(struct xhci_ctrl *hc, int device, int ports, int multi_tt, int think_time)
 {
     model.hub_told = 1;
@@ -482,6 +532,7 @@ int xhci_device_hub(struct xhci_ctrl *hc, int device, int ports, int multi_tt, i
     return 0;
 }
 
+/** Issue Configure Endpoint, which succeeds. */
 int xhci_endpoint_open(struct xhci_ctrl *hc, int device, const struct usb_endpoint *endpoint)
 {
     (void)endpoint;
@@ -489,6 +540,8 @@ int xhci_endpoint_open(struct xhci_ctrl *hc, int device, const struct usb_endpoi
     return 0;
 }
 
+/** Record the slot closed, in order, and issue Disable Slot, which fails
+ * when `close_refuse` is set. */
 int xhci_device_close(struct xhci_ctrl *hc, int device)
 {
     if (closes < 16) {
@@ -503,12 +556,14 @@ int xhci_device_close(struct xhci_ctrl *hc, int device)
     return 0;
 }
 
+/** Count a slot the core gave back. */
 void xhci_device_closed(struct xhci_ctrl *hc, int device)
 {
     (void)device;
     closed_done++;
 }
 
+/** Issue Reset Endpoint, which succeeds. */
 int xhci_endpoint_reset(struct xhci_ctrl *hc, int device, int endpoint)
 {
     (void)endpoint;
@@ -516,6 +571,7 @@ int xhci_endpoint_reset(struct xhci_ctrl *hc, int device, int endpoint)
     return 0;
 }
 
+/** Issue Stop Endpoint, which succeeds. */
 int xhci_endpoint_stop(struct xhci_ctrl *hc, int device, int endpoint)
 {
     (void)endpoint;
@@ -523,6 +579,7 @@ int xhci_endpoint_stop(struct xhci_ctrl *hc, int device, int endpoint)
     return 0;
 }
 
+/** Issue Set TR Dequeue Pointer, which succeeds. */
 int xhci_endpoint_dequeue_here(struct xhci_ctrl *hc, int device, int endpoint)
 {
     (void)endpoint;
@@ -530,6 +587,7 @@ int xhci_endpoint_dequeue_here(struct xhci_ctrl *hc, int device, int endpoint)
     return 0;
 }
 
+/** Return `XHCI_EP_RUNNING`: no endpoint halts here. */
 int xhci_endpoint_state(struct xhci_ctrl *hc, int device, int endpoint)
 {
     (void)device;
@@ -537,6 +595,7 @@ int xhci_endpoint_state(struct xhci_ctrl *hc, int device, int endpoint)
     return XHCI_EP_RUNNING;
 }
 
+/** Do nothing: no row checks the quiescing flag. */
 void xhci_endpoint_quiescing(struct xhci_ctrl *hc, int device, int endpoint, int on)
 {
     (void)device;
@@ -544,17 +603,20 @@ void xhci_endpoint_quiescing(struct xhci_ctrl *hc, int device, int endpoint, int
     (void)on;
 }
 
+/** Do nothing: no transfer is queued to retire. */
 void xhci_endpoint_retire_all(struct xhci_ctrl *hc, int device, int endpoint)
 {
     (void)device;
     (void)endpoint;
 }
 
+/** Do nothing: there is no stick. */
 void msc_slot_closed(struct xhci_ctrl *hc, int device)
 {
     (void)device;
 }
 
+/** Do nothing: no endpoint is closed here. */
 void xhci_endpoint_close(struct xhci_ctrl *hc, int device, int endpoint)
 {
     (void)device;
@@ -572,14 +634,14 @@ static const unsigned char keyboard_config[] = {
 static unsigned char hub_config[31];
 
 /*
- * A configuration longer than the sixty-four bytes this kernel used to read:
- * a vendor block of ninety, then the interface and its endpoint. A driver
- * that read only the header's first sixty-four bytes would find no interface
- * here at all.
+ * A configuration of 115 bytes: a vendor block of ninety, then the interface
+ * and its endpoint. A driver that read only the first sixty-four bytes would
+ * find no interface here at all.
  */
 #define LONG_CONFIG_LEN 115
 static unsigned char long_config[LONG_CONFIG_LEN];
 
+/** Build `long_config`: a boot keyboard's interface after a vendor block. */
 static void long_config_fill(void)
 {
     int i;
@@ -640,10 +702,13 @@ static void hub_config_fill(void)
     }
 }
 
+/**
+ * Return the status word of hub port `port`, from 1. USB 3 puts the power bit
+ * at 9 and has no low- and high-speed bits; its speed field above them says
+ * which SuperSpeed, 0 for 5 Gbps, and bits 5 to 8 are the link state.
+ */
 static unsigned int port_status_word(int port)
 {
-    /* USB 3 puts the power bit at 9 and has no speed bits: the speed field
-       above it says which SuperSpeed, zero for 5 Gbps. */
     unsigned int status =
         model.port_powered_off[port - 1] ? 0 : (model.hub_protocol == 3 ? 0x0200 : 0x0100);
 
@@ -696,6 +761,16 @@ static void model_change(int port)
     model_report_changes();
 }
 
+/**
+ * Take a transfer on an open slot and answer it as what is at the slot's
+ * location would; return -1 for a slot not open. A hub's change endpoint is
+ * answered when a change is reported, and any other endpoint but the
+ * control endpoint, 1, stays out. On endpoint 1 the standard requests are
+ * answered for both kinds; a keyboard stalls everything else. A SuperSpeed
+ * hub has the USB 3 hub descriptor and stalls a request for the USB 2 one,
+ * as the specification's hubs do, and a USB 2 hub the other way round. A
+ * warm reset on an empty port reports nothing.
+ */
 int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb_transfer *transfer)
 {
     const unsigned char *setup = transfer->setup;
@@ -780,8 +855,7 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
     }
     if (setup[0] == 0x00 && (setup[1] == 9)) { /* SET_CONFIGURATION */
         if (model.config_delay_ms > 0 && kind != KIND_HUB) {
-            /* A stick starting its flash: the answer comes later, from the
-               pump, or never within the step's time. */
+            /* A device starting its flash: `pump` answers when it is due. */
             model.config_due_ms = (int)model.now_ms + model.config_delay_ms;
             model.config_device = device;
             model.config_generation = transfer->generation;
@@ -808,9 +882,7 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
                transfer->generation);
         return 0;
     }
-    /* The hub's class requests. A SuperSpeed hub has the USB 3 descriptor
-       and stalls a request for the USB 2 one, as the specification's hubs
-       do; a USB 2 hub the other way round. */
+    /* The hub's class requests. */
     if (setup[0] == 0xA0 && setup[1] == 6 && setup[3] == 0x2A) {
         if (model.hub_protocol != 3 || model.hub_desc_stall) {
             answer(device, 1, USB_XFER_STALLED, transfer->length, transfer->length,
@@ -891,8 +963,7 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
             model.first_status_ms = model.now_ms;
         }
         if (model.short_clear_seen && model.short_after_clear == port) {
-            /* One byte where four were asked for: the hub answered, and
-               said nothing the driver can read. */
+            /* One byte where four were asked for. */
             model.short_clear_seen = 0;
             model.short_after_clear = 0;
             buf[0] = (unsigned char)(port_status_word(port) & 0xFF);
@@ -914,9 +985,7 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
         buf[3] = (unsigned char)(model.port_change[port - 1] >> 8);
         answer(device, 1, USB_XFER_OK, 4, 0, transfer->generation);
         if (model.connect_on_read == port) {
-            /* The contact settles just after the read: the port reads
-               connected from here, and the connection change already
-               latched is this device's. */
+            /* The device lands after the read; the latched change is its. */
             model.connect_on_read = 0;
             model.port_kind[port - 1] = KIND_KBD;
         }
@@ -938,8 +1007,7 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
                 model.power_ons++;
             }
         } else if (feature == 28 && port >= 1 && port <= MODEL_PORTS) {
-            /* A warm reset: the link comes back to U0 and the port reports
-               both reset changes; on an empty port nothing is reported. */
+            /* BH_PORT_RESET: the link returns to U0, both reset changes set. */
             model.warm_resets++;
             if (model.port_kind[port - 1] == KIND_NONE) {
                 answer(device, 1, USB_XFER_OK, 0, 0, transfer->generation);
@@ -952,8 +1020,7 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
             model_change(port);
             return 0;
         } else if (feature == 4 && port >= 1 && port <= MODEL_PORTS) {
-            /* A reset change never acknowledged: the hub refuses another
-               reset on that port, as a hub that keeps its change bit does. */
+            /* A hub stalls a reset while C_PORT_RESET is unacknowledged. */
             if (model.port_change[port - 1] & 16u) {
                 answer(device, 1, USB_XFER_STALLED, 0, 0, transfer->generation);
                 return 0;
@@ -980,8 +1047,7 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
         if (feature >= 16 && feature <= 20 && port >= 1 && port <= MODEL_PORTS) {
             model.port_change[port - 1] &= ~(1u << (feature - 16));
         }
-        /* USB 3's three: the warm reset, the link state, the configuration
-           error, at bits 5, 6 and 7 of the change word. */
+        /* USB 3's warm reset, link state and config error changes: bits 5-7. */
         if (port >= 1 && port <= MODEL_PORTS) {
             if (feature == 29) {
                 model.port_change[port - 1] &= ~(1u << 5);
@@ -1005,12 +1071,13 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
     return 0;
 }
 
-/** The core reads a device's record with interrupts off; the host has none. */
+/** Return 0: the core masks interrupts, and the host has none. */
 uint32_t kirq_save(void)
 {
     return 0;
 }
 
+/** Do nothing, as `kirq_save` does. */
 void kirq_restore(uint32_t flags)
 {
     (void)flags;
@@ -1031,6 +1098,11 @@ static int fails;
         }                                 \
     } while (0)
 
+/**
+ * Reset the model, the core and the hub driver to a full-speed hub on root
+ * port 0 with eight empty ports, no power switching and a power-good time of
+ * 20 ms.
+ */
 static void model_reset(void)
 {
     int i;
@@ -1067,7 +1139,8 @@ static void model_reset(void)
     }
 }
 
-/** Run the pump for `ms` milliseconds, ten at a time. */
+/** Step the core for `ms` milliseconds, ten at a time, answering a delayed
+ * SET_CONFIGURATION when it is due. */
 static void pump(uint32_t ms)
 {
     uint32_t t;
@@ -1082,7 +1155,7 @@ static void pump(uint32_t ms)
     }
 }
 
-/** The slot of the first open device of `kind`, or 0. */
+/** Return the slot of the first open device of `kind`, or 0. */
 static int slot_of_kind(int kind)
 {
     int n;
@@ -1095,7 +1168,7 @@ static int slot_of_kind(int kind)
     return 0;
 }
 
-/** The slot of the open device on hub port `port`, or 0: a port above
+/** Return the slot of the open device on hub port `port`, or 0: a port above
  * fifteen is written as fifteen in the route string and named by the
  * translator's port. */
 static int slot_at_port(int port)
@@ -1114,7 +1187,7 @@ static int slot_at_port(int port)
     return 0;
 }
 
-/** The slot of the open device whose route is `route`, or 0. */
+/** Return the slot of the open device whose route is `route`, or 0. */
 static int slot_at_route(uint32_t route)
 {
     int n;
@@ -1127,6 +1200,7 @@ static int slot_at_route(uint32_t route)
     return 0;
 }
 
+/** Return the number of core entries in the running state. */
 static int running_count(void)
 {
     int i;
@@ -1140,6 +1214,7 @@ static int running_count(void)
     return n;
 }
 
+/** Return the number of free core entries. */
 static int free_count(void)
 {
     int i;
@@ -1153,7 +1228,8 @@ static int free_count(void)
     return n;
 }
 
-/** Whether the hub was asked to clear `feature` on `port` since the reset. */
+/** Return 1 when the hub was asked to clear `feature` on `port` since the
+ * reset. */
 static int cleared(int feature, int port)
 {
     int i;
@@ -1166,6 +1242,7 @@ static int cleared(int feature, int port)
     return 0;
 }
 
+/** Return 1 when `needle` occurs in `hay`. */
 static int contains(const char *hay, const char *needle)
 {
     const char *h;
@@ -1185,7 +1262,11 @@ static int contains(const char *hay, const char *needle)
     return 0;
 }
 
-/** Keep a detached hub's buffers until Disable Slot succeeds. */
+/**
+ * Check that a detached hub's record and buffers are kept, and not given to
+ * another hub, until its Disable Slot succeeds; `refused` makes the Disable
+ * Slot fail, which keeps them for good.
+ */
 static void detached_record(int refused)
 {
     struct hub *old;
@@ -1290,6 +1371,30 @@ static void concurrent_changes(void)
           closes == 1 && model.power_offs == 1 && model.warm_resets == 0 && running_count() == 1);
 }
 
+/**
+ * Run the rows and print the result; return 1 when a row failed.
+ *
+ * A hub may say it is ganged with power good in 0 ms and yet power only the
+ * port a request names, as the hub 35d6:2510 does, so every port is asked
+ * for and no port is read before 100 ms. A SuperSpeed hub is told its depth
+ * before the controller is told it is a hub. When a ring holds a command
+ * nobody answers, the device that issued it gives up at its deadline, and
+ * the next device must not take the turn and issue on the held ring. A
+ * device behind a hub, a USB stick starting its flash at boot, may answer
+ * SET_CONFIGURATION late, and is configured when the answer comes within five
+ * seconds. A device pulled during a reset the hub never finishes gives the
+ * enumeration turn back.
+ *
+ * Some SuperSpeed hubs report a pull as the link falling inactive with the
+ * device still shown connected, then the disconnection while the warm reset
+ * that answered the first report is out; the connection change ends the warm
+ * reset. A port the scan reads as disconnected, with a connection change
+ * already latched, may get its device the moment after the read; the change
+ * the scan acknowledges is then the new device's, so the port is read again
+ * after the acknowledgement. When that read comes back short, the latch is
+ * cleared and the hub leaves the port out of its bitmap, so nothing would
+ * ask again; the hub is closed instead.
+ */
 int main(void)
 {
     char line[96];
@@ -1334,9 +1439,7 @@ int main(void)
         CHECK("/proc/usb gives the keyboard's location as 1.2", found);
     }
 
-    /* Power: one request per port whether the hub says ganged or per port,
-       and the first port is not looked at before the power-good time has
-       passed. */
+    /* Power: one request per port, ganged or not, then the power-good wait. */
     model_reset();
     model.hub_lpsm = 0;
     model.hub_pwrgood = 100; /* 200 ms */
@@ -1349,10 +1452,7 @@ int main(void)
     pump(2000);
     CHECK("a per-port hub is powered port by port", model.power_requests == 8);
 
-    /* The Lenovo's hub, 35d6:2510: it says ganged and power good in 0 ms,
-       and a power request on port 1 leaves ports 2 to 4 unpowered, so a
-       keyboard on port 3 was never seen. Every port powered by its own
-       request, and the read of the ports not before 100 ms. */
+    /* A ganged hub that powers only the port named, power good in 0 ms. */
     model_reset();
     model.hub_lpsm = 0;
     model.hub_pwrgood = 0;
@@ -1368,9 +1468,7 @@ int main(void)
     CHECK("and with power good in 0 ms no port is read before 100 ms",
           model.first_status_ms >= model.last_power_ms + 100u);
 
-    /* A high-speed hub with one translator per port and a think time of two:
-       the hub's slot gets both, and a low-speed keyboard below it carries
-       the hub and its port as its translator. */
+    /* A high-speed hub, a translator per port, think time 2, keyboard below. */
     model_reset();
     model.root_speed = USB_SPEED_HIGH;
     model.hub_protocol = 2;
@@ -1390,12 +1488,7 @@ int main(void)
               slot_of[kbd].where.tt_multi == 1);
     CHECK("and a route of 3", kbd != 0 && slot_of[kbd].where.route == 0x3u);
 
-    /* A SuperSpeed hub, protocol 3, on a SuperSpeed root port: it is read
-       through the USB 3 descriptor, told its depth before the controller is
-       told it is a hub, told no translators, its ports are powered where USB
-       3 puts the power bit, a device below it is opened at SuperSpeed with
-       no translator and a route of its port, and the change bits USB 3 adds
-       are acknowledged with their own feature numbers. */
+    /* A SuperSpeed hub, protocol 3, on a SuperSpeed root port. */
     model_reset();
     model.root_speed = USB_SPEED_SUPER;
     model.hub_protocol = 3;
@@ -1421,8 +1514,7 @@ int main(void)
     CHECK("and a route of 2", kbd != 0 && slot_of[kbd].where.route == 0x2u);
     CHECK("its port was reset through the hub and the reset change cleared",
           model.reset_requests >= 1 && model.reset_clears >= 1);
-    /* A configuration error reported with the link still up is
-       acknowledged with its feature and nothing else happens. */
+    /* A configuration error with the link still up is only acknowledged. */
     model.clears = 0;
     model.port_change[1] |= 0x80u;
     model_change(2);
@@ -1430,10 +1522,7 @@ int main(void)
     CHECK("a configuration error change is acknowledged with USB 3's feature 26", cleared(26, 2));
     CHECK("with no warm reset while the link is up", model.warm_resets == 0);
     CHECK("and the device below still running", running_count() == 2);
-    /* The link falls to SS.Inactive: the device below is closed, the port
-       gets a warm reset, both reset changes are acknowledged with their
-       features, and the device is enumerated again on the link that came
-       back. */
+    /* The link falls to SS.Inactive, and comes back after a warm reset. */
     model.clears = 0;
     {
         int given = slots_given;
@@ -1449,9 +1538,7 @@ int main(void)
               slots_given == given + 1 && slot_of_kind(KIND_KBD) != 0 && running_count() == 2);
     }
 
-    /* A ring holding a command nobody answers: the device that issued it
-       gives up at its deadline, and the next device does not take the turn
-       and issue on the held ring; nothing is issued twice. */
+    /* A ring holding a command nobody answers. */
     model_reset();
     pump(2000);
     CHECK("the hub is up with nothing below it", running_count() == 1);
@@ -1467,9 +1554,7 @@ int main(void)
     CHECK("no command is issued on a ring that holds one", model.double_issues == 0);
     model.hold_commands = 0;
 
-    /* A device that answers its configuration request late, as the
-       notebook's stick behind the hub does at boot while its flash starts,
-       is configured when the answer comes within five seconds. */
+    /* A device that answers SET_CONFIGURATION after 1.5 s. */
     model_reset();
     model.port_kind[1] = KIND_KBD;
     model.config_delay_ms = 1500;
@@ -1477,9 +1562,7 @@ int main(void)
     CHECK("a device that answers its configuration after 1.5 s is enumerated",
           slot_of_kind(KIND_KBD) != 0 && running_count() == 2);
 
-    /* A device pulled in the middle of its reset through the hub, a reset
-       the hub never finishes, gives the enumeration turn back: a keyboard
-       plugged into another port afterwards is enumerated. */
+    /* A device pulled during a reset through the hub that never ends. */
     model_reset();
     model.port_kind[1] = KIND_KBD;
     model.port_reset_never[1] = 1;
@@ -1496,11 +1579,7 @@ int main(void)
     CHECK("a device pulled during its reset through the hub gives the turn back",
           slot_of_kind(KIND_KBD) != 0 && running_count() == 2);
 
-    /* A pull as the notebook's hub reports it: the link falls inactive
-       first, with the device still shown connected, and the disconnection
-       follows while the warm reset that answered the first report is out.
-       The connection change ends the warm reset, and the device plugged
-       back in is enumerated. */
+    /* A pull reported as the link falling inactive, then a disconnection. */
     model_reset();
     model.root_speed = USB_SPEED_SUPER;
     model.hub_protocol = 3;
@@ -1529,8 +1608,7 @@ int main(void)
     CHECK("the device plugged back in after a pull under a warm reset is enumerated",
           slot_of_kind(KIND_KBD) != 0 && running_count() == 2);
 
-    /* A SuperSpeed hub that will not give its descriptor is closed before
-       any depth is sent; one that refuses its depth is closed too. */
+    /* SuperSpeed hubs that stall the descriptor request and SET_HUB_DEPTH. */
     model_reset();
     model.root_speed = USB_SPEED_SUPER;
     model.hub_protocol = 3;
@@ -1552,9 +1630,7 @@ int main(void)
     pump(2000);
     CHECK("a hub with twenty ports is told as twenty", model.hub_told_ports == 20);
 
-    /* A reset that never ends: the device below is refused, its port is
-       remembered as refused on the hub, and the refusal goes when the device
-       does. */
+    /* A reset that never ends: the port is refused until its device leaves. */
     model_reset();
     model.port_kind[1] = KIND_KBD;
     model.port_reset_never[1] = 1;
@@ -1618,10 +1694,7 @@ int main(void)
     CHECK("every slot was given back and every entry freed",
           closed_done == 3 && free_count() == USB_MAX_DEVICES);
 
-    /* The change endpoint: a transfer always out, resubmitted at each
-       answer; a keyboard plugged in after the hub is up is reported, its
-       status read, its connection change acknowledged with the right
-       feature, and the core told; pulled again, it goes. */
+    /* The change endpoint, its transfer put out again after each answer. */
     model_reset();
     pump(2000);
     hub = slot_of_kind(KIND_HUB);
@@ -1650,10 +1723,7 @@ int main(void)
     CHECK("a hub-status change is read and its local-power change cleared",
           model.hub_status_reads == 1 && model.hub_clears == 1 && model.hub_change == 0);
 
-    /* A port the scan reads as disconnected with a connection change
-       already latched, whose device lands the moment after that read: the
-       change acknowledged from the scan's bits is the new device's, so the
-       port is read again after the acknowledgement. */
+    /* A device that lands on a port just after the scan read it. */
     model_reset();
     model.port_change[1] = 1u; /* C_PORT_CONNECTION, from a contact that bounced */
     model.connect_on_read = 2;
@@ -1662,10 +1732,7 @@ int main(void)
     CHECK("a device that connects during the scan, after its port was read, is enumerated",
           kbd != 0 && slot_of[kbd].where.route == 0x2u && running_count() == 2);
 
-    /* The same port, with that second read answered in one byte: the
-       acknowledgement has already cleared the latch and the hub leaves the
-       port out of its bitmap, so nothing would ask again and the device
-       would stay unknown. The hub is closed instead. */
+    /* The same, with the read after the acknowledgement answered short. */
     model_reset();
     model.port_change[1] = 1u;
     model.connect_on_read = 2;
@@ -1674,8 +1741,7 @@ int main(void)
     CHECK("a hub whose read after an acknowledgement comes back short is closed",
           cleared(16, 2) && closes == 1 && running_count() == 0 && slot_of_kind(KIND_KBD) == 0);
 
-    /* A swap: a connection change with the status still connected closes the
-       old device before the new one is enumerated. */
+    /* A swap: a connection change with the port still connected. */
     model_reset();
     model.port_kind[1] = KIND_KBD;
     pump(2000);
@@ -1689,8 +1755,7 @@ int main(void)
     CHECK("before a new one is enumerated in its place",
           slots_given == 3 && slot_of[3].kind == KIND_KBD && slot_of[3].open);
 
-    /* An enable lost is recorded and the device below closed and tried
-     * again. */
+    /* A port that loses its enable. */
     model_reset();
     model.port_kind[1] = KIND_KBD;
     pump(2000);
@@ -1702,8 +1767,7 @@ int main(void)
     CHECK("an enable lost closes the device below", closes >= 1 && close_order[0] == kbd);
     CHECK("and clears C_PORT_ENABLE", cleared(17, 2));
 
-    /* Over-current: the port powered off and its device closed, powered on
-       again once after a second, and left off when it recurs. */
+    /* Over-current: off, on again once after a second, off for good after. */
     model_reset();
     model.port_kind[1] = KIND_KBD;
     pump(2000);
@@ -1726,9 +1790,7 @@ int main(void)
     CHECK("an over-current again leaves the port off",
           model.power_offs == 2 && model.power_ons == 1);
 
-    /* A device pulled while its Enable Slot is in flight: the slot the
-       controller answers with is taken and given back, and the command turn
-       is released, so the next device enumerates. */
+    /* A device pulled while its Enable Slot is in flight. */
     model_reset();
     pump(2000);
     model.pull_on_open = 1;
@@ -1748,9 +1810,7 @@ int main(void)
     pump(2000);
     CHECK("and the next keyboard enumerates", running_count() == 2);
 
-    /* The hub and all but one of its keyboards fill the table; the last,
-       on the port the route string writes as fifteen and the translator
-       names, waits for an entry. */
+    /* A full table: the last keyboard, on a port above fifteen, waits. */
     model_reset();
     model.root_speed = USB_SPEED_HIGH;
     model.hub_protocol = 1;
@@ -1769,8 +1829,7 @@ int main(void)
     CHECK("when one is pulled, the one that waited takes its entry",
           running_count() == USB_MAX_DEVICES && slot_at_port(USB_MAX_DEVICES) != 0);
 
-    /* The power-on retry after an over-current refused: the port is left
-       off and not asked again. */
+    /* The power-on after an over-current, stalled by the hub. */
     model_reset();
     model.port_kind[1] = KIND_KBD;
     pump(2000);
@@ -1790,8 +1849,7 @@ int main(void)
     CHECK("and the port is left off", model.power_requests == port + 1 && model.power_ons == 0);
     CHECK("with nothing enumerated on it", running_count() == 1 && model.reset_requests == kbd);
 
-    /* A multi-TT hub selects its alternate setting; one that refuses is
-       driven with one translator. */
+    /* A multi-TT hub's alternate setting 1, selected or stalled. */
     model_reset();
     model.root_speed = USB_SPEED_HIGH;
     model.hub_protocol = 2;
@@ -1816,9 +1874,7 @@ int main(void)
     CHECK("and a low-speed device below it is opened with one translator too",
           kbd != 0 && slot_of[kbd].where.tt_multi == 0);
 
-    /* An over-current already present when the hub is first scanned is
-       answered as a reported one is: the port powered off, powered on
-       again after a second, and its device enumerated then. */
+    /* An over-current already present at the first scan. */
     model_reset();
     model.port_kind[1] = KIND_KBD;
     model.port_over_current[1] = 1;
@@ -1841,15 +1897,13 @@ int main(void)
     CHECK("a change endpoint that stalls closes the hub and what is below it",
           closes == 2 && running_count() == 0);
 
-    /* A hub that will not give its descriptor is refused by name. */
+    /* A hub that stalls its descriptor request. */
     model_reset();
     model.hub_desc_stall = 1;
     pump(2000);
     CHECK("a hub that will not give its descriptor is closed", closes == 1 && running_count() == 0);
 
-    /* A high-speed hub with twenty ports, and a device on port twenty: the
-       route string writes fifteen where the nibble will not hold the number,
-       and the translator carries the real port. */
+    /* Port twenty: the route nibble says fifteen, the translator says 20. */
     model_reset();
     model.root_speed = USB_SPEED_HIGH;
     model.hub_ports = 20;
@@ -1871,8 +1925,7 @@ int main(void)
               kbd != 0 && slot_of[kbd].where.tt_port == 20);
     }
 
-    /* A configuration longer than sixty-four bytes is read whole, and one
-       whose header claims more than this kernel reads is refused by name. */
+    /* A configuration of 115 bytes, then one that claims 5000. */
     model_reset();
     model.long_config = 1;
     model.port_kind[0] = KIND_KBD;
@@ -1888,8 +1941,7 @@ int main(void)
     CHECK("a configuration longer than this kernel reads is refused",
           running_count() == 1 && slot_of_kind(KIND_KBD) == 0);
 
-    /* Every slot taken: the device waits for one rather than being refused,
-       and takes the slot another device gives back. */
+    /* Every slot taken: the device waits for one and is not refused. */
     model_reset();
     pump(2000);
     CHECK("the hub is up with nothing below it", running_count() == 1);
