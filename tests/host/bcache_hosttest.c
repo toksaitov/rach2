@@ -1,5 +1,6 @@
 /*
- * bcache_hosttest.c: the buffer cache against a fake block device.
+ * bcache_hosttest.c: the buffer cache of rach2/sys/fs/bcache.c, against fake
+ * block devices in memory.
  *
  * host-deps: rach2/sys/fs/bcache.c rach2/sys/block/chain.c
  * host-deps: rach2/sys/lib/kstring.c
@@ -7,29 +8,18 @@
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/blockmax_host.c
  * host-deps: tests/host/compat/pressure_host.c
  *
- * The fake device is polled and fault-safe, backed by a memory image whose
- * every sector holds its own number. `block_request` is stubbed to call the
- * device directly: the request pool is i386 code and the guest's row. The
- * rows are the cache's contract: hits and misses, the least-recently-
- * released victim named exactly, a failed read returning no buffer,
- * invalidation returning EBUSY while a buffer is held or dirty and dropping
- * every buffer of the device after, the hold rules and the ownership of a
- * release ending in a panic, a short last block, a block past the device and
- * a block number that would wrap the sector arithmetic both returning
- * nothing, sync writing dirty buffers in ascending order and keeping a
- * buffer dirty across a failed write until a later call writes it, a
- * write-through reaching the device before it returns and in call order, a
- * dirty victim written before its buffer is reused, a failed write recorded
- * against the device and its sector with the buffer kept dirty and not
- * reused, and a torn or dropped write the device reports as success, which
- * the cache cannot see and the volume walk must judge. The busy-buffer wait
- * needs a scheduler and is the guest's row, not this one's.
+ * The fake devices are polled and fault-safe, and each is backed by a memory
+ * image. `block_request` is stubbed to call the device's own read or write,
+ * so no request pool is built. The devices' calls run hooks that stand for
+ * other callers acting while a transfer sleeps: a device that goes, a block
+ * written or keyed by another process, a torn or dropped write. The rows are
+ * listed with `main`. The busy-buffer wait needs a scheduler; the stubbed
+ * wait fails the test if any row reaches it.
  *
  * No hosted headers: the kernel headers define the fixed-width types, and
- * the libc calls used here are declared by hand the way the other host
- * tests declare them. Each panic row runs the violating call in a forked
- * child; the child's exit status says whether the panic came and whether
- * its text named the rule.
+ * the libc calls used here are declared by hand. Each panic row runs the
+ * violating call in a forked child; the child's exit status says whether the
+ * panic came and whether its text named the rule.
  */
 
 #include "../../rach2/sys/fs/bcache.h"
@@ -42,8 +32,6 @@ extern int waitpid(int pid, int *status, int options);
 extern void _exit(int status);
 extern void exit(int status);
 
-/* ---- stubs for what the cache reaches outside itself ---- */
-
 process_t proc_a, proc_b;
 struct percpu cpu_table[NR_CPUS] = {{.current = &proc_a}};
 
@@ -51,6 +39,7 @@ struct percpu cpu_table[NR_CPUS] = {{.current = &proc_a}};
  * text contains this, 43 when it does not. */
 static const char *expect_panic;
 
+/** Return 1 when `needle` occurs in `hay`, and 0 otherwise. */
 static int contains(const char *hay, const char *needle)
 {
     const char *h;
@@ -70,6 +59,8 @@ static int contains(const char *hay, const char *needle)
     return 0;
 }
 
+/** The kernel's panic: exit 42 or 43 in a panic row's child, as
+ *  `expect_panic` says, and otherwise print the text and exit 44. */
 void k_panic(const char *s)
 {
     if (expect_panic) {
@@ -79,15 +70,17 @@ void k_panic(const char *s)
     _exit(44);
 }
 
-/* The cache asks the mount table whether this caller holds a lock before it
-   writes back a buffer of a device that stands on a file; a row sets this. */
+/* Whether the caller holds a mount's lock, which the cache asks before it
+   writes back a buffer of a device that stands on a file; a row sets it. */
 static int ns_held;
 
+/** The mount table's answer: `ns_held`. */
 int vfs_ns_held_by_caller(void)
 {
     return ns_held;
 }
 
+/** The kernel log; the records are dropped. */
 void klog(int level, const char *sys, const char *fmt, ...)
 {
     (void)level;
@@ -95,32 +88,35 @@ void klog(int level, const char *sys, const char *fmt, ...)
     (void)fmt;
 }
 
+/* Set when a row reaches the sleeping wait. */
 static int waited_on_host;
 
+/** Clear a wait queue. */
 void wait_queue_init(wait_queue_t *wq)
 {
     __builtin_memset(wq, 0, sizeof(*wq));
 }
+/** Wake nobody: no process sleeps here. */
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
 }
+/** The sleeping wait, which no row may reach: one process runs here, so a
+ *  wait would never end. Record the fault, print it and exit 1. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
     (void)cond;
     (void)arg;
-    /* No row may sleep: one process runs here, so a wait would never end. */
     waited_on_host = 1;
     printf("bcache_hosttest: FAIL: a row reached the sleeping wait\n");
     exit(1);
 }
+/** The uninterruptible wait, as `wq_wait_event`. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     return wq_wait_event(wq, cond, arg);
 }
-
-/* ---- the fake device ---- */
 
 #define FAKE_SECTORS   100u /* not a multiple of 8: block 12 is a 4-sector tail */
 /* The most buffers the cache makes in this test, set on the cache below,
@@ -134,10 +130,11 @@ static unsigned char image_small[FAKE_SECTORS * 512];
 static unsigned char image_wide[WIDE_SECTORS * 512];
 static unsigned char image_big[BIG_SECTORS * 512];
 static int reads_made, fail_reads, fail_writes;
-/* The device is pulled in the middle of this read: the cache is told it has
-   gone while the buffer being filled is held, and the read then fails. */
+/* The device is pulled in the middle of the next read: the cache is told it
+   has gone while the buffer being filled is held, and the read then fails. */
 static int gone_during_read;
-/* And in the middle of this write of a dirty victim, which is held for it. */
+/* The device is pulled in the middle of the next write, that of a dirty
+   victim held for it. */
 static int gone_during_write;
 static unsigned last_count;
 static uint64_t writes_lba[8];
@@ -150,13 +147,13 @@ static uint64_t fill_during_write;
 /* The fault injector: report success and write nothing at write number
    `drop_at`; write only `tear_bytes` at write number `tear_at`. */
 static int drop_at = -1, tear_at = -1, tear_bytes;
-/* The two interleavings. `write_during_fill` is a block written through
-   the cache, synced and dropped from it while a run read that covers it is
+/* Two interleavings. `write_during_fill` is a block written through the
+   cache, synced and dropped from it while a run read that covers it is
    inside the device, as another process's write lands during the fill's
-   sleep: the read answers the old bytes, and the fill must not put them
-   over the newer ones. `first_during_sync` is a block another process
-   dirties as a `first` while a sync's write of an `after` is inside the
-   device: the sync must write it before its next `after`. */
+   sleep: the read returns the old bytes, and the fill must not put them over
+   the newer ones. `first_during_sync` is a block that `hook_proc` dirties as
+   a `first` while a sync's write of an `after` is inside the device; the
+   sync must write it before its next `after`. */
 static uint64_t write_during_fill;
 static uint64_t first_during_sync;
 static struct process *hook_proc;
@@ -171,6 +168,8 @@ static block_device_t *failed_dev;
 static uint64_t failed_lba;
 static int failed_rc;
 
+/** Record the failed write the cache reports in `failed_dev`, `failed_lba`
+ *  and `failed_rc`. */
 void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
 {
     failed_dev = dev;
@@ -178,6 +177,16 @@ void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
     failed_rc = rc;
 }
 
+/**
+ * The fake device's read: copy the sectors from the image at `drvdata`,
+ * counting the read in `reads_made` and its sectors in `last_count`.
+ *
+ * Fails with -5 (EIO) when `fail_reads` is set. With `gone_during_read` set
+ * it marks the device gone and fails, uncounted. When a read of more than
+ * one block covers `write_during_fill`, it then writes that block through
+ * the cache after the copy, with 0xEE in its first byte, syncs the device
+ * and invalidates it.
+ */
 static int fake_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
 {
     if (gone_during_read) {
@@ -207,6 +216,18 @@ static int fake_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
     return 0;
 }
 
+/**
+ * The fake device's write: copy the sectors into the image at `drvdata`.
+ *
+ * Fails with -5 (EIO) when `fail_writes` is set. Before the copy it runs the
+ * hooks that are set, each once: `gone_during_write` marks the device gone,
+ * `first_during_sync` dirties that block as a `first` with 0xF1 as
+ * `hook_proc`, and `fill_during_write` keys that block blank with 0xAB. It
+ * records the request flags of `watch_blk`'s write, the LBAs of the first
+ * eight writes and the count of the last. Write number `drop_at` reports
+ * success and copies nothing; write number `tear_at` copies only
+ * `tear_bytes`.
+ */
 static int fake_write(block_device_t *d, uint64_t lba, uint32_t count, const void *buf)
 {
     if (fail_writes) {
@@ -249,7 +270,7 @@ static int fake_write(block_device_t *d, uint64_t lba, uint32_t count, const voi
     last_write_count = count;
     writes_made++;
     if (writes_made == drop_at) {
-        return 0; /* the device says yes and keeps nothing */
+        return 0;
     }
     if (writes_made == tear_at) {
         __builtin_memcpy((unsigned char *)d->drvdata + lba * 512, buf, (size_t)tear_bytes);
@@ -260,23 +281,22 @@ static int fake_write(block_device_t *d, uint64_t lba, uint32_t count, const voi
 }
 
 /* The members in order: the sector size, the count, the flags, the deadline's
-   period and its periods, the most sectors a request moves, the two polled
-   calls, the two a sleeping device has, the device this one's bytes live on,
-   and the driver's own pointer. Written out rather than left to position, so
-   that a member added to the structure is a compile error here and not a
-   silent shift. */
+   period and its periods, the most sectors a request moves (0 for a page),
+   the read and write calls, `submit` and `flush`, the device this one's
+   bytes live on, and the driver's own pointer. */
 static block_device_t fake = {
     512, FAKE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 0, fake_read, fake_write, 0, 0, 0, image_small};
 static block_device_t other = {
     512, BIG_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 0, fake_read, fake_write, 0, 0, 0, image_big};
-/* A device whose bytes live on `fake`: what a loop device is to the volume
-   holding its file. Its own reads and writes go through `fake`, so taking one
-   of its blocks and then one of `fake`'s is the order the rules must allow,
-   and the other way round is the one they must refuse. */
+/* A device whose bytes live on `fake` once a row sets its `backing`: what a
+   loop device is to the volume holding its file. Its own reads and writes
+   go through `fake`, so taking one of its blocks and then one of `fake`'s is
+   the order the rules must allow, and the other way round is the one they
+   must refuse. */
 static block_device_t nested = {
     512, FAKE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 0, fake_read, fake_write, 0, 0, 0, image_small};
-/* A device that takes 64 sectors a request, as the ATA disk does: what
-   the run fill and the runs of a sync are proved on. */
+/* A device that takes 64 sectors a request, as the ATA disk does, for the
+   run fill and the runs of a sync. */
 static block_device_t wide = {
     512, WIDE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 64, fake_read, fake_write, 0, 0, 0, image_wide};
 /* A device that takes 2048 sectors a request, as the AHCI disk does: a
@@ -285,6 +305,7 @@ static unsigned char image_vast[WIDE_SECTORS * 512];
 static block_device_t vast = {
     512, WIDE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 2048, fake_read, fake_write, 0, 0, 0, image_vast};
 
+/** The block layer's request, done by the device's own read or write. */
 int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *data)
 {
     if (write) {
@@ -293,10 +314,9 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
     return device->read(device, lba, count, data);
 }
 
-/* ---- the rows ---- */
-
 static int fails;
 
+/** Count a failed check and print `what`. */
 static void check(int ok, const char *what)
 {
     if (!ok) {
@@ -305,8 +325,14 @@ static void check(int ok, const char *what)
     }
 }
 
-/* Run `fn(arg)` in a child that expects a panic whose text contains `text`;
- * the parent turns the exit status into a row. */
+/**
+ * Run `fn(arg)` in a forked child that expects a panic whose text contains
+ * `text`, and check the row `what` on the child's exit status.
+ *
+ * The row passes only when the child exits 42, which `k_panic` gives for a
+ * panic that names the rule. The child exits 44 when `fn` returns with no
+ * panic.
+ */
 static void panic_row(void (*fn)(void *), void *arg, const char *text, const char *what)
 {
     int pid = fork();
@@ -315,48 +341,60 @@ static void panic_row(void (*fn)(void *), void *arg, const char *text, const cha
     if (pid == 0) {
         expect_panic = text;
         fn(arg);
-        _exit(44); /* no panic came */
+        _exit(44);
     }
     check(pid > 0 && waitpid(pid, &status, 0) == pid, "the panic child ran");
     check((status & 0x7f) == 0 && ((status >> 8) & 0xff) == 42, what);
 }
 
+/** A panic row's call: get the block of `fake` that `arg` points to. */
 static void get_fake(void *arg)
 {
     bcache_get(&fake, *(uint64_t *)arg);
 }
+/** A panic row's call: write the buffer `arg` through. */
 static void write_it(void *arg)
 {
     bcache_write(arg);
 }
+/** A panic row's call: get the block of `nested` that `arg` points to. */
 static void get_nested(void *arg)
 {
     bcache_get(&nested, *(uint64_t *)arg);
 }
 
+/** A panic row's call: get the block of `other` that `arg` points to. */
 static void get_other(void *arg)
 {
     bcache_get(&other, *(uint64_t *)arg);
 }
+/** A panic row's call: sync the device `arg`. */
 static void sync_it(void *arg)
 {
     bcache_sync((block_device_t *)arg);
 }
+/** A panic row's call: release the buffer `arg`. */
 static void release_it(void *arg)
 {
     bcache_release(arg);
 }
+/** A panic row's call: mark the buffer `arg` dirty. */
 static void dirty_it(void *arg)
 {
     bcache_dirty(arg);
 }
 
-/* On a write-through disk a sync writes without the disk's flush and
-   flushes once at its end, but a `first` is written with the flush:
-   here one dirtied during the first batch's writes, below an `after`,
-   which the next batch reaches in block order and must not leave in
-   the disk's cache when the `after` is written. A failure of the end's
-   flush is recorded against the device as a failed write is. */
+/**
+ * Check a sync on `wide` made a write-through disk (`BLOCK_WRITE_THROUGH`).
+ *
+ * The sync writes without the disk's flush and flushes once at its end, but
+ * writes a `first` with the flush. The `first` here, block 135, is dirtied by
+ * the device's write hook during the writes of the first batch, and lies
+ * below the `after` at block 140; the next batch reaches it in block order,
+ * and it must be on the medium before the `after` is written. A failure of
+ * the flush at the sync's end is recorded against the device as a failed
+ * write is.
+ */
 static void write_through_rows(void)
 {
     struct bbuf *b;
@@ -391,6 +429,79 @@ static void write_through_rows(void)
     bcache_invalidate(&wide);
 }
 
+/**
+ * Run the rows in order, and return the count of failed checks, at most 255.
+ *
+ * A get reads a block by one device read and holds it, and a second get is
+ * a counted hit. A blank get of an uncached block makes no read and returns
+ * zeros, and of a cached block returns its bytes. The short last block is
+ * read as the 4 sectors that exist; a block past the device, a block number
+ * that would wrap the sector arithmetic, and a failed read return nothing.
+ * Invalidation is EBUSY while a buffer is held or dirty, and then drops
+ * every buffer of the device.
+ *
+ * A sync writes dirty buffers in ascending block order and keeps a buffer
+ * dirty across a failed write. A write-through (`bcache_write`) reaches the
+ * device before it returns, in call order, and leaves the buffer clean. A
+ * dirty victim is written before its buffer is reused.
+ *
+ * The order a file system asks for: at an eviction a `first` reaches the
+ * device before an `after` of the same device, though the `after` was
+ * released earlier and is the older. An `after` is not evicted while another
+ * process holds a `first` of its device; that row makes twice the cache's
+ * worth of misses, so every unheld buffer the rule does not protect is
+ * replaced at least once. A sync writes the firsts, then the rest in block
+ * order, and clears the marks.
+ *
+ * A failed write is recorded against the device and its sector through
+ * `vfs_device_failed`. The buffer stays dirty and is not reused until a
+ * later sync writes it, and the device takes no write-through (EROFS) until
+ * it is invalidated. A torn write and a dropped write that the device
+ * reports as success leave the prefix new or the whole block old, which the
+ * cache cannot see; judging the disk afterwards is the volume walk's work.
+ *
+ * Replacement is least recently released: with every buffer filled from
+ * `other` and its block 0 got again, the next miss evicts its block 1.
+ *
+ * The hold rules panic, each in a forked child: a lower block, or the held
+ * block again, while holding block 3; a block of an unrelated device; a
+ * block of the device above while holding one of the device under it (the
+ * other way round is allowed, since that is what the upper device's read
+ * does); a release, a dirty mark or a write-through by a process that does
+ * not hold the buffer; a fifth held buffer. A sync panics when the caller
+ * holds a dirty block of the device it syncs, or holds a block of an
+ * unrelated device while it syncs one that stands on another: the first
+ * would wait for itself, and the second would write through a file system
+ * the caller is already inside. While the caller holds a mount's lock, an
+ * eviction passes over the dirty block of a device that stands on another,
+ * since writing it takes the lock of the mount holding its file and two
+ * callers could then wait for each other. A block keyed by another caller
+ * while a victim's writeback is inside the device is the buffer the get
+ * returns. Another process's holds do not count against this one's rules.
+ *
+ * A device that has gone: an unheld clean buffer is dropped, a dirty one
+ * records the device failed and is dropped, since nothing will write it,
+ * and a held one is marked and dropped at its release. A buffer whose
+ * device goes during its fill, or during its writeback as a dirty victim,
+ * carries no discard mark into its next use on a sound device, where the
+ * mark would throw away a dirty block at its release.
+ *
+ * The runs, on `wide`: the miss at the block after a first miss reads a run
+ * of eight blocks in one request, and the seven after it are hits. A sync
+ * writes adjacent dirty blocks in requests of eight, and writes more dirty
+ * blocks than one batch gathers, all of them, in order. A write that lands
+ * while a run read is inside the device is not overwritten by the fill's
+ * older copy. A `first` dirtied while a sync writes an `after` is written
+ * before the next `after`, whatever their block numbers. On `vast`, with a
+ * limit of 600 so that half of it holds a run of 256, the run after a first
+ * miss is 256 blocks in one request and the block past it starts the next;
+ * 300 dirty blocks are written in a run of 256 and one of 44. On a cache cut
+ * to 40 buffers with 21 held by six other processes, four or fewer each, a
+ * read run is bounded to half the cache, and its last blocks evict its own
+ * first blocks, not the caller's block, though that is the least recently
+ * released. A write run of 40 blank dirty blocks goes out in two runs of
+ * 20, not one that holds every buffer while the request sleeps.
+ */
 int main(void)
 {
     struct bbuf *b, *c, *d;
@@ -416,8 +527,6 @@ int main(void)
     check(bcache_stat_hits() == 1, "and the hit is counted");
     bcache_release(b);
 
-    /* The blank get: a miss costs no read and reads as zeros; a cached block
-       is returned as it is, bytes and all. */
     reads_made = 0;
     b = bcache_get_blank(&fake, 5);
     check(b != 0 && reads_made == 0, "a blank get of an uncached block makes no read");
@@ -457,9 +566,6 @@ int main(void)
     bcache_release(b);
     check(reads_made == 3, "so every block of the device is read again");
 
-    /* Writeback: a dirty buffer is written at sync in ascending block order,
-       is kept dirty across a failed write, and blocks invalidation until it
-       is written. */
     b = bcache_get(&fake, 9);
     bcache_dirty(b);
     bcache_release(b);
@@ -479,8 +585,6 @@ int main(void)
     check(bcache_sync(&fake) == 0 && writes_made == 2, "and nothing is dirty after");
     check(bcache_invalidate(&fake) == 0, "so invalidation succeeds");
 
-    /* Write-through: bcache_write reaches the device before it returns,
-       in call order, and leaves the buffer clean. */
     writes_made = 0;
     b = bcache_get(&fake, 6);
     b->data[7] = 0x5A;
@@ -497,8 +601,6 @@ int main(void)
     current_proc = &proc_a;
     bcache_release(c);
 
-    /* A dirty victim is written before its buffer is reused: one dirty
-       buffer, then every buffer taken by the big device. */
     b = bcache_get(&fake, 8);
     b->data[0] = 0x77;
     bcache_dirty(b);
@@ -511,11 +613,6 @@ int main(void)
     check(writes_made == 1 && writes_lba[0] == 64 && image_small[8 * 4096] == 0x77,
           "a dirty victim is written before its buffer is reused");
 
-    /* The order a file system asks for: a `first` buffer reaches the device
-       before an `after` one of the same device, at an eviction, at a sync,
-       and not while a first is held by another process. The after is
-       released before the first, so it is the older and the eviction's
-       choice. */
     b = bcache_get(&fake, 11);
     b->data[0] = 0x11;
     bcache_dirty_ordered(b, BCACHE_ORDER_AFTER);
@@ -543,8 +640,6 @@ int main(void)
     bcache_dirty_ordered(d, BCACHE_ORDER_FIRST);
     current_proc = &proc_a;
     writes_made = 0;
-    /* Twice the cache's worth of misses, so every unheld buffer the rule
-       does not protect is replaced at least once on the way. */
     for (i = 0; i < 2 * BCACHE_BUFFERS; i++) {
         c = bcache_get(&other, i % (BIG_SECTORS / 8));
         bcache_release(c);
@@ -571,9 +666,6 @@ int main(void)
     check(!b->dirty && b->order == 0, "and the marks clear with the write");
     bcache_release(b);
 
-    /* A failed write is recorded against the device: the mounts on it go
-       read-only through vfs_device_failed, and the buffer stays dirty until
-       a later sync writes it. */
     b = bcache_get(&fake, 9);
     b->data[0] = 0x66;
     bcache_dirty(b);
@@ -601,9 +693,6 @@ int main(void)
     check(bcache_write(b) == 0, "and the next mount's first metadata write goes through");
     bcache_release(b);
 
-    /* The edge of the guarantee: a torn write and a dropped write are
-       reported as success by the device, so the cache cannot know; what
-       the disk holds afterwards is for the walk to judge. */
     b = bcache_get(&fake, 10);
     __builtin_memset(b->data, 0x99, 4096);
     tear_at = writes_made + 1;
@@ -619,8 +708,6 @@ int main(void)
     drop_at = -1;
     bcache_release(b);
 
-    /* Replacement is least recently released: fill every buffer from `other`,
-       refresh block 0, and the next miss must evict other:1 exactly. */
     for (i = 0; i < BCACHE_BUFFERS; i++) {
         b = bcache_get(&other, i);
         check(b != 0, "a fill row within the big device");
@@ -639,7 +726,6 @@ int main(void)
     check(b != 0 && reads_made == 2, "and the oldest release was the victim");
     bcache_release(b);
 
-    /* The hold rules end in a panic, observed from a forked child. */
     {
         uint64_t two = 2, three = 3, nine = 9;
 
@@ -648,8 +734,6 @@ int main(void)
         panic_row(get_fake, &three, "not above", "the held block taken again panics");
         panic_row(get_other, &two, "not under",
                   "a block on another device while holding one panics");
-        /* A chain of devices: down is allowed, up is not. The buffer held
-           above is let go first, since these rows take blocks of their own. */
         bcache_release(b);
         nested.backing = &fake;
         check(block_depth(&nested) == BLOCK_MAX_DEPTH && block_depth(&fake) == 0,
@@ -674,10 +758,6 @@ int main(void)
                       "a block of the device above while holding one under it panics");
             bcache_release(b);
         }
-        /* A dirty buffer of a device that stands on another is not written
-           back on the way to an unrelated device while this caller holds a
-           mount's lock: that write takes the lock of the mount holding its
-           file, and two callers could then wait for each other. */
         {
             struct bbuf *dirty;
             int i2;
@@ -704,11 +784,6 @@ int main(void)
             bcache_invalidate(&nested);
             bcache_invalidate(&other);
         }
-        /* A writeback sleeps, whatever kind of device it goes to, and
-           another caller can key the very block this call is about to key.
-           The device's write keys it here, with a byte the cache would not
-           have put there, and the call must come back with that buffer
-           rather than a second one of its own. */
         {
             uint64_t last = BCACHE_BUFFERS;
             struct bbuf *b2;
@@ -720,7 +795,7 @@ int main(void)
                 b2 = bcache_get(&other, (uint64_t)i2);
                 check(b2 != 0, "a buffer is taken to fill the cache");
                 if (i2 == 0) {
-                    bcache_dirty(b2); /* the oldest buffer, and dirty */
+                    bcache_dirty(b2);
                 }
                 if (b2) {
                     bcache_release(b2);
@@ -735,10 +810,6 @@ int main(void)
             }
             bcache_invalidate(&other);
         }
-        /* A sync waits for a dirty buffer somebody else holds. A caller
-           holding one of the device it syncs would be waiting for itself,
-           and one holding a block of another device would write through a
-           file system it is already inside. Both are named, not waited on. */
         {
             struct bbuf *held;
 
@@ -791,7 +862,6 @@ int main(void)
         }
     }
 
-    /* Another process's holds do not count against this one's rules. */
     b = bcache_get(&fake, 7);
     current_proc = &proc_b;
     c = bcache_get(&fake, 2);
@@ -800,11 +870,6 @@ int main(void)
     current_proc = &proc_a;
     bcache_release(b);
 
-    /* A device that has gone. A clean buffer nobody holds is dropped at
-       once; a dirty one records the device failed and is dropped, since
-       nothing will ever write it; one a process holds is kept, marked, and
-       dropped at its release, because a buffer cannot be reused under its
-       holder. */
     bcache_invalidate(&fake);
     failed_dev = 0;
     b = bcache_get(&fake, 1);
@@ -826,11 +891,6 @@ int main(void)
     check(bcache_invalidate(&fake) == 0, "and the device can be dropped: nothing dirty is left");
     fake.flags &= ~BLOCK_GONE;
 
-    /* A device that goes in the middle of a fill: the buffer being filled is
-       held, so it is marked to be dropped; the fill then fails and drops it
-       without a release. The mark must go with it, or the next user of that
-       buffer, on a device that never went anywhere, has its dirty block
-       thrown away at its release. */
     bcache_invalidate(&fake);
     bcache_invalidate(&other);
     gone_during_read = 1;
@@ -844,11 +904,6 @@ int main(void)
     bcache_sync(&other);
     bcache_invalidate(&other);
 
-    /* The other way a held buffer changes hands without a release: a dirty
-       victim is written back inside a fill for another device, held for the
-       write, and the device goes during it. The victim is then given to the
-       other device with the mark still on it, unless the reuse clears it;
-       every dirty block of the other device must reach it at a sync. */
     bcache_invalidate(&fake);
     b = bcache_get(&fake, 8);
     bcache_dirty(b);
@@ -866,11 +921,6 @@ int main(void)
           "a buffer reused after its device went during a writeback keeps its next dirty block");
     bcache_invalidate(&other);
 
-    /* The runs, on the device that takes 64 sectors: a miss at the block
-       after the last fill reads eight blocks in one request, and the seven
-       after it are hits; a sync writes adjacent dirty blocks in requests of
-       eight; and a sync of more dirty blocks than one batch gathers leaves
-       nothing dirty, in ascending order. */
     for (i = 0; i < (int)sizeof(image_wide); i++) {
         image_wide[i] = (unsigned char)(i / 4096u);
     }
@@ -923,11 +973,6 @@ int main(void)
     }
     bcache_invalidate(&wide);
 
-    /* A write that lands while a run read is inside the device: the read
-       answered the block's old bytes, another process then wrote the block
-       through the cache, synced it and let the buffer go, and the fill's
-       staged copy is older than the device. The fill must not put it in
-       the cache; the block read afterwards is the device's newer one. */
     b = bcache_get(&wide, 300);
     bcache_release(b);
     write_during_fill = 305;
@@ -940,9 +985,6 @@ int main(void)
     bcache_release(b);
     bcache_invalidate(&wide);
 
-    /* A `first` dirtied by another process while a sync's write of an
-       `after` is inside the device: the sync writes it before its next
-       `after`, whatever their block numbers. */
     for (i = 0; i < 3; i++) {
         b = bcache_get_blank(&wide, (uint64_t)(210 + 10 * i));
         b->data[0] = 0xA0;
@@ -968,13 +1010,10 @@ int main(void)
         printf("bcache_hosttest: OK\n");
     }
 
-    /* The device that takes 2048 sectors: the run after a first miss is
-       the largest run, 256 blocks in one request, and the blocks of it are
-       hits after, each with its own bytes. */
     for (i = 0; i < (int)sizeof(image_vast); i++) {
         image_vast[i] = (unsigned char)(i / 4096u);
     }
-    bcache_set_limit(600); /* a run is at most half the limit: room for 256 */
+    bcache_set_limit(600);
     reads_made = 0;
     b = bcache_get(&vast, 1);
     bcache_release(b);
@@ -999,8 +1038,6 @@ int main(void)
     bcache_release(b);
     bcache_invalidate(&vast);
 
-    /* Written back the same way: 300 dirty blocks in a row go to the device
-       in a run of 256 blocks, 2048 sectors, and a run of the 44 left. */
     writes_made = 0;
     for (i = 1; i <= 300; i++) {
         b = bcache_get(&vast, (uint64_t)i);
@@ -1017,12 +1054,6 @@ int main(void)
         image_vast[i] = (unsigned char)(i / 4096u);
     }
 
-    /* A cache of forty buffers, made so by freeing every buffer the rows
-       above made and lowering the limit, with twenty-one of them held by
-       six other processes, four each within the hold rule: the run is
-       bounded to half the cache, and when its last blocks find no free
-       buffer the block the caller asked for is not the victim, though it
-       is the least recently released: the run's own earlier blocks are. */
     {
         uint32_t written = 0;
         static process_t holders[6];
@@ -1054,10 +1085,6 @@ int main(void)
         current_proc = &proc_a;
     }
 
-    /* A write run is bounded the same way: forty dirty blocks, keyed blank
-       so that no read run takes buffers, fill the cache of forty and go to
-       the device in two runs of twenty, not one of forty that would hold
-       every buffer while the request sleeps. */
     bcache_invalidate(&vast);
     writes_made = 0;
     for (i = 1; i <= 40; i++) {

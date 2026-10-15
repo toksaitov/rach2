@@ -1,6 +1,7 @@
 /*
- * bcache_cost_hosttest.c: what the buffer cache reads to serve a get, to
- * choose a victim and to sync, and where it stops growing.
+ * bcache_cost_hosttest.c: what the buffer cache, rach2/sys/fs/bcache.c,
+ * reads to serve a get, to choose a victim and to sync, and where it stops
+ * growing.
  *
  * host-deps: rach2/sys/fs/bcache.c rach2/sys/block/chain.c
  * host-deps: rach2/sys/lib/kstring.c
@@ -10,15 +11,14 @@
  *
  * The cache counts every buffer a walk of one of its lists reads
  * (`bcache_stat_visits`), and these rows hold that count under bounds that
- * are the same on every machine. A get once walked every buffer of the cache
- * for the hold rules and again for its victim, and a sync walked it again
- * for every run it wrote; with sixteen thousand buffers on a machine with
- * memory, that walking was most of what a write cost (entry 25 of milestone
- * 50). The rules now read the caller's own holds, the victim is the head of
- * the release order, and a sync gathers the lowest 128 dirty blocks a walk.
- * Each row that measures the count also requires it to be at least the reads
- * the row names, since a counter that counted nothing would pass every upper
- * bound.
+ * are the same on every machine. With sixteen thousand buffers, a walk of
+ * the whole cache on each get or each run written would be most of what a
+ * write costs. The hold rules read the caller's own holds, the victim is
+ * the head of the release order, and a sync gathers the lowest 128 dirty
+ * blocks a walk. Each row that measures the count also requires it to be at
+ * least the reads the row names, since a counter that counted nothing would
+ * pass every upper bound. bcache_mutate.sh compiles in the faults the bounds
+ * are for.
  *
  * The rows run on a cache of 1024 buffers keyed to consecutive blocks of one
  * device, which the index keeps in buckets of their own, so a lookup reads
@@ -29,21 +29,20 @@
  * and its release at least three. The bound is eight buffers for a get and
  * its release, where one walk of the cache is 1024.
  *
- * A sync reads the dirty buffers and not the cache: they are on a list of
- * their own, since a sync once walked every buffer of the cache for each of
- * its passes and batches, and a small file's write, which syncs about nine
- * times, read the whole cache nine times over. A sync of 1024 dirty blocks,
- * on a device that takes eight blocks a request, gathers them all in one
- * walk into a batch the heap gives it, sorted in a heap where a block takes
- * at most ten steps to go in and ten to come out in order; it walks the list
- * once more for its pass over the firsts, and reads each block a few times
- * more, for its lookup in the batch, its place in a run and its hold across
- * the request. The list has its newest buffer first, so these blocks,
- * dirtied in order, are read highest first, which cost an insertion sort a
- * shift of the whole batch for each. The bound allows four walks of the
- * cache, eight reads a block and the heap's steps, where batches of 128 are
- * 43940 and the insertion sort half a million steps, and the count must be
- * at least the two walks' 2048 reads.
+ * A sync reads the dirty buffers and not the cache, since they are on a list
+ * of their own; a small file's write syncs about nine times, so a sync that
+ * walked the cache would read it nine times over. A sync of 1024 dirty
+ * blocks, on a device that takes eight blocks a request, gathers them all in
+ * one walk into a batch the heap gives it, sorted in a heap where a block
+ * takes at most ten steps to go in and ten to come out in order; it walks
+ * the list once more for its pass over the firsts, and reads each block a
+ * few times more, for its lookup in the batch, its place in a run and its
+ * hold across the request. The list has its newest buffer first, so these
+ * blocks, dirtied in order, are read highest first, and a batch kept by
+ * insertion sort would shift the whole batch for each. The bound allows four
+ * walks of the cache, eight reads a block and the heap's steps, where
+ * batches of 128 would take 43940 and an insertion sort half a million, and
+ * the count must be at least the two walks' 2048 reads.
  *
  * Without room in the heap the sync gathers 128 blocks a walk on its stack,
  * one walk for each batch, in a list 128 shorter after each, and seven
@@ -54,15 +53,14 @@
  * dirty blocks in a full cache of 1024 reads the eight, at most twelve times
  * each, where a walk of the cache is 1024 reads.
  *
- * The cap row is entry 40's. A buffer is a page of the kernel heap, whose
- * region on i686 is 256 MiB whatever the machine's memory, and on a machine
- * of more than 2 GiB the caches' memory share is larger than the heap. The
- * row stands for a machine of 3 GiB, writes past half the heap's pages, and
- * requires the cache to stop there and make room by writing its oldest
- * buffers back. The last row does the same with a heap whose region is a
- * quarter of that, standing for a region the boot sized otherwise, as it
- * sizes x86-64's from the memory: the cap is half of whatever region the
- * heap has.
+ * A buffer is a page of the kernel heap, whose region on i686 is 256 MiB
+ * whatever the machine's memory, and on a machine of more than 2 GiB the
+ * caches' memory share is larger than the heap. The cap row stands for a
+ * machine of 3 GiB, writes past half the heap's pages, and requires the
+ * cache to stop there and make room by writing its oldest buffers back. The
+ * last row does the same with a heap whose region is a quarter of that,
+ * standing for a region the boot sized otherwise, as it sizes x86-64's from
+ * the memory: the cap is half of whatever region the heap has.
  *
  * No hosted headers, as in bcache_hosttest.c: the kernel headers define the
  * fixed-width types, and the libc calls used here are declared by hand. The
@@ -135,6 +133,7 @@ static int fails;
 static uint32_t writes_made;
 static uint64_t hit_visits, miss_visits, sync_visits, batch_visits, few_visits;
 
+/** Count a failed check and print `what`. */
 static void check(int ok, const char *what)
 {
     if (!ok) {
@@ -143,17 +142,20 @@ static void check(int ok, const char *what)
     }
 }
 
+/** The kernel's panic: print `s` and exit with status 44. */
 void k_panic(const char *s)
 {
     printf("bcache_cost_hosttest: unexpected panic: %s\n", s);
     _exit(44);
 }
 
+/** The caller holds no namespace lock. */
 int vfs_ns_held_by_caller(void)
 {
     return 0;
 }
 
+/** A device write failed, which no row expects. */
 void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
 {
     (void)dev;
@@ -162,6 +164,7 @@ void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
     check(0, "no write fails in these rows");
 }
 
+/** The kernel log; the records are dropped. */
 void klog(int level, const char *sys, const char *fmt, ...)
 {
     (void)level;
@@ -169,17 +172,20 @@ void klog(int level, const char *sys, const char *fmt, ...)
     (void)fmt;
 }
 
+/** Make `wq` an empty wait queue. */
 void wait_queue_init(wait_queue_t *wq)
 {
     __builtin_memset(wq, 0, sizeof(*wq));
 }
 
+/** Wake no one: no process waits here. */
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
 }
 
-/* One process runs here, so a wait would never end. */
+/** The sleeping wait, which fails the test and exits with status 1: one
+ *  process runs here, so a wait would never end. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
@@ -190,6 +196,7 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
+/** The device's read, which moves no bytes and succeeds. */
 static int disk_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
 {
     (void)d;
@@ -199,6 +206,8 @@ static int disk_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
     return 0;
 }
 
+/** The device's write, which keeps no bytes, counts the request in
+ *  `writes_made`, and succeeds. */
 static int disk_write(block_device_t *d, uint64_t lba, uint32_t count, const void *buf)
 {
     (void)d;
@@ -216,7 +225,8 @@ static int disk_write(block_device_t *d, uint64_t lba, uint32_t count, const voi
 static block_device_t disk = {
     512, DISK_SECTORS, BLOCK_FAULT_SAFE, 0, 0, RUN_SECTORS, disk_read, disk_write, 0, 0, 0, 0};
 
-/* The request pool is i386 code; a host request calls the device. */
+/** A block request, made here by calling the device's polled read or write
+ *  directly, in place of the kernel's request pool. */
 int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *data)
 {
     if (write) {
@@ -225,8 +235,8 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
     return device->read(device, lba, count, data);
 }
 
-/* Key `count` blocks from `first` on with the blank get, each let go at
- * once, dirty or not. */
+/** Key `count` blocks from `first` on with the blank get, each released at
+ *  once, dirty when `dirty` is set. */
 static void key_blocks(uint64_t first, uint64_t count, int dirty)
 {
     uint64_t i;
@@ -245,8 +255,8 @@ static void key_blocks(uint64_t first, uint64_t count, int dirty)
     }
 }
 
-/* The cache full of blocks 0 to 1023; blocks 0, 1 and 2 held while block
- * 1023 is got and let go. */
+/** Fill the cache with blocks 0 to 1023, and measure a get and release of
+ *  block 1023 while blocks 0, 1 and 2 are held. */
 static void hit_row(void)
 {
     struct bbuf *held[3];
@@ -277,8 +287,8 @@ static void hit_row(void)
     }
 }
 
-/* A miss for each buffer of the full cache: blocks 1024 to 2047, each
- * taking the least recently released buffer. */
+/** Measure a miss for each buffer of the full cache: blocks 1024 to 2047,
+ *  each taking the least recently released buffer. */
 static void miss_row(void)
 {
     uint64_t before = bcache_stat_visits();
@@ -292,7 +302,7 @@ static void miss_row(void)
           "the counter counts the buffers each miss and its release read");
 }
 
-/* Every buffer of the cache dirty, blocks 0 to 1023, and a sync. */
+/** Measure a sync of a cache whose every buffer is dirty, blocks 0 to 1023. */
 static void sync_row(void)
 {
     uint64_t before;
@@ -309,8 +319,8 @@ static void sync_row(void)
     check(sync_visits >= SYNC_LEAST, "the counter counts the sync's two walks of the dirty list");
 }
 
-/* The same, with a heap that grants nothing longer than a page: the sync
- * gathers its batches on its stack. */
+/** As `sync_row`, with a heap that grants nothing longer than a page, so the
+ *  sync gathers its batches on its stack. */
 static void batch_row(void)
 {
     uint64_t before;
@@ -331,8 +341,8 @@ static void batch_row(void)
           "the counter counts the batched sync's walks of the dirty list");
 }
 
-/* The cache full of clean blocks 0 to 1023 but blocks 2048 to 2055, which
- * are dirty, and a sync. */
+/** Measure a sync of a full cache of clean blocks 0 to 1015 and dirty
+ *  blocks 2048 to 2055. */
 static void few_row(void)
 {
     uint64_t before;
@@ -351,8 +361,9 @@ static void few_row(void)
     check(few_visits >= FEW_LEAST, "the counter counts the sync's two walks of the eight");
 }
 
-/* Every block of the device written through the cache, on a machine whose
- * memory share is three times the cap. */
+/** Write every block of the device through the cache, on a machine whose
+ *  memory share is three times the cap, and require the cache to stop at
+ *  the cap. */
 static void cap_row(void)
 {
     host_cache_target = TARGET_3GIB;
@@ -367,8 +378,8 @@ static void cap_row(void)
     host_cache_target = 128;
 }
 
-/* The same on a heap of a quarter of the region: the cap is half of what
- * the heap has, not of i686's region. */
+/** As `cap_row`, on a heap of a quarter of the region, after the cache is
+ *  emptied: the cap is half of what the heap has, not of i686's region. */
 static void region_row(void)
 {
     uint32_t written = 0;
@@ -388,6 +399,8 @@ static void region_row(void)
     kheap_host_region_pages = KHEAP_FLOOR / PAGE_SIZE;
 }
 
+/** Run the rows in order, each on the cache the one before it left, and
+ *  print the counts. Returns 0 when every check passed and 1 otherwise. */
 int main(void)
 {
     proc_a.pid = 1;
