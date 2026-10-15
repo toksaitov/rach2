@@ -1,26 +1,30 @@
-# tools/inspect/setid.allow: the set-id guard's declarations.
+# tools/inspect/setid.allow: the declarations setidcheck checks the images
+# against.
 #
 # setidcheck reads this file. One `manifest` line opens an entry named by a
-# manifest's stem, and the indented lines under it declare what that image
-# may carry; `copy` starts from another entry's declarations, and later
-# lines add to or replace them, so a shared profile is written once and a
-# derived one cannot drift from it. The global lists at the bottom feed the
-# applet, config and init checks. Lines read like manifest directives: the
-# same tokenizer, `#` starts a full-line comment, and a `text` payload is
-# the rest of the line, byte for byte, before escapes are expanded.
+# manifest's stem, and the lines after it declare what that image may have;
+# `manifest NAME copy BASE` starts from an earlier entry's declarations, and
+# later lines add to or replace them, so a shared profile is written once
+# and a derived one cannot drift from it. The global lists at the bottom
+# are read by the applet, config and init checks. Lines read like manifest
+# directives: the same tokenizer, `#` starts a full-line comment, and a
+# `text` payload is the rest of the line, byte for byte, before escapes are
+# expanded.
 #
 # `setid` declares a privileged path with its mode, owner and the host file
 # it is staged from. `trusted` names a file that must be present,
 # unprivileged, and exactly as declared: a program root runs, or a file
-# root reads to decide who somebody is. `trusted overlay` names one that a
-# manifest's overlay program installs over the staged tree, with the host
-# file it comes from: the manifest check passes it over, and the check of
-# the finished image requires a regular file with the declared mode and
-# owner under directories nobody but root may write. `sentinel` names one ordinary node
-# the image inventory must find when an entry declares no set-id path, so a
-# misparsed image cannot read as clean. `init` names which init artifact
-# the manifest must stage (`none` forbids one). `sysroot` marks the image
-# that carries the compiler, whose search paths are then inventoried too.
+# root reads to decide who somebody is. `trusted optional-file` is one a
+# build may leave out. `trusted overlay` names one that a manifest's overlay
+# program installs over the staged tree, with the host file it comes from:
+# the manifest check passes it over, and the check of the finished image
+# requires a regular file with the declared mode and owner under
+# directories nobody but root may write. `sentinel` names one ordinary node
+# the image inventory must find, so that a misparsed image cannot read as
+# clean; an entry that declares no set-id path must have one. `init` names
+# which init artifact the manifest must stage (`none` forbids one).
+# `sysroot` marks the image that has the compiler, whose search paths are
+# then inventoried too.
 
 manifest os-real
 setid /bin/su 04755:0:0 build/vendor/busybox/busybox-suid
@@ -60,18 +64,16 @@ trusted text 0644:0:0 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOM
 trusted file 0600:0:0 /root/.ssh/authorized_keys krffs/authorized_keys
 init init-metal
 
-# The recovery profile. It copied the metal one until 2026-09-14 and now
-# stands on its own, because it is the one image that authenticates nobody:
-# it boots to a shell, carries no stored password, and nothing on it decides
-# who a person is at its console. Whether it answers the network is decided by
-# whether the build had a key to stage: no key, no server. That is deliberate. Whoever
-# chooses this entry has the machine in their hands, a password here would
-# have stood between somebody whose machine will not start and the tools that
-# repair it, and the image has none of that machine's accounts to check
-# against in any case.
+# The recovery profile, the one image that authenticates nobody: it boots
+# to a shell, has no stored password, and nothing on it decides who a person
+# is at its console. It answers the network only when the build had a key to
+# stage: no key, no server. Whoever chooses this entry has the machine in
+# their hands, a password here would stand between somebody whose machine
+# will not start and the tools that repair it, and the image has none of
+# that machine's accounts to check against in any case.
 #
 # The set-id programs come with it because the shell still needs them to run
-# something as another user, and the two disk tools are pinned because both
+# something as another user, and the disk tools are declared because they
 # run as root against raw devices in the one image whose purpose is writing
 # any sector.
 manifest rach2-recovery
@@ -102,12 +104,12 @@ init init-metal
 # the two files by which glibc decides whose account a name is and which
 # libraries a program of root's loads. What vendor/gnu/install_root.sh adds
 # over the staged tree is not in the manifest, and none of it may be set-id:
-# OpenSSH's ssh-keysign is installed without its bit. The programs of it
-# that root runs, the SSH server and ssh-keygen, which init starts, the two
-# helpers the server starts as root, bash, root's login shell, which
-# /bin/bash links to and /bin/sh is a second name of, and D-Bus's daemon and
-# dbus-send, which root's login profile runs for its session bus, are
-# declared as overlay files.
+# OpenSSH's ssh-keysign is installed without its bit. Of what it adds, the
+# programs root runs are declared as overlay files: the SSH server and
+# ssh-keygen, which init starts, the two helpers the server starts as root,
+# bash, root's login shell, which /bin/bash links to and /bin/sh is a second
+# name of, and D-Bus's daemon and dbus-send, which root's login profile runs
+# for its session bus.
 manifest os-real-gnu
 setid /bin/su 04755:0:0 build/vendor/busybox/busybox-suid
 setid /bin/passwd 04755:0:0 build/vendor/busybox/busybox-suid
@@ -221,8 +223,8 @@ sentinel /rngprobe 0755:0:0
 init none
 
 # The console-login fixtures: the same image but for the init each
-# declares, and neither stages /bin/login. The strict one must refuse and
-# the permissive one must reach a root shell.
+# declares, and neither stages /bin/login. The strict one must give no
+# shell and the permissive one must reach a root shell.
 manifest login-test-strict
 trusted file 0755:0:0 /sbin/init build/utils/sbin/init-login
 sentinel /etc/motd 0644:0:0
@@ -233,8 +235,8 @@ trusted file 0755:0:0 /sbin/init build/utils/sbin/init-shell
 sentinel /etc/motd 0644:0:0
 init init-shell
 
-# The shutdown fixture stages the shipped setuid `su` so one phase can ask
-# a bare `halt` as somebody who is not root and be refused.
+# The shutdown fixture stages the shipped setuid `su` so one phase can run
+# a bare `halt` as somebody who is not root and see it fail.
 manifest shutdown-test
 setid /bin/su 04755:0:0 build/utils/sbin/su
 trusted file 0755:0:0 /bin/busybox build/vendor/busybox/busybox
@@ -244,15 +246,15 @@ manifest stress-test
 sentinel /stressprobe 0755:0:0
 init none
 
-# What the MAIN busybox must not carry. The first six want the set-id bit
-# this binary is staged without, so an applet of that name would answer
-# before the set-id build's copy and refuse. `ping6` and `traceroute6` need
-# IPv6 this stack does not have. `ping` and `dmesg` would answer from the
-# applet table before the files staged under the same names: /bin/ping is
-# the in-house program an ordinary account can run, and /bin/dmesg prints
-# /dev/bootlog. The sentinel is an applet that must be present, because a
-# check that only looks for absences passes just as well on a header it
-# failed to understand.
+# The applets the main busybox must not have. The first six need the set-id
+# bit this binary is staged without, so an applet of that name would run in
+# place of the set-id build's copy and fail. `ping6` and `traceroute6` need
+# IPv6 this stack does not have. `ping` and `dmesg` would run from the
+# applet table in place of the files staged under the same names: /bin/ping
+# is the in-house program an ordinary account can run, and /bin/dmesg
+# prints /dev/bootlog. The sentinel is an applet that must be present,
+# because a check that only looks for absences passes just as well on a
+# header it failed to understand.
 forbidden-applet su
 forbidden-applet passwd
 forbidden-applet login
@@ -265,17 +267,18 @@ forbidden-applet traceroute6
 forbidden-applet dmesg
 applet-sentinel cat
 
-# The set-id build's whitelist: exactly these three and nothing else, since
-# every applet in that binary runs as root.
+# The set-id build's applets: exactly these three and no other, since every
+# applet in that binary runs as root.
 suid-applet login
 suid-applet passwd
 suid-applet su
 
-# The set-id build's config. Every symbol here must APPEAR, on or off, so a
-# config regenerated under other symbol names fails instead of passing by
-# holding none of them. The off list is what keeps the binary the thing its
-# name claims: no busybox.conf parser (an upstream use-after-free), no
-# applet-over-disk preference, no login scripts, and no shell in any form.
+# The set-id build's config. Every symbol here must appear, on or off, so
+# that a config regenerated under other symbol names fails instead of
+# passing by having none of them. The off list keeps the binary to its
+# three applets: no busybox.conf parser (an upstream use-after-free), no
+# preference of applets over programs on disk, no login scripts, and no
+# shell in any form.
 suid-config-on CONFIG_STATIC
 suid-config-on CONFIG_LFS
 suid-config-on CONFIG_FEATURE_SUID
@@ -295,9 +298,9 @@ suid-config-off CONFIG_SH_IS_HUSH
 suid-config-off CONFIG_FEATURE_SH_STANDALONE
 
 # The two init disciplines, told apart by the byte strings that name a
-# shell. A strict init must hold neither; init-shell must hold both, which
-# is the sentinel that proves the scan read the artifact at all. init-metal
-# is init-login plus a supervised SSH server and inherits the strict rule.
+# shell. A strict init must have neither; init-shell must have both, which
+# shows that the scan read the artifact at all. init-metal is init-login
+# plus a supervised SSH server and has the strict rule.
 init-strict init-login
 init-strict init-metal
 init-names-shell init-shell

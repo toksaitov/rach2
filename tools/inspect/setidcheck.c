@@ -1,9 +1,11 @@
 /**
- * setidcheck: the guard on the set-id bits of the staged images.
+ * setidcheck: check the set-id bits of the staged images against their
+ * declarations.
  *
- * Privilege in a Rach2 image climbs through a few declared files and
- * nowhere else. The declarations live in `setid.allow` beside this file;
- * this tool holds them against four artifacts, each a separate question:
+ * In a Rach2 image a program runs with another account's privilege only
+ * through a few declared files. The declarations are in `setid.allow`
+ * beside this file, and this program checks the manifests, the built
+ * images, and the busybox and init artifacts against them.
  *
  * The manifest sweep (`setidcheck [MANIFEST ...]`) parses the manifests
  * the way `apply_line` (krffs/stageimage.krffs.c) does, byte for byte:
@@ -11,30 +13,34 @@
  * split on spaces and tabs, a comment is a line whose first token begins
  * with `#`, and an omitted owner reads as 0:0. A set-id `file` must match
  * its declaration at the same path, mode, owner and host source; a set-id
- * `exec-dir` or `tree` is refused outright (the set of paths it privileges
- * is a property of the host directory, not the manifest), and a set-id
- * `dir` is refused because KRFFS has no setgid-directory inheritance.
- * Trusted files, the staged init, and the directories above every declared
- * path are held to their declarations too.
+ * `exec-dir` or `tree` is a finding (the set of paths it privileges is a
+ * property of the host directory, not of the manifest), and so is a set-id
+ * `dir`, because KRFFS has no setgid-directory inheritance. Trusted files,
+ * the staged init, and the directories above every declared path are
+ * checked against their declarations too. With no MANIFEST the sweep reads
+ * every manifest in krffs/manifests and requires one for every entry.
  *
  * The image inventory (`setidcheck --image FILE --manifest PATH [--offset
- * BYTES] [--size BYTES]`) reads the artifact, not the text: it walks the
- * node chain the way fsck.krffs does, requires the ring to close on the
- * size the root records, rebuilds every reserved node's path from
- * `parent_id`, and compares what it finds against the same declarations.
- * An image whose entry says `sysroot` also has the compiler's search paths
- * inventoried and its staged header tree compared, path by path and byte
- * by byte, with the musl install it was staged from.
+ * BYTES] [--size BYTES]`, or `--ext2 FILE` in place of `--image FILE` for an
+ * ext2 volume) reads the built image instead of the text. For KRFFS it
+ * walks the node chain the way fsck.krffs does, requires the ring to close
+ * on the size the root records, and rebuilds every reserved node's path
+ * from `parent_id`; then it compares what it finds against the same
+ * declarations. An image whose entry says `sysroot` also has the
+ * compiler's search paths inventoried and its staged header tree compared,
+ * path by path and byte by byte, with the musl install it was staged from.
  *
  * `setidcheck --applets [TABLE]` reads the staged busybox applet tables
  * and configs and the two init binaries. `setidcheck --free --image FILE
  * --offset N --size N` prints the free bytes of a region, for the
  * self-build suite's space preflight; `--nodes --image FILE` prints each
  * root or reserved node in ring order with its path and timestamps, for
- * the reproducibility check. `--selftest` runs every half over fixtures
- * built in memory and in a temporary directory.
+ * the reproducibility check, and `--nodes --ext2 FILE` prints each node
+ * reached with its mode, owner, size and inode. `--selftest` runs every
+ * part over fixtures built in memory and in a temporary directory.
  *
- * Exits non-zero on any finding.
+ * Exits 0 with no finding, 1 on a finding, and 2 on a usage error or a
+ * declaration file that does not read.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -76,11 +82,13 @@
 
 /* ---- growable string list, the findings accumulator ---- */
 
+/* A list of strings; whether it owns them is up to the caller. */
 struct list {
     char **items;
     int n, cap;
 };
 
+/** Allocate `n` bytes, one for a size of 0; exit 2 when memory runs out. */
 static void *xmalloc(size_t n)
 {
     void *p = malloc(n ? n : 1);
@@ -92,6 +100,7 @@ static void *xmalloc(size_t n)
     return p;
 }
 
+/** A copy of `s` from `xmalloc`, which the caller frees. */
 static char *xstrdup(const char *s)
 {
     char *p = xmalloc(strlen(s) + 1);
@@ -128,6 +137,7 @@ static int appendf(char *out, size_t out_len, size_t *used, const char *fmt, ...
     return 1;
 }
 
+/** Append `item` to `l`, growing it as needed; exit 2 when memory runs out. */
 static void list_push(struct list *l, char *item)
 {
     if (l->n == l->cap) {
@@ -139,6 +149,7 @@ static void list_push(struct list *l, char *item)
     l->items[l->n++] = item;
 }
 
+/** Append a finding formatted from `fmt`, cut at 1023 bytes, to `l`. */
 static void addf(struct list *l, const char *fmt, ...)
 {
     va_list ap;
@@ -150,19 +161,23 @@ static void addf(struct list *l, const char *fmt, ...)
     list_push(l, xstrdup(buf));
 }
 
+/** The `qsort` comparison of two `char *` items. */
 static int cmp_str(const void *a, const void *b)
 {
     return strcmp(*(char *const *)a, *(char *const *)b);
 }
 
-/* Sorts a list's items; an empty list has no array to hand to qsort,
-   whose first argument the C library declares never null. */
+/**
+ * Sort a list's items. An empty list has no array to give `qsort`, whose
+ * first argument the C library declares never null.
+ */
 static void list_sort(struct list *l)
 {
     if (l->n > 0)
         qsort(l->items, (size_t)l->n, sizeof(char *), cmp_str);
 }
 
+/** Free every item of `l` and its array, and leave it empty. */
 static void list_free(struct list *l)
 {
     int i;
@@ -174,6 +189,7 @@ static void list_free(struct list *l)
     l->n = l->cap = 0;
 }
 
+/** Whether `l` has an item equal to `s`. */
 static int list_has(const struct list *l, const char *s)
 {
     int i;
@@ -186,6 +202,7 @@ static int list_has(const struct list *l, const char *s)
 
 /* ---- little parsers shared by the manifest and allow readers ---- */
 
+/** The part of `path` after its last slash, a pointer into `path`. */
 static const char *base_name(const char *path)
 {
     const char *slash = strrchr(path, '/');
@@ -193,12 +210,18 @@ static const char *base_name(const char *path)
     return slash ? slash + 1 : path;
 }
 
-/* The host path a manifest's `path` is read from: the first FROM=TO pair of
-   RACH2_PATH_MAP whose FROM begins it has its FROM replaced by TO, as the
-   stager reads it (krffs/stageimage.krffs.c, host_path). An x86-64 build maps
-   build/... to build/x86_64/..., so the manifest and the allowlist name one
-   path for either architecture while the files read are the architecture's.
-   The result is in a rotating buffer. */
+/**
+ * The host path a manifest's `path` is read from: the first FROM=TO pair of
+ * RACH2_PATH_MAP whose FROM begins it has its FROM replaced by TO, as the
+ * stager reads it (krffs/stageimage.krffs.c, host_path). An x86-64 build
+ * maps build/... to build/x86_64/..., so the manifest and the allowlist name
+ * one path for either architecture while the files read are the
+ * architecture's.
+ *
+ * The result is `path` itself or one of four static buffers used in turn,
+ * so it stays valid for three more calls. A mapped path longer than 1023
+ * bytes exits 2.
+ */
 static const char *host_path(const char *path)
 {
     static char buf[4][1024];
@@ -237,8 +260,10 @@ static const char *host_path(const char *path)
     return path;
 }
 
-/* The allowlist key a manifest path names, `krffs/manifests/x.manifest`
-   being `x`. The result is a fresh string. */
+/**
+ * The allowlist key a manifest path names, `krffs/manifests/x.manifest`
+ * being `x`. The caller frees the result.
+ */
 static char *manifest_stem(const char *path)
 {
     const char *name = base_name(path);
@@ -253,8 +278,10 @@ static char *manifest_stem(const char *path)
     return stem;
 }
 
-/* The manifest's mode spelling, `0mmmm:uid:gid`, in a rotating buffer so
-   two spellings can sit in one message. */
+/**
+ * The manifest's form of a mode and owner, `0mmmm:uid:gid`, in one of four
+ * static buffers used in turn, so that one message can have up to four.
+ */
 static const char *fmt_entry(unsigned long mode, unsigned long uid, unsigned long gid)
 {
     static char bufs[4][64];
@@ -265,10 +292,13 @@ static const char *fmt_entry(unsigned long mode, unsigned long uid, unsigned lon
     return bufs[which];
 }
 
-/* The (mode, uid, gid) of a manifest mode field. This is `parse_mode`
-   (krffs/stageimage.krffs.c) with its exact verdicts: the mode is octal
-   and at most 07777, the tail after it is either empty or an owner
-   introduced by ':', and an owner is two complete decimal fields. */
+/**
+ * Parse a manifest mode field into `*mode`, `*uid` and `*gid`. This accepts
+ * exactly what `parse_mode` (krffs/stageimage.krffs.c) accepts: the mode is
+ * octal and at most 07777, the tail after it is either empty or an owner
+ * introduced by ':', and an owner is two complete decimal fields, each at
+ * most 2^32 - 1. Return 1, or 0 when the field is malformed.
+ */
 static int parse_mode(const char *token, unsigned long *mode, unsigned long *uid,
                       unsigned long *gid)
 {
@@ -301,8 +331,10 @@ static int parse_mode(const char *token, unsigned long *mode, unsigned long *uid
     return 1;
 }
 
-/* Split a line into fields the way strtok_r(" \t") does. The line is
-   modified in place; returns the field count, capped by `max`. */
+/**
+ * Split `line` into fields the way strtok_r(" \t") does, writing a NUL after
+ * each field in place. Return the field count, at most `max`.
+ */
 static int tokenize(char *line, char **fields, int max)
 {
     int n = 0;
@@ -322,7 +354,11 @@ static int tokenize(char *line, char **fields, int max)
     return n;
 }
 
-/* Read a whole file. Returns NULL on failure. */
+/**
+ * Read the whole file `path` into a buffer from `xmalloc` with a NUL after
+ * its bytes, and set `*out_len` to its length. The caller frees the buffer.
+ * Return NULL when the file does not open or read.
+ */
 static unsigned char *read_file(const char *path, size_t *out_len)
 {
     FILE *f = fopen(path, "rb");
@@ -358,7 +394,7 @@ struct setid_decl {
 struct trusted_decl {
     char *path;
     unsigned long mode, uid, gid;
-    char *verb;  /* "file", "optional-file" or "text" */
+    char *verb;  /* "file", "optional-file", "overlay" or "text" */
     char *value; /* the host path, or the pre-unescape payload */
 };
 
@@ -383,9 +419,10 @@ struct allow {
     struct list suid_on, suid_off;
     struct list init_strict, init_shellful, shell_strings;
     struct list sysroot_paths;    /* in declaration order */
-    struct list sysroot_programs; /* subset markers */
+    struct list sysroot_programs; /* the sysroot paths that are programs */
 };
 
+/** The entry of `a` for `stem`, or NULL. */
 static struct entry *find_entry(struct allow *a, const char *stem)
 {
     int i;
@@ -396,6 +433,10 @@ static struct entry *find_entry(struct allow *a, const char *stem)
     return NULL;
 }
 
+/**
+ * Append an empty entry for `stem` to `a` and return it. The pointer is
+ * valid until the next call, which may move the array.
+ */
 static struct entry *add_entry(struct allow *a, const char *stem)
 {
     a->entries = realloc(a->entries, (size_t)(a->n + 1) * sizeof(struct entry));
@@ -406,6 +447,7 @@ static struct entry *add_entry(struct allow *a, const char *stem)
     return &a->entries[a->n++];
 }
 
+/** Append a set-id declaration to `e`, copying the strings. */
 static void entry_add_setid(struct entry *e, const char *path, unsigned long mode,
                             unsigned long uid, unsigned long gid, const char *source)
 {
@@ -420,7 +462,11 @@ static void entry_add_setid(struct entry *e, const char *path, unsigned long mod
     e->n_setid++;
 }
 
-/* Add or replace: a `copy` entry may re-declare a trusted path. */
+/**
+ * Add a trusted declaration to `e`, or replace the one for the same path,
+ * since a `copy` entry may declare a trusted path again. The strings are
+ * copied.
+ */
 static void entry_add_trusted(struct entry *e, const char *path, unsigned long mode,
                               unsigned long uid, unsigned long gid, const char *verb,
                               const char *value)
@@ -447,6 +493,7 @@ static void entry_add_trusted(struct entry *e, const char *path, unsigned long m
     e->trusted[i].value = xstrdup(value);
 }
 
+/** Add every declaration of `src` to `dst`, as a `copy` line does. */
 static void entry_copy(struct entry *dst, const struct entry *src)
 {
     int i;
@@ -467,8 +514,11 @@ static void entry_copy(struct entry *dst, const struct entry *src)
     dst->sysroot = src->sysroot;
 }
 
-/* Refuse a malformed declaration file loudly: the guard's own input is a
-   trust boundary, and a line it skipped is a rule nobody enforces. */
+/**
+ * Print `why` against line `lineno` of the declaration file and exit 2. A
+ * malformed line ends the run instead of being skipped, since a skipped
+ * line is a declaration nothing checks.
+ */
 static void allow_fail(const char *path, int lineno, const char *why) __attribute__((noreturn));
 
 static void allow_fail(const char *path, int lineno, const char *why)
@@ -477,6 +527,22 @@ static void allow_fail(const char *path, int lineno, const char *why)
     exit(2);
 }
 
+/**
+ * Read the declaration file at `path`, as its own opening comment describes
+ * it, into a new `struct allow`, which `allow_free` releases. A file that
+ * does not read, and a line that is malformed, unknown or outside an entry,
+ * exit 2. The applet sentinel is `cat` when the file names none.
+ *
+ * A `trusted text` payload has spaces, so the payload is taken from the raw
+ * line after the guest path, as a manifest's `text` payload is.
+ *
+ * `trusted optional-file` declares the one file an image may be built
+ * without: the key that decides whether a recovery system answers the
+ * network. A build that has one stages it and it is checked like any other
+ * trusted file; a build that has none stages nothing, and the image then
+ * has no SSH server anyone can reach. Every other declaration must be
+ * staged.
+ */
 static struct allow *read_allow(const char *path)
 {
     struct allow *a = xmalloc(sizeof(*a));
@@ -505,9 +571,6 @@ static struct allow *read_allow(const char *path)
         line[end - pos] = '\0';
         pos = end + 1;
 
-        /* A `trusted text` payload holds spaces, so the tail after the
-           guest path is taken from the raw line, the way a manifest's
-           `text` payload is. */
         if (strncmp(line, "trusted text ", 13) == 0) {
             char head[LINE_BUFFER];
             char *hfields[4];
@@ -557,12 +620,6 @@ static struct allow *read_allow(const char *path)
 
             if (cur == NULL)
                 allow_fail(path, lineno, "no manifest entry is open");
-            /* `optional-file` is the one an image may be built without: the
-               key that decides whether a recovery system answers the network.
-               A build that has one stages it and it is checked like any other
-               trusted file; a build that has none stages nothing, and that is
-               the difference between an image somebody can reach and one
-               nobody can. Every other declaration must be staged. */
             if (n != 5 || !parse_mode(fields[2], &mode, &uid, &gid) ||
                 (strcmp(fields[1], "file") != 0 && strcmp(fields[1], "optional-file") != 0 &&
                  strcmp(fields[1], "overlay") != 0))
@@ -641,6 +698,7 @@ static const char *const VERBS[] = {"dir", "text", "file", "optional-file", "exe
 static const char *const FILE_VERBS[] = {"file", "optional-file", "text"};
 static const char *const HOST_VERBS[] = {"file", "optional-file", "exec-dir", "tree"};
 
+/** Whether `verb` is one of the `n` verbs of `set`. */
 static int verb_in(const char *verb, const char *const set[], int n)
 {
     int i;
@@ -655,6 +713,7 @@ static int verb_in(const char *verb, const char *const set[], int n)
 #define IS_HOST_VERB(v) verb_in((v), HOST_VERBS, 4)
 #define IS_VERB(v)      verb_in((v), VERBS, 6)
 
+/** The fields a directive with `verb` needs: 3 for `dir` and `text`, else 4. */
 static int verb_arity(const char *verb)
 {
     if (strcmp(verb, "dir") == 0 || strcmp(verb, "text") == 0)
@@ -662,6 +721,7 @@ static int verb_arity(const char *verb)
     return 4;
 }
 
+/** Free every directive of `m` and leave it empty. */
 static void manifest_free(struct manifest *m)
 {
     int i;
@@ -676,11 +736,24 @@ static void manifest_free(struct manifest *m)
     m->n = 0;
 }
 
-/* Parse a manifest into directives and the lines stageimage would refuse.
-   The file is read as bytes and only '\n' ends a line, exactly as fgets
-   reads it: a bare carriage return does not, which matters because
-   `file 04755:0:0 /bin/su<CR>#x host` stages `/bin/su<CR>#x` and a
-   universal-newline reader would see a declared path and a comment. */
+/**
+ * Parse the manifest at `path` into `m`, which `manifest_free` releases, and
+ * add to `problems` a finding for each line stageimage would fail on or this
+ * check cannot read: a line too long, a NUL or non-ASCII byte, an unknown
+ * verb, a missing operand or a malformed mode. Return 0, or -1 after a
+ * finding when the file does not read.
+ *
+ * The file is read as bytes and only '\n' ends a line, exactly as fgets
+ * reads it: a bare carriage return does not, which matters because
+ * `file 04755:0:0 /bin/su<CR>#x host` stages `/bin/su<CR>#x` and a
+ * universal-newline reader would see a declared path and a comment. fgets
+ * stores at most LINE_BUFFER - 1 bytes, and stageimage fails on a line that
+ * fills the buffer without a newline. Trailing '\r' and '\n' are removed,
+ * and a NUL byte inside a line is found by comparing its length with
+ * `strlen`. A `text` payload is the rest of the line after the first
+ * occurrence of the path token, less the spaces and tabs in front of it,
+ * byte for byte before the escapes are expanded.
+ */
 static int parse_manifest(const char *path, struct manifest *m, struct list *problems)
 {
     size_t len, pos = 0;
@@ -709,8 +782,6 @@ static int parse_manifest(const char *path, struct manifest *m, struct list *pro
         rawlen = end - pos + (end < len ? 1 : 0); /* the '\n' included */
         lineno++;
 
-        /* fgets stores at most LINE_BUFFER-1 bytes and stageimage refuses
-           a line that filled the buffer without a newline. */
         stored = rawlen < LINE_BUFFER - 1 ? rawlen : LINE_BUFFER - 1;
         if (stored == LINE_BUFFER - 1 &&
             !(stored == rawlen && end < len && text[pos + stored - 1] == '\n')) {
@@ -724,8 +795,6 @@ static int parse_manifest(const char *path, struct manifest *m, struct list *pro
         memcpy(line, text + pos, stored);
         line[stored] = '\0';
         pos = end + 1;
-        /* rstrip of '\r' and '\n'. A NUL byte inside the line survives in
-           `stored` bytes; the length is tracked apart from strlen. */
         while (stored > 0 && (line[stored - 1] == '\n' || line[stored - 1] == '\r'))
             line[--stored] = '\0';
 
@@ -780,9 +849,6 @@ static int parse_manifest(const char *path, struct manifest *m, struct list *pro
         if (IS_HOST_VERB(verb)) {
             source = xstrdup(fields[3]);
         } else if (strcmp(verb, "text") == 0) {
-            /* The payload: the rest of the line after the first occurrence
-               of the path token, less the spaces and tabs in front of it,
-               byte for byte before the escapes are expanded. */
             const char *at = strstr(line, fields[2]);
 
             if (at != NULL) {
@@ -812,9 +878,14 @@ static int parse_manifest(const char *path, struct manifest *m, struct list *pro
 
 /* ---- the sweep's rules ---- */
 
-/* Check which init a manifest stages; see the allow file's `init` lines.
-   The kernel execs /sbin/init as root before anything else runs, so it is
-   the same trust boundary a set-id program is. */
+/**
+ * Check the /sbin/init manifest `m` stages against `want`, the init its
+ * entry declares, or NULL when it declares none. A declared init must be
+ * staged with `file` from build/utils/sbin/WANT at 0755:0:0, and with none
+ * declared no file directive may stage /sbin/init. The kernel execs
+ * /sbin/init as root before anything else runs, so it is checked as a
+ * set-id program is. Findings name the manifest `name`.
+ */
 static void check_init_line(const char *name, const struct manifest *m, const char *want,
                             struct list *problems)
 {
@@ -865,11 +936,13 @@ static void check_init_line(const char *name, const struct manifest *m, const ch
              name, want);
 }
 
-/* Every path an allowlist entry says root runs or trusts, sorted setid
-   first, then sorted trusted, then /sbin/init when one is declared; the
-   trusted `overlay` paths only with `overlays`, since a manifest does not
-   stage them or their directories. The result is a list of borrowed
-   pointers. */
+/**
+ * Append to `out` every path entry `e` says root runs or trusts: the set-id
+ * paths sorted, then the trusted paths sorted, then /sbin/init when an init
+ * is declared. The trusted `overlay` paths are included only with
+ * `overlays`, since a manifest does not stage them or their directories.
+ * The items are borrowed from `e`.
+ */
 static void declared_paths(const struct entry *e, int overlays, struct list *out)
 {
     struct list tmp = {NULL, 0, 0};
@@ -892,14 +965,20 @@ static void declared_paths(const struct entry *e, int overlays, struct list *out
         list_push(out, (char *)"/sbin/init");
 }
 
-/* Check the directories above every declared path, the `overlay` ones
-   with `overlays`: each must be staged, owned by root, and writable by
-   nobody else, because `unlink` and `rename` are decided on the parent
-   directory's write permission. `look` answers a directory path with its
-   mode and owner, or nonzero for "not staged". */
+/**
+ * The lookup of `check_ancestors`: set the mode and owner of the directory
+ * at `path` and return 0, or return nonzero when it is not staged.
+ */
 typedef int (*dir_look)(void *ctx, const char *path, unsigned long *mode, unsigned long *uid,
                         unsigned long *gid);
 
+/**
+ * Check the directories above every declared path of `e`, the `overlay`
+ * ones with `overlays`, through `look`: each must be staged, owned by user
+ * and group 0, and writable by neither group nor others, because `unlink`
+ * and `rename` are decided on the parent directory's write permission.
+ * Findings name `where`.
+ */
 static void check_ancestors(const char *where, const struct entry *e, int overlays, dir_look look,
                             void *ctx, struct list *problems)
 {
@@ -955,11 +1034,13 @@ struct staged {
     const char *verb; /* first verb for the path, or NULL for tree-pinned */
 };
 
+/* The paths a manifest stages, each once. */
 struct staged_map {
     struct staged *s;
     int n;
 };
 
+/** The record of `guest` in `map`, or NULL. */
 static struct staged *staged_find(struct staged_map *map, const char *guest)
 {
     int i;
@@ -970,6 +1051,10 @@ static struct staged *staged_find(struct staged_map *map, const char *guest)
     return NULL;
 }
 
+/**
+ * Append a record for `guest` to `map` and return it, valid until the next
+ * call. `guest` and `source` are copied; `verb` is borrowed.
+ */
 static struct staged *staged_add(struct staged_map *map, const char *guest, int lineno,
                                  unsigned long mode, unsigned long uid, unsigned long gid,
                                  const char *source, const char *verb)
@@ -987,6 +1072,7 @@ static struct staged *staged_add(struct staged_map *map, const char *guest, int 
     return &map->s[map->n++];
 }
 
+/** Free every record of `map` and leave it empty. */
 static void staged_free(struct staged_map *map)
 {
     int i;
@@ -1000,6 +1086,7 @@ static void staged_free(struct staged_map *map)
     map->n = 0;
 }
 
+/** The set-id declaration of `e` for `path`, or NULL. */
 static const struct setid_decl *setid_find(const struct entry *e, const char *path)
 {
     int i;
@@ -1010,18 +1097,22 @@ static const struct setid_decl *setid_find(const struct entry *e, const char *pa
     return NULL;
 }
 
+/* The context of `manifest_dir_look`. */
 struct manifest_dirs {
     const struct manifest *m;
 };
 
+/**
+ * The `dir_look` of a manifest: the mode and owner of the last `dir` line
+ * for `path`, since `stage_dir` applies the mode again to a directory it
+ * finds staged, or 1 when no `dir` line stages it.
+ */
 static int manifest_dir_look(void *ctx, const char *path, unsigned long *mode, unsigned long *uid,
                              unsigned long *gid)
 {
     const struct manifest *m = ((struct manifest_dirs *)ctx)->m;
     int i, found = 1;
 
-    /* The LAST `dir` for a path decides, the way `stage_dir` re-applies
-       the mode to the node it finds. */
     for (i = 0; i < m->n; i++) {
         if (strcmp(m->d[i].verb, "dir") == 0 && strcmp(m->d[i].guest, path) == 0) {
             *mode = m->d[i].mode & PERMBITS;
@@ -1033,7 +1124,7 @@ static int manifest_dir_look(void *ctx, const char *path, unsigned long *mode, u
     return found;
 }
 
-/* The first verb a manifest uses for a guest path, or NULL. */
+/** The first verb a manifest uses for a guest path, or NULL. */
 static const char *first_verb(const struct manifest *m, const char *guest)
 {
     int i;
@@ -1090,7 +1181,18 @@ static void stage_tree_pins(const struct manifest *m, const struct entry *e,
     }
 }
 
-/* Check one manifest against the allowlist. */
+/**
+ * Check the manifest at `path` against its entry in `allow`, adding a
+ * finding to `problems` for each fault: no entry for it, a line stageimage
+ * would fail on, a path staged twice, a set-id directive the entry does not
+ * declare as it is, a declared set-id path not staged or staged without its
+ * privilege, an unsafe directory above a declared path, and a trusted file
+ * missing, set-id or not as declared.
+ *
+ * A trusted path under a `tree` directive has no directive of its own: the
+ * walk copies it from the host file, which is what a `file` declaration
+ * means, so its verb is not compared.
+ */
 static void check_manifest(const char *path, const struct allow *allow, struct list *problems)
 {
     const char *name = base_name(path);
@@ -1249,9 +1351,6 @@ static void check_manifest(const char *path, const struct allow *allow, struct l
                  "somebody is, are trust boundaries too",
                  name, s->lineno, t->path, fmt_entry(t->mode, t->uid, t->gid),
                  fmt_entry(s->mode, s->uid, s->gid));
-        /* A pinned path under a `tree` directive has no directive of its
-           own: the walk copies it from the host file, which is what a
-           'file' declaration means. */
         else if (staged_verb != NULL && strcmp(staged_verb, t->verb) != 0)
             addf(problems,
                  "%s:%d: %s is staged with '%s' and the "
@@ -1280,7 +1379,11 @@ static void check_manifest(const char *path, const struct allow *allow, struct l
     free(stem);
 }
 
-/* Check the allowlist itself: every entry has something to find. */
+/**
+ * Check the allowlist itself: every entry has a set-id path or a sentinel
+ * for the image inventory to find, and every set-id declaration has a
+ * set-id bit.
+ */
 static void validate_table(const struct allow *allow, struct list *problems)
 {
     struct list stems = {NULL, 0, 0};
@@ -1317,27 +1420,32 @@ static void validate_table(const struct allow *allow, struct list *problems)
 
 /* ---- the image inventory: fsck.krffs's walk, and the checks over it ---- */
 
+/* One node of a KRFFS region, or one node an ext2 walk reached. */
 struct node {
     unsigned magic;
     unsigned type;
+    /* The KRFFS node id, or the ext2 inode number. */
     uint64_t id;
     char name[NODE_NAME_LEN + 1];
     unsigned long mode, uid, gid;
     uint64_t size, previous_node_size, data_size, parent_id;
+    /* The KRFFS node's byte offset in the region. */
     size_t offset;
     char *path;          /* filled by node_paths for reserved nodes */
     unsigned char *data; /* an ext2 file's bytes, read from its blocks */
     size_t data_len;
 };
 
+/* An image read into a table of nodes; `err` has the last failure. */
 struct image {
-    unsigned char *region;
+    unsigned char *region; /* the KRFFS region, NULL for ext2 */
     size_t size;
     struct node *nodes;
     int n_nodes;
     char err[512];
 };
 
+/** The little-endian 64-bit value at `p`. */
 static uint64_t rd64(const unsigned char *p)
 {
     uint64_t v = 0;
@@ -1347,16 +1455,19 @@ static uint64_t rd64(const unsigned char *p)
         v = v << 8 | p[i];
     return v;
 }
+/** The little-endian 32-bit value at `p`. */
 static unsigned long rd32(const unsigned char *p)
 {
     return (unsigned long)p[0] | (unsigned long)p[1] << 8 | (unsigned long)p[2] << 16 |
            (unsigned long)p[3] << 24;
 }
+/** The little-endian 16-bit value at `p`. */
 static unsigned rd16(const unsigned char *p)
 {
     return p[0] | p[1] << 8;
 }
 
+/** Format a failure into `im->err` and return -1. */
 static int img_fail(struct image *im, const char *fmt, ...)
 {
     va_list ap;
@@ -1367,9 +1478,13 @@ static int img_fail(struct image *im, const char *fmt, ...)
     return -1;
 }
 
-/* Decode one on-disk node. The name is decoded strictly: a node name is a
-   guest path component, and a lossy reading would fold two distinct names
-   onto one path, which is how a set-id node hides behind a sibling. */
+/**
+ * Decode the node at byte `offset` of the region into `*n`. Return 0, or -1
+ * with `im->err` set when its name is not ASCII or a reserved node's name is
+ * not one path component. The name is decoded strictly: a node name is a
+ * guest path component, and a lossy reading would fold two distinct names
+ * onto one path, where a set-id node could go unseen behind a sibling.
+ */
 static int unpack_node(struct image *im, size_t offset, struct node *n)
 {
     memset(n, 0, sizeof(*n));
@@ -1408,10 +1523,13 @@ static int unpack_node(struct image *im, size_t offset, struct node *n)
     return 0;
 }
 
-/* Walk the node chain from the root: each node advances by its own size,
-   wrapping once at the region end, capped at the most nodes the region
-   could hold. The ring must close on the size the root records, because
-   the walk alone cannot tell a whole file system from a prefix of one. */
+/**
+ * Walk the node chain of the region from the root into `im->nodes`: each
+ * node advances by its own size, wrapping once at the region end, capped at
+ * the most nodes the region could hold. The ring must close on the size the
+ * root records, because the walk alone cannot tell a whole file system from
+ * a prefix of one. Return 0, or -1 with `im->err` set.
+ */
 static int walk_nodes(struct image *im)
 {
     size_t position = 0, previous = 0;
@@ -1495,11 +1613,14 @@ static int walk_nodes(struct image *im)
     return 0;
 }
 
-/* Rebuild the absolute path of every reserved node from `parent_id`. The
-   root's id is 0 as a parent and `krffs_mix_id` never returns 0, so a
-   chain terminates only at the root; anything else is an error, not a
-   skipped node, since a node the inventory cannot name is a node it
-   cannot clear. */
+/**
+ * Rebuild the absolute path of every reserved node from `parent_id`. The
+ * root's id is 0 as a parent and `krffs_mix_id` never returns 0, so a chain
+ * ends only at the root. Two reserved nodes with one id or one path, a
+ * cycle and a missing parent are errors, not skipped nodes, since a node
+ * the inventory cannot name is a node it cannot check. Return 0, or -1 with
+ * `im->err` set.
+ */
 static int node_paths(struct image *im)
 {
     int i, j;
@@ -1568,11 +1689,12 @@ static int node_paths(struct image *im)
     return 0;
 }
 
-/* Read the `size` bytes at `offset` of `path`, checking the bounds. A
-   size of 0 means the rest of the file. */
-/* A number given on the command line, parsed strictly: a mistyped offset
-   that reads as 0 would inventory a different region and report on that
-   one. */
+/**
+ * Parse a number given on the command line, in any base `strtol` takes, into
+ * `*out`; return 0, or -1 when `s` is not wholly a number in range. A
+ * mistyped offset that read as 0 would inventory a different region and
+ * report on that one.
+ */
 static int parse_num(const char *s, long *out)
 {
     char *end;
@@ -1586,6 +1708,11 @@ static int parse_num(const char *s, long *out)
     return 0;
 }
 
+/**
+ * Read the `size` bytes at byte `offset` of `path` into `im->region`,
+ * checking the bounds; a size of 0 means the rest of the file. Return 0, or
+ * -1 with `im->err` set.
+ */
 static int read_region(struct image *im, const char *path, long offset, long size)
 {
     struct stat st;
@@ -1619,6 +1746,7 @@ static int read_region(struct image *im, const char *path, long offset, long siz
     return 0;
 }
 
+/** Free the region and the nodes with their paths and data; zero `im`. */
 static void image_free(struct image *im)
 {
     int i;
@@ -1632,8 +1760,11 @@ static void image_free(struct image *im)
     memset(im, 0, sizeof(*im));
 }
 
-/* A node's bytes: an ext2 node's own copy, a KRFFS node's place in the
-   region. */
+/**
+ * A node's bytes and their count in `*len`: an ext2 node's own copy, or a
+ * KRFFS node's place in the region; NULL with a count of 0 when the data
+ * would run past the region.
+ */
 static const unsigned char *node_bytes(const struct image *im, const struct node *n, size_t *len)
 {
     if (n->data != NULL) {
@@ -1648,6 +1779,7 @@ static const unsigned char *node_bytes(const struct image *im, const struct node
     return im->region + n->offset + NODE_SIZE;
 }
 
+/** The node whose rebuilt path is `path`, or NULL. */
 static const struct node *path_find(const struct image *im, const char *path)
 {
     int i;
@@ -1658,6 +1790,7 @@ static const struct node *path_find(const struct image *im, const char *path)
     return NULL;
 }
 
+/** The `dir_look` of an image: a directory node at `path`, or 1 for none. */
 static int image_dir_look(void *ctx, const char *path, unsigned long *mode, unsigned long *uid,
                           unsigned long *gid)
 {
@@ -1671,9 +1804,12 @@ static int image_dir_look(void *ctx, const char *path, unsigned long *mode, unsi
     return 0;
 }
 
-/* Expand a declared text payload the way `unescape_text` does: a
-   backslash before n, t or a backslash is that character, and a backslash
-   before anything else stays as written. Returns a fresh buffer. */
+/**
+ * Expand a declared text payload the way `unescape_text`
+ * (krffs/stageimage.krffs.c) does: a backslash before n, t or a backslash is
+ * that character, and a backslash before anything else stays as written.
+ * The result, of `*out_len` bytes, is from `xmalloc`; the caller frees it.
+ */
 static unsigned char *unescape(const char *want, size_t *out_len)
 {
     unsigned char *out = xmalloc(strlen(want) + 1);
@@ -1701,8 +1837,11 @@ static unsigned char *unescape(const char *want, size_t *out_len)
     return out;
 }
 
-/* Does the staged node at `path` hold exactly the pinned payload?
-   Returns -1 when the path is absent, 0 for a mismatch, 1 for a match. */
+/**
+ * Whether the node at `path` has exactly the bytes of the declared payload
+ * `want` once its escapes are expanded: -1 when the path is absent, 0 for a
+ * mismatch, 1 for a match.
+ */
 static int trusted_text_matches(const struct image *im, const char *path, const char *want)
 {
     const struct node *n = path_find(im, path);
@@ -1727,16 +1866,15 @@ static int trusted_text_matches(const struct image *im, const char *path, const 
 
    A small read-only reader of its own, sharing nothing with the kernel's
    driver, for the one profile tools/image/mkext2.sh writes: revision 1,
-   4 KiB blocks, 128-byte inodes, and the features filetype, sparse_super
-   and large_file with no other. It fails closed: any other feature, any
-   block outside the volume or inside its structural blocks, any malformed
+   4 KiB blocks, 128-byte inodes, and the features resize_inode, filetype,
+   sparse_super and large_file with no other. Any other feature, any block
+   outside the volume or inside its structural blocks, any malformed
    directory entry, any inode it cannot place and a file larger than
-   `EXT2_FILE_MAX` refuses the image, so that an image this checker cannot
-   read is one the build rejects. It lists
-   every node reached from the root with its type, owner, group, mode and
-   set-id bits, follows every directory to its end, and lists a second name
-   for one inode as a node of its own, which is how a hard link to a set-id
-   file meets the policy as an undeclared set-id path. */
+   `EXT2_FILE_MAX` fail the image, so that the build stops on an image this
+   program cannot read. It lists every node reached from the root with its
+   type, owner, group, mode and set-id bits, follows every directory to its
+   end, and lists a second name for one inode as a node of its own, so that
+   a hard link to a set-id file is an undeclared set-id path. */
 
 #define EXT2_MAGIC     0xEF53u
 #define EXT2_BLOCK     4096u
@@ -1750,10 +1888,13 @@ static int trusted_text_matches(const struct image *im, const char *path, const 
    damaged inode may have wrong. */
 #define EXT2_FILE_MAX (512ul * 1024 * 1024)
 
+/* An open ext2 volume and the reader's maps of it. */
 struct ext2 {
     FILE *f;
+    /* The volume's byte offset in the file, and its length in bytes. */
     long base;
     uint64_t size;
+    /* Blocks, inodes, blocks per group, inodes per group, groups. */
     unsigned long blocks, inodes, bpg, ipg, groups;
     unsigned long reserved_gdt; /* blocks kept after each descriptor table */
     unsigned char *gd;          /* the group descriptors, 32 bytes each */
@@ -1763,6 +1904,7 @@ struct ext2 {
     char err[512];
 };
 
+/** Whether `g` is a power of `base`, 1 included; `g` must not be 0. */
 static int ext2_is_power(unsigned long g, unsigned long base)
 {
     while (g % base == 0)
@@ -1770,6 +1912,7 @@ static int ext2_is_power(unsigned long g, unsigned long base)
     return g == 1;
 }
 
+/** Format a failure into `fs->err` and return -1. */
 static int ext2_fail(struct ext2 *fs, const char *fmt, ...)
 {
     va_list ap;
@@ -1780,6 +1923,10 @@ static int ext2_fail(struct ext2 *fs, const char *fmt, ...)
     return -1;
 }
 
+/**
+ * Read the `len` bytes at byte `at` of the volume into `buf`. Return 0, or
+ * -1 with `fs->err` set when the read would leave the volume or is short.
+ */
 static int ext2_read(struct ext2 *fs, uint64_t at, void *buf, size_t len)
 {
     if (at + len > fs->size)
@@ -1792,7 +1939,11 @@ static int ext2_read(struct ext2 *fs, uint64_t at, void *buf, size_t len)
     return 0;
 }
 
-/* A block a pointer names: inside the volume and not one of the tables. */
+/**
+ * Read into `buf` the block `b` that a pointer of `what` names. The block
+ * must be inside the volume and not a structural one. Return 0, or -1 with
+ * `fs->err` set.
+ */
 static int ext2_data_block(struct ext2 *fs, unsigned long b, unsigned char *buf, const char *what)
 {
     if (b == 0 || b >= fs->blocks)
@@ -1808,6 +1959,18 @@ static int ext2_data_block(struct ext2 *fs, unsigned long b, unsigned char *buf,
     return ext2_read(fs, (uint64_t)b * EXT2_BLOCK, buf, EXT2_BLOCK);
 }
 
+/**
+ * Open the ext2 volume of `size` bytes at byte `offset` of `path`, a size of
+ * 0 meaning the rest of the file, and check its superblock against the
+ * profile. Return 0, or -1 with `fs->err` set; `ext2_close` releases `fs`
+ * either way.
+ *
+ * Every block that is not data is marked structural: the superblock and
+ * the descriptors, in group 0 and in every backup sparse_super keeps
+ * (groups 0, 1 and the powers of 3, 5 and 7, each a power of one base
+ * alone), the blocks kept after the descriptors for a grow, which the
+ * resize inode owns, and each group's two bitmaps and inode table.
+ */
 static int ext2_open(struct ext2 *fs, const char *path, long offset, long size)
 {
     unsigned char sb[1024];
@@ -1891,9 +2054,7 @@ static int ext2_open(struct ext2 *fs, const char *path, long offset, long size)
     memset(fs->seen_dir, 0, fs->inodes + 1);
     fs->seen_file = xmalloc(fs->inodes + 1);
     memset(fs->seen_file, 0, fs->inodes + 1);
-    /* The superblock and the descriptors, in group 0 and in every backup
-       sparse_super keeps (groups 0, 1 and the powers of 3, 5 and 7), and
-       each group's two bitmaps and inode table. */
+    /* With 4 KiB blocks the superblock is in block 0, the descriptors in 1. */
     fs->structural[0] = 1;
     fs->structural[1] = 1;
     for (g = 0; g < fs->groups; g++) {
@@ -1911,14 +2072,10 @@ static int ext2_open(struct ext2 *fs, const char *path, long offset, long size)
         fs->structural[ib] = 1;
         for (i = 0; i < it_blocks; i++)
             fs->structural[it + i] = 1;
-        /* sparse_super: groups 0 and 1 and the powers of 3, 5 and 7, each
-         * a power of one base alone, keep a superblock copy. */
         if (g <= 1 || ext2_is_power(g, 3) || ext2_is_power(g, 5) || ext2_is_power(g, 7)) {
             unsigned long first = g * fs->bpg;
             unsigned long gd_blocks = (fs->groups * 32 + EXT2_BLOCK - 1) / EXT2_BLOCK;
 
-            /* The superblock copy, the descriptors and the blocks kept
-             * after them for a grow, which the resize inode owns. */
             for (i = 0; i <= gd_blocks + fs->reserved_gdt && first + i < fs->blocks; i++)
                 fs->structural[first + i] = 1;
         }
@@ -1926,6 +2083,7 @@ static int ext2_open(struct ext2 *fs, const char *path, long offset, long size)
     return 0;
 }
 
+/** Close the file and free the maps of `fs`, which may have failed to open. */
 static void ext2_close(struct ext2 *fs)
 {
     if (fs->f != NULL)
@@ -1939,7 +2097,10 @@ static void ext2_close(struct ext2 *fs)
     fs->structural = fs->seen_dir = fs->seen_file = NULL;
 }
 
-/* The 128 bytes of inode `ino`, placed through its group's table. */
+/**
+ * Read the 128 bytes of inode `ino` into `out`, placed through its group's
+ * table. Return 0, or -1 with `fs->err` set.
+ */
 static int ext2_inode(struct ext2 *fs, unsigned long ino, unsigned char *out)
 {
     unsigned long g, index, table;
@@ -1953,9 +2114,7 @@ static int ext2_inode(struct ext2 *fs, unsigned long ino, unsigned char *out)
                      EXT2_INODE);
 }
 
-/* Every block of an inode's data in order, through the three levels of
-   pointers, each handed to `take` with its index; a hole is handed as a
-   zero block. Stops at `count` blocks, the size's. */
+/* The state of one `ext2_walk_blocks`: `done` of `count` blocks handed. */
 struct ext2_blocks {
     struct ext2 *fs;
     unsigned long count, done;
@@ -1963,6 +2122,12 @@ struct ext2_blocks {
     void *ctx;
 };
 
+/**
+ * Hand to `w->take` the blocks under pointer `b`, a data block at `level` 0
+ * and an indirect one at levels 1 to 3, until `w->count` blocks are handed.
+ * A pointer of 0 is a hole of zero blocks. Return 0, or -1 when a block does
+ * not read or `take` fails.
+ */
 static int ext2_take_pointer(struct ext2_blocks *w, unsigned long b, int level, const char *what)
 {
     unsigned char buf[EXT2_BLOCK];
@@ -1996,6 +2161,13 @@ static int ext2_take_pointer(struct ext2_blocks *w, unsigned long b, int level, 
     return 0;
 }
 
+/**
+ * Hand every block of an inode's data in order to `take` with its index,
+ * through the twelve direct pointers and the three levels of indirect ones;
+ * a hole is handed as a block of zeros. The walk stops after `count`
+ * blocks, the number the inode's size covers. Return 0, or -1 when a block
+ * does not read or `take` fails.
+ */
 static int ext2_walk_blocks(struct ext2 *fs, const unsigned char *inode, unsigned long count,
                             const char *what,
                             int (*take)(void *, unsigned long, const unsigned char *), void *ctx)
@@ -2017,11 +2189,13 @@ static int ext2_walk_blocks(struct ext2 *fs, const unsigned char *inode, unsigne
     return 0;
 }
 
+/* Where `ext2_copy_block` puts a file: `len` bytes at `out`. */
 struct ext2_copy {
     unsigned char *out;
     uint64_t len;
 };
 
+/** Copy block `index` of a file into its buffer, the last one cut at `len`. */
 static int ext2_copy_block(void *ctx, unsigned long index, const unsigned char *block)
 {
     struct ext2_copy *c = ctx;
@@ -2032,6 +2206,10 @@ static int ext2_copy_block(void *ctx, unsigned long index, const unsigned char *
     return 0;
 }
 
+/**
+ * Append to `im` a reserved node for `path` whose id is inode `ino`. `im`
+ * takes ownership of `data`, the file's `len` bytes, or NULL.
+ */
 static void ext2_push(struct image *im, const char *path, unsigned long mode, unsigned long uid,
                       unsigned long gid, uint64_t size, unsigned long ino, unsigned char *data,
                       size_t len)
@@ -2055,6 +2233,7 @@ static void ext2_push(struct image *im, const char *path, unsigned long mode, un
     n->data_len = len;
 }
 
+/* The directory `ext2_dir_block` reads, and whether an entry failed. */
 struct ext2_dir {
     struct ext2 *fs;
     struct image *im;
@@ -2065,8 +2244,20 @@ struct ext2_dir {
 
 static int ext2_dir_block(void *ctx, unsigned long index, const unsigned char *block);
 
-/* One node reached at `path` through `ino`: recorded, and a directory
-   walked. */
+/**
+ * Record the node reached at `path` through inode `ino`, whose directory
+ * entry has type `ft`, and walk it when it is a directory; `parent` is the
+ * inode of the directory it was reached from. Return 0, or -1 with
+ * `fs->err` set.
+ *
+ * The entry's type must be the inode's: filetype is in the profile so that
+ * a reader may use it, and an entry whose type differs is malformed. A
+ * directory reached twice is an error. The root is a node here, unlike in
+ * KRFFS, whose root mode word has the dirty bit, so that the policy sees
+ * set-id bits on it. A regular file's bytes are read; a node of any other
+ * type, which the manifests never stage, is listed with no bytes so that
+ * the policy sees it.
+ */
 static int ext2_reach(struct ext2 *fs, struct image *im, const char *path, unsigned long ino,
                       unsigned long parent, unsigned ft)
 {
@@ -2085,8 +2276,6 @@ static int ext2_reach(struct ext2 *fs, struct image *im, const char *path, unsig
         return ext2_fail(fs, "%s: inode %lu has no links yet a name", path, ino);
     if (type == 0100000)
         size |= (uint64_t)rd32(inode + 108) << 32;
-    /* The entry's type must be the inode's: filetype is in the profile so
-       that a reader may trust it, and one that lies is malformed. */
     if ((type == 0040000 && ft != 2) || (type == 0100000 && ft != 1) ||
         (type == 0120000 && ft != 7) || (type == 0020000 && ft != 3) ||
         (type == 0060000 && ft != 4) || (type == 0010000 && ft != 5) ||
@@ -2106,8 +2295,6 @@ static int ext2_reach(struct ext2 *fs, struct image *im, const char *path, unsig
                              "%s: directory size %llu is not whole "
                              "blocks",
                              path, (unsigned long long)size);
-        /* The root is a node here, unlike KRFFS's, whose root mode word
-           carries the dirty bit: the policy must see set-id bits on it. */
         ext2_push(im, path, mode, uid, gid, size, ino, NULL, 0);
         d.fs = fs;
         d.im = im;
@@ -2140,12 +2327,16 @@ static int ext2_reach(struct ext2 *fs, struct image *im, const char *path, unsig
         ext2_push(im, path, mode, uid, gid, size, ino, c.out, (size_t)size);
         return 0;
     }
-    /* Anything else is a node the manifests never stage; it is listed so
-       that the policy sees it, with no bytes. */
     ext2_push(im, path, mode, uid, gid, size, ino, NULL, 0);
     return 0;
 }
 
+/**
+ * Read the entries of block `index` of the directory `ctx`, checking each,
+ * and reach every entry but `.` and `..`, which must name the directory and
+ * its parent. Return 0, or -1 with the context's `failed` and the reader's
+ * error set.
+ */
 static int ext2_dir_block(void *ctx, unsigned long index, const unsigned char *block)
 {
     struct ext2_dir *d = ctx;
@@ -2227,7 +2418,10 @@ static int ext2_dir_block(void *ctx, unsigned long index, const unsigned char *b
     return 0;
 }
 
-/* Read an ext2 image into the node table check_image judges. */
+/**
+ * Read the ext2 volume at `offset` of `path` into the node table
+ * `check_image` judges. Return 0, or -1 with `im->err` set.
+ */
 static int read_ext2(struct image *im, const char *path, long offset, long size)
 {
     struct ext2 fs;
@@ -2249,10 +2443,22 @@ static int read_ext2(struct image *im, const char *path, long offset, long size)
 static void sysroot_checks(const struct allow *allow, const struct image *im, const char *name,
                            struct list *problems);
 
-/* Inventory a staged image against the allowlist entry `manifest` names.
-   The root node is deliberately not inventoried: KRFFS_MODE_DIRTY is
-   0004000, the setuid bit's own place, and the root is the one node that
-   has it. Fills `summary` (empty on a walk failure). */
+/**
+ * Inventory the image `image` against the allowlist entry of the manifest
+ * `manifest`: an ext2 volume when `ext2` is set, else a KRFFS region of
+ * `size` bytes at `offset`. Each fault is a finding in `problems`: no entry,
+ * or one with nothing to find; an image that does not read; an init not as
+ * declared; a sysroot fault; a set-id node not declared, not as declared or
+ * not a regular file; a declared set-id node missing; an unsafe directory
+ * above a declared path; a trusted file missing, set-id or not as declared;
+ * and a sentinel missing or not as declared. `summary` gets a line of
+ * counts, and is empty when the check stops early.
+ *
+ * The KRFFS root node is not inventoried: KRFFS_MODE_DIRTY is 0004000, the
+ * setuid bit's own place, and the root is the one node that has it. A
+ * declared set-id entry is a program, so a set-id link or device under its
+ * name is a finding.
+ */
 static void check_image(const char *image, const char *manifest, long offset, long size, int ext2,
                         const struct allow *allow, struct list *problems, char *summary,
                         size_t summary_len)
@@ -2332,8 +2538,6 @@ static void check_image(const char *image, const char *manifest, long offset, lo
                  iname, sn->path, fmt_entry(mode, sn->uid, sn->gid), stem);
             continue;
         }
-        /* A declared entry is a program: a set-id link or device under
-           its name is not the file the declaration was about. */
         if ((sn->mode & 0170000u) != 0 && (sn->mode & 0170000u) != 0100000u) {
             addf(problems,
                  "%s: %s is staged set-id but is not a regular "
@@ -2383,7 +2587,7 @@ static void check_image(const char *image, const char *manifest, long offset, lo
         }
         tn = path_find(&im, t->path);
         if (tn == NULL && strcmp(t->verb, "optional-file") == 0) {
-            continue; /* a build that had no key to stage; see the parser */
+            continue; /* a build that had no key to stage; see read_allow */
         }
         if (tn == NULL)
             addf(problems,
@@ -2448,16 +2652,22 @@ static void check_image(const char *image, const char *manifest, long offset, lo
 struct hfile {
     char *path;               /* the guest path it answers to */
     unsigned long mode;       /* staged side only */
-    unsigned char *data;      /* host side reads bytes; staged points in */
-    const unsigned char *ref; /* staged side: bytes inside the region */
+    unsigned char *data;      /* bytes the set owns, or NULL */
+    const unsigned char *ref; /* the bytes compared, `len` of them */
     size_t len;
 };
 
+/* A set of headers, keyed by guest path. */
 struct hset {
     struct hfile *f;
     int n;
 };
 
+/**
+ * Append a header to `h`. `path` is copied, the set takes ownership of
+ * `data`, and `ref` is borrowed: on the host side it is `data`, and on the
+ * staged side it points into the image.
+ */
 static void hset_add(struct hset *h, const char *path, unsigned long mode, unsigned char *data,
                      const unsigned char *ref, size_t len)
 {
@@ -2472,6 +2682,7 @@ static void hset_add(struct hset *h, const char *path, unsigned long mode, unsig
     h->n++;
 }
 
+/** The header of `h` at `path`, or NULL. */
 static const struct hfile *hset_find(const struct hset *h, const char *path)
 {
     int i;
@@ -2482,6 +2693,7 @@ static const struct hfile *hset_find(const struct hset *h, const char *path)
     return NULL;
 }
 
+/** Free every header's path and data and the array of `h`; leave it empty. */
 static void hset_free(struct hset *h)
 {
     int i;
@@ -2495,11 +2707,13 @@ static void hset_free(struct hset *h)
     h->n = 0;
 }
 
-/* The host's header tree, keyed by the guest path each header will answer
-   to. Returns nonzero when the tree is absent. Anything the walk cannot
-   read is reported rather than passed over: a header left out of this set
-   is a header the staged tree is never compared against, which is the
-   comparison quietly proving less than it says. */
+/**
+ * Add every regular file under the host directory `root` to `out`, keyed by
+ * the path under `guest_root` it will have in the guest. Return 1 when
+ * `root` does not open, else 0. A symbolic link, and a file the walk cannot
+ * read, is a finding in `problems`, since a header left out of the set
+ * would never be compared with the staged tree.
+ */
 static int host_headers(const char *root, const char *guest_root, struct hset *out,
                         struct list *problems)
 {
@@ -2554,7 +2768,10 @@ static int host_headers(const char *root, const char *guest_root, struct hset *o
     return 0;
 }
 
-/* The image's header tree: files and directories under /include. */
+/**
+ * Add the image's files under /include to `files`, borrowing their bytes,
+ * and its directories there to `dirs`.
+ */
 static void staged_headers(const struct image *im, struct hset *files, struct hset *dirs)
 {
     size_t rootlen = strlen(SYSROOT_HEADER_ROOT);
@@ -2576,8 +2793,11 @@ static void staged_headers(const struct image *im, struct hset *files, struct hs
     }
 }
 
-/* "a, b, c and N more": a few of the paths, sorted, because a stage that
-   went wrong tends to go wrong by hundreds. */
+/**
+ * Write to `out` "a, b, c and N more": the first three of `paths`, which
+ * this sorts in place, since a stage that went wrong tends to go wrong by
+ * hundreds of paths.
+ */
 static void some(struct list *paths, char *out, size_t out_len)
 {
     int i, shown = paths->n < 3 ? paths->n : 3;
@@ -2591,11 +2811,15 @@ static void some(struct list *paths, char *out, size_t out_len)
         appendf(out, out_len, &used, " and %d more", paths->n - 3);
 }
 
-/* Compare a staged header tree with the tree it was staged from: by path,
-   by content and by mode, and all three are needed. A count comparison is
-   a check a wrong image passes easily; a truncated header is the right
-   path holding the wrong file; and a `tree 0600` line stages every byte
-   correctly into a compiler no ordinary account can use. */
+/**
+ * Compare a staged header tree with the tree it was staged from: by path,
+ * by content and by mode, and all three are needed. A count comparison is
+ * a check a wrong image passes easily; a truncated header is the right
+ * path with the wrong file; and a `tree 0600` line stages every byte
+ * correctly into a compiler no ordinary account can use. The directories
+ * `dirs`, which may be NULL, must be walkable by an ordinary account.
+ * Findings name `name`.
+ */
 static void compare_headers(const struct hset *staged, const struct hset *wanted,
                             const struct hset *dirs, const char *name, struct list *problems)
 {
@@ -2666,11 +2890,16 @@ static void compare_headers(const struct hset *staged, const struct hset *wanted
     free(bag.items);
 }
 
-/* Every directory above a staged path must be walkable by an ordinary
-   account: a header staged 0644 under a directory staged 0700 is a header
-   only root can open. `find` answers a path with its node or NULL. */
+/** The lookup of `check_reachable`: the node at `path`, or NULL. */
 typedef const struct node *(*path_look)(void *ctx, const char *path);
 
+/**
+ * Check that every directory above each staged path of `want` is staged, is
+ * a directory, and can be walked into by an ordinary account: a header
+ * staged 0644 under a directory staged 0700 is a header only root can open.
+ * A path of `want` that is not staged is passed over, since the caller
+ * reports it.
+ */
 static void check_reachable(path_look find, void *ctx, const struct list *want, const char *name,
                             struct list *problems)
 {
@@ -2722,18 +2951,22 @@ static void check_reachable(path_look find, void *ctx, const struct list *want, 
     list_free(&seen);
 }
 
+/** The `path_look` of an image. */
 static const struct node *image_path_look(void *ctx, const char *path)
 {
     return path_find((const struct image *)ctx, path);
 }
 
-/* The compiler's search paths, inventoried in the image whose entry says
-   `sysroot`: tcc's paths were baked in at configure time, so an image
-   missing one has a compiler that fails at the last step with a message
-   about a file, not about the image. The named paths say the shape is
-   right; the whole header tree is then compared with the tree it was
-   staged from, because a header nobody sampled is exactly what a partial
-   stage loses. */
+/**
+ * Check the compiler's search paths in an image whose entry says `sysroot`.
+ * tcc's search paths are fixed when it is configured, so an image missing
+ * one has a compiler that fails at the last step with a message about a
+ * file, not about the image. Each declared path must be a nonempty file an
+ * ordinary account can read, and run when it is a program, under
+ * directories it can walk into. The named paths check the shape; the whole
+ * header tree is then compared with the tree it was staged from, because a
+ * header no declaration names is what a partial stage loses.
+ */
 static void sysroot_checks(const struct allow *allow, const struct image *im, const char *name,
                            struct list *problems)
 {
@@ -2797,12 +3030,15 @@ static void sysroot_checks(const struct allow *allow, const struct image *im, co
 #define BUSYBOX_CONFIG      "build/vendor/busybox/config-main"
 #define INIT_BINARIES       "build/utils/sbin"
 
-/* Read a generated applet table into whole-token names. The names live in
-   one NUL-delimited string, so the match is on whole tokens: `passwd`
-   appears inside `passwd_main` and inside a help string. The whole
-   initializer or nothing: a truncated file would read as a shorter applet
-   set with the sentinel still present, so the declared count is required
-   to agree with the names. Returns nonzero after reporting. */
+/**
+ * Read the generated applet table at `path` into `names`, one whole-token
+ * name each. The names are in one NUL-delimited string, so the match is on
+ * whole tokens: `passwd` appears inside `passwd_main` and inside a help
+ * string. The whole initializer is read or the table fails: a truncated
+ * file would read as a shorter applet set with the sentinel still present,
+ * so the declared NUM_APPLETS must agree with the names. Return 0, or 1
+ * after a finding.
+ */
 static int applet_names(const char *path, struct list *names, struct list *problems)
 {
     size_t len;
@@ -2909,6 +3145,11 @@ static int applet_names(const char *path, struct list *names, struct list *probl
     return 0;
 }
 
+/**
+ * Check the main busybox's applet table at `path`: it must name the applet
+ * sentinel, so that the absence of an applet means something, and none of
+ * the forbidden applets.
+ */
 static void check_applets(const struct allow *allow, const char *path, struct list *problems)
 {
     struct list names = {NULL, 0, 0};
@@ -2935,9 +3176,11 @@ static void check_applets(const struct allow *allow, const char *path, struct li
     list_free(&names);
 }
 
-/* The set-id build's table: exactly the declared applets and nothing
-   else. A blacklist here would pass a binary that had quietly grown a
-   shell, which is the one thing a set-id executable must never contain. */
+/**
+ * Check that the set-id busybox's applet table at `path` names exactly the
+ * declared applets. A list of forbidden applets here would pass a binary
+ * built with a shell, which a set-id executable must never contain.
+ */
 static void check_suid_applets(const struct allow *allow, const char *path, struct list *problems)
 {
     struct list names = {NULL, 0, 0};
@@ -2988,9 +3231,13 @@ static void check_suid_applets(const struct allow *allow, const char *path, stru
     list_free(&names);
 }
 
-/* The set-id build's resolved config: every named symbol must APPEAR, on
-   or off, decided exactly once, so a config regenerated under other
-   symbol names fails instead of passing by holding none of them. */
+/**
+ * Check the set-id busybox's resolved config at `path`. Every declared
+ * symbol must appear, as `=y`, `=n` or a not-set comment, exactly once, so
+ * that a config regenerated under other symbol names fails instead of
+ * passing by having none of them; the `on` symbols must be on and the `off`
+ * symbols off. A line longer than 511 bytes is a finding.
+ */
 static void check_suid_config(const struct allow *allow, const char *path, struct list *problems)
 {
     size_t len, pos = 0;
@@ -3067,7 +3314,7 @@ static void check_suid_config(const struct allow *allow, const char *path, struc
         pos = end + 1;
     }
     free(text);
-    /* Reported in symbol-name order, the way a sorted dict reads. */
+    /* The symbols decided more than once, in name order. */
     {
         struct list order = {NULL, 0, 0};
         int j;
@@ -3123,9 +3370,11 @@ static void check_suid_config(const struct allow *allow, const char *path, struc
     free(seen);
 }
 
-/* The two init disciplines, told apart by the byte strings that name a
-   shell. A strict init must hold neither; the shell-naming one must hold
-   both, which is the sentinel proving the scan read the artifact. */
+/**
+ * Check the init binaries under `directory` by the byte strings that name a
+ * shell. A strict init must have none of them; the shell-naming one must
+ * have them all, which shows that the scan read the artifact.
+ */
 static void check_inits(const struct allow *allow, const char *directory, struct list *problems)
 {
     struct list names = {NULL, 0, 0};
@@ -3187,6 +3436,7 @@ static void check_inits(const struct allow *allow, const char *directory, struct
 
 /* ---- reporting and the entry point ---- */
 
+/** Print the findings on stderr under a FAIL line; return 1. */
 static int report(const struct list *problems)
 {
     int i;
@@ -3199,10 +3449,16 @@ static int report(const struct list *problems)
 
 static int selftest(struct allow *allow);
 
+/**
+ * The path of setid.allow: tools/inspect/ of the tree three directories
+ * above the directory of `argv0` (build/tools/inspect/setidcheck) when it is
+ * readable there, else tools/inspect/setid.allow under the current
+ * directory. The result is in a static buffer with room for the directory,
+ * the walk up to the tree and the name, so that the compiler can see the
+ * path is never cut.
+ */
 static char *allow_path_beside(const char *argv0)
 {
-    /* Room for the directory, the walk up to the tree and the name, so the
-       compiler can see the path is never cut. */
     static char path[2048];
     char dir[1024];
     const char *slash = strrchr(argv0, '/');
@@ -3217,8 +3473,10 @@ static char *allow_path_beside(const char *argv0)
     return path;
 }
 
-/* Releases what an allow list holds: every entry's declarations and the
-   applet and init lists. The list itself stays, for one on the stack. */
+/**
+ * Free what an allow list has: every entry's declarations and the applet
+ * and init lists. `a` itself is not freed, so that it may be on the stack.
+ */
 static void allow_clear(struct allow *a)
 {
     int i, j;
@@ -3254,14 +3512,23 @@ static void allow_clear(struct allow *a)
     list_free(&a->sysroot_programs);
 }
 
-/* Frees an allow list read by `read_allow`. */
+/** Free an allow list read by `read_allow`. */
 static void allow_free(struct allow *a)
 {
     allow_clear(a);
     free(a);
 }
 
-/* The program under its options, given the allow list beside it. */
+/**
+ * Run the program on its arguments with the declarations `allow`, and return
+ * its exit status, as the opening comment says.
+ *
+ * `--nodes` prints one line per node. For KRFFS it is each root or reserved
+ * node in ring order with its type, rebuilt path and three timestamps, from
+ * which the reproducibility check reads the staging order and the fixed
+ * staged time; for ext2 it is each node reached, in the walk's order, with
+ * its path, mode with its type, owner, group, size and inode.
+ */
 static int run(int argc, char **argv, struct allow *allow)
 {
     struct list problems = {NULL, 0, 0};
@@ -3337,10 +3604,6 @@ static int run(int argc, char **argv, struct allow *allow)
     }
 
     if (do_nodes) {
-        /* One line per root or reserved node, in ring order: the type,
-           the rebuilt path, and the three timestamps. The reproducibility
-           check reads staging order and the fixed staged instant off
-           this. */
         struct image im;
 
         if (image == NULL) {
@@ -3348,8 +3611,6 @@ static int run(int argc, char **argv, struct allow *allow)
             return 2;
         }
         if (ext2) {
-            /* One line per node reached: path, mode with its type, owner,
-               group, size and inode, in the walk's order. */
             if (read_ext2(&im, image, offset, size) != 0) {
                 fprintf(stderr, "check-setid: %s: %s\n", base_name(image), im.err);
                 return 1;
@@ -3438,8 +3699,6 @@ static int run(int argc, char **argv, struct allow *allow)
 
     validate_table(allow, &problems);
     if (manifests.n == 0) {
-        /* Sweep every manifest in krffs/manifests, and require every
-           allowlist entry to have one there. */
         struct list stems = {NULL, 0, 0};
         DIR *dir = opendir("krffs/manifests");
         struct dirent *ent;
@@ -3503,6 +3762,7 @@ static int run(int argc, char **argv, struct allow *allow)
     return 0;
 }
 
+/** Read the declarations beside the binary and run. */
 int main(int argc, char **argv)
 {
     struct allow *allow = read_allow(allow_path_beside(argv[0]));
@@ -3512,7 +3772,7 @@ int main(int argc, char **argv)
     return rc;
 }
 
-/* ---- the selftest: every half over fixtures ----
+/* ---- the selftest: every part over fixtures ----
  *
  * The sweep fixtures' declared lines come from the allow file itself, so a
  * mutation is the one thing that varies; what they prove is that the
@@ -3526,7 +3786,11 @@ int main(int argc, char **argv)
 
 static int st_bad, st_ran;
 
-/* Judge one case's findings. */
+/**
+ * Count one case: with `want_ok` the findings `got` must be none, and
+ * otherwise one of them must contain `fragment`. A failed case prints a
+ * FAIL line. `got` is freed and left empty.
+ */
 static void st_case(const char *name, struct list *got, int want_ok, const char *fragment)
 {
     int i, found = 0;
@@ -3550,9 +3814,12 @@ static void st_case(const char *name, struct list *got, int want_ok, const char 
     list_free(got);
 }
 
-/* The directive lines a manifest needs to satisfy one entry's trusted
-   list, in sorted-path order, built from the allow file so the fixtures
-   cannot drift from it. */
+/**
+ * Write to `out` the directive lines a manifest needs to satisfy one
+ * entry's trusted list, in sorted-path order, built from the allow file so
+ * that the fixtures cannot drift from it. Exit 2 when they do not fit in
+ * `out_len` bytes.
+ */
 static void trusted_lines(const struct entry *e, char *out, size_t out_len)
 {
     struct list paths = {NULL, 0, 0};
@@ -3580,7 +3847,7 @@ static void trusted_lines(const struct entry *e, char *out, size_t out_len)
     free(paths.items);
 }
 
-/* The /sbin/init line a manifest with this stem must carry, or "". */
+/** Write to `out` the /sbin/init line the manifest `stem` must have, or "". */
 static void init_line_of(const struct allow *allow, const char *stem, char *out, size_t out_len)
 {
     const struct entry *e = find_entry((struct allow *)allow, stem);
@@ -3590,10 +3857,13 @@ static void init_line_of(const struct allow *allow, const char *stem, char *out,
         snprintf(out, out_len, "file 0755 /sbin/init build/utils/sbin/%s\n", e->init);
 }
 
+/* The selftest's temporary directory. */
 static char st_tmp[256];
 
-/* The selftest's fixtures are flat files in one directory, so removing
-   them and the directory is the whole of the cleanup. */
+/**
+ * Remove the selftest's fixtures and their directory. The fixtures are flat
+ * files in that one directory, so this is the whole of the cleanup.
+ */
 static void st_clean(void)
 {
     DIR *dir = opendir(st_tmp);
@@ -3613,7 +3883,11 @@ static void st_clean(void)
     rmdir(st_tmp);
 }
 
-/* Write a fixture manifest and sweep it. */
+/**
+ * Write `text` as the fixture manifest `stem`, after its declared init line
+ * when `with_init` is set, sweep it, and judge the findings as `st_case`
+ * does.
+ */
 static void st_manifest(const struct allow *allow, const char *name, const char *stem,
                         const char *text, int want_ok, const char *fragment, int with_init)
 {
@@ -3635,7 +3909,10 @@ static void st_manifest(const struct allow *allow, const char *name, const char 
     st_case(name, &got, want_ok, fragment);
 }
 
-/* A helper for building fixture text: `sed`-style single replacement. */
+/**
+ * A copy of `text` with its first `old` replaced by `new_`, from `xmalloc`.
+ * When `old` is not in `text`, the case fails and the copy is unchanged.
+ */
 static char *replaced(const char *text, const char *old, const char *new_)
 {
     const char *at = strstr(text, old);
@@ -3657,6 +3934,7 @@ static char *replaced(const char *text, const char *old, const char *new_)
     return out;
 }
 
+/** `a` followed by `b`, from `xmalloc`. */
 static char *concat(const char *a, const char *b)
 {
     char *out = xmalloc(strlen(a) + strlen(b) + 1);
@@ -3670,6 +3948,7 @@ static char *concat(const char *a, const char *b)
 
 #define IMG_TOTAL 4096
 
+/* One node of a fixture region, as `build_region` writes it. */
 struct fix_node {
     unsigned type;
     uint64_t id;
@@ -3678,6 +3957,7 @@ struct fix_node {
     uint64_t parent;
 };
 
+/** Store `v` at `p` as a little-endian 64-bit value. */
 static void wr64(unsigned char *p, uint64_t v)
 {
     int i;
@@ -3685,6 +3965,7 @@ static void wr64(unsigned char *p, uint64_t v)
     for (i = 0; i < 8; i++)
         p[i] = (unsigned char)(v >> 8 * i);
 }
+/** Store the low 32 bits of `v` at `p`, little-endian. */
 static void wr32(unsigned char *p, unsigned long v)
 {
     p[0] = (unsigned char)v;
@@ -3692,13 +3973,17 @@ static void wr32(unsigned char *p, unsigned long v)
     p[2] = (unsigned char)(v >> 16);
     p[3] = (unsigned char)(v >> 24);
 }
+/** Store the low 16 bits of `v` at `p`, little-endian. */
 static void wr16(unsigned char *p, unsigned v)
 {
     p[0] = (unsigned char)v;
     p[1] = (unsigned char)(v >> 8);
 }
 
-/* Pack nodes into a region, closed by a free node of the remainder. */
+/**
+ * Pack the `n` nodes, NODE_SIZE bytes each, into `region` of `total` bytes,
+ * and close the ring with a free node of the remainder.
+ */
 static void build_region(const struct fix_node *nodes, int n, unsigned char *region, size_t total)
 {
     uint64_t previous = total - (size_t)n * NODE_SIZE;
@@ -3727,6 +4012,7 @@ static void build_region(const struct fix_node *nodes, int n, unsigned char *reg
     }
 }
 
+/* The root, /bin, the set-id /bin/su, /bin/busybox and /hello.txt. */
 static const struct fix_node IMG_NODES[5] = {
     {NODE_ROOT, 5381, "", 0755, 0, 0, 0},
     {NODE_RESERVED, 11, "bin", 040755, 0, 0, 0},
@@ -3735,7 +4021,11 @@ static const struct fix_node IMG_NODES[5] = {
     {NODE_RESERVED, 14, "hello.txt", 0644, 0, 0, 0},
 };
 
-/* The fixture region with one node optionally replaced and more added. */
+/**
+ * Build the fixture region in `region`, with node `index` replaced by
+ * `*node` when `index` is not negative, and the `n_extra` nodes of `extra`
+ * added.
+ */
 static void fixture(int index, const struct fix_node *node, const struct fix_node *extra,
                     int n_extra, unsigned char *region)
 {
@@ -3750,8 +4040,11 @@ static void fixture(int index, const struct fix_node *node, const struct fix_nod
     build_region(nodes, n, region, IMG_TOTAL);
 }
 
-/* One image case: write the region, inventory it against the fixture
-   allowlist. */
+/**
+ * One image case: write the first `cut` bytes of the region, or all of it
+ * when `cut` is 0, and inventory them against the entry `stem` of
+ * `img_allow`.
+ */
 static void st_image(const struct allow *img_allow, const char *name, const char *stem,
                      const unsigned char *region, size_t region_len, long cut, int want_ok,
                      const char *fragment)
@@ -3773,11 +4066,13 @@ static void st_image(const struct allow *img_allow, const char *name, const char
 
 /* ---- the header-comparison fixtures, in memory ---- */
 
+/* A path table for `check_reachable`, built by hand. */
 struct fake_fs {
     struct node nodes[8];
     int n;
 };
 
+/** The `path_look` of a `fake_fs`. */
 static const struct node *fake_look(void *ctx, const char *path)
 {
     struct fake_fs *fs = ctx;
@@ -3789,6 +4084,7 @@ static const struct node *fake_look(void *ctx, const char *path)
     return NULL;
 }
 
+/** Add a node at `path`, which is borrowed, with `mode`. */
 static void fake_add(struct fake_fs *fs, const char *path, unsigned long mode)
 {
     memset(&fs->nodes[fs->n], 0, sizeof(struct node));
@@ -3805,6 +4101,7 @@ static void fake_add(struct fake_fs *fs, const char *path, unsigned long mode)
    by debugfs, and then copies with one thing changed, by debugfs where
    debugfs can and by a byte where it cannot. */
 
+/** Run `command` with system(3); 0 when it exits 0, else -1. */
 static int st_run(const char *command)
 {
     int rc = system(command);
@@ -3812,6 +4109,7 @@ static int st_run(const char *command)
     return rc == 0 ? 0 : -1;
 }
 
+/** Remove the tree at `path`, ignoring what cannot be removed. */
 static void st_rm_tree(const char *path)
 {
     DIR *dir = opendir(path);
@@ -3835,6 +4133,7 @@ static void st_rm_tree(const char *path)
     rmdir(path);
 }
 
+/** Write `text` to the file `path`; 0, or nonzero on a failure. */
 static int st_write_file(const char *path, const char *text)
 {
     FILE *f = fopen(path, "wb");
@@ -3845,8 +4144,10 @@ static int st_write_file(const char *path, const char *text)
     return fclose(f);
 }
 
-/* The clean fixture volume at `out`, or -1 when the host tools are not
-   there or refuse. */
+/**
+ * Build the clean fixture volume at `out`: 0, or -1 when the host tools are
+ * not there or fail.
+ */
 static int st_ext2_fixture(const char *out)
 {
     char tree[512], cmd[4096], script[512];
@@ -3898,9 +4199,10 @@ static int st_ext2_fixture(const char *out)
     return 0;
 }
 
-/* A copy of the clean fixture with a debugfs command applied. */
-/* A copy of the clean fixture with debugfs's `commands` applied, one per
-   line, through a request file. */
+/**
+ * Copy the clean fixture to `out` and apply debugfs's `commands` to the
+ * copy, one per line, through a request file; 0, or -1 on a failure.
+ */
 static int st_ext2_copy(const char *clean, const char *out, const char *commands)
 {
     char cmd[4096];
@@ -3913,7 +4215,10 @@ static int st_ext2_copy(const char *clean, const char *out, const char *commands
     return st_run(cmd);
 }
 
-/* A copy of the clean fixture with `len` bytes written at `at`. */
+/**
+ * Copy the clean fixture to `out` with `len` bytes written at byte `at`; 0,
+ * or nonzero on a failure.
+ */
 static int st_ext2_poke(const char *clean, const char *out, long at, const unsigned char *bytes,
                         size_t len)
 {
@@ -3933,8 +4238,10 @@ static int st_ext2_poke(const char *clean, const char *out, long at, const unsig
     return fclose(o);
 }
 
-/* Where an inode's 128 bytes are in the clean fixture, and where a
-   directory's block is, read through the reader's own placement. */
+/**
+ * The byte offset of inode `ino` in `image`, placed through the reader's
+ * own `ext2_open`, or -1 when the image does not open.
+ */
 static long st_ext2_inode_at(const char *image, unsigned long ino)
 {
     struct ext2 fs;
@@ -3953,6 +4260,7 @@ static long st_ext2_inode_at(const char *image, unsigned long ino)
     return at;
 }
 
+/** The inode number the reader finds at `path` in `image`, or 0. */
 static unsigned long st_ext2_inode_of(const char *image, const char *path)
 {
     struct image im;
@@ -3965,7 +4273,7 @@ static unsigned long st_ext2_inode_of(const char *image, const char *path)
     return ino;
 }
 
-/* An ext2 row judged by the entry `stem` of the fixture allowlist. */
+/** An ext2 row judged by the entry `stem` of the fixture allowlist. */
 static void st_ext2_case_as(const struct allow *img_allow, const char *stem, const char *name,
                             const char *image, int want_ok, const char *fragment)
 {
@@ -3977,12 +4285,18 @@ static void st_ext2_case_as(const struct allow *img_allow, const char *stem, con
     st_case(name, &got, want_ok, fragment);
 }
 
+/** An ext2 row judged by the entry `img-fixture`. */
 static void st_ext2_case(const struct allow *img_allow, const char *name, const char *image,
                          int want_ok, const char *fragment)
 {
     st_ext2_case_as(img_allow, "img-fixture", name, image, want_ok, fragment);
 }
 
+/**
+ * The ext2 reader's rows: a fixture built by the host's mke2fs and debugfs,
+ * read back and judged, and copies of it with one thing changed. A host
+ * without those tools fails one case.
+ */
 static void st_ext2_rows(const struct allow *img_allow)
 {
     char clean[512], mut[512];
@@ -4032,8 +4346,7 @@ static void st_ext2_rows(const struct allow *img_allow)
     }
     st_ext2_case(img_allow, "a clean ext2 fixture", clean, 1, "");
 
-    /* The same image with /bin/busybox declared a file an overlay installs:
-       as the image has it, anyone may write it, and a link in its place. */
+    /* /bin/busybox declared an overlay file: as staged, writable, a link. */
     st_ext2_case_as(img_allow, "img-overlay", "ext2: an overlay file as declared", clean, 1, "");
     if (st_ext2_copy(clean, mut, "set_inode_field /bin/busybox mode 0100777") == 0)
         st_ext2_case_as(img_allow, "img-overlay", "ext2: an overlay file anyone may write", mut, 0,
@@ -4071,7 +4384,7 @@ static void st_ext2_rows(const struct allow *img_allow)
                      "regular file",
                      mut, 0, "is not a regular file");
 
-    /* The refusals, each a byte the tools would not write. */
+    /* The failures, each a byte the tools would not write. */
     {
         unsigned char b[4];
         long at;
@@ -4107,8 +4420,7 @@ static void st_ext2_rows(const struct allow *img_allow)
                 st_ext2_case(img_allow, "ext2: a block inside a table", mut, 0,
                              "which is a bitmap, a table or a superblock");
         }
-        /* A malformed entry: the root directory's first entry with a
-           rec_len of 6. */
+        /* A malformed entry: a rec_len of 6 in the root's first entry. */
         ino = 2;
         at = st_ext2_inode_at(clean, ino);
         if (at > 0) {
@@ -4126,8 +4438,7 @@ static void st_ext2_rows(const struct allow *img_allow)
             if (block != 0 && st_ext2_poke(clean, mut, (long)(block * EXT2_BLOCK + 4), b, 2) == 0)
                 st_ext2_case(img_allow, "ext2: a malformed directory entry", mut, 0,
                              "is malformed");
-            /* An inode the reader cannot place: the third entry's number,
-               the first after . and .., past the count. */
+            /* An inode past the count in the third entry, after . and .. */
             b[0] = 0xff;
             b[1] = 0xff;
             b[2] = 0xff;
@@ -4141,6 +4452,15 @@ static void st_ext2_rows(const struct allow *img_allow)
     unlink(mut);
 }
 
+/**
+ * Run every case over fixtures in a temporary directory and print a summary
+ * line. Return 0 when every case passes, 1 when one fails or the
+ * declaration file lacks the os-real, os-simple or test entry, and 2 when
+ * the directory cannot be made.
+ *
+ * The minimal accepted manifests are generated from the declarations, and
+ * each case changes one line of one.
+ */
 static int selftest(struct allow *allow)
 {
     char base[8192], tl[4096];
@@ -4340,8 +4660,7 @@ static int selftest(struct allow *allow)
          "file 04755:0:0 /bin/su\r#x build/utils/sbin/su\n",
          0, "does not declare it");
     {
-        /* A NUL byte cannot ride in a C string, so this fixture is
-           written byte by byte. */
+        /* A C string ends at a NUL, so this fixture is written with fwrite. */
         char path[512], init[256];
         static const char nul_line[] = "file 0755 /bin/x@y build/x\n";
         char *withnul = concat(base, nul_line);
@@ -4487,7 +4806,7 @@ static int selftest(struct allow *allow)
           "declares none for this image");
     free(t);
 
-    /* The applet table's ways of lying. */
+    /* Applet tables, one clean and four with a fault. */
     {
         static const struct {
             const char *name;
@@ -4706,8 +5025,7 @@ static int selftest(struct allow *allow)
         allow_clear(&bad);
     }
 
-    /* A manifest the table names but the tree lacks: the require-all rule
-       of the no-argument sweep. */
+    /* The no-argument sweep's rule that every entry has a manifest. */
     addf(&got, "allowlist: os-real names os-real.manifest, which is not "
                "in krffs/manifests");
     st_case("a manifest the table names but the tree lacks", &got, 0, "which is not in");

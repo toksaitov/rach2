@@ -747,26 +747,26 @@ tools/inspect/elfcheck.c:kernel_check64 lines 179 an inspector's check, one walk
 tools/inspect/setidcheck.c:applet_names complexity 32 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:applet_names lines 102 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:check_image complexity 50 an inspector's check, one walk over the format it reads
-tools/inspect/setidcheck.c:check_image lines 180 an inspector's check, one walk over the format it reads
+tools/inspect/setidcheck.c:check_image lines 178 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:check_image params 9 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:check_manifest complexity 54 an inspector's check, one walk over the format it reads
-tools/inspect/setidcheck.c:check_manifest lines 218 an inspector's check, one walk over the format it reads
+tools/inspect/setidcheck.c:check_manifest lines 182 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:check_suid_config complexity 33 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:check_suid_config lines 128 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:entry_add_trusted params 7 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:ext2_open complexity 39 an inspector's check, one walk over the format it reads
-tools/inspect/setidcheck.c:ext2_open lines 114 an inspector's check, one walk over the format it reads
+tools/inspect/setidcheck.c:ext2_open lines 108 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:ext2_push params 9 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:ext2_reach complexity 27 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:parse_manifest complexity 31 an inspector's check, one walk over the format it reads
-tools/inspect/setidcheck.c:parse_manifest lines 125 an inspector's check, one walk over the format it reads
+tools/inspect/setidcheck.c:parse_manifest lines 118 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:read_allow complexity 64 an inspector's check, one walk over the format it reads
-tools/inspect/setidcheck.c:read_allow lines 141 an inspector's check, one walk over the format it reads
+tools/inspect/setidcheck.c:read_allow lines 132 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:run complexity 69 an inspector's check, one walk over the format it reads
-tools/inspect/setidcheck.c:run lines 237 an inspector's check, one walk over the format it reads
-tools/inspect/setidcheck.c:selftest lines 700 the checker's own selftest, its cases in one table
+tools/inspect/setidcheck.c:run lines 229 an inspector's check, one walk over the format it reads
+tools/inspect/setidcheck.c:selftest lines 698 the checker's own selftest, its cases in one table
 tools/inspect/setidcheck.c:st_ext2_rows complexity 45 an inspector's check, one walk over the format it reads
-tools/inspect/setidcheck.c:st_ext2_rows lines 154 an inspector's check, one walk over the format it reads
+tools/inspect/setidcheck.c:st_ext2_rows lines 151 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:st_image params 8 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:st_manifest params 7 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:staged_add params 8 an inspector's check, one walk over the format it reads
