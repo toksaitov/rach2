@@ -79,8 +79,7 @@ typedef char user_regs_fit[(R_COUNT == ARCH_GREGS) ? 1 : -1];
  * The running thread, whose registers a core dump of its own process reads,
  * has its bases and selectors read from the processor, since a selector it
  * loaded may have changed them since its record was written; a stopped
- * thread's were saved when it switched away. DS and ES read as the null
- * selector: the kernel keeps neither for a 64-bit thread.
+ * thread's were saved when it switched away.
  */
 void arch_regs_get(const process_t *t, unsigned long *r)
 {
@@ -109,27 +108,35 @@ void arch_regs_get(const process_t *t, unsigned long *r)
     r[R_SS] = tf->ss & 0xFFFFu;
     r[R_FS_BASE] = t == current_proc ? msr_read(MSR_FS_BASE) : t->tls_base;
     r[R_GS_BASE] = t == current_proc ? msr_read(MSR_KERNEL_GS_BASE) : t->regs.gs_base;
-    r[R_DS] = 0;
-    r[R_ES] = 0;
+    r[R_DS] = t == current_proc ? x86_64_ds_read() : t->regs.ds_sel;
+    r[R_ES] = t == current_proc ? x86_64_es_read() : t->regs.es_sel;
     r[R_FS] = t == current_proc ? x86_64_fs_read() : t->regs.fs_sel;
     r[R_GS] = t == current_proc ? x86_64_gs_read() : t->regs.gs_sel;
 }
 
 /**
- * Set the FS or GS selector, by `i`, of the stopped thread `t` to `sel`,
- * which the switch in loads before the bases. The selector must be null, at
- * RPL 0 or 3, or the user data or code selector: the selectors Linux takes
- * from a tracer that this GDT has, since any other could fault when the
- * kernel loads it. Returns 0, or -EIO.
+ * Set the DS, ES, FS or GS selector, by `i`, of the stopped thread `t` to
+ * `sel`, which the switch in loads, before the bases. The selector must be
+ * null, at RPL 0 or 3, or the user data or code selector: the selectors
+ * Linux takes from a tracer that this GDT has, since any other could fault
+ * when the kernel loads it. Returns 0, or -EIO.
  */
 static int sel_set(process_t *t, int i, unsigned long sel)
 {
     if (sel != 0 && sel != 3 && sel != GDT_USER_DATA && sel != GDT_USER_CODE) {
         return -EIO;
     }
-    if (i == R_FS) {
+    switch (i) {
+    case R_DS:
+        t->regs.ds_sel = (uint16_t)sel;
+        break;
+    case R_ES:
+        t->regs.es_sel = (uint16_t)sel;
+        break;
+    case R_FS:
         t->regs.fs_sel = (uint16_t)sel;
-    } else {
+        break;
+    default:
         t->regs.gs_sel = (uint16_t)sel;
     }
     return 0;
@@ -139,10 +146,8 @@ static int sel_set(process_t *t, int i, unsigned long sel)
  * Set the user register `i` of the stopped thread `t` to `v`, as Linux's
  * `putreg` does: the flags only where a program may change them, a base
  * only to a user address, CS and SS only to the ones they have, since a
- * return to user mode with any other would fault in the kernel, and FS and
- * GS only to a selector `sel_set` takes. The kernel keeps no DS or ES
- * selector for a 64-bit thread, which read as null, so a tracer may write
- * back the null it read and nothing else. An orig_rax of -1 stops an
+ * return to user mode with any other would fault in the kernel, and DS, ES,
+ * FS and GS only to a selector `sel_set` takes. An orig_rax of -1 stops an
  * interrupted system call from being restarted; it is kept in 32 bits, as
  * the system call number is. Returns 0, or -EIO.
  */
@@ -234,10 +239,6 @@ static int regs_set(process_t *t, int i, unsigned long v)
         break;
     case R_DS:
     case R_ES:
-        if ((v & 0xFFFFu) != 0) {
-            return -EIO;
-        }
-        break;
     case R_FS:
     case R_GS:
         return sel_set(t, i, v);

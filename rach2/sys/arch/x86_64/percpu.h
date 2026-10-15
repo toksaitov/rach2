@@ -117,6 +117,13 @@ unsigned int x86_64_gs_read(void);
 void x86_64_fs_load(unsigned int sel);
 void x86_64_gs_load(unsigned int sel);
 
+/* Read the selector in DS or ES, and load `sel` into one (switch.s). Long
+ * mode ignores both registers' bases, so a load changes nothing else. */
+unsigned int x86_64_ds_read(void);
+unsigned int x86_64_es_read(void);
+void x86_64_ds_load(unsigned int sel);
+void x86_64_es_load(unsigned int sel);
+
 /**
  * Fill the boot processor's record, with its GDT and its TSS, load the GDT,
  * and make the record GS's base, with 0 as the program's base in

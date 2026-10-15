@@ -1,6 +1,6 @@
 /**
  * fsbaseprobe: the x86-64 thread's FS and GS bases, which arch_prctl sets
- * and gets, and its FS and GS selectors.
+ * and gets, and its DS, ES, FS and GS selectors.
  *
  * Each base set by ARCH_SET_FS or ARCH_SET_GS must read back by ARCH_GET_FS
  * or ARCH_GET_GS and address the block it names. A forked child must start
@@ -14,11 +14,11 @@
  * by ARCH_SET_GS and by clone with CLONE_SETTLS, which then makes no child,
  * and the bases set before stay; the last user address below it is taken,
  * and clone with CLONE_SETTLS gives its child the base it names. A forked
- * child must start with its parent's FS and GS selectors; when it loads
- * others, each process must keep its own across two thousand yields between
- * them on one processor. A tracer must read a stopped child's selectors
- * with PTRACE_PEEKUSER, and selectors it writes with PTRACE_POKEUSER must
- * be the child's when it runs again.
+ * child must start with its parent's DS, ES, FS and GS selectors; when it
+ * loads others, each process must keep its own across two thousand yields
+ * between them on one processor. A tracer must read a stopped child's
+ * selectors with PTRACE_PEEKUSER, and selectors it writes with
+ * PTRACE_POKEUSER must be the child's when it runs again.
  *
  * arch_prctl is x86-64's alone; on i686 the probe says its rows did not run
  * and passes.
@@ -53,7 +53,9 @@
 #define PTRACE_POKEUSER 6
 #define PTRACE_CONT     7
 
-/* The byte offsets of FS and GS in Linux x86-64's `struct user`. */
+/* The byte offsets of DS, ES, FS and GS in Linux x86-64's `struct user`. */
+#define USER_DS 184
+#define USER_ES 192
 #define USER_FS 200
 #define USER_GS 208
 
@@ -172,6 +174,31 @@ static void load_sels(unsigned long fs, unsigned long gs)
 {
     __asm__ __volatile__("movw %w0, %%fs" : : "r"(fs));
     __asm__ __volatile__("movw %w0, %%gs" : : "r"(gs));
+}
+
+/** The selector in DS. */
+static unsigned long ds_sel(void)
+{
+    unsigned long v = 0;
+
+    __asm__ __volatile__("movw %%ds, %w0" : "+r"(v));
+    return v;
+}
+
+/** The selector in ES. */
+static unsigned long es_sel(void)
+{
+    unsigned long v = 0;
+
+    __asm__ __volatile__("movw %%es, %w0" : "+r"(v));
+    return v;
+}
+
+/** Load the selector `ds` into DS and `es` into ES. */
+static void load_data_sels(unsigned long ds, unsigned long es)
+{
+    __asm__ __volatile__("movw %w0, %%ds" : : "r"(ds));
+    __asm__ __volatile__("movw %w0, %%es" : : "r"(es));
 }
 
 /** The exit status of the child `pid`, or -1. */
@@ -324,11 +351,12 @@ static void run_bounds(void)
 
 /**
  * The selectors across switches. The parent has the user data selector in
- * FS and GS from `run_selectors`. A forked child starts with the same, then
- * loads the null selector and the user code selector, and both yield to
- * each other on processor 0, where a selector the kernel did not keep for
- * each would pass from one to the other. The child exits 2 when it did not
- * start with its parent's selectors and 3 when its own did not last.
+ * FS and GS from `run_selectors` and loads it into DS and ES. A forked
+ * child starts with the same, then loads the null selector into FS and ES
+ * and the user code selector into GS and DS, and both yield to each other
+ * on processor 0, where a selector the kernel did not keep for each would
+ * pass from one to the other. The child exits 2 when it did not start with
+ * its parent's selectors and 3 when its own did not last.
  */
 static void run_selector_switches(void)
 {
@@ -339,15 +367,19 @@ static void run_selector_switches(void)
     if (syscall3(SYS_SCHED_SETAFFINITY, 0, (long)sizeof(processor0), (long)&processor0) != 0) {
         fail("the probe could not be bound to processor 0");
     }
+    load_data_sels(GDT_USER_DATA, GDT_USER_DATA);
     pid = syscall0(SYS_FORK);
     if (pid == 0) {
-        if (fs_sel() != GDT_USER_DATA || gs_sel() != GDT_USER_DATA) {
+        if (fs_sel() != GDT_USER_DATA || gs_sel() != GDT_USER_DATA || ds_sel() != GDT_USER_DATA ||
+            es_sel() != GDT_USER_DATA) {
             sys_exit(2);
         }
         load_sels(0, GDT_USER_CODE);
+        load_data_sels(GDT_USER_CODE, 0);
         for (i = 0; i < YIELDS; i++) {
             syscall0(SYS_SCHED_YIELD);
-            if (fs_sel() != 0 || gs_sel() != GDT_USER_CODE) {
+            if (fs_sel() != 0 || gs_sel() != GDT_USER_CODE || ds_sel() != GDT_USER_CODE ||
+                es_sel() != 0) {
                 sys_exit(3);
             }
         }
@@ -358,8 +390,9 @@ static void run_selector_switches(void)
     }
     for (i = 0; i < YIELDS; i++) {
         syscall0(SYS_SCHED_YIELD);
-        if (fs_sel() != GDT_USER_DATA || gs_sel() != GDT_USER_DATA) {
-            fail("the parent's FS or GS selector did not survive the switches");
+        if (fs_sel() != GDT_USER_DATA || gs_sel() != GDT_USER_DATA || ds_sel() != GDT_USER_DATA ||
+            es_sel() != GDT_USER_DATA) {
+            fail("the parent's DS, ES, FS or GS selector did not survive the switches");
         }
     }
     switch (child_status(pid)) {
@@ -369,26 +402,30 @@ static void run_selector_switches(void)
         fail("a forked child did not start with its parent's selectors");
         break;
     default:
-        fail("a child's own FS or GS selector did not survive the switches");
+        fail("a child's own DS, ES, FS or GS selector did not survive the switches");
     }
 }
 
 /**
  * The selectors through ptrace. The child stops itself with the user data
- * selector in FS and GS; the parent reads them, writes the user code
- * selector to FS and a null selector of RPL 3 to GS, and lets it run on to
- * check them.
+ * selector in DS, ES, FS and GS; the parent reads them, writes the user
+ * code selector to DS and FS and a null selector of RPL 3 to ES and GS, and
+ * lets it run on to check them.
  */
 static void run_selector_ptrace(void)
 {
-    unsigned long fs = 0, gs = 0;
+    unsigned long ds = 0, es = 0, fs = 0, gs = 0;
     int status = 0;
     long pid = syscall0(SYS_FORK);
 
     if (pid == 0) {
         syscall4(SYS_PTRACE, PTRACE_TRACEME, 0, 0, 0);
         syscall2(SYS_KILL, syscall0(SYS_GETPID), SIGSTOP);
-        sys_exit(fs_sel() == GDT_USER_CODE && gs_sel() == 3 ? 0 : 5);
+        if (ds_sel() != GDT_USER_CODE || es_sel() != 3 || fs_sel() != GDT_USER_CODE ||
+            gs_sel() != 3) {
+            sys_exit(5);
+        }
+        sys_exit(0);
     }
     if (pid < 0) {
         fail("fork");
@@ -396,15 +433,19 @@ static void run_selector_ptrace(void)
     if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid || (status & 0xFF) != 0x7F) {
         fail("a traced child did not stop");
     }
-    if (syscall4(SYS_PTRACE, PTRACE_PEEKUSER, pid, USER_FS, (long)&fs) != 0 ||
+    if (syscall4(SYS_PTRACE, PTRACE_PEEKUSER, pid, USER_DS, (long)&ds) != 0 ||
+        syscall4(SYS_PTRACE, PTRACE_PEEKUSER, pid, USER_ES, (long)&es) != 0 ||
+        syscall4(SYS_PTRACE, PTRACE_PEEKUSER, pid, USER_FS, (long)&fs) != 0 ||
         syscall4(SYS_PTRACE, PTRACE_PEEKUSER, pid, USER_GS, (long)&gs) != 0 ||
-        fs != GDT_USER_DATA || gs != GDT_USER_DATA) {
-        fail("PTRACE_PEEKUSER did not read a stopped child's FS and GS selectors");
+        ds != GDT_USER_DATA || es != GDT_USER_DATA || fs != GDT_USER_DATA || gs != GDT_USER_DATA) {
+        fail("PTRACE_PEEKUSER did not read a stopped child's DS, ES, FS and GS selectors");
     }
-    if (syscall4(SYS_PTRACE, PTRACE_POKEUSER, pid, USER_FS, (long)GDT_USER_CODE) != 0 ||
+    if (syscall4(SYS_PTRACE, PTRACE_POKEUSER, pid, USER_DS, (long)GDT_USER_CODE) != 0 ||
+        syscall4(SYS_PTRACE, PTRACE_POKEUSER, pid, USER_ES, 3) != 0 ||
+        syscall4(SYS_PTRACE, PTRACE_POKEUSER, pid, USER_FS, (long)GDT_USER_CODE) != 0 ||
         syscall4(SYS_PTRACE, PTRACE_POKEUSER, pid, USER_GS, 3) != 0 ||
         syscall4(SYS_PTRACE, PTRACE_CONT, pid, 0, 0) != 0) {
-        fail("PTRACE_POKEUSER refused an FS or GS selector");
+        fail("PTRACE_POKEUSER refused a DS, ES, FS or GS selector");
     }
     if (child_status(pid) != 0) {
         fail("selectors written by PTRACE_POKEUSER were not the child's");

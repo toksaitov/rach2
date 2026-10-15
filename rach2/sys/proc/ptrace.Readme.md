@@ -64,7 +64,7 @@ A tracee stops in `ptrace_stop`, on its own kernel stack. It stores the status a
 
 ### Registers and system calls
 
-A stopped tracee is not running, so its user registers are the frame its entry to the kernel pushed at the top of its kernel stack (`proc_user_frame`), and the requests read and write that frame. `regs_set` in each `ptrace.c` changes only what a return to user mode can load, as Linux's `putreg` does: of the flags only those a program may change, the code and stack selectors only to the user's, on i686 a data selector only to the null, user data or TLS selector, and on x86-64 the FS and GS selectors only to the null or a user selector and the FS and GS bases only to user addresses.
+A stopped tracee is not running, so its user registers are the frame its entry to the kernel pushed at the top of its kernel stack (`proc_user_frame`), and the requests read and write that frame. `regs_set` in each `ptrace.c` changes only what a return to user mode can load, as Linux's `putreg` does: of the flags only those a program may change, the code and stack selectors only to the user's, on i686 a data selector only to the null, user data or TLS selector, and on x86-64 the DS, ES, FS and GS selectors only to the null or a user selector and the FS and GS bases only to user addresses.
 
 At a system call's entry stop, `orig_nr` is the call's number and the result register is `-ENOSYS`. Neither is put back after the stop: the dispatcher (`_syscall_handler` in `syscall.c`) reads the number again from `orig_nr`, runs that call with the registers the tracer left, answers `ENOSYS` for a number of no call, and runs none for -1, whose result is what the tracer left in the result register. A thread sent `SIGKILL` during the entry stop runs no call. The seccomp filters then judge the call the tracer left.
 
@@ -114,7 +114,7 @@ A core file has the registers of each thread as the requests read them. [The pro
 * An unprivileged caller's attach to a thread inside `execve` fails with `EPERM`, where Linux waits for the exec to end.
 * `PTRACE_INTERRUPT` of a call that is never restarted, such as `nanosleep`, makes it fail with `EINTR`, where Linux restarts it.
 * Linux's `PTRACE_PEEKSIGINFO`, `PTRACE_GETSIGMASK`, `PTRACE_SETSIGMASK`, `PTRACE_SYSEMU` and `PTRACE_GET_SYSCALL_INFO` are among the requests that answer `EIO`.
-* On x86-64 the kernel keeps no DS or ES selector for a thread, so they read 0, and `orig_rax` is kept in 32 bits.
+* On x86-64 `orig_rax` is kept in 32 bits.
 * i686 has one TLS entry for `PTRACE_GET_THREAD_AREA` and `PTRACE_SET_THREAD_AREA` ([thread-local storage](../arch/tls.Readme.md)).
 * The core file is always named `core` and has no `NT_SIGINFO` or `NT_FILE` note ([core(5)](../../../man/man5/core.5)).
 

@@ -20,9 +20,11 @@
  * on x86-64), and bit 0x80 on the stop signal with PTRACE_O_TRACESYSGOOD. At an
  * entry stop the tracer changes the call through orig_eax: getpid made getppid
  * returns the parent's id, and a write made -1 is not run and returns the eax
- * the tracer set. A tracee that SIGKILL reaches at the entry stop of a write
- * writes nothing. At the exit stop of a read a signal interrupted, -1 in
- * orig_eax keeps the read from being restarted after a handler with SA_RESTART.
+ * the tracer set; on x86-64 a DS selector the tracer sets there is the
+ * child's at the next stop, and the kernel's data selector is refused. A
+ * tracee that SIGKILL reaches at the entry stop of a write writes nothing. At
+ * the exit stop of a read a signal interrupted, -1 in orig_eax keeps the read
+ * from being restarted after a handler with SA_RESTART.
  * PTRACE_O_TRACEEXEC stops the child after an execve with the exec event, which
  * waitid reports in si_status above the signal, and a /proc/PID/mem descriptor
  * opened before the execve reads nothing of the new image. A debug register set
@@ -436,9 +438,9 @@ static int syscall_entry(pid_t pid, long nr, struct user_regs_struct *regs)
  * Check that at a system call's entry stop the tracer may change the call
  * through orig_eax: getpid made getppid returns the parent's id, and a write
  * made -1 is not run and returns what the tracer left in eax, so the pipe
- * stays empty. On x86-64 SETREGS fails with EIO for a data segment selector
- * other than the null one, since the kernel keeps none for a thread.
- * Returns 0, or 1 after the failure is printed.
+ * stays empty. On x86-64 SETREGS fails with EIO for the kernel's data
+ * selector in DS, and takes the user data selector, which DS still has at
+ * the next stop. Returns 0, or 1 after the failure is printed.
  */
 static int syscall_changes(void)
 {
@@ -466,17 +468,22 @@ static int syscall_changes(void)
         return fail("the entry stop of getpid");
     }
 #if defined __x86_64__
-    regs.ds = 0x2b;
+    regs.ds = 0x18;
     if (ptrace(PTRACE_SETREGS, pid, NULL, &regs) != -1 || errno != EIO) {
-        return fail("a data segment selector the kernel does not keep was taken");
+        return fail("the kernel's data selector was taken for DS");
     }
-    regs.ds = 0;
+    regs.ds = 0x2b;
 #endif
     R_NR(regs) = SYS_getppid;
     if (ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0 ||
         syscall_entry(pid, SYS_write, &regs) != 0) {
         return fail("the entry stop of write");
     }
+#if defined __x86_64__
+    if (regs.ds != 0x2b) {
+        return fail("a DS selector set by SETREGS was not kept");
+    }
+#endif
     R_NR(regs) = -1;
     R_RET(regs) = 42;
     if (ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0 ||

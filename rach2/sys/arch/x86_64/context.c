@@ -43,21 +43,29 @@ int arch_context_check(void)
            (const char *)&c->id - (const char *)c != 24;
 }
 
-/** Read the running thread's FS and GS selectors, its FS base and its GS
- * base, which IA32_KERNEL_GS_BASE has while the kernel runs, into `p`'s
- * record. */
+/** Read the running thread's DS, ES, FS and GS selectors, its FS base and
+ * its GS base, which IA32_KERNEL_GS_BASE has while the kernel runs, into
+ * `p`'s record. */
 static void arch_bases_save(process_t *p)
 {
+    p->regs.ds_sel = (uint16_t)x86_64_ds_read();
+    p->regs.es_sel = (uint16_t)x86_64_es_read();
     p->regs.fs_sel = (uint16_t)x86_64_fs_read();
     p->regs.gs_sel = (uint16_t)x86_64_gs_read();
     p->tls_base = msr_read(MSR_FS_BASE);
     p->regs.gs_base = msr_read(MSR_KERNEL_GS_BASE);
 }
 
-/** Load `p`'s selectors where they differ from the ones in FS and GS, then
- * its bases, since a selector load sets the base as well. */
+/** Load `p`'s selectors where they differ from the ones in the registers,
+ * then its bases, since a load into FS or GS sets the base as well. */
 static void arch_bases_load(const process_t *p)
 {
+    if (x86_64_ds_read() != p->regs.ds_sel) {
+        x86_64_ds_load(p->regs.ds_sel);
+    }
+    if (x86_64_es_read() != p->regs.es_sel) {
+        x86_64_es_load(p->regs.es_sel);
+    }
     if (x86_64_fs_read() != p->regs.fs_sel) {
         x86_64_fs_load(p->regs.fs_sel);
     }
@@ -75,10 +83,10 @@ static void arch_bases_load(const process_t *p)
  * thread for the incoming one.
  *
  * The outgoing thread's selectors and bases are read back into its record
- * first (`arch_bases_save`): a program loads a selector into FS or GS
- * without a system call, and the load sets that base to the descriptor's,
- * 0. Then the incoming thread's kernel stack becomes the one the next entry
- * from user mode takes; its selectors and bases are loaded
+ * first (`arch_bases_save`): a program loads a selector into DS, ES, FS or
+ * GS without a system call, and a load into FS or GS sets that base to the
+ * descriptor's, 0. Then the incoming thread's kernel stack becomes the one
+ * the next entry from user mode takes; its selectors and bases are loaded
  * (`arch_bases_load`), the GS base where the `swapgs` of the return finds
  * it; and its page directory is loaded when it has one and the processor
  * does not have it loaded, or a shootdown passed it by.
@@ -134,8 +142,8 @@ void arch_context_init(process_t *proc, void (*entry_point)(void))
  * in RAX and `newsp`, when it is not 0, in RSP; `isr_return`; and the six
  * registers `x86_64_switch` pops, all zero. The child returns to user mode
  * through `iretq`, with RCX and R11 as the parent's `syscall` left them.
- * Its FS and GS selectors and its GS base are the parent's as they are now,
- * read from the processor; its FS base, which the caller sets, is the
+ * Its DS, ES, FS and GS selectors and its GS base are the parent's as they
+ * are now, read from the processor; its FS base, which the caller sets, is the
  * parent's too (`arch_tls_get`) unless `CLONE_SETTLS` gives it one
  * (`arch_clone_tls`).
  */
@@ -158,6 +166,8 @@ void arch_fork_frame(process_t *child, const isr_params_t *params, uintptr_t new
     }
     child->regs.rsp = (uint64_t)(uintptr_t)sp;
     if (current_proc) {
+        child->regs.ds_sel = (uint16_t)x86_64_ds_read();
+        child->regs.es_sel = (uint16_t)x86_64_es_read();
         child->regs.fs_sel = (uint16_t)x86_64_fs_read();
         child->regs.gs_sel = (uint16_t)x86_64_gs_read();
         child->regs.gs_base = msr_read(MSR_KERNEL_GS_BASE);
@@ -167,9 +177,10 @@ void arch_fork_frame(process_t *child, const isr_params_t *params, uintptr_t new
 /**
  * Every general register is zeroed, RDX among them, which the x86-64 ELF
  * ABI reads as a function to register with atexit when it is not 0, and
- * RFLAGS has IF alone, with bit 1, which is always set. FS and GS take the
- * null selector and the GS base goes back to 0, in the processor and in the
- * record; the caller sets the FS base, after the selector load here.
+ * RFLAGS has IF alone, with bit 1, which is always set. DS, ES, FS and GS
+ * take the null selector, as Linux gives a 64-bit program, and the GS base
+ * goes back to 0, in the processor and in the record; the caller sets the
+ * FS base, after the selector load here.
  */
 void arch_exec_frame(isr_params_t *p, uintptr_t entry, uintptr_t sp)
 {
@@ -180,10 +191,14 @@ void arch_exec_frame(isr_params_t *p, uintptr_t entry, uintptr_t sp)
     p->ss = GDT_USER_DATA;
     p->rflags = RFLAGS_START;
     if (current_proc) {
+        current_proc->regs.ds_sel = 0;
+        current_proc->regs.es_sel = 0;
         current_proc->regs.fs_sel = 0;
         current_proc->regs.gs_sel = 0;
         current_proc->regs.gs_base = 0;
     }
+    x86_64_ds_load(0);
+    x86_64_es_load(0);
     x86_64_fs_load(0);
     x86_64_gs_load(0);
     msr_write(MSR_KERNEL_GS_BASE, 0);

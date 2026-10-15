@@ -68,6 +68,36 @@ x86_64_gs_read:
     movw %gs, %ax
     ret
 
+# unsigned int x86_64_ds_read(void)
+# unsigned int x86_64_es_read(void)
+#
+# The selector in DS or ES, zero-extended.
+.globl x86_64_ds_read
+x86_64_ds_read:
+    xorl %eax, %eax
+    movw %ds, %ax
+    ret
+
+.globl x86_64_es_read
+x86_64_es_read:
+    xorl %eax, %eax
+    movw %es, %ax
+    ret
+
+# void x86_64_ds_load(unsigned int sel)
+# void x86_64_es_load(unsigned int sel)
+#
+# Load sel into DS or ES. Long mode ignores both bases, so nothing follows.
+.globl x86_64_ds_load
+x86_64_ds_load:
+    movw %di, %ds
+    ret
+
+.globl x86_64_es_load
+x86_64_es_load:
+    movw %di, %es
+    ret
+
 # void x86_64_fs_load(unsigned int sel)
 # void x86_64_gs_load(unsigned int sel)
 #
