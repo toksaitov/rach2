@@ -1006,10 +1006,6 @@ int main(void)
 
     check(waited_on_host == 0, "no row reached the sleeping wait");
 
-    if (fails == 0) {
-        printf("bcache_hosttest: OK\n");
-    }
-
     for (i = 0; i < (int)sizeof(image_vast); i++) {
         image_vast[i] = (unsigned char)(i / 4096u);
     }
@@ -1098,5 +1094,8 @@ int main(void)
           "and are written in two runs of twenty");
     bcache_invalidate(&vast);
 
+    if (fails == 0) {
+        printf("bcache_hosttest: OK\n");
+    }
     return fails > 255 ? 255 : fails;
 }
