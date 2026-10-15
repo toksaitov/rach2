@@ -17,14 +17,16 @@ extern int printf(const char *fmt, ...);
 
 static int fails;
 
-#define CHECK(cond)    \
-    do {               \
-        if (!(cond)) { \
-            fails++;   \
-        }              \
+/* Counts a failed check, and prints its line and condition. */
+#define CHECK(cond)                                           \
+    do {                                                      \
+        if (!(cond)) {                                        \
+            fails++;                                          \
+            printf("  FAIL: line %d: %s\n", __LINE__, #cond); \
+        }                                                     \
     } while (0)
 
-/* CHECK that also prints `what` when the check fails. */
+/* CHECK, with `what` printed in place of the condition. */
 #define CHECKN(cond, what)                  \
     do {                                    \
         if (!(cond)) {                      \

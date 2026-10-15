@@ -40,13 +40,17 @@ void klog(int level, const char *subsystem, const char *format, ...)
 
 #include "block/block.c"
 
+extern int printf(const char *fmt, ...);
+
 static int fails;
 
-#define CHECK(cond)    \
-    do {               \
-        if (!(cond)) { \
-            fails++;   \
-        }              \
+/* Counts a failed check, and prints its line and condition. */
+#define CHECK(cond)                                           \
+    do {                                                      \
+        if (!(cond)) {                                        \
+            fails++;                                          \
+            printf("  FAIL: line %d: %s\n", __LINE__, #cond); \
+        }                                                     \
     } while (0)
 
 static uint32_t backing_reads;
