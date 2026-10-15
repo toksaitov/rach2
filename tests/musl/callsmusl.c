@@ -1,75 +1,71 @@
 /**
- * The calls GNU libc programs make that the process work of milestone 54
- * added.
+ * callsmusl: check calls that GNU libc programs make, through musl and by
+ * number.
  *
- * sigtimedwait takes a blocked signal the process sent itself and returns
- * its number and sender, takes a signal sent to the thread before a lower
- * one sent to the process, waits for an alarm under a timeout of more than
- * 2^31 ticks, and with no signal pending its timeout ends it with EAGAIN.
- * kill of a child that has ended and is not yet reaped succeeds, alone and
- * by its group, as on Linux, and fails with ESRCH once it is reaped. A child
- * that starts a session and opens a free pseudo-terminal slave with
- * O_NOCTTY does not take it, and opening it again without the flag makes it
- * the controlling terminal with the child's group in the foreground, the
- * Linux rule BusyBox's telnetd depends on. getrusage reports the memory a
- * process has touched as ru_maxrss in kilobytes, and wait4 that of a child
- * that touched more, as GNU time reads them. A UDP socket connected to a
- * local port no socket has polls POLLERR once the port unreachable comes
- * back, and its next receive is ECONNREFUSED, as glibc's resolver expects,
- * ten times in a row, since errors over the loopback are not rate-limited.
- * A POSIX timer's signal comes with SI_TIMER and its value, a periodic
- * timer's signal blocked through several periods comes once with the others
- * as its overrun, and a deleted timer's id is EINVAL. sigqueue gives its
- * value and SI_QUEUE to the signal it sends, and rt_sigqueueinfo its errno
- * and value. A writer to a raw
- * pseudo-terminal slave whose master has not read waits for room, so the
- * master reads every byte of 64 KiB, and a non-blocking one takes EAGAIN;
- * two writers' lines reach the master each whole.
- * A signalfd reads a blocked signal sent to the process, with its sender,
- * and a sigqueue's value, and with none pending a non-blocking read is
- * EAGAIN.
- * A setgid directory gives a file made in it its group, and a directory
- * its group and the bit. A process of another user is refused the maps and
- * the descriptors of a root process under /proc, and reads its own. Its
- * /proc directory is root's while a change of ids leaves it not dumpable,
- * and its own once PR_SET_DUMPABLE makes it so, as on Linux, and so is a
- * descriptor open on its maps.
- * mlock, munlock, mlockall and munlockall accept a mapped range and refuse a
- * gap with ENOMEM; mincore reports a touched page resident.
+ * sigtimedwait takes a blocked signal the process sent itself and returns its
+ * number and sender, takes a signal sent to the thread before a lower one sent
+ * to the process, waits for an alarm under a timeout of more than 2^31 ticks,
+ * and with no signal pending its timeout ends it with EAGAIN. kill of a child
+ * that has ended and is not yet reaped succeeds, alone and by its group, as on
+ * Linux, and fails with ESRCH once it is reaped. A child that starts a session
+ * and opens a free pseudo-terminal slave with O_NOCTTY does not take it, and
+ * opening it again without the flag makes it the controlling terminal with the
+ * child's group in the foreground, the Linux rule BusyBox's telnetd depends on.
+ * getrusage reports the memory a process has touched as ru_maxrss in kilobytes,
+ * and wait4 that of a child that touched more, as GNU time reads them. A UDP
+ * socket connected to a local port no socket has polls POLLERR once the port
+ * unreachable comes back, and its next receive is ECONNREFUSED, as glibc's
+ * resolver expects, ten times in a row, since errors over the loopback are not
+ * rate-limited. A POSIX timer's signal comes with SI_TIMER and its value, a
+ * periodic timer's signal blocked through several periods comes once with the
+ * others as its overrun, and a deleted timer's id is EINVAL. sigqueue gives its
+ * value and SI_QUEUE to the signal it sends, and rt_sigqueueinfo its errno and
+ * value. A writer to a raw pseudo-terminal slave whose master has not read
+ * waits for room, so the master reads every byte of 64 KiB, and a non-blocking
+ * one takes EAGAIN; two writers' lines reach the master each whole. A signalfd
+ * reads a blocked signal sent to the process, with its sender, and a sigqueue's
+ * value, and with none pending a non-blocking read is EAGAIN. A setgid
+ * directory gives a file made in it its group, and a directory its group and
+ * the bit. A process of another user may not open the maps or the descriptors
+ * of a root process under /proc, and reads its own. Its /proc directory is
+ * root's while a change of ids leaves it not dumpable, and its own once
+ * PR_SET_DUMPABLE makes it so, as on Linux, and so is a descriptor open on its
+ * maps. mlock, munlock, mlockall and munlockall accept a mapped range, and
+ * mlock fails on a gap with ENOMEM; mincore reports a touched page resident.
  * getcpu reports a processor of the caller's affinity and node 0, and
  * personality keeps and returns its value. On x86-64 the ids 0xfffffffe read
  * back from getuid, geteuid, getgid and getegid unsigned, not as an error.
- * sendmmsg sends two datagrams in one call over an AF_UNIX pair and
- * recvmmsg receives both, each with its count; on x86-64 a count of 2^32 + 1
- * receives one, and socket and socketpair of the domain 2^32 + 1 make AF_UNIX
- * sockets, since each takes an int. clock_gettime64 reads the
- * monotonic clock with 64-bit fields (clock_gettime on x86-64). close_range
- * marks a range of descriptors close-on-exec and closes it, reaches past the
- * table's end, and refuses a flag it does not take and a backward range. splice
- * from a pipe to /dev/null, tee and sendfile answer EINVAL, which GNU grep
- * takes for a descriptor it must read instead, and EBADF for a closed one.
+ * sendmmsg sends two datagrams in one call over an AF_UNIX pair and recvmmsg
+ * receives both, each with its count; on x86-64 a count of 2^32 + 1 receives
+ * one, and socket and socketpair of the domain 2^32 + 1 make AF_UNIX sockets,
+ * since each takes an int. clock_gettime64 reads the monotonic clock with
+ * 64-bit fields (clock_gettime on x86-64). close_range marks a range of
+ * descriptors close-on-exec and closes it, reaches past the table's end, and
+ * fails with EINVAL for a flag it does not take and for a backward range.
+ * splice from a pipe to /dev/null, tee and sendfile answer EINVAL, which GNU
+ * grep takes for a descriptor it must read instead, and EBADF for a closed one.
  * posix_fallocate gives a file in /dev/shm its pages, the size and the blocks
- * of the range, and answers EOPNOTSUPP for a file of KRFFS open for writing,
- * a /proc file among them, after which glibc's writes the range itself,
- * EBADF for one open only for reading, EINVAL for a length of 0, ESPIPE for
- * a pipe, and EOPNOTSUPP for a mode Linux does not take before the check
- * that the descriptor is open for writing. adjtimex reads an unsynchronized
- * clock with its 10 ms tick, and clock_adjtime of CLOCK_MONOTONIC is
- * EOPNOTSUPP.
- * The extended attribute calls find the file and answer as Linux does for a
- * file system without attributes: an empty list and EOPNOTSUPP to get one,
- * and ENOENT for a missing file. readahead and posix_fadvise accept a
- * regular file, and posix_fadvise refuses a pipe with ESPIPE.
- * setitimer's ITIMER_VIRTUAL and ITIMER_PROF post SIGVTALRM and SIGPROF as
- * the process spins, and getitimer reports the interval; so do POSIX timers
- * on the process's and the thread's clocks of processor time. /dev/mem reads
- * the first megabyte and maps the local APIC, and refuses RAM and a private
- * mapping. klogctl gives the log ring's size, its records whole, and after
- * a clear none of those before; /dev/log leads to /var/run/log. The clock's
- * wake alarm refuses a time past or two days ahead, ends a read at the
- * alarm, and wakes a suspend to idle that gives no process time meanwhile.
+ * of the range, and answers EOPNOTSUPP for a file of KRFFS or of /proc open for
+ * writing, after which glibc's writes the range itself, EBADF for one open only
+ * for reading, EINVAL for a length of 0, ESPIPE for a pipe, and EOPNOTSUPP for
+ * a mode Linux does not take before the check that the descriptor is open for
+ * writing. adjtimex reads an unsynchronized clock with its 10 ms tick, and
+ * clock_adjtime of CLOCK_MONOTONIC is EOPNOTSUPP. The extended attribute calls
+ * find the file and answer as Linux does for a file system without attributes:
+ * an empty list and EOPNOTSUPP to get one, and ENOENT for a missing file.
+ * readahead and posix_fadvise accept a regular file, and posix_fadvise fails on
+ * a pipe with ESPIPE. setitimer's ITIMER_VIRTUAL and ITIMER_PROF post SIGVTALRM
+ * and SIGPROF as the process spins, and getitimer reports the interval; so do
+ * POSIX timers on the process's and the thread's clocks of processor time.
+ * /dev/mem reads the first megabyte and maps the local APIC, and fails with
+ * EPERM for RAM and with EINVAL for a private mapping. klogctl gives the log
+ * ring's size, its records whole, and after a clear none of those before;
+ * /dev/log leads to /var/run/log. The clock's wake alarm fails with ETIME for a
+ * time past and EINVAL for one two days ahead, ends a read at the alarm, and
+ * wakes a suspend to idle that gives no process time meanwhile.
  *
- * Prints "CALLSMUSL OK" on success and "CALLSMUSL FAIL (detail)" otherwise.
+ * It prints "CALLSMUSL OK" and exits 0 on success, or prints "CALLSMUSL FAIL
+ * (detail: errno N)" and exits 1 at the first failure.
  */
 
 #define _GNU_SOURCE
@@ -115,14 +111,17 @@
 #define SYS_CLOCK_GETTIME64 403
 #endif
 
+/** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
 {
     printf("CALLSMUSL FAIL (%s: errno %d)\n", what, errno);
     return 1;
 }
 
-/* Write a byte to each page of `n` bytes at `p`, through a volatile pointer
-   so the compiler cannot drop stores nothing reads. */
+/**
+ * Write a byte to each page of the `n` bytes at `p`, through a volatile
+ * pointer so the compiler cannot drop stores nothing reads.
+ */
 static void touch(char *p, long n)
 {
     volatile char *v = p;
@@ -133,7 +132,10 @@ static void touch(char *p, long n)
     }
 }
 
-/* ru_maxrss, in kilobytes, of the caller and of a child it waits for. */
+/**
+ * Check ru_maxrss, in kilobytes, of the caller and of a child it waits for.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int peaks(void)
 {
     struct rusage ru;
@@ -164,8 +166,12 @@ static int peaks(void)
     return 0;
 }
 
-/* Ten datagrams to a closed local port, each answered with a port
-   unreachable, since errors over the loopback are not rate-limited. */
+/**
+ * Check ten datagrams to a closed local port, each answered with a port
+ * unreachable, since errors over the loopback are not rate-limited: each polls
+ * POLLERR and its receive fails with ECONNREFUSED. Returns 0, or 1 after the
+ * failure is printed.
+ */
 static int refusals(void)
 {
     struct sockaddr_in a;
@@ -198,7 +204,10 @@ static int refusals(void)
     return 0;
 }
 
-/* POSIX timers on SIGUSR2, which stays blocked and is taken by sigtimedwait. */
+/**
+ * Check POSIX timers on SIGUSR2, which stays blocked and is taken by
+ * sigtimedwait. Returns 0, or 1 after the failure is printed.
+ */
 static int timers(void)
 {
     struct sigevent se;
@@ -240,7 +249,10 @@ static int timers(void)
     return 0;
 }
 
-/* sigqueue to the caller's own process, taken by sigtimedwait. */
+/**
+ * Check sigqueue and rt_sigqueueinfo to the caller's own process, taken by
+ * sigtimedwait. Returns 0, or 1 after the failure is printed.
+ */
 static int queues(void)
 {
     struct timespec wait = {2, 0};
@@ -277,7 +289,10 @@ static int queues(void)
     return 0;
 }
 
-/* A non-blocking signalfd of SIGUSR2, which stays blocked. */
+/**
+ * Check a non-blocking signalfd of SIGUSR2, which stays blocked. Returns 0, or
+ * 1 after the failure is printed.
+ */
 static int signalfds(void)
 {
     struct signalfd_siginfo si;
@@ -303,7 +318,10 @@ static int signalfds(void)
     return 0;
 }
 
-/* Files made in a setgid directory of group 4242. */
+/**
+ * Check the group of a file and a directory made in a setgid directory of
+ * group 4242. Returns 0, or 1 after the failure is printed.
+ */
 static int setgids(void)
 {
     const char *dir = "/tmp/callsmusl.sg";
@@ -330,9 +348,13 @@ static int setgids(void)
     return 0;
 }
 
-/* As user 4243, open the root process `parent`'s maps and fd directory and
-   read a link in that directory, which are EACCES, and open the caller's own
-   maps; the number of the first that went wrong, or 0. */
+/**
+ * Run in a child of root: as user 4243, open the root process `parent`'s maps
+ * and fd directory and read a link in that directory, which fail with EACCES,
+ * open the caller's own maps, and check the owner of its /proc directory
+ * before and after PR_SET_DUMPABLE. Returns 0, or the number of the first
+ * step that went wrong.
+ */
 static int privacies_child(pid_t parent)
 {
     char path[64], link[64];
@@ -369,7 +391,10 @@ static int privacies_child(pid_t parent)
     return 0;
 }
 
-/* A child runs `privacies_child` and exits with its number. */
+/**
+ * Run `privacies_child` in a child and judge its exit status. Returns 0, or 1
+ * after the failure is printed.
+ */
 static int privacies(void)
 {
     int status;
@@ -395,11 +420,14 @@ static int privacies(void)
     return 0;
 }
 
-/* Two children write 20000 lines of seven letters to the slave `name`, one
-   write a line, of 'a' and of 'b', through output processing, which turns
-   each newline into two bytes: every line reaches the master `master`
-   whole, as Linux's terminal write lock keeps a write from being cut by
-   another's. 0, or -1 when a line was mixed or a child failed. */
+/**
+ * Check that when two children write 20000 lines of seven letters to the
+ * slave `name`, one write a line, of 'a' and of 'b', through output
+ * processing, which turns each newline into two bytes, every line reaches
+ * the master `master` whole, as Linux's terminal write lock keeps a write
+ * from being cut by another's. Returns 0, or -1 when a line was mixed or a
+ * child failed.
+ */
 static int whole_writes(int master, const char *name)
 {
     char got[4096], line[8], cur = 0;
@@ -450,10 +478,12 @@ static int whole_writes(int master, const char *name)
     return bad == 0 ? 0 : -1;
 }
 
-/* A slave written past what the master ring holds: a non-blocking write is
-   cut and then EAGAIN, and a child's 64 KiB, written while the master waits
-   before it reads, all reach the master; two children's lines reach it
-   each whole. */
+/**
+ * Check a slave written past what the master ring holds: a non-blocking
+ * write is cut and then EAGAIN, and a child's 64 KiB, written while the
+ * master waits before it reads, all reach the master; two children's lines
+ * reach it each whole. Returns 0, or 1 after the failure is printed.
+ */
 static int flows(void)
 {
     char name[32], buf[4096];
@@ -505,7 +535,11 @@ static int flows(void)
     return 0;
 }
 
-/* Whether a session leader takes a free slave it opens without O_NOCTTY. */
+/**
+ * Check that a session leader does not take a free slave it opens with
+ * O_NOCTTY, and takes it when it opens it again without the flag.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int terminals(void)
 {
     char name[32];
@@ -537,7 +571,11 @@ static int terminals(void)
     return 0;
 }
 
-/* A child that has ended is a target until it is reaped. */
+/**
+ * Check that a child that has ended is a target of kill, alone and by its
+ * group, until it is reaped, and ESRCH after. Returns 0, or 1 after the failure
+ * is printed.
+ */
 static int zombies(void)
 {
     siginfo_t info;
@@ -559,6 +597,12 @@ static int zombies(void)
     return 0;
 }
 
+/**
+ * Check sigtimedwait: a pending signal and its sender, EAGAIN with none, a
+ * thread's signal before a lower one of the process, and a timeout past 2^31
+ * ticks; then the rows of `zombies`. Returns 0, or 1 after the failure is
+ * printed.
+ */
 static int signals(void)
 {
     sigset_t set;
@@ -600,6 +644,11 @@ static int signals(void)
     return zombies();
 }
 
+/**
+ * Check mlock, munlock, mlockall and munlockall on a mapped range, mlock across
+ * a gap, and mincore of a touched page. Returns 0, or 1 after the failure is
+ * printed.
+ */
 static int memory(void)
 {
     long page = sysconf(_SC_PAGESIZE);
@@ -628,6 +677,10 @@ static int memory(void)
     return 0;
 }
 
+/**
+ * Check getcpu and personality, and on x86-64 the ids 0xfffffffe read back
+ * unsigned. Returns 0, or 1 after the failure is printed.
+ */
 static int identity(void)
 {
     unsigned cpu = 99, node = 7;
@@ -668,6 +721,11 @@ static int identity(void)
     return 0;
 }
 
+/**
+ * Check sendmmsg and recvmmsg over an AF_UNIX pair, and on x86-64 a count and a
+ * domain past 32 bits, of which the kernel takes the low word. Returns 0, or 1
+ * after the failure is printed.
+ */
 static int messages(void)
 {
     int sv[2];
@@ -730,6 +788,12 @@ static int messages(void)
     return 0;
 }
 
+/**
+ * Check clock_gettime64 of the monotonic clock, and the raw time call, which
+ * glibc makes on x86-64: it gives real time's seconds, between two readings
+ * of the clock taken around it whatever the process waited, and stores them
+ * as well. Returns 0, or 1 after the failure is printed.
+ */
 static int clocks(void)
 {
     int64_t t[2] = {-1, -1};
@@ -740,9 +804,6 @@ static int clocks(void)
         t[1] >= 1000000000) {
         return fail("clock_gettime64");
     }
-    /* The raw time call, which glibc makes on x86-64, gives real time's
-       seconds, between two readings of the clock taken around it whatever
-       the process waited, and stores them as well. */
     if (clock_gettime(CLOCK_REALTIME, &before) != 0) {
         return fail("clock_gettime before time");
     }
@@ -756,6 +817,11 @@ static int clocks(void)
     return 0;
 }
 
+/**
+ * Check close_range, call 436 on both architectures: CLOSE_RANGE_CLOEXEC, an
+ * unknown flag, a backward range, and a range to the end of the table.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int ranges(void)
 {
     int fd[3];
@@ -796,6 +862,11 @@ static int ranges(void)
     return 0;
 }
 
+/**
+ * Check that splice from a pipe to /dev/null, tee and sendfile fail with
+ * EINVAL, and splice from a closed descriptor with EBADF. Returns 0, or 1 after
+ * the failure is printed.
+ */
 static int copies(void)
 {
     int p[2], q[2];
@@ -824,8 +895,11 @@ static int copies(void)
     return 0;
 }
 
-/* adjtimex reads the clock's state as Linux's starts, unsynchronized, and
-   clock_adjtime adjusts CLOCK_REALTIME alone. */
+/**
+ * Check that adjtimex reads the clock's state as Linux's starts,
+ * unsynchronized, and that clock_adjtime adjusts CLOCK_REALTIME alone.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int adjusts(void)
 {
     struct timex tx;
@@ -842,8 +916,11 @@ static int adjusts(void)
     return 0;
 }
 
-/* Extended attributes, which no file system here stores, and the advice
-   calls, which change nothing but check their descriptor. */
+/**
+ * Check the extended attribute calls, which no file system here stores, and
+ * the advice calls, which change nothing but check their descriptor.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int advises(void)
 {
     char v[16];
@@ -874,7 +951,10 @@ static int advises(void)
     return 0;
 }
 
-/** posix_fallocate in /dev/shm, a tmpfs, which makes the range's pages. */
+/**
+ * Check posix_fallocate in /dev/shm, a tmpfs, which makes the range's pages.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int reserves_shm(void)
 {
     struct stat st;
@@ -889,6 +969,11 @@ static int reserves_shm(void)
     return 0;
 }
 
+/**
+ * Check posix_fallocate and fallocate on a KRFFS file in /tmp, a pipe and a
+ * /proc file, then the rows of `reserves_shm`. Returns 0, or 1 after the
+ * failure is printed.
+ */
 static int reserves(void)
 {
     int p[2];
@@ -926,37 +1011,45 @@ static int reserves(void)
     return reserves_shm();
 }
 
+/* The counts of SIGVTALRM and SIGPROF that on_vtalrm and on_prof took. */
 static volatile sig_atomic_t vtalrms, profs;
 
+/** Count a SIGVTALRM. */
 static void on_vtalrm(int signo)
 {
     (void)signo;
     vtalrms++;
 }
 
+/** Count a SIGPROF. */
 static void on_prof(int signo)
 {
     (void)signo;
     profs++;
 }
 
+/* The counts of SIGUSR1 and SIGUSR2 that on_usr1 and on_usr2 took. */
 static volatile sig_atomic_t usr1s, usr2s;
 
+/** Count a SIGUSR1. */
 static void on_usr1(int signo)
 {
     (void)signo;
     usr1s++;
 }
 
+/** Count a SIGUSR2. */
 static void on_usr2(int signo)
 {
     (void)signo;
     usr2s++;
 }
 
-/* Spend a while in user mode: ITIMER_VIRTUAL counts only user time, and a
-   loop that did nothing but call times() would spend nearly all of its time
-   in the kernel, where a slow guest's ticks all land. */
+/**
+ * Spend a while in user mode. ITIMER_VIRTUAL counts only user time, and a
+ * loop that did nothing but call times() would spend nearly all of its time
+ * in the kernel, where a slow guest's ticks all land.
+ */
 static void spin_user(void)
 {
     volatile unsigned int n = 0;
@@ -966,10 +1059,12 @@ static void spin_user(void)
     }
 }
 
-/* POSIX timers on the process's and the thread's clocks of processor time:
-   each posts its signal three times while the process spins for at most
-   three seconds of processor time, and timer_gettime reports no more left
-   than its interval. */
+/**
+ * Check POSIX timers on the process's and the thread's clocks of processor
+ * time: each posts its signal three times while the process spins for at
+ * most three seconds of processor time, and timer_gettime reports no more
+ * left than its interval. Returns 0, or 1 after the failure is printed.
+ */
 static int cpu_ptimers(void)
 {
     struct itimerspec every = {{0, 10000000}, {0, 10000000}}, cur;
@@ -1018,9 +1113,12 @@ static int cpu_ptimers(void)
     return 0;
 }
 
-/* The timers of processor time, which gprof's sampling uses: each posts its
-   signal three times while the process spins for at most three seconds of
-   processor time, and a value of zero disarms it. */
+/**
+ * Check the interval timers of processor time, which gprof's sampling uses:
+ * each posts its signal three times while the process spins for at most
+ * three seconds of processor time, and a value of zero disarms it. Then the
+ * rows of `cpu_ptimers`. Returns 0, or 1 after the failure is printed.
+ */
 static int cputimers(void)
 {
     struct itimerval every = {{0, 10000}, {0, 10000}}, off = {{0, 0}, {0, 0}}, cur;
@@ -1051,10 +1149,13 @@ static int cputimers(void)
     return cpu_ptimers();
 }
 
-/* /dev/mem as Linux's STRICT_DEVMEM gives it to root: the first megabyte
-   and the local APIC's registers read, by pread and through a shared
-   mapping, a frame of RAM at 32 MiB refused both ways with EPERM, and a
-   private mapping refused with EINVAL. */
+/**
+ * Check /dev/mem as Linux's STRICT_DEVMEM gives it to root: the first megabyte
+ * read by pread and the local APIC's registers through a shared mapping, a
+ * frame of RAM at 32 MiB, which fails both ways with EPERM, and a private
+ * mapping, which fails with EINVAL. Returns 0, or 1 after the failure is
+ * printed.
+ */
 static int devmems(void)
 {
     unsigned char low[16];
@@ -1083,9 +1184,12 @@ static int devmems(void)
     return 0;
 }
 
-/* The kernel's log through syslog(2): the ring's size, the whole ring read
-   as records that begin with a priority, after a clear nothing of what came
-   before, and /dev/log a link to the syslog daemon's socket. */
+/**
+ * Check the kernel's log through syslog(2): the ring's size, the whole ring
+ * read as records that begin with a priority, after a clear nothing of what
+ * came before, and /dev/log a link to the syslog daemon's socket.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int klogs(void)
 {
     static char ring[16384];
@@ -1120,7 +1224,10 @@ struct wkalrm {
     int tm[9];
 };
 
-/* The CPU ticks /proc/PID/stat gives `pid` in user and system mode. */
+/**
+ * Return the CPU ticks /proc/PID/stat gives `pid` in user and system mode,
+ * or 0 when the file cannot be read.
+ */
 static long cpu_ticks(pid_t pid)
 {
     char path[32], text[512];
@@ -1148,8 +1255,11 @@ static long cpu_ticks(pid_t pid)
     return u + s;
 }
 
-/* Set /dev/rtc0's wake alarm `ahead` seconds from the clock's time;
-   ioctl's result, with the alarm's date and time in `*w`. */
+/**
+ * Set the wake alarm of /dev/rtc0, open as `fd`, `ahead` seconds from the
+ * clock's time. Returns ioctl's result, with the alarm's date and time in
+ * `*w`.
+ */
 static int wake_in(int fd, int ahead, struct wkalrm *w)
 {
     struct tm t;
@@ -1178,13 +1288,15 @@ static int wake_in(int fd, int ahead, struct wkalrm *w)
     return ioctl(fd, RTC_WKALM_SET, w);
 }
 
-/* The clock's wake alarm and suspend to idle: an alarm in the past is
-   ETIME and one two days ahead EINVAL; one two seconds ahead reads back
-   enabled and ends a read of /dev/rtc0 with RTC_AF; the device may wake the
-   machine; a descriptor open on /sys/power/state has mode 0644, as its
-   path does; and a write of freeze to it, with the alarm set again,
-   returns at the alarm with a spinning child given no processor time
-   meanwhile, which the kernel counts. */
+/**
+ * Check the clock's wake alarm and suspend to idle: an alarm in the past is
+ * ETIME and one two days ahead EINVAL; one two seconds ahead reads back
+ * enabled and ends a read of /dev/rtc0 with RTC_AF; the device may wake the
+ * machine; a descriptor open on /sys/power/state has mode 0644, as its path
+ * does; and a write of freeze to it, with the alarm set again, returns at
+ * the alarm with a spinning child given no processor time meanwhile, which
+ * the kernel counts. Returns 0, or 1 after the failure is printed.
+ */
 static int rtcs(void)
 {
     struct wkalrm w, back;
