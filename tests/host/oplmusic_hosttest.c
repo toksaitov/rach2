@@ -25,7 +25,7 @@ static int fails;
         }                                                           \
     } while (0)
 
-static unsigned int calls, samples, events;
+static unsigned int calls, samples, events; /* counted by DG_TimeSpent */
 
 /** Count emulator calls, generated samples and track events. */
 void DG_TimeSpent(int what, uint32_t n)
@@ -53,6 +53,9 @@ void Z_Free(void *ptr)
     free(ptr);
 }
 
+/* The GENMIDI lump: an 8-byte header and 175 instruments of 36 bytes. A
+ * row sets the length the WAD declares for it, whether it is present, and
+ * whether caching it fails. */
 static unsigned char genmidi[8 + 175 * 36];
 static int lump_length = sizeof(genmidi);
 static int lump_present = 1;
@@ -120,15 +123,17 @@ static void check_instruments(void)
     genmidi[0] = '#';
 }
 
-static unsigned char midi[256];
+static unsigned char midi[256]; /* the MIDI file a row builds */
 static int midi_len;
 
+/** Append `n` bytes to `midi`. */
 static void put(const unsigned char *bytes, int n)
 {
     memcpy(midi + midi_len, bytes, (size_t)n);
     midi_len += n;
 }
 
+/** Append a track chunk of `n` bytes of events to `midi`. */
 static void put_track(const unsigned char *events_bytes, int n)
 {
     unsigned char header[8];
@@ -145,7 +150,7 @@ static void put_track(const unsigned char *events_bytes, int n)
     put(events_bytes, n);
 }
 
-/* A format 1 file: two tracks, 96 ticks to the beat. */
+/** Build in `midi` a format 1 file: two tracks, 96 ticks to the beat. */
 static void build_midi(void)
 {
     static const unsigned char header[14] = {'M', 'T', 'h', 'd', 0, 0, 0, 6, 0, 1, 0, 2, 0, 96};
@@ -306,7 +311,18 @@ static void check_loops(void)
     }
 }
 
-/** Run the validation cases and the two-track playback regression. */
+/**
+ * Run the validation cases and the two-track playback regression. The exit
+ * status is the count of failed checks, at most 100.
+ *
+ * At 49716 Hz, 4096 samples are 82 ms and a beat is half a second, so the
+ * first call carries the tempo, the end of track 0 and the note that track
+ * 1 opens with, and no more. Then two seconds cover the four note events
+ * and the end of the second track; a player that read track 0 alone would
+ * have stopped at its end and given silence from there. The emulator is
+ * called for the song's own length, three beats of it, and not for the
+ * silence after the end, which is a memset.
+ */
 int main(void)
 {
     static int16_t buffer[4096 * 2];
@@ -326,9 +342,6 @@ int main(void)
     OPLMusic_PlaySong(song, 0);
     CHECK("and is playing", OPLMusic_IsPlaying() == 1);
 
-    /* 4096 samples are 82 ms at this rate and a beat is half a second, so
-       the first call carries the tempo, the end of track 0 and the note
-       that track 1 opens with, and no more. */
     calls = 0;
     samples = 0;
     events = 0;
@@ -338,9 +351,6 @@ int main(void)
     CHECK("the emulator is asked for runs of samples, not one at a time",
           calls > 0 && calls <= 4 && samples == 4096);
 
-    /* Two seconds, which covers the four note events and the end of the
-       second track. A player that read track 0 alone would have stopped at
-       its end above and answered silence from here. */
     {
         int i;
 
@@ -351,8 +361,6 @@ int main(void)
     }
     CHECK("both notes are sounded and stopped, and the track ends", events >= 7);
     CHECK("in a few calls to the emulator for each buffer", calls <= 4 * 25);
-    /* The emulator is asked for the song's own length, three beats of it,
-       and not for the silence after the end, which is a memset. */
     CHECK("with the song's own length generated and no more",
           samples >= 70000 && samples <= 4096 * 25);
     CHECK("and the song, which does not loop, has stopped", OPLMusic_IsPlaying() == 0);

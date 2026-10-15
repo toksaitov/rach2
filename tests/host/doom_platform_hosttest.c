@@ -1,6 +1,11 @@
 /**
  * Exercise Doom startup arguments, zone sizing and normal quit.
  *
+ * The Rach2 platform file, the engine's system layer and its argument
+ * parser are compiled here with their system calls renamed to models: a
+ * /proc/meminfo whose free memory a row sets, the framebuffer and mouse
+ * devices as fixed descriptors, and an exit that returns to the row.
+ *
  * host-deps:
  * host-cflags: -I ports/doom/src -DNORMALUNIX -DCMAP256
  */
@@ -50,15 +55,16 @@ static void test_exit(int status) __attribute__((noreturn));
 #undef exit
 #undef _exit
 
-static jmp_buf quit_env;
+static jmp_buf quit_env; /* where the quit returns to the row */
+/* `free_kib` is MemFree in KiB, or -1 for a /proc/meminfo that fails. */
 static int failures, checks, free_kib, zone_mib, expected_mib, reports;
 static int closed_mouse, closed_fb, engine_closed, expected_argc;
 static char **expected_argv;
 static void *allocations[16];
 static int allocation_count;
 static const char *expected_wad;
-static size_t reject_size;
-static int callback_exits;
+static size_t reject_size; /* an allocation of this size fails; 0 for none */
+static int callback_exits; /* the engine's exit callback calls exit itself */
 pixel_t *DG_ScreenBuffer;
 boolean palette_changed;
 struct color colors[256];
@@ -242,7 +248,11 @@ int M_snprintf(char *buf, size_t len, const char *fmt, ...)
     return result;
 }
 
-/** Run one startup and quit, then release every host allocation. */
+/**
+ * Run one startup and quit, then release every host allocation. `kib` is
+ * the free memory /proc/meminfo reports, or -1 for none; `mib` is the zone
+ * size and `wad` the IWAD the startup must choose.
+ */
 static void run_case(int argc, char **argv, int kib, int mib, const char *wad)
 {
     int i;
@@ -269,7 +279,8 @@ static void run_case(int argc, char **argv, int kib, int mib, const char *wad)
     fb_fd = mouse_fd = -1;
 }
 
-/** Cover defaults, the low-memory branch, retries and explicit options. */
+/** Cover defaults, the low-memory branch, retries and explicit options: 0
+ * when every check passes, 1 otherwise. */
 int main(void)
 {
     char *plain[] = {"doom", NULL};
