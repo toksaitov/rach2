@@ -26,7 +26,7 @@
 /* What the formatter wrote, `used` bytes of it. */
 static char out[512];
 static size_t used;
-static int fails;
+static int rows, fails;
 
 /** Count and print a failure when `cond` is false; `what` says what held. */
 #define CHECK(cond, what)                          \
@@ -53,6 +53,7 @@ static void row(const char *want, const char *format, int n, ...)
     va_list ap;
 
     (void)n;
+    rows++;
     used = 0;
     memset(out, 0, sizeof(out));
     va_start(ap, n);
@@ -114,7 +115,7 @@ int main(void)
     row("q", "%q", 0);
 
     if (fails == 0) {
-        printf("kfmt_hosttest: 22 rows passed\n");
+        printf("kfmt_hosttest: %d rows passed\n", rows);
     }
     return fails > 255 ? 255 : fails;
 }
