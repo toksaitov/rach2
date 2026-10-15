@@ -138,8 +138,8 @@ static uint32_t hub_slow(void)
 #define HUB_SCAN       5 /* each port's status read once */
 #define HUB_RUNNING    6
 #define HUB_SCAN_WAIT  7 /* `rach2.hubslow`: between two ports of the scan */
-#define HUB_SETTING    7 /* a multi-TT hub's setting selected */
-#define HUB_DEPTH      8 /* a SuperSpeed hub being told its depth */
+#define HUB_SETTING    8 /* a multi-TT hub's setting selected */
+#define HUB_DEPTH      9 /* a SuperSpeed hub being told its depth */
 
 /* What a port is doing, for the core's reset. */
 #define RESET_NONE   0
