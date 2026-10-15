@@ -1,5 +1,5 @@
 #!/bin/sh
-# ci_test.sh: check unfinished ci reports and the runs bisection repeats.
+# ci_test.sh: check unfinished ci reports, bisection runs and verdict errors.
 # The scripts run in a private tree with stand-ins for git, gh and make.
 
 set -eu
@@ -33,12 +33,24 @@ fault()
         items)
             sed 's/core) test_set=core ;;/core) test_set=core; test_items="" ;;/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
             ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
+        comment)
+            sed '/the comment on/s/return 1/return 0/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
+            ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
+        label)
+            sed '/the label on/s/status=1/status=0/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
+            ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
+        intermittent)
+            sed '/say .*passed .*when run again/s/|| status=1/|| :/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
+            ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
     esac
 }
 if [ "$mode" = texts ]; then
     fault report
     fault bisect
     fault items
+    fault comment
+    fault label
+    fault intermittent
     exit 0
 fi
 
@@ -68,7 +80,9 @@ case "$1 $2" in
     'api '*) ;;
     'issue list') ;;
     'issue create') echo https://example.invalid/issues/7 ;;
-    'issue comment'|'issue edit'|'issue close'|'workflow run') ;;
+    'issue comment') [ "${CI_TEST_GH_FAIL:-}" != comment ] ;;
+    'issue edit') [ "${CI_TEST_GH_FAIL:-}" != edit ] ;;
+    'issue close'|'workflow run') ;;
     *) exit 2 ;;
 esac
 EOF
@@ -100,6 +114,8 @@ cd "$work/tree"
 report()
 {
     kind=$1 state=$2 item=$3
+    CI_TEST_GH_FAIL=
+    export CI_TEST_GH_FAIL
     rm -rf "$work/results"
     mkdir -p "$work/results/$kind-i686" "$work/results/$kind-x86_64"
     result=$work/results/$kind-i686
@@ -121,19 +137,31 @@ report()
     fi
 }
 
-# bisect ITEM COMMAND FAIL: check the selected command and repeated verdicts.
+# bisect ITEM COMMAND FAIL [GH-FAIL]: check runs and verdict delivery.
 # For an item that is not an unfinished run, COMMAND is the tests/run lines
 # expected after the build, and the stand-in runner always passes.
 bisect()
 {
-    item=$1 command=$2 CI_TEST_FAIL=$3
-    export CI_TEST_FAIL
+    item=$1 command=$2 CI_TEST_FAIL=$3 CI_TEST_GH_FAIL=${4:-}
+    export CI_TEST_FAIL CI_TEST_GH_FAIL
     RUNNER_TEMP=$work/logs
     export RUNNER_TEMP
     rm -rf "$RUNNER_TEMP"
     : > "$work/events"
     : > "$work/gh.log"
-    sh "$work/bisect.sh" i686 good bad 7 "$item" > "$work/bisect.log" 2>&1 || return 1
+    status=0
+    sh "$work/bisect.sh" i686 good bad 7 "$item" > "$work/bisect.log" 2>&1 || status=$?
+    if [ -n "$CI_TEST_GH_FAIL" ]; then
+        [ "$status" = 1 ] || return 1
+        case $CI_TEST_GH_FAIL in
+            comment) diagnostic=comment ;;
+            edit) diagnostic=label ;;
+        esac
+        grep -q "the $diagnostic on #7 failed" "$work/bisect.log" || return 1
+    else
+        [ "$status" = 0 ] || return 1
+    fi
+    grep -q 'issue comment 7 ' "$work/gh.log" || return 1
     case $item in
         unfinished-*)
             if [ "$CI_TEST_FAIL" = 0 ]; then
@@ -164,7 +192,10 @@ rows()
         bisect "unfinished-$kind" "$kind" 1 || return 1
     done
     bisect runner 'tests runner' 0 || return 1
-    bisect 'style core' 'tests style\ntests core' 0
+    bisect 'style core' 'tests style\ntests core' 0 || return 1
+    bisect unfinished-core core 1 comment || return 1
+    bisect unfinished-core core 0 comment || return 1
+    bisect unfinished-core core 0 edit
 }
 
 if ! rows; then
@@ -187,6 +218,18 @@ if [ "$mode" = mutate ]; then
         echo 'ci-test: result: fail: core items fault passed' >&2; exit 1
     fi
     cp "$repo/tools/ci/bisect.sh" "$work/bisect.sh"
+    for name in comment label intermittent; do
+        fault "$name"
+        case $name in
+            comment) fail=1; gh_fail=comment ;;
+            label) fail=0; gh_fail=edit ;;
+            intermittent) fail=0; gh_fail=comment ;;
+        esac
+        if bisect unfinished-core core "$fail" "$gh_fail"; then
+            echo "ci-test: result: fail: $name fault passed" >&2; exit 1
+        fi
+        cp "$repo/tools/ci/bisect.sh" "$work/bisect.sh"
+    done
     rows
 fi
-echo 'ci-test: result: pass: unfinished runs, the runner suite and core items'
+echo 'ci-test: result: pass: unfinished runs, the runner suite, core items and verdict errors'

@@ -50,12 +50,12 @@ case " $items " in
        done ;;
 esac
 
-say() { # say TEXT: comment on the issue and print the text
+say() { # say TEXT: print and post the verdict; return 1 if the comment fails
     echo "ci: bisect: $1"
     gh issue comment "$issue" --repo "$repo" --body "bisect on $ARCH: $1
 
 Logs: \`gh run download $GITHUB_RUN_ID --repo $repo --name bisect-$issue\`" > /dev/null ||
-        echo "ci: bisect: the comment on #$issue failed" >&2
+        { echo "ci: bisect: the comment on #$issue failed" >&2; return 1; }
 }
 
 # The abbreviated hash of a commit.
@@ -91,10 +91,11 @@ tested() { # tested COMMIT
 
 tested "$bad"
 case $? in
-    0) gh issue edit "$issue" --repo "$repo" --add-label intermittent > /dev/null ||
-           echo "ci: bisect: the label on #$issue failed" >&2
-       say "$(short "$bad") passed $items when run again; the failure did not repeat, so the issue is intermittent and stays open"
-       exit 0 ;;
+    0) status=0
+       gh issue edit "$issue" --repo "$repo" --add-label intermittent > /dev/null ||
+           { echo "ci: bisect: the label on #$issue failed" >&2; status=1; }
+       say "$(short "$bad") passed $items when run again; the failure did not repeat, so the issue is intermittent and stays open" || status=1
+       exit "$status" ;;
     2) say "unresolved: $(short "$bad") could not be tested again"; exit 1 ;;
 esac
 
