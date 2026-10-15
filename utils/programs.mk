@@ -30,8 +30,8 @@ DEF_init_metal = -DINIT_CONSOLE_LOGIN -DINIT_METAL
 # init beside it, which is the network and the optional SSH server. Neither of
 # the other two does both. `init-shell` gives a shell and supervises nothing;
 # `init-metal` supervises everything and demands a login that a system with no
-# passwords cannot answer, which would have left the rescue system impossible
-# to enter by any route.
+# passwords cannot answer, so with it nobody could enter the recovery system
+# by any route.
 SRC_init_recovery = init.c gptdisk.c
 HDR_init_recovery = gptdisk.h
 DEF_init_recovery = -DINIT_METAL -DINIT_RECOVERY

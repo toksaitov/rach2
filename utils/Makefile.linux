@@ -1,15 +1,14 @@
-# Unix Utilities Makefile (native Linux)
+# utils/Makefile.linux: build the file utilities as native programs with the
+# host's compiler and libc, to run and test them on Linux.
 #
-# Builds the file utilities as ordinary native programs with the host compiler
-# and its libc, for running/testing on Linux. Usage: make -f Makefile.linux
+# Usage: make -f Makefile.linux
 #
-# Only the portable file utilities are built here; the network utilities
-# (ping/nc/httpd) target the Rach2 kernel's sockets and stay with the main
-# musl-linked Makefile.
+# Only the portable file utilities are built here; the other programs are
+# written for the Rach2 kernel and build only with the Makefile beside this one.
 #
-# Like the main build, this builds out of tree, into build/utils/linux/ (its own
-# subdir so the native binaries never collide with the Rach2 musl binaries of the
-# same name under build/utils/). See ../mk/build.mk.
+# The build is out of tree, into build/utils/linux/ (../mk/build.mk), a
+# directory of its own so that the native programs never collide with the
+# Rach2 programs of the same name in build/utils/.
 
 COMPONENT = utils/linux
 include ../mk/build.mk
