@@ -29,6 +29,7 @@
 # 30) push only their vector; the others push a zero first, so the frame has
 # one shape. There is no gate for int $0x80 (idt.c).
 
+# Byte offsets in the frame, struct isr_params (cpu.h).
 .set F_R11,    32
 .set F_RCX,    96
 .set F_RIP,    136
@@ -36,9 +37,11 @@
 .set F_RFLAGS, 152
 .set F_SS,     168
 
+# Byte offsets in struct cpu (percpu.h).
 .set CPU_KERNEL_RSP, 8
 .set CPU_USER_RSP,   16
 
+# The user's selectors (percpu.h) and the system call's vector (sysnr.h).
 .set GDT_USER_DATA,  0x2B
 .set GDT_USER_CODE,  0x33
 .set SYSCALL_VECTOR, 128
@@ -253,10 +256,11 @@ isr31:
     jmp isr_common_handler
 
 
-# The common entry of the exceptions and of the interrupts: save the
-# registers, route the vector (x86_64_route, idt.c), deliver any signal
-# pending for a return to user mode and give back the big lock (isr_leave,
-# isr.c), and return.
+# The common entry of the exceptions and the interrupts, all but the four
+# exceptions on interrupt stacks and the local vectors: swap GS for an entry
+# from user mode, save the registers, route the vector (x86_64_route,
+# idt.c), deliver any signal pending for a return to user mode and give back
+# the big lock the router took (isr_leave, isr.c), and return.
 .globl isr_common_handler
 isr_common_handler:
     testb $3, 24(%rsp)
@@ -282,8 +286,9 @@ isr_common_handler:
     movq %rsp, %rdi
     call x86_64_route
 
-# Where a forked child's first switch lands (context.c), with its frame on
-# the stack: the same return as every other entry's.
+# The return of the common entry and of a debug exception from user mode,
+# and where a forked child's first switch lands (context.c), with its frame
+# on the stack.
 .globl isr_return
 isr_return:
     movq %rsp, %rdi
@@ -329,11 +334,17 @@ isr_exit:
 .exit_iret:
     iretq
 
-# A debug exception may follow MOV SS and SYSCALL before syscall_entry
-# changes stacks or GS. Its IST stack is always usable, and the GS MSR
-# determines whether to swap. A user exception moves to the thread's stack
-# before any C code can stop or switch it. A kernel exception only saves
-# DR6 on this processor; isr_leave posts the signal on the thread's stack.
+# The debug exception's entry. MOV SS can delay one past a `syscall` to the
+# first instruction of syscall_entry, before it has changed the stack or GS,
+# so the exception comes on an interrupt stack of its own, and the GS base
+# MSR, not the saved CS, decides the swap, as in the paranoid entry. An
+# exception from user mode has its frame copied to the thread's kernel
+# stack, before any C code can stop or switch the thread, and is routed and
+# returned from there. One from kernel mode is only recorded for this
+# processor (debugreg_defer_user, debugreg_defer, x86/debugreg.c), with TF
+# cleared in the saved flags; its signal is posted later on the thread's own
+# stack, at the return to user mode (isr_leave) or before a signal test
+# (arch_debug_deliver).
 debug_entry:
     pushq %rax
     pushq %rbx
@@ -385,10 +396,10 @@ debug_entry:
     jmp .paranoid_restore
 
 # The paranoid entry of the NMI, the double fault and the machine check,
-# on their interrupt stacks. RBX, which the C call preserves, remembers
-# whether this entry swapped GS. A kernel GS base is an upper-half address,
-# whose high half has its top bit set. Nothing here delivers a signal or
-# switches threads: the stack is the processor's, not the thread's.
+# on their interrupt stacks. RBX, which the C call preserves, is 1 when this
+# entry swapped GS. A kernel GS base is an upper-half address, whose high
+# half has its top bit set. Nothing here delivers a signal or switches
+# threads: the stack is the processor's, not the thread's.
 .globl paranoid_entry
 paranoid_entry:
     pushq %rax
@@ -451,7 +462,9 @@ paranoid_entry:
 # call made: RCX and R11 equal to RIP and RFLAGS, the user's selectors, no
 # TF or RF, and an address below USER_ADDR_MAX. Anything a signal, an exec,
 # a signal return or a tracer changed returns by `iretq`, which restores
-# every register as the frame has it.
+# every register as the frame has it. From the load of the user's stack
+# pointer to `sysretq` the kernel runs on the user's stack, with interrupts
+# off, and touches no memory.
 .globl syscall_entry
 syscall_entry:
     swapgs
@@ -513,9 +526,7 @@ syscall_entry:
     popq %rcx
     popq %rbx
     popq %rax
-    # The user's stack pointer, past the vector, the error code, RIP, CS and
-    # RFLAGS; from here to `sysretq` the kernel runs on the user's stack,
-    # with interrupts off, and touches no memory.
+    # The user's RSP, past the vector, the error code, RIP, CS and RFLAGS.
     movq 40(%rsp), %rsp
     swapgs
     sysretq

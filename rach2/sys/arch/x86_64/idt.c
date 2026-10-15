@@ -1,5 +1,6 @@
 /*
- * idt.c: the x86-64's interrupt descriptor table.
+ * idt.c: the x86-64's interrupt descriptor table, and the hand-off of an
+ * entry's frame to the routers of x86/isr.c.
  */
 
 #include "percpu.h"
@@ -38,15 +39,19 @@ static struct idt_gate idt[256];
  * declare: on i686 the vector has a task gate and no stub. */
 extern void isr8(void);
 
+/* Load the IDTR (switch.s). */
 extern void x86_64_load_idt(const void *ptr);
 
 /* The routers of x86/isr.c. */
 void _isr_router(isr_params_t *params);
 void _irq_router(isr_params_t *params);
 
-/* Called by the common entry (isr_handler.s). */
+/* Called by the common entry and the debug entry (isr_handler.s). */
 void x86_64_route(isr_params_t *params);
 
+/** Point the gate of `vector` at `handler` through the kernel's code
+ * selector, with the type and DPL of `flags` and the interrupt stack `ist`,
+ * 0 for none. */
 static void set_gate(int vector, void (*handler)(void), uint8_t flags, uint8_t ist)
 {
     uintptr_t a = (uintptr_t)handler;
@@ -61,21 +66,22 @@ static void set_gate(int vector, void (*handler)(void), uint8_t flags, uint8_t i
 }
 
 /**
- * Build the IDT and load it.
- *
- * The 32 exceptions, the sixteen 8259 lines on 32 to 47, the sixteen
- * message vectors on 48 to 63 and the APIC's spurious vector 255 have
- * interrupt gates, as on i686. The breakpoint and overflow gates are DPL 3,
- * so that `int3` reaches its handler; `into` does not exist in 64-bit mode.
- * There is no gate at 0x80: a program enters the kernel by `syscall`, and
- * an `int $0x80` is a general-protection fault, a SIGSEGV, as it is on a
- * Linux without its 32-bit emulation.
+ * Every vector of i686's IDT but 0x80 has an interrupt gate here, the
+ * double fault's included: the 32 exceptions, the sixteen 8259 lines on 32
+ * to 47, the sixteen message vectors on 48 to 63, the interprocessor
+ * interrupt at IPI_VECTOR and the APIC's spurious vector 255. The
+ * breakpoint and overflow gates are DPL 3, so that `int3` reaches its
+ * handler from user mode; `into` does not exist in 64-bit mode. There is no
+ * gate at 0x80: a program enters the kernel by `syscall`, and an
+ * `int $0x80` is a general-protection fault, a SIGSEGV, as it is on a Linux
+ * without its 32-bit emulation.
  *
  * Four exceptions run on interrupt stacks of their own (percpu.h): the
- * double fault, whose cause may be the stack in use, the NMI, which may
- * arrive anywhere, the entry and exit paths included, and the machine
- * check, for the same reason. A debug exception delayed by MOV SS can
- * arrive after SYSCALL changes privilege but before it changes stacks.
+ * double fault, whose cause may be the stack in use; the NMI and the
+ * machine check, which may arrive anywhere, the entry and exit paths
+ * included; and the debug exception, which `MOV SS` can delay past a
+ * `syscall` to the first instruction of `syscall_entry`, before it has
+ * changed the stack.
  */
 void init_idt(void)
 {
@@ -156,8 +162,7 @@ void init_idt(void)
     idt_load();
 }
 
-/** Load the IDT, on the boot processor once `init_idt` has built it and on
- * each processor it starts. */
+/** `init_idt` loads the table through this too, on the boot processor. */
 void idt_load(void)
 {
     struct {
@@ -171,10 +176,11 @@ void idt_load(void)
 }
 
 /**
- * Hand an entry's frame to its router: an exception to `_isr_router`, an
- * interrupt, from the 8259, a message or the APIC, to `_irq_router`. On
- * i686 the two kinds have entries of their own; here they share one, and
- * the vector tells them apart.
+ * Hand the frame of `isr_common_handler`, or of a debug exception from user
+ * mode, to its router: an exception, a vector below 32, to `_isr_router`,
+ * and an interrupt, a line on 32 to 47 or a message on 48 to 63, to
+ * `_irq_router`. On i686 the two kinds have entries of their own; here they
+ * share one, and the vector tells them apart.
  */
 void x86_64_route(isr_params_t *params)
 {

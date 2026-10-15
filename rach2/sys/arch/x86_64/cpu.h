@@ -103,8 +103,8 @@ extern pte_t mmu_nx;
  * The boot's window: the kernel image, the boot data, the page tables the
  * boot carves and the DMA buffers a device is given the physical address of
  * live below it. The kernel reaches it, as it reaches all physical memory,
- * through the direct map at KVA_DIRECT, never at its physical address,
- * since the lower half is user space.
+ * through the direct map at KVA_DIRECT, and the image at KVA_IMAGE as well,
+ * never at its physical address, since the lower half is user space.
  */
 #define HARD_MEMORY_LIMIT 0x2000000
 

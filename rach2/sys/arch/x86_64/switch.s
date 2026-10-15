@@ -75,8 +75,9 @@ x86_64_gs_read:
 # descriptor's or, for a null selector, to a value that differs between
 # processors, so the caller writes the base MSR afterwards. A load into GS
 # sets IA32_GS_BASE, the kernel's base, so it runs between two `swapgs`
-# with interrupts off: the user's slot takes the descriptor's base, and the
-# paranoid entry of an NMI on the way finds a lower-half base and swaps.
+# with interrupts off: the user's slot takes the descriptor's base, and an
+# NMI between the two finds a lower-half base in IA32_GS_BASE, which the
+# paranoid entry swaps as it does for any entry with the user's base loaded.
 .globl x86_64_fs_load
 x86_64_fs_load:
     movw %di, %fs
@@ -93,6 +94,8 @@ x86_64_gs_load:
     ret
 
 # void x86_64_load_idt(const void *ptr)
+#
+# Load the IDTR from the operand at ptr: a 16-bit limit and a 64-bit base.
 .globl x86_64_load_idt
 x86_64_load_idt:
     lidt (%rdi)
@@ -102,7 +105,8 @@ x86_64_load_idt:
 #
 # Enter user mode at pc with the stack pointer sp, interrupts on and every
 # general register cleared, through the frame an interrupt from user mode
-# would have left; GS takes the program's base on the way out.
+# would have left; the `swapgs` before the `iretq` gives GS the program's
+# base from IA32_KERNEL_GS_BASE.
 .globl x86_64_enter_user
 x86_64_enter_user:
     cli

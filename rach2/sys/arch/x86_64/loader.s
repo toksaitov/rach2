@@ -24,8 +24,8 @@
 # The first tables map the first 4 GiB in 2 MiB pages three times: at 0,
 # for the instructions between paging and the jump to the upper half; at
 # KVA_DIRECT, the direct map, where the Multiboot information is read; and,
-# the first 2 GiB, at KVA_IMAGE, where the kernel runs. mmu_init replaces
-# them with the kernel's own (mmu.c).
+# the first 2 GiB, at KVA_IMAGE, where the kernel runs. mmu_frame_table
+# (mmu.c) replaces them with the kernel's own PML4.
 
 .set MULTIBOOT_MAGIC,       0x1BADB002
 .set MULTIBOOT_PAGEALIGN,   1
@@ -230,8 +230,9 @@ long_mode_high:
     xorl %ebp, %ebp
 
     # The boot processor's record is the GS base before any C code runs, so
-    # that this_cpu(), and current_proc through it, reads that record from
-    # the first klog on; init_gdt fills it and sets the base again.
+    # that arch_cpu_id reads 0 from its zeroed id, and this_cpu() and
+    # current_proc are processor 0's, from the first klog on; init_gdt fills
+    # the record and sets the base again.
     movl $MSR_GS_BASE, %ecx
     movq $cpus, %rax
     movq %rax, %rdx
@@ -245,11 +246,13 @@ long_mode_high:
     addq %rax, %rsi
     call k_main
 
+# A return from k_main would come here: halt between interrupts for good.
 .globl k_halt
 k_halt:
     hlt
     jmp k_halt
 
+# Stop this processor for good, with interrupts off (panic.c).
 .globl k_stop
 k_stop:
     cli
@@ -302,8 +305,9 @@ boot_pd:
     .skip 4 * 4096
 
 # The boot stack, which the boot, process 0, the debug shell and the first
-# program run on, and the page below it: its guard, which k_main unmaps once
-# paging is on, so that running past the stack's base faults.
+# program run on, and the page below it: its guard, which guard_boot_stack
+# (kernel.c) unmaps once paging is on, so that running past the stack's
+# base faults.
 .balign 4096
 .globl stack_guard
 stack_guard:

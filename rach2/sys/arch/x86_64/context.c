@@ -1,15 +1,8 @@
 /*
  * context.c: the x86-64's context switch, the stacks a thread's first switch
  * finds, the frame an exec starts a program from, and the entry to user
- * mode.
- *
- * The switch is C around one short routine, x86_64_switch (switch.s), which
- * saves the callee-saved registers on the old thread's kernel stack and
- * takes the new one's. Everything else a switch changes, the kernel stack
- * the next entry lands on, the FS and GS selectors and bases and the page
- * directory, is set here, before the stacks change, by the outgoing thread
- * for the incoming one; the record is read through the compiler's offsets,
- * and no assembly knows its layout.
+ * mode. The process record is read here through the compiler's offsets; no
+ * assembly knows its layout.
  */
 
 #include "percpu.h"
@@ -20,10 +13,11 @@
 #include "../../proc/process.h"
 #include "../../lib/kstring.h"
 
-/* The common entry's return to user mode (isr_handler.s), where a forked
- * child's first switch lands. */
+/* The common entry's return (isr_handler.s), where a forked child's first
+ * switch lands. */
 extern void isr_return(void);
 
+/* The stack switch and the entry to user mode (switch.s). */
 extern void x86_64_switch(uint64_t *save_sp, uint64_t load_sp);
 extern void x86_64_enter_user(uintptr_t pc, uintptr_t sp) K_NORETURN;
 
@@ -34,9 +28,10 @@ extern void x86_64_enter_user(uintptr_t pc, uintptr_t sp) K_NORETURN;
 #define RFLAGS_START 0x202u
 
 /**
- * Nonzero when struct cpu's first fields are not at the offsets the entry
- * code reads (percpu.h); the record of a process has none of that kind on
- * x86-64.
+ * No assembly reads the process record on x86-64, so this checks instead
+ * the four fields of `struct cpu` that the entry code and `arch_cpu_id` read
+ * at fixed offsets (percpu.h). percpu.c checks them at build time too,
+ * except under TinyCC, which cannot.
  */
 int arch_context_check(void)
 {
@@ -48,29 +43,9 @@ int arch_context_check(void)
            (const char *)&c->id - (const char *)c != 24;
 }
 
-/**
- * Switch from `old` to `new_proc`.
- *
- * The incoming thread's kernel stack becomes the one the next entry from
- * user mode takes; its FS and GS selectors are loaded where they differ
- * from the outgoing thread's, then its FS base, its thread pointer, and its
- * GS base, which goes where `swapgs` will find it on the way out, since a
- * selector load changes the base too; the page directory
- * changes when the incoming thread has one and it is not the one loaded or
- * a shootdown passed it by: a record with none, an idle task or a kernel
- * thread, runs in whatever is loaded, whose kernel half is every
- * directory's, so a process that blocks and wakes again here finds its
- * directory still loaded (`smp_space_release` takes it back before it is
- * freed, and `smp_tlb_shootdown` marks it stale meanwhile). Then the stacks
- * change. The outgoing thread's selectors and bases are read back into its
- * record first (`arch_bases_save`): a program loads a selector into FS or
- * GS without a system call, and the load sets the base to the
- * descriptor's, 0; arch_prctl and clone write the record. The
- * directory is compared with the one this processor has loaded, never with
- * the outgoing record's: a thread that gave up its address space at its end
- * still runs in it until it switches away, and the directory may be freed
- * once it has.
- */
+/** Read the running thread's FS and GS selectors, its FS base and its GS
+ * base, which IA32_KERNEL_GS_BASE has while the kernel runs, into `p`'s
+ * record. */
 static void arch_bases_save(process_t *p)
 {
     p->regs.fs_sel = (uint16_t)x86_64_fs_read();
@@ -80,7 +55,7 @@ static void arch_bases_save(process_t *p)
 }
 
 /** Load `p`'s selectors where they differ from the ones in FS and GS, then
- * its bases. */
+ * its bases, since a selector load sets the base as well. */
 static void arch_bases_load(const process_t *p)
 {
     if (x86_64_fs_read() != p->regs.fs_sel) {
@@ -93,6 +68,31 @@ static void arch_bases_load(const process_t *p)
     msr_write(MSR_KERNEL_GS_BASE, p->regs.gs_base);
 }
 
+/**
+ * The switch is C around `x86_64_switch` (switch.s), which saves the
+ * callee-saved registers on the outgoing thread's kernel stack and takes
+ * the incoming one's; everything else is set before it, by the outgoing
+ * thread for the incoming one.
+ *
+ * The outgoing thread's selectors and bases are read back into its record
+ * first (`arch_bases_save`): a program loads a selector into FS or GS
+ * without a system call, and the load sets that base to the descriptor's,
+ * 0. Then the incoming thread's kernel stack becomes the one the next entry
+ * from user mode takes; its selectors and bases are loaded
+ * (`arch_bases_load`), the GS base where the `swapgs` of the return finds
+ * it; and its page directory is loaded when it has one and the processor
+ * does not have it loaded, or a shootdown passed it by.
+ *
+ * A thread with no directory of its own, an idle task or a kernel thread,
+ * runs in whatever is loaded, whose upper half is every directory's, so a
+ * process that blocks and wakes again here finds its directory still
+ * loaded; `smp_space_release` takes a directory back from every processor
+ * before it is freed, and `smp_tlb_shootdown` marks it stale meanwhile. The
+ * directory is compared with the one this processor has loaded, never with
+ * the outgoing record's: a thread that gave up its address space at its end
+ * still runs in it until it switches away, and the directory may be freed
+ * once it has.
+ */
 void switch_context(process_t *old, process_t *new_proc)
 {
     struct percpu *cpu = this_cpu();
@@ -111,11 +111,10 @@ void switch_context(process_t *old, process_t *new_proc)
 }
 
 /**
- * Prime a new thread's kernel stack for its first switch, which returns
- * into `entry_point`. From high to low address: a zero where `entry_point`'s
- * own return address would be, which also leaves the stack as a call would,
- * 8 bytes past a 16-byte boundary; `entry_point`; and the six registers
- * x86_64_switch pops, all zero.
+ * The stack, from high to low address: a zero where `entry_point`'s own
+ * return address would be, which also leaves the stack as a call would, 8
+ * bytes past a 16-byte boundary; `entry_point`, which the switch's `ret`
+ * takes; and the six registers `x86_64_switch` pops, all zero.
  */
 void arch_context_init(process_t *proc, void (*entry_point)(void))
 {
@@ -131,14 +130,14 @@ void arch_context_init(process_t *proc, void (*entry_point)(void))
 }
 
 /**
- * Lay out `child`'s kernel stack for its first switch, from the parent's
- * frame `params`: the frame, with 0 in RAX, fork's result, and the stack
- * pointer `newsp` a clone asks for, when it asks; under it `isr_return` and
- * the six registers x86_64_switch pops. The child returns to user mode
+ * The stack, from high to low address: a copy of the parent's frame with 0
+ * in RAX and `newsp`, when it is not 0, in RSP; `isr_return`; and the six
+ * registers `x86_64_switch` pops, all zero. The child returns to user mode
  * through `iretq`, with RCX and R11 as the parent's `syscall` left them.
- * Its FS and GS selectors and its GS base are the parent's as they are
- * now, read from the registers, as its FS base is (`arch_tls_get`), unless
- * `CLONE_SETTLS` gives it a base of its own (`arch_clone_tls`).
+ * Its FS and GS selectors and its GS base are the parent's as they are now,
+ * read from the processor; its FS base, which the caller sets, is the
+ * parent's too (`arch_tls_get`) unless `CLONE_SETTLS` gives it one
+ * (`arch_clone_tls`).
  */
 void arch_fork_frame(process_t *child, const isr_params_t *params, uintptr_t newsp)
 {
@@ -166,12 +165,11 @@ void arch_fork_frame(process_t *child, const isr_params_t *params, uintptr_t new
 }
 
 /**
- * Make the frame start a new program at `entry` with the stack pointer
- * `sp`: every general register zero, RDX among them, which the x86-64 ELF
- * ABI reads as a function for atexit when it is not; the user's selectors;
- * interrupts on and every other flag clear. FS and GS take the null
- * selector and the GS base goes back to 0; the caller sets the FS base,
- * after the load here.
+ * Every general register is zeroed, RDX among them, which the x86-64 ELF
+ * ABI reads as a function to register with atexit when it is not 0, and
+ * RFLAGS has IF alone, with bit 1, which is always set. FS and GS take the
+ * null selector and the GS base goes back to 0, in the processor and in the
+ * record; the caller sets the FS base, after the selector load here.
  */
 void arch_exec_frame(isr_params_t *p, uintptr_t entry, uintptr_t sp)
 {
@@ -192,9 +190,10 @@ void arch_exec_frame(isr_params_t *p, uintptr_t entry, uintptr_t sp)
 }
 
 /**
- * Enter user mode at `pc` with the stack pointer `sp`. The thread entering
- * was not switched to, so its kernel stack, selectors and bases are loaded
- * here, as `switch_context` would have loaded them.
+ * The thread entering user mode here was not switched to, so its kernel
+ * stack, selectors and bases are loaded here, as `switch_context` would
+ * load them; `x86_64_enter_user` (switch.s) then returns to user mode
+ * through the frame of an interrupt from it.
  */
 void arch_enter_user(uintptr_t pc, uintptr_t sp)
 {

@@ -62,9 +62,10 @@ struct tss64 {
 
 /*
  * One processor's record. The first four fields are read at fixed offsets,
- * which percpu.c checks against the compiler's at build time: `self` at 0,
- * `kernel_rsp` at 8 and `user_rsp` at 16 by the entry code (isr_handler.s),
- * and `id` at 24 by `arch_cpu_id` (cpu.h).
+ * which percpu.c checks against the compiler's at build time and
+ * `arch_context_check` (context.c) at boot: `self` at 0, `kernel_rsp` at 8
+ * and `user_rsp` at 16 by the entry code (isr_handler.s), and `id` at 24 by
+ * `arch_cpu_id` (cpu.h).
  */
 struct cpu {
     struct cpu *self;    /* this record, which %gs:0 reads */
@@ -99,13 +100,17 @@ static __inline__ struct cpu *cpu_self(void)
 #define EFER_LME 0x100u /* long mode */
 #define EFER_NXE 0x800u /* the NX bit of page entries */
 
+/** Read and write the model-specific register `msr` of the running
+ * processor. */
 uint64_t msr_read(uint32_t msr);
 void msr_write(uint32_t msr, uint64_t value);
 
 /*
- * The FS and GS selectors (switch.s). A load sets the register's base as
- * well, so the caller writes the base MSR after it; a load into GS keeps
- * the kernel's own GS base.
+ * Read the selector in FS or GS, and load `sel` into one (switch.s). A load
+ * sets the register's base too, to the descriptor's or, for the null
+ * selector, to a value that differs between processors, so the caller
+ * writes the base's MSR after it. A load into GS leaves the kernel's GS
+ * base in place and sets the program's, in IA32_KERNEL_GS_BASE.
  */
 unsigned int x86_64_fs_read(void);
 unsigned int x86_64_gs_read(void);
@@ -113,23 +118,29 @@ void x86_64_fs_load(unsigned int sel);
 void x86_64_gs_load(unsigned int sel);
 
 /**
- * Make the boot processor's record, GDT and TSS, load them, and point GS at
- * the record: what `init_gdt` and `init_tss` do on i686, in one step here,
- * since the TSS is an entry of the record's own GDT.
+ * Fill the boot processor's record, with its GDT and its TSS, load the GDT,
+ * and make the record GS's base, with 0 as the program's base in
+ * IA32_KERNEL_GS_BASE. Boot only, before `init_tss`.
  */
 void init_gdt(void);
 
-/** Give the boot processor's TSS its stacks, the kernel stack ending at
- * `kernel_stack` among them, load the task register, and turn `syscall`
- * on. */
+/**
+ * Make the kernel stack ending at `kernel_stack` the running processor's
+ * (`cpu_set_kernel_stack`), load its task register, and turn `syscall` on:
+ * IA32_STAR, IA32_LSTAR, IA32_FMASK and EFER.SCE. The processor's GS base
+ * must be its record already, and its GDT loaded: the boot processor calls
+ * this after `init_gdt`, and a started one from `arch_ap_tables`.
+ */
 void init_tss(uintptr_t kernel_stack);
 
-/** Build the IDT and load it (idt.c). */
+/** Build the IDT, program the 8259 pair for vectors 32 to 47 (`init_pic`),
+ * and load the IDT on the boot processor (idt.c). Boot only. */
 void init_idt(void);
 
 /**
- * Make `top` the kernel stack the next entry from user mode lands on, by
- * an interrupt (the TSS's `rsp0`) or by `syscall` (`kernel_rsp`).
+ * Make `top` the kernel stack the next entry from user mode lands on, on
+ * the running processor, by an interrupt (the TSS's `rsp0`) or by
+ * `syscall` (`kernel_rsp`).
  */
 void cpu_set_kernel_stack(uintptr_t top);
 

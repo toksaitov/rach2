@@ -10,10 +10,10 @@
 # The code enters protected mode through a GDT of its own, takes the boot
 # processor's CR4, with PAE, the PML4 the mailbox names, which maps the
 # kernel's upper half and the first 2 MiB at their physical addresses, the
-# boot processor's EFER, with LME and NXE, and its CR0, which turns paging
-# and so long mode on, jumps to the GDT's 64-bit code segment, and calls
-# x86_ap_entry(cpu) in the upper half on the stack the mailbox names. The
-# entry loads the kernel's own page tables and GDT.
+# boot processor's EFER, with LME and, where the processor has it, NXE, and
+# its CR0, which turns paging and so long mode on, jumps to the GDT's 64-bit
+# code segment, and calls x86_ap_entry(cpu) in the upper half on the stack
+# the mailbox names. The entry loads the kernel's own page tables and GDT.
 
 .set TRAMP, 0x8000
 
@@ -73,6 +73,7 @@ ap_long:
     movl TRAMP + ap_mailbox - ap_trampoline + MB_CPU, %edi
     movq TRAMP + ap_mailbox - ap_trampoline + MB_ENTRY, %rax
     call *%rax
+# x86_ap_entry does not return; a processor that came back would stop here.
 ap_stop:
     cli
     hlt

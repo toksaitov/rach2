@@ -15,8 +15,8 @@
 struct cpu cpus[NR_CPUS];
 
 /* The entry code and `arch_cpu_id` read these four fields at fixed offsets.
- * TinyCC cannot fold an offset into an array size, so a kernel it builds checks
- * them at boot instead (`arch_context_check`). */
+ * TinyCC cannot fold an offset into an array size, so a kernel it builds has
+ * only the check at boot (`arch_context_check`). */
 #if !defined(__TINYC__)
 typedef char cpu_offsets_fit[(__builtin_offsetof(struct cpu, self) == 0 &&
                               __builtin_offsetof(struct cpu, kernel_rsp) == 8 &&
@@ -28,8 +28,8 @@ typedef char cpu_offsets_fit[(__builtin_offsetof(struct cpu, self) == 0 &&
 
 /*
  * The interrupt stacks of each processor, for the double fault, the NMI, the
- * machine check and the debug exception. A double fault comes from a kernel
- * stack that ran into its guard page and has no room for the frame, and the
+ * machine check and the debug exception, which their gates select whatever
+ * stack was in use (idt.c). The double fault's is the largest, since the
  * record and the panic its handler writes take the most; the NMI and the
  * machine check print and panic, and the debug entry copies a user frame to
  * the thread's stack or defers a kernel exception.
@@ -79,10 +79,11 @@ void msr_write(uint32_t msr, uint64_t value)
 #define DESC_USER_DATA   0x00CFF2000000FFFFUL /* present, DPL 3, writable data */
 #define DESC_USER_CODE   0x00AFFA000000FFFFUL /* present, DPL 3, code, L */
 
-/*
+/**
  * Fill processor `id`'s record: the GDT with the TSS's descriptor, which is
  * 16 bytes in long mode, its base split over both words, and the TSS with
- * the interrupt stacks and the closed I/O map.
+ * the interrupt stacks and the closed I/O map. `rsp0` and `kernel_rsp` stay
+ * 0 until `init_tss`.
  */
 static void cpu_fill(uint32_t id)
 {
@@ -112,11 +113,6 @@ static void cpu_fill(uint32_t id)
     c->tss.iomap_base = sizeof(struct tss64);
 }
 
-/**
- * Build the boot processor's record and load its GDT, then make the record
- * the kernel's GS base. The base the program will have, in the other slot,
- * starts at 0.
- */
 void init_gdt(void)
 {
     struct desc_ptr ptr;
@@ -130,10 +126,10 @@ void init_gdt(void)
 }
 
 /**
- * Give the boot processor its kernel stack, load the task register, and
- * turn `syscall` on: IA32_STAR has the kernel's code selector for the
- * entry and the base of the user's for the return (percpu.h), IA32_LSTAR
- * the entry, and IA32_FMASK the flags the entry clears.
+ * IA32_STAR has the kernel's code selector for the entry in bits 32 to 47,
+ * and the base of the user's selectors for the return in bits 48 to 63
+ * (percpu.h); IA32_LSTAR has the entry, and IA32_FMASK the flags the entry
+ * clears.
  */
 void init_tss(uintptr_t kernel_stack)
 {
@@ -147,10 +143,9 @@ void init_tss(uintptr_t kernel_stack)
 }
 
 /**
- * The x86-64's part of a started processor's start: the kernel's page
- * tables in place of the trampoline's, its record, GDT and TSS, GS on the
- * record before anything reads `this_cpu()`, `syscall`, and the IDT every
- * processor shares.
+ * The kernel's PML4 takes the place of the trampoline's first, and GS's
+ * base is the record before anything reads `this_cpu()`; the IDT is the
+ * one every processor shares.
  */
 void arch_ap_tables(int cpu, uintptr_t stack_top)
 {
