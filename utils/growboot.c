@@ -50,6 +50,25 @@ static int write_sector(void *ctx, uint32_t lba, const void *buf)
     return 0;
 }
 
+/**
+ * Whether the environment of `s` is 1024 bytes in two consecutive sectors:
+ * one cluster of two sectors or more, as on a boot partition of an MBR disk,
+ * or two adjacent clusters of one sector, as on the EFI system partition of
+ * a GUID table, which has one sector to a cluster.
+ */
+static int consecutive(const struct bootslot *s)
+{
+    const struct bootslot_file *env = &s->grubenv;
+
+    if (env->size != BOOTSLOT_ENV_BYTES) {
+        return 0;
+    }
+    if (s->cluster_sectors >= 2) {
+        return env->chain_len == 1;
+    }
+    return s->cluster_sectors == 1 && env->chain_len == 2 && env->chain[1] == env->chain[0] + 1;
+}
+
 /** Check the backup, prepare both sectors and create a new file. Exits 0, 1
  *  on a failure and 2 on a usage error. */
 int main(int argc, char **argv)
@@ -77,9 +96,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "growboot: %s\n", error);
         return 1;
     }
-    if (slot.grubenv.chain_len != 1 || slot.cluster_sectors < 2 ||
-        slot.grubenv.size != BOOTSLOT_ENV_BYTES) {
-        fprintf(stderr, "growboot: the saved environment must occupy one cluster\n");
+    if (!consecutive(&slot)) {
+        fprintf(stderr, "growboot: the saved environment must occupy two consecutive sectors\n");
         return 1;
     }
     first = slot.data_start + (slot.grubenv.chain[0] - 2) * slot.cluster_sectors;

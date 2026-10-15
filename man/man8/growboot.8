@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd October 15, 2026
 .Dt GROWBOOT 8
 .Os
 .Sh NAME
@@ -12,7 +12,10 @@
 reads a complete 64 MiB boot-partition backup from
 .Ar BOOT.IMG
 through the boot-slot library.
-The saved 1024-byte GRUB environment must occupy one cluster.
+The saved 1024-byte GRUB environment must occupy two consecutive sectors:
+one cluster of two sectors or more, as on the boot partition of an MBR
+disk, or two adjacent clusters of one sector, as on the EFI system
+partition of a GUID table.
 .Pp
 The editor makes recovery the saved boot entry and removes the trial
 entry in a two-sector memory copy.
@@ -34,8 +37,8 @@ In the source tree,
 .Ql tests/run grow
 exercises this command.
 .Sh DIAGNOSTICS
-An environment that does not occupy one cluster is reported as:
-.Dl growboot: the saved environment must occupy one cluster
+An environment in any other place is reported as:
+.Dl growboot: the saved environment must occupy two consecutive sectors
 Failure to create a new output file is reported with
 .Ql growboot: creating the new environment file
 and the system error.

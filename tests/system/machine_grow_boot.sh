@@ -1,8 +1,11 @@
 #!/bin/sh
 # machine_grow_boot.sh [--mutate | --texts]: check prepare_boot and
-# keep_recovery of tools/dev/machine_grow.sh on a private FAT image, with
+# keep_recovery of tools/dev/machine_grow.sh on private FAT images, with
 # bootctl, growboot and reflash built natively.
 #
+# Every row runs on two boot partitions: one at eight sectors to a cluster,
+# as an MBR disk's is, and one at one sector to a cluster, as the EFI system
+# partition of a GUID table is, whose environment is two clusters.
 # A boot partition whose environment already starts recovery must not be
 # written. One whose environment header is zeroed must be repaired with its
 # 1024 bytes alone, from the copy prepare_boot made; a repair torn after one
@@ -73,12 +76,14 @@ cc -O2 -Wall -Wextra -I "$repo/utils" -o "$work/growboot" "$repo/utils/growboot.
 cc -O2 -Wall -Wextra -I "$repo/utils" -o "$work/reflash" \
     "$repo/utils/reflash.c" "$repo/utils/sectorcopy.c" "$repo/utils/sha256.c"
 cc -O2 -Wall -Wextra -o "$work/mkfatfixture" "$repo/tests/host/mkfatfixture.c"
-"$work/mkfatfixture" "$work/boot.original" --cluster8
-# Pad the independent fixture to the machine helper's complete boot extent.
-python3 - "$work/boot.original" <<'PY'
+"$work/mkfatfixture" "$work/boot.cluster8" --cluster8
+"$work/mkfatfixture" "$work/boot.cluster1"
+# Pad the independent fixtures to the machine helper's complete boot extent.
+python3 - "$work/boot.cluster8" "$work/boot.cluster1" <<'PY'
 import sys
-with open(sys.argv[1], 'r+b') as volume:
-    volume.truncate(67108864)
+for path in sys.argv[1:]:
+    with open(path, 'r+b') as volume:
+        volume.truncate(67108864)
 PY
 mkdir "$work/saved"
 cat > "$work/io.py" <<'PY'
@@ -176,12 +181,24 @@ bootctl()
     fi
 }
 
-# rows PHASE: run the boot rows on the functions of source.sh, with the
-# output in PHASE.log; status 1 when a row fails.
+# rows PHASE: run the boot rows on the functions of source.sh for each
+# boot partition, with the output in PHASE.log; status 1 when a row fails.
 rows()
 {
     phase=$1
     extract
+    : > "$work/$phase.log"
+    for geometry in cluster8 cluster1; do
+        cp "$work/boot.$geometry" "$work/boot.original"
+        echo "machine-grow-boot: $geometry" >> "$work/$phase.log"
+        geometry_rows || return 1
+    done
+}
+
+# geometry_rows: the rows of `rows` on boot.original, with the output
+# appended to PHASE.log.
+geometry_rows()
+{
     (
         # shellcheck disable=SC1091
         . "$work/functions.sh"
@@ -241,10 +258,10 @@ rows()
             fail 'growboot allowed overwriting its input'
         fi
         cmp "$work/boot.original" "$saved/boot.img" || fail 'the boot backup was changed'
-    ) >"$work/$phase.log" 2>&1
+    ) >>"$work/$phase.log" 2>&1
 }
 rows fixed || { cat "$work/fixed.log" >&2; fail 'fixed boot checks'; }
-echo 'machine-grow-boot: fixed: unchanged recovery, invalid header, torn repair and retry passed'
+echo 'machine-grow-boot: fixed: unchanged recovery, invalid header, torn repair and retry passed on both geometries'
 if [ "$#" = 1 ]; then
     for mutation in rewrite repair; do
         mutate_source "$mutation"
