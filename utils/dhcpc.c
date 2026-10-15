@@ -20,11 +20,11 @@
  *
  * With `-b` it stays in the foreground through its first round of discovery,
  * which ends with a lease or without one, and then goes to the background and
- * holds the lease or goes on asking. A boot that found no server backgrounds
- * too instead of giving up, because a machine that gave up is one nobody can
- * reach until somebody walks to it. `dhcpc -i eth0 -k` stops the client that
- * has an interface and waits for the address to come off, which is what a
- * machine being moved to a fixed address needs first.
+ * holds the lease or goes on requesting one. A boot that found no server
+ * backgrounds too instead of giving up, because a machine that gave up is one
+ * nobody can reach until somebody walks to it. `dhcpc -i eth0 -k` stops the
+ * client that has an interface and waits for the address to come off, which
+ * is what a machine being moved to a fixed address needs first.
  *
  * What it sends through the packet socket it builds whole: the Ethernet
  * payload is an IP header, a UDP header and a BOOTP message, with both
@@ -67,21 +67,23 @@
 #define RESOLV_CONF "/etc/resolv.conf"
 #define RUN_DIR     "/var/run"
 
-/* The discover schedule: four tries, then a rest, forever. A machine plugged
- * into a switch that has not started forwarding must keep asking, because the
- * alternative is a machine nobody can reach until somebody walks to it. */
+/* The discover schedule: four tries, then a rest of `REST_SECONDS`, without
+ * end. A machine plugged into a switch that has not started forwarding must
+ * keep trying, or nobody can reach it until somebody walks to it. */
 #define DISCOVER_TRIES 4
 #define REST_SECONDS   30
 
-/* How long `-k` waits for the client it signalled to let go. A client wakes
- * from its poll on the signal, so this is a bound on a client that is stuck,
- * not the time it takes. */
+/* How long, in seconds, `-k` waits for the client it signalled to remove its
+ * claim. A client wakes from its poll on the signal, so this bounds only a
+ * client that is stuck. */
 #define STOP_WAIT_SECONDS 10
 
 /* The longest single wait, in seconds, so that poll's millisecond count fits
  * an int however far off the deadline is. */
 #define POLL_CHUNK 60
 
+/* The interface (`-i`), its index and hardware address, and the transaction
+ * id of the exchange in progress. */
 static const char *ifname = "eth0";
 static int ifindex;
 static unsigned char hwaddr[6];
@@ -93,7 +95,7 @@ static uint32_t xid;
 static unsigned long max_lease = HARD_MAX_LEASE;
 
 /*
- * Set when a signal asks this client to stop.
+ * Set by `stop_handler` when SIGTERM, SIGINT or SIGHUP arrives.
  *
  * A client that was killed while holding a lease must take the address off on
  * its way out: the kernel's configuration outlives the process, and an address
@@ -104,24 +106,26 @@ static unsigned long max_lease = HARD_MAX_LEASE;
  */
 static volatile sig_atomic_t stopping;
 
+/** The handler of the stop signals, which sets `stopping` and no more. */
 static void stop_handler(int sig)
 {
     (void)sig;
     stopping = 1;
 }
 
+/* The message being sent, and the frame or message last received. */
 static unsigned char out[DHCP_MAX];
 static unsigned char in[1600];
 
 /**
- * Choose a transaction id, at random where the machine can.
+ * Choose a transaction id: four bytes of `/dev/urandom`, or the clock and the
+ * pid when the read fails or gives 0.
  *
- * The kernel's random device fails closed unless the CPU seeded it, so a
- * machine that cannot give a random number says so instead of handing one
- * out; the fallback is the clock and the pid, which is weaker and is what a
- * machine without that CPU has. A reply is matched on this id and on the
- * hardware address, so two machines booted together with the same hardware
- * address must not choose the same id, or each takes the other's answers.
+ * The kernel's random device fails with EIO unless the CPU's RDSEED or RDRAND
+ * seeded it, so a machine without them takes the weaker fallback. A reply is
+ * matched on this id and on the hardware address, so two machines booted
+ * together with the same hardware address must not choose the same id, or
+ * each takes the other's answers.
  *
  * The id is 32 bits, the width of the field a reply carries it back in. A
  * wider one, which an `unsigned long` read from the device is on x86-64,
@@ -143,7 +147,8 @@ static uint32_t random_xid(void)
     return (uint32_t)(((unsigned long)time(0) << 8) ^ (unsigned long)getpid());
 }
 
-/** Ask the interface for its index and hardware address. */
+/** Read the index and hardware address of `ifname` into `ifindex` and
+ * `hwaddr`; 0, or -1 after a message. */
 static int read_interface(void)
 {
     struct ifreq ifr;
@@ -197,7 +202,8 @@ static unsigned int build(int type, unsigned long ciaddr, unsigned long server,
     return dhcp_build(out, sizeof(out), &r);
 }
 
-/** Send a built message to `mac` through the packet socket. */
+/** Send the `len` bytes of `out` to the hardware address `mac` through the
+ * packet socket `fd`; 0, or -1 after a message. */
 static int transmit(int fd, const unsigned char *mac, unsigned int len)
 {
     struct sockaddr_ll to;
@@ -217,27 +223,28 @@ static int transmit(int fd, const unsigned char *mac, unsigned int len)
 }
 
 /**
- * Read one reply for us from the packet socket, or answer that none came before
- * `deadline`.
+ * Read one reply to this client from the packet socket `fd` into
+ * `*out_lease`, or return 0 when none came before `deadline`.
  *
  * Every IPv4 packet the interface receives arrives on this socket, so most of
- * what it reads is somebody else's: `dhcp_frame_ok` and `dhcp_parse` are what
- * make a reply ours.
+ * what it reads is other machines' traffic: `dhcp_frame_ok` and `dhcp_parse`
+ * pick out the replies to this client. `*out_lease` may be overwritten by a
+ * message that is then dropped.
  *
- * `want` is the message type this is waiting for, and anything else that
- * arrives is dropped, not returned: a segment with two servers on it, or
- * one server behind two relays, answers a discover twice, and a client that
- * treated the second offer as an answer to its request would abandon the
- * exchange it had just started. A refusal is returned whatever is awaited,
- * because it ends the exchange either way. Zero as `want` takes anything.
+ * `want` is the message type awaited, and a reply of another type is
+ * dropped: a segment with two servers on it, or one server behind two
+ * relays, answers a discover twice, and a client that took the second offer
+ * as the answer to its request would abandon the exchange it had just
+ * started. A NAK is returned whatever is awaited, because it ends the
+ * exchange either way. A `want` of 0 takes any type.
  *
  * Each poll waits at most `POLL_CHUNK` seconds, and the polls go on until
- * `deadline`. A signal wakes a poll, and once a stop has been asked for this
- * returns 0 at once, so that the caller can take the address off and leave.
+ * `deadline`. A signal wakes a poll, and once `stopping` is set this returns
+ * 0 at once, so that the caller can take the address off and leave.
  *
- * @return the message type, 0 once `deadline` has passed or a stop has been
- *         asked for, or -1 on a socket that failed. A poll that reports an
- *         error condition without input also returns 0; this kernel's packet
+ * @return the message type, 0 once `deadline` has passed or `stopping` is
+ *         set, or -1 on a socket that failed. A poll that reports an error
+ *         condition without input also returns 0; this kernel's packet
  *         socket reports none.
  */
 static int receive(int fd, struct dhcp_lease *out_lease, int want, time_t deadline)
@@ -305,7 +312,7 @@ static void format_ip(unsigned long ip, char *buf)
             ip & 0xff);
 }
 
-/** Put an IPv4 address into an ifreq's sockaddr. */
+/** Put the IPv4 address `ip`, in host byte order, into `ifr`'s address. */
 static void set_ifr_addr(struct ifreq *ifr, unsigned long ip)
 {
     struct sockaddr_in *sin = (struct sockaddr_in *)&ifr->ifr_addr;
@@ -316,11 +323,13 @@ static void set_ifr_addr(struct ifreq *ifr, unsigned long ip)
 }
 
 /**
- * Replace `/etc/resolv.conf` with the lease's resolver settings.
+ * Replace `/etc/resolv.conf` with the lease's resolver settings: a `search`
+ * line for its domain and a `nameserver` line for each of its nameservers.
  *
- * Write and close a private temporary file before renaming it, so readers see
- * a complete version. Replace the file even when the lease supplies no DNS
- * servers. Return 0, or -1 with the old file in place.
+ * The lines go to a temporary file of mode 0644, which is closed and then
+ * renamed over the old one, so a reader sees one version or the other,
+ * whole. The file is replaced even when the lease gives no nameserver.
+ * Returns 0, or -1 with the old file in place.
  */
 static int write_resolv(const struct dhcp_lease *l)
 {
@@ -374,20 +383,23 @@ static int write_resolv(const struct dhcp_lease *l)
     return 0;
 }
 
-/** Where this client records that it has the interface. */
+/* The claim, `/var/run/dhcpc.IFACE.pid`, by which a client records that it
+ * has the interface, and whether this client holds it. */
 static char pidpath[64];
 static int holds_interface;
 
 /* The address this client has put on the interface, 0 when none. It is written
  * into the claim so that a client killed outright can be cleaned up after. */
 static unsigned long holding;
-/* The lease's address was on the interface before this client took the
- * lease, so the claim names nothing for a cleanup to take off. */
+/* Set when the lease's address was on the interface before this client
+ * applied the lease; the claim then records no address, so a cleanup takes
+ * nothing off. */
 static int adopted;
 
 /**
- * Write a claim: the process holding the interface, and the address it has put
- * on it.
+ * Write a claim to `fd`: the pid `pid` of the process holding the interface
+ * and the address `addr` it has put on it, a line each; 0, or -1 when the
+ * write is short.
  *
  * The address is there so that a client which was killed outright can still be
  * cleaned up after. Nothing runs on SIGKILL, so such a client leaves its
@@ -424,11 +436,12 @@ static int pid_alive(long pid)
 }
 
 /**
- * Read the claim's pid and optional address.
+ * Read the claim at `pidpath`: its pid, and its address into `*addr`.
  *
- * Return zero if no valid pid can be read. Set `present` unless the claim is
- * known to be absent; an unreadable claim remains present. Either output
- * pointer may be null.
+ * Returns the pid, or 0 when no positive pid can be read. `*addr` is 0 when
+ * the claim has no valid address or no pid. `*present` is 0 only when the
+ * claim does not exist (ENOENT); a claim that cannot be read is present.
+ * Either pointer may be NULL.
  */
 static long claim_read(unsigned long *addr, int *present)
 {
@@ -462,7 +475,7 @@ static long claim_read(unsigned long *addr, int *present)
     return pid;
 }
 
-/** The process named in the claim, without asking what it configured. */
+/** The pid of the claim, as `claim_read` gives it, without its address. */
 static long claim_pid(int *present)
 {
     return claim_read(0, present);
@@ -517,7 +530,7 @@ static int record_claim(long pid, unsigned long addr)
 }
 
 /**
- * Take an address off the interface, but only the one named.
+ * Take the address `addr` off the interface if the interface has it now.
  *
  * This is the cleanup after a client that was killed outright: it left an
  * address behind and no lease to go with it, and the machine would go on
@@ -525,7 +538,7 @@ static int record_claim(long pid, unsigned long addr)
  * The comparison is what keeps it safe: an interface holding a different
  * address now is one somebody configured on purpose.
  *
- * The claim it was read from must not be removed until this has answered: a
+ * The claim it was read from must not be removed until this has returned: a
  * claim removed after a cleanup that failed is an address nobody can find out
  * about, since the record of what to remove has gone with it.
  *
@@ -576,7 +589,7 @@ static int drop_recorded_address(unsigned long addr)
 }
 
 /**
- * Stop the client holding this interface and wait for it to let go.
+ * Stop the client holding this interface and wait for its claim to go.
  *
  * A leased address is renewed by the client that holds it, so an address that
  * is to be replaced by a fixed one, or by none, needs its client stopped
@@ -687,9 +700,8 @@ static int stop_client(void)
  * walking away would leave an address with nobody to take it off when its
  * lease ends. So it is written again.
  *
- * It is a check and not a lock, because this kernel has no lock to offer:
- * `fcntl` locking is granted unconditionally here. One administrator at a time
- * is the contract; this is what keeps a lost race from becoming two clients
+ * It is a check, and no file lock is taken: one administrator at a time is
+ * the contract, and this check keeps a lost race from becoming two clients
  * renewing one address.
  *
  * `strict` is set before the first lease is applied and clear afterwards. It
@@ -697,13 +709,14 @@ static int stop_client(void)
  * unreadable, which is what another client creating its claim this instant
  * looks like, or one that cannot be written again. Nothing is configured yet
  * at the first call, so such a claim is a reason not to start. Once an address
- * is in force the client goes on holding it: two clients on one interface ask
- * with the same hardware address and are given the same address, while an
+ * is in force the client goes on holding it: two clients on one interface
+ * send the same hardware address and are given the same address, while an
  * address nobody renews is one the server hands to another machine. Another
- * client that means to take over is seen at the next renewal, once its claim
- * names it.
+ * client taking over is seen at the next renewal, once its claim names it.
  *
- * @return 1 when the interface is still this client's to configure.
+ * @return 1 when the interface is still this client's to configure, or 0,
+ *         with `holds_interface` cleared when another live client has the
+ *         claim.
  */
 static int claim_is_ours(int strict)
 {
@@ -757,8 +770,8 @@ static int claim_is_ours(int strict)
 /**
  * Claim the interface, or report who has it.
  *
- * Two clients on one interface interfere: each renews, either may be refused,
- * and either one's expiry takes off an address the other still holds. The
+ * Two clients on one interface interfere: each renews, either may be sent a
+ * NAK, and either one's expiry takes off an address the other still holds. The
  * claim is the creation of the file, which either happens or does not, so two
  * clients starting at the same moment cannot both create it. The file is
  * visible before its pid is written. An empty or unreadable claim is treated
@@ -769,12 +782,14 @@ static int claim_is_ours(int strict)
  * it in between; that narrows the window without closing it, and
  * `claim_is_ours` makes the loss visible when it happens. The address it
  * records is taken off first, since the claim is the only record of which
- * address that is. Anything else that goes wrong is a refusal: a client that
- * cannot say it has an interface must not act as though it does.
+ * address that is. Anything else that goes wrong fails the claim: a client
+ * that cannot record that it has an interface must not act as though it
+ * does.
  *
  * Init empties `/var/run` at boot, so a claim does not outlive the machine.
  *
- * @return 0 when the interface is this client's.
+ * @return 0 when the interface is this client's, with `holds_interface` set,
+ *         or -1 after a message.
  */
 static int claim_interface(void)
 {
@@ -825,7 +840,8 @@ static int claim_interface(void)
     return -1;
 }
 
-/** Release the claim only after its recorded address has been removed. */
+/** Remove the claim, unless this client has an address on the interface
+ * (`holding`), which the claim must keep for a later cleanup. */
 static void release_interface(void)
 {
     if (holds_interface && holding == 0) {
@@ -948,10 +964,9 @@ static int apply(int fd, const struct dhcp_lease *l, int strict)
 }
 
 /**
- * Remove the interface address through the existing socket.
- *
- * Preserve the recorded address and claim if removal fails so a later client
- * can retry cleanup. Return zero on removal, or -1 on failure.
+ * Take the address off the interface through the socket `fd`, and record no
+ * address in the claim. Returns 0, or -1 after a message, with `holding` and
+ * the claim left as they were for a later cleanup.
  */
 static int unconfigure(int fd)
 {
@@ -970,12 +985,13 @@ static int unconfigure(int fd)
 }
 
 /**
- * Apply the first lease or remove any partial configuration.
+ * Apply the first lease `l`, or take off the part of it that was applied.
  *
- * Return 1 when configured, zero when discovery may retry, or -1 when the
- * claim is lost or cleanup fails. Failed cleanup preserves the recovery record.
- * A first lease whose claim could not be recorded was never applied, and
- * `holding` is still zero: nothing is taken off then, so an address the
+ * Returns 1 when the interface is configured, 0 when discovery may try
+ * again, or -1 when `claim_is_ours` does not confirm the claim or the
+ * cleanup failed, which leaves the claim's record of the address. A first
+ * lease whose address could not be recorded in the claim was never applied,
+ * and `holding` is still 0: nothing is taken off then, so an address the
  * interface already had, such as a static one from the boot line, stays.
  */
 static int apply_initial(int fd, const struct dhcp_lease *l)
@@ -993,7 +1009,7 @@ static int apply_initial(int fd, const struct dhcp_lease *l)
 }
 
 /**
- * Ask for a lease and return it in `l` for the caller to apply.
+ * Request a lease and return it in `l` for the caller to apply.
  *
  * Discover, then request the address the first offer names, and wait for the
  * acknowledgement; each try waits twice as long as the one before, from two
@@ -1001,16 +1017,16 @@ static int apply_initial(int fd, const struct dhcp_lease *l)
  * when it grants, and an answer that took ten seconds to arrive has spent ten
  * seconds of the lease.
  *
- * A refusal starts again, and so does an acknowledgement this client cannot
- * use. One without a lease time `dhcp_sane_lease` accepts would have the
- * machine keep an address until somebody else is given it; one that
- * `dhcp_lease_usable` refuses would change the address and then be refused
- * half way, leaving the machine with neither. A server that keeps answering so
- * is asked again, not given up on. Silence after the schedule runs out
- * returns, and the caller decides whether to try another round.
+ * A NAK starts again, and so does an acknowledgement this client cannot use.
+ * One without a lease time `dhcp_sane_lease` accepts would have the machine
+ * keep an address until somebody else is given it; one that fails
+ * `dhcp_lease_usable` would change the address and then fail half way,
+ * leaving the machine with neither. A server that keeps answering so gets the
+ * next discover of the schedule. When the schedule runs out with no usable
+ * answer, this returns, and the caller decides whether to try another round.
  *
  * @return 0 with `l` filled, or -1 when no usable lease came, a send failed,
- *         or a stop was asked for.
+ *         or `stopping` is set.
  */
 static int obtain(int fd, struct dhcp_lease *l, time_t *asked)
 {
@@ -1085,9 +1101,11 @@ static int obtain(int fd, struct dhcp_lease *l, time_t *asked)
  * packet socket. Connecting is what makes the answer this socket's own, since a
  * connected datagram socket receives only from its peer.
  *
- * The message is the BOOTP part alone; the kernel writes the IP and UDP headers
- * and finds the route. The wait ends at `limit`, the boundary that decides
- * what to do next, or after ten seconds if that is sooner.
+ * The message is the first `bootp_len` bytes of the BOOTP part of `out`, sent
+ * to `l->server`; the kernel writes the IP and UDP headers and finds the
+ * route. The reply goes into `*got`. The wait ends at `limit`, the boundary
+ * that decides what to do next, or after ten seconds if that is sooner, and
+ * one datagram is read.
  *
  * @return the message type, 0 when no reply for this client came, or -1 on a
  *         socket that failed.
@@ -1149,11 +1167,12 @@ static int renew_unicast(struct dhcp_lease *l, struct dhcp_lease *got, unsigned 
 }
 
 /**
- * Wait two seconds before asking again, or until `limit` if that is sooner.
+ * Wait two seconds before the next request, or until `limit` if that is
+ * sooner.
  *
  * Every path in `hold` that did not get an answer it can use comes through
- * here, so a server that answers wrongly at once is asked again two seconds
- * later, not at once, unless `limit` comes first.
+ * here, so a server that answers wrongly at once gets the next request two
+ * seconds later, not at once, unless `limit` comes first.
  */
 static void rest_until(time_t limit)
 {
@@ -1168,33 +1187,33 @@ static void rest_until(time_t limit)
  * Hold a lease: renew at T1, rebind at T2, and give the address up when the
  * lease runs out.
  *
- * Until T1 the client waits on the packet socket, where a stop request wakes
+ * Until T1 the client waits on the packet socket, where a stop signal wakes
  * it. A renewal goes to the server that granted the lease and nowhere else; a
  * rebinding goes to everyone through the packet socket, because by then the
  * server that granted it has stopped answering and there may be another. Both
- * ask for the same thing. Every wait is cut short by the next boundary, so a
+ * are the same request. Every wait is cut short by the next boundary, so a
  * renewal that goes unanswered cannot keep the machine past the moment it
  * should have started rebinding, or past the moment the address stops being
  * its own. A renewal waits ten seconds for its answer, and a renewal whose
  * socket fails counts as unanswered. A rebinding request waits for half of
- * what is left of the lease, as RFC 2131 asks, but at least a second and not
- * the RFC's sixty, so that even the shortest lease this client accepts, ten
- * seconds, is asked about more than once; waiting the whole way to the expiry
- * would let one lost request cost the last eighth of the lease.
+ * what is left of the lease, as RFC 2131 recommends, but at least a second
+ * and not the RFC's sixty, so that even the shortest lease this client
+ * accepts, ten seconds, gets more than one request; waiting the whole way to
+ * the expiry would let one lost request cost the last eighth of the lease.
  *
  * An acknowledgement of the same address moves the boundaries, counted from
- * the moment this machine asked, since the server started counting first. It
- * is applied again and logged as `renewed for N seconds`, a line the dhcp
- * suite counts apart from a new lease's. One that `dhcp_lease_usable`
- * refuses, or that has no lease time `dhcp_sane_lease` accepts, leaves the
- * lease in force and its boundaries alone: moving them on an answer that gave
- * no duration would let a malformed server extend an address forever while it
+ * the moment the request went out, since the server started counting first.
+ * It is applied again and logged as `renewed for N seconds`, a line the dhcp
+ * suite counts apart from a new lease's. One that fails `dhcp_lease_usable`,
+ * or that has no lease time `dhcp_sane_lease` accepts, leaves the lease in
+ * force and its boundaries alone: moving them on an answer that gave no
+ * duration would let a malformed server extend an address forever while it
  * hands that address to another machine. An acknowledgement of another
- * address counts as no answer. A refusal, a rebinding request that cannot be
+ * address counts as no answer. A NAK, a rebinding request that cannot be
  * sent, or a renewal that `apply` fails on gives the address up as an expiry
- * does, and the caller asks for a new lease.
+ * does, and the caller requests a new lease.
  *
- * @return 0 when the address was given up or a stop was asked for, -1 on a
+ * @return 0 when the address was given up or `stopping` is set, -1 on a
  *         failed socket or an address that could not be taken off, or -2 when
  *         another client has the claim.
  */
@@ -1303,10 +1322,9 @@ static int hold(int fd, struct dhcp_lease *l, time_t asked)
 }
 
 /**
- * Replace inherited standard descriptors with the console or `/dev/null`.
- *
- * Close the inherited descriptors before opening the replacement. On failure,
- * leave all three closed and return -1.
+ * Point descriptors 0, 1 and 2 at `/dev/console`, or at `/dev/null` when the
+ * console cannot be opened, closing the inherited ones first. Returns 0, or
+ * -1 with all three closed.
  */
 static int detach_stdio(void)
 {
@@ -1356,13 +1374,13 @@ static int detach_stdio(void)
  * The child does nothing until it has the answer. Until the claim names it, a
  * `dhcpc -k` would read the parent's pid, and if the parent had died it would
  * take the address off, remove the claim and report a client stopped that is
- * still running. A refusal, an end of file or a failed read makes the child
- * give up and exit with status 1. It touches nothing unless the claim still
- * names the parent, since by then another client may have taken the interface
- * over and been given the same address. When the claim does name the parent,
- * the child takes off the address in `holding`, if the interface still has
- * it and the first lease did not find it there, and removes the claim, which
- * it keeps when that address cannot be taken off.
+ * still running. An answer of `n`, an end of file or a failed read makes the
+ * child give up and exit with status 1. It touches nothing unless the claim
+ * still names the parent, since by then another client may have taken the
+ * interface over and been given the same address. When the claim does name
+ * the parent, the child takes off the address in `holding`, if the interface
+ * still has it and the first lease did not find it there, and removes the
+ * claim, which it keeps when that address cannot be taken off.
  *
  * A published child starts its own session and detaches the inherited
  * standard descriptors; one that cannot redirect exits with its claim retained
@@ -1448,7 +1466,7 @@ static int go_background(void)
 }
 
 /**
- * Claim the interface, then ask for a lease and hold it until stopped.
+ * Claim the interface, then request a lease and hold it until stopped.
  *
  * `-k` stops the client that holds the interface and does nothing else. `-l`
  * lowers the cap on every lease, which is how the renewal path is exercised
@@ -1465,7 +1483,7 @@ static int go_background(void)
  * client that finds the claim is another's exits and leaves the address to
  * that client.
  *
- * @return 0 after a stop request that took the address off, 1 on a failure, 2
+ * @return 0 after a stop signal once the address is off, 1 on a failure, 2
  *         on a usage error; with `-k`, what `stop_client` returns.
  */
 int main(int argc, char **argv)
