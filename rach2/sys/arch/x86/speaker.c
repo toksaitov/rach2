@@ -1,10 +1,10 @@
+/*
+ * speaker.c: the PC speaker, as speaker.h describes it. The PIT's channel 2
+ * makes the frequency, and port 0x61's low two bits gate the channel to the
+ * speaker.
+ */
 #include "portio.h"
 #include "../../speaker.h"
-
-/*
- * The PC speaker: the PIT's channel 2 makes the frequency, and port 0x61's
- * low two bits gate the channel to the speaker.
- */
 
 /* PIT base oscillator frequency (Hz) */
 #define SPEAKER_PIT_BASE_FREQ 1193182
@@ -18,15 +18,12 @@
 static bool _speaker_on = false;
 
 /**
- * Drive the PC speaker at `frequency` Hz with a square wave.
- *
- * The speaker is gated by PIT channel 2: programming the channel to mode 3
- * (square wave) and connecting its output to the speaker produces a tone
- * whose pitch is the base PIT frequency divided by the loaded count. A
- * frequency of 0 has no valid divisor, so it silences the speaker instead.
- * The count is a 16-bit PIT register, so a sub-19 Hz request (whose divisor
- * exceeds 0xFFFF) is clamped to the lowest representable tone rather than
- * silently truncated to a wrong one.
+ * Programming PIT channel 2 to mode 3, the square wave, and connecting its
+ * output to the speaker produces a tone whose pitch is the PIT's base
+ * frequency divided by the loaded count. A frequency of 0 has no divisor,
+ * so it silences the speaker instead. The count is a 16-bit register, so
+ * the divisor of a request below 19 Hz, which exceeds 0xFFFF, is clamped to
+ * 0xFFFF, the lowest tone the count can make.
  */
 void speaker_on(uint32_t frequency)
 {
@@ -59,9 +56,6 @@ void speaker_on(uint32_t frequency)
     _speaker_on = true;
 }
 
-/**
- * Silence the speaker by clearing its gate and enable bits.
- */
 void speaker_off(void)
 {
     uint8_t tmp;

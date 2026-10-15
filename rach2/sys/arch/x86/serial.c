@@ -1,3 +1,8 @@
+/*
+ * serial.c: the PC's serial console, a 16550 UART at COM1, as serial.h
+ * describes it: a polled transmit, and a receive ring that the port's
+ * interrupt and the tick fill.
+ */
 #include "portio.h"
 #include "../../serial.h"
 
@@ -41,22 +46,25 @@ static uint32_t _rx_tail;
 static struct serial_rx_counters _rx;
 static void (*_rx_notify)(void);
 static int _rx_irq_wanted; /* the receive interrupt was enabled */
-static int _rx_irq_masked; /* and is off while the ring is full */
+static int _rx_irq_masked; /* and is off from a full ring to a half-empty one */
 
 /* Line control register bits */
 #define SERIAL_LCR_DLAB 0x80 /* Divisor latch access bit */
 
 /*
- * Set once a real COM1 UART is found. On hardware without COM1, port reads
- * float to 0xFF, so a wait for the port would never end; this flag makes the
- * write a no-op and the read report nothing instead.
+ * Set once `serial_init` finds a UART at COM1. On a machine without one the
+ * port reads 0xFF, a line status that says the transmitter is empty and a
+ * byte is waiting, so every byte written would go nowhere and the receive
+ * service would fill the ring with 0xFF; while the flag is clear each entry
+ * returns at once instead.
  */
 static int _serial_port_exists = 0;
 
-/*
- * Every read of the line status goes through here, because reading it
- * clears the overrun bit: a transmit poll that read the register directly
- * would clear the evidence the receive side counts.
+/**
+ * Read the line status, counting an overrun. Every read of the line status
+ * goes through here, because reading it clears the overrun bit: a transmit
+ * poll that read the register directly would clear the evidence the receive
+ * side counts.
  */
 static uint8_t _serial_lsr(void)
 {
@@ -68,11 +76,13 @@ static uint8_t _serial_lsr(void)
     return lsr;
 }
 
+/** Whether the transmit holding register can take a byte. */
 static int _serial_is_transmit_empty(void)
 {
     return _serial_lsr() & SERIAL_LSR_THRE;
 }
 
+/** The bytes the receive ring holds. */
 static uint32_t _rx_count(void)
 {
     return _rx_tail - _rx_head;
@@ -82,7 +92,7 @@ static uint32_t _rx_count(void)
  * Probe for a COM1 UART using its scratch register.
  *
  * Writes two distinct test bytes to the scratch register (offset 7) and reads
- * each back. A real UART latches the value; a floating bus returns 0xFF.
+ * each back. A UART keeps the value; a port nothing answers reads 0xFF.
  *
  * @return 1 if both bytes read back, 0 otherwise.
  */
@@ -107,9 +117,11 @@ static int _serial_detect_port(void)
 }
 
 /**
- * Detect and configure COM1 for 115200 baud, 8N1, FIFO enabled.
- *
- * Probes first; if no UART is present every serial entry point stays a no-op.
+ * COM1 is set to 115200 baud, a divisor of 1 on the UART's 1.8432 MHz clock
+ * over 16, with eight data bits, no parity and one stop bit, and the FIFO
+ * on with a 14-byte receive threshold. OUT2 connects the UART's interrupt to
+ * its ISA line. Without a UART the port is left alone, and every entry here
+ * returns at once.
  */
 void serial_init(void)
 {
@@ -137,8 +149,8 @@ void serial_init(void)
  * that hangs while reporting a fault reports nothing. At 115200 baud a byte
  * leaves in about 87 microseconds and this loop is far faster than that, so
  * the count is high enough that a working port never reaches it and low
- * enough that a wedged one costs a bounded delay per byte rather than the
- * machine.
+ * enough that a stuck one delays each byte by a bounded time instead of
+ * stopping the kernel.
  */
 #define SERIAL_TX_POLLS 100000
 
@@ -194,8 +206,9 @@ int serial_rx_service(int budget)
     return moved;
 }
 
-/*
- * The port's interrupt: the FIFO is 16 bytes and the budget is four times
+/**
+ * The port's interrupt: a service of at most 64 bytes, then the notify when
+ * the ring holds any. The FIFO is 16 bytes and the budget is four times
  * that, so a byte arriving while the handler runs is taken in the same
  * service and a flood cannot hold the handler for more than 64 bytes; what
  * is left raises the line again.
@@ -268,10 +281,10 @@ int serial_try_getc(void)
 }
 
 /*
- * The scan remembers how far it got with which set: the bytes between the
- * head and that position hold none of the set, so a caller that asks
- * again while the ring drains scans only what arrived since, and a
- * throttled reader asking once per byte does not walk the ring each time.
+ * Where `serial_rx_find`'s last scan for a set of three stopped, and the
+ * set: the bytes from the head to there hold none of the set, so a caller
+ * that asks again while the ring drains scans only what arrived since, and
+ * a throttled reader asking once per byte does not walk the ring each time.
  */
 static uint32_t _rx_scanned;
 static unsigned char _rx_scan_set[3];

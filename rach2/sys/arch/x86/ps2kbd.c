@@ -1,8 +1,8 @@
 /*
  * ps2kbd.c: the PS/2 keyboard's interrupt, which reads the 8042's data port
- * and hands the code on. Everything that is not about the 8042 lives in the
- * input layer, because a USB keyboard's codes arrive by another road and
- * are treated the same.
+ * and hands the code on. Everything that is not about the 8042 is in the
+ * input layer, which takes a USB keyboard's codes too and treats them the
+ * same.
  */
 
 #include "isr.h"
@@ -25,7 +25,8 @@
  * which the vector raised for a byte waiting at the switch to the I/O APIC
  * and the line's own message can make (`ps2_waiting` in platform.c), finds
  * the output buffer empty and reads nothing: the data port would give the
- * last byte again.
+ * last byte again. A waiting byte is taken whether the status marks it the
+ * keyboard's or the mouse's.
  *
  * Runs in interrupt context with an arbitrary process's page directory
  * loaded, so it translates through the kernel's own directory around the
@@ -49,6 +50,6 @@ static void kbd_irq(isr_params_t *params)
 
 void kbd_init(void)
 {
-    set_isr_handler(33, &kbd_irq, "kbd"); /* install the IRQ 1 keyboard handler */
-    pic_unmask_irq(1); /* now safe to take keyboard interrupts (masked since init_pic) */
+    set_isr_handler(33, &kbd_irq, "kbd");
+    pic_unmask_irq(1);
 }

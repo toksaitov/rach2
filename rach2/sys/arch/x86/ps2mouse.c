@@ -1,3 +1,14 @@
+/*
+ * ps2mouse.c: the PS/2 mouse, on the 8042's auxiliary port, as ps2mouse.h
+ * describes it. The mouse shares the controller with the keyboard: both use
+ * port 0x60 for data and 0x64 for status and commands. The mouse interrupts
+ * on IRQ 12, vector 44.
+ *
+ * A packet is three bytes:
+ *   Byte 0: [Yovf|Xovf|Ysign|Xsign|1|Middle|Right|Left]
+ *   Byte 1: X movement, the low 8 bits of a 9-bit value, Xsign its sign
+ *   Byte 2: Y movement, the low 8 bits of a 9-bit value, Ysign its sign
+ */
 #include "portio.h"
 #include "ps2mouse.h"
 #include "../../platform.h"
@@ -6,19 +17,6 @@
 #include "isr.h"
 #include "../../kio.h"
 #include "../../serial.h"
-
-/*
- * PS/2 Mouse Driver
- *
- * The PS/2 mouse shares the 8042 controller with the keyboard.
- * Both use port 0x60 for data and 0x64 for status/commands.
- * The mouse uses IRQ12 (mapped to vector 44 after PIC remapping).
- *
- * Mouse packets are 3 bytes:
- *   Byte 0: [Yovf|Xovf|Ysign|Xsign|1|Middle|Right|Left]
- *   Byte 1: X movement (8-bit, use Xsign for 9-bit signed)
- *   Byte 2: Y movement (8-bit, use Ysign for 9-bit signed)
- */
 
 /* 8042 Controller Ports */
 #define PS2_DATA_PORT   0x60
@@ -58,20 +56,20 @@
 /* Timeout for waiting on 8042 controller (iterations) */
 #define PS2_TIMEOUT 100000
 
-/* Packet assembly state */
+/* The packet being assembled, and the index of its next byte. */
 static uint8_t packet_bytes[3];
 static int packet_index = 0;
+
+/* How many bytes the first drain reads before it calls the controller
+   stuck. A PS/2 output buffer has one byte, so anything past a handful is a
+   controller that is not answering. */
+#define PS2_DRAIN_LIMIT 4096
 
 /**
  * Spin until the 8042 input buffer is empty, ready to accept a byte.
  *
  * @return 0 when the buffer drains, -1 on timeout.
  */
-/* How many bytes the initial drain will read before calling the controller
-   stuck. A PS/2 output buffer has one byte, so anything past a handful is a
-   controller that is not answering. */
-#define PS2_DRAIN_LIMIT 4096
-
 static int ps2_wait_input(void)
 {
     int timeout = PS2_TIMEOUT;
@@ -117,11 +115,12 @@ static int ps2_send_command(uint8_t cmd)
  *
  * Each command must be prefixed with PS2_CMD_WRITE_MOUSE so the
  * controller routes the following data byte to the auxiliary device.
- * A MOUSE_RESEND reply means the mouse saw a framing error; retry up
- * to three times. Any other non-ACK byte is returned to the caller,
- * since some commands answer with data, not an ACK.
+ * A MOUSE_RESEND reply means the mouse saw a framing error, and a timeout
+ * means it did not answer; either way the command is tried again, three
+ * times in all. Any other byte is returned to the caller, since some
+ * commands answer with data and not an ACK.
  *
- * @return the mouse's response byte, or -1 after the retries are spent.
+ * @return the mouse's response byte, or -1 after three failed tries.
  */
 static int mouse_send_command(uint8_t cmd)
 {
@@ -157,16 +156,18 @@ static int mouse_send_command(uint8_t cmd)
 }
 
 /**
- * IRQ12 handler that assembles 3-byte PS/2 packets one byte per interrupt.
+ * The IRQ 12 handler, which assembles a three-byte packet one byte an
+ * interrupt and puts it in the mouse queue.
  *
- * The 8042 raises IRQ12 for every auxiliary byte; status bit 5
- * (PS2_STATUS_MOUSE_DATA) distinguishes mouse bytes from keyboard bytes
- * that share the controller. Packets are framed by byte 0, whose bit 3
- * is always 1: if that bit is clear while we expect byte 0, the stream
- * is out of sync and the byte is dropped to resynchronize. The X and Y
- * movement bytes are 9-bit signed, with the high bit in flags bits 4-5;
- * a set overflow bit (flags bits 6-7) marks an unusable delta and the
- * whole packet is discarded.
+ * The 8042 raises IRQ 12 for every auxiliary byte, and status bit 5
+ * (PS2_STATUS_MOUSE_DATA) tells a mouse byte from a keyboard byte; a byte
+ * the status marks as the keyboard's is read from the data port here and
+ * dropped. A packet is framed by byte 0, whose bit 3 is always 1: a byte
+ * expected as byte 0 with that bit clear is out of step with the stream and
+ * is dropped, which brings the stream back in step. The X and Y movements
+ * are 9-bit signed values with their high bits in bits 4 and 5 of byte 0; a
+ * set overflow bit, bit 6 or 7, marks a movement that cannot be used, and
+ * the whole packet is discarded.
  */
 static void mouse_irq_handler(isr_params_t *params)
 {
@@ -180,7 +181,6 @@ static void mouse_irq_handler(isr_params_t *params)
     }
     data = inb(PS2_DATA_PORT);
 
-    /* Keyboard byte sharing the 8042; its own handler will read it. */
     if (!(status & PS2_STATUS_MOUSE_DATA)) {
         return;
     }
@@ -218,16 +218,15 @@ static void mouse_irq_handler(isr_params_t *params)
 }
 
 /**
- * Bring up the PS/2 mouse: enable the aux port, IRQ12, and data reporting.
- *
- * Runs with interrupts masked so the configuration handshake is not
- * interleaved with stray IRQ12 bytes. The output buffer is drained first
- * to discard junk left by firmware. A failed reset is tolerated because
- * some emulators do not answer it; a failed port enable or data-reporting
- * enable is fatal. The mouse uses IRQ12, vector 44 (32 + 12) after PIC
- * remapping.
- *
- * @return 0 once data reporting is on, -1 on a fatal handshake failure.
+ * Interrupts are off so that the handshake's bytes are not taken by a stray
+ * IRQ 12. The output buffer is drained first of what the firmware left in
+ * it, at most PS2_DRAIN_LIMIT bytes: the buffer is one byte deep and a
+ * working controller clears in a read or two, but one that reports a full
+ * buffer for good would otherwise stop the boot here, with interrupts off
+ * and nothing said, which on a laptop without a serial port leaves nothing
+ * to read. A failed reset is tolerated because some emulators do not answer
+ * it, and so is a refused default; a failed port enable, configuration byte
+ * or reporting enable fails the bring-up.
  */
 int init_mouse(void)
 {
@@ -236,13 +235,6 @@ int init_mouse(void)
 
     __asm__ __volatile__("cli");
 
-    /* Discard firmware junk so the handshake starts from a clean buffer. The
-     * count is a bound and not an expectation: the buffer is one byte deep and
-     * a working controller clears in a read or two, but a controller that
-     * reports output-full forever is a real failure on real hardware, and this
-     * runs with interrupts off during boot. Unbounded, it would stop the
-     * machine here with nothing said, which on a laptop with no serial port is
-     * a blank refusal nobody can act on. */
     {
         int drained = PS2_DRAIN_LIMIT;
 
@@ -321,8 +313,8 @@ int init_mouse(void)
     return 0;
 }
 
-/* Start the next packet afresh: the graphics-mode reader that empties the
- * ring wants no half of one assembled before. */
+/** `mouse_clear_packets` calls this when the queue is emptied, so that half
+ * a packet assembled before is not finished with the bytes after. */
 void platform_mouse_resync(void)
 {
     packet_index = 0;

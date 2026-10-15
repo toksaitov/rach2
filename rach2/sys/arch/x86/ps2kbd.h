@@ -6,7 +6,9 @@
  * a byte, which it gives to the input layer (../../input.h).
  */
 
-/** Take the keyboard's interrupt and unmask its line. */
+/** Take the keyboard's interrupt, vector 33, and unmask IRQ 1, which
+ * `init_pic` left masked. Called once, at boot, from
+ * `platform_keyboard_init`. */
 void kbd_init(void);
 
 #endif /* _PS2KBD_H_ */
