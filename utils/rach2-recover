@@ -19,10 +19,13 @@ set -u
 ME=rach2-recover
 MNT=/mnt/recover
 
+# Prints MESSAGE on stdout as `rach2-recover: MESSAGE`.
 say() { echo "$ME: $1"; }
+# Prints MESSAGE on stderr as `rach2-recover: MESSAGE`; the menu goes on.
 warn() { echo "$ME: $1" >&2; }
 
 mounted=""
+# Unmounts the stick when this run mounted it. The traps call it; it returns 0.
 cleanup() {
     [ -n "$mounted" ] && umount "$mounted" 2>/dev/null
     return 0
@@ -34,24 +37,35 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 
+# The functions below read `/proc/disk`, whose `disk` line for disk N has the
+# fields N TRANSPORT LOCATION SECTORS TABLE MODEL after the word, and whose
+# `identity` line has N SECTOR-SIZE fixed|removable mounted|free SERIAL. Each
+# prints nothing for a disk the file does not list.
+#
+# disk_numbers prints the number of each disk /proc/disk lists, one a line.
 disk_numbers() {
     grep '^disk ' /proc/disk | cut -d' ' -f2
 }
 
+# Prints field FIELD of disk N's `disk` line, counting the word as field 1.
 disk_field() { # disk_field N FIELD
     grep "^disk $1 " /proc/disk | head -1 | cut -d' ' -f"$2"
 }
 
+# Prints disk N's model, the rest of its `disk` line from field 7.
 disk_model() {
     grep "^disk $1 " /proc/disk | head -1 | cut -d' ' -f7-
 }
 
+# Prints disk N's serial, the rest of its `identity` line from field 6.
 disk_serial() {
     grep "^identity $1 " /proc/disk | head -1 | cut -d' ' -f6-
 }
 
 # ---- what the machine has ----
 
+# Prints each disk on one line, with its model, serial, size in bytes,
+# transport and table, and its `part` lines from /proc/disk below it.
 list_disks() {
     for n in $(disk_numbers); do
         say "/dev/disk$n: $(disk_model "$n"), serial $(disk_serial "$n"), \
@@ -60,7 +74,8 @@ $(($(disk_field "$n" 5) * 512)) bytes, $(disk_field "$n" 3), table $(disk_field 
     done
 }
 
-# A device the person names, refused unless the machine has it.
+# Asks for a device with PROMPT and leaves the answer in `device`. Status 1
+# when the answer is empty, or names nothing on this machine, which is said.
 ask_device() { # ask_device PROMPT
     printf '%s: %s: ' "$ME" "$1"
     read -r device
@@ -74,6 +89,8 @@ ask_device() { # ask_device PROMPT
 
 # ---- the steps ----
 
+# Asks for a partition and checks its ext2 file system with `e2fsck -f -n`,
+# which writes nothing, and says how to repair it when the check finds faults.
 check_volume() {
     ask_device "which partition shall be checked, for example /dev/disk0p3" || return 0
     say "checking $device without writing to it"
@@ -84,9 +101,10 @@ check_volume() {
     fi
 }
 
-# Mount the stick this is running from, if it carries an image, and print
-# where. The same volume the installer reads, found the same way: by the
-# manifest on it rather than by a position.
+# Mount the stick this is running from, if it has an image, and print where.
+# The same volume the installer reads, found the same way: by the manifest on
+# it rather than by a position. Status 1 when no removable disk has one, or
+# when a volume mounted to look would not unmount.
 find_stick() {
     for n in $(disk_numbers); do
         [ "$(grep "^identity $n " /proc/disk | cut -d' ' -f4)" = "removable" ] || continue
@@ -104,8 +122,8 @@ find_stick() {
     return 1
 }
 
-# The disks this machine has, as `/proc/disk` names them, so a target is a
-# disk of this machine and not a path that happens to exist.
+# Whether PATH is /dev/diskN for a disk `/proc/disk` lists, so that a target
+# is a disk of this machine and not a path that happens to exist.
 is_whole_disk() { # is_whole_disk PATH
     for n in $(disk_numbers); do
         [ "$1" = "/dev/disk$n" ] && return 0
@@ -113,19 +131,30 @@ is_whole_disk() { # is_whole_disk PATH
     return 1
 }
 
+# Writes a saved image of a whole disk to a disk the person names, once its
+# hash agrees, reads it back, and has the kernel read the new table. The
+# target is a whole disk and not a partition: an image begins with a table,
+# and written at a partition's first sector it would put that table there
+# and read back as though it had been written correctly. The image offered is
+# the one on the stick this runs from, since the stick a person boots to
+# repair a machine is usually the stick that has the system.
+#
+# The hash comes from IMAGE.sha256 beside the image, or from the installer's
+# manifest when that manifest names this image, and an image with neither is
+# not written. The length comes from the file's own record rather than from
+# counting its bytes: `wc -c` on a stick reads the whole image, which is
+# minutes before a question is even asked. An image with a GUID table has its
+# backup where the image ends; on a larger disk it goes to the disk's end, as
+# the installer puts it. Each outcome is said in one line, and the function
+# returns 0.
 restore_image() {
     ask_device "which disk shall be restored, for example /dev/disk0" || return 0
     target=$device
-    # A whole disk and not a partition: an image begins with a table, and
-    # written at a partition's first sector it would put that table there and
-    # read back as though it had been written correctly.
     is_whole_disk "$target" || {
         warn "$target is not a whole disk of this machine; the disks are:"
         list_disks
         return 0
     }
-    # The stick's own image is the answer this offers, since the stick a person
-    # boots to repair a machine is usually the stick that carries the system.
     offer=""
     if [ -z "$mounted" ]; then
         mounted=$(find_stick) || mounted=""
@@ -143,8 +172,6 @@ restore_image() {
         warn "$image is not a file"
         return 0
     }
-    # The hash comes from `IMAGE.sha256` beside the image, or from the
-    # installer's own manifest when that manifest names this image.
     want=""
     if [ -f "$image.sha256" ]; then
         want=$(cut -d' ' -f1 < "$image.sha256")
@@ -160,9 +187,6 @@ restore_image() {
         warn "no hash for $image: an image is restored only against one"
         return 0
     }
-    # The length comes from the file's own record rather than from counting its
-    # bytes: `wc -c` on a stick reads the whole image, which is minutes before
-    # a question is even asked.
     bytes=$(stat -c %s "$image")
     [ -n "$bytes" ] || {
         warn "the length of $image could not be read"
@@ -193,9 +217,7 @@ $(($(disk_field "$n" 5) * 512)) bytes, $(disk_field "$n" 3), table $(disk_field 
         warn "what reached the disk hashes to $back and the image to $want"
         return 0
     }
-    # An image with a GUID table, which its protective MBR's type 0xEE says,
-    # has its backup where the image ends; on a larger disk it goes to the
-    # disk's end, as the installer puts it, and the table is read again.
+    # Type 0xEE in the first MBR entry, byte 450, marks a GUID table.
     if [ "$(dd if="$image" bs=1 skip=450 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')" = ee ]; then
         if ! diskctl relocate "$target" > /dev/null; then
             warn "$target: the image is on the disk and read back, and its GUID table's backup \
@@ -210,6 +232,8 @@ its new table; reboot before mounting anything from it"
     say "$target: restored and read back; reboot from it"
 }
 
+# Asks for a boot partition and a kernel file, and stages the kernel in the
+# candidate slot with `bootctl kernel`, which arms one trial boot of it.
 install_kernel() {
     ask_device "which boot partition, for example /dev/disk0p1" || return 0
     boot=$device
