@@ -771,8 +771,8 @@ static void _page_fault_handler(isr_params_t *params)
 
         k_memset(&info, 0, sizeof(info));
         info.code = SI_KERNEL;
-        klog(KLOG_WARN, "vm", "fault: out of memory: killing pid %d: no frame for a %s at 0x%x",
-             current_proc->pid, write ? "write" : "read", fault_address);
+        klog(KLOG_WARN, "vm", "fault: out of memory: killing pid %d: no frame for a %s at 0x%lx",
+             current_proc->pid, write ? "write" : "read", (unsigned long)fault_address);
         signal_force(current_proc, SIGKILL, &info);
         return;
     }
@@ -789,8 +789,9 @@ static void _page_fault_handler(isr_params_t *params)
         signal_force(current_proc, SIGSEGV, &info);
         if (current_proc->sigacts[SIGSEGV].handler == KSIG_DFL &&
             !(current_proc->ptrace & PT_TRACED)) {
-            klog(KLOG_WARN, "vm", "fault: killing pid %d: bad %s at 0x%x (err 0x%x)",
-                 current_proc->pid, write ? "write" : "read", fault_address, params->error_code);
+            klog(KLOG_WARN, "vm", "fault: killing pid %d: bad %s at 0x%lx (err 0x%x)",
+                 current_proc->pid, write ? "write" : "read", (unsigned long)fault_address,
+                 (uint32_t)params->error_code);
         }
         return;
     }
@@ -798,14 +799,16 @@ static void _page_fault_handler(isr_params_t *params)
     pid = kstack_overrun_pid(fault_address);
     if (pid >= 0) {
         klog(KLOG_CRIT, "vm",
-             "fault: in kernel mode at 0x%X (err 0x%X), eip 0x%X: "
+             "fault: in kernel mode at 0x%lX (err 0x%X), pc 0x%lX: "
              "pid %d ran past the end of its kernel stack",
-             fault_address, params->error_code, FRAME_PC(params), pid);
+             (unsigned long)fault_address, (uint32_t)params->error_code,
+             (unsigned long)FRAME_PC(params), pid);
         k_panic("page fault: a kernel stack ran out");
     }
 
-    klog(KLOG_CRIT, "vm", "fault: in kernel mode at 0x%X (err 0x%X), eip 0x%X", fault_address,
-         params->error_code, FRAME_PC(params));
+    klog(KLOG_CRIT, "vm", "fault: in kernel mode at 0x%lX (err 0x%X), pc 0x%lX",
+         (unsigned long)fault_address, (uint32_t)params->error_code,
+         (unsigned long)FRAME_PC(params));
 
     k_panic("Unrecoverable error: page fault while in kernel mode.");
 }
@@ -831,13 +834,15 @@ uintptr_t map_mmio_typed(uintptr_t phys_addr, size_t size, pte_t cache)
     uintptr_t pages, span, i, va;
 
     if (size == 0 || end_addr < phys_addr) {
-        klog(KLOG_ERR, "vm", "map_mmio: bad region 0x%x, %d bytes", phys_addr, size);
+        klog(KLOG_ERR, "vm", "map_mmio: bad region 0x%lx, %zu bytes", (unsigned long)phys_addr,
+             size);
         return 0;
     }
     span = end_addr - start_page;
     pages = span / PAGE_SIZE + ((span % PAGE_SIZE) ? 1u : 0u);
     if (pages > (KVA_MMIO + KVA_MMIO_SIZE - _mmio_next) / PAGE_SIZE) {
-        klog(KLOG_ERR, "vm", "map_mmio: the MMIO region is full at 0x%x", _mmio_next);
+        klog(KLOG_ERR, "vm", "map_mmio: the MMIO region is full at 0x%lx",
+             (unsigned long)_mmio_next);
         return 0;
     }
     va = _mmio_next;
