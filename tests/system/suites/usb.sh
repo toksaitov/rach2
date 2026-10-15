@@ -2,7 +2,10 @@
 #
 # usb.sh: the USB stack, from a port to a keystroke.
 #
-# Each row is a boot of its own, since each tests a different path.
+# The suite makes thirty boots: twenty-eight here, and the two keystroke
+# dispatch rows of usb_latency.sh. Each row here is a boot of its own, since
+# each tests a different path, except the sticks on two controllers, which
+# boot once for each direction.
 #
 # The machine has no 8042 in the boots that type a key or move a mouse. With
 # a PS/2 keyboard and mouse present, a typed key or a moved mouse could have

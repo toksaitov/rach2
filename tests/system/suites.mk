@@ -1434,10 +1434,8 @@ run-diskdiag: rach2 rach2-metal rach2-metal-image $(HARNESS) $(SHA256TOOL) $(RUN
 	    $(DISKDIAG_PORT)
 # `tests/run subset`: each optional device probe left out, and proved left
 # out.
-# `tests/run usb`: the USB stack, in five boots. Three of them take the 8042
-# away, because a key typed or a mouse moved on a machine that still has a PS/2
-# keyboard could have arrived by either road, and a check that passes either
-# way says nothing about the stack this milestone built.
+# `tests/run usb`: the USB stack, from a port to a keystroke, in the boots
+# that `tests/system/suites/usb.sh` counts and describes.
 # `tests/run mount`: the mount milestone's suite. Phase 2 boots the lag device
 # and the partition nodes; later phases grow it. Its disk is the test disk
 # with a FAT32 partition added at 49 MiB by mkmbr and mtools.
