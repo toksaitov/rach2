@@ -1,19 +1,17 @@
 /**
- * Exercises the server-side socket fill-out a forking sshd needs, through real
- * musl: getsockname, getpeername, setsockopt, getsockopt, and shutdown.
+ * sockfillmusl: check the socket calls a forking server makes on its listening
+ * socket, through musl: setsockopt, getsockname, getsockopt and getpeername.
  *
- * The test is hermetic, needing no peer. It drives the socketcall sub-calls on
- * a TCP listening socket and checks the success and error contract:
- * setsockopt(SO_REUSEADDR) and setsockopt(TCP_NODELAY) succeed; bind and listen
- * succeed and getsockname reports the bound port; getsockopt(SO_TYPE) reports
- * SOCK_STREAM; getpeername on an unconnected socket fails with ENOTCONN; and
- * getsockname on a non-socket fd (stdin) fails with ENOTSOCK. The connected
- * getpeername and shutdown(FIN) paths are not driven here: they are proven by
- * the httpd integration, where accept yields a connected socket, and reviewed
- * in the kernel.
+ * It needs no peer. On a TCP socket it checks that setsockopt(SO_REUSEADDR)
+ * and setsockopt(TCP_NODELAY) succeed; that bind and listen succeed and
+ * getsockname reports the bound port; that getsockopt(SO_TYPE) reports
+ * SOCK_STREAM; that getpeername on the unconnected socket fails with ENOTCONN;
+ * and that getsockname on standard input, which is not a socket, fails with
+ * ENOTSOCK. It does not check getpeername on a connected socket or shutdown.
  *
- * Prints "SOCKFILLMUSL OK" on success or "SOCKFILLMUSL FAIL" on failure. Linked
- * against the ported musl.
+ * No suite runs it; `tests/probe-helpers` lists it as a manual test. It prints
+ * "SOCKFILLMUSL OK" and exits 0 on success, or prints "SOCKFILLMUSL FAIL
+ * (detail)" and exits 1 at the first failure.
  */
 
 #include <sys/socket.h>

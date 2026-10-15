@@ -1,18 +1,19 @@
 /**
- * Round-trip a line over a connected TCP socket through real musl
- * send()/recv(), not read()/write().
+ * tcpsendrecv: send a line over a connected TCP socket with musl's send and
+ * read its echo back with recv.
  *
- * musl's send()/recv() compile to sendto()/recvfrom() with a NULL address,
- * which the kernel must route to the TCP path on a connected stream socket, not
- * the UDP path. The test connects out through the SLIRP gateway 10.0.2.2:PORT
- * to a host echo server, then exercises the path in order: a non-blocking recv
- * before any data must fail with EAGAIN, not block or read (the server
- * echoes only after it receives the line); send() must write the whole known
- * line; recv() must read it back. It prints "TCPSENDRECV OK" only when the echo
- * matches, locking the regression that broke the musl httpd.
+ * musl's send and recv call sendto and recvfrom with a null address, which
+ * the kernel must handle as TCP on a connected stream socket. The program
+ * connects through the SLIRP gateway, 10.0.2.2:PORT, to an echo server on the
+ * host, and checks in order: a non-blocking recv before any data fails with
+ * EAGAIN, since the server echoes only after it receives the line; send
+ * writes the whole line; and recv reads it back.
  *
- * Needs a host echo server on 127.0.0.1:PORT (the test harness starts one).
- * Linked statically against the ported musl; see tests/musl/build.sh.
+ * No suite runs it; `tests/probe-helpers` lists it as a manual test, and it
+ * needs an echo server listening on the host's 127.0.0.1:PORT. It prints
+ * "TCPSENDRECV OK" and exits 0 when the echo matches, or prints "TCPSENDRECV
+ * FAIL: reason" and exits 1. It is linked statically against the ported musl;
+ * see `tests/musl/build.sh`.
  */
 
 #include <stdio.h>
@@ -22,7 +23,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-#define GW_IP 0x0A000202u /* 10.0.2.2, the SLIRP gateway (== the host) */
+#define GW_IP 0x0A000202u /* 10.0.2.2, the SLIRP gateway to the host */
 #define PORT  18079
 
 int main(void)

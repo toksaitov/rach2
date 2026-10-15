@@ -1,12 +1,13 @@
 /**
- * The creation flags of a socket, SOCK_CLOEXEC and SOCK_NONBLOCK, taken by
- * the kernel in the type of socket(2) and the flags of accept4(2), as Linux
- * takes them.
+ * sockflagmusl: check that the kernel takes the socket creation flags,
+ * SOCK_CLOEXEC and SOCK_NONBLOCK, in the type of socket(2) and the flags of
+ * accept4(2), as Linux does.
  *
  * The calls go through socketcall by number, or on x86-64, which has no
- * socketcall, through the calls of their own, and not through musl, which sets
- * the flags itself with fcntl when the kernel refuses them and so would hide
- * a kernel that does. A type with another bit above its low four, and an
+ * socketcall, through the calls of their own, and not through musl's
+ * wrappers: when the kernel fails a call with EINVAL for the flags, musl makes
+ * it again without them and sets them with fcntl, which would hide a kernel
+ * that lacks them. A type with another bit above its low four, and an
  * accept4 flag other than the two, are EINVAL. A socket made with
  * SOCK_CLOEXEC alone is close-on-exec and blocking; a listener made with both
  * flags has both, and an accept on it with nothing queued is EAGAIN. A
@@ -19,8 +20,8 @@
  * reads the server's answer and then the end of input, as `nc` does, and a
  * send after the shutdown is EPIPE.
  *
- * Prints "SOCKFLAGMUSL OK" on success and "SOCKFLAGMUSL FAIL (detail)"
- * otherwise.
+ * It prints "SOCKFLAGMUSL OK" and exits 0 on success, or prints
+ * "SOCKFLAGMUSL FAIL (detail)" and exits 1 at the first failure.
  */
 
 #define _GNU_SOURCE
@@ -37,6 +38,7 @@
 #include <time.h>
 #include <unistd.h>
 
+/* The socketcall numbers of the calls; on x86-64, sc maps them to its calls. */
 #define SC_SOCKET  1
 #define SC_BIND    2
 #define SC_CONNECT 3
@@ -53,8 +55,10 @@ static int fail(const char *what)
 }
 
 #if defined SYS_socketcall
-/** Make the socket operation `call` with the arguments `a` to `d`; its
- * result, or -1 with errno set. */
+/**
+ * Make the socket operation `call`, an `SC_` number, with the arguments `a`
+ * to `d` through socketcall. Returns the call's result, or -1 with errno set.
+ */
 static long sc(int call, long a, long b, long c, long d)
 {
     long args[4];
@@ -66,8 +70,11 @@ static long sc(int call, long a, long b, long c, long d)
     return syscall(SYS_socketcall, call, args);
 }
 #else
-/** Make the socket operation `call` with the arguments `a` to `d` through
- * the call x86-64 has for it; its result, or -1 with errno set. */
+/**
+ * Make the socket operation `call`, an `SC_` number, with the arguments `a`
+ * to `d` through the call x86-64 has for it. Returns the call's result, or -1
+ * with errno set.
+ */
 static long sc(int call, long a, long b, long c, long d)
 {
     static const long nr[] = {0, SYS_socket, SYS_bind, SYS_connect, SYS_listen};
@@ -76,8 +83,11 @@ static long sc(int call, long a, long b, long c, long d)
 }
 #endif
 
-/** Whether `fd` is close-on-exec and non-blocking exactly as `cloexec` and
- * `nonblock` say. */
+/**
+ * Return 1 when the close-on-exec and non-blocking flags of `fd` match
+ * `cloexec` and `nonblock`, each 0 or 1, and 0 when they do not or fcntl
+ * fails.
+ */
 static int has(int fd, int cloexec, int nonblock)
 {
     int fdflags = fcntl(fd, F_GETFD);
@@ -87,9 +97,12 @@ static int has(int fd, int cloexec, int nonblock)
            ((flflags & O_NONBLOCK) != 0) == nonblock;
 }
 
-/** Accept a connection on the non-blocking listener `ls` with `flags`,
- * trying again every 10 ms for at most a second while the handshake's last
- * segment is on its way through the loopback ring. */
+/**
+ * Accept a connection on the non-blocking listener `ls` with the accept4
+ * `flags`, trying again every 10 ms for at most a second while the
+ * handshake's last segment is on its way through the loopback ring. Returns
+ * the new descriptor, or -1 with errno set.
+ */
 static int accept_within(int ls, int flags)
 {
     struct timespec tick = {0, 10000000};
@@ -106,7 +119,10 @@ static int accept_within(int ls, int flags)
     return (int)fd;
 }
 
-/** A client connected to the listener's port on 127.0.0.1, or -1. */
+/**
+ * Connect a new client socket to `PORT` on 127.0.0.1. Returns its descriptor,
+ * or -1.
+ */
 static int connect_one(void)
 {
     struct sockaddr_in sa;
@@ -122,7 +138,10 @@ static int connect_one(void)
     return cs;
 }
 
-/** A listener on the probe's port made with both flags, or -1. */
+/**
+ * Make a listener on `PORT` with both creation flags. Returns its descriptor,
+ * or -1.
+ */
 static int listener(void)
 {
     struct sockaddr_in sa;
@@ -139,9 +158,13 @@ static int listener(void)
     return ls;
 }
 
-/** A half close over the loopback on the listener `ls`: the client sends its
- * request and shuts its sending half, the server reads the request and the
- * end of input and only then answers, and the client reads the answer. */
+/**
+ * Check a half close over the loopback on the listener `ls`: the client sends
+ * its request and shuts its sending half, a send after that fails with EPIPE,
+ * the server reads the request and the end of input and only then answers,
+ * and the client reads the answer and the end of input. Returns 0, or 1 after
+ * the failure is printed. SIGPIPE is ignored from here on.
+ */
 static int half_close(int ls)
 {
     char buf[16];
