@@ -1,8 +1,11 @@
 /**
- * The type getdents64 reports in d_type, which GNU libc's and musl's readdir
- * hand on and programs such as find and ls act on without a stat; the seeks
- * of a directory's listing; and the answer each call that takes a path
- * gives one that names a directory by its end.
+ * direntmusl: check d_type, the seeks of a listing, and paths that end as
+ * directories.
+ *
+ * getdents64 reports a type in d_type, which GNU libc's and musl's readdir
+ * pass on and programs such as find and ls act on without a stat. The probe
+ * checks that type, the seeks of a directory's listing, and the answer each
+ * call that takes a path gives one that names a directory by its end.
  *
  * Every entry of /dev, /dev/pts, /proc, /proc/self, /proc/self/fd, /proc/net,
  * /proc/sys and /proc/sys/fs/inotify and a directory the probe makes must
@@ -18,9 +21,8 @@
  * directory of /proc/sys/kernel is named so by getcwd. Each listing must end
  * without an error from readdir and check at least one entry, and lstat may
  * fail only with ENOENT, only in /proc and /dev/pts, whose entries come and
- * go. A path
- * that names a directory by its end is followed there, by lstat and by the
- * old lstat, and a file named that way is ENOTDIR. The probe's own
+ * go. A path that names a directory by its end is followed there, by lstat
+ * and by the old lstat, and a file named that way is ENOTDIR. The probe's own
  * directory and /proc/self, read to their end, list as many entries again
  * after rewinddir, and seekdir to the place telldir gave after the first
  * entry lists the second next.
@@ -57,11 +59,13 @@
  * and on an ext2 root.
  *
  * With a directory argument, which tests/system/suites/ext2.sh gives as /tmp
- * on an ext2 root, the probe's own directory is made there and must hold a
+ * on an ext2 root, the probe's own directory is made there and must have a
  * symbolic link reported as DT_LNK, and / and /bin of that root are checked
  * too.
  *
- * Prints "DIRENTMUSL OK" on success and "DIRENTMUSL FAIL (detail)" otherwise.
+ * The program runs as root. It prints `DIRENTMUSL OK`, followed by
+ * " (links)" when the file system has symbolic links, and exits 0 on success,
+ * and prints `DIRENTMUSL FAIL (detail)` and exits 1 otherwise.
  */
 
 #define _GNU_SOURCE
@@ -504,8 +508,8 @@ static int at_ends(const char *dir, const struct ends *p)
     return 0;
 }
 
-/* A script whose interpreter is named with a trailing slash, which the
- * kernel refuses. The row judges by the child's status (`exec_refused`),
+/* A script whose interpreter is named with a trailing slash, which execve
+ * fails with ENOTDIR. The row judges by the child's status (`exec_refused`),
  * since the default image's /bin/sh reads its commands from its input and not
  * from the script; a shell that read the script would print the line. */
 static const char slash_script[] =
@@ -1036,8 +1040,10 @@ static void tidy(void)
     rmdir(base);
 }
 
-/* The whole of the small file `path` into `buf` of `cap` bytes, NUL-ended;
- * its length, or -1. */
+/**
+ * Read the small file `path` into `buf` of `cap` bytes, terminated with a
+ * NUL. Returns its length, or -1.
+ */
 static int slurp(const char *path, char *buf, int cap)
 {
     int fd = open(path, O_RDONLY);
@@ -1052,9 +1058,11 @@ static int slurp(const char *path, char *buf, int cap)
     return n;
 }
 
-/* Whether `s` begins with three loads of two decimals each, as
-   /proc/loadavg writes them, each followed by a space; the text after them
-   in `*rest`. */
+/**
+ * Whether `s` begins with three loads of two decimals each, as /proc/loadavg
+ * writes them, each followed by a space; the text after them is left in
+ * `*rest`.
+ */
 static int three_loads(const char *s, const char **rest)
 {
     int i;
@@ -1075,8 +1083,11 @@ static int three_loads(const char *s, const char **rest)
     return 1;
 }
 
-/* /proc/cpuinfo's record, /proc/self/mounts, /proc/loadavg and no process
- * 0, a /proc/sys file, and a working directory in /proc/sys. */
+/**
+ * Check /proc/cpuinfo's record, /proc/self/mounts, /proc/loadavg and that
+ * there is no process 0, two /proc/sys files, and a working directory in
+ * /proc/sys. Returns 0, or 1 once the failure is reported.
+ */
 static int proc_texts(void)
 {
     char buf[4096];

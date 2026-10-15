@@ -1,5 +1,5 @@
 /**
- * eventfd and epoll.
+ * epollmusl: check eventfd and epoll.
  *
  * An eventfd's read takes the whole counter and leaves it empty; with
  * EFD_SEMAPHORE each read takes one, and a counter of 3 is empty after three. A
@@ -11,33 +11,34 @@
  * the data is there; edge-triggered only once until more arrives; with
  * EPOLLONESHOT once until EPOLL_CTL_MOD. Its data word comes back as it was
  * given. A wait on nothing ready ends at its timeout with 0; a registration is
- * removed by EPOLL_CTL_DEL and dropped when its descriptor is closed; a regular
- * file is refused with EPERM and a second add with EEXIST. A child's write
- * wakes a parent the child has seen asleep in an epoll_wait with no timeout.
- * The child keeps running until the parent answers, so that the kernel does not
- * idle, which would scan the set again at every interrupt, and only the write
- * can end the wait; an alarm bounds it. A registration of no events is told of
- * a hangup. A pipe added to a set while a wait on it sleeps, then written,
- * wakes the wait. A set whose edge-triggered event was reported does not poll
- * readable, and a poll of a set is woken by a child's write to a pipe it
- * watches. A write to a pipe in a set inside a set inside a third wakes a wait
- * on the third, and a cycle of sets, of three or of two, is ELOOP. Five sets
- * may nest, each added to the one before, and a write to a pipe in the fifth
- * reaches a wait on the first; a sixth set is ELOOP whether the chain is built
- * from the outermost set in or from the innermost out, and so is a set that
- * another holds by two paths when the longer would make a chain of six. A
- * child of a fork that closes its copy of the second of five nested sets'
- * numbers, which the parent's keeps open, is refused a sixth set under them
- * and them under a sixth, and its wait on the first leaves the registration
- * to the parent, whose wait reports a write to a pipe in the fifth. Waits
- * with room for one event report two ready descriptors in turn. A one-shot
- * event a wait cannot store, EFAULT, is reported by the next wait. The
- * registration of a closed eventfd does not report the eventfd made next at its
- * number, which can be added. epoll_pwait2 takes a timeout of 2^31 seconds, and
- * refuses negative seconds with EINVAL.
+ * removed by EPOLL_CTL_DEL and dropped when its descriptor is closed; the add
+ * of a regular file fails with EPERM and a second add with EEXIST. A child's
+ * write wakes a parent the child has seen asleep in an epoll_wait with no
+ * timeout. The child keeps running until the parent answers, so that the
+ * kernel does not idle, which would scan the set again at every interrupt,
+ * and only the write can end the wait; an alarm bounds it. A registration of
+ * no events reports a hangup. A pipe added to a set while a wait on it
+ * sleeps, then written, wakes the wait. A set whose edge-triggered event was
+ * reported does not poll readable, and a poll of a set is woken by a child's
+ * write to a pipe it watches. A write to a pipe in a set inside a set inside
+ * a third wakes a wait on the third, and a cycle of sets, of three or of two,
+ * is ELOOP. Five sets may nest, each added to the one before, and a write to
+ * a pipe in the fifth reaches a wait on the first; a sixth set is ELOOP
+ * whether the chain is built from the outermost set in or from the innermost
+ * out, and so is a set that another reaches by two paths when the longer would
+ * make a chain of six. A child of a fork that closes its copy of the second
+ * of five nested sets' numbers, which the parent's keeps open, gets ELOOP for
+ * a sixth set under them and for them under a sixth, and its wait on the
+ * first leaves the registration to the parent, whose wait reports a write to
+ * a pipe in the fifth. Waits with room for one event report two ready
+ * descriptors in turn. A one-shot event a wait cannot store, EFAULT, is
+ * reported by the next wait. The registration of a closed eventfd does not
+ * report the eventfd made next at its number, which can be added.
+ * epoll_pwait2 takes a timeout of 2^31 seconds, and fails with EINVAL for
+ * negative seconds.
  *
- * An edge-triggered registration is told only of the kinds of change its
- * events watch, as in Linux: an AF_UNIX stream end watched for output is not
+ * An edge-triggered registration reports only the kinds of change its events
+ * watch, as in Linux: an AF_UNIX stream end watched for output is not
  * reported again when a byte comes to it, nor when a read makes room in its
  * own full queue, while one watched for input is reported for each byte, and
  * a shutdown of the end is an edge of every kind; a listener is not reported
@@ -47,7 +48,8 @@
  * the pipe empty before it or not; and room a VINTR makes in a full
  * pseudoterminal is an edge of its master watched for output.
  *
- * Prints "EPOLLMUSL OK" on success and "EPOLLMUSL FAIL (detail)" otherwise.
+ * Prints `EPOLLMUSL OK` and exits 0 on success, and prints
+ * `EPOLLMUSL FAIL (detail)` and exits 1 otherwise.
  */
 
 #define _GNU_SOURCE
@@ -77,8 +79,10 @@
  * listens on. */
 #define EDGE_PORT 7470
 
+/* The SIGALRMs delivered; an alarm ends a wait that nothing else did. */
 static volatile sig_atomic_t alarms;
 
+/** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
 {
     printf("EPOLLMUSL FAIL (%s: errno %d)\n", what, errno);
@@ -118,8 +122,9 @@ static int sleeping(pid_t pid)
  * running, reading the nonblocking `ack` in a loop, until it has a byte or
  * 15 s have passed. A process that runs keeps the kernel from idling, and an
  * idle kernel scans the parent's descriptors again at every interrupt, which
- * would end the wait without the write's wake. Exits 0 when all of that
- * happened, 2 when the parent was never seen asleep, and 3 when no byte came.
+ * would end the wait without the write's wake. Runs in the forked child and
+ * does not return: exits 0 when all of that happened, 2 when the parent was
+ * never seen asleep, 3 when no byte came, and 1 when the write failed.
  */
 static void writer(pid_t parent, int out, int ack)
 {
@@ -152,9 +157,12 @@ struct woken {
     int ack[2];
 };
 
-/** Wait up to 3 s to see `parent` asleep, then add `in` to the set `ep`
- * for input, with the descriptor as its data: exits 1 when the add fails
- * and 2 when the parent was never seen asleep. */
+/**
+ * Wait up to 3 s to see `parent` asleep, then add `in` to the set `ep` for
+ * input, with the descriptor as its data. Runs in the forked child and
+ * returns when the add succeeds; exits 1 when the add fails and 2 when the
+ * parent was never seen asleep.
+ */
 static void add_when_asleep(pid_t parent, int ep, int in)
 {
     struct epoll_event ev;
@@ -180,7 +188,7 @@ static void add_when_asleep(pid_t parent, int ep, int in)
  * of its own. A wait the alarm ends finds the event there as it wakes, and
  * returns it, so the caller fails its row when `alarms` counts one: only
  * the write's wake may end the wait. With `ep` not -1, the child first adds
- * `in` to the set `ep` once it sees this process asleep. 0, or -1.
+ * `in` to the set `ep` once it sees this process asleep. Returns 0, or -1.
  */
 static int wake_start(struct woken *w, int out, int ep, int in)
 {
@@ -207,10 +215,12 @@ static int wake_start(struct woken *w, int out, int ep, int in)
     return 0;
 }
 
-/** End the row `wake_start` began: disarm the alarm, answer the child and
- * reap it. 0 when the child did its part, 2 when it never saw this process
- * asleep, 1 when it failed otherwise, and -1 when it could not be answered
- * or reaped. */
+/**
+ * End the row `wake_start` began: disarm the alarm, answer the child and
+ * reap it. Returns 0 when the child did its part, 2 when it never saw this
+ * process asleep, 1 when it failed otherwise, and -1 when it could not be
+ * answered or reaped.
+ */
 static int wake_end(struct woken *w)
 {
     int status;
@@ -229,6 +239,10 @@ static int wake_end(struct woken *w)
     return WEXITSTATUS(status) == 0 ? 0 : WEXITSTATUS(status) == 2 ? 2 : 1;
 }
 
+/**
+ * Check an eventfd's counter, with and without EFD_SEMAPHORE, its errors, and
+ * poll. Returns 0, or 1 once the failure is reported.
+ */
 static int counters(void)
 {
     struct pollfd pfd;
@@ -278,11 +292,18 @@ static int counters(void)
     return 0;
 }
 
+/** Wait on the set `ep` for one event into `out`; epoll_wait's result. */
 static int wait_one(int ep, int timeout, struct epoll_event *out)
 {
     return epoll_wait(ep, out, 1, timeout);
 }
 
+/**
+ * Check an epoll set over pipes: level-triggered, edge-triggered and one-shot
+ * reports, the data word, a timeout, removal, the errors of an add, and a
+ * child's write that wakes a wait with no timeout. Returns 0, or 1 once the
+ * failure is reported.
+ */
 static int sets(void)
 {
     struct epoll_event ev, out;
@@ -380,10 +401,12 @@ static int sets(void)
     return 0;
 }
 
-/* A wait on an empty set is woken by a pipe added to the set while it
- * waits and then written: a child shares the set, adds the pipe once it sees
- * the wait asleep, lets the wait look again, and writes once it sees it
- * asleep again. */
+/**
+ * Check that a wait on an empty set is woken by a pipe added to the set while
+ * it waits and then written: a child shares the set, adds the pipe once it
+ * sees the wait asleep, lets the wait look again, and writes once it sees it
+ * asleep again. Returns 0, or 1 once the failure is reported.
+ */
 static int added_while_waiting(void)
 {
     struct epoll_event out;
@@ -409,8 +432,11 @@ static int added_while_waiting(void)
     return 0;
 }
 
-/* A set whose only event is edge-triggered and reported already does not
- * poll readable, as a wait on it would report nothing. */
+/**
+ * Check that a set whose only event is edge-triggered and reported already does
+ * not poll readable, as a wait on it would report nothing. Returns 0, or 1 once
+ * the failure is reported.
+ */
 static int polled_after_edge(void)
 {
     struct epoll_event ev, out;
@@ -436,9 +462,12 @@ static int polled_after_edge(void)
     return 0;
 }
 
-/* Sets inside sets: with a pipe in A, A in B and B in C, a child's write to
- * the pipe wakes a wait on C, which reports B while the data is there; and
- * adding C to A, or B to A, a cycle, is ELOOP. */
+/**
+ * Check sets inside sets: with a pipe in A, A in B and B in C, a child's write
+ * to the pipe wakes a wait on C, which reports B while the data is there; and
+ * adding C to A, or B to A, a cycle, is ELOOP. Returns 0, or 1 once the failure
+ * is reported.
+ */
 static int nested(void)
 {
     struct epoll_event ev, out;
@@ -482,8 +511,10 @@ static int nested(void)
     return 0;
 }
 
-/* A poll of an epoll set is woken by a child's write to a pipe the set
- * watches. */
+/**
+ * Check that a poll of an epoll set is woken by a child's write to a pipe the
+ * set watches. Returns 0, or 1 once the failure is reported.
+ */
 static int polled_set_woken(void)
 {
     struct epoll_event ev;
@@ -515,8 +546,10 @@ static int polled_set_woken(void)
     return 0;
 }
 
-/* Two descriptors ready, and waits with room for one event: the waits
- * report each in turn. */
+/**
+ * Check that waits with room for one event report two ready descriptors in
+ * turn. Returns 0, or 1 once the failure is reported.
+ */
 static int in_turn(void)
 {
     struct epoll_event ev, first, second;
@@ -544,8 +577,11 @@ static int in_turn(void)
     return 0;
 }
 
-/* A one-shot event a wait cannot store in a read-only buffer, EFAULT, is
- * reported by the next wait. */
+/**
+ * Check that a one-shot event a wait cannot store in a read-only buffer,
+ * EFAULT, is reported by the next wait. Returns 0, or 1 once the failure is
+ * reported.
+ */
 static int failed_copy(void)
 {
     struct epoll_event ev, out;
@@ -572,7 +608,10 @@ static int failed_copy(void)
     return 0;
 }
 
-/* A registration of no events is still told of a hangup. */
+/**
+ * Check that a registration of no events still reports a hangup. Returns 0, or
+ * 1 once the failure is reported.
+ */
 static int hangup_no_events(void)
 {
     struct epoll_event ev, out;
@@ -595,9 +634,12 @@ static int hangup_no_events(void)
     return 0;
 }
 
-/* A registration of a closed eventfd is not the eventfd made next at its
- * number, whose description the kernel may put at the same address: a wait
- * does not report the new one for it, and the new one can be added. */
+/**
+ * Check that a registration of a closed eventfd is not the eventfd made next
+ * at its number, whose description the kernel may put at the same address: a
+ * wait does not report the new one for it, and the new one can be added.
+ * Returns 0, or 1 once the failure is reported.
+ */
 static int number_reused(void)
 {
     struct epoll_event ev, out;
@@ -626,8 +668,11 @@ static int number_reused(void)
     return 0;
 }
 
-/* epoll_pwait2 takes 64-bit seconds: a timeout of 2^31 seconds is valid,
- * and with a descriptor ready the wait returns at once. */
+/**
+ * Check that epoll_pwait2 takes 64-bit seconds: a timeout of 2^31 seconds is
+ * valid, and with a descriptor ready the wait returns at once; negative
+ * seconds are EINVAL. Returns 0, or 1 once the failure is reported.
+ */
 static int long_timeout(void)
 {
     long long ts[2] = {2147483648LL, 0}; /* the kernel's 64-bit timespec */
@@ -654,9 +699,12 @@ static int long_timeout(void)
     return 0;
 }
 
-/* An AF_UNIX stream end watched edge-triggered for output alone is not
- * reported again when a byte comes to it, and one watched for input is
- * reported for each byte that comes. */
+/**
+ * Check that an AF_UNIX stream end watched edge-triggered for output alone is
+ * not reported again when a byte comes to it, and one watched for input is
+ * reported for each byte that comes. Returns 0, or 1 once the failure is
+ * reported.
+ */
 static int unix_kinds(void)
 {
     struct epoll_event ev, out;
@@ -688,9 +736,11 @@ static int unix_kinds(void)
     return 0;
 }
 
-/* Each write to a pipe is an edge of an edge-triggered registration of its
- * read end for input, the pipe empty before it or not, as Linux has it for a
- * pipe it polls. */
+/**
+ * Check that each write to a pipe is an edge of an edge-triggered registration
+ * of its read end for input, the pipe empty before it or not, as Linux has it
+ * for a pipe it polls. Returns 0, or 1 once the failure is reported.
+ */
 static int pipe_each_write(void)
 {
     struct epoll_event ev, out;
@@ -712,8 +762,11 @@ static int pipe_each_write(void)
     return 0;
 }
 
-/* A shutdown of an AF_UNIX stream end changes the end itself, and is an
- * edge of every kind: its registration for output is reported again. */
+/**
+ * Check that a shutdown of an AF_UNIX stream end, which changes the end
+ * itself, is an edge of every kind: its registration for output is reported
+ * again. Returns 0, or 1 once the failure is reported.
+ */
 static int unix_shutdown_edge(void)
 {
     struct epoll_event ev, out;
@@ -736,9 +789,12 @@ static int unix_shutdown_edge(void)
     return 0;
 }
 
-/* A read that makes room in an AF_UNIX stream end's own full queue is room
- * for the sends of its peer, not its own: an edge-triggered registration of
- * the end for output is not reported again. */
+/**
+ * Check that a read that makes room in an AF_UNIX stream end's own full queue,
+ * room for the sends of its peer and not its own, does not report an
+ * edge-triggered registration of the end for output again. Returns 0, or 1 once
+ * the failure is reported.
+ */
 static int unix_own_room(void)
 {
     struct epoll_event ev, out;
@@ -767,9 +823,11 @@ static int unix_own_room(void)
     return 0;
 }
 
-/* An AF_UNIX listener watched edge-triggered for input is not reported
- * again when an accept leaves a second connection queued: no connection
- * came. */
+/**
+ * Check that an AF_UNIX listener watched edge-triggered for input is not
+ * reported again when an accept leaves a second connection queued, since no
+ * connection came. Returns 0, or 1 once the failure is reported.
+ */
 static int unix_accept_edge(void)
 {
     struct sockaddr_un a;
@@ -808,8 +866,11 @@ static int unix_accept_edge(void)
     return 0;
 }
 
-/* A datagram that another socket sends over the loopback to a UDP socket
- * watched edge-triggered for output, which can always send, is no edge. */
+/**
+ * Check that a datagram that another socket sends over the loopback to a UDP
+ * socket watched edge-triggered for output, which can always send, is no
+ * edge. Returns 0, or 1 once the failure is reported.
+ */
 static int udp_arrival(void)
 {
     struct sockaddr_in me;
@@ -846,8 +907,11 @@ static int udp_arrival(void)
     return 0;
 }
 
-/* Data that the other end of a TCP connection over the loopback sends to an
- * end watched edge-triggered for output is no edge. */
+/**
+ * Check that data that the other end of a TCP connection over the loopback
+ * sends to an end watched edge-triggered for output is no edge. Returns 0, or 1
+ * once the failure is reported.
+ */
 static int tcp_arrival(void)
 {
     struct sockaddr_in sa;
@@ -892,11 +956,14 @@ static int tcp_arrival(void)
     return 0;
 }
 
-/* Room a signal character makes in a pseudoterminal is an edge of its master
- * watched for output: with ISIG on and echo off on the slave, the master's
- * first report is taken, the master is written until it has no room, and a
- * VINTR written then flushes the slave's input, which the next wait reports
- * with no wait between to see the room go. */
+/**
+ * Check that room a signal character makes in a pseudoterminal is an edge of
+ * its master watched for output: with ISIG on and echo off on the slave, the
+ * master's first report is taken, the master is written until it has no room,
+ * and a VINTR written then flushes the slave's input, which the next wait
+ * reports with no wait between to see the room go. Returns 0, or 1 once the
+ * failure is reported.
+ */
 static int pty_signal_room(void)
 {
     struct epoll_event ev, out;
@@ -942,10 +1009,13 @@ static int pty_signal_room(void)
     return 0;
 }
 
-/* Six sets, each added to the one before: five may nest, as in Linux, and a
- * pipe in the fifth is reported by a wait on the first; the sixth is ELOOP,
- * counting the sets above the one it is added to when the chain is built from
- * the outermost in, and those below it when built from the innermost out. */
+/**
+ * Check six sets, each added to the one before: five may nest, as in Linux,
+ * and a pipe in the fifth is reported by a wait on the first; the sixth is
+ * ELOOP, counting the sets above the one it is added to when the chain is
+ * built from the outermost in, and those below it when built from the
+ * innermost out. Returns 0, or 1 once the failure is reported.
+ */
 static int nested_six(void)
 {
     struct epoll_event ev, out;
@@ -993,10 +1063,13 @@ static int nested_six(void)
     return 0;
 }
 
-/* A set held by two paths: I holds A, A holds X, and I holds X as well, and
- * X holds P, which holds Q. Adding I to a sixth set E would put Q five below
- * E by the longer path, which is ELOOP, whichever path a check takes first;
- * X, added to I last, is the first I's list gives. */
+/**
+ * Check a set reached by two paths: I has A, A has X, I has X as well, and X
+ * has P, which has Q. Adding I to a sixth set E would put Q five below E by the
+ * longer path, which is ELOOP, whichever path a check takes first; X, added to
+ * I last, is the first in I's list. Returns 0, or 1 once the failure is
+ * reported.
+ */
 static int nested_two_paths(void)
 {
     struct epoll_event ev;
@@ -1027,13 +1100,14 @@ static int nested_two_paths(void)
     return 0;
 }
 
-/*
- * A child of a fork shares its parent's sets: s0 holds s1, on to s4, and a
- * pipe is in s4. The child closes its copy of s1's number, which the
- * parent's keeps open, so s0's registration of s1 lasts and holds s1: the
- * child's add of a sixth set under s4 is ELOOP, and so is its add of s0
- * under a sixth; and its wait on s0 leaves the registration to the parent,
- * whose wait on s0 reports a write to the pipe.
+/**
+ * Check that a child of a fork shares its parent's sets: s0 has s1, and so on
+ * to s4, and a pipe is in s4. The child closes its copy of s1's number, which
+ * the parent's keeps open, so s0's registration of s1 lasts and keeps s1: the
+ * child's add of a sixth set under s4 is ELOOP, and so is its add of s0 under a
+ * sixth; and its wait on s0 leaves the registration to the parent, whose wait
+ * on s0 reports a write to the pipe. Returns 0, or 1 once the failure is
+ * reported.
  */
 static int nested_forked(void)
 {
@@ -1098,10 +1172,13 @@ static int nested_forked(void)
 }
 
 #if defined __x86_64__
-/* eventfd(284) and pipe(22), which the kernel serves as eventfd2 and pipe2
- * without flags, leave the caller's RSI, where those take their flags, as it
- * was: `syscall` keeps every register but RAX, RCX and R11, and a compiler
- * keeps a value in RSI across a call that does not name it. */
+/**
+ * Check that eventfd (284) and pipe (22), which the kernel serves as eventfd2
+ * and pipe2 without flags, leave the caller's RSI, where those take their
+ * flags, as it was: `syscall` keeps every register but RAX, RCX and R11, and a
+ * compiler keeps a value in RSI across a call that does not use it. Returns 0,
+ * or 1 once the failure is reported.
+ */
 static int calls_keep_registers(void)
 {
     unsigned long si;
@@ -1128,9 +1205,12 @@ static int calls_keep_registers(void)
     return 0;
 }
 #else
-/* eventfd(323) and pipe(42), which the kernel serves as eventfd2 and pipe2
- * without flags, leave the caller's ECX as it was: a compiler keeps a value
- * there across a call that does not name it. */
+/**
+ * Check that eventfd (323) and pipe (42), which the kernel serves as eventfd2
+ * and pipe2 without flags, leave the caller's ECX as it was: a compiler keeps a
+ * value there across a call that does not use it. Returns 0, or 1 once the
+ * failure is reported.
+ */
 static int calls_keep_registers(void)
 {
     unsigned int c;
