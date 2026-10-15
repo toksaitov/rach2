@@ -27,19 +27,22 @@ extern void exit(int status);
 #define APIC_WORDS 1024
 
 /* The registers, through the interface the driver takes, so that no address
-   games are needed: the model is an array and the driver never dereferences
-   a truncated pointer. Every write is recorded in order, since the order of
+   is mapped: the model is an array and the driver never dereferences a
+   truncated pointer. Every write is recorded in order, since the order of
    two of them is what keeps the 8259's interrupts arriving. */
 static unsigned int apic_page[APIC_WORDS];
-static unsigned int write_order[64];
+static unsigned int write_order[64]; /* the register offset of each write */
 static int writes;
 
+/** Read the register at byte offset `reg`. */
 static unsigned int model_read(unsigned int reg)
 {
     return apic_page[reg / 4];
 }
 
-/*
+/**
+ * Write the register at byte offset `reg`, and record the write.
+ *
  * The one rule of this model that is not a plain store: a processor whose
  * APIC is software disabled holds the mask bit of every local-vector entry
  * set and ignores a write that would reset one, so a driver that wrote
@@ -60,22 +63,27 @@ static void model_write(unsigned int reg, unsigned int value)
 
 static const struct lapic_io model_io = {model_read, model_write};
 
+/* The IA32_APIC_BASE register, the processor's features, the command line's
+ * rach2.nomsi, and the writes of the register. */
 static unsigned int apic_base_lo, apic_base_hi;
 static int has_apic, has_msr;
 static int nomsi;
 static int wrmsr_calls;
 static unsigned int wrmsr_lo;
 
+/** Whether `cpuid` reports an APIC: `has_apic`. */
 int kcpu_apic_present(void)
 {
     return has_apic;
 }
 
+/** Whether `cpuid` reports the model-specific registers: `has_msr`. */
 int kcpu_msr_present(void)
 {
     return has_msr;
 }
 
+/** A `cpuid` that writes nothing; the driver asks the two calls above. */
 void kcpu_id(unsigned int leaf, unsigned int *a, unsigned int *b, unsigned int *c, unsigned int *d)
 {
     (void)leaf;
@@ -85,6 +93,7 @@ void kcpu_id(unsigned int leaf, unsigned int *a, unsigned int *b, unsigned int *
     (void)d;
 }
 
+/** Read IA32_APIC_BASE, the one register the driver reads. */
 void kcpu_rdmsr(unsigned int msr, unsigned int *lo, unsigned int *hi)
 {
     (void)msr;
@@ -96,6 +105,7 @@ void kcpu_rdmsr(unsigned int msr, unsigned int *lo, unsigned int *hi)
     }
 }
 
+/** Write IA32_APIC_BASE's low half, and count the write. */
 void kcpu_wrmsr(unsigned int msr, unsigned int lo, unsigned int hi)
 {
     (void)msr;
@@ -111,11 +121,14 @@ uint32_t kirq_save(void)
     return 0;
 }
 
+/** Restore nothing, as `kirq_save` saved nothing. */
 void kirq_restore(uint32_t flags)
 {
     (void)flags;
 }
 
+/** Whether the command line has `flag`: only rach2.nomsi, when `nomsi` is
+ * set. */
 int kcmdline_has(const char *flag)
 {
     const char *p = "rach2.nomsi";
@@ -129,16 +142,16 @@ int kcmdline_has(const char *flag)
     return nomsi && flag[i] == p[i];
 }
 
-/* The APIC's page: the driver's writes land here, and the order of the two
-   that matter is recorded. */
+/** Map the APIC's page at its usual base, and nothing else. The driver does
+ * not call it with the model installed; a base it rejects is set in the
+ * register instead. */
 unsigned int map_mmio(unsigned int phys, unsigned int size)
 {
     (void)size;
-    /* Never reached with the model installed; a base the driver refuses is
-       modelled by the register instead. */
     return phys == 0xFEE00000u ? phys : 0;
 }
 
+/** Discard the log: the rows read the model. */
 void klog(int level, const char *subsystem, const char *fmt, ...)
 {
     (void)level;
@@ -150,6 +163,7 @@ void klog(int level, const char *subsystem, const char *fmt, ...)
 
 static int fails;
 
+/** Count and print a failed row named `what`. */
 static void check(int ok, const char *what)
 {
     if (!ok) {
@@ -158,6 +172,9 @@ static void check(int ok, const char *what)
     }
 }
 
+/** A fresh model: an APIC page as a firmware leaves it, with `lint0` in
+ * LINT0, enabled at 0xFEE00000 in the register, and a processor that has
+ * the APIC and the model-specific registers. */
 static void reset_model(unsigned int lint0)
 {
     int i;
@@ -185,8 +202,9 @@ static void reset_model(unsigned int lint0)
  * at the processor before it counts an edge as lost.
  *
  * Vector 48 is bit 16 of the word at 0x210, and the registers are sixteen
- * bytes apart. The rows start from a fresh model, and the last one refuses
- * the APIC to show that a refused driver answers without reading its page.
+ * bytes apart. The rows start from a fresh model, and the last one has no
+ * APIC, to show that a driver that rejected it answers without reading its
+ * page.
  */
 static void rows_pending(void)
 {
@@ -212,10 +230,29 @@ static void rows_pending(void)
     check(!lapic_pending(48), "and a refused APIC answers no rather than reading its page");
 }
 
+/**
+ * Run the rows: 0 when every check passes, 1 otherwise.
+ *
+ * A machine as QEMU leaves it has LINT0 already an unmasked external
+ * interrupt, so the driver leaves it alone. A firmware that suppressed the
+ * broadcast end-of-interrupt has that bit cleared and its other bits kept.
+ * A firmware that masked LINT0, or left it a fixed interrupt, has it written
+ * as the unmasked external-interrupt entry, or the 8259's interrupts stop
+ * at the processor. An enable bit off in the register is written. The
+ * states the driver rejects (no APIC, no model-specific registers, x2APIC
+ * mode, a base above 4 GiB or none, rach2.nomsi) each leave the model
+ * untouched.
+ *
+ * The order: the software enable first, and the local-vector entries after
+ * it, because the processor ignores an unmask before it. The first write of
+ * each register is the one compared, since a second write of the spurious
+ * register later would hide an enable that came too late. The repair the
+ * boot makes when the timer stops after the APIC is enabled writes LINT0
+ * again and touches nothing else. The spurious vector's handler counts and
+ * returns.
+ */
 int main(void)
 {
-    /* A machine as QEMU leaves it: LINT0 already an unmasked external
-       interrupt, so the driver leaves it alone. */
     reset_model(0x8700);
     check(lapic_init() == 0, "an APIC in virtual-wire mode is enabled");
     check(lapic_ready(), "and reports itself ready");
@@ -237,15 +274,10 @@ int main(void)
           "the spurious register is enabled with vector 255");
     check(wrmsr_calls == 0, "an APIC already enabled in the register is not written again");
 
-    /* An end-of-interrupt is one write of zero to 0xB0. */
     apic_page[0xB0 / 4] = 0x1234;
     lapic_eoi();
     check(apic_page[0xB0 / 4] == 0, "the end-of-interrupt is one write of zero to 0xB0");
 
-    /* A firmware that masked LINT0: the driver must write the unmasked
-       external-interrupt entry, or the 8259's interrupts stop here. */
-    /* A firmware that suppressed the broadcast end-of-interrupt: the bit
-       is cleared, the other bits it set are kept. */
     reset_model(0x8700);
     apic_page[0xF0 / 4] = 0x100Fu | 0x200u;
     check(lapic_init() == 0 && apic_page[0xF0 / 4] == (0x300u | 0xFFu),
@@ -256,18 +288,15 @@ int main(void)
     check(apic_page[0x350 / 4] == (7u << 8), "with LINT0 set to an unmasked external interrupt");
     check(apic_page[0xF0 / 4] == (0x100u | 0xFFu), "and the spurious register enabled");
 
-    /* A firmware that left LINT0 as a fixed interrupt: the same. */
     reset_model(0x00020);
     check(lapic_init() == 0, "an APIC whose LINT0 is not an external interrupt is enabled");
     check(apic_page[0x350 / 4] == (7u << 8), "with LINT0 corrected");
 
-    /* The register's enable bit off: the driver writes it. */
     reset_model(0x8700);
     apic_base_lo = 0xFEE00000u;
     check(lapic_init() == 0, "an APIC disabled in the register is enabled");
     check(wrmsr_calls == 1 && (wrmsr_lo & (1u << 11)) != 0, "by one write that sets bit 11");
 
-    /* The states the driver refuses, each leaving the model untouched. */
     reset_model(0x8700);
     has_apic = 0;
     check(lapic_init() == -1 && !lapic_ready(), "a processor without an APIC is refused");
@@ -304,15 +333,11 @@ int main(void)
 
     rows_pending();
 
-    /* The order: the software enable first, and the local-vector entries
-       after it, because the processor ignores an unmask before it. */
     reset_model(0x10700);
     (void)lapic_init();
     {
         int tpr_at = -1, lint0_at = -1, svr_at = -1, i;
 
-        /* The first write of each: a second write of the spurious register
-           later would hide an enable that came too late. */
         for (i = 0; i < writes; i++) {
             if (write_order[i] == 0x80 && tpr_at < 0) {
                 tpr_at = i;
@@ -328,8 +353,6 @@ int main(void)
               "the software enable is written before the task priority and LINT0");
     }
 
-    /* The repair the boot asks for when the timer stops after the APIC is
-       enabled: `LINT0` written again, and nothing else touched. */
     reset_model(0x8700);
     (void)lapic_init();
     apic_page[0x350 / 4] = 0x10700; /* masked behind the driver's back */
@@ -345,7 +368,6 @@ int main(void)
     lapic_repair_lint0();
     check(apic_page[0x350 / 4] == 0x10700, "an APIC that was refused is not repaired");
 
-    /* The spurious vector's handler counts and returns. */
     reset_model(0x8700);
     (void)lapic_init();
     {
