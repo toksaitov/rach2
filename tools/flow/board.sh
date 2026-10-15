@@ -48,7 +48,8 @@
 # member gets the label `grouped`, which keeps it out of `next`, and the group
 # is set Ready, for `ready` or `order` to place. It prints the group's number.
 #
-# `done` sets Done on every closed issue whose Status is not.
+# `done` sets Done on every closed issue whose Status is not, and fails when
+# the listing of the board fails.
 #
 # The repository and the board's owner and number are below. The ids of the
 # board, its Status field and the field's options are looked up by name on
@@ -272,7 +273,7 @@ group()
 
 done_()
 {
-    gh api graphql --paginate -F n="$BOARD" -f o="$OWNER" -f query='
+    closed=$(gh api graphql --paginate -F n="$BOARD" -f o="$OWNER" -f query='
         query($o: String!, $n: Int!, $endCursor: String) {
             user(login: $o) { projectV2(number: $n) {
                 items(first: 100, after: $endCursor) {
@@ -282,8 +283,8 @@ done_()
                         content { ... on Issue { number state } } } } } } }' \
         --jq '.data.user.projectV2.items.nodes[] |
             select(.content.state == "CLOSED" and
-                   (.fieldValueByName.name // "") != "Done") | .content.number' |
-    while read -r n; do
+                   (.fieldValueByName.name // "") != "Done") | .content.number')
+    for n in $closed; do
         set_status "$n" Done
         printf '%s ' "$n"
     done
