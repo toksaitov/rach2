@@ -568,8 +568,8 @@ tests/musl/memfdmusl.c:sealing complexity 36 a test's rows, each a case, read as
 tests/musl/opathmusl.c:file_rows complexity 31 a test's rows, each a case, read as one table
 tests/musl/opathmusl.c:synth_rows complexity 36 a test's rows, each a case, read as one table
 
-tests/musl/passwdmusl.c:check_concurrent complexity 104 a test's rows, each a case, read as one table
-tests/musl/passwdmusl.c:check_concurrent lines 419 a test's rows, each a case, read as one table
+tests/musl/passwdmusl.c:check_concurrent complexity 75 a test's rows, each a case, read as one table
+tests/musl/passwdmusl.c:check_concurrent lines 337 a test's rows, each a case, read as one table
 tests/musl/passwdmusl.c:check_concurrent nesting 5 a test's rows, each a case, read as one table
 tests/musl/passwdmusl.c:check_refusals complexity 55 a test's rows, each a case, read as one table
 tests/musl/passwdmusl.c:check_refusals lines 258 a test's rows, each a case, read as one table

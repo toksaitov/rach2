@@ -104,6 +104,23 @@ static int fail(const char *what)
 }
 
 /**
+ * Report a failed check as `fail` does, with `said`, the standard error of
+ * the program that failed, on the same line; its newlines become spaces.
+ * Returns 1.
+ */
+static int fail_said(const char *what, char *said)
+{
+    char *newline;
+
+    while ((newline = strchr(said, '\n')) != NULL) {
+        *newline = ' ';
+    }
+    printf("ADDUSERMUSL FAIL (%s: %s)\n", what, said);
+
+    return 1;
+}
+
+/**
  * Read up to `size - 1` bytes of `path` into `buffer`, terminated. Returns the
  * length, or -1.
  */
@@ -680,13 +697,16 @@ static int check_refusals(void)
  * Shadow comes first, with a locked field: the prefix that uses no number and
  * names no group. A file not yet published must be byte-identical, and not
  * merely lack the name, since a rewrite that lost other lines would pass that.
- * The re-run must refuse, naming the files that have the leftovers, except
- * after the last point, where the account is complete and `passwd` can finish
- * it.
+ * The re-run must refuse, naming the databases that have the leftovers and
+ * the one that lacks them, except after the last point, where the account is
+ * complete and `passwd` can finish it.
  */
 static int check_injection(void)
 {
-    static const char *const wanted[] = {ETC_SHADOW, ETC_GROUP, "/home/" CRASH_USER, ETC_PASSWD};
+    static const char *const refusal[] = {
+        CRASH_USER " is in " ETC_SHADOW " but not " ETC_PASSWD,
+        CRASH_USER " is in " ETC_SHADOW " and " ETC_GROUP " but not " ETC_PASSWD,
+        CRASH_USER " is in " ETC_SHADOW " and " ETC_GROUP " but not " ETC_PASSWD};
     char report[1024];
     char after[4096];
     char field[256];
@@ -776,11 +796,8 @@ static int check_injection(void)
             if (run_adduser(CRASH_USER, "", report, sizeof(report)) == 0) {
                 return fail("adduser created an account over a crash residue");
             }
-            if (strstr(report, wanted[0]) == NULL) {
-                return fail("the refusal did not name the shadow file");
-            }
-            if (which >= 2 && strstr(report, ETC_GROUP) == NULL) {
-                return fail("the refusal did not name the group file");
+            if (strstr(report, refusal[which - 1]) == NULL) {
+                return fail("the refusal did not name the databases that have the leftovers");
             }
             if (slurp(ETC_SHADOW, after, sizeof(after)) < 0) {
                 return fail("cannot read the shadow file after the refusal");
@@ -981,10 +998,10 @@ static int check_concurrent(void)
     if (waitpid(writer, &status, 0) != writer || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         (void)waitpid(maker, &status, 0);
 
-        return fail("the racing password change failed");
+        return fail_said("the racing password change failed", waiting);
     }
     if (waitpid(maker, &status, 0) != maker || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return fail("the racing account creation failed");
+        return fail_said("the racing account creation failed", report);
     }
     /* Both survive. */
     if (slurp(ETC_SHADOW, after, sizeof(after)) < 0) {
@@ -1046,10 +1063,10 @@ static int check_concurrent(void)
             drain(errs[which][0], report, sizeof(report), 30000);
             close(errs[which][0]);
             if (waitpid(makers[which], &status, 0) != makers[which] || !WIFEXITED(status)) {
-                return fail("one of two concurrent makers did not exit normally");
+                return fail_said("one of two concurrent makers did not exit normally", report);
             }
             if (WEXITSTATUS(status) != 0) {
-                return fail("one of two concurrent makers failed");
+                return fail_said("one of two concurrent makers failed", report);
             }
         }
     }

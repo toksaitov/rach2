@@ -43,6 +43,7 @@
  */
 
 #define _GNU_SOURCE /* crypt, getrandom */
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -133,6 +134,29 @@ static int present(const char *path)
     struct stat info;
 
     return stat(path, &info) == 0;
+}
+
+/**
+ * True when /etc has a temporary file of the credential library, a name of
+ * `CRED_TMP_FORMAT` made from one of the three databases, or cannot be read.
+ */
+static int leftover_temp(void)
+{
+    DIR *dir = opendir("/etc");
+    struct dirent *e;
+    int found = 0;
+
+    if (dir == NULL) {
+        return 1;
+    }
+    while (!found && (e = readdir(dir)) != NULL) {
+        found = strncmp(e->d_name, "passwd.tmp.", 11) == 0 ||
+                strncmp(e->d_name, "shadow.tmp.", 11) == 0 ||
+                strncmp(e->d_name, "group.tmp.", 10) == 0;
+    }
+    closedir(dir);
+
+    return found;
 }
 
 /**
@@ -535,11 +559,56 @@ static int check_change(void)
     if (present(CRED_LOCK_PATH)) {
         return fail("passwd left its lock behind");
     }
-    if (present("/etc/shadow.tmp") || present("/etc/passwd.tmp")) {
+    if (leftover_temp()) {
         return fail("passwd left a temporary file behind");
     }
 
     return 0;
+}
+
+/**
+ * Fork `/passwd` as `uid`, with its standard input from a pipe whose writing
+ * end is left in `*in` and its standard error into one whose reading end is
+ * left in `*err`. Returns the child's id, or -1 when a pipe or the fork
+ * failed.
+ */
+static pid_t start_passwd(uid_t uid, int *in, int *err)
+{
+    int to[2], from[2];
+    pid_t pid;
+
+    if (pipe(to) != 0) {
+        return -1;
+    }
+    if (pipe(from) != 0) {
+        close(to[0]);
+        close(to[1]);
+        return -1;
+    }
+    pid = fork();
+    if (pid == 0) {
+        close(to[1]);
+        close(from[0]);
+        if (dup2(to[0], 0) < 0 || dup2(from[1], 2) < 0) {
+            _exit(90);
+        }
+        if (setuid(uid) != 0) {
+            _exit(91);
+        }
+        execl(PASSWD_PATH, "passwd", (char *)0);
+        _exit(92);
+    }
+    close(to[0]);
+    close(from[1]);
+    if (pid < 0) {
+        close(to[1]);
+        close(from[0]);
+        return -1;
+    }
+    *in = to[1];
+    *err = from[0];
+
+    return pid;
 }
 
 /**
@@ -589,8 +658,8 @@ static int check_concurrent(void)
     char report[512];
     char waiting[512];
     char script[256];
-    int b_in[2];
-    int b_err[2];
+    int b_in;
+    int b_err;
     pid_t b;
     int status;
     char *made;
@@ -598,30 +667,13 @@ static int check_concurrent(void)
     restore_databases();
 
     /* The second writer, held at its new-password prompt. */
-    if (pipe(b_in) != 0 || pipe(b_err) != 0) {
-        return fail("could not make the pipes the overlapping writer reports on");
-    }
-    b = fork();
-    if (b == 0) {
-        close(b_in[1]);
-        close(b_err[0]);
-        if (dup2(b_in[0], 0) < 0 || dup2(b_err[1], 2) < 0) {
-            _exit(90);
-        }
-        if (setuid(PROBE2_UID) != 0) {
-            _exit(91);
-        }
-        execl(PASSWD_PATH, "passwd", (char *)0);
-        _exit(92);
-    }
-    close(b_in[0]);
-    close(b_err[1]);
+    b = start_passwd(PROBE2_UID, &b_in, &b_err);
     if (b < 0) {
-        return fail("could not fork the overlapping writer");
+        return fail("could not start the overlapping writer");
     }
-    (void)write(b_in[1], PROBE2_PASS "\n", strlen(PROBE2_PASS) + 1);
+    (void)write(b_in, PROBE2_PASS "\n", strlen(PROBE2_PASS) + 1);
     waiting[0] = '\0';
-    if (!read_until(b_err[0], "New password:", waiting, sizeof(waiting), 20000)) {
+    if (!read_until(b_err, "New password:", waiting, sizeof(waiting), 20000)) {
         kill(b, SIGKILL);
         (void)waitpid(b, &status, 0);
 
@@ -638,12 +690,12 @@ static int check_concurrent(void)
     }
 
     /* The second publishes from a copy that is out of date. */
-    (void)write(b_in[1], "second-new-pw\nsecond-new-pw\n", 28);
-    close(b_in[1]);
+    (void)write(b_in, "second-new-pw\nsecond-new-pw\n", 28);
+    close(b_in);
     if (waitpid(b, &status, 0) != b || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return fail("the overlapping writer did not finish cleanly");
     }
-    close(b_err[0]);
+    close(b_err);
 
     if (slurp(ETC_SHADOW, after, sizeof(after)) < 0) {
         return fail("cannot read the shadow file both writers published to");
@@ -675,30 +727,13 @@ static int check_concurrent(void)
 
     /* One account, changed by two writers. */
     restore_databases();
-    if (pipe(b_in) != 0 || pipe(b_err) != 0) {
-        return fail("could not make the pipes the same-account case reports on");
-    }
-    b = fork();
-    if (b == 0) {
-        close(b_in[1]);
-        close(b_err[0]);
-        if (dup2(b_in[0], 0) < 0 || dup2(b_err[1], 2) < 0) {
-            _exit(90);
-        }
-        if (setuid(PROBE_UID) != 0) {
-            _exit(91);
-        }
-        execl(PASSWD_PATH, "passwd", (char *)0);
-        _exit(92);
-    }
-    close(b_in[0]);
-    close(b_err[1]);
+    b = start_passwd(PROBE_UID, &b_in, &b_err);
     if (b < 0) {
-        return fail("could not fork the writer that must be refused");
+        return fail("could not start the writer that must be refused");
     }
-    (void)write(b_in[1], PROBE_PASS "\n", strlen(PROBE_PASS) + 1);
+    (void)write(b_in, PROBE_PASS "\n", strlen(PROBE_PASS) + 1);
     waiting[0] = '\0';
-    if (!read_until(b_err[0], "New password:", waiting, sizeof(waiting), 20000)) {
+    if (!read_until(b_err, "New password:", waiting, sizeof(waiting), 20000)) {
         kill(b, SIGKILL);
         (void)waitpid(b, &status, 0);
 
@@ -712,14 +747,14 @@ static int check_concurrent(void)
 
         return fail("root could not change the account the stale writer holds");
     }
-    (void)write(b_in[1], "stale-new-pw\nstale-new-pw\n", 26);
-    close(b_in[1]);
+    (void)write(b_in, "stale-new-pw\nstale-new-pw\n", 26);
+    close(b_in);
     waiting[0] = '\0';
-    (void)read_until(b_err[0], "changed while", waiting, sizeof(waiting), 20000);
+    (void)read_until(b_err, "changed while", waiting, sizeof(waiting), 20000);
     if (waitpid(b, &status, 0) != b || !WIFEXITED(status)) {
         return fail("the writer that must be refused did not exit normally");
     }
-    close(b_err[0]);
+    close(b_err);
     if (WEXITSTATUS(status) == 0) {
         return fail("a writer published from a record that had changed under it");
     }
@@ -738,30 +773,13 @@ static int check_concurrent(void)
 
     /* The caller's claim, taken away by a rename at the prompt. */
     restore_databases();
-    if (pipe(b_in) != 0 || pipe(b_err) != 0) {
-        return fail("could not make the pipes the revocation case reports on");
-    }
-    b = fork();
-    if (b == 0) {
-        close(b_in[1]);
-        close(b_err[0]);
-        if (dup2(b_in[0], 0) < 0 || dup2(b_err[1], 2) < 0) {
-            _exit(90);
-        }
-        if (setuid(PROBE_UID) != 0) {
-            _exit(91);
-        }
-        execl(PASSWD_PATH, "passwd", (char *)0);
-        _exit(92);
-    }
-    close(b_in[0]);
-    close(b_err[1]);
+    b = start_passwd(PROBE_UID, &b_in, &b_err);
     if (b < 0) {
-        return fail("could not fork the writer whose claim is revoked");
+        return fail("could not start the writer whose claim is revoked");
     }
-    (void)write(b_in[1], PROBE_PASS "\n", strlen(PROBE_PASS) + 1);
+    (void)write(b_in, PROBE_PASS "\n", strlen(PROBE_PASS) + 1);
     waiting[0] = '\0';
-    if (!read_until(b_err[0], "New password:", waiting, sizeof(waiting), 20000)) {
+    if (!read_until(b_err, "New password:", waiting, sizeof(waiting), 20000)) {
         kill(b, SIGKILL);
         (void)waitpid(b, &status, 0);
 
@@ -795,14 +813,14 @@ static int check_concurrent(void)
             return fail("could not stage the revoked passwd file");
         }
     }
-    (void)write(b_in[1], "revoked-new-pw\nrevoked-new-pw\n", 30);
-    close(b_in[1]);
+    (void)write(b_in, "revoked-new-pw\nrevoked-new-pw\n", 30);
+    close(b_in);
     waiting[0] = '\0';
-    (void)read_until(b_err[0], "no longer names", waiting, sizeof(waiting), 20000);
+    (void)read_until(b_err, "no longer names", waiting, sizeof(waiting), 20000);
     if (waitpid(b, &status, 0) != b || !WIFEXITED(status)) {
         return fail("the writer whose claim is revoked did not exit normally");
     }
-    close(b_err[0]);
+    close(b_err);
     if (WEXITSTATUS(status) == 0) {
         return fail("a writer published for an account its uid no longer names");
     }
@@ -821,30 +839,13 @@ static int check_concurrent(void)
 
     /* The caller's claim, taken away by a line added before it. */
     restore_databases();
-    if (pipe(b_in) != 0 || pipe(b_err) != 0) {
-        return fail("could not make the pipes the reassignment case reports on");
-    }
-    b = fork();
-    if (b == 0) {
-        close(b_in[1]);
-        close(b_err[0]);
-        if (dup2(b_in[0], 0) < 0 || dup2(b_err[1], 2) < 0) {
-            _exit(90);
-        }
-        if (setuid(PROBE_UID) != 0) {
-            _exit(91);
-        }
-        execl(PASSWD_PATH, "passwd", (char *)0);
-        _exit(92);
-    }
-    close(b_in[0]);
-    close(b_err[1]);
+    b = start_passwd(PROBE_UID, &b_in, &b_err);
     if (b < 0) {
-        return fail("could not fork the writer whose login is reassigned");
+        return fail("could not start the writer whose login is reassigned");
     }
-    (void)write(b_in[1], PROBE_PASS "\n", strlen(PROBE_PASS) + 1);
+    (void)write(b_in, PROBE_PASS "\n", strlen(PROBE_PASS) + 1);
     waiting[0] = '\0';
-    if (!read_until(b_err[0], "New password:", waiting, sizeof(waiting), 20000)) {
+    if (!read_until(b_err, "New password:", waiting, sizeof(waiting), 20000)) {
         kill(b, SIGKILL);
         (void)waitpid(b, &status, 0);
 
@@ -874,16 +875,19 @@ static int check_concurrent(void)
             return fail("could not stage the reassigned passwd file");
         }
     }
-    (void)write(b_in[1], "reassigned-pw\nreassigned-pw\n", 28);
-    close(b_in[1]);
+    (void)write(b_in, "reassigned-pw\nreassigned-pw\n", 28);
+    close(b_in);
     waiting[0] = '\0';
-    (void)read_until(b_err[0], "no longer names", waiting, sizeof(waiting), 20000);
+    (void)read_until(b_err, "no longer names", waiting, sizeof(waiting), 20000);
     if (waitpid(b, &status, 0) != b || !WIFEXITED(status)) {
         return fail("the writer whose login is reassigned did not exit normally");
     }
-    close(b_err[0]);
+    close(b_err);
     if (WEXITSTATUS(status) == 0) {
         return fail("a writer published for a login that names two accounts");
+    }
+    if (strstr(waiting, "no longer names") == NULL) {
+        return fail("a writer refused for a reassigned login did not say so");
     }
     if (slurp(ETC_SHADOW, after, sizeof(after)) < 0 ||
         line_of(after, PROBE_USER, line, sizeof(line)) != 0 ||
@@ -902,30 +906,13 @@ static int check_concurrent(void)
 
         for (which = 0; which < sizeof(rotted) / sizeof(rotted[0]); which++) {
             restore_databases();
-            if (pipe(b_in) != 0 || pipe(b_err) != 0) {
-                return fail("could not make the pipes the shape case reports on");
-            }
-            b = fork();
-            if (b == 0) {
-                close(b_in[1]);
-                close(b_err[0]);
-                if (dup2(b_in[0], 0) < 0 || dup2(b_err[1], 2) < 0) {
-                    _exit(90);
-                }
-                if (setuid(PROBE_UID) != 0) {
-                    _exit(91);
-                }
-                execl(PASSWD_PATH, "passwd", (char *)0);
-                _exit(92);
-            }
-            close(b_in[0]);
-            close(b_err[1]);
+            b = start_passwd(PROBE_UID, &b_in, &b_err);
             if (b < 0) {
-                return fail("could not fork the writer whose record changes shape");
+                return fail("could not start the writer whose record changes shape");
             }
-            (void)write(b_in[1], PROBE_PASS "\n", strlen(PROBE_PASS) + 1);
+            (void)write(b_in, PROBE_PASS "\n", strlen(PROBE_PASS) + 1);
             waiting[0] = '\0';
-            if (!read_until(b_err[0], "New password:", waiting, sizeof(waiting), 20000)) {
+            if (!read_until(b_err, "New password:", waiting, sizeof(waiting), 20000)) {
                 kill(b, SIGKILL);
                 (void)waitpid(b, &status, 0);
 
@@ -981,14 +968,14 @@ static int check_concurrent(void)
                     return fail("cannot read back the reshaped shadow file");
                 }
             }
-            (void)write(b_in[1], "reshaped-pw\nreshaped-pw\n", 24);
-            close(b_in[1]);
+            (void)write(b_in, "reshaped-pw\nreshaped-pw\n", 24);
+            close(b_in);
             waiting[0] = '\0';
-            (void)read_until(b_err[0], "changed shape", waiting, sizeof(waiting), 20000);
+            (void)read_until(b_err, "changed shape", waiting, sizeof(waiting), 20000);
             if (waitpid(b, &status, 0) != b || !WIFEXITED(status)) {
                 return fail("the writer whose record changes shape did not exit normally");
             }
-            close(b_err[0]);
+            close(b_err);
             if (WEXITSTATUS(status) == 0) {
                 return fail(which == 0 ? "a writer published a malformed aging field"
                                        : "a writer published an unterminated final record");
@@ -1308,9 +1295,6 @@ static int check_refusals(void)
             longpw[i] = 'a';
         }
         longpw[sizeof(longpw) - 1] = '\0';
-        if ((size_t)snprintf(script, sizeof(script), "%s\n", PROBE_PASS) >= sizeof(script)) {
-            return fail("the long-password script does not fit");
-        }
         {
             char feed[1024];
 
