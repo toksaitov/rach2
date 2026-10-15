@@ -3,11 +3,12 @@
 # tools/setup/doctor.sh: report which tools of Rach2's build, suites and
 # checks this machine has. Run it directly.
 #
-# Reports each tool as PASS, MISSING or OPTIONAL with an install hint, and
-# each judge's version beside the recorded one, and exits non-zero if a tool
-# in either required group is absent (or present but broken), so a student or
-# a fresh CI machine sees a checklist instead of a failure in the middle of
-# a build.
+# Reports a required tool as PASS or MISSING and an optional one as PASS or
+# OPTIONAL, with an install hint for each absent one, and each judge's version
+# as PASS when it is the recorded one, OTHER when it differs and ---- when the
+# judge is absent. It exits non-zero if a required tool is absent (or present
+# but broken), so a student or a fresh CI machine sees a checklist instead of
+# a failure in the middle of a build.
 #
 # The output is ASCII only: the style check (tools/verify/check.sh) forbids
 # other bytes in in-house files, so there are no check marks here.
@@ -19,19 +20,20 @@ case "$(uname -s)" in
     *)      MAC=0 ;;
 esac
 
-# hint KEY: an OS-appropriate install suggestion. The i686-elf and x86_64-elf
-# cross toolchains are not stock apt packages on Linux, so their hints are
-# spelled out rather than assuming a package manager.
+# hint KEY: an OS-appropriate install suggestion. No Linux package provides
+# the i686-elf and x86_64-elf toolchains; tools/Readme.md links the tools of
+# the archive's i686-linux-gnu and x86_64-linux-gnu cross toolchains under
+# those names and wraps their compilers, and the hints point there.
 hint() {
     case "$1" in
     cross)    [ "$MAC" = 1 ] && echo "brew install i686-elf-gcc" \
-                             || echo "build it from source; tools/Readme.md has the commands" ;;
+                             || echo "apt install gcc-i686-linux-gnu, wrapped as i686-elf-gcc as tools/Readme.md shows" ;;
     binutils) [ "$MAC" = 1 ] && echo "brew install i686-elf-binutils" \
-                             || echo "part of the i686-elf toolchain; tools/Readme.md has the commands" ;;
+                             || echo "apt install binutils-i686-linux-gnu, linked as i686-elf-* as tools/Readme.md shows" ;;
     cross64)  [ "$MAC" = 1 ] && echo "brew install x86_64-elf-gcc" \
-                             || echo "build it from source; tools/Readme.md has the commands" ;;
+                             || echo "x86_64-linux-gnu-gcc (gcc-x86-64-linux-gnu off amd64), wrapped as x86_64-elf-gcc as tools/Readme.md shows" ;;
     binutils64) [ "$MAC" = 1 ] && echo "brew install x86_64-elf-binutils" \
-                             || echo "part of the x86_64-elf toolchain; tools/Readme.md has the commands" ;;
+                             || echo "the x86_64-linux-gnu binutils (binutils-x86-64-linux-gnu off amd64), linked as x86_64-elf-* as tools/Readme.md shows" ;;
     qemu)     [ "$MAC" = 1 ] && echo "brew install qemu" || echo "apt install qemu-system-x86" ;;
     ovmf)     [ "$MAC" = 1 ] && echo "brew install qemu, which ships edk2-x86_64-code.fd" \
                              || echo "apt install ovmf" ;;
@@ -105,7 +107,7 @@ opt() {
 
 echo "Rach2 toolchain check (tools/setup/doctor.sh)"
 echo
-echo "Required (build + run the OS):"
+echo "Required to build and boot both architectures:"
 req i686-elf-gcc     cross
 req i686-elf-ld      binutils
 req i686-elf-strip   binutils
@@ -168,8 +170,6 @@ fi
 rm -rf "$keygen_dir"
 keygen_dir=
 
-echo
-echo "Required to verify (tests/run style refuses to run without these):"
 # e2fsprogs builds and checks the ext2 root image at every build: the three
 # programs, found where preflight.sh finds them, and mke2fs probed for the
 # -d option the image build needs, which e2fsprogs before 1.43 lacks.
@@ -191,25 +191,28 @@ else
     missing=$((missing + 1))
 fi
 
-# mandoc has no version option; it is probed by rendering empty input.
+# mandoc renders the manual pages the images stage. It has no version
+# option, so it is probed by rendering empty input.
 reqx mandoc mandoc -T ascii
+
+echo
+echo "Required by tests/run style, which does not start without them:"
 req cppcheck     cppcheck
 req shellcheck   shellcheck
 req clang        clang
 req clang-format clang-format
 
 echo
-# A default `make` builds the three RAM images and reaches none of these. The
-# GRUB disks do, and tools/image/mkdisk_grub.sh needs all three mtools
-# commands, so all three are named rather than one standing for the set. The
-# ISOs and the sticks made from them need xorriso. A set of suites, `make test`
-# among them, prepares every suite's products and needs all four: they are
-# what `make prepare-tools` prints.
-echo "Needed by the suites that build GRUB disks, ISOs or sticks, and by every set of suites:"
-opt mformat      "the FAT boot partition" mtools
-opt mmd          "the FAT boot partition" mtools
-opt mcopy        "the FAT boot partition" mtools
-opt xorriso      "the ISOs and sticks, and make isos" xorriso
+# A default `make` reaches none of these. A set of suites, `make test` among
+# them, prepares every suite's products and needs mformat, mmd, mcopy and
+# xorriso, which `make prepare-tools` prints; the suites that write or read a
+# FAT volume on the host need the rest of the mtools commands tests/registry
+# names. Each command is named, so that one does not stand for the set.
+echo "Required by the suites (tests/registry names each suite's):"
+for t in mformat mmd mcopy mdir mtype mdel mdeltree minfo; do
+    req "$t" mtools
+done
+req xorriso xorriso
 
 echo
 echo "Optional (only some tasks need these):"
@@ -222,7 +225,7 @@ opt git          "cloning and committing" git
 if command -v fsck.fat >/dev/null 2>&1; then
     row "[PASS]" "dosfstools" "fsck.fat present"
 else
-    row "[----]" "dosfstools" "optional, for fsck.fat over tests/run fatwrite; $(hint dosfstools)"
+    row "[OPTIONAL]" "dosfstools" "(fsck.fat over tests/run fatwrite); $(hint dosfstools)"
 fi
 
 # exfatprogs (Linux) or the system's fsck_exfat (macOS) checks an exFAT
@@ -232,20 +235,20 @@ fi
 if command -v fsck.exfat >/dev/null 2>&1 || command -v fsck_exfat >/dev/null 2>&1; then
     row "[PASS]" "exfatprogs" "fsck.exfat or fsck_exfat present"
 else
-    row "[----]" "exfatprogs" "optional, for fsck.exfat over tests/run exfat and for tests/run large; $(hint exfatprogs)"
+    row "[OPTIONAL]" "exfatprogs" "(fsck.exfat over tests/run exfat, and tests/run large); $(hint exfatprogs)"
 fi
 
 # FUSE mounts a KRFFS image on the host (make -C krffs mount); nothing in the
 # default build or the suites needs it. It is checked through pkg-config,
 # which is optional for the same reason.
 if ! pkg-config --version >/dev/null 2>&1; then
-    row "[----]" "FUSE" "optional; cannot check without pkg-config (pkgconf)"
+    row "[OPTIONAL]" "FUSE" "(make -C krffs mount); cannot check without pkg-config, $(hint pkgconf)"
 elif pkg-config --exists fuse 2>/dev/null; then
     row "[PASS]" "FUSE" "fuse ($(pkg-config --modversion fuse 2>/dev/null))"
 elif pkg-config --exists fuse-t 2>/dev/null; then
     row "[PASS]" "FUSE" "fuse-t ($(pkg-config --modversion fuse-t 2>/dev/null))"
 else
-    row "[----]" "FUSE" "optional, for make -C krffs mount; $(hint fuse)"
+    row "[OPTIONAL]" "FUSE" "(make -C krffs mount); $(hint fuse)"
 fi
 
 # The judges: each tool's version beside the one tools/setup/judges records
