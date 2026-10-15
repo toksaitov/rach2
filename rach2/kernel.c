@@ -2234,13 +2234,17 @@ static int krffs_root_mount(block_device_t *disk, uint32_t start_lba, uint32_t s
     _krffs_on_disk = 1;
 
     if (found >= 0 && mbr_bootpart_pick(parts, found, disk->sector_count) != 0) {
-        devfs_bootpart_withdraw();
+        if (devfs_bootpart_withdraw()) {
+            klog(KLOG_WARN, "krffs", "entry 0 has the root; /dev/bootpart withdrawn");
+        }
     } else if (found < 0 && disk == boot_disk_device && disc_table_ok &&
                (uint64_t)start_lba <
                    (uint64_t)disc_parts[0].start_lba + disc_parts[0].sector_count &&
                (uint64_t)disc_parts[0].start_lba < (uint64_t)start_lba + sector_count) {
-        klog(KLOG_WARN, "krffs", "the root overlaps the boot partition; /dev/bootpart withdrawn");
-        devfs_bootpart_withdraw();
+        if (devfs_bootpart_withdraw()) {
+            klog(KLOG_WARN, "krffs",
+                 "the root overlaps the boot partition; /dev/bootpart withdrawn");
+        }
     }
     return 0;
 }

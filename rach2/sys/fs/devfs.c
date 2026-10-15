@@ -2352,14 +2352,16 @@ void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba, ui
  * against the whole partition table. One fact is only knowable after the
  * mount: which entry has the root. Entry 0 can be FAT-typed and still be the
  * entry the root was found in, and a boot partition over the root is not one
- * this machine should offer.
+ * this machine should offer. The callers have different reasons, so the
+ * caller logs its own.
  */
-void devfs_bootpart_withdraw(void)
+int devfs_bootpart_withdraw(void)
 {
-    if (bootpart.present) {
-        klog(KLOG_WARN, "devfs", "entry 0 has the root; /dev/bootpart withdrawn");
-        bootpart.present = 0;
+    if (!bootpart.present) {
+        return 0;
     }
+    bootpart.present = 0;
+    return 1;
 }
 
 /**

@@ -151,9 +151,9 @@ int devfs_claim(struct block_device *backing, uint64_t first, uint64_t last);
 /** Release the claim of index `claim`; an index out of range is ignored. */
 void devfs_release_claim(int claim);
 
-/** Withdraw /dev/bootpart, with the warning that entry 0 has the root,
- * whatever the caller's reason; nothing when it is not published. */
-void devfs_bootpart_withdraw(void);
+/** Withdraw /dev/bootpart, and log nothing. Returns 1 when it was published,
+ * 0 when there was nothing to withdraw. */
+int devfs_bootpart_withdraw(void);
 
 /** Withdraw /dev/grubcore, before a controller is reset; nothing when it is
  * not published. */
