@@ -21,19 +21,21 @@
  * reads it stays with the read, which returns what is written after the close,
  * and its number is free once the read is over. A wait whose status page
  * another thread unmaps while it sleeps fails with EFAULT and leaves the zombie
- * to a later wait. A child forked by a thread has one thread. A thread that
- * calls execve replaces the whole process, whose other threads end. Of two
- * threads in execve at once, the one whose call first waits for the other
- * threads to end replaces the process, and the other ends: the probe traces the
- * second and holds it at the entry of its call until the first waits for it. A
- * robust mutex a thread other than the first holds when it calls execve is
- * released, and its next locker gets EOWNERDEAD. A thread that calls exit ends
- * them all. A thread other than the first empties the console's queue of lines,
- * opens the framebuffer, sets its palette, writes a pixel, reads the console as
- * the display's owner reads it, raw scancodes, of which it finds none, where
- * the line discipline would answer EAGAIN, and closes it, which gives the
- * display back for another process to open: the display belongs to the process,
- * whichever thread opened it.
+ * to a later wait. A TCP receive, a TCP send and a UDP receive over the
+ * loopback whose buffer goes the same way fail with EFAULT too: the receives
+ * leave the data queued, and the send queues nothing. A child forked by a
+ * thread has one thread. A thread that calls execve replaces the whole process,
+ * whose other threads end. Of two threads in execve at once, the one whose call
+ * first waits for the other threads to end replaces the process, and the other
+ * ends: the probe traces the second and holds it at the entry of its call until
+ * the first waits for it. A robust mutex a thread other than the first holds
+ * when it calls execve is released, and its next locker gets EOWNERDEAD. A
+ * thread that calls exit ends them all. A thread other than the first empties
+ * the console's queue of lines, opens the framebuffer, sets its palette, writes
+ * a pixel, reads the console as the display's owner reads it, raw scancodes, of
+ * which it finds none, where the line discipline would answer EAGAIN, and
+ * closes it, which gives the display back for another process to open: the
+ * display belongs to the process, whichever thread opened it.
  *
  * It prints "THREADMUSL OK" and exits 0 on success, or prints "THREADMUSL
  * FAIL (detail: errno N)" and exits 1 at the first failure.
@@ -43,8 +45,10 @@
  */
 
 #define _GNU_SOURCE
+#include <arpa/inet.h>
 #include <dirent.h>
 #include <errno.h>
+#include <netinet/in.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
@@ -54,6 +58,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/ptrace.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/times.h>
@@ -63,6 +68,10 @@
 
 #define THREADS 4
 #define ROUNDS  10000
+
+/* The loopback ports of the socket rows, on which no other probe listens. */
+#define LOST_TCP_PORT 7480
+#define LOST_UDP_PORT 7481
 
 /* The framebuffer's requests, as the kernel numbers them. */
 #define FB_SETPALETTE 0x4603
@@ -828,6 +837,156 @@ static int lost_status_row(void)
     return 0;
 }
 
+/*
+ * The thread id of the socket call `lost_buffer_call` starts, and the page of
+ * its buffer, which the first thread unmaps while the call sleeps.
+ */
+static volatile pid_t lost_tid;
+static char *volatile lost_page;
+
+/**
+ * Run as the thread of `lost_buffer_call` that receives on the socket `*arg`
+ * into `lost_page`. Returns the errno of the receive, or 0 when it did not
+ * fail.
+ */
+static void *recv_lost(void *arg)
+{
+    lost_tid = tid();
+    if (recv(*(int *)arg, lost_page, 4096, 0) != -1) {
+        return (void *)0L;
+    }
+    return (void *)(long)errno;
+}
+
+/**
+ * Run as the thread of `lost_buffer_call` that sends from `lost_page` on the
+ * socket `*arg`. Returns the errno of the send, or 0 when it did not fail.
+ */
+static void *send_lost(void *arg)
+{
+    lost_tid = tid();
+    if (send(*(int *)arg, lost_page, 4096, 0) != -1) {
+        return (void *)0L;
+    }
+    return (void *)(long)errno;
+}
+
+/**
+ * Start `body` on the socket `*fd` with its buffer in a page of its own,
+ * wait until the thread is seen asleep, and unmap the page. Returns 0, or -1
+ * when a step fails.
+ */
+static int lost_buffer_call(pthread_t *t, void *(*body)(void *), int *fd)
+{
+    int i;
+
+    lost_tid = 0;
+    lost_page = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (lost_page == MAP_FAILED || pthread_create(t, NULL, body, fd) != 0) {
+        return -1;
+    }
+    for (i = 0; i < 500 && !(lost_tid && sleeping(lost_tid)); i++) {
+        usleep(10000);
+    }
+    return munmap(lost_page, 4096);
+}
+
+/** Whether the thread `t` returned the errno EFAULT. */
+static int failed_efault(pthread_t t)
+{
+    void *result;
+
+    return pthread_join(t, &result) == 0 && (long)result == EFAULT;
+}
+
+/**
+ * Check a TCP receive and a TCP send over the loopback whose buffer another
+ * thread unmaps while they sleep: each fails with EFAULT when it wakes, the
+ * byte that woke the receive is left for the next one, and the send queues
+ * nothing, so that what the peer reads is what was sent before it. Returns
+ * 0, or 1 after the failure is printed.
+ */
+static int lost_tcp_rows(void)
+{
+    static char chunk[4096];
+    struct sockaddr_in sa;
+    pthread_t t;
+    int ls = socket(AF_INET, SOCK_STREAM, 0);
+    int cs = socket(AF_INET, SOCK_STREAM, 0);
+    int as;
+    long queued = 0, got = 0, n;
+    char c = 0;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(LOST_TCP_PORT);
+    sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (ls < 0 || cs < 0 || bind(ls, (struct sockaddr *)&sa, sizeof(sa)) != 0 ||
+        listen(ls, 1) != 0 || connect(cs, (struct sockaddr *)&sa, sizeof(sa)) != 0 ||
+        (as = accept(ls, NULL, NULL)) < 0) {
+        return fail("setup for a TCP connection over the loopback");
+    }
+    if (lost_buffer_call(&t, recv_lost, &cs) != 0 || write(as, "x", 1) != 1 || !failed_efault(t)) {
+        return fail("a TCP receive whose buffer went while it slept did not fail with EFAULT");
+    }
+    if (recv(cs, &c, 1, 0) != 1 || c != 'x') {
+        return fail("the byte a failed TCP receive woke for was not left queued");
+    }
+    while ((n = send(cs, chunk, sizeof(chunk), MSG_DONTWAIT)) > 0 && queued < 4L << 20) {
+        queued += n;
+    }
+    if (n != -1 || errno != EAGAIN) {
+        return fail("setup: filling a TCP connection's send buffer");
+    }
+    if (lost_buffer_call(&t, send_lost, &cs) != 0) {
+        return fail("setup for a TCP send that waits for room");
+    }
+    while (got < queued && (n = read(as, chunk, sizeof(chunk))) > 0) {
+        got += n;
+    }
+    if (!failed_efault(t)) {
+        return fail("a TCP send whose buffer went while it slept did not fail with EFAULT");
+    }
+    if (got != queued || recv(as, chunk, 1, MSG_DONTWAIT) != -1 || errno != EAGAIN) {
+        return fail("a TCP send that failed with EFAULT queued bytes");
+    }
+    close(as);
+    close(cs);
+    close(ls);
+    return 0;
+}
+
+/**
+ * Check a UDP receive over the loopback whose buffer another thread unmaps
+ * while it sleeps: it fails with EFAULT when the datagram comes, and the
+ * datagram is left for the next receive. Returns 0, or 1 after the failure
+ * is printed.
+ */
+static int lost_udp_row(void)
+{
+    struct sockaddr_in sa;
+    pthread_t t;
+    int us = socket(AF_INET, SOCK_DGRAM, 0);
+    char c = 0;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(LOST_UDP_PORT);
+    sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (us < 0 || bind(us, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+        return fail("setup for a UDP socket on the loopback");
+    }
+    if (lost_buffer_call(&t, recv_lost, &us) != 0 ||
+        sendto(us, "y", 1, 0, (struct sockaddr *)&sa, sizeof(sa)) != 1 || !failed_efault(t)) {
+        return fail("a UDP receive whose buffer went while it slept did not fail with EFAULT");
+    }
+    if (recv(us, &c, 1, MSG_DONTWAIT) != 1 || c != 'y') {
+        return fail("the datagram a failed UDP receive woke for was not left queued");
+    }
+    close(us);
+    return 0;
+}
+
 /* The errno of the step `use_framebuffer` failed at. */
 static volatile int fb_errno;
 
@@ -932,16 +1091,16 @@ static int framebuffer_row(void)
 }
 
 /**
- * Run the rows that follow the first ones: what the threads share, a signal
- * a handler's mask blocks, a wait whose status page goes, and the framebuffer
- * a thread that is not the first uses. Returns 0 when all pass, and 1 after a
- * failure is printed. They are one call so that `main` stays within the
- * complexity tools/verify/sizes.reasons allows it.
+ * Run the rows that follow the first ones: what the threads share, a signal a
+ * handler's mask blocks, a wait whose status page goes, the socket calls whose
+ * buffers go, and the framebuffer a thread that is not the first uses. Returns
+ * 0 when all pass, and 1 after a failure is printed. They are one call so that
+ * `main` stays within the complexity tools/verify/sizes.reasons allows it.
  */
 static int later_rows(void)
 {
     return sharing() != 0 || handler_mask_row() != 0 || lost_status_row() != 0 ||
-           framebuffer_row() != 0;
+           lost_tcp_rows() != 0 || lost_udp_row() != 0 || framebuffer_row() != 0;
 }
 
 /**

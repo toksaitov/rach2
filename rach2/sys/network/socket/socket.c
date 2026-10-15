@@ -20,6 +20,7 @@
 #include "../../lib/kstring.h"
 #include "../../lib/kerrno.h"
 #include "../../mm/kheap.h"
+#include "../../mm/paging.h"
 #include "../../ipc/unix.h"
 #include "../../proc/ns.h"
 #include "../driver/netdev.h"
@@ -513,7 +514,10 @@ static void socket_dgram_take(struct socket *sock, uint32_t *src_ip, uint16_t *s
 
 /** The copy and the take run under one hold of `net_lock`, as socket.h
  * requires of the three steps; the two calls take the lock again inside,
- * which nests. A datagram that is gone by then is one of no bytes. */
+ * which nests. The buffer is brought in again after the wait, which another
+ * thread's munmap may have outlasted, and before the lock, since that can
+ * sleep too; a datagram another reader took meanwhile sends this one back to
+ * wait for the next. */
 int socket_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip, uint16_t *src_port,
                 int peek)
 {
@@ -521,15 +525,20 @@ int socket_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip, ui
     int rc;
     uint32_t flags;
 
-    rc = socket_dgram_wait(sock);
-    if (rc < 0) {
-        return rc;
-    }
-
-    flags = net_lock();
-    copy_len = socket_dgram_peek(sock, 0, buf, len);
-    if (copy_len < 0) {
-        copy_len = 0;
+    for (;;) {
+        rc = socket_dgram_wait(sock);
+        if (rc < 0) {
+            return rc;
+        }
+        if (!vm_prefault_range((uintptr_t)buf, (uintptr_t)len, 1)) {
+            return -EFAULT;
+        }
+        flags = net_lock();
+        copy_len = socket_dgram_peek(sock, 0, buf, len);
+        if (copy_len >= 0) {
+            break;
+        }
+        net_unlock(flags);
     }
     socket_dgram_take(sock, src_ip, src_port, peek);
     net_unlock(flags);
@@ -643,7 +652,8 @@ static int tcp_dead_error(struct tcb *tcb, int fallback)
  * a block that is gone or not sending. A blocking socket sleeps for room,
  * which `socket_tcp_writable` wakes it for when an ACK frees some, so a
  * nonzero request never returns 0, which a caller would take for the end of
- * input.
+ * input. The buffer is brought in again after each sleep, since `tcp_send`
+ * reads it with interrupts off and another thread may have unmapped it.
  */
 int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblock)
 {
@@ -670,6 +680,9 @@ int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblo
             if (rc < 0) {
                 return rc;
             }
+        }
+        if (!vm_prefault_range((uintptr_t)buf, (uintptr_t)len, 0)) {
+            return -EFAULT;
         }
     }
 }
@@ -766,7 +779,10 @@ void socket_tcp_release(struct socket *sock, uint32_t n)
 }
 
 /** A sharer's shutdown may detach the block during the wait, which is then
- * the end of input. */
+ * the end of input. The buffer is brought in again after the wait, which
+ * another thread's munmap may have outlasted; that can sleep too, so the
+ * ring is judged again after it, and bytes another reader took meanwhile
+ * send this one back to the wait instead of reading as the end of input. */
 int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len, int peek)
 {
     struct tcb *tcb;
@@ -778,9 +794,17 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len, int peek)
     if (!sock->tcb)
         return sock->shut_down ? 0 : -ENOTCONN;
 
-    rc = wq_wait_event(&sock->waiters, tcp_recv_ready, sock);
-    if (rc < 0) {
-        return rc;
+    for (;;) {
+        rc = wq_wait_event(&sock->waiters, tcp_recv_ready, sock);
+        if (rc < 0) {
+            return rc;
+        }
+        if (!vm_prefault_range((uintptr_t)buf, (uintptr_t)len, 1)) {
+            return -EFAULT;
+        }
+        if (tcp_recv_ready(sock)) {
+            break;
+        }
     }
     tcb = sock->tcb;
     if (!tcb) {

@@ -6144,3 +6144,54 @@ old
     xorl %edx, %edx
 new
 end
+
+# Socket calls whose buffer another thread unmaps while they sleep.
+
+fault tcp-recv-buffer-after-wait
+probe threadmusl
+file rach2/sys/network/socket/socket.c
+expect page fault while in kernel mode
+old
+        rc = wq_wait_event(&sock->waiters, tcp_recv_ready, sock);
+        if (rc < 0) {
+            return rc;
+        }
+        if (!vm_prefault_range((uintptr_t)buf, (uintptr_t)len, 1)) {
+            return -EFAULT;
+        }
+new
+        rc = wq_wait_event(&sock->waiters, tcp_recv_ready, sock);
+        if (rc < 0) {
+            return rc;
+        }
+end
+
+fault tcp-send-buffer-after-wait
+probe threadmusl
+file rach2/sys/network/socket/socket.c
+expect page fault while in kernel mode
+old
+        if (!vm_prefault_range((uintptr_t)buf, (uintptr_t)len, 0)) {
+            return -EFAULT;
+        }
+new
+end
+
+fault dgram-recv-buffer-after-wait
+probe threadmusl
+file rach2/sys/network/socket/socket.c
+expect page fault while in kernel mode
+old
+        rc = socket_dgram_wait(sock);
+        if (rc < 0) {
+            return rc;
+        }
+        if (!vm_prefault_range((uintptr_t)buf, (uintptr_t)len, 1)) {
+            return -EFAULT;
+        }
+new
+        rc = socket_dgram_wait(sock);
+        if (rc < 0) {
+            return rc;
+        }
+end

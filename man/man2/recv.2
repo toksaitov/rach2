@@ -111,6 +111,12 @@ On a TCP stream, supplied address buffers are checked but no source
 address or length is written.
 If receiving the data fails, no source address or length is written.
 .Pp
+A receive that waits checks the data buffer again when the wait ends,
+since another thread may have unmapped it meanwhile.
+A buffer that can no longer be written fails the call with
+.Er EFAULT ,
+and the datagram or the stream bytes stay queued for the next receive.
+.Pp
 An IPv4 socket returns a 16-byte
 .Vt sockaddr_in
 with its sender's address and port in network byte order; a raw ICMP

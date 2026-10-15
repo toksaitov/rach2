@@ -242,9 +242,10 @@ void socket_udp_deliver(struct socket *sock, uint32_t src_ip, uint16_t src_port,
  * `src_port` when they are not NULL, as `socket_dgram_consume` reports it.
  * The rest of a longer datagram is discarded, since the datagram is the
  * unit; with `peek` the datagram stays queued, whole, for the next receive
- * (MSG_PEEK). Returns the bytes copied, -EINTR, or the socket's pending
- * error, which this takes. The copy runs with interrupts off, so `buf`, a
- * user buffer, must have been faulted in (`user_buffer_ok`).
+ * (MSG_PEEK). Returns the bytes copied, -EINTR, -EFAULT, or the socket's
+ * pending error, which this takes. The copy runs with interrupts off, so
+ * `buf`, a user buffer, is brought in again after the wait, and the call is
+ * -EFAULT, with the datagram left queued, when it no longer can be.
  */
 int socket_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip, uint16_t *src_port,
                 int peek);
@@ -330,7 +331,9 @@ void socket_tcp_writable(struct socket *sock);
  * ring as long as none is free, and return the count queued, never 0 for a
  * nonzero `len`. Returns SOCK_EAGAIN instead of waiting when `nonblock` is
  * set, -EINTR on a signal, and on a connection no longer in a sending state
- * the error recorded for it or -EPIPE.
+ * the error recorded for it or -EPIPE. `buf` is a user buffer the caller
+ * has brought in (`user_buffer_ok`); after a wait this brings it in again,
+ * and returns -EFAULT, with nothing queued, when it no longer can.
  */
 int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblock);
 /** Copy in-order stream bytes into the receive ring and wake a reader;
@@ -350,9 +353,10 @@ void socket_tcp_release(struct socket *sock, uint32_t n);
  * to `len` bytes to `buf`. Returns the count copied; 0 at the end of input,
  * the FIN with nothing buffered or a block a shutdown detached; with
  * nothing buffered on a reset or closed connection, the error recorded for
- * it or -ECONNRESET; -ENOTCONN for a stream that never connected; or -EINTR.
- * With `peek` the bytes stay in the ring for the next receive (MSG_PEEK),
- * and the window does not change.
+ * it or -ECONNRESET; -ENOTCONN for a stream that never connected; -EINTR;
+ * or -EFAULT, with the bytes left in the ring, when `buf`, a user buffer,
+ * can no longer be brought in after the wait. With `peek` the bytes stay in
+ * the ring for the next receive (MSG_PEEK), and the window does not change.
  */
 int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len, int peek);
 /** `socket_tcp_recv` without the wait (MSG_DONTWAIT): SOCK_EAGAIN where it

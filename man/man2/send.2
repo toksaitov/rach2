@@ -100,6 +100,11 @@ or the descriptor has
 .Dv O_NONBLOCK .
 Other flag bits are ignored.
 A signal can interrupt the wait.
+The payload buffer is checked again when the wait ends, since another
+thread may have unmapped it meanwhile; a buffer that can no longer be
+read fails the send with
+.Er EFAULT ,
+and nothing is queued.
 .Pp
 A stream must be in the established or close-wait state.
 If it cannot send, a pending TCP error is returned and cleared.
