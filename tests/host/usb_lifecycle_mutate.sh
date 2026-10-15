@@ -45,6 +45,7 @@ changes = {
         '            return isr_line_pending(interrupt_sources[n].line_irq);\n'
         '        }\n    }\n'
         '    for (n = 0; n < interrupt_source_count; n++) {\n        int irq'),
+    'usb-keep-vector': ('            isr_free_vector(vector);\n', ''),
     'msc-elapsed': (
         '    m->ready_left = (m->ready_left > elapsed_ms) ? m->ready_left - elapsed_ms : 0;',
         '    if (m->state == MSC_STATE_TEST && m->stage == STAGE_IDLE) {\n'
@@ -60,7 +61,7 @@ PY
 }
 
 faults='hub-reuse hub-changes hub-warm-order usb-last-source usb-line-only
-    msc-elapsed msc-unit'
+    usb-keep-vector msc-elapsed msc-unit'
 if [ "${1:-}" = --texts ]; then
     for fault in $faults; do
         RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/usb "$fault" >/dev/null || exit 1
@@ -145,6 +146,7 @@ for fault in $faults; do
         hub-reuse) test=hub; message='a detached hub record is not reused' ;;
         hub-changes) test=hub; message='cleared over-current does not suppress another change' ;;
         hub-warm-order) test=hub; message='a simultaneous connection and link fault starts a warm reset' ;;
+        usb-keep-vector) test=usb_interrupt; message='a failed MSI enable gives its vector back' ;;
         usb-*) test=usb_interrupt; message='a configured pending source prevents fallback' ;;
         msc-elapsed) test=msc; message='initialization expires after ten elapsed seconds' ;;
         msc-unit) test=msc; message='each unit gets a separate elapsed deadline' ;;
@@ -161,4 +163,4 @@ for fault in $faults; do
         cmp "$work/$name.saved" "$work/rach2/sys/usb/$name.c"
     done
 done
-echo 'usb-lifecycle-mutation: result: pass, seven compiled faults failed and restored tests passed'
+echo 'usb-lifecycle-mutation: result: pass, eight compiled faults failed and restored tests passed'

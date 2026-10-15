@@ -27,6 +27,8 @@ static int controller_count;
 /* Whether each vector is given out, as `isr_alloc_vector` and
  * `isr_free_vector` keep it. */
 static int vector_taken[256];
+/* How many handlers are registered on each vector. */
+static int vector_handlers[256];
 /* Whether the local APIC takes messages, as `isr_msi_ready` reports. */
 static int apic_ready;
 /* The vector and the line reported pending, -1 for none, and the vector
@@ -176,18 +178,19 @@ int isr_alloc_vector(void)
     return -1;
 }
 
-/** Mark `vector` free for the next `isr_alloc_vector`. */
+/** Mark `vector` free for the next `isr_alloc_vector` and drop its handlers. */
 void isr_free_vector(int vector)
 {
     vector_taken[vector] = 0;
+    vector_handlers[vector] = 0;
 }
 
-/** Do nothing: no row raises an interrupt. */
+/** Count the handler on `vector`; no row raises an interrupt. */
 void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
 {
-    (void)vector;
     (void)handler;
     (void)name;
+    vector_handlers[vector]++;
 }
 
 /** Return the number of controllers the row set up. */
@@ -399,6 +402,7 @@ static void reset(int count)
     for (n = 0; n < 256; n++) {
         vector_queries[n] = 0;
         vector_taken[n] = 0;
+        vector_handlers[n] = 0;
     }
     for (n = 0; n < 16; n++) {
         irq_queries[n] = 0;
@@ -442,9 +446,9 @@ static void check_sources(void)
  * Run the configurations: every controller on messages, both on lines with
  * no local APIC, messages and a line mixed in both orders, and one source
  * whose enable failed, which must not be asked about and whose vector is
- * given back; then a message that becomes pending only during the pump's step,
- * and a controller polled with no interrupt configured. Return 1 when a row
- * failed.
+ * given back for the next controller to take; then a message that becomes
+ * pending only during the pump's step, and a controller polled with no
+ * interrupt configured. Return 1 when a row failed.
  */
 int main(void)
 {
@@ -483,6 +487,13 @@ int main(void)
     CHECK("a failed MSI enable is not inspected", vector_queries[49] == 0);
     CHECK("a working MSI enable keeps its vector", vector_taken[48]);
     CHECK("a failed MSI enable gives its vector back", !vector_taken[49]);
+    CHECK("and drops the handler registered on it", vector_handlers[49] == 0);
+
+    reset(2);
+    controllers[1].messages = 1;
+    usb_interrupts_start();
+    CHECK("the next controller takes the vector given back",
+          controllers[1].vector == ISR_MSI_FIRST);
 
     reset(2);
     controllers[0].messages = controllers[1].messages = 1;
