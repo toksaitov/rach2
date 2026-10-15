@@ -465,9 +465,10 @@ run-socket: rach2 tests krffs test-image $(HARNESS) $(HOSTPEER) $(RUNUTIL)
 # `tests/run disk`: the disk-backed page-cache integrity check. Builds a disk
 # image holding blockprobe, boots disk-only with KRFFS on the real ATA disk
 # through the cache (rach2.fsdisk), and runs blockprobe from the debug shell,
-# passing on its "BLOCKPROBE OK" serial token. blockprobe writes more than the
-# resident cache, so it exercises real eviction and writeback and fails on any
-# dropped or corrupted page.
+# passing on its "BLOCKPROBE OK" serial token. blockprobe's 6 MiB fit in the
+# 8 MiB cache of this machine, so it proves that data written and fsynced
+# through the cache reads back whole; the stress suite's 33 MiB exercise
+# eviction.
 DISK_TEST_IMAGE = $(IMAGES_DIR)/disk-test.disk
 run-disk: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_IMAGE) 64 48
