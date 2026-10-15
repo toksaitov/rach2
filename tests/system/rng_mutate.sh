@@ -3,10 +3,10 @@
 # the CPUID helper of rach2/sys/arch/x86/kcpu.c that the probe compiles in:
 # the subleaf operand changed from an input to an output.
 #
-# The probe is built from a private copy of its sources for each phase, for
-# the architecture ARCH names, and must pass, then fail with `RNGPROBE FAIL
-# (cpuid subleaf zero)` under the fault, then pass with the source restored.
-# --texts checks that the operand is once in kcpu.c.
+# The probe is built from a private copy of its sources for each phase, for the
+# architecture ARCH names, and must pass, then fail with
+# `RNGPROBE FAIL (cpuid subleaf zero)` under the fault, then pass with the
+# source restored. --texts checks that the operand is once in kcpu.c.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"

@@ -1,7 +1,7 @@
 #!/bin/sh
-# fdlock_mutate.sh [--direct] [FAULT...] | --texts: show that `tests/run
-# fdlock` catches seven compiled faults in the locking of open descriptors,
-# on the kernel, probes and emulator of the architecture ARCH names.
+# fdlock_mutate.sh [--direct] [FAULT...] | --texts: show that `tests/run fdlock`
+# catches seven compiled faults in the locking of open descriptors, on the
+# kernel, probes and emulator of the architecture ARCH names.
 #
 # `namespace` takes the namespace lock out of rach2/sys/fs/fd.c's operations
 # on a file system whose namespace is serialised. `raw-read` and `raw-write`

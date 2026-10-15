@@ -18,9 +18,9 @@
 # Its output is a record of notes and FAIL lines. Where a baseline exists
 # (dev-log/24-metal/baseline.md, what Windows measured on the Lenovo before
 # Rach2 was installed) it compares and says so; where none exists it
-# reports the number so that the record has it. It prints `metal-accept:
-# PASS` and exits 0, or `metal-accept: FAIL (N)` and exits 1; a usage error
-# exits 2.
+# reports the number so that the record has it. It prints
+# `metal-accept: PASS` and exits 0, or `metal-accept: FAIL (N)` and exits 1;
+# a usage error exits 2.
 #
 # The key is the demonstration one the RAM images carry, unless
 # `RACH2_ACCEPT_KEY` names another, and the account is root unless
@@ -502,8 +502,8 @@ fi
 #      Almost every line is a note: a machine whose firmware leaves it on
 #      legacy lines is not broken, and what it did is the record. The
 #      failures are the timer's vector, 32, having taken nothing, a boot log
-#      with no line about the local APIC, and the kernel's own `lapic:
-#      timer:` line, which it logs when no tick arrives. ----
+#      with no line about the local APIC, and the kernel's own
+#      `lapic: timer:` line, which it logs when no tick arrives. ----
 INTR="$(run 'cat /proc/interrupts 2>/dev/null')"
 if [ -z "$INTR" ]; then
     bad "/proc/interrupts is not there; this kernel predates it"

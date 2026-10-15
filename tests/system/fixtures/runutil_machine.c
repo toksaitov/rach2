@@ -51,8 +51,9 @@ static pid_t start_worker(int zombie, struct identity *id)
  * start time is one more than the worker's, as if its PID had been reused,
  * and in `zombie` the worker has exited and is not yet reaped, as a console
  * relay's child can be; in both neither function may find it, and the
- * worker must still be there afterwards. Prints `runutil-machine: result:
- * CASE passed` and returns 0, or returns 1; 125 is a failure of the fixture.
+ * worker must still be there afterwards. Prints
+ * `runutil-machine: result: CASE passed` and returns 0, or returns 1; 125 is
+ * a failure of the fixture.
  */
 int main(int argc, char **argv)
 {
