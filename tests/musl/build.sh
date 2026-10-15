@@ -54,7 +54,7 @@ LIBGCC="$($CC -print-libgcc-file-name)"
 OUT="$ARCH_BUILD/tests/musl"
 
 if [ ! -f "$PREFIX/lib/libc.a" ]; then
-    echo "error: $PREFIX/lib/libc.a not found; run make musl in the top directory first" >&2
+    echo "musl-programs: $PREFIX/lib/libc.a not found; run make musl in the top directory first" >&2
     exit 1
 fi
 
@@ -93,14 +93,14 @@ for src in *.c; do
         prev ~ /link-deps:/ && $0 ~ /^[[:space:]]*\*[[:space:]]+[A-Za-z0-9_.\/-]+\.[ch]([[:space:]]|$)/ { exit 1 }
         { prev = $0 }
     ' "$src"; then
-        echo "error: $src has a wrapped link-deps: line; repeat the" >&2
-        echo "error: link-deps: prefix on the next line instead" >&2
+        echo "musl-programs: $src has a wrapped link-deps: line; repeat the" >&2
+        echo "musl-programs: link-deps: prefix on the next line instead" >&2
         exit 1
     fi
     # shellcheck disable=SC2013 # a link-deps: line lists its sources as words
     for dep in $(grep -oE 'link-deps:[^*]*' "$src" | sed 's/link-deps://'); do
         if [ ! -f "$REPO/$dep" ]; then
-            echo "error: $src names a link-deps: source that is not there: $dep" >&2
+            echo "musl-programs: $src names a link-deps: source that is not there: $dep" >&2
             exit 1
         fi
         deps="$deps $REPO/$dep"
