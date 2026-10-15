@@ -163,11 +163,22 @@ row_less() {
     has "the version" "$(less --version | head -n 1)" "less 710"
 }
 
-# vim edits a file in ex mode.
+# vim edits a file in ex mode, and gives up a search at its time limit. The
+# pattern matches the first line at once, but on the second, sixty a's, the
+# backtracking engine would try more ways than it could in a lifetime, so
+# the search ends only when the timer Vim starts with timer_create, which
+# strace must see succeed, expires.
 row_vim() {
     printf 'hello world\n' > "$WORK/vim.txt"
     runs "an edit in ex mode" vim -Nu NONE -i NONE -es -c '%s/world/Rach2/' -c wq "$WORK/vim.txt"
     same "the edited file" "$(cat "$WORK/vim.txt")" "hello Rach2"
+    { echo aaac; printf '%060d\n' 0 | tr 0 a; } > "$WORK/slow.txt"
+    output "a timed search" strace -f -e trace=timer_create -o "$WORK/trace" \
+        vim -Nu NONE -i NONE -es -c 'set regexpengine=1' -c 'call cursor(1, 1)' \
+        -c "call writefile([search('\\v^(a|aa)*c', 'cW'), search('\\v^(a|aa)*c', 'W', 0, 100)], '$WORK/found')" \
+        -c 'qa!' "$WORK/slow.txt"
+    same "the lines the searches found" "$(tr '\n' ' ' < "$WORK/found")" "1 0 "
+    has "vim's timer" "$(grep 'timer_create(CLOCK_MONOTONIC' "$WORK/trace")" ") = 0"
 }
 
 # Perl: a hash and a sort, Digest::SHA, a gzip round trip through
