@@ -98,7 +98,7 @@ prune-stale:
 # Fail early with a clear message if the ported libc has not been built.
 libc-check:
 	@test -f "$(PREFIX)/lib/libc.a" || { \
-	    echo "error: $(PREFIX)/lib/libc.a not found; run vendor/musl/build_libc.sh first" >&2; \
+	    echo "utils: $(PREFIX)/lib/libc.a not found; run make musl in the top directory first" >&2; \
 	    exit 1; }
 
 # Each NAME.c is compiled and linked in one step into a static guest program
