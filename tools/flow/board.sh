@@ -16,10 +16,12 @@
 # page of the answer is lost, `next` prints nothing and fails, so that a caller
 # does not take a part of the board for the whole.
 #
-# `take N` assigns N to this account, sets it In progress, and reads the
-# issue's timeline. Of the accounts assigned now, the one whose latest
-# assignment is the earliest keeps the issue. When that is another account,
-# `take` unassigns this one and exits 1, so that no issue has two writers.
+# `take N` assigns N to this account and reads the issue's timeline. Of the
+# accounts assigned now, the one whose latest assignment is the earliest keeps
+# the issue. When that is another account, `take` unassigns this one and exits
+# 1, so that no issue has two writers; otherwise it sets N In progress. A step
+# that fails after the assignment unassigns this account again, so that a
+# failed take leaves the issue as it found it.
 #
 # `mine N` prints `yes` while N is open and assigned to this account and `no`
 # otherwise; it prints nothing and fails when GitHub cannot be reached, so
@@ -103,6 +105,13 @@ next()
             $1 == "Ready" { r = r $2 "\t" $3 "\n" } END { printf "%s", r }'
 }
 
+# unassign N LOGIN: remove LOGIN from N's assignees, or say that it could not.
+unassign()
+{
+    gh issue edit "$1" --repo "$REPO" --remove-assignee "$2" > /dev/null ||
+        echo "board: #$1: could not unassign $2; unassign it by hand" >&2
+}
+
 # first N: print the account, of those assigned to N now, whose latest
 # assignment is the earliest, the lesser login on a tie, or the one account
 # assigned when the timeline does not show its assignment yet.
@@ -131,11 +140,19 @@ take()
 {
     me=$(gh api user --jq .login)
     gh issue edit "$1" --repo "$REPO" --add-assignee "$me" > /dev/null
-    set_status "$1" "In progress"
-    who=$(first "$1")
+    if ! who=$(first "$1"); then
+        unassign "$1" "$me"
+        echo "board: #$1: cannot read who was assigned first" >&2
+        exit 1
+    fi
     if [ "$who" != "$me" ]; then
-        gh issue edit "$1" --repo "$REPO" --remove-assignee "$me" > /dev/null
+        unassign "$1" "$me"
         echo "board: #$1: taken by $who first" >&2
+        exit 1
+    fi
+    if ! set_status "$1" "In progress"; then
+        unassign "$1" "$me"
+        echo "board: #$1: cannot set it In progress" >&2
         exit 1
     fi
 }
