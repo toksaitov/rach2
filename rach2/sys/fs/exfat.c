@@ -2774,6 +2774,19 @@ static int is_under(struct ex_mount *em, uint32_t dir, uint32_t anc)
     return 0;
 }
 
+/* Whether a rename may rewrite the set `src` in place as a new set of
+ * `count` entries: the counts agree, and the stream and name entries lie in
+ * one sector, so that a stop leaves either name under its own hash, at
+ * worst with the checksum the dirty-volume check repairs. Across two
+ * sectors a stop would leave parts of both names under the old hash. */
+static int fits_in_place(const struct ex_set *src, uint32_t count)
+{
+    uint32_t per_sector = BLOCK_SECTOR_SIZE / 32;
+    uint32_t stream = src->index + 1, last_name = stream + (src->count + 14) / 15;
+
+    return count == src->entries && stream / per_sector == last_name / per_sector;
+}
+
 static int ex_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
                      const char *newname)
 {
@@ -2905,7 +2918,7 @@ static int ex_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
         }
         em->setbuf[1] = (uint8_t)(count - 1);
     }
-    if (od_cluster == nd_cluster && !dst_exists && count == src.entries) {
+    if (od_cluster == nd_cluster && !dst_exists && fits_in_place(&src, count)) {
         /* In place: the name entries first, then the file entry's sector. */
         rc = set_store(em, od, src.index, count, 1);
         if (rc == 0 && moved) {

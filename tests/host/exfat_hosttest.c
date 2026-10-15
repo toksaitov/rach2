@@ -1166,6 +1166,33 @@ static int seq_crossing(void)
     return rc;
 }
 
+/* The fixture's crossing.txt renamed within the root to a name of as many
+   entries, read, and renamed back. Its stream entry is in its file entry's
+   sector and its name entry in the next, so a rewrite in place would leave
+   a stop with the new name under the old hash, a fault the check does not
+   repair. */
+static int seq_crossing_rename(void)
+{
+    void *n;
+    int err, rc = OPS->rename(&mnt, mnt.root, "crossing.txt", mnt.root, "crossed.txt");
+
+    if (rc != 0) {
+        return rc;
+    }
+    n = walk("/crossed.txt", &err);
+    if (!n) {
+        return -1;
+    }
+    if (read_all(n, back, sizeof(back)) != 9 || memcmp(back, "crossing\n", 9) != 0) {
+        rc = -1;
+    }
+    OPS->put(&mnt, n);
+    if (rc == 0) {
+        rc = OPS->rename(&mnt, mnt.root, "crossed.txt", mnt.root, "crossing.txt");
+    }
+    return rc;
+}
+
 static const struct {
     const char *name;
     int (*run)(void);
@@ -1182,6 +1209,7 @@ static const struct {
     {"vdl", seq_vdl},
     {"unlink-synced", seq_unlink_synced},
     {"crossing", seq_crossing},
+    {"crossing-rename", seq_crossing_rename},
 };
 
 /* Files made and remade: what a program rewriting a set of files does, the
@@ -1226,9 +1254,9 @@ static int rewrite_rows_run(void)
     return 0;
 }
 
-/* The sequence a stop is judged for; the crossing sequence takes the
-   fixture's crossing.txt away and makes it again, so the oracle does not
-   require that file of it. */
+/* The sequence a stop is judged for; the two crossing sequences take the
+   fixture's crossing.txt away for a time, one to make it again and one to
+   rename it, so the oracle does not require that file of them. */
 static int judging_crossing;
 
 /* The content oracle: after a stop, every file a sequence wrote reads,
@@ -1380,7 +1408,7 @@ static void judge_stop(unsigned i, const char *stage)
             snprintf(what, sizeof(what),
                      "'%s' %s, %s of the pending writes kept, reads only what was written",
                      sequences[i].name, stage, name);
-            judging_crossing = strncmp(sequences[i].name, "crossing", 9) == 0;
+            judging_crossing = strncmp(sequences[i].name, "crossing", 8) == 0;
             check(oracle_ok(), what);
             judging_crossing = 0;
             unmount_image();
