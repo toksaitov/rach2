@@ -4,15 +4,16 @@
 # which run as the user ghrunner in WSL; tools/Readme.md describes them. A
 # runner keeps its checkout and its build/ between jobs, so a job rebuilds
 # only what changed. One core run runs at a time and is never cancelled; of
-# the pushes made while it runs, only the newest waits, since GitHub cancels
-# a waiting run when a newer one joins the group. The first job reads the
-# newest master once the run starts, and both architectures test that one
-# commit, one on each runner; a commit whose `ci/core` status an earlier run
-# set, once it had reported everything, is not tested again. tools/ci/run.sh runs the build, `tests/run style`,
-# `tests/run host` and `tests/run core`; each architecture's output and kept
-# logs are uploaded for every account to fetch, and tools/ci/report.sh sets
-# the commit's status, files a failure as an issue, starts bisect.yml for a
-# new one, and opens or closes the `hold` issue.
+# the pushes made while it runs, only the newest waits, since GitHub cancels a
+# waiting run when a newer one joins the group. The first job reads the newest
+# master once the run starts, and both architectures test that one commit, one
+# on each runner; a commit whose `ci/core` status an earlier run set, once it
+# had reported everything, is not tested again. tools/ci/run.sh runs the
+# build, `tests/run style`, `tests/run host` and `tests/run core`; each
+# architecture's output and kept logs are uploaded for every account to fetch,
+# and tools/ci/report.sh sets the commit's status, files a failure as an
+# issue, starts bisect.yml for a new one, and opens or closes the `hold`
+# issue.
 name: ci
 
 on:

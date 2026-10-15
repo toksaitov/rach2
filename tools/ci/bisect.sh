@@ -45,6 +45,7 @@ Logs: \`gh run download $GITHUB_RUN_ID --repo $repo --name bisect-$issue\`" > /d
         echo "ci: bisect: the comment on #$issue failed" >&2
 }
 
+# The abbreviated hash of a commit.
 short() { git rev-parse --short "$1"; }
 
 # Build COMMIT and run the failing items on it: 0 when it passes, 1 when the

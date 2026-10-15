@@ -42,6 +42,7 @@ lost() { # lost WHAT: name a GitHub call that failed
     rc=1
 }
 
+# Set the status CONTEXT of SHA to STATE, linked to this run.
 set_status() { # set_status CONTEXT STATE
     gh api "repos/$repo/statuses/$sha" -f state="$2" -f context="$1" \
         -f target_url="$run_url" -f description="$kind at $short" > /dev/null ||
