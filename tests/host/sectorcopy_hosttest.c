@@ -251,12 +251,14 @@ static void check_copy(void)
         int all_whole = 1;
         unsigned long i;
 
-        for (i = 0; i < 1; i++) {
-            if ((m.device_pos % SECTORCOPY_SECTOR) != 0) {
+        for (i = 0; i < (unsigned long)m.writes_done &&
+                    i < sizeof(m.write_sizes) / sizeof(m.write_sizes[0]);
+             i++) {
+            if ((m.write_sizes[i] % SECTORCOPY_SECTOR) != 0) {
                 all_whole = 0;
             }
         }
-        CHECK(all_whole, "the device saw a whole number of sectors");
+        CHECK(all_whole, "every write the device saw was of whole sectors");
         CHECK(m.writes_done <= 4096 / SECTORCOPY_SECTOR,
               "and no more writes than there were sectors");
     }
