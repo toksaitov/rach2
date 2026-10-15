@@ -1,5 +1,5 @@
 # bisect: find the commit that made a ci failure, started by
-# tools/ci/report.sh for each new failure issue.
+# tools/ci/report.sh for each new failure issue whose last pass it found.
 #
 # It runs outside the core runs' group, on either runner, one run for each
 # issue. tools/ci/bisect.sh tests the failing commit again, halves the

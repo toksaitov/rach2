@@ -50,7 +50,8 @@ set_status() { # set_status CONTEXT STATE
 }
 
 # The newest first-parent ancestor of SHA, within fifty, that passed this
-# kind of run on ARCH; nothing when none did.
+# kind of run on ARCH; nothing when none did, and status 1 when a commit's
+# status could not be read.
 last_pass() { # last_pass ARCH
     for c in $(git rev-list --first-parent --max-count=50 "$sha^" 2> /dev/null); do
         state=$(gh api "repos/$repo/commits/$c/status" \

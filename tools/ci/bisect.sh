@@ -85,6 +85,7 @@ candidates=$(git rev-list --reverse --first-parent "$good..$bad")
 n=$(echo "$candidates" | wc -l | tr -d ' ')
 lo=-1
 hi=$((n - 1))
+# The candidate at index I.
 nth() { echo "$candidates" | sed -n "$(($1 + 1))p"; }
 while [ $((hi - lo)) -gt 1 ]; do
     mid=$(((lo + hi) / 2))

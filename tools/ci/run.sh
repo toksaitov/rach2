@@ -38,9 +38,10 @@ step() {
     return "$(cat "$out/rc")"
 }
 
-# Record the suites a tests/run command failed; a failed command that names
-# none is recorded under the set's name. The names are on the runner's own
-# `run: result: failed: NAME...` lines, which follow the last suite's result;
+# Run tests/run with ARGS, and append to DIR/failed the suites it failed, or
+# NAME when it failed without naming a suite of the registry; return 0 when it
+# passed and 1 when it failed. The suites are on the runner's own
+# `run: result: failed: SUITE...` lines, which follow the last suite's result;
 # the runner suite's output, printed before it, has lines of the same form
 # from the runs it drives.
 run_set() { # run_set NAME ARGS...
