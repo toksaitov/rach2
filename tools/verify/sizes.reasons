@@ -208,9 +208,9 @@ rach2/sys/proc/sched.c:schedule complexity 29 one decision, its cases in the ord
 
 rach2/sys/syscall.c:ktimex_adjust complexity 27 one arm per mode of adjtimex, in the order Linux applies them
 rach2/sys/syscall.c:sys_ioctl complexity 34 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall.c:sys_ioctl lines 150 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall.c:sys_ioctl lines 124 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall.c:sys_ioctl nesting 5 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall.c:tty_common_ioctl lines 126 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall.c:tty_common_ioctl lines 109 a dispatcher, one arm per command, read as a table
 
 rach2/sys/syscall_fs.c:chown_fd complexity 27 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:do_chdir complexity 27 one system call's contract, its checks in the order the manual page lists the errors
@@ -235,19 +235,15 @@ rach2/sys/syscall_fs.c:synth_stat complexity 32 a dispatcher, one arm per comman
 rach2/sys/syscall_fs.c:synth_sys_dirent complexity 33 a dispatcher, one arm per command, read as a table
 
 rach2/sys/syscall_net.c:do_connect complexity 30 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_net.c:do_connect lines 140 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_net.c:do_connect lines 103 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_getsockopt complexity 36 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_net.c:do_recvfrom complexity 27 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_net.c:do_recvfrom lines 107 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_recvmsg complexity 32 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_net.c:do_recvmsg lines 108 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_sendmsg complexity 33 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_sendto complexity 27 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_net.c:do_sendto lines 144 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_setsockopt complexity 32 a dispatcher, one arm per command, read as a table
 
 rach2/sys/syscall_proc.c:exec_shebang complexity 30 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_proc.c:do_fork lines 101 one process copied, its parts in the order Linux's copy_process takes them
 
 rach2/sys/tty/n_tty.c:n_tty_receive complexity 33 a state machine, one arm per state, read as a table
 
