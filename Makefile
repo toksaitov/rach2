@@ -697,10 +697,12 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 	$(MKIMAGE) krffs/manifests/os-simple.manifest $@ 10
 
 # The os-real image: the BusyBox shell and tools, the Dropbear SSH server and
-# client, TinyCC and pdpmake, Doom, the manual, and an /etc and /root tree.
-# 18 MiB on i686: the tree is under 16 MiB without the manual, and the
-# manual's gzipped pages and alias table take under 1 MiB more. 20 MiB on
-# x86-64, whose programs are larger: the tree with Doom's WAD takes 18.2 MiB.
+# client, TinyCC and pdpmake, Doom, the manual, the sources under /src, and an
+# /etc and /root tree. 20 MiB on both architectures: with Doom's WAD the tree
+# takes 18.1 MiB on i686 and 18.8 MiB on x86-64, whose programs are larger.
+# The WAD is not in the repository. A build without it, as in ci, must leave
+# OS_REAL_WAD_KIB free for it, so a tree that outgrows the image fails there
+# too and not only where the WAD is present.
 # The module sits in the kernel's 32 MiB window, where the DMA buffers and the
 # kernel stacks are carved, so it is kept small; and the manual's aliases are
 # a table and not files, since the RAM root and a KRFFS disk walk every node
@@ -708,9 +710,10 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # five times slower. gen_demo_key.sh provisions the SSH login keys and
 # gen_demo_password.sh the account passwords and /etc/shadow, each when
 # absent; the check targets require each vendored binary it stages.
-OS_REAL_MIB = $(if $(filter x86_64,$(ARCH)),20,18)
+OS_REAL_MIB = 20
+OS_REAL_WAD_KIB = 4100
 $(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti check-e2fsck ports/doom
-	$(MKIMAGE) krffs/manifests/os-real.manifest $@ $(OS_REAL_MIB)
+	$(MKIMAGE) krffs/manifests/os-real.manifest $@ $(OS_REAL_MIB) $(if $(wildcard ports/doom/doom1.wad),,$(OS_REAL_WAD_KIB))
 
 # The same manifest as an ext2 volume, which `rach2.root=ext2` mounts as the
 # root: 1 GiB, sparse on the host. tools/image/mkext2.sh stages it through
