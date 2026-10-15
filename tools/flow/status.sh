@@ -57,18 +57,28 @@ while read -r id rest; do
     echo "$id $rest tested $(printf '%s\n' "$tested" | awk -v id="$id" '$1 == id { print $2; exit }' | grep . || echo '?')"
 done
 echo "== open issues"
-gh api graphql --paginate -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='
+issues=$(gh api graphql --paginate -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='
     query($o: String!, $r: String!, $endCursor: String) {
         repository(owner: $o, name: $r) {
         issues(states: OPEN, first: 100, after: $endCursor) {
             pageInfo { hasNextPage endCursor } nodes { number title
-            labels(first: 5) { nodes { name } }
+            labels(first: 10) { nodes { name } }
             assignees(first: 5) { nodes { login } }
             projectItems(first: 10) { nodes { project { number }
                 fieldValueByName(name: "Status") {
                 ... on ProjectV2ItemFieldSingleSelectValue { name } } } } } } } }' \
     --jq '.data.repository.issues.nodes[] |
-        "#\(.number) [\([.projectItems.nodes[] | select(.project.number == 6)][0].fieldValueByName.name // "-")] \([.assignees.nodes[].login] | join(",")) {\([.labels.nodes[].name] | join(","))} \(.title[0:70])"'
+        "#\(.number) [\([.projectItems.nodes[] | select(.project.number == 6)][0].fieldValueByName.name // "-")] \([.assignees.nodes[].login] | join(",")) {\([.labels.nodes[].name] | join(","))} \(.title[0:70])"') ||
+    issues="status: the open issues cannot be read"
+printf '%s\n' "$issues"
+printf '%s\n' "$issues" | awk '
+    /^#/ {
+        if ($2 == "[Ready]") r++
+        else if ($2 == "[In") p++
+        if ($0 ~ /[{,]owner[,}]/) o++
+        else if ($2 == "[Backlog]" && $0 !~ /[{,]phase[,}]/) b++
+    }
+    END { printf "queue: %d Ready, %d In progress, %d owner decisions, %d other in Backlog\n", r, p, o, b }'
 echo "== workers"
 grep -v '^#' "$(dirname "$0")/workers" | while read -r name host st; do
     [ -n "$name" ] || continue
