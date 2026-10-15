@@ -927,10 +927,12 @@ They parse no options except
 .Nm rm Fl r .
 That
 .Nm cat
-reports open and write failures with status 1, completes short writes,
-and treats read errors as end of input.
+reports open, read, and write failures with status 1 and completes short writes.
 An open failure skips that operand; a write returning zero or an error
 stops the copy.
+Read failures report the input path, or
+.Qq standard input
+with no operands, and stop the copy.
 Close errors do not affect the status.
 That
 .Nm cp
@@ -938,8 +940,8 @@ requires exactly two operands identifying different files.
 It truncates the destination without checking file identity, so identical
 paths, hard links, and symlink aliases can erase the source.
 A missing destination is created with mode 0666 subject to the process umask.
-Usage, open, and write failures return status 1; read errors end the copy
-silently, and close errors do not affect the status.
+Usage, open, read, and write failures return status 1.
+Read failures report the source path; close errors do not affect the status.
 That
 .Nm rm Fl r
 unlinks symbolic links without following their targets.
@@ -954,6 +956,9 @@ That
 .Nm ls
 lists one directory without calling
 .Fn stat .
+It reports directory read failures with the path and returns status 1.
+The three programs report read failures as the program name, a colon,
+the input path, a colon, and the error description.
 .Bl -tag -width sha256sum
 .It Nm arch
 Print the system architecture.

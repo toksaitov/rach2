@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <string.h>
+#include <errno.h>
 
 #define BUFFER_SIZE 4096
 static char buffer[BUFFER_SIZE];
@@ -21,9 +22,10 @@ static void say(const char *a, const char *b)
  * Copy bytes from `fd` to standard output.
  *
  * Complete short writes. Report a write returning zero or an error and
- * return 1. Return 0 on EOF or a read error. Leave `fd` open.
+ * return 1. Report a read error with the input name `path` and return 1.
+ * Return 0 on EOF. Leave `fd` open.
  */
-static int cat_fd(int fd)
+static int cat_fd(int fd, const char *path)
 {
     ssize_t n;
 
@@ -38,6 +40,14 @@ static int cat_fd(int fd)
             off += w;
         }
     }
+    if (n < 0) {
+        const char *error = strerror(errno);
+
+        say("cat: ", path);
+        say(": ", error);
+        say("", "\n");
+        return 1;
+    }
     return 0;
 }
 
@@ -46,8 +56,8 @@ static int cat_fd(int fd)
  *
  * Report an open failure and continue with later operands. Complete short
  * writes; report a write returning zero or an error and stop copying.
- * Return 1 on these failures, otherwise 0. Read errors end the current
- * input silently, and close errors do not affect the status.
+ * Report a read error and stop copying. Return 1 on these failures,
+ * otherwise 0. Close errors do not affect the status.
  */
 int main(int argc, char *argv[])
 {
@@ -55,7 +65,7 @@ int main(int argc, char *argv[])
     int status = 0;
 
     if (argc == 1) {
-        return cat_fd(STDIN_FILENO);
+        return cat_fd(STDIN_FILENO, "standard input");
     }
     for (i = 1; i < argc; ++i) {
         int fd = open(argv[i], O_RDONLY);
@@ -65,7 +75,7 @@ int main(int argc, char *argv[])
             status = 1;
             continue;
         }
-        if (cat_fd(fd) != 0) {
+        if (cat_fd(fd, argv[i]) != 0) {
             close(fd);
             return 1;
         }

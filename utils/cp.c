@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
+#include <string.h>
 
 #define BUFFER_SIZE 4096
 static char buffer[BUFFER_SIZE];
@@ -16,12 +18,13 @@ static char buffer[BUFFER_SIZE];
  * destination is created with mode 0666 less the umask.
  *
  * The status is 1 for a usage error, a file that cannot be opened, or a
- * failed write. A read error ends the copy with status 0 and no message, and
- * a failed close does not change the status.
+ * failed read or write. A read error is reported with the source path.
+ * A failed close does not change the status.
  */
 int main(int argc, char *argv[])
 {
     int fd_src, fd_dest;
+    int status = 0;
     ssize_t n;
 
     if (argc != 3) {
@@ -54,8 +57,12 @@ int main(int argc, char *argv[])
             off += w;
         }
     }
+    if (n < 0) {
+        fprintf(stderr, "cp: %s: %s\n", argv[1], strerror(errno));
+        status = 1;
+    }
     close(fd_src);
     close(fd_dest);
 
-    return 0;
+    return status;
 }

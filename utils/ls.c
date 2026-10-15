@@ -8,6 +8,8 @@
 
 #include <stdio.h>
 #include <dirent.h>
+#include <errno.h>
+#include <string.h>
 
 /**
  * Print one entry's line.
@@ -37,14 +39,15 @@ static void print_entry(const char *name, unsigned char d_type)
 
 /**
  * List the directory. The status is 1, with a message, when it cannot be
- * opened, and 0 otherwise; an error while reading ends the list early with
- * status 0.
+ * opened or read, and 0 otherwise. A read error is reported with the path.
+ * A failed close does not change the status.
  */
 int main(int argc, char *argv[])
 {
     const char *dir_path = (argc > 1) ? argv[1] : ".";
     DIR *dir;
     struct dirent *de;
+    int status = 0;
 
     dir = opendir(dir_path);
     if (dir == NULL) {
@@ -52,12 +55,21 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    while ((de = readdir(dir)) != NULL) {
+    for (;;) {
+        errno = 0;
+        de = readdir(dir);
+        if (de == NULL) {
+            break;
+        }
         if (de->d_name[0] != '.') {
             print_entry(de->d_name, de->d_type);
         }
     }
+    if (errno != 0) {
+        fprintf(stderr, "ls: %s: %s\n", dir_path, strerror(errno));
+        status = 1;
+    }
 
     closedir(dir);
-    return 0;
+    return status;
 }
