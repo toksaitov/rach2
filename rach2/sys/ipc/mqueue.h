@@ -30,6 +30,13 @@ struct ipcns;
  * descriptor, a waiter or an open of its file has it. */
 void mq_ns_gone(const struct ipcns *ns);
 
+struct fd_entry;
+struct vfs_statfs;
+/** Fill `st` with the statfs of the mqueue file system and return 1 when
+ * `e` is the descriptor of a queue, as mq_open makes it; return 0 for any
+ * other descriptor. */
+int mq_fd_statfs(const struct fd_entry *e, struct vfs_statfs *st);
+
 struct vfs_type;
 /** The type of the mqueue file system, which lists the queues of the IPC
  * namespace that mounted it as the files of one directory. */

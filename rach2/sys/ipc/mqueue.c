@@ -1096,6 +1096,14 @@ static int mqfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
     return 0;
 }
 
+int mq_fd_statfs(const struct fd_entry *e, struct vfs_statfs *st)
+{
+    if (!e || e->ops != &mq_ops) {
+        return 0;
+    }
+    return mqfs_statfs(NULL, st) == 0;
+}
+
 /** A mount lists the queues of its mounter's IPC namespace, the first one's
  * for the permanent mount the kernel makes at boot. */
 static int mqfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,

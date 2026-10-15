@@ -414,14 +414,17 @@ long ksys_statfs(const char __user *upath, struct user_statfs __user *out);
  * file system descriptor `fd` is open on; 0 or a negative errno, -EBADF for a
  * descriptor that is not open. The caller has refused a NULL `out`.
  *
- * The descriptor's kind decides which mount answers. A /proc file's descriptor
- * answers proc's, or sysfs's for a /sys file, and a /sys directory's sysfs's.
- * An O_PATH descriptor on a synthetic leaf answers devfs's for a device or a
- * pty slave, sysfs's for a /sys node, and proc's for any other. A device, the
- * console, a pty master and any other synthetic directory, /proc and /proc/PID
- * among them, answer devfs's. A file or a directory of a mounted volume answers
- * with the volume's own statfs, and one of the KRFFS boot root with KRFFS's.
- * Any other descriptor, a socket, a pipe or a pty slave among them, is -ENOSYS.
+ * The descriptor's kind decides which file system answers. A file, a
+ * directory or a FIFO of a mounted volume answers with the volume's own
+ * statfs, and one of the KRFFS boot root with KRFFS's. A /proc file answers
+ * proc's, or sysfs's for a /sys file; a synthetic directory, and an O_PATH
+ * descriptor on a synthetic leaf, answer with the magic of the mount the
+ * node is in (`statfs_magic_for_kind`), as statfs of its path does. A
+ * device, the console, a pty master or slave, the mouse and the framebuffer
+ * answer devfs's, a device opened by a device node on a volume too. The rest
+ * answer as Linux does: a pipe pipefs's, a socket sockfs's, a namespace file
+ * nsfs's, a message queue mqueue's, and any other anonymous descriptor, an
+ * eventfd or an epoll set among them, the anonymous inode file system's.
  */
 long ksys_fstatfs(int fd, struct user_statfs __user *out);
 

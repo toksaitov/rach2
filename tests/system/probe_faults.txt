@@ -1300,6 +1300,27 @@ new
     dst->flags = entry->flags & ~(uint32_t)(FD_FLAG_CLOEXEC | FD_FLAG_PATH);
 end
 
+fault fstatfs-proc-dir-devfs
+probe statfsmusl
+file rach2/sys/syscall_fs.c
+expect STATFSMUSL FAIL (/proc:
+old
+        return statfs_fill(out, sd ? statfs_magic_for_kind(sd->kind) : STATFS_MAGIC_DEVFS);
+new
+        return statfs_fill(out, sd && sd->kind == VNODE_SYS_DIR ? STATFS_MAGIC_SYSFS
+                                                                : STATFS_MAGIC_DEVFS);
+end
+
+fault fstatfs-anon-devfs
+probe statfsmusl
+file rach2/sys/syscall_fs.c
+expect STATFSMUSL FAIL (an eventfd:
+old
+        return statfs_fill(out, nsfs_ns(e) ? STATFS_MAGIC_NSFS : STATFS_MAGIC_ANON);
+new
+        return statfs_fill(out, nsfs_ns(e) ? STATFS_MAGIC_NSFS : STATFS_MAGIC_DEVFS);
+end
+
 fault mremap-shrink-keeps-tail
 probe mapmusl
 file rach2/sys/syscall_proc.c

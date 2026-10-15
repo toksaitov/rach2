@@ -31,6 +31,7 @@
 #include "fs/lock.h"
 #include "fs/pathbuf.h"
 #include "ipc/pipe.h"
+#include "ipc/mqueue.h"
 #include "io/poll.h"
 #include "tty/tty.h"
 #include "tty/pty.h"
@@ -6463,11 +6464,13 @@ long sys_lstat64(isr_params_t *params)
 
 #define STATFS_BSIZE 1024u
 
-/* The magic numbers statfs reports for the KRFFS boot root and for /proc,
- * /dev and /sys; a mounted volume, the tmpfs at /dev/shm among them,
- * answers with its own statfs. The synthetic ones have Linux's numbers, so
- * a program that recognises them finds what it expects; KRFFS has no
- * assigned number and reports its own name. */
+/* The magic numbers statfs reports for the KRFFS boot root, for /proc,
+ * /dev and /sys, and for the file systems Linux keeps the objects of pipes,
+ * sockets, namespace files and other anonymous descriptors on; a mounted
+ * volume, the tmpfs at /dev/shm among them, answers with its own statfs.
+ * The synthetic ones have Linux's numbers, so a program that recognises
+ * them finds what it expects; KRFFS has no assigned number and reports its
+ * own name. */
 #define STATFS_MAGIC_KRFFS 0x4B524646u /* "KRFF" */
 
 #define STATFS_MAGIC_PROC 0x9FA0u
@@ -6475,17 +6478,24 @@ long sys_lstat64(isr_params_t *params)
 #define STATFS_MAGIC_DEVFS 0x1373u
 #define STATFS_MAGIC_SYSFS 0x62656572u
 
+#define STATFS_MAGIC_PIPEFS 0x50495045u
+#define STATFS_MAGIC_SOCKFS 0x534F434Bu
+#define STATFS_MAGIC_NSFS   0x6E736673u
+#define STATFS_MAGIC_ANON   0x09041934u
+
 /**
- * Copy out to `out` the statfs of the KRFFS boot root or of a synthetic
- * mount, by its `magic`; 0, or -EFAULT. A mounted volume answers from its
- * own statfs (`statfs_fill_mount`).
+ * Copy out to `out` the statfs of the KRFFS boot root, of a synthetic
+ * mount, or of the file system of a pipe, a socket or an anonymous
+ * descriptor, by its `magic`; 0, or -EFAULT. A mounted volume answers from
+ * its own statfs (`statfs_fill_mount`).
  *
  * Only the boot root has blocks: the size of its region and the usable
- * bytes of its free nodes, in units of STATFS_BSIZE. A synthetic mount
- * reports its magic and no blocks, which is what it has and what Linux
- * reports for /proc, /dev and /sys. `f_files` and `f_ffree` are 0, which a
- * reader takes as not counted, since KRFFS keeps no count of inodes, and
- * `f_namelen` is KRFFS's longest name for all of them.
+ * bytes of its free nodes, in units of STATFS_BSIZE. Every other magic
+ * reports no blocks, which is what Linux reports for /proc, /dev and /sys
+ * and for pipefs, sockfs, nsfs and the anonymous inode file system.
+ * `f_files` and `f_ffree` are 0, which a reader takes as not counted, since
+ * KRFFS keeps no count of inodes, and `f_namelen` is KRFFS's longest name
+ * for all of them.
  */
 static int32_t statfs_fill(struct user_statfs __user *out, uint32_t magic)
 {
@@ -6515,32 +6525,40 @@ static int32_t statfs_fill(struct user_statfs __user *out, uint32_t magic)
     return 0;
 }
 
-/** Copy out to `out` the statfs of the mounted volume `m`, from its type's
- * statfs, with the free blocks only a privileged writer takes left out of
- * `f_bavail`; 0, the type's error, or -EFAULT. */
-static int32_t statfs_fill_mount(struct user_statfs __user *out, struct vfs_mount *m)
+/** Copy out to `out` the statfs a file system type gave in `vs`, with the
+ * free blocks only a privileged writer takes left out of `f_bavail`; 0, or
+ * -EFAULT. */
+static int32_t statfs_put(struct user_statfs __user *out, const struct vfs_statfs *vs)
 {
     struct user_statfs st;
+
+    k_memset(&st, 0, sizeof(st));
+    st.f_type = vs->magic;
+    st.f_bsize = vs->bsize;
+    st.f_frsize = vs->bsize;
+    st.f_blocks = vs->blocks;
+    st.f_bfree = vs->bfree;
+    st.f_bavail = vs->bfree > vs->reserved ? vs->bfree - vs->reserved : 0;
+    st.f_files = vs->files;
+    st.f_ffree = vs->ffree;
+    st.f_namelen = vs->namelen;
+    if (copy_to_user(out, &st, sizeof(st)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/** Copy out to `out` the statfs of the mounted volume `m`, from its type's
+ * statfs (`statfs_put`); 0, the type's error, or -EFAULT. */
+static int32_t statfs_fill_mount(struct user_statfs __user *out, struct vfs_mount *m)
+{
     struct vfs_statfs vs;
     int rc = vfs_statfs(m, &vs);
 
     if (rc != 0) {
         return rc;
     }
-    k_memset(&st, 0, sizeof(st));
-    st.f_type = vs.magic;
-    st.f_bsize = vs.bsize;
-    st.f_frsize = vs.bsize;
-    st.f_blocks = vs.blocks;
-    st.f_bfree = vs.bfree;
-    st.f_bavail = vs.bfree > vs.reserved ? vs.bfree - vs.reserved : 0;
-    st.f_files = vs.files;
-    st.f_ffree = vs.ffree;
-    st.f_namelen = vs.namelen;
-    if (copy_to_user(out, &st, sizeof(st)) != 0) {
-        return -EFAULT;
-    }
-    return 0;
+    return statfs_put(out, &vs);
 }
 
 /** The magic of the mount a synthetic node of `kind` belongs to: /dev's,
@@ -6597,39 +6615,56 @@ long ksys_statfs(const char __user *upath, struct user_statfs __user *out)
 long ksys_fstatfs(int fd, struct user_statfs __user *out)
 {
     fd_entry_t *e;
+    const struct open_file *ofd;
+    struct vfs_statfs vs;
 
     e = fd_get(current_proc->fds, fd);
     if (!e) {
         return -EBADF;
     }
-    if (e->type == FD_TYPE_PROC) {
-        return statfs_fill(out, procfs_fd_is_sys(e) ? STATFS_MAGIC_SYSFS : STATFS_MAGIC_PROC);
-    }
-    if (e->type == FD_TYPE_SYNTH_DIR && e->priv &&
-        ((const struct synth_dir *)e->priv)->kind == VNODE_SYS_DIR) {
-        return statfs_fill(out, STATFS_MAGIC_SYSFS);
-    }
-    if (e->type == FD_TYPE_SYNTH_PATH) {
-        const struct vpath *vp = (const struct vpath *)e->priv;
-        int dev = vp && (vp->kind == VNODE_DEV || vp->kind == VNODE_PTS);
-        uint32_t magic = dev ? STATFS_MAGIC_DEVFS : STATFS_MAGIC_PROC;
-
-        if (synth_is_sys(vp)) {
-            magic = STATFS_MAGIC_SYSFS;
+    ofd = e->ofd;
+    switch (e->type) {
+    case FD_TYPE_FILE:
+    case FD_TYPE_DIR:
+    case FD_TYPE_PIPE:
+        if (ofd && ofd->vmnt && !mnt_is_root(ofd->vmnt)) {
+            return statfs_fill_mount(out, ofd->vmnt);
         }
-        return statfs_fill(out, magic);
+        if (e->type == FD_TYPE_PIPE && !(ofd && ofd->vmnt)) {
+            return statfs_fill(out, STATFS_MAGIC_PIPEFS);
+        }
+        return statfs_fill(out, STATFS_MAGIC_KRFFS);
+    case FD_TYPE_PROC:
+        return statfs_fill(out, procfs_fd_is_sys(e) ? STATFS_MAGIC_SYSFS : STATFS_MAGIC_PROC);
+    case FD_TYPE_SYNTH_DIR: {
+        const struct synth_dir *sd = (const struct synth_dir *)e->priv;
+
+        return statfs_fill(out, sd ? statfs_magic_for_kind(sd->kind) : STATFS_MAGIC_DEVFS);
     }
-    if (e->type == FD_TYPE_DEVICE || e->type == FD_TYPE_CONSOLE || e->type == FD_TYPE_PTM ||
-        e->type == FD_TYPE_SYNTH_DIR) {
+    case FD_TYPE_SYNTH_PATH: {
+        const struct vpath *vp = (const struct vpath *)e->priv;
+
+        return statfs_fill(out, vp ? statfs_magic_for_kind(vp->kind) : STATFS_MAGIC_PROC);
+    }
+    case FD_TYPE_SOCKET:
+    case FD_TYPE_UNIX:
+        return statfs_fill(out, STATFS_MAGIC_SOCKFS);
+    case FD_TYPE_ANON:
+        if (mq_fd_statfs(e, &vs)) {
+            return statfs_put(out, &vs);
+        }
+        return statfs_fill(out, nsfs_ns(e) ? STATFS_MAGIC_NSFS : STATFS_MAGIC_ANON);
+    case FD_TYPE_CONSOLE:
+    case FD_TYPE_FRAMEBUFFER:
+    case FD_TYPE_MOUSE:
+    case FD_TYPE_DEVICE:
+    case FD_TYPE_PTM:
+    case FD_TYPE_PTS:
         return statfs_fill(out, STATFS_MAGIC_DEVFS);
+    case FD_TYPE_NONE:
+    default:
+        return -EBADF;
     }
-    if (e->type != FD_TYPE_FILE && e->type != FD_TYPE_DIR) {
-        return -ENOSYS;
-    }
-    if (e->ofd && e->ofd->vmnt && !mnt_is_root(e->ofd->vmnt)) {
-        return statfs_fill_mount(out, e->ofd->vmnt);
-    }
-    return statfs_fill(out, STATFS_MAGIC_KRFFS);
 }
 
 /**

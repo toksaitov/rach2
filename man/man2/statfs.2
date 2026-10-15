@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd October 15, 2026
 .Dt STATFS 2
 .Os
 .Sh NAME
@@ -99,32 +99,47 @@ count is maintained as allocation changes.
 Magic 0x9fa0, block unit 1024, and zero block counts.
 .It Pa /dev
 Magic 0x1373, block unit 1024, and zero block counts.
+.Pa /dev/pts
+is part of it.
+.It Pa /sys
+Magic 0x62656572, block unit 1024, and zero block counts.
+.It mqueue
+Magic 0x19800202, block unit 4096, and zero block counts.
 .El
 .Pp
-For
-.Fn fstatfs ,
-proc-file descriptors report the proc values.
-Device, console, pseudo-terminal master, and synthetic directory
-descriptors report the devfs values.
-This includes synthetic directory descriptors under
-.Pa /proc .
-A descriptor opened with
-.Dv O_PATH
-on a
+.Fn fstatfs
+of a descriptor opened by a path reports what
+.Fn statfs
+of that path reports: a file, a directory or a FIFO reports its mount's
+values, and a file or a directory of
+.Pa /proc ,
 .Pa /dev
-node reports the devfs values, and one on a
-.Pa /proc
-node that is not a directory the proc values; one on a
-.Pa /proc
-directory is a synthetic directory descriptor and reports the devfs
-values, as above.
-Ordinary file and directory descriptors report their mount's values,
-those opened with
+or
+.Pa /sys
+that file system's, those opened with
 .Dv O_PATH
 included.
-Other descriptor types, including pipes, sockets, and pseudo-terminal
-slaves, return
-.Er ENOSYS .
+An
+.Dv O_PATH
+descriptor on the link
+.Pa /dev/log ,
+opened with
+.Dv O_NOFOLLOW ,
+reports the devfs values, as Linux's devtmpfs does.
+A device, the console, a pseudo-terminal master or slave, the mouse and
+the framebuffer report the devfs values, a device opened by a device node
+on another file system too.
+.Pp
+A descriptor with no path reports the file system Linux keeps its object
+on, with block unit 1024 and zero block counts: a pipe end pipefs's magic
+0x50495045, a socket sockfs's 0x534f434b, a namespace file of
+.Pa /proc/PID/ns
+nsfs's 0x6e736673, and any other anonymous descriptor, such as an eventfd,
+an epoll set, a timerfd, an inotify instance or a signalfd, the anonymous
+inode file system's 0x09041934.
+A message queue that
+.Xr mq_open 2
+returns reports the mqueue values above.
 .Ss System call interface
 The i386 kernel calls are
 .Nm statfs64
@@ -180,6 +195,13 @@ On failure they return -1 and set
 The kernel calls return negative error numbers on failure.
 .Sh EXAMPLES
 The default suite's
+.Pa tests/musl/statfsmusl.c
+checks that
+.Fn fstatfs
+of each kind of descriptor reports the magic above, and the one
+.Fn statfs
+reports for the path it was opened by.
+Its
 .Pa tests/vfsprobe.c
 calls
 .Nm statfs64
@@ -217,8 +239,6 @@ The path is empty or, on an ordinary file system, a required component
 does not exist.
 .It Bq Er ENOMEM
 A node needed for path resolution cannot be allocated.
-.It Bq Er ENOSYS
-The descriptor type has no file-system statistics.
 .It Bq Er ENOTDIR
 A path component is not a directory, or a path that ends in a slash or
 in

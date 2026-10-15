@@ -104,10 +104,11 @@ static const char *const PROBES[] = {
     /* The file calls GNU libc makes: paths of PATH_MAX bytes, the
        descriptor forms of the calls that take a path, the namespace
        calls through a directory descriptor, positioned reads and writes,
-       truncation by path, O_PATH descriptors, lchown, and the entry types
-       getdents64 reports. */
+       truncation by path, O_PATH descriptors, lchown, the entry types
+       getdents64 reports, and the file system fstatfs names for each kind
+       of descriptor. */
     "musl/pathmaxmusl", "musl/fdcallmusl", "musl/atcallmusl", "musl/preadmusl", "musl/truncmusl",
-    "musl/opathmusl", "musl/lchownmusl", "musl/direntmusl",
+    "musl/opathmusl", "musl/lchownmusl", "musl/direntmusl", "musl/statfsmusl",
     /* The process calls static GNU programs make, each group through the
        libc that has them: the CPU time the kernel charges, the clocks, how a
        process is named and scheduled, waitid, prctl, the stack limit, and the
