@@ -194,24 +194,6 @@ void write32be(uint8_t *p, uint32_t v)
     p[3] = (uint8_t)v;
 }
 
-/* The interrupt flag's save and restore, which on this host is a counter.
-   Neither ethernet.c nor ip.c calls them, and no row reads the counter. */
-static unsigned irq_depth;
-
-/** Count a save of the interrupt flag and return 0. */
-unsigned int kirq_save(void)
-{
-    irq_depth++;
-    return 0;
-}
-
-/** Count a restore of the interrupt flag. */
-void kirq_restore(unsigned int flags)
-{
-    (void)flags;
-    irq_depth--;
-}
-
 /* The interface the cases run on, with the machine's own address so that a
  * datagram addressed to it is taken, and a second card on another network,
  * present only while `ifaces` is 2; `test_broadcast_iface` fills it in. */
