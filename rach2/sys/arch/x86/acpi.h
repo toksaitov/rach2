@@ -52,6 +52,8 @@ struct acpi_cpu {
 #define ACPI_CPU_ENABLED        0x1u
 #define ACPI_CPU_ONLINE_CAPABLE 0x2u
 
+/* An I/O APIC of the MADT: its APIC identity, the physical address of its
+ * registers, and the global system interrupt of its first input. */
 struct acpi_ioapic {
     uint8_t id;
     uint32_t address;
@@ -129,14 +131,15 @@ struct acpi_table {
 #define ACPI_PM1_SLP_TYP     (7u << ACPI_PM1_SLP_TYP_POS)
 #define ACPI_PM1_SLP_EN      (1u << 13)
 
-/* The record. Zero where a table was absent or refused. */
+/* The record. Zero where a table was absent or refused; `madt`, `fadt`,
+ * `s5` and `hpet` are 1 when their table, or the \_S5 package, was read. */
 struct acpi_info {
-    int found;
-    uint64_t rsdp;
-    uint8_t revision;
+    int found;        /* an RSDP passed its checks */
+    uint64_t rsdp;    /* its physical address */
+    uint8_t revision; /* its revision: 2 and up have an XSDT */
     char oem[7];
-    int xsdt;
-    uint64_t root;
+    int xsdt;      /* the root table is the XSDT, not the RSDT */
+    uint64_t root; /* the root table's physical address */
     int ntables;
     struct acpi_table tables[ACPI_MAX_TABLES];
 
@@ -162,10 +165,10 @@ struct acpi_info {
     uint32_t smi_cmd;
     uint8_t acpi_enable;
     struct acpi_gas pm1a_cnt, pm1b_cnt, pm_timer;
-    int pm_timer_bits;
+    int pm_timer_bits; /* the PM timer's width: 24, or 32 by TMR_VAL_EXT */
     struct acpi_gas reset_reg;
     uint8_t reset_value;
-    int reset_supported;
+    int reset_supported;           /* RESET_REG_SUP, and a register given */
     struct acpi_gas sleep_control; /* a hardware-reduced machine's PM1 */
     uint16_t boot_flags;
     uint8_t century; /* the CMOS register of the century, 0 for none */
@@ -220,8 +223,8 @@ int acpi_s5_find(const uint8_t *aml, uint32_t len, uint8_t *typa, uint8_t *typb)
 /* Where an interrupt line arrives at the I/O APICs, and how it signals. */
 struct acpi_route {
     uint32_t gsi;
-    int level;
-    int low;
+    int level; /* level-triggered; 0 for an edge */
+    int low;   /* active low; 0 for active high */
 };
 
 /**
@@ -237,7 +240,9 @@ int acpi_isa_route(const struct acpi_info *a, int line, int pci, struct acpi_rou
 /**
  * Read the tables, from the boot record's RSDP when `rsdp` is not 0 and
  * from the BIOS area otherwise, into the record `acpi_get` returns, and log
- * what was found as `acpi: tables: ...` and a line for each table read.
+ * what was found as `acpi: tables: ...` and a line for each table read. The
+ * boot calls it once, with paging on, since every table is reached through
+ * `map_mmio`.
  */
 void acpi_init(uint64_t rsdp);
 
@@ -245,11 +250,16 @@ void acpi_init(uint64_t rsdp);
 const struct acpi_info *acpi_get(void);
 
 /**
- * Read or write the register `g` describes, in its own space and width: an
- * I/O port, memory, or PCI configuration space of bus 0. 0, or -1 for a
- * register this kernel cannot reach.
+ * Read the register `g` describes into `*value`, in its own space and
+ * width: an I/O port, memory, or PCI configuration space of bus 0. A PCI
+ * register is read as the doubleword that holds it, shifted down to its
+ * offset, with the bytes above it left in. 0, or -1 for a register this
+ * kernel cannot reach.
  */
 int acpi_gas_read(const struct acpi_gas *g, uint32_t *value);
+
+/** Write `value` to the register `g` describes, in its own space and
+ * width: 0, or -1 for a register this kernel cannot reach. */
 int acpi_gas_write(const struct acpi_gas *g, uint32_t value);
 
 #endif /* _ACPI_H_ */

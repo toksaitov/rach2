@@ -23,27 +23,31 @@
 
 #define ACPI_HEADER_LEN 36
 
+/** The little-endian 16-bit value at `p`. */
 static uint32_t get16(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8);
 }
 
+/** The little-endian 32-bit value at `p`. */
 static uint32_t get32(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+/** The little-endian 64-bit value at `p`. */
 static uint64_t get64(const uint8_t *p)
 {
     return (uint64_t)get32(p) | ((uint64_t)get32(p + 4) << 32);
 }
 
-/** The low and high halves of a physical address, for the log. */
+/** The low half of the physical address `v`, for the log. */
 static uint32_t lo32(uint64_t v)
 {
     return (uint32_t)(v & 0xFFFFFFFFu);
 }
 
+/** The high half of the physical address `v`, for the log. */
 static uint32_t hi32(uint64_t v)
 {
     return (uint32_t)(v >> 32);
@@ -74,8 +78,9 @@ int acpi_checksum_ok(const uint8_t *p, uint32_t len)
     return sum == 0;
 }
 
-/** A table's signature as text, with a byte that is not a letter, a digit
- * or a space shown as `?`, so a corrupt header cannot write to the log. */
+/** A table's signature as text, with a byte that is not a letter, a digit,
+ * a space or an underscore shown as `?`, so that a corrupt header puts no
+ * control byte in the log. */
 static void sig_text(const uint8_t *p, char *out)
 {
     int i;
@@ -113,6 +118,8 @@ static int rsdp_valid(const uint8_t *p, uint32_t avail)
     return len >= 36 && len <= avail && acpi_checksum_ok(p, len);
 }
 
+/** The physical address of the first RSDP that passes on a 16-byte boundary
+ * of the `len` bytes at `base`, or 0. */
 static uint64_t rsdp_scan(acpi_map_fn map, uint64_t base, uint32_t len)
 {
     const uint8_t *p = map(base, len);
@@ -136,8 +143,7 @@ uint64_t acpi_rsdp_search(acpi_map_fn map)
     uint32_t ebda;
 
     if (bda) {
-        /* The BIOS data area's word at 0x40E is the EBDA's real-mode
-         * segment. */
+        /* The BIOS data area's word at 0x40E: the EBDA's segment. */
         ebda = get16(bda) << 4;
         if (ebda >= 0x400u && ebda + 1024u <= 0xA0000u) {
             found = rsdp_scan(map, ebda, 1024);
@@ -191,6 +197,7 @@ static const uint8_t *table_read(acpi_map_fn map, uint64_t phys, const char *wan
     return p;
 }
 
+/** Read the 12-byte Generic Address Structure at `p` into `g`. */
 static void gas_read(const uint8_t *p, struct acpi_gas *g)
 {
     g->space = p[0];
@@ -230,6 +237,12 @@ static void gas_extended(const uint8_t *t, uint32_t len, uint32_t off, struct ac
     }
 }
 
+/**
+ * Add a processor to the record, once for each APIC identity, since one may
+ * be listed by both an xAPIC and an x2APIC entry. With the table full the
+ * entry counts as dropped, and an enabled processor takes the place of the
+ * first one that is not, so that the processors that can run are kept.
+ */
 static void add_cpu(struct acpi_info *a, uint32_t apic_id, uint32_t uid, uint32_t flags)
 {
     int i;
@@ -258,6 +271,8 @@ static void add_cpu(struct acpi_info *a, uint32_t apic_id, uint32_t uid, uint32_
     a->cpus[i].flags = flags;
 }
 
+/** Add a local APIC's NMI input to the record; past ACPI_MAX_NMIS it counts
+ * as dropped. */
 static void add_nmi(struct acpi_info *a, uint32_t uid, uint16_t flags, uint8_t lint)
 {
     if (a->nnmis >= ACPI_MAX_NMIS) {
@@ -270,7 +285,8 @@ static void add_nmi(struct acpi_info *a, uint32_t uid, uint16_t flags, uint8_t l
     a->nnmis++;
 }
 
-/* The least length of each MADT entry type this kernel reads. */
+/** The least length of an MADT entry of `type` that this kernel reads, and
+ * 2 for a type it passes over. */
 static uint32_t madt_entry_min(uint8_t type)
 {
     switch (type) {
@@ -404,6 +420,12 @@ static void madt_parse(struct acpi_info *a, const uint8_t *t, uint32_t len)
 #define FADT_SLEEP_CONTROL 244
 #define FADT_MIN_LEN       116
 
+/**
+ * Read the FADT `t` of `len` bytes into the record: the fields of ACPI 1.0,
+ * then, as the table's revision and length allow, the boot flags, the reset
+ * register and the 64-bit forms of the registers, which take the place of
+ * the 32-bit ones where they are given.
+ */
 static void fadt_parse(struct acpi_info *a, const uint8_t *t, uint32_t len)
 {
     a->fadt = 1;
@@ -419,8 +441,7 @@ static void fadt_parse(struct acpi_info *a, const uint8_t *t, uint32_t len)
     a->century = t[FADT_CENTURY];
     a->fadt_flags = get32(t + FADT_FLAGS);
     a->pm_timer_bits = (a->fadt_flags & ACPI_FADT_TMR_VAL_EXT) ? 32 : 24;
-    /* IAPC_BOOT_ARCH came with ACPI 2.0, the FADT's revision 3; before it
-     * the two bytes are reserved. */
+    /* IAPC_BOOT_ARCH is reserved before FADT revision 3, ACPI 2.0's. */
     if (a->fadt_revision >= 3) {
         a->boot_flags = (uint16_t)get16(t + FADT_BOOT_ARCH);
     }
@@ -445,6 +466,9 @@ static void fadt_parse(struct acpi_info *a, const uint8_t *t, uint32_t len)
 
 #define HPET_MIN_LEN 56
 
+/** Read the HPET table `t`, at `phys`, into the record: the event timer
+ * block's ID, its registers' address and its number. A table whose
+ * registers are not in memory is logged and left out. */
 static void hpet_parse(struct acpi_info *a, const uint8_t *t, uint64_t phys)
 {
     struct acpi_gas g;
@@ -463,6 +487,8 @@ static void hpet_parse(struct acpi_info *a, const uint8_t *t, uint64_t phys)
 
 #define MCFG_MIN_LEN 44
 
+/** Read the MCFG's windows into the record, at most ACPI_MAX_ECAM; one with
+ * no base, or with its last bus below its first, is passed over. */
 static void mcfg_parse(struct acpi_info *a, const uint8_t *t, uint32_t len)
 {
     uint32_t off;
@@ -484,6 +510,9 @@ static void mcfg_parse(struct acpi_info *a, const uint8_t *t, uint32_t len)
     }
 }
 
+/** Note a table in the record: its signature as `sig_text` shows it, its
+ * address and length, and whether it passed its checks. Past
+ * ACPI_MAX_TABLES it is not noted. */
 static void table_note(struct acpi_info *a, const uint8_t *sig, uint64_t phys, uint32_t len, int ok)
 {
     struct acpi_table *t;
@@ -498,7 +527,8 @@ static void table_note(struct acpi_info *a, const uint8_t *sig, uint64_t phys, u
     t->ok = ok;
 }
 
-/** One table of the root's list: read, noted, and parsed by its kind. */
+/** One table of the root's list: read, noted, and parsed by its kind; only
+ * the first table of each kind is parsed. */
 static void table_take(acpi_map_fn map, struct acpi_info *a, uint64_t phys)
 {
     const uint8_t *head = map(phys, ACPI_HEADER_LEN);
@@ -770,6 +800,13 @@ static struct {
 } windows[ACPI_WINDOWS];
 static int nwindows, windows_full;
 
+/**
+ * The kernel's `acpi_map_fn`: the `len` bytes at `phys` through a window
+ * already made when one covers them, otherwise through a new window of
+ * whole pages from `map_mmio`. NULL for no bytes, a range that wraps, one
+ * past 4 GiB on i686, one `map_mmio` cannot map, or a new window once all
+ * are made.
+ */
 static const uint8_t *kernel_map(uint64_t phys, uint32_t len)
 {
     uint64_t start, end;
@@ -907,6 +944,9 @@ static uintptr_t gas_memory(const struct acpi_gas *g, uint32_t bytes)
     return (uintptr_t)p;
 }
 
+/** The bytes of one access to the register `g`: by its access size when it
+ * gives one of 1 to 3 (byte, word, doubleword), otherwise the least of 1, 2
+ * and 4 that holds its bit width. */
 static uint32_t gas_bytes(const struct acpi_gas *g)
 {
     if (g->access_size >= 1 && g->access_size <= 3) {
@@ -945,8 +985,7 @@ int acpi_gas_read(const struct acpi_gas *g, uint32_t *value)
                               : (uint32_t)*(volatile uint8_t *)m;
         return 0;
     case ACPI_SPACE_PCI:
-        /* Bus 0: the device in bits 32 to 47, the function in 16 to 31, the
-         * offset in 0 to 15. */
+        /* Bus 0: device in bits 32 to 47, function 16 to 31, offset 0 to 15. */
         *value =
             pci_read_config32(0, (uint8_t)((g->address >> 32) & 0x1Fu),
                               (uint8_t)((g->address >> 16) & 0x7u), (uint8_t)(g->address & 0xFCu));

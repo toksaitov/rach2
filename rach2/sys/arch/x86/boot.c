@@ -20,11 +20,12 @@
 #include "../x86_64/mmu.h"
 #endif
 
-/* The kernel's address of the loader's physical address `pa`: the address
- * itself on i686, where paging is off until the boot turns it on, and its
- * address in the direct map on x86-64, whose loader.s maps the first 4 GiB
- * there and passes `info` there too. The kernel's own physical address of
- * its image's `va`, the address itself on i686, linked where it runs. */
+/* LOADER_PTR is the kernel's address of the loader's physical address `pa`:
+ * the address itself on i686, where paging is off until the boot turns it
+ * on, and its address in the direct map on x86-64, whose loader.s maps the
+ * first 4 GiB there and passes `info` there too. IMAGE_PHYS is the physical
+ * address of `va` in the kernel's image: less KVA_IMAGE on x86-64, and the
+ * address itself on i686, whose kernel is linked where it runs. */
 #if defined(__x86_64__)
 #define LOADER_PTR(pa) MMU_VIRT(pa)
 #define IMAGE_PHYS(va) ((uint64_t)((uintptr_t)(va) - KVA_IMAGE))
@@ -41,8 +42,8 @@ static struct boot_store store;
  * through until it loads its own. */
 static uintptr_t boot_root;
 
-/** The loader's `len` bytes at `phys`, below the 4 GiB both entries
- * reach. */
+/** The loader's `len` bytes at `phys`, through the view `LOADER_PTR`
+ * gives; NULL for address 0 or bytes past the 4 GiB both entries reach. */
 static const void *loader_reach(uint64_t phys, uint32_t len)
 {
     if (phys == 0 || phys + len > 0x100000000ULL) {
@@ -90,15 +91,13 @@ static int kernel_tables(void)
 }
 
 /**
- * The console's address of the loader's framebuffer: its physical address
- * through the loader's view of memory until the kernel's page tables are in
- * force, and from then a mapping of it in the MMIO region, made the first
- * time the console draws after. The mapping is write-combining where the
- * processor setup made `PTE_WC` so (`pat_setup`), since the console
- * and the /fb picture only write the framebuffer, and uncached writes cost
- * a bus transaction each: on the Lenovo a 960x600 picture of uncached
- * writes held Doom to 28 frames a second. A framebuffer past 4 GiB is not
- * reached.
+ * The framebuffer is reached through the loader's view of memory until the
+ * kernel's page tables are in force, and from then through a mapping in the
+ * MMIO region, made the first time the console draws after; a mapping that
+ * fails is not tried again. The mapping is write-combining where the
+ * processor setup made `PTE_WC` so (`pat_setup`), since the console and the
+ * /fb picture only write the framebuffer, and an uncached write costs a bus
+ * transaction. A framebuffer past 4 GiB is not reached.
  */
 volatile uint8_t *fbcon_window(void)
 {
@@ -129,7 +128,13 @@ volatile uint8_t *fbcon_window(void)
 
 void k_main(uint32_t magic, const void *info);
 
-/** The entry from loader.s, with the loader's magic and information. */
+/**
+ * The C entry from loader.s, on the boot processor with interrupts off:
+ * `magic` is the loader's, Multiboot's or multiboot2's, and `info` is its
+ * information, at the physical address on i686 and through the direct map
+ * on x86-64. A magic that is neither is logged, and the boot goes on with
+ * an empty record.
+ */
 void k_main(uint32_t magic, const void *info)
 {
     boot_root = arch_space_root();
