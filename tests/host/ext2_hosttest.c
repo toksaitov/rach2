@@ -3731,13 +3731,12 @@ static uint64_t dirty_image(const char *img, const char *script)
 }
 
 /**
- * Make a dirty volume with `script` applied, and require it to mount
- * read-only with `fault` named by the check, and to fail a create with
- * `EROFS` with the error bit set on disk.
+ * Require the dirty volume `img`, of `bytes`, to mount read-only with
+ * `fault` named by the check, and to fail a create with `EROFS` with the
+ * error bit set on disk.
  */
-static void fault_row(const char *img, const char *script, const char *fault, const char *what)
+static void fault_on(const char *img, uint64_t bytes, const char *fault, const char *what)
 {
-    uint64_t bytes = dirty_image(img, script);
     int rc;
 
     use_image(img, bytes);
@@ -3756,6 +3755,13 @@ static void fault_row(const char *img, const char *script, const char *fault, co
     if (rc == 0 || mnt.root) {
         unmount_rw();
     }
+}
+
+/** Make a dirty volume with `script` applied, and require it to fault as
+ * `fault_on` does. */
+static void fault_row(const char *img, const char *script, const char *fault, const char *what)
+{
+    fault_on(img, dirty_image(img, script), fault, what);
 }
 
 /**
@@ -3913,6 +3919,147 @@ static void dirty_rows(void)
           "a read-only mount of a dirty volume is not checked");
     unmount_image();
     check(image_equals_snap(img, bytes), "and writes nothing");
+}
+
+/* PROFILE with `ext_attr`, for volumes whose inodes have attribute blocks. */
+#define ATTR_PROFILE                                                                  \
+    "sparse_super,large_file,filetype,^dir_index,resize_inode,ext_attr,^has_journal," \
+    "^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize"
+
+/* The attribute blocks of `attr_image`: deep.txt's, and the shared one. */
+static long attr_own, attr_shared;
+
+/**
+ * Make a tree volume with its valid bit clear and with attribute blocks as
+ * Linux writes them for 128-byte inodes: debugfs's `ea_set` gives one each
+ * to /dir/sub/deep.txt, the fast link /fast and the device /cold, and one
+ * to /many/file0.txt, which the next `names - 1` files then share, with
+ * `refs` written as its header's reference count.
+ */
+static uint64_t attr_image(const char *img, int names, unsigned refs)
+{
+    uint64_t bytes = build_image(img, 4096, 128, ATTR_PROFILE, 16, "tree");
+    unsigned char b[4] = {0, 0, 0, 0};
+    char script[512];
+    int len = 0, i;
+
+    if (!debugfs_script(img, "ssv state 0\nea_set /dir/sub/deep.txt user.a 1\n"
+                             "ea_set /fast user.a 1\nea_set /cold user.a 1\n"
+                             "ea_set /many/file0.txt user.a 1\n")) {
+        printf("ext2_hosttest: debugfs ea_set failed on %s\n", img);
+        exit(1);
+    }
+    attr_own = debugfs_number(img, "stat /dir/sub/deep.txt", "File ACL: ");
+    attr_shared = debugfs_number(img, "stat /many/file0.txt", "File ACL: ");
+    for (i = 1; i < names; i++) {
+        len += snprintf(script + len, sizeof(script) - len,
+                        "sif /many/file%d.txt file_acl %ld\nsif /many/file%d.txt i_blocks 16\n", i,
+                        attr_shared, i);
+    }
+    if (attr_own <= 0 || attr_shared <= 0 || (len > 0 && !debugfs_script(img, script))) {
+        printf("ext2_hosttest: the attribute blocks of %s were not made\n", img);
+        exit(1);
+    }
+    b[0] = (unsigned char)refs;
+    poke(img, attr_shared * 4096 + 4, b, 4);
+    return bytes;
+}
+
+/** Unlink `name` in the directory at `path`; 0, or -errno. */
+static int unlink_in(const char *path, const char *name)
+{
+    int rc;
+    void *d = walk(path, &rc);
+
+    if (!d) {
+        return rc;
+    }
+    rc = OPS->unlink(&mnt, d, name);
+    OPS->put(&mnt, d);
+    return rc;
+}
+
+/** The reference count in the header of attribute block `blk`, or -1. */
+static long attr_refs(const char *img, long blk)
+{
+    unsigned char b[4];
+
+    if (host_read(img, b, 4, blk * 4096 + 4) != 4) {
+        return -1;
+    }
+    return b[0] | (b[1] << 8) | (b[2] << 16) | ((long)b[3] << 24);
+}
+
+/**
+ * Mount volumes whose inodes have extended-attribute blocks, as Linux and
+ * `mke2fs -d` leave them, and require:
+ *
+ * - the check to count each block in its inode's `i_blocks` and to mark a
+ *   shared block once, so that a sound volume is clean;
+ * - a fast link with an attribute block to read from its pointer words;
+ * - an unlink to free an unshared block and to lower a shared block's
+ *   count, freeing it with its last inode, leaving e2fsck nothing to do;
+ * - a shared block counting more inodes than name it to mount writable
+ *   and counted, with the error bit set;
+ * - a block named by more inodes than its count, or without its header's
+ *   magic number, to mount read-only, by name.
+ */
+static void attr_rows(void)
+{
+    const char *img = fix_path("attr.ext2");
+    char linkbuf[64];
+    char script[128];
+    uint64_t bytes;
+    void *n;
+    int rc;
+
+    bytes = attr_image(img, 2, 2);
+    check(e2fsck_clean(img), "a volume with shared and unshared attribute blocks is clean");
+    use_image(img, bytes);
+    last_check[0] = 0;
+    rc = mount_rw();
+    check(rc == 0 && (mnt.flags & VFS_MS_RDONLY) == 0 && streq(last_check, "check: clean"),
+          "and its check counts every attribute block once and mounts it writable");
+    if (rc != 0) {
+        return;
+    }
+    n = walk("/fast", &rc);
+    check(n && OPS->readlink(&mnt, n, linkbuf, sizeof(linkbuf)) == 9 && streq(linkbuf, "hello.txt"),
+          "a fast link with an attribute block reads its target from the pointer words");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check(unlink_in("/dir/sub", "deep.txt") == 0 && unlink_in("/", "fast") == 0 &&
+              unlink_in("/", "cold") == 0 && unlink_in("/many", "file1.txt") == 0 &&
+              unmount_rw() == 0,
+          "files, a fast link and a device with attribute blocks unlink");
+    snprintf(script, sizeof(script), "testb %ld", attr_own);
+    check(e2fsck_clean(img) && debugfs_says(img, script, "not in use") &&
+              attr_refs(img, attr_shared) == 1,
+          "and the volume is clean, an unshared block freed and a shared one's count lowered");
+    use_image(img, bytes);
+    check(mount_rw() == 0 && unlink_in("/many", "file0.txt") == 0 && unmount_rw() == 0,
+          "the shared block's last inode unlinks");
+    snprintf(script, sizeof(script), "testb %ld", attr_shared);
+    check(e2fsck_clean(img) && debugfs_says(img, script, "not in use"),
+          "and the volume is clean with the block freed");
+
+    bytes = attr_image(img, 2, 3);
+    use_image(img, bytes);
+    last_check[0] = 0;
+    check(mount_rw() == 0 && (mnt.flags & VFS_MS_RDONLY) == 0 &&
+              streq(last_check, "check: 1 attribute blocks with counts above their inodes, kept "
+                                "for e2fsck") &&
+              unmount_rw() == 0 && disk_state(img) == 2,
+          "a shared block counting an inode too many mounts writable, counted, the error bit set");
+    fault_on(img, attr_image(img, 3, 2), "an attribute block named past its count",
+             "a shared block named by more inodes than its count mounts read-only");
+    fault_on(img, attr_image(img, 2, 1), "a block claimed twice",
+             "a block named by two inodes and counting one mounts read-only");
+    bytes = attr_image(img, 1, 1);
+    poke(img, attr_own * 4096, (const unsigned char *)"\0\0\0\0", 4);
+    fault_on(img, bytes, "an attribute block of the wrong form",
+             "an attribute block without its magic number mounts read-only");
 }
 
 /**
@@ -4096,6 +4243,7 @@ int main(int argc, char **argv)
     order_row();
     refusal_write_rows();
     dirty_rows();
+    attr_rows();
     matrix_rows();
     batch_rows();
 

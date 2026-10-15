@@ -22,7 +22,8 @@
 #define EXT2_NDIR        12u
 #define EXT2_NBLOCKS     15u
 #define EXT2_NAME_MAX    255u
-#define EXT2_FAST_LINK   60u /* the bytes of `i_block`, where a shorter target is kept */
+#define EXT2_FAST_LINK   60u         /* the bytes of `i_block`, where a shorter target is kept */
+#define EXT2_XATTR_MAGIC 0xEA020000u /* h_magic of an extended-attribute block */
 
 /* The bits of `i_flags` lsattr(1) sees, and those chattr(1) may change. */
 #define EXT2_FL_USER_VISIBLE    0x0003DFFFu
@@ -71,6 +72,7 @@ struct ext2_node {
     uint32_t atime, mtime, ctime;
     uint32_t flags;      /* i_flags, which the VFS enforces in part */
     uint32_t generation; /* i_generation, new for each inode made */
+    uint32_t file_acl;   /* i_file_acl: the extended-attribute block, or 0 */
     uint32_t add_from;   /* a directory's offset of the block where the last entry went */
     int unlinked;        /* no name left; the inode and its blocks go at the last put */
 };
@@ -441,6 +443,7 @@ static int inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n)
     n->blocks = le32(raw + 28);
     n->flags = le32(raw + 32);
     n->generation = le32(raw + 100);
+    n->file_acl = le32(raw + 104);
     for (i = 0; i < (int)EXT2_NBLOCKS; i++) {
         n->block[i] = le32(raw + 40 + i * 4);
     }
@@ -448,6 +451,16 @@ static int inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n)
         n->size |= (uint64_t)le32(raw + 108) << 32;
     }
     return 0;
+}
+
+/** Whether `n` is a fast symbolic link, its target in the pointer words:
+ * a link whose `i_blocks` counts no block but its extended-attribute
+ * block, as Linux's `ext2_inode_is_fast_symlink` decides. */
+static int fast_link(const struct ext2_mount *em, const struct ext2_node *n)
+{
+    uint32_t attr = n->file_acl ? em->block_size / 512 : 0;
+
+    return (n->mode & S_IFMT_) == S_IFLNK_ && n->blocks == attr;
 }
 
 /* ---- the nodes in memory ---- */
@@ -1058,7 +1071,7 @@ static int ext2_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t 
     if (len + 1 > cap) {
         return -ENAMETOOLONG;
     }
-    if (n->blocks == 0) {
+    if (fast_link(em, n)) {
         uint32_t i;
 
         if (len >= EXT2_FAST_LINK) {
@@ -1593,6 +1606,7 @@ static void inode_encode(const struct ext2_node *n, uint8_t *raw)
         LE32_PUT(raw + 40 + i * 4, n->block[i]);
     }
     LE32_PUT(raw + 100, n->generation);
+    LE32_PUT(raw + 104, n->file_acl);
     LE16_PUT(raw + 120, (n->uid >> 16) & 0xFFFFu);
     LE16_PUT(raw + 122, (n->gid >> 16) & 0xFFFFu);
     if ((n->mode & S_IFMT_) == S_IFREG_) {
@@ -2031,6 +2045,45 @@ static int inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir)
     }
     em->free_inodes++;
     return 0;
+}
+
+/**
+ * Drop inode `ino`'s reference to its extended-attribute block `b`, once the
+ * inode was written freed: the block is freed when the reference count in
+ * its header is 1, and the count lowered otherwise, as Linux's
+ * `ext2_xattr_delete_inode` does, so that a block several inodes share
+ * stays until the last of them goes. A block out of range, or whose header
+ * lacks the magic number or a length of one block, is left as it is with
+ * the error bit set, for e2fsck. 0, or -errno.
+ */
+static int attr_release(struct ext2_mount *em, uint32_t ino, uint32_t b)
+{
+    uint64_t at = (uint64_t)b * em->block_size;
+    uint8_t raw[12];
+    uint32_t refs;
+    int rc;
+
+    if (!data_block_ok(em, b)) {
+        klog(KLOG_WARN, "ext2", "inode %d: attribute block %d is out of range", (int)ino, (int)b);
+        mark_error(em);
+        return 0;
+    }
+    rc = read_bytes(em, at, raw, sizeof(raw));
+    if (rc != 0) {
+        return rc;
+    }
+    if (le32(raw) != EXT2_XATTR_MAGIC || le32(raw + 8) != 1) {
+        klog(KLOG_WARN, "ext2", "inode %d: attribute block %d has no valid header", (int)ino,
+             (int)b);
+        mark_error(em);
+        return 0;
+    }
+    refs = le32(raw + 4);
+    if (refs > 1) {
+        LE32_PUT(raw + 4, refs - 1);
+        return write_bytes(em, at + 4, raw + 4, 4, WRITE_THROUGH);
+    }
+    return block_free(em, b);
 }
 
 /* ---- the block map, written ---- */
@@ -3254,7 +3307,8 @@ static struct ext2_node *node_held(struct ext2_mount *em, uint32_t ino)
 /**
  * Free inode `n`, which has no name and no holder: the blocks of a regular
  * file, a directory or a long symbolic link from the end (`punch`), then
- * the inode written zeroed with its deletion time, then its bit and counts.
+ * the inode written zeroed with its deletion time, then its reference to
+ * its extended-attribute block (`attr_release`), then its bit and counts.
  * The node's `unlinked` mark is cleared. 0, or -errno.
  */
 static int release_inode(struct ext2_mount *em, struct ext2_node *n)
@@ -3263,7 +3317,7 @@ static int release_inode(struct ext2_mount *em, struct ext2_node *n)
     int rc;
 
     if ((n->mode & S_IFMT_) == S_IFREG_ || was_dir ||
-        ((n->mode & S_IFMT_) == S_IFLNK_ && n->blocks != 0)) {
+        ((n->mode & S_IFMT_) == S_IFLNK_ && !fast_link(em, n))) {
         rc = punch(em, n, 0);
         if (rc != 0) {
             return rc;
@@ -3275,6 +3329,9 @@ static int release_inode(struct ext2_mount *em, struct ext2_node *n)
         k_memset(raw, 0, sizeof(raw));
         LE32_PUT(raw + 20, now_seconds()); /* i_dtime */
         rc = write_bytes(em, inode_offset(em, n->ino), raw, sizeof(raw), 1);
+    }
+    if (rc == 0 && n->file_acl != 0) {
+        rc = attr_release(em, n->ino, n->file_acl);
     }
     if (rc != 0) {
         return rc;
@@ -4498,29 +4555,34 @@ static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
  * before it is written, under the walk lock and the shared bitmap the FAT
  * drivers use: the structural blocks are seeded into the bitmap, the tree
  * is walked from the root and every block every reached inode names is
- * marked, the inodes the inode bitmap calls used but the walk did not
- * reach are scanned as orphans, and the bitmaps are compared with the
- * marks. Nothing is repaired. Lost blocks and orphans are counted and
- * kept, held out of the allocator by the bits they still have, and the
- * error bit is set so that the volume is not marked clean again before
- * `e2fsck` has run. A fault mounts the volume read-only with the first one
- * named: a block claimed twice or out of range, an inode whose pointers do
- * not match its size or its `i_blocks`, a directory with two parents or
+ * marked, its extended-attribute block among them, the inodes the inode
+ * bitmap calls used but the walk did not reach are scanned as orphans, and
+ * the bitmaps are compared with the marks. Nothing is repaired. Lost
+ * blocks, orphans and shared attribute blocks whose reference count is
+ * above the inodes that name them are counted and kept, held out of the
+ * allocator by the bits and counts they still have, and the error bit is
+ * set so that the volume is not marked clean again before `e2fsck` has
+ * run. A fault mounts the volume read-only with the first one named: a
+ * block claimed twice or out of range, an inode whose pointers do not
+ * match its size or its `i_blocks`, an attribute block of the wrong form
+ * or named by more inodes than its count, a directory with two parents or
  * without its parent, an entry of the wrong form, a link count that does
  * not match the entries, a used block or a reached inode the bitmap calls
  * free. The group descriptors' free counts are recomputed from the bitmaps
  * rather than taken from the disk, since a crash leaves them stale.
  *
  * The walk keeps its state on the heap rather than on the stack: the node
- * of each directory level, the hard links met with their expected and
- * found counts, the reached-inode set, one bit per inode of the volume,
- * and one bitmap block; the block bitmap is the one the FAT walks share.
- * A dirty volume whose set or bitmap the free memory cannot hold, a
- * directory deeper than the levels or more hard-linked files than the
- * table mounts read-only and says which.
+ * of each directory level, the hard links and the shared attribute blocks
+ * met with their expected and found counts, the reached-inode set, one bit
+ * per inode of the volume, and one bitmap block; the block bitmap is the
+ * one the FAT walks share. A dirty volume whose set or bitmap the free
+ * memory cannot hold, a directory deeper than the levels, or more
+ * hard-linked files or shared attribute blocks than the tables hold mounts
+ * read-only and says which.
  */
 #define EXT2_CHECK_DEPTH 32  /* the directory levels the walk holds */
 #define EXT2_CHECK_LINKS 512 /* the files with more than one link it counts */
+#define EXT2_CHECK_ATTRS 512 /* the shared attribute blocks it counts */
 
 /* A file with more than one link: its inode, its link count, and the names
  * the walk has found for it. */
@@ -4529,17 +4591,27 @@ struct ext2_link {
     uint32_t expect, found;
 };
 
+/* An extended-attribute block whose header counts more than one reference:
+ * the block, that count, and the inodes the check has found naming it. */
+struct ext2_attr {
+    uint32_t block;
+    uint32_t expect, found;
+};
+
 /*
  * The check's state: the first fault and its inode; the lost blocks, the
- * orphans and the `links` entries of `link`; the inode of each directory
- * level being walked; the set of reached inodes; and one bitmap block.
+ * orphans, the shared attribute blocks counting more references than the
+ * inodes that name them (`stale`), the `links` entries of `link` and the
+ * `attrs` entries of `attr`; the inode of each directory level being
+ * walked; the set of reached inodes; and one bitmap block.
  */
 struct ext2_check {
     struct ext2_mount *em;
     const char *fault;
     uint32_t fault_ino;
-    uint32_t lost, orphans, links;
+    uint32_t lost, orphans, stale, links, attrs;
     struct ext2_link link[EXT2_CHECK_LINKS];
+    struct ext2_attr attr[EXT2_CHECK_ATTRS];
     struct ext2_node node[EXT2_CHECK_DEPTH];
     uint8_t *seen; /* `(inodes + 7) / 8` bytes */
     uint8_t bitmap[4096];
@@ -4677,22 +4749,83 @@ static int check_level(struct ext2_check *c, uint32_t ino, uint32_t b, int level
 }
 
 /**
+ * Mark the extended-attribute block inode `n` names, once however many
+ * inodes share it. Its header must have the magic number and a length of
+ * one block. A block whose reference count is 1 or less is marked as any
+ * other block is; a shared one is marked and entered in the table by its
+ * first inode, and each later inode counts toward the reference count
+ * there, more inodes than the count being a fault. 0, or -EIO with the
+ * fault recorded or for a failed read.
+ */
+static int check_attr(struct ext2_check *c, const struct ext2_node *n)
+{
+    struct ext2_mount *em = c->em;
+    uint32_t b = n->file_acl, refs, i;
+    uint8_t raw[12];
+    int rc;
+
+    if (b < em->first_data || b >= em->blocks) {
+        return check_fault(c, n->ino, "a block out of range");
+    }
+    rc = read_bytes(em, (uint64_t)b * em->block_size, raw, sizeof(raw));
+    if (rc != 0) {
+        return rc;
+    }
+    if (le32(raw) != EXT2_XATTR_MAGIC || le32(raw + 8) != 1) {
+        return check_fault(c, n->ino, "an attribute block of the wrong form");
+    }
+    refs = le32(raw + 4);
+    if (refs <= 1) {
+        return check_mark(c, n->ino, b);
+    }
+    for (i = 0; i < c->attrs; i++) {
+        if (c->attr[i].block == b) {
+            if (++c->attr[i].found > c->attr[i].expect) {
+                return check_fault(c, n->ino, "an attribute block named past its count");
+            }
+            return 0;
+        }
+    }
+    if (c->attrs >= EXT2_CHECK_ATTRS) {
+        return check_fault(c, n->ino, "more shared attribute blocks than the check's table");
+    }
+    rc = check_mark(c, n->ino, b);
+    if (rc != 0) {
+        return rc;
+    }
+    c->attr[c->attrs].block = b;
+    c->attr[c->attrs].expect = refs;
+    c->attr[c->attrs].found = 1;
+    c->attrs++;
+    return 0;
+}
+
+/**
  * Mark every block `n` names and check them against its size and its
- * `i_blocks`. A fast symbolic link, a device, a pipe and a socket keep
- * none; `as_data` treats the inode as a file whatever its mode, for the
- * reserved inodes. 0, or -EIO with the fault recorded or for a failed read.
+ * `i_blocks`, which counts the extended-attribute block too (`check_attr`).
+ * A fast symbolic link, a device, a pipe and a socket keep no other;
+ * `as_data` treats the inode as a file whatever its mode, for the reserved
+ * inodes. 0, or -EIO with the fault recorded or for a failed read.
  */
 static int check_blocks(struct ext2_check *c, const struct ext2_node *n, int as_data)
 {
     const struct ext2_mount *em = c->em;
     uint32_t type = n->mode & S_IFMT_;
     uint32_t per = em->block_size / 4;
+    uint32_t attr = n->file_acl ? em->block_size / 512 : 0;
     uint32_t count = 0, last = 0, limit, i;
     int named = 0, rc;
 
     limit = (uint32_t)((n->size + em->block_size - 1) >> em->block_shift);
-    if (!as_data && type != S_IFREG_ && type != S_IFDIR_ && (type != S_IFLNK_ || n->blocks == 0)) {
-        if (n->blocks != 0) {
+    if (n->file_acl != 0) {
+        rc = check_attr(c, n);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    if (!as_data && type != S_IFREG_ && type != S_IFDIR_ &&
+        (type != S_IFLNK_ || fast_link(em, n))) {
+        if (n->blocks != attr) {
             return check_fault(c, n->ino, "blocks on an inode that keeps none");
         }
         return 0;
@@ -4722,7 +4855,7 @@ static int check_blocks(struct ext2_check *c, const struct ext2_node *n, int as_
         }
         named = 1;
     }
-    if (n->blocks != count * (em->block_size / 512)) {
+    if (n->blocks != count * (em->block_size / 512) + attr) {
         return check_fault(c, n->ino, "i_blocks that does not match its pointers");
     }
     if (named && last >= limit) {
@@ -4973,6 +5106,36 @@ static int check_bitmaps(struct ext2_check *c)
 }
 
 /**
+ * Log what a check without a fault leaves for e2fsck, setting the error bit
+ * when it leaves anything: the shared attribute blocks whose count is above
+ * the inodes found naming them, then the lost blocks and orphans; or that
+ * the volume is clean.
+ */
+static void check_report(struct ext2_check *c)
+{
+    uint32_t i;
+
+    for (i = 0; i < c->attrs; i++) {
+        if (c->attr[i].found < c->attr[i].expect) {
+            c->stale++;
+        }
+    }
+    if (c->stale != 0) {
+        klog(KLOG_WARN, "ext2",
+             "check: %d attribute blocks with counts above their inodes, kept for e2fsck",
+             (int)c->stale);
+        c->em->state |= EXT2_ERROR_FS;
+    }
+    if (c->lost != 0 || c->orphans != 0) {
+        klog(KLOG_WARN, "ext2", "check: %d lost blocks, %d orphan inodes, kept for e2fsck",
+             (int)c->lost, (int)c->orphans);
+        c->em->state |= EXT2_ERROR_FS;
+    } else if (c->stale == 0) {
+        klog(KLOG_INFO, "ext2", "check: clean");
+    }
+}
+
+/**
  * Check a volume whose valid bit is clear or whose error bit is set, at a
  * writable mount or remount, before it is written, as the section above
  * says: the structural blocks and the reserved inodes below `s_first_ino`
@@ -4981,7 +5144,8 @@ static int check_bitmaps(struct ext2_check *c)
  *
  * Returns 0 with the volume writable, the recounted free counts written to
  * the descriptors and the superblock, and the error bit set as well when
- * blocks were lost or inodes orphaned; 1 with `*why` naming why it must stay
+ * blocks were lost, inodes orphaned or attribute blocks left counting
+ * inodes that no longer name them; 1 with `*why` naming why it must stay
  * read-only, the error bit written and the counts as the disk has them,
  * since the recount may have stopped part way; or -errno when the device
  * failed.
@@ -5072,13 +5236,7 @@ static int ext2_check_volume(struct ext2_mount *em, const char **why)
             return rc;
         }
     }
-    if (c->lost != 0 || c->orphans != 0) {
-        klog(KLOG_WARN, "ext2", "check: %d lost blocks, %d orphan inodes, kept for e2fsck",
-             (int)c->lost, (int)c->orphans);
-        em->state |= EXT2_ERROR_FS;
-    } else {
-        klog(KLOG_INFO, "ext2", "check: clean");
-    }
+    check_report(c);
     check_state_free(c);
     return sb_store(em);
 }

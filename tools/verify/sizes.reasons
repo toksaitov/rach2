@@ -112,7 +112,6 @@ rach2/sys/fs/exfat.c:upcase_check complexity 28 one file system operation over t
 rach2/sys/fs/ext2.c:check_dir complexity 31 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2.c:check_level params 8 the parameters are one level's cursor in a recursive walk
 rach2/sys/fs/ext2.c:dirent_write params 7 the parameters are one level's cursor in a recursive walk
-rach2/sys/fs/ext2.c:ext2_check_volume complexity 26 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2.c:ext2_mount_on complexity 62 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2.c:ext2_mount_on lines 165 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2.c:ext2_rename complexity 63 one file system operation over the on-disk format, each step a rule of the format
