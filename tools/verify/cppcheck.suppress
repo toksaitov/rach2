@@ -1,17 +1,20 @@
-# Rach2 cppcheck suppressions, read by the style check, tools/verify/check.sh.
+# cppcheck.suppress: the cppcheck suppressions of the style check,
+# tools/verify/check.sh, and the slow analysers, tools/verify/analyze.sh.
 #
-# Each entry is a deliberate exception with its reason; a real fault is fixed,
-# not listed here. A bare id suppresses a rule everywhere, where the tree's
-# conventions contradict it. An id:*path entry suppresses a rule in one file
-# and leaves it live in every other.
+# Each entry is a deliberate exception with its reason; a fault cppcheck finds
+# is fixed in the code and is not listed here. A bare id suppresses a rule
+# everywhere, where the tree's conventions contradict it. An id:*path entry
+# suppresses a rule in one file and keeps it in force in every other.
 
 # The tree's conventions.
 
-# C89 requires declarations at the top of a block; we never narrow scope.
+# C89 requires declarations at the top of a block, and the tree does not move
+# a declaration into an inner block to narrow its scope.
 variableScope
 
 # Syscall handlers are installed in a function-pointer dispatch table, so their
-# signature is fixed; cppcheck itself flags the const-cast caveat here.
+# signature is fixed; cppcheck's own message for the rule says that a `const`
+# there would need a cast.
 constParameterCallback
 
 # The kernel's C89 interfaces take their pointers without `const`, and are not
@@ -104,8 +107,9 @@ knownConditionTrueFalse:*sys/ipc/unix.c
 
 # The guest programs.
 
-# main's argv is the ABI's, not ours: cppcheck asks for `const char *argv[]`,
-# which is not the signature a hosted C program's main has.
+# main's argv has the type the C standard gives it: cppcheck asks for
+# `const char *argv[]`, which is not the signature a hosted C program's main
+# has.
 constParameter:*tests/musl/execargmusl.c
 
 # The budget test holds descriptors rather than reading them: the value of the
