@@ -21,6 +21,8 @@ if os.environ.get('RACH2_FAULT_TEXTS'):
 
 path = Path(sys.argv[1])
 source = path.read_text()
+if source.count('static int loop_resolve(') != 1:
+    raise SystemExit('loop-attach-mutation: loop_resolve is not unique')
 start = source.index('static int loop_resolve(')
 end = source.index('\n}', start) + 2
 source = source[:start] + '''static int loop_resolve(const char *path, struct vfs_ref *ref)
