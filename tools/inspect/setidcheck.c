@@ -3520,6 +3520,31 @@ static void allow_free(struct allow *a)
 }
 
 /**
+ * Add to `problems` a finding for each entry of `allow` whose manifest is
+ * not in `manifests`, the paths the no-argument sweep found in
+ * krffs/manifests.
+ */
+static void check_stems(const struct allow *allow, const struct list *manifests,
+                        struct list *problems)
+{
+    struct list stems = {NULL, 0, 0};
+    int i;
+
+    for (i = 0; i < allow->n; i++)
+        list_push(&stems, allow->entries[i].stem);
+    list_sort(&stems);
+    for (i = 0; i < stems.n; i++) {
+        char want[512];
+
+        snprintf(want, sizeof(want), "krffs/manifests/%s.manifest", stems.items[i]);
+        if (!list_has(manifests, want))
+            addf(problems, "allowlist: %s names %s.manifest, which is not in krffs/manifests",
+                 stems.items[i], stems.items[i]);
+    }
+    free(stems.items);
+}
+
+/**
  * Run the program on its arguments with the declarations `allow`, and return
  * its exit status, as the opening comment says.
  *
@@ -3699,7 +3724,6 @@ static int run(int argc, char **argv, struct allow *allow)
 
     validate_table(allow, &problems);
     if (manifests.n == 0) {
-        struct list stems = {NULL, 0, 0};
         DIR *dir = opendir("krffs/manifests");
         struct dirent *ent;
 
@@ -3725,20 +3749,7 @@ static int run(int argc, char **argv, struct allow *allow)
             return 2;
         }
         list_sort(&manifests);
-        for (i = 0; i < allow->n; i++)
-            list_push(&stems, allow->entries[i].stem);
-        list_sort(&stems);
-        for (i = 0; i < stems.n; i++) {
-            char want[512];
-
-            snprintf(want, sizeof(want), "krffs/manifests/%s.manifest", stems.items[i]);
-            if (!list_has(&manifests, want))
-                addf(&problems,
-                     "allowlist: %s names %s.manifest, which "
-                     "is not in krffs/manifests",
-                     stems.items[i], stems.items[i]);
-        }
-        free(stems.items);
+        check_stems(allow, &manifests, &problems);
     }
     for (i = 0; i < manifests.n; i++)
         check_manifest(manifests.items[i], allow, &problems);
@@ -4226,16 +4237,17 @@ static int st_ext2_poke(const char *clean, const char *out, long at, const unsig
     FILE *o = fopen(out, "wb");
     unsigned char buf[65536];
     size_t n;
+    int bad = in == NULL || o == NULL;
 
-    if (in == NULL || o == NULL)
-        return -1;
-    while ((n = fread(buf, 1, sizeof(buf), in)) > 0)
-        if (fwrite(buf, 1, n, o) != n)
-            return -1;
-    fclose(in);
-    if (fseek(o, at, SEEK_SET) != 0 || fwrite(bytes, 1, len, o) != len)
-        return -1;
-    return fclose(o);
+    while (!bad && (n = fread(buf, 1, sizeof(buf), in)) > 0)
+        bad = fwrite(buf, 1, n, o) != n;
+    if (!bad)
+        bad = fseek(o, at, SEEK_SET) != 0 || fwrite(bytes, 1, len, o) != len;
+    if (in != NULL)
+        fclose(in);
+    if (o != NULL && fclose(o) != 0)
+        bad = 1;
+    return bad ? -1 : 0;
 }
 
 /**
@@ -4453,6 +4465,33 @@ static void st_ext2_rows(const struct allow *img_allow)
 }
 
 /**
+ * The cases of the no-argument sweep's rule that every entry of `allow` has
+ * a manifest in krffs/manifests.
+ */
+static void st_stems(const struct allow *allow)
+{
+    struct list found = {NULL, 0, 0};
+    struct list got = {NULL, 0, 0};
+    int i;
+
+    for (i = 0; i < allow->n; i++) {
+        char path[512];
+
+        snprintf(path, sizeof(path), "krffs/manifests/%s.manifest", allow->entries[i].stem);
+        list_push(&found, xstrdup(path));
+    }
+    check_stems(allow, &found, &got);
+    st_case("a table whose every manifest is in the tree", &got, 1, NULL);
+    list_free(&found);
+    list_push(&found, xstrdup("krffs/manifests/os-simple.manifest"));
+    list_push(&found, xstrdup("krffs/manifests/test.manifest"));
+    check_stems(allow, &found, &got);
+    st_case("a manifest the table names but the tree lacks", &got, 0,
+            "os-real names os-real.manifest, which is not in");
+    list_free(&found);
+}
+
+/**
  * Run every case over fixtures in a temporary directory and print a summary
  * line. Return 0 when every case passes, 1 when one fails or the
  * declaration file lacks the os-real, os-simple or test entry, and 2 when
@@ -4478,15 +4517,15 @@ static int selftest(struct allow *allow)
 
     st_bad = 0;
     st_ran = 0;
+    if (os_real == NULL || os_simple == NULL || test_e == NULL) {
+        printf("  FAIL: the allow file lacks os-real, os-simple or test\n");
+        return 1;
+    }
     snprintf(st_tmp, sizeof(st_tmp), "%s/setidcheck-selftest.XXXXXX",
              getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");
     if (mkdtemp(st_tmp) == NULL) {
         fprintf(stderr, "check-setid: cannot make a temporary directory\n");
         return 2;
-    }
-    if (os_real == NULL || os_simple == NULL || test_e == NULL) {
-        printf("  FAIL: the allow file lacks os-real, os-simple or test\n");
-        return 1;
     }
     validate_table(allow, &got);
     for (i = 0; i < got.n; i++) {
@@ -5025,10 +5064,7 @@ static int selftest(struct allow *allow)
         allow_clear(&bad);
     }
 
-    /* The no-argument sweep's rule that every entry has a manifest. */
-    addf(&got, "allowlist: os-real names os-real.manifest, which is not "
-               "in krffs/manifests");
-    st_case("a manifest the table names but the tree lacks", &got, 0, "which is not in");
+    st_stems(allow);
 
     /* The image inventory's fixtures. */
     memset(&img_allow, 0, sizeof(img_allow));

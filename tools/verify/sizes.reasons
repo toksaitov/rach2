@@ -742,9 +742,9 @@ tools/inspect/setidcheck.c:parse_manifest complexity 31 an inspector's check, on
 tools/inspect/setidcheck.c:parse_manifest lines 118 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:read_allow complexity 64 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:read_allow lines 132 an inspector's check, one walk over the format it reads
-tools/inspect/setidcheck.c:run complexity 69 an inspector's check, one walk over the format it reads
-tools/inspect/setidcheck.c:run lines 229 an inspector's check, one walk over the format it reads
-tools/inspect/setidcheck.c:selftest lines 698 the checker's own selftest, its cases in one table
+tools/inspect/setidcheck.c:run complexity 66 an inspector's check, one walk over the format it reads
+tools/inspect/setidcheck.c:run lines 215 an inspector's check, one walk over the format it reads
+tools/inspect/setidcheck.c:selftest lines 695 the checker's own selftest, its cases in one table
 tools/inspect/setidcheck.c:st_ext2_rows complexity 45 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:st_ext2_rows lines 151 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:st_image params 8 an inspector's check, one walk over the format it reads
