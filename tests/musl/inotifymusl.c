@@ -1,24 +1,24 @@
 /**
- * inotify: the events of a watched directory and of a watched file, as
- * Linux reports them, and the calls' refusals.
+ * inotifymusl: check inotify's events and errors as Linux reports them.
  *
- * A directory watch hears a file made, opened, written twice (one IN_MODIFY,
- * since the second merges with the first), closed, read and closed again,
- * moved away with a cookie that pairs its two events, linked, unlinked, and a
- * directory made and removed with IN_ISDIR. A watch of the file itself hears
- * its attribute change, its opens and closes, the move of it, the changes of
- * its links, and its removal, after which the watch is gone with IN_IGNORED.
- * A read too small for the next event is EINVAL, an empty queue of a
- * nonblocking instance is EAGAIN, FIONREAD says the bytes a read returns,
- * and poll says when one is queued. A watch of the same file changes the
- * first and returns its descriptor, IN_MASK_CREATE refuses it with EEXIST, a
- * one-shot watch goes after its first event, and inotify_rm_watch queues
- * IN_IGNORED. inotify_init made by hand leaves the caller's EBX, which i386
- * code keeps its global offset table in, as it was, and on x86-64 its RDI,
- * where inotify_init1 takes its flags.
+ * A watch of a directory reports a file made, opened, written twice (one
+ * IN_MODIFY, since the second merges with the first), closed, read and
+ * closed again, moved away with a cookie that pairs its two events, linked,
+ * unlinked, and a directory made and removed with IN_ISDIR. A watch of the
+ * file itself reports its attribute change, its opens and closes, the move of
+ * it, the changes of its links, and its removal, after which the watch is
+ * gone with IN_IGNORED. A read too small for the next event is EINVAL, an
+ * empty queue of a nonblocking instance is EAGAIN, FIONREAD gives the bytes a
+ * read returns, and poll shows when an event is queued. A second watch of the
+ * same file changes the first and returns its descriptor, with IN_MASK_CREATE
+ * it fails with EEXIST, a one-shot watch is removed after its first event,
+ * and inotify_rm_watch queues IN_IGNORED. inotify_init made with inline
+ * assembly leaves the caller's EBX, which i386 code keeps its global offset
+ * table in, as it was, and on x86-64 its RDI, where inotify_init1 takes its
+ * flags.
  *
- * Prints "INOTIFYMUSL OK" on success and "INOTIFYMUSL FAIL (detail)"
- * otherwise.
+ * Prints `INOTIFYMUSL OK` and exits 0 on success, and prints
+ * `INOTIFYMUSL FAIL (detail)` and exits 1 otherwise.
  */
 
 #include <errno.h>
@@ -34,12 +34,14 @@
 /* On tmpfs, which has hard links, where the KRFFS root has none. */
 #define DIR_PATH "/dev/shm/inotifymusl"
 
+/* An event a read must return: its watch, its mask, and its name or "". */
 struct want {
     int wd;
     unsigned int mask;
     const char *name;
 };
 
+/** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
 {
     printf("INOTIFYMUSL FAIL (%s: errno %d)\n", what, errno);
@@ -91,6 +93,12 @@ static int expect(int fd, const struct want *w, int n, const char *what)
     return 0;
 }
 
+/**
+ * Watch `DIR_PATH` and a file in it on the instance `fd`, make the calls
+ * watched, and compare the events queued. The directory's watch descriptor,
+ * which must be 1, is left in `*wd`. Returns 0, or 1 once the failure is
+ * reported.
+ */
 static int events(int fd, int *wd)
 {
     int f, wf;
@@ -145,6 +153,11 @@ static int events(int fd, int *wd)
     }
 }
 
+/**
+ * Check the errors of read, inotify_add_watch and inotify_rm_watch on the
+ * instance `fd`, a second watch of the directory watched as `wd`, poll, and a
+ * one-shot watch. Returns 0, or 1 once the failure is reported.
+ */
 static int refusals(int fd, int wd)
 {
     char small[8];
@@ -217,9 +230,12 @@ static int refusals(int fd, int wd)
 }
 
 #if defined __x86_64__
-/* inotify_init(253), which the kernel serves as inotify_init1 without
- * flags, leaves the caller's RDI, where inotify_init1 takes them, as it was:
- * `syscall` keeps every register but RAX, RCX and R11. */
+/**
+ * Check that inotify_init (253), which the kernel serves as inotify_init1
+ * without flags, leaves the caller's RDI, where inotify_init1 takes them, as
+ * it was: `syscall` keeps every register but RAX, RCX and R11. Returns 0, or
+ * 1 once the failure is reported.
+ */
 static int register_kept(void)
 {
     unsigned long di;
@@ -236,8 +252,11 @@ static int register_kept(void)
     return 0;
 }
 #else
-/* inotify_init(291), which the kernel serves as inotify_init1 without
- * flags, leaves the caller's EBX as it was. */
+/**
+ * Check that inotify_init (291), which the kernel serves as inotify_init1
+ * without flags, leaves the caller's EBX as it was. Returns 0, or 1 once the
+ * failure is reported.
+ */
 static int register_kept(void)
 {
     unsigned int b;

@@ -1,5 +1,5 @@
 /**
- * timerfd.
+ * timerfdmusl: check timerfd's timers, reads and wakes.
  *
  * A timer armed for 50 ms with a 20 ms interval blocks a read until it
  * expires, then reads a count of at least one, and timerfd_gettime reports
@@ -15,8 +15,8 @@
  * alarm ended fails. A timer of 200 days reports 200 days, and its interval of
  * 200 days.
  *
- * Prints "TIMERFDMUSL OK" on success and "TIMERFDMUSL FAIL (detail)"
- * otherwise.
+ * Prints `TIMERFDMUSL OK` and exits 0 on success, and prints
+ * `TIMERFDMUSL FAIL (detail)` and exits 1 otherwise.
  */
 
 #define _GNU_SOURCE
@@ -33,14 +33,17 @@
 #include <time.h>
 #include <unistd.h>
 
+/* The SIGALRMs delivered; an alarm ends an epoll wait that nothing else did. */
 static volatile sig_atomic_t alarms;
 
+/** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
 {
     printf("TIMERFDMUSL FAIL (%s: errno %d)\n", what, errno);
     return 1;
 }
 
+/** Fill `it` with a value of `value_ms` and an interval of `interval_ms`. */
 static void set(struct itimerspec *it, long value_ms, long interval_ms)
 {
     memset(it, 0, sizeof(*it));
@@ -164,8 +167,11 @@ static int epoll_row(int t)
     return 0;
 }
 
-/* A timer of 200 days, longer than one wait of ticks spans, reports the
- * whole time, and so does its interval. */
+/**
+ * Check that a timer of 200 days, longer than one wait of ticks spans,
+ * reports the whole time, and so does its interval. Returns 0, or 1 once the
+ * failure is reported.
+ */
 static int long_timer(void)
 {
     struct itimerspec it, got;

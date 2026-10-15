@@ -1,5 +1,5 @@
 /**
- * Named pipes.
+ * fifomusl: check named pipes.
  *
  * mkfifo and mknod with S_IFIFO make files stat reports as FIFOs. With no
  * reader, a nonblocking open for writing fails with ENXIO; a nonblocking
@@ -14,7 +14,8 @@
  * pipes; a renamed FIFO keeps its pipe; and one unlinked while an end is open
  * keeps its pipe for that end, apart from a FIFO made in its name.
  *
- * Prints "FIFOMUSL OK" on success and "FIFOMUSL FAIL (detail)" otherwise.
+ * Prints `FIFOMUSL OK` and exits 0 on success, and prints
+ * `FIFOMUSL FAIL (detail)` and exits 1 otherwise.
  */
 
 #define _GNU_SOURCE
@@ -36,6 +37,7 @@
 #define TWIN_B    "/tmp/fifomusl.bP"
 #define MOVED     "/tmp/fifomusl.moved"
 
+/** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
 {
     printf("FIFOMUSL FAIL (%s: errno %d)\n", what, errno);
@@ -63,9 +65,12 @@ static int sleeping(pid_t pid)
     return state && state[1] == ' ' && state[2] == 'S';
 }
 
-/** Wait up to 3 s to see `parent` asleep, write a byte to `told`, then open
- * the FIFO for writing and write to it: exits 0 when all of that happened,
- * 2 when the parent was never seen asleep. */
+/**
+ * Wait up to 3 s to see `parent` asleep, write a byte to `told`, then open
+ * the FIFO for writing and write to it. Runs in the forked child and does not
+ * return: exits 0 when all of that happened, 2 when the parent was never seen
+ * asleep, and 1 otherwise.
+ */
 static void writer(pid_t parent, int told)
 {
     int tries;
@@ -84,6 +89,7 @@ static void writer(pid_t parent, int told)
     _exit(w >= 0 && write(w, "child", 5) == 5 ? 0 : 1);
 }
 
+/* The SIGALRMs delivered; an alarm ends a poll that nothing else did. */
 static volatile sig_atomic_t alarms;
 
 /** Count a SIGALRM. */
@@ -93,12 +99,15 @@ static void on_alarm(int sig)
     alarms++;
 }
 
-/** Wait up to 3 s to see `parent` asleep, open the FIFO for reading and
- * read a byte of it, and keep running, reading the nonblocking `ack` in a
- * loop, until it has a byte or 15 s have passed: an idle kernel scans a
- * sleeping poll's descriptors again at every interrupt, which would end the
- * parent's wait without the read's wake. Exits 0 when all of that happened,
- * 2 when the parent was never seen asleep, and 1 otherwise. */
+/**
+ * Wait up to 3 s to see `parent` asleep, open the FIFO for reading and read a
+ * byte of it, and keep running, reading the nonblocking `ack` in a loop,
+ * until it has a byte or 15 s have passed: an idle kernel scans a sleeping
+ * poll's descriptors again at every interrupt, which would end the parent's
+ * wait without the read's wake. Runs in the forked child and does not
+ * return: exits 0 when all of that happened, 2 when the parent was never seen
+ * asleep, and 1 otherwise.
+ */
 static void drainer(pid_t parent, int ack)
 {
     struct timespec start, now;
@@ -124,11 +133,14 @@ static void drainer(pid_t parent, int ack)
     _exit(1);
 }
 
-/* A FIFO open for reading and writing does not wait, and once full polls
- * writable when another open reads a byte. The reader is a child that reads
- * once it sees the poll asleep and keeps running after, and the poll has no
- * time limit of its own, only a 10 s alarm; a poll the alarm ends finds the
- * room as it wakes, so the row fails when the alarm fired. */
+/**
+ * Check that an open of the FIFO for reading and writing does not wait, and
+ * that once full it polls writable when another open reads a byte. The
+ * reader is a child that reads once it sees the poll asleep and keeps running
+ * after, and the poll has no time limit of its own, only a 10 s alarm; a poll
+ * the alarm ends finds the room as it wakes, so the row fails when the alarm
+ * fired. Returns 0, or 1 once the failure is reported.
+ */
 static int rdwr_opens(void)
 {
     struct sigaction sa;
@@ -186,8 +198,11 @@ static int rdwr_opens(void)
     return 0;
 }
 
-/** A FIFO is its own pipe, by name hash, across a rename and past an
- * unlink. */
+/**
+ * Check that a FIFO has a pipe of its own: apart from another whose name has
+ * the same hash, across a rename, and past an unlink. Returns 0, or 1 once the
+ * failure is reported.
+ */
 static int identity(void)
 {
     char buf[4];

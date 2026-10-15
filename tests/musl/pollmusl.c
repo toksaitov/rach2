@@ -1,21 +1,20 @@
 /**
- * Exercises poll() and select() over a pipe through musl's own wrappers.
+ * pollmusl: check poll and select on a pipe through musl's wrappers.
  *
- * The freestanding pollprobe issues `int 0x80` directly; this test instead
- * goes through musl, so it pins the actual ABI musl emits on i386: poll()
- * becomes SYS_poll (168), and select() becomes SYS_pselect6_time64 (413,
- * which the kernel answers -ENOSYS) falling back to SYS__newselect (142). On
- * x86-64 poll() is SYS_poll (7) and select() SYS_select (23).
+ * The freestanding pollprobe makes the system calls itself; this program goes
+ * through musl, so it checks the calls musl makes. On i686 `poll` is SYS_poll
+ * (168), and `select` with a timeout that fits in 32 bits is SYS__newselect
+ * (142); musl tries SYS_pselect6_time64 (413) first only for a larger
+ * timeout. On x86-64 `poll` is SYS_poll (7) and `select` is SYS_select (23).
  *
- * It covers the family end to end. poll() of an empty pipe with a short
- * timeout returns 0. After a write, poll() reports the read end POLLIN.
- * select() with FD_SET/FD_ISSET and a timeout finds that same fd readable,
- * which also exercises the fd_set translation and the pselect6_time64 to
- * _newselect fallback. Finally a child that writes after a delay wakes a
- * parent blocked in poll(), so the return comes from the write, well under
- * the 3s timeout.
+ * `poll` of an empty pipe with a short timeout returns 0. After a write,
+ * `poll` reports the read end POLLIN, and `select` with `FD_SET` and
+ * `FD_ISSET` finds that descriptor readable. Last, a child that writes after
+ * 60 ms wakes the parent blocked in `poll`, which returns 1 well before its
+ * timeout of 3 s.
  *
- * Staged into test.krffs as /musl/pollmusl. Prints "POLLMUSL OK".
+ * Staged into the test image as /musl/pollmusl. Prints `POLLMUSL OK`, or
+ * `POLLMUSL FAIL` with the number of failed checks after a line for each.
  */
 #include <unistd.h>
 #include <stdio.h>
@@ -27,6 +26,7 @@
 
 static int fails;
 
+/** Count and print a failed check when `cond` is zero. */
 static void check(int cond, const char *msg)
 {
     if (!cond) {
@@ -35,6 +35,7 @@ static void check(int cond, const char *msg)
     }
 }
 
+/** Sleep for `ms` milliseconds with `nanosleep`. */
 static void msleep(int ms)
 {
     struct timespec ts;
@@ -58,28 +59,24 @@ int main(void)
         return 1;
     }
 
-    /* empty pipe: poll times out to 0 */
     pfd.fd = p[0];
     pfd.events = POLLIN;
     pfd.revents = 0;
     check(poll(&pfd, 1, 30) == 0, "poll empty pipe -> 0 (timeout)");
 
-    /* after a write: poll reports POLLIN */
     write(p[1], "x", 1);
     pfd.revents = 0;
     n = poll(&pfd, 1, 1000);
     check(n == 1 && (pfd.revents & POLLIN), "poll reports POLLIN after write");
 
-    /* select finds the same fd (data still buffered) */
     FD_ZERO(&rset);
     FD_SET(p[0], &rset);
     tv.tv_sec = 1;
     tv.tv_usec = 0;
     n = select(p[0] + 1, &rset, 0, 0, &tv);
     check(n == 1 && FD_ISSET(p[0], &rset), "select finds the readable fd");
-    read(p[0], buf, sizeof(buf)); /* drain the byte */
+    read(p[0], buf, sizeof(buf));
 
-    /* child write wakes a parent blocked in poll */
     pid = fork();
     if (pid < 0) {
         printf("POLLMUSL FAIL: fork\n");
