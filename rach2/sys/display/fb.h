@@ -1,7 +1,6 @@
 /*
  * fb.h: the graphics mode a program draws in through /fb, and the record of
- * the mode in force. VGA mode 13h is the only mode; the enum keeps a value
- * for VESA's modes, which nothing sets.
+ * the mode in force. VGA mode 13h is the only graphics mode.
  */
 
 #ifndef _FB_H_
@@ -13,8 +12,7 @@
 /* Graphics mode identifiers. */
 typedef enum {
     GFX_MODE_NONE = 0, /* No graphics mode active (text mode) */
-    GFX_MODE_VGA_13H,  /* VGA Mode 13h: 320x200, 256 colors */
-    GFX_MODE_VBE       /* Reserved for VESA/VBE high-resolution modes */
+    GFX_MODE_VGA_13H   /* VGA Mode 13h: 320x200, 256 colors */
 } gfx_mode_t;
 
 /* Current graphics mode and the location of its framebuffer. */

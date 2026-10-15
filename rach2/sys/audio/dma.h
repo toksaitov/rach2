@@ -36,8 +36,8 @@
  */
 int dma_start(uint8_t channel, uint32_t buffer, uint32_t length, uint8_t mode);
 
-/** Stop transfers on `channel` by setting its mask bit; a channel above 7
- * is ignored. */
+/** Stop transfers on `channel` by setting its mask bit; channel 4 and channels
+ * above 7 are ignored. */
 void dma_stop(uint8_t channel);
 
 /**

@@ -89,7 +89,7 @@ On a framebuffer console there may be no VGA, as on a machine booted by UEFI, an
 
 ## Limits
 
-* `/fb` has one mode, 320x200 at a byte a pixel through a palette of 256 colors. `GFX_MODE_VBE` in `fb.h` is a mode with no driver.
+* `/fb` has one mode, 320x200 at a byte a pixel through a palette of 256 colors.
 * A write to `/fb` tests for graphics mode and not for ownership: a descriptor inherited by fork, or kept after the display was released, writes into the picture of whichever process owns the display.
 * The framebuffer console draws only on a framebuffer below 4 GiB, of at least 640x384 pixels, of direct color at 8 to 32 bits a pixel or 8-bit indexed; with any other the console stays on the VGA's text mode, which a machine booted by UEFI may lack.
 * The console has no scroll region and no line or character insertion, so a program redraws where a terminal would scroll.

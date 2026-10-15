@@ -41,7 +41,6 @@
 
 struct pty {
     struct pty *next; /* the list of live ptys */
-    int in_use;
     int index;        /* N in /dev/pts/N */
     struct tty slave; /* the slave end: a full tty + N_TTY discipline */
 

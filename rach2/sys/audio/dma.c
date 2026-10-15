@@ -194,7 +194,7 @@ void dma_stop(uint8_t channel)
 {
     uint16_t mask_port;
 
-    if (channel > 7)
+    if (channel > 7 || channel == 4)
         return;
 
     mask_port = (channel < 4) ? DMA1_SINGLEMASK : DMA2_SINGLEMASK;

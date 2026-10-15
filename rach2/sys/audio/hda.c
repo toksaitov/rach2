@@ -40,7 +40,6 @@ static uintptr_t hda_base;
 /* Controller capabilities */
 static uint16_t num_input_streams = 0;
 static uint16_t num_output_streams = 0;
-static uint16_t num_bidir_streams = 0;
 
 /* The most streams the controller's register layout addresses, a hardware
  * limit. */
@@ -131,9 +130,7 @@ static volatile uint32_t walclk_end = 0;
 static volatile int16_t out_min_s16 = 0;
 static volatile int16_t out_max_s16 = 0;
 static char hda_boot_status[48] = "Intel HD Audio";
-static bool hda_probe_log_enabled = false;
 
-static void hda_probe_log(const char *format, ...);
 static void hda_build_boot_status(void);
 
 /** The bytes queued in the ring; the IRQ side and the write side may both
@@ -296,55 +293,6 @@ void hda_set_output_mode(int mode)
         return;
     }
     hda_output_mode = mode;
-}
-
-/*
- * The bring-up trace, which composes its lines from fragments: a step prints
- * its name, then the reason, then "OK" or "FAIL" and the newline. A record is
- * a whole line, so the fragments are gathered here and one record is emitted
- * when the line ends. A line longer than the buffer is emitted at the length
- * that fits, which is the same thing the record builder does.
- */
-static char hda_trace_line[192];
-static unsigned hda_trace_len;
-
-/** Add one character to the trace line, and at a newline emit the line as
- * one debug record. A line that begins with "HDA: " loses the prefix, since
- * the record has the subsystem already. */
-static void hda_trace_putc(char c)
-{
-    if (c == '\n') {
-        const char *text = hda_trace_line;
-
-        hda_trace_line[hda_trace_len] = '\0';
-        if (hda_trace_len >= 5 && text[0] == 'H' && text[1] == 'D' && text[2] == 'A' &&
-            text[3] == ':' && text[4] == ' ') {
-            text += 5;
-        }
-        if (hda_trace_len > 0) {
-            klog(KLOG_DEBUG, "hda", "%s", text);
-        }
-        hda_trace_len = 0;
-        return;
-    }
-    if (hda_trace_len + 1 < sizeof(hda_trace_line)) {
-        hda_trace_line[hda_trace_len++] = c;
-    }
-}
-
-/** Format a fragment of the bring-up trace (hda_trace_putc); nothing is
- * printed unless hda_probe_log_enabled is true. */
-static void hda_probe_log(const char *format, ...)
-{
-    va_list ap;
-
-    if (!hda_probe_log_enabled) {
-        return;
-    }
-
-    va_start(ap, format);
-    k_vprintf(hda_trace_putc, format, ap);
-    va_end(ap);
 }
 
 /**
@@ -838,15 +786,10 @@ static void hda_pci_force_d0(pci_device_t *dev)
         return;
     }
 
-    hda_probe_log("HDA: PCI PMCSR=0x%x (D%d) -> D0\n", pmcsr, state);
-
     pmcsr &= (uint16_t)~0x3;
     pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(pmcap + 4), pmcsr);
 
     hda_delay(200000);
-
-    pmcsr = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(pmcap + 4));
-    hda_probe_log("HDA: PCI PMCSR now 0x%x (D%d)\n", pmcsr, (int)(pmcsr & 0x3));
 }
 
 /**
@@ -1287,9 +1230,7 @@ static bool hda_find_output(void)
     pin_conn_sel_idx = hp_conn_sel_idx = mixer_conn_sel_idx = 0;
     k_memset(&hda_report, 0, sizeof(hda_report));
     statests = hda_read16(HDA_STATESTS);
-    hda_probe_log("HDA: STATESTS=0x%x\n", statests);
     if (statests == 0) {
-        hda_probe_log("HDA: no codec\n");
         return false;
     }
 
@@ -1308,19 +1249,13 @@ static bool hda_find_output(void)
                 vid = hda_send_verb(i, 0, HDA_VERB_GET_PARAM | HDA_PARAM_VENDOR_ID);
             }
 
-            hda_probe_log("HDA: Codec %d vendor=0x%x", i, vid);
-
             if (vid == 0) {
-                hda_probe_log(" (no response, skip)\n");
                 continue;
             }
 
             if (is_hdmi_codec(vid)) {
-                hda_probe_log(" (HDMI, skip)\n");
                 continue;
             }
-
-            hda_probe_log(" (analog)\n");
 
             if (analog_codec_addr == 0xFF) {
                 analog_codec_addr = i;
@@ -1339,7 +1274,6 @@ static bool hda_find_output(void)
                 if (vid != 0) {
                     analog_codec_addr = i;
                     analog_vendor = vid;
-                    hda_probe_log("HDA: Fallback to codec %d: 0x%x\n", i, vid);
                     break;
                 }
             }
@@ -1347,14 +1281,12 @@ static bool hda_find_output(void)
     }
 
     if (analog_codec_addr == 0xFF) {
-        hda_probe_log("HDA: no usable codec\n");
         return false;
     }
 
     codec_addr = analog_codec_addr;
     vendor = analog_vendor;
     codec_vendor_id = vendor;
-    hda_probe_log("HDA: Using codec %d: 0x%x\n", codec_addr, vendor);
 
     if (((codec_vendor_id >> 16) & 0xFFFF) == 0x14f1) {
         hda_output_mode = HDA_OUTMODE_PRIMARY;
@@ -1367,7 +1299,6 @@ static bool hda_find_output(void)
     num_nodes = node_count & 0xFF;
     if (start_nid == 0 || (unsigned)start_nid + num_nodes > 128)
         return false;
-    hda_probe_log("HDA: Root has %d subnodes starting at 0x%x\n", num_nodes, start_nid);
 
     for (i = 0; i < num_nodes; i++) {
         uint32_t func_type = hda_get_param(start_nid + i, HDA_PARAM_FUNC_GROUP);
@@ -1378,10 +1309,8 @@ static bool hda_find_output(void)
     }
 
     if (audio_fg_nid == 0) {
-        hda_probe_log("HDA: No audio function group found\n");
         return false;
     }
-    hda_probe_log("HDA: Audio function group at 0x%x\n", audio_fg_nid);
 
     hda_send_verb(codec_addr, audio_fg_nid, HDA_VERB_SET_POWER | 0x00);
     hda_delay(100);
@@ -1391,7 +1320,6 @@ static bool hda_find_output(void)
     subnode_count = hda_get_param(audio_fg_nid, HDA_PARAM_NODE_COUNT);
     fg_start = (subnode_count >> 16) & 0xFF;
     fg_count = subnode_count & 0xFF;
-    hda_probe_log("HDA: AFG has %d widgets starting at 0x%x\n", fg_count, fg_start);
     if (fg_start == 0 || (unsigned)fg_start + fg_count > 128)
         return false;
     afg_widget_start = fg_start;
@@ -1409,9 +1337,6 @@ static bool hda_find_output(void)
                 uint32_t pin_cfg = hda_send_verb(codec_addr, nid, HDA_VERB_GET_CONFIG_DEF);
                 uint8_t def_dev = HDA_PIN_DEF_DEV(pin_cfg);
                 uint8_t port_conn = HDA_PIN_DEF_PORT(pin_cfg);
-
-                hda_probe_log("HDA: Pin 0x%x cfg=0x%x dev=%d port=%d\n", nid, pin_cfg, def_dev,
-                              port_conn);
 
                 if (fallback_pin == 0) {
                     fallback_pin = nid;
@@ -1434,27 +1359,20 @@ static bool hda_find_output(void)
 
     if (speaker_pin != 0) {
         pin_nid = speaker_pin;
-        hda_probe_log("HDA: Selected speaker pin 0x%x\n", pin_nid);
     } else if (line_out_pin != 0) {
         pin_nid = line_out_pin;
-        hda_probe_log("HDA: Selected line out pin 0x%x\n", pin_nid);
     } else if (hp_pin != 0) {
         pin_nid = hp_pin;
-        hda_probe_log("HDA: Selected HP pin 0x%x\n", pin_nid);
     } else if (fallback_pin != 0) {
         pin_nid = fallback_pin;
-        hda_probe_log("HDA: Using fallback pin 0x%x\n", pin_nid);
     }
 
     hp_pin_nid = hp_pin;
     speaker_pin_nid = speaker_pin;
 
     if (pin_nid == 0) {
-        hda_probe_log("HDA: no pin\n");
         return false;
     }
-
-    hda_probe_log("HDA: pin=0x%x ", pin_nid);
 
     num_conn = hda_get_connections(pin_nid, conn_list, HDA_MAX_CONNECTIONS);
 
@@ -1491,7 +1409,6 @@ static bool hda_find_output(void)
                     dac_nid = (uint8_t)conn_nid;
                     mixer_nid = 0;
                     pin_conn_sel_idx = (uint8_t)idx;
-                    hda_probe_log("HDA: Pin connects directly to DAC 0x%x\n", dac_nid);
                     break;
                 } else if (wtype == HDA_WIDGET_AUDIO_MIX || wtype == HDA_WIDGET_AUDIO_SEL) {
                     uint16_t mix_conn[HDA_MAX_CONNECTIONS];
@@ -1500,7 +1417,6 @@ static bool hda_find_output(void)
 
                     mixer_nid = (uint8_t)conn_nid;
                     pin_conn_sel_idx = (uint8_t)idx;
-                    hda_probe_log("HDA: Pin connects to mixer/sel 0x%x\n", mixer_nid);
 
                     mix_num = hda_get_connections(mixer_nid, mix_conn, HDA_MAX_CONNECTIONS);
 
@@ -1512,7 +1428,6 @@ static bool hda_find_output(void)
                         if (((mcaps0 >> 20) & 0xF) == HDA_WIDGET_AUDIO_OUT) {
                             dac_nid = (uint8_t)mix_conn[mix_sel];
                             mixer_conn_sel_idx = mix_sel;
-                            hda_probe_log("HDA: Mixer selected DAC 0x%x\n", dac_nid);
                             break;
                         }
                     }
@@ -1522,7 +1437,6 @@ static bool hda_find_output(void)
                         if (((mcaps >> 20) & 0xF) == HDA_WIDGET_AUDIO_OUT) {
                             dac_nid = (uint8_t)mix_conn[j];
                             mixer_conn_sel_idx = (uint8_t)j;
-                            hda_probe_log("HDA: Mixer connects to DAC 0x%x\n", dac_nid);
                             break;
                         }
                     }
@@ -1535,15 +1449,8 @@ static bool hda_find_output(void)
     }
 
     if (dac_nid == 0) {
-        hda_probe_log("HDA: no DAC\n");
         return false;
     }
-
-    hda_probe_log("dac=0x%x", dac_nid);
-    if (mixer_nid != 0) {
-        hda_probe_log(" mix=0x%x", mixer_nid);
-    }
-    hda_probe_log("\n");
 
     if (hp_pin_nid != 0 && hp_pin_nid != pin_nid) {
         uint8_t hp_sel;
@@ -1638,7 +1545,7 @@ static uint16_t hda_calc_format(uint32_t sample_rate, audio_format_t format, int
 /**
  * HDA interrupt handler: acknowledge the output stream IRQ and refill.
  *
- * Returns immediately if INTSTS does not flag the output stream. Otherwise it
+ * Returns immediately after shutdown or if INTSTS does not flag the stream. It
  * clears the stream's status register (write-1-to-clear) and services the
  * stream to refill the next DMA period.
  */
@@ -1647,6 +1554,10 @@ static void hda_irq_handler(isr_params_t *params)
     uint32_t intsts;
     uint8_t sd_sts;
     (void)params;
+
+    if (!hda_base) {
+        return;
+    }
 
     intsts = hda_read32(HDA_INTSTS);
     if (!(intsts & (1 << output_stream_index))) {
@@ -1722,19 +1633,13 @@ static int hda_init(void)
     k_strncpy(hda_boot_status, "Intel HD Audio", sizeof(hda_boot_status) - 1);
     hda_boot_status[sizeof(hda_boot_status) - 1] = '\0';
 
-    hda_probe_log("\nHDA: init\n");
-
     while (pci_find_device_skip(PCI_CLASS_MULTIMEDIA, PCI_SUBCLASS_AUDIO, skip_dev, &temp_pci)) {
-        hda_probe_log("HDA: Found PCI %x:%x", temp_pci.vendor_id, temp_pci.device_id);
-
         if (is_hdmi_controller(temp_pci.vendor_id, temp_pci.device_id)) {
-            hda_probe_log(" (HDMI, skip)\n");
             hda_pci = temp_pci;
             skip_dev = &hda_pci;
             continue;
         }
 
-        hda_probe_log(" (use)\n");
         hda_pci = temp_pci;
         found_controller = true;
         break;
@@ -1742,10 +1647,8 @@ static int hda_init(void)
 
     if (!found_controller) {
         if (!pci_find_device(PCI_CLASS_MULTIMEDIA, PCI_SUBCLASS_AUDIO, &hda_pci)) {
-            hda_probe_log("HDA: No PCI audio device\n");
             return -1;
         }
-        hda_probe_log("HDA: Fallback to %x:%x\n", hda_pci.vendor_id, hda_pci.device_id);
     }
 
     {
@@ -1764,22 +1667,15 @@ static int hda_init(void)
         }
     }
 
-    hda_probe_log("HDA: Using %x:%x BAR0=", hda_pci.vendor_id, hda_pci.device_id);
-
     bar0 = pci_bar_address64(&hda_pci, 0);
-    hda_probe_log("0x%lx\n", (unsigned long)bar0);
     if (bar0 == 0 || (uint64_t)(uintptr_t)bar0 != bar0) {
-        hda_probe_log("HDA: BAR0 invalid, or above the addresses this kernel maps\n");
         return -1;
     }
 
-    hda_probe_log("HDA: Mapping MMIO...");
     mapped = map_mmio((uintptr_t)bar0, HDA_MMIO_SIZE);
     if (mapped == 0) {
-        hda_probe_log("FAIL\n");
         return -1;
     }
-    hda_probe_log("OK\n");
 
     hda_base = mapped;
 
@@ -1790,24 +1686,18 @@ static int hda_init(void)
     /* Real hardware sometimes boots the controller in D3hot. */
     hda_pci_force_d0(&hda_pci);
 
-    hda_probe_log("HDA: Reset...");
     if (!hda_reset()) {
-        hda_probe_log("FAIL\n");
         return -1;
     }
-    hda_probe_log("OK\n");
 
     gcap = hda_read16(HDA_GCAP);
     num_output_streams = (gcap >> 12) & 0xF;
     num_input_streams = (gcap >> 8) & 0xF;
-    num_bidir_streams = (gcap >> 3) & 0x1F;
-    hda_probe_log("HDA: GCAP=0x%x out=%d\n", gcap, num_output_streams);
 
     /* Output streams come after input streams in the descriptor array */
     output_stream_index = num_input_streams;
 
     if (num_output_streams == 0) {
-        hda_probe_log("HDA: No output streams\n");
         return -1;
     }
 
@@ -1818,12 +1708,9 @@ static int hda_init(void)
     /* Let the codec settle before issuing commands. */
     hda_delay(50000);
 
-    hda_probe_log("HDA: Find output...");
     if (!hda_find_output()) {
-        hda_probe_log("FAIL\n");
         return -1;
     }
-    hda_probe_log("OK\n");
 
     if (hda_pci.irq > 0 && hda_pci.irq < 16) {
         register_isr_handler((uint8_t)IRQ_VECTOR(hda_pci.irq), hda_irq_handler, "hda");
@@ -1840,15 +1727,19 @@ static int hda_init(void)
     }
 
     hda_build_boot_status();
-    hda_probe_log("HDA: Initialization complete\n");
     return 0;
 }
 
 /**
  * Stop playback, disable interrupts, and reset the controller.
+ * A queued interrupt after shutdown does not access the controller.
  */
 static void hda_shutdown(void)
 {
+    if (!hda_base) {
+        return;
+    }
+
     if (playing) {
         hda_driver.stop();
     }

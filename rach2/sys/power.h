@@ -31,8 +31,4 @@
  */
 void power_stop(int how);
 
-/* The table of the writes and readings the reset makes, defined and used in
- * arch/x86/power.c; no function outside it takes one. */
-struct power_io;
-
 #endif /* _POWER_H_ */

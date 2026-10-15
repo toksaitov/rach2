@@ -16,13 +16,6 @@
 /* The kernel's address of the adapter's window at physical 0xA0000. */
 #define VGA_GFX_FRAMEBUFFER phys_to_virt(0xA0000)
 
-/* The same constants under a second set of names. */
-#define VGA_MODE13H_WIDTH  VGA_GFX_WIDTH
-#define VGA_MODE13H_HEIGHT VGA_GFX_HEIGHT
-#define VGA_MODE13H_BPP    1 /* 1 byte per pixel */
-#define VGA_MODE13H_SIZE   VGA_GFX_SIZE
-#define VGA_FRAMEBUFFER    VGA_GFX_FRAMEBUFFER
-
 /* VGA I/O ports (shared between text and graphics modes). */
 #define VGA_MISC_WRITE      0x3C2
 #define VGA_MISC_READ       0x3CC

@@ -25,9 +25,4 @@
 #define VGA_TEXT_DEFAULT_FG 0x07 /* Light grey */
 #define VGA_TEXT_DEFAULT_BG 0x00 /* Black */
 
-/*
- * Another name for VGA_TEXT_BUFFER.
- */
-#define VIDEO_COLOR_TEXT_BUFFER VGA_TEXT_BUFFER
-
 #endif /* _VGA_TEXT_H_ */

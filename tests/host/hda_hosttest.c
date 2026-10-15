@@ -127,6 +127,7 @@ extern void *malloc(unsigned long size);
 extern void free(void *ptr);
 static uint32_t clock_value; /* the wall clock, 24000 ticks on at each read */
 static unsigned clock_reads, console_writes;
+static unsigned mmio_reads, mmio_writes;
 
 /** Report the row and assertion that failed. */
 static void check(int ok, const char *message)
@@ -179,6 +180,7 @@ uint32_t hda_test_read(uint32_t offset, int bits)
     uint32_t value = 0;
     int i;
 
+    mmio_reads++;
     if (offset == HDA_WALCLK) {
         clock_reads++;
         return clock_value += 24000;
@@ -193,6 +195,7 @@ void hda_test_write(uint32_t offset, uint32_t value, int bits)
 {
     int i;
 
+    mmio_writes++;
     if (offset == HDA_ICS) {
         if (value & HDA_ICS_IRV)
             mmio[HDA_ICS] &= ~HDA_ICS_IRV;
@@ -529,8 +532,6 @@ const char *audio_get_driver_name(void)
     return "Intel HD Audio";
 }
 
-/** Run codec and controller rows without executing host I/O instructions:
- * 0 when every check passes, 1 otherwise. */
 /** Only the first start after setup waits for the DMA check; none prints. */
 static void row_dma_check(void)
 {
@@ -551,6 +552,35 @@ static void row_dma_check(void)
     hda_stop();
 }
 
+/** Shutdown stops DMA; later interrupts and repeated shutdown do no I/O. */
+static void row_shutdown(void)
+{
+    unsigned reads, writes;
+
+    row = "shutdown";
+    reset_model();
+    check(hda_find_output(), "enumeration succeeds");
+    check(hda_start(48000, AUDIO_S16LE, 2) == 0, "start succeeds");
+    hda_test_write(HDA_GCTL, 1, 32);
+    hda_test_write(HDA_INTCTL, 0x80000001, 32);
+    hda_shutdown();
+    check(!playing && !stream_started && !hda_base, "shutdown clears playback and mapping");
+    check(hda_test_read(HDA_INTCTL, 32) == 0, "shutdown disables interrupts");
+    check(hda_test_read(HDA_GCTL, 32) == 0, "shutdown asserts reset");
+    check(!(hda_test_read(hda_sd_offset(output_stream_index) + HDA_SD_CTL, 8) & HDA_SD_CTL_RUN),
+          "shutdown stops stream DMA");
+    hda_test_write(HDA_INTSTS, 1, 32);
+    reads = mmio_reads;
+    writes = mmio_writes;
+    hda_irq_handler(NULL);
+    check(mmio_reads == reads && mmio_writes == writes, "late interrupt does no MMIO");
+    hda_tick();
+    check(mmio_reads == reads && mmio_writes == writes, "tick after shutdown does no MMIO");
+    hda_shutdown();
+    check(mmio_reads == reads && mmio_writes == writes, "repeated shutdown does no MMIO");
+}
+
+/** Run codec and controller rows: 0 when every check passes, 1 otherwise. */
 int main(void)
 {
     row_rates();
@@ -561,6 +591,7 @@ int main(void)
     row_hdmi();
     row_report();
     row_dma_check();
+    row_shutdown();
     printf("hda-test: result: %s\n", failures ? "fail" : "pass");
     return failures ? 1 : 0;
 }

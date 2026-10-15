@@ -5,15 +5,13 @@
 
 #include "audio.h"
 #include "../platform.h"
+#include "../speaker.h"
 #include "hda.h"
 #include "../serial.h"
 #include "../pci.h"
 
 audio_driver_t *audio = NULL;
 static const char *audio_boot_status = "Not initialized";
-
-extern void speaker_on(uint32_t frequency);
-extern void speaker_off(void);
 
 static bool speaker_playing = false;
 static audio_callback_t speaker_callback = NULL;

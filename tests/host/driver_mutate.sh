@@ -1,6 +1,6 @@
 #!/bin/sh
-# Prove the sb16, vga_gfx, vga_text and ps2mouse host tests with private
-# mutations of rach2/sys/audio/sb16.c, audio_debug.c, display/vga_gfx.c,
+# Prove the dma, sb16, vga_gfx, vga_text and ps2mouse host tests with private
+# mutations of rach2/sys/audio/dma.c, sb16.c, audio_debug.c, display/vga_gfx.c,
 # vga_text.c and arch/x86/ps2mouse.c.
 #
 # Usage: driver_mutate.sh [FAULT...] | --texts
@@ -60,6 +60,9 @@ elif fault == "mouse-aux":
     new = "    if (!(status & PS2_STATUS_OUTPUT_FULL)) {\n" \
           "        return;\n    }\n    data = inb(PS2_DATA_PORT);\n" \
           "    if (!(status & PS2_STATUS_MOUSE_DATA)) {\n        return;\n    }\n"
+elif fault == "dma-stop":
+    old = "    if (channel > 7 || channel == 4)\n"
+    new = "    if (channel > 7)\n"
 elif fault == "scale":
     old = "    if (audio->type == AUDIO_DRIVER_SB16) {\n" \
           "        sample_rate = 44100;\n    }"
@@ -87,6 +90,8 @@ select_fault()
             failure='failed setup returns failure' ;;
         callback) test=sb16; file=audio/sb16.c
             failure='callback continues after priming' ;;
+        dma-stop) test=dma; file=audio/dma.c
+            failure='cascade and invalid channels do no I/O' ;;
         scale) test=sb16; file=audio/audio_debug.c
             failure='sb16 scale selects 44100 hz' ;;
         gfx-enter|gfx-exit) test=vga_gfx; file=display/vga_gfx.c
@@ -100,7 +105,7 @@ select_fault()
 }
 
 faults='frames gfx-enter gfx-exit setup-speaker setup-transfer setup-dma scale
-    callback cursor mouse-aux'
+    callback cursor mouse-aux dma-stop'
 if [ "${1:-}" = --texts ]; then
     for fault in $faults; do
         select_fault "$fault"

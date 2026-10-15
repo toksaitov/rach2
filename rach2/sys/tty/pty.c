@@ -152,7 +152,6 @@ static struct pty *pty_alloc(void)
     }
     for (i = 0; pty_by_index(i); i++) {
     }
-    p->in_use = 1;
     p->index = i;
     p->locked = 1; /* unlockpt() (TIOCSPTLCK 0) must run before pts open */
     p->uid = current_proc ? current_proc->euid : 0;
