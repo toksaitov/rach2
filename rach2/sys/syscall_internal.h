@@ -2,25 +2,45 @@
 #define _SYSCALL_INTERNAL_H_
 
 /*
- * What the four parts of the system call layer share: the helpers one part
- * defines and another calls, the constants and types two parts read, and
- * every handler, which syscall.c registers in its table. Included after the
- * kernel headers, whose types it names. The layer was one file until
- * milestone 53 divided it along its arms; the bodies did not change.
+ * What the files of the system call layer (syscall.c, syscall_fs.c,
+ * syscall_proc.c and syscall_net.c) share with each other and with the
+ * subsystems that serve calls: the helpers one file defines and another
+ * calls, the constants and types two of them read, and every handler, which
+ * `arch_syscall_init` of each architecture puts in the table
+ * (arch/i686/systab.c, arch/x86_64/systab.c). Included after the kernel
+ * headers, whose types it names.
  */
 
 extern volatile uint32_t fb_owner_pid;
 
+/**
+ * Release what the descriptor `e` holds before its slot is freed: first, for a
+ * descriptor of the calling thread's table, the table's record locks on what it
+ * is open on (`fd_close_locks`), then its objects (`fd_release_objects`). The
+ * caller frees the slot with `fd_free`. The close, the dup2 replacement of an
+ * open target, the execve CLOEXEC sweep and the release of a table by its last
+ * sharer come here. Nothing when `e` is NULL. May sleep.
+ */
 void fd_release_backing(fd_entry_t *e);
 
-/** The root's namespace lock, taken for the release of `e` when it may free
- * a nameless node of the KRFFS root, or NULL (syscall_fs.c). A holder in a
- * list of its own takes it before it leaves the list. May sleep. */
+/**
+ * Take the lock the release of `e`, a descriptor or a copy of one, needs when
+ * the release may free a node of the KRFFS root that lost its name: the root's
+ * namespace lock, for a file of the root, or for an end of a FIFO of the root
+ * or the reservation of an open of one. Returns the mount locked, which the
+ * caller unlocks (`vfs_ns_unlock`) once the release is done, or NULL, with
+ * nothing taken, for any other descriptor.
+ *
+ * May sleep; no caller holds the namespace lock of another mount or the lock of
+ * a description on a mount.
+ */
 struct vfs_mount *fd_release_lock(const fd_entry_t *e);
 
-/** At the end of a system call: let go of the descriptors the call held in
- * its shared table, and release those another sharer closed meanwhile that
- * no other call holds. May sleep. */
+/**
+ * At the end of a system call: let go of the descriptors the call held in its
+ * shared table, and release those another sharer closed meanwhile that no other
+ * call holds (`fd_teardown`). May sleep.
+ */
 void fd_holds_release(void);
 
 void init_kstacks(void);
@@ -31,13 +51,6 @@ long sys_exit(isr_params_t *params);
 
 long sys_ftruncate(isr_params_t *params);
 
-/*
- * The cores of the calls whose arguments differ in shape between i386 and
- * a 64-bit architecture, Linux's ksys_ functions: each takes its offsets
- * and lengths whole. The shared sys_ handler of each is the one-register
- * form a 64-bit architecture maps; i386's, which split a 64-bit value into
- * two registers, are in arch/i686/sys_ia32.c.
- */
 /* A call's argument `n` of the frame `p` as a signed value of the
  * register's width, and the largest such value: 32 bits on i686 and 64 on
  * x86-64, by the width of the frame's own registers, so a host test of the
@@ -46,12 +59,84 @@ long sys_ftruncate(isr_params_t *params);
     (sizeof(SC_RET(p)) == 4 ? (long long)(int32_t)SC_ARG(p, n) : (long long)SC_ARG(p, n))
 #define SC_SIGNED_MAX(p) (~(uint64_t)0 >> (65 - 8 * sizeof(SC_RET(p))))
 
+/*
+ * The cores of the calls whose arguments differ in shape between i386 and
+ * a 64-bit architecture, Linux's ksys_ functions: each takes its offsets
+ * and lengths whole. The shared sys_ handler of each is the one-register
+ * form a 64-bit architecture maps; i386's, which split a 64-bit value into
+ * two registers, are in arch/i686/sys_ia32.c.
+ */
+
+/**
+ * Truncate or extend the open file `fd` to `length` bytes: the core of
+ * ftruncate(2) and of i386's ftruncate64, the form musl calls there, whose
+ * handlers give it the length whole; the file system answers a length past what
+ * it can hold. Returns 0 or a negative errno: -EBADF for a descriptor that is
+ * not open on a file of a mount or is an O_PATH one, as on Linux; -EINVAL for
+ * one not open for writing; -EFBIG past RLIMIT_FSIZE, with SIGXFSZ sent
+ * (`fsize_refused`); -EPERM for an immutable or append-only file
+ * (`size_guarded`); -EBUSY for a file that backs a loop device; or the file
+ * system's error. May sleep.
+ */
 long ksys_ftruncate(int fd, uint64_t length);
+
+/**
+ * The core of truncate(2) and of i386's truncate64(2): set the length of the
+ * file `upath` names, relative to the working directory, to `length` bytes.
+ * Returns 0 or a negative errno: -EINVAL for a negative length, before the path
+ * is looked at, as on Linux; -EFAULT for a NULL path; or the errors of the copy
+ * into a path page (`path_from_user_dir`) and of `truncate_path`.
+ */
 long ksys_truncate(const char __user *upath, long long length);
+
+/**
+ * The core of pread64(2) in every form: `count` bytes of `fd` at `pos` into
+ * `buf`, leaving the descriptor's own offset where it was; `pio_entry` has what
+ * it refuses. Returns the bytes read, 0 at the end of the file and for a
+ * `count` of 0, whose descriptor is still checked, or a negative errno.
+ */
 long ksys_pread64(int fd, char __user *buf, uint32_t count, long long pos);
+
+/**
+ * The core of pwrite64(2) in every form: pread64's, with the buffer written
+ * from. Writes at the offset and leaves the descriptor's own where it was,
+ * except that O_APPEND writes at the end of the file, as Linux's pwrite does;
+ * the set-id bits and the loop device's file are write's rules (`file_write`).
+ * A device is written as pread64 reads it. Returns the bytes written, 0 for a
+ * `count` of 0, whose descriptor is still checked, or a negative errno.
+ */
 long ksys_pwrite64(int fd, const char __user *buf, uint32_t count, long long pos);
+
+/**
+ * The core of fadvise64 in every form: check one advice of posix_fadvise(3) and
+ * ignore it; the offset does not matter to it. Returns 0, or fails as Linux's
+ * does: -EBADF for a descriptor not open, -ESPIPE for a pipe or a FIFO, and
+ * -EINVAL for a negative length or an advice outside POSIX_FADV_NORMAL (0) to
+ * POSIX_FADV_NOREUSE (5).
+ */
 long ksys_fadvise64(int fd, long long len, uint32_t advice);
+
+/**
+ * The core of fallocate(2) in every form: give `fd` the range of `len` bytes at
+ * `offset` as `mode` asks. Returns 0 or a negative errno.
+ *
+ * A regular file of a mounted file system goes to its type's operation
+ * (vfs_fallocate), under the description's lock: tmpfs makes the range's pages
+ * or punches a hole, as Linux's tmpfs does, and ext2 gives the holes in the
+ * range zeroed blocks; any other type, and a block device, is -EOPNOTSUPP,
+ * Linux's answer for a file without the operation, after which glibc's
+ * posix_fallocate writes the range itself; it does not after -ENOSYS. A range
+ * that grows the file past RLIMIT_FSIZE is -EFBIG with SIGXFSZ, as a write's
+ * is. The checks before it are Linux's, in its order (ksys_fallocate,
+ * vfs_fallocate): -EBADF for a descriptor that is not open, -EINVAL for a
+ * negative offset or a length that is not positive, -EOPNOTSUPP for a mode it
+ * does not take, -EBADF for a descriptor not open for writing, then by the
+ * file's type -ESPIPE for a pipe, -EISDIR for a directory and -ENODEV for
+ * anything but a regular file or a block device, and -EFBIG for a range past
+ * the largest offset.
+ */
 long ksys_fallocate(int fd, uint32_t mode, uint64_t offset, uint64_t len);
+
 long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t flags, int fd,
                      unsigned long pgoff);
 
@@ -96,20 +181,70 @@ struct kernel_cmsghdr {
 
 long sys_writev(isr_params_t *params);
 
+/**
+ * Remove the empty and "." components of the absolute path `path`, in place,
+ * and return its length. `path` begins with '/'; the result has no trailing
+ * slash unless it is "/". ".." stays in the path: the walk resolves it
+ * physically, where a missing or unsearchable directory before it fails, so no
+ * spelling of a path reaches past what the caller may see.
+ */
 int canonicalize_abs(char *path);
 
+/**
+ * The path of execve(2), copied into `pathbuf` of `size` bytes as
+ * `copy_path_at` copies it for `AT_FDCWD`, for the program it runs, with `*end`
+ * saying how it named a directory by its end and a last "." put back. Such a
+ * path must reach a directory, which no program is, so the one walk that finds
+ * the program answers for the end (`resolve_named`): a file so named is
+ * -ENOTDIR and a directory the open's -EACCES, as on Linux. Returns the length,
+ * or a negative errno.
+ */
 int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath, int *end);
 
+/**
+ * Make the absolute path `path`, which the kernel read from a file, canonical
+ * in place, as `copy_path_cwd` makes execve's, with `*end` saying how it named
+ * a directory by its end and a last "." put back: the interpreter a script
+ * names, or an ELF image's PT_INTERP, whose one walk answers for the end as the
+ * program's does. Returns the length.
+ */
 int canonicalize_named(char *path, int *end);
 
+/**
+ * `vfs_resolve` of `name` with the flags `walk`, for a call whose path named a
+ * directory by its end when `dir` is not 0 (`path_names_dir`): such a path
+ * follows a final symbolic link whatever `walk` says, and must reach a
+ * directory, as Linux's walk requires, or the call is -ENOTDIR, with nothing
+ * held and no lock kept. Returns 0 with `ref` held, and the final mount locked
+ * under VFS_WALK_LOCK, or a negative errno.
+ */
 int32_t resolve_named(const char *name, int walk, int dir, struct vfs_ref *ref);
 
+/**
+ * Check, before an operation on it, that the KRFFS root node the descriptor
+ * `entry` has is still a file the descriptor may use: 0, or -EBADF.
+ */
 int fd_node_check(fd_entry_t *entry);
 
+/** Non-zero when the caller has appropriate privilege (`proc_privileged`). */
 int cred_privileged(void);
 
+/**
+ * Drop the set-id bits a modification must not leave standing on the KRFFS root
+ * node `node`: a write or a truncation by a caller without privilege, or a
+ * change of owner or group by any caller. A directory keeps its bits, as on
+ * Linux, and a NULL `node` is ignored.
+ */
 void cred_kill_setid(krffs_node_t *node);
 
+/**
+ * The rule of `cred_kill_setid` for the file `node` of the mount `mnt` of
+ * another type, through the attributes the type reports and sets: a write or a
+ * truncation by a caller without the privilege drops the set-id bits, so that a
+ * program a group may modify cannot keep root's identity. A directory keeps its
+ * bits, as on Linux. Nothing is done for a NULL `mnt` or `node` or a file whose
+ * attributes cannot be read, and a failure to set them is ignored.
+ */
 void vfs_kill_setid(struct vfs_mount *mnt, void *node);
 
 /* Access-check `want` bits, matching an octal permission digit. */
@@ -119,10 +254,31 @@ void vfs_kill_setid(struct vfs_mount *mnt, void *node);
 
 #define CRED_X 1
 
+/**
+ * Whether `mnt` is the KRFFS root, whose nodes take the paths of the system
+ * call layer written for KRFFS; an ext2 root is entry zero of the mount table
+ * as well and goes the way of every other type.
+ */
 int mnt_is_root(const struct vfs_mount *mnt);
 
+/**
+ * The permission check of the `want` bits over the node `r` of any type, from
+ * the attributes its file system reports, by the real ids when `use_real` is
+ * set: the nine-bit rule of `cred_access_bits`, as `cred_access_node` applies
+ * it, with its execute rule for anything but a directory, which needs an
+ * execute bit somewhere even for root. A write of an immutable file is -EPERM
+ * for every caller, root too, as Linux's inode_permission answers. Returns 0,
+ * -EACCES, -EPERM, or the error of reading the attributes.
+ */
 int32_t cred_access_ref(const struct vfs_ref *r, int want, int use_real);
 
+/**
+ * The permission check of the `want` bits over the KRFFS root node `node`, by
+ * the real ids when `use_real` is set (`cred_access_bits`): 0, or -EACCES. The
+ * root directory reads as 0755, the fixed identity stat reports (its stored
+ * mode has the dirty-mount flag). Executing a file that is not a directory
+ * needs an execute bit somewhere, even for root.
+ */
 int32_t cred_access_node(const krffs_node_t *node, int want, int use_real);
 
 long sys_mount(isr_params_t *params);
@@ -143,6 +299,21 @@ long sys_syncfs(isr_params_t *params);
 
 long sys_readahead(isr_params_t *params);
 
+/**
+ * The inode-flag requests of ioctl(2), FS_IOC_GETFLAGS, FS_IOC_SETFLAGS and
+ * FS_IOC_GETVERSION, on the descriptor `entry`, with `arg` the user address of
+ * the int they read or write. `*handled` is set when the request was answered
+ * here, and the return is then 0, -EFAULT, -EPERM or the type's error;
+ * otherwise it is 0.
+ *
+ * Of the types here only ext2 keeps the flags and the generation, and only for
+ * a file or a directory; any other descriptor leaves the request to the rest of
+ * ioctl(2), which answers -ENOTTY, as Linux does for a file system without
+ * them. The file's owner, or a privileged caller, sets the flags the file
+ * system keeps; the immutable and append-only flags, which the VFS enforces,
+ * only a privileged caller changes, as CAP_LINUX_IMMUTABLE does on Linux, and
+ * another caller is -EPERM.
+ */
 int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *handled);
 
 long sys_fadvise64(isr_params_t *params);
@@ -164,6 +335,13 @@ int32_t raw_seek_resolve(uint64_t cur, uint64_t size, long long delta, int whenc
 
 long sys_lseek(isr_params_t *params);
 
+/**
+ * Whether `sock` is the query descriptor: the raw socket socket(2) makes of
+ * AF_INET, SOCK_RAW and IPPROTO_RAW, which stores no protocol. A DHCP client
+ * opens one only to ask the interface ioctls about the machine, and it sends
+ * and receives nothing: bind, sendto, recvfrom, read and readv fail on it with
+ * EOPNOTSUPP.
+ */
 int sock_is_query(const struct socket *sock);
 
 long sys_read(isr_params_t *params);
@@ -176,6 +354,23 @@ long sys_preadv(isr_params_t *params);
 
 long sys_pwritev(isr_params_t *params);
 
+/**
+ * Fill the `iovcnt` buffers of the user's iovec array at `iov_user` from one
+ * datagram of the socket `entry` is open on, for readv(2) and recvmsg(2),
+ * waiting for one unless the description has O_NONBLOCK. Returns the bytes
+ * copied, or a negative errno from the wait: -EAGAIN when no datagram waits
+ * under O_NONBLOCK, -EINTR, or the socket's pending error, which the call
+ * takes.
+ *
+ * A datagram is a message, so it is taken once and copied out in pieces: the
+ * buffers are filled in order until the datagram runs out, and what is left
+ * when the buffers run out first is dropped, as a `read` too small for a
+ * datagram drops it. One datagram is consumed either way, unless `peek` leaves
+ * it waiting for the next receive, as MSG_PEEK asks, and one of no bytes
+ * returns 0 without being the end of input. `src_ip` and `src_port`, when not
+ * NULL, are given the datagram's sender, and `whole` its length, which is more
+ * than the bytes copied when the buffers took less, for MSG_TRUNC.
+ */
 int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, uint32_t *src_ip,
                     uint16_t *src_port, int peek, int32_t *whole);
 
@@ -203,8 +398,31 @@ long sys_lstat64(isr_params_t *params);
 
 struct user_statfs;
 
+/**
+ * The core of statfs(2) and statfs64(2): copy out to `out` the statfs of the
+ * file system the user's path `upath` is on; 0 or a negative errno. The caller
+ * has refused a NULL for either. The path must name something, so a path that
+ * names nothing is the walk's error, -ENOENT among them, and one that names a
+ * directory by its end must reach one (`resolve_named`). A node of /dev, /proc
+ * or /sys answers with its mount's magic, a node of a mounted volume with the
+ * volume's own statfs, and a node of the KRFFS boot root with KRFFS's.
+ */
 long ksys_statfs(const char __user *upath, struct user_statfs __user *out);
 
+/**
+ * The core of fstatfs(2) and fstatfs64(2): copy out to `out` the statfs of the
+ * file system descriptor `fd` is open on; 0 or a negative errno, -EBADF for a
+ * descriptor that is not open. The caller has refused a NULL `out`.
+ *
+ * The descriptor's kind decides which mount answers. A /proc file's descriptor
+ * answers proc's, or sysfs's for a /sys file, and a /sys directory's sysfs's.
+ * An O_PATH descriptor on a synthetic leaf answers devfs's for a device or a
+ * pty slave, sysfs's for a /sys node, and proc's for any other. A device, the
+ * console, a pty master and any other synthetic directory, /proc and /proc/PID
+ * among them, answer devfs's. A file or a directory of a mounted volume answers
+ * with the volume's own statfs, and one of the KRFFS boot root with KRFFS's.
+ * Any other descriptor, a socket, a pipe or a pty slave among them, is -ENOSYS.
+ */
 long ksys_fstatfs(int fd, struct user_statfs __user *out);
 
 long sys_statfs(isr_params_t *params);
@@ -328,14 +546,20 @@ long sys_renameat(isr_params_t *params);
 
 long sys_renameat2(isr_params_t *params);
 
-/*
- * Timespec structure for utimensat
- */
+/* The `struct timespec` of the caller's ABI, two `long`s, which utimensat,
+ * the clocks, the sleeps and futex read and write. */
 struct kernel_timespec {
     long tv_sec;
     long tv_nsec;
 };
 
+/**
+ * The current real time, in seconds and nanoseconds since the epoch, as
+ * `rtc_realtime` (clock.c) gives it: the second the machine's clock gave at
+ * boot plus the time since that read, or the time since boot on a machine whose
+ * clock could not be read, with the timer's place within the tick and any step
+ * a setting of the clock made, and never earlier than the reading before it.
+ */
 void get_current_time(int64_t *seconds, int64_t *nanoseconds);
 
 long sys_utimensat(isr_params_t *params);

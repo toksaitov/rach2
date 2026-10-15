@@ -16,15 +16,25 @@ void fb_release_if_owner(uint32_t pid);
 
 struct krffs_node;
 
-/** Whether any descriptor has `node`, a node of the KRFFS root. The debug
- * shell removes and renames through the file system, below the system call
- * layer that keeps a held node without a name instead of freeing it, so it
- * asks here first. */
+/**
+ * Whether anything holds the KRFFS root node `node`: a descriptor, an end of a
+ * FIFO, a descriptor in flight, a file mapping or the address space of a
+ * program (`fd_node_holders`).
+ *
+ * The debug shell removes and renames through the file system directly, below
+ * the system call layer, which keeps the rule that a held node is orphaned and
+ * not freed, so it asks here and keeps no copy of the rule.
+ */
 int fs_node_is_held(const struct krffs_node *node);
 
-/** Repoint every holder of `from` at `to` (`vfs_repoint`), after a write of
- * the debug shell grew a file past its extent and moved its node. Nothing is
- * done when the two are the same or `from` is NULL. */
+/**
+ * Move every reference to the KRFFS root node `from` to `to`, where the file
+ * now is; nothing when `from` is NULL or is `to`. The debug shell writes
+ * through the file system directly, and a write that grows a file past its
+ * extent relocates it. The sweep over descriptors, descriptions, working
+ * directories and roots, mounts, loop devices and locks is the VFS's
+ * (`vfs_repoint`), the one place that knows every kind of holder.
+ */
 void fs_node_moved(const struct krffs_node *from, struct krffs_node *to);
 
 /** The host and domain names of the caller's UTS namespace, which uname
