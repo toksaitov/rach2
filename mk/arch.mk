@@ -7,16 +7,15 @@
 # do not include it: they run on the build machine and are the same for
 # either architecture.
 #
-# ARCH_SUFFIX is what a path of this architecture adds after `build`. It is
-# empty for i686, whose products keep the paths they had before there was a
-# second architecture (build/rach2/kernel), and `/x86_64` for x86-64
+# ARCH_SUFFIX is what a path of this architecture adds after `build`: empty
+# for i686 (build/rach2/kernel) and `/x86_64` for x86-64
 # (build/x86_64/rach2/kernel), so the two trees never share a file.
 #
-# ARCH_VENDOR is where a vendored port's generated work lives: its extracted
+# ARCH_VENDOR is where a vendored port's generated work goes: its extracted
 # tree, its stamp, and musl's install. For i686 that is the port's own
-# directory under vendor/, as it always was (vendor/musl/install); for x86-64
-# it is build/x86_64/vendor-work/, so nothing of the second architecture lands
-# in the source tree.
+# directory under vendor/ (vendor/musl/install); for x86-64 it is
+# build/x86_64/vendor-work/, so nothing of x86-64 is written in the source
+# tree.
 #
 # CROSS_PREFIX names the cross toolchain, ARCH_CFLAGS selects the word size
 # for every guest compile and link, and ARCH_USER_TEXT is the address at which
@@ -48,11 +47,11 @@ else
 $(error ARCH=$(ARCH): the architectures are i686 and x86_64)
 endif
 
-# The build tree of this architecture, relative to the repository root, and
-# the install directory of the ported musl the guest programs link against.
+# The build tree of this architecture, relative to the repository root.
 ARCH_BUILD  = build$(ARCH_SUFFIX)
 
 # The build trees of every architecture, for what spans them, as the one
 # recovery key does.
 ARCH_BUILDS = build build/x86_64
+# The install directory of the ported musl the guest programs link against.
 ARCH_MUSL   = $(ARCH_VENDOR)/musl/install

@@ -9,11 +9,10 @@
 # with no leading dash, and every long option in a word of its own: `make -n
 # --no-print-directory` gives `n --no-print-directory`, and
 # `make --no-print-directory` alone gives `--no-print-directory` as the first
-# word. Searching that first word for the letter `n` therefore reads
-# `--no-print-directory` as a dry run, which `tests/run` passes on every named
-# suite, and the vendor builds were skipped where their outputs were absent.
-# The word is taken only when it is not an option, which is what says it holds
-# the short flags.
+# word. Searching that first word for the letter `n` would read
+# `--no-print-directory`, which `tests/run` passes on every named suite, as a
+# dry run, and skip the vendor builds. The word is taken only when it is not
+# an option, which is what says it holds the short flags.
 #
 # That word is not the whole answer. GNU Make 3.81, the make macOS ships, puts
 # the short flag after the long option when both are given: `make -n

@@ -1,12 +1,12 @@
-# The programs of the GNU layer that have build scripts of their own rather
-# than port recipes (vendor/gnu/native, spidermonkey and chromium). Like
-# gnu-toolchain, each target builds on a Linux host, is not part of `all`,
-# and runs its script from nothing behind a stamp, again whenever the script
-# or a list of sources it reads changes: `make gnu-native` builds GCC and
-# binutils to run on Rach2, `make gnu-gdb` GDB and gdbserver, `make gnu-js`
-# the SpiderMonkey shell, and `make gnu-chromium` unpacks Debian's
-# chromium-headless-shell with its libraries. The three that compile are
-# rebuilt when the cross toolchain is; the fourth needs only its sysroot.
+# mk/gnu-extra.mk: the programs of the GNU layer that have build scripts of
+# their own rather than port recipes (vendor/gnu/native, spidermonkey and
+# chromium). Like gnu-toolchain, each target builds on a Linux host, is not
+# part of `all`, and runs its script from nothing behind a stamp, again
+# whenever the script or a list of sources it reads changes: `make gnu-native`
+# builds GCC and binutils to run on Rach2, `make gnu-gdb` GDB and gdbserver,
+# `make gnu-js` the SpiderMonkey shell, and `make gnu-chromium` unpacks
+# Debian's chromium-headless-shell with its libraries. The three that compile
+# are rebuilt when the cross toolchain is; the fourth needs only its sysroot.
 GNU_NATIVE_STAMP = $(GNU_OUT)/native.stamp
 GNU_GDB_STAMP = $(GNU_OUT)/gdb.stamp
 GNU_JS_STAMP = $(GNU_OUT)/js.stamp

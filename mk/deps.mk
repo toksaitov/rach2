@@ -1,13 +1,12 @@
-# mk/deps.mk: automatic header-dependency tracking (the fix for the old
-# "edit a .h, then `make clean && make`" ritual).
+# mk/deps.mk: the compiler flags that record each object's headers, so that a
+# header edit rebuilds the objects that include it.
 #
-# Add $(DEPFLAGS) to every C compile and `-include $(OBJECTS:.o=.d)` near the
-# end of the Makefile. GCC then writes a `.d` next to each `.o` listing the
-# headers that object included, and make rebuilds exactly the objects affected
-# by a header edit (no full rebuild), and `make -j` stays correct.
+# A component adds $(DEPFLAGS) to every C compile and puts
+# `-include $(OBJECTS:.o=.d)` near the end of its Makefile. GCC then writes a
+# `.d` beside each `.o` listing the headers that object included, and make
+# rebuilds only the objects a header edit affects, under `make -j` as well.
 #
-# -MMD : alongside the .o, emit a .d with the object's header prerequisites
-# (user headers only; system headers are skipped, like our krffs tools) -MP :
-# also emit an empty phony target for each header, so deleting or renaming a
-# header does not wedge make with a "no rule to make <header>" error
+# -MMD writes the .d with the object's own headers; system headers are left
+# out. -MP adds an empty phony target for each header, so that deleting or
+# renaming a header does not stop make with "no rule to make target".
 DEPFLAGS := -MMD -MP

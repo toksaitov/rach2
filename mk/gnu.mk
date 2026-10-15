@@ -1,16 +1,16 @@
-# The GNU layer of milestone 54 (vendor/gnu/Readme.md). It builds on a Linux
-# host and is not part of `all`. `make gnu-toolchain` builds the cross
-# toolchain for the architecture ARCH names, i686-linux-gnu or
-# x86_64-rach2-linux-gnu (vendor/gnu/arch.sh says why), under
-# build/vendor/gnu/ or build/x86_64/vendor/gnu/ from the tarballs
-# vendor/gnu/fetch.sh downloads and checks, and `make gnu-ports` builds every
-# recipe of vendor/gnu/ports/ with it into an empty root/ there. The scripts
-# take the architecture from RACH2_ARCH (vendor/gnu/arch.sh). Each is behind a
-# stamp. The toolchain's depends on its script, fetch.sh and the toolchain's
-# own lines of sources.txt, so that pinning a port does not rebuild the
-# compilers; the ports' depends on the toolchain, build_port.sh, the recipes,
-# fetch.sh, all of sources.txt and the link GNU_LINK asks for, shared unless
-# it says static, which a file keeps.
+# mk/gnu.mk: the GNU layer (vendor/gnu/Readme.md). It builds on a Linux host
+# and is not part of `all`. `make gnu-toolchain` builds the cross toolchain
+# for the architecture ARCH names, i686-linux-gnu or x86_64-rach2-linux-gnu
+# (vendor/gnu/arch.sh says why), under build/vendor/gnu/ or
+# build/x86_64/vendor/gnu/ from the tarballs vendor/gnu/fetch.sh downloads and
+# checks, and `make gnu-ports` builds every recipe of vendor/gnu/ports/ with
+# it into an empty root/ there. The scripts take the architecture from
+# RACH2_ARCH (vendor/gnu/arch.sh). Each is behind a stamp. The toolchain's
+# depends on its script, fetch.sh and the toolchain's own lines of
+# sources.txt, so that pinning a port does not rebuild the compilers; the
+# ports' depends on the toolchain, build_port.sh, the recipes, fetch.sh, all
+# of sources.txt and the link GNU_LINK asks for, shared unless it says static,
+# which a file keeps.
 GNU_OUT = build$(ARCH_SUFFIX)/vendor/gnu
 GNU_TARGET_i686 = i686-linux-gnu
 GNU_TARGET_x86_64 = x86_64-rach2-linux-gnu
