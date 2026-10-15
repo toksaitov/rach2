@@ -1,3 +1,5 @@
+/* usercopy.c: the copies between kernel and user memory of usercopy.h. */
+
 #include "usercopy.h"
 #include "paging.h"
 #include "../arch/arch.h"
@@ -5,40 +7,25 @@
 #include "../lib/kstring.h"
 #include "../lib/kerrno.h"
 
-/**
- * Report whether [addr, addr+len) lies wholly within user space.
- *
- * The length test is written as `len > USER_ADDR_MAX - addr` so a range whose
- * end wraps past the top of the address space is rejected without overflowing.
- * An empty range is always in bounds.
- */
+/** The length test is written as `len > USER_ADDR_MAX - addr`, so that a
+ * range whose end wraps past the top of the address space is refused
+ * without an overflow. */
 int user_range_ok(uintptr_t addr, size_t len)
 {
     if (len == 0) {
-        return 1; /* an empty range touches nothing */
+        return 1;
     }
     if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX) {
         return 0;
     }
     if (len > USER_ADDR_MAX - addr) {
-        return 0; /* spans past the end of user space (or overflows) */
+        return 0;
     }
     return 1;
 }
 
-/**
- * Copy `n` bytes from a user pointer into the kernel buffer `dst`.
- *
- * The range is pre-faulted before the copy, so a valid page not yet backed
- * is backed there and not by a fault in the raw copy, and a page outside
- * every VMA answers -EFAULT instead of a panic. Backing a page may take
- * frames back from the caches, which from a system call can sleep in a
- * writeback.
- *
- * Returns 0 on success and -EFAULT if any byte of the source range is outside
- * user space, in no region that may be read, or cannot be backed. Returns 0
- * for a zero-length copy.
- */
+/** The range is brought in before the copy (`vm_prefault_range`), so that
+ * a page not yet backed is backed there and not by a fault in the copy. */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     uintptr_t addr = (__force uintptr_t)src;
@@ -56,19 +43,9 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
     return 0;
 }
 
-/**
- * Copy `n` bytes from the kernel buffer `src` into a user pointer.
- *
- * The range is pre-faulted for writing before the copy, so a lazy heap or
- * stack page is made there, a copy-on-write page is made private, and a
- * read-only or unmapped destination answers -EFAULT instead of a fault in
- * kernel mode. Backing a page may take frames back from the caches, which
- * from a system call can sleep in a writeback.
- *
- * Returns 0 on success and -EFAULT if any byte of the destination range is
- * outside user space, unmapped, read-only, or cannot be backed. Returns 0
- * for a zero-length copy.
- */
+/** The range is brought in for a write before the copy, so that a page not
+ * yet backed is made there and a copy-on-write page made private, and the
+ * kernel's store finds each page writable. */
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
     uintptr_t addr = (__force uintptr_t)dst;
@@ -105,21 +82,13 @@ int cmpxchg_user_u32(uintptr_t dst, uint32_t old, uint32_t value, uint32_t *prev
 }
 
 /**
- * Copy a NUL-terminated string from user space into `dst`, at most `n` bytes.
- *
  * Each byte's address is checked before it is read, so a short string near
- * the top of user space is valid and an unterminated one cannot walk off the
- * end. Each page is backed as the copy reaches it, not the whole `n` at once,
- * since `n` is only a cap: the string may end before a page that is
- * legitimately unmapped, and backing that page would reject a valid string.
- * Each byte is read from user memory once and tested in `dst`, so a thread
- * on another processor that stores into the string meanwhile cannot make
- * the copy end without its NUL.
- *
- * On success returns the string length not counting the NUL, which is also
- * copied. Returns -EINVAL for `n` of 0, -EFAULT if a byte lies outside user
- * space or backs no VMA, and -ENAMETOOLONG if no NUL appears within `n` bytes;
- * `dst` then has `n` bytes and no NUL.
+ * the top of user space is copied and an unterminated one cannot run off
+ * the end. The pages are backed one at a time, not the whole `n` at once,
+ * since `n` is only a cap and the page past the string's end may lie in no
+ * region. Each byte is read from user memory once and tested in `dst`, so a
+ * thread on another processor that stores into the string meanwhile cannot
+ * make the copy end without its NUL.
  */
 int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
 {
@@ -144,23 +113,9 @@ int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
             return (int)i;
         }
     }
-    return -ENAMETOOLONG; /* no NUL within n bytes */
+    return -ENAMETOOLONG;
 }
 
-/**
- * The length of the NUL-terminated string at user address `src`, not counting
- * the NUL, when the NUL is among the first `n` bytes.
- *
- * The bytes are checked and their pages backed as `strncpy_from_user` checks
- * and backs them, one page at a time as the scan reaches it, so a string that
- * ends before an unmapped page is measured. What it measures can change
- * before the caller reads it again; a caller that copies it after bounds the
- * copy by this length.
- *
- * Returns the length; -EINVAL for `n` of 0; -EFAULT if a byte lies outside
- * user space or backs no VMA; -ENAMETOOLONG if no NUL is among the first `n`
- * bytes.
- */
 int strnlen_user(const char __user *src, uint32_t n)
 {
     uintptr_t addr = (__force uintptr_t)src;

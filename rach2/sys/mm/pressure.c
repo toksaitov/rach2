@@ -53,10 +53,8 @@ size_t mem_reserve_frames(void)
 
 /**
  * The free-frame count below which `mem_balance` starts reclaim: a sixteenth
- * of managed memory.
- *
- * Reclaim stops at `high_mark`, an eighth, so it runs in bursts and not on
- * every allocation.
+ * of managed memory. Reclaim stops at `high_mark`, an eighth, so it runs in
+ * bursts and not on every allocation.
  */
 static size_t low_mark(void)
 {
@@ -72,16 +70,8 @@ static size_t high_mark(void)
     return frame_total_count() / 8u;
 }
 
-/**
- * Whether a frame may be taken now.
- *
- * When the free count is at or below the reserve, a frame is refused to a
- * process whose effective uid is not 0. An interrupt handler, the kernel
- * outside any process, root, and a process that is reclaiming may still take
- * one: the writeback a reclaim starts needs requests, and the reserve is kept
- * for them. `user_page` is not consulted, so a user page and a kernel object
- * are refused alike.
- */
+/** A process that is reclaiming may take from the reserve: the writeback a
+ * reclaim starts needs requests, and the reserve is kept for them. */
 int mem_may_take(int user_page)
 {
     (void)user_page;
@@ -105,16 +95,10 @@ static int may_write_back(void)
     return kirq_enabled() && proc_in_syscall();
 }
 
-/**
- * Evict cached frames until the free count reaches the high mark, or until
- * the caches give nothing back. Returns the number of frames freed.
- *
- * The buffer cache is asked first and the page cache for the rest. Dirty
- * frames are written back only where `may_write_back` allows it. The calling
- * process is marked as reclaiming meanwhile, so the requests a writeback
- * needs come from the reserve even when the caller itself may not take from
- * it: the writeback is what the reserve is kept for.
- */
+/** The calling process is marked as reclaiming meanwhile, so that the
+ * requests a writeback needs come from the reserve even when the caller
+ * itself may not take from it: the writeback is what the reserve is kept
+ * for. */
 uint32_t mem_reclaim(void)
 {
     size_t before = frame_free_count();

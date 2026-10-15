@@ -1,13 +1,9 @@
-#ifndef _MODLAYOUT_H_
-#define _MODLAYOUT_H_
-
-#include "../lib/kint.h"
-
 /*
  * modlayout: the judgement on where the bootloader put the boot modules.
  *
- * GRUB promises a module's address and length and nothing about placement, so
- * the kernel checks the layout before it reserves memory over it. The rules
+ * Multiboot gives a module's address and length and says nothing of where
+ * it lies, so the kernel checks the layout before it reserves memory over
+ * it. The rules
  * are the four ways a placement breaks this kernel: a module past the
  * memory the kernel can address (its end would wrap), a module
  * overlapping the kernel image (the bump allocator would carve over its own
@@ -16,9 +12,13 @@
  * length calculation wrong). Where a module lies is otherwise the loader's
  * choice: the boot maps it into the kernel's layout wherever it is.
  *
- * The function is pure so tests/host/modlayout_hosttest.c can craft every
- * refusal, including the ones no bootloader will produce on demand.
+ * The check calls nothing of the kernel, so tests/host/modlayout_hosttest.c
+ * can give it every refusal, the ones no bootloader makes among them.
  */
+#ifndef _MODLAYOUT_H_
+#define _MODLAYOUT_H_
+
+#include "../lib/kint.h"
 
 /** One module's half-open physical range, as Multiboot reports it. */
 struct modlayout_range {
@@ -39,8 +39,10 @@ struct modlayout_range {
  * `kernel_end` is the first byte past the kernel image, `limit` the first byte
  * past addressable memory. On a refusal `*bad` receives the index of the
  * offending module (the second of the pair for an overlap), so the caller can
- * name it. Ranges are half-open and compared by subtraction, so a range near
- * the 32-bit edge cannot wrap past a check.
+ * name it, and 0 otherwise; `bad` may be NULL. Ranges are half-open and
+ * compared end to end, with no length added, so a range near the top of the
+ * address space cannot wrap past a check. Each module is checked for the
+ * first three rules in turn, and the pairs for overlap after.
  *
  * @return `MODLAYOUT_OK`, or the first rule broken.
  */
@@ -54,11 +56,11 @@ const char *modlayout_reason(int code);
  * Write the full refusal into `buf`: the rule, the module's index, and its
  * range, as `reason: module N spans 0xSTART - 0xEND`.
  *
- * The kernel's panic screen takes a string and the target laptop has no serial
- * port, so the detail has to travel INTO the panic, not be printed
- * before it: `k_panic` clears the display. The formatting is self-contained
- * for the same reason the check is, so the host test can assert the exact
- * text. The result is always NUL-terminated and truncated to fit.
+ * `k_panic` takes one string and draws its picture over the screen, and the
+ * Lenovo has no serial port, so the detail goes into that string rather than
+ * into a line printed before it. The formatting calls nothing of the kernel
+ * either, so the host test can check the exact text. The result is
+ * truncated to fit and ends in a NUL; a `buflen` of 0 writes nothing.
  */
 void modlayout_describe(int code, uint32_t index, uintptr_t start, uintptr_t end, char *buf,
                         uint32_t buflen);

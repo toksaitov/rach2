@@ -1,9 +1,3 @@
-#ifndef _MM_H_
-#define _MM_H_
-
-#include "../lib/kint.h"
-#include "vm.h"
-
 /*
  * An address space: a page directory and the regions it holds. A process
  * points at one; fork makes a copy, and clone with CLONE_VM, which vfork and
@@ -41,6 +35,12 @@
  * keeps it with the address space: every thread that shares the space has the
  * one flag.
  */
+#ifndef _MM_H_
+#define _MM_H_
+
+#include "../lib/kint.h"
+#include "vm.h"
+
 struct page_dir;
 struct open_file;
 struct vfs_mount;
@@ -53,7 +53,7 @@ struct mm {
     uint32_t users;
     uint32_t holds;
     struct page_dir *dir; /* NULL once the last user has gone */
-    uintptr_t space_root; /* the directory's physical address */
+    uintptr_t space_root; /* the directory's physical address; 0 with `dir` */
     vm_space_t vm;
     struct open_file *exe_file; /* the program's file; NULL for none */
     struct mm *exe_next;        /* the next on the list of those with one */
@@ -153,19 +153,33 @@ void mm_drop(struct process *p);
  * counted past the tables its regions lack (`paging_user_count`). */
 unsigned long mm_resident(const struct mm *mm);
 
-/*
- * The file system's part, in syscall_fs.c: a description of the file at
- * `ref` that opens nothing, with a hold of its own on the node and a
- * reference on the mount, or NULL when the heap has no room or the type
- * cannot pin the node; the lock the release of one needs, which
- * `fs_exe_lock` takes and returns the mount of, the KRFFS root's namespace
- * lock for a file of the root and none, NULL, for another; and the release
- * of one that no list has any more, with that lock held, which frees a file
- * of the KRFFS root that lost its name when nothing else holds it and then
- * gives the lock back.
+/**
+ * A description of the file at `ref` for an address space to keep its
+ * program by, one that opens nothing, as an O_PATH open makes: it has a hold
+ * of its own on the node and a reference on the mount, so that a volume is
+ * not unmounted while a program on it runs, and on a type that keeps a node
+ * only while it is open, mounted KRFFS, a pin, so that a rename or an unlink
+ * leaves the file to it. NULL when the heap has no room or the pin fails.
+ * The file system's part, in syscall_fs.c.
  */
 struct open_file *fs_exe_open(const struct vfs_ref *ref);
+
+/**
+ * Take the lock the release of `ofd`, an address space's description of its
+ * program's file, needs, before the address space leaves the list
+ * `mm_exe_holds` reads, and return the mount locked: for a file of the KRFFS
+ * root, the root's namespace lock; for a file of another type, no lock, and
+ * NULL. May sleep, so the caller holds no namespace lock. In syscall_fs.c.
+ */
 struct vfs_mount *fs_exe_lock(const struct open_file *ofd);
+
+/**
+ * Let go of `ofd` once its address space is off the list `mm_exe_holds`
+ * reads, with `locked` held as `fs_exe_lock` returned it: a file of the
+ * KRFFS root that lost its name is freed when nothing else holds it, the
+ * lock is given back, and the description's last reference closes it. May
+ * sleep. In syscall_fs.c.
+ */
 void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked);
 
 #endif /* _MM_H_ */

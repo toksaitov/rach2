@@ -1,25 +1,24 @@
-#ifndef _VM_H_
-#define _VM_H_
-
-#include "../lib/kint.h"
-#include "../lib/kdef.h"
-
 /*
- * The address-space model: a process's memory is described by a small set of
- * virtual memory areas (VMAs), each a half-open page-aligned range with a
- * protection and a kind. This is the data structure real kernels (Linux
- * vm_area_struct, BSD vm_map_entry) are built on; here a growable array
- * rather than a tree, since a teaching process has few regions. The
- * demand-paging fault handler consults it to decide whether a fault is a page
- * to lazily allocate, a stack to grow, or a segfault. See the Readme.
+ * The regions of an address space: its virtual memory areas (VMAs), each a
+ * half-open page-aligned range with a protection and a kind. Linux keeps the
+ * same record as vm_area_struct and BSD as vm_map_entry, both in a tree;
+ * here the regions are an array in the heap that grows. The page fault
+ * handler reads them to decide whether a fault is a page to back, a stack to
+ * grow, or a segfault. See Readme.md.
  *
  * The array is kept sorted by address and neighbours of the same kind and
  * protection are merged, so a lookup is a binary search and the free ranges
  * are the gaps between consecutive entries.
  *
- * vm.c is pure logic (no kernel globals), so the host test exercises the
- * find/insert/remove/overlap operations directly.
+ * vm.c calls nothing of the kernel but kmalloc and kfree, so
+ * tests/host/vm_hosttest.c compiles it with the host's allocator in their
+ * place and drives its operations directly.
  */
+#ifndef _VM_H_
+#define _VM_H_
+
+#include "../lib/kint.h"
+#include "../lib/kdef.h"
 
 /* Policy: the regions a process may hold at most. A process's regions are an
  * array in the heap that starts at VMA_FIRST entries and doubles as it
@@ -36,12 +35,14 @@
 /* How far below its base the main stack VMA may grow on demand (8 MB). */
 #define VM_STACK_MAX_GROWTH 0x800000u
 
-/* Region protection bits (mirror the PROT_* / page-table permission flags). */
+/* Region protection bits; the first three are the values of PROT_READ,
+ * PROT_WRITE and PROT_EXEC. */
 #define VM_PROT_READ    0x1u
 #define VM_PROT_WRITE   0x2u
 #define VM_PROT_EXEC    0x4u
-/* Given to paging_protect_range for a shared region, whose pages are shared
- * on purpose: a write goes to the frame they share, never to a copy. */
+/* Given to paging_protect_range, and not kept in a region, for a shared
+ * region, whose pages are shared on purpose: a write goes to the frame they
+ * share, never to a copy. */
 #define VM_PROT_SHARED  0x8u
 /* Kept in a region's protection beside the three access bits: the region
  * may never be made writable. A shared mapping of a file opened without
@@ -57,7 +58,8 @@
  * the device, and a page of it is never backed by a fault. */
 #define VM_PROT_IO      0x20u
 
-/* Region kind; drives both teaching clarity and fault policy. */
+/* The kind of a region, which /proc/PID/maps reports and the fault, fork
+ * and brk paths read. */
 typedef enum {
     VM_NONE = 0,
     VM_CODE,  /* ELF text: read + execute */
@@ -100,7 +102,7 @@ typedef struct vma {
     uint32_t pgoff;
 } vma_t;
 
-/* The per-process address space. */
+/* The regions of an address space, with its break and its stack's limit. */
 typedef struct vm_space {
     vma_t *vmas; /* `cap` entries in the heap, `count` of them in use */
     uint32_t cap;
@@ -110,26 +112,35 @@ typedef struct vm_space {
     uintptr_t stack_limit; /* lowest address the stack VMA may grow down to */
 } vm_space_t;
 
-/* Reset an address space to empty, dropping the files its regions map; the
- * array it has, if any, is kept. */
+/** Reset an address space to empty, dropping the files its regions map;
+ * the array it has, if any, is kept, and the heap's start, the break and the
+ * stack's limit go to 0. */
 void vm_init(vm_space_t *vm);
 
-/* Give the array back; the space is empty after. */
+/** Drop the files the regions map and give the array back; the space is
+ * empty after. */
 void vm_free(vm_space_t *vm);
 
-/* Make `dst`, which has no array, a copy of `src`, whose regions take a
- * reference each to the files they map; 0, or -1 with no memory. */
+/** Make `dst`, which has no array, a copy of `src`, whose regions take a
+ * reference each to the files they map; 0, or -1 with no memory, with `dst`
+ * left empty. */
 int vm_copy(vm_space_t *dst, const vm_space_t *src);
 
-/* Return the VMA containing 'addr' (start <= addr < end), or NULL. */
+/** The region that holds `addr` (`start <= addr < end`), or NULL. */
 vma_t *vm_find(vm_space_t *vm, uintptr_t addr);
 
-/* Return 1 if any existing VMA intersects [start, end), else 0. */
+/** 1 if any region meets [start, end), else 0. */
 int vm_overlaps(const vm_space_t *vm, uintptr_t start, uintptr_t end);
 
-/** Insert a region [start, end) with 'prot'/'type', `prot` being the access
- * bits and VM_PROT_NOWRITE for a region never to be written; 0 ok, -1 on
- * error, which includes the limit reached and a heap with no room to grow. */
+/**
+ * Add the region [start, end) with the protection `prot`, the access bits
+ * and VM_PROT_NOWRITE or VM_PROT_IO as the region needs, and the kind
+ * `type`. The range must be non-empty, page-aligned at both ends and clear
+ * of every region. The region is merged with a neighbour it touches that
+ * has the same kind and protection and maps no file, or the same file
+ * without a gap. Returns 0, or -1, with nothing changed, for a range that
+ * breaks those rules, at VMA_LIMIT, or when the array cannot grow.
+ */
 int vm_insert(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type);
 
 /** The same, for a region that maps `file` from its page `pgoff`; the region
@@ -137,10 +148,12 @@ int vm_insert(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_
 int vm_insert_file(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type,
                    struct vm_file *file, uint32_t pgoff);
 
-/** Take a reference to `f`, or drop one. The last one does not release the
- * file but puts it on the list `vm_file_reap` empties, so that a change to
- * the regions never sleeps part way through. */
+/** Take a reference to `f`; NULL is ignored. */
 void vm_file_get(struct vm_file *f);
+
+/** Drop a reference to `f`; NULL is ignored. The last one does not release
+ * the file but puts it on the list `vm_file_reap` empties, so that a change
+ * to the regions never sleeps part way through. */
 void vm_file_put(struct vm_file *f);
 
 /**
@@ -152,14 +165,23 @@ void vm_file_put(struct vm_file *f);
  */
 void vm_file_reap(void);
 
-/** Remove [start, end) (munmap semantics); 0 ok, -1 if a split has no room,
- * in which case nothing has changed. */
+/** Take [start, end) out of every region it meets, as munmap does: a region
+ * it covers goes, one it overlaps at one end is trimmed, and one that holds
+ * it is split in two. An empty range changes nothing. 0, or -1 when the
+ * split has no room, with nothing changed. */
 int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end);
 
-/** Give [start, end), which regions must cover without a gap, the access
- * bits `prot`, each region keeping its VM_PROT_NOWRITE; 0 ok, -1 for a gap,
- * -2 when a split has no room, and -3 when `prot` has write and a region of
- * the range has VM_PROT_NOWRITE, all with nothing changed. */
+/**
+ * Give [start, end), which regions must cover without a gap, the access bits
+ * `prot`, each region keeping its VM_PROT_NOWRITE and VM_PROT_IO; the
+ * regions the range cuts are split at its ends, and the pieces merge with
+ * neighbours that then match. An empty range changes nothing. Returns 0; -1
+ * for a gap, as Linux's mprotect answers ENOMEM; -2 when a split has no
+ * room; -3 when `prot` has write and a region of the range has
+ * VM_PROT_NOWRITE, as Linux answers EACCES. Of -1 and -3, the one met first
+ * in address order is the answer, and every error leaves the regions as
+ * they were.
+ */
 int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot);
 
 /** Make room for `n` more regions now, so the changes after cannot fail;
@@ -176,8 +198,15 @@ uintptr_t vm_covered(const vm_space_t *vm, uintptr_t start, uintptr_t end);
 /** Bytes the regions cover together: what RLIMIT_AS is measured against. */
 uintptr_t vm_total(const vm_space_t *vm);
 
-/** Grow the stack VMA down to cover 'page' (page-aligned; the fault handler
- * floors the fault address); 1 if grown, 0 if not. */
+/**
+ * Grow a VM_STACK region down to start at `page`, page-aligned, for a fault
+ * below it: 1 if grown, 0 if not. `page` must lie below the region's start
+ * and at or above `stack_limit`; the growth counts against `as_limit`
+ * (RLIMIT_AS) as a mapping does; and the new span must be clear of every
+ * other region, so that a segment or a mapping placed in the stack's room
+ * is not taken into the stack. The pages between are backed as they are
+ * touched.
+ */
 int vm_grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit);
 
 #endif /* _VM_H_ */

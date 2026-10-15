@@ -1,3 +1,5 @@
+/* vm.c: the regions of an address space, as vm.h describes them. */
+
 #include "vm.h"
 
 #include "../lib/kdef.h"
@@ -38,7 +40,7 @@ void vm_file_reap(void)
     }
 }
 
-/* Drop the file references of every region, which then go. */
+/** Drop the file reference of every region and clear its `file`. */
 static void vm_drop_files(vm_space_t *vm)
 {
     uint32_t i;
@@ -49,9 +51,9 @@ static void vm_drop_files(vm_space_t *vm)
     }
 }
 
-/* Cut region `r` at `at`, inside it: the part from `at` up, which the caller
- * places, maps the file on from its own page and holds a reference of its
- * own. */
+/** Cut region `r` at `at`, inside it, and return the part from `at` up for
+ * the caller to place: it maps the file on from its own page and holds a
+ * reference of its own. */
 static vma_t vm_cut(vma_t *r, uintptr_t at)
 {
     vma_t upper = *r;
@@ -65,13 +67,6 @@ static vma_t vm_cut(vma_t *r, uintptr_t at)
     return upper;
 }
 
-/**
- * Reset an address space to empty.
- *
- * The count goes to zero, the array it has is kept for reuse, and the heap,
- * brk and stack limit are zeroed. The space owns no mappings until vm_insert
- * adds them.
- */
 void vm_init(vm_space_t *vm)
 {
     vm_drop_files(vm);
@@ -144,8 +139,9 @@ int vm_reserve(vm_space_t *vm, uint32_t n)
     return 0;
 }
 
-/* The index of the first region that ends above addr: the region holding
- * addr if there is one, else the first region above it, else count. */
+/** The index of the first region that ends above `addr`: the region that
+ * holds `addr` if there is one, else the first region above it, else
+ * `count`. */
 static uint32_t vm_lower(const vm_space_t *vm, uintptr_t addr)
 {
     uint32_t lo = 0;
@@ -163,7 +159,8 @@ static uint32_t vm_lower(const vm_space_t *vm, uintptr_t addr)
     return lo;
 }
 
-/* Put r at index i, moving the regions from i up; the caller made room. */
+/** Put `r` at index `i`, moving the regions from `i` up; the caller made
+ * room. */
 static void vm_insert_at(vm_space_t *vm, uint32_t i, const vma_t *r)
 {
     if (i < vm->count) {
@@ -173,6 +170,7 @@ static void vm_insert_at(vm_space_t *vm, uint32_t i, const vma_t *r)
     vm->count++;
 }
 
+/** Remove the region at index `i`, dropping its file's reference. */
 static void vm_delete_at(vm_space_t *vm, uint32_t i)
 {
     vm_file_put(vm->vmas[i].file);
@@ -182,8 +180,8 @@ static void vm_delete_at(vm_space_t *vm, uint32_t i)
     vm->count--;
 }
 
-/* Merge region i into its left neighbour when they touch and agree in kind
- * and protection, and map no file or the same file without a gap. */
+/** Merge region `i` into its left neighbour when they touch and agree in
+ * kind and protection, and map no file or the same file without a gap. */
 static void vm_merge_left(vm_space_t *vm, uint32_t i)
 {
     vma_t *l;
@@ -201,11 +199,6 @@ static void vm_merge_left(vm_space_t *vm, uint32_t i)
     }
 }
 
-/**
- * Return the VMA containing addr, or NULL if none does.
- *
- * Regions are half-open [start, end), so end is not part of the region.
- */
 vma_t *vm_find(vm_space_t *vm, uintptr_t addr)
 {
     uint32_t i = vm_lower(vm, addr);
@@ -216,9 +209,6 @@ vma_t *vm_find(vm_space_t *vm, uintptr_t addr)
     return NULL;
 }
 
-/**
- * Report whether [start, end) intersects any existing region.
- */
 int vm_overlaps(const vm_space_t *vm, uintptr_t start, uintptr_t end)
 {
     uint32_t i = vm_lower(vm, start);
@@ -226,15 +216,6 @@ int vm_overlaps(const vm_space_t *vm, uintptr_t start, uintptr_t end)
     return i < vm->count && vm->vmas[i].start < end;
 }
 
-/**
- * Add region [start, end) with the given protection and type.
- *
- * The range must be non-empty, page-aligned at both ends, and clear of every
- * existing region, and the array must have room or be able to grow below
- * `VMA_LIMIT`. The region is merged with a neighbour it touches that has the
- * same kind and protection. Returns 0 on success or -1 if any of those
- * conditions fails.
- */
 int vm_insert(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type)
 {
     return vm_insert_file(vm, start, end, prot, type, NULL, 0);
@@ -247,16 +228,16 @@ int vm_insert_file(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot
     uint32_t i;
 
     if (start >= end) {
-        return -1; /* empty or inverted range */
+        return -1;
     }
     if ((start & VM_PAGE_MASK) != 0 || (end & VM_PAGE_MASK) != 0) {
-        return -1; /* boundaries must be page-aligned */
+        return -1;
     }
     if (vm_overlaps(vm, start, end)) {
-        return -1; /* would overlap an existing region */
+        return -1;
     }
     if (vm_reserve(vm, 1) != 0) {
-        return -1; /* the limit, or no memory */
+        return -1;
     }
 
     r.start = start;
@@ -274,19 +255,16 @@ int vm_insert_file(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot
 }
 
 /**
- * Remove the span [start, end) from every region it touches.
- *
- * A fully covered region is dropped, a region clipped at one end is trimmed,
- * and a region straddling the span is split in two. Only the split needs a
- * new entry, and it is made room for before anything changes, so a -1 leaves
- * the regions as they were.
+ * Only the split needs a new entry, and it is made room for before anything
+ * changes. A region whose low end goes is the last the span meets, since
+ * the regions are sorted and disjoint.
  */
 int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end)
 {
     uint32_t i;
 
     if (start >= end) {
-        return 0; /* nothing to remove */
+        return 0;
     }
 
     i = vm_lower(vm, start);
@@ -294,7 +272,7 @@ int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end)
         vma_t upper;
 
         if (vm_reserve(vm, 1) != 0) {
-            return -1; /* no room for the upper half */
+            return -1;
         }
         upper = vm_cut(&vm->vmas[i], end);
         vm->vmas[i].end = start;
@@ -308,12 +286,11 @@ int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end)
         if (start <= r->start && end >= r->end) {
             vm_delete_at(vm, i);
         } else if (start <= r->start) {
-            /* The low end goes; nothing above reaches back. */
             r->pgoff += r->file ? (uint32_t)((end - r->start) >> VM_PAGE_SHIFT) : 0u;
             r->start = end;
             break;
         } else {
-            r->end = start; /* the high end goes */
+            r->end = start;
             i++;
         }
     }
@@ -321,17 +298,10 @@ int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end)
 }
 
 /**
- * Give [start, end) a new protection.
- *
- * Every page of the range must lie in a region: a gap returns -1, as Linux's
- * mprotect answers ENOMEM. Write is refused with -3 when a region of the
- * range may never be written (VM_PROT_NOWRITE), as Linux answers EACCES; the
- * range is walked for both before anything changes, and the first in address
- * order is the answer. The regions the range cuts are split at its two ends,
- * which needs up to two entries, made room for first; then the pieces inside
- * take `prot`, each keeping its own VM_PROT_NOWRITE, and merge with
- * neighbours that now match. Returns 0, -1 for a gap, -2 when the split has
- * no room, or -3; every error leaves the regions as they were.
+ * The range is walked for the gap and the refused write before anything
+ * changes, and the two splits' entries are made room for first. The merges
+ * run from the top down, so that each leaves the lower indices where they
+ * were.
  */
 int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot)
 {
@@ -375,8 +345,6 @@ int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot)
         vm->vmas[i].prot = prot | (vm->vmas[i].prot & (VM_PROT_NOWRITE | VM_PROT_IO));
         i++;
     }
-    /* Merge from the top down so each merge leaves the lower indices where
-     * they were. */
     if (i < vm->count) {
         vm_merge_left(vm, i);
     }
@@ -433,7 +401,6 @@ uintptr_t vm_covered(const vm_space_t *vm, uintptr_t start, uintptr_t end)
     return total;
 }
 
-/** Bytes the regions cover together, what RLIMIT_AS is measured against. */
 uintptr_t vm_total(const vm_space_t *vm)
 {
     uintptr_t total = 0;
@@ -445,17 +412,6 @@ uintptr_t vm_total(const vm_space_t *vm)
     return total;
 }
 
-/**
- * Extend a stack region downward to cover the faulting page.
- *
- * Returns 1 if a stack region was grown to include `page`, 0 otherwise. The
- * page must lie below a VM_STACK region's start and at or above the stack
- * limit set when the stack was made; the region then starts at `page`, and
- * the pages between fault in lazily as the stack touches them. The growth
- * counts against `as_limit` (RLIMIT_AS) as a mapping does, and the new span
- * must be clear of every other region: a hostile ELF segment or mmap
- * inside the growth window must not be absorbed into the stack.
- */
 int vm_grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit)
 {
     uint32_t i, j;
@@ -464,8 +420,6 @@ int vm_grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit)
         vma_t *r = &vm->vmas[i];
 
         if (r->type == VM_STACK && page < r->start && page >= vm->stack_limit) {
-            /* The growth counts against the address-space limit like a
-               mapping would. */
             if (vm_total(vm) + (r->start - page) > as_limit) {
                 return 0;
             }

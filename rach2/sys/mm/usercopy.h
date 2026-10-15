@@ -1,23 +1,23 @@
+/*
+ * The copies between kernel and user memory. These helpers check a user
+ * range, back every page of it that is not yet present, and copy, so that a
+ * kernel touch of a bad user address becomes -EFAULT in one place and not a
+ * panic in whichever system call dereferenced it. User pointers are marked
+ * __user (lib/kuser.h), so that sparse reports one dereferenced outside
+ * these helpers. Linux has the same names; BSD has copyin, copyout and
+ * copyinstr.
+ *
+ * Each helper backs pages as a fault would, for the current process, and so
+ * may sleep: taking frames back from the caches can wait on a writeback.
+ * With no current process, or one without an address space, every non-empty
+ * copy is -EFAULT.
+ */
 #ifndef _USERCOPY_H_
 #define _USERCOPY_H_
 
 #include "../arch/arch.h"
 #include "../lib/kint.h"
 #include "../lib/kuser.h"
-
-/*
- * The copy-from/to-user contract. These helpers range-check a user pointer,
- * fault in any not-yet-present user page, and copy, so that a kernel touch of
- * an unmapped user address becomes -EFAULT in one place, not a panic
- * from a raw dereference scattered across every syscall. User pointers are
- * annotated __user (see lib/kuser.h) so a sparse pass proves every access goes
- * through these helpers.
- *
- * Linux and BSD analogue: copy_from_user, copy_to_user, strncpy_from_user.
- */
-
-/* The user address range is the architecture's, USER_ADDR_MIN and
- * USER_ADDR_MAX (arch/arch.h). */
 
 /* A user's `size_t` length as the 32 bits the kernel's buffers count in,
  * a length past 4 GiB taken as the most that fits. */
@@ -36,16 +36,20 @@
  * a long. */
 #define USER_ADDR_ERRNO(v) ((unsigned long)(v) > (unsigned long)-4096L)
 
-/** Report whether [addr, addr+len) lies wholly within user space; 1 yes, 0
- * no. */
+/** 1 if [addr, addr + len) lies wholly within user space, USER_ADDR_MIN to
+ * USER_ADDR_MAX (arch/arch.h), and does not wrap; else 0. An empty range is
+ * always 1. */
 int user_range_ok(uintptr_t addr, size_t len);
 
-/** Copy n bytes from a user pointer into kernel memory; 0 ok, -EFAULT on a
- * bad range. */
+/** Copy `n` bytes from the user address `src` into `dst`: 0, also for an
+ * `n` of 0, or -EFAULT when a byte of the source is outside user space, in
+ * no region that may be read, or cannot be backed. */
 int copy_from_user(void *dst, const void __user *src, size_t n);
 
-/** Copy n bytes from kernel memory to a user pointer; 0 ok, -EFAULT on a
- * bad range. */
+/** Copy `n` bytes from `src` to the user address `dst`, after making each
+ * copy-on-write page of it private: 0, also for an `n` of 0, or -EFAULT when
+ * a byte of the destination is outside user space, in no region that may be
+ * written, or cannot be backed. */
 int copy_to_user(void __user *dst, const void *src, size_t n);
 
 /**
@@ -65,14 +69,25 @@ int get_user_u32(uint32_t *val, uintptr_t src);
  */
 int cmpxchg_user_u32(uintptr_t dst, uint32_t old, uint32_t value, uint32_t *prev);
 
-/** Copy a NUL-terminated string from user space into dst, at most n bytes;
- * returns its length, or a negative errno. */
+/**
+ * Copy the NUL-terminated string at the user address `src` into `dst`, at
+ * most `n` bytes. Each page is backed as the copy reaches it, so a string
+ * that ends before a page outside every region is copied. Returns the
+ * length, the NUL not counted but copied; -EINVAL for an `n` of 0; -EFAULT
+ * when a byte lies outside user space or cannot be read; -ENAMETOOLONG when
+ * no NUL is among the first `n` bytes, and `dst` then has `n` bytes and no
+ * NUL.
+ */
 int strncpy_from_user(char *dst, const char __user *src, uint32_t n);
 
-/** The length of the NUL-terminated user string at src, the NUL not
- * counted, when its NUL lies within n bytes; -ENAMETOOLONG when it does not,
- * -EFAULT for an address the caller may not read, and -EINVAL for an n of
- * 0. */
+/**
+ * The length of the NUL-terminated string at the user address `src`, the
+ * NUL not counted, when its NUL is among the first `n` bytes; the pages are
+ * backed as `strncpy_from_user` backs them. -ENAMETOOLONG when the NUL is
+ * not there, -EFAULT for an address the caller may not read, and -EINVAL
+ * for an `n` of 0. The string can change before the caller reads it again,
+ * so a copy after bounds itself by this length.
+ */
 int strnlen_user(const char __user *src, uint32_t n);
 
 #endif /* _USERCOPY_H_ */

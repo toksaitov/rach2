@@ -1,11 +1,11 @@
 /*
  * modlayout.c: the boot-module placement check.
  *
- * Pure arithmetic over ranges the bootloader chose, so the host test can craft
- * placements no bootloader offers. Every comparison is between two ends and
- * none adds a length, because a crafted or corrupt descriptor can name a
- * range that wraps the 32-bit address space and an addition would wrap with
- * it.
+ * Arithmetic over the ranges the bootloader chose and nothing else, so the
+ * host test can give it placements no bootloader offers. Every comparison
+ * is between two ends and none adds a length, because a crafted or corrupt
+ * descriptor can name a range that wraps the 32-bit address space and an
+ * addition would wrap with it.
  */
 
 #include "modlayout.h"
@@ -65,7 +65,8 @@ const char *modlayout_reason(int code)
     }
 }
 
-/** Append as much of `src` as fits; `*pos` tracks the used length. */
+/** Append as much of `src` as fits, leaving room for the NUL; `*pos` is
+ * the length used. */
 static void ml_put(char *buf, uint32_t buflen, uint32_t *pos, const char *src)
 {
     while (*src != '\0' && *pos + 1 < buflen) {
@@ -91,7 +92,7 @@ static void ml_put_hex(char *buf, uint32_t buflen, uint32_t *pos, uintptr_t v)
     }
 }
 
-/** Append `v` as decimal. */
+/** Append `v` in decimal, as much of it as fits. */
 static void ml_put_dec(char *buf, uint32_t buflen, uint32_t *pos, uint32_t v)
 {
     char tmp[11];
