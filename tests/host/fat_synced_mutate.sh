@@ -3,8 +3,8 @@
 #
 # Usage: sh tests/host/fat_synced_mutate.sh [--texts]
 #
-# The unlink and the truncate of a file its fsync put on the medium (entry
-# 209) are read back after the sequences run: the unlinked file must be gone
+# The unlink and the truncate of a file its fsync put on the medium are read
+# back after the sequences run: the unlinked file must be gone
 # and the truncated one must read its first 700 bytes. The test is compiled
 # against a private copy of rach2/sys as it is, where it must pass; with
 # fat_unlink leaving the name in its directory, where the first row must
@@ -35,6 +35,8 @@ else
 fi
 child=
 
+# stop_child: end the process group of the running test, if there is one, and
+# wait until none of its processes is left.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -47,12 +49,15 @@ stop_child()
     fi
 }
 
+# restore: copy the saved fat32.c back over the private tree.
 restore()
 {
     cp "$work/fat32.saved" "$source"
     touch "$source"
 }
 
+# cleanup: the exit trap; stop the running test, restore the source and remove
+# the fixtures.
 cleanup()
 {
     stop_child
@@ -65,8 +70,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 # run_phase PHASE EXPECTED DETAIL: compile the test against the private tree
-# and run it; a pass must exit 0 and print its OK line, a fail must print
-# DETAIL as a failed row.
+# and run it for at most 900 seconds; a pass must exit 0 and print its OK
+# line, a fail must print DETAIL as a failed row.
 run_phase()
 {
     phase=$1

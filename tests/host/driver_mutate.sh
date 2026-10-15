@@ -1,10 +1,14 @@
 #!/bin/sh
-# Rebuild each driver fault in a private copy under this worktree.
+# Prove the sb16, vga_gfx and vga_text host tests with private mutations of
+# rach2/sys/audio/sb16.c, audio_debug.c, display/vga_gfx.c and vga_text.c.
+#
+# Usage: driver_mutate.sh [FAULT...] | --texts
+# With no FAULT it proves every fault.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FILE FAULT: put FAULT into FILE, a copy of its source; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -61,8 +65,9 @@ p.write_text(s.replace(old, new))
 PY
 }
 
-# select_fault FAULT: the test, the source under rach2/sys and the failure
-# its row prints for FAULT.
+# select_fault FAULT: set `test`, `file` (the source under rach2/sys),
+# `argument` (the test's argument, or empty) and `failure` (the text its row
+# prints) for FAULT.
 select_fault()
 {
     argument=
@@ -105,6 +110,8 @@ child=
 source=
 cp -R rach2/sys "$work/sys"
 
+# restore: stop the running test and put the saved source back, if a fault is
+# in progress; it is also the exit trap.
 restore()
 {
     if [ -n "$child" ]; then
@@ -122,12 +129,14 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE: compile $test's host test with its own host-deps lines, as
+# the host suite reads them, the kernel's sources taken from the private copy,
+# and run it for at most 30 seconds. PHASE `mutated` must fail with $failure in
+# its log; any other must pass. Exit if not.
 run_phase()
 {
     phase=$1
     binary="$work/$fault-$phase"
-    # The test's own host-deps lines, as the host suite reads them, with the
-    # kernel's sources taken from the private copy.
     deps=$(sed -n 's/^ \* host-deps://p' "tests/host/${test}_hosttest.c" |
         sed "s|rach2/sys/|$work/sys/|g")
     # shellcheck disable=SC2086

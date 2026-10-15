@@ -1,11 +1,16 @@
 #!/bin/sh
-# Compile ext2 quota checks with fixed, faulty and restored sources.
+# Prove ext2_reserve_hosttest.c, the ext2 driver's checks of free and reserved
+# blocks before a write, with private mutations of rach2/sys/fs/ext2.c: the
+# `estimate` fault puts a walk of the data blocks with an estimate of the
+# pointer blocks in place of writeback_space; `pending` makes the check in
+# writeback_reserve leave out the blocks the batch has reserved; `original`
+# is the estimate with no check in writeback_reserve at all.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FILE FAULT: put FAULT into FILE, a copy of ext2.c; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -90,6 +95,8 @@ source="$work/sys/fs/ext2.c"
 cp "$source" "$work/source.saved"
 child=
 
+# cleanup: stop the running test and put the saved ext2.c back; the loop calls
+# it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -105,6 +112,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: compile ext2_reserve_hosttest.c over the copy
+# as $work/PHASE, run it for at most 10 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1

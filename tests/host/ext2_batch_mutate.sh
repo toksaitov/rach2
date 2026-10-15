@@ -1,12 +1,18 @@
 #!/bin/sh
-# Compile and run the ext2 batch rows with fixed, faulty and restored sources.
+# Prove the writeback batch rows of ext2_hosttest.c with private mutations of
+# rach2/sys/fs/ext2.c.
+#
+# Usage: ext2_batch_mutate.sh [--batch-only | --all | --texts]
+# --batch-only, the default, runs the test's batch rows alone in each phase;
+# --all runs the whole test.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_per_call ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_per_call FILE: make every write in FILE, a copy of ext2.c, drain the
+# batch at once; with RACH2_FAULT_TEXTS set, only check its text and write
+# nothing.
 apply_per_call()
 {
     python3 - "$1" <<'PY'
@@ -27,8 +33,9 @@ PY
 }
 
 
-# apply_drain ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_drain FILE: take the cache flush out of writeback_drain in FILE, a
+# copy of ext2.c; with RACH2_FAULT_TEXTS set, only check its text and write
+# nothing.
 apply_drain()
 {
     python3 - "$1" <<'PY'
@@ -52,7 +59,7 @@ PY
 }
 
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FILE FAULT: put FAULT into FILE, a copy of ext2.c; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -147,6 +154,9 @@ child=
 # each fault makes it do.
 fixtures=
 
+# cleanup: stop the running test's process group, remove the phase's fixtures
+# and put the saved ext2.c back; run_phase calls it after each run, and it is
+# the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -169,6 +179,12 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE EXPECTED [MESSAGE [STATUS]]: compile ext2_hosttest.c over the
+# private tree with fixtures of its own and run it, in the mode the script was
+# given, for at most 180 seconds. EXPECTED `pass` must exit 0 and print PASS;
+# any other must exit with STATUS, 1 by default, and print MESSAGE, which is
+# the per-call row's failure by default and the volatile media row's for
+# `media`. Exit if not.
 run_phase()
 {
     phase=$1

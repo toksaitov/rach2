@@ -1,5 +1,5 @@
 #!/bin/sh
-# Compile each phase from a private copy; no running kernel image is replaced.
+# Prove exit_hosttest.c with private mutations of rach2/sys/proc/exit.c.
 # Two faults: death published before the cleanup, and an exit that keeps its
 # address space for the reap. --texts checks that each line the faults find
 # is once in the tree's exit.c, and compiles nothing.
@@ -8,7 +8,8 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# exit_texts FILE: each line the two faults find is once in FILE.
+# exit_texts FILE: check that each line the two faults find is once in FILE;
+# return 1 if not.
 exit_texts()
 {
     for line in 'self->state = PROC_ZOMBIE;' 'self->in_syscall = 1;' 'mm_drop(self);' \
@@ -31,6 +32,8 @@ runlock_hold "$repo" exit-mutation "$repo/tests/host/exit_mutate.sh" "$@"
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-exit.XXXXXX")
 child=
 
+# cleanup: stop the running test and put the saved exit.c back; the script
+# calls it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -49,6 +52,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE: compile exit_hosttest.c over the copy as $work/PHASE and run
+# it for at most 10 seconds. The phases `mutated` and `kept` must fail with
+# their faults' rows; any other must pass. Exit if not.
 run_phase()
 {
     phase=$1

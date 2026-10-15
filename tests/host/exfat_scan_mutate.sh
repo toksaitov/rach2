@@ -1,6 +1,6 @@
 #!/bin/sh
-# Prove the three fixes of entry 27 of milestone 50 in the exFAT driver's
-# directory scan, with private mutations of rach2/sys/fs/exfat.c, against
+# Prove the cost of the exFAT driver's directory scan, with private mutations
+# of rach2/sys/fs/exfat.c, against
 # the cost rows of tests/host/exfat_hosttest.c (its `--scan-cost` mode):
 # the twenty creates after the first two hundred in one directory, and a
 # lookup of the last name. On the same private copy it proves the whole
@@ -8,8 +8,7 @@
 #
 # Usage: exfat_scan_mutate.sh [--check | --texts]
 # With --check it compiles and runs the unmodified rows alone, the cost
-# rows and the whole test. The faults, the first four each an old path
-# put back:
+# rows and the whole test. The faults:
 #   filler  the filler entry at a sector's last slot written at every scan
 #           that passes it, which fails the creates' bound of 60 writes;
 #   entry   a cache get for every 32-byte entry, the mount's copy of the
@@ -18,7 +17,7 @@
 #           mappings read at mount ignored, which fails the same bound on
 #           this volume, whose table is read through the cache;
 #   grow    the caller's set left for the directory's growth to overwrite,
-#           entry 194, which fails the volume's check after the creates;
+#           which fails the volume's check after the creates;
 #   unlink  `ex_unlink` answering 0 once it has found the set, with nothing
 #           retired or freed, which fails the whole test's two rows that
 #           require the file unlinked while held and the one unlinked after a
@@ -30,7 +29,7 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FILE FAULT: put FAULT into FILE, a copy of exfat.c; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -108,6 +107,8 @@ source="$work/rach2/sys/fs/exfat.c"
 cp "$source" "$work/source.saved"
 child=
 
+# cleanup: stop the running test's process group and put the saved exfat.c
+# back; run_phase calls it after each run, and the exit trap calls it.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -133,7 +134,8 @@ deps=$(grep -oE 'host-deps:[^*]*' tests/host/exfat_hosttest.c | sed 's/host-deps
 
 # run_phase PHASE STATUS MESSAGE [ARG...]: compile the test over the
 # private tree and run it with ARG, `--scan-cost` or none for the whole
-# test; it must exit with STATUS and print MESSAGE.
+# test, for at most 900 seconds; it must exit with STATUS and print each line
+# of MESSAGE.
 run_phase()
 {
     phase=$1

@@ -1,12 +1,17 @@
 #!/bin/sh
-# Compile Doom's fixed, faulty and restored control paths in a private tree.
+# Prove doom_platform_hosttest.c with private mutations of Doom's control
+# paths in ports/doom/doomgeneric_rach2.c and ports/doom/src/i_system.c: the
+# command's arguments dropped, an exit that leaves the devices open, a quit
+# that returns, and a report that names the zone asked for, not the one
+# allocated.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault PLATFORM SYSTEM FAULT: put FAULT into PLATFORM or SYSTEM, copies
+# of doomgeneric_rach2.c and i_system.c; with RACH2_FAULT_TEXTS set, only
+# check its text and write nothing.
 apply_fault()
 {
     python3 - "$1" "$2" "$3" <<'PY'
@@ -56,6 +61,8 @@ cp "$platform" "$work/platform.saved"
 cp "$system" "$work/system.saved"
 child=
 
+# cleanup: stop the running test and put the two saved sources back; the loop
+# calls it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -72,6 +79,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: compile doom_platform_hosttest.c over the
+# copy as $work/PHASE, run it for at most 10 seconds, and exit unless it ends
+# with STATUS, its log contains MESSAGE, and it printed its result line.
 run_phase()
 {
     phase=$1

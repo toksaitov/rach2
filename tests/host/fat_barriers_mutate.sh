@@ -1,18 +1,17 @@
 #!/bin/sh
-# Prove the barriers of the two FAT drivers one at a time, entry 32 of
-# milestone 50. Every call to `sync_disk` and `block_flush` in
-# rach2/sys/fs/exfat.c and rach2/sys/fs/fat32.c, the flush inside
-# `sync_disk` itself excepted, is a barrier site. Each site is dropped in
-# turn from a private copy of its driver, the call replaced by the success
-# it would have returned, and the driver's host test is run over the copy
-# in its `--barriers` mode: the interruption matrix and the durability
-# rows, with the free-durability row for exFAT. A site is proved when its
-# run stops at a failed row that judges the medium, a state a crash leaves
-# or the medium after a sync, with the test's failure status 1, and
+# Prove the barriers of the two FAT drivers one at a time. Every call to
+# `sync_disk` and `block_flush` in rach2/sys/fs/exfat.c and
+# rach2/sys/fs/fat32.c, the flush inside `sync_disk` itself excepted, is a
+# barrier site. Each site is dropped in turn from a private copy of its driver,
+# the call replaced by the success it would have returned, and the driver's host
+# test is run over the copy in its `--barriers` mode: the interruption matrix
+# and the durability rows, with the free-durability row for exFAT. A site is
+# proved when its run stops at a failed row that judges the medium, a state a
+# crash leaves or the medium after a sync, with the test's failure status 1, and
 # unproved when its run passes. A run that ends any other way, killed by a
-# signal or by its alarm, stopped by a sanitizer report or by a fixture
-# that did not build, or failed at a row of the rows' own setup, proves
-# nothing about the site, and the proof stops.
+# signal or by its alarm, stopped by a sanitizer report or by a fixture that did
+# not build, or failed at a row of the rows' own setup, proves nothing about the
+# site, and the proof stops.
 #
 # After each drop both sources are restored and compared with the copies
 # the unmodified run passed on. The restored driver is compiled and run
@@ -68,6 +67,8 @@ else
 fi
 child=
 
+# stop_child: end the process group of the running test, if there is one, and
+# wait until none of its processes is left.
 stop_child()
 {
     if [ -n "$child" ]; then
@@ -80,8 +81,9 @@ stop_child()
     fi
 }
 
-# The loop variable is its own: a shell function shares its caller's
-# variables, and the site loop below keeps its driver in `driver`.
+# restore: copy the saved exfat.c and fat32.c back over the private tree. The
+# loop variable is its own: a shell function shares its caller's variables,
+# and the site loop below keeps its driver in `driver`.
 restore()
 {
     for each in exfat fat32; do
@@ -90,6 +92,8 @@ restore()
     done
 }
 
+# cleanup: the exit trap; stop the running test, restore the sources and
+# remove the fixtures.
 cleanup()
 {
     stop_child
@@ -198,7 +202,9 @@ compile()
     fi
 }
 
-# run DRIVER LOG: the barrier rows; `status` is the exit status.
+# run DRIVER LOG: run the barrier rows of $work/DRIVER.bin into LOG, in a
+# process group of its own, for at most 900 seconds; `status` is the exit
+# status.
 run()
 {
     cksum "$work/rach2/sys/fs/$1.c" "$work/$1.bin" >"$2.cksum"

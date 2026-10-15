@@ -1,6 +1,9 @@
 #!/bin/sh
-# Prove the alignment tests by restoring the old buffer-address check.
-# Run from any directory. Logs and the saved source go to a temporary one.
+# Prove e2fsprogs_alignment_hosttest.c and e2fsprogs_alignment64_hosttest.c
+# with one fault in the extracted e2fsprogs lib/ext2fs/unix_io.c: Rach2's
+# `BUFFER_ALIGNED` made upstream's buffer-address check, `IS_ALIGNED`. The
+# fault is written into the extracted tree itself, and the exit trap restores
+# it. Run from any directory; logs and the saved source go to a temporary one.
 
 set -eu
 
@@ -25,7 +28,8 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-alignment.XXXXXX")
 child=
 mutated=0
 
-# The test is one process. Stop and reap it before restoring its source.
+# cleanup: the exit trap; stop and reap the test, which is one process, and
+# put the saved unix_io.c back if the fault is in it.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -52,7 +56,10 @@ if [ "$(grep -Fxc "$original" "$source")" != 1 ]; then
     exit 1
 fi
 
-# Compile fresh binaries in each phase with the host runner's flags.
+# run_phase PHASE: compile both tests afresh with the host suite's flags and
+# run each for at most 10 seconds. In the phase `mutated` each must fail its 14
+# misaligned checks and no other; in any other phase each must pass. Exit if
+# not.
 run_phase()
 {
     phase=$1

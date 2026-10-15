@@ -48,6 +48,7 @@ else
     cp "$xhci" "$work/xhci.c.saved"
 fi
 
+# restore: copy the saved ahci.c and xhci.c back over the private tree.
 restore()
 {
     cp "$work/ahci.c.saved" "$ahci"
@@ -55,6 +56,7 @@ restore()
     touch "$ahci" "$xhci"
 }
 
+# cleanup: the exit trap; stop the running test and restore the sources.
 cleanup()
 {
     if [ -n "$child" ]; then

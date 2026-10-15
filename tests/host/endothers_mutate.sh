@@ -18,8 +18,9 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault FILE FAULT: put FAULT into proc_end_others in FILE, a copy of
+# syscall_proc.c; with RACH2_FAULT_TEXTS set, only check its text and write
+# nothing.
 apply_fault()
 {
     python3 - "$1" "$2" <<'PY'
@@ -71,11 +72,13 @@ child=
 cp rach2/sys/syscall_proc.c "$work/syscall_proc.c"
 cp "$work/syscall_proc.c" "$work/syscall_proc.saved"
 
+# restore: copy the saved syscall_proc.c back over the copy under test.
 restore()
 {
     cp "$work/syscall_proc.saved" "$work/syscall_proc.c"
     touch "$work/syscall_proc.c"
 }
+# cleanup: the exit trap; stop the running test and restore the source.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -90,6 +93,10 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: extract proc_end_others from the copy into
+# $work/endothers.inc, compile fixtures/endothers.c over it as $work/PHASE, run
+# it for at most 20 seconds, and exit unless it ends with STATUS and its log
+# contains MESSAGE.
 run_phase()
 {
     phase=$1

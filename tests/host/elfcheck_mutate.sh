@@ -1,11 +1,13 @@
 #!/bin/sh
-# Prove the ELF header bound in a private compiled copy.
+# Prove elf_hosttest.c's bound on the program header table with one private
+# mutation of rach2/sys/proc/elf.c: the bound as a 32-bit sum that can wrap,
+# with no check of `e_phentsize`.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault DIR: put the fault into DIR/proc/elf.c; with RACH2_FAULT_TEXTS
+# set, only check its text and write nothing.
 apply_fault()
 {
     python3 - "$1" <<'PY'
@@ -51,12 +53,14 @@ mkdir -p "$work/proc"
 cp rach2/sys/proc/elf.c "$work/elf.saved"
 cp "$work/elf.saved" "$work/proc/elf.c"
 
+# restore: copy the saved elf.c back over the copy under test.
 restore()
 {
     cp "$work/elf.saved" "$work/proc/elf.c"
     touch "$work/proc/elf.c"
 }
 
+# cleanup: the exit trap; stop the running test and restore the source.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -71,6 +75,8 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE zero|nonzero: compile elf_hosttest.c over the copy as
+# $work/PHASE, run it, and exit unless its status is zero or nonzero as asked.
 run_phase()
 {
     phase=$1
