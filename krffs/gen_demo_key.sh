@@ -38,7 +38,7 @@ gen_key() {
     fi
     if ! command -v ssh-keygen >/dev/null 2>&1; then
         echo "gen_demo_key: no krffs/$pub and no ssh-keygen to make one." >&2
-        echo "gen_demo_key: the os-real image is the SSH capstone, so this is fatal." >&2
+        echo "gen_demo_key: the os-real image stages the key for its SSH login, so this is fatal." >&2
         echo "gen_demo_key: install openssh, or drop a public key at krffs/$pub." >&2
         exit 1
     fi

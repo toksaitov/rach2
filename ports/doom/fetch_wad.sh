@@ -43,7 +43,7 @@ if [ -f "$WAD" ]; then
     exit 0
 fi
 
-echo "doom: no IWAD at $SCRIPT_DIR/$WAD; the Doom capstone cannot start without one" >&2
+echo "doom: no IWAD at $SCRIPT_DIR/$WAD; Doom cannot start without one" >&2
 echo "  Option A (id Software Doom shareware, freely redistributable):" >&2
 echo "    place doom1.wad here; its sha256 must be" >&2
 echo "    $SHAREWARE_SHA256" >&2

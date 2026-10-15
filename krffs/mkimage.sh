@@ -34,7 +34,7 @@ SIZE="${3:-10}"
 MIN_FREE_KIB="${4:-0}"
 
 if [ -z "$MANIFEST" ] || [ -z "$OUT" ]; then
-    echo "usage: mkimage.sh <manifest> <output.krffs> [size_mb]" >&2
+    echo "usage: mkimage.sh <manifest> <output.krffs> [size_mib [min_free_kib]]" >&2
     exit 2
 fi
 if [ ! -f "$TOOLS/mkfs.krffs" ] || [ ! -f "$TOOLS/stageimage.krffs" ]; then
