@@ -1,9 +1,3 @@
-#ifndef _KHEAP_H_
-#define _KHEAP_H_
-
-#include "../lib/kdef.h"
-#include "../lib/kint.h"
-
 /*
  * kheap: the kernel heap, which allocates and frees objects of any size.
  *
@@ -26,9 +20,9 @@
  *
  * The allocator never sleeps: it scans the frame table and the page bitmap
  * with interrupts masked, so it may be called from any context that may
- * allocate at all. A request the heap cannot meet answers NULL with a
- * record, and the caller answers its own caller with ENOMEM or the error
- * its contract names.
+ * allocate at all. A request the heap has no room or no frame for answers
+ * NULL with a record, and the caller answers its own caller with ENOMEM or
+ * the error its contract names.
  *
  * The top 16 MiB of the region is a reserve of sixteen runs of 256 pages
  * that allocations under 64 pages never enter. A run of 64 pages or more
@@ -37,6 +31,11 @@
  * there, so that a raw batch or a request of the largest size is had
  * beside a full cache. The reserve costs no frame until a run is taken.
  */
+#ifndef _KHEAP_H_
+#define _KHEAP_H_
+
+#include "../lib/kdef.h"
+#include "../lib/kint.h"
 
 /* The least region the heap is given, i686's whole region, and the grain
  * of its size, a whole number of leaf page tables' spans on i686 and on
@@ -57,15 +56,18 @@ size_t kheap_size_for(uint64_t managed, uint64_t most);
  * KHEAP_GRAIN, making the region's page tables (`premap_kernel_window`).
  * The map of the region's pages is in the image for a region of
  * KHEAP_FLOOR, and for a larger one in the region's own first pages, a
- * frame for each 128 MiB of region, taken now. Called once page tables come
- * from the frame allocator (`mmu_heap_ready`).
+ * frame for each 128 MiB of region, taken now. `init_paging` calls it
+ * once, after `mmu_heap_ready`; it panics when a table or a frame of the map
+ * cannot be had.
  */
 void kheap_init(size_t bytes);
 
 /** The pages of the region `kheap_init` was given. */
 uint32_t kheap_region_pages(void);
 
-/** Give back what `kmalloc` returned; NULL is accepted and ignored. */
+/** Give back what `kmalloc` or `kzalloc` returned; NULL is accepted and
+ * ignored. A pointer outside the region, or in a page without the header,
+ * is logged and ignored. */
 void kfree(void *p);
 
 /* The allocator attribute is for the callers. Inside the allocator's own
@@ -78,7 +80,8 @@ void kfree(void *p);
 #define KHEAP_MALLOC K_MALLOC(kfree)
 #endif
 
-/** `size` bytes, or NULL; the memory is not zeroed. */
+/** `size` bytes aligned to 16, or NULL, which is also the answer to 0;
+ * the memory is not zeroed. */
 void *kmalloc(size_t size) KHEAP_MALLOC;
 
 /** `size` bytes zeroed, or NULL. */
@@ -110,16 +113,19 @@ void *kalloc_pages_try(uint32_t count, uintptr_t *phys);
  */
 void *kalloc_cache_page(void);
 
-/** Give back what `kalloc_pages` or `kalloc_cache_page` returned. */
+/** Give back what `kalloc_pages` or `kalloc_cache_page` returned, with the
+ * `count` it was given. A pointer outside the region or not on a page is
+ * logged and ignored. */
 void kfree_pages(void *p, uint32_t count);
 
 /**
  * `count` pages as `kalloc_pages` gives them, with the page below them
  * marked taken and never mapped: a guard, which no other allocation is
  * given, so an access that runs off the low end of the pages faults. A
- * kernel stack comes this way. The guard takes no frame. NULL, with a
- * record, when the region has no free run of `count + 1` pages or the
- * frames run out. Freed with `kfree_guarded`.
+ * kernel stack comes this way. The guard takes no frame. `count` is 1 to
+ * 63, and the pages never come from the reserve. NULL, with a record, for
+ * another count, or when the region has no free run of `count + 1` pages or
+ * the frames run out. Freed with `kfree_guarded`.
  */
 void *kalloc_guarded(uint32_t count);
 
@@ -130,7 +136,8 @@ void *kalloc_guarded(uint32_t count);
  */
 void kfree_guarded(void *p, uint32_t count);
 
-/** Pages the heap holds now, and bytes in use inside them. */
+/** Pages the heap holds now, and bytes in use inside them; either pointer
+ * may be NULL. */
 void kheap_stats(uint32_t *pages, size_t *bytes);
 
 /** One size class of the heap, as /proc/slabinfo reports it. */

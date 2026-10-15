@@ -66,11 +66,13 @@ static size_t bytes_used;
 static uint32_t class_pages[KHEAP_CLASSES]; /* pages carved into each class */
 static uint32_t class_live[KHEAP_CLASSES];  /* blocks of each class in use */
 
+/** Whether page `page` of the region is taken in the map. */
 static int page_taken(uint32_t page)
 {
     return (page_bits[page / 32] >> (page % 32)) & 1u;
 }
 
+/** Mark page `page` of the region taken or free in the map. */
 static void page_set(uint32_t page, int taken)
 {
     if (taken) {
@@ -80,16 +82,16 @@ static void page_set(uint32_t page, int taken)
     }
 }
 
-/* The end of the region, one past its last byte. */
+/** The end of the region, one past its last byte. */
 static uintptr_t heap_end(void)
 {
     return KVA_HEAP + (uintptr_t)heap_pages * PAGE_SIZE;
 }
 
-/* Interrupts off. `count` free pages in a row, the lowest such run, a word
- * of the map at a time where all of its pages are taken; `heap_pages` when
- * the region has no such run. The first free page the search passes
- * becomes `low_free`. */
+/** `count` free pages in a row, the lowest such run, a word of the map at
+ * a time where all of its pages are taken; `heap_pages` when the region has
+ * no such run. The first free page the search passes becomes `low_free`.
+ * `heap_lock` is held. */
 static uint32_t find_run(uint32_t count)
 {
     uint32_t run = 0, i, first = heap_pages;
@@ -113,8 +115,8 @@ static uint32_t find_run(uint32_t count)
     return heap_pages;
 }
 
-/* Interrupts off. The highest free page below the reserve, which becomes
- * `high_free`, or `heap_pages` when there is none. */
+/** The highest free page below the reserve, which becomes `high_free`, or
+ * `heap_pages` when there is none. `heap_lock` is held. */
 static uint32_t find_page_high(void)
 {
     uint32_t i = high_free + 1u;
@@ -130,8 +132,9 @@ static uint32_t find_page_high(void)
     return heap_pages;
 }
 
-/* Interrupts off. Map `count` fresh frames at the run starting at `page`;
- * on a frame shortage what was mapped is unmapped again. */
+/** Map `count` fresh frames at the run starting at `page` and mark them
+ * taken: 0, or -1 when the frames ran out, with what was mapped unmapped
+ * again. `heap_lock` is held. */
 static int map_run(uint32_t page, uint32_t count)
 {
     uint32_t i;
@@ -156,6 +159,8 @@ static int map_run(uint32_t page, uint32_t count)
     return 0;
 }
 
+/** Unmap the run of `count` pages at `page`, give back its frames and mark
+ * it free. `heap_lock` is held. */
 static void unmap_run(uint32_t page, uint32_t count)
 {
     uint32_t i;
@@ -183,6 +188,8 @@ size_t kheap_size_for(uint64_t managed, uint64_t most)
     return (size_t)bytes;
 }
 
+/** The reserve's pages are marked taken from the start, so that the
+ * ordinary search passes them; `run_bits` says which runs are out. */
 void kheap_init(size_t bytes)
 {
     uint32_t i, map_pages = 0;
@@ -214,8 +221,6 @@ void kheap_init(size_t bytes)
     high_free = reserve_first - 1u;
     pages_held = map_pages;
     bytes_used = 0;
-    /* The reserve's pages read as taken to the ordinary search from the
-     * start; the run bits say which runs are out. */
     for (i = reserve_first; i < heap_pages; i++) {
         page_set(i, 1);
     }
@@ -227,8 +232,8 @@ uint32_t kheap_region_pages(void)
     return heap_pages;
 }
 
-/* Interrupts off. The first page of a free reserve run, marked taken, or
- * `heap_pages` when every run is out or `count` is more than a run. */
+/** The first page of a free reserve run, marked out, or `heap_pages` when
+ * every run is out or `count` is more than a run. `heap_lock` is held. */
 static uint32_t reserve_take(uint32_t count)
 {
     uint32_t r;
@@ -245,9 +250,9 @@ static uint32_t reserve_take(uint32_t count)
     return heap_pages;
 }
 
-/* Interrupts off. A reserve run whose pages `map_run` or `unmap_run` left
- * clear is closed to the ordinary search again and, when `release` says
- * so, given back to the reserve. */
+/** A reserve run whose pages `map_run` or `unmap_run` left clear is closed
+ * to the ordinary search again and, when `release` says so, given back to
+ * the reserve. `heap_lock` is held. */
 static void reserve_close(uint32_t page, uint32_t count, int release)
 {
     uint32_t i;
@@ -260,9 +265,9 @@ static void reserve_close(uint32_t page, uint32_t count, int release)
     }
 }
 
-/* Interrupts off. Pages `first` through `last`, below the reserve, are
- * free again: the searches from both ends start at them if they lie
- * beyond where each would start. */
+/** Pages `first` through `last`, below the reserve, are free again: the
+ * searches from both ends start at them if they lie beyond where each would
+ * start. `heap_lock` is held. */
 static void ends_widen(uint32_t first, uint32_t last)
 {
     if (first < low_free) {
@@ -273,8 +278,9 @@ static void ends_widen(uint32_t first, uint32_t last)
     }
 }
 
-/* Interrupts off. Unmap a run and, when it lies in the reserve, give the
- * run back: the one way pages leave the heap, whoever allocated them. */
+/** Unmap a run and, when it lies in the reserve, give the run back: the
+ * one way pages leave the heap, whoever allocated them. `heap_lock` is
+ * held. */
 static void release_run(uint32_t page, uint32_t count)
 {
     unmap_run(page, count);
@@ -286,9 +292,9 @@ static void release_run(uint32_t page, uint32_t count)
     }
 }
 
-/* Interrupts off. `count` pages from the ordinary region or, for a run of
- * KHEAP_RUN_LEAST or more, from the reserve; `heap_pages` when neither has
- * them or the frames ran out. */
+/** `count` pages, mapped, from the ordinary region or, for a run of
+ * KHEAP_RUN_LEAST or more that it cannot give, from the reserve; `heap_pages`
+ * when neither has them or the frames ran out. `heap_lock` is held. */
 static uint32_t take_pages(uint32_t count)
 {
     uint32_t page = find_run(count);
@@ -305,8 +311,8 @@ static uint32_t take_pages(uint32_t count)
     return page;
 }
 
-/* `count` pages as kalloc_pages gives them; `quiet` leaves a refusal out of
- * the log, for a caller that has a smaller size or a static buffer to go
+/** `count` pages as kalloc_pages gives them; `quiet` leaves a refusal out
+ * of the log, for a caller that has a smaller size or a static buffer to go
  * on with. */
 static void *pages_or_null(uint32_t count, uintptr_t *phys, int quiet)
 {
@@ -372,10 +378,9 @@ void kfree_pages(void *p, uint32_t count)
     spin_unlock_irqrestore(&heap_lock, flags);
 }
 
-/* The guard is the first page of a run of `count + 1` and is marked taken
+/** The guard is the first page of a run of `count + 1` and is marked taken
  * only once the pages above it are mapped, so a shortage of frames leaves
- * nothing behind. A guarded run is smaller than KHEAP_RUN_LEAST and never
- * comes from the reserve. */
+ * nothing behind. */
 void *kalloc_guarded(uint32_t count)
 {
     uint32_t flags = spin_lock_irqsave(&heap_lock);
@@ -394,7 +399,7 @@ void *kalloc_guarded(uint32_t count)
     return (void *)(KVA_HEAP + ((uintptr_t)guard + 1) * PAGE_SIZE);
 }
 
-/* A guard is a page below the reserve that is taken and has no mapping.
+/** A guard is a page below the reserve that is taken and has no mapping.
  * Below the first page of any other run is a mapped page, a free page or
  * the region's start: every taken page outside the reserve is mapped
  * except a guard, and the page above a guard begins the guard's own run. */
@@ -421,8 +426,8 @@ void kfree_guarded(void *p, uint32_t count)
     spin_unlock_irqrestore(&heap_lock, flags);
 }
 
-/* Interrupts off. A page carved into blocks of class `cls`, its blocks on
- * the class's free list; -1 when no page could be had. */
+/** A page carved into blocks of class `cls`, its blocks on the class's
+ * free list: 0, or -1 when no page could be had. `heap_lock` is held. */
 static int add_class_page(uint32_t cls)
 {
     uint32_t page = find_run(1);
@@ -448,8 +453,8 @@ static int add_class_page(uint32_t cls)
     return 0;
 }
 
-/* Interrupts off. Take every block of the page at `base` off its class's
- * free list, so the page can go back. */
+/** Take every block of the page at `base` off its class's free list, so
+ * the page can go back. `heap_lock` is held. */
 static void drop_class_page(void *base, uint32_t cls)
 {
     void **link = &free_list[cls];
@@ -467,13 +472,13 @@ static void drop_class_page(void *base, uint32_t cls)
     }
 }
 
+/** A size above the largest class takes whole pages with the header in
+ * the first, and the header's `used` has 32 bits for the size. */
 void *kmalloc(size_t size)
 {
     uint32_t flags, cls;
     void *block;
 
-    /* Nothing, more than the region could hold, or more than a large
-     * object's header counts in its 32 bits. */
     if (size == 0 || size > (size_t)heap_pages * PAGE_SIZE - PAGE_SIZE || size > 0xFFFFFFF0u) {
         return NULL;
     }

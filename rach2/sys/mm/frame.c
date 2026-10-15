@@ -13,17 +13,24 @@
 #define ENTRY_LEN  12
 #define ENTRY_TYPE 20
 
+/** The little-endian 32-bit word at `p`, which need not be aligned. */
 static uint32_t le32(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+/** The little-endian 64-bit word at `p`, which need not be aligned. */
 static uint64_t le64(const uint8_t *p)
 {
     return (uint64_t)le32(p) | ((uint64_t)le32(p + 4) << 32);
 }
 
-/* The `index`-th entry, walking the map as its format says. */
+/**
+ * The `index`-th entry of the map, walked as its format says: each entry's
+ * `size` gives the bytes after that field. NULL past the last entry, for a
+ * NULL map, or at an entry shorter than BOOT_MMAP_ENTRY or one that runs
+ * past `mmap_len`.
+ */
 static const uint8_t *entry_at(const void *mmap_buf, uint32_t mmap_len, uint32_t index)
 {
     const uint8_t *p;
@@ -64,8 +71,11 @@ int frame_map_entry(const void *mmap_buf, uint32_t mmap_len, uint32_t index, uin
     return 1;
 }
 
-/* Put `[start, end)` into the sorted, disjoint list, merging what it
- * touches. Returns -1 when the list is full. */
+/**
+ * Put `[start, end)` into the sorted, disjoint list, merged with every range
+ * it overlaps or abuts. An empty range adds nothing. Returns 0, or -1 when
+ * the list is full.
+ */
 static int range_add(struct frame_map *m, uint64_t start, uint64_t end)
 {
     uint32_t i, j;
@@ -73,7 +83,6 @@ static int range_add(struct frame_map *m, uint64_t start, uint64_t end)
     if (end <= start) {
         return 0;
     }
-    /* Absorb every range that overlaps or abuts the new one. */
     for (i = 0; i < m->count;) {
         if (m->usable[i].end < start || m->usable[i].start > end) {
             i++;
@@ -104,8 +113,9 @@ static int range_add(struct frame_map *m, uint64_t start, uint64_t end)
     return 0;
 }
 
-/* Take `[start, end)` out of the list; `*taken` gains the bytes that were
- * in it. Returns -1 when a split needs a range the list has no room for. */
+/** Take `[start, end)` out of the list; `*taken` gains the bytes that were
+ * in it. Returns 0, or -1 when a split needs a range the list has no room
+ * for. */
 static int range_subtract(struct frame_map *m, uint64_t start, uint64_t end, uint64_t *taken)
 {
     uint32_t i, j;
@@ -155,7 +165,7 @@ static int range_subtract(struct frame_map *m, uint64_t start, uint64_t end, uin
     return 0;
 }
 
-/* Set `usable_bytes` and `top_frame` from the ranges. */
+/** Set `usable_bytes` and `top_frame` from the ranges. */
 static void recount(struct frame_map *m)
 {
     uint32_t i;
@@ -170,13 +180,20 @@ static void recount(struct frame_map *m)
     }
 }
 
-/* The end of an entry: its base plus its length, or the space's last byte
+/** The end of an entry: its base plus its length, or the space's last byte
  * for a length that wraps. */
 static uint64_t entry_end(uint64_t addr, uint64_t len)
 {
     return addr + len < addr ? ~(uint64_t)0 : addr + len;
 }
 
+/**
+ * Anything of another type wins where it overlaps an available range: the
+ * conservative reading of a map that contradicts itself. What lies past the
+ * reach is taken out after the merge and the subtraction, so that an entry
+ * given twice counts once, and one a reserved entry overlaps counts not at
+ * all.
+ */
 int frame_map_build(struct frame_map *m, const void *mmap_buf, uint32_t mmap_len,
                     uint32_t mem_upper_kb, uint64_t reach)
 {
@@ -198,8 +215,6 @@ int frame_map_build(struct frame_map *m, const void *mmap_buf, uint32_t mmap_len
             return -1;
         }
     }
-    /* Anything of another type wins where it overlaps an available range:
-     * the conservative reading of a map that contradicts itself. */
     for (i = 0; frame_map_entry(mmap_buf, mmap_len, i, &addr, &len, &type); i++) {
         if (type != FRAME_MAP_USABLE &&
             range_subtract(m, addr, entry_end(addr, len), &dropped) != 0) {
@@ -207,16 +222,11 @@ int frame_map_build(struct frame_map *m, const void *mmap_buf, uint32_t mmap_len
             return -1;
         }
     }
-    /* What lies past the reach is counted and dropped: merged and
-     * subtracted like the rest first, so an entry given twice or overlapped
-     * by a reserved one counts once and not at all. */
     if (range_subtract(m, reach, ~(uint64_t)0, &m->unreachable_bytes) != 0) {
         m->count = 0;
         return -1;
     }
     if (m->count == 0 && m->unreachable_bytes == 0) {
-        /* No map, or nothing available in it: the older field, as one range
-         * from the end of the first megabyte. */
         m->from_mem_upper = 1;
         if (mem_upper_kb > 0) {
             uint64_t end = 0x100000ULL + (uint64_t)mem_upper_kb * 1024u;

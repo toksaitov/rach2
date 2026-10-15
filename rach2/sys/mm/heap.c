@@ -1,3 +1,5 @@
+/* heap.c: the boot allocator of heap.h. */
+
 #include "../arch/arch.h"
 #include "../klog.h"
 #include "heap.h"
@@ -6,13 +8,6 @@
 
 uintptr_t mem_reserved_ptr;
 
-/**
- * Anchor the bump allocator at the end of the kernel image.
- *
- * `mem_reserved_ptr` is the next free physical address. The boot code may
- * already have raised it past loaded modules, so only advance it, never
- * lower it.
- */
 void init_mm(void)
 {
     uintptr_t kernel_end = (uintptr_t)&_end;
@@ -23,19 +18,9 @@ void init_mm(void)
 }
 
 /**
- * Carve `size` bytes off the top of reserved physical memory.
- *
- * A monotonic bump allocator over identity-mapped memory: it returns the
- * current break and advances it, never freeing. With `align` set the break
- * is first rounded up to a page boundary.
- *
- * Once the frame table exists this allocator and the page allocator
- * (`alloc_user_page`) share the same physical range, so the reservation must
- * avoid frames already handed out. Any used frame in the span moves the break
- * past it and the search restarts; on success every covered frame is claimed.
- *
- * @return The reserved physical address, or 0 if the request would cross
- *         `HARD_MEMORY_LIMIT`, the top of identity-mapped memory.
+ * Once the frame table exists, the frame allocator gives out frames of the
+ * window too, so a used frame in the span moves the break past it and the
+ * search starts again from there.
  */
 uintptr_t mem_reserve(size_t size, bool align)
 {

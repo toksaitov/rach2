@@ -1,10 +1,3 @@
-#ifndef _FRAME_H_
-#define _FRAME_H_
-
-#include "../boot.h"
-#include "../lib/kdef.h"
-#include "../lib/kint.h"
-
 /*
  * frame: physical memory as the firmware's map describes it.
  *
@@ -23,17 +16,24 @@
  * come from here and from nothing else: usable is the available ranges
  * below the reach; unreachable is the available ranges at or above it;
  * reserved is what the boot occupies of the usable ranges; managed is
- * usable less reserved. The map gives no
- * installed figure, and none is invented from it.
+ * usable less reserved. The map gives no installed figure, and none is
+ * invented from it.
  *
- * Pure: no kernel service is called, so tests/host/frame_hosttest.c drives
- * it with maps no firmware offers on demand.
+ * The code calls no kernel service, so tests/host/frame_hosttest.c compiles
+ * it alone and gives it maps no firmware at hand offers.
  */
+#ifndef _FRAME_H_
+#define _FRAME_H_
+
+#include "../boot.h"
+#include "../lib/kdef.h"
+#include "../lib/kint.h"
 
 #define FRAME_PAGE_SIZE        0x1000u
-/* The identity-mapped window: mirrors HARD_MEMORY_LIMIT in mm/paging.h, and
- * init_paging checks that they agree. A frame above it is reached through a
- * mapping in the kernel's own layout, never through its physical address. */
+/* The top of the boot's window, HARD_MEMORY_LIMIT in each architecture's
+ * cpu.h, given again here so that frame.c needs no architecture's header;
+ * init_paging panics if the two differ. A frame above it is reached through
+ * a mapping in the kernel's layout, never through its physical address. */
 #define FRAME_DIRECT_MAP_LIMIT 0x2000000u
 /* The reach of a 32-bit physical address. */
 #define FRAME_REACH_32         0x100000000ULL
