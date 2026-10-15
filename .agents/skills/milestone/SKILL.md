@@ -16,10 +16,10 @@ A milestone runs from its `plan.md` under `dev-log/`. Its phases are issues on t
 
 ## The close
 
-* Once a phase's last issue has landed, the manager has Codex review the phase's whole diff from the owner's account while the work goes on, and each finding it keeps becomes a `bug` issue. Nothing waits for the review. The owner closes a milestone after a build from clean and a night that passed its last commit whole.
+* Once a phase's issues have all closed, the reviewer loop reviews the phase's whole diff while the work goes on, and each finding becomes a `bug` issue. Nothing waits for the review. The owner closes a milestone after a build from clean and a night that passed its last commit whole.
 * The build from clean empties `build/` of everything but `build/vendor/`, and removes the vendor outputs as well only when a port or its toolchain changed.
 * The style suite runs `prosecheck`, the mechanical half of the register rule; the review covers its contextual half.
-* A phase's review takes its diff in units grouped by contract, each of at most six files and sized to finish in ten minutes, one unit at a time. Each unit gets the shared interface changes, may read what its diff depends on, and states its most serious findings first. An expired review is incomplete, not clean.
+* The reviewer's lead divides the diff by contract among its subagents and checks each finding they return against the code before it keeps it. A review that reaches its three hours is incomplete, not clean, and says so on the phase.
 * Fix every finding, or reject it in the milestone's `notes.md` with the source that shows it wrong.
 
 ## The machine sitting
