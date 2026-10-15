@@ -20,8 +20,7 @@
 # are what runs at once and not the worker count alone; a suite larger than
 # the whole budget runs alone rather than never. The core tier is chosen by
 # one rule: every subsystem of the kernel is exercised at least once. Through
-# the pool it finishes with its longest member, which the milestone 52 record
-# puts at about five minutes.
+# the pool it finishes when its longest member does.
 #
 # The architectures, i686 and x86_64 with commas between them, are the ones
 # `tests/run` runs the suite on, for the ARCH it is given; left out, the suite

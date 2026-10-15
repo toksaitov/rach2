@@ -81,22 +81,22 @@ LC_ALL=C; export LC_ALL
 now() { "$RACH2_RUN_UTIL" now; }
 sleep() { "$RACH2_RUN_UTIL" sleep "$1"; }
 
-# e2fsprogs, where a package manager keeps it off the path; the suites that
-# name mke2fs or e2fsck find them where the build does.
-# Where the tree has it; the runner's own self-test drives a tree that does not.
+# e2fsprogs, where a package manager keeps it off the path, so that the suites
+# that name mke2fs or e2fsck find them where the build does. The tree the
+# runner's own self-test drives has no such script.
 [ -f "$REPO/tools/setup/e2fsprogs_path.sh" ] && . "$REPO/tools/setup/e2fsprogs_path.sh"
 REGISTRY="$REPO/tests/registry"
 [ -f "$REGISTRY" ] || { echo "run: result: refused: missing $REGISTRY" >&2; exit 1; }
 
-# How many suites run at once. A suite spends most of its life waiting for an
+# How many suites run at once. A suite spends most of its time waiting for an
 # emulated machine rather than computing, so the useful count is above the
 # core count: on a ten-core machine the full run of one-processor machines
 # takes 1286s at four workers, 728 at eight, 587 at twelve, 527 at sixteen
-# and 499 at twenty, and stops improving there. Twice the processors lands
-# on that knee, counted in the machines' processors, each machine having
-# RACH2_CPUS (set_cpus): with two, twice the processors in suites gave the
-# testing host's 32 threads 128 processors to run, and boots ran past their
-# steps' time limits.
+# and 499 at twenty, and improves no further. The default is twice the host's
+# processors, counted in the machines' processors, each machine having
+# RACH2_CPUS (set_cpus), so that the guests' processors do not outnumber the
+# host's threads by more than two to one and boots finish within their steps'
+# time limits.
 workers_default() {
     n=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
     case "$n" in ''|*[!0-9]*) n=4 ;; esac
@@ -112,9 +112,9 @@ unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
 WORKERS="${RACH2_WORKERS:-$(workers_default)}"
 # How much guest memory the pool may have booted at once, in MiB: three
 # quarters of the host's, so the memory matrix's 4 GiB machine and the
-# suites beside it never push the host into swap, where every deadline
-# lies. RACH2_MEMORY_MIB overrides it. A suite is admitted while the running
-# suites' declared memory plus its own fits; a suite alone always fits.
+# suites beside it do not push the host into swap, where the time limits no
+# longer hold. RACH2_MEMORY_MIB overrides it. A suite is admitted while the
+# running suites' declared memory plus its own fits; a suite alone always fits.
 memory_default() {
     b=$(sysctl -n hw.memsize 2>/dev/null)
     if [ -z "$b" ] && [ -r /proc/meminfo ]; then
@@ -148,14 +148,12 @@ WORKERS=$(awk -v n="$WORKERS" 'BEGIN {if (n < 1 || n > 1024) exit 1; printf "%.0
 # once: the trap calls it and the EXIT trap finds it done.
 OWN_PGID=$("$RACH2_RUN_UTIL" pgid $$)
 PGID=$OWN_PGID
-# Not a group of its own, so nothing is matched by group; what the ledgers
-# and the process table name is still stopped.
+# A run that does not lead its process group matches nothing by group; what
+# the ledgers and the process table name is still stopped.
 [ "$PGID" = "$$" ] || PGID=""
 STOPPING=""
 owned() {
-    # The listing's own processes, the substitution's subshell and what it
-    # started, are not the run's: every process under the one that ran `ps`
-    # is left out, whether reached through the table or through the group.
+    # The processes under the one that ran `ps` are not the run's.
     ps -A -o pid= -o ppid= -o pgid= > "$WORK/ps" 2>/dev/null &
     self=$!; wait "$self"
     awk -v group="$PGID" '$3 == group {print $1}' "$WORK/ps" > "$WORK/group"
@@ -218,8 +216,7 @@ owned_stop() {
     owned_live > "$WORK/stopping"
     groups_kill 15
     while read -r pid; do kill -TERM "$pid" 2>/dev/null; done < "$WORK/stopping"
-    # Let suite supervisors finish their two-second TERM and token cleanup
-    # before escalating against the supervisors themselves.
+    # A suite's supervisor takes two seconds to stop and free its tokens.
     owned_wait 50 && return 0
     while read -r pid; do kill -KILL "$pid" 2>/dev/null; done < "$WORK/stopping"
     owned_kill KILL
@@ -454,15 +451,10 @@ check_images() { # check_images NAMES: 0 when every file made that is not a
     [ -f "$WORK/images.stamp" ] || return 0
     image_table "$1" > "$WORK/images.patterns"
     ( cd "$REPO/$ARCH_BUILD/images" 2>/dev/null && find . -type f -newer "$WORK/images.stamp" | sed 's|^\./||' | sort ) > "$WORK/images.made"
-    # A product of the run's own target is the build's and not a suite's: a
-    # suite's make remakes one whose prerequisite the parallel build left at
-    # the same second, and the file is the same bytes, which `check_hashes`
-    # is what proves. Only what no product covers is asked about below.
+    # A product of the run's target is the build's, and check_hashes checks it.
     if [ -f "$WORK/inventory.products" ]; then
         { sed -n "s|^$ARCH_BUILD/images/||p" "$WORK/inventory.products"
-          # and the dependency file mkimage.sh wrote beside each, and the
-          # record of its programs that file names, which are not targets of
-          # their own and so are in no closure
+          # with the .d and .programs files of mkimage.sh, in no closure
           sed -n "s|^$ARCH_BUILD/images/||p" "$WORK/inventory.products" | sed 's/$/.d/'
           sed -n "s|^$ARCH_BUILD/images/||p" "$WORK/inventory.products" | sed 's/$/.programs/'
         } | sort -u > "$WORK/images.products"
@@ -608,7 +600,11 @@ suite_make() {
 # A suite run on its own builds what its own target names, in parallel, and
 # nothing else: `tests/run host` after an edit to a utility does not restage
 # five images and two ISOs first. In a set, `prepare` has built everything.
-# The components were built before either, in a Make of their own.
+# The components were built before either, in a Make of their own. A suite
+# run alone has its target's prerequisites built and hashed by a make of their
+# own before the suite starts, since one make of both would hash a build in
+# progress; an e1000 suite's target runs the plain one with NIC set, so its
+# products are the plain target's.
 run_one() {
     start=$(now)
     RACH2_QEMU_LEDGER="$WORK/$1.machines"; export RACH2_QEMU_LEDGER
@@ -616,11 +612,6 @@ run_one() {
     [ "${2-}" = pooled ] || echo "run: $1: starting (idle limit $IDLE_SECONDS s)"
     rc=0
     if [ "${2-}" = alone ]; then
-        # What the target names is built first and hashed, then the suite
-        # runs against those files; one make of both would hash a build in
-        # progress or a suite already run.
-        # An e1000 suite's target is a wrapper that runs the plain one with
-        # NIC set, so the products are the plain target's.
         target="run-$1"
         case "$1" in *-e1000) target="run-${1%-e1000}" ;; esac
         products=$(closure "$target" | grep '^build/')
@@ -677,12 +668,12 @@ keep_logs() { # keep_logs NAME
 }
 
 # The given suites, at most $WORKERS at a time, each one's output held while
-# it runs and printed whole the moment it ends, in the order they end: twenty
-# suites writing to one terminal is not a report, and a report an hour late
-# is not one either. A suite's result is its `.rc` file, written beside and
-# moved into place after its output is closed, so a reader never sees an
-# empty result; a job that is gone with no result failed. The failures are
-# left in POOL_FAILED rather than printed, because a caller reading this
+# it runs and printed whole as soon as it ends, in the order they end, so that
+# the outputs of suites running at once do not interleave and each is read
+# without waiting for the rest. A suite's result is its `.rc` file, written
+# beside and moved into place after its output is closed, so a reader never
+# sees an empty result; a job that is gone with no result failed. The failures
+# are left in POOL_FAILED rather than printed, because a caller reading this
 # through a command substitution would run it in a subshell and the output
 # would go there instead of to the person waiting. With RACH2_STOP_ON_FAIL
 # set, the first failure stops the pool: what is queued does not start, and
@@ -848,11 +839,11 @@ take_products() { # take_products TARGET...
 }
 # The scripts are checked as the set runs, not only at its end: the runner,
 # the registry, the makefiles and the suite and tool scripts, which is what
-# `scripts_inventory` lists. A file changed under a run voids it, and learning
-# that ninety minutes later costs the whole run; on 2026-09-13 it cost one.
-# Hashing those is cheap and it is the case that happens. The kernel and the
-# application sources are not hashed here; a change to one reaches the run
-# through the products, which are large and are left to the check at the end.
+# `scripts_inventory` lists. A file changed under a run voids it, and a change
+# found only at the end costs the whole run, while the scripts are cheap to
+# hash. The kernel and the application sources are not hashed here; a change
+# to one reaches the run through the products, which are large and are left to
+# the check at the end.
 check_scripts_now() { # 0 when no script of the inventory has changed
     [ -f "$WORK/hashes.scripts" ] || return 0
     hash_list "$WORK/inventory.scripts" "$WORK/hashes.scripts.now"
@@ -889,8 +880,7 @@ build_components() {
 }
 prepare() {
     echo "run: preparing"
-    # The named kernel first: the disks and sticks the preparation makes
-    # carry it, so it must exist before they are built.
+    # The named kernel first, since the preparation's disks and sticks have it.
     if [ -n "$KERNEL_VAR" ]; then
         run_make "${RACH2_KERNEL}-kernel" || {
             echo "run: result: refused: the $RACH2_KERNEL kernel did not build" >&2; exit 1
@@ -922,8 +912,8 @@ prepare_gnu() { # prepare_gnu NAMES
 #
 # A host with a KVM device this user cannot open is refused rather than run
 # under the emulator: the bounds were set under KVM, and a run that fell back
-# without saying so once cost a day spent on a regression that was only the
-# emulator's speed. `RACH2_QEMU_ACCEL=tcg` asks for the emulator outright.
+# to the emulator without saying so would report its slowness as a
+# regression. `RACH2_QEMU_ACCEL=tcg` asks for the emulator outright.
 # `RACH2_KVM_DEVICE` names the device, which is how the runner's own test
 # offers one it cannot open.
 set_accel() {
@@ -994,8 +984,7 @@ run_set() {
     for suite in $serial; do run_one "$suite" || failed="$failed $suite"; done
     RUNNING=""
     [ -n "$STOPPING" ] && return 1
-    # A style fault is fixed by an edit, and an edit voids what the pool would
-    # judge: the GNU root carries the sources, so even a comment changes it.
+    # The fix of a style fault is an edit, which changes the GNU root's sources.
     case " $failed " in
         *" style "*)
             [ -z "$pooled" ] || echo "run: stopped: style failed; not started:$pooled"
@@ -1022,9 +1011,7 @@ case "${1-}" in
         echo "usage: tests/run NAME [NAME...] | core | all | inventory" >&2
         echo "run: result: refused: no suite named" >&2; usage_names; exit 2 ;;
     all|core)
-        # A set and a name in one command would read as "the set and also
-        # this", and the set is not being added to. Refused rather than
-        # silently dropped.
+        # A set takes no other names, rather than dropping them silently.
         [ "$#" -eq 1 ] || {
             echo "run: result: refused: '$1' is a whole set; it takes no other names" >&2; exit 2
         }
@@ -1045,8 +1032,7 @@ for suite in "$@"; do
     suite_known "$suite" || {
         echo "run: result: refused: unknown suite '$suite'" >&2; usage_names; exit 2
     }
-    # Twice in one command means two runs sharing one ledger and one held
-    # output, where the second result overwrites the first.
+    # Two runs of one suite would share one ledger and one held output.
     case " $seen " in
         *" $suite "*) echo "run: result: refused: $suite is named twice" >&2; exit 2 ;;
     esac
@@ -1164,11 +1150,6 @@ done
 export RACH2_QEMU_ACCEL
 [ ! -d "$WORK/bin" ] || { PATH="$WORK/bin:$PATH"; export PATH; }
 
-# A sweep of the process table for another runner stood here for an hour on
-# 2026-09-14 and was removed: a runner of another tree looks exactly like a
-# runner of this one on a command line, so the runner's own selftest, which
-# drives a tree of its own while a set runs, refused itself. The lock is what
-# knows which tree a run holds, and it names the run that holds it.
 # The line that says this run began. Everything below it belongs to this run,
 # and a log without it is a run that never started.
 echo "run: starting: $* (pid $$, $(date '+%Y-%m-%d %H:%M:%S'), architecture $ARCH, workers $WORKERS, memory $MEMORY_MIB MiB, timeout factor $CAL_FACTOR, accelerator $RACH2_QEMU_ACCEL, processors $RACH2_CPUS)"
@@ -1197,10 +1178,7 @@ take_scripts
 build_components
 rc=0
 if [ "$#" -eq 1 ]; then
-    # The kernel RACH2_KERNEL names is built here too: a suite run alone
-    # builds through its own target, which does not name that kernel, so
-    # without this the suite would boot whatever the last set left, or
-    # nothing at all.
+    # A suite's own target does not build the kernel RACH2_KERNEL names.
     if [ -n "$KERNEL_VAR" ]; then
         run_make "${RACH2_KERNEL}-kernel" || {
             echo "run: result: refused: the $RACH2_KERNEL kernel did not build" >&2; exit 1

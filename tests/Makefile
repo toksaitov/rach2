@@ -1,14 +1,13 @@
-# Rach2 Syscall Test Programs Makefile
+# tests/Makefile: build the guest probes, the freestanding programs the suites
+# run on Rach2 to test the kernel's system calls.
 #
-# Builds freestanding executables for testing kernel syscalls, for the
-# architecture mk/arch.mk names, into build/tests/ or build/x86_64/tests/. They
-# run in user mode on the Rach2 kernel and make their system calls through
-# probe.h, which has each architecture's numbers, entry and layouts. The one
-# exception is dnstest, which links the ported musl (like the utils) so it and
-# the shared resolver it pulls in (utils/resolv.c) use the real libc rather
-# than hand-rolled system calls; see its rule below.
+# Each probe is built for the architecture mk/arch.mk names, into build/tests/
+# or build/x86_64/tests/, and makes its system calls through probe.h, which has
+# each architecture's numbers, entry instruction and structure layouts. The one
+# exception is dnstest, which links the ported musl, as the utilities do, so
+# that it and the resolver it tests (utils/resolv.c) call the C library.
 
-# Shared cross toolchain + automatic header-dependency tracking (see ../mk/).
+# The cross toolchain and the header dependencies (../mk/).
 include ../mk/toolchain.mk
 include ../mk/deps.mk
 include ../mk/build.mk
@@ -19,8 +18,8 @@ CFLAGS = $(ARCH_CFLAGS) -nostdlib -static -ffreestanding -Wl,-Ttext=$(ARCH_USER_
 EXTRA ?=
 CFLAGS += $(EXTRA)
 
-# The musl link for dnstest: the architecture's compiler (for its libgcc), the
-# ported musl headers and crt objects, exactly as utils/Makefile links.
+# The musl link for dnstest: the architecture's compiler (for its libgcc), and
+# the ported musl's headers and crt objects, as utils/Makefile links.
 MUSL_CC     := $(CROSS_CC)
 MUSL_PREFIX := $(TOP)/$(ARCH_MUSL)
 MUSL_LIBGCC := $(shell $(MUSL_CC) $(ARCH_CFLAGS) -print-libgcc-file-name)
@@ -49,16 +48,15 @@ ifeq ($(ARCH),x86_64)
 PROGS := $(filter-out $(I686_ONLY),$(PROGS))
 endif
 
-# These compile+link in one step, so there are no .o intermediates; only the
-# GCC-written .d, which -MF puts under $(BUILD) (build/tests/, from
-# mk/build.mk), so the source tree stays clean and the RAM-disk staging picks
-# the binaries up there.
+# A probe is compiled and linked in one step, so the only file besides the
+# binary is the .d that -MF writes under $(BUILD) (build/tests/, from
+# mk/build.mk). The image manifests stage the binaries from there.
 TARGETS = $(addprefix $(BUILD)/, $(PROGS))
 
 # The configuration fingerprint (mk/fingerprint.mk): a changed flag or a
-# reinstalled compiler rebuilds every probe automatically. The purge names this
-# Makefile's own products because build/tests/musl belongs to
-# tests/musl/build.sh, which can be compiling there in a parallel build.
+# reinstalled compiler rebuilds every probe. The purge names only this
+# Makefile's products, since build/tests/musl belongs to tests/musl/build.sh,
+# which may be compiling there in a parallel build.
 CONFIG_TEXT = $(CC) $(CFLAGS) $(MUSL_CC) $(MUSL_CFLAGS)
 CONFIG_PURGE = $(TARGETS) $(BUILD)/*.d
 include ../mk/fingerprint.mk
@@ -68,19 +66,17 @@ include ../mk/fingerprint.mk
 all: $(TARGETS)
 $(TARGETS): $(CONFIG)
 
-# Each probe is a single freestanding source compiled+linked in one step; -MMD
-# (from $(DEPFLAGS)) writes the deps, -MF puts that .d under $(BUILD), so
-# editing a shared header rebuilds it.
+# A probe is one freestanding source. -MMD, from $(DEPFLAGS), records the
+# headers it includes in the .d that -MF names, so a changed header rebuilds it.
 $(BUILD)/%: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/$*.d -o $@ $<
 
-# dnstest links the shared stub resolver from utils/ so it can exercise both the
-# pure parser (crafted vectors) and resolve_host() (live), and it links the
-# ported musl so both it and resolv.c use the real libc. It compiles+links two
-# sources in one step, where -MF records only the last source's headers, so the
-# build inputs (dnstest.c, resolv.c, netdb.h) are declared as explicit
-# prerequisites; the $(BUILD) .d adds the resolver's transitive headers on top.
+# dnstest links the stub resolver of utils/ to test its parser on crafted
+# replies and resolve_host() against a live server, and links the ported musl
+# for both. It compiles two sources in one step, and the .d may not record the
+# headers of both, so dnstest.c, resolv.c and netdb.h are named here as
+# prerequisites; the .d adds the headers they include.
 $(BUILD)/dnstest: dnstest.c ../utils/resolv.c ../utils/netdb.h \
     $(MUSL_PRE) $(MUSL_PREFIX)/lib/libc.a $(MUSL_LIBGCC) \
     $(MUSL_PREFIX)/lib/crtn.o
