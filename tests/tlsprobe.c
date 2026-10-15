@@ -23,8 +23,10 @@
  *      processor 0 first: on two processors each could keep one to itself,
  *      and no switch would go from one to the other.
  *
- * Prints "All TLS checks passed!" and exits 0 when every check passes, and
- * "tlsprobe: FAILED" and exits 1 otherwise.
+ * Prints "All TLS checks passed!" and exits 0 when every check passes.
+ * Otherwise it prints a line that begins "FAIL: " and exits 1, printing
+ * "tlsprobe: FAILED" before the exit unless the TLS, the binding to
+ * processor 0, a pipe or the fork could not be set up.
  *
  * On Linux the same interface is set_thread_area(2) and the i386 %gs thread
  * pointer that glibc and musl, the stack-protector canary and

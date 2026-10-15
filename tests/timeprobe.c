@@ -11,8 +11,8 @@
  *     waking, which happens only if the sleeping parent gives up the CPU.
  *
  * It prints "TIMEPROBE OK" and exits 0 when all pass, and "TIMEPROBE FAIL"
- * with the count of failed checks as its status otherwise. It does no
- * 64-bit division, since the probes link without libgcc.
+ * with the count of failed checks as its status otherwise. It divides
+ * nothing wider than a long, since the probes link without libgcc.
  */
 
 #include "probe.h"
@@ -73,6 +73,9 @@ static int elapsed_ms(const struct timespec *a, const struct timespec *b)
 /**
  * The probe: the three checks in order, each counted by `check`.
  *
+ * Both getrandom buffers start zeroed, so a call that writes nothing fails
+ * the test that the two differ.
+ *
  * The sleep of 150 ms is fifteen ticks; two reads of a clock that moves in
  * ticks can straddle two of them, so the bound is 130. How far the sleep
  * overshot depends on the machine, and the probe does not judge it.
@@ -90,8 +93,7 @@ PROBE_START void _start(void)
           "monotonic clock does not go backwards");
     check(t0.tv_nsec >= 0 && t0.tv_nsec < 1000000000, "tv_nsec in range");
 
-    /* 2. getrandom: both buffers start equal, so a call that writes nothing
-     * fails the difference test. */
+    /* 2. getrandom returns the count and bytes that differ. */
     for (i = 0; i < 16; i++) {
         r1[i] = 0;
         r2[i] = 0;

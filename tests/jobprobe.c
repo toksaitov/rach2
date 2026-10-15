@@ -4,8 +4,8 @@
  * The probe establishes, through raw system calls, that:
  *   * a process is its own session and group leader by default (getpgrp ==
  *     getsid == getpid for the init process);
- *   * fork inherits the parent's session and group;
- *   * setpgid(0,0) moves a non-leader child into its own group;
+ *   * a forked child does not lead its group, and setpgid(0,0) moves it
+ *     into a group of its own;
  *   * setsid on a non-group-leader child opens a new session (sid == pgid ==
  *     pid);
  *   * the session leader claims the console as its controlling terminal,
@@ -172,16 +172,16 @@ static void check(int cond, const char *msg)
 }
 
 /**
- * A child's body for `run_child`: it checks that it is in its parent's group
- * and session, then moves to a group of its own with setpgid(0, 0). Returns
- * 0 when every check passes, or 10 to 14 for the first that fails.
+ * A child's body for `run_child`: it checks that it does not lead its group
+ * and that getsid(0) and getsid of its own pid agree, then moves to a group
+ * of its own with setpgid(0, 0) and checks getpgrp and getpgid(0). Returns 0
+ * when every check passes, or 10 to 14 for the first that fails.
  */
 static int child_setpgid(void)
 {
     int me = getpid();
     int parent_pgrp;
 
-    /* Inherited the parent's group and session (the parent is the leader). */
     parent_pgrp = getpgrp();
     if (parent_pgrp == me) {
         return 10;
@@ -278,7 +278,7 @@ PROBE_START void _start(void)
     check(getpgid(0) == me, "init getpgid(0) == pid");
     check(getsid(0) == me, "init getsid(0) == pid");
 
-    /* fork inheritance + setpgid, checked inside the child. */
+    /* A forked child and its setpgid(0,0), checked inside the child. */
     check(run_child(child_setpgid) == 0, "child: inherit group, setpgid(0,0) -> own group");
 
     /* setsid from a non-leader child opens a new session. */

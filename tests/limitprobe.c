@@ -5,14 +5,14 @@
  * real user (`RLIMIT_NPROC`), a process's open descriptors (`RLIMIT_NOFILE`)
  * and its address space in bytes (`RLIMIT_AS`), each a soft value enforced
  * and a hard value the soft may be raised to. The probe runs as root and
- * proves, one child at a time: the limits read back as the table's; a
+ * proves, in children of its own: the limits read back as the table's; a
  * descriptor limit of eight refuses the ninth open with `EMFILE` and a
  * `dup2` onto a number past it with `EBADF`, a child forked under a limit
  * reads that limit, and an address-space limit of eight megabytes refuses
  * a larger mapping with `ENOMEM` and leaves the break where it was; a hard
  * limit raised by a user is refused with `EPERM` while a lowering and
  * root's raising are allowed; the limits are seen after a fork and after
- * an exec, which is `limitprobe show` reporting the number it inherited;
+ * an exec, which is `limitprobe show` checking the limit it inherited;
  * one user with four processes allowed is refused a fork past the four
  * with `EAGAIN` while another user forks; and a process that took that
  * user's identity with `setuid` counts against that user's four. Last, a
@@ -23,10 +23,11 @@
  * of 4096 bytes has a write of 8192 cut to 4096, and the next write and a
  * truncation past the limit refused with `EFBIG`.
  *
- * Needs: root privilege, readable /hello, this binary at /limitprobe, and
- * only descriptors 0, 1 and 2 open. Start with RLIMIT_NOFILE at 1024/1024,
- * unlimited RLIMIT_AS, and no other processes owned by uid 1000 or 1001.
- * Neither path nor limit depends on the root file system's type.
+ * Needs: root privilege, readable /hello, a writable /tmp, this binary at
+ * /limitprobe, and only descriptors 0, 1 and 2 open. Start with
+ * RLIMIT_NOFILE at 1024/1024, unlimited RLIMIT_AS, and no other processes
+ * owned by uid 1000 or 1001. Neither path nor limit depends on the root
+ * file system's type.
  *
  * Prints "LIMITPROBE OK" and exits 0, or "LIMITPROBE FAIL: " and the reason
  * and exits 1.
@@ -404,7 +405,7 @@ void probe_main(unsigned long *sp);
 PROBE_SP_ENTRY;
 
 /** The probe, entered with `sp` at argc: `run_show` when the first argument
- * begins with 's', and otherwise the rows of the opening comment in order. */
+ * begins with 's', and otherwise the rows of the opening comment. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
@@ -448,7 +449,8 @@ void probe_main(unsigned long *sp)
     if (family == 0) {
         sys_exit(body_nproc());
     }
-    syscall1(SYS_CLOSE, fds[1]); /* so a family that dies unheard is end of input here */
+    /* A family that dies unheard is then end of input on the read below. */
+    syscall1(SYS_CLOSE, fds[1]);
     if (syscall3(SYS_READ, fds[0], (long)&byte, 1) != 1 || byte != 's') {
         fail("four processes of one user: three forks and a fourth refused with EAGAIN");
     }

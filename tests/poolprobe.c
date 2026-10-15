@@ -1,6 +1,7 @@
 /**
  * poolprobe: many pipes, ptys, sockets and processes live at once, and the
- * kernel heap back where it started after a thousand of each object.
+ * kernel heap back where it started after a thousand each of pipes, ptys
+ * and sockets.
  *
  * In each of four rounds, eight children each open and hold six pipes, or
  * five pty masters, or six datagram sockets, or fork four children of their
@@ -210,7 +211,8 @@ static void crossed(int kind, int per_child, const char *what)
             hold(kind, per_child, report[1]);
         }
     }
-    syscall1(SYS_CLOSE, report[1]); /* a holder that dies unheard is end of input */
+    /* A holder that dies unheard is then end of input on the reads below. */
+    syscall1(SYS_CLOSE, report[1]);
     for (i = 0; i < 8; i++) {
         if (syscall3(SYS_READ, report[0], (long)&byte, 1) != 1 || byte != 'h') {
             fail(what);

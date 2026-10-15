@@ -97,9 +97,9 @@ static unsigned char block[4096];
 /* Whether a writer syncs after each pass; the argument's `n` clears it. */
 static int writer_syncs = 1;
 
-/** A writer: write the file `path` whole, 64 blocks of 4 KiB, close it and
- * sync, again and again. It exits 2 when the open fails and 3 when a write
- * is short. */
+/** A writer: write the file `path` whole, 64 blocks of 4 KiB, close it and,
+ * when `writer_syncs` is set, sync, again and again. It exits 2 when the
+ * open fails and 3 when a write is short. */
 static void writer(const char *path)
 {
     unsigned i;
@@ -254,7 +254,8 @@ void probe_main(unsigned long *sp)
             if (i < 6) {
                 if (wanted(arg, 's')) {
                     for (;;) {
-                        __asm__ __volatile__("" ::: "memory"); /* a spin, meant to last */
+                        /* A spin, meant to last until the kill. */
+                        __asm__ __volatile__("" ::: "memory");
                     }
                 }
             } else if (i < 8) {

@@ -107,10 +107,10 @@ static volatile int handler_ran;
 static volatile int handler_sig;
 static volatile int forge_ran;
 
-/* A selector with a ring-3 RPL whose index names no descriptor: the GDT has
- * a handful of entries, so index 8191 is past its limit. A kernel that loaded
- * it with `mov %ax, %gs` at ring 0, or returned through it with `iretq`, would
- * take a general-protection fault in kernel mode and panic. */
+/* A selector of RPL 3 that names no descriptor: its table bit selects the
+ * LDT, which the kernel never loads, and its index is 8191. A kernel that
+ * loaded it with `mov %ax, %gs` at ring 0, or returned through it with
+ * `iretq`, would take a general-protection fault in kernel mode and panic. */
 #define BAD_SELECTOR 0xFFFFu
 
 /** Record that the handler ran, and for which signal. */
@@ -384,9 +384,9 @@ static void timer_rows(void)
  *
  * Row 4: the i386 return path loads gs, fs, es and ds with `mov` while still
  * at ring 0, and the x86-64 one returns through cs and ss with `iretq`, so a
- * selector past the GDT's limit would fault the kernel and not the process;
- * the kernel must replace it. Reaching the next statement at all is the
- * proof, since the alternative is a machine that stops.
+ * selector that names no descriptor would fault the kernel and not the
+ * process; the kernel must replace it. Reaching the next statement at all is
+ * the proof, since the alternative is a machine that stops.
  *
  * Row 5: `SA_RESETHAND` puts the disposition back for the next signal, not
  * for this one: a delivery that entered the disposition it had just cleared
