@@ -5,7 +5,8 @@
 # node that loses its directory, a rename that leaves the node in its old
 # directory, mkdir without its refusal of a taken directory id, a node made
 # with no request that keeps the free node's owner, the free blocks counted
-# rounding up, and a rename to the same name that frees the node. The test
+# rounding up, a rename to the same name that frees the node, and a staged
+# file given a directory's mixed id in place of its name's hash. The test
 # is compiled with a fuse.h that stops the build, so that it uses the test's
 # own stub.
 set -eu
@@ -13,7 +14,7 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-faults='ring parent moved rename mkdir-id owner statfs same-name'
+faults='ring parent moved rename mkdir-id owner statfs same-name staged-id'
 
 # select_fault FAULT: the file FAULT changes, in `file`, the text it replaces,
 # in `old`, the text that replaces it, in `new`, and the rows it must fail,
@@ -63,6 +64,11 @@ full image has no free block' ;;
             old='if (result == 0 && target && target != node) {'
             new='if (result == 0 && target) {'
             rows='rename to the same name keeps the file' ;;
+        staged-id)
+            file=krffs/stageimage.krffs.c
+            old='if (is_dir_node(node)) {'
+            new='if (1) {'
+            rows='staged file has the hash of its name as its id' ;;
         *)
             echo "krffs-fuse-mutation: unknown fault: $1" >&2
             exit 1 ;;

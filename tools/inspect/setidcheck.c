@@ -1613,12 +1613,20 @@ static int walk_nodes(struct image *im)
     return 0;
 }
 
+/** Whether `n` is a reserved node with the directory type in its mode. */
+static int is_dir_node(const struct node *n)
+{
+    return n->type == NODE_RESERVED && (n->mode & 0170000u) == 0040000u;
+}
+
 /**
- * Rebuild the absolute path of every reserved node from `parent_id`. The
- * root's id is 0 as a parent and `krffs_mix_id` never returns 0, so a chain
- * ends only at the root. Two reserved nodes with one id or one path, a
- * cycle and a missing parent are errors, not skipped nodes, since a node
- * the inventory cannot name is a node it cannot check. Return 0, or -1 with
+ * Rebuild the absolute path of every reserved node from `parent_id`, which
+ * is the id of a directory. A file's id is the hash of its name, so files of
+ * one name share it, and only directories are looked up by id. The root's id
+ * is 0 as a parent and `krffs_mix_id` never returns 0, so a chain ends only
+ * at the root. Two directories with one id, two nodes with one path, a cycle
+ * and a missing parent are errors, not skipped nodes, since a node the
+ * inventory cannot name is a node it cannot check. Return 0, or -1 with
  * `im->err` set.
  */
 static int node_paths(struct image *im)
@@ -1626,12 +1634,12 @@ static int node_paths(struct image *im)
     int i, j;
 
     for (i = 0; i < im->n_nodes; i++) {
-        if (im->nodes[i].type != NODE_RESERVED)
+        if (!is_dir_node(&im->nodes[i]))
             continue;
         for (j = 0; j < i; j++)
-            if (im->nodes[j].type == NODE_RESERVED && im->nodes[j].id == im->nodes[i].id)
+            if (is_dir_node(&im->nodes[j]) && im->nodes[j].id == im->nodes[i].id)
                 return img_fail(im,
-                                "two reserved nodes share id %llu "
+                                "two directories share id %llu "
                                 "('%s' at offset %lu and '%s' at offset "
                                 "%lu), so no path is unambiguous",
                                 (unsigned long long)im->nodes[i].id, im->nodes[j].name,
@@ -1669,12 +1677,12 @@ static int node_paths(struct image *im)
                                 n->name, (unsigned long)n->offset);
             walker = NULL;
             for (j = 0; j < im->n_nodes; j++)
-                if (im->nodes[j].type == NODE_RESERVED && im->nodes[j].id == parent)
+                if (is_dir_node(&im->nodes[j]) && im->nodes[j].id == parent)
                     walker = &im->nodes[j];
             if (walker == NULL)
                 return img_fail(im,
                                 "node '%s' at offset %lu names parent "
-                                "id %llu, which no node has",
+                                "id %llu, which no directory has",
                                 n->name, (unsigned long)n->offset, (unsigned long long)parent);
         }
         for (j = 0; j < i; j++)
@@ -4465,6 +4473,32 @@ static void st_ext2_rows(const struct allow *img_allow)
 }
 
 /**
+ * The image cases of paths and ids, in `region`: two nodes on one path are
+ * refused, a file may have a directory's id, since files of one name share
+ * theirs, and two directories may not share one.
+ */
+static void st_path_rows(const struct allow *img_allow, unsigned char *region)
+{
+    struct fix_node n = IMG_NODES[3];
+    struct fix_node extra = IMG_NODES[1];
+
+    n.name = "su";
+    n.mode = 0755;
+    fixture(3, &n, NULL, 0, region);
+    st_image(img_allow, "two nodes on one path", "img-fixture", region, IMG_TOTAL, 0, 0,
+             "resolve to the path");
+    n = IMG_NODES[4];
+    n.id = IMG_NODES[1].id;
+    fixture(4, &n, NULL, 0, region);
+    st_image(img_allow, "a file with the id of a directory", "img-fixture", region, IMG_TOTAL, 0, 1,
+             "");
+    extra.name = "sbin";
+    fixture(-1, NULL, &extra, 1, region);
+    st_image(img_allow, "two directories with one id", "img-fixture", region, IMG_TOTAL, 0, 0,
+             "two directories share id");
+}
+
+/**
  * The cases of the no-argument sweep's rule that every entry of `allow` has
  * a manifest in krffs/manifests.
  */
@@ -5166,12 +5200,7 @@ static int selftest(struct allow *allow)
         wr64(region + 2 * NODE_SIZE + NODE_DATA_OFF, IMG_TOTAL);
         st_image(&img_allow, "a node claiming more data than it holds", "img-fixture", region,
                  IMG_TOTAL, 0, 0, "bytes of data");
-        n = IMG_NODES[3];
-        n.name = "su";
-        n.mode = 0755;
-        fixture(3, &n, NULL, 0, region);
-        st_image(&img_allow, "two nodes on one path", "img-fixture", region, IMG_TOTAL, 0, 0,
-                 "resolve to the path");
+        st_path_rows(&img_allow, region);
         n = IMG_NODES[3];
         n.name = "m\xff";
         fixture(3, &n, NULL, 0, region);

@@ -287,11 +287,13 @@ static uint64_t total_free_space(struct krffs_file_system *file_system)
 }
 
 /**
- * Reserves a node named `name` in the directory `parent_id`, with the id
- * `krffs_mix_id` gives, `mode`, the owner `uid`:`gid`, `data_size` bytes of
- * `data`, none copied when `data` is NULL, and the fixed staged time as its
- * three times, and syncs it. Returns its id, or 0, with a message, when the
- * data is too large or no free node is large enough.
+ * Reserves a node named `name` in the directory `parent_id`, with `mode`, the
+ * owner `uid`:`gid`, `data_size` bytes of `data`, none copied when `data` is
+ * NULL, and the fixed staged time as its three times, and syncs it. Its id is
+ * the one the kernel gives the same node: the djb2 hash of the name for a
+ * file, or the hash mixed with `parent_id` by `krffs_mix_id` for a directory.
+ * Returns the node, or NULL, with a message, when the data is too large or no
+ * free node is large enough.
  *
  * The staged time is one second past the epoch: fixed, so that an image
  * built twice from one tree is one image, and not zero, since pdpmake takes a
@@ -299,9 +301,9 @@ static uint64_t total_free_space(struct krffs_file_system *file_system)
  * run over the staged sources in place. A file the machine builds gets the
  * time of its clock, which is later.
  */
-static uint64_t stage_node(struct krffs_file_system *file_system, uint64_t parent_id,
-                           const char *name, uint16_t mode, uint32_t uid, uint32_t gid,
-                           const char *data, uint64_t data_size)
+static struct krffs_node *stage_node(struct krffs_file_system *file_system, uint64_t parent_id,
+                                     const char *name, uint16_t mode, uint32_t uid, uint32_t gid,
+                                     const char *data, uint64_t data_size)
 {
     struct krffs_node *node;
     struct krffs_node_time staged_time = {1, 0};
@@ -309,7 +311,7 @@ static uint64_t stage_node(struct krffs_file_system *file_system, uint64_t paren
     if (data_size > (uint64_t)SIZE_MAX) {
         fprintf(stderr, "stageimage: '%s' is too large to stage.\n", name);
 
-        return 0;
+        return NULL;
     }
 
     node = krffs_allocate_reserved_node(file_system, data_size, NULL);
@@ -317,14 +319,16 @@ static uint64_t stage_node(struct krffs_file_system *file_system, uint64_t paren
     if (!node) {
         fprintf(stderr, "stageimage: not enough space for '%s'.\n", name);
 
-        return 0;
+        return NULL;
     }
 
     krffs_set_reserved_node_name(node, name);
 
     node->parent_id = parent_id;
-    node->id = krffs_mix_id(parent_id, name);
     node->mode = mode;
+    if (is_dir_node(node)) {
+        node->id = krffs_mix_id(parent_id, name);
+    }
     node->uid = uid;
     node->gid = gid;
     node->data_size = data_size;
@@ -339,7 +343,7 @@ static uint64_t stage_node(struct krffs_file_system *file_system, uint64_t paren
 
     krffs_sync_mapping(node, sizeof(*node) + (size_t)data_size);
 
-    return node->id;
+    return node;
 }
 
 /**
@@ -386,16 +390,18 @@ static uint64_t resolve_dir(struct krffs_file_system *file_system, const char *p
             id = existing->id;
         } else {
             char here[256];
+            struct krffs_node *made;
 
             snprintf(here, sizeof(here), "%.*s", (int)(1 + (p - buf) + strlen(p)), path);
             if (!dir_id_free(file_system, parent, p, here)) {
                 return (uint64_t)-1;
             }
-            id = stage_node(file_system, parent, p, (uint16_t)(KRFFS_MODE_IFDIR | 0755), 0, 0, NULL,
-                            0);
-            if (id == 0) {
+            made = stage_node(file_system, parent, p, (uint16_t)(KRFFS_MODE_IFDIR | 0755), 0, 0,
+                              NULL, 0);
+            if (made == NULL) {
                 return (uint64_t)-1;
             }
+            id = made->id;
         }
         parent = id;
     }
@@ -684,7 +690,7 @@ static bool stage_dir(struct krffs_file_system *file_system, const char *path, u
     }
 
     return stage_node(file_system, parent_id, name, (uint16_t)(KRFFS_MODE_IFDIR | mode), uid, gid,
-                      NULL, 0) != 0;
+                      NULL, 0) != NULL;
 }
 
 /**
@@ -735,7 +741,7 @@ static bool stage_file(struct krffs_file_system *file_system, const char *path, 
         return false;
     }
 
-    return stage_node(file_system, dir_id, name, mode, uid, gid, data, data_size) != 0;
+    return stage_node(file_system, dir_id, name, mode, uid, gid, data, data_size) != NULL;
 }
 
 /**

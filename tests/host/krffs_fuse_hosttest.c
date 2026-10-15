@@ -322,20 +322,32 @@ static void statfs_rows(void)
 }
 
 /**
- * Stage `/d/f` and then `/f` with the image stager, which gives every node
- * the id mixed from its directory's and its name, and require the mount to
- * find each by its directory and name: each reads its own bytes, `/d` is a
- * directory, and each directory lists its own names once.
+ * Stage `/d/f` and then `/f` with the image stager, and require the ids the
+ * kernel gives: the hash of the name for each file, and for `/d` the hash
+ * mixed with the root's id. Then require the mount to find each by its
+ * directory and name: each reads its own bytes, `/d` is a directory, and each
+ * directory lists its own names once.
  */
 static void staged_rows(void)
 {
     struct stat stat_buffer;
     char buffer[8] = {0};
+    struct krffs_node *inner;
+    struct krffs_node *outer;
+    struct krffs_node *directory;
+    uint64_t hash = krffs_calculate_djb_hash((uint8_t *)"f");
 
     reset_image();
     check(stage_file(&fixture, "/d/f", 0100644, 0, 0, "inner", 5) &&
               stage_file(&fixture, "/f", 0100644, 0, 0, "outer", 5),
           "stage two files named f");
+    inner = krffs_find_node_by_path(&fixture, "/d/f", 4);
+    outer = krffs_find_node_by_path(&fixture, "/f", 2);
+    directory = krffs_find_node_by_path(&fixture, "/d", 2);
+    check(inner != NULL && outer != NULL && inner->id == hash && outer->id == hash,
+          "staged file has the hash of its name as its id");
+    check(directory != NULL && directory->id == krffs_mix_id(0, "d"),
+          "staged directory has its mixed id");
     check(krffs_getattr("/d", &stat_buffer) == 0 && S_ISDIR(stat_buffer.st_mode),
           "staged directory is a directory");
     check(krffs_open("/d/f", NULL) == 0, "staged file opens");
