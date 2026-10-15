@@ -1,21 +1,22 @@
 /**
- * prctl(2)'s attributes of a process, read through musl.
+ * prctlmusl: check the attributes of a process that prctl(2) sets and reads,
+ * through musl, and the /proc/self/exe link.
  *
- * The program name starts as the exec's basename, is set cut to 15 bytes
- * and read back with its NUL, and shows in /proc/self/stat. A shorter name
- * set after the long one, and the name an exec after it gives, read back as
- * all 16 bytes, the name padded with NULs. The dumpable flag starts at 1 and
- * takes 0 and 1 and nothing else, and a thread that was already running sees
- * the value another thread set. The parent-death signal is kept and read back,
- * a signal past 64 is refused, a fork does not pass it on, and a grandchild
- * that set it receives it when its parent exits. In a dumpable child with the
- * signal set, a change of the effective uid alone clears the signal and the
- * dumpable flag, and so does a change of the effective gid alone in another
- * such child. no_new_privs takes 1 with its other arguments 0 and nothing
- * else, a fork passes it on, and under it the set-user-ID `/suidhelper.suid`
- * runs as a plain program, which that helper's `plain` mode checks: every id
- * of its caller, user 1000, and AT_SECURE 0. An option this kernel does not
- * have is EINVAL, never ENOSYS.
+ * The program name starts as the exec's basename, is set cut to 15 bytes and
+ * read back with its NUL, and shows in /proc/self/stat. A shorter name set
+ * after the long one, and the name an exec after it gives, read back as all 16
+ * bytes, the name padded with NULs. The dumpable flag starts at 1 and takes 0
+ * and 1 and nothing else, and a thread that was already running sees the value
+ * another thread set. The parent-death signal is kept and read back, a signal
+ * past 64 fails with EINVAL, a fork does not pass it on, and a grandchild that
+ * set it receives it when its parent exits. In a dumpable child with the signal
+ * set, a change of the effective uid alone clears the signal and the dumpable
+ * flag, and so does a change of the effective gid alone in another such child.
+ * no_new_privs takes 1 with its other arguments 0 and nothing else, a fork
+ * passes it on, and under it the set-user-ID `/suidhelper.suid` runs as a plain
+ * program, which that helper's `plain` mode checks: every id of its caller,
+ * user 1000, and AT_SECURE 0. An option this kernel does not have is EINVAL,
+ * never ENOSYS.
  *
  * /proc/self/exe, which the name row executes, reaches the program's file: a
  * copy of the probe that renames itself reads its new path from the link, and
@@ -25,7 +26,10 @@
  * ended, which waitid with WNOWAIT reports, lets go of its file at its end, so
  * the tmpfs unmounts before the copy is reaped.
  *
- * Prints "PRCTLMUSL OK" on success and "PRCTLMUSL FAIL (detail)" otherwise.
+ * The program runs itself in the modes `name`, `exe-moved`, `exe-ran` and
+ * `exit-now`, named by its first argument. With none it runs the checks,
+ * prints "PRCTLMUSL OK" and exits 0 on success, or prints "PRCTLMUSL FAIL
+ * (detail)" and exits 1 at the first failure.
  */
 
 #define _GNU_SOURCE
@@ -62,7 +66,10 @@ static int fail(const char *what)
     return 1;
 }
 
-/** Run `test` in a child and return its exit status, or -1. */
+/**
+ * Run `test` in a forked child and return its exit status, or -1 when the
+ * fork failed or the child did not exit.
+ */
 static int in_child(int (*test)(void))
 {
     pid_t child = fork();
@@ -81,10 +88,11 @@ static int in_child(int (*test)(void))
 }
 
 /**
- * Whether the program name reads back as "prctlmusl" padded with NULs to all
- * 16 bytes, with nothing left of a longer name before it: 0, or 1. `names`
- * checks with it the name it sets back after a longer one, and the image
- * `exec_name` runs checks the name its exec gave it.
+ * Check that the program name reads back as "prctlmusl" padded with NULs to
+ * all 16 bytes, with nothing left of a longer name before it. Returns 0 when
+ * it does and 1 otherwise. `names` checks with it the name it sets back after
+ * a longer one, and the image `exec_name` runs checks the name its exec gave
+ * it.
  */
 static int padded_name(void)
 {
@@ -95,8 +103,11 @@ static int padded_name(void)
     return prctl(PR_GET_NAME, name, 0, 0, 0) == 0 && memcmp(name, want, sizeof(name)) == 0 ? 0 : 1;
 }
 
-/** A child that takes a longer name and execs the probe again to check the
- * name it then has (`padded_name`). */
+/**
+ * Run in a child: take a longer name and exec the probe again, in the `name`
+ * mode, to check the name it then has (`padded_name`). Returns 2 when the
+ * name cannot be set and 3 when the exec fails.
+ */
 static int exec_name(void)
 {
     if (prctl(PR_SET_NAME, "renamed-probe-too-long", 0, 0, 0) != 0) {
@@ -106,7 +117,10 @@ static int exec_name(void)
     return 3;
 }
 
-/** The name, set and read back, and as /proc/self/stat shows it. */
+/**
+ * Check the program name, set and read back, and as /proc/self/stat shows
+ * it. Returns 0, or 1 after the failure is printed.
+ */
 static int names(void)
 {
     char name[16];
@@ -152,7 +166,10 @@ static int names(void)
 /* The pipe that tells the thread of `dumpable` to read the flag. */
 static int flag_pipe[2];
 
-/** A thread that reads the dumpable flag once told to; the value it read. */
+/**
+ * Run as the thread of `dumpable`: read the dumpable flag once a byte comes
+ * on `flag_pipe`. Returns the value read, or -1 when no byte came.
+ */
 static void *read_dumpable(void *arg)
 {
     char c;
@@ -164,7 +181,10 @@ static void *read_dumpable(void *arg)
     return (void *)(long)prctl(PR_GET_DUMPABLE, 0, 0, 0, 0);
 }
 
-/** The dumpable flag's values, and a running thread's view of a change. */
+/**
+ * Check the dumpable flag's values, and a running thread's view of a change.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int dumpable(void)
 {
     pthread_t t;
@@ -192,7 +212,10 @@ static int dumpable(void)
     return 0;
 }
 
-/** A child's view: no parent-death signal inherited. */
+/**
+ * Run in a child: return 0 when it inherited no parent-death signal, and 1
+ * otherwise.
+ */
 static int no_inherited_signal(void)
 {
     int sig = -1;
@@ -200,7 +223,10 @@ static int no_inherited_signal(void)
     return prctl(PR_GET_PDEATHSIG, &sig, 0, 0, 0) == 0 && sig == 0 ? 0 : 1;
 }
 
-/** Tell the probe the parent-death signal arrived. */
+/**
+ * Write 'D' on `report_fd` for SIGUSR1, or 'X' for another signal, and exit.
+ * Runs in the grandchild, as its parent-death signal's handler.
+ */
 static void on_parent_death(int sig)
 {
     char c = sig == SIGUSR1 ? 'D' : 'X';
@@ -210,8 +236,9 @@ static void on_parent_death(int sig)
 }
 
 /**
- * The middle generation: fork a grandchild that sets its parent-death
- * signal and says so, then exit, which must deliver that signal.
+ * Run as the middle generation: fork a grandchild that sets its parent-death
+ * signal and says so, then return, so that the child exits, which must
+ * deliver that signal. Returns 0, or the number of the step that failed.
  */
 static int parent_that_dies(void)
 {
@@ -245,9 +272,10 @@ static int parent_that_dies(void)
 }
 
 /**
- * A dumpable child of root that sets the signal and then moves its effective
- * uid (`uid`) or its effective gid alone to 1000 loses the signal and the
- * dumpable flag. 0, or the step that failed.
+ * Check, in a dumpable child of root, that setting the signal and then moving
+ * the effective uid (`uid` nonzero) or the effective gid alone to 1000 clears
+ * the signal and the dumpable flag. Returns 0, or the number of the step
+ * that failed.
  */
 static int moved_id(int uid)
 {
@@ -266,20 +294,23 @@ static int moved_id(int uid)
     return prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) == 0 ? 0 : 4;
 }
 
-/** `moved_id` with the effective uid. */
+/** Run `moved_id` for the effective uid. */
 static int moved_uid(void)
 {
     return moved_id(1);
 }
 
-/** `moved_id` with the effective gid. */
+/** Run `moved_id` for the effective gid. */
 static int moved_gid(void)
 {
     return moved_id(0);
 }
 
-/** The parent-death signal: kept, refused past 64, not inherited,
- * delivered, and cleared by a move of the effective ids. */
+/**
+ * Check the parent-death signal: kept, EINVAL past 64, not inherited,
+ * delivered, and cleared by a move of the effective ids. Returns 0, or 1
+ * after the failure is printed.
+ */
 static int parent_death(void)
 {
     struct pollfd pfd;
@@ -324,8 +355,12 @@ static int parent_death(void)
     return 0;
 }
 
-/** A caller of user 1000 under no_new_privs: its child has the bit, and a
- * set-user-ID exec runs with its ids. */
+/**
+ * Run in a child of root: become user 1000 under no_new_privs, check that a
+ * fork passes the bit on, and exec the set-user-ID helper in its `plain`
+ * mode, which checks that it runs with this caller's ids and exits 0 when it
+ * does. Returns 10 to 13 for the step that failed.
+ */
 static int unprivileged_exec(void)
 {
     char *argv[3];
@@ -351,7 +386,10 @@ static int unprivileged_exec(void)
     return 13;
 }
 
-/** no_new_privs's arguments, and its effect on a set-user-ID exec. */
+/**
+ * Check no_new_privs's arguments, its effect on a set-user-ID exec, and the
+ * error for an unknown option. Returns 0, or 1 after the failure is printed.
+ */
 static int no_new_privs(void)
 {
     if (prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 0) {
@@ -373,7 +411,7 @@ static int no_new_privs(void)
     return 0;
 }
 
-/** Copy the file at `from` to a new file `to` of mode 0755; 0, or -1. */
+/** Copy the file at `from` to the file `to`, of mode 0755. Returns 0, or -1. */
 static int copy_program(const char *from, const char *to)
 {
     char buf[4096];
@@ -394,8 +432,10 @@ static int copy_program(const char *from, const char *to)
     return ok && n == 0 ? 0 : -1;
 }
 
-/** Put a script of mode 0755 that ends with 7 at the new file `path`; 0,
- * or -1. */
+/**
+ * Create the new file `path`, a script of mode 0755 that exits 7. Returns 0,
+ * or -1.
+ */
 static int put_script(const char *path)
 {
     static const char text[] = "#!/bin/sh\nexit 7\n";
@@ -469,11 +509,12 @@ static int exe_ran(void)
 }
 
 /**
- * /proc/self/exe follows the program's file: a copy of the probe that renames
- * itself reads its new path from the link and runs itself, not the script
- * put at its old path, through the link; the image that runs removes the
- * copy's name and still reaches the copy through the link. The copy's exit
- * status says which step failed.
+ * Check that /proc/self/exe follows the program's file: a copy of the probe
+ * that renames itself reads its new path from the link and runs itself, not
+ * the script put at its old path, through the link; the image that runs
+ * removes the copy's name and still reaches the copy through the link. The
+ * copy's exit status says which step failed. Returns 0, or 1 after the
+ * failure is printed.
  */
 static int exe_follows(void)
 {
@@ -514,11 +555,12 @@ static int exe_follows(void)
 }
 
 /**
- * The end of a process lets go of its program's file, and of the mount the
- * file is on, with the rest of its address space, before its parent reaps it,
- * as Linux's exit_mm does: a copy of the probe on a tmpfs runs and ends, and
- * with its exit seen by waitid with WNOWAIT and the copy not yet reaped, the
- * tmpfs must unmount.
+ * Check that the end of a process lets go of its program's file, and of the
+ * mount the file is on, with the rest of its address space, before its parent
+ * reaps it, as Linux's exit_mm does: a copy of the probe on a tmpfs runs and
+ * ends, and with its exit seen by waitid with WNOWAIT and the copy not yet
+ * reaped, the tmpfs must unmount. Returns 0, or 1 after the failure is
+ * printed.
  */
 static int exit_lets_go(void)
 {
