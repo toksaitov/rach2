@@ -1,21 +1,19 @@
 /**
- * Drives the ported musl file layer over the hierarchical KRFFS, end to end
- * in-guest, the way a real file utility would.
+ * catfile: check musl's file layer over KRFFS the way a file utility uses it.
  *
- * The program reads a pre-staged root file (`/hello.txt`) through `<stdio.h>`,
- * then a host-staged nested file (`/etc/motd`, written into the image by the
- * manifest) and lists `/etc` for `motd` and `hostname`, proving musl navigates
- * a tree staged before boot, not only one built at runtime.
- * It then makes a fresh directory and creates and writes a file inside it,
- * reads that nested file back and verifies its bytes, stats it as a regular
- * file of exactly the bytes written, opendirs the directory and confirms
- * readdir lists the file, and finally unlinks the file and rmdirs the
- * now-empty directory. musl routes these through open, read, write, mkdir,
- * rmdir, and unlink and the 64-bit stat64 and getdents64 syscalls.
+ * The program reads `/hello.txt`, a file in the root of the image, through
+ * `<stdio.h>`, then `/etc/motd`, which the manifest writes into the image, and
+ * lists `/etc` for `motd` and `hostname`, so it reads a tree staged before
+ * boot as well as one made at run time. It then makes a directory, creates
+ * and writes a file inside it, reads the file back and compares its bytes,
+ * stats it as a regular file of the length written, lists the directory for
+ * it, and last unlinks the file and removes the empty directory. musl makes
+ * these calls with open, read, write, mkdir, rmdir, unlink and getdents64,
+ * and with statx on i686 and stat on x86-64.
  *
- * Prints "CATFILE OK" only if every step matched, otherwise a "CATFILE FAIL"
- * line naming the step. Linked statically against the ported musl; see
- * tests/musl/build.sh.
+ * Prints `CATFILE OK` and exits 0 when every step matched, and otherwise a
+ * `CATFILE FAIL` line naming the step, and exits 1. Linked statically against
+ * the ported musl; see tests/musl/build.sh.
  */
 
 #include <stdio.h>
@@ -36,7 +34,7 @@ int main(void)
     struct dirent *de;
     int saw_data = 0;
 
-    /* Pre-staged root file through stdio. */
+    /* A file staged in the root, through stdio. */
     f = fopen("/hello.txt", "r");
     if (!f) {
         printf("CATFILE FAIL: open /hello.txt\n");
@@ -49,7 +47,7 @@ int main(void)
     }
     fclose(f);
 
-    /* Host-staged nested file, then list /etc. */
+    /* A file staged in /etc, then the listing of /etc. */
     buf[0] = '\0'; /* so a read failure does not print stale /hello.txt bytes */
     f = fopen("/etc/motd", "r");
     if (!f) {
@@ -123,7 +121,7 @@ int main(void)
     }
     fclose(f);
 
-    /* stat the nested file: a regular file of exactly the bytes we wrote. */
+    /* stat the nested file: a regular file of the length written. */
     if (stat("/cf/data", &st) != 0 || !S_ISREG(st.st_mode) ||
         st.st_size != (off_t)strlen(PAYLOAD)) {
         printf("CATFILE FAIL: stat /cf/data\n");

@@ -1,22 +1,24 @@
 /**
- * Exercises the synthetic /dev and /proc file systems through real musl.
+ * devtest: check the synthetic /dev and /proc file systems through musl.
  *
- * Drives the libc wrappers (not raw int 0x80) so the call path that the shell
- * and its utilities take is the one under test. The char devices carry their
- * contracts: /dev/zero reads zeros, /dev/null reads EOF, /dev/full fails writes
- * with ENOSPC, a read-only device rejects writes with EBADF (access mode is
- * checked before the device op runs), and O_DIRECTORY on a char device is
- * ENOTDIR. ttyname(0) exercises isatty (TIOCGWINSZ), the readlink of
- * /proc/self/fd/0, and the stat/fstat identity match. opendir lists /dev (the
- * "null" entry) and /proc (the "self" entry and the caller's numeric pid, what
- * ps enumerates); openat resolves a name relative to a synthetic directory fd.
- * access(2) reports F_OK and R_OK hits, EACCES on a write to a read-only proc
- * file, ENOENT for a missing device, and EINVAL for a bad mode. /proc/self is a
- * magic symlink to the numeric pid: lstat sees the link, stat follows it to the
- * directory, and /proc/self/fd/0 follows through to the console char device.
+ * The program calls the libc wrappers, so the calls are the ones the shell
+ * and its utilities make. /dev/zero reads zeros, /dev/null reads end of file,
+ * a write to /dev/full fails with ENOSPC, a write to a device open read-only
+ * fails with EBADF (the access mode is checked before the device's write
+ * runs), and O_DIRECTORY on a character device fails with ENOTDIR.
+ * `ttyname(0)` checks isatty (TIOCGWINSZ), the readlink of /proc/self/fd/0,
+ * and the match of stat and fstat identities. Listings of /dev and /proc
+ * show "null", "self" and the caller's pid, which is what ps reads; openat
+ * resolves a name relative to a descriptor of a synthetic directory.
+ * `access` succeeds for F_OK and R_OK, and fails with EACCES for a write to a
+ * read-only proc file, ENOENT for a missing device, and EINVAL for a bad
+ * mode. /proc/self is a symbolic link to the caller's pid: lstat sees the
+ * link, stat follows it to the directory, and /proc/self/fd/0 leads to the
+ * console's character device.
  *
- * Staged into test.krffs as /musl/devtest. Prints "DEVTEST OK" when every
- * check passes.
+ * Staged into the test image as /musl/devtest. Prints `DEVTEST OK` when every
+ * check passes, and otherwise a line for each failed check and
+ * `DEVTEST FAIL` with their number.
  */
 #include <fcntl.h>
 #include <unistd.h>
@@ -28,6 +30,7 @@
 
 static int fails;
 
+/** Count and print a failed check when `cond` is zero. */
 static void check(int cond, const char *msg)
 {
     if (!cond) {

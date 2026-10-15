@@ -1,24 +1,28 @@
 /**
- * memfd_create and its seals.
+ * memfdmusl: check memfd_create and the seals of a memfd.
  *
  * A memfd made with MFD_CLOEXEC and MFD_ALLOW_SEALING is close-on-exec, open
  * for reading and writing, a regular file of mode 0777 whose size fstat
- * reports, and /proc/self/fd names it "/memfd:NAME (deleted)". Its seals
- * start empty. F_SEAL_SHRINK refuses a smaller ftruncate and takes a larger
- * one; F_SEAL_GROW refuses a write past the end and a larger ftruncate, and
- * takes an overwrite, and refuses whole, with nothing written, a writev whose
- * two elements together pass the end; F_SEAL_FUTURE_WRITE refuses a write;
- * F_SEAL_SEAL refuses more seals; F_GET_SEALS reports each one. A memfd made
- * without MFD_ALLOW_SEALING starts with F_SEAL_SEAL and refuses F_ADD_SEALS
- * with EPERM, and one made with MFD_NOEXEC_SEAL has mode 0666 and
- * F_SEAL_EXEC. F_ADD_SEALS is EINVAL on a KRFFS file. On a tmpfs file with a
- * name it is EPERM, since the file is sealed against sealing, but EINVAL for
- * a bit that is no seal, which is checked first; through a descriptor not
- * open for writing it is EPERM for that bit too, since the access is checked
- * before both. A name of 250 bytes, MFD_HUGETLB and an unknown flag are
- * EINVAL.
+ * reports, and its /proc/self/fd link reads "/memfd:NAME (deleted)". Its
+ * seals start empty. Under F_SEAL_SHRINK a smaller ftruncate fails with EPERM
+ * and a larger one succeeds. Under F_SEAL_GROW a write past the end and a
+ * larger ftruncate fail and an overwrite succeeds, and a writev whose two
+ * elements together pass the end fails whole, with nothing written. Under
+ * F_SEAL_FUTURE_WRITE a write fails; after F_SEAL_SEAL a further seal fails;
+ * F_GET_SEALS reports each one.
  *
- * Prints "MEMFDMUSL OK" on success and "MEMFDMUSL FAIL (detail)" otherwise.
+ * A memfd made without MFD_ALLOW_SEALING starts with F_SEAL_SEAL, and
+ * F_ADD_SEALS on it fails with EPERM. One made with MFD_NOEXEC_SEAL has mode
+ * 0666 and F_SEAL_EXEC, and `fchmod` to 0755 fails with EPERM. The seal
+ * commands fail with EINVAL on a KRFFS file. On a tmpfs file with a name
+ * F_ADD_SEALS fails with EPERM, since the file is sealed against sealing, but
+ * with EINVAL for a bit that is no seal, which is checked first; through a
+ * descriptor not open for writing it fails with EPERM for that bit too, since
+ * the access is checked before both. A name of 250 bytes, MFD_HUGETLB and an
+ * unknown flag fail with EINVAL.
+ *
+ * Prints `MEMFDMUSL OK` and exits 0 on success, and prints
+ * `MEMFDMUSL FAIL (detail)` and exits 1 otherwise.
  */
 
 #define _GNU_SOURCE
@@ -59,6 +63,10 @@ static int size_is(int fd, off_t size)
     return fstat(fd, &st) == 0 && st.st_size == size;
 }
 
+/**
+ * Check a sealable memfd: its descriptor, its file and its /proc/self/fd
+ * link, then each seal in turn. Returns 0, or 1 after the failure is printed.
+ */
 static int sealing(void)
 {
     struct iovec grow[2] = {{(void *)"y", 1}, {(void *)"z", 1}};
@@ -108,6 +116,11 @@ static int sealing(void)
     return 0;
 }
 
+/**
+ * Check a memfd without MFD_ALLOW_SEALING, one with MFD_NOEXEC_SEAL, the seal
+ * commands on a KRFFS file and on a named tmpfs file, and the names and flags
+ * memfd_create rejects. Returns 0, or 1 after the failure is printed.
+ */
 static int others(void)
 {
     char longname[251];

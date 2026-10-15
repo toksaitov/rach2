@@ -1,37 +1,39 @@
 /**
- * Exercises the permission and identity syscalls through the ported musl.
+ * permmusl: check the permission and identity calls a Dropbear session makes.
  *
- * These are the calls a dropbear pty session and host-key write make, driven
- * by a real musl binary so the exact syscall numbers musl emits, i386's or
- * x86-64's, are pinned. The expected contracts:
+ * These are the calls of a Dropbear pty session and of its host-key write,
+ * made through musl, so the system call numbers are the ones musl uses on
+ * i686 or x86-64. The checks:
  *
- * * `fsync(fd)` on a real file returns 0 (KRFFS is RAM, so durability is a
- *   no-op); `fsync` of a bad descriptor is -1 with EBADF.
- * * `link(a, b)` is -1 with EPERM: KRFFS has no hard links, so dropbear falls
- *   back to a direct host-key write.
- * * `chmod(path, mode)` updates a KRFFS file's permission bits and `stat`
- *   reflects them; `chmod` of a missing path is -1 with ENOENT.
- * * `chown(path, uid, gid)` as root stores the owner and `stat` reflects it
- *   (the deeper rules are ownprobe's to pin).
- * * `seteuid(0)`, `setegid(0)`, and `setresuid(0,0,0)` succeed, and a root
- *   caller's effective-id excursion (`seteuid(1)` out, `seteuid(0)` back, the
- *   idiom around reading authorized_keys) works both ways; the identity rules
- *   themselves are authmusl's to pin.
- * * After a real drop to uid 1000, the nine-bit check answers through libc: a
- *   0644 root file opens for read but not write, and creating in the root
- *   directory is EACCES (the full deny matrix is permprobe's to pin).
+ * * `fsync(fd)` on a file returns 0 (the test image's KRFFS is in RAM, so
+ *   there is nothing to write back); `fsync` of a bad descriptor is -1 with
+ *   EBADF.
+ * * `link(a, b)` is -1 with EPERM: KRFFS has no hard links, so Dropbear falls
+ *   back to writing the host key in place.
+ * * `chmod(path, mode)` sets a KRFFS file's permission bits and `stat`
+ *   reports them; `chmod` of a missing path is -1 with ENOENT.
+ * * `chown(path, uid, gid)` as root stores the owner and `stat` reports it;
+ *   ownprobe checks the rest of the ownership rules.
+ * * `seteuid(0)`, `setegid(0)` and `setresuid(0,0,0)` succeed, and a root
+ *   caller's change of effective id and back (`seteuid(1)`, then
+ *   `seteuid(0)`, as around a read of authorized_keys) works both ways;
+ *   authmusl checks the identity rules themselves.
+ * * After a drop to uid 1000, the mode bits apply through libc: a 0644 root
+ *   file opens for reading but not for writing, and a creation in the root
+ *   directory is EACCES; permprobe checks the whole matrix of denials.
  * * A last "." is looked up in the directory before it, which takes search
  *   permission there, as Linux's walk does, and a trailing slash alone takes
  *   none: as uid 1000, with a directory of its own in /dev/shm set to 0600,
  *   stat, access and open of "dir/." are EACCES, and stat of "dir/" reports
  *   the directory.
  * * A process left in a directory below one it may not search, as `su` from
- *   root's home leaves one, still names files there, as Linux's walk from the
- *   working directory lets it: as uid 1000 in "w/in", with "w" root's 0700,
- *   stat of ".", an open of a file in it, getcwd and stat of the file by its
- *   absolute path succeed, and stat of "w/other" is EACCES.
+ *   root's home leaves one, still reaches files there, as Linux's walk from
+ *   the working directory lets it: as uid 1000 in "w/in", with "w" root's
+ *   0700, stat of ".", an open of a file in it, getcwd and stat of the file by
+ *   its absolute path succeed, and stat of "w/other" is EACCES.
  *
- * Prints "PERMMUSL OK" or "PERMMUSL FAIL ...". Linked against the ported musl.
+ * The program runs as root. It prints `PERMMUSL OK` and exits 0, or prints
+ * `PERMMUSL FAIL (detail)` and exits 1. Linked against the ported musl.
  */
 
 #define _GNU_SOURCE /* setresuid */
@@ -47,9 +49,9 @@
 #define DOT_DIR "/dev/shm/permmusl.d"
 
 /**
- * The rows of a last "." as uid 1000: the directory `DOT_DIR`, the caller's
- * own, set to 0600, so its owner may not search it. 0, or 1 once the failure
- * is reported.
+ * Check a last "." as uid 1000: the directory `DOT_DIR`, the caller's own,
+ * set to 0600, so its owner may not search it. Returns 0, or 1 once the
+ * failure is reported.
  */
 static int dot_search_rows(void)
 {
@@ -82,9 +84,10 @@ static int dot_search_rows(void)
 #define CWD_DIR "/dev/shm/permmusl.w"
 
 /**
- * The rows of a working directory below one the caller may not search, as
- * the header says, in a child that drops to uid 1000 in `CWD_DIR/in`; the
- * parent, root, cleans up. 0, or 1 once the failure is reported.
+ * Check a working directory below one the caller may not search, as the
+ * file's opening comment says, in a child that drops to uid 1000 in
+ * `CWD_DIR/in`; the parent, root, removes the tree. Returns 0, or 1 once the
+ * failure is reported.
  */
 static int cwd_rows(void)
 {
@@ -125,10 +128,11 @@ static int cwd_rows(void)
 }
 
 /**
- * The deny paths through libc, after the drop to uid 1000, which is for
- * good: a 0644 root file reads but does not write, the root directory
- * refuses a creation, and a last "." takes search permission
- * (`dot_search_rows`). 0, or 1 once the failure is reported.
+ * Drop to uid 1000 for the rest of the process and check the denials through
+ * libc: a 0644 root file opens for reading but not for writing, a creation in
+ * the root directory fails with EACCES, and a last "." takes search
+ * permission (`dot_search_rows`). Returns 0, or 1 once the failure is
+ * reported.
  */
 static int deny_rows(void)
 {
@@ -216,9 +220,7 @@ int main(void)
         return 1;
     }
 
-    /* seteuid/setegid/setresuid: the identity rules themselves are authmusl's
-     * to pin; here just prove the excursion a file server runs under works
-     * both ways for a root caller. */
+    /* seteuid, setegid and setresuid: a root caller's change and return. */
     if (seteuid(0) != 0 || setegid(0) != 0 || setresuid(0, 0, 0) != 0) {
         printf("PERMMUSL FAIL (seteuid/setegid/setresuid 0: %s)\n", strerror(errno));
         return 1;

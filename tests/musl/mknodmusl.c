@@ -1,23 +1,25 @@
 /**
- * mknod and mknodat, and the kinds of node they make.
+ * mknodmusl: check mknod and mknodat, and the kinds of node they make.
  *
  * On KRFFS, in /tmp: a FIFO made with the umask applied and one made by
  * mknodat from a directory descriptor, a socket file and a regular file,
  * which stat reports with their kinds and a listing with DT_FIFO, DT_SOCK
  * and DT_REG; an open of the socket file fails with ENXIO and a connect to
- * it with ECONNREFUSED; a device node is refused with EPERM, since KRFFS
- * has no field for its number. On a tmpfs mounted in /tmp: character and
- * block device nodes whose numbers stat reports, a small one and one in
- * Linux's wide encoding, listed as DT_CHR and DT_BLK; the node with
- * /dev/null's number opens as /dev/null does, and one with a number no
- * device has fails with ENXIO. Then the refusals, in Linux's order: EINVAL
- * for a kind that is none of the five, EPERM for a directory, both before a
- * null path's EFAULT, EEXIST for a name that exists, a symbolic link
- * included, ENOENT and ENOTDIR for a bad path, EROFS under /dev, and EPERM
- * for a device node from a caller who is not root, who may make a FIFO. A
- * device node on /dev/shm, which is nodev, does not open (EACCES).
+ * it with ECONNREFUSED; a device node fails with EPERM, since KRFFS has no
+ * field for its number. On a tmpfs mounted in /tmp: character and block
+ * device nodes whose numbers stat reports, a small one and one in Linux's
+ * wide encoding, listed as DT_CHR and DT_BLK; the node with /dev/null's
+ * number opens as /dev/null does, and one with a number no device has fails
+ * with ENXIO. Then the errors, in Linux's order: EINVAL for a kind that is
+ * none of the five, EPERM for a directory, both before a null path's EFAULT,
+ * EEXIST for a name that exists, a symbolic link included, ENOENT and ENOTDIR
+ * for a bad path, EROFS under /dev, and EPERM for a device node from a caller
+ * who is not root, who may make a FIFO. A device node on /dev/shm, which is
+ * nodev, does not open (EACCES).
  *
- * Prints "MKNODMUSL OK" on success and "MKNODMUSL FAIL (detail)" otherwise.
+ * The program runs as root, since it mounts a tmpfs and makes device nodes.
+ * It prints `MKNODMUSL OK` and exits 0 on success, and prints
+ * `MKNODMUSL FAIL (detail)` and exits 1 otherwise.
  */
 
 #define _GNU_SOURCE
@@ -78,6 +80,7 @@ static int node_is(const char *path, mode_t mode, dev_t dev)
     return stat(path, &st) == 0 && st.st_mode == mode && st.st_rdev == dev;
 }
 
+/** Remove the nodes `on_krffs` makes in /tmp, whichever of them exist. */
 static void clean(void)
 {
     unlink(FIFO_PATH);
@@ -86,6 +89,11 @@ static void clean(void)
     unlink(FILE_PATH);
 }
 
+/**
+ * Check the FIFOs, the socket file and the regular file mknod makes on KRFFS,
+ * and that a device node there fails with EPERM. Returns 0, or 1 after the
+ * failure is printed.
+ */
 static int on_krffs(void)
 {
     struct sockaddr_un a;
@@ -128,6 +136,11 @@ static int on_krffs(void)
     return 0;
 }
 
+/**
+ * Mount a tmpfs on `MNT` and check the device nodes made in it: their numbers,
+ * their types in a listing, and what an open of each does. The tmpfs stays
+ * mounted for `refusals`. Returns 0, or 1 after the failure is printed.
+ */
 static int devices(void)
 {
     const dev_t wide = makedev(4000, 70000);
@@ -161,6 +174,12 @@ static int devices(void)
     return 0;
 }
 
+/**
+ * Check the errors of mknod in Linux's order, the EPERM for a device node from
+ * a forked child that has become user 1000, and that a device node on the
+ * nodev /dev/shm does not open; then unmount the tmpfs on `MNT`. Returns 0,
+ * or 1 after the failure is printed.
+ */
 static int refusals(void)
 {
     const char *no_path = NULL;
