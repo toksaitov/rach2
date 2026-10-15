@@ -1,25 +1,25 @@
 #!/bin/sh
-# Compile mounted open cleanup, the errors of an open, a dup and a dup2 that
-# get no descriptor, the KRFFS root's unlink and rename under the root's lock
-# and of a program's file, the calls by path that read or change a node under
-# the lock their walk takes, the key of a file's locks, a mkdir's lookup under
-# the lock of its parent, an orphan's locks dropped before it is freed, an
-# rmdir on the KRFFS root of a directory a description or a working directory
-# has, a chdir's pin of a directory on a type that keeps a node only while it
-# is open, a read and a write of a /proc file, and a read of /dev/bootlog,
-# that hold the description while a sharer's seek waits, the log's seeks
-# checked past the offsets they can return, a sum past the largest signed
-# one among them, and the release of the last
-# holder of a nameless file
-# of the KRFFS root under the root's lock, by a descriptor or a file mapping,
-# before, during and after each fault.
+# Prove open_hosttest.c with private mutations of rach2/sys/syscall_fs.c,
+# block/loop.c and mm/filemap.c. Its rows cover the cleanup of a mounted open;
+# the errors of an open, a dup and a dup2 that get no descriptor; the KRFFS
+# root's unlink and rename under the root's lock, and of a program's file; the
+# calls by path that read or change a node under the lock their walk takes;
+# the key of a file's locks; a mkdir's lookup under the lock of its parent; an
+# orphan's locks dropped before it is freed; an rmdir on the KRFFS root of a
+# directory a description or a working directory has; a chdir's pin of a
+# directory on a type that keeps a node only while it is open; a read and a
+# write of a /proc file, and a read of /dev/bootlog, that hold the description
+# while a sharer's seek waits; the log's seeks checked past the offsets they
+# can return, and a sum past the largest signed one among them; and the
+# release of the last holder of a nameless file of the KRFFS root under the
+# root's lock, by a descriptor or a file mapping.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault FILE FAULT: put FAULT into FILE, the copy fault_source names;
+# with RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
     python3 - "$1" "$2" <<'PY'
@@ -266,6 +266,8 @@ cp "$work/sys/syscall_fs.c" "$work/open.saved"
 cp "$work/sys/block/loop.c" "$work/loop.saved"
 cp "$work/sys/mm/filemap.c" "$work/filemap.saved"
 
+# cleanup: stop the running test and put the saved syscall_fs.c, loop.c and
+# filemap.c back; the loop calls it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -283,6 +285,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: compile open_hosttest.c over the copy as
+# $work/PHASE, run it for at most 10 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1

@@ -1,12 +1,13 @@
 #!/bin/sh
-# Compile ARP and IP regressions with separate faults in private source copies.
+# Prove arp_hosttest.c and packet_hosttest.c with private mutations of
+# rach2/sys/network/arp/arp.c and ip/ip.c.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault ARP IP FAULT: put FAULT into ARP or IP, copies of arp.c and
+# ip.c; with RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
     python3 - "$1" "$2" "$3" <<'PY'
@@ -58,6 +59,8 @@ ip="$work/rach2/sys/network/ip/ip.c"
 cp "$arp" "$work/arp.saved"
 cp "$ip" "$work/ip.saved"
 
+# cleanup: stop the running test and put the saved arp.c and ip.c back; the
+# loop calls it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -74,6 +77,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE TEST STATUS MESSAGE: compile TEST_hosttest.c over the copies
+# as $work/PHASE, run it for at most 10 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1
@@ -92,8 +98,7 @@ run_phase()
         exit 1
     fi
     cksum "$arp" "$ip" "$work/tests/host/${test}_hosttest.c" "$binary" >"$binary.cksum"
-    # A sanitizer's report ends the test with status 1 on every host; macOS
-    # would otherwise abort it.
+    # A sanitizer's report ends the test with status 1; macOS would abort it.
     ASAN_OPTIONS=abort_on_error=0 UBSAN_OPTIONS=abort_on_error=0 \
         perl -e 'alarm 10; exec @ARGV or die "network-mutation: exec: $!\n"' \
         "$binary" >"$binary.log" 2>&1 &

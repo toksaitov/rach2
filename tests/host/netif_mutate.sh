@@ -1,11 +1,12 @@
 #!/bin/sh
-# Prove each socket regression in a private compiled copy of the real handler.
+# Prove netif_hosttest.c, the socket calls' handlers, with private mutations of
+# rach2/sys/syscall_net.c.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FILE FAULT: put FAULT into FILE, a copy of syscall_net.c; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -76,6 +77,8 @@ child=
 cp rach2/sys/syscall_net.c "$work/syscall_net.saved"
 cp "$work/syscall_net.saved" "$work/syscall_net.c"
 
+# cleanup: stop the running test and put the saved syscall_net.c back; the
+# loop calls it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -91,6 +94,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS DETAIL: compile netif_hosttest.c over the copy as
+# $work/PHASE, run it for at most 10 seconds, and exit unless it ends with
+# STATUS and its log matches DETAIL.
 run_phase()
 {
     phase=$1

@@ -1,11 +1,13 @@
 #!/bin/sh
-# Compile each phase from a private tree; no kernel image is replaced.
+# Prove rtl8139_hosttest.c with one private mutation of
+# rach2/sys/network/driver/rtl8139.c: a warning for every receive overflow,
+# not one a boot.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# overflow_once FILE: the check the fault replaces is once in FILE.
+# overflow_once FILE: exit unless the check the fault replaces is once in FILE.
 overflow_once()
 {
     if [ "$(grep -c 'if (!rx_overflow_logged)' "$1" 2>/dev/null)" != 1 ]; then
@@ -28,6 +30,8 @@ cp -R rach2/sys "$work/sys"
 source="$work/sys/network/driver/rtl8139.c"
 cp "$source" "$work/rtl8139.saved"
 
+# cleanup: stop the running test and put the saved rtl8139.c back; the script
+# calls it after the fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -42,6 +46,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE: compile rtl8139_hosttest.c over the copy as $work/PHASE and
+# run it for at most 10 seconds. The phase `mutated` must fail its row; any
+# other must pass. Exit if not.
 run_phase()
 {
     phase=$1

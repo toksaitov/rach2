@@ -1,5 +1,6 @@
 #!/bin/sh
-# Compile fixed, faulty and restored network utilities in a private directory.
+# Prove the netcfg_io, dhcpc, netup, ncport and httpd host tests with private
+# mutations of utils/netcfg.c, dhcpc.c, netup.c, nc.c and httpd.c.
 #
 # Usage: sh tests/host/netutil_mutate.sh [FAULT ...] | --texts
 # With no operand every fault is proved; an operand proves only the ones named.
@@ -8,8 +9,8 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault DIR FAULT: put FAULT into its source in DIR, a copy of utils/;
+# with RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
     python3 - "$1" "$2" <<'PY'
@@ -138,6 +139,8 @@ cp utils/*.c utils/*.h "$work/utils/"
 cp "$work/utils/"* "$work/saved/"
 child=
 
+# cleanup: stop the running test and put the saved sources back; the loop calls
+# it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -153,6 +156,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE TEST STATUS MESSAGE: compile TEST_hosttest.c over the copy as
+# $work/PHASE, run it for at most 15 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1

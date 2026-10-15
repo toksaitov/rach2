@@ -1,12 +1,14 @@
 #!/bin/sh
-# Compile the network configuration fixes and each fault in a private tree.
+# Prove netdev_hosttest.c and netconf_hosttest.c, the network configuration,
+# with private mutations of rach2/sys/network/driver/netdev.c and netconf.c.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault NETDEV NETCONF FAULT: put FAULT into NETDEV or NETCONF, copies
+# of netdev.c and netconf.c; with RACH2_FAULT_TEXTS set, only check its text
+# and write nothing.
 apply_fault()
 {
     python3 - "$1" "$2" "$3" <<'PY'
@@ -63,6 +65,8 @@ netconf="$work/rach2/sys/network/netconf.c"
 cp "$netdev" "$work/netdev.saved"
 cp "$netconf" "$work/netconf.saved"
 
+# cleanup: stop the running test and put the saved netdev.c and netconf.c back;
+# the loop calls it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -79,6 +83,10 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase TEST PHASE pass|fail MESSAGE: compile TEST_hosttest.c over the
+# copies as $work/TEST-PHASE and run it for at most 10 seconds. A pass must
+# exit 0, a fail with a status from 1 to 63; either must print MESSAGE. Exit
+# if not.
 run_phase()
 {
     test=$1

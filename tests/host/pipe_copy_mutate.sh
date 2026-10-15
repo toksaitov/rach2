@@ -1,13 +1,15 @@
 #!/bin/sh
-# Compile pipe copies before, during and after each scheduling mutation, and
-# each mutation of the kind of change a transfer or a close wakes the other
-# end for, and of the transfers that wake the readers.
+# Prove pipe_copy_hosttest.c with private mutations of rach2/sys/ipc/pipe.c: a
+# read or a write that does not fault the user's pages in before it copies
+# (read, write); a transfer or a close that wakes the other end for the wrong
+# kind of change (read-kind, write-kind, close-kind); and a write that wakes
+# the readers only when the ring was empty (write-empty-only).
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FILE FAULT: put FAULT into FILE, a copy of pipe.c; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -56,6 +58,8 @@ child=
 cp -R rach2/sys "$work/sys"
 cp "$work/sys/ipc/pipe.c" "$work/pipe.saved"
 
+# cleanup: stop the running test and put the saved pipe.c back; the loop calls
+# it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -71,6 +75,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: compile pipe_copy_hosttest.c over the copy
+# as $work/PHASE, run it for at most 10 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1

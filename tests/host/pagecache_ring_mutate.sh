@@ -1,18 +1,17 @@
 #!/bin/sh
-# Prove the row of tests/host/pagecache_ring_hosttest.c against the fault it
-# was written for, entry 110 of milestone 50: the page cache back at 1024
-# slots, where a compile's lookups over the ring with the manual staged read
-# the disk again every round. The fault is compiled into a private copy of
-# rach2/sys/mm/pagecache.h and must fail the row; the copy restored, touched
-# and rebuilt must pass. The test includes pagecache.c whole, as
-# tests/system/suites/host.sh compiles it, from the private copy.
+# Prove the row of tests/host/pagecache_ring_hosttest.c with one fault: the page
+# cache cut to 1024 slots, where a compile's lookups over the ring with the
+# manual staged read the disk again every round. The fault is compiled into a
+# private copy of rach2/sys/mm/pagecache.h and must fail the row; the copy
+# restored, touched and rebuilt must pass. The test includes pagecache.c whole,
+# as tests/system/suites/host.sh compiles it, from the private copy.
 #
 # Usage: pagecache_ring_mutate.sh [--texts]
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FILE: put the fault into FILE, a copy of pagecache.h; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -55,11 +54,13 @@ cp -R rach2/sys "$work/sys"
 source="$work/sys/mm/pagecache.h"
 cp "$source" "$work/pagecache.saved"
 
+# restore: copy the saved pagecache.h back over the copy under test.
 restore()
 {
     cp "$work/pagecache.saved" "$source"
     touch "$source"
 }
+# cleanup: the exit trap; stop the running test and restore the source.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -74,8 +75,8 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# run_phase PHASE STATUS MESSAGE: compile and run the test; it must exit
-# with STATUS and print MESSAGE.
+# run_phase PHASE STATUS MESSAGE: compile and run the test for at most 60
+# seconds; it must exit with STATUS and print MESSAGE.
 run_phase()
 {
     phase=$1

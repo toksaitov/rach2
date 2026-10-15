@@ -1,8 +1,8 @@
 #!/bin/sh
 # Prove the range checks of rach2/sys/mm/paging.c and
-# rach2/sys/arch/i686/mmu.c, entry 140 of milestone 50, and the page fault
-# handler's panic for a kernel stack that ran into its guard page, entry 248,
-# and the batched release of the temporary mappings.
+# rach2/sys/arch/i686/mmu.c, the page fault handler's panic for a kernel stack
+# that ran into its guard page, and the batched release of the temporary
+# mappings.
 # tests/host/paging_hosttest.c is compiled against a private copy of the
 # kernel's sources with each fault put in turn, and its row must fail; the
 # restored copy must pass again.
@@ -13,7 +13,7 @@
 # for a span that begins in the first page and ends in the last; the loop of
 # premap_kernel_window bounded by `va_start + size`, which wraps below the
 # start for a window that runs past the top; the refusal without its
-# exception for address 0, the regression a868ba10 fixed; the handler
+# exception for address 0; the handler
 # without its test of the guard page, which panics as any kernel fault; and
 # four faults of the temporary mappings: a release that unmaps its slot at
 # once, a search that gives a released slot before a sweep, a sweep that
@@ -23,8 +23,8 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+# apply_fault FILE FAULT: put FAULT into FILE, the copy fault_source names;
+# with RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
     python3 - "$1" "$2" <<'PY'
@@ -145,6 +145,8 @@ mmu="$work/rach2/sys/arch/i686/mmu.c"
 cp "$paging" "$work/paging.saved"
 cp "$mmu" "$work/mmu.saved"
 
+# cleanup: stop the running test and put the saved paging.c and mmu.c back;
+# the loop calls it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -168,6 +170,9 @@ deps=$(grep -oE 'host-deps:[^*]*' "$test" | sed 's/host-deps://' | tr '\n' ' ' |
     sed "s# rach2/# $work/rach2/#g")
 extra=$(grep -oE 'host-cflags:[^*]*' "$test" | sed 's/host-cflags://' | tr '\n' ' ')
 
+# run_phase PHASE STATUS MESSAGE: compile paging_hosttest.c over the private
+# tree as $work/PHASE, run it for at most 10 seconds, and exit unless it ends
+# with STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1

@@ -1,11 +1,17 @@
 #!/bin/sh
-# Compile page-cache writeback and the syscall with their busy checks removed.
+# Prove pagecache_hosttest.c with private mutations: pc_writeback in
+# rach2/sys/mm/pagecache.c without its pin of the page it writes (pin) or its
+# refusal of a pinned one (busy), and sys_sync in syscall_fs.c calling pc_sync
+# once, with no retry of busy pages (sync).
+#
+# Usage: pagecache_mutate.sh [--check | --texts]
+# With --check it compiles and runs the source as it is.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_sync ARGS...: put one fault into its source; with
+# apply_sync FILE: put the sync fault into FILE, a copy of syscall_fs.c; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_sync()
 {
@@ -31,7 +37,7 @@ path.write_text(source)
 PYMUTATE
 }
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FILE FAULT: put FAULT into FILE, a copy of pagecache.c; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -81,6 +87,8 @@ cp -R rach2/sys "$work/sys"
 cp "$work/sys/mm/pagecache.c" "$work/pagecache.saved"
 cp "$work/sys/syscall_fs.c" "$work/syscall.saved"
 
+# cleanup: stop the running test and put the saved pagecache.c and syscall_fs.c
+# back; the script calls it after each fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -97,6 +105,10 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: extract sys_sync from the copy into
+# $work/syscall_sync.inc, compile pagecache_hosttest.c over it as $work/PHASE,
+# run it for at most 10 seconds, and exit unless it ends with STATUS and its
+# log contains MESSAGE.
 run_phase()
 {
     phase=$1

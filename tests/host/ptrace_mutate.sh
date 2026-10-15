@@ -1,5 +1,7 @@
 #!/bin/sh
-# Prove native ptrace tests against faults in private source copies.
+# Prove ptrace_hosttest.c and debugreg_hosttest.c against faults in private
+# copies of rach2/sys/proc/ptrace.c and arch/x86/debugreg.c.
+#
 # Usage: ptrace_mutate.sh [ptrace|debugreg [--check]] | --texts
 # With no argument, run both tests and their faults. --check compiles and
 # runs the unmodified test alone; --texts checks that every fault's text is
@@ -123,7 +125,8 @@ print(message)
 PY
 }
 
-# select_kind KIND: the source and the faults of KIND.
+# select_kind KIND: set `source`, the file under rach2/sys, and `faults` for
+# KIND, ptrace or debugreg; exit 2 for any other.
 select_kind()
 {
     case "$1" in
@@ -169,6 +172,7 @@ child=
 extra=
 [ "$kind" != debugreg ] || extra=-DRACH2_HOST_CPU
 
+# cleanup: the exit trap; stop the running test and put the saved source back.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -184,6 +188,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: compile KIND_hosttest.c over the copy as
+# $work/PHASE, run it for at most 10 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1

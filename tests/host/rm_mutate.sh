@@ -1,11 +1,13 @@
 #!/bin/sh
-# Compile rm's fixed, faulty and restored forms in a private tree.
+# Prove rm_hosttest.c with one private mutation of utils/rm.c: after a failed
+# unlink, remove_recursive empties the operand as a directory without checking
+# that it is one.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault ARGS...: put one fault into its source; with
+# apply_fault FILE: put the fault into FILE, a copy of rm.c; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -51,6 +53,8 @@ mkdir "$work/utils"
 cp utils/rm.c "$work/utils/rm.c"
 cp "$work/utils/rm.c" "$work/rm.saved"
 
+# cleanup: stop the running test and put the saved rm.c back; the script calls
+# it after the fault, and it is the exit trap.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -66,6 +70,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# run_phase PHASE STATUS MESSAGE: compile rm_hosttest.c over the copy as
+# $work/PHASE, run it for at most 10 seconds, and exit unless it ends with
+# STATUS and its log contains MESSAGE.
 run_phase()
 {
     phase=$1
