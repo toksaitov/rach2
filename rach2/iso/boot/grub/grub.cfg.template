@@ -1,10 +1,11 @@
-# GRUB Configuration Template for Rach2
+# A sample GRUB menu for Rach2, which no build reads.
 #
-# Reference only. The actual grub.cfg for a bootable ISO is generated per image by
-# tools/image/mkiso.sh (run `make <image>-iso` or `make isos`), which stages the kernel and
-# the image module and writes the two entries below: a normal boot, and a rescue
-# boot that passes the kernel `rach2.rescue` to land in the debug shell instead of
-# the image's /sbin/init.
+# tools/image/mkiso.sh writes the grub.cfg of each ISO image (`make
+# <image>-iso` or `make isos`): it stages the kernel and the image module and
+# writes an entry that loads them, by Multiboot under BIOS and by multiboot2
+# under UEFI, with a few more entries for rach2-metal. The second entry below
+# is a rescue boot: `rach2.rescue` on the kernel's command line starts the
+# kernel debug shell instead of the image's /sbin/init.
 #
 #   multiboot /boot/kernel
 #   module /boot/<image>.krffs

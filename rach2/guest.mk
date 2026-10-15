@@ -12,7 +12,7 @@
 # written by one builtin printf (no execve) into a temporary file renamed only
 # after every line landed, so a printf that failed part way cannot leave a
 # shorter list that a retry would treat as current. OBJS keeps the
-# architecture's loader.o first: the multiboot header lives in it and the
+# architecture's loader.o first: the multiboot header is in it and the
 # linker keeps input order, so the header stays inside the first 8192 bytes of
 # the kernel where the loaders search for it. The architecture's list gives
 # the flags of the compile and of the link (ARCH_TCC_CFLAGS, ARCH_TCC_LDFLAGS):

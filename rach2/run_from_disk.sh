@@ -1,15 +1,15 @@
 #!/bin/sh
 
-# Boot the bootable Rach2 disk image in QEMU, BIOS -> MBR -> GRUB -> kernel,
-# with no -kernel or -initrd: the kernel and GRUB come off the disk's boot
-# partition and KRFFS off its second partition (rach2.root=disk). Build the
-# disk first with `make os-real-grub-disk`, which names it
+# Boot the GRUB disk image in QEMU by BIOS, MBR -> GRUB -> kernel, with no
+# -kernel or -initrd: GRUB and the kernel come off the disk's boot partition,
+# and the kernel mounts the os-real system, an ext2 root on the disk's third
+# partition. Build the disk first with `make os-real-grub-disk`, which names it
 # os-real-grub-with-key.disk in a tree with a recovery key; the script boots
 # whichever of the two names exists, the plain one first.
 #
 # -serial stdio puts the kernel's COM1 on the terminal; audio and networking
-# come from qemu_devices.sh. SSH is forwarded to host port 2222 so the capstone
-# (ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost) reaches dropbear.
+# come from qemu_devices.sh. SSH is forwarded to host port 2222, so that
+# `ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost` reaches dropbear.
 #
 # Usage: ./run_from_disk.sh [audio_device]
 #
@@ -18,8 +18,8 @@
 AUDIO_DEVICE="${1:-speaker}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# This image has the SSH capstone, so forward host port 2222 to guest port
-# 22 by default. NET_HOSTFWD must be set before sourcing qemu_devices.sh, whose
+# This image runs dropbear, so host port 2222 is forwarded to guest port 22
+# by default. NET_HOSTFWD must be set before sourcing qemu_devices.sh, whose
 # own default (8080 -> 80) would otherwise win; an exported NET_HOSTFWD still
 # overrides.
 NET_HOSTFWD="${NET_HOSTFWD:-hostfwd=tcp::2222-:22}"
@@ -33,11 +33,12 @@ if [ ! -f "$DISK" ]; then
     exit 1
 fi
 
-# The disk owns its kernel state: /boot/kernel is the candidate slot the
-# machine itself rewrites with bootctl, /boot/fallback the untouched
-# copy, and grubenv selects between them. A host kernel newer than the disk
-# is therefore not a reason to rebuild it; `make os-real-grub-disk` recreates
-# the disk from the host build and DISCARDS anything installed on it.
+# The disk has its own kernels: /boot/kernel is the candidate slot that
+# bootctl on the machine rewrites, /boot/fallback the copy that only `bootctl
+# fallback` rewrites, and grubenv selects between them. A host kernel newer
+# than the disk is therefore no reason to rebuild the disk; `make
+# os-real-grub-disk` makes it again from the host build and discards anything
+# installed on it.
 
 # -cpu max exposes RDSEED/RDRAND so the CSPRNG seeds from trusted hardware
 # entropy (dropbear key generation needs it).

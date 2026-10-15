@@ -1,6 +1,8 @@
 #!/bin/sh
 
-# Start QEMU with GDB server (-s) paused at first instruction (-S).
+# Debug the kernel under QEMU with GDB: QEMU boots the kernel alone, with no
+# RAM disk, stopped at its first instruction with a GDB server on port 1234
+# (-s -S), and GDB attaches to it through rach2/.gdbinit.
 # Audio and networking devices are attached so their drivers can be debugged.
 # NIC=e1000 selects the other card; see qemu_devices.sh.
 # GDB loads the symbols of the kernel it debugs, the architecture's

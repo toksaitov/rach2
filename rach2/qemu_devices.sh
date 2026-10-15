@@ -1,4 +1,4 @@
-# qemu_devices.sh - shared QEMU audio and networking options.
+# qemu_devices.sh: the QEMU options the run and debug scripts share.
 # shellcheck shell=sh
 #
 # Sourced by the run/debug scripts. Set AUDIO_DEVICE (sb16, hda, or speaker;
@@ -11,7 +11,7 @@
 # on what build/x86_64/ holds.
 #
 # Networking (on QEMU's SLIRP user network) is enabled by default:
-#   NET=off                     disable networking
+#   NET=off                     pass no network options (see below)
 #   NET_HOSTFWD="hostfwd=..."   override the host port forwards
 #   NIC=rtl8139|e1000           choose the card (default rtl8139)
 #
@@ -20,7 +20,7 @@
 # session, the machine runs with no window and its console is the serial port
 # alone. DISPLAY_MODE is passed to -display and replaces that choice:
 #   DISPLAY_MODE=none           no window on any host
-#   DISPLAY_MODE=gtk|sdl|cocoa  the window QEMU names so
+#   DISPLAY_MODE=gtk|sdl|cocoa  the QEMU display of that name
 
 AUDIO_DEVICE="${AUDIO_DEVICE:-speaker}"
 
@@ -41,14 +41,15 @@ case "${ARCH:-i686}" in
         ;;
 esac
 
-# Detect OS and set appropriate audio backend
+# The host's audio backend.
 case "$(uname -s)" in
     Darwin*)
-        # macOS - use CoreAudio
+        # macOS: CoreAudio.
         AUDIO_BACKEND="-audiodev coreaudio,id=audio0"
         ;;
     Linux*)
-        # Linux - try PulseAudio first, fall back to SDL
+        # Linux: PulseAudio when it or PipeWire's server for it is installed,
+        # SDL otherwise.
         if command -v pulseaudio >/dev/null 2>&1 || command -v pipewire-pulse >/dev/null 2>&1; then
             AUDIO_BACKEND="-audiodev pa,id=audio0"
         else
@@ -56,11 +57,11 @@ case "$(uname -s)" in
         fi
         ;;
     MINGW*|MSYS*|CYGWIN*)
-        # Windows - use DirectSound
+        # Windows: DirectSound.
         AUDIO_BACKEND="-audiodev dsound,id=audio0"
         ;;
     *)
-        # Unknown OS - try SDL as fallback
+        # Any other system: SDL.
         AUDIO_BACKEND="-audiodev sdl,id=audio0"
         ;;
 esac
@@ -80,7 +81,7 @@ else
     DISPLAY_OPTS=""
 fi
 
-# Configure audio device based on selection
+# The audio device AUDIO_DEVICE chose.
 case "$AUDIO_DEVICE" in
     sb16)
         # Sound Blaster 16 (ISA, IRQ 5, DMA 1/5)
@@ -101,11 +102,11 @@ esac
 # is forwarded to the guest's httpd on port 80.
 #
 # The kernel drives two of QEMU's cards, so the card is a choice. The RTL8139
-# is the default because it is what every test boots against. The e1000 is the
-# 82540EM, which is what QEMU attaches when nothing asks for a card, so it is
-# what a plain qemu-system-i386 command line gets; a boot with NET=off, which
-# passes no network options at all, therefore still finds a card this kernel
-# can drive.
+# is the default because it is the card the test harness gives a machine. The
+# e1000 is the 82540EM, which is what QEMU attaches when nothing asks for a
+# card, so it is what a plain qemu-system-i386 command line gets; a boot with
+# NET=off, which passes no network options at all, therefore still has a card
+# this kernel can drive, on QEMU's user network with no port forwarded.
 NET="${NET:-on}"
 NIC="${NIC:-rtl8139}"
 NET_HOSTFWD="${NET_HOSTFWD:-hostfwd=tcp::8080-:80}"
