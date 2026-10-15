@@ -114,7 +114,6 @@ void probe_main(unsigned long *sp)
                     sys_exit(1);
                 }
                 if (n == 0) {
-                    /* once: the suite sends the key after this line */
                     puts("KEYLAT HOG\n");
                 }
             }

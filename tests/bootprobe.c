@@ -13,20 +13,20 @@
  * system, and both /dev/bootpart and /dev/grubcore must exist anyway, the
  * gap bounded and refusing as the fixture's partition does. With
  * `rach2.bootprobe=wide` a sparse 260 GB drive is attached over AHCI with
- * markers at 5 GiB and 258 GiB: the far one needs 38 bits of offset, so an
+ * markers at 5 GiB and 258 GiB: the far one needs 39 bits of offset, so an
  * implementation keeping fewer misses it however well it does at 5 GiB, and the
  * boot also walks SEEK_CUR across the 4 GiB line both ways, refuses a seek
  * before the start, and duplicates a descriptor to prove the wide offset is
- * shared through the open-file description. With `rach2.bootprobe=auth` and
- * `rach2.bootprobe=auth-recovery` the probe checks whether the kernel may write
- * its own disk (`auth_case`) and whether the bounded windows batch
- * (`window_batch_case`); with `rach2.bootprobe=shared`, behind a delayed
- * device, it races a transfer on an inherited description with another
- * (`raw_readv_case`, `raw_shared_case`). Without the flag the disk has only
- * the KRFFS partition and the device must be absent from stat and open
- * alike. /proc/cmdline is proved at each of its layers in every boot:
- * content, the /proc listing, stat/fstat identity, and the fd's readlink
- * origin.
+ * shared through the open-file description. With
+ * `rach2.bootprobe=auth-ordinary` and `rach2.bootprobe=auth-recovery` the
+ * probe checks whether the kernel may write its own disk (`auth_case`) and
+ * whether the bounded windows batch (`window_batch_case`); with
+ * `rach2.bootprobe=shared`, behind a delayed device, it races a transfer on
+ * an inherited description with another (`raw_readv_case`,
+ * `raw_shared_case`). Without the flag the disk has only the KRFFS partition
+ * and the device must be absent from stat and open alike. /proc/cmdline is
+ * proved at each of its layers in every boot: content, the /proc listing,
+ * stat/fstat identity, and the fd's readlink origin.
  *
  * Prints "BOOTPROBE OK", "BOOTPROBE ABSENT OK", "BOOTPROBE RAMROOT OK",
  * "BOOTPROBE WIDE OK", "BOOTPROBE SHARED OK", "BOOTPROBE AUTH ORDINARY OK"
@@ -209,7 +209,6 @@ static void auth_case(int recovery)
     fd = syscall3(SYS_OPEN, (long)"/dev/disk0", O_RDWR, 0);
     check(fd >= 0, "root opens /dev/disk0 read-write");
 
-    /* One writer at a time, across every window onto this disk. */
     {
         int second = syscall3(SYS_OPEN, (long)"/dev/disk0", O_RDWR, 0);
 
@@ -311,7 +310,6 @@ static void auth_case(int recovery)
         check(proc_disk_field("raw-batch-sectors ", &batch) && batch == 2048,
               "/proc/disk reports the batch size the count should be read against");
 
-        /* The driver's commands and cache flushes for the batch. */
         check(proc_disk_field("disk-commands ", &cmd_after), "/proc/disk reports disk commands");
         check(proc_disk_field("disk-flushes ", &flush_after), "and cache flushes");
         check(cmd_after - cmd_before == 2,
@@ -319,7 +317,6 @@ static void auth_case(int recovery)
         check(flush_after - flush_before == 1, "and exactly one cache flush, not two hundred");
     }
 
-    /* A transfer longer than one batch: two calls, and the boundary between. */
     rc = probe_llseek(fd, at, SEEK_SET, &pos);
     check(rc == 0, "seek back for a transfer past one batch");
     {
@@ -371,7 +368,8 @@ static void auth_case(int recovery)
  * The whole-disk window is the one a reflash uses, but all three share the same
  * loops, and a batching regression in the two bounded ones would be just as
  * slow and just as invisible in the result. This drives /dev/grubcore, which
- * every boot with a readable disk has, over more sectors than one batch has.
+ * every boot with a readable disk has, with a read and a write of 200
+ * sectors, which one batch of 2048 holds, so each must take one driver call.
  */
 static void window_batch_case(void)
 {
@@ -470,7 +468,7 @@ static int raw_pattern(const char *bytes, int which)
 
 /**
  * Race a read with the second vector of an inherited raw readv. A child's
- * readv of two sectors on /dev/disk0p1 is seen blocked after its second
+ * readv of two sectors on /dev/disk0p1 is seen blocked in its second
  * driver call; a read through the parent's copy of the description then
  * takes the third sector, so the readv reserved its second, and the shared
  * offset ends three sectors in.
@@ -658,7 +656,8 @@ static void proc_listing_case(void)
 /**
  * Check /proc/cmdline, then run the boot's mode, each ending with its token:
  * `shared`, `ramroot`, `auth`, `wide`, the absent device when no mode is
- * named, and the fixture.
+ * named, and the fixture. The RAM-root, wide and auth boots ask for no disk
+ * root, and the others for `rach2.fsdisk`.
  *
  * A machine that mounted a RAM image and no disk file system still has a
  * disk, and both of its level-one devices: the boot partition it may have to
@@ -673,7 +672,6 @@ PROBE_START void _start(void)
     int fd, rc, n, fixture;
     unsigned int mode, ino_stat, ino_fstat;
 
-    /* /proc/cmdline: content, then the descriptor's readlink origin. */
     fd = syscall3(SYS_OPEN, (long)"/proc/cmdline", O_RDONLY, 0);
     check(fd >= 0, "open /proc/cmdline");
     n = syscall3(SYS_READ, fd, (long)cmdline, (int)sizeof(cmdline) - 1);
@@ -681,7 +679,6 @@ PROBE_START void _start(void)
     if (n > 0) {
         cmdline[n] = '\0';
     }
-    /* The RAM-root, wide and auth boots ask for no disk root. */
     if (contains(cmdline, "rach2.bootprobe=ramroot") || contains(cmdline, "rach2.bootprobe=wide") ||
         contains(cmdline, "rach2.bootprobe=auth")) {
         check(!contains(cmdline, "rach2.fsdisk"), "a RAM-root boot asks for no disk root");
@@ -715,7 +712,6 @@ PROBE_START void _start(void)
         check(rc > 0 && contains(link, "/proc/cmdline"), "the fd's origin is /proc/cmdline");
     }
 
-    /* stat and fstat agree on the file's identity. */
     rc = syscall3(SYS_STAT, (long)"/proc/cmdline", (long)statbuf, 0);
     check(rc == 0, "stat64 /proc/cmdline");
     rc = syscall3(SYS_FSTAT, fd, (long)fstatbuf, 0);
@@ -745,7 +741,6 @@ PROBE_START void _start(void)
         sys_exit(fails != 0);
     }
 
-    /* A RAM root still has the disk's boot partition and loader gap. */
     if (contains(cmdline, "rach2.bootprobe=ramroot")) {
         rc = syscall3(SYS_STAT, (long)"/dev/bootpart", (long)statbuf, 0);
         check(rc == 0, "a RAM-root boot still has /dev/bootpart");
@@ -764,7 +759,6 @@ PROBE_START void _start(void)
         n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
         check(n == SECTOR, "the gap's first sector reads whole");
 
-        /* A write at or across the end writes nothing, not part. */
         rc = syscall3(SYS_LSEEK, fd, 2047 * SECTOR, SEEK_SET);
         check(rc == 2047 * SECTOR, "seek to the gap's end");
         n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
@@ -787,7 +781,6 @@ PROBE_START void _start(void)
         n = syscall3(SYS_WRITE, fd, (long)sector, SECTOR - 1);
         check(n == -EINVAL, "a partial-sector count is -EINVAL");
 
-        /* The write handler checks privilege again, past the open. */
         rc = syscall1(SYS_SETUID, 1000);
         check(rc == 0, "the probe drops to an unprivileged uid");
         rc = syscall3(SYS_LSEEK, fd, 0, SEEK_SET);
@@ -809,7 +802,6 @@ PROBE_START void _start(void)
         sys_exit(1);
     }
 
-    /* Whether this kernel may write its own disk. */
     if (contains(cmdline, "rach2.bootprobe=auth")) {
         auth_case(contains(cmdline, "rach2.bootprobe=auth-recovery"));
         window_batch_case();
@@ -902,7 +894,6 @@ PROBE_START void _start(void)
     }
 
     if (!fixture) {
-        /* A single-partition disk: the device must not exist anywhere. */
         rc = syscall3(SYS_STAT, (long)"/dev/bootpart", (long)statbuf, 0);
         check(rc == -ENOENT, "stat64 /dev/bootpart is -ENOENT");
         rc = syscall3(SYS_OPEN, (long)"/dev/bootpart", O_RDONLY, 0);
@@ -915,7 +906,6 @@ PROBE_START void _start(void)
         sys_exit(1);
     }
 
-    /* The fixture: partition 1 is FAT-typed known bytes. */
     rc = syscall3(SYS_STAT, (long)"/dev/bootpart", (long)statbuf, 0);
     check(rc == 0, "stat64 /dev/bootpart");
     mode = *(unsigned int *)(statbuf + KSTAT_MODE);
@@ -927,7 +917,6 @@ PROBE_START void _start(void)
     check(rc == 0 && *(unsigned int *)(fstatbuf + KSTAT_MODE) == 020600,
           "fstat mode matches the path stat");
 
-    /* Known bytes at a seek: sector 5 of the pattern. */
     rc = syscall3(SYS_LSEEK, fd, 5 * SECTOR, SEEK_SET);
     check(rc == 5 * SECTOR, "seek to sector 5");
     n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
@@ -944,7 +933,6 @@ PROBE_START void _start(void)
         check(ok, "sector 5 has the pattern");
     }
 
-    /* The end: reads at and past it return 0, and a write is -ENOSPC. */
     rc = syscall3(SYS_LSEEK, fd, 0, SEEK_END);
     check(rc == PART_SECTORS * SECTOR, "SEEK_END is the partition size");
     n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
@@ -956,7 +944,6 @@ PROBE_START void _start(void)
     n = syscall3(SYS_WRITE, fd, (long)sector, SECTOR);
     check(n == -ENOSPC, "a write past the end is -ENOSPC");
 
-    /* Alignment: partial sectors are refused in both directions. */
     rc = syscall3(SYS_LSEEK, fd, 0, SEEK_SET);
     check(rc == 0, "seek back to 0");
     n = syscall3(SYS_READ, fd, (long)sector, 100);
@@ -966,7 +953,6 @@ PROBE_START void _start(void)
     n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
     check(n == -EINVAL, "an unaligned offset is -EINVAL");
 
-    /* A write comes back on a re-read. */
     {
         int j;
 
@@ -995,7 +981,6 @@ PROBE_START void _start(void)
     }
     syscall1(SYS_CLOSE, fd);
 
-    /* Unprivileged, the device refuses at open with -EACCES. */
     rc = syscall1(SYS_SETUID, 1000);
     check(rc == 0, "drop to uid 1000");
     rc = syscall3(SYS_OPEN, (long)"/dev/bootpart", O_RDONLY, 0);

@@ -174,7 +174,6 @@ PROBE_START void _start(void)
     expect("no second magic", sys_reboot(MAGIC1, 0, CMD_CAD_OFF), WANT_EINVAL);
     expect("wrong second magic", sys_reboot(MAGIC1, MAGIC2 + 1, CMD_CAD_OFF), WANT_EINVAL);
 
-    /* The unprivileged refusal, in a child that drops root before it asks. */
     child = sys_fork();
     if (child == 0) {
         if (sys_setuid(PROBE_UID) != 0 || sys_geteuid() != PROBE_UID) {

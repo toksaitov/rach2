@@ -167,7 +167,9 @@ static void print_num(int n)
 }
 
 /**
- * ELF entry point: run the rename tests and exit 0 only if all pass.
+ * ELF entry point: run the rename tests and exit 0 only if all pass. A row
+ * removes the names it made, and a failed row the names a wrong answer may
+ * have made, such as the destination of a rename whose source was missing.
  */
 PROBE_START void _start(void)
 {
@@ -187,7 +189,6 @@ PROBE_START void _start(void)
     }
     puts("");
 
-    /* Test 1: Create a test file */
     print("Test 1: creat(\"mvtest_old.tmp\")... ");
     fd = sys_creat("mvtest_old.tmp", S_IRUSR | S_IWUSR);
     if (fd >= 0) {
@@ -200,7 +201,6 @@ PROBE_START void _start(void)
         goto results;
     }
 
-    /* Test 2: Verify source file exists */
     print("Test 2: open(\"mvtest_old.tmp\") to verify... ");
     fd = sys_open("mvtest_old.tmp", O_RDONLY);
     if (fd >= 0) {
@@ -212,7 +212,6 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 3: Rename the file */
     print("Test 3: rename(\"mvtest_old.tmp\", \"mvtest_new.tmp\")... ");
     result = sys_rename("mvtest_old.tmp", "mvtest_new.tmp");
     if (result == 0) {
@@ -223,7 +222,6 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 4: Verify old name is gone */
     print("Test 4: open(\"mvtest_old.tmp\") should fail... ");
     fd = sys_open("mvtest_old.tmp", O_RDONLY);
     if (fd < 0) {
@@ -235,7 +233,6 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 5: Verify new name exists */
     print("Test 5: open(\"mvtest_new.tmp\")... ");
     fd = sys_open("mvtest_new.tmp", O_RDONLY);
     if (fd >= 0) {
@@ -247,7 +244,6 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 6: Rename a missing source: -ENOENT */
     print("Test 6: rename(\"nonexistent\", \"other\") == -ENOENT... ");
     result = sys_rename("nonexistent", "other");
     if (result == -ENOENT) {
@@ -255,12 +251,10 @@ PROBE_START void _start(void)
         passed++;
     } else {
         puts("FAILED (wrong errno)");
-        /* Clean up the accidentally created file */
         sys_unlink("other");
         failed++;
     }
 
-    /* Test 6b: a directory's rename: -EPERM on KRFFS, done on ext2. */
     print("Test 6b: rename of a directory, the answer this root owes... ");
     if (root == -1) {
         puts("FAILED (the root is neither krffs nor ext2)");
@@ -283,7 +277,6 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 6c: A directory destination under a plain source: -EISDIR. */
     print("Test 6c: rename(file, a directory) == -EISDIR... ");
     if (sys_mkdir("mvtest.dst", 0755) == 0) {
         fd = sys_creat("mvtest.src", S_IRUSR | S_IWUSR);
@@ -308,7 +301,6 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 6d: The root as a source: -EBUSY, as on Linux, not -ENOENT. */
     print("Test 6d: rename(\"/\", \"mvtest.x\") == -EBUSY... ");
     result = sys_rename("/", "mvtest.x");
     if (result == -EBUSY) {
@@ -319,7 +311,6 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 7: Rename to overwrite existing file */
     print("Test 7: create \"mvtest_dest.tmp\"... ");
     fd = sys_creat("mvtest_dest.tmp", S_IRUSR | S_IWUSR);
     if (fd >= 0) {
@@ -329,19 +320,16 @@ PROBE_START void _start(void)
         if (result == 0) {
             puts("OK");
             passed++;
-            /* Clean up */
             sys_unlink("mvtest_dest.tmp");
         } else {
             puts("FAILED");
             failed++;
-            /* Clean up both files */
             sys_unlink("mvtest_new.tmp");
             sys_unlink("mvtest_dest.tmp");
         }
     } else {
         puts("FAILED (can't create dest file)");
         failed++;
-        /* Clean up source file */
         sys_unlink("mvtest_new.tmp");
     }
 

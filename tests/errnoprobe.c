@@ -121,18 +121,14 @@ void probe_main(unsigned long *sp)
 
     puts_("errnoprobe: starting\n");
 
-    /* Unimplemented in-range and out-of-range numbers must be -ENOSYS. */
     expect(syscall3(NR_UNIMPL, 0, 0, 0), ENOSYS, "unimpl(" NR_UNIMPL_TEXT ")");
     expect(syscall3(909, 0, 0, 0), ENOSYS, "outofrange(909)");
 
-    /* open() of a nonexistent path -> -ENOENT. */
     expect(syscall3(SYS_OPEN, (long)missing, 0, 0), ENOENT, "open(missing)");
 
-    /* Operations on a bad fd -> -EBADF. */
     expect(syscall3(SYS_CLOSE, 999, 0, 0), EBADF, "close(999)");
     expect(syscall3(SYS_READ, 999, (long)rbuf, (int)sizeof(rbuf)), EBADF, "read(999)");
 
-    /* writev() with an iov pointer in the kernel's last page -> -EFAULT. */
     expect(syscall3(SYS_WRITEV, STDOUT, -4096L, 1), EFAULT, "writev(bad iov)");
 
     if (fails == 0) {

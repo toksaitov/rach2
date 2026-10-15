@@ -113,7 +113,6 @@ void probe_main(unsigned long *sp)
         if (secure != 1)
             done(5);
 
-        /* Shed the acquired root and take it back: the saved uid is 0. */
         if (syscall3(SYS_SETRESUID, -1, 1000, -1) != 0)
             done(6);
         if (syscall3(SYS_GETRESUID, (long)&ruid, (long)&euid, (long)&suid) != 0)
@@ -130,7 +129,6 @@ void probe_main(unsigned long *sp)
     }
 
     if (streq(argv[1], "suid5")) {
-        /* The bit grants the file owner's identity, root or not. */
         if (ruid != 1000)
             done(20);
         if (euid != 5)
@@ -157,7 +155,6 @@ void probe_main(unsigned long *sp)
     }
 
     if (streq(argv[1], "root")) {
-        /* sudo's environment is two entries, PATH and HOME. */
         char **envp = (char **)(sp + 1 + argc + 1);
 
         if (ruid != 0)

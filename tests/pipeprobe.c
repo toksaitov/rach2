@@ -14,8 +14,8 @@
  *   (e) a hundred pipes made and closed in turn each succeed;
  *   (f) identity: the link /proc/self/fd gives for a pipe end is exactly
  *       `pipe:[N]`, the two ends of one pipe give the same N and two pipes
- *       different ones, and fstat reports N as the inode in both words of
- *       its 64-bit field;
+ *       different ones, and fstat reports N as the inode, the high word of
+ *       its 64-bit field zero;
  *   (g) a read into a buffer whose second page is unmapped returns the bytes
  *       of the first page and leaves the rest in the pipe for the next read,
  *       since the kernel copies to user memory a page at a time and a page
@@ -242,16 +242,14 @@ PROBE_START void _start(void)
         big[i] = (char)(i & 0x7f);
     }
 
-    /* (a) round-trip + EOF, in one process, which the pipe's buffer allows. */
     check(do_pipe(p) == 0, "pipe()");
     check(wr(p[1], "hello pipe", 10) == 10, "write 10 bytes");
     n = rd(p[0], buf, 10);
     check(n == 10 && eqn(buf, "hello pipe", 10), "read back the 10 bytes in order");
-    syscall1(SYS_CLOSE, p[1]); /* close the write end */
+    syscall1(SYS_CLOSE, p[1]);
     check(rd(p[0], buf, 10) == 0, "read returns 0 (EOF) after write end closed");
     syscall1(SYS_CLOSE, p[0]);
 
-    /* (b) O_NONBLOCK: an empty read and a write past full are -EAGAIN. */
     check(do_pipe2(p, O_NONBLOCK) == 0, "pipe2(O_NONBLOCK)");
     check(syscall3(SYS_FCNTL, p[0], F_GETPIPE_SZ, 0) == PIPE_BUF_SIZE &&
               syscall3(SYS_FCNTL, p[1], F_GETPIPE_SZ, 0) == PIPE_BUF_SIZE,
@@ -263,27 +261,25 @@ PROBE_START void _start(void)
     syscall1(SYS_CLOSE, p[0]);
     syscall1(SYS_CLOSE, p[1]);
 
-    /* (c) SIGPIPE + -EPIPE: write with the read end closed. */
     ka.handler = sigpipe_handler;
-    ka.flags = SA_SIGINFO | SA_RESTORER; /* the rt frame its restorer returns from */
+    ka.flags = SA_SIGINFO | SA_RESTORER; /* an rt frame, for rt_sigreturn */
     ka.restorer = sig_restorer;
     ka.mask = 0;
     syscall4(SYS_RT_SIGACTION, SIGPIPE, (long)&ka, 0, 8);
     got_sigpipe = 0;
     check(do_pipe(p) == 0, "pipe() for SIGPIPE test");
-    syscall1(SYS_CLOSE, p[0]); /* close the read end */
+    syscall1(SYS_CLOSE, p[0]);
     check(wr(p[1], "data", 4) == -EPIPE, "write to reader-closed pipe -> -EPIPE");
     check(got_sigpipe == 1, "SIGPIPE was raised");
     syscall1(SYS_CLOSE, p[1]);
 
-    /* (d) blocking across a fork: the writer blocks until the reader drains. */
     check(do_pipe(p) == 0, "pipe() for blocking test");
     pid = syscall1(SYS_FORK, 0);
     check(pid >= 0, "fork");
     if (pid == 0) {
         int total = 0, got;
         char cb[256];
-        syscall1(SYS_CLOSE, p[1]); /* child reads only */
+        syscall1(SYS_CLOSE, p[1]);
         while ((got = rd(p[0], cb, sizeof(cb))) > 0) {
             int j;
             for (j = 0; j < got; j++) {
@@ -296,7 +292,7 @@ PROBE_START void _start(void)
         sys_exit(total == BIG ? 0 : 2); /* 0 only if every byte arrived */
     } else {
         int off = 0;
-        syscall1(SYS_CLOSE, p[0]); /* parent writes only */
+        syscall1(SYS_CLOSE, p[0]);
         while (off < BIG) {
             int w = wr(p[1], big + off, BIG - off);
             if (w <= 0) {
@@ -312,7 +308,6 @@ PROBE_START void _start(void)
               "child read every byte intact");
     }
 
-    /* (e) pipes made and closed in turn leak nothing. */
     for (i = 0; i < 100; i++) {
         int q[2];
         if (do_pipe(q) != 0) {
@@ -323,13 +318,12 @@ PROBE_START void _start(void)
         syscall1(SYS_CLOSE, q[1]);
     }
 
-    /* (f) identity: one inode for a pipe's two ends, in its link and fstat. */
     {
         int a[2], b[2];
         unsigned int ino[4];
         char link[64];
         char fdpath[32];
-        char st[KSTAT_SIZE] = {0}; /* fstat fills it through a long-cast pointer */
+        char st[KSTAT_SIZE] = {0}; /* fstat fills it through a cast */
         int k, ends[4];
 
         check(do_pipe(a) == 0 && do_pipe(b) == 0, "two pipes open");
@@ -350,7 +344,6 @@ PROBE_START void _start(void)
                       "and it is a pipe link, spelled exactly as one");
             }
             check(syscall3(SYS_FSTAT, ends[k], (long)st, 0) == 0, "fstat a pipe end");
-            /* Both words of the 64-bit inode. */
             check(*(unsigned int *)(st + KSTAT_INO) == ino[k] &&
                       *(unsigned int *)(st + KSTAT_INO + 4) == 0u && ino[k] != 0,
                   "and fstat reports the number the link does");
@@ -362,7 +355,6 @@ PROBE_START void _start(void)
         }
     }
 
-    /* (g) a read into a buffer whose second page is unmapped. */
     {
         long m = mmap_anon(8192);
         char *first = (char *)m;
@@ -374,7 +366,7 @@ PROBE_START void _start(void)
         check(syscall2(SYS_MUNMAP, (long)(first + 4096), 4096) == 0,
               "with its second page unmapped");
         check(do_pipe(p) == 0, "pipe() for the fault test");
-        /* A pattern with no period of 2048 bytes. */
+        /* No period of 2048, so the second half cannot pass for the first. */
         for (i = 0; i < 4096; i++) {
             big[i] = (char)(((i * 7 + 3) ^ (i >> 7)) & 0x7f);
         }
@@ -399,7 +391,6 @@ PROBE_START void _start(void)
         syscall1(SYS_CLOSE, p[1]);
     }
 
-    /* (h) one write of three pipefuls and a byte, through three refills. */
     {
         int q[2];
 
@@ -439,7 +430,6 @@ PROBE_START void _start(void)
         }
     }
 
-    /* (i) every length to 67 bytes at every alignment of both buffers. */
     {
         static char pat[80], got[80];
         int len, sa, da, bad = 0;

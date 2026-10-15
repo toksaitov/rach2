@@ -61,6 +61,8 @@ static void fail(const char *why)
  * and takes a write; /cx/../cx opens the directory; and execve of
  * /cx/../dev/null fails with -EACCES, the answer for a path on a synthetic
  * mount, where a path that reached the KRFFS root would fail with -ENOENT.
+ * The refusal is what keeps a file an image placed under a synthetic prefix
+ * on the KRFFS root from being run.
  */
 PROBE_START void _start(void)
 {
@@ -70,7 +72,6 @@ PROBE_START void _start(void)
         fail("mkdir /cx");
     }
 
-    /* A '..' path onto a synthetic mount is refused and makes no KRFFS node. */
     if (syscall2(SYS_MKDIR, (long)"/cx/../proc", 0755) == 0) {
         fail("mkdir /cx/../proc created a KRFFS shadow of synthetic /proc");
     }
@@ -78,7 +79,6 @@ PROBE_START void _start(void)
         fail("mkdir /cx/../dev created a KRFFS shadow of synthetic /dev");
     }
 
-    /* A '..' path that canonicalizes onto a real device still reaches it. */
     fd = syscall3(SYS_OPEN, (long)"/cx/../dev/null", O_RDWR, 0);
     if (fd < 0) {
         fail("/cx/../dev/null did not reach the device");
@@ -88,14 +88,12 @@ PROBE_START void _start(void)
     }
     syscall2(SYS_CLOSE, fd, 0);
 
-    /* And one that canonicalizes back onto a real directory opens it. */
     fd = syscall3(SYS_OPEN, (long)"/cx/../cx", O_RDONLY, 0);
     if (fd < 0) {
         fail("/cx/../cx did not resolve to the real directory");
     }
     syscall2(SYS_CLOSE, fd, 0);
 
-    /* execve refuses a path on a synthetic mount with -EACCES. */
     {
         char *av[1];
         av[0] = 0;

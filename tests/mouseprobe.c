@@ -4,10 +4,9 @@
  * The device is the one Doom opens, by the bare name `mouse` rather than a
  * path under `/dev`, and it is the same queue the PS/2 mouse fills. That is
  * the point: a program reading movement does not learn which kind of mouse
- * produced it.
- * The suite moves a USB mouse through the emulator's own monitor before
- * running this, so what arrives here came in over USB and out of the shared
- * queue.
+ * produced it. The suite moves a USB mouse through the emulator's own
+ * monitor while this runs, so what arrives here came in over USB and out of
+ * the shared queue.
  *
  * With the argument `any`, for a person at a machine, any movement in any
  * direction passes and the movement seen is printed; without it the suite's
@@ -96,7 +95,7 @@ PROBE_SP_ENTRY;
  * never moves the mouse. The suite moves the mouse right by 20 and up by 8,
  * so that axes swapped for each other or a sign turned the wrong way fail
  * rather than pass as some movement. Up is positive here and negative on the
- * wire, which is the turn the class driver makes (usb/hid.c).
+ * wire, which is the turn the class driver makes (rach2/sys/usb/hid.c).
  */
 void probe_main(unsigned long *sp)
 {
@@ -115,7 +114,6 @@ void probe_main(unsigned long *sp)
         fail("the mouse device did not open");
     }
 
-    /* The open dropped the packets queued before it. */
     puts("MOUSEPROBE: move the mouse");
     for (tries = 0; tries < 1500 && !moved; tries++) {
         static const long pause[2] = {0, 10000000};
@@ -154,7 +152,6 @@ void probe_main(unsigned long *sp)
         puts("MOUSEPROBE OK\n");
         sys_exit(0);
     }
-    /* The suite's movement: right by 20, up by 8. */
     if (total_x <= 0) {
         fail("the movement did not go right");
     }

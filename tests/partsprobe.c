@@ -224,7 +224,6 @@ void probe_main(unsigned long *sp)
         fail("/proc/disk");
     }
 
-    /* Disk 0: the MBR as built, numbered by entry, the extended one absent. */
     if (!has_line(text, "disk 0 ahci 0 131072 mbr ")) {
         fail("disk 0 is not the MBR disk");
     }
@@ -245,7 +244,6 @@ void probe_main(unsigned long *sp)
         fail("a logical partition past the chain");
     }
 
-    /* Disk 1: the GPT with its six entries, GUIDs and labels. */
     if (!has_line(text, "disk 1 ahci 1 65536 gpt ")) {
         fail("disk 1 is not the GPT disk");
     }
@@ -259,7 +257,6 @@ void probe_main(unsigned long *sp)
         fail("a seventh partition on disk 1");
     }
 
-    /* Disk 2: the damaged copy, read from its backup. */
     if (!has_line(text, "disk 2 ahci 2 65536 gpt ") ||
         !has_text(text, "part 2 3 8192 8192 45444342-4746-4948-494a-4b4c4d4e4f50 DATA3\n")) {
         fail("disk 2's table from the backup header");
@@ -274,7 +271,6 @@ void probe_main(unsigned long *sp)
         fail("disk 1's primary was taken for damaged");
     }
 
-    /* Disk 3: blank. */
     if (!has_line(text, "disk 3 ahci 3 16384 none ")) {
         fail("disk 3 is not the blank disk");
     }
@@ -282,7 +278,6 @@ void probe_main(unsigned long *sp)
         fail("a partition on the blank disk");
     }
 
-    /* The nodes. */
     if (xstat("/dev/disk0p1") != 0 || xstat("/dev/disk0p2") != 0 || xstat("/dev/disk0p4") != 0 ||
         xstat("/dev/disk0p5") != 0 || xstat("/dev/disk0p6") != 0 || xstat("/dev/disk0p7") != 0) {
         fail("disk 0's partition nodes");
@@ -298,7 +293,6 @@ void probe_main(unsigned long *sp)
     }
     sys_block_rows();
 
-    /* A logical partition and a GPT partition, mounted and written. */
     if (mount_vfat("/dev/disk0p6", "/mnt6") != 0) {
         fail("mounting the logical FAT32 partition");
     }
@@ -308,7 +302,6 @@ void probe_main(unsigned long *sp)
     write_and_read_back("/mnt6/logical.txt", "logical six says hello\n");
     write_and_read_back("/mnt3/gpt.txt", "gpt three says hello\n");
 
-    /* The table read again: refused under a mount, done once it is gone. */
     fd = syscall3(SYS_OPEN, (long)"/dev/disk1", O_RDONLY, 0);
     if (fd < 0) {
         fail("opening /dev/disk1");

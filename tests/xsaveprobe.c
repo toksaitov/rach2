@@ -746,7 +746,6 @@ static int traced_child(int avx, unsigned seed)
         }
         syscall2(SYS_KILL, getpid(), SIGSTOP);
         if (avx) {
-            /* The tracer wrote ymm2's upper half. */
             int j;
 
             for (j = 0; j < 4; j++) {

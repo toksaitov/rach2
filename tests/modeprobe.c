@@ -25,7 +25,7 @@
  *
  * The escalation needs a program and not just a mode, so the probe makes one:
  * the root parent copies the staged `/suidhelper` byte for byte to
- * `/mp_sgid0`, which keeps the fixture out of the manifest and out of the
+ * `mp_sgid0`, which keeps the fixture out of the manifest and out of the
  * set-id allowlist (tools/inspect/setid.allow). It is chmod'd 02700 and
  * chowned `1000:0`, in that order, and the mode must survive the chown:
  * 02700 has no group-execute, so the clear spares its setgid bit. A uid-1000
@@ -109,10 +109,10 @@ typedef unsigned int u32;
 #define FSGIDNOX "mp_fsgid645" /* 02645: no group-execute, so setgid stays */
 #define FNOCHG   "mp_fnochg"   /* the no-change fchown a uid-1000 child asks */
 
-/* The two answers an unprivileged owner owes: a group it may move the file
+/* The two answers an unprivileged owner gets: a group it may move the file
  * into, and an owner it may not. */
-#define GIVEGRP "mp_grp"    /* owned 1000:0, armed; the child moves the group */
-#define REFUSED "mp_refuse" /* owned 1000:1000, armed; the child may not give it away */
+#define GIVEGRP "mp_grp"    /* 1000:0, armed; the child moves the group */
+#define REFUSED "mp_refuse" /* 1000:1000, armed; its chown to uid 0 fails */
 
 /* The escalation: a runnable copy of the staged helper, owned 1000:0. */
 #define HELPER "/suidhelper"
@@ -425,8 +425,8 @@ static int run_helper(const char *path, const char *arg)
  * the descriptor the times are checked as well: a call that changes no field
  * writes nothing, so the status time may not move either.
  *
- * A write that grows /mp_grow past its node's data room must move the node,
- * since /mp_block sits right behind it, and the mode is read through the
+ * A write that grows mp_grow past its node's data room must move the node,
+ * since mp_block sits right behind it, and the mode is read through the
  * path again, the only way to see a clear applied through the pointer the
  * write left behind. creat(2) on an existing file truncates, as
  * open(O_WRONLY|O_CREAT|O_TRUNC) does, and the clear goes with the
@@ -445,19 +445,15 @@ static void user_child(void)
 
     drop_to_1000();
 
-    /* chown(path, -1, -1) needs no right, so it may take none away. */
     want_eq("chown(-1, -1) on a root-owned setuid file",
             syscall3(SYS_CHOWN, (long)NOCHG, (int)KEEP, (int)KEEP), 0);
     want_mode("a no-change chown disarmed the file", NOCHG, 04755);
-    /* The same no-change chown with the ids named, not the sentinel. */
     want_eq("chown(0, 0) on a root-owned setuid file", syscall3(SYS_CHOWN, (long)NOCHG, 0, 0), 0);
     want_mode("naming the ids it already had disarmed the file", NOCHG, 04755);
 
-    /* A write that stays inside the node the descriptor already has. */
     write_bytes("write in place", INPLACE, 8);
     want_mode("an in-place write kept setuid", INPLACE, 0755);
 
-    /* A write that grows the file past its node's data room moves the node. */
     write_bytes("write past the node", GROW, GROW_BYTES);
     want_mode("a relocating write kept setuid", GROW, 0755);
     want_size("the relocating write lost bytes", GROW, GROW_BYTES);
@@ -468,27 +464,22 @@ static void user_child(void)
     want_mode("O_TRUNC kept setuid", TRUNCME, 0755);
     want_size("O_TRUNC left bytes behind", TRUNCME, 0);
 
-    /* creat(2) on an existing file truncates it. */
     fd = syscall3(SYS_CREAT, (long)CREATME, 0644, 0);
     want_ok("creat an existing set-id file", fd);
     want_eq("close the recreated file", syscall3(SYS_CLOSE, fd, 0, 0), 0);
     want_mode("creat kept setuid", CREATME, 0755);
     want_size("creat left bytes behind", CREATME, 0);
 
-    /* Setgid follows group-execute, the bit exec's grant reads. */
     write_bytes("write the 02755 file", SGIDX, 8);
     want_mode("a write kept setgid with group-execute", SGIDX, 0755);
-    /* This caller is in the file's group, so the setgid it asks for lands. */
     want_eq("chmod the 02755 file back", syscall3(SYS_CHMOD, (long)SGIDX, 02755, 0), 0);
     want_mode("chmod took setgid from a caller inside the group", SGIDX, 02755);
     write_bytes("write the 02645 file", SGIDNOX, 8);
     want_mode("a write took setgid without group-execute", SGIDNOX, 02645);
 
-    /* The control: a mode with nothing to lose comes back unchanged. */
     write_bytes("write the plain file", PLAIN, 8);
     want_mode("a write disturbed a plain mode", PLAIN, 0755);
 
-    /* The same no-change rule through the descriptor, with the times. */
     fd = syscall3(SYS_OPEN, (long)FNOCHG, O_RDONLY, 0);
     want_ok("open the root-owned setuid file", fd);
     keep_times(FNOCHG);
@@ -503,13 +494,11 @@ static void user_child(void)
     want_times_kept("a no-change fchown by name moved the times", FNOCHG);
     want_eq("close the root-owned setuid file", syscall3(SYS_CLOSE, fd, 0, 0), 0);
 
-    /* A group change this caller may make clears both set-id bits. */
     want_eq("give a file its owner's group", syscall3(SYS_CHOWN, (long)GIVEGRP, (int)KEEP, 1000),
             0);
     want_mode("a permitted group change kept the set-id bits", GIVEGRP, 0755);
     want_owner("a permitted group change did not store the group", GIVEGRP, 1000, 1000);
 
-    /* Only a privileged caller changes the owner; a refusal clears nothing. */
     keep_times(REFUSED);
     want_eq("give a file away as its unprivileged owner",
             syscall3(SYS_CHOWN, (long)REFUSED, 0, (int)KEEP), -EPERM);
@@ -522,7 +511,7 @@ static void user_child(void)
 
 /**
  * The escalation the mode alone would grant; exits 0, or 1 at the first case
- * that fails. /mp_sgid0 is a runnable copy of the helper, 02700 and owned
+ * that fails. mp_sgid0 is a runnable copy of the helper, 02700 and owned
  * 1000:0, so its executor is its owner and the setgid bit is the only thing
  * that could hand out gid 0.
  *
@@ -539,7 +528,6 @@ static void escalation_child(void)
 
     drop_to_1000();
 
-    /* Rewrite one byte with the value it already has. */
     fd = syscall3(SYS_OPEN, (long)SGID0, O_RDONLY, 0);
     want_ok("open the copy to read a byte", fd);
     want_eq("read a byte of the copy", syscall3(SYS_READ, fd, (long)&byte, 1), 1);
@@ -552,7 +540,6 @@ static void escalation_child(void)
     want_mode("a write took setgid without group-execute", SGID0, 02700);
     want_eq("exec the 02700 copy", run_helper(SGID0, "plain"), 0);
 
-    /* An owner outside the file's group may not store setgid on it. */
     want_eq("chmod the copy 02710", syscall3(SYS_CHMOD, (long)SGID0, 02710, 0), 0);
     want_mode("chmod stored setgid for a caller outside the group", SGID0, 0710);
     want_eq("exec the 02710 copy", run_helper(SGID0, "plain"), 0);
@@ -614,10 +601,10 @@ PROBE_SP_ENTRY;
  * test runner uses leaves it empty.
  *
  * The relocation pair is made first and in this order. `creat` allocates a
- * node with no room for data, so /mp_grow is followed by the remainder of the
+ * node with no room for data, so mp_grow is followed by the remainder of the
  * free block it was cut from; allocation is first-fit from the start of the
  * image and every hole before that block was already too small to hold a
- * node header, so the next `creat` takes that remainder. Either way /mp_grow
+ * node header, so the next `creat` takes that remainder. Either way mp_grow
  * ends up followed by a reserved node, and a write that outgrows it must
  * relocate, not extend in place.
  *
@@ -642,12 +629,10 @@ void probe_main(unsigned long *sp)
         want_eq("enter the directory named on the command line",
                 syscall3(SYS_CHDIR, (long)argv[1], 0, 0), 0);
     }
-    /* Root's group 0 in the list puts uid 1000 in a 1000:0 file's group. */
     if (syscall3(SYS_GETEUID, 0, 0, 0) == 0) {
         want_eq("empty the supplementary group list", syscall3(SYS_SETGROUPS, 0, 0, 0), 0);
     }
 
-    /* The relocation pair, first and in this order: the blocker follows. */
     fd = syscall3(SYS_CREAT, (long)GROW, 0644, 0);
     want_ok("mint the relocation fixture", fd);
     want_eq("close the relocation fixture", syscall3(SYS_CLOSE, fd, 0, 0), 0);
@@ -674,7 +659,6 @@ void probe_main(unsigned long *sp)
     mint(GIVEGRP, 06755, FILL_BYTES, 1000, 0);
     mint(REFUSED, 04755, FILL_BYTES, 1000, 1000);
 
-    /* A directory is armed after it is made, and chowned after that. */
     want_eq("mint the directory", syscall3(SYS_MKDIR, (long)DIRSUID, 0755, 0), 0);
     want_eq("arm the directory", syscall3(SYS_CHMOD, (long)DIRSUID, 04755, 0), 0);
     want_mode("the directory did not take its mode", DIRSUID, 04755);
@@ -682,19 +666,16 @@ void probe_main(unsigned long *sp)
     want_eq("arm the descriptor's directory", syscall3(SYS_CHMOD, (long)FDIRSUID, 04755, 0), 0);
     want_mode("the descriptor's directory did not take its mode", FDIRSUID, 04755);
 
-    /* Root's own half: a privileged writer keeps the bit. */
     want_mode("the 04755 baseline", ROOTSUID, 04755);
     write_bytes("write as root", ROOTSUID, 8);
     want_mode("a privileged write took the bit", ROOTSUID, 04755);
 
-    /* A chown has no such exemption, asked by the same identity. */
     want_eq("chown a setuid file away", syscall3(SYS_CHOWN, (long)CHOWNED, 1000, 1000), 0);
     want_mode("a chown kept setuid", CHOWNED, 0755);
     want_owner("a chown did not store the owner", CHOWNED, 1000, 1000);
     want_eq("chown the directory away", syscall3(SYS_CHOWN, (long)DIRSUID, 1000, 1000), 0);
     want_mode("a chown took a directory's setuid", DIRSUID, 04755);
 
-    /* The same four answers through the descriptor. */
     fd = syscall3(SYS_OPEN, (long)FCHOWNED, O_WRONLY, 0);
     want_ok("open the file to be chowned by descriptor", fd);
     want_eq("fchown a setuid file away", syscall3(SYS_FCHOWN, fd, 1000, 1000), 0);
@@ -727,7 +708,6 @@ void probe_main(unsigned long *sp)
 
     run_child(user_child, "the uid-1000 child");
 
-    /* The escalation's fixture: 02700 keeps its setgid through the chown. */
     copy_file(HELPER, SGID0);
     want_eq("arm the helper copy", syscall3(SYS_CHMOD, (long)SGID0, 02700, 0), 0);
     want_eq("give the helper copy away", syscall3(SYS_CHOWN, (long)SGID0, 1000, 0), 0);
@@ -735,7 +715,6 @@ void probe_main(unsigned long *sp)
 
     run_child(escalation_child, "the escalation child");
 
-    /* Hand the image back the way the probe found it. */
     want_eq("remove the baseline file", syscall3(SYS_UNLINK, (long)ROOTSUID, 0, 0), 0);
     want_eq("remove the chowned file", syscall3(SYS_UNLINK, (long)CHOWNED, 0, 0), 0);
     want_eq("remove the no-change file", syscall3(SYS_UNLINK, (long)NOCHG, 0, 0), 0);

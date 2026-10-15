@@ -241,7 +241,6 @@ static void slow_row(void)
     if (syscall1(SYS_PIPE, (long)pipefd) != 0) {
         fail("pipe");
     }
-    /* The clock starts before the slow reader. */
     overlaps = disk_counter("disk-overlaps ");
     t0 = now_ms();
     slow = syscall1(SYS_FORK, 0);
@@ -276,7 +275,6 @@ static void slow_row(void)
     if (longest == 200) {
         fail("the fast disk's read");
     }
-    /* The slow reader has not ended when the fast one has. */
     status = -1;
     reaped = syscall3(SYS_WAITPID, slow, (long)&status, WNOHANG);
     slow_running = reaped == 0;
@@ -294,7 +292,6 @@ static void slow_row(void)
         }
         fail("the fast reader ended after the slow disk's read, so it waited behind it");
     }
-    /* A fast request completed while a slow one was in flight. */
     if (disk_counter("disk-overlaps ") - overlaps < 1) {
         fail("no request of the fast disk completed while the slow disk's was in flight");
     }
@@ -559,7 +556,6 @@ static void quarantine_row(void)
     puts("AHCIPROBE GAVEUP ms:");
     putnum(ms);
     sleep_ms(6000); /* the late completion lands in the meantime */
-    /* The next request is taken only if the late completion freed the slot. */
     quarantined = disk_counter("disk-quarantines ");
     n = read_once("/dev/disk0p1", 4 * 1024, &ms);
     if (ms < 0) {
@@ -602,7 +598,7 @@ static void pool_row(void)
                 read_node(i == 0 ? "/dev/disk0p1" : "/dev/disk1p1", 64 * 1024, &l) == 0 ? 0 : 3, 0);
         }
     }
-    syscall2(SYS_CLOSE, pipefd[1], 0); /* so a reader that dies first ends the wait */
+    syscall2(SYS_CLOSE, pipefd[1], 0); /* so a dead reader ends the wait */
     for (i = 0; i < 2; i++) {
         if (syscall3(SYS_READ, pipefd[0], (long)&byte, 1) != 1) {
             fail("a slow reader did not start");

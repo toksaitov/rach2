@@ -171,7 +171,7 @@ static void eintr_child(void)
     char buf[16];
 
     ka.handler = usr1_handler;
-    ka.flags = SA_SIGINFO | SA_RESTORER; /* the rt frame its restorer returns from */
+    ka.flags = SA_SIGINFO | SA_RESTORER; /* an rt frame, for rt_sigreturn */
     ka.restorer = sig_restorer;
     ka.mask = 0;
     if (syscall4(SYS_RT_SIGACTION, SIGUSR1, (long)&ka, 0, 8) != 0) {
@@ -186,7 +186,6 @@ static void eintr_child(void)
         sys_exit(3);
     }
 
-    /* Blocks on the socket wait queue; the parent's SIGUSR1 must break it. */
     args[0] = (unsigned long)sfd;
     args[1] = (unsigned long)(size_t)buf;
     args[2] = sizeof(buf);
@@ -195,7 +194,6 @@ static void eintr_child(void)
     args[5] = 0;
     rc = sock_call(SC_RECVFROM, args);
 
-    /* Expect -EINTR, and the handler must have run. */
     sys_exit((rc == -EINTR && got_usr1) ? 0 : 1);
 }
 
@@ -206,7 +204,6 @@ PROBE_START void _start(void)
     char buf[16];
     int fd, r, n, pid, status;
 
-    /* (a) O_NONBLOCK round-trips through F_SETFL/F_GETFL on the OFD. */
     fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
     check(fd >= 0, "open hello.txt");
     check(syscall3(SYS_FCNTL, fd, F_SETFL, O_NONBLOCK) == 0, "F_SETFL O_NONBLOCK");
@@ -215,14 +212,12 @@ PROBE_START void _start(void)
     check((syscall3(SYS_FCNTL, fd, F_GETFL, 0) & O_NONBLOCK) == 0, "F_GETFL no longer O_NONBLOCK");
     syscall1(SYS_CLOSE, fd);
 
-    /* (b) close(stderr) is legal, and the reopen takes the freed fd 2. */
     r = syscall1(SYS_CLOSE, STDERR_FILENO);
     check(r == 0, "close(stderr) is legal");
     fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
     check(fd == STDERR_FILENO, "reopen lands on the freed fd 2");
     syscall1(SYS_CLOSE, fd);
 
-    /* close(0) is legal, and with fd 0 freed the reopen lands on 0. */
     check(syscall1(SYS_CLOSE, STDIN_FILENO) == 0, "close(stdin) is legal");
     fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
     check(fd == STDIN_FILENO, "reopen lands on the freed fd 0");
@@ -230,13 +225,11 @@ PROBE_START void _start(void)
     check(n == 5 && eqn(buf, "hello", 5), "read through reopened fd 0");
     syscall1(SYS_CLOSE, fd);
 
-    /* (c) a blocking recvfrom is interruptible: it unwinds with -EINTR. */
     pid = syscall1(SYS_FORK, 0);
     check(pid >= 0, "fork");
     if (pid == 0) {
         eintr_child();
     } else {
-        /* Signal the child once it is seen asleep in its recvfrom. */
         struct {
             long tv_sec;
             long tv_nsec;

@@ -90,7 +90,6 @@ PROBE_START void _start(void)
         sys_exit(1);
     }
 
-    /* Fault the read-only page in (a read is allowed) before forking. */
     if (ro[0] != 0) {
         puts("forkro: ERROR read-only page did not read zero");
         sys_exit(1);
@@ -105,14 +104,11 @@ PROBE_START void _start(void)
     }
 
     if (pid == 0) {
-        /* The child's copy of the page is read-only too: SIGSEGV. */
         ro[0] = 0xFF;
-        /* Reached only if fork wrongly gave the child a writable copy. */
         puts("forkro: ERROR child wrote a read-only page and survived");
         sys_exit(0);
     }
 
-    /* Parent: the child must have been killed by the protection fault. */
     if (sys_waitpid(pid, &status, 0) != pid) {
         puts("forkro: ERROR waitpid failed");
         sys_exit(1);

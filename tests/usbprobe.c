@@ -307,7 +307,6 @@ void probe_main(unsigned long *sp)
         puts("USBPROBE settled: the devices the machine was given are listed\n");
     }
 
-    /* Booted with rach2.nousb, the file is there and empty. */
     if (switched_off()) {
         if (len != 0) {
             fail("USB was switched off and devices are listed");
@@ -323,7 +322,6 @@ void probe_main(unsigned long *sp)
     if (lines < 2) {
         fail("fewer than two devices are listed");
     }
-    /* Every line, not the file as a whole. */
     for (i = 0; i < len; i = line_end(i, len) + 1) {
         int end = line_end(i, len);
 
@@ -350,7 +348,6 @@ void probe_main(unsigned long *sp)
     if (!contains("class 3 protocol 2", len)) {
         fail("no mouse is listed");
     }
-    /* With rach2.hubtree, the keyboard and the mouse are behind a hub. */
     if (cmdline_has("rach2.hubtree")) {
         for (i = 0; i < len; i = line_end(i, len) + 1) {
             int end = line_end(i, len);
@@ -368,7 +365,6 @@ void probe_main(unsigned long *sp)
         }
     }
 
-    /* A device the kernel cannot drive is refused once, in one log line. */
     {
         int refusals = count_in_log("no interface this kernel can drive");
 

@@ -127,7 +127,6 @@ PROBE_START void _start(void)
     puts("Unlink syscall test starting...");
     puts("");
 
-    /* Test 1: Create a test file */
     print("Test 1: creat(\"rmtest.tmp\")... ");
     fd = sys_creat("rmtest.tmp", S_IRUSR | S_IWUSR);
     if (fd >= 0) {
@@ -137,11 +136,9 @@ PROBE_START void _start(void)
     } else {
         puts("FAILED (can't create test file)");
         failed++;
-        /* The later tests need the file. */
         goto results;
     }
 
-    /* Test 2: Verify file exists */
     print("Test 2: open(\"rmtest.tmp\") to verify... ");
     fd = sys_open("rmtest.tmp", O_RDONLY);
     if (fd >= 0) {
@@ -153,7 +150,6 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 3: Unlink the file */
     print("Test 3: unlink(\"rmtest.tmp\")... ");
     result = sys_unlink("rmtest.tmp");
     if (result == 0) {
@@ -164,7 +160,6 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 4: Verify file is gone */
     print("Test 4: open(\"rmtest.tmp\") should fail... ");
     fd = sys_open("rmtest.tmp", O_RDONLY);
     if (fd < 0) {
@@ -176,7 +171,6 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 5: Unlink nonexistent file: -ENOENT, not a blanket failure */
     print("Test 5: unlink(\"nonexistent.tmp\") == -ENOENT... ");
     result = sys_unlink("nonexistent.tmp");
     if (result == -ENOENT) {
@@ -187,7 +181,6 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 6: Unlink "/": -EISDIR. */
     print("Test 6: unlink(\"/\") == -EISDIR... ");
     result = sys_unlink("/");
     if (result == -EISDIR) {
@@ -198,7 +191,6 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 6b: Unlink a directory: -EISDIR, the answer that means rmdir. */
     print("Test 6b: unlink(a directory) == -EISDIR... ");
     if (sys_mkdir("rmtest.dir", 0755) == 0) {
         result = sys_unlink("rmtest.dir");
@@ -215,7 +207,6 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 6c: A file in the middle of the path: -ENOTDIR, not -ENOENT. */
     print("Test 6c: unlink(\"rmtest.plain/child\") == -ENOTDIR... ");
     fd = sys_creat("rmtest.plain", S_IRUSR | S_IWUSR);
     if (fd >= 0) {
@@ -234,7 +225,6 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 7: Create and delete another file */
     print("Test 7: create, then unlink \"rmtest2.tmp\"... ");
     fd = sys_creat("rmtest2.tmp", S_IRUSR | S_IWUSR);
     if (fd >= 0) {

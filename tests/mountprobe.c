@@ -210,12 +210,15 @@ static void read_text(const char *path)
  * rebuilds the path from the volume; its removal; the refused flags,
  * targets, sources and options; and the read-only mount the later rows use,
  * with the second mounts it makes busy.
+ *
+ * F_DUPFD is tried on the root before any mount, so that a later failure of
+ * it is the mount's and not the table's. The second mount on the same target
+ * names another source, so that its EBUSY can only be the target's.
  */
 static void rows_placing(void)
 {
     int fd, d;
 
-    /* F_DUPFD on the root first, so a later failure is the mount's. */
     fd = syscall3(SYS_OPEN, (long)"/hello", O_RDONLY, 0);
     d = syscall3(SYS_FCNTL, fd, F_DUPFD, 10);
     if (fd < 0 || d != 10) {
@@ -229,7 +232,6 @@ static void rows_placing(void)
     if (do_mount(SRC, MNT, 0, 0) != 0) {
         fail("a writable mount is placed");
     }
-    /* A directory descriptor on the mount follows its directory's rename. */
     {
         int rfd, xfd;
 
@@ -276,7 +278,6 @@ static void rows_placing(void)
     if (do_mount(SRC, MNT, MS_RDONLY, 0) != 0) {
         fail("the read-only mount");
     }
-    /* Another source, so the EBUSY can only be the target's. */
     if (do_mount("/dev/disk0p1", MNT, MS_RDONLY, 0) != -EBUSY) {
         fail("a second mount on the same target is EBUSY");
     }
@@ -341,7 +342,6 @@ static void rows_reading(void)
     if (fd < 0) {
         fail("open the mount root");
     }
-    /* A buffer too small for one record is EINVAL and keeps no lock. */
     if (syscall3(SYS_GETDENTS64, fd, (long)buf, 1) != -EINVAL) {
         fail("getdents64 with a buffer too small for one record is EINVAL");
     }
@@ -456,7 +456,6 @@ static void rows_lifetime(void)
     if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != -EBUSY) {
         fail("umount2 with the last duplicate open is EBUSY");
     }
-    /* A description a forked child inherited holds the mount too. */
     pid = syscall1(SYS_FORK, 0);
     if (pid < 0) {
         fail("fork");
@@ -481,7 +480,6 @@ static void rows_lifetime(void)
         fail("the mount again after umount2");
     }
 
-    /* execve drops a close-on-exec descriptor: the mount is free after it. */
     opened[0] = -1; /* the kernel fills the pair through the cast address */
     opened[1] = -1;
     if (syscall1(SYS_PIPE, (long)opened) != 0) {
@@ -528,7 +526,6 @@ static void rows_lifetime(void)
         fail("the mount once more");
     }
 
-    /* A working directory inside the mount holds it. */
     pid = syscall1(SYS_FORK, 0);
     if (pid == 0) {
         if (syscall1(SYS_CHDIR, (long)MNT) != 0) {
@@ -551,7 +548,9 @@ static void rows_lifetime(void)
 
 /** The rows of umount2's flags and the permanent mounts, an unprivileged
  * caller, noexec, a program run from the mount, and a target too long for
- * the mount's record, which claims nothing. */
+ * the mount's record, which claims nothing. The noexec and executable
+ * mounts pass `umask=000`, which makes every file 0777, so that only noexec
+ * refuses the program. */
 static void rows_flags(void)
 {
     char *av[2];
@@ -573,7 +572,6 @@ static void rows_flags(void)
         syscall2(SYS_UMOUNT2, (long)"/", 0) != -EBUSY) {
         fail("the permanent mounts are EBUSY");
     }
-    /* Unprivileged: mount and umount2 are root's. */
     pid = syscall1(SYS_FORK, 0);
     if (pid == 0) {
         if (syscall1(SYS_SETUID, 1000) != 0) {
@@ -594,7 +592,6 @@ static void rows_flags(void)
         fail("umount2 before the noexec rows");
     }
 
-    /* A noexec mount refuses a program umask=000 makes 0777. */
     if (do_mount(SRC, MNT, MS_RDONLY | MS_NOEXEC, "umask=000") != 0) {
         fail("the noexec mount");
     }
@@ -606,7 +603,6 @@ static void rows_flags(void)
     if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
         fail("umount2 after the noexec row");
     }
-    /* And without noexec the same program runs from the mount. */
     if (do_mount(SRC, MNT, MS_RDONLY, "umask=000") != 0) {
         fail("the executable mount");
     }
@@ -636,7 +632,6 @@ static void rows_flags(void)
         fail("umount2 after running from the mount");
     }
 
-    /* A target too long for the record is refused, and claims nothing. */
     {
         static char longname[80];
         int i;
@@ -653,7 +648,6 @@ static void rows_flags(void)
             fail("a long target is ENAMETOOLONG");
         }
         syscall1(SYS_RMDIR, (long)longname);
-        /* The source is still free to mount: the refusal claimed nothing. */
         if (do_mount(SRC, "/mnt2", MS_RDONLY, 0) != 0 ||
             syscall2(SYS_UMOUNT2, (long)"/mnt2", 0) != 0) {
             fail("the source mounts after the refused long target");
@@ -730,7 +724,6 @@ static void rows_record(void)
         syscall3(SYS_FCNTL, fd, F_DUPFD, 3) < 3) {
         fail("the duplicates for the record row");
     }
-    /* A failed duplication on a full table takes no reference. */
     rl[0] = 16;
     rl[1] = 0;
     rl[2] = 1024;

@@ -7,13 +7,13 @@
  * guest can read for itself:
  *
  * * With a USB device and messages, which is the ordinary boot: the
- *   controller's vector has taken at least one interrupt per key typed
- *   before this ran, and the timer's pump has found none of the work they
- *   carry, so the fallback count is zero.
+ *   controller's vector has taken at least four interrupts for the five keys
+ *   typed before this ran, and the timer's pump has found none of the work
+ *   they carry, so the fallback count is zero.
  * * With `rach2.nomsi`: the message vector has no line at all, since a
  *   vector that has taken nothing is not listed; the controller's PCI line,
  *   listed as `IO-APIC`, or `PIC` on a machine without one, with the
- *   controller's name, has taken at least one interrupt per key typed; and
+ *   controller's name, has taken at least four for the five keys; and
  *   the fallback count is zero because the line brought the work.
  * * With `rach2.msidrop=N`: the controller was silenced after N messages, so
  *   the vector's count is exactly N and the timer's pump has been finding
@@ -318,7 +318,10 @@ static int count_for_named(const char *kind, const char *name, const char *file)
 /**
  * Read the boot line and /proc/interrupts, print the counts, and require
  * those of the machine the boot line and /proc/usb describe. The timer's
- * vector must have counted on every machine.
+ * vector must have counted on every machine. The counts are printed before
+ * any is judged, so that a failing run logs them. The kernel acts on
+ * `rach2.msidrop` only with a count above zero, so a count of zero, or one
+ * that is not a number, is the ordinary boot.
  *
  * The audio controller's vector is printed and not judged: whether it has
  * taken anything depends on whether this boot played a sound, which is the
@@ -355,11 +358,9 @@ PROBE_START void _start(void)
     if (fallback < 0) {
         fail("there is no fallback line");
     }
-    /* The kernel acts on rach2.msidrop only with a count above zero. */
     drop = option_value("rach2.msidrop=");
     devices = usb_devices();
 
-    /* The counts are printed first, so that a failing run logs them. */
     puts("INTRPROBE READ vector ");
     putnum(vector);
     puts(", audio ");
@@ -395,7 +396,6 @@ PROBE_START void _start(void)
             fail("a machine with no USB device counted a lost edge");
         }
     } else {
-        /* The suite types five keys before the probe, each a message. */
         if (vector < 4) {
             fail("the controller's vector took fewer interrupts than the keys typed");
         }

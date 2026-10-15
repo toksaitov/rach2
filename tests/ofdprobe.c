@@ -94,23 +94,20 @@ PROBE_START void _start(void)
     char buf[16];
     int fd, fd2, pid, status, i, n;
 
-    /* (a) dup2 shares the seek offset. */
     fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
     check(fd >= 0, "open hello.txt");
     check(rd(fd, buf, 5) == 5 && eqn(buf, "hello", 5), "read first 5 == hello");
 
-    fd2 = syscall2(SYS_DUP2, fd, 9); /* dup onto fd 9 */
+    fd2 = syscall2(SYS_DUP2, fd, 9);
     check(fd2 == 9, "dup2 onto fd 9");
     n = rd(fd2, buf, 5); /* must continue from offset 5 */
     check(n == 5 && eqn(buf, ", wor", 5), "dup shares offset (reads ', wor')");
 
-    /* (c) the dup works after the original is closed: the OFD is still held. */
     syscall1(SYS_CLOSE, fd);
     n = rd(fd2, buf, 3); /* offset is now 10: "ld\n" */
     check(n == 3 && eqn(buf, "ld\n", 3), "dup works after original closed");
     syscall1(SYS_CLOSE, fd2);
 
-    /* (b) fork shares the seek offset. */
     fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
     check(fd >= 0, "reopen hello.txt");
     check(rd(fd, buf, 3) == 3 && eqn(buf, "hel", 3), "parent reads first 3 == hel");
@@ -127,7 +124,6 @@ PROBE_START void _start(void)
     check(n == 3 && eqn(buf, " wo", 3), "fork shares offset (parent reads ' wo')");
     syscall1(SYS_CLOSE, fd);
 
-    /* (c) open and close cycles leak no description. */
     for (i = 0; i < 300; i++) {
         int f = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
         if (f < 0) {
@@ -137,7 +133,6 @@ PROBE_START void _start(void)
         syscall1(SYS_CLOSE, f);
     }
 
-    /* (c2) a child's exit releases the descriptions it inherited. */
     for (i = 0; i < 100; i++) {
         int p = syscall1(SYS_FORK, 0);
         if (p == 0) {
@@ -151,7 +146,6 @@ PROBE_START void _start(void)
         syscall1(SYS_CLOSE, fd);
     }
 
-    /* (d) FD_CLOEXEC is per-fd: it round-trips, and dup2 leaves it clear. */
     fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
     check(fd >= 0, "open for cloexec test");
     syscall3(SYS_FCNTL, fd, F_SETFD, FD_CLOEXEC);

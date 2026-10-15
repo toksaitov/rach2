@@ -1,12 +1,12 @@
 /**
  * krffsprobe: a mounted KRFFS volume, from a program.
  *
- * `krffsprobe read` mounts /dev/disk0p1 read-only, the volume
+ * `krffsprobe read` mounts /dev/disk0p1, the volume
  * tests/system/suites/krffsmount.sh builds, on /k read-only and checks what
- * a mounted volume owes: every byte of a file whose contents follow a rule,
- * the names in the root and in a subdirectory, a stat of each kind, a read
- * past the end, a name that is not there, and a write refused because the
- * mount is read-only. Then it unmounts.
+ * a mounted volume must give: every byte of a file whose contents follow a
+ * rule, the names in the root and in a subdirectory, a stat of each kind, a
+ * read past the end, a name that is not there, and a write refused because
+ * the mount is read-only. Then it unmounts.
  *
  * `krffsprobe write` mounts it for writing and does what a file system is
  * for: creates, writes, reads back, grows, truncates, renames, removes,
@@ -21,7 +21,7 @@
  * errno plus the kernel's own line on the console. `krffsprobe failed`
  * writes until the device fails a write, `krffsprobe three` mounts three
  * volumes at once, and `krffsprobe pull` writes until the stick under the
- * mount is pulled; `probe_main` says what each owes.
+ * mount is pulled; `probe_main` says what each requires.
  *
  * Prints "KRFFSPROBE OK (mode)" or "KRFFSPROBE FAIL: reason". Freestanding;
  * direct system calls (probe.h).
@@ -231,7 +231,6 @@ static void read_rows(void)
         fail_with("the size stat reports", (int)*(unsigned *)(st + KSTAT_SIZE_AT));
     }
 
-    /* The names, through getdents. */
     {
         int saw_pattern = 0;
         int saw_sub = 0;
@@ -401,7 +400,6 @@ static void write_rows(void)
     int fd;
     int rc;
 
-    /* What the rows are about to make, taken away first, if it is there. */
     syscall1(SYS_UNLINK, (long)"/k/made/inside");
     syscall1(SYS_RMDIR, (long)"/k/made");
     syscall1(SYS_UNLINK, (long)"/k/after.txt");
@@ -435,7 +433,6 @@ static void write_rows(void)
     syscall1(SYS_CLOSE, fd);
     read_pattern("/k/written.bin", 20000);
 
-    /* A grow past what the node holds, then a truncate back. */
     fd = syscall3(SYS_OPEN, (long)"/k/grown.bin", O_WRONLY | O_CREAT, 0644);
     if (fd < 0) {
         fail_with("creating the file to grow", fd);
@@ -457,7 +454,6 @@ static void write_rows(void)
         fail("the size after a truncate");
     }
 
-    /* A directory, a file in it, a rename, and a removal. */
     if (syscall2(SYS_MKDIR, (long)"/k/made", 0755) != 0) {
         fail("mkdir on the volume");
     }
@@ -494,7 +490,6 @@ static void write_rows(void)
     if (syscall1(SYS_RMDIR, (long)"/k/empty") != 0) {
         fail("rmdir on the volume");
     }
-    /* A name taken while the file is open: the reader keeps the file. */
     fd = syscall3(SYS_OPEN, (long)"/k/held.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         fail_with("creating the file to hold open", fd);
@@ -527,7 +522,6 @@ static void write_rows(void)
     }
     syscall1(SYS_CLOSE, fd);
 
-    /* An open directory is not removed; a renamed-over open file is kept. */
     {
         int dirfd;
 
@@ -589,7 +583,6 @@ static void write_rows(void)
         syscall1(SYS_CLOSE, fd);
     }
 
-    /* A truncation of a file whose name is gone reaches the file alone. */
     if (syscall2(SYS_MKDIR, (long)"/k/hold", 0755) != 0) {
         fail("the directory for the truncation of a nameless file");
     }
@@ -629,7 +622,6 @@ static void write_rows(void)
         syscall1(SYS_CLOSE, fd);
     }
 
-    /* A descriptor open across a grow that moves the file follows it. */
     fd = syscall3(SYS_OPEN, (long)"/k/moved.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         fail_with("creating the file to move", fd);
@@ -665,7 +657,6 @@ static void write_rows(void)
     }
     syscall1(SYS_CLOSE, fd);
 
-    /* A grow through ftruncate moves the file too; both descriptors follow. */
     {
         int one = syscall3(SYS_OPEN, (long)"/k/cut.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
         int two;
@@ -722,7 +713,6 @@ static void write_rows(void)
         syscall1(SYS_CLOSE, two);
     }
 
-    /* An overwrite of bytes that are already there. */
     {
         int over = syscall3(SYS_OPEN, (long)"/k/over.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
         char got[16];
@@ -759,7 +749,6 @@ static void write_rows(void)
         fail_with("the mode after a chmod", rc & 07777);
     }
 
-    /* A creation gets the mode it asks for, not the format's 0644. */
     fd = syscall3(SYS_OPEN, (long)"/k/secret.txt", O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) {
         fail_with("creating a file with a mode of its own", fd);
@@ -848,13 +837,13 @@ PROBE_SP_ENTRY;
  * Make /k and run the mode argv[1] names.
  *
  * `failed`: a write the device fails takes the mount read-only, and the
- * unmount that follows writes nothing: the volume owes the next mount a
- * check, and the flag that says so must still be set when the host reads
+ * unmount that follows writes nothing: the next mount of the volume must
+ * check it, and the flag that says so must still be set when the host reads
  * it. `three`: three volumes at once, each of its own, so that what one
  * mount writes is in that volume and in no other.
  *
- * `pull`: a stick pulled from under a mounted volume. What the machine owes
- * then is an error from what was in flight, no writes to a device that is
+ * `pull`: a stick pulled from under a mounted volume. What the machine must
+ * give then is an error from what was in flight, no writes to a device that is
  * not there, and an unmount that takes the mount down rather than failing
  * its sync for ever. The row writes until the stick is not there any more,
  * then once more; `KRFFSPROBE HOLDING` is said after the first write, so the
@@ -890,7 +879,6 @@ void probe_main(unsigned long *sp)
         sys_exit(0);
     }
 
-    /* A failed write takes the mount read-only; the unmount writes nothing. */
     if (streq(mode, "failed")) {
         int fd;
         int i;
@@ -925,7 +913,6 @@ void probe_main(unsigned long *sp)
         sys_exit(0);
     }
 
-    /* Three volumes at once, each holding only what its own mount writes. */
     if (streq(mode, "three")) {
         int fd;
         char got[16];
@@ -988,7 +975,6 @@ void probe_main(unsigned long *sp)
         sys_exit(0);
     }
 
-    /* A stick pulled from under a mounted volume. */
     if (streq(mode, "pull")) {
         int tries = 0;
         int writes = 0;
@@ -1027,7 +1013,6 @@ void probe_main(unsigned long *sp)
                 fail("the stick was never pulled");
             }
         }
-        /* The mount stays while the stick is plugged back in. */
         puts("KRFFSPROBE GONE");
         for (tries = 0; tries < 2000000; tries++) {
             int fd = syscall3(SYS_OPEN, (long)"/dev/disk0p1", O_RDONLY, 0);
@@ -1038,12 +1023,11 @@ void probe_main(unsigned long *sp)
 
                 syscall1(SYS_CLOSE, fd);
                 if (got == (int)sizeof(one)) {
-                    break; /* a stick answers there again */
+                    break;
                 }
             }
         }
         {
-            /* Nothing of the new stick reaches the mount over the old one. */
             int fd = syscall3(SYS_OPEN, (long)"/k/hello.txt", O_RDONLY, 0);
             char one[8];
 
@@ -1075,7 +1059,6 @@ void probe_main(unsigned long *sp)
             if (fd < 0) {
                 fail_with("creating the file to be killed", fd);
             }
-            /* The same bytes over and over, until the machine is killed. */
             for (;;) {
                 syscall3(SYS_LSEEK, fd, 0, 0);
                 write_pattern(fd, 4096);

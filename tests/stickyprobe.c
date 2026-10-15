@@ -305,33 +305,26 @@ static void user_child(void)
 {
     drop_to(1000);
 
-    /* The pair: one file, one mode, one owner, two directories, one bit. */
     want_eq("sticky: unlink root's file", syscall3(SYS_UNLINK, (long)S_VICTIM, 0, 0), -EPERM);
     want_eq("plain: unlink root's file", syscall3(SYS_UNLINK, (long)P_VICTIM, 0, 0), 0);
 
-    /* A rename within the directory takes the entry out of it too. */
     want_eq("sticky: rename root's file", syscall3(SYS_RENAME, (long)S_MOVER, (long)S_MOVED, 0),
             -EPERM);
     want_eq("plain: rename root's file", syscall3(SYS_RENAME, (long)P_MOVER, (long)P_MOVED, 0), 0);
 
-    /* Both directories are empty, so rmdir has nothing else to refuse. */
     want_eq("sticky: rmdir root's directory", syscall3(SYS_RMDIR, (long)S_RMME, 0, 0), -EPERM);
     want_eq("plain: rmdir root's directory", syscall3(SYS_RMDIR, (long)P_RMME, 0, 0), 0);
 
-    /* The entry-owner clause and the source end of rename: both ways out. */
     want_eq("sticky: unlink its own file", syscall3(SYS_UNLINK, (long)S_MINE, 0, 0), 0);
     want_eq("sticky: rename its own file", syscall3(SYS_RENAME, (long)S_MYRN, (long)S_MYRN2, 0), 0);
 
-    /* The destination end: only the root-owned entry it replaces can refuse. */
     want_eq("sticky: rename its own file over root's",
             syscall3(SYS_RENAME, (long)S_MYSRC, (long)S_TARGET, 0), -EPERM);
     want_eq("plain: rename its own file over root's",
             syscall3(SYS_RENAME, (long)P_MYSRC, (long)P_TARGET, 0), 0);
 
-    /* The directory-owner clause: root's entry in a directory it owns. */
     want_eq("owned: unlink root's file", syscall3(SYS_UNLINK, (long)OWN_VICTIM, 0, 0), 0);
 
-    /* No write on the directory: -EACCES, checked before the sticky rule. */
     want_eq("locked: unlink root's file", syscall3(SYS_UNLINK, (long)LOCK_VICTIM, 0, 0), -EACCES);
 
     syscall1(SYS_EXIT, 0);
@@ -399,11 +392,9 @@ static void run_child(void (*body)(void), const char *what)
  */
 PROBE_START void _start(void)
 {
-    /* What the manifest staged: `dir 1777` stores the bit. */
     want_mode("staged /st_sticky", STICKY, 01777);
     want_mode("staged /st_plain", PLAIN, 0777);
 
-    /* The sticky directory's fixtures, one for each case. */
     mint_file(S_VICTIM, 0666);
     mint_file(S_MOVER, 0666);
     mint_file(S_TARGET, 0666);
@@ -413,11 +404,9 @@ PROBE_START void _start(void)
     give_to(S_MINE, 1000);
     mint_file(S_MYRN, 0644);
     give_to(S_MYRN, 1000);
-    /* 0640: after a rename over a 0666 victim the mode tells the two apart. */
     mint_file(S_MYSRC, 0640);
     give_to(S_MYSRC, 1000);
 
-    /* The control, staged the same way, one bit apart. */
     mint_file(P_VICTIM, 0666);
     mint_file(P_MOVER, 0666);
     mint_file(P_TARGET, 0666);
@@ -425,20 +414,17 @@ PROBE_START void _start(void)
     mint_file(P_MYSRC, 0640);
     give_to(P_MYSRC, 1000);
 
-    /* A sticky directory of uid 1000's, holding entries it does not own. */
     mint_dir(OWNED, 01777);
     give_to(OWNED, 1000);
     want_mode("the minted /st_owned", OWNED, 01777);
     mint_file(OWN_VICTIM, 0666);
     mint_file(OWN_OTHER, 0666);
 
-    /* 01755: sticky, and writable by nobody but root. */
     mint_dir(LOCKED, 01755);
     mint_file(LOCK_VICTIM, 0666);
 
     run_child(user_child, "the uid-1000 child");
 
-    /* Refused and nothing done. */
     want_there("sticky: the victim is still there", S_VICTIM);
     want_there("sticky: the mover is still there", S_MOVER);
     want_absent("sticky: the rename's destination", S_MOVED);
@@ -447,7 +433,6 @@ PROBE_START void _start(void)
     want_mode("sticky: the destination case's victim", S_TARGET, 0666);
     want_there("locked: the victim is still there", LOCK_VICTIM);
 
-    /* Permitted and carried out. */
     want_absent("plain: the victim is gone", P_VICTIM);
     want_absent("plain: the mover is gone", P_MOVER);
     want_there("plain: the rename's destination", P_MOVED);
@@ -466,7 +451,6 @@ PROBE_START void _start(void)
     want_absent("sticky: the third uid's own file is gone", S_OTHOWN);
     want_absent("owned: the third uid's own file is gone", OWN_OTHOWN);
 
-    /* The privileged clause, which also leaves the image as it was staged. */
     want_eq("root removes the victim", syscall3(SYS_UNLINK, (long)S_VICTIM, 0, 0), 0);
     want_eq("root removes the mover", syscall3(SYS_UNLINK, (long)S_MOVER, 0, 0), 0);
     want_eq("root removes the third uid's victim", syscall3(SYS_UNLINK, (long)S_OTHER, 0, 0), 0);

@@ -281,7 +281,6 @@ PROBE_START void _start(void)
     char cwd[64];
     unsigned magic = root_magic();
 
-    /* ---- the tree the rows use ---- */
     if (syscall2(SYS_MKDIR, (long)"/vp", 0755) != 0) {
         fail("mkdir /vp");
     }
@@ -297,7 +296,6 @@ PROBE_START void _start(void)
     }
     syscall1(SYS_CLOSE, fd);
 
-    /* ---- what a path answers ---- */
     if (xstat("/vp/d/f") != 0) {
         fail("stat of a real file");
     }
@@ -340,7 +338,6 @@ PROBE_START void _start(void)
         fail("dot-dot through a file (marked row)");
     }
 
-    /* ---- open and openat ---- */
     dfd = syscall3(SYS_OPEN, (long)"/vp/d", O_RDONLY, 0);
     if (dfd < 0) {
         fail("open the directory");
@@ -366,7 +363,6 @@ PROBE_START void _start(void)
         fail("O_DIRECTORY on a file is ENOTDIR");
     }
 
-    /* ---- the description keeps the file ---- */
     fd = syscall3(SYS_OPEN, (long)"/vp/d/f2", O_CREAT | O_RDWR, 0644);
     if (fd < 0 || syscall3(SYS_WRITE, fd, (long)"zz", 2) != 2) {
         fail("create /vp/d/f2");
@@ -387,7 +383,6 @@ PROBE_START void _start(void)
     }
     syscall1(SYS_CLOSE, fd);
 
-    /* ---- rename under an open description ---- */
     fd = syscall3(SYS_OPEN, (long)"/vp/d/f", O_RDONLY, 0);
     if (fd < 0) {
         fail("open before rename");
@@ -403,7 +398,6 @@ PROBE_START void _start(void)
         fail("rename g back to f");
     }
 
-    /* ---- offsets and sizes ---- */
     fd = syscall3(SYS_OPEN, (long)"/vp/d/f", O_RDONLY, 0);
     if (syscall3(SYS_LSEEK, fd, 1, SEEK_SET) != 1) {
         fail("lseek to 1");
@@ -444,8 +438,6 @@ PROBE_START void _start(void)
     }
     syscall1(SYS_CLOSE, fd);
 
-    /* ---- a relocated file keeps every description ---- */
-    /* A neighbour right after the file makes its growth move the node. */
     fd = syscall3(SYS_OPEN, (long)"/vp/d/grow", O_CREAT | O_RDWR, 0644);
     if (fd < 0 || syscall3(SYS_WRITE, fd, (long)"seed", 4) != 4) {
         fail("create the file that will grow");
@@ -479,7 +471,6 @@ PROBE_START void _start(void)
         fail("remove the growth files");
     }
 
-    /* ---- directories ---- */
     dfd = syscall3(SYS_OPEN, (long)"/vp/d", O_RDONLY, 0);
     rc = syscall3(SYS_GETDENTS64, dfd, (long)iobuf, sizeof(iobuf));
     if (rc <= 0 || !dirents_contain(iobuf, rc, "f")) {
@@ -499,7 +490,6 @@ PROBE_START void _start(void)
         fail("unlink of a directory is EISDIR");
     }
 
-    /* ---- attributes ---- */
     if (syscall2(SYS_CHMOD, (long)"/vp/d/f", 0640) != 0 || xstat("/vp/d/f") != 0 ||
         (st_field(KSTAT_MODE) & 0777) != 0640) {
         fail("chmod sets the mode stat reports");
@@ -523,14 +513,12 @@ PROBE_START void _start(void)
     check_link(magic);
     check_blocks(magic);
 
-    /* ---- statfs identities ---- */
     if (probe_statfs("/proc", iobuf) != 0 || *(unsigned *)iobuf != STATFS_MAGIC_PROC) {
         fail("statfs64 of /proc");
     }
     if (probe_statfs("/", iobuf) != 0 || *(unsigned *)iobuf != magic) {
         fail("statfs64 of the root");
     }
-    /* f_files and f_ffree: counted on ext2, not on KRFFS. */
     if (magic == STATFS_MAGIC_EXT2
             ? *(unsigned *)(iobuf + KSTATFS_FILES) == 0 ||
                   *(unsigned *)(iobuf + KSTATFS_FFREE) > *(unsigned *)(iobuf + KSTATFS_FILES)
@@ -538,7 +526,6 @@ PROBE_START void _start(void)
         fail("statfs64 of the root counts its inodes");
     }
 
-    /* ---- the working directory ---- */
     if (syscall1(SYS_CHDIR, (long)"/vp/d") != 0) {
         fail("chdir");
     }
@@ -559,7 +546,6 @@ PROBE_START void _start(void)
         fail("sync");
     }
 
-    /* ---- leave the image as it was found ---- */
     if (syscall1(SYS_UNLINK, (long)"/vp/d/f") != 0 || syscall1(SYS_RMDIR, (long)"/vp/d") != 0 ||
         syscall1(SYS_RMDIR, (long)"/vp") != 0) {
         fail("cleanup");

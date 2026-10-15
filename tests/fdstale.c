@@ -108,7 +108,8 @@
  * Every wait checks WIFEXITED before WEXITSTATUS: a signal death has the
  * signal in the low bits and would otherwise decode as exit 0, scoring a
  * crashed child as a passing one. Every fixture is minted and removed here, so
- * the probe hands the image back as it found it and runs twice in one boot.
+ * the probe hands the image back as it found it and can run twice in one
+ * boot.
  *
  * Prints "FDSTALE OK" and exits 0 only when every case passed; any failure
  * names the step and the answer it got, and exits 1. Freestanding; direct
@@ -156,7 +157,7 @@ typedef unsigned int u32;
 #define EXITF "/fdstale.exit" /* held by a child that _exits without closing */
 #define DUPF  "/fdstale.dup"  /* two descriptors on one orphan */
 #define GROW  "/fdstale.grow" /* the file a write must relocate */
-#define WALL  "/fdstale.wall" /* the reserved node that leaves it nowhere to go */
+#define WALL  "/fdstale.wall" /* the reserved node that leaves it no room */
 #define XGROW "/fdstale.xgrw" /* the same, moved by another process */
 #define XWALL "/fdstale.xwal" /* and its wall */
 #define LEAK  "/fdstale.leak" /* the unlink-under-a-descriptor leak loop */
@@ -376,7 +377,6 @@ static int dir_entries(const char *step, const char *dirpath, const char *forbid
             fail(step, pos);
         }
         pos += reclen;
-        /* `.` and `..` are no children, on whichever root lists them. */
         if (streq(name, ".") || streq(name, "..")) {
             continue;
         }
@@ -560,10 +560,10 @@ static void orphan_scan_case(void)
 }
 
 /** Whether the root this probe runs on is the boot root. A rename row below
- * owes different answers on the two file systems, and reads the type out of
- * `/proc/mounts` rather than assuming the one it was written on. A root whose
- * line cannot be read is taken for the boot root, which is what an image
- * without `/proc` boots. */
+ * expects different answers on the two file systems, and reads the type out
+ * of `/proc/mounts` rather than assuming the one it was written on. A root
+ * whose line cannot be read is taken for the boot root, which is what an
+ * image without `/proc` boots. */
 static int root_is_krffs(void)
 {
     static char mounts[1024];
@@ -590,8 +590,8 @@ static int root_is_krffs(void)
 /** Whether this root performs a directory's rename. The boot root refuses
  * every one of them with EPERM, since its children name their parent by id;
  * ext2 moves a directory and answers a rename onto a file with ENOTDIR,
- * which is what POSIX asks for. The row below takes whichever answer its
- * root owes. */
+ * which is what POSIX asks for. The row below expects whichever answer its
+ * root gives. */
 static int root_moves_directories(void)
 {
     return !root_is_krffs();
@@ -644,7 +644,6 @@ static void reader_child(void)
     int fd_old = syscall3(SYS_OPEN, (long)OLD, O_RDONLY, 0);
     int fd_gone = syscall3(SYS_OPEN, (long)GONE, O_RDONLY, 0);
 
-    /* Signal first: a failed open then cannot hang the parent. */
     notify("the child signals its opens", up[1]);
     want_ok("the child opens the renamed-over name", fd_old);
     want_ok("the child opens the re-created name", fd_gone);
@@ -680,7 +679,6 @@ static void cross_process_case(void)
     notify("the parent releases the child", down[1]);
     reap(pid, "the reader child");
 
-    /* What the names hold now is the writer's, whatever the reader saw. */
     want_named_bytes("the renamed-onto name has the replacement", OLD, NEW_LINE,
                      (int)slen(NEW_LINE));
     want_named_bytes("the re-created name has the new file", GONE, FRESH_LINE,
@@ -970,9 +968,8 @@ static void directory_case(void)
     want_eq("rmdir once nothing refers to the directory", syscall3(SYS_RMDIR, (long)DDIR, 0, 0), 0);
 }
 
-/** Run every case in the order of the opening comment, the cross-process
- * ones over the two pipes, and print FDSTALE OK; each case exits 1 at its
- * first failure. */
+/** Run every case, the cross-process ones over the two pipes, and print
+ * FDSTALE OK; each case exits 1 at its first failure. */
 PROBE_START void _start(void)
 {
     int i;

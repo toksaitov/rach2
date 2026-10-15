@@ -4,11 +4,11 @@
  * Two children fault on purpose: one executes an invalid opcode (#UD), one
  * divides by zero (#DE). Every CPU exception but the page fault, the double
  * fault, the NMI and the machine check goes to the kernel's default
- * exception handler (arch/x86/isr.c), which sends the faulting process the
- * signal its cause maps to (SIGILL for #UD, SIGFPE for #DE) and leaves the
- * parent and the kernel running. A handler that returned into the faulting
- * instruction would fault again without end. The probe reaps each child and
- * checks that the wait status has the expected signal.
+ * exception handler (rach2/sys/arch/x86/isr.c), which sends the faulting
+ * process the signal its cause maps to (SIGILL for #UD, SIGFPE for #DE) and
+ * leaves the parent and the kernel running. A handler that returned into the
+ * faulting instruction would fault again without end. The probe reaps each
+ * child and checks that the wait status has the expected signal.
  *
  * Prints "TRAPPROBE OK" and exits 0. Freestanding; direct system calls
  * (probe.h).

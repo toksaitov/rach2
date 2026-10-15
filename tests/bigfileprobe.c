@@ -311,11 +311,14 @@ static int disk_commands(u64 *out)
  * blocks in a batch needs a few requests per pointer block of 4 MiB and a
  * few for the bitmaps, and one that writes each block's pointer, bit and
  * descriptor through needs thousands, which the bound refuses.
+ *
+ * The reads past the write fall at the 4 GiB line, where a 32-bit offset
+ * would wrap, or at the middle of a file too small to reach it, as one
+ * written for a measurement is.
  */
 static void write_mode(u64 mib)
 {
     u64 total = mib << 20, done = 0, three_quarters = (total >> 2) * 3;
-    /* The 4 GiB line, or the middle of a file too small to reach it. */
     u64 line = total > ((u64)1 << 32) + CHUNK ? (u64)1 << 32 : total >> 1;
     int fd, fd2, fd3;
     u64 before, after;
@@ -365,7 +368,6 @@ static void write_mode(u64 mib)
     check_block(fd, line, "the block at the 4 GiB line");
     check_block(fd, line - BLOCK, "the block before the 4 GiB line");
     check_block(fd, total - 3 * CHUNK + BLOCK, "a block near the end");
-    /* The second open has its own offset; the duplicate shares the first's. */
     fd2 = syscall3(SYS_OPEN, (long)"/big/big.bin", O_RDONLY, 0);
     if (fd2 < 0) {
         fail_with("a second open", fd2);
@@ -395,7 +397,6 @@ static void write_mode(u64 mib)
     }
     syscall1(SYS_CLOSE, fd3);
     syscall1(SYS_CLOSE, fd2);
-    /* Three quarters, then a mebibyte appended at the end. */
     put("bigfile: read back\n");
     if (disk_commands(&before) != 0) {
         fail("reading /proc/disk before the truncate");

@@ -92,14 +92,15 @@ static void close_all(void)
 /**
  * Open /hello until the table refuses, and require the refusal to be
  * -EMFILE after LIMIT less three opens; then close one descriptor and
- * require an open to take its place. Every descriptor is closed before the
- * probe exits, 0 when each step held and 1 otherwise.
+ * require an open to take its place. The file is the same every time, since
+ * what fills is this process's table and not the file system's. Every
+ * descriptor is closed before the probe exits, 0 when each step held and 1
+ * otherwise.
  */
 PROBE_START void _start(void)
 {
     int fd, i, refused, opened;
 
-    /* The same file every time: what fills is this process's table. */
     refused = 0;
     for (i = 0; i < TRIES; i++) {
         fd = syscall3(SYS_OPEN, (long)"/hello", O_RDONLY, 0);
@@ -129,7 +130,6 @@ PROBE_START void _start(void)
         sys_exit(1);
     }
 
-    /* A closed descriptor is reusable at once. */
     if (syscall3(SYS_CLOSE, fds[0], 0, 0) != 0) {
         close_all();
         puts("FDFULL FAIL: a descriptor could not be closed");

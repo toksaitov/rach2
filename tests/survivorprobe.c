@@ -43,7 +43,7 @@ PROBE_START void _start(void)
     }
     if (pid == 0) {
         for (;;) {
-            __asm__ __volatile__("" ::: "memory"); /* spin until the kernel ends it */
+            __asm__ __volatile__("" ::: "memory");
         }
     }
     print("SURVIVORPROBE OK\n");

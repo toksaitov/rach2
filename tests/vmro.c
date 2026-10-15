@@ -71,7 +71,6 @@ PROBE_START void _start(void)
         sys_exit(1);
     }
 
-    /* A read is allowed and the lazy page reads zero. */
     if (ro[0] != 0) {
         puts("vmro: ERROR read-only page did not read zero");
         sys_exit(1);
@@ -79,7 +78,7 @@ PROBE_START void _start(void)
 
     puts("vmro: about to write a read-only page");
 
-    ro[0] = 0xFF; /* a store to a PROT_READ page: SIGSEGV */
+    ro[0] = 0xFF;
 
     puts("vmro: ERROR still alive after writing read-only page");
     sys_exit(0);

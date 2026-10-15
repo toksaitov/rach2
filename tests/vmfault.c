@@ -59,7 +59,7 @@ PROBE_START void _start(void)
 
     puts("vmfault: about to dereference a wild pointer");
 
-    *wild = 0x1234; /* no region covers it: SIGSEGV */
+    *wild = 0x1234;
 
     puts("vmfault: ERROR still alive after wild write");
     sys_exit(0);
