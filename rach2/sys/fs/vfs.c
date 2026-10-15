@@ -1,9 +1,7 @@
 /*
- * vfs.c: the mount table and the resolver. The contract is in vfs.h; what
- * is here is the walk, one component at a time, the reference and transient
- * counts, the per-mount namespace lock, the default-answer wrappers, the
- * glue that makes KRFFS and the two synthetic namespaces answer the
- * operation interface, and mount(2) and umount2(2).
+ * The VFS of vfs.h: the mount table, the resolver, the wrappers, mount(2),
+ * binds and umount2(2), and the operations of the KRFFS root and of the
+ * three synthetic types, /dev, /proc and /sys.
  */
 
 #include "../mm/kheap.h"
@@ -41,8 +39,8 @@
 /*
  * The mounts, by number: an array of pointers that grows, each record
  * allocated from the heap when the mount is made and freed when it is
- * unmounted; a NULL slot is free. The root is 0, /dev 1 and /proc 2, for
- * the life of the kernel.
+ * unmounted; a NULL slot is free. The first VFS_PERMANENT entries are made
+ * at boot and last the life of the kernel.
  */
 static struct vfs_mount **mounts;
 static int mount_slots;
@@ -52,8 +50,9 @@ int vfs_mount_slots(void)
     return mount_slots;
 }
 
-/* The array of eight slots, made once: the boot's root installers both
- * need it, and either can run first. */
+/** Make the array of eight slots, once: both root installers of the boot,
+ * `vfs_init` and `vfs_init_root`, need it, and either can run first. Panics
+ * when the heap has no room. */
 static void mount_table_init(void)
 {
     if (mounts) {
@@ -66,8 +65,8 @@ static void mount_table_init(void)
     }
 }
 
-/* A record in slot `idx`, allocated if the slot is empty; NULL when the
- * heap has none. */
+/** The record in slot `idx`, allocated if the slot is empty; NULL when the
+ * heap has no room. */
 static struct vfs_mount *mount_record(int idx)
 {
     if (!mounts[idx]) {
@@ -76,9 +75,9 @@ static struct vfs_mount *mount_record(int idx)
     return mounts[idx];
 }
 
-/* The first free slot past the permanent ones, the array grown by doubling
- * when every slot is taken, with a record in it; -1 when the heap has
- * none. */
+/** The first free slot past the permanent ones, the array grown by doubling
+ * when every slot is taken, with a record in it; -1 when the heap has no
+ * room. */
 static int mount_new_slot(void)
 {
     int i;
@@ -104,7 +103,8 @@ static int mount_new_slot(void)
     return mount_record(i) ? i : -1;
 }
 
-/* Give a user mount's record back; its slot is free for the next. */
+/** Free the record `m` of a mount placed by mount(2), and empty its slot; a
+ * record outside those slots is marked VFS_FREE instead. */
 static void mount_release(struct vfs_mount *m)
 {
     int i;
@@ -132,16 +132,13 @@ struct vfs_mount *vfs_root_mount(void)
     return mounts[0];
 }
 
-/**
- * Test both the mounted view and its backing device for removal.
- * Partition views can be invalidated before the physical record is released.
- */
 int vfs_mount_gone(const struct vfs_mount *mnt)
 {
     return mnt->dev && ((mnt->dev->flags | block_flags(mnt->dev)) & BLOCK_GONE);
 }
 
-/* The mount whose file system `m` shows, for the callers that change it. */
+/** The mount whose file system `m` shows, as `vfs_mount_base` gives it, for
+ * the callers that change it. */
 static struct vfs_mount *mount_base(struct vfs_mount *m)
 {
     return m->bind_of ? m->bind_of : m;
@@ -152,7 +149,7 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
     return m->bind_of ? m->bind_of : m;
 }
 
-/* Whether a write through `mnt` is refused for a read-only mount: its own
+/** Whether a write through `mnt` is refused for a read-only mount: its own
  * flags, or for a bind mount those of the file system it shows. */
 static int mount_rdonly(struct vfs_mount *mnt)
 {
@@ -186,6 +183,8 @@ int vfs_enter(struct vfs_mount *mnt)
     return 0;
 }
 
+/** The unmount waits for the count to reach zero on the queue of the
+ * namespace lock, `ns_wq`. A leave without an enter panics. */
 void vfs_leave(struct vfs_mount *mnt)
 {
     if (mnt->inprogress == 0) {
@@ -193,17 +192,20 @@ void vfs_leave(struct vfs_mount *mnt)
     }
     mnt->inprogress--;
     if (mnt->inprogress == 0 && mnt->state == VFS_UNMOUNTING) {
-        wq_wake_all(&mnt->ns_wq); /* the unmount drains on this queue */
+        wq_wake_all(&mnt->ns_wq);
     }
 }
 
 /* The namespace lock. */
 
+/* A waiter's place in the line for the namespace lock of `mnt`. */
 struct ns_turn {
     struct vfs_mount *mnt;
     uint32_t place;
 };
 
+/** The wait condition of `vfs_ns_lock`: the lock is free and the place of
+ * `arg`, a `struct ns_turn`, is the one served. */
 static int ns_my_turn(void *arg)
 {
     const struct ns_turn *t = arg;
@@ -225,15 +227,13 @@ int vfs_ns_held_by_caller(void)
 }
 
 /**
- * Take the mount's lock, in the order the callers asked for it.
- *
- * A caller takes a place in the line and waits until the lock is free and
- * its place is served, so a process that releases the lock and asks again
- * waits behind everyone who asked meanwhile: a writer that locks for every
- * call cannot take the lock back before a waiter has had it, and so cannot
- * starve the waiter. The order costs no switch of its own; releasing the
- * lock does not yield. A caller that holds the lock takes it again without a
- * place. The wait sleeps and a signal does not end it.
+ * The callers are served in the order they asked. A caller takes a place in
+ * the line and waits until the lock is free and its place is served, so a
+ * process that releases the lock and asks again waits behind everyone who
+ * asked meanwhile: a writer that locks for every call cannot take the lock
+ * back before a waiter has had it, and so cannot starve the waiter. The
+ * order costs no switch of its own; releasing the lock does not yield. A
+ * caller that holds the lock takes it again without a place.
  */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
@@ -254,7 +254,6 @@ void vfs_ns_lock(struct vfs_mount *mnt)
     mnt->ns_depth = 1;
 }
 
-/** Release the lock and serve the next place in the line. */
 void vfs_ns_unlock(struct vfs_mount *mnt)
 {
     mnt = mount_base(mnt);
@@ -270,6 +269,7 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
 
 /* The permission the resolver checks. */
 
+/** Whether `gid` is one of the calling process's supplementary groups. */
 static int in_groups(uint32_t gid)
 {
     uint32_t i;
@@ -282,12 +282,16 @@ static int in_groups(uint32_t gid)
     return 0;
 }
 
-/*
- * The classic nine-bit rule over the attributes the file system reports:
- * one identity class is chosen and judged alone, and a uid of 0 passes
- * unless the thread gave up its capabilities (`nocaps`). `use_real` judges
- * by the real ids, for access(2), the one call that asks who the process
- * really is. The search bit is what walking a directory costs.
+/**
+ * Whether the caller may search the directory `node` of `mnt`: 0, -EACCES,
+ * -ENOTDIR for a node that is not a directory, or the error of `getattr`.
+ *
+ * The rule is the nine-bit rule over the attributes the type reports: one
+ * identity class is chosen and judged alone, and a uid of 0 passes unless
+ * the thread gave up its capabilities (`nocaps`). `use_real` judges by the
+ * real ids, for access(2). A node of a type without `getattr` is
+ * searchable, and so is every directory to the kernel when no process
+ * runs.
  */
 static int may_search(struct vfs_mount *mnt, void *node, int use_real)
 {
@@ -296,7 +300,7 @@ static int may_search(struct vfs_mount *mnt, void *node, int use_real)
     int rc;
 
     if (!mnt->type->ops->getattr) {
-        return 0; /* a flat synthetic namespace is searchable */
+        return 0;
     }
     rc = mnt->type->ops->getattr(mount_base(mnt), node, &st);
     if (rc != 0) {
@@ -333,10 +337,10 @@ static int may_search(struct vfs_mount *mnt, void *node, int use_real)
  *
  * The syscall layer joins a relative name to the working directory's path
  * and the walk starts at the root, where Linux starts a relative walk at the
- * working directory and asks no permission of the directories above it. A
+ * working directory and checks no permission on the directories above it. A
  * process that keeps a directory it may not reach by its path, as `su` to an
  * ordinary user from root's home leaves one, may still name files there
- * relatively, so the walk does not ask search permission for a component on
+ * relatively, so the walk checks no search permission on a component on
  * that way; any other component of such a directory still needs it.
  */
 static int toward_cwd(const struct vfs_ref *start, const char *path, const char *p)
@@ -379,10 +383,13 @@ int vfs_mount_seen(const struct vfs_mount *m)
     return (m->ns_hidden & ns_bit()) == 0;
 }
 
-/* The mount whose root replaces `node` when the walk arrives at it: a child
- * of `mnt` covering that node that the caller's mount namespace sees. The
- * two synthetic mounts cover no node; they are entered by name from the
- * root directory, which `mount_named` matches. */
+/**
+ * The mount whose root replaces `node` when the walk arrives at it: a child
+ * of `mnt` covering that node that the caller's mount namespace sees. A
+ * mount being made or unmounted is returned too, and the walk's
+ * `vfs_enter` answers EBUSY for it. A nameless mount covers no node; it is
+ * entered by name instead (`mount_named`).
+ */
 static struct vfs_mount *mount_covering(struct vfs_mount *mnt, void *node)
 {
     int i;
@@ -390,12 +397,13 @@ static struct vfs_mount *mount_covering(struct vfs_mount *mnt, void *node)
     for (i = 1; i < mount_slots; i++) {
         if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->parent == mnt &&
             mounts[i]->covered && mounts[i]->covered == node && vfs_mount_seen(mounts[i])) {
-            return mounts[i]; /* a transitional mount answers EBUSY on entry */
+            return mounts[i];
         }
     }
     return 0;
 }
 
+/** Whether the strings `a` and `b` are equal. */
 static int streq(const char *a, const char *b)
 {
     while (*a && *a == *b) {
@@ -405,7 +413,7 @@ static int streq(const char *a, const char *b)
     return *a == *b;
 }
 
-/* Whether `path` is below the directory whose path is `dir[0..len)`. */
+/** Whether `path` is below the directory whose path is `dir[0..len)`. */
 static int path_under(const char *path, const char *dir, uint32_t len)
 {
     uint32_t i;
@@ -418,8 +426,8 @@ static int path_under(const char *path, const char *dir, uint32_t len)
     return path[len] == '/';
 }
 
-/* The last component of a mount's recorded path: the name a nameless mount
- * stands at in its parent's root directory. */
+/** The last component of a mount's recorded path: for a nameless mount, the
+ * name it is entered by from its parent's root directory. */
 static const char *path_last(const char *path)
 {
     const char *last = path;
@@ -432,9 +440,10 @@ static const char *path_last(const char *path)
     return last;
 }
 
-/* The nameless mount standing at the name comp[0..len) in the root
- * directory of `mnt`: /dev and /proc in the root's, /dev/shm in /dev's; or
- * NULL. */
+/** The active nameless mount, of those the caller's mount namespace sees,
+ * entered by the name comp[0..len) from the root directory of `mnt`, as
+ * /dev, /proc and /sys are from the root's and /dev/shm and /dev/mqueue
+ * from /dev's; or NULL. */
 static struct vfs_mount *mount_named_at(struct vfs_mount *mnt, const char *comp, uint32_t len)
 {
     int i;
@@ -457,8 +466,8 @@ static struct vfs_mount *mount_named_at(struct vfs_mount *mnt, const char *comp,
     return 0;
 }
 
-/* The nameless mount standing at `name` in the root directory `node` of
- * `mnt`, or NULL. */
+/** The nameless mount entered by `name` from `node` of `mnt` when `node` is
+ * the mount's root directory, as `mount_named_at` finds it; or NULL. */
 static struct vfs_mount *mount_named(struct vfs_mount *mnt, void *node, const char *name)
 {
     return node == mnt->root ? mount_named_at(mnt, name, (uint32_t)k_strlen(name)) : 0;
@@ -496,7 +505,6 @@ struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *
         mnt->type->ops->lookup(mount_base(mnt), node, name, &found) != 0) {
         return 0;
     }
-    /* A mount still being made covers the node as well as an active one. */
     for (i = 1; i < mount_slots; i++) {
         if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->parent == mnt &&
             mounts[i]->covered == found && vfs_mount_seen(mounts[i])) {
@@ -550,6 +558,12 @@ int vfs_leaf_root(struct vfs_mount *mnt, void *node, const char *name)
     return is;
 }
 
+/**
+ * The recorded path of the root mount, "/", goes in front of nothing, since
+ * the type's path is already the whole. Through a bind, the bind's root is
+ * taken off the front of the type's path. The path of a mount's root is the
+ * path of the directory it covers, with no slash after it.
+ */
 int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap)
 {
     uint32_t ml = (uint32_t)k_strlen(mnt->covered_path);
@@ -563,7 +577,7 @@ int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap)
         return -ENOENT;
     }
     if (ml <= 1) {
-        ml = 0; /* the root mount: the type's path is the whole */
+        ml = 0;
     }
     if (ml + 2 > cap) {
         return -ENAMETOOLONG;
@@ -579,7 +593,7 @@ int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap)
         uint32_t bl = (uint32_t)k_strlen(mnt->bind_root);
 
         if (!path_under(out + ml, mnt->bind_root, bl) && !streq(out + ml, mnt->bind_root)) {
-            return -ENOENT; /* a node of the file system the bind does not show */
+            return -ENOENT;
         }
         k_memmove(out + ml, out + ml + bl, k_strlen(out + ml + bl) + 1);
         if (out[ml] == '\0') {
@@ -588,20 +602,20 @@ int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap)
         }
     }
     if (ml > 0 && out[ml + 1] == '\0') {
-        out[ml] = '\0'; /* the mount's root is the directory it covers */
+        out[ml] = '\0';
     }
     return 0;
 }
 
-/*
- * A locked walk takes a mount's namespace lock only where the type asks for
- * it. KRFFS moves a file's bytes while they are open and ext2 holds a batch
- * of dirty blocks between calls, so an open of either must register its
- * description under the lock or it can land on an offset another file has
- * taken. A type with neither property needs nothing here, and locking it
- * would serialise lookups that are meant to run together: two processes
- * opening one cold file on a FAT volume must both reach the buffer cache,
- * which is what `tests/run mount` counts.
+/**
+ * Take the namespace lock of `mnt` for a locked walk, VFS_WALK_LOCK, on a
+ * type that sets `ns_serialised` only. KRFFS moves a file's bytes while they
+ * are open and ext2 keeps a batch of dirty blocks between calls, so an open
+ * of either must register its description under the lock or it can land on
+ * an offset another file has taken. On a type without the bit the lock would
+ * serialise lookups that are meant to run together: two processes opening
+ * one cold file on a FAT volume must both reach the buffer cache, which is
+ * what `tests/run mount` counts.
  */
 static void walk_lock(struct vfs_mount *mnt, int locked)
 {
@@ -624,10 +638,12 @@ void vfs_walk_unlock(struct vfs_mount *mnt)
 }
 
 /**
- * Move the held node and transient reference to the next mount.
- *
- * A locked walk releases the old mount before waiting for the new lock.
- * Mount crossings use a held covered directory or a mount's root.
+ * Move the walk at `cur` to `node` of `mnt`, a covered directory or a
+ * mount's root: hold the node, put the old one, and when the mount changes,
+ * enter the new mount before the old one is left. The put, which may sleep,
+ * comes before the old mount is left, and a locked walk releases the old
+ * mount's lock before it waits for the new one. 0, or -EBUSY for a mount
+ * that is not active, with `cur` as it was.
  */
 static int walk_move(struct vfs_ref *cur, struct vfs_mount *mnt, void *node, int locked)
 {
@@ -641,8 +657,6 @@ static int walk_move(struct vfs_ref *cur, struct vfs_mount *mnt, void *node, int
         }
     }
     vfs_ref_hold(&next);
-    /* The put, which may sleep, before the mount is left; the put clears
-     * the reference, so the mount is remembered first. */
     {
         struct vfs_mount *was = cur->mnt;
 
@@ -657,8 +671,8 @@ static int walk_move(struct vfs_ref *cur, struct vfs_mount *mnt, void *node, int
     return 0;
 }
 
-/* Where an absolute path starts: the calling process's root, which chroot
- * set, or the root of the root mount. */
+/** Where an absolute path starts, into `r`: the calling process's root,
+ * which chroot set, or the root of the root mount. */
 static void walk_root(struct vfs_ref *r)
 {
     if (current_proc && current_proc->fs->root_mnt) {
@@ -685,7 +699,7 @@ static int root_current(const struct vfs_ref *root)
     return now.mnt == root->mnt && now.node == root->node;
 }
 
-/* Whether `..` at `cur` stays there: at the walk's root, and at the root of
+/** Whether `..` at `cur` stays there: at the walk's root, and at the root of
  * the root mount, above which there is nothing, whatever root the walk has. */
 static int dotdot_stays(const struct vfs_ref *cur, const struct vfs_ref *root)
 {
@@ -693,7 +707,7 @@ static int dotdot_stays(const struct vfs_ref *cur, const struct vfs_ref *root)
            (cur->mnt == mounts[0] && cur->node == mounts[0]->root);
 }
 
-/* Replace the node `cur` holds with `node`, held already, on the same mount:
+/** Replace the node `cur` holds with `node`, held already, on the same mount:
  * the put clears the reference, so the mount is kept across it. */
 static void ref_move_node(struct vfs_ref *cur, void *node)
 {
@@ -720,7 +734,10 @@ static int named_in_rest(const struct vfs_ref *cur, const char *p)
     return cur->node == cur->mnt->root && mount_named_at(cur->mnt, p, len) != 0;
 }
 
-/** Copy the unwalked final component and locate it within a parent path. */
+/** For a VFS_WALK_PARENT walk, copy the last component of `path`, trailing
+ * slashes passed over, into `leaf` of `leafcap` bytes, and point `*last` at
+ * it in `path`. 0, -EINVAL for a path with no component, or
+ * -ENAMETOOLONG. */
 static int walk_leaf(const char *path, char *leaf, uint32_t leafcap, const char **last)
 {
     const char *end = path + k_strlen(path);
@@ -745,13 +762,15 @@ static int walk_leaf(const char *path, char *leaf, uint32_t leafcap, const char 
     return 0;
 }
 
-/*
+/**
  * Splice the target of the link `found` on `mnt` in front of `rest`, the
  * part of the path after the link, in the path page `*linkpath`, taking it
  * and `*target` at the first link of the walk; `found` is put. The walk goes
  * on at `*linkpath`: 1 when the target is absolute, so from the root, 0 when
  * it is relative, or -ELOOP past VFS_LINK_MAX links, -ENOENT for an empty
- * target, -ENAMETOOLONG, -ENOMEM, or the type's error.
+ * target, -ENAMETOOLONG, -ENOMEM, or the type's error. The rest may already
+ * be inside `*linkpath`, from a link followed before this one, so it moves
+ * before the target is written over it.
  */
 static int walk_link(struct vfs_mount *mnt, void *found, const char *rest, char **linkpath,
                      char **target, int *links)
@@ -778,13 +797,11 @@ static int walk_link(struct vfs_mount *mnt, void *found, const char *rest, char 
         return tlen;
     }
     if (tlen == 0) {
-        return -ENOENT; /* an empty target names nothing */
+        return -ENOENT;
     }
     if ((uint32_t)tlen + join + rlen + 1 > VFS_PATH_MAX) {
         return -ENAMETOOLONG;
     }
-    /* The rest may already be inside `linkpath`, from a link followed before
-     * this one, so it moves before the target is written over it. */
     k_memmove(*linkpath + tlen + join, rest, rlen + 1);
     k_memcpy(*linkpath, *target, (uint32_t)tlen);
     if (join) {
@@ -822,11 +839,23 @@ static int walk_is_link(struct vfs_mount *mnt, void *node)
 }
 
 /**
- * Resolve one path. See vfs.h for the whole contract. The loop takes one
- * component at a time and handles five cases: `.`, `..`, a mount whose type
- * takes the rest of the path in one call, a nameless mount entered by name
- * from the root directory, and the ordinary lookup of one name, after which
- * a symbolic link is followed and a covering mount is crossed.
+ * Resolve one path, as `vfs_resolve` says; with `unmount`, for an unmount,
+ * the walk may end on a mount whose device has gone, though it looks up no
+ * name inside one, so that the unmount can release that mount.
+ *
+ * The loop takes one component at a time and handles five cases: `.`, `..`,
+ * a mount whose type takes the rest of the path in one call, a nameless
+ * mount entered by name from the root directory, and the ordinary lookup of
+ * one name, after which a symbolic link is followed and a covering mount is
+ * crossed.
+ *
+ * A type that takes the rest is handed the rest of the path; with
+ * VFS_WALK_PARENT, a copy of the part before the leaf, after which the walk
+ * goes on at the same offset of the path, and when that part is empty the
+ * walk ends at the mount's root. On its VFS_CLIMB the walk goes on, the
+ * `..` used up, at the covered node in the parent mount, or for a nameless
+ * mount at the root of the root mount; on its VFS_ROOT it goes on at the
+ * mount's root directory with the name of the nameless mount there.
  *
  * On a type with symbolic links, a component that is one is followed when
  * more of the path comes after it, and at the last component unless the
@@ -834,17 +863,18 @@ static int walk_is_link(struct vfs_mount *mnt, void *node)
  * absolute target restarts at the root, and the walk goes on from the
  * directory the link was found in. A mount covers a directory, so a link is
  * never a covered node. /proc/<pid>/exe is followed to the program's file
- * itself (`walk_exe`), and no text.
+ * itself (`walk_exe`) rather than by its text.
  *
  * The target and the path it is joined to are in two path pages, taken at
  * the first link and given back on every return; a walk that meets no link
  * takes none.
  *
  * `..` at the root of a mount over a directory runs again at the covered
- * directory, in the parent mount, since the mount stands in for it. A
- * nameless mount stands by name in its parent's root directory, as /dev/shm
- * does in /dev's, so `..` at its root is that directory and is used up
- * there: run again, the synthetic type would climb once more.
+ * directory, in the parent mount, since the mount's root replaces that
+ * directory. A nameless mount is entered by name from its parent's root
+ * directory, as /dev/shm is from /dev's, so `..` at its root is that
+ * directory and is used up there: run again, the synthetic type would climb
+ * once more.
  *
  * The walk keeps the root it starts from: `..` stops there, and at the root
  * of the root mount whatever the root, and an absolute link's target starts
@@ -857,10 +887,8 @@ static int walk_is_link(struct vfs_mount *mnt, void *node)
  * for `..` and for links.
  *
  * VFS_WALK_LOCK holds one namespace lock at a time and returns with the
- * final mount locked when its type asks for the lock, so an open can
- * register before relocation. An unmount may resolve a removed mount at the
- * final component only, so it can release that mount without permitting
- * lookup inside it.
+ * final mount locked when its type sets `ns_serialised`, so an open can
+ * register its description before a relocation.
  */
 static int resolve_path(const struct vfs_ref *start, const char *path, int flags,
                         struct vfs_ref *out, char *leaf, uint32_t leafcap, int unmount)
@@ -927,14 +955,11 @@ begin:
             goto out_err;
         }
 
-        /* The rest-taking mounts: the whole remainder in one call, with a
-         * climb above their root returned here to continue at the parent. */
         if (cur.mnt->type->ops->lookup_rest && !named_in_rest(&cur, p)) {
             const char *left = 0;
             char restbuf[VFS_NAME_MAX + 1];
             const char *rest = p;
 
-            /* With WALK_PARENT only the part before the leaf is walked. */
             if (last_comp) {
                 uint32_t rlen = (uint32_t)(last_comp - p);
 
@@ -942,7 +967,7 @@ begin:
                     rlen--;
                 }
                 if (rlen == 0) {
-                    break; /* the parent is this mount's root */
+                    break;
                 }
                 if (rlen > VFS_NAME_MAX) {
                     rc = -ENAMETOOLONG;
@@ -957,8 +982,6 @@ begin:
                 struct vfs_mount *pm = cur.mnt->parent ? cur.mnt->parent : mounts[0];
                 void *pnode = cur.mnt->covered ? cur.mnt->covered : mounts[0]->root;
                 if (rest == restbuf) {
-                    /* The type used part of a bounded copy; continue at the
-                     * same offset of the real path. */
                     p += left - restbuf;
                 } else {
                     p = left;
@@ -1028,7 +1051,7 @@ begin:
                 goto restart;
             }
             if (dotdot_stays(&cur, &root)) {
-                continue; /* a root is its own parent */
+                continue;
             }
             if (cur.node == cur.mnt->root && cur.mnt->covered) {
                 p -= 2;
@@ -1047,7 +1070,6 @@ begin:
             }
         }
 
-        /* The nameless mounts, entered by name from the root directory. */
         m = mount_named(cur.mnt, cur.node, comp);
         if (m) {
             rc = walk_move(&cur, m, m->root, locked);
@@ -1100,8 +1122,6 @@ begin:
         }
         ref_move_node(&cur, found);
 
-        /* A directory covered by a mount is replaced by that mount's root
-         * before the walk continues. */
         m = mount_covering(cur.mnt, cur.node);
         if (m) {
             rc = walk_move(&cur, m, m->root, locked);
@@ -1143,7 +1163,6 @@ out_err:
     return rc;
 }
 
-/** Resolve a path only while its mount's device is present. */
 int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct vfs_ref *out,
                 char *leaf, uint32_t leafcap)
 {
@@ -1215,11 +1234,6 @@ static void repoint_one(struct vfs_mount *mnt, const void *from, void *to)
     lock_repoint(mnt, (uint64_t)(uintptr_t)from, (uint64_t)(uintptr_t)to);
 }
 
-/**
- * KRFFS moved a node from `from` to `to`: every reference to it moves, on
- * the mount `mnt` and on each bind that shows its file system, and the
- * descriptors of the boot root, which hold its nodes themselves.
- */
 void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to)
 {
     process_t *pr;
@@ -1274,12 +1288,6 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
     return n;
 }
 
-/**
- * Truncate through an open handle unless a loop device holds the file.
- *
- * The KRFFS root uses its node as a handle, including for `O_TRUNC`.
- * Mounted types receive the handle returned by their open operation.
- */
 int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
     int rc;
@@ -1373,10 +1381,6 @@ int vfs_device_holds(block_device_t *dev)
         if (!mounts[i] || mounts[i]->state == VFS_FREE || mounts[i]->dev != dev) {
             continue;
         }
-        /* The mount itself is one hold, and each description, working
-         * directory, covering mount and operation in flight on it is
-         * another. An unmount waits out the operations in flight and refuses
-         * with EBUSY while anything else still holds it. */
         held += 1 + (int)mounts[i]->refs + (int)mounts[i]->inprogress;
     }
     return held;
@@ -1419,10 +1423,12 @@ int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     return mnt->type->ops->getattr(mount_base(mnt), node, st);
 }
 
-/* inotify's view of the namespace operations: each asks what it needs only
- * while a watch exists (`inotify_watches`). */
+/* The attributes the wrappers read for inotify and for the inode flags.
+ * Those inotify reports are read only while a watch exists
+ * (`inotify_watches`). */
 
-/** The attributes of `node`, into `st`; 0, or -1 when the type has none. */
+/** The attributes of `node`, into `st`; 0, or -1 when the type has no
+ * `getattr` or it fails. */
 static int watched_node(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     return mnt->type->ops->getattr && mnt->type->ops->getattr(mount_base(mnt), node, st) == 0 ? 0
@@ -1469,12 +1475,14 @@ static uint32_t guard_entry(struct vfs_mount *mnt, void *dir, const char *name)
     return st.flags & (VFS_FL_IMMUTABLE | VFS_FL_APPEND);
 }
 
+/** IN_ISDIR for the attributes `st` of a directory, else 0. */
 static uint32_t watched_isdir(const struct vfs_stat *st)
 {
     return (st->mode & 0170000u) == 0040000u ? IN_ISDIR : 0u;
 }
 
-/** The entry `name` was made in `dir`, a directory when `isdir`. */
+/** Tell inotify, while a watch exists, that the entry `name` was made in
+ * `dir`; `isdir` is IN_ISDIR for a directory, else 0. */
 static void watch_made(struct vfs_mount *mnt, void *dir, const char *name, uint32_t isdir)
 {
     struct vfs_stat st;
@@ -1485,10 +1493,11 @@ static void watch_made(struct vfs_mount *mnt, void *dir, const char *name, uint3
 }
 
 /**
- * The entry `name` of the directory `dir_ino` is gone, and `was` is what it
- * named: a file's links changed, as Linux reports with IN_ATTRIB, and a
- * directory, or a file with no link left, is gone itself. Linux reports
- * that of a file at its last close; here it is at its last link's removal.
+ * Tell inotify that the entry `name` of the directory `dir_ino` is gone,
+ * and `was` is what it named: a file's links changed, as Linux reports with
+ * IN_ATTRIB, and a directory, or a file with no link left, is gone itself.
+ * Linux reports that of a file at its last close; here it is at its last
+ * link's removal.
  */
 static void watch_removed(struct vfs_mount *mnt, uint64_t dir_ino, const char *name,
                           const struct vfs_stat *was)
@@ -1535,8 +1544,6 @@ int vfs_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_st
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
-    /* The length of a file that backs a loop device is the device's sector
-     * count: nothing may change it while the device is attached. */
     if ((what & VFS_SET_SIZE) && loop_backs(mnt, node)) {
         return -EBUSY;
     }
@@ -1569,7 +1576,7 @@ int vfs_open_node(struct vfs_mount *mnt, void *node, int flags, void **handle)
             return rc;
         }
     } else {
-        *handle = node; /* a type that needs no per-open object */
+        *handle = node;
     }
     mnt->opens++;
     return 0;
@@ -1698,11 +1705,6 @@ static int rename_guarded(struct vfs_mount *mnt, void *olddir, const char *oldna
     return (to & VFS_FL_APPEND) || guard_entry(mnt, newdir, newname);
 }
 
-/**
- * Rename, and tell inotify: IN_MOVED_FROM and IN_MOVED_TO with one cookie
- * to the two directories, IN_MOVE_SELF to the file moved, and to a file the
- * new name replaced what its removal would have told.
- */
 int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
                const char *newname)
 {
@@ -1757,7 +1759,7 @@ int vfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
         return -EROFS;
     }
     if (!mnt->type->ops->link) {
-        return -EPERM; /* a file system without links */
+        return -EPERM;
     }
     if (guard_node(mnt, node) || (guard_node(mnt, dir) & VFS_FL_IMMUTABLE)) {
         return -EPERM; /* vfs_link's rule */
@@ -1802,7 +1804,7 @@ int vfs_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
         return -EROFS;
     }
     if (!mnt->type->ops->mknod) {
-        return -EPERM; /* a file system with no such nodes */
+        return -EPERM;
     }
     rc = mnt->type->ops->mknod(mount_base(mnt), dir, name, mode, rdev, node);
     if (rc == 0) {
@@ -1823,12 +1825,16 @@ int vfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
     return mnt->type->ops->statfs(mount_base(mnt), st);
 }
 
-/* The KRFFS type: the root, adapted onto the interface. */
+/* The operations of the KRFFS root, over the core in krffs.c. */
 
-/* A node handle is the node's place in the mapped image; the root is
- * `krffs_fs->node`. Hold and put are NULL because a place is not a
- * resource. */
+/* A node handle is the node's address in the mapped image, and the root
+ * directory's is `krffs_fs->node`. Hold and put are NULL: the root counts no
+ * holds, and the system call layer finds a node's holders by a scan
+ * (`fd_node_holders` in syscall_fs.c). */
 
+/** The `lookup` of the KRFFS root: `.`, `..`, which at the root directory
+ * is the root directory, or a child by name, -ENOENT when there is none.
+ * `dir` NULL is the root directory. */
 static int kfs_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
 {
     krffs_node_t *d = dir ? dir : krffs_fs->node;
@@ -1852,6 +1858,9 @@ static int kfs_lookup(struct vfs_mount *mnt, void *dir, const char *name, void *
     return 0;
 }
 
+/** The `getattr` of the KRFFS root: a node's mode, owner, size and times,
+ * one link, and the inode number `krffs_node_ino` gives. The root directory
+ * reports mode 0755 and inode 1, owned by root, with no times. */
 static int kfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     krffs_node_t *n = node;
@@ -1859,8 +1868,7 @@ static int kfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     (void)mnt;
     k_memset(st, 0, sizeof(*st));
     if (n == krffs_fs->node) {
-        /* The root's stored mode has the dirty flag in it; it reads as the
-         * fixed identity stat reports. */
+        /* The root's stored mode has the dirty flag, KRFFS_MODE_DIRTY. */
         st->mode = VFS_S_IFDIR | 0755u;
         st->ino = 1;
         return 0;
@@ -1880,6 +1888,8 @@ static int kfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     return 0;
 }
 
+/** The `statfs` of the KRFFS root: blocks of 1 KiB, the image's total and
+ * free bytes in them, and the longest name the format keeps. */
 static int kfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 {
     (void)mnt;
@@ -1891,12 +1901,16 @@ static int kfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
     return 0;
 }
 
+/** The `sync` of the KRFFS root: write the dirty pages of the page cache
+ * (`pc_sync`); 0, or -EIO when a page failed or was busy. */
 static int kfs_sync(struct vfs_mount *mnt)
 {
     (void)mnt;
     return pc_sync() == 0 ? 0 : -EIO;
 }
 
+/** Read `count` bytes at `offset` of the file whose node is `handle`, with
+ * the mount's lock held: the bytes read, 0 past the end, or -EIO. */
 static int32_t kfs_read_locked(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
                                uint64_t offset)
 {
@@ -1910,8 +1924,10 @@ static int32_t kfs_read_locked(struct vfs_mount *mnt, void *handle, void *buf, u
     return n < 0 ? -EIO : n;
 }
 
-/* A grow can relocate the node; every holder, this writer's description
- * included, is repointed before the byte count returns. */
+/** Write `count` bytes at `offset` of the file whose node is `handle`, with
+ * the mount's lock held: the bytes written, -EFBIG past 4 GiB, -ENOSPC, or
+ * -EIO. A grow can relocate the node; every holder, this writer's
+ * description included, is repointed before the byte count returns. */
 static int32_t kfs_write_locked(struct vfs_mount *mnt, void *handle, const void *buf,
                                 uint32_t count, uint64_t offset)
 {
@@ -1934,9 +1950,9 @@ static int32_t kfs_write_locked(struct vfs_mount *mnt, void *handle, const void 
     return written;
 }
 
-/**
- * Truncate the held node and repoint its holders if it moves.
- */
+/** Truncate the file whose node is `handle` to `size`, with the mount's lock
+ * held, and repoint its holders if the node moves, even when the truncation
+ * then fails: 0, -EFBIG past 4 GiB, -ENOSPC, or -EIO. */
 static int kfs_truncate_locked(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
     krffs_node_t *n = handle;
@@ -1955,17 +1971,27 @@ static int kfs_truncate_locked(struct vfs_mount *mnt, void *handle, uint64_t siz
     return rc == 0 ? 0 : -EIO;
 }
 
+/** The `fsync` of the KRFFS root, with the mount's lock held: the page cache
+ * has no write of one file, so every dirty page is written, as `kfs_sync`
+ * writes them; 0, or -EIO. */
 static int kfs_fsync_locked(struct vfs_mount *mnt, void *handle)
 {
     (void)mnt;
     (void)handle;
-    return pc_sync() == 0 ? 0 : -EIO; /* the window flushes whole */
+    return pc_sync() == 0 ? 0 : -EIO;
 }
 
-/* The cursor is the entry node's byte offset in the image plus one, so a
+/**
+ * The entry of the directory `handle` at or after `*cursor`, with the
+ * mount's lock held: 1 with `ent` filled, or 0 at the end.
+ *
+ * The cursor is the entry node's byte offset in the image plus one, so a
  * deletion between calls never renumbers the survivors; the traversal
  * visits nodes in ascending offsets, so the first match at or past the
- * cursor is the next entry. */
+ * cursor is the next entry. An orphan, a node unlinked while it is held,
+ * keeps its parent id but has no name, and is left out, since no path
+ * reaches it.
+ */
 static int kfs_readdir_locked(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
                               struct vfs_dirent *ent)
 {
@@ -1977,8 +2003,6 @@ static int kfs_readdir_locked(struct vfs_mount *mnt, void *handle, uint32_t *cur
     do {
         uint32_t node_off = (uint32_t)((uintptr_t)node - (uintptr_t)krffs_fs->node);
 
-        /* An orphan keeps its parent id but has no name; a caller that
-         * cannot reach it by path must not see it in a listing either. */
         if (node->type == KRFFS_RESERVED_NODE && node->parent_id == dir_id &&
             node->name[0] != '\0' && node_off >= *cursor) {
             uint32_t nlen = (uint32_t)k_strlen((const char *)node->name);
@@ -1998,9 +2022,9 @@ static int kfs_readdir_locked(struct vfs_mount *mnt, void *handle, uint32_t *cur
     return 0;
 }
 
-/* The namespace operations go through the parent's canonical path, since
- * the namespace half of KRFFS takes paths; a name is joined to the held
- * directory and handed to the path call. */
+/** Join `name` to the path of the directory `dir`, NULL for the root
+ * directory, in `path` of `cap` bytes: the namespace operations call the
+ * core by path. 0, or -ENAMETOOLONG. */
 static int kfs_join(void *dir, const char *name, char *path, uint32_t cap)
 {
     krffs_node_t *d = dir ? dir : krffs_fs->node;
@@ -2024,6 +2048,8 @@ static int kfs_join(void *dir, const char *name, char *path, uint32_t cap)
     return 0;
 }
 
+/** The `unlink` of the KRFFS root, of `name` in `dir` by its path: 0,
+ * -ENAMETOOLONG, or -EIO when the core fails. */
 static int kfs_unlink(struct vfs_mount *mnt, void *dir, const char *name)
 {
     char path[256];
@@ -2037,10 +2063,12 @@ static int kfs_unlink(struct vfs_mount *mnt, void *dir, const char *name)
 }
 
 /**
- * Make the directory `name` in `dir`. The parent is resolved and held, so
- * the core refuses one of two things: a name whose directory identifier
- * another directory has (`KRFFS_ETAKEN`), which is EINVAL, the answer for a
- * name the file system cannot hold, and a root with no room, ENOSPC.
+ * The `mkdir` of the KRFFS root, of `name` in `dir`. The parent is resolved
+ * and held, so the core fails for one of two reasons: a name whose
+ * directory identifier another directory has (`KRFFS_ETAKEN`), which is
+ * EINVAL, the answer for a name the file system cannot hold, and a root
+ * with no room, ENOSPC. `mode` is not used: the system call layer sets the
+ * new node's mode and owner afterwards (`krffs_stamp_new_node`).
  */
 static int kfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 {
@@ -2048,7 +2076,7 @@ static int kfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     int rc = kfs_join(dir, name, path, sizeof(path));
 
     (void)mnt;
-    (void)mode; /* the caller stamps mode and owner under its own rules */
+    (void)mode;
     if (rc != 0) {
         return rc;
     }
@@ -2059,6 +2087,9 @@ static int kfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     return rc == 0 ? 0 : -ENOSPC;
 }
 
+/** The `rmdir` of the KRFFS root, of `name` in `dir`: 0, -ENAMETOOLONG, or
+ * -ENOTEMPTY. The caller has resolved the name to a directory, so emptiness
+ * is the one thing left for the core to fail on. */
 static int kfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
 {
     char path[256];
@@ -2068,10 +2099,11 @@ static int kfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     if (rc != 0) {
         return rc;
     }
-    /* The target is resolved and a directory, so what remains is emptiness. */
     return krffs_rmdir(path) == 0 ? 0 : -ENOTEMPTY;
 }
 
+/** The `rename` of the KRFFS root, by the two paths: 0, -ENAMETOOLONG, or
+ * -EIO when the core fails. */
 static int kfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
                       const char *newname)
 {
@@ -2090,8 +2122,11 @@ static int kfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
     return krffs_rename(oldp + (oldp[0] == '/'), newp + (newp[0] == '/')) == 0 ? 0 : -EIO;
 }
 
-/* Creation goes through the parent's canonical path like the other
- * namespace operations; the node comes back resolved. */
+/** The `create` of the KRFFS root: the regular file `name` in `dir`, made by
+ * its path, and its node in `*node`. 0, -ENAMETOOLONG, -ENOSPC when the core
+ * cannot make it, or -EIO when the name is not found after. `mode` is not
+ * used: the system call layer sets the new node's mode and owner afterwards
+ * (`krffs_stamp_new_node`). */
 static int kfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
                       void **node)
 {
@@ -2100,7 +2135,7 @@ static int kfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32
     int rc;
 
     (void)mnt;
-    (void)mode; /* the caller stamps mode and owner under its own rules */
+    (void)mode;
     rc = kfs_join(dir, name, path, sizeof(path));
     if (rc != 0) {
         return rc;
@@ -2117,11 +2152,11 @@ static int kfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32
 }
 
 /**
- * A FIFO or a socket, made as `kfs_create` makes a file, with its type bits
- * on the medium before its name. A device node has a number KRFFS has no
- * field for, and is refused with EPERM. A name already there is EEXIST: the
- * core's create answers success for one, which would make this somebody
- * else's node.
+ * The `mknod` of the KRFFS root: a FIFO or a socket, made as `kfs_create`
+ * makes a file, with its type bits on the medium before its name. A device
+ * node has a number KRFFS has no field for, and is -EPERM. A name already
+ * there is -EEXIST, checked first, since the core's create succeeds for an
+ * existing name and the node found after would be that name's.
  */
 static int kfs_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
                      uint32_t rdev, void **node)
@@ -2155,15 +2190,18 @@ static int kfs_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_
 }
 
 /*
- * The data operations, under the mount's lock. The namespace operations
- * arrive locked from the common layer; these take the lock themselves. The
- * disk driver sleeps for its commands inside a write's sync points, and a
+ * The data operations take the mount's lock themselves; the namespace
+ * operations are called with it held, and a description's lock
+ * (`fd_ofd_lock`) may hold it already for a data operation, which then takes
+ * it again. The disk driver sleeps for its commands inside a write, and a
  * second process that grows a file of its own meanwhile moves nodes under
  * the first: without the lock, a file whose node moved would be written at
  * the old place, over the header of the node after it. The lock is the same
  * one the namespace operations hold, so a create and a write cannot
  * interleave either.
  */
+
+/** The `read` of the KRFFS root: `kfs_read_locked` under the lock. */
 static int32_t kfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
                         uint64_t offset)
 {
@@ -2175,6 +2213,7 @@ static int32_t kfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t
     return rc;
 }
 
+/** The `write` of the KRFFS root: `kfs_write_locked` under the lock. */
 static int32_t kfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                          uint64_t offset)
 {
@@ -2186,6 +2225,7 @@ static int32_t kfs_write(struct vfs_mount *mnt, void *handle, const void *buf, u
     return rc;
 }
 
+/** The `truncate` of the KRFFS root: `kfs_truncate_locked` under the lock. */
 static int kfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
     int rc;
@@ -2196,6 +2236,7 @@ static int kfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     return rc;
 }
 
+/** The `fsync` of the KRFFS root: `kfs_fsync_locked` under the lock. */
 static int kfs_fsync(struct vfs_mount *mnt, void *handle)
 {
     int rc;
@@ -2206,6 +2247,7 @@ static int kfs_fsync(struct vfs_mount *mnt, void *handle)
     return rc;
 }
 
+/** The `readdir` of the KRFFS root: `kfs_readdir_locked` under the lock. */
 static int kfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
                        struct vfs_dirent *ent)
 {
@@ -2232,7 +2274,7 @@ static const struct vfs_ops krffs_ops = {
     kfs_statfs,  kfs_sync,    0, /* prepare_unmount: the root is permanent */
     0,                           /* abort_unmount */
     0,                           /* unmount */
-    0,                           /* path: KRFFS directories do not move */
+    0,                           /* path: vfs_node_path reads the core's */
     0,                           /* symlink */
     kfs_mknod,   0,              /* pin: the syscall layer's holders keep a node */
     0,                           /* unpin */
@@ -2240,6 +2282,8 @@ static const struct vfs_ops krffs_ops = {
     0,                           /* fallocate */
 };
 
+/** The constructor of the root's entry: the mount's root is the image's root
+ * directory; -ENOENT when no image is up. */
 static int kfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
                      const char *options)
 {
@@ -2255,23 +2299,23 @@ static int kfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
 
 const struct vfs_type vfs_krffs_type = {"krffs", kfs_mount, &krffs_ops, 1, 0};
 
-/* The two synthetic types. */
+/* The three synthetic types, of /dev, /proc and /sys. */
 
 /*
  * A synthetic node is a classified path. The classification has a device
  * leaf name in it, which a value packed into the pointer cannot, so the
  * nodes are records from the heap and hold/put count references to them.
- * A synthetic node lives for the length of one syscall (the open that
- * follows a resolution binds a device's own ops onto the descriptor); a
- * record the heap cannot give answers ENOMEM.
+ * The open that follows a resolution sets up its descriptor from the
+ * classification, so a node seldom outlives its system call; a mount's root
+ * is held for the life of the mount.
  */
 struct synth_node {
     struct vpath vp;
-    int refs;
+    int refs; /* the holds; the last put frees the record */
 };
 
-/* A synthetic node is allocated from the heap when a path is resolved to
- * it and freed when its last holder puts it. */
+/** A new node of the classification `vp`, with one hold, in `*node`: 0, or
+ * -ENOMEM, with a record in the kernel log, when the heap has no room. */
 static int synth_take(const struct vpath *vp, void **node)
 {
     struct synth_node *n = kzalloc(sizeof(*n));
@@ -2286,12 +2330,15 @@ static int synth_take(const struct vpath *vp, void **node)
     return 0;
 }
 
+/** The `hold` of the synthetic types: one more reference to `node`. */
 static void synth_hold(struct vfs_mount *mnt, void *node)
 {
     (void)mnt;
     ((struct synth_node *)node)->refs++;
 }
 
+/** The `put` of the synthetic types: one reference fewer, and the record
+ * freed with the last. */
 static void synth_put(struct vfs_mount *mnt, void *node)
 {
     struct synth_node *n = node;
@@ -2303,14 +2350,16 @@ static void synth_put(struct vfs_mount *mnt, void *node)
 }
 
 /**
- * The rest of a path through a flat synthetic namespace, `..` inside it
- * resolved lexically because the namespace is a table of spellings, not a
- * tree. A `..` that would climb above the mount root returns `VFS_CLIMB`
- * with `*left` at the remainder, and the resolver continues at the covered
- * node. A name at the mount root that a nameless mount stands at, as `shm`
- * in /dev after `pts/..`, returns `VFS_ROOT` with `*left` at that name, and
- * the resolver enters the mount from the root directory. The full spelling
- * (`prefix` + the canonical rest) goes through `synth_classify`.
+ * The rest of a path through a synthetic namespace whose root directory
+ * `prefix` names, "dev", "proc" or "sys". A `..` inside it is resolved by
+ * the text, since the namespace is a table classified by string. A `..`
+ * that would climb above the mount root returns VFS_CLIMB with `*left` at
+ * the rest after it. A name at the mount root that a nameless mount is
+ * entered by, as `shm` in /dev after `pts/..`, returns VFS_ROOT with
+ * `*left` at that name. Otherwise the whole path, `prefix` and the rest
+ * without its `.` and `..`, is classified (`synth_classify`): 0 with a new
+ * node held, -ENOENT, -ENOTDIR, -ENAMETOOLONG for a path longer than 255
+ * bytes, or -ENOMEM.
  */
 static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *rest, void **node,
                       const char **left)
@@ -2382,27 +2431,31 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *res
     return synth_take(&vp, node);
 }
 
+/** The `lookup_rest` of /dev: `synth_rest` under "dev". */
 static int devfs_rest(struct vfs_mount *mnt, const char *rest, void **node, const char **left)
 {
     return synth_rest(mnt, "dev", rest, node, left);
 }
 
+/** The `lookup_rest` of /proc: `synth_rest` under "proc". */
 static int procfs_rest(struct vfs_mount *mnt, const char *rest, void **node, const char **left)
 {
     return synth_rest(mnt, "proc", rest, node, left);
 }
 
+/** The `lookup_rest` of /sys: `synth_rest` under "sys". */
 static int sysfs_rest(struct vfs_mount *mnt, const char *rest, void **node, const char **left)
 {
     return synth_rest(mnt, "sys", rest, node, left);
 }
 
-/* What the resolver needs of a synthetic node: whether it is a directory or
- * a link it follows, /proc/<pid>/exe, and the mode the search rule reads
- * (0755 under /dev, 0555 under /proc and /sys, all root's). A device's link
- * under /sys is classified, not resolved, as /proc/self is, so to the
- * resolver it is the directory it leads to. The syscall layer reports the
- * full attributes itself. */
+/** The `getattr` of the synthetic types, what the resolver needs of a node:
+ * whether it is a directory or a link it follows, /proc/<pid>/exe, cwd and
+ * root and /dev/log, and the mode the search rule reads (0755 under /dev,
+ * 0555 under /proc and /sys, all root's). A device's link under /sys is
+ * classified rather than resolved, as /proc/self is, so to the resolver it
+ * is the directory it leads to. The system call layer reports the full
+ * attributes itself. */
 static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     const struct synth_node *sn = node;
@@ -2427,12 +2480,13 @@ static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     return 0;
 }
 
-/* The target of a synthetic link as text: /dev/log's, fixed; /proc/<pid>/
- * exe's, the path of the program the process runs (`procfs_readlink_exe`);
- * and /proc/<pid>/cwd's and root's, the paths of its directories
- * (`procfs_readlink_dir`). The resolver goes on from exe's program file
- * itself (`walk_exe`), and from the text of the others, and readlink(2)
- * reads the text through procfs. */
+/** The `readlink` of the synthetic types, the target of a link as text:
+ * /dev/log's, fixed; /proc/<pid>/exe's, the path of the program the process
+ * runs (`procfs_readlink_exe`); and /proc/<pid>/cwd's and root's, the paths
+ * of its directories (`procfs_readlink_dir`). -ENOENT for a process that is
+ * gone, -EINVAL for a node that is no link. The resolver goes on from exe's
+ * program file itself (`walk_exe`), and from the text of the others, and
+ * readlink(2) reads the text through procfs. */
 static int synth_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
     const struct synth_node *sn = node;
@@ -2531,6 +2585,9 @@ static const struct vfs_ops sysfs_vops = {
     0,                                                                      /* fallocate */
 };
 
+/** The constructor of a synthetic mount: its root is a node of the
+ * namespace's own directory, whose name `options` has, held for the life of
+ * the mount. 0, or -ENOMEM. */
 static int synth_mount_root(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
                             const char *options)
 {
@@ -2538,12 +2595,11 @@ static int synth_mount_root(struct vfs_mount *mnt, block_device_t *dev, uint32_t
 
     (void)dev;
     (void)flags;
-    /* The mount root is the namespace's own directory, held for the life of
-     * the mount. */
     synth_classify(options, &vp);
     return synth_take(&vp, &mnt->root);
 }
 
+/** The constructor of /dev, `synth_mount_root` for "dev". */
 static int devfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
                        const char *options)
 {
@@ -2551,6 +2607,7 @@ static int devfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flag
     return synth_mount_root(mnt, dev, flags, "dev");
 }
 
+/** The constructor of /proc, `synth_mount_root` for "proc". */
 static int procfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
                         const char *options)
 {
@@ -2558,6 +2615,7 @@ static int procfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t fla
     return synth_mount_root(mnt, dev, flags, "proc");
 }
 
+/** The constructor of /sys, `synth_mount_root` for "sys". */
 static int sysfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
                        const char *options)
 {
@@ -2569,8 +2627,6 @@ const struct vfs_type vfs_devfs_type = {"devfs", devfs_mount, &devfs_vops, 0, 1}
 const struct vfs_type vfs_procfs_type = {"proc", procfs_mount, &procfs_vops, 0, 1};
 const struct vfs_type vfs_sysfs_type = {"sysfs", sysfs_mount, &sysfs_vops, 0, 1};
 
-/** The classification of a synthetic node, or NULL when `mnt` is not one
- * of the three synthetic mounts. The syscall layer's glue reads it. */
 const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node)
 {
     if (mnt->type != &vfs_devfs_type && mnt->type != &vfs_procfs_type &&
@@ -2582,7 +2638,8 @@ const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node)
 
 /* The permanent entries. */
 
-/** Whether `m` is one of the permanent mounts, which umount2 refuses. */
+/** Whether `m` is one of the permanent mounts, which umount2 answers EBUSY
+ * for. */
 static int mount_permanent(const struct vfs_mount *m)
 {
     int i;
@@ -2596,10 +2653,11 @@ static int mount_permanent(const struct vfs_mount *m)
 }
 
 /**
- * Drop what a refused mount read of device `dev` from the cache, as an
- * unmount does. The disk's nodes read and write the device itself, past the
- * cache, so a block the refused constructor left there would be stale once a
- * program wrote the device, as mkfs does, and the next mount would read it.
+ * Drop what a failed mount read of device `dev` from the cache, as an
+ * unmount does. The device nodes of /dev read and write a device past the
+ * cache, so a block the failed constructor left there would be stale once
+ * a program wrote the device, as mkfs does, and the next mount would read
+ * it. A NULL `dev` has nothing to drop.
  */
 static void mount_refused(block_device_t *dev)
 {
@@ -2608,7 +2666,9 @@ static void mount_refused(block_device_t *dev)
     }
 }
 
-/** Construct permanent mount `idx` of `type` at `path`; a failure panics. */
+/** Construct the permanent mount `idx` of `type` at `path`, under `parent`,
+ * NULL for none, with `options` for the constructor, and make it active. A
+ * failure panics. */
 static void install(int idx, const struct vfs_type *type, const char *path,
                     struct vfs_mount *parent, const char *options)
 {
@@ -2650,11 +2710,12 @@ static void install(int idx, const struct vfs_type *type, const char *path,
  * type cannot host a mount point, so /dev/shm is a nameless mount entered
  * by its name, as /dev and /proc are. Then the tmpfs of memfd_create, with
  * no parent and no path, which nothing enters by name, and whose root, mode
- * 0555, stays empty, since its files have no names; chroot makes it the
- * root of a process that asks for a /proc/PID/fdinfo. Then /sys,
- * read-only, as /dev and /proc are entered, and last the mqueue file system
- * at /dev/mqueue, which lists the first IPC namespace's POSIX queues and is
- * entered by its name in /dev as /dev/shm is.
+ * 0555, stays empty, since its files have no names; chroot to a
+ * /proc/PID/fdinfo makes that root the process's root. Then /sys,
+ * read-only, nosuid, nodev and noexec, entered by name as /dev and /proc
+ * are, and last the mqueue file system at /dev/mqueue, which lists the
+ * first IPC namespace's POSIX queues and is entered by its name in /dev as
+ * /dev/shm is.
  */
 static void install_permanent(void)
 {
@@ -2688,9 +2749,6 @@ int vfs_root_mounted(void)
 void vfs_init(void)
 {
     if (root_installed) {
-        /* A re-mount of the root (the debug shell can remount from the
-         * disk) replaces the image; the entry keeps its slot and takes the
-         * new root node. An ext2 root is not replaced. */
         if (mounts[0]->type == &vfs_krffs_type) {
             mounts[0]->root = krffs_fs->node;
         }
@@ -2740,8 +2798,10 @@ int vfs_init_root(const struct vfs_type *type, struct block_device *dev, const c
 
 /* mount(2) and umount2(2). */
 
-/* The types mount(2) accepts, by name; the root's adapter and the two
- * synthetic types are not here because nothing mounts them by name. */
+/* The types mount(2) finds by name, in the order /proc/filesystems lists
+ * them. The root's adapter and the synthetic types are not here:
+ * `vfs_do_mount` takes the name "proc" itself, and nothing mounts the
+ * others by name. */
 static const struct vfs_type *const mount_types[] = {&vfs_vfat_type,
                                                      &vfs_exfat_type,
                                                      &vfs_ext2_type,
@@ -2750,11 +2810,11 @@ static const struct vfs_type *const mount_types[] = {&vfs_vfat_type,
                                                      &vfs_mqueue_type,
                                                      0};
 
-/* The table's entries, its terminator apart. Counted, not written down twice:
- * a fifth type added to the list above and not to a number here is a type
- * mount(2) would not find. */
+/* The entries of `mount_types`, its terminator apart, counted from the table
+ * so that a type added to it is found with no number to change. */
 #define VFS_MOUNT_TYPES ((int)(sizeof(mount_types) / sizeof(mount_types[0])) - 1)
 
+/** The type of `mount_types` named `name`, or NULL. */
 static const struct vfs_type *type_named(const char *name)
 {
     int i;
@@ -2814,7 +2874,8 @@ int vfs_remount(struct vfs_mount *m, uint32_t flags, const char *options)
     return 0;
 }
 
-/* Wait predicate: no operation is in progress on the mount. */
+/** The wait condition of an unmount: no operation is in progress on the
+ * mount `arg`. */
 static int drained(void *arg)
 {
     struct vfs_mount *mnt = arg;
@@ -2824,10 +2885,11 @@ static int drained(void *arg)
 /**
  * The device `source` names for a mount of `t`, into `*dev`, with its claim
  * in `*claim`: a partition window, a stick or a loop device under /dev, its
- * sectors claimed, and `*flags` made read-only for a device that refuses
- * writes. A type with no device takes any source string, claims nothing and
- * has a NULL device. Returns 0, or the errno with nothing claimed: a
- * device's own, EBUSY for a claimed range or a device with a mount already.
+ * sectors claimed, and `*flags` made read-only for a read-only device
+ * (BLOCK_READ_ONLY). A type with no device takes any source string, claims
+ * nothing and has a NULL device. Returns 0, or the errno with nothing
+ * claimed: that of `devfs_window_of`, or EBUSY for a claimed range or a
+ * device with a mount already.
  */
 static int mount_source(const struct vfs_type *t, const char *source, block_device_t **dev,
                         uint32_t *flags, int *claim)
@@ -2859,7 +2921,7 @@ static int mount_source(const struct vfs_type *t, const char *source, block_devi
         if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->dev == *dev) {
             devfs_release_claim(*claim);
             *claim = -1;
-            return -EBUSY; /* the device already has a mount */
+            return -EBUSY;
         }
     }
     return 0;
@@ -2884,7 +2946,7 @@ static int target_check(struct vfs_ref *tref, const char *target, char *canon)
                (tref->mnt == mounts[0] && tref->node == mounts[0]->root)) {
         rc = -EINVAL;
     } else if (tref->node == tref->mnt->root) {
-        rc = -EBUSY; /* the root of a placed mount: a mount point already */
+        rc = -EBUSY;
     } else if ((rc = vfs_getattr(tref->mnt, tref->node, &st)) == 0 && !VFS_IS_DIR(st.mode)) {
         rc = -ENOTDIR;
     }
@@ -2897,7 +2959,7 @@ static int target_check(struct vfs_ref *tref, const char *target, char *canon)
     return rc;
 }
 
-/* Whether the node `tref` holds is covered already, or reserved by a mount
+/** Whether the node `tref` holds is covered already, or reserved by a mount
  * in progress, in the caller's mount namespace. Under the parent's lock. */
 static int covered_already(const struct vfs_ref *tref)
 {
@@ -2942,33 +3004,28 @@ static struct vfs_mount *mount_place(struct vfs_mount *parent, void *covered,
     k_strncpy(m->covered_path, canon, sizeof(m->covered_path));
     k_strncpy(m->source, source, sizeof(m->source));
     m->source[sizeof(m->source) - 1] = '\0';
-    parent->refs++; /* a child mount is a reference on its parent */
+    parent->refs++;
     return m;
 }
 
 /**
- * mount(2): the order of work is resolve and hold the target, check its
- * path length and what it is, claim the source's range, take a slot as
- * `mounting` under the parent's namespace lock so no namespace change runs
- * between the covered check and the reservation, run the constructor,
- * publish. Every failure after the first step releases what the steps
- * before it took. The target is recorded by its path from the root of the
- * mount table (`vfs_node_path`), not by the path that named it, which may
+ * The covered check and the reservation of the slot are made under the
+ * parent's namespace lock, so that no namespace change runs between them.
+ * The slot is taken before the constructor runs, because the constructor
+ * may sleep on the device and another process could remove or rename the
+ * target meanwhile: the slot keeps the covered node's hold, which the walk
+ * took, and counts on the parent, and the walk's count of operations in
+ * progress is given back. The target is recorded by the path
+ * `vfs_node_path` gives rather than by the path that named it, which may
  * pass through a link or start at a root chroot gave the caller.
  *
- * The source is a partition window under /dev, claimed as a sector range on
- * the backing disk; a loop device has no disk under it and claims nothing,
- * since the device itself is what a second mount of it collides with, and a
- * type with no device, tmpfs, takes any source string (`mount_source`). A
- * device that refuses writes, a write-protected stick or a loop device
- * attached read-only, makes the mount read-only whatever the caller asked
- * for, and the type learns it from the flags. A mount of type proc over a
- * directory of /proc succeeds and changes nothing, since every /proc shows
- * the processes of its reader's PID namespace, as `unshare --mount-proc`
- * would have it; one anywhere else is ENODEV. The slot is taken before the
- * constructor runs, because the constructor may sleep on the device and
- * another process could remove or rename the target meanwhile; the covered
- * node stays held and the parent counted.
+ * A loop device has no disk under it and claims nothing, since the device
+ * itself is what a second mount of it collides with (`mount_source`). A
+ * read-only device, a write-protected stick or a loop device attached
+ * read-only, makes the mount read-only, and the type learns it from the
+ * flags. A mount of type proc changes nothing, since every /proc shows the
+ * processes of its reader's PID namespace, as `unshare --mount-proc` would
+ * have it.
  */
 int vfs_do_mount(const char *source, const char *target, const char *type, uint32_t flags,
                  const char *options)
@@ -3004,7 +3061,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     if (covered_already(&tref)) {
         vfs_ns_unlock(tref.mnt);
         vfs_ref_release(&tref);
-        return -EBUSY; /* covered, or reserved by a mount in progress */
+        return -EBUSY;
     }
     rc = mount_source(t, source, &dev, &flags, &claim);
     if (rc != 0) {
@@ -3022,7 +3079,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     m->dev = dev;
     m->claim = claim;
     vfs_ns_unlock(tref.mnt);
-    vfs_leave(tref.mnt); /* the walk's count; the hold stays with the slot */
+    vfs_leave(tref.mnt);
 
     vfs_ns_lock(m);
     rc = t->mount(m, dev, flags, options);
@@ -3045,7 +3102,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     return 0;
 }
 
-/* The length of a mount's recorded path that a path below it starts with:
+/** The length of a mount's recorded path that a path below it starts with:
  * 0 for the root's "/", whose children's paths start with their own "/". */
 static uint32_t path_below(const struct vfs_mount *m)
 {
@@ -3057,9 +3114,10 @@ static uint32_t path_below(const struct vfs_mount *m)
 /**
  * Whether the directory `sref` holds may be a bind's root, with its path
  * from the root of the mount table in `full` and its path within its file
- * system in `inner`. 0, or ENOTDIR, EINVAL for a place inside a type that
- * takes the rest of a path in one call, or ENAMETOOLONG. A bind of KRFFS,
- * whose nodes move, is moved with them by `vfs_repoint`.
+ * system in `inner`. 0, or the error of `getattr`, ENOTDIR, EINVAL for a
+ * place inside a type that takes the rest of a path in one call, or
+ * ENAMETOOLONG. A bind of KRFFS, whose nodes move, is moved with them by
+ * `vfs_repoint`.
  */
 static int bind_source(const struct vfs_ref *sref, char *full, char *inner)
 {
@@ -3099,8 +3157,10 @@ static int bind_source(const struct vfs_ref *sref, char *full, char *inner)
     return 0;
 }
 
-/* Make `m`, placed already, a bind showing the file system of `from` from
- * its node `root`, held for it, at `inner` within that file system. */
+/** Make `m`, placed already, a bind showing the file system of `from` from
+ * its node `root`, held for it, at `inner` within that file system. The bind
+ * is a reference on the base, so the file system it shows stays mounted
+ * under it. */
 static void bind_fill(struct vfs_mount *m, struct vfs_mount *from, void *root, const char *inner)
 {
     struct vfs_mount *base = mount_base(from);
@@ -3110,13 +3170,14 @@ static void bind_fill(struct vfs_mount *m, struct vfs_mount *from, void *root, c
     m->root = root;
     m->bind_of = base;
     k_strncpy(m->bind_root, inner, sizeof(m->bind_root));
-    base->refs++; /* the file system a bind shows stays mounted under it */
+    base->refs++;
 }
 
 /**
  * A bind of the mount `c` under `parent`, a bind already, at `canon`: its
  * covered node and root held again for the new record, which shows what `c`
- * shows. NULL when no slot can be had. Under no lock.
+ * shows. NULL when no slot can be had. The caller holds no lock; this takes
+ * `parent`'s around the placing.
  */
 static struct vfs_mount *bind_child(struct vfs_mount *c, struct vfs_mount *parent,
                                     const char *canon)
@@ -3139,7 +3200,7 @@ static struct vfs_mount *bind_child(struct vfs_mount *c, struct vfs_mount *paren
     return b;
 }
 
-/* The bind `made` holds for the parent of the mount `c`, of the `n` mounts
+/** The bind `made` holds for the parent of the mount `c`, of the `n` mounts
  * in `orig`, or `top` when that parent is `from`, the source's own mount;
  * NULL when the parent was not shown. */
 static struct vfs_mount *bind_parent(struct vfs_mount *c, struct vfs_mount **orig,
@@ -3160,7 +3221,9 @@ static struct vfs_mount *bind_parent(struct vfs_mount *c, struct vfs_mount **ori
  * For MS_REC: show below the bind `top`, made of the place `full`, each
  * mount the caller sees below that place, in the order of their depth, each
  * as a bind under the bind of its parent (`bind_child`). A mount whose new
- * path would not fit, or on KRFFS, is left out, with a record.
+ * path would not fit, a KRFFS volume, and a mount whose parent is not shown
+ * are left out, with a record in the kernel log, and when the heap has no
+ * room for the two arrays nothing is shown below `top`.
  */
 static void bind_below(struct vfs_mount *top, struct vfs_mount *from, const char *full)
 {
@@ -3206,6 +3269,9 @@ static void bind_below(struct vfs_mount *top, struct vfs_mount *from, const char
     kfree(orig);
 }
 
+/** Once the bind is placed, the walks' counts of operations in progress are
+ * given back; the hold on the covered node stays with the slot, and the hold
+ * on the source's node with the bind, as its root. */
 int vfs_do_bind(const char *source, const char *target, int rec)
 {
     struct vfs_ref sref, tref;
@@ -3243,8 +3309,8 @@ int vfs_do_bind(const char *source, const char *target, int rec)
         vfs_ref_release(&sref);
         return rc;
     }
-    vfs_leave(tref.mnt); /* the covered node's hold stays with the slot */
-    vfs_leave(sref.mnt); /* and the source's with the bind, as its root */
+    vfs_leave(tref.mnt);
+    vfs_leave(sref.mnt);
     if (rec) {
         bind_below(m, sref.mnt, full);
     }
@@ -3270,17 +3336,17 @@ int vfs_remount_bind(struct vfs_mount *m, uint32_t flags)
 }
 
 /**
- * An unmount that prepared and could not be finished, so the mount stays.
- *
- * The type wrote its last metadata for a volume that is going away; the
- * volume is not going away, and what it wrote says otherwise. A type that
- * cannot put it back leaves a mount nobody may write, which is the answer
- * that cannot be wrong.
+ * Return `m` to its type after an unmount that passed `prepare_unmount` and
+ * then failed, so that the mount stays: the type wrote its last metadata for
+ * a volume that was going away, and its `abort_unmount` puts back what that
+ * changed. A type without one is left as its preparation left it, and a
+ * mount whose device has gone, which was not prepared and takes no write, is
+ * left alone.
  */
 static void unmount_abandoned(struct vfs_mount *m)
 {
     if (vfs_mount_gone(m)) {
-        return; /* nothing was written and nothing can be */
+        return;
     }
     if (m->type->ops->abort_unmount) {
         m->type->ops->abort_unmount(m);
@@ -3331,17 +3397,18 @@ static int unmount_target(const char *target, char *out)
 }
 
 /**
- * Find a mount by its recorded target when a removed ancestor blocks lookup.
+ * The mount `target` names by its recorded path, for an unmount whose walk
+ * met a removed device on the way: the one active mount with that path that
+ * has an ancestor whose device has gone, or NULL when there is none or more
+ * than one.
  *
- * Removal must not make a child mount's reference on its parent permanent.
- * The recorded spelling is the recovery name; no lookup on the missing
- * medium is needed. The caller names the target from its own root, and the
- * name is put in the mount table's terms before it is compared
- * (`unmount_target`), so only a mount at or below that root can match; a
- * recorded path has no `.` or `..`, so a target that climbs matches none.
- * Only a unique active mount below a gone ancestor is eligible. Ordinary
- * lookup errors and mounts on present ancestors retain their usual pathname
- * rules.
+ * Without it, a child mount's reference on a parent whose device has gone
+ * could never be dropped, since no lookup on the missing medium is possible.
+ * The caller names the target from its own root, and the name is put in the
+ * mount table's terms before it is compared (`unmount_target`), so only a
+ * mount at or below that root can match; a recorded path has no `.` or
+ * `..`, so a target that climbs matches none. A mount whose ancestors are
+ * all present is found only by the walk.
  */
 static struct vfs_mount *unmount_below_gone(const char *target)
 {
@@ -3379,7 +3446,7 @@ static struct vfs_mount *unmount_below_gone(const char *target)
  * permanent mount. The reference is released.
  *
  * A mount's root is a directory, so a target that reached one needs no
- * attribute read, which the file system of a device that has gone refuses.
+ * attribute read, which is EIO on a mount whose device has gone.
  */
 static int unmount_found(struct vfs_ref *tref, int dir, struct vfs_mount **out)
 {
@@ -3393,7 +3460,7 @@ static int unmount_found(struct vfs_ref *tref, int dir, struct vfs_mount **out)
         }
     }
     if (rc == 0 && tref->node != tref->mnt->root) {
-        rc = -EINVAL; /* not a mount point */
+        rc = -EINVAL;
     } else if (rc == 0 && mount_permanent(tref->mnt)) {
         rc = -EBUSY;
     }
@@ -3405,27 +3472,11 @@ static int unmount_found(struct vfs_ref *tref, int dir, struct vfs_mount **out)
 static int unmount_mount(struct vfs_mount *m);
 
 /**
- * umount2(2): the mount goes to `unmounting`, which refuses new work; the
- * in-progress count drains; the reference count is checked; sync and
- * prepare_unmount; the cache's dirty buffers are written and the device's
- * own cache is flushed, a failure here returning the mount to `active`; the
- * cache drops the device's buffers; unmount; the covered node is released;
- * the claim is released; the entry clears.
- *
- * A device that has gone takes nothing, so the sync, prepare_unmount, the
- * writeback and the flush are skipped for it: each would fail, and an
- * unmount that failed on a stick that is no longer there would keep the
- * mount for good.
- *
- * A target that named a directory by its end, `dir`, must reach one, and
- * the walk that finds the mount answers for it: anything else is -ENOTDIR,
- * as on Linux, before the -EINVAL of a name that is no mount point. The node
- * checked is the node unmounted, so a symbolic link replaced between two
- * walks cannot change the answer. A target found by its recorded name below
- * a removed device is a mount's root, a directory.
- *
- * A mount another mount namespace still sees is only hidden from the
- * caller's, and stays mounted for the others.
+ * A target that named a directory by its end is checked by the walk that
+ * finds the mount, before the EINVAL of a name that is no mount point, as
+ * on Linux. The node checked is the node unmounted, so a symbolic link
+ * replaced between two walks cannot change the answer. A target found by
+ * its recorded path below a removed device is a mount's root, a directory.
  */
 int vfs_do_umount(const char *target, int dir)
 {
@@ -3486,6 +3537,14 @@ static int unmount_bind(struct vfs_mount *m)
 /**
  * Unmount `m`, an active mount no other mount namespace sees, as
  * `vfs_do_umount` describes. 0, or the error that left it mounted.
+ *
+ * A device that has gone takes nothing, so the sync, the preparation, the
+ * writeback and the flush are skipped for it: each would fail, and an
+ * unmount that failed on a stick that is no longer there would keep the
+ * mount for good. Nothing irreversible happens before the cache drops the
+ * device's buffers, so a failure up to there returns the mount to
+ * VFS_ACTIVE, with the type's `abort_unmount` (`unmount_abandoned`) once
+ * `prepare_unmount` has run.
  */
 static int unmount_mount(struct vfs_mount *m)
 {
@@ -3527,9 +3586,9 @@ static int unmount_mount(struct vfs_mount *m)
         unmount_abandoned(m);
         vfs_ns_unlock(m);
         m->state = VFS_ACTIVE;
-        return -EIO; /* nothing irreversible has happened yet */
+        return -EIO;
     }
-    /* A stick's own cache is not on the medium until the stick is told. */
+    /* A disk's own write cache reaches the medium only at a flush. */
     rc = gone || !m->dev ? 0 : block_flush(m->dev);
     if (rc != 0) {
         vfs_device_failed(m->dev, 0, rc);
@@ -3542,7 +3601,7 @@ static int unmount_mount(struct vfs_mount *m)
         unmount_abandoned(m);
         vfs_ns_unlock(m);
         m->state = VFS_ACTIVE;
-        return -EBUSY; /* a buffer of the device is still held or dirty */
+        return -EBUSY;
     }
     klog(KLOG_INFO, "vfs", "unmounted %s: %d opens, %d releases", m->covered_path, (int)m->opens,
          (int)m->releases);
@@ -3629,14 +3688,13 @@ static void hold_release(struct vfs_mount *mnt, void *node)
 }
 
 /**
- * Hold the new working directory, store it, and only then let go of the old
- * one, whose put may sleep: a thread that shares the working directory
- * (CLONE_FS) and changes it meanwhile replaces a hold that is in the record,
- * and the pair in the record stays the directory its path names. /dev and
- * /proc need no hold and take none. KRFFS, the boot root and a mounted
- * volume, has no `hold`: the working directory takes only the mount's
- * count, and the record keeps its node for `rmdir`, which refuses a
- * directory that is a working directory.
+ * The new directory is stored before the old one is let go of, since the
+ * put may sleep: a thread that shares the working directory (CLONE_FS) and
+ * changes it meanwhile replaces a hold that is in the record, and the pair
+ * in the record stays the directory its path names. KRFFS, the boot root
+ * and a mounted volume, has no `hold`: the working directory takes only the
+ * mount's count, and the record keeps its node for `rmdir`, which answers
+ * EBUSY for a directory that is a working directory.
  */
 void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node)
 {
@@ -3658,10 +3716,10 @@ void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node)
 }
 
 /**
- * Hold the new root, store it, and only then let go of the old one. The put
- * may sleep, and a thread that shares the root (CLONE_FS) and resolves a
- * path meanwhile finds one of the two roots in the record, never none,
- * which would be the root of the mount table.
+ * The new root is stored before the old one is let go of, since the put may
+ * sleep: a thread that shares the root (CLONE_FS) and resolves a path
+ * meanwhile finds one of the two roots in the record, never none, which
+ * would be the root of the mount table.
  */
 void vfs_root_set(struct process *p, struct vfs_mount *mnt, void *node)
 {
