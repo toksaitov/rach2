@@ -10943,9 +10943,6 @@ long sys_renameat2(isr_params_t *params)
 
 #define UTIME_OMIT ((1L << 30) - 2L)
 
-/* Timer tick frequency (100 Hz) */
-#define TIMER_FREQUENCY 100
-
 void get_current_time(int64_t *seconds, int64_t *nanoseconds)
 {
     rtc_realtime(seconds, nanoseconds);

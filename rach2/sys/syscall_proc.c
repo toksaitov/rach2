@@ -98,15 +98,6 @@ void fb_release_if_owner(uint32_t pid)
 extern char stack[];
 
 /**
- * Prepare the kernel stacks, which needs nothing: a process's kernel stack
- * comes from the heap at fork, KERNEL_STACK_SIZE of pages with an unmapped
- * guard page below them, and goes back when the zombie is reaped; the one
- * reaping is never the one whose stack it is.
- */
-void init_kstacks(void)
-{}
-
-/**
  * A kernel stack, returning its base, or 0 when the heap has none.
  *
  * The caller uses `base + KERNEL_STACK_SIZE` as the stack top. The page
@@ -131,6 +122,9 @@ static uintptr_t kstack_alloc(void)
 
 /**
  * Give back the stack whose top is `top`, with its guard page.
+ *
+ * A stack goes back when its zombie is reaped, when a fork fails after taking
+ * it, and when exec takes the leader's place; the caller never runs on it.
  *
  * The boot stack is part of the kernel image and not the heap's, and is left
  * as it is. A record whose stack it is can still come here: a thread of a

@@ -2833,8 +2833,6 @@ void init_syscall(void)
 {
     uint32_t i;
 
-    init_kstacks();
-
     for (i = 0; i < SYSCALL_TABLE_SIZE; i++) {
         _syscall_table[i] = NULL;
     }

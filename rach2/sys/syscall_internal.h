@@ -43,8 +43,6 @@ struct vfs_mount *fd_release_lock(const fd_entry_t *e);
  */
 void fd_holds_release(void);
 
-void init_kstacks(void);
-
 extern volatile process_t *stdin_waiting_proc;
 
 long sys_exit(isr_params_t *params);
