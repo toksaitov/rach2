@@ -159,12 +159,13 @@ struct vfs_statfs {
 /*
  * The operations, one set per type. A node handle is the type's own: an
  * address in the mapped image for the KRFFS root, an offset plus one for a
- * KRFFS volume, a record of the node pool for FAT32, a heap record of a
- * classified path for the synthetic types. Whoever receives a node from
- * `lookup`, `create`, `mknod` or a mount's root owns one hold on it and
- * must `put` it; open-file descriptions, working directories, process roots
- * and covering mounts keep theirs for as long as they refer to it. For a
- * type with empty `hold` and `put` the pointers may be NULL.
+ * KRFFS volume, a heap record on the mount's list for FAT32, exFAT and
+ * ext2, a heap record of a classified path for the synthetic types.
+ * Whoever receives a node from `lookup`, `create`, `mknod` or a mount's
+ * root owns one hold on it and must `put` it; open-file descriptions,
+ * working directories, process roots and covering mounts keep theirs for as
+ * long as they refer to it. For a type with empty `hold` and `put` the
+ * pointers may be NULL.
  */
 struct vfs_ops {
     /* One name in one directory, `..` included; `dir` NULL is the mount
