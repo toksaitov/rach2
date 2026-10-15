@@ -313,6 +313,19 @@ static void *walk(const char *path, int *err)
     return cur;
 }
 
+/** Whether `path` resolves under the root; the node `walk` holds is put. */
+static int found(const char *path)
+{
+    int err;
+    void *n = walk(path, &err);
+
+    if (n == 0) {
+        return 0;
+    }
+    OPS->put(&mnt, n);
+    return 1;
+}
+
 /**
  * Read a whole file into `buf`, at most `cap` bytes; the count, or a
  * negative errno, -1 when the open fails.
@@ -478,13 +491,13 @@ static void well_formed_rows(void)
     check(seen, "the listing shows the long name");
     check(count == 15, "the root lists fifteen entries: no label, no deleted entry");
 
-    check(walk("/badord.txt", &err) != 0 && list_dir(mnt.root, "BADORD.TXT", &seen) > 0 && seen,
+    check(found("/badord.txt") && list_dir(mnt.root, "BADORD.TXT", &seen) > 0 && seen,
           "a long name with a reserved ordinal bit is shown by its alias");
-    check(walk("/badattr.txt", &err) != 0 && list_dir(mnt.root, "BADATTR.TXT", &seen) > 0 && seen,
+    check(found("/badattr.txt") && list_dir(mnt.root, "BADATTR.TXT", &seen) > 0 && seen,
           "a long name with a wrong attribute byte is shown by its alias");
-    check(walk("/badpad.txt", &err) != 0 && list_dir(mnt.root, "BADPAD.TXT", &seen) > 0 && seen,
+    check(found("/badpad.txt") && list_dir(mnt.root, "BADPAD.TXT", &seen) > 0 && seen,
           "a long name with a unit past its terminator is shown by its alias");
-    check(walk("/lone.txt", &err) != 0 && list_dir(mnt.root, "LONE.TXT", &seen) > 0 && seen,
+    check(found("/lone.txt") && list_dir(mnt.root, "LONE.TXT", &seen) > 0 && seen,
           "a long name with an unpaired surrogate is shown by its alias");
     ino_count = 0;
     list_dir(mnt.root, "", &seen);
@@ -500,16 +513,6 @@ static void well_formed_rows(void)
     }
     check(ino_count == 58 && inos_distinct(),
           "no two of the 58 entries listed share an inode number");
-    for (i = 0; i < 4; i++) {
-        static const char *const aliases[] = {"/badord.txt", "/badattr.txt", "/badpad.txt",
-                                              "/lone.txt"};
-
-        n = walk(aliases[i], &err);
-        if (n) {
-            OPS->put(&mnt, n);
-            OPS->put(&mnt, n);
-        }
-    }
 
     n = walk("/stamp.txt", &err);
     check(n && OPS->getattr(&mnt, n, &st) == 0 && st.mtime_sec == 946684798 &&
@@ -1494,7 +1497,7 @@ static void long_rows(void)
     if (n) {
         OPS->put(&mnt, n);
     }
-    check(walk("/Long Name One.txt", &err) != 0, "and found by its long name");
+    check(found("/Long Name One.txt"), "and found by its long name");
     n = walk("/long name one.txt", &err);
     check(n != 0, "with case folded");
     if (n) {
@@ -1509,14 +1512,14 @@ static void long_rows(void)
     }
     check(make_file(mnt.root, "longname1.txt") != 0 && make_file(mnt.root, "longname2.txt") != 0,
           "two names whose alias base is taken");
-    check(walk("/LONGNA~2.TXT", &err) != 0 && walk("/LONGNA~3.TXT", &err) != 0,
+    check(found("/LONGNA~2.TXT") && found("/LONGNA~3.TXT"),
           "take the next numbers, as mtools numbered them");
     n = make_file(mnt.root, "Mixed.txt");
-    check(n != 0 && walk("/MIXED~1.TXT", &err) != 0, "a name of mixed case takes an alias");
+    check(n != 0 && found("/MIXED~1.TXT"), "a name of mixed case takes an alias");
     n = make_file(mnt.root, "a.b.c");
-    check(n != 0 && walk("/AB~1.C", &err) != 0, "two dots take an alias");
+    check(n != 0 && found("/AB~1.C"), "two dots take an alias");
     n = make_file(mnt.root, "\xc3\xa9t\xc3\xa9.txt");
-    check(n != 0 && walk("/\xc3\xa9t\xc3\xa9.txt", &err) != 0 && walk("/_T_~1.TXT", &err) != 0,
+    check(n != 0 && found("/\xc3\xa9t\xc3\xa9.txt") && found("/_T_~1.TXT"),
           "a name outside ASCII is stored in UTF-16 and read back");
     for (i = 0; i < 200; i++) {
         name[i] = (char)('a' + i % 26);
@@ -1567,10 +1570,10 @@ static void long_rows(void)
           "the check lists the long names");
 
     check(OPS->rename(&mnt, mnt.root, "Long Name One.txt", mnt.root, "Long Name Two.txt") == 0 &&
-              walk("/Long Name Two.txt", &err) != 0 && walk("/Long Name One.txt", &err) == 0,
+              found("/Long Name Two.txt") && walk("/Long Name One.txt", &err) == 0,
           "a long name renamed in place");
     check(OPS->rename(&mnt, mnt.root, "Long Name Two.txt", mnt.root, "SHORT.TXT") == 0 &&
-              walk("/SHORT.TXT", &err) != 0,
+              found("/SHORT.TXT"),
           "a long name renamed to a short one");
     check(OPS->unlink(&mnt, mnt.root, "longname2.txt") == 0 && walk("/longname2.txt", &err) == 0,
           "a long name unlinked");
