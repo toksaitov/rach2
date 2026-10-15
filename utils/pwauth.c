@@ -2,8 +2,7 @@
  * pwauth: the credential library's implementation.
  *
  * The contract is in `pwauth.h`: who takes the transaction, who never does,
- * why the lock is reported and never broken, and what the replacement idiom
- * promises.
+ * why the lock is reported and never broken, and what a replacement does.
  *
  * The transaction and the terminal modes are file-scope state, not a handle
  * the caller passes around, because the signal handlers that must undo a
@@ -31,45 +30,49 @@
 
 /* The replacement's name: `/etc/shadow` is rewritten through
  * `/etc/shadow.tmp.<pid>` in the same directory, since a rename is atomic only
- * within one file system. The pid is what makes the name one writer's own, so
- * no two of them can destroy each other's work in flight. */
+ * within one file system. The pid makes the name one writer's own, so two
+ * writers never write one temporary file. */
 #define CRED_TMP_FORMAT "%s.tmp.%d"
 
 /* Signals 1..64 are deliverable on this kernel, so the saved dispositions are
  * indexed by number, not packed into a list. */
 #define PWAUTH_SIG_MAX 65
 
-/* What an inspection of the lock file found: this process recorded in it, some
- * other writer's lock (or none at all) at the name, or nothing that can be told
- * apart, which every caller must treat as a refusal, not as consent. */
+/* What a reading of the lock file found: this process recorded in it, some
+ * other writer's lock (or none at all) at the name, or a file that could not
+ * be read, which every caller must treat as a reason to stop. */
 #define CRED_LOCK_OURS    1
 #define CRED_LOCK_OTHER   0
 #define CRED_LOCK_UNKNOWN (-1)
 
-/* The transaction. `Txn_held` and `Txn_owner` together are "this process holds
- * the lock": a fork copies the state but not the holding, so the recorded pid
- * is what tells a holder from an heir. `Txn_tmp` names the temporary file a
- * `cred_rewrite` currently has open, so a signal death can remove it, and is
- * empty at every other moment. A handler reads all three, and only the first
- * can be `sig_atomic_t`: the pid is one word, written once, but the name is a
- * string that no single store makes whole, and a death served partway through
- * one would read a truncated path and unlink it. That is why the deaths are
- * blocked wherever this state is published, not merely written in a
- * careful order; `pwauth_death_set` lists every stretch they are blocked
- * across, publication and otherwise. */
+/* The transaction. `Txn_held` and `Txn_owner` together mean "this process
+ * holds the lock": a fork copies the state but not the lock, so the recorded
+ * pid tells the holder from a child that inherited the state. `Txn_tmp` is
+ * the name of the temporary file a `cred_rewrite` has open, so that a death
+ * by signal can remove it, and is empty at every other moment. A handler
+ * reads all three, and only the first can be `sig_atomic_t`: the pid is one
+ * word, written once, but the name is a string that no single store
+ * completes, and a death served while it is being written would read a
+ * truncated path and unlink it. That is why the deaths are blocked wherever
+ * this state is published, not merely written in a careful order;
+ * `pwauth_death_set` lists every stretch they are blocked across,
+ * publication and otherwise. */
 static volatile sig_atomic_t Txn_held;
-static volatile sig_atomic_t Exit_under_way;
+static volatile sig_atomic_t Exit_under_way; /* set once `exit` has begun; never cleared */
 static pid_t Txn_owner;
-static int Txn_fd = -1;
+static int Txn_fd = -1; /* the lock's write descriptor, -1 when none is open */
 static char Txn_lock[128];
 static char Txn_tmp[256];
-static int Txn_atexit_done;
+static int Txn_atexit_done; /* the release and the exit marker are registered */
 static struct sigaction Txn_saved_death[PWAUTH_SIG_MAX];
 static struct sigaction Txn_saved_pipe;
 
 /* The terminal a password prompt took echo away from: `Tty_saved` is the modes
- * to put back, `Tty_quiet` the echo-off copy a resume re-applies, and
- * `Tty_resumed` says a stop has been served, so the line must start over. */
+ * to put back, `Tty_quiet` the echo-off copy a resume applies again,
+ * `Tty_have_modes` says the two are valid for a resume to use, `Tty_echo_off`
+ * that the terminal has the echo-off modes now, `Tty_resumed` that a stop has
+ * been served, so the line must start over, and `Tty_failed` that setting the
+ * modes failed, which fails the read. */
 static struct termios Tty_saved;
 static struct termios Tty_quiet;
 static volatile sig_atomic_t Tty_have_modes;
@@ -88,8 +91,9 @@ static const char Salt_alphabet[] =
 /**
  * Write the prompt in flight to standard error.
  *
- * A prompt that cannot be printed is not a reason to refuse the read, and this
- * runs from a signal handler on a resume, where there is nobody to report to.
+ * A failed write is ignored: a prompt that cannot be printed does not stop
+ * the read, and on a resume this runs in a signal handler, which has nowhere
+ * to report it.
  */
 static void pwauth_prompt(void)
 {
@@ -104,10 +108,10 @@ static void pwauth_prompt(void)
  * True when this process is the one that took the transaction.
  *
  * A `fork` copies the library's state, so a child inherits `Txn_held` while
- * holding nothing: the lock file names its parent, and an heir that leaves
- * through `exit` or dies of a signal would run the release and take a live
- * writer's lock with it. The pid recorded at the acquire is what separates the
- * two, and every path that would touch the lock asks this first.
+ * holding nothing: the lock file names its parent, and a child that leaves
+ * through `exit` or dies of a signal would run the release and remove a live
+ * writer's lock. The pid recorded at the acquire tells the two apart, and
+ * every path that would touch the lock checks this first.
  */
 static int cred_txn_mine(void)
 {
@@ -142,9 +146,9 @@ static void pwauth_tty_restore(void)
  * Install `handler` for `sig`, saving the old disposition in `saved` unless it
  * is NULL. Returns what `sigaction` returns.
  *
- * No `SA_RESTART`: this kernel stores the flag and never restarts an
- * interrupted call, so asking for it would suggest a restart that does not
- * happen.
+ * No `SA_RESTART`, so a read that one of these handlers interrupts returns
+ * `EINTR` to the loop in `pwauth_read_password`, which looks for a resume
+ * before it reads again.
  */
 static int pwauth_install(int sig, void (*handler)(int), struct sigaction *saved)
 {
@@ -181,44 +185,43 @@ static void pwauth_stop_signals(sigset_t *set)
 /**
  * True when `sig` is one this library must handle to die cleanly.
  *
- * The set is derived from what the kernel does, not from the four names
- * a writer expects. `ksig_default_action` terminates a process for every signal
+ * The set follows what the kernel does, not the few signals a writer
+ * expects. `ksig_default_action` terminates a process for every signal
  * except four it ignores and four it stops for, and `cred_may_signal` lets a
  * process signal one whose real uid matches its own, which a setuid program
  * keeps from whoever ran it. So the user who started `su` or `passwd` can send
  * it `SIGUSR1`, `SIGALRM`, or any of a few dozen others, and each of them would
  * otherwise end the writer where no handler runs: a password prompt with echo
  * off and no program left to restore it, or a transaction with its lock still
- * in `/etc`. Handling only the four that arrive by habit would leave the rest
- * as a way for any user to strand the credential database.
+ * in `/etc`. Handling only the usual few would leave the rest as a way for
+ * any user to leave the credential database locked.
  *
- * Five groups are left out. `SIGKILL` and `SIGSTOP` cannot be caught at all,
- * which is the documented residue: a writer killed that way leaves a lock the
- * next writer reports. The kernel's own ignore and stop sets are not deaths,
- * and the stop family is the prompt's business, which suspends and resumes
- * instead of tearing down. `SIGPIPE` is caught by `pwauth_pipe_handler`, so
- * the write that raised it fails instead. Signals 32, 33 and 34 cannot be
- * handled: this libc reserves them and refuses them from both `sigaddset` and
- * `sigaction`, so no program linked against it can block or catch them, here
- * or on Linux, and the kernel still terminates for them by default. They are
- * listed so that the default branch does not try and silently fail, and
- * `pwauth.h` states them beside the uncatchable pair, since to a writer the
- * consequence is the same.
+ * Five groups are left out. `SIGKILL` and `SIGSTOP` cannot be caught at all:
+ * a writer killed that way leaves a lock the next writer reports. The
+ * kernel's own ignore and stop sets are not deaths, and the stop signals
+ * belong to the prompt, which suspends and resumes instead of tearing down.
+ * `SIGPIPE` is caught by `pwauth_pipe_handler`, so the write that raised it
+ * fails instead. Signals 32, 33 and 34 cannot be handled: musl reserves them,
+ * and its `sigaddset` and `sigaction` fail for them, so no program linked
+ * against it can block or catch them, here or on Linux, and the kernel still
+ * terminates for them by default. They are listed so that the default case
+ * does not try and fail without a word, and `pwauth.h` lists them with
+ * `SIGKILL`, since to a writer the result is the same.
  *
- * The fault-numbered signals are handled, although elsewhere one avoids
- * catching `SIGSEGV`, since a handler would run `exit` on a process that has
- * just faulted, cleaning up over undefined state. On this kernel a CPU
- * exception never reaches a disposition at all: `_exception_handler`
- * (`rach2/sys/arch/x86/isr.c`) and the page-fault path
- * (`rach2/sys/mm/paging.c`) both call `terminate_current_process`, which
- * zombifies the process directly without consulting `sigacts`. So the only
- * `SIGSEGV` a handler here can ever see is one that was sent, which is an
- * ordinary death from an ordinary `kill`, and one the real uid that launched a
- * setuid writer is allowed to send. Handling them changes nothing about a real
- * fault and closes five more ways to strand the lock. `SIGABRT` and `SIGSYS`
- * are handled for the same reason: the kernel raises neither. A transaction
- * therefore turns an `abort` into a clean exit; with no transaction held the
- * handler restores the default and re-raises, so an `abort` remains one.
+ * The fault signals are handled too. On this kernel a CPU exception in user
+ * mode is a forced signal: `_exception_handler` (`rach2/sys/arch/x86/isr.c`)
+ * and the page-fault path (`rach2/sys/mm/paging.c`) call `signal_force`,
+ * which delivers it to an installed handler, or restores the default action
+ * when the signal is blocked or ignored. A writer that faults while it holds
+ * a transaction therefore leaves through `exit`, and the release runs over
+ * the state of a process that has just faulted; one that faults while the
+ * deaths are blocked dies without the release. A `SIGSEGV` that was sent is
+ * an ordinary death, and the real uid that started a setuid writer may send
+ * one, so handling the fault signals closes five more ways to leave the lock
+ * behind. `SIGABRT` and `SIGSYS` are handled for the same reason. A
+ * transaction therefore turns an `abort` into a clean exit; with no
+ * transaction held the handler restores the default and raises the signal
+ * again, so an `abort` remains one.
  */
 static int pwauth_is_death(int sig)
 {
@@ -240,7 +243,7 @@ static int pwauth_is_death(int sig)
     case 32:
     case 33:
     case 34:
-        return 0; /* this libc keeps them and refuses to install here */
+        return 0; /* musl reserves them, and its sigaction fails for them */
     default:
         return sig >= 1 && sig < PWAUTH_SIG_MAX;
     }
@@ -261,7 +264,7 @@ static int pwauth_is_death(int sig)
  *
  * The same set is blocked across four more stretches: the release, whose
  * unlink and flush are one step (`cred_lock_release`); the teardown in
- * `cred_txn_end`; an heir's teardown of what it inherited, in
+ * `cred_txn_end`; a child's teardown of what it inherited, in
  * `cred_txn_begin_at`; and the whole of `cred_txn_atexit`, which runs inside
  * `exit` and must not be re-entered through one.
  */
@@ -278,16 +281,16 @@ static void pwauth_death_set(sigset_t *set)
 }
 
 /**
- * Take `SIGPIPE` and do nothing, so the write that raised it fails instead.
+ * The handler of `SIGPIPE`, which does nothing, so the write that raised the
+ * signal fails with `EPIPE` instead.
  *
- * A handler, not `SIG_IGN`, though the two are indistinguishable to the
- * write itself (this kernel posts the signal and returns `-EPIPE` either way),
- * because an exec resets a caught disposition to the default and keeps an
- * ignored one in the new image. A child forked under a transaction inherits
- * this library's state and has none of it; what it must not also inherit is a
- * `SIGPIPE` that stays ignored into whatever program it goes on to run, since
- * that is this library quietly changing the signal semantics of an image that
- * never linked it.
+ * A handler, not `SIG_IGN`, though the write itself returns the same either
+ * way (this kernel posts the signal and returns `-EPIPE`), because an exec
+ * resets a caught disposition to the default and keeps an ignored one in the
+ * new image. A child forked under a transaction inherits this library's
+ * state but not its lock; it must not also inherit a `SIGPIPE` that stays
+ * ignored in whatever program it goes on to run, since this library would
+ * then change the signal handling of a program that never linked it.
  */
 static void pwauth_pipe_handler(int sig)
 {
@@ -295,9 +298,10 @@ static void pwauth_pipe_handler(int sig)
 }
 
 /**
- * Attempt to remove the unpublished file. Return -1 on removal failure and
- * keep its name for the caller's diagnostic and a later retry. Use only
- * async-signal-safe calls.
+ * Remove the unpublished file `Txn_tmp` names, if any, and clear the name;
+ * 0, or -1 when the unlink fails for a reason other than `ENOENT`, with the
+ * name kept for the caller's diagnostic and a later retry. It calls only
+ * async-signal-safe functions, since the release a death runs calls it.
  */
 static int cred_drop_temp(void)
 {
@@ -320,9 +324,10 @@ static void cred_report_temp(const char *path)
 }
 
 /**
- * Disable echo while this process group owns the terminal. Return 1 when the
- * modes were applied, 0 when another process group owns the terminal, and -1,
- * with `Tty_failed` set, when setting the modes fails.
+ * Take echo away while this process group owns the terminal, or when the
+ * terminal's foreground group cannot be read. Returns 1 when the modes were
+ * applied, 0 when another process group owns the terminal, and -1, with
+ * `Tty_failed` set, when setting the modes fails.
  *
  * The foreground check and the mode change run with the job-control signals
  * blocked, because the check goes stale once a stop is served. A reader that
@@ -332,8 +337,8 @@ static void cred_report_temp(const char *path)
  * the signals defers the stop until the modes are in place, where the stop
  * handler puts them back before it stops.
  *
- * `SIGSTOP` cannot be blocked, so that one window stays open, and it is the
- * residue `pwauth.h` already states for stops that cannot be caught.
+ * `SIGSTOP` cannot be blocked, so that window stays open for it, as
+ * `pwauth.h` states for the stop that cannot be caught.
  */
 static int pwauth_echo_off(void)
 {
@@ -379,8 +384,8 @@ static int pwauth_echo_off(void)
  * `Exit_under_way` set returns instead, and the exit already running
  * finishes. The flag is never cleared, because the `exit` that set it does
  * not return. With no transaction it restores the default disposition and
- * re-raises, so the process dies of the signal it was sent and a waiter sees
- * that, not an invented status.
+ * raises the signal again, so the process dies of the signal it was sent and
+ * a waiter sees that, not an exit status of the library's choosing.
  *
  * Either way the terminal gets its modes back first, since otherwise a `^C`
  * at a password prompt leaves a console with echo off and no program left to
@@ -432,12 +437,13 @@ static void pwauth_tstp_handler(int sig)
 }
 
 /**
- * Re-arm the prompt on the continue that follows a stop.
+ * Set the prompt up again on the continue that follows a stop.
  *
- * It re-installs the stop handler that the stop itself reset to the default,
- * re-applies the echo-off modes while discarding the input typed meanwhile (a
- * character the terminal echoed at a stopped process must not become a password
- * byte), and reprints the prompt, since the read is about to start over. It
+ * It installs again the stop handler that the stop itself reset to the
+ * default, applies the echo-off modes again while discarding the input typed
+ * meanwhile (a character the terminal echoed at a stopped process must not
+ * become a password byte), and prints the prompt again, since the read is
+ * about to start over. It
  * also covers `SIGSTOP`, which cannot be caught, so the resume is where the
  * line is dropped whichever stop was taken. Everything reached from here is
  * async-signal-safe: `sigaction`, `sigprocmask`, `tcgetpgrp`, `getpgrp`,
@@ -462,10 +468,6 @@ static void pwauth_cont_handler(int sig)
     pwauth_prompt();
 }
 
-/**
- * Compare `password` against the `stored` hash. Returns 1 on a match, 0
- * otherwise.
- */
 int pwauth_check(const char *stored, const char *password)
 {
     char *hash;
@@ -477,11 +479,6 @@ int pwauth_check(const char *stored, const char *password)
     return hash != NULL && strcmp(hash, stored) == 0;
 }
 
-/**
- * Resolve `user` in the shadow database and check `password` against it.
- * Returns 1 on a match, 0 for a wrong password, an absent account, or a locked
- * one.
- */
 int pwauth_verify(const char *user, const char *password)
 {
     struct spwd *sp;
@@ -497,10 +494,11 @@ int pwauth_verify(const char *user, const char *password)
 }
 
 /**
- * Save terminal modes and disable echo only for the foreground process group.
- * A background reader keeps the saved modes for its next foreground resume.
- * ENOTTY permits nonterminal input; any other mode-read error refuses input.
- * Return -1 if reading or setting the modes fails, otherwise 0.
+ * Save the terminal's modes and take echo away if this process group is in
+ * the foreground; a reader in the background keeps the saved modes for the
+ * resume that brings it to the foreground. Returns 0 when standard input is
+ * not a terminal (`ENOTTY`) or the modes were saved, and -1 when reading or
+ * setting them fails.
  */
 static int pwauth_prepare_tty(void)
 {
@@ -513,7 +511,11 @@ static int pwauth_prepare_tty(void)
     return pwauth_echo_off() < 0 ? -1 : 0;
 }
 
-/** Refuse a byte if disabling echo failed before or during the read. */
+/**
+ * Read one byte of standard input into `c`, as `read` does, or fail with
+ * `EIO` when taking echo away failed before the read or, on a resume, during
+ * it, so that no byte read with echo on joins the line.
+ */
 static ssize_t pwauth_read_byte(char *c)
 {
     ssize_t n = -1;
@@ -529,42 +531,25 @@ static ssize_t pwauth_read_byte(char *c)
 }
 
 /**
- * Print `prompt` and read one line from standard input into `buf`. Returns 0 on
- * a complete line, -1 on empty EOF, a read error, a terminal-mode error, or a
- * `size` below 2. Reject NUL bytes and input longer than the smaller of the
- * caller's buffer and PWAUTH_MAX_PASSWORD. A failed echo change on resume
- * refuses the line.
+ * The read loops on `EINTR`, since the handlers are installed without
+ * `SA_RESTART` and every one that runs while the read is blocked returns it
+ * with `EINTR`, and a stop and continue must not read as end of input. The
+ * line is dropped and started over on a resume and only there, not on every
+ * `EINTR`: the resume is the moment the terminal was flushed and the prompt
+ * printed again, and the one moment a byte already in `buf` may have come
+ * from before the stop. A signal that is not a stop leaves what the user has
+ * typed alone. The resume is checked before each read, where starting over
+ * loses nothing, since a stop served while the modes were set or the prompt
+ * written leaves no read outstanding; and after each read, where the byte in
+ * hand may have been typed before the stop and is dropped with the line.
  *
- * A refused line (too long, holding a NUL, or read after a failed mode change)
- * leaves `buf` zeroed and is never cut to a prefix: the prefix would be a
- * secret the user never typed, and the change would be reported as a success.
- * A NUL is refused because `strcmp` and `crypt` stop there, so the hash would
- * cover only the bytes before it. After a read error `buf` holds the bytes
- * read so far, terminated.
- *
- * The read loops on `-EINTR` because this kernel stores `SA_RESTART` and never
- * restarts a call, so every signal that reaches a blocked read returns it and
- * a stop-and-continue must not read as end of input. The line is dropped and
- * started over on a resume and only there, not on every `-EINTR`: the resume
- * is the moment the terminal was flushed and the prompt reprinted, and it is
- * also the one moment a byte already in `buf` may have come from before the
- * stop. A signal that is not a stop leaves what the user has typed alone. The
- * resume is checked before each read, where starting over loses nothing, since
- * a stop served while the modes were set or the prompt written leaves no read
- * outstanding; and after each read, where the byte in hand may have been typed
- * before the stop and is dropped with the line.
- *
- * `SIGPIPE` is caught for the length of the call, because the prompt is written
- * to file descriptor 2 after echo has been taken away. A caller whose standard
- * error is a pipe nobody reads would otherwise be killed by the default action
- * at exactly that point, leaving the terminal silenced with no program left to
- * restore it. The write is allowed to fail instead, which is what the ignored
- * result of the prompt already says it may do.
+ * The write of the prompt is allowed to fail, which is why `SIGPIPE` is
+ * caught and the result of the write ignored.
  *
  * The teardown runs with the stop and continue signals blocked: the modes go
  * back before the handlers come off, so a `SIGCONT` arriving in between would
- * re-apply echo-off through a handler about to be removed and the call would
- * return with the terminal silenced for good.
+ * apply echo-off again through a handler about to be removed, and the call
+ * would return with the terminal silenced for good.
  */
 int pwauth_read_password(const char *prompt, char *buf, size_t size)
 {
@@ -686,10 +671,6 @@ done:
     return rc;
 }
 
-/**
- * Map `n` bytes onto `n` characters of the crypt(3) alphabet, terminating
- * `out`.
- */
 void pwauth_salt_map(const unsigned char *bytes, size_t n, char *out)
 {
     size_t i;
@@ -703,10 +684,6 @@ void pwauth_salt_map(const unsigned char *bytes, size_t n, char *out)
     out[n] = '\0';
 }
 
-/**
- * Draw `PWAUTH_SALT_LEN` characters of trusted salt into `out`. Returns 0, or
- * -1 with no byte of `out` written.
- */
 int pwauth_mint_salt(char *out, size_t size)
 {
     unsigned char raw[PWAUTH_SALT_LEN];
@@ -733,9 +710,10 @@ int pwauth_mint_salt(char *out, size_t size)
 }
 
 /**
- * Read one positive decimal PID followed only by spaces, tabs, carriage
- * returns, or newlines. Return 1 on success, 0 for malformed contents, and -1
- * on a read error. Reject more than nine digits.
+ * Read `fd` to its end as one positive decimal pid, followed by nothing but
+ * spaces, tabs, carriage returns or newlines, into `*out`. Returns 1 on
+ * success, 0 for any other contents, more than nine digits among them, and
+ * -1 on a read error.
  */
 static int cred_parse_pid(int fd, long *out)
 {
@@ -805,10 +783,6 @@ static int cred_read_pid(const char *path, long *out)
  * `CRED_LOCK_OTHER` for another writer's lock or none at all, or
  * `CRED_LOCK_UNKNOWN` when it could not be read.
  *
- * The library checks the recorded PID before publishing. KRFFS inode numbers
- * are name hashes; ext2 provides inode numbers. Neither a PID check nor an
- * inode comparison makes a later pathname operation atomic with the check.
- *
  * The third answer is why this is not a predicate. This opens a file, so it
  * fails when there is no descriptor to open it with, and a caller told only
  * "not ours" would then treat an exhausted descriptor table as a decision.
@@ -842,8 +816,8 @@ static int cred_lock_state(void)
  * writer records a small pid that some unrelated process now has, and an
  * operator told only to wait would wait forever. The line therefore says what
  * has to be true before removing it. (`EPERM` counts as an answer for a
- * caller that is not root; every writer in the image runs as root, setuid or
- * by refusing anyone else, and never sees it.)
+ * caller that is not root; every writer in the image runs as root, by its
+ * set-uid bit or because it exits for anyone else, and never sees it.)
  */
 static void cred_report_busy(const char *prog, const char *path)
 {
@@ -880,34 +854,34 @@ static void cred_report_busy(const char *prog, const char *path)
  * write descriptor on the lock is closed at the top and the read that follows
  * takes the slot it freed, so a writer that filled its descriptor table can
  * still release. An open that fails for any reason but `ENOENT` is a failure
- * and never "some other writer's lock", which is the one answer that makes a
- * release decline to unlink: a process holding the lock in its last free slot
- * would strand it for everyone and report success.
+ * and never "some other writer's lock", the one answer on which a release
+ * does not unlink: a process holding the lock in its last free slot would
+ * leave it for everyone and report success.
  *
- * The failure is returned, not swallowed, because "the lock is gone" and "the
+ * The failure is returned, not dropped, because "the lock is gone" and "the
  * lock could not be looked at" are different states, and only the first is a
  * clean release; a caller told 0 for both would report a finished transaction
  * over a lock file still in `/etc`.
  *
  * The read and the unlink are adjacent on purpose. The name is not proof of the
- * file (see `cred_lock_state`), so between deciding the lock is ours and
- * removing it there is a window in which recovery could remove it and a
- * successor create its own, and this unlink would then take the successor's.
- * Nothing in this kernel closes that window: an unlink is by name, and there is
- * no `funlink`. No syscall is put between the two. The holder is compared
- * against `Txn_owner`, not a fresh `getpid`, which is a syscall in this libc
- * and would sit in exactly that gap; the recorded pid is the same number,
- * since every caller of this function has already established it through
+ * file (see `pwauth.h`), so between deciding the lock is ours and removing it
+ * there is a window in which root could remove it by hand and a successor
+ * create its own, and this unlink would then remove the successor's. Nothing
+ * in this kernel closes that window: an unlink is by name, and there is no
+ * `funlink`. No system call is put between the two. The holder is compared
+ * with `Txn_owner`, not a fresh `getpid`, which is a system call in this libc
+ * and would fall in that gap; the recorded pid is the same number, since
+ * every caller of this function has already established it through
  * `cred_txn_mine`. What is left is the scheduler alone: the kernel may still
- * preempt between the read's return and the unlink's entry. `pwauth.h` states
- * the residue.
+ * preempt between the read's return and the unlink's entry, as `pwauth.h`
+ * states.
  *
  * The flush goes through the descriptor the check left open, which still
  * refers to the file after the unlink. Without it the release is the one step
  * of a writer's work that stays in the page cache: the credentials reach the
- * platter and the lock that guarded them does not, so a power cut after a
- * clean run hands the next writer a lock recording a process that died with
- * the boot. A flush that fails is `CRED_UNFLUSHED` and not a printed line
+ * disk and the lock that guarded them does not, so a power cut after a clean
+ * run hands the next writer a lock recording a process that died with the
+ * boot. A flush that fails is `CRED_UNFLUSHED` and not a printed line
  * alone, since this is the only flush a transaction that ends without a
  * replacement makes.
  *
@@ -1003,7 +977,8 @@ static void cred_pipe_restore(void)
 }
 
 /**
- * Attempt to release the transaction on exit and report cleanup failures.
+ * Release the transaction at `exit`, registered with `atexit`, and report
+ * what could not be cleaned up.
  *
  * A forked child discards the inherited state, closes the inherited lock
  * descriptor, and restores the saved death-signal and SIGPIPE dispositions
@@ -1012,11 +987,10 @@ static void cred_pipe_restore(void)
  * The death signals are blocked until the transaction state is discarded, and
  * SIGPIPE is restored after the diagnostics. Only dispositions still installed
  * when the call began are put back: a writer that ended its own transaction
- * restored them already, and a refused acquire installed none, so its saved
- * copy is a zeroed `struct sigaction` that would impose the default on the
- * rest of `exit`. `cred_exit_started` prevents a second exit from skipping
- * this callback. `_Exit`, `SIGKILL`, CPU faults, and delivery of
- * musl-reserved signals 32-34 can terminate the process without this cleanup.
+ * restored them already, and an acquire that failed installed none, so its
+ * saved copy is a zeroed `struct sigaction` that would impose the default on
+ * the rest of `exit`. `cred_exit_started` keeps a second exit from skipping
+ * this callback.
  */
 static void cred_txn_atexit(void)
 {
@@ -1069,33 +1043,28 @@ static void cred_exit_started(void)
 }
 
 /**
- * Take the writer's exclusive lock at `lock_path`, retrying `tries` times.
- * Return 0 when it is held, -1 otherwise.
+ * The death signals and SIGPIPE are blocked from just before the create until
+ * the pid and the transaction's state are recorded. SIGPIPE is blocked only
+ * here: its default action kills, its handler goes in several calls after the
+ * lock exists, and the user who ran a setuid writer may send it, so a SIGPIPE
+ * in that window would leave the lock in `/etc`. The retry sleeps with the
+ * caller's signal mask restored.
  *
- * Block the selected death signals and SIGPIPE from just before the create
- * until the PID and transaction state are recorded. SIGPIPE is blocked only
- * here: its default action is fatal, its handler goes in several calls after
- * the lock exists, and the user who ran a setuid writer may signal it, so a
- * SIGPIPE in that window would leave the lock in `/etc`. The retry sleeps with
- * the caller's signal mask restored.
- *
- * A failed PID write removes the lock and restores the mask before it
+ * A failed pid write removes the lock and restores the mask before it
  * reports, since a diagnostic written to a full pipe blocks, and a writer
  * blocked there with the deaths masked could be ended only by `SIGKILL`,
- * which leaves the lock. A lock whose removal fails is reported and requires
- * manual cleanup. `_Exit`, `SIGKILL`, CPU faults, and delivery of
- * musl-reserved signals 32-34 can terminate the process without this cleanup.
+ * which leaves the lock.
  *
- * A forked child discards the inherited lock descriptor and restores the saved
- * death-signal and SIGPIPE dispositions with the death signals blocked.
- * Register the release before the exit marker so the marker runs first. Once
- * registered, the marker prevents later exit callbacks from acquiring a
- * transaction, since `exit` walks the registered functions downwards and
- * nothing would drop a lock taken after the release. Refuse an acquisition if
- * either registration fails.
+ * A forked child closes the inherited lock descriptor and restores the saved
+ * death-signal and SIGPIPE dispositions with the death signals blocked. The
+ * release is registered before the exit marker, so that the marker runs
+ * first. Once registered, the marker makes an acquire by a later exit
+ * callback fail, since `exit` calls the registered functions in the reverse
+ * of their order and nothing would drop a lock taken after the release has
+ * run.
  *
- * Use O_CLOEXEC because a transaction cannot survive exec. Catch SIGPIPE until
- * the last diagnostic so a closed diagnostic pipe cannot prevent cleanup.
+ * The lock is opened with O_CLOEXEC, since a transaction does not survive an
+ * exec.
  */
 int cred_txn_begin_at(const char *prog, const char *lock_path, int tries)
 {
@@ -1190,37 +1159,27 @@ int cred_txn_begin_at(const char *prog, const char *lock_path, int tries)
     return 0;
 }
 
-/**
- * Take the writer's exclusive lock at `CRED_LOCK_PATH`. Returns 0 when it is
- * held, -1 otherwise.
- */
 int cred_txn_begin(const char *prog)
 {
     return cred_txn_begin_at(prog, CRED_LOCK_PATH, CRED_LOCK_TRIES);
 }
 
 /**
- * Release the transaction. Returns 0 when the lock is gone, `CRED_UNFLUSHED`
- * when it is gone from the file system but the removal did not reach the disk,
- * and -1 when this process holds no transaction, a temporary file could not be
- * removed, or the release could not finish.
- *
  * The lock goes before the dispositions come back, and not the other way
  * around: a signal arriving in between must still find a handler that knows the
  * lock is gone, where the default action would have killed the process with the
- * lock still in place. Release checks the recorded PID before unlinking the
- * lock. Manual removal and replacement between that check and the unlink can
- * still cause removal of a successor's lock.
+ * lock still in place.
  *
  * The teardown runs with the deaths blocked, since the dispositions go back one
  * call at a time and a death served midway would meet the handler over state
- * that says the lock is not ours, which re-raises with the default whatever
- * the caller had. The reports after it run with the deaths deliverable, so a
- * writer stuck in a diagnostic can still be interrupted.
+ * that says the lock is not ours, and the handler would raise the signal again
+ * with the default action, whatever the caller had. The reports after it run
+ * with the deaths deliverable, so a writer stuck in a diagnostic can still be
+ * interrupted.
  *
  * A failed release is reported to the caller and not only to the operator,
  * since a writer that says it finished cleanly over a lock still in `/etc`
- * sends the next one into a ten-second wait and a refusal it was not warned
+ * sends the next one into a ten-second wait and a failure it was not warned
  * about. The transaction is forgotten either way: this process holds nothing
  * afterwards, whatever is left at the name.
  */
@@ -1261,13 +1220,14 @@ int cred_txn_end(void)
 }
 
 /**
- * The line a replacement is refused with when the lock did not answer for it.
+ * The detail a replacement reports when a check of the lock, which found
+ * `state`, did not find this process's lock.
  *
  * A lock that reads as another writer's and a lock that cannot be read at all
  * both stop a publish, and they are different facts: the first is the state the
  * never-break rule describes, the second an open or a read that failed, as on
  * a full descriptor table. Reporting the second as the first would send an
- * operator hunting for a lock file that is exactly where it belongs.
+ * operator looking for a lock file that is exactly where it belongs.
  */
 static const char *cred_lock_detail(int state)
 {
@@ -1276,12 +1236,12 @@ static const char *cred_lock_detail(int state)
 }
 
 /**
- * Undo a replacement that failed before its rename, report `detail`, and return
- * `CRED_UNCHANGED`.
+ * Abandon a replacement of `path` that failed before its rename: report
+ * `detail`, close `fd` if it is open, remove the unpublished file, restore
+ * `saved_umask`, and return `CRED_UNCHANGED`.
  *
- * Attempt to remove the unpublished file and report any removal failure.
- * Leave the target unchanged. A file whose removal fails requires manual
- * cleanup.
+ * An unlink of the unpublished file that fails is reported, and the file is
+ * left for cleaning up by hand. The target is not touched.
  */
 static int cred_rewrite_abort(int fd, const char *path, const char *detail, mode_t saved_umask)
 {
@@ -1297,31 +1257,28 @@ static int cred_rewrite_abort(int fd, const char *path, const char *detail, mode
 }
 
 /**
- * Replace `path` with the `len` bytes at `text`. Returns `CRED_PUBLISHED`,
- * `CRED_UNFLUSHED`, or `CRED_UNCHANGED`.
- *
- * The rename is the moment the new file becomes the real one, and the error
- * handling differs on either side of it. Before the rename, a failure removes
- * the unpublished file, reports any removal failure, leaves the target
- * unchanged and returns `CRED_UNCHANGED`; a file whose removal fails requires
- * manual cleanup. After the rename, the temporary name is gone and the
- * descriptor has followed the file, so a failure is reported and never undone,
- * since unlinking would destroy what was just published; the caller is told
- * `CRED_UNFLUSHED`, because the new file is the one the system now
- * authenticates against whether or not it reached the platter, and
- * "unchanged" would be a lie an operator acts on.
+ * The rename is the moment the new file becomes the one the system reads, and
+ * the error handling differs on either side of it. Before the rename, a
+ * failure removes the unpublished file (`cred_rewrite_abort`), leaves the
+ * target unchanged and returns `CRED_UNCHANGED`. After the rename, the
+ * temporary name is gone and the descriptor refers to the published file, so
+ * a failure is reported and never undone, since unlinking would destroy what
+ * was just published; the caller is told `CRED_UNFLUSHED`, because the new
+ * file is the one the system now authenticates against whether or not it
+ * reached the disk, and "unchanged" would be false.
  *
  * The lock is checked before the create's unlink of the temporary name, and
  * again just before the rename. The second check is the one that guards the
  * publish; the first keeps a transaction whose lock is already gone from
  * destroying work that is not its own, since the create begins by removing
- * whatever stands at the temporary name. Between them the temporary belongs to
- * this writer alone: its name has the pid, so two writers loose at once (which
- * takes a broken lock to arrange) still cannot meet on one file.
+ * whatever is at the temporary name. Between them the temporary file belongs
+ * to this writer alone: its name has the pid, so two writers at once (which
+ * takes a lock removed by hand) still cannot meet on one file.
  *
- * Record the temporary name before creation with death signals blocked. The
- * name begins with the target path; a handler reading a partial copy could
- * unlink the target. Clearing the first byte later is one store.
+ * The temporary name is recorded in `Txn_tmp` before the create, with the
+ * death signals blocked: the name begins with the target's path, and a
+ * handler reading a partial copy could unlink the target. Clearing the first
+ * byte later is one store.
  */
 int cred_rewrite(const char *path, const char *text, size_t len)
 {
