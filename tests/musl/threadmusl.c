@@ -1,43 +1,42 @@
 /**
- * Threads.
+ * threadmusl: check threads, made and used through musl's pthreads.
  *
- * Four threads start and are joined, each with its own thread id, the
- * process's pid, and its own copy of a thread-local variable, and they count
- * to 40000 under one mutex in memory they share. A condition variable
- * passes a value to a waiter seen asleep. pthread_kill reaches the thread
- * it names, which alone runs the handler. A signal sent to the process
- * while every thread blocks it waits, as sigpending reports, with no handler
- * run, and a thread made after it takes it once it unblocks it. Of two signals
- * sent to the process at once, the second, which the first one's handler
- * blocks, is taken by another thread while that handler runs. A thread's exit
- * leaves the process running; /proc/self/task lists each live thread and has
- * two links and one for each, as Chromium's zygote reads it, a
- * thread's directory there has no task directory and keeps its path in a
- * descriptor, down to the thread's descriptor links, a task path names only a
- * thread of its process, a thread's stat there has its own time, and
- * /proc/self/exe names the program. The threads share the descriptors, the
- * working directory and the umask: what one opens, closes or changes the others
- * see, and an execve that fails leaves its thread in the shared table. A
- * descriptor one thread closes while another reads it stays with the read,
- * which returns what is written after the close, and its number is free once
- * the read is over. A wait whose status page another thread unmaps while it
- * sleeps fails with EFAULT and leaves the zombie to a later wait. A child
- * forked by a thread has one thread. A thread that calls execve replaces the
- * whole process, whose other threads end. Of two threads in execve at once, the
- * one whose call first waits for the other threads to end replaces the process,
- * and the other ends: the probe traces the second and holds it at the entry of
- * its call until the first waits for it. A robust mutex a thread other than the
- * first holds when it calls execve is released, and its next locker gets
- * EOWNERDEAD. A thread that calls exit ends them all. A thread other than
- * the first empties the console's queue of lines, opens the framebuffer,
- * sets its palette, writes a pixel, reads the console as the display's owner
- * reads it, raw scancodes, of which it finds none, where the line discipline
- * would answer EAGAIN, and closes it, which gives the display back for
- * another process to open: the display belongs to the process, whichever
- * thread opened it.
+ * Four threads start and are joined, each with its own thread id, the process's
+ * pid, and its own copy of a thread-local variable, and they count to 40000
+ * under one mutex in memory they share. A condition variable passes a value to
+ * a waiter seen asleep. pthread_kill reaches the thread it is given, which
+ * alone runs the handler. A signal sent to the process while every thread
+ * blocks it waits, as sigpending reports, with no handler run, and a thread
+ * made after it takes it once it unblocks it. Of two signals sent to the
+ * process at once, the second, which the first one's handler blocks, is taken
+ * by another thread while that handler runs. A thread's exit leaves the process
+ * running; /proc/self/task lists each live thread and has two links and one for
+ * each, as Chromium's zygote reads it, a thread's directory there has no task
+ * directory and keeps its path in a descriptor, down to the thread's descriptor
+ * links, a task path reaches only a thread of its process, a thread's stat
+ * there has its own time, and /proc/self/exe reads as the program's path. The
+ * threads share the descriptors, the working directory and the umask: what one
+ * opens, closes or changes the others see, and an execve that fails leaves its
+ * thread in the shared table. A descriptor one thread closes while another
+ * reads it stays with the read, which returns what is written after the close,
+ * and its number is free once the read is over. A wait whose status page
+ * another thread unmaps while it sleeps fails with EFAULT and leaves the zombie
+ * to a later wait. A child forked by a thread has one thread. A thread that
+ * calls execve replaces the whole process, whose other threads end. Of two
+ * threads in execve at once, the one whose call first waits for the other
+ * threads to end replaces the process, and the other ends: the probe traces the
+ * second and holds it at the entry of its call until the first waits for it. A
+ * robust mutex a thread other than the first holds when it calls execve is
+ * released, and its next locker gets EOWNERDEAD. A thread that calls exit ends
+ * them all. A thread other than the first empties the console's queue of lines,
+ * opens the framebuffer, sets its palette, writes a pixel, reads the console as
+ * the display's owner reads it, raw scancodes, of which it finds none, where
+ * the line discipline would answer EAGAIN, and closes it, which gives the
+ * display back for another process to open: the display belongs to the process,
+ * whichever thread opened it.
  *
- * Prints "THREADMUSL OK" on success and "THREADMUSL FAIL (detail)"
- * otherwise.
+ * It prints "THREADMUSL OK" and exits 0 on success, or prints "THREADMUSL
+ * FAIL (detail: errno N)" and exits 1 at the first failure.
  *
  * Needs: the console as stdin, in canonical mode, as a boot of the default
  * suite has it; the framebuffer's row reads it.
@@ -68,6 +67,9 @@
 /* The framebuffer's requests, as the kernel numbers them. */
 #define FB_SETPALETTE 0x4603
 
+/* The counting threads' mutex and count, the condition row's value, each
+ * counting thread's thread-local value and thread id, the thread that ran
+ * SIGUSR1's handler, and the spare thread's flag once it blocks SIGUSR1. */
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t ready = PTHREAD_COND_INITIALIZER;
 static int counter;
@@ -77,17 +79,25 @@ static volatile pid_t ids[THREADS];
 static volatile int handled_by;
 static volatile int spare_blocked;
 
+/** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
 {
     printf("THREADMUSL FAIL (%s: errno %d)\n", what, errno);
     return 1;
 }
 
+/** Return the caller's thread id. */
 static pid_t tid(void)
 {
     return (pid_t)syscall(SYS_gettid);
 }
 
+/**
+ * Run as counting thread number `arg`: store its thread id in `ids`, set its
+ * thread-local `mine`, and add `ROUNDS` to `counter` under `lock`. Returns 1
+ * when `mine` kept its value and the thread id is not the pid, and 0
+ * otherwise.
+ */
 static void *count(void *arg)
 {
     int i = (int)(long)arg;
@@ -103,8 +113,13 @@ static void *count(void *arg)
     return (void *)(long)(mine == i + 100 && getpid() != ids[i] ? 1 : 0);
 }
 
+/* The thread id of the receiver of `condition_row`, once it runs. */
 static volatile pid_t receiver_tid;
 
+/**
+ * Run as the receiver of `condition_row`: wait on `ready` until `handed` is
+ * set. Returns the value handed.
+ */
 static void *receive(void *arg)
 {
     (void)arg;
@@ -117,6 +132,7 @@ static void *receive(void *arg)
     return (void *)(long)handed;
 }
 
+/** Record in `handled_by` the thread that ran SIGUSR1's handler. */
 static void on_usr1(int sig)
 {
     (void)sig;
@@ -142,6 +158,7 @@ static void await_usr1(void)
     }
 }
 
+/** Run as a thread that waits for SIGUSR1's handler in `await_usr1`. */
 static void *wait_signal(void *arg)
 {
     (void)arg;
@@ -149,9 +166,11 @@ static void *wait_signal(void *arg)
     return NULL;
 }
 
-/* The thread pthread_kill names: it waits for the signal and keeps it
+/**
+ * Run as the thread pthread_kill is given: wait for the signal and keep it
  * blocked after, so the process-directed signal later can reach only the
- * thread made for that. */
+ * thread made for that. Does not return.
+ */
 static void *spare_main(void *arg)
 {
     (void)arg;
@@ -167,8 +186,8 @@ static void *spare_main(void *arg)
  * A signal sent to the process while its two threads block it, the first
  * and the one `spare_main` runs: it waits, as sigpending reports, and no
  * handler runs. A thread made after it then takes it in `wait_signal`, the
- * first thread still blocking it. Returns 0, or 1 once the failure is
- * reported.
+ * first thread still blocking it. Returns 0, or 1 after the failure is
+ * printed.
  */
 static int process_signal_row(void)
 {
@@ -193,6 +212,7 @@ static int process_signal_row(void)
     return 0;
 }
 
+/** Run as a thread that sleeps until the process ends. */
 static void *idle(void *arg)
 {
     (void)arg;
@@ -202,6 +222,10 @@ static void *idle(void *arg)
     return NULL;
 }
 
+/**
+ * Return the number of threads /proc/self/task lists, or -1 when it cannot
+ * be opened.
+ */
 static int count_tasks(void)
 {
     DIR *d = opendir("/proc/self/task");
@@ -220,9 +244,11 @@ static int count_tasks(void)
     return n;
 }
 
-/** The link count of this process's task directory, read with fstatat
- * through a descriptor on /proc as Chromium's zygote reads it; -1 when the
- * read fails. */
+/**
+ * Return the link count of this process's task directory, read with fstatat
+ * through a descriptor on /proc as Chromium's zygote reads it, or -1 when
+ * the read fails.
+ */
 static long task_links(void)
 {
     struct stat st;
@@ -239,12 +265,12 @@ static long task_links(void)
 }
 
 /**
- * The paths of thread `t` under this process's task directory: its
+ * Check the paths of thread `t` under this process's task directory: its
  * directory lists no task directory of its own, a descriptor on it keeps
  * its path, for its link and for a name relative to it, whose stat is the
  * thread's own, the thread's descriptor links are there six components
  * deep, and a task path under another process, a child made for the row,
- * or under none, names nothing.
+ * or under none, reaches nothing. Returns 0, or 1 after the failure is printed.
  */
 static int task_paths(pid_t t)
 {
@@ -312,8 +338,10 @@ static int task_paths(pid_t t)
     return 0;
 }
 
-/** The user and system ticks, fields 14 and 15, of the stat file `path`;
- * -1 when it cannot be read. */
+/**
+ * Return the sum of the user and system ticks, fields 14 and 15, of the stat
+ * file `path`, or -1 when it cannot be read.
+ */
 static long stat_ticks(const char *path)
 {
     char line[256], *paren;
@@ -341,8 +369,11 @@ static long stat_ticks(const char *path)
 /* The spinning thread's own time in ticks, before and after it spun. */
 static long spun_from, spun_to;
 
-/** Spin until this thread's own time, read from its stat under the task
- * directory, counts five ticks more, bounded by the ticks since boot. */
+/**
+ * Run as the spinning thread: spin until this thread's own time, read from
+ * its stat under the task directory, counts five ticks more, or for a
+ * thousand ticks since boot. Stores the times in `spun_from` and `spun_to`.
+ */
 static void *spin_main(void *arg)
 {
     char own_stat[64];
@@ -366,11 +397,12 @@ static void *spin_main(void *arg)
 }
 
 /**
- * A thread's stat under the task directory has the thread's own time: a
+ * Check that a thread's stat under the task directory has the thread's own
+ * time: a
  * thread made for the row spins until its own counts five ticks more, while
  * thread `t` sleeps and gains none of them, and the process's stat has the
  * ticks the spinning thread spun, though it has ended by then, beside this
- * thread's own.
+ * thread's own. Returns 0, or 1 after the failure is printed.
  */
 static int thread_times(pid_t t)
 {
@@ -397,8 +429,10 @@ static int thread_times(pid_t t)
     return 0;
 }
 
+/* The descriptor the threads of `sharing` open and close. */
 static int shared_fd = -1;
 
+/** Run as a thread: open /dev/null into `shared_fd`. */
 static void *open_file(void *arg)
 {
     (void)arg;
@@ -406,14 +440,18 @@ static void *open_file(void *arg)
     return NULL;
 }
 
+/** Run as a thread: close `shared_fd`. Returns close's result. */
 static void *close_file(void *arg)
 {
     (void)arg;
     return (void *)(long)close(shared_fd);
 }
 
-/** Open a descriptor after an execve of a program that is not there, which
- * fails; 1 when it failed with ENOENT. */
+/**
+ * Run as a thread: call execve on a program that is not there, which fails,
+ * then open /dev/null into `shared_fd`. Returns 1 when the execve failed with
+ * ENOENT, and 0 otherwise.
+ */
 static void *exec_missing(void *arg)
 {
     int missing;
@@ -425,6 +463,10 @@ static void *exec_missing(void *arg)
     return (void *)(long)missing;
 }
 
+/**
+ * Run as a thread: set the umask to 077 and change to /tmp. Returns chdir's
+ * result.
+ */
 static void *change_dir(void *arg)
 {
     (void)arg;
@@ -432,9 +474,14 @@ static void *change_dir(void *arg)
     return (void *)(long)chdir("/tmp");
 }
 
+/* The pipe of the read another thread closes, and the reader's thread id. */
 static int pipe_fds[2];
 static volatile pid_t reader_tid;
 
+/**
+ * Run as the reader: read one byte from `pipe_fds[0]`. Returns 1 when it read
+ * 'x', and 0 otherwise.
+ */
 static void *read_pipe(void *arg)
 {
     char c = 0;
@@ -446,8 +493,10 @@ static void *read_pipe(void *arg)
     return (void *)(n == 1 && c == 'x' ? 1L : 0L);
 }
 
-/** Whether thread `t` of this process sleeps, by its state in
- * /proc/self/task/<t>/stat. */
+/**
+ * Return 1 when thread `t` of this process is asleep, state S in
+ * /proc/self/task/<t>/stat, and 0 otherwise.
+ */
 static int sleeping(pid_t t)
 {
     char path[64], line[256], *state;
@@ -471,7 +520,7 @@ static int sleeping(pid_t t)
 /**
  * A condition variable passes a value to a thread that is seen asleep in its
  * wait before the value is published, so that only the signal's wake can
- * end the wait. Returns 0, or 1 once the failure is reported.
+ * end the wait. Returns 0, or 1 after the failure is printed.
  */
 static int condition_row(void)
 {
@@ -498,7 +547,11 @@ static int condition_row(void)
     return 0;
 }
 
-/** The sharing of descriptors, the working directory and the umask. */
+/**
+ * Check the sharing of descriptors, the working directory and the umask,
+ * /proc/self/exe, and a descriptor one thread closes while another reads it.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int sharing(void)
 {
     pthread_t t;
@@ -551,12 +604,17 @@ static int sharing(void)
     return 0;
 }
 
+/* The thread ids of the two takers of `handler_mask`, and the threads that
+ * ran the SIGUSR1 and SIGUSR2 handlers. */
 static volatile pid_t takers[2];
 static int slots[2] = {0, 1}; /* each taker's index in `takers` */
 static volatile pid_t usr1_by, usr2_by;
 
-/** SIGUSR1's handler in `handler_mask`: its mask blocks SIGUSR2, and it
- * waits for SIGUSR2's handler to run in another thread. */
+/**
+ * Handle SIGUSR1 for `handler_mask`: record the thread in `usr1_by` and wait
+ * up to 10 s for SIGUSR2's handler to run in another thread. The handler's
+ * mask blocks SIGUSR2.
+ */
 static void on_usr1_waits(int sig)
 {
     int i;
@@ -568,18 +626,21 @@ static void on_usr1_waits(int sig)
     }
 }
 
+/** Record in `usr2_by` the thread that ran SIGUSR2's handler. */
 static void on_usr2(int sig)
 {
     (void)sig;
     usr2_by = tid();
 }
 
-/** A thread of `handler_mask`, which sleeps with both signals unblocked
- * until the two handlers have run. It keeps the two blocked, as it was
- * created, between its look at the handlers and its sleep, and sigsuspend
- * unblocks them and sleeps in one step: a pause after the look would sleep
- * for good when this thread's handler ran between the two, before the other
- * thread's. */
+/**
+ * Run as a thread of `handler_mask`, whose index in `takers` is at `arg`:
+ * sleep with both signals unblocked until the two handlers have run. The
+ * thread keeps the two blocked, as it was created, between its look at the
+ * handlers and its sleep, and sigsuspend unblocks them and sleeps in one
+ * step: a pause after the look would sleep for good when this thread's
+ * handler ran between the two, before the other thread's.
+ */
 static void *take_signals(void *arg)
 {
     sigset_t none;
@@ -597,7 +658,8 @@ static void *take_signals(void *arg)
  * the first thread blocks both, and the two signals sent to the process one
  * after the other, so that the first sleeper may be woken for both. SIGUSR1's
  * handler blocks SIGUSR2 and waits for SIGUSR2's handler, which the other
- * sleeper must be woken to run. Returns 0 when each thread ran one handler.
+ * sleeper must be woken to run. Returns 0 when each thread ran one handler,
+ * and 1 otherwise.
  */
 static int handler_mask(void)
 {
@@ -634,9 +696,11 @@ static int handler_mask(void)
     return usr1_by != 0 && usr2_by != 0 && usr1_by != usr2_by ? 0 : 1;
 }
 
-/** Print each thread of the process `pid` as /proc gives it: its state, the
+/**
+ * Print each thread of the process `pid` as /proc gives it: its state, the
  * signals pending for it and for its process, and its blocked mask, so that
- * a failed row says where a signal waits. */
+ * a failed row says where a signal waits.
+ */
 static void say_threads(pid_t pid)
 {
     char path[64], line[128];
@@ -672,9 +736,12 @@ static void say_threads(pid_t pid)
     closedir(dir);
 }
 
-/** `handler_mask` in a child, where no other thread of the probe can take
- * the two signals, judged by the child's status; a child that does not end
- * has its threads printed (`say_threads`) before it is killed. */
+/**
+ * Run `handler_mask` in a child, where no other thread of the probe can take
+ * the two signals, and judge it by the child's status; a child that does not
+ * end in 20 s has its threads printed (`say_threads`) before it is killed.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int handler_mask_row(void)
 {
     int i, status = 0;
@@ -698,12 +765,18 @@ static int handler_mask_row(void)
     return 0;
 }
 
+/*
+ * The waiter's thread id, and the page its status goes to, of
+ * `lost_status_row`.
+ */
 static volatile pid_t waiter_tid;
 static int *volatile status_page;
 
-/** The thread of `lost_status_row` that waits for the child `*arg` with its
- * status in a page the first thread unmaps meanwhile; the errno of the wait,
- * or 0 when it did not fail. */
+/**
+ * Run as the thread of `lost_status_row` that waits for the child `*arg`
+ * with its status in a page the first thread unmaps meanwhile. Returns the
+ * errno of the wait, or 0 when it did not fail.
+ */
 static void *wait_unmapped(void *arg)
 {
     pid_t child = *(pid_t *)arg;
@@ -716,9 +789,10 @@ static void *wait_unmapped(void *arg)
 }
 
 /**
- * A wait whose status page another thread unmaps while it sleeps: when the
- * child ends the wait cannot store the status, so it fails with EFAULT and
- * leaves the zombie, which a second wait reaps with its status.
+ * Check a wait whose status page another thread unmaps while it sleeps: when
+ * the child ends the wait cannot store the status, so it fails with EFAULT
+ * and leaves the zombie, which a second wait reaps with its status.
+ * Returns 0, or 1 after the failure is printed.
  */
 static int lost_status_row(void)
 {
@@ -757,9 +831,11 @@ static int lost_status_row(void)
 /* The errno of the step `use_framebuffer` failed at. */
 static volatile int fb_errno;
 
-/** Empty the line discipline's queue of the console, which has O_NONBLOCK
- * set, reading lines and an end of file until it answers EAGAIN: 0 then, or
- * -1 when it does not within 64 reads. */
+/**
+ * Empty the line discipline's queue of the console, which has O_NONBLOCK
+ * set, reading lines and an end of file until it answers EAGAIN. Returns 0
+ * then, or -1 when it does not within 64 reads.
+ */
 static int console_emptied(void)
 {
     unsigned char line[256];
@@ -779,8 +855,8 @@ static int console_emptied(void)
  * display; then open the framebuffer, set its palette, write a pixel, and
  * read the console, which for the display's owner reads raw scancodes and,
  * none typed, answers 0, where the line discipline, its queue empty, answers
- * EAGAIN; and close it. 0, or the number of the step that failed, with its
- * errno in `fb_errno`.
+ * EAGAIN; and close it. Returns 0, or the number of the step that failed,
+ * with its errno in `fb_errno`.
  */
 static void *use_framebuffer(void *arg)
 {
@@ -816,10 +892,11 @@ static void *use_framebuffer(void *arg)
 }
 
 /**
- * The framebuffer, opened, used and closed by a thread that is not the
- * first: the display is the process's, so the thread's palette and pixel
- * are taken, its read of the console is the owner's, and its close gives the
- * display back, which a child process then opens.
+ * Check the framebuffer, opened, used and closed by a thread that is not the
+ * first: the display is the process's, so the thread's palette and pixel are
+ * taken, its read of the console is the owner's, and its close gives the
+ * display back, which a child process then opens. Returns 0, or 1 after the
+ * failure is printed.
  */
 static int framebuffer_row(void)
 {
@@ -854,17 +931,22 @@ static int framebuffer_row(void)
     return 0;
 }
 
-/** The rows that follow the first ones: what the threads share, a signal a
- * handler's mask blocks, a wait whose status page goes, and the framebuffer
- * a thread that is not the first uses; 0 when all pass. They are one call so
- * that `main` stays within the complexity tools/verify/sizes.reasons allows
- * it. */
+/**
+ * Run the rows that follow the first ones: what the threads share, a signal
+ * a handler's mask blocks, a wait whose status page goes, and the framebuffer
+ * a thread that is not the first uses. Returns 0 when all pass, and 1 after a
+ * failure is printed. They are one call so that `main` stays within the
+ * complexity tools/verify/sizes.reasons allows it.
+ */
 static int later_rows(void)
 {
     return sharing() != 0 || handler_mask_row() != 0 || lost_status_row() != 0 ||
            framebuffer_row() != 0;
 }
 
+/**
+ * Run as a thread: exec a shell that exits 9. Returns only when the exec fails.
+ */
 static void *exec_self(void *arg)
 {
     (void)arg;
@@ -872,16 +954,20 @@ static void *exec_self(void *arg)
     return NULL;
 }
 
+/** Run as a thread: end the process with exit status 8. */
 static void *exit_all(void *arg)
 {
     (void)arg;
     exit(8);
 }
 
+/* The pipe the second thread of `two_execs` sends its thread id on. */
 static int tid_pipe[2];
 
-/** The second exec of the two: the thread makes the probe its tracer, says
- * its id, stops, and then calls execve. */
+/**
+ * Run as the second thread of `two_execs`: make the probe its tracer, send
+ * its id, stop, and then call execve. Does not return.
+ */
 static void *exec_second(void *arg)
 {
     pid_t self = tid();
@@ -896,6 +982,10 @@ static void *exec_second(void *arg)
     _exit(3);
 }
 
+/**
+ * Do nothing, so that SIGALRM interrupts a blocked call and does not end the
+ * process.
+ */
 static void on_alarm(int sig)
 {
     (void)sig;
@@ -904,7 +994,10 @@ static void on_alarm(int sig)
 /* The process-shared robust mutex of the robust row, in shared memory. */
 static pthread_mutex_t *robust;
 
-/** Lock the robust mutex, and keep it into an execve. */
+/**
+ * Run as a thread: lock the robust mutex and keep it into an execve. Does not
+ * return.
+ */
 static void *lock_and_exec(void *arg)
 {
     (void)arg;
@@ -916,11 +1009,12 @@ static void *lock_and_exec(void *arg)
 }
 
 /**
- * A robust mutex that a thread other than the first holds when it calls
- * execve is released under the id the thread locked it with, before the
- * thread takes the process id, so the probe's lock after the child's end
- * gets EOWNERDEAD and the mutex. A release that looked for the process id
- * would leave the mutex held for good; a time limit bounds the lock.
+ * Check that a robust mutex that a thread other than the first holds when it
+ * calls execve is released under the id the thread locked it with, before the
+ * thread takes the process id, so the probe's lock after the child's end gets
+ * EOWNERDEAD and the mutex. A release that looked for the process id would
+ * leave the mutex held for good; a time limit bounds the lock. Returns 0, or 1
+ * after the failure is printed.
  */
 static int robust_exec(void)
 {
@@ -968,7 +1062,7 @@ static int robust_exec(void)
  * SIGKILL ends the stop, and the second call does not run, as on Linux: its
  * thread ends, and the child runs the first one's program. An alarm bounds
  * the waits, since a second call that ran and waited for the first would
- * never end.
+ * never end. Returns 0, or 1 after the failure is printed.
  */
 static int two_execs(void)
 {
