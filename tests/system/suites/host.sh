@@ -276,6 +276,13 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: TinyCC's assemblers against GNU as" >&2
         fail=1
     fi
+    if TMPDIR="$VDIR" sh vendor/tcc/check_ldscript.sh >"$VDIR/check_ldscript.rlog" 2>&1; then
+        echo "hosttest: result: pass: TinyCC's linker script reader against GNU ld"
+    else
+        cat "$VDIR/check_ldscript.rlog"
+        echo "hosttest: result: fail: TinyCC's linker script reader against GNU ld" >&2
+        fail=1
+    fi
 fi
 
 # The fuzz harnesses under tests/fuzz, built as replay programs and run over

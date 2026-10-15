@@ -8,7 +8,7 @@ The host tests compile kernel and user sources as ordinary programs for the buil
 
 1. Compiles and runs each `tests/host/*_hosttest.c`.
 2. Compiles six checkers again under the sanitizers and runs their self-tests: `tools/inspect/elfcheck.c`, `cfgcheck.c` and `setidcheck.c`, `tools/verify/prosecheck.c`, and `tests/system/runner/runtests.c` and `harness.c`, each with `-Wall -Wextra -Werror` and `--selftest`.
-3. Runs eleven scripted checks: the `--check` mode of `krffs_open_mutate.sh`, `krffs_root_lock_mutate.sh`, `kstack_mutate.sh`, `endothers_mutate.sh`, `chown_mutate.sh` and `krffs_tools_mutate.sh` in this directory; `tests/system/run_scripts_test.sh`, `commit_msg_test.sh`, `install_accounts_test.sh` and `mkext2_overlay_test.sh`; and `vendor/tcc/check_asm.sh`.
+3. Runs twelve scripted checks: the `--check` mode of `krffs_open_mutate.sh`, `krffs_root_lock_mutate.sh`, `kstack_mutate.sh`, `endothers_mutate.sh`, `chown_mutate.sh` and `krffs_tools_mutate.sh` in this directory; `tests/system/run_scripts_test.sh`, `commit_msg_test.sh`, `install_accounts_test.sh` and `mkext2_overlay_test.sh`; and `vendor/tcc/check_asm.sh` and `check_ldscript.sh`.
 4. Builds the fuzz harnesses of [`tests/fuzz/`](../fuzz/Readme.md) as replay programs with `tests/fuzz/build.sh replay` and runs each over its committed corpus, `tests/fuzz/corpus/NAME/`. A harness that did not build, or whose corpus is empty, fails.
 
 The suite has no option to run one test. To run one by hand, print the compile commands, compile the one wanted, and run the binary:
