@@ -1,15 +1,24 @@
 # bisect: find the commit that made a ci failure, started by
 # tools/ci/report.sh for each new failure issue whose last pass it found.
 #
-# It runs outside the core runs' group, on either runner, one run for each
-# issue. tools/ci/bisect.sh tests the failing commit again, halves the
-# commits since the last pass, and comments on the issue with the commit it
-# names, an unresolved range, or a failure that did not repeat.
+# It runs outside the core runs' group, on either runner, one run at a time
+# for each issue. tools/ci/bisect.sh tests the failing commit again, halves
+# the commits since the last pass, and comments on the issue with the commit
+# it names, an unresolved range, or a failure that did not repeat. Each test
+# has the time limit of the run that failed, 170 or 340 minutes, so that a
+# bisection can outlast one job. The script has 700 minutes, inside the job's
+# 720, and when the time left cannot hold the next test it starts a new run
+# of this workflow on the range left, with `confirmed` set. The job runs
+# master's copy of the script from outside the tree, since the script checks
+# out each commit it tests.
 name: bisect
 
 on:
   workflow_dispatch:
     inputs:
+      kind:
+        description: The kind of run that failed, core or night
+        required: true
       arch:
         description: The architecture, i686 or x86_64
         required: true
@@ -25,10 +34,15 @@ on:
       issue:
         description: The failure's issue number
         required: true
+      confirmed:
+        description: yes when an earlier run saw the failing commit fail again
+        required: false
+        default: ''
 
 permissions:
   contents: read
   issues: write
+  actions: write
 
 concurrency:
   group: bisect-${{ inputs.issue }}
@@ -37,28 +51,33 @@ concurrency:
 jobs:
   bisect:
     runs-on: [self-hosted, rach2]
-    timeout-minutes: 300
+    timeout-minutes: 720
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.bad }}
+          ref: ${{ github.sha }}
           clean: false
           fetch-depth: 0
 
       - name: bisect
         env:
           GH_TOKEN: ${{ github.token }}
+          KIND: ${{ inputs.kind }}
           ARCH_IN: ${{ inputs.arch }}
           GOOD: ${{ inputs.good }}
           BAD: ${{ inputs.bad }}
           ISSUE: ${{ inputs.issue }}
           ITEMS: ${{ inputs.items }}
+          CONFIRMED: ${{ inputs.confirmed }}
         run: |
+          case "$KIND" in core|night) ;; *) echo "bisect: refused: kind '$KIND'" >&2; exit 2 ;; esac
           case "$ARCH_IN" in i686|x86_64) ;; *) echo "bisect: refused: architecture '$ARCH_IN'" >&2; exit 2 ;; esac
           case "$GOOD$BAD$ISSUE" in *[!0-9a-f]*) echo "bisect: refused: a commit or issue that is not hexadecimal" >&2; exit 2 ;; esac
           case "$ITEMS" in *[!a-z0-9\ -]*) echo "bisect: refused: items '$ITEMS'" >&2; exit 2 ;; esac
+          case "$CONFIRMED" in '') set -- ;; yes) set -- -c ;; *) echo "bisect: refused: confirmed '$CONFIRMED'" >&2; exit 2 ;; esac
+          cp tools/ci/bisect.sh "$RUNNER_TEMP/bisect.sh"
           # shellcheck disable=SC2086 # the items are one word each
-          sh tools/ci/bisect.sh "$ARCH_IN" "$GOOD" "$BAD" "$ISSUE" $ITEMS
+          sh "$RUNNER_TEMP/bisect.sh" "$@" -m 700 "$KIND" "$ARCH_IN" "$GOOD" "$BAD" "$ISSUE" $ITEMS
 
       - name: keep the logs
         if: always()

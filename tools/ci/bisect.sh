@@ -3,33 +3,65 @@
 # tools/ci/bisect.sh: find the commit that made a ci failure, and say so on
 # its issue.
 #
-#   tools/ci/bisect.sh ARCH GOOD BAD ISSUE ITEM...
+#   tools/ci/bisect.sh [-c] [-m MINUTES] KIND ARCH GOOD BAD ISSUE ITEM...
 #
-# GOOD passed ci on ARCH and BAD failed it; ITEM... is what failed, as
-# tools/ci/run.sh names it: `build`, `style`, `host`, a suite, or a set's name.
-# The report's `unfinished-core` and `unfinished-night` repeat the whole run
-# through tools/ci/run.sh, including its build and the night's separate bigmem.
-# A commit is tested by building it and running those items, the build alone
-# when `build` is among them. tests/run takes a set only by itself, so `core`
-# runs after the other items in a run of its own, and `all` runs alone since
-# it covers every suite. A test passes, fails, or cannot be made: a commit
-# that cannot be checked out, that does not build when the failure is a
-# suite's, or whose tests/run refuses or stops before its final
-# `run: result: failed` is untestable, and an untestable commit ends the
-# search with the range unresolved. BAD is tested first: a failure that does
-# not repeat is labelled `intermittent` and the issue stays open. Otherwise
-# the first-parent commits between GOOD and BAD are halved until one fails
-# and its parent passes, and both are tested once more; the commit is named
-# only when both results repeat. Each test's output is kept under
-# RUNNER_TEMP/bisect, one file for each commit and attempt, for the job to
-# upload. GH_TOKEN, GITHUB_REPOSITORY and GITHUB_RUN_ID come from the job.
+# GOOD passed ci on ARCH and BAD failed it in a run of KIND, `core` or
+# `night`; ITEM... is what failed, as tools/ci/run.sh names it: `build`,
+# `style`, `host`, a suite, or a set's name. The report's `unfinished-core`
+# and `unfinished-night` repeat the whole run through tools/ci/run.sh,
+# including its build and the night's separate bigmem. A commit is tested by
+# building it and running those items, the build alone when `build` is among
+# them. tests/run takes a set only by itself, so `core` runs after the other
+# items in a run of its own, and `all` runs alone since it covers every
+# suite. Each test has the time limit of KIND's run step in ci.yml or
+# night.yml, 170 or 340 minutes, so that a run too slow for ci is too slow
+# here; timeout(1) stops it as it stops ci's. A test passes, fails, or
+# cannot be made: a commit that cannot be checked out, that does not build
+# when the failure is a suite's, or whose tests/run refuses or stops before
+# its final `run: result: failed` is untestable, and an untestable commit
+# ends the search with the range unresolved. BAD is tested first, unless -c
+# says that an earlier run did so: a failure that does not repeat is
+# labelled `intermittent` and the issue stays open. Otherwise the
+# first-parent commits between GOOD and BAD are halved until one fails and
+# its parent passes, and both are tested once more; the commit is named only
+# when both results repeat.
+#
+# With -m the run may take MINUTES. When the time left cannot hold the next
+# test, or the two of the last step, at their full limits, the script comments
+# with the range left, starts bisect.yml again on that range with -c, and
+# exits 0; a run that cannot hold even its first test says the range is
+# unresolved. The script checks out every commit it tests, so it runs from a
+# copy outside the tree. Each test's output is kept under RUNNER_TEMP/bisect,
+# one file for each commit and attempt, for the job to upload. GH_TOKEN,
+# GITHUB_REPOSITORY and GITHUB_RUN_ID come from the job.
 #
 set -u
 
-[ "$#" -ge 5 ] || { echo "usage: tools/ci/bisect.sh ARCH GOOD BAD ISSUE ITEM..." >&2; exit 2; }
-ARCH=$1 good=$2 bad=$3 issue=$4
-shift 4
+usage="usage: tools/ci/bisect.sh [-c] [-m MINUTES] KIND ARCH GOOD BAD ISSUE ITEM..."
+confirmed=""
+minutes=""
+while getopts cm: opt; do
+    case $opt in
+        c) confirmed=yes ;;
+        m) minutes=$OPTARG ;;
+        *) echo "$usage" >&2; exit 2 ;;
+    esac
+done
+shift $((OPTIND - 1))
+[ "$#" -ge 6 ] || { echo "$usage" >&2; exit 2; }
+kind=$1 ARCH=$2 good=$3 bad=$4 issue=$5
+shift 5
 items=$*
+case $kind in
+    core) limit=170 ;;
+    night) limit=340 ;;
+    *) echo "$usage" >&2; exit 2 ;;
+esac
+case $minutes in
+    '') deadline="" ;;
+    *[!0-9]*) echo "$usage" >&2; exit 2 ;;
+    *) deadline=$(($(date +%s) + minutes * 60)) ;;
+esac
 export ARCH
 repo=$GITHUB_REPOSITORY
 logs="$RUNNER_TEMP/bisect"
@@ -62,10 +94,41 @@ Logs: \`gh run download $GITHUB_RUN_ID --repo $repo --name bisect-$issue\`" > /d
 # The abbreviated hash of a commit.
 short() { git rev-parse --short "$1"; }
 
+# Run a command under timeout(1) until the end of the current test, which
+# tested() sets in test_end, and return its status, 124 or 137 at the limit.
+limited() { # limited COMMAND...
+    left=$((test_end - $(date +%s)))
+    [ "$left" -gt 0 ] || left=1
+    timeout -k 60 "${left}s" "$@"
+}
+
+# Whether COUNT more tests fit in the time left, each at its full limit and
+# the minute that timeout(1) allows it to stop; always, without -m.
+fits() { # fits COUNT
+    [ -z "$deadline" ] || [ $(($(date +%s) + $1 * (limit + 2) * 60)) -le "$deadline" ]
+}
+
+# Leave the range GOOD..BAD, whose BAD has failed twice, to a new run of
+# bisect.yml, and exit; refuse when this run has tested nothing, since the
+# new run would have no more time than this one.
+handoff() { # handoff GOOD BAD
+    if [ "$attempt" = 0 ]; then
+        say "unresolved: this run's $minutes minutes cannot hold its tests of $kind, $limit minutes each; narrow the range $(short "$1")..$(short "$2") by hand"
+        exit 1
+    fi
+    if ! gh workflow run bisect.yml --repo "$repo" --ref master -f kind="$kind" \
+        -f arch="$ARCH" -f good="$1" -f bad="$2" -f items="$items" -f issue="$issue" -f confirmed=yes; then
+        say "unresolved: the run that would test $(short "$1")..$(short "$2") could not be started; narrow that range by hand"
+        exit 1
+    fi
+    say "$(short "$1") passes and $(short "$2") fails; this run has no time for another test, so a new bisect run continues with that range" || exit 1
+    exit 0
+}
+
 # Run tests/run with ARGS, its output on the log: 0 when it passes, 1 when it
 # ran its suites and failed, 2 when it refused or stopped before its result.
 suites() { # suites ARGS...
-    tests/run "$@" >> "$log.log" 2>&1
+    limited tests/run "$@" >> "$log.log" 2>&1
     rc=$?
     case $rc/$(grep '^run: result: ' "$log.log" | tail -n 1) in
         0/*) return 0 ;;
@@ -79,20 +142,22 @@ suites() { # suites ARGS...
 tested() { # tested COMMIT
     attempt=$((attempt + 1))
     log="$logs/$attempt-$(short "$1")"
+    test_end=$(($(date +%s) + limit * 60))
     git checkout -q --detach "$1" > "$log.log" 2>&1 || { mv "$log.log" "$log.untestable.log"; return 2; }
     echo "ci: bisect: testing $(git log -1 --format='%h %s' "$1")"
     if [ -n "$run_kind" ]; then
-        if sh tools/ci/run.sh "$run_kind" "$log.run" >> "$log.log" 2>&1; then
+        if limited sh tools/ci/run.sh "$run_kind" "$log.run" >> "$log.log" 2>&1; then
             mv "$log.log" "$log.passed.log"; return 0
         fi
         mv "$log.log" "$log.failed.log"; return 1
     fi
-    if ! make >> "$log.log" 2>&1; then
-        if [ -z "$test_set$test_items" ]; then
-            mv "$log.log" "$log.failed.log"; return 1
-        fi
-        mv "$log.log" "$log.untestable.log"; return 2
-    fi
+    limited make >> "$log.log" 2>&1
+    case $?/$test_set$test_items in
+        0/*) ;;
+        124/*|137/*) mv "$log.log" "$log.untestable.log"; return 2 ;;
+        */) mv "$log.log" "$log.failed.log"; return 1 ;;
+        *) mv "$log.log" "$log.untestable.log"; return 2 ;;
+    esac
     verdict=0
     # shellcheck disable=SC2086 # a suite name is one word by format
     [ -z "$test_items" ] || suites $test_items || verdict=$?
@@ -105,8 +170,12 @@ tested() { # tested COMMIT
     return "$verdict"
 }
 
-tested "$bad"
-case $? in
+verdict=1
+if [ -z "$confirmed" ]; then
+    fits 1 || handoff "$good" "$bad"
+    tested "$bad"; verdict=$?
+fi
+case $verdict in
     0) status=0
        gh issue edit "$issue" --repo "$repo" --add-label intermittent > /dev/null ||
            { echo "ci: bisect: the label on #$issue failed" >&2; status=1; }
@@ -121,9 +190,12 @@ candidates=$(git rev-list --reverse --first-parent "$good..$bad")
 n=$(echo "$candidates" | wc -l | tr -d ' ')
 lo=-1
 hi=$((n - 1))
-# The candidate at index I.
-nth() { echo "$candidates" | sed -n "$(($1 + 1))p"; }
+# The candidate at index I, GOOD at -1.
+nth() {
+    if [ "$1" -ge 0 ]; then echo "$candidates" | sed -n "$(($1 + 1))p"; else echo "$good"; fi
+}
 while [ $((hi - lo)) -gt 1 ]; do
+    fits 1 || handoff "$(nth "$lo")" "$(nth "$hi")"
     mid=$(((lo + hi) / 2))
     tested "$(nth "$mid")"
     case $? in
@@ -134,8 +206,9 @@ while [ $((hi - lo)) -gt 1 ]; do
     esac
 done
 culprit=$(nth "$hi")
-if [ "$lo" -ge 0 ]; then parent=$(nth "$lo"); else parent=$good; fi
+parent=$(nth "$lo")
 
+fits 2 || handoff "$parent" "$culprit"
 tested "$culprit"; again=$?
 tested "$parent"; before=$?
 if [ "$again" = 1 ] && [ "$before" = 0 ]; then

@@ -139,7 +139,7 @@ $(tail -n 40 "$result/log")
     number=${url##*/}
     echo "ci: report: $arch: filed #$number"
     [ -n "$good" ] || continue
-    if gh workflow run bisect.yml --repo "$repo" --ref master \
+    if gh workflow run bisect.yml --repo "$repo" --ref master -f kind="$kind" \
         -f arch="$arch" -f good="$good" -f bad="$sha" -f items="$items" -f issue="$number"; then
         echo "ci: report: $arch: bisect started for #$number"
     else

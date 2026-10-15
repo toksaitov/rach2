@@ -1,7 +1,8 @@
 #!/bin/sh
 # ci_test.sh: check unfinished ci reports, the hold issue, bisection runs,
-# a refused run in bisection, and verdict errors.
-# The scripts run in a private tree with stand-ins for git, gh and make.
+# their time limits and continuation, a refused run in bisection, and verdict
+# errors. The scripts run in a private tree with stand-ins for git, gh, make,
+# timeout and the clock.
 
 set -eu
 case ${1:-} in
@@ -50,6 +51,12 @@ fault()
         refusal)
             sed "s|'1/run: result: failed')|[1-9]*/*)|" "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
             ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
+        limit)
+            sed 's/if limited sh tools/if sh tools/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
+            ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
+        handoff)
+            sed 's/fits 2 || handoff/: || handoff/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
+            ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
     esac
 }
 if [ "$mode" = texts ]; then
@@ -61,6 +68,8 @@ if [ "$mode" = texts ]; then
     fault label
     fault intermittent
     fault refusal
+    fault limit
+    fault handoff
     exit 0
 fi
 
@@ -115,11 +124,23 @@ esac
 echo "run: $1: PASS in 1s"
 echo 'run: result: all 1 suites passed'
 EOF
+cat > "$work/bin/timeout" <<'EOF'
+#!/bin/sh
+echo "$3" >> "$CI_TEST_WORK/limits"
+shift 3
+exec "$@"
+EOF
+cat > "$work/bin/date" <<'EOF'
+#!/bin/sh
+[ "$1" = +%s ] || exit 2
+cat "$CI_TEST_WORK/clock"
+EOF
 cat > "$work/tree/tools/ci/run.sh" <<'EOF'
 #!/bin/sh
 set -eu
 current=$(cat "$CI_TEST_WORK/current")
 echo "run $1 $current" >> "$CI_TEST_WORK/events"
+echo $(($(cat "$CI_TEST_WORK/clock") + ${CI_TEST_STEP:-0})) > "$CI_TEST_WORK/clock"
 [ "$CI_TEST_FAIL" = 0 ] || [ "$current" = good ]
 EOF
 chmod +x "$work/bin/"* "$work/tree/tests/run"
@@ -180,20 +201,35 @@ hold()
     fi
 }
 
-# bisect ITEM COMMAND FAIL [GH-FAIL]: check runs and verdict delivery.
-# For an item that is not an unfinished run, COMMAND is the tests/run lines
-# expected after the build, and the stand-in runner always passes.
-bisect()
+# start: reset the logs, the stand-ins' records and the clock.
+start()
 {
-    item=$1 command=$2 CI_TEST_FAIL=$3 CI_TEST_GH_FAIL=${4:-} CI_TEST_RUN=pass
-    export CI_TEST_FAIL CI_TEST_GH_FAIL CI_TEST_RUN
     RUNNER_TEMP=$work/logs
     export RUNNER_TEMP
     rm -rf "$RUNNER_TEMP"
     : > "$work/events"
     : > "$work/gh.log"
+    : > "$work/limits"
+    echo 0 > "$work/clock"
+}
+
+# bisect ITEM COMMAND FAIL [GH-FAIL]: check runs, their time limits and
+# verdict delivery. For an item that is not an unfinished run, COMMAND is the
+# tests/run lines expected after the build, and the stand-in runner always
+# passes. Every command runs under timeout(1) with the run kind's whole
+# limit, since the stand-in clock does not move.
+bisect()
+{
+    item=$1 command=$2 CI_TEST_FAIL=$3 CI_TEST_GH_FAIL=${4:-} CI_TEST_RUN=pass
+    export CI_TEST_FAIL CI_TEST_GH_FAIL CI_TEST_RUN
+    case $item in
+        unfinished-night) kind=night seconds=20400 ;;
+        *) kind=core seconds=10200 ;;
+    esac
+    start
     status=0
-    sh "$work/bisect.sh" i686 good bad 7 "$item" > "$work/bisect.log" 2>&1 || status=$?
+    # shellcheck disable=SC2086 # the items are one word each
+    sh "$work/bisect.sh" "$kind" i686 good bad 7 $item > "$work/bisect.log" 2>&1 || status=$?
     if [ -n "$CI_TEST_GH_FAIL" ]; then
         [ "$status" = 1 ] || return 1
         case $CI_TEST_GH_FAIL in
@@ -215,6 +251,8 @@ bisect()
         *) printf 'make\n%b\n' "$command" > "$work/expected" ;;
     esac
     cmp -s "$work/expected" "$work/events" || return 1
+    [ "$(wc -l < "$work/limits")" = "$(wc -l < "$work/events")" ] || return 1
+    ! grep -qvx "${seconds}s" "$work/limits" || return 1
     if [ "$CI_TEST_FAIL" = 0 ]; then
         grep -q -- '--add-label intermittent' "$work/gh.log" || return 1
     else
@@ -222,18 +260,43 @@ bisect()
     fi
 }
 
+# handoff: give a core bisection 700 minutes and let each run take 400 of
+# them; require the run to test BAD alone and leave the last step to a new
+# run with -c, that run to test both commits without BAD again, and a run of
+# 100 minutes to test nothing and say that the range is unresolved.
+handoff()
+{
+    CI_TEST_FAIL=1 CI_TEST_GH_FAIL='' CI_TEST_STEP=24000
+    export CI_TEST_FAIL CI_TEST_GH_FAIL CI_TEST_STEP
+    start
+    sh "$work/bisect.sh" -m 700 core i686 good bad 7 unfinished-core > "$work/bisect.log" 2>&1 || return 1
+    printf 'run core bad\n' > "$work/expected"
+    cmp -s "$work/expected" "$work/events" || return 1
+    grep -q 'workflow run bisect.yml .* -f kind=core -f arch=i686 -f good=good -f bad=bad -f items=unfinished-core -f issue=7 -f confirmed=yes' "$work/gh.log" || return 1
+    grep -q 'good passes and bad fails' "$work/gh.log" || return 1
+    start
+    sh "$work/bisect.sh" -c -m 700 core i686 good bad 7 unfinished-core > "$work/bisect.log" 2>&1 || return 1
+    printf 'run core bad\nrun core good\n' > "$work/expected"
+    cmp -s "$work/expected" "$work/events" || return 1
+    ! grep -q 'workflow run' "$work/gh.log" || return 1
+    grep -q 'fails .* and its parent good passes' "$work/gh.log" || return 1
+    start
+    status=0
+    sh "$work/bisect.sh" -m 100 core i686 good bad 7 unfinished-core > "$work/bisect.log" 2>&1 || status=$?
+    [ "$status" = 1 ] && [ ! -s "$work/events" ] || return 1
+    grep -q "unresolved: this run's 100 minutes" "$work/gh.log" || return 1
+    CI_TEST_STEP=0
+}
+
 # suite RESULT: bisect the runner suite when tests/run on BAD passes, fails,
 # or refuses, and check that only a failure it reports is counted as one.
 suite()
 {
     CI_TEST_RUN=$1 CI_TEST_GH_FAIL=
-    RUNNER_TEMP=$work/logs
-    export CI_TEST_RUN CI_TEST_GH_FAIL RUNNER_TEMP
-    rm -rf "$RUNNER_TEMP"
-    : > "$work/events"
-    : > "$work/gh.log"
+    export CI_TEST_RUN CI_TEST_GH_FAIL
+    start
     status=0
-    sh "$work/bisect.sh" i686 good bad 7 runner > "$work/bisect.log" 2>&1 || status=$?
+    sh "$work/bisect.sh" core i686 good bad 7 runner > "$work/bisect.log" 2>&1 || status=$?
     case $1 in
         pass) printf 'make\ntests runner bad\n' > "$work/expected"
               verdict='--add-label intermittent' want=0 ;;
@@ -249,7 +312,8 @@ suite()
 
 # rows: check both unfinished kinds and the hold issue, preserve an actual
 # runner failure, run the core set beside the other items of a core run that
-# failed, and count only a reported failure of the runner suite as one.
+# failed, continue a bisection in a new run, and count only a reported
+# failure of the runner suite as one.
 rows()
 {
     for kind in core night; do
@@ -266,6 +330,7 @@ rows()
     bisect unfinished-core core 1 comment || return 1
     bisect unfinished-core core 0 comment || return 1
     bisect unfinished-core core 0 edit || return 1
+    handoff || return 1
     for result in pass fail refuse; do
         suite "$result" || return 1
     done
@@ -312,7 +377,15 @@ if [ "$mode" = mutate ]; then
     if suite refuse; then
         echo 'ci-test: result: fail: refusal fault passed' >&2; exit 1
     fi
+    fault limit
+    if bisect unfinished-core core 1; then
+        echo 'ci-test: result: fail: limit fault passed' >&2; exit 1
+    fi
+    fault handoff
+    if handoff; then
+        echo 'ci-test: result: fail: handoff fault passed' >&2; exit 1
+    fi
     cp "$repo/tools/ci/bisect.sh" "$work/bisect.sh"
     rows
 fi
-echo 'ci-test: result: pass: unfinished runs, the hold issue, the runner suite, core items, a refused run and verdict errors'
+echo 'ci-test: result: pass: unfinished runs, the hold issue, the runner suite, core items, time limits, continuation, a refused run and verdict errors'
