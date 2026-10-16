@@ -32,5 +32,6 @@ prompt="First run \`sleep 150\` with the Bash tool, in the foreground. Then call
 
 Then wait for the owner, who may open this session from the phone to ask about the message. Answer from the repository, the board (\`gh\`) and \`sh tools/flow/status.sh\`, and change nothing unless the owner asks."
 tmux kill-session -t rach2-incident 2> /dev/null
+# The prompt comes first, since --allowedTools takes every word after it.
 tmux new-session -d -s rach2-incident -x 200 -y 50 -e "PATH=$PATH" \
-    claude --remote-control "rach2 incident" --allowedTools 'Bash(sleep:*)' "$prompt"
+    claude "$prompt" --remote-control "rach2 incident" --allowedTools 'Bash(sleep:*)'
