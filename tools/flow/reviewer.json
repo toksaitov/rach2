@@ -1,9 +1,11 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["summary", "findings"],
+  "required": ["summary", "complete", "unreviewed", "findings"],
   "properties": {
     "summary": {"type": "string"},
+    "complete": {"type": "boolean"},
+    "unreviewed": {"type": "string"},
     "findings": {
       "type": "array",
       "items": {
