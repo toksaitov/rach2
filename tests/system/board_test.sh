@@ -1,7 +1,9 @@
 #!/bin/sh
-# board_test.sh: check group creation, rollback and take's choice of the
-# first assignee against a local gh fixture. --mutate omits rollback, then
-# reverses take's order, in a private copy; --texts checks the faults' texts.
+# board_test.sh: check group creation, rollback, take's choice of the first
+# assignee, and take and release of a closed issue against a local gh fixture.
+# --mutate omits rollback, then reverses take's order, then lets a closed
+# issue pass for an open one, in a private copy; --texts checks the faults'
+# texts.
 
 set -eu
 case ${1:-} in
@@ -34,9 +36,20 @@ take_fault()
         "$repo/tools/flow/board.sh" > "$work/board.sh"
     ! cmp -s "$repo/tools/flow/board.sh" "$work/board.sh"
 }
+
+# closed_fault: let take and release treat a closed issue as open in the
+# private copy, refusing missing fault text.
+closed_fault()
+{
+    # shellcheck disable=SC2016 # the dollar is in the text the fault removes
+    sed 's/\[ "\$state" = CLOSED \] || return 1/return 1/' \
+        "$repo/tools/flow/board.sh" > "$work/board.sh"
+    ! cmp -s "$repo/tools/flow/board.sh" "$work/board.sh"
+}
 if [ "$mode" = texts ]; then
     fault
     take_fault
+    closed_fault
     exit 0
 fi
 
@@ -52,7 +65,8 @@ case "$1 $2" in
     'api graphql')
         case "$*" in
             *'field(name: "Status")'*)
-                printf '%s\n' project=project field=field Ready=ready ;;
+                printf '%s\n' project=project field=field Backlog=backlog \
+                    Ready=ready In_progress=progress Done=done ;;
             *'projectItems(first: 10)'*)
                 case $BOARD_TEST_FAIL in
                     item) exit 1 ;;
@@ -62,6 +76,11 @@ case "$1 $2" in
             *) exit 2 ;;
         esac ;;
     'issue view')
+        case "$*" in
+            *'--json state --jq .state'*)
+                echo "$BOARD_TEST_STATE"
+                exit 0 ;;
+        esac
         if [ -n "$BOARD_TEST_ME" ]; then
             case "$*" in
                 *'.assignees[].login'*) printf '%s\n' "$BOARD_TEST_NOW" | tr , '\n' ;;
@@ -108,7 +127,8 @@ case "$1 $2" in
     'project item-edit')
         case "$*" in *'--id item '*) ;; *) exit 1 ;; esac
         [ "$BOARD_TEST_FAIL" != status ] || exit 1
-        echo ready > "$BOARD_TEST_WORK/status" ;;
+        printf '%s\n' "$*" | sed 's/.*--single-select-option-id //' \
+            > "$BOARD_TEST_WORK/status" ;;
     'issue close')
         [ "$BOARD_TEST_FAIL" != close ] || exit 1
         echo closed > "$BOARD_TEST_WORK/group" ;;
@@ -118,8 +138,9 @@ EOF
 chmod +x "$work/bin/gh"
 BOARD_TEST_WORK=$work/state
 BOARD_TEST_ME=
+BOARD_TEST_STATE=OPEN
 PATH=$work/bin:$PATH
-export BOARD_TEST_WORK BOARD_TEST_ME PATH
+export BOARD_TEST_WORK BOARD_TEST_ME BOARD_TEST_STATE PATH
 
 # row FAILURE: check the exit status, queue labels and group left by one call.
 row()
@@ -191,9 +212,39 @@ take_row()
     esac
 }
 
+# state_row NAME: run `take 7` or `release 7` as alpha, the one account
+# assigned, on an issue that is closed or open as NAME says, and check the
+# Status and assignees it leaves.
+state_row()
+{
+    BOARD_TEST_FAIL=none BOARD_TEST_ME=alpha BOARD_TEST_NOW=alpha
+    BOARD_TEST_TIMELINE=alpha
+    case $1 in
+        *-closed) BOARD_TEST_STATE=CLOSED ;;
+        *) BOARD_TEST_STATE=OPEN ;;
+    esac
+    export BOARD_TEST_FAIL BOARD_TEST_NOW BOARD_TEST_TIMELINE BOARD_TEST_STATE
+    rm -f "$BOARD_TEST_WORK/"*
+    result=0
+    sh "$work/board.sh" "${1%%-*}" 7 > "$work/out" 2> "$work/err" || result=$?
+    BOARD_TEST_ME='' BOARD_TEST_STATE=OPEN
+    case $1 in
+        take-closed)
+            [ "$result" -ne 0 ] && [ "$(cat "$BOARD_TEST_WORK/status")" = 'done' ] &&
+                ! grep -q 'issue edit' "$BOARD_TEST_WORK/calls" &&
+                grep -q '^board: #7: closed: set Done$' "$work/err" ;;
+        release-closed)
+            [ "$result" -eq 0 ] && [ "$(cat "$BOARD_TEST_WORK/status")" = 'done' ] &&
+                ! grep -q 'issue edit' "$BOARD_TEST_WORK/calls" ;;
+        release-open)
+            [ "$result" -eq 0 ] && [ "$(cat "$BOARD_TEST_WORK/status")" = ready ] &&
+                grep -q 'remove-assignee alpha' "$BOARD_TEST_WORK/calls" ;;
+    esac
+}
+
 # rows: check successful creation, a group the board added first, each failed
 # step and failed cleanup, and which of two accounts assigned in the same
-# second keeps an issue.
+# second keeps an issue, and what take and release do to a closed issue.
 rows()
 {
     failed=
@@ -215,6 +266,13 @@ yield-later alpha zed,alpha zed,alpha
 keep-earlier zed zed,alpha zed,alpha
 yield-again alpha zed,alpha alpha,zed,alpha
 ROWS
+    for test in take-closed release-closed release-open; do
+        if ! state_row "$test"; then
+            echo "board-test: failed: $test" >&2
+            cat "$work/err" >&2
+            failed="$failed $test"
+        fi
+    done
     [ -z "$failed" ]
 }
 rows || exit 1
@@ -231,8 +289,15 @@ if [ "$mode" = mutate ]; then
         exit 1
     fi
     grep -q '^board-test: failed: yield-later$' "$work/mutated.out"
+    closed_fault
+    if rows > "$work/mutated.out" 2>&1; then
+        echo 'board-test: fault passed: a closed issue was taken as open' >&2
+        exit 1
+    fi
+    grep -q '^board-test: failed: take-closed$' "$work/mutated.out"
+    grep -q '^board-test: failed: release-closed$' "$work/mutated.out"
     cp "$repo/tools/flow/board.sh" "$work/board.sh"
     rows || exit 1
-    echo 'board-test: result: pass: rollback and take faults caught and restored'
+    echo 'board-test: result: pass: rollback, take and closed faults caught and restored'
 fi
-echo 'board-test: result: pass: 18 rows'
+echo 'board-test: result: pass: 21 rows'

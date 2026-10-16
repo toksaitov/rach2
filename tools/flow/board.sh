@@ -20,7 +20,10 @@
 # prints nothing and fails, so that a caller does not take a part of the board
 # for the whole.
 #
-# `take N [GROUP]` assigns N to this account and reads the issue's timeline.
+# `take N [GROUP]` refuses a closed issue, setting it Done and changing
+# nothing else, since a close between `next` and `take` would otherwise leave
+# it In progress. Otherwise it assigns N to this account and reads the
+# issue's timeline.
 # Of the accounts assigned now, the one whose latest assignment is the
 # earliest keeps the issue. When that is another account, `take` unassigns
 # this one and exits 1, so that no issue has two writers; otherwise it sets N
@@ -44,7 +47,8 @@
 # the label `owner`, which marks a decision that AGENTS.md gives the owner and
 # that the manager sends to the owner's phone. A step that fails exits 1 with
 # N still assigned to this account, so that its worker keeps it and can
-# release it again.
+# release it again. A closed issue is set Done and nothing else is changed,
+# since its commit may have closed it before its worker hands it back.
 #
 # `ready AFTER N...` moves each N after AFTER on the board, the first N after
 # AFTER and each later one after the one before, and then sets it Ready, so
@@ -69,7 +73,8 @@
 # it created. If cleanup fails, stderr gives the steps left to do.
 #
 # `done` sets Done on every closed issue whose Status is not, and fails when
-# the listing of the board fails.
+# the listing of the board fails. The manager runs it at each check, for an
+# issue that closes while a `take` or a `release` of it runs.
 #
 # The repository and the board's owner and number are below. The ids of the
 # board, its Status field and the field's options are looked up by name on
@@ -164,6 +169,22 @@ next()
             $1 == "Ready" { r = r $2 "\t" $3 "\n" } END { printf "%s", r }'
 }
 
+# finished N: when issue N is closed, set it Done, say so and succeed;
+# otherwise fail. A state or Status that cannot be read or set exits 1.
+finished()
+{
+    state=$(gh issue view "$1" --repo "$REPO" --json state --jq .state) || {
+        echo "board: #$1: cannot read its state" >&2
+        exit 1
+    }
+    [ "$state" = CLOSED ] || return 1
+    set_status "$1" Done || {
+        echo "board: #$1: closed, but cannot set it Done" >&2
+        exit 1
+    }
+    echo "board: #$1: closed: set Done" >&2
+}
+
 # unassign N LOGIN: remove LOGIN from N's assignees, or say that it could not.
 unassign()
 {
@@ -228,6 +249,9 @@ refuse()
 
 take()
 {
+    if finished "$1"; then
+        exit 1
+    fi
     me=$(gh api user --jq .login) added=no
     had=$(gh issue view "$1" --repo "$REPO" --json assignees \
         --jq 'if any(.assignees[]; .login == "'"$me"'") then "yes" else "no" end')
@@ -261,6 +285,9 @@ mine()
 
 release()
 {
+    if finished "$1"; then
+        return 0
+    fi
     me=$(gh api user --jq .login)
     status=$2 label=
     if [ "$status" = owner ]; then
