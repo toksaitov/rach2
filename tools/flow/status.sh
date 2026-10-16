@@ -3,20 +3,30 @@
 # status.sh: one look at the whole process, for the manager's check.
 #
 # Usage: status.sh
+#        status.sh day DATE
 #
-# It prints master's newest commit; ci's last eight runs, each with the
-# commit it started at and the commit whose status it set, or `?` while that
-# is not known, since a core run tests the newest master when its first job
-# runs; the open issues with their Status on the board, assignees and labels;
-# a line for each worker loop that `workers` lists and one for the reviewer
-# loop of this machine; and the testing host's load, memory and emulators. A
-# worker's line says whether its loop runs, its last log line, the seconds
-# since its newest session wrote, how many test commands it runs, and its
-# clone's commit and count of changed files; the reviewer's, whether it runs,
-# its last log line and its queue. A loop on another host is read over ssh;
-# one whose host is `-` runs on this machine. A loop that sends its tests to
-# its own copy on the testing host, as the owner's loops do, counts the
+# It prints master's newest commit; the phase In progress as `board.sh phase`
+# reports it, whose last line says whether the phase is ready for its release;
+# the record of the release under way and whether its tmux session
+# `rach2-release` runs; ci's last eight runs, each with the commit it started
+# at and the commit whose status it set, or `?` while that is not known, since
+# a core run tests the newest master when its first job runs; the open issues
+# with their Status on the board, assignees and labels; a line for each
+# worker loop that `workers` lists and one for the reviewer loop of this
+# machine; and the testing host's load, memory and emulators. A worker's line
+# says whether its loop runs, its last log line, the seconds since its newest
+# session wrote, how many test commands it runs, and its clone's commit and
+# count of changed files; the reviewer's, whether it runs, its last log line
+# and the runs of the range it reviews. A loop on another host is read over
+# ssh; one whose host is `-` runs on this machine. A loop that sends its tests
+# to its own copy on the testing host, as the owner's loops do, counts the
 # commands that work in that copy.
+#
+# `day DATE` prints the facts of one day, DATE as YYYY-MM-DD, counted at the
+# owner's UTC+6, for the manager's day report: the commits that reached
+# master, the issues closed, the core and full runs by their result, and the
+# phases closed, each with its list, so that the report's numbers are counted
+# by a program and not by the model that writes it.
 
 # shellcheck disable=SC2016 # the dollars are GraphQL's, jq's and the probe's
 REPO=toksaitov/rach2
@@ -42,7 +52,54 @@ echo "loop $loop: $(tail -n 1 "$st/loop.log" 2> /dev/null) | silent $age | $test
     "$(git -C "$repo" status --porcelain 2> /dev/null | wc -l | tr -d " ") changed"
 '
 
+# day DATE: print the facts of DATE, as the header says.
+day()
+{
+    from="$1T00:00:00+06:00"
+    to=$(date -j -v+1d -f %F "$1" +%F 2> /dev/null || date -d "$1 + 1 day" +%F)
+    to="${to}T00:00:00+06:00"
+    git fetch -q origin
+    echo "== $1 at UTC+6: $from to $to"
+    commits=$(git log --first-parent --format='%h %s' --since="$from" --until="$to" origin/master)
+    echo "commits on master: $(printf '%s' "$commits" | grep -c .)"
+    printf '%s\n' "$commits" | grep . | sed 's/^/  /'
+    closed=$(gh issue list --repo "$REPO" --state closed --limit 500 \
+        --search "closed:$from..$to" --json number,title,stateReason \
+        --jq '.[] | "#\(.number) \(.stateReason | ascii_downcase) \(.title[0:70])"')
+    echo "issues closed: $(printf '%s' "$closed" | grep -c .)"
+    printf '%s\n' "$closed" | grep . | sed 's/^/  /'
+    for w in ci.yml full.yml; do
+        runs=$(gh run list --repo "$REPO" --workflow "$w" --limit 200 --created "$from..$to" \
+            --json conclusion,status,displayTitle,databaseId \
+            --jq '.[] | "\(.databaseId) \(.conclusion // .status) \(.displayTitle)"')
+        echo "$w runs: $(printf '%s' "$runs" | grep -c .), by result: $(printf '%s\n' "$runs" |
+            awk 'NF { n[$2]++ } END { for (r in n) printf "%s %d; ", r, n[r] }')"
+        printf '%s\n' "$runs" | grep . | sed 's/^/  /'
+    done
+    phases=$(gh issue list --repo "$REPO" --state closed --label phase --limit 50 \
+        --search "closed:$from..$to" --json number,title --jq '.[] | "#\(.number) \(.title)"')
+    echo "phases closed: $(printf '%s' "$phases" | grep -c .)"
+    printf '%s\n' "$phases" | grep . | sed 's/^/  /'
+}
+
+if [ "$1" = day ]; then
+    [ -n "$2" ] || { echo "usage: status.sh day YYYY-MM-DD" >&2; exit 2; }
+    day "$2"
+    exit
+fi
+
 echo "== master $(git ls-remote "https://github.com/$REPO" refs/heads/master | cut -c 1-8)  $(date -u '+%F %T') UTC"
+echo "== phase"
+sh "$(dirname "$0")/board.sh" phase 2>&1
+echo "== release"
+if tmux has-session -t rach2-release 2> /dev/null; then echo "release.sh runs"; else echo "release.sh is not running"; fi
+r=$HOME/flow/manager/release/record
+if [ -f "$r" ]; then
+    echo "record $r:"
+    tail -n 6 "$r"
+else
+    echo "no release record"
+fi
 echo "== ci runs"
 tested=$(gh api graphql -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='
     query($o: String!, $r: String!) { repository(owner: $o, name: $r) {
@@ -95,7 +152,7 @@ if [ ! -d "$st" ]; then
     echo "no reviewer loop has run here: no $st"
 else
     if pgrep -f "$st/run/reviewer.sh" > /dev/null; then loop=runs; else loop="not running"; fi
-    echo "loop $loop: $(tail -n 1 "$st/loop.log" 2> /dev/null) | queue: $(tr '\n' ' ' < "$st/queue" 2> /dev/null)"
+    echo "loop $loop: $(tail -n 1 "$st/loop.log" 2> /dev/null) | tries: $(tr '\n' ' ' < "$st/tries" 2> /dev/null)"
 fi
 echo "== testing host"
 printf '%s\n' 'uptime' 'free -g | sed -n 2p' 'echo "qemu $(pgrep -c qemu-system || true)"' |
