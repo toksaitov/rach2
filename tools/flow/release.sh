@@ -58,7 +58,9 @@
 #   boot. Only then `bootctl commit` makes the candidate the saved default.
 # * record: /etc/rach2/release on the machine, which runs the committed
 #   candidate, is written with SHA, the phase, the full run and the root's
-#   digest, and read back; the phase is not closed until it names SHA.
+#   digest, flushed to the disk with the directories that hold it, and read
+#   back. A flush that fails fails the step, since the read-back may come
+#   from the buffer cache; the phase is not closed until the file names SHA.
 # * close: the phase gets a comment with the commit, the run, the digests and
 #   the verdicts; when the candidate is still ready, the record says
 #   `closing`, the phase is closed, its cards are archived with `board.sh
@@ -589,8 +591,15 @@ main()
         [ "$now" = "system candidate" ] ||
             fail record "the machine runs $now, not the committed candidate"
         want=$(printf 'commit %s\nphase %s\nfull %s\nroot %s' "$sha" "$phase" "$run" "$(digest images/os-real-gnu.ext2)")
-        printf '%s\n' "$want" | lenovo 'mkdir -p /etc/rach2 && cat > /etc/rach2/release.new &&
-            sync && mv /etc/rach2/release.new /etc/rach2/release && sync'
+        wrote=$(printf '%s\n' "$want" | lenovo '{ mkdir -p /etc/rach2 && cat > /etc/rach2/release.new &&
+            sync /etc/rach2/release.new && mv /etc/rach2/release.new /etc/rach2/release &&
+            sync /etc/rach2/release /etc/rach2 /etc; } 2>&1; echo "status $?"') ||
+            later "the machine does not answer"
+        case $(printf '%s\n' "$wrote" | tail -n 1) in
+            'status 0') ;;
+            status*) fail record "writing /etc/rach2/release failed: $(printf '%s' "$wrote" | tr '\n' ' ')" ;;
+            *) later "the machine does not answer" ;;
+        esac
         have=$(lenovo 'cat /etc/rach2/release 2> /dev/null; echo answered') &&
             [ "$(printf '%s\n' "$have" | tail -n 1)" = answered ] ||
             later "the machine does not answer"

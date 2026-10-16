@@ -6,7 +6,7 @@
 # tools/flow/release.sh, in a scratch tree, against stand-ins for gh, ssh,
 # git, sleep, board.sh and notify.sh that append each call to a list. The
 # machine answers the reads of `where`, `bootctl status` and
-# /etc/rach2/release, takes a write of that file when the row allows it, and
+# /etc/rach2/release, takes a write of that file as the row says, and
 # refuses every other command; the board says what the row gives; gh lists
 # no runs.
 # The rows check that a release whose steps are all done only reports and
@@ -18,7 +18,8 @@
 # system after the installer started fails the install without a write to
 # the machine; that a release whose acceptance is done writes
 # /etc/rach2/release before it closes the phase, and fails without closing
-# it when the file does not read back; and that a record with `closing`
+# it when the file does not read back or when the machine's flush of it
+# fails though it reads back; and that a record with `closing`
 # finishes that phase whatever phase was given, checking an open phase for
 # readiness again. With --mutate
 # each fault below is put into the copy and must fail its own row; the copy
@@ -52,7 +53,8 @@ mkdir -p "$work/bin" "$tree/tools/flow" "$tree/krffs"
 # `touched` line; an ended record with `install started` is replaced; a
 # machine running its system after the installer started is sent to
 # recovery; the record step is skipped once the acceptance is done; the
-# record is not read back; the phase of a record with `closing` is ignored;
+# status of the machine's write and flush is ignored; the record is not read
+# back; the phase of a record with `closing` is ignored;
 # and an open phase is closed without its readiness checked again.
 fault()
 {
@@ -70,6 +72,7 @@ fault()
         started) sed 's/^        if grep -q .^install started . "\$state\/record" &&$/        if false \&\&/' ;;
         reboot) sed 's/^                ! grep -q .^install started . "\$state\/record" ||$/                true ||/' ;;
         unrecorded) sed 's/^    if ! done_ record; then$/    if ! done_ accept; then/' ;;
+        unsynced) sed "s/^            'status 0') ;;\$/            status*) ;;/" ;;
         unread) sed 's/^        \[ .* = "\$want" \] ||$/        true ||/' ;;
         closing) sed 's/^        phase=\$(sed -n .s\/^phase \/\/p. "\$state\/record")$/        :/' ;;
         ready) awk '
@@ -81,7 +84,7 @@ fault()
 }
 
 if [ "$mode" = texts ]; then
-    for f in undone full aside touched started reboot unrecorded unread closing ready; do
+    for f in undone full aside touched started reboot unrecorded unsynced unread closing ready; do
         fault "$f" || { echo "release-test: fault $f changes nothing" >&2; exit 1; }
     done
     exit 0
@@ -109,9 +112,11 @@ esac
 EOF
 
 # ssh answers the testing host and the machine's reads, as the Lenovo
-# running its system's candidate slot, keeps a write of /etc/rach2/release
-# in RELEASE_TEST_CALLS.release when RELEASE_TEST_WRITES is yes, and refuses
-# every other command.
+# running its system's candidate slot, and refuses every other command but a
+# write of /etc/rach2/release. RELEASE_TEST_WRITES says what that write does:
+# `yes` keeps it in RELEASE_TEST_CALLS.release and reports status 0, `lost`
+# reports status 0 and keeps nothing, `unsynced` keeps it and reports the
+# flush's error and status 1, and `no` refuses it.
 cat > "$work/bin/ssh" <<'EOF'
 #!/bin/sh
 for a; do host=$command command=$a; done
@@ -130,13 +135,20 @@ case $command in
         printf 'machine read\n' >> "$RELEASE_TEST_CALLS"
         cat "$RELEASE_TEST_CALLS.release" 2> /dev/null
         echo answered ;;
-    'mkdir -p /etc/rach2 && cat > /etc/rach2/release.new &&'*)
-        [ "$RELEASE_TEST_WRITES" = yes ] || {
+    '{ mkdir -p /etc/rach2 && cat > /etc/rach2/release.new &&'*)
+        [ "$RELEASE_TEST_WRITES" != no ] || {
             printf 'machine write refused\n' >> "$RELEASE_TEST_CALLS"
             exit 1
         }
         printf 'machine write release\n' >> "$RELEASE_TEST_CALLS"
-        cat > "$RELEASE_TEST_CALLS.release" ;;
+        case $RELEASE_TEST_WRITES in
+            lost) cat > /dev/null; echo 'status 0' ;;
+            unsynced)
+                cat > "$RELEASE_TEST_CALLS.release"
+                echo "sync: error syncing '/etc/rach2/release': Input/output error"
+                echo 'status 1' ;;
+            *) cat > "$RELEASE_TEST_CALLS.release"; echo 'status 0' ;;
+        esac ;;
     *)
         printf 'machine write %s\n' "$command" >> "$RELEASE_TEST_CALLS"
         exit 1 ;;
@@ -192,7 +204,8 @@ void: ready: no: work: #14"
 
 # run P RECORD BOARD [STATE [WRITES]]: write RECORD, have the board report
 # BOARD for phase 7, gh report the phase as STATE, OPEN unless given, and the
-# machine take a write of /etc/rach2/release when WRITES is yes, and run the
+# machine take a write of /etc/rach2/release as WRITES says, no unless given,
+# as for ssh above, and run the
 # copy for phase P, keeping its output in out and its status in `result`.
 run()
 {
@@ -277,9 +290,15 @@ root " ] && [ "$(grep -c '^record done ' "$work/state/$a")" -eq 1 ] &&
                 [ "$(grep -n '^machine write release$' "$work/calls" | cut -d : -f 1)" -lt \
                     "$(grep -n '^gh issue close 7$' "$work/calls" | cut -d : -f 1)" ] ;;
         record-refused)
-            run 7 "$accepted" "ready: yes $H"
+            run 7 "$accepted" "ready: yes $H" OPEN lost
             [ "$result" -eq 1 ] &&
                 [ "$(tail -n 1 "$work/state/record")" = "failed record: /etc/rach2/release on the machine does not name $H: " ] &&
+                ! grep -q '^reported \|^record done ' "$work/state/record" &&
+                ! called '^gh issue close' ;;
+        record-unsynced)
+            run 7 "$accepted" "ready: yes $H" OPEN unsynced
+            [ "$result" -eq 1 ] &&
+                [ "$(tail -n 1 "$work/state/record")" = "failed record: writing /etc/rach2/release failed: sync: error syncing '/etc/rach2/release': Input/output error status 1" ] &&
                 ! grep -q '^reported \|^record done ' "$work/state/record" &&
                 ! called '^gh issue close' ;;
         closing-other)
@@ -316,7 +335,7 @@ rows()
 {
     failed=
     for name in all-done full-done void-waits void-aside failed-aside \
-        install-stops install-reboot record-write record-refused closing-other closing-open closing-unready; do
+        install-stops install-reboot record-write record-refused record-unsynced closing-other closing-open closing-unready; do
         if ! row "$name"; then
             echo "release-test: failed: $name" >&2
             cat "$work/out" "$work/calls" >&2
@@ -350,11 +369,12 @@ if [ "$mode" = mutate ]; then
     caught started install-stops
     caught reboot install-reboot
     caught unrecorded record-write
+    caught unsynced record-unsynced
     caught unread record-refused
     caught closing closing-other
     caught ready closing-unready
     fault none || exit 1
     rows || exit 1
-    echo 'release-test: result: pass: 10 faults caught and restored'
+    echo 'release-test: result: pass: 11 faults caught and restored'
 fi
-echo 'release-test: result: pass: 12 rows'
+echo 'release-test: result: pass: 13 rows'
