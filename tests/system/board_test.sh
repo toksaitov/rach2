@@ -1,6 +1,7 @@
 #!/bin/sh
 # board_test.sh: check board.sh against a local gh stand-in: group creation
-# and rollback, take's choice of the first assignee, take and release of a
+# and rollback, take's choice of the first assignee, assignee changes that a
+# list read before another account's change would undo, take and release of a
 # closed issue, and the phase subcommands, which are current, members, next,
 # start, the checks take and group make of the phase, archive and phase.
 # --mutate plants each fault below in a private copy, requires a row of its
@@ -55,8 +56,9 @@ closed_fault()
 # looks for a comment it never wrote, and so comments again, or sets the phase
 # In progress before it comments; `next` lists Ready issues of no phase; `take`
 # skips the phase check, or takes a member that is not Ready; `group` accepts
-# an issue of no phase; `archive` ignores the other open phase; and `phase`
-# ignores the review.
+# an issue of no phase; `archive` ignores the other open phase; `phase`
+# ignores the review; and `unassign` writes back the whole list of assignees
+# it read, as `gh issue edit` does.
 # shellcheck disable=SC2016 # the dollars are in the texts the faults change
 {
     members_fault='s/(parent == p || has(partof, p))/(parent == p)/'
@@ -69,6 +71,7 @@ closed_fault()
     group_fault='s/^            member) ;;$/            *) ;;/'
     archive_fault='s/ || f\[8\] in open)/)/'
     phase_fault='s/\[ "\${review#\*..}" != "\$head" \]/false/'
+    stale_fault='s|gh api -X DELETE "repos/\$REPO/issues/\$1/assignees" -f "assignees\[\]=\$2"|gh issue edit "$1" --repo "$REPO" --remove-assignee "$2"|'
 }
 
 # plant SCRIPT: write the private copy with the sed SCRIPT applied, refusing
@@ -84,7 +87,8 @@ if [ "$mode" = texts ]; then
     closed_fault
     for f in "$members_fault" "$current_fault" "$start_fault" \
         "$start_order_fault" "$next_fault" "$take_phase_fault" \
-        "$take_status_fault" "$group_fault" "$archive_fault" "$phase_fault"; do
+        "$take_status_fault" "$group_fault" "$archive_fault" "$phase_fault" \
+        "$stale_fault"; do
         plant "$f"
     done
     exit 0
@@ -95,21 +99,26 @@ fi
 # BLOCKED being the number of open blockers, with `-` for an empty field, `_`
 # for a space in STATUS, `;` between comments and `\n` for a newline in BODY.
 # It answers each query with the lines that the query's --jq filter in
-# board.sh prints, paginated two lines a page.
+# board.sh prints, paginated two lines a page. It keeps the accounts assigned
+# in the file `assignees`, which starts as BOARD_TEST_NOW. The REST calls add
+# or remove the one login given; `issue edit` writes back the list it read,
+# which is BOARD_TEST_STALE when that is set, with the login added or removed.
 cat > "$work/bin/gh" <<'EOF'
 #!/bin/sh
 set -eu
 printf '%s\n' "$*" >> "$BOARD_TEST_WORK/calls"
 data=$BOARD_TEST_DATA
-query='' body='' id='' item='' n='' prev=''
+query='' body='' id='' item='' login='' n='' prev=''
 for a; do
     case $prev in
         --body) body=$a ;;
         --id) item=$a ;;
+        --add-assignee|--remove-assignee) login=$a ;;
         -f|-F)
             case $a in
                 query=*) query=${a#query=} ;;
                 sub_issue_id=*) id=${a#sub_issue_id=} ;;
+                'assignees[]='*) login=${a#*=} ;;
                 n=*) n=${a#n=} ;;
             esac ;;
     esac
@@ -171,6 +180,28 @@ change()
     mv "$data.new" "$data"
 }
 
+# assignees: print the accounts assigned now, one a line.
+assignees()
+{
+    if [ -f "$BOARD_TEST_WORK/assignees" ]; then
+        cat "$BOARD_TEST_WORK/assignees"
+    else
+        printf '%s\n' "$BOARD_TEST_NOW" | tr , '\n'
+    fi
+}
+
+# reassign LIST OP LOGIN: make the assignees the lines of LIST with LOGIN
+# added, for OP `+`, or removed, for OP `-`.
+reassign()
+{
+    printf '%s\n' "$1" | awk -v op="$2" -v who="$3" '
+        $0 == "" { next }
+        $0 == who { found = 1; if (op == "-") next }
+        { print }
+        END { if (op == "+" && !found) print who }' > "$BOARD_TEST_WORK/assignees.new"
+    mv "$BOARD_TEST_WORK/assignees.new" "$BOARD_TEST_WORK/assignees"
+}
+
 case "$1 $2" in
     'api user')
         echo "$BOARD_TEST_ME" ;;
@@ -199,6 +230,15 @@ case "$1 $2" in
             *) exit 2 ;;
         esac ;;
     'api -X')
+        case $3 in
+            POST) op=+ ;;
+            *) op=- ;;
+        esac
+        case $4 in
+            */assignees)
+                reassign "$(assignees)" "$op" "$login"
+                exit 0 ;;
+        esac
         if [ "$BOARD_TEST_FULL" = yes ]; then
             echo 'gh: the parent has the most sub-issues it may have (HTTP 422)' >&2
             exit 1
@@ -223,7 +263,7 @@ case "$1 $2" in
         esac
         if [ -n "$BOARD_TEST_ME" ]; then
             case "$*" in
-                *'.assignees[].login'*) printf '%s\n' "$BOARD_TEST_NOW" | tr , '\n' ;;
+                *'.assignees[].login'*) assignees ;;
                 *) echo no ;;
             esac
             exit 0
@@ -257,7 +297,15 @@ case "$1 $2" in
             *'--remove-label grouped')
                 [ "$BOARD_TEST_FAIL/$3" != remove/1 ] || exit 1
                 rm -f "$BOARD_TEST_WORK/grouped-$3" ;;
-            *'--add-assignee '*|*'--remove-assignee '*) ;;
+            *'--add-assignee '*|*'--remove-assignee '*)
+                case "$*" in
+                    *'--add-assignee '*) op=+ ;;
+                    *) op=- ;;
+                esac
+                list=$(assignees)
+                [ -z "$BOARD_TEST_STALE" ] ||
+                    list=$(printf '%s\n' "$BOARD_TEST_STALE" | tr , '\n')
+                reassign "$list" "$op" "$login" ;;
             *) exit 2 ;;
         esac ;;
     'issue comment')
@@ -297,6 +345,7 @@ BOARD_TEST_WORK=$work/state
 BOARD_TEST_DATA=$work/data
 BOARD_TEST_ME=''
 BOARD_TEST_NOW=''
+BOARD_TEST_STALE=''
 BOARD_TEST_TIMELINE=''
 BOARD_TEST_STATE=OPEN
 BOARD_TEST_FAIL=none
@@ -309,7 +358,7 @@ C=3333333333333333333333333333333333333333
 BOARD_TEST_HEAD=$H
 PATH=$work/bin:$PATH
 export BOARD_TEST_WORK BOARD_TEST_DATA BOARD_TEST_ME BOARD_TEST_NOW \
-    BOARD_TEST_TIMELINE BOARD_TEST_STATE BOARD_TEST_FAIL BOARD_TEST_LOST \
+    BOARD_TEST_STALE BOARD_TEST_TIMELINE BOARD_TEST_STATE BOARD_TEST_FAIL BOARD_TEST_LOST \
     BOARD_TEST_FULL BOARD_TEST_CORE BOARD_TEST_HEAD PATH
 tab=$(printf '\t')
 
@@ -372,7 +421,7 @@ use()
     printf '%s\n' "$1" | sed "${2:-}" > "$BOARD_TEST_DATA"
     BOARD_TEST_FAIL=none BOARD_TEST_LOST='' BOARD_TEST_FULL=no
     BOARD_TEST_CORE=success BOARD_TEST_ME='' BOARD_TEST_NOW=''
-    BOARD_TEST_TIMELINE='' BOARD_TEST_STATE=OPEN
+    BOARD_TEST_STALE='' BOARD_TEST_TIMELINE='' BOARD_TEST_STATE=OPEN
 }
 
 # run ARGS...: run the private copy with ARGS, keeping its output in out, its
@@ -407,6 +456,22 @@ statuses()
 field()
 {
     awk -F '|' -v n="$1" -v k="$2" '$1 == n { print $k }' "$BOARD_TEST_DATA"
+}
+
+# left: print the accounts the stand-in has assigned, joined by commas.
+left()
+{
+    if [ -f "$BOARD_TEST_WORK/assignees" ]; then
+        paste -s -d , "$BOARD_TEST_WORK/assignees"
+    else
+        printf '%s\n' "$BOARD_TEST_NOW"
+    fi
+}
+
+# without LIST LOGIN: print the comma-separated LIST without LOGIN.
+without()
+{
+    printf '%s\n' "$1" | tr , '\n' | grep -vx "$2" | paste -s -d , -
 }
 
 # row FAILURE: check the exit status, queue labels and group left by one call.
@@ -457,13 +522,16 @@ row()
     esac
 }
 
-# take_row NAME ME NOW TIMELINE: take issue 7 as ME, with the accounts NOW
-# assigned and TIMELINE the assignees of its assignment events in order, and
-# check that ME keeps it only when NAME begins `keep`.
+# take_row NAME ME NOW TIMELINE STALE: take issue 7 as ME, with the accounts
+# NOW assigned, TIMELINE the assignees of its assignment events in order and
+# STALE, or `-` for none, the list `gh issue edit` would write back, and check
+# that ME keeps it only when NAME begins `keep` and that no other account's
+# assignment changes.
 take_row()
 {
     use "$old"
     BOARD_TEST_FAIL=none BOARD_TEST_ME=$2 BOARD_TEST_NOW=$3 BOARD_TEST_TIMELINE=$4
+    BOARD_TEST_STALE=${5#-}
     rm -f "$BOARD_TEST_WORK/"*
     result=0
     sh "$work/board.sh" take 7 > "$work/out" 2> "$work/err" || result=$?
@@ -471,22 +539,22 @@ take_row()
     case $1 in
         keep*)
             [ "$result" -eq 0 ] && [ -f "$BOARD_TEST_WORK/status" ] &&
-                ! grep -q 'remove-assignee' "$BOARD_TEST_WORK/calls" ;;
+                [ "$(left)" = "$3" ] ;;
         *)
             [ "$result" -ne 0 ] && [ ! -f "$BOARD_TEST_WORK/status" ] &&
-                grep -q "remove-assignee $2\$" "$BOARD_TEST_WORK/calls" &&
+                [ "$(left)" = "$(without "$3" "$2")" ] &&
                 grep -q '^board: #7: taken by zed first$' "$work/err" ;;
     esac
 }
 
 # state_row NAME: run `take 7` or `release 7` as alpha, the one account
-# assigned, on an issue that is closed or open as NAME says, and check the
-# Status and assignees it leaves.
+# assigned since zed removed itself, on an issue that is closed or open as
+# NAME says, and check the Status and assignees it leaves.
 state_row()
 {
     use "$old"
     BOARD_TEST_FAIL=none BOARD_TEST_ME=alpha BOARD_TEST_NOW=alpha
-    BOARD_TEST_TIMELINE=alpha
+    BOARD_TEST_TIMELINE=alpha BOARD_TEST_STALE=alpha,zed
     case $1 in
         *-closed) BOARD_TEST_STATE=CLOSED ;;
         *) BOARD_TEST_STATE=OPEN ;;
@@ -505,7 +573,7 @@ state_row()
                 ! grep -q 'issue edit' "$BOARD_TEST_WORK/calls" ;;
         release-open)
             [ "$result" -eq 0 ] && [ "$(cat "$BOARD_TEST_WORK/status")" = ready ] &&
-                grep -q 'remove-assignee alpha' "$BOARD_TEST_WORK/calls" ;;
+                [ -z "$(left)" ] ;;
     esac
 }
 
@@ -718,9 +786,10 @@ ready: yes $H" ] ;;
 }
 
 # rows: check successful creation, a group the board added first, each failed
-# step and failed cleanup, and which of two accounts assigned in the same
-# second keeps an issue, what take and release do to a closed issue, and the
-# rows of the phase subcommands.
+# step and failed cleanup, which of two accounts assigned in the same second
+# keeps an issue, that a refused take leaves another account unassigned,
+# what take and release do to a closed issue, and the rows of the phase
+# subcommands.
 rows()
 {
     failed=
@@ -731,16 +800,17 @@ rows()
             failed="$failed $test"
         fi
     done
-    while read -r test me now timeline; do
-        if ! take_row "$test" "$me" "$now" "$timeline"; then
+    while read -r test me now timeline stale; do
+        if ! take_row "$test" "$me" "$now" "$timeline" "$stale"; then
             echo "board-test: failed: $test" >&2
             cat "$work/err" >&2
             failed="$failed $test"
         fi
     done <<'ROWS'
-yield-later alpha zed,alpha zed,alpha
-keep-earlier zed zed,alpha zed,alpha
-yield-again alpha zed,alpha alpha,zed,alpha
+yield-later alpha zed,alpha zed,alpha -
+keep-earlier zed zed,alpha zed,alpha -
+yield-again alpha zed,alpha alpha,zed,alpha -
+yield-stale alpha zed zed,beta,alpha zed,beta
 ROWS
     for test in take-closed release-closed release-open; do
         if ! state_row "$test"; then
@@ -811,8 +881,9 @@ if [ "$mode" = mutate ]; then
     caught "$group_fault" group-stranger 'group took an issue of no phase'
     caught "$archive_fault" archive-other 'archive ignored the other phase'
     caught "$phase_fault" phase-review 'phase ignored the review'
+    caught "$stale_fault" yield-stale 'unassign put back a stale list'
     cp "$repo/tools/flow/board.sh" "$work/board.sh"
     rows || exit 1
-    echo 'board-test: result: pass: 13 faults caught and restored'
+    echo 'board-test: result: pass: 14 faults caught and restored'
 fi
-echo 'board-test: result: pass: 58 rows'
+echo 'board-test: result: pass: 59 rows'

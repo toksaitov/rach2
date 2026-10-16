@@ -26,6 +26,9 @@
 # Each subcommand that reads the board or the issues fails, with a diagnostic
 # on stderr and nothing on stdout, when any page of the answer is lost, so
 # that a caller does not take a part of the board for the whole.
+# Assignees are added and removed with the REST calls that change only the
+# login given. `gh issue edit` writes back the whole list it read, and so puts
+# back an account that another `take` removed in the meantime.
 #
 # `next` prints the issues a worker may take, one line each with the number,
 # a tab and the title. Each is open, unassigned, with no open blocker and
@@ -66,7 +69,7 @@
 # with `release` when it cannot go on.
 #
 # `release N [STATUS]` hands N back: it sets STATUS, Ready unless given, then
-# unassigns this account and removes the label `grouped`, so that N returns to
+# removes the label `grouped` and unassigns this account, so that N returns to
 # the queue as an issue of its own. `release N owner` sets Backlog and adds
 # the label `owner`, which marks a decision that AGENTS.md gives the owner and
 # that the manager sends to the owner's phone. A step that fails exits 1 with
@@ -353,11 +356,16 @@ finished()
     echo "board: #$1: closed: set Done" >&2
 }
 
-# unassign N LOGIN: remove LOGIN from N's assignees, or say that it could not.
+# assign N LOGIN: add LOGIN to N's assignees.
+assign()
+{
+    gh api -X POST "repos/$REPO/issues/$1/assignees" -f "assignees[]=$2" > /dev/null
+}
+
+# unassign N LOGIN: remove LOGIN from N's assignees.
 unassign()
 {
-    gh issue edit "$1" --repo "$REPO" --remove-assignee "$2" > /dev/null ||
-        echo "board: #$1: could not unassign $2; unassign it by hand" >&2
+    gh api -X DELETE "repos/$REPO/issues/$1/assignees" -f "assignees[]=$2" > /dev/null
 }
 
 # first N: print the account, of those assigned to N now, whose latest
@@ -410,7 +418,8 @@ labelled()
 # from N when this take assigned it.
 refuse()
 {
-    [ "$added" != yes ] || unassign "$1" "$me"
+    [ "$added" != yes ] || unassign "$1" "$me" ||
+        echo "board: #$1: could not unassign $me; unassign it by hand" >&2
     echo "board: #$1: $2" >&2
     exit 1
 }
@@ -456,7 +465,7 @@ take()
         reason=$(member "$1" "$2")
         [ -z "$reason" ] || refuse "$1" "$reason"
     fi
-    gh issue edit "$1" --repo "$REPO" --add-assignee "$me" > /dev/null
+    assign "$1" "$me"
     [ "$had" = yes ] || added=yes
     who=$(first "$1") || refuse "$1" "cannot read who was assigned first"
     [ "$who" = "$me" ] || refuse "$1" "taken by $who first"
@@ -489,8 +498,12 @@ release()
         echo "board: #$1: cannot set it $status; it is still assigned to $me" >&2
         exit 1
     fi
-    if ! gh issue edit "$1" --repo "$REPO" --remove-assignee "$me" \
-        --remove-label grouped ${label:+--add-label "$label"} > /dev/null; then
+    if ! gh issue edit "$1" --repo "$REPO" --remove-label grouped \
+        ${label:+--add-label "$label"} > /dev/null; then
+        echo "board: #$1: set $status, but cannot change its labels; release it again" >&2
+        exit 1
+    fi
+    if ! unassign "$1" "$me"; then
         echo "board: #$1: set $status, but cannot unassign $me; release it again" >&2
         exit 1
     fi
