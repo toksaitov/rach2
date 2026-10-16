@@ -36,6 +36,11 @@
 #     build with RELEASE=1 are refused before anything is built, while a
 #     development build is not; in a tree without one RELEASE=1 is not
 #     refused.
+#   * manifest-parts: every rule whose recipe stages a manifest that names
+#     an e2fsprogs program, with the KRFFS stager, the disk stager or
+#     mkext2.sh, reaches `check-e2fsck` through its prerequisites, order-only
+#     ones included, so that a tree where e2fsprogs is not yet built builds it
+#     before the stager reads it.
 #   * ish-absolute: the test image's dependency file names the shell by its
 #     absolute path, as krffs/mkimage.sh writes it, beside an object newer
 #     than the shell. `make -n` of that path, with make's built-in rules,
@@ -350,6 +355,61 @@ images_include_row()
     pass images-include
 }
 
+# The manifest-parts row, on the database base.db: the rules that stage a
+# manifest naming build/vendor/e2fsprogs/ and do not reach check-e2fsck.
+manifest_parts_row()
+{
+    db="$WORK/base.db"
+    manifests=$(cd "$C" && grep -l '^[^#]*build/vendor/e2fsprogs/' krffs/manifests/*.manifest)
+    if [ -z "$manifests" ]; then
+        fail manifest-parts "no manifest names an e2fsprogs program"
+        return
+    fi
+    # shellcheck disable=SC2016 # the stagers, by their unexpanded names
+    lone=$(awk -v manifests="$manifests" '
+        function reach(t,   n, i, a) {
+            if (t == "check-e2fsck") return 1
+            if (t in seen) return 0
+            seen[t] = 1
+            n = split(deps[t], a, " ")
+            for (i = 1; i <= n; i++) if (reach(a[i])) return 1
+            return 0
+        }
+        /^$/ { cur = "" }
+        cur != "" && /^\t/ { recipe[cur] = recipe[cur] " " $0 }
+        prev != "# Not a target:" && /^[^#\t =][^ \t=]*:( |$)/ && !/^[^ ]*::/ {
+            cur = substr($0, 1, index($0, ":") - 1)
+            rest = substr($0, length(cur) + 2)
+            gsub(/\|/, " ", rest)
+            deps[cur] = deps[cur] " " rest
+        }
+        { prev = $0 }
+        END {
+            nm = split(manifests, m, " ")
+            for (t in recipe) {
+                r = recipe[t]
+                if (!index(r, "$(MKIMAGE)") && !index(r, "$(MKDISK)") && !index(r, "mkext2.sh"))
+                    continue
+                for (i = 1; i <= nm; i++) {
+                    if (!index(r, m[i])) continue
+                    split("", seen)
+                    if (!reach(t)) print t
+                    break
+                }
+            }
+        }' "$db" | sort | tr '\n' ' ')
+    if [ -n "$lone" ]; then
+        fail manifest-parts "these stage e2fsprogs without check-e2fsck: $lone"
+        return
+    fi
+    # The row is empty if it finds no stager at all, so require the rules
+    # this fault would leave without e2fsprogs to have been read.
+    for t in run-doom build/images/os-real.krffs; do
+        is_target "$db" "$t" || { fail manifest-parts "no rule makes $t"; return; }
+    done
+    pass manifest-parts
+}
+
 # The key-names row: the database of the build tree with a recovery key,
 # then `make no-recovery-key`. The removal runs for real, in the private
 # tree, over files planted in both architectures' image directories: its
@@ -470,10 +530,12 @@ rows()
         fail grub-disk-rule "the build tree's make database: status $rc"
         fail disk-tools "the build tree's make database: status $rc"
         fail images-include "the build tree's make database: status $rc"
+        fail manifest-parts "the build tree's make database: status $rc"
     else
         grub_disk_row
         disk_tools_row
         images_include_row
+        manifest_parts_row
     fi
     key_names_row
     release_row
@@ -535,10 +597,11 @@ fi
 # Each fault, the copy it changes and the row it must fail. The make faults
 # are no rule for the GRUB disk, the tools' names defined in mk/images.mk
 # after the disk rules that name them, and the fragment included before the
-# names its own rules take.
+# names its own rules take; the parts fault is os-real's prerequisites without
+# e2fsprogs.
 # shellcheck disable=SC2016
 for fault in unlisted missing clean grub-target tools-late include-early plain-sealed one-arch \
-    release ish-absolute; do
+    release parts ish-absolute; do
     case $fault in
         unlisted)
             copies="$S/tools/verify/check_sources.sh=$WORK/check_sources.saved"
@@ -578,6 +641,11 @@ for fault in unlisted missing clean grub-target tools-late include-early plain-s
             copies="$C/Makefile=$WORK/Makefile.saved"
             mutate "$C/Makefile" '$(error release: refused:' '$(info release: allowed:'
             row='release-guard' ;;
+        parts)
+            copies="$C/Makefile=$WORK/Makefile.saved"
+            mutate "$C/Makefile" 'check-dropbearmulti check-e2fsck ports/doom $(MAN_ALL)' \
+                'check-dropbearmulti ports/doom $(MAN_ALL)'
+            row='manifest-parts' ;;
         ish-absolute)
             copies="$C/Makefile=$WORK/Makefile.saved"
             mutate "$C/Makefile" '$(CURDIR)/$(ARCH_BUILD)/ish/ish:' '$(CURDIR)/$(ARCH_BUILD)/ish/ish-gone:'

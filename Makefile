@@ -323,6 +323,12 @@ MANIFEST_DEPS_rach2_metal := $(shell $(MANIFEST_DEPS) krffs/manifests/rach2-meta
 MANIFEST_DEPS_rach2_recovery := $(shell $(MANIFEST_DEPS) krffs/manifests/rach2-recovery.manifest)
 MANIFEST_DEPS_rach2_metal_disk := $(shell $(MANIFEST_DEPS) krffs/manifests/rach2-metal-disk.manifest)
 MANIFEST_DEPS_grub_test := $(shell $(MANIFEST_DEPS) krffs/manifests/grub-test.manifest)
+# The targets that build what os-real's manifest stages, and grub-test's,
+# which is os-real's with two more files. Every rule that stages either names
+# them as prerequisites, order-only in the rule of a file, so that a tree with
+# nothing built yet can stage it.
+MANIFEST_PARTS_os_real = utils check-busybox check-tcc check-pdpmake check-setid \
+                         check-dropbearmulti check-e2fsck ports/doom $(MAN_ALL)
 MANIFEST_INPUTS = $(sort $(MANIFEST_DEPS_test) $(MANIFEST_DEPS_os_simple) \
     $(MANIFEST_DEPS_os_real) $(MANIFEST_DEPS_os_real_gnu) $(MANIFEST_DEPS_rach2_metal) \
     $(MANIFEST_DEPS_rach2_recovery) $(MANIFEST_DEPS_rach2_metal_disk) $(MANIFEST_DEPS_grub_test))
@@ -718,7 +724,7 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # absent; the check targets require each vendored binary it stages.
 OS_REAL_MIB = 20
 OS_REAL_WAD_KIB = 4100
-$(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti check-e2fsck ports/doom
+$(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
 	$(MKIMAGE) krffs/manifests/os-real.manifest $@ $(OS_REAL_MIB) $(if $(wildcard ports/doom/doom1.wad),,$(OS_REAL_WAD_KIB))
 
 # The same manifest as an ext2 volume, which `rach2.root=ext2` mounts as the
@@ -727,7 +733,7 @@ $(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS
 # the driver writes, sets the owners with debugfs, and passes it through
 # e2fsck and the set-id guard's own ext2 reader before it is named. The
 # prerequisites are the KRFFS image's, so the two are built from one tree.
-$(OS_REAL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) tools/image/mkext2.sh $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti check-e2fsck ports/doom
+$(OS_REAL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) tools/image/mkext2.sh $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
 	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 1024
 
 # The metal image: what the Lenovo G50-70 boots from a USB stick. The module
@@ -814,7 +820,7 @@ rach2-recovery-image: $(RECOVERY_IMAGE)
 # RAM-disk module: a 64 MB disk with a 48 MB KRFFS partition at LBA 2048. The
 # partition is larger than the page cache's 8 MiB, so the file system on it is
 # bigger than what the kernel holds in RAM at once.
-os-real-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti check-e2fsck ports/doom $(MAN_ALL)
+os-real-disk: krffs rach2 $(MANIFEST_PARTS_os_real)
 	$(MKDISK) krffs/manifests/os-real.manifest $(OS_REAL_DISK) 64 48
 
 # `make rach2-sealed-disk`: the disk the installer writes to a machine and the
@@ -944,7 +950,7 @@ $(SEALED_DISK): $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED_EXT2) \
 # the make database instead. Its recovery partition carries the recovery
 # image, so a tree with a recovery key names it `os-real-grub-with-key.disk`.
 .PHONY: os-real-grub-disk
-os-real-grub-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti check-e2fsck ports/doom
+os-real-grub-disk: krffs rach2 rach2-recovery rach2-recovery-image $(MANIFEST_PARTS_os_real)
 	@$(MAKE) --no-print-directory $(OS_REAL_GRUB_DISK)
 
 $(OS_REAL_GRUB_DISK): $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(OS_REAL_EXT2) \

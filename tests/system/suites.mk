@@ -577,9 +577,9 @@ $(GRUB_CORE_B): $(GRUB_CORE_DEPS) vendor/grub/disk-core-b.img
 	sh tools/image/mkgrubcore.sh B $@
 
 GRUB_TEST_EXT2 = $(IMAGES_DIR)/grub-test.ext2
-$(GRUB_TEST_EXT2): $(DEMO_CREDS) $(GRUB_CORE_A) $(GRUB_CORE_B) krffs/manifests/grub-test.manifest $(MANIFEST_DEPS_grub_test) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-setid
+$(GRUB_TEST_EXT2): $(DEMO_CREDS) $(GRUB_CORE_A) $(GRUB_CORE_B) krffs/manifests/grub-test.manifest $(MANIFEST_DEPS_grub_test) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
 	sh tools/image/mkext2.sh krffs/manifests/grub-test.manifest $@ 48
-run-grub: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs $(GRUB_TEST_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(RUNUTIL) $(DISK_TOOLS)
+run-grub: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image krffs $(GRUB_TEST_EXT2) $(MANIFEST_PARTS_os_real) $(RUNUTIL) $(DISK_TOOLS)
 	@mkdir -p $(IMAGES_DIR)
 	sed -e '/^#/d' -e '/^$$/d' -e '\|^file 0644 /core-[ab]\.img|d' \
 	    krffs/manifests/grub-test.manifest > $(IMAGES_DIR)/grub-test.manifest.stripped
@@ -595,7 +595,7 @@ run-grub: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs $(
 # `tests/run bootorder`: the GRUB disk on the second AHCI port behind a
 # disk holding nothing, booted by the firmware, its root found as disk 1.
 BOOTORDER_DISK = $(IMAGES_DIR)/bootorder-test.disk
-run-bootorder: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs $(GRUB_TEST_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(HARNESS)
+run-bootorder: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image krffs $(GRUB_TEST_EXT2) $(MANIFEST_PARTS_os_real) $(HARNESS)
 	sh tests/system/suites/bootorder.sh $(BOOT_KERNEL) $(HARNESS) $(BOOTORDER_DISK)
 # `tests/run menu`: the boot menu that can be rewritten, and the stub that
 # cannot. Four boots of one GRUB disk: a two-entry menu staged through `bootctl
@@ -610,7 +610,7 @@ MENU_TEST_DISK = $(IMAGES_DIR)/menu-test.disk
 # at the machine is a busybox command and os-simple carries no busybox: with
 # that root the first command would print nothing and the suite would wait out
 # its deadline.
-run-menu: $(DEMO_CREDS) rach2 utils krffs $(OS_REAL_SMALL_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND) $(RUNUTIL) $(DISK_TOOLS)
+run-menu: $(DEMO_CREDS) rach2 krffs $(OS_REAL_SMALL_EXT2) $(MANIFEST_PARTS_os_real) $(BINFIND) $(RUNUTIL) $(DISK_TOOLS)
 	@mkdir -p $(IMAGES_DIR)
 	RACH2_DISK_TABLE=mbr \
 	RACH2_DISK_RECOVERY_MB=8 \
@@ -657,10 +657,10 @@ run-authority: rach2 rach2-recovery tests krffs test-image $(MKFIXTURE) $(HARNES
 # The install disk's entries boot the ext2 root, the os-real system at
 # 96 MiB. The kernel is built on that root and installed from it.
 OS_REAL_SMALL_EXT2 = $(IMAGES_DIR)/os-real-small.ext2
-$(OS_REAL_SMALL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+$(OS_REAL_SMALL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
 	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 96
 INSTALL_TEST_DISK = $(IMAGES_DIR)/install-test.disk
-run-install: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND) rach2-recovery $(RECOVERY_IMAGE) $(OS_REAL_SMALL_EXT2) $(RUNUTIL) $(DISK_TOOLS)
+run-install: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real) $(BINFIND) rach2-recovery $(RECOVERY_IMAGE) $(OS_REAL_SMALL_EXT2) $(RUNUTIL) $(DISK_TOOLS)
 	@mkdir -p $(IMAGES_DIR)
 	RACH2_DISK_TABLE=mbr \
 	RACH2_DISK_RECOVERY_MB=8 \
@@ -1484,7 +1484,7 @@ run-krffsmount: rach2 tests krffs test-image $(HARNESS) $(MKMBR)
 # mke2fs wrote, with the walker's link rows on the mounted volume.
 EXT2_DISK = $(IMAGES_DIR)/ext2-test.disk
 run-ext2: $(DEMO_CREDS) rach2 tests krffs test-image $(HARNESS) $(RUNUTIL) $(MKMBR) \
-          utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom \
+          $(MANIFEST_PARTS_os_real) \
           rach2-recovery $(RECOVERY_IMAGE)
 	sh tests/system/suites/ext2.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(EXT2_DISK) \
 	    build/tools/image/mkmbr $(RECOVERY_KERNEL) $(RECOVERY_IMAGE)
@@ -1699,7 +1699,7 @@ run-metal: rach2-metal rach2-metal-image metal-installed-tools $(PTYDRIVE)
 # password and would pass over a wrong hash and an unusable set-id `passwd`
 # alike.
 ACCOUNT_TEST_DISK = $(IMAGES_DIR)/account-test.disk
-run-account: $(DEMO_CREDS) rach2 utils krffs busybox ish check-tcc check-pdpmake os-simple-image $(HARNESS) $(RUNUTIL)
+run-account: $(DEMO_CREDS) rach2 krffs ish $(MANIFEST_PARTS_os_real) os-simple-image $(HARNESS) $(RUNUTIL)
 	$(MKDISK) krffs/manifests/os-real.manifest $(ACCOUNT_TEST_DISK) 64 48
 	sh tests/system/suites/account.sh $(BOOT_KERNEL) $(ACCOUNT_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`" real
@@ -1716,11 +1716,11 @@ TCC_TEST_DISK = $(IMAGES_DIR)/tcc-test.disk
 # `tests/run doom`: the Doom port's zone on a disk root, sized from the
 # machine's free memory through a heap that grows with brk; one boot.
 DOOM_TEST_DISK = $(IMAGES_DIR)/doom-test.disk
-run-doom: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(HARNESS)
+run-doom: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real) $(HARNESS)
 	$(MKDISK) krffs/manifests/os-real.manifest $(DOOM_TEST_DISK) 64 48
 	sh tests/system/suites/doom.sh $(BOOT_KERNEL) $(DOOM_TEST_DISK) $(HARNESS) \
 	    "`cat krffs/rach2_demo_password`"
-run-tcc: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(RUNUTIL)
+run-tcc: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real) $(RUNUTIL)
 	$(MKDISK) krffs/manifests/os-real.manifest $(TCC_TEST_DISK) 64 48
 	sh tests/system/suites/tcc.sh $(BOOT_KERNEL) $(TCC_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`"
@@ -1731,7 +1731,7 @@ run-tcc: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake c
 # fault of the machine, and a parallel build on the installed system that runs
 # on every one of four (see tests/system/suites/smp.sh).
 SMP_TEST_DISK = $(IMAGES_DIR)/smp-test.disk
-run-smp: $(DEMO_CREDS) rach2 utils tests krffs test-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(HARNESS)
+run-smp: $(DEMO_CREDS) rach2 tests krffs test-image $(MANIFEST_PARTS_os_real) $(HARNESS)
 	@mkdir -p $(IMAGES_DIR)
 	$(MKDISK) krffs/manifests/os-real.manifest $(SMP_TEST_DISK) 64 48
 	sh tests/system/suites/smp.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(SMP_TEST_DISK) \
@@ -1741,7 +1741,7 @@ run-smp: $(DEMO_CREDS) rach2 utils tests krffs test-image check-busybox check-tc
 # one source rebuilds one object, and that the answer survives a reboot. Two
 # boots of one disk, since the reboot is half the point.
 MAKE_TEST_DISK = $(IMAGES_DIR)/make-test.disk
-run-make: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(RUNUTIL)
+run-make: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real) $(RUNUTIL)
 	@mkdir -p $(IMAGES_DIR)
 	$(MKDISK) krffs/manifests/os-real.manifest $(MAKE_TEST_DISK) 64 48
 	sh tests/system/suites/make.sh $(BOOT_KERNEL) $(MAKE_TEST_DISK) \
@@ -1752,7 +1752,7 @@ run-make: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake 
 # workspaces; the two kernels must hash equal. Every wait is bounded, and the
 # whole run carries one deadline over the per-step ones.
 SELFBUILD_DISK = $(IMAGES_DIR)/selfbuild-test.disk
-run-selfbuild: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs test-image $(OS_SIMPLE_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(ELFCHECK) $(RUNTESTS) $(RUNUTIL) $(SHA256TOOL)
+run-selfbuild: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image krffs test-image $(OS_SIMPLE_EXT2) $(MANIFEST_PARTS_os_real) $(ELFCHECK) $(RUNTESTS) $(RUNUTIL) $(SHA256TOOL)
 	@mkdir -p $(IMAGES_DIR)
 	$(MKDISK) krffs/manifests/os-real.manifest $(SELFBUILD_DISK) 64 48
 	sh tests/system/suites/selfbuild.sh $(BOOT_KERNEL) $(SELFBUILD_DISK) \
@@ -1765,9 +1765,9 @@ run-selfbuild: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krf
 # half are the KRFFS suite's.
 SELFBUILD_EXT2_VOL = $(IMAGES_DIR)/selfbuild-ext2.vol
 SELFBUILD_EXT2_DISK = $(IMAGES_DIR)/selfbuild-ext2-test.disk
-$(SELFBUILD_EXT2_VOL): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+$(SELFBUILD_EXT2_VOL): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
 	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 48
-run-selfbuild-ext2: $(DEMO_CREDS) rach2 utils krffs test-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(ELFCHECK) $(RUNTESTS) $(SELFBUILD_EXT2_VOL) build/tools/image/mkmbr $(RUNUTIL) $(HARNESS) $(SHA256TOOL)
+run-selfbuild-ext2: $(DEMO_CREDS) rach2 krffs test-image $(MANIFEST_PARTS_os_real) $(ELFCHECK) $(RUNTESTS) $(SELFBUILD_EXT2_VOL) build/tools/image/mkmbr $(RUNUTIL) $(HARNESS) $(SHA256TOOL)
 	@mkdir -p $(IMAGES_DIR)
 	{ dd if=/dev/zero bs=1048576 count=1 2>/dev/null; cat $(SELFBUILD_EXT2_VOL); \
 	  dd if=/dev/zero bs=1048576 count=15 2>/dev/null; } > $(SELFBUILD_EXT2_DISK)
@@ -1780,7 +1780,7 @@ run-selfbuild-ext2: $(DEMO_CREDS) rach2 utils krffs test-image check-busybox che
 # unprivileged account by password, which is the half that reaches /etc/shadow.
 # Every wait is bounded, so a hang fails instead of sitting there.
 SSH_TEST_DISK = $(IMAGES_DIR)/ssh-test$(NIC_TAG).disk
-run-ssh: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(PTYDRIVE)
+run-ssh: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real) $(PTYDRIVE)
 	$(MKDISK) krffs/manifests/os-real.manifest $(SSH_TEST_DISK) 64 48
 	sh tests/system/suites/ssh.sh $(BOOT_KERNEL) $(SSH_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`" \
