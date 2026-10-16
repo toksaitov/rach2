@@ -152,7 +152,7 @@ if [ ! -d "$st" ]; then
     echo "no reviewer loop has run here: no $st"
 else
     if pgrep -f "$st/run/reviewer.sh" > /dev/null; then loop=runs; else loop="not running"; fi
-    echo "loop $loop: $(tail -n 1 "$st/loop.log" 2> /dev/null) | tries: $(tr '\n' ' ' < "$st/tries" 2> /dev/null)"
+    echo "loop $loop: $(tail -n 1 "$st/loop.log" 2> /dev/null) | tries: $(tr '\n' ' ' 2> /dev/null < "$st/tries")"
 fi
 echo "== testing host"
 printf '%s\n' 'uptime' 'free -g | sed -n 2p' 'echo "qemu $(pgrep -c qemu-system || true)"' |
