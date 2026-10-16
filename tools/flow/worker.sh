@@ -48,8 +48,9 @@
 # group that lists one, so that no loop waits while a repair the hold lets
 # through waits for a worker.
 # When that issue is closed or no longer this account's, the loop takes the
-# parked issue back. With none to claim, it looks again every five minutes,
-# and the next session after the hold pushes.
+# parked issue back. With none to claim, it puts the clone back on the
+# issue's branch and looks again every five minutes, and the next session
+# after the hold pushes.
 
 REPO=toksaitov/rach2
 REASONING=high
@@ -133,18 +134,22 @@ repair()
 
 # park N: when the clone has nothing uncommitted, keep issue N in STATE/parked,
 # put the clone on master, and claim a repair of core; succeed when one was
-# claimed. Otherwise leave everything as it was and fail.
+# claimed. Otherwise put N back in STATE/issue and the clone back on the branch
+# or commit it was on, and fail.
 park()
 {
     [ -z "$(git status --porcelain)" ] || return 1
-    git switch -q master 2> /dev/null && git merge -q --ff-only origin/master || return 1
-    echo "$1" > "$state/parked"
-    rm -f "$state/issue"
-    if claim repair && [ -s "$state/issue" ]; then
-        log "#$1 parked for #$(cat "$state/issue")"
-        return 0
+    was=$(git symbolic-ref -q --short HEAD || git rev-parse HEAD) || return 1
+    if git switch -q master 2> /dev/null && git merge -q --ff-only origin/master; then
+        echo "$1" > "$state/parked"
+        rm -f "$state/issue"
+        if claim repair && [ -s "$state/issue" ]; then
+            log "#$1 parked for #$(cat "$state/issue")"
+            return 0
+        fi
+        mv "$state/parked" "$state/issue"
     fi
-    mv "$state/parked" "$state/issue"
+    git checkout -q "$was" -- 2> /dev/null
     return 1
 }
 

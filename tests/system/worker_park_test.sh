@@ -14,7 +14,8 @@
 # issue, takes 50 back when the repair is closed, takes a group that lists a
 # repair and not one that lists only another suite's issue, takes a repair
 # listed after five issues it refuses, and neither parks nor claims with
-# nothing to claim or with a file not committed. With --mutate each fault
+# nothing to claim or with a file not committed, leaving the clone on 50-fix.
+# With --mutate each fault
 # below is put into the copy and must fail its own row; the copy is restored
 # before the rows run again at the end. --texts puts each fault into the copy
 # and requires only that it changes the file, and runs no row.
@@ -39,16 +40,18 @@ mkdir -p "$work/bin" "$work/flow" "$work/home"
 
 # fault NAME: put fault NAME into the private copy of worker.sh, or the
 # original for `none`, and fail when a fault leaves the copy unchanged. The
-# faults: park leaves the clone on the issue's branch; the loop never takes a
-# parked issue back; repair takes any issue, or a group whatever it lists;
-# claim counts an issue that repair refuses against its five tries; and park
-# ignores a file that is not committed.
+# faults: park leaves the clone on the issue's branch; park claims nothing and
+# leaves the clone on master; the loop never takes a parked issue back; repair
+# takes any issue, or a group whatever it lists; claim counts an issue that
+# repair refuses against its five tries; and park ignores a file that is not
+# committed.
 fault()
 {
     # shellcheck disable=SC2016 # the dollars are in the texts sed matches
     case $1 in
         none) cat ;;
-        stay) sed 's/^    git switch -q master 2> \/dev\/null && git merge -q --ff-only origin\/master || return 1$/    :/' ;;
+        stay) sed 's/^    if git switch -q master 2> \/dev\/null && git merge -q --ff-only origin\/master; then$/    if :; then/' ;;
+        back) sed 's/^    git checkout -q "\$was" -- 2> \/dev\/null$/    :/' ;;
         keep) sed 's/^        if \[ -z "\$issue" \] && \[ -s "\$state\/parked" \]; then$/        if false; then/' ;;
         any) awk '/^repair\(\)$/ { r = 1 } r && /^    return 1$/ { sub(/1/, "0"); r = 0 } { print }' ;;
         group) sed 's/^    \[ "\$members" != core \] || return 0$/    [ -z "$members" ] || return 0/' ;;
@@ -63,7 +66,7 @@ fault()
 }
 
 if [ "$mode" = texts ]; then
-    for f in stay keep any group count dirty; do
+    for f in stay back keep any group count dirty; do
         fault "$f" || { echo "worker-test: fault $f changes nothing" >&2; exit 1; }
     done
     exit 0
@@ -201,6 +204,7 @@ row()
         none|dirty)
             [ -z "$sessions" ] && [ "$(cat "$work/state/issue")" = 50 ] &&
                 [ ! -e "$work/state/parked" ] &&
+                [ "$(g -C "$work/clone" rev-parse --abbrev-ref HEAD)" = 50-fix ] &&
                 grep -q ' #50 is committed and waits for hold #77$' "$log" &&
                 ! grep -q '^board take' "$work/calls" ;;
         *) return 1 ;;
@@ -246,6 +250,7 @@ fault none && origin || exit 1
 rows || exit 1
 if [ "$mode" = mutate ]; then
     caught stay park
+    caught back none
     caught keep park
     caught any park
     caught group group
@@ -253,6 +258,6 @@ if [ "$mode" = mutate ]; then
     caught dirty dirty
     fault none && origin || exit 1
     rows || exit 1
-    echo 'worker-test: result: pass: 6 faults caught and restored'
+    echo 'worker-test: result: pass: 7 faults caught and restored'
 fi
 echo 'worker-test: result: pass: 5 rows'
