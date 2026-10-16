@@ -230,6 +230,12 @@ which it keeps in
 .Pa /dev/shm ,
 the recovery system's tmpfs of half the machine's memory; an update whose
 homes do not fit there stops before the root is written.
+The copy is removed when the update finishes.
+An update that stops after it began to write the root leaves the copy,
+and an update of the same disk run again in the same boot takes it in place
+of the root and the archive, so that the homes are kept; an update of
+another disk is refused while the copy is there.
+A reboot loses the copy.
 These are restored after the write, preserving passwords changed since
 installation, and the image's system accounts the restored files lack are
 appended to them, as for an install.
@@ -272,7 +278,9 @@ resting slot after a complete run.
 A counter at 2147483647 stops further archive writes.
 An update interrupted after writing the image and before restoring the
 accounts leaves the image's accounts on the root.
-The next update uses the marked archive, preserving the server's identity
+The next update, when the copy in
+.Pa /dev/shm
+is gone, uses the marked archive, preserving the server's identity
 and the accounts' keys.
 FAT32 stores neither owners nor modes, so restored key directories receive
 mode 700 and key files mode 600.

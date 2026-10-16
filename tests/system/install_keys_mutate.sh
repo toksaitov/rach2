@@ -1,6 +1,6 @@
 #!/bin/sh
 # install_keys_mutate.sh [--texts]: show that the installer suite catches
-# three faults in utils/rach2-install, built in a private copy of the tree,
+# four faults in utils/rach2-install, built in a private copy of the tree,
 # on the kernel, images and emulator of the architecture ARCH names.
 #
 # `keys` takes the archiving of the machine's Dropbear keys out of
@@ -8,7 +8,9 @@
 # the archive slot it was chosen from, which leaves no complete copy when the
 # update stops, and row archive-stop must catch it. `case` takes out the
 # refusal of two key names that differ only in case, which row archive-keys
-# must catch. The installer suite must pass on the installer as it is and
+# must catch. `retry` makes an update ignore the copy an update of the same
+# boot kept before it wrote the root, which row 19 must catch. The installer
+# suite must pass on the installer as it is and
 # after each restoration. --texts checks that each fault is in the installer.
 set -eu
 
@@ -79,12 +81,33 @@ path.write_text(source.replace(needle, '                :'))
 PYCASE
 }
 
+# apply_retry SOURCE: put the `retry` fault into SOURCE; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_retry()
+{
+    python3 - "$1" <<'PYRETRY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+needle = '    if [ -f "$keep/root-written" ]; then'
+assert source.count(needle) == 1
+path.write_text(source.replace(needle, '    if false; then'))
+PYRETRY
+}
+
 if [ "${1:-}" = --texts ]; then
     RACH2_FAULT_TEXTS=1
     export RACH2_FAULT_TEXTS
     apply_keys utils/rach2-install >/dev/null
     apply_archive utils/rach2-install >/dev/null
     apply_case utils/rach2-install >/dev/null
+    apply_retry utils/rach2-install >/dev/null
     echo 'install-keys-mutation: texts: every fault is once in its source'
     exit 0
 fi
@@ -184,6 +207,7 @@ run_phase()
         grep -Fq 'retried from the marked archive: OK' "$work/$phase.log"
         grep -Fq 'row 17: host and account keys match the installed machine: OK' "$work/$phase.log"
         grep -Fq 'row 17: root logs in with its restored key: OK' "$work/$phase.log"
+        grep -Fq 'row 19: the update run again in the same boot puts back the homes the first one kept: OK' "$work/$phase.log"
     else
         grep -Fq "FAIL: $failure" "$work/$phase.log"
         case $failure in
@@ -191,6 +215,8 @@ run_phase()
                 grep -Fq 'retried from the marked archive: OK' "$work/$phase.log" ;;
             'row archive-stop:'*)
                 grep -Fq 'STOP_STATUS=99' "$tree/images/keys-$phase/archive-stop.log" ;;
+            'row 19:'*)
+                grep -Fq 'row 19: the first update stops with the image'"'"'s root written: OK' "$work/$phase.log" ;;
         esac
     fi
     echo "install-keys-mutation: result: $phase status $status"
@@ -217,4 +243,11 @@ run_phase case-mutated 1 "row archive-keys: two key names that differ only in ca
 restore
 run_phase case-restored 0
 cmp "$work/fixed.installer" "$work/case-restored.installer"
-echo 'install-keys-mutation: result: pass: missing keys, rebuilding the chosen slot and names that differ in case failed their rows; each restoration passed'
+# Without the kept copy, the update run again takes the marked archive,
+# which keeps no ordinary home files.
+apply_retry "$source"
+run_phase retry-mutated 1 "row 19: the update run again in the same boot lost the homes"
+restore
+run_phase retry-restored 0
+cmp "$work/fixed.installer" "$work/retry-restored.installer"
+echo 'install-keys-mutation: result: pass: missing keys, rebuilding the chosen slot, names that differ in case and an ignored kept copy failed their rows; each restoration passed'

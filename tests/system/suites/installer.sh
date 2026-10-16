@@ -1654,6 +1654,58 @@ else
 fi
 
 mark "row 16"
+
+# ---- 19: an update stopped after the root write, and run again in the same
+#          boot. A file is put in an account's home, which the archive does
+#          not keep; a copy of the installer that exits once the root is
+#          written and checked replaces the root with the image's; the
+#          installer run again must take the copy the first run kept in
+#          /dev/shm, put the file back with its owner, and remove the copy.
+LOGRETRY="$DIR/retry.log"
+if "$HARNESS" --bios \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
+    --drive "if=none,id=stick,format=raw,file=$DIR/test-stick.img" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
+    --timeout 3600 --steptmo 1800 --ok "RETRYDONE" --log "$LOGRETRY" \
+    "expect=recovery image" \
+    "expect=# " "send=mkdir -p /m && mount -t exfat /dev/disk1p2 /m && echo MOUNT\"\"ED" \
+    "expect=MOUNTED" \
+    "send=mkdir -p /r && mount -t ext2 /dev/disk0p3 /r && echo this-homes-own > /r/home/test/plain && chown 1000:1000 /r/home/test/plain && umount /r && echo PLAIN\"\"PUT" \
+    "expect=PLAINPUT" \
+    "send=sed 's|^    say \"what reached the root is the image\"\$|&; sync; exit 98|' /bin/rach2-install > /dev/shm/stop-install" \
+    "send=sh /dev/shm/stop-install --update /m/$(basename "$INSTALLER_EXT2") /dev/disk0; echo STOP\"\"_STATUS=\$?" \
+    "expect=STOP_STATUS=" \
+    "send=mount -t ext2 /dev/disk0p3 /r; test ! -e /r/home/test/plain; echo PLAIN\"\"GONE=\$?; umount /r" \
+    "expect=PLAINGONE=" \
+    "send=rach2-install --update /m/$(basename "$INSTALLER_EXT2") /dev/disk0; echo RETRY\"\"_STATUS=\$?" \
+    "expect=RETRY_STATUS=" \
+    "send=mount -t ext2 /dev/disk0p3 /r; sed s/^/PLAIN=/ /r/home/test/plain; stat -c OWNER=%u:%g /r/home/test/plain; umount /r" \
+    "send=test ! -e /dev/shm/rach2-update-keep; echo KEEP\"\"GONE=\$?" \
+    "expect=KEEPGONE=" \
+    "send=umount /m; echo RETRY\"\"DONE" "expect=RETRYDONE" > "$LOGRETRY.harness" 2>&1; then
+    :
+else
+    sed -n 's/^HARNESS: /installer-test: /p' "$LOGRETRY.harness" >&2
+    bad "row 19: the boot of the stopped and repeated update did not finish"
+fi
+retry_value() { grep -a "^$1=" "$LOGRETRY" | tail -1 | tr -d '\r' | cut -d= -f2; }
+if [ "$(retry_value STOP_STATUS)" = 98 ] && [ "$(retry_value PLAINGONE)" = 0 ]; then
+    note "row 19: the first update stops with the image's root written: OK"
+else
+    bad "row 19: the first update did not stop with the image's root written"
+fi
+if [ "$(retry_value RETRY_STATUS)" = 0 ] &&
+    grep -aq "an update of this boot stopped after it wrote the root; taking the configuration it kept" "$LOGRETRY" &&
+    [ "$(retry_value PLAIN)" = this-homes-own ] && [ "$(retry_value OWNER)" = 1000:1000 ] &&
+    [ "$(retry_value KEEPGONE)" = 0 ]; then
+    note "row 19: the update run again in the same boot puts back the homes the first one kept: OK"
+else
+    bad "row 19: the update run again in the same boot lost the homes the first one kept"
+fi
+mark "row 19"
 fi
 
 # ---- the rehearsal of the Lenovo's install sitting, at its own size,

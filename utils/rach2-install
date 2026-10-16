@@ -774,33 +774,51 @@ if [ -n "$update_image" ]; then
         die "${update_disk}p1 is not a boot partition this system wrote; \
 $update_disk was not installed from here"
 
-    root_entry=""
-    for p in 4 3 2 1; do
-        [ -e "${update_disk}p${p}" ] || continue
-        mkdir -p "$TARGET_MNT" 2>/dev/null
-        mount -t ext2 "${update_disk}p${p}" "$TARGET_MNT" 2>/dev/null || continue
-        mounted_root=$TARGET_MNT
-        if [ -f "$TARGET_MNT/etc/passwd" ] && [ -d "$TARGET_MNT/etc/rach2" ]; then
-            root_entry=$p
-            break
-        fi
-        umount "$TARGET_MNT" || die "${update_disk}p${p} would not unmount"
-        mounted_root=""
-    done
     # The copy of what the old root keeps, the home directories among it, goes
     # in /dev/shm, the tmpfs of half the machine's memory, where there is one,
     # and not in the recovery system's root, which the build leaves half a
-    # mebibyte free at the least.
+    # mebibyte free at the least. Its file `root-written`, `DISK ENTRY`, says
+    # that an update of this boot began to write that root and did not finish:
+    # the copy is then the only one of the old root's homes, and is used again.
     keep=/tmp/rach2-update-keep
     [ -d /dev/shm ] && keep=/dev/shm/rach2-update-keep
-    rm -rf "$keep" || die "an old copy of the configuration could not be removed"
-    { mkdir -p "$keep" && chmod 700 "$keep"; } || die "there is nowhere to keep the machine's configuration"
+    kept_entry=""
+    if [ -f "$keep/root-written" ]; then
+        read -r kept_disk kept_entry < "$keep/root-written" || kept_entry=""
+        case "$kept_entry" in [1-4]) ;; *) die "$keep/root-written is not a disk and an entry" ;; esac
+        [ "$kept_disk" = "$update_disk" ] ||
+            die "an update of $kept_disk stopped after it wrote the root, and $keep holds the \
+only copy of its homes; update $kept_disk again before $update_disk"
+    fi
+
+    root_entry=""
+    if [ -n "$kept_entry" ]; then
+        root_entry=$kept_entry
+        say "an update of this boot stopped after it wrote the root; taking the configuration it kept in $keep"
+    else
+        for p in 4 3 2 1; do
+            [ -e "${update_disk}p${p}" ] || continue
+            mkdir -p "$TARGET_MNT" 2>/dev/null
+            mount -t ext2 "${update_disk}p${p}" "$TARGET_MNT" 2>/dev/null || continue
+            mounted_root=$TARGET_MNT
+            if [ -f "$TARGET_MNT/etc/passwd" ] && [ -d "$TARGET_MNT/etc/rach2" ]; then
+                root_entry=$p
+                break
+            fi
+            umount "$TARGET_MNT" || die "${update_disk}p${p} would not unmount"
+            mounted_root=""
+        done
+        rm -rf "$keep" || die "an old copy of the configuration could not be removed"
+        { mkdir -p "$keep" && chmod 700 "$keep"; } || die "there is nowhere to keep the machine's configuration"
+    fi
     find_recovery "$target"
     recovery_entry=$recovery_found
     [ -n "$recovery_entry" ] && mounted_recovery=$RECOVERY_MNT
     [ -z "$recovery_entry" ] || recover_archive
     from_archive=""
-    if [ -n "$recovery_entry" ] && [ -n "$archive" ] && [ -f "$archive/update-in-progress" ]; then
+    if [ -n "$kept_entry" ]; then
+        :
+    elif [ -n "$recovery_entry" ] && [ -n "$archive" ] && [ -f "$archive/update-in-progress" ]; then
         # An update stopped after it wrote the root and before it wrote the
         # accounts back: the root reads, and what it holds is the image's.
         # The archive was written before that root, from the machine's own.
@@ -832,7 +850,7 @@ whole configuration archived on its recovery partition; its accounts are not the
             fi
         done
         restore_archive_keys || die "the archived keys and homes could not be restored"
-    else
+    elif [ -z "$kept_entry" ]; then
         say "copying this machine's accounts, policy and keys off the root"
         for f in $CONFIG_FILES; do
             if [ -f "$TARGET_MNT/$f" ]; then
@@ -967,6 +985,8 @@ whole configuration archived on its recovery partition; its accounts are not the
         convert_mbr_disk
     fi
 
+    echo "$update_disk $root_entry" > "$keep/root-written" ||
+        die "the copy of the configuration could not be marked; the root was not written"
     say "writing $bytes bytes into ${update_disk}p${root_entry}, at $at"
     reflash -p "$update_disk" "$at" "$bytes" < "$update_image" ||
         die "the root was not written"
