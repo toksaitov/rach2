@@ -219,8 +219,8 @@ review()
         kind="An earlier review read the phase up to $from; these commits are what landed since, the fixes of that review's findings among them, so check each fix and what it may have broken as well."
     fi
     issues=$(printf '%s\n' "$m" | awk -F '\t' 'NF { print "* #" $1 " " $5 }')
-    for n in "$p" $(printf '%s\n' "$m" | cut -f 1); do
-        gh issue view "$n" --repo "$REPO" --json number,title,body \
+    for issue in "$p" $(printf '%s\n' "$m" | cut -f 1); do
+        gh issue view "$issue" --repo "$REPO" --json number,title,body \
             --jq '"## #\(.number) \(.title)\n\n\(.body)\n"' || return 75
     done > "$base.issues"
     prompt=$(P=$p TITLE=$title FROM=$from TO=$to KIND=$kind ISSUES=$issues TEXTS=$base.issues perl -0pe '
@@ -330,25 +330,25 @@ main()
         fi
         # shellcheck disable=SC2086 # the range is three words
         set -- $range
-        n=$(($(runs "$@") + 1))
-        log "review of #$1 at $2..$3 starts, run $n"
+        run=$(($(runs "$@") + 1))
+        log "review of #$1 at $2..$3 starts, run $run"
         review "$@"
         status=$?
         log "review of #$1 ended $status"
         case $status in
-            0) n=0; [ "$3" != "$(cat "$state/until" 2> /dev/null)" ] || rm -f "$state/until" ;;
+            0) run=0; [ "$3" != "$(cat "$state/until" 2> /dev/null)" ] || rm -f "$state/until" ;;
             75) sleep 900; continue ;;
             124)
-                n=0
+                run=0
                 give_up "$1" "it reached its limit of $DEADLINE seconds" ;;
             *)
-                if [ "$n" -ge "$RUNS" ]; then
-                    n=0
+                if [ "$run" -ge "$RUNS" ]; then
+                    run=0
                     give_up "$1" "$RUNS runs ended without an answer in the form reviewer.json gives"
                 fi ;;
         esac
         grep -v "^$1 $2 $3 " "$state/tries" > "$state/tries.new" 2> /dev/null
-        [ "$n" -eq 0 ] || echo "$1 $2 $3 $n" >> "$state/tries.new"
+        [ "$run" -eq 0 ] || echo "$1 $2 $3 $run" >> "$state/tries.new"
         mv "$state/tries.new" "$state/tries"
     done
     log stopped
