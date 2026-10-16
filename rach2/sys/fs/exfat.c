@@ -3004,16 +3004,59 @@ static int is_under(struct ex_mount *em, uint32_t dir, uint32_t anc)
 }
 
 /** Whether a rename may rewrite the set `src` in place as a new set of
- * `count` entries: the counts agree, and the file, stream and name entries lie
- * in one sector, which `set_store` writes at once. Otherwise its separate
- * secondary writes could leave the new name under the old hash, a fault
- * the dirty-volume check cannot repair. */
-static int fits_in_place(const struct ex_set *src, uint32_t count)
+ * `count` entries with a name of `nlen` units: the counts agree, and the
+ * file and stream entries and the name entries of both names lie in one
+ * sector, which `set_store` writes at once. Otherwise its separate
+ * secondary writes could leave a name entry where the other name has a
+ * benign secondary, or the new name under the old hash, faults the
+ * dirty-volume check cannot repair. */
+static int fits_in_place(const struct ex_set *src, uint32_t count, uint32_t nlen)
 {
-    uint32_t per_sector = BLOCK_SECTOR_SIZE / 32;
-    uint32_t stream = src->index + 1, last_name = stream + (src->count + 14) / 15;
+    uint32_t per_sector = BLOCK_SECTOR_SIZE / 32, sector = src->index / per_sector;
+    uint32_t old_last = src->index + 1 + (src->count + 14) / 15;
+    uint32_t new_last = src->index + 1 + (nlen + 14) / 15;
 
-    return count == src->entries && src->index / per_sector == last_name / per_sector;
+    return count == src->entries && old_last / per_sector == sector &&
+           new_last / per_sector == sector;
+}
+
+/**
+ * Build in the mount's buffer the set a rename of `src`, in directory `d`,
+ * to `name` writes: the source's file and stream entries with the new
+ * name's length and hash, the new name entries, and the source's benign
+ * secondaries. Nothing is written to the directory. The entry count in
+ * `*count`; 0, -ENAMETOOLONG for a name whose entries would take the set
+ * past the format's 256, -EINVAL for a name FAT cannot store, or -EIO.
+ */
+static int rename_build(struct ex_mount *em, struct ex_node *d, const struct ex_set *src,
+                        const char *name, int is_dir, uint32_t *count)
+{
+    uint8_t stream[32];
+    uint32_t k, n, src_names = 2 + (src->count + 14) / 15;
+    int rc = set_build(em, name, is_dir, 0, 0, &n);
+
+    if (rc != 0) {
+        return rc;
+    }
+    k_memcpy(stream, src->stream, 32);
+    stream[3] = em->setbuf[32 + 3];
+    stream[4] = em->setbuf[32 + 4];
+    stream[5] = em->setbuf[32 + 5];
+    k_memcpy(em->setbuf, src->file, 32);
+    k_memcpy(em->setbuf + 32, stream, 32);
+    for (k = src_names; k < src->entries && n < 256; k++) {
+        rc = dir_entry(em, d, src->index + k, em->setbuf + n * 32);
+        if (rc <= 0) {
+            return rc == 0 ? -EIO : rc;
+        }
+        n++;
+    }
+    if (k < src->entries) {
+        return -ENAMETOOLONG;
+    }
+    em->setbuf[1] = (uint8_t)(n - 1);
+    *count = n;
+    return 0;
 }
 
 /**
@@ -3038,9 +3081,10 @@ static int fits_in_place(const struct ex_set *src, uint32_t count)
  *
  * The new set has the source's file and stream entries, so the times, the
  * chain and the flags stay, and its benign secondaries, a vendor allocation
- * among them, after the new name entries. A node in memory moves to the new
- * place, and is held through the writes, which sleep, so that a last close
- * meanwhile cannot free it.
+ * among them, after the new name entries; a new name that would take the
+ * set past the format's 256 entries is -ENAMETOOLONG before any write. A
+ * node in memory moves to the new place, and is held through the writes,
+ * which sleep, so that a last close meanwhile cannot free it.
  *
  * Returns 0, -ENOENT, -ENOTDIR, -EISDIR, -ENOTEMPTY, -EBUSY, -EROFS for a
  * read-only mount or a frozen directory, -EINVAL for a directory moved below
@@ -3142,37 +3186,11 @@ static int ex_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
         }
     }
     moved = node_find(em, is_dir, od_cluster, src.index, le32(src.stream + 20));
-    rc = set_build(em, newname, is_dir, 0, 0, &count);
+    rc = rename_build(em, od, &src, newname, is_dir, &count);
     if (rc != 0) {
         goto out;
     }
-    {
-        uint8_t hash_lo = em->setbuf[32 + 4], hash_hi = em->setbuf[32 + 5],
-                nlen = em->setbuf[32 + 3];
-
-        uint32_t k, src_names = 2 + (src.count + 14) / 15;
-
-        k_memcpy(em->setbuf, src.file, 32);
-        k_memcpy(em->setbuf + 32, src.stream, 32);
-        em->setbuf[32 + 3] = nlen;
-        em->setbuf[32 + 4] = hash_lo;
-        em->setbuf[32 + 5] = hash_hi;
-        for (k = src_names; k < src.entries && count < 256; k++) {
-            uint8_t e[32];
-
-            rc = dir_entry(em, od, src.index + k, e);
-            if (rc < 0) {
-                goto out;
-            }
-            if (rc == 0) {
-                break;
-            }
-            k_memcpy(em->setbuf + count * 32, e, 32);
-            count++;
-        }
-        em->setbuf[1] = (uint8_t)(count - 1);
-    }
-    if (od_cluster == nd_cluster && !dst_exists && fits_in_place(&src, count)) {
+    if (od_cluster == nd_cluster && !dst_exists && fits_in_place(&src, count, em->setbuf[32 + 3])) {
         rc = set_store(em, od, src.index, count, 1);
         if (rc == 0 && moved) {
             moved->index = src.index;

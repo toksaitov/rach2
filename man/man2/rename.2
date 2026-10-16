@@ -255,7 +255,9 @@ Path resolution would follow more than 40 symbolic links.
 .It Er EMLINK
 An ext2 directory move would exceed the new parent's limit of 65000 links.
 .It Er ENAMETOOLONG
-A path, component, or symbolic-link expansion is too long.
+A path, component, or symbolic-link expansion is too long, or on exFAT
+the new name's entries and the source's benign secondary entries would
+make a set of more than 256 entries.
 The copied path, including any current-directory prefix and its
 terminating null byte, must fit 4096 bytes.
 .It Er ENOENT

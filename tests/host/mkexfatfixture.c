@@ -1830,6 +1830,39 @@ static int build_volume(const char *out, uint64_t sectors, uint64_t offset, char
     return 0;
 }
 
+/** With `--full-set`, add full to `root`: a contiguous directory of three
+ *  clusters whose first set, f.txt, has the format's most entries, 256: one
+ *  name entry and 253 vendor extensions after it. */
+static void b_full_set(struct build *b, struct dw *root)
+{
+    uint32_t c;
+    struct dw full;
+    unsigned char set[19 * 32], entry[32], *first;
+    unsigned n, i;
+
+    if (!b_is(b, "--full-set"))
+        return;
+    c = b_alloc(b, 3, 0);
+    dw_init(&full, b, 1, c);
+    full.clusters[1] = c + 1;
+    full.clusters[2] = c + 2;
+    full.n = 3;
+    n = set_build(b, set, "f.txt", 0, 0, 0, 0, 0, 0, 0);
+    dw_put_set(&full, set, n);
+    memset(entry, 0, 32);
+    entry[0] = 0xE0; /* a vendor extension, benign */
+    for (i = 0; i < 16; i++)
+        entry[2 + i] = (unsigned char)(0xC0 + i);
+    while (full.used < 256)
+        dw_put(&full, entry);
+    first = dw_slot(&full, 0);
+    first[1] = 255;
+    wr16(first + 2, b_set_checksum(first, 256));
+    n = set_build(b, set, "full", 1, c, (uint64_t)b_cbytes(b) * 3, (uint64_t)b_cbytes(b) * 3, 1, 0,
+                  0);
+    dw_put_set(root, set, n);
+}
+
 /**
  * Build the fixture volume, changed by the option `opt` or NULL, and write
  * it to `out`. Returns 0, or 2 when memory or the write fails.
@@ -1889,6 +1922,10 @@ static int build_volume(const char *out, uint64_t sectors, uint64_t offset, char
  *   inside dir;
  * - `--dirty-critical`: a critical primary entry the driver does not know,
  *   in dir.
+ *
+ * `--full-set` adds full, a contiguous directory of three clusters whose
+ * first set, f.txt, has the format's most entries, 256: one name entry and
+ * 253 vendor extensions after it.
  *
  * `--swallow` enlarges hello.txt's set over the next file's entries, with
  * its checksum written again, so that a reader that counts entries without
@@ -2088,6 +2125,7 @@ static int build(const char *out, const char *opt)
     n = set_build(&b, set, "crossing.txt", 0, c, 9, 9, 1, 0, 0);
     dw_put_set(&root, set, n);
     big_first = c;
+    b_full_set(&b, &root);
 
     {
         unsigned char *hello = dw_slot(&root, b.hello_set);

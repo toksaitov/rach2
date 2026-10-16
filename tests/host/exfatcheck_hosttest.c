@@ -346,6 +346,7 @@ int main(void)
     row("--sector-4k", 0, "check: OK: ");
     row("--no-utc", 0, "check: OK: ");
     row("--zoned", 0, "check: OK: ");
+    row("--full-set", 0, "check: OK: ");
     row("--dirty", 0, ", dirty");
 
     row("--bad-main-checksum", 1, "boot: main checksum");

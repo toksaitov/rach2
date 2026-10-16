@@ -25,7 +25,10 @@
 #           crossing sequences and the free-durability row fail as well,
 #           since the driver has one unlink path;
 #   rename  an in-place rewrite with the file entry in another sector,
-#           which leaves a name hash the interruption matrix rejects.
+#           which leaves a name hash the interruption matrix rejects;
+#   overflow  a rename past 256 entries that drops the source's last
+#             benign secondaries in place of ENAMETOOLONG, which fails the
+#             whole test's row on the set of 256 entries.
 # With --rename it proves the rename fault using the barrier rows alone.
 set -eu
 
@@ -63,8 +66,13 @@ function, old, new = {
              '    k_memcpy(em->setbuf, em->setsave, sizeof(em->setbuf));\n',
              ''),
     'rename': ('static int fits_in_place(',
-               'src->index / per_sector == last_name / per_sector',
-               'stream / per_sector == last_name / per_sector'),
+               'sector = src->index / per_sector',
+               'sector = (src->index + 1) / per_sector'),
+    'overflow': ('static int rename_build(',
+                 '    if (k < src->entries) {\n'
+                 '        return -ENAMETOOLONG;\n'
+                 '    }\n',
+                 ''),
     'unlink': ('static int ex_unlink(',
                '    rc = set_retire(em, d, set.index, set.entries);\n'
                '    if (rc != 0) {\n'
@@ -84,7 +92,7 @@ path.write_text(source[:start] + body.replace(old, new) + source[end:])
 PY
 }
 
-faults='filler entry upcase grow unlink rename'
+faults='filler entry upcase grow unlink rename overflow'
 if [ "${1:-}" = --texts ]; then
     for fault in $faults; do
         RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/fs/exfat.c "$fault" >/dev/null || exit 1
@@ -203,6 +211,10 @@ for fault in $faults; do
         rename)
             message="exfat_hosttest: FAIL: 'straddle-rename' stopped after write 1"
             mode=--barriers
+            ;;
+        overflow)
+            message='exfat_hosttest: FAIL: and a name of seventeen entries, past 256, is ENAMETOOLONG'
+            mode=
             ;;
         unlink)
             message='exfat_hosttest: FAIL: the file unlinked while held is gone

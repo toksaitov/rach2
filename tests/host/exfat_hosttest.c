@@ -1871,6 +1871,50 @@ static void require_unlinked_gone(const char *sequence)
  *   a create or a mkdir in it fails with EROFS, while a directory below it
  *   takes a file.
  */
+/** A set of the format's 256 entries, full/f.txt with one name entry and
+ * 253 vendor extensions: a rename to a name of one entry keeps them, and
+ * one to a name of seventeen entries, which would take the set past 256, is
+ * ENAMETOOLONG and writes nothing. */
+static void full_set_rows(void)
+{
+    char longname[256];
+    void *d, *n;
+    unsigned long at, first = 0, kept = 0;
+    int err, before;
+
+    memset(longname, 'n', 255);
+    longname[255] = '\0';
+    load("--full-set");
+    check(mount_rw() == 0, "a writable mount for the full set rows");
+    d = walk("/full", &err);
+    check(d && OPS->rename(&mnt, d, "f.txt", d, "g.txt") == 0,
+          "a set of 256 entries is renamed to a name of one entry");
+    before = writes_made;
+    check(d && OPS->rename(&mnt, d, "g.txt", d, longname) == -ENAMETOOLONG,
+          "and a name of seventeen entries, past 256, is ENAMETOOLONG");
+    check(writes_made == before, "and that rename writes nothing");
+    check(d && OPS->rename(&mnt, d, "g.txt", mnt.root, longname) == -ENAMETOOLONG,
+          "so is a move to another directory with that name");
+    n = walk("/full/g.txt", &err);
+    check(n != 0, "the set keeps its name of one entry");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    if (d) {
+        OPS->put(&mnt, d);
+    }
+    check(OPS->prepare_unmount(&mnt) == 0, "the full set rows' clean unmount");
+    unmount_image();
+    check_consistent("the volume is consistent after the full set rows", 0);
+    for (at = 0; at < (unsigned long)image_sectors * 512; at += 32) {
+        if (image[at] == 0xE0 && image[at + 2] == 0xC0 && image[at + 3] == 0xC1 && kept++ == 0) {
+            first = at;
+        }
+    }
+    check(kept == 253 && first >= 96 && image[first - 96] == 0x85 && image[first - 95] == 255,
+          "and the renamed set has its 253 vendor extensions");
+}
+
 static void write_rows(void)
 {
     unsigned i;
@@ -2439,6 +2483,7 @@ int main(int argc, char **argv)
     damaged_rows();
     external_rows();
     write_rows();
+    full_set_rows();
     scan_cost_rows();
     durability_rows();
     free_durability_row();
