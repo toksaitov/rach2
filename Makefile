@@ -706,9 +706,9 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # client, TinyCC and pdpmake, Doom, the manual, the sources under /src, and an
 # /etc and /root tree. 20 MiB on both architectures: with Doom's WAD the tree
 # takes 18.1 MiB on i686 and 18.8 MiB on x86-64, whose programs are larger.
-# The WAD is not in the repository. A build without it, as in ci, must leave
-# OS_REAL_WAD_KIB free for it, so a tree that outgrows the image fails there
-# too and not only where the WAD is present.
+# The WAD is not in the repository. A build without it, as in a fresh clone,
+# must leave OS_REAL_WAD_KIB free for it, so a tree that outgrows the image
+# fails there too and not only where the WAD is present.
 # The module sits in the kernel's 32 MiB window, where the DMA buffers and the
 # kernel stacks are carved, so it is kept small; and the manual's aliases are
 # a table and not files, since the RAM root and a KRFFS disk walk every node
