@@ -63,32 +63,51 @@ TEST_STATUS_PY
 fi
 "
 
+# whole PATH JQ: print the rows that JQ makes of every page of the GitHub API's
+# list at PATH, JQ writing each row as the list's `total_count`, a space and
+# the row. Fail when a request fails or the rows are fewer than the total, as
+# they are past the API's limit of 1000 rows for a search.
+whole()
+{
+    rows=$(gh api --paginate "$1" --jq "$2") || return 1
+    printf '%s\n' "$rows" | awk 'NF { t = $1; n++; sub(/^[^ ]* /, ""); print }
+        END { if (n != t + 0) { printf "status: %d of %d rows\n", n, t > "/dev/stderr"; exit 1 } }'
+}
+
+# runs WORKFLOW RANGE: print WORKFLOW's runs created in RANGE, each as
+# `ID RESULT TITLE`.
+runs()
+{
+    whole "repos/$REPO/actions/workflows/$1/runs?per_page=100&created=$2" \
+        '.total_count as $t | .workflow_runs[] |
+        "\($t) \(.id) \(.conclusion // .status) \(.display_title)"'
+}
+
 # day DATE: print the facts of DATE, as the header says.
 day()
 {
     from="$1T00:00:00+06:00"
     to=$(date -j -v+1d -f %F "$1" +%F 2> /dev/null || date -d "$1 + 1 day" +%F)
     to="${to}T00:00:00+06:00"
+    range=$(printf '%s..%s' "$from" "$to" | sed 's/+/%2B/g')
+    search="search/issues?per_page=100&q=repo:$REPO+is:issue+is:closed+closed:$range"
     git fetch -q origin
     echo "== $1 at UTC+6: $from to $to"
     commits=$(git log --first-parent --format='%h %s' --since="$from" --until="$to" origin/master)
     echo "commits on master: $(printf '%s' "$commits" | grep -c .)"
     printf '%s\n' "$commits" | grep . | sed 's/^/  /'
-    closed=$(gh issue list --repo "$REPO" --state closed --limit 500 \
-        --search "closed:$from..$to" --json number,title,stateReason \
-        --jq '.[] | "#\(.number) \(.stateReason | ascii_downcase) \(.title[0:70])"')
+    closed=$(whole "$search" '.total_count as $t | .items[] |
+        "\($t) #\(.number) \(.state_reason) \(.title[0:70])"')
     echo "issues closed: $(printf '%s' "$closed" | grep -c .)"
     printf '%s\n' "$closed" | grep . | sed 's/^/  /'
     for w in ci.yml full.yml; do
-        runs=$(gh run list --repo "$REPO" --workflow "$w" --limit 200 --created "$from..$to" \
-            --json conclusion,status,displayTitle,databaseId \
-            --jq '.[] | "\(.databaseId) \(.conclusion // .status) \(.displayTitle)"')
-        echo "$w runs: $(printf '%s' "$runs" | grep -c .), by result: $(printf '%s\n' "$runs" |
+        rows=$(runs "$w" "$range")
+        echo "$w runs: $(printf '%s' "$rows" | grep -c .), by result: $(printf '%s\n' "$rows" |
             awk 'NF { n[$2]++ } END { for (r in n) printf "%s %d; ", r, n[r] }')"
-        printf '%s\n' "$runs" | grep . | sed 's/^/  /'
+        printf '%s\n' "$rows" | grep . | sed 's/^/  /'
     done
-    phases=$(gh issue list --repo "$REPO" --state closed --label phase --limit 50 \
-        --search "closed:$from..$to" --json number,title --jq '.[] | "#\(.number) \(.title)"')
+    phases=$(whole "$search+label:phase" '.total_count as $t | .items[] |
+        "\($t) #\(.number) \(.title)"')
     echo "phases closed: $(printf '%s' "$phases" | grep -c .)"
     printf '%s\n' "$phases" | grep . | sed 's/^/  /'
 }
