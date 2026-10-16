@@ -83,33 +83,48 @@ runs()
         "\($t) \(.id) \(.conclusion // .status) \(.display_title)"'
 }
 
-# day DATE: print the facts of DATE, as the header says.
+# list WHAT ROWS: print the count of ROWS, labelled WHAT, and ROWS indented.
+list()
+{
+    echo "$1: $(printf '%s' "$2" | grep -c .)"
+    printf '%s\n' "$2" | grep . | sed 's/^/  /'
+}
+
+# tally WORKFLOW ROWS: print the count of the runs ROWS lists, by result, and
+# ROWS indented.
+tally()
+{
+    echo "$1 runs: $(printf '%s' "$2" | grep -c .), by result: $(printf '%s\n' "$2" |
+        awk 'NF { n[$2]++ } END { for (r in n) printf "%s %d; ", r, n[r] }')"
+    printf '%s\n' "$2" | grep . | sed 's/^/  /'
+}
+
+# day DATE: print the facts of DATE, as the header says. Print nothing and fail
+# when one of them cannot be read whole.
 day()
 {
     from="$1T00:00:00+06:00"
-    to=$(date -j -v+1d -f %F "$1" +%F 2> /dev/null || date -d "$1 + 1 day" +%F)
+    to=$(date -j -v+1d -f %F "$1" +%F 2> /dev/null || date -d "$1 + 1 day" +%F) || return 2
     to="${to}T00:00:00+06:00"
     range=$(printf '%s..%s' "$from" "$to" | sed 's/+/%2B/g')
     search="search/issues?per_page=100&q=repo:$REPO+is:issue+is:closed+closed:$range"
-    git fetch -q origin
-    echo "== $1 at UTC+6: $from to $to"
-    commits=$(git log --first-parent --format='%h %s' --since="$from" --until="$to" origin/master)
-    echo "commits on master: $(printf '%s' "$commits" | grep -c .)"
-    printf '%s\n' "$commits" | grep . | sed 's/^/  /'
+    git fetch -q origin || { echo "status: day: cannot fetch origin" >&2; return 1; }
+    commits=$(git log --first-parent --format='%h %s' --since="$from" --until="$to" origin/master) ||
+        { echo "status: day: cannot read master's log" >&2; return 1; }
     closed=$(whole "$search" '.total_count as $t | .items[] |
-        "\($t) #\(.number) \(.state_reason) \(.title[0:70])"')
-    echo "issues closed: $(printf '%s' "$closed" | grep -c .)"
-    printf '%s\n' "$closed" | grep . | sed 's/^/  /'
-    for w in ci.yml full.yml; do
-        rows=$(runs "$w" "$range")
-        echo "$w runs: $(printf '%s' "$rows" | grep -c .), by result: $(printf '%s\n' "$rows" |
-            awk 'NF { n[$2]++ } END { for (r in n) printf "%s %d; ", r, n[r] }')"
-        printf '%s\n' "$rows" | grep . | sed 's/^/  /'
-    done
+        "\($t) #\(.number) \(.state_reason) \(.title[0:70])"') ||
+        { echo "status: day: cannot read the closed issues" >&2; return 1; }
+    ci=$(runs ci.yml "$range") || { echo "status: day: cannot read the runs of ci.yml" >&2; return 1; }
+    full=$(runs full.yml "$range") || { echo "status: day: cannot read the runs of full.yml" >&2; return 1; }
     phases=$(whole "$search+label:phase" '.total_count as $t | .items[] |
-        "\($t) #\(.number) \(.title)"')
-    echo "phases closed: $(printf '%s' "$phases" | grep -c .)"
-    printf '%s\n' "$phases" | grep . | sed 's/^/  /'
+        "\($t) #\(.number) \(.title)"') ||
+        { echo "status: day: cannot read the closed phases" >&2; return 1; }
+    echo "== $1 at UTC+6: $from to $to"
+    list "commits on master" "$commits"
+    list "issues closed" "$closed"
+    tally ci.yml "$ci"
+    tally full.yml "$full"
+    list "phases closed" "$phases"
 }
 
 if [ "$1" = day ]; then
