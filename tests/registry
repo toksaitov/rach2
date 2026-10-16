@@ -99,7 +99,7 @@ metal|qemu,ssh,mformat,mcopy,mmd,mke2fs,debugfs,e2fsck,python3|core
 bootline|qemu,mke2fs|full
 servicelog|qemu,mke2fs|full
 persist|qemu|core|persist-test.*,persist.*,persist/*
-style|cppcheck,shellcheck,clang,clang-format|full
+style|cppcheck,shellcheck,clang,clang-format,python3|full
 dgram-e1000|qemu|full
 dgram|qemu|core
 diskdiag|qemu,ssh|full
@@ -121,7 +121,7 @@ audio|qemu|core|audio-test*,audio-scale.*,audio-scale-sb16.*
 netconsole|qemu|core
 crash|qemu|core
 pools|qemu|core
-runner|-|core
+runner|python3|core
 diskfull|qemu|core
 fault|qemu|core
 imagerace|-|full

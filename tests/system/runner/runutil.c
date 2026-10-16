@@ -22,6 +22,7 @@
  *   until FILE PATTERN SECS [COUNT]
  *                                  wait for lines of a file to match
  *   gone PID SECS                  wait for a process to end
+ *   identity PID                   print pid, group and start time
  *   pgid PID                       print a process's group, or exit 1
  *   young FILE SECS                exit 0 when FILE changed within SECS
  *   now                            print the monotonic clock's seconds
@@ -1339,10 +1340,11 @@ static void remove_named(const char *name)
 /** Remove what a run has made when an exec of the lock or port helper cannot
  * continue: its scratch, `RACH2_RUN_WORK`, and the tree lock directory it
  * took before claiming its ports, `RACH2_RUN_TREE_LOCK`, which tests/run sets
- * only for that claim.
+ * only for that claim, and its status record, `RACH2_RUN_STATUS`.
  */
 static void remove_work(void)
 {
+    remove_named("RACH2_RUN_STATUS");
     remove_named("RACH2_RUN_WORK");
     remove_named("RACH2_RUN_TREE_LOCK");
 }
@@ -1492,6 +1494,39 @@ static int open_host_file(const char *dir, const char *name)
     return fd;
 }
 
+/** Publish a host or port wait in the run's scratch directory. `path` is
+ * one host lock, or the directory of `count` port blocks. A zero `since`
+ * removes the record before the claim starts its command. The record is
+ * advisory; failure to write it does not change the claim.
+ */
+static void claim_status(const char *reason, const char *path, short type, int count, time_t since)
+{
+    const char *work = getenv("RACH2_RUN_WORK");
+    char file[4096], temp[4096];
+    FILE *fp;
+    int i;
+
+    if (!work || !*work)
+        return;
+    snprintf(file, sizeof(file), "%s/claim.wait", work);
+    if (!since) {
+        unlink(file);
+        return;
+    }
+    snprintf(temp, sizeof(temp), "%s/claim.wait.new", work);
+    fp = fopen(temp, "w");
+    if (!fp)
+        return;
+    fprintf(fp, "reason %s\nsince %lld\n", reason, (long long)since);
+    if (count)
+        for (i = 0; i < count; i++)
+            fprintf(fp, "lock WRITE %s/rach2-ports.%d\n", path, i);
+    else
+        fprintf(fp, "lock %s %s\n", type == F_WRLCK ? "WRITE" : "READ", path);
+    if (fclose(fp) == 0)
+        rename(temp, file);
+}
+
 /** Take a lock of `type` on the file `fd` has open, trying once a second, as
  * the claim of a block does, while another process has a lock that conflicts
  * with it. The signals in `stop` are unblocked only between the tries. The
@@ -1499,11 +1534,17 @@ static int open_host_file(const char *dir, const char *name)
  * printed already. Return 0 when the lock is taken and -1 when it fails for
  * another reason, with `errno` set.
  */
-static int wait_for_lock(int fd, short type, const sigset_t *stop, const char *waiting, int *said)
+static int wait_for_lock(int fd, short type, const sigset_t *stop, const char *waiting, int *said,
+                         const char *path)
 {
-    int held;
+    int held, saved;
+    time_t since = 0;
 
     while ((held = try_lock(fd, type)) == 1) {
+        if (!since) {
+            since = time(NULL);
+            claim_status("host", path, type, 0, since);
+        }
         if (!*said) {
             printf("%s\n", waiting);
             fflush(stdout);
@@ -1513,6 +1554,9 @@ static int wait_for_lock(int fd, short type, const sigset_t *stop, const char *w
         pause_for(1.0);
         stop_if_interrupted(stop);
     }
+    saved = errno;
+    claim_status(NULL, NULL, 0, 0, 0);
+    errno = saved;
     return held;
 }
 
@@ -1539,6 +1583,7 @@ static void host_claim(const char *dir, const sigset_t *stop)
     static const char behind[] = "run: host: waiting for a run that needs the host alone";
     const char *mode = getenv("RACH2_HOST_LOCK");
     int gate, host, alone, failed, said = 0;
+    char gatepath[4096], hostpath[4096];
 
     if (mode == NULL)
         return;
@@ -1548,14 +1593,16 @@ static void host_claim(const char *dir, const sigset_t *stop)
         remove_work();
         exit(2);
     }
+    snprintf(gatepath, sizeof(gatepath), "%s/rach2-host.gate", dir);
+    snprintf(hostpath, sizeof(hostpath), "%s/rach2-host.lock", dir);
     gate = open_host_file(dir, "rach2-host.gate");
     host = open_host_file(dir, "rach2-host.lock");
     if (alone)
-        failed = wait_for_lock(gate, F_WRLCK, stop, ahead, &said) != 0 ||
-                 wait_for_lock(host, F_WRLCK, stop, ahead, &said) != 0;
+        failed = wait_for_lock(gate, F_WRLCK, stop, ahead, &said, gatepath) != 0 ||
+                 wait_for_lock(host, F_WRLCK, stop, ahead, &said, hostpath) != 0;
     else
-        failed = wait_for_lock(gate, F_RDLCK, stop, behind, &said) != 0 ||
-                 wait_for_lock(host, F_RDLCK, stop, behind, &said) != 0;
+        failed = wait_for_lock(gate, F_RDLCK, stop, behind, &said, gatepath) != 0 ||
+                 wait_for_lock(host, F_RDLCK, stop, behind, &said, hostpath) != 0;
     if (failed) {
         fprintf(stderr, "run: result: refused: the host lock under %s cannot be taken: %s\n", dir,
                 strerror(errno));
@@ -1610,6 +1657,7 @@ static void ports_exec(const char *dir, int count, char **cmd)
                 if (slot > 0)
                     printf("run: ports: block %d, %s above the table's\n", slot, offset);
                 fflush(stdout);
+                claim_status(NULL, NULL, 0, 0, 0);
                 ports_start(&stop, cmd);
             }
             close(fd);
@@ -1620,6 +1668,7 @@ static void ports_exec(const char *dir, int count, char **cmd)
             exit(1);
         }
         if (!said) {
+            claim_status("ports", dir, F_WRLCK, count, time(NULL));
             printf("run: ports: all %d blocks are held by other runs; waiting\n", count);
             fflush(stdout);
             said = 1;
@@ -1650,6 +1699,19 @@ static void start_command(int argc, char **argv)
         exit(lead_exec(argv + 2));
 }
 
+/** Print the process identity used by the manager's status reader. Return
+ * 1 when `pid` is absent, a zombie, or cannot be inspected.
+ */
+static int print_identity(pid_t pid)
+{
+    struct identity id;
+
+    if (process_identity(pid, &id) != 1 || id.zombie)
+        return 1;
+    printf("%ld %ld %llu %llu\n", (long)pid, (long)id.group, id.start, id.fraction);
+    return 0;
+}
+
 /** Run the mode the first argument names, as the opening comment lists. */
 int main(int argc, char **argv)
 {
@@ -1678,6 +1740,8 @@ int main(int argc, char **argv)
                            argc == 6 ? (int)strtol(argv[5], NULL, 10) : 1);
     if (argc == 4 && !strcmp(argv[1], "gone"))
         return until_gone((pid_t)strtol(argv[2], NULL, 10), strtod(argv[3], NULL));
+    if (argc == 3 && !strcmp(argv[1], "identity"))
+        return print_identity((pid_t)strtol(argv[2], NULL, 10));
     if (argc == 3 && !strcmp(argv[1], "pgid")) {
         pid_t group = getpgid((pid_t)strtol(argv[2], NULL, 10));
         if (group < 0)

@@ -20,7 +20,8 @@
 # and the runs of the range it reviews. A loop on another host is read over
 # ssh; one whose host is `-` runs on this machine. A loop that sends its tests
 # to its own copy on the testing host, as the owner's loops do, counts the
-# commands that work in that copy.
+# commands that work in that copy. Each run then lists its admission waits,
+# their start times and holders, and whether each holder lives.
 #
 # `day DATE` prints the facts of one day, DATE as YYYY-MM-DD, counted at the
 # owner's UTC+6, for the manager's day report: the commits that reached
@@ -51,6 +52,16 @@ echo "loop $loop: $(tail -n 1 "$st/loop.log" 2> /dev/null) | silent $age | $test
     "$(git -C "$repo" log -1 --format=%h 2> /dev/null)" \
     "$(git -C "$repo" status --porcelain 2> /dev/null | wc -l | tr -d " ") changed"
 '
+# Send this copy of the reader even when a worker's checkout is older.
+probe="$probe
+if [ -n \"\$copy\" ]; then
+    echo \"test-copy \$copy\"
+else
+    python3 - \"\$repo\" <<'TEST_STATUS_PY'
+$(cat "$(dirname "$0")/test_status.py")
+TEST_STATUS_PY
+fi
+"
 
 # day DATE: print the facts of DATE, as the header says.
 day()
@@ -141,10 +152,19 @@ grep -v '^#' "$(dirname "$0")/workers" | while read -r name host st; do
     [ -n "$name" ] || continue
     printf '%s: ' "$name"
     if [ "$host" = - ]; then
-        printf '%s' "$probe" | sh -s "$st" 2>&1 | tail -n 1
+        report=$(printf '%s' "$probe" | sh -s "$st" 2>&1)
     else
-        printf '%s' "$probe" | ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" sh -s "$st" 2>&1 | tail -n 1
+        report=$(printf '%s' "$probe" | ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" sh -s "$st" 2>&1)
     fi
+    printf '%s\n' "$report" | sed '/^test-copy /d'
+    copy=$(printf '%s\n' "$report" | sed -n 's/^test-copy //p')
+    case $copy in
+        '') ;;
+        *[!A-Za-z0-9/._-]*|*/..*) echo "  test status: invalid copy path" ;;
+        /*) ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
+                "MSYS_NO_PATHCONV=1 wsl.exe -u root -- python3 - $copy" < "$(dirname "$0")/test_status.py" 2>&1 ;;
+        *) echo "  test status: invalid copy path" ;;
+    esac
 done
 echo "== reviewer"
 st=$HOME/flow/reviewer

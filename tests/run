@@ -18,7 +18,7 @@ set -u
 # the claim, from this line on: a signal ends it through the exit trap, which
 # removes the lock and the run's scratch (see the claim below).
 if [ -n "${RACH2_RUN_TREE_LOCK:-}" ]; then
-    trap 'rm -rf "$RACH2_RUN_WORK" "$RACH2_RUN_TREE_LOCK"' 0
+    trap 'rm -rf "$RACH2_RUN_WORK" "$RACH2_RUN_TREE_LOCK" "${RACH2_RUN_STATUS:-}"' 0
     trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
 fi
 
@@ -73,10 +73,11 @@ case "${RACH2_PORT_OFFSET:-}" in
     *[!0-9]*) echo "run: result: refused: RACH2_PORT_OFFSET must be a whole number" >&2; rm -rf "$RACH2_RUN_WORK"; exit 2 ;;
 esac
 WORK=$RACH2_RUN_WORK
+STATUS_RECORD=${RACH2_RUN_STATUS:-}
 HANDOFF_LOCK=${RACH2_RUN_TREE_LOCK:-}
 LOCKED=${HANDOFF_LOCK:+1}
-trap 'rm -rf "$WORK" ${HANDOFF_LOCK:+"$HANDOFF_LOCK"}' 0
-unset RACH2_RUN_GROUP RACH2_RUN_WORK RACH2_RUN_TREE_LOCK RACH2_PROGRESS_FD RACH2_HOST_LOCK
+trap 'rm -rf "$WORK" ${HANDOFF_LOCK:+"$HANDOFF_LOCK"} ${STATUS_RECORD:+"$STATUS_RECORD"}' 0
+unset RACH2_RUN_GROUP RACH2_RUN_WORK RACH2_RUN_TREE_LOCK RACH2_PROGRESS_FD RACH2_HOST_LOCK RACH2_RUN_STATUS
 LC_ALL=C; export LC_ALL
 now() { "$RACH2_RUN_UTIL" now; }
 sleep() { "$RACH2_RUN_UTIL" sleep "$1"; }
@@ -245,6 +246,7 @@ finish() {
     [ -z "$(owned_live)$(groups_live)" ] || owned_stop
     lock_release
     rm -rf "$WORK"
+    [ -z "$STATUS_RECORD" ] || rm -f "$STATUS_RECORD"
 }
 RUNNING=""; RUNNING_NAMES=""
 trap 'finish' EXIT
@@ -702,7 +704,7 @@ keep_logs() { # keep_logs NAME
 # what is running is stopped and reported as stopped.
 POOL_FAILED=""
 run_pool() {
-    POOL_FAILED=""; RUNNING=""; RUNNING_NAMES=""; stopped=""; poll_turns=0
+    POOL_FAILED=""; RUNNING=""; RUNNING_NAMES=""; stopped=""; poll_turns=0; POOL_STATUS=""
     # shellcheck disable=SC2086 # the names are one word each; this drops the leading space
     set -- $1; pending="$*"
     while [ -n "$pending" ] || [ -n "$RUNNING_NAMES" ]; do
@@ -718,7 +720,9 @@ run_pool() {
             ( RACH2_PROGRESS_FD=3; export RACH2_PROGRESS_FD
               run_one "$suite" pooled > "$WORK/$suite.out" 2>&1; echo $? > "$WORK/$suite.rc.new";
               mv "$WORK/$suite.rc.new" "$WORK/$suite.rc" ) 3>&1 &
-            echo $! > "$WORK/$suite.job"
+            job=$!
+            echo "$job" > "$WORK/$suite.job"
+            "$RACH2_RUN_UTIL" identity "$job" > "$WORK/$suite.identity"
             RUNNING="$RUNNING $!"
             RUNNING_NAMES="$RUNNING_NAMES $suite"
         done
@@ -737,6 +741,7 @@ run_pool() {
                 pool_collect
             }
         fi
+        pool_status
         poll_turns=$((poll_turns + 1))
         if [ "$((poll_turns % 10))" -eq 0 ] && [ -z "$stopped" ] && ! check_scripts_now; then
             echo "run: stopping the set: the tree changed under it" >&2
@@ -745,6 +750,35 @@ run_pool() {
         [ -z "$pending" ] && [ -z "$RUNNING_NAMES" ] || sleep 0.2
     done
     RUNNING=""
+}
+
+# Publish the pool's pending suites and the jobs that occupy its budget.
+# The timestamp changes only when the reason for waiting changes.
+pool_status() {
+    if [ -z "$pending" ] || [ -n "$stopped" ]; then
+        rm -f "$WORK/pool.wait"
+        POOL_STATUS=""
+        return
+    fi
+    pool_state="$pending|$RUNNING_NAMES"
+    [ "$POOL_STATUS" != "$pool_state" ] || return 0
+    POOL_STATUS=$pool_state
+    reason=memory
+    [ "$(active_count)" -lt "$WORKERS" ] || reason=workers
+    since=$(sed -n 's/^since //p' "$WORK/pool.wait" 2>/dev/null)
+    if [ "$(sed -n 's/^reason //p' "$WORK/pool.wait" 2>/dev/null)" != "$reason" ]; then
+        since=$(date +%s)
+    fi
+    {
+        echo "reason $reason"
+        echo "since $since"
+        echo "budget $MEMORY_MIB"
+        for s in $pending; do echo "pending $s $(suite_memory "$s")"; done
+        for s in $RUNNING_NAMES; do
+            echo "holder $s $(suite_memory "$s") $(cat "$WORK/$s.identity")"
+        done
+    } > "$WORK/pool.wait.new"
+    mv "$WORK/pool.wait.new" "$WORK/pool.wait"
 }
 
 # The suites that ended since the last look, each reported once and its
@@ -1108,6 +1142,13 @@ set_factor || exit 2
 set_accel || exit 2
 set_cpus || exit 2
 lock_take "$@" || { echo "run: result: refused: the tree is not free" >&2; exit 1; }
+STATUS_RECORD=$REPO/build/.run.status.$$
+{
+    echo "identity $("$RACH2_RUN_UTIL" identity $$)"
+    echo "work $WORK"
+    echo "args $*"
+} > "$STATUS_RECORD.new"
+mv "$STATUS_RECORD.new" "$STATUS_RECORD"
 # The host lock a run of the suites named takes before its port claim, below:
 # `alone` when one declares more guest memory than half of the host's, which
 # is two thirds of memory_default's three quarters, and `shared` otherwise.
@@ -1147,6 +1188,7 @@ if [ -n "$machines" ] && [ -z "${RACH2_PORT_OFFSET:-}" ]; then
     if [ -n "$LOCKED" ]; then
         RACH2_RUN_TREE_LOCK=$LOCK; export RACH2_RUN_TREE_LOCK
     fi
+    RACH2_RUN_STATUS=$STATUS_RECORD; export RACH2_RUN_STATUS
     RACH2_HOST_LOCK=$(host_lock "$@"); export RACH2_HOST_LOCK
     exec "$RACH2_RUN_UTIL" ports "${RACH2_PORT_DIR:-/tmp}" 10 sh "$0" "$@"
 fi

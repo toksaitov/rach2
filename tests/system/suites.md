@@ -67,7 +67,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `bootline` (full tier; needs qemu, mke2fs; 128 MiB): the boot line that contradicts itself.
 * `servicelog` (full tier; needs qemu, mke2fs; 128 MiB): the log init's services write to is bounded within a boot, and a log a boot left full is removed at the next.
 * `persist` (core tier; needs qemu; 128 MiB): fsync durability across a reboot.
-* `style` (full tier; needs cppcheck, shellcheck, clang, clang-format; no machine): the source checks over the tree, tools/verify/check.sh, booting nothing.
+* `style` (full tier; needs cppcheck, shellcheck, clang, clang-format, python3; no machine): the source checks over the tree, tools/verify/check.sh, booting nothing.
 * `dgram-e1000` (full tier; needs qemu; 128 MiB): the dgram suite on the e1000 card.
 * `dgram` (core tier; needs qemu; 128 MiB): a connected datagram socket and the permission to broadcast, which is how a DHCP client renews a lease and how it asks for one.
 * `diskdiag` (full tier; needs qemu, ssh; 128 MiB): a disk read without being mounted and without being written.
@@ -89,7 +89,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `netconsole` (core tier; needs qemu; 128 MiB): the kernel log on the wire.
 * `crash` (core tier; needs qemu; 128 MiB): prove the dirty-mount flag detects an unclean shutdown.
 * `pools` (core tier; needs qemu; 128 MiB): many pipes, ptys, sockets and processes live at once, and the kernel heap back where it started after a thousand each of pipes, ptys and sockets (see tests/poolprobe.c).
-* `runner` (core tier; needs nothing beyond the build; no machine): the harness's selftest, then the runner's own, tests/run driven against a registry and a makefile of its own in a temporary directory (tests/system/selftest.sh).
+* `runner` (core tier; needs python3; no machine): the harness's selftest, then the runner's own, tests/run driven against a registry and a makefile of its own in a temporary directory (tests/system/selftest.sh).
 * `diskfull` (core tier; needs qemu; 128 MiB): a file system with no room left.
 * `fault` (core tier; needs qemu; 128 MiB): the three probes whose whole claim is that the kernel killed them.
 * `imagerace` (full tier; needs nothing beyond the build; no machine): two builds of one image at the same moment, as a parallel run of the suites can make them, both of which must finish and leave the image whole.

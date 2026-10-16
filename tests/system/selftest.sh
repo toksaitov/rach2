@@ -74,6 +74,10 @@ cp "$REPO/tests/system/runlock.sh" "$REPO/tests/system/runlock_exec.sh" "$WORK/t
 cp "$REPO/tests/system/runner/runutil.c" "$WORK/tests/system/runner/runutil.c"
 cc -O2 -Wall -Wextra -o "$WORK/runutil" "$REPO/tests/system/runner/runutil.c" || exit 1
 SELFTEST_UTIL=$WORK/runutil
+SELFTEST_STATUS=$REPO/tools/flow/test_status.py; export SELFTEST_STATUS
+out=$(python3 "$REPO/tests/system/test_status_test.py" "$SELFTEST_UTIL" 2>&1); rc=$?
+printf '%s\n' "$out"
+check "test status reports admission waits and stale holders" 0 "$rc"
 # The clock and the sleep of the compiled runutil, which the rows use in
 # place of the host's.
 now() { "$SELFTEST_UTIL" now; }
@@ -183,7 +187,8 @@ run-slow1:
 run-slow2:
 	@echo slow2-start >> events; sleep 2; echo slow2-end >> events
 run-hungry1:
-	@echo hungry1-start >> events; sleep 2; echo hungry1-end >> events
+	@echo hungry1-start >> events; sleep 1; \
+	  python3 "$$SELFTEST_STATUS" "$$PWD"; sleep 1; echo hungry1-end >> events
 run-hungry2:
 	@echo hungry2-start >> events; sleep 2; echo hungry2-end >> events
 run-stuck:
@@ -545,6 +550,11 @@ rm -f "$WORK/events"
 out=$(RACH2_MEMORY_MIB=4000 W=2 run hungry1 hungry2); rc=$?
 check "two suites past the memory budget run one after the other" 'hungry1-start hungry1-end hungry2-start hungry2-end ' \
     "$(tr '\n' ' ' < "$WORK/events")"
+if [ -r /proc/locks ]; then
+    check "a memory wait names the pending suite" 1 "$(printf '%s\n' "$out" | grep -c 'pending hungry2: 3000 MiB')"
+    check "a memory wait names its live holder" 1 "$(printf '%s\n' "$out" | grep -c 'holder hungry1 pid [0-9]* alive: 3000 MiB')"
+    check "a memory wait has a start time" 1 "$(printf '%s\n' "$out" | grep -c 'waits for memory since .* UTC; budget 4000 MiB')"
+fi
 check "and the budget is announced" 1 "$(printf '%s\n' "$out" | grep -c 'memory 4000 MiB')"
 rm -f "$WORK/events"
 out=$(RACH2_MEMORY_MIB=8000 W=2 run hungry1 hungry2); rc=$?
