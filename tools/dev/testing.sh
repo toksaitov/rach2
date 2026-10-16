@@ -137,14 +137,14 @@ probe()
     if [ -d "$lock" ]; then
         pid=$(sed -n 's/^pid //p' "$lock/owner" 2>/dev/null)
         [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null &&
-            echo "the run lock, held by pid $pid: $(sed -n 's/^args //p' "$lock/owner")"
+            echo "the run lock, held by pid $pid: $(sed -n 's/^args //p' "$lock/owner" 2>/dev/null)"
     fi
     for d in /proc/[0-9]*; do
         case "$(readlink "$d/cwd" 2>/dev/null)" in
             "$1"|"$1"/*) ;;
             *) continue ;;
         esac
-        command=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)
+        command=$(tr '\0' ' ' 2>/dev/null < "$d/cmdline")
         case "$(cat "$d/comm" 2>/dev/null)" in
             bash|sh|dash|zsh)
                 # A shell that runs no script of its own is a person's prompt.
