@@ -291,8 +291,9 @@ With `rach2.netconsole` on the boot line, the kernel broadcasts its log in Ether
 
 ### Machine measurements and the grow: `dev/`
 
-These scripts measure an installed machine over SSH and run the recovery grow. Each script's header states its contract.
+These scripts update and measure an installed machine over SSH and run the recovery grow. Each script's header states its contract.
 
+* [machine_update.sh](dev/machine_update.sh) `KERNEL [ADDRESS]` installs KERNEL on the installed Lenovo with `bootctl kernel`, boots it once as a trial and commits it once machine_identity.sh finds it running from the candidate slot. Before it writes, the machine must report the Lenovo's station address, a boot from a slot and no trial armed. The manager runs it each morning with the kernel of a commit that a night passed whole.
 * [machine_identity.sh](dev/machine_identity.sh) runs before every measurement, as `RACH2_MEASURE_USER`, root by default. It lets the measurement go on only when the machine booted the slot `RACH2_MEASURE_SLOT` gives, `candidate` or `fallback`, has no trial armed, and has the host file `RACH2_MEASURE_KERNEL` in that slot by SHA-256, and logs what the machine reported.
 * `machine_load.sh KEY ADDRESS SESSIONS SECONDS [DIR]` starts SESSIONS sessions a second apart, since Dropbear admits five unauthenticated connections from one address at a time. Each runs [machine_load_session.sh](dev/machine_load_session.sh): it copies `/src/rach2` under `/tmp`, builds it with the staged TinyCC and pdpmake for SECONDS of the machine's clock, and prints `SESSION N builds B failed F before-deadline W late L`. `RACH2_LOAD_USER` selects the account.
 * [machine_net.c](dev/machine_net.c) times a TCP transfer with the same code on the host, where `make` builds `build/tools/dev/machine_net`, and on Rach2, where `tcc -static` builds it: `local MIB WRITE-BYTES TIMEOUT` on loopback port 27157, or `receive PORT MIB TIMEOUT` and `send ADDRESS PORT MIB WRITE-BYTES` on two machines, each stopped at 180 seconds.
