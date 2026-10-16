@@ -283,6 +283,13 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: board groups, rollback and take" >&2
         fail=1
     fi
+    if sh tests/system/limited_test.sh >"$VDIR/limited.rlog" 2>&1; then
+        echo "hosttest: result: pass: the loops' reading of a usage limit"
+    else
+        cat "$VDIR/limited.rlog"
+        echo "hosttest: result: fail: the loops' reading of a usage limit" >&2
+        fail=1
+    fi
     if sh tests/system/testing_run_test.sh >"$VDIR/testing_run.rlog" 2>&1; then
         echo "hosttest: result: pass: testing.sh run's quoted commands"
     else

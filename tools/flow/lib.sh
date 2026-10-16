@@ -69,11 +69,18 @@ refresh()
 
 # limited OUT ERR: succeed when the session whose output is OUT and whose
 # errors are ERR ended on the account's usage limit, and print the start of
-# its message. Only the last lines are read: the agent's final message
-# is there, and earlier lines can quote the limit's text, as this file does.
+# its message. Only the last two lines of each are read, since earlier lines
+# can quote the limit's text, as this file does. In OUT the message counts
+# only on a line that reports an error: Claude Code's result line with
+# "is_error":true, or Codex's error or turn.failed event. A session that ends
+# normally has a result line too, whose text is the agent's final message and
+# may quote the limit; in JSON that text cannot contain an unescaped quote, so
+# it cannot match these keys. Codex writes the message to ERR as plain text.
 limited()
 {
-    tail -n 2 "$1" "$2" 2> /dev/null | grep -o 'hit your [a-z]* limit[^"\\]*' | head -n 1 | grep .
+    { tail -n 2 "$1" |
+        grep -E '"type":"result".*"is_error":true|"is_error":true.*"type":"result"|"type":"(error|turn\.failed)"'
+        tail -n 2 "$2"; } 2> /dev/null | grep -o 'hit your [a-z]* limit[^"\\]*' | head -n 1 | grep .
 }
 
 # run_session OUT ERR LIMIT COMMAND...: run COMMAND with its output in OUT and
