@@ -1982,6 +1982,11 @@ static int check_prompt_never_owned(void)
  * and no `SIGTTOU` stops it, since this kernel raises none for `TCSETS`. So the
  * two assertions are what the shell must still have afterwards: its prompt not
  * overwritten, and a terminal that still echoes.
+ *
+ * The leader is reaped before the master is closed. Closing the master sends
+ * `SIGHUP` to the slave's foreground group, which is the leader's once it has
+ * taken the terminal back, and a leader still reaping its reader would die of
+ * it instead of exiting 0.
  */
 static int check_prompt_background(void)
 {
@@ -2039,12 +2044,14 @@ static int check_prompt_background(void)
         return fail("the session leader did not report what the continue left behind");
     }
     close(channel[0]);
+    if (!wait_for(leader, &status, 0, 10000) || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        close(master);
+
+        return fail("the session leader could not drive the background case");
+    }
     buffer[0] = '\0';
     drain(master, buffer, sizeof(buffer));
     close(master);
-    if (waitpid(leader, &status, 0) != leader || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return fail("the session leader could not drive the background case");
-    }
     if (strstr(buffer, "Password: ") != NULL) {
         return fail("a reader continued in the background reprinted its prompt");
     }
