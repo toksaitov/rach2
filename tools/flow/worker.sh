@@ -41,16 +41,24 @@
 #
 # While a `hold` issue is open, the loop starts no session on an issue whose
 # work is committed on a branch named for it and waits only for the push,
-# unless the issue is a `ci:` one, whose repair the hold lets through; it
-# looks again every five minutes, and the next session after the hold pushes.
+# unless the issue is labelled `ci`, whose repair the hold lets through.
+# Such a loop, its tree clean, parks the issue: it keeps it assigned, writes
+# its number to STATE/parked, puts the clone on master and claims a `ci`
+# issue of core, `ci: core: ...`, the kind of failure a hold stands for, or a
+# group that lists one, so that no loop waits while a repair the hold lets
+# through waits for a worker.
+# When that issue is closed or no longer this account's, the loop takes the
+# parked issue back. With none to claim, it looks again every five minutes,
+# and the next session after the hold pushes.
 
 REPO=toksaitov/rach2
 REASONING=high
 CODEX_MODEL=gpt-6.1-sol
 DEADLINE=21600
 
-# claim: take an issue for this account, as the header says, and write its
-# number to STATE/issue; write nothing when none is waiting, and fail, taking
+# claim [repair]: take an issue for this account, as the header says, and
+# write its number to STATE/issue; with `repair`, take only a repair of core,
+# as `repair` decides. Write nothing when none is waiting, and fail, taking
 # nothing, when the lock cannot be taken or the board cannot be read. The lock
 # is perl's flock on ~/.rach2-claim.lock, which the redirection after the body
 # opens on descriptor 9 for the length of the call. A flock belongs to the
@@ -68,7 +76,13 @@ claim()
         log "board unreachable"
         return 1
     fi
-    for n in $(printf '%s\n' "$listed" | cut -f 1 | head -n 5); do
+    tries=0
+    for n in $(printf '%s\n' "$listed" | cut -f 1); do
+        if [ "${1-}" = repair ] && ! repair "$n"; then
+            continue
+        fi
+        tries=$((tries + 1))
+        [ "$tries" -le 5 ] || break
         if sh "$state/run/board.sh" take "$n" 2>> "$state/loop.log"; then
             echo "$n" > "$state/issue"
             log "took #$n"
@@ -79,9 +93,9 @@ claim()
 
 # waiting N: print the number of the open `hold` issue and succeed when the
 # work on issue N is committed and only its push waits for that hold: a local
-# branch named for N has commits that master lacks, and N is not a `ci:`
-# issue, whose repair the hold lets through. Fail when nothing waits or
-# GitHub cannot be reached, so the loop goes on to the session.
+# branch named for N has commits that master lacks, and N is not labelled
+# `ci`, whose repair the hold lets through. Fail when nothing waits or GitHub
+# cannot be reached, so the loop goes on to the session.
 waiting()
 {
     unpushed=
@@ -91,11 +105,47 @@ waiting()
     [ -n "$unpushed" ] || return 1
     hold=$(gh issue list --repo "$REPO" --label hold --state open \
         --json number --jq '.[0].number // empty') && [ -n "$hold" ] || return 1
-    title=$(gh issue view "$1" --repo "$REPO" --json title --jq .title) || return 1
-    case $title in
-        ci:*) return 1 ;;
-    esac
+    ci=$(gh issue view "$1" --repo "$REPO" --json labels \
+        --jq 'any(.labels[]; .name == "ci")') || return 1
+    [ "$ci" = false ] || return 1
     echo "$hold"
+}
+
+# repair N: succeed when issue N is labelled `ci` and is a failure of core,
+# titled `ci: core: ...`, or a group that lists one, which the manager fills
+# while a hold is open only with what repairs the same failure.
+repair()
+{
+    members=$(gh issue view "$1" --repo "$REPO" --json title,labels,body --jq '
+        if any(.labels[]; .name == "ci") | not then empty
+        elif .title | startswith("ci: core: ") then "core"
+        elif any(.labels[]; .name == "group") then
+            .body | split("\n")[] | select(test("^\\* #[0-9]+$")) | ltrimstr("* #")
+        else empty end') || return 1
+    [ "$members" != core ] || return 0
+    for m in $members; do
+        [ "$(gh issue view "$m" --repo "$REPO" --json title,labels --jq '
+            any(.labels[]; .name == "ci") and
+            (.title | startswith("ci: core: "))')" != true ] || return 0
+    done
+    return 1
+}
+
+# park N: when the clone has nothing uncommitted, keep issue N in STATE/parked,
+# put the clone on master, and claim a repair of core; succeed when one was
+# claimed. Otherwise leave everything as it was and fail.
+park()
+{
+    [ -z "$(git status --porcelain)" ] || return 1
+    git switch -q master 2> /dev/null && git merge -q --ff-only origin/master || return 1
+    echo "$1" > "$state/parked"
+    rm -f "$state/issue"
+    if claim repair && [ -s "$state/issue" ]; then
+        log "#$1 parked for #$(cat "$state/issue")"
+        return 0
+    fi
+    mv "$state/parked" "$state/issue"
+    return 1
 }
 
 # session ISSUE: run one session on ISSUE with the agent's command.
@@ -189,6 +239,12 @@ main()
                 issue=
             fi
         fi
+        if [ -z "$issue" ] && [ -s "$state/parked" ]; then
+            mv "$state/parked" "$state/issue"
+            issue=$(cat "$state/issue")
+            log "#$issue taken back from parking"
+            continue
+        fi
         if [ -z "$issue" ]; then
             if ! claim; then
                 sleep 60
@@ -202,6 +258,9 @@ main()
             continue
         fi
         if hold=$(waiting "$issue"); then
+            if [ ! -s "$state/parked" ] && park "$issue"; then
+                continue
+            fi
             log "#$issue is committed and waits for hold #$hold"
             sleep 300
             continue
