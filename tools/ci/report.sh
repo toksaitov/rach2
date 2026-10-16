@@ -20,10 +20,11 @@
 # success, or for full `ci/full/ARCH` or `ci/night/ARCH`, which the nightly
 # runs before full runs set. An issue already open under that title gets a
 # comment instead; when it has the label `intermittent`, the label is
-# removed. A new issue, and an open one that was intermittent, starts
-# `bisect.yml` when the last pass is known, and gives it this run's ID, so
-# that bisection does not call the failure intermittent once a later run
-# has reported it again.
+# removed. The labels are read again after the comment, since a bisection
+# that ends meanwhile may add the label after the first read. A new issue,
+# and an open one that was intermittent, starts `bisect.yml` when the last
+# pass is known, and gives it this run's ID, so that bisection does not
+# call the failure intermittent once a later run has reported it again.
 #
 # A core failure of the build, style or the runner, or of the `default`
 # suite, which boots the test image, opens the issue labelled `hold`, or
@@ -95,6 +96,15 @@ open_issue() { # open_issue LABEL TITLE
         --jq ".[] | select(.title == \"$2\") | [.number, .labels[].name] | map(tostring) | join(\" \")") ||
         return 1
     echo "$list" | head -n 1
+}
+
+# Set `now` to the labels of the issue NUMBER, separated by spaces. When they
+# cannot be read the failure is named and `now` is `intermittent`, so that a
+# repeated failure loses that label and starts a bisection in any case.
+labels_now() { # labels_now NUMBER
+    now=$(gh issue view "$1" --repo "$repo" --json labels \
+        --jq '[.labels[].name] | join(" ")') ||
+        { lost "the labels of #$1"; now=intermittent; }
 }
 
 # The numbers of the open issues with the label `hold`, oldest first; the
@@ -170,7 +180,8 @@ $(tail -n 40 "$result/log")
         gh issue comment "$number" --repo "$repo" --body "$body" > /dev/null ||
             lost "the comment on #$number"
         echo "ci: report: $arch: failure added to #$number"
-        case " $found " in
+        labels_now "$number"
+        case " $found $now " in
             *" intermittent "*)
                 gh issue edit "$number" --repo "$repo" --remove-label intermittent > /dev/null ||
                     lost "the label of #$number"

@@ -33,8 +33,9 @@
 # RUN is the ID of the ci run that started the bisection. With -r, a failure
 # that does not repeat is labelled `intermittent` only when the newest
 # `Run: .../actions/runs/ID` line in the issue's body and comments names
-# RUN; when a later run has reported the failure again, the script says so
-# on the issue, leaves it unlabelled and exits 0.
+# RUN, both before the label is added and after; when a later run has
+# reported the failure again, the script says so on the issue, leaves it
+# without the label and exits 0.
 #
 # With -m the run may take MINUTES. When the time left cannot hold the next
 # test, or the two of the last step, at their full limits, the script comments
@@ -118,6 +119,30 @@ newest_run() {
     id=$(printf '%s\n' "$text" | tr -d '\r' |
         sed -n 's|^Run: .*/actions/runs/\([0-9][0-9]*\)$|\1|p' | tail -n 1)
     [ -n "$id" ] && echo "$id"
+}
+
+# Return when -r gave no run or when its run is still the newest that the
+# issue reports. Otherwise say why the issue is not labelled intermittent and
+# exit, 0 when a newer run reported the failure and 1 when the runs could not
+# be read. With `labelled`, the label has just been added and is removed
+# first: report.sh may have read the issue's labels before the add and
+# posted its newer run after the first check.
+newest_or_exit() { # newest_or_exit [labelled]
+    [ -n "$run" ] || return 0
+    if newest=$(newest_run); then
+        [ "$newest" != "$run" ] || return 0
+        why="$(short "$bad") passed $items when run again, but a newer failure, run $newest, was reported since run $run"
+        stop=0
+    else
+        why="unresolved: $(short "$bad") passed $items when run again, but the issue's runs could not be read"
+        stop=1
+    fi
+    if [ "${1-}" = labelled ]; then
+        gh issue edit "$issue" --repo "$repo" --remove-label intermittent > /dev/null ||
+            { echo "ci: bisect: the removal of the label on #$issue failed" >&2; stop=1; }
+    fi
+    say "$why, so the issue is not labelled intermittent" || stop=1
+    exit "$stop"
 }
 
 # Run a command under timeout(1) until the end of the current test, which
@@ -205,19 +230,11 @@ if [ -z "$confirmed" ]; then
     tested "$bad"; verdict=$?
 fi
 case $verdict in
-    0) if [ -n "$run" ]; then
-           newest=$(newest_run) || {
-               say "unresolved: $(short "$bad") passed $items when run again, but the issue's runs could not be read, so it is not labelled intermittent"
-               exit 1
-           }
-           if [ "$newest" != "$run" ]; then
-               say "$(short "$bad") passed $items when run again, but a newer failure, run $newest, was reported since run $run, so the issue is not labelled intermittent" || exit 1
-               exit 0
-           fi
-       fi
+    0) newest_or_exit
        status=0
        gh issue edit "$issue" --repo "$repo" --add-label intermittent > /dev/null ||
            { echo "ci: bisect: the label on #$issue failed" >&2; status=1; }
+       newest_or_exit labelled
        say "$(short "$bad") passed $items when run again; the failure did not repeat, so the issue is intermittent and stays open" || status=1
        exit "$status" ;;
     2) say "unresolved: $(short "$bad") could not be tested again"; exit 1 ;;
