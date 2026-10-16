@@ -35,6 +35,4 @@ The faults that the process of `AGENTS.md` showed in its first two days with the
 
 ## Open
 
-* The night of 04:05 on 2026-10-16, on `795d177b`, failed `selfbuild` on i686: on the kernel that the machine built with TinyCC, `musl/pwauthmusl` reported that the session leader could not drive the background case. The same code passed it the night before.
-* Whether the night due at 19:17 starts is first seen on 2026-10-16.
-* #450, the closed issues outside Done.
+Nothing. The night of 04:05 on 2026-10-16, on `795d177b`, failed `selfbuild` on i686, where `musl/pwauthmusl`'s session leader was killed by the hangup of its terminal; 95392e1d8 (#452) reaps it first, and the night of 06:49 passed whole. 1faac41ec (#450) settled the closed issues outside Done. The night itself was replaced by a full run per phase; phases.md records why.
