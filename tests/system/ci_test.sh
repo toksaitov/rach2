@@ -1,9 +1,9 @@
 #!/bin/sh
-# ci_test.sh: check unfinished ci reports, a full run's last pass, the hold
-# issue, bisection runs, their time limits and continuation, the kind an
-# older commit's run.sh takes, a refused run in bisection, and verdict
-# errors. The scripts run in a private tree with stand-ins for git, gh,
-# make, timeout and the clock.
+# ci_test.sh: check unfinished ci reports, the labels and body of a filed
+# issue, a full run's last pass, the hold issue, bisection runs, their time
+# limits and continuation, the kind an older commit's run.sh takes, a
+# refused run in bisection, and verdict errors. The scripts run in a private
+# tree with stand-ins for git, gh, make, timeout and the clock.
 
 set -eu
 case ${1:-} in
@@ -29,6 +29,9 @@ fault()
         report)
             # shellcheck disable=SC2016 # the script contains a literal $kind
             sed 's/items=unfinished-\$kind/items=runner/' "$repo/tools/ci/report.sh" > "$work/report.sh"
+            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
+        cilabel)
+            sed 's/ --label bug --label ci / --label bug /' "$repo/tools/ci/report.sh" > "$work/report.sh"
             ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
         baseline)
             sed 's|contexts="ci/full ci/night"|contexts=ci/full|' "$repo/tools/ci/report.sh" > "$work/report.sh"
@@ -67,8 +70,8 @@ fault()
     esac
 }
 if [ "$mode" = texts ]; then
-    for name in report baseline hold bisect items comment label intermittent \
-        older refusal limit handoff; do
+    for name in report cilabel baseline hold bisect items comment label \
+        intermittent older refusal limit handoff; do
         fault "$name"
     done
     exit 0
@@ -193,11 +196,14 @@ results()
     sh "$work/report.sh" "$kind" bad "$work/results" > "$work/report.log" 2>&1
 }
 
-# report KIND STATE ITEM: require the dispatched item and the core hold.
+# report KIND STATE ITEM: require an issue labelled `bug` and `ci` that
+# gives the attempt and the commit, a bisection of ITEM, and the core hold.
 report()
 {
     clear
     results "$1" "$2" || return 1
+    grep -q '^issue create .* --label bug --label ci --body ' "$work/gh.log" || return 1
+    grep -qx 'Attempt: 1' "$work/gh.log" && grep -qx 'Commit: bad' "$work/gh.log" || return 1
     grep -q "workflow run bisect.yml .* -f items=$3 -f issue=7" "$work/gh.log" || return 1
     if [ "$1" = core ]; then
         grep -q 'issue create .* --label hold ' "$work/gh.log" || return 1
@@ -407,6 +413,10 @@ if [ "$mode" = mutate ]; then
     if report core unfinished unfinished-core; then
         echo 'ci-test: result: fail: report fault passed' >&2; exit 1
     fi
+    fault cilabel
+    if report core unfinished unfinished-core; then
+        echo 'ci-test: result: fail: cilabel fault passed' >&2; exit 1
+    fi
     fault baseline
     if base; then
         echo 'ci-test: result: fail: baseline fault passed' >&2; exit 1
@@ -457,4 +467,4 @@ if [ "$mode" = mutate ]; then
     cp "$repo/tools/ci/bisect.sh" "$work/bisect.sh"
     rows
 fi
-echo 'ci-test: result: pass: unfinished runs, the last pass, the hold issue, the runner suite, core items, time limits, continuation, older run scripts, a refused run and verdict errors'
+echo 'ci-test: result: pass: unfinished runs, issue labels, the last pass, the hold issue, the runner suite, core items, time limits, continuation, older run scripts, a refused run and verdict errors'
