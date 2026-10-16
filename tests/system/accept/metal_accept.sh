@@ -29,6 +29,10 @@
 # and uses su for root commands. The owner sets RACH2_ACCEPT_PASSWORD in the
 # environment; it is never put in a command argument or printed.
 #
+# It writes its records under build/images, which it creates, and its image
+# row needs the host KRFFS tools, which `make krffs` builds; a tree that holds
+# only a fetched kernel needs nothing else.
+#
 # Usage: metal_accept.sh <host> [port] [stick-serial]
 #
 
@@ -63,6 +67,7 @@ if [ ! -f "$KEY" ]; then
     exit 2
 fi
 KNOWN="$REPO/build/images/metal-accept.known"
+mkdir -p "$REPO/build/images"
 umask 077
 LOCAL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept.XXXXXX")
 
@@ -706,7 +711,7 @@ if [ -z "$FILESYSTEMS" ]; then
 elif ! printf '%s\n' "$FILESYSTEMS" | grep -qw krffs; then
     note "this kernel does not take the krffs type; no image row"
 elif [ ! -x "$REPO/build/krffs/mkfs.krffs" ]; then
-    bad "the host KRFFS tools required for the image row are not built"
+    bad "the host KRFFS tools required for the image row are not built; run make krffs"
 else
     IMG="$REPO/build/images/metal-loop.krffs"
     TREE="$REPO/build/tests/system/loopimg"

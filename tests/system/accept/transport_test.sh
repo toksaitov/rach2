@@ -1,7 +1,8 @@
 #!/bin/sh
-# transport_test.sh: run the whole of metal_accept.sh against a stand-in for
-# ssh, which answers each command the script sends as a machine would, in 17
-# cases, once with root's key and once through su_command.sh.
+# transport_test.sh: run the whole of metal_accept.sh, in a tree with no
+# build/images, against a stand-in for ssh, which answers each command the
+# script sends as a machine would, in 17 cases, once with root's key and once
+# through su_command.sh.
 #
 # A case fails a command, a transfer, a hash or a check of the stick, or
 # boots an ext2 root whose check found a fault, and the script must then
@@ -20,7 +21,7 @@ if [ "${1:-}" != --texts ]; then
 fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept-test.XXXXXX")
 copy="$work/tests/system/accept"
-mkdir -p "$copy" "$work/bin" "$work/build/images" "$work/build/krffs" "$work/krffs"
+mkdir -p "$copy" "$work/bin" "$work/build/krffs" "$work/krffs"
 cp "$repo/tests/system/accept/metal_accept.sh" "$copy/original.sh"
 cp "$copy/original.sh" "$copy/metal_accept.sh"
 touch "$work/key"
