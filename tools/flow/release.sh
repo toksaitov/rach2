@@ -55,8 +55,10 @@
 # * trial: the machine boots the trial, and machine_identity.sh must find the
 #   new kernel running from the candidate slot.
 # * accept: `tests/system/accept/metal_accept.sh` must pass on the trial
-#   boot. Only then `bootctl commit` makes the candidate the saved default,
-#   and /etc/rach2/release on the machine records SHA, the phase and the run.
+#   boot. Only then `bootctl commit` makes the candidate the saved default.
+# * record: /etc/rach2/release on the machine, which runs the committed
+#   candidate, is written with SHA, the phase, the full run and the root's
+#   digest, and read back; the phase is not closed until it names SHA.
 # * close: the phase gets a comment with the commit, the run, the digests and
 #   the verdicts; when the candidate is still ready, the record says
 #   `closing`, the phase is closed, its cards are archived with `board.sh
@@ -576,20 +578,34 @@ main()
         lenovo 'bootctl commit' > "$state/commit.log" 2>&1
         grep -q '^bootctl: committed:' "$state/commit.log" ||
             fail accept "bootctl commit: $(tr '\n' ' ' < "$state/commit.log")"
-        run=$(sed -n 's/^run \([0-9]*\) success$/\1/p' "$state/record" | tail -n 1)
-        lenovo "mkdir -p /etc/rach2 && printf 'commit %s\nphase %s\nfull %s\nroot %s\n' $sha $phase $run $(digest images/os-real-gnu.ext2) > /etc/rach2/release" ||
-            say "accept: /etc/rach2/release could not be written"
         mark accept "metal-accept: PASS; committed"
     fi
 
     run=$(sed -n 's/^run \([0-9]*\) success$/\1/p' "$state/record" | tail -n 1)
+    if ! done_ record; then
+        step=record
+        where || fail record "the machine answered as another machine"
+        [ -n "$now" ] || later "the machine does not answer"
+        [ "$now" = "system candidate" ] ||
+            fail record "the machine runs $now, not the committed candidate"
+        want=$(printf 'commit %s\nphase %s\nfull %s\nroot %s' "$sha" "$phase" "$run" "$(digest images/os-real-gnu.ext2)")
+        printf '%s\n' "$want" | lenovo 'mkdir -p /etc/rach2 && cat > /etc/rach2/release.new &&
+            sync && mv /etc/rach2/release.new /etc/rach2/release && sync'
+        have=$(lenovo 'cat /etc/rach2/release 2> /dev/null; echo answered') &&
+            [ "$(printf '%s\n' "$have" | tail -n 1)" = answered ] ||
+            later "the machine does not answer"
+        [ "$(printf '%s\n' "$have" | sed '$d')" = "$want" ] ||
+            fail record "/etc/rach2/release on the machine does not name $sha: $(printf '%s\n' "$have" | sed '$d' | tr '\n' ' ')"
+        mark record "/etc/rach2/release names $sha"
+    fi
+
     if ! grep -q '^reported ' "$state/record"; then
         gh issue comment "$phase" --repo "$REPO" --body "Released $sha to the Lenovo.
 
 * Full run: https://github.com/$REPO/actions/runs/$run passed on both architectures.
 * Build: \`ARCH=x86_64 make clean && ARCH=x86_64 make machine\` in $COPY.
 * Kernel $(digest rach2/kernel), recovery kernel $(digest rach2-recovery/kernel), recovery image $(digest "$RECOVERY_IMAGE"), GNU root $(digest images/os-real-gnu.ext2), each by SHA-256.
-* The recovery partition was updated, the kernel and root installed from recovery, the trial boot passed machine_identity.sh and metal_accept.sh, and \`bootctl commit\` made it the saved default." > /dev/null ||
+* The recovery partition was updated, the kernel and root installed from recovery, the trial boot passed machine_identity.sh and metal_accept.sh, \`bootctl commit\` made it the saved default, and /etc/rach2/release on the machine names $sha." > /dev/null ||
             later "the report could not be commented"
         note "reported $(date -u '+%FT%TZ')"
     fi
