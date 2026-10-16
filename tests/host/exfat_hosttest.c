@@ -1840,37 +1840,6 @@ static void require_unlinked_gone(const char *sequence)
     }
 }
 
-/**
- * The write rows. Each sequence runs on a fresh writable mount: the dirty
- * bit is on the image from the mount, the sequence succeeds, its files read
- * what was written, the files it unlinks are gone, the unmount is clean and
- * clears the dirty bit, and the walk finds the volume consistent. Then, on
- * fresh mounts:
- *
- * - the extend and rename sequences run again and their files read back:
- *   the extended file across the cluster boundary, the renamed names gone,
- *   and the file renamed over another with the source's bytes;
- * - a held file renamed into another directory is the same node under its
- *   new name, since its advisory locks are found by the node
- *   (rach2/sys/fs/lock.Readme.md);
- * - a create of a name that up-cases like an existing one is EEXIST;
- * - two hundred files made and remade twice leave a consistent volume;
- * - the unlink of the set with a vendor allocation frees that allocation's
- *   clusters too;
- * - a volume filled to its last cluster answers ENOSPC, and a contiguous
- *   file cannot grow on it; its stream still says NoFatChain, since the
- *   write that failed wrote nothing, and the percent in use in the boot
- *   sector is the bitmap's, rounded down;
- * - no set the driver makes has its file entry in a sector's last slot, so
- *   its file and stream entries share a sector. The rule is read over the
- *   twenty sets made past the fixture's end marker, in the root's first two
- *   clusters, since the fixture's own straddle.txt breaks it on purpose;
- * - neither a mount and a write, while the dirty bit is on the main boot
- *   sector, nor the clean unmount writes the backup boot region;
- * - a root that holds a critical entry the driver does not know is frozen,
- *   a create or a mkdir in it fails with EROFS, while a directory below it
- *   takes a file.
- */
 /** A set of the format's 256 entries, full/f.txt with one name entry and
  * 253 vendor extensions: a rename to a name of one entry keeps them, and
  * one to a name of seventeen entries, which would take the set past 256, is
@@ -1915,6 +1884,37 @@ static void full_set_rows(void)
           "and the renamed set has its 253 vendor extensions");
 }
 
+/**
+ * The write rows. Each sequence runs on a fresh writable mount: the dirty
+ * bit is on the image from the mount, the sequence succeeds, its files read
+ * what was written, the files it unlinks are gone, the unmount is clean and
+ * clears the dirty bit, and the walk finds the volume consistent. Then, on
+ * fresh mounts:
+ *
+ * - the extend and rename sequences run again and their files read back:
+ *   the extended file across the cluster boundary, the renamed names gone,
+ *   and the file renamed over another with the source's bytes;
+ * - a held file renamed into another directory is the same node under its
+ *   new name, since its advisory locks are found by the node
+ *   (rach2/sys/fs/lock.Readme.md);
+ * - a create of a name that up-cases like an existing one is EEXIST;
+ * - two hundred files made and remade twice leave a consistent volume;
+ * - the unlink of the set with a vendor allocation frees that allocation's
+ *   clusters too;
+ * - a volume filled to its last cluster answers ENOSPC, and a contiguous
+ *   file cannot grow on it; its stream still says NoFatChain, since the
+ *   write that failed wrote nothing, and the percent in use in the boot
+ *   sector is the bitmap's, rounded down;
+ * - no set the driver makes has its file entry in a sector's last slot, so
+ *   its file and stream entries share a sector. The rule is read over the
+ *   twenty sets made past the fixture's end marker, in the root's first two
+ *   clusters, since the fixture's own straddle.txt breaks it on purpose;
+ * - neither a mount and a write, while the dirty bit is on the main boot
+ *   sector, nor the clean unmount writes the backup boot region;
+ * - a root that holds a critical entry the driver does not know is frozen,
+ *   a create or a mkdir in it fails with EROFS, while a directory below it
+ *   takes a file.
+ */
 static void write_rows(void)
 {
     unsigned i;
