@@ -4,29 +4,32 @@
 # architecture ARCH names, and keep what tools/ci/report.sh reads.
 #
 #   tools/ci/run.sh core DIR    the build, style, host and the core tier
-#   tools/ci/run.sh night DIR   the build and every suite of ARCH
+#   tools/ci/run.sh full DIR    the build from clean and every suite of ARCH
 #
 # DIR receives `log`, the whole output; `failed`, one line for each step
 # that failed: `build`, a suite's name, or the set's own name when the
 # runner failed without naming a suite of the registry; `kept/`, the serial
 # logs that tests/run kept for the failed suites; and `done`, written last,
-# without which a reader takes the run as unfinished. The night runs
-# `bigmem`, which needs the host alone, as a run of its own after the rest,
-# so that the other suites share the host with the day's runs. The exit
-# status is 0 when nothing failed. A TERM to the run's process group, which
-# timeout(1) sends at the workflow's time limit, ends the run without `done`
-# once the step it interrupts has stopped, so that tests/run stops its
-# machines before the next run starts; the status is then 143.
+# without which a reader takes the run as unfinished. A full run first runs
+# `make clean`, which removes ARCH's in-house objects and images but keeps
+# the vendored builds, then `make`; a failure of either is `build`. It then
+# runs every suite of the registry that runs on ARCH, `style` and `host`
+# among them, as one set, and after it `bigmem`, which runs only on x86_64
+# and needs the host alone, as a run of its own. The exit status is 0 when
+# nothing failed. A TERM to the run's process group, which timeout(1) sends
+# at the workflow's time limit, ends the run without `done` once the step it
+# interrupts has stopped, so that tests/run stops its machines before the
+# next run starts; the status is then 143.
 #
 set -u
 
 kind=${1-}
 out=${2-}
 case "$kind" in
-    core|night) ;;
-    *) echo "usage: tools/ci/run.sh core|night DIR" >&2; exit 2 ;;
+    core|full) ;;
+    *) echo "usage: tools/ci/run.sh core|full DIR" >&2; exit 2 ;;
 esac
-[ -n "$out" ] || { echo "usage: tools/ci/run.sh core|night DIR" >&2; exit 2; }
+[ -n "$out" ] || { echo "usage: tools/ci/run.sh core|full DIR" >&2; exit 2; }
 ARCH=${ARCH:-i686}
 export ARCH
 mkdir -p "$out/kept"
@@ -87,7 +90,9 @@ run_set() { # run_set NAME ARGS...
 }
 
 echo "ci: $kind: architecture $ARCH at $(git rev-parse --short HEAD)"
-if ! step make; then
+if [ "$kind" = full ] && ! step make clean; then
+    echo build >> "$out/failed"
+elif ! step make; then
     echo build >> "$out/failed"
 else
     case "$kind" in
@@ -95,7 +100,7 @@ else
             run_set style style
             run_set host host
             run_set core core ;;
-        night)
+        full)
             names=$(awk -F'|' -v a="$ARCH" '
                 /^[a-z]/ && $1 != "bigmem" && ($6 == "" || index("," $6 ",", "," a ",")) { print $1 }
             ' tests/registry)

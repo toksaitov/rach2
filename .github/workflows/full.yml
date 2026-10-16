@@ -1,0 +1,101 @@
+# full: every suite on both architectures, built from clean, at one commit.
+#
+# tools/flow/release.sh starts a run when a phase's work is finished and
+# reviewed, and a person may start one with `gh workflow run full.yml -f
+# sha=SHA`. The input is the commit's whole hash, forty lowercase hexadecimal
+# digits; the first step refuses anything else. One full run goes at a time,
+# outside the core runs' group, and none is cancelled; of the runs started
+# while one runs, only the newest waits, since GitHub cancels a waiting run
+# when a newer one joins the group. The run tests the two architectures one
+# after the other on one runner, so that the core runs keep the other.
+# tools/ci/run.sh builds each from clean, keeping the vendored builds, and
+# runs every suite of the architecture, `bigmem` last and alone;
+# tools/ci/report.sh sets the statuses `ci/full/ARCH` and `ci/full`, files
+# what fails as core runs do, and starts bisect.yml for a new failure. A run
+# that a person cancels reports nothing. GitHub cancels a job that passes its
+# time limit too, so each architecture has 340 minutes of its own inside the
+# job's, which leave time for the report. At the limit timeout(1) sends TERM
+# to the run's process group, and run.sh ends once tests/run has stopped its
+# machines, so that the next architecture starts on a free tree; the
+# architecture that ran out of time is reported as unfinished.
+name: full
+run-name: full at ${{ inputs.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: The whole hash of the commit to test
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+  statuses: write
+  actions: write
+
+concurrency:
+  group: full
+  cancel-in-progress: false
+
+jobs:
+  full:
+    runs-on: [self-hosted, rach2]
+    timeout-minutes: 720
+    steps:
+      - id: commit
+        env:
+          SHA: ${{ inputs.sha }}
+        run: |
+          case "$SHA" in
+              ''|*[!0-9a-f]*) echo "full: refused: '$SHA' is not a commit's whole hash" >&2; exit 1 ;;
+          esac
+          [ "${#SHA}" -eq 40 ] || { echo "full: refused: '$SHA' is not a commit's whole hash" >&2; exit 1; }
+
+      - id: checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.sha }}
+          clean: false
+          fetch-depth: 0
+
+      - name: i686
+        env:
+          ARCH: i686
+        run: timeout -k 60 340m sh tools/ci/run.sh full "$RUNNER_TEMP/results/full-i686" || true
+
+      - name: x86_64
+        env:
+          ARCH: x86_64
+        run: timeout -k 60 340m sh tools/ci/run.sh full "$RUNNER_TEMP/results/full-x86_64" || true
+
+      - name: keep the i686 result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-i686
+          path: ${{ runner.temp }}/results/full-i686
+          retention-days: 14
+
+      - name: keep the x86_64 result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-x86_64
+          path: ${{ runner.temp }}/results/full-x86_64
+          retention-days: 14
+
+      - name: report
+        if: ${{ !cancelled() && steps.commit.outcome == 'success' && steps.checkout.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ inputs.sha }}
+        run: sh tools/ci/report.sh full "$SHA" "$RUNNER_TEMP/results"
+
+      - name: result
+        run: |
+          for arch in i686 x86_64; do
+              [ -f "$RUNNER_TEMP/results/full-$arch/done" ] &&
+                  [ -f "$RUNNER_TEMP/results/full-$arch/failed" ] &&
+                  [ ! -s "$RUNNER_TEMP/results/full-$arch/failed" ] || exit 1
+          done

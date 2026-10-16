@@ -8,16 +8,18 @@
 # has the time limit of the run that failed, 170 or 340 minutes, so that a
 # bisection can outlast one job. The script has 700 minutes, inside the job's
 # 720, and when the time left cannot hold the next test it starts a new run
-# of this workflow on the range left, with `confirmed` set. The job runs
-# master's copy of the script from outside the tree, since the script checks
-# out each commit it tests.
+# of this workflow on the range left, with `confirmed` set. `kind` also
+# takes `night`, the kind of the nightly runs that full runs replaced, which
+# a bisection started before them passes on. The job runs master's copy of
+# the script from outside the tree, since the script checks out each commit
+# it tests.
 name: bisect
 
 on:
   workflow_dispatch:
     inputs:
       kind:
-        description: The kind of run that failed, core or night
+        description: The kind of run that failed, core or full (night for an older issue)
         required: true
       arch:
         description: The architecture, i686 or x86_64
@@ -70,7 +72,7 @@ jobs:
           ITEMS: ${{ inputs.items }}
           CONFIRMED: ${{ inputs.confirmed }}
         run: |
-          case "$KIND" in core|night) ;; *) echo "bisect: refused: kind '$KIND'" >&2; exit 2 ;; esac
+          case "$KIND" in core|full|night) ;; *) echo "bisect: refused: kind '$KIND'" >&2; exit 2 ;; esac
           case "$ARCH_IN" in i686|x86_64) ;; *) echo "bisect: refused: architecture '$ARCH_IN'" >&2; exit 2 ;; esac
           case "$GOOD$BAD$ISSUE" in *[!0-9a-f]*) echo "bisect: refused: a commit or issue that is not hexadecimal" >&2; exit 2 ;; esac
           case "$ITEMS" in *[!a-z0-9\ -]*) echo "bisect: refused: items '$ITEMS'" >&2; exit 2 ;; esac

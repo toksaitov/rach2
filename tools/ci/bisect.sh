@@ -6,25 +6,28 @@
 #   tools/ci/bisect.sh [-c] [-m MINUTES] KIND ARCH GOOD BAD ISSUE ITEM...
 #
 # GOOD passed ci on ARCH and BAD failed it in a run of KIND, `core` or
-# `night`; ITEM... is what failed, as tools/ci/run.sh names it: `build`,
-# `style`, `host`, a suite, or a set's name. The report's `unfinished-core`
-# and `unfinished-night` repeat the whole run through tools/ci/run.sh,
-# including its build and the night's separate bigmem. A commit is tested by
-# building it and running those items, the build alone when `build` is among
-# them. tests/run takes a set only by itself, so `core` runs after the other
-# items in a run of its own, and `all` runs alone since it covers every
-# suite. Each test has the time limit of KIND's run step in ci.yml or
-# night.yml, 170 or 340 minutes, so that a run too slow for ci is too slow
-# here; timeout(1) stops it as it stops ci's. A test passes, fails, or
-# cannot be made: a commit that cannot be checked out, that does not build
-# when the failure is a suite's, or whose tests/run refuses or stops before
-# its final `run: result: failed` is untestable, and an untestable commit
-# ends the search with the range unresolved. BAD is tested first, unless -c
-# says that an earlier run did so: a failure that does not repeat is
-# labelled `intermittent` and the issue stays open. Otherwise the
-# first-parent commits between GOOD and BAD are halved until one fails and
-# its parent passes, and both are tested once more; the commit is named only
-# when both results repeat.
+# `full`, or `night`, which issues filed before full runs name and which is
+# taken as `full`. ITEM... is what failed, as tools/ci/run.sh names it:
+# `build`, `style`, `host`, a suite, or a set's name. The report's
+# `unfinished-core`, `unfinished-full` and `unfinished-night` repeat the
+# whole run through the tested commit's tools/ci/run.sh, including its build
+# and the full run's separate bigmem; a commit whose run.sh does not take
+# `full` runs the same set as `night`. A commit is tested by building it and
+# running those items, the build alone when `build` is among them. tests/run
+# takes a set only by itself, so `core` runs after the other items in a run
+# of its own, and `all` runs alone since it covers every suite. Each test
+# has the time limit of KIND's run step in ci.yml or full.yml, 170 or 340
+# minutes, so that a run too slow for ci is too slow here; timeout(1) stops
+# it as it stops ci's. A test passes, fails, or cannot be made: a commit
+# that cannot be checked out, that does not build when the failure is a
+# suite's, or whose tests/run refuses or stops before its final
+# `run: result: failed` is untestable, and an untestable commit ends the
+# search with the range unresolved. BAD is tested first, unless -c says that
+# an earlier run did so: a failure that does not repeat is labelled
+# `intermittent` and the issue stays open. Otherwise the first-parent
+# commits between GOOD and BAD are halved until one fails and its parent
+# passes, and both are tested once more; the commit is named only when both
+# results repeat.
 #
 # With -m the run may take MINUTES. When the time left cannot hold the next
 # test, or the two of the last step, at their full limits, the script comments
@@ -54,7 +57,7 @@ shift 5
 items=$*
 case $kind in
     core) limit=170 ;;
-    night) limit=340 ;;
+    full|night) limit=340 ;;
     *) echo "$usage" >&2; exit 2 ;;
 esac
 case $minutes in
@@ -72,7 +75,7 @@ test_set=""
 test_items=""
 case " $items " in
     *" unfinished-core "*) run_kind=core ;;
-    *" unfinished-night "*) run_kind=night ;;
+    *" unfinished-full "*|*" unfinished-night "*) run_kind=full ;;
     *" build "*) ;;
     *" all "*) test_set=all ;;
     *) for item in $items; do
@@ -146,7 +149,9 @@ tested() { # tested COMMIT
     git checkout -q --detach "$1" > "$log.log" 2>&1 || { mv "$log.log" "$log.untestable.log"; return 2; }
     echo "ci: bisect: testing $(git log -1 --format='%h %s' "$1")"
     if [ -n "$run_kind" ]; then
-        if limited sh tools/ci/run.sh "$run_kind" "$log.run" >> "$log.log" 2>&1; then
+        here=$run_kind
+        [ "$here" != full ] || grep -q '^ *core|full)' tools/ci/run.sh || here=night
+        if limited sh tools/ci/run.sh "$here" "$log.run" >> "$log.log" 2>&1; then
             mv "$log.log" "$log.passed.log"; return 0
         fi
         mv "$log.log" "$log.failed.log"; return 1
