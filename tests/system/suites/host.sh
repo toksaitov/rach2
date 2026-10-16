@@ -290,6 +290,20 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: the loops' reading of a usage limit" >&2
         fail=1
     fi
+    if sh tests/system/worker_park_test.sh >"$VDIR/worker_park.rlog" 2>&1; then
+        echo "hosttest: result: pass: the worker loop's parking during a hold"
+    else
+        cat "$VDIR/worker_park.rlog"
+        echo "hosttest: result: fail: the worker loop's parking during a hold" >&2
+        fail=1
+    fi
+    if sh tests/system/release_resume_test.sh >"$VDIR/release_resume.rlog" 2>&1; then
+        echo "hosttest: result: pass: a release resumed from its record"
+    else
+        cat "$VDIR/release_resume.rlog"
+        echo "hosttest: result: fail: a release resumed from its record" >&2
+        fail=1
+    fi
     if sh tests/system/testing_run_test.sh >"$VDIR/testing_run.rlog" 2>&1; then
         echo "hosttest: result: pass: testing.sh run's quoted commands"
     else
