@@ -2375,11 +2375,13 @@ int main(int argc, char **argv)
 
     for (i = 0; i < n_steps; i++) {
         const char *step = steps[i];
+        int exited;
 
         begin_step(i);
-        if (child_poll() >= 0 && strncmp(step, "until=", 6) == 0)
+        exited = child_poll() >= 0;
+        if (exited && strncmp(step, "until=", 6) == 0)
             continue;
-        if (child_poll() >= 0 && (is_expect_step(step) || strncmp(step, "seen=", 5) == 0)) {
+        if (exited && (is_expect_step(step) || strncmp(step, "seen=", 5) == 0)) {
             struct regex re;
             long end;
             int seen = step[0] == 's';
@@ -2397,7 +2399,7 @@ int main(int argc, char **argv)
                 continue;
             }
         }
-        if (child_poll() >= 0) {
+        if (exited) {
             int left;
 
             for (left = i; left < n_steps; left++) {
