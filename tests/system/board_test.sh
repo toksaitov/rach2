@@ -52,15 +52,17 @@ closed_fault()
 
 # The faults of the phase rows, each a sed script for the private copy:
 # membership ignores `Part of`; `current` keeps one of two phases; `start`
-# looks for a comment it never wrote, and so comments again; `next` lists
-# Ready issues of no phase; `take` skips the phase check, or takes a member
-# that is not Ready; `group` accepts an issue of no phase; `archive` ignores
-# the other open phase; and `phase` ignores the review.
+# looks for a comment it never wrote, and so comments again, or sets the phase
+# In progress before it comments; `next` lists Ready issues of no phase; `take`
+# skips the phase check, or takes a member that is not Ready; `group` accepts
+# an issue of no phase; `archive` ignores the other open phase; and `phase`
+# ignores the review.
 # shellcheck disable=SC2016 # the dollars are in the texts the faults change
 {
     members_fault='s/(parent == p || has(partof, p))/(parent == p)/'
     current_fault='s/s = s (s == "" ? "" : " #") \$3 }/s = $3 }/'
     start_fault="s/grep -Eqx 'phase: started at/grep -Eqx 'phase: begun at/"
+    start_order_fault='s/^    said=\$(comments/    [ -n "$started" ] || set_status "$p" "In progress" || exit 1; &/'
     next_fault='s/member && \$2 == "Ready" {/$2 == "Ready" {/'
     take_phase_fault='s/g != "" || has(\$5, "ci") { exit }/{ exit }/'
     take_status_fault='s/\$2 != "Ready" \&\& \$2 != "In progress" {/0 {/'
@@ -80,9 +82,9 @@ if [ "$mode" = texts ]; then
     fault
     take_fault
     closed_fault
-    for f in "$members_fault" "$current_fault" "$start_fault" "$next_fault" \
-        "$take_phase_fault" "$take_status_fault" "$group_fault" \
-        "$archive_fault" "$phase_fault"; do
+    for f in "$members_fault" "$current_fault" "$start_fault" \
+        "$start_order_fault" "$next_fault" "$take_phase_fault" \
+        "$take_status_fault" "$group_fault" "$archive_fault" "$phase_fault"; do
         plant "$f"
     done
     exit 0
@@ -621,6 +623,17 @@ phase_row()
             [ "$result" -eq 0 ] && [ "$(cat "$work/out")" = 5 ] &&
                 cmp -s "$BOARD_TEST_DATA" "$work/first" &&
                 ! grep -q 'item-edit\|issue comment\|-X POST' "$BOARD_TEST_WORK/calls" ;;
+        start-retry)
+            use "$begin"
+            BOARD_TEST_FAIL=status
+            run start
+            first=$result
+            BOARD_TEST_FAIL=none BOARD_TEST_HEAD=$C
+            run start
+            BOARD_TEST_HEAD=$H
+            [ "$first" -ne 0 ] && [ "$result" -eq 0 ] &&
+                [ "$(field 5 3)" = In_progress ] &&
+                [ "$(field 5 10)" = "phase: started at $H" ] ;;
         start-full)
             use "$begin"
             BOARD_TEST_FULL=yes
@@ -742,7 +755,8 @@ ROWS
         take-member take-ci take-stranger take-blocked take-owner take-phase \
         take-backlog \
         group-stranger group-ci archive-other archive-closed archive-fail \
-        start-first start-again start-full start-other start-idle \
+        start-first start-again start-retry start-full start-other \
+        start-idle \
         phase-ready phase-none phase-work phase-flaky phase-hold \
         phase-failed phase-review phase-core phase-lost; do
         if ! phase_row "$test"; then
@@ -790,6 +804,7 @@ if [ "$mode" = mutate ]; then
     caught "$members_fault" members-all 'membership ignored Part of'
     caught "$current_fault" current-two 'two phases In progress passed'
     caught "$start_fault" start-again 'a second start commented again'
+    caught "$start_order_fault" start-retry 'start set In progress before it commented'
     caught "$next_fault" next-tiers 'next listed issues of no phase'
     caught "$take_phase_fault" take-stranger 'take skipped the phase check'
     caught "$take_status_fault" take-backlog 'take took a Backlog member'
@@ -798,6 +813,6 @@ if [ "$mode" = mutate ]; then
     caught "$phase_fault" phase-review 'phase ignored the review'
     cp "$repo/tools/flow/board.sh" "$work/board.sh"
     rows || exit 1
-    echo 'board-test: result: pass: 12 faults caught and restored'
+    echo 'board-test: result: pass: 13 faults caught and restored'
 fi
-echo 'board-test: result: pass: 57 rows'
+echo 'board-test: result: pass: 58 rows'

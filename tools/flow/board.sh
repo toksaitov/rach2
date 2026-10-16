@@ -117,19 +117,21 @@
 # #P.` to N's body instead. A member of P is left as it is. It fails when no
 # phase is In progress or when an N got neither the link nor the line.
 #
-# `start [P]` starts a phase. With none In progress, it sets P In progress, or
-# without P the top open phase whose Status is Ready, and prints nothing and
-# succeeds when no phase is Ready. With a phase In progress, it completes that
-# phase's start, and refuses any other P. For the phase In progress, it
-# comments `phase: started at SHA`, SHA being master's head, unless a comment
-# of that form is there already; it links, as `link` does, each open issue
-# labelled `triaged` that has no parent, whose body says no `Part of #N`, and
-# that has none of the labels `phase`, `group`, `grouped`, `ci`, `owner` and
-# `intermittent`; and it sets Ready each open member whose Status is Backlog
-# or empty and that is not labelled `owner`, `grouped` or `phase`. It prints
-# the phase's number. Each step skips what an earlier run did, so a second
-# run changes nothing, and a run that failed part way is completed by the
-# next.
+# `start [P]` starts a phase. With none In progress, it starts P, or without P
+# the top open phase whose Status is Ready, and prints nothing and succeeds when
+# no phase is Ready. With a phase In progress, it completes that phase's start,
+# and refuses any other P. It comments `phase: started at SHA` on the phase, SHA
+# being master's head, unless a comment of that form is there already, and only
+# then sets the phase In progress, so that SHA comes before every commit a
+# worker makes for the phase's members, and a run that fails after the comment
+# leaves SHA for the next run to keep. For the phase In progress, it then links,
+# as `link` does, each open issue labelled `triaged` that has no parent, whose
+# body says no `Part of #N`, and that has none of the labels `phase`, `group`,
+# `grouped`, `ci`, `owner` and `intermittent`; and it sets Ready each open
+# member whose Status is Backlog or empty and that is not labelled `owner`,
+# `grouped` or `phase`. It prints the phase's number. Each step skips what an
+# earlier run did, so a second run changes nothing, and a run that failed part
+# way is completed by the next.
 #
 # `archive P` archives the card of every closed issue on the board, except a
 # closed member of an open phase other than P, which stays on the board until
@@ -730,6 +732,7 @@ start()
 {
     read_board
     p=$(in_progress) || exit 1
+    started=$p
     if [ -n "$p" ]; then
         if [ -n "$1" ] && [ "$1" != "$p" ]; then
             echo "board: #$p is In progress, so #$1 cannot start" >&2
@@ -746,10 +749,6 @@ start()
             }
             return 0
         fi
-        set_status "$p" "In progress" || {
-            echo "board: #$p: cannot set it In progress" >&2
-            exit 1
-        }
     fi
     said=$(comments "$p") || {
         echo "board: #$p: cannot read its comments" >&2
@@ -762,6 +761,12 @@ start()
         }
         gh issue comment "$p" --repo "$REPO" --body "phase: started at $head" > /dev/null || {
             echo "board: #$p: cannot comment on it" >&2
+            exit 1
+        }
+    fi
+    if [ -z "$started" ]; then
+        set_status "$p" "In progress" || {
+            echo "board: #$p: cannot set it In progress" >&2
             exit 1
         }
     fi
