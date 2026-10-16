@@ -82,7 +82,7 @@ for t in tests/host/*_hosttest.c; do
     # turns off. Empty for every kernel test, which the fixed flags cover.
     extra="$(grep -oE 'host-cflags:[^*]*' "$t" | sed 's/host-cflags://' | tr '\n' ' ')"
     # A test whose rows take longer than the deadline says so in seconds
-    # on a `host-seconds:` line; the two FAT interruption matrices do.
+    # on a `host-seconds:` line, as the file system interruption matrices do.
     secs="$(grep -oE 'host-seconds: *[0-9]+' "$t" | grep -oE '[0-9]+' | head -1)"
     [ -n "$secs" ] || secs=$WATCHDOG_SECS
     [ -z "$WATCHDOG" ] || WATCHDOG="$REPO/build/tests/system/deadline $secs"

@@ -52,7 +52,7 @@ A test's opening comment may have three kinds of line, which `host.sh` reads wit
 
 * `host-deps: PATH ...`: sources, by path from the repository root, compiled and linked with the test. The line repeats, one list per line. A list wrapped onto a following comment line without its own `host-deps:` prefix stops the suite, since the rest of the list would be lost; a named file that does not exist fails the test.
 * `host-cflags: FLAGS`: more compiler flags, also repeatable: the include paths and warnings of a source outside the kernel tree, or a `-D` the test needs. 33 tests have one.
-* `host-seconds: N`: the time limit, in place of 60 seconds. `fat32_hosttest.c` declares 300 and `exfat_hosttest.c` 450.
+* `host-seconds: N`: the time limit, in place of 60 seconds. The interruption matrices run external checkers on copies of the volumes: `ext2_hosttest.c` and `fat32_hosttest.c` declare 300 seconds, and `exfat_hosttest.c` 450.
 
 `tools/verify/coverage.sh` reads the same lines to measure which lines of the named sources a test runs, and several mutation scripts read them to compile a test the way the suite does.
 

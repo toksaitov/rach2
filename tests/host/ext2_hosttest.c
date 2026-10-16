@@ -7,6 +7,7 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
  * host-deps: tests/host/compat/pressure_host.c tests/host/compat/fixdir_host.c
+ * host-seconds: 300
  *
  * The volumes are made here from a staged tree by the host's mke2fs with the
  * features tools/image/mkext2.sh gives, and debugfs adds what a host tree
