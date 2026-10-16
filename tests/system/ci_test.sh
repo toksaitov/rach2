@@ -1,9 +1,11 @@
 #!/bin/sh
 # ci_test.sh: check unfinished ci reports, the labels and body of a filed
-# issue, a full run's last pass, the hold issue, bisection runs, their time
-# limits and continuation, the kind an older commit's run.sh takes, a
-# refused run in bisection, and verdict errors. The scripts run in a private
-# tree with stand-ins for git, gh, make, timeout and the clock.
+# issue, a full run's last pass, a failure repeated on an intermittent issue,
+# the hold issue, bisection runs, their time limits and continuation, the run
+# whose issue bisection labels intermittent, the kind an older commit's
+# run.sh takes, a refused run in bisection, and verdict errors. The scripts
+# run in a private tree with stand-ins for git, gh, make, timeout and the
+# clock.
 
 set -eu
 case ${1:-} in
@@ -36,6 +38,9 @@ fault()
         baseline)
             sed 's|contexts="ci/full ci/night"|contexts=ci/full|' "$repo/tools/ci/report.sh" > "$work/report.sh"
             ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
+        again)
+            sed 's/\*" intermittent "\*)/*" never "*)/' "$repo/tools/ci/report.sh" > "$work/report.sh"
+            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
         hold)
             # shellcheck disable=SC2016 # the script contains $(open_holds)
             sed 's/holds=$(open_holds)/holds=$(open_issue hold "$hold_title")/' "$repo/tools/ci/report.sh" > "$work/report.sh"
@@ -55,6 +60,10 @@ fault()
         intermittent)
             sed '/say .*passed .*when run again/s/|| status=1/|| :/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
             ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
+        newest)
+            # shellcheck disable=SC2016 # the script contains $newest and $run
+            sed 's/"$newest" != "$run"/-z "$newest"/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
+            ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
         older)
             sed 's/|| here=night/|| :/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
             ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
@@ -70,8 +79,8 @@ fault()
     esac
 }
 if [ "$mode" = texts ]; then
-    for name in report cilabel baseline hold bisect items comment label \
-        intermittent older refusal limit handoff; do
+    for name in report cilabel baseline again hold bisect items comment label \
+        intermittent newest older refusal limit handoff; do
         fault "$name"
     done
     exit 0
@@ -109,7 +118,17 @@ case "$1 $2" in
         case "$*" in
             *'--label hold '*'--json number --jq '*)
                 [ -z "${CI_TEST_HOLD:-}" ] || printf '%s\n' $CI_TEST_HOLD ;;
+            *'--label bug '*'--json number,title,labels '*"select(.title == \"${CI_TEST_OPEN_TITLE:-}\")"*)
+                echo "$CI_TEST_OPEN" ;;
         esac ;;
+    'issue view')
+        case "$*" in
+            *' --json body,comments '*) ;;
+            *) exit 2 ;;
+        esac
+        for id in ${CI_TEST_RUNS:-}; do
+            printf 'A failure.\n\nRun: https://example.invalid/test/rach2/actions/runs/%s\nAttempt: 1\n' "$id"
+        done ;;
     'issue create') echo https://example.invalid/issues/7 ;;
     'issue comment') [ "${CI_TEST_GH_FAIL:-}" != comment ] ;;
     'issue edit') [ "${CI_TEST_GH_FAIL:-}" != edit ] ;;
@@ -167,11 +186,12 @@ PATH=$work/bin:$PATH
 export CI_TEST_WORK GITHUB_REPOSITORY GITHUB_SERVER_URL GITHUB_RUN_ID PATH
 cd "$work/tree"
 
-# clear: drop the passes that a row gives the gh stand-in.
+# clear: drop the passes, the open issue and the runs that rows give the gh
+# stand-in.
 clear()
 {
-    CI_TEST_BASE=''
-    export CI_TEST_BASE
+    CI_TEST_BASE='' CI_TEST_OPEN='' CI_TEST_OPEN_TITLE='' CI_TEST_RUNS=''
+    export CI_TEST_BASE CI_TEST_OPEN CI_TEST_OPEN_TITLE CI_TEST_RUNS
 }
 
 # results KIND STATE: report a run of KIND whose x86_64 half passed and
@@ -197,14 +217,15 @@ results()
 }
 
 # report KIND STATE ITEM: require an issue labelled `bug` and `ci` that
-# gives the attempt and the commit, a bisection of ITEM, and the core hold.
+# gives the attempt and the commit, a bisection of ITEM that names this
+# run, and the core hold.
 report()
 {
     clear
     results "$1" "$2" || return 1
     grep -q '^issue create .* --label bug --label ci --body ' "$work/gh.log" || return 1
     grep -qx 'Attempt: 1' "$work/gh.log" && grep -qx 'Commit: bad' "$work/gh.log" || return 1
-    grep -q "workflow run bisect.yml .* -f items=$3 -f issue=7" "$work/gh.log" || return 1
+    grep -q "workflow run bisect.yml .* -f items=$3 -f issue=7 -f run=1" "$work/gh.log" || return 1
     if [ "$1" = core ]; then
         grep -q 'issue create .* --label hold ' "$work/gh.log" || return 1
     else
@@ -213,17 +234,40 @@ report()
 }
 
 # base: with only nightly passes on GOOD, require a full report to bisect
-# from GOOD as a full run, and a core report to find no last pass.
+# from GOOD as a full run, with this run's ID, and a core report to find no
+# last pass.
 base()
 {
     clear
     CI_TEST_BASE=night
     results full runner || return 1
-    grep -q 'workflow run bisect.yml .* -f kind=full -f arch=i686 -f good=good -f bad=bad -f items=runner -f issue=7' "$work/gh.log" || return 1
+    grep -q 'workflow run bisect.yml .* -f kind=full -f arch=i686 -f good=good -f bad=bad -f items=runner -f issue=7 -f run=1' "$work/gh.log" || return 1
     results core runner || return 1
     ! grep -q 'workflow run' "$work/gh.log" || return 1
     grep -q 'unknown: no commit in the 50 before bad' "$work/gh.log" || return 1
     CI_TEST_BASE=''
+}
+
+# again LABELS: with #12 open under the title of the runner's failure on
+# i686 and labelled LABELS, require a core report to comment on #12 and
+# file no failure issue; when LABELS has `intermittent`, to remove that
+# label and bisect for #12 again, and otherwise to do neither.
+again()
+{
+    clear
+    CI_TEST_OPEN_TITLE='ci: core: runner fails on i686' CI_TEST_OPEN="12 $1"
+    results core runner || return 1
+    grep -q '^issue comment 12 ' "$work/gh.log" || return 1
+    ! grep -q '^issue create .* --title ci: ' "$work/gh.log" || return 1
+    case " $1 " in
+        *' intermittent '*)
+            grep -q '^issue edit 12 --repo test/rach2 --remove-label intermittent' "$work/gh.log" || return 1
+            grep -q 'workflow run bisect.yml .* -f items=runner -f issue=12 -f run=1' "$work/gh.log" || return 1 ;;
+        *)
+            ! grep -q '^issue edit ' "$work/gh.log" || return 1
+            ! grep -q 'workflow run' "$work/gh.log" || return 1 ;;
+    esac
+    clear
 }
 
 # hold STATE: with holds #5 and #9 open under any title, require a core run
@@ -322,19 +366,43 @@ older()
     return "$status"
 }
 
-# handoff: give a core bisection 700 minutes and let each run take 400 of
-# them; require the run to test BAD alone and leave the last step to a new
-# run with -c, that run to test both commits without BAD again, and a run of
-# 100 minutes to test nothing and say that the range is unresolved.
+# latest RUNS: bisect a failure of run 1 that does not repeat, with -r 1, on
+# an issue whose Run lines name RUNS, oldest first; require the issue to be
+# labelled intermittent only when the last of them is run 1, and otherwise
+# a comment that names the newer run.
+latest()
+{
+    CI_TEST_FAIL=0 CI_TEST_GH_FAIL='' CI_TEST_RUN=pass
+    export CI_TEST_FAIL CI_TEST_GH_FAIL CI_TEST_RUN
+    start
+    CI_TEST_RUNS=$1
+    status=0
+    sh "$work/bisect.sh" -r 1 core i686 good bad 7 unfinished-core > "$work/bisect.log" 2>&1 || status=$?
+    CI_TEST_RUNS=''
+    [ "$status" = 0 ] || return 1
+    grep -q '^issue view 7 --repo test/rach2 --json body,comments ' "$work/gh.log" || return 1
+    case " $1" in
+        *' 1') grep -q -- '--add-label intermittent' "$work/gh.log" ;;
+        *)
+            ! grep -q -- '--add-label intermittent' "$work/gh.log" || return 1
+            grep -q "a newer failure, run ${1##* }, was reported since run 1" "$work/gh.log" ;;
+    esac
+}
+
+# handoff: give a core bisection of run 1 700 minutes and let each run take
+# 400 of them; require the run to test BAD alone and leave the last step to a
+# new run with -c and run 1, that run to test both commits without BAD
+# again, and a run of 100 minutes to test nothing and say that the range is
+# unresolved.
 handoff()
 {
     CI_TEST_FAIL=1 CI_TEST_GH_FAIL='' CI_TEST_STEP=24000
     export CI_TEST_FAIL CI_TEST_GH_FAIL CI_TEST_STEP
     start
-    sh "$work/bisect.sh" -m 700 core i686 good bad 7 unfinished-core > "$work/bisect.log" 2>&1 || return 1
+    sh "$work/bisect.sh" -r 1 -m 700 core i686 good bad 7 unfinished-core > "$work/bisect.log" 2>&1 || return 1
     printf 'run core bad\n' > "$work/expected"
     cmp -s "$work/expected" "$work/events" || return 1
-    grep -q 'workflow run bisect.yml .* -f kind=core -f arch=i686 -f good=good -f bad=bad -f items=unfinished-core -f issue=7 -f confirmed=yes' "$work/gh.log" || return 1
+    grep -q 'workflow run bisect.yml .* -f kind=core -f arch=i686 -f good=good -f bad=bad -f items=unfinished-core -f issue=7 -f confirmed=yes -f run=1' "$work/gh.log" || return 1
     grep -q 'good passes and bad fails' "$work/gh.log" || return 1
     start
     sh "$work/bisect.sh" -c -m 700 core i686 good bad 7 unfinished-core > "$work/bisect.log" 2>&1 || return 1
@@ -372,12 +440,13 @@ suite()
     grep -q -- "$verdict" "$work/gh.log"
 }
 
-# rows: check both unfinished kinds and the hold issue, preserve an actual
-# runner failure, take a nightly pass as a full run's last pass, run the
-# core set beside the other items of a core run that failed, repeat an
-# unfinished full run as `night` where run.sh knows only that, continue a
-# bisection in a new run, and count only a reported failure of the runner
-# suite as one.
+# rows: check both unfinished kinds, the filed issue and the hold issue,
+# preserve an actual runner failure, take a nightly pass as a full run's
+# last pass, bisect a repeated intermittent failure again, run the core set
+# beside the other items of a core run that failed, take an issue's newest
+# run before labelling it intermittent, repeat an unfinished full run as
+# `night` where run.sh knows only that, continue a bisection in a new run,
+# and count only a reported failure of the runner suite as one.
 rows()
 {
     for kind in core full; do
@@ -391,12 +460,16 @@ rows()
     bisect unfinished-night full 0 || return 1
     older || return 1
     base || return 1
+    again 'bug ci intermittent' || return 1
+    again 'bug ci' || return 1
     hold fail || return 1
     hold pass || return 1
     bisect 'style core' 'tests style bad\ntests core bad' 0 || return 1
     bisect unfinished-core core 1 comment || return 1
     bisect unfinished-core core 0 comment || return 1
     bisect unfinished-core core 0 edit || return 1
+    latest 1 || return 1
+    latest '1 2' || return 1
     handoff || return 1
     for result in pass fail refuse; do
         suite "$result" || return 1
@@ -420,6 +493,10 @@ if [ "$mode" = mutate ]; then
     fault baseline
     if base; then
         echo 'ci-test: result: fail: baseline fault passed' >&2; exit 1
+    fi
+    fault again
+    if again 'bug ci intermittent'; then
+        echo 'ci-test: result: fail: again fault passed' >&2; exit 1
     fi
     fault hold
     if hold fail || hold pass; then
@@ -447,6 +524,10 @@ if [ "$mode" = mutate ]; then
         fi
         cp "$repo/tools/ci/bisect.sh" "$work/bisect.sh"
     done
+    fault newest
+    if latest '1 2'; then
+        echo 'ci-test: result: fail: newest fault passed' >&2; exit 1
+    fi
     fault older
     if older; then
         echo 'ci-test: result: fail: older fault passed' >&2; exit 1
@@ -467,4 +548,4 @@ if [ "$mode" = mutate ]; then
     cp "$repo/tools/ci/bisect.sh" "$work/bisect.sh"
     rows
 fi
-echo 'ci-test: result: pass: unfinished runs, issue labels, the last pass, the hold issue, the runner suite, core items, time limits, continuation, older run scripts, a refused run and verdict errors'
+echo 'ci-test: result: pass: unfinished runs, issue labels, the last pass, repeated failures, the hold issue, the runner suite, core items, time limits, continuation, the newest run, older run scripts, a refused run and verdict errors'

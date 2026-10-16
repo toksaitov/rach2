@@ -1,5 +1,6 @@
 # bisect: find the commit that made a ci failure, started by
-# tools/ci/report.sh for each new failure issue whose last pass it found.
+# tools/ci/report.sh for each new failure issue whose last pass it found,
+# and for an `intermittent` issue whose failure a later run repeated.
 #
 # It runs outside the core runs' group, on either runner, one run at a time
 # for each issue. tools/ci/bisect.sh tests the failing commit again, halves
@@ -8,11 +9,13 @@
 # has the time limit of the run that failed, 170 or 340 minutes, so that a
 # bisection can outlast one job. The script has 700 minutes, inside the job's
 # 720, and when the time left cannot hold the next test it starts a new run
-# of this workflow on the range left, with `confirmed` set. `kind` also
-# takes `night`, the kind of the nightly runs that full runs replaced, which
-# a bisection started before them passes on. The job runs master's copy of
-# the script from outside the tree, since the script checks out each commit
-# it tests.
+# of this workflow on the range left, with `confirmed` set. `run` is the ID
+# of the ci run that reported the failure; the script does not label the
+# issue intermittent once a later run has reported it. `kind` also takes
+# `night`, the kind of the nightly runs that full runs replaced, which a
+# bisection started before them passes on. The job runs master's copy of the
+# script from outside the tree, since the script checks out each commit it
+# tests.
 name: bisect
 
 on:
@@ -38,6 +41,10 @@ on:
         required: true
       confirmed:
         description: yes when an earlier run saw the failing commit fail again
+        required: false
+        default: ''
+      run:
+        description: The ID of the ci run that reported the failure
         required: false
         default: ''
 
@@ -71,12 +78,14 @@ jobs:
           ISSUE: ${{ inputs.issue }}
           ITEMS: ${{ inputs.items }}
           CONFIRMED: ${{ inputs.confirmed }}
+          RUN: ${{ inputs.run }}
         run: |
           case "$KIND" in core|full|night) ;; *) echo "bisect: refused: kind '$KIND'" >&2; exit 2 ;; esac
           case "$ARCH_IN" in i686|x86_64) ;; *) echo "bisect: refused: architecture '$ARCH_IN'" >&2; exit 2 ;; esac
           case "$GOOD$BAD$ISSUE" in *[!0-9a-f]*) echo "bisect: refused: a commit or issue that is not hexadecimal" >&2; exit 2 ;; esac
           case "$ITEMS" in *[!a-z0-9\ -]*) echo "bisect: refused: items '$ITEMS'" >&2; exit 2 ;; esac
           case "$CONFIRMED" in '') set -- ;; yes) set -- -c ;; *) echo "bisect: refused: confirmed '$CONFIRMED'" >&2; exit 2 ;; esac
+          case "$RUN" in '') ;; *[!0-9]*) echo "bisect: refused: run '$RUN'" >&2; exit 2 ;; *) set -- "$@" -r "$RUN" ;; esac
           cp tools/ci/bisect.sh "$RUNNER_TEMP/bisect.sh"
           # shellcheck disable=SC2086 # the items are one word each
           sh "$RUNNER_TEMP/bisect.sh" "$@" -m 700 "$KIND" "$ARCH_IN" "$GOOD" "$BAD" "$ISSUE" $ITEMS

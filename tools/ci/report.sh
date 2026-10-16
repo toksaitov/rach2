@@ -19,8 +19,11 @@
 # SHA, within 50 for core and 500 for full, whose status `ci/core/ARCH` is
 # success, or for full `ci/full/ARCH` or `ci/night/ARCH`, which the nightly
 # runs before full runs set. An issue already open under that title gets a
-# comment instead, and only a new issue starts `bisect.yml`, when the last
-# pass is known.
+# comment instead; when it has the label `intermittent`, the label is
+# removed. A new issue, and an open one that was intermittent, starts
+# `bisect.yml` when the last pass is known, and gives it this run's ID, so
+# that bisection does not call the failure intermittent once a later run
+# has reported it again.
 #
 # A core failure of the build, style or the runner, or of the `default`
 # suite, which boots the test image, opens the issue labelled `hold`, or
@@ -82,12 +85,15 @@ last_pass() { # last_pass ARCH
     return 0
 }
 
-# The number of the open issue with the label LABEL and the title TITLE, or
-# nothing; the status is 1 when the listing could not be read. The listing
-# is read rather than searched, since the search index lags.
+# The open issue with the label LABEL and the title TITLE, as its number
+# followed by its labels, or nothing; the status is 1 when the listing could
+# not be read. The listing is read rather than searched, since the search
+# index lags.
 open_issue() { # open_issue LABEL TITLE
     list=$(gh issue list --repo "$repo" --state open --label "$1" --limit 500 \
-        --json number,title --jq ".[] | select(.title == \"$2\") | .number") || return 1
+        --json number,title,labels \
+        --jq ".[] | select(.title == \"$2\") | [.number, .labels[].name] | map(tostring) | join(\" \")") ||
+        return 1
     echo "$list" | head -n 1
 }
 
@@ -96,6 +102,19 @@ open_issue() { # open_issue LABEL TITLE
 open_holds() {
     gh issue list --repo "$repo" --state open --label hold --limit 500 \
         --json number --jq 'sort_by(.number) | .[].number'
+}
+
+# Start bisect.yml for the issue NUMBER on the range GOOD..SHA and the items
+# that failed on ARCH, or say on the issue that it could not be started.
+start_bisect() { # start_bisect NUMBER
+    if gh workflow run bisect.yml --repo "$repo" --ref master -f kind="$kind" \
+        -f arch="$arch" -f good="$good" -f bad="$sha" -f items="$items" \
+        -f issue="$1" -f run="$GITHUB_RUN_ID"; then
+        echo "ci: report: $arch: bisect started for #$1"
+    else
+        lost "the bisect for #$1"
+        gh issue comment "$1" --repo "$repo" --body "ci could not start the bisect; narrow the range by hand." > /dev/null
+    fi
 }
 
 passed=""
@@ -142,14 +161,22 @@ The end of the log:
 $(tail -n 40 "$result/log")
 \`\`\`"
     fi
-    if ! number=$(open_issue bug "$title"); then
+    if ! found=$(open_issue bug "$title"); then
         lost "the issue list for $arch"
         continue
     fi
+    number=${found%% *}
     if [ -n "$number" ]; then
         gh issue comment "$number" --repo "$repo" --body "$body" > /dev/null ||
             lost "the comment on #$number"
         echo "ci: report: $arch: failure added to #$number"
+        case " $found " in
+            *" intermittent "*)
+                gh issue edit "$number" --repo "$repo" --remove-label intermittent > /dev/null ||
+                    lost "the label of #$number"
+                echo "ci: report: $arch: #$number is no longer intermittent"
+                [ -z "$good" ] || start_bisect "$number" ;;
+        esac
         continue
     fi
     if ! url=$(gh issue create --repo "$repo" --title "$title" --label bug --label ci --body "$body"); then
@@ -158,14 +185,7 @@ $(tail -n 40 "$result/log")
     fi
     number=${url##*/}
     echo "ci: report: $arch: filed #$number"
-    [ -n "$good" ] || continue
-    if gh workflow run bisect.yml --repo "$repo" --ref master -f kind="$kind" \
-        -f arch="$arch" -f good="$good" -f bad="$sha" -f items="$items" -f issue="$number"; then
-        echo "ci: report: $arch: bisect started for #$number"
-    else
-        lost "the bisect for #$number"
-        gh issue comment "$number" --repo "$repo" --body "ci could not start the bisect; narrow the range by hand." > /dev/null
-    fi
+    [ -z "$good" ] || start_bisect "$number"
 done
 
 if [ "$kind" = core ]; then

@@ -3,7 +3,8 @@
 # tools/ci/bisect.sh: find the commit that made a ci failure, and say so on
 # its issue.
 #
-#   tools/ci/bisect.sh [-c] [-m MINUTES] KIND ARCH GOOD BAD ISSUE ITEM...
+#   tools/ci/bisect.sh [-c] [-m MINUTES] [-r RUN]
+#                      KIND ARCH GOOD BAD ISSUE ITEM...
 #
 # GOOD passed ci on ARCH and BAD failed it in a run of KIND, `core` or
 # `full`, or `night`, which issues filed before full runs name and which is
@@ -29,27 +30,38 @@
 # passes, and both are tested once more; the commit is named only when both
 # results repeat.
 #
+# RUN is the ID of the ci run that started the bisection. With -r, a failure
+# that does not repeat is labelled `intermittent` only when the newest
+# `Run: .../actions/runs/ID` line in the issue's body and comments names
+# RUN; when a later run has reported the failure again, the script says so
+# on the issue, leaves it unlabelled and exits 0.
+#
 # With -m the run may take MINUTES. When the time left cannot hold the next
 # test, or the two of the last step, at their full limits, the script comments
-# with the range left, starts bisect.yml again on that range with -c, and
-# exits 0; a run that cannot hold even its first test says the range is
-# unresolved. The script checks out every commit it tests, so it runs from a
-# copy outside the tree. Each test's output is kept under RUNNER_TEMP/bisect,
-# one file for each commit and attempt, for the job to upload. GH_TOKEN,
-# GITHUB_REPOSITORY and GITHUB_RUN_ID come from the job.
+# with the range left, starts bisect.yml again on that range with -c and the
+# same RUN, and exits 0; a run that cannot hold even its first test says the
+# range is unresolved. The script checks out every commit it tests, so it
+# runs from a copy outside the tree. Each test's output is kept under
+# RUNNER_TEMP/bisect, one file for each commit and attempt, for the job to
+# upload. GH_TOKEN, GITHUB_REPOSITORY and GITHUB_RUN_ID come from the job.
 #
 set -u
 
-usage="usage: tools/ci/bisect.sh [-c] [-m MINUTES] KIND ARCH GOOD BAD ISSUE ITEM..."
+usage="usage: tools/ci/bisect.sh [-c] [-m MINUTES] [-r RUN] KIND ARCH GOOD BAD ISSUE ITEM..."
 confirmed=""
 minutes=""
-while getopts cm: opt; do
+run=""
+while getopts cm:r: opt; do
     case $opt in
         c) confirmed=yes ;;
         m) minutes=$OPTARG ;;
+        r) run=$OPTARG ;;
         *) echo "$usage" >&2; exit 2 ;;
     esac
 done
+case $run in
+    *[!0-9]*) echo "$usage" >&2; exit 2 ;;
+esac
 shift $((OPTIND - 1))
 [ "$#" -ge 6 ] || { echo "$usage" >&2; exit 2; }
 kind=$1 ARCH=$2 good=$3 bad=$4 issue=$5
@@ -97,6 +109,17 @@ Logs: \`gh run download $GITHUB_RUN_ID --repo $repo --name bisect-$issue\`" > /d
 # The abbreviated hash of a commit.
 short() { git rev-parse --short "$1"; }
 
+# The ID of the run that the last `Run: .../actions/runs/ID` line of ISSUE
+# names, its body first and then its comments, oldest first; status 1 when
+# the issue cannot be read or names no run.
+newest_run() {
+    text=$(gh issue view "$issue" --repo "$repo" --json body,comments \
+        --jq '.body, .comments[].body') || return 1
+    id=$(printf '%s\n' "$text" | tr -d '\r' |
+        sed -n 's|^Run: .*/actions/runs/\([0-9][0-9]*\)$|\1|p' | tail -n 1)
+    [ -n "$id" ] && echo "$id"
+}
+
 # Run a command under timeout(1) until the end of the current test, which
 # tested() sets in test_end, and return its status, 124 or 137 at the limit.
 limited() { # limited COMMAND...
@@ -120,7 +143,8 @@ handoff() { # handoff GOOD BAD
         exit 1
     fi
     if ! gh workflow run bisect.yml --repo "$repo" --ref master -f kind="$kind" \
-        -f arch="$ARCH" -f good="$1" -f bad="$2" -f items="$items" -f issue="$issue" -f confirmed=yes; then
+        -f arch="$ARCH" -f good="$1" -f bad="$2" -f items="$items" -f issue="$issue" -f confirmed=yes \
+        -f run="$run"; then
         say "unresolved: the run that would test $(short "$1")..$(short "$2") could not be started; narrow that range by hand"
         exit 1
     fi
@@ -181,7 +205,17 @@ if [ -z "$confirmed" ]; then
     tested "$bad"; verdict=$?
 fi
 case $verdict in
-    0) status=0
+    0) if [ -n "$run" ]; then
+           newest=$(newest_run) || {
+               say "unresolved: $(short "$bad") passed $items when run again, but the issue's runs could not be read, so it is not labelled intermittent"
+               exit 1
+           }
+           if [ "$newest" != "$run" ]; then
+               say "$(short "$bad") passed $items when run again, but a newer failure, run $newest, was reported since run $run, so the issue is not labelled intermittent" || exit 1
+               exit 0
+           fi
+       fi
+       status=0
        gh issue edit "$issue" --repo "$repo" --add-label intermittent > /dev/null ||
            { echo "ci: bisect: the label on #$issue failed" >&2; status=1; }
        say "$(short "$bad") passed $items when run again; the failure did not repeat, so the issue is intermittent and stays open" || status=1
