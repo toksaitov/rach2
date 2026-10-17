@@ -8,8 +8,9 @@
  *
  * * With a USB device and messages, which is the ordinary boot: the
  *   controller's vector has taken at least five interrupts for the five keys
- *   typed before this ran, and the timer's pump has found none of the work
- *   they carry, so the fallback count is zero.
+ *   typed before this ran, or at least two on a machine with no keyboard,
+ *   whose mouse was moved instead; and the timer's pump has found none of
+ *   the work they carry, so the fallback count is zero.
  * * With `rach2.nomsi`: the message vector has no line at all, since a
  *   vector that has taken nothing is not listed; the controller's PCI line,
  *   listed as `IO-APIC`, or `PIC` on a machine without one, with the
@@ -187,17 +188,36 @@ static int count_for(const char *label, const char *file)
     return -1;
 }
 
+/** Whether the `n` bytes at `line` end with `tail`. */
+static int ends_with(const char *line, int n, const char *tail)
+{
+    int m = (int)strlen(tail);
+    int i;
+
+    if (m > n) {
+        return 0;
+    }
+    for (i = 0; i < m; i++) {
+        if (line[n - m + i] != tail[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /**
- * How many USB devices this machine has configured.
+ * How many of the USB devices this machine has configured have a line that
+ * ends with `tail`, which is all of them when `tail` is empty.
  *
  * `/proc/usb` has one line per device, which begins with the port it is on,
  * and is empty on a machine with none; that difference is what tells a boot
  * that must have taken messages from one that had nothing to send them. The
  * file also has a line per stick that is a disk and a line counting the
  * names, so the count is of the lines that begin with `port` and not of the
- * lines.
+ * lines. A device's line ends with its class and protocol, so a `tail` of
+ * `" class 3 protocol 1"` counts the boot-protocol keyboards.
  */
-static int usb_devices(void)
+static int usb_devices(const char *tail)
 {
     static char list[1024];
     int n = slurp("/proc/usb", list, (int)sizeof(list));
@@ -214,7 +234,7 @@ static int usb_devices(void)
             end++;
         }
         if (end - at > 5 && list[at] == 'p' && list[at + 1] == 'o' && list[at + 2] == 'r' &&
-            list[at + 3] == 't' && list[at + 4] == ' ') {
+            list[at + 3] == 't' && list[at + 4] == ' ' && ends_with(list + at, end - at, tail)) {
             devices++;
         }
         at = end + 1;
@@ -329,11 +349,15 @@ static int count_for_named(const char *kind, const char *name, const char *file)
  * have taken at least five interrupts for the five keys the suite typed
  * before the probe ran; one message and no more is what a kernel that never
  * ends the interrupt at the processor takes, while the machine goes on
- * typing on the timer's pump.
+ * typing on the timer's pump. A machine with no keyboard must have taken at
+ * least two, which is still more than that one. Its mouse is moved without a
+ * pause between the steps, so a report can arrive while the handler is still
+ * taking the one before it and be taken on the same message, and the number
+ * of messages the moves bring is not fixed.
  */
 PROBE_START void _start(void)
 {
-    int vector, audio, fallback, drop, devices, n, line;
+    int vector, audio, fallback, drop, devices, keyboards, n, line;
 
     if (slurp("/proc/cmdline", cmdline, (int)sizeof(cmdline)) < 0) {
         fail("/proc/cmdline would not open");
@@ -359,7 +383,8 @@ PROBE_START void _start(void)
         fail("there is no fallback line");
     }
     drop = option_value("rach2.msidrop=");
-    devices = usb_devices();
+    devices = usb_devices("");
+    keyboards = usb_devices(" class 3 protocol 1");
 
     puts("INTRPROBE READ vector ");
     putnum(vector);
@@ -396,8 +421,11 @@ PROBE_START void _start(void)
             fail("a machine with no USB device counted a lost edge");
         }
     } else {
-        if (vector < 5) {
+        if (keyboards > 0 && vector < 5) {
             fail("the controller's vector took fewer interrupts than the keys typed");
+        }
+        if (keyboards == 0 && vector < 2) {
+            fail("the controller's vector took fewer than two interrupts for the mouse");
         }
         if (fallback != 0) {
             fail("the timer's pump found work the messages should have brought");
