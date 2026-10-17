@@ -1,22 +1,26 @@
 #!/bin/sh
 # agents_mutate.sh | --texts: show that `tests/run agents` catches a fault in
-# the agents layer's install of gh and one in its install of muse.
+# each of the agents layer's installs of gh, Claude Code and muse.
 #
 # Usage: sh tests/system/agents_mutate.sh | --texts
-# Each fault points a program's link in /usr/bin, which its recipe in
-# vendor/gnu/agents/packages/ makes, at a file the package does not have, so
-# that the path finds no such program. The suite must pass, fail on the gh
-# row and on the muse row with both faults in the recipes and the root built
+# Each fault is in a recipe of vendor/gnu/agents/packages/. Those of gh and
+# muse point the program's link in /usr/bin, which the recipe makes, at a
+# file the package does not have, so that the path finds no such program.
+# That of claude gives Claude Code's managed settings DISABLE_AUTOUPDATER in
+# place of DISABLE_UPDATES, which stops only the background update, so that
+# `claude update` tries to fetch a release. The suite must pass, fail on the
+# row of each package with the three faults in the recipes and the root built
 # again, and pass again with the recipes restored. The suite is x86-64 only.
 # --texts checks that each fault is once in its source.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-packages="gh muse"
+packages="gh claude muse"
 
 # apply_fault NAME: put the fault into the recipe of the package NAME, whose
-# program is NAME too; with RACH2_FAULT_TEXTS set, only check its text and
+# program is NAME too: claude's in its managed settings, and the others' in
+# the program's link; with RACH2_FAULT_TEXTS set, only check its text and
 # write nothing.
 apply_fault()
 {
@@ -30,10 +34,14 @@ if os.environ.get('RACH2_FAULT_TEXTS'):
 path = Path(sys.argv[1])
 name = sys.argv[2]
 text = path.read_text()
-old = f'ln -s ../../opt/{name}/bin/{name} "$1/usr/bin/{name}"'
+if name == 'claude':
+    old, new = '"DISABLE_UPDATES": "1"', '"DISABLE_AUTOUPDATER": "1"'
+else:
+    old = f'ln -s ../../opt/{name}/bin/{name} "$1/usr/bin/{name}"'
+    new = f'ln -s ../../opt/{name}/bin/{name}.missing "$1/usr/bin/{name}"'
 if text.count(old) != 1:
-    raise SystemExit(f'agents-mutation: the link of {name} is not once in its recipe')
-path.write_text(text.replace(old, f'ln -s ../../opt/{name}/bin/{name}.missing "$1/usr/bin/{name}"'))
+    raise SystemExit(f'agents-mutation: the fault of {name} is not once in its recipe')
+path.write_text(text.replace(old, new))
 PY
 }
 
@@ -141,7 +149,8 @@ for name in $packages; do
     apply_fault "$name"
     touch "vendor/gnu/agents/packages/$name.sh"
 done
-run_phase links 'AGENTROW FAIL gh: gh --version: status 127' \
+run_phase faults 'AGENTROW FAIL gh: gh --version: status 127' \
+    'AGENTROW FAIL claude: claude update: status 1' \
     'AGENTROW FAIL muse: muse --version: status 127'
 restore
 run_phase restored pass
