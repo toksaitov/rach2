@@ -96,8 +96,12 @@ probe() {
             ok=1
         fi
     done
+    work=
+    trap 'rm -rf ${work:+"$work"}' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     work=$(mktemp -d) || return 1
-    trap 'rm -rf "$work"' EXIT INT TERM
     printf 'int main(void) { return 0; }\n' >"$work/t.c"
     if ! cc -o "$work/t" "$work/t.c" 2>"$work/err"; then
         echo "preflight: the host C compiler cannot build a program:" >&2

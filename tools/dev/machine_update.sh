@@ -37,8 +37,12 @@ key=$root/krffs/rach2_demo_ed25519
 [ -s "$kernel" ] || { echo "machine-update: no kernel at $kernel" >&2; exit 2; }
 chmod 600 "$key"
 
+work=
+trap 'rm -rf ${work:+"$work"}' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/machine-update.XXXXXX") || exit 1
-trap 'rm -rf "$work"' EXIT
 set -- ssh -i "$key" -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR \
     -o UserKnownHostsFile="$work/known" -o StrictHostKeyChecking=accept-new \
     "root@$address"

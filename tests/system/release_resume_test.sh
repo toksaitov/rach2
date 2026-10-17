@@ -36,11 +36,12 @@ case ${1:-} in
     *) echo 'release-test: usage: release_resume_test.sh [--mutate | --texts]' >&2; exit 2 ;;
 esac
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-work=$(mktemp -d "${TMPDIR:-/tmp}/release-test.XXXXXX") || exit 1
-trap 'rm -rf "$work"' EXIT
+work=
+trap 'rm -rf ${work:+"$work"}' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "${TMPDIR:-/tmp}/release-test.XXXXXX") || exit 1
 tree=$work/tree
 mkdir -p "$work/bin" "$tree/tools/flow" "$tree/krffs"
 : > "$tree/krffs/rach2_demo_ed25519"

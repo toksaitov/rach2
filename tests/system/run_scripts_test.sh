@@ -42,14 +42,15 @@ if [ "${1:-}" != --texts ]; then
     . "$repo/tests/system/runlock.sh"
     runlock_hold "$repo" run-scripts-test "$repo/tests/system/run_scripts_test.sh" "$@"
 fi
-work=$(mktemp -d "${TMPDIR:-/tmp}/run-scripts.XXXXXX")
-trap 'rm -rf "$work"' EXIT
-# The scripts name their files from `cd` and `pwd`, which fold a doubled
-# slash, so the expected paths are made the same way.
-work=$(CDPATH='' cd -- "$work" && pwd)
+work=
+trap 'rm -rf ${work:+"$work"}' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "${TMPDIR:-/tmp}/run-scripts.XXXXXX")
+# The scripts name their files from `cd` and `pwd`, which fold a doubled
+# slash, so the expected paths are made the same way.
+work=$(CDPATH='' cd -- "$work" && pwd)
 mkdir -p "$work/rach2" "$work/build/rach2" "$work/build/images" "$work/bin" "$work/saved" \
     "$work/build/x86_64/rach2" "$work/build/x86_64/images"
 for f in run.sh run_from_disk.sh run_from_iso.sh debug.sh qemu_devices.sh; do

@@ -110,6 +110,11 @@ mkdir -p "$(dirname "$OUT")"
 # Every intermediate lives in a directory of this run's own, so that two
 # builds of one output never share a path and nothing here follows a name
 # somebody else made; the image reaches its name by one rename at the end.
+WORK=
+trap 'rm -rf ${WORK:+"$WORK"}' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 WORK=$(mktemp -d "$(dirname "$OUT")/.mkext2.XXXXXX") || exit 1
 TMP="$WORK/image"
 TREE="$WORK/tree"
@@ -118,7 +123,6 @@ SCRIPT="$WORK/debugfs"
 FSCK="$WORK/fsck.log"
 MKLOG="$WORK/mke2fs.log"
 ADDED="$WORK/added"
-trap 'rm -rf "$WORK"' EXIT INT TERM
 
 "$STAGEIMAGE" "$MANIFEST" --tree "$TREE" > "$NODES"
 : > "$ADDED"

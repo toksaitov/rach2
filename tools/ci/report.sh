@@ -50,8 +50,12 @@ run_url="$GITHUB_SERVER_URL/$repo/actions/runs/$GITHUB_RUN_ID"
 attempt=${GITHUB_RUN_ATTEMPT:-1}
 short=$(git rev-parse --short "$sha")
 hold_title="hold: master does not build, pass style or boot"
+statuses=
+trap 'rm -f ${statuses:+"$statuses"}' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 statuses=$(mktemp "${TMPDIR:-/tmp}/report.XXXXXX") || exit 1
-trap 'rm -f "$statuses"' EXIT
 rc=0
 
 lost() { # lost WHAT: name a GitHub call that failed

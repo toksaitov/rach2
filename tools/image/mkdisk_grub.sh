@@ -213,12 +213,17 @@ make -s -C "$REPO" build/tools/image/grubembed "ARCH=$RACH2_ARCH" || exit 1
 # configuration or partition images. The trap clears it and the unrenamed
 # output on any exit; the finished disk appears only through the final mv.
 mkdir -p "$ARCH_BUILD/images" || exit 1
+TMPD=
+NEW=
+trap 'rm -rf ${TMPD:+"$TMPD"} ${NEW:+"$NEW"}' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 TMPD="$(mktemp -d "$ARCH_BUILD/images/mkdisk.XXXXXX")"
 # The unrenamed output has this run's process number in its name for the same
 # reason: two builds of one disk under one fixed name would remove each
 # other's file, and make would delete the disk both wanted.
 NEW="$OUT.$$.new"
-trap 'rm -rf "$TMPD" "$NEW"' EXIT
 GRUB_CFG="$TMPD/grub-disk.cfg"
 RECOVERY_CFG="$TMPD/grub-recovery.cfg"
 EMBED_CFG="$TMPD/grub-embed.cfg"

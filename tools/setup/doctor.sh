@@ -157,8 +157,12 @@ req patch            patch
 # doing the work the build does with it: generate a key pair in a temporary
 # directory. A tool that cannot write a key is as broken here as one that is
 # absent. The directory is removed on every path, interruption included.
+keygen_dir=
+trap 'rm -rf ${keygen_dir:+"$keygen_dir"}' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 keygen_dir=$(mktemp -d "${TMPDIR:-/tmp}/rach2-doctor.XXXXXX") || keygen_dir=
-trap 'test -n "$keygen_dir" && rm -rf "$keygen_dir"' EXIT INT TERM HUP
 if command -v ssh-keygen >/dev/null 2>&1 && [ -n "$keygen_dir" ] &&
    ssh-keygen -t ed25519 -N '' -C rach2-doctor -f "$keygen_dir/probe" \
        >/dev/null 2>&1; then
@@ -167,7 +171,7 @@ else
     row "[MISSING]" "ssh-keygen" "$(hint openssh)"
     missing=$((missing + 1))
 fi
-rm -rf "$keygen_dir"
+rm -rf ${keygen_dir:+"$keygen_dir"}
 keygen_dir=
 
 # e2fsprogs builds and checks the ext2 root image at every build: the three

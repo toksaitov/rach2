@@ -11,11 +11,12 @@ case ${1:-} in
     *) echo 'testing-run-test: usage: testing_run_test.sh [--mutate | --texts]' >&2; exit 2 ;;
 esac
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-work=$(mktemp -d "${TMPDIR:-/tmp}/testing-run-test.XXXXXX")
-trap 'rm -rf "$work"' EXIT
+work=
+trap 'rm -rf ${work:+"$work"}' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "${TMPDIR:-/tmp}/testing-run-test.XXXXXX")
 mkdir -p "$work/bin" "$work/home" "$work/copy" "$work/tree/tools/dev"
 script=$work/tree/tools/dev/testing.sh
 cp "$repo/tools/dev/testing.sh" "$script"

@@ -369,8 +369,9 @@ echo "metal-test: acceptance without a serial leaves the stick unchanged: OK"
 # The copy lives under the images directory with this suite's name: a
 # directory made under build/tests changes that directory's time, which the
 # test image depends on, and a pooled suite would restage it.
+ACCEPT_ROOT=
+trap 'cleanup; rm -rf ${ACCEPT_ROOT:+"$ACCEPT_ROOT"}' EXIT
 ACCEPT_ROOT=$(mktemp -d "$OUT.accept.XXXXXX")
-trap 'cleanup; rm -rf "$ACCEPT_ROOT"' EXIT
 ACCEPT_COPY="$ACCEPT_ROOT/tests/system/accept"
 mkdir -p "$ACCEPT_COPY"
 for directory in build krffs; do

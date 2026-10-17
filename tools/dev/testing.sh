@@ -103,6 +103,9 @@ hold=
 holder=
 feeder=
 trap 'stop_feeder; release_copy; [ -z "$hold" ] || rm -rf "$hold"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Exit 2 unless the rsync here is rsync 3.
 need_rsync3()
