@@ -24,7 +24,8 @@
 #
 # Before each check the loop prunes the checks' output, as `prune_logs` in
 # lib.sh says, and runs `scratch.pl` on the testing host, which removes from
-# its /tmp the scratch of tests that were killed before their traps ran.
+# its /tmp the scratch of tests that were killed before their traps ran. The
+# sweep is stopped after ten minutes, and its result is one line of loop.log.
 
 PERIOD=1200
 TESTING=testing
@@ -72,9 +73,13 @@ main()
                 continue ;;
         esac
         prune_logs 'c-*'
-        ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
+        if ! swept=$(perl -e 'alarm shift; exec @ARGV' 600 \
+            ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
             'MSYS_NO_PATHCONV=1 wsl.exe -u root -- perl - /tmp' \
-            < "$state/run/scratch.pl" >> "$state/loop.log" 2>&1
+            < "$state/run/scratch.pl" 2>&1); then
+            swept="scratch: failed on $TESTING: $(printf '%s\n' "$swept" | tail -n 1)"
+        fi
+        log "$swept"
         t=$(date -u '+%m%d-%H%M%S')
         prompt="$(cat "$state/run/manager.txt")
 
