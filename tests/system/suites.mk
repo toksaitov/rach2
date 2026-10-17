@@ -1514,6 +1514,15 @@ run-fakeapi: $(DEMO_CREDS) rach2 os-real-gnu-ext2 $(DEADLINE) $(RUNUTIL) $(MKMBR
 	sh tests/system/suites/fakeapi.sh $(BOOT_KERNEL) $(OS_REAL_GNU_EXT2) $(FAKEAPI_TEST_DISK) \
 	    $(FAKEAPI_PORT)
 
+# `tests/run codexapi`: OpenAI's Responses protocol in the fake API server,
+# proved against the host's Codex at the pinned version, in a fresh home and
+# a network namespace with only a loopback interface: Codex reads a file,
+# runs a command, edits a file and commits, over a WebSocket and then over
+# the HTTPS fallback, and the server refuses a wrong tool result. No machine
+# is booted.
+run-codexapi: $(DEADLINE) $(RUNUTIL)
+	sh tests/system/suites/codexapi.sh $(IMAGES_DIR)/codexapi-test
+
 # `tests/run exfat`: exFAT written from a program, read back after a reboot,
 # judged by the host's reader and the external checker where the host has
 # one, taken through a crash and its repair, written from BusyBox and by

@@ -841,7 +841,7 @@ scripts_inventory() {
     ( cd "$REPO" && {
         echo tests/run; echo tests/registry; echo tests/system/suites.mk; echo Makefile
         ls mk/*.mk tests/system/runner/*.c tests/system/*.sh tests/system/suites/*.sh tests/system/accept/*.sh \
-           tests/system/fakeapi/* tools/image/*.sh krffs/*.sh tools/verify/check.sh krffs/manifests/* 2>/dev/null
+           tests/system/fakeapi/* tests/system/fakeapi/repo/* tools/image/*.sh krffs/*.sh tools/verify/check.sh krffs/manifests/* 2>/dev/null
     } ) | present
 }
 products_inventory() { # products_inventory TARGET...
