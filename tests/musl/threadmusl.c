@@ -644,19 +644,22 @@ static void on_usr2(int sig)
 
 /**
  * Run as a thread of `handler_mask`, whose index in `takers` is at `arg`:
- * sleep with both signals unblocked until the two handlers have run. The
- * thread keeps the two blocked, as it was created, between its look at the
- * handlers and its sleep, and sigsuspend unblocks them and sleeps in one
- * step: a pause after the look would sleep for good when this thread's
- * handler ran between the two, before the other thread's.
+ * sleep with both signals unblocked until this thread has run one of the
+ * handlers. Each thread waits for its own handler alone, since nothing wakes
+ * a thread that ran SIGUSR2's handler and slept again before the other
+ * recorded itself in SIGUSR1's. The thread keeps the two blocked, as it was
+ * created, between its look at the handlers and its sleep, and sigsuspend
+ * unblocks them and sleeps in one step: a pause after the look would sleep
+ * for good when the handler ran between the two.
  */
 static void *take_signals(void *arg)
 {
+    pid_t me = tid();
     sigset_t none;
 
-    takers[*(const int *)arg] = tid();
+    takers[*(const int *)arg] = me;
     sigemptyset(&none);
-    while (!usr1_by || !usr2_by) {
+    while (usr1_by != me && usr2_by != me) {
         sigsuspend(&none);
     }
     return NULL;
