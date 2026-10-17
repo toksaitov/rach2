@@ -47,6 +47,8 @@ A turn is an object:
                       an assistant message;
                   {"call": NAME, "id": CALL_ID, "arguments": VALUE}
                       a call of the function tool NAME, VALUE sent as JSON;
+                      with "namespace": SPACE as well, a call of the
+                      function NAME of the namespace tool SPACE;
                   {"custom": NAME, "id": CALL_ID, "input": TEXT}
                       a call of the custom tool NAME with the text TEXT.
 
@@ -197,6 +199,10 @@ def offered(body, item):
     """Whether the request BODY offers the tool that output ITEM calls."""
     kind, name = ("function", item["call"]) if "call" in item else ("custom", item["custom"])
     tools = body.get("tools") or []
+    if "namespace" in item:
+        spaces = [t for t in tools if isinstance(t, dict) and t.get("type") == "namespace" and
+                  t.get("name") == item["namespace"]]
+        tools = [t for space in spaces for t in space.get("tools") or []]
     return any(isinstance(t, dict) and t.get("type") == kind and t.get("name") == name
                for t in tools)
 
@@ -238,9 +244,12 @@ def output_items(turn):
                           "content": [{"type": "output_text", "text": item["message"],
                                        "annotations": []}]})
         elif "call" in item:
-            items.append({"type": "function_call", "id": new_id("fc"), "status": "completed",
-                          "call_id": item["id"], "name": item["call"],
-                          "arguments": json.dumps(item.get("arguments", {}))})
+            call = {"type": "function_call", "id": new_id("fc"), "status": "completed",
+                    "call_id": item["id"], "name": item["call"],
+                    "arguments": json.dumps(item.get("arguments", {}))}
+            if "namespace" in item:
+                call["namespace"] = item["namespace"]
+            items.append(call)
         else:
             items.append({"type": "custom_tool_call", "id": new_id("ctc"), "status": "completed",
                           "call_id": item["id"], "name": item["custom"], "input": item["input"]})

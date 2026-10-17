@@ -129,6 +129,7 @@ fault|qemu|core
 imagerace|-|full
 krffscheck|python3|full
 codexapi|codex,python3,openssl,git,unshare,ip|full|||x86_64
+museapi|curl,python3,openssl,git,unshare,ip|full|||x86_64
 conload|qemu,mformat|core
 drive|-|core
 textbusy|qemu|full||128|x86_64

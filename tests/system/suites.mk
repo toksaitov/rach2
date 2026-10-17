@@ -1523,6 +1523,15 @@ run-fakeapi: $(DEMO_CREDS) rach2 os-real-gnu-ext2 $(DEADLINE) $(RUNUTIL) $(MKMBR
 run-codexapi: $(DEADLINE) $(RUNUTIL)
 	sh tests/system/suites/codexapi.sh $(IMAGES_DIR)/codexapi-test
 
+# `tests/run museapi`: the Responses protocol of Meta's Model API in the fake
+# API server, proved against Muse Code at the pinned version, fetched and
+# checked against Meta's digest, in a fresh home and a network namespace with
+# only a loopback interface: Muse reads a file, runs a command, edits a file
+# and commits, and the server refuses a wrong tool result. No machine is
+# booted.
+run-museapi: $(DEADLINE) $(RUNUTIL)
+	sh tests/system/suites/museapi.sh $(IMAGES_DIR)/museapi-test
+
 # `tests/run exfat`: exFAT written from a program, read back after a reboot,
 # judged by the host's reader and the external checker where the host has
 # one, taken through a crash and its repair, written from BusyBox and by
