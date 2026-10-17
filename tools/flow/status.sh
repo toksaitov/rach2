@@ -4,6 +4,7 @@
 #
 # Usage: status.sh
 #        status.sh day DATE
+#        status.sh sizes
 #
 # It prints master's newest commit; the phase In progress as `board.sh phase`
 # reports it, whose last line says whether the phase is ready for its release;
@@ -22,6 +23,23 @@
 # to its own copy on the testing host, as the owner's loops do, counts the
 # commands that work in that copy. Each run then lists its admission waits,
 # their start times and holders, and whether each holder lives.
+#
+# Last come the resources: the free space of this machine's disk, of the
+# testing host's WSL root and /tmp, whose tmpfs is the host's memory, and of
+# its Windows drives C: and D:, which hold Windows and WSL's disk file; the
+# free inodes of the WSL root and /tmp; and the free memory of both machines.
+# The section ends with the verdict `resources: ok`, `resources: low: WHAT` or
+# `resources: critical: WHAT`, WHAT naming each reading below its threshold:
+# low is under 20% free, and critical under 10%, or under 40 GiB on a disk,
+# the floor that tests/run keeps. Memory is reported and not judged, since a
+# suite takes it for minutes. `resources: unknown` says that the host did not
+# answer.
+#
+# `sizes` prints the sizes of the build trees, the GNU caches, the ci
+# checkouts, the loops' state and /tmp on the testing host, and of the
+# loops' state and build trees here, largest first, for the manager to choose
+# what to remove when space is low. It reads every file of those trees, which
+# takes minutes, so the manager's check runs it only then.
 #
 # `day DATE` prints the facts of one day, DATE as YYYY-MM-DD, counted at the
 # owner's UTC+6, for the manager's day report: the commits that reached
@@ -99,6 +117,62 @@ tally()
     printf '%s\n' "$2" | grep . | sed 's/^/  /'
 }
 
+# readings: print one line for each resource the header names, as `NAME KIND
+# FREE TOTAL`, KIND being disk, tmpfs, inodes or memory, and FREE and TOTAL
+# in KiB, in inodes, or for this machine's memory in percent; a host that
+# does not answer gives `NAME missing 0 0`.
+readings()
+{
+    df -Pk "$HOME" | awk 'NR == 2 { print "mac:" $6, "disk", $4, $2 }'
+    memory_pressure -Q 2> /dev/null |
+        awk -F ': ' '/free percentage/ { sub(/%/, "", $2); print "mac:memory memory", $2, 100 }'
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" 'df -Pk / /d' 2> /dev/null |
+        awk 'NR > 1 { print "windows:" substr($1, 1, 1), "disk", $4, $2 } END { if (NR < 2) print "windows missing 0 0" }'
+    printf '%s\n' \
+        'df -Pk / /tmp | awk '"'"'NR > 1 { print "wsl:" $6, ($6 == "/tmp" ? "tmpfs" : "disk"), $4, $2 }'"'" \
+        'df -Pi / /tmp | awk '"'"'NR > 1 { print "wsl:" $6, "inodes", $4, $2 }'"'" \
+        'awk '"'"'{ m[$1] = $2 } END { print "wsl:memory memory", m["MemAvailable:"], m["MemTotal:"]; print "wsl:swap memory", m["SwapFree:"], m["SwapTotal:"] }'"'"' /proc/meminfo' |
+        ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" 'wsl.exe -u root -- sh -s' 2> /dev/null |
+        awk '{ print } END { if (NR < 1) print "wsl missing 0 0" }'
+}
+
+# resources: print the readings in words and the verdict, as the header says.
+resources()
+{
+    readings | awk '
+        NF == 4 {
+            pct = $4 > 0 ? int(100 * $3 / $4) : 0
+            if ($2 == "missing") { unknown = unknown " " $1; next }
+            if ($2 == "inodes") printf "%s inodes: %d%% free\n", $1, pct
+            else if ($1 == "mac:memory") printf "%s: %d%% free\n", $1, pct
+            else printf "%s: %.0f GiB free of %.0f (%d%%)\n", $1, $3 / 1048576, $4 / 1048576, pct
+            if ($2 == "memory") next
+            if (pct < 10 || ($2 == "disk" && $3 < 40 * 1048576)) critical = critical " " $1 " " $2
+            else if (pct < 20) low = low " " $1 " " $2
+        }
+        END {
+            if (critical != "") print "resources: critical:" critical
+            else if (low != "") print "resources: low:" low
+            else if (unknown != "") print "resources: unknown:" unknown " did not answer"
+            else print "resources: ok"
+        }'
+}
+
+# sizes: print the sizes the header names, in GiB, largest first.
+sizes()
+{
+    echo "== sizes on the testing host, in GiB"
+    printf '%s\n' 'du -sxk /home/*/rach2*/build /home/*/rach2*/build/vendor/gnu \
+        /home/*/rach2*/build/x86_64/vendor/gnu /home/ghrunner/rach2-ci-*/_work \
+        /home/*/flow /tmp 2> /dev/null | sort -rn |
+        awk '"'"'{ printf "%7.1f %s\n", $1 / 1048576, $2 }'"'" |
+        ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" 'wsl.exe -u root -- sh -s' 2>&1
+    echo "== sizes here, in GiB"
+    du -sxk "$HOME"/flow/* "$HOME"/flow/*/rach2/build "$HOME"/Desktop/rach2/build \
+        "$HOME"/Desktop/rach2/.claude/worktrees 2> /dev/null | sort -rn |
+        awk '{ printf "%7.1f %s\n", $1 / 1048576, $2 }'
+}
+
 # day DATE: print the facts of DATE, as the header says. Print nothing and fail
 # when one of them cannot be read whole.
 day()
@@ -127,6 +201,10 @@ day()
     list "phases closed" "$phases"
 }
 
+if [ "$1" = sizes ]; then
+    sizes
+    exit
+fi
 if [ "$1" = day ]; then
     [ -n "$2" ] || { echo "usage: status.sh day YYYY-MM-DD" >&2; exit 2; }
     day "$2"
@@ -211,3 +289,5 @@ fi
 echo "== testing host"
 printf '%s\n' 'uptime' 'free -g | sed -n 2p' 'echo "qemu $(pgrep -c qemu-system || true)"' |
     ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" 'wsl.exe -u root -- sh -s' 2>&1 | tail -n 3
+echo "== resources"
+resources
