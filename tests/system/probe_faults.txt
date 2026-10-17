@@ -86,6 +86,36 @@ new
     s->unreadable = 0;
 end
 
+fault exec-fd-not-followed
+probe fdexecmusl
+file rach2/sys/syscall_proc.c
+expect FDEXECMUSL FAIL (a descriptor opened for reading: EACCES)
+old
+        rc = exec_follow_fd(&ref, &link);
+new
+        rc = link != NULL ? exec_follow_fd(&ref, &link) : 0;
+end
+
+fault exec-fd-unnamed
+probe fdexecmusl
+file rach2/sys/syscall_proc.c
+expect FDEXECMUSL FAIL (/proc/self/exe of a tmpfs copy run by its descriptor)
+old
+    if (rc == 0 && link != NULL && link->dirpath[0] == '/' && keep->interp_file == NULL) {
+new
+    if (rc == 0 && link != NULL && link->dirpath[0] == '-' && keep->interp_file == NULL) {
+end
+
+fault exec-fd-script-named
+probe fdexecmusl
+file rach2/sys/syscall_proc.c
+expect FDEXECMUSL FAIL (/proc/self/exe of a script run by its descriptor)
+old
+    kfree(s->mm->exe);
+    s->mm->exe = NULL;
+new
+end
+
 # Signals and waits.
 
 fault sig-taker-stopped

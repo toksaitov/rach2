@@ -1984,6 +1984,34 @@ static int32_t proc_fd_share(fd_table_t *fds, int procfd, int flags)
 }
 
 /**
+ * The descriptor the /proc/PID/fd/N link `vp` names, into `*src`, and the
+ * process whose table has it, into `*owner`. Another process's descriptor
+ * needs a privileged caller or one with the process's effective user ID.
+ * 0, -ENOENT for no such process or descriptor, or -EACCES.
+ */
+static int32_t proc_fd_entry(const struct vpath *vp, process_t **owner, fd_entry_t **src)
+{
+    int pid = procfs_resolve_id(vp);
+    process_t *p = pid < 0 ? NULL : get_process((uint32_t)pid);
+    fd_entry_t *e;
+
+    if (!p || p->state == PROC_UNUSED || !p->fds || vp->procfd < 0 ||
+        vp->procfd >= fd_table_cap(p->fds)) {
+        return -ENOENT;
+    }
+    if (p->fds != current_proc->fds && !cred_privileged() && p->euid != current_proc->euid) {
+        return -EACCES;
+    }
+    e = &p->fds->entries[vp->procfd];
+    if (e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING)) {
+        return -ENOENT;
+    }
+    *owner = p;
+    *src = e;
+    return 0;
+}
+
+/**
  * open(2) of /proc/PID/fd/N, which /dev/fd/N, /dev/stdin, /dev/stdout and
  * /dev/stderr are for the caller, following the link to what the descriptor
  * is open on, as Linux does. A file or directory is opened again
@@ -1993,30 +2021,20 @@ static int32_t proc_fd_share(fd_table_t *fds, int procfd, int flags)
  * description shared with the new one (`proc_fd_share`), when the
  * descriptor has the access asked for and is no O_DIRECTORY open of what is
  * not a directory; Linux opens a pipe's other end for the other access, and
- * this answers EACCES. Another process's descriptor needs a privileged
- * caller or one with the process's effective user ID. Returns the new
- * descriptor, or a negative errno: -ENOENT for no such process or
- * descriptor, -EACCES, -ENOTDIR, or the open's.
+ * this answers EACCES. Returns the new descriptor, or a negative errno: an
+ * error of `proc_fd_entry`, -EACCES, -ENOTDIR, or the open's.
  */
 static int32_t proc_fd_open(const struct vpath *vp, int flags)
 {
-    int pid = procfs_resolve_id(vp);
-    process_t *p = pid < 0 ? NULL : get_process((uint32_t)pid);
     unsigned acc = (unsigned)flags & 3u;
     struct open_file *held;
+    process_t *p;
     fd_entry_t *src;
     int32_t rc;
 
-    if (!p || p->state == PROC_UNUSED || !p->fds || vp->procfd < 0 ||
-        vp->procfd >= fd_table_cap(p->fds)) {
-        return -ENOENT;
-    }
-    if (p->fds != current_proc->fds && !cred_privileged() && p->euid != current_proc->euid) {
-        return -EACCES;
-    }
-    src = &p->fds->entries[vp->procfd];
-    if (src->type == FD_TYPE_NONE || (src->flags & FD_FLAG_CLOSING)) {
-        return -ENOENT;
+    rc = proc_fd_entry(vp, &p, &src);
+    if (rc != 0) {
+        return rc;
     }
     if (src->ofd && src->ofd->vmnt && (src->type == FD_TYPE_FILE || src->type == FD_TYPE_DIR)) {
         held = src->ofd;
@@ -2033,6 +2051,37 @@ static int32_t proc_fd_open(const struct vpath *vp, int flags)
         return -ENOTDIR;
     }
     return proc_fd_share(p->fds, vp->procfd, flags);
+}
+
+int32_t proc_fd_file(const struct vpath *vp, struct vfs_ref *ref, struct open_file **held)
+{
+    struct vfs_mount *mnt;
+    process_t *p;
+    fd_entry_t *src;
+    int32_t rc;
+
+    rc = proc_fd_entry(vp, &p, &src);
+    if (rc != 0) {
+        return rc;
+    }
+    if (!src->ofd || !src->ofd->vmnt || (src->type != FD_TYPE_FILE && src->type != FD_TYPE_DIR)) {
+        return -EACCES;
+    }
+    *held = src->ofd;
+    fd_ofd_ref(*held);
+    mnt = (*held)->vmnt;
+    if (vfs_enter(mnt) != 0) {
+        fd_ofd_unref(*held);
+        *held = NULL;
+        return -ENOENT;
+    }
+    if (mnt->type->ns_serialised) {
+        vfs_ns_lock(mnt);
+    }
+    ref->mnt = mnt;
+    ref->node = (*held)->vnode;
+    vfs_ref_hold(ref);
+    return 0;
 }
 
 /**

@@ -94,6 +94,9 @@ static const char *const PROBES[] = {
     "musl/passwdmusl", "musl/addusermusl", "musl/loginmusl", "rebootprobe", "musl/readvmusl",
     "musl/timemusl", "musl/clockmusl", "musl/statmusl", "musl/stampmusl", "musl/execargmusl",
     "musl/spawnmusl", "musl/sigmusl",
+    /* execve of /proc/self/fd/N, which is glibc's fexecve without
+       execveat. */
+    "musl/fdexecmusl",
     /* clone in glibc's fork form, set_tid_address and futex. */
     "musl/clonemusl",
     /* Faults to handlers, SA_RESTART, the alternate stack, int3, the

@@ -1121,6 +1121,49 @@ static int32_t exec_copy_args(struct exec_state *s, const char __user *user_path
 }
 
 /**
+ * Go on from the node `ref` a locked walk ended on to the file it leads to,
+ * when it is a /proc/PID/fd/N link (`proc_fd_file`), with `*held` the
+ * description the caller puts once the mount is unlocked; any other node
+ * stays as it is. On an error the walk's node is released and nothing is
+ * held.
+ */
+static int32_t exec_follow_fd(struct vfs_ref *ref, struct open_file **held)
+{
+    const struct vpath *vp = vfs_synth_vpath(ref->mnt, ref->node);
+    struct vpath link;
+
+    if (vp == NULL || vp->kind != VNODE_PROC_FD_LINK) {
+        return 0;
+    }
+    link = *vp;
+    vfs_walk_unlock(ref->mnt);
+    vfs_ref_release(ref);
+    return proc_fd_file(&link, ref, held);
+}
+
+/**
+ * Have the new address space `keep` keep the file `ref` a locked walk ended
+ * on, its program or its ELF interpreter (`mm_exe_open`), and read a file of
+ * the KRFFS root through that, as `f` says. When the walk went on to the
+ * program from the descriptor's link whose description is `link`, the
+ * address space is named by the path that descriptor was opened by, if it
+ * has one. 0, -ETXTBSY or -ENOMEM.
+ */
+static int32_t exec_keep(struct exec_file *f, const struct vfs_ref *ref, struct mm *keep,
+                         const struct open_file *link)
+{
+    int32_t rc = mm_exe_open(keep, ref);
+
+    if (rc == 0 && f->ref.mnt == NULL) {
+        f->held = keep->interp_file ? keep->interp_file : keep->exe_file;
+    }
+    if (rc == 0 && link != NULL && link->dirpath[0] == '/' && keep->interp_file == NULL) {
+        mm_set_exe(keep, link->dirpath);
+    }
+    return rc;
+}
+
+/**
  * Open the file at the absolute, canonical `path` into `f` for execve to
  * read, and when `id` is not NULL, say in it what the file's set-id bits
  * would do. `path` starts at the caller's root, which chroot may have
@@ -1137,23 +1180,30 @@ static int32_t exec_copy_args(struct exec_state *s, const char __user *user_path
  * node opened, so a symbolic link replaced while the walk waits for a disk
  * cannot hand the open a program the check never saw.
  *
- * The walk may not arrive on the synthetic /dev and /proc mounts, which
- * hold no programs, so execve sees the mount boundary open sees and cannot
- * reach a file a hostile image placed below the synthetic prefix; a mount
- * with MS_NOEXEC holds none either. A directory is no program and is
- * -EACCES, as Linux's open for an exec answers. The caller needs the execute
- * right, root too. The set-id facts are taken while the node is at hand and
- * apply only once the exec commits. Setgid counts only with the
- * group-execute bit beside it, which is Linux's rule: without it a 02700
- * file owned 1000:0 passes the execute check on its owner bits, since the
- * check judges one identity class and the owner's first, and would hand its
- * executor egid 0. Setgid without group-execute is the mark of mandatory
- * locking in Unix, which nothing here implements. On a mount with MS_NOSUID
- * the bits are read and ignored. 0 or a negative errno.
+ * A walk that ends on a /proc/PID/fd/N link goes on to the file the
+ * descriptor is open on (`proc_fd_file`), as Linux's does, which is how
+ * the C library's fexecve runs a descriptor without execveat; every check
+ * below is made of that file, as of one its own path named. The program's
+ * name in its address space, which /proc/PID/exe and maps give, is then the
+ * path the descriptor was opened by, when it has one. Any other end on the
+ * synthetic /dev and /proc mounts, which hold no programs, is refused, so
+ * execve sees the mount boundary open sees and cannot reach a file a
+ * hostile image placed below the synthetic prefix; a mount with MS_NOEXEC
+ * holds none either. A directory is no program and is -EACCES, as Linux's
+ * open for an exec answers. The caller needs the execute right, root too.
+ * The set-id facts are taken while the node is at hand and apply only once
+ * the exec commits. Setgid counts only with the group-execute bit beside
+ * it, which is Linux's rule: without it a 02700 file owned 1000:0 passes the
+ * execute check on its owner bits, since the check judges one identity
+ * class and the owner's first, and would hand its executor egid 0. Setgid
+ * without group-execute is the mark of mandatory locking in Unix, which
+ * nothing here implements. On a mount with MS_NOSUID the bits are read and
+ * ignored. 0 or a negative errno.
  */
 static int32_t exec_open(struct exec_file *f, const char *path, int end, struct exec_setid *id,
                          struct mm *keep)
 {
+    struct open_file *link = NULL;
     struct vfs_ref ref;
     struct vfs_stat vst;
     int nosuid;
@@ -1165,6 +1215,9 @@ static int32_t exec_open(struct exec_file *f, const char *path, int end, struct 
     f->err = 0;
     f->readable = 0;
     rc = resolve_named(path + (path[0] == '/'), VFS_WALK_LOCK, end, &ref);
+    if (rc == 0) {
+        rc = exec_follow_fd(&ref, &link);
+    }
     if (rc != 0) {
         return rc;
     }
@@ -1198,15 +1251,13 @@ static int32_t exec_open(struct exec_file *f, const char *path, int end, struct 
         }
     }
     if (rc == 0 && keep != NULL) {
-        rc = mm_exe_open(keep, &ref);
-        if (rc == 0 && f->ref.mnt == NULL) {
-            f->held = keep->interp_file ? keep->interp_file : keep->exe_file;
-        }
+        rc = exec_keep(f, &ref, keep, link);
     }
     vfs_walk_unlock(ref.mnt);
     if (f->ref.mnt == NULL) {
         vfs_ref_release(&ref);
     }
+    fd_ofd_unref(link);
     if (rc == 0 && id != NULL) {
         id->mode = vst.mode & KRFFS_MODE_SUID;
         if ((vst.mode & KRFFS_MODE_SGID) && (vst.mode & 010u)) {
@@ -1224,14 +1275,15 @@ static int32_t exec_open(struct exec_file *f, const char *path, int end, struct 
 /**
  * Turn an exec of a script into an exec of its interpreter, when the file
  * `s` has open is not an ELF image: `exec_shebang` rewrites the arguments,
- * and the interpreter is opened in the script's place, as the program the new
- * address space keeps, which is Linux's exe for a script. A set-id script runs
- * as its invoker, as on Linux: the interpreter is what runs, it is not
- * set-id, and the script's bits would be unsafe, since the interpreter can
- * be made to read a different file than the one whose bits were checked. An
- * interpreter that is itself a script is -ENOEXEC: nothing here needs a
- * chain of them, and a chain could loop. 0, -ENOEXEC, or an error of the
- * open or the read.
+ * and the interpreter is opened in the script's place, as the program the
+ * new address space keeps and is named by, which is Linux's exe for a
+ * script; a name the script's descriptor gave (`exec_open`) is dropped. A
+ * set-id script runs as its invoker, as on Linux: the interpreter is what
+ * runs, it is not set-id, and the script's bits would be unsafe, since the
+ * interpreter can be made to read a different file than the one whose bits
+ * were checked. An interpreter that is itself a script is -ENOEXEC: nothing
+ * here needs a chain of them, and a chain could loop. 0, -ENOEXEC, or an
+ * error of the open or the read.
  */
 static int32_t exec_script(struct exec_state *s)
 {
@@ -1248,6 +1300,8 @@ static int32_t exec_script(struct exec_state *s)
     rc = exec_shebang(s, &s->argc, exec_file_read, &s->prog);
     exec_file_close(&s->prog);
     mm_exe_close(s->mm);
+    kfree(s->mm->exe);
+    s->mm->exe = NULL;
     if (rc <= 0) {
         return rc < 0 ? rc : -ENOEXEC;
     }
@@ -1467,7 +1521,9 @@ static int32_t exec_build(struct exec_state *s)
     s->mm->env_start = s->args.env_start;
     s->mm->env_end = s->args.env_end;
     k_memcpy(s->mm->auxv, s->args.auxv, sizeof(s->args.auxv));
-    mm_set_exe(s->mm, s->path);
+    if (s->mm->exe == NULL) {
+        mm_set_exe(s->mm, s->path);
+    }
     if (s->layout.interp[0] != '\0') {
         mm_set_interp(s->mm, s->layout.interp);
     }

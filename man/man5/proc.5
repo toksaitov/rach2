@@ -903,6 +903,10 @@ shares it, when the descriptor has the access asked for, and the open is
 otherwise, where Linux opens a pipe's other end anew.
 Another process's descriptor needs a privileged caller or one with the
 process's effective user ID.
+An
+.Xr execve 2
+of the link runs the file the descriptor is open on, with the checks of
+an exec by name, as on Linux.
 .Pa /dev/fd/N ,
 .Pa /dev/stdin ,
 .Pa /dev/stdout

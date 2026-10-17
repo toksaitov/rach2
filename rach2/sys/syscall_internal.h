@@ -220,6 +220,27 @@ int canonicalize_named(char *path, int *end);
  */
 int32_t resolve_named(const char *name, int walk, int dir, struct vfs_ref *ref);
 
+struct vpath;
+struct open_file;
+
+/**
+ * The file the /proc/PID/fd/N link `vp` reaches, for execve to run, into
+ * `ref`, which is left as a walk with VFS_WALK_LOCK leaves the node it ends
+ * on: the mount entered and, for a type that sets `ns_serialised`, locked,
+ * and the node held. A descriptor opened with O_PATH reaches its file, and so
+ * does one whose file has lost its name, as on Linux. The description is held
+ * across the wait for the lock, since another thread may close the
+ * descriptor meanwhile, and the node is read from it under the lock, where a
+ * relocation of the KRFFS root moves it; `*held` is that description, which
+ * the caller puts with `fd_ofd_unref` once the mount is unlocked. Another
+ * process's descriptor needs a privileged caller or one with its effective
+ * user ID. A descriptor of anything but a file or a directory, such as a
+ * pipe, a socket or a node of /dev or /proc, is -EACCES, which is what Linux
+ * answers for an exec of a file that is not regular. 0, -ENOENT for no such
+ * process or descriptor or a mount being unmounted, or -EACCES.
+ */
+int32_t proc_fd_file(const struct vpath *vp, struct vfs_ref *ref, struct open_file **held);
+
 /**
  * Check, before an operation on it, that the KRFFS root node the descriptor
  * `entry` has is still a file the descriptor may use: 0, or -EBADF.
@@ -768,7 +789,6 @@ long sys_capget(isr_params_t *params);
 
 long sys_capset(isr_params_t *params);
 
-struct open_file;
 struct shmem;
 
 /* What a System V attachment may do besides read. */
