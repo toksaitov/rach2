@@ -27,14 +27,15 @@
 # Last come the resources: the free space of this machine's disk, of the
 # testing host's WSL root and /tmp, whose tmpfs is the host's memory, and of
 # its Windows drives C: and D:, which hold Windows and WSL's disk file; the
-# free inodes of the WSL root and /tmp; and the free memory of both machines.
+# free inodes of this machine's disk, the WSL root and /tmp; and the free
+# memory of this machine, of Windows and of WSL, and WSL's free swap.
 # The section ends with the verdict `resources: ok`, `resources: low: WHAT` or
 # `resources: critical: WHAT`, WHAT naming each reading below its threshold:
 # low is under 20% free, and critical under 10%, or under 40 GiB on a disk,
 # the floor that tests/run keeps. Memory is reported and not judged, since a
-# suite takes it for minutes. A part of the host that does not answer has a
-# line `NAME: did not answer`; the verdict is then `resources: unknown`, or
-# a low or critical one that ends `; unknown: NAME did not answer`.
+# suite takes it for minutes. A reading that is missing or malformed has a
+# line `NAME KIND: did not answer`; the verdict is then `resources: unknown`,
+# or a low or critical one that ends `; unknown: NAME KIND ... did not answer`.
 #
 # `sizes` prints the sizes of the build trees, the GNU caches, the ci
 # checkouts, the loops' state and /tmp on the testing host, and of the
@@ -120,30 +121,37 @@ tally()
 
 # readings: print one line for each resource the header names, as `NAME KIND
 # FREE TOTAL`, KIND being disk, tmpfs, inodes or memory, and FREE and TOTAL
-# in KiB, in inodes, or for this machine's memory in percent; a host that
-# does not answer gives `NAME missing 0 0`.
+# in KiB, in inodes, or for this machine's memory in percent. A reading the
+# host does not give is missing; `resources` finds it so.
 readings()
 {
-    df -Pk "$HOME" | awk 'NR == 2 { print "mac:" $6, "disk", $4, $2 }'
+    df -Pk "$HOME" | awk 'NR == 2 { print "mac:" $NF, "disk", $4, $2 }'
+    df -Pi "$HOME" | awk 'NR == 2 { print "mac:" $NF, "inodes", $(NF - 2), $(NF - 3) + $(NF - 2) }'
     memory_pressure -Q 2> /dev/null |
         awk -F ': ' '/free percentage/ { sub(/%/, "", $2); print "mac:memory memory", $2, 100 }'
     ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" 'df -Pk / /d' 2> /dev/null |
-        awk 'NR > 1 { print "windows:" substr($1, 1, 1), "disk", $(NF - 2), $(NF - 4) } END { if (NR < 2) print "windows missing 0 0" }'
+        awk 'NR > 1 { print "windows:" substr($1, 1, 1), "disk", $(NF - 2), $(NF - 4) }'
+    # shellcheck disable=SC2016 # the dollars are PowerShell's and awk's
     printf '%s\n' \
         'df -Pk / /tmp | awk '"'"'NR > 1 { print "wsl:" $6, ($6 == "/tmp" ? "tmpfs" : "disk"), $4, $2 }'"'" \
         'df -Pi / /tmp | awk '"'"'NR > 1 { print "wsl:" $6, "inodes", $4, $2 }'"'" \
-        'awk '"'"'{ m[$1] = $2 } END { print "wsl:memory memory", m["MemAvailable:"], m["MemTotal:"]; print "wsl:swap memory", m["SwapFree:"], m["SwapTotal:"] }'"'"' /proc/meminfo' |
-        ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" 'wsl.exe -u root -- sh -s' 2> /dev/null |
-        awk '{ print } END { if (NR < 1) print "wsl missing 0 0" }'
+        'awk '"'"'{ m[$1] = $2 } END { print "wsl:memory memory", m["MemAvailable:"], m["MemTotal:"]; print "wsl:swap memory", m["SwapFree:"], m["SwapTotal:"] }'"'"' /proc/meminfo' \
+        'cd / && timeout 60 powershell.exe -NoProfile -Command '"'"'$o = Get-CimInstance Win32_OperatingSystem; "$($o.FreePhysicalMemory) $($o.TotalVisibleMemorySize)"'"'"' | tr -d "\r" | awk '"'"'NF == 2 { print "windows:memory memory", $1, $2 }'"'" |
+        ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" 'wsl.exe -u root -- sh -s' 2> /dev/null
 }
 
 # resources: print the readings in words and the verdict, as the header says.
 resources()
 {
     readings | awk '
-        NF == 4 {
+        BEGIN {
+            n = split("windows:C disk,windows:D disk,windows:memory memory,wsl:/ disk," \
+                "wsl:/tmp tmpfs,wsl:/ inodes,wsl:/tmp inodes,wsl:memory memory,wsl:swap memory," \
+                "mac:memory memory", want, ",")
+        }
+        NF == 4 && $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9]+$/ {
+            seen[$1 " " $2] = 1
             pct = $4 > 0 ? int(100 * $3 / $4) : 0
-            if ($2 == "missing") { printf "%s: did not answer\n", $1; unknown = unknown " " $1; next }
             if ($2 == "inodes") printf "%s inodes: %d%% free\n", $1, pct
             else if ($1 == "mac:memory") printf "%s: %d%% free\n", $1, pct
             else printf "%s: %.0f GiB free of %.0f (%d%%)\n", $1, $3 / 1048576, $4 / 1048576, pct
@@ -152,6 +160,12 @@ resources()
             else if (pct < 20) low = low " " $1 " " $2
         }
         END {
+            for (i = 1; i <= n; i++) {
+                if (want[i] in seen) continue
+                split(want[i], w, " ")
+                printf "%s %s: did not answer\n", w[1], w[2]
+                unknown = unknown " " w[1] " " w[2]
+            }
             u = unknown != "" ? "; unknown:" unknown " did not answer" : ""
             if (critical != "") print "resources: critical:" critical u
             else if (low != "") print "resources: low:" low u
