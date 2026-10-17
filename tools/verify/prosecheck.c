@@ -1369,16 +1369,21 @@ static int any_span_has(const struct spans *s, const char *needle)
     return 0;
 }
 
-/* The selftest's temporary directory. */
+/* The selftest's temporary directory, empty when there is none. */
 static char st_dir[256];
 
-/** Removes the selftest's fixtures and their directory. The fixtures are
-   flat files in one directory, so that is the whole of the cleanup. */
+/** Removes the selftest's fixtures and their directory, and empties
+   `st_dir`. The fixtures are flat files in one directory, so that is the
+   whole of the cleanup. The selftest also registers it with atexit, for an
+   exit on a fixture that cannot be written. */
 static void st_clean(void)
 {
-    DIR *dir = opendir(st_dir);
+    DIR *dir;
     struct dirent *ent;
 
+    if (st_dir[0] == '\0')
+        return;
+    dir = opendir(st_dir);
     if (dir != NULL) {
         while ((ent = readdir(dir)) != NULL) {
             char path[512];
@@ -1391,6 +1396,7 @@ static void st_clean(void)
         closedir(dir);
     }
     rmdir(st_dir);
+    st_dir[0] = '\0';
 }
 
 /** Writes `body` to the file `name` in the selftest's directory and returns
@@ -1484,9 +1490,11 @@ static int selftest(void)
     snprintf(st_dir, sizeof(st_dir), "%s/prosecheck-selftest.XXXXXX",
              getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");
     if (mkdtemp(st_dir) == NULL) {
+        st_dir[0] = '\0';
         fprintf(stderr, "prosecheck: cannot make a temporary directory\n");
         return 2;
     }
+    atexit(st_clean);
 
     st_widths("t.c", SELFTEST_C, 2);
     st_widths("t.sh", SELFTEST_SH, 2);

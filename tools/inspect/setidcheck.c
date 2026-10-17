@@ -3876,18 +3876,23 @@ static void init_line_of(const struct allow *allow, const char *stem, char *out,
         snprintf(out, out_len, "file 0755 /sbin/init build/utils/sbin/%s\n", e->init);
 }
 
-/* The selftest's temporary directory. */
+/* The selftest's temporary directory, empty when there is none. */
 static char st_tmp[256];
 
 /**
- * Remove the selftest's fixtures and their directory. The fixtures are flat
- * files in that one directory, so this is the whole of the cleanup.
+ * Remove the selftest's fixtures and their directory, and empty `st_tmp`. The
+ * fixtures are flat files in that one directory, so this is the whole of the
+ * cleanup. The selftest also registers it with atexit, for an exit on a
+ * fixture that cannot be written.
  */
 static void st_clean(void)
 {
-    DIR *dir = opendir(st_tmp);
+    DIR *dir;
     struct dirent *ent;
 
+    if (st_tmp[0] == '\0')
+        return;
+    dir = opendir(st_tmp);
     if (dir != NULL) {
         while ((ent = readdir(dir)) != NULL) {
             char path[512];
@@ -3900,6 +3905,7 @@ static void st_clean(void)
         closedir(dir);
     }
     rmdir(st_tmp);
+    st_tmp[0] = '\0';
 }
 
 /**
@@ -4558,9 +4564,11 @@ static int selftest(struct allow *allow)
     snprintf(st_tmp, sizeof(st_tmp), "%s/setidcheck-selftest.XXXXXX",
              getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");
     if (mkdtemp(st_tmp) == NULL) {
+        st_tmp[0] = '\0';
         fprintf(stderr, "check-setid: cannot make a temporary directory\n");
         return 2;
     }
+    atexit(st_clean);
     validate_table(allow, &got);
     for (i = 0; i < got.n; i++) {
         printf("  FAIL: the allowlist itself: %s\n", got.items[i]);
