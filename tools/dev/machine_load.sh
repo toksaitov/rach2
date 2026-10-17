@@ -18,9 +18,10 @@
 # the number of sessions the caller asked for.
 #
 # Each session's build output is kept in its own log beside the report, so a
-# failure can be read afterwards; the copies are left in a private directory on
-# the machine. The exit status is nonzero if any session failed to run, if
-# fewer reported than were asked for, or if any build failed.
+# failure can be read afterwards. Each session removes its copy of the tree
+# when it ends, which leaves an empty private directory on the machine. The
+# exit status is nonzero if any session failed to run, if fewer reported than
+# were asked for, or if any build failed.
 #
 # Before any session starts, machine_identity.sh must find the machine running
 # the slot and the kernel named in RACH2_MEASURE_SLOT and RACH2_MEASURE_KERNEL.

@@ -8,13 +8,24 @@
 # The session copies /src/rach2 to DIRECTORY and builds it with guest.mk
 # until SECONDS of guest time have passed since it started, then prints
 # `SESSION N builds B failed F before-deadline W late L` for machine_load.sh;
-# a build that finishes after the deadline counts as late.
+# a build that finishes after the deadline counts as late. The copy is
+# removed when the session ends, unless DIRECTORY was there before it began.
 set -eu
 session=$1
 seconds=$2
 directory=$3
+copy=
+# bash 3.2, the Mac's sh, gives an EXIT trap a status of 0 when `set -u`
+# stops a script that also has `set -e`, so a run that reached no success
+# exit fails here.
+finished=
+status=0
+trap 'status=$?; rm -rf ${copy:+"$copy"}; [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1; exit "$status"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+[ -e "$directory" ] || copy=$directory
 cp -r /src/rach2 "$directory"
-cd "$directory"
 
 # Print the whole seconds of /proc/uptime, or exit 1 when it does not read as
 # a number. /proc/uptime counts the boot processor's 10 ms ticks, and the
@@ -29,39 +40,46 @@ now()
     printf '%s\n' "$value"
 }
 
-start=$(now)
-end=$((start + seconds))
-built=0
-failed=0
-within=0
-late=0
-attempt=0
-previous=$start
-printf 'load-session: window: %s start %s deadline %s clock guest-tick-seconds\n' \
-    "$session" "$start" "$end"
-echo 'load-session: clock: missed ticks are lost without an invariant TSC; each session has its own window'
-while :; do
-    began=$(now)
-    [ "$began" -ge "$previous" ] || exit 1
-    [ "$began" -lt "$end" ] || break
-    attempt=$((attempt + 1))
-    rc=0
-    make -f guest.mk clean && make -f guest.mk || rc=$?
-    finished=$(now)
-    [ "$finished" -ge "$began" ] || exit 1
-    previous=$finished
-    printf 'load-session: build: %s start %s finish %s status %s clock guest-tick-seconds\n' \
-        "$attempt" "$began" "$finished" "$rc"
-    if [ "$rc" -ne 0 ]; then
-        failed=$((failed + 1))
-    else
-        built=$((built + 1))
-        if [ "$finished" -lt "$end" ]; then
-            within=$((within + 1))
+# The builds run in a subshell, so that the copy is not the working directory
+# of the shell that removes it, and the build times are kept apart from the
+# `finished` flag.
+(
+    cd "$directory"
+    start=$(now)
+    end=$((start + seconds))
+    built=0
+    failed=0
+    within=0
+    late=0
+    attempt=0
+    previous=$start
+    printf 'load-session: window: %s start %s deadline %s clock guest-tick-seconds\n' \
+        "$session" "$start" "$end"
+    echo 'load-session: clock: missed ticks are lost without an invariant TSC; each session has its own window'
+    while :; do
+        began=$(now)
+        [ "$began" -ge "$previous" ] || exit 1
+        [ "$began" -lt "$end" ] || break
+        attempt=$((attempt + 1))
+        rc=0
+        make -f guest.mk clean && make -f guest.mk || rc=$?
+        finished=$(now)
+        [ "$finished" -ge "$began" ] || exit 1
+        previous=$finished
+        printf 'load-session: build: %s start %s finish %s status %s clock guest-tick-seconds\n' \
+            "$attempt" "$began" "$finished" "$rc"
+        if [ "$rc" -ne 0 ]; then
+            failed=$((failed + 1))
         else
-            late=$((late + 1))
+            built=$((built + 1))
+            if [ "$finished" -lt "$end" ]; then
+                within=$((within + 1))
+            else
+                late=$((late + 1))
+            fi
         fi
-    fi
-done
-printf 'SESSION %s builds %s failed %s before-deadline %s late %s\n' \
-    "$session" "$built" "$failed" "$within" "$late"
+    done
+    printf 'SESSION %s builds %s failed %s before-deadline %s late %s\n' \
+        "$session" "$built" "$failed" "$within" "$late"
+)
+finished=1
