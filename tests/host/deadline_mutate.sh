@@ -72,7 +72,7 @@ restore()
 }
 
 # cleanup: stop the running test and restore the sources; the exit trap calls
-# it before it removes $scratch.
+# it, then removes $scratch if the script exits 0.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -82,7 +82,8 @@ cleanup()
     fi
     restore
 }
-trap 'cleanup; [ -z "$scratch" ] || rm -rf "$scratch"' EXIT
+st=0
+trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$scratch" ] || rm -rf "$scratch"' EXIT
 
 # run_phase PHASE TEST EXPECTED DETAILS: compile tests/host/TEST.c with its
 # host-deps, each kernel source taken from the private tree, and run it for at

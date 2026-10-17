@@ -108,7 +108,7 @@ restore()
 }
 
 # cleanup: stop the running test and restore the sources; the exit trap calls
-# it before it removes $work.
+# it, then removes $work if the script exits 0.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -118,7 +118,8 @@ cleanup()
     fi
     restore
 }
-trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase TEST PHASE EXPECTED MESSAGE: compile tests/host/TEST_hosttest.c
 # against the private copies as the host suite compiles it, run it for at most

@@ -34,8 +34,8 @@ child=
 mutated=0
 
 # cleanup: stop and reap the test, which is one process, and put the saved
-# unix_io.c back if the fault is in it; the exit trap calls it before it
-# removes $work.
+# unix_io.c back if the fault is in it; the exit trap calls it, then removes
+# $work if the script exits 0.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -50,7 +50,8 @@ cleanup()
     fi
 }
 
-trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 command -v perl >/dev/null
 cp -p "$source" "$work/unix_io.c.saved"

@@ -96,8 +96,8 @@ cp "$work/sys/mm/pagecache.c" "$work/pagecache.saved"
 cp "$work/sys/syscall_fs.c" "$work/syscall.saved"
 
 # cleanup: stop the running test and put the saved pagecache.c and syscall_fs.c
-# back; the script calls it after each fault, and the exit trap calls it before
-# it removes $work.
+# back; the script calls it after each fault, and the exit trap calls it, then
+# removes $work if the script exits 0.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -109,7 +109,8 @@ cleanup()
     cp "$work/syscall.saved" "$work/sys/syscall_fs.c"
     touch "$work/sys/mm/pagecache.c" "$work/sys/syscall_fs.c"
 }
-trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: extract sys_sync from the copy into
 # $work/syscall_sync.inc, compile pagecache_hosttest.c over it as $work/PHASE,

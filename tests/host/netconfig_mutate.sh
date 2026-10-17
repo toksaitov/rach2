@@ -71,8 +71,8 @@ cp "$netdev" "$work/netdev.saved"
 cp "$netconf" "$work/netconf.saved"
 
 # cleanup: stop the running test and put the saved netdev.c and netconf.c back;
-# the loop calls it after each fault, and the exit trap calls it before it
-# removes $work.
+# the loop calls it after each fault, and the exit trap calls it, then removes
+# $work if the script exits 0.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -84,7 +84,8 @@ cleanup()
     cp "$work/netconf.saved" "$netconf"
     touch "$netdev" "$netconf"
 }
-trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase TEST PHASE pass|fail MESSAGE: compile TEST_hosttest.c over the
 # copies as $work/TEST-PHASE and run it for at most 10 seconds. A pass must

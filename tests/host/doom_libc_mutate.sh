@@ -85,7 +85,8 @@ cleanup()
     fi
     restore
 }
-trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase NAME EXPECTED: require both ABIs to pass, or one to fail.
 run_phase()

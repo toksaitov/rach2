@@ -62,14 +62,15 @@ restore()
     touch "$source"
 }
 
-# cleanup: stop the running test and restore the source; the exit trap calls it
-# before it removes $fixtures and $work.
+# cleanup: stop the running test and restore the source; the exit trap calls it,
+# removes $fixtures, and removes $work if the script exits 0.
 cleanup()
 {
     stop_child
     restore
 }
-trap 'cleanup; [ -z "$fixtures" ] || rm -rf "$fixtures"; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ -z "$fixtures" ] || rm -rf "$fixtures"; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE EXPECTED DETAIL: compile the test against the private tree
 # and run it for at most 900 seconds; a pass must exit 0 and print its OK

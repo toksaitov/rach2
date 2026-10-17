@@ -66,7 +66,7 @@ cp "$source" "$work/ata.saved.c"
 child=
 
 # restore: stop the running test and put the saved ata.c back; the exit trap
-# calls it too, before it removes $work.
+# calls it too, then removes $work if the script exits 0.
 restore()
 {
     if [ -n "$child" ]; then
@@ -77,7 +77,8 @@ restore()
     cp "$work/ata.saved.c" "$source"
     touch "$source"
 }
-trap 'restore; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; restore; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE: compile ata_hosttest.c over the copy and run it for at most
 # 30 seconds. A PHASE ending in -mutated must fail with $failure in its log and

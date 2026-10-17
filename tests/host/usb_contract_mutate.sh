@@ -92,8 +92,8 @@ cp "$work/rach2/sys/usb/core.c" "$work/core.saved"
 cp "$work/rach2/sys/usb/xhci.c" "$work/xhci.saved"
 
 # cleanup: stop the running test and put the saved core.c and xhci.c back; the
-# loop calls it after each fault, and the exit trap calls it before it removes
-# $work.
+# loop calls it after each fault, and the exit trap calls it, then removes $work
+# if the script exits 0.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -105,7 +105,8 @@ cleanup()
     cp "$work/xhci.saved" "$work/rach2/sys/usb/xhci.c"
     touch "$work/rach2/sys/usb/core.c" "$work/rach2/sys/usb/xhci.c"
 }
-trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE TEST STATUS MESSAGE: compile TEST_hosttest.c over the private
 # tree as $work/PHASE-TEST, run it for at most 30 seconds, and exit unless it

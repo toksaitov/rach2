@@ -38,8 +38,8 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-exit.XXXXXX")
 child=
 
 # cleanup: stop the running test and put the saved exit.c back; the script
-# calls it after each fault, and the exit trap calls it before it removes
-# $work.
+# calls it after each fault, and the exit trap calls it, then removes $work if
+# the script exits 0.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -53,7 +53,8 @@ cleanup()
 mkdir "$work/proc"
 cp rach2/sys/proc/exit.c "$work/exit.saved"
 cp "$work/exit.saved" "$work/proc/exit.c"
-trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE: compile exit_hosttest.c over the copy as $work/PHASE and run
 # it for at most 10 seconds. The phases `mutated` and `kept` must fail with

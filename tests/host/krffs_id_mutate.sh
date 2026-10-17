@@ -148,8 +148,8 @@ restore()
     touch "$source"
 }
 
-# cleanup: stop the running test and restore the source; the exit trap calls it
-# before it removes $work.
+# cleanup: stop the running test and restore the source; the exit trap calls it,
+# then removes $work if the script exits 0.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -159,7 +159,8 @@ cleanup()
     fi
     restore
 }
-trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE pass|fail MESSAGE: compile the test over the private tree
 # and run it for at most 60 seconds. A passing phase must exit 0 with its OK

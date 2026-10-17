@@ -107,8 +107,8 @@ restore()
     cp "$work/process.saved" "$work/process.h"
     touch "$work/syscall_fs.c" "$work/process.h"
 }
-# cleanup: stop the running test and restore the source; the exit trap calls it
-# before it removes $work.
+# cleanup: stop the running test and restore the source; the exit trap calls it,
+# then removes $work if the script exits 0.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -118,7 +118,8 @@ cleanup()
     fi
     restore
 }
-trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: extract the functions and definitions from
 # the copies into $work/chown_plan.inc, compile fixtures/chown_plan.c over it

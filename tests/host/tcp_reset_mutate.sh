@@ -72,7 +72,8 @@ source="$work/rach2/sys/network/tcp/tcp.c"
 cp "$source" "$work/tcp.saved"
 
 # cleanup: stop the running test and put the saved tcp.c back; the loop calls
-# it after each fault, and the exit trap calls it before it removes $work.
+# it after each fault, and the exit trap calls it, then removes $work if the
+# script exits 0.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -83,7 +84,8 @@ cleanup()
     cp "$work/tcp.saved" "$source"
     touch "$source"
 }
-trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: compile tcp_reset_hosttest.c over the copy as
 # $work/PHASE, run it for at most 10 seconds, and exit unless it ends with

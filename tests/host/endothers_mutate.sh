@@ -83,8 +83,8 @@ restore()
     cp "$work/syscall_proc.saved" "$work/syscall_proc.c"
     touch "$work/syscall_proc.c"
 }
-# cleanup: stop the running test and restore the source; the exit trap calls it
-# before it removes $work.
+# cleanup: stop the running test and restore the source; the exit trap calls it,
+# then removes $work if the script exits 0.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -94,7 +94,8 @@ cleanup()
     fi
     restore
 }
-trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: extract proc_end_others from the copy into
 # $work/endothers.inc, compile fixtures/endothers.c over it as $work/PHASE, run

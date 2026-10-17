@@ -116,7 +116,7 @@ restore()
 }
 
 # cleanup: stop the running test and restore the sources; the exit trap calls
-# it before it removes $work.
+# it, then removes $work if the script exits 0.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -127,7 +127,8 @@ cleanup()
     restore
 }
 
-trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE: compile the host test $mutation belongs to over the private
 # tree and run it in a session of its own for at most 20 seconds. The phase

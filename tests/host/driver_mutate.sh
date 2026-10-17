@@ -167,7 +167,8 @@ source=
 cp -R rach2/sys "$work/sys"
 
 # restore: stop the running test and put the saved source back, if a fault is
-# in progress; the exit trap calls it too, before it removes $work.
+# in progress; the exit trap calls it too, then removes $work if the script
+# exits 0.
 restore()
 {
     if [ -n "$child" ]; then
@@ -180,7 +181,8 @@ restore()
         touch "$source"
     fi
 }
-trap 'restore; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; restore; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE: compile $test's host test with its own host-deps lines, as
 # the host suite reads them, the kernel's sources taken from the private copy,

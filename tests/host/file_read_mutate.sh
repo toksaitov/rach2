@@ -61,7 +61,8 @@ cleanup()
         touch "$work/utils/$program.c"
     done
 }
-trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: compile the private sources and require
 # STATUS and MESSAGE from a test bounded by ten seconds.

@@ -145,7 +145,8 @@ cp "$work/utils/"* "$work/saved/"
 child=
 
 # cleanup: stop the running test and put the saved sources back; the loop calls
-# it after each fault, and the exit trap calls it before it removes $work.
+# it after each fault, and the exit trap calls it, then removes $work if the
+# script exits 0.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -156,7 +157,8 @@ cleanup()
     cp "$work/saved/"* "$work/utils/"
     touch "$work/utils/"*.c
 }
-trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE TEST STATUS MESSAGE: compile TEST_hosttest.c over the copy as
 # $work/PHASE, run it for at most 15 seconds, and exit unless it ends with

@@ -119,8 +119,8 @@ done
 printf '#error "krffs-fuse-test: test stub was not selected"\n' > "$work/no-fuse/fuse.h"
 
 # restore: stop the running test and put the saved copy of the faulted source
-# back; the script calls it after each fault, and the exit trap calls it before
-# it removes $work.
+# back; the script calls it after each fault, and the exit trap calls it, then
+# removes $work if the script exits 0.
 restore()
 {
     if [ -n "$child" ]; then
@@ -135,7 +135,8 @@ restore()
     fi
 }
 
-trap 'restore; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; restore; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE: compile the test over the copy as $work/PHASE and run it for
 # at most 60 seconds, with its warnings not errors, since a fault may leave a

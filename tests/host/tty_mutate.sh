@@ -1,6 +1,7 @@
 #!/bin/sh
 # Prove tty_hosttest.c and n_tty_hosttest.c with private mutations of
-# rach2/sys/tty/tty.c, pty.c, pty.h and n_tty.c; every binary and log is kept.
+# rach2/sys/tty/tty.c, pty.c, pty.h and n_tty.c; a failed run keeps every
+# binary and log.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -158,7 +159,7 @@ restore()
 }
 
 # cleanup: stop the running test and restore the sources; the exit trap calls
-# it before it removes $work.
+# it, then removes $work if the script exits 0.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -169,7 +170,8 @@ cleanup()
     restore
 }
 
-trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # compile DIR NAME: compile $test's host test and the private n_tty.c into
 # $work/DIR/NAME, which `binary` names, and check from the dependency files

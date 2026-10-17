@@ -65,7 +65,7 @@ restore()
 }
 
 # cleanup: stop the running command and restore the sources; the exit trap
-# calls it before it removes $work.
+# calls it, then removes $work if the script exits 0.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -77,7 +77,8 @@ cleanup()
 }
 if [ -z "$texts" ]; then
     restore
-    trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
+    st=0
+    trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 fi
 
 # The flags krffs/Makefile gives the tools, fsviz's exception among them, and

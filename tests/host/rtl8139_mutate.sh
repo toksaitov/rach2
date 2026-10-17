@@ -36,7 +36,8 @@ source="$work/sys/network/driver/rtl8139.c"
 cp "$source" "$work/rtl8139.saved"
 
 # cleanup: stop the running test and put the saved rtl8139.c back; the script
-# calls it after the fault, and the exit trap calls it before it removes $work.
+# calls it after the fault, and the exit trap calls it, then removes $work if
+# the script exits 0.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -46,7 +47,8 @@ cleanup()
     cp "$work/rtl8139.saved" "$source"
 }
 
-trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE: compile rtl8139_hosttest.c over the copy as $work/PHASE and
 # run it for at most 10 seconds. The phase `mutated` must fail its row; any

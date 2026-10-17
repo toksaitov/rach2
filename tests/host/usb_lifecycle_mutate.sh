@@ -107,8 +107,8 @@ for name in core hub msc usb; do
 done
 
 # cleanup: stop the running test and put the saved core.c, hub.c, msc.c and
-# usb.c back; the loop calls it after each fault, and the exit trap calls it
-# before it removes $work.
+# usb.c back; the loop calls it after each fault, and the exit trap calls it,
+# then removes $work if the script exits 0.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -121,7 +121,8 @@ cleanup()
         touch "$work/rach2/sys/usb/$name.c"
     done
 }
-trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE TEST STATUS MESSAGE: compile TEST_hosttest.c over the private
 # tree as $work/PHASE, run it for at most 10 seconds, and exit unless it ends

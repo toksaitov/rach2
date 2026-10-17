@@ -57,7 +57,8 @@ cleanup()
     cp "$work/saved.c" "$work/sys/ipc/sysv.c"
     touch "$work/sys/ipc/sysv.c"
 }
-trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # Compile PHASE, run it with a bound and require STATUS and its result text.
 run_phase()

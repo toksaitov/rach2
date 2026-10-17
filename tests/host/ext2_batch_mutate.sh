@@ -163,7 +163,7 @@ fixtures=
 
 # cleanup: stop the running test's process group, remove the phase's fixtures
 # and put the saved ext2.c back; run_phase calls it after each run, and the
-# exit trap calls it before it removes $work.
+# exit trap calls it, then removes $work if the script exits 0.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -181,7 +181,8 @@ cleanup()
     cp "$work/source.saved" "$source"
     touch "$source"
 }
-trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE EXPECTED [MESSAGE [STATUS]]: compile ext2_hosttest.c over the
 # private tree with fixtures of its own and run it, in the mode the script was

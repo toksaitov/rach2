@@ -128,8 +128,8 @@ cp "$source" "$work/source.saved"
 child=
 
 # cleanup: stop the running test's process group and put the saved exfat.c
-# back; run_phase calls it after each run, and the exit trap calls it before
-# it removes $fixtures and $work.
+# back; run_phase calls it after each run, and the exit trap calls it, removes
+# $fixtures, and removes $work if the script exits 0.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -143,7 +143,8 @@ cleanup()
     cp "$work/source.saved" "$source"
     touch "$source"
 }
-trap 'cleanup; [ -z "$fixtures" ] || rm -rf "$fixtures"; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ -z "$fixtures" ] || rm -rf "$fixtures"; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # The test's own dependency lines, as the host suite reads them, with the
 # kernel's sources taken from the private tree.

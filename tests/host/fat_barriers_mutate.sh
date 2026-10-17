@@ -98,13 +98,14 @@ restore()
 }
 
 # cleanup: stop the running test and restore the sources; the exit trap calls
-# it before it removes $fixtures and $work.
+# it, removes $fixtures, and removes $work if the script exits 0 or ran --texts.
 cleanup()
 {
     stop_child
     restore
 }
-trap 'cleanup; [ -z "$fixtures" ] || rm -rf "$fixtures"; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ -z "$fixtures" ] || rm -rf "$fixtures"; { [ "$st" -ne 0 ] && [ -z "$texts" ]; } || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # The sites of a driver, one line each: the index, the line, the enclosing
 # function and the call; or, with `drop INDEX`, the driver rewritten with

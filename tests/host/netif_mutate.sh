@@ -83,8 +83,8 @@ cp rach2/sys/syscall_net.c "$work/syscall_net.saved"
 cp "$work/syscall_net.saved" "$work/syscall_net.c"
 
 # cleanup: stop the running test and put the saved syscall_net.c back; the loop
-# calls it after each fault, and the exit trap calls it before it removes
-# $work.
+# calls it after each fault, and the exit trap calls it, then removes $work if
+# the script exits 0.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -95,7 +95,8 @@ cleanup()
     touch "$work/syscall_net.c"
 }
 
-trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
+st=0
+trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS DETAIL: compile netif_hosttest.c over the copy as
 # $work/PHASE, run it for at most 10 seconds, and exit unless it ends with
