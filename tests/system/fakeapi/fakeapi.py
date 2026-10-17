@@ -42,8 +42,12 @@ not yet played, in the order the requests arrive, whatever connection each
 comes on. When the step's protocol accepts the request, the server answers as
 the step says and the step is played. Any other request is unexpected: it is
 answered with status 400 and a JSON error, recorded with the reason, and the
-run fails, while the step waits for the next request. A step may name its own
-"protocol"; otherwise it has the script's.
+run fails, while the step waits for the next request. A step with "unordered":
+true is played by the first request it accepts, whenever that comes: a client
+that sends two requests at once, such as a title for the conversation beside
+its first turn, sends them in either order. A request is checked against the
+step whose turn it is, then against each unordered step not yet played. A
+step may name its own "protocol"; otherwise it has the script's.
 
 A protocol is a module `proto_NAME.py` in this directory with two functions:
 
@@ -453,6 +457,7 @@ class Server:
         self.default = script.get("protocol", "plain")
         self.context = context
         self.played = 0
+        self.done = set()
         self.count = 0
         self.failures = []
         self.lock = threading.Lock()
@@ -482,26 +487,41 @@ class Server:
         self.record({"n": n, "failed": reason} if n else {"connection": where, "failed": reason})
         log(f"{where}: fail: {reason}")
 
+    def candidates(self):
+        """Return the numbers from 0 of the steps a request may play now.
+
+        The first is the ordered step whose turn it is, when one is left; the
+        unordered steps not yet played follow.
+        """
+        left = [i for i in range(len(self.steps)) if i not in self.done]
+        ordered = [i for i in left if not self.steps[i].get("unordered")]
+        return ordered[:1] + [i for i in left if self.steps[i].get("unordered")]
+
     def take(self, request):
-        """Number REQUEST and check it against the step whose turn it is.
+        """Number REQUEST and check it against the steps it may play.
 
         Return the request's number, the step and its number when the
-        request plays it, and otherwise the reason it is unexpected.
+        request plays it, and otherwise the reason it is unexpected, which
+        is the first step's.
         """
         with self.lock:
             self.count += 1
             n = self.count
-            if self.played == len(self.steps):
+            reasons = []
+            for i in self.candidates():
+                step = self.steps[i]
+                try:
+                    reason = self.module(step).check(step, request)
+                except Exception as error:  # a fault of the script or its protocol
+                    reason = f"the check failed: {type(error).__name__}: {error}"
+                if not reason:
+                    self.done.add(i)
+                    self.played += 1
+                    return n, step, i + 1, None
+                reasons.append(f"step {i + 1}: {reason}")
+            if not reasons:
                 return n, None, None, "the script has no step left"
-            step = self.steps[self.played]
-            try:
-                reason = self.module(step).check(step, request)
-            except Exception as error:  # a fault of the script or its protocol
-                reason = f"the check failed: {type(error).__name__}: {error}"
-            if reason:
-                return n, None, None, f"step {self.played + 1}: {reason}"
-            self.played += 1
-            return n, step, self.played, None
+            return n, None, None, reasons[0]
 
     def serve(self, request, rfile, wfile):
         """Answer one request; return whether its connection may take another."""
@@ -540,11 +560,12 @@ class Server:
         if self.failures:
             faults.append(f"{len(self.failures)} failed, the first {self.failures[0]}")
         if left:
-            step = json.dumps(self.steps[self.played])
+            first = min(i for i in range(len(self.steps)) if i not in self.done)
+            step = json.dumps(self.steps[first])
             if len(step) > 160:
                 step = step[:157] + "..."
             faults.append(f"{left} of {len(self.steps)} steps not played, "
-                          f"the first step {self.played + 1}: {step}")
+                          f"the first step {first + 1}: {step}")
         if faults:
             log("result: fail: " + "; ".join(faults))
             return 1

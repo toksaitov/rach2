@@ -1,0 +1,32 @@
+{
+  "protocol": "gemini",
+  "steps": [
+    {
+      "unordered": true,
+      "model": "gemini-3.1-flash-lite-preview",
+      "system": "conversation title generator",
+      "reply": [{"text": "Offline Fixture Update"}]
+    },
+    {
+      "tools": ["view_file", "run_command", "replace_file_content"],
+      "prompt": "change answer=before to answer=after",
+      "reply": [{"text": "Reading the fixture first."}, {"functionCall": {"id": "call_read", "name": "view_file", "args": {"AbsolutePath": "@REPO@/fixture.txt", "toolAction": "Reading the fixture", "toolSummary": "Fixture contents"}}}]
+    },
+    {
+      "results": [{"id": "call_read", "contains": ["1: rach2 fixture 493", "2: answer=before"]}],
+      "reply": [{"functionCall": {"id": "call_shell", "name": "run_command", "args": {"CommandLine": "test -f fixture.txt && printf 'SHELL_OK_493\\n'", "Cwd": "@REPO@", "WaitMsBeforeAsync": 10000, "toolAction": "Checking the fixture", "toolSummary": "Fixture check"}}}]
+    },
+    {
+      "results": [{"id": "call_shell", "contains": ["SHELL_OK_493"]}],
+      "reply": [{"functionCall": {"id": "call_edit", "name": "replace_file_content", "args": {"TargetFile": "@REPO@/fixture.txt", "Instruction": "Change answer=before to answer=after.", "Description": "Sets the fixture's answer.", "AllowMultiple": false, "TargetContent": "answer=before", "ReplacementContent": "answer=after", "StartLine": 2, "EndLine": 2, "toolAction": "Editing the fixture", "toolSummary": "Fixture edit"}}}]
+    },
+    {
+      "results": [{"id": "call_edit", "contains": ["fixture.txt"]}],
+      "reply": [{"functionCall": {"id": "call_commit", "name": "run_command", "args": {"CommandLine": "git add fixture.txt && git -c core.hooksPath=/dev/null commit -m 'Update the offline fixture' && printf 'COMMIT_OK_493\\n'", "Cwd": "@REPO@", "WaitMsBeforeAsync": 10000, "toolAction": "Committing the change", "toolSummary": "Fixture commit"}}}]
+    },
+    {
+      "results": [{"id": "call_read", "contains": ["1: rach2 fixture 493", "2: answer=before"]}, {"id": "call_shell", "contains": ["SHELL_OK_493"]}, {"id": "call_edit", "contains": ["fixture.txt"]}, {"id": "call_commit", "contains": ["Update the offline fixture", "1 file changed", "COMMIT_OK_493"]}],
+      "reply": [{"text": "The fixture was read, checked, edited and committed."}]
+    }
+  ]
+}
