@@ -16,11 +16,12 @@
 # cache. `tools/setup/doctor.sh` is the wider machine-setup report, which
 # covers QEMU, OVMF, the style tools and the optional tools.
 #
-# When RACH2_MIN_FREE_GIB is set above 0, the build is also refused while
-# the filesystem of the tree has less than that many GiB free. Space is read
-# on every run, since unlike the tools it changes between builds. The flow's
-# worker loops, ci and tools/dev/testing.sh set it to 40, so that a build on
-# the shared testing host stops before it fills the disk.
+# When RACH2_MIN_FREE_GIB is set above 0, the build is also refused while the
+# filesystem of the tree, or under WSL the Windows drive that holds the
+# distribution's disk, has less than that many GiB free (tools/setup/space.sh).
+# Space is read on every run, since unlike the tools it changes between builds.
+# The flow's worker loops, ci and tools/dev/testing.sh set it to 40, so that a
+# build on the shared testing host stops before it fills the disk.
 #
 # The cross toolchain checked is the one of the architecture in RACH2_ARCH
 # (mk/arch.sh), which the root Makefile passes: i686-elf-* for i686, the
@@ -119,22 +120,6 @@ probe() {
     return $ok
 }
 
-# space: fail when the tree's filesystem has less free space than
-# RACH2_MIN_FREE_GIB asks for, as the header says.
-space() {
-    floor=${RACH2_MIN_FREE_GIB:-0}
-    case "$floor" in
-        ''|*[!0-9]*)
-            echo "preflight: RACH2_MIN_FREE_GIB must be a whole number of GiB" >&2
-            return 1 ;;
-    esac
-    [ "$floor" -gt 0 ] || return 0
-    free=$(df -Pk "$REPO" | awk 'NR == 2 {printf "%d\n", $4 / 1048576}')
-    [ -n "$free" ] && [ "$free" -ge "$floor" ] && return 0
-    echo "preflight: ${free:-unknown} GiB free under $REPO, below the $floor GiB the build needs" >&2
-    return 1
-}
-
 case "${1-}" in
     --report)
         probe report
@@ -147,7 +132,7 @@ case "${1-}" in
         ;;
 esac
 
-space || exit 1
+sh "$REPO/tools/setup/space.sh" preflight 'the build' "${RACH2_MIN_FREE_GIB:-0}" "$REPO" || exit 1
 current=$(fingerprint)
 if [ -f "$STAMP" ] && [ "$current" = "$(cat "$STAMP")" ]; then
     case "$current" in

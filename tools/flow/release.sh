@@ -324,7 +324,7 @@ build()
         if grep -q 'testing: the copy at .* is in use\|testing: the host did not answer' "$state/build.log"; then
             later "the build copy is busy or the host does not answer"
         fi
-        if grep -q '^preflight: .* GiB free under .*, below the' "$state/build.log"; then
+        if grep -q '^preflight: result: refused: .* GiB the build needs$' "$state/build.log"; then
             later "the testing host is short of space"
         fi
         fail build "the build failed: $(tail -n 3 "$state/build.log" | tr '\n' ' ')"
