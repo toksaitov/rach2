@@ -19,7 +19,8 @@
 # root has it and takes each download through `fetched NAME`. A recipe may
 # also define package_verify, which checks the vendor's signatures on the
 # downloads, and package_check DIR, which runs the staged program on the
-# build host with a home of its own in SCRATCH.
+# build host. Both may write in SCRATCH, an empty directory of the package's
+# own that is removed when it is staged.
 #
 # A download is kept in ../downloads/agents/NAME/ once and checked against
 # its digest each time `fetched` names it; a file with another digest is
@@ -138,6 +139,11 @@ stage()
     for f in $(printf '%s\n' "$FILES" | awk 'NF { print $1 }'); do
         fetched "$f" > /dev/null
     done
+    SCRATCH=
+    trap '[ -z "$SCRATCH" ] || rm -rf "$SCRATCH"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/rach2-agents.XXXXXX")
     if command -v package_verify > /dev/null 2>&1; then
         package_verify
     fi
@@ -153,11 +159,6 @@ stage()
         fi
     done
     if command -v package_check > /dev/null 2>&1; then
-        SCRATCH=
-        trap '[ -z "$SCRATCH" ] || rm -rf "$SCRATCH"' EXIT
-        trap 'exit 130' INT
-        trap 'exit 143' TERM
-        SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/rach2-agents.XXXXXX")
         package_check "$STAGE"
     fi
     echo "gnu: agents: $NAME $VERSION: $(cd "$STAGE" && find . ! -type d | wc -l | tr -d ' ') files staged"

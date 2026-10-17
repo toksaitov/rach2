@@ -1,0 +1,218 @@
+.Dd October 18, 2026
+.Dt CLAUDE 1
+.Os
+.Sh NAME
+.Nm claude
+.Nd Anthropic's Claude Code, a coding agent for the terminal
+.Sh SYNOPSIS
+.Nm
+.Op Ar options
+.Op Ar prompt
+.Nm
+.Fl p
+.Ar prompt
+.Nm
+.Ar command
+.Op Ar options
+.Sh DESCRIPTION
+.Nm
+reads and edits the files of the directory it starts in, runs shell
+commands and
+.Xr git 1 ,
+and asks Anthropic's models what to do next.
+With no
+.Ar command
+it starts an interactive session on the terminal, with the
+.Ar prompt
+as its first message when one is given;
+.Fl p
+answers one prompt on standard output and exits.
+.Ql claude --help
+lists the options and commands, and
+.Ql claude Ar command Fl -help
+describes one.
+.Pp
+The x86-64 GNU root has
+.Nm
+when it is built with the agents layer:
+.Ql make ARCH=x86_64 GNU_AGENTS=claude os-real-gnu-ext2 ,
+or
+.Ql GNU_AGENTS=all ,
+which the release to the installed machine uses.
+The program is Anthropic's linux-x64 build of version 2.1.296, one
+executable linked against glibc, installed unmodified.
+.Pa /opt/claude/bin/claude
+is the program, and
+.Pa /usr/bin/claude
+and
+.Pa /bin/claude
+link to it.
+Claude Code is proprietary; Anthropic's notice, from the npm package of the
+same version, is
+.Pa /opt/claude/LICENSE.md .
+The build fetches the program for the person who builds the image, and each
+person signs in with an account of their own.
+.Pp
+.Ql claude doctor
+reports two warnings that do not apply here: that
+.Pa ~/.local/bin
+is not on the path and that
+.Pa ~/.local/bin/claude
+is missing.
+Those are where Anthropic's installer puts the program; this system
+installs it under
+.Pa /opt .
+.Ss Signing in over SSH
+.Nm
+asks for a sign-in when it starts without one, and
+.Ql claude auth login ,
+or
+.Ql /login
+in a session, signs in again.
+It prints an address at
+.Lk https://claude.com
+to open in a web browser.
+The machine has no browser, so open that address on any other computer and
+sign in there.
+The browser cannot reach the callback that
+.Nm
+listens on, so it shows a code instead; paste the code at the
+.Dq Paste code here if prompted
+prompt.
+.Ql claude auth login --console
+signs in to an Anthropic Console account instead of a Claude subscription.
+.Ql claude auth status
+prints the method in use, and exits with status 1 when there is none;
+.Ql claude auth logout
+signs out.
+.Pp
+Instead of signing in, a Console API key in the environment variable
+.Ev ANTHROPIC_API_KEY
+is used as it is and not stored.
+An interactive session asks once whether to use it and remembers the
+answer;
+.Fl p
+uses it without asking.
+.Pp
+.Ql claude setup-token
+takes the same browser sign-in, prints an OAuth token that is valid for a
+year, and stores nothing.
+Set
+.Ev CLAUDE_CODE_OAUTH_TOKEN
+to that token where no sign-in can be made, such as a script or a loop on
+the machine.
+It needs a Claude subscription and serves model requests only.
+When several credentials are present,
+.Ev ANTHROPIC_API_KEY
+comes before
+.Ev CLAUDE_CODE_OAUTH_TOKEN ,
+and both come before a sign-in.
+.Ss Where the credentials live
+A sign-in is kept in
+.Pa ~/.claude/.credentials.json ,
+with mode 0600.
+The settings and the state of the projects are in
+.Pa ~/.claude.json ,
+and the sessions, their transcripts, the plugins and caches under
+.Pa ~/.claude .
+.Ev CLAUDE_CONFIG_DIR
+names another directory in place of
+.Pa ~/.claude ,
+which keeps a second account apart.
+.Ss Updates, telemetry and the sandbox
+The managed settings,
+.Pa /etc/claude-code/managed-settings.json ,
+which come before a user's or a project's settings, set
+.Ev DISABLE_UPDATES
+to 1.
+That stops the update a session would start in the background, and
+.Ql claude update
+and
+.Ql claude install
+print
+.Dq Updates are disabled by your administrator
+and change nothing, so the program stays the version the image has.
+A new version comes with a new build of the root.
+.Pp
+.Nm
+sends usage events to Anthropic and logs to Datadog, and fetches feature
+flags from Anthropic, unless
+.Ev DISABLE_TELEMETRY
+is set to 1.
+.Ev CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+set to 1 stops those and the other requests that are not for the model or a
+sign-in, such as the fetch of its change log, but for the download of
+Anthropic's catalog of plugins, which
+.Ev CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL
+set to 1 stops.
+.Pp
+The sandbox that
+.Nm
+can run shell commands in needs bubblewrap, which this release does not
+provide.
+The managed settings turn it off, so the commands it runs have the user's
+own rights, within what the permission mode of the session allows.
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev ANTHROPIC_API_KEY
+a Console API key to use in place of a sign-in
+.It Ev CLAUDE_CODE_OAUTH_TOKEN
+a token from
+.Ql claude setup-token
+.It Ev CLAUDE_CONFIG_DIR
+the directory to use in place of
+.Pa ~/.claude
+.It Ev HTTPS_PROXY
+a proxy for every request
+.It Ev NODE_EXTRA_CA_CERTS
+a file of certificate authorities to trust besides those of
+.Pa /etc/ssl/certs
+.It Ev TMPDIR
+where
+.Nm
+makes
+.Pa claude-UID ,
+its scratch directory, and
+.Pa cc-socks ;
+.Pa /tmp
+when unset
+.El
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /opt/claude/bin/claude
+the program
+.It Pa /opt/claude/LICENSE.md
+Anthropic's notice
+.It Pa /etc/claude-code/managed-settings.json
+the settings that turn updates and the sandbox off
+.It Pa ~/.claude/.credentials.json
+the sign-in
+.It Pa ~/.claude.json
+the settings and the state of each project
+.It Pa ~/.claude
+sessions, transcripts, plugins and caches
+.El
+.Sh EXIT STATUS
+0 on success and 1 on an error, which includes
+.Ql claude auth status
+with no sign-in.
+.Sh EXAMPLES
+Sign in, then work in a repository:
+.Bd -literal -offset indent
+$ claude auth login
+$ cd project
+$ claude
+.Ed
+.Pp
+Answer one prompt with a token made elsewhere by
+.Ql claude setup-token :
+.Bd -literal -offset indent
+$ export CLAUDE_CODE_OAUTH_TOKEN=token
+$ claude -p "Summarize the changes since the last tag"
+.Ed
+.Sh SEE ALSO
+.Xr gh 1 ,
+.Xr git 1 ,
+.Xr ssh 1
+.Pp
+.Lk https://code.claude.com/docs "The Claude Code documentation"

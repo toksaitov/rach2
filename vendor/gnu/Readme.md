@@ -1,6 +1,6 @@
 # The GNU layer
 
-The GNU layer builds a GNU system for Rach2: a cross toolchain with glibc, 72 port recipes built with it, a native GCC and GDB, the SpiderMonkey shell, and Debian's chromium-headless-shell, all installed over the os-real system in an ext2 root that the kernel boots. On x86-64 the root can also have the [agents layer](agents/Readme.md), vendors' published builds of coding agents and their tools, such as GitHub's `gh`. It gives Rach2 the dynamically linked programs a person expects of a Linux machine (bash, coreutils, OpenSSH, Python, Git, GCC), which the static musl system does not have. It builds on an x86-64 Linux host only and is not part of `make`. The targets are `i686-linux-gnu` and `x86_64-rach2-linux-gnu`, as `ARCH` selects.
+The GNU layer builds a GNU system for Rach2: a cross toolchain with glibc, 72 port recipes built with it, a native GCC and GDB, the SpiderMonkey shell, and Debian's chromium-headless-shell, all installed over the os-real system in an ext2 root that the kernel boots. On x86-64 the root can also have the [agents layer](agents/Readme.md), vendors' published builds of coding agents and their tools, such as Anthropic's Claude Code and GitHub's `gh`. It gives Rach2 the dynamically linked programs a person expects of a Linux machine (bash, coreutils, OpenSSH, Python, Git, GCC), which the static musl system does not have. It builds on an x86-64 Linux host only and is not part of `make`. The targets are `i686-linux-gnu` and `x86_64-rach2-linux-gnu`, as `ARCH` selects.
 
 ## Use
 
