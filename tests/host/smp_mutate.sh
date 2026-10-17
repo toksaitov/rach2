@@ -92,9 +92,10 @@ runlock_hold "$repo" smp-proof "$repo/tests/host/smp_mutate.sh" "$@"
 mkdir -p build/tests
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+stopped=
+trap 'stopped=1; exit 129' HUP
+trap 'stopped=1; exit 130' INT
+trap 'stopped=1; exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/smp-proof.XXXXXX")
 child=
 mkdir "$work/rach2"
@@ -104,7 +105,7 @@ cp "$smp" "$work/smp.saved"
 
 # cleanup: stop the running test and put the saved smp.c back; the loop calls
 # it after each fault, and the exit trap calls it, then removes $work if the
-# script exits 0.
+# script exits 0 or a signal stops it.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -116,7 +117,7 @@ cleanup()
     touch "$smp"
 }
 st=0
-trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'st=$?; cleanup; { [ "$st" -ne 0 ] && [ -z "${stopped:-}" ]; } || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # The test's own dependency and flag lines, as the host suite reads them,
 # with its kernel sources taken from the private tree.

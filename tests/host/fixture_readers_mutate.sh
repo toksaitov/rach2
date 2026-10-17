@@ -76,9 +76,10 @@ runlock_hold "$repo" fixture-mutation "$repo/tests/host/fixture_readers_mutate.s
 mkdir -p build
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+stopped=
+trap 'stopped=1; exit 129' HUP
+trap 'stopped=1; exit 130' INT
+trap 'stopped=1; exit 143' TERM
 work=$(mktemp -d build/fixture-readers-proof.XXXXXX)
 child=
 source=
@@ -98,7 +99,7 @@ restore()
 }
 
 # cleanup: stop the running test and restore the builder; the exit trap calls
-# it, then removes $work if the script exits 0.
+# it, then removes $work if the script exits 0 or a signal stops it.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -110,7 +111,7 @@ cleanup()
 }
 
 st=0
-trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'st=$?; cleanup; { [ "$st" -ne 0 ] && [ -z "${stopped:-}" ]; } || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE KIND EXPECTED: compile KINDcheck_hosttest.c and run it in a
 # session of its own for at most 60 seconds. With EXPECTED empty it must pass;

@@ -46,9 +46,10 @@ sources='proc/wait_queue.c io/poll.c proc/process.c'
 # which only mktemp sets.
 scratch=
 trap '[ -z "$scratch" ] || rm -rf "$scratch"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+stopped=
+trap 'stopped=1; exit 129' HUP
+trap 'stopped=1; exit 130' INT
+trap 'stopped=1; exit 143' TERM
 if [ -z "$texts" ]; then
     mkdir -p build
     scratch=$(mktemp -d "$repo/build/deadline-proof.XXXXXX")
@@ -72,7 +73,7 @@ restore()
 }
 
 # cleanup: stop the running test and restore the sources; the exit trap calls
-# it, then removes $scratch if the script exits 0.
+# it, then removes $scratch if the script exits 0 or a signal stops it.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -83,7 +84,7 @@ cleanup()
     restore
 }
 st=0
-trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$scratch" ] || rm -rf "$scratch"' EXIT
+trap 'st=$?; cleanup; { [ "$st" -ne 0 ] && [ -z "${stopped:-}" ]; } || [ -z "$scratch" ] || rm -rf "$scratch"' EXIT
 
 # run_phase PHASE TEST EXPECTED DETAILS: compile tests/host/TEST.c with its
 # host-deps, each kernel source taken from the private tree, and run it for at

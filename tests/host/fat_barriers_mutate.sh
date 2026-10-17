@@ -45,9 +45,10 @@ fi
 work=
 fixtures=
 trap '[ -z "$fixtures" ] || rm -rf "$fixtures"; [ -z "$work" ] || rm -rf "$work"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+stopped=
+trap 'stopped=1; exit 129' HUP
+trap 'stopped=1; exit 130' INT
+trap 'stopped=1; exit 143' TERM
 if [ -n "$texts" ]; then
     # --texts lists the sites of the tree's drivers alone, in a directory of
     # its own.
@@ -98,14 +99,15 @@ restore()
 }
 
 # cleanup: stop the running test and restore the sources; the exit trap calls
-# it, removes $fixtures, and removes $work if the script exits 0 or ran --texts.
+# it, removes $fixtures, and removes $work if the script exits 0, ran --texts or
+# was stopped by a signal.
 cleanup()
 {
     stop_child
     restore
 }
 st=0
-trap 'st=$?; cleanup; [ -z "$fixtures" ] || rm -rf "$fixtures"; { [ "$st" -ne 0 ] && [ -z "$texts" ]; } || [ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'st=$?; cleanup; [ -z "$fixtures" ] || rm -rf "$fixtures"; { [ "$st" -ne 0 ] && [ -z "$texts" ] && [ -z "${stopped:-}" ]; } || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # The sites of a driver, one line each: the index, the line, the enclosing
 # function and the call; or, with `drop INDEX`, the driver rewritten with

@@ -24,9 +24,10 @@ fi
 work=
 fixtures=
 trap '[ -z "$fixtures" ] || rm -rf "$fixtures"; [ -z "$work" ] || rm -rf "$work"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+stopped=
+trap 'stopped=1; exit 129' HUP
+trap 'stopped=1; exit 130' INT
+trap 'stopped=1; exit 143' TERM
 if [ -n "$texts" ]; then
     work=
     source=rach2/sys/fs/fat32.c
@@ -63,14 +64,15 @@ restore()
 }
 
 # cleanup: stop the running test and restore the source; the exit trap calls it,
-# removes $fixtures, and removes $work if the script exits 0.
+# removes $fixtures, and removes $work if the script exits 0 or a signal stops
+# it.
 cleanup()
 {
     stop_child
     restore
 }
 st=0
-trap 'st=$?; cleanup; [ -z "$fixtures" ] || rm -rf "$fixtures"; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'st=$?; cleanup; [ -z "$fixtures" ] || rm -rf "$fixtures"; { [ "$st" -ne 0 ] && [ -z "${stopped:-}" ]; } || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE EXPECTED DETAIL: compile the test against the private tree
 # and run it for at most 900 seconds; a pass must exit 0 and print its OK

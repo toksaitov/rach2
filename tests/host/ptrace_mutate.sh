@@ -163,9 +163,10 @@ fi
 runlock_hold "$repo" ptrace-proof "$repo/tests/host/ptrace_mutate.sh" "$@"
 if [ "$#" -eq 0 ]; then
     # A group signal reaches the child too; these run once it has restored.
-    trap 'exit 129' HUP
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
+    stopped=
+    trap 'stopped=1; exit 129' HUP
+    trap 'stopped=1; exit 130' INT
+    trap 'stopped=1; exit 143' TERM
     sh "$repo/tests/host/ptrace_mutate.sh" ptrace
     sh "$repo/tests/host/ptrace_mutate.sh" debugreg
     exit 0
@@ -180,9 +181,9 @@ fi
 mkdir -p build/tests
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'stopped=1; exit 129' HUP
+trap 'stopped=1; exit 130' INT
+trap 'stopped=1; exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/$kind-proof.XXXXXX")
 mkdir "$work/rach2"
 cp -R rach2/sys "$work/rach2/"
@@ -193,7 +194,7 @@ extra=
 [ "$kind" != debugreg ] || extra=-DRACH2_HOST_CPU
 
 # cleanup: stop the running test and put the saved source back; the exit trap
-# calls it, then removes $work if the script exits 0.
+# calls it, then removes $work if the script exits 0 or a signal stops it.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -205,7 +206,7 @@ cleanup()
     touch "$file"
 }
 st=0
-trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'st=$?; cleanup; { [ "$st" -ne 0 ] && [ -z "${stopped:-}" ]; } || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: compile KIND_hosttest.c over the copy as
 # $work/PHASE, run it for at most 10 seconds, and exit unless it ends with

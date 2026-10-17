@@ -144,9 +144,10 @@ esac
 mkdir -p build/tests
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+stopped=
+trap 'stopped=1; exit 129' HUP
+trap 'stopped=1; exit 130' INT
+trap 'stopped=1; exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/ext2-batch-proof.XXXXXX")
 mkdir -p "$work/rach2" "$work/tests/host"
 cp -R rach2/sys "$work/rach2/sys"
@@ -162,8 +163,8 @@ child=
 fixtures=
 
 # cleanup: stop the running test's process group, remove the phase's fixtures
-# and put the saved ext2.c back; run_phase calls it after each run, and the
-# exit trap calls it, then removes $work if the script exits 0.
+# and put the saved ext2.c back; run_phase calls it after each run, and the exit
+# trap calls it, then removes $work if the script exits 0 or a signal stops it.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -182,7 +183,7 @@ cleanup()
     touch "$source"
 }
 st=0
-trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'st=$?; cleanup; { [ "$st" -ne 0 ] && [ -z "${stopped:-}" ]; } || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE EXPECTED [MESSAGE [STATUS]]: compile ext2_hosttest.c over the
 # private tree with fixtures of its own and run it, in the mode the script was

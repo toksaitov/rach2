@@ -158,9 +158,10 @@ runlock_hold "$repo" driver-mutation "$repo/tests/host/driver_mutate.sh" "$@"
 mkdir -p build/review-proof
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+stopped=
+trap 'stopped=1; exit 129' HUP
+trap 'stopped=1; exit 130' INT
+trap 'stopped=1; exit 143' TERM
 work=$(mktemp -d "$repo/build/review-proof/drivers.XXXXXX")
 child=
 source=
@@ -168,7 +169,7 @@ cp -R rach2/sys "$work/sys"
 
 # restore: stop the running test and put the saved source back, if a fault is
 # in progress; the exit trap calls it too, then removes $work if the script
-# exits 0.
+# exits 0 or a signal stops it.
 restore()
 {
     if [ -n "$child" ]; then
@@ -182,7 +183,7 @@ restore()
     fi
 }
 st=0
-trap 'st=$?; restore; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'st=$?; restore; { [ "$st" -ne 0 ] && [ -z "${stopped:-}" ]; } || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE: compile $test's host test with its own host-deps lines, as
 # the host suite reads them, the kernel's sources taken from the private copy,

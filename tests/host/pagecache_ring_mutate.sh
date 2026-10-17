@@ -50,9 +50,10 @@ runlock_hold "$repo" pagecache-ring-proof "$repo/tests/host/pagecache_ring_mutat
 mkdir -p build/tests
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+stopped=
+trap 'stopped=1; exit 129' HUP
+trap 'stopped=1; exit 130' INT
+trap 'stopped=1; exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/pagecache-ring-proof.XXXXXX")
 child=
 cp -R rach2/sys "$work/sys"
@@ -66,7 +67,7 @@ restore()
     touch "$source"
 }
 # cleanup: stop the running test and restore the source; the exit trap calls it,
-# then removes $work if the script exits 0.
+# then removes $work if the script exits 0 or a signal stops it.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -77,7 +78,7 @@ cleanup()
     restore
 }
 st=0
-trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'st=$?; cleanup; { [ "$st" -ne 0 ] && [ -z "${stopped:-}" ]; } || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: compile and run the test for at most 60
 # seconds; it must exit with STATUS and print MESSAGE.

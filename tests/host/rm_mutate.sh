@@ -49,9 +49,10 @@ runlock_hold "$repo" rm-mutation "$repo/tests/host/rm_mutate.sh" "$@"
 mkdir -p build/tests
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+stopped=
+trap 'stopped=1; exit 129' HUP
+trap 'stopped=1; exit 130' INT
+trap 'stopped=1; exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/rm-proof.XXXXXX")
 child=
 mkdir "$work/utils"
@@ -60,7 +61,7 @@ cp "$work/utils/rm.c" "$work/rm.saved"
 
 # cleanup: stop the running test and put the saved rm.c back; the script calls
 # it after the fault, and the exit trap calls it, then removes $work if the
-# script exits 0.
+# script exits 0 or a signal stops it.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -72,7 +73,7 @@ cleanup()
     touch "$work/utils/rm.c"
 }
 st=0
-trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'st=$?; cleanup; { [ "$st" -ne 0 ] && [ -z "${stopped:-}" ]; } || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: compile rm_hosttest.c over the copy as
 # $work/PHASE, run it for at most 10 seconds, and exit unless it ends with

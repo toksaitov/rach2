@@ -135,9 +135,10 @@ runlock_hold "$repo" netutil-mutation "$repo/tests/host/netutil_mutate.sh" "$@"
 mkdir -p build/tests
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+stopped=
+trap 'stopped=1; exit 129' HUP
+trap 'stopped=1; exit 130' INT
+trap 'stopped=1; exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/netutil-proof.XXXXXX")
 mkdir "$work/utils" "$work/saved"
 cp utils/*.c utils/*.h "$work/utils/"
@@ -146,7 +147,7 @@ child=
 
 # cleanup: stop the running test and put the saved sources back; the loop calls
 # it after each fault, and the exit trap calls it, then removes $work if the
-# script exits 0.
+# script exits 0 or a signal stops it.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -158,7 +159,7 @@ cleanup()
     touch "$work/utils/"*.c
 }
 st=0
-trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'st=$?; cleanup; { [ "$st" -ne 0 ] && [ -z "${stopped:-}" ]; } || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE TEST STATUS MESSAGE: compile TEST_hosttest.c over the copy as
 # $work/PHASE, run it for at most 15 seconds, and exit unless it ends with

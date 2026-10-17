@@ -80,9 +80,10 @@ fi
 mkdir -p build/tests
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+stopped=
+trap 'stopped=1; exit 129' HUP
+trap 'stopped=1; exit 130' INT
+trap 'stopped=1; exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/krffs-root-lock-proof.XXXXXX")
 child=
 cp -R rach2/sys "$work/sys"
@@ -96,7 +97,7 @@ restore()
 }
 
 # cleanup: stop the running test and restore the source; the exit trap calls it,
-# then removes $work if the script exits 0.
+# then removes $work if the script exits 0 or a signal stops it.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -107,7 +108,7 @@ cleanup()
     restore
 }
 st=0
-trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'st=$?; cleanup; { [ "$st" -ne 0 ] && [ -z "${stopped:-}" ]; } || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: extract the functions from the private
 # vfs.c, compile the fixture over them, and run it for at most 10 seconds; it

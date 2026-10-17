@@ -26,16 +26,17 @@ runlock_hold "$repo" alignment-mutation "$repo/tests/host/e2fsprogs_alignment_mu
 source=vendor/e2fsprogs/e2fsprogs-1.47.4/lib/ext2fs/unix_io.c
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+stopped=
+trap 'stopped=1; exit 129' HUP
+trap 'stopped=1; exit 130' INT
+trap 'stopped=1; exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-alignment.XXXXXX")
 child=
 mutated=0
 
 # cleanup: stop and reap the test, which is one process, and put the saved
 # unix_io.c back if the fault is in it; the exit trap calls it, then removes
-# $work if the script exits 0.
+# $work if the script exits 0 or a signal stops it.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -51,7 +52,7 @@ cleanup()
 }
 
 st=0
-trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'st=$?; cleanup; { [ "$st" -ne 0 ] && [ -z "${stopped:-}" ]; } || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 command -v perl >/dev/null
 cp -p "$source" "$work/unix_io.c.saved"

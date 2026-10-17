@@ -149,9 +149,10 @@ runlock_hold "$repo" account-mutation "$repo/tests/host/account_mutate.sh" "$@"
 mkdir -p build/tests
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+stopped=
+trap 'stopped=1; exit 129' HUP
+trap 'stopped=1; exit 130' INT
+trap 'stopped=1; exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/account-proof.XXXXXX")
 cp -R utils "$work/utils"
 cp -R "$work/utils" "$work/saved"
@@ -181,14 +182,14 @@ restore()
 }
 
 # cleanup: stop the running test and restore the sources; the exit trap calls
-# it, then removes $work if the script exits 0.
+# it, then removes $work if the script exits 0 or a signal stops it.
 cleanup()
 {
     stop_child
     restore
 }
 st=0
-trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'st=$?; cleanup; { [ "$st" -ne 0 ] && [ -z "${stopped:-}" ]; } || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE TEST STATUS MESSAGE: compile TEST_hosttest.c over the copy
 # as $work/PHASE, run it in a process group of its own for at most 15 seconds,

@@ -31,15 +31,16 @@ fi
 runlock_hold "$repo" exit-mutation "$repo/tests/host/exit_mutate.sh" "$@"
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+stopped=
+trap 'stopped=1; exit 129' HUP
+trap 'stopped=1; exit 130' INT
+trap 'stopped=1; exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-exit.XXXXXX")
 child=
 
 # cleanup: stop the running test and put the saved exit.c back; the script
 # calls it after each fault, and the exit trap calls it, then removes $work if
-# the script exits 0.
+# the script exits 0 or a signal stops it.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -54,7 +55,7 @@ mkdir "$work/proc"
 cp rach2/sys/proc/exit.c "$work/exit.saved"
 cp "$work/exit.saved" "$work/proc/exit.c"
 st=0
-trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'st=$?; cleanup; { [ "$st" -ne 0 ] && [ -z "${stopped:-}" ]; } || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE: compile exit_hosttest.c over the copy as $work/PHASE and run
 # it for at most 10 seconds. The phases `mutated` and `kept` must fail with

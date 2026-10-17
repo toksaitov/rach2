@@ -86,9 +86,10 @@ fi
 mkdir -p build/tests
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+stopped=
+trap 'stopped=1; exit 129' HUP
+trap 'stopped=1; exit 130' INT
+trap 'stopped=1; exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/pagecache-proof.XXXXXX")
 child=
 cp -R rach2/sys "$work/sys"
@@ -97,7 +98,7 @@ cp "$work/sys/syscall_fs.c" "$work/syscall.saved"
 
 # cleanup: stop the running test and put the saved pagecache.c and syscall_fs.c
 # back; the script calls it after each fault, and the exit trap calls it, then
-# removes $work if the script exits 0.
+# removes $work if the script exits 0 or a signal stops it.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -110,7 +111,7 @@ cleanup()
     touch "$work/sys/mm/pagecache.c" "$work/sys/syscall_fs.c"
 }
 st=0
-trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'st=$?; cleanup; { [ "$st" -ne 0 ] && [ -z "${stopped:-}" ]; } || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: extract sys_sync from the copy into
 # $work/syscall_sync.inc, compile pagecache_hosttest.c over it as $work/PHASE,

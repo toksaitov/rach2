@@ -65,9 +65,10 @@ runlock_hold "$repo" ata-identify-proof "$repo/tests/host/ata_identify_mutate.sh
 mkdir -p build/tests
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+stopped=
+trap 'stopped=1; exit 129' HUP
+trap 'stopped=1; exit 130' INT
+trap 'stopped=1; exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/ata-identify-proof.XXXXXX")
 mkdir -p "$work/rach2" "$work/tests/host"
 cp -R rach2/sys "$work/rach2/sys"
@@ -78,7 +79,7 @@ child=
 
 # cleanup: stop the running test's process group and put the saved ata.c back;
 # run_phase calls it after each run, and the exit trap calls it, then removes
-# $work if the script exits 0.
+# $work if the script exits 0 or a signal stops it.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -93,7 +94,7 @@ cleanup()
     touch "$source"
 }
 st=0
-trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'st=$?; cleanup; { [ "$st" -ne 0 ] && [ -z "${stopped:-}" ]; } || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: compile ata_hosttest.c over the copy as
 # $work/PHASE, run it for at most 60 seconds, and exit unless it ends with

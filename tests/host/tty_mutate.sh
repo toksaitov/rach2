@@ -142,9 +142,10 @@ runlock_hold "$repo" tty-mutation "$repo/tests/host/tty_mutate.sh" "$@"
 mkdir -p build/tests
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+stopped=
+trap 'stopped=1; exit 129' HUP
+trap 'stopped=1; exit 130' INT
+trap 'stopped=1; exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/tty-proof.XXXXXX")
 child=
 mkdir "$work/tty" "$work/saved"
@@ -159,7 +160,7 @@ restore()
 }
 
 # cleanup: stop the running test and restore the sources; the exit trap calls
-# it, then removes $work if the script exits 0.
+# it, then removes $work if the script exits 0 or a signal stops it.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -171,7 +172,7 @@ cleanup()
 }
 
 st=0
-trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'st=$?; cleanup; { [ "$st" -ne 0 ] && [ -z "${stopped:-}" ]; } || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # compile DIR NAME: compile $test's host test and the private n_tty.c into
 # $work/DIR/NAME, which `binary` names, and check from the dependency files

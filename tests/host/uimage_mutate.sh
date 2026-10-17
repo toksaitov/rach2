@@ -75,9 +75,10 @@ faults='budget-quarter budget-cap budget-floor pointers-argv0 pointers-edge
 if [ "${1:-}" = --texts ]; then
     root=
     trap '[ -z "$root" ] || rm -rf "$root"' EXIT
-    trap 'exit 129' HUP
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
+    stopped=
+    trap 'stopped=1; exit 129' HUP
+    trap 'stopped=1; exit 130' INT
+    trap 'stopped=1; exit 143' TERM
     # The faults name the source as the private directory holds it.
     root=$(mktemp -d "${TMPDIR:-/tmp}/rach2-uimage-texts.XXXXXX")
     ln -s "$repo/rach2/sys/proc/uimage.c" "$root/uimage.c"
@@ -94,9 +95,9 @@ runlock_hold "$repo" uimage-mutation "$repo/tests/host/uimage_mutate.sh" "$@"
 mkdir -p build
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'stopped=1; exit 129' HUP
+trap 'stopped=1; exit 130' INT
+trap 'stopped=1; exit 143' TERM
 work=$(mktemp -d "$repo/build/uimage-proof.XXXXXX")
 child=
 cp rach2/sys/proc/uimage.c "$work/uimage.saved"
@@ -110,7 +111,7 @@ restore()
 }
 
 # cleanup: stop the running test and restore the source; the exit trap calls it,
-# then removes $work if the script exits 0.
+# then removes $work if the script exits 0 or a signal stops it.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -121,7 +122,7 @@ cleanup()
     restore
 }
 st=0
-trap 'st=$?; cleanup; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'st=$?; cleanup; { [ "$st" -ne 0 ] && [ -z "${stopped:-}" ]; } || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS DETAIL: compile the test against the private copy
 # and run it for at most 20 seconds; it must exit with STATUS and print

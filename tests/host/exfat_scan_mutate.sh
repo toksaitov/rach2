@@ -112,9 +112,10 @@ mkdir -p build/tests
 work=
 fixtures=
 trap '[ -z "$fixtures" ] || rm -rf "$fixtures"; [ -z "$work" ] || rm -rf "$work"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+stopped=
+trap 'stopped=1; exit 129' HUP
+trap 'stopped=1; exit 130' INT
+trap 'stopped=1; exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/exfat-scan-proof.XXXXXX")
 # The test's fixtures, in a directory of this run's that the trap removes: a
 # test given none makes its own and keeps it when it fails, as each fault
@@ -129,7 +130,7 @@ child=
 
 # cleanup: stop the running test's process group and put the saved exfat.c
 # back; run_phase calls it after each run, and the exit trap calls it, removes
-# $fixtures, and removes $work if the script exits 0.
+# $fixtures, and removes $work if the script exits 0 or a signal stops it.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -144,7 +145,7 @@ cleanup()
     touch "$source"
 }
 st=0
-trap 'st=$?; cleanup; [ -z "$fixtures" ] || rm -rf "$fixtures"; [ "$st" -ne 0 ] || [ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'st=$?; cleanup; [ -z "$fixtures" ] || rm -rf "$fixtures"; { [ "$st" -ne 0 ] && [ -z "${stopped:-}" ]; } || [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # The test's own dependency lines, as the host suite reads them, with the
 # kernel's sources taken from the private tree.
