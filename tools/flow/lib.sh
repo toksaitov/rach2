@@ -122,40 +122,17 @@ wait_session()
     rm -f "$state/session"
 }
 
-# merged REF: succeed when every commit of REF is on `origin/master`: REF is
-# an ancestor of it, or master has, since the two parted, a commit with the
-# same patch as each commit of REF, as it does for a branch rebased or
-# cherry-picked before its push. A commit message proves nothing. A patch is
-# compared whole by `patches`. A merge commit or a commit that changes nothing
-# has no patch, so a branch with one that master lacks counts only by
-# ancestry.
+# merged REF: succeed when `origin/master` has everything REF has: a merge of
+# REF into it, which `git merge-tree` makes without touching a checkout, would
+# leave its tree as it is. That holds for a branch master contains and for one
+# rebased or cherry-picked before its push, and fails for any change master
+# lacks, whitespace and a change in another place included, and for a merge
+# that conflicts. A commit message proves nothing.
 merged()
 {
-    git merge-base --is-ancestor "$1" origin/master 2> /dev/null && return 0
-    base=$(git merge-base origin/master "$1" 2> /dev/null) || return 1
-    n=$(git rev-list --count "origin/master..$1" 2> /dev/null) || return 1
-    mine=$(patches "origin/master..$1")
-    [ "$(printf '%s\n' "$mine" | grep -c .)" -eq "$n" ] || return 1
-    theirs=$(patches "$base..origin/master")
-    for id in $mine; do
-        printf '%s\n' "$theirs" | grep -qxF "$id" || return 1
-    done
-}
-
-# patches RANGE: print a digest of the patch of each commit of RANGE that
-# changes something: its diff, whitespace, binary contents and the function
-# heading of each hunk included, without the line numbers and blob ids, which
-# a rebase changes. Two equal hunks in different functions differ by their
-# headings, which `git patch-id` drops.
-patches()
-{
-    git log -p --binary --no-textconv --no-ext-diff --no-merges --format='commit %H' "$1" 2> /dev/null |
-        perl -MDigest::SHA=sha1_hex -ne '
-            if (/^commit [0-9a-f]+$/) { print sha1_hex($d), "\n" if $d =~ /^diff /m; $d = ""; next }
-            next if /^index /;
-            s/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/@@/;
-            $d .= $_;
-            END { print sha1_hex($d), "\n" if $d =~ /^diff /m }'
+    master=$(git rev-parse -q --verify 'origin/master^{tree}') || return 1
+    tree=$(git merge-tree --write-tree --no-messages origin/master "$1" 2> /dev/null | sed -n 1p)
+    [ "$tree" = "$master" ]
 }
 
 # tidy: remove what finished work left in the clone. A helper's worktree under
