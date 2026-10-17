@@ -226,7 +226,7 @@ $3" RELEASE_TEST_STATE=${4:-OPEN} RELEASE_TEST_WRITES=${5:-no} \
 # aside PREFIX: print the names of the records copied aside that begin PREFIX.
 aside()
 {
-    (cd "$work/state" && ls) | grep "^$1"
+    (cd "$work/state" && ls) | grep "^$1" | grep -v '\.sha256$'
 }
 
 # called PATTERN: succeed when a call matches the grep PATTERN.
@@ -246,7 +246,7 @@ row()
                 [ "$(tail -n 1 "$work/state/$a" | cut -d ' ' -f 1)" = closed ] &&
                 [ "$(grep -c ' done ' "$work/state/$a")" -eq 9 ] &&
                 called '^gh issue close 7$' && called '^board archive 7$' &&
-                called '^git worktree remove --force .*/state/wt$' &&
+                [ -f "$work/state/$a.sha256" ] && called '^git worktree remove --force .*/state/wt$' &&
                 ! called '^machine\|^ssh\|^git -C\|^gh run\|^gh workflow' ;;
         full-done)
             run 7 "$head" "ready: yes $H"

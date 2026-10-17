@@ -84,8 +84,9 @@
 # TIME`, `reported TIME` once the phase has the report, `closing TIME`, and
 # last `failed STEP: WHY`, `void: WHY` or `closed TIME`; `log`, everything
 # the script prints; `wt`, the worktree; and the records of releases that
-# ended, as `P-SHA-TIME`. A release that closes its phase removes `wt`, with the
-# build's products in it, last; the record, the digests and the logs stay. A
+# ended, as `P-SHA-TIME`, with the build's digests beside each closed one as
+# `P-SHA-TIME.sha256`. A release that closes its phase copies the digests out of
+# `wt` and then removes `wt`, with the build's products in it, last. A
 # record that ended, or that belongs to another phase, is copied aside once the
 # board has given a new candidate, and the new record then replaces it in one
 # rename. The new record keeps the old one's `touched` line unless the old
@@ -645,7 +646,9 @@ main()
     say "#$phase is released and closed"
     old=$phase-$(echo "$sha" | cut -c 1-8)-$(date -u '+%m%d-%H%M%S')
     mv "$state/record" "$state/$old"
-    if ! { cd "$repo" && git worktree remove --force "$state/wt" && git worktree prune; }; then
+    if ! cp "$files/release.sha256" "$state/$old.sha256"; then
+        say "the digests could not be copied, so the worktree $state/wt stays"
+    elif ! { cd "$repo" && git worktree remove --force "$state/wt" && git worktree prune; }; then
         say "the worktree $state/wt could not be removed"
     fi
 }
