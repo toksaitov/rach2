@@ -158,6 +158,9 @@ static const char *const PROBES[] = {
     /* chroot on KRFFS and tmpfs: paths, links and ".." inside the root,
        fork and exec keeping it, and the rmdir and unmount it refuses. */
     "musl/chrootmusl",
+    /* Paths that go on past /proc/PID/fd/N, cwd and root, and /dev/fd/N,
+       from the file or directory each refers to. */
+    "musl/proclinkmusl",
     /* vfork and clone with CLONE_VM|CLONE_VFORK, as posix_spawn, system
        and popen start their children. */
     "musl/vforkmusl",

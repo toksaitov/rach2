@@ -18,6 +18,7 @@ static int procfs_readlink_exe(int pid, char *buf, int cap);
 static int procfs_exe_name(int pid, char *buf, int cap);
 static int procfs_readlink_dir(int pid, int root, char *buf, int cap);
 static int procfs_exe_file(int pid, struct vfs_ref *out);
+static int procfs_link_target(const struct vpath *vp, struct vfs_ref *out, char *buf, int cap);
 static int procfs_nth_pid(int n);
 static uint32_t procfs_ino_dir(void);
 static uint32_t procfs_ino_cmdline(void);

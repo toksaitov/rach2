@@ -92,7 +92,7 @@ The `default` suite prints a table, one row per probe with the kernel's verdict 
 
 Every program built here is listed in exactly one of three places, and `tools/verify/probecheck.sh`, which `tests/run style` runs, refuses a tree where one is not. Other suites may run a program again, as `ext2` runs ten of the `default` suite's probes on an ext2 root and `selfbuild` runs the whole list on the kernel the machine built.
 
-* The `default` suite runs the 116 programs, 60 probes and 56 musl programs, of the `PROBES` list in `system/runner/runtests.c`. These are the programs that need nothing but the test image and report their result as an exit status.
+* The `default` suite runs the 117 programs, 60 probes and 57 musl programs, of the `PROBES` list in `system/runner/runtests.c`. These are the programs that need nothing but the test image and report their result as an exit status.
 * `probe-suites` names each of the other 44 programs that a suite runs, with that suite: a probe that needs, for example, a disk, a host peer, typed input, another processor model, a boot line of its own or more than one boot, or one that must be killed.
 * `probe-helpers` names the 20 programs no suite runs as a probe, each with its use: fixtures another program runs, such as `suidhelper` and `musl/statushelper`, and programs for runs by hand, such as `musl/ctrlcmusl`.
 

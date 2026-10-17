@@ -1513,6 +1513,14 @@ uint32_t unix_inode(const fd_entry_t *e)
     return 0;
 }
 
+/** No row's path names a link of /proc: every one is VNODE_KRFFS. */
+int synth_classify(const char *path, struct vpath *vp)
+{
+    (void)path;
+    vp->kind = VNODE_KRFFS;
+    return vp->kind;
+}
+
 /** Fail the row: no row names a synthetic directory. */
 void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
 {

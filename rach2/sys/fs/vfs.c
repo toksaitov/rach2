@@ -772,55 +772,79 @@ static int walk_leaf(const char *path, char *leaf, uint32_t leafcap, const char 
     return 0;
 }
 
-/**
- * Splice the target of the link `found` on `mnt` in front of `rest`, the
- * part of the path after the link, in the path page `*linkpath`, taking it
- * and `*target` at the first link of the walk; `found` is put. The walk goes
- * on at `*linkpath`: 1 when the target is absolute, so from the root, 0 when
- * it is relative, or -ELOOP past VFS_LINK_MAX links, -ENOENT for an empty
- * target, -ENAMETOOLONG, -ENOMEM, or the type's error. The rest may already
- * be inside `*linkpath`, from a link followed before this one, so it moves
- * before the target is written over it.
- */
-static int walk_link(struct vfs_mount *mnt, void *found, const char *rest, char **linkpath,
-                     char **target, int *links)
+/** Take the two path pages a walk follows links in, `*linkpath` and
+ * `*target`, at its first link: 0, or -ENOMEM. */
+static int walk_pages(char **linkpath, char **target)
 {
-    uint32_t rlen = (uint32_t)k_strlen(rest);
-    uint32_t join = rlen != 0 ? 1u : 0u;
-    int tlen;
-
-    if (++*links > VFS_LINK_MAX) {
-        node_put(mnt, found);
-        return -ELOOP;
-    }
     if (!*linkpath) {
         *linkpath = path_buf_get();
         *target = path_buf_get();
-        if (!*linkpath || !*target) {
-            node_put(mnt, found);
-            return -ENOMEM;
-        }
     }
-    tlen = mnt->type->ops->readlink(mount_base(mnt), found, *target, VFS_PATH_MAX);
-    node_put(mnt, found);
-    if (tlen < 0) {
-        return tlen;
-    }
+    return *linkpath && *target ? 0 : -ENOMEM;
+}
+
+/**
+ * Put the `tlen` bytes of `target` in front of `rest`, the part of the path
+ * after a link, in `linkpath`. The rest may already be inside `linkpath`,
+ * from a link followed before, so it moves before the target is written over
+ * it. 1 when the target is absolute, 0 when it is relative, -ENOENT for an
+ * empty target, or -ENAMETOOLONG.
+ */
+static int walk_splice(char *linkpath, const char *target, int tlen, const char *rest)
+{
+    uint32_t rlen = (uint32_t)k_strlen(rest);
+    uint32_t join = rlen != 0 ? 1u : 0u;
+
     if (tlen == 0) {
         return -ENOENT;
     }
     if ((uint32_t)tlen + join + rlen + 1 > VFS_PATH_MAX) {
         return -ENAMETOOLONG;
     }
-    k_memmove(*linkpath + tlen + join, rest, rlen + 1);
-    k_memcpy(*linkpath, *target, (uint32_t)tlen);
+    k_memmove(linkpath + tlen + join, rest, rlen + 1);
+    k_memcpy(linkpath, target, (uint32_t)tlen);
     if (join) {
-        (*linkpath)[tlen] = '/';
+        linkpath[tlen] = '/';
     }
-    return (*target)[0] == '/';
+    return target[0] == '/';
+}
+
+/**
+ * Splice the target of the link `found` on `mnt` in front of `rest`, the
+ * part of the path after the link, in the path page `*linkpath`, taking it
+ * and `*target` at the first link of the walk; `found` is put. The walk goes
+ * on at `*linkpath`: 1 when the target is absolute, so from the root, 0 when
+ * it is relative, or -ELOOP past VFS_LINK_MAX links, -ENOENT for an empty
+ * target, -ENAMETOOLONG, -ENOMEM, or the type's error.
+ */
+static int walk_link(struct vfs_mount *mnt, void *found, const char *rest, char **linkpath,
+                     char **target, int *links)
+{
+    int tlen;
+
+    if (++*links > VFS_LINK_MAX) {
+        node_put(mnt, found);
+        return -ELOOP;
+    }
+    if (walk_pages(linkpath, target) != 0) {
+        node_put(mnt, found);
+        return -ENOMEM;
+    }
+    tlen = mnt->type->ops->readlink(mount_base(mnt), found, *target, VFS_PATH_MAX);
+    node_put(mnt, found);
+    if (tlen < 0) {
+        return tlen;
+    }
+    return walk_splice(*linkpath, *target, tlen, rest);
 }
 
 static int walk_exe(struct vfs_ref *cur, void *found, int locked);
+static int synth_object_link(const struct vpath *vp);
+static int walk_object(struct vfs_ref *cur, void *found, const char *rest, char **linkpath,
+                       char **target, int locked);
+
+/* What `walk_object` returns when the walk has moved to the link's object. */
+#define WALK_AT_OBJECT 2
 
 /** The start of the last component of `path`, trailing slashes passed over:
  * the leaf a parent walk returns once a link's target is spliced into its
@@ -848,6 +872,40 @@ static int walk_is_link(struct vfs_mount *mnt, void *node)
            (st.mode & 0170000u) == 0120000u;
 }
 
+/** The length of the rest of the path at `p` that a type taking the rest
+ * is handed: all of it, or for a parent walk the part before the leaf at
+ * `last`, without the slashes after it; 0 when that part is empty. */
+static uint32_t walk_rest_len(const char *p, const char *last)
+{
+    uint32_t len;
+
+    if (!last) {
+        return (uint32_t)k_strlen(p);
+    }
+    len = (uint32_t)(last - p);
+    while (len > 0 && p[len - 1] == '/') {
+        len--;
+    }
+    return len;
+}
+
+/**
+ * Whether the walk goes on from the object of the synthetic node `vp`, which
+ * `lookup_rest` returned with `rc`: a link followed to its object
+ * (`synth_object_link`) with more of the path after it (VFS_LINK), before
+ * the leaf of a parent walk (`parent`), or at the end of the path for cwd
+ * and root unless `flags` has VFS_WALK_NOFOLLOW. A /proc/PID/fd/N at the end
+ * stays the link's node, for the system call layer.
+ */
+static int walk_to_object(const struct vpath *vp, int rc, int parent, int flags)
+{
+    if (!synth_object_link(vp)) {
+        return 0;
+    }
+    return rc == VFS_LINK || parent ||
+           (!(flags & VFS_WALK_NOFOLLOW) && vp->kind != VNODE_PROC_FD_LINK);
+}
+
 /**
  * Resolve one path, as `vfs_resolve` says; with `unmount`, for an unmount,
  * the walk may end on a mount whose device has gone, though it looks up no
@@ -860,8 +918,7 @@ static int walk_is_link(struct vfs_mount *mnt, void *node)
  * crossed.
  *
  * A type that takes the rest is handed the rest of the path; with
- * VFS_WALK_PARENT, a copy of the part before the leaf, after which the walk
- * goes on at the same offset of the path, and when that part is empty the
+ * VFS_WALK_PARENT, the part before the leaf, and when that part is empty the
  * walk ends at the mount's root. On its VFS_CLIMB or VFS_ROOT the walk goes
  * on at the mount's root directory with what the type left: a `..` that
  * climbs, or the name of a nameless mount there. A `..` at that root is
@@ -874,7 +931,16 @@ static int walk_is_link(struct vfs_mount *mnt, void *node)
  * absolute target restarts at the root, and the walk goes on from the
  * directory the link was found in. A mount covers a directory, so a link is
  * never a covered node. /proc/<pid>/exe is followed to the program's file
- * itself (`walk_exe`) rather than by its text.
+ * itself (`walk_exe`) rather than by its text, and /proc/<pid>/fd/<n>, cwd
+ * and root to the file or directory they refer to (`walk_object`): on the
+ * type's VFS_LINK, when more of the path comes after the link, and for the
+ * last component of a parent walk; cwd and root also at the last component
+ * unless VFS_WALK_NOFOLLOW. A /proc/<pid>/fd/<n> at the last component stays
+ * the link's node, which the system call layer opens and reports itself. The
+ * walk goes on from the object as from a directory it looked up, though a
+ * mount over it is not crossed, as Linux crosses none there, and no
+ * component after it is excused from the search check as one on the way to
+ * the working directory is (`toward_cwd`).
  *
  * The target and the path it is joined to are in two path pages, taken at
  * the first link and given back on every return; a walk that meets no link
@@ -911,6 +977,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
     const char *last_comp;
     int use_real = (flags & VFS_WALK_REAL_IDS) ? 1 : 0;
     int links;
+    int jumped;
     int locked = (flags & VFS_WALK_LOCK) != 0;
     struct vfs_mount *was;
     char *linkpath = 0;
@@ -935,6 +1002,7 @@ begin:
     p = path;
     last_comp = leaf_comp;
     links = 0;
+    jumped = 0;
     walk_root(&root);
     cur = (p[0] == '/' || !start) ? root : *start;
     if (p[0] == '/' && p[1] == '/') {
@@ -968,40 +1036,27 @@ begin:
 
         if (cur.mnt->type->ops->lookup_rest && !named_in_rest(&cur, p) && !climbs(&cur, p)) {
             const char *left = 0;
-            char restbuf[VFS_NAME_MAX + 1];
-            const char *rest = p;
+            const struct vpath *vp;
+            uint32_t rlen = walk_rest_len(p, last_comp);
 
-            if (last_comp) {
-                uint32_t rlen = (uint32_t)(last_comp - p);
-
-                while (rlen > 0 && p[rlen - 1] == '/') {
-                    rlen--;
-                }
-                if (rlen == 0) {
-                    break;
-                }
-                if (rlen > VFS_NAME_MAX) {
-                    rc = -ENAMETOOLONG;
-                    goto out_err;
-                }
-                k_memcpy(restbuf, p, rlen);
-                restbuf[rlen] = '\0';
-                rest = restbuf;
+            if (rlen == 0) {
+                break;
             }
-            rc = cur.mnt->type->ops->lookup_rest(cur.mnt, rest, &found, &left);
+            rc = cur.mnt->type->ops->lookup_rest(cur.mnt, p, rlen, &found, &left);
             if (rc == VFS_CLIMB || rc == VFS_ROOT) {
-                if (rest == restbuf) {
-                    p += left - restbuf;
-                } else {
-                    p = left;
-                }
+                p = left;
                 continue;
             }
-            if (rc != 0) {
+            if (rc < 0) {
                 goto out_err;
             }
-            if (!last_comp && !(flags & VFS_WALK_NOFOLLOW) && walk_is_link(cur.mnt, found)) {
-                if (vfs_synth_vpath(cur.mnt, found)->kind == VNODE_PROC_EXE) {
+            p = rc == VFS_LINK ? left : p + rlen;
+            vp = vfs_synth_vpath(cur.mnt, found);
+            if (walk_to_object(vp, rc, last_comp != 0, flags)) {
+                jumped = 1;
+                rc = walk_object(&cur, found, p, &linkpath, &target, locked);
+            } else if (!last_comp && !(flags & VFS_WALK_NOFOLLOW) && walk_is_link(cur.mnt, found)) {
+                if (vp->kind == VNODE_PROC_EXE) {
                     rc = walk_exe(&cur, found, locked);
                     if (rc != 0) {
                         goto out_err;
@@ -1009,26 +1064,33 @@ begin:
                     break;
                 }
                 rc = walk_link(cur.mnt, found, "", &linkpath, &target, &links);
-                if (rc < 0) {
-                    goto out_err;
-                }
-                p = linkpath;
-                if (rc == 1) {
-                    if (!root_current(&root)) {
-                        goto restart;
-                    }
-                    rc = walk_move(&cur, root.mnt, root.node, locked);
-                    if (rc != 0) {
-                        goto out_err;
-                    }
-                }
+            } else {
+                ref_move_node(&cur, found);
+                break;
+            }
+            if (rc < 0) {
+                goto out_err;
+            }
+            if (rc == WALK_AT_OBJECT) {
                 continue;
             }
-            ref_move_node(&cur, found);
-            break;
+            p = linkpath;
+            if (last_comp) {
+                last_comp = walk_last_comp(linkpath);
+            }
+            if (rc == 1) {
+                if (!root_current(&root)) {
+                    goto restart;
+                }
+                rc = walk_move(&cur, root.mnt, root.node, locked);
+                if (rc != 0) {
+                    goto out_err;
+                }
+            }
+            continue;
         }
 
-        rc = toward_cwd(start, path, p) ? 0 : may_search(cur.mnt, cur.node, use_real);
+        rc = !jumped && toward_cwd(start, path, p) ? 0 : may_search(cur.mnt, cur.node, use_real);
         if (rc != 0) {
             goto out_err;
         }
@@ -2371,41 +2433,79 @@ static int synth_past_present(const struct vpath *vp)
     return !SYSFS_KEYED(vp->sysent) || sysfs_device_exists(vp->sysent, vp->syskey);
 }
 
+/** Whether the synthetic node `vp` is a link the walk follows to the object
+ * it refers to, not to a text: /proc/PID/fd/N, which /dev/fd/N, /dev/stdin,
+ * /dev/stdout and /dev/stderr are too, and /proc/PID/cwd and root. */
+static int synth_object_link(const struct vpath *vp)
+{
+    return vp->kind == VNODE_PROC_FD_LINK || vp->kind == VNODE_PROC_CWD ||
+           vp->kind == VNODE_PROC_ROOT;
+}
+
+/**
+ * Whether the part of a path classified so far, the `out` bytes of `full`,
+ * names a link the walk follows to its object (`synth_object_link`) and more
+ * of the rest, from `p` to `end`, comes after it: VFS_LINK with a new node of
+ * the link held in `*node`, 0 when it does not, or -ENOMEM.
+ */
+static int synth_link_part(char *full, uint32_t out, const char *p, const char *end, void **node)
+{
+    struct vpath vp;
+
+    while (p < end && *p == '/') {
+        p++;
+    }
+    if (p == end) {
+        return 0;
+    }
+    full[out] = '\0';
+    synth_classify(full, &vp);
+    if (!synth_object_link(&vp)) {
+        return 0;
+    }
+    return synth_take(&vp, node) != 0 ? -ENOMEM : VFS_LINK;
+}
+
 /**
  * The rest of a path through a synthetic namespace whose root directory
- * `prefix` names, "dev", "proc" or "sys". A `..` inside it is resolved by
- * the text, since the namespace is a table classified by string. A `..`
- * that would climb above the mount root returns VFS_CLIMB with `*left` at
- * that `..`, which the walk takes at the mount root. A name at the mount
- * root that a nameless mount is entered by, as `shm` in /dev after `pts/..`,
- * returns VFS_ROOT with `*left` at that name. Otherwise the whole path,
+ * `prefix` names, "dev", "proc" or "sys", its first `restlen` bytes. A `..`
+ * inside it is resolved by the text, since the namespace is a table
+ * classified by string. A `..` that would climb above the mount root returns
+ * VFS_CLIMB with `*left` at that `..`, which the walk takes at the mount
+ * root. A name at the mount root that a nameless mount is entered by, as
+ * `shm` in /dev after `pts/..`, returns VFS_ROOT with `*left` at that name.
+ * A part that names a link the walk follows to its object and has more of
+ * the rest after it returns VFS_LINK (`synth_link_part`), with a new node of
+ * the link held and `*left` after its name, so that a `..` after the link
+ * climbs from the object. Otherwise the whole path,
  * `prefix` and the rest without its `.` and `..`, is classified
  * (`synth_classify`): 0 with a new node held, -ENOENT, -ENOTDIR for a
  * path past a file that is there (`synth_past_present`), -ENAMETOOLONG for
  * a path longer than 255 bytes, or -ENOMEM.
  */
-static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *rest, void **node,
-                      const char **left)
+static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *rest, uint32_t restlen,
+                      void **node, const char **left)
 {
     char full[256];
     struct vpath vp;
     uint32_t plen = (uint32_t)k_strlen(prefix);
     uint32_t out;
     const char *p = rest;
+    const char *end = rest + restlen;
     int kind;
 
     out = plen;
     k_memcpy(full, prefix, out);
 
-    while (*p) {
+    while (p < end) {
         const char *comp;
-        uint32_t len = 0;
+        uint32_t len;
 
-        while (*p == '/') {
+        while (p < end && *p == '/') {
             p++;
         }
         comp = p;
-        while (*p != '\0' && *p != '/') {
+        while (p < end && *p != '/') {
             p++;
         }
         len = (uint32_t)(p - comp);
@@ -2438,6 +2538,11 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *res
         full[out++] = '/';
         k_memcpy(full + out, comp, len);
         out += len;
+        kind = synth_link_part(full, out, p, end, node);
+        if (kind != 0) {
+            *left = p;
+            return kind;
+        }
     }
     full[out] = '\0';
 
@@ -2452,21 +2557,24 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *res
 }
 
 /** The `lookup_rest` of /dev: `synth_rest` under "dev". */
-static int devfs_rest(struct vfs_mount *mnt, const char *rest, void **node, const char **left)
+static int devfs_rest(struct vfs_mount *mnt, const char *rest, uint32_t len, void **node,
+                      const char **left)
 {
-    return synth_rest(mnt, "dev", rest, node, left);
+    return synth_rest(mnt, "dev", rest, len, node, left);
 }
 
 /** The `lookup_rest` of /proc: `synth_rest` under "proc". */
-static int procfs_rest(struct vfs_mount *mnt, const char *rest, void **node, const char **left)
+static int procfs_rest(struct vfs_mount *mnt, const char *rest, uint32_t len, void **node,
+                       const char **left)
 {
-    return synth_rest(mnt, "proc", rest, node, left);
+    return synth_rest(mnt, "proc", rest, len, node, left);
 }
 
 /** The `lookup_rest` of /sys: `synth_rest` under "sys". */
-static int sysfs_rest(struct vfs_mount *mnt, const char *rest, void **node, const char **left)
+static int sysfs_rest(struct vfs_mount *mnt, const char *rest, uint32_t len, void **node,
+                      const char **left)
 {
-    return synth_rest(mnt, "sys", rest, node, left);
+    return synth_rest(mnt, "sys", rest, len, node, left);
 }
 
 /** The `getattr` of the synthetic types, what the resolver needs of a node:
@@ -2505,8 +2613,9 @@ static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
  * runs (`procfs_readlink_exe`); and /proc/<pid>/cwd's and root's, the paths
  * of its directories (`procfs_readlink_dir`). -ENOENT for a process that is
  * gone, -EINVAL for a node that is no link. The resolver goes on from exe's
- * program file itself (`walk_exe`), and from the text of the others, and
- * readlink(2) reads the text through procfs. */
+ * program file itself (`walk_exe`), from the directories of cwd and root
+ * themselves (`walk_object`), and from the text of /dev/log, and readlink(2)
+ * reads the text through procfs. */
 static int synth_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
     const struct synth_node *sn = node;
@@ -2568,6 +2677,60 @@ static int walk_exe(struct vfs_ref *cur, void *found, int locked)
     if (rc == 0) {
         vfs_ref_hold(&exe);
         ref_move_node(cur, exe.node);
+    }
+    return rc;
+}
+
+/**
+ * Go on from the object the link `found` of /proc, on `cur`'s mount, refers
+ * to (`synth_object_link`), as Linux's walk goes to it and does not read its
+ * text: the file or directory a descriptor is open on, or a process's working
+ * directory or root (`procfs_link_target`), wherever a rename has put it and
+ * whether a path reaches it still. `found` is put. The walk moves to a node
+ * as `walk_exe` moves to a program's file: to the root of the node's mount
+ * first, taking that mount's lock for a locked walk, and reads the object
+ * again there, since the wait may let it move or the descriptor close. A
+ * directory of /dev, /proc or /sys, and a working directory with no node, has
+ * only a path from the root, which is put in front of `rest`, the part of the
+ * path after the link, in `*linkpath`, as an absolute link's target is, with
+ * the walk's pages taken at its first link (`walk_pages`). The jump uses up a
+ * component of the path, so a chain of them ends, and it is not counted
+ * against VFS_LINK_MAX. WALK_AT_OBJECT at the node; 1 with the path in
+ * `*linkpath`; or a negative errno: -ENOMEM, -ENAMETOOLONG, -EBUSY, or
+ * `procfs_link_target`'s.
+ */
+static int walk_object(struct vfs_ref *cur, void *found, const char *rest, char **linkpath,
+                       char **target, int locked)
+{
+    struct vpath vp = ((struct synth_node *)found)->vp;
+    struct vfs_ref to;
+    int rc;
+
+    node_put(cur->mnt, found);
+    if (walk_pages(linkpath, target) != 0) {
+        return -ENOMEM;
+    }
+    for (;;) {
+        rc = procfs_link_target(&vp, &to, *target, VFS_PATH_MAX);
+        if (rc != 0 || to.mnt == cur->mnt) {
+            break;
+        }
+        rc = walk_move(cur, to.mnt, to.mnt->root, locked);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    if (rc > 0) {
+        while (*rest == '/') {
+            rest++;
+        }
+        rc = walk_splice(*linkpath, *target, rc, rest);
+        return rc < 0 ? rc : 1;
+    }
+    if (rc == 0) {
+        vfs_ref_hold(&to);
+        ref_move_node(cur, to.node);
+        rc = WALK_AT_OBJECT;
     }
     return rc;
 }

@@ -144,12 +144,13 @@ groups = [
      "ns_my_turn vfs_ns_lock vfs_ns_unlock in_groups may_search toward_cwd mount_covering path_last "
      "mount_named_at mount_named named_in_rest climbs node_put walk_lock walk_unlock vfs_walk_unlock "
      "ref_move_node "
-     "walk_move walk_root root_current dotdot_stays walk_leaf walk_link walk_last_comp walk_is_link "
+     "walk_move walk_root root_current dotdot_stays walk_leaf walk_pages walk_splice walk_link "
+     "walk_last_comp walk_is_link walk_rest_len "
      "resolve_path vfs_resolve vfs_ref_release vfs_desc_open vfs_desc_close "
      "vfs_getattr vfs_open_node vfs_release vfs_truncate vfs_create"),
     ("syscall_fs.c", "syscall_open.inc", "name_is device_name open_device_name open_link_target "
      "node_make open_create "
-     "open_mounted_node ofd_record_path open_install open_synth_node do_open"),
+     "open_mounted_node path_starts ofd_record_path open_install open_synth_node do_open"),
 ]
 for source, output, names in groups:
     text = (work / "sys" / source).read_text()

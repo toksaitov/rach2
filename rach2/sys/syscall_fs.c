@@ -1584,16 +1584,130 @@ static const char *path_name(const char *abs)
     return abs[0] == '/' ? abs + 1 : abs;
 }
 
+/** Whether the string `s` begins with `prefix`. */
+static int path_starts(const char *s, const char *prefix)
+{
+    while (*prefix != '\0' && *s == *prefix) {
+        s++;
+        prefix++;
+    }
+    return *prefix == '\0';
+}
+
+/**
+ * The length of the first part of the absolute path `path` that names a
+ * link the walk follows to its object, /proc/PID/fd/N, cwd or root, or
+ * /dev/fd/N, with more of the path after it, and in `vp` the link; 0 when
+ * the path has none. Only a path under /proc or /dev can.
+ */
+static uint32_t path_object_link(char *path, struct vpath *vp)
+{
+    uint32_t at = 1;
+
+    if (!path_starts(path + 1, "proc/") && !path_starts(path + 1, "dev/")) {
+        return 0;
+    }
+    for (;;) {
+        uint32_t next;
+        char was;
+
+        while (path[at] != '\0' && path[at] != '/') {
+            at++;
+        }
+        for (next = at; path[next] == '/'; next++) {
+        }
+        if (path[next] == '\0') {
+            return 0;
+        }
+        was = path[at];
+        path[at] = '\0';
+        synth_classify(path, vp);
+        path[at] = was;
+        if (vp->kind == VNODE_PROC_FD_LINK || vp->kind == VNODE_PROC_CWD ||
+            vp->kind == VNODE_PROC_ROOT) {
+            return at;
+        }
+        at = next;
+    }
+}
+
+/**
+ * Replace in `path`, an absolute path in a path page, each link the walk
+ * followed to its object (`path_object_link`) with the object's path when
+ * the walk was made, and collapse the dots after it, as the physical walk
+ * from the object went. A directory the caller has open is named as its
+ * `*at` calls name it (`fd_dir_path`), which follows a rename on a type that
+ * can name its directories; any other object by the link's text. A path a
+ * description or a working directory records then names the object, and not
+ * a descriptor of the process that walked it, which may be closed or reused.
+ * A link whose text is no absolute path, a process gone, and a result too
+ * long for the page leave the rest of `path` as it is.
+ */
+static void path_expand_links(char *path)
+{
+    struct vpath vp;
+    char *text = NULL;
+    uint32_t at;
+    int n, links;
+
+    for (links = 0; links < VFS_LINK_MAX; links++) {
+        process_t *p;
+        int pid;
+
+        at = path_object_link(path, &vp);
+        if (at == 0) {
+            break;
+        }
+        if (!text && !(text = path_buf_get())) {
+            break;
+        }
+        pid = procfs_resolve_id(&vp);
+        p = pid < 0 ? NULL : get_process((uint32_t)pid);
+        if (!p || p->state == PROC_UNUSED) {
+            break;
+        }
+        if (vp.kind == VNODE_PROC_FD_LINK) {
+            fd_entry_t *own = p->fds == current_proc->fds ? fd_get(p->fds, vp.procfd) : NULL;
+
+            if (own && (own->type == FD_TYPE_DIR || own->type == FD_TYPE_SYNTH_DIR)) {
+                n = fd_dir_path(own, text, VFS_PATH_MAX, NULL) == 0 ? (int)k_strlen(text) : -1;
+            } else {
+                n = procfs_readlink_fd(pid, vp.procfd, text, VFS_PATH_MAX);
+            }
+        } else {
+            n = procfs_readlink_dir(pid, vp.kind == VNODE_PROC_ROOT, text, VFS_PATH_MAX - 1);
+        }
+        if (n <= 0 || text[0] != '/' || (uint32_t)n + k_strlen(path + at) + 1 > VFS_PATH_MAX) {
+            break;
+        }
+        k_memmove(path + n, path + at, k_strlen(path + at) + 1);
+        k_memcpy(path, text, (uint32_t)n);
+        collapse_dots(path);
+    }
+    path_buf_put(text);
+}
+
 /**
  * Record `name`, the path a description was opened by with its leading '/'
  * stripped, in `ofd`, for /proc/PID/fd to show and for a directory of a type
- * without `path` to resolve names against: without the last "." that
- * `path_put_dot` put back, and empty when the path is too long for the
- * record.
+ * without `path` to resolve names against: with the links of /proc it went
+ * through replaced by the paths of their objects (`path_expand_links`),
+ * without the last "." that `path_put_dot` put back, and empty when the path
+ * is too long for the record.
  */
 static void ofd_record_path(struct open_file *ofd, const char *name)
 {
+    char *full = NULL;
     uint32_t len = (uint32_t)k_strlen(name);
+
+    if ((path_starts(name, "proc/") || path_starts(name, "dev/")) && len + 2 <= VFS_PATH_MAX &&
+        (full = path_buf_get()) != NULL) {
+        full[0] = '/';
+        k_memcpy(full + 1, name, len + 1);
+        path_expand_links(full);
+        name = full + 1;
+        len = (uint32_t)k_strlen(name);
+    }
 
     if (len > 0 && name[len - 1] == '.' && (len == 1 || name[len - 2] == '/')) {
         len = len > 1 ? len - 2 : 0;
@@ -1604,6 +1718,7 @@ static void ofd_record_path(struct open_file *ofd, const char *name)
         k_memcpy(ofd->dirpath + 1, name, len);
         ofd->dirpath[len + 1] = '\0';
     }
+    path_buf_put(full);
 }
 
 static int32_t synth_open_dir(const struct vpath *vp, int flags);
@@ -4852,6 +4967,7 @@ static int32_t chdir_mounted(const struct vfs_ref *ref, char *path)
     if (rc != 0) {
         return rc;
     }
+    path_expand_links(path);
     collapse_dots(path);
     named = ref->mnt->type->ops->path ? path_buf_get() : NULL;
     if (named && vfs_node_path(ref->mnt, ref->node, named, VFS_PATH_MAX) == 0 &&

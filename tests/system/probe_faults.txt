@@ -3593,9 +3593,9 @@ probe prctlmusl
 file rach2/sys/fs/vfs.c
 expect PRCTLMUSL FAIL (an open of /proc/self/exe did not reach the program once its name was gone)
 old
-                if (vfs_synth_vpath(cur.mnt, found)->kind == VNODE_PROC_EXE) {
+                if (vp->kind == VNODE_PROC_EXE) {
 new
-                if (vfs_synth_vpath(cur.mnt, found)->kind == VNODE_PROC_EXE && locked < 0) {
+                if (vp->kind == VNODE_PROC_EXE && locked < 0) {
 end
 
 fault exit-keeps-address-space-mem
@@ -6060,9 +6060,9 @@ probe permmusl
 file rach2/sys/fs/vfs.c
 expect PERMMUSL FAIL (a file of the working directory below an unsearchable one
 old
-        rc = toward_cwd(start, path, p) ? 0 : may_search(cur.mnt, cur.node, use_real);
+        rc = !jumped && toward_cwd(start, path, p) ? 0 : may_search(cur.mnt, cur.node, use_real);
 new
-        rc = may_search(cur.mnt, cur.node, use_real) + 0 * toward_cwd(start, path, p);
+        rc = may_search(cur.mnt, cur.node, use_real) + 0 * (!jumped && toward_cwd(start, path, p));
 end
 
 fault fsize-never-refused
@@ -6376,4 +6376,49 @@ old
     kfree(p);
 new
     kfree(p->buf);
+end
+
+# Paths that go on past the links of /proc.
+
+fault proc-link-not-followed
+probe proclinkmusl
+file rach2/sys/fs/vfs.c
+expect PROCLINKMUSL FAIL (a lookup through the link:
+old
+    if (!synth_object_link(&vp)) {
+new
+    if (!synth_object_link(&vp) || 1) {
+end
+
+fault proc-link-by-text
+probe proclinkmusl
+file rach2/sys/fs/procfs.c
+expect PROCLINKMUSL FAIL (a lookup through the link to a renamed directory
+old
+    if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) && e->ofd && e->ofd->vmnt) {
+        out->mnt = e->ofd->vmnt;
+        out->node = e->ofd->vnode;
+        return 0;
+    }
+new
+    if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) && e->ofd && e->ofd->vmnt) {
+        return exe_put(buf, cap, 0, e->ofd->dirpath);
+    }
+end
+
+fault proc-link-unchecked
+probe proclinkmusl
+file rach2/sys/fs/procfs.c
+expect PROCLINKMUSL FAIL (another process's descriptor: step 24
+old
+    if (!p || !p->fs || !p->fds) {
+        return -ENOENT;
+    }
+    if (!procfs_may_read_mem(p)) {
+        return -EACCES;
+    }
+new
+    if (!p || !p->fs || !p->fds) {
+        return -ENOENT;
+    }
 end

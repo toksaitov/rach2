@@ -128,6 +128,23 @@ int procfs_open_ns(int pid, int kind, int flags);
  */
 int procfs_exe_file(int pid, struct vfs_ref *out);
 
+/**
+ * The object the /proc link `vp` refers to, which the resolver goes on from
+ * when more of a path comes after the link: for /proc/PID/fd/N, the mount and
+ * the node of the file or directory the descriptor is open on; for
+ * /proc/PID/cwd and root, those of the process's working directory and root.
+ * The node is not held, and stays while nothing sleeps. A directory of /dev,
+ * /proc or /sys that a descriptor is open on, or a working directory there,
+ * has no node, and its path from the root is written into `buf` of `cap`
+ * bytes, without a terminator, instead. Returns 0 with `out` filled, the
+ * path's length, or a negative errno: -ENOENT for no such process or
+ * descriptor, -EACCES for a caller that may not read the process's memory,
+ * as Linux asks a ptrace read check of these links, and -ENOTDIR for a
+ * descriptor on anything that is neither a file nor a directory, a pipe, a
+ * socket or a device, which no path goes on past.
+ */
+int procfs_link_target(const struct vpath *vp, struct vfs_ref *out, char *buf, int cap);
+
 /** PID-directory enumeration: the pid in the caller's PID namespace of the
  * `n`th process it sees, counting from 0, one for each thread group, or -1
  * past the end. */

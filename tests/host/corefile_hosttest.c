@@ -798,6 +798,26 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
     return -ENOENT;
 }
 
+/** No row's path is under /dev, /proc or /sys: every one is VNODE_KRFFS. */
+int synth_classify(const char *path, struct vpath *vp)
+{
+    (void)path;
+    vp->kind = VNODE_KRFFS;
+    return vp->kind;
+}
+
+/** No row has a descriptor on a directory of /dev, /proc or /sys: "/". */
+void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
+{
+    (void)kind;
+    (void)pid;
+    (void)tid;
+    if (cap > 1) {
+        out[0] = '/';
+        out[1] = '\0';
+    }
+}
+
 /** No row reads a /proc/PID/exe link: -ENOENT. */
 int procfs_readlink_exe(int pid, char *buf, int cap)
 {

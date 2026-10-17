@@ -829,6 +829,53 @@ int procfs_readlink_dir(int pid, int root, char *buf, int cap)
     return exe_put(buf, cap, 0, root ? "/" : proc_cwd(p));
 }
 
+int procfs_link_target(const struct vpath *vp, struct vfs_ref *out, char *buf, int cap)
+{
+    int pid = procfs_resolve_id(vp);
+    process_t *p = pid < 0 ? NULL : procfs_proc(pid);
+    fd_entry_t *e;
+
+    if (!p || !p->fs || !p->fds) {
+        return -ENOENT;
+    }
+    if (!procfs_may_read_mem(p)) {
+        return -EACCES;
+    }
+    if (vp->kind == VNODE_PROC_ROOT) {
+        out->mnt = p->fs->root_mnt ? p->fs->root_mnt : vfs_root_mount();
+        out->node = p->fs->root_mnt ? p->fs->root_node : out->mnt->root;
+        return 0;
+    }
+    if (vp->kind == VNODE_PROC_CWD) {
+        if (!p->fs->cwd_mnt) {
+            return exe_put(buf, cap, 0, proc_cwd(p));
+        }
+        out->mnt = p->fs->cwd_mnt;
+        out->node = p->fs->cwd_node;
+        return 0;
+    }
+    if (vp->procfd < 0 || vp->procfd >= fd_table_cap(p->fds)) {
+        return -ENOENT;
+    }
+    e = &p->fds->entries[vp->procfd];
+    if (e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING)) {
+        return -ENOENT;
+    }
+    if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) && e->ofd && e->ofd->vmnt) {
+        out->mnt = e->ofd->vmnt;
+        out->node = e->ofd->vnode;
+        return 0;
+    }
+    if (e->type == FD_TYPE_SYNTH_DIR && e->priv) {
+        const struct synth_dir *sd = e->priv;
+        char path[64];
+
+        synth_dir_path(sd->kind, sd->pid, sd->tid, path, (int)sizeof(path));
+        return exe_put(buf, cap, 0, path);
+    }
+    return -ENOTDIR;
+}
+
 /**
  * Append the bytes of `p`'s memory from `start` to `end`, read through its
  * address space, at most 128 KiB: the strings of its arguments or its

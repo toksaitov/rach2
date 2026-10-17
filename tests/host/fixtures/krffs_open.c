@@ -93,6 +93,34 @@ static int walk_exe(struct vfs_ref *cur, void *found, int locked)
     return -ENOENT;
 }
 
+/** No fixture node is a link of /proc followed to its object. */
+static int walk_to_object(const struct vpath *vp, int rc, int parent, int flags)
+{
+    (void)vp;
+    (void)rc;
+    (void)parent;
+    (void)flags;
+    return 0;
+}
+
+/* What `walk_object` returns at the link's object, as vfs.c defines it. */
+#define WALK_AT_OBJECT 2
+
+/** The resolver's step through a /proc link to its object, which no row's
+ * walk takes. */
+static int walk_object(struct vfs_ref *cur, void *found, const char *rest, char **linkpath,
+                       char **target, int locked)
+{
+    (void)cur;
+    (void)found;
+    (void)rest;
+    (void)linkpath;
+    (void)target;
+    (void)locked;
+    check(0, "no walk goes through a /proc link to its object");
+    return -ENOENT;
+}
+
 /** The file page cache, which keeps no page of the fixture's files. */
 static void filecache_forget(struct vfs_mount *mnt, void *node)
 {
@@ -255,6 +283,12 @@ static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result)
     (void)flags;
     (void)result;
     return 0;
+}
+
+/** No fixture path goes through /proc or /dev. */
+static void path_expand_links(char *path)
+{
+    (void)path;
 }
 
 #include "syscall_open.inc"

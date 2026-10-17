@@ -923,29 +923,47 @@ gives it, and to its root directory,
 unless
 .Xr chroot 2
 moved it, for the path of the directory it moved it to.
-A path that ends at either goes on from the path the link holds.
-The kernel follows these links, and those under
+A path that ends at either reaches the directory itself.
+.Pp
+A path that goes on past one of these links, or past a link under
 .Pa fd ,
-only as the last component of a path: a name below one, as in
+.Pa /dev/fd/N ,
+.Pa /dev/stdin ,
+.Pa /dev/stdout
+or
+.Pa /dev/stderr ,
+as
 .Pa /proc/PID/cwd/NAME
-or
-.Pa /proc/PID/fd/N/NAME ,
-is
-.Er ENOENT ,
-and a name below
-.Pa /dev/fd/N
-or
-.Pa /dev/stdin
-is
-.Er ENOTDIR ,
-where Linux goes on in the directory the link leads to.
-A
+and
+.Pa /proc/PID/fd/N/NAME
+do, goes on from the file or directory the link refers to, as on Linux,
+and not from the text the link reads: from a directory wherever a rename
+has put it, and from one removed while it is held, which has no names
+left in it.
+Every call that takes a path goes on so, the calls that make, rename and
+remove names among them, and so does a
 .Ql ..
-after one is taken from the path as written, back to the directory the
-link is in.
-Reading one, or going through it, needs what
+after the link, which climbs from that directory.
+A path past a descriptor open on a file is
+.Er ENOTDIR ,
+as a path past any file is, and so is one past a pipe, a socket or a
+device; one past a descriptor that is not open is
+.Er ENOENT .
+A descriptor open on a directory of
+.Pa /dev ,
+.Pa /proc
+or
+.Pa /sys ,
+and a working directory there, go on from that directory's path.
+A file opened through such a path has a link under
+.Pa fd
+that names it by the path of the directory the walk went through, not by
+the link.
+Reading one of these links, or going through one, needs what
 .Pa exe
-needs.
+needs, and is
+.Er EACCES
+otherwise.
 .It Pa /proc/PID/exe
 A symbolic link to the program the process runs: the file its
 .Xr execve 2

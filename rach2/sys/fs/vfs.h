@@ -35,7 +35,9 @@
  * mount; a `..` first at that root is never handed to the type. A rest that
  * comes back to the mount's root directory in front of the name of a
  * nameless mount there is answered with VFS_ROOT, and the walk enters that
- * mount by its name. No mount covers a node of such a type.
+ * mount by its name. A rest that goes on past /proc/PID/fd/N, cwd or root,
+ * or /dev/fd/N, is answered with VFS_LINK, and the walk goes on from the
+ * object the link refers to. No mount covers a node of such a type.
  *
  * An operation a type does not have is a NULL pointer, and the wrapper of
  * the operation, below, gives the default answer for it.
@@ -75,11 +77,13 @@
 #define VFS_MS_SILENT      0x8000u
 #define VFS_MS_RELATIME    0x200000u
 
-/* What `lookup_rest` returns when `..` would climb above the mount root, and
+/* What `lookup_rest` returns when `..` would climb above the mount root;
  * when the remainder reaches, at the mount's root directory, the name of a
- * nameless mount there. */
+ * nameless mount there; and when it goes on past a link of /proc that refers
+ * to an open file or a directory. */
 #define VFS_CLIMB 1
 #define VFS_ROOT  2
+#define VFS_LINK  3
 
 struct vfs_mount;
 
@@ -172,12 +176,16 @@ struct vfs_ops {
     /* One name in one directory, `..` included; `dir` NULL is the mount
      * root. The node comes back held. */
     int (*lookup)(struct vfs_mount *mnt, void *dir, const char *name, void **node);
-    /* In place of `lookup`, for a synthetic type: the rest of the path in
-     * one call. 0 with the node held; VFS_CLIMB with `*left` at a `..`
-     * that climbs above the mount root, which the walk takes there;
-     * VFS_ROOT with `*left` at the name of a nameless mount at the mount
-     * root, which the walk enters; or a negative errno. */
-    int (*lookup_rest)(struct vfs_mount *mnt, const char *rest, void **node, const char **left);
+    /* In place of `lookup`, for a synthetic type: the rest of the path, its
+     * first `len` bytes, in one call. 0 with the node held; VFS_CLIMB with
+     * `*left` at a `..` that climbs above the mount root, which the walk
+     * takes there; VFS_ROOT with `*left` at the name of a nameless mount at
+     * the mount root, which the walk enters; VFS_LINK with the node of a
+     * /proc/PID/fd/N, cwd or root link held and `*left` at the rest after
+     * it, which the walk goes on with from the link's object; or a negative
+     * errno. */
+    int (*lookup_rest)(struct vfs_mount *mnt, const char *rest, uint32_t len, void **node,
+                       const char **left);
     void (*hold)(struct vfs_mount *mnt, void *node);
     void (*put)(struct vfs_mount *mnt, void *node);
     int (*getattr)(struct vfs_mount *mnt, void *node, struct vfs_stat *st);
@@ -393,7 +401,10 @@ void vfs_init(void);
  * returns with no lock held.
  *
  * Returns 0 or a negative errno: the type's, from `lookup`, `getattr` or
- * `readlink`; EACCES or ENOTDIR from the search check; ENAMETOOLONG for a
+ * `readlink`; EACCES or ENOTDIR from the search check; EACCES for a link of
+ * /proc to another process's file or directory that the caller may not
+ * read, and ENOTDIR for a path past such a link to a pipe, a socket or a
+ * device; ENAMETOOLONG for a
  * component over VFS_NAME_MAX, a leaf over `leafcap` or a link's expansion
  * over VFS_PATH_MAX; ELOOP past VFS_LINK_MAX links; ENOENT for an empty
  * link target or before a root is installed; EINVAL for a parent walk of a
