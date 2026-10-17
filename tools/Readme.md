@@ -53,6 +53,8 @@ The suites, the sets and the analyses run on the testing host, a Windows machine
 
     sudo apt install clang-tidy sparse pmccabe
 
+WSL's `/etc/sysctl.d/60-rach2-compaction.conf` sets `vm.compaction_proactiveness = 20`, applied at once with `sudo sysctl --system` and at boot by systemd. Background compaction maintains contiguous free memory for the Hyper-V socket channels that `wsl.exe` opens. Without it, fragmented memory caused 512 KiB channel allocations to fail despite gigabytes free, and commands from Windows SSH failed with `Wsl/Service/WSAETIMEDOUT`. The setting uses some CPU in `kcompactd` while memory is fragmented.
+
 The `codexapi` suite runs the host's Codex at the version the suite pins, in a network namespace that `unshare` (util-linux) and `ip` (iproute2) make. Codex comes from npm:
 
     sudo apt install nodejs npm
