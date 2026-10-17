@@ -144,13 +144,10 @@ for fault do
     esac
 done
 mkdir -p build
-work=$(mktemp -d "$repo/build/fdlock-proof.XXXXXX")
+work=
+logged=
 child=
 changed=
-for source in rach2/sys/fs/fd.c rach2/sys/syscall_fs.c rach2/sys/fs/vfs.c; do
-    cp "$source" "$work/$(basename "$source").saved"
-done
-cc -O2 -Wall -Wextra -Werror tests/system/runner/runutil.c -o "$work/runutil"
 
 # Stop the running boot's process group and wait until it is gone.
 stop_child()
@@ -176,8 +173,12 @@ restore()
 }
 
 # Stop the boot and, when a fault is in the source, restore it and rebuild.
+# Then remove the scratch directory. A failure after its path was printed
+# keeps it as evidence; a signal does not.
 cleanup()
 {
+    status=$?
+    [ -n "$work" ] || return 0
     stop_child
     if [ -n "$changed" ]; then
         restore
@@ -185,11 +186,21 @@ cleanup()
         make -C rach2 "ARCH=$RACH2_ARCH" >"$work/cleanup.build.log" 2>&1
         make build/tests/host/fd_hosttest "ARCH=$RACH2_ARCH" >>"$work/cleanup.build.log" 2>&1
     fi
+    case $status in
+        0|129|130|143) ;;
+        *) [ -z "$logged" ] || return 0 ;;
+    esac
+    rm -rf "$work"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "$repo/build/fdlock-proof.XXXXXX")
+for source in rach2/sys/fs/fd.c rach2/sys/syscall_fs.c rach2/sys/fs/vfs.c; do
+    cp "$source" "$work/$(basename "$source").saved"
+done
+cc -O2 -Wall -Wextra -Werror tests/system/runner/runutil.c -o "$work/runutil"
 
 # Remove the three changed objects, the kernel and fd_hosttest, so that make
 # builds them again.
@@ -241,6 +252,7 @@ run_phase()
 }
 
 echo "fdlock-mutation: logs: $work"
+logged=1
 run_phase fixed pass
 for fault do
     select_fault "$fault"

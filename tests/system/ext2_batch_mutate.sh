@@ -57,10 +57,10 @@ probe=build$ARCH_SUFFIX/tests/ext2probe
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" ext2-batch-mutation "$repo/tests/system/ext2_batch_mutate.sh" "$@"
 mkdir -p build
-work=$(mktemp -d "$repo/build/ext2-batch-proof.XXXXXX")
+work=
+logged=
 source=rach2/sys/fs/ext2.c
 baseline=${1:-}
-cp "$source" "$work/source.saved"
 child=
 changed=
 
@@ -93,18 +93,29 @@ restore()
 }
 
 # Stop the boot and, when a fault is in the source, restore it and rebuild.
+# Then remove the scratch directory. A failure after its path was printed
+# keeps it as evidence; a signal does not.
 cleanup()
 {
+    status=$?
+    [ -n "$work" ] || return 0
     stop_child
     if [ -n "$changed" ]; then
         restore
         rebuild >"$work/cleanup.build.log" 2>&1
     fi
+    case $status in
+        0|129|130|143) ;;
+        *) [ -z "$logged" ] || return 0 ;;
+    esac
+    rm -rf "$work"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "$repo/build/ext2-batch-proof.XXXXXX")
+cp "$source" "$work/source.saved"
 
 # check_disk PHASE: copy the ext2 root out of PHASE's disk, require e2fsck to
 # pass it, and require the bytes of /cost-rewrite and /cost-append.
@@ -180,6 +191,7 @@ run_phase()
 }
 
 echo "ext2-batch-mutation: logs: $work"
+logged=1
 make -s krffs build/tests/system/harness build/tests/system/runutil \
     build/tools/image/mkmbr "ARCH=$RACH2_ARCH" >"$work/build.log" 2>&1
 make -s -C tests "../$probe" "ARCH=$RACH2_ARCH" >>"$work/build.log" 2>&1

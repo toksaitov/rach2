@@ -62,10 +62,8 @@ tree=build$ARCH_SUFFIX
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" ext2-map-mutation "$repo/tests/system/ext2_map_mutate.sh" "$@"
 mkdir -p build
-work=$(mktemp -d "$repo/build/ext2-map-proof.XXXXXX")
-for f in rach2/sys/mm/filemap.c rach2/sys/syscall_fs.c; do
-    cp "$f" "$work/$(basename "$f").saved"
-done
+work=
+logged=
 child=
 changed=
 
@@ -93,18 +91,31 @@ restore()
 }
 
 # Stop the boot and, when a fault is in a source, restore it and rebuild.
+# Then remove the scratch directory. A failure after its path was printed
+# keeps it as evidence; a signal does not.
 cleanup()
 {
+    status=$?
+    [ -n "$work" ] || return 0
     stop_child
     if [ -n "$changed" ]; then
         restore
         make -s rach2 "ARCH=$RACH2_ARCH" >"$work/cleanup.build.log" 2>&1
     fi
+    case $status in
+        0|129|130|143) ;;
+        *) [ -z "$logged" ] || return 0 ;;
+    esac
+    rm -rf "$work"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "$repo/build/ext2-map-proof.XXXXXX")
+for f in rach2/sys/mm/filemap.c rach2/sys/syscall_fs.c; do
+    cp "$f" "$work/$(basename "$f").saved"
+done
 
 # run_phase PHASE EXPECTED: build the kernel and run mapmusl on an ext2 root
 # under it. EXPECTED is `pass`, or the words the row prints when it fails.
@@ -134,6 +145,7 @@ run_phase()
 }
 
 echo "ext2-map-mutation: logs: $work"
+logged=1
 make -s test-image build/tests/system/harness build/tests/system/runutil \
     build/tools/image/mkmbr "ARCH=$RACH2_ARCH" >"$work/build.log" 2>&1
 run_phase fixed pass

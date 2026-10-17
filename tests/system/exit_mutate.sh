@@ -106,19 +106,9 @@ export RACH2_QEMU ARCH_BUILD
 tree=build$ARCH_SUFFIX
 mkdir -p build
 sources='rach2/sys/syscall_proc.c rach2/kernel.c rach2/sys/proc/exit.c'
-if [ "$#" -eq 0 ]; then
-    work=$(mktemp -d "$repo/build/exit-proof.XXXXXX")
-    for source in $sources; do
-        cp "$source" "$work/$(basename "$source").saved"
-    done
-elif [ "$#" -eq 2 ] && [ "$1" = --resume ]; then
-    work=$(CDPATH='' cd -- "$2" && pwd)
-    for source in $sources; do
-        cmp "$source" "$work/$(basename "$source").saved"
-    done
-else
-    echo 'exit-integration: usage: exit_mutate.sh [--resume work-directory | --texts]' >&2; exit 1
-fi
+work=
+made=
+logged=
 child=
 changed=
 
@@ -155,18 +145,39 @@ restore()
 }
 
 # Stop the boot and, when a fault is in the source, restore it and rebuild.
+# Then remove the scratch directory this run made, unless the run stopped after
+# printing its path, which keeps it for --resume.
 cleanup()
 {
+    status=$?
+    [ -n "$work" ] || return 0
     stop_child
     if [ -n "$changed" ]; then
         restore
         rebuild >"$work/cleanup.build.log" 2>&1
     fi
+    [ -n "$made" ] || return 0
+    [ "$status" -eq 0 ] || [ -z "$logged" ] || return 0
+    rm -rf "$made"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+if [ "$#" -eq 0 ]; then
+    work=$(mktemp -d "$repo/build/exit-proof.XXXXXX")
+    made=$work
+    for source in $sources; do
+        cp "$source" "$work/$(basename "$source").saved"
+    done
+elif [ "$#" -eq 2 ] && [ "$1" = --resume ]; then
+    work=$(CDPATH='' cd -- "$2" && pwd)
+    for source in $sources; do
+        cmp "$source" "$work/$(basename "$source").saved"
+    done
+else
+    echo 'exit-integration: usage: exit_mutate.sh [--resume work-directory | --texts]' >&2; exit 1
+fi
 
 # Build the kernel for the phase named by `phase`, keep a copy, and record
 # the checksums of the sources and of what the boot reads.
@@ -235,6 +246,7 @@ run_row()
 }
 
 echo "exit-integration: logs: $work"
+logged=1
 timeout=$(python3 - <<'PY'
 import math
 import os

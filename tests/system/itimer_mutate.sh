@@ -95,10 +95,8 @@ fi
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" itimer-mutation "$repo/tests/system/itimer_mutate.sh" "$@"
 mkdir -p build
-work=$(mktemp -d "$repo/build/itimer-mutation.XXXXXX")
-cp rach2/sys/proc/process.c "$work/process.saved"
-cp rach2/sys/syscall.c "$work/syscall.saved"
-cp rach2/sys/syscall_proc.c "$work/syscall_proc.saved"
+work=
+logged=
 child=
 changed=
 
@@ -136,18 +134,31 @@ restore()
 }
 
 # Stop the boot and, when a fault is in a source, restore it and rebuild.
+# Then remove the scratch directory. A failure after its path was printed
+# keeps it as evidence; a signal does not.
 cleanup()
 {
+    status=$?
+    [ -n "$work" ] || return 0
     stop_child
     if [ -n "$changed" ]; then
         restore
         rebuild >"$work/cleanup.build.log" 2>&1
     fi
+    case $status in
+        0|129|130|143) ;;
+        *) [ -z "$logged" ] || return 0 ;;
+    esac
+    rm -rf "$work"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "$repo/build/itimer-mutation.XXXXXX")
+cp rach2/sys/proc/process.c "$work/process.saved"
+cp rach2/sys/syscall.c "$work/syscall.saved"
+cp rach2/sys/syscall_proc.c "$work/syscall_proc.saved"
 
 # run_probe EXPECTED: boot the kernel and run sigprobe. With EXPECTED `pass`
 # it must pass; otherwise it must fail the row named in `detail`.
@@ -192,6 +203,7 @@ run_phase()
 }
 
 echo "itimer-mutation: logs: $work"
+logged=1
 make -s -C tests ../"$tree"/tests/sigprobe "ARCH=$RACH2_ARCH" >"$work/build.log" 2>&1
 # These three image tools do not use mkhash's vendored crypt source.
 make -s -C krffs -o libc-check ../build/krffs/mkfs.krffs \

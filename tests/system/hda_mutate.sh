@@ -50,9 +50,9 @@ tree=build$ARCH_SUFFIX
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" hda-guest "$repo/tests/system/hda_mutate.sh" "$@"
 mkdir -p build
-work=$(mktemp -d "$repo/build/hda-guest.XXXXXX")
+work=
+logged=
 source=rach2/sys/fs/synthfs.c
-cp "$source" "$work/source.saved"
 child=
 changed=
 
@@ -83,18 +83,29 @@ restore()
 }
 
 # Stop the boot and, when a fault is in the source, restore it and rebuild.
+# Then remove the scratch directory. A failure after its path was printed
+# keeps it as evidence; a signal does not.
 cleanup()
 {
+    status=$?
+    [ -n "$work" ] || return 0
     stop_child
     if [ -n "$changed" ]; then
         restore
         rebuild >"$work/cleanup.build.log" 2>&1
     fi
+    case $status in
+        0|129|130|143) ;;
+        *) [ -z "$logged" ] || return 0 ;;
+    esac
+    rm -rf "$work"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "$repo/build/hda-guest.XXXXXX")
+cp "$source" "$work/source.saved"
 
 # run_phase PHASE EXPECTED: build the kernel and run hdaprobe, or
 # `hdaprobe absent` with rach2.noaudio in the phase `absent`. With EXPECTED
@@ -139,6 +150,7 @@ run_phase()
 }
 
 echo "hda-guest: logs: $work"
+logged=1
 # The probe is one of the musl programs, built by `make musl-programs` with
 # the others, so this script neither compiles it nor keeps a copy of that
 # compile line.

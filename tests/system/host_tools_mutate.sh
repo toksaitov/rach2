@@ -133,7 +133,8 @@ case "${ARCH:-i686}" in
     *) probes=build/tests ;;
 esac
 mkdir -p build
-WORK=$(mktemp -d "$REPO/build/host-tools-proof.XXXXXX")
+WORK=
+logged=
 source_file=
 created=
 active=
@@ -176,11 +177,19 @@ restore() {
         source_file=
     fi
 }
-trap restore 0
+# On exit: restore, then remove the scratch directory unless fail() printed
+# its path.
+cleanup() {
+    [ -n "$WORK" ] || return 0
+    restore
+    [ -n "$logged" ] || rm -rf "$WORK"
+}
+trap cleanup 0
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
+WORK=$(mktemp -d "$REPO/build/host-tools-proof.XXXXXX")
 # Report $* with the logs' directory and exit 1.
-fail() { echo "host-tools-proof: $*; logs: $WORK" >&2; exit 1; }
+fail() { echo "host-tools-proof: $*; logs: $WORK" >&2; logged=1; exit 1; }
 # Run a command as the leader of a new process group, made by `runutil
 # group`, and end it with perl's alarm after 120 seconds. The group's id is
 # the command's pid, so stop_job can stop every process the command started:

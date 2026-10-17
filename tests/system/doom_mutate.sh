@@ -94,11 +94,8 @@ done
     exit 1
 }
 mkdir -p build
-work=$(mktemp -d "$repo/build/doom-proof.XXXXXX")
-for source in ports/doom/doomgeneric_rach2.c ports/doom/src/d_iwad.c; do
-    cp "$source" "$work/$(basename "$source").saved"
-done
-cc -O2 -Wall -Wextra -Werror tests/system/runner/runutil.c -o "$work/runutil"
+work=
+logged=
 child=
 changed=
 
@@ -134,19 +131,33 @@ restore()
 }
 
 # Stop the boot and, when a fault is in the source, restore it and rebuild.
+# Then remove the scratch directory. A failure after its path was printed
+# keeps it as evidence; a signal does not.
 cleanup()
 {
+    status=$?
+    [ -n "$work" ] || return 0
     stop_child
     if [ -n "$changed" ]; then
         restore
         force_rebuild
         make ports/doom "ARCH=$RACH2_ARCH" >"$work/cleanup.build.log" 2>&1
     fi
+    case $status in
+        0|129|130|143) ;;
+        *) [ -z "$logged" ] || return 0 ;;
+    esac
+    rm -rf "$work"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "$repo/build/doom-proof.XXXXXX")
+for source in ports/doom/doomgeneric_rach2.c ports/doom/src/d_iwad.c; do
+    cp "$source" "$work/$(basename "$source").saved"
+done
+cc -O2 -Wall -Wextra -Werror tests/system/runner/runutil.c -o "$work/runutil"
 
 # run_phase PHASE EXPECTED: the game built from the sources as they stand, on
 # its own so that a fault that does not compile stops the proof here, then the
@@ -185,6 +196,7 @@ run_phase()
 }
 
 echo "doom-mutation: logs: $work"
+logged=1
 run_phase fixed pass
 for fault do
     select_fault "$fault"

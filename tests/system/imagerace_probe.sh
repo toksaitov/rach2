@@ -50,13 +50,17 @@ if [ "$mutate" -eq 2 ]; then
     exit 0
 fi
 mkdir -p build/tests/system
-work=$(mktemp -d "$repo/build/tests/system/imagerace-probe.XXXXXX")
-tree=$work/tree
+work=
+logged=
 child=
 
-# Stop the build, then put back the private Makefile and probe source.
+# Stop the build, put back the private Makefile and probe source, and remove
+# the scratch directory. A failure after its path was printed keeps it as
+# evidence; a signal does not.
 cleanup()
 {
+    status=$?
+    [ -n "$work" ] || return 0
     if [ -n "$child" ]; then
         kill -TERM "$child" 2>/dev/null || :
         wait "$child" 2>/dev/null || :
@@ -67,11 +71,18 @@ cleanup()
         cp "$work/conloadprobe.saved" "$tree/tests/conloadprobe.c"
         touch "$tree/Makefile" "$tree/tests/conloadprobe.c"
     fi
+    case $status in
+        0|129|130|143) ;;
+        *) [ -z "$logged" ] || return 0 ;;
+    esac
+    rm -rf "$work"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "$repo/build/tests/system/imagerace-probe.XXXXXX")
+tree=$work/tree
 
 # Report $* and exit 1, so that a failed setup or build is never taken for a
 # stale image.
@@ -123,6 +134,7 @@ printf '%s\n' 'manifest test' 'sentinel /conloadprobe 0755:0:0' 'init none' \
 cp "$tree/Makefile" "$work/Makefile.saved"
 cp "$tree/tests/conloadprobe.c" "$work/conloadprobe.saved"
 echo "imagerace-probe: logs: $work"
+logged=1
 build "$work/tools.log" -C "$tree/krffs" -j4 -o libc-check \
     ../build/krffs/mkfs.krffs ../build/krffs/stageimage.krffs \
     ../build/krffs/readfile.krffs

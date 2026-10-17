@@ -80,9 +80,9 @@ tree=build$ARCH_SUFFIX
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" metal-fat-mutation "$repo/tests/system/metal_fat_mutate.sh" "$@"
 mkdir -p build
-work=$(mktemp -d "$repo/build/metal-fat-proof.XXXXXX")
+work=
+logged=
 source=rach2/sys/fs/bcache.c
-cp "$source" "$work/source.saved"
 child=
 recorder=
 changed=
@@ -126,17 +126,28 @@ restore()
 }
 
 # Stop the suite and, when a fault is in the source, restore it.
+# Then remove the scratch directory. A failure after its path was printed
+# keeps it as evidence; a signal does not.
 cleanup()
 {
+    status=$?
+    [ -n "$work" ] || return 0
     stop_child
     if [ -n "$changed" ]; then
         restore
     fi
+    case $status in
+        0|129|130|143) ;;
+        *) [ -z "$logged" ] || return 0 ;;
+    esac
+    rm -rf "$work"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "$repo/build/metal-fat-proof.XXXXXX")
+cp "$source" "$work/source.saved"
 
 # run_phase PHASE EXPECTED: run the metal suite, its output recorded through
 # a fifo. With EXPECTED `pass` the FAT row must pass; otherwise the suite
@@ -178,6 +189,7 @@ run_phase()
 }
 
 echo "metal-fat-mutation: logs: $work"
+logged=1
 "${CC:-cc}" -O2 -Wall -Wextra -Werror -o "$work/runutil" \
     tests/system/runner/runutil.c > "$work/helper.build.log" 2>&1
 cat "$work/helper.build.log"

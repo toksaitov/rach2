@@ -58,9 +58,8 @@ tree=build$ARCH_SUFFIX
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" metal-installed-mutation "$repo/tests/system/accept/installed_mutate.sh" "$@"
 mkdir -p build
-work=$(mktemp -d "$repo/build/metal-installed-proof.XXXXXX")
-cp "$accept" "$work/accept.saved"
-cp "$bootctl" "$work/bootctl.saved"
+work=
+logged=
 child=
 changed=
 
@@ -94,18 +93,30 @@ restore()
     changed=
 }
 
-# On exit: stop the row and restore any source a fault changed.
+# On exit: stop the row, restore any source a fault changed, and remove the
+# scratch directory. A failure after its path was printed keeps it as
+# evidence; a signal does not.
 cleanup()
 {
+    status=$?
+    [ -n "$work" ] || return 0
     stop_child
     if [ -n "$changed" ]; then
         restore
     fi
+    case $status in
+        0|129|130|143) ;;
+        *) [ -z "$logged" ] || return 0 ;;
+    esac
+    rm -rf "$work"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "$repo/build/metal-installed-proof.XXXXXX")
+cp "$accept" "$work/accept.saved"
+cp "$bootctl" "$work/bootctl.saved"
 
 # run_phase PHASE ROW EXPECTED: run installed_test.sh's ROW; EXPECTED is
 # `pass`, or the text the failing row must print.
@@ -135,6 +146,7 @@ run_phase()
 }
 
 echo "metal-installed-mutation: logs: $work"
+logged=1
 make -s -j4 metal-installed-tools "ARCH=$RACH2_ARCH" > "$work/build.log" 2>&1
 cat "$work/build.log"
 run_phase fixed all pass

@@ -122,20 +122,7 @@ tree=build$ARCH_SUFFIX
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" install-keys-mutation "$repo/tests/system/install_keys_mutate.sh" "$@"
 mkdir -p build
-work=$(mktemp -d "$repo/build/install-keys-proof.XXXXXX")
-echo "install-keys-mutation: logs: $work"
-# The tree with its built programs, so nothing is built again, and without
-# the images, which the rows make, the GNU layers, the failed runs' logs and
-# the other proofs' work, a hundred gigabytes on a host that has built the
-# GNU system.
-rsync -a --exclude=/.git --exclude=/build/.run.lock --exclude=/build/images \
-    --exclude='/build/*/images' --exclude=/build/vendor/gnu --exclude='/build/*/vendor/gnu' \
-    --exclude=/build/tests/failed --exclude='/build/machine-*' --exclude='/build/*-proof.*' \
-    "$repo/" "$work/tree/"
-cd "$work/tree"
-ARCH_BUILD=$work/tree/build$ARCH_SUFFIX
-source="$work/tree/utils/rach2-install"
-cp "$source" "$work/installer.saved"
+work=
 child=
 
 # Stop the running suite's process group and wait until it is gone.
@@ -156,16 +143,36 @@ restore()
     touch "$source"
 }
 
-# Stop the suite and restore the installer.
+# Stop the suite and restore the installer, once it is saved. Then remove the
+# scratch directory. A failure keeps it as evidence; a signal does not.
 cleanup()
 {
+    status=$?
+    [ -n "$work" ] || return 0
     stop_child
-    restore
+    [ ! -f "$work/installer.saved" ] || restore
+    case $status in
+        0|129|130|143) rm -rf "$work" ;;
+    esac
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "$repo/build/install-keys-proof.XXXXXX")
+echo "install-keys-mutation: logs: $work"
+# The tree with its built programs, so nothing is built again, and without
+# the images, which the rows make, the GNU layers, the failed runs' logs and
+# the other proofs' work, a hundred gigabytes on a host that has built the
+# GNU system.
+rsync -a --exclude=/.git --exclude=/build/.run.lock --exclude=/build/images \
+    --exclude='/build/*/images' --exclude=/build/vendor/gnu --exclude='/build/*/vendor/gnu' \
+    --exclude=/build/tests/failed --exclude='/build/machine-*' --exclude='/build/*-proof.*' \
+    "$repo/" "$work/tree/"
+cd "$work/tree"
+ARCH_BUILD=$work/tree/build$ARCH_SUFFIX
+source="$work/tree/utils/rach2-install"
+cp "$source" "$work/installer.saved"
 
 # run_phase PHASE STATUS [FAILURE]: rebuild the images that stage the
 # installer and run the installer suite on them, which must exit with STATUS:

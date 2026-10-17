@@ -54,10 +54,8 @@ tree=build$ARCH_SUFFIX
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" install-stick-mutation "$repo/tests/system/install_stick_mutate.sh" "$@"
 mkdir -p build
-work=$(mktemp -d "$repo/build/install-stick-proof.XXXXXX")
-source="$work/images.mk"
-cp mk/images.mk "$source"
-cp "$source" "$work/images.saved"
+work=
+logged=
 child=
 
 # Stop the running suite's process group and wait until it is gone.
@@ -78,16 +76,29 @@ restore()
     touch "$source"
 }
 
-# Stop the test and restore the copy of images.mk.
+# Stop the test and restore the copy of images.mk, once it is saved. Then
+# remove the scratch directory. A failure after its path was printed keeps it
+# as evidence; a signal does not.
 cleanup()
 {
+    status=$?
+    [ -n "$work" ] || return 0
     stop_child
-    restore
+    [ ! -f "$work/images.saved" ] || restore
+    case $status in
+        0|129|130|143) ;;
+        *) [ -z "$logged" ] || return 0 ;;
+    esac
+    rm -rf "$work"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "$repo/build/install-stick-proof.XXXXXX")
+source="$work/images.mk"
+cp mk/images.mk "$source"
+cp "$source" "$work/images.saved"
 
 # run_phase PHASE STATUS MESSAGE: make the stick from the private rule and
 # run install_stick_test.sh on it, which must exit with STATUS and print
@@ -116,6 +127,7 @@ run_phase()
 }
 
 echo "install-stick-mutation: logs: $work"
+logged=1
 make -s -j8 rach2 "$tree"/images/installer-root.ext2 rach2-recovery-image \
     build/tests/system/harness build/tests/system/runutil \
     build/tools/image/mkmbr build/tools/image/fatchains build/tools/image/grubembed \

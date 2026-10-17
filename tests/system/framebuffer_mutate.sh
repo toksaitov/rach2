@@ -55,9 +55,9 @@ tree=build$ARCH_SUFFIX
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" framebuffer-guest "$repo/tests/system/framebuffer_mutate.sh" "$@"
 mkdir -p build
-work=$(mktemp -d "$repo/build/framebuffer-guest.XXXXXX")
+work=
+logged=
 source=rach2/sys/syscall.c
-cp "$source" "$work/syscall.saved"
 child=
 changed=
 
@@ -90,18 +90,29 @@ restore()
 }
 
 # Stop the boot and, when a fault is in the source, restore it and rebuild.
+# Then remove the scratch directory. A failure after its path was printed
+# keeps it as evidence; a signal does not.
 cleanup()
 {
+    status=$?
+    [ -n "$work" ] || return 0
     stop_child
     if [ -n "$changed" ]; then
         restore
         rebuild >"$work/cleanup.build.log" 2>&1
     fi
+    case $status in
+        0|129|130|143) ;;
+        *) [ -z "$logged" ] || return 0 ;;
+    esac
+    rm -rf "$work"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "$repo/build/framebuffer-guest.XXXXXX")
+cp "$source" "$work/syscall.saved"
 
 # run_probe PROBE TOKEN EXPECTED: boot the kernel of the phase named by
 # `phase` and run PROBE. With EXPECTED `pass` it must print `TOKEN OK`;
@@ -152,6 +163,7 @@ run_phase()
 }
 
 echo "framebuffer-guest: logs: $work"
+logged=1
 make -s -C tests ../"$tree"/tests/devprobe ../"$tree"/tests/loopprobe "ARCH=$RACH2_ARCH" >"$work/build.log" 2>&1
 # These three image tools do not use mkhash's vendored crypt source.
 make -s -C krffs -o libc-check ../build/krffs/mkfs.krffs \

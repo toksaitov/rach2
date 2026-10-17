@@ -56,9 +56,7 @@ export RACH2_QEMU ARCH_BUILD
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" init-refusal-mutation "$repo/tests/system/init_refusal_mutate.sh" "$@"
 mkdir -p build
-work=$(mktemp -d "$repo/build/init-refusal-proof.XXXXXX")
-tree="$work/tree"
-source="$tree/rach2/kernel.c"
+work=
 child=
 changed=
 
@@ -84,17 +82,27 @@ restore()
 }
 
 # Stop the row and, when a fault is in the private source, restore it.
+# Then remove the scratch directory. A failure keeps it as evidence; a signal
+# does not.
 cleanup()
 {
+    status=$?
+    [ -n "$work" ] || return 0
     stop_child
     if [ -n "$changed" ]; then
         restore
     fi
+    case $status in
+        0|129|130|143) rm -rf "$work" ;;
+    esac
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "$repo/build/init-refusal-proof.XXXXXX")
+tree="$work/tree"
+source="$tree/rach2/kernel.c"
 
 # run_phase PHASE EXPECTED: build the kernel in the private tree and run the
 # row on it. With EXPECTED `pass` the row must pass; otherwise it must fail

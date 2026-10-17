@@ -148,9 +148,8 @@ fi
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" harness-input-mutation "$repo/tests/system/harness_input_mutate.sh" "$@"
 mkdir -p build/tests
-work=$(mktemp -d "$repo/build/tests/harness-input-proof.XXXXXX")
-cp tests/system/runner/harness.c "$work/harness.c"
-cp "$work/harness.c" "$work/harness.saved"
+work=
+logged=
 child=
 
 # Stop the selftest, and put back the saved private copy of harness.c.
@@ -164,10 +163,28 @@ cleanup()
     cp "$work/harness.saved" "$work/harness.c"
     touch "$work/harness.c"
 }
-trap cleanup EXIT
+
+# On exit: run cleanup once the private copy is saved, and remove the scratch
+# directory. A failure after its path was printed keeps it as evidence; a
+# signal does not.
+exit_cleanup()
+{
+    status=$?
+    [ -n "$work" ] || return 0
+    [ ! -f "$work/harness.saved" ] || cleanup
+    case $status in
+        0|129|130|143) ;;
+        *) [ -z "$logged" ] || return 0 ;;
+    esac
+    rm -rf "$work"
+}
+trap exit_cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "$repo/build/tests/harness-input-proof.XXXXXX")
+cp tests/system/runner/harness.c "$work/harness.c"
+cp "$work/harness.c" "$work/harness.saved"
 
 # run_phase PHASE STATUS MESSAGE: compile the private copy and run its
 # selftest, which must exit with STATUS and print MESSAGE.
@@ -195,6 +212,7 @@ run_phase()
 }
 
 echo "harness-input-mutation: logs: $work"
+logged=1
 run_phase fixed 0 'a write the machine does not read ends at the deadline'
 apply_blocking "$work/harness.c"
 run_phase blocking-mutated 1 'a write the machine does not read was not ended by the deadline'
