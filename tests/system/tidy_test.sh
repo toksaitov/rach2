@@ -49,7 +49,7 @@ trap '[ -z "$busy" ] || kill $busy 2> /dev/null; [ -z "$work" ] || rm -rf "$work
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-made=$(mktemp -d "${TMPDIR:-/tmp}/tidy-test.XXXXXX") || exit 1
+made=$(mktemp -d "${TMPDIR:-/tmp}/rach2-tidy-test.XXXXXX") || exit 1
 work=$made
 real=$(cd "$made" && pwd -P) || exit 1
 case $real in /?*) work=$real ;; *) exit 1 ;; esac

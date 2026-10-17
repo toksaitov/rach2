@@ -18,7 +18,7 @@ status=0
 trap 'status=$?; rm -rf ${WORK:+"$WORK"}; [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1; exit "$status"' 0
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/probecheck.XXXXXX")
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-probecheck.XXXXXX")
 # The programs of both architectures, each named on the make's command line,
 # since the assignments cover both and a run's own ARCH would leave out the
 # probes of an interface the other alone has.

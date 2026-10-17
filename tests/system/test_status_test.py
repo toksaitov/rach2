@@ -172,7 +172,7 @@ def main():
     helper = sys.argv[1]
     signal.signal(signal.SIGHUP, stop)
     signal.signal(signal.SIGTERM, stop)
-    with tempfile.TemporaryDirectory(prefix="test-status.") as temp:
+    with tempfile.TemporaryDirectory(prefix="rach2-test-status.") as temp:
         root = Path(temp)
         copy = root / "reader.py"
         shutil.copyfile(source, copy)

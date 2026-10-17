@@ -22,7 +22,7 @@ trap '[ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-work=$(mktemp -d "${TMPDIR:-/tmp}/board-test.XXXXXX")
+work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-board-test.XXXXXX")
 mkdir -p "$work/bin" "$work/state"
 cp "$repo/tools/flow/board.sh" "$work/board.sh"
 

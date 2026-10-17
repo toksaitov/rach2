@@ -200,7 +200,7 @@ EOF
 # input, and the holder releases the lock.
 hold_copy()
 {
-    hold=$(mktemp -d "${TMPDIR:-/tmp}/testing.XXXXXX") || return 1
+    hold=$(mktemp -d "${TMPDIR:-/tmp}/rach2-testing.XXXXXX") || return 1
     mkfifo "$hold/in" "$hold/out" || return 1
     { hold_script "$1 from $(hostname -s):$REPO"; cat; } < "$hold/in" |
         ssh -o BatchMode=yes "$HOST" "MSYS_NO_PATHCONV=1 wsl.exe -- bash -s -- $DEST" \

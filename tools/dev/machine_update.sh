@@ -42,7 +42,7 @@ trap 'rm -rf ${work:+"$work"}' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-work=$(mktemp -d "${TMPDIR:-/tmp}/machine-update.XXXXXX") || exit 1
+work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-machine-update.XXXXXX") || exit 1
 set -- ssh -i "$key" -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR \
     -o UserKnownHostsFile="$work/known" -o StrictHostKeyChecking=accept-new \
     "root@$address"

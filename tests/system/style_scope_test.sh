@@ -44,7 +44,7 @@ trap 'rm -rf ${work:+"$work"}' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-work=$(mktemp -d "${TMPDIR:-/tmp}/style-scope.XXXXXX")
+work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-style-scope.XXXXXX")
 tree=$work/tree
 for d in rach2/sys/arch/i686 krffs/manifests krffs/vendor utils ish tests/host tests/system/fixtures \
     tools/verify tools/setup mk man ports/doom/src vendor/busybox/busybox-9.9 \

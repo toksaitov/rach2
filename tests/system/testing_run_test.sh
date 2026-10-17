@@ -16,7 +16,7 @@ trap 'rm -rf ${work:+"$work"}' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-work=$(mktemp -d "${TMPDIR:-/tmp}/testing-run-test.XXXXXX")
+work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-testing-run-test.XXXXXX")
 mkdir -p "$work/bin" "$work/home" "$work/copy" "$work/tree/tools/dev"
 script=$work/tree/tools/dev/testing.sh
 cp "$repo/tools/dev/testing.sh" "$script"

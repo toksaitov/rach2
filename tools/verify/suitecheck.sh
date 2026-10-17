@@ -140,7 +140,7 @@ selftest() {
     trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    T=$(mktemp -d "${TMPDIR:-/tmp}/suitecheck.XXXXXX") || exit 2
+    T=$(mktemp -d "${TMPDIR:-/tmp}/rach2-suitecheck.XXXXXX") || exit 2
     n=0; bad=0
     # case_ STATUS NAME: check the tree under $T/NAME and expect STATUS.
     case_() {

@@ -47,7 +47,7 @@ trap 'rm -rf ${work:+"$work"}' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-work=$(mktemp -d "${TMPDIR:-/tmp}/run-scripts.XXXXXX")
+work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-run-scripts.XXXXXX")
 # The scripts name their files from `cd` and `pwd`, which fold a doubled
 # slash, so the expected paths are made the same way.
 work=$(CDPATH='' cd -- "$work" && pwd)

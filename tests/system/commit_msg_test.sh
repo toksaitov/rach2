@@ -37,7 +37,7 @@ trap '[ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-work=$(mktemp -d "${TMPDIR:-/tmp}/commit-msg.XXXXXX") || exit 1
+work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-commit-msg.XXXXXX") || exit 1
 hook=$work/commit-msg
 cp "$repo/tools/git-hooks/commit-msg" "$hook.orig" || exit 1
 cp "$hook.orig" "$hook" || exit 1

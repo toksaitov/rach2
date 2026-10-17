@@ -36,7 +36,7 @@ trap 'rm -rf ${work:+"$work"}' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-work=$(mktemp -d "${TMPDIR:-/tmp}/worker-test.XXXXXX") || exit 1
+work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-worker-test.XXXXXX") || exit 1
 mkdir -p "$work/bin" "$work/flow" "$work/home"
 
 # fault NAME: put fault NAME into the private copy of worker.sh, or the

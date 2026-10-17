@@ -71,7 +71,7 @@ trap 'rm -rf ${work:+"$work"}' 0
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-work=$(mktemp -d "${TMPDIR:-/tmp}/doccheck.XXXXXX") || exit 2
+work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-doccheck.XXXXXX") || exit 2
 
 # The tokens of the C text on stdin, one a line, literals kept whole and
 # each directive set between empty lines; the status is 1, with the

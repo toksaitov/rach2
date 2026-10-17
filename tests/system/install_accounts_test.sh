@@ -48,7 +48,7 @@ trap '[ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-work=$(mktemp -d "${TMPDIR:-/tmp}/install-accounts.XXXXXX") || exit 1
+work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-install-accounts.XXXXXX") || exit 1
 
 for function in add_lines keep_image_accounts; do
     awk -v f="$function" '$0 == f "() {" { copy = 1 } copy { print } copy && /^\}$/ { exit }' \

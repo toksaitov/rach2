@@ -41,7 +41,7 @@ trap 'rm -rf ${work:+"$work"}' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-work=$(mktemp -d "${TMPDIR:-/tmp}/release-test.XXXXXX") || exit 1
+work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-release-test.XXXXXX") || exit 1
 tree=$work/tree
 mkdir -p "$work/bin" "$tree/tools/flow" "$tree/krffs"
 : > "$tree/krffs/rach2_demo_ed25519"

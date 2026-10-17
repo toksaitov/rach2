@@ -21,7 +21,7 @@ trap '[ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-work=$(mktemp -d "${TMPDIR:-/tmp}/ci-test.XXXXXX")
+work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-ci-test.XXXXXX")
 mkdir -p "$work/bin" "$work/tree/tools/ci" "$work/tree/tests"
 cp "$repo/tools/ci/report.sh" "$work/report.sh"
 cp "$repo/tools/ci/bisect.sh" "$work/bisect.sh"

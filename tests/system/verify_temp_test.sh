@@ -9,7 +9,7 @@ WORK=
 trap 'rm -rf ${WORK:+"$WORK"}' 0
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/verify-temp-test.XXXXXX")
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-verify-temp-test.XXXXXX")
 # Report $* and exit 1.
 fail() { echo "verify-temp-test: $*" >&2; exit 1; }
 mkdir "$WORK/rach2_verify"

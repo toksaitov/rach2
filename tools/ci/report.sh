@@ -55,7 +55,7 @@ trap 'rm -f ${statuses:+"$statuses"}' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-statuses=$(mktemp "${TMPDIR:-/tmp}/report.XXXXXX") || exit 1
+statuses=$(mktemp "${TMPDIR:-/tmp}/rach2-report.XXXXXX") || exit 1
 rc=0
 
 lost() { # lost WHAT: name a GitHub call that failed
