@@ -32,8 +32,9 @@
 # `resources: critical: WHAT`, WHAT naming each reading below its threshold:
 # low is under 20% free, and critical under 10%, or under 40 GiB on a disk,
 # the floor that tests/run keeps. Memory is reported and not judged, since a
-# suite takes it for minutes. `resources: unknown` says that the host did not
-# answer.
+# suite takes it for minutes. A part of the host that does not answer has a
+# line `NAME: did not answer`; the verdict is then `resources: unknown`, or
+# a low or critical one that ends `; unknown: NAME did not answer`.
 #
 # `sizes` prints the sizes of the build trees, the GNU caches, the ci
 # checkouts, the loops' state and /tmp on the testing host, and of the
@@ -127,7 +128,7 @@ readings()
     memory_pressure -Q 2> /dev/null |
         awk -F ': ' '/free percentage/ { sub(/%/, "", $2); print "mac:memory memory", $2, 100 }'
     ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" 'df -Pk / /d' 2> /dev/null |
-        awk 'NR > 1 { print "windows:" substr($1, 1, 1), "disk", $4, $2 } END { if (NR < 2) print "windows missing 0 0" }'
+        awk 'NR > 1 { print "windows:" substr($1, 1, 1), "disk", $(NF - 2), $(NF - 4) } END { if (NR < 2) print "windows missing 0 0" }'
     printf '%s\n' \
         'df -Pk / /tmp | awk '"'"'NR > 1 { print "wsl:" $6, ($6 == "/tmp" ? "tmpfs" : "disk"), $4, $2 }'"'" \
         'df -Pi / /tmp | awk '"'"'NR > 1 { print "wsl:" $6, "inodes", $4, $2 }'"'" \
@@ -142,7 +143,7 @@ resources()
     readings | awk '
         NF == 4 {
             pct = $4 > 0 ? int(100 * $3 / $4) : 0
-            if ($2 == "missing") { unknown = unknown " " $1; next }
+            if ($2 == "missing") { printf "%s: did not answer\n", $1; unknown = unknown " " $1; next }
             if ($2 == "inodes") printf "%s inodes: %d%% free\n", $1, pct
             else if ($1 == "mac:memory") printf "%s: %d%% free\n", $1, pct
             else printf "%s: %.0f GiB free of %.0f (%d%%)\n", $1, $3 / 1048576, $4 / 1048576, pct
@@ -151,8 +152,9 @@ resources()
             else if (pct < 20) low = low " " $1 " " $2
         }
         END {
-            if (critical != "") print "resources: critical:" critical
-            else if (low != "") print "resources: low:" low
+            u = unknown != "" ? "; unknown:" unknown " did not answer" : ""
+            if (critical != "") print "resources: critical:" critical u
+            else if (low != "") print "resources: low:" low u
             else if (unknown != "") print "resources: unknown:" unknown " did not answer"
             else print "resources: ok"
         }'
