@@ -1,0 +1,25 @@
+{
+  "protocol": "anthropic",
+  "steps": [
+    {
+      "tools": ["Read", "Bash", "Edit"],
+      "reply": [{"type": "tool_use", "id": "toolu_read", "name": "Read", "input": {"file_path": "@REPO@/fixture.txt"}}]
+    },
+    {
+      "results": [{"id": "toolu_read", "contains": ["rach2 fixture 489", "answer=before"]}],
+      "reply": [{"type": "tool_use", "id": "toolu_shell", "name": "Bash", "input": {"command": "test -f fixture.txt && printf 'SHELL_OK_489\\n'", "description": "Check the fixture"}}]
+    },
+    {
+      "results": [{"id": "toolu_shell", "contains": ["SHELL_OK_489"]}],
+      "reply": [{"type": "tool_use", "id": "toolu_edit", "name": "Edit", "input": {"file_path": "@REPO@/fixture.txt", "old_string": "answer=before", "new_string": "answer=after"}}]
+    },
+    {
+      "results": [{"id": "toolu_edit", "contains": ["fixture.txt", "successfully"]}],
+      "reply": [{"type": "tool_use", "id": "toolu_commit", "name": "Bash", "input": {"command": "git add fixture.txt && git -c core.hooksPath=/dev/null commit -m 'Update the offline fixture' && printf 'COMMIT_OK_489\\n'", "description": "Commit the fixture change"}}]
+    },
+    {
+      "results": [{"id": "toolu_read", "contains": ["rach2 fixture 489", "answer=before"]}, {"id": "toolu_shell", "contains": ["SHELL_OK_489"]}, {"id": "toolu_edit", "contains": ["fixture.txt", "successfully"]}, {"id": "toolu_commit", "contains": ["Update the offline fixture", "1 file changed", "COMMIT_OK_489"]}],
+      "reply": [{"type": "text", "text": "The fixture was read, checked, edited and committed."}]
+    }
+  ]
+}

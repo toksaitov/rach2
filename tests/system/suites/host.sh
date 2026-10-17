@@ -318,6 +318,13 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: testing.sh run's quoted commands" >&2
         fail=1
     fi
+    if python3 -B tests/system/fakeapi/anthropic_test.py >"$VDIR/anthropic.rlog" 2>&1; then
+        echo "hosttest: result: pass: Messages tool results and streamed replies"
+    else
+        cat "$VDIR/anthropic.rlog"
+        echo "hosttest: result: fail: Messages tool results and streamed replies" >&2
+        fail=1
+    fi
     if sh tests/system/install_accounts_test.sh >"$VDIR/install_accounts.rlog" 2>&1; then
         echo "hosttest: result: pass: the installer's kept image accounts"
     else
