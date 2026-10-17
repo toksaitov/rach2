@@ -245,8 +245,10 @@ row_coreutils() {
 # bash with the answers its configure could not find in a cross build:
 # the status of a pipeline's last command under lastpipe, printf's %a, which
 # formats a long double, 0x8p-3 for 1 on x86 as on Linux, the real-time
-# signals, and its directory as a user who may not search it; and a program
-# run through /proc/self/fd/3, as Codex runs its bwrap.
+# signals, and its directory as a user who may not search it; a program
+# run through /proc/self/fd/3, as Codex runs its bwrap; and one run through a
+# relative link to an absolute one, whose /proc/PID/exe is the file's path
+# with no link in it, as realpath(3) finds it and Codex reads it.
 row_bash() {
     # shellcheck disable=SC2016 # the dollars are the inner bash's
     same "an associative array" "$(bash -c 'declare -A m=([k]=v); echo "${m[k]}"')" "v"
@@ -260,6 +262,11 @@ row_bash() {
     same "the version" "$(/bin/bash -c 'echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"')" "5.3"
     same "a program run through its descriptor" \
         "$(bash -c 'exec 3</usr/bin/true; /proc/self/fd/3 && echo ran' 2>&1)" "ran"
+    ln -s /bin/bash "$WORK/bash-abs"
+    ln -s bash-abs "$WORK/bash-rel"
+    # shellcheck disable=SC2016 # the dollars are the inner bash's
+    same "/proc/PID/exe through links" "$("$WORK/bash-rel" -c 'readlink /proc/$$/exe; exit $?' 2>&1)" \
+        "$(readlink -f "$WORK/bash-rel")"
     # shellcheck disable=SC2016 # the dollars are the inner bash's
     same "a here-document longer than a pipe holds" "$(timeout 20 bash -c 'doc=$(head -c 5000 /dev/zero | tr "\0" a)
 cat << EOF | wc -c

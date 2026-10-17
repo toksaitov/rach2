@@ -1521,6 +1521,19 @@ static int32_t exec_interp(struct exec_state *s, uintptr_t *base)
 }
 
 /**
+ * Name the address space `mm` by the program at `path` as /proc/PID/exe
+ * shows it: by the path of the file, its symbolic links resolved
+ * (`resolve_real_path`), or by `path` itself when that fails.
+ */
+static void exec_name(struct mm *mm, const char *path)
+{
+    char *real = path_buf_get();
+
+    mm_set_exe(mm, real && resolve_real_path(path, real) == 0 ? real : path);
+    path_buf_put(real);
+}
+
+/**
  * Build the new image in `s`'s address space of its own while the caller's
  * still runs, as Linux's `load_elf_binary` builds one: the program, at
  * ELF_ET_DYN_BASE when it is position-independent; the interpreter its
@@ -1592,7 +1605,7 @@ static int32_t exec_build(struct exec_state *s)
     s->mm->env_end = s->args.env_end;
     k_memcpy(s->mm->auxv, s->args.auxv, sizeof(s->args.auxv));
     if (s->mm->exe == NULL) {
-        mm_set_exe(s->mm, s->path);
+        exec_name(s->mm, s->path);
     }
     if (s->layout.interp[0] != '\0') {
         mm_set_interp(s->mm, s->layout.interp);

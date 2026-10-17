@@ -163,6 +163,7 @@ These two run no test on the unmodified tree: they require the kernel rebuilt at
 * `codexapi_mutate.sh`: the `codexapi` suite, against a Responses protocol that takes any output of a tool call as the expected one and one that plays a warmup as a turn.
 * `museapi_mutate.sh`: the `museapi` suite, against a Responses protocol that takes any output of a tool call as the expected one and one that looks for a namespace's functions among the request's top-level tools.
 * `ntpd_mutate.sh`: the `gnu` suite's ntpd row, against a configuration that names no server and an SNTP server that answers with the host's own time.
+* `exe_mutate.sh`: the `gnu` suite's bash row, against an `execve` that names the program by the path it was given, links and all, in `/proc/PID/exe`.
 * `init_refusal_mutate.sh`, `gpt_write_mutate.sh` and `servicelog_mutate.sh`: the `bootline` suite's init refusal, the `parts` suite's GPT write refusal and the `servicelog` suite.
 * `install_keys_mutate.sh`, `install_stick_mutate.sh`, `recovery_disk_key_mutate.sh` and `rehearse_group_mutate.sh`: rows of the installer suites.
 * `metal_fat_mutate.sh` and `accept/installed_mutate.sh`: the acceptance rows of the `metal` suite.

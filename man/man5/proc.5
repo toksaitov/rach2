@@ -990,9 +990,13 @@ for a file there whose name has been removed the path
 found it at followed by
 .Ql " (deleted)" ,
 as Linux names one.
-On another file system it gives the path
+On another file system it gives the path at which
 .Xr execve 2
-found it at, where Linux gives the file's present path.
+found the file, with each symbolic link in it replaced by its target, as
+.Xr realpath 3
+finds it and as Linux gives it; a rename after the
+.Xr execve 2
+is not seen, where Linux gives the file's present path.
 Reading the link, or going through it, needs a thread of the process, a
 privileged caller, one whose effective user ID is 0 and which kept its
 capabilities
