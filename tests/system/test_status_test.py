@@ -6,6 +6,7 @@ import importlib.util
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -149,6 +150,12 @@ def rows(reader, helper, root):
     print("test-status-test: result: pass")
 
 
+def stop(signum, frame):
+    """Exit on HUP or TERM through the context managers, which stop the
+    fixtures and remove the temporary directory, as an interrupt does."""
+    raise SystemExit(128 + signum)
+
+
 def main():
     """Run the rows and optionally require a faulty reader to fail them."""
     source = Path(__file__).resolve().parents[2] / "tools/flow/test_status.py"
@@ -163,6 +170,8 @@ def main():
         print("test-status-test: result: skipped: Linux testing host required")
         return
     helper = sys.argv[1]
+    signal.signal(signal.SIGHUP, stop)
+    signal.signal(signal.SIGTERM, stop)
     with tempfile.TemporaryDirectory(prefix="test-status.") as temp:
         root = Path(temp)
         copy = root / "reader.py"

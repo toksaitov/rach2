@@ -30,18 +30,22 @@ export RACH2_MIN_FREE_GIB
 unset ARCH RACH2_ARCH RACH2_QEMU RACH2_CPUS MAKEFLAGS MFLAGS
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-selftest.XXXXXX")
-[ -d "$WORK" ] || { echo "selftest: no scratch directory" >&2; exit 1; }
+WORK=
 # The stand-in machines and the port claims are stopped here rather than at
 # the end of the script, so an interrupted run does not leave one of them
 # waiting out its sleep or holding its block.
 portclaims=""
 stop_machines() {
     for pid in $portclaims; do kill "$pid" 2>/dev/null; done
-    [ -f "$WORK/machines" ] || return 0
+    [ -n "$WORK" ] && [ -f "$WORK/machines" ] || return 0
     while read -r pid; do kill "$pid" 2>/dev/null; done < "$WORK/machines"
 }
-trap 'stop_machines; rm -rf "$WORK"' EXIT INT TERM HUP
+trap 'stop_machines; rm -rf ${WORK:+"$WORK"}' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-selftest.XXXXXX")
+[ -d "$WORK" ] || { echo "selftest: no scratch directory" >&2; exit 1; }
 
 fails=0
 total=0

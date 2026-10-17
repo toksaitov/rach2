@@ -33,29 +33,39 @@ if [ "$mutate" -eq 2 ]; then
     echo 'runutil-group: texts: every fault is once in its source'
     exit 0
 fi
-work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-runutil-group.XXXXXX")
+work=
 child=0
+keep=
 
-# Stop the current case, then put back the private runutil.c.
+# Stop the current case, then put back the private runutil.c. Then remove the
+# work directory, unless the test failed after printing its path, which sets
+# `keep`; a signal clears `keep`.
 # shellcheck disable=SC2329
 cleanup()
 {
+    exit_status=$?
     if [ "$child" -ne 0 ]; then
         kill -TERM "$child" 2>/dev/null || :
         wait "$child" 2>/dev/null || :
     fi
+    [ -n "$work" ] || return 0
     if [ -f "$work/runutil.saved" ]; then
         cp "$work/runutil.saved" "$work/runutil.c"
         touch "$work/runutil.c"
     fi
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf "$work"
+    fi
 }
 trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-trap 'exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
+trap 'keep=; exit 129' HUP
+work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-runutil-group.XXXXXX")
 cp "$repo/tests/system/runner/runutil.c" "$work/runutil.saved"
 cp "$work/runutil.saved" "$work/runutil.c"
 echo "runutil-group: artifacts: $work"
+keep=1
 
 # build NAME: compile the fixture against the private runutil.c as NAME.
 build()

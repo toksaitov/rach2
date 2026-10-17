@@ -28,6 +28,11 @@ shift
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 lock=$repo/build/.run.lock
 if [ "${RACH2_TREE_TAKING:-}" != "$$" ]; then
+    helper=
+    trap 'rm -rf ${helper:+"$helper"}' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     helper=$(mktemp -d "${TMPDIR:-/tmp}/rach2-runlock.XXXXXX") || exit 1
     if ! cc -O2 -Wall -Wextra -o "$helper/runutil" "$repo/tests/system/runner/runutil.c"; then
         echo "$name: the runner helper did not compile" >&2
@@ -41,6 +46,10 @@ if [ "${RACH2_TREE_TAKING:-}" != "$$" ]; then
     exec "$helper/runutil" lock "$repo/build/.run.guard" "$lock/owner" sh "$0" "$name" "$@"
 fi
 helper=$RACH2_RUN_WORK
+trap 'rm -rf ${helper:+"$helper"}' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 unset RACH2_TREE_TAKING RACH2_RUN_WORK
 taken=
 if mkdir "$lock" 2>/dev/null; then

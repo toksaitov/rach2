@@ -48,14 +48,9 @@ if [ "$mutate" -eq 2 ]; then
     exit 0
 fi
 mkdir -p "$repo/build"
-work=$(mktemp -d "$repo/build/selftest-stop.XXXXXX")
-tree=$work/tree
-source=$tree/tests/system/runner/runutil.c
+work=
 runner=0
-mkdir -p "$tree/tests/system/runner" "$tree/tools/setup" "$tree/tmp"
-cp "$repo/tests/system/runner/runutil.c" "$work/runutil.saved"
-cp "$repo/tests/run" "$work/run.saved"
-cp "$repo/tests/system/runlock.sh" "$repo/tests/system/runlock_exec.sh" "$tree/tests/system/"
+keep=
 
 # Put the saved runutil.c and tests/run into the private tree and touch them.
 restore()
@@ -65,20 +60,36 @@ restore()
     touch "$source" "$tree/tests/run"
 }
 
-# Stop the private runner and restore the private tree.
+# Stop the private runner and restore the private tree. Then remove the work
+# directory, unless the test failed after printing its path, which sets
+# `keep`; a signal clears `keep`.
 # shellcheck disable=SC2329
 cleanup()
 {
+    exit_status=$?
     if [ "$runner" -ne 0 ]; then
         kill -TERM "$runner" 2>/dev/null || :
         wait "$runner" 2>/dev/null || :
     fi
-    restore
+    [ -n "$work" ] || return 0
+    if [ -f "$work/runutil.saved" ] && [ -f "$work/run.saved" ]; then
+        restore
+    fi
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf "$work"
+    fi
 }
 trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-trap 'exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
+trap 'keep=; exit 129' HUP
+work=$(mktemp -d "$repo/build/selftest-stop.XXXXXX")
+tree=$work/tree
+source=$tree/tests/system/runner/runutil.c
+mkdir -p "$tree/tests/system/runner" "$tree/tools/setup" "$tree/tmp"
+cp "$repo/tests/system/runner/runutil.c" "$work/runutil.saved"
+cp "$repo/tests/run" "$work/run.saved"
+cp "$repo/tests/system/runlock.sh" "$repo/tests/system/runlock_exec.sh" "$tree/tests/system/"
 restore
 printf '%s\n' 'failing|-|full' 'slow1|-|full' 'slow2|-|full' > "$tree/tests/registry"
 printf '%s\n' 'int main(void) { return 0; }' > "$tree/tools/setup/hostcheck.c"
@@ -97,6 +108,7 @@ run-slow2:
 	@echo slow2-start >> events; echo release > release
 MK
 echo "selftest-stop: artifacts: $work"
+keep=1
 
 # check NAME EXPECTED ACTUAL: count one check, and report it failed when
 # ACTUAL is not EXPECTED.

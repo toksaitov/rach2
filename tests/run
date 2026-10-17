@@ -47,8 +47,12 @@ fi
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 # Compile the host helper in private scratch before making a process group.
-# No product or shared build file is written by this bootstrap.
+# No product or shared build file is written by this bootstrap. The exit trap
+# removes the scratch unless the exec below hands it to the run.
 if [ "${RACH2_RUN_GROUP:-}" != "$$" ]; then
+    WORK=
+    trap '[ -z "$WORK" ] || rm -rf "$WORK"' 0
+    trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
     WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-run.XXXXXX") || exit 1
     if ! cc -O2 -Wall -Wextra -o "$WORK/runutil" "$REPO/tests/system/runner/runutil.c"; then
         echo "run: result: refused: the runner helper did not compile" >&2
@@ -77,6 +81,7 @@ STATUS_RECORD=${RACH2_RUN_STATUS:-}
 HANDOFF_LOCK=${RACH2_RUN_TREE_LOCK:-}
 LOCKED=${HANDOFF_LOCK:+1}
 trap 'rm -rf "$WORK" ${HANDOFF_LOCK:+"$HANDOFF_LOCK"} ${STATUS_RECORD:+"$STATUS_RECORD"}' 0
+trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
 unset RACH2_RUN_GROUP RACH2_RUN_WORK RACH2_RUN_TREE_LOCK RACH2_PROGRESS_FD RACH2_HOST_LOCK RACH2_RUN_STATUS
 LC_ALL=C; export LC_ALL
 now() { "$RACH2_RUN_UTIL" now; }

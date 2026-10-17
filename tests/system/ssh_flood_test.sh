@@ -32,31 +32,40 @@ if [ "$mutate" -eq 2 ]; then
     echo 'ssh-flood: texts: every fault is once in its source'
     exit 0
 fi
-work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-ssh-flood.XXXXXX")
+work=
 driver=0
-cp "$repo/tests/system/suites/ssh.sh" "$work/saved.sh"
-cp "$work/saved.sh" "$work/source.sh"
+keep=
 
 # Stop the driver, kill every child whose process ID is recorded, and put the
-# saved suite back into the copy.
+# saved suite back into the copy. Then remove the work directory, unless the
+# test failed after printing its path, which sets `keep`; a signal clears
+# `keep`.
 # shellcheck disable=SC2329
 cleanup()
 {
+    exit_status=$?
     if [ "$driver" -ne 0 ]; then
         kill -TERM "$driver" 2>/dev/null || :
         wait "$driver" 2>/dev/null || :
     fi
+    [ -n "$work" ] || return 0
     for file in "$work"/*/pids/*; do
         [ -f "$file" ] || continue
         read -r pid < "$file"
         kill -KILL "$pid" 2>/dev/null || :
     done
-    cp "$work/saved.sh" "$work/source.sh"
+    [ ! -f "$work/saved.sh" ] || cp "$work/saved.sh" "$work/source.sh"
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf "$work"
+    fi
 }
 trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-trap 'exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
+trap 'keep=; exit 129' HUP
+work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-ssh-flood.XXXXXX")
+cp "$repo/tests/system/suites/ssh.sh" "$work/saved.sh"
+cp "$work/saved.sh" "$work/source.sh"
 mkdir "$work/bin"
 cat > "$work/bin/sleep" <<'PEER'
 #!/bin/sh
@@ -70,6 +79,7 @@ exec /bin/sleep 300
 PEER
 chmod +x "$work/bin/sleep" "$work/bin/nc"
 echo "ssh-flood: artifacts: $work"
+keep=1
 
 # check_case PHASE MODE: copy flood_start, flood_stop, cleanup, cleanup_boot
 # and the traps that call cleanup out of the copy of the suite, and run a

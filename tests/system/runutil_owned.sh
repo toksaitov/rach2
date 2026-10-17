@@ -27,6 +27,52 @@ if [ "${1:-}" != --texts ]; then
     . "$repo/tests/system/runlock.sh"
     runlock_hold "$repo" runutil-owned "$repo/tests/system/runutil_owned.sh" "$@"
 fi
+work=
+runner=0
+sentinel=0
+machine_test=0
+keep=
+
+# Stop test processes before restoring the private source. PID files are
+# used only here, after verdict assertions; the runner never reads them. Then
+# remove the work directory, unless the test failed after printing its path,
+# which sets `keep`; a signal clears `keep`.
+# shellcheck disable=SC2329
+cleanup()
+{
+    exit_status=$?
+    if [ "$runner" -ne 0 ]; then
+        kill -TERM "$runner" 2>/dev/null || :
+        wait "$runner" 2>/dev/null || :
+    fi
+    if [ "$machine_test" -ne 0 ]; then
+        "$work/fixed/helper" killgroup "$machine_test" 15 2>/dev/null || :
+        /bin/sleep 0.1
+        "$work/fixed/helper" killgroup "$machine_test" 9 2>/dev/null || :
+        wait "$machine_test" 2>/dev/null || :
+    fi
+    [ -n "$work" ] || return 0
+    for file in "$work"/*/worker.pid; do
+        [ -s "$file" ] || continue
+        read -r pid < "$file"
+        kill -KILL "$pid" 2>/dev/null || :
+    done
+    if [ "$sentinel" -ne 0 ]; then
+        kill -USR1 "$sentinel" 2>/dev/null || :
+        wait "$sentinel" 2>/dev/null || :
+    fi
+    if [ -f "$work/runutil.saved" ]; then
+        cp "$work/runutil.saved" "$work/runutil.c"
+        touch "$work/runutil.c"
+    fi
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf "$work"
+    fi
+}
+trap cleanup EXIT
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
+trap 'keep=; exit 129' HUP
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-runutil-owned.XXXXXX")
 
 # owned_edit FAULT [SOURCE]: write $work/runutil.c as SOURCE, by default the
@@ -54,56 +100,21 @@ if [ "$mutate" -eq 2 ]; then
         machine-reuse; do
         owned_edit "$fault" "$repo/tests/system/runner/runutil.c"
     done
-    rm -rf "$work"
     echo 'runutil-owned: texts: every fault is once in its source'
     exit 0
 fi
-runner=0
-sentinel=0
-machine_test=0
-
 
 # The runner's own tests boot nothing on another kernel: the trees they
 # copy have no such target, so the name a caller set is dropped here.
 RACH2_KERNEL=""
 export RACH2_KERNEL
-# Stop test processes before restoring the private source. PID files are
-# used only here, after verdict assertions; the runner never reads them.
-# shellcheck disable=SC2329
-cleanup()
-{
-    if [ "$runner" -ne 0 ]; then
-        kill -TERM "$runner" 2>/dev/null || :
-        wait "$runner" 2>/dev/null || :
-    fi
-    if [ "$machine_test" -ne 0 ]; then
-        "$work/fixed/helper" killgroup "$machine_test" 15 2>/dev/null || :
-        /bin/sleep 0.1
-        "$work/fixed/helper" killgroup "$machine_test" 9 2>/dev/null || :
-        wait "$machine_test" 2>/dev/null || :
-    fi
-    for file in "$work"/*/worker.pid; do
-        [ -s "$file" ] || continue
-        read -r pid < "$file"
-        kill -KILL "$pid" 2>/dev/null || :
-    done
-    if [ "$sentinel" -ne 0 ]; then
-        kill -USR1 "$sentinel" 2>/dev/null || :
-        wait "$sentinel" 2>/dev/null || :
-    fi
-    cp "$work/runutil.saved" "$work/runutil.c"
-    touch "$work/runutil.c"
-}
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-trap 'exit 129' HUP
 cp "$repo/tests/system/runner/runutil.c" "$work/runutil.saved"
 cp "$work/runutil.saved" "$work/runutil.c"
 cc -O2 -Wall -Wextra -Werror "$repo/tests/system/fixtures/runutil_owned.c" -o "$work/worker"
 "$work/worker" sentinel "$work/sentinel.pid" &
 sentinel=$!
 echo "runutil-owned: artifacts: $work"
+keep=1
 
 # make_tree NAME MODE: a tree with tests/run, the private helper and a
 # Makefile whose one suite starts a worker in MODE. No guest or socket is
