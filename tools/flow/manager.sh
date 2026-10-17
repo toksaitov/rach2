@@ -23,9 +23,10 @@
 # that is running. The checks run at high effort, as a worker's sessions do.
 #
 # Before each check the loop prunes the checks' output, as `prune_logs` in
-# lib.sh says, and runs `scratch.pl` on the testing host, which removes from
-# its /tmp the scratch of tests that were killed before their traps ran. The
-# sweep is stopped after ten minutes, and its result is one line of loop.log.
+# lib.sh says, and runs `scratch.pl` on the testing host with the stems of
+# master's scratch names, which removes from its /tmp the scratch of tests
+# that were killed before their traps ran. The sweep is stopped after ten
+# minutes, and its result is one line of loop.log.
 
 PERIOD=1200
 TESTING=testing
@@ -75,7 +76,7 @@ main()
         prune_logs 'c-*'
         swept=$(perl -e 'alarm shift; exec @ARGV' 600 \
             ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
-            'MSYS_NO_PATHCONV=1 wsl.exe -u root -- perl - /tmp' \
+            "MSYS_NO_PATHCONV=1 wsl.exe -u root -- perl - /tmp 86400 $(stems origin/master | tr '\n' ' ')" \
             < "$state/run/scratch.pl" 2>&1)
         swept_rc=$?
         swept=$(printf '%s\n' "$swept" | tail -n 1)

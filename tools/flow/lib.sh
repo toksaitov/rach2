@@ -123,35 +123,49 @@ wait_session()
 }
 
 # merged REF: succeed when every commit of REF is on `origin/master`: REF is
-# an ancestor of it, or `git cherry` finds each commit's patch there, as it
-# does for a branch rebased before its push. A commit message proves nothing.
-# `git cherry` skips merge commits, so a branch with a merge that master lacks
-# counts only by ancestry. A patch id ignores whitespace, so a commit that
-# differs from master's only in whitespace counts as merged.
+# an ancestor of it, or master has, since the two parted, a commit with the
+# same patch as each commit of REF, as it does for a branch rebased or
+# cherry-picked before its push. A commit message proves nothing. A patch is
+# compared whole, whitespace and binary contents included. A merge commit or
+# a commit that changes nothing has no patch id, so a branch with one that
+# master lacks counts only by ancestry.
 merged()
 {
     git merge-base --is-ancestor "$1" origin/master 2> /dev/null && return 0
-    [ -z "$(git rev-list --merges -n 1 "origin/master..$1" 2> /dev/null)" ] || return 1
-    patches=$(git cherry origin/master "$1" 2> /dev/null) || return 1
-    ! printf '%s\n' "$patches" | grep -q '^+'
+    base=$(git merge-base origin/master "$1" 2> /dev/null) || return 1
+    n=$(git rev-list --count "origin/master..$1" 2> /dev/null) || return 1
+    mine=$(patches "origin/master..$1")
+    [ "$(printf '%s\n' "$mine" | grep -c .)" -eq "$n" ] || return 1
+    theirs=$(patches "$base..origin/master")
+    for id in $mine; do
+        printf '%s\n' "$theirs" | grep -qxF "$id" || return 1
+    done
 }
 
-# tidy: remove what finished work left in the clone. A helper's worktree
-# under .claude/worktrees goes when its HEAD is merged and `git worktree
-# remove` takes it without force, which it refuses for a worktree with
-# changes, untracked files or a lock, as Claude Code keeps on a helper's
-# worktree while the helper runs; the ignored files in it, its build output
-# and scratch, go with it. A branch goes when it is merged, unless it
-# is master, the branch checked out, one checked out in a worktree, which git
-# refuses to delete, or one named for the issue in STATE/issue or
-# STATE/parked. Each removal is logged.
+# patches RANGE: print the patch id of each commit of RANGE, whitespace and
+# binary contents included.
+patches()
+{
+    git log -p --binary --no-textconv --no-ext-diff --no-merges --format='commit %H' "$1" 2> /dev/null |
+        git patch-id --verbatim | cut -d ' ' -f 1
+}
+
+# tidy: remove what finished work left in the clone. A helper's worktree under
+# .claude/worktrees goes when its HEAD is merged and `git worktree remove` takes
+# it without force, which it refuses for a worktree with changes, untracked
+# files or a lock, as Claude Code keeps on a helper's worktree while the helper
+# runs, and only when `disposable` finds nothing ignored in it but build output,
+# which goes with it. A branch goes when it is merged, unless it is master, the
+# branch checked out, one checked out in a worktree, which git refuses to
+# delete, or one named for the issue in STATE/issue or STATE/parked. Each
+# removal is logged.
 tidy()
 {
     keep=$(cat "$state/issue" "$state/parked" 2> /dev/null)
     top=$(git rev-parse --show-toplevel) || return 1
     git worktree list --porcelain | sed -n 's/^worktree //p' | while read -r w; do
         case $w in "$top"/.claude/worktrees/*) ;; *) continue ;; esac
-        head=$(git -C "$w" rev-parse -q --verify HEAD) && merged "$head" &&
+        head=$(git -C "$w" rev-parse -q --verify HEAD) && merged "$head" && disposable "$w" &&
             git worktree remove "$w" 2> /dev/null && log "tidy: removed the worktree $w"
     done
     git worktree prune
@@ -164,6 +178,29 @@ tidy()
         merged "refs/heads/$b" && git branch -q -D "$b" 2> /dev/null &&
             log "tidy: deleted the branch $b"
     done
+}
+
+# disposable W: succeed when every ignored file of the worktree W is output
+# that a build makes again: build/, the compilation database and clangd's
+# cache, the vendored projects' trees and stamps (not the GNU downloads), and
+# Finder's .DS_Store files. A key, a password, the Doom WAD or a person's
+# notes keep the worktree.
+disposable()
+{
+    ignored=$(git -C "$1" ls-files --others --ignored --exclude-standard --directory) || return 1
+    ! printf '%s\n' "$ignored" |
+        grep -v -E '^(build/|\.cache/|compile_commands\.json$|vendor/)|(^|/)\.DS_Store$' | grep -q . &&
+        ! printf '%s\n' "$ignored" | grep -q '^vendor/gnu/downloads'
+}
+
+# stems REF: print, one to a line, the stems of the scratch names that the
+# tests and tools of REF make: the part before `.XXXXXX` of each mktemp
+# template, and before the last dot of each prefix given to Python's tempfile.
+# A template whose stem has a shell variable in it is not listed.
+stems()
+{
+    git grep -hoE "[/\"'][A-Za-z0-9_-]+\.XXXXXX|prefix=[\"'][A-Za-z0-9_-]+\.[\"']" "$1" -- tests tools |
+        sed -E "s/^prefix=.//; s/^[/\"']//; s/\.(XXXXXX|[\"'])\$//" | sort -u
 }
 
 # prune_logs PATTERN...: remove the files of STATE that a PATTERN matches and

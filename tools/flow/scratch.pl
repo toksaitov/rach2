@@ -3,24 +3,24 @@
 # scratch.pl: remove the scratch that tests left in a directory when they were
 # killed before their exit traps ran.
 #
-# Usage: perl scratch.pl [DIR [SECONDS]]
+# Usage: perl scratch.pl DIR SECONDS STEM...
 #
 # The manager loop runs this before each check, as root in WSL on the testing
-# host, for /tmp, whose tmpfs is the host's memory. An entry of DIR, /tmp
-# unless given, is removed when all of these hold:
+# host, for /tmp, whose tmpfs is the host's memory, with the stems that
+# `stems` in lib.sh reads from master's tests and tools. An entry of DIR is
+# removed when all of these hold:
 #
-# * its name has a form that mktemp(1) gives: a name, a dot and six letters
-#   or digits, as the templates of this tree's tests make, or `tmp.` and ten,
-#   as GNU mktemp makes with no template; the six are not a login name, as in
-#   nvim's directories, and the lock files rach2-ports.N, rach2-host.lock and
-#   rach2-host.gate have neither form;
+# * its name is one of the STEMs, a dot and six to eight letters, digits or
+#   underscores, as mktemp(1) makes from a template STEM.XXXXXX and Python's
+#   tempfile from a prefix `STEM.`;
 # * it is a directory or a regular file, and root does not own it;
-# * nothing in it has changed for SECONDS, a day unless given;
+# * nothing in it has changed for SECONDS;
 # * nothing is mounted in it, and no process has its working directory, its
 #   program, an open file or a mapped file in it, as /proc shows where it
 #   exists.
 #
-# It prints one line: how many entries it removed and their size.
+# It stops itself after nine minutes, within the manager's limit of ten, and
+# prints one line: how many entries it removed and their size.
 
 use strict;
 use warnings;
@@ -28,8 +28,10 @@ use Cwd qw(abs_path);
 use File::Find;
 use File::Path qw(remove_tree);
 
-my $dir = abs_path(shift // '/tmp') // die "scratch: no such directory\n";
-my $age = shift // 86400;
+alarm 540;
+my $dir = abs_path(shift // '') // die "scratch: no such directory\n";
+my $age = shift // die "usage: scratch.pl DIR SECONDS STEM...\n";
+my $stems = join '|', map { quotemeta } @ARGV;
 my $now = time;
 
 my @busy;
@@ -77,8 +79,7 @@ sub size {
 opendir my $d, $dir or die "scratch: $dir: $!\n";
 my ($count, $bytes) = (0, 0);
 for my $e (sort readdir $d) {
-    next unless $e =~ /^(?:[A-Za-z0-9][A-Za-z0-9_.-]*\.([A-Za-z0-9]{6})|tmp\.[A-Za-z0-9]{10})$/;
-    next if defined $1 and defined getpwnam $1;
+    next unless @ARGV and $e =~ /^(?:$stems)\.[A-Za-z0-9_]{6,8}$/;
     my $p = "$dir/$e";
     my @st = lstat $p or next;
     next if $st[4] == 0 or !(-d _ or -f _);
