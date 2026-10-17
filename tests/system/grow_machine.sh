@@ -29,6 +29,21 @@ iso=$2
 installer_disk=$3
 sealed=$4
 directory=$5
+work=
+# Remove the fixture directory. A failure, but not a signal, keeps it, since
+# the run printed its path and tests/run keeps the logs in it.
+cleanup()
+{
+    status=$?
+    [ -n "$work" ] || return 0
+    case $status in
+        0|129|130|143) rm -rf "$work" ;;
+    esac
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$directory/machine.XXXXXX")
 work=$(CDPATH='' cd -- "$work" && pwd)
 echo "grow-machine-test: logs: $work"
@@ -147,7 +162,8 @@ cat "$work/store.vol" >> "$work/store.img"
 "$mkmbr" --lba "$work/store.img" 2048:262144:07 > "$work/store-mbr.log"
 cp "$work/store.img" "$work/store.initial.img"
 if [ "${6:-}" = space ] || [ "${6:-}" = space-mutate ]; then
-    exec sh tests/system/machine_grow_space.sh "$harness" "$work" "$6"
+    sh tests/system/machine_grow_space.sh "$harness" "$work" "$6"
+    exit 0
 fi
 qemu-img create -q -f qcow2 -o cluster_size=4096 -F raw \
     -b "$work/base.raw" "$work/disk.qcow2"

@@ -12,7 +12,24 @@
 # shellcheck disable=SC2034,SC2154
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-proof=$(mktemp -d "${TMPDIR:-/tmp}/rach2-grow-full.XXXXXX")
+proof=
+# Remove the scratch directory, or after a failure only its six GiB of fixture
+# data, keeping the logs whose path the run printed.
+cleanup()
+{
+    status=$?
+    case $proof in /?*) ;; *) return 0 ;; esac
+    case $status in
+        0|129|130|143) rm -rf "$proof" ;;
+        *) rm -f "$proof/target" "$proof/backup.bin" "$proof/seed.ext2" ;;
+    esac
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+mkdir -p "$repo/build/tests"
+proof=$(mktemp -d "$repo/build/tests/machine-grow-full.XXXXXX")
 proof=$(CDPATH='' cd -- "$proof" && pwd -P)
 echo "machine-grow-full-test: logs: $proof"
 # Report $* and exit 1.
@@ -118,5 +135,3 @@ with (p / 'target').open('rb') as target:
                 assert target.read(512) == bytes(512), sector
 print('machine-grow-full-test: 5932200 sectors, 1856 completion records, every byte and gap boundaries passed')
 PY
-# Keep the small logs and generated geometry, not six GiB of fixture data.
-rm "$proof/target" "$proof/backup.bin" "$proof/seed.ext2"

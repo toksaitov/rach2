@@ -74,9 +74,7 @@ harness=$1
 fixture=$2
 mode=$3
 fixture=$(CDPATH='' cd -- "$fixture" && pwd)
-proof=$(mktemp -d "$fixture/space.XXXXXX")
-echo "grow-space: logs: $proof"
-echo "$$" > "$proof/driver.pid"
+proof=
 qpid=
 DRIVE_FPID=
 REPO=$repo
@@ -88,12 +86,26 @@ stop()
     if [ -n "$qpid" ]; then kill "$qpid" 2>/dev/null || :; wait "$qpid" 2>/dev/null || :; qpid=; fi
     drive_stop
 }
+# On exit: stop, then remove the scratch directory. A failure, but not a
+# signal, keeps it, since the run printed its path.
+cleanup()
+{
+    status=$?
+    stop
+    [ -n "$proof" ] || return 0
+    case $status in
+        0|129|130|143) rm -rf "$proof" ;;
+    esac
+}
 # Report $* with the console's log and exit 1.
 fail() { echo "grow-space: failed: $*; console: ${DRIVE_LOG:-none}" >&2; exit 1; }
-trap stop EXIT
+trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+proof=$(mktemp -d "$fixture/space.XXXXXX")
+echo "grow-space: logs: $proof"
+echo "$$" > "$proof/driver.pid"
 mkexfat="$repo/build/tests/host/mkexfatfixture"
 mkdir "$proof/scripts"
 cp "$repo/tools/dev/machine_grow.sh" "$proof/scripts/fixed.sh"

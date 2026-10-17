@@ -19,7 +19,25 @@ if [ "${1:-}" != --texts ]; then
     . "$repo/tests/system/runlock.sh"
     runlock_hold "$repo" machine-grow-check "$repo/tests/system/machine_grow_check.sh" "$@"
 fi
-work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-grow-check.XXXXXX")
+work=
+# Put the unmutated script back and remove the scratch directory. A failure,
+# but not a signal, keeps the directory, whose path the run printed.
+# shellcheck disable=SC2329
+cleanup()
+{
+    status=$?
+    [ -n "$work" ] || return 0
+    [ ! -f "$work/original.sh" ] || cp "$work/original.sh" "$work/source.sh"
+    case $status in
+        0|129|130|143) rm -rf "$work" ;;
+    esac
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+mkdir -p "$repo/build/tests"
+work=$(mktemp -d "$repo/build/tests/machine-grow-check.XXXXXX")
 echo "machine-grow-check: logs: $work"
 # Report $* and exit 1.
 fail() { echo "machine-grow-check: failed: $*" >&2; exit 1; }
@@ -47,18 +65,9 @@ if [ "$*" = --texts ]; then
             exit 1
         fi
     done
-    trap - EXIT
-    rm -rf "$work"
     echo 'machine-grow-check: texts: every fault is once in its source'
     exit 0
 fi
-# Put the unmutated script back.
-# shellcheck disable=SC2329
-cleanup() { cp "$work/original.sh" "$work/source.sh"; }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
 cc -O2 -Wall -Wextra -o "$work/growset" "$repo/tools/inspect/growset.c"
 cc -O2 -Wall -Wextra -I "$repo/utils" -o "$work/reflash" \
     "$repo/utils/reflash.c" "$repo/utils/sectorcopy.c" "$repo/utils/sha256.c"

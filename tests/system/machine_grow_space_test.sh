@@ -23,6 +23,23 @@ if [ "${1:-}" != --texts ]; then
     . "$repo/tests/system/runlock.sh"
     runlock_hold "$repo" machine-grow-space-test "$repo/tests/system/machine_grow_space_test.sh" "$@"
 fi
+proof=
+# Put the unmutated script back and remove the scratch directory. A failure,
+# but not a signal, keeps the directory, whose path the run printed.
+# shellcheck disable=SC2329
+cleanup()
+{
+    status=$?
+    [ -n "$proof" ] || return 0
+    [ ! -f "$proof/original.sh" ] || cp "$proof/original.sh" "$proof/source.sh"
+    case $status in
+        0|129|130|143) rm -rf "$proof" ;;
+    esac
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 proof=$(mktemp -d "${TMPDIR:-/tmp}/rach2-grow-space.XXXXXX")
 proof=$(CDPATH='' cd -- "$proof" && pwd -P)
 echo "machine-grow-space-test: logs: $proof"
@@ -60,15 +77,9 @@ if [ "$*" = --texts ]; then
             exit 1
         fi
     done
-    trap - EXIT
-    rm -rf "$proof"
     echo 'machine-grow-space-test: texts: every fault is once in its source'
     exit 0
 fi
-trap 'cp "$proof/original.sh" "$proof/source.sh"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
 cc -O2 -Wall -Wextra -o "$proof/growset" "$repo/tools/inspect/growset.c"
 # shellcheck source=tools/setup/e2fsprogs_path.sh
 . "$repo/tools/setup/e2fsprogs_path.sh"
@@ -116,7 +127,14 @@ identity=MBRID=1acef00d
 case "$1" in
     work)
         prepare_work
-        case "$work" in "$store"/machine-grow.*) ;; *) fail 'work is outside the store' ;; esac
+        case "$work" in
+            "$store"/machine-grow.*) ;;
+            *)
+                # The work fault puts the directory in /tmp, outside the proof.
+                case "$work" in /tmp/machine-grow.?*) rm -rf "$work" ;; esac
+                fail 'work is outside the store'
+                ;;
+        esac
         ;;
     absent)
         prepare_work

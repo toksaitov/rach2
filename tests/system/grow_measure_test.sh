@@ -7,11 +7,32 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 exec python3 - "$repo/tests/system/checkers/grow_measure.awk" <<'PY'
+import atexit
 import pathlib
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 
+work = None
+kept = False
+
+
+def remove_work():
+    """Remove the scratch directory, unless a failed check printed its path."""
+    if work is not None and not kept:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def stop(signum, frame):
+    """End the run on a signal, with the status a shell's trap gives."""
+    sys.exit(128 + signum)
+
+
+atexit.register(remove_work)
+for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+    signal.signal(signum, stop)
 work = pathlib.Path(tempfile.mkdtemp(prefix='rach2-grow-measure.'))
 phases = ['table', 'check-readonly', 'check-repair', 'resize']
 commands = [100, 105, 105, 112, 112, 123, 123, 140]
@@ -45,6 +66,7 @@ for name, text, status in cases:
         result = subprocess.run(['awk', '-f', sys.argv[1], str(path)], stdout=out,
                                 stderr=subprocess.STDOUT, timeout=5)
     if result.returncode != status:
+        kept = True
         sys.exit('grow-measure-test: failed: ' + name + '; logs: ' + str(work))
 print('grow-measure-test: 6 checks passed; logs:', work)
 PY
