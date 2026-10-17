@@ -126,9 +126,9 @@ wait_session()
 # an ancestor of it, or master has, since the two parted, a commit with the
 # same patch as each commit of REF, as it does for a branch rebased or
 # cherry-picked before its push. A commit message proves nothing. A patch is
-# compared whole, whitespace and binary contents included. A merge commit or
-# a commit that changes nothing has no patch id, so a branch with one that
-# master lacks counts only by ancestry.
+# compared whole by `patches`. A merge commit or a commit that changes nothing
+# has no patch, so a branch with one that master lacks counts only by
+# ancestry.
 merged()
 {
     git merge-base --is-ancestor "$1" origin/master 2> /dev/null && return 0
@@ -142,12 +142,20 @@ merged()
     done
 }
 
-# patches RANGE: print the patch id of each commit of RANGE, whitespace and
-# binary contents included.
+# patches RANGE: print a digest of the patch of each commit of RANGE that
+# changes something: its diff, whitespace, binary contents and the function
+# heading of each hunk included, without the line numbers and blob ids, which
+# a rebase changes. Two equal hunks in different functions differ by their
+# headings, which `git patch-id` drops.
 patches()
 {
     git log -p --binary --no-textconv --no-ext-diff --no-merges --format='commit %H' "$1" 2> /dev/null |
-        git patch-id --verbatim | cut -d ' ' -f 1
+        perl -MDigest::SHA=sha1_hex -ne '
+            if (/^commit [0-9a-f]+$/) { print sha1_hex($d), "\n" if $d =~ /^diff /m; $d = ""; next }
+            next if /^index /;
+            s/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/@@/;
+            $d .= $_;
+            END { print sha1_hex($d), "\n" if $d =~ /^diff /m }'
 }
 
 # tidy: remove what finished work left in the clone. A helper's worktree under
@@ -194,13 +202,14 @@ disposable()
 }
 
 # stems REF: print, one to a line, the stems of the scratch names that the
-# tests and tools of REF make: the part before `.XXXXXX` of each mktemp
-# template, and before the last dot of each prefix given to Python's tempfile.
-# A template whose stem has a shell variable in it is not listed.
+# tests and tools of REF make and that begin with `rach2`, as no one else's
+# files do: the part before `.XXXXXX` of each mktemp template, and before the
+# last dot of each quoted prefix, as Python's tempfile takes. A stem with a
+# shell variable in it is not listed.
 stems()
 {
-    git grep -hoE "[/\"'][A-Za-z0-9_-]+\.XXXXXX|prefix=[\"'][A-Za-z0-9_-]+\.[\"']" "$1" -- tests tools |
-        sed -E "s/^prefix=.//; s/^[/\"']//; s/\.(XXXXXX|[\"'])\$//" | sort -u
+    git grep -hoE "[/\"']rach2[A-Za-z0-9_-]*\.XXXXXX|[\"']rach2[A-Za-z0-9_-]*\.[\"']" "$1" -- tests tools |
+        sed -E "s/^[/\"']//; s/\.(XXXXXX|[\"'])\$//" | sort -u
 }
 
 # prune_logs PATTERN...: remove the files of STATE that a PATTERN matches and

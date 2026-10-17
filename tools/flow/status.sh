@@ -125,8 +125,8 @@ tally()
 # host does not give is missing; `resources` finds it so.
 readings()
 {
-    df -Pk "$HOME" | awk 'NR == 2 { print "mac:" $NF, "disk", $4, $2 }'
-    df -Pi "$HOME" | awk 'NR == 2 { print "mac:" $NF, "inodes", $(NF - 2), $(NF - 3) + $(NF - 2) }'
+    df -Pk "$HOME" | awk 'NR == 2 { print "mac:disk disk", $4, $2 }'
+    df -Pi "$HOME" | awk 'NR == 2 { print "mac:disk inodes", $(NF - 2), $(NF - 3) + $(NF - 2) }'
     memory_pressure -Q 2> /dev/null |
         awk -F ': ' '/free percentage/ { sub(/%/, "", $2); print "mac:memory memory", $2, 100 }'
     ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" 'df -Pk / /d' 2> /dev/null |
@@ -147,7 +147,7 @@ resources()
         BEGIN {
             n = split("windows:C disk,windows:D disk,windows:memory memory,wsl:/ disk," \
                 "wsl:/tmp tmpfs,wsl:/ inodes,wsl:/tmp inodes,wsl:memory memory,wsl:swap memory," \
-                "mac:memory memory", want, ",")
+                "mac:disk disk,mac:disk inodes,mac:memory memory", want, ",")
         }
         NF == 4 && $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9]+$/ {
             seen[$1 " " $2] = 1

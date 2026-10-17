@@ -7,21 +7,24 @@
 # into master and one whose commit master took by cherry-pick, and keep one
 # whose commit only has a subject master has, one with a commit master lacks,
 # one whose only commit master lacks is a merge, one whose commit differs from
-# master's only in whitespace inside a string, the branches of the issue held
+# master's only in whitespace inside a string, one whose commit makes in one
+# function the change master made in another, the branches of the issue held
 # and of the issue parked, and the branch checked out; and it must remove a
 # clean helper's worktree under .claude/worktrees at a merged commit, with its
 # branch and its build output, and keep one with an untracked file, one with
 # an ignored file that is not build output, a locked one, one with a commit
-# master lacks, and one outside .claude/worktrees. `stems` must list the stems
-# of this tree's mktemp templates and Python prefixes. `prune_logs` must
-# remove a session's output past fourteen days and keep a younger one and
-# files its patterns do not match, and under 1 GiB of sparse files remove the
-# oldest until the total fits, never one written in the last day. `scratch.pl`
-# must remove an old scratch directory, an old scratch file and an old
-# directory named as Python's tempfile names them, and keep a directory with a
-# file changed now, entries whose names have no stem it was given or no
-# suffix that mktemp gives, a symbolic link, and, where /proc exists, a
-# directory a process works in and one that holds a running program.
+# master lacks, and one outside .claude/worktrees; a branch rebased onto a
+# master that changed its file elsewhere counts as merged. `stems` must list
+# the rach2 stems of this tree's mktemp templates and Python prefixes, and no
+# other. `prune_logs` must remove a session's output past fourteen days and
+# keep a younger one and files its patterns do not match, and under 1 GiB of
+# sparse files remove the oldest until the total fits, never one written in
+# the last day. `scratch.pl` must remove an old scratch directory, an old
+# scratch file and an old directory named as Python's tempfile names them, and
+# keep a directory with a file changed now, entries whose names have no stem
+# it was given, a stem that does not begin with rach2 or no suffix that mktemp
+# gives, a symbolic link, and, where /proc exists, a directory a process works
+# in and one that holds a running program.
 #
 # With --mutate each fault below is put into private copies of lib.sh and
 # scratch.pl and must fail exactly its expected rows; the copies are
@@ -61,9 +64,11 @@ fault()
     case $1 in
         none) ;;
         no-patch) l='s/^        printf .%s\\n. "\$theirs" | grep -qxF "\$id" || return 1$/        :/' ;;
-        no-verbatim) l='s/git patch-id --verbatim/git patch-id/' ;;
+        no-space) l='s|^            next if /^index /;$|            next if /^index /; s/[ \\t]+//g if \/^[+-]\/;|' ;;
+        no-heading) l='s|^            s/^@@ -.*$|            s/^@@.*/@@/;|' ;;
+        keep-index) l='/^            next if \/^index \/;$/d' ;;
         any-ignored) l='s/ && disposable "\$w" &&/ \&\&/' ;;
-        no-python) l='s/|prefix=\[/|nothing=[/' ;;
+        no-python) l='s/XXXXXX|\[/XXXXXX|nothing[/' ;;
         no-count) l='/^    \[ "\$(printf .%s\\n. "\$mine" | grep -c .)" -eq "\$n" \] || return 1$/d' ;;
         no-keep) l='s/^            case \$b in "\$n"-\*) continue 2 ;; esac$/            :/' ;;
         force) l='s/git worktree remove "\$w"/git worktree remove --force --force "\$w"/' ;;
@@ -72,7 +77,8 @@ fault()
         no-young) l='/^            last if \$age < 86400;$/d' ;;
         no-size) l='s/next unless \$age > 14 \* 86400 || \$total > 1 << 30;/next unless $age > 14 * 86400;/' ;;
         no-fresh) s='/^    next if fresh(\$p);$/d' ;;
-        any-name) s='/^    next unless @ARGV and \$e =~ /d' ;;
+        any-name) s='/^    next unless @stems and \$e =~ /d' ;;
+        any-prefix) s='s/^my @stems = grep { \/^rach2\/ } @ARGV;$/my @stems = @ARGV;/' ;;
         any-stem) s='s/(?:\$stems)/[A-Za-z0-9_.-]+/' ;;
         links) s='s/^    next if \$st\[4\] == 0 or !(-d _ or -f _);$/    next if $st[4] == 0;/' ;;
         no-busy) s='/^    next if grep { \$_ eq \$p or index(\$_, "\$p\/") == 0 } @busy;$/d' ;;
@@ -113,7 +119,9 @@ setup()
     git config core.hooksPath /dev/null
     printf 'build/\n*.wad\n' > .gitignore
     echo a > a
-    git add .gitignore a && git commit -q -m 'Add a'
+    printf '%s\n' 1 2 3 4 5 6 7 8 9 10 > r
+    for f in f g; do printf '%s()\n{\n\ta\n\tb\n\tc\n\tx = 1\n\td\n\te\n\tf\n}\n' "$f"; done > h
+    git add .gitignore a r h && git commit -q -m 'Add a'
     git branch -M master
     git remote add origin "$work/origin.git"
     base=$(git rev-parse HEAD)
@@ -121,7 +129,7 @@ setup()
     git switch -q -c 1-merged
     echo b > b && git add b && git commit -q -m 'Add b'
     git switch -q -c 2-rebased "$base"
-    echo c > c && git add c && git commit -q -m 'Add c'
+    sed 's/^9$/nine/' r > r.new && mv r.new r && git commit -q -a -m 'Edit r'
     git switch -q -c 3-subject "$base"
     echo d1 > d && git add d && git commit -q -m 'Add d'
     git switch -q -c 4-unpushed "$base"
@@ -130,11 +138,15 @@ setup()
     git merge -q --no-ff -m 'Merge 1-merged' 1-merged
     git switch -q -c 9-space "$base"
     printf 'say "a b"\n' > g && git add g && git commit -q -m 'Add g'
+    git switch -q -c 10-place "$base"
+    sed '6s/x = 1/x = 2/' h > h.new && mv h.new h && git commit -q -a -m 'Edit h'
     git switch -q master
     git merge -q --ff-only 1-merged
+    sed 's/^1$/01/' r > r.new && mv r.new r && git commit -q -a -m 'Edit r first'
     git cherry-pick -x 2-rebased > /dev/null
     echo d2 > d && git add d && git commit -q -m 'Add d'
     printf 'say "ab"\n' > g && git add g && git commit -q -m 'Add g'
+    sed '16s/x = 1/x = 2/' h > h.new && mv h.new h && git commit -q -a -m 'Edit h'
     git push -q origin master
     git fetch -q origin
     for w in clean dirty ignored locked unique; do
@@ -167,15 +179,16 @@ setup()
     : > "$t/notes"
     : > "$t/log.txt"
     : > "$t/notes.202610"
+    : > "$t/report.Ab3dEf"
     : > "$t/rach2-old.Ab3dEfGhI"
     : > "$t/rach2-young.Yy3Yy3/now"
-    ln -s "$work/target" "$t/link.Li9kLi"
+    ln -s "$work/target" "$t/rach2-link.Li9kLi"
     age 2 "$t/rach2-old.Ab3dEf/sub/f" "$t/rach2-old.Ab3dEf/sub" "$t/rach2-old.Ab3dEf" \
-        "$t/rach2-file.Fi1eFi" "$t/rach2-ports.0" "$t/notes" "$t/log.txt" "$t/notes.202610" \
+        "$t/rach2-file.Fi1eFi" "$t/rach2-ports.0" "$t/notes" "$t/log.txt" "$t/notes.202610" "$t/report.Ab3dEf" \
         "$t/rach2-old.Ab3dEfGhI" "$t/rach2-py.ab_12cde" "$t/rach2-young.Yy3Yy3" "$t/rach2-busy.Bu5yBu" \
         "$t/rach2-prog.Pr0gPr/sleep" "$t/rach2-prog.Pr0gPr" "$work/target"
     touch -h -t "$(perl -MPOSIX -e 'print strftime("%Y%m%d%H%M", localtime(time - 2 * 86400))')" \
-        "$t/link.Li9kLi"
+        "$t/rach2-link.Li9kLi"
 }
 
 # has REF: succeed when the clone has the branch REF.
@@ -204,7 +217,7 @@ rows()
         # shellcheck source=tools/flow/lib.sh
         (state=$work/stateB && . "$lib" && prune_logs 's-*')
         perl "$sweep" "$work/tmp" 86400 rach2-old rach2-file rach2-py rach2-young rach2-busy \
-            rach2-prog rach2-ports link
+            rach2-prog rach2-ports rach2-link report
         # shellcheck source=tools/flow/lib.sh
         (cd "$repo" && state=$work/stateA && . "$lib" && stems HEAD) > "$work/stems" 2>&1
     } > "$work/tidy.out" 2>&1
@@ -213,7 +226,7 @@ rows()
     wt=$work/clone/.claude/worktrees
     a=$work/stateA b=$work/stateB t=$work/tmp
     for row in branch-merged branch-rebased branch-subject branch-unpushed \
-        branch-held branch-parked branch-current branch-merge branch-space wt-clean wt-dirty wt-ignored wt-locked \
+        branch-held branch-parked branch-current branch-merge branch-space branch-place wt-clean wt-dirty wt-ignored wt-locked \
         wt-unique wt-outside prune-age prune-pattern prune-size prune-young \
         scratch-old scratch-file scratch-young scratch-name scratch-link scratch-busy \
         scratch-program scratch-stems; do
@@ -227,6 +240,7 @@ rows()
             branch-current) has 7-current ;;
             branch-merge) has 8-merge ;;
             branch-space) has 9-space ;;
+            branch-place) has 10-place ;;
             wt-clean) [ ! -e "$wt/clean" ] && ! has worktree-clean ;;
             wt-dirty) [ -e "$wt/dirty/untracked" ] && has worktree-dirty ;;
             wt-ignored) [ -e "$wt/ignored/game.wad" ] && has worktree-ignored ;;
@@ -241,12 +255,13 @@ rows()
             scratch-file) [ ! -e "$t/rach2-file.Fi1eFi" ] ;;
             scratch-young) [ -e "$t/rach2-young.Yy3Yy3/now" ] ;;
             scratch-name) [ -e "$t/rach2-ports.0" ] && [ -e "$t/notes" ] && [ -e "$t/log.txt" ] &&
-                [ -e "$t/notes.202610" ] && [ -e "$t/rach2-old.Ab3dEfGhI" ] ;;
-            scratch-link) [ -L "$t/link.Li9kLi" ] && [ -d "$work/target" ] ;;
+                [ -e "$t/notes.202610" ] && [ -e "$t/report.Ab3dEf" ] && [ -e "$t/rach2-old.Ab3dEfGhI" ] ;;
+            scratch-link) [ -L "$t/rach2-link.Li9kLi" ] && [ -d "$work/target" ] ;;
             scratch-busy) [ ! -d /proc/self/fd ] || [ -d "$t/rach2-busy.Bu5yBu" ] ;;
             scratch-program) [ ! -d /proc/self/fd ] || [ -e "$t/rach2-prog.Pr0gPr/sleep" ] ;;
-            scratch-stems) grep -qx rach2_verify "$work/stems" && grep -qx tidy-test "$work/stems" &&
-                grep -qx rach2-grow-measure "$work/stems" && ! grep -q '[^A-Za-z0-9_-]' "$work/stems" ;;
+            scratch-stems) grep -qx rach2_verify "$work/stems" && grep -qx rach2-measure "$work/stems" &&
+                grep -qx rach2-grow-measure "$work/stems" && ! grep -q '[^A-Za-z0-9_-]' "$work/stems" &&
+                ! grep -qv '^rach2' "$work/stems" ;;
         esac || { echo "tidy-test: failed: $row"; failed=1; }
     done
     [ "$failed" -eq 0 ] || sed 's/^/tidy-test: output: /' "$work/tidy.out"
@@ -265,8 +280,8 @@ expect()
     fi
 }
 
-faults='no-patch no-verbatim no-count no-keep force any-worktree any-ignored no-age no-young
-    no-size no-fresh any-name any-stem no-python links no-busy no-program'
+faults='no-patch no-space no-heading keep-index no-count no-keep force any-worktree any-ignored
+    no-age no-young no-size no-fresh any-name any-stem any-prefix no-python links no-busy no-program'
 if [ "$mode" = texts ]; then
     for f in $faults; do
         fault "$f" || { echo "tidy-test: fault $f changes nothing in lib.sh or scratch.pl" >&2; exit 1; }
@@ -276,8 +291,10 @@ fi
 fault none
 rows >&2 || exit 1
 if [ "$mode" = mutate ]; then
-    expect no-patch 'branch-subject branch-unpushed branch-space wt-unique' || exit 1
-    expect no-verbatim branch-space || exit 1
+    expect no-patch 'branch-subject branch-unpushed branch-space branch-place wt-unique' || exit 1
+    expect no-space branch-space || exit 1
+    expect no-heading branch-place || exit 1
+    expect keep-index branch-rebased || exit 1
     expect no-count branch-merge || exit 1
     expect no-keep 'branch-held branch-parked' || exit 1
     expect force 'wt-dirty wt-locked' || exit 1
@@ -289,6 +306,7 @@ if [ "$mode" = mutate ]; then
     expect no-fresh scratch-young || exit 1
     expect any-name scratch-name || exit 1
     expect any-stem scratch-name || exit 1
+    expect any-prefix scratch-name || exit 1
     expect no-python scratch-stems || exit 1
     expect links scratch-link || exit 1
     if [ -d /proc/self/fd ]; then
@@ -299,4 +317,4 @@ if [ "$mode" = mutate ]; then
     rows >&2 || exit 1
     echo 'tidy-test: result: pass: every fault caught and restored'
 fi
-echo 'tidy-test: result: pass: 27 rows'
+echo 'tidy-test: result: pass: 28 rows'

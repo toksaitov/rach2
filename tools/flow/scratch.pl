@@ -10,9 +10,9 @@
 # `stems` in lib.sh reads from master's tests and tools. An entry of DIR is
 # removed when all of these hold:
 #
-# * its name is one of the STEMs, a dot and six to eight letters, digits or
-#   underscores, as mktemp(1) makes from a template STEM.XXXXXX and Python's
-#   tempfile from a prefix `STEM.`;
+# * its name is one of the STEMs that begin with `rach2`, a dot and six to
+#   eight letters, digits or underscores, as mktemp(1) makes from a template
+#   STEM.XXXXXX and Python's tempfile from a prefix `STEM.`;
 # * it is a directory or a regular file, and root does not own it;
 # * nothing in it has changed for SECONDS;
 # * nothing is mounted in it, and no process has its working directory, its
@@ -31,7 +31,8 @@ use File::Path qw(remove_tree);
 alarm 540;
 my $dir = abs_path(shift // '') // die "scratch: no such directory\n";
 my $age = shift // die "usage: scratch.pl DIR SECONDS STEM...\n";
-my $stems = join '|', map { quotemeta } @ARGV;
+my @stems = grep { /^rach2/ } @ARGV;
+my $stems = join '|', map { quotemeta } @stems;
 my $now = time;
 
 my @busy;
@@ -79,7 +80,7 @@ sub size {
 opendir my $d, $dir or die "scratch: $dir: $!\n";
 my ($count, $bytes) = (0, 0);
 for my $e (sort readdir $d) {
-    next unless @ARGV and $e =~ /^(?:$stems)\.[A-Za-z0-9_]{6,8}$/;
+    next unless @stems and $e =~ /^(?:$stems)\.[A-Za-z0-9_]{6,8}$/;
     my $p = "$dir/$e";
     my @st = lstat $p or next;
     next if $st[4] == 0 or !(-d _ or -f _);
