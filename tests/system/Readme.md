@@ -8,6 +8,8 @@ Every suite runs through `tests/run`, as [the tests' Readme](../Readme.md) descr
 
 A script here runs by hand from the top of the tree as `sh tests/system/NAME.sh`; its header comment, or its usage message, gives its arguments. The fault proofs need a built tree, and most need the products of the suite they prove, which a run of that suite builds. `ARCH` chooses their architecture as it chooses the runner's, except where a script's header names one.
 
+`sh tests/system/textbusy_mutate.sh` removes executable write exclusion, requires `textbusy` to detect the fault, restores and rebuilds the kernel, and runs the suite again. The suite runs offline on x86-64 with 128 MiB, and checks executable and interpreter lifetimes on KRFFS and tmpfs, duplicate writers, fork, exec, failed exec, rename and unlink.
+
 ## Design
 
 ### The registry and the recipes

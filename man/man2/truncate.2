@@ -73,9 +73,10 @@ to every caller, as an open of one for writing does; Linux lets root
 truncate one and changes nothing.
 A file backing a loop device returns
 .Er EBUSY .
-Linux has no such rule, and returns
-.Er ETXTBSY
-for a program being run, which this kernel does not.
+Linux has no such loop-device rule.
+A running program or its ELF interpreter returns
+.Er ETXTBSY ,
+as on Linux, until the last process exits or executes another image.
 .Pp
 The file is truncated through an open file description that no
 descriptor refers to, so the call does what an open for writing,
@@ -227,6 +228,13 @@ The file is immutable or append-only.
 The file system is read-only or has no truncate operation.
 .It Er ESRCH
 There is no current process.
+.It Er ETXTBSY
+.Fn truncate
+was given a running program or its ELF interpreter.
+A writable descriptor cannot coexist with an executable reference;
+.Fn ftruncate
+on a read-only descriptor returns
+.Er EINVAL .
 .El
 .Sh SEE ALSO
 .Xr open 2 ,

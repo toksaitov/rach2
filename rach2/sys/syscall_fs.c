@@ -2648,9 +2648,8 @@ static int open_mounted_node(struct vfs_ref *ref, int flags)
  * EISDIR for the root or a directory opened for writing, with O_TRUNC or
  * with O_CREAT, which asks for a file; ENOTDIR for O_DIRECTORY on anything
  * else; then the permission the access mode asks for, O_TRUNC asking for
- * write. O_TRUNC of the regular file that is left is done here: a truncation
- * to zero only shrinks, and a shrink keeps the node where it is; a caller
- * without privilege loses the file's set-id bits. Returns 0, or a negative
+ * write. The truncation is done by `open_install` after it reserves write
+ * access, so a running program gives -ETXTBSY. Returns 0, or a negative
  * errno with the reference released.
  */
 static int open_root_node(struct vfs_ref *ref, int flags)
@@ -2660,7 +2659,6 @@ static int open_root_node(struct vfs_ref *ref, int flags)
     unsigned acc = (unsigned)flags & 3u;
     int want;
     int32_t crc;
-    int rc;
 
     if ((flags & O_CREAT) && (flags & O_EXCL)) {
         vfs_ref_release(ref);
@@ -2688,16 +2686,6 @@ static int open_root_node(struct vfs_ref *ref, int flags)
     if (crc != 0) {
         vfs_ref_release(ref);
         return crc;
-    }
-    if (flags & O_TRUNC) {
-        rc = vfs_truncate(ref->mnt, node, 0);
-        if (rc != 0) {
-            vfs_ref_release(ref);
-            return rc;
-        }
-        if (!cred_privileged()) {
-            cred_kill_setid(node);
-        }
     }
     return 0;
 }
@@ -2758,7 +2746,13 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
     }
     entry->ofd->offset = 0;
 
-    rc = vfs_open_node(ref->mnt, node, flags, &entry->ofd->fhandle);
+    rc = 0;
+    if ((flags & 3) != 0 || (flags & O_TRUNC)) {
+        rc = fd_ofd_access(entry->ofd, ref, 1);
+    }
+    if (rc == 0) {
+        rc = vfs_open_node(ref->mnt, node, flags, &entry->ofd->fhandle);
+    }
     if (rc != 0) {
         fd_free(current_proc->fds, fd);
         vfs_ref_release(ref);
@@ -2768,10 +2762,14 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
     entry->ofd->vnode = node;
     vfs_desc_open(ref->mnt);
     vfs_leave(ref->mnt);
-    if (!mnt_is_root(ref->mnt) && (flags & O_TRUNC)) {
+    if (flags & O_TRUNC) {
         rc = vfs_truncate(ref->mnt, entry->ofd->fhandle, 0);
         if (rc == 0 && !cred_privileged()) {
-            vfs_kill_setid(ref->mnt, entry->ofd->vnode);
+            if (mnt_is_root(ref->mnt)) {
+                cred_kill_setid(entry->ofd->vnode);
+            } else {
+                vfs_kill_setid(ref->mnt, entry->ofd->vnode);
+            }
         }
         if (rc != 0) {
             fd_free(current_proc->fds, fd);
@@ -2779,6 +2777,9 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
         }
     }
 
+    if ((flags & 3) == 0) {
+        entry->ofd->access = 0;
+    }
     if ((flags & 3) == 1) {
         entry->flags = FD_FLAG_WRITE;
     } else if ((flags & 3) == 2) {
@@ -8120,9 +8121,8 @@ static int32_t truncate_checks(const struct vfs_ref *ref)
  * close of an open for writing and an ftruncate: a KRFFS file that must move
  * to grow repoints the description, so the set-id clear of an unprivileged
  * caller finds the file where it is now, and a loop attachment sees the
- * truncation in progress, as it sees an ftruncate. Linux has ETXTBSY where
- * a program being run is truncated, and no loop rule; this kernel has the
- * loop rule and no ETXTBSY.
+ * truncation in progress, as it sees an ftruncate. A file reserved for
+ * execution gives -ETXTBSY, as on Linux.
  */
 static int32_t truncate_path(const char *path, long long length, int dir)
 {
@@ -8142,7 +8142,10 @@ static int32_t truncate_path(const char *path, long long length, int dir)
     rc = truncate_checks(&ref);
     if (rc == 0) {
         desc = fd_ofd_new();
-        rc = desc ? vfs_open_node(ref.mnt, ref.node, 1 /* O_WRONLY */, &desc->fhandle) : -ENOMEM;
+        rc = desc ? fd_ofd_access(desc, &ref, 1) : -ENOMEM;
+        if (rc == 0) {
+            rc = vfs_open_node(ref.mnt, ref.node, 1 /* O_WRONLY */, &desc->fhandle);
+        }
     }
     if (rc != 0) {
         fd_ofd_unref(desc);

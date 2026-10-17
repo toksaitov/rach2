@@ -55,8 +55,9 @@ struct mm {
     struct page_dir *dir; /* NULL once the last user has gone */
     uintptr_t space_root; /* the directory's physical address; 0 with `dir` */
     vm_space_t vm;
-    struct open_file *exe_file; /* the program's file; NULL for none */
-    struct mm *exe_next;        /* the next on the list of those with one */
+    struct open_file *exe_file;    /* the program's file; NULL for none */
+    struct open_file *interp_file; /* the ELF interpreter; NULL for none */
+    struct mm *exe_next;           /* the next on the list of those with one */
     /* The path the exec found the program at, from the heap; NULL for none. */
     char *exe;
     /* The dynamic linker the program names, from the heap; NULL for none. */
@@ -81,7 +82,8 @@ struct mm *mm_new(void);
 
 /** Copy what `from` keeps beside its pages, for /proc and the dumpable flag,
  * into `to`, a copy of its address space that fork made: the program's file,
- * whose description the two then share, and the path when there is room. */
+ * and its ELF interpreter, whose descriptions the two then share, and the
+ * path when there is room. */
 void mm_copy_info(struct mm *to, const struct mm *from);
 
 /** Keep the heap copy of the path `path` as the path the exec found `mm`'s
@@ -95,11 +97,13 @@ void mm_set_exe(struct mm *mm, const char *path);
 void mm_set_interp(struct mm *mm, const char *path);
 
 /**
- * Keep the file at `ref` as the program of `mm`, which keeps none yet: a
+ * Keep the file at `ref` as the program of `mm`, or its ELF interpreter
+ * when it already has a program: a
  * description of it that opens nothing (`fs_exe_open`), and `mm` on the list
  * `mm_exe_holds` reads. Nothing may sleep between the resolution that found
  * the node and this call unless the caller holds the node's namespace lock,
- * since until the list has `mm` the node may go. 0, or -ENOMEM.
+ * since until the list has `mm` the node may go. 0, -ETXTBSY for a writer,
+ * or -ENOMEM.
  */
 int mm_exe_open(struct mm *mm, const struct vfs_ref *ref);
 
@@ -114,8 +118,9 @@ int mm_exe_open(struct mm *mm, const struct vfs_ref *ref);
 void mm_exe_close(struct mm *mm);
 
 /** Whether an address space keeps the node `node` of `mnt` as its program's
- * file: the node the file is at now, which a relocation moves in the
- * description. The KRFFS root counts it as one more holder of the node. */
+ * file or ELF interpreter: the node the file is at now, which a relocation
+ * moves in the description. The KRFFS root counts it as one more holder
+ * of the node. */
 int mm_exe_holds(const struct vfs_mount *mnt, const void *node);
 
 /** Take a user's count of `mm`, for a caller that runs in it or that found

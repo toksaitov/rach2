@@ -40,8 +40,10 @@ changes = {
              "vfs_truncate(ref->mnt, node, 0)"),
     "release": ("            fd_free(current_proc->fds, fd);\n            return rc;",
                 "            return rc;"),
-    "truncate": ("if (!mnt_is_root(ref->mnt) && (flags & O_TRUNC)) {",
-                 "if (0) {"),
+    "truncate": ("    if (flags & O_TRUNC) {\n"
+                 "        rc = vfs_truncate(ref->mnt, entry->ofd->fhandle, 0);",
+                 "    if (0) {\n"
+                 "        rc = vfs_truncate(ref->mnt, entry->ofd->fhandle, 0);"),
     "loop": ("mnt->type == &vfs_krffs_type && loops[i].handle == from",
              "loops[i].handle == from"),
     "unlink-lock": ("vfs_resolve(0, path, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf,",

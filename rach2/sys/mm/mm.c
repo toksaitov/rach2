@@ -60,6 +60,13 @@ void mm_put(struct mm *mm)
     mm->dir = NULL;
     mm->space_root = 0;
     vm_free(&mm->vm);
+    if (mm->interp_file) {
+        struct open_file *ofd = mm->interp_file;
+        struct vfs_mount *locked = fs_exe_lock(ofd);
+
+        mm->interp_file = NULL;
+        fs_exe_close(ofd, locked);
+    }
     mm_exe_close(mm);
     vm_file_reap();
     mm_unhold(mm);
@@ -127,7 +134,19 @@ int mm_exe_open(struct mm *mm, const struct vfs_ref *ref)
     if (!ofd) {
         return -ENOMEM;
     }
-    exe_list_add(mm, ofd);
+    {
+        int rc = fd_ofd_access(ofd, ref, 2);
+
+        if (rc != 0) {
+            fs_exe_close(ofd, fs_exe_lock(ofd));
+            return rc;
+        }
+    }
+    if (mm->exe_file) {
+        mm->interp_file = ofd;
+    } else {
+        exe_list_add(mm, ofd);
+    }
     return 0;
 }
 
@@ -157,7 +176,9 @@ int mm_exe_holds(const struct vfs_mount *mnt, const void *node)
     const struct mm *m;
 
     for (m = exe_list; m; m = m->exe_next) {
-        if (node && m->exe_file->vmnt == mnt && m->exe_file->vnode == node) {
+        if (node &&
+            ((m->exe_file->vmnt == mnt && m->exe_file->vnode == node) ||
+             (m->interp_file && m->interp_file->vmnt == mnt && m->interp_file->vnode == node))) {
             return 1;
         }
     }
@@ -175,6 +196,10 @@ void mm_copy_info(struct mm *to, const struct mm *from)
     if (from->exe_file) {
         fd_ofd_ref(from->exe_file);
         exe_list_add(to, from->exe_file);
+    }
+    if (from->interp_file) {
+        fd_ofd_ref(from->interp_file);
+        to->interp_file = from->interp_file;
     }
     to->arg_start = from->arg_start;
     to->arg_end = from->arg_end;

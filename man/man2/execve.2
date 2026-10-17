@@ -436,6 +436,9 @@ or
 and reaches something else.
 .It Bq Er ESRCH
 There is no current process.
+.It Bq Er ETXTBSY
+The program or an interpreter is open for writing, including through a
+duplicate or inherited descriptor or one marked close-on-exec.
 .El
 .Sh SEE ALSO
 .Xr chown 2 ,

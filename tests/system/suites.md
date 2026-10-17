@@ -96,3 +96,4 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `krffscheck` (full tier; needs python3; no machine): what the offline checker says about images broken on purpose.
 * `conload` (core tier; needs qemu, mformat; 128 MiB): every line typed at the console under load arrives, numbered and checksummed, with the reader parked, as type-ahead, after an interrupt character to a foreground child, and across an exec.
 * `drive` (core tier; needs nothing beyond the build; no machine): the drivers' waits, drive.sh and the harness against fake machines that choose when they are ready, booting nothing.
+* `textbusy` (full tier; needs qemu; 128 MiB; x86_64 only): executable files exclude writers until the last image ends.

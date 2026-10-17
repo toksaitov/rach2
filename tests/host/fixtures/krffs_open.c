@@ -163,6 +163,13 @@ static int cred_privileged(void)
     return 1;
 }
 
+/** No row changes the set-id bits of a file on the memory root. */
+static void cred_kill_setid(krffs_node_t *node)
+{
+    (void)node;
+    check(0, "unexpected memory-root set-id update");
+}
+
 /** Reject an unexpected set-id update. */
 static void vfs_kill_setid(struct vfs_mount *mnt, void *node)
 {

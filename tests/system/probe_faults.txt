@@ -3288,10 +3288,10 @@ probe direntmusl
 file rach2/sys/syscall_proc.c
 expect DIRENTMUSL FAIL (an ELF image whose PT_INTERP names a directory by its end was not refused)
 old
-    rc = exec_open(&s->prog, s->layout.interp, end, NULL, NULL);
+    rc = exec_open(&s->prog, s->layout.interp, end, NULL, s->mm);
 new
     (void)end;
-    rc = exec_open(&s->prog, s->layout.interp, 0, NULL, NULL);
+    rc = exec_open(&s->prog, s->layout.interp, 0, NULL, s->mm);
 end
 
 fault device-directory-flag-ignored

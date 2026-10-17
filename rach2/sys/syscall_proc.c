@@ -628,9 +628,8 @@ static void close_cloexec_fds(void)
  * on the KRFFS root is read through the description of it the new address
  * space keeps (`mm_exe_open`), at the node the file is at now, so the load
  * reads the file whose rights and set-id bits the exec checked, whatever is
- * put at its path meanwhile; the dynamic linker there is read by the path of
- * its node, from the root of the mount table, which is not the path the
- * caller gave when chroot moved the caller's root. One on another mount is
+ * put at its path meanwhile. The ELF interpreter has a description of its
+ * own with the same lifetime. One on another mount is
  * read through a handle on the node its resolution held, opened once and
  * released after the load. It lives in the caller's own exec workspace below,
  * because a read of a mounted volume sleeps and a second exec runs while it
@@ -640,9 +639,9 @@ struct exec_file {
     char path[VFS_PATH_MAX]; /* the node's path on the KRFFS root */
     struct vfs_ref ref;      /* the mount is NULL on the KRFFS root and once closed */
     void *handle;
-    struct mm *held; /* the address space whose program this file of the root is */
-    int32_t err;     /* the errno of a failed read of a mount, which execve reports */
-    int readable;    /* whether the caller may read the file itself */
+    struct open_file *held; /* the file of the root the new image keeps */
+    int32_t err;            /* the errno of a failed read of a mount, which execve reports */
+    int readable;           /* whether the caller may read the file itself */
 };
 
 /* What a program's set-id bits would do: the bits that apply, and the file
@@ -689,7 +688,7 @@ static int exec_file_read(void *ctx, void *dst, uint32_t count, uint32_t off)
     int32_t got;
 
     if (f->held != NULL) {
-        return exec_held_read(f->held->exe_file, dst, count, off);
+        return exec_held_read(f->held, dst, count, off);
     }
     if (f->ref.mnt == NULL) {
         return krffs_read(f->path, (char *)dst, count, off);
@@ -1125,8 +1124,8 @@ static int32_t exec_copy_args(struct exec_state *s, const char __user *user_path
  * Open the file at the absolute, canonical `path` into `f` for execve to
  * read, and when `id` is not NULL, say in it what the file's set-id bits
  * would do. `path` starts at the caller's root, which chroot may have
- * moved. When `keep` is not NULL the file is the program the image runs,
- * and `keep`, the new address space, keeps it (`mm_exe_open`) while the walk
+ * moved. `keep`, the new address space, keeps the program and its ELF
+ * interpreter (`mm_exe_open`), excluding writers while the walk
  * still holds the node's mount locked; one on the KRFFS root is then read
  * through that, and any other file on the root by its node's own path, which
  * `f` keeps. `f` also says whether the caller may read the file, which the
@@ -1201,7 +1200,7 @@ static int32_t exec_open(struct exec_file *f, const char *path, int end, struct 
     if (rc == 0 && keep != NULL) {
         rc = mm_exe_open(keep, &ref);
         if (rc == 0 && f->ref.mnt == NULL) {
-            f->held = keep;
+            f->held = keep->interp_file ? keep->interp_file : keep->exe_file;
         }
     }
     vfs_walk_unlock(ref.mnt);
@@ -1374,7 +1373,7 @@ static int32_t exec_interp(struct exec_state *s, uintptr_t *base)
     if (rc < 0) {
         return rc;
     }
-    rc = exec_open(&s->prog, s->layout.interp, end, NULL, NULL);
+    rc = exec_open(&s->prog, s->layout.interp, end, NULL, s->mm);
     if (rc != 0) {
         return rc;
     }

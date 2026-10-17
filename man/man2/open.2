@@ -684,6 +684,12 @@ write operation is not implemented.
 .It Bq Er ESRCH
 .Fn close
 was called without a current process.
+.It Bq Er ETXTBSY
+The file is a running program or its ELF interpreter, and the open
+requests write access or
+.Dv O_TRUNC .
+The last process to exit or execute another image releases this restriction.
+Rename and unlink remain permitted.
 .El
 .Sh SEE ALSO
 .Xr dup 2 ,

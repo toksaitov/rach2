@@ -56,6 +56,23 @@ struct open_file *fd_ofd_new(void)
     return ofd_alloc();
 }
 
+int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access)
+{
+    struct ofd_rec *rec;
+
+    for (rec = ofds; rec; rec = rec->next) {
+        if (rec->ofd.access && rec->ofd.access != access &&
+            vfs_mount_base(rec->ofd.access_mnt) == vfs_mount_base(ref->mnt) &&
+            rec->ofd.access_node == ref->node) {
+            return -ETXTBSY;
+        }
+    }
+    ofd->access_mnt = ref->mnt;
+    ofd->access_node = ref->node;
+    ofd->access = access;
+    return 0;
+}
+
 void fd_ofd_ref(struct open_file *ofd)
 {
     if (ofd) {
@@ -138,6 +155,9 @@ void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to)
     struct ofd_rec *rec;
 
     for (rec = ofds; rec; rec = rec->next) {
+        if (rec->ofd.access_mnt == mnt && rec->ofd.access_node == from) {
+            rec->ofd.access_node = to;
+        }
         if (rec->ofd.vmnt != mnt) {
             continue;
         }
@@ -158,6 +178,7 @@ void fd_ofd_unref(struct open_file *ofd)
             struct ofd_rec **link = &ofds;
             struct ofd_rec *rec = ofd_rec_of(ofd);
 
+            ofd->access = 0;
             if (lock_any()) {
                 lock_ofd_gone(ofd);
             }

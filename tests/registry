@@ -128,3 +128,4 @@ imagerace|-|full
 krffscheck|python3|full
 conload|qemu,mformat|core
 drive|-|core
+textbusy|qemu|full||128|x86_64

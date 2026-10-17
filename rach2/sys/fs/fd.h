@@ -120,6 +120,11 @@ struct open_file {
      * from a new description the heap gives the same address after its
      * last close; an epoll registration keeps both. */
     uint32_t serial;
+    /* A write or executable reservation, taken before an open may sleep.
+     * The resolver holds this node until the description takes ownership. */
+    struct vfs_mount *access_mnt;
+    void *access_node;
+    int access; /* 0: none, 1: writer, 2: executable */
     /* The token of the type's `pin` for an O_PATH description on a type
      * that keeps a node only while it is open, which the last unref gives
      * to `unpin`; NULL for every other description. */
@@ -287,6 +292,13 @@ void fd_ofd_unref(struct open_file *ofd);
  * (`fs_exe_open`). NULL when the heap has no room; `fd_ofd_unref` frees it.
  */
 struct open_file *fd_ofd_new(void);
+
+struct vfs_ref;
+/** Reserve `ref` for writing (1) or execution (2) in `ofd`. Opposite
+ * reservations on the same file give -ETXTBSY. Does not sleep; the caller
+ * holds the node, and transfers that hold to the description or releases
+ * the description before the node. The big kernel lock is required. */
+int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access);
 
 /** Take or release the description lock (see `busy` above), and with it,
  * taken first and released last, the namespace lock of the description's

@@ -172,6 +172,15 @@ void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked)
     }
 }
 
+/** No row models writers; executable reservations always succeed. */
+int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access)
+{
+    (void)ofd;
+    (void)ref;
+    (void)access;
+    return 0;
+}
+
 /** Take a reference to the description `ofd`. */
 void fd_ofd_ref(struct open_file *ofd)
 {

@@ -2104,3 +2104,12 @@ run-ssh-e1000:
 prepare-products: $(MKEXFATFIXTURE) $(MKFATFIXTURE) $(OS_SIMPLE_EXT2) $(OS_REAL_SMALL_EXT2) \
                   $(GRUB_TEST_EXT2) $(FD_HOSTTEST) \
                   $(STICK_IMAGE) $(SELFBUILD_EXT2_VOL) $(IMAGE_TOOLS)
+
+# `tests/run textbusy`: executable files exclude writers until the last image
+# ends.
+run-textbusy: rach2 tests krffs musl-programs test-image $(HARNESS)
+	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
+	    --qemu-arg=-m --qemu-arg=128 --append "rach2.rescue" \
+	    --timeout 120 --ok "TEXTBUSYMUSL OK" --never "TEXTBUSYMUSL FAIL" \
+	    --log $(IMAGES_DIR)/textbusy-test.log \
+	    "expect=Type 'help'" "send=exec /musl/textbusymusl" until=90
