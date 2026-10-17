@@ -127,12 +127,13 @@ wait_session()
 # leave its tree as it is. That holds for a branch master contains and for one
 # rebased or cherry-picked before its push, and fails for any change master
 # lacks, whitespace and a change in another place included, and for a merge
-# that conflicts. A commit message proves nothing.
+# that conflicts, even one whose tree is master's, as when REF deletes a file
+# that master changed. A commit message proves nothing.
 merged()
 {
     master=$(git rev-parse -q --verify 'origin/master^{tree}') || return 1
-    tree=$(git merge-tree --write-tree --no-messages origin/master "$1" 2> /dev/null | sed -n 1p)
-    [ "$tree" = "$master" ]
+    merge=$(git merge-tree --write-tree --no-messages origin/master "$1" 2> /dev/null) || return 1
+    [ "$(printf '%s\n' "$merge" | sed -n 1p)" = "$master" ]
 }
 
 # tidy: remove what finished work left in the clone. A helper's worktree under

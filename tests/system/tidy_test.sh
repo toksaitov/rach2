@@ -7,25 +7,25 @@
 # into master, one whose commit master took by cherry-pick and one whose only
 # commit merges a branch master has, and keep one whose commit only has a
 # subject master has, one with a commit master lacks, one whose merge commit
-# adds a file, one whose commit differs from master's only in whitespace
-# inside a string, one whose commit makes in one function the change master
-# made in another, the branches of the issue held and of the issue parked, and
-# the branch checked out; and it must remove a clean helper's worktree under
-# .claude/worktrees at a merged commit, with its branch and its build output,
-# and keep one with an untracked file, one with an ignored file that is not
-# build output, a locked one, one with a commit master lacks, and one outside
-# .claude/worktrees; a branch rebased onto a master that changed its file
-# elsewhere counts as merged. `stems` must list the rach2 stems of this tree's
-# mktemp templates and Python prefixes, and no other. `prune_logs` must remove
-# a session's output past fourteen days and keep a younger one and files its
-# patterns do not match, and under 1 GiB of sparse files remove the oldest
-# until the total fits, never one written in the last day. `scratch.pl` must
-# remove an old scratch directory, an old scratch file and an old directory
-# named as Python's tempfile names them, and keep a directory with a file
-# changed now, entries whose names have no stem it was given, a stem that does
-# not begin with rach2 or no suffix that mktemp gives, a symbolic link, and,
-# where /proc exists, a directory a process works in and one that holds a
-# running program.
+# adds a file, one that deletes a file master changed, one whose commit
+# differs from master's only in whitespace inside a string, one whose commit
+# makes in one function the change master made in another, the branches of the
+# issue held and of the issue parked, and the branch checked out; and it must
+# remove a clean helper's worktree under .claude/worktrees at a merged commit,
+# with its branch and its build output, and keep one with an untracked file,
+# one with an ignored file that is not build output, a locked one, one with a
+# commit master lacks, and one outside .claude/worktrees; a branch rebased
+# onto a master that changed its file elsewhere counts as merged. `stems` must
+# list the rach2 stems of this tree's mktemp templates and Python prefixes,
+# and no other. `prune_logs` must remove a session's output past fourteen days
+# and keep a younger one and files its patterns do not match, and under 1 GiB
+# of sparse files remove the oldest until the total fits, never one written in
+# the last day. `scratch.pl` must remove an old scratch directory, an old
+# scratch file and an old directory named as Python's tempfile names them, and
+# keep a directory with a file changed now, entries whose names have no stem
+# it was given, a stem that does not begin with rach2 or no suffix that mktemp
+# gives, a symbolic link, and, where /proc exists, a directory a process works
+# in and one that holds a running program.
 #
 # With --mutate each fault below is put into private copies of lib.sh and
 # scratch.pl and must fail exactly its expected rows; the copies are
@@ -66,7 +66,8 @@ fault()
         none) ;;
         any-ignored) l='s/ && disposable "\$w" &&/ \&\&/' ;;
         no-python) l='s/XXXXXX|\[/XXXXXX|nothing[/' ;;
-        any-tree) l='s/^    \[ "\$tree" = "\$master" \]$/    true/' ;;
+        any-tree) l='s/^    \[ "\$(printf .%s\\n. "\$merge" | sed -n 1p)" = "\$master" \]$/    true/' ;;
+        any-conflict) l='s/^\(    merge=.*\) || return 1$/\1/' ;;
         no-keep) l='s/^            case \$b in "\$n"-\*) continue 2 ;; esac$/            :/' ;;
         force) l='s/git worktree remove "\$w"/git worktree remove --force --force "\$w"/' ;;
         any-worktree) l='s|^        case \$w in "\$top"/.claude/worktrees/\*) ;; \*) continue ;; esac$|        :|' ;;
@@ -117,8 +118,9 @@ setup()
     printf 'build/\n*.wad\n' > .gitignore
     echo a > a
     printf '%s\n' 1 2 3 4 5 6 7 8 9 10 > r
+    echo k > k
     for f in f g; do printf '%s()\n{\n\ta\n\tb\n\tc\n\tx = 1\n\td\n\te\n\tf\n}\n' "$f"; done > h
-    git add .gitignore a r h && git commit -q -m 'Add a'
+    git add .gitignore a r h k && git commit -q -m 'Add a'
     git branch -M master
     git remote add origin "$work/origin.git"
     base=$(git rev-parse HEAD)
@@ -134,6 +136,8 @@ setup()
     git switch -q -c 8-merge "$base"
     git merge -q --no-ff --no-commit 1-merged
     echo x > x && git add x && git commit -q -m 'Merge 1-merged'
+    git switch -q -c 12-delete "$base"
+    git rm -q k && git commit -q -m 'Remove k'
     git switch -q -c 11-pure "$base"
     git merge -q --no-ff -m 'Merge 1-merged' 1-merged
     git switch -q -c 9-space "$base"
@@ -147,6 +151,7 @@ setup()
     echo d2 > d && git add d && git commit -q -m 'Add d'
     printf 'say "ab"\n' > g && git add g && git commit -q -m 'Add g'
     sed '16s/x = 1/x = 2/' h > h.new && mv h.new h && git commit -q -a -m 'Edit h'
+    echo k2 > k && git commit -q -a -m 'Edit k'
     git push -q origin master
     git fetch -q origin
     for w in clean dirty ignored locked unique; do
@@ -226,7 +231,7 @@ rows()
     wt=$work/clone/.claude/worktrees
     a=$work/stateA b=$work/stateB t=$work/tmp
     for row in branch-merged branch-rebased branch-subject branch-unpushed \
-        branch-held branch-parked branch-current branch-merge branch-pure branch-space branch-place wt-clean wt-dirty wt-ignored wt-locked \
+        branch-held branch-parked branch-current branch-merge branch-pure branch-delete branch-space branch-place wt-clean wt-dirty wt-ignored wt-locked \
         wt-unique wt-outside prune-age prune-pattern prune-size prune-young \
         scratch-old scratch-file scratch-young scratch-name scratch-link scratch-busy \
         scratch-program scratch-stems; do
@@ -240,6 +245,7 @@ rows()
             branch-current) has 7-current ;;
             branch-merge) has 8-merge ;;
             branch-pure) ! has 11-pure ;;
+            branch-delete) has 12-delete ;;
             branch-space) has 9-space ;;
             branch-place) has 10-place ;;
             wt-clean) [ ! -e "$wt/clean" ] && ! has worktree-clean ;;
@@ -281,7 +287,7 @@ expect()
     fi
 }
 
-faults='any-tree no-keep force any-worktree any-ignored no-age no-young no-size no-fresh
+faults='any-tree any-conflict no-keep force any-worktree any-ignored no-age no-young no-size no-fresh
     any-name any-stem any-prefix no-python links no-busy no-program'
 if [ "$mode" = texts ]; then
     for f in $faults; do
@@ -292,7 +298,8 @@ fi
 fault none
 rows >&2 || exit 1
 if [ "$mode" = mutate ]; then
-    expect any-tree 'branch-subject branch-unpushed branch-merge branch-space branch-place wt-unique' || exit 1
+    expect any-tree 'branch-unpushed branch-merge branch-place wt-unique' || exit 1
+    expect any-conflict branch-delete || exit 1
     expect no-keep 'branch-held branch-parked' || exit 1
     expect force 'wt-dirty wt-locked' || exit 1
     expect any-worktree wt-outside || exit 1
@@ -314,4 +321,4 @@ if [ "$mode" = mutate ]; then
     rows >&2 || exit 1
     echo 'tidy-test: result: pass: every fault caught and restored'
 fi
-echo 'tidy-test: result: pass: 29 rows'
+echo 'tidy-test: result: pass: 30 rows'
