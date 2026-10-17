@@ -2,7 +2,7 @@
 
 One line per suite, in the order the pool starts them, from `tests/run inventory`: the tier, the external commands the suite needs, `qemu` being the emulator of the architecture `ARCH` names, the most guest memory its machines ask for at once, the architectures it runs on when it does not run on both, and what it proves, which is the sentence in `tests/system/suites.mk` that names it. `tests/run style` compares this file with that output.
 
-* `gnu` (full tier; needs qemu, ssh, scp, sftp, debugfs; 2048 MiB): the GNU system on its ext2 root, driven over OpenSSH with nobody at the console, logged in to by key and by password, and each port, GCC, GNU make, GDB, the SpiderMonkey shell and chromium-headless-shell doing its main job on the machine.
+* `gnu` (full tier; needs qemu, ssh, scp, sftp, debugfs, python3; 2048 MiB): the GNU system on its ext2 root, driven over OpenSSH with nobody at the console, logged in to by key and by password, and each port, GCC, GNU make, GDB, the SpiderMonkey shell and chromium-headless-shell doing its main job on the machine.
 * `agents` (full tier; needs qemu, ssh, scp, debugfs, python3, openssl; 4096 MiB; x86_64 only): the agents layer on the x86-64 GNU system, each of its rows run over OpenSSH as the test account on a machine whose only route out is to the fake API server on the host.
 * `install` (full tier; needs qemu, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the machine installs its own kernel.
 * `selfbuild` (full tier; needs qemu, mformat, mmd, mcopy; 128 MiB): the machine builds its own kernel.

@@ -364,6 +364,35 @@ which steps it where Linux would slew it;
 sets it once and exits, and
 .Fl w
 queries the peers without setting the clock.
+Without
+.Fl p ,
+it takes its servers from the lines of
+.Pa /etc/ntp.conf
+of the form
+.Ql server Ar NAME ,
+where
+.Ar NAME
+is a host name or an address, with
+.Ql : Ns Ar PORT
+after it for a port other than 123, and skips any other line with a
+message; a
+.Ql #
+begins a comment.
+It reads the file only when it starts.
+While the file names a server, the metal build's
+.Xr init 8
+runs
+.Ql ntpd -n
+and starts it again when it ends, so after an edit
+.Ql killall ntpd
+makes it read the file anew.
+The GNU system's root names the servers of the NTP pool,
+.Ql 0.pool.ntp.org
+to
+.Ql 3.pool.ntp.org ;
+the other images have no such file and run no ntpd.
+Run so, it writes each step of the clock and each error to
+.Pa /var/log/services .
 .It Nm pscan
 Scan
 .Ar HOST

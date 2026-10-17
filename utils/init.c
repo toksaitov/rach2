@@ -14,8 +14,9 @@
  * Four artifacts are built from this one source, and none of them is named
  * plain `init`: `init-shell` runs a shell on the console, `init-login` puts
  * that console behind `/bin/login`, `init-metal` is `init-login` plus the
- * network, a supervised SSH server, the system log and, on the GNU system's
- * root, D-Bus's system bus and the cron daemon, and `init-recovery` is the
+ * network, a supervised SSH server, the system log, BusyBox's NTP daemon
+ * where /etc/ntp.conf names a server and, on the GNU system's root, D-Bus's
+ * system bus and the cron daemon, and `init-recovery` is the
  * recovery system's, a shell on the console with the metal build's network,
  * services and file system check beside it. The metal build exists because
  * the machine it is for is across the room: nobody types a command at its
@@ -145,6 +146,16 @@ static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
  * image has a mail transfer agent.
  */
 #define CRON_PROGRAM "/usr/sbin/crond"
+
+/*
+ * BusyBox's ntpd, which keeps the clock by the servers `NTP_CONF` names:
+ * init runs it in the foreground, as an applet of `BUSYBOX_PROGRAM`, while
+ * that file has a server line (`ntp_servers`). Of the images built here
+ * only the GNU system's root installs the file. ntpd reads it when it
+ * starts, and writes each step of the clock and each error to the service
+ * log.
+ */
+#define NTP_CONF "/etc/ntp.conf"
 #endif
 
 #ifdef INIT_CONSOLE_LOGIN
@@ -1528,6 +1539,69 @@ static pid_t spawn_cron(void)
 }
 
 /**
+ * Return 1 when `NTP_CONF` has a line whose first word is `server` and has a
+ * second word, the line ntpd takes a server from, and 0 when it has none or
+ * cannot be read. A `#` begins a comment, as it does for ntpd. Given no
+ * server, ntpd prints its usage and exits, so init does not start it.
+ */
+static int ntp_servers(void)
+{
+    FILE *f = fopen(NTP_CONF, "r");
+    char line[512];
+    int found = 0;
+
+    if (!f) {
+        return 0;
+    }
+    while (!found && fgets(line, sizeof(line), f)) {
+        char *p = line + strspn(line, " \t");
+
+        if (strncmp(p, "server", 6) == 0 && (p[6] == ' ' || p[6] == '\t')) {
+            p += 6 + strspn(p + 6, " \t");
+            found = *p != '\0' && *p != '\n' && *p != '\r' && *p != '#';
+        }
+    }
+    fclose(f);
+    return found;
+}
+
+/**
+ * Fork BusyBox's ntpd in the foreground and return its pid (-1 on failure),
+ * its messages on the service log, with the shutdown signals blocked across
+ * the fork as for the SSH server (`spawn_sshd`).
+ */
+static pid_t spawn_ntpd(void)
+{
+    sigset_t saved;
+    pid_t pid;
+
+    if (shutdown_block(&saved) != 0) {
+        return -1;
+    }
+    pid = fork();
+    if (pid != 0) {
+        (void)sigprocmask(SIG_SETMASK, &saved, NULL);
+        return pid;
+    }
+    if (shutdown_defaults(&saved) != 0) {
+        _exit(126);
+    }
+    service_output();
+    {
+        static const char msg[] = "init: cannot exec " BUSYBOX_PROGRAM " ntpd\n";
+        char *argv[3];
+
+        argv[0] = (char *)"ntpd";
+        argv[1] = (char *)"-n";
+        argv[2] = 0;
+        execve(BUSYBOX_PROGRAM, argv, environ);
+        (void)write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    }
+    _exit(127);
+    return -1; /* unreachable; quiets the compiler */
+}
+
+/**
  * Whether this image runs D-Bus's system bus: when it has `DBUS_PROGRAM`
  * and the user `DBUS_USER`, whose ids go in `bus_uid` and `bus_gid`. An
  * image with the program and not the user is reported once.
@@ -1559,7 +1633,7 @@ struct service {
 /* The services, and whether the image has the bus and the cron daemon,
  * which `services_found` decides at boot. */
 struct services {
-    struct service log, sshd, bus, cron;
+    struct service log, sshd, bus, cron, ntp;
     int bus_wanted, cron_wanted;
 };
 
@@ -1571,7 +1645,7 @@ struct services {
 static void services_found(struct services *s)
 {
     memset(s, 0, sizeof(*s));
-    s->log.pid = s->sshd.pid = s->bus.pid = s->cron.pid = -1;
+    s->log.pid = s->sshd.pid = s->bus.pid = s->cron.pid = s->ntp.pid = -1;
     s->bus_wanted = bus_user();
     s->cron_wanted = access(CRON_PROGRAM, X_OK) == 0;
 }
@@ -1579,8 +1653,12 @@ static void services_found(struct services *s)
 /**
  * Start each service that is not running: the system log, the SSH server
  * where `anyone_to_let_in` allows one, reported on the console, D-Bus's
- * system bus and the cron daemon where the image has them. A failed fork is
- * left for the next turn.
+ * system bus and the cron daemon where the image has them, and ntpd while
+ * `NTP_CONF` names a server. A failed fork is left for the next turn.
+ *
+ * The NTP configuration is read again on each turn that finds ntpd not
+ * running, so a server an administrator writes into the file is used within
+ * a second, and one written while ntpd runs is used once ntpd is killed.
  */
 static void start_services(struct services *s)
 {
@@ -1603,6 +1681,10 @@ static void start_services(struct services *s)
     if (s->cron.pid < 0 && s->cron_wanted) {
         s->cron.pid = spawn_cron();
         s->cron.spawned = time(0);
+    }
+    if (s->ntp.pid < 0 && ntp_servers()) {
+        s->ntp.pid = spawn_ntpd();
+        s->ntp.spawned = time(0);
     }
 }
 
@@ -1911,8 +1993,9 @@ static void apply_limits(void)
  * (a full process table) is retried after a second so the loop does not spin;
  * `/bin/update`; and on the metal builds the network, once, after the console
  * session and before the SSH server that needs it, then the server wherever
- * `anyone_to_let_in` allows one, and D-Bus's system bus and the cron daemon
- * where the image has them (`services_found`). A failed fork of a service or
+ * `anyone_to_let_in` allows one, D-Bus's system bus and the cron daemon
+ * where the image has them (`services_found`), and ntpd while
+ * /etc/ntp.conf names a server. A failed fork of a service or
  * of `update` is left for the next turn, so the loop keeps reaping the
  * orphans that filled the process table.
  *
@@ -2012,7 +2095,8 @@ int main(void)
         }
 #ifdef INIT_METAL
         if (service_ended(&services.log, reaped) || service_ended(&services.sshd, reaped) ||
-            service_ended(&services.bus, reaped) || service_ended(&services.cron, reaped)) {
+            service_ended(&services.bus, reaped) || service_ended(&services.cron, reaped) ||
+            service_ended(&services.ntp, reaped)) {
             continue;
         }
 #endif

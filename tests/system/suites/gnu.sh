@@ -15,6 +15,12 @@
 # list of row names separated by spaces, runs those rows of ROWS alone, as a
 # mutation proof of one row needs.
 #
+# The ntpd row has an SNTP server on the host, tests/system/sntpserver.py,
+# whose time starts at 2030-01-01 00:00:00 UTC; the row points the machine's
+# /etc/ntp.conf at it and requires BusyBox's ntpd, which init runs, to set
+# the clock to it. The row is the last of ROWS, since it leaves the clock
+# years ahead.
+#
 # The last row is a person at the console: root logs in there, through the
 # serial port, which feeds the console's line discipline as the keyboard
 # does, starts tmux, and runs a command in its pane; the pane must reach the
@@ -51,7 +57,9 @@ TEST_KEY="$REPO/krffs/rach2_test_ed25519"
 LOG="$DISK.log"
 KNOWN="$DISK.known"
 CONSOLE="$DISK.console"
+SNTP="$DISK.sntp"
 QPID=""
+SNTPPID=""
 
 . "$REPO/tools/setup/e2fsprogs_path.sh"
 
@@ -65,12 +73,18 @@ stop_machine() {
         wait "$qpid" 2>/dev/null || true
     fi
 }
-# Stop the machine, close the console's input, and remove the disk, the known
-# hosts, the fetched script and the FIFO.
+# Stop the machine and the SNTP server, close the console's input, and remove
+# the disk, the known hosts, the fetched script, the FIFO and the server's
+# output.
 cleanup() {
     stop_machine
+    if [ -n "$SNTPPID" ]; then
+        kill "$SNTPPID" 2>/dev/null || true
+        wait "$SNTPPID" 2>/dev/null || true
+        SNTPPID=""
+    fi
     exec 9>&-
-    rm -f "$DISK" "$KNOWN" "$DISK.back" "$CONSOLE"
+    rm -f "$DISK" "$KNOWN" "$DISK.back" "$CONSOLE" "$SNTP"
 }
 trap 'cleanup' EXIT
 trap 'cleanup; exit 130' INT
@@ -235,8 +249,23 @@ pkgconf:120 procps:120 utillinux:120 zstd:120 rsync:300 nano:120 texinfo:120 str
 tmux:120 cron:180 zip:120 htop:120 dosfstools:120 uname:120 ttygroup:120 disknode:120
 fallocate:120 chattr:120 filecache:120 shadow:120 chawan:120 python:300 gnupg:300 m4:120
 autoreconf:300 bison:120 flex:120 jq:120 screen:120 sudo:120 cmake:300 dig:120
-make:600 autotools:2700 gcc:900 gdb:600 js:600 dbus:120 chromium:1200"
+make:600 autotools:2700 gcc:900 gdb:600 js:600 dbus:120 chromium:1200 ntpd:180"
 FAILED=""
+
+# The ntpd row's server, started before the rows when the ntpd row is among
+# them; its time starts at NTP_EPOCH, 2030-01-01 00:00:00 UTC, which the row
+# is given with the server's address.
+NTP_EPOCH=1893456000
+NTP_SERVER=""
+case " ${RACH2_GNU_ROWS:-ntpd} " in
+    *" ntpd "*)
+        python3 -B "$REPO/tests/system/sntpserver.py" "$NTP_EPOCH" > "$SNTP" 2>&1 &
+        SNTPPID=$!
+        "$RUNUTIL" until "$SNTP" "^sntpserver: port [0-9]" "$(scaled 30)" ||
+            fail "the SNTP server did not bind its port: $(cat "$SNTP")"
+        NTP_SERVER="10.0.2.2:$(sed -n 's/^sntpserver: port //p' "$SNTP")"
+        ;;
+esac
 TOTAL=0
 for row in $ROWS; do
     name=${row%%:*}
@@ -249,7 +278,8 @@ for row in $ROWS; do
     "$DEADLINE" "$(scaled "${row#*:}")" \
         ssh -i "$ROOT_KEY" -p "$PORT" -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
         -o "ConnectTimeout=$(scaled 30)" -o BatchMode=yes -o IdentitiesOnly=yes \
-        root@127.0.0.1 "/bin/bash /tmp/gnu/rows.sh $name ${RACH2_ARCH:-i686}" > "$DISK.$name.log" 2>&1
+        root@127.0.0.1 "RACH2_NTP_SERVER=$NTP_SERVER RACH2_NTP_EPOCH=$NTP_EPOCH \
+        /bin/bash /tmp/gnu/rows.sh $name ${RACH2_ARCH:-i686}" > "$DISK.$name.log" 2>&1
     status=$?
     took="$(($("$RUNUTIL" now) - began)) s"
     if [ "$status" -eq 0 ] && grep -q "^GNUROW OK $name\$" "$DISK.$name.log"; then

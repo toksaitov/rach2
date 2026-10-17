@@ -1106,6 +1106,30 @@ EOF
     [ $((after - before)) -lt 200 ] || fail "a second start read the disk $((after - before)) times"
 }
 
+# BusyBox's ntpd, which init starts by the servers of /etc/ntp.conf, the NTP
+# pool's on the image. With the suite's SNTP server, RACH2_NTP_SERVER, put
+# in their place and ntpd killed, init starts it again, and it sets the
+# clock to the server's time, which began at RACH2_NTP_EPOCH, and writes the
+# step to the service log.
+row_ntpd() {
+    local i=0 now
+    same "the daemon" "$(pgrep -fc '^ntpd -n$')" "1"
+    has "the image's servers" "$(cat /etc/ntp.conf)" "server 0.pool.ntp.org"
+    printf 'server %s\n' "${RACH2_NTP_SERVER:-}" > /etc/ntp.conf
+    runs "killall" killall ntpd
+    now=$(date +%s)
+    until [ "$now" -ge "$RACH2_NTP_EPOCH" ] || [ $i -ge 90 ]; do
+        sleep 1
+        i=$((i + 1))
+        now=$(date +%s)
+    done
+    [ "$now" -ge "$RACH2_NTP_EPOCH" ] && [ "$now" -lt $((RACH2_NTP_EPOCH + 86400)) ] ||
+        fail "the clock: $(date -u '+%F %T') is not the server's, which began at $(date -u -d "@$RACH2_NTP_EPOCH" '+%F %T')"
+    same "the daemon started again" "$(pgrep -fc '^ntpd -n$')" "1"
+    has "the service log" "$(grep 'ntpd: setting time' /var/log/services)" \
+        "ntpd: setting time to $(date -u -d "@$RACH2_NTP_EPOCH" +%F)"
+}
+
 if ! declare -F "row_$ROW" > /dev/null; then
     echo "GNUROW FAIL $ROW: no such row"
     exit 2

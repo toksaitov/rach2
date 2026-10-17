@@ -34,7 +34,7 @@
 #
 # Order is the schedule order: the pool starts at the top, and a pool finishes
 # when its longest member does, so the long suites are listed first.
-gnu|qemu,ssh,scp,sftp,debugfs|full|gnu-test*|2048
+gnu|qemu,ssh,scp,sftp,debugfs,python3|full|gnu-test*|2048
 agents|qemu,ssh,scp,debugfs,python3,openssl|full||4096|x86_64
 install|qemu,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 selfbuild|qemu,mformat,mmd,mcopy|full|selfbuild-test*,selfbuild.*,selfbuild/*

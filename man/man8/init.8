@@ -78,6 +78,21 @@ as the GNU system's root does, it supervises cronie's cron daemon, run as
 which logs to the system log and sends it what a job prints, since no
 image has a mail transfer agent; see
 .Xr cron 8 .
+While
+.Pa /etc/ntp.conf
+has a line
+.Ql server Ar NAME ,
+as the GNU system's root has, it supervises BusyBox's
+.Xr ntpd 1 ,
+run as
+.Ql ntpd -n ,
+which takes the time from those servers and writes each step of the
+clock and each error to the service log.
+The file is read again whenever ntpd is not running, so a server written
+into it is used within a second, and one written while ntpd runs is used
+once
+.Ql killall ntpd
+has ended it.
 On a boot with
 .Ql rach2.ip=none ,
 it runs BusyBox's
@@ -226,6 +241,10 @@ The machine's identity, made at the first boot of the GNU system's root.
 D-Bus's system bus, which the metal build runs where the image has it.
 .It Pa /usr/sbin/crond
 The cron daemon, which the metal build runs where the image has it.
+.It Pa /etc/ntp.conf
+The NTP servers, by which the metal build runs
+.Xr ntpd 1
+while the file names one.
 .It Pa /var/run
 Entries cleared at boot, with the entries of its directories, which are
 then removed; a directory deeper than that is reported if it is not empty.
@@ -253,6 +272,7 @@ The recovery file system check reports its status as:
 .Dl init: e2fsck: /dev/diskNpM: status S
 .Sh SEE ALSO
 .Xr login 1 ,
+.Xr ntpd 1 ,
 .Xr bootlog 4 ,
 .Xr sshd.conf 5 ,
 .Xr limits 7 ,
