@@ -88,6 +88,7 @@ now() { "$SELFTEST_UTIL" now; }
 sleep() { "$SELFTEST_UTIL" sleep "$1"; }
 cp "$REPO/tests/system/deadline.sh" "$WORK/tests/system/deadline.sh"
 cp "$REPO/tools/setup/hostcheck.c" "$WORK/tools/setup/hostcheck.c"
+cp "$REPO/tools/setup/space.sh" "$WORK/tools/setup/space.sh"
 # Calibration must never be invoked, even when the host would measure slowly.
 cat > "$WORK/tests/system/calibrate.sh" <<'CAL'
 #!/bin/sh

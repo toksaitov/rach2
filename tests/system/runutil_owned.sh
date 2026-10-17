@@ -146,6 +146,7 @@ HIDDEN
     cp "$work/worker" "$tree/worker" || return 125
     printf '%s\n' 'owned|-|core' > "$tree/tests/registry" || return 125
     printf '%s\n' 'int main(void) { return 0; }' > "$tree/tools/setup/hostcheck.c" || return 125
+    cp "$repo/tools/setup/space.sh" "$tree/tools/setup/space.sh" || return 125
     printf 'components prepare-all:\n\t@:\nrun-owned:\n\t@./worker %s worker.pid\n' "$2" > "$tree/Makefile" || return 125
 }
 
