@@ -1,0 +1,131 @@
+.Dd October 17, 2026
+.Dt GH 1
+.Os
+.Sh NAME
+.Nm gh
+.Nd GitHub's command-line program
+.Sh SYNOPSIS
+.Nm
+.Ar command
+.Op Ar subcommand
+.Op Ar options
+.Sh DESCRIPTION
+.Nm
+works with GitHub from the shell: repositories, issues, pull requests,
+releases, Actions runs, projects and the REST and GraphQL interfaces.
+.Ql gh help
+lists its commands, and
+.Ql gh help Ar command
+or
+.Ql gh Ar command Fl -help
+describes one.
+.Pp
+The x86-64 GNU root has
+.Nm
+when it is built with the agents layer:
+.Ql make ARCH=x86_64 GNU_AGENTS=gh os-real-gnu-ext2 ,
+or
+.Ql GNU_AGENTS=all ,
+which the release to the installed machine uses.
+The program is GitHub's own build of version 2.102.0, a static Go
+executable, installed unmodified as the release has it.
+.Pa /opt/gh/bin/gh
+is the program, and
+.Pa /usr/bin/gh
+and
+.Pa /bin/gh
+link to it.
+GitHub's license, MIT, is
+.Pa /opt/gh/LICENSE .
+The release's own manual pages are in
+.Pa /opt/gh/share/man/man1 ;
+.Xr man 1
+does not read them, and
+.Ql gh help
+has the same text.
+.Ss Signing in over SSH
+.Ql gh auth login
+asks for the host, the protocol Git is to use, HTTPS or SSH, and a way to
+sign in.
+With
+.Dq Login with a web browser ,
+.Nm
+prints a one-time code and the address
+.Lk https://github.com/login/device .
+The machine has no web browser for
+.Nm
+to open, so open that address on any other computer, sign in to GitHub
+there and enter the code;
+.Nm
+waits for GitHub's answer and then stores the token it is given.
+.Pp
+Instead,
+.Ql gh auth login --with-token
+reads a personal access token from standard input, and a token in the
+environment variable
+.Ev GH_TOKEN
+is used without signing in and is not stored.
+.Ql gh auth status
+says which account is signed in and where its token is kept.
+.Ql gh auth setup-git
+makes
+.Xr git 1
+ask
+.Nm
+for the credentials of a GitHub host, so that a clone or push over HTTPS
+needs no other sign-in.
+.Ss Where the token lives
+.Nm
+keeps a token in the system's credential store, the Secret Service of the
+D-Bus session bus, where there is one, and otherwise in plain text.
+Rach2 runs no Secret Service, so the token is written to
+.Pa ~/.config/gh/hosts.yml ,
+with mode 0600, beside the settings in
+.Pa ~/.config/gh/config.yml .
+.Ev GH_CONFIG_DIR ,
+or
+.Ev XDG_CONFIG_HOME
+followed by
+.Pa /gh ,
+names another directory.
+.Ql gh auth logout
+removes the token.
+.Ss Updates and telemetry
+.Nm
+does not replace itself; a new version comes with a new build of the root.
+On a terminal it asks GitHub once a day whether a newer release exists and
+prints a notice when one does, which
+.Ev GH_NO_UPDATE_NOTIFIER
+set to any value turns off.
+It sends GitHub usage telemetry unless
+.Ql gh config set telemetry disabled
+or
+.Ev GH_TELEMETRY Ns =false
+turns it off.
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /opt/gh/bin/gh
+the program
+.It Pa /opt/gh/LICENSE
+its license
+.It Pa ~/.config/gh/hosts.yml
+the hosts signed in to, with their tokens
+.It Pa ~/.config/gh/config.yml
+the settings
+.It Pa ~/.local/state/gh
+the state of the update check and a device identifier
+.El
+.Sh EXIT STATUS
+0 on success, 1 on an error, 2 when a command is cancelled, and 4 when a
+command needs a sign-in that has not been made.
+.Sh EXAMPLES
+Sign in, then list the open issues of a repository:
+.Bd -literal -offset indent
+$ gh auth login
+$ gh issue list --repo toksaitov/rach2
+.Ed
+.Sh SEE ALSO
+.Xr git 1 ,
+.Xr ssh 1
+.Pp
+.Lk https://cli.github.com/manual "The GitHub CLI manual"

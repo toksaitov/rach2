@@ -5,20 +5,31 @@
 # and is not part of `all`. 4096 MiB: the system takes 1.2 GiB of it, and the
 # rest is room for what the machine compiles and fetches. The prerequisites
 # are those of os-real's ext2 image, less Dropbear, with the overlay, the list
-# with the CA bundle's digest and the five stamps of the GNU layer.
+# with the CA bundle's digest and the five stamps of the GNU layer. The root
+# has the packages of the agents layer that GNU_AGENTS names
+# (mk/gnu-agents.mk); os-real-gnu-agents.ext2, the root of `tests/run
+# agents`, has every package the layer has.
 OS_REAL_GNU_EXT2 = $(IMAGES_DIR)/os-real-gnu.ext2
+OS_REAL_GNU_AGENTS_EXT2 = $(IMAGES_DIR)/os-real-gnu-agents.ext2
 GNU_IMAGE_STAMPS = $(GNU_PORTS_STAMP) $(GNU_NATIVE_STAMP) $(GNU_GDB_STAMP) \
                    $(GNU_JS_STAMP) $(GNU_CHROMIUM_STAMP)
+GNU_IMAGE_DEPS = $(DEMO_CREDS) krffs/manifests/os-real-gnu.manifest $(MANIFEST_DEPS_os_real_gnu) \
+                 tools/image/mkext2.sh vendor/gnu/install_root.sh vendor/gnu/fetch.sh \
+                 vendor/gnu/sources-extra.txt $(GNU_IMAGE_STAMPS) $(IMAGE_TOOLS) $(MAN_ALL)
+GNU_IMAGE_ORDER = preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid \
+                  check-e2fsck ports/doom
 
-.PHONY: os-real-gnu-ext2
+.PHONY: os-real-gnu-ext2 os-real-gnu-agents-ext2
 os-real-gnu-ext2: $(OS_REAL_GNU_EXT2)
+os-real-gnu-agents-ext2: $(OS_REAL_GNU_AGENTS_EXT2)
 
-$(OS_REAL_GNU_EXT2): $(DEMO_CREDS) krffs/manifests/os-real-gnu.manifest $(MANIFEST_DEPS_os_real_gnu) \
-                     tools/image/mkext2.sh vendor/gnu/install_root.sh vendor/gnu/fetch.sh \
-                     vendor/gnu/sources-extra.txt $(GNU_IMAGE_STAMPS) $(IMAGE_TOOLS) $(MAN_ALL) \
-                     | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-e2fsck ports/doom
-	RACH2_ARCH=$(ARCH) sh tools/image/mkext2.sh --overlay vendor/gnu/install_root.sh \
-	    krffs/manifests/os-real-gnu.manifest $@ 4096
+$(OS_REAL_GNU_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) | $(GNU_IMAGE_ORDER)
+	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" sh tools/image/mkext2.sh \
+	    --overlay vendor/gnu/install_root.sh krffs/manifests/os-real-gnu.manifest $@ 4096
+
+$(OS_REAL_GNU_AGENTS_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_ALL_LIST) $(GNU_AGENTS_ALL_STAMPS) | $(GNU_IMAGE_ORDER)
+	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ALL)" sh tools/image/mkext2.sh \
+	    --overlay vendor/gnu/install_root.sh krffs/manifests/os-real-gnu.manifest $@ 4096
 
 # `make machine`: everything an installed machine is given, in one target, so
 # that no part of it is left from an older build: the kernel, the recovery

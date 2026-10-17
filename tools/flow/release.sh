@@ -29,9 +29,10 @@
 #   A board that cannot be read is waited on.
 # * build: SHA is built from clean for the Lenovo on the testing host, in
 #   the copy /home/testing/rach2-clean, with `ARCH=x86_64 make clean` and
-#   `make machine`, and the kernel, the recovery kernel and image, and the
-#   GNU root, compressed, are fetched with their SHA-256 into a worktree of
-#   SHA, STATE/wt.
+#   `make machine GNU_AGENTS=all`, whose GNU root has every package of the
+#   agents layer, and the kernel, the recovery kernel and image, and the GNU
+#   root, compressed, are fetched with their SHA-256 into a worktree of SHA,
+#   STATE/wt.
 # * recovery: the Lenovo boots its recovery system from its recovery
 #   partition; the recovery kernel and image on that partition are replaced
 #   when they differ from the build's, keeping the partition's recovery key
@@ -318,7 +319,7 @@ build()
         fail build "no worktree of $sha"
     cd "$state/wt" || fail build "no worktree"
     if ! RACH2_TESTING_COPY=$COPY sh tools/dev/testing.sh run \
-        "ARCH=x86_64 make clean && ARCH=x86_64 make machine && cd $ARCH_DIR &&
+        "ARCH=x86_64 make clean && ARCH=x86_64 make machine GNU_AGENTS=all && cd $ARCH_DIR &&
         gzip -1 -c images/os-real-gnu.ext2 > images/os-real-gnu.ext2.gz &&
         sha256sum rach2/kernel rach2-recovery/kernel $RECOVERY_IMAGE images/os-real-gnu.ext2 \
             > images/release.sha256" > "$state/build.log" 2>&1; then
@@ -617,7 +618,7 @@ main()
         gh issue comment "$phase" --repo "$REPO" --body "Released $sha to the Lenovo.
 
 * Full run: https://github.com/$REPO/actions/runs/$run passed on both architectures.
-* Build: \`ARCH=x86_64 make clean && ARCH=x86_64 make machine\` in $COPY.
+* Build: \`ARCH=x86_64 make clean && ARCH=x86_64 make machine GNU_AGENTS=all\` in $COPY.
 * Kernel $(digest rach2/kernel), recovery kernel $(digest rach2-recovery/kernel), recovery image $(digest "$RECOVERY_IMAGE"), GNU root $(digest images/os-real-gnu.ext2), each by SHA-256.
 * The recovery partition was updated, the kernel and root installed from recovery, the trial boot passed machine_identity.sh and metal_accept.sh, \`bootctl commit\` made it the saved default, and /etc/rach2/release on the machine names $sha." > /dev/null ||
             later "the report could not be commented"

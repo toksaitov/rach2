@@ -1,6 +1,6 @@
 # The GNU layer
 
-The GNU layer builds a GNU system for Rach2: a cross toolchain with glibc, 72 port recipes built with it, a native GCC and GDB, the SpiderMonkey shell, and Debian's chromium-headless-shell, all installed over the os-real system in an ext2 root that the kernel boots. It gives Rach2 the dynamically linked programs a person expects of a Linux machine (bash, coreutils, OpenSSH, Python, Git, GCC), which the static musl system does not have. It builds on an x86-64 Linux host only and is not part of `make`. The targets are `i686-linux-gnu` and `x86_64-rach2-linux-gnu`, as `ARCH` selects.
+The GNU layer builds a GNU system for Rach2: a cross toolchain with glibc, 72 port recipes built with it, a native GCC and GDB, the SpiderMonkey shell, and Debian's chromium-headless-shell, all installed over the os-real system in an ext2 root that the kernel boots. On x86-64 the root can also have the [agents layer](agents/Readme.md), vendors' published builds of coding agents and their tools, such as GitHub's `gh`. It gives Rach2 the dynamically linked programs a person expects of a Linux machine (bash, coreutils, OpenSSH, Python, Git, GCC), which the static musl system does not have. It builds on an x86-64 Linux host only and is not part of `make`. The targets are `i686-linux-gnu` and `x86_64-rach2-linux-gnu`, as `ARCH` selects.
 
 ## Use
 
@@ -11,7 +11,8 @@ The Make targets build for the architecture `ARCH` names, so `make ARCH=x86_64 g
 * `make gnu-native` and `make gnu-gdb`: binutils, GCC and GDB that run on Rach2 ([`native/`](native/Readme.md)).
 * `make gnu-js`: the SpiderMonkey shell ([`spidermonkey/`](spidermonkey/Readme.md)).
 * `make gnu-chromium`: Debian's chromium-headless-shell with its libraries ([`chromium/`](chromium/Readme.md)).
-* `make os-real-gnu-ext2`: the root image, `build/images/os-real-gnu.ext2` or `build/x86_64/images/os-real-gnu.ext2`, 4096 MiB and sparse, which needs all of the above. `make machine` builds it with the kernels and the recovery image an installed machine takes.
+* `make ARCH=x86_64 GNU_AGENTS=NAME... gnu-agents`: the packages of the agents layer that `GNU_AGENTS` names, or every one for `all` ([`agents/`](agents/Readme.md)).
+* `make os-real-gnu-ext2`: the root image, `build/images/os-real-gnu.ext2` or `build/x86_64/images/os-real-gnu.ext2`, 4096 MiB and sparse, which needs all of the above; of the agents layer it has the packages `GNU_AGENTS` names. `make machine` builds it with the kernels and the recovery image an installed machine takes.
 
 Each target is behind a stamp; [`mk/Readme.md`](../../mk/Readme.md) says what rebuilds it. The scripts also run alone, with `RACH2_ARCH` for the architecture:
 
@@ -63,6 +64,7 @@ Everything is built under `build/vendor/gnu/` for i686 and `build/x86_64/vendor/
 | `setid/` | programs a recipe moved out of its stage to be installed set-id |
 | `host/` | CMake for the build host |
 | `native/`, `gdb/`, `js/`, `chromium/` | the staging roots of the subdirectories |
+| `agents/` | the stage of each package of the agents layer, on x86-64 |
 | `rust/` | the Rust toolchain of the SpiderMonkey build |
 | `src/`, `work/`, `log/` | sources, build directories and step logs |
 
@@ -86,6 +88,7 @@ A port installs into `stage/NAME`. There the target's `strip --strip-debug` runs
 
 * `root/`, `native/`, `gdb/` and `js/`.
 * The files of the Chromium packages, with paths under `/bin`, `/lib` and `/sbin` moved under `/usr`. Packages whose libraries the root already builds (`libc6`, GCC's, zlib, liblzma, PCRE2, util-linux's, libffi, SQLite, bzip2 and zstd) and the programs `chromium-common` pulls in that a headless shell does not run are left out; the list is `SKIP` in the script.
+* The packages of the agents layer that `GNU_AGENTS` names, each as `fetch_agents.sh` staged it.
 * Links: `/bin/bash`, `/bin/apropos` and `/bin/whatis` to `man`, `/usr/bin/cc` to `gcc`, `/usr/bin/vi` to `vim`, `/bin/mkfs.ext2`, `/sbin/fsck.ext2`, `/sbin/e2label`, `/etc/mtab` to `/proc/self/mounts`, and `/run` to `/var/run`. `/bin/sh` is a hard link to bash, since the set-id guard requires root's shell to be a file.
 * A link to `/bin/busybox` for each unprovided applet, from the static BusyBox's `--list-full`, and a link in `/bin` for each program only `/usr/bin` has, and the reverse, and the same for `/sbin` and `/usr/sbin`.
 * The CA bundle as `/etc/ssl/certs/ca-certificates.crt`, with `/etc/ssl/cert.pem` linked to it.
@@ -115,4 +118,4 @@ To update a port, verify the new tarball's signature with `gpgv` and the key the
 
 ## Tests
 
-`tests/run gnu` (`ARCH=x86_64 tests/run gnu` for x86-64) builds the root image, boots it, logs in over OpenSSH, and has each port and program do its main job on the machine, one row each; [`tests/system/gnu_rows.sh`](../../tests/system/gnu_rows.sh) has the rows. It is in the full tier. The `check` steps of the subdirectories' scripts test their programs on the build host.
+`tests/run gnu` (`ARCH=x86_64 tests/run gnu` for x86-64) builds the root image, boots it, logs in over OpenSSH, and has each port and program do its main job on the machine, one row each; [`tests/system/gnu_rows.sh`](../../tests/system/gnu_rows.sh) has the rows. It is in the full tier. The `check` steps of the subdirectories' scripts test their programs on the build host. `ARCH=x86_64 tests/run agents` tests the agents layer ([its Readme](agents/Readme.md#tests)).

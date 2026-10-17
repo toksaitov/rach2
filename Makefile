@@ -1119,6 +1119,7 @@ include mk/host.mk
 include mk/images.mk
 include mk/gnu.mk
 include mk/gnu-extra.mk
+include mk/gnu-agents.mk
 include mk/gnu-image.mk
 include tests/system/suites.mk
 

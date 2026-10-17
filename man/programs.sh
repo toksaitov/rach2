@@ -8,9 +8,9 @@
 # Every fact comes from a file the build reads: the programs from the image
 # manifests and utils/programs.mk, the BusyBox applets from APPLETS, the
 # applet table of the BusyBox build (build/vendor/busybox/applet_tables-main.h
-# unless named), the pages from man/, the GNU ports from their recipes, and
-# the versions from the build scripts, the GNU layer's source lists and the
-# GRUB manifest. The licenses and the purposes of the five GNU programs that
+# unless named), the pages from man/, the GNU ports and the packages of the
+# agents layer from their recipes, and the versions from the build scripts,
+# the GNU layer's source lists and the GRUB manifest. The licenses and the purposes of the five GNU programs that
 # are not ports, which no file states in a form a script can read, are the
 # tables LICENSES and GNU_TOOLS below, taken from the projects' Readmes.
 # `make programs-md` runs this script into man/programs.md, and `tests/run
@@ -463,6 +463,56 @@ function row(   i) {
     if (i > 0) text = substr(text, 1, i - 1) "."
     printf "| [%s](../vendor/gnu/ports/%s.sh) | %s | %s |\n", port, port, ver, text
 }' vendor/gnu/ports/*.sh
+
+awk '
+FNR == 1 {
+    if (pkg != "") row()
+    pkg = FILENAME
+    sub(/.*\//, "", pkg)
+    sub(/\.sh$/, "", pkg)
+    text = ""
+    ver = ""
+    lic = ""
+    head = 1
+    next
+}
+head && /^#/ {
+    line = $0
+    sub(/^# ?/, "", line)
+    text = text (text == "" ? "" : " ") line
+    next
+}
+{ head = 0 }
+/^VERSION=/ {
+    ver = $0
+    sub(/^VERSION=/, "", ver)
+    gsub(/"/, "", ver)
+}
+/^LICENSE=/ {
+    lic = $0
+    sub(/^LICENSE=/, "", lic)
+    gsub(/"/, "", lic)
+}
+END {
+    row()
+    print ""
+}
+function row(   i) {
+    if (!printed) {
+        print "### The agents layer"
+        print ""
+        print "The [agents layer](../vendor/gnu/agents/Readme.md) installs vendors'"'"' published builds in the x86-64 root when the build names them in `GNU_AGENTS`. Each package is a recipe of [`vendor/gnu/agents/packages/`](../vendor/gnu/agents/packages), with the version it pins, its vendor'"'"'s license and what it is: the first sentence of its comment, up to a semicolon."
+        print ""
+        print "| Package | Version | License | Purpose |"
+        print "| --- | --- | --- | --- |"
+        printed = 1
+    }
+    i = index(text, ". ")
+    if (i > 0) text = substr(text, 1, i)
+    i = index(text, "; ")
+    if (i > 0) text = substr(text, 1, i - 1) "."
+    printf "| [%s](../vendor/gnu/agents/packages/%s.sh) | %s | %s | %s |\n", pkg, pkg, ver, lic, text
+}' vendor/gnu/agents/packages/*.sh
 
 LICENSES="$LICENSES" awk '
 BEGIN {

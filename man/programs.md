@@ -218,6 +218,14 @@ Each port is a recipe of [`vendor/gnu/ports/`](../vendor/gnu/ports), with the ve
 | [zlib](../vendor/gnu/ports/zlib.sh) | 1.3.2 | zlib, which OpenSSL, OpenSSH, curl and Git link against. |
 | [zstd](../vendor/gnu/ports/zstd.sh) | 1.5.7 | Zstandard: zstd with its other names, unzstd, zstdcat and zstdmt, and libzstd, which rsync links. |
 
+### The agents layer
+
+The [agents layer](../vendor/gnu/agents/Readme.md) installs vendors' published builds in the x86-64 root when the build names them in `GNU_AGENTS`. Each package is a recipe of [`vendor/gnu/agents/packages/`](../vendor/gnu/agents/packages), with the version it pins, its vendor's license and what it is: the first sentence of its comment, up to a semicolon.
+
+| Package | Version | License | Purpose |
+| --- | --- | --- | --- |
+| [gh](../vendor/gnu/agents/packages/gh.sh) | 2.102.0 | MIT | gh, GitHub's command-line program for repositories, issues, pull requests, releases and the API. |
+
 ## The vendored projects
 
 The third-party code of the repository, each with the version the build pins, its upstream license and the document that describes it. The repository declares no license for its own code.

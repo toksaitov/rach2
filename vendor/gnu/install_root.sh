@@ -21,6 +21,8 @@
 #             it needs in /usr/lib/i386-linux-gnu or /usr/lib/x86_64-linux-gnu,
 #             as Debian's packages have them, from the packages
 #             fetch_chromium.sh unpacked
+#   agents    the packages of the agents layer that GNU_AGENTS lists, each as
+#             fetch_agents.sh staged it, on x86-64 only
 #
 # Then it links /bin/bash, /bin/sh, /bin/apropos, /bin/whatis, /usr/bin/cc,
 # /usr/bin/vi, /bin/mkfs.ext2, /sbin/fsck.ext2, /sbin/e2label, /etc/mtab and
@@ -77,6 +79,16 @@ if [ ! -f "$DEBIAN/closure.txt" ]; then
     echo "gnu: install: no $DEBIAN/closure.txt; run make gnu-chromium" >&2
     exit 1
 fi
+for name in ${GNU_AGENTS:-}; do
+    if [ "$RACH2_ARCH" != x86_64 ]; then
+        echo "gnu: install: the agents layer's packages are for x86-64 only" >&2
+        exit 1
+    fi
+    if [ ! -d "$OUT/agents/$name" ]; then
+        echo "gnu: install: no $OUT/agents/$name; run make ARCH=x86_64 GNU_AGENTS=$name gnu-agents" >&2
+        exit 1
+    fi
+done
 
 WORK="$(mktemp -d "$TREE.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT INT TERM
@@ -147,6 +159,10 @@ fresh "$WORK/new"
 tar -cf "$WORK/debian.tar" -C "$OUT/chromium" --no-recursion -T "$WORK/debian.list"
 tar -xpf "$WORK/debian.tar" -C "$TREE"
 echo "gnu: install: chromium: $(wc -l < "$WORK/new" | tr -d ' ') files"
+
+for name in ${GNU_AGENTS:-}; do
+    install_part "agents/$name"
+done
 
 # bash is /bin/bash, cc is GCC and vi is Vim, as on a Debian system. The
 # links are relative, so they resolve wherever the volume is mounted. bash is
