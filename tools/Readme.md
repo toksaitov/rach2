@@ -57,6 +57,37 @@ Each person has an account in WSL named after their GitHub login, with a clone o
 
 The accounts are in the `kvm` group, and the runner uses `/dev/kvm` when it can open it and refuses a device it cannot. Runs on this host ask for the emulator all the same: the KVM is nested under Hyper-V, and the ATA driver polls a port after every sector it writes, each poll exiting through two hypervisors, so a disk write is slower than under the emulator.
 
+Both runners have `ACTIONS_RUNNER_ACTION_ARCHIVE_CACHE=/home/ghrunner/action-archives` in their `.env`. The runner copies a cached archive before trying the network; its download client otherwise stops after 100 seconds, which a slow transfer from `codeload.github.com` can exceed before checkout starts. The cache is shared, owned by `ghrunner`, and contains one tar archive per resolved action commit, as [the runner's implementation](https://github.com/actions/runner/blob/v2.338.0/src/Runner.Worker/ActionManager.cs) specifies. A missing entry still downloads normally.
+
+When a workflow changes an action or its version tag moves, prepare its archive from an account with `gh` signed in. This prepares the three actions the workflows use; the download has fifteen minutes, and only a complete archive enters the cache:
+
+```sh
+set -eu
+cache=$HOME/action-archives
+part=
+trap '[ -z "$part" ] || rm -f "$part"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+for action in actions/checkout@v5 actions/upload-artifact@v4 actions/download-artifact@v4; do
+    repo=${action%@*}
+    ref=${action#*@}
+    sha=$(gh api "repos/$repo/commits/$ref" --jq .sha)
+    dir=$cache/$(echo "$repo" | tr / _)
+    mkdir -p "$dir"
+    archive=$dir/$sha.tar.gz
+    [ ! -f "$archive" ] || continue
+    part=$archive.part
+    curl -fsSL --connect-timeout 30 --max-time 900 --retry 3 \
+        -o "$part" "https://codeload.github.com/$repo/tar.gz/$sha"
+    tar -tzf "$part" > /dev/null
+    mv "$part" "$archive"
+    part=
+done
+```
+
+Copy the cache to `/home/ghrunner/action-archives` on the testing host, preserving its directory names and making it readable by `ghrunner`. Set the variable in each runner's `.env` and restart its service when it has no job; later cache additions need no restart. The runner's `_diag/Worker_*.log` records `Found action archive` when it uses an entry. An action download failure has no test artifact: read it with `gh run view RUN --log-failed`.
+
 ### Checking a machine: `setup/`
 
 * [preflight.sh](setup/preflight.sh) is the build's tool check, an order-only prerequisite of the root Makefile's build targets, so every `make` and `tests/run` runs it. It checks the build's tools and the cross toolchain of `RACH2_ARCH`, and caches the result in `build/.preflight` or `build/x86_64/.preflight`, so that a check with nothing changed runs none of the tools. A missing tool fails the build by name before the cross toolchain compiles anything. When `RACH2_MIN_FREE_GIB` is set above 0, it also refuses a build while `space.sh` finds fewer GiB free, read on every run; the loops, ci and `dev/testing.sh run` set it to 40. `--report` prints a line for each tool.
