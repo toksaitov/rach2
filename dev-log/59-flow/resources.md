@@ -8,7 +8,7 @@ The owner asked Codex (`gpt-6-astra`) how to handle resources without making the
 
 ## What changes
 
-* Every test removes its scratch on every exit path, from an exit trap installed before the scratch is made. Large disk images go under the tree's `build/tests`, not into the host's memory. `tools/verify/check.sh` removes its logs when the check passes and keeps them when it fails.
+* Every test removes its scratch when it passes, from an exit trap installed before the scratch is made; a test that fails keeps the directory whose path it printed, for its logs. Large disk images go under the tree's `build/tests`, not into the host's memory. `tools/verify/check.sh` removes its logs when the check passes and keeps them when it fails.
 * A worker loop between issues deletes the merged branches and helpers' worktrees of its clone (`tidy` in `tools/flow/lib.sh`). A branch counts as merged by ancestry or by `git cherry`'s patch ids, never by its commit messages, since several finished branches held commits whose messages matched master's and whose text did not.
 * Every loop prunes its logs past fourteen days or 1 GiB (`prune_logs`).
 * `tools/flow/status.sh` reads free space, inodes and memory on both machines and ends with a verdict; `status.sh sizes` lists the largest trees. The manager frees space when the verdict is low and stops the workers that write a disk when it is critical.
