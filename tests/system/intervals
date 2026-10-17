@@ -5,6 +5,7 @@ tests/system/suites.mk: the machine is asked every second until init has started
 tests/system/suites.mk: the service log is read every second until the client gives up
 tests/system/clockload.py: the host holds the machine stopped
 tests/system/clockload.py: the machine runs between two stops
+tests/system/agents/codex.sh: the pane is read every second until the screen is drawn
 tests/system/suites/agents.sh: a try of SSH every two seconds until the server answers
 tests/system/suites/bootline.sh: the machine runs on after the line to show it stopped there
 tests/system/suites/diskdiag.sh: a try of SSH every two seconds until the server answers
