@@ -15,7 +15,9 @@
 # the vendored builds, then `make`; a failure of either is `build`. It then
 # runs every suite of the registry that runs on ARCH, `style` and `host`
 # among them, as one set, and after it `bigmem`, which runs only on x86_64
-# and needs the host alone, as a run of its own. The exit status is 0 when
+# and needs the host alone, as a run of its own. The build runs with
+# RACH2_MIN_FREE_GIB at 40 unless the environment gives another, so that it
+# stops, as `build`, before it fills the host's disk. The exit status is 0 when
 # nothing failed. A TERM to the run's process group, which timeout(1) sends
 # at the workflow's time limit, ends the run without `done` once the step it
 # interrupts has stopped, so that tests/run stops its machines before the
@@ -31,7 +33,8 @@ case "$kind" in
 esac
 [ -n "$out" ] || { echo "usage: tools/ci/run.sh core|full DIR" >&2; exit 2; }
 ARCH=${ARCH:-i686}
-export ARCH
+RACH2_MIN_FREE_GIB=${RACH2_MIN_FREE_GIB:-40}
+export ARCH RACH2_MIN_FREE_GIB
 mkdir -p "$out/kept"
 : > "$out/failed"
 : > "$out/log"

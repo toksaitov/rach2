@@ -85,7 +85,9 @@
 # each poll exits through two hypervisors: a 64 MiB write measured 236 s
 # under that KVM and 25 s emulated, and the 4 KiB write rows ran past the
 # runner's silence limit. This is the host's setting, as the worker count is;
-# the runner itself takes KVM wherever it opens.
+# the runner itself takes KVM wherever it opens. `run` also sets
+# RACH2_MIN_FREE_GIB to 40, so that a build in the copy stops, as
+# tools/setup/preflight.sh says, before it fills the host's disk.
 set -e
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
@@ -278,7 +280,7 @@ run_held()
     { printf '%s' "$*" | base64 | tr -d '\n'; echo; exec cat; } \
         <&5 5<&- > "$hold/command" 3>&- &
     feeder=$!
-    ssh -o BatchMode=yes "$HOST" "MSYS_NO_PATHCONV=1 wsl.exe -e bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg && read -r c && . <(base64 -d <<< \$c)'" \
+    ssh -o BatchMode=yes "$HOST" "MSYS_NO_PATHCONV=1 wsl.exe -e bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg RACH2_MIN_FREE_GIB=40 && read -r c && . <(base64 -d <<< \$c)'" \
         < "$hold/command" 3>&- 5<&- &
     command=$!
     exec 5<&-

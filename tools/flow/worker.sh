@@ -25,7 +25,9 @@
 # process group of the session that is running in `session`, the clone's path
 # in `repo`, and in `copy` the copy on the testing host that
 # RACH2_TESTING_COPY names for testing.sh, if any; `touch STATE/stop` ends
-# the loop after the session that is running.
+# the loop after the session that is running. Sessions run with
+# RACH2_MIN_FREE_GIB at 40 unless the environment gives another, so that a
+# build they start stops before it fills the disk.
 #
 # A session that ends on the account's usage limit makes the loop wait fifteen
 # minutes. One shorter than two minutes for another reason, such as a lost
@@ -207,6 +209,8 @@ main()
     git config core.hooksPath tools/git-hooks
     if [ "$0" != "$state/run/worker.sh" ]; then
         refresh
+    RACH2_MIN_FREE_GIB=${RACH2_MIN_FREE_GIB:-40}
+    export RACH2_MIN_FREE_GIB
         while update worker.sh 2>> "$state/loop.log"; [ $? -eq 2 ]; do
             log "update failed"
             sleep 60

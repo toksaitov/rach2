@@ -325,6 +325,9 @@ build()
         fi
         fail build "the build failed: $(tail -n 3 "$state/build.log" | tr '\n' ' ')"
     fi
+        if grep -q '^preflight: .* GiB free under .*, below the' "$state/build.log"; then
+            later "the testing host is short of space"
+        fi
     RACH2_TESTING_COPY=$COPY sh tools/dev/testing.sh get "$ARCH_DIR/rach2/kernel" \
         "$ARCH_DIR/rach2-recovery/kernel" "$ARCH_DIR/$RECOVERY_IMAGE" \
         "$ARCH_DIR/images/os-real-gnu.ext2.gz" "$ARCH_DIR/images/release.sha256" \
