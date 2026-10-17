@@ -54,7 +54,7 @@ The layer builds where the rest of the GNU layer does, on an x86-64 Linux host, 
 
 To update a package, take the new version's digest from the list its vendor publishes, verifying the list's signature where the vendor signs it, and set `VERSION` and the digest in the recipe. Then update the package's row in the table above, its page in the manual and what its row in `tests/system/agents/` expects, and run `ARCH=x86_64 tests/run agents`.
 
-A new package is a recipe in `packages/`, a row in `tests/system/agents/`, a page in [`man/`](../../../man/Readme.md), a line in the table above and a section of Design that records what the program needs.
+A new package is a recipe in `packages/`, a row in `tests/system/agents/`, with a script for the fake server where the row talks to the vendor's service, a page in [`man/`](../../../man/Readme.md), a line in the table above and a section of Design that records what the program needs.
 
 ## Limits
 
@@ -63,4 +63,4 @@ A new package is a recipe in `packages/`, a row in `tests/system/agents/`, a pag
 
 ## Tests
 
-`fetch_agents.sh` runs each recipe's `package_check` on the build host when it stages the package. `ARCH=x86_64 tests/run agents` boots `os-real-gnu-agents.ext2` with 4 GiB of memory and no route out of the emulator's network, and runs the rows of [`tests/system/agents/`](../../../tests/system/agents) over SSH as the test account; [`tests/system/suites/agents.sh`](../../../tests/system/suites/agents.sh) describes a row. The `gh` row checks the pinned version, the program the path finds and its license, `gh auth status` with no account signed in, and one HTTPS request from `gh api` with no account to openssl's test server on the machine, which `gh` refuses until `SSL_CERT_FILE` names the server's certificate.
+`fetch_agents.sh` runs each recipe's `package_check` on the build host when it stages the package. `ARCH=x86_64 tests/run agents` boots `os-real-gnu-agents.ext2` with 4 GiB of memory on a network whose only route out is to the fake API server on the host ([`tests/system/fakeapi/fakeapi.py`](../../../tests/system/fakeapi/fakeapi.py)), and runs the rows of [`tests/system/agents/`](../../../tests/system/agents) over SSH as the test account; [`tests/system/suites/agents.sh`](../../../tests/system/suites/agents.sh) describes a row and its script for the server. The `gh` row checks the pinned version, the program the path finds and its license, `gh auth status` with no account signed in, one HTTPS request from `gh api` with no account to openssl's test server on the machine, which `gh` refuses until `SSL_CERT_FILE` names the server's certificate, and `GH_TOKEN=invalid gh api user` against the fake server as `api.github.com`, which answers 401 as GitHub does. `sh tests/system/agents_mutate.sh` proves the row against a fault in the recipe.

@@ -1,0 +1,10 @@
+{
+  "protocol": "plain",
+  "steps": [
+    {"request": {"path": "/user", "headers": {"Authorization": "token invalid"}},
+     "reply": {"status": 401,
+               "json": {"message": "Bad credentials",
+                        "documentation_url": "https://docs.github.com/rest",
+                        "status": "401"}}}
+  ]
+}

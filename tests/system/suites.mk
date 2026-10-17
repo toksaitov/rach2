@@ -78,6 +78,8 @@ DISKDIAG_PORT   := $(call port,2225)
 METAL_PORT      := $(call port,2223)
 GNU_PORT        := $(call port,2296)
 FAKEAPI_PORT    := $(call port,2300)
+AGENTS_PORT     := $(call port,2301)
+AGENTS_API_PORT := $(call port,2302)
 SEALED_PORT     := $(call port,2297)
 DRILL_PORT      := $(call port,2298)
 PROCFILES_PORT  := $(call port,2299)
@@ -1531,6 +1533,16 @@ run-codexapi: $(DEADLINE) $(RUNUTIL)
 # booted.
 run-museapi: $(DEADLINE) $(RUNUTIL)
 	sh tests/system/suites/museapi.sh $(IMAGES_DIR)/museapi-test
+
+# `tests/run agents`: the agents layer on the x86-64 GNU system, each of its
+# rows run over OpenSSH as the test account on a machine whose only route
+# out is to the fake API server on the host. Its image, like the gnu suite's,
+# is built on a Linux host only and is not among the products `prepare-all`
+# builds.
+AGENTS_TEST_DISK = $(IMAGES_DIR)/agents-test.disk
+run-agents: $(DEMO_CREDS) rach2 os-real-gnu-agents-ext2 $(DEADLINE) $(RUNUTIL) $(MKMBR)
+	sh tests/system/suites/agents.sh $(BOOT_KERNEL) $(OS_REAL_GNU_AGENTS_EXT2) $(AGENTS_TEST_DISK) \
+	    $(AGENTS_PORT) $(AGENTS_API_PORT)
 
 # `tests/run exfat`: exFAT written from a program, read back after a reboot,
 # judged by the host's reader and the external checker where the host has

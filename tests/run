@@ -841,7 +841,8 @@ scripts_inventory() {
     ( cd "$REPO" && {
         echo tests/run; echo tests/registry; echo tests/system/suites.mk; echo Makefile
         ls mk/*.mk tests/system/runner/*.c tests/system/*.sh tests/system/suites/*.sh tests/system/accept/*.sh \
-           tests/system/fakeapi/* tests/system/fakeapi/repo/* tools/image/*.sh krffs/*.sh tools/verify/check.sh krffs/manifests/* 2>/dev/null
+           tests/system/agents/* tests/system/fakeapi/* tests/system/fakeapi/repo/* \
+           tools/image/*.sh krffs/*.sh tools/verify/check.sh krffs/manifests/* 2>/dev/null
     } ) | present
 }
 products_inventory() { # products_inventory TARGET...
@@ -917,15 +918,15 @@ prepare() {
         echo "run: result: refused: preparation failed" >&2; exit 1
     }
 }
-# The GNU system's image is not among the products `prepare-all` builds: it
-# builds on a Linux host only (mk/gnu-image.mk), and a set without a suite
-# that boots it must not need it. A set with such a suite, one of
+# The GNU system's images are not among the products `prepare-all` builds:
+# they build on a Linux host only (mk/gnu-image.mk), and a set without a
+# suite that boots one must not need them. A set with such a suite, one of
 # GNU_SUITES, builds what the suite's target names here, before the pool, as
 # a suite run alone does, and adds the target to the ones whose products are
-# hashed, so that a change to the image while the set runs voids the run
-# like a change to any product.
+# hashed, so that a change to an image while the set runs voids the run like
+# a change to any product.
 PREPARED=prepare-all
-GNU_SUITES="gnu fakeapi"
+GNU_SUITES="gnu fakeapi agents"
 prepare_gnu() { # prepare_gnu NAMES
     for suite in $GNU_SUITES; do
         case " $* " in *" $suite "*) ;; *) continue ;; esac

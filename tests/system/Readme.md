@@ -31,7 +31,7 @@ Most recipes run `runner/runtests` or `runner/harness` with the arguments the su
 3. It refuses a glob two suites declare, checks the idle limit, the timeout factor and `RACH2_CPUS`, and chooses the accelerator: KVM where `/dev/kvm` can be read and written, HVF on an x86 Mac that reports it, the emulator otherwise. A `/dev/kvm` this user cannot open is refused rather than run under the emulator, whose speed the completion bounds were not written for; `RACH2_QEMU_ACCEL=tcg` asks for the emulator.
 4. It takes the tree, then, when a suite boots a machine, the host lock and a block of ports, as described below.
 5. It installs its QEMU shims, prints its start line, makes the recovery system's key if the tree has none, and hashes the scripts that decide a result.
-6. It builds the components in a make of their own, since an image rule that meets a program and the component that builds it in one make reads the program's time before the component has run. A single suite then builds the prerequisites of its own target, with `make -j`; a set builds `prepare-all` once, and the GNU system's image when the set has a suite that boots it, `gnu` or `fakeapi`, so no two suites build the same file. The built products are hashed.
+6. It builds the components in a make of their own, since an image rule that meets a program and the component that builds it in one make reads the program's time before the component has run. A single suite then builds the prerequisites of its own target, with `make -j`; a set builds `prepare-all` once, and the GNU system's images when the set has a suite that boots one, `gnu`, `fakeapi` or `agents`, so no two suites build the same file. The built products are hashed.
 7. It runs the suites: `style` and `host` one after the other, then the rest in the pool. A failed `style` stops the set, since the edit that fixes it changes what the pool would judge.
 8. It hashes the scripts and products again, and fails the run on a difference or a missing file. It checks the image files the run made, and ends with `run: result:`.
 
@@ -142,6 +142,7 @@ These two run no test on the unmodified tree: they require the kernel rebuilt at
 * `ext2_batch_mutate.sh`: the ext2 driver's count of disk commands for batched writes.
 * `noentropy_mutate.sh`: the `noentropy` suite's fail-closed steps.
 * `doom_mutate.sh`: the `doom` suite's missing-WAD row.
+* `agents_mutate.sh`: the `agents` suite's `gh` row, against a recipe that links `gh` to a file the package does not have.
 * `hda_mutate.sh`: the `/proc/audio` rows of `musl/hdaprobe`, the audio diagnostic no suite runs.
 * `sb16_mutate.sh`: the `audio` suite's SB16 row.
 * `usb_latency_mutate.sh`: the two USB wake-to-dispatch rows.
