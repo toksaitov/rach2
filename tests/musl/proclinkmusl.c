@@ -10,7 +10,8 @@
  * names through the descriptor still reach it while its old path names
  * nothing, chdir through the descriptor enters it, and a file opened through
  * it has a /proc link that names the file by its new path. A directory
- * removed while open is still a directory and has no names in it. A child's
+ * removed while open is still a directory with no names and no links, takes
+ * no new name, and `..` climbs from it as the working directory. A child's
  * working directory and root are reached through /proc/PID/cwd and root, and
  * ".." after cwd climbs from the directory. A child of uid 1000 holds a
  * directory open: root and another process of uid 1000 reach it through
@@ -202,11 +203,16 @@ static int renamed(int d)
 
 /**
  * Check that a directory removed while a descriptor is open on it is still a
- * directory through the descriptor, with no names in it. Returns 0, or 1
- * after printing the failure.
+ * directory through the descriptor, with no names in it and no links, and
+ * that no name is made in it: a create through /proc/self/fd/N or by openat
+ * on the descriptor and a mkdir through the link are each ENOENT, as on
+ * Linux. A working directory removed under the probe takes no create either,
+ * and `..` from it climbs to TOP. Returns 0, or 1 after printing the
+ * failure.
  */
 static int removed(void)
 {
+    struct stat st;
     char a[96];
     int e;
 
@@ -219,7 +225,23 @@ static int removed(void)
         close(e);
         return fail("a lookup through the link to a removed directory");
     }
+    if (fstat(e, &st) != 0 || st.st_nlink != 0) {
+        close(e);
+        return fail("the links of a removed directory");
+    }
+    if (!refused(open(at(a, "/proc/self/fd", e, "f"), O_WRONLY | O_CREAT, 0644), ENOENT) ||
+        !refused(openat(e, "f", O_WRONLY | O_CREAT, 0644), ENOENT) ||
+        !refused(mkdir(at(a, "/proc/self/fd", e, "s"), 0755), ENOENT)) {
+        close(e);
+        return fail("a name made in a removed directory");
+    }
     close(e);
+    if (mkdir(TOP "/w", 0755) != 0 || chdir(TOP "/w") != 0 || rmdir(TOP "/w") != 0 ||
+        !refused(open("f", O_WRONLY | O_CREAT, 0644), ENOENT) || chdir("..") != 0 || !cwd_is(TOP) ||
+        chdir("/") != 0) {
+        chdir("/");
+        return fail("a removed working directory");
+    }
     return 0;
 }
 

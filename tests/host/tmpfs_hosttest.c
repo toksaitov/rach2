@@ -598,6 +598,38 @@ static void removed_parent(void)
 }
 
 /**
+ * A directory removed while it is held reports no links and takes no name:
+ * a create, a mknod, a mkdir, a symbolic link, a hard link and a rename into
+ * it are each ENOENT, and the file "rf" keeps its name in the root.
+ */
+static void removed_directory(void)
+{
+    struct vfs_stat st;
+    void *d, *f, *again, *n = NULL;
+
+    CHECK(tmpfs_mkdir(&mnt, NULL, "rd", 0755) == 0);
+    d = look(NULL, "rd");
+    f = make(NULL, "rf", 0644);
+    CHECK(tmpfs_rmdir(&mnt, NULL, "rd") == 0);
+    CHECK(tmpfs_getattr(&mnt, d, &st) == 0 && st.nlink == 0);
+    CHECK(tmpfs_create(&mnt, d, "f", 0644, &n) == -ENOENT && n == NULL);
+    CHECK(tmpfs_mknod(&mnt, d, "p", T_IFIFO | 0644, 0, &n) == -ENOENT && n == NULL);
+    CHECK(tmpfs_mkdir(&mnt, d, "s", 0755) == -ENOENT);
+    CHECK(tmpfs_symlink(&mnt, d, "l", "rf") == -ENOENT);
+    CHECK(tmpfs_link(&mnt, d, "h", f) == -ENOENT);
+    CHECK(tmpfs_rename(&mnt, NULL, "rf", d, "m") == -ENOENT);
+    CHECK(look(d, "f") == NULL && look(d, "m") == NULL);
+    again = look(NULL, "rf");
+    CHECK(again == f);
+    if (again) {
+        tmpfs_put(&mnt, again);
+    }
+    CHECK(tmpfs_unlink(&mnt, NULL, "rf") == 0);
+    tmpfs_put(&mnt, f);
+    tmpfs_put(&mnt, d);
+}
+
+/**
  * A rename the heap cannot serve is ENOSPC and changes nothing, whether the
  * allocation of its entry or of its name fails: a directory with a file in
  * it keeps its old name and the file, and the new name is not made.
@@ -730,6 +762,7 @@ int main(void)
     truncation();
     seals();
     removed_parent();
+    removed_directory();
     rename_refused();
     sizes();
     allocation();

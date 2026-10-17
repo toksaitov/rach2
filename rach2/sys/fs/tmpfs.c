@@ -112,6 +112,14 @@ static int is_dir(const struct tmpfs_node *n)
     return (n->mode & T_IFMT) == T_IFDIR;
 }
 
+/** Whether the directory `d` has been removed: no name is left for it, while
+ * the root has the one link `tmpfs_mount` gives it. No name is made in such
+ * a directory, as Linux makes none in a directory it marks dead. */
+static int removed(const struct tmpfs_node *d)
+{
+    return d->links == 0;
+}
+
 /** A new node of `mode` for the directory `dir`, or of no directory for the
  * root and a memfd, with no hold, no name, the next inode number and the
  * seal TMPFS_SEAL_SEAL; NULL when the heap has no room. It is owned as
@@ -350,10 +358,10 @@ static void tmpfs_put(struct vfs_mount *mnt, void *node)
 }
 
 /** The `getattr` of tmpfs. A directory has two links and one for each
- * subdirectory, and a size of DIRENT_BYTES for each name and for `.` and
- * `..`; a symbolic link's size is its target's length; any other node has
- * the size of its bytes and the 512-byte blocks of the pages that hold
- * them. */
+ * subdirectory, or none once it is removed, and a size of DIRENT_BYTES for
+ * each name and for `.` and `..`; a symbolic link's size is its target's
+ * length; any other node has the size of its bytes and the 512-byte blocks
+ * of the pages that hold them. */
 static int tmpfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     struct tmpfs_node *n = (struct tmpfs_node *)node;
@@ -363,7 +371,11 @@ static int tmpfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     st->mode = n->mode;
     st->uid = n->uid;
     st->gid = n->gid;
-    st->nlink = is_dir(n) ? 2u + n->subdirs : n->links;
+    if (!is_dir(n)) {
+        st->nlink = n->links;
+    } else {
+        st->nlink = removed(n) ? 0u : 2u + n->subdirs;
+    }
     st->ino = n->ino;
     st->rdev = n->rdev;
     if (is_dir(n)) {
@@ -588,8 +600,8 @@ static int tmpfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
  * Make `name` in `dir` a node of the type the S_IF bits of `mode` give, a
  * regular file for none, with the device number `rdev` for a device. The
  * node comes back held. A directory and a symbolic link have operations of
- * their own and are -EINVAL here; a name already there is -EEXIST, and a
- * heap with no room -ENOSPC.
+ * their own and are -EINVAL here; a removed `dir` is -ENOENT, a name
+ * already there -EEXIST, and a heap with no room -ENOSPC.
  */
 static int make_node(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
                      uint32_t rdev, void **node)
@@ -599,6 +611,9 @@ static int make_node(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     uint32_t type = mode & T_IFMT;
     int rc;
 
+    if (removed(d)) {
+        return -ENOENT;
+    }
     if (find(d, name)) {
         return -EEXIST;
     }
@@ -657,14 +672,17 @@ static int tmpfs_unlink(struct vfs_mount *mnt, void *dir, const char *name)
 }
 
 /** The `mkdir` of tmpfs: a new directory `name` in `dir` with the permission
- * bits of `mode`, owned as `new_node` says; -EEXIST, or -ENOSPC when the heap
- * has no room. */
+ * bits of `mode`, owned as `new_node` says; -ENOENT for a removed `dir`,
+ * -EEXIST, or -ENOSPC when the heap has no room. */
 static int tmpfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 {
     struct tmpfs_node *d = dir_of(mnt, dir);
     struct tmpfs_node *n;
     int rc;
 
+    if (removed(d)) {
+        return -ENOENT;
+    }
     if (find(d, name)) {
         return -EEXIST;
     }
@@ -720,9 +738,10 @@ static int is_above(const struct tmpfs_node *a, const struct tmpfs_node *d)
  * file or an empty directory there; a rename of a name to another name of
  * the same node does nothing. The new name's entry is taken from the heap
  * before either directory changes, so a rename the heap cannot serve
- * answers -ENOSPC with both names as they were. -ENOENT, -ENOTDIR or
- * -EISDIR for a directory and a file in each other's place, -ENOTEMPTY,
- * and -EINVAL for a directory moved below itself.
+ * answers -ENOSPC with both names as they were. -ENOENT for a missing
+ * name or a removed `newdir`, -ENOTDIR or -EISDIR for a directory and a file
+ * in each other's place, -ENOTEMPTY, and -EINVAL for a directory moved below
+ * itself.
  */
 static int tmpfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
                         const char *newname)
@@ -734,7 +753,7 @@ static int tmpfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname
     struct tmpfs_dirent *e;
     struct tmpfs_node *n;
 
-    if (!from) {
+    if (!from || removed(nd)) {
         return -ENOENT;
     }
     n = (*from)->node;
@@ -771,14 +790,17 @@ static int tmpfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname
 }
 
 /** The `link` of tmpfs: a new name `name` in `dir` for the file `node`,
- * which has a new change time; -EPERM for a directory, -EEXIST, or
- * -ENOSPC. */
+ * which has a new change time; -ENOENT for a removed `dir`, -EPERM for a
+ * directory, -EEXIST, or -ENOSPC. */
 static int tmpfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
 {
     struct tmpfs_node *d = dir_of(mnt, dir);
     struct tmpfs_node *n = (struct tmpfs_node *)node;
     int rc;
 
+    if (removed(d)) {
+        return -ENOENT;
+    }
     if (is_dir(n)) {
         return -EPERM;
     }
@@ -984,7 +1006,8 @@ static int tmpfs_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap
 }
 
 /** The `symlink` of tmpfs: a link `name` in `dir`, mode 0777, to a copy of
- * `target`; -EEXIST, or -ENOSPC when the heap has no room. */
+ * `target`; -ENOENT for a removed `dir`, -EEXIST, or -ENOSPC when the heap
+ * has no room. */
 static int tmpfs_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char *target)
 {
     struct tmpfs_node *d = dir_of(mnt, dir);
@@ -992,6 +1015,9 @@ static int tmpfs_symlink(struct vfs_mount *mnt, void *dir, const char *name, con
     uint32_t len = (uint32_t)k_strlen(target);
     int rc;
 
+    if (removed(d)) {
+        return -ENOENT;
+    }
     if (find(d, name)) {
         return -EEXIST;
     }

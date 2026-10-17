@@ -117,8 +117,8 @@ place would go to the next node made while the holder still refers to it.
 FAT32 and exFAT refuse a directory a descriptor or a working
 directory refers to, after the check for emptiness.
 ext2 and tmpfs remove such a directory, as Linux does, and leave its
-descriptors and working directories on an empty directory that takes no
-new entry; ext2 lists it as
+descriptors and working directories on an empty directory with a link
+count of 0 that takes no new entry; ext2 lists it as
 .Er ENOENT
 and frees its inode when the last of them lets go.
 POSIX permits either answer.

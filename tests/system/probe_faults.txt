@@ -6466,6 +6466,39 @@ new
     }
 end
 
+fault proc-link-removed-dir-made
+probe proclinkmusl
+file rach2/sys/fs/tmpfs.c
+expect PROCLINKMUSL FAIL (a name made in a removed directory
+old
+    int rc;
+
+    if (removed(d)) {
+        return -ENOENT;
+    }
+    if (find(d, name)) {
+        return -EEXIST;
+    }
+    if (type == 0) {
+new
+    int rc;
+
+    if (find(d, name)) {
+        return -EEXIST;
+    }
+    if (type == 0) {
+end
+
+fault proc-link-removed-dir-links
+probe proclinkmusl
+file rach2/sys/fs/tmpfs.c
+expect PROCLINKMUSL FAIL (the links of a removed directory
+old
+        st->nlink = removed(n) ? 0u : 2u + n->subdirs;
+new
+        st->nlink = 2u + n->subdirs;
+end
+
 fault proc-link-unchecked
 probe proclinkmusl
 file rach2/sys/fs/procfs.c
