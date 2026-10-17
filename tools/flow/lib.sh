@@ -1,5 +1,5 @@
 # shellcheck shell=sh disable=SC2154 # state and repo are the loop's
-# lib.sh: what worker.sh and manager.sh share, read by both with `.`.
+# lib.sh: what the flow's loops share, read by each with `.`.
 #
 # Each loop has a state directory, STATE. The loop runs from a copy of
 # `tools/flow` in STATE/run that `update` takes from `origin/master`, so the
@@ -120,4 +120,71 @@ wait_session()
         log "session group $group ended"
     fi
     rm -f "$state/session"
+}
+
+# merged REF: succeed when every commit of REF is on `origin/master`: REF is
+# an ancestor of it, or `git cherry` finds each commit's patch there, as it
+# does for a branch rebased before its push. A commit message proves nothing.
+merged()
+{
+    git merge-base --is-ancestor "$1" origin/master 2> /dev/null && return 0
+    patches=$(git cherry origin/master "$1" 2> /dev/null) || return 1
+    ! printf '%s\n' "$patches" | grep -q '^+'
+}
+
+# tidy: remove what finished work left in the clone. A helper's worktree
+# under .claude/worktrees goes when its HEAD is merged and `git worktree
+# remove` takes it without force, which it refuses for a worktree with
+# changes, untracked files or a lock, as Claude Code keeps on a helper's
+# worktree while the helper runs. A branch goes when it is merged, unless it
+# is master, the branch checked out, one checked out in a worktree, which git
+# refuses to delete, or one named for the issue in STATE/issue or
+# STATE/parked. Each removal is logged.
+tidy()
+{
+    keep=$(cat "$state/issue" "$state/parked" 2> /dev/null)
+    top=$(git rev-parse --show-toplevel) || return 1
+    git worktree list --porcelain | sed -n 's/^worktree //p' | while read -r w; do
+        case $w in "$top"/.claude/worktrees/*) ;; *) continue ;; esac
+        head=$(git -C "$w" rev-parse -q --verify HEAD) && merged "$head" &&
+            git worktree remove "$w" 2> /dev/null && log "tidy: removed the worktree $w"
+    done
+    git worktree prune
+    current=$(git symbolic-ref -q --short HEAD)
+    git for-each-ref --format='%(refname:short)' refs/heads | while read -r b; do
+        case $b in master|"$current") continue ;; esac
+        for n in $keep; do
+            case $b in "$n"-*) continue 2 ;; esac
+        done
+        merged "refs/heads/$b" && git branch -q -D "$b" 2> /dev/null &&
+            log "tidy: deleted the branch $b"
+    done
+}
+
+# prune_logs PATTERN...: remove the files of STATE that a PATTERN matches and
+# that are more than fourteen days old, then the oldest of the rest while they
+# add up to more than 1 GiB; a file written in the last day is kept whatever
+# the total. A loop calls this between sessions, so the transcript of the
+# session that runs is never among them.
+prune_logs()
+{
+    n=$(perl -MFile::Glob=:bsd_glob -e '
+        my ($dir, @pat) = @ARGV;
+        my %seen;
+        my @f = sort { $a->[1] <=> $b->[1] }
+            map { [$_, (stat $_)[9, 7]] } grep { -f && !$seen{$_}++ }
+            map { bsd_glob("$dir/$_") } @pat;
+        my $total = 0;
+        $total += $_->[2] for @f;
+        my $n = 0;
+        for (@f) {
+            my $age = time - $_->[1];
+            last if $age < 86400;
+            next unless $age > 14 * 86400 || $total > 1 << 30;
+            next unless unlink $_->[0];
+            $total -= $_->[2];
+            $n++;
+        }
+        print "$n\n";' "$state" "$@")
+    [ "${n:-0}" -eq 0 ] || log "pruned $n logs"
 }

@@ -304,6 +304,13 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: a release resumed from its record" >&2
         fail=1
     fi
+    if sh tests/system/tidy_test.sh >"$VDIR/tidy.rlog" 2>&1; then
+        echo "hosttest: result: pass: the loops' cleanup of finished work"
+    else
+        cat "$VDIR/tidy.rlog"
+        echo "hosttest: result: fail: the loops' cleanup of finished work" >&2
+        fail=1
+    fi
     if sh tests/system/testing_run_test.sh >"$VDIR/testing_run.rlog" 2>&1; then
         echo "hosttest: result: pass: testing.sh run's quoted commands"
     else

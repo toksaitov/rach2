@@ -55,6 +55,8 @@
 # and output as `r-P-TIME.issues`, `.jsonl`, `.err` and `.json`, with the
 # findings filed in `.filed`, one `I N` a line for finding I filed as issue
 # N, and `.commented` once the summary is on the phase.
+# Between reviews, while no filing or failure waits, the loop prunes these
+# files as `prune_logs` in lib.sh says.
 # Removing `pending` abandons the filing. `touch STATE/stop` ends the loop
 # after the review that is running, and a loop that starts while a review of
 # the loop before it still runs waits for that review to end.
@@ -319,6 +321,7 @@ main()
             sleep 300
             continue
         fi
+        [ -e "$state/pending" ] || [ -e "$state/failure" ] || prune_logs 'r-*'
         if ! range=$(pick); then
             log "board unreachable"
             sleep 300

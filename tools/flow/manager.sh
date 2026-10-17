@@ -21,8 +21,13 @@
 # the check that is running in `session`, and `last`, the time of the last
 # check that ended by itself. `touch STATE/stop` ends the loop after the check
 # that is running. The checks run at high effort, as a worker's sessions do.
+#
+# Before each check the loop prunes the checks' output, as `prune_logs` in
+# lib.sh says, and runs `scratch.pl` on the testing host, which removes from
+# its /tmp the scratch of tests that were killed before their traps ran.
 
 PERIOD=1200
+TESTING=testing
 DEADLINE=2400
 
 main()
@@ -66,6 +71,10 @@ main()
                 sleep 60
                 continue ;;
         esac
+        prune_logs 'c-*'
+        ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
+            'MSYS_NO_PATHCONV=1 wsl.exe -u root -- perl - /tmp' \
+            < "$state/run/scratch.pl" >> "$state/loop.log" 2>&1
         t=$(date -u '+%m%d-%H%M%S')
         prompt="$(cat "$state/run/manager.txt")
 

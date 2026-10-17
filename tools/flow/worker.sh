@@ -41,6 +41,10 @@
 # tmux session is killed, waits for the session to end before it does
 # anything in the clone.
 #
+# While it holds no issue, before it claims one, the loop removes what
+# finished work left in its clone, as `tidy` in lib.sh says, and prunes its
+# sessions' output, as `prune_logs` says.
+#
 # While a `hold` issue is open, the loop starts no session on an issue whose
 # work is committed on a branch named for it and waits only for the push,
 # unless the issue is labelled `ci`, whose repair the hold lets through.
@@ -205,12 +209,12 @@ main()
     cd "$repo" || exit 1
     echo "$repo" > "$state/repo"
     echo "${RACH2_TESTING_COPY:-}" > "$state/copy"
+    RACH2_MIN_FREE_GIB=${RACH2_MIN_FREE_GIB:-40}
+    export RACH2_MIN_FREE_GIB
     wait_session
     git config core.hooksPath tools/git-hooks
     if [ "$0" != "$state/run/worker.sh" ]; then
         refresh
-    RACH2_MIN_FREE_GIB=${RACH2_MIN_FREE_GIB:-40}
-    export RACH2_MIN_FREE_GIB
         while update worker.sh 2>> "$state/loop.log"; [ $? -eq 2 ]; do
             log "update failed"
             sleep 60
@@ -255,6 +259,8 @@ main()
             continue
         fi
         if [ -z "$issue" ]; then
+            tidy
+            prune_logs 's-*'
             if ! claim; then
                 sleep 60
                 continue
