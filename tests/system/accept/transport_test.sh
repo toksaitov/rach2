@@ -19,19 +19,24 @@ if [ "${1:-}" != --texts ]; then
     . "$repo/tests/system/runlock.sh"
     runlock_hold "$repo" accept-transport "$repo/tests/system/accept/transport_test.sh" "$@"
 fi
+work=
+
+# Remove the scratch directory.
+# shellcheck disable=SC2329 # The exit trap calls this function.
+cleanup()
+{
+    [ -z "$work" ] || rm -rf "$work"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept-test.XXXXXX")
 copy="$work/tests/system/accept"
 mkdir -p "$copy" "$work/bin" "$work/build/krffs" "$work/krffs"
 cp "$repo/tests/system/accept/metal_accept.sh" "$copy/original.sh"
 cp "$copy/original.sh" "$copy/metal_accept.sh"
 touch "$work/key"
-
-# shellcheck disable=SC2329 # The exit trap restores the private mutation.
-cleanup()
-{
-    cp "$copy/original.sh" "$copy/metal_accept.sh"
-}
-trap cleanup EXIT
 
 # transport_edit FAULT: the private metal_accept.sh is the saved one with FAULT
 # in it: no failure record (record) or a disk matched by its prefix alone
@@ -57,14 +62,9 @@ transport_edit()
 if [ "${1:-}" = --texts ]; then
     transport_edit record
     transport_edit disk-prefix
-    trap - EXIT
-    rm -rf "$work"
     echo 'accept-transport: texts: every fault is once in its source'
     exit 0
 fi
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
 
 cat > "$work/bin/ssh" <<'SSH'
 #!/bin/sh

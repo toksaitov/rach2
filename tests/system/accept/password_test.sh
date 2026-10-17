@@ -15,26 +15,28 @@ if [ "${1:-}" != --texts ]; then
     . "$repo/tests/system/runlock.sh"
     runlock_hold "$repo" accept-password "$repo/tests/system/accept/password_test.sh" "$@"
 fi
-work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-password-test.XXXXXX")
-mkdir -p "$work/tests/system/accept" "$work/build/tests/system" "$work/bin" "$work/tmp"
-cp "$repo/tests/system/accept/su_command.sh" "$work/tests/system/accept/"
-cp "$repo/tests/system/runner/ptydrive.c" "$work/original.c"
-cp "$work/original.c" "$work/ptydrive.c"
+work=
 child=
 
-# shellcheck disable=SC2329 # The exit trap restores the private source.
+# Stop the running case and remove the scratch directory.
+# shellcheck disable=SC2329 # The exit trap calls this function.
 cleanup()
 {
     if [ -n "$child" ]; then
         kill -TERM "$child" 2>/dev/null || :
         wait "$child" 2>/dev/null || :
     fi
-    cp "$work/original.c" "$work/ptydrive.c"
+    [ -z "$work" ] || rm -rf "$work"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-password-test.XXXXXX")
+mkdir -p "$work/tests/system/accept" "$work/build/tests/system" "$work/bin" "$work/tmp"
+cp "$repo/tests/system/accept/su_command.sh" "$work/tests/system/accept/"
+cp "$repo/tests/system/runner/ptydrive.c" "$work/original.c"
+cp "$work/original.c" "$work/ptydrive.c"
 
 # password_edit MUTATION: $work/ptydrive.c is the saved driver with MUTATION in
 # it, and `diagnostic` the words its failing case prints; fail when the edit
@@ -72,9 +74,6 @@ if [ "${1:-}" = --texts ]; then
     for mutation in repeat redact count; do
         password_edit "$mutation"
     done
-    cp "$work/original.c" "$work/ptydrive.c"
-    trap - EXIT
-    rm -rf "$work"
     echo 'accept-password: texts: every fault is once in its source'
     exit 0
 fi
