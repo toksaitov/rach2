@@ -1,0 +1,151 @@
+.Dd October 17, 2026
+.Dt MUSE 1
+.Os
+.Sh NAME
+.Nm muse
+.Nd Meta's Muse Code, a coding agent for the terminal
+.Sh SYNOPSIS
+.Nm
+.Op Ar options
+.Op Ar prompt
+.Nm
+.Op Ar options
+.Ar command
+.Sh DESCRIPTION
+.Nm
+works on the files of the directory it starts in at a person's request: it
+sends the request to a model of Meta's Model API, reads and edits files and
+runs shell commands as the model asks, and shows the conversation on the
+terminal.
+With no command it opens its interactive screen;
+.Ql muse exec Ar prompt
+runs one request to the end without one.
+.Ql muse --help
+lists the options and commands, and
+.Ql muse Ar command Fl -help
+describes one.
+.Pp
+The x86-64 GNU root has
+.Nm
+when it is built with the agents layer:
+.Ql make ARCH=x86_64 GNU_AGENTS=muse os-real-gnu-ext2 ,
+or
+.Ql GNU_AGENTS=all ,
+which the release to the installed machine uses.
+The program is Meta's own build of version 1.4.10-R6427.1 for Linux on
+x86-64, a static executable, installed unmodified as Meta's release has it.
+.Pa /opt/muse/bin/muse
+is the program, and
+.Pa /usr/bin/muse
+and
+.Pa /bin/muse
+link to it.
+Meta's installer also installs a launcher that updates the program; the
+root does not have it.
+Meta gives the program under its Model API Terms of Service, which forbid
+modifying it or giving it to anyone else;
+.Pa /opt/muse/TERMS
+says so and gives their address.
+.Pp
+The first time
+.Nm
+opens its screen in a directory, it asks whether to trust it.
+A trusted directory's own instructions, skills, rules and hooks are loaded,
+and the answer is kept in
+.Pa ~/.config/muse/trust.json .
+.Ss Signing in over SSH
+With no credential, the screen offers
+.Dq Log in with browser
+and
+.Dq Set an API key .
+The first prints an address at
+.Lk https://auth.meta.com
+with a one-time code, and tries to open it with
+.Ql xdg-open ,
+which the machine does not have.
+Open the address on any other computer, sign in to Meta there and confirm
+the code;
+.Nm
+waits for Meta's answer and then stores the session it is given.
+.Ql muse login
+does the same from the shell.
+The second reads a Model API key, checks it with Meta and stores it;
+.Ql muse auth set --api-key-stdin
+stores one read from standard input.
+A key in the environment variable
+.Ev META_API_KEY
+is used without signing in and is not stored, and it takes priority over a
+stored key, which takes priority over a stored session.
+.Ql muse logout
+removes the stored credential.
+.Ss Where the credential lives
+.Nm
+keeps a stored credential in
+.Pa ~/.config/muse/auth.json ,
+beside its settings in
+.Pa ~/.config/muse/settings.json ;
+.Ev XDG_CONFIG_HOME
+followed by
+.Pa /muse
+names another directory.
+Its sessions, their index and its logs are under
+.Pa ~/.local/share/muse ,
+or
+.Ev XDG_DATA_HOME
+followed by
+.Pa /muse .
+.Ss The sandbox
+By default
+.Nm
+asks before a command with side effects and runs each shell command in a
+sandbox, which on Linux is a copy of bubblewrap built into the program.
+Bubblewrap needs parts of Linux that Rach2 does not have yet, among them
+.Fn pivot_root
+and
+.Pa /proc/sys/kernel/overflowuid ,
+and Meta documents that
+.Nm
+refuses a shell command when it cannot run it in the sandbox.
+.Fl -disable-sandbox
+runs commands without it, and
+.Fl -yolo
+also turns off the approvals and trusts the directory, for one run.
+.Ss Updates and telemetry
+The program does not update itself; a new version comes with a new build
+of the root.
+A line of the settings file turns off its telemetry to Meta:
+.Bd -literal -offset indent
+{"schema_version": 1, "telemetry": {"enabled": false}}
+.Ed
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /opt/muse/bin/muse
+the program
+.It Pa /opt/muse/TERMS
+the terms it is used under
+.It Pa ~/.config/muse/auth.json
+the stored credential
+.It Pa ~/.config/muse/settings.json
+the settings
+.It Pa ~/.config/muse/trust.json
+the directories trusted or not
+.It Pa ~/.local/share/muse
+the sessions, their index and the logs
+.El
+.Sh EXIT STATUS
+0 on success, 1 on an error, such as
+.Ql muse exec
+with no credential, and 2 for an option it does not know.
+.Sh EXAMPLES
+Sign in, then work in a repository without the sandbox:
+.Bd -literal -offset indent
+$ muse login
+$ cd project
+$ muse --disable-sandbox
+.Ed
+.Sh SEE ALSO
+.Xr gh 1 ,
+.Xr git 1 ,
+.Xr tmux 1
+.Pp
+.Lk https://dev.meta.ai/docs/muse-code "The Muse Code documentation"

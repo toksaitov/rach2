@@ -225,6 +225,7 @@ The [agents layer](../vendor/gnu/agents/Readme.md) installs vendors' published b
 | Package | Version | License | Purpose |
 | --- | --- | --- | --- |
 | [gh](../vendor/gnu/agents/packages/gh.sh) | 2.102.0 | MIT | gh, GitHub's command-line program for repositories, issues, pull requests, releases and the API. |
+| [muse](../vendor/gnu/agents/packages/muse.sh) | 1.4.10-R6427.1 | Meta Model API Terms of Service | muse, Meta's Muse Code, a coding agent for the terminal. |
 
 ## The vendored projects
 

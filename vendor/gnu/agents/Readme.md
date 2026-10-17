@@ -1,6 +1,6 @@
 # The agents layer
 
-This directory adds to the x86-64 [GNU system](../Readme.md) the programs a person uses to work with a coding agent over SSH: each vendor's published build, fetched for the person who builds the image, checked against the digest its vendor publishes, and installed unmodified under its own license. Nothing of a package is committed but its recipe. The layer has one package so far, GitHub's `gh`. A package is installed only when the builder names it.
+This directory adds to the x86-64 [GNU system](../Readme.md) the programs a person uses to work with a coding agent over SSH: each vendor's published build, fetched for the person who builds the image, checked against the digest its vendor publishes, and installed unmodified under its own license. Nothing of a package is committed but its recipe. The layer has two packages, GitHub's `gh` and Meta's Muse Code, `muse`. A package is installed only when the builder names it.
 
 ## Use
 
@@ -11,15 +11,16 @@ This directory adds to the x86-64 [GNU system](../Readme.md) the programs a pers
 
 `make ARCH=x86_64 GNU_AGENTS=gh gnu-agents` fetches and stages the packages without building the root. A change to the list, to a recipe or to `fetch_agents.sh` builds the root again; [`mk/gnu-agents.mk`](../../../mk/gnu-agents.mk) has the rules. The release to the installed machine builds with `GNU_AGENTS=all` (`tools/flow/release.sh`), and so does the root `tests/run agents` boots, `os-real-gnu-agents.ext2`.
 
-On the machine each package is a directory of `/opt`, as its vendor published it, with a link to its program in `/usr/bin` and `/bin`. Its page in the manual says how to sign in over SSH and where the credentials are kept: [gh(1)](../../../man/man1/gh.1).
+On the machine each package is a directory of `/opt`, as its vendor published it, with a link to its program in `/usr/bin` and `/bin`. Its page in the manual says how to sign in over SSH and where the credentials are kept: [gh(1)](../../../man/man1/gh.1) and [muse(1)](../../../man/man1/muse.1).
 
 ## Sources and license
 
 | Package | Version | License | From | Pinned by |
 | --- | --- | --- | --- | --- |
 | [`gh`](packages/gh.sh) | 2.102.0 | MIT | `gh_2.102.0_linux_amd64.tar.gz` of GitHub's release `v2.102.0` of `cli/cli` | the SHA-256 the release's `gh_2.102.0_checksums.txt` lists |
+| [`muse`](packages/muse.sh) | 1.4.10-R6427.1 | [Meta Model API Terms of Service](https://dev.meta.ai/legal/terms-of-service) | `muse-x86-linux` of Meta's release `1.4.10-R6427.1` | the SHA-256 that the release's `manifest.json` lists for `x86_linux` |
 
-A package keeps its vendor's license, which the recipe names in `LICENSE` and installs beside the program; `NOTICES` lists those files, and the stage fails without them. The recipes and `fetch_agents.sh` are in-house.
+A package keeps its vendor's license, which the recipe names in `LICENSE` and installs beside the program; `NOTICES` lists those files, and the stage fails without them. Meta publishes no license file for Muse Code, so its recipe writes `/opt/muse/TERMS`, which names the terms and gives their address. The recipes and `fetch_agents.sh` are in-house.
 
 ## Design
 
@@ -46,6 +47,12 @@ It defines `package_stage DIR`, which lays the package out under `DIR` as the ro
 
 `gh` is a static Go executable and needs no library of the root. Under `/opt/gh` it has `bin/gh`, its manual pages in `share/man/man1` and `LICENSE`. Measured on Linux, it starts no other process for `--version`, `auth status` or `api`. It writes its settings to `~/.config/gh`, and a device identifier and the state of its update check to `~/.local/state/gh`. Before a request it asks the Secret Service of the D-Bus session bus for a stored token, at the address `DBUS_SESSION_BUS_ADDRESS` gives or at `/run/user/UID/bus`, and reads the token from `~/.config/gh/hosts.yml` where there is none. It talks to `api.github.com` and `github.com`, or to the host `GH_HOST` names, whose API it reaches at `https://HOST/api/v3/`, and trusts the certificate authorities of `/etc/ssl/certs`, with those of the file `SSL_CERT_FILE` names. It does not update itself: on a terminal it checks GitHub for a newer release once a day and prints a notice, which `GH_NO_UPDATE_NOTIFIER` turns off. Its telemetry, on by default, is turned off by `gh config set telemetry disabled` or `GH_TELEMETRY=false`.
 
+### muse
+
+Muse Code is one static executable of 376 MB, which needs no library of the root. Meta's installer, `https://dev.meta.ai/install.sh`, puts a launcher script at `~/.local/bin/muse`. The launcher reads the channel manifest, `https://api.meta.ai/muse-code/channels/muse-stable`, for the current version and its release manifest, downloads the file that manifest lists for the platform, checks its size and SHA-256, keeps it beside itself as `muse-bin-VERSION` and runs it. Each time it starts it looks for a newer launcher and a newer version, at most once an hour, and installs them in the background; `MUSE_NO_AUTO_UPDATE=1` turns that off. The program has no update code of its own, so the layer installs it without the launcher, and it stays at the version the recipe pins.
+
+Measured on Linux, `--version` and `--help` start no other process and write no file. Its screen asks whether to trust the directory it starts in, and writes the answer to `~/.config/muse/trust.json`. It makes `~/.local/share/muse`, with a SQLite index of its sessions, the sessions, its bundled skills and plugins and a log of each start, and makes and removes scratch directories under `TMPDIR` or `/tmp`. To learn whether its sandbox works it runs `/usr/bin/bwrap`, where there is one, and itself as `muse __tbh_internal_bwrap`, its own copy of bubblewrap; it also reads `/etc/ssh/ssh_config`. With no credential it offers two sign-ins: by browser, a device code that `auth.meta.com` confirms, for which it runs `xdg-open` on the address and also prints it, or by a Model API key typed in. A key in `META_API_KEY` signs it in without either and takes priority over a stored credential, which it keeps in `~/.config/muse/auth.json`. Its settings are `~/.config/muse/settings.json`, where `"telemetry": {"enabled": false}` turns off its telemetry. It talks to `api.meta.ai` and `auth.meta.com`, or to the server `--base-url` names, and trusts as well the certificate authority whose file the setting `endpoint_transport.ca_bundle` names.
+
 ## Building
 
 The layer builds where the rest of the GNU layer does, on an x86-64 Linux host, with access to each vendor's download site. Besides the tools the [GNU layer](../Readme.md#building) lists it needs `sha512sum`, or `shasum`, for a package pinned by SHA-512.
@@ -60,7 +67,9 @@ A new package is a recipe in `packages/`, a row in `tests/system/agents/`, with 
 
 * The packages are x86-64 programs, and the layer installs them only in the x86-64 GNU root.
 * GitHub signs no file of `gh`'s release. Its build provenance attestations are checked by `gh attestation verify`, which needs a sign-in, so the recipe pins the digest the checksums file lists.
+* Meta signs neither manifest of Muse Code's release, so the recipe pins the digest the release manifest lists. Meta's terms let the person who fetched the program install and use it, and forbid giving it to anyone else: a root built with `muse` is not to be given away.
+* Muse Code's sandbox, its own copy of bubblewrap, needs parts of Linux that Rach2 does not have yet, among them `pivot_root` and `/proc/sys/kernel/overflowuid`; on Rach2 it is turned off with `--disable-sandbox` or `--yolo`.
 
 ## Tests
 
-`fetch_agents.sh` runs each recipe's `package_check` on the build host when it stages the package. `ARCH=x86_64 tests/run agents` boots `os-real-gnu-agents.ext2` with 4 GiB of memory on a network whose only route out is to the fake API server on the host ([`tests/system/fakeapi/fakeapi.py`](../../../tests/system/fakeapi/fakeapi.py)), and runs the rows of [`tests/system/agents/`](../../../tests/system/agents) over SSH as the test account; [`tests/system/suites/agents.sh`](../../../tests/system/suites/agents.sh) describes a row and its script for the server. The `gh` row checks the pinned version, the program the path finds and its license, `gh auth status` with no account signed in, one HTTPS request from `gh api` with no account to openssl's test server on the machine, which `gh` refuses until `SSL_CERT_FILE` names the server's certificate, and `GH_TOKEN=invalid gh api user` against the fake server as `api.github.com`, which answers 401 as GitHub does. `sh tests/system/agents_mutate.sh` proves the row against a fault in the recipe.
+`fetch_agents.sh` runs each recipe's `package_check` on the build host when it stages the package. `ARCH=x86_64 tests/run agents` boots `os-real-gnu-agents.ext2` with 4 GiB of memory on a network whose only route out is to the fake API server on the host ([`tests/system/fakeapi/fakeapi.py`](../../../tests/system/fakeapi/fakeapi.py)), and runs the rows of [`tests/system/agents/`](../../../tests/system/agents) over SSH as the test account; [`tests/system/suites/agents.sh`](../../../tests/system/suites/agents.sh) describes a row and its script for the server. The `gh` row checks the pinned version, the program the path finds and its license, `gh auth status` with no account signed in, one HTTPS request from `gh api` with no account to openssl's test server on the machine, which `gh` refuses until `SSL_CERT_FILE` names the server's certificate, and `GH_TOKEN=invalid gh api user` against the fake server as `api.github.com`, which answers 401 as GitHub does. The `muse` row checks the pinned version, the program the path finds and the terms beside it, `muse --help`, and its screen in tmux, in a home of its own: the question whether to trust the directory, the answer recorded in `trust.json`, the two sign-ins it offers with no credential, and its end, not signed in, at Esc. `sh tests/system/agents_mutate.sh` proves the two rows against a fault in each recipe.
