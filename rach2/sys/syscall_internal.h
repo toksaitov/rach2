@@ -282,6 +282,11 @@ void vfs_kill_setid(struct vfs_mount *mnt, void *node);
  */
 int mnt_is_root(const struct vfs_mount *mnt);
 
+/** The current KRFFS boot-root file node held by `e`, including through a
+ * bind mount, or NULL for another descriptor. A copied entry's node may be
+ * stale after relocation; its shared description has the current node. */
+krffs_node_t *fd_root_node(const fd_entry_t *e);
+
 /**
  * The permission check of the `want` bits over the node `r` of any type, from
  * the attributes its file system reports, by the real ids when `use_real` is

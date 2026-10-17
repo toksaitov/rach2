@@ -4022,7 +4022,7 @@ probe unixmusl
 file rach2/sys/ipc/unix.c
 expect UNIXMUSL FAIL (a received descriptor of a moved, unlinked file
 old
-        if (e->type == FD_TYPE_FILE && e->node && e->ofd && e->ofd->vnode == node) {
+        if (node && fd_root_node(e) == node) {
 new
         if (e->type == FD_TYPE_FILE && e->node == node) {
 end

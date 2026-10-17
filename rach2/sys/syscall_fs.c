@@ -154,7 +154,7 @@ static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
         for (i = 0; i < fd_table_cap(pr->fds); i++) {
             fd_entry_t *e = &pr->fds->entries[i];
 
-            if (e != except && e->type == FD_TYPE_FILE && e->node == node) {
+            if (e != except && fd_root_node(e) == node) {
                 held++;
             }
         }
@@ -227,7 +227,7 @@ struct vfs_mount *fd_release_lock(const fd_entry_t *e)
         return NULL;
     }
     if (e->type == FD_TYPE_FILE) {
-        orphanable = e->node && e->node != krffs_fs->node;
+        orphanable = fd_root_node(e) != NULL;
     } else {
         orphanable = (e->type == FD_TYPE_PIPE || e->type == FD_TYPE_NONE) && e->ofd &&
                      e->ofd->vmnt && vfs_mount_base(e->ofd->vmnt) == root && mnt_is_root(root);
@@ -251,14 +251,19 @@ struct vfs_mount *fd_release_lock(const fd_entry_t *e)
 static void fd_release_orphan(fd_entry_t *e)
 {
     struct vfs_mount *locked = fd_release_lock(e);
+    krffs_node_t *node;
 
     if (!locked) {
         return;
     }
     if (e->type == FD_TYPE_FILE) {
-        if (e->node->name[0] == '\0' && fd_node_holders(e->node, e) == 0) {
-            fd_free_orphan(e, e->node);
+        node = fd_root_node(e);
+        if (node->name[0] == '\0' && fd_node_holders(node, e) == 0) {
+            fd_free_orphan(e, node);
             e->node = NULL;
+            if (e->ofd) {
+                e->ofd->vnode = NULL;
+            }
         }
     } else {
         fd_fifo_orphan(e);
@@ -451,11 +456,11 @@ struct open_file *fs_exe_open(const struct vfs_ref *ref)
  */
 struct vfs_mount *fs_exe_lock(const struct open_file *ofd)
 {
-    if (!mnt_is_root(ofd->vmnt)) {
+    if (vfs_mount_base(ofd->vmnt) != vfs_root_mount() || ofd->vmnt->type != &vfs_krffs_type) {
         return NULL;
     }
-    vfs_ns_lock(ofd->vmnt);
-    return ofd->vmnt;
+    vfs_ns_lock(vfs_root_mount());
+    return vfs_root_mount();
 }
 
 /**
@@ -1827,6 +1832,21 @@ static int32_t cred_access_bits(uint32_t owner, uint32_t group, uint32_t mode, i
 int mnt_is_root(const struct vfs_mount *mnt)
 {
     return mnt == vfs_root_mount() && mnt->type == &vfs_krffs_type;
+}
+
+/** Find the current boot-root node of a file holder through any bind alias. */
+krffs_node_t *fd_root_node(const fd_entry_t *e)
+{
+    const struct open_file *ofd = e->ofd;
+
+    if (e->type != FD_TYPE_FILE) {
+        return NULL;
+    }
+    if (ofd && ofd->vmnt && vfs_mount_base(ofd->vmnt) == vfs_root_mount() &&
+        ofd->vmnt->type == &vfs_krffs_type) {
+        return ofd->vnode != krffs_fs->node ? ofd->vnode : NULL;
+    }
+    return e->node;
 }
 
 int32_t cred_access_ref(const struct vfs_ref *r, int want, int use_real)
@@ -10191,6 +10211,9 @@ static int32_t unlink_root_name(const struct vfs_ref *parent, const char *leaf, 
     if (loop_backs(parent->mnt, node)) {
         return -EBUSY;
     }
+    if ((parent->mnt->flags | vfs_mount_base(parent->mnt)->flags) & VFS_MS_RDONLY) {
+        return -EROFS;
+    }
     if (fd_node_holders(node, NULL) > 0) {
         krffs_unlink_held(node);
         return 0;
@@ -10249,7 +10272,7 @@ static int32_t unlink_named(const char *path, int end)
         rc = -EROFS;
     } else if (vfs_leaf_mount(parent.mnt, parent.node, leaf)) {
         rc = -EBUSY;
-    } else if (mnt_is_root(parent.mnt)) {
+    } else if (mnt_is_root(vfs_mount_base(parent.mnt))) {
         rc = unlink_root_name(&parent, leaf, end == PATH_END_SLASH);
     } else {
         vfs_ns_lock(parent.mnt);
@@ -10909,6 +10932,9 @@ static int32_t rename_root_names(const struct vfs_ref *opar, const char *oleaf,
     if (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
         return -EPERM;
     }
+    if ((opar->mnt->flags | vfs_mount_base(opar->mnt)->flags) & VFS_MS_RDONLY) {
+        return -EROFS;
+    }
     if (flags & RENAME_NOREPLACE) {
         return vfs_rename(opar->mnt, opar->node, oleaf, npar->node, nleaf);
     }
@@ -11077,7 +11103,7 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags, in
         }
         goto out;
     }
-    if (!mnt_is_root(opar.mnt)) {
+    if (!mnt_is_root(vfs_mount_base(opar.mnt))) {
         rc = rename_mounted_names(&opar, oleaf, &npar, nleaf, flags, slash);
         goto out;
     }

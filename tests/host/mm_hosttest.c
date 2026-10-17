@@ -42,6 +42,12 @@ static int exe_opens, exe_closes, refuse_exe;
 static int held_at_close[4];
 static int exe_locks, held_at_lock[4];
 
+/** The file system a bind mount shows, or the mount itself. */
+const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
+{
+    return m->bind_of ? m->bind_of : m;
+}
+
 /** Count and print a failure when `c` is false. */
 #define CHECK(c, detail)                           \
     do {                                           \

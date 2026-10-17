@@ -529,7 +529,7 @@ static int fds_hold(const fd_entry_t *fds, uint32_t n, const void *node)
     for (i = 0; i < n; i++) {
         const fd_entry_t *e = &fds[i];
 
-        if (e->type == FD_TYPE_FILE && e->node && e->ofd && e->ofd->vnode == node) {
+        if (node && fd_root_node(e) == node) {
             return 1;
         }
     }

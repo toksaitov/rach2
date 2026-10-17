@@ -96,7 +96,7 @@ faults = {
     'transit-installed': ('unix.c', [
         ('        in->fds[given++].type = FD_TYPE_NONE;\n', '        given++;\n')]),
     'moved-count': ('unix.c', [
-        ('        if (e->type == FD_TYPE_FILE && e->node && e->ofd && e->ofd->vnode == node) {\n',
+        ('        if (node && fd_root_node(e) == node) {\n',
          '        if (e->type == FD_TYPE_FILE && e->node == node) {\n')]),
     'moved-install': ('unix.c', [('        flight_sync(slot);\n', '')]),
     'moved-release': ('unix.c', [

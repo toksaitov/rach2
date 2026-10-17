@@ -99,14 +99,11 @@ static uintptr_t filemap_share(struct vm_file *f, uint32_t pgoff)
     return shmem_map_page(m->sh, pgoff);
 }
 
-/** The KRFFS root node the mapping's file is now, or NULL for a file of
- * another type, whose copy of the descriptor has no node. The copy keeps
- * the node the file was opened on, which a relocation leaves behind; the
- * description's is the one `vfs_repoint` moves. */
+/** The KRFFS boot-root node the mapping's file is now, including through a
+ * bind mount, or NULL for a file of another type. */
 static void *filemap_node(const struct filemap *m)
 {
-    return m->entry.type == FD_TYPE_FILE && m->entry.node && m->entry.ofd ? m->entry.ofd->vnode
-                                                                          : NULL;
+    return fd_root_node(&m->entry);
 }
 
 /** The pages in memory of the file `ino` of `mnt`, or NULL when no shared

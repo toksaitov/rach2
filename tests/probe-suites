@@ -45,3 +45,4 @@ musl/creddisk cred-persist
 musl/saltnoent noentropy
 musl/smpmusl smp
 musl/textbusymusl textbusy
+musl/bindholdmusl textbusy

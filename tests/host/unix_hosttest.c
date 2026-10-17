@@ -457,6 +457,12 @@ fd_entry_t *fd_get(fd_table_t *table, int fd)
     return e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING) ? NULL : e;
 }
 
+/** The current node of a model KRFFS regular file descriptor. */
+krffs_node_t *fd_root_node(const fd_entry_t *e)
+{
+    return e->type == FD_TYPE_FILE && e->node && e->ofd ? e->ofd->vnode : NULL;
+}
+
 /** The holders of the file `node` other than `except`, as `fd_node_holders`
  * counts them: the table's descriptors of it, and one for any in flight. */
 static int holders(const krffs_node_t *node, const fd_entry_t *except)

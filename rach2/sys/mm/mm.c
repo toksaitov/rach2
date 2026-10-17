@@ -7,6 +7,7 @@
 #include "kheap.h"
 #include "paging.h"
 #include "../fs/fd.h"
+#include "../fs/vfs.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../proc/process.h"
@@ -176,9 +177,11 @@ int mm_exe_holds(const struct vfs_mount *mnt, const void *node)
     const struct mm *m;
 
     for (m = exe_list; m; m = m->exe_next) {
-        if (node &&
-            ((m->exe_file->vmnt == mnt && m->exe_file->vnode == node) ||
-             (m->interp_file && m->interp_file->vmnt == mnt && m->interp_file->vnode == node))) {
+        if (mnt && node &&
+            ((vfs_mount_base(m->exe_file->vmnt) == vfs_mount_base(mnt) &&
+              m->exe_file->vnode == node) ||
+             (m->interp_file && vfs_mount_base(m->interp_file->vmnt) == vfs_mount_base(mnt) &&
+              m->interp_file->vnode == node))) {
             return 1;
         }
     }

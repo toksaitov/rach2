@@ -10,6 +10,8 @@ A script here runs by hand from the top of the tree as `sh tests/system/NAME.sh`
 
 `sh tests/system/textbusy_mutate.sh` removes executable write exclusion, requires `textbusy` to detect the fault, restores and rebuilds the kernel, and runs the suite again. The suite runs offline on x86-64 with 128 MiB, and checks executable and interpreter lifetimes on KRFFS and tmpfs, duplicate writers, fork, exec, failed exec, rename and unlink.
 
+`sh tests/system/bindhold_mutate.sh` removes the boot-root bind identity checks for descriptors and executable holders in turn. The `textbusy` suite runs `musl/bindholdmusl`, which checks a descriptor and its duplicate, a mapping after close, a descriptor in flight on an AF_UNIX socket, a running image and a forked image through a bind remounted read-only. Unlink and rename through the original mount or its writable bind must preserve the file's bytes through replacement allocations, and last close or exit must reclaim its space. Each fault must fail the suite; the restored kernel must pass it.
+
 ## Design
 
 ### The registry and the recipes
