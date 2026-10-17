@@ -11,7 +11,9 @@
 # sftp put a file on the machine and take it back. Then each port does its
 # main job on the machine, one row each, as tests/system/gnu_rows.sh runs it;
 # ROWS below names the rows and their bounds. A failed row does not stop the
-# next, so a run reports every row the machine cannot do.
+# next, so a run reports every row the machine cannot do. RACH2_GNU_ROWS, a
+# list of row names separated by spaces, runs those rows of ROWS alone, as a
+# mutation proof of one row needs.
 #
 # The last row is a person at the console: root logs in there, through the
 # serial port, which feeds the console's line discipline as the keyboard
@@ -238,6 +240,10 @@ FAILED=""
 TOTAL=0
 for row in $ROWS; do
     name=${row%%:*}
+    case " ${RACH2_GNU_ROWS:-$name} " in
+        *" $name "*) ;;
+        *) continue ;;
+    esac
     TOTAL=$((TOTAL + 1))
     began=$("$RUNUTIL" now)
     "$DEADLINE" "$(scaled "${row#*:}")" \
