@@ -204,6 +204,7 @@ const Elf_Phdr *elf_program_headers(const void *data);
 uint16_t elf_program_header_count(const void *data);
 
 struct page_dir;
+struct vm_file; /* mm/vm.h */
 
 /* The most program headers `elf_read_layout` and the loader take: the
  * length of the array of them each has on its stack. */
@@ -227,11 +228,15 @@ struct exec_krffs_ctx {
 #define ELF_MAX_SEGS 8
 
 /* One recorded PT_LOAD segment, page-aligned, so exec can build a VMA for it
- * with the right protection. */
+ * with the right protection. The pages from `start` to `file_end` map the
+ * image's file from its page `pgoff`, and those from `file_end` to `end` are
+ * anonymous; a segment the loader copied has `file_end` at `start`. */
 typedef struct elf_seg {
-    uintptr_t start; /* page-aligned segment start (inclusive) */
-    uintptr_t end;   /* page-aligned segment end (exclusive)   */
-    uint32_t flags;  /* ELF p_flags (PF_R/PF_W/PF_X)           */
+    uintptr_t start;    /* page-aligned segment start (inclusive) */
+    uintptr_t end;      /* page-aligned segment end (exclusive)   */
+    uintptr_t file_end; /* page-aligned end of the file's part    */
+    uint32_t pgoff;     /* the file's page at `start`             */
+    uint32_t flags;     /* ELF p_flags (PF_R/PF_W/PF_X)           */
 } elf_seg_t;
 
 /*
@@ -246,6 +251,7 @@ typedef struct {
     uintptr_t image_end;  /* page-aligned end of all loaded segments (heap base) */
     int nsegs;            /* number of recorded PT_LOAD segments */
     elf_seg_t segs[ELF_MAX_SEGS];
+    struct vm_file *file; /* the file the segments map, or NULL */
 } elf_image_t;
 
 /**
@@ -288,16 +294,17 @@ uintptr_t elf_phdr_vaddr(const Elf_Phdr *phdrs, uint16_t phnum, uint64_t phoff);
 /**
  * Load an ELF program into `dir`, reading it through `read` with `ctx`, and
  * describe it in `out`: the segment table, the image's end (the heap's
- * base), the entry point and the program header geometry.
+ * base), the entry point and the program header geometry. Every segment is
+ * copied into frames of its own; the boot loads the first program so.
  *
  * The file is read on demand and never held whole, so its size has no
  * bound. Each PT_LOAD must be well formed and lie in the user image window,
  * clear of the kernel and of the stack, and start at or after the
- * page-aligned end of the one before. A page that no segment with PF_W
- * covers is made read-only, so a user write to it faults and kills the
- * process, and one that no segment with PF_X covers is made not
- * executable. The image needs at least one PT_LOAD, a program header table
- * inside one, for AT_PHDR, and an entry point inside the window.
+ * page-aligned end of the one before, so no two segments share a page. A
+ * page of a segment without PF_W is made read-only, so a user write to it
+ * faults and kills the process, and one of a segment without PF_X is made
+ * not executable. The image needs at least one PT_LOAD, a program header
+ * table inside one, for AT_PHDR, and an entry point inside the window.
  *
  * 0; -ENOEXEC for a malformed image or one outside these rules, one with
  * more than ELF_MAX_PHNUM program headers or ELF_MAX_SEGS PT_LOADs, or a
@@ -309,18 +316,32 @@ uintptr_t elf_phdr_vaddr(const Elf_Phdr *phdrs, uint16_t phnum, uint64_t phoff);
  */
 int elf_load_image(elf_read_fn read, void *ctx, struct page_dir *dir, elf_image_t *out);
 
-/** The same with every address moved by `bias`, page-aligned, which must be
+/**
+ * The same with every address moved by `bias`, page-aligned, which must be
  * 0 for an ET_EXEC image: an ET_DYN program or interpreter at its base.
- * Another `bias` is -ENOEXEC. */
+ * Another `bias` is -ENOEXEC.
+ *
+ * With `file`, a private mapping of the file `read` reads, a segment whose
+ * file offset and address agree modulo the page is not copied but recorded
+ * as a mapping of the file, as Linux's `elf_map` maps it: the pages that
+ * hold its file bytes map the file, and are read when they are first
+ * touched, and the whole pages past them are anonymous. The page where the
+ * file bytes end is loaded at once when the segment goes on past it, with
+ * zeros after the file bytes, as Linux's `padzero` clears it. A segment
+ * whose offset and address disagree is copied. `out->file` is `file`; the
+ * loader takes no reference to it.
+ */
 int elf_load_image_at(elf_read_fn read, void *ctx, struct page_dir *dir, uintptr_t bias,
-                      elf_image_t *out);
+                      struct vm_file *file, elf_image_t *out);
 
 struct vm_space; /* mm/vm.h */
 
 /** Add the regions of a loaded image's segments to `vm`, each with the
  * protection of its `p_flags`, a code region for one with PF_X and a data
- * region for another: an interpreter's, beside its program's. 0, or -1 when
- * a region could not be recorded (`vm_insert`). */
+ * region for another: an interpreter's, beside its program's. A segment
+ * that maps the file has a region that maps it (`vm_insert_file`), and one
+ * without, for its anonymous pages past the file's part. 0, or -1 when a
+ * region could not be recorded. */
 int elf_add_vmas(struct vm_space *vm, const elf_image_t *img);
 
 /**

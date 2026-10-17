@@ -16,8 +16,13 @@
  * read callback. Both loads must retain their own segment geometry and
  * bytes. A position-independent image is read for its layout and
  * interpreter and loaded at a base, and read as an interpreter is, with its
- * own PT_INTERP not read. Each failed check prints a line on stderr, and
- * the test exits with their count, at most 100.
+ * own PT_INTERP not read. Loaded with a file to map, a segment whose offset
+ * and address agree modulo the page takes no frame but the one where its
+ * file bytes end, which holds those bytes and zeros after them, and gets a
+ * region of the file and one of anonymous memory; one whose offset and
+ * address disagree is copied, and one that names bytes past the file's end
+ * fails before any frame is taken. Each failed check prints a line on
+ * stderr, and the test exits with their count, at most 100.
  */
 
 #include "proc/elf.c"
@@ -123,15 +128,35 @@ void vm_init(vm_space_t *vm)
     (void)vm;
 }
 
-/** Take every region: 0. */
-int vm_insert(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type)
+/* The regions `vm_insert` and `vm_insert_file` were given, in order. */
+static struct {
+    uintptr_t start, end;
+    struct vm_file *file;
+    uint32_t pgoff;
+} regions[8];
+static int region_count;
+
+/** Record the region, a file's or anonymous memory's; 0. */
+int vm_insert_file(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type,
+                   struct vm_file *file, uint32_t pgoff)
 {
     (void)vm;
-    (void)start;
-    (void)end;
     (void)prot;
     (void)type;
+    if (region_count < 8) {
+        regions[region_count].start = start;
+        regions[region_count].end = end;
+        regions[region_count].file = file;
+        regions[region_count].pgoff = pgoff;
+        region_count++;
+    }
     return 0;
+}
+
+/** Record the region of anonymous memory; 0. */
+int vm_insert(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type)
+{
+    return vm_insert_file(vm, start, end, prot, type, NULL, 0);
 }
 
 /** memset, for elf.c. */
@@ -416,7 +441,7 @@ static void dynamic_images(void)
     dir.logical_page_tables[ELF_ET_DYN_BASE / PAGE_SIZE / 1024] = &table;
     frame_count = 0;
     map_frames = 1;
-    CHECK(elf_load_image_at(test_read, 0, &dir, ELF_ET_DYN_BASE, &out) == 0);
+    CHECK(elf_load_image_at(test_read, 0, &dir, ELF_ET_DYN_BASE, NULL, &out) == 0);
     map_frames = 0;
     CHECK(out.entry == ELF_ET_DYN_BASE + 0x120u);
     CHECK(out.phdr_vaddr == ELF_ET_DYN_BASE + sizeof(Elf32_Ehdr));
@@ -424,9 +449,9 @@ static void dynamic_images(void)
           out.segs[0].end == ELF_ET_DYN_BASE + 0x2000u);
 
     alloc_reached = 0;
-    CHECK(elf_load_image_at(test_read, 0, &dir, 0, &out) == -ENOEXEC && alloc_reached == 0);
+    CHECK(elf_load_image_at(test_read, 0, &dir, 0, NULL, &out) == -ENOEXEC && alloc_reached == 0);
     alloc_reached = 0;
-    CHECK(elf_load_image_at(test_read, 0, &dir, ELF_ET_DYN_BASE + 0x10u, &out) == -ENOEXEC &&
+    CHECK(elf_load_image_at(test_read, 0, &dir, ELF_ET_DYN_BASE + 0x10u, NULL, &out) == -ENOEXEC &&
           alloc_reached == 0);
 
     img_buf[0x100 + 18] = 'x';
@@ -440,8 +465,115 @@ static void dynamic_images(void)
     base_image(1);
     set_load(0, 0x100u, 0x08048000u, 0x100u, 0x100u, 5u);
     alloc_reached = 0;
-    CHECK(elf_load_image_at(test_read, 0, &dir, ELF_ET_DYN_BASE, &out) == -ENOEXEC &&
+    CHECK(elf_load_image_at(test_read, 0, &dir, ELF_ET_DYN_BASE, NULL, &out) == -ENOEXEC &&
           alloc_reached == 0);
+}
+
+/**
+ * The regions `elf_add_vmas` makes of the image `mapped_segments` loaded,
+ * whose segments map `file`: the file's two pages from page 0, then an
+ * anonymous page for each segment.
+ */
+static void mapped_regions(const elf_image_t *out, struct vm_file *file)
+{
+    vm_space_t vm;
+
+    region_count = 0;
+    CHECK(elf_add_vmas(&vm, out) == 0 && region_count == 3);
+    CHECK(regions[0].start == 0x08048000u && regions[0].end == 0x0804A000u &&
+          regions[0].file == file && regions[0].pgoff == 0);
+    CHECK(regions[1].start == 0x0804A000u && regions[1].end == 0x0804B000u &&
+          regions[1].file == NULL);
+    CHECK(regions[2].start == 0x0804B000u && regions[2].end == 0x0804C000u &&
+          regions[2].file == NULL);
+}
+
+/**
+ * Segments loaded with a file to map. The first, at offset 0, has 0x1100
+ * file bytes in three pages: it takes one frame, at its second page, with
+ * the file's bytes from 0x1000 and zeros after them, and its regions are
+ * the file's two pages from page 0 and an anonymous third. The second, at
+ * file offset 0x1100 and an address 0x200 into its page, cannot be mapped
+ * and is copied into a frame of its own. A mapped segment whose last file
+ * byte lies past the file's end fails the load before any frame is taken.
+ */
+static void mapped_segments(void)
+{
+    static page_dir_t dir;
+    static page_table_t table;
+    struct vm_file *file = (struct vm_file *)&table;
+    elf_image_t out;
+    unsigned char *page;
+    int i;
+
+    base_image(2);
+    set_load(0, 0, 0x08048000u, 0x1100u, 0x3000u, PF_R | PF_W);
+    set_load(1, 0x1100u, 0x0804B200u, 0x10u, 0x10u, PF_R);
+    img_size = 0x1110u;
+    for (i = 0x1000; i < 0x1110; i++) {
+        img_buf[i] = (unsigned char)(i < 0x1100 ? 'f' : 'g');
+    }
+    k_memset(&dir, 0, sizeof(dir));
+    k_memset(&table, 0, sizeof(table));
+    dir.logical_page_tables[0x08048000u / PAGE_SIZE / 1024] = &table;
+    frame_count = 0;
+    map_frames = 1;
+    CHECK(elf_load_image_at(test_read, 0, &dir, 0, file, &out) == 0);
+    map_frames = 0;
+    CHECK(out.file == file && out.nsegs == 2 && frame_count == 2);
+    CHECK(out.segs[0].start == 0x08048000u && out.segs[0].file_end == 0x0804A000u &&
+          out.segs[0].end == 0x0804B000u && out.segs[0].pgoff == 0);
+    CHECK(out.segs[1].start == 0x0804B000u && out.segs[1].file_end == 0x0804B000u);
+    CHECK(paging_user_phys(&dir, 0x08048000u) == 0 && paging_user_phys(&dir, 0x0804A000u) == 0);
+    page = kmap_temp(paging_user_phys(&dir, 0x08049000u));
+    CHECK(page != NULL && page[0] == 'f' && page[0xFF] == 'f' && page[0x100] == 0 &&
+          page[PAGE_SIZE - 1] == 0);
+    page = kmap_temp(paging_user_phys(&dir, 0x0804B000u));
+    CHECK(page != NULL && page[0x1FF] == 0 && page[0x200] == 'g' && page[0x20F] == 'g' &&
+          page[0x210] == 0);
+    mapped_regions(&out, file);
+
+    base_image(1);
+    set_load(0, 0, 0x08048000u, 0x2000u, 0x2000u, PF_R | PF_X);
+    img_size = 0x1FFFu;
+    map_frames = 1;
+    alloc_reached = 0;
+    CHECK(elf_load_image_at(test_read, 0, &dir, 0, file, &out) == -ENOEXEC && alloc_reached == 0);
+    map_frames = 0;
+}
+
+/**
+ * A mapped segment whose memory ends in the page its 0x1100 file bytes end
+ * in, before the file does: that page is loaded at once, with zeros after
+ * the segment's bytes where the file has more, and the region of the file
+ * covers it.
+ */
+static void mapped_bss_page(void)
+{
+    static page_dir_t dir;
+    static page_table_t table;
+    struct vm_file *file = (struct vm_file *)&table;
+    elf_image_t out;
+    unsigned char *page;
+    int i;
+
+    base_image(1);
+    set_load(0, 0, 0x08048000u, 0x1100u, 0x1800u, PF_R | PF_W);
+    img_size = 0x1200u;
+    for (i = 0x1000; i < 0x1200; i++) {
+        img_buf[i] = (unsigned char)(i < 0x1100 ? 'f' : 'g');
+    }
+    k_memset(&dir, 0, sizeof(dir));
+    k_memset(&table, 0, sizeof(table));
+    dir.logical_page_tables[0x08048000u / PAGE_SIZE / 1024] = &table;
+    frame_count = 0;
+    map_frames = 1;
+    CHECK(elf_load_image_at(test_read, 0, &dir, 0, file, &out) == 0);
+    map_frames = 0;
+    CHECK(out.nsegs == 1 && frame_count == 1 && out.segs[0].file_end == 0x0804A000u &&
+          out.segs[0].end == 0x0804A000u);
+    page = kmap_temp(paging_user_phys(&dir, 0x08049000u));
+    CHECK(page != NULL && page[0xFF] == 'f' && page[0x100] == 0 && page[0x1FF] == 0);
 }
 
 /**
@@ -476,7 +608,7 @@ static void read_error(void)
 
 /**
  * Run the rejection rows on an image each, then the read error, reentry, header
- * table and position-independent rows.
+ * table, position-independent and mapped rows.
  *
  * The row of too many program headers covers the whole claimed table with
  * `img_size` and makes phdr[0] a valid PT_LOAD, so the cap on e_phnum is the
@@ -550,6 +682,8 @@ int main(void)
     reentrant_load();
     header_table_bounds();
     dynamic_images();
+    mapped_segments();
+    mapped_bss_page();
 
     dprintf(1, "elf-hosttest: result: %s: %d failures\n", fails ? "fail" : "pass", fails);
     return (fails > 100) ? 100 : fails;

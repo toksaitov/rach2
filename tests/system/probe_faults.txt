@@ -284,6 +284,16 @@ end
 
 # Memory mappings, protection and shared memory.
 
+fault exec-segments-copied
+probe mapmusl
+file rach2/sys/proc/elf.c
+expect MAPMUSL FAIL (a dropped page of the program's data segment did not read its file again
+old
+        if (file == NULL || filesz == 0 || ((off ^ vaddr) & (PAGE_SIZE - 1)) != 0) {
+new
+        if (1) {
+end
+
 fault shmem-truncate-keeps-mapped-page
 probe mapmusl
 file rach2/sys/mm/shmem.c

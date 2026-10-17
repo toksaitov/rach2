@@ -189,7 +189,6 @@ rach2/sys/pci.c:pci_find_nth_by_id nesting 5 a hardware sequence, the registers 
 
 rach2/sys/proc/elf.c:elf_load_image_at complexity 42 one program loaded and entered, its stages in the order the loader takes them
 rach2/sys/proc/elf.c:elf_load_image_at lines 157 one program loaded and entered, its stages in the order the loader takes them
-rach2/sys/proc/elf.c:elf_load_image_at nesting 5 one program loaded and entered, its stages in the order the loader takes them
 
 rach2/sys/arch/x86/cmos.c:rtc_decode complexity 31 a parser over an external format, one check per field in the format's order
 
@@ -290,6 +289,8 @@ tests/dup2test.c:_start lines 173 a probe, one sequence of steps in the order th
 tests/ext2probe.c:links_rows complexity 48 a probe, one sequence of steps in the order the log records them
 tests/ext2probe.c:links_rows lines 134 a probe, one sequence of steps in the order the log records them
 
+tests/fuzz/elf_fuzz.c:vm_insert_file params 7 a stub of vm.c's, whose parameters are the fields of one region
+
 tests/host/acpi_hosttest.c:madt_rows complexity 38 a test's rows, each a case, read as one table
 tests/host/acpi_hosttest.c:qemu_pc_rows complexity 31 a test's rows, each a case, read as one table
 tests/host/acpi_hosttest.c:qemu_q35_rows complexity 28 a test's rows, each a case, read as one table
@@ -312,6 +313,8 @@ tests/host/diskinfo_hosttest.c:main lines 262 a test's rows, each a case, read a
 
 tests/host/e1000_hosttest.c:main complexity 63 a test's rows, each a case, read as one table
 tests/host/e1000_hosttest.c:main lines 408 a test's rows, each a case, read as one table
+
+tests/host/elf_hosttest.c:vm_insert_file params 7 a stub of vm.c's, whose parameters are the fields of one region
 
 tests/host/exfat_hosttest.c:dirty_rows lines 165 a test's rows, each a case, read as one table
 tests/host/exfat_hosttest.c:dirty_rows nesting 5 a test's rows, each a case, read as one table

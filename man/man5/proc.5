@@ -1121,6 +1121,8 @@ for a shared one, and from column 73 the file the region maps,
 .Ql [stack] ,
 the program for the segments of its image, or the dynamic linker the
 program names for the segments of the linker's.
+The offset is the file's at the region's first page, and 0 for a region
+that maps no file.
 The device and inode are not kept and read 0.
 A region with no path ends at the space after the inode, as on Linux.
 It and

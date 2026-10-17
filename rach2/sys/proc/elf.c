@@ -223,7 +223,74 @@ uintptr_t elf_phdr_vaddr(const Elf_Phdr *phdrs, uint16_t phnum, uint64_t phoff)
 
 int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *out)
 {
-    return elf_load_image_at(readfn, ctx, dir, 0, out);
+    return elf_load_image_at(readfn, ctx, dir, 0, NULL, out);
+}
+
+/* Bytes of the file the loader copies: `count` of them from the offset
+ * `off`, to the address `vaddr`. */
+struct elf_bytes {
+    uintptr_t vaddr;
+    uint32_t off;
+    uint32_t count;
+};
+
+/**
+ * Back the pages from `pages->start` to `pages->end` in `dir` with zeroed
+ * frames, read `bytes` of the file into them, and give them the rights of
+ * the segment flags `pages->flags`. 0, or the error `elf_load_image_at`
+ * gives for a page or a read.
+ */
+static int elf_fill(elf_read_fn readfn, void *ctx, page_dir_t *dir, const elf_seg_t *pages,
+                    const struct elf_bytes *bytes)
+{
+    uintptr_t page_addr;
+    uint32_t copied = 0;
+    int rc;
+
+    for (page_addr = pages->start; page_addr < pages->end; page_addr += PAGE_SIZE) {
+        uintptr_t phys_addr = alloc_user_page(dir, page_addr);
+
+        if (phys_addr == 0 || paging_zero_frame(phys_addr) != 0) {
+            return -ENOMEM;
+        }
+    }
+
+    while (copied < bytes->count) {
+        uintptr_t curr_vaddr = bytes->vaddr + copied;
+        uintptr_t page_base = curr_vaddr & ~(uintptr_t)(PAGE_SIZE - 1);
+        uint32_t page_offset = (uint32_t)(curr_vaddr & (PAGE_SIZE - 1));
+        uint32_t chunk_size = PAGE_SIZE - page_offset;
+        uintptr_t phys_base;
+        uint8_t *page;
+
+        if (chunk_size > bytes->count - copied) {
+            chunk_size = bytes->count - copied;
+        }
+        phys_base = paging_user_phys(dir, page_base) & ~(uintptr_t)(PAGE_SIZE - 1);
+        if (!phys_base) {
+            return -ENOMEM;
+        }
+        page = kmap_temp(phys_base);
+        if (!page) {
+            return -ENOMEM;
+        }
+        rc = elf_read_exact(readfn, ctx, page + page_offset, chunk_size, bytes->off + copied);
+        kunmap_temp(page);
+        if (rc != 0) {
+            return rc;
+        }
+        copied += chunk_size;
+    }
+
+    for (page_addr = pages->start; page_addr < pages->end; page_addr += PAGE_SIZE) {
+        if (!(pages->flags & PF_W)) {
+            paging_set_writable(dir, page_addr, false);
+        }
+        if (!(pages->flags & PF_X)) {
+            paging_set_exec(dir, page_addr, false);
+        }
+    }
+    return 0;
 }
 
 /**
@@ -234,12 +301,12 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
  * by page, since two that shared a page would take it twice, leaking a
  * frame and losing the first one's bytes; and a PT_LOAD past ELF_MAX_SEGS
  * fails the load, since a segment without a record would stay writable and
- * have no region. The rights of a page are those of every segment that
- * covers it, write or execute where one of them has it, once every
- * segment's bytes are in place.
+ * have no region. A segment that maps the file has its last file byte read
+ * here, so a file that ends before it fails the load as a copy would, and
+ * not the first touch of the page.
  */
 int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uintptr_t bias,
-                      elf_image_t *out)
+                      struct vm_file *file, elf_image_t *out)
 {
     Elf_Phdr phdrs[ELF_MAX_PHNUM];
     Elf_Ehdr ehdr;
@@ -254,6 +321,7 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uintptr_t 
 
     out->nsegs = 0;
     out->image_end = 0;
+    out->file = file;
 
     rc = elf_read_exact(readfn, ctx, &ehdr, sizeof(ehdr), 0);
     if (rc != 0) {
@@ -274,8 +342,10 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uintptr_t 
 
     for (i = 0; i < ehdr.e_phnum; i++) {
         const Elf_Phdr *ph = &phdrs[i];
-        uintptr_t vaddr, vaddr_end, page_addr;
-        uint32_t file_offset, copied, to_copy;
+        uintptr_t vaddr, vaddr_end, seg_start, seg_end, file_end;
+        uint32_t off, filesz;
+        struct elf_bytes bytes;
+        elf_seg_t *seg;
 
         if (ph->p_type != PT_LOAD) {
             continue;
@@ -297,92 +367,56 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uintptr_t 
         if ((vaddr & ~(uintptr_t)(PAGE_SIZE - 1)) < prev_end) {
             return -ENOEXEC;
         }
-        prev_end = (vaddr_end + PAGE_SIZE - 1) & ~(uintptr_t)(PAGE_SIZE - 1);
+        seg_start = vaddr & ~(uintptr_t)(PAGE_SIZE - 1);
+        seg_end = (vaddr_end + PAGE_SIZE - 1) & ~(uintptr_t)(PAGE_SIZE - 1);
+        prev_end = seg_end;
         nload++;
 
-        {
-            uintptr_t seg_start = vaddr & ~(uintptr_t)(PAGE_SIZE - 1);
-            uintptr_t seg_end = (vaddr_end + PAGE_SIZE - 1) & ~(uintptr_t)(PAGE_SIZE - 1);
-
-            if (out->nsegs >= ELF_MAX_SEGS) {
-                return -ENOEXEC;
-            }
-            out->segs[out->nsegs].start = seg_start;
-            out->segs[out->nsegs].end = seg_end;
-            out->segs[out->nsegs].flags = ph->p_flags;
-            out->nsegs++;
-            if (seg_end > out->image_end) {
-                out->image_end = seg_end;
-            }
+        if (out->nsegs >= ELF_MAX_SEGS) {
+            return -ENOEXEC;
+        }
+        off = (uint32_t)ph->p_offset;
+        filesz = (uint32_t)ph->p_filesz;
+        seg = &out->segs[out->nsegs++];
+        seg->start = seg_start;
+        seg->end = seg_end;
+        seg->file_end = seg_start;
+        seg->pgoff = 0;
+        seg->flags = ph->p_flags;
+        if (seg_end > out->image_end) {
+            out->image_end = seg_end;
         }
 
-        for (page_addr = (vaddr & ~(uintptr_t)(PAGE_SIZE - 1)); page_addr < vaddr_end;
-             page_addr += PAGE_SIZE) {
-            uintptr_t phys_addr = alloc_user_page(dir, page_addr);
-
-            if (phys_addr == 0 || paging_zero_frame(phys_addr) != 0) {
-                return -ENOMEM;
+        bytes.vaddr = vaddr;
+        bytes.off = off;
+        bytes.count = filesz;
+        if (file == NULL || filesz == 0 || ((off ^ vaddr) & (PAGE_SIZE - 1)) != 0) {
+            rc = elf_fill(readfn, ctx, dir, seg, &bytes);
+            if (rc != 0) {
+                return rc;
             }
+            continue;
         }
 
-        file_offset = (uint32_t)ph->p_offset;
-        copied = 0;
-        to_copy = (uint32_t)ph->p_filesz;
+        file_end = (vaddr + filesz + PAGE_SIZE - 1) & ~(uintptr_t)(PAGE_SIZE - 1);
+        seg->file_end = file_end;
+        seg->pgoff = off / PAGE_SIZE;
+        if (ph->p_memsz > filesz && ((vaddr + filesz) & (PAGE_SIZE - 1)) != 0) {
+            elf_seg_t last = *seg;
 
-        while (copied < to_copy) {
-            uintptr_t curr_vaddr = vaddr + copied;
-            uintptr_t page_base = curr_vaddr & ~(uintptr_t)(PAGE_SIZE - 1);
-            uint32_t page_offset = (uint32_t)(curr_vaddr & (PAGE_SIZE - 1));
-            uint32_t chunk_size = PAGE_SIZE - page_offset;
-            uintptr_t phys_base;
+            last.start = file_end - PAGE_SIZE;
+            last.end = file_end;
+            bytes.vaddr = last.start;
+            bytes.off = seg->pgoff * PAGE_SIZE + (uint32_t)(last.start - seg_start);
+            bytes.count = (uint32_t)(vaddr + filesz - last.start);
+            rc = elf_fill(readfn, ctx, dir, &last, &bytes);
+        } else {
+            uint8_t byte;
 
-            if (chunk_size > to_copy - copied) {
-                chunk_size = to_copy - copied;
-            }
-
-            phys_base = paging_user_phys(dir, page_base) & ~(uintptr_t)(PAGE_SIZE - 1);
-            if (!phys_base) {
-                return -ENOMEM;
-            }
-
-            {
-                uint8_t *page = kmap_temp(phys_base);
-
-                if (!page) {
-                    return -ENOMEM;
-                }
-                rc = elf_read_exact(readfn, ctx, page + page_offset, chunk_size,
-                                    file_offset + copied);
-                kunmap_temp(page);
-                if (rc != 0) {
-                    return rc;
-                }
-            }
-            copied += chunk_size;
+            rc = elf_read_exact(readfn, ctx, &byte, 1, off + filesz - 1);
         }
-    }
-
-    {
-        int si, sj;
-
-        for (si = 0; si < out->nsegs; si++) {
-            uintptr_t pg;
-
-            for (pg = out->segs[si].start; pg < out->segs[si].end; pg += PAGE_SIZE) {
-                uint32_t rights = 0;
-
-                for (sj = 0; sj < out->nsegs; sj++) {
-                    if (pg >= out->segs[sj].start && pg < out->segs[sj].end) {
-                        rights |= out->segs[sj].flags;
-                    }
-                }
-                if (!(rights & PF_W)) {
-                    paging_set_writable(dir, pg, false);
-                }
-                if (!(rights & PF_X)) {
-                    paging_set_exec(dir, pg, false);
-                }
-            }
+        if (rc != 0) {
+            return rc;
         }
     }
 
@@ -405,21 +439,25 @@ int elf_add_vmas(struct vm_space *vm, const elf_image_t *img)
     int si;
 
     for (si = 0; si < img->nsegs; si++) {
-        uint32_t flags = img->segs[si].flags;
+        const elf_seg_t *seg = &img->segs[si];
         uint32_t prot = 0;
         vm_type_t vt;
 
-        if (flags & PF_R) {
+        if (seg->flags & PF_R) {
             prot |= VM_PROT_READ;
         }
-        if (flags & PF_W) {
+        if (seg->flags & PF_W) {
             prot |= VM_PROT_WRITE;
         }
-        if (flags & PF_X) {
+        if (seg->flags & PF_X) {
             prot |= VM_PROT_EXEC;
         }
-        vt = (flags & PF_X) ? VM_CODE : VM_DATA;
-        if (vm_insert(vm, img->segs[si].start, img->segs[si].end, prot, vt) != 0) {
+        vt = (seg->flags & PF_X) ? VM_CODE : VM_DATA;
+        if (seg->file_end > seg->start &&
+            vm_insert_file(vm, seg->start, seg->file_end, prot, vt, img->file, seg->pgoff) != 0) {
+            return -1;
+        }
+        if (seg->end > seg->file_end && vm_insert(vm, seg->file_end, seg->end, prot, vt) != 0) {
             return -1;
         }
     }

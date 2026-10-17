@@ -5,10 +5,11 @@
  *
  * Includes elf.c directly, as the host test does, with the page and VMA
  * calls stubbed over a pool of host frames, and loads the input through a
- * read callback over its bytes. A load that fails has rejected the image,
- * which is a valid result; the faults the harness exists to find are a read
- * past the image, a write past a frame and arithmetic that wraps, which the
- * sanitizers report.
+ * read callback over its bytes twice: copied whole, and with a file to map,
+ * which takes the loader's other path for each segment. A load that fails
+ * has rejected the image, which is a valid result; the faults the harness
+ * exists to find are a read past the image, a write past a frame and
+ * arithmetic that wraps, which the sanitizers report.
  */
 #include "proc/elf.c"
 #include "arch/i686/mmu.h"
@@ -124,6 +125,15 @@ int vm_insert(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_
     return 0;
 }
 
+/** Accept every region of a file, as `vm_insert` does. */
+int vm_insert_file(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type,
+                   struct vm_file *file, uint32_t pgoff)
+{
+    (void)file;
+    (void)pgoff;
+    return vm_insert(vm, start, end, prot, type);
+}
+
 /** The kernel's memset, one byte at a time. */
 void *k_memset(void *ptr, int c, size_t n)
 {
@@ -174,24 +184,32 @@ static int image_read(void *ctx, void *dst, uint32_t count, uint32_t off)
 static page_dir_t dir;
 static page_table_t tables[2];
 
-/** Load the input, cut to `IMAGE_MAX` bytes, as a program image. */
+/** Load the input, cut to `IMAGE_MAX` bytes, as a program image, copied
+ * and then mapped from a file that stands for the input. */
 int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
 {
     elf_image_t out;
     unsigned i;
+    int pass;
 
     if (size > IMAGE_MAX) {
         size = IMAGE_MAX;
     }
     k_memcpy(img_buf, data, (size_t)size);
     img_size = (uint32_t)size;
-    frame_count = 0;
-    k_memset(&dir, 0, sizeof(dir));
-    k_memset(tables, 0, sizeof(tables));
-    for (i = 0; i < 2; i++) {
-        dir.logical_page_tables[0x08000000u / PAGE_SIZE / 1024 + i] = &tables[i];
+    for (pass = 0; pass < 2; pass++) {
+        frame_count = 0;
+        k_memset(&dir, 0, sizeof(dir));
+        k_memset(tables, 0, sizeof(tables));
+        for (i = 0; i < 2; i++) {
+            dir.logical_page_tables[0x08000000u / PAGE_SIZE / 1024 + i] = &tables[i];
+        }
+        k_memset(&out, 0, sizeof(out));
+        (void)elf_load_image_at(image_read, 0, &dir, 0,
+                                pass ? (struct vm_file *)(void *)tables : NULL, &out);
+        if (pass) {
+            (void)elf_add_vmas(NULL, &out);
+        }
     }
-    k_memset(&out, 0, sizeof(out));
-    (void)elf_load_image(image_read, 0, &dir, &out);
     return 0;
 }

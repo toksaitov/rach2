@@ -34,7 +34,12 @@
  * losing a store beside it, and its stores reach the file after munmap and
  * after a mapper's exit; on the KRFFS root, one that may be written is ENODEV,
  * and a read-only one through a descriptor open for writing may not be made
- * writable.
+ * writable. A page of the program's own data segment that was written, and
+ * one of its read-only data, read the program's file again after
+ * madvise(MADV_DONTNEED), as on Linux, where exec maps each segment
+ * privately from the file; so do they in a copy of the program run after
+ * it renamed and unlinked its own file. Both run in a child the probe
+ * execs, since the first program a boot loads has its segments copied.
  *
  * Prints `MAPMUSL OK` and exits 0 on success, and prints
  * `MAPMUSL FAIL (detail)` and exits 1 otherwise.
@@ -57,6 +62,8 @@
 
 #define FILE_PATH "/tmp/mapmusl"
 #define SHM_PATH  "/dev/shm/mapmusl"
+#define EXE_PATH  "/tmp/mapmusl.exe"
+#define MOVED     "/tmp/mapmusl.moved"
 #define PAGE      4096
 
 /*
@@ -75,6 +82,13 @@
 #ifndef MADV_DONTNEED_LOCKED
 #define MADV_DONTNEED_LOCKED 24
 #endif
+
+/* Two pages each of the program's initialized data and of its read-only
+ * data, aligned so that nothing else shares their pages. */
+static unsigned char seg_data[2 * PAGE] __attribute__((aligned(PAGE))) = {
+    [0] = 'd', [PAGE - 1] = 'd', [PAGE] = 'e', [2 * PAGE - 1] = 'e'};
+static const unsigned char seg_ro[2 * PAGE] __attribute__((aligned(PAGE))) = {
+    [0] = 'r', [PAGE - 1] = 'r', [PAGE] = 'o', [2 * PAGE - 1] = 'o'};
 
 /** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
@@ -764,11 +778,100 @@ static int root_shared(void)
     return rc;
 }
 
-int main(void)
+/**
+ * Check that the pages of `seg_data`, written, and of `seg_ro`, read, hold
+ * the program file's bytes again after MADV_DONTNEED drops them. The
+ * accesses are volatile, so the compiler reads the memory and not the
+ * initializers. Returns 0, or 1 once the failure is reported.
+ */
+static int segments(void)
 {
+    volatile unsigned char *d = seg_data;
+    const volatile unsigned char *r = seg_ro;
+
+    if (d[0] != 'd' || d[PAGE] != 'e' || r[0] != 'r' || r[PAGE] != 'o') {
+        return fail("the program's data did not hold its file's bytes");
+    }
+    d[0] = 'X';
+    d[PAGE] = 'Y';
+    d[PAGE + 1] = 'Z';
+    if (madvise(seg_data, 2 * PAGE, MADV_DONTNEED) != 0 || d[0] != 'd' || d[PAGE - 1] != 'd' ||
+        d[PAGE] != 'e' || d[PAGE + 1] != 0 || d[2 * PAGE - 1] != 'e') {
+        return fail("a dropped page of the program's data segment did not read its file again");
+    }
+    if (madvise((void *)seg_ro, 2 * PAGE, MADV_DONTNEED) != 0 || r[0] != 'r' ||
+        r[PAGE - 1] != 'r' || r[PAGE] != 'o' || r[2 * PAGE - 1] != 'o') {
+        return fail("a dropped page of the program's read-only data did not read its file again");
+    }
+    return 0;
+}
+
+/**
+ * Run `path`, the program's own file or a copy of it, with the argument
+ * `mode`, "segments" or "unlinked", which `main` answers by checking its
+ * segments (`segments`), after renaming and unlinking its own file for
+ * "unlinked". The check runs in a program that execve loaded, since the
+ * kernel copies the segments of the first program a boot loads, as which
+ * this one may run. Returns whether the child exited with status 0.
+ */
+static int run_segments(const char *path, const char *mode)
+{
+    char *args[3];
+    pid_t pid;
+
+    args[0] = (char *)path;
+    args[1] = (char *)mode;
+    args[2] = NULL;
+    pid = fork();
+    if (pid == 0) {
+        execv(path, args);
+        _exit(1);
+    }
+    return pid > 0 && wait_ok(pid);
+}
+
+/**
+ * Check the program's segments in a child that execs the program, and in
+ * one that execs a copy of it at EXE_PATH and renames and unlinks the copy
+ * first. Returns 0, or 1 once the failure is reported.
+ */
+static int exec_segments(void)
+{
+    static char buf[PAGE];
+    ssize_t n = 0;
+    int in, out;
+
+    if (!run_segments("/proc/self/exe", "segments")) {
+        return fail("the segments of the program run by execve");
+    }
+    in = open("/proc/self/exe", O_RDONLY);
+    out = open(EXE_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0755);
+    while (in >= 0 && out >= 0 && (n = read(in, buf, sizeof(buf))) > 0 &&
+           write(out, buf, (size_t)n) == n) {
+    }
+    if (in < 0 || out < 0 || n != 0 || close(out) != 0) {
+        return fail("a copy of the program");
+    }
+    close(in);
+    if (!run_segments(EXE_PATH, "unlinked")) {
+        unlink(EXE_PATH);
+        return fail("the segments of a program whose file was renamed and unlinked");
+    }
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc == 2 && strcmp(argv[1], "unlinked") == 0 &&
+        (rename(EXE_PATH, MOVED) != 0 || unlink(MOVED) != 0)) {
+        return fail("the rename and the unlink of the program's own file");
+    }
+    if (argc == 2) {
+        return segments();
+    }
     if (private_file() || shared() || root_shared() || truncated_shared() || truncated_wide() ||
         huge_walks() || readonly_shared() || offsets() || remaps() || advice() || forced_write() ||
-        remap_limit()) {
+        remap_limit() || exec_segments()) {
         return 1;
     }
     printf("MAPMUSL OK\n");

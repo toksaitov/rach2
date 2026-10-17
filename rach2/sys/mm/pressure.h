@@ -21,8 +21,8 @@
  * else finds its fork refused with ENOMEM while root can still log in and
  * act. Interrupt handlers and the kernel outside any process take from the
  * reserve. The size is enough for a login: on the console that is a fork by
- * init and two programs loaded whole, over a megabyte, and a machine of
- * 128 MiB keeps back 4 MiB.
+ * init and the pages two programs touch, and a machine of 128 MiB keeps
+ * back 4 MiB.
  */
 #ifndef _PRESSURE_H_
 #define _PRESSURE_H_

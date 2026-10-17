@@ -448,14 +448,14 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
  * then reports unresolved, since reporting it backed would fault on the same
  * instruction forever.
  *
- * A missing page is heap, stack or an anonymous mapping, since exec loads
- * code and data whole, or a page of a file; a page of device memory is
- * never backed here. An anonymous one gets a zeroed frame, read-only in the
- * PTE when its region is, so a later write faults; a grown stack page stays
- * writable. A file's page is read into its frame, which may sleep, and when
- * the regions changed meanwhile the resolution runs again
- * (`vm_resolve_once`), so success always means a page that is present and
- * allows the access.
+ * A missing page is anonymous memory (heap, stack, an anonymous mapping or
+ * a segment's pages past its file bytes) or a page of a file, a segment's
+ * or a mapping's; a page of device memory is never backed here. An
+ * anonymous one gets a zeroed frame, read-only in the PTE when its region
+ * is, so a later write faults; a grown stack page stays writable. A file's
+ * page is read into its frame, which may sleep, and when the regions
+ * changed meanwhile the resolution runs again (`vm_resolve_once`), so
+ * success always means a page that is present and allows the access.
  *
  * Returns 1 if the page is now mapped, 0 if the access is illegal or no
  * frame could be had or zeroed; the fault handler then signals the process,

@@ -38,6 +38,25 @@ own
 .Dv PT_INTERP
 is ignored.
 .Pp
+A segment of the program or of the interpreter whose file offset and
+address agree modulo the page size is mapped privately from its file, as
+on Linux.
+A page of it is read from the file when it is first touched, and again
+after
+.Xr madvise 2
+with
+.Dv MADV_DONTNEED
+drops it; the whole pages past the segment's file bytes are anonymous
+memory, and the page where those bytes end reads zero past them.
+The image keeps the file through a rename or an unlink of its path.
+A segment whose offset and address disagree, and every segment of a file
+on a loop device or a USB stick, is copied into memory by the exec
+instead.
+While the image runs, an open of the program or of the interpreter for
+writing fails with
+.Er ETXTBSY ,
+as on Linux.
+.Pp
 The auxiliary vector on the initial stack has
 .Dv AT_PHDR ,
 .Dv AT_PHENT ,

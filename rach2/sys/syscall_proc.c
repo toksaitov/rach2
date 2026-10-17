@@ -640,9 +640,12 @@ struct exec_file {
     struct vfs_ref ref;      /* the mount is NULL on the KRFFS root and once closed */
     void *handle;
     struct open_file *held; /* the file of the root the new image keeps */
+    struct vm_file *map;    /* a private mapping of the file for its segments, or NULL */
     int32_t err;            /* the errno of a failed read of a mount, which execve reports */
     int readable;           /* whether the caller may read the file itself */
 };
+
+static int mmap_fault_readable(const struct vfs_mount *mnt);
 
 /* What a program's set-id bits would do: the bits that apply, and the file
  * owner's ids they would give. */
@@ -721,11 +724,17 @@ static int32_t exec_load_err(const struct exec_file *f, int rc, int32_t malforme
     return rc == -ENOEXEC ? malformed : rc;
 }
 
-/** Release the handle and the node `f` holds on another mount, if any; a
- * file of the root the new address space keeps stays with it. */
+/** Release the handle and the node `f` holds on another mount, if any, and
+ * the mapping of the file the loader did not take; a file of the root the
+ * new address space keeps stays with it. */
 static void exec_file_close(struct exec_file *f)
 {
     f->held = NULL;
+    if (f->map) {
+        vm_file_put(f->map);
+        f->map = NULL;
+        vm_file_reap();
+    }
     if (f->ref.mnt) {
         vfs_release(f->ref.mnt, f->handle);
         vfs_ref_release(&f->ref);
@@ -782,9 +791,10 @@ struct exec_state {
 
 /** Give back the current process's exec workspace, if it has one: the
  * file held open, the frames of a stack no page directory took, the
- * address space of an image that did not commit, the storage of a
- * descriptor table it did not install, which holds no references, the
- * hold on CLONE_FS, and the workspace itself. */
+ * address space of an image that did not commit, the references to the
+ * files the images map, which their regions hold on their own, the
+ * storage of a descriptor table it did not install, which holds no
+ * references, the hold on CLONE_FS, and the workspace itself. */
 static void exec_release(void)
 {
     struct exec_state *s = current_proc->exec_ws;
@@ -798,6 +808,9 @@ static void exec_release(void)
     exec_file_close(&s->prog);
     uimage_release(&s->args);
     mm_put(s->mm);
+    vm_file_put(s->img.file);
+    vm_file_put(s->iimg.file);
+    vm_file_reap();
     if (s->files != NULL) {
         fd_table_delete(s->files);
     }
@@ -1164,6 +1177,53 @@ static int32_t exec_keep(struct exec_file *f, const struct vfs_ref *ref, struct 
 }
 
 /**
+ * Make `f->map` a private mapping of the file at `ref`, whose attributes on
+ * a mount other than the KRFFS root are `vst`, for the loader to map the
+ * file's segments by (`elf_load_image_at`), as Linux's `elf_map` maps them
+ * from the open file. The mapping keeps a description of the file open for
+ * reading, in a copy of a descriptor no table has (`filemap_new`), so the
+ * image keeps its file through a close, a rename or an unlink, as a mapping
+ * by mmap does. A file that is not regular, or one on a disk a page fault
+ * cannot read (`mmap_fault_readable`), gets none, and the loader copies its
+ * segments. 0, or -ENOMEM or the open's error.
+ */
+static int32_t exec_map(struct exec_file *f, const struct vfs_ref *ref, const struct vfs_stat *vst)
+{
+    const krffs_node_t *node = ref->node;
+    int root = mnt_is_root(ref->mnt);
+    uint32_t type = root ? krffs_mode_type(node->mode) : vst->mode & 0170000u;
+    struct open_file *ofd;
+    fd_entry_t e;
+    int32_t rc;
+
+    if (type != 0100000u || !mmap_fault_readable(ref->mnt)) {
+        return 0;
+    }
+    ofd = fd_ofd_new();
+    if (!ofd) {
+        return -ENOMEM;
+    }
+    rc = vfs_open_node(ref->mnt, ref->node, 0, &ofd->fhandle);
+    if (rc != 0) {
+        fd_ofd_unref(ofd);
+        return rc;
+    }
+    vfs_ref_hold(ref);
+    ofd->vmnt = ref->mnt;
+    ofd->vnode = ref->node;
+    ofd->ino = root ? krffs_node_ino(node) : vst->ino;
+    vfs_desc_open(ref->mnt);
+    k_memset(&e, 0, sizeof(e));
+    e.type = FD_TYPE_FILE;
+    e.flags = FD_FLAG_READ;
+    e.ofd = ofd;
+    e.node = root ? ref->node : NULL;
+    f->map = filemap_new(&e);
+    fd_ofd_unref(ofd);
+    return f->map ? 0 : -ENOMEM;
+}
+
+/**
  * Open the file at the absolute, canonical `path` into `f` for execve to
  * read, and when `id` is not NULL, say in it what the file's set-id bits
  * would do. `path` starts at the caller's root, which chroot may have
@@ -1172,7 +1232,8 @@ static int32_t exec_keep(struct exec_file *f, const struct vfs_ref *ref, struct 
  * still holds the node's mount locked; one on the KRFFS root is then read
  * through that, and any other file on the root by its node's own path, which
  * `f` keeps. `f` also says whether the caller may read the file, which the
- * kernel loads for it with the execute right alone.
+ * kernel loads for it with the execute right alone, and has the mapping of
+ * the file the loader maps its segments by (`exec_map`).
  *
  * A path that named a directory by its end, `end` (`copy_path_cwd`), must
  * reach one, and the walk that finds the file answers for it
@@ -1212,6 +1273,7 @@ static int32_t exec_open(struct exec_file *f, const char *path, int end, struct 
     f->ref.mnt = NULL;
     f->handle = NULL;
     f->held = NULL;
+    f->map = NULL;
     f->err = 0;
     f->readable = 0;
     rc = resolve_named(path + (path[0] == '/'), VFS_WALK_LOCK, end, &ref);
@@ -1249,6 +1311,9 @@ static int32_t exec_open(struct exec_file *f, const char *path, int end, struct 
         if (rc == 0) {
             f->ref = ref; /* held until exec_file_close */
         }
+    }
+    if (rc == 0) {
+        rc = exec_map(f, &ref, &vst);
     }
     if (rc == 0 && keep != NULL) {
         rc = exec_keep(f, &ref, keep, link);
@@ -1444,7 +1509,8 @@ static int32_t exec_interp(struct exec_state *s, uintptr_t *base)
     if (s->ilayout.lo + bias < s->img.image_end && s->ilayout.hi + bias > s->img.segs[0].start) {
         return -ENOMEM;
     }
-    rc = elf_load_image_at(exec_file_read, &s->prog, s->mm->dir, bias, &s->iimg);
+    rc = elf_load_image_at(exec_file_read, &s->prog, s->mm->dir, bias, s->prog.map, &s->iimg);
+    s->prog.map = NULL;
     if (rc != 0) {
         return exec_load_err(&s->prog, rc, -ELIBBAD);
     }
@@ -1459,7 +1525,10 @@ static int32_t exec_interp(struct exec_state *s, uintptr_t *base)
  * still runs, as Linux's `load_elf_binary` builds one: the program, at
  * ELF_ET_DYN_BASE when it is position-independent; the interpreter its
  * PT_INTERP names; the regions; and the stack, with the pointers and the
- * auxiliary vector below its strings. The stack may grow to the soft
+ * auxiliary vector below its strings. Each of the program and the
+ * interpreter maps its segments from its file where it can, and the
+ * reference to the file's mapping goes from the open file to the image,
+ * which keeps it until `exec_release`. The stack may grow to the soft
  * RLIMIT_STACK, lowered to 8 MiB for an image that runs with ids its
  * caller lacks, and the regions may cover no more than RLIMIT_AS. The
  * caller's image is untouched, so every failure is an error execve
@@ -1482,7 +1551,8 @@ static int32_t exec_build(struct exec_state *s)
     if (s->layout.type == ET_DYN && s->layout.lo < ELF_ET_DYN_BASE) {
         bias = ELF_ET_DYN_BASE - s->layout.lo;
     }
-    rc = elf_load_image_at(exec_file_read, &s->prog, s->mm->dir, bias, &s->img);
+    rc = elf_load_image_at(exec_file_read, &s->prog, s->mm->dir, bias, s->prog.map, &s->img);
+    s->prog.map = NULL;
     if (rc != 0) {
         return exec_load_err(&s->prog, rc, -ENOEXEC);
     }
