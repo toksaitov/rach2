@@ -93,17 +93,10 @@ runlock_hold "$repo" stackoverrun-proof "$repo/tests/system/stackoverrun_mutate.
 }
 make -s build/tools/inspect/elfcheck build/tests/system/harness build/tests/system/runutil "ARCH=$RACH2_ARCH"
 mkdir -p build
-work=$(mktemp -d "$repo/build/stackoverrun-proof.XXXXXX")
-cp -R rach2 mk "$work/"
-mkdir -p "$work/build/tools/inspect"
-cp build/tools/inspect/elfcheck "$work/build/tools/inspect/"
-cat >"$work/Makefile" <<'MAKE'
-build/tools/inspect/elfcheck:
-	@test -x "$@"
-MAKE
-cp "$tree"/images/test.krffs "$work/test.krffs"
+work=
 child=
 file=
+keep=
 
 # Stop the running row's process group.
 stop_child()
@@ -114,10 +107,30 @@ stop_child()
         child=
     fi
 }
-trap stop_child EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+
+# Stop the row, then remove the work directory, unless the proof failed after
+# printing its path, which sets `keep`; a signal clears `keep`.
+cleanup()
+{
+    exit_status=$?
+    stop_child
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf ${work:+"$work"}
+    fi
+}
+trap cleanup EXIT
+trap 'keep=; exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
+work=$(mktemp -d "$repo/build/stackoverrun-proof.XXXXXX")
+cp -R rach2 mk "$work/"
+mkdir -p "$work/build/tools/inspect"
+cp build/tools/inspect/elfcheck "$work/build/tools/inspect/"
+cat >"$work/Makefile" <<'MAKE'
+build/tools/inspect/elfcheck:
+	@test -x "$@"
+MAKE
+cp "$tree"/images/test.krffs "$work/test.krffs"
 
 # run_row PHASE WHERE: the row for the stack WHERE on PHASE's kernel, in a
 # process group of its own, with its line in $row and its status in $status.
@@ -192,6 +205,7 @@ restore()
 }
 
 echo "stackoverrun-proof: logs: $work"
+keep=1
 build fixed
 judge fixed fork pass
 judge fixed boot pass

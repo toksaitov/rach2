@@ -52,11 +52,11 @@ tree=build$ARCH_SUFFIX
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" pty-hangup "$repo/tests/system/pty_hangup_mutate.sh" "$@"
 mkdir -p build
-work=$(mktemp -d "$repo/build/pty-hangup.XXXXXX")
+work=
 source=rach2/sys/tty/pty.c
-cp "$source" "$work/pty.saved"
 child=
 changed=
+keep=
 
 # Stop the running boot's process group and wait until it is gone.
 stop_child()
@@ -87,18 +87,26 @@ restore()
 }
 
 # Stop the boot and, when a fault is in the source, restore it and rebuild.
+# The work directory is removed too, unless the proof failed after printing
+# its path, which sets `keep`; a signal clears `keep`.
 cleanup()
 {
+    exit_status=$?
     stop_child
     if [ -n "$changed" ]; then
         restore
         rebuild >"$work/cleanup.build.log" 2>&1
     fi
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf ${work:+"$work"}
+    fi
 }
 trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'keep=; exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
+work=$(mktemp -d "$repo/build/pty-hangup.XXXXXX")
+cp "$source" "$work/pty.saved"
 
 # run_probe EXPECTED: boot the kernel and run ptyprobe. With EXPECTED `pass`
 # it must pass; otherwise it must fail with the words in `detail`.
@@ -144,6 +152,7 @@ run_phase()
 }
 
 echo "pty-hangup: logs: $work"
+keep=1
 make -s -C tests ../"$tree"/tests/ptyprobe "ARCH=$RACH2_ARCH" >"$work/build.log" 2>&1
 # These three image tools do not use mkhash's vendored crypt source.
 make -s -C krffs -o libc-check ../build/krffs/mkfs.krffs \

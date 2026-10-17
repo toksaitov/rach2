@@ -55,7 +55,6 @@ if [ -z "$check_only" ]; then
     . "$repo/tests/system/runlock.sh"
     runlock_hold "$repo" probe-faults "$repo/tests/system/probe_faults.sh" -s "$shard" "$@"
     mkdir -p build/tests
-    work=$(mktemp -d "$repo/build/tests/probe-faults.XXXXXX")
 fi
 
 # `faults select SHARD [NAME...]` prints the chosen faults, one a line, as
@@ -133,20 +132,12 @@ if [ -n "$check_only" ]; then
     faults check
     exit
 fi
-faults select "$shard" "$@" >"$work/selected"
-[ -s "$work/selected" ] || { echo 'probe-faults: no fault selected' >&2; exit 2; }
-tab=$(printf '\t')
-while IFS=$tab read -r _ _ file _; do
-    if [ ! -f "$work/saved/$file" ]; then
-        mkdir -p "$work/saved/$(dirname "$file")"
-        cp "$file" "$work/saved/$file"
-    fi
-done <"$work/selected"
-cc -O2 -Wall -Wextra -Werror tests/system/runner/runutil.c -o "$work/runutil"
+work=
 child=
 changed=
 built=
 missed=
+keep=
 
 # Stop the running boot's process group and wait until it is gone.
 stop_child()
@@ -171,19 +162,36 @@ restore()
     fi
 }
 
-# Stop the suite, restore the file, and rebuild when a fault was built.
+# Stop the suite, restore the file, and rebuild when a fault was built. The
+# work directory is removed too, unless the proof failed after printing its
+# path, which sets `keep`; a signal clears `keep`.
 cleanup()
 {
+    exit_status=$?
     stop_child
     restore
     if [ -n "$built" ]; then
         make -s rach2 test-image "ARCH=$RACH2_ARCH" >"$work/cleanup.build.log" 2>&1 </dev/null || :
     fi
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf ${work:+"$work"}
+    fi
 }
 trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'keep=; exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
+work=$(mktemp -d "$repo/build/tests/probe-faults.XXXXXX")
+faults select "$shard" "$@" >"$work/selected"
+[ -s "$work/selected" ] || { echo 'probe-faults: no fault selected' >&2; exit 2; }
+tab=$(printf '\t')
+while IFS=$tab read -r _ _ file _; do
+    if [ ! -f "$work/saved/$file" ]; then
+        mkdir -p "$work/saved/$(dirname "$file")"
+        cp "$file" "$work/saved/$file"
+    fi
+done <"$work/selected"
+cc -O2 -Wall -Wextra -Werror tests/system/runner/runutil.c -o "$work/runutil"
 
 # The kernel and the programs of the architecture's tests, tests/musl and
 # utils, as checksums in a stable order.
@@ -225,6 +233,7 @@ probe_fault()
 }
 
 echo "probe-faults: logs: $work"
+keep=1
 make -s rach2 test-image "ARCH=$RACH2_ARCH" >"$work/first.build.log" 2>&1 </dev/null ||
     { cat "$work/first.build.log"; exit 1; }
 products >"$work/first.sums"

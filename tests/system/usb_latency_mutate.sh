@@ -78,17 +78,11 @@ for artifact in "$harness" "$runner" "$image" "$checker"; do
         exit 1
     fi
 done
-work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-usb-latency.XXXXXX")
-cp -R rach2 mk "$work/"
-# The kernel's link asks the directory above rach2/ for the ELF checker; the
-# private tree's has a rule with nothing to do, and ELFCHECK names the built
-# one.
-printf 'build/tools/inspect/elfcheck: ;\n' >"$work/Makefile"
-isr=$work/rach2/sys/arch/x86/isr.c
-syscall=$work/rach2/sys/syscall.c
-cp "$isr" "$work/isr.c.saved"
-cp "$syscall" "$work/syscall.c.saved"
+work=
+isr=
+syscall=
 child=
+keep=
 
 # Stop the running boot's process group and wait until it is gone.
 stop_child()
@@ -109,16 +103,34 @@ restore()
     touch "$isr" "$syscall"
 }
 
-# Stop the rows and restore the sources.
+# Stop the rows and restore the sources. The work directory is removed too,
+# unless the proof failed after printing its path, which sets `keep`; a
+# signal clears `keep`.
 cleanup()
 {
+    exit_status=$?
     stop_child
-    restore
+    if [ -n "$work" ] && [ -f "$work/syscall.c.saved" ]; then
+        restore
+    fi
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf ${work:+"$work"}
+    fi
 }
 trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'keep=; exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
+work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-usb-latency.XXXXXX")
+cp -R rach2 mk "$work/"
+# The kernel's link asks the directory above rach2/ for the ELF checker; the
+# private tree's has a rule with nothing to do, and ELFCHECK names the built
+# one.
+printf 'build/tools/inspect/elfcheck: ;\n' >"$work/Makefile"
+isr=$work/rach2/sys/arch/x86/isr.c
+syscall=$work/rach2/sys/syscall.c
+cp "$isr" "$work/isr.c.saved"
+cp "$syscall" "$work/syscall.c.saved"
 
 # build PHASE: build the harness kernel from the private tree and keep a copy.
 build()
@@ -171,6 +183,7 @@ mutate()
 }
 
 echo "usb-latency-mutation: logs: $work"
+keep=1
 run_rows fixed ''
 mutate preempt
 run_rows preempt-mutated spin

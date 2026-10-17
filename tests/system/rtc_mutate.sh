@@ -57,13 +57,11 @@ esac
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" rtc-mutation "$repo/tests/system/rtc_mutate.sh" "$@"
 mkdir -p build/clock-proof
-work=$(mktemp -d "$repo/build/clock-proof/mutation.XXXXXX")
-cp rach2/sys/clock.c "$work/source.saved"
-source="$work/clock.c"
-[ "$mode" != --guest ] || source=rach2/sys/clock.c
-cp "$work/source.saved" "$source"
+work=
+source=
 child=
 changed=
+keep=
 
 # Stop the running boot's process group and wait until it is gone.
 stop_child()
@@ -87,9 +85,12 @@ restore()
 }
 
 # Stop the boot and, when the fault is in the source, restore it, and with
-# --guest rebuild the kernel.
+# --guest rebuild the kernel. The work directory is removed too, unless the
+# proof failed after printing its path, which sets `keep`; a signal clears
+# `keep`.
 cleanup()
 {
+    exit_status=$?
     stop_child
     if [ -n "$changed" ]; then
         restore
@@ -97,11 +98,19 @@ cleanup()
             make -s rach2 "ARCH=$RACH2_ARCH" >"$work/cleanup.build.log" 2>&1
         fi
     fi
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf ${work:+"$work"}
+    fi
 }
 trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'keep=; exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
+work=$(mktemp -d "$repo/build/clock-proof/mutation.XXXXXX")
+cp rach2/sys/clock.c "$work/source.saved"
+source="$work/clock.c"
+[ "$mode" != --guest ] || source=rach2/sys/clock.c
+cp "$work/source.saved" "$source"
 
 # run_phase PHASE EXPECTED: compile and run the host test, and with --guest
 # build the kernel and run stattest on the KRFFS root. With EXPECTED `pass`
@@ -153,6 +162,7 @@ run_phase()
 }
 
 echo "rtc-mutation: logs: $work"
+keep=1
 if [ "$mode" = --guest ]; then
     make -s test-image build/tests/system/harness build/tests/system/runutil \
         "ARCH=$RACH2_ARCH" >"$work/prepare.log" 2>&1

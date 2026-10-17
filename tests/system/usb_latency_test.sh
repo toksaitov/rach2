@@ -62,11 +62,9 @@ fi
 
 
 mkdir -p build/tests
-work=$(mktemp -d "$repo/build/tests/usb-latency-proof.XXXXXX")
-cp -R rach2/sys "$work/sys"
-cp "$work/sys/usb/stamp.c" "$work/stamp.saved"
-cp "$work/sys/proc/sched.c" "$work/sched.saved"
+work=
 child=
+keep=
 
 # Stop the running test, and put back the saved stamp.c and sched.c and touch
 # them.
@@ -81,10 +79,28 @@ restore()
     cp "$work/sched.saved" "$work/sys/proc/sched.c"
     touch "$work/sys/usb/stamp.c" "$work/sys/proc/sched.c"
 }
-trap restore EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+
+# Restore once the sources are saved, then remove the work directory, unless
+# the test failed after printing its path, which sets `keep`; a signal clears
+# `keep`.
+cleanup()
+{
+    exit_status=$?
+    if [ -n "$work" ] && [ -f "$work/sched.saved" ]; then
+        restore
+    fi
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf ${work:+"$work"}
+    fi
+}
+trap cleanup EXIT
+trap 'keep=; exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
+work=$(mktemp -d "$repo/build/tests/usb-latency-proof.XXXXXX")
+cp -R rach2/sys "$work/sys"
+cp "$work/sys/usb/stamp.c" "$work/stamp.saved"
+cp "$work/sys/proc/sched.c" "$work/sched.saved"
 
 # run_phase PHASE EXPECTED: build the host test from the private sources and
 # run it, which must exit with EXPECTED, then run it in each mode and judge
@@ -135,6 +151,7 @@ run_phase()
 }
 
 echo "usb-latency-test: logs: $work"
+keep=1
 run_phase fixed 0
 if [ "${1:-}" = --mutate ]; then
     for fault in cutoff dispatch; do

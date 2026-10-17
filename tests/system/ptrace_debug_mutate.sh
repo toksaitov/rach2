@@ -91,16 +91,13 @@ REPO=$repo
 RACH2_QEMU=$ARCH_QEMU
 export RACH2_QEMU
 mkdir -p build/tests
-work=$(mktemp -d "$repo/build/tests/ptrace-debug.XXXXXX")
+work=
 sources='rach2/sys/syscall.c rach2/sys/syscall_proc.c rach2/sys/arch/x86/debugreg.c
     rach2/sys/arch/x86_64/idt.c rach2/sys/arch/x86_64/isr_handler.s'
-for file in $sources; do
-    mkdir -p "$work/saved/$(dirname "$file")"
-    cp "$file" "$work/saved/$file"
-done
 child=
 changed=
 kvm=
+keep=
 
 # Stop the running boot's process group and wait until it is gone.
 stop_child()
@@ -131,18 +128,29 @@ rebuild()
 }
 
 # Stop the boot and, when a fault is in the source, restore it and rebuild.
+# The work directory is removed too, unless the proof failed after printing
+# its path, which sets `keep`; a signal clears `keep`.
 cleanup()
 {
+    exit_status=$?
     stop_child
     if [ -n "$changed" ]; then
         restore
         rebuild >"$work/cleanup.build.log" 2>&1
     fi
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf ${work:+"$work"}
+    fi
 }
 trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'keep=; exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
+work=$(mktemp -d "$repo/build/tests/ptrace-debug.XXXXXX")
+for file in $sources; do
+    mkdir -p "$work/saved/$(dirname "$file")"
+    cp "$file" "$work/saved/$file"
+done
 
 # mutate FAULT: mark the sources changed and put FAULT in.
 mutate()
@@ -199,6 +207,7 @@ run_phase()
 }
 
 printf 'ptrace-debug: logs: %s\n' "$work"
+keep=1
 make -s ARCH="$RACH2_ARCH" musl build/tests/system/harness build/tests/system/runutil \
     >"$work/build.log" 2>&1
 vendor/musl/muslgcc -O2 -Wall -Wextra -Werror -Wl,-z,noexecstack \

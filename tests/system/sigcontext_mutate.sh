@@ -47,11 +47,11 @@ fi
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" sigcontext-mutation "$repo/tests/system/sigcontext_mutate.sh" "$@"
 mkdir -p build
-work=$(mktemp -d "$repo/build/sigcontext-proof.XXXXXX")
+work=
 source=rach2/sys/arch/i686/sigframe.c
-cp "$source" "$work/source.saved"
 child=
 changed=
+keep=
 
 # Stop the running boot's process group and wait until it is gone.
 stop_child()
@@ -82,18 +82,26 @@ restore()
 }
 
 # Stop the boot and, when a fault is in the source, restore it and rebuild.
+# The work directory is removed too, unless the proof failed after printing
+# its path, which sets `keep`; a signal clears `keep`.
 cleanup()
 {
+    exit_status=$?
     stop_child
     if [ -n "$changed" ]; then
         restore
         rebuild >"$work/cleanup.build.log" 2>&1
     fi
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf ${work:+"$work"}
+    fi
 }
 trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'keep=; exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
+work=$(mktemp -d "$repo/build/sigcontext-proof.XXXXXX")
+cp "$source" "$work/source.saved"
 
 # run_phase PHASE EXPECTED: build the kernel and run sigmusl on it with FXSR
 # and with rach2.nofxsr. With EXPECTED `pass` both must pass; otherwise both
@@ -140,6 +148,7 @@ run_phase()
 }
 
 echo "sigcontext-mutation: logs: $work"
+keep=1
 make -s rach2 tests musl-programs utils ish krffs \
     build/tests/system/harness build/tests/system/runutil >"$work/build.log" 2>&1
 make -s test-image >>"$work/build.log" 2>&1

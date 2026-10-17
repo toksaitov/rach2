@@ -66,16 +66,10 @@ for artifact in build/tools/inspect/elfcheck build/tests/system/harness \
     [ -x "$artifact" ] || { echo "sb16-mutation: missing $artifact" >&2; exit 1; }
 done
 mkdir -p build/review-proof
-work=$(mktemp -d "$repo/build/review-proof/sb16.XXXXXX")
-cp -R rach2 mk "$work/"
-mkdir -p "$work/build/tools/inspect"
-cp build/tools/inspect/elfcheck "$work/build/tools/inspect/"
-cat > "$work/Makefile" <<'MAKE'
-build/tools/inspect/elfcheck:
-	@test -x "$@"
-MAKE
+work=
 source=
 child=
+keep=
 # Stop the running boot, and put back the saved source when a fault is in it.
 restore()
 {
@@ -89,10 +83,32 @@ restore()
         touch "$source"
     fi
 }
-trap restore EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+
+# Restore once the source is saved, then remove the work directory, unless
+# the proof failed after printing its path, which sets `keep`; a signal
+# clears `keep`.
+cleanup()
+{
+    exit_status=$?
+    if [ -z "$source" ] || [ -f "$work/saved.c" ]; then
+        restore
+    fi
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf ${work:+"$work"}
+    fi
+}
+trap cleanup EXIT
+trap 'keep=; exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
+work=$(mktemp -d "$repo/build/review-proof/sb16.XXXXXX")
+cp -R rach2 mk "$work/"
+mkdir -p "$work/build/tools/inspect"
+cp build/tools/inspect/elfcheck "$work/build/tools/inspect/"
+cat > "$work/Makefile" <<'MAKE'
+build/tools/inspect/elfcheck:
+	@test -x "$@"
+MAKE
 
 # run_phase PHASE: build the private kernel and run `audio test scale 2000`
 # on it, with the SB16's output recorded to a WAV file. With the `rate` fault
@@ -141,6 +157,7 @@ run_phase()
 }
 
 echo "sb16-mutation: logs: $work"
+keep=1
 for fault in rate refill; do
     case "$fault" in
         rate) source="$work/rach2/sys/audio/audio_debug.c" ;;

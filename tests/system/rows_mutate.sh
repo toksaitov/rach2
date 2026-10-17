@@ -89,16 +89,12 @@ tree=build$ARCH_SUFFIX
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" rows-mutation "$repo/tests/system/rows_mutate.sh" "$@"
 mkdir -p build/tests
-work=$(mktemp -d "$repo/build/tests/rows-mutation.XXXXXX")
+work=
 sources="tests/run rach2/sys/fs/devfs.c rach2/sys/syscall_proc.c rach2/sys/fs/procfs.c
 krffs/manifests/rach2-metal-disk.manifest tests/system/suites.mk"
-for f in $sources; do
-    mkdir -p "$work/saved/$(dirname "$f")"
-    cp "$f" "$work/saved/$f"
-done
-cc -O2 -Wall -Wextra -Werror tests/system/runner/runutil.c -o "$work/runutil"
 child=
 changed=
+keep=
 
 # Stop the running boot's process group and wait until it is gone.
 stop_child()
@@ -123,19 +119,31 @@ restore()
     fi
 }
 
-# Stop the row and, when a fault is in a source, restore it and rebuild.
+# Stop the row and, when a fault is in a source, restore it and rebuild. The
+# work directory is removed too, unless the proof failed after printing its
+# path, which sets `keep`; a signal clears `keep`.
 cleanup()
 {
+    exit_status=$?
     stop_child
     if [ -n "$changed" ]; then
         restore
         make -s rach2 test-image "ARCH=$RACH2_ARCH" >"$work/cleanup.build.log" 2>&1 || :
     fi
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf ${work:+"$work"}
+    fi
 }
 trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'keep=; exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
+work=$(mktemp -d "$repo/build/tests/rows-mutation.XXXXXX")
+for f in $sources; do
+    mkdir -p "$work/saved/$(dirname "$f")"
+    cp "$f" "$work/saved/$f"
+done
+cc -O2 -Wall -Wextra -Werror tests/system/runner/runutil.c -o "$work/runutil"
 
 # mutate NAME: put NAME's fault into its source, named in `changed`, and
 # touch it.
@@ -200,6 +208,7 @@ probe_phase()
 }
 
 echo "rows-mutation: logs: $work"
+keep=1
 make -s rach2 "ARCH=$RACH2_ARCH" >"$work/first.build.log" 2>&1 ||
     { cat "$work/first.build.log"; exit 1; }
 cp "$tree"/rach2/kernel "$work/first.kernel"

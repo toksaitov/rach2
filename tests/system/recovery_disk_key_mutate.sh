@@ -19,9 +19,9 @@
 # it starting the server one turn of its loop late, where row 6c must find
 # init's line that it started the server, the second only because the row
 # reads the log at a console session init forks after its second test for a
-# key; and restored a last time. The trap stops the row's process group and
-# restores both sources. --texts checks that each fault is once in its
-# source.
+# key; and restored a last time. The trap stops the row's process group,
+# restores both sources, and removes the work directory unless the proof
+# failed. --texts checks that each fault is once in its source.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -90,22 +90,9 @@ fi
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" recovery-disk-key-mutation "$repo/tests/system/recovery_disk_key_mutate.sh" "$@"
 mkdir -p build
-work=$(mktemp -d "$repo/build/recovery-disk-key-proof.XXXXXX")
-echo "recovery-disk-key-mutation: logs: $work"
-# The tree with its built programs, so nothing is built again, and without
-# the images, which the rows make, the GNU layers and the failed runs' logs,
-# a hundred gigabytes on a host that has built the GNU system.
-rsync -a --exclude=/.git --exclude=/build/.run.lock --exclude=/build/images \
-    --exclude='/build/*/images' --exclude=/build/vendor/gnu --exclude='/build/*/vendor/gnu' \
-    --exclude=/build/tests/failed --exclude='/build/machine-*' --exclude='/build/*-proof.*' \
-    "$repo/" "$work/tree/"
-cd "$work/tree"
-ARCH_BUILD=$work/tree/build$ARCH_SUFFIX
-init_source="$work/tree/utils/init.c"
-installer_source="$work/tree/utils/rach2-install"
-cp "$init_source" "$work/init.saved"
-cp "$installer_source" "$work/installer.saved"
+work=
 child=
+keep=
 
 # Stop the row's process group and wait until it is gone.
 stop_child()
@@ -128,16 +115,40 @@ restore()
     touch "$init_source" "$installer_source"
 }
 
-# Stop the row and restore both sources.
+# Stop the row and restore both sources. The work directory is removed too,
+# unless the proof failed after printing its path, which sets `keep`; a
+# signal clears `keep`.
 cleanup()
 {
+    exit_status=$?
     stop_child
-    restore
+    if [ -n "$work" ] && [ -f "$work/installer.saved" ]; then
+        restore
+    fi
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf ${work:+"$work"}
+    fi
 }
 trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'keep=; exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
+work=$(mktemp -d "$repo/build/recovery-disk-key-proof.XXXXXX")
+echo "recovery-disk-key-mutation: logs: $work"
+keep=1
+# The tree with its built programs, so nothing is built again, and without
+# the images, which the rows make, the GNU layers and the failed runs' logs,
+# a hundred gigabytes on a host that has built the GNU system.
+rsync -a --exclude=/.git --exclude=/build/.run.lock --exclude=/build/images \
+    --exclude='/build/*/images' --exclude=/build/vendor/gnu --exclude='/build/*/vendor/gnu' \
+    --exclude=/build/tests/failed --exclude='/build/machine-*' --exclude='/build/*-proof.*' \
+    "$repo/" "$work/tree/"
+cd "$work/tree"
+ARCH_BUILD=$work/tree/build$ARCH_SUFFIX
+init_source="$work/tree/utils/init.c"
+installer_source="$work/tree/utils/rach2-install"
+cp "$init_source" "$work/init.saved"
+cp "$installer_source" "$work/installer.saved"
 
 # run_phase PHASE STATUS MESSAGE: each phase rebuilds the recovery init and
 # every image that stages it or the installer, from nothing: an image whose

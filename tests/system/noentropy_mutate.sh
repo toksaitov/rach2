@@ -100,13 +100,10 @@ for fault do
     esac
 done
 mkdir -p build
-work=$(mktemp -d "$repo/build/noentropy-proof.XXXXXX")
-for source in rach2/sys/fs/devfs.c rach2/sys/syscall.c; do
-    cp "$source" "$work/$(basename "$source").saved"
-done
-cc -O2 -Wall -Wextra -Werror tests/system/runner/runutil.c -o "$work/runutil"
+work=
 child=
 changed=
+keep=
 
 # Stop the running boot's process group and wait until it is gone.
 stop_child()
@@ -139,19 +136,30 @@ restore()
 }
 
 # Stop the boot and, when a fault is in the source, restore it and rebuild.
+# The work directory is removed too, unless the proof failed after printing
+# its path, which sets `keep`; a signal clears `keep`.
 cleanup()
 {
+    exit_status=$?
     stop_child
     if [ -n "$changed" ]; then
         restore
         force_rebuild
         make -C rach2 "ARCH=$RACH2_ARCH" >"$work/cleanup.build.log" 2>&1
     fi
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf ${work:+"$work"}
+    fi
 }
 trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'keep=; exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
+work=$(mktemp -d "$repo/build/noentropy-proof.XXXXXX")
+for source in rach2/sys/fs/devfs.c rach2/sys/syscall.c; do
+    cp "$source" "$work/$(basename "$source").saved"
+done
+cc -O2 -Wall -Wextra -Werror tests/system/runner/runutil.c -o "$work/runutil"
 
 # build_kernel PHASE: the kernel with the sources as they stand, built first and
 # on its own so that a fault that does not compile stops the proof here, and its
@@ -230,6 +238,7 @@ fault_phase()
 }
 
 echo "noentropy-mutation: logs: $work"
+keep=1
 pass_phase fixed
 for fault do
     select_fault "$fault"

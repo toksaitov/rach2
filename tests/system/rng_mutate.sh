@@ -41,15 +41,9 @@ for artifact in "$kernel" build/tests/system/harness \
     [ -x "$artifact" ] || { echo "rng-mutation: missing $artifact" >&2; exit 1; }
 done
 mkdir -p build/review-proof
-work=$(mktemp -d "$repo/build/review-proof/rng.XXXXXX")
-mkdir -p "$work/rach2/sys/lib" "$work/rach2/sys/arch/x86" "$work/tests" "$work/utils"
-cp rach2/sys/arch/x86/kcpu.c rach2/sys/arch/x86/kcpu.h "$work/rach2/sys/arch/x86/"
-cp rach2/sys/lib/kint.h "$work/rach2/sys/lib/"
-cp tests/rngprobe.c tests/probe.h "$work/tests/"
-cp utils/pingcall.h "$work/utils/"
-source="$work/rach2/sys/arch/x86/kcpu.c"
-cp "$source" "$work/saved.c"
+work=
 child=
+keep=
 # Stop the running boot and put back the saved source.
 restore()
 {
@@ -61,10 +55,32 @@ restore()
     cp "$work/saved.c" "$source"
     touch "$source"
 }
-trap restore EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+
+# Restore once the source is saved, then remove the work directory, unless
+# the proof failed after printing its path, which sets `keep`; a signal
+# clears `keep`.
+cleanup()
+{
+    exit_status=$?
+    if [ -n "$work" ] && [ -f "$work/saved.c" ]; then
+        restore
+    fi
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf ${work:+"$work"}
+    fi
+}
+trap cleanup EXIT
+trap 'keep=; exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
+work=$(mktemp -d "$repo/build/review-proof/rng.XXXXXX")
+mkdir -p "$work/rach2/sys/lib" "$work/rach2/sys/arch/x86" "$work/tests" "$work/utils"
+cp rach2/sys/arch/x86/kcpu.c rach2/sys/arch/x86/kcpu.h "$work/rach2/sys/arch/x86/"
+cp rach2/sys/lib/kint.h "$work/rach2/sys/lib/"
+cp tests/rngprobe.c tests/probe.h "$work/tests/"
+cp utils/pingcall.h "$work/utils/"
+source="$work/rach2/sys/arch/x86/kcpu.c"
+cp "$source" "$work/saved.c"
 
 # run_phase PHASE: build the probe, stage it in an image, boot it, and
 # require the result PHASE must give.
@@ -102,6 +118,7 @@ run_phase()
     echo "rng-mutation: result: $phase status $status"
 }
 echo "rng-mutation: logs: $work"
+keep=1
 run_phase fixed
 rc_once "$source"
 sed 's/"+c"(rc)/"=c"(rc)/' "$work/saved.c" > "$source"

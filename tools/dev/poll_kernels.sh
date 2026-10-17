@@ -8,8 +8,10 @@
 # Each kernel's path is printed as RACH2_MEASURE_KERNEL, the name
 # machine_identity.sh takes, so that a measurement driver checks that the
 # machine runs that artifact before it times anything. The kernels are built
-# for the architecture ARCH names. --texts only checks that the text the
-# second order changes is once in rach2/sys/io/poll.c, and builds nothing.
+# for the architecture ARCH names. The private tree, with the kernels and the
+# build's records, stays at the path the artifacts line prints, unless a
+# signal stops the run. --texts only checks that the text the second order
+# changes is once in rach2/sys/io/poll.c, and builds nothing.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -69,6 +71,34 @@ if [ ! -x "$runner" ] || [ ! -x "$checker" ]; then
     echo 'poll-kernels: build build/tests/system/runutil and build/tools/inspect/elfcheck first' >&2
     exit 1
 fi
+work=
+poll=
+child=
+keep=
+
+# Stop a build in progress and put the saved poll.c back in the private tree.
+cleanup()
+{
+    if [ -n "$child" ]; then
+        kill -TERM "$child" 2>/dev/null || :
+        wait "$child" 2>/dev/null || :
+    fi
+    if [ -n "$work" ] && [ -f "$work/poll.saved" ]; then
+        cp "$work/poll.saved" "$poll"
+        touch "$poll"
+    fi
+}
+
+# bash 3.2, the Mac's sh, gives an EXIT trap a status of 0 when `set -u`
+# stops a script that also has `set -e`, so a run that reached no success
+# exit fails here. The private tree is removed unless `keep` is set, after its
+# path is printed; a signal clears `keep`.
+finished=
+status=0
+trap 'status=$?; cleanup; [ -n "$keep" ] || rm -rf ${work:+"$work"}; [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1; exit "$status"' EXIT
+trap 'keep=; exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-poll-kernels.XXXXXX")
 cp -R rach2 mk "$work/"
 # rach2/Makefile's kernel rule runs `make build/tools/inspect/elfcheck` in the
@@ -78,28 +108,6 @@ cp -R rach2 mk "$work/"
 printf 'build/tools/inspect/elfcheck: ;\n' >"$work/Makefile"
 poll="$work/rach2/sys/io/poll.c"
 cp "$poll" "$work/poll.saved"
-child=
-
-# Stop a build in progress and put the saved poll.c back in the private tree.
-cleanup()
-{
-    if [ -n "$child" ]; then
-        kill -TERM "$child" 2>/dev/null || :
-        wait "$child" 2>/dev/null || :
-    fi
-    cp "$work/poll.saved" "$poll"
-    touch "$poll"
-}
-
-# bash 3.2, the Mac's sh, gives an EXIT trap a status of 0 when `set -u`
-# stops a script that also has `set -e`, so a run that reached no success
-# exit fails here.
-finished=
-status=0
-trap 'status=$?; cleanup; [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1; exit "$status"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
 
 # build ORDER: build the private tree's kernel and keep it and its .config as
 # WORK/ORDER.kernel and WORK/ORDER.config; exit with make's status when the
@@ -123,6 +131,7 @@ build()
 }
 
 echo "poll-kernels: artifacts: $work"
+keep=1
 git rev-parse HEAD > "$work/base.commit"
 git diff --binary > "$work/working.diff"
 build poll-after-halt

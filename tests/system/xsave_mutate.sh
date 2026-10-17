@@ -90,11 +90,11 @@ RACH2_QEMU=$ARCH_QEMU
 export RACH2_QEMU
 tree=${ARCH_BUILD#"$repo"/}
 mkdir -p build
-work=$(mktemp -d "$repo/build/xsave-proof.XXXXXX")
+work=
 source=rach2/sys/arch/x86/fpu.c
-cp "$source" "$work/source.saved"
 child=
 changed=
+keep=
 
 # Stop the running boot's process group and wait until it is gone.
 stop_child()
@@ -125,18 +125,26 @@ restore()
 }
 
 # Stop the boot and, when a fault is in the source, restore it and rebuild.
+# The work directory is removed too, unless the proof failed after printing
+# its path, which sets `keep`; a signal clears `keep`.
 cleanup()
 {
+    exit_status=$?
     stop_child
     if [ -n "$changed" ]; then
         restore
         rebuild >"$work/cleanup.build.log" 2>&1
     fi
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf ${work:+"$work"}
+    fi
 }
 trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'keep=; exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
+work=$(mktemp -d "$repo/build/xsave-proof.XXXXXX")
+cp "$source" "$work/source.saved"
 
 # Compile and run the two frame host tests as tests/system/suites/host.sh
 # compiles them, and return 0 when both pass. The caller's `||` turns errexit
@@ -204,6 +212,7 @@ run_phase()
 }
 
 echo "xsave-mutation: $RACH2_ARCH: logs: $work"
+keep=1
 make -s ARCH="$RACH2_ARCH" rach2 tests krffs test-image \
     build/tests/system/harness build/tests/system/runutil >"$work/build.log" 2>&1
 cat "$work/build.log"

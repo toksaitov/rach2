@@ -12,8 +12,10 @@
 # tests/system/suites.mk: as written, where it must equal the artifact the
 # rehearsal ran and growset must take it; with the default group size, where
 # tests/system/suites/installer.sh must stop at its setup; and restored,
-# which must equal the first byte for byte. Nothing under build/ is written:
-# the mutated root goes into a private copy of the installer disk.
+# which must equal the first byte for byte. No product under build/ is
+# written: the roots and the private copy of the installer disk that takes the
+# mutated root are in a work directory under build/tests, which is removed
+# unless the proof fails.
 #
 # Usage: sh tests/system/rehearse_group_mutate.sh [ROOT DISK] | --texts
 # ROOT and DISK name the installer root and disk the rehearsal ran, by
@@ -72,10 +74,9 @@ for artifact in "$growset" "$root" "$disk" build/krffs/stageimage.krffs; do
         exit 1
     fi
 done
-work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-rehearse-group.XXXXXX")
-cp tests/system/suites.mk "$work/suites.mk.saved"
-cp "$work/suites.mk.saved" "$work/suites.mk"
+work=
 child=
+keep=
 
 # Stop the running suite and wait for it.
 stop_child()
@@ -94,10 +95,29 @@ cleanup()
     cp "$work/suites.mk.saved" "$work/suites.mk"
     touch "$work/suites.mk"
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+
+# Clean up at exit, then remove the work directory, unless the proof failed
+# after printing its path, which sets `keep`; a signal clears `keep`.
+finish()
+{
+    exit_status=$?
+    if [ -n "$work" ] && [ -f "$work/suites.mk.saved" ]; then
+        cleanup
+    else
+        stop_child
+    fi
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf ${work:+"$work"}
+    fi
+}
+trap finish EXIT
+trap 'keep=; exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
+mkdir -p "$repo/build/tests"
+work=$(mktemp -d "$repo/build/tests/rehearse-group.XXXXXX")
+cp tests/system/suites.mk "$work/suites.mk.saved"
+cp "$work/suites.mk.saved" "$work/suites.mk"
 
 # The arguments after `$@` in the installer root's recipe.
 recipe_args()
@@ -156,6 +176,7 @@ case "$root_start" in
     '' | 0 | *[!0-9]*) echo 'rehearse-group-mutation: the installer disk has no third entry' >&2; exit 1 ;;
 esac
 echo "rehearse-group-mutation: logs: $work"
+keep=1
 
 build_root fixed
 if ! cmp -s "$work/fixed.ext2" "$root"; then

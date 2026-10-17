@@ -75,11 +75,12 @@ fi
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" servicelog-mutation "$repo/tests/system/servicelog_mutate.sh" "$@"
 mkdir -p build
-work=$(mktemp -d "$repo/build/servicelog-proof.XXXXXX")
-tree="$work/tree"
-source="$tree/utils/init.c"
+work=
+tree=
+source=
 child=
 changed=
+keep=
 
 # Stop the running boot's process group and wait until it is gone.
 stop_child()
@@ -102,18 +103,27 @@ restore()
     changed=
 }
 
-# Stop the boot and, when a fault is in the source, restore it.
+# Stop the boot and, when a fault is in the source, restore it. The work
+# directory is removed too, unless the proof failed after printing its path,
+# which sets `keep`; a signal clears `keep`.
 cleanup()
 {
+    exit_status=$?
     stop_child
     if [ -n "$changed" ]; then
         restore
     fi
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf ${work:+"$work"}
+    fi
 }
 trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'keep=; exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
+work=$(mktemp -d "$repo/build/servicelog-proof.XXXXXX")
+tree="$work/tree"
+source="$tree/utils/init.c"
 
 # run_phase PHASE EXPECTED MESSAGE: build init-shell from the private tree,
 # keep a copy, and boot the service log suite with it. With EXPECTED `pass`
@@ -156,6 +166,7 @@ run_phase()
 }
 
 echo "servicelog-mutation: logs: $work"
+keep=1
 make -s rach2 utils check-busybox build/tests/system/harness build/tests/system/runutil \
     build/tools/image/mkmbr "ARCH=$RACH2_ARCH" >"$work/prepare.log" 2>&1 || {
     cat "$work/prepare.log" >&2; exit 1;
