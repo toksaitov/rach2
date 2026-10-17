@@ -8,8 +8,8 @@
 #include "lib/kint.h"
 
 /* The ticks since the timer started, counted by the boot processor's timer
- * handler (kernel.c) at the platform's rate, with the ticks
- * `timer_lost_ticks` finds missed. */
+ * handler (kernel.c) at the platform's rate, as many for each interrupt as
+ * `timer_tick_clock` says. */
 extern volatile uint32_t kernel_ticks;
 
 /*
@@ -48,80 +48,78 @@ int tick_read_retry(uint32_t seq);
 void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint32_t *ticks);
 
 /*
- * The clock under the tick: microseconds since the boot, the place within
- * the tick, and the ticks the timer did not deliver. The platform's timer
- * defines it (arch/x86/pit.c, from the counter of the timer that ticks, the
- * local APIC's or the 8254's, with the time-stamp counter where it runs at
- * one rate); the tick itself is the kernel's (kernel_ticks).
+ * The clock under the tick: the ticks each interrupt counts, microseconds
+ * since the boot, and the place within the tick. The platform's timer
+ * defines it (arch/x86/pit.c). From the first tick on it is kept by a
+ * reference counter where the machine has one, the HPET's main counter, the
+ * ACPI PM timer or, without either, a time-stamp counter at one rate, so
+ * that a tick delivered late, coalesced with others or delivered again
+ * counts the time that passed; without one it is the periods of the timer
+ * that ticks and that timer's count. The tick itself is the kernel's
+ * (kernel_ticks).
  */
 
 /**
- * Microseconds since the boot, from the tick's periods and the place of the
- * counter under the tick within the current one, for intervals shorter than
- * the 10 ms tick: the latency record, block requests, TCP's round trips and
- * the USB stamps.
+ * Microseconds since the boot, for intervals shorter than the 10 ms tick:
+ * the latency record, block requests, TCP's round trips and the USB stamps.
+ * With a reference, its ticks since it started and its place within the
+ * next, on every processor; without one, the periods the boot processor's
+ * tick and readings counted and the place of the counter under the tick,
+ * which loses a period no reading fell inside while interrupts were off.
  *
- * On a processor other than the boot processor the place is the reference
- * counter's time since the boot processor's tick began, short of a whole
- * period. No reading is earlier than one given before on any processor. A
- * stretch with interrupts off longer than a period loses the periods no
- * reading fell inside; the tick count makes them up (`timer_lost_ticks`)
- * and this clock does not. It wraps after about 71 minutes. It turns
- * interrupts off and takes a spinlock of its own while it reads, so an
- * interrupt handler may call it.
+ * No reading is earlier than one given before on any processor. It wraps
+ * after about 71 minutes. It turns interrupts off and takes a spinlock of
+ * its own while it reads, so an interrupt handler may call it.
  */
 uint32_t timer_now_us(void);
 
 /**
- * Where the clock is within the tick, with interrupts off: `*pending` is
- * nonzero when the tick's interrupt has been raised and not yet counted,
- * the counter having wrapped into a tick the handler has not seen, and
- * `*phase_ns` is the nanoseconds into the tick in progress. On the boot
- * processor these come from the counter under its tick; on any other, whose
- * own timer does not run in step with it, from the platform's reference
- * counter since the boot processor's last tick began, which the caller
- * reads within `tick_read_begin` and `tick_read_retry`.
+ * Where the clock is within the tick, with interrupts off: `*pending` is the
+ * ticks that have passed and that the boot processor's handler has not yet
+ * counted, and `*phase_ns` the nanoseconds into the tick in progress. With a
+ * reference these are its own, on any processor, and `*pending` is any
+ * number up to a minute's ticks; without one they come from the counter
+ * under the boot processor's tick, and `*pending` is 1 when its interrupt
+ * has been raised and not yet taken. The caller reads them within
+ * `tick_read_begin` and `tick_read_retry`.
  */
 void timer_phase(int *pending, uint32_t *phase_ns);
 
 /**
- * Count one period of the counter, unless a reading of `timer_now_us` has
- * counted it already, from the boot processor's timer handler and nowhere
- * else, and record where the tick began by the reference counter, for the
- * other processors' readings.
- *
- * `timer_now_us` takes its periods from the tick, because two readings a whole
- * period apart are at the same place in the counter's sweep and the wrap
- * between them cannot be seen.
+ * Count the boot processor's tick, from its timer handler within the tick's
+ * sequence count and nowhere else, and return the ticks this interrupt
+ * counts. Before a reference starts that is 1, and the clock counts a
+ * period of the counter under the tick unless a reading of `timer_now_us`
+ * has counted it already. The first tick with a reference ready starts it;
+ * from then on it is the reference's whole ticks since the last one counted,
+ * at most a minute's: 0 for an interrupt a hypervisor delivers again, and
+ * more than 1 for one that came late.
  */
-void timer_tick_clock(void);
+uint32_t timer_tick_clock(void);
 
 /**
- * Whether the clock's period accounting is right, on fixed readings: the
- * arithmetic `timer_now_us` and `timer_tick_clock` run, fed readings whose
- * answer is known, so a wrong accounting fails on every machine and a
- * machine a hypervisor stops cannot fail it, since nothing here is read from
- * the timer. The boot's timing record takes its level from this. Nonzero
- * when every answer is right.
+ * Whether the clock's arithmetic is right, on fixed readings: the period
+ * accounting of `timer_now_us` and `timer_tick_clock` without a reference,
+ * and the reference's count of whole ticks with a fraction of a count in
+ * each, fed readings whose answer is known, so a wrong accounting fails on
+ * every machine and a machine a hypervisor stops cannot fail it, since
+ * nothing here is read from a timer. The boot's timing record takes its
+ * level from this. Nonzero when every answer is right.
  */
 int timer_clock_check(void);
 
 /**
- * Measure the processor's cycle counter against the timer, with interrupts
- * off for 20 ms, where the counter runs at one rate whatever the processor's
- * clock does and no hypervisor runs the machine (on a PC, what `cpuid`
- * leaves 0x80000007 and 1 say), so that a tick the timer misses can be made
- * up. Returns the counter's counts in one tick, and 0 otherwise, when no
- * missed tick is made up.
+ * Measure the processor's time-stamp counter against the 8254, with
+ * interrupts off for 20 ms, on a machine with neither the HPET nor the PM
+ * timer whose counter runs at one rate whatever the processor's clock does
+ * (on a PC, what `cpuid` leaf 0x80000007 says), so that it can be the
+ * reference from the next tick on. Returns its counts in one tick, and 0
+ * when it is not measured.
  */
 uint32_t timer_calibrate(void);
 
-/**
- * The ticks the timer did not deliver since its last interrupt, by the cycle
- * counter, from the timer handler and nowhere else: the whole ticks of the
- * interval, rounded down, less the one this interrupt delivers, at most a
- * minute's. Zero without a calibration, and at the first call.
- */
-uint32_t timer_lost_ticks(void);
+/** The reference that keeps the clock, "hpet", "pm timer" or "tsc", or NULL
+ * when the counter under the tick keeps it. */
+const char *timer_reference(void);
 
 #endif /* _TIMER_H_ */

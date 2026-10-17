@@ -234,14 +234,14 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
  *
  * Every processor has its own tick; a processor other than the boot one only
  * accounts it and preempts. The boot processor's tick also advances the tick
- * count and the uptime, by the ticks the timer did not deliver as well
- * (`timer_lost_ticks`), counts the microsecond clock's period
- * (`timer_tick_clock`, see `timer_now_us`), and runs the periodic work of the
- * kernel: the sleepers and timerfds whose time has come, the HDA tick for a
- * controller whose interrupts do not arrive, the network device that is
- * polled, the TCP timers, the loopback delivery, the USB controller's event
- * ring, the block layer's lagged requests and deadlines, the platform's
- * devices, and the console's serial port.
+ * count and the uptime by the ticks the clock says this interrupt counts
+ * (`timer_tick_clock`), none for one delivered again and more than one for
+ * one that came late, and runs the periodic work of the kernel: the sleepers
+ * and timerfds whose time has come, the HDA tick for a controller whose
+ * interrupts do not arrive, the network device that is polled, the TCP
+ * timers, the loopback delivery, the USB controller's event ring, the block
+ * layer's lagged requests and deadlines, the platform's devices, and the
+ * console's serial port.
  *
  * The tick is accounted as idle or busy first, before anything below can
  * wake a process: the accounting records what the processor was doing when
@@ -264,22 +264,16 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
  */
 static void timer_handler(isr_params_t *params)
 {
-    uint32_t lost;
+    uint32_t due;
 
     if (arch_cpu_id() != 0) {
         sched_account_tick(FRAME_USER(params) != 0);
         sched_preempt();
         return;
     }
-    lost = timer_lost_ticks();
     tick_write_begin();
-    ++kernel_ticks;
-    timer_tick_clock();
-    if (++kernel_second_ticks >= 100) {
-        kernel_second_ticks = 0;
-        ++kernel_uptime_seconds;
-    }
-    while (lost-- > 0) {
+    due = timer_tick_clock();
+    while (due-- > 0) {
         ++kernel_ticks;
         if (++kernel_second_ticks >= 100) {
             kernel_second_ticks = 0;
@@ -639,8 +633,9 @@ static bool test_udelay(uint32_t *measured_ms)
  * way, and against the tick. Returns true when both agree; otherwise `*why`
  * says how the check failed.
  *
- * `timer_now_us` counts the periods of the ticking timer's counter and reads
- * where it is inside one; `k_udelay` measures the 8254's counter by its drop.
+ * `timer_now_us` counts the reference counter's ticks, or without one the
+ * periods of the ticking timer's counter, and reads where it is inside one;
+ * `k_udelay` measures the 8254's counter by its drop.
  * A wait of 2 ms is taken eight times and the shortest of them is the
  * reading, `*measured_us`, which must be 1500 to 3500 us: an interrupt in the
  * middle of a wait can only add to it, and the machine writes whole lines to
@@ -2590,21 +2585,23 @@ static int init_root_by_identity(const char *spec, int *krffs_mounted)
  * reads a 200 ms delay as twice that, or puts the missed ticks inside a walk
  * and not its clock readings, and a suite that judged them would be judging
  * the host's load. They are printed as warnings for a person to read. The
- * time-stamp counter's calibration is logged last.
+ * reference that keeps the clock is logged last, after the time-stamp
+ * counter is measured on a machine that needs it (`timer_calibrate`).
  */
 static void check_timing(void)
 {
     uint32_t measured_ms = 0;
     uint32_t measured_us = 0;
-    uint32_t walk_clock = 0, walk_tick = 0, tsc;
-    const char *why = "";
+    uint32_t walk_clock = 0, walk_tick = 0;
+    const char *why = "", *reference;
     int delay_ok, walk_ok, clock_ok, tick_ok;
 
     tick_ok = test_timer();
     delay_ok = test_udelay(&measured_ms);
     walk_ok = test_clock(&measured_us, &why, &walk_clock, &walk_tick);
     clock_ok = timer_clock_check();
-    tsc = timer_calibrate();
+    (void)timer_calibrate();
+    reference = timer_reference();
 
     klog(clock_ok ? KLOG_INFO : KLOG_ERR, "timing",
          "tick %d Hz, 200 ms delay measured %d ms, 2000 us wait measured %d us",
@@ -2622,10 +2619,11 @@ static void check_timing(void)
     if (!clock_ok) {
         klog(KLOG_ERR, "timing", "the clock's arithmetic failed its check on fixed readings");
     }
-    if (tsc) {
-        klog(KLOG_INFO, "tsc", "%d counts a tick; a tick the timer misses is counted", (int)tsc);
+    if (reference) {
+        klog(KLOG_INFO, "clock", "reference: the %s; a tick the timer misses or delays is counted",
+             reference);
     } else {
-        klog(KLOG_INFO, "tsc", "none at one rate; a tick the timer misses is lost");
+        klog(KLOG_INFO, "clock", "reference: none; a tick the timer misses is lost");
     }
 }
 

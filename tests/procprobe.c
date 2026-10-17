@@ -855,10 +855,9 @@ static void sysctl_rows(void)
 
 /** /dev/rtc0: the CMOS clock as hwclock reads it, the time of day of
  * RTC_RD_TIME the real time's within two minutes either way. The real time
- * runs from the clock read at boot by the ticks counted since, and under a
- * hypervisor a tick the timer misses is not made up (proc(5)), so on a loaded
- * host it falls tens of seconds behind the clock; an hour, or a time zone,
- * wrong is what this row is for. */
+ * runs from the clock read at boot by the ticks counted since, and the CMOS
+ * clock is read in whole seconds; an hour, or a time zone, wrong is what this
+ * row is for. */
 static void rtc_rows(void)
 {
     int tm[9];

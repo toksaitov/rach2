@@ -7,9 +7,10 @@
 
 /*
  * refclock: a counter that runs at a rate the firmware states, for the
- * local APIC timer to be measured against and, on a machine with no 8254,
- * for short waits. The HPET's main counter when the HPET table gives one,
- * and the ACPI PM timer, 3.579545 MHz, when it does not.
+ * local APIC timer to be measured against, for the clock to be kept by
+ * (pit.c) and, on a machine with no 8254, for short waits. The HPET's main
+ * counter when the HPET table gives one, and the ACPI PM timer, 3.579545
+ * MHz, when it does not.
  *
  * Neither interrupts anything; both are read. The HPET is enabled here,
  * with its legacy replacement left off, so the 8254 and the RTC keep their

@@ -226,9 +226,9 @@ static void rtc_add_step(int64_t *seconds, int64_t *nanoseconds)
  * Time since boot now: the uptime seconds, the ticks of this second and the
  * timer's place within the tick; the caller has interrupts off.
  *
- * The tick's interrupt can be pending after the counter wraps, and a pending
- * tick belongs to the new period even before the handler counts it
- * (`timer_phase`).
+ * Ticks can have passed that the handler has not counted, the one of a
+ * pending interrupt or, with a reference, those of a late one, and they
+ * belong to the time now before the handler counts them (`timer_phase`).
  */
 static void rtc_since_boot(uint32_t *uptime, uint32_t *ticks, uint32_t *phase_ns)
 {
@@ -242,10 +242,8 @@ static void rtc_since_boot(uint32_t *uptime, uint32_t *ticks, uint32_t *phase_ns
         timer_phase(&pending, phase_ns);
     } while (tick_read_retry(seq));
     *ticks += (uint32_t)pending;
-    if (*ticks >= RTC_TICKS_PER_SECOND) {
-        *ticks -= RTC_TICKS_PER_SECOND;
-        (*uptime)++;
-    }
+    *uptime += *ticks / RTC_TICKS_PER_SECOND;
+    *ticks %= RTC_TICKS_PER_SECOND;
 }
 
 void rtc_tick_phase(uint32_t *ticks, uint32_t *phase_ns)
@@ -284,9 +282,10 @@ static void rtc_kept_time(int64_t *seconds, int64_t *nanoseconds)
 }
 
 /**
- * The last reading is kept as a floor, since a reading can fall back: a
- * stretch with interrupts off longer than a period loses periods the tick
- * does not count, and a faulty latch of the counter reads zero.
+ * The last reading is kept as a floor, since a reading can fall back:
+ * without a reference counter a stretch with interrupts off longer than a
+ * period loses periods the tick does not count, and a faulty latch of the
+ * counter reads zero.
  */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {

@@ -18,9 +18,9 @@
  * hand-worked instants.
  *
  * Port stubs also drive the real-time reader across pending interrupts and
- * counter wraps, including one during its latch, without executing I/O, and
- * the microsecond clock on the boot processor and on another, which reads a
- * reference counter the test keeps.
+ * counter wraps, including one during its latch, without executing I/O; and a
+ * reference counter the test keeps drives the ticks each interrupt counts and
+ * the clocks it keeps, on the boot processor and on another.
  *
  * Returns the failed-check count (0 == all passed), capped so it cannot wrap
  * to a false 0.
@@ -339,39 +339,53 @@ static void monotonic_rows(void)
 }
 
 /**
- * The microsecond clock on two processors around a tick of the boot
- * processor's at 41 us into its period. Another processor two and a half
- * periods on reads a microsecond short of the period after the tick, since
- * the boot processor has counted no period since; the boot processor, which
- * then reads half a period and 41 us into that period by its counter, gives
- * the other's reading again, never an earlier one; and once its counter has
- * wrapped it reads 41 us into the next period.
+ * The clock once the test's reference counter, 1 MHz and 32 bits, keeps it,
+ * from a tick at 41 us into the PIT's period with the counter 64 Ki counts
+ * short of its wrap: the microsecond clock goes on from the PIT's reading; an
+ * interrupt on time counts one tick, the same one delivered again none, and
+ * one seven and a half ticks late, past the counter's wrap, seven. Another
+ * processor then three ticks and 100 us on reads three ticks pending and its
+ * place, as the microsecond clock and the time since boot, to a second's
+ * turn; the boot processor reads no earlier; and an interrupt seventy
+ * seconds late counts a minute's ticks, the next the rest.
  */
-static void cross_cpu_rows(void)
+static void reference_rows(void)
 {
-    uint32_t period = pit_period_us();
-    uint32_t base, other, late, wrapped;
+    const uint32_t start = 0xFFFF0000u;
+    uint32_t base, phase_ns;
+    int64_t sec, ns;
+    int due;
 
     ref_on = 1;
-    ref_now = 5000000u;
+    ref_now = start;
     pending = 0;
     wrap_on_pending = 0;
     status = 0x80;
     count = pit_reload - 100u;
-    timer_tick_clock();
-    base = timer_now_us() - 41u;
+    CHECK(timer_tick_clock() == 1u);
+    base = timer_now_us();
+    CHECK(base == pit_period_us() + 41u);
+    ref_now = start + 10000u;
+    CHECK(timer_tick_clock() == 1u);
+    ref_now = start + 10100u;
+    CHECK(timer_tick_clock() == 0u);
+    ref_now = start + 80100u;
+    CHECK(timer_tick_clock() == 7u);
+    CHECK(timer_now_us() == base + 80100u);
     host_cpu = 1;
-    ref_now += 5u * period / 2u;
-    other = timer_now_us();
+    ref_now = start + 105100u;
+    timer_phase(&due, &phase_ns);
+    CHECK(due == 3 && phase_ns == 100000u);
+    CHECK(timer_now_us() == base + 105100u);
+    kernel_uptime_seconds = 60;
+    kernel_second_ticks = 98;
+    rtc_monotonic(&sec, &ns);
+    CHECK(sec == 61 && ns == 10100000);
     host_cpu = 0;
-    status = 0;
-    late = timer_now_us();
-    status = 0x80;
-    count = pit_reload - 100u;
-    wrapped = timer_now_us();
-    CHECK(other == base + period - 1u);
-    CHECK(late == other);
-    CHECK(wrapped == base + period + 41u);
+    CHECK(timer_now_us() == base + 105100u);
+    ref_now += 70000000u;
+    CHECK(timer_tick_clock() == 6000u);
+    CHECK(timer_tick_clock() == 1003u);
     CHECK(!irq_disabled);
     ref_on = 0;
 }
@@ -682,6 +696,6 @@ int main(void)
     set_rows();
     monotonic_rows();
     clock_write_rows();
-    cross_cpu_rows();
+    reference_rows();
     return fails > 100 ? 100 : fails;
 }

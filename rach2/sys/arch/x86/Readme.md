@@ -10,7 +10,7 @@ The platform defines what these shared headers declare. Each header states its c
 | --- | --- | --- |
 | `sys/platform.h` | the boot's calls into the machine, in the order `kernel.c` makes them | `platform.c`, `smpboot.c`, `ps2mouse.c` |
 | `sys/irq.h` | handler chains, message vectors, interrupt counts | `isr.c` |
-| `sys/timer.h` | the clock under the tick, and missed ticks | `pit.c` |
+| `sys/timer.h` | the clock under the tick, and the ticks each interrupt counts | `pit.c` |
 | `sys/rtc.h` | the battery-backed clock and its alarm | `cmos.c` |
 | `sys/udelay.h` | `k_udelay`, a bounded busy wait | `udelay.c` |
 | `sys/serial.h` | the serial console | `serial.c` |
@@ -109,7 +109,9 @@ The local APIC's timer counts at a divided bus clock that no register states, so
 
 ### The clock under the tick
 
-`timer_now_us` (`pit.c`) is the periods the tick counted and the place within the current one, read from the counter under the tick: the local APIC timer's count, or channel 0's latched count with the status bit that says which of mode 3's two sweeps it is in. A reading that finds the counter behind the last counts the period itself, so that the tick does not count it twice. Another processor, whose timer runs out of step with the boot processor's, reads the reference counter since the boot processor's last tick began, and no reading on any processor is earlier than one given before. Where the time-stamp counter runs at one rate and no hypervisor is present, `timer_lost_ticks` gives the tick handler the whole ticks missed while interrupts were off, at most a minute's.
+The clock is kept by a reference counter from the first tick on: the HPET's main counter or the ACPI PM timer, whichever `refclock.c` found, and on a machine with neither, the time-stamp counter where `cpuid` leaf 0x80000007 says it runs at one rate, measured against the 8254 over 20 ms by `timer_calibrate` (`pit.c`). The tick's interrupt only prompts the count: `timer_tick_clock` gives the tick handler the reference's whole ticks since the last it counted, one for an interrupt on time, none for one a hypervisor delivers again, and every tick that fell due for one that an emulator delayed or that a stretch with interrupts off left pending, at most a minute's each time. The first tick is taken to fall half a tick into the reference's, so an interrupt early or late by less than half a tick counts the one it was raised for. A tick of the PM timer is 35795.45 counts, so the count is kept in hundredths of a count, and no fraction is lost. The boot's log says which reference keeps the clock, as `clock: reference: the hpet`.
+
+`timer_now_us` and `timer_phase`, which `sys/clock.c` reads for the clocks, give the reference's ticks counted, the whole ticks it has gone past them and its place within the next, on every processor, within the tick's sequence count; no reading of `timer_now_us` on any processor is earlier than one given before. Before the first tick, and on a machine with no reference, they read the counter under the tick: the local APIC timer's count, or channel 0's latched count with the status bit that says which of mode 3's two sweeps it is in. A reading that finds the counter behind the last counts the period itself, so that the tick does not count it twice, and a stretch with interrupts off longer than a period loses the periods no reading fell inside.
 
 ### The other processors
 
@@ -174,6 +176,7 @@ Both boot reports read and print and configure nothing. `platform_report` runs t
 * The ACPI record keeps 64 processors, 8 I/O APICs, 16 overrides, 8 NMI inputs and 8 NMI sources, 32 tables and 4 MCFG windows; the rest are counted and left out. A table longer than 4 MiB is not read.
 * ECAM reaches segment 0 alone; other segments are not reached. On i686 no ACPI table, ECAM window or HPET above 4 GiB is used, and on both no loader pointer or framebuffer above 4 GiB.
 * The tick is periodic at 100 Hz on every processor; there is no one-shot or tickless mode.
+* The reference counter is read in 32 bits, or 24 for the PM timer, and extended at each tick, so a stretch without a tick longer than its wrap, 4.7 s for the PM timer and 43 s for QEMU's 100 MHz HPET, loses the wraps. The time-stamp counter's rate is measured over 20 ms and is as good as that measurement.
 * Five chipsets have power profiles. The sleep type 7 and the ACPI enable 0xA0 of the Lynx Point and Wildcat Point rows are the PCH's encoding and the value their firmware publishes, and no emulator has those chipsets.
 * The stops' waits are loop counts, not times.
 * The serial console is COM1 alone, at 115200 baud; the mouse has three buttons and no wheel; the speaker plays a square wave and no samples; of SMBIOS only the BIOS vendor is read.

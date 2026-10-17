@@ -1,7 +1,7 @@
 /*
  * pit.c: the 8254's channel 0, and the clock under the tick that
- * ../../timer.h declares: the microseconds since the boot, the place within
- * the tick, and the ticks the time-stamp counter finds missed.
+ * ../../timer.h declares: the ticks each interrupt counts, the microseconds
+ * since the boot and the place within the tick, kept by a reference counter.
  */
 
 #include "portio.h"
@@ -71,20 +71,6 @@ struct pit_clock {
 static struct pit_clock clock;
 
 /*
- * Where the boot processor's last tick began, for the other processors: the
- * reference counter (refclock.h) then, and the clock's periods. Another
- * processor's own timer starts when that processor does and runs out of
- * step with the boot processor's, so its count says nothing about where the
- * boot processor's tick is; the reference counter is one counter every
- * processor reads. Written by `timer_tick_clock` within the tick's sequence
- * count (../../timer.h); `edge_set` is zero until the first tick with a
- * reference counter.
- */
-static volatile uint32_t edge_ref;
-static volatile uint32_t edge_periods;
-static volatile int edge_set;
-
-/*
  * The latest reading `timer_now_us` has given on any processor, below which
  * no later reading goes, and the lock it is read and raised under. The boot
  * processor reads channel 0 and the others the reference counter, and the
@@ -97,7 +83,6 @@ static uint32_t now_floor;
 
 static uint32_t pit_phase_from(uint32_t count, uint8_t status);
 static int pit_pending(void);
-static void edge_phase(uint32_t ns, uint32_t period_ns, int *pending, uint32_t *phase_ns);
 
 /* Channel 0's counter, and the counter the clock reads, channel 0's until
  * `timer_set_counter` chooses another. */
@@ -137,22 +122,60 @@ static void pit_clock_tick(struct pit_clock *c, uint32_t phase)
 }
 
 /*
- * The TSC's measure of the ticks. A tick arrives only while interrupts are
- * on, and the PIC keeps one pending, so a stretch with them off longer than
- * a period loses periods, as a page fault that reclaims memory can take;
- * the time-stamp counter goes on counting. With the counts of one tick, from
- * `timer_calibrate`, the timer handler asks how many whole ticks have gone
- * by since the last one it saw (`timer_lost_ticks`), rounding down, so the
- * count can fall short of the time by part of a tick in a gap and never run
- * ahead of it. Zero counts: no TSC that runs at one rate, or a hypervisor,
- * whose emulated timer delivers the ticks it held back again, and no ticks
- * are made up.
+ * The reference that keeps time from the first tick after one is ready: the
+ * platform's counter (refclock.h), whose rate the firmware states, or, on a
+ * machine with neither the HPET nor the PM timer, the time-stamp counter
+ * where it runs at one rate, measured against the 8254 by `timer_calibrate`.
+ *
+ * The tick's interrupt then only prompts the count. Each interrupt counts
+ * the whole ticks of the reference since the last one counted: one for an
+ * interrupt on time; none for one that comes again, as a hypervisor delivers
+ * the ticks it held back; and all that went by for one that an emulator
+ * delayed, or that a stretch with interrupts off made the PIC hold, which
+ * keeps one pending however many were raised. The place within the tick is
+ * read from the reference too, so the count and the place cannot disagree.
+ *
+ * A count is kept in `mult` units, so that a tick is a whole number of them,
+ * `tick`: the PM timer's 3579545 Hz is 35795.45 counts a tick, and 3579545
+ * units of a hundredth of a count. Where the tick in progress began is `edge`
+ * counts and `frac` units past them, below `mult`.
  */
-static uint32_t tsc_per_tick;
-static uint32_t tsc_last_lo, tsc_last_hi;
+struct ref_clock {
+    uint32_t mult;  /* units in a count: TICKS_PER_SECOND, or 1 for the TSC */
+    uint32_t tick;  /* units in a tick */
+    uint64_t edge;  /* the count where the tick in progress began */
+    uint32_t frac;  /* the units past `edge` where it began */
+    uint32_t ticks; /* ticks counted since the reference started */
+};
 
-/* The most ticks one interrupt makes up: a minute. */
-#define PIT_LOST_MAX 6000u
+#define REF_NONE    0
+#define REF_COUNTER 1
+#define REF_TSC     2
+
+/* The tick's rate, TICK_HZ in platform.c, and its length. */
+#define TICKS_PER_SECOND 100u
+#define US_PER_TICK      10000u
+#define NS_PER_TICK      10000000u
+
+/* The most ticks one interrupt counts, a minute's; the next counts on. */
+#define REF_DUE_MAX 6000u
+
+/*
+ * The reference, REF_NONE until it starts; its clock; the platform
+ * counter's reading at the last tick and its counts from the start to that
+ * reading, which extend the counter past its wrap (a stretch of 4.7 s
+ * without a tick loses the PM timer's wraps, 43 s the HPET's at 100 MHz);
+ * and `timer_now_us` when it started. The boot processor's tick writes them
+ * within the tick's sequence count (../../timer.h).
+ */
+static volatile int ref_kind;
+static volatile struct ref_clock ref;
+static volatile uint32_t ref_raw;
+static volatile uint64_t ref_total;
+static volatile uint32_t ref_us_base;
+
+/* The TSC's counts in a tick, from `timer_calibrate`; 0 for none. */
+static uint32_t tsc_per_tick;
 
 /** The time-stamp counter's halves into `*lo` and `*hi`; 0 in a host
  * test. */
@@ -165,29 +188,106 @@ static void tsc_read(uint32_t *lo, uint32_t *hi)
 #endif
 }
 
-/**
- * The whole ticks of `per_tick` counts in the TSC interval `hi`:`lo` less
- * the one that ends it, at most PIT_LOST_MAX: the ticks the timer missed.
- */
-static uint32_t pit_ticks_missed(uint32_t lo, uint32_t hi, uint32_t per_tick)
+/** `n` divided by `d`, at most REF_DUE_MAX, with the remainder in `*rem`, or
+ * 0 there when the quotient was cut to the bound. */
+static uint32_t ref_divide(uint64_t n, uint32_t d, uint32_t *rem)
 {
-    uint32_t q;
+    uint32_t q, r;
 
-    if (per_tick == 0) {
-        return 0;
+    if ((uint32_t)(n >> 32) >= d) {
+        *rem = 0;
+        return REF_DUE_MAX; /* a quotient past 32 bits is past the bound too */
     }
-    if (hi >= per_tick) {
-        return PIT_LOST_MAX; /* a quotient past 32 bits is past the bound too */
-    }
-#ifndef RACH2_HOSTTEST
-    __asm__("divl %2" : "=a"(q) : "0"(lo), "rm"(per_tick), "d"(hi) : "cc");
+#if defined(__x86_64__) || defined(RACH2_HOSTTEST)
+    q = (uint32_t)(n / d);
+    r = (uint32_t)(n % d);
 #else
-    q = (uint32_t)((((uint64_t)hi << 32) | lo) / per_tick);
+    __asm__("divl %4"
+            : "=a"(q), "=d"(r)
+            : "0"((uint32_t)n), "1"((uint32_t)(n >> 32)), "rm"(d)
+            : "cc");
 #endif
-    if (q <= 1u) {
+    if (q > REF_DUE_MAX) {
+        *rem = 0;
+        return REF_DUE_MAX;
+    }
+    *rem = r;
+    return q;
+}
+
+/**
+ * The whole ticks of `r` from where the tick in progress began to the
+ * reference's `count`, at most REF_DUE_MAX, and the units into the next in
+ * `*rem`. A count short of the edge, as the count `edge` itself is when
+ * `frac` is not 0, is no tick and none into one.
+ */
+static uint32_t ref_due(const volatile struct ref_clock *r, uint64_t count, uint32_t *rem)
+{
+    uint64_t gone = count - r->edge, units = gone * r->mult;
+
+    if ((gone >> 63) != 0 || units < r->frac) {
+        *rem = 0;
         return 0;
     }
-    return q - 1u > PIT_LOST_MAX ? PIT_LOST_MAX : q - 1u;
+    return ref_divide(units - r->frac, r->tick, rem);
+}
+
+/** Move where the tick in progress began on by `n` ticks. */
+static void ref_advance(volatile struct ref_clock *r, uint32_t n)
+{
+    r->ticks += n;
+    while (n-- > 0) {
+        r->frac += r->tick;
+        r->edge += r->frac / r->mult;
+        r->frac %= r->mult;
+    }
+}
+
+/** The reference's count now, from the TSC or from the platform's counter's
+ * counts since the last tick added to its total then; `*raw` is what the
+ * counter read. */
+static uint64_t ref_count(uint32_t *raw)
+{
+    uint32_t hi;
+
+    if (ref_kind == REF_TSC) {
+        tsc_read(raw, &hi);
+        return ((uint64_t)hi << 32) | *raw;
+    }
+    *raw = refclock_read();
+    return ref_total + ((*raw - ref_raw) & refclock_mask());
+}
+
+/**
+ * Start the reference at this tick, which the old count has counted, or
+ * return 0 when none is ready. The tick in progress is put to have begun half
+ * a tick ago, so that an interrupt early or late by less than half a tick
+ * counts the one tick it was raised for, and the microsecond clock goes on
+ * from where it is.
+ */
+static int ref_start(void)
+{
+    uint32_t raw, now_us;
+
+    if (refclock_name()) {
+        ref.mult = TICKS_PER_SECOND;
+        ref.tick = refclock_hz();
+        ref_raw = refclock_read();
+        ref_total = 0;
+        ref_kind = REF_COUNTER;
+    } else if (tsc_per_tick) {
+        ref.mult = 1;
+        ref.tick = tsc_per_tick;
+        ref_kind = REF_TSC;
+    } else {
+        return 0;
+    }
+    now_us = pit_clock_read(&clock, counter->phase_us(), counter->period_us());
+    ref.edge = ref_count(&raw) - ref.tick / ref.mult / 2u;
+    ref.frac = 0;
+    ref.ticks = 0;
+    ref_us_base = now_us - US_PER_TICK / 2u;
+    return 1;
 }
 
 uint32_t timer_calibrate(void)
@@ -197,9 +297,8 @@ uint32_t timer_calibrate(void)
 #ifdef RACH2_HOSTTEST
     return 0; /* a host has its own clocks */
 #endif
-    kcpu_id(1u, &a, &b, &c, &d);
-    if (c & (1u << 31)) {
-        return 0; /* a hypervisor gives the ticks it held back again itself */
+    if (ref_kind != REF_NONE || refclock_name() || tsc_per_tick) {
+        return tsc_per_tick;
     }
     kcpu_id(0x80000000u, &a, &b, &c, &d);
     if (a < 0x80000007u) {
@@ -219,19 +318,12 @@ uint32_t timer_calibrate(void)
     return tsc_per_tick;
 }
 
-uint32_t timer_lost_ticks(void)
+const char *timer_reference(void)
 {
-    uint32_t lo, hi, gap_lo, gap_hi, first = tsc_last_lo == 0 && tsc_last_hi == 0;
-
-    if (tsc_per_tick == 0) {
-        return 0;
+    if (ref_kind == REF_COUNTER) {
+        return refclock_name();
     }
-    tsc_read(&lo, &hi);
-    gap_lo = lo - tsc_last_lo;
-    gap_hi = hi - tsc_last_hi - (lo < tsc_last_lo ? 1u : 0u);
-    tsc_last_lo = lo;
-    tsc_last_hi = hi;
-    return first ? 0 : pit_ticks_missed(gap_lo, gap_hi, tsc_per_tick);
+    return ref_kind == REF_TSC || tsc_per_tick ? "tsc" : 0;
 }
 
 /**
@@ -283,41 +375,48 @@ static int timer_count_rows(uint32_t p)
 }
 
 /**
- * The rows of `timer_clock_check` for the ticks the TSC finds missed: none
- * in a gap of one tick or a little more, eight in one of nine and a half,
- * none without a calibration, and the bound for a gap whose quotient is
- * past 32 bits. Then another processor's place in the boot processor's
- * tick: inside the period, none pending; a period and more gone, one
- * pending and the rest; three periods gone, one pending and the place short
- * of a period.
+ * The rows of `timer_clock_check` for the reference, the PM timer's 35795.45
+ * counts a tick: short of a tick, none, and a count past it, one; the edge
+ * then 45 hundredths past its count, so that count is short of it; after two
+ * ticks, the edge two ticks on exactly; an interrupt nine and a half ticks
+ * late counts nine, the same one again none, with the place unchanged; a
+ * gap of 2^40 counts, some 85 hours, counts the bound; and a count behind
+ * the edge counts none.
  */
-static int timer_missed_rows(void)
+static int timer_ref_rows(void)
 {
-    uint32_t phase;
-    int ok = 1, due;
+    struct ref_clock r;
+    uint32_t rem;
+    int ok = 1;
 
-    ok = ok && pit_ticks_missed(1000u, 0u, 1000u) == 0u;
-    ok = ok && pit_ticks_missed(1900u, 0u, 1000u) == 0u;
-    ok = ok && pit_ticks_missed(9500u, 0u, 1000u) == 8u;
-    ok = ok && pit_ticks_missed(9500u, 0u, 0u) == 0u;
-    ok = ok && pit_ticks_missed(0u, 5000u, 1000u) == PIT_LOST_MAX;
-    ok = ok && pit_ticks_missed(0u, 1u, 1000u) == PIT_LOST_MAX;
-    edge_phase(4000000u, 10000000u, &due, &phase);
-    ok = ok && !due && phase == 4000000u;
-    edge_phase(12500000u, 10000000u, &due, &phase);
-    ok = ok && due && phase == 2500000u;
-    edge_phase(30000000u, 10000000u, &due, &phase);
-    ok = ok && due && phase == 9999999u;
+    r.mult = 100u;
+    r.tick = 3579545u;
+    r.edge = 0;
+    r.frac = 0;
+    r.ticks = 0;
+    ok = ok && ref_due(&r, 35795u, &rem) == 0u && rem == 3579500u;
+    ok = ok && ref_due(&r, 35796u, &rem) == 1u && rem == 55u;
+    ref_advance(&r, 1u);
+    ok = ok && r.edge == 35795u && r.frac == 45u;
+    ok = ok && ref_due(&r, 35795u, &rem) == 0u && rem == 0u;
+    ok = ok && ref_due(&r, 71591u, &rem) == 1u && rem == 10u;
+    ref_advance(&r, 1u);
+    ok = ok && r.edge == 71590u && r.frac == 90u && r.ticks == 2u;
+    ok = ok && ref_due(&r, 411647u, &rem) == 9u && rem == 1789705u;
+    ref_advance(&r, 9u);
+    ok = ok && ref_due(&r, 411647u, &rem) == 0u && rem == 1789705u && r.ticks == 11u;
+    ok = ok && ref_due(&r, r.edge + ((uint64_t)1 << 40), &rem) == REF_DUE_MAX;
+    ok = ok && ref_due(&r, r.edge - 1u, &rem) == 0u && rem == 0u;
     return ok;
 }
 
 /** The rows are in three functions: the phase rows, the clock rows and the
- * missed-tick rows. */
+ * reference's rows. */
 int timer_clock_check(void)
 {
     uint32_t p = 2u * sweep_us();
 
-    return timer_phase_rows(p) && timer_count_rows(p) && timer_missed_rows();
+    return timer_phase_rows(p) && timer_count_rows(p) && timer_ref_rows();
 }
 
 /**
@@ -352,98 +451,70 @@ uint32_t pit_phase_us(void)
 }
 
 /**
- * Where the tick began by the reference counter is the counter now less
- * the counts of the place within the tick, the two read together with
- * interrupts off. The tick counts the period unless a reading has already
- * counted it, which is what `clock.wrapped` says; counting it twice would
- * put the clock a period ahead each period.
+ * Before the reference starts, the tick counts the counter's period unless a
+ * reading has already counted it, which is what `clock.wrapped` says;
+ * counting it twice would put the clock a period ahead each period. The
+ * first tick with a reference ready starts it (`ref_start`); from then on
+ * the reference's whole ticks are counted, and the platform's counter's
+ * reading is added to its total, so that the next reading counts from here.
  */
-void timer_tick_clock(void)
+uint32_t timer_tick_clock(void)
 {
     uint32_t flags = kirq_save();
-    uint32_t phase_ns = counter->phase_ns();
+    uint32_t raw, rem, due;
+    uint64_t count;
 
-    pit_clock_tick(&clock, phase_ns / 1000u);
-    if (refclock_name()) {
-        edge_ref = (refclock_read() - refclock_scale(phase_ns, refclock_hz(), 1000000000u)) &
-                   refclock_mask();
-        edge_periods = clock.periods;
-        edge_set = 1;
+    if (ref_kind == REF_NONE) {
+        pit_clock_tick(&clock, counter->phase_ns() / 1000u);
+        (void)ref_start();
+        kirq_restore(flags);
+        return 1u;
     }
+    count = ref_count(&raw);
+    if (ref_kind == REF_COUNTER) {
+        ref_total = count;
+        ref_raw = raw;
+    }
+    due = ref_due(&ref, count, &rem);
+    ref_advance(&ref, due);
     kirq_restore(flags);
-}
-
-/** Nanoseconds since the boot processor's last tick began, by the
- * reference counter, at most two periods'. */
-static uint32_t edge_elapsed_ns(void)
-{
-    uint32_t counts = (refclock_read() - edge_ref) & refclock_mask();
-    uint32_t most = refclock_scale(2u * counter->period_us(), refclock_hz(), 1000000u);
-
-    if (counts > most) {
-        counts = most;
-    }
-    return refclock_scale(counts, 1000000000u, refclock_hz());
-}
-
-/**
- * The place in the tick `ns` nanoseconds after a tick of `period_ns` began:
- * a tick pending when a whole period has gone, and the nanoseconds into the
- * next, short of a period however long the boot processor has not counted
- * one.
- */
-static void edge_phase(uint32_t ns, uint32_t period_ns, int *pending, uint32_t *phase_ns)
-{
-    *pending = ns >= period_ns;
-    if (*pending) {
-        ns -= period_ns;
-        if (ns >= period_ns) {
-            ns = period_ns - 1u;
-        }
-    }
-    *phase_ns = ns;
+    return due;
 }
 
 /**
  * The tick alone has 10 ms of resolution, which is coarser than the intervals
- * the USB interrupt path is measured over, so this reads where the counter
- * under the tick is inside its period as well: the local APIC timer's count
- * when that is the tick, and channel 0's otherwise. Mode 3 sweeps channel 0's
- * counter to zero twice per interrupt, so the count says where in a
- * half-period the machine is and the read-back status says which half: `OUT`
- * is high through the first.
+ * the USB interrupt path is measured over, so this reads the place within the
+ * tick as well. Once the reference has started, it is the reference's ticks
+ * since it started and its place within the next, on every processor, read
+ * within the tick's sequence count.
  *
- * A machine whose interrupts are off for longer than a period loses that
- * period unless something reads the clock inside it. The tick counter makes
- * such periods up from the TSC where `timer_calibrate` found one at one
- * rate; this clock does not.
+ * Before then it is the boot processor's periods of the counter under the
+ * tick and that counter's place: the local APIC timer's count when that is
+ * the tick, and channel 0's otherwise. Mode 3 sweeps channel 0's counter to
+ * zero twice per interrupt, so the count says where in a half-period the
+ * machine is and the read-back status says which half: `OUT` is high
+ * through the first. A stretch with interrupts off longer than a period then
+ * loses the periods no reading fell inside.
  *
- * Another processor reads the reference counter's time since the boot
- * processor's tick began, short of a period however long the boot processor
- * has not counted one, since the boot processor counts at most one period
- * past its last tick; and no reading is earlier than one given before on any
- * processor (`now_floor`), so the clock never runs back from one processor
- * to another.
- *
- * It wraps after about 71 minutes, which is a diagnostic clock's bound and
- * not a wall clock's; the time of day is kept by ../../clock.c.
+ * No reading is earlier than one given before on any processor
+ * (`now_floor`), so the clock never runs back from one processor to
+ * another. It wraps after about 71 minutes, which is a diagnostic clock's
+ * bound and not a wall clock's; the time of day is kept by ../../clock.c.
  */
 uint32_t timer_now_us(void)
 {
     uint32_t flags = kirq_save();
-    uint32_t now, seq, ns, period_us = counter->period_us();
+    uint32_t now, seq, raw, rem, due;
 
-    if (arch_cpu_id() != 0 && edge_set) {
+    if (ref_kind != REF_NONE) {
         do {
             seq = tick_read_begin();
-            ns = edge_elapsed_ns();
-            if (ns >= period_us * 1000u) {
-                ns = (period_us - 1u) * 1000u;
-            }
-            now = edge_periods * period_us + ns / 1000u;
+            due = ref_due(&ref, ref_count(&raw), &rem);
+            now = ref_us_base + (ref.ticks + due) * US_PER_TICK +
+                  refclock_scale(rem, US_PER_TICK, ref.tick);
         } while (tick_read_retry(seq));
     } else {
-        now = pit_clock_read(&clock, counter->phase_us(), period_us);
+        now = pit_clock_read(&clock, counter->phase_us(), counter->period_us());
     }
     spin_lock(&now_lock);
     if ((int32_t)(now - now_floor) < 0) {
@@ -473,15 +544,19 @@ static int pit_pending(void)
 }
 
 /**
- * On the boot processor, the counter's pending bit read on both sides of the
- * latch of its place, and the latch again when the bit changed between, so
- * that the place belongs to the tick the bit says. On another processor, the
- * reference counter's time since the boot processor's tick began.
+ * Once the reference has started, the ticks it has gone past the tick in
+ * progress and its place within the next. Before then, the counter's pending
+ * bit read on both sides of the latch of its place, and the latch again when
+ * the bit changed between, so that the place belongs to the tick the bit
+ * says.
  */
 void timer_phase(int *pending, uint32_t *phase_ns)
 {
-    if (arch_cpu_id() != 0 && edge_set) {
-        edge_phase(edge_elapsed_ns(), counter->period_us() * 1000u, pending, phase_ns);
+    uint32_t raw, rem;
+
+    if (ref_kind != REF_NONE) {
+        *pending = (int)ref_due(&ref, ref_count(&raw), &rem);
+        *phase_ns = refclock_scale(rem, NS_PER_TICK, ref.tick);
         return;
     }
     *pending = counter->pending();
