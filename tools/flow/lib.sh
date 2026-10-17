@@ -125,9 +125,13 @@ wait_session()
 # merged REF: succeed when every commit of REF is on `origin/master`: REF is
 # an ancestor of it, or `git cherry` finds each commit's patch there, as it
 # does for a branch rebased before its push. A commit message proves nothing.
+# `git cherry` skips merge commits, so a branch with a merge that master lacks
+# counts only by ancestry. A patch id ignores whitespace, so a commit that
+# differs from master's only in whitespace counts as merged.
 merged()
 {
     git merge-base --is-ancestor "$1" origin/master 2> /dev/null && return 0
+    [ -z "$(git rev-list --merges -n 1 "origin/master..$1" 2> /dev/null)" ] || return 1
     patches=$(git cherry origin/master "$1" 2> /dev/null) || return 1
     ! printf '%s\n' "$patches" | grep -q '^+'
 }
@@ -136,7 +140,8 @@ merged()
 # under .claude/worktrees goes when its HEAD is merged and `git worktree
 # remove` takes it without force, which it refuses for a worktree with
 # changes, untracked files or a lock, as Claude Code keeps on a helper's
-# worktree while the helper runs. A branch goes when it is merged, unless it
+# worktree while the helper runs; the ignored files in it, its build output
+# and scratch, go with it. A branch goes when it is merged, unless it
 # is master, the branch checked out, one checked out in a worktree, which git
 # refuses to delete, or one named for the issue in STATE/issue or
 # STATE/parked. Each removal is logged.

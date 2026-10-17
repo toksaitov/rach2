@@ -6,17 +6,18 @@
 # `tidy` runs in a clone of a scratch origin. It must delete a branch merged
 # into master and one whose commit master took by cherry-pick, and keep one
 # whose commit only has a subject master has, one with a commit master lacks,
-# the branches of the issue held and of the issue parked, and the branch
-# checked out; and it must remove a clean helper's worktree under
-# .claude/worktrees at a merged commit, with its branch, and keep one with an
-# untracked file, a locked one, one with a commit master lacks, and one
-# outside .claude/worktrees. `prune_logs` must remove a session's output past
-# fourteen days and keep a younger one and files its patterns do not match,
-# and under 1 GiB of sparse files remove the oldest until the total fits,
-# never one written in the last day. `scratch.pl` must remove an old scratch
-# directory and an old scratch file, and keep a directory with a file changed
-# now, entries whose names mktemp does not give, a symbolic link, and, where
-# /proc exists, a directory a process works in.
+# one whose only commit master lacks is a merge, the branches of the issue
+# held and of the issue parked, and the branch checked out; and it must remove
+# a clean helper's worktree under .claude/worktrees at a merged commit, with
+# its branch, and keep one with an untracked file, a locked one, one with a
+# commit master lacks, and one outside .claude/worktrees. `prune_logs` must
+# remove a session's output past fourteen days and keep a younger one and
+# files its patterns do not match, and under 1 GiB of sparse files remove the
+# oldest until the total fits, never one written in the last day. `scratch.pl`
+# must remove an old scratch directory and an old scratch file, and keep a
+# directory with a file changed now, entries whose names mktemp does not give
+# or end in a login name, a symbolic link, and, where /proc exists, a
+# directory a process works in and one that holds a running program.
 #
 # With --mutate each fault below is put into private copies of lib.sh and
 # scratch.pl and must fail exactly its expected rows; the copies are
@@ -36,7 +37,7 @@ esac
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 work=
 busy=
-trap '[ -z "$busy" ] || kill "$busy" 2> /dev/null; [ -z "$work" ] || rm -rf "$work"' EXIT
+trap '[ -z "$busy" ] || kill $busy 2> /dev/null; [ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -56,6 +57,7 @@ fault()
     case $1 in
         none) ;;
         no-cherry) l='s/^    ! printf .%s\\n. "\$patches" | grep -q .^+.$/    true/' ;;
+        no-merges) l='/^    \[ -z "\$(git rev-list --merges /d' ;;
         no-keep) l='s/^            case \$b in "\$n"-\*) continue 2 ;; esac$/            :/' ;;
         force) l='s/git worktree remove "\$w"/git worktree remove --force --force "\$w"/' ;;
         any-worktree) l='s|^        case \$w in "\$top"/.claude/worktrees/\*) ;; \*) continue ;; esac$|        :|' ;;
@@ -64,8 +66,11 @@ fault()
         no-size) l='s/next unless \$age > 14 \* 86400 || \$total > 1 << 30;/next unless $age > 14 * 86400;/' ;;
         no-fresh) s='/^    next if fresh(\$p);$/d' ;;
         any-name) s='/^    next unless \$e =~ /d' ;;
+        any-length) s='s/(\[A-Za-z0-9\]{6})/([A-Za-z0-9]{6,})/' ;;
+        no-login) s='/^    next if defined \$1 and defined getpwnam \$1;$/d' ;;
         links) s='s/^    next if \$st\[4\] == 0 or !(-d _ or -f _);$/    next if $st[4] == 0;/' ;;
         no-busy) s='/^    next if grep { \$_ eq \$p or index(\$_, "\$p\/") == 0 } @busy;$/d' ;;
+        no-program) s='s/"\$p\/cwd", "\$p\/exe", /"$p\/cwd", /; /^    if (open my \$m, .<., "\$p\/maps") {$/,/^    }$/d' ;;
     esac
     if [ "$l" = cat ]; then cat; else sed "$l"; fi < "$repo/tools/flow/lib.sh" > "$lib"
     if [ "$s" = cat ]; then cat; else sed "$s"; fi < "$repo/tools/flow/scratch.pl" > "$sweep"
@@ -115,6 +120,8 @@ setup()
     echo d1 > d && git add d && git commit -q -m 'Add d'
     git switch -q -c 4-unpushed "$base"
     echo e > e && git add e && git commit -q -m 'Add e'
+    git switch -q -c 8-merge "$base"
+    git merge -q --no-ff -m 'Merge 1-merged' 1-merged
     git switch -q master
     git merge -q --ff-only 1-merged
     git cherry-pick -x 2-rebased > /dev/null
@@ -141,17 +148,21 @@ setup()
     sparse "$work/stateB/s-big2.jsonl" 600 && age 2 "$work/stateB/s-big2.jsonl"
     sparse "$work/stateB/s-young.jsonl" 1200
     t=$work/tmp
-    mkdir -p "$t/rach2-old.Ab3dEf/sub" "$t/rach2-busy.Bu5yBu" "$work/target"
+    mkdir -p "$t/rach2-old.Ab3dEf/sub" "$t/rach2-busy.Bu5yBu" "$t/rach2-prog.Pr0gPr" "$work/target"
+    cp "$(command -v sleep)" "$t/rach2-prog.Pr0gPr/sleep"
     : > "$t/rach2-old.Ab3dEf/sub/f"
     : > "$t/tmp.Fi1eFi1eFi"
     : > "$t/rach2-ports.0"
     : > "$t/notes"
     : > "$t/log.txt"
+    : > "$t/app.daemon"
+    : > "$t/nvim.longname1"
     : > "$t/rach2-young.Yy3Yy3/now"
     ln -s "$work/target" "$t/link.Li9kLi"
     age 2 "$t/rach2-old.Ab3dEf/sub/f" "$t/rach2-old.Ab3dEf/sub" "$t/rach2-old.Ab3dEf" \
-        "$t/tmp.Fi1eFi1eFi" "$t/rach2-ports.0" "$t/notes" "$t/log.txt" \
-        "$t/rach2-young.Yy3Yy3" "$t/rach2-busy.Bu5yBu" "$work/target"
+        "$t/tmp.Fi1eFi1eFi" "$t/rach2-ports.0" "$t/notes" "$t/log.txt" "$t/app.daemon" \
+        "$t/nvim.longname1" "$t/rach2-young.Yy3Yy3" "$t/rach2-busy.Bu5yBu" \
+        "$t/rach2-prog.Pr0gPr/sleep" "$t/rach2-prog.Pr0gPr" "$work/target"
     touch -h -t "$(perl -MPOSIX -e 'print strftime("%Y%m%d%H%M", localtime(time - 2 * 86400))')" \
         "$t/link.Li9kLi"
 }
@@ -171,22 +182,27 @@ rows()
     if [ -d /proc/self/fd ]; then
         (cd "$work/tmp/rach2-busy.Bu5yBu" && exec sleep 300) &
         busy=$!
+        (cd / && exec "$work/tmp/rach2-prog.Pr0gPr/sleep" 300) &
+        busy="$busy $!"
     fi
-    # shellcheck source=tools/flow/lib.sh
-    (cd "$work/clone" && state=$work/stateA repo=$work/clone &&
-        . "$lib" && tidy) > "$work/tidy.out" 2>&1
-    # shellcheck source=tools/flow/lib.sh
-    (state=$work/stateA && . "$lib" && prune_logs 's-*') >> "$work/tidy.out" 2>&1
-    # shellcheck source=tools/flow/lib.sh
-    (state=$work/stateB && . "$lib" && prune_logs 's-*') >> "$work/tidy.out" 2>&1
-    perl "$sweep" "$work/tmp" >> "$work/tidy.out" 2>&1
-    [ -z "$busy" ] || { kill "$busy" 2> /dev/null; wait "$busy" 2> /dev/null; busy=; }
+    {
+        # shellcheck source=tools/flow/lib.sh
+        (cd "$work/clone" && state=$work/stateA && . "$lib" && tidy)
+        # shellcheck source=tools/flow/lib.sh
+        (state=$work/stateA && . "$lib" && prune_logs 's-*')
+        # shellcheck source=tools/flow/lib.sh
+        (state=$work/stateB && . "$lib" && prune_logs 's-*')
+        perl "$sweep" "$work/tmp"
+    } > "$work/tidy.out" 2>&1
+    # shellcheck disable=SC2086 # busy is a list of process ids
+    [ -z "$busy" ] || { kill $busy 2> /dev/null; wait $busy 2> /dev/null; busy=; }
     wt=$work/clone/.claude/worktrees
     a=$work/stateA b=$work/stateB t=$work/tmp
     for row in branch-merged branch-rebased branch-subject branch-unpushed \
-        branch-held branch-parked branch-current wt-clean wt-dirty wt-locked \
+        branch-held branch-parked branch-current branch-merge wt-clean wt-dirty wt-locked \
         wt-unique wt-outside prune-age prune-pattern prune-size prune-young \
-        scratch-old scratch-file scratch-young scratch-name scratch-link scratch-busy; do
+        scratch-old scratch-file scratch-young scratch-name scratch-link scratch-busy \
+        scratch-program; do
         case $row in
             branch-merged) ! has 1-merged ;;
             branch-rebased) ! has 2-rebased ;;
@@ -195,6 +211,7 @@ rows()
             branch-held) has 5-held ;;
             branch-parked) has 6-parked ;;
             branch-current) has 7-current ;;
+            branch-merge) has 8-merge ;;
             wt-clean) [ ! -e "$wt/clean" ] && ! has worktree-clean ;;
             wt-dirty) [ -e "$wt/dirty/untracked" ] && has worktree-dirty ;;
             wt-locked) [ -d "$wt/locked" ] && has worktree-locked ;;
@@ -207,9 +224,11 @@ rows()
             scratch-old) [ ! -e "$t/rach2-old.Ab3dEf" ] ;;
             scratch-file) [ ! -e "$t/tmp.Fi1eFi1eFi" ] ;;
             scratch-young) [ -e "$t/rach2-young.Yy3Yy3/now" ] ;;
-            scratch-name) [ -e "$t/rach2-ports.0" ] && [ -e "$t/notes" ] && [ -e "$t/log.txt" ] ;;
+            scratch-name) [ -e "$t/rach2-ports.0" ] && [ -e "$t/notes" ] && [ -e "$t/log.txt" ] &&
+                [ -e "$t/app.daemon" ] && [ -e "$t/nvim.longname1" ] ;;
             scratch-link) [ -L "$t/link.Li9kLi" ] && [ -d "$work/target" ] ;;
             scratch-busy) [ ! -d /proc/self/fd ] || [ -d "$t/rach2-busy.Bu5yBu" ] ;;
+            scratch-program) [ ! -d /proc/self/fd ] || [ -e "$t/rach2-prog.Pr0gPr/sleep" ] ;;
         esac || { echo "tidy-test: failed: $row"; failed=1; }
     done
     [ "$failed" -eq 0 ] || sed 's/^/tidy-test: output: /' "$work/tidy.out"
@@ -228,7 +247,8 @@ expect()
     fi
 }
 
-faults='no-cherry no-keep force any-worktree no-age no-young no-size no-fresh any-name links no-busy'
+faults='no-cherry no-merges no-keep force any-worktree no-age no-young no-size no-fresh any-name
+    any-length no-login links no-busy no-program'
 if [ "$mode" = texts ]; then
     for f in $faults; do
         fault "$f" || { echo "tidy-test: fault $f changes nothing in lib.sh or scratch.pl" >&2; exit 1; }
@@ -239,6 +259,7 @@ fault none
 rows >&2 || exit 1
 if [ "$mode" = mutate ]; then
     expect no-cherry 'branch-subject branch-unpushed wt-unique' || exit 1
+    expect no-merges branch-merge || exit 1
     expect no-keep 'branch-held branch-parked' || exit 1
     expect force 'wt-dirty wt-locked' || exit 1
     expect any-worktree wt-outside || exit 1
@@ -247,12 +268,15 @@ if [ "$mode" = mutate ]; then
     expect no-size prune-size || exit 1
     expect no-fresh scratch-young || exit 1
     expect any-name scratch-name || exit 1
+    expect any-length scratch-name || exit 1
+    expect no-login scratch-name || exit 1
     expect links scratch-link || exit 1
     if [ -d /proc/self/fd ]; then
         expect no-busy scratch-busy || exit 1
+        expect no-program scratch-program || exit 1
     fi
     fault none
     rows >&2 || exit 1
     echo 'tidy-test: result: pass: every fault caught and restored'
 fi
-echo 'tidy-test: result: pass: 22 rows'
+echo 'tidy-test: result: pass: 24 rows'

@@ -9,13 +9,16 @@
 # host, for /tmp, whose tmpfs is the host's memory. An entry of DIR, /tmp
 # unless given, is removed when all of these hold:
 #
-# * its name has the form that mktemp(1) and mkdtemp(3) give, a name, a dot
-#   and six or more letters, digits or underscores, which the lock files
-#   rach2-ports.N, rach2-host.lock and rach2-host.gate do not have;
+# * its name has a form that mktemp(1) gives: a name, a dot and six letters
+#   or digits, as the templates of this tree's tests make, or `tmp.` and ten,
+#   as GNU mktemp makes with no template; the six are not a login name, as in
+#   nvim's directories, and the lock files rach2-ports.N, rach2-host.lock and
+#   rach2-host.gate have neither form;
 # * it is a directory or a regular file, and root does not own it;
 # * nothing in it has changed for SECONDS, a day unless given;
-# * nothing is mounted in it, and no process has its working directory or an
-#   open file in it, as /proc shows where it exists.
+# * nothing is mounted in it, and no process has its working directory, its
+#   program, an open file or a mapped file in it, as /proc shows where it
+#   exists.
 #
 # It prints one line: how many entries it removed and their size.
 
@@ -30,9 +33,12 @@ my $now = time;
 
 my @busy;
 for my $p (glob '/proc/[0-9]*') {
-    for my $l ("$p/cwd", glob "$p/fd/*") {
+    for my $l ("$p/cwd", "$p/exe", glob "$p/fd/*") {
         my $t = readlink $l;
         push @busy, $t if defined $t;
+    }
+    if (open my $m, '<', "$p/maps") {
+        push @busy, map { m{^\S+ \S+ \S+ \S+ \S+ +(/.*?)(?: \(deleted\))?$} ? $1 : () } <$m>;
     }
 }
 if (open my $m, '<', '/proc/self/mounts') {
@@ -40,6 +46,8 @@ if (open my $m, '<', '/proc/self/mounts') {
 } else {
     push @busy, map { /^\S+ on (.+?) (?:type |\()/ ? $1 : () } `mount`;
 }
+my %seen;
+@busy = grep { index($_, "$dir/") == 0 and !$seen{$_}++ } @busy;
 
 # fresh PATH: whether PATH or anything under it changed within $age seconds.
 sub fresh {
@@ -68,7 +76,8 @@ sub size {
 opendir my $d, $dir or die "scratch: $dir: $!\n";
 my ($count, $bytes) = (0, 0);
 for my $e (sort readdir $d) {
-    next unless $e =~ /^[A-Za-z0-9][A-Za-z0-9_.-]*\.[A-Za-z0-9_]{6,}$/;
+    next unless $e =~ /^(?:[A-Za-z0-9][A-Za-z0-9_.-]*\.([A-Za-z0-9]{6})|tmp\.[A-Za-z0-9]{10})$/;
+    next if defined $1 and defined getpwnam $1;
     my $p = "$dir/$e";
     my @st = lstat $p or next;
     next if $st[4] == 0 or !(-d _ or -f _);
