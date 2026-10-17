@@ -1,7 +1,8 @@
 #!/bin/sh
 # agents_mutate.sh | --texts: show that `tests/run agents` catches a fault in
 # each of the agents layer's installs of gh, Claude Code, Codex, Antigravity
-# CLI and muse, and one in the project's loops.
+# CLI and muse, one in the project's loops, and one in the kernel that Claude
+# Code's sessions meet.
 #
 # Usage: sh tests/system/agents_mutate.sh | --texts
 # Five faults are in recipes of vendor/gnu/agents/packages/. Those of gh and
@@ -16,27 +17,32 @@
 # Antigravity CLI's updater on. The sixth makes `limited` in
 # tools/flow/lib.sh take a usage limit from any line of a session's output,
 # which the limited_test row, running tests/system/limited_test.sh on the
-# machine, must catch. The suite runs only the rows of these six, through
-# RACH2_AGENTS_ROWS: it must pass, fail on each of them with the six faults
-# in their sources and the root built again, and pass again with the
-# sources restored. The suite is x86-64 only. --texts checks that each fault
-# is once in its source.
+# machine, must catch. The seventh, in rach2/sys/fs/procfs.c, stops a path
+# from going on past /proc/PID/fd/N of a file or a directory, with ENOTDIR,
+# as Rach2 did before it followed the link; Claude Code's Bash tool makes its
+# files through such a path, so the claude-print and claude-screen rows must
+# fail. The suite runs only the rows of these seven, through
+# RACH2_AGENTS_ROWS: it must pass, fail on each of them with the seven
+# faults in their sources and the root and the kernel built again, and pass
+# again with the sources restored. The suite is x86-64 only. --texts checks
+# that each fault is once in its source.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-faults="gh claude codex agy muse limited"
-rows="gh claude codex agy muse limited_test"
+faults="gh claude codex agy muse limited procfs"
+rows="gh claude codex agy muse limited_test claude-print claude-screen"
 
 # fault_file NAME: the file that fault NAME goes into: tools/flow/lib.sh for
-# `limited`, and otherwise the recipe of the package NAME.
+# `limited`, rach2/sys/fs/procfs.c for `procfs`, and otherwise the recipe of
+# the package NAME.
 fault_file()
 {
-    if [ "$1" = limited ]; then
-        echo tools/flow/lib.sh
-    else
-        echo "vendor/gnu/agents/packages/$1.sh"
-    fi
+    case $1 in
+        limited) echo tools/flow/lib.sh ;;
+        procfs) echo rach2/sys/fs/procfs.c ;;
+        *) echo "vendor/gnu/agents/packages/$1.sh" ;;
+    esac
 }
 
 # apply_fault NAME: put fault NAME into its source: for a package, whose
@@ -66,6 +72,9 @@ elif name == 'agy':
 elif name == 'limited':
     old = '''        grep -E '"type":"result".*"is_error":true|"is_error":true.*"type":"result"|"type":"(error|turn\\.failed)"'\n'''
     new = '        cat\n'
+elif name == 'procfs':
+    old = 'if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) && e->ofd && e->ofd->vmnt) {'
+    new = 'if (0) {'
 else:
     old = f'ln -s ../../opt/{name}/bin/{name} "$1/usr/bin/{name}"'
     new = f'ln -s ../../opt/{name}/bin/{name}.missing "$1/usr/bin/{name}"'
@@ -106,7 +115,7 @@ stop_child()
 }
 
 # Put back the saved sources and touch them, so that make stages the packages
-# again.
+# and builds the kernel again.
 restore()
 {
     if [ -n "$changed" ]; then
@@ -143,8 +152,9 @@ done
 cc -O2 -Wall -Wextra -Werror tests/system/runner/runutil.c -o "$work/runutil"
 
 # run_phase PHASE EXPECTED...: run the suite's rows of the faults, which
-# builds the root again when a recipe changed. With EXPECTED `pass` it must
-# pass; otherwise it must fail with each EXPECTED in its output.
+# builds the root and the kernel again when a source changed. With EXPECTED
+# `pass` it must pass; otherwise it must fail with each EXPECTED in its
+# output.
 run_phase()
 {
     phase=$1
@@ -185,7 +195,8 @@ run_phase faults 'AGENTROW FAIL gh: gh --version: status 127' \
     'AGENTROW FAIL codex: the processes: got [' \
     "AGENTROW FAIL agy: the updater's setting in a login shell: got [false], want [true]" \
     'AGENTROW FAIL muse: muse --version: status 127' \
-    'AGENTROW FAIL limited_test: limited_test.sh --mutate: status'
+    'AGENTROW FAIL limited_test: limited_test.sh --mutate: status' \
+    'agents-test: claude-print: FAIL' 'agents-test: claude-screen: FAIL'
 restore
 run_phase restored pass
 for name in $faults; do

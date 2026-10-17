@@ -27,10 +27,11 @@
 #
 # A row that talks to a vendor's service has a script for the fake server,
 # NAME.json beside it, or a header `# script: PATH` relative to
-# tests/system/, and a header line `# hosts: NAME...` with the host
-# names it reaches. The suite makes a certificate authority, which the
-# machine has as /tmp/agents/ca.pem, and a server certificate for every
-# row's names, and root gives each name the server's address in /etc/hosts.
+# tests/system/, and header lines `# hosts: NAME...` with the host names it
+# reaches, on as many lines as they need. The suite makes a certificate
+# authority, which the machine has as /tmp/agents/ca.pem, and a server
+# certificate for every row's names, and root gives each name the server's
+# address in /etc/hosts.
 # The server plays the row's script while the row runs, and the row fails
 # unless the server's verdict passes: every step played and no request the
 # script does not expect. A row may write /tmp/agents/results/NAME.tar and
@@ -40,7 +41,8 @@
 # afterwards; TIMINGS records elapsed host seconds as requests arrive.
 # `# package: NAME` selects another package's version; `# verifier: FILE`
 # selects another row's verifier. `# script-filter: FILE` runs FILE --script
-# SOURCE DESTINATION to prepare a variant of the shared server script.
+# SOURCE DESTINATION NAME to prepare the row NAME's variant of the shared
+# server script.
 #
 # Usage: agents.sh KERNEL IMAGE DISK PORT APIPORT
 #
@@ -252,7 +254,7 @@ for file in "$ROWS_DIR"/*.sh; do
     TOTAL=$((TOTAL + 1))
     filter=$(sed -n 's/^# script-filter: //p' "$file")
     if [ -n "$filter" ]; then
-        python3 -B "$ROWS_DIR/$filter" --script "$script" "$work/$name.json" ||
+        python3 -B "$ROWS_DIR/$filter" --script "$script" "$work/$name.json" "$name" ||
             fail "the server script for $name"
         script="$work/$name.json"
     fi

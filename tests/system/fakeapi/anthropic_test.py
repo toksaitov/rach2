@@ -50,6 +50,16 @@ class MessagesTest(unittest.TestCase):
         self.body["messages"][1]["content"].append(copy.deepcopy(self.result))
         self.assertIn("duplicated", self.check())
 
+    def test_body(self):
+        """A step's body must match the request's as fakeapi.subset says."""
+        self.step["body"] = {"tools": [], "output_config": {"format": {"type": "json_schema"}}}
+        self.assertIn("unexpected body: $ has no member", self.check())
+        self.body["tools"] = [{"name": "Bash", "input_schema": {}}]
+        self.body["output_config"] = {"effort": "high", "format": {"type": "json_schema"}}
+        self.assertIn("unexpected body: $.tools is", self.check())
+        self.body["tools"] = []
+        self.assertIsNone(self.check())
+
     def test_stream_and_json(self):
         """Both response forms preserve text and complete tool arguments."""
         for stream in (True, False):

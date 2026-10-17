@@ -11,24 +11,8 @@
 # hosts: muse.fakeapi.test
 # script: fakeapi/muse.json
 
-# pane WHAT TEXT SECONDS: wait until the muse window of tmux shows TEXT,
-# looking once a second for at most SECONDS.
-pane() {
-    local n=0 screen
-    while :; do
-        screen=$(tmux -L muse capture-pane -p -t muse 2>&1)
-        case "$screen" in
-            *"$2"*) return 0 ;;
-        esac
-        if [ "$n" -ge "$3" ]; then
-            fail "$1: in $3 s the screen showed no [$2], but [$(printf '%s' "$screen" |
-                sed '/^ *$/d' | tail -n 4 | tr '\n' ' ')]"
-            return 1
-        fi
-        n=$((n + 1))
-        sleep 1
-    done
-}
+# shellcheck disable=SC2034 # agents_rows.sh's pane reads it
+PANE=muse
 
 row() {
     output "muse --version" env HOME="$WORK/home" muse --version
@@ -65,14 +49,6 @@ row_cleanup() {
         SAMPLER=
     fi
     tmux -L muse kill-server 2>/dev/null || true
-}
-
-# Sample the kernel's free frame count once a second for the record.
-sample_memory() {
-    while :; do
-        awk '$1 == "nr_free_pages" {print $2}' /proc/vmstat
-        sleep 1
-    done
 }
 
 # Run the shared script in headless mode or in the terminal, in a fresh home.

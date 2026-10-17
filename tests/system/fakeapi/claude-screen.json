@@ -1,0 +1,14 @@
+{
+  "protocol": "anthropic",
+  "steps": [
+    {"protocol": "plain", "unordered": true,
+     "request": {"path": "/api/hello", "headers": {"Host": "api.anthropic.com"}},
+     "reply": {"json": {"message": "hello"}}},
+    {"protocol": "plain", "unordered": true,
+     "request": {"path": "/v1/oauth/hello", "headers": {"Host": "platform.claude.com"}},
+     "reply": {"json": {"message": "hello"}}},
+    {"unordered": true,
+     "body": {"tools": [], "output_config": {"format": {"type": "json_schema"}}},
+     "reply": [{"type": "text", "text": "{\"title\": \"Fixture answer\"}"}]}
+  ]
+}

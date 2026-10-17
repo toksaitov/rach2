@@ -5,6 +5,9 @@ Messages content array. Each result has `id` and `contains` (text fragments),
 or `equals` (the whole text). `model` defaults to claude-sonnet-4-6. Requests
 must advertise the tools in `tools` (names), use the dummy key, and stream.
 `stream: false` on a step tests a nonstreaming Messages exchange instead.
+`body`, when a step has it, is a value the request's JSON body must match as
+fakeapi.subset says, which tells apart a request the client sends for its own
+use, such as the title of a session, from a turn of the conversation.
 The result checks precede every reply, including the final text answer.
 
 The protocol follows Anthropic's Messages, tool-result and streaming docs:
@@ -75,6 +78,10 @@ def check(step, request):
     for name in step.get("tools", []):
         if name not in tools or not isinstance(tools[name].get("input_schema"), dict):
             return f"missing tool definition: {name}"
+    if "body" in step:
+        reason = fakeapi.subset(step["body"], body)
+        if reason:
+            return "unexpected body: " + reason
     results = {}
     calls = {}
     for message in body.get("messages", []):

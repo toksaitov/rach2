@@ -41,7 +41,7 @@ def watch(record, output):
             time.sleep(0.1)
 
 
-def prepare_script(source, destination):
+def prepare_script(source, destination, _row=None):
     """Add the TUI's second model-list fetch and unavailable config service."""
     script = json.loads(Path(source).read_text())
     catalog = script['steps'][0]

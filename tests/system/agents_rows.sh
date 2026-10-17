@@ -15,8 +15,10 @@
 # program do its job as a person would ask for it and compares what it
 # printed or wrote with what it must be, through the functions below; a row
 # that runs a test of the tree, such as a test of the project's loops, makes
-# a git repository of the tree's tests and tools with `tree`. The
-# script prints `AGENTROW OK NAME` when every comparison holds, and otherwise
+# a git repository of the tree's tests and tools with `tree`, and a row
+# that drives a program's screen runs it in tmux, on the server and in the
+# session PANE names, and waits for it with `pane`. The script prints
+# `AGENTROW OK NAME` when every comparison holds, and otherwise
 # `AGENTROW FAIL NAME: ` with the first that did not.
 #
 
@@ -30,6 +32,7 @@ VERSION=${2:-}
 WORK=/tmp/agents/work/$ROW
 # shellcheck disable=SC2034 # the rows read it
 CA=/tmp/agents/ca.pem
+PANE=
 FAILED=
 OUT=
 
@@ -79,6 +82,60 @@ tree() {
         fail "the tree's tests and tools in a git repository"
         return 1
     fi
+}
+
+# pane WHAT TEXT SECONDS: wait until the window of the tmux server PANE, a
+# session of the same name, shows TEXT, looking once a second for at most
+# SECONDS.
+pane() {
+    local n=0 screen
+    while :; do
+        screen=$(tmux -u -L "$PANE" capture-pane -p -t "$PANE" 2>&1)
+        case "$screen" in
+            *"$2"*) return 0 ;;
+        esac
+        if [ "$n" -ge "$3" ]; then
+            fail "$1: in $3 s the screen showed no [$2], but [$(printf '%s' "$screen" |
+                sed '/^ *$/d' | tail -n 4 | tr '\n' ' ')]"
+            return 1
+        fi
+        n=$((n + 1))
+        sleep 1
+    done
+}
+
+# sample_memory: print the kernel's count of free frames, nr_free_pages of
+# /proc/vmstat, once a second until killed.
+sample_memory() {
+    while :; do
+        awk '$1 == "nr_free_pages" {print $2}' /proc/vmstat
+        sleep 1
+    done
+}
+
+# unmodified WHAT PID PROGRAM FILE...: require the process PID to run
+# PROGRAM with nothing preloaded: the process runs PROGRAM, its environment
+# has no variable of the dynamic linker's, LD_*, the root has no
+# /etc/ld.so.preload, and every file the process maps, with every link in
+# its path resolved, is PROGRAM, one of the FILEs or the linker's cache,
+# /etc/ld.so.cache, which glibc's linker keeps mapped after a dlopen. The
+# host compares the program's digest with the one its vendor published.
+unmodified() {
+    local what=$1 pid=$2 program=$3 exe maps linker file
+    shift 3
+    exe=$(readlink "/proc/$pid/exe")
+    maps=$(awk '$6 ~ /^\// { print $6 }' "/proc/$pid/maps" | sort -u)
+    linker=$(tr '\0' '\n' < "/proc/$pid/environ" | grep '^LD_')
+    same "$what: the program" "$exe" "$program"
+    [ -n "$maps" ] || fail "$what: /proc/$pid/maps names no file"
+    for file in $maps; do
+        case " $program /etc/ld.so.cache $* " in
+            *" $(readlink -f "$file") "*) ;;
+            *) fail "$what: the process maps $file" ;;
+        esac
+    done
+    same "$what: the linker's variables" "$linker" ""
+    [ ! -e /etc/ld.so.preload ] || fail "$what: the root has /etc/ld.so.preload"
 }
 
 if [ -z "$ROW" ] || [ ! -f "/tmp/agents/$ROW.sh" ]; then

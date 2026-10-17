@@ -8,9 +8,11 @@ Usage: claude_test.py BINARY [--mutate]
        claude_test.py --texts
 
 The prepare, client and verify commands are also the parts a guest suite
-uses, with claude-session.json unchanged. WORK is an absolute path. The
-caller of those commands removes it. The Linux proof removes its work on
-success or a signal, and prints its evidence directory on failure.
+uses, with claude-session.json unchanged; the agents suite's rows use
+render and verify through tests/system/agents/claude_session_verify.py.
+WORK is an absolute path. The caller of those commands removes it. The
+Linux proof removes its work on success or a signal, and prints its
+evidence directory on failure.
 """
 
 import hashlib
@@ -42,6 +44,20 @@ def command(args, cwd, env=None):
                                    text=True, timeout=30)
 
 
+def render(repo, screen=False):
+    """Return claude-session.json with its repository at the path REPO.
+
+    With SCREEN, the steps of claude-screen.json come first: the requests a
+    session in Claude Code's screen sends beside the conversation.
+    """
+    script = json.loads((HERE / "claude-session.json").read_text().replace(
+        "@REPO@", json.dumps(str(repo))[1:-1]))
+    if screen:
+        script["steps"] = json.loads((HERE / "claude-screen.json").read_text())["steps"] + \
+            script["steps"]
+    return script
+
+
 def prepare(work):
     """Make an empty home, a fixture repository and the rendered script."""
     work = work.resolve()
@@ -57,9 +73,7 @@ def prepare(work):
         command(["git", "config", name, value], repo, env)
     command(["git", "add", "fixture.txt"], repo, env)
     command(["git", "commit", "-qm", "Create the offline fixture"], repo, env)
-    script = json.loads((HERE / "claude-session.json").read_text().replace(
-        "@REPO@", json.dumps(str(repo))[1:-1]))
-    (work / "script.json").write_text(json.dumps(script))
+    (work / "script.json").write_text(json.dumps(render(repo)))
 
 
 def client(binary, work, url, ca):
@@ -125,14 +139,17 @@ def verify(work, record):
         if command(args, repo, env) != wanted:
             raise ValueError("wrong git result: " + " ".join(args))
     entries = [json.loads(line) for line in record.read_text().splitlines()]
-    if len(entries) != 5 or [e.get("step") for e in entries] != list(range(1, 6)):
-        raise ValueError("the record is not five accepted Messages requests")
     script = json.loads((work / "script.json").read_text())
-    for step, entry in zip(script["steps"], entries):
+    steps = script["steps"]
+    if sorted(e.get("step", 0) for e in entries) != list(range(1, len(steps) + 1)):
+        raise ValueError(f"the record is not {len(steps)} accepted requests, one for each step")
+    for entry in entries:
+        step = steps[entry["step"] - 1]
         request = fakeapi.Request(entry["method"], entry["path"] +
                                   ("?" + entry["query"] if entry["query"] else ""),
                                   "HTTP/1.1", entry["headers"], entry["body"].encode())
-        reason = proto_anthropic.check(step, request)
+        module = fakeapi.protocol(step.get("protocol", script.get("protocol", "plain")))
+        reason = module.check(step, request)
         if reason:
             raise ValueError("the recorded exchange failed: " + reason)
 
