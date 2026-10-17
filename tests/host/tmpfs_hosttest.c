@@ -573,25 +573,26 @@ static void seals(void)
 }
 
 /**
- * A removed directory that is still held keeps its removed parent: its ".."
- * is listed with the parent's number and walked to the parent, and both go
- * with the last hold.
+ * A removed directory that is still held keeps its removed parent: a listing
+ * of it is ENOENT from any cursor, its ".." is walked to the parent, and both
+ * go with the last hold.
  */
 static void removed_parent(void)
 {
     struct vfs_dirent ent;
-    struct vfs_stat st;
     uint32_t cursor = 0;
     void *p, *c;
 
     CHECK(tmpfs_mkdir(&mnt, NULL, "rp", 0755) == 0);
     p = look(NULL, "rp");
-    CHECK(tmpfs_getattr(&mnt, p, &st) == 0 && tmpfs_mkdir(&mnt, p, "rc", 0755) == 0);
+    CHECK(tmpfs_mkdir(&mnt, p, "rc", 0755) == 0);
     c = look(p, "rc");
     tmpfs_put(&mnt, p);
+    CHECK(tmpfs_readdir(&mnt, c, &cursor, &ent) == 1 && cursor == 1);
     CHECK(tmpfs_rmdir(&mnt, p, "rc") == 0 && tmpfs_rmdir(&mnt, NULL, "rp") == 0);
-    CHECK(tmpfs_readdir(&mnt, c, &cursor, &ent) == 1 &&
-          tmpfs_readdir(&mnt, c, &cursor, &ent) == 1 && same(ent.name, "..") && ent.ino == st.ino);
+    CHECK(tmpfs_readdir(&mnt, c, &cursor, &ent) == -ENOENT && cursor == 1);
+    cursor = 0;
+    CHECK(tmpfs_readdir(&mnt, c, &cursor, &ent) == -ENOENT && cursor == 0);
     CHECK(look(c, "..") == p);
     tmpfs_put(&mnt, p);
     tmpfs_put(&mnt, c);

@@ -561,7 +561,8 @@ static int tmpfs_fsync(struct vfs_mount *mnt, void *handle)
  * "..", and the names follow at their places, which removing a name does not
  * change, so a program that removes names while it lists them, as `rm -r`
  * does, misses none. The cursor goes past the place of the name returned.
- * 1 with `ent` filled, 0 at the end, or -ENOTDIR.
+ * 1 with `ent` filled, 0 at the end, -ENOTDIR, or -ENOENT for a removed
+ * directory, as Linux lists a directory it marks dead.
  */
 static int tmpfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
                          struct vfs_dirent *ent)
@@ -572,6 +573,9 @@ static int tmpfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
     (void)mnt;
     if (!is_dir(d)) {
         return -ENOTDIR;
+    }
+    if (removed(d)) {
+        return -ENOENT;
     }
     k_memset(ent, 0, sizeof(*ent));
     if (*cursor < 2) {

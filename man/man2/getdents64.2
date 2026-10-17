@@ -277,6 +277,10 @@ is, as on Linux.
 .It Bq Er EIO
 The root is not mounted, the backing device has been removed, or a
 file-system read fails or encounters invalid directory data.
+.It Bq Er ENOENT
+The directory was removed on ext2 or tmpfs while
+.Fa fd
+was open on it, as on Linux.
 .It Bq Er ENOTDIR
 The descriptor does not refer to a directory.
 .El
