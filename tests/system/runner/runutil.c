@@ -350,6 +350,7 @@ static int lead_exec(char **argv)
 struct process {
     pid_t pid, parent, group;
     int owned;
+    double cpu; /* cumulative processor time, in seconds */
 };
 
 /** Parse ps's cumulative processor time, `[[dd-]hh:]mm:ss`, into seconds. */
@@ -402,33 +403,6 @@ static double reaped_cpu(long pid)
     return (cutime + cstime) / (double)sysconf(_SC_CLK_TCK);
 }
 
-/** The seconds of processor time the process `root` and the members of its
- * group have used, from POSIX ps, with what each has reaped of its
- * children's where /proc reports it; the number of those processes goes in
- * `*count`. Returns -1 when ps cannot be run. A suite whose machines still
- * use processor time is working, however silent, and so is one whose
- * processes come and go. */
-static double group_cpu(pid_t root, int *count)
-{
-    FILE *fp = popen("ps -A -o pid= -o pgid= -o time=", "r");
-    char line[256], timetext[64];
-    long pid, group;
-    double total = 0;
-    *count = 0;
-    if (!fp)
-        return -1;
-    while (fgets(line, sizeof(line), fp)) {
-        if (sscanf(line, "%ld %ld %63s", &pid, &group, timetext) != 3)
-            continue;
-        if (pid == root || group == root) {
-            total += cpu_seconds(timetext) + reaped_cpu(pid);
-            (*count)++;
-        }
-    }
-    pclose(fp);
-    return total;
-}
-
 /**
  * List the process table, from POSIX ps, with `owned` set on `root`, the
  * members of its group, and every descendant of those, whatever its group.
@@ -440,16 +414,16 @@ static double group_cpu(pid_t root, int *count)
  */
 static struct process *descendants(pid_t root, size_t *count)
 {
-    FILE *fp = popen("ps -A -o pid= -o ppid= -o pgid=", "r");
+    FILE *fp = popen("ps -A -o pid= -o ppid= -o pgid= -o time=", "r");
     struct process *list = NULL;
     long pid, parent, group;
-    char line[256];
+    char line[256], timetext[64];
     size_t n = 0, i, j;
     int changed;
     if (fp) {
         while (fgets(line, sizeof(line), fp)) {
             struct process *next;
-            if (sscanf(line, "%ld %ld %ld", &pid, &parent, &group) != 3)
+            if (sscanf(line, "%ld %ld %ld %63s", &pid, &parent, &group, timetext) != 4)
                 continue;
             next = realloc(list, (n + 1) * sizeof(*list));
             if (!next) {
@@ -461,6 +435,7 @@ static struct process *descendants(pid_t root, size_t *count)
             list[n].parent = (pid_t)parent;
             list[n].group = (pid_t)group;
             list[n].owned = pid == root || group == root;
+            list[n].cpu = cpu_seconds(timetext);
             n++;
         }
         if (pclose(fp) != 0)
@@ -481,6 +456,27 @@ static struct process *descendants(pid_t root, size_t *count)
     } while (changed);
     *count = n;
     return list;
+}
+
+/** The seconds of processor time used by `root`, its group and their
+ * descendants, including those in other groups, with reaped children's time
+ * where /proc reports it. The number of owned processes goes in `*count`.
+ * Returns -1 when the process table is empty or unavailable. */
+static double owned_cpu(pid_t root, int *count)
+{
+    size_t n, i;
+    struct process *list = descendants(root, &n);
+    double total = 0;
+
+    *count = 0;
+    for (i = 0; i < n; i++) {
+        if (list[i].owned) {
+            total += list[i].cpu + reaped_cpu(list[i].pid);
+            (*count)++;
+        }
+    }
+    free(list);
+    return n ? total : -1;
 }
 
 /* A process's identity: its group, its start time, in seconds and
@@ -1046,11 +1042,11 @@ static void last_output(const char *path)
  * liveness check fails; and 2 when the command cannot be started.
  *
  * The command is working while it writes output, while `LEDGER.console`, the
- * transcript its machines' relays append to, grows, and while its group uses
- * processor time: more than a tenth of a processor over the span since it
- * was last seen working, or a process started or ended, sampled every ten
- * seconds or twice within a shorter limit. A slow machine can write nothing
- * for minutes, and a halted one takes only a few percent for its timer,
+ * transcript its machines' relays append to, grows, and while its group or
+ * descendants use processor time: more than a tenth of a processor over the
+ * span since it was last seen working, or a process started or ended, sampled
+ * every ten seconds or twice within a shorter limit. A slow machine can write
+ * nothing for minutes, and a halted one takes only a few percent for its timer,
  * under either accelerator, which is not working. When none of the three has
  * happened for `idle` seconds, which are never multiplied by the deadline
  * factor, the last output of the command and of the console is printed and
@@ -1181,7 +1177,7 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
         t = now();
         if (!done && t - sampled >= period) {
             int count;
-            double cpu = group_cpu(child, &count);
+            double cpu = owned_cpu(child, &count);
 
             if (cpu < 0 || cpu_at_busy < 0 || count != count_last ||
                 cpu - cpu_at_busy > 0.1 * (t - busy)) {

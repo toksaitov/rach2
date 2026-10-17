@@ -70,6 +70,10 @@ out=$(sh "$REPO/tests/system/runutil_owned.sh" 2>&1); rc=$?
 printf '%s\n' "$out"
 check "detached work fails and is stopped before the verdict" 0 "$rc"
 
+out=$(sh "$REPO/tests/system/runutil_cpu.sh" 2>&1); rc=$?
+printf '%s\n' "$out"
+check "CPU activity follows descendants across process groups" 0 "$rc"
+
 # A tree the runner can drive: its own registry, its own suite targets, and a
 # `prepare-all` that builds the fixture's product and its shared image.
 mkdir -p "$WORK/tests/system/runner" "$WORK/tools/setup"
