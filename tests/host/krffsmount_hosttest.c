@@ -64,6 +64,12 @@ void *kzalloc(size_t size)
     return calloc(1, size);
 }
 
+/** Allocate host storage, zeroed as `kzalloc` does. */
+void *kmalloc(size_t size)
+{
+    return kzalloc(size);
+}
+
 /** Free a host allocation. */
 void kfree(void *ptr)
 {

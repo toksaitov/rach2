@@ -1605,11 +1605,11 @@ static const char *procfs_global_fd_path(int origin)
  * Append the /proc/<pid>/fd/<fd> target of a file or directory descriptor to
  * `t`: the absolute path of a KRFFS node, "/memfd:NAME (deleted)" for a memfd
  * as Linux shows one, the path a node of another type was opened by, and "/"
- * for the root directory, a stale descriptor or a path that does not fit. A
- * KRFFS path is rebuilt, in a heap buffer of VFS_PATH_MAX bytes, only from a
- * node still live and reachable, since the node of a stale descriptor,
- * unlinked or relocated, may be on the free list; a heap with no room for the
- * buffer sets `t`'s `nomem`.
+ * for the root directory, a stale descriptor or a path the heap had no room
+ * to record. A KRFFS path is rebuilt, in a heap buffer of VFS_PATH_MAX bytes,
+ * only from a node still live and reachable, since the node of a stale
+ * descriptor, unlinked or relocated, may be on the free list; a heap with no
+ * room for the buffer sets `t`'s `nomem`.
  */
 static void procfs_file_target(struct procfs_text *t, const fd_entry_t *e)
 {
@@ -1630,7 +1630,7 @@ static void procfs_file_target(struct procfs_text *t, const fd_entry_t *e)
         ap_str(t, "/memfd:");
         ap_str(t, tmpfs_label(e->ofd->vnode));
         ap_str(t, " (deleted)");
-    } else if (e->ofd && e->ofd->vmnt && e->ofd->dirpath[0]) {
+    } else if (e->ofd && e->ofd->vmnt && e->ofd->dirpath) {
         ap_str(t, e->ofd->dirpath);
     } else {
         ap_ch(t, '/');
@@ -1791,7 +1791,7 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
         break;
     }
     case FD_TYPE_SYNTH_PATH:
-        ap_str(t, e->ofd && e->ofd->dirpath[0] ? e->ofd->dirpath : "/");
+        ap_str(t, e->ofd && e->ofd->dirpath ? e->ofd->dirpath : "/");
         break;
     case FD_TYPE_FRAMEBUFFER:
     case FD_TYPE_MOUSE:

@@ -260,6 +260,12 @@ void *kzalloc(size_t size)
     return calloc(1, size);
 }
 
+/** The kernel's allocation, zeroed here too. */
+void *kmalloc(size_t size)
+{
+    return kzalloc(size);
+}
+
 /** Free a block from `kzalloc`. */
 void kfree(void *p)
 {

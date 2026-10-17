@@ -111,11 +111,11 @@ struct open_file {
      * alone. The lock's wait queue is in the description's record in fd.c. */
     int busy;
     /* For a file of a mount other than the KRFFS root, the canonical path
-     * it was opened by, or "" when the path did not fit: what the `*at`
-     * calls resolve a relative name against when the directory's type has
-     * no `path` operation, answering ENAMETOOLONG for "", and what
-     * `/proc/PID/fd` reports. */
-    char dirpath[64];
+     * it was opened by, from the heap, or NULL when the heap had no room
+     * for it: what the `*at` calls resolve a relative name against when the
+     * directory's type has no `path` operation, answering ENAMETOOLONG for
+     * NULL, and what `/proc/PID/fd` reports. The last unref frees it. */
+    char *dirpath;
     /* The count of descriptions made when this one was, which tells it
      * from a new description the heap gives the same address after its
      * last close; an epoll registration keeps both. */

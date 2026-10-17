@@ -17,7 +17,9 @@
  * directory open: root and another process of uid 1000 reach it through
  * /proc/PID/fd/N, and a process of uid 1001 is refused with EACCES. A
  * descriptor on a file or a pipe used as a directory is ENOTDIR, a closed one
- * ENOENT, and a descriptor on /dev reaches its devices.
+ * ENOENT, and a descriptor on /dev reaches its devices. The links of a
+ * directory and a file whose paths are longer than 64 bytes name them
+ * whole, also for a directory opened with O_PATH through another's link.
  *
  * Prints "PROCLINKMUSL OK" on success and "PROCLINKMUSL FAIL (detail)"
  * otherwise.
@@ -197,6 +199,58 @@ static int renamed(int d)
     close(f);
     if (n != (ssize_t)strlen(TOP "/d2/f") || memcmp(target, TOP "/d2/f", (size_t)n) != 0) {
         return fail("the link of a file opened through a link");
+    }
+    return 0;
+}
+
+/** Whether the /proc link of the descriptor `fd` reads `want`. */
+static int link_is(int fd, const char *want)
+{
+    char a[96], target[256];
+    ssize_t n;
+
+    snprintf(a, sizeof(a), "/proc/self/fd/%d", fd);
+    n = readlink(a, target, sizeof(target));
+    return n == (ssize_t)strlen(want) && memcmp(target, want, (size_t)n) == 0;
+}
+
+/**
+ * Check that the /proc links of a directory and a file whose paths are
+ * longer than 64 bytes name them whole, as Linux's do: the directory opened
+ * with O_PATH, a directory made through its link and opened with O_PATH
+ * through it, as a program that pins a path by its directories does, and a
+ * file made there through that one's link. Returns 0, or 1 after printing
+ * the failure.
+ */
+static int long_paths(void)
+{
+    char dir[160], sub[176], file[192], a[96];
+    int d, s, f, bad;
+
+    snprintf(dir, sizeof(dir), "%s/%s", TOP,
+             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+    snprintf(sub, sizeof(sub), "%s/sub", dir);
+    snprintf(file, sizeof(file), "%s/file", sub);
+    if (mkdir(dir, 0755) != 0 || (d = open(dir, O_PATH | O_DIRECTORY)) < 0) {
+        return fail("the directory of a long path");
+    }
+    if (mkdir(at(a, "/proc/self/fd", d, "sub"), 0755) != 0 ||
+        (s = open(a, O_PATH | O_DIRECTORY | O_NOFOLLOW)) < 0) {
+        close(d);
+        return fail("a directory of a long path made through the link");
+    }
+    f = open(at(a, "/proc/self/fd", s, "file"), O_WRONLY | O_CREAT | O_EXCL, 0644);
+    bad = !link_is(d, dir) || !link_is(s, sub) || f < 0 || !link_is(f, file);
+    if (f >= 0) {
+        close(f);
+    }
+    close(s);
+    close(d);
+    if (bad) {
+        return fail("the link of a long path");
+    }
+    if (unlink(file) != 0 || rmdir(sub) != 0 || rmdir(dir) != 0) {
+        return fail("the removal of the long path");
     }
     return 0;
 }
@@ -423,7 +477,8 @@ int main(void)
     if (d < 0) {
         return fail("the directory");
     }
-    bad = through(d) || renamed(d) || removed() || not_dirs() || cwd_root() || other_process();
+    bad = through(d) || renamed(d) || removed() || not_dirs() || cwd_root() || other_process() ||
+          long_paths();
     close(d);
     if (umount2(TOP, 0) != 0 || rmdir(TOP) != 0) {
         return fail("the tmpfs's removal");

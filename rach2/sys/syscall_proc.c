@@ -1170,7 +1170,7 @@ static int32_t exec_keep(struct exec_file *f, const struct vfs_ref *ref, struct 
     if (rc == 0 && f->ref.mnt == NULL) {
         f->held = keep->interp_file ? keep->interp_file : keep->exe_file;
     }
-    if (rc == 0 && link != NULL && link->dirpath[0] == '/' && keep->interp_file == NULL) {
+    if (rc == 0 && link != NULL && link->dirpath != NULL && keep->interp_file == NULL) {
         mm_set_exe(keep, link->dirpath);
     }
     return rc;

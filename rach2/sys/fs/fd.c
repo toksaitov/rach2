@@ -188,6 +188,8 @@ void fd_ofd_unref(struct open_file *ofd)
             }
             kfree(ofd->leaf);
             ofd->leaf = NULL;
+            kfree(ofd->dirpath);
+            ofd->dirpath = NULL;
             if (ofd->vmnt) {
                 struct vfs_mount *mnt = ofd->vmnt;
                 void *node = ofd->vnode;

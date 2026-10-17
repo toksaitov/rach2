@@ -1358,7 +1358,7 @@ static int fd_dir_path(fd_entry_t *entry, char *out, uint32_t cap, int *outside)
             r = vfs_node_path(vm, entry->ofd->vnode, out, cap);
             return r != 0 ? r : path_in_root_at(out, outside);
         }
-        if (entry->ofd->dirpath[0] == '\0' || k_strlen(entry->ofd->dirpath) + 1 > cap) {
+        if (!entry->ofd->dirpath || k_strlen(entry->ofd->dirpath) + 1 > cap) {
             return -ENAMETOOLONG;
         }
         k_memcpy(out, entry->ofd->dirpath, k_strlen(entry->ofd->dirpath) + 1);
@@ -1697,8 +1697,8 @@ static void path_expand_links(char *path)
  * stripped, in `ofd`, for /proc/PID/fd to show and for a directory of a type
  * without `path` to resolve names against: with the links of /proc it went
  * through replaced by the paths of their objects (`path_expand_links`),
- * without the last "." that `path_put_dot` put back, and empty when the path
- * is too long for the record.
+ * without the last "." that `path_put_dot` put back, in a copy from the heap
+ * that replaces the one `ofd` had, and none when the heap has no room.
  */
 static void ofd_record_path(struct open_file *ofd, const char *name)
 {
@@ -1717,8 +1717,9 @@ static void ofd_record_path(struct open_file *ofd, const char *name)
     if (len > 0 && name[len - 1] == '.' && (len == 1 || name[len - 2] == '/')) {
         len = len > 1 ? len - 2 : 0;
     }
-    ofd->dirpath[0] = '\0';
-    if (len + 2 <= sizeof(ofd->dirpath)) {
+    kfree(ofd->dirpath);
+    ofd->dirpath = kmalloc(len + 2);
+    if (ofd->dirpath) {
         ofd->dirpath[0] = '/';
         k_memcpy(ofd->dirpath + 1, name, len);
         ofd->dirpath[len + 1] = '\0';
@@ -1962,7 +1963,7 @@ static int32_t proc_fd_reopen(const struct open_file *src, int flags)
         fd_free(current_proc->fds, fd);
         return rc;
     }
-    rc = open_install(&ref, fd, src->dirpath[0] == '/' ? src->dirpath + 1 : "", flags);
+    rc = open_install(&ref, fd, src->dirpath ? src->dirpath + 1 : "", flags);
     vfs_walk_unlock(mnt);
     return rc;
 }
@@ -6420,7 +6421,6 @@ static int32_t path_install(struct vfs_ref *ref, const char *name, int flags)
     }
     entry->type = is_dir ? FD_TYPE_DIR : FD_TYPE_FILE;
     entry->node = (mnt_is_root(ref->mnt) && node != krffs_fs->node) ? node : NULL;
-    entry->ofd->dirpath[0] = '\0';
     if (!mnt_is_root(ref->mnt)) {
         ofd_record_path(entry->ofd, name);
     }

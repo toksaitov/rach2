@@ -101,9 +101,9 @@ probe fdexecmusl
 file rach2/sys/syscall_proc.c
 expect FDEXECMUSL FAIL (/proc/self/exe of a tmpfs copy run by its descriptor)
 old
-    if (rc == 0 && link != NULL && link->dirpath[0] == '/' && keep->interp_file == NULL) {
+    if (rc == 0 && link != NULL && link->dirpath != NULL && keep->interp_file == NULL) {
 new
-    if (rc == 0 && link != NULL && link->dirpath[0] == '-' && keep->interp_file == NULL) {
+    if (rc == 0 && link != NULL && link->dirpath == NULL && keep->interp_file == NULL) {
 end
 
 fault exec-fd-script-named
@@ -6474,6 +6474,16 @@ new
     if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) && e->ofd && e->ofd->vmnt) {
         return exe_put(buf, cap, 0, e->ofd->dirpath);
     }
+end
+
+fault proc-link-long-path
+probe proclinkmusl
+file rach2/sys/syscall_fs.c
+expect PROCLINKMUSL FAIL (the link of a long path
+old
+    ofd->dirpath = kmalloc(len + 2);
+new
+    ofd->dirpath = len + 2 <= 64 ? kmalloc(len + 2) : NULL;
 end
 
 fault proc-link-removed-dir-made
