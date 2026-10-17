@@ -640,7 +640,7 @@ main()
     fi
     sh "$repo/tools/flow/board.sh" 'done' > /dev/null || later "board.sh done failed"
     sh "$repo/tools/flow/board.sh" archive "$phase" > /dev/null || later "board.sh archive $phase failed"
-    sh "$repo/tools/flow/notify.sh" "rach2: phase #$phase released; the Lenovo runs $(echo "$sha" | cut -c 1-8)" ||
+    sh "$repo/tools/flow/notify.sh" "rach2: phase #$phase is finished and installed on the Lenovo, which now runs $(echo "$sha" | cut -c 1-8)" ||
         say "the push to the owner's phone failed"
     note "closed $(date -u '+%FT%TZ')"
     say "#$phase is released and closed"

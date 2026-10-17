@@ -28,9 +28,9 @@ if [ $# -eq 0 ]; then
     exit 2
 fi
 cd "$(dirname "$0")/../.." || exit 1
-prompt="First run \`sleep 150\` with the Bash tool, in the foreground. Then call the PushNotification tool once, with the status \"proactive\" and this message: $*
+prompt="First run \`sleep 150\` with the Bash tool in the background and wait for its notice. Then call the PushNotification tool once, with the status \"proactive\" and this message: $*
 
-Then wait for the owner, who may open this session from the phone to ask about the message. Answer from the repository, the board (\`gh\`) and \`sh tools/flow/status.sh\`, and change nothing unless the owner asks."
+Write nothing about these steps. Then wait for the owner, who may open this session from the phone to ask about the message. Answer in short, plain sentences, as the section Writing of AGENTS.md says, from the repository, the board (\`gh\`) and \`sh tools/flow/status.sh\`, and change nothing unless the owner asks."
 tmux kill-session -t rach2-incident 2> /dev/null
 # The prompt comes first, since --allowedTools takes every word after it.
 tmux new-session -d -s rach2-incident -x 200 -y 50 -e "PATH=$PATH" \
