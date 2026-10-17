@@ -73,9 +73,13 @@ faults='budget-quarter budget-cap budget-floor pointers-argv0 pointers-edge
     secure argv-null envp-null drop-clear drop-used map-address map-flags
     frames-cap release-given release-none fault'
 if [ "${1:-}" = --texts ]; then
+    root=
+    trap '[ -z "$root" ] || rm -rf "$root"' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     # The faults name the source as the private directory holds it.
     root=$(mktemp -d "${TMPDIR:-/tmp}/rach2-uimage-texts.XXXXXX")
-    trap 'rm -rf "$root"' EXIT
     ln -s "$repo/rach2/sys/proc/uimage.c" "$root/uimage.c"
     for mutation in $faults; do
         RACH2_FAULT_TEXTS=1 apply_fault "$root" "$mutation" >/dev/null || exit 1
@@ -88,6 +92,11 @@ fi
 runlock_hold "$repo" uimage-mutation "$repo/tests/host/uimage_mutate.sh" "$@"
 
 mkdir -p build
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/uimage-proof.XXXXXX")
 child=
 cp rach2/sys/proc/uimage.c "$work/uimage.saved"
@@ -100,7 +109,8 @@ restore()
     touch "$work/uimage.c"
 }
 
-# cleanup: the exit trap; stop the running test and restore the source.
+# cleanup: stop the running test and restore the source; the exit trap calls it
+# before it removes $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -110,10 +120,7 @@ cleanup()
     fi
     restore
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS DETAIL: compile the test against the private copy
 # and run it for at most 20 seconds; it must exit with STATUS and print

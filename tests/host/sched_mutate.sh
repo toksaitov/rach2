@@ -45,13 +45,18 @@ fi
 runlock_hold "$repo" sched-mutation "$repo/tests/host/sched_mutate.sh" "$@"
 
 mkdir -p build/tests
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/sched-proof.XXXXXX")
 child=
 cp -R rach2/sys "$work/sys"
 cp "$work/sys/proc/sched.c" "$work/sched.saved"
 
 # cleanup: stop the running test and put the saved sched.c back; the loop calls
-# it after each fault, and it is the exit trap.
+# it after each fault, and the exit trap calls it before it removes $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -62,10 +67,7 @@ cleanup()
     cp "$work/sched.saved" "$work/sys/proc/sched.c"
     touch "$work/sys/proc/sched.c"
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: compile sched_hosttest.c over the copy as
 # $work/PHASE, run it for at most 10 seconds, and exit unless it ends with

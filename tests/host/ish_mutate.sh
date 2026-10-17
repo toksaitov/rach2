@@ -85,6 +85,11 @@ fi
 runlock_hold "$repo" ish-mutation "$repo/tests/host/ish_mutate.sh" "$@"
 
 mkdir -p build/tests
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/ish-proof.XXXXXX")
 mkdir -p "$work/tests/host" "$work/tests/musl"
 cp -R ish "$work/ish"
@@ -110,7 +115,8 @@ stop_child()
 }
 
 # cleanup: stop the running test and put the two saved sources back; the loop
-# calls it after each fault, and it is the exit trap.
+# calls it after each fault, and the exit trap calls it before it removes
+# $work.
 cleanup()
 {
     stop_child
@@ -118,10 +124,7 @@ cleanup()
     cp "$work/cstring.saved" "$work/ish/ish_cstring_utilities.c"
     touch "$work/ish/ish.c" "$work/ish/ish_cstring_utilities.c"
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: compile ish_hosttest.c over the copy twice,
 # over the C library and with ISH_RAW_HOSTTEST, run each in a session of its

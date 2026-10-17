@@ -88,13 +88,19 @@ fi
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" growroot-mutation "$repo/tests/host/growroot_mutate.sh" "$@"
 
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-growroot.XXXXXX")
 cp utils/growroot.c "$work/growroot.saved"
 cp "$work/growroot.saved" "$work/growroot.c"
 child=
 
 # cleanup: stop the running test and put the saved growroot.c back; the script
-# calls it after each fault, and it is the exit trap.
+# calls it after each fault, and the exit trap calls it before it removes
+# $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -105,10 +111,7 @@ cleanup()
     touch "$work/growroot.c"
 }
 
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE: compile growroot_hosttest.c over the copy as $work/PHASE and
 # run it for at most 10 seconds. The phases `mutated`, `zero` and

@@ -75,13 +75,19 @@ fi
 runlock_hold "$repo" bootslot-proof "$repo/tests/host/bootslot_mutate.sh" "$@"
 
 mkdir -p build/tests
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/bootslot-proof.XXXXXX")
 child=
 cp utils/bootslot.c "$work/bootslot.saved"
 cp "$work/bootslot.saved" "$work/bootslot.c"
 
 # cleanup: stop the running test and put the saved bootslot.c back; the loop
-# calls it after each fault, and it is the exit trap.
+# calls it after each fault, and the exit trap calls it before it removes
+# $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -92,10 +98,7 @@ cleanup()
     cp "$work/bootslot.saved" "$work/bootslot.c"
     touch "$work/bootslot.c"
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: compile bootslot_hosttest.c over the copy as
 # $work/PHASE, run it for at most 10 seconds, and exit unless it ends with

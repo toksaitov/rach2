@@ -25,8 +25,12 @@ fi
     exit 2
 }
 child=
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 if [ -n "$texts" ]; then
-    work=
     source=rach2/sys/klog.c
 else
     mkdir -p build/tests
@@ -46,7 +50,8 @@ restore()
     touch "$source"
 }
 
-# cleanup: the exit trap; stop the running test and restore the source.
+# cleanup: stop the running test and restore the source; the exit trap calls it
+# before it removes $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -56,10 +61,7 @@ cleanup()
     fi
     restore
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 test=tests/host/klog_hosttest.c
 deps=$(grep -oE 'host-deps:[^*]*' "$test" | sed 's/host-deps://' | tr '\n' ' ')

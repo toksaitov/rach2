@@ -97,14 +97,20 @@ fi
 runlock_hold "$repo" fd-stdio-mutation "$repo/tests/host/fd_stdio_mutate.sh" "$@"
 
 mkdir -p build/tests
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/fd-stdio-proof.XXXXXX")
 child=
 cp -R rach2/sys "$work/sys"
 cp "$work/sys/fs/fd.c" "$work/fd-stdio.saved"
 cp "$work/sys/proc/process.c" "$work/process.saved"
 
-# cleanup: stop the running test and put the saved fd.c and process.c back;
-# the loop calls it after each fault, and it is the exit trap.
+# cleanup: stop the running test and put the saved fd.c and process.c back; the
+# loop calls it after each fault, and the exit trap calls it before it removes
+# $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -116,10 +122,7 @@ cleanup()
     cp "$work/process.saved" "$work/sys/proc/process.c"
     touch "$work/sys/fs/fd.c" "$work/sys/proc/process.c"
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: compile fd_hosttest.c over the copy as
 # $work/PHASE, run it for at most 10 seconds, and exit unless it ends with

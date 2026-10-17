@@ -51,6 +51,11 @@ runlock_hold "$repo" loop-attach-mutation "$repo/tests/host/loop_attach_mutate.s
 
 
 mkdir -p build/tests
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/loop-attach-proof.XXXXXX")
 cp -R rach2/sys "$work/sys"
 source="$work/sys/block/loop.c"
@@ -58,7 +63,7 @@ cp "$source" "$work/source.saved"
 child=
 
 # cleanup: stop the running test and put the saved loop.c back; the script
-# calls it after the fault, and it is the exit trap.
+# calls it after the fault, and the exit trap calls it before it removes $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -69,10 +74,7 @@ cleanup()
     cp "$work/source.saved" "$source"
     touch "$source"
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: compile loop_attach_hosttest.c over the copy
 # as $work/PHASE, run it for at most 10 seconds, and exit unless it ends with

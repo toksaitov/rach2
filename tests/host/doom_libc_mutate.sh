@@ -58,6 +58,11 @@ esac
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" doom-libc-mutation "$repo/tests/host/doom_libc_mutate.sh" "$@"
 mkdir -p build/tests
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/doom-libc-proof.XXXXXX")
 mkdir "$work/original" "$work/source"
 cp -R ports/doom/include ports/doom/crt0.c "$work/original/"
@@ -80,10 +85,7 @@ cleanup()
     fi
     restore
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase NAME EXPECTED: require both ABIs to pass, or one to fail.
 run_phase()

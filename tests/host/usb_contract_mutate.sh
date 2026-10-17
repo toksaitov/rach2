@@ -78,6 +78,11 @@ fi
 runlock_hold "$repo" usb-mutation "$repo/tests/host/usb_contract_mutate.sh" "$@"
 
 mkdir -p build/tests
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/usb-contract-proof.XXXXXX")
 child=
 mkdir -p "$work/rach2" "$work/tests/host"
@@ -87,7 +92,8 @@ cp "$work/rach2/sys/usb/core.c" "$work/core.saved"
 cp "$work/rach2/sys/usb/xhci.c" "$work/xhci.saved"
 
 # cleanup: stop the running test and put the saved core.c and xhci.c back; the
-# loop calls it after each fault, and it is the exit trap.
+# loop calls it after each fault, and the exit trap calls it before it removes
+# $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -99,10 +105,7 @@ cleanup()
     cp "$work/xhci.saved" "$work/rach2/sys/usb/xhci.c"
     touch "$work/rach2/sys/usb/core.c" "$work/rach2/sys/usb/xhci.c"
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE TEST STATUS MESSAGE: compile TEST_hosttest.c over the private
 # tree as $work/PHASE-TEST, run it for at most 30 seconds, and exit unless it

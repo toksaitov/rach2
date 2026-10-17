@@ -142,6 +142,11 @@ case "$mode" in
     *) echo "ext2-batch-mutation: usage: $0 [--batch-only|--all]" >&2; exit 2 ;;
 esac
 mkdir -p build/tests
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/ext2-batch-proof.XXXXXX")
 mkdir -p "$work/rach2" "$work/tests/host"
 cp -R rach2/sys "$work/rach2/sys"
@@ -157,8 +162,8 @@ child=
 fixtures=
 
 # cleanup: stop the running test's process group, remove the phase's fixtures
-# and put the saved ext2.c back; run_phase calls it after each run, and it is
-# the exit trap.
+# and put the saved ext2.c back; run_phase calls it after each run, and the
+# exit trap calls it before it removes $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -176,10 +181,7 @@ cleanup()
     cp "$work/source.saved" "$source"
     touch "$source"
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE EXPECTED [MESSAGE [STATUS]]: compile ext2_hosttest.c over the
 # private tree with fixtures of its own and run it, in the mode the script was
@@ -194,7 +196,7 @@ run_phase()
     message=${3:-}
     want_status=${4:-1}
     binary="$work/$phase"
-    fixtures=$(mktemp -d /tmp/rach2-fix.XXXXXX)
+    fixtures=$(mktemp -d "${TMPDIR:-/tmp}/rach2-fix.XXXXXX")
     if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST \
         -DFIXDIR="\"$fixtures\"" \
         -fsanitize=address,undefined -fno-sanitize-recover=all \

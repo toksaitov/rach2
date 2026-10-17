@@ -95,13 +95,19 @@ fi
 runlock_hold "$repo" krffsmount-mutation "$repo/tests/host/krffsmount_mutate.sh" "$@"
 
 mkdir -p build/tests
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/krffsmount-proof.XXXXXX")
 child=
 cp -R rach2/sys "$work/sys"
 cp "$work/sys/fs/krffsmount.c" "$work/krffsmount.saved"
 
 # cleanup: stop the running test and put the saved krffsmount.c back; the loop
-# calls it after each fault, and it is the exit trap.
+# calls it after each fault, and the exit trap calls it before it removes
+# $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -112,10 +118,7 @@ cleanup()
     cp "$work/krffsmount.saved" "$work/sys/fs/krffsmount.c"
     touch "$work/sys/fs/krffsmount.c"
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: compile krffsmount_hosttest.c over the copy
 # as $work/PHASE, run it for at most 10 seconds, and exit unless it ends with

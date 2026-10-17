@@ -29,11 +29,17 @@ fi
 
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" exit-mutation "$repo/tests/host/exit_mutate.sh" "$@"
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-exit.XXXXXX")
 child=
 
 # cleanup: stop the running test and put the saved exit.c back; the script
-# calls it after each fault, and it is the exit trap.
+# calls it after each fault, and the exit trap calls it before it removes
+# $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -47,10 +53,7 @@ cleanup()
 mkdir "$work/proc"
 cp rach2/sys/proc/exit.c "$work/exit.saved"
 cp "$work/exit.saved" "$work/proc/exit.c"
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE: compile exit_hosttest.c over the copy as $work/PHASE and run
 # it for at most 10 seconds. The phases `mutated` and `kept` must fail with

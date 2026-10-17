@@ -46,6 +46,11 @@ runlock_hold "$repo" kstd-mutation "$repo/tests/host/kstd_mutate.sh" "$@"
 
 
 mkdir -p build/tests
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/kstd-proof.XXXXXX")
 cp -R rach2/sys/lib "$work/lib"
 cp -R rach2/sys/arch "$work/arch"
@@ -53,7 +58,7 @@ cp "$work/lib/kstd.c" "$work/kstd.saved"
 child=
 
 # cleanup: stop the running test and put the saved kstd.c back; the script
-# calls it after the fault, and it is the exit trap.
+# calls it after the fault, and the exit trap calls it before it removes $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -64,10 +69,7 @@ cleanup()
     cp "$work/kstd.saved" "$work/lib/kstd.c"
     touch "$work/lib/kstd.c"
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS: compile kstd_hosttest.c over the copy as
 # $work/PHASE, run it for at most 15 seconds, and exit unless it ends with

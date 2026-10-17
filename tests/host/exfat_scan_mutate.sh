@@ -109,11 +109,17 @@ runlock_hold "$repo" exfat-scan-proof "$repo/tests/host/exfat_scan_mutate.sh" "$
     exit 2
 }
 mkdir -p build/tests
+work=
+fixtures=
+trap '[ -z "$fixtures" ] || rm -rf "$fixtures"; [ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/exfat-scan-proof.XXXXXX")
 # The test's fixtures, in a directory of this run's that the trap removes: a
 # test given none makes its own and keeps it when it fails, as each fault
 # makes it do.
-fixtures=$(mktemp -d /tmp/rach2-fix.XXXXXX)
+fixtures=$(mktemp -d "${TMPDIR:-/tmp}/rach2-fix.XXXXXX")
 mkdir -p "$work/rach2" "$work/tests/host"
 cp -R rach2/sys "$work/rach2/sys"
 cp tests/host/exfat_hosttest.c "$work/tests/host/"
@@ -122,7 +128,8 @@ cp "$source" "$work/source.saved"
 child=
 
 # cleanup: stop the running test's process group and put the saved exfat.c
-# back; run_phase calls it after each run, and the exit trap calls it.
+# back; run_phase calls it after each run, and the exit trap calls it before
+# it removes $fixtures and $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -136,10 +143,7 @@ cleanup()
     cp "$work/source.saved" "$source"
     touch "$source"
 }
-trap 'cleanup; rm -rf "$fixtures"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$fixtures" ] || rm -rf "$fixtures"; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # The test's own dependency lines, as the host suite reads them, with the
 # kernel's sources taken from the private tree.

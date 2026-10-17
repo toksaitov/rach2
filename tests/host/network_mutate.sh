@@ -49,6 +49,11 @@ fi
 runlock_hold "$repo" network-mutation "$repo/tests/host/network_mutate.sh" "$@"
 
 mkdir -p build/tests
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/network-proof.XXXXXX")
 child=
 mkdir -p "$work/rach2" "$work/tests/host"
@@ -60,7 +65,8 @@ cp "$arp" "$work/arp.saved"
 cp "$ip" "$work/ip.saved"
 
 # cleanup: stop the running test and put the saved arp.c and ip.c back; the
-# loop calls it after each fault, and it is the exit trap.
+# loop calls it after each fault, and the exit trap calls it before it removes
+# $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -72,10 +78,7 @@ cleanup()
     cp "$work/ip.saved" "$ip"
     touch "$arp" "$ip"
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE TEST STATUS MESSAGE: compile TEST_hosttest.c over the copies
 # as $work/PHASE, run it for at most 10 seconds, and exit unless it ends with

@@ -36,6 +36,11 @@ fi
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" sysv-detach-mutation "$repo/tests/host/sysv_detach_mutate.sh" "$@"
 mkdir -p build/tests
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/sysv-detach-proof.XXXXXX")
 cp -R rach2/sys "$work/sys"
 cp "$work/sys/ipc/sysv.c" "$work/saved.c"
@@ -52,10 +57,7 @@ cleanup()
     cp "$work/saved.c" "$work/sys/ipc/sysv.c"
     touch "$work/sys/ipc/sysv.c"
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # Compile PHASE, run it with a bound and require STATUS and its result text.
 run_phase()

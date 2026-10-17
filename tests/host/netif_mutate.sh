@@ -72,13 +72,19 @@ fi
 runlock_hold "$repo" netif-mutation "$repo/tests/host/netif_mutate.sh" "$@"
 
 mkdir -p build/tests/host
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/host/netif-mutation.XXXXXX")
 child=
 cp rach2/sys/syscall_net.c "$work/syscall_net.saved"
 cp "$work/syscall_net.saved" "$work/syscall_net.c"
 
-# cleanup: stop the running test and put the saved syscall_net.c back; the
-# loop calls it after each fault, and it is the exit trap.
+# cleanup: stop the running test and put the saved syscall_net.c back; the loop
+# calls it after each fault, and the exit trap calls it before it removes
+# $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -89,10 +95,7 @@ cleanup()
     touch "$work/syscall_net.c"
 }
 
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS DETAIL: compile netif_hosttest.c over the copy as
 # $work/PHASE, run it for at most 10 seconds, and exit unless it ends with

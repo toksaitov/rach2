@@ -87,6 +87,11 @@ fi
 runlock_hold "$repo" userland-mutation "$repo/tests/host/userland_mutate.sh" "$@"
 
 mkdir -p build
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/userland-mutation.XXXXXX")
 mkdir -p "$work/tests/host" "$work/tests/musl" "$work/ports" "$work/saved"
 cp -R ish utils "$work/"
@@ -110,7 +115,8 @@ restore()
     done
 }
 
-# cleanup: the exit trap; stop the running test and restore the sources.
+# cleanup: stop the running test and restore the sources; the exit trap calls
+# it before it removes $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -121,10 +127,7 @@ cleanup()
     restore
 }
 
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE: compile the host test $mutation belongs to over the private
 # tree and run it in a session of its own for at most 20 seconds. The phase

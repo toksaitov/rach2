@@ -42,9 +42,17 @@ if [ -z "$texts" ]; then
     runlock_hold "$repo" deadline-mutation "$repo/tests/host/deadline_mutate.sh" "$@"
 fi
 sources='proc/wait_queue.c io/poll.c proc/process.c'
+# --texts points $work at the real tree, so the exit trap removes $scratch,
+# which only mktemp sets.
+scratch=
+trap '[ -z "$scratch" ] || rm -rf "$scratch"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 if [ -z "$texts" ]; then
     mkdir -p build
-    work=$(mktemp -d "$repo/build/deadline-proof.XXXXXX")
+    scratch=$(mktemp -d "$repo/build/deadline-proof.XXXXXX")
+    work=$scratch
     mkdir "$work/sys"
     cp -R rach2/sys/. "$work/sys/"
     for source in $sources; do
@@ -63,7 +71,8 @@ restore()
     done
 }
 
-# cleanup: the exit trap; stop the running test and restore the sources.
+# cleanup: stop the running test and restore the sources; the exit trap calls
+# it before it removes $scratch.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -73,10 +82,7 @@ cleanup()
     fi
     restore
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$scratch" ] || rm -rf "$scratch"' EXIT
 
 # run_phase PHASE TEST EXPECTED DETAILS: compile tests/host/TEST.c with its
 # host-deps, each kernel source taken from the private tree, and run it for at

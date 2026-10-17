@@ -24,6 +24,11 @@ fi
 
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" rtl8139-mutation "$repo/tests/host/rtl8139_mutate.sh" "$@"
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-rtl8139.XXXXXX")
 child=
 cp -R rach2/sys "$work/sys"
@@ -31,7 +36,7 @@ source="$work/sys/network/driver/rtl8139.c"
 cp "$source" "$work/rtl8139.saved"
 
 # cleanup: stop the running test and put the saved rtl8139.c back; the script
-# calls it after the fault, and it is the exit trap.
+# calls it after the fault, and the exit trap calls it before it removes $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -41,10 +46,7 @@ cleanup()
     cp "$work/rtl8139.saved" "$source"
 }
 
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE: compile rtl8139_hosttest.c over the copy as $work/PHASE and
 # run it for at most 10 seconds. The phase `mutated` must fail its row; any

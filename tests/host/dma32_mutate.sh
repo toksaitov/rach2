@@ -31,6 +31,11 @@ if [ -z "$texts" ]; then
     runlock_hold "$repo" dma32-proof "$repo/tests/host/dma32_mutate.sh" "$@"
 fi
 child=
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 if [ -n "$texts" ]; then
     ahci=rach2/sys/block/ahci.c
     xhci=rach2/sys/usb/xhci.c
@@ -56,7 +61,8 @@ restore()
     touch "$ahci" "$xhci"
 }
 
-# cleanup: the exit trap; stop the running test and restore the sources.
+# cleanup: stop the running test and restore the sources; the exit trap calls
+# it before it removes $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -66,10 +72,7 @@ cleanup()
     fi
     restore
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase NAME TEST: compile TEST, one of the two, against the private tree
 # as tests/system/suites/host.sh does, and run it; `status` is its exit

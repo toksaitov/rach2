@@ -42,11 +42,16 @@ if [ -z "$texts" ]; then
     . "$repo/tests/system/runlock.sh"
     runlock_hold "$repo" fat-barriers-proof "$repo/tests/host/fat_barriers_mutate.sh" "$@"
 fi
+work=
+fixtures=
+trap '[ -z "$fixtures" ] || rm -rf "$fixtures"; [ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 if [ -n "$texts" ]; then
-    # --texts lists the sites of the tree's drivers alone, in a directory the
-    # trap removes as it would remove the fixtures.
+    # --texts lists the sites of the tree's drivers alone, in a directory of
+    # its own.
     work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-fat-barriers-texts.XXXXXX")
-    fixtures=$work
     mkdir -p "$work/rach2/sys/fs"
     for driver in exfat fat32; do
         cp "rach2/sys/fs/$driver.c" "$work/$driver.saved"
@@ -57,7 +62,7 @@ else
     # The tests' fixtures, in a directory of this run's that the trap removes:
     # a test given none makes its own and keeps it when it fails, as a dropped
     # barrier makes it do.
-    fixtures=$(mktemp -d /tmp/rach2-fix.XXXXXX)
+    fixtures=$(mktemp -d "${TMPDIR:-/tmp}/rach2-fix.XXXXXX")
     mkdir -p "$work/rach2" "$work/tests/host"
     cp -R rach2/sys "$work/rach2/sys"
     cp tests/host/exfat_hosttest.c tests/host/fat32_hosttest.c "$work/tests/host/"
@@ -92,18 +97,14 @@ restore()
     done
 }
 
-# cleanup: the exit trap; stop the running test, restore the sources and
-# remove the fixtures.
+# cleanup: stop the running test and restore the sources; the exit trap calls
+# it before it removes $fixtures and $work.
 cleanup()
 {
     stop_child
     restore
-    rm -rf "$fixtures"
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$fixtures" ] || rm -rf "$fixtures"; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # The sites of a driver, one line each: the index, the line, the enclosing
 # function and the call; or, with `drop INDEX`, the driver rewritten with

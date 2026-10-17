@@ -41,6 +41,11 @@ sources="$sources krffs_platform.c"
 if [ -n "$texts" ]; then
     src=krffs
 else
+    work=
+    trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     mkdir -p build/tests
     work=$(mktemp -d "$repo/build/tests/krffs-tools-proof.XXXXXX")
     src=$work/src
@@ -59,7 +64,8 @@ restore()
     done
 }
 
-# cleanup: the exit trap; stop the running command and restore the sources.
+# cleanup: stop the running command and restore the sources; the exit trap
+# calls it before it removes $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -71,10 +77,7 @@ cleanup()
 }
 if [ -z "$texts" ]; then
     restore
-    trap cleanup EXIT
-    trap 'exit 129' HUP
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
+    trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 fi
 
 # The flags krffs/Makefile gives the tools, fsviz's exception among them, and

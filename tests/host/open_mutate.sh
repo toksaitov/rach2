@@ -261,6 +261,11 @@ fi
 runlock_hold "$repo" open-mutation "$repo/tests/host/open_mutate.sh" "$@"
 
 mkdir -p build/tests
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/open-proof.XXXXXX")
 child=
 cp -R rach2/sys "$work/sys"
@@ -272,7 +277,8 @@ cp "$work/sys/block/loop.c" "$work/loop.saved"
 cp "$work/sys/mm/filemap.c" "$work/filemap.saved"
 
 # cleanup: stop the running test and put the saved syscall_fs.c, loop.c and
-# filemap.c back; the loop calls it after each fault, and it is the exit trap.
+# filemap.c back; the loop calls it after each fault, and the exit trap calls
+# it before it removes $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -285,10 +291,7 @@ cleanup()
     cp "$work/filemap.saved" "$work/sys/mm/filemap.c"
     touch "$work/sys/syscall_fs.c" "$work/sys/block/loop.c" "$work/sys/mm/filemap.c"
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: compile open_hosttest.c over the copy as
 # $work/PHASE, run it for at most 10 seconds, and exit unless it ends with

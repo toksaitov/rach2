@@ -18,8 +18,12 @@ if [ -z "$texts" ]; then
     runlock_hold "$repo" tcp-mutation "$repo/tests/host/tcp_mutate.sh" "$@"
 fi
 child=
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 if [ -n "$texts" ]; then
-    work=
     source=rach2/sys/network/tcp/tcp.c
 else
     mkdir -p build/tests
@@ -33,7 +37,8 @@ else
 fi
 
 # cleanup: stop the running test and put the saved tcp.c back; the script
-# calls it after each fault, and it is the exit trap.
+# calls it after each fault, and the exit trap calls it before it removes
+# $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -44,10 +49,7 @@ cleanup()
     cp "$work/tcp.saved" "$source"
     touch "$source"
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: compile tcp_hosttest.c over the copy as
 # $work/PHASE, run it for at most 10 seconds, and exit unless it ends with

@@ -21,13 +21,19 @@ if [ -z "$texts" ]; then
     . "$repo/tests/system/runlock.sh"
     runlock_hold "$repo" fat-synced-proof "$repo/tests/host/fat_synced_mutate.sh" "$@"
 fi
+work=
+fixtures=
+trap '[ -z "$fixtures" ] || rm -rf "$fixtures"; [ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 if [ -n "$texts" ]; then
     work=
     source=rach2/sys/fs/fat32.c
 else
     mkdir -p build/tests
     work=$(mktemp -d "$repo/build/tests/fat-synced-proof.XXXXXX")
-    fixtures=$(mktemp -d /tmp/rach2-fix.XXXXXX)
+    fixtures=$(mktemp -d "${TMPDIR:-/tmp}/rach2-fix.XXXXXX")
     mkdir -p "$work/rach2"
     cp -R rach2/sys "$work/rach2/sys"
     source="$work/rach2/sys/fs/fat32.c"
@@ -56,18 +62,14 @@ restore()
     touch "$source"
 }
 
-# cleanup: the exit trap; stop the running test, restore the source and remove
-# the fixtures.
+# cleanup: stop the running test and restore the source; the exit trap calls it
+# before it removes $fixtures and $work.
 cleanup()
 {
     stop_child
     restore
-    rm -rf "$fixtures"
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$fixtures" ] || rm -rf "$fixtures"; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE EXPECTED DETAIL: compile the test against the private tree
 # and run it for at most 900 seconds; a pass must exit 0 and print its OK

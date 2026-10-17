@@ -51,6 +51,11 @@ fi
 runlock_hold "$repo" doom-platform-mutation "$repo/tests/host/doom_platform_mutate.sh" "$@"
 
 mkdir -p build/tests
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/doom-platform-proof.XXXXXX")
 mkdir -p "$work/ports" "$work/tests/host"
 cp -R ports/doom "$work/ports/doom"
@@ -62,7 +67,8 @@ cp "$system" "$work/system.saved"
 child=
 
 # cleanup: stop the running test and put the two saved sources back; the loop
-# calls it after each fault, and it is the exit trap.
+# calls it after each fault, and the exit trap calls it before it removes
+# $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -74,10 +80,7 @@ cleanup()
     cp "$work/system.saved" "$system"
     touch "$platform" "$system"
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: compile doom_platform_hosttest.c over the
 # copy as $work/PHASE, run it for at most 10 seconds, and exit unless it ends

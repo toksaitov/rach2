@@ -142,6 +142,11 @@ runlock_hold "$repo" bcache-proof "$repo/tests/host/bcache_mutate.sh" "$@"
     exit 2
 }
 mkdir -p build/tests
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/bcache-proof.XXXXXX")
 child=
 mkdir -p "$work/rach2" "$work/tests/host"
@@ -157,7 +162,8 @@ restore()
     cp "$work/bcache.saved" "$source"
     touch "$source"
 }
-# cleanup: the exit trap; stop the running test and restore the source.
+# cleanup: stop the running test and restore the source; the exit trap calls it
+# before it removes $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -167,10 +173,7 @@ cleanup()
     fi
     restore
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 test=tests/host/bcache_cost_hosttest.c
 deps=$(grep -oE 'host-deps:[^*]*' "$work/$test" | sed 's/host-deps://' | tr '\n' ' ')

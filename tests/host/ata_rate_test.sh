@@ -52,6 +52,11 @@ fi
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" ata-rate-test "$repo/tests/host/ata_rate_test.sh" "$@"
 mkdir -p build/review-proof
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/review-proof/ata-rate.XXXXXX")
 mkdir -p "$work/rach2" "$work/tests/host"
 cp -R rach2/sys "$work/rach2/sys"
@@ -60,8 +65,8 @@ source="$work/rach2/sys/block/ata.c"
 cp "$source" "$work/ata.saved.c"
 child=
 
-# restore: stop the running test and put the saved ata.c back; it is also the
-# exit trap.
+# restore: stop the running test and put the saved ata.c back; the exit trap
+# calls it too, before it removes $work.
 restore()
 {
     if [ -n "$child" ]; then
@@ -72,10 +77,7 @@ restore()
     cp "$work/ata.saved.c" "$source"
     touch "$source"
 }
-trap restore EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'restore; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE: compile ata_hosttest.c over the copy and run it for at most
 # 30 seconds. A PHASE ending in -mutated must fail with $failure in its log and

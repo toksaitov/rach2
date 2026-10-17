@@ -34,6 +34,11 @@ fi
 runlock_hold "$repo" file-read-mutation "$repo/tests/host/file_read_mutate.sh" "$@"
 
 mkdir -p build/tests
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/file-read-proof.XXXXXX")
 child=
 mkdir "$work/utils"
@@ -56,10 +61,7 @@ cleanup()
         touch "$work/utils/$program.c"
     done
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: compile the private sources and require
 # STATUS and MESSAGE from a test bounded by ten seconds.

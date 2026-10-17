@@ -360,6 +360,11 @@ fi
 runlock_hold "$repo" syscall-mutation "$repo/tests/host/syscall_mutate.sh" "$@"
 
 mkdir -p build
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/syscall-proof.XXXXXX")
 child=
 for source in syscall syscall_net; do
@@ -376,7 +381,8 @@ restore()
     done
 }
 
-# cleanup: the exit trap; stop the running test and restore the sources.
+# cleanup: stop the running test and restore the sources; the exit trap calls
+# it before it removes $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -386,10 +392,7 @@ cleanup()
     fi
     restore
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS DETAILS: compile the test against the private copies
 # and run it for at most 10 seconds; it must exit with STATUS and print each

@@ -136,6 +136,11 @@ fi
 runlock_hold "$repo" unix-proof "$repo/tests/host/unix_mutate.sh" "$@"
 
 mkdir -p build/tests
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/unix-proof.XXXXXX")
 child=
 cp -R rach2/sys "$work/sys"
@@ -149,7 +154,8 @@ restore()
     cp "$work/pipe.saved" "$work/sys/ipc/pipe.c"
     touch "$work/sys/ipc/unix.c" "$work/sys/ipc/pipe.c"
 }
-# cleanup: the exit trap; stop the running test and restore the sources.
+# cleanup: stop the running test and restore the sources; the exit trap calls
+# it before it removes $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -159,10 +165,7 @@ cleanup()
     fi
     restore
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: compile unix_hosttest.c over the private tree
 # as $work/PHASE, run it for at most 10 seconds, and exit unless it ends with

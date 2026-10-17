@@ -65,9 +65,13 @@ PY
 
 faults='open-lock late-lock'
 if [ "${1:-}" = --texts ]; then
+    root=
+    trap '[ -z "$root" ] || rm -rf "$root"' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     # The faults name their files as the private tree lays them out.
     root=$(mktemp -d "${TMPDIR:-/tmp}/rach2-krffs-open-texts.XXXXXX")
-    trap 'rm -rf "$root"' EXIT
     ln -s "$repo/rach2/sys" "$root/sys"
     for fault in $faults; do
         RACH2_FAULT_TEXTS=1 apply_fault "$root" "$fault" >/dev/null || exit 1
@@ -84,6 +88,11 @@ if [ "$#" -gt 0 ] && [ "$*" != --check ]; then
     exit 2
 fi
 mkdir -p build/tests
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/krffs-open-proof.XXXXXX")
 child=
 cp -R rach2/sys "$work/sys"
@@ -92,8 +101,8 @@ cp "$work/sys/fs/krffsmount.c" "$work/krffsmount.saved"
 cp "$work/sys/syscall_fs.c" "$work/syscall.saved"
 
 # cleanup: stop the running test and put the saved vfs.c, krffsmount.c and
-# syscall_fs.c back; the loop calls it after each fault, and it is the exit
-# trap.
+# syscall_fs.c back; the loop calls it after each fault, and the exit trap
+# calls it before it removes $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -106,10 +115,7 @@ cleanup()
     cp "$work/syscall.saved" "$work/sys/syscall_fs.c"
     touch "$work/sys/fs/vfs.c" "$work/sys/syscall_fs.c" "$work/sys/fs/krffsmount.c"
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: extract the functions from the private tree
 # into $work/vfs_open.inc and syscall_open.inc, compile the fixture over them

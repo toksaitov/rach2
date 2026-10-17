@@ -65,9 +65,13 @@ PY
 
 faults='tails bound active other-array one-entry own-array past-disk'
 if [ "${1:-}" = --texts ]; then
+    root=
+    trap '[ -z "$root" ] || rm -rf "$root"' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     # The faults name their files as the private tree lays them out.
     root=$(mktemp -d "${TMPDIR:-/tmp}/rach2-grubwindow-texts.XXXXXX")
-    trap 'rm -rf "$root"' EXIT
     ln -s "$repo/rach2/sys" "$root/sys"
     ln -s "$repo/utils" "$root/utils"
     for fault in $faults; do
@@ -81,6 +85,11 @@ fi
 runlock_hold "$repo" grubwindow-mutation "$repo/tests/host/grubwindow_mutate.sh" "$@"
 
 mkdir -p build/tests
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/grubwindow-proof.XXXXXX")
 child=
 mkdir -p "$work/utils" "$work/saved"
@@ -98,7 +107,8 @@ restore()
     touch "$work/utils/grubslot.c" "$work/sys/block/partition.c" "$work/sys/fs/devfs.c"
 }
 
-# cleanup: the exit trap; stop the running test and restore the sources.
+# cleanup: stop the running test and restore the sources; the exit trap calls
+# it before it removes $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -108,10 +118,7 @@ cleanup()
     fi
     restore
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase TEST PHASE EXPECTED MESSAGE: compile tests/host/TEST_hosttest.c
 # against the private copies as the host suite compiles it, run it for at most

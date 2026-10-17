@@ -50,6 +50,11 @@ fi
 runlock_hold "$repo" corefile-mutation "$repo/tests/host/corefile_mutate.sh" "$@"
 
 mkdir -p build/tests
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/corefile-proof.XXXXXX")
 child=
 cp -R rach2/sys "$work/sys"
@@ -58,8 +63,9 @@ mkdir "$work/vendor"
 cp rach2/vendor/multiboot.h "$work/vendor/multiboot.h"
 cp "$work/sys/syscall_fs.c" "$work/syscall_fs.saved"
 
-# cleanup: stop the running test and put the saved syscall_fs.c back; the
-# loop calls it after each fault, and it is the exit trap.
+# cleanup: stop the running test and put the saved syscall_fs.c back; the loop
+# calls it after each fault, and the exit trap calls it before it removes
+# $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -70,10 +76,7 @@ cleanup()
     cp "$work/syscall_fs.saved" "$work/sys/syscall_fs.c"
     touch "$work/sys/syscall_fs.c"
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase PHASE STATUS MESSAGE: compile corefile_hosttest.c over the copy as
 # $work/PHASE, run it for at most 10 seconds, and exit unless it ends with

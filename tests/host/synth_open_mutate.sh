@@ -123,6 +123,11 @@ fi
 runlock_hold "$repo" synth-open-mutation "$repo/tests/host/synth_open_mutate.sh" "$@"
 
 mkdir -p build/tests
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/synth-open-proof.XXXXXX")
 child=
 cp -R rach2/sys "$work/sys"
@@ -131,7 +136,8 @@ for component in devfs procfs; do
 done
 
 # cleanup: stop the running test and put the saved devfs.c and procfs.c back;
-# the loop calls it after each fault, and it is the exit trap.
+# the loop calls it after each fault, and the exit trap calls it before it
+# removes $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -144,10 +150,7 @@ cleanup()
         touch "$work/sys/fs/$component.c"
     done
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # run_phase TEST PHASE STATUS MESSAGE: compile TEST_hosttest.c with its own
 # dependency lines, its kernel sources taken from the private tree, as

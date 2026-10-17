@@ -42,9 +42,13 @@ PY
 
 faults='orphan root-node root-old root-wide harness'
 if [ "${1:-}" = --texts ]; then
+    root=
+    trap '[ -z "$root" ] || rm -rf "$root"' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     # The faults name their files as the private tree lays them out.
     root=$(mktemp -d "${TMPDIR:-/tmp}/rach2-krffs-inode-texts.XXXXXX")
-    trap 'rm -rf "$root"' EXIT
     ln -s "$repo/rach2/sys" "$root/sys"
     ln -s "$repo/tests/system/runner/harness.c" "$root/harness.c"
     for fault in $faults; do
@@ -58,6 +62,11 @@ fi
 runlock_hold "$repo" inode-proof "$repo/tests/host/krffs_inode_mutate.sh" "$@"
 
 mkdir -p build/tests
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/krffs-inode-proof.XXXXXX")
 child=
 cp -R rach2/sys "$work/sys"
@@ -74,7 +83,8 @@ restore()
         touch "$work/$source"
     done
 }
-# cleanup: the exit trap; stop the running test and restore the sources.
+# cleanup: stop the running test and restore the sources; the exit trap calls
+# it before it removes $work.
 cleanup()
 {
     if [ -n "$child" ]; then
@@ -84,10 +94,7 @@ cleanup()
     fi
     restore
 }
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup; [ -z "$work" ] || rm -rf "$work"' EXIT
 
 # Extract whole production functions, keeping their bodies unchanged. The
 # fixture supplies user copies and a resolver backed by the real KRFFS walk.
