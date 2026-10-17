@@ -9,7 +9,8 @@
 # behind a stamp of its own that its recipe and fetch_agents.sh renew.
 # agents.list records the packages GNU_AGENTS names and agents-all.list every
 # recipe, each rewritten only when the list changes, so that the root image
-# that installs them is built again then.
+# that installs them is built again then. Each rule writes a temporary named
+# by the shell's process ID, as mk/gnu.mk says.
 GNU_AGENTS_ALL = $(sort $(patsubst vendor/gnu/agents/packages/%.sh,%,$(wildcard vendor/gnu/agents/packages/*.sh)))
 GNU_AGENTS_ON = $(if $(filter all,$(GNU_AGENTS)),$(GNU_AGENTS_ALL),$(sort $(GNU_AGENTS)))
 GNU_AGENTS_LIST = $(GNU_OUT)/agents.list
@@ -28,13 +29,13 @@ $(GNU_AGENTS_LIST): gnu-agents-check
 	    echo "gnu: agents: the packages are for x86-64 only; build with ARCH=x86_64 or without GNU_AGENTS" >&2; exit 1; \
 	fi
 	@mkdir -p $(GNU_OUT)
-	@echo "$(GNU_AGENTS_ON)" >$@.new
-	@if cmp -s $@.new $@; then rm -f $@.new; else mv $@.new $@; fi
+	@t=$@.$$$$; echo "$(GNU_AGENTS_ON)" >$$t && \
+	    if cmp -s $$t $@; then rm -f $$t; else mv $$t $@; fi
 
 $(GNU_AGENTS_ALL_LIST): gnu-agents-check
 	@mkdir -p $(GNU_OUT)
-	@echo "$(GNU_AGENTS_ALL)" >$@.new
-	@if cmp -s $@.new $@; then rm -f $@.new; else mv $@.new $@; fi
+	@t=$@.$$$$; echo "$(GNU_AGENTS_ALL)" >$$t && \
+	    if cmp -s $$t $@; then rm -f $$t; else mv $$t $@; fi
 
 $(GNU_OUT)/agents/%.stamp: vendor/gnu/agents/packages/%.sh vendor/gnu/agents/fetch_agents.sh vendor/gnu/arch.sh | $(SHA256TOOL)
 	@rm -f $@

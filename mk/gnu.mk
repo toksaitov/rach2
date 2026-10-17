@@ -27,11 +27,13 @@ gnu-toolchain: $(GNU_TOOLCHAIN_STAMP)
 gnu-ports: $(GNU_PORTS_STAMP)
 
 # Rewritten only when the toolchain's lines change, so that its timestamp
-# moves only then.
+# moves only then. This rule, the ports.link rule below and the agents' lists
+# (mk/gnu-agents.mk) write a temporary named by the shell's process ID, since
+# two suites' makes may run one of them at once.
 $(GNU_TOOLCHAIN_PINS): vendor/gnu/sources.txt
 	@mkdir -p $(GNU_OUT)
-	@awk '$$1 ~ /^(binutils|gcc|gmp|mpfr|mpc|glibc|linux|libxcrypt)$$/' vendor/gnu/sources.txt >$@.new
-	@if cmp -s $@.new $@; then rm -f $@.new; else mv $@.new $@; fi
+	@t=$@.$$$$; awk '$$1 ~ /^(binutils|gcc|gmp|mpfr|mpc|glibc|linux|libxcrypt)$$/' vendor/gnu/sources.txt >$$t && \
+	    if cmp -s $$t $@; then rm -f $$t; else mv $$t $@; fi
 
 $(GNU_TOOLCHAIN_STAMP): vendor/gnu/build_toolchain.sh vendor/gnu/arch.sh vendor/gnu/fetch.sh $(GNU_TOOLCHAIN_PINS) | $(SHA256TOOL)
 	@rm -f $@
@@ -44,8 +46,8 @@ $(GNU_TOOLCHAIN_STAMP): vendor/gnu/build_toolchain.sh vendor/gnu/arch.sh vendor/
 .PHONY: gnu-link-check
 $(GNU_PORTS_LINK): gnu-link-check
 	@mkdir -p $(GNU_OUT)
-	@echo "$(or $(GNU_LINK),shared)" >$@.new
-	@if cmp -s $@.new $@; then rm -f $@.new; else mv $@.new $@; fi
+	@t=$@.$$$$; echo "$(or $(GNU_LINK),shared)" >$$t && \
+	    if cmp -s $$t $@; then rm -f $$t; else mv $$t $@; fi
 
 $(GNU_PORTS_STAMP): $(GNU_TOOLCHAIN_STAMP) vendor/gnu/build_port.sh vendor/gnu/fetch.sh vendor/gnu/sources.txt $(GNU_RECIPES) $(GNU_PORTS_LINK)
 	@rm -f $@
