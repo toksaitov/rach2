@@ -12,7 +12,9 @@
 # parent out of the unmount, so the probe must fail because the removed child
 # mount did not keep its open description. The unmodified and restored
 # kernels must pass both modes, and the restored kernel must match the first.
-# Each kernel, probe and disk is built or copied into a private directory.
+# Each kernel, probe and disk is built or copied into a private directory
+# under build/tests. A run removes it when it passes or a signal stops it, and
+# keeps it, at the path its logs line prints, when it fails.
 #
 # --resume DIRECTORY runs the fault and restored phases again in a directory
 # a run left, after checking its passing fixed logs and its sums; --restore
@@ -72,6 +74,26 @@ failure_pattern()
 
 resume=0
 fault=gone
+work=
+made=
+armed=
+keep=
+
+# Run cleanup once it is armed, then remove the work directory if this run
+# made it, unless the proof failed after printing its path, which sets
+# `keep`; a signal clears `keep`.
+finish()
+{
+    exit_status=$?
+    [ -z "$armed" ] || cleanup
+    if [ -n "$made" ] && { [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; }; then
+        rm -rf ${work:+"$work"}
+    fi
+}
+trap finish EXIT
+trap 'keep=; exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
 if [ "$#" -eq 2 ] && { [ "$1" = --resume ] || [ "$1" = --restore ]; }; then
     work=$2
     fault=$(cat "$work/fault")
@@ -99,7 +121,9 @@ if [ "$#" -eq 2 ] && { [ "$1" = --resume ] || [ "$1" = --restore ]; }; then
         done
     fi
 elif [ "$#" -eq 0 ] || { [ "$#" -eq 1 ] && [ "$1" = --nested ]; }; then
-    work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-usbdisk.XXXXXX")
+    mkdir -p build/tests
+    made=1
+    work=$(mktemp -d "$repo/build/tests/usbdisk-mutation.XXXXXX")
     [ "$#" -eq 0 ] || fault=nested
 else
     echo 'usbdisk-mutation: usage: [--nested | --resume DIRECTORY | --restore DIRECTORY | --texts]' >&2
@@ -138,10 +162,7 @@ cleanup()
     touch "$source"
 }
 
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+armed=1
 
 "${CC:-cc}" -O2 -Wall -Wextra -o "$runner" tests/system/runner/runutil.c
 
@@ -237,6 +258,7 @@ run_phase()
 }
 
 echo "usbdisk-mutation: logs: $work"
+keep=1
 if [ "$resume" -eq 0 ]; then
     build_probe
     run_phase fixed

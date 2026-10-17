@@ -28,14 +28,30 @@ if [ "$*" = --texts ]; then
     echo 'vfs-unmount: texts: every fault is once in its source'
     exit 0
 fi
+work=
+keep=
+
+# Put the saved vfs.c back into the copy. Then remove the work directory,
+# unless the test failed after printing its path, which sets `keep`; a signal
+# clears `keep`.
+cleanup()
+{
+    exit_status=$?
+    [ -n "$work" ] || return 0
+    [ ! -f "$work/saved.c" ] || cp "$work/saved.c" "$work/vfs.c"
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf "$work"
+    fi
+}
+trap cleanup EXIT
+trap 'keep=; exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-unmount.XXXXXX")
 echo "vfs-unmount: logs: $work"
+keep=1
 cp "$repo/rach2/sys/fs/vfs.c" "$work/saved.c"
 cp "$work/saved.c" "$work/vfs.c"
-trap 'cp "$work/saved.c" "$work/vfs.c"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
 
 # run_phase NAME: copy the unmount functions out of the copy of vfs.c, build
 # the fixture with them as NAME, and run it with its output in NAME.log.

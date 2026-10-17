@@ -23,6 +23,29 @@ if [ "${1:-}" != --texts ]; then
     . "$repo/tests/system/runlock.sh"
     runlock_hold "$repo" usbdisk-script "$repo/tests/system/usbdisk_script_test.sh" "$@"
 fi
+root=
+child=
+keep=
+# Stop the running case and put the saved script back into the copy. Then
+# remove the work directory, unless the test failed after printing its path,
+# which sets `keep`; a signal clears `keep`.
+cleanup_test()
+{
+    exit_status=$?
+    if [ -n "$child" ]; then
+        kill -TERM "$child" 2>/dev/null || :
+        wait "$child" 2>/dev/null || :
+    fi
+    [ -n "$root" ] || return 0
+    [ ! -f "$root/saved.sh" ] || cp "$root/saved.sh" "$root/source.sh"
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf "$root"
+    fi
+}
+trap cleanup_test EXIT
+trap 'keep=; exit 129' HUP
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM
 root=$(mktemp -d "${TMPDIR:-/tmp}/rach2-usbdisk-script.XXXXXX")
 echo "usbdisk-script: logs: $root"
 [ "$#" -eq 0 ] || [ "$*" = --mutate ] || [ "$*" = --texts ] || exit 2
@@ -57,10 +80,10 @@ if [ "$*" = --texts ]; then
         echo 'usbdisk-script: texts: usbdiskprobe.c does not print the assertion the rows edit' >&2
         exit 1
     fi
-    rm -rf "$root"
     echo 'usbdisk-script: texts: every fault is once in its source'
     exit 0
 fi
+keep=1
 # The architecture, from ARCH as usbdisk_mutate.sh takes it, for the
 # mk/arch.sh the extracted builder sources, which reads RACH2_ARCH alone.
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
@@ -68,20 +91,6 @@ export RACH2_ARCH
 cp "$repo/tests/system/usbdisk_mutate.sh" "$root/saved.sh"
 cp "$root/saved.sh" "$root/source.sh"
 "${CC:-cc}" -O2 -Wall -Wextra -Werror -o "$root/runutil" "$repo/tests/system/runner/runutil.c"
-child=
-# Stop the running case and put the saved script back into the copy.
-cleanup_test()
-{
-    if [ -n "$child" ]; then
-        kill -TERM "$child" 2>/dev/null || :
-        wait "$child" 2>/dev/null || :
-    fi
-    cp "$root/saved.sh" "$root/source.sh"
-}
-trap cleanup_test EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
 
 # Copy build_probe, cleanup and run_logged out of the copy of the script into
 # functions.sh.
