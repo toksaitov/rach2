@@ -44,14 +44,17 @@ FIXTURE="$REPO/tools/verify/prose_upstream.txt"
 
 make -s -C "$REPO" build/tools/verify/prosecheck || exit 1
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/rach2_prose.XXXXXX")"
+WORK=
 # bash 3.2, the Mac's sh, gives an EXIT trap a status of 0 when `set -u`
 # stops a script that also has `set -e`, so a run that reached no success
 # exit fails here.
 finished=
 status=0
-trap 'status=$?; rm -rf "$WORK"; [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1; exit "$status"' EXIT
-trap 'rm -rf "$WORK"' INT TERM
+trap 'status=$?; rm -rf ${WORK:+"$WORK"}; [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1; exit "$status"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/rach2_prose.XXXXXX")"
 
 cd "$REPO"
 

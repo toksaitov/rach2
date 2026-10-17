@@ -5,10 +5,11 @@
 # that is gone, a helper without a reason and a program assigned twice fail.
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/probecheck-test.XXXXXX")
-trap 'rm -rf "$WORK"' 0
+WORK=
+trap 'rm -rf ${WORK:+"$WORK"}' 0
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/probecheck-test.XXXXXX")
 mkdir -p "$WORK/tests/musl" "$WORK/tests/system/runner"
 printf 'PROGS = alpha beta\n' > "$WORK/tests/Makefile"
 printf 'static const char *const PROBES[] = {\n    "alpha"};\n' > "$WORK/tests/system/runner/runtests.c"

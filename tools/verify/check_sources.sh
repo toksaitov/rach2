@@ -47,9 +47,14 @@ ondisk=$(cd "$K" && find kernel.c sys -name '*.c' 2>/dev/null | sed 's#^\./##' |
 
 # A failed mktemp stops the check, since the comparison below would then find
 # nothing and print OK.
+lf=
+df=
+trap 'rm -f ${lf:+"$lf"} ${df:+"$df"}' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 lf=$(mktemp) || { echo "check-sources: mktemp failed" >&2; exit 2; }
-df=$(mktemp) || { echo "check-sources: mktemp failed" >&2; rm -f "$lf"; exit 2; }
-trap 'rm -f "$lf" "$df"' EXIT INT TERM
+df=$(mktemp) || { echo "check-sources: mktemp failed" >&2; exit 2; }
 printf '%s\n' "$listed" >"$lf"
 printf '%s\n' "$ondisk" >"$df"
 

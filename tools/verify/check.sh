@@ -75,7 +75,9 @@
 # Usage:
 #     ./check.sh [FILE ...]      # more files for the clang-format check
 #
-# The exit status is 1 when any check fails.
+# The exit status is 1 when any check fails. The logs go to a private
+# directory whose path the first line prints; a run that passes or is stopped
+# by a signal removes it, and one that fails keeps it.
 #
 
 set -u
@@ -97,6 +99,13 @@ make -C "$REPO" --no-print-directory build/tools/verify/asciiscan \
     build/tools/verify/prosecheck build/tools/verify/sizecheck \
     build/tools/inspect/setidcheck >/dev/null || exit 1
 cd "$REPO" || exit 1
+# The exit trap keeps the logs only after a failure, for the paths it printed.
+unset VDIR
+status=0
+trap 'status=$?; [ "$status" -ne 0 ] || rm -rf ${VDIR:+"$VDIR"}; exit "$status"' EXIT
+trap 'rm -rf ${VDIR:+"$VDIR"}; exit 129' HUP
+trap 'rm -rf ${VDIR:+"$VDIR"}; exit 130' INT
+trap 'rm -rf ${VDIR:+"$VDIR"}; exit 143' TERM
 VDIR=$(umask 077; mktemp -d "${TMPDIR:-/tmp}/rach2_verify.XXXXXX") || {
     echo "verify-style: cannot create a temporary directory" >&2
     exit 1

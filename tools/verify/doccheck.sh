@@ -66,8 +66,12 @@ command -v bash >/dev/null 2>&1 || {
     echo "doccheck: bash not found; it reads the shell scripts" >&2; exit 2
 }
 
+work=
+trap 'rm -rf ${work:+"$work"}' 0
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/doccheck.XXXXXX") || exit 2
-trap 'rm -rf "$work"' 0
 
 # The tokens of the C text on stdin, one a line, literals kept whole and
 # each directive set between empty lines; the status is 1, with the

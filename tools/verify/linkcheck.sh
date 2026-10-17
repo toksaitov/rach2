@@ -31,8 +31,12 @@ else
     files=$(git ls-files -- '*.md' ':!:dev-log/*' | sort)
 fi
 
+out=
+trap 'rm -f ${out:+"$out"}' 0
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 out=$(mktemp "${TMPDIR:-/tmp}/linkcheck.XXXXXX") || exit 1
-trap 'rm -f "$out"' 0
 count=0
 for f in $files; do
     count=$((count + 1))

@@ -39,11 +39,12 @@ if [ "${1:-}" != --texts ]; then
     . "$repo/tests/system/runlock.sh"
     runlock_hold "$repo" style-scope-test "$repo/tests/system/style_scope_test.sh" "$@"
 fi
-work=$(mktemp -d "${TMPDIR:-/tmp}/style-scope.XXXXXX")
-trap 'rm -rf "$work"' EXIT
+work=
+trap 'rm -rf ${work:+"$work"}' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "${TMPDIR:-/tmp}/style-scope.XXXXXX")
 tree=$work/tree
 for d in rach2/sys/arch/i686 krffs/manifests krffs/vendor utils ish tests/host tests/system/fixtures \
     tools/verify tools/setup mk man ports/doom/src vendor/busybox/busybox-9.9 \

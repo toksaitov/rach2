@@ -160,8 +160,12 @@ build_array() {
 #   5. json_escape escapes a tab, a double quote and a backslash, and nothing
 #      else.
 selftest() {
-    st_dir=$(mktemp -d)
-    trap 'rm -rf "$st_dir"' EXIT INT TERM
+    st_dir=
+    trap 'rm -rf ${st_dir:+"$st_dir"}' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    st_dir=$(mktemp -d) || exit 1
     st_fail=0
 
     # Case 1: the wrapped Homebrew recipe.
@@ -246,6 +250,18 @@ case "${1-}" in
         ;;
 esac
 
+entries=
+dump_raw=
+dump=
+out_tmp=
+unit_tmp=
+rawlist=
+expected=
+missing=
+trap 'rm -f ${entries:+"$entries"} ${dump_raw:+"$dump_raw"} ${dump:+"$dump"} ${out_tmp:+"$out_tmp"} ${unit_tmp:+"$unit_tmp"} ${rawlist:+"$rawlist"} ${expected:+"$expected"} ${missing:+"$missing"}' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 entries=$(mktemp)
 dump_raw=$(mktemp)
 dump=$(mktemp)
@@ -254,7 +270,6 @@ unit_tmp=$(mktemp)
 rawlist=$(mktemp)
 expected=$(mktemp)
 missing=$(mktemp)
-trap 'rm -f "$entries" "$dump_raw" "$dump" "$out_tmp" "$unit_tmp" "$rawlist" "$expected" "$missing"' EXIT INT TERM
 DBDIR="$REPO/build/compile_commands"
 mkdir -p "$DBDIR"
 

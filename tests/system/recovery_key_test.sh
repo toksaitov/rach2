@@ -38,13 +38,8 @@ if [ "${1:-}" = --texts ]; then
     exit 0
 fi
 mkdir -p "$REPO/build"
-WORK=$(mktemp -d "$REPO/build/recovery-key-test.XXXXXX")
-echo "recovery-key-test: logs: $WORK"
-mkdir "$WORK/krffs" "$WORK/bin"
-cp "$REPO/krffs/gen_recovery_key.sh" "$WORK/krffs/gen_recovery_key.sh"
-cp "$REPO/krffs/stageimage.krffs.c" "$WORK/stageimage.krffs.c"
-cp "$WORK/krffs/gen_recovery_key.sh" "$WORK/key.source"
-cp "$WORK/stageimage.krffs.c" "$WORK/stager.source"
+WORK=
+keep=
 
 # Put back the private sources and touch them.
 restore() {
@@ -52,9 +47,29 @@ restore() {
     cp "$WORK/stager.source" "$WORK/stageimage.krffs.c"
     touch "$WORK/krffs/gen_recovery_key.sh" "$WORK/stageimage.krffs.c"
 }
-trap restore 0
-trap 'exit 130' INT
-trap 'exit 143' TERM HUP
+
+# Put back the private sources, then remove the work directory, unless the
+# test failed after printing its path, which sets `keep`; a signal clears
+# `keep`.
+cleanup() {
+    exit_status=$?
+    [ -n "$WORK" ] || return 0
+    [ ! -f "$WORK/stager.source" ] || restore
+    if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
+        rm -rf "$WORK"
+    fi
+}
+trap cleanup 0
+trap 'keep=; exit 130' INT
+trap 'keep=; exit 143' TERM HUP
+WORK=$(mktemp -d "$REPO/build/recovery-key-test.XXXXXX")
+echo "recovery-key-test: logs: $WORK"
+keep=1
+mkdir "$WORK/krffs" "$WORK/bin"
+cp "$REPO/krffs/gen_recovery_key.sh" "$WORK/krffs/gen_recovery_key.sh"
+cp "$REPO/krffs/stageimage.krffs.c" "$WORK/stageimage.krffs.c"
+cp "$WORK/krffs/gen_recovery_key.sh" "$WORK/key.source"
+cp "$WORK/stageimage.krffs.c" "$WORK/stager.source"
 
 # Report $* with the logs' directory and exit 1.
 fail() {

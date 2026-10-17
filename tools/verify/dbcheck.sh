@@ -30,8 +30,12 @@ fi
 # The absolute path of every entry: its directory joined with its file, a
 # file that is already absolute taken as it is. The generator writes one
 # entry per line, and this reads that shape.
+known=
+trap 'rm -f ${known:+"$known"}' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 known=$(mktemp) || exit 2
-trap 'rm -f "$known"' EXIT INT TERM
 cat "$DBDIR"/*.json | LC_ALL=C awk -F'"' '
     /"directory"/ {
         for (i = 1; i <= NF; i++) {

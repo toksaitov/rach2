@@ -28,8 +28,12 @@ ASCIISCAN="$REPO/build/tools/verify/asciiscan"
 make -s -C "$REPO" build/tools/verify/asciiscan || exit 1
 cd "$REPO" || exit 1
 
+findings=
+trap 'rm -f ${findings:+"$findings"}' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 findings=$(mktemp)
-trap 'rm -f "$findings"' EXIT INT TERM
 
 # Find in-house files under the source roots; the arguments are the name
 # filter and -print. The extracted vendor trees and their built output

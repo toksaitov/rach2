@@ -23,8 +23,12 @@ scripts=$( {
     grep -l -e '--mutate)' -e '= --mutate' -e "'--mutate'" tests/system/*.sh \
         tests/system/accept/*.sh tests/host/*.sh tools/*/*.sh
 } | grep -v '^tools/verify/faulttexts\.sh$' | sort -u)
+log=
+trap 'rm -f ${log:+"$log"}' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 log=$(mktemp "${TMPDIR:-/tmp}/rach2-faulttexts.XXXXXX") || exit 1
-trap 'rm -f "$log"' EXIT
 checked=0
 failed=0
 for script in $scripts; do

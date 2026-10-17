@@ -46,14 +46,17 @@ command -v "$NM" >/dev/null 2>&1 || {
     exit 2
 }
 
-TMPD="$(mktemp -d)"
+TMPD=
 # bash 3.2, the Mac's sh, gives an EXIT trap a status of 0 when `set -u`
 # stops a script that also has `set -e`, so a run that reached no success
 # exit fails here.
 finished=
 status=0
-trap 'status=$?; rm -rf "$TMPD"; [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1; exit "$status"' EXIT
-trap 'rm -rf "$TMPD"' INT TERM
+trap 'status=$?; rm -rf ${TMPD:+"$TMPD"}; [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1; exit "$status"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+TMPD="$(mktemp -d)"
 
 for path in "$@"; do
     if ! "$NM" "$path" > "$TMPD/nm.out" 2> "$TMPD/nm.err"; then

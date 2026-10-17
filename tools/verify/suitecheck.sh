@@ -135,8 +135,12 @@ check_tree() {
 # gives. Exits 1 when a case differs.
 # shellcheck disable=SC2016
 selftest() {
+    T=
+    trap 'rm -rf ${T:+"$T"}' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     T=$(mktemp -d "${TMPDIR:-/tmp}/suitecheck.XXXXXX") || exit 2
-    trap 'rm -rf "$T"' EXIT INT TERM
     n=0; bad=0
     # case_ STATUS NAME: check the tree under $T/NAME and expect STATUS.
     case_() {
