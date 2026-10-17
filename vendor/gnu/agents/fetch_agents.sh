@@ -85,8 +85,10 @@ fetched()
         echo "gnu: agents: $NAME: no $1 in the recipe's FILES" >&2
         return 1
     fi
-    # shellcheck disable=SC2086 # a line of FILES is three words
+    set -f
+    # shellcheck disable=SC2086 # three words; set -f keeps a URL's ? as it is
     set -- $line
+    set +f
     file="$DL/$1"
     algorithm=${3%%:*}
     want=${3#*:}
