@@ -107,6 +107,7 @@ either|a-command-that-does-not-exist/sh+cat|full
 imagey|hdiutil|full
 slow1|-|full
 slow2|-|full
+locking|-|full
 stuck|-|full
 editing|-|full
 slowish|-|full
@@ -191,6 +192,8 @@ run-slow1:
 	@echo slow1-start >> events; sleep 2; echo slow1-end >> events; touch slow1.done
 run-slow2:
 	@echo slow2-start >> events; sleep 2; echo slow2-end >> events
+run-locking:
+	@echo ready > lock-ready; ./runutil until lock-release '^release$$' 60
 run-hungry1:
 	@echo hungry1-start >> events; sleep 1; \
 	  python3 "$$SELFTEST_STATUS" "$$PWD"; sleep 1; echo hungry1-end >> events
@@ -1050,17 +1053,22 @@ check "a host lock other than shared or alone is refused" 2 "$rc"
 check "and its command does not start" 0 "$(printf '%s\n' "$out" | grep -c '^started$')"
 
 # What a run owns. One run at a time on a tree: a second is refused with the
-# first named; a lock a dead run left is taken over, unless something of that
-# run's process group is still alive, which is named for the person to stop.
+# first named. The first suite reports that it has started, after the owner
+# record is written, and holds the tree until the second run is refused.
+# A lock a dead run left is taken over, unless something of that run's
+# process group is still alive, which is named for the person to stop.
 mkdir -p "$WORK/build"
 rm -rf "$WORK/build/.run.lock"
-( cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS=2 sh tests/run slow1 > "$WORK/first.out" 2>&1 ) &
+( cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS=2 sh tests/run locking > "$WORK/first.out" 2>&1 ) &
 first=$!
-sleep 0.7
+portclaims=$first
+"$SELFTEST_UTIL" until "$WORK/lock-ready" '^ready$' 60
 out=$(run passing); rc=$?
 check "a second run on a tree with one in flight is refused" 1 "$rc"
-check "and the first is named" 1 "$(printf '%s\n' "$out" | grep -c 'another run holds this tree: [0-9]*, slow1')"
+check "and the first is named" 1 "$(printf '%s\n' "$out" | grep -c 'another run holds this tree: [0-9]*, locking')"
+echo release > "$WORK/lock-release"
 wait "$first"
+portclaims=""
 check "and the lock goes with the first run" 0 "$([ -e "$WORK/build/.run.lock" ] && echo 1 || echo 0)"
 mkdir -p "$WORK/build/.run.lock"
 printf 'pid 999999\npgid 999999\nsince long ago\nargs old\n' > "$WORK/build/.run.lock/owner"
