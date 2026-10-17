@@ -1743,6 +1743,13 @@ run-tcc: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real) $(RUNUTIL)
 	$(MKDISK) krffs/manifests/os-real.manifest $(TCC_TEST_DISK) 64 48
 	sh tests/system/suites/tcc.sh $(BOOT_KERNEL) $(TCC_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`"
+# `tests/run clock`: the guest's monotonic and real clocks keeping the host's
+# time within 250 ms over 45 s of load in which the host stops the machine
+# thirty times, under the run's accelerator and under TCG (see
+# tests/system/suites/clock.sh).
+run-clock: rach2 tests krffs test-image
+	@mkdir -p $(IMAGES_DIR)
+	sh tests/system/suites/clock.sh $(BOOT_KERNEL) $(TEST_IMAGE)
 # `tests/run smp`: the kernel on one processor, on four and on two of four, each
 # finding its processors and passing a stress of fork, exec, pipes, futexes and
 # munmap across them and sleeps on the last, the debug shell's preemption test

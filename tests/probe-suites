@@ -44,5 +44,6 @@ bigfileprobe large
 musl/creddisk cred-persist
 musl/saltnoent noentropy
 musl/smpmusl smp
+musl/clockloadmusl clock
 musl/textbusymusl textbusy
 musl/bindholdmusl textbusy

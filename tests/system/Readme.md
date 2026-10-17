@@ -73,6 +73,8 @@ A failed suite's logs are copied to `build/tests/failed/NAME.ARCH.DATE-TIME.PID`
 
 A suite waits for a token and judges what the kernel counts, never the clock; a number of seconds in a suite is a completion bound. `RACH2_TIMEOUT_FACTOR=F` multiplies every bound, for a single suite or a set: the runner passes it on as `RACH2_DEADLINES=scaled` and `RACH2_DEADLINE_FACTOR=F`, which the harness, `runtests`, `ptydrive`, `hostpeer` and `runutil until` and `gone` read, and a shell suite writes a bound as `$(scaled N)` from `deadline.sh`. A bound that asserts a rate, the time a row applies a load for, a guest's own deadline and the idleness limit are not multiplied. The runner measures nothing about the host.
 
+The `clock` suite is the one exception, since the clock is what it tests: it compares the guest's clocks with the host's over 45 s in which the host stops the machine, within a bound measured on the testing host, which `suites/clock.sh` records.
+
 A row whose verdict compares a request with the guest's own deadline keeps the guest's flushes from the host: its disk is `cache=unsafe`, or its file node `cache.no-flush=on`. The disk drivers end each write with a flush, which QEMU makes an fdatasync of the image, and the deadline counts it, so on a loaded host a flush could outlast the deadline and quarantine a request the device answered. These rows are every boot under `rach2.blocklag` and the `queue` suite's throttled boot. Each write still reaches the host's page cache, where a later reader of the image finds it; such a row claims nothing about what survives a failure of the host, and every other row keeps its flushes.
 
 `tools/verify/suitecheck.sh`, which `tests/run style` runs, refuses a `sleep` for a number of seconds in a suite, on the host or typed into the guest, a typed line longer than 240 characters, since the console's line discipline keeps 255 bytes of a line and drops the rest, and an upper bound on a duration in a probe. A deliberate interval is marked `interval: REASON` in a comment and listed in `intervals` with the same reason; a mark without an entry, or an entry without a mark, fails the check. `calibrate.sh` measures the emulator's rate under a number of machines at once; no suite runs it.
@@ -88,6 +90,8 @@ The programs under `runner/` are host programs that `suites.mk` builds.
 * `deadline.c` runs a command in a process group of its own and kills the group when a time limit passes, with status 124.
 * `screentext.c` prints the text a framebuffer console shows in a QEMU screen dump, matching each cell against the kernel's own font, `rach2/sys/display/vga_font.c`; `--colors` prints how many colours the dump has.
 * `runutil.c` is the runner's helper above. Built at `build/tests/system/runutil`, it is also the suites' wait: `runutil until FILE PATTERN SECS [COUNT]` returns 0 once COUNT lines of FILE, one by default, match the basic regular expression PATTERN, and 1 when SECS pass first; `runutil gone PID SECS` returns 0 once the process has ended.
+
+`clockload.py`, the `clock` suite's driver, starts QEMU itself with its console on the driver's pipes, notes the host's time at each line the machine prints, and stops and continues QEMU with SIGSTOP and SIGCONT.
 
 A suite that starts QEMU itself with `-serial stdio < FIFO > LOG` sources `drive.sh`: `drive_feed` holds the FIFO open, `drive_type` types a line once the output it answers has arrived, `drive_expect` and `drive_prompt` wait for fresh output after the last match or typed line, and `drive_login` logs in.
 
@@ -142,6 +146,7 @@ These two run no test on the unmodified tree: they require the kernel rebuilt at
 * `usbdisk_mutate.sh`: the `usbdisk` suite's pull rows, against faults in the VFS's removal of a mount.
 * `stackoverrun_mutate.sh`: the `memory` suite's two stack-overrun rows.
 * `anthropic_mutate.sh`: the Linux Claude Code exchange, against acceptance of a wrong shell result.
+* `clock_mutate.sh`: the `clock` suite, against the rule that counts one tick for each interrupt.
 * `fakeapi_mutate.sh`: the `fakeapi` suite, against a fault in the plain protocol's check of a request and one in the server's verdict.
 * `codexapi_mutate.sh`: the `codexapi` suite, against a Responses protocol that takes any output of a tool call as the expected one and one that plays a warmup as a turn.
 * `init_refusal_mutate.sh`, `gpt_write_mutate.sh` and `servicelog_mutate.sh`: the `bootline` suite's init refusal, the `parts` suite's GPT write refusal and the `servicelog` suite.
