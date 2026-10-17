@@ -224,6 +224,7 @@ The [agents layer](../vendor/gnu/agents/Readme.md) installs vendors' published b
 
 | Package | Version | License | Purpose |
 | --- | --- | --- | --- |
+| [agy](../vendor/gnu/agents/packages/agy.sh) | 1.4.0 | Google Antigravity Terms of Service | agy, Google's Antigravity CLI, a coding agent for the terminal. |
 | [claude](../vendor/gnu/agents/packages/claude.sh) | 2.1.296 | Proprietary | claude, Anthropic's Claude Code, a coding agent for the terminal. |
 | [codex](../vendor/gnu/agents/packages/codex.sh) | 0.162.1 | Apache-2.0 | codex, OpenAI's Codex, a coding agent for the terminal. |
 | [gh](../vendor/gnu/agents/packages/gh.sh) | 2.102.0 | MIT | gh, GitHub's command-line program for repositories, issues, pull requests, releases and the API. |

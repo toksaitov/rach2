@@ -1,29 +1,32 @@
 #!/bin/sh
 # agents_mutate.sh | --texts: show that `tests/run agents` catches a fault in
-# each of the agents layer's installs of gh, Claude Code, Codex and muse,
-# and one in the project's loops.
+# each of the agents layer's installs of gh, Claude Code, Codex, Antigravity
+# CLI and muse, and one in the project's loops.
 #
 # Usage: sh tests/system/agents_mutate.sh | --texts
-# Four faults are in recipes of vendor/gnu/agents/packages/. Those of gh and
+# Five faults are in recipes of vendor/gnu/agents/packages/. Those of gh and
 # muse point the program's link in /usr/bin, which the recipe makes, at a
 # file the package does not have, so that the path finds no such program.
 # That of claude gives Claude Code's managed settings DISABLE_AUTOUPDATER in
 # place of DISABLE_UPDATES, which stops only the background update, so that
 # `claude update` tries to fetch a release. That of codex turns on Codex's
 # daemon_auto_start in /etc/codex/config.toml, so that Codex starts its
-# background server. The fifth makes `limited` in tools/flow/lib.sh take a
-# usage limit from any line of a session's output, which the limited_test
-# row, running tests/system/limited_test.sh on the machine, must catch.
-# The suite runs only the rows of these five, through RACH2_AGENTS_ROWS:
-# it must pass, fail on each of them with the five faults in their sources
-# and the root built again, and pass again with the sources restored. The
-# suite is x86-64 only. --texts checks that each fault is once in its source.
+# background server. That of agy makes /etc/profile.d/agy.sh set
+# AGY_CLI_DISABLE_AUTO_UPDATE to false, so that a login shell leaves
+# Antigravity CLI's updater on. The sixth makes `limited` in
+# tools/flow/lib.sh take a usage limit from any line of a session's output,
+# which the limited_test row, running tests/system/limited_test.sh on the
+# machine, must catch. The suite runs only the rows of these six, through
+# RACH2_AGENTS_ROWS: it must pass, fail on each of them with the six faults
+# in their sources and the root built again, and pass again with the
+# sources restored. The suite is x86-64 only. --texts checks that each fault
+# is once in its source.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-faults="gh claude codex muse limited"
-rows="gh claude codex muse limited_test"
+faults="gh claude codex agy muse limited"
+rows="gh claude codex agy muse limited_test"
 
 # fault_file NAME: the file that fault NAME goes into: tools/flow/lib.sh for
 # `limited`, and otherwise the recipe of the package NAME.
@@ -38,7 +41,8 @@ fault_file()
 
 # apply_fault NAME: put fault NAME into its source: for a package, whose
 # program is NAME too, claude's in its managed settings, codex's in its
-# system config and the others' in the program's link; with
+# system config, agy's in its profile script and the others' in the
+# program's link; with
 # RACH2_FAULT_TEXTS set, only check its text and write nothing.
 apply_fault()
 {
@@ -56,6 +60,9 @@ if name == 'claude':
     old, new = '"DISABLE_UPDATES": "1"', '"DISABLE_AUTOUPDATER": "1"'
 elif name == 'codex':
     old, new = '\ndaemon_auto_start = false\n', '\ndaemon_auto_start = true\n'
+elif name == 'agy':
+    old = 'export AGY_CLI_DISABLE_AUTO_UPDATE=true'
+    new = 'export AGY_CLI_DISABLE_AUTO_UPDATE=false'
 elif name == 'limited':
     old = '''        grep -E '"type":"result".*"is_error":true|"is_error":true.*"type":"result"|"type":"(error|turn\\.failed)"'\n'''
     new = '        cat\n'
@@ -176,6 +183,7 @@ done
 run_phase faults 'AGENTROW FAIL gh: gh --version: status 127' \
     'AGENTROW FAIL claude: claude update: status 1' \
     'AGENTROW FAIL codex: the processes: got [' \
+    "AGENTROW FAIL agy: the updater's setting in a login shell: got [false], want [true]" \
     'AGENTROW FAIL muse: muse --version: status 127' \
     'AGENTROW FAIL limited_test: limited_test.sh --mutate: status'
 restore

@@ -1,0 +1,135 @@
+.Dd October 18, 2026
+.Dt AGY 1
+.Os
+.Sh NAME
+.Nm agy
+.Nd Google's Antigravity CLI, a coding agent for the terminal
+.Sh SYNOPSIS
+.Nm
+.Op Ar options
+.Nm
+.Fl p Ar prompt
+.Op Ar options
+.Nm
+.Ar subcommand
+.Op Ar arguments
+.Sh DESCRIPTION
+.Nm
+is a coding agent: in a full-screen session on the terminal it takes a
+request, asks Google's models for the steps, and reads and edits files and
+runs commands in the current directory to carry them out.
+.Ql agy -p Ar prompt
+runs one request without the screen and prints the answer.
+.Ql agy --help
+lists the options and subcommands, and
+.Ql agy help Ar subcommand
+describes one.
+.Pp
+The x86-64 GNU root has
+.Nm
+when it is built with the agents layer:
+.Ql make ARCH=x86_64 GNU_AGENTS=agy os-real-gnu-ext2 ,
+or
+.Ql GNU_AGENTS=all ,
+which the release to the installed machine uses.
+The program is Google's own build of Antigravity CLI 1.4.0, a dynamically
+linked Go program for glibc, installed unmodified as Google's installer
+installs it, under the name
+.Nm .
+.Pa /opt/agy/bin/agy
+is the program, and
+.Pa /usr/bin/agy
+and
+.Pa /bin/agy
+link to it.
+Its use is governed by Google's terms, which
+.Pa /opt/agy/TERMS
+names.
+.Ss Signing in over SSH
+The first session that is not signed in shows a menu of ways to sign in:
+Google OAuth, for a Google account, or a Google Cloud project.
+With Google OAuth,
+.Nm
+prints the address of Google's sign-in page and waits for a code.
+Open that address on any other computer, sign in there, and paste the code
+the page then shows into the session.
+.Pp
+Instead, a key of the Gemini API is used without signing in, when
+.Pa ~/.gemini/antigravity-cli/settings.json
+names the Gemini API as the model provider and the key is in the
+environment variable
+.Ev GEMINI_API_KEY :
+.Bd -literal -offset indent
+{ "modelProvider": "gemini" }
+.Ed
+.Pp
+.Nm
+keeps the account's token in the Secret Service of the D-Bus session bus
+where one answers, and otherwise in a file of its own.
+Rach2 runs no Secret Service, so the token is in that file.
+.Ql /logout
+in a session removes it.
+.Ss Updates and telemetry
+.Nm
+has an updater, which replaces the program with Google's newest release
+in the background.
+.Pa /etc/profile.d/agy.sh
+sets
+.Ev AGY_CLI_DISABLE_AUTO_UPDATE Ns =true
+for every login shell, the setting Google documents to turn the updater
+off, so the program stays the version the root installed; a new version
+comes with a new build of the root.
+The updater also stops where it cannot write the program's directory, as
+an ordinary user cannot write
+.Pa /opt/agy/bin .
+.Pp
+.Nm
+sends Google usage metrics and crash logs unless
+.Pa ~/.gemini/antigravity-cli/settings.json
+sets
+.Ql enableTelemetry
+to false.
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev AGY_CLI_DISABLE_AUTO_UPDATE
+.Ql true
+turns the updater off.
+.It Ev GEMINI_API_KEY
+a key of the Gemini API, used when the settings name the Gemini API as the
+model provider.
+.It Ev GOOGLE_GEMINI_BASE_URL
+the address of the Gemini API, for a server other than Google's.
+.It Ev SSL_CERT_FILE
+a file of certificate authorities to trust in place of those of
+.Pa /etc/ssl/certs .
+.El
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /opt/agy/bin/agy
+the program
+.It Pa /opt/agy/TERMS
+the terms of its use
+.It Pa /etc/profile.d/agy.sh
+turns the updater off
+.It Pa ~/.gemini/antigravity-cli
+the settings, conversations, logs and cache, and the helper programs the
+program writes there itself
+.It Pa ~/.gemini/config
+the projects and other settings
+.El
+.Sh EXAMPLES
+Sign in in a session of
+.Xr tmux 1 ,
+then ask for a change in a repository:
+.Bd -literal -offset indent
+$ tmux
+$ cd project
+$ agy
+.Ed
+.Sh SEE ALSO
+.Xr git 1 ,
+.Xr ssh 1 ,
+.Xr tmux 1
+.Pp
+.Lk https://antigravity.google/docs/install?tab=cli "Installing and signing in"
+.Lk https://antigravity.google/docs/cli/reference "The CLI reference"
