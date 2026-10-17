@@ -34,7 +34,7 @@ The path finds a GNU program in `/usr/bin` before a file of `/bin`. `make` is GN
 
 ## Sources and license
 
-[`sources.txt`](sources.txt) pins each tarball of the toolchain and the ports, and [`sources-extra.txt`](sources-extra.txt) the sources of the three subdirectories, the Debian archive keys and the CA bundle. A line gives a name, version, URL and SHA-256, and each file's header says which upstream key verified each digest. `fetch.sh` downloads a file once, into `downloads/`, which Git ignores, and checks its digest every time a script uses it; a file with another digest is removed and refused. Nothing fetched is committed.
+[`sources.txt`](sources.txt) pins each tarball of the toolchain and the ports, and [`sources-extra.txt`](sources-extra.txt) the sources of the three subdirectories, the Debian archive keys and the CA bundle. A line gives a name, version, URL and SHA-256, and each file's header says which upstream key verified each digest. `fetch.sh` downloads a file once, into `downloads/`, which Git ignores, trying up to three times, and checks its digest every time a script uses it; a file with another digest is removed and refused. Nothing fetched is committed.
 
 Each port keeps its upstream license, which its tarball has. The scripts, the recipes, `rach2.ti` and the files in `etc/` are in-house.
 

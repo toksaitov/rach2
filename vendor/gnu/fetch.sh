@@ -26,13 +26,23 @@ sha256_of()
     "$SHA" "$1" | awk '{print $1}'
 }
 
+# download URL FILE: write URL to FILE, trying up to three times. Every
+# failure is tried again, since curl's --retry passes over a dropped
+# connection; a bad file still fails the digest check.
 download()
 {
-    if command -v curl >/dev/null 2>&1; then
-        curl -sSfL -o "$2" "$1"
-    else
-        wget -q -O "$2" "$1"
-    fi
+    tries=1
+    while :; do
+        if command -v curl >/dev/null 2>&1; then
+            curl -sSfL -o "$2" "$1" && return 0
+        else
+            wget -q -O "$2" "$1" && return 0
+        fi
+        [ "$tries" -lt 3 ] || return 1
+        tries=$((tries + 1))
+        echo "fetch: retrying: $1" >&2
+        sleep 10
+    done
 }
 
 # fetch_one NAME: print the checked tarball's path, fetching it if needed.
