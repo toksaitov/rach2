@@ -17,11 +17,12 @@ case ${1:-} in
     *) echo 'board-test: usage: board_test.sh [--mutate | --texts]' >&2; exit 2 ;;
 esac
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-work=$(mktemp -d "${TMPDIR:-/tmp}/board-test.XXXXXX")
-trap 'rm -rf "$work"' EXIT
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "${TMPDIR:-/tmp}/board-test.XXXXXX")
 mkdir -p "$work/bin" "$work/state"
 cp "$repo/tools/flow/board.sh" "$work/board.sh"
 

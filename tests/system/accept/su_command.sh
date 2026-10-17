@@ -23,7 +23,7 @@ if [ ! -x "$driver" ] || [ ! -x "$runner" ]; then
     exit 2
 fi
 umask 077
-work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept-su.XXXXXX")
+work=
 child=
 # shellcheck disable=SC2329 # The exit trap calls this function.
 cleanup()
@@ -32,7 +32,7 @@ cleanup()
         kill -TERM "$child" 2>/dev/null || :
         wait "$child" 2>/dev/null || :
     fi
-    rm -rf "$work"
+    [ -z "$work" ] || rm -rf "$work"
 }
 # bash 3.2, the Mac's sh, gives an EXIT trap a status of 0 when `set -u`
 # stops a script that also has `set -e`, so a run that reached no success
@@ -42,6 +42,7 @@ trap 'status=$?; cleanup; [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1;
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept-su.XXXXXX")
 
 # Print $1 quoted for a shell.
 quote()

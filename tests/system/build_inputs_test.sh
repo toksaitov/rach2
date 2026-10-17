@@ -16,10 +16,11 @@ unset ARCH MAKEFLAGS MFLAGS
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$REPO"
 mkdir -p build
-WORK=$(mktemp -d "$REPO/build/build-inputs.XXXXXX")
-trap 'rm -rf "$WORK"' 0
+WORK=
+trap '[ -z "$WORK" ] || rm -rf "$WORK"' 0
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
+WORK=$(mktemp -d "$REPO/build/build-inputs.XXXXXX")
 # Report $* and exit 1.
 fail() { echo "build-inputs-test: $*" >&2; exit 1; }
 cc=$(command -v i686-elf-gcc)

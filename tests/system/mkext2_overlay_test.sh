@@ -50,11 +50,12 @@ if [ "${1:-}" != --texts ]; then
     . "$repo/tests/system/runlock.sh"
     runlock_hold "$repo" mkext2-overlay-test "$repo/tests/system/mkext2_overlay_test.sh" "$@"
 fi
-work=$(mktemp -d "${TMPDIR:-/tmp}/mkext2-overlay.XXXXXX") || exit 1
-trap 'rm -rf "$work"' EXIT
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "${TMPDIR:-/tmp}/mkext2-overlay.XXXXXX") || exit 1
 # mkext2.sh finds its tree with `cd` and `pwd`, which fold a doubled slash.
 work=$(CDPATH='' cd -- "$work" && pwd)
 

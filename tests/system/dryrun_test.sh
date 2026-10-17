@@ -42,10 +42,11 @@ if [ "$mutate" -eq 2 ]; then
     exit 0
 fi
 mkdir -p build
-WORK=$(mktemp -d "$REPO/build/dryrun-test.XXXXXX")
-trap 'rm -rf "$WORK"' 0
+WORK=
+trap '[ -z "$WORK" ] || rm -rf "$WORK"' 0
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
+WORK=$(mktemp -d "$REPO/build/dryrun-test.XXXXXX")
 
 fails=0
 # say TEXT: print a progress line.

@@ -77,10 +77,11 @@ if [ "${1:-}" != --texts ]; then
 fi
 cd "$REPO"
 mkdir -p build/tests
-WORK=$(mktemp -d "$REPO/build/tests/build-rules-test.XXXXXX")
-trap 'rm -rf "$WORK"' 0
+WORK=
+trap '[ -z "$WORK" ] || rm -rf "$WORK"' 0
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
+WORK=$(mktemp -d "$REPO/build/tests/build-rules-test.XXXXXX")
 
 # pass ROW: report that ROW passed.
 pass()

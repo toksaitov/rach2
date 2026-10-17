@@ -23,19 +23,22 @@ unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
 unset RACH2_QEMU
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-drive.XXXXXX")
-[ -d "$WORK" ] || { echo "drivetest: no scratch directory" >&2; exit 1; }
+WORK=
 HARNESS="$REPO/build/tests/system/harness"
 PIDS=""
-# Kill the fake machines and feeders and remove the scratch directory.
+# Kill the fake machines and feeders, wait for them, and remove the scratch
+# directory.
 cleanup() {
     for p in $PIDS; do kill "$p" 2>/dev/null; done
-    rm -rf "$WORK"
+    for p in $PIDS; do wait "$p" 2>/dev/null; done
+    [ -z "$WORK" ] || rm -rf "$WORK"
 }
 trap 'cleanup' EXIT
 trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-drive.XXXXXX")
+[ -d "$WORK" ] || { echo "drivetest: no scratch directory" >&2; exit 1; }
 
 fails=0
 total=0

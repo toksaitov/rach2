@@ -69,7 +69,6 @@ fi
 KNOWN="$REPO/build/images/metal-accept.known"
 mkdir -p "$REPO/build/images"
 umask 077
-LOCAL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept.XXXXXX")
 
 # The MBR's SHA-256 as Windows measured it, from dev-log/24-metal/baseline.md.
 # It is kept here and not read from the document, so that this script is one
@@ -82,6 +81,8 @@ BASELINE_MODEL="Samsung SSD 870 EVO 1TB"
 # On exit, remove what the script left on the machine: the stick's file, its
 # mount, the loop device, and the temporary directories, each mount released
 # before its directory is removed. A failed unmount leaves its directory.
+# It also removes LOCAL_TMP, this host's temporary directory.
+LOCAL_TMP=""
 MACHINE_TMP=""
 MACHINE_MOUNTED=""
 MACHINE_LOOP=""
@@ -106,13 +107,14 @@ cleanup() {
         account "rm -rf $TRANSFER_TMP" > /dev/null 2>&1 || true
     fi
     rm -f "$KNOWN"
-    rm -rf "$LOCAL_TMP"
+    [ -z "$LOCAL_TMP" ] || rm -rf "$LOCAL_TMP"
     return 0
 }
 trap 'cleanup' EXIT
 trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
+LOCAL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept.XXXXXX")
 
 fails=0
 # Record $1 as a note, or as a failure that is counted.

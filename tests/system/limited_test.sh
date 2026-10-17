@@ -26,11 +26,12 @@ case ${1:-} in
     *) echo 'limited-test: usage: limited_test.sh [--mutate | --texts]' >&2; exit 2 ;;
 esac
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-work=$(mktemp -d "${TMPDIR:-/tmp}/limited-test.XXXXXX") || exit 1
-trap 'rm -rf "$work"' EXIT
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+work=$(mktemp -d "${TMPDIR:-/tmp}/limited-test.XXXXXX") || exit 1
 lib=$work/lib.sh
 
 # fault NAME: put fault NAME into the private copy of lib.sh, or the original
