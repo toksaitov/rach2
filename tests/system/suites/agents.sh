@@ -26,13 +26,21 @@
 # tests of the project's loops (tools/flow/) there.
 #
 # A row that talks to a vendor's service has a script for the fake server,
-# NAME.json beside it, and a header line `# hosts: NAME...` with the host
+# NAME.json beside it, or a header `# script: PATH` relative to
+# tests/system/, and a header line `# hosts: NAME...` with the host
 # names it reaches. The suite makes a certificate authority, which the
 # machine has as /tmp/agents/ca.pem, and a server certificate for every
 # row's names, and root gives each name the server's address in /etc/hosts.
 # The server plays the row's script while the row runs, and the row fails
 # unless the server's verdict passes: every step played and no request the
-# script does not expect.
+# script does not expect. A row may write /tmp/agents/results/NAME.tar and
+# supply NAME_verify.py beside its script. The host fetches that archive and
+# runs the verifier with the archive, server record and pinned version. It
+# starts FILE --watch RECORD TIMINGS before the row and sends it SIGTERM
+# afterwards; TIMINGS records elapsed host seconds as requests arrive.
+# `# package: NAME` selects another package's version; `# verifier: FILE`
+# selects another row's verifier. `# script-filter: FILE` runs FILE --script
+# SOURCE DESTINATION to prepare a variant of the shared server script.
 #
 # Usage: agents.sh KERNEL IMAGE DISK PORT APIPORT
 #
@@ -61,6 +69,7 @@ LOG="$DISK.log"
 KNOWN="$DISK.known"
 QPID=""
 SPID=""
+TPID=""
 SERVER_STATUS=""
 work=""
 
@@ -88,9 +97,18 @@ stop_server() {
         SERVER_STATUS=$?
     fi
 }
+# Stop the request-time observer and wait for its last record.
+stop_timing() {
+    if [ -n "$TPID" ]; then
+        kill -TERM "$TPID" 2>/dev/null || true
+        wait "$TPID" 2>/dev/null || true
+        TPID=""
+    fi
+}
 # Stop the machine and the server, and remove the disk, the known hosts and
 # the scratch directory with the authority's key.
 cleanup() {
+    stop_timing
     stop_machine
     stop_server
     rm -f "$DISK" "$KNOWN"
@@ -191,7 +209,7 @@ for name in $HOSTS; do
 done
 ssh_as "$(scaled 60)" root "$ROOT_KEY" "printf '$lines' >> /etc/hosts" ||
     fail "the fake server's names in /etc/hosts"
-ssh_as "$(scaled 60)" test "$TEST_KEY" 'rm -rf /tmp/agents && mkdir /tmp/agents' ||
+ssh_as "$(scaled 60)" test "$TEST_KEY" 'rm -rf /tmp/agents && mkdir -p /tmp/agents/fixture' ||
     fail "the rows' directory on the machine"
 git -C "$REPO" ls-files tests tools | while IFS= read -r f; do
     [ ! -e "$REPO/$f" ] || printf '%s\n' "$f"
@@ -201,6 +219,10 @@ done | tar -cf "$work/tree.tar" -C "$REPO" -T - || fail "the tar of the tree's t
     "$REPO/tests/system/agents_rows.sh" "$ROWS_DIR"/*.sh "$work/ca/ca.pem" "$work/tree.tar" \
     test@127.0.0.1:/tmp/agents/ > /dev/null 2>&1 ||
     fail "scp could not put the rows on the machine"
+"$DEADLINE" "$(scaled 120)" scp -P "$PORT" -i "$TEST_KEY" -o StrictHostKeyChecking=no \
+    -o "UserKnownHostsFile=$KNOWN" -o BatchMode=yes -o IdentitiesOnly=yes \
+    "$REPO/tests/system/fakeapi/repo/"* test@127.0.0.1:/tmp/agents/fixture/ \
+    > /dev/null 2>&1 || fail "the shared fixture on the machine"
 echo "agents-test: the fake server's names, $HOSTS, and its authority are on the machine: OK"
 
 FAILED=""
@@ -212,14 +234,28 @@ for file in "$ROWS_DIR"/*.sh; do
         *" $name "*) ;;
         *) continue ;;
     esac
-    script="$ROWS_DIR/$name.json"
+    script=$(sed -n 's/^# script: //p' "$file")
+    if [ -n "$script" ]; then
+        script="$REPO/tests/system/$script"
+        [ -f "$script" ] || fail "$file names no server script at $script"
+    else
+        script="$ROWS_DIR/$name.json"
+    fi
     bound=$(sed -n 's/^# bound: \([0-9][0-9]*\)$/\1/p' "$file")
     [ -n "$bound" ] || fail "$file has no line '# bound: N'"
+    package=$(sed -n 's/^# package: //p' "$file")
+    package=${package:-$name}
     version=""
-    if [ -f "$PACKAGES/$name.sh" ]; then
-        version=$(sed -n 's/^VERSION=//p' "$PACKAGES/$name.sh")
+    if [ -f "$PACKAGES/$package.sh" ]; then
+        version=$(sed -n 's/^VERSION=//p' "$PACKAGES/$package.sh")
     fi
     TOTAL=$((TOTAL + 1))
+    filter=$(sed -n 's/^# script-filter: //p' "$file")
+    if [ -n "$filter" ]; then
+        python3 -B "$ROWS_DIR/$filter" --script "$script" "$work/$name.json" ||
+            fail "the server script for $name"
+        script="$work/$name.json"
+    fi
     if [ -f "$script" ]; then
         python3 -B "$FAKEAPI" serve "$script" "$DISK.$name.record" "$work/ca" "$APIPORT" \
             > /dev/null 2> "$DISK.$name.server" &
@@ -227,10 +263,17 @@ for file in "$ROWS_DIR"/*.sh; do
         "$RUNUTIL" until "$DISK.$name.server" "fakeapi: listening on" "$(scaled 30)" ||
             fail "the server did not listen for $name: $(cat "$DISK.$name.server")"
     fi
+    verifier=$(sed -n 's/^# verifier: //p' "$file")
+    verifier="$ROWS_DIR/${verifier:-${name}_verify.py}"
+    if [ -f "$verifier" ]; then
+        python3 -B "$verifier" --watch "$DISK.$name.record" "$DISK.$name.times.log" &
+        TPID=$!
+    fi
     began=$("$RUNUTIL" now)
     ssh_as "$(scaled "$bound")" test "$TEST_KEY" \
         "/bin/bash /tmp/agents/agents_rows.sh $name $version" > "$DISK.$name.log" 2>&1
     status=$?
+    stop_timing
     took="$(($("$RUNUTIL" now) - began)) s"
     problem=""
     if [ "$status" -eq 124 ]; then
@@ -245,6 +288,22 @@ for file in "$ROWS_DIR"/*.sh; do
         if [ "$SERVER_STATUS" != 0 ] && [ -z "$problem" ]; then
             problem="the fake server's verdict: $(tail -n 1 "$DISK.$name.server")"
         fi
+    fi
+    if [ -z "$problem" ] && [ -f "$verifier" ]; then
+        if ! "$DEADLINE" "$(scaled 120)" scp -P "$PORT" -i "$TEST_KEY" \
+            -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" -o BatchMode=yes \
+            -o IdentitiesOnly=yes "test@127.0.0.1:/tmp/agents/results/$name.tar" \
+            "$work/$name.tar" >> "$DISK.$name.log" 2>&1; then
+            problem="the row's result archive could not be fetched"
+        elif ! python3 -B "$verifier" "$work/$name.tar" "$DISK.$name.record" "$version" \
+            > "$work/$name.verify.log" 2>&1; then
+            problem="the host's verification: $(tail -n 1 "$work/$name.verify.log")"
+        else
+            cat "$work/$name.verify.log"
+            echo "agents-test: $name: request number and elapsed host seconds:"
+            cat "$DISK.$name.times.log"
+        fi
+        [ ! -f "$work/$name.verify.log" ] || cat "$work/$name.verify.log" >> "$DISK.$name.log"
     fi
     if [ -z "$problem" ]; then
         echo "agents-test: $name: OK in $took"

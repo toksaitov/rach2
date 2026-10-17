@@ -150,6 +150,7 @@ These two run no test on the unmodified tree: they require the kernel rebuilt at
 * `ext2_batch_mutate.sh`: the ext2 driver's count of disk commands for batched writes.
 * `noentropy_mutate.sh`: the `noentropy` suite's fail-closed steps.
 * `doom_mutate.sh`: the `doom` suite's missing-WAD row.
+* `muse_session_mutate.sh`: the headless and interactive Muse rows on Rach2, against a fake API command that makes its commit with the wrong author, while the tool results still pass.
 * `agents_mutate.sh`: the `agents` suite's `gh` and `muse` rows, against recipes that link each program to a file its package does not have, its `claude` row, against managed settings that leave `claude update` on, and its `limited_test` row, against a `limited` in `tools/flow/lib.sh` that takes a usage limit from any line.
 * `hda_mutate.sh`: the `/proc/audio` rows of `musl/hdaprobe`, the audio diagnostic no suite runs.
 * `sb16_mutate.sh`: the `audio` suite's SB16 row.

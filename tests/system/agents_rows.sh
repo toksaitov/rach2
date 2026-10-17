@@ -91,6 +91,18 @@ if ! declare -F row > /dev/null; then
     echo "AGENTROW FAIL $ROW: $ROW.sh defines no function row"
     exit 2
 fi
+# Stop a row's children before removing its work on success or a signal.
+cleanup() {
+    if declare -F row_cleanup > /dev/null; then
+        row_cleanup
+    fi
+    cd / || return
+    rm -rf "$WORK"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 rm -rf "$WORK"
 mkdir -p "$WORK"
 cd "$WORK" || exit 2
