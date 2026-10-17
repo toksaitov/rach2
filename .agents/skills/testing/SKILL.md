@@ -30,6 +30,7 @@ description: Run suites, full sets, analyses or mutation tests on the testing ho
 
 * A suite judges what the kernel counts, never the clock. Seconds in a suite are completion bounds, which `RACH2_TIMEOUT_FACTOR` scales for a slow host, and a time is printed for the record, not judged.
 * What would make a row slow (a spin, a wait, a walk over a list, a call per page) is counted by the kernel, and the row checks each count against a bound that is the same on every machine. Where the kernel has no counter for it yet, a multiple of a baseline measured in the same boot is the last resort, and each such row is listed with its reason.
+* A suite or test script removes its scratch on every exit path, as the Testing section of `AGENTS.md` says. Install the exit trap before the first `mktemp`, with the variable empty until then, so that an early exit removes nothing; in the trap stop and wait for the children, restore the sources, and only then remove the scratch, guarding each removal, as `[ -z "$work" ] || rm -rf "$work"`. Never put a variable that may be empty in front of a path or a glob in an `rm`. Python removes its directories in `finally` or with `tempfile.TemporaryDirectory`. A run on the testing host that leaves scratch fills its `/tmp`, which is its memory: on 2026-10-17 the host held some 2,400 directories that tests had left, 7 GiB of them.
 
 ## Mutation tests
 
