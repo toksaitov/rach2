@@ -841,7 +841,7 @@ scripts_inventory() {
     ( cd "$REPO" && {
         echo tests/run; echo tests/registry; echo tests/system/suites.mk; echo Makefile
         ls mk/*.mk tests/system/runner/*.c tests/system/*.sh tests/system/suites/*.sh tests/system/accept/*.sh \
-           tools/image/*.sh krffs/*.sh tools/verify/check.sh krffs/manifests/* 2>/dev/null
+           tests/system/fakeapi/* tools/image/*.sh krffs/*.sh tools/verify/check.sh krffs/manifests/* 2>/dev/null
     } ) | present
 }
 products_inventory() { # products_inventory TARGET...
@@ -918,20 +918,24 @@ prepare() {
     }
 }
 # The GNU system's image is not among the products `prepare-all` builds: it
-# builds on a Linux host only (mk/gnu-image.mk), and a set without the gnu
-# suite must not need it. A set with the suite builds what the suite's
-# target names here, before the pool, as a suite run alone does, and adds
-# the target to the ones whose products are hashed, so that a change to the
-# image while the set runs voids the run like a change to any product.
+# builds on a Linux host only (mk/gnu-image.mk), and a set without a suite
+# that boots it must not need it. A set with such a suite, one of
+# GNU_SUITES, builds what the suite's target names here, before the pool, as
+# a suite run alone does, and adds the target to the ones whose products are
+# hashed, so that a change to the image while the set runs voids the run
+# like a change to any product.
 PREPARED=prepare-all
+GNU_SUITES="gnu fakeapi"
 prepare_gnu() { # prepare_gnu NAMES
-    case " $* " in *" gnu "*) ;; *) return 0 ;; esac
-    products=$(closure run-gnu | grep '^build/')
-    # shellcheck disable=SC2086 # the prerequisites are one word each
-    [ -z "$products" ] || run_make -j $products || {
-        echo "run: result: refused: the gnu suite's products did not build" >&2; exit 1
-    }
-    PREPARED="$PREPARED run-gnu"
+    for suite in $GNU_SUITES; do
+        case " $* " in *" $suite "*) ;; *) continue ;; esac
+        products=$(closure "run-$suite" | grep '^build/')
+        # shellcheck disable=SC2086 # the prerequisites are one word each
+        [ -z "$products" ] || run_make -j $products || {
+            echo "run: result: refused: the $suite suite's products did not build" >&2; exit 1
+        }
+        PREPARED="$PREPARED run-$suite"
+    done
 }
 
 # Completion bounds keep their written values unless the caller supplies a

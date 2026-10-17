@@ -12,6 +12,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `installer-rehearse` (full tier; needs qemu, qemu-img, xorriso, shasum; 512 MiB): the rehearsal of the machine sitting in its small form, minutes: the same rows RACH2_REHEARSE_LENOVO runs at the machine's size in most of an hour.
 * `selfbuild-ext2` (full tier; needs qemu, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the self-build on an ext2 root, the os-real system at 48 MiB on a partition at LBA 2048 as the KRFFS disk has it, booted with rach2.root=ext2; the suite reads the volume back with debugfs and e2fsck must find it consistent after the synced stop.
 * `sealed` (full tier; needs qemu, ssh, mformat, mmd, mcopy; 128 MiB): the disk that goes into the laptop, operated the way it will be operated once it is in there.
+* `fakeapi` (full tier; needs qemu, ssh, scp, python3, openssl; 1024 MiB; x86_64 only): the fake API server the agents' suites talk to, with its test certificate authority, proved from the GNU system with curl on a network whose route out is closed.
 * `dhcp-e1000` (full tier; needs qemu; 128 MiB): the dhcp suite's card half on the e1000 card.
 * `dhcp` (full tier; needs qemu; 128 MiB): the machine taking an address it was not told, with both of its clients: BusyBox's `udhcpc`, which `ifup` runs, and os-simple's own `dhcpc`, which its `netup` runs.
 * `netif` (full tier; needs qemu; 128 MiB): the interface ioctls, which is how a program sets this machine's address.

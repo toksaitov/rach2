@@ -1,0 +1,21 @@
+{
+  "protocol": "plain",
+  "steps": [
+    {"request": {"path": "/v1/hello"},
+     "reply": {"json": {"hello": "rach2"}}},
+    {"request": {"method": "POST", "path": "/v1/echo",
+                 "headers": {"Content-Type": "application/json"},
+                 "json": {"say": "ping"}},
+     "reply": {"status": 201, "body": "pong\n"}},
+    {"request": {"path": "/v1/events", "query": "stream=1"},
+     "reply": {"events": [{"event": "count", "data": {"n": 1}},
+                          {"event": "count", "id": "2", "data": {"n": 2}},
+                          {"data": "two\nlines"}]}},
+    {"request": {"path": "/v1/socket"},
+     "reply": {"websocket": [{"expect": "ping"}, {"send": "pong"},
+                             {"expect": {"n": 2}}, {"send": {"n": 3}},
+                             {"close": 1000}]}},
+    {"request": {"path": "/v1/last"},
+     "reply": {"body": "last\n"}}
+  ]
+}

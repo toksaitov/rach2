@@ -77,6 +77,7 @@ port             = $(shell echo $$(($(1) + $(PORT_OFFSET))))
 DISKDIAG_PORT   := $(call port,2225)
 METAL_PORT      := $(call port,2223)
 GNU_PORT        := $(call port,2296)
+FAKEAPI_PORT    := $(call port,2300)
 SEALED_PORT     := $(call port,2297)
 DRILL_PORT      := $(call port,2298)
 PROCFILES_PORT  := $(call port,2299)
@@ -1503,6 +1504,15 @@ GNU_TEST_DISK = $(IMAGES_DIR)/gnu-test.disk
 run-gnu: $(DEMO_CREDS) rach2 os-real-gnu-ext2 $(DEADLINE) $(PTYDRIVE) $(RUNUTIL) $(MKMBR)
 	sh tests/system/suites/gnu.sh $(BOOT_KERNEL) $(OS_REAL_GNU_EXT2) $(GNU_TEST_DISK) \
 	    $(GNU_PORT) "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`"
+
+# `tests/run fakeapi`: the fake API server the agents' suites talk to, with
+# its test certificate authority, proved from the GNU system with curl on a
+# network whose route out is closed. Like the gnu suite, it boots the GNU
+# system's image, which its own target asks for.
+FAKEAPI_TEST_DISK = $(IMAGES_DIR)/fakeapi-test.disk
+run-fakeapi: $(DEMO_CREDS) rach2 os-real-gnu-ext2 $(DEADLINE) $(RUNUTIL) $(MKMBR)
+	sh tests/system/suites/fakeapi.sh $(BOOT_KERNEL) $(OS_REAL_GNU_EXT2) $(FAKEAPI_TEST_DISK) \
+	    $(FAKEAPI_PORT)
 
 # `tests/run exfat`: exFAT written from a program, read back after a reboot,
 # judged by the host's reader and the external checker where the host has
