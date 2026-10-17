@@ -189,14 +189,14 @@ static void fd_free_orphan(const fd_entry_t *e, krffs_node_t *node)
  * Free the node of a FIFO of the KRFFS root that lost its name while open,
  * when `e`, an end of it or the reservation of an open of it that did not
  * finish, is the last to hold it: the release of a file's last descriptor
- * frees its orphan, and a FIFO's ends are its descriptors. The caller holds
- * the root's namespace lock.
+ * frees its orphan, and a FIFO's ends are its descriptors, opened through the
+ * root or a bind of it. The caller holds the root's namespace lock.
  */
 static void fd_fifo_orphan(const fd_entry_t *e)
 {
     krffs_node_t *fifo;
 
-    if (!e->ofd || !e->ofd->vmnt || !krffs_fs || !mnt_is_root(e->ofd->vmnt)) {
+    if (!e->ofd || !e->ofd->vmnt || !krffs_fs || !mnt_is_root(vfs_mount_base(e->ofd->vmnt))) {
         return;
     }
     fifo = e->ofd->vnode;
@@ -230,7 +230,7 @@ struct vfs_mount *fd_release_lock(const fd_entry_t *e)
         orphanable = e->node && e->node != krffs_fs->node;
     } else {
         orphanable = (e->type == FD_TYPE_PIPE || e->type == FD_TYPE_NONE) && e->ofd &&
-                     e->ofd->vmnt == root && mnt_is_root(root);
+                     e->ofd->vmnt && vfs_mount_base(e->ofd->vmnt) == root && mnt_is_root(root);
     }
     if (!orphanable) {
         return NULL;
@@ -2631,7 +2631,9 @@ static int32_t open_device(int block, uint32_t rdev, int flags)
  * file alone for as long as an end is open: a mounted type's inode number,
  * and on the KRFFS root the node's address, since the root numbers a file
  * by its directory and its name, which a rename changes and two names can
- * share. The node stays where it is, a FIFO having no bytes to move, and
+ * share. The mount is the base (`vfs_mount_base`), and a bind of the root
+ * keys a FIFO by its node as well, so every alias of the file reaches one
+ * pipe. The node stays where it is, a FIFO having no bytes to move, and
  * keeps its place, nameless after an unlink, while an end holds it
  * (`fd_node_holders`).
  */
@@ -2644,7 +2646,7 @@ static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result)
     uint64_t ino;
     int32_t rc;
 
-    if (mnt_is_root(mnt)) {
+    if (mnt_is_root(vfs_mount_base(mnt))) {
         krffs_node_t *node = ref->node;
 
         if (node == krffs_fs->node) {

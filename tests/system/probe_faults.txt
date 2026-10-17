@@ -642,6 +642,36 @@ new
     return held;
 end
 
+fault fifo-bind-key
+probe fifomusl
+file rach2/sys/syscall_fs.c
+expect FIFOMUSL FAIL (a writer through a bind did not join a reader through its source
+old
+    if (mnt_is_root(vfs_mount_base(mnt))) {
+new
+    if (mnt_is_root(mnt)) {
+end
+
+fault fifo-bind-release-unlocked
+probe fifomusl
+file rach2/sys/syscall_fs.c
+expect FIFOMUSL FAIL (the last close through a bind did not free unlinked FIFOs
+old
+                     e->ofd->vmnt && vfs_mount_base(e->ofd->vmnt) == root && mnt_is_root(root);
+new
+                     e->ofd->vmnt == root && mnt_is_root(root);
+end
+
+fault fifo-bind-orphan-kept
+probe fifomusl
+file rach2/sys/syscall_fs.c
+expect FIFOMUSL FAIL (the last close through a bind did not free unlinked FIFOs
+old
+    if (!e->ofd || !e->ofd->vmnt || !krffs_fs || !mnt_is_root(vfs_mount_base(e->ofd->vmnt))) {
+new
+    if (!e->ofd || !e->ofd->vmnt || !krffs_fs || !mnt_is_root(e->ofd->vmnt)) {
+end
+
 fault thread-dir-lists-task
 probe threadmusl
 file rach2/sys/syscall_fs.c

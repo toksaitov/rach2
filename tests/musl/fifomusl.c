@@ -12,7 +12,10 @@
  * and once full it polls writable when a child's open reads a byte. Two FIFOs
  * whose names have one hash, which the KRFFS root numbers a file by, are two
  * pipes; a renamed FIFO keeps its pipe; and one unlinked while an end is open
- * keeps its pipe for that end, apart from a FIFO made in its name.
+ * keeps its pipe for that end, apart from a FIFO made in its name. Through a
+ * bind of a directory of the root, a FIFO has the pipe it has through its
+ * source, and the last close through the bind of an end of a FIFO unlinked
+ * through the source frees its node, which statfs counts.
  *
  * Prints `FIFOMUSL OK` and exits 0 on success, and prints
  * `FIFOMUSL FAIL (detail)` and exits 1 otherwise.
@@ -25,7 +28,9 @@
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mount.h>
 #include <sys/stat.h>
+#include <sys/statfs.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -36,6 +41,12 @@
 #define TWIN_A    "/tmp/fifomusl.a3"
 #define TWIN_B    "/tmp/fifomusl.bP"
 #define MOVED     "/tmp/fifomusl.moved"
+/* A directory of the KRFFS root and the bind of it. */
+#define BIND_SRC  "/tmp/fifomusl.src"
+#define BIND_DST  "/tmp/fifomusl.dst"
+/* The FIFOs whose nodes the bind's row frees; each node's header is 357
+ * bytes, so together they are some 17 KiB of the root. */
+#define ALIASES   48
 
 /** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
@@ -199,9 +210,63 @@ static int rdwr_opens(void)
 }
 
 /**
+ * Check a FIFO of the KRFFS root through a bind of its directory: a writer
+ * through the bind joins a reader through the source. Then ends opened
+ * through the bind, each on a FIFO unlinked through the source, keep the
+ * FIFOs' nodes until their close, which frees them: statfs counts the space
+ * taken while the ends are open and the same space back after. Returns 0, or
+ * 1 once the failure is reported.
+ */
+static int aliased(void)
+{
+    struct statfs before, held, after;
+    char src[64], dst[64], buf[4];
+    int ends[ALIASES];
+    int r, w, i;
+
+    if (mkdir(BIND_SRC, 0755) != 0 || mkdir(BIND_DST, 0755) != 0 ||
+        mount(BIND_SRC, BIND_DST, NULL, MS_BIND, NULL) != 0) {
+        return fail("a bind of a directory of the KRFFS root");
+    }
+    if (mkfifo(BIND_SRC "/f", 0600) != 0) {
+        return fail("a FIFO under the bind's source");
+    }
+    r = open(BIND_SRC "/f", O_RDONLY | O_NONBLOCK);
+    w = r < 0 ? -1 : open(BIND_DST "/f", O_WRONLY | O_NONBLOCK);
+    if (w < 0 || write(w, "bd", 2) != 2 || read(r, buf, sizeof(buf)) != 2) {
+        return fail("a writer through a bind did not join a reader through its source");
+    }
+    close(w);
+    close(r);
+    if (unlink(BIND_SRC "/f") != 0 || statfs("/tmp", &before) != 0) {
+        return fail("statfs before the FIFOs");
+    }
+    for (i = 0; i < ALIASES; i++) {
+        snprintf(src, sizeof(src), BIND_SRC "/o%d", i);
+        snprintf(dst, sizeof(dst), BIND_DST "/o%d", i);
+        if (mkfifo(src, 0600) != 0 || (ends[i] = open(dst, O_RDWR)) < 0 || unlink(src) != 0) {
+            return fail("an end through a bind of a FIFO unlinked through its source");
+        }
+    }
+    if (statfs("/tmp", &held) != 0 || held.f_bfree + 8 > before.f_bfree) {
+        return fail("the FIFOs held through a bind took no space statfs counts");
+    }
+    for (i = 0; i < ALIASES; i++) {
+        close(ends[i]);
+    }
+    if (statfs("/tmp", &after) != 0 || after.f_bfree + 2 < before.f_bfree) {
+        return fail("the last close through a bind did not free unlinked FIFOs");
+    }
+    if (umount2(BIND_DST, 0) != 0 || rmdir(BIND_DST) != 0 || rmdir(BIND_SRC) != 0) {
+        return fail("the bind unmounts and its directories go");
+    }
+    return 0;
+}
+
+/**
  * Check that a FIFO has a pipe of its own: apart from another whose name has
- * the same hash, across a rename, and past an unlink. Returns 0, or 1 once the
- * failure is reported.
+ * the same hash, across a rename, past an unlink, and through a bind
+ * (`aliased`). Returns 0, or 1 once the failure is reported.
  */
 static int identity(void)
 {
@@ -238,7 +303,7 @@ static int identity(void)
     close(r);
     unlink(MOVED);
     unlink(TWIN_B);
-    return 0;
+    return aliased();
 }
 
 int main(void)
