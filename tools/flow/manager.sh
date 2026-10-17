@@ -73,12 +73,13 @@ main()
                 continue ;;
         esac
         prune_logs 'c-*'
-        if ! swept=$(perl -e 'alarm shift; exec @ARGV' 600 \
+        swept=$(perl -e 'alarm shift; exec @ARGV' 600 \
             ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
             'MSYS_NO_PATHCONV=1 wsl.exe -u root -- perl - /tmp' \
-            < "$state/run/scratch.pl" 2>&1); then
-            swept="scratch: failed on $TESTING: $(printf '%s\n' "$swept" | tail -n 1)"
-        fi
+            < "$state/run/scratch.pl" 2>&1)
+        swept_rc=$?
+        swept=$(printf '%s\n' "$swept" | tail -n 1)
+        [ "$swept_rc" -eq 0 ] || swept="scratch: failed on $TESTING: $swept"
         log "$swept"
         t=$(date -u '+%m%d-%H%M%S')
         prompt="$(cat "$state/run/manager.txt")

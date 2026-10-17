@@ -24,10 +24,11 @@
 
 use strict;
 use warnings;
+use Cwd qw(abs_path);
 use File::Find;
 use File::Path qw(remove_tree);
 
-my $dir = shift // '/tmp';
+my $dir = abs_path(shift // '/tmp') // die "scratch: no such directory\n";
 my $age = shift // 86400;
 my $now = time;
 
