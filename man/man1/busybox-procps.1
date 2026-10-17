@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd October 17, 2026
 .Dt BUSYBOX-PROCPS 1
 .Os
 .Sh NAME
@@ -186,12 +186,15 @@ Display the process tree, optionally starting from
 or
 .Ar PID .
 .It Nm pwdx
-Display the current directory of each specified process.
-Rach2 has no
-.Pa /proc/PID/cwd ,
-so the applet reports
-.Ql No such process
-for every process.
+Display the current directory of each specified process by reading
+.Pa /proc/PID/cwd .
+Each line is
+.Ql PID: PATH ,
+or
+.Ql PID: Permission denied
+when the caller lacks access to the link
+.Pq see Xr proc 5 .
+The exit status is 0 even when access is denied.
 .It Nm smemcap
 Collect memory usage data from
 .Pa /proc
@@ -451,7 +454,8 @@ Do not print the header.
 .Dl uptime
 .Dl watch date
 .Sh SEE ALSO
-.Xr kill 2
+.Xr kill 2 ,
+.Xr proc 5
 .Sh HISTORY
 The applet descriptions are adapted from BusyBox 1.36.1 documentation,
 licensed under GPL-2.0.
