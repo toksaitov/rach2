@@ -18,7 +18,12 @@
 # tests/system/agents_rows.sh runs on the machine in a directory of the
 # row's own. A row named after a package is given the version its recipe
 # pins. A failed row does not stop the next, so a run reports every row the
-# machine cannot do.
+# machine cannot do. RACH2_AGENTS_ROWS, a list of row names separated by
+# spaces, runs those rows alone, as a mutation proof of one row needs.
+#
+# The files git tracks under the tree's tests and tools, as this tree has
+# them, go to the machine as /tmp/agents/tree.tar, for the rows that run the
+# tests of the project's loops (tools/flow/) there.
 #
 # A row that talks to a vendor's service has a script for the fake server,
 # NAME.json beside it, and a header line `# hosts: NAME...` with the host
@@ -188,9 +193,12 @@ ssh_as "$(scaled 60)" root "$ROOT_KEY" "printf '$lines' >> /etc/hosts" ||
     fail "the fake server's names in /etc/hosts"
 ssh_as "$(scaled 60)" test "$TEST_KEY" 'rm -rf /tmp/agents && mkdir /tmp/agents' ||
     fail "the rows' directory on the machine"
+git -C "$REPO" ls-files tests tools | while IFS= read -r f; do
+    [ ! -e "$REPO/$f" ] || printf '%s\n' "$f"
+done | tar -cf "$work/tree.tar" -C "$REPO" -T - || fail "the tar of the tree's tests and tools"
 "$DEADLINE" "$(scaled 120)" scp -P "$PORT" -i "$TEST_KEY" -o StrictHostKeyChecking=no \
     -o "UserKnownHostsFile=$KNOWN" -o BatchMode=yes -o IdentitiesOnly=yes \
-    "$REPO/tests/system/agents_rows.sh" "$ROWS_DIR"/*.sh "$work/ca/ca.pem" \
+    "$REPO/tests/system/agents_rows.sh" "$ROWS_DIR"/*.sh "$work/ca/ca.pem" "$work/tree.tar" \
     test@127.0.0.1:/tmp/agents/ > /dev/null 2>&1 ||
     fail "scp could not put the rows on the machine"
 echo "agents-test: the fake server's names, $HOSTS, and its authority are on the machine: OK"
@@ -200,6 +208,10 @@ TOTAL=0
 for file in "$ROWS_DIR"/*.sh; do
     name=${file##*/}
     name=${name%.sh}
+    case " ${RACH2_AGENTS_ROWS:-$name} " in
+        *" $name "*) ;;
+        *) continue ;;
+    esac
     script="$ROWS_DIR/$name.json"
     bound=$(sed -n 's/^# bound: \([0-9][0-9]*\)$/\1/p' "$file")
     [ -n "$bound" ] || fail "$file has no line '# bound: N'"
@@ -245,7 +257,7 @@ for file in "$ROWS_DIR"/*.sh; do
         echo "agents-test: $name: the server's log: $DISK.$name.server; its record: $DISK.$name.record" >&2
     fi
 done
-[ "$TOTAL" -gt 0 ] || fail "tests/system/agents has no rows"
+[ "$TOTAL" -gt 0 ] || fail "tests/system/agents has no rows${RACH2_AGENTS_ROWS:+ named $RACH2_AGENTS_ROWS}"
 [ -z "$FAILED" ] || fail "$(echo "$FAILED" | wc -w | tr -d ' ') of $TOTAL rows:$FAILED"
 rm -f "$DISK".*.log "$DISK".*.record "$DISK".*.server "$DISK.services"
 echo "agents-test: PASS"

@@ -1534,9 +1534,10 @@ run-codexapi: $(DEADLINE) $(RUNUTIL)
 run-museapi: $(DEADLINE) $(RUNUTIL)
 	sh tests/system/suites/museapi.sh $(IMAGES_DIR)/museapi-test
 
-# `tests/run agents`: the agents layer on the x86-64 GNU system, each of its
-# rows run over OpenSSH as the test account on a machine whose only route
-# out is to the fake API server on the host. Its image, like the gnu suite's,
+# `tests/run agents`: the agents layer on the x86-64 GNU system, and the
+# tests of the project's loops there, each row run over OpenSSH as the test
+# account on a machine whose only route out is to the fake API server on the
+# host. Its image, like the gnu suite's,
 # is built on a Linux host only and is not among the products `prepare-all`
 # builds.
 AGENTS_TEST_DISK = $(IMAGES_DIR)/agents-test.disk

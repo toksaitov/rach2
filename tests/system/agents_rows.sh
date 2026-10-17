@@ -13,7 +13,9 @@
 # VERSION, the version the package's recipe pins, in VERSION, and the path
 # of the fake API server's certificate authority in CA. A row has a
 # program do its job as a person would ask for it and compares what it
-# printed or wrote with what it must be, through the functions below. The
+# printed or wrote with what it must be, through the functions below; a row
+# that runs a test of the tree, such as a test of the project's loops, makes
+# a git repository of the tree's tests and tools with `tree`. The
 # script prints `AGENTROW OK NAME` when every comparison holds, and otherwise
 # `AGENTROW FAIL NAME: ` with the first that did not.
 #
@@ -66,6 +68,17 @@ status() {
     got=$?
     [ "$got" = "$want" ] ||
         fail "$what: status $got, want $want: $(printf '%s' "$OUT" | tail -n 3 | tr '\n' ' ')"
+}
+
+# tree: make WORK/tree a git repository with one commit of the tree's tests
+# and tools, from the tar the suite put in /tmp/agents, or fail and return 1.
+tree() {
+    if ! { mkdir "$WORK/tree" && tar -xf /tmp/agents/tree.tar -C "$WORK/tree" &&
+        git -C "$WORK/tree" init -q && git -C "$WORK/tree" add -A &&
+        git -C "$WORK/tree" -c user.name=rach2 -c user.email=test@rach2.invalid commit -qm tree; }; then
+        fail "the tree's tests and tools in a git repository"
+        return 1
+    fi
 }
 
 if [ -z "$ROW" ] || [ ! -f "/tmp/agents/$ROW.sh" ]; then
