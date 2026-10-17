@@ -696,9 +696,9 @@ musl-programs: $(LIBC_STAMP)
 # status; `make test` runs the style checks, the host tests and the core
 # tier, which includes that suite. It is the RAM root of the suites that boot
 # it, and loopdevprobe copies a 4 MiB image onto it, so it keeps 5 MiB free:
-# 12 MiB, of which the programs of either architecture take 6.2.
+# 13 MiB, of which the programs take 7.0 on i686 and 6.3 on x86-64.
 $(TEST_IMAGE): $(DEMO_CREDS) krffs/manifests/test.manifest $(MANIFEST_DEPS_test) $(IMAGE_TOOLS) | preflight krffs rach2 tests musl-programs utils ish
-	$(MKIMAGE) krffs/manifests/test.manifest $@ 12 5120
+	$(MKIMAGE) krffs/manifests/test.manifest $@ 13 5120
 
 # The os-simple image: a small Unix built out of this project's own code. init
 # execs /bin/login, so this image needs the account databases;
