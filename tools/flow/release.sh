@@ -84,16 +84,17 @@
 # TIME`, `reported TIME` once the phase has the report, `closing TIME`, and
 # last `failed STEP: WHY`, `void: WHY` or `closed TIME`; `log`, everything
 # the script prints; `wt`, the worktree; and the records of releases that
-# ended, as `P-SHA-TIME`. A record that ended, or that belongs to another
-# phase, is copied aside once the board has given a new candidate, and the
-# new record then replaces it in one rename. The new record keeps the old
-# one's `touched` line unless the old release closed, since the machine may
-# still run what that release left. A done step is skipped when the script
-# runs again, a transfer whose files still hash right on the machine is
-# kept, and a step that writes the machine first asks it what it runs and
-# which disk has the serial. A reboot counts as done when a boot younger
-# than the request answers, by /proc/uptime. One release runs at a time,
-# under a lock on STATE/lock.
+# ended, as `P-SHA-TIME`. A release that closes its phase removes `wt`, with the
+# build's products in it, last; the record, the digests and the logs stay. A
+# record that ended, or that belongs to another phase, is copied aside once the
+# board has given a new candidate, and the new record then replaces it in one
+# rename. The new record keeps the old one's `touched` line unless the old
+# release closed, since the machine may still run what that release left. A done
+# step is skipped when the script runs again, a transfer whose files still hash
+# right on the machine is kept, and a step that writes the machine first asks it
+# what it runs and which disk has the serial. A reboot counts as done when a
+# boot younger than the request answers, by /proc/uptime. One release runs at a
+# time, under a lock on STATE/lock.
 #
 # The exit status is 0 when the phase was released and closed, or released
 # and kept open; 75 when it could not start or go on for a reason that
@@ -323,11 +324,11 @@ build()
         if grep -q 'testing: the copy at .* is in use\|testing: the host did not answer' "$state/build.log"; then
             later "the build copy is busy or the host does not answer"
         fi
-        fail build "the build failed: $(tail -n 3 "$state/build.log" | tr '\n' ' ')"
-    fi
         if grep -q '^preflight: .* GiB free under .*, below the' "$state/build.log"; then
             later "the testing host is short of space"
         fi
+        fail build "the build failed: $(tail -n 3 "$state/build.log" | tr '\n' ' ')"
+    fi
     RACH2_TESTING_COPY=$COPY sh tools/dev/testing.sh get "$ARCH_DIR/rach2/kernel" \
         "$ARCH_DIR/rach2-recovery/kernel" "$ARCH_DIR/$RECOVERY_IMAGE" \
         "$ARCH_DIR/images/os-real-gnu.ext2.gz" "$ARCH_DIR/images/release.sha256" \
@@ -644,6 +645,9 @@ main()
     say "#$phase is released and closed"
     old=$phase-$(echo "$sha" | cut -c 1-8)-$(date -u '+%m%d-%H%M%S')
     mv "$state/record" "$state/$old"
+    if ! { cd "$repo" && git worktree remove --force "$state/wt" && git worktree prune; }; then
+        say "the worktree $state/wt could not be removed"
+    fi
 }
 
 main "$@"

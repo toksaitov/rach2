@@ -9,22 +9,21 @@
 # /etc/rach2/release, takes a write of that file as the row says, and
 # refuses every other command; the board says what the row gives; gh lists
 # no runs.
-# The rows check that a release whose steps are all done only reports and
-# closes the phase, and one whose full run is done goes to the build without
-# a second; that a void or failed record stays in place while the board
-# gives no candidate, and is copied aside, keeping its `touched` line, once
-# it gives one; that a record with `install started` and no `install done`
-# stops the script before anything else, and that a machine running its
-# system after the installer started fails the install without a write to
-# the machine; that a release whose acceptance is done writes
-# /etc/rach2/release before it closes the phase, and fails without closing
-# it when the file does not read back or when the machine's flush of it
-# fails though it reads back; and that a record with `closing`
-# finishes that phase whatever phase was given, checking an open phase for
-# readiness again. With --mutate
-# each fault below is put into the copy and must fail its own row; the copy
-# is restored before the rows run again at the end. --texts puts each fault
-# into the copy and requires only that it changes the file, and runs no row.
+# The rows check that a release whose steps are all done only reports, closes
+# the phase and removes its worktree, and one whose full run is done goes to the
+# build without a second; that a void or failed record stays in place while the
+# board gives no candidate, and is copied aside, keeping its `touched` line,
+# once it gives one; that a record with `install started` and no `install done`
+# stops the script before anything else, and that a machine running its system
+# after the installer started fails the install without a write to the machine;
+# that a release whose acceptance is done writes /etc/rach2/release before it
+# closes the phase, and fails without closing it when the file does not read
+# back or when the machine's flush of it fails though it reads back; and that a
+# record with `closing` finishes that phase whatever phase was given, checking
+# an open phase for readiness again. With --mutate each fault below is put into
+# the copy and must fail its own row; the copy is restored before the rows run
+# again at the end. --texts puts each fault into the copy and requires only that
+# it changes the file, and runs no row.
 #
 # Usage: sh tests/system/release_resume_test.sh [--mutate | --texts]
 #
@@ -247,7 +246,8 @@ row()
                 [ "$(tail -n 1 "$work/state/$a" | cut -d ' ' -f 1)" = closed ] &&
                 [ "$(grep -c ' done ' "$work/state/$a")" -eq 9 ] &&
                 called '^gh issue close 7$' && called '^board archive 7$' &&
-                ! called '^machine\|^ssh\|^git\|^gh run\|^gh workflow' ;;
+                called '^git worktree remove --force .*/state/wt$' &&
+                ! called '^machine\|^ssh\|^git -C\|^gh run\|^gh workflow' ;;
         full-done)
             run 7 "$head" "ready: yes $H"
             [ "$result" -eq 75 ] && [ "$(grep -c '^full done ' "$work/state/record")" -eq 1 ] &&
