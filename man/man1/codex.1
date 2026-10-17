@@ -1,0 +1,189 @@
+.Dd October 18, 2026
+.Dt CODEX 1
+.Os
+.Sh NAME
+.Nm codex
+.Nd OpenAI's coding agent for the terminal
+.Sh SYNOPSIS
+.Nm
+.Op Ar options
+.Op Ar prompt
+.Nm
+.Cm exec
+.Op Ar options
+.Op Ar prompt
+.Nm
+.Cm login
+.Op Fl -device-auth | Fl -with-api-key
+.Nm
+.Cm login status
+.Sh DESCRIPTION
+.Nm
+is OpenAI's Codex: an agent that reads and changes the files of a
+directory and runs commands there, at the request of a person or of a
+model it talks to on OpenAI's service.
+With no command it draws its screen and takes requests one after another;
+.Cm exec
+runs one request without the screen and prints the result.
+.Ql codex --help
+lists the commands, and
+.Ql codex Ar command Fl -help
+describes one.
+.Pp
+The x86-64 GNU root has
+.Nm
+when it is built with the agents layer:
+.Ql make ARCH=x86_64 GNU_AGENTS=codex os-real-gnu-ext2 ,
+or
+.Ql GNU_AGENTS=all ,
+which the release to the installed machine uses.
+The program is OpenAI's own build of version 0.162.1 for
+x86_64-unknown-linux-musl, a static executable, installed unmodified in
+.Pa /opt/codex
+with the helpers its package has:
+.Pa bin/codex-code-mode-host ,
+ripgrep as
+.Pa codex-path/rg ,
+bubblewrap as
+.Pa codex-resources/bwrap ,
+zsh as
+.Pa codex-resources/zsh/bin/zsh ,
+and the voice host with its libraries in
+.Pa codex-resources/voice .
+.Pa /usr/bin/codex
+and
+.Pa /bin/codex
+link to
+.Pa /opt/codex/bin/codex .
+OpenAI's license, Apache-2.0, and its notice are
+.Pa /opt/codex/LICENSE
+and
+.Pa /opt/codex/NOTICE ;
+the licenses of ripgrep, bubblewrap and zsh are in
+.Pa /opt/codex/licenses ,
+and those of the voice libraries in
+.Pa /opt/codex/codex-resources/voice/licenses .
+.Ss Signing in over SSH
+The screen first offers three ways to sign in.
+.Dq Sign in with ChatGPT
+prints an address to open in a web browser and waits for the browser to
+return to a server that
+.Nm
+runs on port 1455 of this machine's loopback interface.
+Over SSH, either forward that port from the computer that has the browser,
+with
+.Ql ssh -L 1455:localhost:1455 ,
+or choose
+.Dq Sign in with Device Code ,
+which
+.Ql codex login --device-auth
+also starts:
+.Nm
+prints an address and a one-time code, and the code is entered at that
+address on any other computer, by a ChatGPT account whose security settings
+allow sign-in by a device code.
+.Pp
+.Dq Provide your own API key ,
+or
+.Ql codex login --with-api-key ,
+which reads the key from standard input, signs in with an OpenAI API key
+instead, for which OpenAI bills by use:
+.Bd -literal -offset indent
+$ printenv OPENAI_API_KEY | codex login --with-api-key
+.Ed
+.Pp
+.Ql codex login status
+says how
+.Nm
+is signed in, and
+.Ql codex logout
+removes the credentials.
+.Ss Where the credentials live
+.Nm
+keeps the credentials of a sign-in in plain text in
+.Pa ~/.codex/auth.json ,
+with mode 0600, which it reads at each start; treat the file as a
+password.
+.Ev CODEX_HOME
+names another directory in place of
+.Pa ~/.codex .
+The setting
+.Ql cli_auth_credentials_store
+can name a keyring instead, which Rach2 does not have.
+.Ss Settings
+.Nm
+reads its settings from
+.Pa /etc/codex/config.toml ,
+then from
+.Pa ~/.codex/config.toml ,
+whose settings take the place of the first's, and then from
+.Fl c Ar key Ns = Ns Ar value
+on the command line.
+Rach2's
+.Pa /etc/codex/config.toml
+makes three settings:
+.Bl -tag -width Ds
+.It Ql check_for_update_on_startup = false
+.Nm
+does not ask GitHub for its latest release when its screen starts, and
+offers no update.
+.Nm
+does not replace itself here in any case: it counts
+.Pa /opt/codex
+as a local build, which it does not update, and a new version comes with a
+new build of the root.
+.It Ql features.daemon_auto_start = false
+.Nm
+runs the sessions of its screen in its own process, as
+.Fl -no-daemon
+has it do.
+With the setting on, it copies its whole package, some 430 MB, to
+.Pa ~/.codex/packages/app-server-daemon
+and starts two processes from the copy that outlive it: the shared
+server that runs the sessions, and an updater that installs OpenAI's newer
+releases in that directory.
+.Ql codex agents ,
+which lists the sessions of that server, needs it.
+.It Ql sandbox_mode = \(dqdanger-full-access\(dq
+The commands that the model asks for run without Codex's sandbox.
+On Linux the sandbox runs each command under the bundled bubblewrap, which
+needs kernel features that Rach2 does not have yet, so a command run in it
+fails.
+Without it a command has every right of the user who runs
+.Nm ,
+so run
+.Nm
+as an ordinary user, on files that the work can afford to change.
+.El
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /opt/codex/bin/codex
+the program
+.It Pa /opt/codex/LICENSE
+its license
+.It Pa /etc/codex/config.toml
+Rach2's settings
+.It Pa ~/.codex/config.toml
+a person's settings
+.It Pa ~/.codex/auth.json
+the credentials of a sign-in
+.El
+.Sh EXIT STATUS
+.Nm
+exits 0 on success and 1 on an error.
+.Ql codex login status
+exits 1 when no account is signed in.
+.Sh EXAMPLES
+Sign in from an SSH session, then ask for one change in the current
+directory without the screen:
+.Bd -literal -offset indent
+$ codex login --device-auth
+$ codex exec "Fix the failing test in tests/parse.sh"
+.Ed
+.Sh SEE ALSO
+.Xr gh 1 ,
+.Xr git 1 ,
+.Xr ssh 1 ,
+.Xr tmux 1
+.Pp
+.Lk https://developers.openai.com/codex "The Codex documentation"
