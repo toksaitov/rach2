@@ -17,6 +17,7 @@ if [ "${1:-}" != --texts ]; then
     runlock_hold "$repo" machine-measure-test "$repo/tests/system/machine_measure_test.sh" "$@"
 fi
 exec python3 - "$repo" "$@" <<'PY'
+import atexit
 import os
 import pathlib
 import shutil
@@ -29,7 +30,38 @@ import time
 repo = pathlib.Path(sys.argv[1])
 if sys.argv[2:] not in ([], ['--mutate'], ['--texts']):
     sys.exit('usage: machine_measure_test.sh [--mutate | --texts]')
-work = pathlib.Path(tempfile.mkdtemp(prefix='rach2-measure.', dir='/tmp'))
+# Each scratch directory's path is printed when it is made, and a failure
+# keeps them all as evidence; a pass or a signal removes them.
+scratch = []
+passed = False
+signalled = False
+
+
+def remove_scratch():
+    """Remove the scratch directories after a pass or a signal."""
+    if passed or signalled:
+        for path in scratch:
+            shutil.rmtree(path, ignore_errors=True)
+
+
+def stop(signum, frame):
+    """End the test on a signal, with the status a shell's trap gives."""
+    global signalled
+    signalled = True
+    sys.exit(128 + signum)
+
+
+def scratch_directory(prefix, parent):
+    """Make a directory in PARENT that remove_scratch removes."""
+    path = pathlib.Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
+    scratch.append(path)
+    return path
+
+
+atexit.register(remove_scratch)
+for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+    signal.signal(signum, stop)
+work = scratch_directory('rach2-measure.', os.environ.get('TMPDIR') or '/tmp')
 print('machine-measure-test: logs:', work, flush=True)
 source = work / 'source'
 source.mkdir()
@@ -279,7 +311,7 @@ def refusal_cases(label):
     logs = list(directory.glob('net-in.*/identity.log'))
     assert len(logs) == 1 and 'machine-identity: refused: ' in logs[0].read_text(), output
     checks += 1
-    directory = pathlib.Path(tempfile.mkdtemp(prefix='rach2-load.', dir='/tmp'))
+    directory = scratch_directory('rach2-load.', '/tmp')
     print('machine-measure-test: refused load fixture:', directory, flush=True)
     status, output = run(['sh', str(source / 'machine_load.sh'), str(key), '127.0.0.1', '2',
                           '3600', str(directory)],
@@ -323,8 +355,9 @@ def load_cases(label):
     """The load window: late completions and failures counted apart."""
     global checks
     for finish, fail in [(3799, False), (3700, False), (3799, True)]:
-        # The production remote path validator requires this prefix.
-        directory = pathlib.Path(tempfile.mkdtemp(prefix='rach2-load.', dir='/tmp'))
+        # The production remote path validator requires /tmp/rach2-load.*,
+        # whatever TMPDIR names.
+        directory = scratch_directory('rach2-load.', '/tmp')
         print('machine-measure-test: load fixture:', directory, flush=True)
         (directory / 'clock').write_text(f'100\n101\n103\n3699\n{finish}\n{finish + 1}\n')
         env = env_for(directory, 'load', FAIL_BUILD=str(int(fail)))
@@ -352,7 +385,7 @@ def stagger_case(label):
     has started, so the record is the order of the driver's calls.
     """
     global checks
-    directory = pathlib.Path(tempfile.mkdtemp(prefix='rach2-load.', dir='/tmp'))
+    directory = scratch_directory('rach2-load.', '/tmp')
     print('machine-measure-test: stagger fixture:', directory, flush=True)
     env = env_for(directory, 'stagger',
                   PATH=str(pacepath) + ':' + str(binpath) + ':' + os.environ['PATH'])
@@ -404,7 +437,7 @@ mutations = [
 if '--texts' in sys.argv:
     for label, name, before, after, diagnostic in mutations:
         assert (source / name).read_text().count(before) == 1, label
-    shutil.rmtree(work)
+    passed = True
     print('machine-measure-test: texts: every fault is once in its source', flush=True)
     sys.exit(0)
 try:
@@ -431,4 +464,5 @@ try:
 finally:
     for path, content in saved.items():
         path.write_bytes(content)
+passed = True
 PY
