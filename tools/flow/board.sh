@@ -6,7 +6,7 @@
 # Usage: board.sh next
 #        board.sh take N [GROUP]
 #        board.sh mine N
-#        board.sh release N [STATUS|owner]
+#        board.sh release N [STATUS|owner|owner-only]
 #        board.sh ready AFTER N...
 #        board.sh order N...
 #        board.sh group TITLE N...
@@ -23,6 +23,9 @@
 # issues whose body says `Part of #P` with no digit after P, since GitHub links
 # at most a hundred sub-issues to one parent. Workers take only the issues
 # labelled `ci`, which ci files, and the members of the phase In progress.
+# An issue labelled `owner-only` has work that only the owner's accounts can
+# do, such as a step on the testing host through `ssh testing` from the
+# owner's computer; `next` and `take` offer it only to the account OWNER below.
 # Each subcommand that reads the board or the issues fails, with a diagnostic
 # on stderr and nothing on stdout, when any page of the answer is lost, so
 # that a caller does not take a part of the board for the whole.
@@ -32,7 +35,8 @@
 #
 # `next` prints the issues a worker may take, one line each with the number,
 # a tab and the title. Each is open, unassigned, with no open blocker and
-# without the labels `grouped`, `owner` and `phase`. First come the issues
+# without the labels `grouped`, `owner` and `phase`, and without `owner-only`
+# unless this account is OWNER. First come the issues
 # labelled `ci` and not `intermittent`, whatever their Status; then the
 # members of the phase In progress whose Status is Ready; then, while that
 # phase has an open member not labelled `intermittent`, the issues labelled
@@ -43,7 +47,8 @@
 # `take N [GROUP]` refuses a closed issue, setting it Done and changing
 # nothing else, since a close between `next` and `take` would otherwise leave
 # it In progress. Before it assigns anything, it also refuses a phase, an
-# issue with an open blocker, one labelled `owner` and, without GROUP, an
+# issue with an open blocker, one labelled `owner`, one labelled `owner-only`
+# when this account is not OWNER and, without GROUP, an
 # issue that is neither labelled `ci` nor a member of the phase In progress,
 # and a member whose Status is neither Ready nor In progress.
 # Otherwise it assigns N to this account and reads the issue's timeline.
@@ -72,7 +77,10 @@
 # removes the label `grouped` and unassigns this account, so that N returns to
 # the queue as an issue of its own. `release N owner` sets Backlog and adds
 # the label `owner`, which marks a decision that AGENTS.md gives the owner and
-# that the manager sends to the owner's phone. A step that fails exits 1 with
+# that the manager sends to the owner's phone. `release N owner-only` sets
+# Ready and adds the label `owner-only`, for work that is no decision but that
+# only the owner's accounts can do, so that the owner's worker loops take it
+# and the others pass it by. A step that fails exits 1 with
 # N still assigned to this account, so that its worker keeps it and can
 # release it again. A closed issue is set Done and nothing else is changed,
 # since its commit may have closed it before its worker hands it back.
@@ -85,7 +93,8 @@
 #
 # `group TITLE N...` makes a group, one issue that a worker takes in place of
 # its members N..., at most eight of them, each open, unassigned, in no other
-# group, and labelled `ci` or a member of the phase In progress. The group is
+# group, not labelled `owner-only`, and labelled `ci` or a member of the phase
+# In progress. The group is
 # an issue titled `group: TITLE` with the label `group`, and `ci` as well when
 # a member has it, whose body lists the members one a line as `* #N`. While a
 # phase P is In progress, the body ends with the line `Part of #P.` and the
@@ -164,9 +173,11 @@
 # `core STATE`. When something cannot be read, the last line is `ready: no:
 # unreadable: WHAT` and the exit status is 1; otherwise it is 0.
 #
-# The repository and the board's owner and number are below. The ids of the
-# board, its Status field and the field's options are looked up by name on
-# each call, so another board needs only these three lines changed.
+# The repository and the board's owner and number are below. The board's
+# owner is the owner's account, the one that may take an issue labelled
+# `owner-only`. The ids of the board, its Status field and the field's
+# options are looked up by name on each call, so another board needs only
+# these three lines changed.
 
 # shellcheck disable=SC2016 # the dollars are GraphQL's and jq's
 set -e
@@ -327,13 +338,18 @@ in_progress()
 
 next()
 {
+    me=$(gh api user --jq .login) || {
+        echo "board: cannot read this account's login" >&2
+        exit 1
+    }
     read_board
     p=$(in_progress) || exit 1
-    printf '%s\n' "$board" | awk -F '\t' -v p="$p" "$LIB"'
+    printf '%s\n' "$board" | awk -F '\t' -v p="$p" -v me="$me" -v owner="$OWNER" "$LIB"'
         { member = in_phase($3, $8, $9, p) }
         $4 == "OPEN" && member && !has($5, "intermittent") { work = 1 }
         $4 != "OPEN" || $6 > 0 || $7 > 0 { next }
         has($5, "grouped") || has($5, "owner") || has($5, "phase") { next }
+        has($5, "owner-only") && me != owner { next }
         has($5, "ci") && !has($5, "intermittent") { ci = ci $3 "\t" $10 "\n"; next }
         has($5, "ci") { flaky = flaky $3 "\t" $10 "\n"; next }
         member && $2 == "Ready" { ready = ready $3 "\t" $10 "\n" }
@@ -425,16 +441,19 @@ refuse()
 }
 
 # kind N [GROUP]: print what keeps N from a worker on the board read into
-# `board`, `p` being the phase In progress and GROUP, when given, the group N
-# is taken for; print nothing when nothing does.
+# `board`, `p` being the phase In progress, `me` this account and GROUP, when
+# given, the group N is taken for; print nothing when nothing does.
 kind()
 {
-    printf '%s\n' "$board" | awk -F '\t' -v n="$1" -v p="$p" -v g="$2" "$LIB"'
+    printf '%s\n' "$board" | awk -F '\t' -v n="$1" -v p="$p" -v g="$2" \
+        -v me="$me" -v owner="$OWNER" "$LIB"'
         $3 != n { next }
         { found = 1 }
         has($5, "phase") { print "it is a phase"; exit }
         $7 > 0 { print "it has an open blocker"; exit }
         has($5, "owner") { print "it waits for the owner"; exit }
+        has($5, "owner-only") && me != owner {
+            print "only the owner'"'"'s accounts can do its work"; exit }
         g != "" || has($5, "ci") { exit }
         p == "" { print "it is not labelled ci, and no phase is In progress"; exit }
         !in_phase($3, $8, $9, p) {
@@ -491,9 +510,10 @@ release()
     fi
     me=$(gh api user --jq .login)
     status=$2 label=
-    if [ "$status" = owner ]; then
-        status=Backlog label=owner
-    fi
+    case $status in
+        owner) status=Backlog label=owner ;;
+        owner-only) status=Ready label=owner-only ;;
+    esac
     if ! set_status "$1" "$status"; then
         echo "board: #$1: cannot set it $status; it is still assigned to $me" >&2
         exit 1
@@ -592,10 +612,14 @@ group()
             exit 1
         fi
         case $(printf '%s\n' "$board" | awk -F '\t' -v n="$n" -v p="$p" "$LIB"'
+                $3 == n && has($5, "owner-only") { print "owner-only"; exit }
                 $3 == n && has($5, "ci") { print "ci"; exit }
                 $3 == n && in_phase($3, $8, $9, p) { print "member" }') in
             ci) labels=group,ci ;;
             member) ;;
+            owner-only)
+                echo "board: #$n is labelled owner-only, so it cannot join a group" >&2
+                exit 1 ;;
             *)
                 echo "board: #$n is neither labelled ci nor a member of the phase In progress, so it cannot join a group" >&2
                 exit 1 ;;

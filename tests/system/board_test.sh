@@ -3,7 +3,8 @@
 # and rollback, take's choice of the first assignee, assignee changes that a
 # list read before another account's change would undo, take and release of a
 # closed issue, and the phase subcommands, which are current, members, next,
-# start, the checks take and group make of the phase, archive and phase.
+# start, the checks take and group make of the phase and of an issue labelled
+# owner-only, archive and phase.
 # --mutate plants each fault below in a private copy, requires a row of its
 # own to fail, and then requires every row to pass with the copy restored;
 # --texts requires only that each fault changes the copy, so that a fault
@@ -59,7 +60,8 @@ closed_fault()
 # skips the phase check, or takes a member that is not Ready; `group` accepts
 # an issue of no phase; `archive` ignores the other open phase; `phase`
 # ignores the review; and `unassign` writes back the whole list of assignees
-# it read, as `gh issue edit` does.
+# it read, as `gh issue edit` does; `next` or `take` offers an issue labelled
+# owner-only to any account.
 # shellcheck disable=SC2016 # the dollars are in the texts the faults change
 {
     members_fault='s/(parent == p || has(partof, p))/(parent == p)/'
@@ -73,6 +75,8 @@ closed_fault()
     archive_fault='s/ || f\[8\] in open)/)/'
     phase_fault='s/\[ "\${review#\*..}" != "\$head" \]/false/'
     stale_fault='s|gh api -X DELETE "repos/\$REPO/issues/\$1/assignees" -f "assignees\[\]=\$2"|gh issue edit "$1" --repo "$REPO" --remove-assignee "$2"|'
+    next_owner_fault='s/has(\$5, "owner-only") \&\& me != owner { next }/0 { next }/'
+    take_owner_fault='s/has(\$5, "owner-only") \&\& me != owner {$/0 {/'
 }
 
 # plant SCRIPT: write the private copy with the sed SCRIPT applied, refusing
@@ -89,7 +93,7 @@ if [ "$mode" = texts ]; then
     for f in "$members_fault" "$current_fault" "$start_fault" \
         "$start_order_fault" "$next_fault" "$take_phase_fault" \
         "$take_status_fault" "$group_fault" "$archive_fault" "$phase_fault" \
-        "$stale_fault"; do
+        "$stale_fault" "$next_owner_fault" "$take_owner_fault"; do
         plant "$f"
     done
     exit 0
@@ -295,9 +299,14 @@ case "$1 $2" in
                 fi
                 touch "$BOARD_TEST_WORK/grouped-$3"
                 [ "$BOARD_TEST_FAIL" != "applied$3" ] ;;
-            *'--remove-label grouped')
+            *'--remove-label grouped'*)
                 [ "$BOARD_TEST_FAIL/$3" != remove/1 ] || exit 1
-                rm -f "$BOARD_TEST_WORK/grouped-$3" ;;
+                rm -f "$BOARD_TEST_WORK/grouped-$3"
+                case "$*" in
+                    *' --add-label '*)
+                        for label; do :; done
+                        change "$3" 4 "$(field "$3" 4),$label" ;;
+                esac ;;
             *'--add-assignee '*|*'--remove-assignee '*)
                 case "$*" in
                     *'--add-assignee '*) op=+ ;;
@@ -362,6 +371,9 @@ export BOARD_TEST_WORK BOARD_TEST_DATA BOARD_TEST_ME BOARD_TEST_NOW \
     BOARD_TEST_STALE BOARD_TEST_TIMELINE BOARD_TEST_STATE BOARD_TEST_FAIL BOARD_TEST_LOST \
     BOARD_TEST_FULL BOARD_TEST_CORE BOARD_TEST_HEAD PATH
 tab=$(printf '\t')
+
+# An issue that only the owner's accounts can do, a member of phase 7.
+only='25|OPEN|Ready|bug,owner-only|-|7|0|-|owner-only member'
 
 # The issues of the group, take and release rows, each filed by ci.
 old='1|OPEN|Ready|ci|-|-|0|-|ci: one
@@ -550,7 +562,7 @@ take_row()
 
 # state_row NAME: run `take 7` or `release 7` as alpha, the one account
 # assigned since zed removed itself, on an issue that is closed or open as
-# NAME says, and check the Status and assignees it leaves.
+# NAME says, and check the Status, assignees and labels it leaves.
 state_row()
 {
     use "$old"
@@ -562,7 +574,10 @@ state_row()
     esac
     rm -f "$BOARD_TEST_WORK/"*
     result=0
-    sh "$work/board.sh" "${1%%-*}" 7 > "$work/out" 2> "$work/err" || result=$?
+    case $1 in
+        release-only) sh "$work/board.sh" release 7 owner-only > "$work/out" 2> "$work/err" || result=$? ;;
+        *) sh "$work/board.sh" "${1%%-*}" 7 > "$work/out" 2> "$work/err" || result=$? ;;
+    esac
     BOARD_TEST_ME='' BOARD_TEST_STATE=OPEN
     case $1 in
         take-closed)
@@ -575,6 +590,9 @@ state_row()
         release-open)
             [ "$result" -eq 0 ] && [ "$(cat "$BOARD_TEST_WORK/status")" = ready ] &&
                 [ -z "$(left)" ] ;;
+        release-only)
+            [ "$result" -eq 0 ] && [ "$(cat "$BOARD_TEST_WORK/status")" = ready ] &&
+                [ -z "$(left)" ] && [ "$(field 7 4)" = ci,owner-only ] ;;
     esac
 }
 
@@ -616,6 +634,15 @@ phase_row()
             run next
             [ "$result" -eq 0 ] && [ "$(words)" = '14 22 10 11 15' ] &&
                 said "14${tab}ci: core fails" ;;
+        next-only|next-owner)
+            use "$main
+$only"
+            [ "$1" = next-only ] || BOARD_TEST_ME=toksaitov
+            run next
+            case $1 in
+                next-only) [ "$result" -eq 0 ] && [ "$(words)" = '14 22 10 11 15' ] ;;
+                *) [ "$result" -eq 0 ] && [ "$(words)" = '14 22 10 11 25 15' ] ;;
+            esac ;;
         next-idle)
             use "$main" 's/^7|OPEN|In_progress|/7|OPEN|Ready|/'
             run next
@@ -629,19 +656,26 @@ phase_row()
             BOARD_TEST_LOST=board
             run next
             [ "$result" -ne 0 ] && [ ! -s "$work/out" ] && [ -s "$work/err" ] ;;
-        take-member|take-ci)
-            use "$main"
+        take-member|take-ci|take-owner-only)
+            use "$main
+$only"
             BOARD_TEST_ME=alpha BOARD_TEST_NOW=alpha BOARD_TEST_TIMELINE=alpha
-            case $1 in take-member) n=10 ;; *) n=14 ;; esac
+            case $1 in
+                take-member) n=10 ;;
+                take-ci) n=14 ;;
+                *) n=25 BOARD_TEST_ME=toksaitov BOARD_TEST_NOW=toksaitov BOARD_TEST_TIMELINE=toksaitov ;;
+            esac
             run take "$n"
             [ "$result" -eq 0 ] && [ "$(field "$n" 3)" = In_progress ] ;;
-        take-stranger|take-blocked|take-owner|take-phase|take-backlog)
-            use "$main" 's/^10|OPEN|Ready|/10|OPEN|Backlog|/'
+        take-stranger|take-blocked|take-owner|take-only|take-phase|take-backlog)
+            use "$main
+$only" 's/^10|OPEN|Ready|/10|OPEN|Backlog|/'
             BOARD_TEST_ME=alpha BOARD_TEST_NOW=alpha BOARD_TEST_TIMELINE=alpha
             case $1 in
                 take-stranger) n=13 why='neither labelled ci nor a member of #7' ;;
                 take-blocked) n=17 why='it has an open blocker' ;;
                 take-owner) n=16 why='it waits for the owner' ;;
+                take-only) n=25 why="only the owner's accounts can do its work" ;;
                 take-backlog) n=10 why='its Status is Backlog, not Ready' ;;
                 *) n=8 why='it is a phase' ;;
             esac
@@ -652,6 +686,13 @@ phase_row()
             use "$main"
             run group fixtures 13
             [ "$result" -ne 0 ] && [ ! -s "$work/out" ] &&
+                ! grep -q 'issue edit\|issue create' "$BOARD_TEST_WORK/calls" ;;
+        group-only)
+            use "$main
+$only"
+            run group fixtures 10 25
+            [ "$result" -ne 0 ] && [ ! -s "$work/out" ] &&
+                grep -q '^board: #25 is labelled owner-only' "$work/err" &&
                 ! grep -q 'issue edit\|issue create' "$BOARD_TEST_WORK/calls" ;;
         group-ci)
             use "$main"
@@ -789,8 +830,8 @@ ready: yes $H" ] ;;
 # rows: check successful creation, a group the board added first, each failed
 # step and failed cleanup, which of two accounts assigned in the same second
 # keeps an issue, that a refused take leaves another account unassigned,
-# what take and release do to a closed issue, and the rows of the phase
-# subcommands.
+# what take and release do to a closed issue, what `release N owner-only`
+# leaves, and the rows of the phase subcommands.
 rows()
 {
     failed=
@@ -813,7 +854,7 @@ keep-earlier zed zed,alpha zed,alpha -
 yield-again alpha zed,alpha alpha,zed,alpha -
 yield-stale alpha zed zed,beta,alpha zed,beta
 ROWS
-    for test in take-closed release-closed release-open; do
+    for test in take-closed release-closed release-open release-only; do
         if ! state_row "$test"; then
             echo "board-test: failed: $test" >&2
             cat "$work/err" >&2
@@ -822,10 +863,10 @@ ROWS
     done
     for test in current-none current-one current-two \
         members-all members-open members-lost \
-        next-tiers next-idle next-done next-lost \
-        take-member take-ci take-stranger take-blocked take-owner take-phase \
-        take-backlog \
-        group-stranger group-ci archive-other archive-closed archive-fail \
+        next-tiers next-only next-owner next-idle next-done next-lost \
+        take-member take-ci take-owner-only take-stranger take-blocked \
+        take-owner take-only take-phase take-backlog \
+        group-stranger group-only group-ci archive-other archive-closed archive-fail \
         start-first start-again start-retry start-full start-other \
         start-idle \
         phase-ready phase-none phase-work phase-flaky phase-hold \
@@ -883,8 +924,10 @@ if [ "$mode" = mutate ]; then
     caught "$archive_fault" archive-other 'archive ignored the other phase'
     caught "$phase_fault" phase-review 'phase ignored the review'
     caught "$stale_fault" yield-stale 'unassign put back a stale list'
+    caught "$next_owner_fault" next-only 'next offered an owner-only issue to a team account'
+    caught "$take_owner_fault" take-only 'take gave an owner-only issue to a team account'
     cp "$repo/tools/flow/board.sh" "$work/board.sh"
     rows || exit 1
-    echo 'board-test: result: pass: 14 faults caught and restored'
+    echo 'board-test: result: pass: 16 faults caught and restored'
 fi
-echo 'board-test: result: pass: 59 rows'
+echo 'board-test: result: pass: 65 rows'
