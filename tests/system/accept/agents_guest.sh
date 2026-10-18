@@ -187,6 +187,19 @@ redact() {
         }'
 }
 
+# scratch: install the traps that remove $dir, the command's scratch
+# directory, when the shell exits or a hangup, an interrupt, a broken pipe or
+# a termination ends it. A pipeline runs main in a subshell, which keeps none
+# of its parent's traps, so each command that makes scratch calls this first.
+scratch() {
+    dir=
+    trap '[ -z "$dir" ] || rm -rf "$dir"' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 141' PIPE
+    trap 'exit 143' TERM
+}
+
 # setup: write the QEMU mode's dummy keys, the environment that points the
 # agents at the fake server, and the settings each agent reads from its home.
 setup() {
@@ -324,6 +337,7 @@ main() {
             printf 'commits %s\n' "$(git rev-list --count HEAD)"
             printf 'subject %s\n' "$(git log -1 --format=%s)"
             printf 'greeting %s\n' "$(git show HEAD:greeting.txt)"
+            scratch
             dir=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept-check.XXXXXX") || exit 1
             git archive HEAD | tar -x -C "$dir"
             printf 'check %s\n' "$(cd "$dir" && sh check.sh 2>&1)"
@@ -347,6 +361,7 @@ main() {
             fi
             ;;
         secrets)
+            scratch
             dir=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept-secrets.XXXXXX") || exit 1
             cat > "$dir/log"
             credential_strings "${@:2}" > "$dir/strings"

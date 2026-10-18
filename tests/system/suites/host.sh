@@ -311,6 +311,13 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: the loops' cleanup of finished work" >&2
         fail=1
     fi
+    if sh tests/system/agents_guest_test.sh >"$VDIR/agents_guest.rlog" 2>&1; then
+        echo "hosttest: result: pass: the agents guest's scratch removed on every exit"
+    else
+        cat "$VDIR/agents_guest.rlog"
+        echo "hosttest: result: fail: the agents guest's scratch removed on every exit" >&2
+        fail=1
+    fi
     if sh tests/system/testing_run_test.sh >"$VDIR/testing_run.rlog" 2>&1; then
         echo "hosttest: result: pass: testing.sh run's quoted commands"
     else
