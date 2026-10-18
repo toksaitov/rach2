@@ -188,24 +188,28 @@ stop_server() {
     fi
 }
 
-# Stop the machine and the server, end the agents' sessions on the machine,
-# close the host's tmux and the master connection, and remove the disk and
-# the scratch directory.
+# Close the host's tmux, stop the QEMU mode's machine and the server, end the
+# agents' sessions on the Lenovo and the master connection, and remove the
+# disk and the scratch directory; only then wait for the machine and the
+# server to end. tests/run kills a suite it stops two seconds after asking it
+# to end, so the removals come before every wait.
 # shellcheck disable=SC2329 # the traps call it
 cleanup() {
-    stop_server
+    [ -z "$work" ] || h kill-server 2> /dev/null
+    [ -z "$QPID" ] || kill -9 "$QPID" 2> /dev/null
+    [ -z "$SPID" ] || kill -TERM "$SPID" 2> /dev/null
     if [ -n "$work" ]; then
-        [ -z "$HOME_M" ] || m 'tmux -L rach2-accept kill-server' 2> /dev/null
-        h kill-server 2> /dev/null
+        if [ "$MODE" = lenovo ] && [ -n "$HOME_M" ]; then
+            m 'tmux -L rach2-accept kill-server' 2> /dev/null
+        fi
         ssh -o "ControlPath=$work/ssh" -O exit "$USERNAME@$HOST" 2> /dev/null
-    fi
-    if [ -n "$QPID" ]; then
-        kill -9 "$QPID" 2> /dev/null
-        wait "$QPID" 2> /dev/null
-        QPID=""
+        rm -rf "$work"
+        work=""
     fi
     [ "$MODE" != qemu ] || rm -f "$DISK"
-    [ -z "$work" ] || rm -rf "$work"
+    [ -z "$QPID" ] || wait "$QPID" 2> /dev/null
+    QPID=""
+    stop_server
 }
 trap 'cleanup' EXIT
 trap 'cleanup; exit 130' INT
