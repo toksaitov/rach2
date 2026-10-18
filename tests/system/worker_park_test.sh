@@ -1,7 +1,8 @@
 #!/bin/sh
 #
 # worker_park_test.sh: worker.sh parks a committed issue while a `hold` is
-# open, claims only a repair of core meanwhile, and takes the issue back.
+# open, claims only a repair of core meanwhile, and takes the issue back; and
+# it passes by an intermittent issue handed back with nothing new from ci.
 #
 # Each row runs the loop itself, from a private copy of tools/flow committed
 # to a scratch origin, in a clone of that origin whose branch 50-fix has a
@@ -15,10 +16,16 @@
 # repair and not one that lists only another suite's issue, takes a repair
 # listed after five issues it refuses, and neither parks nor claims with
 # nothing to claim or with a file not committed, leaving the clone on 50-fix.
-# With --mutate each fault
-# below is put into the copy and must fail its own row; the copy is restored
-# before the rows run again at the end. --texts puts each fault into the copy
-# and requires only that it changes the file, and runs no row.
+# The rows rest, fresh and stale start with no issue and no hold, and give
+# the timeline of issue 80, labelled `ci` and `intermittent`, which a session
+# hands back: the loop runs one session on 80 and then passes it by, whether
+# ci last reported on 80 before any hand-back, after an earlier one, or not at
+# all since a hand-back two days old. The row plain hands back a `ci` issue
+# that is not intermittent a minute before, and the loop takes it. With
+# --mutate each fault below is put into the copy and must fail its own row;
+# the copy is restored before the rows run again at the end. --texts puts
+# each fault into the copy and requires only that it changes the file, and
+# runs no row.
 #
 # Usage: sh tests/system/worker_park_test.sh [--mutate | --texts]
 #
@@ -44,8 +51,9 @@ mkdir -p "$work/bin" "$work/flow" "$work/home"
 # faults: park leaves the clone on the issue's branch; park claims nothing and
 # leaves the clone on master; the loop never takes a parked issue back; repair
 # takes any issue, or a group whatever it lists; claim counts an issue that
-# repair refuses against its five tries; and park ignores a file that is not
-# committed.
+# repair refuses against its five tries; park ignores a file that is not
+# committed; claim never passes an issue by; rests ignores ci's reports, or
+# the age of the hand-back, or the label `intermittent`.
 fault()
 {
     # shellcheck disable=SC2016 # the dollars are in the texts sed matches
@@ -62,12 +70,16 @@ fault()
             { print }
             $0 == "        [ \"$tries\" -le 5 ] || break" { printf "%s", kept }' ;;
         dirty) sed 's/^    \[ -z "\$(git status --porcelain)" \] || return 1$/    :/' ;;
+        never) sed 's/^        if rests "\$n"; then$/        if false; then/' ;;
+        evidence) sed '/^        \$1 == "ci" && \$2 > ci { ci = \$2 }$/d' ;;
+        delay) sed 's/back > ci && now - back < rest/back > ci/' ;;
+        label) sed 's/^    \[ "\$flaky" = true \] || return 1$/    :/' ;;
     esac < "$repo/tools/flow/worker.sh" > "$work/flow/worker.sh"
     [ "$1" = none ] || ! cmp -s "$repo/tools/flow/worker.sh" "$work/flow/worker.sh"
 }
 
 if [ "$mode" = texts ]; then
-    for f in stay back keep any group count dirty; do
+    for f in stay back keep any group count dirty never evidence delay label; do
         fault "$f" || { echo "worker-test: fault $f changes nothing" >&2; exit 1; }
     done
     exit 0
@@ -75,7 +87,10 @@ fi
 
 # The stand-ins read the issues from WORKER_TEST_DATA, one a line, as
 # `N|STATE|ASSIGNED|LABELS|TITLE|BODY`, with `-` for an empty field and `\n`
-# for a newline in BODY, and append each call to WORKER_TEST_CALLS.
+# for a newline in BODY, and append each call to WORKER_TEST_CALLS. The
+# timelines are in WORKER_TEST_EVENTS, one event a line, as `N|KIND|TIME`, KIND
+# being `back` for an unassignment or `ci` for a comment or label change of
+# ci's, and TIME in seconds since the epoch.
 cat > "$work/flow/board.sh" <<'EOF'
 #!/bin/sh
 # board.sh: the test's stand-in for next, take and mine.
@@ -104,8 +119,14 @@ data=$WORKER_TEST_DATA
 case "$1 $2 $*" in
     'issue list '*'--label hold'*)
         awk -F '|' '$2 == "OPEN" && ("," $4 ",") ~ /,hold,/ { print $1; exit }' "$data" ;;
+    'api '*'/timeline '*)
+        for a; do
+            case $a in */timeline) n=${a%/timeline} n=${n##*/} ;; esac
+        done
+        awk -F '|' -v n="$n" '$1 == n { print $2, $3 }' "$WORKER_TEST_EVENTS" ;;
     'issue view '*)
         case "$*" in
+            *'"intermittent"'*) what=flaky ;;
             *'--json labels '*) what=ci ;;
             *'--json title,labels,body '*) what=members ;;
             *'--json title,labels '*) what=core ;;
@@ -118,6 +139,7 @@ case "$1 $2 $*" in
                 ci = ("," $4 ",") ~ /,ci,/
                 core = ci && index($5, "ci: core: ") == 1
             }
+            what == "flaky" { print ("," $4 ",") ~ /,intermittent,/ ? "true" : "false" }
             what == "ci" { print ci ? "true" : "false" }
             what == "core" { print core ? "true" : "false" }
             what == "state" { print $2 }
@@ -133,13 +155,19 @@ esac
 EOF
 
 # claude: record the session's issue, the clone's branch and the parked
-# issue, then close the issue and the hold, as a session that pushed would.
+# issue, then close the issue and the hold, as a session that pushed would,
+# or hand back an intermittent issue, unchanged, as a session that found
+# nothing new would.
 cat > "$work/bin/claude" <<'EOF'
 #!/bin/sh
 n=$(printf '%s\n' "$2" | sed 's/^Work on issue \([0-9]*\)\.$/\1/')
 printf '%s %s %s\n' "$n" "$(git rev-parse --abbrev-ref HEAD)" \
     "$(cat "$WORKER_TEST_STATE/parked" 2> /dev/null || echo -)" >> "$WORKER_TEST_SESSIONS"
-awk -F '|' -v OFS='|' -v n="$n" '$1 == n || ("," $4 ",") ~ /,hold,/ { $2 = "CLOSED" } { print }' \
+awk -F '|' -v OFS='|' -v n="$n" -v now="$(date +%s)" -v events="$WORKER_TEST_EVENTS" '
+    { flaky = ("," $4 ",") ~ /,intermittent,/ }
+    $1 == n && flaky { $3 = "-"; print n "|back|" now >> events }
+    ($1 == n && !flaky) || ("," $4 ",") ~ /,hold,/ { $2 = "CLOSED" }
+    { print }' \
     "$WORKER_TEST_DATA" > "$WORKER_TEST_DATA.new" && mv "$WORKER_TEST_DATA.new" "$WORKER_TEST_DATA"
 EOF
 
@@ -170,24 +198,44 @@ origin()
         g -C "$work/seed" push -q "$work/origin.git" master
 }
 
-# row NAME LAST ISSUES: run the loop until its LAST sleep on the issues 50
-# and 77 and ISSUES, then check what row NAME requires.
+# row NAME LAST ISSUES: run the loop until its LAST sleep on ISSUES, and,
+# except in the rows of a hand-back, on the issues 50 and 77, then check what
+# row NAME requires.
 row()
 {
-    rm -rf "$work/clone" "$work/state" "$work/data"* "$work/calls" "$work/sessions" "$work/sleeps"
-    printf '%s\n' '50|OPEN|me|bug|tools: a fix|-' '77|OPEN|-|hold|hold: core fails|-' \
-        "$3" > "$work/data"
+    rm -rf "$work/clone" "$work/state" "$work/data"* "$work/calls" "$work/sessions" \
+        "$work/sleeps" "$work/events"
+    now=$(date +%s)
+    case $1 in
+        rest) printf '80|ci|%s\n' $((now - 7200)) ;;
+        fresh) printf '80|back|%s\n80|ci|%s\n' $((now - 7200)) $((now - 3600)) ;;
+        stale) printf '80|back|%s\n' $((now - 172800)) ;;
+        plain) printf '81|back|%s\n' $((now - 60)) ;;
+    esac > "$work/events"
+    case $1 in
+        rest|fresh|stale|plain) back=yes ;;
+        *) back=no ;;
+    esac
+    if [ "$back" = yes ]; then
+        printf '%s\n' "$3" > "$work/data"
+    else
+        printf '%s\n' '50|OPEN|me|bug|tools: a fix|-' '77|OPEN|-|hold|hold: core fails|-' \
+            "$3" > "$work/data"
+    fi
     : > "$work/sessions"
     : > "$work/sleeps"
-    g clone -q "$work/origin.git" "$work/clone" &&
-        g -C "$work/clone" switch -q -c 50-fix &&
-        echo fix > "$work/clone/fix.txt" &&
-        g -C "$work/clone" add fix.txt &&
-        g -C "$work/clone" commit -q -m 'Fix the tool' || return 1
-    [ "$1" != dirty ] || echo notes > "$work/clone/notes.txt"
+    g clone -q "$work/origin.git" "$work/clone" || return 1
     mkdir -p "$work/state"
-    echo 50 > "$work/state/issue"
+    if [ "$back" = no ]; then
+        g -C "$work/clone" switch -q -c 50-fix &&
+            echo fix > "$work/clone/fix.txt" &&
+            g -C "$work/clone" add fix.txt &&
+            g -C "$work/clone" commit -q -m 'Fix the tool' || return 1
+        echo 50 > "$work/state/issue"
+    fi
+    [ "$1" != dirty ] || echo notes > "$work/clone/notes.txt"
     HOME=$work/home PATH=$work/bin:$PATH WORKER_TEST_DATA=$work/data \
+        WORKER_TEST_EVENTS=$work/events \
         WORKER_TEST_CALLS=$work/calls WORKER_TEST_SESSIONS=$work/sessions \
         WORKER_TEST_SLEEPS=$work/sleeps WORKER_TEST_STATE=$work/state \
         WORKER_TEST_LAST=$2 sh "$work/clone/tools/flow/worker.sh" -s "$work/state" \
@@ -208,6 +256,10 @@ row()
                 [ "$(g -C "$work/clone" rev-parse --abbrev-ref HEAD)" = 50-fix ] &&
                 grep -q ' #50 is committed and waits for hold #77$' "$log" &&
                 ! grep -q '^board take' "$work/calls" ;;
+        rest|fresh|stale)
+            [ "$sessions" = '80 master -,' ] &&
+                grep -q ' #80 rests: handed back with nothing new from ci$' "$log" ;;
+        plain) [ "$sessions" = '81 master -,' ] ;;
         *) return 1 ;;
     esac
 }
@@ -229,6 +281,10 @@ group 1 65|OPEN|-|ci,group|ci: style group|* #62;62|OPEN|-|ci|ci: style: style f
 sixth 1 70|OPEN|-|bug|a|-;71|OPEN|-|bug|b|-;72|OPEN|-|ci|ci: style: c|-;73|OPEN|-|bug|d|-;74|OPEN|-|bug|e|-;61|OPEN|-|ci|ci: core: default fails on i686|-
 none 1 60|OPEN|-|bug|tests: a bug|-;62|OPEN|-|ci|ci: style: style fails on i686|-
 dirty 1 61|OPEN|-|ci|ci: core: default fails on i686|-
+rest 2 80|OPEN|-|ci,intermittent|ci: default: default fails on i686|-
+fresh 2 80|OPEN|-|ci,intermittent|ci: default: default fails on i686|-
+stale 2 80|OPEN|-|ci,intermittent|ci: default: default fails on i686|-
+plain 2 81|OPEN|-|ci|ci: default: default fails on i686|-
 ROWS
     [ -z "$failed" ]
 }
@@ -257,8 +313,12 @@ if [ "$mode" = mutate ]; then
     caught group group
     caught count sixth
     caught dirty dirty
+    caught never rest
+    caught evidence fresh
+    caught delay stale
+    caught label plain
     fault none && origin || exit 1
     rows || exit 1
-    echo 'worker-test: result: pass: 7 faults caught and restored'
+    echo 'worker-test: result: pass: 11 faults caught and restored'
 fi
-echo 'worker-test: result: pass: 5 rows'
+echo 'worker-test: result: pass: 9 rows'

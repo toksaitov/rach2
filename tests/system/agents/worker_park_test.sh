@@ -1,6 +1,7 @@
 # shellcheck shell=bash
 # worker_park_test: tests/system/worker_park_test.sh, the test of how the
-# worker loop parks a committed issue while a hold is open, against
+# worker loop parks a committed issue while a hold is open and passes by an
+# intermittent issue handed back with nothing new from ci, against
 # stand-ins for gh, board.sh and the agent, with --mutate, which runs its
 # rows with each of its faults in a private copy of tools/flow and then with
 # the copy restored.

@@ -36,10 +36,12 @@
 # every process in its group; a long suite is not a stuck session, and the
 # manager stops one that is stuck sooner. After three sessions on one issue
 # that leave it open, the loop waits thirty minutes before each further one
-# and says so in its log, for the manager to see. A loop that starts while a
-# session of the loop before it still runs, as one does after that loop's
-# tmux session is killed, waits for the session to end before it does
-# anything in the clone.
+# and says so in its log, for the manager to see. A session that hands its
+# issue back escapes that wait, so a claim passes by an issue labelled
+# `intermittent` that was handed back after ci last reported on it, for a day
+# after the hand-back, as `rests` says. A loop that starts while a session of
+# the loop before it still runs, as one does after that loop's tmux session is
+# killed, waits for the session to end before it does anything in the clone.
 #
 # While it holds no issue, before it claims one, the loop removes what
 # finished work left in its clone, as `tidy` in lib.sh says, and prunes its
@@ -62,16 +64,17 @@ REPO=toksaitov/rach2
 REASONING=high
 CODEX_MODEL=gpt-6.1-sol
 DEADLINE=21600
+REST=86400
 
 # claim [repair]: take an issue for this account, as the header says, and
 # write its number to STATE/issue; with `repair`, take only a repair of core,
-# as `repair` decides. Write nothing when none is waiting, and fail, taking
-# nothing, when the lock cannot be taken or the board cannot be read. The lock
-# is perl's flock on ~/.rach2-claim.lock, which the redirection after the body
-# opens on descriptor 9 for the length of the call. A flock belongs to the
-# open file description, not to the process that took it, so the lock is held
-# until the descriptor is closed: by the shell when the call ends, or by the
-# kernel when the loop dies.
+# as `repair` decides. Pass by an issue that `rests`. Write nothing when none
+# is waiting, and fail, taking nothing, when the lock cannot be taken or the
+# board cannot be read. The lock is perl's flock on ~/.rach2-claim.lock,
+# which the redirection after the body opens on descriptor 9 for the length of
+# the call. A flock belongs to the open file description, not to the process
+# that took it, so the lock is held until the descriptor is closed: by the
+# shell when the call ends, or by the kernel when the loop dies.
 claim()
 {
     if ! perl -MFcntl=:flock -e 'open(L, ">&=9") && flock(L, LOCK_EX) or
@@ -86,6 +89,10 @@ claim()
     tries=0
     for n in $(printf '%s\n' "$listed" | cut -f 1); do
         if [ "${1-}" = repair ] && ! repair "$n"; then
+            continue
+        fi
+        if rests "$n"; then
+            log "#$n rests: handed back with nothing new from ci"
             continue
         fi
         tries=$((tries + 1))
@@ -136,6 +143,29 @@ repair()
             (.title | startswith("ci: core: "))')" != true ] || return 0
     done
     return 1
+}
+
+# rests N: succeed when a claim should pass issue N by: N is labelled
+# `intermittent`, the last time an account was unassigned from it came after
+# the last comment or label change of ci's, `github-actions[bot]`, and less
+# than REST seconds ago. Succeed too when the labels or the timeline cannot be
+# read. A session finds nothing new in an intermittent failure until ci
+# reports on it again, and the timeline, unlike the loop's state, keeps a
+# hand-back for every account's next claim.
+rests()
+{
+    flaky=$(gh issue view "$1" --repo "$REPO" --json labels \
+        --jq 'any(.labels[]; .name == "intermittent")') || return 0
+    [ "$flaky" = true ] || return 1
+    marks=$(gh api --paginate "repos/$REPO/issues/$1/timeline" --jq '.[] |
+        select(.created_at != null) |
+        if .event == "unassigned" then "back \(.created_at | fromdate)"
+        elif .actor.login == "github-actions[bot]" then "ci \(.created_at | fromdate)"
+        else empty end') || return 0
+    printf '%s\n' "$marks" | awk -v now="$(date +%s)" -v rest="$REST" '
+        $1 == "back" && $2 > back { back = $2 }
+        $1 == "ci" && $2 > ci { ci = $2 }
+        END { exit !(back > ci && now - back < rest) }'
 }
 
 # park N: when the clone has nothing uncommitted, keep issue N in STATE/parked,

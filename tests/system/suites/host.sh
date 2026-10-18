@@ -291,10 +291,10 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         fail=1
     fi
     if sh tests/system/worker_park_test.sh >"$VDIR/worker_park.rlog" 2>&1; then
-        echo "hosttest: result: pass: the worker loop's parking during a hold"
+        echo "hosttest: result: pass: the worker loop's parking during a hold and rest of a handed-back intermittent issue"
     else
         cat "$VDIR/worker_park.rlog"
-        echo "hosttest: result: fail: the worker loop's parking during a hold" >&2
+        echo "hosttest: result: fail: the worker loop's parking during a hold and rest of a handed-back intermittent issue" >&2
         fail=1
     fi
     if sh tests/system/release_resume_test.sh >"$VDIR/release_resume.rlog" 2>&1; then
