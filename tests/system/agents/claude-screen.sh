@@ -29,36 +29,8 @@ PANE=claude
 
 # The mark Claude Code puts before the answer a question has selected,
 # U+276F, in UTF-8.
+# shellcheck disable=SC2034 # agents_rows.sh's choose reads it
 SELECTED=$(printf '\342\235\257')
-
-# keys KEY...: press the keys KEY in the screen.
-keys() {
-    tmux -u -L claude send-keys -t claude "$@"
-}
-
-# choose WHAT KEY ANSWER: press KEY until the screen has marked ANSWER
-# selected for 5 s, within 60 s. A question of Claude Code's refuses keys
-# for a moment after it opens and is then drawn again with its first answer
-# selected, which can come after the row's key under TCG, so the row presses
-# KEY again whenever ANSWER is not selected, at most every 5 s.
-choose() {
-    local n=0 held=0
-    while [ "$n" -lt 60 ]; do
-        case "$(tmux -u -L claude capture-pane -p -t claude)" in
-            *"$SELECTED $3"*)
-                held=$((held + 1))
-                [ "$held" -le 5 ] || return 0
-                ;;
-            *)
-                held=0
-                [ $((n % 5)) != 0 ] || keys "$2"
-                ;;
-        esac
-        n=$((n + 1))
-        sleep 1
-    done
-    pane "$1" "$SELECTED $3" 0
-}
 
 row() {
     local pid env

@@ -17,7 +17,8 @@
 # that runs a test of the tree, such as a test of the project's loops, makes
 # a git repository of the tree's tests and tools with `tree`, and a row
 # that drives a program's screen runs it in tmux, on the server and in the
-# session PANE names, and waits for it with `pane`. The script prints
+# session PANE names, waits for it with `pane` and answers its questions
+# with `keys` and `choose`. The script prints
 # `AGENTROW OK NAME` when every comparison holds, and otherwise
 # `AGENTROW FAIL NAME: ` with the first that did not.
 #
@@ -33,6 +34,7 @@ WORK=/tmp/agents/work/$ROW
 # shellcheck disable=SC2034 # the rows read it
 CA=/tmp/agents/ca.pem
 PANE=
+SELECTED=
 FAILED=
 OUT=
 
@@ -104,6 +106,36 @@ pane() {
     done
 }
 
+# keys KEY...: press the keys KEY in the window of the tmux server PANE.
+keys() {
+    tmux -u -L "$PANE" send-keys -t "$PANE" "$@"
+}
+
+# choose WHAT KEY ANSWER: press KEY until the window of PANE has marked
+# ANSWER selected, the program's mark SELECTED before it, for 5 s, within
+# 60 s. A program's question can refuse keys for a moment after it opens and
+# then be drawn again with its first answer selected, which can come after
+# the row's key under TCG, so the row presses KEY again whenever ANSWER is
+# not selected, at most every 5 s.
+choose() {
+    local n=0 held=0
+    while [ "$n" -lt 60 ]; do
+        case "$(tmux -u -L "$PANE" capture-pane -p -t "$PANE")" in
+            *"$SELECTED $3"*)
+                held=$((held + 1))
+                [ "$held" -le 5 ] || return 0
+                ;;
+            *)
+                held=0
+                [ $((n % 5)) != 0 ] || keys "$2"
+                ;;
+        esac
+        n=$((n + 1))
+        sleep 1
+    done
+    pane "$1" "$SELECTED $3" 0
+}
+
 # sample_memory: print the kernel's count of free frames, nr_free_pages of
 # /proc/vmstat, once a second until killed.
 sample_memory() {
@@ -117,11 +149,12 @@ sample_memory() {
 # PROGRAM with nothing preloaded: the process runs PROGRAM, its environment
 # has no variable of the dynamic linker's, LD_*, the root has no
 # /etc/ld.so.preload, and every file the process maps, with every link in
-# its path resolved, is PROGRAM, one of the FILEs or the linker's cache,
-# /etc/ld.so.cache, which glibc's linker keeps mapped after a dlopen. The
-# host compares the program's digest with the one its vendor published.
+# its path resolved, is PROGRAM, matches one of the FILEs, each a path or a
+# pattern of the shell, or is the linker's cache, /etc/ld.so.cache, which
+# glibc's linker keeps mapped after a dlopen. The host compares the
+# program's digest with the one its vendor published.
 unmodified() {
-    local what=$1 pid=$2 program=$3 exe maps linker file
+    local what=$1 pid=$2 program=$3 exe maps linker file resolved allowed
     shift 3
     exe=$(readlink "/proc/$pid/exe")
     maps=$(awk '$6 ~ /^\// { print $6 }' "/proc/$pid/maps" | sort -u)
@@ -129,10 +162,14 @@ unmodified() {
     same "$what: the program" "$exe" "$program"
     [ -n "$maps" ] || fail "$what: /proc/$pid/maps names no file"
     for file in $maps; do
-        case " $program /etc/ld.so.cache $* " in
-            *" $(readlink -f "$file") "*) ;;
-            *) fail "$what: the process maps $file" ;;
-        esac
+        resolved=$(readlink -f "$file")
+        for allowed in "$program" /etc/ld.so.cache "$@" ""; do
+            # shellcheck disable=SC2254 # a FILE may be a pattern
+            case $resolved in
+                $allowed) break ;;
+            esac
+        done
+        [ -n "$allowed" ] || fail "$what: the process maps $file"
     done
     same "$what: the linker's variables" "$linker" ""
     [ ! -e /etc/ld.so.preload ] || fail "$what: the root has /etc/ld.so.preload"

@@ -1,8 +1,9 @@
 #!/bin/sh
 # agents_mutate.sh [FAULT...] | --texts: show that `tests/run agents` catches
 # a fault in each of the agents layer's installs of gh, Claude Code, Codex,
-# Antigravity CLI and muse, two in the project's loops, and one in the kernel
-# that Claude Code's sessions meet.
+# Antigravity CLI and muse, two in the project's loops, one in the kernel
+# that Claude Code's sessions meet, and one in Codex's settings that its
+# sessions meet.
 #
 # Usage: sh tests/system/agents_mutate.sh [FAULT...] | --texts
 # Five faults are in recipes of vendor/gnu/agents/packages/. Those of gh and
@@ -12,7 +13,8 @@
 # place of DISABLE_UPDATES, which stops only the background update, so that
 # `claude update` tries to fetch a release. That of codex turns on Codex's
 # daemon_auto_start in /etc/codex/config.toml, so that Codex starts its
-# background server. That of agy makes /etc/profile.d/agy.sh set
+# background server, which outlives the screen of the codex-screen row too.
+# That of agy makes /etc/profile.d/agy.sh set
 # AGY_CLI_DISABLE_AUTO_UPDATE to false, so that a login shell leaves
 # Antigravity CLI's updater on. The sixth makes `limited` in
 # tools/flow/lib.sh take a usage limit from any line of a session's output,
@@ -24,25 +26,34 @@
 # fail. The eighth makes tools/flow/worker.sh give its session the prompt
 # with `@ISSUE@` in place of the issue's number, which the worker-session
 # row's verifier must find in the first request of the session on #901.
-# The suite runs only the rows of these eight, through RACH2_AGENTS_ROWS:
-# it must pass, fail on each of them with the eight faults in their sources
-# and the root and the kernel built again, and pass again with the sources
-# restored. FAULT, one of the names in `faults` below, proves only the rows
-# of the faults named. The suite is x86-64 only. --texts checks that each
-# fault is once in its source.
+# The ninth sets sandbox_mode to workspace-write in Codex's
+# /etc/codex/config.toml, so that Codex runs the model's commands in its
+# sandbox, which Rach2 cannot make, and the codex-exec and codex-screen rows
+# must fail; it is one of the faults in `alone`, which run one at a time,
+# since the fault of codex fails codex-screen first. The suite runs only the
+# rows of these nine, through RACH2_AGENTS_ROWS: it must pass, fail on each
+# of them with the first eight faults in their sources and the root and the
+# kernel built again, fail on the rows of each fault of `alone` with it alone
+# in its source, and pass again with the sources restored. FAULT, one of the
+# names in `faults` below, proves only the rows of the faults named. The
+# suite is x86-64 only. --texts checks that each fault is once in its
+# source.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-faults="gh claude codex agy muse limited procfs worker"
+faults="gh claude codex agy muse limited procfs worker sandbox"
+alone="sandbox"
 
 # fault_rows NAME: the rows that fault NAME must fail.
 fault_rows()
 {
     case $1 in
+        codex) echo codex codex-screen ;;
         limited) echo limited_test ;;
         procfs) echo claude-print claude-screen ;;
         worker) echo worker-session ;;
+        sandbox) echo codex-exec codex-screen ;;
         *) echo "$1" ;;
     esac
 }
@@ -54,24 +65,28 @@ fault_failure()
     case $1 in
         gh) echo 'AGENTROW FAIL gh: gh --version: status 127' ;;
         claude) echo 'AGENTROW FAIL claude: claude update: status 1' ;;
-        codex) echo 'AGENTROW FAIL codex: the processes: got [' ;;
+        codex) printf '%s\n' 'AGENTROW FAIL codex: the processes: got [' \
+            "AGENTROW FAIL codex-screen: codex's screen: the processes left: got [" ;;
         agy) echo "AGENTROW FAIL agy: the updater's setting in a login shell: got [false], want [true]" ;;
         muse) echo 'AGENTROW FAIL muse: muse --version: status 127' ;;
         limited) echo 'AGENTROW FAIL limited_test: limited_test.sh --mutate: status' ;;
         procfs) printf '%s\n' 'agents-test: claude-print: FAIL' 'agents-test: claude-screen: FAIL' ;;
         worker) echo "the session has no worker's prompt for #901" ;;
+        sandbox) printf '%s\n' 'agents-test: codex-exec: FAIL' 'agents-test: codex-screen: FAIL' ;;
     esac
 }
 
 # fault_file NAME: the file that fault NAME goes into: tools/flow/lib.sh for
-# `limited`, rach2/sys/fs/procfs.c for `procfs`, and otherwise the recipe of
-# the package NAME.
+# `limited`, rach2/sys/fs/procfs.c for `procfs`, tools/flow/worker.sh for
+# `worker`, Codex's recipe for `sandbox`, and otherwise the recipe of the
+# package NAME.
 fault_file()
 {
     case $1 in
         limited) echo tools/flow/lib.sh ;;
         procfs) echo rach2/sys/fs/procfs.c ;;
         worker) echo tools/flow/worker.sh ;;
+        sandbox) echo vendor/gnu/agents/packages/codex.sh ;;
         *) echo "vendor/gnu/agents/packages/$1.sh" ;;
     esac
 }
@@ -97,6 +112,9 @@ if name == 'claude':
     old, new = '"DISABLE_UPDATES": "1"', '"DISABLE_AUTOUPDATER": "1"'
 elif name == 'codex':
     old, new = '\ndaemon_auto_start = false\n', '\ndaemon_auto_start = true\n'
+elif name == 'sandbox':
+    old = '\nsandbox_mode = "danger-full-access"\n'
+    new = '\nsandbox_mode = "workspace-write"\n'
 elif name == 'agy':
     old = 'export AGY_CLI_DISABLE_AUTO_UPDATE=true'
     new = 'export AGY_CLI_DISABLE_AUTO_UPDATE=false'
@@ -138,10 +156,6 @@ if [ "$#" -gt 0 ]; then
     done
     faults=$*
 fi
-rows=
-for name in $faults; do
-    rows="$rows $(fault_rows "$name")"
-done
 
 mkdir -p build
 work=
@@ -163,7 +177,8 @@ stop_child()
 }
 
 # Put back the saved sources and touch them, so that make stages the packages
-# and builds the kernel again.
+# and builds the kernel again. The saved copies of `codex` and `sandbox` are
+# the same file.
 restore()
 {
     if [ -n "$changed" ]; then
@@ -199,14 +214,19 @@ for name in $faults; do
 done
 cc -O2 -Wall -Wextra -Werror tests/system/runner/runutil.c -o "$work/runutil"
 
-# run_phase PHASE pass|fail: run the suite's rows of the faults, which
-# builds the root and the kernel again when a source changed. With `pass` it
-# must pass; with `fail` it must fail with what fault_failure prints for each
-# fault in its output.
+# run_phase PHASE pass|fail NAME...: run the suite's rows of the faults
+# NAME, which builds the root and the kernel again when a source changed.
+# With `pass` it must pass; with `fail` it must fail with what fault_failure
+# prints for each fault NAME in its output.
 run_phase()
 {
     phase=$1
     expected=$2
+    shift 2
+    rows=
+    for name; do
+        rows="$rows $(fault_rows "$name")"
+    done
     ARCH=x86_64 RACH2_AGENTS_ROWS=$rows "$work/runutil" group tests/run agents \
         >"$work/$phase.log" 2>&1 &
     child=$!
@@ -220,7 +240,7 @@ run_phase()
         [ "$status" -ne 0 ] || {
             echo "agents-mutation: fault passed: $phase" >&2; exit 1;
         }
-        for name in $faults; do
+        for name; do
             fault_failure "$name"
         done > "$work/expected"
         while IFS= read -r line; do
@@ -234,15 +254,36 @@ run_phase()
 
 echo "agents-mutation: logs: $work"
 logged=1
-run_phase fixed pass
-changed=1
+together=
+separate=
 for name in $faults; do
+    case " $alone " in
+        *" $name "*) separate="$separate $name" ;;
+        *) together="$together $name" ;;
+    esac
+done
+
+# shellcheck disable=SC2086 # the lists are names, a word each
+run_phase fixed pass $faults
+if [ -n "$together" ]; then
+    changed=1
+    for name in $together; do
+        apply_fault "$name"
+        touch "$(fault_file "$name")"
+    done
+    # shellcheck disable=SC2086
+    run_phase faults fail $together
+    restore
+fi
+for name in $separate; do
+    changed=1
     apply_fault "$name"
     touch "$(fault_file "$name")"
+    run_phase "$name" fail "$name"
+    restore
 done
-run_phase faults fail
-restore
-run_phase restored pass
+# shellcheck disable=SC2086
+run_phase restored pass $faults
 for name in $faults; do
     cmp "$(fault_file "$name")" "$work/$name.saved"
 done

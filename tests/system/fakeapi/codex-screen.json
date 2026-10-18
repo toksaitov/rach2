@@ -1,0 +1,15 @@
+{
+  "protocol": "responses",
+  "steps": [
+    {"protocol": "plain", "unordered": true,
+     "request": {"path": "/openai/codex/main/announcement_tip.toml",
+                 "headers": {"Host": "raw.githubusercontent.com"}},
+     "reply": {"status": 404}},
+    {"refuse": 426, "unordered": true},
+    {"unordered": true,
+     "turn": {
+       "request": {"text": {"format": {"type": "json_schema", "name": "codex_output_schema"}}},
+       "input": [{"role": "user", "text": "Generate a concise, single-line task title"}],
+       "output": [{"message": "{\"title\": \"Greet Rach2\"}"}]}}
+  ]
+}
