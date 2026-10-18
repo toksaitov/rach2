@@ -8,9 +8,13 @@
 # tools/ci/run.sh. An architecture passed only when its directory has
 # `done` and an empty `failed`; a missing or unfinished one is a failure of
 # the runner, named `unfinished-core` or `unfinished-full` so that bisection
-# repeats that kind of run. For each architecture the commit SHA gets the
-# status `ci/KIND/ARCH`, and once everything below has been done, `ci/KIND`,
-# which tells a later run that this commit has been tested and reported.
+# repeats that kind of run. An architecture whose directory lacks `done`,
+# as when the upload of a core run's result was lost, takes its result from
+# the variable VERDICT_ARCH, which ci.yml sets from the core job's outputs,
+# when that begins with the word `done`; the words after it are the lines of
+# `failed`. For each architecture the commit SHA gets the status
+# `ci/KIND/ARCH`, and once everything below has been done, `ci/KIND`, which
+# tells a later run that this commit has been tested and reported.
 #
 # A failure is filed as an issue with the labels `bug` and `ci`, titled by
 # the run's kind, its architecture and what failed. The issue gives the run,
@@ -135,6 +139,15 @@ passed=""
 held=""
 for arch in i686 x86_64; do
     result="$dir/$kind-$arch"
+    case $arch in
+        i686) verdict=${VERDICT_i686-} ;;
+        x86_64) verdict=${VERDICT_x86_64-} ;;
+    esac
+    if [ ! -f "$result/done" ] && [ "${verdict%% *}" = "done" ]; then
+        mkdir -p "$result"
+        echo "${verdict#done}" | tr ' ' '\n' | sed '/^$/d' > "$result/failed"
+        : > "$result/done"
+    fi
     if [ -f "$result/done" ] && [ -f "$result/failed" ] && [ ! -s "$result/failed" ]; then
         set_status "ci/$kind/$arch" success
         passed="$passed $arch"
@@ -174,6 +187,10 @@ The end of the log:
 \`\`\`
 $(tail -n 40 "$result/log")
 \`\`\`"
+    else
+        body="$body
+
+The run's output was not kept; \`gh run view $GITHUB_RUN_ID --repo $repo --log\` prints the log of each job."
     fi
     if ! found=$(open_issue bug "$title"); then
         lost "the issue list for $arch"

@@ -13,12 +13,14 @@
 # everything; a run started by hand, `gh workflow run ci.yml`, tests the
 # commit all the same, so that a core failure that did not repeat in its
 # bisection can be tried again. tools/ci/run.sh runs the build,
-# `tests/run style`, `tests/run host` and `tests/run core`; each
+# `tests/run style`, `tests/run host` and `tests/run core`. Each
 # architecture's output and kept logs are uploaded for every account to
-# fetch, and tools/ci/report.sh sets the commit's status, files a failure as
-# an issue, starts bisect.yml for a new one or one labelled `intermittent`,
-# and opens or closes the `hold` issue. A run that a person cancels reports
-# nothing. The core step has 170 minutes, inside the job's 180, after which
+# fetch, and its verdict, `done` followed by the steps that failed, is also
+# an output of the job, so that a run whose upload was lost is still judged.
+# tools/ci/report.sh sets the commit's status, files a failure as an issue,
+# starts bisect.yml for a new one or one labelled `intermittent`, and opens
+# or closes the `hold` issue. A run that a person cancels reports nothing.
+# The core step has 170 minutes, inside the job's 180, after which
 # timeout(1) stops the run as tools/ci/run.sh describes, and the run is
 # reported as unfinished.
 name: ci
@@ -63,6 +65,9 @@ jobs:
     if: needs.head.outputs.tested == '0'
     runs-on: [self-hosted, rach2]
     timeout-minutes: 180
+    outputs:
+      i686: ${{ steps.verdict.outputs.i686 }}
+      x86_64: ${{ steps.verdict.outputs.x86_64 }}
     strategy:
       fail-fast: false
       matrix:
@@ -78,6 +83,15 @@ jobs:
 
       - name: core
         run: timeout -k 60 170m sh tools/ci/run.sh core "$RUNNER_TEMP/core-$ARCH"
+
+      - name: verdict
+        id: verdict
+        if: always()
+        run: |
+          out=$RUNNER_TEMP/core-$ARCH
+          if [ -f "$out/done" ] && [ -f "$out/failed" ]; then
+              echo "$ARCH=done $(tr '\n' ' ' < "$out/failed")" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: keep the result
         if: always()
@@ -110,4 +124,6 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
+          VERDICT_i686: ${{ needs.core.outputs.i686 }}
+          VERDICT_x86_64: ${{ needs.core.outputs.x86_64 }}
         run: sh tools/ci/report.sh core ${{ needs.head.outputs.sha }} "$RUNNER_TEMP/results"
