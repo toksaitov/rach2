@@ -111,7 +111,7 @@ class GeminiTest(unittest.TestCase):
                     played.append(server.take(request)[2])
                 server.record_file.close()
                 self.assertEqual(played, [2, 1, None] if order[0] == "main" else [1, 2, None])
-                self.assertEqual(server.played, 2)
+                self.assertEqual(len(server.taken), 2)
         finally:
             os.unlink(record.name)
 

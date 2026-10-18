@@ -38,19 +38,22 @@ The script is a JSON object:
     {"protocol": "plain", "steps": [STEP, ...]}
 
 The steps are played in turn. Each request is checked against the first step
-not yet played, in the order the requests arrive, whatever connection each
-comes on. When the step's protocol accepts the request, the server answers as
-the step says and the step is played. Any other request is unexpected: it is
-answered with status 400 and a JSON error, recorded with the reason, and the
-run fails, while the step waits for the next request. A step with "unordered":
-true is played by the first request it accepts, whenever that comes: a client
-that sends two requests at once, such as a title for the conversation beside
-its first turn, sends them in either order. A request is checked against the
-step whose turn it is, then against each unordered step not yet played. An
-unordered step with "repeat": true as well is never used up: any number of
-requests play it, none among them, for a request that a client repeats on a
-timer of its own, such as a flush of usage logs. A step may name its own
-"protocol"; otherwise it has the script's.
+not yet taken, in the order the requests arrive, whatever connection each
+comes on. When the step's protocol accepts the request, the step is taken and
+the server answers as it says. The step is played once the reply has ended,
+or, for a WebSocket, once the server starts to close it; a connection that
+ends in a WebSocket exchange before then fails the run, since the client has
+not sent, or not been sent, all that the step requires. Any other request is
+unexpected: it is answered with status 400 and a JSON error, recorded with
+the reason, and the run fails, while the step waits for the next request. A
+step with "unordered": true is taken by the first request it accepts,
+whenever that comes: a client that sends two requests at once, such as a
+title for the conversation beside its first turn, sends them in either order.
+A request is checked against the step whose turn it is, then against each
+unordered step not yet taken. An unordered step with "repeat": true as well
+is never used up: any number of requests play it, none among them, for a
+request that a client repeats on a timer of its own, such as a flush of usage
+logs. A step may name its own "protocol"; otherwise it has the script's.
 
 A protocol is a module `proto_NAME.py` in this directory with two functions:
 
@@ -261,14 +264,18 @@ class Peer:
     request. `keep` is false once the connection is not to be used again.
     """
 
-    def __init__(self, server, request, n, rfile, wfile):
+    def __init__(self, server, request, n, number, rfile, wfile):
         self.server = server
         self.request = request
         self.n = n
+        self.number = number      # the step the request takes, from 1, or None
         self.rfile = rfile
         self.wfile = wfile
         self.keep = (request.version == "HTTP/1.1" and
                      (request.header("connection") or "").lower() != "close")
+        self.socket = None        # the WebSocket, once the request is upgraded
+        self.failed = False
+        self.finished = False
 
     def note(self, **fields):
         """Add a line about this request to the record."""
@@ -276,7 +283,19 @@ class Peer:
 
     def fail(self, reason):
         """Fail the run for REASON, in the log and the record."""
+        self.failed = True
         self.server.fail(f"request {self.n}", reason, self.n)
+
+    def finish(self):
+        """Count the request's step played, unless its reply failed the run.
+
+        The server calls it when the reply ends, and `WebSocket.close` before
+        the closing handshake, so a client that drops the connection then has
+        still played the step. A second call does nothing.
+        """
+        if not self.failed and not self.finished:
+            self.finished = True
+            self.server.finish(self.number)
 
     def respond(self, status, headers=(), body=b""):
         """Send a response with a whole body, text or bytes."""
@@ -333,7 +352,8 @@ class Peer:
         self.wfile.write(head(101, headers))
         self.wfile.flush()
         self.keep = False
-        return WebSocket(self)
+        self.socket = WebSocket(self)
+        return self.socket
 
 
 class WebSocket:
@@ -427,6 +447,7 @@ class WebSocket:
 
     def close(self, code=1000):
         """Close the WebSocket with CODE and wait for the client's close."""
+        self.peer.finish()
         if self.closed:
             return
         self._send(0x8, struct.pack("!H", code))
@@ -459,8 +480,8 @@ class Server:
         self.steps = script["steps"]
         self.default = script.get("protocol", "plain")
         self.context = context
-        self.played = 0
-        self.done = set()
+        self.taken = set()
+        self.played = set()
         self.count = 0
         self.failures = []
         self.lock = threading.Lock()
@@ -498,7 +519,7 @@ class Server:
         The first is the ordered step whose turn it is, when one is left; the
         unordered steps not yet played follow, the repeated ones among them.
         """
-        left = [i for i in range(len(self.steps)) if i not in self.done]
+        left = [i for i in range(len(self.steps)) if i not in self.taken]
         ordered = [i for i in left if not self.steps[i].get("unordered")]
         return ordered[:1] + [i for i in left if self.steps[i].get("unordered")]
 
@@ -507,7 +528,8 @@ class Server:
 
         Return the request's number, the step and its number when the
         request plays it, and otherwise the reason it is unexpected, which
-        is the first step's.
+        is the first step's. A step other than a repeated one is taken, so
+        that no other request plays it; `finish` counts it played.
         """
         with self.lock:
             self.count += 1
@@ -521,13 +543,18 @@ class Server:
                     reason = f"the check failed: {type(error).__name__}: {error}"
                 if not reason:
                     if not step.get("repeat"):
-                        self.done.add(i)
-                        self.played += 1
+                        self.taken.add(i)
                     return n, step, i + 1, None
                 reasons.append(f"step {i + 1}: {reason}")
             if not reasons:
                 return n, None, None, "the script has no step left"
             return n, None, None, reasons[0]
+
+    def finish(self, number):
+        """Count the step NUMBER, from 1, played, its reply having ended."""
+        with self.lock:
+            if not self.steps[number - 1].get("repeat"):
+                self.played.add(number - 1)
 
     def serve(self, request, rfile, wfile):
         """Answer one request; return whether its connection may take another."""
@@ -535,7 +562,7 @@ class Server:
         entry = {"n": n, "method": request.method, "path": request.path,
                  "query": request.query, "headers": request.headers,
                  "body": request.text()}
-        peer = Peer(self, request, n, rfile, wfile)
+        peer = Peer(self, request, n, number, rfile, wfile)
         if step is None:
             entry["unexpected"] = reason
             self.record(entry)
@@ -552,27 +579,31 @@ class Server:
         try:
             self.module(step).reply(step, request, peer)
         except OSError as error:
-            log(f"{n}: the connection ended in the reply: {error}")
+            if peer.socket is not None and not (peer.finished or peer.failed):
+                peer.fail(f"the connection ended in the WebSocket exchange: {error}")
+            else:
+                log(f"{n}: the connection ended in the reply: {error}")
+                peer.finish()
             return False
         except Exception as error:  # a fault of the script or its protocol
             peer.fail(f"the reply failed: {type(error).__name__}: {error}")
             return False
+        peer.finish()
         return peer.keep
 
     def verdict(self):
         """Log the run's result and return its exit status."""
         owed = [i for i in range(len(self.steps)) if not self.steps[i].get("repeat")]
-        left = len(owed) - self.played
+        left = [i for i in owed if i not in self.played]
         faults = []
         if self.failures:
             faults.append(f"{len(self.failures)} failed, the first {self.failures[0]}")
         if left:
-            first = min(i for i in owed if i not in self.done)
-            step = json.dumps(self.steps[first])
+            step = json.dumps(self.steps[left[0]])
             if len(step) > 160:
                 step = step[:157] + "..."
-            faults.append(f"{left} of {len(owed)} steps not played, "
-                          f"the first step {first + 1}: {step}")
+            faults.append(f"{len(left)} of {len(owed)} steps not played, "
+                          f"the first step {left[0] + 1}: {step}")
         if faults:
             log("result: fail: " + "; ".join(faults))
             return 1

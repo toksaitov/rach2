@@ -195,7 +195,7 @@ def exchange(binary, work, wrong=False, module=None):
         server.record_file.close()
     verdict = server.verdict()
     if wrong:
-        if not verdict or server.played != 3 or not any(
+        if not verdict or len(server.played) != 3 or not any(
                 "wrong function response: call_shell" in f for f in server.failures) or \
                 "answer=before" not in (work / "repo" / "fixture.txt").read_text():
             raise ValueError("a wrong function response was accepted")

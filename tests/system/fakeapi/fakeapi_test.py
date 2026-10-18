@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
-"""Check how the fake API server chooses the step a request plays.
+"""Check how the fake API server chooses the step a request plays, and when
+a WebSocket exchange has played it.
 
 Usage: fakeapi_test.py [--mutate | --texts]
 
 With no argument it runs the tests, as `tests/run host` does. --mutate runs
-them first against a private copy of fakeapi.py in which a repeated step is
-used up by the first request that plays it, and requires that copy to fail
-the test of repeated steps and no other, and then against fakeapi.py as it
-is, which must pass; nothing in the tree changes. --texts checks that the
-fault's text is once in fakeapi.py.
+them against a private copy of fakeapi.py for each fault in FAULTS, and
+requires each copy to fail its fault's test and no other: in one a repeated
+step is used up by the first request that plays it, in the other a
+connection that ends in a WebSocket exchange is only logged. It then runs
+them against fakeapi.py as it is, which must pass; nothing in the tree
+changes. --texts checks that each fault's text is once in fakeapi.py.
 """
 
 import io
 import os
+import struct
 from pathlib import Path
 import sys
 import tempfile
@@ -22,8 +25,14 @@ import unittest
 import fakeapi
 
 HERE = Path(__file__).resolve().parent
-FAULT = ('                    if not step.get("repeat"):\n',
-         '                    if True:\n')
+FAULTS = [
+    ("test_repeat",
+     '                    if not step.get("repeat"):\n',
+     '                    if True:\n'),
+    ("test_reset",
+     '            if peer.socket is not None and not (peer.finished or peer.failed):\n',
+     '            if False:\n'),
+]
 
 
 def request(path):
@@ -54,6 +63,9 @@ class StepTest(unittest.TestCase):
         server = fakeapi.Server({"protocol": "plain", "steps": steps}, self.record, None)
         try:
             played = [server.take(request(path))[2] for path in paths]
+            for number in played:
+                if number:
+                    server.finish(number)
             return played, server.verdict()
         finally:
             server.record_file.close()
@@ -76,29 +88,91 @@ class StepTest(unittest.TestCase):
             self.play([step("/log", repeat=True)], [])
 
 
+class Wire:
+    """A client's bytes for the server to read, then a reset."""
+
+    def __init__(self, data):
+        self.data = data
+
+    def read(self, size):
+        """Return the next SIZE bytes; raise ConnectionResetError at the end."""
+        if not self.data:
+            raise ConnectionResetError(104, "Connection reset by peer")
+        part, self.data = self.data[:size], self.data[size:]
+        return part
+
+
+def frame(opcode, data):
+    """Return a client's masked WebSocket frame of OPCODE with DATA."""
+    mask = b"\x01\x02\x03\x04"
+    return (struct.pack("!BB", 0x80 | opcode, 0x80 | len(data)) + mask +
+            bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
+
+
+class WebSocketTest(unittest.TestCase):
+    """Play a WebSocket step that expects one message, without a connection."""
+
+    def setUp(self):
+        """Make a record for the server to write."""
+        handle, self.record = tempfile.mkstemp(prefix="rach2-fakeapi-test.")
+        os.close(handle)
+
+    def tearDown(self):
+        """Remove the record."""
+        os.unlink(self.record)
+
+    def play(self, sent):
+        """Serve the upgrade to a client that sends SENT and then resets the
+        connection; return the verdict and the number of failures."""
+        steps = [{"request": {"path": "/ws"},
+                  "reply": {"websocket": [{"expect": "hello"}, {"send": "bye"}]}}]
+        server = fakeapi.Server({"protocol": "plain", "steps": steps}, self.record, None)
+        upgrade = fakeapi.Request("GET", "/ws", "HTTP/1.1",
+                                  [("Host", "fakeapi.test"), ("Upgrade", "websocket"),
+                                   ("Connection", "Upgrade"),
+                                   ("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")], b"")
+        try:
+            server.serve(upgrade, Wire(sent), io.BytesIO())
+            return server.verdict(), len(server.failures)
+        finally:
+            server.record_file.close()
+
+    def test_closed(self):
+        """An exchange the client finishes and closes plays its step."""
+        self.assertEqual(self.play(frame(0x1, b"hello") + frame(0x8, b"\x03\xe8")), (0, 0))
+
+    def test_reset(self):
+        """A reset before the expected message fails the run, and the step
+        is not played; one in the closing handshake does neither."""
+        self.assertEqual(self.play(b""), (1, 1))
+        self.assertEqual(self.play(frame(0x1, b"hello")), (0, 0))
+
+
 def run(module):
     """Run the tests with MODULE as fakeapi; return the result."""
     global fakeapi
     original = fakeapi
     try:
         fakeapi = module
-        suite = unittest.defaultTestLoader.loadTestsFromTestCase(StepTest)
+        suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(case)
+                                   for case in (StepTest, WebSocketTest))
         return unittest.TextTestRunner(stream=io.StringIO()).run(suite)
     finally:
         fakeapi = original
 
 
 def mutate():
-    """Require the fault to fail test_repeat alone, and the source to pass."""
+    """Require each fault to fail its test alone, and the source to pass."""
     source = (HERE / "fakeapi.py").read_text()
-    module = types.ModuleType("mutated_fakeapi")
-    module.__file__ = str(HERE / "fakeapi.py")
-    exec(compile(source.replace(*FAULT), module.__file__, "exec"), module.__dict__)
-    result = run(module)
-    failed = [test.id().rsplit(".", 1)[1] for test, _ in result.failures + result.errors]
-    if failed != ["test_repeat"]:
-        sys.exit(f"fakeapi-test: fail: the fault failed {failed or 'no test'}, not test_repeat")
-    print("fakeapi-test: result: a repeated step used up once was caught")
+    for test, old, new in FAULTS:
+        module = types.ModuleType("mutated_fakeapi")
+        module.__file__ = str(HERE / "fakeapi.py")
+        exec(compile(source.replace(old, new), module.__file__, "exec"), module.__dict__)
+        result = run(module)
+        failed = [t.id().rsplit(".", 1)[1] for t, _ in result.failures + result.errors]
+        if failed != [test]:
+            sys.exit(f"fakeapi-test: fail: the fault for {test} failed {failed or 'no test'}")
+        print(f"fakeapi-test: result: the fault for {test} was caught")
     if not run(fakeapi).wasSuccessful():
         sys.exit("fakeapi-test: fail: the unchanged server did not pass")
     print("fakeapi-test: pass: the unchanged server passed")
@@ -106,8 +180,9 @@ def mutate():
 
 if __name__ == "__main__":
     if sys.argv[1:] == ["--texts"]:
-        if (HERE / "fakeapi.py").read_text().count(FAULT[0]) != 1:
-            sys.exit("fakeapi-test: fail: the fault's text is not once in fakeapi.py")
+        source = (HERE / "fakeapi.py").read_text()
+        if any(source.count(old) != 1 for _, old, _ in FAULTS):
+            sys.exit("fakeapi-test: fail: a fault's text is not once in fakeapi.py")
     elif sys.argv[1:] == ["--mutate"]:
         mutate()
     else:

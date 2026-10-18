@@ -183,7 +183,7 @@ def exchange(binary, work, wrong=False, module=None):
         server.record_file.close()
     verdict = server.verdict()
     if wrong:
-        if not verdict or server.played != 2 or not any(
+        if not verdict or len(server.played) != 2 or not any(
                 "wrong tool result: toolu_shell" in f for f in server.failures):
             raise ValueError("a wrong tool result was accepted")
         print("anthropic-test: result: wrong tool result refused", flush=True)
