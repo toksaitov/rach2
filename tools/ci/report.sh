@@ -32,10 +32,13 @@
 #
 # A core job that GitHub gave to no runner, so that none of its steps ran,
 # is not a failure of the commit: its architecture gets the status `error`,
-# nothing is filed, `ci/core` is left unset, and ci.yml is started again on
-# the newest master. A commit that already has that `error` status, from a
-# run whose job was lost before, is reported as unfinished, so that a
-# runner that keeps losing jobs is filed and does not start run after run.
+# as does `ci/lost/ARCH`, nothing is filed, `ci/core` is left unset, and
+# ci.yml is started again on the newest master. Nothing sets `ci/lost/ARCH`
+# again, so a commit that has it, from a run whose job on ARCH was lost
+# before, keeps it whatever later runs report, and its next lost job on ARCH
+# is reported as unfinished. A runner that keeps losing jobs is thus filed
+# and does not start run after run. When that status cannot be read or set,
+# the lost job is reported as unfinished at once.
 #
 # A core failure of the build, style or the runner, or of the `default`
 # suite, which boots the test image, opens the issue labelled `hold`, or
@@ -74,11 +77,12 @@ lost() { # lost WHAT: name a GitHub call that failed
     rc=1
 }
 
-# Set the status CONTEXT of SHA to STATE, linked to this run.
+# Set the status CONTEXT of SHA to STATE, linked to this run; the status is
+# 1 when GitHub refused it.
 set_status() { # set_status CONTEXT STATE
     gh api "repos/$repo/statuses/$sha" -f state="$2" -f context="$1" \
         -f target_url="$run_url" -f description="$kind at $short" > /dev/null ||
-        lost "status $1"
+        { lost "status $1"; return 1; }
 }
 
 # The newest first-parent ancestor of SHA, within DEPTH, with a success
@@ -143,10 +147,10 @@ start_bisect() { # start_bisect NUMBER
 }
 
 # Whether the core job of ARCH ran no step on any runner, and SHA has no
-# `error` status for ARCH from an earlier run whose job was lost.
+# status `ci/lost/ARCH` from an earlier run whose job on ARCH was lost.
 unrun_once() { # unrun_once ARCH
     case "$unrun" in *"core ($1)"*) ;; *) return 1 ;; esac
-    case " $errors " in *" ci/core/$1 "*) return 1 ;; esac
+    case " $errors " in *" ci/lost/$1 "*) return 1 ;; esac
 }
 
 unrun=""
@@ -157,7 +161,7 @@ if [ "$kind" = core ]; then
         { lost "the jobs of the run"; unrun=""; }
     errors=$(gh api "repos/$repo/commits/$sha/status" \
         --jq '[.statuses[] | select(.state == "error") | .context] | join(" ")') ||
-        { lost "the statuses of $short"; errors=""; }
+        { lost "the statuses of $short"; errors="ci/lost/i686 ci/lost/x86_64"; }
 fi
 passed=""
 held=""
@@ -178,7 +182,8 @@ for arch in i686 x86_64; do
         passed="$passed $arch"
         continue
     fi
-    if [ ! -f "$result/done" ] && unrun_once "$arch"; then
+    if [ ! -f "$result/done" ] && unrun_once "$arch" &&
+        set_status "ci/lost/$arch" error; then
         set_status "ci/$kind/$arch" error
         rerun="$rerun $arch"
         continue

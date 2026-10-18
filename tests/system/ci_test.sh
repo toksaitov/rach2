@@ -57,7 +57,11 @@ fault()
             ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
         retry)
             # shellcheck disable=SC2016 # the script contains a literal $1
-            sed 's|\*" ci/core/\$1 "\*) return 1|*" never "*) return 1|' "$repo/tools/ci/report.sh" > "$work/report.sh"
+            sed 's|\*" ci/lost/\$1 "\*) return 1|*" never "*) return 1|' "$repo/tools/ci/report.sh" > "$work/report.sh"
+            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
+        record)
+            # shellcheck disable=SC2016 # the script contains a literal $arch
+            sed 's|set_status "ci/lost/\$arch" error|true|' "$repo/tools/ci/report.sh" > "$work/report.sh"
             ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
         hold)
             # shellcheck disable=SC2016 # the script contains $(open_holds)
@@ -100,7 +104,7 @@ fault()
     esac
 }
 if [ "$mode" = texts ]; then
-    for name in report cilabel baseline again reread verdict rerun retry hold bisect items comment \
+    for name in report cilabel baseline again reread verdict rerun retry record hold bisect items comment \
         label intermittent newest recheck older refusal limit handoff; do
         fault "$name"
     done
@@ -135,7 +139,10 @@ case "$1 $2" in
             *) printf '%s\n' ci/core ci/core/i686 ci/core/x86_64 ci/full/i686 ci/full/x86_64 ;;
         esac ;;
     'api repos/test/rach2/actions/runs/1/attempts/1/jobs') echo "${CI_TEST_UNRUN:-}" ;;
-    'api repos/test/rach2/commits/bad/status') echo "${CI_TEST_ERRORS:-}" ;;
+    'api repos/test/rach2/statuses/bad') echo "${6#context=} ${4#state=}" >> "$CI_TEST_WORK/statuses" ;;
+    'api repos/test/rach2/commits/bad/status')
+        [ ! -f "$CI_TEST_WORK/statuses" ] ||
+            awk '{ s[$1] = $2 } END { for (c in s) if (s[c] == "error") printf "%s ", c }' "$CI_TEST_WORK/statuses" ;;
     'api '*) ;;
     'issue list')
         case "$*" in
@@ -214,10 +221,11 @@ PATH=$work/bin:$PATH
 export CI_TEST_WORK GITHUB_REPOSITORY GITHUB_SERVER_URL GITHUB_RUN_ID PATH
 cd "$work/tree"
 
-# clear: drop the passes, the open issue, its labels and the runs that rows
-# give the gh stand-in.
+# clear: drop the passes, the commit's statuses, the open issue, its labels
+# and the runs that rows give the gh stand-in.
 clear()
 {
+    rm -f "$work/statuses"
     CI_TEST_BASE='' CI_TEST_OPEN='' CI_TEST_OPEN_TITLE='' CI_TEST_LABELS=''
     CI_TEST_RUNS='' CI_TEST_RUNS_LABELLED=''
     export CI_TEST_BASE CI_TEST_OPEN CI_TEST_OPEN_TITLE CI_TEST_LABELS
@@ -225,7 +233,8 @@ clear()
 }
 
 # results KIND STATE: report a run of KIND whose x86_64 half passed and
-# whose i686 half ended in STATE.
+# whose i686 half ended in STATE, or for `swapped`, whose i686 half passed
+# and whose x86_64 half left no result.
 results()
 {
     kind=$1 state=$2 verdict=
@@ -243,6 +252,7 @@ results()
         runner) echo runner > "$result/failed"; : > "$result/done" ;;
         lost) rm -rf "$result"; verdict='done ' ;;
         lost-runner) rm -rf "$result"; verdict='done runner default' ;;
+        swapped) : > "$result/done"; : > "$result/failed"; rm -rf "$work/results/$kind-x86_64" ;;
     esac
     : > "$work/gh.log"
     VERDICT_i686=$verdict sh "$work/report.sh" "$kind" bad "$work/results" > "$work/report.log" 2>&1
@@ -281,22 +291,32 @@ lost()
 }
 
 # unrun: require a core run whose i686 job no runner took to give i686 the
-# status `error`, file nothing, leave `ci/core` unset and start ci.yml
-# again, and the same run on a commit that already has that status to report
-# the job as unfinished.
+# statuses `error` and `ci/lost/i686`, file nothing, leave `ci/core` unset
+# and start ci.yml again; a second run on the same commit that passes i686
+# and loses x86_64 to do the same for x86_64; and a third that loses i686
+# again, though its status is now a success, to report that job as
+# unfinished.
 unrun()
 (
+    clear
     CI_TEST_UNRUN='head,core (i686)'
     export CI_TEST_UNRUN
-    clear
     results core missing || return 1
     grep -q 'statuses/bad -f state=error -f context=ci/core/i686 ' "$work/gh.log" || return 1
+    grep -q 'statuses/bad -f state=error -f context=ci/lost/i686 ' "$work/gh.log" || return 1
     grep -q '^workflow run ci.yml --repo test/rach2 --ref master' "$work/gh.log" || return 1
     ! grep -q '^issue create ' "$work/gh.log" || return 1
     ! grep -q 'context=ci/core ' "$work/gh.log" || return 1
-    CI_TEST_ERRORS='ci/core/i686'
-    export CI_TEST_ERRORS
-    report core missing unfinished-core || return 1
+    CI_TEST_UNRUN='head,core (x86_64)'
+    results core swapped || return 1
+    grep -q 'statuses/bad -f state=success -f context=ci/core/i686 ' "$work/gh.log" || return 1
+    grep -q 'statuses/bad -f state=error -f context=ci/lost/x86_64 ' "$work/gh.log" || return 1
+    grep -q '^workflow run ci.yml ' "$work/gh.log" || return 1
+    ! grep -q '^issue create ' "$work/gh.log" || return 1
+    CI_TEST_UNRUN='head,core (i686)'
+    results core missing || return 1
+    grep -q '^issue create --repo test/rach2 --title ci: core: unfinished-core fails on i686 ' "$work/gh.log" || return 1
+    ! grep -q 'context=ci/lost/' "$work/gh.log" || return 1
     ! grep -q 'workflow run ci.yml' "$work/gh.log"
 )
 
@@ -590,7 +610,7 @@ if [ "$mode" = mutate ]; then
     if lost; then
         echo 'ci-test: result: fail: verdict fault passed' >&2; exit 1
     fi
-    for name in rerun retry; do
+    for name in rerun retry record; do
         fault "$name"
         if unrun; then
             echo "ci-test: result: fail: $name fault passed" >&2; exit 1
