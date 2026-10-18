@@ -448,7 +448,7 @@ bisect()
     if [ "$CI_TEST_FAIL" = 0 ]; then
         grep -q -- '--add-label intermittent' "$work/gh.log" || return 1
     else
-        grep -q 'fails .* and its parent good passes' "$work/gh.log" || return 1
+        grep -q 'is the first commit that fails .*; its parent, good, passes' "$work/gh.log" || return 1
     fi
 }
 
@@ -501,10 +501,10 @@ latest()
         *' 1/'*)
             grep -q -- '--add-label intermittent' "$work/gh.log" || return 1
             grep -q -- '--remove-label intermittent' "$work/gh.log" || return 1
-            grep -q "a newer failure, run ${2##* }, was reported since run 1" "$work/gh.log" ;;
+            grep -q "run ${2##* } has reported the failure since run 1" "$work/gh.log" ;;
         *)
             ! grep -q -- '--add-label intermittent' "$work/gh.log" || return 1
-            grep -q "a newer failure, run ${1##* }, was reported since run 1" "$work/gh.log" ;;
+            grep -q "run ${1##* } has reported the failure since run 1" "$work/gh.log" ;;
     esac
 }
 
@@ -528,12 +528,12 @@ handoff()
     printf 'run core bad\nrun core good\n' > "$work/expected"
     cmp -s "$work/expected" "$work/events" || return 1
     ! grep -q 'workflow run' "$work/gh.log" || return 1
-    grep -q 'fails .* and its parent good passes' "$work/gh.log" || return 1
+    grep -q 'is the first commit that fails .*; its parent, good, passes' "$work/gh.log" || return 1
     start
     status=0
     sh "$work/bisect.sh" -m 100 core i686 good bad 7 unfinished-core > "$work/bisect.log" 2>&1 || status=$?
     [ "$status" = 1 ] && [ ! -s "$work/events" ] || return 1
-    grep -q "unresolved: this run's 100 minutes" "$work/gh.log" || return 1
+    grep -q "unresolved: this run has 100 minutes" "$work/gh.log" || return 1
     CI_TEST_STEP=0
 }
 
@@ -550,7 +550,7 @@ suite()
         pass) printf 'make\ntests runner bad\n' > "$work/expected"
               verdict='--add-label intermittent' want=0 ;;
         fail) printf 'make\ntests runner bad\nmake\ntests runner bad\nmake\ntests runner good\n' > "$work/expected"
-              verdict='fails .* and its parent good passes' want=0 ;;
+              verdict='is the first commit that fails .*; its parent, good, passes' want=0 ;;
         refuse) printf 'make\ntests runner bad\n' > "$work/expected"
                 verdict='unresolved: bad could not be tested again' want=1 ;;
     esac

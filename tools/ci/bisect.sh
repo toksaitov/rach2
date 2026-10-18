@@ -101,11 +101,20 @@ case " $items " in
        done ;;
 esac
 
+# The subject of each verdict, and what failed as the verdicts name it: the
+# items in backticks, or the whole run for an unfinished one.
+on="Bisection on $ARCH"
+case $run_kind in
+    core) failed="the core tests" ;;
+    full) failed="the release tests" ;;
+    *) failed=$(echo "$items" | sed "s/^/\`/; s/ /\`, \`/g; s/\$/\`/") ;;
+esac
+
 say() { # say TEXT: print and post the verdict; return 1 if the comment fails
     echo "ci: bisect: $1"
-    gh issue comment "$issue" --repo "$repo" --body "bisect on $ARCH: $1
+    gh issue comment "$issue" --repo "$repo" --body "$1
 
-Logs: \`gh run download $GITHUB_RUN_ID --repo $repo --name bisect-$issue\`" > /dev/null ||
+The logs of each test: \`gh run download $GITHUB_RUN_ID --repo $repo --name bisect-$issue\`" > /dev/null ||
         { echo "ci: bisect: the comment on #$issue failed" >&2; return 1; }
 }
 
@@ -133,17 +142,17 @@ newest_or_exit() { # newest_or_exit [labelled]
     [ -n "$run" ] || return 0
     if newest=$(newest_run); then
         [ "$newest" != "$run" ] || return 0
-        why="$(short "$bad") passed $items when run again, but a newer failure, run $newest, was reported since run $run"
+        why="$on: $(short "$bad") passed $failed when run again, but run $newest has reported the failure since run $run, which started this bisection"
         stop=0
     else
-        why="unresolved: $(short "$bad") passed $items when run again, but the issue's runs could not be read"
+        why="$on is unresolved: $(short "$bad") passed $failed when run again, but the runs that the issue reports could not be read"
         stop=1
     fi
     if [ "${1-}" = labelled ]; then
         gh issue edit "$issue" --repo "$repo" --remove-label intermittent > /dev/null ||
             { echo "ci: bisect: the removal of the label on #$issue failed" >&2; stop=1; }
     fi
-    say "$why, so the issue is not labelled intermittent" || stop=1
+    say "$why, so the issue is not labelled intermittent." || stop=1
     exit "$stop"
 }
 
@@ -166,16 +175,16 @@ fits() { # fits COUNT
 # new run would have no more time than this one.
 handoff() { # handoff GOOD BAD
     if [ "$attempt" = 0 ]; then
-        say "unresolved: this run's $minutes minutes cannot hold its tests of $kind, $limit minutes each; narrow the range $(short "$1")..$(short "$2") by hand"
+        say "$on is unresolved: this run has $minutes minutes, too few for one test, which may take $limit minutes. Narrow the range $(short "$1")..$(short "$2") by hand."
         exit 1
     fi
     if ! gh workflow run bisect.yml --repo "$repo" --ref master -f kind="$kind" \
         -f arch="$ARCH" -f good="$1" -f bad="$2" -f items="$items" -f issue="$issue" -f confirmed=yes \
         -f run="$run"; then
-        say "unresolved: the run that would test $(short "$1")..$(short "$2") could not be started; narrow that range by hand"
+        say "$on is unresolved: the run that would test $(short "$1")..$(short "$2") could not be started. Narrow that range by hand."
         exit 1
     fi
-    say "$(short "$1") passes and $(short "$2") fails; this run has no time for another test, so a new bisect run continues with that range" || exit 1
+    say "$on continues in a new run: $(short "$1") passes and $(short "$2") fails, and this run has no time for another test." || exit 1
     exit 0
 }
 
@@ -245,9 +254,9 @@ case $verdict in
        gh issue edit "$issue" --repo "$repo" --add-label intermittent > /dev/null ||
            { echo "ci: bisect: the label on #$issue failed" >&2; status=1; }
        newest_or_exit labelled
-       say "$(short "$bad") passed $items when run again; the failure did not repeat, so the issue is intermittent and stays open" || status=1
+       say "$on: $(short "$bad") passed $failed when run again, so the failure did not repeat. The issue is labelled intermittent and stays open; it loses the label when the failure comes back." || status=1
        exit "$status" ;;
-    2) say "unresolved: $(short "$bad") could not be tested again"; exit 1 ;;
+    2) say "$on is unresolved: $(short "$bad") could not be tested again."; exit 1 ;;
 esac
 
 # The candidates, oldest first, and the index of the last that passed (-1
@@ -267,7 +276,7 @@ while [ $((hi - lo)) -gt 1 ]; do
     case $? in
         0) lo=$mid ;;
         1) hi=$mid ;;
-        *) say "unresolved: $(short "$(nth "$mid")") could not be tested; narrow the range $(short "$good")..$(short "$bad") by hand"
+        *) say "$on is unresolved: $(short "$(nth "$mid")") could not be tested. Narrow the range $(short "$good")..$(short "$bad") by hand."
            exit 1 ;;
     esac
 done
@@ -278,7 +287,7 @@ fits 2 || handoff "$parent" "$culprit"
 tested "$culprit"; again=$?
 tested "$parent"; before=$?
 if [ "$again" = 1 ] && [ "$before" = 0 ]; then
-    say "$(git log -1 --format='%h (%s)' "$culprit") fails $items and its parent $(short "$parent") passes, each twice. Fix forward if the fix is clear; otherwise revert $(short "$culprit") and reopen the issue it closed."
+    say "$on: $(git log -1 --format='%h (%s)' "$culprit") is the first commit that fails $failed; its parent, $(short "$parent"), passes. Each was tested twice. Fix forward if the fix is clear; otherwise revert $(short "$culprit") and reopen the issue it closed."
 else
-    say "unresolved: $(short "$culprit") and its parent $(short "$parent") did not repeat their results; narrow the range $(short "$good")..$(short "$bad") before reverting anything"
+    say "$on is unresolved: $(short "$culprit") and its parent $(short "$parent") did not give the same results when tested again. Narrow the range $(short "$good")..$(short "$bad") before reverting anything."
 fi
