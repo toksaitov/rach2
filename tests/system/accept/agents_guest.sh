@@ -24,12 +24,20 @@
 #   sleeps AGENT      print each process in the session that runs `sleep 600`.
 #   pane AGENT        print the pane's size, its terminal's size by stty, and
 #                     the number of clients attached to the session.
+#   screen AGENT [all]
+#                     print the agent's screen, or with `all` its whole
+#                     history.
 #   work AGENT        print the repository's commits, its greeting, the result
 #                     of its check at HEAD and the files `git status` lists.
 #   credentials MODE  print a line `FILE SHA256` for each credential file
 #                     of MODE, or `FILE missing`.
 #   secrets MODE      read a log on standard input and print how many of the
 #                     strings of MODE's credential files it has.
+#   redact            copy standard input to standard output with each
+#                     credential string replaced, as below.
+#   filtered MODE     print what `secrets MODE` counts in MODE's credential
+#                     files themselves after `redact`: `0 of N` when the
+#                     filter removes every string.
 #   setup             give the account the settings and dummy keys that
 #                     point every agent at the fake API server, for the QEMU
 #                     mode; the server's certificate authority is
@@ -40,6 +48,14 @@
 # keys `setup` writes and the token it gives gh. A credential's strings are
 # its runs of 16 or more of the characters a token is written with, and only
 # their count is printed.
+#
+# Every command but setup, secrets and redact, and run with start or resume,
+# prints through `redact`, so that no text read from the machine has a
+# credential when it reaches agents_accept.sh; run with once prints its
+# standard error there too. `redact` reads the credential
+# files of both modes that exist, replaces each of their strings with
+# `[credential]`, and then each run of 16 or more token characters that is
+# part of one, such as the half of a string a screen wraps.
 
 set -u
 export LC_ALL=C.UTF-8
@@ -98,15 +114,62 @@ descendants() {
         }' | sort -n
 }
 
-# credential_files MODE: print the credential files of MODE, a path to a line.
+# credential_files MODE: print the credential files of MODE, or with `all`
+# those of both modes, a path to a line.
 credential_files() {
-    if [ "$1" = qemu ]; then
+    if [ "$1" != lenovo ]; then
         printf '%s\n' "$DIR/keys/claude" "$DIR/keys/codex" "$DIR/keys/agy" "$DIR/keys/muse"
-    else
+    fi
+    if [ "$1" != qemu ]; then
         printf '%s\n' "$HOME/.claude/.credentials.json" "$HOME/.codex/auth.json" \
             "$HOME/.config/muse/auth.json"
     fi
     printf '%s\n' "$HOME/.config/gh/hosts.yml"
+}
+
+# credential_strings MODE: print the strings of MODE's credential files that
+# exist, each once, a string to a line.
+credential_strings() {
+    credential_files "$1" | while read -r file; do
+        [ ! -f "$file" ] || grep -oE '[A-Za-z0-9._~+/-]{16,}' "$file"
+    done | sort -u
+}
+
+# redact: copy standard input to standard output with the credential strings
+# of both modes, and the runs of token characters that are part of one,
+# replaced by `[credential]`.
+redact() {
+    awk -v list="$(credential_strings all)" '
+        function cut(text, string,    out, i) {
+            out = ""
+            while ((i = index(text, string)) > 0) {
+                out = out substr(text, 1, i - 1) "[credential]"
+                text = substr(text, i + length(string))
+            }
+            return out text
+        }
+        function part(run,    i) {
+            for (i = 1; i <= n; i++)
+                if (index(strings[i], run) > 0)
+                    return 1
+            return 0
+        }
+        BEGIN { n = split(list, strings, "\n") }
+        {
+            text = $0
+            for (i = 1; i <= n; i++)
+                if (strings[i] != "")
+                    text = cut(text, strings[i])
+            out = ""
+            while (match(text, /[A-Za-z0-9._~+\/-]+/)) {
+                run = substr(text, RSTART, RLENGTH)
+                if (RLENGTH >= 16 && part(run))
+                    run = "[credential]"
+                out = out substr(text, 1, RSTART - 1) run
+                text = substr(text, RSTART + RLENGTH)
+            }
+            print out text
+        }'
 }
 
 # setup: write the QEMU mode's dummy keys, the environment that points the
@@ -185,95 +248,125 @@ github.com:
 EOF
 }
 
-case ${1:-} in
-    prepare)
-        rm -rf "${DIR:?}/$2" && mkdir -p "$DIR/$2" && cp "$DIR"/fixture/* "$DIR/$2/" &&
-            cd "$DIR/$2" && git init -q --initial-branch=master &&
-            git config user.name 'Rach2 acceptance' &&
-            git config user.email accept@rach2.invalid &&
-            git config commit.gpgsign false && git add . && git commit -qm 'The fixture'
-        ;;
-    run)
-        line=$(command_line "$2" "$3") || { echo "guest: no action $3 for $2" >&2; exit 2; }
-        # shellcheck disable=SC2034 # the eval below reads it
-        MUSE_ARGS=
-        # shellcheck disable=SC1091 # the QEMU mode's environment
-        [ ! -f "$DIR/env" ] || . "$DIR/env"
-        if [ -d "$DIR/$2" ]; then
-            cd "$DIR/$2" || exit 1
-        fi
-        if [ "$3" = once ]; then
-            eval "timeout 600 $line"
-        else
-            eval "$line"
-        fi
-        echo "rach2-accept: ended with status $?"
-        ;;
-    version)
-        case $2 in
-            gh) out=$(gh --version | head -n 1) ;;
-            *) out=$("$2" --version 2>&1) ;;
-        esac
-        printf '%s\n' "$out"
-        sha256sum "$(readlink -f "$(type -P "$2")")"
-        ;;
-    pid)
-        root=$(pane_pid "$2") || exit 0
-        descendants "$root" | awk -v name="$2" '$3 == name { print $1; exit }'
-        ;;
-    exe)
-        pid=$(bash "$0" pid "$2")
-        [ -z "$pid" ] || readlink "/proc/$pid/exe"
-        ;;
-    sleeps)
-        root=$(pane_pid "$2") || exit 0
-        descendants "$root" | awk -v line="$CANCEL_LINE" '
-            { args = $0; sub(/^ *[0-9]+ +[0-9]+ +[^ ]+ +/, "", args) }
-            args == line { print $1 }'
-        ;;
-    pane)
-        tmux -L "$SERVER" display-message -p -t "$(session "$2")" \
-            '#{pane_width}x#{pane_height} #{pane_tty} #{session_attached}' 2> /dev/null |
-            while read -r size tty attached; do
-                printf '%s %s %s\n' "$size" "$(stty -F "$tty" size | awk '{ print $2 "x" $1 }')" \
-                    "$attached"
-            done
-        ;;
-    work)
-        cd "$DIR/$2" || exit 1
-        printf 'commits %s\n' "$(git rev-list --count HEAD)"
-        printf 'subject %s\n' "$(git log -1 --format=%s)"
-        printf 'greeting %s\n' "$(git show HEAD:greeting.txt)"
-        dir=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept-check.XXXXXX") || exit 1
-        git archive HEAD | tar -x -C "$dir"
-        printf 'check %s\n' "$(cd "$dir" && sh check.sh 2>&1)"
-        rm -rf "$dir"
-        printf 'status %s\n' "$(git status --porcelain | tr '\n' ' ')"
-        ;;
-    credentials)
-        credential_files "$2" | while read -r file; do
-            if [ -f "$file" ]; then
-                printf '%s %s\n' "$file" "$(sha256sum < "$file" | cut -d ' ' -f 1)"
-            else
-                printf '%s missing\n' "$file"
+# main COMMAND [AGENT] [ARGUMENT]: run COMMAND.
+main() {
+    case ${1:-} in
+        prepare)
+            rm -rf "${DIR:?}/$2" && mkdir -p "$DIR/$2" && cp "$DIR"/fixture/* "$DIR/$2/" &&
+                cd "$DIR/$2" && git init -q --initial-branch=master &&
+                git config user.name 'Rach2 acceptance' &&
+                git config user.email accept@rach2.invalid &&
+                git config commit.gpgsign false && git add . && git commit -qm 'The fixture'
+            ;;
+        run)
+            line=$(command_line "$2" "$3") || { echo "guest: no action $3 for $2" >&2; exit 2; }
+            # shellcheck disable=SC2034 # the eval below reads it
+            MUSE_ARGS=
+            # shellcheck disable=SC1091 # the QEMU mode's environment
+            [ ! -f "$DIR/env" ] || . "$DIR/env"
+            if [ -d "$DIR/$2" ]; then
+                cd "$DIR/$2" || exit 1
             fi
-        done
+            if [ "$3" = once ]; then
+                eval "timeout 600 $line"
+            else
+                eval "$line"
+            fi
+            echo "rach2-accept: ended with status $?"
+            ;;
+        version)
+            case $2 in
+                gh) out=$(gh --version | head -n 1) ;;
+                *) out=$("$2" --version 2>&1) ;;
+            esac
+            printf '%s\n' "$out"
+            sha256sum "$(readlink -f "$(type -P "$2")")"
+            ;;
+        pid)
+            root=$(pane_pid "$2") || exit 0
+            descendants "$root" | awk -v name="$2" '$3 == name { print $1; exit }'
+            ;;
+        exe)
+            pid=$(bash "$0" pid "$2")
+            [ -z "$pid" ] || readlink "/proc/$pid/exe"
+            ;;
+        sleeps)
+            root=$(pane_pid "$2") || exit 0
+            descendants "$root" | awk -v line="$CANCEL_LINE" '
+                { args = $0; sub(/^ *[0-9]+ +[0-9]+ +[^ ]+ +/, "", args) }
+                args == line { print $1 }'
+            ;;
+        pane)
+            tmux -L "$SERVER" display-message -p -t "$(session "$2")" \
+                '#{pane_width}x#{pane_height} #{pane_tty} #{session_attached}' 2> /dev/null |
+                while read -r size tty attached; do
+                    printf '%s %s %s\n' "$size" \
+                        "$(stty -F "$tty" size | awk '{ print $2 "x" $1 }')" "$attached"
+                done
+            ;;
+        work)
+            cd "$DIR/$2" || exit 1
+            printf 'commits %s\n' "$(git rev-list --count HEAD)"
+            printf 'subject %s\n' "$(git log -1 --format=%s)"
+            printf 'greeting %s\n' "$(git show HEAD:greeting.txt)"
+            dir=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept-check.XXXXXX") || exit 1
+            git archive HEAD | tar -x -C "$dir"
+            printf 'check %s\n' "$(cd "$dir" && sh check.sh 2>&1)"
+            rm -rf "$dir"
+            printf 'status %s\n' "$(git status --porcelain | tr '\n' ' ')"
+            ;;
+        credentials)
+            credential_files "$2" | while read -r file; do
+                if [ -f "$file" ]; then
+                    printf '%s %s\n' "$file" "$(sha256sum < "$file" | cut -d ' ' -f 1)"
+                else
+                    printf '%s missing\n' "$file"
+                fi
+            done
+            ;;
+        screen)
+            if [ "${3:-}" = all ]; then
+                tmux -u -L "$SERVER" capture-pane -p -S - -t "$(session "$2")"
+            else
+                tmux -u -L "$SERVER" capture-pane -p -t "$(session "$2")"
+            fi
+            ;;
+        secrets)
+            dir=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept-secrets.XXXXXX") || exit 1
+            cat > "$dir/log"
+            credential_strings "$2" > "$dir/strings"
+            printf '%s of %s strings\n' "$(grep -oFf "$dir/strings" "$dir/log" | sort -u | wc -l)" \
+                "$(wc -l < "$dir/strings")"
+            rm -rf "$dir"
+            ;;
+        redact)
+            redact
+            ;;
+        filtered)
+            credential_files "$2" | while read -r file; do
+                [ ! -f "$file" ] || cat "$file"
+            done | redact | main secrets "$2"
+            ;;
+        setup)
+            setup
+            ;;
+        *)
+            echo "usage: guest.sh COMMAND [AGENT] [ARGUMENT]" >&2
+            exit 2
+            ;;
+    esac
+}
+
+case ${1:-}.${3:-} in
+    setup.* | secrets.* | redact.* | run.start | run.resume)
+        main "$@"
         ;;
-    secrets)
-        dir=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept-secrets.XXXXXX") || exit 1
-        cat > "$dir/log"
-        credential_files "$2" | while read -r file; do
-            [ ! -f "$file" ] || grep -oE '[A-Za-z0-9._~+/-]{16,}' "$file"
-        done | sort -u > "$dir/strings"
-        printf '%s of %s strings\n' "$(grep -oFf "$dir/strings" "$dir/log" | sort -u | wc -l)" \
-            "$(wc -l < "$dir/strings")"
-        rm -rf "$dir"
-        ;;
-    setup)
-        setup
+    run.*)
+        main "$@" 2>&1 | redact
+        exit "${PIPESTATUS[0]}"
         ;;
     *)
-        echo "usage: guest.sh COMMAND [AGENT] [ARGUMENT]" >&2
-        exit 2
+        main "$@" | redact
+        exit "${PIPESTATUS[0]}"
         ;;
 esac

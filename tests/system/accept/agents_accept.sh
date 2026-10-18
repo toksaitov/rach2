@@ -40,6 +40,12 @@
 # machine at the end, and refuses to start when that directory exists
 # without the mark the script leaves in it.
 #
+# Each text the script reads from the machine, a screen, an answer or the
+# output of a step, passes first through a filter there that replaces each
+# string of a credential file with `[credential]`, so that the log has none
+# on any path to the script's exit. Before the sessions the script requires
+# the filter to remove every string of the credential files themselves.
+#
 # `lenovo` accepts the installed Lenovo as USER, the account the owner signed
 # in with, at ADDRESS, RACH2_MACHINE_ADDRESS or 192.168.0.106, by the key
 # RACH2_ACCEPT_KEY names or ssh's own. It reboots the machine as root by the
@@ -274,10 +280,10 @@ version_line() {
     esac
 }
 
-# screen [-S -]: print the agent's screen in the machine's tmux, or with
-# `-S -` its whole history.
+# screen [all]: print the agent's screen in the machine's tmux, or with `all`
+# its whole history.
 screen() {
-    m "tmux -u -L rach2-accept capture-pane -p $* -t rach2-accept-$agent" 2> /dev/null
+    guest screen "$agent" "$@" 2> /dev/null
 }
 
 # keys KEY...: type KEY in the host's window of the agent, into SSH's terminal.
@@ -588,7 +594,7 @@ step_session() {
     quit || return 1
     keys -l "bash ~/rach2-accept/guest.sh run $agent resume" && keys Enter
     idle "the reopened conversation" "$(scaled 300)" || return 1
-    OUT=$(screen -S - | awk '/rach2-accept: ended with status/ { text = "" } { text = text $0 "\n" }
+    OUT=$(screen all | awk '/rach2-accept: ended with status/ { text = "" } { text = text $0 "\n" }
         END { printf "%s", text }')
     case $OUT in
         *"sleep 600"*) say "$agent: reopened the conversation: OK" ;;
@@ -604,7 +610,7 @@ step_session() {
 # status 0.
 quit() {
     send "$QUIT" "$QUIT" "$QUIT" ended || return 1
-    ends=$(screen -S - | grep 'rach2-accept: ended with status')
+    ends=$(screen all | grep 'rach2-accept: ended with status')
     [ "$(printf '%s\n' "$ends" | tail -n 1)" = "rach2-accept: ended with status 0" ] ||
         bad "$agent: $QUIT ended it with [$(printf '%s\n' "$ends" | tail -n 1)]"
 }
@@ -758,6 +764,11 @@ guest credentials "$MODE" > "$work/credentials.before" || give_up "the credentia
 while read -r file digest; do
     [ "$digest" != missing ] || bad "no credential file $file"
 done < "$work/credentials.before"
+OUT=$(guest filtered "$MODE")
+case $OUT in
+    "0 of "[1-9]*) say "the machine's filter removes every credential string: OK" ;;
+    *) give_up "the machine's filter leaves [$OUT] of the credential files' strings" ;;
+esac
 
 h new-session -d -s accept -x 120 -y 40 -n script
 h set-option -g remain-on-exit on
