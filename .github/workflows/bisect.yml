@@ -15,8 +15,10 @@
 # `night`, the kind of the nightly runs that full runs replaced, which a
 # bisection started before them passes on. The job runs master's copy of the
 # script from outside the tree, since the script checks out each commit it
-# tests.
-name: bisect
+# tests. The run's title names the issue, by which the manager finds and
+# cancels the run of an issue that has been closed.
+name: Bisect a failure
+run-name: 'Bisect #${{ inputs.issue }}: ${{ inputs.items }} on ${{ inputs.arch }}'
 
 on:
   workflow_dispatch:
@@ -59,16 +61,18 @@ concurrency:
 
 jobs:
   bisect:
+    name: Find the commit that caused the failure
     runs-on: [self-hosted, rach2]
     timeout-minutes: 720
     steps:
-      - uses: actions/checkout@v5
+      - name: Check out master
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
           clean: false
           fetch-depth: 0
 
-      - name: bisect
+      - name: Test the commits since the last pass
         env:
           GH_TOKEN: ${{ github.token }}
           KIND: ${{ inputs.kind }}
@@ -90,9 +94,9 @@ jobs:
           # shellcheck disable=SC2086 # the items are one word each
           sh "$RUNNER_TEMP/bisect.sh" "$@" -m 700 "$KIND" "$ARCH_IN" "$GOOD" "$BAD" "$ISSUE" $ITEMS
 
-      - name: keep the logs
+      - name: Upload the logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bisect-${{ inputs.issue }}
           path: ${{ runner.temp }}/bisect

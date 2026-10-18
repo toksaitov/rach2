@@ -5,8 +5,9 @@
 # issue, bisection runs, their time limits and continuation, the run whose
 # issue bisection labels intermittent, a report and a bisection that
 # overlap, the kind an older commit's run.sh takes, a refused run in
-# bisection, and verdict errors. The scripts run in a private tree with
-# stand-ins for git, gh, make, timeout and the clock.
+# bisection, a bisection whose issue has been closed, and verdict errors.
+# The scripts run in a private tree with stand-ins for git, gh, make,
+# timeout and the clock.
 
 set -eu
 case ${1:-} in
@@ -101,11 +102,14 @@ fault()
         handoff)
             sed 's/fits 2 || handoff/: || handoff/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
             ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
+        closed)
+            sed 's/^    open_or_stop$/    :/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
+            ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
     esac
 }
 if [ "$mode" = texts ]; then
     for name in report cilabel baseline again reread verdict rerun retry record hold bisect items comment \
-        label intermittent newest recheck older refusal limit handoff; do
+        label intermittent newest recheck older refusal limit handoff closed; do
         fault "$name"
     done
     exit 0
@@ -157,6 +161,9 @@ case "$1 $2" in
                 echo "$CI_TEST_LABELS"
                 exit 0 ;;
             *' --json body,comments '*) ;;
+            *' --json state '*)
+                echo "${CI_TEST_STATE:-OPEN}"
+                exit 0 ;;
             *) exit 2 ;;
         esac
         runs=${CI_TEST_RUNS:-}
@@ -227,9 +234,9 @@ clear()
 {
     rm -f "$work/statuses"
     CI_TEST_BASE='' CI_TEST_OPEN='' CI_TEST_OPEN_TITLE='' CI_TEST_LABELS=''
-    CI_TEST_RUNS='' CI_TEST_RUNS_LABELLED=''
+    CI_TEST_RUNS='' CI_TEST_RUNS_LABELLED='' CI_TEST_STATE=''
     export CI_TEST_BASE CI_TEST_OPEN CI_TEST_OPEN_TITLE CI_TEST_LABELS
-    export CI_TEST_RUNS CI_TEST_RUNS_LABELLED
+    export CI_TEST_RUNS CI_TEST_RUNS_LABELLED CI_TEST_STATE
 }
 
 # results KIND STATE: report a run of KIND whose x86_64 half passed and
@@ -445,6 +452,20 @@ bisect()
     fi
 }
 
+# closed: bisect for an issue that has been closed, and require the script
+# to stop with status 0 before it tests a commit or comments.
+closed()
+(
+    CI_TEST_FAIL=1 CI_TEST_GH_FAIL='' CI_TEST_RUN=pass
+    export CI_TEST_FAIL CI_TEST_GH_FAIL CI_TEST_RUN
+    start
+    CI_TEST_STATE=CLOSED
+    sh "$work/bisect.sh" core i686 good bad 7 unfinished-core > "$work/bisect.log" 2>&1 || return 1
+    grep -q 'stopped: #7 was closed' "$work/bisect.log" || return 1
+    [ ! -s "$work/events" ] || return 1
+    ! grep -q 'issue comment 7 ' "$work/gh.log"
+)
+
 # older: bisect an unfinished full run on commits whose run.sh takes `night`
 # but not `full`, and require run.sh to be called with `night`.
 older()
@@ -575,6 +596,7 @@ rows()
     latest '1 2' || return 1
     latest 1 '1 2' || return 1
     handoff || return 1
+    closed || return 1
     for result in pass fail refuse; do
         suite "$result" || return 1
     done
@@ -666,8 +688,12 @@ if [ "$mode" = mutate ]; then
     if handoff; then
         echo 'ci-test: result: fail: handoff fault passed' >&2; exit 1
     fi
+    fault closed
+    if closed; then
+        echo 'ci-test: result: fail: closed fault passed' >&2; exit 1
+    fi
     cp "$repo/tools/ci/report.sh" "$work/report.sh"
     cp "$repo/tools/ci/bisect.sh" "$work/bisect.sh"
     rows
 fi
-echo 'ci-test: result: pass: unfinished runs, lost uploads, lost jobs, issue labels, the last pass, repeated failures, the hold issue, the runner suite, core items, time limits, continuation, the newest run, overlapping reports, older run scripts, a refused run and verdict errors'
+echo 'ci-test: result: pass: unfinished runs, lost uploads, lost jobs, issue labels, the last pass, repeated failures, the hold issue, the runner suite, core items, time limits, continuation, the newest run, overlapping reports, older run scripts, a refused run, a closed issue and verdict errors'

@@ -44,7 +44,9 @@
 # range is unresolved. The script checks out every commit it tests, so it
 # runs from a copy outside the tree. Each test's output is kept under
 # RUNNER_TEMP/bisect, one file for each commit and attempt, for the job to
-# upload. GH_TOKEN, GITHUB_REPOSITORY and GITHUB_RUN_ID come from the job.
+# upload. Before each test the script reads the issue, and once it has been
+# closed, since a fix has landed, it stops with status 0 and no comment.
+# GH_TOKEN, GITHUB_REPOSITORY and GITHUB_RUN_ID come from the job.
 #
 set -u
 
@@ -189,9 +191,17 @@ suites() { # suites ARGS...
     return 2
 }
 
+# Exit 0 when the issue has been closed; a state that cannot be read lets
+# the search go on.
+open_or_stop() {
+    state=$(gh issue view "$issue" --repo "$repo" --json state --jq .state) || return 0
+    [ "$state" != CLOSED ] || { echo "ci: bisect: stopped: #$issue was closed"; exit 0; }
+}
+
 # Build COMMIT and run the failing items on it: 0 when it passes, 1 when the
 # failure repeats, 2 when the commit is untestable.
 tested() { # tested COMMIT
+    open_or_stop
     attempt=$((attempt + 1))
     log="$logs/$attempt-$(short "$1")"
     test_end=$(($(date +%s) + limit * 60))
