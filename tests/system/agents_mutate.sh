@@ -1,10 +1,10 @@
 #!/bin/sh
-# agents_mutate.sh | --texts: show that `tests/run agents` catches a fault in
-# each of the agents layer's installs of gh, Claude Code, Codex, Antigravity
-# CLI and muse, one in the project's loops, and one in the kernel that Claude
-# Code's sessions meet.
+# agents_mutate.sh [FAULT...] | --texts: show that `tests/run agents` catches
+# a fault in each of the agents layer's installs of gh, Claude Code, Codex,
+# Antigravity CLI and muse, two in the project's loops, and one in the kernel
+# that Claude Code's sessions meet.
 #
-# Usage: sh tests/system/agents_mutate.sh | --texts
+# Usage: sh tests/system/agents_mutate.sh [FAULT...] | --texts
 # Five faults are in recipes of vendor/gnu/agents/packages/. Those of gh and
 # muse point the program's link in /usr/bin, which the recipe makes, at a
 # file the package does not have, so that the path finds no such program.
@@ -21,17 +21,47 @@
 # from going on past /proc/PID/fd/N of a file or a directory, with ENOTDIR,
 # as Rach2 did before it followed the link; Claude Code's Bash tool makes its
 # files through such a path, so the claude-print and claude-screen rows must
-# fail. The suite runs only the rows of these seven, through
-# RACH2_AGENTS_ROWS: it must pass, fail on each of them with the seven
-# faults in their sources and the root and the kernel built again, and pass
-# again with the sources restored. The suite is x86-64 only. --texts checks
-# that each fault is once in its source.
+# fail. The eighth makes tools/flow/worker.sh give its session the prompt
+# with `@ISSUE@` in place of the issue's number, which the worker-session
+# row's verifier must find in the first request of the session on #901.
+# The suite runs only the rows of these eight, through RACH2_AGENTS_ROWS:
+# it must pass, fail on each of them with the eight faults in their sources
+# and the root and the kernel built again, and pass again with the sources
+# restored. FAULT, one of the names in `faults` below, proves only the rows
+# of the faults named. The suite is x86-64 only. --texts checks that each
+# fault is once in its source.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-faults="gh claude codex agy muse limited procfs"
-rows="gh claude codex agy muse limited_test claude-print claude-screen"
+faults="gh claude codex agy muse limited procfs worker"
+
+# fault_rows NAME: the rows that fault NAME must fail.
+fault_rows()
+{
+    case $1 in
+        limited) echo limited_test ;;
+        procfs) echo claude-print claude-screen ;;
+        worker) echo worker-session ;;
+        *) echo "$1" ;;
+    esac
+}
+
+# fault_failure NAME: print, a line each, what the suite's output must have
+# with fault NAME in its source.
+fault_failure()
+{
+    case $1 in
+        gh) echo 'AGENTROW FAIL gh: gh --version: status 127' ;;
+        claude) echo 'AGENTROW FAIL claude: claude update: status 1' ;;
+        codex) echo 'AGENTROW FAIL codex: the processes: got [' ;;
+        agy) echo "AGENTROW FAIL agy: the updater's setting in a login shell: got [false], want [true]" ;;
+        muse) echo 'AGENTROW FAIL muse: muse --version: status 127' ;;
+        limited) echo 'AGENTROW FAIL limited_test: limited_test.sh --mutate: status' ;;
+        procfs) printf '%s\n' 'agents-test: claude-print: FAIL' 'agents-test: claude-screen: FAIL' ;;
+        worker) echo "the session has no worker's prompt for #901" ;;
+    esac
+}
 
 # fault_file NAME: the file that fault NAME goes into: tools/flow/lib.sh for
 # `limited`, rach2/sys/fs/procfs.c for `procfs`, and otherwise the recipe of
@@ -41,6 +71,7 @@ fault_file()
     case $1 in
         limited) echo tools/flow/lib.sh ;;
         procfs) echo rach2/sys/fs/procfs.c ;;
+        worker) echo tools/flow/worker.sh ;;
         *) echo "vendor/gnu/agents/packages/$1.sh" ;;
     esac
 }
@@ -75,6 +106,9 @@ elif name == 'limited':
 elif name == 'procfs':
     old = 'if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) && e->ofd && e->ofd->vmnt) {'
     new = 'if (0) {'
+elif name == 'worker':
+    old = '    prompt=$(sed "s/@ISSUE@/$1/g" "$state/run/worker.txt")\n'
+    new = '    prompt=$(cat "$state/run/worker.txt")\n'
 else:
     old = f'ln -s ../../opt/{name}/bin/{name} "$1/usr/bin/{name}"'
     new = f'ln -s ../../opt/{name}/bin/{name}.missing "$1/usr/bin/{name}"'
@@ -94,6 +128,20 @@ fi
 
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" agents-mutation "$repo/tests/system/agents_mutate.sh" "$@"
+
+if [ "$#" -gt 0 ]; then
+    for name; do
+        case " $faults " in
+            *" $name "*) ;;
+            *) echo "agents-mutation: no fault named $name" >&2; exit 2 ;;
+        esac
+    done
+    faults=$*
+fi
+rows=
+for name in $faults; do
+    rows="$rows $(fault_rows "$name")"
+done
 
 mkdir -p build
 work=
@@ -151,15 +199,14 @@ for name in $faults; do
 done
 cc -O2 -Wall -Wextra -Werror tests/system/runner/runutil.c -o "$work/runutil"
 
-# run_phase PHASE EXPECTED...: run the suite's rows of the faults, which
-# builds the root and the kernel again when a source changed. With EXPECTED
-# `pass` it must pass; otherwise it must fail with each EXPECTED in its
-# output.
+# run_phase PHASE pass|fail: run the suite's rows of the faults, which
+# builds the root and the kernel again when a source changed. With `pass` it
+# must pass; with `fail` it must fail with what fault_failure prints for each
+# fault in its output.
 run_phase()
 {
     phase=$1
-    shift
-    expected=$1
+    expected=$2
     ARCH=x86_64 RACH2_AGENTS_ROWS=$rows "$work/runutil" group tests/run agents \
         >"$work/$phase.log" 2>&1 &
     child=$!
@@ -173,11 +220,14 @@ run_phase()
         [ "$status" -ne 0 ] || {
             echo "agents-mutation: fault passed: $phase" >&2; exit 1;
         }
-        for line in "$@"; do
+        for name in $faults; do
+            fault_failure "$name"
+        done > "$work/expected"
+        while IFS= read -r line; do
             grep -F "$line" "$work/$phase.log" >/dev/null || {
                 echo "agents-mutation: wrong failure: $phase: no $line" >&2; exit 1;
             }
-        done
+        done < "$work/expected"
     fi
     echo "agents-mutation: result: $phase status $status"
 }
@@ -190,13 +240,7 @@ for name in $faults; do
     apply_fault "$name"
     touch "$(fault_file "$name")"
 done
-run_phase faults 'AGENTROW FAIL gh: gh --version: status 127' \
-    'AGENTROW FAIL claude: claude update: status 1' \
-    'AGENTROW FAIL codex: the processes: got [' \
-    "AGENTROW FAIL agy: the updater's setting in a login shell: got [false], want [true]" \
-    'AGENTROW FAIL muse: muse --version: status 127' \
-    'AGENTROW FAIL limited_test: limited_test.sh --mutate: status' \
-    'agents-test: claude-print: FAIL' 'agents-test: claude-screen: FAIL'
+run_phase faults fail
 restore
 run_phase restored pass
 for name in $faults; do
