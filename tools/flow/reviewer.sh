@@ -108,15 +108,13 @@ findings()
             i=$((i + 1))
             continue
         fi
-        body="Found by the review of phase #$1 at $2, which \`tools/flow/reviewer.sh\` ran with $agent.
-
-Severity: $(get severity). In \`$(get file):$(get line)\`.
-
-$(get claim)
+        body="$(get claim)
 
 Evidence: $(get evidence)
 
-Fix: $(get fix)
+Suggested fix: $(get fix)
+
+Severity: $(get severity). The code is at \`$(get file):$(get line)\`. The review of phase #$1 at commit $2, which \`tools/flow/reviewer.sh\` ran with $agent, found it.
 
 Part of #$1."
         if url=$(gh issue create --repo "$REPO" --title "$(get title)" --label bug --body "$body"); then
@@ -151,16 +149,23 @@ finish()
     complete=$(jq -r '.complete' "$base.json")
     if [ ! -e "$base.commented" ]; then
         filed=$(awk '{ printf "%s#%s", s, $2; s = " " }' "$base.filed" 2> /dev/null)
+        case $filed in
+            '') found="It filed no issues." ;;
+            *' '*) found="It filed its findings as the issues $filed." ;;
+            *) found="It filed its finding as the issue $filed." ;;
+        esac
         if [ "$complete" = true ]; then
-            record="review: $from..$to complete"
+            record="The review read every commit of the range. The line below is its record, which \`board.sh phase\` reads:
+
+review: $from..$to complete"
         else
-            record="The review is incomplete; it did not read: $(jq -r .unreviewed "$base.json")"
+            record="The review is incomplete, so the phase gets the label \`review-failed\`. It did not read: $(jq -r .unreviewed "$base.json")"
         fi
-        gh issue comment "$p" --repo "$REPO" --body "Review of the commits $from..$to of this phase by \`tools/flow/reviewer.sh\` with $agent ($LEAD at $LEAD_EFFORT effort, at most $SUBAGENTS subagents at a time of $SUB at $SUB_EFFORT), in $took seconds.
+        gh issue comment "$p" --repo "$REPO" --body "The review of the commits $(echo "$from" | cut -c 1-8)..$(echo "$to" | cut -c 1-8) of this phase has ended. $found
 
 $(jq -r .summary "$base.json")
 
-Filed: ${filed:-none}
+\`tools/flow/reviewer.sh\` ran the review with $agent: $LEAD at $LEAD_EFFORT effort as the lead, with at most $SUBAGENTS subagents at a time of $SUB at $SUB_EFFORT effort. It took $((took / 60)) minutes and $((took % 60)) seconds.
 
 $record" > /dev/null || return 1
         : > "$base.commented"
@@ -187,7 +192,7 @@ publish()
 {
     read -r p out why < "$state/failure" || return 1
     if [ ! -e "$state/failure.commented" ]; then
-        gh issue comment "$p" --repo "$REPO" --body "The review of this phase failed: $why. Its output is \`$out.*\` on the reviewer's machine. Remove the label \`review-failed\` to review the range again." > /dev/null ||
+        gh issue comment "$p" --repo "$REPO" --body "The review of this phase failed: $why. Its output is in \`$out.*\` on the computer that runs the reviewer loop. Removing the label \`review-failed\` makes the loop review the range again." > /dev/null ||
             return 1
         : > "$state/failure.commented"
     fi
