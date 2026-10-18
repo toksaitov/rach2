@@ -1355,13 +1355,13 @@ static int32_t exec_open(struct exec_file *f, const char *path, int end, struct 
  * `s` has open is not an ELF image: `exec_shebang` rewrites the arguments,
  * and the interpreter is opened in the script's place, as the program the
  * new address space keeps and is named by, which is Linux's exe for a
- * script; a name the script's descriptor gave (`exec_open`) is dropped. A
- * set-id script runs as its invoker, as on Linux: the interpreter is what
- * runs, it is not set-id, and the script's bits would be unsafe, since the
- * interpreter can be made to read a different file than the one whose bits
- * were checked. An interpreter that is itself a script is -ENOEXEC: nothing
- * here needs a chain of them, and a chain could loop. 0, -ENOEXEC, or an
- * error of the open or the read.
+ * script: its open (`exec_keep`) replaces the script's name, the one its
+ * descriptor gave among them. A set-id script runs as its invoker, as on
+ * Linux: the interpreter is what runs, it is not set-id, and the script's
+ * bits would be unsafe, since the interpreter can be made to read a
+ * different file than the one whose bits were checked. An interpreter that
+ * is itself a script is -ENOEXEC: nothing here needs a chain of them, and a
+ * chain could loop. 0, -ENOEXEC, or an error of the open or the read.
  */
 static int32_t exec_script(struct exec_state *s)
 {
@@ -1378,8 +1378,6 @@ static int32_t exec_script(struct exec_state *s)
     rc = exec_shebang(s, &s->argc, exec_file_read, &s->prog);
     exec_file_close(&s->prog);
     mm_exe_close(s->mm);
-    kfree(s->mm->exe);
-    s->mm->exe = NULL;
     if (rc <= 0) {
         return rc < 0 ? rc : -ENOEXEC;
     }
