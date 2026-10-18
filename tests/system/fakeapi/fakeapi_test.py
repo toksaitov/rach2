@@ -7,8 +7,9 @@ Usage: fakeapi_test.py [--mutate | --texts]
 With no argument it runs the tests, as `tests/run host` does. --mutate runs
 them against a private copy of fakeapi.py for each fault in FAULTS, and
 requires each copy to fail its fault's test and no other: in one a repeated
-step is used up by the first request that plays it, in the other a
-connection that ends in a WebSocket exchange is only logged. It then runs
+step is used up by the first request that plays it, in another a
+connection that ends in a WebSocket exchange is only logged, and in the
+third the exchange begins only after its upgrade is sent. It then runs
 them against fakeapi.py as it is, which must pass; nothing in the tree
 changes. --texts checks that each fault's text is once in fakeapi.py.
 """
@@ -32,6 +33,11 @@ FAULTS = [
     ("test_reset",
      '            if peer.socket is not None and not (peer.finished or peer.failed):\n',
      '            if False:\n'),
+    ("test_reset",
+     '        self.socket = WebSocket(self)\n'
+     '        self.wfile.write(head(101, headers))\n',
+     '        self.wfile.write(head(101, headers))\n'
+     '        self.socket = WebSocket(self)\n'),
 ]
 
 
@@ -102,6 +108,17 @@ class Wire:
         return part
 
 
+class Reset:
+    """A connection the client has reset, which takes no bytes."""
+
+    def write(self, data):
+        """Raise ConnectionResetError."""
+        raise ConnectionResetError(104, "Connection reset by peer")
+
+    def flush(self):
+        """Do nothing, there being nothing buffered."""
+
+
 def frame(opcode, data):
     """Return a client's masked WebSocket frame of OPCODE with DATA."""
     mask = b"\x01\x02\x03\x04"
@@ -121,9 +138,10 @@ class WebSocketTest(unittest.TestCase):
         """Remove the record."""
         os.unlink(self.record)
 
-    def play(self, sent):
+    def play(self, sent, wfile=None):
         """Serve the upgrade to a client that sends SENT and then resets the
-        connection; return the verdict and the number of failures."""
+        connection, writing to WFILE, a buffer when it is None; return the
+        verdict and the number of failures."""
         steps = [{"request": {"path": "/ws"},
                   "reply": {"websocket": [{"expect": "hello"}, {"send": "bye"}]}}]
         server = fakeapi.Server({"protocol": "plain", "steps": steps}, self.record, None)
@@ -132,7 +150,7 @@ class WebSocketTest(unittest.TestCase):
                                    ("Connection", "Upgrade"),
                                    ("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")], b"")
         try:
-            server.serve(upgrade, Wire(sent), io.BytesIO())
+            server.serve(upgrade, Wire(sent), wfile or io.BytesIO())
             return server.verdict(), len(server.failures)
         finally:
             server.record_file.close()
@@ -142,9 +160,11 @@ class WebSocketTest(unittest.TestCase):
         self.assertEqual(self.play(frame(0x1, b"hello") + frame(0x8, b"\x03\xe8")), (0, 0))
 
     def test_reset(self):
-        """A reset before the expected message fails the run, and the step
-        is not played; one in the closing handshake does neither."""
+        """A reset before the expected message, the upgrade's among them,
+        fails the run, and the step is not played; one in the closing
+        handshake does neither."""
         self.assertEqual(self.play(b""), (1, 1))
+        self.assertEqual(self.play(frame(0x1, b"hello"), Reset()), (1, 1))
         self.assertEqual(self.play(frame(0x1, b"hello")), (0, 0))
 
 

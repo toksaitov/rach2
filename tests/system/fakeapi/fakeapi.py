@@ -342,6 +342,8 @@ class Peer:
 
         PROTOCOL, when given, is the subprotocol the server answers with. No
         extension is accepted, so the client sends its messages uncompressed.
+        The exchange begins before the upgrade is sent, so a connection that
+        ends while it is sent fails the step.
         """
         key = self.request.header("sec-websocket-key") or ""
         accept = base64.b64encode(hashlib.sha1((key + WEBSOCKET_GUID).encode()).digest())
@@ -349,10 +351,10 @@ class Peer:
                    ("Sec-WebSocket-Accept", accept.decode())]
         if protocol:
             headers.append(("Sec-WebSocket-Protocol", protocol))
-        self.wfile.write(head(101, headers))
-        self.wfile.flush()
         self.keep = False
         self.socket = WebSocket(self)
+        self.wfile.write(head(101, headers))
+        self.wfile.flush()
         return self.socket
 
 
