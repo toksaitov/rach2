@@ -1,6 +1,6 @@
-# Incidents of the loops, 2026-10-15 and 16
+# Incidents of the loops, 2026-10-15 to 18
 
-The faults that the process of `AGENTS.md` showed in its first two days with the worker, manager and reviewer loops, each with its cause, its fix and the rule that now covers it. Times are UTC.
+The faults that the process of `AGENTS.md` showed with the worker, manager and reviewer loops, each with its cause, its fix and the rule that now covers it. Times are UTC.
 
 ## The night
 
@@ -32,6 +32,12 @@ The faults that the process of `AGENTS.md` showed in its first two days with the
 
 * It reported the queue empty without reading Backlog, started the night twice with work outstanding, the second time with the review of #73 still to run, and said that #262's regeneration would not affect the night, though it changes the boot code that the suites run.
 * After the night of `d2905082` failed, it wrote the morning report and stopped, where it should have run the night again and updated the Lenovo; the manager now does both.
+
+## Runner maintenance
+
+The i686 job of core run 39075207761 at `67ee39b8` stopped before any worker started (#524). The listener of `rach2-ci-1` accepted it at 22:44:01 on 2026-10-17. Its first request to renew the job timed out after 100 seconds at 22:45:41. Maintenance for #522 stopped the listener at 22:45:48, while the accepted job still waited for renewal. GitHub reported lost communication at 22:54:01. No build or suite ran, and no i686 artifact was uploaded; x86-64 passed the same commit. WSL restarted at 02:35 on 2026-10-18, and CI and bisection started again on the restored runners.
+
+The process check had missed a job accepted by the listener before it started `Runner.Worker`. `tools/Readme.md` now requires checking GitHub's runner state and the listener's accepted jobs before maintenance, and checking again after stopping services for a job accepted during the checks. The testing skill directs maintenance to that procedure.
 
 ## Open
 

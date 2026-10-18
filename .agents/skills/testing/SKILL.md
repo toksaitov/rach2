@@ -15,6 +15,7 @@ description: Run suites, full sets, analyses or mutation tests on the testing ho
 
 ## Running
 
+* Before maintenance that stops the testing host or its CI runners, follow the accepted-job checks in `tools/Readme.md`. A runner can have an active job before its worker process starts; wait for the job to finish before stopping its service.
 * Try a new row (one check in a suite), suite or tool small first, on the smallest inputs that exercise every step: a 64 MiB disk where the real one is 232 GiB. Start it at full size only after it passes there.
 * Never build while a run is in flight. The suites read the kernel and the images from `build/`, so a build part way through changes what the remaining suites boot and what the finished ones were judged on, and the run is void. Check with `ps` for a run in progress before `make`, and wait for it or stop it deliberately.
 * Watch a run in flight. Stream its log and act on the first failing line, since most failures come in the first seconds. Do not sleep until the run ends to find out how it ended.
