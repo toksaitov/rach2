@@ -1,0 +1,46 @@
+{
+  "hosts": ["fakeapi.test", "api.anthropic.com", "platform.claude.com", "claude.com",
+            "downloads.claude.ai", "raw.githubusercontent.com",
+            "http-intake.logs.us5.datadoghq.com"],
+  "session": {
+    "protocol": "anthropic",
+    "steps": [
+      {"protocol": "plain", "unordered": true,
+       "request": {"path": "/api/hello", "headers": {"Host": "api.anthropic.com"}},
+       "reply": {"json": {"message": "hello"}}},
+      {"protocol": "plain", "unordered": true,
+       "request": {"path": "/v1/oauth/hello", "headers": {"Host": "platform.claude.com"}},
+       "reply": {"json": {"message": "hello"}}},
+      {"unordered": true,
+       "body": {"tools": [], "output_config": {"format": {"type": "json_schema"}}},
+       "reply": [{"type": "text", "text": "{\"title\": \"Greet Rach2\"}"}]},
+      {"tools": ["Read", "Bash", "Edit"],
+       "reply": [{"type": "tool_use", "id": "toolu_notes", "name": "Read",
+                  "input": {"file_path": "@REPO@/notes.txt"}}]},
+      {"results": [{"id": "toolu_notes",
+                    "contains": ["Change the greeting in greeting.txt to: hello, rach2"]}],
+       "reply": [{"type": "tool_use", "id": "toolu_greeting", "name": "Read",
+                  "input": {"file_path": "@REPO@/greeting.txt"}}]},
+      {"results": [{"id": "toolu_greeting", "contains": ["hello, world"]}],
+       "reply": [{"type": "tool_use", "id": "toolu_edit", "name": "Edit",
+                  "input": {"file_path": "@REPO@/greeting.txt", "old_string": "hello, world",
+                            "new_string": "hello, rach2"}}]},
+      {"results": [{"id": "toolu_edit", "contains": ["greeting.txt", "successfully"]}],
+       "reply": [{"type": "tool_use", "id": "toolu_commit", "name": "Bash",
+                  "input": {"command": "sh check.sh && git commit -q -am 'Greet Rach2' && git log --format=%s -1",
+                            "description": "Check the greeting and commit it"}}]},
+      {"results": [{"id": "toolu_commit", "contains": ["check: ok", "Greet Rach2"]}],
+       "reply": [{"type": "text",
+                  "text": "greeting.txt says hello, rach2, check.sh passes, and the change is committed."}]},
+      {"results": [{"id": "toolu_commit", "contains": ["check: ok", "Greet Rach2"]}],
+       "reply": [{"type": "tool_use", "id": "toolu_sleep", "name": "Bash",
+                  "input": {"command": "sleep 600", "description": "Wait ten minutes"}}]}
+    ]
+  },
+  "after": {
+    "protocol": "anthropic",
+    "steps": [
+      {"reply": [{"type": "text", "text": "signed in"}]}
+    ]
+  }
+}

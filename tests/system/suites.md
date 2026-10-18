@@ -4,6 +4,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 
 * `gnu` (full tier; needs qemu, ssh, scp, sftp, debugfs, python3; 2048 MiB): the GNU system on its ext2 root, driven over OpenSSH with nobody at the console, logged in to by key and by password, and each port, GCC, GNU make, GDB, the SpiderMonkey shell and chromium-headless-shell doing its main job on the machine.
 * `agents` (full tier; needs qemu, ssh, scp, debugfs, python3, openssl, git; 4096 MiB; x86_64 only): the agents layer on the x86-64 GNU system, and the tests of the project's loops there, each row run over OpenSSH as the test account on a machine whose only route out is to the fake API server on the host.
+* `agentsaccept` (full tier; needs qemu, ssh, python3, openssl, tmux; 4096 MiB; x86_64 only): the rehearsal of the agents' acceptance on the Lenovo, tests/system/accept/agents_accept.sh in its QEMU mode, on the root the agents suite boots: each agent's session in tmux over SSH, cancelled, resized, reconnected and reopened, a reboot, and each agent's answer after it, against the fake API server.
 * `install` (full tier; needs qemu, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the machine installs its own kernel.
 * `selfbuild` (full tier; needs qemu, mformat, mmd, mcopy; 128 MiB): the machine builds its own kernel.
 * `installer-repair` (full tier; needs qemu, qemu-system-x86_64, qemu-img, xorriso, shasum, ssh, ssh-keygen, mcopy, mmd, mdeltree, mtype, minfo, debugfs; 128 MiB): the other half, the machine that will not boot.

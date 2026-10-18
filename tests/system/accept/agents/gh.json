@@ -1,0 +1,12 @@
+{
+  "hosts": ["api.github.com", "github.com"],
+  "after": {
+    "protocol": "plain",
+    "steps": [
+      {"request": {"path": "/",
+                   "headers": {"Host": "api.github.com",
+                               "Authorization": "token gho_rach2offlinedummytoken0000000000"}},
+       "reply": {"headers": {"X-Oauth-Scopes": "repo, read:org"}, "json": {}}}
+    ]
+  }
+}

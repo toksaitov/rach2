@@ -80,6 +80,8 @@ GNU_PORT        := $(call port,2296)
 FAKEAPI_PORT    := $(call port,2300)
 AGENTS_PORT     := $(call port,2301)
 AGENTS_API_PORT := $(call port,2302)
+AGENTSACCEPT_PORT     := $(call port,2303)
+AGENTSACCEPT_API_PORT := $(call port,2304)
 SEALED_PORT     := $(call port,2297)
 DRILL_PORT      := $(call port,2298)
 PROCFILES_PORT  := $(call port,2299)
@@ -1544,6 +1546,16 @@ AGENTS_TEST_DISK = $(IMAGES_DIR)/agents-test.disk
 run-agents: $(DEMO_CREDS) rach2 os-real-gnu-agents-ext2 $(DEADLINE) $(RUNUTIL) $(MKMBR)
 	sh tests/system/suites/agents.sh $(BOOT_KERNEL) $(OS_REAL_GNU_AGENTS_EXT2) $(AGENTS_TEST_DISK) \
 	    $(AGENTS_PORT) $(AGENTS_API_PORT)
+
+# `tests/run agentsaccept`: the rehearsal of the agents' acceptance on the
+# Lenovo, tests/system/accept/agents_accept.sh in its QEMU mode, on the root
+# the agents suite boots: each agent's session in tmux over SSH, cancelled,
+# resized, reconnected and reopened, a reboot, and each agent's answer after
+# it, against the fake API server.
+AGENTSACCEPT_DISK = $(IMAGES_DIR)/agentsaccept-test.disk
+run-agentsaccept: $(DEMO_CREDS) rach2 os-real-gnu-agents-ext2 $(RUNUTIL) $(MKMBR)
+	sh tests/system/accept/agents_accept.sh qemu $(BOOT_KERNEL) $(OS_REAL_GNU_AGENTS_EXT2) \
+	    $(AGENTSACCEPT_DISK) $(AGENTSACCEPT_PORT) $(AGENTSACCEPT_API_PORT)
 
 # `tests/run exfat`: exFAT written from a program, read back after a reboot,
 # judged by the host's reader and the external checker where the host has

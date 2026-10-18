@@ -36,6 +36,7 @@
 # when its longest member does, so the long suites are listed first.
 gnu|qemu,ssh,scp,sftp,debugfs,python3|full|gnu-test*|2048
 agents|qemu,ssh,scp,debugfs,python3,openssl,git|full||4096|x86_64
+agentsaccept|qemu,ssh,python3,openssl,tmux|full||4096|x86_64
 install|qemu,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 selfbuild|qemu,mformat,mmd,mcopy|full|selfbuild-test*,selfbuild.*,selfbuild/*
 installer-repair|qemu,qemu-system-x86_64,qemu-img,xorriso,shasum,ssh,ssh-keygen,mcopy,mmd,mdeltree,mtype,minfo,debugfs|full

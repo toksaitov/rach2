@@ -168,6 +168,7 @@ These two run no test on the unmodified tree: they require the kernel rebuilt at
 * `init_refusal_mutate.sh`, `gpt_write_mutate.sh` and `servicelog_mutate.sh`: the `bootline` suite's init refusal, the `parts` suite's GPT write refusal and the `servicelog` suite.
 * `install_keys_mutate.sh`, `install_stick_mutate.sh`, `recovery_disk_key_mutate.sh` and `rehearse_group_mutate.sh`: rows of the installer suites.
 * `metal_fat_mutate.sh` and `accept/installed_mutate.sh`: the acceptance rows of the `metal` suite.
+* `accept/agents_accept_mutate.sh`: the `agentsaccept` suite's resized terminal, against a kernel whose pseudo-terminal master sends no `SIGWINCH` when the window size is set.
 * `harness_input_mutate.sh`: the harness's self-test.
 * `host_tools_mutate.sh`: the host tests of the KRFFS tools and of the kernel's KRFFS hash, and the style suite's checks of build rules and probes.
 
@@ -183,6 +184,8 @@ These are tests of scripts, build rules and host helpers, run against private co
 Acceptance of a real machine is not a suite: no `tests/run` set includes it, and the hardware rules of `AGENTS.md` govern it. `accept/metal_accept.sh HOST [PORT] [STICK-SERIAL]` is its scripted half. Over SSH as root, or as an account through `su` with `RACH2_ACCEPT_SU=1` and `accept/su_command.sh`, it reads the machine's identity, network, entropy, disks and devices, fetches its boot log, compares the facts that have a baseline, checks the installed ext2 root, and writes only the root, a loop image under `/tmp`, and the stick whose serial it is given. It writes its records under `build/images`, which it creates, and its image row needs the host KRFFS tools that `make krffs` builds. Its header comment gives its variables, and a comment before each part of the script describes the row.
 
 The `metal` suite rehearses it against a QEMU machine. Before the rehearsal it runs `accept/transport_test.sh`, the whole script against private SSH and `su` fixtures, and `accept/password_test.sh`, the `su` helper against a dummy SSH peer on a real pseudo-terminal; after it, `accept/installed_test.sh` boots the installed-root rows on small GRUB disks with an MBR and with a GUID table.
+
+`accept/agents_accept.sh lenovo USER [ADDRESS]` accepts the coding agents of the agents layer on the installed Lenovo, once the owner has signed in to each as USER; [the agents layer's Readme](../../vendor/gnu/agents/Readme.md#use) gives the owner's commands. From this host it works in each agent's screen as a person does, in tmux over SSH: a change in a disposable repository, tested and committed, a cancelled turn, a resized terminal, a lost connection and a reopened conversation; then it reboots the machine and requires the credentials, the versions and each agent's answer to a request after it. Its machine half, `accept/agents_guest.sh`, runs on the machine. The `agentsaccept` suite runs the same script in its QEMU mode, on the GNU root with the agents layer, against the fake API server, which plays `accept/agents/AGENT.json` for each program. The script's header comment describes each step and what it requires.
 
 ## Adding tests
 

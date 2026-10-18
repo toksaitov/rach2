@@ -1,0 +1,65 @@
+{
+  "hosts": ["muse.fakeapi.test", "api.meta.ai", "auth.meta.com"],
+  "session": {
+    "protocol": "responses",
+    "steps": [
+      {"protocol": "plain", "unordered": true, "repeat": true,
+       "request": {"path": "/muse-code/models"},
+       "reply": {"json": {"object": "list",
+                          "data": [{"id": "muse-spark-1.2", "object": "model",
+                                    "created": 0, "owned_by": "meta"}]}}},
+      {"protocol": "plain", "unordered": true, "repeat": true,
+       "request": {"path": "/muse-code/config", "query": "channel=public"},
+       "reply": {"status": 404}},
+      {"unordered": true, "repeat": true,
+       "turn": {
+         "input": [{"role": "user", "text": "You are picking one optional feature tip"}],
+         "output": [{"message": "none"}]}},
+      {"turn": {
+        "request": {"model": "muse-spark-1.2", "store": false},
+        "input": [{"role": "user", "text": "Read notes.txt and do what it says."}],
+        "output": [{"call": "read_file", "namespace": "muse", "id": "call_read",
+                    "arguments": {"path": "notes.txt"}}]}},
+      {"turn": {
+        "input": [{"output_of": "call_read",
+                   "text": ["Read text file `notes.txt`.",
+                            "Change the greeting in greeting.txt to: hello, rach2"]}],
+        "output": [{"call": "bash", "namespace": "muse", "id": "call_check",
+                    "arguments": {"command": "sh check.sh"}}]}},
+      {"turn": {
+        "input": [{"output_of": "call_check",
+                   "text": ["\"exit_code\": 1", "check: FAIL: greeting.txt says hello, world"]}],
+        "output": [{"call": "edit_file", "namespace": "muse", "id": "call_edit",
+                    "arguments": {"path": "greeting.txt", "find": "hello, world",
+                                  "replace": "hello, rach2"}}]}},
+      {"turn": {
+        "input": [{"output_of": "call_edit", "text": ["edited", "-hello, world", "+hello, rach2"]}],
+        "output": [{"call": "bash", "namespace": "muse", "id": "call_commit",
+                    "arguments": {"command": "sh check.sh && git commit -q -am 'Greet Rach2' && git log --format=%s -1"}}]}},
+      {"turn": {
+        "input": [{"output_of": "call_commit", "text": ["\"exit_code\": 0", "check: ok", "Greet Rach2"]}],
+        "output": [{"message": "greeting.txt says hello, rach2, check.sh passes, and the change is committed."}]}},
+      {"turn": {
+        "input": [{"role": "user", "text": "sleep 600"}],
+        "output": [{"call": "bash", "namespace": "muse", "id": "call_sleep",
+                    "arguments": {"command": "sleep 600"}}]}}
+    ]
+  },
+  "after": {
+    "protocol": "responses",
+    "steps": [
+      {"protocol": "plain", "unordered": true, "repeat": true,
+       "request": {"path": "/muse-code/models"},
+       "reply": {"json": {"object": "list",
+                          "data": [{"id": "muse-spark-1.2", "object": "model",
+                                    "created": 0, "owned_by": "meta"}]}}},
+      {"protocol": "plain", "unordered": true, "repeat": true,
+       "request": {"path": "/muse-code/config", "query": "channel=public"},
+       "reply": {"status": 404}},
+      {"turn": {
+        "request": {"model": "muse-spark-1.2"},
+        "input": [{"role": "user", "text": "Reply with the words: signed in."}],
+        "output": [{"message": "signed in"}]}}
+    ]
+  }
+}
