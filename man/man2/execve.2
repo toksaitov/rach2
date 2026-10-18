@@ -324,11 +324,12 @@ on Linux.
 Its own
 .Pa /proc/ Ns Ar pid Ns Pa /exe
 link reads the file's present path on the KRFFS boot root, and on another
-file system the path the descriptor was opened by, when that fit the 63
-bytes the description keeps of it; otherwise it reads the path the caller
-passed, where Linux reads the file's path.
-A script run so is given that path, and the descriptor must stay open for
-its interpreter to read the script by it, as on Linux.
+file system the path the descriptor was opened by, where Linux reads the
+file's present path on every file system.
+When the heap had no room for a copy of that path, at the open or at this
+call, the link reads the path the caller passed instead.
+A script run so is given the path the caller passed, and the descriptor
+must stay open for its interpreter to read the script by it, as on Linux.
 .Ss Failure
 The path is resolved and its permissions checked first, as Linux opens
 the program before it copies the vectors.
