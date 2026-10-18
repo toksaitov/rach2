@@ -326,8 +326,11 @@ Its own
 link reads the file's present path on the KRFFS boot root, and on another
 file system the path the descriptor was opened by, where Linux reads the
 file's present path on every file system.
-When the heap had no room for a copy of that path, at the open or at this
-call, the link reads the path the caller passed instead.
+When the heap had no room for a copy of that path at the open, the link
+reads the path the caller passed instead; when it had none at this call,
+the link has no path, as
+.Xr proc 5
+says.
 A script run so is given the path the caller passed, and the descriptor
 must stay open for its interpreter to read the script by it, as on Linux.
 .Ss Failure

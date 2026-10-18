@@ -1001,6 +1001,12 @@ during the
 does not change it; a rename after the
 .Xr execve 2
 is not seen, where Linux gives the file's present path.
+When the heap had no room for the copy of that path the
+.Xr execve 2
+keeps, the process has none: the link reads as an empty string on a file
+system other than the KRFFS root, and as
+.Ql " (deleted)"
+alone for a file of the KRFFS root whose name has been removed.
 Reading the link, or going through it, needs a thread of the process, a
 privileged caller, one whose effective user ID is 0 and which kept its
 capabilities
