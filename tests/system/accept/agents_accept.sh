@@ -302,23 +302,6 @@ shows() {
     return 1
 }
 
-# wait_for WHAT TEXT SECONDS: read the screen every two seconds until it
-# shows TEXT, for at most SECONDS; otherwise fail WHAT.
-wait_for() {
-    end=$(($(date +%s) + $3))
-    while :; do
-        SCREEN=$(screen)
-        shows "$2" && return 0
-        if [ "$(date +%s)" -ge "$end" ]; then
-            record "$agent: the screen" "$SCREEN"
-            bad "$agent: $1: in $3 s the screen showed no [$2]"
-            return 1
-        fi
-        # interval: the screen is read every two seconds
-        sleep 2
-    done
-}
-
 # choose ANSWER KEY: press KEY until the question has ANSWER selected for
 # six seconds, then Enter. A question can refuse keys for a moment after it
 # opens and then be drawn again with its first answer selected, so KEY is
@@ -447,28 +430,45 @@ idle() {
     done
 }
 
-# send WHAT TEXT TAIL CHECK: type TEXT in the agent's window and, once the
+# send WHAT TEXT TAIL CHECK: type TEXT in the agent's window and, while the
 # screen shows TAIL, press Enter, and again every 20 s until the function
-# CHECK succeeds, for at most 120 s; otherwise fail WHAT. A program that is
-# still starting can take the text and lose the Enter.
+# CHECK succeeds, for at most 300 s; otherwise fail WHAT. A program that is
+# still starting can lose an Enter, or ask a question after it has drawn its
+# prompt. Such a question is answered when it shows, and TEXT is typed again
+# when the screen no longer has it once the question has gone.
 send() {
-    keys -l "$2" && wait_for "$1" "$3" 120 || return 1
-    end=$(($(date +%s) + $(scaled 120)))
+    keys -l "$2" || return 1
+    end=$(($(date +%s) + $(scaled 300)))
+    asked=""
     while :; do
-        keys Enter
-        n=0
-        while [ "$n" -lt 10 ]; do
-            # interval: the screen is read every two seconds
-            sleep 2
-            SCREEN=$(screen)
-            "$4" && return 0
-            n=$((n + 1))
-        done
+        SCREEN=$(screen)
         if [ "$(date +%s)" -ge "$end" ]; then
             record "$agent: the screen" "$SCREEN"
-            bad "$agent: $1: Enter did not start it in $(scaled 120) s"
+            bad "$agent: $1: not started in $(scaled 300) s"
             return 1
         fi
+        if question; then
+            asked=1
+        elif shows "$3"; then
+            keys Enter
+            n=0
+            while [ "$n" -lt 10 ]; do
+                # interval: the screen is read every two seconds
+                sleep 2
+                SCREEN=$(screen)
+                "$4" && return 0
+                if question; then
+                    asked=1
+                    break
+                fi
+                n=$((n + 1))
+            done
+        elif [ -n "$asked" ]; then
+            keys -l "$2"
+            asked=""
+        fi
+        # interval: the screen is read every two seconds
+        sleep 2
     done
 }
 
