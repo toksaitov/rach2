@@ -46,8 +46,11 @@ run fails, while the step waits for the next request. A step with "unordered":
 true is played by the first request it accepts, whenever that comes: a client
 that sends two requests at once, such as a title for the conversation beside
 its first turn, sends them in either order. A request is checked against the
-step whose turn it is, then against each unordered step not yet played. A
-step may name its own "protocol"; otherwise it has the script's.
+step whose turn it is, then against each unordered step not yet played. An
+unordered step with "repeat": true as well is never used up: any number of
+requests play it, none among them, for a request that a client repeats on a
+timer of its own, such as a flush of usage logs. A step may name its own
+"protocol"; otherwise it has the script's.
 
 A protocol is a module `proto_NAME.py` in this directory with two functions:
 
@@ -469,6 +472,8 @@ class Server:
             reason = module.validate(step) if hasattr(module, "validate") else None
             if reason:
                 raise ValueError(f"step {i}: {reason}")
+            if step.get("repeat") and not step.get("unordered"):
+                raise ValueError(f"step {i}: a repeated step is not unordered")
 
     def module(self, step):
         """Return the protocol module that plays STEP."""
@@ -491,7 +496,7 @@ class Server:
         """Return the numbers from 0 of the steps a request may play now.
 
         The first is the ordered step whose turn it is, when one is left; the
-        unordered steps not yet played follow.
+        unordered steps not yet played follow, the repeated ones among them.
         """
         left = [i for i in range(len(self.steps)) if i not in self.done]
         ordered = [i for i in left if not self.steps[i].get("unordered")]
@@ -515,8 +520,9 @@ class Server:
                 except Exception as error:  # a fault of the script or its protocol
                     reason = f"the check failed: {type(error).__name__}: {error}"
                 if not reason:
-                    self.done.add(i)
-                    self.played += 1
+                    if not step.get("repeat"):
+                        self.done.add(i)
+                        self.played += 1
                     return n, step, i + 1, None
                 reasons.append(f"step {i + 1}: {reason}")
             if not reasons:
@@ -555,21 +561,22 @@ class Server:
 
     def verdict(self):
         """Log the run's result and return its exit status."""
-        left = len(self.steps) - self.played
+        owed = [i for i in range(len(self.steps)) if not self.steps[i].get("repeat")]
+        left = len(owed) - self.played
         faults = []
         if self.failures:
             faults.append(f"{len(self.failures)} failed, the first {self.failures[0]}")
         if left:
-            first = min(i for i in range(len(self.steps)) if i not in self.done)
+            first = min(i for i in owed if i not in self.done)
             step = json.dumps(self.steps[first])
             if len(step) > 160:
                 step = step[:157] + "..."
-            faults.append(f"{left} of {len(self.steps)} steps not played, "
+            faults.append(f"{left} of {len(owed)} steps not played, "
                           f"the first step {first + 1}: {step}")
         if faults:
             log("result: fail: " + "; ".join(faults))
             return 1
-        log(f"result: pass: {len(self.steps)} steps played by {self.count} requests")
+        log(f"result: pass: {len(owed)} steps played by {self.count} requests")
         return 0
 
 

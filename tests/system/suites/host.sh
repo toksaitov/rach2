@@ -332,6 +332,13 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: Gemini function responses and unordered steps" >&2
         fail=1
     fi
+    if python3 -B tests/system/fakeapi/fakeapi_test.py >"$VDIR/fakeapi.rlog" 2>&1; then
+        echo "hosttest: result: pass: the fake API server's unordered and repeated steps"
+    else
+        cat "$VDIR/fakeapi.rlog"
+        echo "hosttest: result: fail: the fake API server's unordered and repeated steps" >&2
+        fail=1
+    fi
     if sh tests/system/install_accounts_test.sh >"$VDIR/install_accounts.rlog" 2>&1; then
         echo "hosttest: result: pass: the installer's kept image accounts"
     else
