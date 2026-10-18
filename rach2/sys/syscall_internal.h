@@ -221,16 +221,12 @@ int canonicalize_named(char *path, int *end);
 int32_t resolve_named(const char *name, int walk, int dir, struct vfs_ref *ref);
 
 /**
- * The path of the file at `path`, an absolute path of a file that exists,
- * with every symbolic link in it replaced by its target, read from the
- * calling process's root, into `out` of `VFS_PATH_MAX` bytes: realpath(3)'s
- * answer, which Linux shows for a program in /proc/PID/exe. A link of /proc
- * or /dev, which names a description or a process rather than a path, stays
- * a name. It takes one path page and the resolver's. Returns 0, or a negative
- * errno with `out` undefined: ELOOP past VFS_LINK_MAX links, ENAMETOOLONG,
- * ENOMEM, or the walk's.
+ * `resolve_named`, with the path the walk took to `ref`, its symbolic links
+ * resolved, put in `real` of VFS_PATH_MAX bytes (`vfs_resolve_real`): the
+ * name /proc/PID/exe gives for a program, taken from the walk that found its
+ * file. `real` is an empty string when the path does not fit.
  */
-int32_t resolve_real_path(const char *path, char *out);
+int32_t resolve_named_real(const char *name, int walk, int dir, struct vfs_ref *ref, char *real);
 
 struct vpath;
 struct open_file;

@@ -103,8 +103,16 @@ static int walk_to_object(const struct vpath *vp, int rc, int parent, int flags)
     return 0;
 }
 
-/* What `walk_object` returns at the link's object, as vfs.c defines it. */
+/* What `walk_object` returns at the link's object, and the flag of an
+ * unmount's walk, as vfs.c defines them. */
 #define WALK_AT_OBJECT 2
+#define WALK_UNMOUNT   0x100
+
+/* The record of the path a walk took, as vfs.c defines it. */
+struct walk_name {
+    char *buf;
+    int len;
+};
 
 /** The resolver's step through a /proc link to its object, which no row's
  * walk takes. */

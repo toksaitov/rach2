@@ -145,7 +145,8 @@ groups = [
      "mount_named_at mount_named named_in_rest climbs node_put walk_lock walk_unlock vfs_walk_unlock "
      "ref_move_node "
      "walk_move walk_root root_current dotdot_stays walk_leaf walk_pages walk_splice walk_link "
-     "walk_last_comp walk_is_link walk_rest_len "
+     "walk_last_comp walk_is_link walk_rest_len walk_name_root walk_name_add walk_name_text "
+     "walk_name_end "
      "resolve_path vfs_resolve vfs_ref_release vfs_desc_open vfs_desc_close "
      "vfs_getattr vfs_open_node vfs_release vfs_truncate vfs_create"),
     ("syscall_fs.c", "syscall_open.inc", "name_is device_name open_device_name open_link_target "

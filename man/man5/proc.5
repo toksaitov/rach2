@@ -994,7 +994,11 @@ On another file system it gives the path at which
 .Xr execve 2
 found the file, with each symbolic link in it replaced by its target, as
 .Xr realpath 3
-finds it and as Linux gives it; a rename after the
+finds it and as Linux gives it.
+The path is taken from the walk that found the file, so a link replaced
+during the
+.Xr execve 2
+does not change it; a rename after the
 .Xr execve 2
 is not seen, where Linux gives the file's present path.
 Reading the link, or going through it, needs a thread of the process, a

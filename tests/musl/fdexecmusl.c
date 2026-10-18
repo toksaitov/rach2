@@ -7,7 +7,10 @@
  * and /proc/self/exe in the new image names the copy. A copy on a tmpfs,
  * which keeps the path a descriptor was opened by, runs and is named by that
  * path, and a script there that names the copy as its interpreter runs the
- * copy, which /proc/self/exe then names. The rules a path meets are met
+ * copy, which /proc/self/exe then names. A run by a path through symbolic
+ * links there, relative and absolute, one to a directory with a `..` after
+ * it, is named by the file's path with no link in it, as realpath(3) gives
+ * it. The rules a path meets are met
  * through a descriptor too: a directory, a file without an execute bit, a
  * file on a tmpfs mounted noexec and a pipe are refused with EACCES; a
  * set-user-ID copy owned by root gives uid 1000 an effective uid of 0, and
@@ -27,6 +30,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -105,20 +109,18 @@ static int write_script(const char *path, const char *interp)
 }
 
 /**
- * Exec /proc/self/fd/`fd` in a forked child with the arguments `a1` and `a2`,
- * as uid 1000 when `uid` is not 0. The child's exit status, or -1 when the
- * fork or the wait failed or the child did not exit.
+ * Exec `path` in a forked child with the arguments `a1` and `a2`, as uid 1000
+ * when `uid` is not 0. The child's exit status, or -1 when the fork or the
+ * wait failed or the child did not exit.
  */
-static int run_fd(int fd, uid_t uid, const char *a1, const char *a2)
+static int run_exec(const char *path, uid_t uid, const char *a1, const char *a2)
 {
-    char path[32];
     char *argv[4];
     char *envp[1];
     int status;
     pid_t pid;
 
-    snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
-    argv[0] = path;
+    argv[0] = (char *)path;
     argv[1] = (char *)a1;
     argv[2] = (char *)a2;
     argv[3] = NULL;
@@ -138,6 +140,15 @@ static int run_fd(int fd, uid_t uid, const char *a1, const char *a2)
         return -1;
     }
     return WEXITSTATUS(status);
+}
+
+/** Exec /proc/self/fd/`fd` as `run_exec` does. */
+static int run_fd(int fd, uid_t uid, const char *a1, const char *a2)
+{
+    char path[32];
+
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+    return run_exec(path, uid, a1, a2);
 }
 
 /** Open `path` with `flags` and run it as `run_fd` does, as root with
@@ -226,8 +237,33 @@ static int on_root(void)
 }
 
 /**
+ * The copy on the tmpfs run by a path through symbolic links: a link to the
+ * mount's directory, a relative one to a directory with a `..` after it, and
+ * a relative one to the copy with a `..` in its target. /proc/self/exe names
+ * the copy by its path with no link in it, as realpath(3) gives it. 0, or the
+ * probe's failure status.
+ */
+static int through_links(void)
+{
+    char real[PATH_MAX];
+    int st;
+
+    if (mkdir(MNT "/d", 0755) != 0 || mkdir(MNT "/d/e", 0755) != 0 ||
+        symlink(MNT, MNT "/top") != 0 || symlink("../bin", MNT "/d/rel") != 0 ||
+        symlink("d/e", MNT "/de") != 0 || realpath(MNT_COPY, real) == NULL) {
+        return fail("make the links on the tmpfs");
+    }
+    if ((st = run_exec(MNT "/top/de/../rel", 0, "child", real)) != 0) {
+        return fail(st == ST_EXE ? "/proc/self/exe of a copy run through links"
+                                 : "a copy run through links");
+    }
+    return 0;
+}
+
+/**
  * The program on a tmpfs, which /proc/self/exe names by the path its
- * descriptor was opened by; a script whose interpreter is that copy, which
+ * descriptor was opened by, and by its path with no link in it when a path
+ * through links runs it; a script whose interpreter is that copy, which
  * /proc/self/exe then names; a copy on a tmpfs mounted noexec refused; and a
  * set-user-ID copy owned by root, which gives uid 1000 an effective uid of
  * 0 and on a tmpfs mounted nosuid does not. 0, or the probe's failure
@@ -245,6 +281,9 @@ static int on_tmpfs(void)
     if (copy_self(MNT_COPY, 04755) != 0 || write_script(MNT_SCRIPT, MNT_COPY) != 0 ||
         copy_self(NOEXEC "/bin", 0755) != 0 || copy_self(NOSUID "/bin", 04755) != 0) {
         return fail("copy the program to the tmpfs");
+    }
+    if ((st = through_links()) != 0) {
+        return st;
     }
     if ((st = run_path(MNT_COPY, O_RDONLY, MNT_COPY)) != 0) {
         return fail(st == ST_EXE ? "/proc/self/exe of a tmpfs copy run by its descriptor"

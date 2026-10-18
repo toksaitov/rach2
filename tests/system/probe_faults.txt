@@ -101,9 +101,9 @@ probe fdexecmusl
 file rach2/sys/syscall_proc.c
 expect FDEXECMUSL FAIL (/proc/self/exe of a tmpfs copy run by its descriptor)
 old
-    if (rc == 0 && link != NULL && link->dirpath != NULL && keep->interp_file == NULL) {
+        mm_set_exe(keep, link != NULL && link->dirpath != NULL ? link->dirpath : name);
 new
-    if (rc == 0 && link != NULL && link->dirpath == NULL && keep->interp_file == NULL) {
+        mm_set_exe(keep, link != NULL ? real : name);
 end
 
 fault exec-fd-script-named
@@ -114,6 +114,17 @@ old
     kfree(s->mm->exe);
     s->mm->exe = NULL;
 new
+end
+
+fault exec-name-link-kept
+probe fdexecmusl
+file rach2/sys/fs/vfs.c
+expect FDEXECMUSL FAIL (/proc/self/exe of a copy run through links)
+old
+                p = linkpath;
+                walk_name_add(&name, "..", 2);
+new
+                p = linkpath;
 end
 
 # Signals and waits.
@@ -865,9 +876,11 @@ file rach2/sys/fs/vfs.c
 expect TMPFSMUSL FAIL (a working directory in /dev/shm
 old
             if (cur.node == cur.mnt->root) {
+                walk_name_add(&name, comp, len);
                 rc = walk_move(&cur, cur.mnt->parent, cur.mnt->parent->root, locked);
 new
             if (cur.node == cur.mnt->root) {
+                walk_name_add(&name, comp, len);
                 p -= 2;
                 rc = walk_move(&cur, cur.mnt->parent, cur.mnt->parent->root, locked);
 end
@@ -3188,9 +3201,9 @@ probe direntmusl
 file rach2/sys/syscall_fs.c
 expect DIRENTMUSL FAIL (a symbolic link to a directory named with a trailing slash was not followed)
 old
-    int32_t rc = vfs_resolve(0, name, dir ? walk & ~VFS_WALK_NOFOLLOW : walk, ref, 0, 0);
+    int32_t rc = vfs_resolve_real(name, dir ? walk & ~VFS_WALK_NOFOLLOW : walk, ref, real);
 new
-    int32_t rc = vfs_resolve(0, name, walk, ref, 0, 0);
+    int32_t rc = vfs_resolve_real(name, walk, ref, real);
 end
 
 fault open-dir-end-nofollow-kept
@@ -3511,7 +3524,7 @@ expect PRCTLMUSL FAIL (an exec of /proc/self/exe ran the file put at the program
 old
     rc = exec_open(&s->prog, s->path, s->path_end, &s->id, s->mm);
     if (rc == 0) {
-        rc = exec_link_name(s->path);
+        rc = exec_link_name(s);
     }
 new
     {
@@ -3523,7 +3536,7 @@ new
     }
     rc = exec_open(&s->prog, s->path, s->path_end, &s->id, s->mm);
     if (rc == 0) {
-        rc = exec_link_name(s->path);
+        rc = exec_link_name(s);
     }
 end
 

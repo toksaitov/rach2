@@ -6131,7 +6131,12 @@ static int32_t leaf_dir_check(const struct vfs_ref *parent, const char *leaf)
  */
 int32_t resolve_named(const char *name, int walk, int dir, struct vfs_ref *ref)
 {
-    int32_t rc = vfs_resolve(0, name, dir ? walk & ~VFS_WALK_NOFOLLOW : walk, ref, 0, 0);
+    return resolve_named_real(name, walk, dir, ref, NULL);
+}
+
+int32_t resolve_named_real(const char *name, int walk, int dir, struct vfs_ref *ref, char *real)
+{
+    int32_t rc = vfs_resolve_real(name, dir ? walk & ~VFS_WALK_NOFOLLOW : walk, ref, real);
 
     if (rc == 0 && dir) {
         rc = ref_dir_check(ref, 1);
@@ -6142,120 +6147,6 @@ int32_t resolve_named(const char *name, int walk, int dir, struct vfs_ref *ref)
             vfs_ref_release(ref);
         }
     }
-    return rc;
-}
-
-/**
- * Whether the node at the absolute path `at` is a symbolic link that a type
- * of a volume keeps: 1 with its target, of `*tlen` bytes, in `target` of
- * `cap` bytes; 0 for anything else, a link of /proc or /dev among them; or a
- * negative errno, the walk's or the type's, ENOENT for an empty target and
- * ENAMETOOLONG for one that fills `target`.
- */
-static int32_t path_read_link(const char *at, char *target, uint32_t cap, uint32_t *tlen)
-{
-    struct vfs_ref ref;
-    struct vfs_stat st;
-    int32_t rc = vfs_resolve(0, at + 1, VFS_WALK_NOFOLLOW, &ref, 0, 0);
-    int n;
-
-    if (rc != 0) {
-        return rc;
-    }
-    if (vfs_synth_vpath(ref.mnt, ref.node) || !ref.mnt->type->ops->readlink ||
-        vfs_getattr(ref.mnt, ref.node, &st) != 0 || (st.mode & 0170000u) != 0120000u) {
-        vfs_ref_release(&ref);
-        return 0;
-    }
-    n = cap > 0 ? ref.mnt->type->ops->readlink(ref.mnt, ref.node, target, cap) : -ENAMETOOLONG;
-    vfs_ref_release(&ref);
-    if (n <= 0) {
-        return n == 0 ? -ENOENT : n;
-    }
-    if ((uint32_t)n >= cap) {
-        return -ENAMETOOLONG;
-    }
-    *tlen = (uint32_t)n;
-    return 1;
-}
-
-/**
- * Apply the component `c`, of `clen` bytes, to the path `out` of `*dlen`
- * bytes: ".." drops its last name, "." and an empty component change
- * nothing, and any other name is appended. Returns 1 when a name was
- * appended, 0 when none was, or -ENAMETOOLONG.
- */
-static int32_t real_path_add(char *out, uint32_t *dlen, const char *c, uint32_t clen)
-{
-    if (clen == 0 || (clen == 1 && c[0] == '.')) {
-        return 0;
-    }
-    if (clen == 2 && c[0] == '.' && c[1] == '.') {
-        while (*dlen > 0 && out[*dlen - 1] != '/') {
-            (*dlen)--;
-        }
-        *dlen -= *dlen > 0;
-        out[*dlen] = '\0';
-        return 0;
-    }
-    if (*dlen + 1 + clen + 1 > VFS_PATH_MAX) {
-        return -ENAMETOOLONG;
-    }
-    out[*dlen] = '/';
-    k_memcpy(out + *dlen + 1, c, clen);
-    *dlen += 1 + clen;
-    out[*dlen] = '\0';
-    return 1;
-}
-
-/*
- * The walk of `resolve_real_path` keeps what is left of the path at the end
- * of one page, from `start` to its last byte, which is the terminator, and
- * reads a link's target into the room in front of it, where it is moved
- * against the rest with a slash between.
- */
-int32_t resolve_real_path(const char *path, char *out)
-{
-    char *buf = path_buf_get();
-    uint32_t start = 0;
-    uint32_t dlen = 0;
-    uint32_t clen;
-    uint32_t tlen = 0;
-    int links = 0;
-    int32_t rc = buf ? 0 : -ENOMEM;
-
-    if (rc == 0) {
-        clen = (uint32_t)k_strlen(path);
-        start = VFS_PATH_MAX - 1 - clen;
-        k_memcpy(buf + start, path, clen + 1);
-        out[0] = '\0';
-    }
-    while (rc == 0 && buf[start] != '\0') {
-        clen = 0;
-        while (buf[start + clen] != '\0' && buf[start + clen] != '/') {
-            clen++;
-        }
-        rc = real_path_add(out, &dlen, buf + start, clen);
-        start += clen + (buf[start + clen] == '/');
-        if (rc == 1) {
-            rc = path_read_link(out, buf, start > 0 ? start - 1 : 0, &tlen);
-        }
-        if (rc == 1 && ++links > VFS_LINK_MAX) {
-            rc = -ELOOP;
-        } else if (rc == 1) {
-            k_memmove(buf + start - 1 - tlen, buf, tlen);
-            buf[start - 1] = '/';
-            start -= tlen + 1;
-            dlen = buf[start] == '/' ? 0 : dlen - clen - 1;
-            out[dlen] = '\0';
-            rc = 0;
-        }
-    }
-    if (rc == 0 && dlen == 0) {
-        out[0] = '/';
-        out[1] = '\0';
-    }
-    path_buf_put(buf);
     return rc;
 }
 

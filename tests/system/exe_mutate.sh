@@ -7,7 +7,7 @@
 #
 # The gnu suite runs its bash row alone three times: with the kernel as the
 # tree has it, where it must pass; with execve naming the new image by the
-# path it was given in place of `resolve_real_path`'s, where /proc/PID/exe
+# path it was given in place of the path its walk took, where /proc/PID/exe
 # of a bash run through two links must not be the file's path; and with the
 # source restored and the kernel rebuilt, where it must pass again. The
 # suite builds the kernel before it boots. --texts checks that the fault's
@@ -27,8 +27,8 @@ import pathlib
 import sys
 
 path = pathlib.Path(sys.argv[1])
-old = "    mm_set_exe(mm, real && resolve_real_path(path, real) == 0 ? real : path);\n"
-new = "    mm_set_exe(mm, path);\n"
+old = "    const char *name = real[0] != '\\0' ? real : path;\n"
+new = "    const char *name = path;\n"
 text = path.read_text()
 if text.count(old) != 1:
     raise SystemExit(f"exe-mutation: not once in {path}: {old}")

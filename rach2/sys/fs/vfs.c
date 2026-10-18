@@ -846,6 +846,9 @@ static int walk_object(struct vfs_ref *cur, void *found, const char *rest, char 
 /* What `walk_object` returns when the walk has moved to the link's object. */
 #define WALK_AT_OBJECT 2
 
+/* A flag of `resolve_path` beside the VFS_WALK_ ones, for an unmount's walk. */
+#define WALK_UNMOUNT 0x100
+
 /** The start of the last component of `path`, trailing slashes passed over:
  * the leaf a parent walk returns once a link's target is spliced into its
  * path. */
@@ -906,8 +909,81 @@ static int walk_to_object(const struct vpath *vp, int rc, int parent, int flags)
            (!(flags & VFS_WALK_NOFOLLOW) && vp->kind != VNODE_PROC_FD_LINK);
 }
 
+/* The path a walk took from its root, its symbolic links resolved, which
+ * `vfs_resolve_real` gives: `len` bytes at `buf`, with no terminator until the
+ * walk ends; `len` is -1 while nothing is recorded, for no buffer or for a
+ * path past VFS_PATH_MAX. */
+struct walk_name {
+    char *buf;
+    int len;
+};
+
+/** Start the record `wn` in `buf`, which may be NULL, again at the walk's
+ * root, as a walk and an absolute link's target do. */
+static void walk_name_root(struct walk_name *wn, char *buf)
+{
+    wn->buf = buf;
+    wn->len = buf ? 0 : -1;
+}
+
 /**
- * Resolve one path, as `vfs_resolve` says; with `unmount`, for an unmount,
+ * Apply the component `c` of `clen` bytes to the record `wn`: `..` drops its
+ * last name, `.` and an empty component change nothing, and any other name is
+ * appended. A path that would not fit VFS_PATH_MAX ends the record.
+ */
+static void walk_name_add(struct walk_name *wn, const char *c, uint32_t clen)
+{
+    if (wn->len < 0 || clen == 0 || (clen == 1 && c[0] == '.')) {
+        return;
+    }
+    if (clen == 2 && c[0] == '.' && c[1] == '.') {
+        while (wn->len > 0 && wn->buf[wn->len - 1] != '/') {
+            wn->len--;
+        }
+        wn->len -= wn->len > 0;
+        return;
+    }
+    if ((uint32_t)wn->len + 1 + clen + 1 > VFS_PATH_MAX) {
+        wn->len = -1;
+        return;
+    }
+    wn->buf[wn->len] = '/';
+    k_memcpy(wn->buf + wn->len + 1, c, clen);
+    wn->len += 1 + (int)clen;
+}
+
+/** Apply each component of the text from `p` to `end`, which a type that
+ * takes the rest of a path used up, to the record `wn`. */
+static void walk_name_text(struct walk_name *wn, const char *p, const char *end)
+{
+    while (p < end) {
+        const char *c = p;
+
+        while (p < end && *p != '/') {
+            p++;
+        }
+        walk_name_add(wn, c, (uint32_t)(p - c));
+        p += p < end;
+    }
+}
+
+/** End the record `wn` of a walk that succeeded: its path, "/" for the root,
+ * or an empty string when nothing was recorded. */
+static void walk_name_end(struct walk_name *wn)
+{
+    if (!wn->buf) {
+        return;
+    }
+    if (wn->len < 0) {
+        wn->len = 0;
+    } else if (wn->len == 0) {
+        wn->buf[wn->len++] = '/';
+    }
+    wn->buf[wn->len] = '\0';
+}
+
+/**
+ * Resolve one path, as `vfs_resolve` says; with WALK_UNMOUNT, for an unmount,
  * the walk may end on a mount whose device has gone, though it looks up no
  * name inside one, so that the unmount can release that mount.
  *
@@ -966,10 +1042,20 @@ static int walk_to_object(const struct vpath *vp, int rc, int parent, int flags)
  * VFS_WALK_LOCK holds one namespace lock at a time and returns with the
  * final mount locked when its type sets `ns_serialised`, so an open can
  * register its description before a relocation.
+ *
+ * With `real` not NULL the walk records the path it takes in it, as
+ * `vfs_resolve_real` says. Each name is recorded when it is looked up or
+ * entered, and a symbolic link found so is dropped again for its target,
+ * whose components are recorded as the walk takes them. What a type that
+ * takes the rest uses up is recorded as text: its links of /proc are objects
+ * or names, not paths of files, so the record keeps the components that
+ * named them, and a text link it follows goes on at the mount's root, as the
+ * walk does.
  */
 static int resolve_path(const struct vfs_ref *start, const char *path, int flags,
-                        struct vfs_ref *out, char *leaf, uint32_t leafcap, int unmount)
+                        struct vfs_ref *out, char *leaf, uint32_t leafcap, char *real)
 {
+    struct walk_name name;
     struct vfs_ref cur;
     struct vfs_ref root;
     const char *p;
@@ -1003,6 +1089,7 @@ begin:
     last_comp = leaf_comp;
     links = 0;
     jumped = 0;
+    walk_name_root(&name, real);
     walk_root(&root);
     cur = (p[0] == '/' || !start) ? root : *start;
     if (p[0] == '/' && p[1] == '/') {
@@ -1035,6 +1122,7 @@ begin:
         }
 
         if (cur.mnt->type->ops->lookup_rest && !named_in_rest(&cur, p) && !climbs(&cur, p)) {
+            const char *from = p;
             const char *left = 0;
             const struct vpath *vp;
             uint32_t rlen = walk_rest_len(p, last_comp);
@@ -1054,9 +1142,11 @@ begin:
             vp = vfs_synth_vpath(cur.mnt, found);
             if (walk_to_object(vp, rc, last_comp != 0, flags)) {
                 jumped = 1;
+                walk_name_text(&name, from, p);
                 rc = walk_object(&cur, found, p, &linkpath, &target, locked);
             } else if (!last_comp && !(flags & VFS_WALK_NOFOLLOW) && walk_is_link(cur.mnt, found)) {
                 if (vp->kind == VNODE_PROC_EXE) {
+                    walk_name_text(&name, from, p);
                     rc = walk_exe(&cur, found, locked);
                     if (rc != 0) {
                         goto out_err;
@@ -1065,6 +1155,7 @@ begin:
                 }
                 rc = walk_link(cur.mnt, found, "", &linkpath, &target, &links);
             } else {
+                walk_name_text(&name, from, p);
                 ref_move_node(&cur, found);
                 break;
             }
@@ -1082,6 +1173,7 @@ begin:
                 if (!root_current(&root)) {
                     goto restart;
                 }
+                walk_name_root(&name, name.buf);
                 rc = walk_move(&cur, root.mnt, root.node, locked);
                 if (rc != 0) {
                     goto out_err;
@@ -1126,6 +1218,7 @@ begin:
                 continue;
             }
             if (cur.node == cur.mnt->root) {
+                walk_name_add(&name, comp, len);
                 rc = walk_move(&cur, cur.mnt->parent, cur.mnt->parent->root, locked);
                 if (rc != 0) {
                     goto out_err;
@@ -1136,6 +1229,7 @@ begin:
 
         m = mount_named(cur.mnt, cur.node, comp);
         if (m) {
+            walk_name_add(&name, comp, len);
             rc = walk_move(&cur, m, m->root, locked);
             if (rc != 0) {
                 goto out_err;
@@ -1147,6 +1241,7 @@ begin:
         if (rc != 0) {
             goto out_err;
         }
+        walk_name_add(&name, comp, len);
         if (cur.mnt->type->ops->readlink && cur.mnt->type->ops->getattr) {
             struct vfs_stat lst;
             const char *rest = p;
@@ -1172,10 +1267,12 @@ begin:
                     last_comp = walk_last_comp(linkpath);
                 }
                 p = linkpath;
+                walk_name_add(&name, "..", 2);
                 if (absolute) {
                     if (!root_current(&root)) {
                         goto restart;
                     }
+                    walk_name_root(&name, name.buf);
                     rc = walk_move(&cur, root.mnt, root.node, locked);
                     if (rc != 0) {
                         goto out_err;
@@ -1195,7 +1292,7 @@ begin:
         }
     }
 
-    if (vfs_mount_gone(cur.mnt) && !unmount) {
+    if (vfs_mount_gone(cur.mnt) && !(flags & WALK_UNMOUNT)) {
         rc = -EIO;
         goto out_err;
     }
@@ -1207,6 +1304,7 @@ begin:
     }
     path_buf_put(linkpath);
     path_buf_put(target);
+    walk_name_end(&name);
     *out = cur;
     return 0;
 
@@ -1231,6 +1329,11 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
                 char *leaf, uint32_t leafcap)
 {
     return resolve_path(start, path, flags, out, leaf, leafcap, 0);
+}
+
+int vfs_resolve_real(const char *path, int flags, struct vfs_ref *out, char *real)
+{
+    return resolve_path(0, path, flags & ~VFS_WALK_PARENT, out, 0, 0, real);
 }
 
 void vfs_ref_release(struct vfs_ref *r)
@@ -3667,7 +3770,7 @@ int vfs_do_umount(const char *target, int dir)
     struct vfs_mount *m;
     int rc;
 
-    rc = resolve_path(0, target, 0, &tref, 0, 0, 1);
+    rc = resolve_path(0, target, WALK_UNMOUNT, &tref, 0, 0, 0);
     m = rc == -EIO ? unmount_below_gone(target) : NULL;
     if (rc != 0 && !m) {
         return rc;

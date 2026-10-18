@@ -414,6 +414,20 @@ void vfs_init(void);
 int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct vfs_ref *out,
                 char *leaf, uint32_t leafcap);
 
+/**
+ * Resolve `path` from the caller's root, as `vfs_resolve` does with no
+ * `start`, and put in `real`, of VFS_PATH_MAX bytes, the path the walk took
+ * to the node it holds: from the caller's root, with each symbolic link the
+ * walk followed replaced by its target and each `..` it took applied, so that
+ * it names that node by the names the walk looked up. It is realpath(3)'s
+ * answer, taken from the walk that found the node, so a link replaced
+ * afterwards does not change it. A link of /proc or /dev that refers to an
+ * object stays a name. `real` is an empty string when the path does not fit,
+ * and undefined on an error. VFS_WALK_PARENT is ignored. Returns as
+ * `vfs_resolve` does.
+ */
+int vfs_resolve_real(const char *path, int flags, struct vfs_ref *out, char *real);
+
 /** Take another hold on `r`'s node, on a type that counts holds. */
 void vfs_ref_hold(const struct vfs_ref *r);
 

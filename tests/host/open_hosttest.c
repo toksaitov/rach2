@@ -1344,6 +1344,15 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
     return 0;
 }
 
+/** The walk with its path recorded, which the model does not record. */
+int vfs_resolve_real(const char *path, int flags, struct vfs_ref *out, char *real)
+{
+    if (real) {
+        real[0] = '\0';
+    }
+    return vfs_resolve(0, path, flags, out, 0, 0);
+}
+
 /** Give back the lock a locked walk took. */
 void vfs_walk_unlock(struct vfs_mount *mnt)
 {

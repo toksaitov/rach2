@@ -1157,21 +1157,24 @@ static int32_t exec_follow_fd(struct vfs_ref *ref, struct open_file **held)
 /**
  * Have the new address space `keep` keep the file `ref` a locked walk ended
  * on, its program or its ELF interpreter (`mm_exe_open`), and read a file of
- * the KRFFS root through that, as `f` says. When the walk went on to the
- * program from the descriptor's link whose description is `link`, the
- * address space is named by the path that descriptor was opened by, if it
- * has one. 0, -ETXTBSY or -ENOMEM.
+ * the KRFFS root through that, as `f` says. The program names the address
+ * space, as /proc/PID/exe shows it, by `real`, the path the walk took to it,
+ * or by `path`, the path the exec was given, when `real` is empty; when the
+ * walk went on to the program from the descriptor's link whose description
+ * is `link`, by the path that descriptor was opened by, if it has one. 0,
+ * -ETXTBSY or -ENOMEM.
  */
 static int32_t exec_keep(struct exec_file *f, const struct vfs_ref *ref, struct mm *keep,
-                         const struct open_file *link)
+                         const struct open_file *link, const char *real, const char *path)
 {
+    const char *name = real[0] != '\0' ? real : path;
     int32_t rc = mm_exe_open(keep, ref);
 
     if (rc == 0 && f->ref.mnt == NULL) {
         f->held = keep->interp_file ? keep->interp_file : keep->exe_file;
     }
-    if (rc == 0 && link != NULL && link->dirpath != NULL && keep->interp_file == NULL) {
-        mm_set_exe(keep, link->dirpath);
+    if (rc == 0 && keep->interp_file == NULL) {
+        mm_set_exe(keep, link != NULL && link->dirpath != NULL ? link->dirpath : name);
     }
     return rc;
 }
@@ -1233,7 +1236,11 @@ static int32_t exec_map(struct exec_file *f, const struct vfs_ref *ref, const st
  * through that, and any other file on the root by its node's own path, which
  * `f` keeps. `f` also says whether the caller may read the file, which the
  * kernel loads for it with the execute right alone, and has the mapping of
- * the file the loader maps its segments by (`exec_map`).
+ * the file the loader maps its segments by (`exec_map`). The program names
+ * the new address space by the path the walk took to its file, its symbolic
+ * links resolved (`resolve_named_real`), or by `path` when that does not fit:
+ * a second walk of `path` could meet a link replaced in between and name
+ * another file.
  *
  * A path that named a directory by its end, `end` (`copy_path_cwd`), must
  * reach one, and the walk that finds the file answers for it
@@ -1267,6 +1274,7 @@ static int32_t exec_open(struct exec_file *f, const char *path, int end, struct 
     struct open_file *link = NULL;
     struct vfs_ref ref;
     struct vfs_stat vst;
+    char *real = path_buf_get();
     int nosuid;
     int32_t rc;
 
@@ -1276,11 +1284,15 @@ static int32_t exec_open(struct exec_file *f, const char *path, int end, struct 
     f->map = NULL;
     f->err = 0;
     f->readable = 0;
-    rc = resolve_named(path + (path[0] == '/'), VFS_WALK_LOCK, end, &ref);
+    if (real == NULL) {
+        return -ENOMEM;
+    }
+    rc = resolve_named_real(path + (path[0] == '/'), VFS_WALK_LOCK, end, &ref, real);
     if (rc == 0) {
         rc = exec_follow_fd(&ref, &link);
     }
     if (rc != 0) {
+        path_buf_put(real);
         return rc;
     }
     nosuid = (ref.mnt->flags & VFS_MS_NOSUID) != 0;
@@ -1316,8 +1328,9 @@ static int32_t exec_open(struct exec_file *f, const char *path, int end, struct 
         rc = exec_map(f, &ref, &vst);
     }
     if (rc == 0 && keep != NULL) {
-        rc = exec_keep(f, &ref, keep, link);
+        rc = exec_keep(f, &ref, keep, link, real, path);
     }
+    path_buf_put(real);
     vfs_walk_unlock(ref.mnt);
     if (f->ref.mnt == NULL) {
         vfs_ref_release(&ref);
@@ -1521,19 +1534,6 @@ static int32_t exec_interp(struct exec_state *s, uintptr_t *base)
 }
 
 /**
- * Name the address space `mm` by the program at `path` as /proc/PID/exe
- * shows it: by the path of the file, its symbolic links resolved
- * (`resolve_real_path`), or by `path` itself when that fails.
- */
-static void exec_name(struct mm *mm, const char *path)
-{
-    char *real = path_buf_get();
-
-    mm_set_exe(mm, real && resolve_real_path(path, real) == 0 ? real : path);
-    path_buf_put(real);
-}
-
-/**
  * Build the new image in `s`'s address space of its own while the caller's
  * still runs, as Linux's `load_elf_binary` builds one: the program, at
  * ELF_ET_DYN_BASE when it is position-independent; the interpreter its
@@ -1604,9 +1604,6 @@ static int32_t exec_build(struct exec_state *s)
     s->mm->env_start = s->args.env_start;
     s->mm->env_end = s->args.env_end;
     k_memcpy(s->mm->auxv, s->args.auxv, sizeof(s->args.auxv));
-    if (s->mm->exe == NULL) {
-        exec_name(s->mm, s->path);
-    }
     if (s->layout.interp[0] != '\0') {
         mm_set_interp(s->mm, s->layout.interp);
     }
@@ -1800,17 +1797,19 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
 }
 
 /**
- * Replace the canonical path `path`, of VFS_PATH_MAX bytes, by the path of
- * the program the /proc/<pid>/exe link it names reaches, if it names one,
- * once `exec_open` has gone on from the link to that program's file: Chromium
- * runs its children by executing /proc/self/exe, and the program they run is
- * named by that path, not the link's, in its comm, and in its own link where
- * its file has no present path to give. For a process chroot put in a
- * directory, a path under /proc is not in the synthetic /proc, so the path
- * stays as the walk resolved it. 0, or the link's error.
+ * Replace the canonical path `s->path` by the path of the program the
+ * /proc/<pid>/exe link it names reaches, if it names one, once `exec_open`
+ * has gone on from the link to that program's file, and name the new address
+ * space by it: Chromium runs its children by executing /proc/self/exe, and
+ * the program they run is named by that path, not the link's, in its comm,
+ * and in its own link where its file has no present path to give. For a
+ * process chroot put in a directory, a path under /proc is not in the
+ * synthetic /proc, so the path stays as the walk resolved it. 0, or the
+ * link's error.
  */
-static int32_t exec_link_name(char *path)
+static int32_t exec_link_name(struct exec_state *s)
 {
+    char *path = s->path;
     struct vpath vp;
     int pid;
     int n;
@@ -1824,6 +1823,7 @@ static int32_t exec_link_name(char *path)
         return n;
     }
     path[n] = '\0';
+    mm_set_exe(s->mm, path);
     return 0;
 }
 
@@ -1905,7 +1905,7 @@ static int32_t exec_run(isr_params_t *params, struct exec_state *s)
     }
     rc = exec_open(&s->prog, s->path, s->path_end, &s->id, s->mm);
     if (rc == 0) {
-        rc = exec_link_name(s->path);
+        rc = exec_link_name(s);
     }
     if (rc == 0) {
         rc = exec_copy_args(s, user_path, (char *const __user *)SC_ARG(params, 1),
