@@ -45,8 +45,11 @@
 # comments on the oldest one open, and a core run that passes on both
 # architectures closes every open one, whoever opened it and whatever its
 # title. A GitHub call that fails is named, the rest are still made, and the
-# exit status is 1. GH_TOKEN, GITHUB_REPOSITORY, GITHUB_SERVER_URL,
-# GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT come from the job.
+# exit status is 1. Each architecture's result, with the first lines that
+# name a failure, the issue and the command that fetches the logs, also goes
+# to the job's summary, GITHUB_STEP_SUMMARY, which GitHub shows on the run's
+# page. GH_TOKEN, GITHUB_REPOSITORY, GITHUB_SERVER_URL, GITHUB_RUN_ID and
+# GITHUB_RUN_ATTEMPT come from the job.
 #
 set -u
 
@@ -54,8 +57,8 @@ kind=${1-}
 sha=${2-}
 dir=${3-}
 case "$kind" in
-    core) depth=50 contexts=ci/core ;;
-    full) depth=500 contexts="ci/full ci/night" ;;
+    core) depth=50 contexts=ci/core what="Core tests" ;;
+    full) depth=500 contexts="ci/full ci/night" what="Release tests" ;;
     *) echo "usage: tools/ci/report.sh core|full SHA DIR" >&2; exit 2 ;;
 esac
 [ -n "$sha" ] || { echo "usage: tools/ci/report.sh core|full SHA DIR" >&2; exit 2; }
@@ -72,6 +75,11 @@ trap 'exit 143' TERM
 statuses=$(mktemp "${TMPDIR:-/tmp}/rach2-report.XXXXXX") || exit 1
 rc=0
 
+# Append each LINE to the job's summary.
+summarize() { # summarize LINE...
+    [ -z "${GITHUB_STEP_SUMMARY:-}" ] || printf '%s\n' "$@" >> "$GITHUB_STEP_SUMMARY"
+}
+
 lost() { # lost WHAT: name a GitHub call that failed
     echo "ci: report: failed: $1" >&2
     rc=1
@@ -81,7 +89,7 @@ lost() { # lost WHAT: name a GitHub call that failed
 # 1 when GitHub refused it.
 set_status() { # set_status CONTEXT STATE
     gh api "repos/$repo/statuses/$sha" -f state="$2" -f context="$1" \
-        -f target_url="$run_url" -f description="$kind at $short" > /dev/null ||
+        -f target_url="$run_url" -f description="$what of $short" > /dev/null ||
         { lost "status $1"; return 1; }
 }
 
@@ -138,7 +146,7 @@ open_holds() {
 start_bisect() { # start_bisect NUMBER
     if gh workflow run bisect.yml --repo "$repo" --ref master -f kind="$kind" \
         -f arch="$arch" -f good="$good" -f bad="$sha" -f items="$items" \
-        -f issue="$1" -f run="$GITHUB_RUN_ID"; then
+        -f issue="$1" -f run="$GITHUB_RUN_ID" > /dev/null; then
         echo "ci: report: $arch: bisect started for #$1"
     else
         lost "the bisect for #$1"
@@ -149,7 +157,7 @@ start_bisect() { # start_bisect NUMBER
 # Whether the core job of ARCH ran no step on any runner, and SHA has no
 # status `ci/lost/ARCH` from an earlier run whose job on ARCH was lost.
 unrun_once() { # unrun_once ARCH
-    case "$unrun" in *"core ($1)"*) ;; *) return 1 ;; esac
+    case "$unrun" in *"Test on $1"*) ;; *) return 1 ;; esac
     case " $errors " in *" ci/lost/$1 "*) return 1 ;; esac
 }
 
@@ -166,6 +174,7 @@ fi
 passed=""
 held=""
 rerun=""
+summarize "## $what of $short" ""
 for arch in i686 x86_64; do
     result="$dir/$kind-$arch"
     case $arch in
@@ -180,12 +189,14 @@ for arch in i686 x86_64; do
     if [ -f "$result/done" ] && [ -f "$result/failed" ] && [ ! -s "$result/failed" ]; then
         set_status "ci/$kind/$arch" success
         passed="$passed $arch"
+        summarize "$arch passed." ""
         continue
     fi
     if [ ! -f "$result/done" ] && unrun_once "$arch" &&
         set_status "ci/lost/$arch" error; then
         set_status "ci/$kind/$arch" error
         rerun="$rerun $arch"
+        summarize "$arch: no runner took the job, so the core tests start again." ""
         continue
     fi
     set_status "ci/$kind/$arch" failure
@@ -205,6 +216,12 @@ $(git log --format='* %h %s' "$good..$sha")"
     else
         range="unknown: no commit in the $depth before $short is known to have passed a $kind run on $arch"
     fi
+    summarize "$arch failed: $items." ""
+    if [ -f "$result/log" ]; then
+        lines=$(grep -E ': FAIL|: result: fail' "$result/log" | head -n 8)
+        [ -z "$lines" ] || summarize '```' "$lines" '```' ""
+    fi
+    summarize "Logs: \`gh run download $GITHUB_RUN_ID --repo $repo --name $kind-$arch\`" ""
     title="ci: $kind: $items fails on $arch"
     body="The $kind run at $short failed on $arch: $items.
 
@@ -236,6 +253,7 @@ The run's output was not kept; \`gh run view $GITHUB_RUN_ID --repo $repo --log\`
         gh issue comment "$number" --repo "$repo" --body "$body" > /dev/null ||
             lost "the comment on #$number"
         echo "ci: report: $arch: failure added to #$number"
+        summarize "Added to issue #$number." ""
         labels_now "$number"
         case " $found $now " in
             *" intermittent "*)
@@ -252,6 +270,7 @@ The run's output was not kept; \`gh run view $GITHUB_RUN_ID --repo $repo --log\`
     fi
     number=${url##*/}
     echo "ci: report: $arch: filed #$number"
+    summarize "Filed as issue #$number." ""
     [ -z "$good" ] || start_bisect "$number"
 done
 

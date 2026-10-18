@@ -53,7 +53,7 @@ fault()
             ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
         rerun)
             # shellcheck disable=SC2016 # the script contains a literal $1
-            sed 's/\*"core (\$1)"\*) ;;/*" never "*) ;;/' "$repo/tools/ci/report.sh" > "$work/report.sh"
+            sed 's/\*"Test on \$1"\*) ;;/*" never "*) ;;/' "$repo/tools/ci/report.sh" > "$work/report.sh"
             ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
         retry)
             # shellcheck disable=SC2016 # the script contains a literal $1
@@ -299,7 +299,7 @@ lost()
 unrun()
 (
     clear
-    CI_TEST_UNRUN='head,core (i686)'
+    CI_TEST_UNRUN='Choose the commit,Test on i686'
     export CI_TEST_UNRUN
     results core missing || return 1
     grep -q 'statuses/bad -f state=error -f context=ci/core/i686 ' "$work/gh.log" || return 1
@@ -307,13 +307,13 @@ unrun()
     grep -q '^workflow run ci.yml --repo test/rach2 --ref master' "$work/gh.log" || return 1
     ! grep -q '^issue create ' "$work/gh.log" || return 1
     ! grep -q 'context=ci/core ' "$work/gh.log" || return 1
-    CI_TEST_UNRUN='head,core (x86_64)'
+    CI_TEST_UNRUN='Choose the commit,Test on x86_64'
     results core swapped || return 1
     grep -q 'statuses/bad -f state=success -f context=ci/core/i686 ' "$work/gh.log" || return 1
     grep -q 'statuses/bad -f state=error -f context=ci/lost/x86_64 ' "$work/gh.log" || return 1
     grep -q '^workflow run ci.yml ' "$work/gh.log" || return 1
     ! grep -q '^issue create ' "$work/gh.log" || return 1
-    CI_TEST_UNRUN='head,core (i686)'
+    CI_TEST_UNRUN='Choose the commit,Test on i686'
     results core missing || return 1
     grep -q '^issue create --repo test/rach2 --title ci: core: unfinished-core fails on i686 ' "$work/gh.log" || return 1
     ! grep -q 'context=ci/lost/' "$work/gh.log" || return 1

@@ -15,7 +15,8 @@
 # * The candidate: SHA, the commit `board.sh phase` gave, is written to the
 #   record with the time it was chosen, and commented on the phase.
 # * full: `full.yml` runs every suite on both architectures from clean at SHA.
-#   The run is found by its name, `full at SHA`, and a start after the
+#   The run is found by its title, `Release tests of SHORT for phase #P`
+#   with SHORT the first eight digits of SHA, and a start after the
 #   candidate was chosen, before another is started, so a release started
 #   again does not start a second, and a new candidate of the same commit
 #   gets a run of its own. A run that fails ends the release, naming the `ci`
@@ -270,10 +271,11 @@ full()
         success) mark full "run $2"; return 0 ;;
         failure) failed_run "$2" ;;
     esac
+    title="Release tests of $(echo "$sha" | cut -c 1-8) for phase #$phase"
     while :; do
         run=$(gh run list --repo "$REPO" --workflow full.yml --limit 50 \
             --json databaseId,displayTitle,status,conclusion,createdAt \
-            --jq "[.[] | select(.displayTitle == \"full at $sha\" and
+            --jq "[.[] | select(.displayTitle == \"$title\" and
                 .createdAt >= \"$chosen\")][0] |
                 select(. != null) | \"\(.databaseId) \(.status) \(.conclusion)\"") ||
             later "the full runs cannot be listed"
@@ -301,7 +303,7 @@ full()
         [ "$(grep -c '^dispatched ' "$state/record")" -lt 3 ] ||
             fail full "three full runs of $sha ended without a result"
         note "dispatched $(date +%s)"
-        gh workflow run full.yml --repo "$REPO" --ref master -f sha="$sha" ||
+        gh workflow run full.yml --repo "$REPO" --ref master -f sha="$sha" -f title="$title" ||
             later "the full run could not be started"
         say "full: started a run of $sha"
         sleep 30

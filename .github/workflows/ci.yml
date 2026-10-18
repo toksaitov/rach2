@@ -24,7 +24,7 @@
 # The core step has 170 minutes, inside the job's 180, after which
 # timeout(1) stops the run as tools/ci/run.sh describes, and the run is
 # reported as unfinished.
-name: ci
+name: Core tests
 
 on:
   push:
@@ -43,12 +43,14 @@ concurrency:
 
 jobs:
   head:
+    name: Choose the commit
     runs-on: [self-hosted, rach2]
     outputs:
       sha: ${{ steps.head.outputs.sha }}
       tested: ${{ steps.head.outputs.tested }}
     steps:
-      - id: head
+      - name: Find master's newest commit and whether it was tested
+        id: head
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -62,6 +64,7 @@ jobs:
           echo "tested=$tested" >> "$GITHUB_OUTPUT"
 
   core:
+    name: Test on ${{ matrix.arch }}
     needs: head
     if: needs.head.outputs.tested == '0'
     runs-on: [self-hosted, rach2]
@@ -76,16 +79,17 @@ jobs:
     env:
       ARCH: ${{ matrix.arch }}
     steps:
-      - uses: actions/checkout@v5
+      - name: Check out the commit
+        uses: actions/checkout@v5
         with:
           ref: ${{ needs.head.outputs.sha }}
           clean: false
           fetch-depth: 0
 
-      - name: core
+      - name: Build, then run style, host and core
         run: timeout -k 60 170m sh tools/ci/run.sh core "$RUNNER_TEMP/core-$ARCH"
 
-      - name: verdict
+      - name: Record the result for the report
         id: verdict
         if: always()
         run: |
@@ -94,34 +98,37 @@ jobs:
               echo "$ARCH=done $(tr '\n' ' ' < "$out/failed")" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: keep the result
+      - name: Upload the logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: core-${{ matrix.arch }}
           path: ${{ runner.temp }}/core-${{ matrix.arch }}
           retention-days: 14
 
   report:
+    name: Report the results
     needs: [head, core]
     if: ${{ !cancelled() && needs.head.result == 'success' && needs.head.outputs.tested == '0' }}
     runs-on: [self-hosted, rach2]
     steps:
-      - uses: actions/checkout@v5
+      - name: Check out the commit
+        uses: actions/checkout@v5
         with:
           ref: ${{ needs.head.outputs.sha }}
           clean: false
           fetch-depth: 0
 
-      - name: results
+      - name: Make the results directory
         run: mkdir -p "$RUNNER_TEMP/results"
 
-      - uses: actions/download-artifact@v4
+      - name: Download the logs
+        uses: actions/download-artifact@v8
         continue-on-error: true
         with:
           path: ${{ runner.temp }}/results
 
-      - name: report
+      - name: Set the commit's status and file failures as issues
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
