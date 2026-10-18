@@ -102,7 +102,8 @@ fi
 # The stand-in keeps its issues in BOARD_TEST_DATA, one a line, as
 # `N|STATE|STATUS|LABELS|ASSIGNEES|PARENT|BLOCKED|BODY|TITLE|COMMENTS|ARCHIVED`,
 # BLOCKED being the number of open blockers, with `-` for an empty field, `_`
-# for a space in STATUS, `;` between comments and `\n` for a newline in BODY.
+# for a space in STATUS, `;` between comments and for a newline in one, and
+# `\n` for a newline in BODY.
 # It answers each query with the lines that the query's --jq filter in
 # board.sh prints, paginated two lines a page. It keeps the accounts assigned
 # in the file `assignees`, which starts as BOARD_TEST_NOW. The REST calls add
@@ -321,7 +322,7 @@ case "$1 $2" in
     'issue comment')
         said=$(field "$3" 10)
         [ "$said" != - ] || said=''
-        change "$3" 10 "${said:+$said;}$body" ;;
+        change "$3" 10 "${said:+$said;}$(printf '%s' "$body" | tr '\n' ';')" ;;
     'project item-add')
         case $BOARD_TEST_FAIL in
             project|remove|close) exit 1 ;;
@@ -724,7 +725,7 @@ $only"
             run start
             [ "$result" -eq 0 ] && [ "$(cat "$work/out")" = 5 ] &&
                 [ "$(statuses)" = '5:In_progress 6:Ready 30:Ready 31:Ready 32:In_progress 33:Backlog 34:Ready 35:Backlog 36:Backlog 37:Backlog 38:Backlog 39:Ready' ] &&
-                [ "$(field 34 6)" = 5 ] && [ "$(field 5 10)" = "phase: started at $H" ] ;;
+                [ "$(field 34 6)" = 5 ] && [ "$(field 5 10 | tr ';' '\n' | grep '^phase: ')" = "phase: started at $H" ] ;;
         start-again)
             use "$begin"
             run start
@@ -743,7 +744,7 @@ $only"
             BOARD_TEST_HEAD=$H
             [ "$first" -ne 0 ] && [ "$result" -eq 0 ] &&
                 [ "$(field 5 3)" = In_progress ] &&
-                [ "$(field 5 10)" = "phase: started at $H" ] ;;
+                [ "$(field 5 10 | tr ';' '\n' | grep '^phase: ')" = "phase: started at $H" ] ;;
         start-full)
             use "$begin"
             BOARD_TEST_FULL=yes

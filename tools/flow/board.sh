@@ -95,7 +95,7 @@
 # its members N..., at most eight of them, each open, unassigned, in no other
 # group, not labelled `owner-only`, and labelled `ci` or a member of the phase
 # In progress. The group is
-# an issue titled `group: TITLE` with the label `group`, and `ci` as well when
+# an issue titled TITLE with the label `group`, and `ci` as well when
 # a member has it, whose body lists the members one a line as `* #N`. While a
 # phase P is In progress, the body ends with the line `Part of #P.` and the
 # group is linked to P as a sub-issue; a link that GitHub refuses is no
@@ -132,8 +132,9 @@
 # `start [P]` starts a phase. With none In progress, it starts P, or without P
 # the top open phase whose Status is Ready, and prints nothing and succeeds when
 # no phase is Ready. With a phase In progress, it completes that phase's start,
-# and refuses any other P. It comments `phase: started at SHA` on the phase, SHA
-# being master's head, unless a comment of that form is there already, and only
+# and refuses any other P. It comments on the phase a sentence and the line
+# `phase: started at SHA`, SHA being master's head, unless a comment has that
+# line already, and only
 # then sets the phase In progress, so that SHA comes before every commit a
 # worker makes for the phase's members, and a run that fails after the comment
 # leaves SHA for the next run to keep. For the phase In progress, it then links,
@@ -601,7 +602,7 @@ group()
     fi
     read_board
     p=$(in_progress) || exit 1
-    body="Members, each fixed in a commit of its own, as the Work section of AGENTS.md says:
+    body="One worker fixes the issues below together, each in a commit of its own, as the Work section of AGENTS.md says:
 "
     labels=group
     grouping=
@@ -652,7 +653,7 @@ Part of #$p."
             exit 1
         fi
     done
-    if ! group_url=$(gh issue create --repo "$REPO" --title "group: $title" --label "$labels" --body "$body"); then
+    if ! group_url=$(gh issue create --repo "$REPO" --title "$title" --label "$labels" --body "$body"); then
         echo "board: cannot create the group" >&2
         exit 1
     fi
@@ -796,7 +797,9 @@ start()
             echo "board: cannot read master's head" >&2
             exit 1
         }
-        gh issue comment "$p" --repo "$REPO" --body "phase: started at $head" > /dev/null || {
+        gh issue comment "$p" --repo "$REPO" --body "This phase starts at master's head. The line below records that commit for \`board.sh phase\`, and the phase's first review reads the commits after it.
+
+phase: started at $head" > /dev/null || {
             echo "board: #$p: cannot comment on it" >&2
             exit 1
         }
