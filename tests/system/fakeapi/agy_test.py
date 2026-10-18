@@ -60,7 +60,8 @@ def prepare(work):
     """Make a home with the API key settings, a fixture repository and the script.
 
     The settings are the vendor's documented ones for a Gemini API key, with
-    telemetry off: https://antigravity.google/docs/install?tab=cli and
+    enableTelemetry false, which version 1.4.0 drops from the file at its
+    start: https://antigravity.google/docs/install?tab=cli and
     https://antigravity.google/docs/cli/reference/
     """
     work = work.resolve()

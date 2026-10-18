@@ -83,12 +83,21 @@ The updater also stops where it cannot write the program's directory, as
 an ordinary user cannot write
 .Pa /opt/agy/bin .
 .Pp
+Each session of
 .Nm
-sends Google usage metrics and crash logs unless
-.Pa ~/.gemini/antigravity-cli/settings.json
-sets
+sends Google usage events, to
+.Lk https://play.googleapis.com/log ,
+and registers with
+.Pa antigravity-unleash.goog ,
+a server of feature flags, and asks it for the flags.
+Google documents
 .Ql enableTelemetry
-to false.
+set to false in
+.Pa ~/.gemini/antigravity-cli/settings.json
+as the setting that turns metrics off, but this version writes the file
+again without that member at each start, and sends the same events
+whether it is false, true or absent.
+Google documents no other setting that stops either.
 .Sh ENVIRONMENT
 .Bl -tag -width Ds
 .It Ev AGY_CLI_DISABLE_AUTO_UPDATE
