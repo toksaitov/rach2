@@ -63,7 +63,7 @@ Before the block, the helper takes the host lock that `tests/run` asks for in `R
 
 #### What a run checks of itself
 
-Before a run, the runner hashes with POSIX `cksum` the files that decide a result: `tests/run`, the registry, `suites.mk`, the root `Makefile`, `mk/*.mk`, the runner sources, the scripts here and under `suites/` and `accept/`, the scripts of `tools/image/` and `krffs/`, `tools/verify/check.sh` and the manifests. After the build it hashes the kernels and every file in the closure of the run's targets, read from `make -pn`. A file that differs or is gone at the end voids the run by name.
+Before a run, the runner hashes with POSIX `cksum` the files that decide a result: `tests/run`, the registry, `suites.mk`, the root `Makefile`, `mk/*.mk`, the runner sources, the scripts and Python programs here, the scripts under `suites/` and `accept/`, the files under `accept/agents/`, `agents/` and `fakeapi/`, the awk checkers and shell fixtures, the loops' scripts under `tools/flow/`, the scripts of `tools/image/` and `krffs/`, `tools/verify/check.sh` and the manifests. After the build it hashes the kernels and every file in the closure of the run's targets, read from `make -pn`. A file that differs or is gone at the end voids the run by name.
 
 After the run, every file made under the images directory since the products were built must match the image globs of exactly one suite of the run; one that matches none or two fails the run by name. The check is of names, so it cannot see a suite that wrote a file another suite owns.
 

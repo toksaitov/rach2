@@ -841,7 +841,8 @@ scripts_inventory() {
     ( cd "$REPO" && {
         echo tests/run; echo tests/registry; echo tests/system/suites.mk; echo Makefile
         ls mk/*.mk tests/system/runner/*.c tests/system/*.sh tests/system/suites/*.sh tests/system/accept/*.sh \
-           tests/system/agents/* tests/system/fakeapi/* tests/system/fakeapi/repo/* \
+           tests/system/*.py tests/system/accept/agents/* tests/system/checkers/*.awk tests/system/fixtures/*.sh \
+           tests/system/agents/* tests/system/fakeapi/* tests/system/fakeapi/repo/* tools/flow/* \
            tools/image/*.sh krffs/*.sh tools/verify/check.sh krffs/manifests/* 2>/dev/null
     } ) | present
 }
@@ -866,12 +867,12 @@ take_products() { # take_products TARGET...
     hash_list "$WORK/inventory.products" "$WORK/hashes.products"
 }
 # The scripts are checked as the set runs, not only at its end: the runner,
-# the registry, the makefiles and the suite and tool scripts, which is what
-# `scripts_inventory` lists. A file changed under a run voids it, and a change
-# found only at the end costs the whole run, while the scripts are cheap to
-# hash. The kernel and the application sources are not hashed here; a change
-# to one reaches the run through the products, which are large and are left to
-# the check at the end.
+# the registry, the makefiles, the suite and tool scripts and the data files
+# and helpers they read at run time, which is what `scripts_inventory` lists.
+# A file changed under a run voids it, and a change found only at the end
+# costs the whole run, while the scripts are cheap to hash. The kernel and
+# the application sources are not hashed here; a change to one reaches the run
+# through the products, which are large and are left to the check at the end.
 check_scripts_now() { # 0 when no script of the inventory has changed
     [ -f "$WORK/hashes.scripts" ] || return 0
     hash_list "$WORK/inventory.scripts" "$WORK/hashes.scripts.now"
