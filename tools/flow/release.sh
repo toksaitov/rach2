@@ -140,7 +140,20 @@ fail()
 {
     note "failed $1: $2"
     say "$1: failed: $2"
-    gh issue comment "$phase" --repo "$REPO" --body "The release of $sha failed at its step \`$1\`: $2. The record is \`$state/record\` on the manager's machine." > /dev/null ||
+    case $1 in
+        preflight) what="the check of the Lenovo before the release changes it" ;;
+        full) what="the run of every suite on both architectures" ;;
+        build) what="the build for the Lenovo on the testing host" ;;
+        recovery) what="the update of the Lenovo's recovery system" ;;
+        transfer) what="the copy of the kernel and the root to the Lenovo" ;;
+        kernel) what="the write of the kernel to the candidate slot" ;;
+        install) what="the install of the root" ;;
+        trial) what="the trial boot of the new system" ;;
+        accept) what="the acceptance tests on the trial boot" ;;
+        record) what="the write of /etc/rach2/release on the Lenovo" ;;
+        *) what="a step of the release" ;;
+    esac
+    gh issue comment "$phase" --repo "$REPO" --body "The release of commit $sha failed at the step \`$1\`, $what: $2. The phase stays In progress. The release's record is \`$state/record\` on the manager's computer." > /dev/null ||
         say "the comment on #$phase failed"
     exit 1
 }
@@ -501,7 +514,7 @@ main()
             later "the old record could not be kept"
         mv "$state/record.new" "$state/record"
         say "#$phase: the candidate is $sha"
-        gh issue comment "$phase" --repo "$REPO" --body "Release: the candidate is $sha. Its full run starts now; the phase closes when that commit has passed it and runs on the Lenovo." > /dev/null ||
+        gh issue comment "$phase" --repo "$REPO" --body "The release of this phase has started with commit $sha. Every suite now runs on it on both architectures from a clean build; the phase closes when that commit has passed them all and runs on the Lenovo." > /dev/null ||
             say "the comment on #$phase failed"
     fi
     sha=$(sed -n 's/^sha //p' "$state/record")
@@ -617,12 +630,12 @@ main()
     fi
 
     if ! grep -q '^reported ' "$state/record"; then
-        gh issue comment "$phase" --repo "$REPO" --body "Released $sha to the Lenovo.
+        gh issue comment "$phase" --repo "$REPO" --body "Commit $sha is released: the Lenovo runs it as its default system.
 
-* Full run: https://github.com/$REPO/actions/runs/$run passed on both architectures.
-* Build: \`ARCH=x86_64 make clean && ARCH=x86_64 make machine GNU_AGENTS=all\` in $COPY.
-* Kernel $(digest rach2/kernel), recovery kernel $(digest rach2-recovery/kernel), recovery image $(digest "$RECOVERY_IMAGE"), GNU root $(digest images/os-real-gnu.ext2), each by SHA-256.
-* The recovery partition was updated, the kernel and root installed from recovery, the trial boot passed machine_identity.sh and metal_accept.sh, \`bootctl commit\` made it the saved default, and /etc/rach2/release on the machine names $sha." > /dev/null ||
+* Every suite passed on both architectures in the run https://github.com/$REPO/actions/runs/$run.
+* The commit was built in $COPY on the testing host with \`ARCH=x86_64 make clean && ARCH=x86_64 make machine GNU_AGENTS=all\`.
+* The SHA-256 digests are $(digest rach2/kernel) for the kernel, $(digest rach2-recovery/kernel) for the recovery kernel, $(digest "$RECOVERY_IMAGE") for the recovery image and $(digest images/os-real-gnu.ext2) for the GNU root.
+* The release updated the recovery partition and installed the kernel and the root from the recovery system. On the trial boot, machine_identity.sh and metal_accept.sh passed; \`bootctl commit\` then made the new system the saved default, and /etc/rach2/release on the machine names $sha." > /dev/null ||
             later "the report could not be commented"
         note "reported $(date -u '+%FT%TZ')"
     fi
@@ -634,7 +647,7 @@ main()
             0) ;;
             2) later "$why" ;;
             *)
-                gh issue comment "$phase" --repo "$REPO" --body "This phase stays In progress: $why. The Lenovo runs $sha; the next release takes the rest." > /dev/null ||
+                gh issue comment "$phase" --repo "$REPO" --body "This phase stays In progress, since commit $sha is no longer its finished work: the board reports \`$why\`. The Lenovo runs $sha; the next release takes the rest." > /dev/null ||
                     later "the comment on #$phase failed"
                 void "$why" ;;
         esac
