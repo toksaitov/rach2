@@ -4,6 +4,6 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
 if [ "${1:-}" = --texts ]; then
-    exec python3 -B "$repo/tests/system/accept/agents_credentials_test.py" --texts
+    exec python3 -B "$repo/tests/system/agents_credentials_test.py" --texts
 fi
-exec python3 -B "$repo/tests/system/accept/agents_credentials_test.py" --mutate
+exec python3 -B "$repo/tests/system/agents_credentials_test.py" --mutate

@@ -29,15 +29,18 @@
 #                     history.
 #   work AGENT        print the repository's commits, its greeting, the result
 #                     of its check at HEAD and the files `git status` lists.
-#   credentials MODE  print a line `FILE SHA256` for each credential file
-#                     of MODE, or `FILE missing`.
-#   secrets MODE      read a log on standard input and print how many of the
-#                     strings of MODE's credential files it has.
+#   credentials MODE [AGENT...]
+#                     print `FILE SHA256` or `FILE missing` for each selected
+#                     agent's credential and gh's, all agents by default.
+#   secrets MODE [AGENT...]
+#                     read a log on standard input and print how many strings
+#                     of those credential files it has.
 #   redact            copy standard input to standard output with each
 #                     credential string replaced, as below.
-#   filtered MODE     print what `secrets MODE` counts in MODE's credential
-#                     files themselves after `redact`: `0 of N` when the
-#                     filter removes every string.
+#   filtered MODE [AGENT...]
+#                     print what `secrets MODE AGENT...` counts in those
+#                     files after `redact`: `0 of N` when the filter removes
+#                     every string.
 #   setup             give the account the settings and dummy keys that
 #                     point every agent at the fake API server, for the QEMU
 #                     mode; the server's certificate authority is
@@ -114,23 +117,35 @@ descendants() {
         }' | sort -n
 }
 
-# credential_files MODE: print the credential files of MODE, or with `all`
-# those of both modes, a path to a line.
+# credential_files MODE [AGENT...]: print the selected agents' credential
+# files and gh's, a path to a line; all agents if none are given. With MODE
+# `all`, include the files of both modes for the output filter.
 credential_files() {
-    if [ "$1" != lenovo ]; then
-        printf '%s\n' "$DIR/keys/claude" "$DIR/keys/codex" "$DIR/keys/agy" "$DIR/keys/muse"
+    local mode=$1 agent
+    shift
+    if [ "$#" -eq 0 ]; then
+        set -- claude codex agy muse
     fi
-    if [ "$1" != qemu ]; then
-        printf '%s\n' "$HOME/.claude/.credentials.json" "$HOME/.codex/auth.json" \
-            "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" "$HOME/.config/muse/auth.json"
-    fi
+    for agent in "$@"; do
+        if [ "$mode" != lenovo ]; then
+            printf '%s\n' "$DIR/keys/$agent"
+        fi
+        if [ "$mode" != qemu ]; then
+            case $agent in
+                claude) printf '%s\n' "$HOME/.claude/.credentials.json" ;;
+                codex) printf '%s\n' "$HOME/.codex/auth.json" ;;
+                agy) printf '%s\n' "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" ;;
+                muse) printf '%s\n' "$HOME/.config/muse/auth.json" ;;
+            esac
+        fi
+    done
     printf '%s\n' "$HOME/.config/gh/hosts.yml"
 }
 
-# credential_strings MODE: print the strings of MODE's credential files that
-# exist, each once, a string to a line.
+# credential_strings MODE [AGENT...]: print the selected credential files'
+# strings that exist, each once, a string to a line.
 credential_strings() {
-    credential_files "$1" | while read -r file; do
+    credential_files "$@" | while read -r file; do
         [ ! -f "$file" ] || grep -oE '[A-Za-z0-9._~+/-]{16,}' "$file"
     done | sort -u
 }
@@ -316,7 +331,7 @@ main() {
             printf 'status %s\n' "$(git status --porcelain | tr '\n' ' ')"
             ;;
         credentials)
-            credential_files "$2" | while read -r file; do
+            credential_files "${@:2}" | while read -r file; do
                 if [ -f "$file" ]; then
                     printf '%s %s\n' "$file" "$(sha256sum < "$file" | cut -d ' ' -f 1)"
                 else
@@ -334,7 +349,7 @@ main() {
         secrets)
             dir=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept-secrets.XXXXXX") || exit 1
             cat > "$dir/log"
-            credential_strings "$2" > "$dir/strings"
+            credential_strings "${@:2}" > "$dir/strings"
             printf '%s of %s strings\n' "$(grep -oFf "$dir/strings" "$dir/log" | sort -u | wc -l)" \
                 "$(wc -l < "$dir/strings")"
             rm -rf "$dir"
@@ -343,9 +358,9 @@ main() {
             redact
             ;;
         filtered)
-            credential_files "$2" | while read -r file; do
+            credential_files "${@:2}" | while read -r file; do
                 [ ! -f "$file" ] || cat "$file"
-            done | redact | main secrets "$2"
+            done | redact | main secrets "${@:2}"
             ;;
         setup)
             setup

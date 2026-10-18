@@ -30,8 +30,8 @@
 # program of the agents layer, /opt/AGENT/bin/AGENT.
 #
 # Before the sessions it requires each program's version to be the one its
-# recipe pins, and keeps the program's SHA-256 and that of each credential
-# file. It then reboots the machine as root and requires every credential
+# recipe pins, and keeps the program's SHA-256 and that of each selected
+# agent's credential file and gh's. It reboots as root and requires each
 # file unchanged, every version and program unchanged, `gh auth status` to
 # pass, and each agent to answer one request without its screen, which only
 # a program still signed in can do. Last it sends its log to the machine,
@@ -759,11 +759,13 @@ for program in $AGENTS gh; do
         *) bad "$program: the path finds [$(printf '%s\n' "$OUT" | sed -n 2p)]" ;;
     esac
 done
-guest credentials "$MODE" > "$work/credentials.before" || give_up "the credential files"
+# shellcheck disable=SC2086 # AGENTS is the validated list of program names
+guest credentials "$MODE" $AGENTS > "$work/credentials.before" || give_up "the credential files"
 while read -r file digest; do
     [ "$digest" != missing ] || bad "no credential file $file"
 done < "$work/credentials.before"
-OUT=$(guest filtered "$MODE")
+# shellcheck disable=SC2086 # AGENTS is the validated list of program names
+OUT=$(guest filtered "$MODE" $AGENTS)
 case $OUT in
     "0 of "[1-9]*) say "the machine's filter removes every credential string: OK" ;;
     *) give_up "the machine's filter leaves [$OUT] of the credential files' strings" ;;
@@ -803,7 +805,8 @@ while :; do
 done
 say "the machine rebooted: OK"
 
-guest credentials "$MODE" > "$work/credentials.after" || give_up "the credential files after the reboot"
+# shellcheck disable=SC2086 # AGENTS is the validated list of program names
+guest credentials "$MODE" $AGENTS > "$work/credentials.after" || give_up "the credential files after the reboot"
 if cmp -s "$work/credentials.before" "$work/credentials.after"; then
     say "the credential files are as they were before the reboot: OK"
 else
@@ -836,7 +839,7 @@ for program in $AGENTS gh; do
     unserve "$program" after
 done
 
-OUT=$(mi "bash ~/rach2-accept/guest.sh secrets $MODE" < "$LOG")
+OUT=$(mi "bash ~/rach2-accept/guest.sh secrets $MODE $AGENTS" < "$LOG")
 case $OUT in
     "0 of "*) say "the log has none of the credential files' strings: OK" ;;
     *) bad "the log has $OUT of the credential files' strings" ;;
