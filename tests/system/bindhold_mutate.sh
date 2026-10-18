@@ -18,6 +18,10 @@ faults = {
     'image': ('rach2/sys/mm/mm.c',
               'vfs_mount_base(m->exe_file->vmnt) == vfs_mount_base(mnt)',
               'm->exe_file->vmnt == mnt'),
+    'copied': ('rach2/sys/syscall_proc.c',
+               'if (type != 0100000u || !mmap_fault_readable(ref->mnt)) {',
+               'if (type != 0100000u || !mmap_fault_readable(ref->mnt) ||\n'
+               '        vfs_mount_base(ref->mnt) == vfs_root_mount()) {'),
 }
 path, old, new = faults[sys.argv[1]]
 p = Path(path)
@@ -30,7 +34,8 @@ PY
 if [ "${1:-}" = --texts ]; then
     fault descriptor check
     fault image check
-    echo 'bindhold-faults: checked: descriptor and image normalization texts'
+    fault copied check
+    echo 'bindhold-faults: checked: normalization and copied-segment texts'
     exit
 fi
 [ "$#" -eq 0 ] || exit 2
@@ -42,7 +47,8 @@ restore_sources()
 {
     cp "$work/syscall_fs.c" rach2/sys/syscall_fs.c
     cp "$work/mm.c" rach2/sys/mm/mm.c
-    touch rach2/sys/syscall_fs.c rach2/sys/mm/mm.c
+    cp "$work/syscall_proc.c" rach2/sys/syscall_proc.c
+    touch rach2/sys/syscall_fs.c rach2/sys/mm/mm.c rach2/sys/syscall_proc.c
 }
 restore()
 {
@@ -65,9 +71,17 @@ trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-bindhold-faults.XXXXXX")
 cp rach2/sys/syscall_fs.c "$work/syscall_fs.c"
 cp rach2/sys/mm/mm.c "$work/mm.c"
+cp rach2/sys/syscall_proc.c "$work/syscall_proc.c"
+ARCH=x86_64 RACH2_WORKERS=4 tests/run textbusy
+echo 'bindhold-faults: passed: unmodified boot-root bind holders'
 changed=1
 for kind in descriptor image; do
     restore_sources
+    if [ "$kind" = image ]; then
+        fault copied write
+        ARCH=x86_64 RACH2_WORKERS=4 tests/run textbusy
+        echo 'bindhold-faults: passed: copied segments with executable holders'
+    fi
     fault "$kind" write
     setsid env ARCH=x86_64 RACH2_WORKERS=4 tests/run textbusy > "$work/$kind.log" 2>&1 &
     child=$!
