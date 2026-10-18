@@ -1,12 +1,12 @@
 #!/bin/sh
 # ci_test.sh: check unfinished ci reports, a result whose upload was lost,
-# the labels and body of a filed issue, a full run's last pass, a failure
-# repeated on an intermittent issue, the hold issue, bisection runs, their
-# time limits and continuation, the run whose issue bisection labels
-# intermittent, a report and a bisection that overlap, the kind an older
-# commit's run.sh takes, a refused run in bisection, and verdict errors. The
-# scripts run in a private tree with stand-ins for git, gh, make, timeout and
-# the clock.
+# a core job that no runner took, the labels and body of a filed issue, a
+# full run's last pass, a failure repeated on an intermittent issue, the hold
+# issue, bisection runs, their time limits and continuation, the run whose
+# issue bisection labels intermittent, a report and a bisection that
+# overlap, the kind an older commit's run.sh takes, a refused run in
+# bisection, and verdict errors. The scripts run in a private tree with
+# stand-ins for git, gh, make, timeout and the clock.
 
 set -eu
 case ${1:-} in
@@ -51,6 +51,14 @@ fault()
             # shellcheck disable=SC2016 # the script contains $VERDICT_i686
             sed 's/verdict=${VERDICT_i686-}/verdict=/' "$repo/tools/ci/report.sh" > "$work/report.sh"
             ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
+        rerun)
+            # shellcheck disable=SC2016 # the script contains a literal $1
+            sed 's/\*"core (\$1)"\*) ;;/*" never "*) ;;/' "$repo/tools/ci/report.sh" > "$work/report.sh"
+            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
+        retry)
+            # shellcheck disable=SC2016 # the script contains a literal $1
+            sed 's|\*" ci/core/\$1 "\*) return 1|*" never "*) return 1|' "$repo/tools/ci/report.sh" > "$work/report.sh"
+            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
         hold)
             # shellcheck disable=SC2016 # the script contains $(open_holds)
             sed 's/holds=$(open_holds)/holds=$(open_issue hold "$hold_title")/' "$repo/tools/ci/report.sh" > "$work/report.sh"
@@ -92,7 +100,7 @@ fault()
     esac
 }
 if [ "$mode" = texts ]; then
-    for name in report cilabel baseline again reread verdict hold bisect items comment \
+    for name in report cilabel baseline again reread verdict rerun retry hold bisect items comment \
         label intermittent newest recheck older refusal limit handoff; do
         fault "$name"
     done
@@ -126,6 +134,8 @@ case "$1 $2" in
             night) printf '%s\n' ci/night/i686 ci/night/x86_64 ;;
             *) printf '%s\n' ci/core ci/core/i686 ci/core/x86_64 ci/full/i686 ci/full/x86_64 ;;
         esac ;;
+    'api repos/test/rach2/actions/runs/1/attempts/1/jobs') echo "${CI_TEST_UNRUN:-}" ;;
+    'api repos/test/rach2/commits/bad/status') echo "${CI_TEST_ERRORS:-}" ;;
     'api '*) ;;
     'issue list')
         case "$*" in
@@ -269,6 +279,26 @@ lost()
     grep -q 'statuses/bad -f state=success -f context=ci/core ' "$work/gh.log" || return 1
     ! grep -q '^issue create ' "$work/gh.log"
 }
+
+# unrun: require a core run whose i686 job no runner took to give i686 the
+# status `error`, file nothing, leave `ci/core` unset and start ci.yml
+# again, and the same run on a commit that already has that status to report
+# the job as unfinished.
+unrun()
+(
+    CI_TEST_UNRUN='head,core (i686)'
+    export CI_TEST_UNRUN
+    clear
+    results core missing || return 1
+    grep -q 'statuses/bad -f state=error -f context=ci/core/i686 ' "$work/gh.log" || return 1
+    grep -q '^workflow run ci.yml --repo test/rach2 --ref master' "$work/gh.log" || return 1
+    ! grep -q '^issue create ' "$work/gh.log" || return 1
+    ! grep -q 'context=ci/core ' "$work/gh.log" || return 1
+    CI_TEST_ERRORS='ci/core/i686'
+    export CI_TEST_ERRORS
+    report core missing unfinished-core || return 1
+    ! grep -q 'workflow run ci.yml' "$work/gh.log"
+)
 
 # base: with only nightly passes on GOOD, require a full report to bisect
 # from GOOD as a full run, with this run's ID, and a core report to find no
@@ -489,13 +519,14 @@ suite()
 }
 
 # rows: check both unfinished kinds, the filed issue and the hold issue,
-# preserve an actual runner failure, take a nightly pass as a full run's
-# last pass, bisect a repeated intermittent failure again, run the core set
-# beside the other items of a core run that failed, take an issue's newest
-# run before labelling it intermittent and again after, read an issue's
-# labels again after reporting on it, repeat an unfinished full run as
-# `night` where run.sh knows only that, continue a bisection in a new run,
-# and count only a reported failure of the runner suite as one.
+# start core again after a job that no runner took, preserve an actual
+# runner failure, take a nightly pass as a full run's last pass, bisect a
+# repeated intermittent failure again, run the core set beside the other
+# items of a core run that failed, take an issue's newest run before
+# labelling it intermittent and again after, read an issue's labels again
+# after reporting on it, repeat an unfinished full run as `night` where
+# run.sh knows only that, continue a bisection in a new run, and count only
+# a reported failure of the runner suite as one.
 rows()
 {
     for kind in core full; do
@@ -509,6 +540,7 @@ rows()
     bisect unfinished-night full 0 || return 1
     older || return 1
     lost || return 1
+    unrun || return 1
     base || return 1
     again 'bug ci intermittent' || return 1
     again 'bug ci' || return 1
@@ -558,6 +590,12 @@ if [ "$mode" = mutate ]; then
     if lost; then
         echo 'ci-test: result: fail: verdict fault passed' >&2; exit 1
     fi
+    for name in rerun retry; do
+        fault "$name"
+        if unrun; then
+            echo "ci-test: result: fail: $name fault passed" >&2; exit 1
+        fi
+    done
     fault hold
     if hold fail || hold pass; then
         echo 'ci-test: result: fail: hold fault passed' >&2; exit 1
@@ -612,4 +650,4 @@ if [ "$mode" = mutate ]; then
     cp "$repo/tools/ci/bisect.sh" "$work/bisect.sh"
     rows
 fi
-echo 'ci-test: result: pass: unfinished runs, lost uploads, issue labels, the last pass, repeated failures, the hold issue, the runner suite, core items, time limits, continuation, the newest run, overlapping reports, older run scripts, a refused run and verdict errors'
+echo 'ci-test: result: pass: unfinished runs, lost uploads, lost jobs, issue labels, the last pass, repeated failures, the hold issue, the runner suite, core items, time limits, continuation, the newest run, overlapping reports, older run scripts, a refused run and verdict errors'

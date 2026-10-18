@@ -30,6 +30,13 @@
 # pass is known, and gives it this run's ID, so that bisection does not
 # call the failure intermittent once a later run has reported it again.
 #
+# A core job that GitHub gave to no runner, so that none of its steps ran,
+# is not a failure of the commit: its architecture gets the status `error`,
+# nothing is filed, `ci/core` is left unset, and ci.yml is started again on
+# the newest master. A commit that already has that `error` status, from a
+# run whose job was lost before, is reported as unfinished, so that a
+# runner that keeps losing jobs is filed and does not start run after run.
+#
 # A core failure of the build, style or the runner, or of the `default`
 # suite, which boots the test image, opens the issue labelled `hold`, or
 # comments on the oldest one open, and a core run that passes on both
@@ -135,8 +142,26 @@ start_bisect() { # start_bisect NUMBER
     fi
 }
 
+# Whether the core job of ARCH ran no step on any runner, and SHA has no
+# `error` status for ARCH from an earlier run whose job was lost.
+unrun_once() { # unrun_once ARCH
+    case "$unrun" in *"core ($1)"*) ;; *) return 1 ;; esac
+    case " $errors " in *" ci/core/$1 "*) return 1 ;; esac
+}
+
+unrun=""
+errors=""
+if [ "$kind" = core ]; then
+    unrun=$(gh api "repos/$repo/actions/runs/$GITHUB_RUN_ID/attempts/$attempt/jobs" \
+        --jq '[.jobs[] | select((.runner_id // 0) == 0 and (.steps | length) == 0) | .name] | join(",")') ||
+        { lost "the jobs of the run"; unrun=""; }
+    errors=$(gh api "repos/$repo/commits/$sha/status" \
+        --jq '[.statuses[] | select(.state == "error") | .context] | join(" ")') ||
+        { lost "the statuses of $short"; errors=""; }
+fi
 passed=""
 held=""
+rerun=""
 for arch in i686 x86_64; do
     result="$dir/$kind-$arch"
     case $arch in
@@ -151,6 +176,11 @@ for arch in i686 x86_64; do
     if [ -f "$result/done" ] && [ -f "$result/failed" ] && [ ! -s "$result/failed" ]; then
         set_status "ci/$kind/$arch" success
         passed="$passed $arch"
+        continue
+    fi
+    if [ ! -f "$result/done" ] && unrun_once "$arch"; then
+        set_status "ci/$kind/$arch" error
+        rerun="$rerun $arch"
         continue
     fi
     set_status "ci/$kind/$arch" failure
@@ -245,7 +275,12 @@ While this issue is open, push only a repair toward a passing core run, and name
         done
     fi
 fi
-if [ "$rc" = 0 ]; then
+if [ -n "$rerun" ]; then
+    gh workflow run ci.yml --repo "$repo" --ref master > /dev/null ||
+        lost "the core run started again"
+    echo "ci: report:$rerun: no runner took the job; core started again"
+fi
+if [ "$rc" = 0 ] && [ -z "$rerun" ]; then
     if [ "$passed" = " i686 x86_64" ]; then
         set_status "ci/$kind" success
     else

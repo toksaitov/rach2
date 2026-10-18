@@ -18,8 +18,9 @@
 # fetch, and its verdict, `done` followed by the steps that failed, is also
 # an output of the job, so that a run whose upload was lost is still judged.
 # tools/ci/report.sh sets the commit's status, files a failure as an issue,
-# starts bisect.yml for a new one or one labelled `intermittent`, and opens
-# or closes the `hold` issue. A run that a person cancels reports nothing.
+# starts bisect.yml for a new one or one labelled `intermittent`, opens or
+# closes the `hold` issue, and starts this workflow again when GitHub gave a
+# core job to no runner. A run that a person cancels reports nothing.
 # The core step has 170 minutes, inside the job's 180, after which
 # timeout(1) stops the run as tools/ci/run.sh describes, and the run is
 # reported as unfinished.
