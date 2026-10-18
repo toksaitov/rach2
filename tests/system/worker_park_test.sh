@@ -104,7 +104,7 @@ case $1 in
         awk -F '|' -v OFS='|' -v n="$2" '$1 == n { $3 = "me" } { print }' "$data" > "$data.new" &&
             mv "$data.new" "$data" ;;
     mine)
-        awk -F '|' -v n="$2" '$1 == n { print $2 == "OPEN" && $3 == "me" ? "yes" : "no" }' "$data" ;;
+        awk -F '|' -v n="$2" '$1 == n { print (($2 == "OPEN" && $3 == "me") ? "yes" : "no") }' "$data" ;;
     *) exit 2 ;;
 esac
 EOF
