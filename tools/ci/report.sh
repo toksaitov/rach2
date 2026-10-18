@@ -16,10 +16,15 @@
 # `ci/KIND/ARCH`, and once everything below has been done, `ci/KIND`, which
 # tells a later run that this commit has been tested and reported.
 #
-# A failure is filed as an issue with the labels `bug` and `ci`, titled by
-# the run's kind, its architecture and what failed. The issue gives the run,
-# its attempt, the commit, the command that fetches the kept logs, and the
-# range of commits since the last pass: the newest first-parent ancestor of
+# A failure is filed as an issue with the labels `bug` and `ci`, titled
+# `Core tests fail on ARCH: ITEMS` or `Release tests fail on ARCH: ITEMS`,
+# ITEMS being what failed, sorted and joined by commas, or `Core tests did
+# not finish on ARCH` or `Release tests did not finish on ARCH` for an
+# unfinished run. The issue says in a sentence what failed, where and at
+# which commit, and gives the first lines of the log that name a failure, the
+# command that fetches the kept logs, the run, its attempt, the commit, the
+# end of the log, and last the commits since the last pass: the newest
+# first-parent ancestor of
 # SHA, within 50 for core and 500 for full, whose status `ci/core/ARCH` is
 # success, or for full `ci/full/ARCH` or `ci/night/ARCH`, which the nightly
 # runs before full runs set. An issue already open under that title gets a
@@ -66,7 +71,7 @@ repo=$GITHUB_REPOSITORY
 run_url="$GITHUB_SERVER_URL/$repo/actions/runs/$GITHUB_RUN_ID"
 attempt=${GITHUB_RUN_ATTEMPT:-1}
 short=$(git rev-parse --short "$sha")
-hold_title="hold: master does not build, pass style or boot"
+hold_title="Pushes are held: master does not build, pass style or boot"
 statuses=
 trap 'rm -f ${statuses:+"$statuses"}' EXIT
 trap 'exit 129' HUP
@@ -150,7 +155,7 @@ start_bisect() { # start_bisect NUMBER
         echo "ci: report: $arch: bisect started for #$1"
     else
         lost "the bisect for #$1"
-        gh issue comment "$1" --repo "$repo" --body "ci could not start the bisect; narrow the range by hand." > /dev/null
+        gh issue comment "$1" --repo "$repo" --body "ci could not start the bisection that would find the commit that caused this failure. Narrow the commits since the last pass by hand." > /dev/null
     fi
 }
 
@@ -205,45 +210,69 @@ for arch in i686 x86_64; do
     else
         items=unfinished-$kind
     fi
+    tests=$(echo "$what" | tr '[:upper:]' '[:lower:]')
+    case $items in
+        unfinished-*)
+            title="$what did not finish on $arch"
+            failed="did not finish"
+            first="The $tests of commit $short did not finish on $arch: the run left no result, as when it reaches its time limit or loses its runner." ;;
+        *)
+            title="$what fail on $arch: $(echo "$items" | sed 's/ /, /g')"
+            failed=$(echo "$items" | sed "s/^/\`/; s/ /\`, \`/g; s/\$/\`/")
+            first="The $tests of commit $short failed on $arch: $failed." ;;
+    esac
     case " $items " in
         *" build "*|*" style "*|*" runner "*|*" core "*|*" default "*|*" unfinished-core "*)
-            [ "$kind" = core ] && held="$held $arch: $items;" ;;
+            [ "$kind" = core ] && held="$held
+* $arch: $failed" ;;
     esac
     good=$(last_pass "$arch") || { lost "the last pass on $arch"; good=""; }
     if [ -n "$good" ]; then
-        range="$(git rev-parse --short "$good")..$short, $(git rev-list --count "$good..$sha") commits:
+        range="Commits since the last pass on $arch, $(git rev-parse --short "$good")..$short, $(git rev-list --count "$good..$sha") in all:
+
 $(git log --format='* %h %s' "$good..$sha")"
     else
-        range="unknown: no commit in the $depth before $short is known to have passed a $kind run on $arch"
+        range="The commits since the last pass are unknown: no commit in the $depth before $short is known to have passed the $tests on $arch."
     fi
     summarize "$arch failed: $items." ""
+    lines=
     if [ -f "$result/log" ]; then
         lines=$(grep -E ': FAIL|: result: fail' "$result/log" | head -n 8)
         [ -z "$lines" ] || summarize '```' "$lines" '```' ""
     fi
     summarize "Logs: \`gh run download $GITHUB_RUN_ID --repo $repo --name $kind-$arch\`" ""
-    title="ci: $kind: $items fails on $arch"
-    body="The $kind run at $short failed on $arch: $items.
+    body=$first
+    [ -z "$lines" ] || body="$body
 
+The first lines of the log that name a failure:
+
+\`\`\`
+$lines
+\`\`\`"
+    body="$body
+
+Logs: \`gh run download $GITHUB_RUN_ID --repo $repo --name $kind-$arch\`
 Run: $run_url
 Attempt: $attempt
-Commit: $sha
-Logs: \`gh run download $GITHUB_RUN_ID --repo $repo --name $kind-$arch\`
-
-Commits since the last pass: $range"
+Commit: $sha"
     if [ -f "$result/log" ]; then
         body="$body
 
-The end of the log:
+<details><summary>The last 40 lines of the log</summary>
 
 \`\`\`
 $(tail -n 40 "$result/log")
-\`\`\`"
+\`\`\`
+
+</details>"
     else
         body="$body
 
 The run's output was not kept; \`gh run view $GITHUB_RUN_ID --repo $repo --log\` prints the log of each job."
     fi
+    body="$body
+
+$range"
     if ! found=$(open_issue bug "$title"); then
         lost "the issue list for $arch"
         continue
@@ -278,11 +307,12 @@ if [ "$kind" = core ]; then
     if ! holds=$(open_holds); then
         lost "the hold issue's list"
     elif [ -n "$held" ]; then
-        body="The core run at $short failed in a way that stops every check:$held
+        body="The core tests of commit $short on master failed in a way that stops every check: the build, the style checks, the test runner or the boot of the test image.
+$held
 
 Run: $run_url
 
-While this issue is open, push only a repair toward a passing core run, and name it here."
+While this issue is open, push to master only a repair toward a passing core run, and name it here. The next core run that passes on both architectures closes the issue."
         hold=$(echo "$holds" | head -n 1)
         if [ -n "$hold" ]; then
             gh issue comment "$hold" --repo "$repo" --body "$body" > /dev/null || lost "the comment on #$hold"
@@ -293,7 +323,7 @@ While this issue is open, push only a repair toward a passing core run, and name
         echo "ci: report: hold opened"
     elif [ "$passed" = " i686 x86_64" ]; then
         for hold in $holds; do
-            gh issue close "$hold" --repo "$repo" --comment "The core run at $short passed on both architectures: $run_url" > /dev/null ||
+            gh issue close "$hold" --repo "$repo" --comment "The core tests of commit $short passed on both architectures, so pushes to master may go on: $run_url" > /dev/null ||
                 lost "the close of #$hold"
             echo "ci: report: hold #$hold closed"
         done

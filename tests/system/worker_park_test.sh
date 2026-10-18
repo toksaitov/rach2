@@ -11,11 +11,12 @@
 # writes its issue, the clone's branch and STATE/parked to a list, and closes
 # its issue and the hold; each sleep is counted, and the row's last touches
 # STATE/stop. The rows check that the loop parks 50 and puts the clone on
-# master, takes the repair `ci: core: ...` past a bug and another suite's `ci`
-# issue, takes 50 back when the repair is closed, takes a group that lists a
-# repair and not one that lists only another suite's issue, takes a repair
-# listed after five issues it refuses, and neither parks nor claims with
-# nothing to claim or with a file not committed, leaving the clone on 50-fix.
+# master, takes the repair `Core tests fail on ...` past a bug and a `ci`
+# issue of the release tests, takes 50 back when the repair is closed, takes a
+# group that lists a repair and not one that lists only a release tests'
+# issue, takes a repair `Core tests did not finish on ...` listed after five
+# issues it refuses, and neither parks nor claims with nothing to claim or
+# with a file not committed, leaving the clone on 50-fix.
 # The rows rest, fresh and stale start with no issue and no hold, and give
 # the timeline of issue 80, labelled `ci` and `intermittent`, which a session
 # hands back: the loop runs one session on 80 and then passes it by, whether
@@ -137,7 +138,8 @@ case "$1 $2 $*" in
             $1 != n { next }
             {
                 ci = ("," $4 ",") ~ /,ci,/
-                core = ci && index($5, "ci: core: ") == 1
+                core = ci && (index($5, "Core tests fail on ") == 1 ||
+                    index($5, "Core tests did not finish on ") == 1)
             }
             what == "flaky" { print ("," $4 ",") ~ /,intermittent,/ ? "true" : "false" }
             what == "ci" { print ci ? "true" : "false" }
@@ -219,7 +221,8 @@ row()
     if [ "$back" = yes ]; then
         printf '%s\n' "$3" > "$work/data"
     else
-        printf '%s\n' '50|OPEN|me|bug|tools: a fix|-' '77|OPEN|-|hold|hold: core fails|-' \
+        printf '%s\n' '50|OPEN|me|bug|A fix to the tools|-' \
+            '77|OPEN|-|hold|Pushes are held: master does not build, pass style or boot|-' \
             "$3" > "$work/data"
     fi
     : > "$work/sessions"
@@ -276,15 +279,15 @@ rows()
             failed="$failed $name"
         fi
     done <<'ROWS'
-park 2 60|OPEN|-|bug|tests: a bug|-;62|OPEN|-|ci|ci: style: style fails on i686|-;61|OPEN|-|ci|ci: core: default fails on i686|-
-group 1 65|OPEN|-|ci,group|ci: style group|* #62;62|OPEN|-|ci|ci: style: style fails on i686|-;63|OPEN|-|ci,group|ci: core group|* #66\n* #64;66|OPEN|-|ci|ci: style: host fails on i686|-;64|OPEN|-|ci|ci: core: default fails on i686|-
-sixth 1 70|OPEN|-|bug|a|-;71|OPEN|-|bug|b|-;72|OPEN|-|ci|ci: style: c|-;73|OPEN|-|bug|d|-;74|OPEN|-|bug|e|-;61|OPEN|-|ci|ci: core: default fails on i686|-
-none 1 60|OPEN|-|bug|tests: a bug|-;62|OPEN|-|ci|ci: style: style fails on i686|-
-dirty 1 61|OPEN|-|ci|ci: core: default fails on i686|-
-rest 2 80|OPEN|-|ci,intermittent|ci: default: default fails on i686|-
-fresh 2 80|OPEN|-|ci,intermittent|ci: default: default fails on i686|-
-stale 2 80|OPEN|-|ci,intermittent|ci: default: default fails on i686|-
-plain 2 81|OPEN|-|ci|ci: default: default fails on i686|-
+park 2 60|OPEN|-|bug|A bug in the tests|-;62|OPEN|-|ci|Release tests fail on i686: style|-;61|OPEN|-|ci|Core tests fail on i686: default|-
+group 1 65|OPEN|-|ci,group|Fix the style of the release tests|* #62;62|OPEN|-|ci|Release tests fail on i686: style|-;63|OPEN|-|ci,group|Make the test image boot again|* #66\n* #64;66|OPEN|-|ci|Release tests fail on i686: host|-;64|OPEN|-|ci|Core tests fail on i686: default|-
+sixth 1 70|OPEN|-|bug|a|-;71|OPEN|-|bug|b|-;72|OPEN|-|ci|Release tests fail on i686: c|-;73|OPEN|-|bug|d|-;74|OPEN|-|bug|e|-;61|OPEN|-|ci|Core tests did not finish on i686|-
+none 1 60|OPEN|-|bug|A bug in the tests|-;62|OPEN|-|ci|Release tests fail on i686: style|-
+dirty 1 61|OPEN|-|ci|Core tests fail on i686: default|-
+rest 2 80|OPEN|-|ci,intermittent|Release tests fail on i686: default|-
+fresh 2 80|OPEN|-|ci,intermittent|Release tests fail on i686: default|-
+stale 2 80|OPEN|-|ci,intermittent|Release tests fail on i686: default|-
+plain 2 81|OPEN|-|ci|Release tests fail on i686: default|-
 ROWS
     [ -z "$failed" ]
 }

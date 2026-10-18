@@ -288,7 +288,7 @@ report()
 lost()
 {
     report core lost-runner 'default runner' || return 1
-    grep -q 'ci: core: default runner fails on i686' "$work/gh.log" || return 1
+    grep -q " --title Core tests fail on i686: default, runner .* --body The core tests of commit bad failed on i686: \`default\`, \`runner\`\.$" "$work/gh.log" || return 1
     grep -q 'The run.s output was not kept; .gh run view 1 ' "$work/gh.log" || return 1
     clear
     results core lost || return 1
@@ -322,7 +322,7 @@ unrun()
     ! grep -q '^issue create ' "$work/gh.log" || return 1
     CI_TEST_UNRUN='Choose the commit,Test on i686'
     results core missing || return 1
-    grep -q '^issue create --repo test/rach2 --title ci: core: unfinished-core fails on i686 ' "$work/gh.log" || return 1
+    grep -q '^issue create --repo test/rach2 --title Core tests did not finish on i686 ' "$work/gh.log" || return 1
     ! grep -q 'context=ci/lost/' "$work/gh.log" || return 1
     ! grep -q 'workflow run ci.yml' "$work/gh.log"
 )
@@ -336,9 +336,10 @@ base()
     CI_TEST_BASE=night
     results full runner || return 1
     grep -q 'workflow run bisect.yml .* -f kind=full -f arch=i686 -f good=good -f bad=bad -f items=runner -f issue=7 -f run=1' "$work/gh.log" || return 1
+    grep -q ' --title Release tests fail on i686: runner ' "$work/gh.log" || return 1
     results core runner || return 1
     ! grep -q 'workflow run' "$work/gh.log" || return 1
-    grep -q 'unknown: no commit in the 50 before bad' "$work/gh.log" || return 1
+    grep -q 'are unknown: no commit in the 50 before bad' "$work/gh.log" || return 1
     CI_TEST_BASE=''
 }
 
@@ -351,11 +352,11 @@ base()
 again()
 {
     clear
-    CI_TEST_OPEN_TITLE='ci: core: runner fails on i686' CI_TEST_OPEN="12 $1"
+    CI_TEST_OPEN_TITLE='Core tests fail on i686: runner' CI_TEST_OPEN="12 $1"
     CI_TEST_LABELS=${2-$1}
     results core runner || return 1
     grep -q '^issue comment 12 ' "$work/gh.log" || return 1
-    ! grep -q '^issue create .* --title ci: ' "$work/gh.log" || return 1
+    ! grep -q '^issue create .* --title Core tests ' "$work/gh.log" || return 1
     case " $1 ${2-} " in
         *' intermittent '*)
             grep -q '^issue edit 12 --repo test/rach2 --remove-label intermittent' "$work/gh.log" || return 1

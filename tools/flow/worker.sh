@@ -52,9 +52,10 @@
 # unless the issue is labelled `ci`, whose repair the hold lets through.
 # Such a loop, its tree clean, parks the issue: it keeps it assigned, writes
 # its number to STATE/parked, puts the clone on master and claims a `ci`
-# issue of core, `ci: core: ...`, the kind of failure a hold stands for, or a
-# group that lists one, so that no loop waits while a repair the hold lets
-# through waits for a worker.
+# issue of core, titled `Core tests fail on ...` or `Core tests did not
+# finish on ...`, the kind of failure a hold stands for, or a group that lists
+# one, so that no loop waits while a repair the hold lets through waits for a
+# worker.
 # When that issue is closed or no longer this account's, the loop takes the
 # parked issue back. With none to claim, it puts the clone back on the
 # issue's branch and looks again every five minutes, and the next session
@@ -126,13 +127,15 @@ waiting()
 }
 
 # repair N: succeed when issue N is labelled `ci` and is a failure of core,
-# titled `ci: core: ...`, or a group that lists one, which the manager fills
-# while a hold is open only with what repairs the same failure.
+# titled `Core tests fail on ...` or `Core tests did not finish on ...`, or a
+# group that lists one, which the manager fills while a hold is open only with
+# what repairs the same failure.
 repair()
 {
     members=$(gh issue view "$1" --repo "$REPO" --json title,labels,body --jq '
         if any(.labels[]; .name == "ci") | not then empty
-        elif .title | startswith("ci: core: ") then "core"
+        elif .title | startswith("Core tests fail on ") or
+            startswith("Core tests did not finish on ") then "core"
         elif any(.labels[]; .name == "group") then
             .body | split("\n")[] | select(test("^\\* #[0-9]+$")) | ltrimstr("* #")
         else empty end') || return 1
@@ -140,7 +143,8 @@ repair()
     for m in $members; do
         [ "$(gh issue view "$m" --repo "$REPO" --json title,labels --jq '
             any(.labels[]; .name == "ci") and
-            (.title | startswith("ci: core: "))')" != true ] || return 0
+            (.title | startswith("Core tests fail on ") or
+                startswith("Core tests did not finish on "))')" != true ] || return 0
     done
     return 1
 }
