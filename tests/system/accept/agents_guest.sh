@@ -122,7 +122,7 @@ credential_files() {
     fi
     if [ "$1" != qemu ]; then
         printf '%s\n' "$HOME/.claude/.credentials.json" "$HOME/.codex/auth.json" \
-            "$HOME/.config/muse/auth.json"
+            "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" "$HOME/.config/muse/auth.json"
     fi
     printf '%s\n' "$HOME/.config/gh/hosts.yml"
 }

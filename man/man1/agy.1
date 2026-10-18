@@ -65,7 +65,8 @@ environment variable
 .Pp
 .Nm
 keeps the account's token in the Secret Service of the D-Bus session bus
-where one answers, and otherwise in a file of its own.
+where one answers, and otherwise in
+.Pa ~/.gemini/antigravity-cli/antigravity-oauth-token .
 Rach2 runs no Secret Service, so the token is in that file.
 .Ql /logout
 in a session removes it.
@@ -125,6 +126,8 @@ the settings, conversations, logs and cache, and the helper programs the
 program writes there itself
 .It Pa ~/.gemini/config
 the projects and other settings
+.It Pa ~/.gemini/antigravity-cli/antigravity-oauth-token
+the Google OAuth token where no Secret Service answers
 .El
 .Sh EXAMPLES
 Sign in in a session of

@@ -318,6 +318,13 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: testing.sh run's quoted commands" >&2
         fail=1
     fi
+    if python3 -B tests/system/accept/agents_credentials_test.py >"$VDIR/agents_credentials.rlog" 2>&1; then
+        echo "hosttest: result: pass: the agents' credential files and log scan"
+    else
+        cat "$VDIR/agents_credentials.rlog"
+        echo "hosttest: result: fail: the agents' credential files and log scan" >&2
+        fail=1
+    fi
     if python3 -B tests/system/fakeapi/anthropic_test.py >"$VDIR/anthropic.rlog" 2>&1; then
         echo "hosttest: result: pass: Messages tool results and streamed replies"
     else

@@ -53,9 +53,8 @@
 # reported the Lenovo's station address, RACH2_MACHINE_MAC or
 # 28:d2:44:7e:e0:af. The credential files are the sign-ins the manual pages
 # name: ~/.claude/.credentials.json, ~/.codex/auth.json,
-# ~/.config/muse/auth.json and ~/.config/gh/hosts.yml; Antigravity CLI keeps
-# its own in a file it does not document, so its answer after the reboot is
-# its check. The log is build/images/agents-accept-lenovo.log.
+# ~/.gemini/antigravity-cli/antigravity-oauth-token, ~/.config/muse/auth.json
+# and ~/.config/gh/hosts.yml. The log is build/images/agents-accept-lenovo.log.
 #
 # `qemu` is the rehearsal, which `tests/run agentsaccept` runs: it boots
 # KERNEL with `rach2.root=ext2` on DISK, a copy of IMAGE, the GNU root with
