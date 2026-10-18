@@ -150,3 +150,19 @@ The intervals are measured as for Muse Code. In the screen the first turn and th
 | --- | ---: | ---: | ---: | ---: |
 | `claude -p` | 0.5 | 1.4 | 0.3 | 1.2 |
 | screen | 1.1 | 1.9 | 0.7 | 1.2 |
+
+The `agy-print` and `agy-screen` rows have Antigravity CLI play the exchange of [`agy-session.json`](../../../tests/system/fakeapi/agy-session.json) as the test account, in a fresh home and the fixture's repository, once with `agy -p` and once in its screen in tmux. There the row answers the questions of its first start (a color scheme, consent to Google's use of the person's interactions, which the program offers given and the row withholds, and trust in the directory) with the keys a person would press, types the request and ends the session with `/exit`. Asked to, the program reads the fixture, runs a command, edits the file and commits it with git, and the fake server checks each function response before it answers. [`agy_session_verify.py`](../../../tests/system/agents/agy_session_verify.py) judges the returned file and commit and every recorded request on the host as the Linux proof does, and requires Google's digest of the program before and after the session. The settings are those of the Linux proof, with the fake server as the Gemini API that `GOOGLE_GEMINI_BASE_URL` names. The Gemini API's own name, `generativelanguage.googleapis.com`, and the names of the two services the program reaches beside it, listed under [agy](#agy), are the fake server's too: [`agy-services.json`](../../../tests/system/fakeapi/agy-services.json) answers the feature flags' two requests and the usage events with 404 however often they come, so a request to any of these names that the script does not have fails the row, and the machine has no route anywhere else. While a session runs, the row requires the process to run `/opt/agy/bin/agy` with no `LD_` variable in its environment, no `/etc/ld.so.preload`, and no file mapped but the program, glibc's linker and the six libraries it links against, the linker's cache and the shared memory of its SQLite databases, the summaries of its conversations and one for each conversation. `sh tests/system/agy_session_mutate.sh` requires both rows to reject a script that has the program write `answer=afterward`, which every check of a function response still passes, and to pass before and after that fault.
+
+Measured as for Muse Code, on Antigravity CLI's pinned version, in the last of several runs of each row; the others were within 6 MB and 2 s. A session needs about 300 MB of memory with `agy -p` and 245 MB in the screen. The screen's session includes the row's answers to the questions of its first start, each held for 5 s before the next: the first question came after 6 s and the prompt after 48 s, the answer was on the screen after 56 s and the session ended at 58 s. With `agy -p` the fixture was edited after 8 s. Beside the conversation, the program registered with the feature-flag server and fetched the flags once in each session, and posted usage events 3 times with `agy -p` and 6 times in the screen. These measurements set no pass criterion.
+
+| Mode | Session (s) | Free frames at the start | Minimum sampled free frames | Fall from start (KiB) |
+| --- | ---: | ---: | ---: | ---: |
+| `agy -p` | 9 | 967769 | 894187 | 294328 |
+| screen | 58 | 940777 | 879835 | 243768 |
+
+The intervals are measured as for Muse Code. In both modes the request for the title came before the first turn.
+
+| Mode | Read (s) | Check (s) | Edit (s) | Commit (s) |
+| --- | ---: | ---: | ---: | ---: |
+| `agy -p` | 0.3 | 0.3 | 0.5 | 0.8 |
+| screen | 0.5 | 0.6 | 0.5 | 1.1 |

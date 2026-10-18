@@ -1,0 +1,17 @@
+{
+  "protocol": "plain",
+  "steps": [
+    {"unordered": true, "repeat": true,
+     "request": {"method": "POST", "path": "/api/client/register",
+                 "headers": {"Host": "antigravity-unleash.goog"}},
+     "reply": {"status": 404}},
+    {"unordered": true, "repeat": true,
+     "request": {"method": "GET", "path": "/api/client/features",
+                 "headers": {"Host": "antigravity-unleash.goog"}},
+     "reply": {"status": 404}},
+    {"unordered": true, "repeat": true,
+     "request": {"method": "POST", "path": "/log",
+                 "headers": {"Host": "play.googleapis.com"}},
+     "reply": {"status": 404}}
+  ]
+}

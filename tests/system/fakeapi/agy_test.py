@@ -129,7 +129,11 @@ def client(binary, work, url, ca):
 
 
 def verify(work, record):
-    """Judge the file, git tree, commit and recorded function responses."""
+    """Judge the file, git tree, commit and recorded function responses.
+
+    Each step of WORK/script.json must be played by one request of RECORD, a
+    repeated step by any number, and no request may be unexpected.
+    """
     repo = work / "repo"
     expected = "rach2 fixture 493\nanswer=after\n"
     if (repo / "fixture.txt").read_text() != expected:
@@ -146,13 +150,18 @@ def verify(work, record):
             raise ValueError("wrong git result: " + " ".join(args))
     entries = [json.loads(line) for line in record.read_text().splitlines()]
     script = json.loads((work / "script.json").read_text())
-    if sorted(e.get("step", 0) for e in entries) != list(range(1, len(script["steps"]) + 1)):
+    steps = script["steps"]
+    owed = [i for i, step in enumerate(steps, 1) if not step.get("repeat")]
+    if any("step" not in e for e in entries) or \
+            sorted(e["step"] for e in entries if e["step"] in owed) != owed:
         raise ValueError("the record is not one accepted request for each step")
     for entry in entries:
+        step = steps[entry["step"] - 1]
         request = fakeapi.Request(entry["method"], entry["path"] +
                                   ("?" + entry["query"] if entry["query"] else ""),
                                   "HTTP/1.1", entry["headers"], entry["body"].encode())
-        reason = proto_gemini.check(script["steps"][entry["step"] - 1], request)
+        module = fakeapi.protocol(step.get("protocol", script.get("protocol", "plain")))
+        reason = module.check(step, request)
         if reason:
             raise ValueError("the recorded exchange failed: " + reason)
 
