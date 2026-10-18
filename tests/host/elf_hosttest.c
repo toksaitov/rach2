@@ -133,6 +133,7 @@ static struct {
     uintptr_t start, end;
     struct vm_file *file;
     uint32_t pgoff;
+    uint32_t prot;
 } regions[8];
 static int region_count;
 
@@ -141,13 +142,13 @@ int vm_insert_file(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot
                    struct vm_file *file, uint32_t pgoff)
 {
     (void)vm;
-    (void)prot;
     (void)type;
     if (region_count < 8) {
         regions[region_count].start = start;
         regions[region_count].end = end;
         regions[region_count].file = file;
         regions[region_count].pgoff = pgoff;
+        regions[region_count].prot = prot;
         region_count++;
     }
     return 0;
@@ -489,6 +490,35 @@ static void mapped_regions(const elf_image_t *out, struct vm_file *file)
 }
 
 /**
+ * The protection `elf_add_vmas` gives the regions of segments with each
+ * kind of `p_flags`: write and execute each grant read, as the processor
+ * reads a page it may write or run, and a segment with no flags has none.
+ */
+static void region_protection(void)
+{
+    static const uint32_t flags[5] = {PF_X, PF_W, PF_R, PF_R | PF_X, 0};
+    static const uint32_t prot[5] = {VM_PROT_READ | VM_PROT_EXEC, VM_PROT_READ | VM_PROT_WRITE,
+                                     VM_PROT_READ, VM_PROT_READ | VM_PROT_EXEC, 0};
+    vm_space_t vm;
+    elf_image_t out;
+    int i;
+
+    k_memset(&out, 0, sizeof(out));
+    out.nsegs = 5;
+    for (i = 0; i < 5; i++) {
+        out.segs[i].start = 0x08048000u + (uintptr_t)i * PAGE_SIZE;
+        out.segs[i].file_end = out.segs[i].start;
+        out.segs[i].end = out.segs[i].start + PAGE_SIZE;
+        out.segs[i].flags = flags[i];
+    }
+    region_count = 0;
+    CHECK(elf_add_vmas(&vm, &out) == 0 && region_count == 5);
+    for (i = 0; i < 5; i++) {
+        CHECK(regions[i].prot == prot[i]);
+    }
+}
+
+/**
  * Segments loaded with a file to map. The first, at offset 0, has 0x1100
  * file bytes in three pages: it takes one frame, at its second page, with
  * the file's bytes from 0x1000 and zeros after them, and its regions are
@@ -682,6 +712,7 @@ int main(void)
     reentrant_load();
     header_table_bounds();
     dynamic_images();
+    region_protection();
     mapped_segments();
     mapped_bss_page();
 

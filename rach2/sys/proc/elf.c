@@ -447,10 +447,10 @@ int elf_add_vmas(struct vm_space *vm, const elf_image_t *img)
             prot |= VM_PROT_READ;
         }
         if (seg->flags & PF_W) {
-            prot |= VM_PROT_WRITE;
+            prot |= VM_PROT_WRITE | VM_PROT_READ;
         }
         if (seg->flags & PF_X) {
-            prot |= VM_PROT_EXEC;
+            prot |= VM_PROT_EXEC | VM_PROT_READ;
         }
         vt = (seg->flags & PF_X) ? VM_CODE : VM_DATA;
         if (seg->file_end > seg->start &&
