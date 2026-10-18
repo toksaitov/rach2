@@ -30,6 +30,8 @@
 /* This model's permanent entries, the root and two others; the kernel has
  * more, and the rows need the three slots after them for mounts. */
 #define VFS_PERMANENT        3
+/* The flag of an unmount's walk, as vfs.c defines it. */
+#define WALK_UNMOUNT         0x100
 
 /* The parts of the kernel's structures that the unmount path reads. */
 struct block_device {
@@ -127,15 +129,15 @@ static struct vfs_type type = {&ops};
  * in `walk_node` or at its root, and returns `lookup_error`. Each call is
  * counted, so that a case can check that no second walk follows an EIO.
  */
-static int resolve_path(int a, const char *path, int b, struct vfs_ref *ref, int c, int d,
-                        int unmount)
+static int resolve_path(int a, const char *path, int flags, struct vfs_ref *ref, int c, int d,
+                        int real)
 {
     (void)a;
     (void)path;
-    (void)b;
+    (void)flags;
     (void)c;
     (void)d;
-    (void)unmount;
+    (void)real;
     resolve_calls++;
     ref->mnt = &records[3];
     ref->node = walk_node ? walk_node : records[3].root;
