@@ -5,7 +5,8 @@
 # issue, bisection runs, their time limits and continuation, the run whose
 # issue bisection labels intermittent, a report and a bisection that
 # overlap, the kind an older commit's run.sh takes, a refused run in
-# bisection, a bisection whose issue has been closed, and verdict errors.
+# bisection, a bisection whose issue has been closed, verdict errors, and the
+# statuses of a full run of chosen suites.
 # The scripts run in a private tree with stand-ins for git, gh, make,
 # timeout and the clock.
 
@@ -105,11 +106,19 @@ fault()
         closed)
             sed 's/^    open_or_stop$/    :/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
             ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
+        rerunctx)
+            sed 's/ || ctx=ci\/rerun$/ || :/' "$repo/tools/ci/report.sh" > "$work/report.sh"
+            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
+        skipped)
+            # shellcheck disable=SC2016 # the script contains a literal $result
+            sed 's|if \[ -f "\$result/done" \] && \[ -f "\$result/skipped" \]; then|if false; then|' \
+                "$repo/tools/ci/report.sh" > "$work/report.sh"
+            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
     esac
 }
 if [ "$mode" = texts ]; then
     for name in report cilabel baseline again reread verdict rerun retry record hold bisect items comment \
-        label intermittent newest recheck older refusal limit handoff closed; do
+        label intermittent newest recheck older refusal limit handoff closed rerunctx skipped; do
         fault "$name"
     done
     exit 0
@@ -391,6 +400,24 @@ hold()
     fi
 }
 
+# chosen: require a full run of chosen suites, with nothing to test on i686
+# and a pass on x86_64, to set `ci/rerun/x86_64` and `ci/rerun` and no other
+# status.
+chosen()
+{
+    clear
+    rm -rf "$work/results"
+    mkdir -p "$work/results/full-i686" "$work/results/full-x86_64"
+    : > "$work/results/full-i686/done"
+    : > "$work/results/full-i686/skipped"
+    : > "$work/results/full-x86_64/done"
+    : > "$work/results/full-x86_64/failed"
+    : > "$work/gh.log"
+    SUITES=x86_64:agents sh "$work/report.sh" full bad "$work/results" > "$work/report.log" 2>&1 || return 1
+    [ "$(grep -o 'state=[a-z]* -f context=[a-z0-9_/]*' "$work/gh.log" | tr '\n' ,)" = \
+        'state=success -f context=ci/rerun/x86_64,state=success -f context=ci/rerun,' ]
+}
+
 # start: reset the logs, the stand-ins' records and the clock.
 start()
 {
@@ -567,8 +594,9 @@ suite()
 # items of a core run that failed, take an issue's newest run before
 # labelling it intermittent and again after, read an issue's labels again
 # after reporting on it, repeat an unfinished full run as `night` where
-# run.sh knows only that, continue a bisection in a new run, and count only
-# a reported failure of the runner suite as one.
+# run.sh knows only that, continue a bisection in a new run, count only a
+# reported failure of the runner suite as one, and set the statuses of a run
+# of chosen suites apart from a full run's.
 rows()
 {
     for kind in core full; do
@@ -598,6 +626,7 @@ rows()
     latest 1 '1 2' || return 1
     handoff || return 1
     closed || return 1
+    chosen || return 1
     for result in pass fail refuse; do
         suite "$result" || return 1
     done
@@ -693,8 +722,14 @@ if [ "$mode" = mutate ]; then
     if closed; then
         echo 'ci-test: result: fail: closed fault passed' >&2; exit 1
     fi
+    for name in rerunctx skipped; do
+        fault "$name"
+        if chosen; then
+            echo "ci-test: result: fail: $name fault passed" >&2; exit 1
+        fi
+    done
     cp "$repo/tools/ci/report.sh" "$work/report.sh"
     cp "$repo/tools/ci/bisect.sh" "$work/bisect.sh"
     rows
 fi
-echo 'ci-test: result: pass: unfinished runs, lost uploads, lost jobs, issue labels, the last pass, repeated failures, the hold issue, the runner suite, core items, time limits, continuation, the newest run, overlapping reports, older run scripts, a refused run, a closed issue and verdict errors'
+echo 'ci-test: result: pass: unfinished runs, lost uploads, lost jobs, issue labels, the last pass, repeated failures, the hold issue, the runner suite, core items, time limits, continuation, the newest run, overlapping reports, older run scripts, a refused run, a closed issue, verdict errors and a run of chosen suites'

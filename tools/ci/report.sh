@@ -14,7 +14,11 @@
 # when that begins with the word `done`; the words after it are the lines of
 # `failed`. For each architecture the commit SHA gets the status
 # `ci/KIND/ARCH`, and once everything below has been done, `ci/KIND`, which
-# tells a later run that this commit has been tested and reported.
+# tells a later run that this commit has been tested and reported. A full run
+# of the suites that SUITES names, as `ARCH:SUITE` words, sets `ci/rerun/ARCH`
+# and `ci/rerun` instead, since it did not test every suite, and an
+# architecture whose directory has `skipped`, where it had nothing to run,
+# gets no status and counts as passed.
 #
 # A failure is filed as an issue with the labels `bug` and `ci`, titled
 # `Core tests fail on ARCH: ITEMS` or `Release tests fail on ARCH: ITEMS`,
@@ -24,16 +28,16 @@
 # which commit, and gives the first lines of the log that name a failure, the
 # command that fetches the kept logs, the run, its attempt, the commit, the
 # end of the log, and last the commits since the last pass: the newest
-# first-parent ancestor of
-# SHA, within 50 for core and 500 for full, whose status `ci/core/ARCH` is
-# success, or for full `ci/full/ARCH` or `ci/night/ARCH`, which the nightly
-# runs before full runs set. An issue already open under that title gets a
-# comment instead; when it has the label `intermittent`, the label is
-# removed. The labels are read again after the comment, since a bisection
-# that ends meanwhile may add the label after the first read. A new issue,
-# and an open one that was intermittent, starts `bisect.yml` when the last
-# pass is known, and gives it this run's ID, so that bisection does not
-# call the failure intermittent once a later run has reported it again.
+# first-parent ancestor of SHA, within 50 for core and 500 for full, whose
+# status `ci/core/ARCH` is success, or for full `ci/full/ARCH` or
+# `ci/night/ARCH`, which the nightly runs before full runs set. An issue
+# already open under that title gets a comment instead; when it has the label
+# `intermittent`, the label is removed. The labels are read again after the
+# comment, since a bisection that ends meanwhile may add the label after the
+# first read. A new issue, and an open one that was intermittent, starts
+# `bisect.yml` when the last pass is known, and gives it this run's ID, so
+# that bisection does not call the failure intermittent once a later run has
+# reported it again.
 #
 # A core job that GitHub gave to no runner, so that none of its steps ran,
 # is not a failure of the commit: its architecture gets the status `error`,
@@ -67,6 +71,8 @@ case "$kind" in
     *) echo "usage: tools/ci/report.sh core|full SHA DIR" >&2; exit 2 ;;
 esac
 [ -n "$sha" ] || { echo "usage: tools/ci/report.sh core|full SHA DIR" >&2; exit 2; }
+ctx=ci/$kind
+[ "$kind" != full ] || [ -z "${SUITES:-}" ] || ctx=ci/rerun
 repo=$GITHUB_REPOSITORY
 run_url="$GITHUB_SERVER_URL/$repo/actions/runs/$GITHUB_RUN_ID"
 attempt=${GITHUB_RUN_ATTEMPT:-1}
@@ -180,6 +186,7 @@ passed=""
 held=""
 rerun=""
 summarize "## $what of $short" ""
+[ "$ctx" != ci/rerun ] || summarize "This run tested only these suites: $SUITES." ""
 for arch in i686 x86_64; do
     result="$dir/$kind-$arch"
     case $arch in
@@ -191,20 +198,25 @@ for arch in i686 x86_64; do
         echo "${verdict#done}" | tr ' ' '\n' | sed '/^$/d' > "$result/failed"
         : > "$result/done"
     fi
+    if [ -f "$result/done" ] && [ -f "$result/skipped" ]; then
+        passed="$passed $arch"
+        summarize "$arch had no suite to test." ""
+        continue
+    fi
     if [ -f "$result/done" ] && [ -f "$result/failed" ] && [ ! -s "$result/failed" ]; then
-        set_status "ci/$kind/$arch" success
+        set_status "$ctx/$arch" success
         passed="$passed $arch"
         summarize "$arch passed." ""
         continue
     fi
     if [ ! -f "$result/done" ] && unrun_once "$arch" &&
         set_status "ci/lost/$arch" error; then
-        set_status "ci/$kind/$arch" error
+        set_status "$ctx/$arch" error
         rerun="$rerun $arch"
         summarize "$arch: no runner took the job, so the core tests start again." ""
         continue
     fi
-    set_status "ci/$kind/$arch" failure
+    set_status "$ctx/$arch" failure
     if [ -f "$result/done" ] && [ -s "$result/failed" ]; then
         items=$(sort -u "$result/failed" | tr '\n' ' ' | sed 's/ $//')
     else
@@ -336,9 +348,9 @@ if [ -n "$rerun" ]; then
 fi
 if [ "$rc" = 0 ] && [ -z "$rerun" ]; then
     if [ "$passed" = " i686 x86_64" ]; then
-        set_status "ci/$kind" success
+        set_status "$ctx" success
     else
-        set_status "ci/$kind" failure
+        set_status "$ctx" failure
     fi
 fi
 exit "$rc"

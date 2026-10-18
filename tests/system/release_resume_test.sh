@@ -8,7 +8,7 @@
 # machine answers the reads of `where`, `bootctl status` and
 # /etc/rach2/release, takes a write of that file as the row says, and
 # refuses every other command; the board says what the row gives; gh lists
-# no runs.
+# no runs unless the row says otherwise.
 # The rows check that a release whose steps are all done only reports, closes
 # the phase and removes its worktree, and one whose full run is done goes to the
 # build without a second; that a void or failed record stays in place while the
@@ -20,7 +20,11 @@
 # closes the phase, and fails without closing it when the file does not read
 # back or when the machine's flush of it fails though it reads back; and that a
 # record with `closing` finishes that phase whatever phase was given, checking
-# an open phase for readiness again. With --mutate each fault below is put into
+# an open phase for readiness again; and that a candidate whose only commits
+# since a failed full run close the issues of its failures gets a run of only
+# the suites that failed, while a commit that closes nothing, one that closes
+# another issue, or an architecture that failed with no issue gives it a full
+# run. With --mutate each fault below is put into
 # the copy and must fail its own row; the copy is restored before the rows run
 # again at the end. --texts puts each fault into the copy and requires only that
 # it changes the file, and runs no row.
@@ -54,8 +58,11 @@ mkdir -p "$work/bin" "$tree/tools/flow" "$tree/krffs"
 # machine running its system after the installer started is sent to
 # recovery; the record step is skipped once the acceptance is done; the
 # status of the machine's write and flush is ignored; the record is not read
-# back; the phase of a record with `closing` is ignored;
-# and an open phase is closed without its readiness checked again.
+# back; the phase of a record with `closing` is ignored; an open phase is
+# closed without its readiness checked again; a rerun is never chosen; a
+# commit that closes nothing, or that closes another issue, is taken for a
+# fix; an architecture that failed with no issue is ignored; and a rerun is
+# started for every suite.
 fault()
 {
     # shellcheck disable=SC2016 # the dollars are in the texts sed matches
@@ -79,12 +86,18 @@ fault()
             /^    issue_state=/ { r = 1 }
             r && $0 == "        why=$(still_ready)" { $0 = "        why=; true"; r = 0 }
             { print }' ;;
+        chosen) sed 's/^        \[ -z "\$old" \] || rerun=\$(again)$/        :/' ;;
+        unclosed) sed 's/^        \[ -n "\$closes" \] || return 0$/        :/' ;;
+        closes) sed 's/^            case " \$issues " in \*" \$n "\*) ;; \*) return 0 ;; esac$/            :/' ;;
+        arches) sed 's/^        case " \$arches " in \*" \$a "\*) ;; \*) return 0 ;; esac$/        :/' ;;
+        suites) sed 's/^        \[ -z "\$only" \] || set -- "\$@" -f suites="\$only"$/        :/' ;;
     esac < "$repo/tools/flow/release.sh" > "$tree/tools/flow/release.sh"
     [ "$1" = none ] || ! cmp -s "$repo/tools/flow/release.sh" "$tree/tools/flow/release.sh"
 }
 
 if [ "$mode" = texts ]; then
-    for f in undone full aside touched started reboot unrecorded unsynced unread closing ready; do
+    for f in undone full aside touched started reboot unrecorded unsynced unread closing ready \
+        chosen unclosed closes arches suites; do
         fault "$f" || { echo "release-test: fault $f changes nothing" >&2; exit 1; }
     done
     exit 0
@@ -99,14 +112,23 @@ cat > "$tree/tools/flow/notify.sh" <<'EOF'
 printf 'notify %s\n' "$*" >> "$RELEASE_TEST_CALLS"
 EOF
 
-# gh comments, closes and gives the phase's state, RELEASE_TEST_STATE, and
-# fails every other query, which the script takes for a passing fault.
+# gh comments, closes and gives the phase's state, RELEASE_TEST_STATE; gives
+# an issue's state and title from the lines `N STATE TITLE` of
+# RELEASE_TEST_ISSUES, and a commit's statuses from RELEASE_TEST_STATUSES;
+# lists no run when RELEASE_TEST_RUNS is `none`, until a run is started, and
+# then fails; keeps each `workflow run` whole in the calls, as `dispatch`;
+# and fails every other query, which the script takes for a passing fault.
 cat > "$work/bin/gh" <<'EOF'
 #!/bin/sh
 printf 'gh %s %s %s\n' "$1" "$2" "$3" >> "$RELEASE_TEST_CALLS"
 case "$1 $2 $*" in
     'issue comment '*|'issue close '*) ;;
+    'issue view '*'--json state,title'*) printf '%s\n' "$RELEASE_TEST_ISSUES" | sed -n "s/^$3 //p" ;;
     'issue view '*'--json state'*) echo "$RELEASE_TEST_STATE" ;;
+    'api repos/'*'/statuses'*) printf '%s\n' "$RELEASE_TEST_STATUSES" ;;
+    'run list '*)
+        [ "$RELEASE_TEST_RUNS" = none ] && ! grep -q '^dispatch ' "$RELEASE_TEST_CALLS" ;;
+    'workflow run '*) printf 'dispatch %s\n' "$*" >> "$RELEASE_TEST_CALLS" ;;
     *) exit 1 ;;
 esac
 EOF
@@ -154,10 +176,22 @@ case $command in
         exit 1 ;;
 esac
 EOF
+# git fails, unless RELEASE_TEST_LOG is set: then the fetch and the ancestry
+# check pass, one commit follows the last candidate, its message is
+# RELEASE_TEST_LOG, and the registry has agents and bigmem on x86_64 and fs
+# on both architectures.
 cat > "$work/bin/git" <<'EOF'
 #!/bin/sh
 printf 'git %s\n' "$*" >> "$RELEASE_TEST_CALLS"
-exit 1
+[ -n "$RELEASE_TEST_LOG" ] || exit 1
+case $3 in
+    fetch|merge-base) ;;
+    rev-list) echo 3333333333333333333333333333333333333333 ;;
+    log) printf '%s\n' "$RELEASE_TEST_LOG" ;;
+    show) printf '%s\n' '# the suites' 'agents|qemu|full||4096|x86_64' 'fs|qemu|full' \
+        'bigmem|qemu|full||73728|x86_64' ;;
+    *) exit 1 ;;
+esac
 EOF
 
 # sleep returns at once, and stops a script that waits more than twenty times.
@@ -168,6 +202,7 @@ echo "$1" >> "$RELEASE_TEST_CALLS.sleeps"
 EOF
 chmod +x "$work/bin/"*
 
+issues='' statuses='' runs='' log=''
 H=1111111111111111111111111111111111111111
 C=2222222222222222222222222222222222222222
 T=2026-10-10T00:00:00Z
@@ -206,7 +241,10 @@ void: ready: no: work: #14"
 # BOARD for phase 7, gh report the phase as STATE, OPEN unless given, and the
 # machine take a write of /etc/rach2/release as WRITES says, no unless given,
 # as for ssh above, and run the
-# copy for phase P, keeping its output in out and its status in `result`.
+# copy for phase P, keeping its output in out and its status in `result`. The
+# variables issues, statuses, runs and log, empty unless a row sets them, are
+# RELEASE_TEST_ISSUES, RELEASE_TEST_STATUSES, RELEASE_TEST_RUNS and
+# RELEASE_TEST_LOG.
 run()
 {
     rm -rf "$work/state" "$work/calls" "$work/calls.sleeps" "$work/calls.release"
@@ -220,6 +258,8 @@ run()
     PATH=$work/bin:$PATH RELEASE_TEST_CALLS=$work/calls \
         RELEASE_TEST_BOARD="phase: #7 phase: seven
 $3" RELEASE_TEST_STATE=${4:-OPEN} RELEASE_TEST_WRITES=${5:-no} \
+        RELEASE_TEST_ISSUES=$issues RELEASE_TEST_STATUSES=$statuses \
+        RELEASE_TEST_RUNS=$runs RELEASE_TEST_LOG=$log \
         sh "$tree/tools/flow/release.sh" -s "$work/state" "$1" > "$work/out" 2>&1 < /dev/null ||
         result=$?
 }
@@ -228,6 +268,19 @@ $3" RELEASE_TEST_STATE=${4:-OPEN} RELEASE_TEST_WRITES=${5:-no} \
 aside()
 {
     (cd "$work/state" && ls) | grep "^$1" | grep -v '\.sha256$'
+}
+
+# failed_at LOG STATUSES: run a new candidate C after a record whose full run
+# 101 failed at H, with #20 filed for agents and bigmem on x86_64, the commit
+# since H having the message LOG and run 101 having set STATUSES on H.
+failed_at()
+{
+    issues='20 CLOSED Release tests fail on x86_64: agents, bigmem'
+    statuses=$2 log=$1
+    run 7 "$(printf '%s\n' "$ended" | sed '$d')
+filed 101 #20
+failed full: run 101 failed; ci filed its failures as #20" "ready: yes $C"
+    issues='' statuses='' log=''
 }
 
 # called PATTERN: succeed when a call matches the grep PATTERN.
@@ -327,6 +380,39 @@ closing $T" 'ready: no: work: #14'
                 [ "$(tail -n 1 "$work/state/record")" = 'void: ready: no: work: #14' ] &&
                 [ "$(grep '^board' "$work/calls" | tr '\n' ,)" = 'board phase,' ] &&
                 called '^gh issue comment 7$' && ! called '^gh issue close' ;;
+        rerun-chosen)
+            failed_at "Fix agents
+
+Closes #20" 'ci/full/i686 success
+ci/full/x86_64 failure'
+            [ "$result" -eq 75 ] &&
+                [ "$(sed -n 4p "$work/state/record")" = "rerun 101 $H x86_64:agents x86_64:bigmem" ] ;;
+        rerun-other|rerun-unfixed|rerun-unfiled)
+            case $1 in
+                rerun-other) failed_at "Fix agents" 'ci/full/i686 success
+ci/full/x86_64 failure' ;;
+                rerun-unfixed) failed_at "Fix agents
+
+Closes #20
+Closes #30" 'ci/full/i686 success
+ci/full/x86_64 failure' ;;
+                *) failed_at "Fix agents
+
+Closes #20" 'ci/full/i686 failure
+ci/full/x86_64 failure' ;;
+            esac
+            [ "$result" -eq 75 ] && [ "$(sed -n 2p "$work/state/record")" = "sha $C" ] &&
+                ! grep -q '^rerun ' "$work/state/record" ;;
+        rerun-dispatch)
+            runs=none
+            run 7 "phase 7
+sha $C
+chosen $T
+rerun 101 $H x86_64:agents
+touched $T" "ready: yes $C"
+            runs=''
+            [ "$result" -eq 75 ] &&
+                [ "$(grep '^dispatch ' "$work/calls")" = "dispatch workflow run full.yml --repo toksaitov/rach2 --ref master -f sha=$C -f title=Release tests of 22222222 for phase #7: again only agents on x86_64 -f suites=x86_64:agents" ] ;;
         *) return 1 ;;
     esac
 }
@@ -336,7 +422,8 @@ rows()
 {
     failed=
     for name in all-done full-done void-waits void-aside failed-aside \
-        install-stops install-reboot record-write record-refused record-unsynced closing-other closing-open closing-unready; do
+        install-stops install-reboot record-write record-refused record-unsynced closing-other closing-open closing-unready \
+        rerun-chosen rerun-other rerun-unfixed rerun-unfiled rerun-dispatch; do
         if ! row "$name"; then
             echo "release-test: failed: $name" >&2
             cat "$work/out" "$work/calls" >&2
@@ -374,8 +461,13 @@ if [ "$mode" = mutate ]; then
     caught unread record-refused
     caught closing closing-other
     caught ready closing-unready
+    caught chosen rerun-chosen
+    caught unclosed rerun-other
+    caught closes rerun-unfixed
+    caught arches rerun-unfiled
+    caught suites rerun-dispatch
     fault none || exit 1
     rows || exit 1
-    echo 'release-test: result: pass: 11 faults caught and restored'
+    echo 'release-test: result: pass: 16 faults caught and restored'
 fi
-echo 'release-test: result: pass: 13 rows'
+echo 'release-test: result: pass: 18 rows'

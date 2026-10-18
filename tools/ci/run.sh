@@ -15,7 +15,10 @@
 # the vendored builds, then `make`; a failure of either is `build`. It then
 # runs every suite of the registry that runs on ARCH, `style` and `host`
 # among them, as one set, and after it `bigmem`, which runs only on x86_64
-# and needs the host alone, as a run of its own. The build runs with
+# and needs the host alone, as a run of its own. When SUITES is set, as
+# `ARCH:SUITE` words, a full run runs only the suites it names for ARCH, and
+# refuses a word whose suite ARCH does not run; when it names none for ARCH,
+# the run builds nothing and writes `skipped` beside `done`. The build runs with
 # RACH2_MIN_FREE_GIB at 40 unless the environment gives another, so that it
 # stops, as `build`, before it fills the host's disk. The exit status is 0 when
 # nothing failed. A TERM to the run's process group, which timeout(1) sends
@@ -92,7 +95,43 @@ run_set() { # run_set NAME ARGS...
     return 1
 }
 
+# Print each of NAMES, the suites ARCH runs, that SUITES names as an
+# `ARCH:SUITE` word, or each of them when SUITES is empty; fail when SUITES
+# names a suite of ARCH that is not among NAMES.
+chosen() { # chosen NAME...
+    [ -n "${SUITES:-}" ] || { printf '%s\n' "$@"; return 0; }
+    for w in $SUITES; do
+        case $w in
+            "$ARCH":*) ;;
+            *) continue ;;
+        esac
+        case " $* " in
+            *" ${w#*:} "*) echo "${w#*:}" ;;
+            *) return 1 ;;
+        esac
+    done
+}
+
 echo "ci: $kind: architecture $ARCH at $(git rev-parse --short HEAD)"
+if [ "$kind" = full ]; then
+    names=$(awk -F'|' -v a="$ARCH" '
+        /^[a-z]/ && $1 != "bigmem" && ($6 == "" || index("," $6 ",", "," a ",")) { print $1 }
+    ' tests/registry)
+    [ "$ARCH" != x86_64 ] || names="$names bigmem"
+    # shellcheck disable=SC2086 # a suite name is one word by format
+    names=$(chosen $names) || {
+        echo "ci: full: refused: SUITES names a suite that $ARCH does not run: $SUITES" | copy -a "$out/log"
+        exit 2
+    }
+    if [ -z "$names" ]; then
+        echo "ci: full: no suite to run again on $ARCH" | copy -a "$out/log"
+        : > "$out/skipped"
+        : > "$out/done"
+        exit 0
+    fi
+    [ -z "${SUITES:-}" ] ||
+        echo "ci: full: running again on $ARCH: $(echo "$names" | tr '\n' ' ' | sed 's/ $//')" | copy -a "$out/log"
+fi
 if [ "$kind" = full ] && ! step make clean; then
     echo build >> "$out/failed"
 elif ! step make; then
@@ -104,12 +143,10 @@ else
             run_set host host
             run_set core core ;;
         full)
-            names=$(awk -F'|' -v a="$ARCH" '
-                /^[a-z]/ && $1 != "bigmem" && ($6 == "" || index("," $6 ",", "," a ",")) { print $1 }
-            ' tests/registry)
+            rest=$(echo "$names" | grep -vx bigmem)
             # shellcheck disable=SC2086 # a suite name is one word by format
-            run_set all $names
-            if [ "$ARCH" = x86_64 ]; then
+            [ -z "$rest" ] || run_set all $rest
+            if echo "$names" | grep -qx bigmem; then
                 run_set bigmem bigmem
             fi ;;
     esac
