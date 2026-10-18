@@ -45,7 +45,7 @@ row() {
         choose "the model" Down "2. Use existing model" && keys Enter &&
         pane "the prompt" "Ask Codex to do anything" 300 && step "the prompt"
     if [ -z "$FAILED" ]; then
-        pid=$(pgrep -u "$(id -u)" -fx codex)
+        pid=$(program codex)
         unmodified "codex's screen" "$pid" /opt/codex/bin/codex \
             "$(readlink -f /etc/localtime)" "$SESSION/home/.codex/*.sqlite-shm"
         keys -l "$PROMPT" && pane "the request" "then commit it." 120 && keys Enter &&

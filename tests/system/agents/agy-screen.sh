@@ -69,7 +69,7 @@ row() {
         press "the button Done" Right ">  Done" &&
         press "the prompt" Enter "? for shortcuts" && step "the prompt"
     if [ -z "$FAILED" ]; then
-        pid=$(pgrep -u "$(id -u)" -x agy)
+        pid=$(program agy)
         session_unmodified "agy's screen" "$pid"
         keys -l "$PROMPT" && pane "the request" "and commit the change." 120 && keys Enter &&
             pane "the answer" "The fixture was read, checked, edited and committed." 600 &&

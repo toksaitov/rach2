@@ -111,6 +111,14 @@ keys() {
     tmux -u -L "$PANE" send-keys -t "$PANE" "$@"
 }
 
+# program NAME: print the process ID of NAME, the program that the shell of
+# the window of the tmux server PANE started. A child of the program has its
+# name until the child calls execve, so a search by the name alone can find
+# two processes.
+program() {
+    pgrep -P "$(tmux -L "$PANE" display-message -p -t "$PANE" '#{pane_pid}')" -x "$1"
+}
+
 # choose WHAT KEY ANSWER: press KEY until the window of PANE has marked
 # ANSWER selected, the program's mark SELECTED before it, for 5 s, within
 # 60 s. A program's question can refuse keys for a moment after it opens and

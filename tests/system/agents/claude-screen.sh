@@ -52,7 +52,7 @@ row() {
         choose "the bypass" Down "Yes, I accept" && keys Enter &&
         pane "the prompt" "bypass permissions on" 300 && step "the prompt"
     if [ -z "$FAILED" ]; then
-        pid=$(pgrep -u "$(id -u)" -x claude)
+        pid=$(program claude)
         unmodified "claude's screen" "$pid" /opt/claude/bin/claude \
             /lib64/ld-linux-x86-64.so.2 /lib/libc.so.6 /lib/libm.so.6 /lib/libpthread.so.0 \
             /lib/libdl.so.2 /lib/librt.so.1
