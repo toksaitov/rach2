@@ -920,16 +920,19 @@ prepare() {
 }
 # The GNU system's images are not among the products `prepare-all` builds:
 # they build on a Linux host only (mk/gnu-image.mk), and a set without a
-# suite that boots one must not need them. A set with such a suite, one of
-# GNU_SUITES, builds what the suite's target names here, before the pool, as
+# suite that boots one must not need them. A suite boots one when its target
+# in tests/system/suites.mk names an `os-real-gnu-` image target. A set with
+# such a suite builds what the suite's target names here, before the pool, as
 # a suite run alone does, and adds the target to the ones whose products are
 # hashed, so that a change to an image while the set runs voids the run like
 # a change to any product.
 PREPARED=prepare-all
-GNU_SUITES="gnu fakeapi agents"
+gnu_suite() { # gnu_suite NAME: 0 when the suite's target names a GNU image
+    grep -q "^run-$1:.*[[:space:]]os-real-gnu-" "$REPO/tests/system/suites.mk" 2>/dev/null
+}
 prepare_gnu() { # prepare_gnu NAMES
-    for suite in $GNU_SUITES; do
-        case " $* " in *" $suite "*) ;; *) continue ;; esac
+    for suite in "$@"; do
+        gnu_suite "$suite" || continue
         products=$(closure "run-$suite" | grep '^build/')
         # shellcheck disable=SC2086 # the prerequisites are one word each
         [ -z "$products" ] || run_make -j $products || {
