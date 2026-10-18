@@ -152,9 +152,10 @@ credential_strings() {
 
 # redact: copy standard input to standard output with the credential strings
 # of both modes, and the runs of token characters that are part of one,
-# replaced by `[credential]`.
+# replaced by `[credential]`. awk reads the strings on descriptor 3, since a
+# process's arguments are readable by every user of the machine.
 redact() {
-    awk -v list="$(credential_strings all)" '
+    awk '
         function cut(text, string,    out, i) {
             out = ""
             while ((i = index(text, string)) > 0) {
@@ -169,7 +170,7 @@ redact() {
                     return 1
             return 0
         }
-        BEGIN { n = split(list, strings, "\n") }
+        BEGIN { while ((getline line < "/dev/fd/3") > 0) strings[++n] = line }
         {
             text = $0
             for (i = 1; i <= n; i++)
@@ -184,7 +185,7 @@ redact() {
                 text = substr(text, RSTART + RLENGTH)
             }
             print out text
-        }'
+        }' 3< <(credential_strings all)
 }
 
 # scratch: install the traps that remove $dir, the command's scratch

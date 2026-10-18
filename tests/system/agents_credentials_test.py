@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 
@@ -60,6 +61,24 @@ class CredentialsTest(unittest.TestCase):
             self.assertEqual("[credential]\n", self.guest("redact", mode, log=DUMMY))
             file.unlink()
 
+    def test_redact_arguments(self):
+        """Keep the credential strings out of redact's process arguments."""
+        self.write("rach2-accept/keys/agy", DUMMY)
+        guest = subprocess.Popen(["bash", str(GUEST), "redact"], env=self.env,
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        self.addCleanup(guest.wait)
+        self.addCleanup(guest.kill)
+        for _ in range(300):
+            rows = descendants(guest.pid)
+            if any(Path(comm).name == "awk" for comm, _ in rows):
+                break
+            time.sleep(0.1)
+        else:
+            self.fail("redact started no awk within 30 seconds")
+        self.assertFalse([args for _, args in rows if DUMMY in args])
+        out, _ = guest.communicate(f"a log with {DUMMY} in it\n", timeout=30)
+        self.assertEqual("a log with [credential] in it\n", out)
+
     def test_selected_credentials(self):
         """Require only selected agents' files and gh's, in both modes."""
         for mode in ("lenovo", "qemu"):
@@ -102,6 +121,28 @@ class CredentialsTest(unittest.TestCase):
             self.assertEqual("0 of 5 strings", self.guest("secrets", mode, log="clean").strip())
 
 
+def descendants(root):
+    """Return the name and arguments of each process below root."""
+    table = subprocess.run(["ps", "-A", "-ww", "-o", "pid=,ppid=,comm=,args="],
+                           text=True, capture_output=True, check=True).stdout
+    parent, rows = {}, {}
+    for line in table.splitlines():
+        fields = line.split(None, 3)
+        if len(fields) < 3:
+            continue
+        pid, ppid = int(fields[0]), int(fields[1])
+        parent[pid] = ppid
+        rows[pid] = (fields[2], fields[3] if len(fields) == 4 else "")
+    found = []
+    for pid in rows:
+        up = parent[pid]
+        while up in parent and up != root and up > 1:
+            up = parent[up]
+        if up == root:
+            found.append(rows[pid])
+    return found
+
+
 def proof(mode):
     """Require private scripts that omit a token or ignore selection to fail."""
     source = GUEST.read_text()
@@ -109,7 +150,10 @@ def proof(mode):
         ("omitted", 'agy) printf \'%s\\n\' "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" ;;',
          "agy) : ;;", "test_antigravity_scan"),
         ("selection", 'for agent in "$@"; do', 'for agent in claude codex agy muse; do',
-         "test_selected_credentials")]
+         "test_selected_credentials"),
+        ("arguments", "    awk '\n        function cut(",
+         "    awk -v list=\"$(credential_strings all)\" '\n        function cut(",
+         "test_redact_arguments")]
     for name, old, new, test in faults:
         if source.count(old) != 1:
             raise SystemExit(f"agents-credentials: the {name} fault's text is not once in its source")

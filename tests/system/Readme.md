@@ -169,7 +169,7 @@ These two run no test on the unmodified tree: they require the kernel rebuilt at
 * `install_keys_mutate.sh`, `install_stick_mutate.sh`, `recovery_disk_key_mutate.sh` and `rehearse_group_mutate.sh`: rows of the installer suites.
 * `metal_fat_mutate.sh` and `accept/installed_mutate.sh`: the acceptance rows of the `metal` suite.
 * `accept/agents_accept_mutate.sh`: the `agentsaccept` suite's resized terminal, against a kernel whose pseudo-terminal master sends no `SIGWINCH` when the window size is set.
-* `accept/agents_credentials_mutate.sh`: the host tests of the acceptance's credential files and log scan, against a guest script that omits Antigravity's OAuth token or always requires every agent's credentials. `agents_credentials_test.py`, run by `host`, checks its digest, missing files, detection of dummy tokens in a log, and selection of agents in both modes, always with gh's credential.
+* `accept/agents_credentials_mutate.sh`: the host tests of the acceptance's credential files and log scan, against a guest script that omits Antigravity's OAuth token, always requires every agent's credentials, or passes the strings `redact` removes in awk's arguments. `agents_credentials_test.py`, run by `host`, checks its digest, missing files, detection of dummy tokens in a log, selection of agents in both modes, always with gh's credential, and that no process of `redact` has a credential string in its arguments.
 * `harness_input_mutate.sh`: the harness's self-test.
 * `host_tools_mutate.sh`: the host tests of the KRFFS tools and of the kernel's KRFFS hash, and the style suite's checks of build rules and probes.
 
