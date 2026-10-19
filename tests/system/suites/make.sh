@@ -151,30 +151,34 @@ cp "$DISK" "$WORK"
 # it on the command line: a make that ignored the override would fail outright,
 # where an override naming the same compiler as the built-in default would prove
 # nothing at all.
+#
+# make rebuilds a target whose time is not later than a prerequisite's, and a
+# fast machine can write a file and build from it within one tick of the
+# clock. So `age`, before a step that must find the tree up to date or a
+# change newer than what was built from it, gives the files times in the past
+# in the order of the build: the sources, then the objects, then the program.
+# A change made after it has the present time, which the file system records.
 : > "$STEPS"
 step "SETUPDONE" "cd /tmp && rm -rf demo && mkdir demo && cd demo && echo SETUP\"\"DONE"
+step "AGEDEF" "age() { n=\$(date +%s); busybox touch -c -d @\$((n-4)) demo.h lib.c main.c Makefile; busybox touch -c -d @\$((n-2)) lib.o main.o; busybox touch -c -d @\$((n-1)) prog; }; echo AGE\"\"DEF"
 step "WROTEH" "printf 'int scale(int);\\n' > demo.h; echo WROTE\"\"H"
 step "WROTELIB" "printf '#include \"demo.h\"\\nint scale(int x){return 2*x;}\\n' > lib.c; echo WROTE\"\"LIB"
 step "WROTEMAIN" "printf '#include <stdio.h>\\n#include \"demo.h\"\\nint main(void){printf(\"ANSWER %%d\\\\n\", scale(21));return 0;}\\n' > main.c; echo WROTE\"\"MAIN"
 step "WROTEMK" "printf 'CC=/no/such/compiler\\nprog: main.o lib.o\\n\\t\$(CC) \$(LDFLAGS) -o prog main.o lib.o\\nmain.o: main.c demo.h\\nlib.o: lib.c demo.h\\nclean:\\n\\trm -f prog main.o lib.o\\n.PHONY: clean\\n' > Makefile; echo WROTE\"\"MK"
 step "FIRSTRC" "make CC=tcc > /tmp/first.out 2>&1; echo FIRST\"\"RC=\$?"
 step "FIRSTRAN" "./prog > /tmp/first.run 2>&1; echo FIRST\"\"RAN=\$(cat /tmp/first.run)"
-# interval: the file's time must pass the second, which make compares whole
-step "IDLE1" "sleep 1; make CC=tcc > /tmp/idle1.out 2>&1; echo IDLE1\"\"RC=\$? TCC=\$(grep -c tcc /tmp/idle1.out) UP=\$(grep -c 'up to date' /tmp/idle1.out)"
-# interval: the file's time must pass the second, which make compares whole
-step "CHANGEDLIB" "sleep 1; printf '#include \"demo.h\"\\nint scale(int x){return 3*x;}\\n' > lib.c; echo CHANGED\"\"LIB"
+step "IDLE1" "age; make CC=tcc > /tmp/idle1.out 2>&1; echo IDLE1\"\"RC=\$? TCC=\$(grep -c tcc /tmp/idle1.out) UP=\$(grep -c 'up to date' /tmp/idle1.out)"
+step "CHANGEDLIB" "age; printf '#include \"demo.h\"\\nint scale(int x){return 3*x;}\\n' > lib.c; echo CHANGED\"\"LIB"
 step "ONERC" "make CC=tcc > /tmp/one.out 2>&1; echo ONE\"\"RC=\$? LIB=\$(grep -c 'c lib.c' /tmp/one.out) MAIN=\$(grep -c 'c main.c' /tmp/one.out) LINK=\$(grep -c 'o prog' /tmp/one.out)"
 step "ONERAN" "./prog > /tmp/one.run 2>&1; echo ONE\"\"RAN=\$(cat /tmp/one.run)"
 step "IDLE2" "make CC=tcc > /tmp/idle2.out 2>&1; echo IDLE2\"\"RC=\$? TCC=\$(grep -c tcc /tmp/idle2.out) UP=\$(grep -c 'up to date' /tmp/idle2.out)"
-# interval: the file's time must pass the second, which make compares whole
-step "TOUCHEDH" "sleep 1; touch demo.h; echo TOUCHED\"\"H"
+step "TOUCHEDH" "age; touch demo.h; echo TOUCHED\"\"H"
 step "HDRRC" "make CC=tcc > /tmp/hdr.out 2>&1; echo HDR\"\"RC=\$? LIB=\$(grep -c 'c lib.c' /tmp/hdr.out) MAIN=\$(grep -c 'c main.c' /tmp/hdr.out)"
-# interval: the file's time must pass the second, which make compares whole
-step "NOOVER" "sleep 1; touch demo.h; make > /tmp/over.out 2>&1; echo NO\"\"OVER=\$? SAW=\$(grep -q 'no/such/compiler' /tmp/over.out && echo yes || echo no)"
+step "NOOVER" "age; touch demo.h; make > /tmp/over.out 2>&1; echo NO\"\"OVER=\$? SAW=\$(grep -q 'no/such/compiler' /tmp/over.out && echo yes || echo no)"
 step "CLEANDONE" "> clean; make CC=tcc clean > /tmp/clean.out 2>&1; echo CLEAN\"\"DONE=\$? LEFT=\$(ls prog main.o 2>/dev/null | wc -l)"
 step "UTILRC" "mkdir -p /tmp/u && cd /tmp/u && cp /src/utils/cat.c . && printf 'cat: cat.o\\n\\t\$(CC) \$(LDFLAGS) -o cat cat.o\\n' > Makefile && make CC=tcc > /tmp/u.out 2>&1; echo UTIL\"\"RC=\$?"
 step "UTILSAME" "printf 'a line this machine built\\n' > /tmp/u/in.txt; /tmp/u/cat /tmp/u/in.txt > /tmp/u/mine; busybox cat /tmp/u/in.txt > /tmp/u/theirs; cmp /tmp/u/mine /tmp/u/theirs && echo UTIL\"\"SAME"
-step "STAMPED" "cd /tmp/demo && make CC=tcc > /dev/null 2>&1; busybox stat -c %Y lib.o > lib.o.when; busybox stat -c 'TIMES %Y %n' Makefile demo.h lib.c main.c lib.o main.o prog; echo STAMP\"\"ED=\$(cat lib.o.when)"
+step "STAMPED" "cd /tmp/demo && make CC=tcc > /dev/null 2>&1; age; busybox stat -c %Y lib.o > lib.o.when; busybox stat -c 'TIMES %Y %n' Makefile demo.h lib.c main.c lib.o main.o prog; echo STAMP\"\"ED=\$(cat lib.o.when)"
 step "FIRSTBOOTDONE" "sync; echo FIRSTBOOT\"\"DONE"
 
 boot_steps
@@ -260,12 +264,14 @@ cleanup_boot
 # fail. And the clock must not have gone backwards: a machine whose time
 # restarts makes everything written before the reboot look newer than everything
 # written after, so a source touched now would be older than the object built
-# from it then, and make would do nothing.
+# from it then, and make would do nothing. The first boot left the object's
+# time two seconds in the past, which leaves room for the part of a second
+# the clock drops at a boot, when it starts from the real-time clock's whole
+# seconds.
 : > "$STEPS"
 step "KEPT" "cd /tmp/demo; echo KEP\"\"T=\$(busybox stat -c %Y lib.o) WANTED=\$(cat lib.o.when)"
 step "REBOOTIDLE" "busybox stat -c 'TIMES %Y %n' Makefile demo.h lib.c main.c lib.o main.o prog; make CC=tcc > /tmp/r1.out 2>&1; echo REBOOT\"\"IDLE=\$? TCC=\$(grep -c tcc /tmp/r1.out); sed 's/^/REMADE: /' /tmp/r1.out"
-# interval: the file's time must pass the second, which make compares whole
-step "REBOOTCHANGE" "sleep 1; printf '#include \"demo.h\"\\nint scale(int x){return 4*x;}\\n' > lib.c; echo REBOOT\"\"CHANGE"
+step "REBOOTCHANGE" "printf '#include \"demo.h\"\\nint scale(int x){return 4*x;}\\n' > lib.c; echo REBOOT\"\"CHANGE"
 step "REBOOTRC" "make CC=tcc > /tmp/r2.out 2>&1; echo REBOOT\"\"RC=\$? LIB=\$(grep -c 'c lib.c' /tmp/r2.out)"
 step "REBOOTRAN" "./prog > /tmp/r2.run 2>&1; echo REBOOT\"\"RAN=\$(cat /tmp/r2.run)"
 step "SECONDBOOTDONE" "sync; echo SECONDBOOT\"\"DONE"
