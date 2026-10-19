@@ -11,7 +11,8 @@
  *       The procfiles suite keeps one open, through a forward to the
  *       guest's SSH server, while the machine's netstat reads its
  *       `/proc/net/tcp`, so the table has a live connection from outside
- *       to show.
+ *       to show, and kills it once the tables are read, so that SECONDS
+ *       only ends a peer the suite left behind.
  *
  *   hostpeer echo PORT SECONDS
  *       Listen on 127.0.0.1:PORT for both TCP and UDP for SECONDS and send

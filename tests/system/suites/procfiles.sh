@@ -93,11 +93,15 @@ boot_driven() {
     drive_feed "$QPID"
 }
 
-# cleanup: stop the machine, and remove the logs only after a pass, since a
-# failed row's explanation is in them.
+# cleanup: stop the machine and the host's peer, and remove the logs only
+# after a pass, since a failed row's explanation is in them.
 # shellcheck disable=SC2086
 cleanup() {
     stop
+    if [ -n "$PEER_PID" ]; then
+        kill "$PEER_PID" 2>/dev/null || true
+        wait "$PEER_PID" 2>/dev/null || true
+    fi
     if [ -n "$PASSED" ]; then
         rm -f $LOGS
     fi
@@ -217,14 +221,15 @@ applet 'dropbearmulti dropbear -R -g -p 22; echo SSH""D-UP' 'SSHD-UP' 300
 # started above, as a login would. It is opened once the server has been
 # started, since a connection made before the server is listening reaches
 # nothing, and QEMU accepts the host side of it either way. The server is
-# started by hand because the image does not run one at boot. The seconds
-# after the open are an interval: QEMU accepts the host's connection at once,
-# and it reaches the guest's server, and its table, a moment later.
-"$REPO/build/tests/system/hostpeer" hold "$FWD_PORT" 90 >/dev/null 2>&1 &
+# started by hand because the image does not run one at boot. QEMU accepts
+# the host's connection at once, and it reaches the guest's server, and its
+# table, a moment later, so the guest reads its table until the connection
+# is there. The peer holds the connection until it is killed below, once the
+# tables have been read; its seconds only end a peer this script left.
+"$REPO/build/tests/system/hostpeer" hold "$FWD_PORT" 900 >/dev/null 2>&1 &
 PEER_PID=$!
-# shellcheck disable=SC2016
 # interval: the guest's table is read every second for the host's connection
-applet 'i=0; until netstat -tn 2>/dev/null | grep -q ESTABLISHED || [ $i -ge 60 ]; do i=$((i + 1)); sleep 1; done; echo CONN""-SEEN' 'CONN-SEEN'
+applet 'until netstat -tn 2>/dev/null | grep -q ESTABLISHED; do sleep 1; done; echo CONN""-SEEN' 'CONN-SEEN'
 applet 'route -n > /tmp.rt; echo RT""-STATUS:$?; cat /tmp.rt' 'RT-STATUS:'
 applet 'netstat -tn > /tmp.ns 2>/tmp.ns6; echo NS""-STATUS:$?; cat /tmp.ns; cat /tmp.ns6' 'NS-STATUS:'
 applet 'arp -n > /tmp.arp; echo AR""P-STATUS:$?; cat /tmp.arp' 'ARP-STATUS:'
@@ -235,6 +240,7 @@ applet 'grep "^intr" /proc/stat | sed s/^/IN""TR:/' 'INTR:intr'
 stop
 kill "$PEER_PID" 2>/dev/null || true
 wait "$PEER_PID" 2>/dev/null || true
+PEER_PID=""
 
 # The console writes CRLF. Every check below reads this copy instead, so a
 # trailing carriage return cannot turn a field into one that matches nothing.
