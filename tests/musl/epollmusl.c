@@ -79,6 +79,10 @@
  * listens on. */
 #define EDGE_PORT 7470
 
+/* The longest wait, in seconds, for another process to be seen asleep: a
+ * bound that ends a wait the kernel never satisfies, far past a correct one. */
+#define ASLEEP_BOUND 20
+
 /* The SIGALRMs delivered; an alarm ends a wait that nothing else did. */
 static volatile sig_atomic_t alarms;
 
@@ -96,8 +100,9 @@ static void on_alarm(int sig)
     alarms++;
 }
 
-/** Whether process `pid` sleeps, by its state in /proc/<pid>/stat. */
-static int sleeping(pid_t pid)
+/** The state letter /proc/<pid>/stat gives process `pid`, or 0 when it has
+ * no stat file. */
+static int proc_state(pid_t pid)
 {
     char path[64], line[256], *state;
     int fd, n;
@@ -114,11 +119,35 @@ static int sleeping(pid_t pid)
     }
     line[n] = '\0';
     state = strrchr(line, ')');
-    return state && state[1] == ' ' && state[2] == 'S';
+    return state && state[1] == ' ' ? state[2] : 0;
 }
 
 /**
- * Wait up to 3 s to see `parent` asleep, write a byte to `out`, and keep
+ * Wait for process `pid` to be asleep, state S in /proc/<pid>/stat, looking
+ * every 10 ms. Returns 1 once it is, and 0 when it ends first, as a zombie or
+ * gone from /proc, or when ASLEEP_BOUND seconds pass.
+ */
+static int seen_asleep(pid_t pid)
+{
+    struct timespec start, now;
+    int state;
+
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (;;) {
+        state = proc_state(pid);
+        if (state == 'S') {
+            return 1;
+        }
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        if (state == 0 || state == 'Z' || now.tv_sec - start.tv_sec >= ASLEEP_BOUND) {
+            return 0;
+        }
+        usleep(10000);
+    }
+}
+
+/**
+ * Wait to see `parent` asleep (`seen_asleep`), write a byte to `out`, and keep
  * running, reading the nonblocking `ack` in a loop, until it has a byte or
  * 15 s have passed. A process that runs keeps the kernel from idling, and an
  * idle kernel scans the parent's descriptors again at every interrupt, which
@@ -130,12 +159,8 @@ static void writer(pid_t parent, int out, int ack)
 {
     struct timespec start, now;
     char byte;
-    int tries;
 
-    for (tries = 0; tries < 300 && !sleeping(parent); tries++) {
-        usleep(10000);
-    }
-    if (tries == 300) {
+    if (!seen_asleep(parent)) {
         _exit(2);
     }
     if (write(out, "w", 1) != 1 || clock_gettime(CLOCK_MONOTONIC, &start) != 0) {
@@ -158,20 +183,16 @@ struct woken {
 };
 
 /**
- * Wait up to 3 s to see `parent` asleep, then add `in` to the set `ep` for
- * input, with the descriptor as its data. Runs in the forked child and
+ * Wait to see `parent` asleep (`seen_asleep`), then add `in` to the set `ep`
+ * for input, with the descriptor as its data. Runs in the forked child and
  * returns when the add succeeds; exits 1 when the add fails and 2 when the
  * parent was never seen asleep.
  */
 static void add_when_asleep(pid_t parent, int ep, int in)
 {
     struct epoll_event ev;
-    int tries;
 
-    for (tries = 0; tries < 300 && !sleeping(parent); tries++) {
-        usleep(10000);
-    }
-    if (tries == 300) {
+    if (!seen_asleep(parent)) {
         _exit(2);
     }
     memset(&ev, 0, sizeof(ev));
