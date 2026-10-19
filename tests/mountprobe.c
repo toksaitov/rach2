@@ -181,6 +181,48 @@ static int wait_status(int pid)
     return status;
 }
 
+/**
+ * Whether process `pid` runs the program `name`, by the name in its
+ * /proc/<pid>/stat, which execve sets after it has dropped the close-on-exec
+ * descriptors: 1 when it does, 0 when it runs another, and -1 when the
+ * process has ended, its file gone or its state Z.
+ */
+static int runs_program(int pid, const char *name)
+{
+    char path[32] = "/proc/";
+    char digits[12], line[256];
+    int i = 0, j = 6, fd, n;
+
+    do {
+        digits[i++] = (char)('0' + pid % 10);
+        pid /= 10;
+    } while (pid > 0);
+    while (i > 0) {
+        path[j++] = digits[--i];
+    }
+    for (i = 0; "/stat"[i] != '\0'; i++) {
+        path[j++] = "/stat"[i];
+    }
+    path[j] = '\0';
+    fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
+    if (fd < 0) {
+        return -1;
+    }
+    n = syscall3(SYS_READ, fd, (long)line, (int)sizeof(line) - 1);
+    syscall1(SYS_CLOSE, fd);
+    for (i = n - 1; i >= 0 && line[i] != ')'; i--) {
+    }
+    if (i < 0 || i + 2 >= n || line[i + 2] == 'Z') {
+        return -1;
+    }
+    for (j = 0; j < i && line[j] != '('; j++) {
+    }
+    for (j++; j < i && *name && line[j] == *name; j++) {
+        name++;
+    }
+    return j == i && !*name;
+}
+
 static unsigned char buf[4096];
 
 #define SRC "/dev/disk0p2"
@@ -404,20 +446,24 @@ static void rows_proc(void)
 /**
  * Every way a description can outlive its opener keeps the mount busy: a
  * descriptor and its duplicates, one a forked child inherited, and a working
- * directory inside the mount.
+ * directory inside the mount. The child that inherited a descriptor closes it
+ * only when the parent closes the pipe `go`, after its unmount was refused;
+ * the child that enters the mount reports its chdir through a pipe and
+ * leaves the mount, by exiting, when the parent closes its own `go`.
  *
  * A close-on-exec descriptor is dropped by execve: the child holds the only
  * description and execs `stdintest`, which blocks on the console and stays
  * alive; the mount is busy until the exec and free after it, while the child
  * still runs, which is what shows execve did it. The parent waits for the
- * child's open through a pipe before it tries the unmount, since a first try
- * before the open would find the mount free and the row would then judge the
- * scheduler and not execve.
+ * child's open through a pipe, since an unmount before the open would find
+ * the mount free and the row would then judge the scheduler and not execve,
+ * and then for the name `stdintest` in the child's stat file, which execve
+ * sets after it has dropped the descriptor, before its one unmount.
  */
 static void rows_lifetime(void)
 {
-    int fd, d1, d2, d3, dfd, pid;
-    int opened[2];
+    int fd, d1, d2, d3, dfd, pid, started;
+    int opened[2], go[2];
     char byte = 0;
 
     fd = syscall3(SYS_OPEN, (long)MNT "/hello.txt", O_RDONLY, 0);
@@ -456,19 +502,27 @@ static void rows_lifetime(void)
     if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != -EBUSY) {
         fail("umount2 with the last duplicate open is EBUSY");
     }
+    go[0] = -1; /* the kernel fills the pair through the cast address */
+    go[1] = -1;
+    if (syscall1(SYS_PIPE, (long)go) != 0) {
+        fail("a pipe for the inheriting child");
+    }
     pid = syscall1(SYS_FORK, 0);
     if (pid < 0) {
         fail("fork");
     }
     if (pid == 0) {
-        sleep_ms(300);
+        syscall1(SYS_CLOSE, go[1]);
+        syscall3(SYS_READ, go[0], (long)&byte, 1);
         syscall1(SYS_CLOSE, d3);
         sys_exit(0);
     }
+    syscall1(SYS_CLOSE, go[0]);
     syscall1(SYS_CLOSE, d3);
     if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != -EBUSY) {
         fail("umount2 with a child's inherited descriptor is EBUSY");
     }
+    syscall1(SYS_CLOSE, go[1]);
     wait_status(pid);
     if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
         fail("umount2 once every description is closed");
@@ -506,38 +560,47 @@ static void rows_lifetime(void)
         fail("the exec child did not open the file");
     }
     syscall1(SYS_CLOSE, opened[0]);
-    {
-        int tries;
-
-        for (tries = 0; tries < 300; tries++) {
-            if (syscall2(SYS_UMOUNT2, (long)MNT, 0) == 0) {
-                break;
-            }
-            sleep_ms(10);
-        }
-        if (tries == 300) {
-            fail("umount2 after the close-on-exec descriptor was dropped by execve");
-        }
-        if (syscall2(SYS_KILL, pid, 9) != 0 || (wait_status(pid) & 0x7f) != 9) {
-            fail("the exec child was not alive across the unmount");
-        }
+    while ((started = runs_program(pid, "stdintest")) == 0) {
+        sleep_ms(10);
+    }
+    if (started < 0) {
+        fail("the exec child ended before it ran stdintest");
+    }
+    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
+        fail("umount2 after the close-on-exec descriptor was dropped by execve");
+    }
+    if (syscall2(SYS_KILL, pid, 9) != 0 || (wait_status(pid) & 0x7f) != 9) {
+        fail("the exec child was not alive across the unmount");
     }
     if (do_mount(SRC, MNT, MS_RDONLY, 0) != 0) {
         fail("the mount once more");
     }
 
+    opened[0] = opened[1] = go[0] = go[1] = -1;
+    if (syscall1(SYS_PIPE, (long)opened) != 0 || syscall1(SYS_PIPE, (long)go) != 0) {
+        fail("the pipes for the chdir child");
+    }
     pid = syscall1(SYS_FORK, 0);
     if (pid == 0) {
+        syscall1(SYS_CLOSE, opened[0]);
+        syscall1(SYS_CLOSE, go[1]);
         if (syscall1(SYS_CHDIR, (long)MNT) != 0) {
             sys_exit(9);
         }
-        sleep_ms(300);
+        syscall3(SYS_WRITE, opened[1], (long)"c", 1);
+        syscall3(SYS_READ, go[0], (long)&byte, 1);
         sys_exit(0);
     }
-    sleep_ms(100);
+    syscall1(SYS_CLOSE, opened[1]);
+    syscall1(SYS_CLOSE, go[0]);
+    if (syscall3(SYS_READ, opened[0], (long)&byte, 1) != 1) {
+        fail("the chdir child did not enter the mount");
+    }
+    syscall1(SYS_CLOSE, opened[0]);
     if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != -EBUSY) {
         fail("umount2 with a working directory inside is EBUSY");
     }
+    syscall1(SYS_CLOSE, go[1]);
     if (wait_status(pid) != 0) {
         fail("the chdir child");
     }
