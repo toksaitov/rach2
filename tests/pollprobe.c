@@ -10,9 +10,9 @@
  *       as Linux does, and select still finds the empty end readable;
  *   (d) select: the same readable fd is found through an fd_set, through
  *       the fd_set to pollfd translation and, on i386, _newselect;
- *   (e) block and wake: a parent polls with a two-second timeout while a
- *       forked child writes after 60 ms, and the poll returns the pipe
- *       readable (the row does not time the wake);
+ *   (e) block and wake: a parent polls with a 60-second timeout while a
+ *       forked child writes once it sees the parent asleep, and the poll
+ *       returns the pipe readable (the row does not time the wake);
  *   (f) fd contract: a wide nfds with only in-range bits works; a bit naming
  *       a closed fd, past the table or not, is -EBADF; nfds past the fd_set
  *       width is -EINVAL, not a truncation;
@@ -127,7 +127,6 @@ static void msleep(int ms)
     syscall2(SYS_NANOSLEEP, (long)&ts, 0);
 }
 
-#if defined __x86_64__
 /** The state letter of process `pid`, from the field after the name in
  * /proc/<pid>/stat, or 0 when it cannot be read. */
 static char state_of(int pid)
@@ -168,7 +167,30 @@ static char state_of(int pid)
     }
     return 0;
 }
-#endif
+
+/**
+ * The child's side of a row in which the parent blocks on a pipe: wait until
+ * /proc shows the parent `parent` asleep, then write one byte to `fd` and
+ * exit 0. A parent that has ended, whose state is gone or Z, ends the child
+ * with status 1 and nothing written. Does not return.
+ */
+static void write_when_asleep(int parent, int fd)
+{
+    char state;
+
+    for (;;) {
+        state = state_of(parent);
+        if (state == 'S') {
+            break;
+        }
+        if (state == 0 || state == 'Z') {
+            sys_exit(1);
+        }
+        msleep(10);
+    }
+    syscall3(SYS_WRITE, fd, (long)"x", 1);
+    sys_exit(0);
+}
 
 /**
  * Case (c), hangup: a pipe whose writer has closed with a byte buffered is
@@ -277,26 +299,24 @@ static void console_modes(void)
 #if defined __x86_64__
 /**
  * Case (h), a ppoll timeout past 32 bits of seconds. The child writes once
- * /proc shows the parent asleep in the call, or after two seconds, so that a
- * parent whose timeout was cut to zero, which returns at once and never
- * sleeps, is not left waiting for it.
+ * /proc shows the parent asleep, in the call or, for a parent whose timeout
+ * was cut to zero and which returned at once, in its wait for the child. A
+ * child that ends without writing leaves the pipe with no writer, and the
+ * call returns POLLHUP without POLLIN.
  */
 static void wide_ppoll(void)
 {
     long ts[2] = {4294967296L, 0};
     struct pollfd pfd[1];
-    int c[2], parent, pid, status, tries;
+    int c[2], pid, status;
 
     check(do_pipe(c) == 0, "pipe for the ppoll row");
     pid = syscall0(SYS_FORK);
     if (pid == 0) {
-        parent = (int)syscall0(SYS_GETPPID);
-        for (tries = 0; tries < 200 && state_of(parent) != 'S'; tries++) {
-            msleep(10);
-        }
-        syscall3(SYS_WRITE, c[1], (long)"x", 1);
-        sys_exit(0);
+        syscall1(SYS_CLOSE, c[0]);
+        write_when_asleep((int)syscall0(SYS_GETPPID), c[1]);
     }
+    syscall1(SYS_CLOSE, c[1]);
     pfd[0].fd = c[0];
     pfd[0].events = POLLIN;
     pfd[0].revents = 0;
@@ -304,7 +324,6 @@ static void wide_ppoll(void)
           "ppoll with a timeout of 2^32 seconds waits for its pipe");
     syscall3(SYS_WAITPID, pid, (long)&status, 0);
     syscall1(SYS_CLOSE, c[0]);
-    syscall1(SYS_CLOSE, c[1]);
 }
 #endif
 
@@ -356,26 +375,24 @@ PROBE_START void _start(void)
     }
     do_read(a[0], buf, 1);
 
-    /* (e) block and wake: the child writes after 60 ms. */
+    /* (e) block and wake: the child writes once the parent sleeps. */
     pid = syscall1(SYS_FORK, 0);
     check(pid >= 0, "fork");
     if (pid == 0) {
         syscall1(SYS_CLOSE, a[0]);
-        msleep(60);
-        syscall3(SYS_WRITE, a[1], (long)"z", 1);
-        sys_exit(0);
+        write_when_asleep((int)syscall0(SYS_GETPPID), a[1]);
     } else {
+        syscall1(SYS_CLOSE, a[1]);
         pfd[0].fd = a[0];
         pfd[0].events = POLLIN;
         pfd[0].revents = 0;
-        n = do_poll(pfd, 1, 2000);
+        n = do_poll(pfd, 1, 60000);
         check(n == 1 && (pfd[0].revents & POLLIN) != 0,
               "poll blocks then wakes on the child's write");
         do_read(a[0], buf, 1);
         syscall3(SYS_WAITPID, pid, (long)&status, 0);
     }
     syscall1(SYS_CLOSE, a[0]);
-    syscall1(SYS_CLOSE, a[1]);
 
     select_contract(a[0]);
 
