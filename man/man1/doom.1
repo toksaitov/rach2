@@ -1,4 +1,4 @@
-.Dd October 15, 2026
+.Dd October 20, 2026
 .Dt DOOM 1
 .Os
 .Sh NAME
@@ -71,7 +71,8 @@ guarantee enough physical memory.
 Confirming Quit in the menu runs the engine's exit callbacks, closes the
 devices, restores text mode, prints the final performance report and
 exits with status zero.
-The report also appears every ten seconds and includes the allocated zone size.
+The report also appears after the first frame and every ten seconds,
+and includes the allocated zone size.
 .Pp
 Normal save slots do not work.
 The runtime's directory creation, removal and rename stubs always fail.

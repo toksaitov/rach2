@@ -268,8 +268,8 @@ static void size_zone(void)
 /*
  * The report of where the time goes: the frames drawn, the time from the
  * first to the last and the longest between two, and the time the music
- * emulator and the mixer took. It is printed every ten seconds while the
- * game draws, and when the game ends.
+ * emulator and the mixer took. It is printed after the first frame, every
+ * ten seconds while the game draws, and when the game ends.
  */
 static uint32_t frames, longest_frame_ms, last_frame_ms, first_frame_ms;
 /* By DG_TimeSpent's `what`: 0 the music emulator's microseconds, 1 the
@@ -313,8 +313,8 @@ static void report(void)
            (unsigned)spent_us[4], (unsigned)(spent_us[1] / 1000u), DG_zone_mib);
 }
 
-/** Count a frame drawn now, keep the longest gap, and print the report when
- * ten seconds have passed since the last. */
+/** Count a frame drawn now, keep the longest gap, and print the report
+ * after the first frame and when ten seconds have passed since the last. */
 static void count_frame(void)
 {
     uint32_t now = DG_GetTicksMs();
@@ -327,7 +327,7 @@ static void count_frame(void)
     }
     last_frame_ms = now;
     frames++;
-    if (now - reported_ms >= 10000u) {
+    if (frames == 1 || now - reported_ms >= 10000u) {
         reported_ms = now;
         report();
     }

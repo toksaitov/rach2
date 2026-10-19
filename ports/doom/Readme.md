@@ -75,7 +75,7 @@ A `FILE` is a descriptor with no buffer, and `fopen` creates a file with mode 06
 
 The port defines `exit`, so every way out of the game runs the same code: `I_Quit`, after a confirmed Quit or the end of a demo played with `-playdemo`; `I_Error`; and an exit callback that calls `exit` itself, as `D_Endoom` does. `exit` calls `DG_Shutdown`, which closes the mouse and `/fb` and then prints the report, and `_exit` ends the process with the status given: 0 from `I_Quit`, 255 from the `exit(-1)` of `I_Error`. The last close of `/fb` by its owner puts the display back in text mode, so the report appears on the text screen.
 
-The report is one line on standard output, printed every ten seconds while the game draws and once more by `DG_Shutdown`:
+The report is one line on standard output, printed after the first frame has been written to `/fb`, every ten seconds while the game draws, and once more by `DG_Shutdown`; the tests wait for the first as the sign that the game has drawn:
 
 ```
 doom: N frames in M ms, the longest L ms; music emulator E ms in C calls for S samples after V events, mixer X ms; zone Z MiB
