@@ -1,22 +1,24 @@
 #!/bin/sh
 # doom_mutate.sh: show that the missing-WAD row of `tests/run doom` catches
-# two compiled faults.
+# two compiled faults, and its row of the running game a third.
 #
-# Two faults are put into the game's sources in turn, each alone: `status`
-# makes the platform's exit report 0 whatever status it is given, and `crash`
+# Three faults are put into the game's sources in turn, each alone: `status`
+# makes the platform's exit report 0 whatever status it is given; `crash`
 # takes out the engine's refusal of a missing IWAD, so the engine goes on
-# with no IWAD and faults reading its absent name. The suite rebuilds the game
+# with no IWAD and faults reading its absent name; and `stall` makes the
+# platform draw no frame after its first, so the game runs on without
+# progress and never prints its second report. The suite rebuilds the game
 # and its disk from the sources as they stand, and the row must fail under
-# each fault with the status or the missing error named. The unmodified suite
-# passes first, and again after each source is restored, touched and rebuilt,
-# with the game's bytes those of the first build.
+# each fault with the status, the missing error or the one report named. The
+# unmodified suite passes first, and again after each source is restored,
+# touched and rebuilt, with the game's bytes those of the first build.
 #
 # The game, the disk and the emulator are those of the architecture ARCH
 # names.
 #
 # Usage: sh tests/system/doom_mutate.sh [--direct] [FAULT...] | --texts
-#   --direct runs `make run-doom` instead of `tests/run doom`. FAULT is status
-#   or crash; the default is both.
+#   --direct runs `make run-doom` instead of `tests/run doom`. FAULT is
+#   status, crash or stall; the default is all three.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -39,6 +41,9 @@ path = Path(name)
 text = path.read_text()
 if fault == 'status':
     old, new = '    _exit(status);\n', '    _exit(0);\n'
+elif fault == 'stall':
+    old = '    if (fb_fd < 0) return;\n\n#ifdef CMAP256\n'
+    new = '    if (fb_fd < 0 || frames > 0) return;\n\n#ifdef CMAP256\n'
 else:
     old = '            I_Error("IWAD file \'%s\' not found!", iwadfile);\n'
     new = ''
@@ -56,11 +61,13 @@ select_fault()
             expected='without its WAD the game exited with status 0 and' ;;
         crash) changed=ports/doom/src/d_iwad.c
             expected='and 0 not-found line(s); the engine' ;;
+        stall) changed=ports/doom/doomgeneric_rach2.c
+            expected='the game printed 1 report(s) of its frames, the last counting 1 frames' ;;
     esac
 }
 
 if [ "${1:-}" = --texts ]; then
-    for fault in status crash; do
+    for fault in status crash stall; do
         select_fault "$fault"
         RACH2_FAULT_TEXTS=1 apply_fault "$fault" "$changed" >/dev/null || exit 1
     done
@@ -81,11 +88,11 @@ if [ "${1-}" = --direct ]; then
     shift
 fi
 if [ "$#" -eq 0 ]; then
-    set -- status crash
+    set -- status crash stall
 fi
 for fault do
     case "$fault" in
-        status|crash) ;;
+        status|crash|stall) ;;
         *) echo "doom-mutation: unknown fault: $fault" >&2; exit 2 ;;
     esac
 done

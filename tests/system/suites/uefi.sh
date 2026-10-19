@@ -18,7 +18,8 @@
 #    `bootctl` on the running machine reads the EFI system partition's slots
 #    and names the candidate as the booted one. Doom, started over SSH,
 #    draws its picture on the framebuffer, which has its palette's colors
-#    while it runs and the console's few again once it ends. The disk stages
+#    once the game reports its first frame, and the console's few again once
+#    the killed game has gone. The disk stages
 #    the game's WAD from ports/doom/doom1.wad, which Git does not track, so
 #    the suite fails at once in a tree without the file.
 # 2. The same disk's recovery entry, armed for one boot on the host: the
@@ -269,14 +270,24 @@ if "$RUNUTIL" until "$LOG1" "rach2 login:" 240; then
         *"bootctl: booted: candidate"*) note "and bootctl reads the slots and names the candidate: OK" ;;
         *) bad "bootctl on the disk booted by UEFI: $OUT" ;;
     esac
-    key_ssh 'cd /root && setsid doom > /tmp/doom.txt 2>&1 < /dev/null & sleep 8; echo DOOM""UP' > /dev/null || true # interval: the game draws its title within the eight seconds
-    if screen_dump "$DIR/doom.ppm" && [ "$("$SCREENTEXT" --colors "$DIR/doom.ppm")" -gt 64 ]; then
+    key_ssh 'cd /root && setsid doom > /tmp/doom.txt 2>&1 < /dev/null & echo DOOM""STARTED' > /dev/null || true
+    # The game prints its report after it has written its first frame to /fb.
+    # interval: a look at the game's output every second until its first frame
+    key_ssh "i=0; until grep -q '^doom: ' /tmp/doom.txt; do pidof doom > /dev/null && [ \$i -lt $(scaled 60) ] || break; i=\$((i + 1)); sleep 1; done; cat /tmp/doom.txt" > "$DIR/doom.txt" || true
+    if ! grep -q '^doom: ' "$DIR/doom.txt"; then
+        bad "the game reported no frame drawn; see $DIR/doom.txt"
+    elif screen_dump "$DIR/doom.ppm" && [ "$("$SCREENTEXT" --colors "$DIR/doom.ppm")" -gt 64 ]; then
         note "Doom's picture is on the framebuffer, with the colors of its palette: OK"
     else
         bad "the screen did not show Doom's picture while it ran; see $DIR/doom.ppm"
     fi
-    key_ssh 'killall doom; sleep 2; echo DOOM""GONE' > /dev/null || true # interval: the game has ended and the console drawn within two seconds
-    if screen_dump "$DIR/after.ppm" && [ "$("$SCREENTEXT" --colors "$DIR/after.ppm")" -le 16 ]; then
+    # The kernel gives the console the screen back before the game's process
+    # has ended.
+    # interval: a look every second until the killed game has gone
+    key_ssh "killall doom; i=0; while pidof doom > /dev/null && [ \$i -lt $(scaled 30) ]; do i=\$((i + 1)); sleep 1; done; pidof doom || echo DOOM\"\"GONE" > "$DIR/gone.txt" || true
+    if ! grep -q DOOMGONE "$DIR/gone.txt"; then
+        bad "the game still ran after it was killed; see $DIR/gone.txt"
+    elif screen_dump "$DIR/after.ppm" && [ "$("$SCREENTEXT" --colors "$DIR/after.ppm")" -le 16 ]; then
         note "and the console has the screen again once the game ends: OK"
     else
         bad "the screen kept the picture after the game ended; see $DIR/after.ppm"

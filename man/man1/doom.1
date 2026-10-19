@@ -96,7 +96,8 @@ In the source tree,
 first starts the game with the WAD moved away and requires that error
 and status 255, then launches the game from
 .Pa /root ,
-checks that it remains running after ten seconds, checks framebuffer
+waits for its second report, which must count more than one frame,
+checks that it is still running, checks framebuffer
 initialization and a zone of at least 10 MiB, and counts disk commands.
 It does not judge visual or audible quality.
 .Sh SEE ALSO

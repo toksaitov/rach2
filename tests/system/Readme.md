@@ -149,7 +149,7 @@ These two run no test on the unmodified tree: they require the kernel rebuilt at
 * `probe_roots_mutate.sh` and `ext2_map_mutate.sh`: the ext2 rows of `vfsprobe` and `musl/mapmusl` on an ext2 root.
 * `ext2_batch_mutate.sh`: the ext2 driver's count of disk commands for batched writes.
 * `noentropy_mutate.sh`: the `noentropy` suite's fail-closed steps.
-* `doom_mutate.sh`: the `doom` suite's missing-WAD row.
+* `doom_mutate.sh`: the `doom` suite's missing-WAD row, and its wait for the game's second report.
 * `agents_mutate.sh`: the `agents` suite's `gh` and `muse` rows, against recipes that link each program to a file its package does not have, its `claude` row, against managed settings that leave `claude update` on, its `codex` row, against settings that leave Codex's background server on, its `agy` row, against a profile script that leaves Antigravity CLI's updater on in a login shell, its `claude-print` and `claude-screen` rows, against a kernel whose paths do not go on past `/proc/PID/fd/N`, its `worker-session` row, against a `tools/flow/worker.sh` that leaves `@ISSUE@` in its session's prompt, its `codex-screen` row, against the settings that leave Codex's background server on, and, in a run of their own, its `codex-exec` and `codex-screen` rows, against settings that turn on Codex's sandbox.
 * `hda_mutate.sh`: the `/proc/audio` rows of `musl/hdaprobe`, the audio diagnostic no suite runs.
 * `sb16_mutate.sh`: the `audio` suite's SB16 row.
