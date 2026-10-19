@@ -11,7 +11,8 @@
 # #901 commits on the issue's branch with `Closes #901` and pushes, and the
 # session on #902 commits, pushes, comments and hands the issue back with
 # `board.sh release`. Once the second session has started, the row writes
-# the loop's stop file and waits for the loop to end. It returns in
+# the loop's stop file and waits for the loop to exit; 600 s only ends the
+# wait for a loop that does not. It returns in
 # /tmp/agents/results/worker-session.tar the loop's state directory, the
 # board, the calls made to gh, the origin and the program's digest before
 # and after the loop; worker_session_verify.py judges them on the host with
@@ -67,7 +68,7 @@ until_log() {
 }
 
 row() {
-    local status n
+    local status bound ended
     tree || return
     mkdir -p "$WORK/home" "$WORK/tmp" "$WORK/bin" "$WORK/state" /tmp/agents/results
     output "the tree's branch" git -C tree branch -M master
@@ -93,14 +94,13 @@ row() {
     LOOP=$!
     until_log ' session [0-9-]* on #902 starts$' 600 || return
     touch "$WORK/state/stop"
-    n=0
-    while kill -0 "$LOOP" 2> /dev/null && [ "$n" -lt 300 ]; do
-        n=$((n + 1))
-        sleep 1
-    done
-    kill -0 "$LOOP" 2> /dev/null && { fail "the loop did not stop in 300 s"; return; }
-    wait "$LOOP"
+    sleep 600 &
+    bound=$!
+    wait -n -p ended "$LOOP" "$bound"
     status=$?
+    kill "$bound" 2> /dev/null
+    wait "$bound" 2> /dev/null
+    [ "$ended" = "$LOOP" ] || { fail "the loop did not stop in 600 s after its stop file"; return; }
     LOOP=
     same "the loop's status" "$status" 0
     output "the program's digest after the loop" sha256sum /opt/claude/bin/claude

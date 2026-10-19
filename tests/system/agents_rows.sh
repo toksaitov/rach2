@@ -165,6 +165,20 @@ choose() {
     press "$1" "$2" "$SELECTED $3"
 }
 
+# exited WHAT SECONDS COMMAND...: wait until COMMAND, which prints the
+# processes it finds, prints none, looking once a second; SECONDS only ends
+# the wait for a process that does not exit. Fail WHAT with those it still
+# prints then.
+exited() {
+    local what=$1 bound=$2 n=0 procs
+    shift 2
+    while procs=$("$@") && [ -n "$procs" ] && [ "$n" -lt "$bound" ]; do
+        n=$((n + 1))
+        sleep 1
+    done
+    same "$what" "$(printf '%s' "$procs" | tr '\n' ' ')" ""
+}
+
 # held WHAT PID: wait until the fake server holds its answer to the request
 # of its script's held step, which the program PID sends, or until the
 # program ends. Return 0 while the server holds it, the program then waiting

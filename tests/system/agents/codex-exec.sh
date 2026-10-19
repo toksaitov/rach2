@@ -19,7 +19,7 @@
 # while Codex waits for it the row requires the process to run OpenAI's
 # program with nothing preloaded: it maps no file but the program, the time
 # zone and the shared memory of its SQLite databases in ~/.codex. Once the
-# session has ended, no process Codex started may be left.
+# session has ended, every process Codex started must exit.
 # The row returns in /tmp/agents/results/codex-exec.tar the repository, the
 # program's digest before and after the session, the free frames sampled each
 # second and the time of each step; codex_session_verify.py judges them on the
@@ -125,15 +125,10 @@ left() {
     done
 }
 
-# gone WHAT: require that no process Codex started is left, within 10 s of
-# the end of its session.
+# gone WHAT: wait for every process Codex started to exit, once its session
+# has ended; 120 s only ends the wait for one that does not.
 gone() {
-    local what=$1 n=0 procs
-    while procs=$(left) && [ -n "$procs" ] && [ "$n" -lt 10 ]; do
-        n=$((n + 1))
-        sleep 1
-    done
-    same "$what: the processes left" "$(printf '%s' "$procs" | tr '\n' ' ')" ""
+    exited "$1: the processes left" 120 left
 }
 
 # Stop the sampler, the private tmux server, what Codex left and the

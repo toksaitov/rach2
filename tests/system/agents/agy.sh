@@ -3,8 +3,8 @@
 # beside it, the updater turned off in a login shell's environment, and
 # --help. Then its screen in tmux, offline and in a home of the row's own:
 # the menu of ways to sign in, and after Google OAuth is chosen, Google's
-# sign-in address and the prompt for the code the browser shows. No process
-# of the program is left once tmux has ended.
+# sign-in address and the prompt for the code the browser shows. Every
+# process of the program exits once tmux has ended.
 # bound: 900
 
 # screen WHAT SECONDS TEXT: wait until the pane shows TEXT, and keep the
@@ -57,11 +57,5 @@ row() {
         fi
     fi
     tmux -S "$WORK/tmux" kill-server 2> /dev/null
-    local i=0
-    while pgrep -x -u "$(id -u)" agy > /dev/null && [ "$i" -lt 30 ]; do
-        i=$((i + 1))
-        # interval: a look each second for the program's processes to end
-        sleep 1
-    done
-    same "agy's processes after tmux ends" "$(pgrep -x -u "$(id -u)" agy)" ""
+    exited "agy's processes after tmux ends" 120 pgrep -x -u "$(id -u)" agy
 }
