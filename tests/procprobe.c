@@ -1262,15 +1262,23 @@ static void dgram_and_local_rows(void)
  * A child asleep in pause is in the state S, a sleep a signal ends, and
  * /proc/stat counts no process blocked while it sleeps: Linux counts there
  * only the sleeps no signal ends, which the disk's waits are, and the test
- * image has no disk. `path` is the child's stat file.
+ * image has no disk. `path` is the child's stat file. The child runs, state
+ * R, until it reaches pause, so the state is read every 10 ms while it is R;
+ * any other state ends the wait and is judged, and 30 seconds of R end a
+ * wait for a child that never sleeps.
  */
 static void sleeping_child_rows(const char *path)
 {
-    int i, n;
+    int i, n, waited;
 
-    nap(50);
-    n = slurp(path, buf, (int)sizeof(buf));
-    for (i = n - 1; i > 0 && buf[i] != ')'; i--) {
+    for (waited = 0;; waited += 10) {
+        n = slurp(path, buf, (int)sizeof(buf));
+        for (i = n - 1; i > 0 && buf[i] != ')'; i--) {
+        }
+        if (n <= 0 || i + 2 >= n || buf[i + 2] != 'R' || waited >= 30000) {
+            break;
+        }
+        nap(10);
     }
     check(n > 0 && i + 2 < n && buf[i + 2] == 'S', "a child asleep in pause is in the state S");
     n = slurp("/proc/stat", buf, (int)sizeof(buf));
