@@ -13,12 +13,13 @@
  * stamp a file. Two kinds of node cannot be checked that way:
  * `utimensat` succeeds for the KRFFS root without changing its times, and
  * fails with EROFS for a synthetic node. stampmusl checks the root, where a
- * file made in it stamps it. A synthetic node reports the boot time, and the
- * probe computes that as the real time less the time since boot, instead of
- * comparing two synthetic nodes, which a fill that returned the same wrong
- * constant for both would pass. On a machine whose clock could not be read
- * the real time is the time since boot, so the computed boot time is zero,
- * which is also what a synthetic node reports then.
+ * file made in it stamps it. A synthetic node reports the boot time, which
+ * moves with every step of the clock, and the probe computes that as the real
+ * time less the time since boot, instead of comparing two synthetic nodes,
+ * which a fill that returned the same wrong constant for both would pass. On
+ * a machine whose clock could not be read and has not been set, the real time
+ * is the time since boot, so the computed boot time is zero, which is also
+ * what a synthetic node reports then.
  *
  * Prints `STATMUSL OK` and exits 0 on success, and prints
  * `STATMUSL FAIL (detail)` and exits 1 otherwise.

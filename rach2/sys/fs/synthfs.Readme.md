@@ -60,7 +60,7 @@ The system-call layer reads the classification back (`vfs_synth_vpath`) and does
 * `/proc/PID/fd/N`: a file or directory of a mounted type is opened again by its node, with an open's checks (`proc_fd_reopen`); anything else shares the descriptor's own description, as `dup` does (`proc_fd_share`). `/proc/PID/ns/KIND` gives a descriptor on the namespace (`procfs_open_ns`).
 * `O_PATH`: `synth_open_path` opens nothing. A directory gives an `FD_TYPE_SYNTH_DIR` descriptor with `FD_FLAG_PATH`, and anything else an `FD_TYPE_SYNTH_PATH` descriptor with a copy of the `vpath` for `fstat` and `fstatfs`, so no device is opened and no text is made.
 
-`synth_stat` makes every `stat` answer from the classification: the namespace's device, a fixed inode, a block size of 4096, a link count of 1 except for a task directory, and for every time the moment the clock was read at boot (`rtc_boot_time`), or 0 when it was not read. The times are fixed so that `make` never finds a synthetic file changed; a pty slave has its own access and modification times.
+`synth_stat` makes every `stat` answer from the classification: the namespace's device, a fixed inode, a block size of 4096, a link count of 1 except for a task directory, and for every time the boot time that `/proc/stat` gives as `btime` (`rtc_boot_epoch`): the clock's reading at boot less the uptime it was read at, moved by every step that setting the clock makes, or the steps alone when the clock was not read. The times change only when the clock is set, so that `make` never finds a synthetic file changed; a pty slave has its own access and modification times.
 
 ### devfs
 

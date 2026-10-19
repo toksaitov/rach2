@@ -5243,6 +5243,19 @@ new
     ap_str(t, "\nPCI_SLOT=");
 end
 
+# The boot time a synthetic node reports, which a step of the clock moves.
+
+fault synth-time-unstepped
+probe clockidmusl
+file rach2/sys/syscall_fs.c
+expect CLOCKIDMUSL FAIL (/dev/null does not report the btime of /proc/stat)
+old
+    unsigned long boot = (unsigned long)rtc_boot_epoch();
+new
+    static unsigned long first;
+    unsigned long boot = first != 0 ? first : (first = (unsigned long)rtc_boot_epoch());
+end
+
 # /dev/rtc0, which hwclock reads.
 
 fault rtc-hour-off-by-one

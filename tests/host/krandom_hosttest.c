@@ -5,7 +5,7 @@
  * Includes `sys/lib/krandom.c` whole, to reach `chacha_block` and the state,
  * and runs it natively under ASan and UBSan. The test gives `krandom_seed`
  * its hardware: `arch_random` answers from a script of words and failures
- * for each source, and `arch_cycles`, `rtc_boot_time` and `kernel_ticks` are
+ * for each source, and `arch_cycles`, `rtc_boot_epoch` and `kernel_ticks` are
  * values the rows set.
  *
  * Prints `krandom-test: fail: FILE:LINE: ROW` for each failed check and
@@ -74,7 +74,7 @@ uint64_t arch_cycles(void)
     return cycles_now;
 }
 
-int64_t rtc_boot_time(void)
+int64_t rtc_boot_epoch(void)
 {
     return boot_seconds;
 }

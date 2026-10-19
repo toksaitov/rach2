@@ -27,7 +27,7 @@
  * the middle of a block another draw is dispensing.
  *
  * Only krandom_seed() touches hardware, through arch_random, arch_cycles,
- * rtc_boot_time and kernel_ticks, so the whole file also compiles hosted,
+ * rtc_boot_epoch and kernel_ticks, so the whole file also compiles hosted,
  * where a host test supplies those four and runs it under the sanitizers.
  */
 

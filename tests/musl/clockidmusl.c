@@ -26,7 +26,8 @@
  * and an absolute one with none written. A sleep on the raw and coarse clocks
  * and the thread CPU clock fails with EOPNOTSUPP, and a bad clock or request
  * with EINVAL. Real time set past 2^31 seconds reads back whole, fine and
- * coarse; on x86-64 a relative sleep of 2^32 seconds and an absolute one to
+ * coarse, and the boot time that /proc/stat and a synthetic node report moves
+ * with it; on x86-64 a relative sleep of 2^32 seconds and an absolute one to
  * 2^62 seconds wait until a signal ends them. The caller's CPU clock returns at
  * once for a time it has reached, and a sleep on it for an interval ends once
  * another thread of the process, spinning, has advanced it that far.
@@ -40,7 +41,9 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/time.h>
 #include <sys/times.h>
@@ -544,15 +547,56 @@ static int reads_past_2038(clockid_t clk, time_t least)
 }
 
 /**
+ * Return NULL when the boot time agrees with the real time less the time since
+ * boot to within 2 s, in `btime` of /proc/stat and in the modification time of
+ * /dev/null, a synthetic node, and otherwise what disagrees.
+ */
+static const char *boot_time_disagrees(void)
+{
+    struct timespec now, mono;
+    struct stat st;
+    char line[256];
+    long expected, btime = -1;
+    FILE *f;
+
+    if (clock_gettime(CLOCK_REALTIME, &now) != 0 || clock_gettime(CLOCK_MONOTONIC, &mono) != 0) {
+        return "reading real time and time since boot";
+    }
+    expected = (long)(now.tv_sec - mono.tv_sec);
+    f = fopen("/proc/stat", "r");
+    if (f == NULL) {
+        return "opening /proc/stat";
+    }
+    while (fgets(line, sizeof(line), f) != NULL) {
+        if (strncmp(line, "btime ", 6) == 0) {
+            btime = strtol(line + 6, NULL, 10);
+        }
+    }
+    fclose(f);
+    if (btime < expected - 2 || btime > expected + 2) {
+        return "btime of /proc/stat is not the real time less the time since boot";
+    }
+    if (stat("/dev/null", &st) != 0) {
+        return "stat of /dev/null";
+    }
+    if ((long)st.st_mtim.tv_sec != btime) {
+        return "/dev/null does not report the btime of /proc/stat";
+    }
+    return NULL;
+}
+
+/**
  * Check times past 32 bits. Real time set to ten seconds past 2^31 reads back
- * whole, fine and coarse, the coarse clock as much as two ticks earlier, and is
- * set back after. On x86-64, whose raw calls take a long, a relative sleep of
- * 2^32 seconds and an absolute sleep to 2^62 seconds of time since boot each
- * wait until a signal ends them. Returns 0, or 1 after the failure is printed.
+ * whole, fine and coarse, the coarse clock as much as two ticks earlier, and
+ * the boot time moves with it (`boot_time_disagrees`); it is set back after.
+ * On x86-64, whose raw calls take a long, a relative sleep of 2^32 seconds and
+ * an absolute sleep to 2^62 seconds of time since boot each wait until a
+ * signal ends them. Returns 0, or 1 after the failure is printed.
  */
 static int wide_times(void)
 {
     struct timespec saved, mono0, past;
+    const char *boot;
     int fine, coarse;
 
     if (clock_gettime(CLOCK_REALTIME, &saved) != 0 || clock_gettime(CLOCK_MONOTONIC, &mono0) != 0) {
@@ -565,12 +609,16 @@ static int wide_times(void)
     }
     fine = reads_past_2038(CLOCK_REALTIME, PAST_2038);
     coarse = reads_past_2038(CLOCK_REALTIME_COARSE, PAST_2038 - 1);
+    boot = boot_time_disagrees();
     real_set_back(saved, &mono0);
     if (!fine) {
         return fail("real time set past 2^31 seconds does not read back whole");
     }
     if (!coarse) {
         return fail("coarse real time set past 2^31 seconds does not read back whole");
+    }
+    if (boot != NULL) {
+        return fail(boot);
     }
 #if defined __x86_64__
     {

@@ -61,12 +61,8 @@ void rtc_init(void);
 /** Whether the boot read the clock and anchored real time to it. */
 int rtc_is_anchored(void);
 
-/** The real time at which the boot read the clock, which a node with no
- * times of its own reports (a device, a /proc file, a pipe); 0 with no
- * anchor. Setting the clock does not move it. */
-int64_t rtc_boot_time(void);
-
-/** The real time of uptime zero, which /proc/stat gives as `btime`: the
+/** The real time of uptime zero, which /proc/stat gives as `btime` and a
+ * node with no times of its own reports (a device, a /proc file, a pipe): the
  * anchor less the uptime it was read at, with the step `rtc_set_realtime`
  * made added; the step alone with no anchor. */
 int64_t rtc_boot_epoch(void);

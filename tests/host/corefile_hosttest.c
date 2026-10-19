@@ -704,7 +704,7 @@ int pty_open_slave(int index, int flags)
 }
 
 /** The boot time, in seconds of the epoch: 0. */
-int64_t rtc_boot_time(void)
+int64_t rtc_boot_epoch(void)
 {
     return 0;
 }

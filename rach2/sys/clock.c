@@ -189,19 +189,9 @@ int rtc_is_anchored(void)
 }
 
 /**
- * A node with no times of its own reports the read and not the time now,
- * since a synthetic file whose modification time moved at every stat would
- * look freshly written to a program comparing times, as make does.
- */
-int64_t rtc_boot_time(void)
-{
-    return rtc_anchor_seconds;
-}
-
-/**
- * `rtc_boot_time` is the moment of the read, some way into the boot; this is
- * that reading less the uptime it was taken at, uptime zero, which is what
- * `btime` means.
+ * The anchor is the moment of the read, some way into the boot; this is that
+ * reading less the uptime it was taken at, uptime zero, which is what `btime`
+ * means.
  */
 int64_t rtc_boot_epoch(void)
 {

@@ -5508,11 +5508,14 @@ static void stat64_node_times(struct user_stat *kst, const krffs_node_t *node)
 
 /**
  * Report the boot time into a stat64, for a node with no history of its own: a
- * device, a /proc file, a pipe, a socket.
+ * device, a /proc file, a pipe, a socket. It is `btime` of /proc/stat, and not
+ * the time now, since a synthetic file whose modification time moved at every
+ * stat would look freshly written to a program comparing times, as make does;
+ * it moves only when the clock is set.
  */
 static void stat64_boot_times(struct user_stat *kst)
 {
-    unsigned long boot = (unsigned long)rtc_boot_time();
+    unsigned long boot = (unsigned long)rtc_boot_epoch();
 
     kst->st_atime = boot;
     kst->st_mtime = boot;

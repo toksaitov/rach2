@@ -36,9 +36,9 @@ The boot logs the source as an `entropy: ready:` record, at warning level for th
 
 The boot calls `krandom_seed` after it has started the timer and read the clock (`kernel.c`). `hw_key` asks for eight words from the processor's seed source, RDSEED, allowing each word 32 attempts; if any word fails, it asks for eight new words from the generator, RDRAND, on the same terms. `arch_random` in `sys/arch/x86/cpu.c` executes an instruction only when CPUID reports it, RDSEED in leaf 7 EBX bit 18 and RDRAND in leaf 1 ECX bit 30, and asks a leaf only when leaf 0's highest basic leaf covers it, since a leaf past that returns another leaf's bits. A complete key is installed as it came, and the source recorded as RDSEED or RDRAND.
 
-Without a complete key, `krandom_seed` reads the time-stamp counter (`arch_cycles`, RDTSC), the real time in seconds that the CMOS clock gave at boot (`rtc_boot_time` in `sys/clock.c`, 0 when the clock could not be read) and the tick count `kernel_ticks`, which the local APIC timer or the 8254 advances. It mixes them into four words for `krandom_reseed` and records `KRANDOM_SRC_JITTER`. These values differ between boots but an observer can estimate them, so the source is untrusted.
+Without a complete key, `krandom_seed` reads the time-stamp counter (`arch_cycles`, RDTSC), the boot time in seconds that the CMOS clock gave (`rtc_boot_epoch` in `sys/clock.c`, 0 when the clock could not be read) and the tick count `kernel_ticks`, which the local APIC timer or the 8254 advances. It mixes them into four words for `krandom_reseed` and records `KRANDOM_SRC_JITTER`. These values differ between boots but an observer can estimate them, so the source is untrusted.
 
-The file has no code of its own for a host build. The host test gives `krandom_seed` the four values it reads, `arch_random`, `arch_cycles`, `rtc_boot_time` and `kernel_ticks`, from a model.
+The file has no code of its own for a host build. The host test gives `krandom_seed` the four values it reads, `arch_random`, `arch_cycles`, `rtc_boot_epoch` and `kernel_ticks`, from a model.
 
 ### Locking and context
 

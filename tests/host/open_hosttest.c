@@ -404,7 +404,7 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 }
 
 /** The boot time, which no row reads. */
-int64_t rtc_boot_time(void)
+int64_t rtc_boot_epoch(void)
 {
     return 0;
 }
