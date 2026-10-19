@@ -6585,3 +6585,42 @@ old
 new
     return (long long)(((uint64_t)high << 32) | low);
 end
+
+# pselect6's sets and the mask it waits under, which pselectmusl checks.
+
+fault pselect6-mask-ignored
+probe pselectmusl
+file rach2/sys/io/poll.c
+expect PSELECTMUSL FAIL (a pending signal the mask unblocks ends the wait)
+old
+    return poll_mask_done(select_common(nfds, ur, uw, ue, &d));
+new
+    signal_set_blocked(current_proc->saved_sigmask);
+    current_proc->sigmask_saved = 0;
+    return select_common(nfds, ur, uw, ue, &d);
+end
+
+fault poll-mask-saves-its-own
+probe pselectmusl
+file rach2/sys/io/poll.c
+expect PSELECTMUSL FAIL (the call's mask is gone after a descriptor ends it)
+old
+    current_proc->saved_sigmask = current_proc->sig_blocked;
+    current_proc->sigmask_saved = 1;
+    signal_set_blocked(mask);
+new
+    current_proc->saved_sigmask = mask;
+    current_proc->sigmask_saved = 1;
+    signal_set_blocked(mask);
+end
+
+fault handler-frame-wait-mask
+probe pselectmusl
+file rach2/sys/syscall_proc.c
+expect PSELECTMUSL FAIL (the mask before the call is back after the handler)
+old
+        oldmask =
+            current_proc->sigmask_saved ? current_proc->saved_sigmask : current_proc->sig_blocked;
+new
+        oldmask = current_proc->sig_blocked;
+end

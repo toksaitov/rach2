@@ -107,6 +107,7 @@ An instance (`struct inotify`) has a queue of events and a wait queue. Every wat
 `tests/run default`, in the core tier, runs these on both architectures:
 
 * `tests/pollprobe.c`: `poll` and `select` over pipes: a timeout, `POLLIN`, `POLLHUP`, `_newselect`, a child's write waking a poller, `select`'s errors, on x86-64 a `ppoll` of 2^32 seconds, and the console.
+* `tests/musl/pselectmusl.c`: `pselect6`'s three sets, a timeout, its errors, and its signal mask: a pending signal the mask unblocks ends the wait and its handler runs under the mask, a signal the mask blocks stays pending, a signal sent while the call sleeps ends it, and the mask before the call is back after each.
 * `tests/musl/epollmusl.c`: the eventfd counter; epoll's level-triggered, edge-triggered and one-shot reports, nesting and `ELOOP`, a fork's child that closed a nested set's number, reports in turn, an event a wait could not store, and the edges of AF_UNIX, pipe, UDP, TCP and pseudoterminal wakes.
 * `tests/musl/timerfdmusl.c`: reads, intervals, a disarmed timer, an absolute time already past, a timer waking an epoll wait, and settings of 200 days.
 * `tests/musl/inotifymusl.c`: the events of a watched directory and a watched file through a file's life, reads, `FIONREAD`, `poll`, and the errors and flags of the watch calls.

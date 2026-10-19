@@ -182,6 +182,18 @@ The default suite's
 writes one byte to a pipe, selects its reader through system call 142
 with no timeout, and checks for a return value of one and the reader's
 bit in the returned set.
+.Pa tests/musl/pselectmusl.c
+blocks
+.Dv SIGUSR1 ,
+raises it, and calls
+.Fn pselect
+with a mask that blocks only
+.Dv SIGUSR2 .
+It requires -1 with
+.Er EINTR ,
+a handler that ran once with both signals blocked, and
+.Dv SIGUSR1
+alone blocked after the call.
 .Sh ERRORS
 .Bl -tag -width "[ENOMEM]"
 .It Bq Er EBADF
