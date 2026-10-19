@@ -14,8 +14,8 @@
 # of the fake API server's certificate authority in CA. A row has a
 # program do its job as a person would ask for it and compares what it
 # printed or wrote with what it must be, through the functions below; a row
-# that runs a test of the tree, such as a test of the project's loops, makes
-# a git repository of the tree's tests and tools with `tree`, and a row
+# that runs the tree's tools, such as the worker loop, makes a git repository
+# of the tree's tests and tools with `tree`, and a row
 # that drives a program's screen runs it in tmux, on the server and in the
 # session PANE names, waits for it with `pane` and answers its questions
 # with `keys` and `choose`. The script prints

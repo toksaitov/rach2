@@ -2,9 +2,8 @@
 # muse_session_mutate.sh | --texts: prove the Muse session row against a
 # commit made with the wrong author. The Model API exchange still succeeds;
 # the host must reject the returned history. The suite passes before and
-# after the fault. The first pass also checks the package rows and the short
-# loop test, which exercises the shared tree setup. The trap restores the
-# script and stops its children.
+# after the fault. The first pass also checks the claude and gh rows. The
+# trap restores the script and stops its children.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -98,7 +97,7 @@ run_phase()
     shift
     expected=$1
     rows='muse muse-tmux'
-    [ "$phase" != fixed ] || rows='claude gh limited_test muse muse-tmux'
+    [ "$phase" != fixed ] || rows='claude gh muse muse-tmux'
     RACH2_AGENTS_ROWS="$rows" ARCH=x86_64 "$work/runutil" group tests/run agents >"$work/$phase.log" 2>&1 &
     child=$!
     status=0

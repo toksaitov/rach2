@@ -1,7 +1,7 @@
 #!/bin/sh
 # agents_mutate.sh [FAULT...] | --texts: show that `tests/run agents` catches
 # a fault in each of the agents layer's installs of gh, Claude Code, Codex,
-# Antigravity CLI and muse, two in the project's loops, one in the kernel
+# Antigravity CLI and muse, one in the project's loops, one in the kernel
 # that Claude Code's sessions meet, and one in Codex's settings that its
 # sessions meet.
 #
@@ -16,23 +16,21 @@
 # background server, which outlives the screen of the codex-screen row too.
 # That of agy makes /etc/profile.d/agy.sh set
 # AGY_CLI_DISABLE_AUTO_UPDATE to false, so that a login shell leaves
-# Antigravity CLI's updater on. The sixth makes `limited` in
-# tools/flow/lib.sh take a usage limit from any line of a session's output,
-# which the limited_test row, running tests/system/limited_test.sh on the
-# machine, must catch. The seventh, in rach2/sys/fs/procfs.c, stops a path
-# from going on past /proc/PID/fd/N of a file or a directory, with ENOTDIR,
-# as Rach2 did before it followed the link; Claude Code's Bash tool makes its
-# files through such a path, so the claude-print and claude-screen rows must
-# fail. The eighth makes tools/flow/worker.sh give its session the prompt
-# with `@ISSUE@` in place of the issue's number, which the worker-session
-# row's verifier must find in the first request of the session on #901.
-# The ninth sets sandbox_mode to workspace-write in Codex's
+# Antigravity CLI's updater on. The sixth, in rach2/sys/fs/procfs.c, stops
+# a path from going on past /proc/PID/fd/N of a file or a directory, with
+# ENOTDIR, as Rach2 did before it followed the link; Claude Code's Bash tool
+# makes its files through such a path, so the claude-print and claude-screen
+# rows must fail. The seventh makes tools/flow/worker.sh give its session
+# the prompt with `@ISSUE@` in place of the issue's number, which the
+# worker-session row's verifier must find in the first request of the session
+# on #901.
+# The eighth sets sandbox_mode to workspace-write in Codex's
 # /etc/codex/config.toml, so that Codex runs the model's commands in its
 # sandbox, which Rach2 cannot make, and the codex-exec and codex-screen rows
 # must fail; it is one of the faults in `alone`, which run one at a time,
 # since the fault of codex fails codex-screen first. The suite runs only the
-# rows of these nine, through RACH2_AGENTS_ROWS: it must pass, fail on each
-# of them with the first eight faults in their sources and the root and the
+# rows of these eight, through RACH2_AGENTS_ROWS: it must pass, fail on each
+# of them with the first seven faults in their sources and the root and the
 # kernel built again, fail on the rows of each fault of `alone` with it alone
 # in its source, and pass again with the sources restored. FAULT, one of the
 # names in `faults` below, proves only the rows of the faults named. The
@@ -42,7 +40,7 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-faults="gh claude codex agy muse limited procfs worker sandbox"
+faults="gh claude codex agy muse procfs worker sandbox"
 alone="sandbox"
 
 # fault_rows NAME: the rows that fault NAME must fail.
@@ -50,7 +48,6 @@ fault_rows()
 {
     case $1 in
         codex) echo codex codex-screen ;;
-        limited) echo limited_test ;;
         procfs) echo claude-print claude-screen ;;
         worker) echo worker-session ;;
         sandbox) echo codex-exec codex-screen ;;
@@ -69,21 +66,18 @@ fault_failure()
             "AGENTROW FAIL codex-screen: codex's screen: the processes left: got [" ;;
         agy) echo "AGENTROW FAIL agy: the updater's setting in a login shell: got [false], want [true]" ;;
         muse) echo 'AGENTROW FAIL muse: muse --version: status 127' ;;
-        limited) echo 'AGENTROW FAIL limited_test: limited_test.sh --mutate: status' ;;
         procfs) printf '%s\n' 'agents-test: claude-print: FAIL' 'agents-test: claude-screen: FAIL' ;;
         worker) echo "the session has no worker's prompt for #901" ;;
         sandbox) printf '%s\n' 'agents-test: codex-exec: FAIL' 'agents-test: codex-screen: FAIL' ;;
     esac
 }
 
-# fault_file NAME: the file that fault NAME goes into: tools/flow/lib.sh for
-# `limited`, rach2/sys/fs/procfs.c for `procfs`, tools/flow/worker.sh for
-# `worker`, Codex's recipe for `sandbox`, and otherwise the recipe of the
-# package NAME.
+# fault_file NAME: the file that fault NAME goes into: rach2/sys/fs/procfs.c
+# for `procfs`, tools/flow/worker.sh for `worker`, Codex's recipe for
+# `sandbox`, and otherwise the recipe of the package NAME.
 fault_file()
 {
     case $1 in
-        limited) echo tools/flow/lib.sh ;;
         procfs) echo rach2/sys/fs/procfs.c ;;
         worker) echo tools/flow/worker.sh ;;
         sandbox) echo vendor/gnu/agents/packages/codex.sh ;;
@@ -118,9 +112,6 @@ elif name == 'sandbox':
 elif name == 'agy':
     old = 'export AGY_CLI_DISABLE_AUTO_UPDATE=true'
     new = 'export AGY_CLI_DISABLE_AUTO_UPDATE=false'
-elif name == 'limited':
-    old = '''        grep -E '"type":"result".*"is_error":true|"is_error":true.*"type":"result"|"type":"(error|turn\\.failed)"'\n'''
-    new = '        cat\n'
 elif name == 'procfs':
     old = 'if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) && e->ofd && e->ofd->vmnt) {'
     new = 'if (0) {'

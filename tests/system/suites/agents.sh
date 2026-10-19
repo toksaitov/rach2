@@ -23,7 +23,7 @@
 #
 # The files git tracks under the tree's tests and tools, as this tree has
 # them, go to the machine as /tmp/agents/tree.tar, for the rows that run the
-# tests of the project's loops (tools/flow/) there.
+# project's loops (tools/flow/) there.
 #
 # A row that talks to a vendor's service has a script for the fake server,
 # NAME.json beside it, or a header `# script: PATH` relative to
