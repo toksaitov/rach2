@@ -75,6 +75,38 @@ elif fault == "mouse-reset":
 elif fault == "mouse-y":
     old = "            mouse_push_packet(buttons, dx, dy);\n"
     new = "            mouse_push_packet(buttons, dx, -dy);\n"
+elif fault == "mouse-drain":
+    old = "            if (--drained <= 0) {\n"
+    new = "            if (--drained < 0) {\n"
+elif fault == "mouse-sti":
+    old = "                klog(KLOG_WARN, \"mouse\", \"the 8042 buffer never drained\");\n" \
+          "                arch_irq_enable();\n"
+    new = "                klog(KLOG_WARN, \"mouse\", \"the 8042 buffer never drained\");\n"
+elif fault == "mouse-input":
+    old = "    if (ps2_wait_input() < 0)\n        return -1;\n    outb(PS2_CMD_PORT, cmd);\n"
+    new = "    outb(PS2_CMD_PORT, cmd);\n"
+elif fault == "mouse-enable":
+    old = "    if (ps2_send_command(PS2_CMD_ENABLE_MOUSE) < 0) {\n"
+    new = "    if (0) {\n"
+elif fault == "mouse-config":
+    old = "    outb(PS2_DATA_PORT, config);\n"
+    new = "    (void)config;\n"
+elif fault == "mouse-ack":
+    old = "        klog(KLOG_WARN, \"mouse\", \"the device did not enable reporting\");\n" \
+          "        arch_irq_enable();\n        return -1;\n"
+    new = "        klog(KLOG_WARN, \"mouse\", \"the device did not enable reporting\");\n"
+elif fault == "mouse-resend":
+    old = "        } else if (response == MOUSE_RESEND) {\n"
+    new = "        } else if (0) {\n"
+elif fault == "mouse-register":
+    old = "    register_isr_handler(44, mouse_irq_handler, \"mouse\");\n\n    arch_irq_enable();\n"
+    new = "    arch_irq_enable();\n\n    register_isr_handler(44, mouse_irq_handler, \"mouse\");\n"
+elif fault == "mouse-frame":
+    old = "        if (!(data & 0x08)) {\n            return;\n        }\n"
+    new = "        (void)0;\n"
+elif fault == "mouse-overflow":
+    old = "        if (!(flags & 0xC0)) { /* no X or Y overflow */\n"
+    new = "        if (1) {\n"
 elif fault == "dma-stop":
     old = "    if (channel > 7 || channel == 4)\n"
     new = "    if (channel > 7)\n"
@@ -130,6 +162,26 @@ select_fault()
             failure="the reset's reply leaves no byte waiting" ;;
         mouse-y) test=ps2mouse; file=arch/x86/ps2mouse.c
             failure="the packet's dy is -3" ;;
+        mouse-drain) test=ps2mouse; file=arch/x86/ps2mouse.c
+            failure='the drain reads PS2_DRAIN_LIMIT bytes' ;;
+        mouse-sti) test=ps2mouse; file=arch/x86/ps2mouse.c
+            failure='a stuck output buffer turns interrupts on again' ;;
+        mouse-input) test=ps2mouse; file=arch/x86/ps2mouse.c
+            failure='a controller that never takes a byte is not written' ;;
+        mouse-enable) test=ps2mouse; file=arch/x86/ps2mouse.c
+            failure="the controller is written the bring-up's sequence" ;;
+        mouse-config) test=ps2mouse; file=arch/x86/ps2mouse.c
+            failure='the configuration byte enables IRQ 12' ;;
+        mouse-ack) test=ps2mouse; file=arch/x86/ps2mouse.c
+            failure='a lost ACK of the enable fails the bring-up' ;;
+        mouse-resend) test=ps2mouse; file=arch/x86/ps2mouse.c
+            failure='the enable is sent again after a resend' ;;
+        mouse-register) test=ps2mouse; file=arch/x86/ps2mouse.c
+            failure='the handler is registered with interrupts off' ;;
+        mouse-frame) test=ps2mouse; file=arch/x86/ps2mouse.c
+            failure='a first byte without bit 3 is dropped' ;;
+        mouse-overflow) test=ps2mouse; file=arch/x86/ps2mouse.c
+            failure='a packet with an overflow bit is dropped' ;;
         kbd-aux) test=ps2kbd; file=arch/x86/ps2kbd.c
             failure='mouse byte leaves the data port unread' ;;
         insyde) test=power; file=arch/x86/power.c
@@ -141,8 +193,10 @@ select_fault()
 }
 
 faults='frames gfx-enter gfx-exit setup-speaker setup-transfer setup-dma scale
-    callback cursor mouse-aux mouse-reply mouse-drop mouse-reset mouse-y dma-stop
-    kbd-aux insyde pm-answers'
+    callback cursor mouse-aux mouse-reply mouse-drop mouse-reset mouse-y
+    mouse-drain mouse-sti mouse-input mouse-enable mouse-config mouse-ack
+    mouse-resend mouse-register mouse-frame mouse-overflow dma-stop kbd-aux insyde
+    pm-answers'
 if [ "${1:-}" = --texts ]; then
     for fault in $faults; do
         select_fault "$fault"
