@@ -953,15 +953,16 @@ BOOTIMG=$(dd if="$TEST_DISK" bs=440 count=1 2>/dev/null | shasum -a 256 | cut -d
 
 mark "setup"
 # ---- 9: a machine whose disk has been destroyed, brought back through the
-#         recovery menu. The first mebibyte of the disk installed in row 3b is
-#         zeroed on the host, which takes its boot code, its table and the
-#         start of its first partition; the stick is booted on it, and
+#         recovery menu. The disk is the patterned one above, which has no
+#         boot code and no table; the stick is booted on it, and
 #         `rach2-recover` puts the stick's own image back and reads it back.
 #         The disk must then boot again. ----
-# First a write killed while it is running, at the layer that does the writing:
-# twenty-four mebibytes of the image are sent to the disk and the machine is
-# killed once it says it has passed sixteen. What is left is neither the disk
-# that was there nor the image, which is what a person who pulled the plug
+# First a write stopped while it is running, at the layer that does the
+# writing: `reflash` is asked for ninety-six mebibytes of the image and given
+# sixteen, then a FIFO that nothing writes, so it writes those sixteen, says
+# so, and waits for the rest. The machine is killed once it has said so. What
+# is left is the image's first sixteen mebibytes over the disk that was there,
+# however fast the machine ran, which is what a person who pulled the plug
 # during an install comes back to, and the restore below is what puts it right.
 #
 # It is `reflash` and not the menu because reaching the menu's own write costs
@@ -981,7 +982,7 @@ rm -f "$DIR/cutoff.log"
     "expect=recovery image" \
     "expect=# " "send=mkdir -p /m && mount -t exfat /dev/disk1p2 /m && echo MOUNT\"\"ED" \
     "expect=MOUNTED" \
-    "send=dd if=/m/$(basename "$TEST_DISK") bs=1048576 count=96 2>/dev/null | reflash -p /dev/disk0 0 100663296" \
+    "send=mkfifo /tmp/hold && { dd if=/m/$(basename "$TEST_DISK") bs=1048576 count=16 2>/dev/null; cat /tmp/hold; } | reflash -p /dev/disk0 0 100663296" \
     "expect=NEVERSEEN" > /dev/null 2>&1 &
 CUTPID=$!
 saw_progress=no
@@ -1001,21 +1002,27 @@ wait "$CUTPID" 2>/dev/null || true
 for left in $(pgrep -f "file=$DIR/cut.img" 2>/dev/null || true); do
     "$RUNUTIL" gone "$left" 60 || true
 done
-# What is judged is the ninety-six mebibytes the write asked for: it must have
-# begun, so those bytes are not what was there before, and it must not have
-# finished, so they are not the image's either. A comparison of the whole disk
-# would pass whatever happened, since the disk is larger than the image.
+# What is judged is the ninety-six mebibytes the write asked for: the image's
+# first sixteen, which reflash said had reached the disk, and after them the
+# disk that was there. A comparison of the whole disk would pass whatever
+# happened, since the disk is larger than the image.
 STARTED=$(dd if="$DIR/cut.img" bs=1048576 count=96 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
 WAS=$(dd if="$DIR/pattern-96" bs=1048576 count=96 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
 WHOLE=$(dd if="$TEST_DISK" bs=1048576 count=96 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
-if [ "$saw_progress" != yes ]; then
+PART=$({ dd if="$TEST_DISK" bs=1048576 count=16 2>/dev/null
+    dd if="$DIR/pattern-96" bs=1048576 skip=16 count=80 2>/dev/null; } | shasum -a 256 | cut -d' ' -f1)
+if [ "$PART" = "$WAS" ] || [ "$PART" = "$WHOLE" ]; then
+    bad "the image's first sixteen mebibytes leave the disk as it was or as the image"
+elif [ "$saw_progress" != yes ]; then
     bad "the write never said it had got anywhere, so it was not killed while it ran"
 elif [ "$STARTED" = "$WAS" ]; then
     bad "the write that was killed had not begun"
 elif [ "$STARTED" = "$WHOLE" ]; then
     bad "the write that was killed had finished"
+elif [ "$STARTED" != "$PART" ]; then
+    bad "the write that was killed left other than the sixteen mebibytes it reported"
 else
-    note "a write killed while it was running leaves the range it asked for part written: OK"
+    note "a write killed after the sixteen mebibytes it reported leaves exactly those written: OK"
 fi
 
 LOG9="$DIR/recover.log"
