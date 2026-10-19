@@ -114,7 +114,7 @@
       "required": ["item_id", "case_id", "family_id", "architecture", "domain", "workload", "assertions", "profile", "repetition", "attempt_ids"],
       "properties": {
         "item_id": {"$ref": "#/$defs/id"}, "case_id": {"$ref": "#/$defs/id"}, "family_id": {"$ref": "#/$defs/id"},
-        "architecture": {"enum": ["i686", "x86_64"]},
+        "architecture": {"enum": ["i686", "x86_64", "none"]},
         "domain": {"enum": ["host", "qemu", "native"]},
         "workload": {"$ref": "#/$defs/blob"},
         "assertions": {"$ref": "#/$defs/blob"},

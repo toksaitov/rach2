@@ -191,3 +191,8 @@ constParameter:*tools/verify/prosecheck.c
 # instruction the probe writes in initializers and the kernel reads; no
 # member is read by name.
 unusedStructMember:*tests/musl/seccompmusl.c
+
+# `struct etude_termination` is the interface that libetude-case fills and
+# machine scenarios read; no source of the tree includes the header yet, so
+# cppcheck finds no reader of its members.
+unusedStructMember:*tools/etude/include/etude/scenario.h

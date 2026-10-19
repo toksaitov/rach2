@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "run_id": "example-run-native",
+  "attempt_id": "example-attempt-errno-native",
+  "attempt_token": "8a236a6b3ac76741",
+  "case_id": "guest.default.errnoprobe",
+  "program": "errnoprobe",
+  "arguments": [],
+  "environment": {
+    "PATH": "/bin:/usr/bin:/sbin:/usr/sbin",
+    "HOME": "${WORKSPACE}"
+  },
+  "stdin": null,
+  "role": "ordinary",
+  "files": [
+    {
+      "name": "errnoprobe",
+      "sha256": "6a6769f748f9a6f6f604ab8fb2709d006a94441417d3c08b499f903aa2212658",
+      "size_bytes": 9216,
+      "mode": "0755"
+    }
+  ],
+  "fixtures": [
+    {
+      "fixture": "workspace",
+      "given": []
+    }
+  ],
+  "deadline_us": 120000000,
+  "grace_us": 5000000,
+  "output_max_bytes": 1048576
+}

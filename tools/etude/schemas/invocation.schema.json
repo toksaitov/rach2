@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Etude invocation, version 1",
+  "description": "One attempt of a guest case as etude-guest receives it; see tools/etude/Readme.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "attempt_id", "attempt_token", "case_id", "program", "arguments",
+               "environment", "stdin", "role", "files", "fixtures", "deadline_us", "grace_us", "output_max_bytes"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$"},
+    "attempt_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$"},
+    "attempt_token": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+    "case_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$", "maxLength": 128},
+    "program": {"$ref": "#/$defs/name"},
+    "arguments": {"type": "array", "items": {"type": "string", "pattern": "^[ -~]*$"}},
+    "environment": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[A-Z_][A-Z0-9_]*$"},
+      "additionalProperties": {"type": "string", "pattern": "^[ -~]*$"}
+    },
+    "stdin": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/name"}]},
+    "role": {"enum": ["ordinary", "init"]},
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["name", "sha256", "size_bytes", "mode"],
+        "properties": {
+          "name": {"$ref": "#/$defs/name"},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "size_bytes": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+          "mode": {"type": "string", "pattern": "^[0-7]{4}$"}
+        }
+      }
+    },
+    "fixtures": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["fixture", "given"],
+        "properties": {
+          "fixture": {"enum": ["workspace", "stage", "volume", "tmpfs", "mountns", "root", "ids", "ipcns", "utsns",
+                               "pty", "ports", "peer", "log", "alone", "console"]},
+          "given": {"type": "array", "items": {"type": "string", "pattern": "^[!-~]+$"}}
+        }
+      }
+    },
+    "deadline_us": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "grace_us": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "output_max_bytes": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}
+  },
+  "$defs": {
+    "name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$"}
+  }
+}

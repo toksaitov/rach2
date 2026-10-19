@@ -1,0 +1,309 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Etude case manifest, version 1",
+  "description": "The cases of one family; their meaning and the checks beyond this shape are in tools/etude/Readme.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "family_id", "summary", "cases"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "family_id": {"$ref": "#/$defs/id"},
+    "summary": {"$ref": "#/$defs/text"},
+    "cases": {"type": "array", "items": {"$ref": "#/$defs/case"}, "minItems": 1}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$", "maxLength": 128},
+    "name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$"},
+    "text": {"type": "string", "minLength": 1, "pattern": "^[ -~]+$"},
+    "count": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+    "positive": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "ids": {"type": "array", "items": {"$ref": "#/$defs/id"}, "uniqueItems": true},
+    "names": {"type": "array", "items": {"$ref": "#/$defs/name"}, "uniqueItems": true},
+    "where": {"type": "string", "pattern": "^[A-Za-z0-9._/+-]+(:[0-9]+(-[0-9]+)?)?$"},
+    "case": {
+      "type": "object", "additionalProperties": false,
+      "required": ["case_id", "behavior", "units", "domain", "architectures", "workload", "requirements",
+                   "execution", "assertions", "branches", "termination", "progress", "bounds", "resources",
+                   "prepare", "timing", "native"],
+      "properties": {
+        "case_id": {"$ref": "#/$defs/id"},
+        "behavior": {"$ref": "#/$defs/text"},
+        "units": {"type": "array", "items": {"$ref": "#/$defs/text"}, "minItems": 1, "uniqueItems": true},
+        "domain": {"enum": ["host", "guest", "machine"]},
+        "architectures": {
+          "oneOf": [
+            {"type": "array", "items": {"enum": ["i686", "x86_64"]}, "minItems": 1, "uniqueItems": true},
+            {"const": "none"}
+          ]
+        },
+        "workload": {"$ref": "#/$defs/workload"},
+        "requirements": {"$ref": "#/$defs/requirements"},
+        "execution": {"$ref": "#/$defs/execution"},
+        "assertions": {"type": "array", "items": {"$ref": "#/$defs/assertion"}, "minItems": 1},
+        "branches": {"type": "array", "items": {"$ref": "#/$defs/branch"}},
+        "termination": {"$ref": "#/$defs/termination"},
+        "steps": {"type": "array", "items": {"$ref": "#/$defs/step"}, "minItems": 1},
+        "machines": {"type": "array", "items": {"$ref": "#/$defs/machine"}, "minItems": 1},
+        "progress": {"type": "array", "items": {"$ref": "#/$defs/witness"}},
+        "bounds": {"$ref": "#/$defs/bounds"},
+        "resources": {"$ref": "#/$defs/resources"},
+        "prepare": {"type": "array", "items": {"$ref": "#/$defs/artifact"}},
+        "timing": {"type": "array", "items": {"$ref": "#/$defs/timing"}},
+        "native": {"$ref": "#/$defs/native"}
+      },
+      "allOf": [
+        {"if": {"properties": {"domain": {"const": "machine"}}},
+         "then": {"required": ["steps", "machines"], "properties": {"native": {"properties": {"plan": {"const": "none"}}}}},
+         "else": {"not": {"anyOf": [{"required": ["steps"]}, {"required": ["machines"]}]}}},
+        {"if": {"properties": {"domain": {"const": "host"}}},
+         "then": {"properties": {"native": {"properties": {"plan": {"const": "host"}}}}},
+         "else": {"properties": {"native": {"properties": {"plan": {"enum": ["native", "none"]}}}, "architectures": {"type": "array"}}}},
+        {"if": {"properties": {"domain": {"const": "guest"}}},
+         "then": {"properties": {"requirements": {"required": ["qemu"]}}},
+         "else": {"properties": {"execution": {"properties": {"role": {"const": "ordinary"}, "stdin": {"type": "null"}}}, "requirements": {"not": {"required": ["qemu"]}}}}}
+      ]
+    },
+    "workload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["arguments", "inputs", "repetitions", "seed"],
+      "properties": {
+        "arguments": {"type": "array", "items": {"type": "string", "pattern": "^[ -~]*$"}},
+        "inputs": {"type": "object", "additionalProperties": {"oneOf": [{"$ref": "#/$defs/count"}, {"$ref": "#/$defs/text"}]}},
+        "repetitions": {"$ref": "#/$defs/positive"},
+        "seed": {"oneOf": [{"$ref": "#/$defs/count"}, {"type": "null"}]}
+      }
+    },
+    "requirements": {
+      "type": "object", "additionalProperties": false,
+      "required": ["host_api", "tools", "features"],
+      "properties": {
+        "host_api": {"enum": ["c", "posix", "linux"]},
+        "tools": {"$ref": "#/$defs/names"},
+        "features": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/name"},
+          "additionalProperties": {"enum": ["present", "absent", "either"]}
+        },
+        "qemu": {"$ref": "#/$defs/qemu"}
+      }
+    },
+    "qemu": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kernel", "initrd", "disks", "cpu", "processors", "memory_bytes", "firmware", "devices", "boot_options"],
+      "properties": {
+        "kernel": {"$ref": "#/$defs/name"},
+        "initrd": {"oneOf": [{"$ref": "#/$defs/name"}, {"type": "null"}]},
+        "disks": {"$ref": "#/$defs/names"},
+        "cpu": {"$ref": "#/$defs/name"},
+        "processors": {"$ref": "#/$defs/positive"},
+        "memory_bytes": {"$ref": "#/$defs/positive"},
+        "firmware": {"enum": ["seabios", "ovmf", "direct"]},
+        "devices": {"$ref": "#/$defs/names"},
+        "boot_options": {"type": "array", "items": {"type": "string", "pattern": "^[!-~]+$"}}
+      }
+    },
+    "execution": {
+      "type": "object", "additionalProperties": false,
+      "required": ["program", "stdin", "role", "privileges", "isolation", "children", "cleanup"],
+      "properties": {
+        "program": {"$ref": "#/$defs/name"},
+        "stdin": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/name"}]},
+        "role": {"enum": ["ordinary", "init", "boot"]},
+        "privileges": {"$ref": "#/$defs/text"},
+        "isolation": {"type": "array", "items": {"$ref": "#/$defs/fixture"}},
+        "children": {"enum": ["none", "reaped", "reported"]},
+        "cleanup": {"$ref": "#/$defs/text"}
+      }
+    },
+    "fixture": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fixture"],
+      "properties": {
+        "fixture": {"enum": ["scratch", "workspace", "stage", "volume", "tmpfs", "mountns", "root", "ids",
+                             "ipcns", "utsns", "pty", "ports", "peer", "log", "alone", "console", "disk"]},
+        "names": {"$ref": "#/$defs/names"},
+        "type": {"enum": ["krffs", "ext2", "vfat", "exfat", "ext2-dir"]},
+        "size_bytes": {"$ref": "#/$defs/positive"},
+        "count": {"$ref": "#/$defs/positive"}
+      },
+      "allOf": [
+        {"if": {"properties": {"fixture": {"enum": ["stage", "disk"]}}}, "then": {"required": ["names"]}},
+        {"if": {"properties": {"fixture": {"enum": ["volume", "root"]}}}, "then": {"required": ["type"]}},
+        {"if": {"properties": {"fixture": {"const": "tmpfs"}}}, "then": {"required": ["size_bytes"]}},
+        {"if": {"properties": {"fixture": {"enum": ["ids", "ports"]}}}, "then": {"required": ["count"]}}
+      ]
+    },
+    "assertion": {
+      "type": "object", "additionalProperties": false,
+      "required": ["assertion_id", "checks", "source"],
+      "properties": {
+        "assertion_id": {"allOf": [{"$ref": "#/$defs/id"}, {"not": {"pattern": "^etude\\."}}]},
+        "checks": {"$ref": "#/$defs/text"},
+        "source": {"enum": ["program", "scenario", "executor"]},
+        "record": {"$ref": "#/$defs/text"},
+        "where": {"$ref": "#/$defs/where"}
+      },
+      "if": {"properties": {"source": {"const": "executor"}}},
+      "then": {"required": ["record"]},
+      "else": {"not": {"required": ["record"]}}
+    },
+    "branch": {
+      "type": "object", "additionalProperties": false,
+      "required": ["group_id", "decided_by", "alternatives"],
+      "properties": {
+        "group_id": {"$ref": "#/$defs/id"},
+        "decided_by": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["features"], "properties": {"features": {"allOf": [{"$ref": "#/$defs/names"}], "minItems": 1}}}, {"const": "report"}]},
+        "alternatives": {
+          "type": "array", "minItems": 2,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["alternative_id", "when", "assertions"],
+            "properties": {
+              "alternative_id": {"$ref": "#/$defs/id"},
+              "when": {"oneOf": [{"enum": ["present", "absent"]}, {"type": "null"}]},
+              "assertions": {"$ref": "#/$defs/ids"}
+            }
+          }
+        }
+      }
+    },
+    "termination": {
+      "type": "object", "additionalProperties": false,
+      "required": ["end", "value"],
+      "properties": {
+        "end": {"enum": ["exited", "signaled", "init_exited", "init_killed", "panic", "reset", "shutdown", "halted"]},
+        "value": {"oneOf": [{"type": "integer", "minimum": 0, "maximum": 255}, {"type": "null"}]}
+      },
+      "if": {"properties": {"end": {"enum": ["exited", "signaled", "init_exited", "init_killed"]}}},
+      "then": {"properties": {"value": {"type": "integer"}}},
+      "else": {"properties": {"value": {"type": "null"}}}
+    },
+    "step": {
+      "type": "object", "additionalProperties": false,
+      "required": ["step_id", "stage", "does"],
+      "properties": {
+        "step_id": {"$ref": "#/$defs/id"},
+        "stage": {"enum": ["prepare", "transfer", "boot", "execute", "capture", "cleanup"]},
+        "does": {"$ref": "#/$defs/text"},
+        "machine": {"$ref": "#/$defs/id"}
+      }
+    },
+    "machine": {
+      "type": "object", "additionalProperties": false,
+      "required": ["machine_id", "qemu", "console", "qmp", "helper"],
+      "properties": {
+        "machine_id": {"$ref": "#/$defs/id"},
+        "qemu": {"$ref": "#/$defs/qemu"},
+        "console": {"enum": ["serial", "none"]},
+        "helper": {"type": "boolean"},
+        "qmp": {"type": "boolean"}
+      }
+    },
+    "witness": {
+      "type": "object", "additionalProperties": false,
+      "required": ["witness_id", "kind", "means", "limit"],
+      "properties": {
+        "witness_id": {"$ref": "#/$defs/id"},
+        "kind": {"enum": ["step", "counter", "quiet"]},
+        "means": {"$ref": "#/$defs/text"},
+        "limit": {"oneOf": [{"$ref": "#/$defs/positive"}, {"type": "null"}]},
+        "bound": {"$ref": "#/$defs/bound"}
+      },
+      "allOf": [
+        {"if": {"properties": {"kind": {"const": "counter"}}}, "then": {"properties": {"limit": {"$ref": "#/$defs/positive"}}}},
+        {"if": {"properties": {"kind": {"const": "quiet"}}}, "then": {"required": ["bound"]}}
+      ]
+    },
+    "bound": {
+      "type": "object", "additionalProperties": false,
+      "required": ["floor_us", "initial_us", "ceiling_us"],
+      "properties": {
+        "floor_us": {"$ref": "#/$defs/positive"},
+        "initial_us": {"$ref": "#/$defs/positive"},
+        "ceiling_us": {"$ref": "#/$defs/positive"}
+      }
+    },
+    "bounds": {
+      "type": "object", "additionalProperties": false,
+      "required": ["case", "gap", "stages"],
+      "properties": {
+        "case": {"$ref": "#/$defs/bound"},
+        "gap": {"$ref": "#/$defs/bound"},
+        "stages": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "prepare": {"$ref": "#/$defs/bound"}, "transfer": {"$ref": "#/$defs/bound"},
+            "boot": {"$ref": "#/$defs/bound"}, "capture": {"$ref": "#/$defs/bound"},
+            "cleanup": {"$ref": "#/$defs/bound"}
+          }
+        }
+      }
+    },
+    "resources": {
+      "type": "object", "additionalProperties": false,
+      "required": ["cpu_millis", "cpu_ceiling_millis", "memory_bytes", "disk_bytes", "locks", "ports", "loop_devices"],
+      "properties": {
+        "cpu_millis": {"$ref": "#/$defs/positive"},
+        "cpu_ceiling_millis": {"$ref": "#/$defs/positive"},
+        "memory_bytes": {"$ref": "#/$defs/positive"},
+        "disk_bytes": {"$ref": "#/$defs/count"},
+        "guest_memory": {
+          "type": "object", "additionalProperties": false,
+          "required": ["configured_bytes", "resident_bytes", "backing"],
+          "properties": {
+            "configured_bytes": {"$ref": "#/$defs/positive"},
+            "resident_bytes": {"$ref": "#/$defs/positive"},
+            "backing": {"enum": ["reserved", "lazy", "file"]}
+          }
+        },
+        "locks": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["lock", "mode"],
+            "properties": {"lock": {"$ref": "#/$defs/name"}, "mode": {"enum": ["shared", "exclusive"]}}
+          }
+        },
+        "ports": {"$ref": "#/$defs/count"},
+        "loop_devices": {"$ref": "#/$defs/count"}
+      }
+    },
+    "artifact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "node", "per_architecture"],
+      "properties": {
+        "name": {"$ref": "#/$defs/name"},
+        "node": {"$ref": "#/$defs/text"},
+        "per_architecture": {"type": "boolean"}
+      }
+    },
+    "timing": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "where", "assumes", "uncertainty_us"],
+      "properties": {
+        "kind": {"enum": ["clock_reference", "injected_delay"]},
+        "where": {"$ref": "#/$defs/where"},
+        "assumes": {"$ref": "#/$defs/text"},
+        "uncertainty_us": {"oneOf": [{"$ref": "#/$defs/positive"}, {"type": "null"}]}
+      },
+      "allOf": [
+        {"if": {"properties": {"kind": {"const": "clock_reference"}}}, "then": {"properties": {"uncertainty_us": {"$ref": "#/$defs/positive"}}}}
+      ]
+    },
+    "native": {
+      "type": "object", "additionalProperties": false,
+      "required": ["plan"],
+      "properties": {
+        "plan": {"enum": ["native", "none", "host"]},
+        "fixtures": {"type": "array", "items": {"$ref": "#/$defs/fixture"}},
+        "class": {"enum": ["QEMU", "card", "init", "boot", "exhaustion", "count", "feature", "layout", "disk",
+                           "network", "image", "system", "firmware", "input", "architecture"]},
+        "reason": {"$ref": "#/$defs/text"}
+      },
+      "allOf": [
+        {"if": {"properties": {"plan": {"const": "native"}}}, "then": {"required": ["fixtures"], "not": {"anyOf": [{"required": ["class"]}, {"required": ["reason"]}]}}},
+        {"if": {"properties": {"plan": {"const": "none"}}}, "then": {"required": ["class", "reason"], "not": {"required": ["fixtures"]}}},
+        {"if": {"properties": {"plan": {"const": "host"}}}, "then": {"not": {"anyOf": [{"required": ["fixtures"]}, {"required": ["class"]}, {"required": ["reason"]}]}}}
+      ]
+    }
+  }
+}

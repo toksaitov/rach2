@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Etude assertion results, version 1",
+  "description": "The assertion results of one attempt, the blob its history record names; see tools/etude/Readme.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "attempt_id", "item_id", "case_id", "inventory_sha256", "placement",
+               "termination", "report", "branches", "assertions", "undeclared"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"$ref": "#/$defs/history_id"},
+    "attempt_id": {"$ref": "#/$defs/history_id"},
+    "item_id": {"$ref": "#/$defs/history_id"},
+    "case_id": {"$ref": "#/$defs/id"},
+    "inventory_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "placement": {"enum": ["host", "qemu", "native"]},
+    "termination": {
+      "type": "object", "additionalProperties": false,
+      "required": ["end", "value", "observed_by", "detail"],
+      "properties": {
+        "end": {"enum": ["exited", "signaled", "init_exited", "init_killed", "panic", "reset", "shutdown", "halted",
+                         "qemu_exited", "accel_failed", "stopped", "lost"]},
+        "value": {"oneOf": [{"type": "integer", "minimum": 0, "maximum": 255}, {"type": "null"}]},
+        "observed_by": {"enum": ["host_process", "etude_guest", "kernel_record", "qmp_event", "qemu_process", "monitor", "executor"]},
+        "detail": {"oneOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]}
+      }
+    },
+    "report": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "records", "errors"],
+      "properties": {
+        "state": {"enum": ["complete", "truncated", "invalid", "absent", "not_used"]},
+        "records": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+        "errors": {"type": "array", "items": {"$ref": "#/$defs/text"}}
+      },
+      "allOf": [
+        {"if": {"properties": {"state": {"enum": ["truncated", "invalid"]}}}, "then": {"properties": {"errors": {"minItems": 1}}}}
+      ]
+    },
+    "branches": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["group_id", "alternative_id", "decided_by"],
+        "properties": {
+          "group_id": {"$ref": "#/$defs/id"},
+          "alternative_id": {"oneOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]},
+          "decided_by": {"enum": ["feature", "report", "undecided"]}
+        }
+      }
+    },
+    "assertions": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["assertion_id", "source", "outcome", "detail"],
+        "properties": {
+          "assertion_id": {"$ref": "#/$defs/id"},
+          "source": {"enum": ["program", "scenario", "executor"]},
+          "outcome": {"enum": ["pass", "fail", "not_run", "missing"]},
+          "detail": {"oneOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]}
+        },
+        "allOf": [
+          {"if": {"properties": {"outcome": {"const": "pass"}}}, "then": {"properties": {"detail": {"type": "null"}}}, "else": {"properties": {"detail": {"$ref": "#/$defs/text"}}}}
+        ]
+      }
+    },
+    "undeclared": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["assertion_id", "outcome", "detail"],
+        "properties": {
+          "assertion_id": {"type": "string", "pattern": "^[!-~]{1,128}$"},
+          "outcome": {"enum": ["pass", "fail", "not_run"]},
+          "detail": {"oneOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$", "maxLength": 128},
+    "history_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$"},
+    "text": {"type": "string", "minLength": 1, "pattern": "^[ -~]+$"}
+  }
+}

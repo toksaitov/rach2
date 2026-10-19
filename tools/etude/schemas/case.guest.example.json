@@ -1,0 +1,191 @@
+{
+  "schema_version": 1,
+  "family_id": "guest.default",
+  "summary": "Probes of the system-call interface, each run as a process on Rach2",
+  "cases": [
+    {
+      "case_id": "guest.default.auxvprobe",
+      "behavior": "A new process starts with the stack, registers, arguments, environment and auxiliary vector of the ABI",
+      "units": ["auxvprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {
+        "host_api": "c", "tools": [], "features": {},
+        "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
+                 "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}
+      },
+      "execution": {
+        "program": "auxvprobe", "stdin": null, "role": "ordinary", "privileges": "any",
+        "isolation": [], "children": "none", "cleanup": "nothing to remove"
+      },
+      "assertions": [
+        {"assertion_id": "stack-aligned", "checks": "the stack pointer is 16-byte aligned at entry", "source": "program"},
+        {"assertion_id": "registers-zero", "checks": "every general register but the stack pointer is 0 at entry", "source": "program"},
+        {"assertion_id": "argv", "checks": "argc is at least 1 and argv[argc] is NULL", "source": "program"},
+        {"assertion_id": "envp", "checks": "the environment has at least one entry and ends with NULL", "source": "program"},
+        {"assertion_id": "auxv-end", "checks": "the auxiliary vector ends with AT_NULL", "source": "program"},
+        {"assertion_id": "pagesz", "checks": "AT_PAGESZ is 4096", "source": "program"},
+        {"assertion_id": "phdr", "checks": "AT_PHNUM and AT_PHDR are nonzero", "source": "program"},
+        {"assertion_id": "phent", "checks": "AT_PHENT is 32 on i686 and 56 on x86-64", "source": "program"},
+        {"assertion_id": "clktck", "checks": "AT_CLKTCK is 100", "source": "program"},
+        {"assertion_id": "secure", "checks": "AT_SECURE is present and 0", "source": "program"},
+        {"assertion_id": "entry", "checks": "AT_ENTRY is nonzero", "source": "program"},
+        {"assertion_id": "minsigstksz", "checks": "AT_MINSIGSTKSZ is above 512", "source": "program"},
+        {"assertion_id": "random", "checks": "AT_RANDOM is present and its 16 bytes are not all zero", "source": "program"},
+        {"assertion_id": "random-page", "checks": "AT_RANDOM lies in the stack pointer's page", "source": "program", "where": "tests/auxvprobe.c:298"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {
+        "case": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000},
+        "gap": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000},
+        "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "auxvprobe", "node": "tests/auxvprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
+    },
+    {
+      "case_id": "guest.default.errnoprobe",
+      "behavior": "A failing system call returns the negated errno that Linux returns",
+      "units": ["errnoprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"missing_path": "/no_such_file_errnoprobe", "closed_fd": 999}, "repetitions": 1, "seed": null},
+      "requirements": {
+        "host_api": "c", "tools": [], "features": {},
+        "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
+                 "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}
+      },
+      "execution": {
+        "program": "errnoprobe", "stdin": null, "role": "ordinary", "privileges": "any",
+        "isolation": [], "children": "none", "cleanup": "nothing to remove; /no_such_file_errnoprobe must be absent"
+      },
+      "assertions": [
+        {"assertion_id": "enosys-unimplemented", "checks": "an unregistered number in the table's range returns -ENOSYS", "source": "program"},
+        {"assertion_id": "enosys-out-of-range", "checks": "number 909 returns -ENOSYS", "source": "program"},
+        {"assertion_id": "enoent-open", "checks": "open of a missing path returns -ENOENT", "source": "program"},
+        {"assertion_id": "ebadf-close", "checks": "close(999) returns -EBADF", "source": "program"},
+        {"assertion_id": "ebadf-read", "checks": "read(999) returns -EBADF", "source": "program"},
+        {"assertion_id": "efault-writev", "checks": "writev with an iovec at -4096 returns -EFAULT", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {
+        "case": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000},
+        "gap": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000},
+        "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "errnoprobe", "node": "tests/errnoprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
+    },
+    {
+      "case_id": "guest.default.rngprobe",
+      "behavior": "The random devices give varied bytes from a trusted source and refuse to read without one",
+      "units": ["rngprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {
+        "host_api": "c", "tools": [], "features": {"rdrand": "either", "rdseed": "either"},
+        "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
+                 "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}
+      },
+      "execution": {
+        "program": "rngprobe", "stdin": null, "role": "ordinary", "privileges": "any",
+        "isolation": [], "children": "none", "cleanup": "nothing to remove"
+      },
+      "assertions": [
+        {"assertion_id": "cpuid-leaf7", "checks": "kcpu_id gives leaf 7 subleaf 0 as a direct cpuid does", "source": "program"},
+        {"assertion_id": "trusted-urandom", "checks": "with getrandom succeeding, /dev/urandom opens, reads and varies across reads", "source": "program"},
+        {"assertion_id": "trusted-monobit", "checks": "the bytes of /dev/urandom pass a loose monobit count", "source": "program"},
+        {"assertion_id": "closed-urandom", "checks": "with getrandom answering EIO, a read of /dev/urandom answers EIO", "source": "program"},
+        {"assertion_id": "closed-random", "checks": "with getrandom answering EIO, a read of /dev/random answers EIO", "source": "program"},
+        {"assertion_id": "closed-insecure", "checks": "getrandom(GRND_INSECURE) still returns bytes", "source": "program"}
+      ],
+      "branches": [
+        {"group_id": "source", "decided_by": {"features": ["rdrand", "rdseed"]},
+         "alternatives": [
+           {"alternative_id": "trusted", "when": "present", "assertions": ["trusted-urandom", "trusted-monobit"]},
+           {"alternative_id": "fail-closed", "when": "absent", "assertions": ["closed-urandom", "closed-random", "closed-insecure"]}
+         ]}
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {
+        "case": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000},
+        "gap": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000},
+        "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "rngprobe", "node": "tests/rngprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
+    },
+    {
+      "case_id": "guest.default.survivorprobe",
+      "behavior": "When the designated init exits with a runnable child, the kernel ends the child and returns to the debug shell",
+      "units": ["survivorprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {
+        "host_api": "c", "tools": [], "features": {},
+        "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
+                 "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}
+      },
+      "execution": {
+        "program": "survivorprobe", "stdin": null, "role": "init", "privileges": "any",
+        "isolation": [], "children": "reported", "cleanup": "the kernel ends the spinning child; nothing outlives the boot"
+      },
+      "assertions": [
+        {"assertion_id": "fork", "checks": "the probe forks a child that spins in user mode", "source": "program"},
+        {"assertion_id": "shell-returned", "checks": "the kernel hands the debug shell back after the init's exit", "source": "executor",
+         "record": ", returning to kernel shell"}
+      ],
+      "branches": [],
+      "termination": {"end": "init_exited", "value": 0},
+      "progress": [],
+      "bounds": {
+        "case": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000},
+        "gap": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000},
+        "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "survivorprobe", "node": "tests/survivorprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "init",
+                 "reason": "the kernel must end the child and return to the debug shell when the designated init exits, which a child of etude-guest cannot be"}
+    }
+  ]
+}
