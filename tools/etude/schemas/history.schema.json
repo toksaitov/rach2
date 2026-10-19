@@ -1,0 +1,266 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Etude history record, version 1",
+  "description": "One complete JSON Lines record; relationships are defined in measurements.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_id", "stream_id", "sequence", "run_id", "recorded_utc", "kind", "data"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "record_id": {"$ref": "#/$defs/id"},
+    "stream_id": {"$ref": "#/$defs/id"},
+    "sequence": {"$ref": "#/$defs/count"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "recorded_utc": {"$ref": "#/$defs/utc"},
+    "kind": {"enum": ["plan", "step", "attempt", "run", "comparison"]},
+    "data": {"type": "object"}
+  },
+  "oneOf": [
+    {"properties": {"kind": {"const": "plan"}, "data": {"$ref": "#/$defs/plan"}}},
+    {"properties": {"kind": {"const": "step"}, "data": {"$ref": "#/$defs/step"}}},
+    {"properties": {"kind": {"const": "attempt"}, "data": {"$ref": "#/$defs/attempt"}}},
+    {"properties": {"kind": {"const": "run"}, "data": {"$ref": "#/$defs/run"}}},
+    {"properties": {"kind": {"const": "comparison"}, "data": {"$ref": "#/$defs/comparison"}}}
+  ],
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$"},
+    "text": {"type": "string", "minLength": 1},
+    "count": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+    "positive": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "utc": {"type": "string", "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$"},
+    "ids": {"type": "array", "items": {"$ref": "#/$defs/id"}, "uniqueItems": true},
+    "blob": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sha256", "size_bytes", "locations"],
+      "properties": {
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size_bytes": {"$ref": "#/$defs/count"},
+        "locations": {"type": "array", "items": {"$ref": "#/$defs/text"}, "minItems": 1, "uniqueItems": true}
+      }
+    },
+    "blobs": {"type": "array", "items": {"$ref": "#/$defs/blob"}},
+    "measurement": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["value", "method", "quality", "interval_us", "error_bound"],
+          "properties": {
+            "value": {"$ref": "#/$defs/count"},
+            "method": {"$ref": "#/$defs/id"},
+            "quality": {"enum": ["exact", "sampled", "lower_bound"]},
+            "interval_us": {"oneOf": [{"$ref": "#/$defs/positive"}, {"type": "null"}]},
+            "error_bound": {"oneOf": [{"$ref": "#/$defs/count"}, {"type": "null"}]}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["value", "reason"],
+          "properties": {"value": {"type": "null"}, "reason": {"$ref": "#/$defs/text"}}
+        }
+      ]
+    },
+    "clock": {
+      "type": "object", "additionalProperties": false,
+      "required": ["machine_id", "boot_id", "clock_id", "resolution_us"],
+      "properties": {
+        "machine_id": {"$ref": "#/$defs/id"}, "boot_id": {"$ref": "#/$defs/id"},
+        "clock_id": {"$ref": "#/$defs/id"}, "resolution_us": {"$ref": "#/$defs/positive"}
+      }
+    },
+    "time": {
+      "type": "object", "additionalProperties": false,
+      "required": ["start_utc", "end_utc", "clock", "start_us", "end_us", "elapsed_us"],
+      "properties": {
+        "start_utc": {"$ref": "#/$defs/utc"},
+        "end_utc": {"oneOf": [{"$ref": "#/$defs/utc"}, {"type": "null"}]},
+        "clock": {"$ref": "#/$defs/clock"},
+        "start_us": {"$ref": "#/$defs/count"},
+        "end_us": {"oneOf": [{"$ref": "#/$defs/count"}, {"type": "null"}]},
+        "elapsed_us": {"$ref": "#/$defs/measurement"}
+      },
+      "allOf": [
+        {"if": {"properties": {"end_us": {"type": "null"}}}, "then": {"properties": {"end_utc": {"type": "null"}, "elapsed_us": {"$ref": "#/$defs/measurement/oneOf/1"}}}, "else": {"properties": {"end_utc": {"$ref": "#/$defs/utc"}, "elapsed_us": {"$ref": "#/$defs/measurement/oneOf/0"}}}}
+      ]
+    },
+    "resources": {
+      "type": "object", "additionalProperties": false,
+      "required": ["scope", "tree_cpu_us", "combined_peak_bytes", "samples"],
+      "properties": {
+        "scope": {"$ref": "#/$defs/blob"},
+        "tree_cpu_us": {"$ref": "#/$defs/measurement"},
+        "combined_peak_bytes": {"$ref": "#/$defs/measurement"},
+        "samples": {"$ref": "#/$defs/blobs"}
+      }
+    },
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["outcome", "reason", "cleanup", "evidence", "capture_errors", "disruptions"],
+      "properties": {
+        "outcome": {"enum": ["pass", "failure", "incomplete", "cancelled"]},
+        "reason": {"oneOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]},
+        "cleanup": {"enum": ["confirmed", "unconfirmed"]},
+        "evidence": {"$ref": "#/$defs/blobs"},
+        "capture_errors": {"type": "array", "items": {"$ref": "#/$defs/text"}},
+        "disruptions": {"type": "array", "items": {"$ref": "#/$defs/text"}}
+      },
+      "allOf": [
+        {"if": {"properties": {"outcome": {"const": "pass"}}}, "then": {"properties": {"cleanup": {"const": "confirmed"}, "reason": {"type": "null"}}}},
+        {"if": {"properties": {"outcome": {"enum": ["failure", "incomplete", "cancelled"]}}}, "then": {"properties": {"reason": {"$ref": "#/$defs/text"}}}}
+      ]
+    },
+    "item": {
+      "type": "object", "additionalProperties": false,
+      "required": ["item_id", "case_id", "family_id", "architecture", "domain", "workload", "assertions", "profile", "repetition", "attempt_ids"],
+      "properties": {
+        "item_id": {"$ref": "#/$defs/id"}, "case_id": {"$ref": "#/$defs/id"}, "family_id": {"$ref": "#/$defs/id"},
+        "architecture": {"enum": ["i686", "x86_64"]},
+        "domain": {"enum": ["host", "qemu", "native"]},
+        "workload": {"$ref": "#/$defs/blob"},
+        "assertions": {"$ref": "#/$defs/blob"},
+        "profile": {"$ref": "#/$defs/blob"},
+        "repetition": {"$ref": "#/$defs/count"},
+        "attempt_ids": {"allOf": [{"$ref": "#/$defs/ids"}], "minItems": 1}
+      }
+    },
+    "environment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["machine_id", "boot_id", "os", "os_version", "accelerator", "site_profile", "tools", "capacity", "cache_state", "load"],
+      "properties": {
+        "machine_id": {"$ref": "#/$defs/id"}, "boot_id": {"$ref": "#/$defs/id"},
+        "os": {"enum": ["linux", "macos", "windows", "rach2"]}, "os_version": {"$ref": "#/$defs/text"},
+        "accelerator": {"enum": ["tcg", "kvm", "whpx", "native"]},
+        "site_profile": {"$ref": "#/$defs/blob"}, "tools": {"$ref": "#/$defs/blob"},
+        "capacity": {"$ref": "#/$defs/blob"}, "cache_state": {"$ref": "#/$defs/blob"},
+        "load": {"$ref": "#/$defs/blob"}
+      }
+    },
+    "exemption": {
+      "type": "object", "additionalProperties": false,
+      "required": ["reason", "phase_issue", "manifest", "run_ids", "attempt_ids"],
+      "properties": {
+        "reason": {"const": "milestone-62-first-runs"}, "phase_issue": {"const": 589},
+        "manifest": {"$ref": "#/$defs/blob"},
+        "run_ids": {"allOf": [{"$ref": "#/$defs/ids"}], "minItems": 1},
+        "attempt_ids": {"allOf": [{"$ref": "#/$defs/ids"}], "minItems": 1}
+      }
+    },
+    "plan": {
+      "type": "object", "additionalProperties": false,
+      "required": ["purpose", "selection", "items", "commit", "source", "runner", "artifacts", "environment", "concurrency", "policies", "exemption", "reproduce"],
+      "properties": {
+        "purpose": {"enum": ["push", "ci", "release", "focused", "phase_first_run"]},
+        "selection": {"$ref": "#/$defs/blob"},
+        "items": {"type": "array", "items": {"$ref": "#/$defs/item"}, "minItems": 1},
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
+        "source": {"$ref": "#/$defs/blob"}, "runner": {"$ref": "#/$defs/blob"},
+        "artifacts": {"$ref": "#/$defs/blobs"}, "environment": {"$ref": "#/$defs/environment"},
+        "concurrency": {"$ref": "#/$defs/blob"}, "policies": {"$ref": "#/$defs/blob"},
+        "exemption": {"oneOf": [{"$ref": "#/$defs/exemption"}, {"type": "null"}]},
+        "reproduce": {"$ref": "#/$defs/blob"}
+      },
+      "allOf": [
+        {"if": {"properties": {"purpose": {"const": "phase_first_run"}}}, "then": {"properties": {"exemption": {"$ref": "#/$defs/exemption"}}}, "else": {"properties": {"exemption": {"type": "null"}}}}
+      ]
+    },
+    "witness": {
+      "type": "object", "additionalProperties": false,
+      "required": ["witness_id", "sequence", "offset_us", "completed_units"],
+      "properties": {
+        "witness_id": {"$ref": "#/$defs/id"}, "sequence": {"$ref": "#/$defs/count"},
+        "offset_us": {"$ref": "#/$defs/count"}, "completed_units": {"$ref": "#/$defs/count"}
+      }
+    },
+    "step": {
+      "type": "object", "additionalProperties": false,
+      "required": ["plan_id", "item_id", "attempt_id", "step_id", "stage", "time", "resources", "witnesses", "max_progress_gap_us", "result"],
+      "properties": {
+        "plan_id": {"$ref": "#/$defs/id"},
+        "item_id": {"oneOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]},
+        "attempt_id": {"oneOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]}, "step_id": {"$ref": "#/$defs/id"},
+        "stage": {"enum": ["queue", "build", "prepare", "transfer", "boot", "execute", "capture", "cleanup", "tooling_start", "one_time_setup"]},
+        "time": {"$ref": "#/$defs/time"}, "resources": {"$ref": "#/$defs/resources"},
+        "witnesses": {"type": "array", "items": {"$ref": "#/$defs/witness"}},
+        "max_progress_gap_us": {"$ref": "#/$defs/measurement"}, "result": {"$ref": "#/$defs/result"}
+      }
+    },
+    "attempt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["plan_id", "item_id", "attempt_id", "previous_attempt_id", "steps", "time", "queue_us", "resources", "assertion_results", "result"],
+      "properties": {
+        "plan_id": {"$ref": "#/$defs/id"}, "item_id": {"$ref": "#/$defs/id"}, "attempt_id": {"$ref": "#/$defs/id"},
+        "previous_attempt_id": {"oneOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]},
+        "steps": {"$ref": "#/$defs/ids"}, "time": {"$ref": "#/$defs/time"},
+        "queue_us": {"$ref": "#/$defs/measurement"}, "resources": {"$ref": "#/$defs/resources"},
+        "assertion_results": {"$ref": "#/$defs/blob"}, "result": {"$ref": "#/$defs/result"}
+      }
+    },
+    "summary_item": {
+      "type": "object", "additionalProperties": false,
+      "required": ["item_id", "attempt_records", "outcome"],
+      "properties": {
+        "item_id": {"$ref": "#/$defs/id"}, "attempt_records": {"$ref": "#/$defs/ids"},
+        "outcome": {"enum": ["pass", "failure", "incomplete", "cancelled"]}
+      }
+    },
+    "budget": {
+      "type": "object", "additionalProperties": false,
+      "required": ["policy", "charged_us", "outside_queue_us", "one_time_setup_us", "goal_us", "growth_us", "ceiling_us", "cleanup_reserve_us", "verdict"],
+      "properties": {
+        "policy": {"$ref": "#/$defs/blob"}, "charged_us": {"$ref": "#/$defs/measurement"},
+        "outside_queue_us": {"$ref": "#/$defs/measurement"}, "one_time_setup_us": {"$ref": "#/$defs/measurement"},
+        "goal_us": {"$ref": "#/$defs/positive"}, "growth_us": {"$ref": "#/$defs/count"},
+        "ceiling_us": {"$ref": "#/$defs/positive"}, "cleanup_reserve_us": {"$ref": "#/$defs/positive"},
+        "verdict": {"enum": ["pass", "failure", "exempt", "unknown"]}
+      }
+    },
+    "run": {
+      "type": "object", "additionalProperties": false,
+      "required": ["plan_id", "items", "preparation_steps", "time", "resources", "stage_totals", "family_totals", "useful_concurrency", "load", "budget", "result"],
+      "properties": {
+        "plan_id": {"$ref": "#/$defs/id"},
+        "items": {"type": "array", "items": {"$ref": "#/$defs/summary_item"}, "minItems": 1},
+        "preparation_steps": {"$ref": "#/$defs/ids"}, "time": {"$ref": "#/$defs/time"},
+        "resources": {"$ref": "#/$defs/resources"},
+        "stage_totals": {"$ref": "#/$defs/blob"}, "family_totals": {"$ref": "#/$defs/blob"},
+        "useful_concurrency": {"$ref": "#/$defs/blob"}, "load": {"$ref": "#/$defs/blob"},
+        "budget": {"$ref": "#/$defs/budget"}, "result": {"$ref": "#/$defs/result"}
+      }
+    },
+    "statistics": {
+      "type": "object", "additionalProperties": false,
+      "required": ["samples", "median_us", "mad_us", "band_us"],
+      "properties": {
+        "samples": {"$ref": "#/$defs/ids"}, "median_us": {"$ref": "#/$defs/measurement"},
+        "mad_us": {"$ref": "#/$defs/measurement"}, "band_us": {"$ref": "#/$defs/measurement"}
+      }
+    },
+    "comparison": {
+      "type": "object", "additionalProperties": false,
+      "required": ["purpose", "scope", "subject_id", "policy", "baseline_id", "baseline", "candidate", "equivalence_review", "verdict", "reasons", "report"],
+      "properties": {
+        "purpose": {"enum": ["same_site_regression", "site_selection"]},
+        "scope": {"enum": ["case", "step", "whole_collection"]}, "subject_id": {"$ref": "#/$defs/id"},
+        "policy": {"$ref": "#/$defs/blob"},
+        "baseline_id": {"oneOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]},
+        "baseline": {"$ref": "#/$defs/statistics"}, "candidate": {"$ref": "#/$defs/statistics"},
+        "equivalence_review": {"oneOf": [{"$ref": "#/$defs/blob"}, {"type": "null"}]},
+        "verdict": {"enum": ["improved", "within_noise", "regression", "insufficient_history", "not_comparable"]},
+        "reasons": {"type": "array", "items": {"$ref": "#/$defs/text"}, "minItems": 1},
+        "report": {"$ref": "#/$defs/blob"}
+      },
+      "allOf": [
+        {"if": {"properties": {"purpose": {"const": "site_selection"}}}, "then": {"properties": {"scope": {"const": "whole_collection"}}}},
+        {"if": {"properties": {"verdict": {"enum": ["improved", "within_noise", "regression"]}}}, "then": {"properties": {"baseline_id": {"$ref": "#/$defs/id"}, "baseline": {"$ref": "#/$defs/decisive_statistics", "properties": {"samples": {"minItems": 5}}}, "candidate": {"$ref": "#/$defs/decisive_statistics", "properties": {"samples": {"minItems": 1}}}}}},
+        {"if": {"properties": {"purpose": {"const": "site_selection"}, "verdict": {"enum": ["improved", "within_noise", "regression"]}}}, "then": {"properties": {"candidate": {"properties": {"samples": {"minItems": 5}}}}}}
+      ]
+    },
+    "decisive_statistics": {
+      "properties": {
+        "median_us": {"$ref": "#/$defs/measurement/oneOf/0"},
+        "mad_us": {"$ref": "#/$defs/measurement/oneOf/0"},
+        "band_us": {"$ref": "#/$defs/measurement/oneOf/0"}
+      }
+    }
+  }
+}
