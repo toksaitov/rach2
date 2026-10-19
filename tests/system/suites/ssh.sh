@@ -341,11 +341,6 @@ require_denied "$OUT" "root's password attempt"
 # uid 0; what the backlog cannot hold is refused with a reset, and the rest
 # are dropbear's to refuse.
 flood_start
-# An interval, not a wait for output: the forty connections reach the guest
-# and are counted only once they have been accepted or refused there. The
-# interval is scaled, since a guest sharing its host with a pool of machines
-# gets through less of the flood in the same wall clock.
-sleep "$(scaled 5)" # interval: the forty connections are counted once the guest has taken them
 # flood_count: ask the console for the guest's count of established
 # connections and set `established` to it; fail if the console does not
 # answer or netstat fails, since a failed listing gives no number and must
@@ -365,6 +360,8 @@ flood_count() {
     esac
     established=$seen
 }
+# The connections reach the guest's table only once its server has accepted
+# them, so the count is read until it is more than none.
 attempt=0
 established=0
 while [ "$attempt" -lt 20 ] && [ "$established" -eq 0 ]; do
