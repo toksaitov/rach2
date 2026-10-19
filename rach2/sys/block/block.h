@@ -433,6 +433,25 @@ block_device_t *block_lag_wrap(block_device_t *backing);
 /** Complete lagged requests whose ticks have passed; the timer calls it. */
 void block_lag_tick(void);
 
+/**
+ * Hold timer delivery when `hold` is nonzero, or resume it otherwise.
+ * Kernel test fixtures only, under the kernel lock; -ENODEV before a lag
+ * wrapper exists, 0 otherwise. Holding does not stop backing transfers or
+ * request deadlines. Fixtures advance deadlines with `block_request_tick`
+ * in a host model and must not mix its clock with real timer interrupts.
+ */
+int block_lag_hold(int hold);
+
+/**
+ * Deliver the held answer captured with `generation`, or its error duplicate
+ * when `duplicate` is nonzero. Kernel test fixtures only, under the kernel
+ * lock. Returns 0, -EPERM outside held mode, -ENOENT for no captured answer,
+ * or -EAGAIN before the backing transfer returns or for the wrong phase.
+ * A duplicate can follow caller release and request-address reuse; it never
+ * reads the old request. Each answer and duplicate can be delivered once.
+ */
+int block_lag_answer(uint32_t generation, int duplicate);
+
 /** The disk the lag device wraps, or NULL when `dev` is not the lag device
  * or the never-answering device beside it. */
 block_device_t *block_lag_backing(block_device_t *dev);

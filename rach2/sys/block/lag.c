@@ -51,6 +51,7 @@ static block_device_t *lag_backing;
 static struct lag_entry queue[LAG_QUEUE];
 static uint32_t lag_ticks;
 static uint32_t lag_delay;
+static int lag_held;             /* explicit completion control for kernel test fixtures */
 static uint32_t lag_completions; /* answers delivered after their lag, for /proc/disk */
 static uint32_t fail_write_at;   /* rach2.blockfail=N: the Nth write answers EIO */
 static uint32_t writes_seen;
@@ -139,42 +140,88 @@ static int lag_submit(block_device_t *device, struct block_request *request)
 }
 
 /**
- * Every completion is delivered twice, two ticks apart, and the second copy
- * reports an error. A request freed between the copies is not live any more,
- * and one made since at the same address has a generation of its own, so the
- * request layer must drop the duplicate; a duplicate accepted would fail a
- * healthy request, so a missing generation check is seen.
+ * Deliver one answer, retaining its address and generation for a duplicate.
+ * The duplicate never reads the request, whose memory may have been reused.
+ * Call with interrupts masked, after the backing transfer has returned.
+ */
+static void lag_deliver(struct lag_entry *e)
+{
+    struct block_request *r = e->request;
+
+    if (e->delivered) {
+        e->used = 0;
+        block_request_complete(r, e->generation, -EIO);
+        return;
+    }
+    e->delivered = 1;
+    e->due = lag_ticks + 2;
+    lag_completions++;
+    if (e->flush) {
+        klog(KLOG_INFO, "block", "lag: flush answered");
+    } else if (!r->write && e->status == 0) {
+        k_memcpy(r->page, e->staged, r->count * BLOCK_SECTOR_SIZE);
+    }
+    block_request_complete(r, e->generation, e->status);
+}
+
+int block_lag_hold(int hold)
+{
+    uint32_t flags = kirq_save();
+
+    if (!lag_backing) {
+        kirq_restore(flags);
+        return -ENODEV;
+    }
+    lag_held = hold != 0;
+    kirq_restore(flags);
+    return 0;
+}
+
+int block_lag_answer(uint32_t generation, int duplicate)
+{
+    uint32_t flags = kirq_save();
+    int i;
+
+    if (!lag_held) {
+        kirq_restore(flags);
+        return -EPERM;
+    }
+    for (i = 0; i < LAG_QUEUE; i++) {
+        struct lag_entry *e = &queue[i];
+
+        if (e->used && e->generation == generation) {
+            if (!e->ready || e->delivered != (duplicate != 0)) {
+                kirq_restore(flags);
+                return -EAGAIN;
+            }
+            lag_deliver(e);
+            kirq_restore(flags);
+            return 0;
+        }
+    }
+    kirq_restore(flags);
+    return -ENOENT;
+}
+
+/**
+ * Deliver ready answers at their due tick, and error duplicates two ticks
+ * later. Explicitly held fixtures use `block_lag_answer` instead; timer
+ * ticks then change neither the lag clock nor its queue.
  */
 void block_lag_tick(void)
 {
     int i;
 
-    if (!lag_backing) {
+    if (!lag_backing || lag_held) {
         return;
     }
     lag_ticks++;
     for (i = 0; i < LAG_QUEUE; i++) {
         struct lag_entry *e = &queue[i];
-        struct block_request *r;
 
-        if (!e->used || !e->ready || (int32_t)(lag_ticks - e->due) < 0) {
-            continue;
+        if (e->used && e->ready && (int32_t)(lag_ticks - e->due) >= 0) {
+            lag_deliver(e);
         }
-        r = e->request;
-        if (!e->delivered) {
-            e->delivered = 1;
-            e->due = lag_ticks + 2;
-            lag_completions++;
-            if (e->flush) {
-                klog(KLOG_INFO, "block", "lag: flush answered");
-            } else if (!r->write && e->status == 0) {
-                k_memcpy(r->page, e->staged, r->count * BLOCK_SECTOR_SIZE);
-            }
-            block_request_complete(r, e->generation, e->status);
-            continue;
-        }
-        e->used = 0;
-        block_request_complete(r, e->generation, -EIO);
     }
 }
 
