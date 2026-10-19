@@ -52,8 +52,14 @@ row_cleanup() {
 }
 
 # Run the shared script in headless mode or in the terminal, in a fresh home.
+# In the terminal the row ends Muse with Ctrl-C, which ends it or has it ask
+# for a second. The row reads the screen until it changes, a fifth of a
+# second apart so that a brief question is seen, and sends the second Ctrl-C
+# unless the screen shows Muse ended. The script that runs Muse ignores
+# Ctrl-C once Muse has ended, so a second one that comes then does not end
+# the window.
 muse_session() {
-    local began screen
+    local began screen before end
     mkdir -p "$WORK/session/home/.config/muse" "$WORK/session/repo" /tmp/agents/results
     cp /tmp/agents/fixture/* "$WORK/session/repo/"
     cat > "$WORK/session/home/.gitconfig" <<'EOF'
@@ -105,16 +111,25 @@ env -i PATH='$PATH' HOME='$WORK/session/home' TMPDIR='$WORK/session' \\
     LANG=C.UTF-8 TERM=xterm-256color META_API_KEY=meta-fakeapi-dummy \\
     muse --yolo --model muse-spark-1.2 \\
     'Read notes.txt and do what it says. Check the change with check.sh, then commit it.'
-echo "muse ended with status \$?"
+status=\$?
+trap '' INT
+echo "muse ended with status \$status"
 sleep 600
 EOF
         tmux -L muse new-session -d -s muse -x 100 -y 40 \
             "/bin/bash '$WORK/session/start.sh'" || fail "the tmux session"
         pane "the completed session" "the change is committed." 300
         tmux -L muse capture-pane -p -S - -t muse > "$WORK/session/screen.txt"
+        before=$(tmux -L muse capture-pane -p -t muse)
         tmux -L muse send-keys -t muse C-c
-        sleep 1
-        screen=$(tmux -L muse capture-pane -p -t muse)
+        end=$((SECONDS + 60))
+        while screen=$(tmux -L muse capture-pane -p -t muse) && [ "$screen" = "$before" ]; do
+            if [ "$SECONDS" -ge "$end" ]; then
+                fail "the first Ctrl-C: in 60 s the screen did not change"
+                break
+            fi
+            sleep 0.2
+        done
         case "$screen" in
             *"muse ended with status"*) ;;
             *) tmux -L muse send-keys -t muse C-c ;;
