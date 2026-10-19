@@ -11,6 +11,7 @@
  */
 #include "portio.h"
 #include "ps2mouse.h"
+#include "../arch.h"
 #include "../../platform.h"
 #include "../../klog.h"
 #include "../../mouse.h"
@@ -265,11 +266,6 @@ static void mouse_irq_handler(isr_params_t *params)
     }
 }
 
-/* A host test compiles the handler and the mouse's commands without the
- * bring-up, whose `cli` and `sti` it can neither assemble on every host nor
- * run. */
-#ifndef RACH2_HOSTTEST
-
 /**
  * Interrupts are off so that the handshake's bytes are not taken by a stray
  * IRQ 12. The output buffer is drained first of what the firmware left in
@@ -286,7 +282,7 @@ int init_mouse(void)
     uint8_t config;
     int response;
 
-    __asm__ __volatile__("cli");
+    arch_irq_disable();
 
     {
         int drained = PS2_DRAIN_LIMIT;
@@ -295,7 +291,7 @@ int init_mouse(void)
             inb(PS2_DATA_PORT);
             if (--drained <= 0) {
                 klog(KLOG_WARN, "mouse", "the 8042 buffer never drained");
-                __asm__ __volatile__("sti");
+                arch_irq_enable();
                 return -1;
             }
         }
@@ -303,18 +299,18 @@ int init_mouse(void)
 
     if (ps2_send_command(PS2_CMD_ENABLE_MOUSE) < 0) {
         klog(KLOG_WARN, "mouse", "the aux port would not enable");
-        __asm__ __volatile__("sti");
+        arch_irq_enable();
         return -1;
     }
 
     if (ps2_send_command(PS2_CMD_READ_CONFIG) < 0) {
         klog(KLOG_WARN, "mouse", "the configuration byte would not read");
-        __asm__ __volatile__("sti");
+        arch_irq_enable();
         return -1;
     }
     if (ps2_wait_output() < 0) {
         klog(KLOG_WARN, "mouse", "reading the configuration byte timed out");
-        __asm__ __volatile__("sti");
+        arch_irq_enable();
         return -1;
     }
     config = inb(PS2_DATA_PORT);
@@ -324,12 +320,12 @@ int init_mouse(void)
 
     if (ps2_send_command(PS2_CMD_WRITE_CONFIG) < 0) {
         klog(KLOG_WARN, "mouse", "the configuration byte would not write");
-        __asm__ __volatile__("sti");
+        arch_irq_enable();
         return -1;
     }
     if (ps2_wait_input() < 0) {
         klog(KLOG_WARN, "mouse", "writing the configuration byte timed out");
-        __asm__ __volatile__("sti");
+        arch_irq_enable();
         return -1;
     }
     outb(PS2_DATA_PORT, config);
@@ -346,18 +342,16 @@ int init_mouse(void)
     response = mouse_send_command(MOUSE_CMD_ENABLE);
     if (response < 0) {
         klog(KLOG_WARN, "mouse", "the device did not enable reporting");
-        __asm__ __volatile__("sti");
+        arch_irq_enable();
         return -1;
     }
 
     register_isr_handler(44, mouse_irq_handler, "mouse");
 
-    __asm__ __volatile__("sti");
+    arch_irq_enable();
 
     return 0;
 }
-
-#endif /* !RACH2_HOSTTEST */
 
 /** `mouse_clear_packets` calls this when the queue is emptied, so that half
  * a packet assembled before is not finished with the bytes after. */
