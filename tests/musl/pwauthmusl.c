@@ -32,7 +32,8 @@
  *
  * The interleave, which no `O_EXCL` on a temporary file can pass: two children
  * read and rewrite one file, ordered by a pipe so the second begins its
- * transaction while the first is asleep inside its own. Both lines must
+ * transaction while the first holds its own, which the first keeps until the
+ * second's notice that it waits for the lock is written. Both lines must
  * survive. Without the lock the second reads the pre-image and its rename
  * destroys the first one's line, the lost update the transaction prevents; the
  * second's acquire is also timed, since a lock that never blocked could pass on
@@ -133,6 +134,11 @@
  * use. */
 #define CALLER_BROKEN 127
 #define CALLER_SIGNAL 126
+
+/* The longest wait, in seconds, for another process to reach a state or
+ * write a notice: a bound that ends a wait the kernel or the program never
+ * satisfies, far past a correct one. */
+#define STATE_BOUND 20
 
 /* The files this probe creates, which `finish` removes. */
 static const char *Fixtures[] = {"/credtxn.txt", "/credbusy.txt", "/credmode.txt", "/credlog.txt",
@@ -325,6 +331,94 @@ static void nap(long ms)
     ts.tv_sec = ms / 1000;
     ts.tv_nsec = (ms % 1000) * 1000000L;
     nanosleep(&ts, NULL);
+}
+
+/** The state letter /proc/<pid>/stat gives process `pid`, or 0 when it has
+ * no stat file. */
+static int proc_state(pid_t pid)
+{
+    char path[64], line[256], *state;
+    int fd, n;
+
+    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return 0;
+    }
+    n = (int)read(fd, line, sizeof(line) - 1);
+    close(fd);
+    if (n <= 0) {
+        return 0;
+    }
+    line[n] = '\0';
+    state = strrchr(line, ')');
+    return state && state[1] == ' ' ? state[2] : 0;
+}
+
+/** Whether process `pid` has ended, a zombie or gone from /proc. */
+static int ended(pid_t pid)
+{
+    int state = proc_state(pid);
+
+    return state == 0 || state == 'Z';
+}
+
+/** The seconds since `start` on the monotonic clock. */
+static long seconds_since(const struct timespec *start)
+{
+    struct timespec now;
+
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (long)(now.tv_sec - start->tv_sec);
+}
+
+/**
+ * Wait for process `pid` to be asleep, state S in /proc/<pid>/stat, and, when
+ * `fd` is not -1, for no byte to be left unread in the pipe `fd` is an end
+ * of, as FIONREAD reports, looking every 10 ms. Returns 1 once both hold, and
+ * 0 when the process ends first or STATE_BOUND seconds pass.
+ */
+static int asleep_drained(pid_t pid, int fd)
+{
+    struct timespec start;
+    int unread;
+
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (;;) {
+        unread = 0;
+        if (fd != -1 && ioctl(fd, FIONREAD, &unread) != 0) {
+            return 0;
+        }
+        if (unread == 0 && proc_state(pid) == 'S') {
+            return 1;
+        }
+        if (ended(pid) || seconds_since(&start) >= STATE_BOUND) {
+            return 0;
+        }
+        usleep(10000);
+    }
+}
+
+/**
+ * Wait for the file at `path` to have the text `text`, looking every 10 ms.
+ * Returns 1 once it does, and 0 when process `pid`, which writes the file,
+ * ends first or STATE_BOUND seconds pass.
+ */
+static int await_text(const char *path, const char *text, pid_t pid)
+{
+    struct timespec start;
+    char buffer[256];
+
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (;;) {
+        if (slurp(path, buffer, sizeof(buffer)) >= 0 && strstr(buffer, text) != NULL) {
+            return 1;
+        }
+        if (ended(pid) || seconds_since(&start) >= STATE_BOUND) {
+            return 0;
+        }
+        usleep(10000);
+    }
 }
 
 /**
@@ -684,15 +778,19 @@ static int check_lost_lock(void)
 }
 
 /**
- * The first writer: take the transaction, announce it, hold it while a second
- * writer tries, then read, append and publish.
+ * The first writer: take the transaction, announce it, hold it until the
+ * second writer, `second`, has found it taken, then read, append and publish.
  *
  * The byte on the pipe is what orders the two, and it goes out only once the
  * lock is held, so the second writer is guaranteed to find it there. The pipe
  * closes when this process leaves, so if it fails before the byte goes out the
  * second writer's read returns end of file and it exits 22 instead of waiting.
+ * The lock is held until the second writer's notice that it waits is in
+ * `/credbusy.txt`; a second writer that ends without one, or a notice that
+ * never comes, lets this one go on, and the parent fails the row on the
+ * second's status or the missing notice.
  */
-static void interleave_first(int notify)
+static void interleave_first(int notify, pid_t second)
 {
     char buffer[256];
     ssize_t n;
@@ -703,7 +801,7 @@ static void interleave_first(int notify)
     if (write(notify, "x", 1) != 1) {
         child_exit(12);
     }
-    sleep(2);
+    (void)await_text("/credbusy.txt", "credential database busy, waiting", second);
     n = slurp("/credtxn.txt", buffer, sizeof(buffer) - 8);
     if (n < 0) {
         child_exit(13);
@@ -772,16 +870,17 @@ static int check_interleave(void)
     if (pipe(ordering) != 0) {
         return fail("could not make the pipe that orders the two writers");
     }
+    unlink("/credbusy.txt");
 
-    first = fork();
-    if (first == 0) {
-        close(ordering[0]);
-        interleave_first(ordering[1]);
-    }
     second = fork();
     if (second == 0) {
         close(ordering[1]);
         interleave_second(ordering[0]);
+    }
+    first = fork();
+    if (first == 0) {
+        close(ordering[0]);
+        interleave_first(ordering[1], second);
     }
     close(ordering[0]);
     close(ordering[1]);
@@ -1789,6 +1888,10 @@ static void prompt_overflow_child(int in)
  * can be served; on a pipe the bytes arrive as they are written, so the reader
  * can be holding an over-long run when the stop lands. Driving a program by
  * script, which is how these probes and dropbear both run one, is that case.
+ *
+ * The stop goes once the pipe is empty and the reader asleep, so it holds
+ * the whole run; the line that fits goes once the continued reader is asleep
+ * again (`asleep_drained`).
  */
 static int check_prompt_overflow_resume(void)
 {
@@ -1825,7 +1928,13 @@ static int check_prompt_overflow_resume(void)
 
         return fail("could not write the over-long run");
     }
-    sleep(1);
+    if (!asleep_drained(child, in[1])) {
+        kill(child, SIGKILL);
+        (void)waitpid(child, &status, 0);
+        close(in[1]);
+
+        return fail("the reader never took the over-long run and waited for more");
+    }
     kill(child, SIGTSTP);
     if (waitpid(child, &status, WUNTRACED) != child || !WIFSTOPPED(status)) {
         kill(child, SIGKILL);
@@ -1835,7 +1944,13 @@ static int check_prompt_overflow_resume(void)
         return fail("the reader did not stop in the overflow-resume case");
     }
     kill(child, SIGCONT);
-    sleep(1);
+    if (!asleep_drained(child, -1)) {
+        kill(child, SIGKILL);
+        (void)waitpid(child, &status, 0);
+        close(in[1]);
+
+        return fail("the reader did not wait for input again after the continue");
+    }
     if (write(in[1], "secret\n", 7) != 7) {
         kill(child, SIGKILL);
         (void)waitpid(child, &status, 0);
