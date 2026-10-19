@@ -72,7 +72,7 @@ walk_repaired() {
 # mount's check counts and leaves; the checker then repairs the copy and must
 # call the repaired copy clean. The two checkers differ on whether a lost
 # cluster is reported before the repair, so that report is not required.
-# Without a checker the function does nothing.
+# Without a checker the function reports the check as not run.
 external_check() {
     dd if="$DISK" of="$DISK.vol" bs=512 skip=$PART count=$SECTORS 2>/dev/null \
         || fail "copying the volume for the external checker"
@@ -94,7 +94,11 @@ external_check() {
             fsck.exfat -n "$DISK.vol" >> "$DISK.fsck" 2>&1; rc=$?
         fi
         [ "$rc" -eq 0 ] || { cat "$DISK.fsck" >&2; fail "$1"; }
+    elif [ -n "$2" ]; then
+        echo "exfat-test: not run: the external checker over its repaired copy of the crashed volume: this host has neither fsck_exfat nor fsck.exfat"
+        return 0
     else
+        echo "exfat-test: not run: the external checker over the volume: this host has neither fsck_exfat nor fsck.exfat"
         return 0
     fi
     if [ -n "$2" ]; then
@@ -225,5 +229,5 @@ rm -f "$DISK.late"
 if command -v fsck_exfat >/dev/null 2>&1 || command -v fsck.exfat >/dev/null 2>&1; then
     echo "exfat-test: PASS (with the external checker)"
 else
-    echo "exfat-test: PASS (no external checker; the host's reader judged the volume)"
+    echo "exfat-test: PASS, with the external checker's checks not run; the host's reader judged the volume"
 fi

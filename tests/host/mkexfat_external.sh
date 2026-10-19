@@ -6,7 +6,7 @@
 # Writes DIR/exfat_external.img, DIR/exfat_external.manifest (name|size|
 # mtime as an epoch second) and the source files under DIR/exfat_src/.
 # Exits 3 when the host has no such tools, which the test reports as rows
-# skipped, not passed.
+# not run.
 set -u
 DIR=${1:?directory}
 command -v hdiutil >/dev/null 2>&1 && command -v newfs_exfat >/dev/null 2>&1 || exit 3

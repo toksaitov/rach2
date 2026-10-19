@@ -23,12 +23,14 @@ With `HOST_PRINT_COMMANDS` set, `host.sh` prints the command of each test and ch
 `host.sh` prints a line for each program:
 
     PASS: fat32_hosttest
+    PASS: exfat_hosttest
+      exfat_hosttest: not run: the rows of the volume the host's tools made: this host has no newfs_exfat and hdiutil
     FAIL (compile; see build/tests/host-suite/NAME.clog): NAME
     FAIL (run; see build/tests/host-suite/NAME.rlog): NAME
     FAIL (hung; killed after 60s; see build/tests/host-suite/NAME.rlog): NAME
     FAIL: NAME: missing host-deps: rach2/sys/fs/gone.c
 
-A test passes when it exits with status 0. A nonzero exit, a sanitizer report (every sanitizer is fatal, by `-fno-sanitize-recover=all`), a compile failure, or a run past its time limit fails it. The time limit is 60 seconds, or the one a `host-seconds:` line gives; `deadline` kills the test's whole process group and exits 124, which is the "hung" line. When `build/tests/system/deadline` is not built, `host.sh` says so on stderr and runs the tests without a limit. A missing source under `vendor/musl/` adds a line saying the musl tarball is not extracted, with the repair: remove `vendor/musl/.stamp` and run `make`.
+A test passes when it exits with status 0. A check a test could not run on this host, for want of a tool, it prints as `NAME: not run: WHAT: WHY`, and `host.sh` repeats each such line under the test's PASS. A nonzero exit, a sanitizer report (every sanitizer is fatal, by `-fno-sanitize-recover=all`), a compile failure, or a run past its time limit fails it. The time limit is 60 seconds, or the one a `host-seconds:` line gives; `deadline` kills the test's whole process group and exits 124, which is the "hung" line. When `build/tests/system/deadline` is not built, `host.sh` says so on stderr and runs the tests without a limit. A missing source under `vendor/musl/` adds a line saying the musl tarball is not extracted, with the repair: remove `vendor/musl/.stamp` and run `make`.
 
 A self-test prints `PASS: NAME selftest under the sanitizers`, a scripted check `hosttest: result: pass: WHAT` or `hosttest: result: fail: WHAT` with its log on the terminal, and a fuzz harness `PASS: NAME corpus replayed (N inputs)`. The compile and run logs are in `build/tests/host-suite/`, which belongs to the tree being tested, so runs in two clones write no file in common. The suite exits 1 when anything failed, and also when it found no test at all. A test that writes fixtures keeps its fixture directory when it fails and prints the directory's path.
 
@@ -72,7 +74,7 @@ A test's opening comment may have three kinds of line, which `host.sh` reads wit
 
 [`mkfatfixture.c`](mkfatfixture.c) writes FAT32 volumes from the specification, valid ones and ones with each fault a reader must refuse, and with `--check IMAGE` walks a volume and names every fault it finds. [`mkexfatfixture.c`](mkexfatfixture.c) is its pair for exFAT: a builder of the volumes the exFAT tests and the images use, and a checker that walks a volume as `fsck_exfat` does, with `--list`, `--dump` and `--read PATH`. Both are written apart from the kernel's drivers, so that the drivers are checked against a second implementation of each format; the options are listed at the head of each source. The tests that use them compile their own copies into their fixture directories; the build compiles both into `build/tests/host/` for the image rules and the guest suites. `host.sh` does not run them as tests; `fatcheck_hosttest.c` and `exfatcheck_hosttest.c` test their checkers.
 
-`mkexfat_external.sh DIR` formats and fills an exFAT volume with the host's own tools (`hdiutil` and `newfs_exfat` on macOS) for `exfat_hosttest.c`'s rows over a volume another implementation wrote; it exits 3 where those tools are missing, and the test reports the rows as skipped.
+`mkexfat_external.sh DIR` formats and fills an exFAT volume with the host's own tools (`hdiutil` and `newfs_exfat` on macOS) for `exfat_hosttest.c`'s rows over a volume another implementation wrote; it exits 3 where those tools are missing, and the test reports the rows as not run.
 
 ### Fixtures for extracted functions
 

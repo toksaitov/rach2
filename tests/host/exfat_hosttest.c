@@ -747,8 +747,8 @@ static void damaged_rows(void)
 
 /** A volume the host's own tools made and filled (mkexfat_external.sh)
  *  mounts and has every file of its manifest, with its size, its
- *  modification time within two seconds, and its bytes. The rows are
- *  skipped, and say so, on a host without those tools. */
+ *  modification time within two seconds, and its bytes. On a host without
+ *  those tools the rows report themselves as not run. */
 static void external_rows(void)
 {
     char cmd[2048], line[600];
@@ -759,8 +759,8 @@ static void external_rows(void)
     rc = system(cmd);
     rc = rc == -1 ? -1 : (rc >> 8) & 0xff;
     if (rc == 3) {
-        printf("exfat_hosttest: the host volume's rows are skipped: no newfs_exfat and hdiutil on "
-               "this host\n");
+        printf("exfat_hosttest: not run: the rows of the volume the host's tools made: this host "
+               "has no newfs_exfat and hdiutil\n");
         return;
     }
     check(rc == 0, "the external volume is made by the host's tools");

@@ -8,8 +8,10 @@
 # The same .c files are linked into the freestanding kernel, so a bounds or
 # overflow fault shows here in milliseconds and not as a fault in QEMU. A test
 # names the sources it links on a "host-deps:" comment line, and passes when
-# it exits 0. The suite then runs the checkers' selftests under the
-# sanitizers, the mutation and script tests, and the fuzz corpora.
+# it exits 0; the lines it prints as `NAME: not run: WHAT: WHY` are repeated
+# under its PASS, since a check it could not run is not a check that passed.
+# The suite then runs the checkers' selftests under the sanitizers, the
+# mutation and script tests, and the fuzz corpora.
 #
 # Usage:
 #     sh tests/system/suites/host.sh
@@ -154,6 +156,7 @@ for t in tests/host/*_hosttest.c; do
         rc=$?
         if [ "$rc" -eq 0 ]; then
             echo "  PASS: $base"
+            grep "^$base: not run: " "$VDIR/$base.rlog" | sed 's/^/    /'
         elif [ -n "$TESTWATCH" ] && [ "$rc" -eq 124 ]; then
             echo "  FAIL (hung; killed after ${secs}s; see $VDIR/$base.rlog): $base"
             fail=1

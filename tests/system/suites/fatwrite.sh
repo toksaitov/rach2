@@ -78,6 +78,8 @@ if command -v fsck.fat >/dev/null 2>&1; then
     dd if="$DISK" of="$DISK.vol" bs=512 skip=100352 count=28672 2>/dev/null
     fsck.fat -n "$DISK.vol" >/dev/null 2>&1 || fail "fsck.fat finds a fault"
     echo "fatwrite-test: fsck.fat -n calls the volume clean: OK"
+else
+    echo "fatwrite-test: not run: fsck.fat -n over the written volume: this host has no fsck.fat"
 fi
 
 # ---- 3: read back after a reboot ----
@@ -167,5 +169,5 @@ walk_clean "the volume is not consistent after the writers"
 if command -v fsck.fat >/dev/null 2>&1; then
     echo "fatwrite-test: PASS (with fsck.fat)"
 else
-    echo "fatwrite-test: PASS (fsck.fat absent; the walk and mtools judged the volume)"
+    echo "fatwrite-test: PASS, with fsck.fat's check not run; the walk and mtools judged the volume"
 fi
