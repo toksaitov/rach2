@@ -642,8 +642,6 @@ tests/rawprobe.c:_start lines 352 a probe, one sequence of steps in the order th
 
 tests/rmtest.c:_start lines 138 a probe, one sequence of steps in the order the log records them
 
-tests/sockettest.c:_start lines 130 a probe, one sequence of steps in the order the log records them
-
 tests/stattest.c:_start lines 177 a probe, one sequence of steps in the order the log records them
 
 tests/stdintest.c:_start lines 115 a probe, one sequence of steps in the order the log records them

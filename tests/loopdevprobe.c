@@ -29,11 +29,15 @@
  * over the device that has gone, and an unmount of the volume the file was
  * on, since the attachment let go of it when its medium went.
  *
- * `loopdevprobe durable` fills the cache through a KRFFS image until its
- * dirty blocks are written back by eviction alone, and requires the device
- * to have synced every write it made. `loopdevprobe ext2back` attaches an
- * image that lives on an ext2 volume, and refuses it a second device under
- * a second name.
+ * `loopdevprobe durable` makes DURABLE_WRITES writes to a file in a KRFFS
+ * image. KRFFS writes its dirty blocks to the device at a sync point that
+ * ends each write, so the device's write count, read from /proc/loop before
+ * the first and after the last, must grow by at least one a write, and its
+ * sync count by the same amount: each write the device made synced the
+ * backing file before it returned. The counts are taken after the mount, so
+ * the mount's own write of the volume's dirty flag is not among them.
+ * `loopdevprobe ext2back` attaches an image that lives on an ext2 volume, and
+ * refuses it a second device under a second name.
  *
  * `loopdevprobe vfat`, `ext2` and `krffs` name the type inside the image,
  * `vfat` with no argument. Prints "LOOPPROBE OK (type)", the type or the
@@ -49,6 +53,9 @@
 #define O_TRUNC  01000
 
 #define MS_RDONLY 1
+
+/* The writes the durable mode makes, each a sync point of KRFFS. */
+#define DURABLE_WRITES 128
 
 #define ENOENT 2
 #define ENXIO  6
@@ -199,6 +206,26 @@ static int read_number(const char *text)
         text++;
     }
     return value;
+}
+
+/** The `writes` and `syncs` counts /proc/loop gives loop0, into `writes`
+ * and `syncs`; a count it does not give is left -1. */
+static void loop_counts(int *writes, int *syncs)
+{
+    char line[256];
+    int n = loop_lines(line, (int)sizeof(line));
+    int i;
+
+    *writes = -1;
+    *syncs = -1;
+    for (i = 0; i + 7 <= n; i++) {
+        if (line[i] == 'w' && line[i + 1] == 'r' && line[i + 2] == 'i' && line[i + 6] == ' ') {
+            *writes = read_number(line + i + 7);
+        }
+        if (line[i] == 's' && line[i + 1] == 'y' && line[i + 2] == 'n' && line[i + 5] == ' ') {
+            *syncs = read_number(line + i + 6);
+        }
+    }
 }
 
 /**
@@ -456,6 +483,7 @@ void probe_main(unsigned long *sp)
     if (streq(type, "durable")) {
         int filler;
         int block_at;
+        int writes_before, syncs_before, writes, syncs;
 
         rc = syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/m", (long)"vfat", 0, 0);
         if (rc != 0) {
@@ -472,9 +500,13 @@ void probe_main(unsigned long *sp)
         (void)proc_disk_number;
         filler = syscall3(SYS_OPEN, (long)"/l/filler.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (filler < 0) {
-            fail_with("the file that fills the cache", filler);
+            fail_with("the file written through the image", filler);
         }
-        for (block_at = 0; block_at < 128; block_at++) {
+        loop_counts(&writes_before, &syncs_before);
+        if (writes_before < 0 || syncs_before < 0) {
+            fail("/proc/loop gives loop0 no write and sync counts");
+        }
+        for (block_at = 0; block_at < DURABLE_WRITES; block_at++) {
             char block[1024];
             int k;
 
@@ -483,41 +515,26 @@ void probe_main(unsigned long *sp)
             }
             if (syscall3(SYS_WRITE, filler, (long)block, (int)sizeof(block)) !=
                 (int)sizeof(block)) {
-                fail("filling the cache through the image");
+                fail("writing the file through the image");
             }
         }
+        loop_counts(&writes, &syncs);
         syscall1(SYS_CLOSE, filler);
-        /* Every write the device made by eviction, and a sync for each. */
-        {
-            char line[256];
-            int writes = 0;
-            int syncs = 0;
-            int i2;
-            int n2 = loop_lines(line, (int)sizeof(line));
-
-            for (i2 = 0; i2 < n2; i2++) {
-                if (line[i2] == 'w' && line[i2 + 1] == 'r' && line[i2 + 2] == 'i') {
-                    writes = read_number(line + i2 + 7);
-                }
-                if (line[i2] == 's' && line[i2 + 1] == 'y' && line[i2 + 2] == 'n') {
-                    syncs = read_number(line + i2 + 6);
-                }
-            }
-            if (writes <= 0) {
-                fail_with("the writes eviction made through the device", writes);
-            }
-            if (syncs != writes) {
-                fail_with("the writes the device did not sync", writes - syncs);
-            }
+        if (writes - writes_before < DURABLE_WRITES) {
+            fail_with("the device writes the image's sync points made", writes - writes_before);
+        }
+        if (syncs - syncs_before != writes - writes_before) {
+            fail_with("the writes the device did not sync",
+                      (writes - writes_before) - (syncs - syncs_before));
         }
         if (syscall2(SYS_UMOUNT2, (long)"/l", 0) != 0) {
-            fail("unmounting the image after filling it");
+            fail("unmounting the image after writing it");
         }
         if (control("detach 0") != 0) {
-            fail("detaching after filling it");
+            fail("detaching after writing it");
         }
         if (syscall2(SYS_UMOUNT2, (long)"/m", 0) != 0) {
-            fail("unmounting the volume after filling it");
+            fail("unmounting the volume after writing it");
         }
         puts("LOOPPROBE OK (durable)");
         sys_exit(0);

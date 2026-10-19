@@ -11,7 +11,9 @@
  * the grandchild would leak its frames, page directory and record.
  *
  * The reaps block, so each round's processes run and exit before the next
- * round begins. Prints "ORPHANPROBE OK (...)" and exits 0 when every round
+ * round begins. A child whose fork of the grandchild failed exits 1, and
+ * that status fails the round, so a failed fork is not taken for an orphan
+ * left unreaped. Prints "ORPHANPROBE OK (...)" and exits 0 when every round
  * reaped both; a failure prints "ORPHANPROBE FAIL (...)" and exits 1.
  * Freestanding; direct system calls (probe.h).
  *
@@ -121,12 +123,18 @@ PROBE_START void _start(void)
             if (grandchild == 0) {
                 sys_exit(0); /* the orphan: exits to be reaped by init */
             }
-            sys_exit(0); /* the child: exits, orphaning the grandchild */
+            sys_exit(grandchild < 0); /* the child: exits, orphaning it */
         }
 
         /* The child, and the grandchild once the kernel gives it to init. */
         got = 0;
         while (got < 2 && sys_waitpid(-1, &status, 0) > 0) {
+            if (status != 0) {
+                print("ORPHANPROBE FAIL (round ");
+                print_num(i);
+                puts(": the child could not fork a grandchild)");
+                sys_exit(1);
+            }
             got++;
             reaped++;
         }

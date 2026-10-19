@@ -9,12 +9,14 @@
  * arm every cycle: the child writes first (its write takes the shared-copy
  * arm and leaves the parent the sole owner), and the parent reaps it and then
  * writes the same page (that write takes the re-grant arm). Over many cycles
- * it catches the faults that arm can have: a leak or double free of the
- * re-granted frame shows as a fork that runs out of frames, and a re-grant of
- * a frame still shared shows as the child's write changing the parent's
- * bytes. It cannot tell a correct re-grant in place from a correct but
- * wasteful copy every time, since the two look the same from user space;
- * telling them apart needs a host test or a count of the kernel's copies.
+ * it catches the faults that arm can have: a leak of the re-granted frame
+ * shows as MemFree in /proc/meminfo fallen by more than SLACK across the
+ * cycles after a warm-up, a double free as a fork that runs out of frames or
+ * a kernel fault, and a re-grant of a frame still shared as the child's
+ * write changing the parent's bytes. It cannot tell a correct re-grant in
+ * place from a correct but wasteful copy every time, since the two look the
+ * same from user space; telling them apart needs a host test or a count of
+ * the kernel's copies.
  *
  * Prints "COWREGRANT OK" on success. Freestanding; direct system calls
  * (probe.h).
@@ -27,7 +29,11 @@
 #define WIFEXITED(s)   (((s) & 0x7F) == 0)
 #define WEXITSTATUS(s) (((s) >> 8) & 0xFF)
 
+#define WARMUP 8
 #define CYCLES 200
+/* The fall in MemFree allowed, in KiB: well below the 800 KiB a leak of a
+ * frame a cycle would cost, and above the jitter of the kernel heap. */
+#define SLACK  64u
 
 /* A global lives in the writable data segment, so after fork it is a COW
  * page. */
@@ -84,18 +90,27 @@ static void fail(const char *why)
 }
 
 /**
- * Run CYCLES cycles of fork, the child's write, the reap and the parent's
- * write, and fail at the first wrong value or failed call. The child exits
- * 7 when its copy held the parent's value and took its own write, 11 when
- * it did not inherit the value and 12 when its write did not stick.
+ * Run WARMUP and then CYCLES cycles of fork, the child's write, the reap and
+ * the parent's write, and fail at the first wrong value or failed call, or
+ * when MemFree after the cycles is more than SLACK below where it was after
+ * the warm-up. The child exits 7 when its copy held the parent's value and
+ * took its own write, 11 when it did not inherit the value and 12 when its
+ * write did not stick.
  */
 PROBE_START void _start(void)
 {
     int pid, status, i;
+    unsigned free_kb = 0, end_kb;
 
-    for (i = 0; i < CYCLES; i++) {
+    for (i = 0; i < WARMUP + CYCLES; i++) {
         unsigned base = 0x10000u + (unsigned)i;
 
+        if (i == WARMUP) {
+            free_kb = probe_meminfo("MemFree:");
+            if (free_kb == 0xFFFFFFFFu) {
+                fail("MemFree in /proc/meminfo");
+            }
+        }
         shared_val = base;
 
         pid = sys_fork();
@@ -127,6 +142,11 @@ PROBE_START void _start(void)
         if (shared_val != base + 0x20000u) {
             fail("re-grant write did not stick");
         }
+    }
+
+    end_kb = probe_meminfo("MemFree:");
+    if (end_kb == 0xFFFFFFFFu || (free_kb > end_kb && free_kb - end_kb > SLACK)) {
+        fail("MemFree fell across the cycles: the re-grant arm leaks a frame");
     }
 
     puts("COWREGRANT OK");

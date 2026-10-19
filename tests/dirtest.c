@@ -3,8 +3,8 @@
  *
  * getcwd reports the current directory; chdir to "/", "." and "..", whose
  * parent at the root is the root itself, all succeed and leave the working
- * directory at "/"; a name that does not exist fails, and so does a plain
- * file, which is not a directory.
+ * directory at "/"; a name that does not exist fails, and a plain file
+ * fails with ENOTDIR.
  *
  * Prints a line for each test and exits 0 when every one passed, 1
  * otherwise. Freestanding; direct system calls (probe.h).
@@ -13,6 +13,8 @@
 #include "probe.h"
 
 #define STDOUT_FILENO 1
+
+#define ENOTDIR 20
 
 /** write(2). */
 static int sys_write(int fd, const void *buf, size_t count)
@@ -152,11 +154,11 @@ PROBE_START void _start(void)
     /* Test 7: chdir to hello.txt, a file, fails. */
     print("Test 7: chdir(\"hello.txt\")... ");
     result = sys_chdir("hello.txt");
-    if (result < 0) {
-        puts("OK (failed as expected - file, not dir)");
+    if (result == -ENOTDIR) {
+        puts("OK (ENOTDIR: a file, not a directory)");
         passed++;
     } else {
-        puts("FAILED (should have failed)");
+        puts("FAILED (not ENOTDIR)");
         failed++;
     }
 

@@ -9,9 +9,13 @@
  *
  * `poll` of an empty pipe with a short timeout returns 0. After a write,
  * `poll` reports the read end POLLIN, and `select` with `FD_SET` and
- * `FD_ISSET` finds that descriptor readable. Last, a child that writes after
- * 60 ms wakes the parent blocked in `poll`, which returns 1 well before its
- * timeout of 3 s.
+ * `FD_ISSET` finds that descriptor readable. Last, the parent waits in `poll`
+ * on the empty pipe while a child reads the parent's state in
+ * /proc/PID/stat until it says S, asleep, and only then writes. `poll` must
+ * return 1 with the byte already in the pipe, as FIONREAD counts it, and the
+ * child must exit 0, which it does only when it saw the parent asleep and its
+ * write took. A `poll` that returned at once would find the pipe empty, since
+ * the child writes only to a sleeping parent.
  *
  * Staged into the test image as /musl/pollmusl. Prints `POLLMUSL OK`, or
  * `POLLMUSL FAIL` with the number of failed checks after a line for each.
@@ -20,6 +24,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <poll.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
 #include <sys/select.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -44,6 +50,44 @@ static void msleep(int ms)
     nanosleep(&ts, 0);
 }
 
+/** The state letter of /proc/`pid`/stat, the field after the command's
+ * closing parenthesis, or 0 when the file cannot be read. */
+static char state_of(pid_t pid)
+{
+    char path[32], text[256], *end;
+    int fd, n;
+
+    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return 0;
+    }
+    n = (int)read(fd, text, sizeof(text) - 1);
+    close(fd);
+    if (n <= 0) {
+        return 0;
+    }
+    text[n] = '\0';
+    end = strrchr(text, ')');
+    return end && end[1] == ' ' ? end[2] : 0;
+}
+
+/** The child's half: wait, for at most some 3 s, until `parent` sleeps, and
+ * then write a byte to `fd`. Exit 0 when the parent was seen asleep and the
+ * write took, 1 when the write failed and 2 when the parent never slept. */
+static void wake_sleeper(pid_t parent, int fd)
+{
+    int tries;
+
+    for (tries = 0; tries < 3000; tries++) {
+        if (state_of(parent) == 'S') {
+            _exit(write(fd, "z", 1) == 1 ? 0 : 1);
+        }
+        msleep(1);
+    }
+    _exit(2);
+}
+
 int main(void)
 {
     int p[2];
@@ -52,7 +96,7 @@ int main(void)
     struct timeval tv;
     char buf[8];
     pid_t pid;
-    int n, status;
+    int n, status, queued;
 
     if (pipe(p) != 0) {
         printf("POLLMUSL FAIL: pipe\n");
@@ -84,18 +128,19 @@ int main(void)
     }
     if (pid == 0) {
         close(p[0]);
-        msleep(60);
-        write(p[1], "z", 1);
-        _exit(0);
-    } else {
-        pfd.fd = p[0];
-        pfd.events = POLLIN;
-        pfd.revents = 0;
-        n = poll(&pfd, 1, 3000);
-        check(n == 1 && (pfd.revents & POLLIN), "poll blocks then wakes on child write");
-        read(p[0], buf, sizeof(buf));
-        waitpid(pid, &status, 0);
+        wake_sleeper(getppid(), p[1]);
     }
+    pfd.fd = p[0];
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    n = poll(&pfd, 1, 3000);
+    queued = -1;
+    ioctl(p[0], FIONREAD, &queued);
+    check(n == 1 && (pfd.revents & POLLIN), "poll wakes on the child's write");
+    check(queued == 1, "poll returned only once the child had written");
+    read(p[0], buf, sizeof(buf));
+    check(waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+          "the child saw the parent asleep in poll and wrote");
 
     if (fails == 0) {
         printf("POLLMUSL OK\n");

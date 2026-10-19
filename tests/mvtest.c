@@ -2,7 +2,7 @@
  * Exercises the rename syscall: rename a file, confirm the old name is gone
  * and the new name resolves, reject renaming a missing source, refuse the root
  * as a source with EBUSY, as Linux does, and overwrite an existing
- * destination.
+ * destination, which then has the source's bytes and not its own.
  *
  * The negative cases assert the exact errno, not the sign. The KRFFS core
  * answers every refusal of a rename with a bare -1, so the system call tells
@@ -40,6 +40,12 @@
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
+}
+
+/** read(2): the bytes read, or a negated errno. */
+static int sys_read(int fd, void *buf, size_t count)
+{
+    return syscall3(SYS_READ, (long)fd, (long)buf, (long)count);
 }
 
 /** exit(2) with `status`; does not return. */
@@ -167,6 +173,48 @@ static void print_num(int n)
 }
 
 /**
+ * Test 7: a rename over an existing file replaces it. The destination is
+ * made with bytes of its own, and after the rename it must read back the
+ * source's five bytes, "moved", with the source's name gone. Both names are
+ * removed afterwards; 1 when the row passed.
+ */
+static int overwrite_row(void)
+{
+    char got[16];
+    int fd, result, n = -1;
+
+    print("Test 7: create \"mvtest_dest.tmp\"... ");
+    fd = sys_creat("mvtest_dest.tmp", S_IRUSR | S_IWUSR);
+    if (fd < 0) {
+        puts("FAILED (can't create dest file)");
+        sys_unlink("mvtest_new.tmp");
+        return 0;
+    }
+    sys_write(fd, "stale bytes", 11);
+    sys_close(fd);
+    print("OK, rename to overwrite... ");
+    result = sys_rename("mvtest_new.tmp", "mvtest_dest.tmp");
+    fd = sys_open("mvtest_dest.tmp", O_RDONLY);
+    if (fd >= 0) {
+        n = sys_read(fd, got, sizeof(got));
+        sys_close(fd);
+    }
+    fd = sys_open("mvtest_new.tmp", O_RDONLY);
+    if (fd >= 0) {
+        sys_close(fd);
+    }
+    sys_unlink("mvtest_new.tmp");
+    sys_unlink("mvtest_dest.tmp");
+    if (result == 0 && n == 5 && got[0] == 'm' && got[1] == 'o' && got[2] == 'v' && got[3] == 'e' &&
+        got[4] == 'd' && fd < 0) {
+        puts("OK (the destination has the source's bytes)");
+        return 1;
+    }
+    puts("FAILED (the destination is not the source, or both names remain)");
+    return 0;
+}
+
+/**
  * ELF entry point: run the rename tests and exit 0 only if all pass. A row
  * removes the names it made, and a failed row the names a wrong answer may
  * have made, such as the destination of a rename whose source was missing.
@@ -191,7 +239,7 @@ PROBE_START void _start(void)
 
     print("Test 1: creat(\"mvtest_old.tmp\")... ");
     fd = sys_creat("mvtest_old.tmp", S_IRUSR | S_IWUSR);
-    if (fd >= 0) {
+    if (fd >= 0 && sys_write(fd, "moved", 5) == 5) {
         puts("OK");
         sys_close(fd);
         passed++;
@@ -311,26 +359,10 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    print("Test 7: create \"mvtest_dest.tmp\"... ");
-    fd = sys_creat("mvtest_dest.tmp", S_IRUSR | S_IWUSR);
-    if (fd >= 0) {
-        sys_close(fd);
-        print("OK, rename to overwrite... ");
-        result = sys_rename("mvtest_new.tmp", "mvtest_dest.tmp");
-        if (result == 0) {
-            puts("OK");
-            passed++;
-            sys_unlink("mvtest_dest.tmp");
-        } else {
-            puts("FAILED");
-            failed++;
-            sys_unlink("mvtest_new.tmp");
-            sys_unlink("mvtest_dest.tmp");
-        }
+    if (overwrite_row()) {
+        passed++;
     } else {
-        puts("FAILED (can't create dest file)");
         failed++;
-        sys_unlink("mvtest_new.tmp");
     }
 
 results:

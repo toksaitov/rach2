@@ -312,8 +312,12 @@ static void read_rows(void)
     }
 }
 
-/** `/proc/mounts` calls the volume read-only, as the read mode mounted it:
- * the line is where a caller sees what it got. */
+/* The middle of /proc/mounts's line for the read mode's mount, whose
+ * options begin with ro; no other mount is at /k. */
+#define OWN_RO_LINE " /k krffs ro"
+
+/** `/proc/mounts` calls the volume at /k read-only, as the read mode mounted
+ * it: the line is where a caller sees what it got. */
 static void mounts_say_ro(void)
 {
     {
@@ -332,15 +336,15 @@ static void mounts_say_ro(void)
             fail_with("reading /proc/mounts", n);
         }
         mounts[n] = '\0';
-        for (i = 0; i + 11 <= n; i++) {
-            if (mounts[i] == 'k' && mounts[i + 1] == 'r' && mounts[i + 2] == 'f' &&
-                mounts[i + 3] == 'f' && mounts[i + 4] == 's' && mounts[i + 5] == ' ' &&
-                mounts[i + 6] == 'r' && mounts[i + 7] == 'o') {
-                saw = 1;
+        for (i = 0; i + (int)sizeof(OWN_RO_LINE) - 1 <= n && !saw; i++) {
+            int k;
+
+            for (k = 0; OWN_RO_LINE[k] && mounts[i + k] == OWN_RO_LINE[k]; k++) {
             }
+            saw = !OWN_RO_LINE[k];
         }
         if (!saw) {
-            fail("/proc/mounts does not call the volume read-only");
+            fail("/proc/mounts does not call the volume at /k read-only");
         }
     }
 }

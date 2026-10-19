@@ -149,7 +149,10 @@ PROBE_START void _start(void)
         if (p == 0) {
             sys_exit(0);
         }
-        syscall3(SYS_WAITPID, p, (long)&status, 0);
+        if (p < 0 || syscall3(SYS_WAITPID, p, (long)&status, 0) != p || status != 0) {
+            check(0, "a fork and reap with the open held");
+            break;
+        }
     }
     syscall1(SYS_CLOSE, fd);
     check(probe_meminfo("HeapUsed:") == used,

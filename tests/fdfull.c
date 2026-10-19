@@ -78,15 +78,17 @@ static void print_num(int v)
 static int fds[TRIES];
 static int n_fds;
 
-/** Close every descriptor in `fds`, and empty the list. */
-static void close_all(void)
+/** Close every descriptor in `fds`, and empty the list; the count of the
+ * closes that failed. */
+static int close_all(void)
 {
-    int i;
+    int i, failed = 0;
 
     for (i = 0; i < n_fds; i++) {
-        syscall3(SYS_CLOSE, fds[i], 0, 0);
+        failed += syscall3(SYS_CLOSE, fds[i], 0, 0) != 0;
     }
     n_fds = 0;
+    return failed;
 }
 
 /**
@@ -94,8 +96,8 @@ static void close_all(void)
  * -EMFILE after LIMIT less three opens; then close one descriptor and
  * require an open to take its place. The file is the same every time, since
  * what fills is this process's table and not the file system's. Every
- * descriptor is closed before the probe exits, 0 when each step held and 1
- * otherwise.
+ * descriptor is closed before the probe exits, and on success each close must
+ * succeed. The probe exits 0 when each step held and 1 otherwise.
  */
 PROBE_START void _start(void)
 {
@@ -144,7 +146,10 @@ PROBE_START void _start(void)
     }
     fds[0] = fd;
 
-    close_all();
+    if (close_all() != 0) {
+        puts("FDFULL FAIL: a descriptor could not be closed");
+        sys_exit(1);
+    }
     print("FDFULL OK (");
     print_num(opened);
     puts(" descriptors, refused with EMFILE, a closed one reused)");

@@ -1477,7 +1477,10 @@ static void connection_owner_rows(void)
     n = slurp("/proc/net/tcp", buf, (int)sizeof(buf));
     check(n > 0 && no_row_has_zero_inode(buf, n),
           "a row whose socket is detached still reports its inode");
-    syscall3(SYS_WAITPID, listener_pid, (long)&child_status, 0);
+    check(listener_pid > 0 &&
+              syscall3(SYS_WAITPID, listener_pid, (long)&child_status, 0) == listener_pid &&
+              child_status == 0,
+          "the listener's child made its socket and exited 0");
 }
 
 void probe_main(unsigned long *sp);

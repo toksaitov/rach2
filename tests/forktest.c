@@ -1,6 +1,6 @@
 /**
  * forktest: fork a child that exits with a known status, and check that the
- * parent reads that status back through waitpid.
+ * parent's waitpid returns the child's pid and reads that status back.
  */
 
 #include "probe.h"
@@ -125,8 +125,10 @@ PROBE_START void _start(void)
     print("Parent: Calling waitpid()... ");
     child_pid = sys_waitpid(pid, &status, 0);
 
-    if (child_pid < 0) {
-        puts("FAILED");
+    if (child_pid != pid) {
+        print("FAILED (returned ");
+        print_num(child_pid);
+        puts(", not the child)");
         sys_exit(1);
     }
     puts("OK");

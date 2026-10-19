@@ -2,10 +2,10 @@
  * lstest: the getdents64 call, as `ls` lists a directory.
  *
  * The probe opens "/", requires a read of 0 bytes to be EINVAL, with a null
- * buffer too, reads its entries, walks the linux_dirent64 records and prints
- * each, reads again, which gives the end of the directory or more entries,
- * requires a read of 0 bytes at the end to give 0, and requires a descriptor
- * that is not open to fail.
+ * buffer too, reads its entries, of which the root has some, walks the
+ * linux_dirent64 records and prints each, reads again, which gives the end of
+ * the directory or more entries, requires a read of 0 bytes at the end to
+ * give 0, and requires a descriptor that is not open to fail.
  *
  * Prints a line for each test and exits 0 when every one passed, 1
  * otherwise. Freestanding; direct system calls (probe.h).
@@ -217,9 +217,6 @@ PROBE_START void _start(void)
         print_num(nread);
         puts(" bytes)");
         passed++;
-    } else if (nread == 0) {
-        puts("OK (empty directory)");
-        passed++;
     } else {
         print("FAILED (ret=");
         print_num(nread);
@@ -230,46 +227,41 @@ PROBE_START void _start(void)
 
     /* Test 4: Parse and display entries */
     puts("Test 4: Parsing directory entries...");
-    if (nread > 0) {
-        pos = 0;
-        while (pos < nread) {
-            d = (struct linux_dirent64 *)(buf + pos);
+    pos = 0;
+    while (pos < nread) {
+        d = (struct linux_dirent64 *)(buf + pos);
 
-            /* A record of length 0 would not advance. */
-            if (d->d_reclen == 0) {
-                puts("  ERROR: d_reclen is 0, breaking");
-                failed++;
-                break;
-            }
-
-            print("  [");
-            print_num(file_count);
-            print("] \"");
-            print(d->d_name);
-            print("\" type=");
-            print(get_type_name(d->d_type));
-            print(" ino=");
-            print_hex((uint32_t)d->d_ino);
-            print(" reclen=");
-            print_num(d->d_reclen);
-            puts("");
-
-            file_count++;
-            pos += d->d_reclen;
-        }
-
-        if (file_count > 0) {
-            print("  Found ");
-            print_num(file_count);
-            puts(" entries... OK");
-            passed++;
-        } else {
-            puts("  No entries found... FAILED");
+        /* A record of length 0 would not advance. */
+        if (d->d_reclen == 0) {
+            puts("  ERROR: d_reclen is 0, breaking");
             failed++;
+            break;
         }
-    } else {
-        puts("  (no entries to parse)");
+
+        print("  [");
+        print_num(file_count);
+        print("] \"");
+        print(d->d_name);
+        print("\" type=");
+        print(get_type_name(d->d_type));
+        print(" ino=");
+        print_hex((uint32_t)d->d_ino);
+        print(" reclen=");
+        print_num(d->d_reclen);
+        puts("");
+
+        file_count++;
+        pos += d->d_reclen;
+    }
+
+    if (file_count > 0) {
+        print("  Found ");
+        print_num(file_count);
+        puts(" entries... OK");
         passed++;
+    } else {
+        puts("  No entries found... FAILED");
+        failed++;
     }
 
     /* Test 5: getdents64 again returns 0 (end of dir) or more entries */

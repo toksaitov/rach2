@@ -9,8 +9,9 @@
  * no execute bit, and setting explicit utimensat times on a root file it can
  * only write; while its own directory grants creation and entry, the
  * other-write bit grants the utimensat touch to "now", and access(2) answers
- * with the real ids. The root parent then removes every fixture through its
- * override, which is itself the override's proof.
+ * with the real ids, which it shows first with real uid 1000 under effective
+ * uid 0. The root parent then removes every fixture through its override,
+ * which is itself the override's proof.
  *
  * Prints "PERMPROBE OK" and exits 0 on success; prints "PERMPROBE FAIL: "
  * and the failing step and exits 1 otherwise.
@@ -79,6 +80,30 @@ static void fail(const char *step)
 }
 
 /**
+ * access(2) answers with the real ids. The child takes gid 1000 and real uid
+ * 1000 while its effective uid stays 0, so open reads the 0600 root file
+ * and access, which asks for real uid 1000, may not; a kernel that answered
+ * access with the effective ids would grant it.
+ */
+static void real_id_rows(void)
+{
+    int fd;
+
+    if (syscall3(SYS_SETRESGID, 1000, 1000, 1000) != 0 ||
+        syscall3(SYS_SETRESUID, 1000, 0, 0) != 0) {
+        fail("real uid 1000 under effective uid 0");
+    }
+    fd = syscall3(SYS_OPEN, (long)"/perm600", O_RDONLY, 0);
+    if (fd < 0) {
+        fail("read 0600 as effective root");
+    }
+    syscall3(SYS_CLOSE, fd, 0, 0);
+    if (syscall3(SYS_ACCESS, (long)"/perm600", R_OK, 0) != -EACCES) {
+        fail("access by real uid 1000 to a 0600 root file not EACCES");
+    }
+}
+
+/**
  * The child's half: drop to uid and gid 1000 and make each denied call and
  * each granted one. It exits 0 when every answer is right, and 1 through
  * `fail` at the first that is not.
@@ -93,8 +118,8 @@ static void child_main(void)
     static char *exec_argv[2];
     int fd;
 
-    if (syscall3(SYS_SETRESGID, 1000, 1000, 1000) != 0 ||
-        syscall3(SYS_SETRESUID, 1000, 1000, 1000) != 0) {
+    real_id_rows();
+    if (syscall3(SYS_SETRESUID, 1000, 1000, 1000) != 0) {
         fail("drop to 1000");
     }
 

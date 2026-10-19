@@ -657,6 +657,48 @@ static __inline__ long probe_statfs(const char *path, void *buf)
 }
 
 /**
+ * The number after the first `key` in the file `path`, past any spaces, or
+ * 0xFFFFFFFF when the file or the key is absent. The first kilobyte of the
+ * file is read, which holds the whole of the /proc files the probes read.
+ */
+static __inline__ unsigned probe_procfield(const char *path, const char *key)
+{
+    static char field_text[1024];
+    int fd = (int)syscall3(SYS_OPEN, (long)path, 0, 0);
+    int n, i;
+
+    if (fd < 0) {
+        return 0xFFFFFFFFu;
+    }
+    n = (int)syscall3(SYS_READ, fd, (long)field_text, (long)sizeof(field_text) - 1);
+    syscall1(SYS_CLOSE, fd);
+    if (n <= 0) {
+        return 0xFFFFFFFFu;
+    }
+    field_text[n] = 0;
+    for (i = 0; i < n; i++) {
+        int k;
+
+        for (k = 0; key[k] && field_text[i + k] == key[k]; k++) {
+        }
+        if (!key[k]) {
+            unsigned v = 0;
+
+            i += k;
+            while (field_text[i] == ' ') {
+                i++;
+            }
+            while (field_text[i] >= '0' && field_text[i] <= '9') {
+                v = v * 10 + (unsigned)(field_text[i] - '0');
+                i++;
+            }
+            return v;
+        }
+    }
+    return 0xFFFFFFFFu;
+}
+
+/**
  * The value of the field `key`, with its colon, of /proc/meminfo, in the
  * field's own units, or 0xFFFFFFFF when the file or the field is absent. A
  * leak row reads `HeapUsed:`, the bytes in use in the kernel heap, before and
@@ -664,39 +706,7 @@ static __inline__ long probe_statfs(const char *path, void *buf)
  */
 static __inline__ unsigned probe_meminfo(const char *key)
 {
-    static char meminfo_text[1024];
-    int fd = (int)syscall3(SYS_OPEN, (long)"/proc/meminfo", 0, 0);
-    int n, i;
-
-    if (fd < 0) {
-        return 0xFFFFFFFFu;
-    }
-    n = (int)syscall3(SYS_READ, fd, (long)meminfo_text, (long)sizeof(meminfo_text) - 1);
-    syscall1(SYS_CLOSE, fd);
-    if (n <= 0) {
-        return 0xFFFFFFFFu;
-    }
-    meminfo_text[n] = 0;
-    for (i = 0; i < n; i++) {
-        int k;
-
-        for (k = 0; key[k] && meminfo_text[i + k] == key[k]; k++) {
-        }
-        if (!key[k]) {
-            unsigned v = 0;
-
-            i += k;
-            while (meminfo_text[i] == ' ') {
-                i++;
-            }
-            while (meminfo_text[i] >= '0' && meminfo_text[i] <= '9') {
-                v = v * 10 + (unsigned)(meminfo_text[i] - '0');
-                i++;
-            }
-            return v;
-        }
-    }
-    return 0xFFFFFFFFu;
+    return probe_procfield("/proc/meminfo", key);
 }
 
 /* The socket operations of socketcall(2), by its numbers, and Rach2's ICMP

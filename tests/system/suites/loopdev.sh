@@ -93,14 +93,15 @@ for type in vfat ext2 krffs; do
 done
 
 # A loop device's write has written and synced the backing file when it
-# returns. The row fills the cache through a mounted image so that eviction
-# alone writes the image's blocks back, with no sync and no unmount, and the
-# drivers' own flush count must grow.
+# returns. The row writes a file in a mounted KRFFS image, whose sync point
+# at the end of each write writes its blocks through the device, and
+# requires the device's count of synced writes to grow with its count of
+# writes, from after the mount to before the unmount.
 if run --append "rach2.rescue" --timeout 150 --steptmo 120 \
     --ok "LOOPPROBE OK (durable)" --never "LOOPPROBE FAIL" \
     --log "$DISK.durable.log" "expect=Type 'help'" \
     "send=exec /loopdevprobe durable" "expect=LOOPPROBE" > /dev/null 2>&1; then
-    echo "loopdev-test: a write through a loop device reaches the medium when it returns, not when something later flushes: OK"
+    echo "loopdev-test: a write through a loop device has synced the backing file when it returns: OK"
 else
     grep -a 'LOOPPROBE FAIL' "$DISK.durable.log" >&2 || true
     fail "the durability boot"

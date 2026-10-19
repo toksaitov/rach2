@@ -7,8 +7,10 @@
  *   2. Split: the child writing the page gets a private copy; the parent's
  *      copy is unchanged, and the parent can then write its own copy.
  *      Isolation both ways means the shared frame was split on write.
- *   3. No leak: 64 fork/exit cycles do not exhaust frames: each shared frame
- *      is reference-counted and freed when the last owner exits.
+ *   3. No leak: 64 cycles of a fork whose child splits the page and exits
+ *      leave MemFree in /proc/meminfo within SLACK of where it was after a
+ *      warm-up: each shared frame is reference-counted and freed when the
+ *      last owner exits. A leak of a frame a cycle would cost 256 KiB.
  *
  * Prints "COWPROBE OK" and exits 0 on success.
  */
@@ -19,6 +21,12 @@
 
 #define WIFEXITED(s)   (((s) & 0x7F) == 0)
 #define WEXITSTATUS(s) (((s) >> 8) & 0xFF)
+
+#define WARMUP 8
+#define CYCLES 64
+/* The fall in MemFree allowed, in KiB: a quarter of what a leak of a frame a
+ * cycle would cost, and above the jitter of the kernel heap. */
+#define SLACK  64u
 
 /* A global lives in the writable data segment, so after fork it is a COW
  * page. */
@@ -82,6 +90,7 @@ static void fail(const char *why)
 PROBE_START void _start(void)
 {
     int pid, status, i;
+    unsigned free_kb = 0, end_kb;
 
     /* 1 + 2: share then split. */
     shared_val = 0xAAAAu;
@@ -119,18 +128,31 @@ PROBE_START void _start(void)
         fail("parent write did not stick");
     }
 
-    /* 3: many fork/exit cycles leave frames for the next fork. */
-    for (i = 0; i < 64; i++) {
-        int p = sys_fork();
+    /* 3: fork, split and exit cycles give back every frame they take. */
+    for (i = 0; i < WARMUP + CYCLES; i++) {
+        int p;
+
+        if (i == WARMUP) {
+            free_kb = probe_meminfo("MemFree:");
+            if (free_kb == 0xFFFFFFFFu) {
+                fail("MemFree in /proc/meminfo");
+            }
+        }
+        p = sys_fork();
         if (p < 0) {
             fail("frames exhausted across repeated forks");
         }
         if (p == 0) {
+            shared_val = (unsigned)i;
             sys_exit(7);
         }
         if (sys_waitpid(p, &status, 0) != p || !WIFEXITED(status) || WEXITSTATUS(status) != 7) {
             fail("repeated fork/reap");
         }
+    }
+    end_kb = probe_meminfo("MemFree:");
+    if (end_kb == 0xFFFFFFFFu || (free_kb > end_kb && free_kb - end_kb > SLACK)) {
+        fail("MemFree fell across fork, split and exit cycles: a frame leaks");
     }
 
     puts("COWPROBE OK");
