@@ -187,20 +187,27 @@ class HoldTest(unittest.TestCase):
 
     def test_hold(self):
         """/fakeapi/held answers once the held step's request has come, whose
-        reply then waits for /fakeapi/release; neither is recorded."""
+        reply then waits for /fakeapi/release; neither is recorded. A reply
+        that does not wait has a second to come before the release; a wait
+        of a minute only ends the test of a server that never answers."""
         server = fakeapi.Server({"protocol": "plain", "steps": [step("/turn", hold=True)]},
                                 self.record, None)
         turn, held, released = io.BytesIO(), io.BytesIO(), io.BytesIO()
         client = threading.Thread(target=server.serve, args=(request("/turn"), None, turn),
                                   daemon=True)
+        waiter = threading.Thread(target=server.serve,
+                                  args=(request("/fakeapi/held"), None, held), daemon=True)
         try:
             client.start()
-            server.serve(request("/fakeapi/held"), None, held)
+            waiter.start()
+            waiter.join(60)
+            self.assertFalse(waiter.is_alive())
             client.join(1)
             self.assertTrue(client.is_alive())
             self.assertEqual(turn.getvalue(), b"")
             server.serve(request("/fakeapi/release"), None, released)
-            client.join()
+            client.join(60)
+            self.assertFalse(client.is_alive())
             self.assertTrue(held.getvalue().endswith(b"held 1\n"))
             self.assertTrue(released.getvalue().endswith(b"released\n"))
             self.assertTrue(turn.getvalue().startswith(b"HTTP/1.1 404 "))
