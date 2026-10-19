@@ -8,8 +8,9 @@ With no argument it runs the tests, as `tests/run host` does. --mutate runs
 them against a private copy of fakeapi.py for each fault in FAULTS, and
 requires each copy to fail its fault's test and no other: in one a repeated
 step is used up by the first request that plays it, in another a
-connection that ends in a WebSocket exchange is only logged, and in the
-third the exchange begins only after its upgrade is sent. It then runs
+connection that ends in a WebSocket exchange is only logged, in the third
+the exchange begins only after its upgrade is sent, and in the fourth a
+held step answers without waiting for its release. It then runs
 them against fakeapi.py as it is, which must pass; nothing in the tree
 changes. --texts checks that each fault's text is once in fakeapi.py.
 """
@@ -20,6 +21,7 @@ import struct
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import types
 import unittest
 
@@ -38,6 +40,9 @@ FAULTS = [
      '        self.wfile.write(head(101, headers))\n',
      '        self.wfile.write(head(101, headers))\n'
      '        self.socket = WebSocket(self)\n'),
+    ("test_hold",
+     '            self.hold.wait_for(lambda: self.released)\n',
+     '            pass\n'),
 ]
 
 
@@ -168,6 +173,42 @@ class WebSocketTest(unittest.TestCase):
         self.assertEqual(self.play(frame(0x1, b"hello")), (0, 0))
 
 
+class HoldTest(unittest.TestCase):
+    """Play a held step against the requests that wait for it and release it."""
+
+    def setUp(self):
+        """Make a record for the server to write."""
+        handle, self.record = tempfile.mkstemp(prefix="rach2-fakeapi-test.")
+        os.close(handle)
+
+    def tearDown(self):
+        """Remove the record."""
+        os.unlink(self.record)
+
+    def test_hold(self):
+        """/fakeapi/held answers once the held step's request has come, whose
+        reply then waits for /fakeapi/release; neither is recorded."""
+        server = fakeapi.Server({"protocol": "plain", "steps": [step("/turn", hold=True)]},
+                                self.record, None)
+        turn, held, released = io.BytesIO(), io.BytesIO(), io.BytesIO()
+        client = threading.Thread(target=server.serve, args=(request("/turn"), None, turn),
+                                  daemon=True)
+        try:
+            client.start()
+            server.serve(request("/fakeapi/held"), None, held)
+            client.join(1)
+            self.assertTrue(client.is_alive())
+            self.assertEqual(turn.getvalue(), b"")
+            server.serve(request("/fakeapi/release"), None, released)
+            client.join()
+            self.assertTrue(held.getvalue().endswith(b"held 1\n"))
+            self.assertTrue(released.getvalue().endswith(b"released\n"))
+            self.assertTrue(turn.getvalue().startswith(b"HTTP/1.1 404 "))
+            self.assertEqual((server.count, server.verdict()), (1, 0))
+        finally:
+            server.record_file.close()
+
+
 def run(module):
     """Run the tests with MODULE as fakeapi; return the result."""
     global fakeapi
@@ -175,7 +216,7 @@ def run(module):
     try:
         fakeapi = module
         suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(case)
-                                   for case in (StepTest, WebSocketTest))
+                                   for case in (StepTest, WebSocketTest, HoldTest))
         return unittest.TextTestRunner(stream=io.StringIO()).run(suite)
     finally:
         fakeapi = original

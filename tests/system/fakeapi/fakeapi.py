@@ -55,6 +55,14 @@ is never used up: any number of requests play it, none among them, for a
 request that a client repeats on a timer of its own, such as a flush of usage
 logs. A step may name its own "protocol"; otherwise it has the script's.
 
+A step with "hold": true is held: once a request has taken it, the reply
+waits until a request for /fakeapi/release has come. In a script with a held
+step, a request for /fakeapi/held is answered with 200 and `held N` once the
+held step's request N has come, and one for /fakeapi/release with 200 and
+`released`; neither is numbered, recorded or checked against the script. A
+test that inspects the client while it waits for an answer holds that answer,
+asks for /fakeapi/held, inspects the client and asks for /fakeapi/release.
+
 A protocol is a module `proto_NAME.py` in this directory with two functions:
 
     check(step, request)
@@ -487,6 +495,10 @@ class Server:
         self.count = 0
         self.failures = []
         self.lock = threading.Lock()
+        self.hold = threading.Condition()
+        self.held = None          # the number of the request a held step waits with
+        self.released = False
+        self.holds = any(isinstance(step, dict) and step.get("hold") for step in self.steps)
         self.record_file = open(record_path, "a", encoding="utf-8")
         for i, step in enumerate(self.steps, 1):
             if not isinstance(step, dict):
@@ -558,8 +570,39 @@ class Server:
             if not self.steps[number - 1].get("repeat"):
                 self.played.add(number - 1)
 
+    def wait_release(self, n):
+        """Make the request N, which took a held step, wait for the release."""
+        log(f"{n}: held")
+        with self.hold:
+            self.held = n
+            self.hold.notify_all()
+            self.hold.wait_for(lambda: self.released)
+        log(f"{n}: released")
+
+    def control(self, request, rfile, wfile):
+        """Answer a request for /fakeapi/held or /fakeapi/release.
+
+        The first waits until a held step's request has come; the second
+        lets every held reply go, now or when its request comes. Return
+        whether the connection may take another request.
+        """
+        peer = Peer(self, request, None, None, rfile, wfile)
+        with self.hold:
+            if request.path == "/fakeapi/release":
+                self.released = True
+                self.hold.notify_all()
+                text = "released\n"
+            else:
+                self.hold.wait_for(lambda: self.held is not None)
+                text = f"held {self.held}\n"
+        log(f"{request.describe()}: {text.strip()}")
+        peer.respond(200, [("Content-Type", "text/plain")], text)
+        return peer.keep
+
     def serve(self, request, rfile, wfile):
         """Answer one request; return whether its connection may take another."""
+        if self.holds and request.path in ("/fakeapi/held", "/fakeapi/release"):
+            return self.control(request, rfile, wfile)
         n, step, number, reason = self.take(request)
         entry = {"n": n, "method": request.method, "path": request.path,
                  "query": request.query, "headers": request.headers,
@@ -578,6 +621,8 @@ class Server:
         entry["step"] = number
         self.record(entry)
         log(f"{n}: {request.describe()}: step {number}")
+        if step.get("hold"):
+            self.wait_release(n)
         try:
             self.module(step).reply(step, request, peer)
         except OSError as error:
