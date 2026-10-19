@@ -1,7 +1,9 @@
 #!/bin/sh
-# testing_run_test.sh: check that `testing.sh run` delivers its command intact.
-# --mutate pastes the command into a quoted argument of a private copy, and
-# then decodes it inside double quotes; --texts checks those faults' texts.
+# testing_run_test.sh: check that `testing.sh run` delivers its command intact,
+# and that a copy synced from a git worktree is a repository of its own.
+# --mutate pastes the command into a quoted argument of a private copy, then
+# decodes it inside double quotes, and then sends a worktree's `.git` file as
+# it is; --texts checks those faults' texts.
 
 set -eu
 case ${1:-} in
@@ -22,8 +24,8 @@ script=$work/tree/tools/dev/testing.sh
 cp "$repo/tools/dev/testing.sh" "$script"
 
 # fault NAME: write the private copy with fault NAME: `paste` puts the command
-# into the single-quoted argument, and `quoted` decodes it inside double
-# quotes, which cmd.exe on the host misreads.
+# into the single-quoted argument, `quoted` decodes it inside double quotes,
+# which cmd.exe on the host misreads, and `gitfile` syncs a worktree as a tree.
 fault()
 {
     case $1 in
@@ -37,6 +39,11 @@ EOF
 s/\. <(base64 -d <<< \\\$c)/eval \\"\\$(printf %s \\"\\$c\\" | base64 -d)\\"/
 EOF
             ;;
+        gitfile)
+            cat > "$work/fault.sed" <<'EOF'
+s/if \[ -f "\$REPO\/\.git" \]; then/if false; then/
+EOF
+            ;;
     esac
     sed -f "$work/fault.sed" "$repo/tools/dev/testing.sh" > "$script"
     ! cmp -s "$repo/tools/dev/testing.sh" "$script"
@@ -44,6 +51,7 @@ EOF
 if [ "$mode" = texts ]; then
     fault paste
     fault quoted
+    fault gitfile
     exit 0
 fi
 
@@ -70,15 +78,40 @@ cat > "$work/bin/wsl.exe" <<'EOF'
 shift
 exec "$@"
 EOF
-cat > "$work/bin/rsync" <<'EOF'
-#!/bin/sh
-[ "$1" != --version ] || echo 'rsync  version 3.2.7  protocol version 31'
+# The rsync fixture copies to the local path that stands for the host's,
+# with this machine's rsync.
+real_rsync=$(command -v rsync)
+{
+    echo '#!/bin/sh'
+    echo "real_rsync='$real_rsync'"
+    cat <<'EOF'
+[ "$1" != --version ] || { echo 'rsync  version 3.2.7  protocol version 31'; exit 0; }
+skip=
+for a do
+    shift
+    if [ -n "$skip" ]; then
+        skip=
+        continue
+    fi
+    case $a in
+        --rsync-path=*) ;;
+        -e) skip=1 ;;
+        testing:*) set -- "$@" "${a#testing:}" ;;
+        *) set -- "$@" "$a" ;;
+    esac
+done
+exec "$real_rsync" "$@"
 EOF
+} > "$work/bin/rsync"
 chmod +x "$work/bin/ssh" "$work/bin/wsl.exe" "$work/bin/rsync"
 HOME=$work/home
 PATH=$work/bin:$PATH
 RACH2_TESTING_COPY=$work/copy
+GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.com
+GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.com
 export HOME PATH RACH2_TESTING_COPY
+export GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
 
 # row NAME STATUS EXPECTED INPUT COMMAND...: run COMMAND with INPUT as its
 # standard input, and require exit status STATUS and output EXPECTED.
@@ -91,6 +124,41 @@ row()
         result=$?
     if [ "$result" -ne "$status" ] || [ "$(cat "$work/out")" != "$expected" ]; then
         echo "testing-run-test: failed: $name: status $result" >&2
+        awk '{ print "testing-run-test:   " $0 }' "$work/out" "$work/err" >&2
+        return 1
+    fi
+}
+
+# worktree: sync from a git worktree into a copy whose `.git` is the file an
+# earlier sync left, move the repository away as the host lacks it, and
+# require git in the copy to read the worktree's commit, tree and index.
+worktree()
+{
+    rm -rf "$work/repo" "$work/away" "$work/wt" "$work/wtcopy"
+    git -c init.defaultBranch=master init -q "$work/repo"
+    echo /tools/ > "$work/repo/.gitignore"
+    echo one > "$work/repo/first"
+    git -C "$work/repo" add .gitignore first
+    git -C "$work/repo" commit -qm one
+    git -C "$work/repo" worktree add -q -b topic "$work/wt" 2> /dev/null
+    echo two > "$work/wt/second"
+    git -C "$work/wt" add second
+    git -C "$work/wt" commit -qm two
+    mkdir -p "$work/wt/tools/dev" "$work/wtcopy"
+    cp "$script" "$work/wt/tools/dev/testing.sh"
+    cp "$work/wt/.git" "$work/wtcopy/.git"
+    expected="$(git -C "$work/wt" rev-parse HEAD)
+HEAD:second"
+    result=0
+    RACH2_TESTING_COPY=$work/wtcopy sh "$work/wt/tools/dev/testing.sh" sync \
+        > "$work/out" 2> "$work/err" || result=$?
+    mv "$work/repo" "$work/away"
+    if [ "$result" -eq 0 ]; then
+        (cd "$work/wtcopy" && git rev-parse HEAD && git grep -l two HEAD &&
+            git status --porcelain) > "$work/out" 2> "$work/err" || result=$?
+    fi
+    if [ "$result" -ne 0 ] || [ "$(cat "$work/out")" != "$expected" ]; then
+        echo "testing-run-test: failed: worktree: status $result" >&2
         awk '{ print "testing-run-test:   " $0 }' "$work/out" "$work/err" >&2
         return 1
     fi
@@ -115,6 +183,7 @@ a\\b" '' "printf '%s\\n' \"it's\" 'say \"hi\"' '(x)' 'a\\b' | tr -d '()'" ||
 ' 'read -r v; echo "got $v"' || failed=1
     row status 7 '' '' '(exit 7)' || failed=1
     row long 0 9000 '' "echo $long | awk '{ print length(\$0) }'" || failed=1
+    worktree || failed=1
     return "$failed"
 }
 long=$(printf '%9000s' '' | tr ' ' x)
@@ -140,8 +209,18 @@ if [ "$mode" = mutate ]; then
         echo 'testing-run-test: fault passed a command without quotes' >&2
         exit 1
     fi
+    fault gitfile
+    if rows > "$work/mutated.out" 2>&1; then
+        echo "testing-run-test: fault passed: a worktree's .git file sent as it is" >&2
+        exit 1
+    fi
+    if grep -v '^testing-run-test: failed: worktree:' "$work/mutated.out" |
+            grep -q '^testing-run-test: failed:'; then
+        echo 'testing-run-test: fault failed a row besides worktree' >&2
+        exit 1
+    fi
     cp "$repo/tools/dev/testing.sh" "$script"
     rows || exit 1
-    echo 'testing-run-test: result: pass: both faults caught and restored'
+    echo 'testing-run-test: result: pass: three faults caught and restored'
 fi
-echo 'testing-run-test: result: pass: 8 rows'
+echo 'testing-run-test: result: pass: 9 rows'

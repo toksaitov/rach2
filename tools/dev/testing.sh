@@ -20,6 +20,9 @@
 # of the rule that sends it, since rsync applies the first rule that matches a
 # name; so a sync from a tree that has no WAD, such as a fresh git worktree,
 # leaves the copy's in place, and a sync from a tree that has one replaces it.
+# The copy's `.git` is a repository of its own, so that git works there: a
+# tree's `.git` directory is sent with the tree, and a git worktree's shared
+# repository with the worktree's HEAD and index, as send_git describes.
 # `run` syncs and then runs COMMAND in the copy; the words of COMMAND are
 # joined with spaces and evaluated by bash there as one string, so quote it as
 # that shell will see it, as run_held describes. `get` copies each PATH,
@@ -242,16 +245,48 @@ holder_lost()
     exit 1
 }
 
+# send ARG...: run rsync with ARG... to the host, comparing by content and
+# deleting what the source lacks.
+send()
+{
+    rsync -a --no-times --checksum --delete \
+        --rsync-path="$RSYNC_PATH" -e 'ssh -o BatchMode=yes' "$@" 3>&-
+}
+
+# send_git: make the copy's `.git` a repository of its own at this worktree's
+# commit. A worktree's `.git` is a file that names its git directory on this
+# machine, a path the host does not have. The copy gets instead the shared
+# repository, without its worktrees' records or the main tree's HEAD and
+# index, and then this worktree's HEAD and index. The repository goes as the
+# directory a symbolic link named `.git` leads to, which rsync's -k sends as
+# a directory, so that it replaces a `.git` file an older sync left there.
+send_git()
+{
+    gitdir=$(cd "$REPO" && cd "$(git rev-parse --git-dir)" && pwd)
+    common=$(cd "$REPO" && cd "$(git rev-parse --git-common-dir)" && pwd)
+    mkdir "$hold/stage"
+    ln -s "$common" "$hold/stage/.git"
+    send -k --filter='+ /.git/' --filter='- /.git/HEAD' \
+        --filter='- /.git/index' --filter='- /.git/worktrees/' --filter='- /*' \
+        "$hold/stage/" "$HOST:$DEST/"
+    send "$gitdir/HEAD" "$gitdir/index" "$HOST:$DEST/.git/"
+}
+
 # sync_tree WHAT: hold the copy for WHAT, `sync` or `run`, and send this tree.
 sync_tree()
 {
     need_rsync3
     hold_copy "$1" || exit 1
-    rsync -a --no-times --checksum --delete \
-        --filter='P /ports/doom/doom1.wad' \
-        --filter='+ /ports/doom/doom1.wad' --filter=':- .gitignore' \
-        --rsync-path="$RSYNC_PATH" -e 'ssh -o BatchMode=yes' \
-        "$REPO/" "$HOST:$DEST/" 3>&-
+    if [ -f "$REPO/.git" ]; then
+        send --filter='- /.git' --filter='P /ports/doom/doom1.wad' \
+            --filter='+ /ports/doom/doom1.wad' --filter=':- .gitignore' \
+            "$REPO/" "$HOST:$DEST/"
+        send_git
+    else
+        send --filter='P /ports/doom/doom1.wad' \
+            --filter='+ /ports/doom/doom1.wad' --filter=':- .gitignore' \
+            "$REPO/" "$HOST:$DEST/"
+    fi
     kill -0 "$holder" 2>/dev/null ||
         holder_lost "during the sync; another caller may have synced over it"
 }

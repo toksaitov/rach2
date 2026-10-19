@@ -319,10 +319,10 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         fail=1
     fi
     if sh tests/system/testing_run_test.sh >"$VDIR/testing_run.rlog" 2>&1; then
-        echo "hosttest: result: pass: testing.sh run's quoted commands"
+        echo "hosttest: result: pass: testing.sh run's quoted commands and a worktree's sync"
     else
         cat "$VDIR/testing_run.rlog"
-        echo "hosttest: result: fail: testing.sh run's quoted commands" >&2
+        echo "hosttest: result: fail: testing.sh run's quoted commands and a worktree's sync" >&2
         fail=1
     fi
     if python3 -B tests/system/agents_credentials_test.py >"$VDIR/agents_credentials.rlog" 2>&1; then
