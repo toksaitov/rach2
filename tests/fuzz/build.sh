@@ -2,8 +2,9 @@
 #
 # tests/fuzz/build.sh MODE [NAME...]: build the fuzz harnesses under
 # tests/fuzz, each a NAME_fuzz.c that defines the entry fuzz.h declares and
-# names the sources it links in `fuzz-deps:` comment lines, as the host tests
-# do with `host-deps:`.
+# names the sources it links in `fuzz-deps:` comment lines and any more
+# compiler flags in `fuzz-cflags:` lines, as the host tests do with
+# `host-deps:` and `host-cflags:`.
 #
 #   replay   a program that replays the files on its command line under
 #            ASan and UBSan, with fuzz.h's main; the host suite runs each
@@ -32,12 +33,13 @@ fi
 for name in "$@"; do
     src="tests/fuzz/${name}_fuzz.c"
     deps=$(grep -o 'fuzz-deps:[^*]*' "$src" | sed 's/fuzz-deps://' | tr '\n' ' ')
+    flags=$(grep -o 'fuzz-cflags:[^*]*' "$src" | sed 's/fuzz-cflags://' | tr '\n' ' ')
     case $mode in
     replay)
-        cmd="$CC $COMMON -DFUZZ_REPLAY -fsanitize=address,undefined -fno-sanitize-recover=all -o $OUT/$name $src $deps"
+        cmd="$CC $COMMON $flags -DFUZZ_REPLAY -fsanitize=address,undefined -fno-sanitize-recover=all -o $OUT/$name $src $deps"
         ;;
     fuzz)
-        cmd="clang $COMMON -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all -o $OUT/$name-fuzz $src $deps"
+        cmd="clang $COMMON $flags -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all -o $OUT/$name-fuzz $src $deps"
         ;;
     *)
         echo "fuzz: usage: build.sh replay|fuzz [NAME...]" >&2; exit 2 ;;

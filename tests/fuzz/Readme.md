@@ -1,6 +1,6 @@
 # Fuzz harnesses
 
-This directory has the libFuzzer harnesses for the kernel's parsers of bytes that come from a disk or a wire, one file for each: the ELF loader (`elf_fuzz.c`), the network receive path (`packet_fuzz.c`), the MBR and GUID partition table readers (`mbr_fuzz.c`, `gpt_fuzz.c`), and the KRFFS, FAT, exFAT and ext2 drivers (`krffs_fuzz.c`, `fat32_fuzz.c`, `exfat_fuzz.c`, `ext2_fuzz.c`). Each harness compiles the kernel's own source on the host, so a fuzzer can run it millions of times under the sanitizers. The corpora under `corpus/NAME/` are committed, and every host run replays them, so an input that once found a fault is tested again on every change.
+This directory has the libFuzzer harnesses for the kernel's parsers of bytes that come from a disk or a wire, one file for each: the ELF loader of the i686 kernel and of the x86-64 kernel (`elf_fuzz.c`, `elf64_fuzz.c`), the network receive path (`packet_fuzz.c`), the MBR and GUID partition table readers (`mbr_fuzz.c`, `gpt_fuzz.c`), and the KRFFS, FAT, exFAT and ext2 drivers (`krffs_fuzz.c`, `fat32_fuzz.c`, `exfat_fuzz.c`, `ext2_fuzz.c`). Each harness compiles the kernel's own source on the host, so a fuzzer can run it millions of times under the sanitizers. The corpora under `corpus/NAME/` are committed, and every host run replays them, so an input that once found a fault is tested again on every change.
 
 ## Running
 
@@ -13,13 +13,14 @@ This directory has the libFuzzer harnesses for the kernel's parsers of bytes tha
 
 ## Results
 
-A replay program prints `fuzz: replayed N input(s)` and exits 0 when the parser survives every input, and a sanitizer's report and a nonzero exit when it does not; `tests/run host` names the harness that failed and keeps its log. An input longer than `FUZZ_INPUT_MAX`, 4 MiB, is refused with status 2 rather than replayed short, since a shortened input is a different one. A crash found by fuzzing is filed as a `bug` issue, and its minimised input joins the corpus.
+A replay program prints `fuzz: replayed N input(s)` and exits 0 when the parser survives every input, and a sanitizer's report and a nonzero exit when it does not. The ELF64 harness also aborts, after `elf64-fuzz: loader fault: RULE`, when the loader accepts an image that breaks one of its rules; `tests/run host` names the harness that failed and keeps its log. An input longer than `FUZZ_INPUT_MAX`, 4 MiB, is refused with status 2 rather than replayed short, since a shortened input is a different one. A crash found by fuzzing is filed as a `bug` issue, and its minimised input joins the corpus.
 
 ## Design
 
-Every harness defines the one function `fuzz.h` declares, `LLVMFuzzerTestOneInput`, and names the sources it links in `fuzz-deps:` comment lines, as the host tests name theirs in `host-deps:` lines. The harnesses build with `RACH2_HOSTTEST`, as the host tests do, so they compile the i686 configuration of the kernel's code whatever the host is.
+Every harness defines the one function `fuzz.h` declares, `LLVMFuzzerTestOneInput`, and names the sources it links in `fuzz-deps:` comment lines and any more compiler flags in `fuzz-cflags:` lines, as the host tests name theirs in `host-deps:` and `host-cflags:` lines. The harnesses build with `RACH2_HOSTTEST`, as the host tests do, so they compile the i686 configuration of the kernel's code whatever the host is; one that adds `-DRACH2_HOST_X86_64` on a `fuzz-cflags:` line compiles the x86-64 configuration, as `elf64_fuzz.c` does.
 
 * The ELF harness includes `rach2/sys/proc/elf.c` and loads the input as a program image into pages it allocates one at a time, so that a write past a page is a write past an allocation.
+* The ELF64 harness includes the same file in the x86-64 configuration, so the loader reads ELF64 headers and checks segments against the x86-64 user window, and puts the input through each path a program takes: `elf_check` over the bytes in memory, a copy at the image's own addresses, as the boot loads, and `elf_read_layout` and a load mapped from a file at the bias execve gives a program and at the one it gives an interpreter. Its model page directory is a list of the pages it has mapped. A load that fails has rejected the image; one that succeeds is checked against the headers the harness reads from the input itself: every page mapped once and inside the window from `USER_ADDR_MIN` to `USER_STACK_BASE`, every segment record matching a PT_LOAD whose file bytes the file has, in ascending order, its bytes and zeros after them in the pages filled, and the entry point and the program header table inside the window. The seeds are two x86-64 test programs, `hello` and the musl `muslhello`, and a position-independent image with an interpreter, `pie`; four more each break one rule the loader enforces and are otherwise valid: a segment past the top of the window (`pasttop`), two segments in one page (`overlap`), an entry point at the window's top (`entrytop`) and a file offset of 2^32 or more (`offset4g`).
 * The packet harness includes the packet host test and hands the input, cut to 1514 bytes, to `ethernet_rx` as one Ethernet frame, from the end of an allocation of exactly its length.
 * The MBR harness includes `rach2/sys/block/mbr.c`, pads the input to a sector with zeros and puts the table through each check the kernel makes of one. The GPT harness links `rach2/sys/block/gpt.c` and takes the input as a header sector followed by the entry array, and recomputes both checksums, so that the checks behind them are reached.
 * The KRFFS harness takes the input, up to 1 MiB, as a whole volume behind a memory backend, lists up to 64 entries of the root and reads each.
@@ -31,4 +32,8 @@ A new harness is `NAME_fuzz.c` with its `fuzz-deps:` lines and a seed under `cor
 
 ## Limits
 
-The harnesses fuzz the i686 configuration only, so the x86-64 kernel's ELF64 path through the loader is not fuzzed.
+Only the ELF loader is fuzzed in both configurations; the other harnesses compile the i686 configuration alone.
+
+## Tests
+
+`tests/host/elf64fuzz_mutate.sh` proves the ELF64 harness: it removes, one at a time, the loader's bound at the top of the window, its refusal of a segment that shares a page with the one before, its bound on the entry point and its check that a file offset fits in 32 bits, and requires the replay of the corpus to fail with the rule each loss breaks, and to pass before and after.

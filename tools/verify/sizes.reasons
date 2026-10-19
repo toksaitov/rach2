@@ -289,6 +289,7 @@ tests/dup2test.c:_start lines 173 a probe, one sequence of steps in the order th
 tests/ext2probe.c:links_rows complexity 48 a probe, one sequence of steps in the order the log records them
 tests/ext2probe.c:links_rows lines 134 a probe, one sequence of steps in the order the log records them
 
+tests/fuzz/elf64_fuzz.c:vm_insert_file params 7 a stub of vm.c's, whose parameters are the fields of one region
 tests/fuzz/elf_fuzz.c:vm_insert_file params 7 a stub of vm.c's, whose parameters are the fields of one region
 
 tests/host/acpi_hosttest.c:madt_rows complexity 38 a test's rows, each a case, read as one table
