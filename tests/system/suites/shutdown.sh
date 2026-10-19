@@ -19,8 +19,7 @@
 #
 # The serial input is a FIFO held open past each wait, because EOF on it stops
 # QEMU by itself and would make every outcome look like a success. The monitor
-# is on a second pair of FIFOs, whose output a reader copies to a log of its
-# own.
+# is on a second pair of FIFOs, which tests/system/monitor.sh reads.
 #
 # Usage: shutdown.sh <kernel> <disk> <fsck.krffs> <password>
 #
@@ -53,15 +52,10 @@ WORK="$DISK.work"
 LOG="$DISK.work.log"
 FEED="$DISK.work.feed"
 MONITOR="$DISK.work.monitor"
-MONLOG="$DISK.work.monitor.log"
-rm -f "$WORK" "$LOG" "$FEED" "$MONITOR.in" "$MONITOR.out" "$MONLOG"
+rm -f "$WORK" "$LOG" "$FEED" "$MONITOR.in" "$MONITOR.out" "$MONITOR.log"
 
 QPID=""
 FPID=""
-MPID=""
-# The looks at the monitor in this boot, each of which ends with one line
-# `VM status:` in the monitor's log.
-LOOKS=0
 
 # fsck_says_clean: return 0 when offline fsck calls the working image clean.
 # Its status is read beside its output: a check that only asked whether the
@@ -99,52 +93,23 @@ fsck_says_dirty() {
     return 1
 }
 
-# look_halted NAME [CPUS]: read every processor's registers and the machine's
-# status. Fail unless the machine is running and every processor is halted
-# with interrupts off, as `power_stop` and `panic_init_died` leave it. When
-# CPUS is given, require that many register records. The monitor's input is
-# opened for reading and writing, so the write does not wait for a reader
-# when QEMU has ended.
+# look_halted NAME [CPUS]: fail phase NAME unless the monitor finds the
+# machine running and every processor halted with its interrupts off, which
+# is what `power_stop` and `panic_init_died` leave: a processor that `hlt`
+# stopped, and that no interrupt can start again. When CPUS is given, the
+# monitor must give the registers of that many processors.
 look_halted() {
-    LOOKS=$((LOOKS + 1))
-    exec 7<> "$MONITOR.in"
-    printf 'info registers -a\ninfo status\n' >&7
-    exec 7>&-
-    if ! "$RUNUTIL" until "$MONLOG" "VM status: " 30 "$LOOKS"; then
-        fail "$1: the monitor did not answer, so QEMU ended or does not respond"
-    fi
-    status=$(grep -a "VM status: " "$MONLOG" | sed -n "${LOOKS}p" | tr -d '\r')
-    if [ "$status" != "VM status: running" ]; then
-        fail "$1: the monitor says '$status', not that the machine is running"
-    fi
-    # Each processor has one line with its flags, EFL or RFL, and HLT.
-    awk -v n="$LOOKS" '/VM status: /{ seen++; next } seen == n - 1 && /FL=/' "$MONLOG" |
-        sed 's/.*FL=\([0-9a-f]*\) .* HLT=\([01]\).*/\1 \2/' > "$MONLOG.cpus"
-    cpus=0
-    while read -r flags halted; do
-        cpus=$((cpus + 1))
-        case "$flags" in
-            "" | *[!0-9a-f]*) fail "$1: the registers of processor $cpus are not readable: $flags $halted" ;;
-        esac
-        if [ "$halted" != 1 ]; then
-            fail "$1: processor $cpus of the machine is not halted"
-        fi
-        if [ $((0x$flags & 0x200)) -ne 0 ]; then
-            fail "$1: processor $cpus is halted with its interrupts on (flags $flags)"
-        fi
-    done < "$MONLOG.cpus"
-    rm -f "$MONLOG.cpus"
-    if [ "$cpus" -eq 0 ]; then
-        fail "$1: the monitor gave the registers of no processor"
-    fi
-    if [ "$#" -gt 1 ] && [ "$cpus" -ne "$2" ]; then
-        fail "$1: the monitor gave $cpus processors, expected $2"
+    monitor_halted || fail "$1: $MONITOR_WHY"
+    if [ "$#" -gt 1 ] && [ "$MONITOR_CPUS" -ne "$2" ]; then
+        fail "$1: the monitor gave $MONITOR_CPUS processors, expected $2"
     fi
 }
 
 # require_clean_halt NAME: check the halt of phase NAME and fail if it was not
-# clean. A halt does not end QEMU, so the suite looks at the processors twice,
-# two seconds apart, and then kills the machine itself. The routes a halt must
+# clean. A halt does not end QEMU, so the suite looks at the processors, types
+# a line at the console, which a machine still running would echo, looks again
+# once the line is in the machine's input, and then kills the machine itself
+# and requires that nothing answered the line. The routes a halt must
 # not take are checked too, since `power_stop` prints the halt token after a
 # power-off or a reset that did not take, and a halt that fell back through one
 # of those would otherwise look like one asked for.
@@ -162,9 +127,14 @@ require_clean_halt() {
         fail "$1: took a platform route a halt must not take"
     fi
     look_halted "$1"
-    sleep 2 # interval: the halted machine runs on between two looks at its processors
+    if ! drive_type 'echo AWA""KE' || ! drive_sent; then
+        fail "$1: the line typed at the halted machine did not reach its input"
+    fi
     look_halted "$1"
     cleanup_boot
+    if grep -aq 'AWA' "$LOG"; then
+        fail "$1: the halted machine answered the line typed at its console"
+    fi
     if ! fsck_says_clean; then
         fail "$1: the image is not clean"
     fi
@@ -187,14 +157,16 @@ fresh_image() {
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 # shellcheck source=tests/system/drive.sh
 . "$REPO/tests/system/drive.sh"
+# shellcheck source=tests/system/monitor.sh
+. "$REPO/tests/system/monitor.sh"
 # start_boot LINE: boot the working image and type LINE once the shell's
 # prompt is printed. The fixture's init starts a root shell with no login. The
 # feeder holds the console open while the machine runs, since EOF on the
 # serial input stops QEMU by itself.
 start_boot() {
-    rm -f "$LOG" "$FEED" "$MONITOR.in" "$MONITOR.out" "$MONLOG"
-    mkfifo "$FEED" "$MONITOR.in" "$MONITOR.out"
-    LOOKS=0
+    rm -f "$LOG" "$FEED"
+    mkfifo "$FEED"
+    monitor_open "$MONITOR"
     # shellcheck disable=SC2086
     "$QEMU" -cpu max -display none $EXTRA_QEMU -kernel "$KERNEL" \
         -append "rach2.fsdisk" \
@@ -202,8 +174,6 @@ start_boot() {
         -monitor "pipe:$MONITOR" \
         -serial stdio < "$FEED" > "$LOG" 2>&1 &
     QPID=$!
-    cat "$MONITOR.out" > "$MONLOG" &
-    MPID=$!
     DRIVE_LOG=$LOG
     DRIVE_FIFO=$FEED
     drive_feed "$QPID"
@@ -235,10 +205,8 @@ wait_token() {
 cleanup_boot() {
     qpid="$QPID"
     fpid="$FPID"
-    mpid="$MPID"
     QPID=""
     FPID=""
-    MPID=""
     if [ -n "$qpid" ]; then
         kill -9 "$qpid" 2>/dev/null || true
         wait "$qpid" 2>/dev/null || true
@@ -247,17 +215,14 @@ cleanup_boot() {
         kill -9 "$fpid" 2>/dev/null || true
         wait "$fpid" 2>/dev/null || true
     fi
-    if [ -n "$mpid" ]; then
-        kill -9 "$mpid" 2>/dev/null || true
-        wait "$mpid" 2>/dev/null || true
-    fi
-    rm -f "$FEED" "$MONITOR.in" "$MONITOR.out"
+    monitor_close
+    rm -f "$FEED"
 }
 
 # cleanup: stop the boot and remove the working image, the logs and the FIFOs.
 cleanup() {
     cleanup_boot
-    rm -f "$WORK" "$LOG" "$FEED" "$MONLOG" "$MONLOG.cpus"
+    rm -f "$WORK" "$LOG" "$FEED" "$MONITOR.log"
 }
 
 trap 'cleanup' EXIT
@@ -269,7 +234,7 @@ trap 'cleanup; exit 129' HUP
 fail() {
     cleanup_boot
     echo "shutdown-test: FAIL: $1" >&2
-    cat "$LOG" "$MONLOG" >&2
+    cat "$LOG" "$MONITOR.log" >&2
     exit 1
 }
 

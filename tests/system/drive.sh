@@ -104,6 +104,17 @@ drive_type() {
     mv "$DRIVE_FIFO.type.new" "$(printf '%s.type.%06d' "$DRIVE_FIFO" "$DRIVE_SEQ")"
 }
 
+# drive_sent: wait until the feeder has written every line typed so far into
+# the fifo, and so into the machine's input; return 1 if the feeder ended
+# first.
+drive_sent() {
+    while [ -e "$(printf '%s.type.%06d' "$DRIVE_FIFO" "$DRIVE_SEQ")" ] ||
+            [ -e "$DRIVE_FIFO.taken" ]; do
+        kill -0 "$DRIVE_FPID" 2>/dev/null || return 1
+        sleep "$DRIVE_POLL"
+    done
+}
+
 # drive_expect PATTERN SECS: wait up to SECS seconds for the extended regular
 # expression PATTERN in the log after the cursor; on a match the cursor moves
 # past it. The log is searched as it is, carriage returns included, so a pattern
