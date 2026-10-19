@@ -33,13 +33,17 @@
 
 #define SIGKILL 9
 #define SIGTERM 15
+#define SIGCHLD 17
 #define SIGCONT 18
 #define SIGSTOP 19
 #define SIGTTIN 21
 
 #define WNOHANG    1
 #define WUNTRACED  2
+#define WEXITED    4
 #define WCONTINUED 8
+#define WNOWAIT    0x01000000
+#define P_PID      1
 
 #define WIFEXITED(s)    (((s) & 0x7f) == 0)
 #define WEXITSTATUS(s)  (((s) >> 8) & 0xff)
@@ -110,6 +114,18 @@ static int fork(void)
 static int waitpid(int pid, int *status, int options)
 {
     return syscall3(SYS_WAITPID, pid, (long)status, options);
+}
+/**
+ * Wait until the child `pid` has exited, and leave it unreaped: waitid with
+ * WEXITED and WNOWAIT. Whether the call reported the child's exit.
+ */
+static int wait_exited(int pid)
+{
+    int info[32]; /* siginfo_t, 128 bytes on both architectures */
+
+    info[0] = 0;
+    return syscall5(SYS_WAITID, P_PID, pid, (long)info, WEXITED | WNOWAIT, 0) == 0 &&
+           info[0] == SIGCHLD;
 }
 /* The kernel's timespec, of longs. */
 struct timespec_probe {
@@ -332,8 +348,8 @@ PROBE_START void _start(void)
             }
             check(child > 0, "fork for the zombie group");
             setpgid(child, child);
-            /* The child exits in the sleep, and is reaped after the claim. */
-            sleep_ms(50);
+            /* The child is seen exited, and is reaped after the claim. */
+            check(wait_exited(child), "the child of the zombie group exits");
             check(ioctl(0, TIOCSPGRP, &child) == 0,
                   "TIOCSPGRP to a group holding only an unreaped zombie");
             check(waitpid(child, &status, 0) == child, "the zombie is reaped");
