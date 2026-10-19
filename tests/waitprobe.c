@@ -229,7 +229,7 @@ PROBE_START void _start(void)
     check(pid >= 0, "fork");
     if (pid == 0) {
         eintr_child();
-    } else {
+    } else if (pid > 0) {
         struct {
             long tv_sec;
             long tv_nsec;

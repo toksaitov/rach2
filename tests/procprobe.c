@@ -1351,6 +1351,44 @@ static void pool_full_rows(void)
 }
 
 /**
+ * The snapshot: a child exists when its stat file is opened and not when the
+ * descriptor is read, and the read still answers what the open took. The
+ * child sleeps in pause until it is killed.
+ */
+static void snapshot_rows(void)
+{
+    int pid, status, fd, n;
+
+    pid = syscall1(SYS_FORK, 0);
+    check(pid >= 0, "fork");
+    if (pid == 0) {
+        for (;;) {
+            syscall1(SYS_PAUSE, 0);
+        }
+    }
+    if (pid > 0) {
+        stat_path_of(path, pid);
+        fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
+        check(fd >= 0, "open /proc/<child>/stat while the child is alive");
+        sleeping_child_rows(path);
+        check(syscall3(SYS_KILL, pid, SIGKILL, 0) == 0, "kill the child");
+        check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid, "reap the child");
+        /* The pid names no process; a snapshot answers what it took. */
+        check(syscall3(SYS_OPEN, (long)path, O_RDONLY, 0) < 0,
+              "the dead child's /proc entry is gone, so the read below is a snapshot");
+        if (fd >= 0) {
+            n = syscall3(SYS_READ, fd, (long)buf, (int)sizeof(buf) - 1);
+            check(n > 0, "the open descriptor still reads after its process is gone");
+            if (n > 0) {
+                buf[n] = '\0';
+                check(buf[0] >= '0' && buf[0] <= '9', "the snapshot starts with the pid");
+            }
+            syscall1(SYS_CLOSE, fd);
+        }
+    }
+}
+
+/**
  * Whose connection it is, and whether the row still says so once the
  * descriptor has gone. A listener owned by an ordinary account is made in a
  * child, and root connects to it: the accepted connection is allocated in
@@ -1529,7 +1567,7 @@ void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
-    int pid, status, fd, n;
+    int n;
 
     /* `procprobe mount`: the root's mount line and nothing else. */
     if (argc > 1 && argv[1][0] == 'm') {
@@ -1539,33 +1577,9 @@ void probe_main(unsigned long *sp)
         done();
     }
 
-    /* The snapshot: the child exists at the open and not at the read. */
-    pid = syscall1(SYS_FORK, 0);
-    check(pid >= 0, "fork");
-    if (pid == 0) {
-        for (;;) {
-            syscall1(SYS_PAUSE, 0);
-        }
-    }
-    stat_path_of(path, pid);
-    fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
-    check(fd >= 0, "open /proc/<child>/stat while the child is alive");
-    sleeping_child_rows(path);
     memory_file_rows();
-    check(syscall3(SYS_KILL, pid, SIGKILL, 0) == 0, "kill the child");
-    check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid, "reap the child");
-    /* The pid names no process; a snapshot answers what it took. */
-    check(syscall3(SYS_OPEN, (long)path, O_RDONLY, 0) < 0,
-          "the dead child's /proc entry is gone, so the read below is a snapshot");
-    if (fd >= 0) {
-        n = syscall3(SYS_READ, fd, (long)buf, (int)sizeof(buf) - 1);
-        check(n > 0, "the open descriptor still reads after its process is gone");
-        if (n > 0) {
-            buf[n] = '\0';
-            check(buf[0] >= '0' && buf[0] <= '9', "the snapshot starts with the pid");
-        }
-        syscall1(SYS_CLOSE, fd);
-    }
+
+    snapshot_rows();
 
     /* Every file comes back whole, asked for what its last line has. */
     n = slurp("/proc/cmdline", buf, (int)sizeof(buf));

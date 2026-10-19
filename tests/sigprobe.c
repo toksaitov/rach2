@@ -478,9 +478,11 @@ PROBE_START void _start(void)
             __asm__ __volatile__("" ::: "memory"); /* a spin, meant to last */
         }
     }
-    syscall2(SYS_KILL, pid, SIGTERM);
-    check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid, "reap killed child");
-    check((status & 0x7f) == SIGTERM, "child terminated by SIGTERM (WTERMSIG)");
+    if (pid > 0) {
+        syscall2(SYS_KILL, pid, SIGTERM);
+        check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid, "reap killed child");
+        check((status & 0x7f) == SIGTERM, "child terminated by SIGTERM (WTERMSIG)");
+    }
 
     /* 4. A forged selector in the frame the kernel restores. */
     install(SIGUSR1, forge_handler);
@@ -508,15 +510,17 @@ PROBE_START void _start(void)
         if (pid == 0) {
             sys_exit(sleep_ms(30000) == -4 ? 0 : 1); /* -EINTR is -4 */
         }
-        for (i = 0; i < 500 && !asleep(pid); i++) {
-            sleep_ms(10);
+        if (pid > 0) {
+            for (i = 0; i < 500 && !asleep(pid); i++) {
+                sleep_ms(10);
+            }
+            check(i < 500, "the sleeper is seen asleep before it is signalled");
+            syscall2(SYS_KILL, pid, SIGUSR1);
+            check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid, "reap the sleeper");
+            check((status & 0x7f) == 0 && ((status >> 8) & 0xff) == 0,
+                  "the sleeper's own sleep returned EINTR");
+            check(sleeps_cut_short() > before, "the kernel counted a sleep the signal cut short");
         }
-        check(i < 500, "the sleeper is seen asleep before it is signalled");
-        syscall2(SYS_KILL, pid, SIGUSR1);
-        check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid, "reap the sleeper");
-        check((status & 0x7f) == 0 && ((status >> 8) & 0xff) == 0,
-              "the sleeper's own sleep returned EINTR");
-        check(sleeps_cut_short() > before, "the kernel counted a sleep the signal cut short");
     }
 
     /* 7. The real-time interval timer. */
