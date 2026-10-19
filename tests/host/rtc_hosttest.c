@@ -30,13 +30,18 @@
 #include "pit.h"
 #include "cmos.h"
 
+extern int printf(const char *fmt, ...);
+
 static int fails;
 
-#define CHECK(cond)    \
-    do {               \
-        if (!(cond)) { \
-            fails++;   \
-        }              \
+/** Count a failure when `cond` is false, and print its file, line and
+ *  condition. */
+#define CHECK(cond)                                                   \
+    do {                                                              \
+        if (!(cond)) {                                                \
+            fails++;                                                  \
+            printf("  FAIL: %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+        }                                                             \
     } while (0)
 
 volatile uint32_t kernel_ticks;
