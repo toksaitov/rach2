@@ -179,8 +179,7 @@ elif name == 'make':
             sys.exit(7)
 elif name == 'sleep':
     order = case / 'order'
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
+    while True:
         lines = order.read_text().splitlines() if order.exists() else []
         starts = sum(line.startswith('session ') for line in lines)
         if starts > sum(line.startswith('sleep ') for line in lines):
