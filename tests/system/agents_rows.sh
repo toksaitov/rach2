@@ -18,7 +18,7 @@
 # of the tree's tests and tools with `tree`, and a row
 # that drives a program's screen runs it in tmux, on the server and in the
 # session PANE names, waits for it with `pane` and answers its questions
-# with `keys` and `choose`. The script prints
+# with `keys`, `press` and `choose`. The script prints
 # `AGENTROW OK NAME` when every comparison holds, and otherwise
 # `AGENTROW FAIL NAME: ` with the first that did not.
 #
@@ -119,29 +119,48 @@ program() {
     pgrep -P "$(tmux -L "$PANE" display-message -p -t "$PANE" '#{pane_pid}')" -x "$1"
 }
 
-# choose WHAT KEY ANSWER: press KEY until the window of PANE has marked
-# ANSWER selected, the program's mark SELECTED before it, for 5 s, within
-# 60 s. A program's question can refuse keys for a moment after it opens and
-# then be drawn again with its first answer selected, which can come after
-# the row's key under TCG, so the row presses KEY again whenever ANSWER is
-# not selected, at most every 5 s.
-choose() {
-    local n=0 held=0
-    while [ "$n" -lt 60 ]; do
-        case "$(tmux -u -L "$PANE" capture-pane -p -t "$PANE")" in
-            *"$SELECTED $3"*)
-                held=$((held + 1))
-                [ "$held" -le 5 ] || return 0
+# press WHAT KEY TEXT: press KEY until the window of PANE shows TEXT on two
+# reads in a row, looking once a second for at most 300 s. KEY is pressed on
+# a screen without TEXT that is the same on two reads in a row and that the
+# program has drawn since KEY was last pressed. A program's question can
+# refuse keys for a moment after it opens and then be drawn again, or take a
+# key and draw its first answer again; either way the program settles on a
+# new screen without TEXT, and is given KEY again. A key whose effect a slow
+# program has yet to draw leaves the screen as it was, and is not pressed
+# twice.
+press() {
+    local n=0 screen last='' pressed='' drawn=1 shown=''
+    while :; do
+        screen=$(tmux -u -L "$PANE" capture-pane -p -t "$PANE")
+        [ "$screen" = "$pressed" ] || drawn=1
+        case "$screen" in
+            *"$3"*)
+                [ -z "$shown" ] || return 0
+                shown=1
                 ;;
             *)
-                held=0
-                [ $((n % 5)) != 0 ] || keys "$2"
+                shown=
+                if [ "$screen" = "$last" ] && [ -n "$drawn" ]; then
+                    keys "$2"
+                    pressed=$screen
+                    drawn=
+                fi
                 ;;
         esac
+        last=$screen
+        if [ "$n" -ge 300 ]; then
+            pane "$1" "$3" 0
+            return 1
+        fi
         n=$((n + 1))
         sleep 1
     done
-    pane "$1" "$SELECTED $3" 0
+}
+
+# choose WHAT KEY ANSWER: press KEY until the window of PANE has marked
+# ANSWER selected, the program's mark SELECTED before it, as `press` does.
+choose() {
+    press "$1" "$2" "$SELECTED $3"
 }
 
 # sample_memory: print the kernel's count of free frames, nr_free_pages of

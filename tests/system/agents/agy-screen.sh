@@ -22,37 +22,8 @@
 # shellcheck source=tests/system/agents/agy-print.sh
 . /tmp/agents/agy-print.sh
 
-# shellcheck disable=SC2034 # agents_rows.sh's pane reads it
+# shellcheck disable=SC2034 # agents_rows.sh's pane, keys and press read it
 PANE=agy
-
-# keys KEY...: press the keys KEY in the screen.
-keys() {
-    tmux -u -L agy send-keys -t agy "$@"
-}
-
-# press WHAT KEY TEXT: press KEY until the screen has shown TEXT for 5 s,
-# within 60 s. A key that comes while the program still draws a question can
-# be lost under TCG, so the row presses KEY again whenever TEXT is not on the
-# screen, at most every 5 s; a question that takes the key twice, as the
-# consent's box does, is then put right by the next press.
-press() {
-    local n=0 held=0
-    while [ "$n" -lt 60 ]; do
-        case "$(tmux -u -L agy capture-pane -p -t agy)" in
-            *"$3"*)
-                held=$((held + 1))
-                [ "$held" -le 5 ] || return 0
-                ;;
-            *)
-                held=0
-                [ $((n % 5)) != 0 ] || keys "$2"
-                ;;
-        esac
-        n=$((n + 1))
-        sleep 1
-    done
-    pane "$1" "$3" 0
-}
 
 row() {
     local pid env
