@@ -43,7 +43,9 @@
  * inside the release registered with `atexit`, which runs after the last case
  * here and can be watched no other way. The mask is a property of the thread,
  * so reading it at a call reads it for the statement. `tcsetattr` is
- * interposed too, to raise a signal inside a terminal restore.
+ * interposed too, to raise a signal inside a terminal restore. `sleep` counts
+ * retry requests without waiting; `fprintf` and `write` announce entry to a
+ * refusal report and a prompt teardown before forwarding to the host.
  *
  * Returns the failed-check count (0 == pass).
  */
@@ -397,6 +399,88 @@ pid_t getpid(void)
     return self;
 }
 
+static unsigned int Retry_calls;
+static unsigned int Retry_bad_seconds;
+static int Retry_ready = -1;
+static int Retry_go = -1;
+static int Report_ready = -1;
+static volatile sig_atomic_t Teardown_ready = -1;
+
+/**
+ * Count each requested retry interval without waiting for real time.
+ *
+ * The contention case uses two pipes to hold a retry until the other process
+ * has released its real lock. Other calls only record their interval.
+ */
+unsigned int sleep(unsigned int seconds)
+{
+    Retry_calls++;
+    if (seconds != 1) {
+        Retry_bad_seconds++;
+    }
+    if (Retry_ready >= 0) {
+        char token;
+
+        if (write(Retry_ready, "r", 1) != 1 || read(Retry_go, &token, 1) != 1 || token != 'g') {
+            _exit(96);
+        }
+        Retry_ready = -1;
+    }
+
+    return 0;
+}
+
+/**
+ * Announce the failed pid-write report before forwarding to `vfprintf`.
+ *
+ * The case fills standard error's pipe first, so the real report cannot
+ * complete. The notification lets the parent inspect the lock and send a
+ * termination signal only once the library has reached the report.
+ */
+int fprintf(FILE *stream, const char *format, ...)
+{
+    va_list args;
+    int rc;
+
+    if (Report_ready >= 0 && strstr(format, "cannot record the holder pid") != NULL) {
+        int ready = Report_ready;
+
+        Report_ready = -1;
+        if (write(ready, "r", 1) != 1) {
+            _exit(85);
+        }
+    }
+    va_start(args, format);
+    rc = vfprintf(stream, format, args);
+    va_end(args);
+
+    return rc;
+}
+
+/**
+ * Forward writes to the host, injecting a continue inside a teardown newline.
+ *
+ * The notification lets the parent drain the full pipe. Raising SIGCONT in
+ * this call places it after the terminal restore and before the handlers are
+ * removed, regardless of when either process runs. Signal handlers also call
+ * write, so the hook is disarmed first and has no sanitizer instrumentation.
+ */
+INTERPOSED_UNINSTRUMENTED
+ssize_t write(int fd, const void *buffer, size_t size)
+{
+    if (Teardown_ready >= 0 && fd == 2 && size == 1 && *(const char *)buffer == '\n') {
+        int ready = (int)Teardown_ready;
+
+        Teardown_ready = -1;
+        if (syscall(SYS_write, ready, "r", 1) != 1) {
+            _exit(96);
+        }
+        raise(SIGCONT);
+    }
+
+    return (ssize_t)syscall(SYS_write, fd, buffer, size);
+}
+
 /**
  * The host's `snprintf(3)`, and the interposed call that watches the signal
  * mask.
@@ -684,6 +768,19 @@ static int read_until(int fd, const char *needle, long ms)
     }
 
     return 0;
+}
+
+/** Return 1 when the child announces its operation within 20 seconds. */
+static int read_ready(int fd)
+{
+    struct pollfd waiting;
+    char token;
+
+    waiting.fd = fd;
+    waiting.events = POLLIN;
+    waiting.revents = 0;
+
+    return poll(&waiting, 1, 20000) == 1 && read(fd, &token, 1) == 1 && token == 'r';
 }
 
 /**
@@ -1264,6 +1361,8 @@ static void check_refusal(const char *what, const char *body, const char *expect
     }
     n = slurp(Lock, before, sizeof(before));
 
+    Retry_calls = 0;
+    Retry_bad_seconds = 0;
     capture_start();
     if (cred_txn_begin_at("pwauth_hosttest", Lock, 2) == 0) {
         capture_stop(report, sizeof(report));
@@ -1274,6 +1373,12 @@ static void check_refusal(const char *what, const char *body, const char *expect
     }
     capture_stop(report, sizeof(report));
 
+    if (Retry_calls != 2) {
+        fail("a busy acquire did not request exactly two retry intervals");
+    }
+    if (Retry_bad_seconds != 0) {
+        fail("a busy acquire requested an interval other than one second");
+    }
     if (occurrences(report, "credential database busy, waiting") != 1) {
         fail("an acquire that waited did not announce it exactly once");
     }
@@ -1815,18 +1920,14 @@ static void check_pipe_during_acquire(void)
  * pid-write path removes its lock is checked by `check_lock_ownership`; this
  * case is about the order of the last three steps.
  *
- * The child says when it is ready, on a pipe of its own, and it says so after
- * the filling and immediately before the acquire. A fixed pause instead would
- * be a test that can pass without testing anything: on a loaded host the child
- * could still be filling when the signal arrived, die of it as any process
- * would, leave no lock because it had not made one yet, and satisfy both
- * assertions on an implementation with the fault in it.
+ * The interposed fprintf announces entry to the failed pid-write report on a
+ * separate pipe. At that point the acquire has tried to record its pid, and
+ * the parent can check that the lock is gone before sending SIGTERM.
  *
  * The child fills the pipe through a non-blocking descriptor, since a blocking
  * one would stop it before the acquire, and then makes the descriptor blocking
- * again for the library. Past the ready token it has only the acquire left,
- * which ends stuck in a write that never completes, so after a pause the case
- * must find it alive and blocked, and the lock already gone.
+ * again for the library. The report cannot finish while the parent keeps
+ * the full pipe open without reading it.
  */
 static void check_report_blocks(void)
 {
@@ -1884,10 +1985,7 @@ static void check_report_blocks(void)
         if (errno != EAGAIN || fcntl(2, F_SETFL, 0) != 0) {
             _exit(82);
         }
-        if (write(ready[1], "r", 1) != 1) {
-            _exit(82);
-        }
-        close(ready[1]);
+        Report_ready = ready[1];
         _exit(cred_txn_begin_at("pwauth_hosttest", Lock, 0) == 0 ? 83 : 84);
     }
     close(stuck[1]);
@@ -1899,25 +1997,16 @@ static void check_report_blocks(void)
 
         return;
     }
-    {
-        struct pollfd waiting;
-        char token = '\0';
+    if (!read_ready(ready[0])) {
+        fail("the writer never reached the failed pid-write report");
+        kill(child, SIGKILL);
+        (void)wait_bounded(child, &status, 20000);
+        close(stuck[0]);
+        close(ready[0]);
 
-        waiting.fd = ready[0];
-        waiting.events = POLLIN;
-        waiting.revents = 0;
-        if (poll(&waiting, 1, 20000) != 1 || read(ready[0], &token, 1) != 1 || token != 'r') {
-            fail("the writer the blocked-report case watches never reached its acquire");
-            kill(child, SIGKILL);
-            (void)wait_bounded(child, &status, 20000);
-            close(stuck[0]);
-            close(ready[0]);
-
-            return;
-        }
+        return;
     }
     close(ready[0]);
-    nap(500);
     if (waitpid(child, &status, WNOHANG) == child) {
         fail("the writer the blocked-report case watches finished instead of blocking");
         close(stuck[0]);
@@ -1947,12 +2036,102 @@ static void check_report_blocks(void)
 }
 
 /**
+ * Acquire a real lock after its holder releases it during the first retry.
+ *
+ * The parent owns the lock before the fork. The child's counted sleep
+ * announces contention and waits for the parent's release, so no schedule can
+ * turn the case into an uncontended acquire or an exhausted retry budget.
+ */
+static void check_retry_release(void)
+{
+    int ready[2];
+    int go[2];
+    pid_t child;
+    int status;
+
+    unlink(Lock);
+    if (pipe(ready) != 0) {
+        fail("could not make the retry notification pipe");
+
+        return;
+    }
+    if (pipe(go) != 0) {
+        close(ready[0]);
+        close(ready[1]);
+        fail("could not make the retry release pipe");
+
+        return;
+    }
+    if (cred_txn_begin_at("pwauth_hosttest", Lock, 0) != 0) {
+        fail("could not take the lock the retry case releases");
+        close(ready[0]);
+        close(ready[1]);
+        close(go[0]);
+        close(go[1]);
+
+        return;
+    }
+    child = fork();
+    if (child == 0) {
+        char recorded[64];
+        int taken;
+        int wrong;
+
+        close(ready[0]);
+        close(go[1]);
+        Retry_ready = ready[1];
+        Retry_go = go[0];
+        Retry_calls = 0;
+        Retry_bad_seconds = 0;
+        taken = cred_txn_begin_at("pwauth_hosttest", Lock, 2);
+        wrong = taken != 0 || Retry_calls != 1 || Retry_bad_seconds != 0;
+        if (slurp(Lock, recorded, sizeof(recorded)) <= 0 || atoi(recorded) != (int)getpid()) {
+            wrong = 1;
+        }
+        if (taken == 0 && cred_txn_end() != 0) {
+            wrong = 1;
+        }
+        _exit(wrong);
+    }
+    close(ready[1]);
+    close(go[0]);
+    if (child < 0) {
+        fail("could not fork the retrying writer");
+    } else if (!read_ready(ready[0])) {
+        fail("the contending writer never requested its first retry");
+        kill(child, SIGKILL);
+    }
+    if (cred_txn_end() != 0) {
+        fail("could not release the lock for the retrying writer");
+    }
+    if (child > 0) {
+        struct sigaction ignored, saved;
+
+        memset(&ignored, 0, sizeof(ignored));
+        ignored.sa_handler = SIG_IGN;
+        sigemptyset(&ignored.sa_mask);
+        sigaction(SIGPIPE, &ignored, &saved);
+        (void)write(go[1], "g", 1);
+        sigaction(SIGPIPE, &saved, NULL);
+        if (!wait_bounded(child, &status, 10000) || !WIFEXITED(status) ||
+            WEXITSTATUS(status) != 0) {
+            fail("a retry did not acquire and release the previous holder's lock");
+        }
+    }
+    close(ready[0]);
+    close(go[1]);
+    if (present(Lock)) {
+        fail("the retrying writer left its lock behind");
+        unlink(Lock);
+    }
+}
+
+/**
  * The lock protocol: what an acquire does when the file is already there, and
  * what it never does.
  *
- * The retry budget is two here, not the compiled-in ten, so the refusal
- * arrives in about two seconds; that the wait is bounded at all is checked with
- * the clock, since a lock that never waited would pass every other assertion.
+ * A counted sleep checks the number and size of the retry intervals without
+ * depending on elapsed time. A second transaction must request no interval.
  * After the refusals, the control: with the file gone, the same call succeeds.
  */
 static void check_lock(void)
@@ -1963,7 +2142,6 @@ static void check_lock(void)
     char after[256];
     char report[512];
     struct stat st_before, st_after;
-    time_t started, elapsed;
     pid_t child;
     int status;
     ssize_t n;
@@ -1971,16 +2149,8 @@ static void check_lock(void)
     unlink(Lock);
     snprintf(self, sizeof(self), "%d\n", (int)getpid());
 
-    started = time(NULL);
     check_refusal("an acquire took a lock naming a live pid", self, "credential database busy (pid",
                   0);
-    elapsed = time(NULL) - started;
-    if (elapsed < 2) {
-        fail("an acquire with a budget of two tries did not wait two seconds");
-    }
-    if (elapsed > 8) {
-        fail("an acquire with a budget of two tries waited far past its budget");
-    }
 
     child = fork();
     if (child == 0) {
@@ -2012,10 +2182,14 @@ static void check_lock(void)
                   "(no holder recorded)", 1);
 
     unlink(Lock);
+    Retry_calls = 0;
     if (cred_txn_begin_at("pwauth_hosttest", Lock, 2) != 0) {
         fail("an acquire failed with no lock file in the way");
 
         return;
+    }
+    if (Retry_calls != 0) {
+        fail("an uncontended acquire requested a retry");
     }
     if (slurp(Lock, before, sizeof(before)) <= 0 || atoi(before) != (int)getpid()) {
         fail("a held lock does not record the holder's pid");
@@ -2023,14 +2197,14 @@ static void check_lock(void)
 
     n = slurp(Lock, before, sizeof(before));
     stat(Lock, &st_before);
-    started = time(NULL);
+    Retry_calls = 0;
     capture_start();
     if (cred_txn_begin_at("pwauth_hosttest", Lock, 2) == 0) {
         fail("a second transaction in one process was granted");
     }
     capture_stop(report, sizeof(report));
-    if (time(NULL) - started > 1) {
-        fail("a second transaction in one process waited instead of refusing");
+    if (Retry_calls != 0) {
+        fail("a second transaction in one process requested a retry");
     }
     if (strstr(report, "already locked by this program") == NULL) {
         fail("a second transaction was refused as contention, not as a mistake");
@@ -2049,6 +2223,7 @@ static void check_lock(void)
     if (cred_txn_end() == 0) {
         fail("cred_txn_end reported success with no transaction held");
     }
+    check_retry_release();
 }
 
 /**
@@ -2918,6 +3093,46 @@ static void check_temp_name(void)
 }
 
 /**
+ * Run the teardown reader in the child, reporting its terminal state by exit.
+ *
+ * The child owns the terminal and writes the prompt to the report pipe.
+ * Its newline hook announces teardown on ready and raises SIGCONT there.
+ */
+static void teardown_reader(const char *name, int master, int report[2], int ready[2])
+{
+    struct termios modes;
+    char password[64];
+    int tty = open(name, O_RDWR);
+
+    close(ready[0]);
+    Teardown_ready = ready[1];
+    close(master);
+    close(report[0]);
+    if (tty < 0 || dup2(tty, 0) != 0 || dup2(report[1], 2) != 2) {
+        _exit(90);
+    }
+    if (tty > 2) {
+        close(tty);
+    }
+    if (report[1] > 2) {
+        close(report[1]);
+    }
+    if (setsid() < 0 || ioctl(0, TIOCSCTTY, 0) != 0) {
+        _exit(91);
+    }
+    if (pwauth_read_password("Password: ", password, sizeof(password)) != 0) {
+        _exit(92);
+    }
+    if (tcgetattr(0, &modes) != 0) {
+        _exit(93);
+    }
+    if ((modes.c_lflag & ECHO) == 0) {
+        _exit(94);
+    }
+    _exit(strcmp(password, "secret") == 0 ? 0 : 95);
+}
+
+/**
  * A continue that arrives while the prompt is being taken down.
  *
  * The teardown is a sequence: the modes go back, a newline is written, and only
@@ -2927,7 +3142,8 @@ static void check_temp_name(void)
  * undo it. Any process in the same session may send that signal, so the window
  * is forced, not waited for: the reader's standard error is a pipe this
  * test fills, so the newline in the middle of the teardown blocks and has the
- * reader inside the window until the signal has been delivered.
+ * reader inside the window. The interposed write announces the newline and
+ * raises SIGCONT there; the parent then drains the pipe.
  *
  * The verdict is the reader's own, read off the terminal after the call returns
  * and reported as an exit status, because only the reader can take it without a
@@ -2946,6 +3162,7 @@ static void check_teardown(void)
     pid_t child;
     long waited;
     int report[2];
+    int ready[2];
     int master;
     int status;
     int chunks;
@@ -2965,38 +3182,21 @@ static void check_teardown(void)
         return;
     }
 
-    child = fork();
-    if (child == 0) {
-        struct termios modes;
-        char password[64];
-        int tty = open(name, O_RDWR);
-
+    if (pipe(ready) != 0) {
         close(master);
         close(report[0]);
-        if (tty < 0 || dup2(tty, 0) != 0 || dup2(report[1], 2) != 2) {
-            _exit(90);
-        }
-        if (tty > 2) {
-            close(tty);
-        }
-        if (report[1] > 2) {
-            close(report[1]);
-        }
-        if (setsid() < 0 || ioctl(0, TIOCSCTTY, 0) != 0) {
-            _exit(91);
-        }
-        if (pwauth_read_password("Password: ", password, sizeof(password)) != 0) {
-            _exit(92);
-        }
-        if (tcgetattr(0, &modes) != 0) {
-            _exit(93);
-        }
-        if ((modes.c_lflag & ECHO) == 0) {
-            _exit(94);
-        }
-        _exit(strcmp(password, "secret") == 0 ? 0 : 95);
+        close(report[1]);
+        fail("could not make the teardown notification pipe");
+
+        return;
     }
+    child = fork();
+    if (child == 0) {
+        teardown_reader(name, master, report, ready);
+    }
+    close(ready[1]);
     if (child < 0) {
+        close(ready[0]);
         close(master);
         close(report[0]);
         close(report[1]);
@@ -3012,6 +3212,7 @@ static void check_teardown(void)
         close(report[0]);
         close(report[1]);
         close(master);
+        close(ready[0]);
 
         return;
     }
@@ -3032,11 +3233,10 @@ static void check_teardown(void)
     if (write(master, "secret\n", 7) != 7) {
         fail("could not type the password the teardown case ends with");
     }
-    nap(500);
-    if (kill(child, SIGCONT) != 0) {
-        fail("could not continue the reader inside its teardown");
+    if (!read_ready(ready[0])) {
+        fail("the reader never reached its teardown newline");
     }
-    nap(300);
+    close(ready[0]);
 
     for (waited = 0; waited < 10000; waited += 50) {
         char sink[512];
