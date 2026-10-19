@@ -10,8 +10,9 @@
 # and connects, so everything it checks follows from the machine having
 # booted on its own: init-metal supervising dropbear, the address
 # configuration reaching the stack, root's key authenticating, a pty, and a
-# file crossing intact in each direction. It also kills the SSH server once
-# and requires the machine to answer again, so init must restart it.
+# file crossing intact in each direction. The tries of SSH start once init
+# has reported starting the server. It also kills that server and requires
+# init to report starting another, and that one to answer.
 #
 # A USB controller, a hub, a keyboard and three sticks are attached because
 # the notebook has a controller and a keyboard and the acceptance script
@@ -189,8 +190,17 @@ if ! grep -q "disk: policy: read-only" "$LOG"; then
 fi
 
 # Nothing has been typed at the console, so the SSH server is up only if init
-# started it.
-#
+# started it. Init prints `init: sshd: started as pid N` each time it forks
+# the server, and the tries of SSH begin after that record.
+if ! wait_token "init: sshd: started as pid" "$(scaled 60)"; then
+    fail "init never reported starting the SSH server"
+fi
+# sshd_pid N: the pid of init's Nth record of starting the server.
+sshd_pid() {
+    sed -n 's/^init: sshd: started as pid \([0-9]*\).*/\1/p' "$LOG" | sed -n "$1p"
+}
+BEFORE="$(sshd_pid 1)"
+
 # ssh_run COMMAND: run COMMAND on the machine as root by key and return its
 # status. A connection the machine refused, or that ended before the two
 # sides had exchanged their identification, is tried again, three times a
@@ -276,28 +286,29 @@ fi
 echo "metal-test: the same file came back byte for byte: OK"
 
 # The supervision itself. Killing the server tells a supervisor from a script
-# that ran a command once at boot, and the server's pid is read before and
-# after, since a kill that failed would leave the original process answering
-# and the row would pass.
-BEFORE="$(ssh_run 'pidof dropbearmulti' | tr -d '\r' | awk '{print $NF}')"
-if [ -z "$BEFORE" ]; then
-    fail "could not find the SSH server's pid on the machine, so killing it would prove nothing"
+# that ran a command once at boot. The server killed is the process init
+# reported starting, and init reports a second start only after it has reaped
+# that process, so a kill that failed cannot pass. The row then requires the
+# second server to be the one that answers.
+if ! ssh_run 'pidof dropbearmulti' | tr -d '\r' | tr ' ' '\n' | grep -qx "$BEFORE"; then
+    fail "the SSH server init reported starting (pid ${BEFORE:-none}) is not running, so killing it would prove nothing"
 fi
 ssh_run "kill -9 $BEFORE" >/dev/null 2>&1 || true
+if ! "$RUNUTIL" until "$LOG" "init: sshd: started as pid" "$(scaled 60)" 2; then
+    fail "the SSH server was killed and init did not start another"
+fi
+AFTER="$(sshd_pid 2)"
 i=0
-AFTER=""
 while [ "$i" -lt "$(scaled 60)" ]; do
-    AFTER="$(ssh_run 'pidof dropbearmulti' 2>/dev/null | tr -d '\r' | awk '{print $NF}')"
-    if [ -n "$AFTER" ] && ssh_run 'echo METAL_AGAIN' 2>/dev/null | grep -q METAL_AGAIN; then
+    if ssh_run 'pidof dropbearmulti' 2>/dev/null | tr -d '\r' | tr ' ' '\n' | grep -qx "$AFTER"; then
         break
     fi
-    AFTER=""
     # interval: a try of SSH every two seconds until the server answers
     sleep 2
     i=$((i + 2))
 done
-if [ -z "$AFTER" ]; then
-    fail "the SSH server was killed and init did not bring it back"
+if [ "$i" -ge "$(scaled 60)" ]; then
+    fail "init started another SSH server (pid $AFTER), and no session found it running"
 fi
 if [ "$AFTER" = "$BEFORE" ]; then
     fail "the server answering is the one that was supposedly killed (pid $BEFORE), so nothing was proved"

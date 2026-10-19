@@ -13,7 +13,8 @@
 # comparisons below would pass on a test that could not detect a write.
 #
 # The second runs the diagnostic on the read-only kernel, reached over SSH
-# with nothing typed at the console. It checks what /proc/disk says, then
+# with nothing typed at the console, once init has reported starting the
+# server. It checks what /proc/disk says, then
 # hashes sectors through /dev/disk0 and compares each with the host's hash of
 # the same offset in the image file, which shows that the machine returned
 # the sector named and not some other 512 bytes. A write to /dev/disk0 must
@@ -140,6 +141,8 @@ GUEST_GW="192.168.90.2"
 QPID=$!
 
 wait_token "rach2 login" 90 "$ROLOG" || fail "the diagnostic boot never reached its login prompt"
+wait_token "init: sshd: started as pid" "$(scaled 60)" "$ROLOG" ||
+    fail "init on the diagnostic boot never reported starting the SSH server"
 
 # ssh_run COMMAND: run COMMAND as root on the machine over SSH with the demo
 # key, its errors appended to the console's log.
