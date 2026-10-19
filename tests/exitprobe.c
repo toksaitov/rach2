@@ -22,6 +22,8 @@
 
 /* The name of the row running, for the result lines. */
 static const char *row;
+static int fixture_dir;
+static int fixture_file;
 
 /** Make the system call `n` with three arguments. */
 static int call(int n, long a, long b, long c)
@@ -250,11 +252,28 @@ static int fixture(void)
         4,    8,   52,  0,   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 52, 0, 32, 0, 1, 0, 0, 0, 0, 0, 0, 0};
 #endif
     int fd, ok;
-    call(SYS_MKDIR, (long)"/exit-cwd", 0700, 0);
-    fd = call(SYS_OPEN, (long)"/exit-bad", 01101, 0700);
+    if (call(SYS_MKDIR, (long)"/exit-cwd", 0700, 0) != 0) {
+        return 0;
+    }
+    fixture_dir = 1;
+    fd = call(SYS_OPEN, (long)"/exit-bad", 01301, 0700);
+    fixture_file = fd >= 0;
     ok = fd >= 0 && call(SYS_WRITE, fd, (long)header, sizeof(header)) == sizeof(header);
     call(SYS_CLOSE, fd, 0, 0);
     return ok;
+}
+
+/** Remove the supervisor's fixtures after the rows have ended. */
+static void finish(int status)
+{
+    call(SYS_UNLINK, (long)"/exit-file", 0, 0);
+    if (fixture_file && call(SYS_UNLINK, (long)"/exit-bad", 0, 0) != 0) {
+        status = 1;
+    }
+    if (fixture_dir && call(SYS_RMDIR, (long)"/exit-cwd", 0, 0) != 0) {
+        status = 1;
+    }
+    die(status);
 }
 
 /** The probe's entry, given the initial stack `sp`: run all rows or the one
@@ -283,14 +302,14 @@ void probe_main(unsigned long *sp)
     row = "fixture";
     if (!fixture()) {
         result("EXITPROBE FAIL ", ": create");
-        die(1);
+        finish(1);
     }
     for (i = first; i <= last; i++) {
         if (!run_row(i, timeout)) {
-            die(1);
+            finish(1);
         }
     }
-    die(0);
+    finish(0);
 }
 
 /** Pass the initial stack before a C prologue changes the stack pointer. */

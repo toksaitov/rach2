@@ -145,6 +145,9 @@ static void mount_write(const char *node, const char *at, const char *name, cons
     if (syscall2(SYS_UMOUNT2, (long)at, 0) != 0) {
         fail(at);
     }
+    if (syscall1(SYS_RMDIR, (long)at) != 0) {
+        fail("remove mount directory");
+    }
 }
 
 void probe_main(unsigned long *sp);

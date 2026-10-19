@@ -121,6 +121,14 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
+/** Remove an empty mount target after its mount ends or fails. */
+static void remove_mount_dir(const char *path)
+{
+    if (syscall1(SYS_RMDIR, (long)path) != 0) {
+        fail("remove mount directory");
+    }
+}
+
 /** Write `n` in decimal, without a newline. */
 static void putnum(unsigned n)
 {
@@ -495,6 +503,7 @@ static void run_blockfail(void)
     if (syscall2(SYS_UMOUNT2, (long)"/lb", 0) != 0) {
         fail("umount2 of the read-only mount");
     }
+    remove_mount_dir("/lb");
     puts("LAGPROBE OK");
 }
 
@@ -539,6 +548,7 @@ static void run_latefail(void)
         puts("");
         fail("umount2 of the mount that failed after its dirty flag was set");
     }
+    remove_mount_dir("/lb");
     puts("LAGPROBE OK");
 }
 
@@ -638,6 +648,7 @@ static void run_writers(void)
     if (syscall2(SYS_UMOUNT2, (long)"/lw", 0) != 0) {
         fail("umount2 of the written volume");
     }
+    remove_mount_dir("/lw");
     puts("LAGPROBE OK");
 }
 
@@ -789,7 +800,7 @@ static void run_mounted(void)
     if (syscall2(SYS_UMOUNT2, (long)"/lm", 0) != 0) {
         fail("umount2 of the lag mount");
     }
-    syscall1(SYS_RMDIR, (long)"/lm");
+    remove_mount_dir("/lm");
     puts("LAGPROBE OK");
 }
 
@@ -918,6 +929,7 @@ static void run_pool(void)
     if (syscall2(SYS_UMOUNT2, (long)"/lp", 0) != 0) {
         fail("umount2 of the volume");
     }
+    remove_mount_dir("/lp");
     puts("LAGPROBE OK");
 }
 
@@ -970,6 +982,7 @@ static void run_queue(void)
     if (syscall2(SYS_UMOUNT2, (long)"/lq", 0) != 0) {
         fail("umount2 of the volume");
     }
+    remove_mount_dir("/lq");
     puts("LAGPROBE OK");
 }
 
@@ -1123,6 +1136,7 @@ static void run_dirty(void)
     if (syscall2(SYS_UMOUNT2, (long)"/ly", 0) != 0) {
         fail("umount2 of the volume");
     }
+    remove_mount_dir("/ly");
     puts("LAGPROBE dirty: commands, flushes, wait ticks, lag completions:");
     say_numbers((unsigned)disk_counter("disk-commands "), (unsigned)disk_counter("disk-flushes "),
                 (unsigned)disk_counter("disk-wait-ticks "),
@@ -1159,6 +1173,7 @@ static void run_dead(void)
     if (wait_status(a) != 0) {
         fail("the raw reader of the partition that never answers was not EIO");
     }
+    remove_mount_dir("/ld1");
     /* One quarantine, and two released by it. */
     if (disk_counter("disk-quarantines ") - quarantines != 1 ||
         disk_counter("disk-releases ") - releases != 2) {
@@ -1174,6 +1189,7 @@ static void run_dead(void)
     if (syscall2(SYS_UMOUNT2, (long)"/ld", 0) != 0) {
         fail("umount2 of the volume");
     }
+    remove_mount_dir("/ld");
     puts("LAGPROBE OK");
 }
 

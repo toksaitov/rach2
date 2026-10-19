@@ -26,6 +26,19 @@ typedef unsigned int u32;
 #define EPERM  1
 #define KEEP   0xFFFFFFFFu
 
+static int fixture_owner;
+
+/** Remove partially staged fixtures in the root parent after a failure. */
+static void cleanup(void)
+{
+    if (syscall1(SYS_GETPID, 0) != fixture_owner) {
+        return;
+    }
+    syscall1(SYS_UNLINK, (long)"/own.txt");
+    syscall1(SYS_UNLINK, (long)"/own.d/e.txt");
+    syscall1(SYS_RMDIR, (long)"/own.d");
+}
+
 /** The length of the string `s`. */
 static u32 slen(const char *s)
 {
@@ -49,6 +62,7 @@ static void fail(const char *step)
     puts_("OWNPROBE FAIL: ");
     puts_(step);
     puts_("\n");
+    cleanup();
     syscall3(SYS_EXIT, 1, 0, 0);
 }
 
@@ -218,6 +232,7 @@ PROBE_START void _start(void)
 {
     int pid, status;
 
+    fixture_owner = syscall1(SYS_GETPID, 0);
     syscall3(SYS_UMASK, 022, 0, 0);
     pid = syscall3(SYS_FORK, 0, 0, 0);
     if (pid < 0) {

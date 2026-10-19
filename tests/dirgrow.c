@@ -23,9 +23,28 @@
 
 #define GROW 2048
 
-/** exit(2); does not return. */
+static int fixture_created;
+
+/** Remove the fixtures; return the directory removal result. */
+static int cleanup(void)
+{
+    int rc = 0;
+
+    if (fixture_created) {
+        syscall1(SYS_UNLINK, (long)"/dg/f");
+        syscall1(SYS_UNLINK, (long)"/dg/g");
+        rc = syscall1(SYS_RMDIR, (long)"/dg");
+        fixture_created = 0;
+    }
+    return rc;
+}
+
+/** Remove the fixtures and exit; does not return. */
 static void sys_exit(int status)
 {
+    if (cleanup() != 0) {
+        status = 1;
+    }
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
@@ -67,6 +86,7 @@ PROBE_START void _start(void)
     if (syscall2(SYS_MKDIR, (long)"/dg", 0755) != 0) {
         fail("mkdir /dg");
     }
+    fixture_created = 1;
 
     fd_f = syscall3(SYS_OPEN, (long)"/dg/f", O_CREAT | O_RDWR, 0644);
     if (fd_f < 0) {
@@ -112,6 +132,9 @@ PROBE_START void _start(void)
         fail("the relocated file leaked to the root as /f");
     }
 
+    if (cleanup() != 0) {
+        fail("remove fixture directory");
+    }
     puts("DIRGROW OK");
     sys_exit(0);
 }

@@ -452,6 +452,9 @@ static void late_row(void)
     if (syscall2(SYS_UMOUNT2, (long)"/late", 0) != 0) {
         fail("umount2 /late");
     }
+    if (syscall1(SYS_RMDIR, (long)"/late") != 0) {
+        fail("remove mount directory");
+    }
     puts("AHCIPROBE OK");
     syscall2(SYS_EXIT, 0, 0);
 }

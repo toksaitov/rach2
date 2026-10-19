@@ -115,6 +115,29 @@ struct stat64 {
 #define WIDE_CALL  "stat (syscall 4)"
 #endif
 
+static int fixture_dirs[3];
+
+/** Remove the inode fixtures; return 1 if a directory cannot be removed. */
+static int cleanup(void)
+{
+    const char *dirs[3] = {"/statc1", "/statc2", "/statroot"};
+    const char *files[2] = {"/statc1/k", "/statc2/k"};
+    int i, failed = 0;
+
+    for (i = 0; i < 3; i++) {
+        if (fixture_dirs[i]) {
+            if (i < 2) {
+                syscall1(SYS_UNLINK, (long)files[i]);
+            }
+            if (syscall1(SYS_RMDIR, (long)dirs[i]) != 0) {
+                failed = 1;
+            }
+            fixture_dirs[i] = 0;
+        }
+    }
+    return failed;
+}
+
 /** write(2). */
 static int sys_write(int fd, const void *buf, size_t count)
 {
@@ -124,6 +147,11 @@ static int sys_write(int fd, const void *buf, size_t count)
 /** exit(2); does not return. */
 static void sys_exit(int status)
 {
+    if (cleanup()) {
+        sys_write(STDOUT_FILENO, "STATTEST FAIL: remove inode fixtures\n",
+                  sizeof("STATTEST FAIL: remove inode fixtures\n") - 1);
+        status = 1;
+    }
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
@@ -148,15 +176,16 @@ static int sys_call4(int nr, long a, long b, long c, long d)
     return syscall4(nr, a, b, c, d);
 }
 
-/** Make the directory `dir` and the file `file` inside it: 0, or -1 when a
- * call fails. */
-static int make_in(const char *dir, const char *file)
+/** Make `dir` and `file`, recording the directory in `fixture_dirs[slot]`: 0,
+ * or -1 when a call fails. */
+static int make_in(const char *dir, const char *file, int slot)
 {
     int fd;
 
     if (sys_call3(SYS_MKDIR, (long)dir, 0755, 0) < 0) {
         return -1;
     }
+    fixture_dirs[slot] = 1;
     fd = sys_call3(SYS_OPEN, (long)file, 0101, 0644); /* O_WRONLY|O_CREAT */
     if (fd < 0) {
         return -1;
@@ -245,7 +274,7 @@ static void same_name_rows(int *passed, int *failed)
 {
     puts("=== Part C: same-named files ===");
     print("Test C1: /statc1/k and /statc2/k have different inode numbers... ");
-    if (make_in("/statc1", "/statc1/k") == 0 && make_in("/statc2", "/statc2/k") == 0) {
+    if (make_in("/statc1", "/statc1/k", 0) == 0 && make_in("/statc2", "/statc2/k", 1) == 0) {
         struct stat64 one, two;
         int old_ok = 1;
 #if !defined __x86_64__
@@ -284,6 +313,7 @@ static void root_ino_rows(int *passed, int *failed)
         (*failed)++;
         return;
     }
+    fixture_dirs[2] = 1;
     for (i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
         struct stat64 wide;
         int old_ok = 1;

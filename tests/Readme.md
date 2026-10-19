@@ -88,6 +88,8 @@ The `default` suite prints a table, one row per probe with the kernel's verdict 
 
 `krffs/manifests/test.manifest` stages every probe at `/NAME` and every musl program at `/musl/NAME` in the test image, `build/images/test.krffs` or `build/x86_64/images/test.krffs`, with ISH as `/bin/sh`, the account and name-service files, and the fixtures that need a mode or owner of their own. The image has no `/sbin/init`, so the kernel starts its debug shell.
 
+The file fixtures of `pathcanon`, `stattest`, `dirgrow` and `exitprobe` are removed before exit. The root parents of `ownprobe` and `permprobe` also remove partially staged fixtures after a failed check, and `xsaveprobe` removes its core file after a failed inspection. `ttyprobe` restores the termios it read before changing the console. The disk probes remove their mount directories after unmounting; files whose contents the host or a later boot checks stay on the test volumes. `krffsprobe crash` deliberately keeps writing until the harness ends the machine.
+
 ### Where each program runs
 
 Every program built here is listed in exactly one of three places, and `tools/verify/probecheck.sh`, which `tests/run style` runs, refuses a tree where one is not. Other suites may run a program again, as `ext2` runs ten of the `default` suite's probes on an ext2 root and `selfbuild` runs the whole list on the kernel the machine built.

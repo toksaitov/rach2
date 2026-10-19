@@ -35,6 +35,22 @@ typedef unsigned int u32;
 #define UTIME_NOW  ((1 << 30) - 1)
 #define UTIME_OMIT ((1 << 30) - 2)
 
+static int fixture_owner;
+
+/** Remove partially staged fixtures in the root parent after a failure. */
+static void cleanup(void)
+{
+    if (syscall1(SYS_GETPID, 0) != fixture_owner) {
+        return;
+    }
+    syscall1(SYS_UNLINK, (long)"/perm.wo");
+    syscall1(SYS_UNLINK, (long)"/perm600");
+    syscall1(SYS_UNLINK, (long)"/perm.rw");
+    syscall1(SYS_UNLINK, (long)"/perm.own/mine.txt");
+    syscall1(SYS_RMDIR, (long)"/perm.own");
+    syscall1(SYS_RMDIR, (long)"/perm.priv");
+}
+
 /** The length of the string `s`. */
 static u32 slen(const char *s)
 {
@@ -58,6 +74,7 @@ static void fail(const char *step)
     puts_("PERMPROBE FAIL: ");
     puts_(step);
     puts_("\n");
+    cleanup();
     syscall3(SYS_EXIT, 1, 0, 0);
 }
 
@@ -176,6 +193,7 @@ PROBE_START void _start(void)
     int pid, status;
     int fd;
 
+    fixture_owner = syscall1(SYS_GETPID, 0);
     /* Exec of a file with no execute bit is -EACCES even for root. */
     exec_argv[0] = (char *)"/hello.txt";
     exec_argv[1] = 0;

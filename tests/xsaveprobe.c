@@ -136,6 +136,18 @@ struct ymm {
     unsigned w[8];
 };
 
+static int core_owner;
+
+/** Remove the core fixture in its parent, including after a failed check. */
+static void cleanup_core(void)
+{
+    if (core_owner && syscall1(SYS_GETPID, 0) == core_owner) {
+        syscall1(SYS_UNLINK, (long)CORE_PATH);
+        syscall1(SYS_RMDIR, (long)CORE_DIR);
+        core_owner = 0;
+    }
+}
+
 /** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
 {
@@ -172,6 +184,7 @@ static void fail(const char *why)
 {
     say("XSAVEPROBE FAIL: ");
     puts(why);
+    cleanup_core();
     sys_exit(1);
 }
 
@@ -182,6 +195,7 @@ static void fail2(const char *what, const char *why)
     say(what);
     say(": ");
     puts(why);
+    cleanup_core();
     sys_exit(1);
 }
 
@@ -934,8 +948,10 @@ static void run_core(void)
     int pid, status;
     const char *why;
 
-    syscall2(SYS_MKDIR, (long)CORE_DIR, 0700);
-    syscall1(SYS_UNLINK, (long)CORE_PATH);
+    if (syscall2(SYS_MKDIR, (long)CORE_DIR, 0700) != 0) {
+        fail("make the core directory");
+    }
+    core_owner = getpid();
     pid = (int)syscall1(SYS_FORK, 0);
     if (pid < 0) {
         fail("fork for the core file");
@@ -976,8 +992,10 @@ static void run_core(void)
     if (why) {
         fail2("the core file's NT_X86_XSTATE", why);
     }
-    syscall1(SYS_UNLINK, (long)CORE_PATH);
-    syscall1(SYS_RMDIR, (long)CORE_DIR);
+    if (syscall1(SYS_UNLINK, (long)CORE_PATH) != 0 || syscall1(SYS_RMDIR, (long)CORE_DIR) != 0) {
+        fail("remove the core fixture");
+    }
+    core_owner = 0;
 }
 
 /** Without XSAVE, PTRACE_GETREGSET with NT_X86_XSTATE fails with -ENODEV. */

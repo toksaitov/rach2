@@ -135,6 +135,7 @@ PROBE_START void _start(void)
 {
     struct ktermios t;
     struct ktermios t2;
+    struct ktermios saved;
     struct winsize ws;
     char buf[64];
     int n;
@@ -151,7 +152,11 @@ PROBE_START void _start(void)
     check(ws.ws_xpixel == 0 && ws.ws_ypixel == 0, "console window has no pixel size");
 
     /* (b) The default termios is cooked and echoing, with ICRNL and OPOST. */
-    check(do_ioctl(0, TCGETS, &t) == 0, "TCGETS ok");
+    if (do_ioctl(0, TCGETS, &t) != 0) {
+        puts("TTYPROBE FAIL: TCGETS");
+        sys_exit(1);
+    }
+    saved = t;
     check((t.c_lflag & ICANON) != 0, "default ICANON set");
     check((t.c_lflag & ECHO) != 0, "default ECHO set");
     check((t.c_iflag & ICRNL) != 0, "default ICRNL set");
@@ -213,6 +218,7 @@ PROBE_START void _start(void)
     }
     check(n == 2 && buf[0] == 27 && buf[1] == 'x', "Alt with x is read as ESC x");
 
+    check(do_ioctl(0, TCSETS, &saved) == 0, "restore original termios");
     if (fails == 0) {
         puts("TTYPROBE OK");
     } else {

@@ -82,6 +82,15 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
+/** Close the report reader and remove the mount after the loads end. */
+static void cleanup_mount(int report)
+{
+    syscall1(SYS_CLOSE, report);
+    if (syscall2(SYS_UMOUNT2, (long)"/lo", 0) != 0 || syscall1(SYS_RMDIR, (long)"/lo") != 0) {
+        fail("unmount and remove /lo");
+    }
+}
+
 /** Sleep for `ms` milliseconds. */
 static void sleep_ms(int ms)
 {
@@ -316,6 +325,7 @@ void probe_main(unsigned long *sp)
         file_field("/proc/disk", "disk-quarantines ") != quarantines) {
         fail("a request was quarantined by its deadline under the load");
     }
+    cleanup_mount(report[0]);
     puts("LOADPROBE OK");
     sys_exit(0);
 }

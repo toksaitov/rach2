@@ -43,10 +43,34 @@
 #define EBUSY  16
 #define EROFS  30
 
+static int fixture_owner;
+static int fixture_dirs; /* Bits 0 to 2 mark /k, /k2 and /k3. */
+
+/** Remove this parent's empty mount directories; return 1 on an error. */
+static int cleanup_dirs(void)
+{
+    const char *dirs[3] = {"/k", "/k2", "/k3"};
+    int i, failed = 0;
+
+    if (syscall1(SYS_GETPID, 0) != fixture_owner) {
+        return 0;
+    }
+    for (i = 0; i < 3; i++) {
+        if ((fixture_dirs & (1 << i)) && syscall1(SYS_RMDIR, (long)dirs[i]) != 0) {
+            failed = 1;
+        }
+    }
+    fixture_dirs = 0;
+    return failed;
+}
+
 /** exit(2) with `status`; does not return. */
 static void sys_exit(int status) __attribute__((noreturn));
 static void sys_exit(int status)
 {
+    if (cleanup_dirs()) {
+        status = 1;
+    }
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
@@ -100,6 +124,28 @@ static void fail_with(const char *why, int n)
     syscall3(SYS_WRITE, 1, (long)(digits + i), (int)strlen(digits + i));
     puts(")");
     sys_exit(1);
+}
+
+/** Make an empty mount target and record its bit in `fixture_dirs`. */
+static void make_mount_dir(const char *path, int bit)
+{
+    if (syscall2(SYS_MKDIR, (long)path, 0755) != 0) {
+        fail(path);
+    }
+    fixture_dirs |= bit;
+}
+
+/** Remove the mount targets, report success for `mode` and exit 0. */
+static void success(const char *mode) __attribute__((noreturn));
+static void success(const char *mode)
+{
+    if (cleanup_dirs()) {
+        fail("remove mount directories");
+    }
+    syscall3(SYS_WRITE, 1, (long)"KRFFSPROBE OK (", 15);
+    syscall3(SYS_WRITE, 1, (long)mode, (int)strlen(mode));
+    puts(")");
+    sys_exit(0);
 }
 
 /** Whether the strings `a` and `b` are equal. */
@@ -886,7 +932,8 @@ void probe_main(unsigned long *sp)
     const char *mode = argc > 1 ? argv[1] : "";
     int rc;
 
-    syscall2(SYS_MKDIR, (long)"/k", 0755);
+    fixture_owner = syscall1(SYS_GETPID, 0);
+    make_mount_dir("/k", 1);
 
     if (streq(mode, "refuse")) {
         rc = syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/k", (long)"krffs", MS_RDONLY, 0);
@@ -896,8 +943,7 @@ void probe_main(unsigned long *sp)
         if (rc != -EINVAL) {
             fail_with("the errno of a refused mount", rc);
         }
-        puts("KRFFSPROBE OK (refuse)");
-        sys_exit(0);
+        success("refuse");
     }
 
     if (streq(mode, "failed")) {
@@ -930,16 +976,15 @@ void probe_main(unsigned long *sp)
         if (rc != 0) {
             fail_with("unmounting a volume the device took read-only", rc);
         }
-        puts("KRFFSPROBE OK (failed)");
-        sys_exit(0);
+        success("failed");
     }
 
     if (streq(mode, "three")) {
         int fd;
         char got[16];
 
-        syscall2(SYS_MKDIR, (long)"/k2", 0755);
-        syscall2(SYS_MKDIR, (long)"/k3", 0755);
+        make_mount_dir("/k2", 2);
+        make_mount_dir("/k3", 4);
         rc = syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/k", (long)"krffs", 0, 0);
         if (rc != 0) {
             fail_with("mounting the first volume", rc);
@@ -992,8 +1037,7 @@ void probe_main(unsigned long *sp)
         if (syscall2(SYS_UMOUNT2, (long)"/k2", 0) != 0) {
             fail("unmounting the second volume");
         }
-        puts("KRFFSPROBE OK (three)");
-        sys_exit(0);
+        success("three");
     }
 
     if (streq(mode, "pull")) {
@@ -1053,8 +1097,7 @@ void probe_main(unsigned long *sp)
         if (rc != 0) {
             fail_with("unmounting a volume whose stick has gone", rc);
         }
-        puts("KRFFSPROBE OK (pull)");
-        sys_exit(0);
+        success("pull");
     }
 
     if (streq(mode, "write") || streq(mode, "crash") || streq(mode, "writers")) {
@@ -1111,10 +1154,7 @@ void probe_main(unsigned long *sp)
         if (rc != 0) {
             fail_with("unmounting after writing", rc);
         }
-        syscall3(SYS_WRITE, 1, (long)"KRFFSPROBE OK (", 15);
-        syscall3(SYS_WRITE, 1, (long)mode, (int)strlen(mode));
-        puts(")");
-        sys_exit(0);
+        success(mode);
     }
 
     if (streq(mode, "readback")) {
@@ -1127,8 +1167,7 @@ void probe_main(unsigned long *sp)
         if (rc != 0) {
             fail_with("unmounting after reading back", rc);
         }
-        puts("KRFFSPROBE OK (readback)");
-        sys_exit(0);
+        success("readback");
     }
 
     if (!streq(mode, "read")) {
@@ -1151,6 +1190,5 @@ void probe_main(unsigned long *sp)
     if (syscall3(SYS_OPEN, (long)"/k/pattern.bin", O_RDONLY, 0) >= 0) {
         fail("a file of the volume is still there after the unmount");
     }
-    puts("KRFFSPROBE OK (read)");
-    sys_exit(0);
+    success("read");
 }

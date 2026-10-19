@@ -200,6 +200,9 @@ void probe_main(unsigned long *sp)
         syscall2(SYS_UMOUNT2, (long)"/mnt0", 0) != 0) {
         fail("unmounting");
     }
+    if (syscall1(SYS_RMDIR, (long)"/mnt1") != 0 || syscall1(SYS_RMDIR, (long)"/mnt0") != 0) {
+        fail("remove mount directories");
+    }
     puts("DISKSPROBE OK");
     syscall2(SYS_EXIT, 0, 0);
 }

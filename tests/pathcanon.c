@@ -23,9 +23,26 @@
 
 #define EACCES 13
 
-/** exit(2) with `status`; does not return. */
+static int fixture_created;
+
+/** Remove the directory made by this invocation; return its rmdir result. */
+static int cleanup(void)
+{
+    int rc = 0;
+
+    if (fixture_created) {
+        rc = syscall1(SYS_RMDIR, (long)"/cx");
+        fixture_created = 0;
+    }
+    return rc;
+}
+
+/** Remove the fixtures and exit; does not return. */
 static void sys_exit(int status)
 {
+    if (cleanup() != 0) {
+        status = 1;
+    }
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
@@ -71,6 +88,7 @@ PROBE_START void _start(void)
     if (syscall2(SYS_MKDIR, (long)"/cx", 0755) != 0) {
         fail("mkdir /cx");
     }
+    fixture_created = 1;
 
     if (syscall2(SYS_MKDIR, (long)"/cx/../proc", 0755) == 0) {
         fail("mkdir /cx/../proc created a KRFFS shadow of synthetic /proc");
@@ -102,6 +120,9 @@ PROBE_START void _start(void)
         }
     }
 
+    if (cleanup() != 0) {
+        fail("remove fixture directory");
+    }
     puts("PATHCANON OK");
     sys_exit(0);
 }
