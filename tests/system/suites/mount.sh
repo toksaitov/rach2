@@ -173,11 +173,11 @@ fi
 
 # ---- 8: BusyBox on os-real mounts, lists, reads and unmounts through the
 #         shell; the listing is mdir's and the bytes are mcopy's. The held
-#         file is opened by the shell before the sleeper is forked with it,
-#         so the unmount that must find it busy cannot run before the open,
-#         however loaded the host. ----
+#         file is opened by the shell before the holder is forked with it,
+#         and the holder keeps it until the shell writes to a FIFO after the
+#         unmount, so the unmount that must find it busy runs while it is
+#         held, however loaded the host. ----
 LOG="$DISK.busybox.log"
-# interval: a sleeper holds the file open across the umount that must fail
 if "$HARNESS" --kernel "$KERNEL" --initrd "$OSREAL" \
     --qemu-arg=-cpu --qemu-arg=max \
     --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" \
@@ -186,8 +186,8 @@ if "$HARNESS" --kernel "$KERNEL" --initrd "$OSREAL" \
     "expect=# " "send=mkdir /mnt && mount -t vfat -o ro /dev/disk0p2 /mnt && echo MOUNT\"\"ED" \
     "expect=MOUNTED" "send=ls /mnt | sort | tr '\\n' ' '; echo; echo LIST\"\"DONE" \
     "expect=LISTDONE" "send=cat /mnt/hello.txt; cksum /mnt/hello /mnt/again.bin /mnt/hello.txt; echo SUMS\"\"DONE" \
-    "expect=SUMSDONE" "send=exec 3< /mnt/hello.txt; (sleep 5 <&3; exec 3<&-; echo HOLDER\"\"DONE) & exec 3<&-; umount /mnt; echo UMOUNT\"\"RC=\$?" \
-    "expect=UMOUNTRC=1" "expect=HOLDERDONE" "send=umount /mnt && echo UN\"\"MOUNTED" \
+    "expect=SUMSDONE" "send=mkfifo /tmp/go; exec 3< /mnt/hello.txt; (read x < /tmp/go; exec 3<&-; echo HOLDER\"\"DONE) & exec 3<&-; umount /mnt; echo UMOUNT\"\"RC=\$?" \
+    "expect=UMOUNTRC=1" "send=echo > /tmp/go" "expect=HOLDERDONE" "send=umount /mnt && echo UN\"\"MOUNTED" \
     "expect=UNMOUNTED" "send=[ \"\$(grep -c vfat /proc/mounts)\" = 0 ] && echo BB\"\"DONE" \
     "expect=BBDONE" > /dev/null 2>&1; then
     echo "mount-test: BusyBox mounts, lists, reads and unmounts: OK"
