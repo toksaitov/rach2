@@ -85,7 +85,8 @@ for t in tests/host/*_hosttest.c; do
     # on a `host-seconds:` line, as the file system interruption matrices do.
     secs="$(grep -oE 'host-seconds: *[0-9]+' "$t" | grep -oE '[0-9]+' | head -1)"
     [ -n "$secs" ] || secs=$WATCHDOG_SECS
-    [ -z "$WATCHDOG" ] || WATCHDOG="$REPO/build/tests/system/deadline $secs"
+    TESTWATCH=""
+    [ -z "$WATCHDOG" ] || TESTWATCH="$REPO/build/tests/system/deadline $secs"
 
     if ! wrapped_deps "$t" "host-deps:"; then
         echo "hosttest: $t: a host-deps: line is wrapped; repeat the" >&2
@@ -149,11 +150,11 @@ for t in tests/host/*_hosttest.c; do
     if $CC -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST $SAN -g -O1 -Wno-empty-body $FREESTANDING $INC $extra -o "$out" "$t" $deps \
          >"$VDIR/$base.clog" 2>&1; then
         # shellcheck disable=SC2086
-        $WATCHDOG "$out" >"$VDIR/$base.rlog" 2>&1
+        $TESTWATCH "$out" >"$VDIR/$base.rlog" 2>&1
         rc=$?
         if [ "$rc" -eq 0 ]; then
             echo "  PASS: $base"
-        elif [ -n "$WATCHDOG" ] && [ "$rc" -eq 124 ]; then
+        elif [ -n "$TESTWATCH" ] && [ "$rc" -eq 124 ]; then
             echo "  FAIL (hung; killed after ${secs}s; see $VDIR/$base.rlog): $base"
             fail=1
         else
