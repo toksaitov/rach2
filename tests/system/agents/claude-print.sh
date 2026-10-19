@@ -12,8 +12,9 @@
 # on Linux, with the fake server as the gateway ANTHROPIC_BASE_URL names. Every
 # name Claude Code reaches as shipped is the fake server's too, so a request
 # to any of them that the script does not have fails the row, and the
-# machine has no route anywhere else. While the session runs, the row
-# requires the process to run Anthropic's file with nothing preloaded.
+# machine has no route anywhere else. The row's script has the last answer
+# held, and while the program waits for it the row requires the process to
+# run Anthropic's file with nothing preloaded.
 # bound: 900
 # hosts: fakeapi.test api.anthropic.com platform.claude.com claude.com
 # hosts: downloads.claude.ai raw.githubusercontent.com
@@ -100,16 +101,12 @@ row() {
         --settings '{"sandbox":{"enabled":false}}' --no-session-persistence --max-turns 8 \
         > "$SESSION/client.log" 2>&1 &
     pid=$!
-    while ! grep -q answer=after fixture.txt && kill -0 "$pid" 2> /dev/null; do
-        sleep 1
-    done
-    step "the fixture edited"
-    if kill -0 "$pid" 2> /dev/null; then
+    if held "claude -p" "$pid"; then
+        step "the last answer held"
         unmodified "claude -p" "$pid" /opt/claude/bin/claude \
             /lib64/ld-linux-x86-64.so.2 /lib/libc.so.6 /lib/libm.so.6 /lib/libpthread.so.0 \
             /lib/libdl.so.2 /lib/librt.so.1
-    else
-        fail "claude -p ended before it edited the fixture"
+        release "$pid"
     fi
     wait "$pid"
     status=$?

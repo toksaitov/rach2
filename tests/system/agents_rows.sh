@@ -18,7 +18,9 @@
 # of the tree's tests and tools with `tree`, and a row
 # that drives a program's screen runs it in tmux, on the server and in the
 # session PANE names, waits for it with `pane` and answers its questions
-# with `keys`, `press` and `choose`. The script prints
+# with `keys`, `press` and `choose`. A row that inspects a program while it
+# waits for the fake server's answer has that answer held, with `held` and
+# `release`. The script prints
 # `AGENTROW OK NAME` when every comparison holds, and otherwise
 # `AGENTROW FAIL NAME: ` with the first that did not.
 #
@@ -161,6 +163,38 @@ press() {
 # ANSWER selected, the program's mark SELECTED before it, as `press` does.
 choose() {
     press "$1" "$2" "$SELECTED $3"
+}
+
+# held WHAT PID: wait until the fake server holds its answer to the request
+# of its script's held step, which the program PID sends, or until the
+# program ends. Return 0 while the server holds it, the program then waiting
+# for that answer until `release`. Otherwise fail WHAT and return 1: the
+# program ended first, or the server could not be asked, and the program is
+# stopped.
+held() {
+    local waiter ended status
+    curl -fsS --cacert "$CA" -o /dev/null https://fakeapi.test/fakeapi/held &
+    waiter=$!
+    wait -n -p ended "$2" "$waiter"
+    status=$?
+    if [ "$ended" = "$2" ]; then
+        kill "$waiter" 2> /dev/null
+        wait "$waiter" 2> /dev/null
+        fail "$1 ended before the fake server held its last answer"
+        return 1
+    fi
+    if [ "$status" != 0 ]; then
+        kill "$2" 2> /dev/null
+        fail "$1: the fake server's hold: curl status $status"
+        return 1
+    fi
+}
+
+# release PID: have the fake server send the answer it holds, which the
+# program PID waits for; stop the program when the server cannot be asked.
+release() {
+    curl -fsS --cacert "$CA" -o /dev/null -X POST https://fakeapi.test/fakeapi/release ||
+        { fail "the fake server's release: curl status $?"; kill "$1" 2> /dev/null; }
 }
 
 # sample_memory: print the kernel's count of free frames, nr_free_pages of

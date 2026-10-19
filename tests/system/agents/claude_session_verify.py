@@ -6,13 +6,15 @@ Usage: claude_session_verify.py --script SOURCE DESTINATION ROW
        claude_session_verify.py ARCHIVE RECORD VERSION
 
 --script writes to DESTINATION the script SOURCE, claude-session.json, with
-the repository where the row ROW makes it, and with claude-screen.json's
-steps first for claude-screen. --watch is muse_verify.py's observer of the
-record. The third form judges a row's archive as claude_test.py judges the
-Linux proof: the file, the commit and every recorded request, each against
-its step. It also requires Anthropic's program before and after the
-session and Messages requests from Claude Code of VERSION, and prints the
-times of the row's steps and the free frames it sampled.
+the repository where the row ROW makes it, and with claude-screen.json's steps
+first for claude-screen; for claude-print its last step is held, so that the
+row inspects the program while it waits for the last answer. --watch is
+muse_verify.py's observer of the record. The third form judges a row's archive
+as claude_test.py judges the Linux proof: the file, the commit and every
+recorded request, each against its step. It also requires Anthropic's program
+before and after the session and Messages requests from Claude Code of
+VERSION, and prints the times of the row's steps and the free frames it
+sampled.
 """
 
 import json
@@ -34,6 +36,8 @@ def prepare_script(source, destination, row):
     if Path(source).resolve() != claude_test.HERE / "claude-session.json":
         raise ValueError(f"{source} is not claude-session.json")
     script = claude_test.render(f"/tmp/agents/work/{row}/session/repo", row == "claude-screen")
+    if row == "claude-print":
+        script["steps"][-1]["hold"] = True
     Path(destination).write_text(json.dumps(script))
 
 

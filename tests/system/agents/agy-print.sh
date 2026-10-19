@@ -15,8 +15,9 @@
 # telemetry off, and of the Gemini API as shipped, are the fake server's too:
 # the script answers the first two with 404 however often they come, and a
 # request it does not have fails the row. The machine has no route anywhere
-# else. While the session runs, the row requires the process to run Google's
-# file with nothing preloaded.
+# else. The row's script has the last answer held, and while the program
+# waits for it the row requires the process to run Google's file with
+# nothing preloaded.
 # bound: 900
 # hosts: fakeapi.test generativelanguage.googleapis.com
 # hosts: antigravity-unleash.goog play.googleapis.com
@@ -112,14 +113,10 @@ row() {
     env -i "${env[@]}" agy -p "$PROMPT" --output-format json --dangerously-skip-permissions \
         --print-timeout 10m > "$SESSION/client.log" 2>&1 &
     pid=$!
-    while ! grep -q answer=after fixture.txt && kill -0 "$pid" 2> /dev/null; do
-        sleep 1
-    done
-    step "the fixture edited"
-    if kill -0 "$pid" 2> /dev/null; then
+    if held "agy -p" "$pid"; then
+        step "the last answer held"
         session_unmodified "agy -p" "$pid"
-    else
-        fail "agy -p ended before it edited the fixture"
+        release "$pid"
     fi
     wait "$pid"
     status=$?

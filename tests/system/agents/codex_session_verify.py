@@ -6,16 +6,16 @@ Usage: codex_session_verify.py --script SOURCE DESTINATION ROW
        codex_session_verify.py ARCHIVE RECORD VERSION
 
 --script writes to DESTINATION the script SOURCE, codex.json, with
-codex-screen.json's steps after it for the row codex-screen. --watch is
-muse_verify.py's observer of the record. The third form judges a row's
-archive: the edited greeting, committed by the fixture's author in a clean
-work tree, and every recorded request against the step it played, each
-request of the Responses API with the dummy key and the user agent of Codex
-VERSION, codex_exec or codex-tui by the row's mode, and two turns on the
-first WebSocket. It also requires that
-the program before and after the session is bin/codex of the package the
-recipe pins, and prints the times of the row's steps and the free frames
-it sampled.
+codex-screen.json's steps after it for the row codex-screen, and with its last
+step held for codex-exec, so that the row inspects the program while it waits
+for the last answer. --watch is muse_verify.py's observer of the record. The
+third form judges a row's archive: the edited greeting, committed by the
+fixture's author in a clean work tree, and every recorded request against the
+step it played, each request of the Responses API with the dummy key and the
+user agent of Codex VERSION, codex_exec or codex-tui by the row's mode, and
+two turns on the first WebSocket. It also requires that the program before and
+after the session is bin/codex of the package the recipe pins, and prints the
+times of the row's steps and the free frames it sampled.
 """
 
 import hashlib
@@ -52,7 +52,10 @@ def prepare_script(source, destination, row):
     """Write the script of the row ROW."""
     if Path(source).resolve() != FAKEAPI / "codex.json":
         raise ValueError(f"{source} is not codex.json")
-    Path(destination).write_text(json.dumps(render(row == "codex-screen")))
+    script = render(row == "codex-screen")
+    if row == "codex-exec":
+        script["steps"][-1]["hold"] = True
+    Path(destination).write_text(json.dumps(script))
 
 
 def program_digest():

@@ -7,13 +7,14 @@ Usage: agy_session_verify.py --script SOURCE DESTINATION ROW
 
 --script writes to DESTINATION the script SOURCE, agy-session.json, with the
 repository where the row ROW makes it, after the steps of agy-services.json:
-the requests the program sends to Google's other services, each answered
-with 404 as often as it comes. --watch is muse_verify.py's observer of the
-record. The third form judges a row's archive as agy_test.py judges the
-Linux proof: the file, the commit and every recorded request, each against
-its step. It also requires Google's program before and after the session,
-and prints the times of the row's steps, the free frames it sampled and how
-often each service was asked.
+the requests the program sends to Google's other services, each answered with
+404 as often as it comes; for agy-print the last step of the session is held,
+so that the row inspects the program while it waits for the last answer.
+--watch is muse_verify.py's observer of the record. The third form judges a
+row's archive as agy_test.py judges the Linux proof: the file, the commit and
+every recorded request, each against its step. It also requires Google's
+program before and after the session, and prints the times of the row's steps,
+the free frames it sampled and how often each service was asked.
 """
 
 import json
@@ -46,6 +47,8 @@ def prepare_script(source, destination, row):
     if Path(source).resolve() != agy_test.HERE / "agy-session.json":
         raise ValueError(f"{source} is not agy-session.json")
     script = render(f"/tmp/agents/work/{row}/session/repo")
+    if row == "agy-print":
+        script["steps"][-1]["hold"] = True
     Path(destination).write_text(json.dumps(script))
 
 

@@ -15,10 +15,11 @@
 # in as a person does, in a login shell, whose profile starts the user's D-Bus
 # session bus, and gives Codex the bus's address, as a program run from that
 # login has it; the login shell Codex runs to learn the environment then finds
-# the bus and starts none. While the session runs, the row requires the
-# process to run OpenAI's program with nothing preloaded: it maps no file but
-# the program, the time zone and the shared memory of its SQLite databases in
-# ~/.codex. Once the session has ended, no process Codex started may be left.
+# the bus and starts none. The row's script has the last answer held, and
+# while Codex waits for it the row requires the process to run OpenAI's
+# program with nothing preloaded: it maps no file but the program, the time
+# zone and the shared memory of its SQLite databases in ~/.codex. Once the
+# session has ended, no process Codex started may be left.
 # The row returns in /tmp/agents/results/codex-exec.tar the repository, the
 # program's digest before and after the session, the free frames sampled each
 # second and the time of each step; codex_session_verify.py judges them on the
@@ -27,6 +28,7 @@
 # hosts: fakeapi.test api.openai.com chatgpt.com auth.openai.com api.github.com
 # hosts: raw.githubusercontent.com
 # script: fakeapi/codex.json
+# script-filter: codex_session_verify.py
 # package: codex
 # verifier: codex_session_verify.py
 
@@ -157,15 +159,11 @@ row() {
     mapfile -t env < <(session_env dumb)
     env -i "${env[@]}" codex exec "$PROMPT" < /dev/null > "$SESSION/client.log" 2>&1 &
     pid=$!
-    while ! grep -qx 'hello, rach2' greeting.txt && kill -0 "$pid" 2> /dev/null; do
-        sleep 1
-    done
-    step "the greeting edited"
-    if kill -0 "$pid" 2> /dev/null; then
+    if held "codex exec" "$pid"; then
+        step "the last answer held"
         unmodified "codex exec" "$pid" /opt/codex/bin/codex \
             "$(readlink -f /etc/localtime)" "$SESSION/home/.codex/*.sqlite-shm"
-    else
-        fail "codex exec ended before it edited the greeting"
+        release "$pid"
     fi
     wait "$pid"
     status=$?
