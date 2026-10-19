@@ -16,7 +16,9 @@
  * * a message past the MTU is refused, and one for an address whose hardware
  *   address is not known yet is accepted, since the request has gone and a
  *   datagram promises no delivery;
- * * the queue is eight deep, so of nine replies eight are queued;
+ * * the queue is eight deep, so of nine replies eight are queued, read once
+ *   /proc/net/snmp has counted nine ICMP messages received since the queue
+ *   was emptied, and 30 seconds of waiting end a wait for replies lost;
  * * eight more raw sockets open at once, and while two children hold full
  *   descriptor tables of sockets a socket still opens and the first raw
  *   socket still receives.
@@ -335,6 +337,41 @@ static int contains(const char *hay, int len, const char *needle)
         }
     }
     return 0;
+}
+
+/* /proc/net/snmp, read by `icmp_in_msgs`. */
+static char snmp[2048];
+
+/**
+ * The machine's count of ICMP messages received, InMsgs of the Icmp line of
+ * /proc/net/snmp, or 0xFFFFFFFF when the file or the line cannot be read.
+ * `ip_rx` hands a datagram to the raw sockets before ICMP counts it, so a
+ * message counted has been queued, or dropped by a full queue.
+ */
+static uint32_t icmp_in_msgs(void)
+{
+    int fd, n = 0, r, i;
+    uint32_t v = 0;
+
+    fd = sys_open_ro("/proc/net/snmp");
+    if (fd < 0) {
+        return 0xFFFFFFFFu;
+    }
+    while (n < (int)sizeof(snmp) - 1 &&
+           (r = sys_read(fd, snmp + n, (int)sizeof(snmp) - 1 - n)) > 0) {
+        n += r;
+    }
+    sys_close(fd);
+    for (i = 0; i + 7 < n; i++) {
+        if (snmp[i] == '\n' && contains(snmp + i + 1, 6, "Icmp: ") && snmp[i + 7] >= '0' &&
+            snmp[i + 7] <= '9') {
+            for (i += 7; i < n && snmp[i] >= '0' && snmp[i] <= '9'; i++) {
+                v = v * 10 + (uint32_t)(snmp[i] - '0');
+            }
+            return v;
+        }
+    }
+    return 0xFFFFFFFFu;
 }
 
 /* The boot line, read from /proc/cmdline. */
@@ -674,12 +711,15 @@ PROBE_START void _start(void)
 
     /* Nine replies to a queue eight deep: eight are kept. */
     {
-        int got = 0;
+        int got = 0, naps;
+        uint32_t base, arrived;
 
         sys_close(fd_b);
         while (raw_take(args, fd_a, frame_a, (int)sizeof(frame_a)) > 0) {
             ;
         }
+        base = icmp_in_msgs();
+        check(base != 0xFFFFFFFFu, "/proc/net/snmp has the Icmp counts");
         for (i = 0; i < 9; i++) {
             uint16_t csum;
 
@@ -704,7 +744,13 @@ PROBE_START void _start(void)
             check(socketcall(SC_SENDTO, args) == 8, "an echo request leaves");
             nap_ms(30);
         }
-        nap_ms(300);
+        arrived = base;
+        for (naps = 0; naps < 3000 && arrived != 0xFFFFFFFFu && arrived - base < 9; naps++) {
+            nap_ms(10);
+            arrived = icmp_in_msgs();
+        }
+        check(base != 0xFFFFFFFFu && arrived != 0xFFFFFFFFu && arrived - base >= 9,
+              "nine ICMP messages reach the socket's queue");
         for (i = 0; i < 12; i++) {
             n = raw_take(args, fd_a, frame_a, (int)sizeof(frame_a));
             if (n <= 0) {
