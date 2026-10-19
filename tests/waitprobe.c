@@ -33,6 +33,7 @@
 
 #define SIGUSR1 10
 #define EINTR   4
+#define WNOHANG 1
 
 #define AF_INET    2
 #define SOCK_DGRAM 2
@@ -234,17 +235,23 @@ PROBE_START void _start(void)
             long tv_sec;
             long tv_nsec;
         } ts;
-        int tries;
 
         ts.tv_sec = 0;
         ts.tv_nsec = 10000000; /* 10 ms */
-        for (tries = 0; tries < 300 && !sleeping(pid); tries++) {
+        r = 0;
+        while (!sleeping(pid)) {
+            r = syscall3(SYS_WAITPID, pid, (long)&status, WNOHANG);
+            if (r != 0) {
+                break;
+            }
             syscall2(SYS_NANOSLEEP, (long)&ts, 0);
         }
-        check(tries < 300, "the child was seen asleep in its recvfrom");
-        syscall2(SYS_KILL, pid, SIGUSR1);
-        r = syscall3(SYS_WAITPID, pid, (long)&status, 0);
-        check(r == pid && status == 0, "child recvfrom interrupted with -EINTR (no hang)");
+        check(r == 0, "the child was seen asleep in its recvfrom");
+        if (r == 0) {
+            syscall2(SYS_KILL, pid, SIGUSR1);
+            r = syscall3(SYS_WAITPID, pid, (long)&status, 0);
+            check(r == pid && status == 0, "child recvfrom interrupted with -EINTR (no hang)");
+        }
     }
 
     if (fails == 0) {
