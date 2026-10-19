@@ -302,73 +302,94 @@ shows() {
     return 1
 }
 
-# choose ANSWER KEY: press KEY until the question has ANSWER selected for
-# six seconds, then Enter. A question can refuse keys for a moment after it
-# opens and then be drawn again with its first answer selected, so KEY is
-# pressed again while ANSWER is not selected, at most every six seconds. A
-# question answered a moment before can still be on the screen; once ANSWER
-# has gone from it, there is nothing to choose.
-choose() {
-    n=0
-    held=0
-    while [ "$n" -lt 30 ]; do
+# settle KEY TEXT [QUESTION]: press KEY until the screen shows TEXT on two
+# reads in a row, reading it every two seconds for at most 120 s; return 0
+# then, 2 at once when the screen no longer shows QUESTION, and 1 at the end,
+# with the screen in the log. KEY is pressed on a screen without TEXT that is
+# the same on two reads in a row and that the agent has drawn since KEY was
+# last pressed. A question can refuse keys for a moment after it opens and
+# then be drawn again, or take a key and draw its first answer again; either
+# way the agent settles on a new screen without TEXT, and is given KEY again.
+# A key whose effect a slow agent has yet to draw leaves the screen as it
+# was, and is not pressed twice.
+settle() {
+    keys_end=$(($(date +%s) + $(scaled 120)))
+    last=""
+    pressed=""
+    drawn=1
+    shown=""
+    while :; do
         SCREEN=$(screen)
-        shows "$1" || return 0
-        if shows "$MARK $1"; then
-            held=$((held + 1))
-            if [ "$held" -ge 3 ]; then
-                keys Enter
-                return 0
-            fi
-        else
-            held=0
-            [ $((n % 3)) != 0 ] || keys "$2"
-        fi
-        n=$((n + 1))
-        # interval: the screen is read every two seconds
-        sleep 2
-    done
-    record "$agent: the screen" "$SCREEN"
-    bad "$agent: the answer [$1] was not selected"
-    return 1
-}
-
-# press KEY TEXT: press KEY until the screen has shown TEXT for six seconds.
-press() {
-    n=0
-    held=0
-    while [ "$n" -lt 30 ]; do
-        SCREEN=$(screen)
+        [ "$SCREEN" = "$pressed" ] || drawn=1
+        shows "${3:-}" || return 2
         if shows "$2"; then
-            held=$((held + 1))
-            [ "$held" -lt 3 ] || return 0
+            [ -z "$shown" ] || return 0
+            shown=1
         else
-            held=0
-            [ $((n % 3)) != 0 ] || keys "$1"
+            shown=""
+            if [ "$SCREEN" = "$last" ] && [ -n "$drawn" ]; then
+                keys "$1"
+                pressed=$SCREEN
+                drawn=""
+            fi
         fi
-        n=$((n + 1))
+        last=$SCREEN
+        if [ "$(date +%s)" -ge "$keys_end" ]; then
+            record "$agent: the screen" "$SCREEN"
+            return 1
+        fi
         # interval: the screen is read every two seconds
         sleep 2
     done
-    record "$agent: the screen" "$SCREEN"
-    bad "$agent: [$2] did not follow $1"
-    return 1
 }
 
-# leave TEXT: press Enter until the screen no longer shows TEXT.
+# choose ANSWER KEY: press KEY until the question has ANSWER selected, as
+# `settle` does, then Enter. A question answered a moment before can still
+# be on the screen; once ANSWER has gone from it, there is nothing to choose.
+choose() {
+    settle "$2" "$MARK $1" "$1"
+    case $? in
+        0) keys Enter ;;
+        1)
+            bad "$agent: the answer [$1] was not selected"
+            return 1
+            ;;
+    esac
+    return 0
+}
+
+# press KEY TEXT: press KEY until the screen shows TEXT, as `settle` does.
+press() {
+    settle "$1" "$2" || { bad "$agent: [$2] did not follow $1"; return 1; }
+}
+
+# leave TEXT: press Enter until the screen no longer shows TEXT, reading it
+# every two seconds for at most 120 s. Enter is pressed on a screen that is
+# the same on two reads in a row and that the agent has drawn since Enter was
+# last pressed, as `settle` presses its key.
 leave() {
-    n=0
-    while [ "$n" -lt 30 ]; do
+    keys_end=$(($(date +%s) + $(scaled 120)))
+    last=""
+    pressed=""
+    drawn=1
+    while :; do
         SCREEN=$(screen)
         shows "$1" || return 0
-        [ $((n % 5)) != 0 ] || keys Enter
-        n=$((n + 1))
+        [ "$SCREEN" = "$pressed" ] || drawn=1
+        if [ "$SCREEN" = "$last" ] && [ -n "$drawn" ]; then
+            keys Enter
+            pressed=$SCREEN
+            drawn=""
+        fi
+        last=$SCREEN
+        if [ "$(date +%s)" -ge "$keys_end" ]; then
+            record "$agent: the screen" "$SCREEN"
+            bad "$agent: Enter did not take the screen past [$1]"
+            return 1
+        fi
         # interval: the screen is read every two seconds
         sleep 2
     done
-    record "$agent: the screen" "$SCREEN"
-    bad "$agent: Enter did not take the screen past [$1]"
-    return 1
 }
 
 # question: answer the question of a first start or of a new directory that
@@ -396,7 +417,7 @@ question() {
 }
 
 # idle WHAT SECONDS: answer the agent's questions until it waits for a
-# request, its prompt on three screens read in a row with no sign of work or
+# request, its prompt on two screens read in a row with no sign of work or
 # of its start, for at most SECONDS; otherwise fail WHAT. A sign-in menu
 # fails at once.
 idle() {
@@ -416,7 +437,7 @@ idle() {
         fi
         if shows "$READY" && ! shows "$BUSY" && { [ -z "$LOADING" ] || ! shows "$LOADING"; }; then
             calm=$((calm + 1))
-            [ "$calm" -lt 3 ] || return 0
+            [ "$calm" -lt 2 ] || return 0
         else
             calm=0
         fi
