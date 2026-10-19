@@ -1846,8 +1846,9 @@ run-ssh: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real) $(PTYDRIVE)
 	    "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`" \
 	    $(SSH_TEST_PORT) $(NIC)
 # `tests/run shutdown`: userland stopping the machine, on a disk fixture, with
-# every claim of a stop asserted on the QEMU process ending rather than on a
-# token, and every image checked by offline fsck afterwards.
+# every claim of a stop asserted on the QEMU process ending, and every claim of
+# a halt on the processors halted in QEMU's monitor, rather than on a token,
+# and every image checked by offline fsck afterwards.
 SHUTDOWN_TEST_DISK = $(IMAGES_DIR)/shutdown-test.disk
 run-shutdown: $(DEMO_CREDS) rach2 utils krffs busybox $(RUNUTIL)
 	$(MKDISK) krffs/manifests/shutdown-test.manifest $(SHUTDOWN_TEST_DISK) 64 48
