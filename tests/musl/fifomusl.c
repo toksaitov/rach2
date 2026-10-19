@@ -147,8 +147,13 @@ out:
     return error ? fail(error) : 0;
 }
 
-/** Whether process `pid` sleeps, by its state in /proc/<pid>/stat. */
-static int sleeping(pid_t pid)
+/* The longest wait, in seconds, for another process to be seen asleep: a
+ * bound that ends a wait the kernel never satisfies, far past a correct one. */
+#define ASLEEP_BOUND 20
+
+/** The state letter /proc/<pid>/stat gives process `pid`, or 0 when it has
+ * no stat file. */
+static int proc_state(pid_t pid)
 {
     char path[64], line[256], *state;
     int fd, n;
@@ -165,24 +170,49 @@ static int sleeping(pid_t pid)
     }
     line[n] = '\0';
     state = strrchr(line, ')');
-    return state && state[1] == ' ' && state[2] == 'S';
+    return state && state[1] == ' ' ? state[2] : 0;
 }
 
 /**
- * Wait up to 3 s to see `parent` asleep, write a byte to `told`, then open
- * the FIFO for writing and write to it. Runs in the forked child and does not
- * return: exits 0 when all of that happened, 2 when the parent was never seen
+ * Wait for process `pid` to be asleep, state S in /proc/<pid>/stat, looking
+ * every 10 ms. Returns 1 once it is, and 0 when it ends first, as a zombie or
+ * gone from /proc, or when ASLEEP_BOUND seconds pass.
+ */
+static int seen_asleep(pid_t pid)
+{
+    struct timespec start, now;
+    int state;
+
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (;;) {
+        state = proc_state(pid);
+        if (state == 'S') {
+            return 1;
+        }
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        if (state == 0 || state == 'Z' || now.tv_sec - start.tv_sec >= ASLEEP_BOUND) {
+            return 0;
+        }
+        usleep(10000);
+    }
+}
+
+/**
+ * Wait to see `parent` asleep (`seen_asleep`), write `o` to `told`, then open
+ * the FIFO for writing and write to it. A parent never seen asleep gets `n`
+ * on `told` instead, and an open that does not wait, which ends the parent's
+ * open if it is still in one. Runs in the forked child and does not return:
+ * exits 0 when all of that happened, 2 when the parent was never seen
  * asleep, and 1 otherwise.
  */
 static void writer(pid_t parent, int told)
 {
-    int tries;
     int w;
 
-    for (tries = 0; tries < 300 && !sleeping(parent); tries++) {
-        usleep(10000);
-    }
-    if (tries == 300) {
+    if (!seen_asleep(parent)) {
+        if (write(told, "n", 1) == 1) {
+            open(FIFO_PATH, O_WRONLY | O_NONBLOCK);
+        }
         _exit(2);
     }
     if (write(told, "o", 1) != 1) {
@@ -203,24 +233,21 @@ static void on_alarm(int sig)
 }
 
 /**
- * Wait up to 3 s to see `parent` asleep, open the FIFO for reading and read a
- * byte of it, and keep running, reading the nonblocking `ack` in a loop,
- * until it has a byte or 15 s have passed: an idle kernel scans a sleeping
- * poll's descriptors again at every interrupt, which would end the parent's
- * wait without the read's wake. Runs in the forked child and does not
- * return: exits 0 when all of that happened, 2 when the parent was never seen
- * asleep, and 1 otherwise.
+ * Wait to see `parent` asleep (`seen_asleep`), open the FIFO for reading and
+ * read a byte of it, and keep running, reading the nonblocking `ack` in a
+ * loop, until it has a byte or 15 s have passed: an idle kernel scans a
+ * sleeping poll's descriptors again at every interrupt, which would end the
+ * parent's wait without the read's wake. Runs in the forked child and does
+ * not return: exits 0 when all of that happened, 2 when the parent was never
+ * seen asleep, and 1 otherwise.
  */
 static void drainer(pid_t parent, int ack)
 {
     struct timespec start, now;
     char byte;
-    int tries, r;
+    int r;
 
-    for (tries = 0; tries < 300 && !sleeping(parent); tries++) {
-        usleep(10000);
-    }
-    if (tries == 300) {
+    if (!seen_asleep(parent)) {
         _exit(2);
     }
     r = open(FIFO_PATH, O_RDONLY | O_NONBLOCK);
@@ -399,14 +426,54 @@ static int identity(void)
     return aliased();
 }
 
+/**
+ * Check that a blocking open of the FIFO for reading waits for a writer. The
+ * child `writer` opens the FIFO only once it has seen this process asleep,
+ * and first writes `o` to a pipe, which must be there when the open returns;
+ * the child's bytes then arrive, and the end of input after its exit.
+ * Returns 0, or 1 once the failure is reported.
+ */
+static int blocking_open(void)
+{
+    char buf[16];
+    int r, status;
+    int told[2];
+    pid_t parent = getpid();
+    pid_t pid;
+
+    if (pipe(told) != 0 || fcntl(told[0], F_SETFL, O_NONBLOCK) != 0) {
+        return fail("the pipe the child writes to");
+    }
+    pid = fork();
+    if (pid == 0) {
+        writer(parent, told[1]);
+    }
+    buf[0] = '\0';
+    r = open(FIFO_PATH, O_RDONLY);
+    if (r < 0 || read(told[0], buf, 1) != 1 || buf[0] != 'o') {
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        return fail(buf[0] == 'n' ? "the blocking open for reading was never seen asleep"
+                                  : "a blocking open for reading returned before a writer opened");
+    }
+    if (read(r, buf, sizeof(buf)) != 5 || memcmp(buf, "child", 5) != 0) {
+        return fail("the child's bytes");
+    }
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0 ||
+        read(r, buf, sizeof(buf)) != 0) {
+        return fail("the writing child");
+    }
+    close(r);
+    close(told[0]);
+    close(told[1]);
+    return 0;
+}
+
 int main(void)
 {
     struct stat st;
     char buf[16];
-    int r, w, status;
-    int told[2];
-    pid_t parent = getpid();
-    pid_t pid;
+    int r, w;
 
     unlink(FIFO_PATH);
     unlink(NODE_PATH);
@@ -437,31 +504,7 @@ int main(void)
     }
     close(r);
 
-    if (pipe(told) != 0 || fcntl(told[0], F_SETFL, O_NONBLOCK) != 0) {
-        return fail("the pipe the child writes to");
-    }
-    pid = fork();
-    if (pid == 0) {
-        writer(parent, told[1]);
-    }
-    r = open(FIFO_PATH, O_RDONLY);
-    if (r < 0 || read(told[0], buf, 1) != 1) {
-        kill(pid, SIGKILL);
-        waitpid(pid, &status, 0);
-        return fail("a blocking open for reading returned before a writer opened");
-    }
-    if (read(r, buf, sizeof(buf)) != 5 || memcmp(buf, "child", 5) != 0) {
-        return fail("the child's bytes");
-    }
-    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0 ||
-        read(r, buf, sizeof(buf)) != 0) {
-        return fail("the writing child");
-    }
-    close(r);
-    close(told[0]);
-    close(told[1]);
-
-    if (poll_opens() != 0) {
+    if (blocking_open() != 0 || poll_opens() != 0) {
         unlink(FIFO_PATH);
         return 1;
     }
