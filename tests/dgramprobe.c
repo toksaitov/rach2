@@ -228,11 +228,87 @@ static int open_bound(uint16_t port)
 }
 
 /**
+ * The machine's count of UDP datagrams that found no socket to take them,
+ * NoPorts of the Udp line of /proc/net/snmp; fails the probe when the file
+ * or the line cannot be read. A datagram to a port whose only socket is
+ * connected to another sender is one of them.
+ */
+static uint32_t udp_no_ports(void)
+{
+    static char text[2048];
+    int fd, n = 0, r, i;
+    uint32_t v = 0;
+
+    fd = syscall3(SYS_OPEN, (long)"/proc/net/snmp", 0, 0);
+    if (fd < 0) {
+        fail("/proc/net/snmp did not open");
+    }
+    while (n < (int)sizeof(text) - 1 && (r = sys_read(fd, text + n, sizeof(text) - 1 - n)) > 0) {
+        n += r;
+    }
+    sys_close(fd);
+    text[n] = '\0';
+    for (i = 0; i + 6 < n; i++) {
+        if (text[i] == '\n' && text[i + 1] == 'U' && text[i + 2] == 'd' && text[i + 3] == 'p' &&
+            text[i + 4] == ':' && text[i + 5] == ' ' && text[i + 6] >= '0' && text[i + 6] <= '9') {
+            break;
+        }
+    }
+    if (i + 6 >= n) {
+        fail("/proc/net/snmp has no Udp counts");
+    }
+    for (i += 6; text[i] >= '0' && text[i] <= '9'; i++) {
+    }
+    for (i++; text[i] >= '0' && text[i] <= '9'; i++) {
+        v = v * 10 + (uint32_t)(text[i] - '0');
+    }
+    return v;
+}
+
+/** Fail with `what` unless the socket `fd` has nothing to read. */
+static void expect_nothing(int fd, const char *what)
+{
+    unsigned long args[6];
+
+    args[0] = (uint32_t)fd;
+    args[1] = (unsigned long)buf;
+    args[2] = sizeof(buf);
+    args[3] = MSG_DONTWAIT;
+    args[4] = 0;
+    args[5] = 0;
+    if (socketcall(SC_RECVFROM, args) != -EAGAIN) {
+        fail(what);
+    }
+}
+
+/**
+ * Wait until a datagram has found no socket since /proc/net/snmp counted
+ * `base` of them, which is the datagram sent to `fd`, a socket connected to
+ * another sender, when `fd` does not take it; `fd` must have nothing to read
+ * meanwhile and then, or the probe fails with `what`. Thirty seconds without
+ * the datagram fail with `missing`.
+ */
+static void expect_refused(uint32_t base, int fd, const char *what, const char *missing)
+{
+    int naps;
+
+    for (naps = 0; udp_no_ports() == base; naps++) {
+        expect_nothing(fd, what);
+        if (naps == 3000) {
+            fail(missing);
+        }
+        nap(10);
+    }
+    expect_nothing(fd, what);
+}
+
+/**
  * The probe's entry: the rows of the list above, in its order.
  *
  * A datagram to the machine's own address goes on the loopback ring, which
  * the kernel delivers after the send returns, so the first read of each
- * exchange waits for it and only the reads that expect nothing do not. The
+ * exchange waits for it, and a read that expects nothing waits first for
+ * /proc/net/snmp to count the datagram as refused (`expect_refused`). The
  * socket that ignores the outsider must still hear its peer afterwards, or
  * its silence would show only that nothing was sent. The eight packet
  * sockets, opened and closed, show that none of them took a UDP binding.
@@ -248,6 +324,7 @@ PROBE_START void _start(void)
     /* The kernel writes it through the pointer getsockopt is given. */
     volatile int on;
     uint16_t client_port;
+    uint32_t refused;
     /* The kernel writes it through the pointer the call is given. */
     volatile uint32_t optlen;
 
@@ -312,6 +389,7 @@ PROBE_START void _start(void)
     if (socketcall(SC_SENDTO, args) != 4) {
         fail("the peer's reply did not send");
     }
+    refused = udp_no_ports();
     set_sockaddr(OUR_IP, client_port);
     args[0] = (uint32_t)other;
     args[1] = (unsigned long)"other";
@@ -334,18 +412,9 @@ PROBE_START void _start(void)
     if (r != 4 || buf[0] != 'p') {
         fail("a connected socket did not receive from its peer");
     }
-    for (i = 0; i < 40; i++) {
-        args[0] = (uint32_t)client;
-        args[1] = (unsigned long)buf;
-        args[2] = sizeof(buf);
-        args[3] = MSG_DONTWAIT;
-        args[4] = 0;
-        args[5] = 0;
-        if (socketcall(SC_RECVFROM, args) != -EAGAIN) {
-            fail("a connected socket received from a sender it is not connected to");
-        }
-        nap(10);
-    }
+    expect_refused(refused, client,
+                   "a connected socket received from a sender it is not connected to",
+                   "the third socket's datagram was neither received nor refused");
 
     /* A sender at another address: the suite's datagram, through a forward. */
     outside = open_bound(OUTSIDE_PORT);
@@ -356,19 +425,11 @@ PROBE_START void _start(void)
     if (socketcall(SC_CONNECT, args) != 0) {
         fail("connecting the socket for the outside case failed");
     }
+    refused = udp_no_ports();
     say("DGRAMPROBE OUTSIDE\n");
-    for (i = 0; i < 60; i++) {
-        args[0] = (uint32_t)outside;
-        args[1] = (unsigned long)buf;
-        args[2] = sizeof(buf);
-        args[3] = MSG_DONTWAIT;
-        args[4] = 0;
-        args[5] = 0;
-        if (socketcall(SC_RECVFROM, args) != -EAGAIN) {
-            fail("a connected socket received from an address that is not its peer's");
-        }
-        nap(10);
-    }
+    expect_refused(refused, outside,
+                   "a connected socket received from an address that is not its peer's",
+                   "the suite's datagram from outside was neither received nor refused");
     /* The same socket still hears its peer. */
     set_sockaddr(OUR_IP, OUTSIDE_PORT);
     args[0] = (uint32_t)peer;
