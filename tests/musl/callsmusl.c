@@ -21,12 +21,13 @@
  * others as its overrun, and a deleted timer's id is EINVAL. sigqueue gives its
  * value and SI_QUEUE to the signal it sends, and rt_sigqueueinfo its errno and
  * value. A writer to a raw pseudo-terminal slave whose master has not read
- * waits for room, so the master reads every byte of 64 KiB, and a non-blocking
- * one takes EAGAIN; two writers' lines reach the master each whole. A signalfd
- * reads a blocked signal sent to the process, with its sender, and a sigqueue's
- * value, and with none pending a non-blocking read is EAGAIN. A setgid
- * directory gives a file made in it its group, and a directory its group and
- * the bit. A process of another user may not open the maps or the descriptors
+ * sleeps for room, as its state in /proc shows, and the master then reads
+ * every byte of its 64 KiB; a non-blocking writer takes EAGAIN; two writers'
+ * lines reach the master each whole. A signalfd reads a blocked signal sent
+ * to the process, with its sender, and a sigqueue's value, and with none
+ * pending a non-blocking read is EAGAIN. A setgid directory gives a file
+ * made in it its group, and a directory its group and the bit. A process
+ * of another user may not open the maps or the descriptors
  * of a root process under /proc, and reads its own. Its /proc directory is
  * root's while a change of ids leaves it not dumpable, and its own once
  * PR_SET_DUMPABLE makes it so, as on Linux, and so is a descriptor open on its
@@ -110,6 +111,10 @@
 #else
 #define SYS_CLOCK_GETTIME64 403
 #endif
+
+/* The longest wait, in seconds, for another process to be seen asleep: a
+ * bound that ends a wait the kernel never satisfies, far past a correct one. */
+#define ASLEEP_BOUND 20
 
 /** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
@@ -478,11 +483,58 @@ static int whole_writes(int master, const char *name)
     return bad == 0 ? 0 : -1;
 }
 
+/** The state letter /proc/<pid>/stat gives process `pid`, or 0 when it has
+ * no stat file. */
+static int proc_state(pid_t pid)
+{
+    char path[64], line[256], *state;
+    int fd, n;
+
+    snprintf(path, sizeof path, "/proc/%d/stat", (int)pid);
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return 0;
+    }
+    n = (int)read(fd, line, sizeof line - 1);
+    close(fd);
+    if (n <= 0) {
+        return 0;
+    }
+    line[n] = '\0';
+    state = strrchr(line, ')');
+    return state && state[1] == ' ' ? state[2] : 0;
+}
+
+/**
+ * Wait for process `pid` to be asleep, state S in /proc/<pid>/stat, looking
+ * every 10 ms. Returns 1 once it is, and 0 when it ends first, as a zombie or
+ * gone from /proc, or when ASLEEP_BOUND seconds pass.
+ */
+static int seen_asleep(pid_t pid)
+{
+    struct timespec start, now;
+    int state;
+
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (;;) {
+        state = proc_state(pid);
+        if (state == 'S') {
+            return 1;
+        }
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        if (state == 0 || state == 'Z' || now.tv_sec - start.tv_sec >= ASLEEP_BOUND) {
+            return 0;
+        }
+        usleep(10000);
+    }
+}
+
 /**
  * Check a slave written past what the master ring holds: a non-blocking
  * write is cut and then EAGAIN, and a child's 64 KiB, written while the
- * master waits before it reads, all reach the master; two children's lines
- * reach it each whole. Returns 0, or 1 after the failure is printed.
+ * master does not read until the child is seen asleep for room, all reach
+ * the master; two children's lines reach it each whole. Returns 0, or 1
+ * after the failure is printed.
  */
 static int flows(void)
 {
@@ -520,7 +572,11 @@ static int flows(void)
         _exit(0);
     }
     close(slave);
-    usleep(100000);
+    if (pid > 0 && !seen_asleep(pid)) {
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        return fail("a slave writer past the master ring was never seen asleep for room");
+    }
     while (total < 16 * (int)sizeof buf && (n = read(master, buf, sizeof buf)) > 0) {
         total += n;
     }
