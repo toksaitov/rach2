@@ -14,9 +14,11 @@
  * the call may not return before the kernel's four hundred ticks.
  *
  * Serialization. The child writes a byte just before its ping; the parent
- * reads it, waits 200 ms so that the child is inside the call, and pings the
- * loopback address, which is refused with -EBUSY. A parent that took the
- * slot first would get its loopback reply and fail the row.
+ * reads it, waits until /proc shows the child asleep, which after the byte
+ * it is only inside the call, holding the slot, and pings the loopback
+ * address, which is refused with -EBUSY. A parent that took the slot first
+ * would get its loopback reply and fail the row, and a child that ends
+ * without being seen asleep fails it too.
  *
  * The bound. The child exits 0 only when its ping returned -ETIMEDOUT, and 3
  * for any other answer, so a wrong errno is not a pass, and its call lasts at
@@ -147,6 +149,36 @@ static int sys_read(int fd, void *buf, size_t count)
 static int sys_close(int fd)
 {
     return syscall1(SYS_CLOSE, (long)fd);
+}
+
+/** The state letter of process `pid`, the field after the name in
+ * /proc/<pid>/stat, or 0 when it cannot be read. */
+static char state_of(int pid)
+{
+    char path[32] = "/proc/";
+    char digits[12], line[256];
+    int i = 0, j = 6, fd, n;
+
+    do {
+        digits[i++] = (char)('0' + pid % 10);
+        pid /= 10;
+    } while (pid > 0);
+    while (i > 0) {
+        path[j++] = digits[--i];
+    }
+    for (i = 0; "/stat"[i] != '\0'; i++) {
+        path[j++] = "/stat"[i];
+    }
+    path[j] = '\0';
+    fd = syscall3(SYS_OPEN, (long)path, 0, 0);
+    if (fd < 0) {
+        return 0;
+    }
+    n = sys_read(fd, line, sizeof(line));
+    sys_close(fd);
+    for (i = n - 1; i >= 0 && line[i] != ')'; i--) {
+    }
+    return i >= 0 && i + 2 < n && line[i + 1] == ' ' ? line[i + 2] : 0;
 }
 
 /** pipe(2). */
@@ -311,7 +343,7 @@ PROBE_START void _start(void)
         int busy;
         long began, ended, live_span = 0, last_live = 0;
         long child_ms = 0;
-        char token = 0;
+        char token = 0, state;
         int ok = 1;
         const char *why = "";
 
@@ -333,9 +365,15 @@ PROBE_START void _start(void)
                     why = "FAILED (the child never reached its ping)";
                 }
                 began = now_ms();
+                while (ok && (state = state_of(child)) != 'S') {
+                    if (state == 0 || state == 'Z') {
+                        ok = 0;
+                        why = "FAILED (the child was never seen asleep in its ping)";
+                    }
+                    sleep_ms(10);
+                }
                 if (ok) {
                     /* While the child is in its call, a ping is EBUSY. */
-                    sleep_ms(200);
                     busy = ping(LOOPBACK_IP);
                     if (busy != PING_EBUSY) {
                         ok = 0;
