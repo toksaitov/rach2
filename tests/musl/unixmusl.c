@@ -586,11 +586,13 @@ static void on_alarm(int sig)
     alarms++;
 }
 
-/**
- * Return 1 when process `pid` is asleep, state S in /proc/<pid>/stat, and 0
- * otherwise.
- */
-static int sleeping(pid_t pid)
+/* The longest wait, in seconds, for another process to be seen asleep: a
+ * bound that ends a wait the kernel never satisfies, far past a correct one. */
+#define ASLEEP_BOUND 20
+
+/** The state letter /proc/<pid>/stat gives process `pid`, or 0 when it has
+ * no stat file. */
+static int proc_state(pid_t pid)
 {
     char path[64], line[256], *state;
     int fd, n;
@@ -607,7 +609,31 @@ static int sleeping(pid_t pid)
     }
     line[n] = '\0';
     state = strrchr(line, ')');
-    return state && state[1] == ' ' && state[2] == 'S';
+    return state && state[1] == ' ' ? state[2] : 0;
+}
+
+/**
+ * Wait for process `pid` to be asleep, state S in /proc/<pid>/stat, looking
+ * every 10 ms. Returns 1 once it is, and 0 when it ends first, as a zombie or
+ * gone from /proc, or when ASLEEP_BOUND seconds pass.
+ */
+static int seen_asleep(pid_t pid)
+{
+    struct timespec start, now;
+    int state;
+
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (;;) {
+        state = proc_state(pid);
+        if (state == 'S') {
+            return 1;
+        }
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        if (state == 0 || state == 'Z' || now.tv_sec - start.tv_sec >= ASLEEP_BOUND) {
+            return 0;
+        }
+        usleep(10000);
+    }
 }
 
 /**
@@ -644,7 +670,7 @@ static int backlog_growth(void)
     socklen_t alen = abstract_addr(&a, "unixmusl.backlog");
     int l = socket(AF_UNIX, SOCK_STREAM, 0);
     int c = socket(AF_UNIX, SOCK_STREAM, 0);
-    int status = 0, tries;
+    int status = 0;
     pid_t pid;
 
     if (bind(l, (struct sockaddr *)&a, alen) != 0 || listen(l, 0) != 0 ||
@@ -662,10 +688,7 @@ static int backlog_growth(void)
         alarm(10);
         _exit(connect(w, (struct sockaddr *)&a, alen) == 0 && !alarms ? 0 : 1);
     }
-    for (tries = 0; pid > 0 && tries < 300 && !sleeping(pid); tries++) {
-        usleep(10000);
-    }
-    if (pid < 0 || tries == 300) {
+    if (pid < 0 || !seen_asleep(pid)) {
         if (pid > 0) {
             kill(pid, SIGKILL);
             waitpid(pid, NULL, 0);
@@ -743,7 +766,7 @@ static int datagram_peers(void)
 static int full_receiver_shut(void)
 {
     int sv[2];
-    int status = 0, tries;
+    int status = 0;
     pid_t pid;
 
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
@@ -765,10 +788,7 @@ static int full_receiver_shut(void)
         alarm(10);
         _exit(send(sv[0], "w", 1, 0) == -1 && errno == EPIPE && !alarms ? 0 : 1);
     }
-    for (tries = 0; pid > 0 && tries < 300 && !sleeping(pid); tries++) {
-        usleep(10000);
-    }
-    if (pid < 0 || tries == 300) {
+    if (pid < 0 || !seen_asleep(pid)) {
         if (pid > 0) {
             kill(pid, SIGKILL);
             waitpid(pid, NULL, 0);
