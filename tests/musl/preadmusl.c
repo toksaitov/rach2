@@ -19,6 +19,15 @@
  * a directory. lseek of a socket and of a pseudo-terminal master is ESPIPE, by
  * _llseek and by call 19 (lseek, call 8, on x86-64), as on Linux.
  *
+ * On x86-64, preadv and pwritev move a vector at an offset and leave the
+ * descriptor's own: each buffer at the place the ones before it reached, a
+ * buffer of no bytes skipped, a short read ending the call, and the call's
+ * fifth argument, the offset's high half, not read. A vector with a buffer
+ * the probe cannot reach is refused before a byte is written, and a negative
+ * offset, a count past 1024, a pipe, a descriptor open for the other
+ * direction and one not open are refused, the last with no buffers too. The
+ * i686 kernel has neither call, and musl's preadv and pwritev are ENOSYS.
+ *
  * Prints `PREADMUSL OK` and exits 0 on success, and prints
  * `PREADMUSL FAIL (detail)` and exits 1 otherwise.
  */
@@ -33,6 +42,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 /* The file the rows make and remove. */
@@ -325,10 +335,128 @@ static int seek_refusal_rows(void)
     return 0;
 }
 
+#if defined __x86_64__
+/* An address in the kernel's half, which no user buffer may name. */
+#define KERNEL_ADDRESS ((void *)0xffff800000000000UL)
+
+/**
+ * Check the refusals of preadv and pwritev on the file vector_rows makes.
+ * Returns 0, or 1 once the failure is reported.
+ */
+static int vector_refusal_rows(void)
+{
+    char two[2];
+    struct iovec out[2], in[1];
+    int fd, pipefd[2], ok;
+
+    fd = open(FILE_PATH, O_RDWR);
+    out[0].iov_base = "XY";
+    out[0].iov_len = 2;
+    out[1].iov_base = KERNEL_ADDRESS;
+    out[1].iov_len = 4;
+    if (fd < 0 || !refused(pwritev(fd, out, 2, 0), EFAULT) || pread(fd, two, 2, 0) != 2 ||
+        memcmp(two, "01", 2) != 0) {
+        return fail("pwritev refuses a vector with a bad buffer before it writes");
+    }
+    in[0].iov_base = two;
+    in[0].iov_len = sizeof(two);
+    ok = refused(preadv(fd, in, 1, -1), EINVAL) && refused(preadv(fd, in, -1, 0), EINVAL) &&
+         refused(preadv(fd, in, 1025, 0), EINVAL) && refused(preadv(999, in, 1, 0), EBADF) &&
+         refused(preadv(999, in, 0, 0), EBADF);
+    close(fd);
+    fd = open(FILE_PATH, O_RDONLY);
+    ok = ok && fd >= 0 && refused(pwritev(fd, out, 1, 0), EBADF);
+    close(fd);
+    ok = ok && pipe(pipefd) == 0 && refused(preadv(pipefd[0], in, 1, 0), ESPIPE) &&
+         refused(pwritev(pipefd[1], out, 1, 0), ESPIPE);
+    close(pipefd[0]);
+    close(pipefd[1]);
+    if (!ok) {
+        return fail("the refusals of preadv and pwritev");
+    }
+    return 0;
+}
+
+/**
+ * Check preadv and pwritev on the file the earlier rows leave, which this
+ * makes again. Returns 0, or 1 once the failure is reported.
+ */
+static int vector_rows(void)
+{
+    char head[2], tail[4], three[3], whole[32];
+    struct iovec out[3], in[3];
+    int fd;
+
+    fd = open(FILE_PATH, O_RDWR | O_TRUNC);
+    if (fd < 0 || write(fd, "0123456789", 10) != 10 || lseek(fd, 3, SEEK_SET) != 3) {
+        return fail("make the file for the vector rows");
+    }
+    out[0].iov_base = "ab";
+    out[0].iov_len = 2;
+    out[1].iov_base = NULL;
+    out[1].iov_len = 0;
+    out[2].iov_base = "cdefg";
+    out[2].iov_len = 5;
+    memset(whole, 'x', sizeof(whole));
+    if (pwritev(fd, out, 3, 12) != 7 || !offset_is(fd, 3) ||
+        pread(fd, whole, sizeof(whole), 0) != 19 ||
+        memcmp(whole, "0123456789\0\0abcdefg", 19) != 0) {
+        return fail("pwritev writes its buffers in turn at the offset");
+    }
+    in[0].iov_base = head;
+    in[0].iov_len = sizeof(head);
+    in[1].iov_base = NULL;
+    in[1].iov_len = 0;
+    in[2].iov_base = tail;
+    in[2].iov_len = sizeof(tail);
+    if (preadv(fd, in, 3, 13) != 6 || memcmp(head, "bc", 2) != 0 || memcmp(tail, "defg", 4) != 0 ||
+        !offset_is(fd, 3)) {
+        return fail("preadv reads its buffers in turn from the offset");
+    }
+    memset(head, 'x', sizeof(head));
+    memset(tail, 'x', sizeof(tail));
+    in[0].iov_base = tail;
+    in[0].iov_len = sizeof(tail);
+    in[1].iov_base = head;
+    in[1].iov_len = sizeof(head);
+    if (preadv(fd, in, 2, 17) != 2 || memcmp(tail, "fgxx", 4) != 0 || memcmp(head, "xx", 2) != 0 ||
+        preadv(fd, in, 2, 19) != 0 || preadv(fd, in, 0, 0) != 0) {
+        return fail("a short preadv ends at the end of the file");
+    }
+    in[0].iov_base = three;
+    in[0].iov_len = sizeof(three);
+    if (syscall(SYS_preadv, fd, in, 1, 4L, 0xdeadL) != 3 || memcmp(three, "456", 3) != 0) {
+        return fail("preadv does not read the offset's high half");
+    }
+    close(fd);
+    return vector_refusal_rows();
+}
+#else
+/** Check that the i686 kernel has neither preadv nor pwritev. Returns 0, or
+ * 1 once the failure is reported. */
+static int vector_rows(void)
+{
+    char buf[4];
+    struct iovec iov;
+    int fd, ok;
+
+    iov.iov_base = buf;
+    iov.iov_len = sizeof(buf);
+    fd = open(FILE_PATH, O_RDWR);
+    ok = fd >= 0 && refused(preadv(fd, &iov, 1, 0), ENOSYS) &&
+         refused(pwritev(fd, &iov, 1, 0), ENOSYS);
+    close(fd);
+    if (!ok) {
+        return fail("i686 has neither preadv nor pwritev");
+    }
+    return 0;
+}
+#endif
+
 int main(void)
 {
     if (file_rows() != 0 || device_rows() != 0 || proc_seek_rows() != 0 || wide_proc_rows() != 0 ||
-        refusal_rows() != 0 || seek_refusal_rows() != 0) {
+        refusal_rows() != 0 || seek_refusal_rows() != 0 || vector_rows() != 0) {
         unlink(FILE_PATH);
         return 1;
     }

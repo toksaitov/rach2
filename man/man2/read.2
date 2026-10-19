@@ -262,6 +262,10 @@ reads a file at offsets with
 and checks that the descriptor's offset does not move, and that a pipe,
 a socket and a terminal return
 .Er ESPIPE .
+On x86-64 it reads 2, 0 and 4 bytes from offset 13 with
+.Fn preadv ,
+requires 6 and the bytes in turn, and on i686 requires
+.Er ENOSYS .
 .Sh ERRORS
 .Bl -tag -width ECONNREFUSED
 .It Er EAGAIN

@@ -6548,3 +6548,40 @@ new
         return -ENOENT;
     }
 end
+
+# preadv and pwritev, which preadmusl checks on x86-64, the only kernel with
+# them, so that these faults are caught with ARCH=x86_64 alone.
+
+fault preadv-one-offset
+probe preadmusl
+file rach2/sys/syscall_fs.c
+expect PREADMUSL FAIL (pwritev writes its buffers in turn at the offset)
+old
+        total += r;
+        pos += r;
+new
+        total += r;
+end
+
+fault pwritev-buffer-unchecked
+probe preadmusl
+file rach2/sys/syscall_fs.c
+expect PREADMUSL FAIL (pwritev refuses a vector with a bad buffer before it writes)
+old
+        if (!user_buffer_ok(iov.iov_base, iov.iov_len, !write)) {
+            return -EFAULT;
+        }
+        wanted += (uint32_t)iov.iov_len;
+new
+        wanted += (uint32_t)iov.iov_len;
+end
+
+fault preadv-high-half-read
+probe preadmusl
+file rach2/sys/syscall_fs.c
+expect PREADMUSL FAIL (preadv does not read the offset's high half)
+old
+    return (long long)((((uint64_t)high << (sizeof(long) * 4)) << (sizeof(long) * 4)) | low);
+new
+    return (long long)(((uint64_t)high << 32) | low);
+end

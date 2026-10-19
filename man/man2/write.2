@@ -255,6 +255,12 @@ writes a file at offsets with
 checks that the descriptor's offset does not move, and that
 .Dv O_APPEND
 writes at the end.
+On x86-64 it writes buffers of 2, 0 and 5 bytes at offset 12 with
+.Fn pwritev ,
+requires 7, and requires
+.Er EFAULT
+and no byte written for a vector whose second buffer is a kernel
+address.
 .Sh ERRORS
 .Bl -tag -width ECONNREFUSED
 .It Er EACCES
