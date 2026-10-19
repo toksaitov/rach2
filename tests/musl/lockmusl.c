@@ -51,11 +51,16 @@
 #include <sys/sysmacros.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #define LOCK_PATH "/tmp/lockmusl"
 /* The directory of the rows about which file a lock is on. */
 #define KEY_DIR   "/tmp/lockmusl.d"
+
+/* The longest wait, in seconds, for a process or thread to be seen asleep: a
+ * bound that ends a wait the kernel never satisfies, far past a correct one. */
+#define ASLEEP_BOUND 20
 
 /** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
@@ -106,13 +111,13 @@ static void leave_parent_end(int from_parent[2])
     close(from_parent[1]);
 }
 
-/** Whether process `pid` sleeps, by its state in /proc/<pid>/stat. */
-static int sleeping(pid_t pid)
+/** The state letter the stat file at `path` gives, or 0 when it cannot be
+ * read. */
+static int stat_state(const char *path)
 {
-    char path[64], line[256], *state;
+    char line[256], *state;
     int fd, n;
 
-    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
     fd = open(path, O_RDONLY);
     if (fd < 0) {
         return 0;
@@ -124,7 +129,39 @@ static int sleeping(pid_t pid)
     }
     line[n] = '\0';
     state = strrchr(line, ')');
-    return state && state[1] == ' ' && state[2] == 'S';
+    return state && state[1] == ' ' ? state[2] : 0;
+}
+
+/**
+ * Wait for the process `*id`, or with `thread` set the thread `*id` of this
+ * process, to be asleep, state S in its stat file, looking every 10 ms. A
+ * thread's `*id` may still be 0, for a thread that has yet to store it.
+ * Returns 1 once it is asleep, and 0 when it ends first, as a zombie or gone
+ * from /proc, or when ASLEEP_BOUND seconds pass.
+ */
+static int asleep(const volatile pid_t *id, int thread)
+{
+    struct timespec start, now;
+    char path[64];
+    int state;
+
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (;;) {
+        state = -1;
+        if (*id != 0) {
+            snprintf(path, sizeof(path), thread ? "/proc/self/task/%d/stat" : "/proc/%d/stat",
+                     (int)*id);
+            state = stat_state(path);
+        }
+        if (state == 'S') {
+            return 1;
+        }
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        if (state == 0 || state == 'Z' || now.tv_sec - start.tv_sec >= ASLEEP_BOUND) {
+            return 0;
+        }
+        usleep(10000);
+    }
 }
 
 /**
@@ -148,18 +185,10 @@ static int held_by(int fd, pid_t pid, off_t at, off_t start, off_t len)
            q.l_start == start && q.l_len == len;
 }
 
-/** Whether process `pid` is seen asleep within 3 s. */
+/** Whether process `pid` is seen asleep (`asleep`). */
 static int seen_asleep(pid_t pid)
 {
-    int tries;
-
-    for (tries = 0; tries < 300; tries++) {
-        if (sleeping(pid)) {
-            return 1;
-        }
-        usleep(10000);
-    }
-    return 0;
+    return asleep(&pid, 0);
 }
 
 /**
@@ -365,28 +394,6 @@ static int largest(int fd)
 static int waiter_fd, waiter_rc, waiter_errno;
 static volatile pid_t waiter_tid;
 
-/** Whether thread `tid` of this process sleeps, by its state in
- * /proc/self/task/<tid>/stat. */
-static int thread_sleeping(pid_t tid)
-{
-    char path[64], line[256], *state;
-    int fd, n;
-
-    snprintf(path, sizeof(path), "/proc/self/task/%d/stat", (int)tid);
-    fd = open(path, O_RDONLY);
-    if (fd < 0) {
-        return 0;
-    }
-    n = (int)read(fd, line, sizeof(line) - 1);
-    close(fd);
-    if (n <= 0) {
-        return 0;
-    }
-    line[n] = '\0';
-    state = strrchr(line, ')');
-    return state && state[1] == ' ' && state[2] == 'S';
-}
-
 /**
  * Store this thread's id in `waiter_tid`, and wait for a write lock of byte
  * 50 through `waiter_fd`, with the result left in `waiter_rc` and
@@ -456,7 +463,7 @@ static int closed_wait(void)
 {
     int to_child[2], to_parent[2];
     pthread_t waiter;
-    int status, tries;
+    int status;
     pid_t pid;
 
     if (pipe(to_child) != 0 || pipe(to_parent) != 0) {
@@ -480,10 +487,7 @@ static int closed_wait(void)
     if (waiter_fd < 0 || pthread_create(&waiter, NULL, wait_for_byte, NULL) != 0) {
         return fail("the waiting thread");
     }
-    for (tries = 0; tries < 300 && !(waiter_tid != 0 && thread_sleeping(waiter_tid)); tries++) {
-        usleep(10000);
-    }
-    if (tries == 300) {
+    if (!asleep(&waiter_tid, 1)) {
         return fail("the waiting thread was never seen asleep in F_SETLKW");
     }
     close(waiter_fd);
@@ -760,7 +764,7 @@ static int closed_wait_moved(void)
     int to_child[2], to_parent[2];
     char block[1024];
     pthread_t waiter;
-    int status, tries, made, beside, grow;
+    int status, made, beside, grow;
     pid_t pid;
 
     made = open(KEY_DIR "/waited", O_RDWR | O_CREAT | O_TRUNC, 0644);
@@ -787,10 +791,7 @@ static int closed_wait_moved(void)
     if (waiter_fd < 0 || pthread_create(&waiter, NULL, wait_for_byte, NULL) != 0) {
         return fail("the waiting thread across a move");
     }
-    for (tries = 0; tries < 300 && !(waiter_tid != 0 && thread_sleeping(waiter_tid)); tries++) {
-        usleep(10000);
-    }
-    if (tries == 300) {
+    if (!asleep(&waiter_tid, 1)) {
         return fail("the waiting thread across a move was never seen asleep in F_SETLKW");
     }
     close(waiter_fd);
