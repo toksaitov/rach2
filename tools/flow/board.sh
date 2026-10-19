@@ -140,11 +140,12 @@
 # leaves SHA for the next run to keep. For the phase In progress, it then links,
 # as `link` does, each open issue labelled `triaged` that has no parent, whose
 # body says no `Part of #N`, and that has none of the labels `phase`, `group`,
-# `grouped`, `ci`, `owner` and `intermittent`; and it sets Ready each open
-# member whose Status is Backlog or empty and that is not labelled `owner`,
-# `grouped` or `phase`. It prints the phase's number. Each step skips what an
-# earlier run did, so a second run changes nothing, and a run that failed part
-# way is completed by the next.
+# `grouped`, `ci`, `owner`, `intermittent`, `day-report`, `incident` and
+# `hold`, since a report, an incident and a hold are no work; and it sets
+# Ready each open member whose Status is Backlog or empty and that is not
+# labelled `owner`, `grouped` or `phase`. It prints the phase's number. Each
+# step skips what an earlier run did, so a second run changes nothing, and a
+# run that failed part way is completed by the next.
 #
 # `archive P` archives the card of every closed issue on the board, except a
 # closed member of an open phase other than P, which stays on the board until
@@ -813,7 +814,8 @@ phase: started at $head" > /dev/null || {
     orphans=$(printf '%s\n' "$board" | awk -F '\t' "$LIB"'
         $4 == "OPEN" && has($5, "triaged") && $8 == "" && $9 == "" &&
         !has($5, "phase") && !has($5, "group") && !has($5, "grouped") &&
-        !has($5, "ci") && !has($5, "owner") && !has($5, "intermittent") {
+        !has($5, "ci") && !has($5, "owner") && !has($5, "intermittent") &&
+        !has($5, "day-report") && !has($5, "incident") && !has($5, "hold") {
             print $3 }')
     status=0 attached=
     for n in $orphans; do

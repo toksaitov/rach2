@@ -56,18 +56,19 @@ closed_fault()
 # The faults of the phase rows, each a sed script for the private copy:
 # membership ignores `Part of`; `current` keeps one of two phases; `start`
 # looks for a comment it never wrote, and so comments again, or sets the phase
-# In progress before it comments; `next` lists Ready issues of no phase; `take`
-# skips the phase check, or takes a member that is not Ready; `group` accepts
-# an issue of no phase; `archive` ignores the other open phase; `phase`
-# ignores the review; and `unassign` writes back the whole list of assignees
-# it read, as `gh issue edit` does; `next` or `take` offers an issue labelled
-# owner-only to any account.
+# In progress before it comments, or makes a day report a member; `next` lists
+# Ready issues of no phase; `take` skips the phase check, or takes a member
+# that is not Ready; `group` accepts an issue of no phase; `archive` ignores
+# the other open phase; `phase` ignores the review; and `unassign` writes back
+# the whole list of assignees it read, as `gh issue edit` does; `next` or
+# `take` offers an issue labelled owner-only to any account.
 # shellcheck disable=SC2016 # the dollars are in the texts the faults change
 {
     members_fault='s/(parent == p || has(partof, p))/(parent == p)/'
     current_fault='s/s = s (s == "" ? "" : " #") \$3 }/s = $3 }/'
     start_fault="s/grep -Eqx 'phase: started at/grep -Eqx 'phase: begun at/"
     start_order_fault='s/^    said=\$(comments/    [ -n "$started" ] || set_status "$p" "In progress" || exit 1; &/'
+    start_report_fault='s/!has(\$5, "day-report") \&\& //'
     next_fault='s/member && \$2 == "Ready" {/$2 == "Ready" {/'
     take_phase_fault='s/g != "" || has(\$5, "ci") { exit }/{ exit }/'
     take_status_fault='s/\$2 != "Ready" \&\& \$2 != "In progress" {/0 {/'
@@ -91,9 +92,10 @@ if [ "$mode" = texts ]; then
     take_fault
     closed_fault
     for f in "$members_fault" "$current_fault" "$start_fault" \
-        "$start_order_fault" "$next_fault" "$take_phase_fault" \
-        "$take_status_fault" "$group_fault" "$archive_fault" "$phase_fault" \
-        "$stale_fault" "$next_owner_fault" "$take_owner_fault"; do
+        "$start_order_fault" "$start_report_fault" "$next_fault" \
+        "$take_phase_fault" "$take_status_fault" "$group_fault" \
+        "$archive_fault" "$phase_fault" "$stale_fault" "$next_owner_fault" \
+        "$take_owner_fault"; do
         plant "$f"
     done
     exit 0
@@ -419,7 +421,10 @@ begin='5|OPEN|Ready|phase|-|-|0|-|phase: five
 36|OPEN|Backlog|bug|-|-|0|-|untriaged orphan
 37|OPEN|Backlog|bug,triaged|-|6|0|-|member of six
 38|OPEN|Backlog|bug,grouped|-|5|0|-|grouped member
-39|OPEN|Ready|bug|-|5|0|-|ready member'
+39|OPEN|Ready|bug|-|5|0|-|ready member
+40|OPEN|Backlog|day-report,triaged|-|-|0|-|day report
+41|OPEN|Backlog|incident,triaged|-|-|0|-|incident
+42|OPEN|Backlog|hold,triaged|-|-|0|-|hold'
 
 # Phase 7 with its members closed, reviewed at master's head H.
 review="7|OPEN|In_progress|phase|-|-|0|-|phase: seven|phase: started at $B;Looks right.;review: $B..$H complete;phase: started at $C
@@ -724,8 +729,8 @@ $only"
             use "$begin"
             run start
             [ "$result" -eq 0 ] && [ "$(cat "$work/out")" = 5 ] &&
-                [ "$(statuses)" = '5:In_progress 6:Ready 30:Ready 31:Ready 32:In_progress 33:Backlog 34:Ready 35:Backlog 36:Backlog 37:Backlog 38:Backlog 39:Ready' ] &&
-                [ "$(field 34 6)" = 5 ] && [ "$(field 5 10 | tr ';' '\n' | grep '^phase: ')" = "phase: started at $H" ] ;;
+                [ "$(statuses)" = '5:In_progress 6:Ready 30:Ready 31:Ready 32:In_progress 33:Backlog 34:Ready 35:Backlog 36:Backlog 37:Backlog 38:Backlog 39:Ready 40:Backlog 41:Backlog 42:Backlog' ] &&
+                [ "$(field 34 6)" = 5 ] && [ "$(field 40 6)$(field 41 6)$(field 42 6)" = --- ] && [ "$(field 5 10 | tr ';' '\n' | grep '^phase: ')" = "phase: started at $H" ] ;;
         start-again)
             use "$begin"
             run start
@@ -918,6 +923,7 @@ if [ "$mode" = mutate ]; then
     caught "$current_fault" current-two 'two phases In progress passed'
     caught "$start_fault" start-again 'a second start commented again'
     caught "$start_order_fault" start-retry 'start set In progress before it commented'
+    caught "$start_report_fault" start-first 'start made a day report a member'
     caught "$next_fault" next-tiers 'next listed issues of no phase'
     caught "$take_phase_fault" take-stranger 'take skipped the phase check'
     caught "$take_status_fault" take-backlog 'take took a Backlog member'
@@ -929,6 +935,6 @@ if [ "$mode" = mutate ]; then
     caught "$take_owner_fault" take-only 'take gave an owner-only issue to a team account'
     cp "$repo/tools/flow/board.sh" "$work/board.sh"
     rows || exit 1
-    echo 'board-test: result: pass: 16 faults caught and restored'
+    echo 'board-test: result: pass: 17 faults caught and restored'
 fi
 echo 'board-test: result: pass: 65 rows'
