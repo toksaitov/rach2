@@ -167,8 +167,6 @@ int krandom_is_trusted(void)
     return cc_src == KRANDOM_SRC_RDSEED || cc_src == KRANDOM_SRC_RDRAND;
 }
 
-#if !defined(RACH2_HOSTTEST)
-
 #include "../arch/arch.h"
 #include "../rtc.h"
 #include "../timer.h"
@@ -272,16 +270,3 @@ void krandom_seed(void)
     krandom_reseed(lo ^ sec, hi, kernel_ticks ^ (sec << 16), lo ^ hi ^ kernel_ticks ^ sec);
     cc_src = KRANDOM_SRC_JITTER;
 }
-
-#else
-
-/**
- * The host build has no hardware entropy and seeds from four fixed words.
- * Tests that need a specific stream call krandom_reseed() themselves.
- */
-void krandom_seed(void)
-{
-    krandom_reseed(0x12345678u, 0x9abcdef0u, 0x0f0f0f0fu, 0xa5a5a5a5u);
-}
-
-#endif

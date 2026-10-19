@@ -26,10 +26,9 @@
  * at boot, and never from an interrupt handler, whose draw could fall in
  * the middle of a block another draw is dispensing.
  *
- * The core (reseed, the draws and ChaCha) has no hardware access and
- * compiles both freestanding and hosted, so it is unit-tested natively
- * under the sanitizers; only krandom_seed() touches hardware, and the
- * kernel alone compiles it.
+ * Only krandom_seed() touches hardware, through arch_random, arch_cycles,
+ * rtc_boot_time and kernel_ticks, so the whole file also compiles hosted,
+ * where a host test supplies those four and runs it under the sanitizers.
  */
 
 /** Reseed the generator from four words, so that the stream that follows
