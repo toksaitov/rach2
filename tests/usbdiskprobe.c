@@ -13,12 +13,13 @@
  * * `write`: a file written to the FAT volume, synced, unmounted, and read
  *   back after the volume is mounted again; the unmount must have flushed
  *   the stick's own cache, which the stick's line in `/proc/usb` counts.
- * * `hold` and `holdexfat`: warm FAT32 or exFAT caches, then signal the pull
- *   with `USBDISKPROBE HOLDING` and read the uncached disk until `EIO`.
- *   File access and cached lookup must then fail; the listings omit the disk
- *   and mount. Unmount is busy while files are open and succeeds after close.
- * * `holdnested` and `holdnestedexfat`: the same with the other volume mounted
- *   below the first. The child must unmount before the parent can be released.
+ * * `hold`: warm the FAT32 volume's caches, then signal the pull with
+ *   `USBDISKPROBE HOLDING` and read the uncached disk until `EIO`. File
+ *   access and cached lookup must then fail; the listings omit the disk and
+ *   mount. Unmount is busy while files are open and succeeds after close.
+ * * `holdnested` and `holdnestedexfat`: the same on the FAT32 or the exFAT
+ *   volume, with the other volume mounted below it. The child must unmount
+ *   before the parent can be released.
  * * `replug`: the volume mounts again and the file is still there, on a
  *   stick that inherits nothing from the one before it.
  * * `keep`: a file held open on the FAT volume, `USBDISKPROBE KEEPING`
@@ -991,9 +992,6 @@ void probe_main(unsigned long *sp)
     }
     if (same(what, "keep")) {
         part_keep();
-    }
-    if (same(what, "holdexfat")) {
-        part_hold(exfat_node, "exfat", 0);
     }
     if (same(what, "holdnested")) {
         part_hold(fat_node, "vfat", 1);
