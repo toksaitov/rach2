@@ -1026,6 +1026,11 @@ static int tracer_first(void)
     for (i = 0; i < 500 && !zombie(c); i++) {
         usleep(10000);
     }
+    if (!zombie(c)) {
+        kill(x, SIGKILL);
+        waitpid(x, &status, 0);
+        return abandon(c, "the first child never became a zombie");
+    }
     if (waitpid(c, &status, WNOHANG) != 0 || write(to_x[1], "g", 1) != 1) {
         kill(x, SIGKILL);
         return fail("the parent reaped a child before its tracer saw its end");

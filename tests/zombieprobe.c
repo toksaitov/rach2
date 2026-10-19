@@ -46,29 +46,38 @@ static void print(const char *s)
 }
 
 static int wpid; /* the writer, stopped on a failure so the shell returns */
+static int vpid; /* the current victim, killed and reaped on a failure */
+static const char *names[HOLDERS] = {"zp0", "zp1", "zp2", "zp3", "zp4", "zp5"};
 
-/** Print "ZOMBIEPROBE FAIL: `what`", kill and reap the writer, and exit 1. */
+/** Print "ZOMBIEPROBE FAIL: `what`", kill and reap the children, and exit 1. */
 static void fail(const char *what)
 {
-    int status = 0;
+    int status = 0, i;
 
     print("ZOMBIEPROBE FAIL: ");
     print(what);
     print("\n");
+    if (vpid > 0) {
+        syscall2(SYS_KILL, vpid, SIGKILL);
+        syscall3(SYS_WAITPID, vpid, (long)&status, 0);
+    }
     if (wpid > 0) {
         syscall2(SYS_KILL, wpid, SIGKILL);
         syscall3(SYS_WAITPID, wpid, (long)&status, 0);
     }
+    for (i = 0; i < HOLDERS; i++) {
+        syscall1(SYS_UNLINK, (long)names[i]);
+    }
+    syscall1(SYS_UNLINK, (long)"zpw");
     syscall1(SYS_EXIT, 1);
 }
-
-static const char *names[HOLDERS] = {"zp0", "zp1", "zp2", "zp3", "zp4", "zp5"};
 
 /** The child that is killed. It fills each of its files and unlinks it while
  * it is open, so that its teardown has that many inodes to free, the work
  * that takes the mount's lock and can wait for a buffer the writer holds;
- * then it rewrites the first file until it dies. */
-static void victim(void)
+ * then it reports readiness on `ready` and rewrites the first file until
+ * it dies. An incomplete setup exits without reporting readiness. */
+static void victim(int ready)
 {
     int fds[HOLDERS];
     static char buf[4096];
@@ -83,10 +92,18 @@ static void victim(void)
             syscall1(SYS_EXIT, -fds[i]);
         }
         for (j = 0; j < 16; j++) {
-            syscall3(SYS_WRITE, fds[i], (long)buf, (int)sizeof(buf));
+            if (syscall3(SYS_WRITE, fds[i], (long)buf, (int)sizeof(buf)) != (int)sizeof(buf)) {
+                syscall1(SYS_EXIT, 1);
+            }
         }
-        syscall1(SYS_UNLINK, (long)names[i]);
+        if (syscall1(SYS_UNLINK, (long)names[i]) != 0) {
+            syscall1(SYS_EXIT, 1);
+        }
     }
+    if (syscall3(SYS_WRITE, ready, (long)"r", 1) != 1) {
+        syscall1(SYS_EXIT, 1);
+    }
+    syscall1(SYS_CLOSE, ready);
     for (;;) {
         for (j = 0; j < 16; j++) {
             syscall3(SYS_WRITE, fds[0], (long)buf, (int)sizeof(buf));
@@ -120,7 +137,8 @@ static void writer(void)
 /** The probe's entry: the writer, then ROUNDS victims killed and reaped. */
 PROBE_START void _start(void)
 {
-    int vpid, status, round;
+    int status, round, ready[2];
+    char ch;
 
     wpid = syscall1(SYS_FORK, 0);
     if (wpid < 0) {
@@ -131,26 +149,34 @@ PROBE_START void _start(void)
     }
 
     for (round = 0; round < ROUNDS; round++) {
+        ready[0] = -1;
+        ready[1] = -1;
+        if (syscall1(SYS_PIPE, (long)ready) != 0) {
+            fail("pipe for the victim's readiness");
+        }
         vpid = syscall1(SYS_FORK, 0);
         if (vpid < 0) {
             fail("fork the victim");
         }
         if (vpid == 0) {
-            victim();
+            syscall1(SYS_CLOSE, ready[0]);
+            victim(ready[1]);
         }
-        {
-            long req[2];
-
-            req[0] = 0;
-            req[1] = 60000000u; /* 60 ms, for the victim to fill and unlink */
-            syscall2(SYS_NANOSLEEP, (long)req, 0);
+        syscall1(SYS_CLOSE, ready[1]);
+        if (syscall3(SYS_READ, ready[0], (long)&ch, 1) != 1 || ch != 'r') {
+            fail("the victim did not fill and unlink its files");
         }
+        syscall1(SYS_CLOSE, ready[0]);
         if (syscall2(SYS_KILL, vpid, SIGKILL) != 0) {
             fail("kill the victim");
         }
         status = 0;
         if (syscall3(SYS_WAITPID, vpid, (long)&status, 0) != vpid) {
             fail("reap the victim");
+        }
+        vpid = 0;
+        if (status != SIGKILL) {
+            fail("the victim did not die by SIGKILL");
         }
     }
 

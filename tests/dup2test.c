@@ -207,6 +207,7 @@ PROBE_START void _start(void)
         puts_stderr("OK");
     } else {
         puts_stderr("FAILED");
+        failed++;
     }
 
     /* Test 3: Read back the file and verify content */

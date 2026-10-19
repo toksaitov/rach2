@@ -1288,6 +1288,52 @@ static int wake_in(int fd, int ahead, struct wkalrm *w)
     return ioctl(fd, RTC_WKALM_SET, w);
 }
 
+/** Check that freeze waits for the wake alarm while the spinner is held.
+ * The caller owns the RTC descriptor `fd`; return 0, or report a failure. */
+static int freezes(int fd)
+{
+    struct wkalrm w, back;
+    struct stat st;
+    int state, status, woke;
+    long before, after;
+    pid_t spinner;
+
+    spinner = fork();
+    if (spinner == 0) {
+        for (;;) {
+        }
+    }
+    usleep(50000);
+    state = open("/sys/power/state", O_WRONLY);
+    if (spinner < 0 || state < 0 || wake_in(fd, 2, &w) != 0) {
+        return fail("a spinning child, /sys/power/state and the wake alarm");
+    }
+    if (fstat(state, &st) != 0 || (st.st_mode & 0777) != 0644) {
+        return fail("the mode fstat gives /sys/power/state's descriptor");
+    }
+    before = cpu_ticks(spinner);
+    if (ioctl(fd, RTC_WKALM_RD, &back) != 0 || back.pending) {
+        kill(spinner, SIGKILL);
+        waitpid(spinner, &status, 0);
+        return fail("the wake alarm was already pending before suspend");
+    }
+    if (write(state, "freeze", 6) != 6) {
+        return fail("a write of freeze to /sys/power/state");
+    }
+    after = cpu_ticks(spinner);
+    woke = ioctl(fd, RTC_WKALM_RD, &back) == 0 && back.pending;
+    kill(spinner, SIGKILL);
+    waitpid(spinner, &status, 0);
+    close(state);
+    if (!woke) {
+        return fail("suspend to idle returned before the wake alarm");
+    }
+    if (after - before > 10) {
+        return fail("a process ran while a suspend to idle held the processes");
+    }
+    return 0;
+}
+
 /**
  * Check the clock's wake alarm and suspend to idle: an alarm in the past is
  * ETIME and one two days ahead EINVAL; one two seconds ahead reads back
@@ -1300,12 +1346,9 @@ static int wake_in(int fd, int ahead, struct wkalrm *w)
 static int rtcs(void)
 {
     struct wkalrm w, back;
-    struct stat st;
     unsigned long data = 0;
     char text[16];
     int fd = open("/dev/rtc0", O_RDONLY), state, status;
-    long before, after;
-    pid_t spinner;
 
     if (fd < 0) {
         return fail("open /dev/rtc0");
@@ -1326,32 +1369,9 @@ static int rtcs(void)
         return fail("the clock may not wake the machine");
     }
     close(state);
-    spinner = fork();
-    if (spinner == 0) {
-        for (;;) {
-        }
-    }
-    usleep(50000);
-    state = open("/sys/power/state", O_WRONLY);
-    if (spinner < 0 || state < 0 || wake_in(fd, 2, &w) != 0) {
-        return fail("a spinning child, /sys/power/state and the wake alarm");
-    }
-    if (fstat(state, &st) != 0 || (st.st_mode & 0777) != 0644) {
-        return fail("the mode fstat gives /sys/power/state's descriptor");
-    }
-    before = cpu_ticks(spinner);
-    if (write(state, "freeze", 6) != 6) {
-        return fail("a write of freeze to /sys/power/state");
-    }
-    after = cpu_ticks(spinner);
-    kill(spinner, SIGKILL);
-    waitpid(spinner, &status, 0);
-    close(state);
+    status = freezes(fd);
     close(fd);
-    if (after - before > 10) {
-        return fail("a process ran while a suspend to idle held the processes");
-    }
-    return 0;
+    return status;
 }
 
 int main(void)

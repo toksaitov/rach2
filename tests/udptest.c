@@ -24,7 +24,9 @@ typedef unsigned char uint8_t;
 #define AF_INET      2
 #define SOCK_DGRAM   2
 #define MSG_DONTWAIT 0x40
+#define MSG_PEEK     0x02
 #define EAGAIN       (-11)
+#define EFAULT       (-14)
 
 /* Test target: host echo server on the SLIRP gateway. */
 #define DST_IP_0   10
@@ -162,6 +164,36 @@ static uint16_t server_port(unsigned long *sp)
     return (uint16_t)n;
 }
 
+/** Require EFAULT from a receive into a kernel address, with an echo queued.
+ * Return 1 on success, or print the failed row and return 0. */
+static int reject_kernel_pointer(int fd, int queued)
+{
+    unsigned long args[6];
+    int n;
+
+    print("Test 5: recvfrom into a kernel pointer is rejected... ");
+    if (!queued) {
+        puts("FAILED (no queued echo)");
+        return 0;
+    }
+    args[0] = (uint32_t)fd;
+    args[1] = KERNEL_PTR;
+    args[2] = 64;
+    args[3] = MSG_DONTWAIT;
+    args[4] = 0;
+    args[5] = 0;
+    n = socketcall(SC_RECVFROM, args);
+    if (n == EFAULT) {
+        puts("OK (EFAULT)");
+        return 1;
+    } else {
+        print("FAILED (got ");
+        print_num(n);
+        puts(")");
+        return 0;
+    }
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -254,7 +286,7 @@ void probe_main(unsigned long *sp)
         args[0] = (uint32_t)fd;
         args[1] = (unsigned long)buf;
         args[2] = sizeof(buf);
-        args[3] = MSG_DONTWAIT;
+        args[3] = MSG_DONTWAIT | MSG_PEEK;
         args[4] = (unsigned long)rcv_sa;
         args[5] = (unsigned long)&rcv_len;
         n = socketcall(SC_RECVFROM, args);
@@ -270,22 +302,9 @@ void probe_main(unsigned long *sp)
         failed++;
     }
 
-    /* Test 5: recvfrom into a kernel address is refused and does not fault. */
-    print("Test 5: recvfrom into a kernel pointer is rejected... ");
-    args[0] = (uint32_t)fd;
-    args[1] = KERNEL_PTR;
-    args[2] = sizeof(buf);
-    args[3] = MSG_DONTWAIT;
-    args[4] = 0;
-    args[5] = 0;
-    n = socketcall(SC_RECVFROM, args);
-    if (n < 0) {
-        puts("OK (rejected)");
+    if (reject_kernel_pointer(fd, n == msglen && mem_eq(buf, (const uint8_t *)msg, msglen))) {
         passed++;
     } else {
-        print("FAILED (got ");
-        print_num(n);
-        puts(")");
         failed++;
     }
 

@@ -831,6 +831,29 @@ static void readback_rows(void)
 
 PROBE_SP_ENTRY;
 
+/** Wait for the replacement at disk1 while the old mount holds disk0. */
+static void wait_replacement(void)
+{
+    int tries;
+
+    for (tries = 0; tries < 2000000; tries++) {
+        int fd = syscall3(SYS_OPEN, (long)"/dev/disk1p1", O_RDONLY, 0);
+
+        if (fd >= 0) {
+            char one[512];
+            int got = syscall3(SYS_READ, fd, (long)one, (int)sizeof(one));
+
+            syscall1(SYS_CLOSE, fd);
+            if (got == (int)sizeof(one)) {
+                break;
+            }
+        }
+    }
+    if (tries == 2000000) {
+        fail("the replacement stick never became readable");
+    }
+}
+
 /**
  * Make /k and run the mode argv[1] names.
  *
@@ -1012,19 +1035,7 @@ void probe_main(unsigned long *sp)
             }
         }
         puts("KRFFSPROBE GONE");
-        for (tries = 0; tries < 2000000; tries++) {
-            int fd = syscall3(SYS_OPEN, (long)"/dev/disk0p1", O_RDONLY, 0);
-
-            if (fd >= 0) {
-                char one[512];
-                int got = syscall3(SYS_READ, fd, (long)one, (int)sizeof(one));
-
-                syscall1(SYS_CLOSE, fd);
-                if (got == (int)sizeof(one)) {
-                    break;
-                }
-            }
-        }
+        wait_replacement();
         {
             int fd = syscall3(SYS_OPEN, (long)"/k/hello.txt", O_RDONLY, 0);
             char one[8];

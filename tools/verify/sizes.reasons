@@ -535,7 +535,6 @@ tests/musl/addusermusl.c:check_refusals complexity 27 a test's rows, each a case
 
 tests/musl/authmusl.c:main complexity 34 a test's rows, each a case, read as one table
 
-tests/musl/callsmusl.c:rtcs complexity 26 a test's rows, each a case, read as one table
 
 tests/musl/catfile.c:main complexity 30 a test's rows, each a case, read as one table
 tests/musl/catfile.c:main lines 130 a test's rows, each a case, read as one table

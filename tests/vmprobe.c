@@ -192,6 +192,7 @@ PROBE_START void _start(void)
     {
         unsigned long p = mmap_anon(PAGE, PROT_READ | PROT_WRITE);
 
+        check(!sys_failed((long)p), "mmap for the brk collision succeeds");
         if (!sys_failed((long)p)) {
             unsigned long old = sys_brk(0);
 
