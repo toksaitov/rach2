@@ -37,6 +37,7 @@
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 /*
@@ -257,11 +258,13 @@ static int install(int sig, void (*fn)(int, siginfo_t *, void *), int flags)
     return sigaction(sig, &sa, NULL);
 }
 
-/**
- * Return 1 when process `pid` is asleep, state S in /proc/<pid>/stat, and 0
- * otherwise.
- */
-static int sleeping(pid_t pid)
+/* The longest wait, in seconds, for another process to be seen asleep: a
+ * bound that ends a wait the kernel never satisfies, far past a correct one. */
+#define ASLEEP_BOUND 20
+
+/** The state letter /proc/<pid>/stat gives process `pid`, or 0 when it has
+ * no stat file. */
+static int proc_state(pid_t pid)
 {
     char path[64], line[256], *state;
     int fd, n;
@@ -278,16 +281,40 @@ static int sleeping(pid_t pid)
     }
     line[n] = '\0';
     state = strrchr(line, ')');
-    return state && state[1] == ' ' && state[2] == 'S';
+    return state && state[1] == ' ' ? state[2] : 0;
 }
 
 /**
- * Fork a child that waits up to 3 s to see this process asleep, sends it
- * SIGUSR1, waits up to 3 s for the handler's byte on `answer`, and only then
- * writes one byte to `fd`, the pipe the parent reads. The child exits 0 when
- * all of that happened, 2 when the parent was never seen asleep and 3 when
- * the handler's byte did not come; it writes the byte in every case, so the
- * read ends.
+ * Wait for process `pid` to be asleep, state S in /proc/<pid>/stat, looking
+ * every 10 ms. Returns 1 once it is, and 0 when it ends first, as a zombie or
+ * gone from /proc, or when ASLEEP_BOUND seconds pass.
+ */
+static int seen_asleep(pid_t pid)
+{
+    struct timespec start, now;
+    int state;
+
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (;;) {
+        state = proc_state(pid);
+        if (state == 'S') {
+            return 1;
+        }
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        if (state == 0 || state == 'Z' || now.tv_sec - start.tv_sec >= ASLEEP_BOUND) {
+            return 0;
+        }
+        usleep(10000);
+    }
+}
+
+/**
+ * Fork a child that waits to see this process asleep (`seen_asleep`), sends
+ * it SIGUSR1, waits up to 3 s for the handler's byte on `answer`, and only
+ * then writes one byte to `fd`, the pipe the parent reads. The child exits 0
+ * when all of that happened, 2 when the parent was never seen asleep and 3
+ * when the handler's byte did not come; it writes the byte in every case, so
+ * the read ends.
  */
 static pid_t signal_then_write(int fd, int answer)
 {
@@ -296,13 +323,10 @@ static pid_t signal_then_write(int fd, int answer)
 
     if (pid == 0) {
         struct pollfd pfd;
-        int tries, code = 0;
+        int code = 0;
         char c;
 
-        for (tries = 0; tries < 300 && !sleeping(parent); tries++) {
-            usleep(10000);
-        }
-        if (tries == 300) {
+        if (!seen_asleep(parent)) {
             code = 2;
         } else {
             pfd.fd = answer;
