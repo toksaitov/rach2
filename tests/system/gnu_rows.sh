@@ -369,12 +369,12 @@ row_iproute2() {
     has "ip rule" "$(ip rule 2>&1)" "32766:	from all lookup main"
     has "tc qdisc" "$(tc qdisc 2>&1)" "qdisc noqueue 0: dev eth0 root"
     has "ip netconf" "$(ip netconf 2>&1)" "inet all forwarding off rp_filter off"
-    perl -MIO::Socket::INET -e 'my $s = IO::Socket::INET->new(LocalPort => 5999, Listen => 1) or die; sleep 90' &
-    local pid=$! i=0
-    until grep -q ':176F ' /proc/net/tcp || [ $i -ge 600 ]; do
-        sleep 0.1
-        i=$((i + 1))
-    done
+    local pid line
+    mkfifo "$WORK/bound"
+    perl -MIO::Socket::INET -e '$| = 1; my $s = IO::Socket::INET->new(LocalPort => 5999, Listen => 1) or die; print "bound\n"; sleep' > "$WORK/bound" &
+    pid=$!
+    read -r line < "$WORK/bound"
+    same "the listener" "$line" "bound"
     has "the listener in /proc/net/tcp" "$(cat /proc/net/tcp)" ":176F "
     has "ss -tln" "$(ss -tln 2>&1)" "0.0.0.0:5999"
     same "what ss -a says on stderr" "$(ss -a 2>&1 >/dev/null)" ""
@@ -478,15 +478,19 @@ row_procps() {
 # newgrp's set-user-ID mode, and the namespaces unshare makes, nsenter enters
 # and lsns lists.
 row_utillinux() {
-    local pid
+    local pid line
     has "lsblk" "$(lsblk -dno NAME,TYPE)" "disk"
     same "findmnt" "$(findmnt -no FSTYPE /)" "ext2"
     has "findmnt --verify of /etc/fstab" "$(findmnt --verify 2>&1)" "Success, no errors or warnings detected"
-    flock "$WORK/lock" sleep 5 &
+    mkfifo "$WORK/held" "$WORK/release"
+    # shellcheck disable=SC2016 # the dollar is the inner shell's
+    flock "$WORK/lock" sh -c 'echo held; read -r _ < "$1"' sh "$WORK/release" > "$WORK/held" &
     pid=$!
-    sleep 1
+    read -r line < "$WORK/held"
+    same "the holder" "$line" "held"
     flock -w 1 "$WORK/lock" true
     same "flock -w on a held lock" "$?" "1"
+    echo > "$WORK/release"
     wait "$pid"
     runs "flock on a free lock" flock -w 1 "$WORK/lock" true
     has "prlimit" "$(prlimit --pid $$ --nofile)" "NOFILE"
@@ -578,26 +582,37 @@ row_strace() {
 row_lsof() {
     local pid
     : > "$WORK/held"
-    sleep 30 3< "$WORK/held" &
+    sleep infinity 3< "$WORK/held" &
     pid=$!
-    sleep 1
+    until [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = sleep ]; do
+        sleep 0.1
+    done
     has "lsof -p" "$(lsof -p "$pid" 2>&1)" "$WORK/held"
     has "lsof FILE" "$(lsof "$WORK/held" 2>&1)" "sleep"
     has "lsof -i" "$(lsof -nP -i TCP:22 -s TCP:LISTEN 2>&1)" "sshd"
     kill "$pid"
 }
 
+# pane_shows PANE TEXT: wait until tmux's PANE shows TEXT, or, with TEXT
+# empty, anything at all, such as a shell's prompt.
+pane_shows() {
+    local pattern="${2:-[^ ]}"
+    until tmux capture-pane -p -t "$1" 2>/dev/null | grep -q -- "$pattern"; do
+        sleep 0.1
+    done
+}
+
 # tmux runs a command in a detached session, and the pane shows what it
 # printed; a window's login shell starts in the directory the window names,
 # which /etc/profile leaves as it is.
 row_tmux() {
-    runs "tmux new-session" tmux new-session -d -s row -x 80 -y 24 'echo tmux row; sleep 30'
-    sleep 1
+    runs "tmux new-session" tmux new-session -d -s row -x 80 -y 24 'echo tmux row; sleep infinity'
+    pane_shows row "tmux row"
     has "the pane" "$(tmux capture-pane -p -t row)" "tmux row"
     runs "tmux new-window" tmux new-window -t row -n here -c "$WORK"
-    sleep 1
+    pane_shows row:here ""
     tmux send-keys -t row:here pwd Enter
-    sleep 1
+    pane_shows row:here "$WORK"
     has "a window's directory" "$(tmux capture-pane -p -t row:here)" "$WORK"
     runs "tmux kill-server" tmux kill-server
 }
@@ -607,15 +622,13 @@ row_tmux() {
 # at the next minute and logs no error, as it does at each change of a
 # crontab when /etc/crontab or /etc/cron.d is missing.
 row_cron() {
-    local i=0
     same "the daemon" "$(pgrep -x crond | wc -l)" "1"
     rm -f /tmp/cron-row.out
     echo '* * * * * echo cron row > /tmp/cron-row.out' | su test -c 'crontab -'
     same "the crontab" "$(su test -c 'crontab -l')" "* * * * * echo cron row > /tmp/cron-row.out"
     same "its owner" "$(stat -c '%U %G' /var/spool/cron/crontabs/test)" "test crontab"
-    until [ -s /tmp/cron-row.out ] || [ $i -ge 70 ]; do
+    until [ -s /tmp/cron-row.out ]; do
         sleep 1
-        i=$((i + 1))
     done
     same "the job's output" "$(cat /tmp/cron-row.out 2>&1)" "cron row"
     same "the daemon's errors" "$(grep -c 'cron.err crond' /var/log/messages)" "0"
