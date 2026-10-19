@@ -76,6 +76,10 @@
 /* The framebuffer's requests, as the kernel numbers them. */
 #define FB_SETPALETTE 0x4603
 
+/* The longest wait, in seconds, for a thread to be seen asleep: a bound that
+ * ends a wait the kernel never satisfies, far past a correct one. */
+#define ASLEEP_BOUND 20
+
 /* The counting threads' mutex and count, the condition row's value, each
  * counting thread's thread-local value and thread id, the thread that ran
  * SIGUSR1's handler, and the spare thread's flag once it blocks SIGUSR1. */
@@ -502,11 +506,9 @@ static void *read_pipe(void *arg)
     return (void *)(n == 1 && c == 'x' ? 1L : 0L);
 }
 
-/**
- * Return 1 when thread `t` of this process is asleep, state S in
- * /proc/self/task/<t>/stat, and 0 otherwise.
- */
-static int sleeping(pid_t t)
+/** The state letter /proc/self/task/<t>/stat gives thread `t` of this
+ * process, or 0 when it has no stat file. */
+static int task_state(pid_t t)
 {
     char path[64], line[256], *state;
     int fd, n;
@@ -523,7 +525,41 @@ static int sleeping(pid_t t)
     }
     line[n] = '\0';
     state = strrchr(line, ')');
-    return state && state[1] == ' ' && state[2] == 'S';
+    return state && state[1] == ' ' ? state[2] : 0;
+}
+
+/** The seconds since `start` on the monotonic clock. */
+static long seconds_since(const struct timespec *start)
+{
+    struct timespec now;
+
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (long)(now.tv_sec - start->tv_sec);
+}
+
+/**
+ * Wait for thread `*t` of this process to be asleep, state S in
+ * /proc/self/task/<t>/stat, looking every 10 ms; `*t` may still be 0, for a
+ * thread that has yet to store its id. Returns 1 once it is asleep, and 0
+ * when it ends first, as a zombie or gone from /proc, or when ASLEEP_BOUND
+ * seconds pass.
+ */
+static int thread_asleep(const volatile pid_t *t)
+{
+    struct timespec start;
+    int state;
+
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (;;) {
+        state = *t != 0 ? task_state(*t) : -1;
+        if (state == 'S') {
+            return 1;
+        }
+        if (state == 0 || state == 'Z' || seconds_since(&start) >= ASLEEP_BOUND) {
+            return 0;
+        }
+        usleep(10000);
+    }
 }
 
 /**
@@ -535,15 +571,11 @@ static int condition_row(void)
 {
     pthread_t r;
     void *result;
-    int i;
 
     if (pthread_create(&r, NULL, receive, NULL) != 0) {
         return fail("pthread_create for the condition");
     }
-    for (i = 0; i < 500 && !(receiver_tid && sleeping(receiver_tid)); i++) {
-        usleep(10000);
-    }
-    if (i == 500) {
+    if (!thread_asleep(&receiver_tid)) {
         return fail("the receiver was never seen asleep in pthread_cond_wait");
     }
     pthread_mutex_lock(&lock);
@@ -596,8 +628,8 @@ static int sharing(void)
     if (pipe(pipe_fds) != 0 || pthread_create(&t, NULL, read_pipe, NULL) != 0) {
         return fail("the pipe and its reader");
     }
-    for (i = 0; i < 500 && !(reader_tid && sleeping(reader_tid)); i++) {
-        usleep(10000);
+    if (!thread_asleep(&reader_tid)) {
+        return fail("the reader was never seen asleep in its read");
     }
     if (close(pipe_fds[0]) != 0 || write(pipe_fds[1], "x", 1) != 1 ||
         pthread_join(t, &result) != 0 || (long)result != 1) {
@@ -621,16 +653,15 @@ static volatile pid_t usr1_by, usr2_by;
 
 /**
  * Handle SIGUSR1 for `handler_mask`: record the thread in `usr1_by` and wait
- * up to 10 s for SIGUSR2's handler to run in another thread. The handler's
- * mask blocks SIGUSR2.
+ * for SIGUSR2's handler to run in another thread, looking every 10 ms. The
+ * handler's mask blocks SIGUSR2. A wait that never ends is ended by
+ * `handler_mask_row`, which kills the child.
  */
 static void on_usr1_waits(int sig)
 {
-    int i;
-
     (void)sig;
     usr1_by = tid();
-    for (i = 0; i < 1000 && !usr2_by; i++) {
+    while (!usr2_by) {
         usleep(10000);
     }
 }
@@ -695,6 +726,13 @@ static int asleep_unblocked(pid_t t)
     return asleep && unblocked;
 }
 
+/** Whether both threads of `handler_mask` are in sigsuspend
+ * (`asleep_unblocked`). */
+static int takers_suspended(void)
+{
+    return takers[0] && asleep_unblocked(takers[0]) && takers[1] && asleep_unblocked(takers[1]);
+}
+
 /**
  * Two threads asleep in sigsuspend with SIGUSR1 and SIGUSR2 unblocked, while
  * the first thread blocks both, and the two signals sent to the process one
@@ -703,15 +741,15 @@ static int asleep_unblocked(pid_t t)
  * sleeper must be woken to run. The signals are sent only once both threads
  * are seen in sigsuspend (`asleep_unblocked`), so a thread that comes late
  * cannot pass for one that was not woken. Returns 0 when each thread ran one
- * handler, 2 when the two were not both in sigsuspend within 10 s and no
- * signal was sent, and 1 otherwise.
+ * handler, 2 when the two were not both seen in sigsuspend within
+ * ASLEEP_BOUND seconds and no signal was sent, and 1 otherwise.
  */
 static int handler_mask(void)
 {
     struct sigaction sa;
+    struct timespec start;
     sigset_t both;
     pthread_t a, b;
-    int i;
 
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = on_usr1_waits;
@@ -729,13 +767,12 @@ static int handler_mask(void)
         pthread_create(&b, NULL, take_signals, &slots[1]) != 0) {
         return 1;
     }
-    for (i = 0; i < 1000 && !(takers[0] && asleep_unblocked(takers[0]) && takers[1] &&
-                              asleep_unblocked(takers[1]));
-         i++) {
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    while (!takers_suspended()) {
+        if (seconds_since(&start) >= ASLEEP_BOUND) {
+            return 2;
+        }
         usleep(10000);
-    }
-    if (i == 1000) {
-        return 2;
     }
     kill(getpid(), SIGUSR1);
     kill(getpid(), SIGUSR2);
@@ -853,7 +890,7 @@ static int lost_status_row(void)
 {
     pthread_t t;
     void *result;
-    int p[2], i, status = 0;
+    int p[2], status = 0;
     pid_t child;
     char c;
 
@@ -868,10 +905,7 @@ static int lost_status_row(void)
     if (pthread_create(&t, NULL, wait_unmapped, &child) != 0) {
         return fail("pthread_create for the wait");
     }
-    for (i = 0; i < 500 && !(waiter_tid && sleeping(waiter_tid)); i++) {
-        usleep(10000);
-    }
-    if (i == 500) {
+    if (!thread_asleep(&waiter_tid)) {
         return fail("the wait was never seen asleep before its status page went");
     }
     if (munmap(status_page, 4096) != 0 || write(p[1], "x", 1) != 1 ||
@@ -928,17 +962,12 @@ static void *send_lost(void *arg)
  */
 static int lost_buffer_call(pthread_t *t, void *(*body)(void *), int *fd)
 {
-    int i;
-
     lost_tid = 0;
     lost_page = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (lost_page == MAP_FAILED || pthread_create(t, NULL, body, fd) != 0) {
         return fail("setup for a socket call whose buffer goes");
     }
-    for (i = 0; i < 500 && !(lost_tid && sleeping(lost_tid)); i++) {
-        usleep(10000);
-    }
-    if (i == 500) {
+    if (!thread_asleep(&lost_tid)) {
         return fail("a socket call was never seen asleep before its buffer went");
     }
     if (munmap(lost_page, 4096) != 0) {
