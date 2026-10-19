@@ -325,6 +325,13 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: testing.sh run's quoted commands and a worktree's sync" >&2
         fail=1
     fi
+    if sh tests/system/prereq_test.sh >"$VDIR/prereq.rlog" 2>&1; then
+        echo "hosttest: result: pass: prereq.sh's reports, installs and recipe"
+    else
+        cat "$VDIR/prereq.rlog"
+        echo "hosttest: result: fail: prereq.sh's reports, installs and recipe" >&2
+        fail=1
+    fi
     if python3 -B tests/system/agents_credentials_test.py >"$VDIR/agents_credentials.rlog" 2>&1; then
         echo "hosttest: result: pass: the agents' credential files and log scan"
     else

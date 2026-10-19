@@ -1,0 +1,363 @@
+# tools/setup/prereqs: the tools each platform needs to build Rach2 and run
+# its tests, how to find each one and how to install it, which
+# tools/setup/prereq.sh reads.
+#
+# A `platform` line starts the section of a platform: linux (Ubuntu 26.04 on
+# x86-64), macos (the latest macOS with Homebrew), windows (Windows 11 with
+# MSYS2) or rach2 (the installed system). A stanza in it begins with a `need`
+# line of one or more names and has one `probe` line and one or more install
+# lines; a blank line or a comment ends nothing, and the next `need` begins
+# the next stanza.
+#
+# The probe is run once for each name, with @TOOL@ replaced by the name, and
+# the name is present when it succeeds. On linux, macos and rach2 it is a
+# command for sh, run in the tree's root with no input, with e2fsprogs'
+# directories on the path as tools/setup/e2fsprogs_path.sh puts them, and
+# with PREREQ_TMP naming an empty directory of its own. On windows it is a
+# PowerShell expression, true when the tool is present; `Runs PATH` is true
+# when PATH runs with --version and exits 0, and `Has PATH` when the file
+# exists.
+#
+# An install line begins with who runs it: `user` for this account, `admin`
+# for an account with administrator rights, which prereq.sh runs through
+# `sudo` on linux and macos and in an elevated PowerShell on windows, or
+# `manual` for a step a person does: one that needs the screen, a new login
+# or a restart, or that installs a system. The lines of a stanza run in order,
+# and a line two stanzas share runs once. @TREE@ is replaced by the tree's
+# absolute path and @USER@ by the name of the account that runs prereq.sh.
+# A manual line that is a comment says what to do where no command does it.
+
+platform linux
+
+# The host's C compiler builds the host tools, the host tests and etude,
+# which is C99.
+need cc
+probe printf 'int main(void) { for (int i = 0; i < 1; i++) ; return 0; }\n' > "$PREREQ_TMP/c99.c" && cc -std=c99 -o "$PREREQ_TMP/c99" "$PREREQ_TMP/c99.c" && "$PREREQ_TMP/c99"
+admin apt-get install -y build-essential
+
+need make
+probe make --version
+admin apt-get install -y build-essential
+
+# No package provides a bare elf cross toolchain; elfwrap.sh makes one from
+# the archive's Linux cross toolchain, in ~/bin, which a new login puts on
+# the path.
+need i686-elf-gcc i686-elf-ld i686-elf-ar i686-elf-strip i686-elf-objcopy i686-elf-readelf i686-elf-ranlib i686-elf-nm
+probe @TOOL@ --version
+admin apt-get install -y gcc-i686-linux-gnu binutils-i686-linux-gnu
+user sh @TREE@/tools/setup/elfwrap.sh i686 "$HOME/bin"
+
+need x86_64-elf-gcc x86_64-elf-ld x86_64-elf-ar x86_64-elf-strip x86_64-elf-objcopy x86_64-elf-readelf x86_64-elf-ranlib x86_64-elf-nm
+probe @TOOL@ --version
+admin apt-get install -y gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu
+user sh @TREE@/tools/setup/elfwrap.sh x86_64 "$HOME/bin"
+
+need awk sed tar gzip
+probe command -v @TOOL@
+admin apt-get install -y gawk sed tar gzip
+
+need bzip2
+probe command -v bzip2
+admin apt-get install -y bzip2
+
+need patch
+probe patch --version
+admin apt-get install -y patch
+
+need ssh ssh-keygen scp sftp
+probe command -v @TOOL@
+admin apt-get install -y openssh-client
+
+need mke2fs debugfs e2fsck
+probe @TOOL@ -V
+admin apt-get install -y e2fsprogs
+
+need mandoc
+probe printf '' | mandoc -T ascii
+admin apt-get install -y mandoc
+
+need cppcheck shellcheck clang clang-format
+probe @TOOL@ --version
+admin apt-get install -y cppcheck shellcheck clang clang-format
+
+need qemu-system-i386 qemu-system-x86_64
+probe @TOOL@ --version
+admin apt-get install -y qemu-system-x86
+
+need qemu-img
+probe qemu-img --version
+admin apt-get install -y qemu-utils
+
+need OVMF
+probe . tools/setup/ovmf_path.sh && [ -n "$OVMF_CODE" ]
+admin apt-get install -y ovmf
+
+# KVM runs the guests on the processor. Under WSL the device exists only
+# with nestedVirtualization=true in the Windows user's .wslconfig, which
+# takes effect after `wsl.exe --shutdown`.
+need /dev/kvm
+probe [ -r /dev/kvm ] && [ -w /dev/kvm ]
+manual sudo usermod -aG kvm @USER@
+manual # log in again, so that the session has the kvm group
+
+need mformat mmd mcopy mdir mtype mdel mdeltree minfo
+probe command -v @TOOL@
+admin apt-get install -y mtools
+
+need xorriso
+probe xorriso -version
+admin apt-get install -y xorriso
+
+need python3
+probe python3 --version
+admin apt-get install -y python3
+
+need openssl
+probe openssl version
+admin apt-get install -y openssl
+
+need git
+probe git --version
+admin apt-get install -y git
+
+need tmux
+probe tmux -V
+admin apt-get install -y tmux
+
+need nc
+probe command -v nc
+admin apt-get install -y netcat-openbsd
+
+need shasum
+probe command -v shasum
+admin apt-get install -y perl
+
+need curl
+probe curl --version
+admin apt-get install -y curl
+
+need mkfs.exfat fsck.exfat
+probe command -v @TOOL@
+admin apt-get install -y exfatprogs
+
+need unshare
+probe unshare --version
+admin apt-get install -y util-linux
+
+need ip
+probe ip -V
+admin apt-get install -y iproute2
+
+# The codexapi suite runs the version of Codex its script names.
+need codex
+probe codex --version
+admin apt-get install -y nodejs npm
+admin npm install -g @openai/codex@0.162.1
+
+platform macos
+
+# Xcode's command line tools supply the C compiler, make, clang, python3 and
+# git. Their installer asks on the screen.
+need cc
+probe printf 'int main(void) { for (int i = 0; i < 1; i++) ; return 0; }\n' > "$PREREQ_TMP/c99.c" && cc -std=c99 -o "$PREREQ_TMP/c99" "$PREREQ_TMP/c99.c" && "$PREREQ_TMP/c99"
+manual xcode-select --install
+
+need make clang python3 git
+probe @TOOL@ --version
+manual xcode-select --install
+
+# Homebrew's installer asks for an administrator's password, and its brew is
+# not on the path until its shellenv line runs.
+need brew
+probe brew --version
+manual /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+manual eval "$(/opt/homebrew/bin/brew shellenv)"
+
+need i686-elf-gcc i686-elf-ld i686-elf-ar i686-elf-strip i686-elf-objcopy i686-elf-readelf i686-elf-ranlib i686-elf-nm
+probe @TOOL@ --version
+user brew install i686-elf-gcc i686-elf-binutils
+
+need x86_64-elf-gcc x86_64-elf-ld x86_64-elf-ar x86_64-elf-strip x86_64-elf-objcopy x86_64-elf-readelf x86_64-elf-ranlib x86_64-elf-nm
+probe @TOOL@ --version
+user brew install x86_64-elf-gcc x86_64-elf-binutils
+
+# Homebrew's QEMU has OVMF in its share/qemu.
+need qemu-system-i386 qemu-system-x86_64 qemu-img
+probe @TOOL@ --version
+user brew install qemu
+
+need OVMF
+probe . tools/setup/ovmf_path.sh && [ -n "$OVMF_CODE" ]
+user brew install qemu
+
+# Homebrew never links e2fsprogs; e2fsprogs_path.sh finds its keg.
+need mke2fs debugfs e2fsck
+probe @TOOL@ -V
+user brew install e2fsprogs
+
+need mandoc
+probe printf '' | mandoc -T ascii
+user brew install mandoc
+
+need mformat mmd mcopy mdir mtype mdel mdeltree minfo
+probe command -v @TOOL@
+user brew install mtools
+
+need cppcheck shellcheck clang-format
+probe @TOOL@ --version
+user brew install cppcheck shellcheck clang-format
+
+need xorriso
+probe xorriso -version
+user brew install xorriso
+
+need tmux
+probe tmux -V
+user brew install tmux
+
+# macOS has these itself.
+need awk sed tar gzip bzip2 patch ssh ssh-keygen scp sftp nc shasum curl openssl hdiutil newfs_exfat
+probe command -v @TOOL@
+manual # part of macOS: install the system again or repair it
+
+platform windows
+
+# winget comes with App Installer; MSYS2 supplies the shell, make and the
+# other POSIX tools, and its UCRT64 environment the MinGW-w64 compiler,
+# whose programs need no MSYS2 runtime.
+need winget
+probe Runs "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe"
+user Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe
+
+need msys2
+probe Runs C:\msys64\usr\bin\bash.exe
+user winget install --exact --id MSYS2.MSYS2 --scope user --silent --accept-package-agreements --accept-source-agreements
+
+need gcc
+probe Runs C:\msys64\ucrt64\bin\gcc.exe
+user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-gcc'
+
+# MSYS2's own GCC builds the build's host tools as POSIX programs.
+need cc
+probe Runs C:\msys64\usr\bin\cc.exe
+user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm gcc'
+
+need make
+probe Runs C:\msys64\usr\bin\make.exe
+user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm make'
+
+need awk sed tar gzip bzip2 patch
+probe Has C:\msys64\usr\bin\@TOOL@.exe
+user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm gawk sed tar gzip bzip2 patch'
+
+need ssh ssh-keygen scp sftp
+probe Has C:\msys64\usr\bin\@TOOL@.exe
+user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm openssh'
+
+need mformat mmd mcopy mdir mtype mdel mdeltree minfo
+probe Has C:\msys64\ucrt64\bin\@TOOL@.exe
+user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-mtools'
+
+need xorriso
+probe Has C:\msys64\usr\bin\xorriso.exe
+user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm xorriso'
+
+need python3
+probe Runs C:\msys64\ucrt64\bin\python3.exe
+user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-python'
+
+need openssl git tmux curl
+probe Has C:\msys64\usr\bin\@TOOL@.exe
+user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm openssl git tmux curl'
+
+need nc
+probe Has C:\msys64\usr\bin\nc.exe
+user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm openbsd-netcat'
+
+need shasum
+probe Has C:\msys64\usr\bin\core_perl\shasum
+user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm perl'
+
+need cppcheck
+probe Has C:\msys64\ucrt64\bin\cppcheck.exe
+user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-cppcheck'
+
+need clang clang-format
+probe Has C:\msys64\ucrt64\bin\@TOOL@.exe
+user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-clang'
+
+need shellcheck
+probe Runs "$env:LOCALAPPDATA\Microsoft\WinGet\Links\shellcheck.exe"
+user winget install --exact --id koalaman.shellcheck --scope user --silent --accept-package-agreements --accept-source-agreements
+
+# MSYS2 has no package of these, so build_host_tool.sh builds them from
+# pinned sources in MSYS2's shell, in a clone of this tree, into its
+# /usr/local.
+need i686-elf-gcc i686-elf-ld i686-elf-ar i686-elf-strip i686-elf-objcopy i686-elf-readelf i686-elf-ranlib i686-elf-nm
+probe Has C:\msys64\usr\local\bin\@TOOL@.exe
+user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm gcc make curl tar gzip xz bzip2 m4 diffutils patch'
+manual # in MSYS2's shell (C:\msys64\msys2.exe), in a clone of this tree:
+manual sh tools/setup/build_host_tool.sh i686-elf /usr/local
+
+need x86_64-elf-gcc x86_64-elf-ld x86_64-elf-ar x86_64-elf-strip x86_64-elf-objcopy x86_64-elf-readelf x86_64-elf-ranlib x86_64-elf-nm
+probe Has C:\msys64\usr\local\bin\@TOOL@.exe
+user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm gcc make curl tar gzip xz bzip2 m4 diffutils patch'
+manual # in MSYS2's shell (C:\msys64\msys2.exe), in a clone of this tree:
+manual sh tools/setup/build_host_tool.sh x86_64-elf /usr/local
+
+need mke2fs debugfs e2fsck
+probe Has C:\msys64\usr\local\bin\@TOOL@.exe
+user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm gcc make curl tar gzip xz bzip2 m4 diffutils patch'
+manual # in MSYS2's shell (C:\msys64\msys2.exe), in a clone of this tree:
+manual sh tools/setup/build_host_tool.sh e2fsprogs /usr/local
+
+need mandoc
+probe Has C:\msys64\usr\local\bin\mandoc.exe
+user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm gcc make curl tar gzip xz bzip2 m4 diffutils patch'
+manual # in MSYS2's shell (C:\msys64\msys2.exe), in a clone of this tree:
+manual sh tools/setup/build_host_tool.sh mandoc /usr/local
+
+# QEMU for Windows installs for every user, with OVMF in its share.
+need qemu-system-i386 qemu-system-x86_64 qemu-img
+probe Runs "$env:ProgramFiles\qemu\@TOOL@.exe"
+admin winget install --exact --id SoftwareFreedomConservancy.QEMU --scope machine --silent --accept-package-agreements --accept-source-agreements
+
+need OVMF
+probe Has "$env:ProgramFiles\qemu\share\edk2-x86_64-code.fd"
+admin winget install --exact --id SoftwareFreedomConservancy.QEMU --scope machine --silent --accept-package-agreements --accept-source-agreements
+
+# WHPX, QEMU's accelerator on Windows, is the Windows Hypervisor Platform,
+# which takes effect after a restart.
+need whpx
+probe (Get-CimInstance Win32_OptionalFeature -Filter "Name='HypervisorPlatform'").InstallState -eq 1
+manual # in an elevated PowerShell:
+manual Enable-WindowsOptionalFeature -Online -FeatureName HypervisorPlatform -All -NoRestart
+manual Restart-Computer
+
+# The owner's Mac reaches the machine over SSH.
+need sshd
+probe (Get-Service sshd).Status -eq 'Running'
+admin Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+admin Set-Service sshd -StartupType Automatic
+admin Start-Service sshd
+
+platform rach2
+
+# The installed system has what etude needs; it has no package manager, so a
+# missing tool means a system older than this tree.
+need cc
+probe printf 'int main(void) { for (int i = 0; i < 1; i++) ; return 0; }\n' > "$PREREQ_TMP/c99.c" && cc -std=c99 -static -o "$PREREQ_TMP/c99" "$PREREQ_TMP/c99.c" && "$PREREQ_TMP/c99"
+manual # install a system built from this tree; the machine skill has the procedure
+
+need make
+probe printf 'all:\n\ttrue\n' > "$PREREQ_TMP/Makefile" && make -f "$PREREQ_TMP/Makefile"
+manual # install a system built from this tree; the machine skill has the procedure
+
+need sh tar gzip sha256sum mktemp timeout kill
+probe command -v @TOOL@
+manual # install a system built from this tree; the machine skill has the procedure
+
+# Dropbear is the SSH server etude's native runs come through.
+need dropbearmulti
+probe [ -x /bin/dropbearmulti ]
+manual # install a system built from this tree; the machine skill has the procedure
