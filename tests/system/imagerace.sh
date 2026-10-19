@@ -150,11 +150,19 @@ cat > "$TREE/prog.mk" <<'EOP'
 $(TREE)/bin/prog: $(TREE)/prog.c
 	cc -o $@ $(TREE)/prog.c
 EOP
+# older: give every file of the private tree a time one second before the
+# whole second it has. make judges by time, and a file system may keep only
+# whole seconds, so this keeps the files' order and makes the next file
+# written newer than all of them, however soon it is written.
+older() {
+    # shellcheck disable=SC2016 # the dollars are Perl's
+    find "$TREE" -exec perl -e 'for (@ARGV) { $t = (stat)[9] - 1; utime $t, $t, $_ or exit 1 }' {} +
+}
 # treemake ARGS...: make in the private tree, with the output in make.log.
 treemake() { MAKEFLAGS='' make --no-print-directory -f "$TREE/Makefile" TREE="$TREE" MANIFEST="$MANIFEST" "$@" > "$TREE/make.log" 2>&1; }
 treemake "$TREE/tree.krffs" || bad "the tree's first build failed: $(tail -2 "$TREE/make.log" | tr '\n' ' ')"
 grep -aq "IMAGERACE FIRST WORDS" "$TREE/tree.krffs" || bad "the first image does not carry the program's words"
-sleep 1 # make judges by time, and the file systems here keep seconds
+older
 sed -i.bak 's/FIRST WORDS/SECOND WORDS/' "$TREE/prog.c"; rm -f "$TREE/prog.c.bak"
 treemake "$TREE/tree.krffs" || bad "the tree's second build failed: $(tail -2 "$TREE/make.log" | tr '\n' ' ')"
 grep -aq "IMAGERACE SECOND WORDS" "$TREE/tree.krffs" || bad "the image was not rebuilt for the changed source"
@@ -168,7 +176,7 @@ say "a changed source reaches the image through exactly its target, and an uncha
 # log made beside the program, which the stager does not take, leave the
 # image as it was; a second program made there restages it, and so does its
 # removal, once.
-sleep 1
+older
 mkdir "$TREE/bin/work.proof"
 : > "$TREE/bin/notes.log"
 treemake "$TREE/tree.krffs" || bad "the build beside a work directory failed"
@@ -176,6 +184,7 @@ grep -q "mkimage.sh" "$TREE/make.log" && bad "a work directory and a log beside 
 cp "$TREE/bin/prog" "$TREE/bin/prog2"
 treemake "$TREE/tree.krffs" || bad "the build with a second program failed"
 grep -q "mkimage.sh" "$TREE/make.log" || bad "a second program beside the first did not rebuild the image"
+older
 rm -f "$TREE/bin/prog2"
 treemake "$TREE/tree.krffs" || bad "the build after the second program went failed"
 grep -q "mkimage.sh" "$TREE/make.log" || bad "the second program's removal did not rebuild the image"
