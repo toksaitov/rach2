@@ -102,7 +102,17 @@ case "$directory" in
 esac
 exec /bin/rm "$@"
 RM
-chmod +x "$work/bin/su" "$work/bin/rm"
+# after_read TEXT: write TEXT, and return once the driver has read it, so
+# that what is written next comes to the driver in a read of its own.
+cat > "$work/bin/after_read" <<'AFTER'
+#!/bin/sh
+before=$(($(wc -l < "$PTYDRIVE_READS")))
+printf '%s' "$1"
+until [ "$(($(wc -l < "$PTYDRIVE_READS")))" -gt "$before" ]; do
+    sleep 0.01
+done
+AFTER
+chmod +x "$work/bin/su" "$work/bin/rm" "$work/bin/after_read"
 
 PATH="$work/bin:$PATH"
 TMPDIR="$work/tmp"
@@ -126,7 +136,8 @@ check()
     PTY_SECRET_CASE=$1
     expected=$2
     PTY_SECRET_AUDIT="$work/$phase.$1"
-    export PTY_SECRET_CASE PTY_SECRET_AUDIT
+    PTYDRIVE_READS="$PTY_SECRET_AUDIT/reads"
+    export PTY_SECRET_CASE PTY_SECRET_AUDIT PTYDRIVE_READS
     mkdir "$PTY_SECRET_AUDIT"
     status=0
     sh "$work/tests/system/accept/su_command.sh" key fixture 22 test known "$3" \
@@ -182,10 +193,10 @@ cases()
     # shellcheck disable=SC2016 # These variables are set by the dummy peer.
     check echo 0 'printf "%s" "$PTY_DUMMY_RECEIVED"' '[redacted]' || return 1
     # shellcheck disable=SC2016
-    check split 0 'printf "%s" "$PTY_DUMMY_FIRST"; sleep 0.03; printf "\r%s" "$PTY_DUMMY_LAST"' \
+    check split 0 'after_read "$PTY_DUMMY_FIRST"; printf "\r%s" "$PTY_DUMMY_LAST"' \
         '[redacted]' || return 1
     # shellcheck disable=SC2016
-    check repeat 1 'printf Pass; sleep 0.03; printf word:; if IFS= read -r value; then echo answered > "$PTY_SECRET_AUDIT/second"; fi' || return 1
+    check repeat 1 'after_read Pass; printf word:; if IFS= read -r value; then echo answered > "$PTY_SECRET_AUDIT/second"; fi' || return 1
     check joined 1 'printf safe' || return 1
     check long 0 'printf safe' safe || return 1
     check prefix 1 'printf safe' || return 1

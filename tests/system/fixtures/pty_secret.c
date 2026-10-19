@@ -38,10 +38,31 @@ static void emit(const char *text, size_t length)
 }
 
 /**
+ * Count the lines of the file at `path`, which runner/ptydrive adds one to
+ * for each read of this program's output; fail when it cannot be read.
+ */
+static long reads_seen(const char *path)
+{
+    FILE *file = fopen(path, "r");
+    long lines = 0;
+    int c;
+
+    if (file == NULL)
+        fail();
+    while ((c = getc(file)) != EOF) {
+        if (c == '\n')
+            lines++;
+    }
+    fclose(file);
+    return lines;
+}
+
+/**
  * Prompt for a password as the case in $PTY_SECRET_CASE says, read one line
  * as the answer, and run the last argument with `sh -c`.
  *
- * The prompt is `Password:` in two writes 20 ms apart; in `joined` it is two
+ * The prompt is `Password:` in two writes, the second once the driver has
+ * read the first, as its file $PTYDRIVE_READS shows; in `joined` it is two
  * prompts in one write, and in `long` 4096 dots follow it. Echo is off while
  * the answer is read, except in `echo`. In `prefix` the fixture writes the
  * answer back without its last byte and exits 0. Otherwise it puts the
@@ -55,12 +76,14 @@ int main(int argc, char **argv)
     struct termios terminal;
     const char *mode = getenv("PTY_SECRET_CASE");
     const char *audit = getenv("PTY_SECRET_AUDIT");
+    const char *reads = getenv("PTYDRIVE_READS");
     char password[128];
     char path[1024];
     size_t length = 0;
     FILE *record;
 
-    if (argc < 2 || mode == NULL || audit == NULL || getenv("RACH2_ACCEPT_PASSWORD") != NULL ||
+    if (argc < 2 || mode == NULL || audit == NULL || reads == NULL ||
+        getenv("RACH2_ACCEPT_PASSWORD") != NULL ||
         tcgetattr(0, &terminal) != 0)
         fail();
     if (strcmp(mode, "echo") != 0)
@@ -70,8 +93,11 @@ int main(int argc, char **argv)
     if (strcmp(mode, "joined") == 0) {
         emit("Password:Password:", 18);
     } else {
+        long before = reads_seen(reads);
+
         emit("Pass", 4);
-        usleep(20000);
+        while (reads_seen(reads) == before)
+            usleep(1000);
         emit("word:", 5);
     }
     if (strcmp(mode, "long") == 0) {
