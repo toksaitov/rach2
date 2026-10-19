@@ -269,8 +269,6 @@ tests/bootprobe.c:_start complexity 42 a probe, one sequence of steps in the ord
 tests/bootprobe.c:_start lines 320 a probe, one sequence of steps in the order the log records them
 tests/bootprobe.c:auth_case lines 158 a probe, one sequence of steps in the order the log records them
 
-tests/conloadprobe.c:probe_main lines 105 a probe, one sequence of steps in the order the log records them
-
 tests/credprobe.c:child_main complexity 46 a probe, one sequence of steps in the order the log records them
 tests/credprobe.c:child_main lines 105 a probe, one sequence of steps in the order the log records them
 

@@ -63,6 +63,16 @@ static pid_t idle_child(void)
     return pid;
 }
 
+/** Kill the child `pid`, when the fork made one, and reap it, on a
+ * failure's way out. */
+static void end_child(pid_t pid)
+{
+    if (pid > 0) {
+        kill(pid, SIGKILL);
+        waitpid(pid, 0, 0);
+    }
+}
+
 /** Fork a child that exits with `code` at once. Returns its pid. */
 static pid_t exiting_child(int code)
 {
@@ -132,7 +142,7 @@ static int dead_stop(void)
     kill(pid, SIGSTOP);
     if (waitid(P_PID, (id_t)pid, &si, WSTOPPED | WNOWAIT) != 0 ||
         !reports(&si, pid, CLD_STOPPED, SIGSTOP)) {
-        kill(pid, SIGKILL);
+        end_child(pid);
         return fail("WNOWAIT did not report the stop");
     }
     kill(pid, SIGKILL);
@@ -174,18 +184,18 @@ static int events(void)
     memset(&si, 0xFF, sizeof(si));
     if (waitid(P_PID, (id_t)pid, &si, WEXITED | WNOHANG) != 0 || si.si_pid != 0 ||
         si.si_signo != 0) {
-        kill(pid, SIGKILL);
+        end_child(pid);
         return fail("WNOHANG with nothing to report did not return 0 with si_pid 0");
     }
     kill(pid, SIGSTOP);
     if (waitid(P_PID, (id_t)pid, &si, WSTOPPED) != 0 || !reports(&si, pid, CLD_STOPPED, SIGSTOP)) {
-        kill(pid, SIGKILL);
+        end_child(pid);
         return fail("a stop did not report CLD_STOPPED with the signal");
     }
     kill(pid, SIGCONT);
     if (waitid(P_PID, (id_t)pid, &si, WCONTINUED) != 0 ||
         !reports(&si, pid, CLD_CONTINUED, SIGCONT)) {
-        kill(pid, SIGKILL);
+        end_child(pid);
         return fail("a continue did not report CLD_CONTINUED with SIGCONT");
     }
     kill(pid, SIGKILL);
@@ -226,14 +236,14 @@ static int selects(idtype_t idtype, int callers)
     if (other < 0 || mine < 0 || (!callers && setpgid(mine, mine) != 0) ||
         waitid(P_PID, (id_t)other, &si, WEXITED | WNOWAIT) != 0 ||
         !reports(&si, other, CLD_EXITED, 4)) {
-        if (mine > 0) {
-            kill(mine, SIGKILL);
-        }
+        end_child(mine);
+        end_child(other);
         return fail("the two children of a selection");
     }
     memset(&si, 0xFF, sizeof(si));
     if (waitid(idtype, id, &si, WEXITED | WNOHANG) != 0 || si.si_pid != 0) {
-        kill(mine, SIGKILL);
+        end_child(mine);
+        end_child(other);
         return fail("a wait reported the exit of a child it does not select");
     }
     kill(mine, SIGTERM);
@@ -284,7 +294,7 @@ static int selections(void)
     memset(&ru, 0xFF, sizeof(ru));
     if (syscall(SYS_waitid, (long)P_PID, (long)pid, &si, (long)(WEXITED | WNOHANG), &ru) != 0 ||
         ru.utime_sec != -1) {
-        kill(pid, SIGKILL);
+        end_child(pid);
         return fail("WNOHANG with nothing to report wrote the usage");
     }
     kill(pid, SIGKILL);

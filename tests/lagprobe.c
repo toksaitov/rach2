@@ -184,6 +184,7 @@ static void run_sleep(void)
     unsigned start, elapsed;
     int lagged;
     int got;
+    int status;
 
     /* Two MBR entries: a node for the second and none for a third. */
     fd = syscall3(SYS_OPEN, (long)"/dev/disk0p2", O_RDONLY, 0);
@@ -218,11 +219,14 @@ static void run_sleep(void)
     start = now_ms();
     lagged = disk_counter("lag-completions ");
     if (read_part(sizeof(sector_buf)) != (int)sizeof(sector_buf)) {
+        syscall2(SYS_KILL, pid, 9);
+        syscall3(SYS_WAITPID, pid, (long)&status, 0);
         fail("the partition read");
     }
     elapsed = now_ms() - start;
     got = syscall3(SYS_READ, fds[0], (long)sector_buf, 64);
     syscall2(SYS_KILL, pid, 9);
+    syscall3(SYS_WAITPID, pid, (long)&status, 0);
     puts("LAGPROBE sleep ms:");
     putnum(elapsed);
     puts("");

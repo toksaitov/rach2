@@ -126,6 +126,15 @@ static void stop_load(void)
     npids = 0;
 }
 
+/** Kill the child `pid` and reap it. */
+static void end_child(int pid)
+{
+    int status;
+
+    syscall2(SYS_KILL, pid, SIGKILL);
+    syscall3(SYS_WAITPID, pid, (long)&status, 0);
+}
+
 /** Stop the load, print "CONLOAD FAIL: " and `why`, and exit 1. */
 static void fail(const char *why)
 {
@@ -471,6 +480,43 @@ static void require(int good, int count, const char *stage)
     sys_exit(1);
 }
 
+/** Stage C's first half: fork a child that spins in a group of its own,
+ * give it the terminal, print "CONLOAD C", and require that the interrupt
+ * character the suite then types kills it; then take the terminal back. A
+ * failure kills and reaps the child before it exits. */
+static void interrupt_child(void)
+{
+    int child, status, pgid;
+
+    child = syscall1(SYS_FORK, 0);
+    if (child < 0) {
+        fail("fork of the foreground child");
+    }
+    if (child == 0) {
+        syscall2(SYS_SETPGID, 0, 0);
+        for (;;) {
+        }
+    }
+    syscall2(SYS_SETPGID, child, child);
+    if (syscall3(SYS_IOCTL, 0, TIOCSPGRP, (long)&child) != 0) {
+        end_child(child);
+        fail("the terminal to the child's group");
+    }
+    puts("CONLOAD C");
+    status = 0;
+    if (syscall3(SYS_WAITPID, child, (long)&status, 0) != child) {
+        end_child(child);
+        fail("the wait for the foreground child");
+    }
+    if ((status & 0x7f) != SIGINT) {
+        fail("the foreground child did not die of the interrupt character");
+    }
+    pgid = syscall1(SYS_GETPID, 0);
+    if (syscall3(SYS_IOCTL, 0, TIOCSPGRP, (long)&pgid) != 0) {
+        fail("the terminal back to the parent");
+    }
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -481,7 +527,7 @@ void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
-    int good, child, status, pgid;
+    int good;
     unsigned start, elapsed, irq_before;
 
     if (argc >= 2 && argv[1][0] == 'D') {
@@ -536,31 +582,7 @@ void probe_main(unsigned long *sp)
     puts("CONLOAD B OK");
 
     /* C: an interrupt character to a foreground child, then the lines. */
-    child = syscall1(SYS_FORK, 0);
-    if (child < 0) {
-        fail("fork of the foreground child");
-    }
-    if (child == 0) {
-        syscall2(SYS_SETPGID, 0, 0);
-        for (;;) {
-        }
-    }
-    syscall2(SYS_SETPGID, child, child);
-    if (syscall3(SYS_IOCTL, 0, TIOCSPGRP, (long)&child) != 0) {
-        fail("the terminal to the child's group");
-    }
-    puts("CONLOAD C");
-    status = 0;
-    if (syscall3(SYS_WAITPID, child, (long)&status, 0) != child) {
-        fail("the wait for the foreground child");
-    }
-    if ((status & 0x7f) != SIGINT) {
-        fail("the foreground child did not die of the interrupt character");
-    }
-    pgid = syscall1(SYS_GETPID, 0);
-    if (syscall3(SYS_IOCTL, 0, TIOCSPGRP, (long)&pgid) != 0) {
-        fail("the terminal back to the parent");
-    }
+    interrupt_child();
     good = read_lines(LINES_A + LINES_B, LINES_C);
     require(good, LINES_C, "C");
     writer_progressed("C");

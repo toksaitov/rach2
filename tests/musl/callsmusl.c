@@ -1288,13 +1288,31 @@ static int wake_in(int fd, int ahead, struct wkalrm *w)
     return ioctl(fd, RTC_WKALM_SET, w);
 }
 
+/** Kill the spinning child `spinner`, when there is one, reap it, and close
+ * `state` when it is open; then report `why` as fail does, with the errno of
+ * the failure, unless it is 0. */
+static int unfreeze(pid_t spinner, int state, const char *why)
+{
+    int status, saved = errno;
+
+    if (spinner > 0) {
+        kill(spinner, SIGKILL);
+        waitpid(spinner, &status, 0);
+    }
+    if (state >= 0) {
+        close(state);
+    }
+    errno = saved;
+    return why ? fail(why) : 0;
+}
+
 /** Check that freeze waits for the wake alarm while the spinner is held.
  * The caller owns the RTC descriptor `fd`; return 0, or report a failure. */
 static int freezes(int fd)
 {
     struct wkalrm w, back;
     struct stat st;
-    int state, status, woke;
+    int state, woke;
     long before, after;
     pid_t spinner;
 
@@ -1306,25 +1324,21 @@ static int freezes(int fd)
     usleep(50000);
     state = open("/sys/power/state", O_WRONLY);
     if (spinner < 0 || state < 0 || wake_in(fd, 2, &w) != 0) {
-        return fail("a spinning child, /sys/power/state and the wake alarm");
+        return unfreeze(spinner, state, "a spinning child, /sys/power/state and the wake alarm");
     }
     if (fstat(state, &st) != 0 || (st.st_mode & 0777) != 0644) {
-        return fail("the mode fstat gives /sys/power/state's descriptor");
+        return unfreeze(spinner, state, "the mode fstat gives /sys/power/state's descriptor");
     }
     before = cpu_ticks(spinner);
     if (ioctl(fd, RTC_WKALM_RD, &back) != 0 || back.pending) {
-        kill(spinner, SIGKILL);
-        waitpid(spinner, &status, 0);
-        return fail("the wake alarm was already pending before suspend");
+        return unfreeze(spinner, state, "the wake alarm was already pending before suspend");
     }
     if (write(state, "freeze", 6) != 6) {
-        return fail("a write of freeze to /sys/power/state");
+        return unfreeze(spinner, state, "a write of freeze to /sys/power/state");
     }
     after = cpu_ticks(spinner);
     woke = ioctl(fd, RTC_WKALM_RD, &back) == 0 && back.pending;
-    kill(spinner, SIGKILL);
-    waitpid(spinner, &status, 0);
-    close(state);
+    unfreeze(spinner, state, 0);
     if (!woke) {
         return fail("suspend to idle returned before the wake alarm");
     }

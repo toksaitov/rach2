@@ -18,6 +18,8 @@
 
 #include "probe.h"
 
+#define SIGKILL 9
+
 /* The name of the row running, for the result lines. */
 static const char *row;
 
@@ -81,7 +83,8 @@ static void proc_path(char *path, int pid)
  * Wait, a millisecond at a time, until /proc shows the process `parent`
  * asleep, which after its fork can only be in waitpid, and print
  * "exitprobe: waiting: ROW". The supervisor's poll bounds this wait and the
- * reap after it.
+ * reap after it. Exits 95 once `parent` is no longer the caller's parent, as
+ * when the supervisor has killed it at the bound.
  */
 static void wait_parent(int parent)
 {
@@ -90,6 +93,9 @@ static void wait_parent(int parent)
     long nap[2] = {0, 1000000};
     proc_path(path, parent);
     for (;;) {
+        if (call(SYS_GETPPID, 0, 0, 0) != parent) {
+            die(95);
+        }
         fd = call(SYS_OPEN, (long)path, 0, 0);
         n = call(SYS_READ, fd, (long)buf, sizeof(buf));
         call(SYS_CLOSE, fd, 0, 0);
@@ -170,10 +176,25 @@ static void reaper(int mode, int report)
     die(ok ? 0 : 93);
 }
 
+/** Kill the reaper `pid` and reap it, waiting at most `timeout` milliseconds,
+ * so that a failed row leaves no reaper blocked in its wait; its victim then
+ * exits by itself in wait_parent, or has already ended. */
+static void end_reaper(int pid, int timeout)
+{
+    long nap[2] = {0, 10000000};
+    int status, waited;
+    call(SYS_KILL, pid, SIGKILL, 0);
+    for (waited = 0; waited < timeout && call(SYS_WAITPID, pid, (long)&status, 1) == 0;
+         waited += 10) {
+        call(SYS_NANOSLEEP, (long)nap, 0, 0);
+    }
+}
+
 /** Run row `mode` in a reaper child and bound it, from outside, with a poll
  * of `timeout` milliseconds on the reaper's report, so that the reaper's own
  * blocking wait and signal state are untouched. Prints the row's result line
- * and returns 1 when it passed. */
+ * and returns 1 when it passed; a row that failed by the bound or by its
+ * report has its reaper killed and reaped after the line. */
 static int run_row(int mode, int timeout)
 {
     struct {
@@ -200,6 +221,9 @@ static int run_row(int mode, int timeout)
     call(SYS_CLOSE, report[0], 0, 0);
     if (!ok) {
         result("EXITPROBE FAIL ", ": reap or release");
+        if (pid > 0) {
+            end_reaper(pid, timeout);
+        }
         return 0;
     }
     ok = call(SYS_WAITPID, pid, (long)&status, 0) == pid && status == 0;

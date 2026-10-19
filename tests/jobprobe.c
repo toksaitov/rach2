@@ -37,6 +37,7 @@
 #define SIGSTOP 19
 #define SIGTTIN 21
 
+#define WNOHANG    1
 #define WUNTRACED  2
 #define WCONTINUED 8
 
@@ -125,6 +126,18 @@ static void sleep_ms(long ms)
     req.tv_nsec = (ms % 1000L) * 1000000L;
     r = syscall2(SYS_NANOSLEEP, (long)(&req), (long)0);
     (void)r;
+}
+/** Wait at most five seconds for the child `pid` to stop or end: the pid, 0
+ * when it did neither, or a negated errno. */
+static int wait_stopped(int pid, int *status)
+{
+    int waited, r;
+
+    for (waited = 0; (r = waitpid(pid, status, WNOHANG | WUNTRACED)) == 0 && waited < 5000;
+         waited += 10) {
+        sleep_ms(10);
+    }
+    return r;
 }
 /** The ioctl call: its result, or a negated errno. */
 static int ioctl(int fd, int req, void *arg)
@@ -406,7 +419,7 @@ PROBE_START void _start(void)
             sys_exit(0);
         }
         if (cpid > 0) {
-            r = waitpid(cpid, &st, WUNTRACED);
+            r = wait_stopped(cpid, &st);
             check(r == cpid && WIFSTOPPED(st) && WSTOPSIG(st) == SIGTTIN,
                   "background read -> SIGTTIN stop");
             kill(cpid, SIGKILL);

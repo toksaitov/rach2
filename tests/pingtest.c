@@ -307,7 +307,7 @@ PROBE_START void _start(void)
         int ready[2];
         int child;
         int status = 0;
-        int reaped;
+        int reaped = -1;
         int busy;
         long began, ended, live_span = 0, last_live = 0;
         long child_ms = 0;
@@ -360,7 +360,7 @@ PROBE_START void _start(void)
                     ok = 0;
                     why = "FAILED (nothing else ran while the ping waited)";
                 }
-                if (ok && reaped != child) {
+                if (reaped != child) {
                     reaped = sys_waitpid(child, &status, 0);
                 }
                 ended = now_ms();

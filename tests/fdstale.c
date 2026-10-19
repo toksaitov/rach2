@@ -404,7 +404,9 @@ static void wait_for(const char *step, int fd)
     want_eq(step, syscall3(SYS_READ, fd, (long)&c, 1), 1);
 }
 
-/** Fork a child that runs `body`, which exits itself; the child's pid. */
+/** Fork a child that runs `body`, which exits itself; the child's pid. The
+ * child closes the parent's ends of the two pipes, so that a parent that
+ * fails and exits ends the child's wait on `down` with end of file. */
 static int spawn(void (*body)(void), const char *what)
 {
     int pid = syscall1(SYS_FORK, 0);
@@ -413,6 +415,8 @@ static int spawn(void (*body)(void), const char *what)
         fail(what, pid);
     }
     if (pid == 0) {
+        syscall3(SYS_CLOSE, up[0], 0, 0);
+        syscall3(SYS_CLOSE, down[1], 0, 0);
         body();
         /* Every body exits itself; 127 fails one that returns. */
         syscall1(SYS_EXIT, 127);

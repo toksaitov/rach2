@@ -44,6 +44,10 @@
 #define FAST_BYTES (256 * 1024)
 #define CHUNK      (32 * 1024)
 #define WNOHANG    1
+#define SIGKILL    9
+
+/* The children a failure must end: the readers and blockprobe, 0 when none. */
+static int children[2];
 
 /** The length of the string `s`. */
 static size_t strlen(const char *s)
@@ -81,11 +85,20 @@ static void putnum(int v)
     }
 }
 
-/** Print "AHCIPROBE FAIL: " and `why`, and exit 1. */
+/** Print "AHCIPROBE FAIL: " and `why`, kill and reap each child in
+ * `children` that is still running, and exit 1. */
 static void fail(const char *why)
 {
+    int i, status;
+
     syscall3(SYS_WRITE, 1, (long)"AHCIPROBE FAIL: ", 16);
     puts(why);
+    for (i = 0; i < 2; i++) {
+        if (children[i] > 0 && syscall3(SYS_WAITPID, children[i], (long)&status, WNOHANG) == 0) {
+            syscall2(SYS_KILL, children[i], SIGKILL);
+            syscall3(SYS_WAITPID, children[i], (long)&status, 0);
+        }
+    }
     syscall2(SYS_EXIT, 1, 0);
 }
 
@@ -247,6 +260,7 @@ static void slow_row(void)
     if (slow < 0) {
         fail("fork");
     }
+    children[0] = slow;
     if (slow == 0) {
         int l;
 
@@ -260,6 +274,7 @@ static void slow_row(void)
     if (fast < 0) {
         fail("fork");
     }
+    children[1] = fast;
     if (fast == 0) {
         int l, rc = read_node("/dev/disk1p1", FAST_BYTES, &l);
 
@@ -328,6 +343,7 @@ static void fault_row(void)
         syscall3(SYS_EXECVE, (long)"/blockprobe", (long)argv, (long)envp);
         syscall2(SYS_EXIT, 4, 0);
     }
+    children[0] = child;
     fd = syscall3(SYS_OPEN, (long)"/dev/disk0p2", O_RDONLY, 0);
     if (fd < 0) {
         fail("/dev/disk0p2");
@@ -589,6 +605,7 @@ static void pool_row(void)
         if (readers[i] < 0) {
             fail("fork");
         }
+        children[i] = readers[i];
         if (readers[i] == 0) {
             int l;
 
