@@ -363,6 +363,36 @@ static void sys_nanosleep_ms(long ms)
     (void)r;
 }
 
+/** The state letter of process `pid`, the field after the name in
+ * /proc/<pid>/stat, or 0 when it cannot be read. */
+static char state_of(int pid)
+{
+    char path[32] = "/proc/";
+    char digits[12], line[256];
+    int i = 0, j = 6, fd, n;
+
+    do {
+        digits[i++] = (char)('0' + pid % 10);
+        pid /= 10;
+    } while (pid > 0);
+    while (i > 0) {
+        path[j++] = digits[--i];
+    }
+    for (i = 0; "/stat"[i] != '\0'; i++) {
+        path[j++] = "/stat"[i];
+    }
+    path[j] = '\0';
+    fd = sys_open(path, O_RDONLY, 0);
+    if (fd < 0) {
+        return 0;
+    }
+    n = sys_read(fd, line, sizeof(line));
+    sys_close(fd);
+    for (i = n - 1; i >= 0 && line[i] != ')'; i--) {
+    }
+    return i >= 0 && i + 2 < n && line[i + 1] == ' ' ? line[i + 2] : 0;
+}
+
 /**
  * A UDP datagram sent to 127.0.0.1 at the socket's own bound port comes
  * back with its payload and the source 127.0.0.1:UDP_PORT. A datagram of no
@@ -1223,15 +1253,16 @@ static void tcp_refused(void)
  * the end of input. The sleeper is in the socket's wait queue, and the
  * shutdown detaches the socket from its block both ways, so nothing the peer
  * sends afterwards can reach that queue: the shutdown wakes it or nothing
- * does. `cs` is a connected socket with nothing to read. The child is given
- * 200 ms to fall asleep, since a shutdown before its read takes the path
- * `shutdown_rows` covers.
+ * does. `cs` is a connected socket with nothing to read. The shutdown waits
+ * until /proc shows the child asleep, since a shutdown before its read takes
+ * the path `shutdown_rows` covers, and a child that ends first fails.
  */
 static void shutdown_wakes_a_sharer(int cs)
 {
     unsigned long args[6];
     uint8_t byte;
     int pid, status = 0;
+    char state;
 
     pid = sys_fork();
     if (pid < 0)
@@ -1240,7 +1271,11 @@ static void shutdown_wakes_a_sharer(int cs)
         /* Blocks: the ring is empty and the peer sends nothing. */
         sys_exit(sys_read(cs, &byte, 1) == 0 ? 0 : 1);
     }
-    sys_nanosleep_ms(200);
+    while ((state = state_of(pid)) != 'S') {
+        if (state == 0 || state == 'Z')
+            fail("the reader was never seen asleep before the shutdown");
+        sys_nanosleep_ms(10);
+    }
     args[0] = (uint32_t)cs;
     args[1] = 2; /* SHUT_RDWR */
     if (socketcall(SC_SHUTDOWN, args) != 0)
