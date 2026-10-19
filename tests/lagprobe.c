@@ -380,6 +380,37 @@ static int wait_status(int pid)
     return status;
 }
 
+/** The state letter of process `pid`, the field after the name in
+ * /proc/<pid>/stat, or 0 when it cannot be read. */
+static char state_of(int pid)
+{
+    char path[32] = "/proc/";
+    static char line[256];
+    char digits[12];
+    int i = 0, j = 6, fd, n;
+
+    do {
+        digits[i++] = (char)('0' + pid % 10);
+        pid /= 10;
+    } while (pid > 0);
+    while (i > 0) {
+        path[j++] = digits[--i];
+    }
+    for (i = 0; "/stat"[i] != '\0'; i++) {
+        path[j++] = "/stat"[i];
+    }
+    path[j] = '\0';
+    fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
+    if (fd < 0) {
+        return 0;
+    }
+    n = syscall3(SYS_READ, fd, (long)line, (int)sizeof(line));
+    syscall1(SYS_CLOSE, fd);
+    for (i = n - 1; i >= 0 && line[i] != ')'; i--) {
+    }
+    return i >= 0 && i + 2 < n && line[i + 1] == ' ' ? line[i + 2] : 0;
+}
+
 /** The number after `label` in /proc/disk, or -1. */
 static int disk_counter(const char *label)
 {
@@ -657,18 +688,36 @@ static void run_writers(void)
 static unsigned char parent_marks[PATTERN_SECTORS];
 static unsigned char child_marks[PATTERN_SECTORS];
 static int pipe_fds[2];
+static int to_child[2], to_parent[2];
 
-/** Read `fd` one sector at a time to the end and mark each sector received
+/**
+ * Read `fd` one sector at a time to the end and mark each sector received
  * in `marks`; a sector whose 128 fields do not all say the same number, or
- * a number out of range, or a short read, fails the probe. The reader that
- * finishes a sector keeps the processor and would take the description
- * again before the other wakes, so a tick's sleep after each lets the two
- * alternate, which is what the marks then show. */
-static void mark_sectors(int fd, unsigned char *marks)
+ * a number out of range, or a short read, fails the probe.
+ *
+ * The reader that finishes a sector keeps the processor and would take the
+ * description again before the other wakes, so the two pass a turn: before
+ * each read a reader waits for a byte on `in`, unless `first`, and writes
+ * one to `out`, so that the other starts its read while this one's sleeps
+ * and the two take sectors in turn. A reader stops at the end of the file,
+ * or when `in` reaches its end because the other has stopped, and closes
+ * `out` so that the other stops too.
+ */
+static void mark_sectors(int fd, unsigned char *marks, int in, int out, int first)
 {
-    int n, i, v;
+    int n = 0, i, v;
+    char turn;
 
-    while ((n = syscall3(SYS_READ, fd, (long)sector_buf, 512)) > 0) {
+    for (;;) {
+        if (!first && syscall3(SYS_READ, in, (long)&turn, 1) != 1) {
+            break;
+        }
+        first = 0;
+        syscall3(SYS_WRITE, out, (long)"t", 1);
+        n = syscall3(SYS_READ, fd, (long)sector_buf, 512);
+        if (n <= 0) {
+            break;
+        }
         if (n != 512) {
             fail("a short read of pattern.bin");
         }
@@ -683,30 +732,52 @@ static void mark_sectors(int fd, unsigned char *marks)
             }
         }
         marks[v]++;
-        sleep_ms(10); /* so that the two readers alternate */
     }
+    syscall1(SYS_CLOSE, out);
     if (n < 0) {
         fail("a read of pattern.bin failed");
     }
 }
 
 /**
+ * The child of the rmdir row: wait until /proc shows the parent `parent`
+ * asleep on the disk, state D, which in its mount is the constructor reading
+ * the volume through the lag, and rmdir the target then. Returns 0 when the
+ * rmdir is EBUSY, 3 when it is anything else, and 6 when the parent is seen
+ * in any state but R or D first, as it is once its mount has returned and it
+ * waits for this child.
+ */
+static int rmdir_in_constructor(int parent)
+{
+    char state;
+
+    while ((state = state_of(parent)) != 'D') {
+        if (state != 'R') {
+            return 6;
+        }
+        syscall0(SYS_SCHED_YIELD);
+    }
+    return syscall1(SYS_RMDIR, (long)"/lm") == -EBUSY ? 0 : 3;
+}
+
+/**
  * The mounted half, under `rach2.blocklag=N` with the FAT32 partition on
- * /dev/disk0p2. A child runs rmdir on the target while the parent's mount
- * sleeps in the constructor on the lag, and gets EBUSY, since the slot has
- * the covered node. Two children read the same cold block at once, and the
- * cache counts one waiting for the busy buffer. Two processes sharing one
+ * /dev/disk0p2. A child runs rmdir on the target once it sees the parent's
+ * mount asleep in the constructor on the lag, and gets EBUSY, since the slot
+ * has the covered node. Two children read the same cold block at once, and
+ * the cache counts one waiting for the busy buffer. Two processes sharing one
  * description through fork read pattern.bin to its end a sector at a time,
- * each marking the sectors it received by the number every sector carries
- * in each of its 128 fields; the child's marks come back through a pipe,
- * and every sector must be marked by exactly one of the two. Last, the
+ * passing turns through two pipes, each marking the sectors it received by
+ * the number every sector carries in each of its 128 fields; the child's
+ * marks come back through a pipe, and every sector must be marked by exactly
+ * one of the two, and each must have some. Last, the
  * whole-disk window is on the real disk and the mount is on the lag wrapper
  * over it, so the claim on the disk must compare the disk under both, and
  * a writer of /dev/disk0 is EBUSY.
  */
 static void run_mounted(void)
 {
-    int pid, pid2, fd, before, after;
+    int pid, pid2, fd, before, after, status;
     int total;
     int pattern_bytes;
 
@@ -717,16 +788,16 @@ static void run_mounted(void)
     /* rmdir of the target while the constructor sleeps is EBUSY. */
     pid = syscall1(SYS_FORK, 0);
     if (pid == 0) {
-        sleep_ms(30);
-        if (syscall1(SYS_RMDIR, (long)"/lm") != -EBUSY) {
-            sys_exit(3);
-        }
-        sys_exit(0);
+        sys_exit(rmdir_in_constructor((int)syscall0(SYS_GETPPID)));
     }
     if (syscall5(SYS_MOUNT, (long)"/dev/disk0p2", (long)"/lm", (long)"vfat", MS_RDONLY, 0) != 0) {
         fail("the mount through the lag");
     }
-    if (wait_status(pid) != 0) {
+    status = wait_status(pid);
+    if (status == 6 << 8) {
+        fail("the mount was never seen asleep on the disk");
+    }
+    if (status != 0) {
         fail("rmdir of the target while the constructor slept was not EBUSY");
     }
 
@@ -758,22 +829,28 @@ static void run_mounted(void)
     if (pattern_bytes != PATTERN_SECTORS * 512 || syscall3(SYS_LSEEK, fd, 0, 0) != 0) {
         fail("the shared file's size");
     }
-    if (syscall1(SYS_PIPE, (long)pipe_fds) != 0) {
+    if (syscall1(SYS_PIPE, (long)pipe_fds) != 0 || syscall1(SYS_PIPE, (long)to_child) != 0 ||
+        syscall1(SYS_PIPE, (long)to_parent) != 0) {
         fail("pipe");
     }
     pid = syscall1(SYS_FORK, 0);
     if (pid == 0) {
-        mark_sectors(fd, child_marks);
+        syscall1(SYS_CLOSE, to_child[1]);
+        syscall1(SYS_CLOSE, to_parent[0]);
+        mark_sectors(fd, child_marks, to_child[0], to_parent[1], 0);
         if (syscall3(SYS_WRITE, pipe_fds[1], (long)child_marks, PATTERN_SECTORS) !=
             PATTERN_SECTORS) {
             sys_exit(5);
         }
         sys_exit(0);
     }
-    mark_sectors(fd, parent_marks);
+    syscall1(SYS_CLOSE, to_parent[1]);
+    mark_sectors(fd, parent_marks, to_parent[0], to_child[1], 1);
     if (wait_status(pid) != 0) {
         fail("the child reader");
     }
+    syscall1(SYS_CLOSE, to_parent[0]);
+    syscall1(SYS_CLOSE, to_child[0]);
     if (syscall3(SYS_READ, pipe_fds[0], (long)child_marks, PATTERN_SECTORS) != PATTERN_SECTORS) {
         fail("the child's marks");
     }
