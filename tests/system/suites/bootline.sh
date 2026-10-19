@@ -16,8 +16,11 @@
 # and one of 668 is cut before its last word and logged as cut.
 #
 # Each refusal is asserted twice: the diagnostic is there, and the machine
-# never reached a shell. A test that looked only for the message would pass on
-# a kernel that printed it and carried on.
+# halted without reaching a shell. A test that looked only for the message
+# would pass on a kernel that printed it and carried on. The halt is what
+# QEMU's monitor says of the processor, through tests/system/monitor.sh: one
+# that `hlt` stopped with its interrupts off prints nothing more, so the log
+# read after it is the whole of what the machine printed.
 #
 # Usage: bootline.sh <kernel> <disk> <harness> <mkmbr>
 #
@@ -43,13 +46,17 @@ fi
 
 WORK="$DISK.bootline"
 LOG="$WORK.log"
+MONITOR="$WORK.monitor"
 QPID=""
+# shellcheck source=tests/system/monitor.sh
+. "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/monitor.sh"
 
-# Stop the machine this run started, if it runs. The pid is taken and cleared
-# before it is signalled, so a trap that fires between the kill and the wait
-# finds nothing to kill: a pid this script no longer owns may since have been
-# given to another process. SIGTERM goes first, then SIGKILL if the machine is
-# still there five seconds later, so the wait is bounded.
+# Stop the machine this run started, if it runs, and its monitor's reader.
+# The pid is taken and cleared before it is signalled, so a trap that fires
+# between the kill and the wait finds nothing to kill: a pid this script no
+# longer owns may since have been given to another process. SIGTERM goes
+# first, then SIGKILL if the machine is still there five seconds later, so
+# the wait is bounded.
 stop_boot() {
     qpid="$QPID"
     QPID=""
@@ -58,12 +65,13 @@ stop_boot() {
         "$RUNUTIL" gone "$qpid" 5 || kill -9 "$qpid" 2>/dev/null || true
         wait "$qpid" 2>/dev/null || true
     fi
+    monitor_close
 }
 
-# Stop the machine and remove the disk's copy and the log.
+# Stop the machine and remove the disk's copy, the log and the monitor's log.
 cleanup() {
     stop_boot
-    rm -f "$WORK" "$LOG"
+    rm -f "$WORK" "$LOG" "$MONITOR.log"
 }
 trap cleanup EXIT INT TERM HUP
 
@@ -77,32 +85,40 @@ fail() {
     exit 1
 }
 
-# boot TOKENS LINE SECONDS: boot a copy of the disk with the boot line TOKENS,
-# wait up to 25 seconds for LINE, then leave the machine running SECONDS more
-# and stop it. A kernel that printed a refusal and carried on would reach a
-# shell in that time, which a test that stopped the machine at the line could
-# not see.
+# halted WHAT: fail unless the machine is found halted with its interrupts
+# off, which a kernel that printed a refusal and carried on toward a shell is
+# not.
+halted() {
+    monitor_wait_halted "$(scaled 30)" || fail "$1 did not halt: $MONITOR_WHY"
+}
+
+# boot TOKENS LINE [halts]: boot a copy of the disk with the boot line TOKENS,
+# wait up to 25 seconds for LINE, and stop the machine; with `halts`, only
+# once it has halted.
 boot() {
     rm -f "$LOG" "$WORK"
     cp "$DISK" "$WORK"
+    monitor_open "$MONITOR"
     "$QEMU" -cpu max -display none -kernel "$KERNEL" \
         -append "$1" \
         -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
+        -monitor "pipe:$MONITOR" \
         -serial stdio < /dev/null > "$LOG" 2>&1 &
     QPID=$!
     "$RUNUTIL" until "$LOG" "$2" 25 || true
-    # interval: the machine runs on after the line to show it stopped there
-    sleep "$3"
+    if [ "${3:-}" = halts ]; then
+        halted "$1"
+    fi
     stop_boot
 }
 
 # The two spellings of a disk root, each of which must be refused.
 for tokens in "rach2.nodisk rach2.fsdisk" "rach2.nodisk rach2.root=disk"; do
     # The last of the refusal's four lines; under load they come seconds apart.
-    boot "$tokens" "and no rach2.rescue" 10
+    boot "$tokens" "and no rach2.rescue" halts
     grep -q "boot: refused: rach2.nodisk with rach2.fsdisk or rach2.root=disk" "$LOG" ||
         fail "$tokens was not refused, or the refusal did not name both tokens"
-    # Ten seconds on, neither the debug shell's banner nor a login prompt.
+    # Halted, with neither the debug shell's banner nor a login prompt.
     if grep -qE "Kernel debug shell active|rach2 login" "$LOG"; then
         fail "$tokens was refused and then reached a shell anyway"
     fi
@@ -116,18 +132,18 @@ done
 rm -f "$WORK.blank"
 dd if=/dev/zero of="$WORK.blank" bs=1048576 count=48 2>/dev/null
 # boot_blank TOKENS: boot the blank disk with the boot line TOKENS, wait up
-# to 30 seconds for the refusal, leave the machine running ten seconds more
-# and stop it.
+# to 30 seconds for the refusal, and stop the machine once it has halted.
 boot_blank() {
     rm -f "$LOG"
+    monitor_open "$MONITOR"
     "$QEMU" -cpu max -display none -kernel "$KERNEL" \
         -append "$1" \
         -drive "file=$WORK.blank,format=raw,if=ide,index=0,media=disk" \
+        -monitor "pipe:$MONITOR" \
         -serial stdio < /dev/null > "$LOG" 2>&1 &
     QPID=$!
     "$RUNUTIL" until "$LOG" "boot: refused: no file system mounted" 30 || true
-    # interval: the machine runs on after the line to show it stopped there
-    sleep 10
+    halted "a disk root with nothing on the disk"
     stop_boot
 }
 boot_blank "rach2.fsdisk"
@@ -154,15 +170,16 @@ echo "bootline-test: refused, and stopped: a root whose /sbin/init cannot be rea
 # and its Pentium no cmov; on x86-64, its qemu32 has no long mode. The kernel's
 # first log line must not follow the refusal.
 # boot_cpu MODEL LINE: boot the kernel alone on the processor MODEL, wait up to
-# 25 seconds for LINE, leave the machine running five seconds more and stop it.
+# 25 seconds for LINE, and stop the machine once it has halted.
 boot_cpu() {
     rm -f "$LOG"
+    monitor_open "$MONITOR"
     "$QEMU" -cpu "$1" -display none -kernel "$KERNEL" \
+        -monitor "pipe:$MONITOR" \
         -serial stdio < /dev/null > "$LOG" 2>&1 &
     QPID=$!
     "$RUNUTIL" until "$LOG" "$2" 25 || true
-    # interval: the machine runs on after the line to show it stopped there
-    sleep 5
+    halted "the $1 processor"
     stop_boot
     grep -q "$2" "$LOG" || fail "the $1 processor was not refused with: $2"
     if grep -q "boot: Rach2 Booting" "$LOG"; then
@@ -189,7 +206,7 @@ pad() {
 }
 # 26 + 20 * 21 + 12 = 458 bytes, with the rescue that exempts the
 # combination as the last word: the kernel must keep it and reach the shell.
-boot "rach2.nodisk rach2.fsdisk $(pad 20)rach2.rescue" "Kernel debug shell active" 0
+boot "rach2.nodisk rach2.fsdisk $(pad 20)rach2.rescue" "Kernel debug shell active"
 grep -q "Kernel debug shell active" "$LOG" ||
     fail "a boot line of 458 bytes lost its last word, rach2.rescue"
 grep -q "boot: command line cut" "$LOG" &&
@@ -197,7 +214,7 @@ grep -q "boot: command line cut" "$LOG" &&
 echo "bootline-test: kept whole: a boot line of 458 bytes"
 # 26 + 30 * 21 + 12 = 668 bytes: the rescue is past the cut, so the
 # combination is refused, and the cut is logged with what was kept.
-boot "rach2.nodisk rach2.fsdisk $(pad 30)rach2.rescue" "and no rach2.rescue" 0
+boot "rach2.nodisk rach2.fsdisk $(pad 30)rach2.rescue" "and no rach2.rescue" halts
 grep -q "boot: command line cut: kept [0-9]* of 511 or more bytes" "$LOG" ||
     fail "a boot line of 668 bytes was cut with no log line, or one that gave no lengths"
 grep -q "boot: refused: rach2.nodisk" "$LOG" ||
@@ -208,7 +225,7 @@ echo "bootline-test: cut and logged: a boot line of 668 bytes"
 # that is what the token is for, and the refusal must not stand in its way.
 for tokens in "rach2.nodisk rach2.fsdisk rach2.rescue" \
               "rach2.nodisk rach2.root=disk init=rescue"; do
-    boot "$tokens" "Kernel debug shell active" 5
+    boot "$tokens" "Kernel debug shell active"
     grep -q "Kernel debug shell active" "$LOG" ||
         fail "$tokens did not reach the debug shell it asked for"
     grep -q "boot: refused: rach2.nodisk" "$LOG" &&
