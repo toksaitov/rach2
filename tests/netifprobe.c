@@ -461,6 +461,55 @@ static void proc_names_both(void)
     }
 }
 
+/**
+ * The receive drops of eth0, the fourth number of its line in /proc/net/dev,
+ * which counts every frame that arrives while the interface is down; fails
+ * the probe when the file or the line cannot be read.
+ */
+static uint32_t eth0_rx_dropped(void)
+{
+    char buf[2048];
+    int fd, n, total = 0, i, j, field;
+    uint32_t v = 0;
+
+    fd = sys_open("/proc/net/dev", 0);
+    if (fd < 0) {
+        fail_n("/proc/net/dev did not open", fd);
+    }
+    while (total < (int)sizeof(buf) - 1) {
+        n = sys_read(fd, buf + total, (size_t)((int)sizeof(buf) - 1 - total));
+        if (n <= 0) {
+            break;
+        }
+        total += n;
+    }
+    sys_close(fd);
+    buf[total] = '\0';
+    for (i = 0; buf[i] != '\0'; i++) {
+        for (j = 0; "eth0:"[j] != '\0' && buf[i + j] == "eth0:"[j]; j++) {
+        }
+        if ("eth0:"[j] == '\0') {
+            break;
+        }
+    }
+    if (buf[i] == '\0') {
+        fail("/proc/net/dev does not name eth0");
+    }
+    i += 5;
+    for (field = 0; field < 4; field++) {
+        while (buf[i] == ' ') {
+            i++;
+        }
+        if (buf[i] < '0' || buf[i] > '9') {
+            fail("eth0's line of /proc/net/dev has no receive drops");
+        }
+        for (v = 0; buf[i] >= '0' && buf[i] <= '9'; i++) {
+            v = v * 10 + (uint32_t)(buf[i] - '0');
+        }
+    }
+    return v;
+}
+
 /* struct sockaddr_ll: family, protocol, ifindex, hatype, pkttype, halen,
  * addr. */
 struct sockaddr_ll_probe {
@@ -991,8 +1040,10 @@ PROBE_SP_ENTRY;
  * Down is down in both directions: with the interface down SIOCGIFFLAGS
  * reports neither IFF_UP nor IFF_RUNNING, the gateway does not answer a
  * ping, and the datagram the suite sends at "NETIFPROBE DOWN" does not
- * arrive. With the interface up again the datagram the suite sends at
- * "NETIFPROBE UP" arrives, which shows that the suite sends one. The second
+ * arrive: the probe waits until eth0's receive drops in /proc/net/dev rise,
+ * as they do for every frame that reaches the interface while it is down,
+ * and the socket has nothing then. With the interface up again the datagram
+ * the suite sends at "NETIFPROBE UP" arrives, which shows that the suite sends one. The second
  * connection, open across that change of address, reads ENETRESET without
  * blocking.
  *
@@ -1018,6 +1069,7 @@ static void netif_main(void)
     unsigned long args[6];
     int fd, listener, client, conn, client2, conn2, pid, status;
     int inbound, tries, r;
+    uint32_t dropped;
     /* The kernel writes it through the pointer getsockopt is given. */
     volatile int err;
     struct pollfd_probe pfd;
@@ -1366,15 +1418,23 @@ static void netif_main(void)
         fail("the gateway answered a machine whose interface was down");
     }
 
-    /* At the token the suite sends a datagram, which may not arrive. */
+    /* At the token the suite sends a datagram, which the interface drops. */
+    dropped = eth0_rx_dropped();
     say("NETIFPROBE DOWN\n");
-    for (tries = 0; tries < 60; tries++) {
-        pfd.fd = inbound;
-        pfd.events = POLLIN;
+    pfd.fd = inbound;
+    pfd.events = POLLIN;
+    for (tries = 0; eth0_rx_dropped() == dropped; tries++) {
+        if (tries == 600) {
+            fail("no frame was dropped at the interface that was down in 30 seconds");
+        }
         pfd.revents = 0;
         if (sys_poll(&pfd, 1, 50) > 0 && (pfd.revents & POLLIN)) {
             fail("a datagram reached a machine whose interface was down");
         }
+    }
+    pfd.revents = 0;
+    if (sys_poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLIN)) {
+        fail("a datagram reached a machine whose interface was down");
     }
     set_name("eth0");
     ifr[16] = IFF_UP;
