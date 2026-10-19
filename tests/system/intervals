@@ -14,7 +14,6 @@ tests/system/suites/drill.sh: the service log is read every second for recovery'
 tests/system/suites/drill.sh: the service log is read every three seconds for the lease
 tests/system/suites/fakeapi.sh: a try of SSH every two seconds until the server answers
 tests/system/suites/gnu.sh: a try of SSH every two seconds until the server answers
-tests/system/suites/grow.sh: the resizer is killed after its period; the row proves the repair
 tests/system/suites/make.sh: the file's time must pass the second, which make compares whole
 tests/system/suites/metal.sh: a try of SSH every two seconds until the server answers
 tests/system/suites/metal.sh: a look at the log every second until the daemon has written it

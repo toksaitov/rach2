@@ -14,8 +14,10 @@
 #    from the volume before the grow; e2fsck on the grown volume finds it
 #    clean; the volume mounted and a file written near its end, read back,
 #    and the volume clean again.
-# 2. The same grow killed inside resize2fs, then run again: the checker
-#    repairs what the kill left and the resizer finishes.
+# 2. The same grow stopped inside resize2fs at a write it reports, then run
+#    again: the volume is left marked as having errors at its old size, so
+#    the resizer refuses it alone; the checker clears the mark and the
+#    resizer finishes.
 # 3. A disk whose entry already reaches the end, a grow stopped between
 #    the entry and the resize: `growroot` finds nothing to rewrite and does
 #    the rest.
@@ -50,9 +52,6 @@ ID=47470001
 # kernel leaves 7108 kB of 16 MiB, under that, and 23476 kB of 32 MiB, the
 # next power of two.
 MEM=32
-# The kill lands inside resize2fs: the 1 GiB check takes a few seconds,
-# the grow minutes on the Lenovo's disk and seconds on the small one.
-KILL_AFTER=$([ -n "${RACH2_GROW_LENOVO:-}" ] && echo 25 || echo 6)
 
 BASE="$DIR/base.raw"
 FULL="$DIR/full.raw"
@@ -150,19 +149,45 @@ UNIQ=$(tr -d '\r' < "$DIR/end.log" | grep -a '^[0-9]* 32768$' | sort -u | wc -l 
 [ "$SUMS" = "2" ] && [ "$UNIQ" = "1" ] || fail "the file near the end did not read back ($SUMS lines, $UNIQ distinct)"
 echo "grow-test: a file written in the grown volume's last group reads back and the volume is clean: OK"
 
-# ---- 2: killed inside resize2fs, repaired and finished by the next run ----
+# ---- 2: stopped in resize2fs at a reported write, repaired and finished ----
+# resize2fs takes e2fsprogs' test I/O manager when TEST_IO_BLOCK is set; with
+# TEST_IO_WRITE_ABORT=1, once its first write of that block has returned, the
+# manager flushes what the resizer wrote, prints "Aborting due to I/O to block
+# N" and aborts it. The block is the first of the inode table of the first
+# group the grow adds, which row 1's grown volume gives in its descriptor of
+# that group (32 bytes each from block 1, the table's block at byte 8). By
+# that write the resizer has marked the volume as having errors and has not
+# written its new size, so the stop leaves the same volume however fast the
+# machine runs, and resize2fs refuses that volume until e2fsck has cleared
+# the mark. The variables reach growroot's checks as well, which write
+# nothing past the old volume's end.
+ADDED=$((SIZE / 8 / GROUP_BLOCKS))
+DESC=$((START * 512 + 4096 + ADDED * 32))
+rm -f "$DIR/desc.raw"
+qemu-img dd -f qcow2 -O raw bs=512 count=$((DESC / 512 + 1)) if="$DIR/one.qcow2" \
+    of="$DIR/desc.raw" || fail "the grown volume's descriptors"
+read -r b0 b1 b2 b3 <<EOF
+$(od -An -tu1 -j $((DESC + 8)) -N 4 "$DIR/desc.raw")
+EOF
+rm -f "$DIR/desc.raw"
+[ -n "$b3" ] || fail "the added group's descriptor"
+ITABLE=$((b0 + 256 * b1 + 65536 * b2 + 16777216 * b3))
+[ "$ITABLE" -ge $((ADDED * GROUP_BLOCKS)) ] && [ "$ITABLE" -lt $(((ADDED + 1) * GROUP_BLOCKS)) ] \
+    || fail "the first added group's inode table at block $ITABLE"
 overlay "$DIR/two.qcow2" "$BASE"
-# interval: the resizer is killed after its period; the row proves the repair
 boot "$DIR/two.qcow2" $MEM "$DIR/two.log" \
-    "send=growroot MBRID=$ID,1 > /tmp/g.log 2>&1 & sleep $KILL_AFTER; pidof resize2fs > /tmp/r.pid; kill \$!; killall resize2fs; sleep 2; echo KILL\"\"ED" "expect=KILLED" \
-    "send=cat /tmp/g.log; test -s /tmp/r.pid && echo WAS\"\"RESIZING; pidof resize2fs || echo NO\"\"RESIZER; echo KILL\"\"DONE" \
-    "expect=WASRESIZING" "expect=NORESIZER" "expect=KILLDONE" \
+    "send=TEST_IO_BLOCK=$ITABLE TEST_IO_WRITE_ABORT=1 growroot MBRID=$ID,1; echo GROW\"\"\$?" \
+    "expect=Aborting due to I/O to block $ITABLE" "expect=GROW1" \
+    "send=pidof resize2fs || echo NO\"\"RESIZER" "expect=NORESIZER" \
+    "send=/sbin/resize2fs /dev/disk0p1; echo RESIZE\"\"\$?" \
+    "expect=Please run 'e2fsck -f /dev/disk0p1' first" "expect=RESIZE1" \
     "send=growroot MBRID=$ID,1" "expect=$GROWN" \
-    "$FSCK" "expect=FSCK0" "send=echo ROW\"\"DONE" "expect=ROWDONE" || fail "the grow killed and run again"
-grep -aq 'growroot: grow: resize2fs /dev/disk0p1' "$DIR/two.log" || fail "the first run reached resize2fs"
+    "$FSCK" "expect=FSCK0" "send=echo ROW\"\"DONE" "expect=ROWDONE" || fail "the grow stopped and run again"
+grep -aq 'growroot: /dev/disk0p1: resize2fs status -1' "$DIR/two.log" \
+    || fail "the first run's report of the stopped resizer"
 grep -aq "growroot: entry: /dev/disk0p1 already fills the $END sectors after it" "$DIR/two.log" \
     || fail "the second run's entry record"
-echo "grow-test: a grow killed inside resize2fs is repaired and finished by running growroot again: OK"
+echo "grow-test: a grow stopped at block $ITABLE inside resize2fs needs the checker, which the next growroot runs before it finishes the grow: OK"
 
 # ---- 3: the entry already at the end, the grow stopped before the resize ----
 cp -c "$BASE" "$FULL" 2>/dev/null || cp "$BASE" "$FULL"
