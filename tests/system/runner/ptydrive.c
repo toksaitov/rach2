@@ -356,6 +356,50 @@ static double scaled(double seconds)
     return seconds * deadline_factor;
 }
 
+/* The file PTYDRIVE_READS names, or NULL when the variable is unset. */
+static FILE *reads;
+
+/**
+ * Open the file PTYDRIVE_READS names for appending, close-on-exec so that
+ * the command does not inherit it; exit 2 when it cannot be opened.
+ */
+static void reads_open(void)
+{
+    const char *path = getenv("PTYDRIVE_READS");
+
+    if (path == NULL)
+        return;
+    reads = fopen(path, "a");
+    if (reads == NULL) {
+        fprintf(stderr, "ptydrive: cannot open %s: %s\n", path, strerror(errno));
+        exit(2);
+    }
+    fcntl(fileno(reads), F_SETFD, FD_CLOEXEC);
+}
+
+/**
+ * Read what the environment sets beside the options: the deadline factor,
+ * and the reads file, which is opened.
+ */
+static void environment_read(void)
+{
+    deadline_factor_read();
+    reads_open();
+}
+
+/**
+ * Flush what a read of `n` bytes of the command's output relayed, and then
+ * add a line with `n` to the reads file, if there is one.
+ */
+static void read_handled(ssize_t n)
+{
+    fflush(stdout);
+    if (reads == NULL)
+        return;
+    fprintf(reads, "%ld\n", (long)n);
+    fflush(reads);
+}
+
 /**
  * Read the options, start the command on a terminal with `forkpty`, and
  * relay its output and answer its prompt until the end of the run.
@@ -383,8 +427,6 @@ int main(int argc, char **argv)
     size_t tail_len = 0;
     int asked = 0, answered = 0, timed_out = 0, failed = 0;
     double deadline;
-    const char *reads_path = getenv("PTYDRIVE_READS");
-    FILE *reads = NULL;
 
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--rows") == 0 && i + 1 < argc)
@@ -432,13 +474,7 @@ int main(int argc, char **argv)
         return 2;
     }
     compile_prompt(prompt_re);
-    if (reads_path != NULL && (reads = fopen(reads_path, "a")) == NULL) {
-        fprintf(stderr, "ptydrive: cannot open %s: %s\n", reads_path, strerror(errno));
-        free(filter.pending);
-        return 2;
-    }
-    if (reads != NULL)
-        fcntl(fileno(reads), F_SETFD, FD_CLOEXEC);
+    environment_read();
 
     ws.ws_row = (unsigned short)rows;
     ws.ws_col = (unsigned short)cols;
@@ -457,7 +493,6 @@ int main(int argc, char **argv)
         _exit(127);
     }
 
-    deadline_factor_read();
     deadline = now() + scaled(timeout);
     for (;;) {
         double remaining = deadline - now();
@@ -504,19 +539,13 @@ int main(int argc, char **argv)
                 answered++;
             }
         }
-        fflush(stdout);
-        if (reads != NULL) {
-            fprintf(reads, "%ld\n", (long)n);
-            fflush(reads);
-        }
+        read_handled(n);
         if (failed)
             break;
     }
 
     secret_finish(&filter);
     free(filter.pending);
-    if (reads != NULL)
-        fclose(reads);
     if (timed_out)
         printf("\nTIMEDOUT\n");
     if (timed_out || failed) {

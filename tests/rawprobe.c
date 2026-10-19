@@ -374,6 +374,23 @@ static uint32_t icmp_in_msgs(void)
     return 0xFFFFFFFFu;
 }
 
+/**
+ * Wait until the machine has counted `count` ICMP messages received since it
+ * counted `base`, looking every 10 ms; 30 seconds end a wait for messages
+ * lost. Returns 1 once they have arrived, and 0 otherwise.
+ */
+static int icmp_arrived(uint32_t base, uint32_t count)
+{
+    uint32_t arrived = base;
+    int naps;
+
+    for (naps = 0; naps < 3000 && arrived != 0xFFFFFFFFu && arrived - base < count; naps++) {
+        nap_ms(10);
+        arrived = icmp_in_msgs();
+    }
+    return base != 0xFFFFFFFFu && arrived != 0xFFFFFFFFu && arrived - base >= count;
+}
+
 /* The boot line, read from /proc/cmdline. */
 static char cmdline[512];
 
@@ -505,6 +522,18 @@ static void socket_pressure(unsigned long *args, int fd_a)
     if (n >= 0) {
         sys_close(n);
     }
+}
+
+/**
+ * Empty the queue of the raw socket `fd`, and return the machine's count of
+ * ICMP messages received then, as `icmp_in_msgs` gives it.
+ */
+static uint32_t drained(unsigned long *args, int fd)
+{
+    while (raw_take(args, fd, frame_a, (int)sizeof(frame_a)) > 0) {
+        ;
+    }
+    return icmp_in_msgs();
 }
 
 /**
@@ -711,14 +740,11 @@ PROBE_START void _start(void)
 
     /* Nine replies to a queue eight deep: eight are kept. */
     {
-        int got = 0, naps;
-        uint32_t base, arrived;
+        int got = 0;
+        uint32_t base;
 
         sys_close(fd_b);
-        while (raw_take(args, fd_a, frame_a, (int)sizeof(frame_a)) > 0) {
-            ;
-        }
-        base = icmp_in_msgs();
+        base = drained(args, fd_a);
         check(base != 0xFFFFFFFFu, "/proc/net/snmp has the Icmp counts");
         for (i = 0; i < 9; i++) {
             uint16_t csum;
@@ -744,13 +770,7 @@ PROBE_START void _start(void)
             check(socketcall(SC_SENDTO, args) == 8, "an echo request leaves");
             nap_ms(30);
         }
-        arrived = base;
-        for (naps = 0; naps < 3000 && arrived != 0xFFFFFFFFu && arrived - base < 9; naps++) {
-            nap_ms(10);
-            arrived = icmp_in_msgs();
-        }
-        check(base != 0xFFFFFFFFu && arrived != 0xFFFFFFFFu && arrived - base >= 9,
-              "nine ICMP messages reach the socket's queue");
+        check(icmp_arrived(base, 9), "nine ICMP messages reach the socket's queue");
         for (i = 0; i < 12; i++) {
             n = raw_take(args, fd_a, frame_a, (int)sizeof(frame_a));
             if (n <= 0) {

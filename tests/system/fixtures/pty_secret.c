@@ -58,12 +58,31 @@ static long reads_seen(const char *path)
 }
 
 /**
+ * Write the prompt of the case `mode`: two prompts in one write in `joined`,
+ * and otherwise `Password:` in two writes, the second once the driver has
+ * read the first, as a new line in the file `reads` shows.
+ */
+static void prompt(const char *mode, const char *reads)
+{
+    long before;
+
+    if (strcmp(mode, "joined") == 0) {
+        emit("Password:Password:", 18);
+        return;
+    }
+    before = reads_seen(reads);
+    emit("Pass", 4);
+    while (reads_seen(reads) == before)
+        usleep(1000);
+    emit("word:", 5);
+}
+
+/**
  * Prompt for a password as the case in $PTY_SECRET_CASE says, read one line
  * as the answer, and run the last argument with `sh -c`.
  *
- * The prompt is `Password:` in two writes, the second once the driver has
- * read the first, as its file $PTYDRIVE_READS shows; in `joined` it is two
- * prompts in one write, and in `long` 4096 dots follow it. Echo is off while
+ * `prompt` writes the prompt, given the driver's file $PTYDRIVE_READS; in
+ * `long` 4096 dots follow it. Echo is off while
  * the answer is read, except in `echo`. In `prefix` the fixture writes the
  * answer back without its last byte and exits 0. Otherwise it puts the
  * answer, its first half and its second half in $PTY_DUMMY_RECEIVED,
@@ -83,23 +102,13 @@ int main(int argc, char **argv)
     FILE *record;
 
     if (argc < 2 || mode == NULL || audit == NULL || reads == NULL ||
-        getenv("RACH2_ACCEPT_PASSWORD") != NULL ||
-        tcgetattr(0, &terminal) != 0)
+        getenv("RACH2_ACCEPT_PASSWORD") != NULL || tcgetattr(0, &terminal) != 0)
         fail();
     if (strcmp(mode, "echo") != 0)
         terminal.c_lflag &= (tcflag_t)~ECHO;
     if (tcsetattr(0, TCSANOW, &terminal) != 0)
         fail();
-    if (strcmp(mode, "joined") == 0) {
-        emit("Password:Password:", 18);
-    } else {
-        long before = reads_seen(reads);
-
-        emit("Pass", 4);
-        while (reads_seen(reads) == before)
-            usleep(1000);
-        emit("word:", 5);
-    }
+    prompt(mode, reads);
     if (strcmp(mode, "long") == 0) {
         char padding[4096];
 

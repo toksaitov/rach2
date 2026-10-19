@@ -510,6 +510,37 @@ static uint32_t eth0_rx_dropped(void)
     return v;
 }
 
+/**
+ * Print "NETIFPROBE DOWN", at which the suite sends a datagram to the socket
+ * `inbound` while eth0 is down, and wait until eth0's receive drops rise, as
+ * they do for the frame the interface drops; the socket must have nothing
+ * then or before. 30 seconds of waiting end a wait for a frame that never
+ * came. Fails the probe otherwise.
+ */
+static void down_drops(int inbound)
+{
+    struct pollfd_probe pfd;
+    uint32_t dropped = eth0_rx_dropped();
+    int tries;
+
+    say("NETIFPROBE DOWN\n");
+    pfd.fd = inbound;
+    pfd.events = POLLIN;
+    for (tries = 0; eth0_rx_dropped() == dropped; tries++) {
+        if (tries == 600) {
+            fail("no frame was dropped at the interface that was down in 30 seconds");
+        }
+        pfd.revents = 0;
+        if (sys_poll(&pfd, 1, 50) > 0 && (pfd.revents & POLLIN)) {
+            fail("a datagram reached a machine whose interface was down");
+        }
+    }
+    pfd.revents = 0;
+    if (sys_poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLIN)) {
+        fail("a datagram reached a machine whose interface was down");
+    }
+}
+
 /* struct sockaddr_ll: family, protocol, ifindex, hatype, pkttype, halen,
  * addr. */
 struct sockaddr_ll_probe {
@@ -1043,9 +1074,9 @@ PROBE_SP_ENTRY;
  * arrive: the probe waits until eth0's receive drops in /proc/net/dev rise,
  * as they do for every frame that reaches the interface while it is down,
  * and the socket has nothing then. With the interface up again the datagram
- * the suite sends at "NETIFPROBE UP" arrives, which shows that the suite sends one. The second
- * connection, open across that change of address, reads ENETRESET without
- * blocking.
+ * the suite sends at "NETIFPROBE UP" arrives, which shows that the suite
+ * sends one. The second connection, open across that change of address,
+ * reads ENETRESET without blocking.
  *
  * Addresses in 0/8, in 240/4 and of multicast are EINVAL. A default route
  * sets the gateway, a gateway off the subnet is ENETUNREACH as on Linux, and
@@ -1068,8 +1099,7 @@ static void netif_main(void)
 {
     unsigned long args[6];
     int fd, listener, client, conn, client2, conn2, pid, status;
-    int inbound, tries, r;
-    uint32_t dropped;
+    int inbound, r;
     /* The kernel writes it through the pointer getsockopt is given. */
     volatile int err;
     struct pollfd_probe pfd;
@@ -1418,24 +1448,7 @@ static void netif_main(void)
         fail("the gateway answered a machine whose interface was down");
     }
 
-    /* At the token the suite sends a datagram, which the interface drops. */
-    dropped = eth0_rx_dropped();
-    say("NETIFPROBE DOWN\n");
-    pfd.fd = inbound;
-    pfd.events = POLLIN;
-    for (tries = 0; eth0_rx_dropped() == dropped; tries++) {
-        if (tries == 600) {
-            fail("no frame was dropped at the interface that was down in 30 seconds");
-        }
-        pfd.revents = 0;
-        if (sys_poll(&pfd, 1, 50) > 0 && (pfd.revents & POLLIN)) {
-            fail("a datagram reached a machine whose interface was down");
-        }
-    }
-    pfd.revents = 0;
-    if (sys_poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLIN)) {
-        fail("a datagram reached a machine whose interface was down");
-    }
+    down_drops(inbound);
     set_name("eth0");
     ifr[16] = IFF_UP;
     ifr[17] = 0;

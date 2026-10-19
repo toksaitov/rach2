@@ -228,6 +228,42 @@ static void sleep_ms(long ms)
     sys_nanosleep(&req);
 }
 
+/** Wait until /proc shows process `pid` asleep, looking every 10 ms. Returns
+ * 1 once it is, and 0 when it ends first, as a zombie or gone from /proc. */
+static int seen_asleep(int pid)
+{
+    char state;
+
+    while ((state = state_of(pid)) != 'S') {
+        if (state == 0 || state == 'Z') {
+            return 0;
+        }
+        sleep_ms(10);
+    }
+    return 1;
+}
+
+/**
+ * Wait for the byte the child writes just before its ping, set `*began` to
+ * the time the wait ended, and wait until /proc shows the child asleep in
+ * the call.
+ * Returns "", or why the row fails.
+ */
+static const char *child_in_ping(int fd, int child, long *began)
+{
+    char token;
+    int got = sys_read(fd, &token, 1);
+
+    *began = now_ms();
+    if (got != 1) {
+        return "FAILED (the child never reached its ping)";
+    }
+    if (!seen_asleep(child)) {
+        return "FAILED (the child was never seen asleep in its ping)";
+    }
+    return "";
+}
+
 /** Ping `ip`: the round-trip time in ticks, or a negated errno. */
 static int ping(uint32_t ip)
 {
@@ -343,7 +379,6 @@ PROBE_START void _start(void)
         int busy;
         long began, ended, live_span = 0, last_live = 0;
         long child_ms = 0;
-        char token = 0, state;
         int ok = 1;
         const char *why = "";
 
@@ -360,18 +395,8 @@ PROBE_START void _start(void)
                 ok = 0;
                 why = "FAILED (no fork)";
             } else {
-                if (sys_read(ready[0], &token, 1) != 1) {
-                    ok = 0;
-                    why = "FAILED (the child never reached its ping)";
-                }
-                began = now_ms();
-                while (ok && (state = state_of(child)) != 'S') {
-                    if (state == 0 || state == 'Z') {
-                        ok = 0;
-                        why = "FAILED (the child was never seen asleep in its ping)";
-                    }
-                    sleep_ms(10);
-                }
+                why = child_in_ping(ready[0], child, &began);
+                ok = why[0] == '\0';
                 if (ok) {
                     /* While the child is in its call, a ping is EBUSY. */
                     busy = ping(LOOPBACK_IP);

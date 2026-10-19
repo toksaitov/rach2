@@ -761,6 +761,31 @@ static int rmdir_in_constructor(int parent)
 }
 
 /**
+ * Mount the FAT32 partition on /lm through the lag while a child runs rmdir
+ * on the target once it sees the mount asleep in the constructor, and fail
+ * unless the rmdir is EBUSY, since the slot has the covered node.
+ */
+static void mount_beside_rmdir(void)
+{
+    int pid, status;
+
+    pid = syscall1(SYS_FORK, 0);
+    if (pid == 0) {
+        sys_exit(rmdir_in_constructor((int)syscall0(SYS_GETPPID)));
+    }
+    if (syscall5(SYS_MOUNT, (long)"/dev/disk0p2", (long)"/lm", (long)"vfat", MS_RDONLY, 0) != 0) {
+        fail("the mount through the lag");
+    }
+    status = wait_status(pid);
+    if (status == 6 << 8) {
+        fail("the mount was never seen asleep on the disk");
+    }
+    if (status != 0) {
+        fail("rmdir of the target while the constructor slept was not EBUSY");
+    }
+}
+
+/**
  * The mounted half, under `rach2.blocklag=N` with the FAT32 partition on
  * /dev/disk0p2. A child runs rmdir on the target once it sees the parent's
  * mount asleep in the constructor on the lag, and gets EBUSY, since the slot
@@ -777,7 +802,7 @@ static int rmdir_in_constructor(int parent)
  */
 static void run_mounted(void)
 {
-    int pid, pid2, fd, before, after, status;
+    int pid, pid2, fd, before, after;
     int total;
     int pattern_bytes;
 
@@ -785,21 +810,7 @@ static void run_mounted(void)
         fail("mkdir /lm");
     }
 
-    /* rmdir of the target while the constructor sleeps is EBUSY. */
-    pid = syscall1(SYS_FORK, 0);
-    if (pid == 0) {
-        sys_exit(rmdir_in_constructor((int)syscall0(SYS_GETPPID)));
-    }
-    if (syscall5(SYS_MOUNT, (long)"/dev/disk0p2", (long)"/lm", (long)"vfat", MS_RDONLY, 0) != 0) {
-        fail("the mount through the lag");
-    }
-    status = wait_status(pid);
-    if (status == 6 << 8) {
-        fail("the mount was never seen asleep on the disk");
-    }
-    if (status != 0) {
-        fail("rmdir of the target while the constructor slept was not EBUSY");
-    }
+    mount_beside_rmdir();
 
     /* Two readers of one cold block: the cache counts the second's wait. */
     before = disk_counter("waits");

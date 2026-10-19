@@ -444,12 +444,54 @@ static void rows_proc(void)
 }
 
 /**
+ * A working directory inside the mount keeps it busy: a child enters the
+ * mount, reports its chdir through a pipe, and leaves the mount, by exiting,
+ * when the parent closes the pipe `go` after its unmount was refused.
+ */
+static void row_working_directory(void)
+{
+    int pid, opened[2], go[2];
+    char byte = 0;
+
+    opened[0] = opened[1] = go[0] = go[1] = -1;
+    if (syscall1(SYS_PIPE, (long)opened) != 0 || syscall1(SYS_PIPE, (long)go) != 0) {
+        fail("the pipes for the chdir child");
+    }
+    pid = syscall1(SYS_FORK, 0);
+    if (pid == 0) {
+        syscall1(SYS_CLOSE, opened[0]);
+        syscall1(SYS_CLOSE, go[1]);
+        if (syscall1(SYS_CHDIR, (long)MNT) != 0) {
+            sys_exit(9);
+        }
+        syscall3(SYS_WRITE, opened[1], (long)"c", 1);
+        syscall3(SYS_READ, go[0], (long)&byte, 1);
+        sys_exit(0);
+    }
+    syscall1(SYS_CLOSE, opened[1]);
+    syscall1(SYS_CLOSE, go[0]);
+    if (syscall3(SYS_READ, opened[0], (long)&byte, 1) != 1) {
+        fail("the chdir child did not enter the mount");
+    }
+    syscall1(SYS_CLOSE, opened[0]);
+    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != -EBUSY) {
+        fail("umount2 with a working directory inside is EBUSY");
+    }
+    syscall1(SYS_CLOSE, go[1]);
+    if (wait_status(pid) != 0) {
+        fail("the chdir child");
+    }
+    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
+        fail("umount2 after the working directory left");
+    }
+}
+
+/**
  * Every way a description can outlive its opener keeps the mount busy: a
  * descriptor and its duplicates, one a forked child inherited, and a working
- * directory inside the mount. The child that inherited a descriptor closes it
- * only when the parent closes the pipe `go`, after its unmount was refused;
- * the child that enters the mount reports its chdir through a pipe and
- * leaves the mount, by exiting, when the parent closes its own `go`.
+ * directory inside the mount (`row_working_directory`). The child that
+ * inherited a descriptor closes it only when the parent closes the pipe `go`,
+ * after its unmount was refused.
  *
  * A close-on-exec descriptor is dropped by execve: the child holds the only
  * description and execs `stdintest`, which blocks on the console and stays
@@ -576,37 +618,7 @@ static void rows_lifetime(void)
         fail("the mount once more");
     }
 
-    opened[0] = opened[1] = go[0] = go[1] = -1;
-    if (syscall1(SYS_PIPE, (long)opened) != 0 || syscall1(SYS_PIPE, (long)go) != 0) {
-        fail("the pipes for the chdir child");
-    }
-    pid = syscall1(SYS_FORK, 0);
-    if (pid == 0) {
-        syscall1(SYS_CLOSE, opened[0]);
-        syscall1(SYS_CLOSE, go[1]);
-        if (syscall1(SYS_CHDIR, (long)MNT) != 0) {
-            sys_exit(9);
-        }
-        syscall3(SYS_WRITE, opened[1], (long)"c", 1);
-        syscall3(SYS_READ, go[0], (long)&byte, 1);
-        sys_exit(0);
-    }
-    syscall1(SYS_CLOSE, opened[1]);
-    syscall1(SYS_CLOSE, go[0]);
-    if (syscall3(SYS_READ, opened[0], (long)&byte, 1) != 1) {
-        fail("the chdir child did not enter the mount");
-    }
-    syscall1(SYS_CLOSE, opened[0]);
-    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != -EBUSY) {
-        fail("umount2 with a working directory inside is EBUSY");
-    }
-    syscall1(SYS_CLOSE, go[1]);
-    if (wait_status(pid) != 0) {
-        fail("the chdir child");
-    }
-    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
-        fail("umount2 after the working directory left");
-    }
+    row_working_directory();
 }
 
 /** The rows of umount2's flags and the permanent mounts, an unprivileged
