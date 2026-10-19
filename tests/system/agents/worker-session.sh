@@ -68,7 +68,7 @@ until_log() {
 }
 
 row() {
-    local status bound ended
+    local status bound ended=''
     tree || return
     mkdir -p "$WORK/home" "$WORK/tmp" "$WORK/bin" "$WORK/state" /tmp/agents/results
     output "the tree's branch" git -C tree branch -M master

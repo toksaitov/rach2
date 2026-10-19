@@ -186,7 +186,7 @@ exited() {
 # program ended first, or the server could not be asked, and the program is
 # stopped.
 held() {
-    local waiter ended status
+    local waiter ended='' status
     curl -fsS --cacert "$CA" -o /dev/null https://fakeapi.test/fakeapi/held &
     waiter=$!
     wait -n -p ended "$2" "$waiter"
