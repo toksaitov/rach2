@@ -229,6 +229,30 @@ static int sem_wide_count(int id)
 #endif
 
 /**
+ * Wait up to 3 s for the child `child` to block on semaphore 0 of `id`.
+ * Returns 0 once it waits there; otherwise kills and reaps the child, removes
+ * the set, and returns 1, so that a waiter that never blocks fails its row.
+ */
+static int await_waiter(int id, pid_t child)
+{
+    int tries;
+
+    for (tries = 0; tries < 300; tries++) {
+        if (semctl(id, 0, GETNCNT) == 1) {
+            return 0;
+        }
+        if (waitpid(child, NULL, WNOHANG) != 0) {
+            break;
+        }
+        usleep(10000);
+    }
+    kill(child, SIGKILL);
+    waitpid(child, NULL, 0);
+    semctl(id, 0, IPC_RMID);
+    return 1;
+}
+
+/**
  * Check two waiters of the set `id`: one the parent lets through, whose
  * SEM_UNDO decrement is undone at its exit, and one the set's removal wakes.
  * Removes the set. Returns 0, or 1 once the failure is reported.
@@ -242,8 +266,8 @@ static int sem_waiters(int id)
     if (child == 0) {
         _exit(sem_child(id));
     }
-    while (semctl(id, 0, GETNCNT) != 1) {
-        usleep(10000);
+    if (await_waiter(id, child) != 0) {
+        return fail("a child's semop on a semaphore of 0 did not wait");
     }
     if (semop(id, &give, 1) != 0 || child_status(child) != 0 || semctl(id, 1, GETVAL) != 1) {
         return fail("a waiter let through, and a child's SEM_UNDO undone at its exit");
@@ -252,8 +276,8 @@ static int sem_waiters(int id)
     if (child == 0) {
         _exit(semop(id, &wait0, 1) == -1 && errno == EIDRM ? 0 : 1);
     }
-    while (semctl(id, 0, GETNCNT) != 1) {
-        usleep(10000);
+    if (await_waiter(id, child) != 0) {
+        return fail("a child's semop did not wait for the set's removal");
     }
     if (semctl(id, 0, IPC_RMID) != 0 || child_status(child) != 0) {
         return fail("removing the set wakes its waiter with EIDRM");
