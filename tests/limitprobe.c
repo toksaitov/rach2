@@ -148,16 +148,6 @@ static int wait_status(int pid)
     return (status >> 8) & 0xff;
 }
 
-/** Sleep for `ms` milliseconds. */
-static void sleep_ms(int ms)
-{
-    long ts[2];
-
-    ts[0] = ms / 1000;
-    ts[1] = (ms % 1000) * 1000000;
-    syscall2(SYS_NANOSLEEP, (long)ts, 0);
-}
-
 /** Run `body` in a child that exits with its answer, and fail with `what`
  * unless the answer is `want`. */
 static void child_must(int (*body)(void), int want, const char *what)
@@ -376,13 +366,20 @@ static int body_zombie(void)
 /* The pipe on which `body_nproc` tells the parent that its four exist. */
 static int report_fd = -1;
 
+/* The pipe whose end of input lets the family's three children exit: the
+ * parent closes `release_w` once its rows that count the four are done. */
+static int release_r = -1, release_w = -1;
+
 /** Uid 1000 with four processes allowed: three forks succeed and the fourth
  * is EAGAIN; the parent is told once the four exist, and the three children
- * exit after 1.5 seconds. Returns 0, or 2 to 4 for the step that fails. */
+ * live until the parent closes the release pipe. Returns 0, or 2 to 4 for
+ * the step that fails. */
 static int body_nproc(void)
 {
     int i, pid;
+    char byte;
 
+    syscall1(SYS_CLOSE, release_w);
     if (syscall1(SYS_SETUID, 1000) != 0 || set_limit(RLIMIT_NPROC, 4, 4) != 0) {
         return 2;
     }
@@ -392,7 +389,8 @@ static int body_nproc(void)
             return 3;
         }
         if (pid == 0) {
-            sleep_ms(1500);
+            syscall1(SYS_CLOSE, report_fd);
+            syscall3(SYS_READ, release_r, (long)&byte, 1);
             sys_exit(0);
         }
     }
@@ -470,7 +468,7 @@ void probe_main(unsigned long *sp)
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
     struct rlimit64 rl;
-    static int fds[2];
+    static int fds[2], release[2];
     int family, others;
     char byte;
 
@@ -498,10 +496,12 @@ void probe_main(unsigned long *sp)
         fail("raising the limit back as root");
     }
     fds[0] = fds[1] = -1;
-    if (syscall1(SYS_PIPE, (long)fds) != 0) {
-        fail("the report pipe");
+    if (syscall1(SYS_PIPE, (long)fds) != 0 || syscall1(SYS_PIPE, (long)release) != 0) {
+        fail("the report pipes");
     }
     report_fd = fds[1];
+    release_r = release[0];
+    release_w = release[1];
     family = syscall1(SYS_FORK, 0);
     if (family < 0) {
         fail("fork of the family");
@@ -516,6 +516,7 @@ void probe_main(unsigned long *sp)
     }
     child_must(body_others, 0, "another user forks beside the limited one");
     child_must(body_setuid, 0, "a process that became the limited user counts against it");
+    syscall1(SYS_CLOSE, release_w);
     others = wait_status(family);
     if (others != 0) {
         fail("four processes of one user: three forks and a fourth refused with EAGAIN");
