@@ -87,6 +87,7 @@
 #include <sys/uio.h>
 #include <sys/user.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 /*
@@ -123,6 +124,10 @@ typedef struct user_fpregs_struct fxregs_t;
 #define LAST_USER_WORD 0xbffffffcUL
 typedef struct user_fpxregs_struct fxregs_t;
 #endif
+
+/* The longest wait, in seconds, for a process to reach a state: a bound that
+ * ends a wait the kernel never satisfies, far past a correct one. */
+#define STATE_BOUND 20
 
 /* The word the parent reads and changes in its traced child. */
 static volatile long target = 1234;
@@ -787,15 +792,28 @@ static int sleeping(pid_t pid, pid_t t)
 }
 
 /**
- * Return 1 when process `pid` has ended and waits to be reaped, state Z in
- * /proc/PID/stat, and 0 otherwise.
+ * Wait for process `pid` to reach the state `want` in /proc/PID/stat,
+ * looking every 10 ms. Returns the state the wait ends at: `want`; Z when the
+ * process ends first; 0 when its stat file is gone; or the state it is in
+ * when STATE_BOUND seconds pass.
  */
-static int zombie(pid_t pid)
+static char await_state(pid_t pid, char want)
 {
+    struct timespec start, now;
     char path[64];
+    char state;
 
     snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
-    return stat_state(path) == 'Z';
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (;;) {
+        state = stat_state(path);
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        if (state == want || state == 'Z' || state == 0 ||
+            now.tv_sec - start.tv_sec >= STATE_BOUND) {
+            return state;
+        }
+        usleep(10000);
+    }
 }
 
 /**
@@ -1023,10 +1041,7 @@ static int tracer_first(void)
         kill(x, SIGKILL);
         return abandon(c, "the second child did not seize the first");
     }
-    for (i = 0; i < 500 && !zombie(c); i++) {
-        usleep(10000);
-    }
-    if (!zombie(c)) {
+    if (await_state(c, 'Z') != 'Z') {
         kill(x, SIGKILL);
         waitpid(x, &status, 0);
         return abandon(c, "the first child never became a zombie");
@@ -1100,12 +1115,12 @@ static int killed_at_entry(void)
  * Check that PTRACE_SEIZE of a process a stop signal has stopped, whose stop
  * its parent has already waited for, stops the thread for the tracer with
  * PTRACE_EVENT_STOP and the stop signal, that the process stays stopped after
- * PTRACE_DETACH, and that it runs on after SIGCONT. Returns 0, or 1 after the
- * failure is printed.
+ * PTRACE_DETACH, its state in /proc going from the tracer's stop to the stop
+ * of its process (T) and not to its end, and that it runs on after SIGCONT.
+ * Returns 0, or 1 after the failure is printed.
  */
 static int attach_stopped(void)
 {
-    char path[64];
     int status;
     pid_t pid = fork();
 
@@ -1123,9 +1138,7 @@ static int attach_stopped(void)
     if (ptrace(PTRACE_DETACH, pid, NULL, NULL) != 0) {
         return abandon(pid, "PTRACE_DETACH of the seized process");
     }
-    usleep(100000);
-    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
-    if (waitpid(pid, &status, WNOHANG) != 0 || stat_state(path) != 'T') {
+    if (await_state(pid, 'T') != 'T' || waitpid(pid, &status, WNOHANG) != 0) {
         return abandon(pid, "the detached process ran while its stop was in effect");
     }
     kill(pid, SIGCONT);
