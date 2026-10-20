@@ -89,6 +89,12 @@
  * ends a wait the kernel never satisfies, far past a correct one. */
 #define ASLEEP_BOUND 20
 
+/* The longest wait, in seconds, for the child of `handler_mask_row`: past the
+ * child's own wait of ASLEEP_BOUND, and well inside the 60 s that the default
+ * suite's runner allows a probe, so that a child that never ends fails the row
+ * and is not taken for a hung probe. */
+#define CHILD_BOUND 30
+
 /* The counting threads' mutex and count, the condition row's value, each
  * counting thread's thread-local value and thread id, the thread that ran
  * SIGUSR1's handler, and the spare thread's flag once it blocks SIGUSR1. */
@@ -837,25 +843,28 @@ static void say_threads(pid_t pid)
 /**
  * Run `handler_mask` in a child, where no other thread of the probe can take
  * the two signals, and judge it by the child's status; a child that does not
- * end in 30 s has its threads printed (`say_threads`) before it is killed.
- * Returns 0, or 1 after the failure is printed.
+ * end in CHILD_BOUND seconds on the monotonic clock has its threads printed
+ * (`say_threads`) before it is killed. Returns 0, or 1 after the failure is
+ * printed.
  */
 static int handler_mask_row(void)
 {
-    int i, status = 0;
+    struct timespec start;
+    int status = 0;
     pid_t pid = fork();
 
     if (pid == 0) {
         _exit(handler_mask());
     }
-    for (i = 0; i < 3000 && waitpid(pid, &status, WNOHANG) == 0; i++) {
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    while (waitpid(pid, &status, WNOHANG) == 0) {
+        if (seconds_since(&start) >= CHILD_BOUND) {
+            say_threads(pid);
+            kill(pid, SIGKILL);
+            waitpid(pid, &status, 0);
+            return fail("a signal a handler's mask blocked did not wake the other thread");
+        }
         usleep(10000);
-    }
-    if (i == 3000) {
-        say_threads(pid);
-        kill(pid, SIGKILL);
-        waitpid(pid, &status, 0);
-        return fail("a signal a handler's mask blocked did not wake the other thread");
     }
     if (WIFEXITED(status) && WEXITSTATUS(status) == 2) {
         return fail("the two threads were not seen asleep in sigsuspend");
