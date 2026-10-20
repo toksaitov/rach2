@@ -5,12 +5,11 @@
  * Every row judges what the kernel counts. Time since boot is read within the
  * tick: two readings of `CLOCK_MONOTONIC` differ by less than a tick, raw and
  * boot time are the same clock, so a reading of either taken between two of
- * `CLOCK_MONOTONIC` lies between them, and the coarse clocks are no later than
- * their fine ones and no more than two ticks earlier, one for the tick in
- * progress and one for a tick the fine clock counts before its interrupt is
- * taken; the CPU clocks advance while this process spins and agree with what
- * `times` reports; a CPU clock by process id, the form `clock_getcpuclockid`
- * returns, reads that process's time, and an id of no process fails with ESRCH.
+ * `CLOCK_MONOTONIC` lies between them, and the coarse clocks read the time at
+ * the last tick the kernel counted (`coarse_clocks`); the CPU clocks advance
+ * while this process spins and agree with what `times` reports; a CPU clock by
+ * process id, the form `clock_getcpuclockid` returns, reads that process's
+ * time, and an id of no process fails with ESRCH.
  * A child blocked after reporting its own CPU time has a clock by id that reads
  * what it reported, or one tick more, and that advances by the three ticks it
  * spins between two reports. Real time and time since boot resolve to the
@@ -185,6 +184,59 @@ static void alarm_every(long usec)
 }
 
 /**
+ * Check that the coarse clocks read the time at the last tick the kernel
+ * counted, the count `times` returns.
+ *
+ * Coarse time since boot is that count of ticks, read between two calls of
+ * `times`, and no later than a fine reading after it. The fine clock can be
+ * later by any number of ticks, since it counts the ticks of an interrupt not
+ * yet taken, as many as an emulator holds back while it does not run the
+ * boot processor. Coarse real time is coarse time since boot plus the offset
+ * of real time from time since boot, which the fine clocks have too: real time
+ * less that offset, read between two readings of `CLOCK_MONOTONIC`, lies
+ * between them. The offset is taken from coarse readings within one tick,
+ * read again for at most `SPIN_BOUND_NS` of time since boot until they are.
+ * Returns 0, or 1 after the failure is printed with its readings.
+ */
+static int coarse_clocks(void)
+{
+    long long began = ns_of(CLOCK_MONOTONIC);
+    long long before;
+    long long x;
+    long long after;
+    long long offset;
+    long long t0;
+    long long t1;
+
+    t0 = (long long)times(NULL) * TICK_NS;
+    x = ns_of(CLOCK_MONOTONIC_COARSE);
+    t1 = (long long)times(NULL) * TICK_NS;
+    after = ns_of(CLOCK_MONOTONIC);
+    if (x < t0 || x > t1 || x > after) {
+        printf("CLOCKIDMUSL FAIL (coarse time since boot is not time since boot at the last tick: "
+               "ticks %lld ns, coarse %lld ns, ticks %lld ns, fine %lld ns)\n",
+               t0, x, t1, after);
+        return 1;
+    }
+    do {
+        before = ns_of(CLOCK_MONOTONIC_COARSE);
+        x = ns_of(CLOCK_REALTIME_COARSE);
+        after = ns_of(CLOCK_MONOTONIC_COARSE);
+    } while (before != after && ns_of(CLOCK_MONOTONIC) - began < SPIN_BOUND_NS);
+    offset = x - before;
+    before = ns_of(CLOCK_MONOTONIC);
+    x = ns_of(CLOCK_REALTIME) - offset;
+    after = ns_of(CLOCK_MONOTONIC);
+    if (x < before || x > after) {
+        printf("CLOCKIDMUSL FAIL (coarse real time is not real time at the last tick: "
+               "offset %lld ns, fine %lld ns, real less offset %lld ns, fine %lld ns)\n",
+               offset, before, x, after);
+        return 1;
+    }
+    return 0;
+}
+
+/**
  * Check the eight clocks, their resolutions, and the CPU clocks by id.
  * Returns 0, or 1 after the failure is printed.
  */
@@ -223,17 +275,8 @@ static int clocks(void)
             return fail("a clock of time since boot does not read CLOCK_MONOTONIC");
         }
     }
-    before = ns_of(CLOCK_MONOTONIC);
-    x = ns_of(CLOCK_MONOTONIC_COARSE);
-    after = ns_of(CLOCK_MONOTONIC);
-    if (x > after || x < before - 2 * TICK_NS) {
-        return fail("coarse time since boot is not time since boot at the last tick");
-    }
-    before = ns_of(CLOCK_REALTIME);
-    x = ns_of(CLOCK_REALTIME_COARSE);
-    after = ns_of(CLOCK_REALTIME);
-    if (x > after || x < before - 2 * TICK_NS) {
-        return fail("coarse real time is not real time at the last tick");
+    if (coarse_clocks() != 0) {
+        return 1;
     }
     for (i = 0; i < sizeof(fine) / sizeof(fine[0]); i++) {
         if (clock_getres(fine[i], &res) != 0 || res.tv_sec != 0 || res.tv_nsec != 1000) {

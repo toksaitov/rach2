@@ -5189,6 +5189,28 @@ new
     t.tv_nsec = 10000000;
 end
 
+fault coarse-monotonic-tick-behind
+probe clockidmusl
+file rach2/sys/syscall.c
+expect CLOCKIDMUSL FAIL (coarse time since boot is not time since boot at the last tick
+old
+        out->tv_nsec = ticks32 * 10000000u;
+new
+        out->tv_nsec = (int64_t)ticks32 * 10000000 - 10000000;
+end
+
+fault coarse-realtime-tick-ahead
+probe clockidmusl
+file rach2/sys/clock.c
+expect CLOCKIDMUSL FAIL (coarse real time is not real time at the last tick
+old
+    tick_now(&uptime, &ticks, &total);
+    rtc_time_from_anchor(rtc_anchor_seconds, rtc_anchor_uptime, uptime, ticks, seconds,
+new
+    tick_now(&uptime, &ticks, &total);
+    rtc_time_from_anchor(rtc_anchor_seconds, rtc_anchor_uptime, uptime, ticks + 1u, seconds,
+end
+
 # The files of /proc/net that netstat and ss -s read.
 
 fault proc-net-udp-state-connected
