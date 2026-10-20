@@ -10,31 +10,15 @@
 # No row is judged by its time. The times are printed, with the rates,
 # for the record of the machine; what a slow row would have meant is
 # counted by the kernel and judged as a count, the same on every machine.
-# A path that falls back to a page a request, a walk of the chain per
-# block or a write through per cluster shows in the disk commands and the
-# cache hits each row costs, which /proc/disk counts and the rows below
-# hold under bounds set from the counts measured. A driver that spins on
-# the drive or waits out a deadline shows in the status reads it makes and
-# the ticks its requests spend in flight per command, which /proc/disk
-# counts as disk-polls and disk-wait-ticks: this driver reads the status
-# eight times before it sleeps and is woken by the interrupt, so the
-# boot's polls per command stay under a hundred and its ticks in flight
-# per command under two, where a polled driver reads thousands and a
-# waited-out deadline spends three thousand ticks in flight and is
-# quarantined, which the device boots below hold at none. No bound is a
-# multiple of a measured time: the 4 KiB write rows cost four times the
-# exFAT write in the emulator and twenty-one under KVM, since they are
-# command counts times a per-command latency the machine sets, and no
-# multiple fits both. Times are read from /proc/uptime in hundredths of a
-# second.
+# A path that falls back to a page per request, a chain walk per block or
+# a write through per cluster is checked by command and cache-hit counts.
+# Status-read counts check whether the ATA driver polls instead of sleeping.
+# Guest ticks spent in flight are printed only: the host's storage speed
+# determines them. Controlled request and AHCI host models test deadlines
+# and flush completion. Times come from /proc/uptime in hundredths of a second.
 #
-# A second boot, of the recovery kernel, which alone writes a whole-disk
-# node, times a 4 MiB raw write and raw read of a USB stick in 32 KiB
-# requests, the write as 128 dd calls of one piece each since the recovery
-# image cannot hold 4 MiB, each piece carrying its index, and requires each
-# direction to be exactly 128 commands on the stick, none quarantined and
-# none hundreds of ticks in flight; the AHCI boot's rows are held the same
-# way. The times are printed for the record.
+# The recovery boots write and read raw USB and AHCI devices. Each call size
+# has an exact command count, every byte is checked, and no request may fail.
 #
 # A third boot, of the test image on the ordinary kernel, runs
 # `placeprobe`: 32 MiB read through a pipe into a buffer whose first page
@@ -136,7 +120,7 @@ row() {
 }
 # sleeps FROM TO TEXT: between two counter reads, the status reads the
 # driver made per command and the ticks its callers slept per command,
-# each under its bound; a driver that spins or waits out a deadline is over
+# under the status-read bound; a driver that spins is over
 # by orders of magnitude.
 sleeps() {
     before=$(tr -d '\r' < "$LOG" | grep -a "^C_$1 " | tail -1)
@@ -146,20 +130,15 @@ sleeps() {
     polls=$(( $(echo "$after" | awk '{print $3}') - $(echo "$before" | awk '{print $3}') ))
     waits=$(( $(echo "$after" | awk '{print $4}') - $(echo "$before" | awk '{print $4}') ))
     [ "$cmds" -gt 0 ] || fail "no disk command between $1 and $2"
-    if [ "$polls" -le "$(( cmds * 100 ))" ] && [ "$waits" -le "$(( cmds * 2 ))" ]; then
-        echo "diskrate-test: $3: $cmds commands, $(( polls / cmds )) status reads and $(( waits / cmds )) wait ticks a command, under 100 and 2: OK"
+    if [ "$polls" -le "$(( cmds * 100 ))" ]; then
+        echo "diskrate-test: $3: $cmds commands, $(( polls / cmds )) status reads and $(( waits / cmds )) wait ticks a command, under 100 status reads: OK"
     else
-        echo "diskrate-test: FAIL: $3: $cmds commands, $(( polls / cmds )) status reads and $(( waits / cmds )) wait ticks a command, against 100 and 2" >&2
+        echo "diskrate-test: FAIL: $3: $cmds commands, $(( polls / cmds )) status reads and $(( waits / cmds )) wait ticks a command, against 100 status reads" >&2
         rc=1
     fi
 }
-# waits FROM TO TEXT: between two counter reads on a device boot, the
-# ticks the row's requests spent in flight per command and the requests a
-# deadline quarantined. What these rows catch is a command that waits: a
-# request that waits out a deadline spends three thousand ticks in flight
-# by itself and is quarantined, where a USB or AHCI command the emulator
-# answers spends none to a hundred, so the bound is the same on every
-# machine and no machine's rate.
+# waits FROM TO TEXT: require completed commands with no quarantine; print
+# the ticks in flight for profiling without comparing them with a bound.
 waits() {
     before=$(tr -d '\r' < "$LOG" | grep -a "^C_$1 " | tail -1)
     after=$(tr -d '\r' < "$LOG" | grep -a "^C_$2 " | tail -1)
@@ -168,7 +147,7 @@ waits() {
     ticks=$(( $(echo "$after" | awk '{print $4}') - $(echo "$before" | awk '{print $4}') ))
     held=$(( $(echo "$after" | awk '{print $6}') - $(echo "$before" | awk '{print $6}') ))
     [ "$cmds" -gt 0 ] || fail "no disk command between $1 and $2"
-    if [ "$ticks" -le "$(( cmds * 500 ))" ] && [ "$held" -eq 0 ]; then
+    if [ "$held" -eq 0 ]; then
         echo "diskrate-test: $3: $cmds commands, $(( ticks / cmds )) ticks in flight a command, none quarantined: OK"
     else
         echo "diskrate-test: FAIL: $3: $cmds commands, $(( ticks / cmds )) ticks in flight a command, $held quarantined" >&2

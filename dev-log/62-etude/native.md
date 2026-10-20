@@ -167,7 +167,7 @@ A suite is a scenario: its boots, its disks and devices, and the steps its host 
 * `ping-e1000` (T84): Native: machine: card: the e1000.
 * `load` (T75): Native: machine: boot: the writers' lag of `rach2.blocklag` and the polled row's `rach2.atapio`.
 * `authority` (T70): Native: machine: boot: the everyday and the recovery kernel each booted on the wide fixture.
-* `queue` (T75): Native: machine: QEMU: the throttle groups of 256 and 512 KiB/s, and `rach2.blockdeadline` boots.
+* `queue` (T75): Native: machine: layout: two disposable AHCI disks and a private ext2 volume; boot: the root-fault row needs a KRFFS root through its page-cache window and a raw second partition. T37 checks deadlines and independent completion in controlled host models, without disks or QEMU throttles.
 * `persist-ahci` (T75): Native: machine: boot: two boots of one disk.
 * `subset` (T77): Native: machine: boot: each boot has a `rach2.noX` option.
 * `bus` (T78): Native: machine: card: four IDE drives and a 130 GiB disk.

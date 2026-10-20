@@ -5,7 +5,6 @@
 # conversion to etude's cases (dev-log/62-etude/plan.md) declares each in a
 # case's timing or removes it. A file whose count differs from its entry fails
 # the check, so the list only falls. A person reads this list.
-tests/ahciprobe.c: 2 sleep
 tests/conloadprobe.c: 1 sleep
 tests/dgramprobe.c: 1 sleep
 tests/dnstest.c: 1 skip

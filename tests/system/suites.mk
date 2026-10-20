@@ -2051,8 +2051,8 @@ run-grow: $(DEMO_CREDS) rach2 tests krffs test-image $(MKMBR) $(MKGPT) $(GROWSET
 	sh tests/system/grow_machine.sh $(HARNESS) $(RECOVERY_ISO) $(INSTALLER_DISK) $(INSTALLER_MBR_DISK) $(GROW_DIR)
 	RACH2_GROW_TABLE=gpt sh tests/system/grow_machine.sh $(HARNESS) $(RECOVERY_ISO) $(INSTALLER_DISK) \
 	    $(GROW_GPT_DISK) $(GROW_DIR)
-# `tests/run queue`: the AHCI disks on their interrupts: a throttled disk
-# beside a fast one, and the fallback root's faults beside the queue.
+# `tests/run queue`: real AHCI reads, interrupts, ext2 batch writes and
+# fallback root faults beside raw reads; controlled host models test deadlines.
 QUEUE_DIR = $(IMAGES_DIR)/queue
 run-queue: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
 	sh tests/system/suites/queue.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(QUEUE_DIR)

@@ -63,6 +63,9 @@ static const char *logged_why;
 static unsigned issued;
 static unsigned stale_issues;
 static unsigned completed;
+static struct block_request *last_completed;
+static uint32_t last_generation;
+static int last_status;
 static uint32_t interrupts_masked;
 /* The byte count the model writes back for a command, which the driver
    compares with what it asked for. */
@@ -79,6 +82,7 @@ static void (*on_command_issued)(void);
 #define R_CAP2 0x24
 #define R_BOHC 0x28
 #define P0     0x100
+#define P1     0x180
 #define P_CLB  0x00
 #define P_FB   0x08
 #define P_IS   0x10
@@ -142,31 +146,31 @@ static uint32_t model_r32(uint32_t off)
  * sets port 0's bits of PxIS and IS. The issue is counted in `issued`, and in
  * `stale_issues` when port 0's bit of IS is still set.
  */
-static void model_issue(uint32_t v)
+static void model_issue(uint32_t base, uint32_t v)
 {
-    if (reg[R_IS] & 1u) {
+    if (reg[R_IS] & (1u << ((base - P0) / 0x80))) {
         stale_issues++;
     }
     issued++;
     if (complete_after && command_completes) {
-        reg[P0 + P_CI] = v;
+        reg[base + P_CI] = v;
         pending_reads = complete_after;
         return;
     }
-    reg[P0 + P_CI] = command_completes ? 0 : v;
+    reg[base + P_CI] = command_completes ? 0 : v;
     if (command_completes && on_command_issued) {
         on_command_issued();
         if (immediate_interrupt) {
-            reg[P0 + P_IS] |= 1u;
-            reg[R_IS] |= 1u;
+            reg[base + P_IS] |= 1u;
+            reg[R_IS] |= 1u << ((base - P0) / 0x80);
         }
     }
     if (fatal_status == 2) {
-        reg[P0 + P_IS] |= 0x40000000u;
-        reg[R_IS] |= 1u;
+        reg[base + P_IS] |= 0x40000000u;
+        reg[R_IS] |= 1u << ((base - P0) / 0x80);
     }
     if (fatal_status) {
-        reg[P0 + P_TFD] = 0x41; /* DRDY and ERR set, BSY clear */
+        reg[base + P_TFD] = 0x41; /* DRDY and ERR set, BSY clear */
     }
 }
 
@@ -185,6 +189,8 @@ static void model_issue(uint32_t v)
  */
 static void model_w32(uint32_t off, uint32_t v)
 {
+    uint32_t base = off >= P1 ? P1 : P0;
+
     if (off >= REGS) {
         return;
     }
@@ -205,21 +211,21 @@ static void model_w32(uint32_t off, uint32_t v)
         reg[off] = v;
         return;
     }
-    if (off == P0 + P_SCTL) {
+    if (off == base + P_SCTL) {
         reg[off] = v;
         if ((v & 0xFu) == 1u) {
-            reg[P0 + P_SSTS] = 0x000u;
+            reg[base + P_SSTS] = 0x000u;
         } else if ((v & 0xFu) == 0u && link_comes_up) {
-            reg[P0 + P_SSTS] = 0x123u;
+            reg[base + P_SSTS] = 0x123u;
         }
         return;
     }
-    if (off == P0 + P_CMD) {
+    if (off == base + P_CMD) {
         if (v & CMD_ST) {
             v |= CMD_CR;
         } else if (!engine_stuck) {
             v &= ~CMD_CR;
-            reg[P0 + P_CI] = 0;
+            reg[base + P_CI] = 0;
         }
         if (v & CMD_FRE) {
             v |= CMD_FR;
@@ -229,12 +235,12 @@ static void model_w32(uint32_t off, uint32_t v)
         reg[off] = v;
         return;
     }
-    if (off == R_IS || off == P0 + P_IS || off == P0 + P_SERR) {
+    if (off == R_IS || off == base + P_IS || off == base + P_SERR) {
         reg[off] &= ~v;
         return;
     }
-    if (off == P0 + P_CI) {
-        model_issue(v);
+    if (off == base + P_CI) {
+        model_issue(base, v);
         return;
     }
     reg[off] = v;
@@ -428,9 +434,9 @@ void block_count_batch(uint32_t sectors)
  *  releases the request's DMA buffer, so the recovery rows require none. */
 void block_request_complete(struct block_request *request, uint32_t generation, int status)
 {
-    (void)request;
-    (void)generation;
-    (void)status;
+    last_completed = request;
+    last_generation = generation;
+    last_status = status;
     completed++;
 }
 
@@ -519,7 +525,10 @@ struct disk *disk_register(block_device_t *dev, const char *transport, int locat
 #include "../../rach2/sys/mm/paging.h"
 #undef HARD_MEMORY_LIMIT
 #define HARD_MEMORY_LIMIT 0u
-#include "../../rach2/sys/block/ahci.c"
+#ifndef AHCI_SOURCE
+#define AHCI_SOURCE "../../rach2/sys/block/ahci.c"
+#endif
+#include AHCI_SOURCE
 
 /* The heap and the DMA pool, for a controller without 64-bit addressing:
    the record of the pages a buffer above 4 GiB moves through, and those
@@ -782,6 +791,64 @@ static void quick_completions(void)
     CHECK("the other port remains pending", reg[R_IS] == 2);
 }
 
+/** Complete a selected port's command without advancing time. */
+static void answer_port(int port, uint32_t bytes)
+{
+    uint32_t base = port == 0 ? P0 : P1;
+    volatile ahci_cmd_header_t *hdr = (volatile ahci_cmd_header_t *)ahci_disks[port].cmdlist;
+
+    hdr->prdbc = bytes;
+    reg[base + P_CI] = 0;
+    reg[base + P_IS] |= 1;
+    reg[R_IS] |= 1u << port;
+    ahci_handler(0);
+}
+
+/** A held read or write flush on port zero cannot hold a read on port one. */
+static void independent_ports(int write)
+{
+    static uint8_t pages[2][512];
+    struct block_request slow, fast;
+    unsigned before;
+
+    model_reset();
+    reg[R_PI] = 3;
+    reg[P1 + P_SSTS] = 0x123;
+    reg[P1 + P_SIG] = 0x101;
+    CHECK("two independent ports start", ahci_select_port() == 0 && ahci_ndisks == 2 &&
+                                             ahci_port_start(&ahci_disks[0]) == 0 &&
+                                             ahci_port_start(&ahci_disks[1]) == 0);
+    k_memset(&slow, 0, sizeof(slow));
+    k_memset(&fast, 0, sizeof(fast));
+    slow.count = fast.count = 1;
+    slow.page = pages[0];
+    fast.page = pages[1];
+    slow.generation = 101;
+    fast.generation = 102;
+    slow.write = write;
+    command_completes = 0;
+    CHECK("both ports accept a held request", ahci_start_request(&ahci_disks[0], &slow) == 0 &&
+                                                  ahci_start_request(&ahci_disks[1], &fast) == 0);
+    if (write) {
+        answer_port(0, 512);
+        CHECK("a write waits for its held flush", ahci_disks[0].flushing &&
+                                                      ahci_disks[0].active == &slow &&
+                                                      completed == 0 && reg[P0 + P_CI] != 0);
+    }
+    before = completed;
+    answer_port(1, 512);
+    CHECK("the independent port completes while port zero is held",
+          completed == before + 1 && last_completed == &fast && last_generation == 102 &&
+              last_status == 0 && ahci_disks[1].active == 0 && ahci_disks[0].active == &slow &&
+              reg[P0 + P_CI] != 0);
+    answer_port(0, write ? 0 : 512);
+    CHECK("the held port completes only on its own answer",
+          completed == before + 2 && last_completed == &slow && last_generation == 101 &&
+              last_status == 0 && ahci_disks[0].active == 0);
+    ahci_handler(0);
+    CHECK("an acknowledged interrupt completes no request twice", completed == before + 2);
+}
+
 /**
  * Check that a polled command's interrupt is acknowledged before the queue
  * it held back resumes, whatever its result.
@@ -947,6 +1014,17 @@ static void command_waits(void)
     CHECK("a command that moves fewer bytes than asked is refused and logged",
           ahci_run_command(&ahci_disks[0], ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) != 0 &&
               ahci_warnings == 1);
+}
+
+/** Check queued completions, independent ports and restart after polling. */
+static void interrupt_rows(void)
+{
+    quick_completions();
+    independent_ports(0);
+    independent_ports(1);
+    polled_queue_restart(0);
+    polled_queue_restart(1);
+    polled_queue_restart(2);
 }
 
 /**
@@ -1117,10 +1195,7 @@ int main(void)
     stuck_recovery(2);
     stuck_recovery(3);
 
-    quick_completions();
-    polled_queue_restart(0);
-    polled_queue_restart(1);
-    polled_queue_restart(2);
+    interrupt_rows();
 
     if (fails == 0) {
         printf("ahci_hosttest: PASS\n");

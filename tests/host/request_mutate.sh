@@ -14,6 +14,16 @@ import sys
 
 path = Path(sys.argv[1])
 faults = {
+    'deadline-late': ('if ((int32_t)(req_ticks - r->deadline) < 0)',
+                       'if ((int32_t)(req_ticks - r->deadline) <= 0)'),
+    'late-error': ('    request->status = status;',
+                   '    request->status = request->overdue ? -EIO : status;'),
+    'flush-final': ('if (r->overdue < req_periods(r->device))',
+                    'if (r->overdue < req_periods(r->device) || (r->flags & BLOCK_REQ_FLUSH))'),
+    'flush-error': ('    request->status = status;',
+                    '    request->status = request->overdue && (request->flags & BLOCK_REQ_FLUSH) ? -EIO : status;'),
+    'pool-deadline': ('r->deadline = req_ticks + req_period(device);',
+                      'r->deadline = (waited ? wait_from / 10000u : req_ticks) + req_period(device);'),
     'owner': ('            r->owner = owner;', '            r->owner = device;'),
     'generation': ('!req_is_live(request) || request->generation != generation',
                    '!req_is_live(request) || generation == 0'),
@@ -35,7 +45,7 @@ if path.parent.name != 'block':
 PY
 }
 
-faults='owner generation early-free late-leak hold ready read-copy'
+faults='owner generation early-free late-leak hold ready read-copy deadline-late late-error flush-final pool-deadline flush-error'
 # source_for FAULT: print the component that the fault changes.
 source_for()
 {
@@ -107,6 +117,11 @@ for fault in $faults; do
     source=$(source_for "$fault")
     apply_fault "$work/$source" "$fault"
     case $fault in
+        deadline-late) message='the last period quarantines the held request' ;;
+        late-error) message='a read answered before quarantine succeeds with its staged bytes' ;;
+        flush-final) message='the final flush deadline quarantines its DMA page' ;;
+        flush-error) message='a flush answered after one deadline succeeds and releases its page' ;;
+        pool-deadline) message="a queued reader's deadline starts at admission after the pool wait" ;;
         owner) message='the partition is accounted to its submitter' ;;
         generation) message='a wrong generation cannot complete or release a request' ;;
         early-free) message='caller release cannot free a page still owned by the device' ;;

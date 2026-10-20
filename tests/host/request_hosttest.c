@@ -158,13 +158,7 @@ uint32_t timer_now_us(void)
     return req_ticks * 10000u;
 }
 
-/** The latency record has no effect on completion. */
-void latency_span(int kind, uint32_t from, uint32_t to)
-{
-    (void)kind;
-    (void)from;
-    (void)to;
-}
+#include "latency.c"
 
 /** Discard diagnostic records. */
 void klog(int level, const char *subsystem, const char *format, ...)
@@ -272,6 +266,7 @@ static int accept(block_device_t *dev, struct block_request *r)
 }
 
 static int waits;
+static void (*wait_step)(wait_queue_t *, wq_cond_fn, void *);
 static uint8_t output[BLOCK_SECTOR_SIZE];
 
 /** Complete a synchronous write or flush only after its caller blocks. */
@@ -279,6 +274,10 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     struct block_request *r = arg;
 
+    if (wait_step) {
+        wait_step(wq, cond, arg);
+        return 0;
+    }
     (void)wq;
     check(!irq_depth && !cond(arg), "the caller waits with interrupts enabled");
     check(r->held_by_caller && r->held_by_device,
@@ -436,6 +435,169 @@ static void write_and_flush(void)
     cpu_table[0].current = 0;
 }
 
+/** Advance only the real request pool's logical clock. */
+static void advance(unsigned ticks)
+{
+    while (ticks-- > 0) {
+        block_request_tick();
+    }
+}
+
+/** Consume a held read and its duplicate, checking its bytes and result. */
+static void answer_read(struct block_request *r, uint32_t gen)
+{
+    int status;
+
+    check(block_lag_answer(gen, 0) == 0, "deliver a read at the chosen logical tick");
+    check(block_request_ended(r, gen, output, &status) && status == 0 && output[0] == 0x5A,
+          "a read answered before quarantine succeeds with its staged bytes");
+    check(block_lag_answer(gen, 1) == 0, "discard the read's duplicate");
+}
+
+/** Check exact deadline boundaries, including the request clock's wrap. */
+static void deadline_edges(uint32_t start)
+{
+    struct block_request *r;
+    uint32_t gen;
+    unsigned period;
+
+    check(live == 0, "the clock is set only with no live request");
+    req_ticks = start;
+    lag->deadline_ticks = 4;
+    lag->deadline_limit = 4;
+    r = begin(lag, &gen);
+    advance(3);
+    check(r->state == BLOCK_REQ_IN_FLIGHT && r->overdue == 0,
+          "a request is not overdue one tick before its first deadline");
+    answer_read(r, gen);
+    for (period = 1; period < 4; period++) {
+        r = begin(lag, &gen);
+        advance(period * 4);
+        check(r->state == BLOCK_REQ_IN_FLIGHT && r->overdue == period &&
+                  !(lag->flags & BLOCK_STALLED),
+              "each nonfinal deadline keeps the request in flight and the device usable");
+        answer_read(r, gen);
+    }
+    r = begin(lag, &gen);
+    advance(15);
+    check(r->state == BLOCK_REQ_IN_FLIGHT && r->overdue == 3,
+          "a request remains answerable one tick before its final deadline");
+    answer_read(r, gen);
+}
+
+static int flush_expires;
+static uint32_t flush_generation;
+
+/** Hold a flush until its first or final deadline. */
+static void flush_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    struct block_request *r = arg;
+    unsigned ticks = flush_expires ? 8 : 4;
+
+    (void)wq;
+    check(!irq_depth && !cond(arg) && (r->flags & BLOCK_REQ_FLUSH),
+          "a flush blocks with an owned request and interrupts enabled");
+    flush_generation = r->generation;
+    advance(ticks - 1);
+    check(!cond(arg) && r->state == BLOCK_REQ_IN_FLIGHT && r->held_by_device,
+          "a flush remains blocked until the chosen deadline or completion");
+    block_request_tick();
+    if (flush_expires) {
+        check(r->state == BLOCK_REQ_QUARANTINED && r->overdue == 2 && r->held_by_device,
+              "the final flush deadline quarantines its DMA page");
+    } else {
+        check(r->state == BLOCK_REQ_IN_FLIGHT && r->overdue == 1,
+              "an overdue flush still waits for the device");
+        check(block_lag_answer(r->generation, 0) == 0, "deliver the overdue flush");
+    }
+    check(cond(arg), "the flush caller wakes on completion or quarantine");
+}
+
+/** Check late flush success and ownership after the final deadline. */
+static void flush_deadlines(void)
+{
+    process_t process;
+
+    k_memset(&process, 0, sizeof(process));
+    process.in_syscall = 1;
+    cpu_table[0].current = &process;
+    lag->deadline_ticks = 4;
+    lag->deadline_limit = 2;
+    wait_step = flush_wait;
+    flush_expires = 0;
+    check(block_flush(lag) == 0 && record_count == 0 && frame_count == 0,
+          "a flush answered after one deadline succeeds and releases its page");
+    check(block_lag_answer(flush_generation, 1) == 0, "discard the late flush duplicate");
+    flush_expires = 1;
+    check(block_flush(lag) == -EIO && record_count == 1 && frame_count == 1 &&
+              (lag->flags & BLOCK_STALLED),
+          "a flush at its final deadline fails without freeing the device's page");
+    check(block_lag_answer(flush_generation, 0) == 0 && record_count == 0 && frame_count == 0 &&
+              !(lag->flags & BLOCK_STALLED),
+          "the quarantined flush's late completion frees its page and clears the stall");
+    check(block_lag_answer(flush_generation, 1) == 0, "discard the quarantined flush duplicate");
+    wait_step = 0;
+    cpu_table[0].current = 0;
+}
+
+static struct block_request *pool_held;
+static uint32_t pool_generation;
+static unsigned pool_waits, admitted_waits;
+
+/** Observe the full-pool wait, free a slot, then answer the admitted read. */
+static void pool_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    check(!irq_depth && !cond(arg), "a pool or request waiter blocks with interrupts enabled");
+    (void)wq;
+    if (cond == slot_ready) {
+        pool_waits++;
+        check(live == 2 && block_in_flight() == 2, "the third reader observes a full pool");
+        advance(9);
+        check(!cond(arg), "time alone cannot make a slot in the full pool");
+        answer_read(pool_held, pool_generation);
+        check(cond(arg), "a completed and consumed request admits the waiting reader");
+    } else {
+        struct block_request *r = arg;
+
+        admitted_waits++;
+        check(r->deadline == req_ticks + 4 && r->overdue == 0,
+              "a queued reader's deadline starts at admission after the pool wait");
+        block_request_complete(r, r->generation, 0);
+        check(cond(arg), "the admitted reader completes normally");
+    }
+}
+
+/** Two held devices fill the pool; a third waits and gets a fresh deadline. */
+static void pool_deadline(void)
+{
+    block_device_t third;
+    process_t process;
+    struct block_request *b;
+    uint32_t gb;
+    int status;
+
+    worst[LAT_DISK] = worst[LAT_DISK_WAIT] = 0;
+    lag->deadline_ticks = other.deadline_ticks = 100;
+    pool_held = begin(lag, &pool_generation);
+    b = begin(&other, &gb);
+    third = other;
+    third.deadline_ticks = 4;
+    k_memset(&process, 0, sizeof(process));
+    process.in_syscall = 1;
+    cpu_table[0].current = &process;
+    wait_step = pool_wait;
+    check(block_request(&third, 0, 0, 1, output) == 0 && output[0] == 0x6B && pool_waits == 1 &&
+              admitted_waits == 1,
+          "a reader of the third device waits for a slot and succeeds");
+    wait_step = 0;
+    cpu_table[0].current = 0;
+    check(latency_max(LAT_DISK_WAIT) == 90000 && latency_max(LAT_DISK) == 90000,
+          "pool and device latency records use the controlled clock and distinct start events");
+    block_request_complete(b, gb, 0);
+    check(block_request_ended(b, gb, output, &status) && status == 0,
+          "the second held device completes after the waiting reader");
+}
+
 /** Install the fixture, run the lifecycle rows and check every release. */
 int main(void)
 {
@@ -459,6 +621,10 @@ int main(void)
     other.flags = 0;
     completion();
     write_and_flush();
+    deadline_edges(100);
+    deadline_edges(0xFFFFFFF8u);
+    flush_deadlines();
+    pool_deadline();
     check(record_count == 0 && frame_count == 0 && live == 0 && quarantined_count == 0,
           "every request and page is released at the end");
     for (i = 0; i < LAG_QUEUE; i++) {
