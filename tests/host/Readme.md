@@ -7,7 +7,7 @@ The host tests compile kernel and user sources as ordinary programs for the buil
 `tests/run host` runs the suite. Its make target, `run-host` in [`tests/system/suites.mk`](../system/suites.mk), first builds musl's installed library (`check-libc`), the extracted e2fsprogs tree, the `deadline` tool and the KRFFS stager, then runs [`tests/system/machine_measure_test.sh`](../system/machine_measure_test.sh), the check of the machine measurement drivers in `tools/dev/` against command fixtures, and then [`tests/system/suites/host.sh`](../system/suites/host.sh), which does four things in order:
 
 1. Compiles and runs each `tests/host/*_hosttest.c`.
-2. Compiles six checkers again under the sanitizers and runs their self-tests: `tools/inspect/elfcheck.c`, `cfgcheck.c` and `setidcheck.c`, `tools/verify/prosecheck.c`, and `tests/system/runner/runtests.c` and `harness.c`, each with `-Wall -Wextra -Werror` and `--selftest`.
+2. Compiles seven checkers again under the sanitizers and runs their self-tests: `tools/inspect/elfcheck.c`, `cfgcheck.c` and `setidcheck.c`, `tools/verify/prosecheck.c`, `tools/etude/win/pecheck.c`, and `tests/system/runner/runtests.c` and `harness.c`, each with `-Wall -Wextra -Werror` and `--selftest`.
 3. Runs twenty-seven scripted checks: the `--check` mode of `krffs_open_mutate.sh`, `krffs_root_lock_mutate.sh`, `kstack_mutate.sh`, `endothers_mutate.sh`, `chown_mutate.sh`, `pagecache_mutate.sh`, `doom_libc_mutate.sh` and `krffs_tools_mutate.sh` in this directory; `tests/system/run_scripts_test.sh`, `commit_msg_test.sh`, `ci_test.sh`, `board_test.sh`, `limited_test.sh`, `worker_park_test.sh`, `release_resume_test.sh`, `tidy_test.sh`, `agents_guest_test.sh`, `testing_run_test.sh`, `prereq_test.sh`, `install_accounts_test.sh` and `mkext2_overlay_test.sh`; `tests/system/agents_credentials_test.py` and `tests/system/fakeapi/anthropic_test.py`, `gemini_test.py` and `fakeapi_test.py`, each with `python3 -B`; and `vendor/tcc/check_asm.sh` and `check_ldscript.sh`.
 4. Builds the fuzz harnesses of [`tests/fuzz/`](../fuzz/Readme.md) as replay programs with `tests/fuzz/build.sh replay` and runs each over its committed corpus, `tests/fuzz/corpus/NAME/`. A harness that did not build, or whose corpus is empty, fails.
 
@@ -115,9 +115,10 @@ Repeat the `host-deps:` prefix rather than wrap a long list. A test may use the 
 
 Each entry names a test, the code it compiles, and its cases. The reasoning of a case is in the test's source.
 
-### Etude history
+### Etude
 
 * `etude_history_hosttest.c` tests the C99 history store and collectors in `tools/etude/`: validated durable records, concurrent exclusive writers, interrupted and damaged streams, missing data, clock intervals and resource aggregation. Its cases and mutation proof are described in [the component Readme](../../tools/etude/Readme.md#tests).
+* `etude_winfmt_hosttest.c` runs `tools/etude/win/winfmt.c`, the plain C of etude's Windows adapter. Rows quote command lines and parse them back with a model of the UCRT's rules: arguments with spaces, tabs, quotes, runs of backslashes before a quote and at the end, an empty argument, bytes beyond ASCII, and 20,000 lines drawn from those bytes by a fixed seed; a program's name with a quote is refused. Rows sort an environment by name without regard to case, and refuse an entry with no name, one with no `=`, and two names that differ only in case. Rows convert the performance counter's ticks at 10 MHz and 3 GHz, the largest count included, and FILETIMEs at, after and before 1970. The fixtures of `tools/etude/wincheck.sh` run the same code on Windows, where the UCRT itself parses the line.
 
 ### Kernel libraries, memory and processes
 

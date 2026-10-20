@@ -18,6 +18,10 @@
 # and with the flags the script sets, so no fixed command describes it; such a
 # source passes when a script under that same tree names it.
 #
+# A Windows program's source under tools/etude/win is compiled by
+# tools/etude/wincheck.sh with MinGW-w64, which the host's databases cannot
+# describe; such a source passes when that script names it.
+#
 # Usage: dbcheck.sh [DBDIR]
 set -u
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -64,11 +68,20 @@ fixture() {
     esac
     grep -rqF --include='*.sh' "fixtures/${1##*/}" "$tree"
 }
+# windows FILE: true when FILE is under tools/etude/win and
+# tools/etude/wincheck.sh names it.
+windows() {
+    case $1 in
+        tools/etude/win/*) grep -qF "${1##*/}" tools/etude/wincheck.sh ;;
+        *) return 1 ;;
+    esac
+}
 missing=0
 for f in $sources; do
     grep -qxF "$REPO/$f" "$known" && continue
     included "$f" && continue
     fixture "$f" && continue
+    windows "$f" && continue
     echo "dbcheck: $f is in no compilation database"
     missing=$((missing + 1))
 done

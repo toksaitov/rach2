@@ -173,7 +173,8 @@ done
 # under the sanitizers and its selftest run, so a bounds or overflow fault in
 # a checker is found by the cases the checker already has.
 for t in tools/inspect/elfcheck.c tools/inspect/cfgcheck.c tools/inspect/setidcheck.c \
-         tools/verify/prosecheck.c tests/system/runner/runtests.c tests/system/runner/harness.c; do
+         tools/verify/prosecheck.c tools/etude/win/pecheck.c tests/system/runner/runtests.c \
+         tests/system/runner/harness.c; do
     base=$(basename "$t" .c)
     out="$VDIR/${base}_selftest"
     if [ -n "${HOST_PRINT_COMMANDS:-}" ]; then

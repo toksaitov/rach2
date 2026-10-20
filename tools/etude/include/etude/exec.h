@@ -17,7 +17,7 @@ struct etude_pid {
     long pid;
     uint64_t start;  /* when it started, in the platform's units: Linux's
                         clock ticks since boot, macOS's microseconds since
-                        the epoch */
+                        the epoch, Windows's 100 ns units since 1601 */
     int start_known; /* 0 when the platform gives no start time */
 };
 
