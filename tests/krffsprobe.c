@@ -881,26 +881,70 @@ static void readback_rows(void)
 
 PROBE_SP_ENTRY;
 
-/** Wait for the replacement at disk1 while the old mount holds disk0. */
-static void wait_replacement(void)
+/** Whether /proc/usb has a line for `disk`, a name with its trailing space,
+ * that says the stick is ready: read, its table given to the disk and its
+ * nodes published. Fails the probe when the file cannot be read. */
+static int usb_disk_ready(const char *disk)
 {
-    int tries;
+    static char text[4096];
+    int fd = syscall3(SYS_OPEN, (long)"/proc/usb", O_RDONLY, 0);
+    int n = 0, got, i;
 
-    for (tries = 0; tries < 2000000; tries++) {
-        int fd = syscall3(SYS_OPEN, (long)"/dev/disk1p1", O_RDONLY, 0);
+    if (fd < 0) {
+        fail_with("opening /proc/usb", fd);
+    }
+    while ((got = syscall3(SYS_READ, fd, (long)(text + n), (int)sizeof(text) - 1 - n)) > 0) {
+        n += got;
+    }
+    syscall1(SYS_CLOSE, fd);
+    if (got < 0) {
+        fail_with("reading /proc/usb", got);
+    }
+    text[n] = '\0';
+    for (i = 0; i < n; i++) {
+        int k;
 
-        if (fd >= 0) {
-            char one[512];
-            int got = syscall3(SYS_READ, fd, (long)one, (int)sizeof(one));
-
-            syscall1(SYS_CLOSE, fd);
-            if (got == (int)sizeof(one)) {
-                break;
+        if (i > 0 && text[i - 1] != '\n') {
+            continue;
+        }
+        for (k = 0; disk[k] && text[i + k] == disk[k]; k++) {
+        }
+        if (disk[k]) {
+            continue;
+        }
+        for (k = i; k < n && text[k] != '\n'; k++) {
+            if (k + 6 <= n && text[k] == ' ' && text[k + 1] == 'r' && text[k + 2] == 'e' &&
+                text[k + 3] == 'a' && text[k + 4] == 'd' && text[k + 5] == 'y') {
+                return 1;
             }
         }
     }
-    if (tries == 2000000) {
-        fail("the replacement stick never became readable");
+    return 0;
+}
+
+/**
+ * Wait for the replacement stick, disk1 while the old mount holds disk0, to
+ * be witnessed ready in /proc/usb, then require its first partition to read
+ * 512 bytes. The look at /proc/usb is repeated, with a yield between, until
+ * the line says ready; the count of looks decides nothing, and the suite's
+ * limit ends a run whose stick never arrives.
+ */
+static void wait_replacement(void)
+{
+    char one[512];
+    int fd, got;
+
+    while (!usb_disk_ready("disk1 ")) {
+        syscall0(SYS_SCHED_YIELD);
+    }
+    fd = syscall3(SYS_OPEN, (long)"/dev/disk1p1", O_RDONLY, 0);
+    if (fd < 0) {
+        fail_with("opening the first partition of the replacement stick", fd);
+    }
+    got = syscall3(SYS_READ, fd, (long)one, (int)sizeof(one));
+    syscall1(SYS_CLOSE, fd);
+    if (got != (int)sizeof(one)) {
+        fail_with("reading the first partition of the replacement stick", got);
     }
 }
 
@@ -916,13 +960,15 @@ static void wait_replacement(void)
  * `pull`: a stick pulled from under a mounted volume. What the machine must
  * give then is an error from what was in flight, no writes to a device that is
  * not there, and an unmount that takes the mount down rather than failing
- * its sync for ever. The row writes until the stick is not there any more,
- * then once more; `KRFFSPROBE HOLDING` is said after the first write, so the
- * pull the suite makes on the word lands on a process writing. The mount
- * stays while the stick is plugged back in: the driver finds a second
- * device with the first still held, and a machine that gave the new one the
- * old one's slot would be handing this mount a pointer into it, so the
- * mount over the device that went must read nothing of the new stick.
+ * its sync for ever. The row writes until a write or the open before it
+ * fails, which is the removal witnessed, however many writes that takes;
+ * `KRFFSPROBE HOLDING` is said after the first write, so the pull the suite
+ * makes on the word lands on a process writing, and the suite's limit ends
+ * a run whose writes never fail. The mount stays while the stick is plugged
+ * back in: the driver finds a second device with the first still held, and
+ * a machine that gave the new one the old one's slot would be handing this
+ * mount a pointer into it, so the mount over the device that went must read
+ * nothing of the new stick, for which `wait_replacement` waits.
  *
  * `crash` rewrites the same bytes until the machine is killed: a volume
  * that filled up would say nothing about what a stop leaves behind, and the
@@ -1045,7 +1091,6 @@ void probe_main(unsigned long *sp)
     }
 
     if (streq(mode, "pull")) {
-        int tries = 0;
         int writes = 0;
 
         rc = syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/k", (long)"krffs", 0, 0);
@@ -1077,9 +1122,6 @@ void probe_main(unsigned long *sp)
             syscall1(SYS_CLOSE, fd);
             if (wrote != 5) {
                 break;
-            }
-            if (++tries > 100000) {
-                fail("the stick was never pulled");
             }
         }
         puts("KRFFSPROBE GONE");
