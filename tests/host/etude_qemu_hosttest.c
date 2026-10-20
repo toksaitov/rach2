@@ -27,6 +27,14 @@
  * shell, whose `poweroff` must give a shutdown; a cancellation at the prompt
  * must give a cancellation, and an accelerator this host's QEMU does not have
  * must give a failed accelerator.
+ *
+ * The memory rows check the reservations of an ordinary profile and of the
+ * boundary profile, refuse a changed boundary profile and a site that has not
+ * enabled it, and refuse a boundary start one byte short of its reservation
+ * before anything runs. With `--boundary` and ARCH=x86_64 the program runs
+ * only the 72 GiB boundary boot in the real QEMU, which must report the
+ * counts bigmem.sh requires and keep QEMU's resident peak within the
+ * reservation.
  */
 #include <errno.h>
 #include <signal.h>

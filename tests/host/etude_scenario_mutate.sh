@@ -8,8 +8,9 @@
 # service taken as ready before its text, a service that died unseen
 # accepted, no diagnostics before the stop, a stopped service's output not
 # kept, a fixed port in place of the plan's, a second machine refused while
-# the first runs, a service's output that wakes no wait, and a keeper that
-# does not end its case when its controller is killed must each be found.
+# the first runs, a service's output that wakes no wait, a keeper that does
+# not end its case when its controller is killed, and a machine's memory
+# profile left out of the launcher's profile must each be found.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"

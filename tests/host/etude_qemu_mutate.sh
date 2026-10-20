@@ -1,7 +1,8 @@
 #!/bin/sh
 # Prove etude_qemu_hosttest.c with faults in a private copy of the launcher:
-# a refused accelerator, a cancellation and a wrong accelerator in use must
-# each be found.
+# a refused accelerator, a cancellation, a wrong accelerator in use and a
+# boundary boot started without its whole memory reservation must each be
+# found.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"

@@ -29,15 +29,16 @@
  * A wait past its step's bound ends at the bound; a stop signal ends the
  * scenario's wait, its machine and its report, and keeps its copies; a
  * scenario that asks for what its manifest does not declare is refused; a
- * failed accelerator and a damaged artifact are reported. Under the stand-in
- * the machine's etude-guest runs a guest program whose report becomes the
- * scenario's, and an etude-guest killed in the middle of a run is a lost
- * end. This program is also the peer that a scenario runs as a service; two
- * machines at once reach it, a service ended unseen is a fault, and failing
- * rows at each stage end their own processes while a held row keeps its
- * own. With the real QEMU, a disk root written at the debug shell and
- * powered off is read back by the next boot, etude-guest runs the test
- * image's /hello, and two machines run /tcptest against the peer.
+ * failed accelerator, a damaged artifact and an unsafe memory profile are
+ * reported. Under the stand-in the machine's etude-guest runs a guest
+ * program whose report becomes the scenario's, and an etude-guest killed in
+ * the middle of a run is a lost end. This program is also the peer that a
+ * scenario runs as a service; two machines at once reach it, a service ended
+ * unseen is a fault, and failing rows at each stage end their own processes
+ * while a held row keeps its own. With the real QEMU, a disk root written at
+ * the debug shell and powered off is read back by the next boot, etude-guest
+ * runs the test image's /hello, and two machines run /tcptest against the
+ * peer.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -837,8 +838,8 @@ static int scenario_misuse(struct etude_case *c)
     return 0;
 }
 
-/** Run the rows whose machine does not boot: a failed accelerator, and a
- * damaged kernel. */
+/** Run the rows whose machine does not boot: a failed accelerator, a
+ * damaged kernel, and an unsafe memory profile. */
 static int scenario_noboot(struct etude_case *c, const char *row)
 {
     struct etude_case_machine *m;
