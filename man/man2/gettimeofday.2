@@ -179,6 +179,8 @@ is allowed.
 .Fn utimensat
 sets the access and modification times of
 .Fa path .
+On ext2, seconds are clamped to the signed 32-bit range and fractional
+seconds are discarded.
 An absolute path ignores
 .Fa dirfd .
 A relative path is resolved against the current working directory when

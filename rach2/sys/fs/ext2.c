@@ -898,9 +898,9 @@ static int ext2_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
         }
         st->rdev = (major << 8) | (minor & 0xFFu) | ((minor & 0xFFF00u) << 12);
     }
-    st->atime_sec = n->atime;
-    st->mtime_sec = n->mtime;
-    st->ctime_sec = n->ctime;
+    st->atime_sec = (int32_t)n->atime;
+    st->mtime_sec = (int32_t)n->mtime;
+    st->ctime_sec = (int32_t)n->ctime;
     st->blocks = n->blocks;
     st->blocks_known = 1;
     st->flags = n->flags & EXT2_FL_USER_VISIBLE;
@@ -1416,17 +1416,25 @@ static int ext2_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
         (p)[3] = (uint8_t)((put_ >> 24) & 0xFFu); \
     } while (0)
 
-/** The real time in seconds, or 0 before the epoch or past what a 32-bit
- * ext2 time holds, 2038-01-19 03:14:07 UTC. */
+/** Clamp seconds to ext2's signed 32-bit range and return the disk bits. */
+static uint32_t time_seconds(int64_t sec)
+{
+    if (sec < -2147483647 - 1) {
+        return 0x80000000u;
+    }
+    if (sec > 2147483647) {
+        return 0x7FFFFFFFu;
+    }
+    return (uint32_t)sec;
+}
+
+/** The real time in seconds, clamped to ext2's signed 32-bit range. */
 static uint32_t now_seconds(void)
 {
     int64_t sec = 0, nsec = 0;
 
     rtc_realtime(&sec, &nsec);
-    if (sec < 0 || sec > 0x7FFFFFFF) {
-        return 0;
-    }
-    return (uint32_t)sec;
+    return time_seconds(sec);
 }
 
 /**
@@ -3403,10 +3411,10 @@ static int ext2_setattr(struct vfs_mount *mnt, void *node, int what, const struc
         n->gid = st->gid;
     }
     if (what & VFS_SET_ATIME) {
-        n->atime = (uint32_t)st->atime_sec;
+        n->atime = time_seconds(st->atime_sec);
     }
     if (what & VFS_SET_MTIME) {
-        n->mtime = (uint32_t)st->mtime_sec;
+        n->mtime = time_seconds(st->mtime_sec);
     }
     if (what & VFS_SET_FLAGS) {
         n->flags = (n->flags & ~EXT2_FL_USER_MODIFIABLE) | (st->flags & EXT2_FL_USER_MODIFIABLE);

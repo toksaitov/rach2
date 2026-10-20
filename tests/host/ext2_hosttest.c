@@ -321,10 +321,12 @@ static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void
     return 0;
 }
 
-/** A fixed time, 10^9 seconds after the epoch. */
+static int64_t clock_seconds = 1000000000;
+
+/** The time selected by the row, 10^9 seconds after the epoch by default. */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
-    *seconds = 1000000000;
+    *seconds = clock_seconds;
     *nanoseconds = 0;
 }
 
@@ -1381,6 +1383,68 @@ static int e2fsck_clean(const char *img)
     fix_format(cmd, sizeof(cmd),
                ". tools/setup/e2fsprogs_path.sh; e2fsck -fn %s > $FIX/fsck.out 2>&1", img);
     return system(cmd) == 0;
+}
+
+/**
+ * Signed seconds and both range limits, set on a file and read again after
+ * each remount. The clock supplies the same cases for the change time.
+ */
+static void time_row(void)
+{
+    static const struct {
+        int64_t requested;
+        int64_t stored;
+    } cases[] = {{-(int64_t)2147483647 - 2, -2147483647 - 1},
+                 {-2147483647 - 1, -2147483647 - 1},
+                 {-31536000, -31536000},
+                 {0, 0},
+                 {2147483647, 2147483647},
+                 {(int64_t)2147483647 + 1, 2147483647},
+                 {(int64_t)4294967295u + 2, 2147483647}};
+    const char *img = fix_path("times.ext2");
+    uint64_t bytes;
+    struct vfs_stat set, got;
+    unsigned i, j, count = sizeof(cases) / sizeof(cases[0]);
+    void *node;
+    int rc;
+
+    bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+    use_image(img, bytes);
+    check(mount_rw() == 0, "the timestamp volume mounts writable");
+    node = make_file(mnt.root, "times", &rc);
+    check(node != 0, "the timestamp file is created");
+    if (!node) {
+        unmount_rw();
+        return;
+    }
+    for (i = 0; i < count; i++) {
+        j = count - i - 1;
+        memset(&set, 0, sizeof(set));
+        set.atime_sec = cases[i].requested;
+        set.mtime_sec = cases[j].requested;
+        clock_seconds = cases[i].requested;
+        check(OPS->setattr(&mnt, node, VFS_SET_ATIME | VFS_SET_MTIME, &set) == 0,
+              "ext2 accepts signed and out-of-range timestamp seconds");
+        check(OPS->getattr(&mnt, node, &got) == 0 && got.atime_sec == cases[i].stored &&
+                  got.mtime_sec == cases[j].stored && got.ctime_sec == cases[i].stored,
+              "ext2 reports signed timestamp seconds clamped at both limits");
+        clock_seconds = 1000000000;
+        OPS->put(&mnt, node);
+        check(unmount_rw() == 0, "the timestamp volume unmounts");
+        use_image(img, bytes);
+        check(mount_rw() == 0, "the timestamp volume remounts");
+        node = walk("/times", &rc);
+        check(node != 0, "the timestamp file survives a remount");
+        if (!node) {
+            unmount_rw();
+            return;
+        }
+        check(OPS->getattr(&mnt, node, &got) == 0 && got.atime_sec == cases[i].stored &&
+                  got.mtime_sec == cases[j].stored && got.ctime_sec == cases[i].stored,
+              "ext2 preserves signed and clamped timestamps on disk");
+    }
+    OPS->put(&mnt, node);
+    check(unmount_rw() == 0 && e2fsck_clean(img), "the timestamp volume is clean");
 }
 
 /**
@@ -4239,7 +4303,8 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
  * and run the rows: the reads at 4 KiB blocks with 128- and 256-byte inodes
  * and at 2 KiB, the 1 KiB levels, the failures, the write sequences, the
  * order rows, the writer's failures, the dirty volumes, the matrix and the
- * batch rows. With `--batch-only`, only the batch rows run. Returns 0, and
+ * batch rows. With `--batch-only` or `--times-only`, only the batch or
+ * timestamp rows run. Returns 0, and
  * calls `fix_passed`, when every row passed.
  */
 int main(int argc, char **argv)
@@ -4265,6 +4330,10 @@ int main(int argc, char **argv)
         batch_rows();
         goto finish;
     }
+    if (argc == 2 && streq(argv[1], "--times-only")) {
+        time_row();
+        goto finish;
+    }
 
     bytes = build_image(fix_path("a.ext2"), 4096, 128, PROFILE, 16, "tree");
     read_rows(fix_path("a.ext2"), bytes, "the 4 KiB volume with 128-byte inodes mounts", 1);
@@ -4276,6 +4345,7 @@ int main(int argc, char **argv)
     levels_rows(fix_path("d.ext2"), bytes);
     refusal_rows();
     write_rows();
+    time_row();
     order_row();
     refusal_write_rows();
     dirty_rows();

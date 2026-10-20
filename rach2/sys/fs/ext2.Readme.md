@@ -96,13 +96,13 @@ A new inode belongs to the caller's effective user and group, or to the director
 * The largest file is what the block pointers and the 32-bit `i_blocks` address: 2196875759616 bytes at 4 KiB blocks. A write, truncate or `fallocate` past it is `EFBIG`, logged with the limit.
 * A directory is at most 4 GiB less a block (`EFBIG`), a link count 65000 (`EMLINK`), a name 255 bytes, and a symbolic link's target a block less one byte, 4095 bytes at 4 KiB blocks (`ENAMETOOLONG`).
 * `path` and the rename check climb at most 2048 directories (`VFS_PATH_MAX / 2`).
-* Times are 32-bit seconds; a time the clock gives past 2038-01-19 03:14:07 UTC is stored as 0.
+* Times are signed 32-bit seconds, from 1901-12-13 20:45:52 UTC to 2038-01-19 03:14:07 UTC, without fractional seconds. A time outside that range, supplied by a program or the clock, is clamped to the nearer limit.
 * Extended attributes are neither read nor written; of an attribute block the driver reads and writes only the header's magic number, length and reference count.
 * Nodes in memory and mounts come from the heap without a fixed count (`ENOMEM`). There are no quotas.
 
 ## Tests
 
-* `tests/run host` runs `tests/host/ext2_hosttest.c`, with the batch rows in `ext2_batch_cases.h` and `ext2_batch_lifecycle.h`, and `tests/host/ext2_reserve_hosttest.c`. The first mounts, reads and writes volumes the host's `mke2fs` makes, sound and damaged, and stops all but one of its write sequences after every write on a `dirsync` mount to judge the stop by `e2fsck` and by the check.
+* `tests/run host` runs `tests/host/ext2_hosttest.c`, with the batch rows in `ext2_batch_cases.h` and `ext2_batch_lifecycle.h`, and `tests/host/ext2_reserve_hosttest.c`. The first mounts, reads and writes volumes the host's `mke2fs` makes, sound and damaged, checks signed and clamped timestamps through a remount, and stops all but one of its write sequences after every write on a `dirsync` mount to judge the stop by `e2fsck` and by the check.
 * `sh tests/host/ext2_batch_mutate.sh`, `sh tests/host/ext2_reserve_mutate.sh` and `sh tests/system/ext2_batch_mutate.sh` prove those rows and the batch's disk-command counts with compiled faults.
 * `tests/run ext2` runs file-system probes on an ext2 root and on a mounted volume, and boots os-real on an ext2 root through a kill, the check, a fault and recovery's `e2fsck`.
 * `tests/run large` writes a file past 4 GiB, and `tests/run selfbuild-ext2` builds the kernel on an ext2 root.
