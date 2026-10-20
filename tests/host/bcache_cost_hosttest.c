@@ -17,8 +17,8 @@
  * the head of the release order, and a sync gathers the lowest 128 dirty
  * blocks a walk. Each row that measures the count also requires it to be at
  * least the reads the row names, since a counter that counted nothing would
- * pass every upper bound. bcache_mutate.sh compiles in the faults the bounds
- * are for.
+ * pass every upper bound. tests/proofs/bcache.json compiles in the faults
+ * the bounds are for.
  *
  * The rows run on a cache of 1024 buffers keyed to consecutive blocks of one
  * device, which the index keeps in buckets of their own, so a lookup reads
