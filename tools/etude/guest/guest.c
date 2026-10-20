@@ -32,6 +32,9 @@
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#endif
 
 #define GUEST_VERSIONS "1"
 #define PATH_CAP       1024
@@ -345,12 +348,13 @@ static void token_of(const void *p, size_t n, char out[ETUDE_FRAME_TOKEN_LEN + 1
 }
 
 /**
- * Find the boot's token. Linux has a boot identity in /proc; Rach2 has none,
- * and the first etude-guest of a boot writes random bytes to a file in
- * /dev/shm, a tmpfs that every boot mounts empty, for every later one to
- * read. The file is published whole by link(2), so a reader never sees a
- * part, and it is used only when this user owns it and nobody else may write
- * it.
+ * Find the boot's token. Linux has a boot identity in /proc, and macOS, where
+ * the host tests run etude-guest too, has one in the sysctl
+ * kern.bootsessionuuid. Rach2 has none, and the first etude-guest of a boot
+ * writes random bytes to a file in /dev/shm, a tmpfs that every boot mounts
+ * empty, for every later one to read. The file is published whole by
+ * link(2), so a reader never sees a part, and it is used only when this user
+ * owns it and nobody else may write it.
  */
 static int find_boot(void)
 {
@@ -364,6 +368,15 @@ static int find_boot(void)
     int fd;
 
     n = read_file("/proc/sys/kernel/random/boot_id", buf, sizeof(buf));
+#if defined(__APPLE__)
+    if (n <= 0) {
+        size_t len = sizeof(buf) - 1;
+        if (sysctlbyname("kern.bootsessionuuid", buf, &len, NULL, 0) == 0) {
+            buf[len] = '\0';
+            n = (long)strlen(buf);
+        }
+    }
+#endif
     if (n > 0) {
         token_of(buf, (size_t)n, boot);
         return 0;
