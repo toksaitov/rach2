@@ -13,25 +13,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
-      "fifomusl"
+      "tests/system/default_probe.sh",
+      "musl/fifomusl"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "fifo-key-name-hash",
-      "summary": "descriptors, open, mknod, FIFOs and /proc",
+      "summary": "the row that fails with: the second found the first's reader",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -42,13 +42,13 @@
       "fails": {
         "lines": [
           "FIFOMUSL FAIL (the second found the first's reader",
-          "guest: fail: fifomusl did not pass"
+          "default-probe: fail: musl/fifomusl did not pass"
         ]
       }
     },
     {
       "name": "fifo-key-follows-name",
-      "summary": "descriptors, open, mknod, FIFOs and /proc",
+      "summary": "the row that fails with: the renamed FIFO lost its reader",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -59,13 +59,13 @@
       "fails": {
         "lines": [
           "FIFOMUSL FAIL (the renamed FIFO lost its reader",
-          "guest: fail: fifomusl did not pass"
+          "default-probe: fail: musl/fifomusl did not pass"
         ]
       }
     },
     {
       "name": "fifo-unlink-keeps-name",
-      "summary": "descriptors, open, mknod, FIFOs and /proc",
+      "summary": "the row that fails with: a FIFO in an unlinked one's name",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -76,13 +76,13 @@
       "fails": {
         "lines": [
           "FIFOMUSL FAIL (a FIFO in an unlinked one's name",
-          "guest: fail: fifomusl did not pass"
+          "default-probe: fail: musl/fifomusl did not pass"
         ]
       }
     },
     {
       "name": "fifo-ends-not-holders",
-      "summary": "descriptors, open, mknod, FIFOs and /proc",
+      "summary": "the row that fails with: a new FIFO found the unlinked one's reader",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -93,13 +93,13 @@
       "fails": {
         "lines": [
           "FIFOMUSL FAIL (a new FIFO found the unlinked one's reader",
-          "guest: fail: fifomusl did not pass"
+          "default-probe: fail: musl/fifomusl did not pass"
         ]
       }
     },
     {
       "name": "fifo-bind-key",
-      "summary": "descriptors, open, mknod, FIFOs and /proc",
+      "summary": "the row that fails with: a writer through a bind did not join a reader through its source",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -110,13 +110,13 @@
       "fails": {
         "lines": [
           "FIFOMUSL FAIL (a writer through a bind did not join a reader through its source",
-          "guest: fail: fifomusl did not pass"
+          "default-probe: fail: musl/fifomusl did not pass"
         ]
       }
     },
     {
       "name": "fifo-bind-release-unlocked",
-      "summary": "descriptors, open, mknod, FIFOs and /proc",
+      "summary": "the row that fails with: the last close through a bind did not free unlinked FIFOs",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -127,13 +127,13 @@
       "fails": {
         "lines": [
           "FIFOMUSL FAIL (the last close through a bind did not free unlinked FIFOs",
-          "guest: fail: fifomusl did not pass"
+          "default-probe: fail: musl/fifomusl did not pass"
         ]
       }
     },
     {
       "name": "fifo-bind-orphan-kept",
-      "summary": "descriptors, open, mknod, FIFOs and /proc",
+      "summary": "the row that fails with: the last close through a bind did not free unlinked FIFOs",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -144,13 +144,13 @@
       "fails": {
         "lines": [
           "FIFOMUSL FAIL (the last close through a bind did not free unlinked FIFOs",
-          "guest: fail: fifomusl did not pass"
+          "default-probe: fail: musl/fifomusl did not pass"
         ]
       }
     },
     {
       "name": "fifo-rdwr-full-polls-writable",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a full FIFO polled writable",
       "edits": [
         {
           "file": "rach2/sys/ipc/pipe.c",
@@ -161,13 +161,13 @@
       "fails": {
         "lines": [
           "FIFOMUSL FAIL (a full FIFO polled writable: errno",
-          "guest: fail: fifomusl did not pass"
+          "default-probe: fail: musl/fifomusl did not pass"
         ]
       }
     },
     {
       "name": "fifo-rdwr-poll-read-queue",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a read by another open did not wake a poll for output",
       "edits": [
         {
           "file": "rach2/sys/ipc/pipe.c",
@@ -178,13 +178,13 @@
       "fails": {
         "lines": [
           "FIFOMUSL FAIL (a read by another open did not wake a poll for output: errno",
-          "guest: fail: fifomusl did not pass"
+          "default-probe: fail: musl/fifomusl did not pass"
         ]
       }
     },
     {
       "name": "fifo-reader-no-wait",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: a blocking open for reading returned before a writer opened",
       "edits": [
         {
           "file": "rach2/sys/ipc/pipe.c",
@@ -195,13 +195,13 @@
       "fails": {
         "lines": [
           "FIFOMUSL FAIL (a blocking open for reading returned before a writer opened",
-          "guest: fail: fifomusl did not pass"
+          "default-probe: fail: musl/fifomusl did not pass"
         ]
       }
     },
     {
       "name": "fifo-reader-hup-before-writer",
-      "summary": "A pipe's poll after its writers have gone",
+      "summary": "the row that fails with: a new FIFO reader reported hangup before a writer opened",
       "edits": [
         {
           "file": "rach2/sys/ipc/pipe.c",
@@ -212,13 +212,13 @@
       "fails": {
         "lines": [
           "FIFOMUSL FAIL (a new FIFO reader reported hangup before a writer opened",
-          "guest: fail: fifomusl did not pass"
+          "default-probe: fail: musl/fifomusl did not pass"
         ]
       }
     },
     {
       "name": "fifo-reader-hup-never",
-      "summary": "A pipe's poll after its writers have gone",
+      "summary": "the row that fails with: a FIFO reader missed hangup after a writer opened and closed",
       "edits": [
         {
           "file": "rach2/sys/ipc/pipe.c",
@@ -229,7 +229,7 @@
       "fails": {
         "lines": [
           "FIFOMUSL FAIL (a FIFO reader missed hangup after a writer opened and closed",
-          "guest: fail: fifomusl did not pass"
+          "default-probe: fail: musl/fifomusl did not pass"
         ]
       }
     }

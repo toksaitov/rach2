@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "probe-capmusl",
-  "summary": "the row of capmusl in the default suite, with faults in the kernel",
+  "summary": "the row of capmusl in the default suite, with faults in the kernel; hello runs first, since the kernel refuses any attach to process 1, which capmusl would be as the boot's first program",
   "tree": "shared",
   "sources": [
     "rach2/sys/syscall_proc.c",
@@ -17,25 +17,26 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
-      "capmusl"
+      "tests/system/default_probe.sh",
+      "hello",
+      "musl/capmusl"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "capset-keeps-caps",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: a thread that gave up its capabilities still has them",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -46,13 +47,13 @@
       "fails": {
         "lines": [
           "CAPMUSL FAIL (a thread that gave up its capabilities still has them)",
-          "guest: fail: capmusl did not pass"
+          "default-probe: fail: musl/capmusl did not pass"
         ]
       }
     },
     {
       "name": "access-ignores-nocaps",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: a thread without capabilities read a file only another user may",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -63,13 +64,13 @@
       "fails": {
         "lines": [
           "CAPMUSL FAIL (a thread without capabilities read a file only another user may)",
-          "guest: fail: capmusl did not pass"
+          "default-probe: fail: musl/capmusl did not pass"
         ]
       }
     },
     {
       "name": "low-port-ignores-nocaps",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: a thread without capabilities bound a port below 1024",
       "edits": [
         {
           "file": "rach2/sys/syscall_net.c",
@@ -80,13 +81,13 @@
       "fails": {
         "lines": [
           "CAPMUSL FAIL (a thread without capabilities bound a port below 1024)",
-          "guest: fail: capmusl did not pass"
+          "default-probe: fail: musl/capmusl did not pass"
         ]
       }
     },
     {
       "name": "status-ignores-nocaps",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: /proc/self/status did not show the capabilities given up",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -97,13 +98,13 @@
       "fails": {
         "lines": [
           "CAPMUSL FAIL (/proc/self/status did not show the capabilities given up)",
-          "guest: fail: capmusl did not pass"
+          "default-probe: fail: musl/capmusl did not pass"
         ]
       }
     },
     {
       "name": "fork-drops-nocaps",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: a fork of a thread without capabilities has them",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -114,13 +115,13 @@
       "fails": {
         "lines": [
           "CAPMUSL FAIL (a fork of a thread without capabilities has them)",
-          "guest: fail: capmusl did not pass"
+          "default-probe: fail: musl/capmusl did not pass"
         ]
       }
     },
     {
       "name": "exec-keeps-nocaps",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: an exec as root did not give the capabilities back",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -131,13 +132,13 @@
       "fails": {
         "lines": [
           "CAPMUSL FAIL (an exec as root did not give the capabilities back)",
-          "guest: fail: capmusl did not pass"
+          "default-probe: fail: musl/capmusl did not pass"
         ]
       }
     },
     {
       "name": "exec-nnp-gives-caps",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: an exec under no_new_privs gave the capabilities back",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -148,13 +149,13 @@
       "fails": {
         "lines": [
           "CAPMUSL FAIL (an exec under no_new_privs gave the capabilities back)",
-          "guest: fail: capmusl did not pass"
+          "default-probe: fail: musl/capmusl did not pass"
         ]
       }
     },
     {
       "name": "exec-regain-ignores-sharer",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: an exec whose directories another process shares gave the capabilities back",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -165,13 +166,13 @@
       "fails": {
         "lines": [
           "CAPMUSL FAIL (an exec whose directories another process shares gave the capabilities back)",
-          "guest: fail: capmusl did not pass"
+          "default-probe: fail: musl/capmusl did not pass"
         ]
       }
     },
     {
       "name": "exec-regain-stays-dumpable",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: an exec that gave the capabilities back left the image dumpable",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -182,13 +183,13 @@
       "fails": {
         "lines": [
           "CAPMUSL FAIL (an exec that gave the capabilities back left the image dumpable)",
-          "guest: fail: capmusl did not pass"
+          "default-probe: fail: musl/capmusl did not pass"
         ]
       }
     },
     {
       "name": "capget-reads-pid-first",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: a header whose version ends a page was not asked the version alone",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -199,13 +200,13 @@
       "fails": {
         "lines": [
           "CAPMUSL FAIL (a header whose version ends a page was not asked the version alone)",
-          "guest: fail: capmusl did not pass"
+          "default-probe: fail: musl/capmusl did not pass"
         ]
       }
     },
     {
       "name": "mem-open-ignores-privilege",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: a thread without capabilities opened the memory of a process that has them",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -216,13 +217,13 @@
       "fails": {
         "lines": [
           "CAPMUSL FAIL (a thread without capabilities opened the memory of a process that has them)",
-          "guest: fail: capmusl did not pass"
+          "default-probe: fail: musl/capmusl did not pass"
         ]
       }
     },
     {
       "name": "attach-ignores-privilege",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: a thread without capabilities attached to a process that has them",
       "edits": [
         {
           "file": "rach2/sys/proc/ptrace.c",
@@ -233,13 +234,13 @@
       "fails": {
         "lines": [
           "CAPMUSL FAIL (a thread without capabilities attached to a process that has them)",
-          "guest: fail: capmusl did not pass"
+          "default-probe: fail: musl/capmusl did not pass"
         ]
       }
     },
     {
       "name": "robust-list-ignores-privilege",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: a thread without capabilities read the robust list of a process that has them",
       "edits": [
         {
           "file": "rach2/sys/proc/futex.c",
@@ -250,13 +251,13 @@
       "fails": {
         "lines": [
           "CAPMUSL FAIL (a thread without capabilities read the robust list of a process that has them)",
-          "guest: fail: capmusl did not pass"
+          "default-probe: fail: musl/capmusl did not pass"
         ]
       }
     },
     {
       "name": "fixed-mode-needs-privilege",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: a thread without capabilities could not change the mode of a node root owns",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -267,13 +268,13 @@
       "fails": {
         "lines": [
           "CAPMUSL FAIL (a thread without capabilities could not change the mode of a node root owns)",
-          "guest: fail: capmusl did not pass"
+          "default-probe: fail: musl/capmusl did not pass"
         ]
       }
     },
     {
       "name": "traceme-ignores-privilege",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: a child with capabilities made a parent without them its tracer",
       "edits": [
         {
           "file": "rach2/sys/proc/ptrace.c",
@@ -284,13 +285,13 @@
       "fails": {
         "lines": [
           "CAPMUSL FAIL (a child with capabilities made a parent without them its tracer)",
-          "guest: fail: capmusl did not pass"
+          "default-probe: fail: musl/capmusl did not pass"
         ]
       }
     },
     {
       "name": "traceme-judges-leader-record",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: a privileged child made its tracer a parent whose live thread was not",
       "edits": [
         {
           "file": "rach2/sys/proc/ptrace.c",
@@ -301,13 +302,13 @@
       "fails": {
         "lines": [
           "CAPMUSL FAIL (a privileged child made its tracer a parent whose live thread was not)",
-          "guest: fail: capmusl did not pass"
+          "default-probe: fail: musl/capmusl did not pass"
         ]
       }
     },
     {
       "name": "own-exe-needs-privilege",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: a thread without capabilities could not read its own process's exe link",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -318,13 +319,13 @@
       "fails": {
         "lines": [
           "CAPMUSL FAIL (a thread without capabilities could not read its own process's exe link)",
-          "guest: fail: capmusl did not pass"
+          "default-probe: fail: musl/capmusl did not pass"
         ]
       }
     },
     {
       "name": "nocaps-cleared-counts-as-gain",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: an exec that regained nothing cleared the parent-death signal",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -335,7 +336,7 @@
       "fails": {
         "lines": [
           "CAPMUSL FAIL (an exec that regained nothing cleared the parent-death signal)",
-          "guest: fail: capmusl did not pass"
+          "default-probe: fail: musl/capmusl did not pass"
         ]
       }
     }

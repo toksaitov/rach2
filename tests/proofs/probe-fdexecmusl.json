@@ -13,25 +13,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
-      "fdexecmusl"
+      "tests/system/default_probe.sh",
+      "musl/fdexecmusl"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "exec-fd-not-followed",
-      "summary": "execve",
+      "summary": "the row that fails with: a descriptor opened for reading: EACCES",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -42,13 +42,13 @@
       "fails": {
         "lines": [
           "FDEXECMUSL FAIL (a descriptor opened for reading: EACCES)",
-          "guest: fail: fdexecmusl did not pass"
+          "default-probe: fail: musl/fdexecmusl did not pass"
         ]
       }
     },
     {
       "name": "exec-fd-unnamed",
-      "summary": "execve",
+      "summary": "the row that fails with: /proc/self/exe of a tmpfs copy run by its descriptor",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -59,13 +59,13 @@
       "fails": {
         "lines": [
           "FDEXECMUSL FAIL (/proc/self/exe of a tmpfs copy run by its descriptor)",
-          "guest: fail: fdexecmusl did not pass"
+          "default-probe: fail: musl/fdexecmusl did not pass"
         ]
       }
     },
     {
       "name": "exec-fd-script-named",
-      "summary": "execve",
+      "summary": "the row that fails with: /proc/self/exe of a script run by its descriptor",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -76,13 +76,13 @@
       "fails": {
         "lines": [
           "FDEXECMUSL FAIL (/proc/self/exe of a script run by its descriptor)",
-          "guest: fail: fdexecmusl did not pass"
+          "default-probe: fail: musl/fdexecmusl did not pass"
         ]
       }
     },
     {
       "name": "exec-name-link-kept",
-      "summary": "execve",
+      "summary": "the row that fails with: /proc/self/exe of a copy run through links",
       "edits": [
         {
           "file": "rach2/sys/fs/vfs.c",
@@ -93,7 +93,7 @@
       "fails": {
         "lines": [
           "FDEXECMUSL FAIL (/proc/self/exe of a copy run through links)",
-          "guest: fail: fdexecmusl did not pass"
+          "default-probe: fail: musl/fdexecmusl did not pass"
         ]
       }
     }

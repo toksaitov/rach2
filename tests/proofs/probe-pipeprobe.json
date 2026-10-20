@@ -14,25 +14,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
+      "tests/system/default_probe.sh",
       "pipeprobe"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "pipe-reader-exit-killed",
-      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "summary": "the row that fails with: child read every byte intact",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -43,13 +43,13 @@
       "fails": {
         "lines": [
           "FAIL: child read every byte intact",
-          "guest: fail: pipeprobe did not pass"
+          "default-probe: fail: pipeprobe did not pass"
         ]
       }
     },
     {
       "name": "pipe-refill-exit-killed",
-      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "summary": "the row that fails with: and said so",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -60,13 +60,13 @@
       "fails": {
         "lines": [
           "FAIL: and said so",
-          "guest: fail: pipeprobe did not pass"
+          "default-probe: fail: pipeprobe did not pass"
         ]
       }
     },
     {
       "name": "pipe-size-refused",
-      "summary": "A pipe's capacity through fcntl",
+      "summary": "the row that fails with: F_GETPIPE_SZ reports 64 KiB at both ends",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -77,13 +77,13 @@
       "fails": {
         "lines": [
           "FAIL: F_GETPIPE_SZ reports 64 KiB at both ends",
-          "guest: fail: pipeprobe did not pass"
+          "default-probe: fail: pipeprobe did not pass"
         ]
       }
     },
     {
       "name": "pipe-close-leaked",
-      "summary": "leaks of open file descriptions and pipes, which ofdprobe and pipeprobe judge by the heap's HeapUsed",
+      "summary": "the row that fails with: 100 pipe/close cycles left the heap as it was",
       "edits": [
         {
           "file": "rach2/sys/ipc/pipe.c",
@@ -94,7 +94,7 @@
       "fails": {
         "lines": [
           "FAIL: 100 pipe/close cycles left the heap as it was",
-          "guest: fail: pipeprobe did not pass"
+          "default-probe: fail: pipeprobe did not pass"
         ]
       }
     }

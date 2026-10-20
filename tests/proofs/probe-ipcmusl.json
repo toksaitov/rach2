@@ -16,25 +16,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
-      "ipcmusl"
+      "tests/system/default_probe.sh",
+      "musl/ipcmusl"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "sem-undo-dropped",
-      "summary": "system V IPC and POSIX message queues, which ipcmusl checks",
+      "summary": "the row that fails with: a waiter let through, and a child's SEM_UNDO undone at its exit",
       "edits": [
         {
           "file": "rach2/sys/ipc/sysv.c",
@@ -45,13 +45,13 @@
       "fails": {
         "lines": [
           "IPCMUSL FAIL (a waiter let through, and a child's SEM_UNDO undone at its exit",
-          "guest: fail: ipcmusl did not pass"
+          "default-probe: fail: musl/ipcmusl did not pass"
         ]
       }
     },
     {
       "name": "shm-removed-kept",
-      "summary": "system V IPC and POSIX message queues, which ipcmusl checks",
+      "summary": "the row that fails with: its last detach frees it",
       "edits": [
         {
           "file": "rach2/sys/ipc/sysv.c",
@@ -62,13 +62,13 @@
       "fails": {
         "lines": [
           "IPCMUSL FAIL (its last detach frees it",
-          "guest: fail: ipcmusl did not pass"
+          "default-probe: fail: musl/ipcmusl did not pass"
         ]
       }
     },
     {
       "name": "msg-negative-highest",
-      "summary": "system V IPC and POSIX message queues, which ipcmusl checks",
+      "summary": "the row that fails with: a negative type takes the lowest, type 0 the first",
       "edits": [
         {
           "file": "rach2/sys/ipc/sysv.c",
@@ -79,13 +79,13 @@
       "fails": {
         "lines": [
           "IPCMUSL FAIL (a negative type takes the lowest, type 0 the first",
-          "guest: fail: ipcmusl did not pass"
+          "default-probe: fail: musl/ipcmusl did not pass"
         ]
       }
     },
     {
       "name": "mq-notify-late",
-      "summary": "system V IPC and POSIX message queues, which ipcmusl checks",
+      "summary": "the row that fails with: mq_notify's signal with SI_MESGQ and its value",
       "edits": [
         {
           "file": "rach2/sys/ipc/mqueue.c",
@@ -96,13 +96,13 @@
       "fails": {
         "lines": [
           "IPCMUSL FAIL (mq_notify's signal with SI_MESGQ and its value",
-          "guest: fail: ipcmusl did not pass"
+          "default-probe: fail: musl/ipcmusl did not pass"
         ]
       }
     },
     {
       "name": "sysv-wait-restarted",
-      "summary": "system V IPC and POSIX message queues, which ipcmusl checks",
+      "summary": "the row that fails with: semop cut by a handler with SA_RESTART",
       "edits": [
         {
           "file": "rach2/sys/syscall.c",
@@ -113,13 +113,13 @@
       "fails": {
         "lines": [
           "IPCMUSL FAIL (semop cut by a handler with SA_RESTART",
-          "guest: fail: ipcmusl did not pass"
+          "default-probe: fail: musl/ipcmusl did not pass"
         ]
       }
     },
     {
       "name": "mqueue-dir-unlisted",
-      "summary": "the mqueue file system, the binds of KRFFS, fallocate on a tmpfs, the system's name and a tmpfs's size= at a remount, of milestone 56",
+      "summary": "the row that fails with: /dev/mqueue lists the queue",
       "edits": [
         {
           "file": "rach2/sys/ipc/mqueue.c",
@@ -130,13 +130,13 @@
       "fails": {
         "lines": [
           "IPCMUSL FAIL (/dev/mqueue lists the queue",
-          "guest: fail: ipcmusl did not pass"
+          "default-probe: fail: musl/ipcmusl did not pass"
         ]
       }
     },
     {
       "name": "mqueue-fd-anon-stat",
-      "summary": "the mqueue file system, the binds of KRFFS, fallocate on a tmpfs, the system's name and a tmpfs's size= at a remount, of milestone 56",
+      "summary": "the row that fails with: fstat of a queue's descriptor gives its file's stat",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -147,13 +147,13 @@
       "fails": {
         "lines": [
           "IPCMUSL FAIL (fstat of a queue's descriptor gives its file's stat",
-          "guest: fail: ipcmusl did not pass"
+          "default-probe: fail: musl/ipcmusl did not pass"
         ]
       }
     },
     {
       "name": "mqueue-fd-link-anon",
-      "summary": "the mqueue file system, the binds of KRFFS, fallocate on a tmpfs, the system's name and a tmpfs's size= at a remount, of milestone 56",
+      "summary": "the row that fails with: a queue's /proc/self/fd link reads /NAME",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -164,13 +164,13 @@
       "fails": {
         "lines": [
           "IPCMUSL FAIL (a queue's /proc/self/fd link reads /NAME",
-          "guest: fail: ipcmusl did not pass"
+          "default-probe: fail: musl/ipcmusl did not pass"
         ]
       }
     },
     {
       "name": "mqueue-unlink-unmarked",
-      "summary": "the mqueue file system, the binds of KRFFS, fallocate on a tmpfs, the system's name and a tmpfs's size= at a remount, of milestone 56",
+      "summary": "the row that fails with: an unlinked queue's link reads /NAME (deleted",
       "edits": [
         {
           "file": "rach2/sys/ipc/mqueue.c",
@@ -181,7 +181,7 @@
       "fails": {
         "lines": [
           "IPCMUSL FAIL (an unlinked queue's link reads /NAME (deleted)",
-          "guest: fail: ipcmusl did not pass"
+          "default-probe: fail: musl/ipcmusl did not pass"
         ]
       }
     }

@@ -9,8 +9,9 @@
 # same way: its words come before the hang, and the runner's deadline ends the
 # boot. The faults of the other probes, of processes, system calls and
 # protocols, are catalogues of etude's proof driver instead,
-# tests/proofs/probe-PROBE.json, which judge each fault the same way and boot
-# the suite again on the restored tree.
+# tests/proofs/probe-PROBE.json, which boot each probe alone through
+# default_probe.sh, judge each fault by its row and its words, and boot the
+# probe again on the restored tree.
 #
 # The file is restored and touched after each fault, and the trap restores it
 # and rebuilds whenever a fault was built and the rebuild of the restored

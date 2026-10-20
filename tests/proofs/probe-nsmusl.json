@@ -20,25 +20,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
-      "nsmusl"
+      "tests/system/default_probe.sh",
+      "musl/nsmusl"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "proc-dir-global-pid",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: a descriptor of its /proc/self/fd reaches its own descriptors",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -49,13 +49,13 @@
       "fails": {
         "lines": [
           "NSMUSL FAIL (a descriptor of its /proc/self/fd reaches its own descriptors",
-          "guest: fail: nsmusl did not pass"
+          "default-probe: fail: musl/nsmusl did not pass"
         ]
       }
     },
     {
       "name": "ns-orphan-child-reaper",
-      "summary": "namespaces, which nsmusl checks",
+      "summary": "the row that fails with: the outer init adopted the namespace init's sibling",
       "edits": [
         {
           "file": "rach2/sys/proc/process.c",
@@ -66,13 +66,13 @@
       "fails": {
         "lines": [
           "NSMUSL FAIL (the outer init adopted the namespace init's sibling",
-          "guest: fail: nsmusl did not pass"
+          "default-probe: fail: musl/nsmusl did not pass"
         ]
       }
     },
     {
       "name": "ns-map-own-lower",
-      "summary": "namespaces, which nsmusl checks",
+      "summary": "the row that fails with: the map reads back",
       "edits": [
         {
           "file": "rach2/sys/proc/ns.c",
@@ -83,13 +83,13 @@
       "fails": {
         "lines": [
           "NSMUSL FAIL (the map reads back",
-          "guest: fail: nsmusl did not pass"
+          "default-probe: fail: musl/nsmusl did not pass"
         ]
       }
     },
     {
       "name": "ns-pid-kernel-numbers",
-      "summary": "namespaces, which nsmusl checks",
+      "summary": "the row that fails with: the first process of a pid namespace is 1, its parent 0",
       "edits": [
         {
           "file": "rach2/sys/proc/ns.c",
@@ -100,13 +100,13 @@
       "fails": {
         "lines": [
           "NSMUSL FAIL (the first process of a pid namespace is 1, its parent 0",
-          "guest: fail: nsmusl did not pass"
+          "default-probe: fail: musl/nsmusl did not pass"
         ]
       }
     },
     {
       "name": "ns-robust-list-kernel-id",
-      "summary": "namespaces, which nsmusl checks",
+      "summary": "the row that fails with: get_robust_list of pid 1 gives the first process's own list",
       "edits": [
         {
           "file": "rach2/sys/proc/futex.c",
@@ -117,13 +117,13 @@
       "fails": {
         "lines": [
           "NSMUSL FAIL (get_robust_list of pid 1 gives the first process's own list",
-          "guest: fail: nsmusl did not pass"
+          "default-probe: fail: musl/nsmusl did not pass"
         ]
       }
     },
     {
       "name": "ns-unknown-pid-idle",
-      "summary": "namespaces, which nsmusl checks",
+      "summary": "the row that fails with: get_robust_list of a pid the namespace has not given is ESRCH",
       "edits": [
         {
           "file": "rach2/sys/proc/ns.c",
@@ -134,13 +134,13 @@
       "fails": {
         "lines": [
           "NSMUSL FAIL (get_robust_list of a pid the namespace has not given is ESRCH",
-          "guest: fail: nsmusl did not pass"
+          "default-probe: fail: musl/nsmusl did not pass"
         ]
       }
     },
     {
       "name": "ns-kill-unknown-pid-idle",
-      "summary": "namespaces, which nsmusl checks",
+      "summary": "the row that fails with: kill of a pid the namespace has not given is ESRCH",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -151,13 +151,13 @@
       "fails": {
         "lines": [
           "NSMUSL FAIL (kill of a pid the namespace has not given is ESRCH",
-          "guest: fail: nsmusl did not pass"
+          "default-probe: fail: musl/nsmusl did not pass"
         ]
       }
     },
     {
       "name": "ns-proc-link-kernel-id",
-      "summary": "namespaces, which nsmusl checks",
+      "summary": "the row that fails with: the link of its /proc file names it 1",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -168,13 +168,13 @@
       "fails": {
         "lines": [
           "NSMUSL FAIL (the link of its /proc file names it 1",
-          "guest: fail: nsmusl did not pass"
+          "default-probe: fail: musl/nsmusl did not pass"
         ]
       }
     },
     {
       "name": "ns-proc-entry-ino-seen",
-      "summary": "namespaces, which nsmusl checks",
+      "summary": "the row that fails with: the entry 1 of /proc has the inode of /proc/1",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -185,13 +185,13 @@
       "fails": {
         "lines": [
           "NSMUSL FAIL (the entry 1 of /proc has the inode of /proc/1",
-          "guest: fail: nsmusl did not pass"
+          "default-probe: fail: musl/nsmusl did not pass"
         ]
       }
     },
     {
       "name": "ns-uts-shared",
-      "summary": "namespaces, which nsmusl checks",
+      "summary": "the row that fails with: setns returns to the first uts namespace",
       "edits": [
         {
           "file": "rach2/sys/proc/ns.c",
@@ -202,13 +202,13 @@
       "fails": {
         "lines": [
           "NSMUSL FAIL (setns returns to the first uts namespace",
-          "guest: fail: nsmusl did not pass"
+          "default-probe: fail: musl/nsmusl did not pass"
         ]
       }
     },
     {
       "name": "ns-net-reaches",
-      "summary": "namespaces, which nsmusl checks",
+      "summary": "the row that fails with: a new network namespace reaches nothing",
       "edits": [
         {
           "file": "rach2/sys/network/socket/socket.c",
@@ -219,13 +219,13 @@
       "fails": {
         "lines": [
           "NSMUSL FAIL (a new network namespace reaches nothing",
-          "guest: fail: nsmusl did not pass"
+          "default-probe: fail: musl/nsmusl did not pass"
         ]
       }
     },
     {
       "name": "ns-mount-shared",
-      "summary": "namespaces, which nsmusl checks",
+      "summary": "the row that fails with: the mount is not seen outside its namespace",
       "edits": [
         {
           "file": "rach2/sys/fs/vfs.c",
@@ -236,13 +236,13 @@
       "fails": {
         "lines": [
           "NSMUSL FAIL (the mount is not seen outside its namespace",
-          "guest: fail: nsmusl did not pass"
+          "default-probe: fail: musl/nsmusl did not pass"
         ]
       }
     },
     {
       "name": "ns-ipc-shared",
-      "summary": "namespaces, which nsmusl checks",
+      "summary": "the row that fails with: a new ipc namespace has none of the first's objects",
       "edits": [
         {
           "file": "rach2/sys/ipc/sysv.c",
@@ -253,13 +253,13 @@
       "fails": {
         "lines": [
           "NSMUSL FAIL (a new ipc namespace has none of the first's objects",
-          "guest: fail: nsmusl did not pass"
+          "default-probe: fail: musl/nsmusl did not pass"
         ]
       }
     },
     {
       "name": "ns-setid-unmapped-owner",
-      "summary": "namespaces, which nsmusl checks",
+      "summary": "the row that fails with: an exec in a user namespace ignores a set-id bit of an owner it does not map",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -270,13 +270,13 @@
       "fails": {
         "lines": [
           "NSMUSL FAIL (an exec in a user namespace ignores a set-id bit of an owner it does not map",
-          "guest: fail: nsmusl did not pass"
+          "default-probe: fail: musl/nsmusl did not pass"
         ]
       }
     },
     {
       "name": "ns-chroot-first-only",
-      "summary": "namespaces, which nsmusl checks",
+      "summary": "the row that fails with: the user namespace's root may chroot",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -287,13 +287,13 @@
       "fails": {
         "lines": [
           "NSMUSL FAIL (the user namespace's root may chroot",
-          "guest: fail: nsmusl did not pass"
+          "default-probe: fail: musl/nsmusl did not pass"
         ]
       }
     },
     {
       "name": "ns-wait-pid-after-reap",
-      "summary": "namespaces, which nsmusl checks",
+      "summary": "the row that fails with: its child is 2",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -304,13 +304,13 @@
       "fails": {
         "lines": [
           "NSMUSL FAIL (its child is 2",
-          "guest: fail: nsmusl did not pass"
+          "default-probe: fail: musl/nsmusl did not pass"
         ]
       }
     },
     {
       "name": "ns-fdinfo-root-refused",
-      "summary": "namespaces, which nsmusl checks",
+      "summary": "the row that fails with: a helper sharing the directories chroots to /proc/self/fdinfo",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -321,13 +321,13 @@
       "fails": {
         "lines": [
           "NSMUSL FAIL (a helper sharing the directories chroots to /proc/self/fdinfo",
-          "guest: fail: nsmusl did not pass"
+          "default-probe: fail: musl/nsmusl did not pass"
         ]
       }
     },
     {
       "name": "fdinfo-cloexec-unreported",
-      "summary": "namespaces, which nsmusl checks",
+      "summary": "the row that fails with: a file of fdinfo has the offset and the flags",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -338,13 +338,13 @@
       "fails": {
         "lines": [
           "NSMUSL FAIL (a file of fdinfo has the offset and the flags",
-          "guest: fail: nsmusl did not pass"
+          "default-probe: fail: musl/nsmusl did not pass"
         ]
       }
     },
     {
       "name": "memfd-root-has-a-path",
-      "summary": "namespaces, which nsmusl checks",
+      "summary": "the row that fails with: a descriptor of /proc opened before the chroot reaches self/fd",
       "edits": [
         {
           "file": "rach2/sys/fs/vfs.c",
@@ -355,7 +355,7 @@
       "fails": {
         "lines": [
           "NSMUSL FAIL (a descriptor of /proc opened before the chroot reaches self/fd",
-          "guest: fail: nsmusl did not pass"
+          "default-probe: fail: musl/nsmusl did not pass"
         ]
       }
     }

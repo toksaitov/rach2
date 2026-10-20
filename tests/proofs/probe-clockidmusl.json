@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "probe-clockidmusl",
-  "summary": "the row of clockidmusl in the default suite, with faults in the kernel",
+  "summary": "the row of clockidmusl in the default suite, with faults in the kernel; pipeprobe runs first, so that a pipe's stat has read the boot time before clockidmusl steps the clock",
   "tree": "shared",
   "sources": [
     "rach2/sys/syscall.c",
@@ -14,25 +14,26 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
-      "clockidmusl"
+      "tests/system/default_probe.sh",
+      "pipeprobe",
+      "musl/clockidmusl"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "cpu-clock-sibling",
-      "summary": "futexes, ptrace, core files and the system call dispatcher",
+      "summary": "the row that fails with: a sleep on the process CPU clock another thread advanced did not end",
       "edits": [
         {
           "file": "rach2/sys/syscall.c",
@@ -43,13 +44,13 @@
       "fails": {
         "lines": [
           "CLOCKIDMUSL FAIL (a sleep on the process CPU clock another thread advanced did not end)",
-          "guest: fail: clockidmusl did not pass"
+          "default-probe: fail: musl/clockidmusl did not pass"
         ]
       }
     },
     {
       "name": "cpu-clock-other-pid",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: a child's CPU clock by id did not read the time the child reported",
       "edits": [
         {
           "file": "rach2/sys/syscall.c",
@@ -60,13 +61,13 @@
       "fails": {
         "lines": [
           "CLOCKIDMUSL FAIL (a child's CPU clock by id did not read the time the child reported)",
-          "guest: fail: clockidmusl did not pass"
+          "default-probe: fail: musl/clockidmusl did not pass"
         ]
       }
     },
     {
       "name": "monotonic-tick-only",
-      "summary": "time since boot read within the tick",
+      "summary": "the row that fails with: time since boot does not read within the tick",
       "edits": [
         {
           "file": "rach2/sys/clock.c",
@@ -77,13 +78,13 @@
       "fails": {
         "lines": [
           "CLOCKIDMUSL FAIL (time since boot does not read within the tick)",
-          "guest: fail: clockidmusl did not pass"
+          "default-probe: fail: musl/clockidmusl did not pass"
         ]
       }
     },
     {
       "name": "getres-time64-tick",
-      "summary": "time since boot read within the tick",
+      "summary": "the row that fails with: clock_getres_time64 does not answer as clock_getres",
       "edits": [
         {
           "file": "rach2/sys/syscall.c",
@@ -94,13 +95,13 @@
       "fails": {
         "lines": [
           "CLOCKIDMUSL FAIL (clock_getres_time64 does not answer as clock_getres)",
-          "guest: fail: clockidmusl did not pass"
+          "default-probe: fail: musl/clockidmusl did not pass"
         ]
       }
     },
     {
       "name": "coarse-monotonic-tick-behind",
-      "summary": "time since boot read within the tick",
+      "summary": "the row that fails with: coarse time since boot is not time since boot at the last tick",
       "edits": [
         {
           "file": "rach2/sys/syscall.c",
@@ -111,13 +112,13 @@
       "fails": {
         "lines": [
           "CLOCKIDMUSL FAIL (coarse time since boot is not time since boot at the last tick",
-          "guest: fail: clockidmusl did not pass"
+          "default-probe: fail: musl/clockidmusl did not pass"
         ]
       }
     },
     {
       "name": "coarse-realtime-tick-ahead",
-      "summary": "time since boot read within the tick",
+      "summary": "the row that fails with: coarse real time is not real time at the last tick",
       "edits": [
         {
           "file": "rach2/sys/clock.c",
@@ -128,13 +129,13 @@
       "fails": {
         "lines": [
           "CLOCKIDMUSL FAIL (coarse real time is not real time at the last tick",
-          "guest: fail: clockidmusl did not pass"
+          "default-probe: fail: musl/clockidmusl did not pass"
         ]
       }
     },
     {
       "name": "synth-time-unstepped",
-      "summary": "the boot time a synthetic node reports, which a step of the clock moves",
+      "summary": "the row that fails with: /dev/null does not report the btime of /proc/stat",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -145,7 +146,7 @@
       "fails": {
         "lines": [
           "CLOCKIDMUSL FAIL (/dev/null does not report the btime of /proc/stat)",
-          "guest: fail: clockidmusl did not pass"
+          "default-probe: fail: musl/clockidmusl did not pass"
         ]
       }
     }

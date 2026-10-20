@@ -25,25 +25,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
-      "callsmusl"
+      "tests/system/default_probe.sh",
+      "musl/callsmusl"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "dequeue-union-lowest",
-      "summary": "signals and waits",
+      "summary": "the row that fails with: sigtimedwait did not take the thread's signal before the process's",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -54,13 +54,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (sigtimedwait did not take the thread's signal before the process's: errno",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "sigtimedwait-unclamped",
-      "summary": "signals and waits",
+      "summary": "the row that fails with: sigtimedwait under a timeout past 2^31 ticks did not wait for the alarm",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -71,13 +71,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (sigtimedwait under a timeout past 2^31 ticks did not wait for the alarm: errno",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "close-range-cloexec-closes",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: close_range with CLOSE_RANGE_CLOEXEC left a descriptor unmarked",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -88,13 +88,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (close_range with CLOSE_RANGE_CLOEXEC left a descriptor unmarked",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "splice-missing",
-      "summary": "splice, tee and sendfile, which answer EINVAL",
+      "summary": "the row that fails with: splice from a pipe to /dev/null was not EINVAL",
       "edits": [
         {
           "file": "rach2/sys/arch/i686/systab.c",
@@ -105,13 +105,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (splice from a pipe to /dev/null was not EINVAL",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "fallocate-missing",
-      "summary": "fallocate, which answers EOPNOTSUPP for a regular file",
+      "summary": "the row that fails with: posix_fallocate of a file open for writing was not EOPNOTSUPP",
       "edits": [
         {
           "file": "rach2/sys/arch/i686/systab.c",
@@ -122,13 +122,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (posix_fallocate of a file open for writing was not EOPNOTSUPP",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "adjtimex-missing",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: adjtimex did not read an unsynchronized clock",
       "edits": [
         {
           "file": "rach2/sys/syscall.c",
@@ -139,13 +139,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (adjtimex did not read an unsynchronized clock",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "listxattr-unsupported",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: listxattr of a regular file was not an empty list",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -155,14 +155,14 @@
       ],
       "fails": {
         "lines": [
-          "CALLSMUSL FAIL (listxattr of /bin/sh was not an empty list",
-          "guest: fail: callsmusl did not pass"
+          "CALLSMUSL FAIL (listxattr of a regular file was not an empty list",
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "pty-open-no-claim",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: a session leader did not take the slave it opened",
       "edits": [
         {
           "file": "rach2/sys/tty/pty.c",
@@ -173,13 +173,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (a session leader did not take the slave it opened",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "kill-zombie-esrch",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: kill of a child not yet reaped did not succeed",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -190,13 +190,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (kill of a child not yet reaped did not succeed",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "maxrss-unsampled",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: wait4 did not report the child's 12 MiB as ru_maxrss",
       "edits": [
         {
           "file": "rach2/sys/mm/mm.c",
@@ -207,13 +207,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (wait4 did not report the child's 12 MiB as ru_maxrss",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "udp-refusal-untold",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: poll did not report the port unreachable as POLLERR",
       "edits": [
         {
           "file": "rach2/sys/network/udp/udp.c",
@@ -224,13 +224,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (poll did not report the port unreachable as POLLERR",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "setgid-dir-group-ignored",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: a file made in a setgid directory did not take its group",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -241,13 +241,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (a file made in a setgid directory did not take its group",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "proc-fd-dir-open-to-all",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: another user opened a root process's maps or fd directory",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -258,13 +258,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (another user opened a root process's maps or fd directory",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "proc-fd-link-open-to-all",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: another user opened a root process's maps or fd directory",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -275,13 +275,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (another user opened a root process's maps or fd directory",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "icmp-loopback-limited",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: poll did not report the port unreachable as POLLERR",
       "edits": [
         {
           "file": "rach2/sys/network/ip/icmp.c",
@@ -292,13 +292,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (poll did not report the port unreachable as POLLERR",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "timer-overrun-dropped",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: a blocked periodic timer's signal did not carry its overrun",
       "edits": [
         {
           "file": "rach2/sys/io/timerfd.c",
@@ -309,13 +309,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (a blocked periodic timer's signal did not carry its overrun",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "sigqueue-value-dropped",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: sigqueue's signal did not come with SI_QUEUE, its value and its sender",
       "edits": [
         {
           "file": "rach2/sys/arch/i686/sigframe.c",
@@ -326,7 +326,7 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (sigqueue's signal did not come with SI_QUEUE, its value and its sender",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
@@ -343,13 +343,13 @@
       "fails": {
         "lines": [
           "musl/callsmusl no shell return (hang?) FAIL",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "signalfd-empty",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: a signalfd did not read the signal sent, its sender and sigqueue's value",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -360,13 +360,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (a signalfd did not read the signal sent, its sender and sigqueue's value",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "cpu-timers-silent",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: ITIMER_VIRTUAL and ITIMER_PROF did not each post three signals",
       "edits": [
         {
           "file": "rach2/sys/proc/sched.c",
@@ -377,13 +377,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (ITIMER_VIRTUAL and ITIMER_PROF did not each post three signals",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "proc-owner-root",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: the /proc directory of a dumpable process of user 4243 was not its own",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -394,13 +394,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (the /proc directory of a dumpable process of user 4243 was not its own",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "pty-writes-mixed",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: two writers' lines to one slave were mixed",
       "edits": [
         {
           "file": "rach2/sys/tty/pty.c",
@@ -411,13 +411,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (two writers' lines to one slave were mixed",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "proc-fd-owner-root",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: the /proc directory of a dumpable process of user 4243 was not its own",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -428,13 +428,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (the /proc directory of a dumpable process of user 4243 was not its own",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "cpu-ptimers-silent",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: the timers of processor time did not each post three signals",
       "edits": [
         {
           "file": "rach2/sys/proc/sched.c",
@@ -445,13 +445,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (the timers of processor time did not each post three signals",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "devmem-maps-ram",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: /dev/mem gave a frame of RAM",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -462,13 +462,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (/dev/mem gave a frame of RAM",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "syslog-clear-ignored",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: klogctl's read after a clear gave records from before it",
       "edits": [
         {
           "file": "rach2/sys/syscall.c",
@@ -479,13 +479,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (klogctl's read after a clear gave records from before it",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "suspend-runs-all",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: a process ran while a suspend to idle held the processes",
       "edits": [
         {
           "file": "rach2/sys/proc/suspend.c",
@@ -496,13 +496,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (a process ran while a suspend to idle held the processes",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "sysattr-fstat-readonly",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: the mode fstat gives /sys/power/state's descriptor",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -513,13 +513,13 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (the mode fstat gives /sys/power/state's descriptor",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     },
     {
       "name": "shm-fallocate-unallocated",
-      "summary": "the mqueue file system, the binds of KRFFS, fallocate on a tmpfs, the system's name and a tmpfs's size= at a remount, of milestone 56",
+      "summary": "the row that fails with: posix_fallocate in /dev/shm did not make the range's pages",
       "edits": [
         {
           "file": "rach2/sys/fs/tmpfs.c",
@@ -530,7 +530,7 @@
       "fails": {
         "lines": [
           "CALLSMUSL FAIL (posix_fallocate in /dev/shm did not make the range's pages",
-          "guest: fail: callsmusl did not pass"
+          "default-probe: fail: musl/callsmusl did not pass"
         ]
       }
     }

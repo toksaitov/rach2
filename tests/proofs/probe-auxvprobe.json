@@ -12,25 +12,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
+      "tests/system/default_probe.sh",
       "auxvprobe"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "enter-user-edx",
-      "summary": "the registers the debug shell's exec enters a program with, which the i386 crt1 reads EDX of as a function for atexit",
+      "summary": "the row that fails with: edx not 0 at entry",
       "edits": [
         {
           "file": "rach2/sys/arch/i686/loader.s",
@@ -41,7 +41,7 @@
       "fails": {
         "lines": [
           "FAIL: edx not 0 at entry",
-          "guest: fail: auxvprobe did not pass"
+          "default-probe: fail: auxvprobe did not pass"
         ]
       }
     }

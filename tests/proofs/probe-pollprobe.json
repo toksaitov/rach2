@@ -14,25 +14,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
+      "tests/system/default_probe.sh",
       "pollprobe"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "pipe-hup-readable",
-      "summary": "A pipe's poll after its writers have gone",
+      "summary": "the row that fails with: closed writer, pipe empty -> POLLHUP alone",
       "edits": [
         {
           "file": "rach2/sys/ipc/pipe.c",
@@ -43,13 +43,13 @@
       "fails": {
         "lines": [
           "FAIL: closed writer, pipe empty -> POLLHUP alone",
-          "guest: fail: pollprobe did not pass"
+          "default-probe: fail: pollprobe did not pass"
         ]
       }
     },
     {
       "name": "stdio-split-modes",
-      "summary": "the console's standard descriptors and its poll, which tmux's server draws through",
+      "summary": "the row that fails with: the kernel's fds 0, 1 and 2 are each open for reading and writing",
       "edits": [
         {
           "file": "rach2/sys/fs/fd.c",
@@ -60,13 +60,13 @@
       "fails": {
         "lines": [
           "FAIL: the kernel's fds 0, 1 and 2 are each open for reading and writing",
-          "guest: fail: pollprobe did not pass"
+          "default-probe: fail: pollprobe did not pass"
         ]
       }
     },
     {
       "name": "console-pollout-writable-only",
-      "summary": "the console's standard descriptors and its poll, which tmux's server draws through",
+      "summary": "the row that fails with: the console opened read-only answers POLLOUT",
       "edits": [
         {
           "file": "rach2/sys/io/poll.c",
@@ -77,7 +77,7 @@
       "fails": {
         "lines": [
           "FAIL: the console opened read-only answers POLLOUT",
-          "guest: fail: pollprobe did not pass"
+          "default-probe: fail: pollprobe did not pass"
         ]
       }
     }

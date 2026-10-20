@@ -12,25 +12,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
+      "tests/system/default_probe.sh",
       "jobprobe"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "job-setpgid-exit-killed",
-      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "summary": "the row that fails with: child: inherit group, setpgid(0,0) -> own group",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -41,13 +41,13 @@
       "fails": {
         "lines": [
           "FAIL: child: inherit group, setpgid(0,0) -> own group",
-          "guest: fail: jobprobe did not pass"
+          "default-probe: fail: jobprobe did not pass"
         ]
       }
     },
     {
       "name": "job-setsid-exit-killed",
-      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "summary": "the row that fails with: child: setsid -> new session (sid==pgid==pid",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -58,7 +58,7 @@
       "fails": {
         "lines": [
           "FAIL: child: setsid -> new session (sid==pgid==pid)",
-          "guest: fail: jobprobe did not pass"
+          "default-probe: fail: jobprobe did not pass"
         ]
       }
     }

@@ -12,25 +12,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
-      "waitidmusl"
+      "tests/system/default_probe.sh",
+      "musl/waitidmusl"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "stop-after-death",
-      "summary": "signals and waits",
+      "summary": "the row that fails with: a child that died was reported stopped",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -41,13 +41,13 @@
       "fails": {
         "lines": [
           "WAITIDMUSL FAIL (a child that died was reported stopped)",
-          "guest: fail: waitidmusl did not pass"
+          "default-probe: fail: musl/waitidmusl did not pass"
         ]
       }
     },
     {
       "name": "waitid-pid-selects-all",
-      "summary": "probe rows the review found weak",
+      "summary": "the row that fails with: a wait reported the exit of a child it does not select",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -58,13 +58,13 @@
       "fails": {
         "lines": [
           "WAITIDMUSL FAIL (a wait reported the exit of a child it does not select)",
-          "guest: fail: waitidmusl did not pass"
+          "default-probe: fail: musl/waitidmusl did not pass"
         ]
       }
     },
     {
       "name": "waitid-pgid-selects-all",
-      "summary": "probe rows the review found weak",
+      "summary": "the row that fails with: a wait reported the exit of a child it does not select",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -75,13 +75,13 @@
       "fails": {
         "lines": [
           "WAITIDMUSL FAIL (a wait reported the exit of a child it does not select)",
-          "guest: fail: waitidmusl did not pass"
+          "default-probe: fail: musl/waitidmusl did not pass"
         ]
       }
     },
     {
       "name": "waitid-own-pgid-selects-all",
-      "summary": "probe rows the review found weak",
+      "summary": "the row that fails with: a wait reported the exit of a child it does not select",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -92,7 +92,7 @@
       "fails": {
         "lines": [
           "WAITIDMUSL FAIL (a wait reported the exit of a child it does not select)",
-          "guest: fail: waitidmusl did not pass"
+          "default-probe: fail: musl/waitidmusl did not pass"
         ]
       }
     }

@@ -16,25 +16,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
-      "schedmusl"
+      "tests/system/default_probe.sh",
+      "musl/schedmusl"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "setpgid-other-session-allowed",
-      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "summary": "the row that fails with: setpgid of a child in another session was not EPERM",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -45,13 +45,13 @@
       "fails": {
         "lines": [
           "SCHEDMUSL FAIL (setpgid of a child in another session was not EPERM)",
-          "guest: fail: schedmusl did not pass"
+          "default-probe: fail: musl/schedmusl did not pass"
         ]
       }
     },
     {
       "name": "setpgid-exec-allowed",
-      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "summary": "the row that fails with: setpgid after a child's successful exec was not EACCES",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -62,13 +62,13 @@
       "fails": {
         "lines": [
           "SCHEDMUSL FAIL (setpgid after a child's successful exec was not EACCES)",
-          "guest: fail: schedmusl did not pass"
+          "default-probe: fail: musl/schedmusl did not pass"
         ]
       }
     },
     {
       "name": "oom-file-missing",
-      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "summary": "the row that fails with: the OOM score adjustment does not read 0 at first",
       "edits": [
         {
           "file": "rach2/sys/fs/synthfs.c",
@@ -79,13 +79,13 @@
       "fails": {
         "lines": [
           "SCHEDMUSL FAIL (the OOM score adjustment does not read 0 at first",
-          "guest: fail: schedmusl did not pass"
+          "default-probe: fail: musl/schedmusl did not pass"
         ]
       }
     },
     {
       "name": "oom-mode-read-only",
-      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "summary": "the row that fails with: oom_score_adj is not root's with mode 0644",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -96,13 +96,13 @@
       "fails": {
         "lines": [
           "SCHEDMUSL FAIL (oom_score_adj is not root's with mode 0644",
-          "guest: fail: schedmusl did not pass"
+          "default-probe: fail: musl/schedmusl did not pass"
         ]
       }
     },
     {
       "name": "oom-creat-refused",
-      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "summary": "the row that fails with: a write of the OOM score adjustment through a redirection did not read back",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -113,13 +113,13 @@
       "fails": {
         "lines": [
           "SCHEDMUSL FAIL (a write of the OOM score adjustment through a redirection did not read back",
-          "guest: fail: schedmusl did not pass"
+          "default-probe: fail: musl/schedmusl did not pass"
         ]
       }
     },
     {
       "name": "oom-fork-not-inherited",
-      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "summary": "the row that fails with: a child did not inherit the OOM score adjustment",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -130,13 +130,13 @@
       "fails": {
         "lines": [
           "SCHEDMUSL FAIL (a child did not inherit the OOM score adjustment",
-          "guest: fail: schedmusl did not pass"
+          "default-probe: fail: musl/schedmusl did not pass"
         ]
       }
     },
     {
       "name": "oom-range-unchecked",
-      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "summary": "the row that fails with: an OOM score adjustment past -1000 to 1000 or no number was not refused with EINVAL",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -147,13 +147,13 @@
       "fails": {
         "lines": [
           "SCHEDMUSL FAIL (an OOM score adjustment past -1000 to 1000 or no number was not refused with EINVAL",
-          "guest: fail: schedmusl did not pass"
+          "default-probe: fail: musl/schedmusl did not pass"
         ]
       }
     },
     {
       "name": "oom-owner-privileged-only",
-      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "summary": "the row that fails with: user 1000 could not raise its OOM score adjustment and lower it to the floor",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -164,13 +164,13 @@
       "fails": {
         "lines": [
           "SCHEDMUSL FAIL (user 1000 could not raise its OOM score adjustment and lower it to the floor",
-          "guest: fail: schedmusl did not pass"
+          "default-probe: fail: musl/schedmusl did not pass"
         ]
       }
     },
     {
       "name": "oom-floor-kept",
-      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "summary": "the row that fails with: user 1000 lowered its OOM score adjustment below the floor root's write set",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -181,13 +181,13 @@
       "fails": {
         "lines": [
           "SCHEDMUSL FAIL (user 1000 lowered its OOM score adjustment below the floor root's write set",
-          "guest: fail: schedmusl did not pass"
+          "default-probe: fail: musl/schedmusl did not pass"
         ]
       }
     },
     {
       "name": "oom-floor-unchecked",
-      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "summary": "the row that fails with: user 1000 lowered its OOM score adjustment below the floor root's write set",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -198,13 +198,13 @@
       "fails": {
         "lines": [
           "SCHEDMUSL FAIL (user 1000 lowered its OOM score adjustment below the floor root's write set",
-          "guest: fail: schedmusl did not pass"
+          "default-probe: fail: musl/schedmusl did not pass"
         ]
       }
     },
     {
       "name": "oom-owner-unchecked",
-      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "summary": "the row that fails with: user 1000 opened root's process's oom_score_adj for writing",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -215,13 +215,13 @@
       "fails": {
         "lines": [
           "SCHEDMUSL FAIL (user 1000 opened root's process's oom_score_adj for writing",
-          "guest: fail: schedmusl did not pass"
+          "default-probe: fail: musl/schedmusl did not pass"
         ]
       }
     },
     {
       "name": "oom-floor-starts-low",
-      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "summary": "the row that fails with: user 1000 lowered its OOM score adjustment below 0",
       "edits": [
         {
           "file": "rach2/sys/proc/process.c",
@@ -232,13 +232,13 @@
       "fails": {
         "lines": [
           "SCHEDMUSL FAIL (user 1000 lowered its OOM score adjustment below 0",
-          "guest: fail: schedmusl did not pass"
+          "default-probe: fail: musl/schedmusl did not pass"
         ]
       }
     },
     {
       "name": "ioprio-rt-unchecked",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: another user's caller and the real-time class or root's process",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -249,7 +249,7 @@
       "fails": {
         "lines": [
           "SCHEDMUSL FAIL (another user's caller and the real-time class or root's process)",
-          "guest: fail: schedmusl did not pass"
+          "default-probe: fail: musl/schedmusl did not pass"
         ]
       }
     }

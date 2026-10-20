@@ -19,25 +19,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
-      "epollmusl"
+      "tests/system/default_probe.sh",
+      "musl/epollmusl"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "eventfd-zero-read",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a read of zero bytes was not EINVAL",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -48,13 +48,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a read of zero bytes was not EINVAL: errno",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-edge-polls-readable",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a set with its edge reported polled readable",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -65,13 +65,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a set with its edge reported polled readable: errno",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-nested-always-readable",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a chain of sets over an empty pipe",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -82,13 +82,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a chain of sets over an empty pipe: errno",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-cycle-not-refused",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a cycle of sets was not ELOOP",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -99,13 +99,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a cycle of sets was not ELOOP: errno",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-nested-one-deep",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a write to a pipe two sets deep did not wake the outer set",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -116,13 +116,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a write to a pipe two sets deep did not wake the outer set: errno",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-reported-stays-first",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: two waits for one event reported the same descriptor",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -133,13 +133,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (two waits for one event reported the same descriptor: errno",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-failed-copy-returns-zero",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a wait into a read-only buffer was not EFAULT",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -150,13 +150,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a wait into a read-only buffer was not EFAULT: errno",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-failed-copy-keeps-off",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a one-shot event a failed copy took was not reported again",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -167,13 +167,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a one-shot event a failed copy took was not reported again: errno",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-no-events-reported",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a registration of no events was reported",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -184,13 +184,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a registration of no events was reported: errno",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-no-events-no-hangup",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a registration of no events was not told of the hangup",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -201,13 +201,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a registration of no events was not told of the hangup: errno",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-pwait2-seconds-32-bit",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: epoll_pwait2 of 2^31 seconds with a descriptor ready",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -218,13 +218,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (epoll_pwait2 of 2^31 seconds with a descriptor ready: errno",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-pwait2-negative-seconds",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: epoll_pwait2 of negative seconds was not EINVAL",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -235,13 +235,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (epoll_pwait2 of negative seconds was not EINVAL: errno",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-add-no-restart",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a pipe added during a wait did not wake it",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -252,13 +252,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a pipe added during a wait did not wake it: errno",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-poll-set-own-queue",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a write to a pipe in a set did not wake a poll of the set",
       "edits": [
         {
           "file": "rach2/sys/io/poll.c",
@@ -269,13 +269,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a write to a pipe in a set did not wake a poll of the set: errno",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-nested-queues-left-off",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a write to a pipe two sets deep did not wake the outer set",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -286,13 +286,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a write to a pipe two sets deep did not wake the outer set: errno",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "eventfd-read-keeps-count",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: a read did not leave the counter empty",
       "edits": [
         {
           "file": "rach2/sys/io/eventfd.c",
@@ -303,13 +303,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a read did not leave the counter empty",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-no-target-queue",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: the child's write did not wake the wait",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -320,13 +320,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (the child's write did not wake the wait",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-edge-data-every-kind",
-      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "summary": "the row that fails with: a byte sent to an AF_UNIX end watched for output alone was reported",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -337,13 +337,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a byte sent to an AF_UNIX end watched for output alone was reported",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-edge-data-no-kind",
-      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "summary": "the row that fails with: a second byte sent to an AF_UNIX end watched for input was not reported",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -354,13 +354,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a second byte sent to an AF_UNIX end watched for input was not reported",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-edge-counts-every-kind",
-      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "summary": "the row that fails with: a byte sent to an AF_UNIX end watched for output alone was reported",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -371,13 +371,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a byte sent to an AF_UNIX end watched for output alone was reported",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-own-room-kind",
-      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "summary": "the row that fails with: room made in an AF_UNIX end's own queue was reported as room to write",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -388,13 +388,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (room made in an AF_UNIX end's own queue was reported as room to write",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-accept-kind",
-      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "summary": "the row that fails with: an accept that left a connection queued was reported as a new one",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -405,13 +405,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (an accept that left a connection queued was reported as a new one",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "udp-arrival-kind",
-      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "summary": "the row that fails with: a datagram that came to a socket watched for output alone was reported",
       "edits": [
         {
           "file": "rach2/sys/network/socket/socket.c",
@@ -422,13 +422,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a datagram that came to a socket watched for output alone was reported",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "tcp-arrival-kind",
-      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "summary": "the row that fails with: data that came to a TCP connection watched for output alone was reported",
       "edits": [
         {
           "file": "rach2/sys/network/socket/socket.c",
@@ -439,13 +439,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (data that came to a TCP connection watched for output alone was reported",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-nest-above-uncounted",
-      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "summary": "the row that fails with: a sixth set added below five, the outermost first, was not ELOOP",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -456,13 +456,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a sixth set added below five, the outermost first, was not ELOOP",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-nest-five-refused",
-      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "summary": "the row that fails with: an add that nests five sets, the outermost first, was refused",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -473,13 +473,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (an add that nests five sets, the outermost first, was refused",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-nest-scan-four-sets",
-      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "summary": "the row that fails with: a write to a pipe in the fifth of five nested sets did not reach the first",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -490,13 +490,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a write to a pipe in the fifth of five nested sets did not reach the first",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-nest-below-cut-early",
-      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "summary": "the row that fails with: an add that nests five sets, the innermost first, was refused",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -507,13 +507,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (an add that nests five sets, the innermost first, was refused",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-nest-below-uncounted",
-      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "summary": "the row that fails with: a sixth set added above five, the innermost first, was not ELOOP",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -524,13 +524,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a sixth set added above five, the innermost first, was not ELOOP",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-nest-shorter-path",
-      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "summary": "the row that fails with: a set nested five below another by the longer of two paths was not ELOOP",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -541,13 +541,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a set nested five below another by the longer of two paths was not ELOOP",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-shutdown-own-kinds",
-      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "summary": "the row that fails with: a shutdown of an AF_UNIX end was not an edge of its registration",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -558,13 +558,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a shutdown of an AF_UNIX end was not an edge of its registration",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "pipe-write-wakes-empty-only",
-      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "summary": "the row that fails with: a write to a pipe with data in it was not an edge",
       "edits": [
         {
           "file": "rach2/sys/ipc/pipe.c",
@@ -575,13 +575,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a write to a pipe with data in it was not an edge",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-nest-above-by-table",
-      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "summary": "the row that fails with: a child's add under five sets, one number closed, was not ELOOP",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -592,13 +592,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a child's add under five sets, one number closed, was not ELOOP",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-nest-below-by-table",
-      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "summary": "the row that fails with: a child's add of five sets under a sixth, one number closed, was not ELOOP",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -609,13 +609,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a child's add of five sets under a sixth, one number closed, was not ELOOP",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "epoll-gone-by-table",
-      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "summary": "the row that fails with: a child's close and wait took the parent's registration of a set",
       "edits": [
         {
           "file": "rach2/sys/io/epoll.c",
@@ -626,13 +626,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (a child's close and wait took the parent's registration of a set",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "tty-input-room-unnamed",
-      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "summary": "the row that fails with: room a VINTR made in a pseudoterminal was not an edge of its master",
       "edits": [
         {
           "file": "rach2/sys/tty/tty.c",
@@ -643,13 +643,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (room a VINTR made in a pseudoterminal was not an edge of its master",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "pipe-clobbers-ecx",
-      "summary": "the calls without flags that the kernel serves as their flagged forms",
+      "summary": "the row that fails with: pipe changed the caller's ECX",
       "edits": [
         {
           "file": "rach2/sys/ipc/pipe.c",
@@ -660,13 +660,13 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (pipe changed the caller's ECX",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     },
     {
       "name": "eventfd-clobbers-ecx",
-      "summary": "the calls without flags that the kernel serves as their flagged forms",
+      "summary": "the row that fails with: eventfd changed the caller's ECX",
       "edits": [
         {
           "file": "rach2/sys/io/eventfd.c",
@@ -677,7 +677,7 @@
       "fails": {
         "lines": [
           "EPOLLMUSL FAIL (eventfd changed the caller's ECX",
-          "guest: fail: epollmusl did not pass"
+          "default-probe: fail: musl/epollmusl did not pass"
         ]
       }
     }

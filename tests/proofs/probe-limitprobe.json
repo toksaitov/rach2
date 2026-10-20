@@ -14,25 +14,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
+      "tests/system/default_probe.sh",
       "limitprobe"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "poll-refuses-past-descriptor-limit",
-      "summary": "openSSH's rlimit sandbox",
+      "summary": "the row that fails with: select and poll under the limits of 0 of OpenSSH's sandbox",
       "edits": [
         {
           "file": "rach2/sys/io/poll.c",
@@ -43,13 +43,13 @@
       "fails": {
         "lines": [
           "LIMITPROBE FAIL: select and poll under the limits of 0 of OpenSSH's sandbox",
-          "guest: fail: limitprobe did not pass"
+          "default-probe: fail: limitprobe did not pass"
         ]
       }
     },
     {
       "name": "fsize-never-refused",
-      "summary": "the state of a sleep, which procprobe checks",
+      "summary": "the row that fails with: a file limit of 4096",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -60,13 +60,13 @@
       "fails": {
         "lines": [
           "LIMITPROBE FAIL: a file limit of 4096",
-          "guest: fail: limitprobe did not pass"
+          "default-probe: fail: limitprobe did not pass"
         ]
       }
     },
     {
       "name": "prlimit-zombie-refused",
-      "summary": "the state of a sleep, which procprobe checks",
+      "summary": "the row that fails with: a zombie's limits",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -77,7 +77,7 @@
       "fails": {
         "lines": [
           "LIMITPROBE FAIL: a zombie's limits",
-          "guest: fail: limitprobe did not pass"
+          "default-probe: fail: limitprobe did not pass"
         ]
       }
     }

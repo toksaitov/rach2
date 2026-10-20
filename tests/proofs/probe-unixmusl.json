@@ -12,25 +12,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
-      "unixmusl"
+      "tests/system/default_probe.sh",
+      "musl/unixmusl"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "unix-scm-creds-thread-pid",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a thread's SCM_CREDENTIALS naming its process was refused",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -41,13 +41,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (a thread's SCM_CREDENTIALS naming its process was refused: errno",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-accept-address-no-length",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: an accept with an address and no length was not EFAULT",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -58,13 +58,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (an accept with an address and no length was not EFAULT: errno",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-accept-shut-drops-queued",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: the connection queued before SHUT_RD was not accepted",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -75,13 +75,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (the connection queued before SHUT_RD was not accepted: errno",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-accept-shut-empty-not-einval",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: an accept with none queued after SHUT_RD was not EINVAL",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -92,13 +92,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (an accept with none queued after SHUT_RD was not EINVAL: errno",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-connect-shut-listener",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a connect to a listener shut down for reading was not ECONNREFUSED",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -109,13 +109,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (a connect to a listener shut down for reading was not ECONNREFUSED: errno",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-dgram-connect-taken-peer",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a connect to a datagram socket connected elsewhere was not EPERM",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -126,13 +126,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (a connect to a datagram socket connected elsewhere was not EPERM: errno",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-dgram-reconnect-keeps-queue",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a reconnected datagram socket kept its old peer's message",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -143,13 +143,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (a reconnected datagram socket kept its old peer's message: errno",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-dgram-left-peer-no-reset",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: the peer left with a message lost was not ECONNRESET",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -160,13 +160,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (the peer left with a message lost was not ECONNRESET: errno",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-dgram-disconnect-keeps-queue",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a disconnected datagram socket kept its old peer's message",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -177,13 +177,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (a disconnected datagram socket kept its old peer's message: errno",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-dgram-full-not-eagain",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a full datagram queue was not EAGAIN",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -194,13 +194,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (a full datagram queue was not EAGAIN: errno",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-dgram-wait-ignores-shut",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a send waiting on a receiver shut down for reading was not EPIPE",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -211,13 +211,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (a send waiting on a receiver shut down for reading was not EPIPE: errno",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-stream-full-not-eagain",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a full stream was not EAGAIN",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -228,13 +228,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (a full stream was not EAGAIN: errno",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-stream-full-polls-writable",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a full stream polled writable",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -245,13 +245,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (a full stream polled writable: errno",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-stream-shut-not-writable",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a stream shut down for writing did not poll writable",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -262,13 +262,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (a stream shut down for writing did not poll writable: errno",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-stream-shut-write-eagain",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a write after SHUT_WR was not EPIPE",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -279,13 +279,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (a write after SHUT_WR was not EPIPE: errno",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-listen-no-wake",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a larger backlog did not let a waiting connect finish",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -296,13 +296,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (a larger backlog did not let a waiting connect finish: errno",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "rights-name-no-new-descriptor",
-      "summary": "probe rows the review found weak",
+      "summary": "the row that fails with: the child did not write through the descriptor it received",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -313,13 +313,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (the child did not write through the descriptor it received",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "peercred-is-the-callers",
-      "summary": "probe rows the review found weak",
+      "summary": "the row that fails with: the child's SO_PEERCRED did not report the pair's creator",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -330,13 +330,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (the child's SO_PEERCRED did not report the pair's creator",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "scm-credentials-are-the-receivers",
-      "summary": "probe rows the review found weak",
+      "summary": "the row that fails with: the SCM_CREDENTIALS values are not the sender's",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -347,13 +347,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (the SCM_CREDENTIALS values are not the sender's",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "credentials-without-gid",
-      "summary": "probe rows the review found weak",
+      "summary": "the row that fails with: the SCM_CREDENTIALS values are not the sender's",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -364,13 +364,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (the SCM_CREDENTIALS values are not the sender's",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-recvfrom-no-length-efault",
-      "summary": "recvfrom's EFAULT for an address with no length",
+      "summary": "the row that fails with: a recvfrom with an address and no length was not EFAULT",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -381,13 +381,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (a recvfrom with an address and no length was not EFAULT",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-recvfrom-no-length-queued",
-      "summary": "recvfrom's EFAULT for an address with no length",
+      "summary": "the row that fails with: a recvfrom refused with EFAULT took the message",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -398,13 +398,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (a recvfrom refused with EFAULT took the message",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-inflight-count-by-node",
-      "summary": "A descriptor in flight whose file a write moved",
+      "summary": "the row that fails with: a received descriptor of a moved, unlinked file",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -415,13 +415,13 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (a received descriptor of a moved, unlinked file",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     },
     {
       "name": "unix-inflight-install-by-node",
-      "summary": "A descriptor in flight whose file a write moved",
+      "summary": "the row that fails with: a received descriptor of a moved, unlinked file",
       "edits": [
         {
           "file": "rach2/sys/ipc/unix.c",
@@ -432,7 +432,7 @@
       "fails": {
         "lines": [
           "UNIXMUSL FAIL (a received descriptor of a moved, unlinked file",
-          "guest: fail: unixmusl did not pass"
+          "default-probe: fail: musl/unixmusl did not pass"
         ]
       }
     }

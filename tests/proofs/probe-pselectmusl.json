@@ -13,25 +13,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
-      "pselectmusl"
+      "tests/system/default_probe.sh",
+      "musl/pselectmusl"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "pselect6-mask-ignored",
-      "summary": "pselect6's sets and the mask it waits under, which pselectmusl checks",
+      "summary": "the row that fails with: a pending signal the mask unblocks ends the wait",
       "edits": [
         {
           "file": "rach2/sys/io/poll.c",
@@ -42,13 +42,13 @@
       "fails": {
         "lines": [
           "PSELECTMUSL FAIL (a pending signal the mask unblocks ends the wait)",
-          "guest: fail: pselectmusl did not pass"
+          "default-probe: fail: musl/pselectmusl did not pass"
         ]
       }
     },
     {
       "name": "poll-mask-saves-its-own",
-      "summary": "pselect6's sets and the mask it waits under, which pselectmusl checks",
+      "summary": "the row that fails with: the call's mask is gone after a descriptor ends it",
       "edits": [
         {
           "file": "rach2/sys/io/poll.c",
@@ -59,13 +59,13 @@
       "fails": {
         "lines": [
           "PSELECTMUSL FAIL (the call's mask is gone after a descriptor ends it)",
-          "guest: fail: pselectmusl did not pass"
+          "default-probe: fail: musl/pselectmusl did not pass"
         ]
       }
     },
     {
       "name": "handler-frame-wait-mask",
-      "summary": "pselect6's sets and the mask it waits under, which pselectmusl checks",
+      "summary": "the row that fails with: the mask before the call is back after the handler",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -76,7 +76,7 @@
       "fails": {
         "lines": [
           "PSELECTMUSL FAIL (the mask before the call is back after the handler)",
-          "guest: fail: pselectmusl did not pass"
+          "default-probe: fail: musl/pselectmusl did not pass"
         ]
       }
     }

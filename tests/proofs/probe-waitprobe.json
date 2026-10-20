@@ -12,25 +12,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
+      "tests/system/default_probe.sh",
       "waitprobe"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "rt-frame-kills-with-sigsegv",
-      "summary": "probe rows the review found weak",
+      "summary": "the row that fails with: child recvfrom interrupted with -EINTR (no hang",
       "edits": [
         {
           "file": "rach2/sys/arch/i686/sigframe.c",
@@ -41,7 +41,7 @@
       "fails": {
         "lines": [
           "FAIL: child recvfrom interrupted with -EINTR (no hang)",
-          "guest: fail: waitprobe did not pass"
+          "default-probe: fail: waitprobe did not pass"
         ]
       }
     }

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "probe-timing",
-  "summary": "the row of timing in the default suite, with faults in the kernel",
+  "summary": "the runner's timing check of the default suite, which judges the kernel's timing record on every boot, here one of hello alone, with a fault in the kernel",
   "tree": "shared",
   "sources": [
     "rach2/sys/arch/x86/pit.c"
@@ -12,20 +12,20 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
-      "timing"
+      "tests/system/default_probe.sh",
+      "hello"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
@@ -40,8 +40,7 @@
       ],
       "fails": {
         "lines": [
-          "the clock's arithmetic failed its check on fixed readings",
-          "guest: fail: timing did not pass"
+          "the clock's arithmetic failed its check on fixed readings"
         ]
       }
     }

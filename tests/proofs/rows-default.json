@@ -14,22 +14,22 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
+      "tests/system/default_probe.sh",
       "devprobe",
       "sigprobe",
       "procprobe"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
@@ -44,7 +44,7 @@
       ],
       "fails": {
         "lines": [
-          "guest: fail: devprobe did not pass",
+          "default-probe: fail: devprobe did not pass",
           "devprobe     status=",
           "fstat and the /dev listing give /dev/null one inode"
         ]
@@ -62,7 +62,7 @@
       ],
       "fails": {
         "lines": [
-          "guest: fail: sigprobe did not pass",
+          "default-probe: fail: sigprobe did not pass",
           "sigprobe     killed by signal 11",
           "bad read at 0x0 (err"
         ]
@@ -80,7 +80,7 @@
       ],
       "fails": {
         "lines": [
-          "guest: fail: procprobe did not pass",
+          "default-probe: fail: procprobe did not pass",
           "procprobe    status=",
           "and the open files have different inodes too"
         ]

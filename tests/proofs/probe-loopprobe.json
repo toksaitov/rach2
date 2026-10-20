@@ -15,25 +15,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
+      "tests/system/default_probe.sh",
       "loopprobe"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "inet-recvfrom-no-length-efault",
-      "summary": "recvfrom's EFAULT for an address with no length",
+      "summary": "the row that fails with: a recvfrom with an address and no length was not EFAULT",
       "edits": [
         {
           "file": "rach2/sys/syscall_net.c",
@@ -44,13 +44,13 @@
       "fails": {
         "lines": [
           "LOOPPROBE FAIL (a recvfrom with an address and no length was not EFAULT)",
-          "guest: fail: loopprobe did not pass"
+          "default-probe: fail: loopprobe did not pass"
         ]
       }
     },
     {
       "name": "inet-recvfrom-no-length-queued",
-      "summary": "recvfrom's EFAULT for an address with no length",
+      "summary": "the row that fails with: a recvfrom refused with EFAULT took the datagram",
       "edits": [
         {
           "file": "rach2/sys/syscall_net.c",
@@ -61,30 +61,30 @@
       "fails": {
         "lines": [
           "LOOPPROBE FAIL (a recvfrom refused with EFAULT took the datagram)",
-          "guest: fail: loopprobe did not pass"
+          "default-probe: fail: loopprobe did not pass"
         ]
       }
     },
     {
       "name": "inet-stream-peek-takes",
-      "summary": "recvfrom's EFAULT for an address with no length",
+      "summary": "the row that fails with: a tcp read after a peek did not start at the byte peeked",
       "edits": [
         {
           "file": "rach2/sys/network/socket/socket.c",
-          "find": "        copy_len = (uint32_t)len;\n    recv_ring_get(buf, tcb, tcb->recv_head, copy_len);\n    if (!peek) {\n",
-          "replace": "        copy_len = (uint32_t)len;\n    recv_ring_get(buf, tcb, tcb->recv_head, copy_len);\n    if (peek >= 0) {\n"
+          "find": "        copy_len = (uint32_t)len;\n\n    recv_ring_get(buf, tcb, tcb->recv_head, copy_len);\n    if (!peek) {\n",
+          "replace": "        copy_len = (uint32_t)len;\n\n    recv_ring_get(buf, tcb, tcb->recv_head, copy_len);\n    if (peek >= 0) {\n"
         }
       ],
       "fails": {
         "lines": [
           "LOOPPROBE FAIL (a tcp read after a peek did not start at the byte peeked)",
-          "guest: fail: loopprobe did not pass"
+          "default-probe: fail: loopprobe did not pass"
         ]
       }
     },
     {
       "name": "inet-dgram-peek-takes",
-      "summary": "recvfrom's EFAULT for an address with no length",
+      "summary": "the row that fails with: a second udp peek did not find the datagram and its sender",
       "edits": [
         {
           "file": "rach2/sys/network/socket/socket.c",
@@ -95,13 +95,13 @@
       "fails": {
         "lines": [
           "LOOPPROBE FAIL (a second udp peek did not find the datagram and its sender)",
-          "guest: fail: loopprobe did not pass"
+          "default-probe: fail: loopprobe did not pass"
         ]
       }
     },
     {
       "name": "inet-dgram-peek-sender",
-      "summary": "recvfrom's EFAULT for an address with no length",
+      "summary": "the row that fails with: a second udp peek did not find the datagram and its sender",
       "edits": [
         {
           "file": "rach2/sys/network/socket/socket.c",
@@ -112,13 +112,13 @@
       "fails": {
         "lines": [
           "LOOPPROBE FAIL (a second udp peek did not find the datagram and its sender)",
-          "guest: fail: loopprobe did not pass"
+          "default-probe: fail: loopprobe did not pass"
         ]
       }
     },
     {
       "name": "loopback-idle-undrained",
-      "summary": "the loopback ring left for the timer by a processor that halts over it",
+      "summary": "the row that fails with: a local round trip waited for the timer with nothing running",
       "edits": [
         {
           "file": "rach2/sys/proc/sched.c",
@@ -129,13 +129,13 @@
       "fails": {
         "lines": [
           "LOOPPROBE FAIL (a local round trip waited for the timer with nothing running)",
-          "guest: fail: loopprobe did not pass"
+          "default-probe: fail: loopprobe did not pass"
         ]
       }
     },
     {
       "name": "listen-no-autobind",
-      "summary": "A bind to port 0 and a listen with no port, each given an ephemeral port",
+      "summary": "the row that fails with: unbound listener refused",
       "edits": [
         {
           "file": "rach2/sys/network/tcp/tcp.c",
@@ -146,13 +146,13 @@
       "fails": {
         "lines": [
           "LOOPPROBE FAIL (unbound listener refused)",
-          "guest: fail: loopprobe did not pass"
+          "default-probe: fail: loopprobe did not pass"
         ]
       }
     },
     {
       "name": "bind-zero-no-port",
-      "summary": "A bind to port 0 and a listen with no port, each given an ephemeral port",
+      "summary": "the row that fails with: bind to port 0 given no ephemeral port",
       "edits": [
         {
           "file": "rach2/sys/syscall_net.c",
@@ -163,13 +163,13 @@
       "fails": {
         "lines": [
           "LOOPPROBE FAIL (bind to port 0 given no ephemeral port)",
-          "guest: fail: loopprobe did not pass"
+          "default-probe: fail: loopprobe did not pass"
         ]
       }
     },
     {
       "name": "listener-any-address",
-      "summary": "the state of a sleep, which procprobe checks",
+      "summary": "the row that fails with: a listener bound to 127.0.0.1 took a connection to the interface address",
       "edits": [
         {
           "file": "rach2/sys/network/tcp/tcp.c",
@@ -180,7 +180,7 @@
       "fails": {
         "lines": [
           "LOOPPROBE FAIL (a listener bound to 127.0.0.1 took a connection to the interface address)",
-          "guest: fail: loopprobe did not pass"
+          "default-probe: fail: loopprobe did not pass"
         ]
       }
     }

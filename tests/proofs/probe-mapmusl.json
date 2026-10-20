@@ -16,25 +16,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
-      "mapmusl"
+      "tests/system/default_probe.sh",
+      "musl/mapmusl"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "exec-segments-copied",
-      "summary": "memory mappings, protection and shared memory",
+      "summary": "the row that fails with: a dropped page of the program's data segment did not read its file again",
       "edits": [
         {
           "file": "rach2/sys/proc/elf.c",
@@ -45,13 +45,13 @@
       "fails": {
         "lines": [
           "MAPMUSL FAIL (a dropped page of the program's data segment did not read its file again",
-          "guest: fail: mapmusl did not pass"
+          "default-probe: fail: musl/mapmusl did not pass"
         ]
       }
     },
     {
       "name": "shmem-truncate-keeps-mapped-page",
-      "summary": "memory mappings, protection and shared memory",
+      "summary": "the row that fails with: a shared mapping kept a page its file's truncation freed",
       "edits": [
         {
           "file": "rach2/sys/mm/shmem.c",
@@ -62,13 +62,13 @@
       "fails": {
         "lines": [
           "MAPMUSL FAIL (a shared mapping kept a page its file's truncation freed",
-          "guest: fail: mapmusl did not pass"
+          "default-probe: fail: musl/mapmusl did not pass"
         ]
       }
     },
     {
       "name": "mprotect-shared-readonly-writable",
-      "summary": "memory mappings, protection and shared memory",
+      "summary": "the row that fails with: mprotect made a read-only file's shared mapping writable",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -79,13 +79,13 @@
       "fails": {
         "lines": [
           "MAPMUSL FAIL (mprotect made a read-only file's shared mapping writable",
-          "guest: fail: mapmusl did not pass"
+          "default-probe: fail: musl/mapmusl did not pass"
         ]
       }
     },
     {
       "name": "mprotect-private-readonly-refused",
-      "summary": "memory mappings, protection and shared memory",
+      "summary": "the row that fails with: mprotect of a read-only file's private mapping",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -96,13 +96,13 @@
       "fails": {
         "lines": [
           "MAPMUSL FAIL (mprotect of a read-only file's private mapping",
-          "guest: fail: mapmusl did not pass"
+          "default-probe: fail: musl/mapmusl did not pass"
         ]
       }
     },
     {
       "name": "mmap2-offset-past-32-bits",
-      "summary": "memory mappings, protection and shared memory",
+      "summary": "the row that fails with: mmap2 of a file whose last page is past 32 bits",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -113,13 +113,13 @@
       "fails": {
         "lines": [
           "MAPMUSL FAIL (mmap2 of a file whose last page is past 32 bits",
-          "guest: fail: mapmusl did not pass"
+          "default-probe: fail: musl/mapmusl did not pass"
         ]
       }
     },
     {
       "name": "shmem-page-past-end-backed",
-      "summary": "memory mappings, protection and shared memory",
+      "summary": "the row that fails with: a touch of a file in memory past its end was not SIGSEGV",
       "edits": [
         {
           "file": "rach2/sys/mm/filemap.c",
@@ -130,13 +130,13 @@
       "fails": {
         "lines": [
           "MAPMUSL FAIL (a touch of a file in memory past its end was not SIGSEGV",
-          "guest: fail: mapmusl did not pass"
+          "default-probe: fail: musl/mapmusl did not pass"
         ]
       }
     },
     {
       "name": "mremap-wrap-removes-source",
-      "summary": "memory mappings, protection and shared memory",
+      "summary": "the row that fails with: mremap took an old length that wraps past the end of memory",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -147,13 +147,13 @@
       "fails": {
         "lines": [
           "MAPMUSL FAIL (mremap took an old length that wraps past the end of memory",
-          "guest: fail: mapmusl did not pass"
+          "default-probe: fail: musl/mapmusl did not pass"
         ]
       }
     },
     {
       "name": "madvise-length-rounded-first",
-      "summary": "memory mappings, protection and shared memory",
+      "summary": "the row that fails with: madvise took a length that rounds up to 0 for an empty range",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -164,13 +164,13 @@
       "fails": {
         "lines": [
           "MAPMUSL FAIL (madvise took a length that rounds up to 0 for an empty range",
-          "guest: fail: mapmusl did not pass"
+          "default-probe: fail: musl/mapmusl did not pass"
         ]
       }
     },
     {
       "name": "madvise-undefined-advice",
-      "summary": "memory mappings, protection and shared memory",
+      "summary": "the row that fails with: madvise took an advice Linux does not define",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -181,13 +181,13 @@
       "fails": {
         "lines": [
           "MAPMUSL FAIL (madvise took an advice Linux does not define",
-          "guest: fail: mapmusl did not pass"
+          "default-probe: fail: musl/mapmusl did not pass"
         ]
       }
     },
     {
       "name": "madvise-dontneed-locked-kept",
-      "summary": "memory mappings, protection and shared memory",
+      "summary": "the row that fails with: MADV_DONTNEED_LOCKED",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -198,13 +198,13 @@
       "fails": {
         "lines": [
           "MAPMUSL FAIL (MADV_DONTNEED_LOCKED",
-          "guest: fail: mapmusl did not pass"
+          "default-probe: fail: musl/mapmusl did not pass"
         ]
       }
     },
     {
       "name": "msync-length-rounded-first",
-      "summary": "memory mappings, protection and shared memory",
+      "summary": "the row that fails with: msync took a length that rounds up to 0 for an empty range",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -215,13 +215,13 @@
       "fails": {
         "lines": [
           "MAPMUSL FAIL (msync took a length that rounds up to 0 for an empty range",
-          "guest: fail: mapmusl did not pass"
+          "default-probe: fail: musl/mapmusl did not pass"
         ]
       }
     },
     {
       "name": "forced-write-grants-write",
-      "summary": "memory mappings, protection and shared memory",
+      "summary": "the row that fails with: a store reached a read-only page after a write through /proc/self/mem",
       "edits": [
         {
           "file": "rach2/sys/mm/paging.c",
@@ -232,13 +232,13 @@
       "fails": {
         "lines": [
           "MAPMUSL FAIL (a store reached a read-only page after a write through /proc/self/mem",
-          "guest: fail: mapmusl did not pass"
+          "default-probe: fail: musl/mapmusl did not pass"
         ]
       }
     },
     {
       "name": "mremap-fixed-shrink-counts-old-size",
-      "summary": "memory mappings, protection and shared memory",
+      "summary": "the row that fails with: a fixed mremap that shrinks was held to its old size",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -249,13 +249,13 @@
       "fails": {
         "lines": [
           "MAPMUSL FAIL (a fixed mremap that shrinks was held to its old size",
-          "guest: fail: mapmusl did not pass"
+          "default-probe: fail: musl/mapmusl did not pass"
         ]
       }
     },
     {
       "name": "mremap-shrink-keeps-tail",
-      "summary": "probe rows the review found weak",
+      "summary": "the row that fails with: the pages a shrink cut were still mapped",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -266,13 +266,13 @@
       "fails": {
         "lines": [
           "MAPMUSL FAIL (the pages a shrink cut were still mapped",
-          "guest: fail: mapmusl did not pass"
+          "default-probe: fail: musl/mapmusl did not pass"
         ]
       }
     },
     {
       "name": "mremap-shrink-drops-kept-page",
-      "summary": "probe rows the review found weak",
+      "summary": "the row that fails with: the page a shrink kept lost its bytes",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -283,13 +283,13 @@
       "fails": {
         "lines": [
           "MAPMUSL FAIL (the page a shrink kept lost its bytes",
-          "guest: fail: mapmusl did not pass"
+          "default-probe: fail: musl/mapmusl did not pass"
         ]
       }
     },
     {
       "name": "disk-share-krffs-writable",
-      "summary": "shared mappings of a file on a disk file system: on the KRFFS root of the default boot, one that may be written is refused; tests/system/ext2_map_mutate.sh has the faults of the ext2 rows",
+      "summary": "the row that fails with: a writable shared mapping of a KRFFS file was not ENODEV",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -300,13 +300,13 @@
       "fails": {
         "lines": [
           "MAPMUSL FAIL (a writable shared mapping of a KRFFS file was not ENODEV",
-          "guest: fail: mapmusl did not pass"
+          "default-probe: fail: musl/mapmusl did not pass"
         ]
       }
     },
     {
       "name": "disk-share-krffs-fallback-writable",
-      "summary": "shared mappings of a file on a disk file system: on the KRFFS root of the default boot, one that may be written is refused; tests/system/ext2_map_mutate.sh has the faults of the ext2 rows",
+      "summary": "the row that fails with: a read-only shared mapping of a KRFFS file was made writable",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -317,7 +317,7 @@
       "fails": {
         "lines": [
           "MAPMUSL FAIL (a read-only shared mapping of a KRFFS file was made writable",
-          "guest: fail: mapmusl did not pass"
+          "default-probe: fail: musl/mapmusl did not pass"
         ]
       }
     }

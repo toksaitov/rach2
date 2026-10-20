@@ -17,25 +17,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
-      "ptracemusl"
+      "tests/system/default_probe.sh",
+      "musl/ptracemusl"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "sig-taker-stopped",
-      "summary": "signals and waits",
+      "summary": "the row that fails with: a process signal did not wake the thread beside the stopped one",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -46,13 +46,13 @@
       "fails": {
         "lines": [
           "PTRACEMUSL FAIL (a process signal did not wake the thread beside the stopped one: errno",
-          "guest: fail: ptracemusl did not pass"
+          "default-probe: fail: musl/ptracemusl did not pass"
         ]
       }
     },
     {
       "name": "usage-children-leader-only",
-      "summary": "signals and waits",
+      "summary": "the row that fails with: a traced thread's end lacks the reaped children's time",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -63,13 +63,13 @@
       "fails": {
         "lines": [
           "PTRACEMUSL FAIL (a traced thread's end lacks the reaped children's time: errno",
-          "guest: fail: ptracemusl did not pass"
+          "default-probe: fail: musl/ptracemusl did not pass"
         ]
       }
     },
     {
       "name": "parent-reaps-traced",
-      "summary": "signals and waits",
+      "summary": "the row that fails with: the parent reaped a child before its tracer saw its end",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -80,13 +80,13 @@
       "fails": {
         "lines": [
           "PTRACEMUSL FAIL (the parent reaped a child before its tracer saw its end: errno",
-          "guest: fail: ptracemusl did not pass"
+          "default-probe: fail: musl/ptracemusl did not pass"
         ]
       }
     },
     {
       "name": "tracer-report-keeps-tracee",
-      "summary": "signals and waits",
+      "summary": "the row that fails with: the parent did not reap the child once its tracer saw the end",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -97,13 +97,13 @@
       "fails": {
         "lines": [
           "PTRACEMUSL FAIL (the parent did not reap the child once its tracer saw the end: errno",
-          "guest: fail: ptracemusl did not pass"
+          "default-probe: fail: musl/ptracemusl did not pass"
         ]
       }
     },
     {
       "name": "waitid-trap-status-byte",
-      "summary": "signals and waits",
+      "summary": "the row that fails with: waitid's si_status of the exec event",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -114,13 +114,13 @@
       "fails": {
         "lines": [
           "PTRACEMUSL FAIL (waitid's si_status of the exec event: errno",
-          "guest: fail: ptracemusl did not pass"
+          "default-probe: fail: musl/ptracemusl did not pass"
         ]
       }
     },
     {
       "name": "dr7-kernel-address",
-      "summary": "futexes, ptrace, core files and the system call dispatcher",
+      "summary": "the row that fails with: an execute breakpoint on a kernel address was not refused",
       "edits": [
         {
           "file": "rach2/sys/arch/x86/debugreg.c",
@@ -131,13 +131,13 @@
       "fails": {
         "lines": [
           "PTRACEMUSL FAIL (an execute breakpoint on a kernel address was not refused: errno",
-          "guest: fail: ptracemusl did not pass"
+          "default-probe: fail: musl/ptracemusl did not pass"
         ]
       }
     },
     {
       "name": "dr7-last-user-address",
-      "summary": "futexes, ptrace, core files and the system call dispatcher",
+      "summary": "the row that fails with: a breakpoint ending at the last user address was refused",
       "edits": [
         {
           "file": "rach2/sys/arch/x86/debugreg.c",
@@ -148,13 +148,13 @@
       "fails": {
         "lines": [
           "PTRACEMUSL FAIL (a breakpoint ending at the last user address was refused: errno",
-          "guest: fail: ptracemusl did not pass"
+          "default-probe: fail: musl/ptracemusl did not pass"
         ]
       }
     },
     {
       "name": "syscall-number-reload",
-      "summary": "futexes, ptrace, core files and the system call dispatcher",
+      "summary": "the row that fails with: the entry stop of write",
       "edits": [
         {
           "file": "rach2/sys/syscall.c",
@@ -165,13 +165,13 @@
       "fails": {
         "lines": [
           "PTRACEMUSL FAIL (the entry stop of write: errno",
-          "guest: fail: ptracemusl did not pass"
+          "default-probe: fail: musl/ptracemusl did not pass"
         ]
       }
     },
     {
       "name": "syscall-skip-runs-call",
-      "summary": "futexes, ptrace, core files and the system call dispatcher",
+      "summary": "the row that fails with: a write changed to -1 did not return 42",
       "edits": [
         {
           "file": "rach2/sys/syscall.c",
@@ -182,13 +182,13 @@
       "fails": {
         "lines": [
           "PTRACEMUSL FAIL (a write changed to -1 did not return 42: errno",
-          "guest: fail: ptracemusl did not pass"
+          "default-probe: fail: musl/ptracemusl did not pass"
         ]
       }
     },
     {
       "name": "syscall-entry-eax",
-      "summary": "futexes, ptrace, core files and the system call dispatcher",
+      "summary": "the row that fails with: a write changed to -1 did not return 42",
       "edits": [
         {
           "file": "rach2/sys/proc/ptrace.c",
@@ -199,13 +199,13 @@
       "fails": {
         "lines": [
           "PTRACEMUSL FAIL (a write changed to -1 did not return 42: errno",
-          "guest: fail: ptracemusl did not pass"
+          "default-probe: fail: musl/ptracemusl did not pass"
         ]
       }
     },
     {
       "name": "restart-after-exit-stop",
-      "summary": "futexes, ptrace, core files and the system call dispatcher",
+      "summary": "the row that fails with: a read whose restart the tracer cancelled was restarted",
       "edits": [
         {
           "file": "rach2/sys/syscall.c",
@@ -216,13 +216,13 @@
       "fails": {
         "lines": [
           "PTRACEMUSL FAIL (a read whose restart the tracer cancelled was restarted: errno",
-          "guest: fail: ptracemusl did not pass"
+          "default-probe: fail: musl/ptracemusl did not pass"
         ]
       }
     },
     {
       "name": "tracee-end-cld-exited",
-      "summary": "futexes, ptrace, core files and the system call dispatcher",
+      "summary": "the row that fails with: the SIGCHLD of a killed tracee was not CLD_KILLED with SIGKILL",
       "edits": [
         {
           "file": "rach2/sys/proc/ptrace.c",
@@ -233,13 +233,13 @@
       "fails": {
         "lines": [
           "PTRACEMUSL FAIL (the SIGCHLD of a killed tracee was not CLD_KILLED with SIGKILL: errno",
-          "guest: fail: ptracemusl did not pass"
+          "default-probe: fail: musl/ptracemusl did not pass"
         ]
       }
     },
     {
       "name": "mem-transfer-past-page",
-      "summary": "descriptors, open, mknod, FIFOs and /proc",
+      "summary": "the row that fails with: a transfer through /proc/PID/mem that runs into a hole",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -250,13 +250,13 @@
       "fails": {
         "lines": [
           "PTRACEMUSL FAIL (a transfer through /proc/PID/mem that runs into a hole",
-          "guest: fail: ptracemusl did not pass"
+          "default-probe: fail: musl/ptracemusl did not pass"
         ]
       }
     },
     {
       "name": "mem-follows-exec",
-      "summary": "descriptors, open, mknod, FIFOs and /proc",
+      "summary": "the row that fails with: a /proc/PID/mem descriptor opened before the exec",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -267,13 +267,13 @@
       "fails": {
         "lines": [
           "PTRACEMUSL FAIL (a /proc/PID/mem descriptor opened before the exec",
-          "guest: fail: ptracemusl did not pass"
+          "default-probe: fail: musl/ptracemusl did not pass"
         ]
       }
     },
     {
       "name": "entry-kill-runs-call",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: a write the tracee was killed at the entry of ran",
       "edits": [
         {
           "file": "rach2/sys/proc/ptrace.c",
@@ -284,13 +284,13 @@
       "fails": {
         "lines": [
           "PTRACEMUSL FAIL (a write the tracee was killed at the entry of ran",
-          "guest: fail: ptracemusl did not pass"
+          "default-probe: fail: musl/ptracemusl did not pass"
         ]
       }
     },
     {
       "name": "detach-keeps-stop-seen",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: the detached process ran while its stop was in effect",
       "edits": [
         {
           "file": "rach2/sys/proc/ptrace.c",
@@ -301,13 +301,13 @@
       "fails": {
         "lines": [
           "PTRACEMUSL FAIL (the detached process ran while its stop was in effect",
-          "guest: fail: ptracemusl did not pass"
+          "default-probe: fail: musl/ptracemusl did not pass"
         ]
       }
     },
     {
       "name": "seize-stopped-stays-parked",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: seizing a stopped process did not stop it for the tracer",
       "edits": [
         {
           "file": "rach2/sys/proc/ptrace.c",
@@ -318,13 +318,13 @@
       "fails": {
         "lines": [
           "PTRACEMUSL FAIL (seizing a stopped process did not stop it for the tracer",
-          "guest: fail: ptracemusl did not pass"
+          "default-probe: fail: musl/ptracemusl did not pass"
         ]
       }
     },
     {
       "name": "interrupt-no-wake",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: PTRACE_INTERRUPT did not stop a tracee blocked in a read",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -335,13 +335,13 @@
       "fails": {
         "lines": [
           "PTRACEMUSL FAIL (PTRACE_INTERRUPT did not stop a tracee blocked in a read",
-          "guest: fail: ptracemusl did not pass"
+          "default-probe: fail: musl/ptracemusl did not pass"
         ]
       }
     },
     {
       "name": "stat-stopped-reads-running",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: the detached process ran while its stop was in effect",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -352,13 +352,13 @@
       "fails": {
         "lines": [
           "PTRACEMUSL FAIL (the detached process ran while its stop was in effect",
-          "guest: fail: ptracemusl did not pass"
+          "default-probe: fail: musl/ptracemusl did not pass"
         ]
       }
     },
     {
       "name": "mem-descriptor-keeps-pages",
-      "summary": "an address space's two counts and the program's file it keeps",
+      "summary": "the row that fails with: a /proc/PID/mem descriptor kept the memory of a child that ended",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -369,13 +369,13 @@
       "fails": {
         "lines": [
           "PTRACEMUSL FAIL (a /proc/PID/mem descriptor kept the memory of a child that ended",
-          "guest: fail: ptracemusl did not pass"
+          "default-probe: fail: musl/ptracemusl did not pass"
         ]
       }
     },
     {
       "name": "exit-keeps-address-space-mem",
-      "summary": "an address space's two counts and the program's file it keeps",
+      "summary": "the row that fails with: a /proc/PID/mem read reached a child that had ended",
       "edits": [
         {
           "file": "rach2/sys/proc/exit.c",
@@ -386,24 +386,24 @@
       "fails": {
         "lines": [
           "PTRACEMUSL FAIL (a /proc/PID/mem read reached a child that had ended",
-          "guest: fail: ptracemusl did not pass"
+          "default-probe: fail: musl/ptracemusl did not pass"
         ]
       }
     },
     {
       "name": "ptrace-seized-child-sigstop",
-      "summary": "the network's tables, which netlinkmusl checks",
+      "summary": "the row that fails with: the child of a seized fork did not first stop with SIGTRAP",
       "edits": [
         {
           "file": "rach2/sys/proc/ptrace.c",
           "find": "    signo = self->tg->stop ? self->tg->stop : SIGTRAP;\n",
-          "replace": "    signo = (self->ptrace & PT_START) ? SIGSTOP : SIGTRAP;\n"
+          "replace": "    signo = (self->ptrace & PT_START) ? SIGSTOP : self->tg->stop ? self->tg->stop : SIGTRAP;\n"
         }
       ],
       "fails": {
         "lines": [
           "PTRACEMUSL FAIL (the child of a seized fork did not first stop with SIGTRAP",
-          "guest: fail: ptracemusl did not pass"
+          "default-probe: fail: musl/ptracemusl did not pass"
         ]
       }
     }

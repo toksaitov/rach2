@@ -13,25 +13,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
-      "timerfdmusl"
+      "tests/system/default_probe.sh",
+      "musl/timerfdmusl"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "timerfd-zero-read",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a read of zero bytes was not EINVAL",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -42,13 +42,13 @@
       "fails": {
         "lines": [
           "TIMERFDMUSL FAIL (a read of zero bytes was not EINVAL: errno",
-          "guest: fail: timerfdmusl did not pass"
+          "default-probe: fail: musl/timerfdmusl did not pass"
         ]
       }
     },
     {
       "name": "timerfd-long-cut-to-span",
-      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "summary": "the row that fails with: a timer of 200 days did not report 200 days",
       "edits": [
         {
           "file": "rach2/sys/io/timerfd.c",
@@ -59,13 +59,13 @@
       "fails": {
         "lines": [
           "TIMERFDMUSL FAIL (a timer of 200 days did not report 200 days: errno",
-          "guest: fail: timerfdmusl did not pass"
+          "default-probe: fail: musl/timerfdmusl did not pass"
         ]
       }
     },
     {
       "name": "timerfd-poll-no-queue",
-      "summary": "probe rows the review found weak",
+      "summary": "the row that fails with: the timer did not wake the epoll wait",
       "edits": [
         {
           "file": "rach2/sys/io/timerfd.c",
@@ -76,13 +76,13 @@
       "fails": {
         "lines": [
           "TIMERFDMUSL FAIL (the timer did not wake the epoll wait",
-          "guest: fail: timerfdmusl did not pass"
+          "default-probe: fail: musl/timerfdmusl did not pass"
         ]
       }
     },
     {
       "name": "timerfd-past-absolute-never-expires",
-      "summary": "probe rows the review found weak",
+      "summary": "the row that fails with: an absolute time already past did not expire",
       "edits": [
         {
           "file": "rach2/sys/io/timerfd.c",
@@ -93,7 +93,7 @@
       "fails": {
         "lines": [
           "TIMERFDMUSL FAIL (an absolute time already past did not expire",
-          "guest: fail: timerfdmusl did not pass"
+          "default-probe: fail: musl/timerfdmusl did not pass"
         ]
       }
     }

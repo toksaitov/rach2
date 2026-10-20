@@ -18,10 +18,6 @@
 #   guest.sh boot WORK ARG...        boot WORK/kernel with WORK/test.krffs
 #                                    under the harness with ARGs, and print
 #                                    its output and the console's log
-#   guest.sh default PROBE...        boot the default suite and print its
-#                                    output and the console's log, with
-#                                    `guest: fail: PROBE did not pass` for
-#                                    each PROBE the runner did not pass
 #   guest.sh run SUITE LINE...       run `tests/run SUITE` and print its
 #                                    output; a run that passes must print
 #                                    each LINE, or the test fails with
@@ -56,7 +52,7 @@ qemu()
 
 usage()
 {
-    echo 'guest: usage: guest.sh make TARGET... | copy WORK PATH... | image WORK MIB ENTRY... | boot WORK ARG... | default PROBE... | run SUITE LINE... | exec WORK COMMAND...' >&2
+    echo 'guest: usage: guest.sh make TARGET... | copy WORK PATH... | image WORK MIB ENTRY... | boot WORK ARG... | run SUITE LINE... | exec WORK COMMAND...' >&2
     exit 2
 }
 
@@ -111,34 +107,6 @@ case $verb in
         build/tests/system/harness --kernel "$work/kernel" --initrd "$work/test.krffs" \
             --log "$work/console.log" "$@" || status=$?
         cat "$work/console.log" 2>/dev/null || :
-        exit "$status"
-        ;;
-    default)
-        log=$tree/images/default-test.log
-        rm -f "$log"
-        scratch=
-        trap 'rm -rf ${scratch:+"$scratch"}' EXIT
-        trap 'exit 129' HUP
-        trap 'exit 130' INT
-        trap 'exit 143' TERM
-        scratch=$(mktemp -d "${TMPDIR:-/tmp}/rach2-guest.XXXXXX")
-        qemu "$scratch"
-        status=0
-        make run-default "ARCH=$RACH2_ARCH" "RACH2_QEMU=$RACH2_QEMU" >"$scratch/out" 2>&1 \
-            </dev/null || status=$?
-        cat "$scratch/out"
-        cat "$log" 2>/dev/null || :
-        if ! grep -q '^runtests: [0-9]* of [0-9]* probes' "$scratch/out"; then
-            echo 'guest: fail: the suite did not run'
-            [ "$status" -ne 0 ] || status=1
-        else
-            for probe in "$@"; do
-                if ! grep -Eq "^  (musl/)?$probe +.* PASS\$" "$scratch/out"; then
-                    echo "guest: fail: $probe did not pass"
-                    [ "$status" -ne 0 ] || status=1
-                fi
-            done
-        fi
         exit "$status"
         ;;
     run)

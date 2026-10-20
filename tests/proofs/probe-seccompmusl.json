@@ -12,25 +12,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
-      "seccompmusl"
+      "tests/system/default_probe.sh",
+      "musl/seccompmusl"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "seccomp-precedence-reversed",
-      "summary": "the network's tables, which netlinkmusl checks",
+      "summary": "the row that fails with: the filter fails getppid with its",
       "edits": [
         {
           "file": "rach2/sys/proc/seccomp.c",
@@ -41,13 +41,13 @@
       "fails": {
         "lines": [
           "SECCOMPMUSL FAIL (the filter fails getppid with its errno and lets getpid run",
-          "guest: fail: seccompmusl did not pass"
+          "default-probe: fail: musl/seccompmusl did not pass"
         ]
       }
     },
     {
       "name": "seccomp-trap-eax-lost",
-      "summary": "the network's tables, which netlinkmusl checks",
+      "summary": "the row that fails with: a trap posts SIGSYS with the call's siginfo and its number in EAX",
       "edits": [
         {
           "file": "rach2/sys/proc/seccomp.c",
@@ -58,13 +58,13 @@
       "fails": {
         "lines": [
           "SECCOMPMUSL FAIL (a trap posts SIGSYS with the call's siginfo and its number in EAX",
-          "guest: fail: seccompmusl did not pass"
+          "default-probe: fail: musl/seccompmusl did not pass"
         ]
       }
     },
     {
       "name": "seccomp-tsync-ignored",
-      "summary": "the network's tables, which netlinkmusl checks",
+      "summary": "the row that fails with: the second thread has the filter TSYNC gave it",
       "edits": [
         {
           "file": "rach2/sys/proc/seccomp.c",
@@ -75,7 +75,7 @@
       "fails": {
         "lines": [
           "SECCOMPMUSL FAIL (the second thread has the filter TSYNC gave it",
-          "guest: fail: seccompmusl did not pass"
+          "default-probe: fail: musl/seccompmusl did not pass"
         ]
       }
     }

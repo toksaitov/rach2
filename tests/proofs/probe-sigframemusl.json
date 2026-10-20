@@ -13,25 +13,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
-      "sigframemusl"
+      "tests/system/default_probe.sh",
+      "musl/sigframemusl"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "sigsuspend-enosys",
-      "summary": "probe rows the review found weak",
+      "summary": "the row that fails with: sigsuspend did not return -1 with EINTR",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -42,13 +42,13 @@
       "fails": {
         "lines": [
           "SIGFRAMEMUSL FAIL (sigsuspend did not return -1 with EINTR)",
-          "guest: fail: sigframemusl did not pass"
+          "default-probe: fail: musl/sigframemusl did not pass"
         ]
       }
     },
     {
       "name": "sa-restart-handler-skipped",
-      "summary": "probe rows the review found weak",
+      "summary": "the row that fails with: the handler with SA_RESTART did not run once",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -59,13 +59,13 @@
       "fails": {
         "lines": [
           "SIGFRAMEMUSL FAIL (the handler with SA_RESTART did not run once)",
-          "guest: fail: sigframemusl did not pass"
+          "default-probe: fail: musl/sigframemusl did not pass"
         ]
       }
     },
     {
       "name": "eintr-without-handler",
-      "summary": "probe rows the review found weak",
+      "summary": "the row that fails with: the handler without SA_RESTART did not run once",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -76,13 +76,13 @@
       "fails": {
         "lines": [
           "SIGFRAMEMUSL FAIL (the handler without SA_RESTART did not run once)",
-          "guest: fail: sigframemusl did not pass"
+          "default-probe: fail: musl/sigframemusl did not pass"
         ]
       }
     },
     {
       "name": "altstack-frame-below",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: a frame written below the alternate stack",
       "edits": [
         {
           "file": "rach2/sys/arch/i686/sigframe.c",
@@ -93,7 +93,7 @@
       "fails": {
         "lines": [
           "SIGFRAMEMUSL FAIL (a frame written below the alternate stack)",
-          "guest: fail: sigframemusl did not pass"
+          "default-probe: fail: musl/sigframemusl did not pass"
         ]
       }
     }

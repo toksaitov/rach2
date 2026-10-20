@@ -13,25 +13,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
-      "inotifymusl"
+      "tests/system/default_probe.sh",
+      "musl/inotifymusl"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "inotify-init-clobbers-ebx",
-      "summary": "inotify",
+      "summary": "the row that fails with: inotify_init changed the caller's EBX",
       "edits": [
         {
           "file": "rach2/sys/io/inotify.c",
@@ -42,13 +42,13 @@
       "fails": {
         "lines": [
           "INOTIFYMUSL FAIL (inotify_init changed the caller's EBX",
-          "guest: fail: inotifymusl did not pass"
+          "default-probe: fail: musl/inotifymusl did not pass"
         ]
       }
     },
     {
       "name": "inotify-no-merge",
-      "summary": "inotify",
+      "summary": "the row that fails with: the events of a directory and a file: event 3",
       "edits": [
         {
           "file": "rach2/sys/io/inotify.c",
@@ -59,13 +59,13 @@
       "fails": {
         "lines": [
           "INOTIFYMUSL FAIL (the events of a directory and a file: event 3",
-          "guest: fail: inotifymusl did not pass"
+          "default-probe: fail: musl/inotifymusl did not pass"
         ]
       }
     },
     {
       "name": "inotify-mkdir-not-dir",
-      "summary": "inotify",
+      "summary": "the row that fails with: the events of a directory and a file: event 22",
       "edits": [
         {
           "file": "rach2/sys/fs/vfs.c",
@@ -76,13 +76,13 @@
       "fails": {
         "lines": [
           "INOTIFYMUSL FAIL (the events of a directory and a file: event 22",
-          "guest: fail: inotifymusl did not pass"
+          "default-probe: fail: musl/inotifymusl did not pass"
         ]
       }
     },
     {
       "name": "inotify-small-read",
-      "summary": "inotify",
+      "summary": "the row that fails with: a read too small for an event was not EINVAL",
       "edits": [
         {
           "file": "rach2/sys/io/inotify.c",
@@ -93,13 +93,13 @@
       "fails": {
         "lines": [
           "INOTIFYMUSL FAIL (a read too small for an event was not EINVAL",
-          "guest: fail: inotifymusl did not pass"
+          "default-probe: fail: musl/inotifymusl did not pass"
         ]
       }
     },
     {
       "name": "inotify-oneshot-kept",
-      "summary": "inotify",
+      "summary": "the row that fails with: a one-shot watch",
       "edits": [
         {
           "file": "rach2/sys/io/inotify.c",
@@ -110,7 +110,7 @@
       "fails": {
         "lines": [
           "INOTIFYMUSL FAIL (a one-shot watch",
-          "guest: fail: inotifymusl did not pass"
+          "default-probe: fail: musl/inotifymusl did not pass"
         ]
       }
     }

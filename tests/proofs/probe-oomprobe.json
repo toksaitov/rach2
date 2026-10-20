@@ -12,25 +12,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
+      "tests/system/default_probe.sh",
       "oomprobe"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "oom-segv",
-      "summary": "the state of a sleep, which procprobe checks",
+      "summary": "the row that fails with: the child died of signal",
       "edits": [
         {
           "file": "rach2/sys/mm/paging.c",
@@ -41,7 +41,7 @@
       "fails": {
         "lines": [
           "OOMPROBE FAIL: the child died of signal",
-          "guest: fail: oomprobe did not pass"
+          "default-probe: fail: oomprobe did not pass"
         ]
       }
     }

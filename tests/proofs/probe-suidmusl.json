@@ -13,25 +13,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
-      "suidmusl"
+      "tests/system/default_probe.sh",
+      "musl/suidmusl"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "exec-setid-ignored",
-      "summary": "execve",
+      "summary": "the row that fails with: child status",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -42,13 +42,13 @@
       "fails": {
         "lines": [
           "SUIDMUSL FAIL (child status)",
-          "guest: fail: suidmusl did not pass"
+          "default-probe: fail: musl/suidmusl did not pass"
         ]
       }
     },
     {
       "name": "exec-root-tracer-suppresses",
-      "summary": "execve",
+      "summary": "the row that fails with: the exec traced by root",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -59,13 +59,13 @@
       "fails": {
         "lines": [
           "SUIDMUSL FAIL (the exec traced by root)",
-          "guest: fail: suidmusl did not pass"
+          "default-probe: fail: musl/suidmusl did not pass"
         ]
       }
     },
     {
       "name": "exec-user-tracer-gains",
-      "summary": "execve",
+      "summary": "the row that fails with: the exec traced by uid 1000",
       "edits": [
         {
           "file": "rach2/sys/proc/ptrace.c",
@@ -76,13 +76,13 @@
       "fails": {
         "lines": [
           "SUIDMUSL FAIL (the exec traced by uid 1000)",
-          "guest: fail: suidmusl did not pass"
+          "default-probe: fail: musl/suidmusl did not pass"
         ]
       }
     },
     {
       "name": "exec-shared-fs-gains",
-      "summary": "execve",
+      "summary": "the row that fails with: the exec whose directories uid 1000 shares",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -93,13 +93,13 @@
       "fails": {
         "lines": [
           "SUIDMUSL FAIL (the exec whose directories uid 1000 shares)",
-          "guest: fail: suidmusl did not pass"
+          "default-probe: fail: musl/suidmusl did not pass"
         ]
       }
     },
     {
       "name": "exec-xonly-dumpable",
-      "summary": "execve",
+      "summary": "the row that fails with: the execute-only copy is dumpable",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -110,13 +110,13 @@
       "fails": {
         "lines": [
           "SUIDMUSL FAIL (the execute-only copy is dumpable)",
-          "guest: fail: suidmusl did not pass"
+          "default-probe: fail: musl/suidmusl did not pass"
         ]
       }
     },
     {
       "name": "peek-nondumpable",
-      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "summary": "the row that fails with: a uid 1000 tracer read the execute-only copy",
       "edits": [
         {
           "file": "rach2/sys/proc/ptrace.c",
@@ -127,7 +127,7 @@
       "fails": {
         "lines": [
           "SUIDMUSL FAIL (a uid 1000 tracer read the execute-only copy)",
-          "guest: fail: suidmusl did not pass"
+          "default-probe: fail: musl/suidmusl did not pass"
         ]
       }
     }

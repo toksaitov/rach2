@@ -17,25 +17,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
+      "tests/system/default_probe.sh",
       "procprobe"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "stat-start-zero",
-      "summary": "the start time and sizes of /proc/PID/stat, which ps reads",
+      "summary": "the row that fails with: /proc/self/stat gives a start time, a size and resident pages",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -46,13 +46,13 @@
       "fails": {
         "lines": [
           "FAIL: /proc/self/stat gives a start time, a size and resident pages",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "stat-rss-zero",
-      "summary": "the start time and sizes of /proc/PID/stat, which ps reads",
+      "summary": "the row that fails with: /proc/self/stat gives a start time, a size and resident pages",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -63,13 +63,13 @@
       "fails": {
         "lines": [
           "FAIL: /proc/self/stat gives a start time, a size and resident pages",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "tcp-listener-address",
-      "summary": "/proc/net/tcp's address of a listener",
+      "summary": "the row that fails with: the listener, which takes its port on every address, is at 0.0.0.0",
       "edits": [
         {
           "file": "rach2/sys/network/tcp/tcp.c",
@@ -80,13 +80,13 @@
       "fails": {
         "lines": [
           "FAIL: the listener, which takes its port on every address, is at 0.0.0.0",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "proc-net-udp-state-connected",
-      "summary": "the files of /proc/net that netstat and ss -s read",
+      "summary": "the row that fails with: and the bound socket's row, with the state netstat reads as unconnected",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -97,13 +97,13 @@
       "fails": {
         "lines": [
           "FAIL: and the bound socket's row, with the state netstat reads as unconnected",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "proc-net-unix-abstract-nul",
-      "summary": "the files of /proc/net that netstat and ss -s read",
+      "summary": "the row that fails with: and the socket's row, a stream not connected, with its name after an @",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -114,13 +114,13 @@
       "fails": {
         "lines": [
           "FAIL: and the socket's row, a stream not connected, with its name after an @",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "sockstat-tcp-inuse-zero",
-      "summary": "the files of /proc/net that netstat and ss -s read",
+      "summary": "the row that fails with: and the listener among the connections in use",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -131,13 +131,13 @@
       "fails": {
         "lines": [
           "FAIL: and the listener among the connections in use",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "sys-pci-link-absolute",
-      "summary": "/sys, which lspci and lsusb read",
+      "summary": "the row that fails with: /sys/bus/pci/devices has the host bridge's link, to its directory",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -148,13 +148,13 @@
       "fails": {
         "lines": [
           "FAIL: /sys/bus/pci/devices has the host bridge's link, to its directory",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "sys-uevent-no-slot",
-      "summary": "/sys, which lspci and lsusb read",
+      "summary": "the row that fails with: and its uevent has the class, the IDs and the slot lspci reads",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -165,13 +165,13 @@
       "fails": {
         "lines": [
           "FAIL: and its uevent has the class, the IDs and the slot lspci reads",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "rtc-hour-off-by-one",
-      "summary": "/dev/rtc0, which hwclock reads",
+      "summary": "the row that fails with: and its time of day is the time's, within two minutes",
       "edits": [
         {
           "file": "rach2/sys/fs/devfs.c",
@@ -182,13 +182,13 @@
       "fails": {
         "lines": [
           "FAIL: and its time of day is the time's, within two minutes",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "sysctl-forward-taken",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: /proc/sys/net/ipv4/ip_forward takes 0 and refuses 1 with EINVAL",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -199,13 +199,13 @@
       "fails": {
         "lines": [
           "FAIL: /proc/sys/net/ipv4/ip_forward takes 0 and refuses 1 with EINVAL",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "proc-version-missing",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: /proc/version gives the kernel's name and release, as uname does",
       "edits": [
         {
           "file": "rach2/sys/fs/synthfs.c",
@@ -216,13 +216,13 @@
       "fails": {
         "lines": [
           "FAIL: /proc/version gives the kernel's name and release, as uname does",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "tcp-opens-uncounted",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: /proc/net/snmp counts it as an active open, a failed attempt and a reset sent",
       "edits": [
         {
           "file": "rach2/sys/network/tcp/tcp.c",
@@ -233,13 +233,13 @@
       "fails": {
         "lines": [
           "FAIL: /proc/net/snmp counts it as an active open, a failed attempt and a reset sent",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "proc-partitions-missing",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: /proc/partitions has Linux's header and a line for each disk /proc/diskstats lists",
       "edits": [
         {
           "file": "rach2/sys/fs/synthfs.c",
@@ -250,13 +250,13 @@
       "fails": {
         "lines": [
           "FAIL: /proc/partitions has Linux's header and a line for each disk /proc/diskstats lists",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "proc-interrupts-unlisted",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: /proc lists interrupts and filesystems, which open there",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -267,13 +267,13 @@
       "fails": {
         "lines": [
           "FAIL: /proc lists interrupts and filesystems, which open there",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "proc-limits-missing",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: /proc/self/limits has Linux's header and its sixteen limits",
       "edits": [
         {
           "file": "rach2/sys/fs/synthfs.c",
@@ -284,13 +284,13 @@
       "fails": {
         "lines": [
           "FAIL: /proc/self/limits has Linux's header and its sixteen limits",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "smaps-text-anonymous",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: the program's text has no anonymous memory in smaps",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -301,13 +301,13 @@
       "fails": {
         "lines": [
           "FAIL: the program's text has no anonymous memory in smaps",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "proc-uptime-link-unnamed",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: and the link names the file it was opened by, not another one",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -318,13 +318,13 @@
       "fails": {
         "lines": [
           "FAIL: and the link names the file it was opened by, not another one",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "sys-class-net-unlisted",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: /sys/class/net lists eth0",
       "edits": [
         {
           "file": "rach2/sys/syscall_fs.c",
@@ -335,13 +335,13 @@
       "fails": {
         "lines": [
           "FAIL: /sys/class/net lists eth0",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "mountinfo-parent-root",
-      "summary": "adjtimex, which reads the clock's NTP state",
+      "summary": "the row that fails with: /proc/self/mountinfo has each mount's id, parent, device and options",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -352,13 +352,13 @@
       "fails": {
         "lines": [
           "FAIL: /proc/self/mountinfo has each mount's id, parent, device and options",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "proc-vmstat-unnamed",
-      "summary": "the network's tables, which netlinkmusl checks",
+      "summary": "the row that fails with: /proc/vmstat has the free pages and the kilobytes read from the disks",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -369,13 +369,13 @@
       "fails": {
         "lines": [
           "FAIL: /proc/vmstat has the free pages and the kilobytes read from the disks",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "sys-cpu-offline-listed",
-      "summary": "namespaces, which nsmusl checks",
+      "summary": "the row that fails with: /sys/devices/system/cpu has the processors /proc/stat lists online",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -386,13 +386,13 @@
       "fails": {
         "lines": [
           "FAIL: /sys/devices/system/cpu has the processors /proc/stat lists online",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "sleep-all-uninterruptible",
-      "summary": "the state of a sleep, which procprobe checks",
+      "summary": "the row that fails with: a child asleep in pause is in the state S",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -403,13 +403,13 @@
       "fails": {
         "lines": [
           "FAIL: a child asleep in pause is in the state S",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "stat-blocked-counts-sleepers",
-      "summary": "the state of a sleep, which procprobe checks",
+      "summary": "the row that fails with: /proc/stat counts no process blocked while a child sleeps in pause",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -420,13 +420,13 @@
       "fails": {
         "lines": [
           "FAIL: /proc/stat counts no process blocked while a child sleeps in pause",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "sysctl-swappiness-empty",
-      "summary": "the state of a sleep, which procprobe checks",
+      "summary": "the row that fails with: /proc/sys/vm has swappiness 60 and overcommit_memory 0",
       "edits": [
         {
           "file": "rach2/sys/fs/synthfs.c",
@@ -437,13 +437,13 @@
       "fails": {
         "lines": [
           "FAIL: /proc/sys/vm has swappiness 60 and overcommit_memory 0",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "slabinfo-class-missing",
-      "summary": "the state of a sleep, which procprobe checks",
+      "summary": "the row that fails with: /proc/slabinfo has Linux's version line and a line for each heap class",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -454,13 +454,13 @@
       "fails": {
         "lines": [
           "FAIL: /proc/slabinfo has Linux's version line and a line for each heap class",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "sys-memory-block-unnamed",
-      "summary": "the state of a sleep, which procprobe checks",
+      "summary": "the row that fails with: /sys/devices/system/memory has a block size in bytes and memory0 online",
       "edits": [
         {
           "file": "rach2/sys/fs/synthfs.c",
@@ -471,13 +471,13 @@
       "fails": {
         "lines": [
           "FAIL: /sys/devices/system/memory has a block size in bytes and memory0 online",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "proc-swaps-header",
-      "summary": "the state of a sleep, which procprobe checks",
+      "summary": "the row that fails with: /proc/swaps has Linux's header and no swap area",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -488,13 +488,13 @@
       "fails": {
         "lines": [
           "FAIL: /proc/swaps has Linux's header and no swap area",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     },
     {
       "name": "proc-version-old-name",
-      "summary": "the mqueue file system, the binds of KRFFS, fallocate on a tmpfs, the system's name and a tmpfs's size= at a remount, of milestone 56",
+      "summary": "the row that fails with: /proc/version gives the kernel's name and release, as uname does",
       "edits": [
         {
           "file": "rach2/sys/syscall.h",
@@ -505,7 +505,7 @@
       "fails": {
         "lines": [
           "FAIL: /proc/version gives the kernel's name and release, as uname does",
-          "guest: fail: procprobe did not pass"
+          "default-probe: fail: procprobe did not pass"
         ]
       }
     }

@@ -16,25 +16,25 @@
   "build": {
     "argv": [
       "/bin/sh",
-      "-c",
-      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "default",
-      "prctlmusl"
+      "tests/system/default_probe.sh",
+      "musl/prctlmusl"
     ],
     "bound_s": 900,
-    "fail_prefix": "guest: fail: "
+    "fail_prefix": "default-probe: fail: "
   },
   "faults": [
     {
       "name": "dumpable-per-thread",
-      "summary": "signals and waits",
+      "summary": "the row that fails with: a running thread did not see the dumpable flag another thread cleared",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -45,13 +45,13 @@
       "fails": {
         "lines": [
           "PRCTLMUSL FAIL (a running thread did not see the dumpable flag another thread cleared)",
-          "guest: fail: prctlmusl did not pass"
+          "default-probe: fail: musl/prctlmusl did not pass"
         ]
       }
     },
     {
       "name": "comm-unpadded",
-      "summary": "signals and waits",
+      "summary": "the row that fails with: an exec left the end of a longer name after the program name",
       "edits": [
         {
           "file": "rach2/sys/proc/process.c",
@@ -62,13 +62,13 @@
       "fails": {
         "lines": [
           "PRCTLMUSL FAIL (an exec left the end of a longer name after the program name)",
-          "guest: fail: prctlmusl did not pass"
+          "default-probe: fail: musl/prctlmusl did not pass"
         ]
       }
     },
     {
       "name": "setresuid-keeps-pdeath",
-      "summary": "probe rows the review found weak",
+      "summary": "the row that fails with: a move of the effective uid alone kept the signal or the dumpable flag",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -79,13 +79,13 @@
       "fails": {
         "lines": [
           "PRCTLMUSL FAIL (a move of the effective uid alone kept the signal or the dumpable flag)",
-          "guest: fail: prctlmusl did not pass"
+          "default-probe: fail: musl/prctlmusl did not pass"
         ]
       }
     },
     {
       "name": "setresgid-keeps-pdeath",
-      "summary": "probe rows the review found weak",
+      "summary": "the row that fails with: a move of the effective gid alone kept the signal or the dumpable flag",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -96,13 +96,13 @@
       "fails": {
         "lines": [
           "PRCTLMUSL FAIL (a move of the effective gid alone kept the signal or the dumpable flag)",
-          "guest: fail: prctlmusl did not pass"
+          "default-probe: fail: musl/prctlmusl did not pass"
         ]
       }
     },
     {
       "name": "get-name-without-padding",
-      "summary": "probe rows the review found weak",
+      "summary": "the row that fails with: a short name set after a longer one was not read back padded with NULs",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -113,13 +113,13 @@
       "fails": {
         "lines": [
           "PRCTLMUSL FAIL (a short name set after a longer one was not read back padded with NULs)",
-          "guest: fail: prctlmusl did not pass"
+          "default-probe: fail: musl/prctlmusl did not pass"
         ]
       }
     },
     {
       "name": "exe-exec-old-path",
-      "summary": "paths that end in a slash, a dot or two, and seeks of directories and /proc files",
+      "summary": "the row that fails with: an exec of /proc/self/exe ran the file put at the program's old path",
       "edits": [
         {
           "file": "rach2/sys/syscall_proc.c",
@@ -130,13 +130,13 @@
       "fails": {
         "lines": [
           "PRCTLMUSL FAIL (an exec of /proc/self/exe ran the file put at the program's old path)",
-          "guest: fail: prctlmusl did not pass"
+          "default-probe: fail: musl/prctlmusl did not pass"
         ]
       }
     },
     {
       "name": "exe-link-exec-path",
-      "summary": "an address space's two counts and the program's file it keeps",
+      "summary": "the row that fails with: /proc/self/exe did not read the program's path after a rename",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -147,13 +147,13 @@
       "fails": {
         "lines": [
           "PRCTLMUSL FAIL (/proc/self/exe did not read the program's path after a rename)",
-          "guest: fail: prctlmusl did not pass"
+          "default-probe: fail: musl/prctlmusl did not pass"
         ]
       }
     },
     {
       "name": "exe-walk-text",
-      "summary": "an address space's two counts and the program's file it keeps",
+      "summary": "the row that fails with: an open of /proc/self/exe did not reach the program once its name was gone",
       "edits": [
         {
           "file": "rach2/sys/fs/vfs.c",
@@ -164,13 +164,13 @@
       "fails": {
         "lines": [
           "PRCTLMUSL FAIL (an open of /proc/self/exe did not reach the program once its name was gone)",
-          "guest: fail: prctlmusl did not pass"
+          "default-probe: fail: musl/prctlmusl did not pass"
         ]
       }
     },
     {
       "name": "exit-keeps-address-space-exe",
-      "summary": "an address space's two counts and the program's file it keeps",
+      "summary": "the row that fails with: an ended child's program kept its file system busy until the reap",
       "edits": [
         {
           "file": "rach2/sys/proc/exit.c",
@@ -181,13 +181,13 @@
       "fails": {
         "lines": [
           "PRCTLMUSL FAIL (an ended child's program kept its file system busy until the reap)",
-          "guest: fail: prctlmusl did not pass"
+          "default-probe: fail: musl/prctlmusl did not pass"
         ]
       }
     },
     {
       "name": "subreaper-ignored",
-      "summary": "child subreapers, and the children file of a thread's directory",
+      "summary": "the row that fails with: an orphan did not come to the child subreaper",
       "edits": [
         {
           "file": "rach2/sys/proc/process.c",
@@ -198,13 +198,13 @@
       "fails": {
         "lines": [
           "PRCTLMUSL FAIL (an orphan did not come to the child subreaper)",
-          "guest: fail: prctlmusl did not pass"
+          "default-probe: fail: musl/prctlmusl did not pass"
         ]
       }
     },
     {
       "name": "children-file-empty",
-      "summary": "child subreapers, and the children file of a thread's directory",
+      "summary": "the row that fails with: the children file did not list the one child",
       "edits": [
         {
           "file": "rach2/sys/fs/procfs.c",
@@ -215,7 +215,7 @@
       "fails": {
         "lines": [
           "PRCTLMUSL FAIL (the children file did not list the one child)",
-          "guest: fail: prctlmusl did not pass"
+          "default-probe: fail: musl/prctlmusl did not pass"
         ]
       }
     }
