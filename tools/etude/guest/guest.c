@@ -584,19 +584,17 @@ static int send_frame(const char *type, int nfields, const char *const *field)
     return 0;
 }
 
-/** Send a frame whose fields are given as one line of words separated by
- * single spaces: "TYPE FIELD...". */
-static int send_line(const char *line)
+/**
+ * Split `copy`, a line of words separated by single spaces, "TYPE FIELD...",
+ * in place into its type, which stays at `copy`, and its fields.
+ *
+ * @return the number of fields, or -1 when there are more than a frame has.
+ */
+static int split_line(char *copy, const char **field)
 {
-    const char *field[WIRE_FIELDS_MAX] = {0};
-    char *copy = strdup(line);
-    char *p;
+    char *p = strchr(copy, ' ');
     int n = 0;
-    int rc;
 
-    if (!copy)
-        return -1;
-    p = strchr(copy, ' ');
     if (p) {
         *p++ = '\0';
         while (p && n < WIRE_FIELDS_MAX) {
@@ -606,9 +604,41 @@ static int send_line(const char *line)
                 *p++ = '\0';
         }
     }
-    rc = p ? -1 : send_frame(copy, n, field);
+    return p ? -1 : n;
+}
+
+/** Send a frame whose fields are given as one line of words separated by
+ * single spaces: "TYPE FIELD...". */
+static int send_line(const char *line)
+{
+    const char *field[WIRE_FIELDS_MAX] = {0};
+    char *copy = strdup(line);
+    int n;
+    int rc;
+
+    if (!copy)
+        return -1;
+    n = split_line(copy, field);
+    rc = n < 0 ? -1 : send_frame(copy, n, field);
     free(copy);
     return rc;
+}
+
+/** Whether send_line could send the event `line` as the frame `ahead` events
+ * after the next: whether it has few enough fields and fits the frame bound. */
+static int event_fits(const char *line, uint64_t ahead)
+{
+    const char *field[WIRE_FIELDS_MAX] = {0};
+    char *copy = strdup(line);
+    char *text = malloc(max_frame + 1);
+    int n = copy ? split_line(copy, field) : -1;
+    int fits = n >= 0 && text &&
+               wire_encode(text, max_frame + 1, session, boot, next_seq + ahead, recv_next > 0,
+                           recv_next - 1, copy, n, field) > 0;
+
+    free(text);
+    free(copy);
+    return fits;
 }
 
 /** The bytes of output one out frame has room for, a multiple of 3 so that
@@ -654,18 +684,41 @@ static void cmd_append(const char *cmd, const char *line)
     close(fd);
 }
 
-/** Send the event `line` for command `cmd` and keep it in the command's
- * record, so that a repeat of the command is answered with it again. */
+#ifdef RACH2_HOSTTEST
+/* In the host test, the type of event that etude-guest is killed at, once
+ * the event is recorded and before it is sent. */
+const char *etude_guest_fault;
+
+/** Kill this process when the event `line` is of the type
+ * `etude_guest_fault` gives, as a kill between two writes would. */
+static void fault_point(const char *line)
+{
+    size_t n = etude_guest_fault ? strlen(etude_guest_fault) : 0;
+
+    if (n > 0 && strncmp(line, etude_guest_fault, n) == 0 && line[n] == ' ')
+        kill(getpid(), SIGKILL);
+}
+#else
+#define fault_point(line) ((void)0)
+#endif
+
+/**
+ * Record the event `line` of command `cmd` and then send it, so that a
+ * repeat of the command is answered with every event that was sent. An
+ * event that cannot be sent is recorded and sent as `error CMD limit` in its
+ * place, so that the record keeps one form of it.
+ */
 static void cmd_event(const char *cmd, const char *line)
 {
-    if (send_line(line) < 0) {
-        char err[64];
+    char err[64];
+
+    if (!event_fits(line, 0)) {
         snprintf(err, sizeof(err), "%s %s %s", ETUDE_EV_ERROR, cmd, ETUDE_ERR_LIMIT);
-        send_line(err);
-        cmd_append(cmd, err);
-        return;
+        line = err;
     }
     cmd_append(cmd, line);
+    fault_point(line);
+    send_line(line);
 }
 
 /** Send `error CMD CODE` for command `cmd`, kept in its record. */
@@ -1661,11 +1714,13 @@ static void stream_event(char *out, size_t cap, struct attempt *a, int fdn)
 }
 
 /**
- * Send and record an attempt's final events once its child has ended and
+ * Record and send an attempt's final events once its child has ended and
  * its pipes are closed, or its time to close them has passed: how it ended,
  * the sizes and digest of each stream of its output, the processor time and
  * peak memory of the child and the descendants it reaped, and whether every
- * process of the attempt is gone and its fixtures removed.
+ * process of the attempt is gone and its fixtures removed. An event that
+ * cannot be sent is `error CMD limit` in the attempt's record as in the
+ * command's.
  */
 static void finish(struct attempt *a)
 {
@@ -1704,6 +1759,9 @@ static void finish(struct attempt *a)
              METHOD_CPU, peak);
     snprintf(line[4], LINE_CAP, "%s %s %s %s", ETUDE_EV_CLEANED, a->cmd, a->token,
              clean ? "confirmed" : "unconfirmed");
+    for (i = 0; i < 5; i++)
+        if (!event_fits(line[i], (uint64_t)i))
+            snprintf(line[i], LINE_CAP, "%s %s %s", ETUDE_EV_ERROR, a->cmd, ETUDE_ERR_LIMIT);
     snprintf(finals, sizeof(finals), "%s\n%s\n%s\n%s\n%s\n", line[0], line[1], line[2], line[3],
              line[4]);
     attempt_record(a, clean ? ST_CLEANED : ST_ENDED, finals);

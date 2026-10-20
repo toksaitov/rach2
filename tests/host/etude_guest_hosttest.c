@@ -32,6 +32,7 @@
 #endif
 
 int etude_guest_main(int argc, char **argv);
+extern const char *etude_guest_fault;
 
 /* The bytes of a path, as many as realpath(3) may write on Linux; the
  * freestanding <limits.h> of the host tests' build has no PATH_MAX. */
@@ -1027,6 +1028,34 @@ static void check_unfinished_end(void)
     bye(0);
 }
 
+/** An etude-guest killed once it has recorded an attempt's `started` and
+ * before it has sent it: the run sent again is answered with that event,
+ * which only the run's record keeps. */
+static void check_record_first(void)
+{
+    static const char quick[] = "#!/bin/sh\necho quick\n";
+    struct ending e;
+    char inv[65];
+    char c[24];
+    int st = -1;
+
+    etude_guest_fault = ETUDE_EV_STARTED;
+    start_guest("--stdio", (char *)NULL);
+    etude_guest_fault = NULL;
+    hello(ETUDE_FRAME_STDIO_MAX);
+    put_case("quick", quick, "00000000000000d6", "ordinary", 30000, inv);
+    send_cmd(ETUDE_CMD_RUN, new_cmd(c), "00000000000000d6", inv, (char *)NULL);
+    CHECK(wait_guest(&st, 10000) == 0 && WIFSIGNALED(st) && WTERMSIG(st) == SIGKILL,
+          "etude-guest is killed at its attempt's start");
+    end_guest();
+    start_guest("--stdio", (char *)NULL);
+    hello(ETUDE_FRAME_STDIO_MAX);
+    send_cmd(ETUDE_CMD_RUN, c, "00000000000000d6", inv, (char *)NULL);
+    CHECK(collect(&e, c, "00000000000000d6", 10000) == 0 && e.pid > 0,
+          "a run repeated after a kill is answered by each event recorded before it");
+    bye(0);
+}
+
 /** A frame with a bad CRC ends a standard-I/O connection. */
 static void check_stdio_damage(void)
 {
@@ -1395,6 +1424,7 @@ int main(int argc, char **argv)
     check_interruptions();
     check_orphan();
     check_unfinished_end();
+    check_record_first();
     check_stdio_damage();
     check_fixtures();
     check_serial();

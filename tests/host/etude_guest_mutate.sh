@@ -6,13 +6,13 @@
 # misses the bytes not kept, an orphaned attempt settled as stopped, an
 # orphaned attempt's group judged at once after SIGKILL, a run's record
 # given the end it lacks only for an attempt settled at the lock, a run's
-# record given that end after a line cut short, an exit that carries both
-# streams' sizes and digests in one frame, ids not checked against the
-# accounts and the processes, on macOS ids not looked up in Directory
-# Services, the ids left out of the program's arguments, a
-# pseudo-terminal whose output is not read, and an attempts' directory that
-# only root may search. Each must fail the test, and the restored copy must
-# pass it.
+# record given that end after a line cut short, an event sent before it is
+# recorded, an exit that carries both streams' sizes and digests in one
+# frame, ids not checked against the accounts and the processes, on macOS ids
+# not looked up in Directory Services, the ids left out of the program's
+# arguments, a pseudo-terminal whose output is not read, and an attempts'
+# directory that only root may search. Each must fail the test, and the
+# restored copy must pass it.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -45,6 +45,8 @@ faults = {
     'complete': ('        settle_orphan(e->d_name, buf);\n        complete_run(cmd, buf);\n',
                  '        if (settle_orphan(e->d_name, buf))\n            complete_run(cmd, buf);\n'),
     'torn': ("    if (last[1] != '\\0') {", '    if (0) {'),
+    'record': ('    cmd_append(cmd, line);\n    fault_point(line);\n    send_line(line);\n',
+               '    send_line(line);\n    fault_point(line);\n    cmd_append(cmd, line);\n'),
     'idcheck': ('    for (i = 0; i < fx->nids; i++)\n        if (listed(',
                 '    for (i = 0; i < 0; i++)\n        if (listed('),
     'idargs': ('        pair_arg(arg, "ids", fx->id_old, fx->id_new, fx->nids);\n        argv[n++] = strdup(arg);\n',
@@ -77,8 +79,8 @@ PY
 if [ "${1:-}" = --texts ]; then
     RACH2_FAULT_TEXTS=1
     export RACH2_FAULT_TEXTS
-    for fault in repeat stopped ack exec digest total orphan immediate complete torn split pty \
-        search; do
+    for fault in repeat stopped ack exec digest total orphan immediate complete torn record \
+        split pty search; do
         apply_fault tools/etude/guest/guest.c "$fault"
     done
     for fault in idcheck idargs directory; do
@@ -162,6 +164,7 @@ fault orphan "an orphaned attempt's end is lost"
 fault immediate "an orphaned attempt's cleanup is confirmed once its processes have ended"
 fault complete 'a run whose record lost part of its end is answered with the whole end'
 fault torn 'a run whose record lost part of its end is answered with the whole end'
+fault record 'a run repeated after a kill is answered by each event recorded before it'
 fault split 'the end of a long attempt comes whole on the serial console'
 fault idcheck 'an id that a process has is refused' fixture.c
 fault idargs 'the program is given its ids, ports and peer' fixture.c
