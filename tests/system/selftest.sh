@@ -10,7 +10,9 @@
 # `tests/run runner` runs this. It boots no machine: every machine it drives is
 # a shell script on the PATH. It does read four built programs, the harness,
 # runtests, ptydrive and hostpeer, so `sh tests/system/selftest.sh` needs a
-# tree that has built those.
+# tree that has built those. SELFTEST_RUN names the runner it tests, the
+# tree's tests/run by default; tests/proofs/rows-runner.json gives it a copy
+# with a fault in it.
 #
 set -u
 
@@ -77,7 +79,7 @@ check "CPU activity follows descendants across process groups" 0 "$rc"
 # A tree the runner can drive: its own registry, its own suite targets, and a
 # `prepare-all` that builds the fixture's product and its shared image.
 mkdir -p "$WORK/tests/system/runner" "$WORK/tools/setup"
-cp "$REPO/tests/run" "$WORK/tests/run"
+cp "${SELFTEST_RUN:-$REPO/tests/run}" "$WORK/tests/run"
 cp "$REPO/tests/system/runlock.sh" "$REPO/tests/system/runlock_exec.sh" "$WORK/tests/system/"
 cp "$REPO/tests/system/runner/runutil.c" "$WORK/tests/system/runner/runutil.c"
 cc -O2 -Wall -Wextra -o "$WORK/runutil" "$REPO/tests/system/runner/runutil.c" || exit 1

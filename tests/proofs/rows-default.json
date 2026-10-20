@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "proof": "rows-default",
+  "summary": "the default suite's rows of devprobe, sigprobe and procprobe, with a fault in the kernel for each",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/fs/devfs.c",
+    "rach2/sys/syscall_proc.c",
+    "rach2/sys/fs/procfs.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "devprobe",
+      "sigprobe",
+      "procprobe"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "devprobe",
+      "summary": "a table entry numbered as a disk node in entry_index alone, so /dev/null and its listing differ in inode",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/devfs.c",
+          "find": "    const struct disk_node *node = disk_node_of(dev);\n\n    if (node) {\n        return DEVFS_NDEV",
+          "replace": "    const struct disk_node *node = (const struct disk_node *)dev;\n\n    if (node) {\n        return DEVFS_NDEV"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "guest: fail: devprobe did not pass",
+          "devprobe     status=",
+          "fstat and the /dev listing give /dev/null one inode"
+        ]
+      }
+    },
+    {
+      "name": "sigprobe",
+      "summary": "a one-shot handler reset before its frame is built, so the first one-shot delivery enters address zero and the probe dies",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "        if (sigframe_setup(tf, signo, sa, &info, oldmask) != 0) {\n",
+          "replace": "        if (handler_flags & SA_RESETHAND) {\n            sa->handler = KSIG_DFL;\n        }\n        if (sigframe_setup(tf, signo, sa, &info, oldmask) != 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "guest: fail: sigprobe did not pass",
+          "sigprobe     killed by signal 11",
+          "bad read at 0x0 (err"
+        ]
+      }
+    },
+    {
+      "name": "procprobe",
+      "summary": "two proc files with one inode: /proc/interrupts opened as the origin of /proc/loop",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "        f->origin_file = SYNTH_PROC_INTERRUPTS;\n",
+          "replace": "        f->origin_file = SYNTH_PROC_LOOP;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "guest: fail: procprobe did not pass",
+          "procprobe    status=",
+          "and the open files have different inodes too"
+        ]
+      }
+    }
+  ]
+}

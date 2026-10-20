@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "proof": "rows-dhcp",
+  "summary": "the dhcp suite's step that requires arping's status 0, with an arping that fails at once on an interface the guest lacks",
+  "tree": "shared",
+  "sources": [
+    "tests/system/suites.mk"
+  ],
+  "artifacts": [
+    "${WORK}/suites.mk"
+  ],
+  "build": {
+    "argv": [
+      "/bin/cp",
+      "tests/system/suites.mk",
+      "${WORK}/suites.mk"
+    ],
+    "bound_s": 10
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "exec",
+      "${WORK}",
+      "/bin/sh",
+      "-c",
+      "rm -f \"$1/dhcp.trace\"; status=0; RACH2_TRACE=\"$1/dhcp.trace\" make dhcp-card \"ARCH=$ARCH\" || status=$?; cat \"$1/dhcp.trace\" \"$ARCH_BUILD/images/dhcp.log\" 2>/dev/null; exit \"$status\"",
+      "dhcp",
+      "${WORK}"
+    ],
+    "bound_s": 1800
+  },
+  "faults": [
+    {
+      "name": "arping",
+      "summary": "arping sent to eth9, which the guest has not, so it exits 2 at once and the status step fails",
+      "edits": [
+        {
+          "file": "tests/system/suites.mk",
+          "find": "send=arping -f -w 5 192.168.90.2 > /tmp/ap",
+          "replace": "send=arping -f -w 5 -I eth9 192.168.90.2 > /tmp/ap"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "step(s) failed",
+          "step expect=ARPING-STATUS:0 fail ",
+          "ARPING-STATUS:2"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "proof": "rows-sealed",
+  "summary": "the sealed suite's rows of update and mke2fs, with the sealed root's manifest missing each",
+  "tree": "shared",
+  "sources": [
+    "krffs/manifests/rach2-metal-disk.manifest"
+  ],
+  "artifacts": [
+    "${WORK}/rach2-metal-disk.manifest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "{ [ -f krffs/recovery_authorized_keys ] || make -s recovery-key; } && sh tests/proofs/guest.sh make man && cp krffs/manifests/rach2-metal-disk.manifest ${WORK}/rach2-metal-disk.manifest"
+    ],
+    "bound_s": 600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "make",
+      "run-sealed"
+    ],
+    "bound_s": 3600,
+    "fail_prefix": "sealed-test: FAIL: "
+  },
+  "faults": [
+    {
+      "name": "sealed",
+      "summary": "the sealed root without update",
+      "edits": [
+        {
+          "file": "krffs/manifests/rach2-metal-disk.manifest",
+          "find": "file 0755 /bin/update build/utils/update\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "sealed-test: FAIL: the installed root runs no update process"
+        ]
+      }
+    },
+    {
+      "name": "mke2fs",
+      "summary": "the sealed root without mke2fs",
+      "edits": [
+        {
+          "file": "krffs/manifests/rach2-metal-disk.manifest",
+          "find": "file 0755 /bin/mke2fs build/vendor/e2fsprogs/mke2fs\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "sealed-test: FAIL: mke2fs on the installed root made no volume a loop device mounts"
+        ]
+      }
+    }
+  ]
+}
