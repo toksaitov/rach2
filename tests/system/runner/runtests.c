@@ -4,7 +4,7 @@
  *
  * Usage: runtests --kernel K --initrd I [--cpu CPU] [--device DEV]
  *                 [--append LINE] [--log FILE] [--timeout S] [--steptmo S]
- *                 [--boottmo S]
+ *                 [--boottmo S] [--probe NAME]...
  *        runtests --selftest
  *
  * It boots the architecture's QEMU, RACH2_QEMU or else qemu-system-i386,
@@ -30,7 +30,10 @@
  * --boottmo the wait for the shell, 60, each multiplied by the set's
  * deadline factor. A probe that does not return within its limit ends the
  * run, and each probe after it counts as a failure. --log keeps the console
- * in FILE. The exit status is 0 when every probe and both checks pass, 1
+ * in FILE. Each --probe runs only the probes it names, in the order of
+ * `PROBES`, as a mutation proof runs the probe its fault reaches; the clock
+ * check then counts only when musl/clockmusl is named. The exit status is 0
+ * when every probe and both checks pass, 1
  * otherwise, 2 for a usage error or a run that could not start, and 3 when
  * the kernel shell never appeared. `--selftest` checks the scoring on fixed
  * text.
@@ -198,6 +201,37 @@ static const char *const PROBES[] = {
        at the image root, and removes every one of them again. */
     "stickyprobe"};
 #define N_PROBES (int)(sizeof(PROBES) / sizeof(PROBES[0]))
+
+/* The probes --probe names, or none for every probe. */
+static const char *chosen[N_PROBES];
+static int n_chosen;
+
+/** Say whether probe `name` runs: every probe does when none is chosen. */
+static int runs(const char *name)
+{
+    int i;
+
+    for (i = 0; i < n_chosen; i++)
+        if (strcmp(chosen[i], name) == 0)
+            return 1;
+    return n_chosen == 0;
+}
+
+/** Choose probe `name` for --probe; 0, or -1 for a name `PROBES` lacks. */
+static int choose(const char *name)
+{
+    int i, j;
+
+    for (i = 0; i < N_PROBES; i++)
+        if (strcmp(PROBES[i], name) == 0) {
+            for (j = 0; j < n_chosen; j++)
+                if (chosen[j] == PROBES[i])
+                    return 0;
+            chosen[n_chosen++] = PROBES[i];
+            return 0;
+        }
+    return -1;
+}
 
 /* The probes of an interface only i386 has, which tests/Makefile builds for
    i686 alone: on a boot of another architecture each is reported as not run
@@ -922,6 +956,44 @@ static void send_line(const char *text)
  * clockmusl brackets that independent timestamp with its clock reads and
  * judges the whole error interval. QEMU reads the CMOS clock as UTC.
  */
+/* A probe's outcome in the run. */
+struct result {
+    const char *name;
+    char detail[128];
+    int ok;
+};
+
+/**
+ * Name each probe that was to run and has no result in `results`, the
+ * probes a hang left unrun, and give their count, which are failures.
+ */
+static int count_unrun(const struct result *results, int n_results)
+{
+    int missing = 0, i;
+    char names[4096];
+    size_t used = 0;
+
+    names[0] = '\0';
+    for (i = 0; i < N_PROBES; i++) {
+        int ran = !runs(PROBES[i]), j, want;
+
+        for (j = 0; j < n_results; j++)
+            if (strcmp(results[j].name, PROBES[i]) == 0)
+                ran = 1;
+        if (ran)
+            continue;
+        missing++;
+        want = snprintf(names + used, sizeof(names) - used, "%s%s", used ? " " : "", PROBES[i]);
+        if (want > 0 && (size_t)want < sizeof(names) - used)
+            used += (size_t)want;
+        else
+            used = sizeof(names) - 1;
+    }
+    if (missing > 0)
+        printf("runtests: %d probe(s) never ran: %s\n", missing, names);
+    return missing;
+}
+
 int main(int argc, char **argv)
 {
     const char *kernel = NULL, *initrd = NULL, *cpu = "max";
@@ -931,11 +1003,7 @@ int main(int argc, char **argv)
     char *qemu[32];
     int nq = 0, i;
     int out_pipe[2], in_pipe[2];
-    struct {
-        const char *name;
-        char detail[128];
-        int ok;
-    } results[N_PROBES];
+    struct result results[N_PROBES];
     int n_results = 0, fails = 0;
     int reference_port;
     int clock_ok = 0;
@@ -964,7 +1032,12 @@ int main(int argc, char **argv)
             steptmo = atof(argv[++i]);
         else if (strcmp(argv[i], "--boottmo") == 0 && i + 1 < argc)
             boottmo = atof(argv[++i]);
-        else {
+        else if (strcmp(argv[i], "--probe") == 0 && i + 1 < argc) {
+            if (choose(argv[++i]) != 0) {
+                fprintf(stderr, "runtests: no probe %s\n", argv[i]);
+                return 2;
+            }
+        } else {
             fprintf(stderr, "runtests: unknown option %s\n", argv[i]);
             return 2;
         }
@@ -1065,6 +1138,8 @@ int main(int argc, char **argv)
         char line[256];
         long end;
 
+        if (!runs(PROBES[i]))
+            continue;
         if (not_built_here(PROBES[i])) {
             results[n_results].name = PROBES[i];
             snprintf(results[n_results].detail, sizeof(results[n_results].detail),
@@ -1124,45 +1199,19 @@ int main(int argc, char **argv)
                results[i].ok ? "PASS" : "FAIL");
     }
 
-    /* Each probe a hang left unrun is a failure, and is named. */
-    {
-        int missing = 0;
-        char names[4096];
-        size_t used = 0;
-
-        names[0] = '\0';
-        for (i = 0; i < N_PROBES; i++) {
-            int ran = 0, j;
-
-            for (j = 0; j < n_results; j++)
-                if (strcmp(results[j].name, PROBES[i]) == 0)
-                    ran = 1;
-            if (!ran) {
-                int want;
-
-                missing++;
-                want = snprintf(names + used, sizeof(names) - used, "%s%s", used ? " " : "",
-                                PROBES[i]);
-                if (want > 0 && (size_t)want < sizeof(names) - used)
-                    used += (size_t)want;
-                else
-                    used = sizeof(names) - 1;
-            }
-        }
-        if (missing > 0) {
-            fails += missing;
-            printf("runtests: %d probe(s) never ran: %s\n", missing, names);
-        }
-    }
+    fails += count_unrun(results, n_results);
 
     /* The two checks count as failures but not as probes. */
     printf("  %-12s %-18s %s\n", "timing", selftest_detail, selftest_ok ? "PASS" : "FAIL");
     if (!selftest_ok)
         fails++;
-    printf("  %-12s %-18s %s\n", "clock", clock_detail, clock_ok ? "PASS" : "FAIL");
-    if (!clock_ok)
-        fails++;
+    if (runs("musl/clockmusl")) {
+        printf("  %-12s %-18s %s\n", "clock", clock_detail, clock_ok ? "PASS" : "FAIL");
+        if (!clock_ok)
+            fails++;
+    }
 
-    printf("runtests: %d of %d probes, %d failures\n", n_results, N_PROBES, fails);
+    printf("runtests: %d of %d probes, %d failures\n", n_results,
+           n_chosen != 0 ? n_chosen : N_PROBES, fails);
     return fails == 0 ? 0 : 1;
 }

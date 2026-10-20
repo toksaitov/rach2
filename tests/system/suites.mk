@@ -199,10 +199,13 @@ $(ETUDESERIAL): tests/system/runner/etudeserial.c tools/etude/guest/wire.c utils
 # to pass. Only a failing probe waits a step window out, so widening it costs
 # a passing run nothing.
 # `tests/run default`: the probe suite, every guest probe booted on the test
-# image in one machine and scored by the runner.
+# image in one machine and scored by the runner. DEFAULT_PROBES, empty but in
+# a proof's test (tests/system/default_probe.sh), names the probes to run.
+DEFAULT_PROBES =
 run-default: rach2 test-image $(RUNTESTS)
 	$(RUNTESTS) $(NIC_DEV) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --timeout 300 --steptmo 60 --log $(IMAGES_DIR)/default-test.log
+	    --timeout 300 --steptmo 60 --log $(IMAGES_DIR)/default-test.log \
+	    $(DEFAULT_PROBES:%=--probe %)
 # `tests/run etudeguest`: etude-guest on the test image's serial console, as
 # the debug shell's designated init, without the debug-exit port. The driver
 # stores the image's /hello and /ish without a transfer and utils' `yes` with
