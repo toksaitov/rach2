@@ -19,12 +19,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
-#include <sys/klog.h>
-#include <sys/mount.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+/*
+ * The fixtures volume, root, tmpfs, mountns, ipcns, utsns and log need the
+ * kernel's loop devices, mounts, namespaces or log. The code that makes them
+ * compiles where FIX_KERNEL is 1: on Linux, and on Rach2, whose cross
+ * compiler defines no operating system and whose build of etude-guest
+ * defines __rach2__. macOS has none of them, and the host tests compile this
+ * file there too: fixture_parse refuses those fixtures. Any other system does
+ * not compile this file.
+ */
+#if defined(__linux__) || defined(__rach2__)
+#define FIX_KERNEL 1
+#include <sys/klog.h>
+#include <sys/mount.h>
 
 /* unshare(2) and the flags of the Linux ABI, declared here because a host
  * test's include path finds the kernel's own sched.h first. */
@@ -33,6 +45,11 @@ int unshare(int flags);
 #define CLONE_NEWNS  0x00020000
 #define CLONE_NEWUTS 0x04000000
 #define CLONE_NEWIPC 0x08000000
+#endif
+#elif defined(__APPLE__)
+#define FIX_KERNEL 0
+#else
+#error "fixture.c: no fixtures for this system; a build for Rach2 defines __rach2__"
 #endif
 
 /* The kernel's log, read whole: SYSLOG_ACTION_READ_ALL, which leaves the
@@ -276,13 +293,28 @@ static const struct {
                {"ports", read_ports},         {"volume", read_volume}, {"root", read_root},
                {"tmpfs", read_tmpfs},         {"peer", read_peer}};
 
+/** Whether the fixture `kind` needs the kernel's loop devices, mounts,
+ * namespaces or log. */
+static int kernel_kind(const char *kind)
+{
+    static const char *const kinds[] = {"volume", "root",  "tmpfs", "mountns",
+                                        "ipcns",  "utsns", "log"};
+    size_t i;
+
+    for (i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++)
+        if (strcmp(kind, kinds[i]) == 0)
+            return 1;
+    return 0;
+}
+
 /**
  * Read the fixtures of an invocation, the array `list`, into `fx`. `has`
  * answers whether the invocation, `ctx`, has a file of a name.
  *
  * @return NULL, or `refused` with the fixture's name in `*why` when a
- * fixture is unknown, given twice where it may be given once, or given
- * values that do not fit its form.
+ * fixture is unknown, needs what the kernel of this system lacks, is given
+ * twice where it may be given once, or is given values that do not fit its
+ * form.
  */
 const char *fixture_parse(struct fixtures *fx, const struct eh_json *list, fix_has_file has,
                           const void *ctx, const char **why)
@@ -306,6 +338,8 @@ const char *fixture_parse(struct fixtures *fx, const struct eh_json *list, fix_h
         if (!k || k->type != 's' || r.n < 0)
             return ETUDE_ERR_REFUSED;
         *why = k->string;
+        if (!FIX_KERNEL && kernel_kind(k->string))
+            return ETUDE_ERR_REFUSED;
         for (i = 0; i < sizeof(readers) / sizeof(readers[0]); i++)
             if (strcmp(k->string, readers[i].kind) == 0)
                 break;
@@ -322,23 +356,6 @@ int fixture_simple(const struct fixtures *fx)
 {
     return !fx->nids && !fx->nports && !fx->nvol && !fx->has_root && !fx->tmpfs_bytes &&
            !fx->mountns && !fx->ipcns && !fx->utsns && !fx->pty && !fx->log && !fx->peer[0];
-}
-
-/** Append `line` and a newline to the attempt's record of what its
- * fixtures made, `DIR/fixtures`, which `fixture_settle` reads. */
-static void remember(const char *dir, const char *line)
-{
-    char path[FIX_PATH];
-    int fd;
-
-    if (fpath(path, "%s/fixtures%s", dir, "") < 0)
-        return;
-    fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
-    if (fd < 0)
-        return;
-    if (write(fd, line, strlen(line)) < 0 || write(fd, "\n", 1) < 0 || fsync(fd) < 0) {
-    }
-    close(fd);
 }
 
 /** Whether `id` is field 3 of a line of the colon-separated file `path`. */
@@ -421,6 +438,81 @@ static int port_free(long port)
             close(s);
     }
     return ok;
+}
+
+/** The reason an id or a port of `fx` cannot be given now, or NULL when
+ * each id is no account's and no process's and each port is free. */
+static const char *not_free(const struct fixtures *fx)
+{
+    int i;
+
+    for (i = 0; i < fx->nids; i++)
+        if (listed("/etc/passwd", fx->id_new[i]) || listed("/etc/group", fx->id_new[i]) ||
+            in_use(fx->id_new[i]))
+            return "an id is an account's or a process's";
+    for (i = 0; i < fx->nports; i++)
+        if (!port_free(fx->port_new[i]))
+            return "a port is in use";
+    return NULL;
+}
+
+/** Open the master side of the case's pseudo-terminal and name its slave;
+ * 0 or -1. */
+static int open_terminal(struct fixtures *fx)
+{
+    const char *name;
+
+    fx->pty_master = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC);
+    if (fx->pty_master < 0 || grantpt(fx->pty_master) < 0 || unlockpt(fx->pty_master) < 0 ||
+        !(name = ptsname(fx->pty_master)))
+        return -1;
+    return snprintf(fx->pty_slave, sizeof(fx->pty_slave), "%s", name) >= (int)sizeof(fx->pty_slave)
+               ? -1
+               : 0;
+}
+
+/** Make the slave side of the case's pseudo-terminal its descriptors 0 to
+ * 2 and its controlling terminal; 0 or -1. */
+static int enter_terminal(const struct fixtures *fx)
+{
+    int s = open(fx->pty_slave, O_RDWR);
+
+    if (s < 0 || ioctl(s, TIOCSCTTY, 0) < 0 || dup2(s, 0) < 0 || dup2(s, 1) < 0 || dup2(s, 2) < 0)
+        return -1;
+    if (s > 2)
+        close(s);
+    return 0;
+}
+
+/** Append to `out`, of FIX_ARG bytes, NAME=OLD:NEW,... of `n` pairs. */
+static void pair_arg(char *out, const char *name, const long *from, const long *to, int n)
+{
+    size_t len = (size_t)snprintf(out, FIX_ARG, "%s=", name);
+    int i;
+
+    for (i = 0; i < n && len < FIX_ARG; i++)
+        len +=
+            (size_t)snprintf(out + len, FIX_ARG - len, "%s%ld:%ld", i ? "," : "", from[i], to[i]);
+}
+
+/* The fixtures that need the kernel, where FIX_KERNEL is 1. */
+#if FIX_KERNEL
+
+/** Append `line` and a newline to the attempt's record of what its
+ * fixtures made, `DIR/fixtures`, which `fixture_settle` reads. */
+static void remember(const char *dir, const char *line)
+{
+    char path[FIX_PATH];
+    int fd;
+
+    if (fpath(path, "%s/fixtures%s", dir, "") < 0)
+        return;
+    fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+    if (fd < 0)
+        return;
+    if (write(fd, line, strlen(line)) < 0 || write(fd, "\n", 1) < 0 || fsync(fd) < 0) {
+    }
+    close(fd);
 }
 
 /** The first loop device that /proc/loop does not list, or -1. */
@@ -519,37 +611,6 @@ static char *read_log(long *len)
     return buf;
 }
 
-/** The reason an id or a port of `fx` cannot be given now, or NULL when
- * each id is no account's and no process's and each port is free. */
-static const char *not_free(const struct fixtures *fx)
-{
-    int i;
-
-    for (i = 0; i < fx->nids; i++)
-        if (listed("/etc/passwd", fx->id_new[i]) || listed("/etc/group", fx->id_new[i]) ||
-            in_use(fx->id_new[i]))
-            return "an id is an account's or a process's";
-    for (i = 0; i < fx->nports; i++)
-        if (!port_free(fx->port_new[i]))
-            return "a port is in use";
-    return NULL;
-}
-
-/** Open the master side of the case's pseudo-terminal and name its slave;
- * 0 or -1. */
-static int open_terminal(struct fixtures *fx)
-{
-    const char *name;
-
-    fx->pty_master = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC);
-    if (fx->pty_master < 0 || grantpt(fx->pty_master) < 0 || unlockpt(fx->pty_master) < 0 ||
-        !(name = ptsname(fx->pty_master)))
-        return -1;
-    return snprintf(fx->pty_slave, sizeof(fx->pty_slave), "%s", name) >= (int)sizeof(fx->pty_slave)
-               ? -1
-               : 0;
-}
-
 /** Make the directory `name` of the workspace in `dir` and, for a case
  * without a mount namespace, mount volume `v`, or the tmpfs when `v` is
  * NULL, on it, recording the mount; 0 or -1. */
@@ -573,96 +634,25 @@ static int mount_point(struct fixtures *fx, const char *dir, const char *name, s
     return 0;
 }
 
-/**
- * Make the fixtures of the attempt in `dir`, whose workspace has the
- * invocation's files, in etude-guest itself: check that each id is no
- * account's and no process's, and that each port is free; read the
- * kernel's log; open the pseudo-terminal; attach each volume and the
- * root's image; and mount the volumes and the tmpfs of a case without a
- * mount namespace of its own. What is made is written to `DIR/fixtures` as
- * it is made.
- *
- * @return NULL, or the error code with the reason in `*why`: `refused` for
- * an id or a port in use, `failed` for a fixture that could not be made.
- */
-const char *fixture_prepare(struct fixtures *fx, const char *dir, const char **why)
+/** Make the fixtures of `fx` that need the kernel, as fixture_prepare
+ * says; 0 or -1. */
+static int kernel_prepare(struct fixtures *fx, const char *dir)
 {
     int i;
 
-    if ((*why = not_free(fx)) != NULL)
-        return ETUDE_ERR_REFUSED;
-    *why = "a fixture could not be made";
-    if ((fx->log && !(fx->log_before = read_log(&fx->log_before_len))) ||
-        (fx->pty && open_terminal(fx) < 0))
-        return ETUDE_ERR_FAILED;
+    if (fx->log && !(fx->log_before = read_log(&fx->log_before_len)))
+        return -1;
     for (i = 0; i < fx->nvol; i++) {
         char name[16];
         snprintf(name, sizeof(name), "vol%d", i);
         if (attach(&fx->vol[i], dir) < 0 ||
             (fx->vol[i].mounted && mount_point(fx, dir, name, &fx->vol[i]) < 0))
-            return ETUDE_ERR_FAILED;
+            return -1;
     }
     if ((fx->has_root && attach(&fx->root, dir) < 0) ||
         (fx->tmpfs_bytes && mount_point(fx, dir, "tmpfs", NULL) < 0))
-        return ETUDE_ERR_FAILED;
-    return NULL;
-}
-
-/** Append to `out`, of FIX_ARG bytes, NAME=OLD:NEW,... of `n` pairs. */
-static void pair_arg(char *out, const char *name, const long *from, const long *to, int n)
-{
-    size_t len = (size_t)snprintf(out, FIX_ARG, "%s=", name);
-    int i;
-
-    for (i = 0; i < n && len < FIX_ARG; i++)
-        len +=
-            (size_t)snprintf(out + len, FIX_ARG - len, "%s%ld:%ld", i ? "," : "", from[i], to[i]);
-}
-
-/**
- * Append the arguments that give the fixtures' values to the program to
- * `argv`, which has `n` entries of `cap`: `ids=OLD:NEW,...`,
- * `ports=OLD:NEW,...`, `loops=DEVICE,...`, `peer=ADDRESS:PORT` and the
- * peer's NAME=VALUE arguments, and `root=PATH`, the private root
- * `WORK/root`, each when its fixture is there. The strings are allocated.
- *
- * @return the new count, or -1 when they do not fit.
- */
-int fixture_args(const struct fixtures *fx, const char *work, char **argv, int n, int cap)
-{
-    char arg[FIX_ARG];
-    int i;
-
-    if (n + 5 + fx->npeer_values >= cap)
         return -1;
-    if (fx->nids) {
-        pair_arg(arg, "ids", fx->id_old, fx->id_new, fx->nids);
-        argv[n++] = strdup(arg);
-    }
-    if (fx->nports) {
-        pair_arg(arg, "ports", fx->port_old, fx->port_new, fx->nports);
-        argv[n++] = strdup(arg);
-    }
-    if (fx->nvol) {
-        size_t len = (size_t)snprintf(arg, sizeof(arg), "loops=");
-        for (i = 0; i < fx->nvol; i++)
-            len += (size_t)snprintf(arg + len, sizeof(arg) - len, "%s/dev/loop%d", i ? "," : "",
-                                    fx->vol[i].loop);
-        argv[n++] = strdup(arg);
-    }
-    if (fx->peer[0]) {
-        snprintf(arg, sizeof(arg), "peer=%s", fx->peer);
-        argv[n++] = strdup(arg);
-    }
-    for (i = 0; i < fx->npeer_values; i++)
-        argv[n++] = strdup(fx->peer_value[i]);
-    if (fx->has_root) {
-        if (snprintf(arg, sizeof(arg), "root=%s/root", work) >= (int)sizeof(arg))
-            return -1;
-        argv[n++] = strdup(arg);
-    }
-    argv[n] = NULL;
-    return n;
+    return 0;
 }
 
 /** Copy the file `from` to `to` with its mode and owner; 0 or -1. */
@@ -804,19 +794,6 @@ static int enter_root(const struct fixtures *fx, const char *work, const char *p
     return 0;
 }
 
-/** Make the slave side of the case's pseudo-terminal its descriptors 0 to
- * 2 and its controlling terminal; 0 or -1. */
-static int enter_terminal(const struct fixtures *fx)
-{
-    int s = open(fx->pty_slave, O_RDWR);
-
-    if (s < 0 || ioctl(s, TIOCSCTTY, 0) < 0 || dup2(s, 0) < 0 || dup2(s, 1) < 0 || dup2(s, 2) < 0)
-        return -1;
-    if (s > 2)
-        close(s);
-    return 0;
-}
-
 /** Mount the volumes and the tmpfs of a case with a mount namespace of
  * its own in it; 0 or -1. */
 static int mount_private(const struct fixtures *fx, const char *work)
@@ -837,25 +814,15 @@ static int mount_private(const struct fixtures *fx, const char *work)
     return 0;
 }
 
-/**
- * Make, in the child before its exec, the fixtures that belong to its own
- * process: the pseudo-terminal as its descriptors 0 to 2 and controlling
- * terminal; its mount, IPC and UTS namespaces; the volumes and the tmpfs
- * mounted in its own mount namespace; and its private root. `prog`, of
- * `cap` bytes, is the program's path in the workspace, and becomes its path
- * in the root; `*dir` is the directory the child runs in.
- *
- * @return 0, or the errno of the step that failed.
- */
-int fixture_enter(const struct fixtures *fx, const char *work, char *prog, size_t cap,
-                  const char **dir)
+/** Make, in the child, the fixtures of `fx` that need the kernel, as
+ * fixture_enter says; 0, or the errno of the step that failed. */
+static int kernel_enter(const struct fixtures *fx, const char *work, char *prog, size_t cap,
+                        const char **dir)
 {
     errno = EIO;
-    if ((fx->pty && enter_terminal(fx) < 0) || (fx->mountns && unshare(CLONE_NEWNS) < 0) ||
-        (fx->ipcns && unshare(CLONE_NEWIPC) < 0) || (fx->utsns && unshare(CLONE_NEWUTS) < 0) ||
-        (fx->mountns && mount_private(fx, work) < 0))
+    if ((fx->mountns && unshare(CLONE_NEWNS) < 0) || (fx->ipcns && unshare(CLONE_NEWIPC) < 0) ||
+        (fx->utsns && unshare(CLONE_NEWUTS) < 0) || (fx->mountns && mount_private(fx, work) < 0))
         return errno;
-    *dir = work;
     if (fx->has_root) {
         if (enter_root(fx, work, prog) < 0)
             return errno;
@@ -905,16 +872,10 @@ static int detach(int n)
     return loop_command(line);
 }
 
-/**
- * Remove the fixtures of the attempt in `dir` once its processes have
- * ended: unmount what etude-guest mounted, detach the loop devices, close
- * the pseudo-terminal and keep the kernel's records as `DIR/log`. A mount
- * namespace of the case's own has ended with its last process, and the
- * kernel unmounted its mounts then.
- *
- * @return 0, or -1 when something made could not be removed.
- */
-int fixture_cleanup(struct fixtures *fx, const char *dir)
+/** Remove the fixtures of `fx` that need the kernel, as fixture_cleanup
+ * says, and the record of what they made once all of it is removed; 0, or
+ * -1 when something made could not be removed. */
+static int kernel_cleanup(struct fixtures *fx, const char *dir)
 {
     char path[FIX_PATH];
     int rc = 0, i;
@@ -933,10 +894,6 @@ int fixture_cleanup(struct fixtures *fx, const char *dir)
     for (i = 0; i < fx->nvol; i++)
         if (fx->vol[i].loop >= 0 && detach(fx->vol[i].loop) < 0)
             rc = -1;
-    if (fx->pty_master >= 0) {
-        close(fx->pty_master);
-        fx->pty_master = -1;
-    }
     if (fx->log && keep_log(fx, dir) < 0)
         rc = -1;
     free(fx->log_before);
@@ -945,16 +902,142 @@ int fixture_cleanup(struct fixtures *fx, const char *dir)
         unlink(path);
     return rc;
 }
+#endif
+
+/**
+ * Make the fixtures of the attempt in `dir`, whose workspace has the
+ * invocation's files, in etude-guest itself: check that each id is no
+ * account's and no process's, and that each port is free; read the
+ * kernel's log; attach each volume and the root's image; mount the volumes
+ * and the tmpfs of a case without a mount namespace of its own; and open the
+ * pseudo-terminal. What is made is written to `DIR/fixtures` as it is made.
+ *
+ * @return NULL, or the error code with the reason in `*why`: `refused` for
+ * an id or a port in use, `failed` for a fixture that could not be made.
+ */
+const char *fixture_prepare(struct fixtures *fx, const char *dir, const char **why)
+{
+    if ((*why = not_free(fx)) != NULL)
+        return ETUDE_ERR_REFUSED;
+    *why = "a fixture could not be made";
+#if FIX_KERNEL
+    if (kernel_prepare(fx, dir) < 0)
+        return ETUDE_ERR_FAILED;
+#else
+    (void)dir;
+#endif
+    if (fx->pty && open_terminal(fx) < 0)
+        return ETUDE_ERR_FAILED;
+    return NULL;
+}
+
+/**
+ * Append the arguments that give the fixtures' values to the program to
+ * `argv`, which has `n` entries of `cap`: `ids=OLD:NEW,...`,
+ * `ports=OLD:NEW,...`, `loops=DEVICE,...`, `peer=ADDRESS:PORT` and the
+ * peer's NAME=VALUE arguments, and `root=PATH`, the private root
+ * `WORK/root`, each when its fixture is there. The strings are allocated.
+ *
+ * @return the new count, or -1 when they do not fit.
+ */
+int fixture_args(const struct fixtures *fx, const char *work, char **argv, int n, int cap)
+{
+    char arg[FIX_ARG];
+    int i;
+
+    if (n + 5 + fx->npeer_values >= cap)
+        return -1;
+    if (fx->nids) {
+        pair_arg(arg, "ids", fx->id_old, fx->id_new, fx->nids);
+        argv[n++] = strdup(arg);
+    }
+    if (fx->nports) {
+        pair_arg(arg, "ports", fx->port_old, fx->port_new, fx->nports);
+        argv[n++] = strdup(arg);
+    }
+    if (fx->nvol) {
+        size_t len = (size_t)snprintf(arg, sizeof(arg), "loops=");
+        for (i = 0; i < fx->nvol; i++)
+            len += (size_t)snprintf(arg + len, sizeof(arg) - len, "%s/dev/loop%d", i ? "," : "",
+                                    fx->vol[i].loop);
+        argv[n++] = strdup(arg);
+    }
+    if (fx->peer[0]) {
+        snprintf(arg, sizeof(arg), "peer=%s", fx->peer);
+        argv[n++] = strdup(arg);
+    }
+    for (i = 0; i < fx->npeer_values; i++)
+        argv[n++] = strdup(fx->peer_value[i]);
+    if (fx->has_root) {
+        if (snprintf(arg, sizeof(arg), "root=%s/root", work) >= (int)sizeof(arg))
+            return -1;
+        argv[n++] = strdup(arg);
+    }
+    argv[n] = NULL;
+    return n;
+}
+
+/**
+ * Make, in the child before its exec, the fixtures that belong to its own
+ * process: the pseudo-terminal as its descriptors 0 to 2 and controlling
+ * terminal; its mount, IPC and UTS namespaces; the volumes and the tmpfs
+ * mounted in its own mount namespace; and its private root. `prog`, of
+ * `cap` bytes, is the program's path in the workspace, and becomes its path
+ * in the root; `*dir` is the directory the child runs in.
+ *
+ * @return 0, or the errno of the step that failed.
+ */
+int fixture_enter(const struct fixtures *fx, const char *work, char *prog, size_t cap,
+                  const char **dir)
+{
+    errno = EIO;
+    if (fx->pty && enter_terminal(fx) < 0)
+        return errno;
+    *dir = work;
+#if FIX_KERNEL
+    return kernel_enter(fx, work, prog, cap, dir);
+#else
+    (void)prog;
+    (void)cap;
+    return 0;
+#endif
+}
+
+/**
+ * Remove the fixtures of the attempt in `dir` once its processes have
+ * ended: close the pseudo-terminal, unmount what etude-guest mounted, detach
+ * the loop devices and keep the kernel's records as `DIR/log`. A mount
+ * namespace of the case's own has ended with its last process, and the
+ * kernel unmounted its mounts then.
+ *
+ * @return 0, or -1 when something made could not be removed.
+ */
+int fixture_cleanup(struct fixtures *fx, const char *dir)
+{
+    if (fx->pty_master >= 0) {
+        close(fx->pty_master);
+        fx->pty_master = -1;
+    }
+#if FIX_KERNEL
+    return kernel_cleanup(fx, dir);
+#else
+    (void)dir;
+    return 0;
+#endif
+}
 
 /**
  * Remove what the record `DIR/fixtures` says an attempt's fixtures made,
  * for an attempt whose etude-guest ended before it could: its mounts in
- * the order opposite to their making, then its loop devices.
+ * the order opposite to their making, then its loop devices. Only the
+ * fixtures that need the kernel write the record, so where FIX_KERNEL is 0
+ * there is nothing to remove.
  *
  * @return 0, or -1 when something is left.
  */
 int fixture_settle(const char *dir)
 {
+#if FIX_KERNEL
     char path[FIX_PATH];
     char text[8192];
     char *line[64];
@@ -982,4 +1065,8 @@ int fixture_settle(const char *dir)
     if (rc == 0)
         unlink(path);
     return rc;
+#else
+    (void)dir;
+    return 0;
+#endif
 }

@@ -3,7 +3,9 @@
 # utils/Makefile links the utilities. The program lands at
 # build/tools/etude/guest/etude-guest, or under build/x86_64/ (mk/build.mk),
 # and the test image stages it. tests/host/etude_guest_hosttest.c compiles the
-# same sources with the host's compiler.
+# same sources with the host's compiler. fixture.c compiles the fixtures that
+# need the kernel under __linux__ or __rach2__, and the cross compiler defines
+# no operating system, so the build defines __rach2__.
 TOP := ../../..
 COMPONENT := tools/etude/guest
 include $(TOP)/mk/toolchain.mk
@@ -17,7 +19,7 @@ CRTI    := $(PREFIX)/lib/crti.o
 CRTN    := $(PREFIX)/lib/crtn.o
 
 CFLAGS  = $(ARCH_CFLAGS) -std=c99 -static -nostdlib -nostartfiles -isystem $(PREFIX)/include \
-          -I . -I ../include -I .. -I $(TOP)/utils -O2 -Wall -Wextra -MMD -MP
+          -D__rach2__ -I . -I ../include -I .. -I $(TOP)/utils -O2 -Wall -Wextra -MMD -MP
 LINK_PRE  = $(CRT1) $(CRTI)
 LINK_POST = $(PREFIX)/lib/libc.a $(LIBGCC) $(CRTN) -Wl,-z,noexecstack $(ARCH_LDFLAGS)
 
