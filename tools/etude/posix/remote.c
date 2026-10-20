@@ -1083,6 +1083,7 @@ static int send_cancel(struct etude_remote *r, struct collect *c, struct run_clo
     if (send_frame(r, ETUDE_CMD_CANCEL, a, 2) != 0)
         return 1;
     k->cancelled = 1;
+    c->res->cancelled = 1;
     end = posix_now_us() + k->grace + 2 * r->conf.stage_us;
     if (end < k->limit)
         k->limit = end;
