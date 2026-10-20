@@ -1,0 +1,884 @@
+/* Drive etude-guest through pipes, as the controller drives it through SSH
+ * and the serial console, and check the contracts of its commands.
+ * host-deps: tools/etude/guest/guest.c tools/etude/guest/wire.c
+ * host-deps: tools/etude/history_json.c utils/sha256.c
+ * host-cflags: -I tools/etude/include -I tools/etude -I tools/etude/guest
+ * host-cflags: -I utils
+ */
+#include "wire.h"
+#include "sha256.h"
+#include <etude/frame.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
+
+int etude_guest_main(int argc, char **argv);
+
+static int failures;
+static char work[512];
+static pid_t guest = -1;
+static int to_guest = -1;
+static int from_guest = -1;
+
+/* The session of the run these tests make, and the boot the guest gave. */
+static const char session[] = "5e551011a0000001";
+static char boot[ETUDE_FRAME_TOKEN_LEN + 1];
+static unsigned long seq;
+static unsigned long cmd_no = 1;
+
+/* Over the serial console the test acknowledges each frame it reads, as a
+ * controller does, and drops a frame sent again below `seen`. */
+static int serial_acks;
+static unsigned long long seen;
+
+#define CHECK(test, detail)                                                \
+    do {                                                                   \
+        if (!(test)) {                                                     \
+            fprintf(stderr, "etude_guest_hosttest: failed: %s\n", detail); \
+            failures++;                                                    \
+        }                                                                  \
+    } while (0)
+
+/* One frame read back, with copies of its type and fields. */
+struct got {
+    char line[70000];
+    char type[16];
+    int nfields;
+    char field[WIRE_FIELDS_MAX][8192];
+    unsigned long long seq;
+    int has_ack;
+    unsigned long long ack;
+};
+
+static char in_buf[200000];
+static size_t in_len;
+
+/** Remove the tree at `path` (the test's own scratch). */
+static void remove_tree(const char *path)
+{
+    char cmd[700];
+
+    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", path);
+    if (system(cmd) != 0)
+        fprintf(stderr, "etude_guest_hosttest: could not remove %s\n", path);
+}
+
+/** End the guest, if one runs, and close its pipes. */
+static void end_guest(void)
+{
+    if (to_guest >= 0)
+        close(to_guest);
+    if (from_guest >= 0)
+        close(from_guest);
+    to_guest = from_guest = -1;
+    if (guest > 0) {
+        kill(guest, SIGKILL);
+        waitpid(guest, NULL, 0);
+    }
+    guest = -1;
+}
+
+/** Reap the guest and remove every fixture, on every exit path. */
+static void cleanup(void)
+{
+    end_guest();
+    if (*work)
+        remove_tree(work);
+}
+
+/** Exit through the cleanup after a signal. */
+static void stopped(int number)
+{
+    exit(128 + number);
+}
+
+/** Start etude-guest with the arguments given, its input and output on
+ * pipes; the state directory is the test's. */
+static void start_guest(const char *mode, ...)
+{
+    int in[2];
+    int out[2];
+    char *argv[16];
+    char state[600];
+    va_list ap;
+    int n = 0;
+
+    snprintf(state, sizeof(state), "%s/state", work);
+    if (pipe(in) < 0 || pipe(out) < 0) {
+        perror("pipe");
+        exit(2);
+    }
+    argv[n++] = "etude-guest";
+    if (mode)
+        argv[n++] = (char *)mode;
+    argv[n++] = "--state";
+    argv[n++] = state;
+    va_start(ap, mode);
+    for (;;) {
+        char *a = va_arg(ap, char *);
+        if (!a)
+            break;
+        argv[n++] = a;
+    }
+    va_end(ap);
+    argv[n] = NULL;
+    guest = fork();
+    if (guest == 0) {
+        dup2(in[0], 0);
+        dup2(out[1], 1);
+        close(in[0]);
+        close(in[1]);
+        close(out[0]);
+        close(out[1]);
+        _exit(etude_guest_main(n, argv));
+    }
+    close(in[0]);
+    close(out[1]);
+    to_guest = in[1];
+    from_guest = out[0];
+    in_len = 0;
+    seq = 0;
+}
+
+/** Monotonic milliseconds. */
+static long long now_ms(void)
+{
+    struct timespec ts;
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/** Read one line from the guest within `ms`; 0, or -1 at the end or on
+ * time. */
+static int read_line(char *out, size_t cap, int ms)
+{
+    long long until = now_ms() + ms;
+
+    for (;;) {
+        char *nl = memchr(in_buf, '\n', in_len);
+        struct pollfd p = {from_guest, POLLIN, 0};
+        ssize_t r;
+        if (nl) {
+            size_t n = (size_t)(nl - in_buf);
+            if (n >= cap)
+                n = cap - 1;
+            memcpy(out, in_buf, n);
+            out[n] = '\0';
+            in_len -= (size_t)(nl - in_buf) + 1;
+            memmove(in_buf, nl + 1, in_len);
+            return 0;
+        }
+        if (now_ms() >= until || poll(&p, 1, (int)(until - now_ms())) <= 0)
+            return -1;
+        r = read(from_guest, in_buf + in_len, sizeof(in_buf) - in_len);
+        if (r <= 0)
+            return -1;
+        in_len += (size_t)r;
+    }
+}
+
+/** Read the next frame within `ms`; 0, or -1. A line that is not a frame is
+ * an error here, since nothing but frames may come from etude-guest. */
+static int next_frame(struct got *g, int ms)
+{
+    static char copy[sizeof(g->line)];
+    struct wire_frame f;
+    long long until = now_ms() + ms;
+    int i;
+
+again:
+    if (read_line(g->line, sizeof(g->line), (int)(until - now_ms())) < 0)
+        return -1;
+    strcpy(copy, g->line);
+    if (wire_parse(copy, strlen(copy), &f) < 0) {
+        fprintf(stderr, "etude_guest_hosttest: not a frame: %s\n", g->line);
+        failures++;
+        return -1;
+    }
+    snprintf(g->type, sizeof(g->type), "%s", f.type);
+    g->nfields = f.nfields;
+    for (i = 0; i < f.nfields; i++)
+        snprintf(g->field[i], sizeof(g->field[i]), "%s", f.field[i]);
+    g->seq = f.seq;
+    g->has_ack = f.has_ack;
+    g->ack = f.ack;
+    if (strcmp(f.type, ETUDE_EV_ALIVE) == 0)
+        snprintf(boot, sizeof(boot), "%s", f.boot);
+    if (serial_acks && strcmp(f.type, ETUDE_EV_ALIVE) != 0 && strcmp(f.type, ETUDE_CMD_ACK) != 0) {
+        char ack[300];
+        size_t n =
+            wire_encode(ack, sizeof(ack), session, boot, seq, 1, f.seq, ETUDE_CMD_ACK, 0, NULL);
+        if (write(to_guest, ack, n) != (ssize_t)n)
+            failures++;
+        if (f.seq < seen)
+            goto again;
+        seen = f.seq + 1;
+    }
+    return 0;
+}
+
+/** Read frames until one of `type` within `ms`, skipping acks; 0 or -1. */
+static int expect(struct got *g, const char *type, int ms)
+{
+    long long until = now_ms() + ms;
+
+    while (now_ms() < until) {
+        if (next_frame(g, (int)(until - now_ms())) < 0)
+            return -1;
+        if (strcmp(g->type, ETUDE_CMD_ACK) == 0)
+            continue;
+        if (strcmp(g->type, type) == 0)
+            return 0;
+        fprintf(stderr, "etude_guest_hosttest: %s where %s was due: %s\n", g->type, type, g->line);
+        return -1;
+    }
+    return -1;
+}
+
+/** Write a frame of the given SEQ, which need not be the next. */
+static void send_seq(unsigned long s, const char *type, int n, const char *const *field)
+{
+    char line[70000];
+    size_t len = wire_encode(line, sizeof(line), session, boot, s, 0, 0, type, n, field);
+
+    if (len == 0 || write(to_guest, line, len) != (ssize_t)len) {
+        fprintf(stderr, "etude_guest_hosttest: could not send %s\n", type);
+        failures++;
+    }
+}
+
+/** Send a frame with the next SEQ; the fields are a list ending in NULL. */
+static void send_cmd(const char *type, ...)
+{
+    const char *field[WIRE_FIELDS_MAX];
+    va_list ap;
+    int n = 0;
+
+    va_start(ap, type);
+    for (;;) {
+        const char *a = va_arg(ap, const char *);
+        if (!a)
+            break;
+        field[n++] = a;
+    }
+    va_end(ap);
+    send_seq(seq++, type, n, field);
+}
+
+/** The next command number, as text. */
+static const char *new_cmd(char *out)
+{
+    sprintf(out, "%lu", cmd_no++);
+    return out;
+}
+
+/** The SHA-256 of `n` bytes, in hexadecimal. */
+static void digest(const void *p, size_t n, char hex[65])
+{
+    struct sha256 s;
+    unsigned char d[32];
+
+    sha256_init(&s);
+    sha256_update(&s, p, n);
+    sha256_final(&s, d);
+    sha256_hex(d, hex);
+}
+
+/** Take the alive frame and open the session with a hello. */
+static void hello(int maxframe)
+{
+    struct got g;
+    char c[24];
+    char max[24];
+
+    CHECK(next_frame(&g, 5000) == 0 && strcmp(g.type, ETUDE_EV_ALIVE) == 0, "alive comes first");
+    snprintf(max, sizeof(max), "%d", maxframe);
+    send_cmd(ETUDE_CMD_HELLO, new_cmd(c), "1", max, (char *)NULL);
+    CHECK(expect(&g, ETUDE_EV_READY, 5000) == 0 && strcmp(g.field[0], c) == 0 &&
+              strcmp(g.field[1], "1") == 0,
+          "hello is answered by ready, version 1");
+}
+
+/** Store `n` bytes as file `name` with put, data and seal; the digest goes
+ * to `hex` and the put's CMD to `c`. */
+static void put_file(const char *name, const char *text, size_t n, const char *mode, char hex[65],
+                     char c[24])
+{
+    struct got g;
+    char size[24];
+    char off[24];
+    char b64[200];
+    size_t i;
+
+    digest(text, n, hex);
+    snprintf(size, sizeof(size), "%zu", n);
+    send_cmd(ETUDE_CMD_PUT, new_cmd(c), name, size, hex, mode, (char *)NULL);
+    for (i = 0; i < n; i += 90) {
+        size_t m = n - i < 90 ? n - i : 90;
+        wire_base64((const unsigned char *)text + i, m, b64);
+        snprintf(off, sizeof(off), "%zu", i);
+        send_cmd(ETUDE_CMD_DATA, c, off, b64, (char *)NULL);
+    }
+    send_cmd(ETUDE_CMD_SEAL, c, (char *)NULL);
+    CHECK(expect(&g, ETUDE_EV_STORED, 5000) == 0 && strcmp(g.field[0], c) == 0 &&
+              strcmp(g.field[2], hex) == 0,
+          "a sealed put is stored with its digest");
+}
+
+/** Store a shell script as `name` and an invocation of it for the attempt
+ * `token`; the invocation's digest goes to `inv`. */
+static void put_case(const char *name, const char *script, const char *token, const char *role,
+                     long deadline_ms, char inv[65])
+{
+    char text[4096];
+    char hex[65];
+    char c[24];
+    int n;
+
+    put_file(name, script, strlen(script), "0755", hex, c);
+    n = snprintf(
+        text, sizeof(text),
+        "{\"schema_version\": 1, \"run_id\": \"etude-guest-hosttest\", "
+        "\"attempt_id\": \"attempt-%s\", \"attempt_token\": \"%s\", "
+        "\"case_id\": \"host.etude.guest\", \"program\": \"%s\", \"arguments\": [\"a b\"], "
+        "\"environment\": {\"PATH\": \"/bin:/usr/bin\", \"HOME\": \"${WORKSPACE}\", "
+        "\"MARKS\": \"%s/marks\"}, \"stdin\": null, \"role\": \"%s\", "
+        "\"files\": [{\"name\": \"%s\", \"sha256\": \"%s\", \"size_bytes\": %zu, "
+        "\"mode\": \"0755\"}], \"fixtures\": [{\"fixture\": \"workspace\", \"given\": []}], "
+        "\"deadline_us\": %ld, \"grace_us\": 500000, \"output_max_bytes\": 65536}",
+        token, token, name, work, role, name, hex, strlen(script), deadline_ms * 1000);
+    put_file("invocation.json", text, (size_t)n, "0644", inv, c);
+}
+
+/* The output, the end and the cleanup an attempt reported. */
+struct ending {
+    char out[4096];
+    char err[4096];
+    char kind[16];
+    char value[16];
+    char cleaned[16];
+    long pid;
+    int events;
+};
+
+/** Read an attempt's frames, from started to cleaned, into `e`; 0 or -1. */
+static int collect(struct ending *e, const char *c, const char *token, int ms)
+{
+    struct got g;
+    long long until = now_ms() + ms;
+
+    memset(e, 0, sizeof(*e));
+    while (now_ms() < until && next_frame(&g, (int)(until - now_ms())) == 0) {
+        if (strcmp(g.type, ETUDE_CMD_ACK) == 0)
+            continue;
+        e->events++;
+        if (strcmp(g.field[0], c) != 0 || strcmp(g.field[1], token) != 0) {
+            fprintf(stderr, "etude_guest_hosttest: a frame of another attempt: %s\n", g.line);
+            return -1;
+        }
+        if (strcmp(g.type, ETUDE_EV_STARTED) == 0) {
+            e->pid = atol(g.field[2]);
+        } else if (strcmp(g.type, ETUDE_EV_OUT) == 0) {
+            unsigned char bytes[8192];
+            char *dst = strcmp(g.field[2], "1") == 0 ? e->out : e->err;
+            long n = wire_unbase64(g.field[4], bytes);
+            size_t off = strtoul(g.field[3], NULL, 10);
+            if (n < 0 || off + (size_t)n >= sizeof(e->out) || off != strlen(dst))
+                return -1;
+            memcpy(dst + off, bytes, (size_t)n);
+            dst[off + (size_t)n] = '\0';
+        } else if (strcmp(g.type, ETUDE_EV_EXIT) == 0) {
+            snprintf(e->kind, sizeof(e->kind), "%.15s", g.field[2]);
+            snprintf(e->value, sizeof(e->value), "%.15s", g.field[3]);
+        } else if (strcmp(g.type, ETUDE_EV_CLEANED) == 0) {
+            snprintf(e->cleaned, sizeof(e->cleaned), "%.15s", g.field[2]);
+            return 0;
+        }
+    }
+    return -1;
+}
+
+/** The number of lines of the marks file, where the scripts count their
+ * runs. */
+static int marks(void)
+{
+    char path[600];
+    FILE *f;
+    int c;
+    int n = 0;
+
+    snprintf(path, sizeof(path), "%s/marks", work);
+    f = fopen(path, "r");
+    if (!f)
+        return 0;
+    while ((c = fgetc(f)) != EOF)
+        n += c == '\n';
+    fclose(f);
+    return n;
+}
+
+/** Whether a process `pid` exists. */
+static int alive(long pid)
+{
+    return pid > 0 && (kill((pid_t)pid, 0) == 0 || errno != ESRCH);
+}
+
+/** Read a file whose first line is a PID, as a script writes one. */
+static long read_pid(const char *name)
+{
+    char path[600];
+    FILE *f;
+    long pid = 0;
+
+    snprintf(path, sizeof(path), "%s/%s", work, name);
+    f = fopen(path, "r");
+    if (!f)
+        return 0;
+    if (fscanf(f, "%ld", &pid) != 1)
+        pid = 0;
+    fclose(f);
+    return pid;
+}
+
+/** Open the read end of the FIFO `name` in the scratch directory, which an
+ * attempt's script opens for writing as its descendants' descriptor 9; -1 on
+ * failure. Open it before the attempt runs. */
+static int watch(const char *name)
+{
+    char path[600];
+
+    snprintf(path, sizeof(path), "%s/%s", work, name);
+    if (mkfifo(path, 0600) < 0 && errno != EEXIST)
+        return -1;
+    return open(path, O_RDONLY | O_NONBLOCK);
+}
+
+/** Wait up to `ms` until no process has the FIFO `fd` open for writing,
+ * which is when every process of the attempt has exited; whether they have.
+ * Call it only after the attempt has run, and it closes `fd`. */
+static int all_gone(int fd, int ms)
+{
+    long long until = now_ms() + ms;
+    struct pollfd p;
+    char buf[64];
+    ssize_t r = -1;
+
+    while (fd >= 0 && r != 0 && now_ms() < until) {
+        p.fd = fd;
+        p.events = POLLIN;
+        p.revents = 0;
+        if (poll(&p, 1, (int)(until - now_ms())) <= 0)
+            break;
+        r = read(fd, buf, sizeof(buf));
+    }
+    if (fd >= 0)
+        close(fd);
+    return r == 0;
+}
+
+/** Wait up to `ms` for the guest to close its output, then reap it, with
+ * its status in `st`; 0, or -1 when its output stays open. */
+static int wait_guest(int *st, int ms)
+{
+    long long until = now_ms() + ms;
+    struct pollfd p;
+    char buf[512];
+    ssize_t r = -1;
+
+    while (r != 0 && now_ms() < until) {
+        p.fd = from_guest;
+        p.events = POLLIN;
+        p.revents = 0;
+        if (poll(&p, 1, (int)(until - now_ms())) <= 0)
+            return -1;
+        r = read(from_guest, buf, sizeof(buf));
+        if (r < 0)
+            return -1;
+    }
+    if (r != 0 || waitpid(guest, st, 0) != guest)
+        return -1;
+    guest = -1;
+    return 0;
+}
+
+/** Read an attempt's output frames until its standard output has said
+ * `ready`; 0, or -1 when it ends or 10 seconds pass first. */
+static int wait_ready(void)
+{
+    static char text[8192];
+    unsigned char bytes[8192];
+    struct got *g = malloc(sizeof(*g));
+    long long until = now_ms() + 10000;
+    size_t len = 0;
+    int rc = -1;
+
+    while (g && now_ms() < until && expect(g, ETUDE_EV_OUT, (int)(until - now_ms())) == 0) {
+        long n = wire_unbase64(g->field[4], bytes);
+        if (n < 0 || strcmp(g->field[2], "1") != 0 || len + (size_t)n >= sizeof(text))
+            continue;
+        memcpy(text + len, bytes, (size_t)n);
+        len += (size_t)n;
+        text[len] = '\0';
+        if (strstr(text, "ready\n")) {
+            rc = 0;
+            break;
+        }
+    }
+    free(g);
+    return rc;
+}
+
+/** End the session with bye and require the guest to exit with `status`. */
+static void bye(int status)
+{
+    struct got g;
+    char c[24];
+    int st = -1;
+
+    send_cmd(ETUDE_CMD_BYE, new_cmd(c), (char *)NULL);
+    CHECK(expect(&g, ETUDE_CMD_BYE, 5000) == 0, "bye is answered by bye");
+    close(to_guest);
+    to_guest = -1;
+    CHECK(wait_guest(&st, 10000) == 0 && WIFEXITED(st) && WEXITSTATUS(st) == status,
+          "etude-guest exits after bye");
+    close(from_guest);
+    from_guest = -1;
+}
+
+/** A pass, an intended failure, a repeated command and a reused number,
+ * over standard I/O. */
+static void check_pass_fail_repeat(void)
+{
+    static const char pass[] = "#!/bin/sh\necho \"@etude 1 begin host.etude.guest\"\n"
+                               "echo \"$1|$HOME|$(pwd)\"\necho run >> \"$MARKS\"\n"
+                               "echo \"@etude 1 end 0\"\n";
+    static const char fail[] = "#!/bin/sh\necho broken >&2\nexit 3\n";
+    struct ending e;
+    struct got g;
+    char inv[65];
+    char inv2[65];
+    char c[24];
+    char c2[24];
+    char expected[2048];
+
+    start_guest("--stdio", (char *)NULL);
+    hello(ETUDE_FRAME_STDIO_MAX);
+    put_case("passing", pass, "00000000000000a1", "ordinary", 30000, inv);
+    send_cmd(ETUDE_CMD_RUN, new_cmd(c), "00000000000000a1", inv, (char *)NULL);
+    CHECK(collect(&e, c, "00000000000000a1", 10000) == 0, "a passing attempt reports its end");
+    snprintf(expected, sizeof(expected),
+             "@etude 1 begin host.etude.guest\na b|%s/state/a/00000000000000a1/work|%s/state/a/"
+             "00000000000000a1/work\n@etude 1 end 0\n",
+             work, work);
+    CHECK(strcmp(e.out, expected) == 0, "the program's output comes back whole, in its workspace");
+    CHECK(strcmp(e.kind, "exited") == 0 && strcmp(e.value, "0") == 0, "a pass exits 0");
+    CHECK(strcmp(e.cleaned, "confirmed") == 0, "a pass is cleaned");
+    CHECK(marks() == 1, "the program ran once");
+
+    /* The same command again: the same events, and no second run. */
+    send_cmd(ETUDE_CMD_RUN, c, "00000000000000a1", inv, (char *)NULL);
+    {
+        struct ending again;
+        CHECK(collect(&again, c, "00000000000000a1", 10000) == 0 && again.pid == e.pid &&
+                  strcmp(again.out, e.out) == 0 && strcmp(again.kind, e.kind) == 0 &&
+                  strcmp(again.cleaned, e.cleaned) == 0,
+              "a repeated run is answered by the same events");
+    }
+    CHECK(marks() == 1, "a repeated run does not run the program again");
+
+    /* The number again with other fields, and another command for the same
+     * attempt. */
+    send_cmd(ETUDE_CMD_RUN, c, "00000000000000a2", inv, (char *)NULL);
+    CHECK(expect(&g, ETUDE_EV_ERROR, 5000) == 0 && strcmp(g.field[0], c) == 0 &&
+              strcmp(g.field[1], ETUDE_ERR_CONFLICT) == 0,
+          "a command number reused with other fields is a conflict");
+    send_cmd(ETUDE_CMD_RUN, new_cmd(c2), "00000000000000a1", inv, (char *)NULL);
+    CHECK(expect(&g, ETUDE_EV_ERROR, 5000) == 0 && strcmp(g.field[1], ETUDE_ERR_CONFLICT) == 0,
+          "a second command for one attempt is a conflict");
+    CHECK(marks() == 1, "neither conflict runs the program");
+
+    /* An intended failure keeps its status and its standard error. */
+    put_case("failing", fail, "00000000000000b1", "ordinary", 30000, inv2);
+    send_cmd(ETUDE_CMD_RUN, new_cmd(c), "00000000000000b1", inv2, (char *)NULL);
+    CHECK(collect(&e, c, "00000000000000b1", 10000) == 0 && strcmp(e.kind, "exited") == 0 &&
+              strcmp(e.value, "3") == 0 && strcmp(e.err, "broken\n") == 0 &&
+              strcmp(e.cleaned, "confirmed") == 0,
+          "an intended failure reports exit 3 and its standard error");
+
+    /* status reads the final events again; remove takes the workspace. */
+    send_cmd(ETUDE_CMD_STATUS, new_cmd(c2), "00000000000000b1", (char *)NULL);
+    CHECK(expect(&g, ETUDE_EV_STATE, 5000) == 0 && strcmp(g.field[2], "cleaned") == 0,
+          "status of an ended attempt says cleaned");
+    CHECK(expect(&g, ETUDE_EV_EXIT, 5000) == 0 && strcmp(g.field[0], c) == 0 &&
+              strcmp(g.field[3], "3") == 0,
+          "status sends the exit again");
+    CHECK(expect(&g, ETUDE_EV_USAGE, 5000) == 0 && expect(&g, ETUDE_EV_CLEANED, 5000) == 0,
+          "status sends usage and cleaned again");
+    send_cmd(ETUDE_CMD_GET, new_cmd(c2), "00000000000000b1/out.2", (char *)NULL);
+    CHECK(expect(&g, ETUDE_CMD_DATA, 5000) == 0 && strcmp(g.field[2], "YnJva2VuCg==") == 0,
+          "get sends the file in data frames");
+    CHECK(expect(&g, ETUDE_EV_SENT, 5000) == 0 && strcmp(g.field[2], "7") == 0,
+          "get ends with sent and the size");
+    send_cmd(ETUDE_CMD_GET, new_cmd(c2), "00000000000000b1/../00000000000000a1/out.1",
+             (char *)NULL);
+    CHECK(expect(&g, ETUDE_EV_ERROR, 5000) == 0 && strcmp(g.field[1], ETUDE_ERR_UNKNOWN) == 0,
+          "get refuses a path out of the attempt");
+    send_cmd(ETUDE_CMD_REMOVE, new_cmd(c2), "00000000000000b1", (char *)NULL);
+    CHECK(expect(&g, ETUDE_EV_REMOVED, 5000) == 0, "remove answers removed");
+    snprintf(expected, sizeof(expected), "%s/state/a/00000000000000b1/work", work);
+    CHECK(access(expected, F_OK) != 0, "remove takes the workspace");
+
+    /* An invocation of the init role is refused over standard I/O. */
+    put_case("asinit", fail, "00000000000000c1", "init", 30000, inv2);
+    send_cmd(ETUDE_CMD_RUN, new_cmd(c), "00000000000000c1", inv2, (char *)NULL);
+    CHECK(expect(&g, ETUDE_EV_ERROR, 5000) == 0 && strcmp(g.field[1], ETUDE_ERR_REFUSED) == 0,
+          "run refuses the init role");
+    send_cmd(ETUDE_CMD_EXEC, new_cmd(c), "00000000000000c1", inv2, (char *)NULL);
+    CHECK(expect(&g, ETUDE_EV_ERROR, 5000) == 0 && strcmp(g.field[1], ETUDE_ERR_REFUSED) == 0,
+          "exec is refused over standard I/O");
+
+    /* A damaged transfer is not stored. */
+    send_cmd(ETUDE_CMD_PUT, new_cmd(c), "damaged", "3", inv, "0644", (char *)NULL);
+    send_cmd(ETUDE_CMD_DATA, c, "0", "YWJj", (char *)NULL);
+    send_cmd(ETUDE_CMD_SEAL, c, (char *)NULL);
+    CHECK(expect(&g, ETUDE_EV_ERROR, 5000) == 0 && strcmp(g.field[1], ETUDE_ERR_DAMAGED) == 0,
+          "content that does not match its digest is damaged");
+    bye(0);
+}
+
+/** A cancellation, a deadline, a child that left its group and a lost
+ * connection: each ends the attempt as stopped and leaves no process. */
+static void check_interruptions(void)
+{
+    static const char hang[] = "#!/bin/sh\nexec 9> \"$MARKS.open\"\n"
+                               "echo $$ > \"$MARKS.leader\"\n"
+                               "sleep 60 &\necho $! > \"$MARKS.member\"\n"
+                               "setsid sleep 60 &\necho \"@etude 1 child $!\"\n"
+                               "echo $! > \"$MARKS.escaped\"\necho ready\nwait\n";
+    static const char ignore[] = "#!/bin/sh\ntrap '' TERM\nexec 9> \"$MARKS.open\"\n"
+                                 "echo $$ > \"$MARKS.leader\"\n"
+                                 "echo ready\nwhile :; do sleep 1; done\n";
+    struct ending e;
+    struct got g;
+    char inv[65];
+    char c[24];
+    char c2[24];
+    long leader;
+    long member;
+    long escaped;
+    int open_end;
+    int st;
+
+    start_guest("--stdio", (char *)NULL);
+    hello(ETUDE_FRAME_STDIO_MAX);
+
+    /* cancel: SIGTERM to the group, and the reported child ended too. */
+    put_case("hanging", hang, "00000000000000d1", "ordinary", 60000, inv);
+    open_end = watch("marks.open");
+    send_cmd(ETUDE_CMD_RUN, new_cmd(c), "00000000000000d1", inv, (char *)NULL);
+    CHECK(expect(&g, ETUDE_EV_STARTED, 5000) == 0, "the hanging attempt starts");
+    CHECK(wait_ready() == 0, "the attempt says it is ready");
+    leader = read_pid("marks.leader");
+    member = read_pid("marks.member");
+    escaped = read_pid("marks.escaped");
+    CHECK(alive(leader) && alive(member) && alive(escaped), "the attempt's processes run");
+    send_cmd(ETUDE_CMD_CANCEL, new_cmd(c2), "00000000000000d1", (char *)NULL);
+    CHECK(expect(&g, ETUDE_EV_STATE, 5000) == 0 && strcmp(g.field[2], "running") == 0,
+          "cancel answers the state it found");
+    CHECK(collect(&e, c, "00000000000000d1", 10000) == 0 && strcmp(e.kind, "stopped") == 0 &&
+              strcmp(e.cleaned, "confirmed") == 0,
+          "a cancelled attempt is stopped and cleaned");
+    CHECK(all_gone(open_end, 2000),
+          "cancel leaves no process of the attempt, the reported one included");
+
+    /* The deadline: a program that ignores SIGTERM is killed after the
+     * grace period. */
+    put_case("stubborn", ignore, "00000000000000d2", "ordinary", 300, inv);
+    open_end = watch("marks.open");
+    send_cmd(ETUDE_CMD_RUN, new_cmd(c), "00000000000000d2", inv, (char *)NULL);
+    CHECK(collect(&e, c, "00000000000000d2", 10000) == 0 && strcmp(e.kind, "stopped") == 0 &&
+              strcmp(e.cleaned, "confirmed") == 0,
+          "an attempt past its deadline is stopped, through SIGKILL");
+    CHECK(all_gone(open_end, 2000), "the stubborn program is gone");
+
+    /* A lost connection: the guest cancels, cleans up and exits 1, and the
+     * next connection's status reads the end. */
+    put_case("hanging2", hang, "00000000000000d3", "ordinary", 60000, inv);
+    open_end = watch("marks.open");
+    send_cmd(ETUDE_CMD_RUN, new_cmd(c), "00000000000000d3", inv, (char *)NULL);
+    CHECK(expect(&g, ETUDE_EV_STARTED, 5000) == 0, "the second hanging attempt starts");
+    CHECK(wait_ready() == 0, "the attempt says it is ready");
+    leader = read_pid("marks.leader");
+    close(to_guest);
+    to_guest = -1;
+    st = -1;
+    CHECK(wait_guest(&st, 10000) == 0 && WIFEXITED(st) && WEXITSTATUS(st) == 1,
+          "a lost connection ends etude-guest with status 1");
+    close(from_guest);
+    from_guest = -1;
+    CHECK(all_gone(open_end, 2000), "a lost connection leaves no process of the attempt");
+    start_guest("--stdio", (char *)NULL);
+    hello(ETUDE_FRAME_STDIO_MAX);
+    send_cmd(ETUDE_CMD_STATUS, new_cmd(c2), "00000000000000d3", (char *)NULL);
+    CHECK(expect(&g, ETUDE_EV_STATE, 5000) == 0 && strcmp(g.field[2], "cleaned") == 0,
+          "the next connection reads the cleaned state");
+    CHECK(expect(&g, ETUDE_EV_EXIT, 5000) == 0 && strcmp(g.field[0], c) == 0 &&
+              strcmp(g.field[2], "stopped") == 0,
+          "and the stopped end of the attempt");
+    CHECK(expect(&g, ETUDE_EV_USAGE, 5000) == 0 && expect(&g, ETUDE_EV_CLEANED, 5000) == 0 &&
+              strcmp(g.field[2], "confirmed") == 0,
+          "and its confirmed cleanup");
+    /* The run itself, repeated on the new connection, is answered from its
+     * record and starts nothing. */
+    send_cmd(ETUDE_CMD_RUN, c, "00000000000000d3", inv, (char *)NULL);
+    CHECK(collect(&e, c, "00000000000000d3", 5000) == 0 && strcmp(e.kind, "stopped") == 0 &&
+              e.pid == leader,
+          "a run repeated after the connection was lost replays its events");
+    bye(0);
+}
+
+/** A frame with a bad CRC ends a standard-I/O connection. */
+static void check_stdio_damage(void)
+{
+    struct got g;
+    char line[300];
+    size_t n;
+    int st = -1;
+
+    start_guest("--stdio", (char *)NULL);
+    hello(ETUDE_FRAME_STDIO_MAX);
+    n = wire_encode(line, sizeof(line), session, boot, seq++, 0, 0, ETUDE_CMD_STATUS, 0, NULL);
+    line[n - 3] = line[n - 3] == '0' ? '1' : '0';
+    CHECK(write(to_guest, line, n) == (ssize_t)n, "the damaged frame is written");
+    CHECK(next_frame(&g, 5000) < 0, "a damaged frame is not answered");
+    CHECK(wait_guest(&st, 10000) == 0 && WIFEXITED(st) && WEXITSTATUS(st) == 1,
+          "a damaged frame ends the connection");
+    end_guest();
+}
+
+/**
+ * The serial transport: an unacknowledged frame is sent again with the same
+ * bytes, a damaged frame and a frame past a gap are dropped and the last
+ * frame in order is acknowledged, a repeated frame is not acted on twice,
+ * and exec runs a case of the init role in etude-guest's own place.
+ */
+static void check_serial(void)
+{
+    static const char init[] = "#!/bin/sh\necho \"@etude 1 begin host.etude.guest\"\n"
+                               "echo \"pid $$\"\necho run >> \"$MARKS\"\nexit 7\n";
+    static struct got g;
+    static struct got again;
+    char inv[65];
+    char c[24];
+    char line[300];
+    char text[300];
+    const char *field[3];
+    size_t n;
+    int before;
+    int st = -1;
+    long pid;
+
+    start_guest(NULL, "--resend-ms", "200", (char *)NULL);
+    CHECK(next_frame(&g, 5000) == 0 && strcmp(g.type, ETUDE_EV_ALIVE) == 0,
+          "alive comes first on the serial console");
+    pid = atol(g.field[1]);
+    CHECK(next_frame(&g, 5000) == 0 && strcmp(g.type, ETUDE_EV_ALIVE) == 0,
+          "alive is sent again until a hello comes");
+    send_cmd(ETUDE_CMD_HELLO, new_cmd(c), "1", "65536", (char *)NULL);
+    CHECK(expect(&g, ETUDE_EV_READY, 5000) == 0 && strcmp(g.field[2], "255") == 0,
+          "the serial console keeps frames to 255 bytes");
+    CHECK(expect(&again, ETUDE_EV_READY, 5000) == 0 && strcmp(again.line, g.line) == 0,
+          "an unacknowledged frame is sent again with the same bytes");
+
+    /* An acknowledgement stops the resending. */
+    n = wire_encode(line, sizeof(line), session, boot, seq, 1, g.seq, ETUDE_CMD_ACK, 0, NULL);
+    CHECK(write(to_guest, line, n) == (ssize_t)n, "the ack is written");
+    for (before = 0; before < 10 && next_frame(&g, 300) == 0; before++)
+        CHECK(strcmp(g.type, ETUDE_EV_READY) == 0, "only the ready frame is pending");
+    CHECK(next_frame(&g, 600) < 0, "an acknowledged frame is not sent again");
+    serial_acks = 1;
+    seen = 1;
+
+    /* A damaged frame, then one past a gap: both dropped, each answered by
+     * an ack of SEQ 0, the hello. */
+    snprintf(text, sizeof(text), "%lu", cmd_no++);
+    field[0] = text;
+    field[1] = "0000000000000000";
+    n = wire_encode(line, sizeof(line), session, boot, seq, 0, 0, ETUDE_CMD_STATUS, 2, field);
+    line[10] ^= 1;
+    CHECK(write(to_guest, line, n) == (ssize_t)n, "the damaged frame is written");
+    send_seq(seq + 1, ETUDE_CMD_STATUS, 2, field);
+    before = 0;
+    while (before < 10 && next_frame(&g, before ? 500 : 5000) == 0) {
+        CHECK(strcmp(g.type, ETUDE_CMD_ACK) == 0 && g.has_ack && g.ack == 0,
+              "a damaged frame and a gap are acknowledged at the last frame in order");
+        before++;
+    }
+    CHECK(before >= 1, "a dropped frame is answered by an ack");
+
+    /* The frame in order, and then the same frame again: one state answer. */
+    send_seq(seq, ETUDE_CMD_STATUS, 2, field);
+    CHECK(expect(&g, ETUDE_EV_STATE, 5000) == 0 && strcmp(g.field[2], "unknown") == 0,
+          "the frame in order is acted on");
+    send_seq(seq, ETUDE_CMD_STATUS, 2, field);
+    seq++;
+    for (before = 0; before < 10 && next_frame(&g, 600) == 0; before++)
+        CHECK(strcmp(g.type, ETUDE_CMD_ACK) == 0 && g.ack == seq - 1,
+              "a repeated frame is acknowledged, not acted on");
+
+    /* exec: the program becomes this process, writes on the console itself,
+     * and its exit is the process's. */
+    put_case("asinit", init, "00000000000000e1", "init", 30000, inv);
+    before = marks();
+    send_cmd(ETUDE_CMD_EXEC, new_cmd(c), "00000000000000e1", inv, (char *)NULL);
+    CHECK(expect(&g, ETUDE_EV_STARTED, 5000) == 0 && atol(g.field[2]) == pid,
+          "exec's started names etude-guest's own process");
+    CHECK(read_line(line, sizeof(line), 5000) == 0 &&
+              strcmp(line, "@etude 1 begin host.etude.guest") == 0,
+          "the program writes its report on the console");
+    snprintf(text, sizeof(text), "pid %ld", pid);
+    CHECK(read_line(line, sizeof(line), 5000) == 0 && strcmp(line, text) == 0,
+          "the program runs in etude-guest's place");
+    CHECK(wait_guest(&st, 10000) == 0 && WIFEXITED(st) && WEXITSTATUS(st) == 7,
+          "the program's exit is the process's");
+    CHECK(marks() == before + 1, "the init program ran once");
+    end_guest();
+}
+
+int main(void)
+{
+    char *tmp = getenv("TMPDIR");
+
+    signal(SIGPIPE, SIG_IGN);
+    atexit(cleanup);
+    signal(SIGINT, stopped);
+    signal(SIGTERM, stopped);
+    signal(SIGHUP, stopped);
+    signal(SIGALRM, stopped);
+    snprintf(work, sizeof(work), "%s/rach2-etude-guest.XXXXXX", tmp && *tmp ? tmp : "/tmp");
+    if (!mkdtemp(work)) {
+        *work = '\0';
+        perror("mkdtemp");
+        return 2;
+    }
+    check_pass_fail_repeat();
+    check_interruptions();
+    check_stdio_damage();
+    check_serial();
+    if (failures) {
+        fprintf(stderr, "etude_guest_hosttest: %d checks failed\n", failures);
+        return 1;
+    }
+    printf("etude_guest_hosttest: all checks passed\n");
+    return 0;
+}
