@@ -2,7 +2,7 @@
 #
 # textcheck.sh: the text-style checks of the in-house files that a pattern
 # can decide, from the Writing and Documentation sections of AGENTS.md. Run
-# by tools/verify/check.sh; a finding fails `tests/run style`.
+# by tests/cases/host/style.sh; a finding fails `tests/run style`.
 #
 # The checks find: a non-ASCII byte (a Unicode dash, a smart quote, the
 # ellipsis character) in the in-house C, headers, assembly, Markdown, shell,
@@ -114,8 +114,8 @@ config_files() {
 
 {
     # Non-ASCII bytes in every in-house file: Markdown, shell and make, the
-    # C, headers and other code, and the configuration files. The convention
-    # step of tools/verify/check.sh checks the C files and headers too.
+    # C, headers and other code, and the configuration files. The style
+    # check's conventions case checks the C files and headers too.
     { md_files; script_files; ch_files; other_code_files; py_files; config_files; } |
         sort -u | while IFS= read -r f; do
         [ -f "$f" ] || continue

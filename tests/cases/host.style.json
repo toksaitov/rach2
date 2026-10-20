@@ -1,0 +1,677 @@
+{
+  "schema_version": 1,
+  "family_id": "host.style",
+  "summary": "The source checks of tests/run style over the in-house tree, booting nothing; their program is tests/cases/host/style.sh",
+  "cases": [
+    {
+      "case_id": "host.style.tools",
+      "behavior": "every tool the style cases run is on the path: the cross compilers and readelf of i686 and of the architecture, cppcheck, ShellCheck, clang-format and clang",
+      "units": ["style", "`check.sh` preflight"],
+      "domain": "host",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": ["tools"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh"], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "i686-gcc", "checks": "i686-elf-gcc is on the path", "source": "program"},
+        {"assertion_id": "i686-readelf", "checks": "i686-elf-readelf is on the path", "source": "program"},
+        {"assertion_id": "cross-gcc", "checks": "the architecture's cross compiler is on the path", "source": "program"},
+        {"assertion_id": "cross-readelf", "checks": "the architecture's readelf is on the path", "source": "program"},
+        {"assertion_id": "cppcheck", "checks": "cppcheck is on the path", "source": "program"},
+        {"assertion_id": "shellcheck", "checks": "shellcheck is on the path", "source": "program"},
+        {"assertion_id": "clang-format", "checks": "clang-format is on the path", "source": "program"},
+        {"assertion_id": "clang", "checks": "clang is on the path", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.assignments",
+      "behavior": "every guest program the tests build is assigned to one suite, and every native case to a program, by probecheck.sh and nativecheck.sh, whose tests plant each kind of fault",
+      "units": ["style", "`tools/verify/probecheck.sh`", "`tests/system/probecheck_test.sh`"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["assignments"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh", "make", "awk"], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "probecheck", "checks": "tools/verify/probecheck.sh passes the tree", "source": "program"},
+        {"assertion_id": "probecheck-test", "checks": "tests/system/probecheck_test.sh finds each planted assignment fault", "source": "program"},
+        {"assertion_id": "nativecheck", "checks": "tools/verify/nativecheck.sh passes the tree", "source": "program"},
+        {"assertion_id": "nativecheck-test", "checks": "tests/system/nativecheck_test.sh finds each planted native fault", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.faulttexts",
+      "behavior": "the text of every fault of every fault script is in its source, by tools/verify/faulttexts.sh, whose test plants a missing text",
+      "units": ["style", "`tools/verify/faulttexts.sh`"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["faulttexts"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh"], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "faulttexts-test", "checks": "tests/system/faulttexts_test.sh finds a fault whose text its source lacks", "source": "program"},
+        {"assertion_id": "faulttexts", "checks": "tools/verify/faulttexts.sh passes every fault script", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.kernel-build",
+      "behavior": "the kernel of the architecture builds under -Werror",
+      "units": ["style", "`check.sh` step 1, the kernel build"],
+      "domain": "host",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": ["kernel-build"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["make", "i686-elf-gcc", "x86_64-elf-gcc"], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "werror-build", "checks": "make -C rach2 succeeds with every warning an error", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.cppcheck",
+      "behavior": "cppcheck finds nothing in the kernel as i686's and as x86-64's C89 or in the host programs as C99, judged under the version tools/setup/judges records",
+      "units": ["style", "`check.sh` step 2, cppcheck"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["cppcheck"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["cppcheck"], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "kernel-runs", "checks": "both passes over the kernel run to their end", "source": "program"},
+        {"assertion_id": "host-runs", "checks": "the pass over the host programs runs to its end", "source": "program"},
+        {"assertion_id": "kernel-clean", "checks": "neither pass over the kernel has a finding", "source": "program"},
+        {"assertion_id": "host-clean", "checks": "the pass over the host programs has no finding", "source": "program"}
+      ],
+      "branches": [
+        {"group_id": "version", "decided_by": "report", "alternatives": [{"alternative_id": "recorded", "when": null, "assertions": ["kernel-clean", "host-clean"]}, {"alternative_id": "other", "when": null, "assertions": []}]}
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.shellcheck",
+      "behavior": "every in-house shell script passes ShellCheck",
+      "units": ["style", "`check.sh` step 3, ShellCheck"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["shellcheck"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["shellcheck"], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "scripts-listed", "checks": "tools/verify/scripts.sh lists the scripts, and the list is not empty", "source": "program"},
+        {"assertion_id": "scripts-clean", "checks": "shellcheck passes every script listed", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.conventions",
+      "behavior": "the in-house sources keep the conventions no compiler checks: no // comment, ASCII alone, a guard in every header, idle waits through the scheduler, no end-of-options marker before a process group in kill, and a finished flag where bash 3.2 needs one",
+      "units": ["style", "`check.sh` step 4, conventions"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["conventions"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh", "awk"], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "no-line-comments", "checks": "no in-house C file has a // comment", "source": "program"},
+        {"assertion_id": "ascii", "checks": "no in-house C file has a byte outside ASCII", "source": "program"},
+        {"assertion_id": "header-guards", "checks": "every in-house header has a guard or pragma once", "source": "program"},
+        {"assertion_id": "idle-wait", "checks": "no idle wait outside the scheduler's helpers", "source": "program"},
+        {"assertion_id": "group-kill", "checks": "no kill puts -- before a process group", "source": "program"},
+        {"assertion_id": "exit-flag", "checks": "a script with set -e, set -u and an EXIT trap keeps a finished flag", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
+        {"name": "asciiscan", "node": "tools/verify/asciiscan", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.clang-format",
+      "behavior": "every in-house C file and header is as clang-format writes it, judged under the version tools/setup/judges records",
+      "units": ["style", "`check.sh` step 5, clang-format"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["clang-format"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["clang-format"], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "formatted", "checks": "clang-format would change no in-house file", "source": "program"}
+      ],
+      "branches": [
+        {"group_id": "version", "decided_by": "report", "alternatives": [{"alternative_id": "recorded", "when": null, "assertions": ["formatted"]}, {"alternative_id": "other", "when": null, "assertions": []}]}
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.build-inputs",
+      "behavior": "a changed libc, start file, libgcc or linker script relinks what uses it, and the loaded kernel keeps no debug sections",
+      "units": ["style", "`tests/system/build_inputs_test.sh`"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["build-inputs"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["make", "i686-elf-gcc"], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "link-inputs", "checks": "tests/system/build_inputs_test.sh passes", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.abi",
+      "behavior": "a static musl program linked here for the architecture is the executable the kernel loads: its class, type, machine, load address and entry, with no interpreter",
+      "units": ["style", "`check.sh` step 6, readelf ABI"],
+      "domain": "host",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": ["abi"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["i686-elf-gcc", "i686-elf-readelf", "x86_64-elf-gcc", "x86_64-elf-readelf"], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "musl-link", "checks": "the program links against the architecture's musl", "source": "program"},
+        {"assertion_id": "elf-header", "checks": "its ELF header and program headers are those of the architecture's ABI", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.sources",
+      "behavior": "every source is built by something: the kernel's source list against the disk, the guest build lists, no product rule under tests/, every source in a compilation database, and the architecture layer",
+      "units": ["style", "`tools/verify/check_sources.sh`", "`tools/verify/guestcheck.c`", "`check.sh` step 7, no product rule under `tests/`", "`tools/verify/dbcheck.sh` after `tools/dev/gen_compile_commands.sh`", "`tools/verify/archcheck.sh`"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["sources"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["make", "clang"], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "kernel-list", "checks": "tools/verify/check_sources.sh finds every kernel source listed and every entry on disk", "source": "program"},
+        {"assertion_id": "guest-lists", "checks": "guestcheck finds the guest makefiles in agreement with the host build", "source": "program"},
+        {"assertion_id": "no-product-rule", "checks": "no rule under tests/ makes a product", "source": "program"},
+        {"assertion_id": "compile-databases", "checks": "every in-house source is in a compilation database", "source": "program"},
+        {"assertion_id": "architecture-layer", "checks": "make -C rach2 check-arch passes", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
+        {"name": "guestcheck", "node": "tools/verify/guestcheck", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.text",
+      "behavior": "the in-house text keeps the writing rules a program can decide: ASCII, no spaced dash, * bullets, the documents' headings, comments at 80 columns, and no term of the register rule's list",
+      "units": ["style", "`tools/verify/textcheck.sh`", "`prosecheck columns`", "`prosecheck --selftest` and `prosecheck banned`"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["text"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh", "awk"], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "textcheck", "checks": "tools/verify/textcheck.sh finds nothing", "source": "program"},
+        {"assertion_id": "comment-columns", "checks": "no comment line is wider than 80 columns", "source": "program"},
+        {"assertion_id": "prosecheck-selftest", "checks": "prosecheck's self-test passes", "source": "program"},
+        {"assertion_id": "banned-terms", "checks": "no banned term in a comment or a string", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
+        {"name": "prosecheck", "node": "tools/verify/prosecheck", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.messages",
+      "behavior": "every kernel message has only conversions the kernel's formatter prints",
+      "units": ["style", "`tools/verify/fmtcheck.sh`"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["messages"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh", "awk"], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "kernel-formats", "checks": "tools/verify/fmtcheck.sh finds nothing", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.runner-rules",
+      "behavior": "the old runner's scoring rule and the harness's escape decoder pass their self-tests",
+      "units": ["style", "`runtests --selftest` and `harness --selftest`"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["runner-rules"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "runtests-selftest", "checks": "runtests --selftest passes", "source": "program"},
+        {"assertion_id": "harness-selftest", "checks": "harness --selftest passes", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
+        {"name": "runtests", "node": "tests/system/runtests", "per_architecture": false},
+        {"name": "harness", "node": "tests/system/harness", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.setid",
+      "behavior": "every set-id line of every image manifest is one tools/inspect/setid.allow allows",
+      "units": ["style", "`setidcheck --selftest` and the manifest sweep"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["setid"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "setid-selftest", "checks": "setidcheck --selftest passes", "source": "program"},
+        {"assertion_id": "manifests", "checks": "setidcheck passes every manifest", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
+        {"name": "setidcheck", "node": "tools/inspect/setidcheck", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.repro",
+      "behavior": "one tree stages one image: names in strcmp order and no host time of day in a node",
+      "units": ["style", "`tools/verify/check_repro.sh`"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["repro"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["make", "sh"], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "krffs-tools", "checks": "the KRFFS host tools build", "source": "program"},
+        {"assertion_id": "one-image", "checks": "tools/verify/check_repro.sh passes", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.checkers",
+      "behavior": "the checkers and the build rules pass their own tests: elfcheck, cfgcheck, pecheck, the compilation-database generator, suitecheck, casecheck, the recovery key, the dry-run guard, the build rules, the scope of the style checks and the private log directory of this program",
+      "units": ["style", "`elfcheck --selftest` and `cfgcheck --selftest`", "`tools/dev/gen_compile_commands.sh --selftest`", "`tests/system/recovery_key_test.sh`", "`tests/system/dryrun_test.sh`", "`tests/system/build_rules_test.sh`", "`tests/system/style_scope_test.sh`", "`tests/system/verify_temp_test.sh`"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["checkers"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["make", "sh"], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "elfcheck", "checks": "elfcheck --selftest passes", "source": "program"},
+        {"assertion_id": "cfgcheck", "checks": "cfgcheck --selftest passes", "source": "program"},
+        {"assertion_id": "pecheck", "checks": "pecheck --selftest passes", "source": "program"},
+        {"assertion_id": "compile-db-generator", "checks": "tools/dev/gen_compile_commands.sh --selftest passes", "source": "program"},
+        {"assertion_id": "suitecheck-selftest", "checks": "tools/verify/suitecheck.sh --selftest passes", "source": "program"},
+        {"assertion_id": "casecheck-selftest", "checks": "casecheck --selftest passes over tools/etude/fixtures", "source": "program"},
+        {"assertion_id": "recovery-key", "checks": "tests/system/recovery_key_test.sh passes", "source": "program"},
+        {"assertion_id": "dryrun", "checks": "tests/system/dryrun_test.sh passes", "source": "program"},
+        {"assertion_id": "build-rules", "checks": "tests/system/build_rules_test.sh passes", "source": "program"},
+        {"assertion_id": "style-scope", "checks": "tests/system/style_scope_test.sh passes", "source": "program"},
+        {"assertion_id": "verify-temp", "checks": "tests/system/verify_temp_test.sh passes", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
+        {"name": "elfcheck", "node": "tools/inspect/elfcheck", "per_architecture": false},
+        {"name": "cfgcheck", "node": "tools/inspect/cfgcheck", "per_architecture": false},
+        {"name": "pecheck", "node": "tools/etude/win/pecheck", "per_architecture": false},
+        {"name": "casecheck", "node": "tools/etude/casecheck", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.devlog",
+      "behavior": "dev-log/Readme.md lists exactly the finished milestones, in the directories' order",
+      "units": ["style", "`prosecheck devlog`"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["devlog"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "index", "checks": "prosecheck devlog passes", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
+        {"name": "prosecheck", "node": "tools/verify/prosecheck", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.registry",
+      "behavior": "the registry agrees with the suites: each suite named once, with a run- target or a case manifest, each target with a row, and the generated lists of suites, programs and system calls as their generators write them",
+      "units": ["style", "`check.sh` step 15, the registry against the targets", "`check.sh` step 15, the generated suite inventory", "`check.sh` step 15, the generated lists of programs and calls"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["registry"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["make", "awk", "sh"], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "names-once", "checks": "no suite is named twice in tests/registry", "source": "program"},
+        {"assertion_id": "targets", "checks": "every row has a run- target or a family of cases, and every target a row", "source": "program"},
+        {"assertion_id": "inventory", "checks": "tests/system/suites.md is what tests/run inventory prints", "source": "program"},
+        {"assertion_id": "sentences", "checks": "every suite has a sentence in tests/system/suites.mk", "source": "program"},
+        {"assertion_id": "programs-md", "checks": "man/programs.md is what make programs-md writes", "source": "program"},
+        {"assertion_id": "syscalls-md", "checks": "rach2/syscalls.md is what make syscalls writes", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
+        {"name": "casecheck", "node": "tools/etude/casecheck", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.prepared",
+      "behavior": "every build/ product a run- target names is reached from prepare-all in make's database",
+      "units": ["style", "`check.sh` step 16, products against `prepare-all`"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["prepared"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["make", "awk"], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "products", "checks": "prepare-all reaches every product of every run- target", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.waits",
+      "behavior": "the tests wait for events, assert on counts and report what they leave out, and the case manifests are valid, by tools/verify/suitecheck.sh",
+      "units": ["style", "`tools/verify/suitecheck.sh`"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["waits"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh", "awk"], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "waits-and-criteria", "checks": "tools/verify/suitecheck.sh finds no guessed duration, unreported skip or invalid manifest", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
+        {"name": "casecheck", "node": "tools/etude/casecheck", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.manual",
+      "behavior": "the manual covers the machine: a page or an alias for every staged program, applet and registered call, every page clean under mandoc's lint, and the recovery pages staged",
+      "units": ["style", "`tools/verify/mancheck.c`"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["manual"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["make", "mandoc"], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "mancheck", "checks": "make mancheck passes", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.clang",
+      "behavior": "clang's positive list of warnings finds nothing in the architecture's kernel, judged under the version tools/setup/judges records",
+      "units": ["style", "`check.sh` step 19, clang's positive list"],
+      "domain": "host",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": ["clang"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["clang", "make"], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "no-warnings", "checks": "every kernel source compiles under clang's list with no warning", "source": "program"}
+      ],
+      "branches": [
+        {"group_id": "version", "decided_by": "report", "alternatives": [{"alternative_id": "recorded", "when": null, "assertions": ["no-warnings"]}, {"alternative_id": "other", "when": null, "assertions": []}]}
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.sparse",
+      "behavior": "sparse finds nothing in the architecture's kernel, its address spaces checked, where sparse is installed",
+      "units": ["style", "`check.sh` step 20, sparse"],
+      "domain": "host",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": ["sparse"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["make"], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "runs", "checks": "sparse runs over every kernel source", "source": "program"},
+        {"assertion_id": "no-findings", "checks": "sparse reports no warning or error", "source": "program"}
+      ],
+      "branches": [
+        {"group_id": "tool", "decided_by": "report", "alternatives": [{"alternative_id": "present", "when": null, "assertions": ["runs", "no-findings"]}, {"alternative_id": "absent", "when": null, "assertions": []}]}
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.sizes",
+      "behavior": "every in-house C function keeps the size limits, its complexity judged where pmccabe is installed",
+      "units": ["style", "`tools/verify/sizecheck.c`"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["sizes"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "within-limits", "checks": "sizecheck finds no function past a limit tools/verify/sizes.reasons does not allow", "source": "program"}
+      ],
+      "branches": [
+        {"group_id": "complexity", "decided_by": "report", "alternatives": [{"alternative_id": "judged", "when": null, "assertions": []}, {"alternative_id": "unjudged", "when": null, "assertions": []}]}
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
+        {"name": "sizecheck", "node": "tools/verify/sizecheck", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.style.links",
+      "behavior": "every Markdown link of the in-house documents points at a file that exists and every anchor at a heading in it",
+      "units": ["style", "`tools/verify/linkcheck.sh`"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["links"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh", "awk"], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "assertions": [
+        {"assertion_id": "documents", "checks": "tools/verify/linkcheck.sh passes the documents git tracks", "source": "program"},
+        {"assertion_id": "checklists", "checks": "tools/verify/linkcheck.sh passes the milestone checklists", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    }
+  ]
+}

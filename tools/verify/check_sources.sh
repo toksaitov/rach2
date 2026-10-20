@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 #
 # check_sources.sh: check the kernel's source list against the disk; run by
-# `make check-sources` and by the style check, tools/verify/check.sh.
+# `make check-sources` and by the style check, tests/cases/host/style.sh.
 #
 # Every C source on disk in the kernel tree (rach2/kernel.c and
 # rach2/sys/**/*.c) must be in the C_SRC list of some architecture, and every

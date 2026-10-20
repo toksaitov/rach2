@@ -1,12 +1,12 @@
 #!/bin/sh
-# verify_temp_test.sh [CHECK]: check that tools/verify/check.sh, or the copy
-# of it that CHECK names, makes a private log directory of its own for each
-# run, fails when it cannot make one, and writes its ABI check's source there
-# without following a symbolic link planted in the fixed directory
-# /tmp/rach2_verify.
+# verify_temp_test.sh [CHECK]: check that tests/cases/host/style.sh, the
+# program of the style cases, or the copy of it that CHECK names, makes a
+# private log directory of its own for each run, fails when it cannot make
+# one, and writes its ABI check's source there without following a symbolic
+# link planted in the fixed directory /tmp/rach2_verify.
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
-CHECK=${1:-$REPO/tools/verify/check.sh}
+CHECK=${1:-$REPO/tests/cases/host/style.sh}
 WORK=
 trap 'rm -rf ${WORK:+"$WORK"}' 0
 trap 'exit 130' INT
@@ -22,17 +22,17 @@ ln -s "$WORK/victim" "$WORK/rach2_verify/_abi.c"
 ln -s "$WORK/victim" "$WORK/rach2_verify/verify_build.log"
 # The fixed name /tmp/rach2_verify is moved into this test's directory. The
 # setup is the lines from VDIR= to the one that prints the directory; without
-# both, the copy would run the rest of check.sh, this test's call included.
+# both, the copy would run the rest of style.sh, this test's call included.
 if ! grep -q '^VDIR=' "$CHECK" ||
     ! grep -q "^printf 'verify-style: logs" "$CHECK"; then
-    fail "check.sh has no VDIR= line or no line that prints the logs directory"
+    fail "style.sh has no VDIR= line or no line that prints the logs directory"
 fi
 printf 'make() { :; }\n' > "$WORK/setup.sh"
 awk '
     /^VDIR=/ { setup = 1 }
     setup { gsub("/tmp/rach2_verify", "${TMPDIR}/rach2_verify"); print }
     /^printf .verify-style: logs/ { setup = 0 }
-    /^if make -C rach2 / { print; print "    :; fi" }
+    /^ *if make -C rach2 / { print; print "    :; fi" }
     /printf.*int main\(void\).*VDIR/ { print }
 ' "$CHECK" >> "$WORK/setup.sh"
 # shellcheck disable=SC2016

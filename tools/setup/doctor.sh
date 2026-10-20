@@ -10,7 +10,7 @@
 # but broken), so a student or a fresh CI machine sees a checklist instead of
 # a failure in the middle of a build.
 #
-# The output is ASCII only: the style check (tools/verify/check.sh) forbids
+# The output is ASCII only: the style check (tests/cases/host/style.sh) forbids
 # other bytes in in-house files, so there are no check marks here.
 #
 set -u

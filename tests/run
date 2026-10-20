@@ -8,10 +8,11 @@
 #   tests/run all               every suite
 #   tests/run inventory         every suite with what it proves, as Markdown
 #
-# The suites themselves live in tests/system/suites.mk, one `run-NAME` target
-# each; tests/registry lists their names, the external commands they need, and
-# which tier they belong to. This file decides only what runs, when, and how a
-# failure is reported.
+# A suite is either the cases of a family in tests/cases, whose identity ends
+# in its name, which etude runs, or a `run-NAME` target of
+# tests/system/suites.mk; tests/registry lists their names, the external
+# commands they need, and which tier they belong to. This file decides only
+# what runs, when, and how a failure is reported.
 #
 set -u
 # The installed launcher accounts for this command before it builds or runs.
@@ -511,7 +512,7 @@ scripts_inventory() {
         ls mk/*.mk tests/system/runner/*.c tests/system/*.sh tests/system/suites/*.sh tests/system/accept/*.sh \
            tests/system/*.py tests/system/accept/agents/* tests/system/checkers/*.awk tests/system/fixtures/*.sh \
            tests/system/agents/* tests/system/fakeapi/* tests/system/fakeapi/repo/* tools/flow/* \
-           tools/image/*.sh krffs/*.sh tools/verify/check.sh krffs/manifests/* 2>/dev/null
+           tools/image/*.sh krffs/*.sh tests/cases/*.json tests/cases/host/*.sh krffs/manifests/* 2>/dev/null
     } ) | present
 }
 hasher() {
@@ -815,39 +816,70 @@ for key in rach2_demo_ed25519 rach2_test_ed25519; do
     [ ! -f "$REPO/krffs/$key" ] || chmod 600 "$REPO/krffs/$key"
 done
 take_scripts
-# The set driver and the formatter, built here, or taken from RACH2_ETUDE_BIN,
-# a directory that has both, for a tree with no etude of its own, as the
-# runner's selftest gives; RACH2_ETUDE_SCHEMAS names the schemas of such a
-# tree. They are copied into the scratch, so that a build a suite starts
-# cannot replace them while they run.
+# The set driver, the formatter and the validator, built here, or taken from
+# RACH2_ETUDE_BIN, a directory that has them, for a tree with no etude of its
+# own, as the runner's selftest gives; RACH2_ETUDE_SCHEMAS names the schemas
+# of such a tree. They are copied into the scratch, so that a build a suite
+# starts cannot replace them while they run. The validator is needed only by
+# a tree with case manifests.
 mkdir -p "$WORK/etude"
+MANIFESTS=$(ls "$REPO"/tests/cases/*.json 2>/dev/null)
+etude_programs="etude-legacy history_lines${MANIFESTS:+ casecheck}"
 if [ -n "${RACH2_ETUDE_BIN:-}" ]; then
-    cp "$RACH2_ETUDE_BIN/etude-legacy" "$RACH2_ETUDE_BIN/history_lines" "$WORK/etude/" || {
-        echo "run: result: refused: RACH2_ETUDE_BIN has no etude-legacy and history_lines" >&2; exit 1
-    }
-elif ! run_make -s build/tools/etude/etude-legacy build/tools/etude/history_lines > "$WORK/etude.log" 2>&1 ||
-     ! cp "$REPO/build/tools/etude/etude-legacy" "$REPO/build/tools/etude/history_lines" "$WORK/etude/"; then
-    cat "$WORK/etude.log" >&2
-    echo "run: result: refused: etude's set driver did not build" >&2; exit 1
+    for p in $etude_programs; do
+        cp "$RACH2_ETUDE_BIN/$p" "$WORK/etude/" || {
+            echo "run: result: refused: RACH2_ETUDE_BIN has no $p" >&2; exit 1
+        }
+    done
+else
+    # shellcheck disable=SC2086 # one program a word
+    targets=$(for p in $etude_programs; do printf ' build/tools/etude/%s' "$p"; done)
+    # shellcheck disable=SC2086 # one target a word
+    if ! run_make -s $targets > "$WORK/etude.log" 2>&1 ||
+        ! (cd "$REPO/build/tools/etude" && cp $etude_programs "$WORK/etude/"); then
+        cat "$WORK/etude.log" >&2
+        echo "run: result: refused: etude's set driver did not build" >&2; exit 1
+    fi
 fi
 ETUDE_LEGACY=$WORK/etude/etude-legacy
 SCHEMAS=${RACH2_ETUDE_SCHEMAS:-$REPO/tools/etude/schemas}
 RECORD=$WORK/prepare.record
 RESULTS=${RACH2_RESULTS:-$WORK/results}
 mkdir -p "$RESULTS" "$REPO/build/tests/failed"
+# The families of cases, `FAMILY PATH` a line, each checked by its schema and
+# rules first, so that a manifest at fault refuses every run; a suite is run
+# by the family whose identity ends in its name.
+: > "$WORK/families"
+if [ -n "$MANIFESTS" ]; then
+    # shellcheck disable=SC2086 # one manifest a word
+    "$WORK/etude/casecheck" -s "$SCHEMAS" families $MANIFESTS > "$WORK/families" || {
+        echo "run: result: refused: a case manifest of tests/cases is at fault" >&2; exit 1
+    }
+fi
+family_of() { # family_of SUITE: the line of the suite's family, or nothing
+    awk -v s="$1" '{ n = split($1, part, "."); if (part[n] == s) { print; exit } }' "$WORK/families"
+}
 # The suites the driver runs, one a line with the guest memory the registry
-# declares; `style` and `host` run first, one at a time, and a failure of
-# `style` stops the set, since the fix of a style fault is an edit, which
-# changes the GNU root's sources. The map gives each suite its one case.
+# declares, and the manifest of a suite's cases; `style` and `host` run first,
+# one at a time, and a failure of `style` stops the set, since the fix of a
+# style fault is an edit, which changes the GNU root's sources. The map gives
+# each suite its family of cases, or the one case of an old suite.
+: > "$WORK/map"
 for suite in "$@"; do
     case "$suite" in
         style) flags=" serial stops" ;;
         host) flags=" serial" ;;
         *) flags="" ;;
     esac
-    echo "$suite $(suite_memory "$suite")$flags"
+    family=$(family_of "$suite")
+    if [ -n "$family" ]; then
+        echo "$suite $(suite_memory "$suite")$flags cases=${family#* }"
+        echo "$suite ${family%% *}" >> "$WORK/map"
+    else
+        echo "$suite $(suite_memory "$suite")$flags"
+        echo "$suite legacy.$suite" >> "$WORK/map"
+    fi
 done > "$WORK/selection"
-for suite in "$@"; do echo "$suite legacy.$suite"; done > "$WORK/map"
 # The driver's ledger is the run's own: the machine's admission is the claim
 # the run holds already, the installed launcher's or the caller's. Its limits
 # give the pool's width and memory budget: WORKERS suites of the processors
@@ -868,7 +900,7 @@ trap 'forward INT' INT; trap 'forward TERM' TERM; trap 'forward HUP' HUP
 # shellcheck disable=SC2086 # the options are one word each or none
 "$ETUDE_LEGACY" set -t "$REPO" -a "$ARCH" ${RACH2_KERNEL:+-n "$RACH2_KERNEL"} \
     -l "$WORK/ledger" -c "$capacity" -j "$WORKERS" -o "$RESULTS" -e "$REPO/build/tests/failed" \
-    -S "$SCHEMAS" -p "$RECORD" -i "$IDLE_SECONDS" -r "$STATUS_RECORD" -m "$WORK/images.stamp" \
+    -S "$SCHEMAS" ${MANIFESTS:+-K "$WORK/etude/casecheck"} -p "$RECORD" -i "$IDLE_SECONDS" -r "$STATUS_RECORD" -m "$WORK/images.stamp" \
     ${commit:+-g "$commit"} ${RACH2_STOP_ON_FAIL:+-k} -q "$*" "$WORK/selection" &
 DRIVER=$!
 watch_scripts &

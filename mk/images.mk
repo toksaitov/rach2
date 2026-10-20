@@ -4,7 +4,7 @@
 # RAM images, and before the test include: every rule here makes something the
 # machine or a stick carries, so it is the build's and not a suite's, and a
 # suite that needs one of these names it as a prerequisite.
-# tools/verify/check.sh refuses a rule under tests/ that makes a product.
+# The style check refuses a rule under tests/ that makes a product.
 #
 # The tools the disk and stick scripts run are named in the root Makefile, which
 # needs them before this point: the MBR and GUID table writers, which

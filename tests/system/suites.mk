@@ -2103,12 +2103,10 @@ run-stress-ahci: rach2 tests krffs $(HARNESS)
 	    $(AHCI_ATTACH) \
 	    --timeout 900 --steptmo 800 --ok "STRESSPROBE OK" --never "STRESSPROBE FAIL" \
 	    --log $(STRESS_AHCI_DISK).log probe=/stressprobe
-# The style suite (see tools/verify/check.sh): -Werror build, scoped cppcheck,
-# shellcheck, the convention grep, clang-format, and a readelf ABI check.
-# `tests/run style`: the source checks over the tree, tools/verify/check.sh,
-# booting nothing.
-run-style:
-	@ARCH=$(ARCH) ./tools/verify/check.sh
+# `tests/run style`: the source checks over the tree, booting nothing. They are
+# the cases of tests/cases/host.style.json, which etude runs, and have no
+# target here.
+
 # The host suite (see tests/system/suites/host.sh): pure kernel logic compiled
 # and run natively under AddressSanitizer + UndefinedBehaviorSanitizer. It waits
 # on the vendored musl for the same reason krffs does: mkhash_hosttest names the
@@ -2212,8 +2210,8 @@ run-ssh-e1000:
 # The other products a `run-` target names, built with `prepare-images` before
 # a set's pool starts, so that no two pooled suites build one at once; they
 # are named here, after their definitions, since a prerequisite named before
-# its variable is defined expands to nothing. `tools/verify/check.sh` holds
-# every `run-` target's file prerequisites to `prepare-all`'s closure.
+# its variable is defined expands to nothing. The style check holds every
+# `run-` target's file prerequisites to `prepare-all`'s closure.
 prepare-products: $(MKEXFATFIXTURE) $(MKFATFIXTURE) $(OS_SIMPLE_EXT2) $(OS_REAL_SMALL_EXT2) \
                   $(GRUB_TEST_EXT2) $(FD_HOSTTEST) \
                   $(STICK_IMAGE) $(SELFBUILD_EXT2_VOL) $(IMAGE_TOOLS)

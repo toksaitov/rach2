@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 #
 # srclists.sh: the cppcheck source lists, defined once for the style suite
-# (tools/verify/check.sh, at the normal level) and the slow analysers
+# (tests/cases/host/style.sh, at the normal level) and the slow analysers
 # (tools/verify/analyze.sh, at the exhaustive level), so that the two runs
 # check the same files. The file is sourced, not run.
 

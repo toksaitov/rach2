@@ -1,5 +1,5 @@
 # cppcheck.suppress: the cppcheck suppressions of the style check,
-# tools/verify/check.sh, and the slow analysers, tools/verify/analyze.sh.
+# tests/cases/host/style.sh, and the slow analysers, tools/verify/analyze.sh.
 #
 # Each entry is a deliberate exception with its reason; a fault cppcheck finds
 # is fixed in the code and is not listed here. A bare id suppresses a rule

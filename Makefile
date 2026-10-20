@@ -141,7 +141,7 @@ MKDISK          = krffs/mkdisk.sh
         isos test-iso os-simple-iso os-real-iso rach2-metal-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
         check-pdpmake check-e2fsck \
-        run-style run-host run-default \
+        run-host run-default \
         musl busybox dropbear tcc pdpmake e2fsprogs $(BASE_DIRS) $(FULL_DIRS)
 
 # The default goal: the images, which bring in the kernel, the guest programs,
@@ -454,6 +454,12 @@ $(CASECHECK): $(ETUDE_CASECHECK_SRC) tools/etude/casecheck.h tools/etude/digest.
 	@mkdir -p $(dir $@)
 	$(HOST_LINK) -std=c99 -Itools/etude -Itools/etude/include -Iutils
 
+# The programs of etude's host cases (tests/cases/host), which the cases'
+# preparation names, one for both architectures.
+build/tests/cases/host/%: tests/cases/host/%.sh
+	@mkdir -p $(@D)
+	cp $< $@.tmp && chmod 755 $@.tmp && mv $@.tmp $@
+
 # The byte scanner (tools/verify/asciiscan.c) the text checks run, the host
 # check (tools/setup/hostcheck.c) `tests/run` compiles for itself before a
 # build, and the TCP transfer measurer (tools/dev/machine_net.c). They are
@@ -747,7 +753,7 @@ syscalls: $(MANCHECK)
 
 # `make programs-md`: man/programs.md, the list of the programs, from the
 # manifests, the recipes and BusyBox's applet table; PROGRAMS_MD names
-# another file to write, which tools/verify/check.sh compares with it.
+# another file to write, which the style check compares with it.
 PROGRAMS_MD = man/programs.md
 .PHONY: programs-md
 programs-md: $(BUSYBOX_STAMP)
