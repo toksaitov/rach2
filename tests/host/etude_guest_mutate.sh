@@ -5,10 +5,11 @@
 # child, an output digest that misses the bytes sent, a stream's total that
 # misses the bytes not kept, an orphaned attempt settled as stopped, an exit
 # that carries both streams' sizes and digests in one frame, ids not
-# checked against the accounts and the processes, the ids left out of the
-# program's arguments, a pseudo-terminal whose output is not read, and an
-# attempts' directory that only root may search. Each must fail the test,
-# and the restored copy must pass it.
+# checked against the accounts and the processes, on macOS ids not looked up
+# in Directory Services, the ids left out of the program's arguments, a
+# pseudo-terminal whose output is not read, and an attempts' directory that
+# only root may search. Each must fail the test, and the restored copy must
+# pass it.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -39,6 +40,7 @@ faults = {
                 '    for (i = 0; i < 0; i++)\n        if (listed('),
     'idargs': ('        pair_arg(arg, "ids", fx->id_old, fx->id_new, fx->nids);\n        argv[n++] = strdup(arg);\n',
                ''),
+    'directory': ('    if (getpwuid((uid_t)id) || getgrgid((gid_t)id))\n        return 1;\n', ''),
     'search': ('{0711, 0711, 0700, 0700}', '{0700, 0700, 0700, 0700}'),
     'pty': ('    if (a->fx.pty)\n        take_terminal(a, inv->stdin_name ? input : NULL);\n', ''),
     'split': [('#include "wire.h"\n',
@@ -69,7 +71,7 @@ if [ "${1:-}" = --texts ]; then
     for fault in repeat stopped ack exec digest total orphan split pty search; do
         apply_fault tools/etude/guest/guest.c "$fault"
     done
-    for fault in idcheck idargs; do
+    for fault in idcheck idargs directory; do
         apply_fault tools/etude/guest/fixture.c "$fault"
     done
     echo 'etude-guest-mutation: texts: every fault found once'
@@ -150,6 +152,10 @@ fault orphan "an orphaned attempt's end is lost"
 fault split 'the end of a long attempt comes whole on the serial console'
 fault idcheck 'an id that a process has is refused' fixture.c
 fault idargs 'the program is given its ids, ports and peer' fixture.c
+# Directory Services are macOS's alone.
+if [ "$(uname -s)" = Darwin ]; then
+    fault directory 'an id that Directory Services alone has is refused' fixture.c
+fi
 fault pty 'a case on a pseudo-terminal reads its input there'
 fault search "every user may search the attempts' directory"
 cp tools/etude/guest/guest.c "$work/guest.c"

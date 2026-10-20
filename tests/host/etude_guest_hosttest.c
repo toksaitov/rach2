@@ -26,6 +26,10 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <grp.h>
+#include <pwd.h>
+#endif
 
 int etude_guest_main(int argc, char **argv);
 
@@ -1000,6 +1004,56 @@ static int listen_any(int *port)
     return s;
 }
 
+#if defined(__APPLE__)
+/** Whether `id` is field 3 of a line of the colon-separated file `path`. */
+static int in_file(const char *path, long id)
+{
+    char line[1024];
+    FILE *f = fopen(path, "r");
+    int found = 0;
+
+    while (f && !found && fgets(line, sizeof(line), f)) {
+        char *p = strchr(line, ':');
+        p = p ? strchr(p + 1, ':') : NULL;
+        found = p && p[1] >= '0' && p[1] <= '9' && strtol(p + 1, NULL, 10) == id;
+    }
+    if (f)
+        fclose(f);
+    return found;
+}
+
+/** Whether `id` can be a NEW id that Directory Services has and neither
+ * /etc/passwd nor /etc/group does. */
+static int directory_only(unsigned long id)
+{
+    return id > 0 && id < 2147483647UL && !in_file("/etc/passwd", (long)id) &&
+           !in_file("/etc/group", (long)id);
+}
+
+/** An id that Directory Services has and /etc/passwd and /etc/group do not,
+ * or -1. A group's is taken before a user's: a user's id is more often a
+ * running process's, and etude-guest refuses such an id for the process
+ * whether or not it asks Directory Services. */
+static long directory_id(void)
+{
+    struct group *g;
+    struct passwd *u;
+    long id = -1;
+
+    setgrent();
+    while (id < 0 && (g = getgrent()) != NULL)
+        if (directory_only(g->gr_gid))
+            id = (long)g->gr_gid;
+    endgrent();
+    setpwent();
+    while (id < 0 && (u = getpwent()) != NULL)
+        if (directory_only(u->pw_uid))
+            id = (long)u->pw_uid;
+    endpwent();
+    return id;
+}
+#endif
+
 /** Run the invocation `inv` of attempt `token` and require `error CODE`
  * for it, with nothing run. */
 static void refused_run(const char *token, const char *inv, const char *code, const char *what)
@@ -1017,9 +1071,10 @@ static void refused_run(const char *token, const char *inv, const char *code, co
 /**
  * The fixtures a host can make: the ids, ports and peer given to the
  * program as arguments after its own, with its absolute path as argv[0];
- * an id that a process has and a port in use refused; fixtures that do not
- * fit their forms refused; and a pseudo-terminal that is the program's
- * terminal, written the invocation's input and read as its output.
+ * an id that a process has, on macOS one that Directory Services alone has,
+ * and a port in use refused; fixtures that do not fit their forms refused;
+ * and a pseudo-terminal that is the program's terminal, written the
+ * invocation's input and read as its output.
  */
 static void check_fixtures(void)
 {
@@ -1082,6 +1137,17 @@ static void check_fixtures(void)
              (long)getuid());
     put_case_with("args", args, "000000000000fa02", fixtures, NULL, inv);
     refused_run("000000000000fa02", inv, ETUDE_ERR_REFUSED, "an id that a process has is refused");
+#if defined(__APPLE__)
+    {
+        long id = directory_id();
+        CHECK(id >= 0, "Directory Services has an id that /etc/passwd and /etc/group lack");
+        snprintf(fixtures, sizeof(fixtures), "[{\"fixture\": \"ids\", \"given\": [\"1000:%ld\"]}]",
+                 id);
+        put_case_with("args", args, "000000000000fa10", fixtures, NULL, inv);
+        refused_run("000000000000fa10", inv, ETUDE_ERR_REFUSED,
+                    "an id that Directory Services alone has is refused");
+    }
+#endif
     snprintf(fixtures, sizeof(fixtures), "[{\"fixture\": \"ports\", \"given\": [\"7470:%d\"]}]",
              busy_port);
     put_case_with("args", args, "000000000000fa03", fixtures, NULL, inv);

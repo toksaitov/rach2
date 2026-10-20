@@ -48,6 +48,8 @@ int unshare(int flags);
 #endif
 #elif defined(__APPLE__)
 #define FIX_KERNEL 0
+#include <grp.h>
+#include <pwd.h>
 #include <sys/sysctl.h>
 #else
 #error "fixture.c: no fixtures for this system; a build for Rach2 defines __rach2__"
@@ -363,7 +365,7 @@ int fixture_simple(const struct fixtures *fx)
 }
 
 /** Whether `id` is field 3 of a line of the colon-separated file `path`. */
-static int listed(const char *path, long id)
+static int in_file(const char *path, long id)
 {
     char line[1024];
     FILE *f = fopen(path, "r");
@@ -384,6 +386,19 @@ static int listed(const char *path, long id)
     }
     fclose(f);
     return found;
+}
+
+/** Whether `id` is an account's or a group's: a line of /etc/passwd or
+ * /etc/group has it, or, on macOS, which keeps most accounts in Directory
+ * Services and not in those files, getpwuid or getgrgid finds it there. On
+ * Linux and Rach2 the files alone are read. */
+static int listed(long id)
+{
+#if defined(__APPLE__)
+    if (getpwuid((uid_t)id) || getgrgid((gid_t)id))
+        return 1;
+#endif
+    return in_file("/etc/passwd", id) || in_file("/etc/group", id);
 }
 
 #if defined(__APPLE__)
@@ -487,8 +502,7 @@ static const char *not_free(const struct fixtures *fx)
     int i;
 
     for (i = 0; i < fx->nids; i++)
-        if (listed("/etc/passwd", fx->id_new[i]) || listed("/etc/group", fx->id_new[i]) ||
-            in_use(fx->id_new[i]))
+        if (listed(fx->id_new[i]) || in_use(fx->id_new[i]))
             return "an id is an account's or a process's";
     for (i = 0; i < fx->nports; i++)
         if (!port_free(fx->port_new[i]))
