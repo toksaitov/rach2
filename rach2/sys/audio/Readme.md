@@ -32,7 +32,7 @@ A program drives audio with `ioctl` on a console descriptor: `KIOCSOUND` sounds 
 The kernel debug shell, described in [run.Readme.md](../../run.Readme.md), passes a line whose first word is `audio` to `audio_debug.c`, which prints to the console and the serial port and not to the kernel log:
 
 * `audio` or `audio info`: the active driver, and whether it plays samples.
-* `audio test scale [ms]`: the notes 262, 294, 330, 349 and 392 Hz through a callback, as signed 16-bit stereo at 48000 Hz, or 44100 Hz on SB16; 2000 ms by default and at least 100.
+* `audio test scale [ms]`: the notes 262, 294, 330, 349 and 392 Hz through a callback, as square waves of signed 16-bit stereo at 48000 Hz, or 44100 Hz on SB16. Each note lasts a fifth of the duration, which is 2000 ms by default, at least 100 and at most 600000, and a rest of three of the driver's periods follows it. The command prints `Done.` when the callback has made the last rest, by which time the device has read the last note. When the device stops asking for frames, it gives up after four times the scale's length and a second, by the timer, and prints `audio: stalled:` with the frames made and the frames of the whole scale.
 * `audio test write [ms]`: the same notes through `write`, as unsigned 8-bit mono at 11025 Hz.
 * `audio test watch [Hz] [ms] [interval-ms]`: on HDA only, a tone, 440 Hz by default, while the stream's position in its buffer is printed every interval.
 * `audio hda dump`, `codec`, `pins` and `stats`: the controller's registers, the codec's widgets, the output pins and the stream's counters.
@@ -41,6 +41,10 @@ The kernel debug shell, described in [run.Readme.md](../../run.Readme.md), passe
 ## Design
 
 `audio.c`, `audio_debug.c` and `hda.c` are shared code, listed in `rach2/sources.mk`; `dma.c`, `sb16.c` and `sys/arch/x86/speaker.c` are the PC's, listed in `sys/arch/x86/sources.mk`. The i686 and x86-64 kernels build all of them.
+
+### The test scale
+
+The scale's callback makes each frame from the count of frames before it, so the notes are the same whenever the device asks for them. A refill that comes late lets the device read again what its buffer has: the two periods written last, or, while a refill is being written, the rest of the one before them. The rest after each note is three periods long, so that buffer never has frames of two notes, and the device replays one note or a rest. The notes then reach the device in their order however late the refills come.
 
 ### HDA controller
 
@@ -89,7 +93,7 @@ Each DAC's capabilities are its Supported PCM Size, Rates and Supported Stream F
 ## Tests
 
 * `tests/run audio`, in the core tier, makes two boots. The first, of the test image, has QEMU's `intel-hda` and `hda-duplex` with the `wav` audio backend; the debug shell runs `audio test scale 2000`, `wavcheck` (`tests/system/checkers/wavcheck.c`) requires the recording to contain the five notes in order, and `intrprobe` reads `/proc/interrupts` before and after, where the count on the `hda` message vector must have grown. The second, of the kernel alone in the debug shell, has QEMU's `sb16` under TCG with `-icount`, runs the same command and checks the recording the same way.
-* `tests/run host` runs `tests/host/hda_hosttest.c`, which compiles `hda.c` and the procfs formatter against a model codec and model registers and checks every rate bit in both modes, the capability rules, connection list decoding, routing, the `/proc/audio` text, underruns and shutdown with a pending interrupt. It also runs `tests/host/sb16_hosttest.c`, which compiles `sb16.c` and `audio_debug.c` against port stubs and a model of the DMA position and checks partial frames across the ring's wrap, short writes, the period at each rate and format, a failure at each setup step, callback refills into the half the DMA is not reading wherever the interrupts find it, and the scale command.
+* `tests/run host` runs `tests/host/hda_hosttest.c`, which compiles `hda.c` and the procfs formatter against a model codec and model registers and checks every rate bit in both modes, the capability rules, connection list decoding, routing, the `/proc/audio` text, underruns and shutdown with a pending interrupt. It also runs `tests/host/sb16_hosttest.c`, which compiles `sb16.c` and `audio_debug.c` against port stubs and a model of the DMA position and checks partial frames across the ring's wrap, short writes, the period at each rate and format, a failure at each setup step, callback refills into the half the DMA is not reading wherever the interrupts find it, the scale's every frame, note and rest, and its report of a device that stops.
 * `sh tests/host/hda_mutate.sh` compiles 18 faults into private copies of `hda.c` and `procfs.c`; each must fail its row of the host test.
 * `sh tests/system/hda_mutate.sh` stages `audiotest` and the probe built from `tests/musl/hdaprobe.c` in a 2 MiB image, compares the staged bytes and boots it with HDA. The probe checks `/proc/audio`'s identity in `stat`, `readdir` and `/proc/self/fd`, reads it 7 bytes at a time, requires an open snapshot to stay unchanged, and requires `audiotest 32000 1 440` to program 32000 Hz with format word 0x0A11 in the stream and the DAC. A kernel with the entry renamed must fail to open `/proc/audio`, the restored kernel must match the first build, and a boot with `rach2.noaudio` must report `hda ready 0`.
 * `sh tests/system/sb16_mutate.sh` compiles two faults in turn, the scale command not lowering its rate for the SB16 and the SB16 not refilling from the callback, and requires each to fail the SB16 boot of the audio suite.

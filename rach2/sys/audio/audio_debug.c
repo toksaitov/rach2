@@ -26,6 +26,25 @@ static volatile uint32_t _tone_half_period = 0;
 static volatile int16_t _tone_amp = 8000;
 static volatile int _tone_channels = 2;
 
+/*
+ * State of the test scale, whose callback makes each frame from the count of
+ * frames before it, so that the notes do not depend on when the device asks
+ * for them. Each note lasts _scale_note_frames and a rest of
+ * _scale_rest_frames follows it: three periods of the driver, the frames its
+ * first call asks for. A refill that comes late leaves the device to play
+ * what its buffer already has, the last two periods written and the rest of
+ * the one being overwritten, so the buffer never has two notes at once and
+ * they are heard in their order however late the refills come. The callback
+ * runs in interrupt context while the shell command reads the counts, so they
+ * are volatile; _scale_rest_frames is 0 until the first call.
+ */
+static const uint32_t _scale_freqs[] = {262, 294, 330, 349, 392};
+#define SCALE_NOTES (sizeof(_scale_freqs) / sizeof(_scale_freqs[0]))
+static uint32_t _scale_rate;
+static uint32_t _scale_note_frames;
+static volatile uint32_t _scale_rest_frames;
+static volatile uint32_t _scale_frames;
+
 /** Whether the strings `a` and `b` are equal. */
 static bool audio_str_equal(const char *a, const char *b)
 {
@@ -148,6 +167,52 @@ static void audio_test_callback(void *buffer, size_t size)
 }
 
 /**
+ * The scale's frame `frame`: a square wave of amplitude 12000 at its note's
+ * frequency, starting high at the note's first frame, or 0 in a rest and after
+ * the last note.
+ */
+static int16_t audio_scale_sample(uint32_t frame)
+{
+    uint32_t cycle = _scale_note_frames + _scale_rest_frames;
+    uint32_t note = frame / cycle;
+    uint32_t at = frame % cycle;
+    uint32_t half;
+
+    if (note >= SCALE_NOTES || at >= _scale_note_frames) {
+        return 0;
+    }
+    half = _scale_rate / _scale_freqs[note] / 2;
+    if (half == 0) {
+        half = 1;
+    }
+    return (at / half) % 2 == 0 ? (int16_t)12000 : (int16_t)-12000;
+}
+
+/**
+ * Mixer callback that fills `buffer` with the scale's next frames, signed
+ * 16-bit stereo with both channels alike, and counts them. A trailing byte
+ * short of a whole frame is silence.
+ */
+static void audio_scale_callback(void *buffer, size_t size)
+{
+    int16_t *out = buffer;
+    uint32_t frames = (uint32_t)(size / 4);
+    uint32_t first = _scale_frames;
+    uint32_t i;
+
+    if (_scale_rest_frames == 0) {
+        _scale_rest_frames = 3 * frames;
+    }
+    for (i = 0; i < frames; i++) {
+        out[2 * i] = out[2 * i + 1] = audio_scale_sample(first + i);
+    }
+    for (i = frames * 4; i < size; i++) {
+        ((uint8_t *)buffer)[i] = 0;
+    }
+    _scale_frames = first + frames;
+}
+
+/**
  * Stop any active playback and detach the test callback.
  *
  * Safe to call when no driver is bound or nothing is playing.
@@ -168,34 +233,22 @@ static void audio_stop_playback(void)
 }
 
 /**
- * Wait until `kernel_ticks` reaches `target_ticks`, halting the processor
- * until each next interrupt (idle_wait_irq_on) instead of spinning.
- */
-static void audio_wait_until(uint32_t target_ticks)
-{
-    while (kernel_ticks < target_ticks) {
-        idle_wait_irq_on();
-    }
-}
-
-/**
  * Play a five-note C-major scale through the callback path.
  *
- * Uses stereo signed-16 samples at 48 kHz, or 44.1 kHz on SB16.
- * Retunes the shared tone state once per note; the interrupt-time callback
- * generates the samples. The notes split `duration_ms` evenly; the total is
- * clamped to at least 100 ms. Always stops playback on the way out.
+ * Uses stereo signed-16 samples at 48 kHz, or 44.1 kHz on SB16. The
+ * interrupt-time callback generates every frame, and each note is a fifth of
+ * `duration_ms` in frames, which is clamped to 100 through 600000 ms; a rest
+ * follows each note. The command waits until the callback has generated the
+ * whole scale with its last rest, by which time the device has read the last
+ * note, and prints "Done.". A device that stops asking for frames leaves the
+ * scale unfinished after four times its length and a second, measured in
+ * timer ticks, and the command prints how far it got. Always stops playback
+ * on the way out.
  */
 static void audio_run_scale_test(uint32_t duration_ms)
 {
-    uint32_t start_ticks;
-    uint32_t total_ticks;
     uint32_t sample_rate = 48000;
-    int channels = 2;
-    size_t n;
-
-    static const uint32_t freqs[] = {262, 294, 330, 349, 392};
-    const size_t num_notes = sizeof(freqs) / sizeof(freqs[0]);
+    uint32_t total, limit;
 
     if (!audio) {
         console_puts("No audio driver.");
@@ -209,29 +262,22 @@ static void audio_run_scale_test(uint32_t duration_ms)
     if (duration_ms < 100) {
         duration_ms = 100;
     }
+    if (duration_ms > 600000) {
+        duration_ms = 600000;
+    }
 
     audio_stop_playback();
 
-    _tone_channels = channels;
-    _tone_amp = 12000;
-
-    {
-        uint32_t period = sample_rate / freqs[0];
-        if (period < 2) {
-            period = 2;
-        }
-        _tone_half_period = period / 2;
-        if (_tone_half_period == 0) {
-            _tone_half_period = 1;
-        }
-        _tone_phase = 0;
-    }
+    _scale_rate = sample_rate;
+    _scale_note_frames = duration_ms / SCALE_NOTES * (sample_rate / 10) / 100;
+    _scale_rest_frames = 0;
+    _scale_frames = 0;
 
     if (audio->set_callback) {
-        audio->set_callback(audio_test_callback);
+        audio->set_callback(audio_scale_callback);
     }
 
-    if (audio->start(sample_rate, AUDIO_S16LE, channels) != 0) {
+    if (audio->start(sample_rate, AUDIO_S16LE, 2) != 0) {
         console_puts("AUDIO_START failed.");
         audio_stop_playback();
         return;
@@ -244,31 +290,17 @@ static void audio_run_scale_test(uint32_t duration_ms)
     console_printf("Playing scale test (%d ms) using %s...\n", duration_ms,
                    audio_get_driver_name());
 
-    start_ticks = kernel_ticks;
-    total_ticks = duration_ms / 10;
-    if (total_ticks == 0) {
-        total_ticks = 1;
-    }
-
-    for (n = 0; n < num_notes; ++n) {
-        uint32_t period = sample_rate / freqs[n];
-        uint32_t note_end_ticks;
-
-        if (period < 2) {
-            period = 2;
-        }
-
-        _tone_half_period = period / 2;
-        if (_tone_half_period == 0) {
-            _tone_half_period = 1;
-        }
-        _tone_phase = 0;
-
-        note_end_ticks = start_ticks + (uint32_t)(((n + 1u) * total_ticks) / num_notes);
-        audio_wait_until(note_end_ticks);
+    total = (uint32_t)SCALE_NOTES * (_scale_note_frames + _scale_rest_frames);
+    limit = kernel_ticks + 4u * (total / (sample_rate / 100)) + 100u;
+    while (_scale_frames < total && kernel_ticks < limit) {
+        idle_wait_irq_on();
     }
 
     audio_stop_playback();
+    if (_scale_frames < total) {
+        console_printf("audio: stalled: %u of %u frames\n", _scale_frames, total);
+        return;
+    }
     console_puts("Done.");
 }
 

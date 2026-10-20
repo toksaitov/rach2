@@ -25,7 +25,11 @@ static int dma_half;      /* the half of the buffer the model's DMA reads */
 static uint8_t commands[32];
 static int scale_done;
 static int scale_failed;
-static unsigned int scale_notes;
+static int scale_stalled;
+static int device_stopped;           /* the model's device takes no more frames */
+static int scale_captured;           /* the primed halves are in scale_stream */
+static int16_t scale_stream[120000]; /* the scale's left channel, in DMA order */
+static long scale_length;
 volatile uint32_t kernel_ticks;
 audio_driver_t *audio = &sb16_driver;
 
@@ -299,26 +303,35 @@ static void row_callback(void)
           "ring refill remains available");
 }
 
-/** Replace the idle wait with one timer tick and twelve completed DMA
- * blocks, the model's DMA moving to the other half at the end of each. */
+/** Append the half `half` of the DMA buffer to the scale's stream. */
+static void capture_half(int half)
+{
+    const int16_t *samples = (const int16_t *)(dma_buffer + (uint32_t)half * period_bytes);
+    uint32_t i;
+
+    for (i = 0; i < period_bytes / 4 && scale_length < (long)(sizeof(scale_stream) / 2); i++) {
+        CHECK(samples[2 * i] == samples[2 * i + 1], "scale channels agree");
+        scale_stream[scale_length++] = samples[2 * i];
+    }
+}
+
+/**
+ * Replace the idle wait with one timer tick, during which the model's DMA
+ * completes the half it reads and moves to the other, unless the device has
+ * stopped. Each half the interrupt refills joins the stream after the two
+ * primed halves, so the stream is the scale as the device plays it.
+ */
 void idle_wait_irq_on(void)
 {
-    static const uint32_t half_periods[] = {84, 75, 66, 63, 56};
-    unsigned int block, note = kernel_ticks / 40;
-
-    CHECK(note < 5, "scale finishes within its tick count");
-    if (note < 5) {
-        CHECK(_tone_half_period == half_periods[note], "scale retunes all five notes");
-        scale_notes |= 1u << note;
+    if (!scale_captured) {
+        capture_half(0);
+        capture_half(1);
+        scale_captured = 1;
     }
-    for (block = 0; block < 12; block++) {
-        int16_t *samples;
-
+    if (!device_stopped) {
         dma_half = 1 - dma_half;
-        samples = (int16_t *)(dma_buffer + (uint32_t)(1 - dma_half) * period_bytes);
         sb16_irq_handler(NULL);
-        CHECK(samples[0] == 12000 || samples[0] == -12000, "scale refills contain sound");
-        CHECK(samples[0] == samples[1], "scale channels agree");
+        capture_half(1 - dma_half);
     }
     kernel_ticks++;
 }
@@ -332,10 +345,11 @@ void console_puts(const char *text)
         scale_failed++;
 }
 
-/** Ignore presentation text; the scale rows check state and samples. */
+/** Record a stall report; the rest is presentation text. */
 void console_printf(const char *format, ...)
 {
-    (void)format;
+    if (audio_str_starts_with(format, "audio: stalled:"))
+        scale_stalled++;
 }
 
 /** Name the driver selected by this model. */
@@ -379,17 +393,57 @@ bool hda_debug_get_stream_snapshot(hda_stream_debug_snapshot_t *out)
     return false;
 }
 
-/** Run the scale command through setup, refills, and shutdown. */
-static void row_scale(void)
+/** Start the scale command on an idle model whose device runs or stops. */
+static void run_scale(int stopped)
 {
     reset_model();
-    kernel_ticks = scale_notes = 0;
-    scale_done = scale_failed = 0;
+    kernel_ticks = 0;
+    scale_done = scale_failed = scale_stalled = scale_captured = 0;
+    scale_length = 0;
+    device_stopped = stopped;
     CHECK(audio_debug_handle_command("audio test scale 2000"), "scale command recognized");
-    CHECK(current_sample_rate == 44100, "sb16 scale selects 44100 hz");
-    CHECK(scale_done == 1 && scale_failed == 0, "sb16 scale completes");
-    CHECK(scale_notes == 31 && irq_count == 2400, "scale continues through all notes");
     CHECK(!playing && !dma_active && !user_callback, "scale stops and detaches callback");
+}
+
+/**
+ * Run the scale command through setup, refills, and shutdown. At 44100 Hz
+ * each note is 17640 frames of a square wave whose runs are its half period,
+ * starting high, and a rest of three 512-frame periods follows it; the
+ * command ends once the device has the last rest.
+ */
+static void row_scale(void)
+{
+    static const long half_periods[] = {84, 75, 66, 63, 56};
+    long at = 0, note;
+
+    run_scale(0);
+    CHECK(current_sample_rate == 44100, "sb16 scale selects 44100 hz");
+    CHECK(scale_done == 1 && scale_failed == 0 && scale_stalled == 0, "sb16 scale completes");
+    CHECK(_scale_frames >= 5 * (17640 + 1536) && _scale_frames < 5 * (17640 + 1536) + 512,
+          "scale generates its notes and rests and stops");
+    for (note = 0; note < 5; note++) {
+        long i;
+
+        for (i = 0; i < 17640 && at + i < scale_length; i++) {
+            int16_t want = (i / half_periods[note]) % 2 == 0 ? 12000 : -12000;
+
+            if (scale_stream[at + i] != want)
+                break;
+        }
+        CHECK(i == 17640, "scale plays each note's whole square wave");
+        at += 17640;
+        for (i = 0; i < 1536 && at + i < scale_length; i++) {
+            if (scale_stream[at + i] != 0)
+                break;
+        }
+        CHECK(i == 1536, "scale rests three periods after each note");
+        at += 1536;
+    }
+    CHECK(scale_length >= at, "device plays the whole scale");
+    run_scale(1);
+    CHECK(scale_done == 0 && scale_stalled == 1, "stopped device makes scale report a stall");
+    CHECK(kernel_ticks >= 4 * (5 * (17640 + 1536) / 441) + 100,
+          "stall is reported after four lengths and a second");
 }
 
 /**

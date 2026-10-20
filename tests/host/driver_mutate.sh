@@ -64,6 +64,12 @@ elif fault == "period":
 elif fault == "dma-count":
     old = "        if ((before >> 8) == (count >> 8)) {\n            break;\n        }\n"
     new = "        (void)before;\n        break;\n"
+elif fault == "scale-rest":
+    old = "        _scale_rest_frames = 3 * frames;"
+    new = "        _scale_rest_frames = 1;"
+elif fault == "scale-stall":
+    old = "    if (_scale_frames < total) {\n        console_printf("
+    new = "    if (0) {\n        console_printf("
 elif fault == "mouse-aux":
     old = "    if (!(status & PS2_STATUS_OUTPUT_FULL) || !(status & PS2_STATUS_MOUSE_DATA)) {\n" \
           "        return;\n    }\n    data = inb(PS2_DATA_PORT);\n"
@@ -165,6 +171,10 @@ select_fault()
             failure='across a borrow in the second reading' ;;
         scale) test=sb16; file=audio/audio_debug.c
             failure='sb16 scale selects 44100 hz' ;;
+        scale-rest) test=sb16; file=audio/audio_debug.c
+            failure='scale rests three periods after each note' ;;
+        scale-stall) test=sb16; file=audio/audio_debug.c
+            failure='stopped device makes scale report a stall' ;;
         gfx-enter|gfx-exit) test=vga_gfx; file=display/vga_gfx.c
             failure='programs maximum scan line\|text clear excludes interrupts' ;;
         cursor) test=vga_text; file=display/vga_text.c
@@ -208,7 +218,7 @@ select_fault()
 }
 
 faults='frames gfx-enter gfx-exit setup-speaker setup-transfer setup-dma scale
-    callback position period dma-count cursor mouse-aux mouse-reply mouse-drop mouse-reset mouse-y
+    scale-rest scale-stall callback position period dma-count cursor mouse-aux mouse-reply mouse-drop mouse-reset mouse-y
     mouse-drain mouse-sti mouse-input mouse-enable mouse-config mouse-ack
     mouse-resend mouse-register mouse-frame mouse-overflow dma-stop kbd-aux insyde
     pm-answers'
