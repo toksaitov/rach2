@@ -36,9 +36,17 @@ typedef unsigned char uint8_t;
 #define DST_PORT   7777
 #define LOCAL_PORT 12345
 
-struct timeval {
-    long tv_sec;
-    long tv_usec;
+/* How long a wait for the echo lasts, in milliseconds, before the message is
+ * sent again. It paces the resends and decides nothing: the row waits for as
+ * many as it takes, and the suite's limit ends a run whose echo never comes. */
+#define RESEND_MS 1000
+
+#define POLLIN 0x001
+
+struct pollfd_probe {
+    int fd;
+    short events;
+    short revents;
 };
 
 /** The write call: the count written, or a negated errno. */
@@ -54,10 +62,11 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
-/** The gettimeofday call with no time zone: 0, or a negated errno. */
-static int sys_gettimeofday(struct timeval *tv)
+/** The poll call, with `timeout` in milliseconds: the count of ready
+ * descriptors, 0 when the timeout passed first, or a negated errno. */
+static int sys_poll(struct pollfd_probe *fds, unsigned int n, int timeout)
 {
-    return syscall2(SYS_GETTIMEOFDAY, (long)tv, (long)0);
+    return syscall3(SYS_POLL, (long)fds, (long)n, (long)timeout);
 }
 
 /** The socket operation `call`, an SC_ number, through `sock_call`. */
@@ -136,18 +145,6 @@ static void make_sockaddr(uint8_t *sa, uint16_t port, uint8_t a, uint8_t b, uint
     sa[7] = d;
 }
 
-/** Spin for at least `ms` milliseconds by gettimeofday. */
-static void delay_ms(int ms)
-{
-    struct timeval start, now;
-    long elapsed;
-    sys_gettimeofday(&start);
-    do {
-        sys_gettimeofday(&now);
-        elapsed = (now.tv_sec - start.tv_sec) * 1000 + (now.tv_usec - start.tv_usec) / 1000;
-    } while (elapsed < ms);
-}
-
 /** The echo server's port: the first argument when there is one, since
  * tests/system/suites.mk moves the socket suite's port with the run's block
  * of ports, else DST_PORT. */
@@ -202,10 +199,12 @@ PROBE_SP_ENTRY;
  * The probe, entered with `sp` at argc: the five tests in order. A failed
  * socket in test 1 ends it at once with status 1.
  *
- * Test 4 sends the message and polls for the echo 50 ms later, up to 40
- * times, sending it again each time no echo has come. A datagram sent
- * before ARP has the gateway's address waits in the kernel for the reply,
- * so the first echo can come late.
+ * Test 4 sends the message and waits in poll for the echo, sending the
+ * message again each time RESEND_MS passes with no echo, for as long
+ * as it takes: a datagram between the emulator's network and the host can
+ * be lost, and a datagram sent before ARP has the gateway's address waits
+ * in the kernel for the reply. The count of sends decides nothing. The echo
+ * is then read with MSG_PEEK, so test 5 finds it still queued.
  */
 void probe_main(unsigned long *sp)
 {
@@ -213,7 +212,8 @@ void probe_main(unsigned long *sp)
     uint8_t local_sa[16], dst_sa[16], rcv_sa[16];
     char msg[] = "rach2-udp-echo";
     uint8_t buf[64];
-    int fd, n, msglen, passed = 0, failed = 0, attempt;
+    struct pollfd_probe pfd;
+    int fd, n, msglen, passed = 0, failed = 0, ready;
 
     msglen = (int)strlen(msg);
 
@@ -271,8 +271,8 @@ void probe_main(unsigned long *sp)
     /* Test 4: echo round trip, sent again until the echo arrives. */
     print("Test 4: sendto + recvfrom echo... ");
     make_sockaddr(dst_sa, server_port(sp), DST_IP_0, DST_IP_1, DST_IP_2, DST_IP_3);
-    n = EAGAIN;
-    for (attempt = 0; attempt < 40 && n < 0; attempt++) {
+    ready = 0;
+    while (ready == 0) {
         args[0] = (uint32_t)fd;
         args[1] = (unsigned long)msg;
         args[2] = (uint32_t)msglen;
@@ -281,16 +281,19 @@ void probe_main(unsigned long *sp)
         args[5] = 16;
         socketcall(SC_SENDTO, args);
 
-        delay_ms(50);
-
-        args[0] = (uint32_t)fd;
-        args[1] = (unsigned long)buf;
-        args[2] = sizeof(buf);
-        args[3] = MSG_DONTWAIT | MSG_PEEK;
-        args[4] = (unsigned long)rcv_sa;
-        args[5] = (unsigned long)&rcv_len;
-        n = socketcall(SC_RECVFROM, args);
+        pfd.fd = fd;
+        pfd.events = POLLIN;
+        pfd.revents = 0;
+        ready = sys_poll(&pfd, 1, RESEND_MS);
     }
+
+    args[0] = (uint32_t)fd;
+    args[1] = (unsigned long)buf;
+    args[2] = sizeof(buf);
+    args[3] = MSG_DONTWAIT | MSG_PEEK;
+    args[4] = (unsigned long)rcv_sa;
+    args[5] = (unsigned long)&rcv_len;
+    n = ready < 0 ? ready : socketcall(SC_RECVFROM, args);
 
     if (n == msglen && mem_eq(buf, (const uint8_t *)msg, msglen)) {
         puts("OK");
