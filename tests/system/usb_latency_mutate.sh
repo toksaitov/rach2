@@ -9,6 +9,17 @@
 # source restored, touched and rebuilt must pass both rows with a kernel equal
 # to the first byte for byte.
 #
+# Each row judges counts the kernel keeps between the wake and the dispatch,
+# and no time, so the speed of the emulator does not decide what it catches.
+# Without the preemption, the only switch left to the reader beside a spinner
+# in user mode is the one the tick's handler makes, after it has pumped the
+# controller, so every run counts a pump; no other device on the row's
+# machine interrupts meanwhile. Without the service point, the reader waits
+# for the end of the eight-mebibyte call it woke in, and the bytes left in
+# that call are counted; a run misses the fault only when the key lands
+# within the last 4096 bytes of a call or between two calls, a fraction of
+# the loop's work, about one run in two thousand, whatever the speed.
+#
 # The kernels are built from a private copy of rach2/ and mk/, so no kernel
 # under build/ is replaced; the test image, the harness and the runner helper
 # are the ones `tests/run usb` built, and must be current. ARCH chooses the
