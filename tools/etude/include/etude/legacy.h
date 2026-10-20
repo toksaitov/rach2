@@ -184,12 +184,14 @@ struct etude_legacy_set_opts {
  * half the limit, and a port block, whose offset the suite is given as
  * RACH2_PORT_OFFSET. The serial members run first, one at a time; the
  * others run in the order given, as many at once as the ledger and
- * `o->width` admit. A failure of a member that `stops`, or of any member
- * with `o->stop_on_fail`, cancels what runs and what has not started.
+ * `o->width` admit. A suite that `stops` and did not pass cancels what
+ * runs and what has not started, once every member of the suite has ended;
+ * with `o->stop_on_fail`, the first member that does not pass does so at
+ * once.
  *
  * A member with `cases` is run by the host cases of its manifest that run
  * on `o->arch` or on none, each repetition of each a member of its own that
- * keeps the suite's `serial` and `stops`. Their programs are goals of the
+ * keeps the suite's `serial`. Their programs are goals of the
  * preparation; each runs in the tree under the case's initial bounds, with
  * a claim of the case's resources, and `o->casecheck` judges each attempt.
  * A manifest that cannot be read, of another suite's family, with no case

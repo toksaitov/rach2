@@ -55,7 +55,9 @@
  * casecheck's outcome and the reason of the assertion that decided it, an
  * attempt that runs past its case bound is incomplete, and `casecheck
  * verdict` passes a run of passing cases and fails the suite of failing
- * ones. A case suite runs beside a suite of the registry. A manifest that
+ * ones. A failed case of a suite that `stops` leaves the suite's other
+ * cases to run before the set stops. A case suite runs beside a suite of
+ * the registry. A manifest that
  * cannot be read, of another suite's family, with a case that is not a host
  * case, reads its input, needs ports, loop devices or a fixture other than
  * scratch, or has no case on the architecture is refused, and so is a case
@@ -1531,6 +1533,31 @@ static void test_cases_mixed(void)
     show(&r, before);
 }
 
+/** A failed case of a suite that stops the set leaves the other cases of
+ * its suite to run, and the set then stops before the next suite. */
+static void test_cases_stops(void)
+{
+    static const struct etude_legacy_member m[] = {{"mixed", 0, 1, 1, "cases/mixed/mixed.json"},
+                                                   {"plain", 64, 0, 0, NULL}};
+    static struct run r;
+    int before = fails;
+
+    r.name = "casesstops";
+    r.members = m;
+    r.n = 2;
+    set_run(&r);
+    CHECK(r.status == 1, "casesstops: failed");
+    CHECK(case_is(&r, "fixture.mixed.fail", "i686", 0, "failure", "ran failed: the count was 2"),
+          "casesstops: the case that failed");
+    CHECK(case_is(&r, "fixture.mixed.cut", "i686", 0, "incomplete", "etude.report is missing") &&
+              case_is(&r, "fixture.mixed.slow", "i686", 0, "incomplete", NULL),
+          "casesstops: the cases after the one that failed ran");
+    CHECK(item_is(&r, "plain", "cancelled"), "casesstops: the next suite cancelled");
+    CHECK(has_line(r.out, "run: stopped: mixed failed; not started: plain"),
+          "casesstops: the stop names the suite");
+    show(&r, before);
+}
+
 /** A suite run by its cases beside a suite of the registry. */
 static void test_cases_beside(void)
 {
@@ -1669,6 +1696,7 @@ int main(int argc, char **argv)
     test_cases();
     test_cases64();
     test_cases_mixed();
+    test_cases_stops();
     test_cases_beside();
     test_cases_refused();
     if (fails != 0)

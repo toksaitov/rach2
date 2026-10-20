@@ -2069,7 +2069,6 @@ static void finished(struct set *x, struct etude_supervised *f)
 {
     struct member *m = NULL;
     struct command *c;
-    char what[200];
     size_t i;
 
     for (i = 0; i < x->n && m == NULL; i++)
@@ -2098,13 +2097,33 @@ static void finished(struct set *x, struct etude_supervised *f)
     c->sup = NULL;
     write_attempt(x, m);
     status(x, 1);
-    if (c->outcome == FAILURE || c->outcome == INCOMPLETE) {
-        if (m->m->stops) {
-            snprintf(what, sizeof(what), "stopped: %s failed", c->name);
-            stop_all(x, "a suite that stops the run did not pass", what);
-        } else if (x->o->stop_on_fail) {
-            stop_all(x, "the run stopped on the first failure", "stopped on the first failure");
+    if ((c->outcome == FAILURE || c->outcome == INCOMPLETE) && x->o->stop_on_fail)
+        stop_all(x, "the run stopped on the first failure", "stopped on the first failure");
+}
+
+/** Stop the run once every member of a suite that `stops` has ended and one
+ * of them did not pass, so that the other cases of such a suite still run
+ * after one of them fails. */
+static void stop_on_suites(struct set *x)
+{
+    char what[200];
+    size_t i = 0, j;
+
+    while (i < x->n && !x->stopping) {
+        const struct etude_legacy_member *s = x->mem[i].m;
+        int ended = 1, failed = 0;
+
+        for (j = i; j < x->n && x->mem[j].m == s; j++) {
+            const struct command *c = &x->mem[j].c;
+
+            ended &= c->state == DONE;
+            failed |= c->outcome == FAILURE || c->outcome == INCOMPLETE;
         }
+        if (s->stops && ended && failed) {
+            snprintf(what, sizeof(what), "stopped: %s failed", s->suite);
+            stop_all(x, "a suite that stops the run did not pass", what);
+        }
+        i = j;
     }
 }
 
@@ -2167,6 +2186,7 @@ static void drive(struct set *x)
     for (;;) {
         if (signalled(x) && !x->stopping)
             stop_all(x, x->stop_reason, NULL);
+        stop_on_suites(x);
         mark_ready(x);
         if (!x->stopping &&
             etude_sched_admit(x->l, x->o->account, x->jobs, x->n, x->cap, x->ncap, NULL) != 0) {

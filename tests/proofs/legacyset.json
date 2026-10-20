@@ -101,14 +101,31 @@
       "edits": [
         {
           "file": "tools/etude/posix/legacy_set.c",
-          "find": "        } else if (x->o->stop_on_fail) {\n",
-          "replace": "        } else if (0) {\n"
+          "find": "    if ((c->outcome == FAILURE || c->outcome == INCOMPLETE) && x->o->stop_on_fail)\n",
+          "replace": "    if (0)\n"
         }
       ],
       "fails": {
         "status": 1,
         "lines": [
           ": first: the running suite cancelled: "
+        ]
+      }
+    },
+    {
+      "name": "suitestop",
+      "summary": "a suite that stops the set stops it when a case fails, before its other cases have run",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "        if (s->stops && ended && failed) {\n",
+          "replace": "        if (s->stops && failed) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": casesstops: the cases after the one that failed ran: "
         ]
       }
     },
