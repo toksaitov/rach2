@@ -248,11 +248,15 @@ static int fake_qemu(const char *mode, int argc, char **argv)
 {
     const char *accel = NULL, *reason = NULL;
     int i, con, qmp, guest = 1, stopped = 0;
+    const char *audio = NULL;
+    FILE *wav;
 
     for (i = 1; i + 1 < argc; i++) {
         if (strcmp(argv[i], "-accel") == 0)
             accel = argv[i + 1];
         stopped |= strcmp(argv[i], "-S") == 0;
+        if (strcmp(argv[i], "-audiodev") == 0)
+            audio = strstr(argv[i + 1], "path=");
     }
     if (accel == NULL || !stopped)
         return 125;
@@ -271,6 +275,13 @@ static int fake_qemu(const char *mode, int argc, char **argv)
         for (;;)
             pause();
     fake_start(qmp, mode, accel);
+    if (audio != NULL) {
+        wav = fopen(audio + 5, "wb");
+        if (wav == NULL)
+            return 127;
+        fputs("recorded samples", wav);
+        fclose(wav);
+    }
     put(con, "fake: running\r\n");
     if (strcmp(mode, "crash") == 0) {
         put(con, "fake: crashing\r\n");
@@ -346,6 +357,10 @@ static void row_act(struct row *r)
     const struct etude_machine_result *res = etude_machine_result(r->m);
     long shell;
 
+    if (r->act == 'a' && r->acted == 1 && find(&res->console, "Done.", 0) >= 0) {
+        r->acted = 2;
+        CHECK(etude_machine_type(r->m, "poweroff\r", 9) == 0, r->name);
+    }
     if (r->act == 'b' && r->acted == 1 && find(&res->console, "MEMPROBE MemTotal ", 0) >= 0) {
         r->acted = 2;
         etude_machine_cancel(r->m);
@@ -357,13 +372,17 @@ static void row_act(struct row *r)
         r->acted = 1;
         etude_machine_cancel(r->m);
     }
-    if (r->act != 'p' && r->act != 'P' && r->act != 'b')
+    if (r->act != 'p' && r->act != 'P' && r->act != 'b' && r->act != 'a')
         return;
     shell = find(&res->console, "Kernel debug shell active", 0);
     if (shell < 0 || find(&res->console, "\n> ", (size_t)shell) < 0)
         return;
     r->acted = 1;
-    if (r->act == 'b') {
+    if (r->act == 'a') {
+        static const char scale[] = "audio test scale 200\r";
+
+        CHECK(etude_machine_type(r->m, scale, sizeof(scale) - 1) == 0, r->name);
+    } else if (r->act == 'b') {
         CHECK(etude_machine_type(r->m, "exec /memprobe 5120\r", 19) != 0 && errno == EPERM,
               "boundary refuses an allocating workload");
         CHECK(etude_machine_type(r->m, "exec /memprobe total\r", 21) == 0, r->name);
@@ -733,6 +752,22 @@ static int real_files(struct row *r)
     return access(r->kernel, R_OK) == 0 && access(r->initrd, R_OK) == 0;
 }
 
+/** Require a real recording to contain a WAV header and sample bytes. */
+static void check_real_audio(const struct etude_machine_result *res)
+{
+    char header[44];
+    FILE *wav = res->audio_path != NULL ? fopen(res->audio_path, "rb") : NULL;
+
+    CHECK(wav != NULL, "real audio capture exists after QEMU ends");
+    if (wav != NULL) {
+        CHECK(fread(header, 1, sizeof(header), wav) == sizeof(header) &&
+                  memcmp(header, "RIFF", 4) == 0 && memcmp(header + 8, "WAVE", 4) == 0 &&
+                  fgetc(wav) != EOF,
+              "real audio capture contains WAV samples");
+        fclose(wav);
+    }
+}
+
 /**
  * Boot the kernel of the architecture ARCH names, i686 when it is unset, in
  * the real QEMU under TCG, twice, and ask QEMU for an accelerator it does not
@@ -746,9 +781,10 @@ static void test_real(int boundary)
     const enum etude_accel absent = ETUDE_ACCEL_HVF;
 #endif
     static struct row rows[] = {
-        ROW("real-poweroff", NULL, ETUDE_ACCEL_TCG, "i686", ETUDE_END_SHUTDOWN, 'p'),
+        ROW("real-poweroff", NULL, ETUDE_ACCEL_TCG, "i686", ETUDE_END_SHUTDOWN, 'a'),
         ROW("real-cancel", NULL, ETUDE_ACCEL_TCG, "i686", ETUDE_END_STOPPED, 'P'),
         ROW("real-absent", NULL, ETUDE_ACCEL_TCG, "i686", ETUDE_END_ACCEL_FAILED, 0),
+        ROW("real-audio-sb16", NULL, ETUDE_ACCEL_TCG, "i686", ETUDE_END_SHUTDOWN, 'a'),
         ROW("real-boundary", NULL, ETUDE_ACCEL_TCG, "x86_64", ETUDE_END_STOPPED, 'b'),
     };
     const char *arch = getenv("ARCH") != NULL && *getenv("ARCH") != '\0' ? getenv("ARCH") : "i686";
@@ -757,15 +793,17 @@ static void test_real(int boundary)
     const struct etude_machine_result *res;
     struct etude_qemu *q;
 
+    rows[0].profile.audio = "hda";
+    rows[3].profile.audio = "sb16";
     rows[2].accel = absent;
     if (boundary) {
         CHECK(strcmp(arch, "x86_64") == 0, "boundary requires ARCH=x86_64");
         if (strcmp(arch, "x86_64") != 0)
             return;
-        rows[0] = rows[3];
+        rows[0] = rows[4];
         n = 1;
     } else {
-        n = 3;
+        n = 4;
     }
     if (strcmp(arch, "i686") != 0 && strcmp(arch, "x86_64") != 0) {
         printf("etude-qemu-test: fail: ARCH is i686 or x86_64, not %s\n", arch);
@@ -802,6 +840,8 @@ static void test_real(int boundary)
             continue;
         }
         res = etude_machine_result(rows[i].m);
+        if (rows[i].act == 'a')
+            check_real_audio(res);
         if (rows[i].act == 'b')
             boundary_result(&rows[i]);
         if (rows[i].want == ETUDE_END_SHUTDOWN) {
@@ -826,7 +866,7 @@ static int make_in(const struct etude_qemu_profile *p, const struct etude_qemu_s
 {
     struct etude_qemu_line out = {argv, max, buf, size};
 
-    return etude_qemu_argv(p, site, "/s/c", "/s/q", &out);
+    return etude_qemu_argv(p, site, "/s/c", "/s/q", "/s/one,two.wav", &out);
 }
 
 /** Make the command line of profile `p` on `site` with the test's sockets. */
@@ -834,6 +874,109 @@ static int make(const struct etude_qemu_profile *p, const struct etude_qemu_site
                 char *buf, size_t size)
 {
     return make_in(p, site, argv, ETUDE_QEMU_ARGS_MAX, buf, size);
+}
+
+/** Say whether an option has exactly `value` as one argument. */
+static int has_arg(char *const argv[], const char *option, const char *value)
+{
+    size_t i;
+
+    for (i = 0; argv[i] != NULL && argv[i + 1] != NULL; i++)
+        if (strcmp(argv[i], option) == 0 && strcmp(argv[i + 1], value) == 0)
+            return 1;
+    return 0;
+}
+
+/** Check both audio cards, WAV path quoting, and a missing or unknown card. */
+static void test_audio_argv(void)
+{
+    struct etude_qemu_profile p = {0};
+    struct etude_qemu_site site = {ETUDE_ACCEL_TCG, "qemu", "qemu", NULL, NULL, 0};
+    char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096];
+    struct etude_qemu_line out = {argv, ETUDE_QEMU_ARGS_MAX, buf, sizeof(buf)};
+    int i;
+
+    p.architecture = "i686";
+    p.kernel = "kernel";
+    p.cpu = "max";
+    p.processors = 1;
+    p.memory_bytes = 128u << 20;
+    for (i = 0; i < 2; i++) {
+        p.audio = i == 0 ? "hda" : "sb16";
+        CHECK(make(&p, &site, argv, buf, sizeof(buf)) == 0, "audio command line");
+        CHECK(has_arg(argv, "-audiodev", "wav,id=etude-audio,path=/s/one,,two.wav"),
+              "audio WAV path quoting");
+        CHECK(has_arg(argv, "-device",
+                      i == 0 ? "intel-hda,id=etude-hda" : "sb16,audiodev=etude-audio"),
+              "audio controller");
+        if (i == 0)
+            CHECK(has_arg(argv, "-device", "hda-duplex,bus=etude-hda.0,audiodev=etude-audio"),
+                  "audio HDA codec");
+    }
+    CHECK(etude_qemu_argv(&p, &site, "/c", "/q", NULL, &out) == EINVAL,
+          "audio needs a launcher path");
+    p.audio = "invalid";
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == EINVAL, "unknown audio card");
+    p.audio = NULL;
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == 0 &&
+              !has_arg(argv, "-device", "sb16,audiodev=etude-audio"),
+          "audio absent by default");
+}
+
+/** Check isolated recordings, their lifetime, and refusal to replace a file. */
+static void test_audio(void)
+{
+    struct row rows[] = {
+        ROW("audio-hda", "shutdown", ETUDE_ACCEL_TCG, "i686", ETUDE_END_SHUTDOWN, 'g'),
+        ROW("audio-sb16", "shutdown", ETUDE_ACCEL_TCG, "x86_64", ETUDE_END_SHUTDOWN, 'g')};
+    struct etude_qemu *q = etude_qemu_new();
+    struct etude_machine_spec spec;
+    struct etude_machine *refused = NULL;
+    char temporary[PATH_MAX], text[32] = "";
+    const char *paths[2];
+    FILE *f;
+    int i;
+
+    CHECK(q != NULL, "audio launcher");
+    if (q == NULL)
+        return;
+    rows[0].profile.audio = "hda";
+    rows[1].profile.audio = "sb16";
+    for (i = 0; i < 2; i++) {
+        row_spec(&rows[i], &spec, self, self, FAKE_GRACE_US);
+        if (i == 1)
+            spec.audio_path = fix_path("recording.wav");
+        CHECK(etude_qemu_start(q, &spec, &rows[i].m) == 0, "audio starts");
+        if (rows[i].m != NULL)
+            etude_machine_type(rows[i].m, "go\r", 3);
+    }
+    run_rows(q, rows, 2);
+    for (i = 0; i < 2; i++) {
+        row_check(&rows[i]);
+        paths[i] = rows[i].m != NULL ? etude_machine_result(rows[i].m)->audio_path : NULL;
+        f = paths[i] != NULL ? fopen(paths[i], "rb") : NULL;
+        CHECK(f != NULL, "audio survives machine end");
+        if (f != NULL) {
+            text[fread(text, 1, sizeof(text) - 1, f)] = '\0';
+            CHECK(strcmp(text, "recorded samples") == 0, "audio recording bytes");
+            fclose(f);
+        }
+    }
+    if (paths[0] != NULL && paths[1] != NULL) {
+        CHECK(strcmp(paths[0], paths[1]) != 0, "audio paths differ");
+        snprintf(temporary, sizeof(temporary), "%s", paths[0]);
+        CHECK(etude_qemu_start(q, &spec, &refused) != 0 && errno == EEXIST,
+              "audio refuses an existing recording");
+        row_free(&rows[0]);
+        CHECK(access(temporary, F_OK) != 0 && errno == ENOENT, "audio temporary removed");
+        row_free(&rows[1]);
+        CHECK(access(fix_path("recording.wav"), F_OK) == 0, "audio evidence retained");
+    } else {
+        row_free(&rows[0]);
+        row_free(&rows[1]);
+    }
+    etude_qemu_free(q);
+    CHECK(!left_in(fix_dir(), "etude-qemu."), "audio directories removed");
 }
 
 /** Check the command lines of profiles, and the profiles that are refused. */
@@ -1049,10 +1192,15 @@ int main(int argc, char **argv)
         return 1;
     if (argc == 2 && strcmp(argv[1], "--boundary") == 0) {
         test_real(1);
+    } else if (argc == 2 && strcmp(argv[1], "--audio") == 0) {
+        test_audio_argv();
+        test_audio();
     } else if (argc == 2 && strcmp(argv[1], "--memory") == 0) {
         test_memory();
     } else {
         test_argv();
+        test_audio_argv();
+        test_audio();
         test_memory();
         test_ends();
         test_refused_starts();

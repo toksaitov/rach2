@@ -39,6 +39,7 @@ struct etude_qemu_profile {
     unsigned processors;        /* 1 to 64 */
     uint64_t memory_bytes;      /* a whole number of mebibytes */
     const char *memory_profile; /* NULL or "reserved", or "bigmem-boundary-v1" */
+    const char *audio;          /* NULL, "hda" or "sb16", recorded through the WAV backend */
     enum etude_firmware firmware;
     const char *const *devices;      /* ended by NULL */
     const char *const *boot_options; /* the kernel's command line, ended
@@ -108,14 +109,16 @@ struct etude_qemu_line {
  * console on the socket at `console` and QMP on the one at `qmp`, both of
  * which QEMU connects to as a client. The machine starts stopped, with `-S`,
  * and the launcher starts it once QMP has confirmed the accelerator. argv[0]
- * is the site's program for the architecture.
+ * is the site's program for the architecture. `audio` is the launcher-made
+ * WAV path, required when the profile selects an audio card.
  *
  * @return 0, or an error number: EINVAL for a profile the launcher cannot
  *         make, ENOENT for a firmware the site lacks, E2BIG when `out` is too
  *         small; ENOTSUP for a lazy boundary profile the site has not enabled.
  */
 int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_site *s,
-                    const char *console, const char *qmp, const struct etude_qemu_line *out);
+                    const char *console, const char *qmp, const char *audio,
+                    const struct etude_qemu_line *out);
 
 /**
  * Say whether QEMU's standard error `err` reports that it could not start
@@ -139,6 +142,8 @@ struct etude_machine_spec {
     char *const *envp;              /* QEMU's whole environment */
     const char *console_path;       /* a new file that gets every console byte,
                                        or NULL */
+    const char *audio_path;         /* new WAV file, or NULL for a private temporary file;
+                                       used only when the profile selects audio */
     size_t console_max;             /* console bytes kept in memory */
     uint64_t grace_us;              /* from QMP's quit to a kill, and from the
                                        termination signal to SIGKILL */
@@ -169,6 +174,9 @@ struct etude_machine_result {
     int by_guest;                /* the event's `guest` */
     struct etude_output console; /* what the console wrote; `closed` once QEMU
                                     closed it */
+    const char *audio_path;      /* WAV path, or NULL; complete after QEMU ends;
+                                    owned until machine_free, which removes a
+                                    temporary file but leaves a caller-given file */
     int console_file_error;      /* the error that ended the writes to the
                                     console's file, or 0 */
     uint64_t end_console;        /* console bytes read when the end was seen */

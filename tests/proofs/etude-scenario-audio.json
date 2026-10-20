@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "proof": "etude-scenario-audio",
+  "summary": "recorded audio uses the selected card and a private path that survives QEMU until evidence is read",
+  "tree": "private",
+  "sources": [
+    "tools/etude/posix/scenario.c"
+  ],
+  "artifacts": [
+    "${WORK}/test"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -I tests/host -I tools/etude/include -I tools/etude -I tools/etude/posix -I tools/etude/guest -I utils tests/host/etude_scenario_hosttest.c ${SRC}/tools/etude/posix/scenario.c tools/etude/posix/case_main.c tools/etude/serial.c tools/etude/processor.c tools/etude/posix/qemu.c tools/etude/qemu_profile.c tools/etude/posix/exec.c tools/etude/posix/keeper.c tools/etude/posix/process.c tools/etude/posix/store.c tools/etude/capture.c tools/etude/history_json.c tools/etude/guest/guest.c tools/etude/guest/fixture.c tools/etude/guest/wire.c utils/sha256.c -o ${WORK}/test"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "/usr/bin/env",
+      "ETUDE_TEST_AUDIO_ONLY=1",
+      "${WORK}/test"
+    ],
+    "bound_s": 60
+  },
+  "faults": [
+    {
+      "name": "audio-profile-lost",
+      "summary": "audio profile lost",
+      "edits": [
+        {
+          "file": "tools/etude/posix/scenario.c",
+          "find": "    p->audio = jtext(qp, \"audio\");",
+          "replace": "    p->audio = NULL;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "audio-first"
+        ]
+      }
+    },
+    {
+      "name": "recording-not-cleaned",
+      "summary": "recording not cleaned",
+      "edits": [
+        {
+          "file": "tools/etude/posix/scenario.c",
+          "find": "    if (mres(m)->audio_path != NULL)\n        made(c, mres(m)->audio_path, 0);",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "audio passing evidence removed"
+        ]
+      }
+    }
+  ]
+}

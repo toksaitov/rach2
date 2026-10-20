@@ -70,6 +70,8 @@ struct etude_machine {
     int console_listen, qmp_listen; /* -1 once QEMU has connected */
     int console, qmp;               /* QEMU's connections; -1 once closed */
     int console_file;
+    char *audio_path;
+    int audio_created, audio_temporary;
     struct etude_proc *proc;
     int proc_done; /* the executor has finished QEMU's attempt */
     enum qmp_state qmp_state;
@@ -154,7 +156,7 @@ static int listen_at(const char *path)
     return fd;
 }
 
-/** Remove the machine's sockets and its directory, and close what is open. */
+/** Remove the machine's sockets and close what is open. */
 static void machine_close(struct etude_machine *m)
 {
     close_fd(&m->console_listen);
@@ -165,8 +167,6 @@ static void machine_close(struct etude_machine *m)
     if (m->dir[0] != '\0') {
         unlink(m->console_path);
         unlink(m->qmp_path);
-        rmdir(m->dir);
-        m->dir[0] = '\0';
     }
 }
 
@@ -181,6 +181,11 @@ static void machine_release(struct etude_machine *m)
         free(c);
     }
     machine_close(m);
+    if (m->audio_created && m->audio_temporary)
+        unlink(m->audio_path);
+    if (m->dir[0] != '\0')
+        rmdir(m->dir);
+    free(m->audio_path);
     if (m->proc != NULL)
         etude_proc_free(m->proc);
     capture_free(&m->r.console);
@@ -212,6 +217,32 @@ static int machine_dir(struct etude_machine *m)
     }
     snprintf(m->console_path, sizeof(m->console_path), "%s/c", m->dir);
     snprintf(m->qmp_path, sizeof(m->qmp_path), "%s/q", m->dir);
+    return 0;
+}
+
+/** Reserve a new WAV file, with its path owned until the machine is freed. */
+static int machine_audio(struct etude_machine *m, const struct etude_machine_spec *spec)
+{
+    char path[sizeof(m->dir) + 16];
+    const char *name = spec->audio_path;
+    int fd;
+
+    if (spec->profile->audio == NULL)
+        return 0;
+    if (name == NULL) {
+        snprintf(path, sizeof(path), "%s/audio.wav", m->dir);
+        name = path;
+        m->audio_temporary = 1;
+    }
+    m->audio_path = strdup(name);
+    if (m->audio_path == NULL)
+        return -1;
+    fd = open(name, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    if (fd < 0)
+        return -1;
+    close(fd);
+    m->audio_created = 1;
+    m->r.audio_path = m->audio_path;
     return 0;
 }
 
@@ -306,7 +337,8 @@ int etude_qemu_start(struct etude_qemu *q, const struct etude_machine_spec *spec
         errno = ENOMEM;
         return -1;
     }
-    if (boundary_check(spec, &m->boundary) != 0 || machine_dir(m) != 0)
+    if (boundary_check(spec, &m->boundary) != 0 || machine_dir(m) != 0 ||
+        machine_audio(m, spec) != 0)
         goto fail;
     buf = malloc(QEMU_LINE_BYTES);
     if (buf == NULL) {
@@ -317,7 +349,8 @@ int etude_qemu_start(struct etude_qemu *q, const struct etude_machine_spec *spec
     line.max = ETUDE_QEMU_ARGS_MAX;
     line.buf = buf;
     line.size = QEMU_LINE_BYTES;
-    e = etude_qemu_argv(spec->profile, spec->site, m->console_path, m->qmp_path, &line);
+    e = etude_qemu_argv(spec->profile, spec->site, m->console_path, m->qmp_path, m->audio_path,
+                        &line);
     if (e != 0) {
         errno = e;
         goto fail;
@@ -353,6 +386,8 @@ fail:
     free(buf);
     if (m->console_file >= 0)
         unlink(spec->console_path);
+    if (m->audio_created)
+        unlink(m->audio_path);
     machine_release(m);
     errno = e;
     return -1;

@@ -583,6 +583,7 @@ static int qemu_memory(const struct rule *r, const struct json *qemu,
     p.cpu = json_text(qemu, "cpu");
     p.initrd = json_text(qemu, "initrd");
     p.memory_profile = json_text(qemu, "memory_profile");
+    p.audio = json_text(qemu, "audio");
     p.memory_bytes = (uint64_t)json_member(qemu, "memory_bytes")->integer;
     p.processors = json_member(qemu, "processors")->integer <= 64
                        ? (unsigned)json_member(qemu, "processors")->integer

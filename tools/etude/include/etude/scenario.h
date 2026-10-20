@@ -143,6 +143,13 @@ enum etude_status etude_guest(struct etude_case_machine *m, const char *name,
 enum etude_status etude_wait_end(struct etude_case_machine *m, struct etude_termination *end);
 
 /**
+ * Give the WAV path of this boot, or NULL when its profile selects no audio.
+ * The library owns the path and keeps the file as attempt evidence. Read it
+ * after etude_wait_end, when QEMU has finished its WAV header and samples.
+ */
+const char *etude_audio(const struct etude_case_machine *m);
+
+/**
  * Run a host tool or an artifact of the manifest, `argv[0]` its name, in the
  * foreground, keeping its standard output as evidence `output` and its
  * standard error as `output`.err, and give its end.

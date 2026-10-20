@@ -137,6 +137,24 @@ static void add_device(struct line *l, const char *name, unsigned *nics)
     add(l, 0, "%s", name);
 }
 
+/** Add the selected audio card and its WAV backend at the launcher's path. */
+static void add_audio(struct line *l, const char *card, const char *path)
+{
+    if (card != NULL) {
+        add(l, 0, "-audiodev");
+        add(l, 1, "wav,id=etude-audio,path=%s", path);
+        if (strcmp(card, "hda") == 0) {
+            add(l, 0, "-device");
+            add(l, 0, "intel-hda,id=etude-hda");
+            add(l, 0, "-device");
+            add(l, 0, "hda-duplex,bus=etude-hda.0,audiodev=etude-audio");
+        } else {
+            add(l, 0, "-device");
+            add(l, 0, "sb16,audiodev=etude-audio");
+        }
+    }
+}
+
 /** Add one argument of the strings of `list` separated by spaces. */
 static void add_joined(struct line *l, const char *const *list)
 {
@@ -176,8 +194,9 @@ int etude_qemu_memory(const struct etude_qemu_profile *p, struct etude_qemu_memo
             strcmp(p->architecture, "x86_64") != 0 || p->cpu == NULL ||
             strcmp(p->cpu, "max-nopdpe1gb") != 0 || p->processors != 1 ||
             p->memory_bytes != ETUDE_BIGMEM_CONFIGURED || p->firmware != ETUDE_FIRMWARE_DIRECT ||
-            p->initrd == NULL || count(p->disks) != 0 || count(p->devices) != 0 ||
-            count(p->boot_options) != 1 || strcmp(p->boot_options[0], "rach2.rescue") != 0)
+            p->initrd == NULL || p->audio != NULL || count(p->disks) != 0 ||
+            count(p->devices) != 0 || count(p->boot_options) != 1 ||
+            strcmp(p->boot_options[0], "rach2.rescue") != 0)
             return EINVAL;
         m.resident_bytes = ETUDE_BIGMEM_RESIDENT;
         m.overhead_bytes = ETUDE_BIGMEM_OVERHEAD;
@@ -218,8 +237,19 @@ static int profile_check(const struct etude_qemu_profile *p)
     return p->initrd == NULL && count(p->boot_options) == 0 && count(p->disks) > 0 ? 0 : EINVAL;
 }
 
+/** Check the selected audio card and its launcher-made WAV path. */
+static int audio_check(const char *card, const char *path)
+{
+    if (card == NULL)
+        return 0;
+    if (strcmp(card, "hda") != 0 && strcmp(card, "sb16") != 0)
+        return EINVAL;
+    return path != NULL && *path != '\0' ? 0 : EINVAL;
+}
+
 int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_site *s,
-                    const char *console, const char *qmp, const struct etude_qemu_line *out)
+                    const char *console, const char *qmp, const char *audio,
+                    const struct etude_qemu_line *out)
 {
     int x86_64 = p->architecture != NULL && strcmp(p->architecture, "x86_64") == 0;
     const char *program = x86_64 ? s->qemu_x86_64 : s->qemu_i686;
@@ -231,6 +261,8 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     int e;
 
     if ((e = profile_check(p)) != 0)
+        return e;
+    if ((e = audio_check(p->audio, audio)) != 0)
         return e;
     if (p->memory_profile != NULL && strcmp(p->memory_profile, "bigmem-boundary-v1") == 0 &&
         !s->boundary_lazy)
@@ -288,6 +320,7 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
         add(&l, 0, "-drive");
         add(&l, 1, "file=%s,format=raw,if=ide,index=%s,media=disk", p->disks[i], number);
     }
+    add_audio(&l, p->audio, audio);
     for (i = 0; i < count(p->devices); i++)
         add_device(&l, p->devices[i], &nics);
     add(&l, 0, "-chardev");

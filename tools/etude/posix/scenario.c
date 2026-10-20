@@ -1201,6 +1201,7 @@ static uint64_t decl_need(const struct etude_case *c, const struct machine_decl 
     p.processors = (unsigned)jnum(qp, "processors");
     p.memory_bytes = jnum(qp, "memory_bytes");
     p.memory_profile = jtext(qp, "memory_profile");
+    p.audio = jtext(qp, "audio");
     p.firmware = firmware_of(jtext(qp, "firmware"));
     if (strings(eh_json_get(qp, "disks"), disks, DISKS_MAX) == 0 &&
         strings(eh_json_get(qp, "devices"), devices, DEVICES_MAX) == 0 &&
@@ -1283,6 +1284,7 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
     p->processors = (unsigned)jnum(qp, "processors");
     p->memory_bytes = jnum(qp, "memory_bytes");
     p->memory_profile = jtext(qp, "memory_profile");
+    p->audio = jtext(qp, "audio");
     p->devices = m->devices;
     p->boot_options = m->options;
     p->firmware = firmware_of(firmware);
@@ -1398,7 +1400,7 @@ enum etude_status etude_boot(struct etude_case *c, const char *machine, const ch
     struct machine_decl *d = find_decl(c, machine);
     struct etude_case_machine *m;
     enum etude_status st;
-    char name[200];
+    char name[200], audio[4096];
     const char *console;
     uint64_t share;
 
@@ -1436,6 +1438,15 @@ enum etude_status etude_boot(struct etude_case *c, const char *machine, const ch
     }
     m->boot = ++d->boots;
     snprintf(m->attempt_id, sizeof(m->attempt_id), "%s.%s.%u", c->attempt_id, d->id, d->boots);
+    if (m->profile.audio != NULL) {
+        snprintf(name, sizeof(name), "%s.%u.wav", d->id, d->boots);
+        if (scratch_path(c, "evidence", name, audio, sizeof(audio)) != 0) {
+            free(m);
+            c->faults++;
+            return ETUDE_FAILED;
+        }
+        m->spec.audio_path = audio;
+    }
     snprintf(name, sizeof(name), "%s.%u.console", d->id, d->boots);
     console = etude_evidence(c, name);
     m->spec.attempt_id = m->attempt_id;
@@ -1454,6 +1465,8 @@ enum etude_status etude_boot(struct etude_case *c, const char *machine, const ch
         return ETUDE_FAILED;
     }
     made(c, console, 0);
+    if (mres(m)->audio_path != NULL)
+        made(c, mres(m)->audio_path, 0);
     m->next = c->machines;
     c->machines = m;
     d->now = m;
@@ -1583,6 +1596,12 @@ enum etude_status etude_qmp(struct etude_case_machine *m, const char *execute,
     st = eh_json_get(j, "return") != NULL ? ETUDE_OK : ETUDE_FAILED;
     eh_json_free(j);
     return st;
+}
+
+/** Give the WAV path of this boot, or NULL when no audio card was selected. */
+const char *etude_audio(const struct etude_case_machine *m)
+{
+    return mres(m)->audio_path;
 }
 
 enum etude_status etude_wait_end(struct etude_case_machine *m, struct etude_termination *end)

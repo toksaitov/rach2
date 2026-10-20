@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "proof": "etude-audio",
+  "summary": "recorded audio uses the selected card and a private path that survives QEMU until evidence is read",
+  "tree": "private",
+  "sources": [
+    "tools/etude/qemu_profile.c",
+    "tools/etude/posix/qemu.c"
+  ],
+  "artifacts": [
+    "${WORK}/test"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -I tests/host -I tools/etude/include -I tools/etude -I tools/etude/posix -I tools/etude/guest -I utils tests/host/etude_qemu_hosttest.c tools/etude/capture.c tools/etude/history_json.c ${SRC}/tools/etude/qemu_profile.c tools/etude/posix/exec.c tools/etude/posix/keeper.c tools/etude/posix/process.c ${SRC}/tools/etude/posix/qemu.c tools/etude/processor.c -o ${WORK}/test"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "${WORK}/test",
+      "--audio"
+    ],
+    "bound_s": 60
+  },
+  "faults": [
+    {
+      "name": "backend-missing",
+      "summary": "backend missing",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "add(l, 0, \"-audiodev\");",
+          "replace": "add(l, 0, \"-missing-audiodev\");"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "audio WAV path quoting"
+        ]
+      }
+    },
+    {
+      "name": "hda-codec-missing",
+      "summary": "hda codec missing",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "\"hda-duplex,bus=etude-hda.0,audiodev=etude-audio\"",
+          "replace": "\"hda-duplex\""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "audio HDA codec"
+        ]
+      }
+    },
+    {
+      "name": "recording-removed-at-end",
+      "summary": "recording removed at end",
+      "edits": [
+        {
+          "file": "tools/etude/posix/qemu.c",
+          "find": "    m->r.state = ETUDE_MACHINE_ENDED;",
+          "replace": "    if (m->audio_created)\n        unlink(m->audio_path);\n    m->r.state = ETUDE_MACHINE_ENDED;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "audio survives machine end"
+        ]
+      }
+    },
+    {
+      "name": "temporary-recording-kept",
+      "summary": "temporary recording kept",
+      "edits": [
+        {
+          "file": "tools/etude/posix/qemu.c",
+          "find": "if (m->audio_created && m->audio_temporary)",
+          "replace": "if (0)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "audio temporary removed"
+        ]
+      }
+    }
+  ]
+}

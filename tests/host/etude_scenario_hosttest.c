@@ -624,6 +624,8 @@ static int fake_qemu(const char *mode, int argc, char **argv)
 {
     const char *accel = fake_arg(argc, argv, "-accel", "");
     const char *disk = fake_arg(argc, argv, "-drive", "file=");
+    const char *audio = fake_arg(argc, argv, "-audiodev", "wav,id=etude-audio,path=");
+    FILE *wav;
     char path[PATH_MAX];
     struct fake_in con, qmp;
     struct pollfd p[2];
@@ -647,6 +649,13 @@ static int fake_qemu(const char *mode, int argc, char **argv)
             _exit(122);
         fake_qmp(qmp.fd, qmp.line, accel, mode);
         ok = strstr(qmp.line, "\"cont\"") == NULL;
+    }
+    if (audio != NULL) {
+        wav = fopen(audio, "wb");
+        if (wav == NULL)
+            return 127;
+        fputs("recorded samples", wav);
+        fclose(wav);
     }
     put(con.fd, "fake: ready\r\nType 'help' for available commands.\r\n> ");
     for (;;) {
@@ -753,6 +762,42 @@ static int scenario_reboot(struct etude_case *c, int real)
     etude_type(m, real ? "poweroff\r" : "poweroff\n");
     expect(c, "second-stop", etude_wait_end(m, &end), ETUDE_OK);
     return 0;
+}
+
+/** Read two boots' recordings with a host tool and keep failed evidence. */
+static int scenario_audio(struct etude_case *c, int keep)
+{
+    struct etude_case_machine *m;
+    struct etude_termination end;
+    const char *first = NULL, *path;
+    char *scan[] = {"scanner", "tool", "scan", NULL, "recorded samples", NULL};
+    int i;
+
+    for (i = 0; i < 2; i++) {
+        if (etude_step(c, i == 0 ? "boot" : "reboot") != ETUDE_OK ||
+            etude_boot(c, "fixture", NULL, &m, &end) != ETUDE_OK)
+            return 1;
+        wait_for(c, m, "audio-host", "> ", 0);
+        etude_type(m, "poweroff\n");
+        if (etude_wait_end(m, &end) != ETUDE_OK)
+            return 1;
+        path = etude_audio(m);
+        etude_assert(c, i == 0 ? "audio-first" : "audio-second", path != NULL, "no recording path");
+        if (path == NULL)
+            return 1;
+        scan[3] = (char *)path;
+        if (etude_host(c, scan, i == 0 ? "scan-one" : "scan-two", &end) != ETUDE_OK ||
+            end.value != 0)
+            return 1;
+        if (i == 0)
+            first = path;
+        else
+            etude_assert(c, "audio-distinct",
+                         strcmp(first, path) != 0 && file_has(first, "recorded samples"),
+                         "recordings were reused");
+    }
+    etude_assert(c, "audio-host", 1, NULL);
+    return keep;
 }
 
 /** Run the rows of a lost machine: each wait ends with the loss. */
@@ -1212,6 +1257,8 @@ int etude_scenario(struct etude_case *c)
 
     if (row == NULL)
         return 1;
+    if (strncmp(row, "audio-", 6) == 0)
+        return scenario_audio(c, strcmp(row, "audio-keep") == 0);
     if (strcmp(row, "reboot") == 0 || strcmp(row, "real-reboot") == 0)
         return scenario_reboot(c, row[0] == 'r' && row[1] == 'e' && row[2] == 'a');
     if (strcmp(row, "lost") == 0 || strcmp(row, "die") == 0 || strcmp(row, "closecon") == 0 ||
@@ -1402,7 +1449,9 @@ static int write_manifest(const char *path, const struct row *r)
             "%s\"firmware\": \"direct\", \"devices\": [], \"boot_options\": %s}, \"console\": "
             "\"serial\", \"qmp\": %s, \"helper\": %s}",
             r->helper ? "\"initrd\"" : "null", r->disk != NULL ? "[\"disk\"]" : "[]",
-            strcmp(r->name, "memory") == 0 ? "\"memory_profile\": \"bigmem-boundary-v1\", " : "",
+            strcmp(r->name, "memory") == 0       ? "\"memory_profile\": \"bigmem-boundary-v1\", "
+            : strncmp(r->name, "audio-", 6) == 0 ? "\"audio\": \"hda\", "
+                                                 : "",
             r->mode == NULL && r->disk != NULL ? "[\"rach2.fsdisk\"]" : "[]",
             strcmp(r->name, "misuse") == 0 ? "false" : "true", r->helper ? "true" : "false");
     }
@@ -1785,6 +1834,10 @@ static void judge(const struct row *r, const struct outcome *o, const char *scra
     CHECK(o->kept == r->want_kept, r->name);
     snprintf(copies, sizeof(copies), "%s/copies", scratch);
     CHECK((stat(copies, &st) == 0) == (r->want_kept && r->disk != NULL), r->name);
+    if (strcmp(r->name, "audio-pass") == 0) {
+        snprintf(copies, sizeof(copies), "%s/evidence", scratch);
+        CHECK(stat(copies, &st) != 0 && errno == ENOENT, "audio passing evidence removed");
+    }
     if (r->want_kept)
         judge_evidence(r, scratch);
     if (fails > 0 || getenv("ETUDE_TEST_VERBOSE") != NULL)
@@ -2302,6 +2355,15 @@ static int real_site(struct site *s)
 /* The stand-in rows: name, mode, steps, assertions, disk, helper, step
  * bound, exit status, end record, kept scratch, and the fields of a row of
  * two machines and a service. */
+static const struct row audio_rows[] = {
+    {"audio-pass", "disk", "boot:fixture reboot:fixture",
+     "audio-first audio-second audio-distinct audio-host", NULL, 0, STEP_US, 0, 1, 0, 0, NULL, 0,
+     NULL, 0},
+    {"audio-keep", "disk", "boot:fixture reboot:fixture",
+     "audio-first audio-second audio-distinct audio-host", NULL, 0, STEP_US, 1, 0, 1, 0, NULL, 0,
+     "fixture.1.wav=recorded samples;fixture.2.wav=recorded samples", 0},
+};
+
 static const struct row stand_in_rows[] = {
     {"reboot", "disk", "write:fixture check readback:fixture",
      "qmp-status qmp-reply qmp-error stopped shutdown host-ran host-sees same-copy readback "
@@ -2373,6 +2435,12 @@ static void test_stand_in(void)
         fails++;
         return;
     }
+    for (i = 0; i < sizeof(audio_rows) / sizeof(audio_rows[0]); i++)
+        run_row(&audio_rows[i], &s, NULL);
+    if (getenv("ETUDE_TEST_AUDIO_ONLY") != NULL) {
+        etude_store_close(s.store);
+        return;
+    }
     for (i = 0; i < sizeof(stand_in_rows) / sizeof(stand_in_rows[0]); i++)
         run_row(&stand_in_rows[i], &s, NULL);
     run_row(stop_row, &s, WAITING);
@@ -2425,7 +2493,8 @@ static void __attribute__((constructor)) dispatch(int argc, char **argv)
     if (setenv("TMPDIR", fix_dir(), 1) != 0)
         exit(1);
     test_stand_in();
-    if (getenv("ETUDE_TEST_NO_REAL") == NULL || *getenv("ETUDE_TEST_NO_REAL") == '\0')
+    if (getenv("ETUDE_TEST_AUDIO_ONLY") == NULL &&
+        (getenv("ETUDE_TEST_NO_REAL") == NULL || *getenv("ETUDE_TEST_NO_REAL") == '\0'))
         test_real();
     if (fails != 0)
         exit(1);

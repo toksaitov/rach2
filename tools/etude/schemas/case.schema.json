@@ -99,6 +99,7 @@
         "processors": {"$ref": "#/$defs/positive"},
         "memory_bytes": {"$ref": "#/$defs/positive"},
         "memory_profile": {"enum": ["reserved", "bigmem-boundary-v1"]},
+        "audio": {"enum": ["hda", "sb16"]},
         "firmware": {"enum": ["seabios", "ovmf", "direct"]},
         "devices": {"$ref": "#/$defs/names"},
         "boot_options": {"type": "array", "items": {"type": "string", "pattern": "^[!-~]+$"}}
