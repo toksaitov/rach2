@@ -11,11 +11,18 @@
  * keep a part below the tick (the time rows print "STATTIME OK" or
  * "STATTIME FAIL").
  *
+ * Given `machine=native` (probe_args.h), the time rows leave out the order
+ * of the stamps, since a machine that is already up may have its real-time
+ * clock stepped between two of them, and print a line that says so; the
+ * writes, the stamps, the part below the tick and the explicit times are
+ * still checked.
+ *
  * Prints a line for each row and exits 0 when every row passed, 1 otherwise.
  * Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 typedef unsigned int mode_t;
 typedef unsigned int ino_t;
@@ -363,6 +370,12 @@ static int time_not_before(const struct stat64 *a, const struct stat64 *b)
            (a->st_mtime == b->st_mtime && a->st_mtime_nsec >= b->st_mtime_nsec);
 }
 
+/** `time_not_before` of `a` and `b`, or 1 given `machine=native`. */
+static int in_order(const struct stat64 *a, const struct stat64 *b)
+{
+    return probe_native() || time_not_before(a, b);
+}
+
 /** Whether the modification time has a part below the 10 ms tick of at
  * least a microsecond. */
 static int below_tick(const struct stat64 *s)
@@ -397,14 +410,14 @@ static int time_rows(void)
     } else {
         ok = sys_write(fd[0], "a", 1) == 1 && sys_write(fd[1], "b", 1) == 1 &&
              sys_stat64(paths[0], &previous) == 0 && sys_stat64(paths[1], &next) == 0 &&
-             time_not_before(&next, &previous);
+             in_order(&next, &previous);
         fine = ok && (below_tick(&previous) || below_tick(&next));
         if (ok) {
             previous = next;
         }
         for (i = 0; ok && i < 50; i++) {
             ok = sys_call4(SYS_UTIMENSAT, -100, (long)paths[i % 2], 0, 0) == 0 &&
-                 sys_stat64(paths[i % 2], &next) == 0 && time_not_before(&next, &previous);
+                 sys_stat64(paths[i % 2], &next) == 0 && in_order(&next, &previous);
             fine = fine || below_tick(&next);
             previous = next;
         }
@@ -422,17 +435,24 @@ static int time_rows(void)
         }
         sys_call3(SYS_UNLINK, (long)paths[i], 0, 0);
     }
+    if (probe_native()) {
+        puts("stattest: the order of the stamps: not run: the real-time clock may be stepped");
+    }
     puts(ok ? "STATTIME OK: two writes, fifty stamps, explicit fractions"
             : "STATTIME FAIL: two writes, fifty stamps, explicit fractions");
     return ok;
 }
+
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
 
 /**
  * Entry point: runs the stat64 (195) probes in part A, the stat (106) probes
  * in part B, then the inode and time rows, and exits 0 only if every row
  * passed. On x86-64 part A is stat (4) and there is no part B.
  */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
 #if !defined __x86_64__
     struct stat st;
@@ -442,6 +462,7 @@ PROBE_START void _start(void)
     int passed = 0;
     int failed = 0;
 
+    probe_args((int)sp[0], (char **)(sp + 1));
     puts("Stat syscall test starting...");
     puts("");
 

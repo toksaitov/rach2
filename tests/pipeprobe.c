@@ -35,11 +35,17 @@
  *       start or a byte written past the end shows at the length and
  *       alignment that has it.
  *
+ * Given `machine=native` (probe_args.h), the probe leaves out the heap's
+ * comparison of (e), since the kernel's heap is shared with every process of
+ * a machine that is already up, and prints a line that says it did not run;
+ * the hundred pipes are still made and closed.
+ *
  * Prints "PIPEPROBE OK" and exits with the count of the checks that failed.
  * Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 #define PROT_READ     0x1
 #define PROT_WRITE    0x2
@@ -150,6 +156,19 @@ static void check(int cond, const char *msg)
     }
 }
 
+/** Check `cond` as `check` does, or, given `machine=native`, print that the
+ * heap check `msg` did not run. */
+static void check_heap(int cond, const char *msg)
+{
+    if (probe_native()) {
+        syscall3(SYS_WRITE, 1, (long)"  not run: ", 11);
+        syscall3(SYS_WRITE, 1, (long)msg, (long)strlen(msg));
+        puts(": the kernel's heap is shared");
+        return;
+    }
+    check(cond, msg);
+}
+
 /** Whether the first `n` bytes of `a` and `b` are equal. */
 static int eqn(const char *a, const char *b, int n)
 {
@@ -230,9 +249,13 @@ static void sigpipe_handler(int sig)
 #define BIG 70000
 static char big[BIG];
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /** Run cases (a) to (i) in order; a failed check is printed and counted,
  * and the next case runs. */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
     int p[2];
     char buf[64];
@@ -240,6 +263,7 @@ PROBE_START void _start(void)
     int i, n, pid, status;
     unsigned used;
 
+    probe_args((int)sp[0], (char **)(sp + 1));
     for (i = 0; i < BIG; i++) {
         big[i] = (char)(i & 0x7f);
     }
@@ -321,8 +345,8 @@ PROBE_START void _start(void)
         syscall1(SYS_CLOSE, q[0]);
         syscall1(SYS_CLOSE, q[1]);
     }
-    check(probe_meminfo("HeapUsed:") == used,
-          "100 pipe/close cycles left the heap as it was (no pipe leak)");
+    check_heap(probe_meminfo("HeapUsed:") == used,
+               "100 pipe/close cycles left the heap as it was (no pipe leak)");
 
     {
         int a[2], b[2];

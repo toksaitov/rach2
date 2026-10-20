@@ -42,11 +42,18 @@
  * its shell's exit sends. The mount suite then logs in as root beside it and
  * kills it.
  *
+ * The probe executes itself as `/memprobe`, or by the absolute path it was
+ * started by (probe_args.h), as a native run starts it from its workspace.
+ * Given `machine=native` as well, `memprobe MIB` leaves out the fall of the
+ * free memory after the unmap, since on a machine that is already up the
+ * other processes move it, and prints a line that says it did not run.
+ *
  * Prints "MEMPROBE OK" or "MEMPROBE FAIL: reason". Freestanding; direct
  * system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 #define PROT_READ     0x1
 #define PROT_WRITE    0x2
@@ -356,7 +363,7 @@ static void run_fail(void)
             args[0] = (char *)"memprobe";
             args[1] = (char *)"fresh";
             args[2] = 0;
-            status = syscall3(SYS_EXECVE, (long)"/memprobe", (long)args, 0);
+            status = syscall3(SYS_EXECVE, (long)probe_self("/memprobe"), (long)args, 0);
             sys_exit(status == -ENOMEM ? 7 : 5);
         }
         if (pid < 0) {
@@ -463,26 +470,28 @@ void probe_main(unsigned long *sp);
 PROBE_SP_ENTRY;
 
 /** The probe's entry, given the initial stack `sp`: `fresh`, `hog`, `total`
- * and `fail` by their first letters, and otherwise `memprobe MIB`, 64 MiB by
- * default. */
+ * and `fail` by the first letters of the first positional argument, and
+ * otherwise `memprobe MIB`, 64 MiB by default. */
 void probe_main(unsigned long *sp)
 {
-    int argc = (int)sp[0];
-    char **argv = (char **)(sp + 1);
-    unsigned mib = argc >= 2 ? parse_mib(argv[1]) : 64;
+    const char *mode;
+    unsigned mib;
     unsigned long len, base, pages, i, before, after;
     int pid, status;
 
-    if (argc >= 2 && argv[1][0] == 'f' && argv[1][1] == 'r') {
+    probe_args((int)sp[0], (char **)(sp + 1));
+    mode = probe_word(1);
+    mib = mode != 0 ? parse_mib(mode) : 64;
+    if (mode != 0 && mode[0] == 'f' && mode[1] == 'r') {
         run_fresh();
     }
-    if (argc >= 2 && argv[1][0] == 'h') {
+    if (mode != 0 && mode[0] == 'h') {
         run_hog();
     }
-    if (argc >= 2 && argv[1][0] == 't') {
+    if (mode != 0 && mode[0] == 't') {
         run_total();
     }
-    if (argc >= 2 && argv[1][0] == 'f') {
+    if (mode != 0 && mode[0] == 'f') {
         run_fail();
     }
     if (mib == 0) {
@@ -544,7 +553,7 @@ void probe_main(unsigned long *sp)
         args[0] = (char *)"memprobe";
         args[1] = (char *)"fresh";
         args[2] = 0;
-        syscall3(SYS_EXECVE, (long)"/memprobe", (long)args, 0);
+        syscall3(SYS_EXECVE, (long)probe_self("/memprobe"), (long)args, 0);
         sys_exit(5);
     }
     status = wait_status(pid);
@@ -557,7 +566,9 @@ void probe_main(unsigned long *sp)
     }
     /* The mapping's page tables stay with the process (TABLE_KIB). */
     after = mem_free_kib();
-    if (after + 256 + TABLE_KIB(pages) < before) {
+    if (probe_native()) {
+        puts("memprobe: the frames came back: not run: the machine's other processes move MemFree");
+    } else if (after + 256 + TABLE_KIB(pages) < before) {
         fail("the frames did not come back");
     }
     puts("MEMPROBE OK");

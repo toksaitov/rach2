@@ -14,11 +14,17 @@
  * in `/proc/meminfo` must be what it was before, with `HeapPages` within two
  * pages of it, so nothing leaked.
  *
+ * Given `machine=native` (probe_args.h), the probe still makes and closes
+ * the thousands, but leaves out the comparisons of the heap, since the
+ * kernel's heap is shared with every process of a machine that is already
+ * up, and prints a line for each that says it did not run.
+ *
  * Prints "POOLPROBE OK" and exits 0, or "POOLPROBE FAIL: " and the reason
  * and exits 1.
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 #define AF_INET    2
 #define SOCK_DGRAM 2
@@ -197,7 +203,8 @@ static void crossed(int kind, int per_child, const char *what)
 
 /** Make and close a thousand objects of `kind` (0 a pipe, 1 a pty master, 2
  * a socket), and fail with `what` unless HeapUsed is unchanged and
- * HeapPages within two pages of where it was. */
+ * HeapPages within two pages of where it was; given `machine=native`, print
+ * that the comparison did not run. */
 static void cycle(int kind, const char *what)
 {
     unsigned used0 = probe_meminfo("HeapUsed:"), pages0 = probe_meminfo("HeapPages:");
@@ -223,6 +230,14 @@ static void cycle(int kind, const char *what)
             syscall1(SYS_CLOSE, fd);
         }
     }
+    if (probe_native()) {
+        static const char *const names[] = {"pipes", "ptys", "sockets"};
+
+        syscall3(SYS_WRITE, 1, (long)"poolprobe: the heap after a thousand ", 37);
+        syscall3(SYS_WRITE, 1, (long)names[kind], (int)strlen(names[kind]));
+        puts(": not run: the kernel's heap is shared");
+        return;
+    }
     used1 = probe_meminfo("HeapUsed:");
     pages1 = probe_meminfo("HeapPages:");
     if (used1 != used0 || pages1 + 2 < pages0 || pages1 > pages0 + 2) {
@@ -237,7 +252,7 @@ PROBE_SP_ENTRY;
 /** The probe: the four rounds, then the three cycles. */
 void probe_main(unsigned long *sp)
 {
-    (void)sp;
+    probe_args((int)sp[0], (char **)(sp + 1));
     if (probe_meminfo("HeapUsed:") == 0xFFFFFFFFu) {
         fail("HeapUsed in /proc/meminfo");
     }

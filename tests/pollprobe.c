@@ -28,12 +28,17 @@
  *       standard input its client passes it and polls it for POLLOUT first,
  *       and waits with nothing on the screen if the poll never answers.
  *
+ * Given `machine=native` (probe_args.h), (i) leaves out the descriptors 0, 1
+ * and 2, which are the kernel's own only for its init, and prints a line that
+ * says it did not run; /dev/console is still opened and checked.
+ *
  * Prints "  FAIL: " and the case for each failure, then "POLLPROBE OK" or
  * "POLLPROBE FAIL", and exits with the count of failures. Freestanding;
  * direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 #define POLLIN  0x001
 #define POLLOUT 0x004
@@ -277,7 +282,11 @@ static void console_modes(void)
     struct pollfd pfd[1];
     int fd, i;
 
-    for (i = 0; i <= 2; i++) {
+    if (probe_native()) {
+        puts("  not run: the kernel's fds 0, 1 and 2 are each open for reading and writing: "
+             "the probe is not the kernel's init");
+    }
+    for (i = 0; i <= 2 && !probe_native(); i++) {
         check((syscall3(SYS_FCNTL, i, F_GETFL, 0) & O_ACCMODE) == O_RDWR,
               "the kernel's fds 0, 1 and 2 are each open for reading and writing");
     }
@@ -331,14 +340,19 @@ static void wide_ppoll(void)
 }
 #endif
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /** The probe's entry: cases (a) to (i) in order. */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
     int a[2], b[2];
     struct pollfd pfd[2];
     char buf[8];
     int n, pid, status;
 
+    probe_args((int)sp[0], (char **)(sp + 1));
     /* (a) timeout: two empty pipes, nothing ready -> 0. */
     check(do_pipe(a) == 0 && do_pipe(b) == 0, "pipe x2");
     pfd[0].fd = a[0];

@@ -28,11 +28,18 @@
  *   * the actions of SIGKILL and SIGSTOP, which a query reads as SIG_DFL and
  *     a new action may not change.
  *
+ * Given `machine=native` (probe_args.h), the probe leaves out the two
+ * checks of `sleeps_interrupted`, since on a machine that is already up its
+ * other processes raise the same count, and a rise would not show that the
+ * probe's own sleep was counted; it prints a line for each that says it did
+ * not run. The sleeps and their EINTR are still checked.
+ *
  * Prints "SIGPROBE OK" and exits 0 when all pass, and "SIGPROBE FAIL" with
  * the count of failed checks as its status otherwise.
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 #define STDOUT_FILENO 1
 
@@ -100,6 +107,19 @@ static void check(int cond, const char *msg)
         syscall3(SYS_WRITE, STDOUT_FILENO, (long)"  FAIL: ", 8);
         puts(msg);
     }
+}
+
+/** Check `cond` as `check` does, or, given `machine=native`, print that the
+ * check `msg` of the machine's count did not run. */
+static void check_count(int cond, const char *msg)
+{
+    if (probe_native()) {
+        syscall3(SYS_WRITE, STDOUT_FILENO, (long)"  not run: ", 11);
+        syscall3(SYS_WRITE, STDOUT_FILENO, (long)msg, (int)strlen(msg));
+        puts(": the machine's other processes move the count");
+        return;
+    }
+    check(cond, msg);
 }
 
 /**
@@ -385,7 +405,8 @@ static void timer_rows(void)
     check(itimer(0, 0, old) == 0 && ended == 3 && alarms >= 3,
           "the interval timer ends three sleeps in turn");
     check(old[0] == 0 && old[1] == 20000, "and reports its interval as it is disarmed");
-    check(sleeps_cut_short() >= before + 3, "the kernel counted the sleeps the timer cut short");
+    check_count(sleeps_cut_short() >= before + 3,
+                "the kernel counted the sleeps the timer cut short");
 
     check(itimer(5000, 250, 0) == 0 && syscall2(SYS_GETITIMER, ITIMER_REAL, (long)cur) == 0 &&
               cur[0] == 0 && cur[1] == 250000 && (cur[2] > 0 || cur[3] > 0) &&
@@ -450,6 +471,10 @@ static void uncatchable_rows(void)
     }
 }
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /**
  * The probe: the rows of the opening comment in order, each counted by
  * `check`.
@@ -470,11 +495,12 @@ static void uncatchable_rows(void)
  * signal cut short to rise, which a sleep that ran to its deadline would not
  * do. A child that ends before it is seen asleep fails its own row.
  */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
     int pid, status;
     unsigned set[2];
 
+    probe_args((int)sp[0], (char **)(sp + 1));
     /* 1. A handler runs on a raised signal, and execution resumes after it. */
     install(SIGUSR1, usr1_handler);
     handler_ran = 0;
@@ -538,7 +564,8 @@ PROBE_START void _start(void)
             check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid, "reap the sleeper");
             check((status & 0x7f) == 0 && ((status >> 8) & 0xff) == 0,
                   "the sleeper's own sleep returned EINTR");
-            check(sleeps_cut_short() > before, "the kernel counted a sleep the signal cut short");
+            check_count(sleeps_cut_short() > before,
+                        "the kernel counted a sleep the signal cut short");
         }
     }
 

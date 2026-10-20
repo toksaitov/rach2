@@ -17,12 +17,19 @@
  *   (d) FD_CLOEXEC is per-fd: it round-trips through fcntl, and dup2 leaves
  *       the new fd's flag clear.
  *
+ * The probe reads `hello.txt` in its working directory, which holds
+ * "hello, world\n". Given `machine=native` (probe_args.h), it leaves out the
+ * two comparisons of HeapUsed, since the kernel's heap is shared with every
+ * process of a machine that is already up, and prints a line for each that
+ * says it did not run; the cycles and the forks still run.
+ *
  * Prints "OFDPROBE OK" on success.
  *
  * Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 #define STDOUT_FILENO 1
 
@@ -32,8 +39,9 @@
 #define F_SETFD    2
 #define FD_CLOEXEC 1
 
-/* "hello, world\n": 0-4 hello, 5 ',', 6 ' ', 7 w... */
-#define HELLO "/hello.txt"
+/* "hello, world\n": 0-4 hello, 5 ',', 6 ' ', 7 w..., in the working
+ * directory, which is the root as the test image runs the probe. */
+#define HELLO "hello.txt"
 
 /** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
@@ -71,6 +79,19 @@ static void check(int cond, const char *msg)
     }
 }
 
+/** Check `cond` as `check` does, or, given `machine=native`, print that the
+ * heap check `msg` did not run. */
+static void check_heap(int cond, const char *msg)
+{
+    if (probe_native()) {
+        syscall3(SYS_WRITE, STDOUT_FILENO, (long)"  not run: ", 11);
+        syscall3(SYS_WRITE, STDOUT_FILENO, (long)msg, (int)strlen(msg));
+        puts(": the kernel's heap is shared");
+        return;
+    }
+    check(cond, msg);
+}
+
 /** Read up to `n` bytes from `fd` into `buf`: the byte count, or a negated
  * errno. */
 static int rd(int fd, char *buf, int n)
@@ -90,14 +111,19 @@ static int eqn(const char *a, const char *b, int n)
     return 1;
 }
 
-/** Run cases (a) to (d) on /hello.txt, and exit with the count of the
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/** Run cases (a) to (d) on hello.txt, and exit with the count of the
  * checks that failed. */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
     char buf[16];
     int fd, fd2, pid, status, i, n;
     unsigned used;
 
+    probe_args((int)sp[0], (char **)(sp + 1));
     fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
     check(fd >= 0, "open hello.txt");
     check(rd(fd, buf, 5) == 5 && eqn(buf, "hello", 5), "read first 5 == hello");
@@ -138,8 +164,8 @@ PROBE_START void _start(void)
         }
         syscall1(SYS_CLOSE, f);
     }
-    check(probe_meminfo("HeapUsed:") == used,
-          "300 open/close cycles left the heap as it was (no OFD leak)");
+    check_heap(probe_meminfo("HeapUsed:") == used,
+               "300 open/close cycles left the heap as it was (no OFD leak)");
 
     used = probe_meminfo("HeapUsed:");
     fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
@@ -155,8 +181,8 @@ PROBE_START void _start(void)
         }
     }
     syscall1(SYS_CLOSE, fd);
-    check(probe_meminfo("HeapUsed:") == used,
-          "100 forks and the close left the heap as it was (no fork OFD leak)");
+    check_heap(probe_meminfo("HeapUsed:") == used,
+               "100 forks and the close left the heap as it was (no fork OFD leak)");
 
     fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
     check(fd >= 0, "open for cloexec test");
