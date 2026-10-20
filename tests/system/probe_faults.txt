@@ -6388,6 +6388,26 @@ end
 
 # A pipe's poll after its writers have gone.
 
+fault fifo-reader-hup-before-writer
+probe fifomusl
+file rach2/sys/ipc/pipe.c
+expect FIFOMUSL FAIL (a new FIFO reader reported hangup before a writer opened
+old
+        if (!p->write_open && (!p->fifo || e->ofd->fifo_write_opens != p->write_opens)) {
+new
+        if (!p->write_open) {
+end
+
+fault fifo-reader-hup-never
+probe fifomusl
+file rach2/sys/ipc/pipe.c
+expect FIFOMUSL FAIL (a FIFO reader missed hangup after a writer opened and closed
+old
+        if (!p->write_open && (!p->fifo || e->ofd->fifo_write_opens != p->write_opens)) {
+new
+        if (!p->write_open && !p->fifo) {
+end
+
 fault pipe-hup-readable
 probe pollprobe
 file rach2/sys/ipc/pipe.c

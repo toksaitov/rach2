@@ -92,6 +92,10 @@ struct open_file {
     uint64_t offset;       /* Shared read/write offset */
     uint64_t raw_offset;   /* Shared offset of a raw disk window */
     uint32_t status_flags; /* Shared O_APPEND/O_NONBLOCK (OFD_* above) */
+    /* A FIFO reader's writer-open count for poll: equal to the pipe's
+     * count until a writer has opened since a nonblocking read-only open
+     * with no writer. Other FIFO opens start with a different count. */
+    uint32_t fifo_write_opens;
     /* A description of a file of a mounted file system holds its mount, its
      * node and the file system's handle of the open. The last unref releases
      * all three through `vfs_desc_close`, so the file system sees one release

@@ -5,9 +5,13 @@
  * reader, a nonblocking open for writing fails with ENXIO; a nonblocking
  * open for reading succeeds and reads the end of input. Bytes written at one
  * open are read at the other, and the reader sees the end of input when the
- * writer closes. A blocking open for reading waits for a writer: a child opens
- * the FIFO for writing only once it has seen the parent asleep, and first
- * writes a byte to a pipe, which must be there when the parent's open returns.
+ * writer closes. A nonblocking reader polls without hangup until a writer
+ * opens and closes; each read open starts that wait anew, and duplicates
+ * share it even after O_NONBLOCK is cleared. Buffered bytes stay readable
+ * with hangup until drained. A blocking open for reading waits for a writer:
+ * a child opens the FIFO for writing only once it has seen the parent asleep.
+ * It writes a byte to a pipe first, which must be there when the parent's
+ * open returns.
  * The child's bytes then arrive. An open for reading and writing does not wait,
  * and once full it polls writable when a child's open reads a byte. Two FIFOs
  * whose names have one hash, which the KRFFS root numbers a file by, are two
@@ -53,6 +57,94 @@ static int fail(const char *what)
 {
     printf("FIFOMUSL FAIL (%s: errno %d)\n", what, errno);
     return 1;
+}
+
+/**
+ * Poll `count` entries without waiting. Return 1 if the first entry reports
+ * `first` and every later entry reports `rest`, or 0 on any other result.
+ */
+static int poll_events(struct pollfd *fds, int count, short first, short rest)
+{
+    int i;
+    int ready = (first != 0) + (rest != 0) * (count - 1);
+
+    if (poll(fds, (nfds_t)count, 0) != ready) {
+        return 0;
+    }
+    for (i = 0; i < count; i++) {
+        if (fds[i].revents != (i == 0 ? first : rest)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * Check FIFO poll before and after writer opens, separately for each read
+ * description and its duplicate. Use the caller's FIFO_PATH and close every
+ * descriptor before returning 0, or 1 after reporting a failure.
+ */
+static int reader_hangup(void)
+{
+    struct pollfd fds[4];
+    const char *error = NULL;
+    char byte;
+    int i, w = -1;
+
+    for (i = 0; i < 4; i++) {
+        fds[i].fd = -1;
+        fds[i].events = POLLIN;
+        fds[i].revents = 0;
+    }
+    fds[0].fd = open(FIFO_PATH, O_RDONLY | O_NONBLOCK);
+    if (fds[0].fd < 0 || !poll_events(fds, 1, 0, 0)) {
+        error = "a new FIFO reader reported hangup before a writer opened";
+        goto out;
+    }
+    w = open(FIFO_PATH, O_WRONLY | O_NONBLOCK);
+    if (w < 0 || !poll_events(fds, 1, 0, 0)) {
+        error = "an empty FIFO with a writer polled ready";
+        goto out;
+    }
+    close(w);
+    w = -1;
+    if (!poll_events(fds, 1, POLLHUP, 0)) {
+        error = "a FIFO reader missed hangup after a writer opened and closed";
+        goto out;
+    }
+    fds[1].fd = open(FIFO_PATH, O_RDONLY | O_NONBLOCK);
+    fds[2].fd = dup(fds[1].fd);
+    if (fds[1].fd < 0 || fds[2].fd < 0 || fcntl(fds[2].fd, F_SETFL, 0) != 0 ||
+        !poll_events(fds, 3, POLLHUP, 0)) {
+        error = "FIFO read opens did not keep separate hangup state";
+        goto out;
+    }
+    w = open(FIFO_PATH, O_WRONLY | O_NONBLOCK);
+    fds[3].fd = open(FIFO_PATH, O_RDONLY | O_NONBLOCK);
+    if (w < 0 || fds[3].fd < 0 || !poll_events(fds, 4, 0, 0) || write(w, "x", 1) != 1) {
+        error = "a reopened FIFO writer did not clear hangup";
+        goto out;
+    }
+    close(w);
+    w = -1;
+    if (!poll_events(fds, 4, POLLIN | POLLHUP, POLLIN | POLLHUP)) {
+        error = "FIFO readers missed buffered data with hangup";
+        goto out;
+    }
+    if (read(fds[0].fd, &byte, 1) != 1 || byte != 'x' || !poll_events(fds, 4, POLLHUP, POLLHUP)) {
+        error = "FIFO readers missed hangup after draining data";
+        goto out;
+    }
+out:
+    if (w >= 0) {
+        close(w);
+    }
+    for (i = 0; i < 4; i++) {
+        if (fds[i].fd >= 0) {
+            close(fds[i].fd);
+        }
+    }
+    return error ? fail(error) : 0;
 }
 
 /** Whether process `pid` sleeps, by its state in /proc/<pid>/stat. */
@@ -150,9 +242,10 @@ static void drainer(pid_t parent, int ack)
  * reader is a child that reads once it sees the poll asleep and keeps running
  * after, and the poll has no time limit of its own, only a 10 s alarm; a poll
  * the alarm ends finds the room as it wakes, so the row fails when the alarm
- * fired. Returns 0, or 1 once the failure is reported.
+ * fired. Then check read-only opens with `reader_hangup`. Returns 0, or 1
+ * once the failure is reported.
  */
-static int rdwr_opens(void)
+static int poll_opens(void)
 {
     struct sigaction sa;
     struct pollfd pfd;
@@ -206,7 +299,7 @@ static int rdwr_opens(void)
     close(ack[0]);
     close(ack[1]);
     close(rw);
-    return 0;
+    return reader_hangup();
 }
 
 /**
@@ -368,7 +461,8 @@ int main(void)
     close(told[0]);
     close(told[1]);
 
-    if (rdwr_opens() != 0) {
+    if (poll_opens() != 0) {
+        unlink(FIFO_PATH);
         return 1;
     }
     unlink(FIFO_PATH);

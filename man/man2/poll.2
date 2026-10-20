@@ -72,6 +72,11 @@ while data is buffered and
 once every writer has closed, so an empty pipe with no writers reports
 .Dv POLLHUP
 alone, as on Linux.
+A FIFO reader opened with
+.Dv O_NONBLOCK
+while no writer is open reports no hangup until a writer has opened
+since that read open.
+Duplicated descriptors share this state.
 The write end reports
 .Dv POLLOUT
 while the buffer has room and
