@@ -497,6 +497,16 @@ $(ETUDEREMOTE): $(ETUDE_REMOTE_SRC) tools/etude/include/etude/remote.h \
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include
 
+# etude-native (tools/etude/posix/etude_native.c), which runs a case on a
+# Rach2 machine that is already up through etude-guest over SSH.
+ETUDENATIVE = build/tools/etude/etude-native
+$(ETUDENATIVE): $(ETUDE_NATIVE_SRC) tools/etude/include/etude/remote.h \
+                tools/etude/include/etude/frame.h tools/etude/include/etude/exec.h \
+                tools/etude/guest/wire.h tools/etude/posix/posix.h tools/etude/json.h \
+                utils/sha256.h
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include
+
 # The external bridge to the old runner's host and port locks.
 ETUDEBRIDGE = build/tools/etude/etude-bridge
 $(ETUDEBRIDGE): $(ETUDE_BRIDGE_SRC) tools/etude/include/etude/bridge.h \
@@ -1273,7 +1283,7 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT) \
              $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEFAILURES) $(ETUDELINES) $(ETUDEBUDGET) \
              $(ETUDEREMOTE) $(ETUDETOOLING) $(ETUDELOAD) $(ETUDEPROOF) $(ETUDEHOST) $(ETUDEBRIDGE) \
-             $(ETUDELEDGER) $(PECHECK) $(ETUDESERIAL) $(ETUDELEGACY)
+             $(ETUDELEDGER) $(PECHECK) $(ETUDESERIAL) $(ETUDELEGACY) $(ETUDENATIVE)
 .PHONY: host-tools print-host-tools
 host-tools: $(HOST_TOOLS)
 print-host-tools:

@@ -51,6 +51,12 @@ ETUDE_REMOTE_SRC = tools/etude/posix/etude_remote.c tools/etude/posix/serve.c \
                    tools/etude/posix/process.c tools/etude/capture.c \
                    tools/etude/guest/wire.c tools/etude/json.c utils/sha256.c
 
+# etude-native, which runs one case on a Rach2 machine that is already up,
+# through etude-guest over a transport such as ssh(1).
+ETUDE_NATIVE_SRC = tools/etude/posix/etude_native.c tools/etude/posix/remote.c \
+                   tools/etude/posix/process.c tools/etude/guest/wire.c \
+                   tools/etude/json.c utils/sha256.c
+
 # etude-host, which runs the host checks of `tests/run host` at once on Linux
 # and macOS.
 ETUDE_HOST_SRC = tools/etude/posix/etude_host.c tools/etude/posix/exec.c \
