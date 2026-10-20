@@ -16,6 +16,7 @@
  *   suite NAME IDLE LEDGER COMMAND ...
  *                                  supervise a suite
  *   machine LEDGER COMMAND ...     record a machine and exec it
+ *   state WHO LEDGER PID           print what a stalled machine is doing
  *   machines NAME LEDGER           stop the machines a suite left
  *   registered LEDGER              print the machines a ledger still has
  *   killgroup GROUP SIGNAL         signal a group other than init's or ours
@@ -37,7 +38,9 @@
 #define _DARWIN_C_SOURCE
 #endif
 #include <sys/types.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <signal.h>
@@ -1034,6 +1037,285 @@ static void last_output(const char *path)
 }
 
 /**
+ * Write to `path`, of `size` bytes, the monitor socket `machine_exec` gives
+ * machine `pid` of `ledger`, `LEDGER.PID.monitor`. Returns 0, or -1 when the
+ * path does not fit a socket's address or has a comma, which QEMU's option
+ * would read as the end of the path.
+ */
+static int monitor_path(char *path, size_t size, const char *ledger, pid_t pid)
+{
+    struct sockaddr_un addr;
+    int n = snprintf(path, size, "%s.%ld.monitor", ledger, (long)pid);
+
+    return n > 0 && (size_t)n < size && (size_t)n < sizeof(addr.sun_path) && !strchr(path, ',')
+               ? 0
+               : -1;
+}
+
+/**
+ * Print each thread of process `pid`, labelled `label`, with its state
+ * letter and the kernel function it sleeps in, Linux's `wchan`, which is
+ * `0` for a thread that runs: a thread in state D waits for the host's disk
+ * or memory, and one asleep in a pipe's write waits for a reader. Nothing is
+ * printed where there is no /proc.
+ */
+static void task_states(const char *who, const char *label, pid_t pid)
+{
+#ifndef __APPLE__
+    char path[96], text[512], wchan[128];
+    struct dirent *entry;
+    DIR *dir;
+    FILE *fp;
+    size_t got;
+
+    snprintf(path, sizeof(path), "/proc/%ld/task", (long)pid);
+    dir = opendir(path);
+    if (!dir)
+        return;
+    while ((entry = readdir(dir)) != NULL) {
+        char *name, *paren;
+
+        if (entry->d_name[0] < '0' || entry->d_name[0] > '9')
+            continue;
+        snprintf(path, sizeof(path), "/proc/%ld/task/%.16s/stat", (long)pid, entry->d_name);
+        fp = fopen(path, "r");
+        if (!fp)
+            continue;
+        got = fread(text, 1, sizeof(text) - 1, fp);
+        fclose(fp);
+        text[got] = 0;
+        name = strchr(text, '(');
+        paren = strrchr(text, ')');
+        if (!name || !paren || paren < name || paren[1] != ' ' || !paren[2])
+            continue;
+        *paren = 0;
+        snprintf(path, sizeof(path), "/proc/%ld/task/%.16s/wchan", (long)pid, entry->d_name);
+        wchan[0] = 0;
+        fp = fopen(path, "r");
+        if (fp) {
+            got = fread(wchan, 1, sizeof(wchan) - 1, fp);
+            fclose(fp);
+            wchan[got] = 0;
+            wchan[strcspn(wchan, "\n")] = 0;
+        }
+        if (!wchan[0] || !strcmp(wchan, "0"))
+            fprintf(stderr, "%s: %s %ld: thread %s (%s): state %c\n", who, label, (long)pid,
+                    entry->d_name, name + 1, paren[2]);
+        else
+            fprintf(stderr, "%s: %s %ld: thread %s (%s): state %c in %s\n", who, label, (long)pid,
+                    entry->d_name, name + 1, paren[2], wchan);
+    }
+    closedir(dir);
+#else
+    (void)who;
+    (void)label;
+    (void)pid;
+#endif
+}
+
+/** Print the host's load averages and its pressure stall lines for the disk
+ * and for memory, the share of time tasks waited on each, where Linux keeps
+ * them. */
+static void host_pressure(const char *who)
+{
+    static const char *const files[] = {"/proc/loadavg", "/proc/pressure/io",
+                                        "/proc/pressure/memory"};
+    static const char *const names[] = {"load", "disk pressure", "memory pressure"};
+    char line[256];
+    size_t i;
+
+    for (i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
+        FILE *fp = fopen(files[i], "r");
+
+        if (!fp)
+            continue;
+        while (fgets(line, sizeof(line), fp)) {
+            line[strcspn(line, "\n")] = 0;
+            fprintf(stderr, "%s: host %s: %s\n", who, names[i], line);
+        }
+        fclose(fp);
+    }
+}
+
+/**
+ * Read from the monitor `fd` into `buf`, of `size` bytes, until its prompt
+ * comes after the first `skip` newlines, or `seconds` pass. A command's echo
+ * is its first line, so `skip` 1 waits past it to the answer. Returns the
+ * bytes read, or -1 when the prompt did not come.
+ */
+static long monitor_read(int fd, char *buf, size_t size, int skip, double seconds)
+{
+    double until = now() + seconds;
+    size_t len = 0;
+
+    buf[0] = 0;
+    while (now() < until && len + 1 < size) {
+        struct pollfd pfd;
+        const char *from = buf;
+        ssize_t n;
+        int lines;
+
+        pfd.fd = fd;
+        pfd.events = POLLIN;
+        pfd.revents = 0;
+        if (poll(&pfd, 1, 100) <= 0)
+            continue;
+        n = read(fd, buf + len, size - 1 - len);
+        if (n <= 0)
+            return -1;
+        len += (size_t)n;
+        buf[len] = 0;
+        for (lines = 0; lines < skip && from; lines++) {
+            from = strchr(from, '\n');
+            if (from)
+                from++;
+        }
+        if (from && strstr(from, "(qemu)"))
+            return (long)len;
+    }
+    return -1;
+}
+
+/**
+ * Print each emulated processor's instruction pointer, flags and halt state
+ * of machine `pid`, from `info registers -a` on the monitor `machine_exec`
+ * gave it: the `CPU#N` line and the `EIP=` or `RIP=` line under it, whose
+ * `HLT=1` is a halted processor and whose flags' 0x200 bit is the interrupt
+ * flag. A monitor that gives no prompt is reported: QEMU's main loop is
+ * blocked, or another client holds the monitor.
+ */
+static void guest_cpus(const char *who, const char *ledger, pid_t pid)
+{
+    static const char command[] = "info registers -a\n";
+    static char reply[65536];
+    char path[256];
+    struct sockaddr_un addr;
+    char *line, *next;
+    int fd;
+
+    if (monitor_path(path, sizeof(path), ledger, pid) != 0 || access(path, F_OK) != 0)
+        return;
+    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0)
+        return;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    memcpy(addr.sun_path, path, strlen(path) + 1);
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        fprintf(stderr, "%s: machine %ld: monitor: cannot connect: %s\n", who, (long)pid,
+                strerror(errno));
+        close(fd);
+        return;
+    }
+    if (monitor_read(fd, reply, sizeof(reply), 0, 3) < 0) {
+        fprintf(stderr, "%s: machine %ld: monitor: no prompt in 3 s\n", who, (long)pid);
+        close(fd);
+        return;
+    }
+    if (write_all(fd, command, sizeof(command) - 1) != 0 ||
+        monitor_read(fd, reply, sizeof(reply), 1, 5) < 0) {
+        fprintf(stderr, "%s: machine %ld: monitor: no answer to info registers in 5 s\n", who,
+                (long)pid);
+        close(fd);
+        return;
+    }
+    close(fd);
+    for (line = reply; line; line = next) {
+        next = strchr(line, '\n');
+        if (next)
+            *next++ = 0;
+        line[strcspn(line, "\r")] = 0;
+        if (!strncmp(line, "CPU#", 4) || !strncmp(line, "EIP=", 4) || !strncmp(line, "RIP=", 4))
+            fprintf(stderr, "%s: machine %ld: %s\n", who, (long)pid, line);
+    }
+}
+
+/**
+ * Print what machine `pid` of `ledger` is doing, each line headed `who`:
+ * its threads, its console relay and its parent, as `task_states` gives
+ * them, the host's load and pressure, and its processors from the monitor.
+ * The relay is the pid after the machine's in the ledger. A machine that
+ * stops printing and takes no processor time is either waiting in the host,
+ * which its threads' states say, or halted in the guest, which its
+ * processors say.
+ */
+static void machine_state(const char *who, const char *ledger, pid_t pid)
+{
+    FILE *fp = fopen(ledger, "r");
+    long seen, relay = 0, parent = 0;
+    char path[64], text[512];
+    const char *paren;
+    size_t got;
+
+    if (fp) {
+        while (fscanf(fp, "%ld", &seen) == 1)
+            if (seen == (long)pid && fscanf(fp, "%ld", &relay) != 1)
+                relay = 0;
+        fclose(fp);
+    }
+    snprintf(path, sizeof(path), "/proc/%ld/stat", (long)pid);
+    fp = fopen(path, "r");
+    if (fp) {
+        got = fread(text, 1, sizeof(text) - 1, fp);
+        fclose(fp);
+        text[got] = 0;
+        paren = strrchr(text, ')');
+        if (!paren || sscanf(paren + 1, " %*c %ld", &parent) != 1)
+            parent = 0;
+    }
+    fprintf(stderr, "%s: the state of machine %ld:\n", who, (long)pid);
+    task_states(who, "machine", pid);
+    if (relay > 1)
+        task_states(who, "relay", (pid_t)relay);
+    if (parent > 1)
+        task_states(who, "parent", (pid_t)parent);
+    host_pressure(who);
+    guest_cpus(who, ledger, pid);
+}
+
+/** Print `machine_state` for each live QEMU machine `ledger` records, those
+ * whose command begins `qemu-system`. */
+static void machine_states(const char *who, const char *ledger)
+{
+    FILE *fp = fopen(ledger, "r");
+    long pid;
+
+    if (!fp)
+        return;
+    while (fscanf(fp, "%ld", &pid) == 1) {
+        struct identity id;
+
+        if (pid > 1 && registered_machine(ledger, (pid_t)pid) &&
+            process_identity((pid_t)pid, &id) == 1 && !strncmp(id.command, "qemu-system", 11))
+            machine_state(who, ledger, (pid_t)pid);
+    }
+    fclose(fp);
+}
+
+/**
+ * Say that the command `name` has done nothing for `idle` seconds, and print
+ * its last output, the `recent_len` bytes of `recent`, the last output of
+ * its machines' transcript `console`, and the state of each machine of
+ * `ledger` that still runs (`machine_states`).
+ */
+static void report_hang(const char *name, double idle, const char *recent, size_t recent_len,
+                        const char *console, const char *ledger)
+{
+    char who[128];
+
+    fprintf(stderr,
+            "run: %s: no output for %.0f s and next to no processor time; stopping the suite\n",
+            name, idle);
+    fprintf(stderr, "run: %s: the suite's last output:\n", name);
+    write_all(STDERR_FILENO, recent, recent_len);
+    write_all(STDERR_FILENO, "\n", 1);
+    fprintf(stderr, "run: %s: the console's last output:\n", name);
+    last_output(console);
+    snprintf(who, sizeof(who), "run: %s", name);
+    machine_states(who, ledger);
+}
+
+/**
  * The `watch` and `suite` modes: run `cmd` as the leader of a new process
  * group, copy its output to standard output, and stop it as hung when it has
  * done nothing for `idle` seconds. Returns the command's exit status, or 128
@@ -1049,10 +1331,10 @@ static void last_output(const char *path)
  * nothing for minutes, and a halted one takes only a few percent for its timer,
  * under either accelerator, which is not working. When none of the three has
  * happened for `idle` seconds, which are never multiplied by the deadline
- * factor, the last output of the command and of the console is printed and
- * the command is stopped with `stop_owned`, as it is when this process
- * receives INT, TERM or HUP. A line of progress goes each minute to standard
- * error, or to descriptor 3 when `RACH2_PROGRESS_FD` is 3 and it is open.
+ * factor, `report_hang` says so and the command is stopped with
+ * `stop_owned`, as it is when this process receives INT, TERM or HUP. A
+ * line of progress goes each minute to standard error, or to descriptor 3
+ * when `RACH2_PROGRESS_FD` is 3 and it is open.
  *
  * The group is recorded in `LEDGER.groups` before the wait. With `suite`
  * set, the command's processes inherit a liveness pipe, which `check_token`
@@ -1194,15 +1476,7 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
             report = t;
         }
         if (!done && t - active >= idle && t - busy >= idle) {
-            fprintf(
-                stderr,
-                "run: %s: no output for %.0f s and next to no processor time; stopping the suite\n",
-                name, idle);
-            fprintf(stderr, "run: %s: the suite's last output:\n", name);
-            write_all(STDERR_FILENO, recent, recent_len);
-            write_all(STDERR_FILENO, "\n", 1);
-            fprintf(stderr, "run: %s: the console's last output:\n", name);
-            last_output(console);
+            report_hang(name, idle, recent, recent_len, console, ledger);
             timedout = 1;
         }
         if (interrupted || timedout) {
@@ -1243,16 +1517,19 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
  * suite that signals the pid it started signals the machine, SIGKILL too.
  * Both pids go in the ledger, and their identities in `LEDGER.identity`, for
  * the cleanup at the suite's end. The relay ends at the end of the machine's
- * output, and sends the machine SIGTERM when it can no longer write. Returns
- * 2 when the pipe, the transcript, the relay or the ledger cannot be made;
- * an exec that fails exits with status 127.
+ * output, and sends the machine SIGTERM when it can no longer write. A QEMU,
+ * a command whose name begins `qemu-system`, is given a monitor on the socket
+ * `monitor_path` names as well, which `machine_state` reads when the machine
+ * stalls. Returns 2 when the pipe, the transcript, the relay or the ledger
+ * cannot be made; an exec that fails exits with status 127.
  */
 static int machine_exec(const char *ledger, char **cmd)
 {
     int pipes[2], logfd;
     pid_t relay, machine = getpid();
-    size_t len = strlen(ledger) + 16;
-    char *console = malloc(len);
+    size_t len = strlen(ledger) + 16, words;
+    char *console = malloc(len), **argv, path[256], monitor[300];
+    const char *base = strrchr(cmd[0], '/');
     FILE *fp;
 
     if (!console || pipe(pipes) != 0) {
@@ -1311,6 +1588,20 @@ static int machine_exec(const char *ledger, char **cmd)
     dup2(pipes[1], STDOUT_FILENO);
     dup2(pipes[1], STDERR_FILENO);
     close(pipes[1]);
+    base = base ? base + 1 : cmd[0];
+    for (words = 0; cmd[words]; words++)
+        ;
+    argv = malloc((words + 3) * sizeof(*argv));
+    if (argv && !strncmp(base, "qemu-system", 11) &&
+        monitor_path(path, sizeof(path), ledger, machine) == 0) {
+        unlink(path);
+        snprintf(monitor, sizeof(monitor), "unix:%s,server=on,wait=off", path);
+        argv[0] = cmd[0];
+        argv[1] = "-monitor";
+        argv[2] = monitor;
+        memcpy(argv + 3, cmd + 1, words * sizeof(*argv));
+        cmd = argv;
+    }
     execute(cmd, 0);
     return 127;
 }
@@ -1708,6 +1999,15 @@ static int print_identity(pid_t pid)
     return 0;
 }
 
+/** The `killgroup` mode: send `sig` to `group`, which is neither init's nor
+ * this process's. Returns 0 when it was sent and 1 otherwise. */
+static int kill_group(pid_t group, int sig)
+{
+    if (group <= 1 || group == getpgrp())
+        return 1;
+    return kill(-group, sig) != 0;
+}
+
 /** Run the mode the first argument names, as the opening comment lists. */
 int main(int argc, char **argv)
 {
@@ -1716,13 +2016,8 @@ int main(int argc, char **argv)
         lock_exec(argv[2], argv[3], argv + 4);
     if (argc >= 5 && !strcmp(argv[1], "ports"))
         ports_exec(argv[2], (int)strtol(argv[3], NULL, 10), argv + 4);
-    if (argc == 4 && !strcmp(argv[1], "killgroup")) {
-        pid_t group = (pid_t)strtol(argv[2], NULL, 10);
-        int sig = (int)strtol(argv[3], NULL, 10);
-        if (group <= 1 || group == getpgrp())
-            return 1;
-        return kill(-group, sig) != 0;
-    }
+    if (argc == 4 && !strcmp(argv[1], "killgroup"))
+        return kill_group((pid_t)strtol(argv[2], NULL, 10), (int)strtol(argv[3], NULL, 10));
     if (argc == 2 && !strcmp(argv[1], "now")) {
         printf("%lld\n", (long long)now());
         return 0;
@@ -1758,6 +2053,10 @@ int main(int argc, char **argv)
         return check_machines(argv[2], argv[3]);
     if (argc >= 4 && !strcmp(argv[1], "machine"))
         return machine_exec(argv[2], argv + 3);
+    if (argc == 5 && !strcmp(argv[1], "state")) {
+        machine_state(argv[2], argv[3], (pid_t)strtol(argv[4], NULL, 10));
+        return 0;
+    }
     fprintf(stderr, "runutil: invalid arguments\n");
     return 2;
 }

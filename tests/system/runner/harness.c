@@ -130,6 +130,8 @@
  * Each failed step is reported on standard error when it fails, as
  * `HARNESS: step N STEP failed after S s`, N counting from 1 and S the
  * seconds the step took, and the run ends with the count of failed steps.
+ * A run that fails while its machine still runs, a hang among them, prints
+ * what the machine is doing before it is stopped (`machine_report`).
  *
  * `harness --selftest` checks, without QEMU, the escape decoder, the mouse
  * step's parsing, the probe's wait bounds, the bound on a write the machine
@@ -803,6 +805,46 @@ static void child_stop(void)
         kill(child_pid, SIGKILL);
         usleep(400000);
         child_poll();
+    }
+}
+
+/**
+ * Print what the machine is doing, while it still runs on a run that has
+ * failed: `runutil state`, which tests/run's helper `RACH2_RUN_UTIL` gives
+ * for a machine of the suite's ledger `RACH2_QEMU_LEDGER`, prints its
+ * threads' states, the host's load and its processors from the monitor the
+ * helper gave it. A machine that stopped printing is then seen to wait in
+ * the host or to be halted in the guest. Outside tests/run nothing is
+ * printed. The report is given twenty seconds.
+ */
+static void machine_report(void)
+{
+    const char *util = getenv("RACH2_RUN_UTIL");
+    const char *ledger = getenv("RACH2_QEMU_LEDGER");
+    char pid[32];
+    pid_t helper;
+    double until;
+
+    if (util == NULL || util[0] == '\0' || ledger == NULL || ledger[0] == '\0')
+        return;
+    snprintf(pid, sizeof(pid), "%ld", (long)child_pid);
+    fflush(stdout);
+    fflush(stderr);
+    helper = fork();
+    if (helper < 0)
+        return;
+    if (helper == 0) {
+        execl(util, util, "state", "harness", ledger, pid, (char *)NULL);
+        _exit(127);
+    }
+    until = now() + 20;
+    while (waitpid(helper, NULL, WNOHANG) == 0) {
+        if (now() >= until) {
+            kill(helper, SIGKILL);
+            waitpid(helper, NULL, 0);
+            break;
+        }
+        usleep(50000);
     }
 }
 
@@ -2599,6 +2641,9 @@ int main(int argc, char **argv)
     }
     qemu_rc = child_poll();
     self_exited = qemu_rc >= 0 && !child_by_signal;
+    if (qemu_rc < 0 && !never_appeared() &&
+        (step_failures > 0 || must_exit || ok == NULL || !contains(buf, buf_len, ok)))
+        machine_report();
     child_stop();
     drain_rest();
     if (logf != NULL)
