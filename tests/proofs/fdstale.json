@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "proof": "fdstale",
+  "summary": "fdstale of the default suite, with faults in the kernel that its rows must catch",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_fs.c",
+    "rach2/sys/fs/vfs.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/default_probe.sh",
+      "fdstale"
+    ],
+    "bound_s": 1200,
+    "fail_prefix": "default-probe: fail: "
+  },
+  "faults": [
+    {
+      "name": "root-rmdir-descriptions-ignored",
+      "summary": "a fault in syscall_fs.c that fails the row: rmdir under the directory descriptor",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (fd_ofd_holders(mnt, dir, NULL) > 0) {\n        return 1;\n    }\n    for (pr = proc_list; pr; pr = pr->next) {\n",
+          "replace": "    for (pr = proc_list; pr; pr = pr->next) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: fdstale did not pass",
+          "FDSTALE FAIL: rmdir under the directory descriptor"
+        ]
+      }
+    },
+    {
+      "name": "root-rmdir-o-path-ignored",
+      "summary": "a fault in syscall_fs.c that fails the row: rmdir under the O_PATH descriptor",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (fd_ofd_holders(mnt, dir, NULL) > 0) {\n        return 1;\n    }\n    for (pr = proc_list; pr; pr = pr->next) {\n",
+          "replace": "    for (pr = proc_list; pr; pr = pr->next) {\n        int i;\n\n        for (i = 0; i < fd_table_cap(pr->fds); i++) {\n            if (pr->fds->entries[i].ofd && pr->fds->entries[i].ofd->vnode == dir &&\n                !(pr->fds->entries[i].flags & FD_FLAG_PATH)) {\n                return 1;\n            }\n        }\n    }\n    for (pr = proc_list; pr; pr = pr->next) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: fdstale did not pass",
+          "FDSTALE FAIL: rmdir under the O_PATH descriptor"
+        ]
+      }
+    },
+    {
+      "name": "root-rmdir-cwd-ignored",
+      "summary": "a fault in syscall_fs.c that fails the row: rmdir under a working directory",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    for (pr = proc_list; pr; pr = pr->next) {\n        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {\n            return 1;\n        }\n    }\n",
+          "replace": "    (void)pr;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: fdstale did not pass",
+          "FDSTALE FAIL: rmdir under a working directory"
+        ]
+      }
+    },
+    {
+      "name": "root-cwd-not-recorded",
+      "summary": "a fault in vfs.c that fails the row: rmdir under a working directory",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/vfs.c",
+          "find": "    if (mnt && (mnt == mounts[1] || mnt == mounts[2])) {\n        mnt = 0;\n    }\n",
+          "replace": "    if (mnt && (mnt == mounts[1] || mnt == mounts[2] ||\n                (mnt == mounts[0] && mnt->type == &vfs_krffs_type))) {\n        mnt = 0;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: fdstale did not pass",
+          "FDSTALE FAIL: rmdir under a working directory"
+        ]
+      }
+    },
+    {
+      "name": "root-cwd-kept-after-leaving",
+      "summary": "a fault in vfs.c that fails the row: rmdir once nothing refers to the directory",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/vfs.c",
+          "find": "    p->fs->cwd_mnt = mnt;\n    p->fs->cwd_node = mnt ? node : 0;\n    hold_release(was, was_node);\n}\n",
+          "replace": "    if (mnt) {\n        p->fs->cwd_mnt = mnt;\n        p->fs->cwd_node = node;\n        hold_release(was, was_node);\n    }\n}\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: fdstale did not pass",
+          "FDSTALE FAIL: rmdir once nothing refers to the directory"
+        ]
+      }
+    },
+    {
+      "name": "root-rmdir-caller-cwd-skipped",
+      "summary": "a fault in syscall_fs.c that fails the row: rmdir under the caller's own working directory",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {\n",
+          "replace": "        if (pr != current_proc && pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: fdstale did not pass",
+          "FDSTALE FAIL: rmdir under the caller's own working directory"
+        ]
+      }
+    }
+  ]
+}

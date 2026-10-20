@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "proof": "fdcallmusl",
+  "summary": "musl/fdcallmusl of the default suite, with faults in the kernel that its rows must catch",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_fs.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/default_probe.sh",
+      "musl/fdcallmusl"
+    ],
+    "bound_s": 1200,
+    "fail_prefix": "default-probe: fail: "
+  },
+  "faults": [
+    {
+      "name": "fd-link-not-opened",
+      "summary": "a fault in syscall_fs.c that fails the row: a pipe opened by /dev/fd/N did not read the pipe",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    case VNODE_PROC_FD_LINK:\n        return proc_fd_open(vp, flags);\n",
+          "replace": "    case VNODE_PROC_FD_LINK:\n        return vp->procfd >= 0 ? -ENXIO : proc_fd_open(vp, flags);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/fdcallmusl did not pass",
+          "FDCALLMUSL FAIL (a pipe opened by /dev/fd/N did not read the pipe"
+        ]
+      }
+    },
+    {
+      "name": "fd-link-file-shared",
+      "summary": "a fault in syscall_fs.c that fails the row: a file opened by /proc/self/fd/N was not a description of its own",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (src->ofd && src->ofd->vmnt && (src->type == FD_TYPE_FILE || src->type == FD_TYPE_DIR)) {\n",
+          "replace": "    if (0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/fdcallmusl did not pass",
+          "FDCALLMUSL FAIL (a file opened by /proc/self/fd/N was not a description of its own"
+        ]
+      }
+    }
+  ]
+}

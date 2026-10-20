@@ -1,0 +1,1435 @@
+{
+  "schema_version": 1,
+  "proof": "direntmusl",
+  "summary": "musl/direntmusl of the default suite, with faults in the kernel that its rows must catch",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_fs.c",
+    "rach2/sys/syscall_proc.c",
+    "rach2/sys/fs/synthfs.c",
+    "rach2/sys/arch/x86/cpuinfo.c",
+    "rach2/sys/fs/procfs.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/default_probe.sh",
+      "musl/direntmusl"
+    ],
+    "bound_s": 1200,
+    "fail_prefix": "default-probe: fail: "
+  },
+  "faults": [
+    {
+      "name": "proc-net-empty",
+      "summary": "a fault in syscall_fs.c that fails the row: /proc/net: no entry checked",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    int kind = sd->kind;\n\n    if (n == 0) {\n",
+          "replace": "    int kind = sd->kind;\n\n    if (kind == VNODE_PROC_NET_DIR) {\n        return 0;\n    }\n    if (n == 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "direntmusl: /proc/net: no entry checked"
+        ]
+      }
+    },
+    {
+      "name": "proc-fd-list-error",
+      "summary": "a fault in syscall_fs.c that fails the row: /proc/self/fd: readdir: errno 5",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    while (synth_dirent_at(sd, (int)idx, name, &ino, &dtype)) {\n",
+          "replace": "    if (sd->kind == VNODE_PROC_FD_DIR) {\n        return -EIO;\n    }\n    while (synth_dirent_at(sd, (int)idx, name, &ino, &dtype)) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "direntmusl: /proc/self/fd: readdir: errno 5"
+        ]
+      }
+    },
+    {
+      "name": "lstat-dot-no-follow",
+      "summary": "a fault in syscall_fs.c that fails the row: lstat of /proc/self/. did not reach the directory",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (dir) {\n        *dir = path_names_dir(pathbuf, len);\n    }\n",
+          "replace": "    if (dir) {\n        *dir = 0;\n        (void)path_names_dir(pathbuf, len);\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (lstat of /proc/self/. did not reach the directory)"
+        ]
+      }
+    },
+    {
+      "name": "stat-dir-end-not-checked",
+      "summary": "a fault in syscall_fs.c that fails the row: a file named with a trailing slash was not ENOTDIR",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (rc == 0 && dir && (kst->st_mode & S_IFMT) != S_IFDIR) {\n        return -ENOTDIR;\n    }\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (a file named with a trailing slash was not ENOTDIR)"
+        ]
+      }
+    },
+    {
+      "name": "old-lstat-dot-no-follow",
+      "summary": "a fault in syscall_fs.c that fails the row: the old lstat of /proc/self/. did not reach the directory",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    len = path_from_user_dir(AT_FDCWD, path, &pathbuf, &dir);\n    if (len != 0) {\n        return len;\n    }\n    follow |= dir;\n",
+          "replace": "    len = path_from_user_dir(AT_FDCWD, path, &pathbuf, &dir);\n    if (len != 0) {\n        return len;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (the old lstat of /proc/self/. did not reach the directory)"
+        ]
+      }
+    },
+    {
+      "name": "dir-seek-ebadf",
+      "summary": "a fault in syscall_fs.c that fails the row: rewinddir of the probe's own directory",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    return entry->type == FD_TYPE_DIR || entry->type == FD_TYPE_SYNTH_DIR ||\n           entry->type == FD_TYPE_PROC;\n",
+          "replace": "    return entry->type == FD_TYPE_SYNTH_DIR || entry->type == FD_TYPE_PROC;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (rewinddir of the probe's own directory)"
+        ]
+      }
+    },
+    {
+      "name": "dir-seek-only-rewind",
+      "summary": "a fault in syscall_fs.c that fails the row: seekdir of the probe's own directory to a place telldir gave",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (target == 0 || target == entry->ofd->offset) {\n        return 0;\n    }\n",
+          "replace": "    if (target == 0 || target == entry->ofd->offset) {\n        return 0;\n    }\n    return -EINVAL;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (seekdir of the probe's own directory to a place telldir gave)"
+        ]
+      }
+    },
+    {
+      "name": "synth-dir-seek-ebadf",
+      "summary": "a fault in syscall_fs.c that fails the row: rewinddir and seekdir of /proc/self",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    return entry->type == FD_TYPE_DIR || entry->type == FD_TYPE_SYNTH_DIR ||\n           entry->type == FD_TYPE_PROC;\n",
+          "replace": "    return entry->type == FD_TYPE_DIR || entry->type == FD_TYPE_PROC;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (rewinddir and seekdir of /proc/self)"
+        ]
+      }
+    },
+    {
+      "name": "open-dir-end-not-directory",
+      "summary": "a fault in syscall_fs.c that fails the row: open of a file named with a trailing slash or a last . was not ENOTDIR",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (end) {\n        flags = (flags | O_DIRECTORY) & ~O_NOFOLLOW;\n    }\n    return do_open(name, flags, mode);\n",
+          "replace": "    return do_open(name, flags, mode);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (open of a file named with a trailing slash or a last . was not ENOTDIR)"
+        ]
+      }
+    },
+    {
+      "name": "open-create-dir-end-creates",
+      "summary": "a fault in syscall_fs.c that fails the row: an open with O_CREAT of a path that names a directory by its end",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (end && (flags & (O_CREAT | O_PATH)) == O_CREAT) {\n        return open_create_dir_end(name, flags, end);\n    }\n",
+          "replace": "    if (0 && end && (flags & (O_CREAT | O_PATH)) == O_CREAT) {\n        return open_create_dir_end(name, flags, end);\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (an open with O_CREAT of a path that names a directory by its end)"
+        ]
+      }
+    },
+    {
+      "name": "access-dir-end-unchecked",
+      "summary": "a fault in syscall_fs.c that fails the row: access of a file named with a trailing slash was not ENOTDIR",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    werr = resolve_named(name, VFS_WALK_REAL_IDS | VFS_WALK_LOCK, dir, &ref);\n",
+          "replace": "    (void)dir;\n    werr = resolve_named(name, VFS_WALK_REAL_IDS | VFS_WALK_LOCK, 0, &ref);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (access of a file named with a trailing slash was not ENOTDIR)"
+        ]
+      }
+    },
+    {
+      "name": "chmod-dir-end-unchecked",
+      "summary": "a fault in syscall_fs.c that fails the row: chmod of a file named with a trailing slash was not ENOTDIR",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = resolve_named(name, VFS_WALK_LOCK, dir, &ref);\n",
+          "replace": "    (void)dir;\n    rc = resolve_named(name, VFS_WALK_LOCK, 0, &ref);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (chmod of a file named with a trailing slash was not ENOTDIR)"
+        ]
+      }
+    },
+    {
+      "name": "chown-dir-end-unchecked",
+      "summary": "a fault in syscall_fs.c that fails the row: chown or lchown of a file named with a trailing slash was not ENOTDIR",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = resolve_named(name, (follow ? 0 : VFS_WALK_NOFOLLOW) | VFS_WALK_LOCK, dir, &ref);\n",
+          "replace": "    (void)dir;\n    rc = resolve_named(name, (follow ? 0 : VFS_WALK_NOFOLLOW) | VFS_WALK_LOCK, 0, &ref);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (chown or lchown of a file named with a trailing slash was not ENOTDIR)"
+        ]
+      }
+    },
+    {
+      "name": "truncate-dir-end-unchecked",
+      "summary": "a fault in syscall_fs.c that fails the row: truncate of a file named with a trailing slash was not ENOTDIR",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = resolve_named(path_name(path), VFS_WALK_LOCK, dir, &ref);\n",
+          "replace": "    (void)dir;\n    rc = resolve_named(path_name(path), VFS_WALK_LOCK, 0, &ref);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (truncate of a file named with a trailing slash was not ENOTDIR)"
+        ]
+      }
+    },
+    {
+      "name": "utimensat-dir-end-unchecked",
+      "summary": "a fault in syscall_fs.c that fails the row: utimensat of a file named with a trailing slash was not ENOTDIR",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = resolve_named(\n        path, ((flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0) | VFS_WALK_LOCK, dir, &ref);\n",
+          "replace": "    (void)dir;\n    rc = resolve_named(\n        path, ((flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0) | VFS_WALK_LOCK, 0, &ref);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (utimensat of a file named with a trailing slash was not ENOTDIR)"
+        ]
+      }
+    },
+    {
+      "name": "readlink-dir-end-unchecked",
+      "summary": "a fault in syscall_fs.c that fails the row: readlink of a name with a trailing slash was not ENOTDIR or EINVAL",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    kind = (int)resolve_named(name, VFS_WALK_NOFOLLOW, dir, &ref);\n",
+          "replace": "    kind = (int)resolve_named(name, VFS_WALK_NOFOLLOW, 0, &ref);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (readlink of a name with a trailing slash was not ENOTDIR or EINVAL)"
+        ]
+      }
+    },
+    {
+      "name": "statfs-dir-end-unchecked",
+      "summary": "a fault in syscall_fs.c that fails the row: statfs of a file named with a trailing slash was not ENOTDIR",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        int rc = resolve_named(pathbuf, 0, dir, &ref);\n",
+          "replace": "        int rc = resolve_named(pathbuf, 0, 0, &ref);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (statfs of a file named with a trailing slash was not ENOTDIR)"
+        ]
+      }
+    },
+    {
+      "name": "link-source-dir-end-unchecked",
+      "summary": "a fault in syscall_fs.c that fails the row: link from a file named with a trailing slash was not ENOTDIR",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = resolve_named(oldname, follow ? 0 : VFS_WALK_NOFOLLOW, olddir, &src);\n",
+          "replace": "    (void)olddir;\n    rc = resolve_named(oldname, follow ? 0 : VFS_WALK_NOFOLLOW, 0, &src);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (link from a file named with a trailing slash was not ENOTDIR)"
+        ]
+      }
+    },
+    {
+      "name": "link-new-dir-end-ignored",
+      "summary": "a fault in syscall_fs.c that fails the row: link to a new name with a trailing slash or a last .",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = make_dir_end(&parent, leaf, newend, newname);\n",
+          "replace": "    (void)newend;\n    rc = make_dir_end(&parent, leaf, 0, newname);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (link to a new name with a trailing slash or a last .)"
+        ]
+      }
+    },
+    {
+      "name": "symlink-new-dir-end-ignored",
+      "summary": "a fault in syscall_fs.c that fails the row: symlink to a new name with a trailing slash or a last .",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = make_dir_end(&parent, leaf, end, newname);\n",
+          "replace": "    (void)end;\n    rc = make_dir_end(&parent, leaf, 0, newname);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (symlink to a new name with a trailing slash or a last .)"
+        ]
+      }
+    },
+    {
+      "name": "mknod-new-dir-end-ignored",
+      "summary": "a fault in syscall_fs.c that fails the row: mknod of a new name with a trailing slash or a last .",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = make_dir_end(&parent, leaf, end, path);\n    if (rc == 0) {\n        rc = new_name_taken(&parent, leaf, path);\n    }\n    if (rc != 0) {\n        vfs_ref_release(&parent);\n        return rc;\n    }\n",
+          "replace": "    (void)end;\n    rc = make_dir_end(&parent, leaf, 0, path);\n    if (rc == 0) {\n        rc = new_name_taken(&parent, leaf, path);\n    }\n    if (rc != 0) {\n        vfs_ref_release(&parent);\n        return rc;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (mknod of a new name with a trailing slash or a last .)"
+        ]
+      }
+    },
+    {
+      "name": "mknod-end-not-asked",
+      "summary": "a fault in syscall_fs.c that fails the row: mknod of a new name with a trailing slash or a last .",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = path_from_user_dir(AT_FDCWD, upath, &path, &end);\n    if (rc != 0) {\n        return rc;\n    }\n    rc = do_mknod(path, (uint32_t)SC_ARG(params, 1), (uint32_t)SC_ARG(params, 2), end);\n",
+          "replace": "    rc = path_from_user(AT_FDCWD, upath, &path);\n    end = 0;\n    if (rc != 0) {\n        return rc;\n    }\n    rc = do_mknod(path, (uint32_t)SC_ARG(params, 1), (uint32_t)SC_ARG(params, 2), end);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (mknod of a new name with a trailing slash or a last .)"
+        ]
+      }
+    },
+    {
+      "name": "mkdir-end-not-asked",
+      "summary": "a fault in syscall_fs.c that fails the row: mkdir of a path whose last name is .",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = path_from_user_dir(AT_FDCWD, upath, &path, &end);\n    if (rc != 0) {\n        return rc;\n    }\n    rc = do_mkdir(path, (uint32_t)SC_ARG(params, 1));\n",
+          "replace": "    rc = path_from_user(AT_FDCWD, upath, &path);\n    (void)end;\n    if (rc != 0) {\n        return rc;\n    }\n    rc = do_mkdir(path, (uint32_t)SC_ARG(params, 1));\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (mkdir of a path whose last name is .)"
+        ]
+      }
+    },
+    {
+      "name": "unlink-end-not-asked",
+      "summary": "a fault in syscall_fs.c that fails the row: unlink of a file named with a trailing slash or of a last .",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = path_from_user_dir(AT_FDCWD, upath, &path, &end);\n    if (rc != 0) {\n        return rc;\n    }\n    rc = unlink_named(path, end);\n",
+          "replace": "    rc = path_from_user(AT_FDCWD, upath, &path);\n    end = 0;\n    if (rc != 0) {\n        return rc;\n    }\n    rc = unlink_named(path, end);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (unlink of a file named with a trailing slash or of a last .)"
+        ]
+      }
+    },
+    {
+      "name": "unlink-root-slash-ignored",
+      "summary": "a fault in syscall_fs.c that fails the row: unlink of a file named with a trailing slash or of a last .",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        rc = unlink_root_name(&parent, leaf, end == PATH_END_SLASH);\n",
+          "replace": "        rc = unlink_root_name(&parent, leaf, 0);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (unlink of a file named with a trailing slash or of a last .)"
+        ]
+      }
+    },
+    {
+      "name": "unlink-mounted-slash-ignored",
+      "summary": "a fault in syscall_fs.c that fails the row: unlink of a file named with a trailing slash or of a last .",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        if (end == PATH_END_SLASH) {\n            rc = leaf_dir_check(&parent, leaf);\n            rc = rc == 0 ? -EISDIR : rc;\n        } else {\n",
+          "replace": "        if (0) {\n            rc = leaf_dir_check(&parent, leaf);\n            rc = rc == 0 ? -EISDIR : rc;\n        } else {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (unlink of a file named with a trailing slash or of a last .)"
+        ]
+      }
+    },
+    {
+      "name": "unlink-dot-leaf-passed",
+      "summary": "a fault in syscall_fs.c that fails the row: unlink of a file named with a trailing slash or of a last .",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (leaf_is_dot(leaf)) {\n        rc = -EISDIR;\n    } else if (vfs_synth_vpath(parent.mnt, parent.node)) {\n",
+          "replace": "    if (vfs_synth_vpath(parent.mnt, parent.node)) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (unlink of a file named with a trailing slash or of a last .)"
+        ]
+      }
+    },
+    {
+      "name": "rmdir-end-not-asked",
+      "summary": "a fault in syscall_fs.c that fails the row: rmdir of a directory's . or ..",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = path_from_user_dir(AT_FDCWD, upath, &path, &end);\n    if (rc != 0) {\n        return rc;\n    }\n    rc = do_rmdir(path);\n",
+          "replace": "    rc = path_from_user(AT_FDCWD, upath, &path);\n    (void)end;\n    if (rc != 0) {\n        return rc;\n    }\n    rc = do_rmdir(path);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (rmdir of a directory's . or ..)"
+        ]
+      }
+    },
+    {
+      "name": "rmdir-dot-leaf-passed",
+      "summary": "a fault in syscall_fs.c that fails the row: rmdir of a directory's . or ..",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (leaf_is_dot(leaf)) {\n        rc = leaf[1] == '\\0' ? -EINVAL : -ENOTEMPTY;\n    } else if (vfs_synth_vpath(parent.mnt, parent.node)) {\n",
+          "replace": "    if (vfs_synth_vpath(parent.mnt, parent.node)) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (rmdir of a directory's . or ..)"
+        ]
+      }
+    },
+    {
+      "name": "rename-end-not-asked",
+      "summary": "a fault in syscall_fs.c that fails the row: rename of a name whose last component is . or ..",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    int32_t rc = path_from_user_dir(olddirfd, uold, &oldpath, &oldend);\n",
+          "replace": "    int32_t rc = path_from_user(olddirfd, uold, &oldpath);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (rename of a name whose last component is . or ..)"
+        ]
+      }
+    },
+    {
+      "name": "rename-dot-leaf-passed",
+      "summary": "a fault in syscall_fs.c that fails the row: rename of a name whose last component is . or ..",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (leaf_is_dot(oleaf) || leaf_is_dot(nleaf)) {\n        rc = (!leaf_is_dot(oleaf) && (flags & RENAME_NOREPLACE)) ? -EEXIST : -EBUSY;\n        goto out;\n    }\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (rename of a name whose last component is . or ..)"
+        ]
+      }
+    },
+    {
+      "name": "rename-root-slash-ignored",
+      "summary": "a fault in syscall_fs.c that fails the row: rename of a file named with a trailing slash",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (slash && node != krffs_fs->node && !KRFFS_IS_DIR(node->mode)) {\n        return -ENOTDIR;\n    }\n",
+          "replace": "    (void)slash;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (rename of a file named with a trailing slash)"
+        ]
+      }
+    },
+    {
+      "name": "rename-mounted-slash-ignored",
+      "summary": "a fault in syscall_fs.c that fails the row: rename of a file named with a trailing slash",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (rc == 0 && slash) {\n        rc = leaf_dir_check(opar, oleaf);\n    }\n",
+          "replace": "    (void)slash;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (rename of a file named with a trailing slash)"
+        ]
+      }
+    },
+    {
+      "name": "exec-dir-end-unchecked",
+      "summary": "a fault in syscall_proc.c that fails the row: execve of a path that names a directory by its end was not ENOTDIR or EACCES",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    rc = exec_open(&s->prog, s->path, s->path_end, &s->id, s->mm);\n",
+          "replace": "    rc = exec_open(&s->prog, s->path, 0, &s->id, s->mm);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (execve of a path that names a directory by its end was not ENOTDIR or EACCES)"
+        ]
+      }
+    },
+    {
+      "name": "exec-directory-runs",
+      "summary": "a fault in syscall_proc.c that fails the row: execve of a path that names a directory by its end was not ENOTDIR or EACCES",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    } else if (vfs_getattr(ref.mnt, ref.node, &vst) == 0 && (vst.mode & 0170000u) == 0040000u) {\n        rc = -EACCES;\n    } else if (mnt_is_root(ref.mnt)) {\n",
+          "replace": "    } else if (mnt_is_root(ref.mnt)) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (execve of a path that names a directory by its end was not ENOTDIR or EACCES)"
+        ]
+      }
+    },
+    {
+      "name": "script-interp-dir-end-unchecked",
+      "summary": "a fault in syscall_proc.c that fails the row: a script whose interpreter has a trailing slash was not ENOTDIR",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    rc = exec_open(&s->prog, s->path, s->path_end, NULL, s->mm);\n",
+          "replace": "    rc = exec_open(&s->prog, s->path, 0, NULL, s->mm);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (a script whose interpreter has a trailing slash was not ENOTDIR)"
+        ]
+      }
+    },
+    {
+      "name": "bind-dir-end-unchecked",
+      "summary": "a fault in syscall_fs.c that fails the row: a bind to a name ending in a slash or . was not refused as on Linux",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        rc = make_dir_end(&parent, leaf, end, path);\n        if (rc == 0) {\n            rc = new_name_taken(&parent, leaf, path);\n        }\n",
+          "replace": "        rc = make_dir_end(&parent, leaf, end == PATH_END_SLASH ? 0 : end, path);\n        if (rc == 0) {\n            rc = new_name_taken(&parent, leaf, path);\n        }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (a bind to a name ending in a slash or . was not refused as on Linux)"
+        ]
+      }
+    },
+    {
+      "name": "connect-dir-end-unchecked",
+      "summary": "a fault in syscall_fs.c that fails the row: connect to a socket named with a trailing slash was not ENOTDIR",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        rc = resolve_named(buf, 0, end, &ref);\n",
+          "replace": "        rc = resolve_named(buf, 0, 0, &ref);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (connect to a socket named with a trailing slash was not ENOTDIR)"
+        ]
+      }
+    },
+    {
+      "name": "umount2-dir-end-unchecked",
+      "summary": "a fault in syscall_fs.c that fails the row: umount2 of a file named with a trailing slash was not ENOTDIR",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    n = vfs_do_umount(tpath, end != 0);\n",
+          "replace": "    n = vfs_do_umount(tpath, 0);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (umount2 of a file named with a trailing slash was not ENOTDIR)"
+        ]
+      }
+    },
+    {
+      "name": "rmdir-root-einval",
+      "summary": "a fault in syscall_fs.c that fails the row: rmdir or rename of the root was not EBUSY",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (pathbuf[0] == '/' && pathbuf[1] == '\\0') {\n        return -EBUSY;\n    }\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (rmdir or rename of the root was not EBUSY)"
+        ]
+      }
+    },
+    {
+      "name": "mkdir-last-dot-dropped",
+      "summary": "a fault in syscall_fs.c that fails the row: mkdir of a path whose last name is .",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = do_mkdir(path, (uint32_t)SC_ARG(params, 1));\n",
+          "replace": "    path_drop_dot(path, end);\n    rc = do_mkdir(path, (uint32_t)SC_ARG(params, 1));\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (mkdir of a path whose last name is .)"
+        ]
+      }
+    },
+    {
+      "name": "open-excl-dot-eisdir",
+      "summary": "a fault in syscall_fs.c that fails the row: an open with O_CREAT of a path that names a directory by its end",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    return (flags & O_EXCL) ? -EEXIST : -EISDIR;\n",
+          "replace": "    (void)flags;\n    return -EISDIR;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (an open with O_CREAT of a path that names a directory by its end)"
+        ]
+      }
+    },
+    {
+      "name": "dir-end-nofollow-kept",
+      "summary": "a fault in syscall_fs.c that fails the row: a symbolic link to a directory named with a trailing slash was not followed",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    int32_t rc = vfs_resolve_real(name, dir ? walk & ~VFS_WALK_NOFOLLOW : walk, ref, real);\n",
+          "replace": "    int32_t rc = vfs_resolve_real(name, walk, ref, real);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (a symbolic link to a directory named with a trailing slash was not followed)"
+        ]
+      }
+    },
+    {
+      "name": "open-dir-end-nofollow-kept",
+      "summary": "a fault in syscall_fs.c that fails the row: a symbolic link to a directory named with a trailing slash was not followed",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        flags = (flags | O_DIRECTORY) & ~O_NOFOLLOW;\n",
+          "replace": "        flags = flags | O_DIRECTORY;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (a symbolic link to a directory named with a trailing slash was not followed)"
+        ]
+      }
+    },
+    {
+      "name": "slash-name-link-as-directory",
+      "summary": "a fault in syscall_fs.c that fails the row: unlink or rename of a link named with a trailing slash was not ENOTDIR",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    at.mnt = parent->mnt;\n    rc = ref_dir_check(&at, 0);\n",
+          "replace": "    at.mnt = parent->mnt;\n    rc = ref_dir_check(&at, 0);\n    {\n        struct vfs_stat lst;\n\n        if (rc == -ENOTDIR && vfs_getattr(at.mnt, at.node, &lst) == 0 &&\n            (lst.mode & S_IFMT) == 0120000u) {\n            rc = 0;\n        }\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (unlink or rename of a link named with a trailing slash was not ENOTDIR)"
+        ]
+      }
+    },
+    {
+      "name": "at-dirfd-dot-dropped",
+      "summary": "a fault in syscall_fs.c that fails the row: unlinkat with AT_REMOVEDIR of a directory's . or .. through a descriptor",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        r = fd_dir_path(entry, dirpath, VFS_PATH_MAX, &outside);\n        if (r == 0) {\n            r = path_prepend(pathbuf, size, (uint32_t)len, dirpath);\n        }\n        path_buf_put(dirpath);\n",
+          "replace": "        r = fd_dir_path(entry, dirpath, VFS_PATH_MAX, &outside);\n        if (r == 0) {\n            r = path_prepend(pathbuf, size, (uint32_t)len, dirpath);\n        }\n        path_buf_put(dirpath);\n        return r < 0 ? r : canonicalize_abs(pathbuf);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (unlinkat with AT_REMOVEDIR of a directory's . or .. through a descriptor)"
+        ]
+      }
+    },
+    {
+      "name": "renameat-ignores-olddirfd",
+      "summary": "a fault in syscall_fs.c that fails the row: renameat of a name whose last component is . or .. through a descriptor",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    return rename_from_user((int)SC_ARG(params, 0), old_path, (int)SC_ARG(params, 2), new_path, 0);\n",
+          "replace": "    return rename_from_user(AT_FDCWD, old_path, (int)SC_ARG(params, 2), new_path, 0);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (renameat of a name whose last component is . or .. through a descriptor)"
+        ]
+      }
+    },
+    {
+      "name": "open-create-root-dir-opens",
+      "summary": "a fault in syscall_fs.c that fails the row: an open with O_CREAT of an existing directory was not EISDIR",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (is_dir && (acc != 0 || (flags & (O_TRUNC | O_CREAT)))) {\n",
+          "replace": "    if (is_dir && (acc != 0 || (flags & O_TRUNC))) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (an open with O_CREAT of an existing directory was not EISDIR)"
+        ]
+      }
+    },
+    {
+      "name": "open-create-mounted-dir-opens",
+      "summary": "a fault in syscall_fs.c that fails the row: an open with O_CREAT of an existing directory was not EISDIR",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if ((vst.mode & 0170000u) == 0040000u && (acc != 0 || (flags & (O_TRUNC | O_CREAT)))) {\n",
+          "replace": "    if ((vst.mode & 0170000u) == 0040000u && (acc != 0 || (flags & O_TRUNC))) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (an open with O_CREAT of an existing directory was not EISDIR)"
+        ]
+      }
+    },
+    {
+      "name": "open-create-synth-dir-opens",
+      "summary": "a fault in syscall_fs.c that fails the row: an open with O_CREAT of an existing directory was not EISDIR",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if ((flags & 3) != 0 || (flags & O_CREAT)) {\n",
+          "replace": "    if ((flags & 3) != 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (an open with O_CREAT of an existing directory was not EISDIR)"
+        ]
+      }
+    },
+    {
+      "name": "open-create-directory-pair-accepted",
+      "summary": "a fault in syscall_fs.c that fails the row: an open with O_CREAT and O_DIRECTORY was not EINVAL",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if ((flags & (O_CREAT | O_DIRECTORY | O_PATH)) == (O_CREAT | O_DIRECTORY)) {\n        return -EINVAL;\n    }\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (an open with O_CREAT and O_DIRECTORY was not EINVAL)"
+        ]
+      }
+    },
+    {
+      "name": "open-path-directory-pair-einval",
+      "summary": "a fault in syscall_fs.c that fails the row: an open with O_PATH, O_CREAT and O_DIRECTORY did not name the directory",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if ((flags & (O_CREAT | O_DIRECTORY | O_PATH)) == (O_CREAT | O_DIRECTORY)) {\n",
+          "replace": "    if ((flags & (O_CREAT | O_DIRECTORY)) == (O_CREAT | O_DIRECTORY)) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (an open with O_PATH, O_CREAT and O_DIRECTORY did not name the directory)"
+        ]
+      }
+    },
+    {
+      "name": "link-root-new-einval",
+      "summary": "a fault in syscall_fs.c that fails the row: link, symlink or mknod with the root as the new name was not EEXIST",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = new_name_parent(newname, &parent, leaf, sizeof(leaf));\n    if (rc != 0) {\n        vfs_ref_release(&src);\n",
+          "replace": "    rc = vfs_resolve(0, newname, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));\n    if (rc != 0) {\n        vfs_ref_release(&src);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (link, symlink or mknod with the root as the new name was not EEXIST)"
+        ]
+      }
+    },
+    {
+      "name": "symlink-root-new-einval",
+      "summary": "a fault in syscall_fs.c that fails the row: link, symlink or mknod with the root as the new name was not EEXIST",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = new_name_parent(newname, &parent, leaf, sizeof(leaf));\n    if (rc != 0) {\n        return rc;\n    }\n",
+          "replace": "    rc = vfs_resolve(0, newname, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));\n    if (rc != 0) {\n        return rc;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (link, symlink or mknod with the root as the new name was not EEXIST)"
+        ]
+      }
+    },
+    {
+      "name": "mknod-root-einval",
+      "summary": "a fault in syscall_fs.c that fails the row: link, symlink or mknod with the root as the new name was not EEXIST",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = new_name_parent(path, &parent, leaf, sizeof(leaf));\n",
+          "replace": "    rc = vfs_resolve(0, path, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (link, symlink or mknod with the root as the new name was not EEXIST)"
+        ]
+      }
+    },
+    {
+      "name": "bind-root-einval",
+      "summary": "a fault in syscall_fs.c that fails the row: a bind to the root was not EADDRINUSE",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    int32_t rc = new_name_parent(path, &parent, leaf, sizeof(leaf));\n",
+          "replace": "    int32_t rc = vfs_resolve(0, path, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (a bind to the root was not EADDRINUSE)"
+        ]
+      }
+    },
+    {
+      "name": "pt-interp-dir-end-unchecked",
+      "summary": "a fault in syscall_proc.c that fails the row: an ELF image whose PT_INTERP names a directory by its end was not refused",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    rc = exec_open(&s->prog, s->layout.interp, end, NULL, s->mm);\n",
+          "replace": "    (void)end;\n    rc = exec_open(&s->prog, s->layout.interp, 0, NULL, s->mm);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (an ELF image whose PT_INTERP names a directory by its end was not refused)"
+        ]
+      }
+    },
+    {
+      "name": "device-directory-flag-ignored",
+      "summary": "a fault in syscall_fs.c that fails the row: an open of /fb or /mouse as a directory was not ENOTDIR",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (fb == 2 || mouse == 2 || (flags & O_DIRECTORY)) {\n",
+          "replace": "    (void)flags;\n    if (fb == 2 || mouse == 2) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (an open of /fb or /mouse as a directory was not ENOTDIR)"
+        ]
+      }
+    },
+    {
+      "name": "device-dot-end-walked",
+      "summary": "a fault in syscall_fs.c that fails the row: an open of /fb or /mouse as a directory was not ENOTDIR",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    return (name_is(name, \"/.\") || name_is(name, \"/..\")) ? 2 : 0;\n",
+          "replace": "    return name_is(name, \"\") ? 2 : 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (an open of /fb or /mouse as a directory was not ENOTDIR)"
+        ]
+      }
+    },
+    {
+      "name": "rename-root-slash-before-noreplace",
+      "summary": "a fault in syscall_fs.c that fails the row: a RENAME_NOREPLACE rename onto a name that exists was not EEXIST first",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    node = found;\n    rc = (flags & RENAME_NOREPLACE) ? rename_noreplace(opar, oleaf, npar, nleaf) : 0;\n",
+          "replace": "    node = found;\n    if (slash && node != krffs_fs->node && !KRFFS_IS_DIR(node->mode)) {\n        return -ENOTDIR;\n    }\n    rc = (flags & RENAME_NOREPLACE) ? rename_noreplace(opar, oleaf, npar, nleaf) : 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (a RENAME_NOREPLACE rename onto a name that exists was not EEXIST first)"
+        ]
+      }
+    },
+    {
+      "name": "rename-synth-erofs-before-dots",
+      "summary": "a fault in syscall_fs.c that fails the row: a rename of a last . or .. in /proc was not EBUSY or EEXIST",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (leaf_is_dot(oleaf) || leaf_is_dot(nleaf)) {\n        rc = (!leaf_is_dot(oleaf) && (flags & RENAME_NOREPLACE)) ? -EEXIST : -EBUSY;\n        goto out;\n    }\n",
+          "replace": "    if (vfs_synth_vpath(opar.mnt, opar.node)) {\n        rc = -EROFS;\n        goto out;\n    }\n    if (leaf_is_dot(oleaf) || leaf_is_dot(nleaf)) {\n        rc = (!leaf_is_dot(oleaf) && (flags & RENAME_NOREPLACE)) ? -EEXIST : -EBUSY;\n        goto out;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (a rename of a last . or .. in /proc was not EBUSY or EEXIST)"
+        ]
+      }
+    },
+    {
+      "name": "make-dir-end-synth-skipped",
+      "summary": "a fault in syscall_fs.c that fails the row: a new name in /dev or /proc with a trailing slash was not ENOENT or EEXIST",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (vfs_synth_vpath(parent->mnt, parent->node)) {\n        return synth_name_exists(path);\n    }\n",
+          "replace": "    if (vfs_synth_vpath(parent->mnt, parent->node)) {\n        return path[0] == '\\0' ? synth_name_exists(path) : 0;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (a new name in /dev or /proc with a trailing slash was not ENOENT or EEXIST)"
+        ]
+      }
+    },
+    {
+      "name": "lchown-dir-end-changes-link",
+      "summary": "a fault in syscall_fs.c that fails the row: a symbolic link to a directory named with a trailing slash was not followed",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = resolve_named(name, (follow ? 0 : VFS_WALK_NOFOLLOW) | VFS_WALK_LOCK, dir, &ref);\n    if (rc != 0) {\n        return rc;\n    }\n",
+          "replace": "    rc = resolve_named(name, (follow ? 0 : VFS_WALK_NOFOLLOW) | VFS_WALK_LOCK, dir, &ref);\n    if (rc == 0 && !follow && dir) {\n        vfs_walk_unlock(ref.mnt);\n        vfs_ref_release(&ref);\n        rc = resolve_named(name, VFS_WALK_NOFOLLOW | VFS_WALK_LOCK, 0, &ref);\n    }\n    if (rc != 0) {\n        return rc;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (a symbolic link to a directory named with a trailing slash was not followed)"
+        ]
+      }
+    },
+    {
+      "name": "utimensat-dir-end-changes-link",
+      "summary": "a fault in syscall_fs.c that fails the row: a symbolic link to a directory named with a trailing slash was not followed",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        path, ((flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0) | VFS_WALK_LOCK, dir, &ref);\n",
+          "replace": "        path, ((flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0) | VFS_WALK_LOCK,\n        (flags & AT_SYMLINK_NOFOLLOW) ? 0 : dir, &ref);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (a symbolic link to a directory named with a trailing slash was not followed)"
+        ]
+      }
+    },
+    {
+      "name": "symlink-name-taken-late",
+      "summary": "a fault in syscall_fs.c that fails the row: a name that exists in /dev or /proc was not EEXIST before EROFS or EXDEV",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = make_dir_end(&parent, leaf, end, newname);\n    if (rc == 0) {\n        rc = new_name_taken(&parent, leaf, newname);\n    }\n",
+          "replace": "    rc = make_dir_end(&parent, leaf, end, newname);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (a name that exists in /dev or /proc was not EEXIST before EROFS or EXDEV)"
+        ]
+      }
+    },
+    {
+      "name": "link-name-taken-late",
+      "summary": "a fault in syscall_fs.c that fails the row: a name that exists in /dev or /proc was not EEXIST before EROFS or EXDEV",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = make_dir_end(&parent, leaf, newend, newname);\n    if (rc == 0) {\n        rc = new_name_taken(&parent, leaf, newname);\n    }\n",
+          "replace": "    rc = make_dir_end(&parent, leaf, newend, newname);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (a name that exists in /dev or /proc was not EEXIST before EROFS or EXDEV)"
+        ]
+      }
+    },
+    {
+      "name": "mknod-name-taken-late",
+      "summary": "a fault in syscall_fs.c that fails the row: a name that exists in /dev or /proc was not EEXIST before EROFS or EXDEV",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = make_dir_end(&parent, leaf, end, path);\n    if (rc == 0) {\n        rc = new_name_taken(&parent, leaf, path);\n    }\n    if (rc != 0) {\n        vfs_ref_release(&parent);\n        return rc;\n    }\n",
+          "replace": "    rc = make_dir_end(&parent, leaf, end, path);\n    if (rc != 0) {\n        vfs_ref_release(&parent);\n        return rc;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (a name that exists in /dev or /proc was not EEXIST before EROFS or EXDEV)"
+        ]
+      }
+    },
+    {
+      "name": "mkdir-synth-erofs-first",
+      "summary": "a fault in syscall_fs.c that fails the row: a name that exists in /dev or /proc was not EEXIST before EROFS or EXDEV",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = new_name_taken(parent, leaf, path);\n    if (rc != 0) {\n        return rc;\n    }\n    if (vfs_synth_vpath(parent->mnt, parent->node)) {\n        return -EROFS; /* nothing is created under /dev or /proc */\n    }\n",
+          "replace": "    if (vfs_synth_vpath(parent->mnt, parent->node)) {\n        return -EROFS; /* nothing is created under /dev or /proc */\n    }\n    rc = new_name_taken(parent, leaf, path);\n    if (rc != 0) {\n        return rc;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (a name that exists in /dev or /proc was not EEXIST before EROFS or EXDEV)"
+        ]
+      }
+    },
+    {
+      "name": "bind-name-taken-late",
+      "summary": "a fault in syscall_fs.c that fails the row: a name that exists in /dev or /proc was not EEXIST before EROFS or EXDEV",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        rc = make_dir_end(&parent, leaf, end, path);\n        if (rc == 0) {\n            rc = new_name_taken(&parent, leaf, path);\n        }\n",
+          "replace": "        rc = make_dir_end(&parent, leaf, end, path);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (a name that exists in /dev or /proc was not EEXIST before EROFS or EXDEV)"
+        ]
+      }
+    },
+    {
+      "name": "new-name-taken-synth-absent",
+      "summary": "a fault in syscall_fs.c that fails the row: a name that exists in /dev or /proc was not EEXIST before EROFS or EXDEV",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        rc = synth_name_exists(path);\n        return rc == -ENOENT ? 0 : rc;\n",
+          "replace": "        rc = synth_name_exists(path);\n        return rc == -ENOENT || rc == -EEXIST ? 0 : rc;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (a name that exists in /dev or /proc was not EEXIST before EROFS or EXDEV)"
+        ]
+      }
+    },
+    {
+      "name": "new-name-taken-lookup-ignored",
+      "summary": "a fault in syscall_fs.c that fails the row: symlink or link onto a name that exists was not EEXIST",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = name_present(parent->mnt, parent->node, leaf);\n    return rc == 1 ? -EEXIST : rc;\n",
+          "replace": "    rc = name_present(parent->mnt, parent->node, leaf);\n    return rc == 1 ? 0 : rc;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (symlink or link onto a name that exists was not EEXIST)"
+        ]
+      }
+    },
+    {
+      "name": "synth-unreadable-name-absent",
+      "summary": "a fault in syscall_fs.c that fails the row: a name in /proc whose link the caller may not read was not EEXIST",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "                 : procfs_readlink_dir(rpid, vp->kind == VNODE_PROC_ROOT, scratch, 0)) == -ENOENT) {\n",
+          "replace": "                 : procfs_readlink_dir(rpid, vp->kind == VNODE_PROC_ROOT, scratch, 0)) < 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (a name in /proc whose link the caller may not read was not EEXIST)"
+        ]
+      }
+    },
+    {
+      "name": "make-dir-end-mount-missed",
+      "summary": "a fault in syscall_fs.c that fails the row: a new name in /dev or /proc with a trailing slash was not ENOENT or EEXIST",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (vfs_leaf_mount(parent->mnt, parent->node, leaf)) {\n        return -EEXIST;\n    }\n    rc = parent->mnt->type->ops->lookup(parent->mnt, parent->node, leaf, &found);\n",
+          "replace": "    rc = parent->mnt->type->ops->lookup(parent->mnt, parent->node, leaf, &found);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (a new name in /dev or /proc with a trailing slash was not ENOENT or EEXIST)"
+        ]
+      }
+    },
+    {
+      "name": "rename-noreplace-mount-busy",
+      "summary": "a fault in syscall_fs.c that fails the row: a rename onto the mount point /dev under RENAME_NOREPLACE was not EEXIST",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        if (flags & RENAME_NOREPLACE) {\n            vfs_ns_lock(opar.mnt);\n            rc = rename_noreplace(&opar, oleaf, &npar, nleaf);\n            vfs_ns_unlock(opar.mnt);\n            if (rc == 0) {\n                rc = -EBUSY;\n            }\n        }\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (a rename onto the mount point /dev under RENAME_NOREPLACE was not EEXIST)"
+        ]
+      }
+    },
+    {
+      "name": "proc-sys-unnamed",
+      "summary": "a fault in synthfs.c that fails the row: /proc",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/synthfs.c",
+          "find": "        if (comp_eq(c[1], \"sys\")) {\n",
+          "replace": "        if (comp_eq(c[1], \"sys-\")) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (/proc"
+        ]
+      }
+    },
+    {
+      "name": "proc-cpuinfo-no-flags",
+      "summary": "a fault in cpuinfo.c that fails the row: /proc/cpuinfo is not a record of processor 0 with its flags",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/cpuinfo.c",
+          "find": "    put(&t, \"wp\\t\\t: yes\\nflags\\t\\t:\");\n",
+          "replace": "    put(&t, \"wp\\t\\t: yes\\nflag\\t\\t:\");\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (/proc/cpuinfo is not a record of processor 0 with its flags"
+        ]
+      }
+    },
+    {
+      "name": "pid-mounts-missing",
+      "summary": "a fault in procfs.c that fails the row: /proc/self/mounts is not /proc/mounts",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "    case SYNTH_PROC_PIDMOUNTS:\n        return procfs_gen_mounts(t);\n",
+          "replace": "    case SYNTH_PROC_PIDMOUNTS:\n        return procfs_gen_cmdline(t, pid);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (/proc/self/mounts is not /proc/mounts"
+        ]
+      }
+    },
+    {
+      "name": "loadavg-missing",
+      "summary": "a fault in synthfs.c that fails the row: /proc/loadavg is not three loads",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/synthfs.c",
+          "find": "                 {\"loadavg\", VNODE_PROC_LOADAVG},\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (/proc/loadavg is not three loads"
+        ]
+      }
+    },
+    {
+      "name": "loadavg-no-running",
+      "summary": "a fault in procfs.c that fails the row: /proc/loadavg is not three loads",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "    ap_u32(t, active);\n    ap_ch(t, '/');\n",
+          "replace": "    ap_u32(t, active - active);\n    ap_ch(t, '/');\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (/proc/loadavg is not three loads"
+        ]
+      }
+    },
+    {
+      "name": "proc-zero-opens",
+      "summary": "faults in synthfs.c and procfs.c, whose two checks each keep /proc from reaching the idle process, that fail the row: /proc has a process 0",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/synthfs.c",
+          "find": "            if (pid <= 0) {\n",
+          "replace": "            if (pid < 0) {\n"
+        },
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "    p = proc_named((uint32_t)pid);\n",
+          "replace": "    p = pid == 0 ? get_process(0) : proc_named((uint32_t)pid);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (/proc has a process 0"
+        ]
+      }
+    },
+    {
+      "name": "proc-zero-listed",
+      "summary": "a fault in procfs.c that fails the row: /proc has a process 0",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "        if (p->pid != p->tgid || p == proc_idle || pid_seen(p->pid) == 0) {\n",
+          "replace": "        if (p->pid != p->tgid) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (/proc has a process 0"
+        ]
+      }
+    },
+    {
+      "name": "core-pattern-missing",
+      "summary": "a fault in synthfs.c that fails the row: /proc/sys/kernel/core_pattern is not the name of a core file",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/synthfs.c",
+          "find": "               {6, \"core_pattern\", \"core\\n\"},\n",
+          "replace": "               {6, \"core_name\", \"core\\n\"},\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/direntmusl did not pass",
+          "DIRENTMUSL FAIL (/proc/sys/kernel/core_pattern is not the name of a core file"
+        ]
+      }
+    }
+  ]
+}

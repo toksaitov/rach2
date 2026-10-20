@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "proof": "preadmusl-x86-64",
+  "summary": "musl/preadmusl of the default suite on x86-64, the only kernel with preadv and pwritev, with faults in the kernel that its rows must catch",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_fs.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "ARCH=x86_64 exec sh tests/system/default_probe.sh --build ${WORK}"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "ARCH=x86_64 exec sh tests/system/default_probe.sh musl/preadmusl"
+    ],
+    "bound_s": 1200,
+    "fail_prefix": "default-probe: fail: "
+  },
+  "faults": [
+    {
+      "name": "preadv-one-offset",
+      "summary": "a fault in syscall_fs.c that fails the row: pwritev writes its buffers in turn at the offset",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        total += r;\n        pos += r;\n",
+          "replace": "        total += r;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/preadmusl did not pass",
+          "PREADMUSL FAIL (pwritev writes its buffers in turn at the offset)"
+        ]
+      }
+    },
+    {
+      "name": "pwritev-buffer-unchecked",
+      "summary": "a fault in syscall_fs.c that fails the row: pwritev refuses a vector with a bad buffer before it writes",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        if (!user_buffer_ok(iov.iov_base, iov.iov_len, !write)) {\n            return -EFAULT;\n        }\n        wanted += (uint32_t)iov.iov_len;\n",
+          "replace": "        wanted += (uint32_t)iov.iov_len;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/preadmusl did not pass",
+          "PREADMUSL FAIL (pwritev refuses a vector with a bad buffer before it writes)"
+        ]
+      }
+    },
+    {
+      "name": "preadv-high-half-read",
+      "summary": "a fault in syscall_fs.c that fails the row: preadv does not read the offset's high half",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    return (long long)((((uint64_t)high << (sizeof(long) * 4)) << (sizeof(long) * 4)) | low);\n",
+          "replace": "    return (long long)(((uint64_t)high << 32) | low);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/preadmusl did not pass",
+          "PREADMUSL FAIL (preadv does not read the offset's high half)"
+        ]
+      }
+    }
+  ]
+}

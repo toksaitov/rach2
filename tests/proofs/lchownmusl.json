@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "proof": "lchownmusl",
+  "summary": "musl/lchownmusl of the default suite, with faults in the kernel that its rows must catch",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_fs.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/default_probe.sh",
+      "musl/lchownmusl"
+    ],
+    "bound_s": 1200,
+    "fail_prefix": "default-probe: fail: "
+  },
+  "faults": [
+    {
+      "name": "fchownat-ignores-dirfd-end",
+      "summary": "a fault in syscall_fs.c that fails the row: fchownat through a directory descriptor, from a directory with a decoy",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    } else {\n        rc = path_from_user_dir(dirfd, upath, &path, &dir);\n        if (rc != 0) {\n            return rc;\n        }\n    }\n    rc = do_chown(path_name(path), uid, gid, !(flags & AT_SYMLINK_NOFOLLOW), dir);\n",
+          "replace": "    } else {\n        rc = path_from_user_dir(AT_FDCWD, upath, &path, &dir);\n        if (rc != 0) {\n            return rc;\n        }\n    }\n    rc = do_chown(path_name(path), uid, gid, !(flags & AT_SYMLINK_NOFOLLOW), dir);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/lchownmusl did not pass",
+          "LCHOWNMUSL FAIL (fchownat through a directory descriptor, from a directory with a decoy)"
+        ]
+      }
+    }
+  ]
+}

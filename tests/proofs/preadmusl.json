@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "proof": "preadmusl",
+  "summary": "musl/preadmusl of the default suite, with faults in the kernel that its rows must catch",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_fs.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/default_probe.sh",
+      "musl/preadmusl"
+    ],
+    "bound_s": 1200,
+    "fail_prefix": "default-probe: fail: "
+  },
+  "faults": [
+    {
+      "name": "proc-seek-ebadf",
+      "summary": "a fault in syscall_fs.c that fails the row: lseek of a /proc snapshot or of /proc/self/mem",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    return entry->type == FD_TYPE_DIR || entry->type == FD_TYPE_SYNTH_DIR ||\n           entry->type == FD_TYPE_PROC;\n",
+          "replace": "    return entry->type == FD_TYPE_DIR || entry->type == FD_TYPE_SYNTH_DIR;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/preadmusl did not pass",
+          "PREADMUSL FAIL (lseek of a /proc snapshot or of /proc/self/mem)"
+        ]
+      }
+    },
+    {
+      "name": "old-lseek-listing-ebadf",
+      "summary": "a fault in syscall_fs.c that fails the row: lseek of a /proc snapshot or of /proc/self/mem",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (seeks_listing(entry)) {\n        seek_rc = seek_listing(entry, offset, whence, limit, &at);\n        return seek_rc != 0 ? seek_rc : (long)at;\n    }\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/preadmusl did not pass",
+          "PREADMUSL FAIL (lseek of a /proc snapshot or of /proc/self/mem)"
+        ]
+      }
+    },
+    {
+      "name": "old-lseek-socket-ebadf",
+      "summary": "a fault in syscall_fs.c that fails the row: lseek of a socket or a pseudo-terminal master",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        return seek_rc != 0 ? seek_rc : (long)at;\n    }\n    if (entry->type != FD_TYPE_FILE) {\n        return -ESPIPE;\n    }\n",
+          "replace": "        return seek_rc != 0 ? seek_rc : (long)at;\n    }\n    if (entry->type != FD_TYPE_FILE) {\n        return -EBADF;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/preadmusl did not pass",
+          "PREADMUSL FAIL (lseek of a socket or a pseudo-terminal master)"
+        ]
+      }
+    },
+    {
+      "name": "llseek-socket-ebadf",
+      "summary": "a fault in syscall_fs.c that fails the row: lseek of a socket or a pseudo-terminal master",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (entry->type != FD_TYPE_FILE) {\n        return -ESPIPE;\n    }\n    seek_rc = entry->ofd ? file_size_now(entry, &size) : -EBADF;\n",
+          "replace": "    if (entry->type != FD_TYPE_FILE) {\n        return -EBADF;\n    }\n    seek_rc = entry->ofd ? file_size_now(entry, &size) : -EBADF;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/preadmusl did not pass",
+          "PREADMUSL FAIL (lseek of a socket or a pseudo-terminal master)"
+        ]
+      }
+    },
+    {
+      "name": "proc-seek-cur-not-kept",
+      "summary": "a fault in syscall_fs.c that fails the row: lseek of a /proc snapshot or of /proc/self/mem",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (rc == 0) {\n        entry->ofd->offset = (uint64_t)at;\n        *out = at;\n    }\n",
+          "replace": "    if (rc == 0 && whence != 1) {\n        entry->ofd->offset = (uint64_t)at;\n    }\n    if (rc == 0) {\n        *out = at;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/preadmusl did not pass",
+          "PREADMUSL FAIL (lseek of a /proc snapshot or of /proc/self/mem)"
+        ]
+      }
+    }
+  ]
+}

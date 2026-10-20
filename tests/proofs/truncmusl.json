@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "proof": "truncmusl",
+  "summary": "musl/truncmusl of the default suite, with faults in the kernel that its rows must catch",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_fs.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/default_probe.sh",
+      "musl/truncmusl"
+    ],
+    "bound_s": 1200,
+    "fail_prefix": "default-probe: fail: "
+  },
+  "faults": [
+    {
+      "name": "path-truncate-repoints-nothing",
+      "summary": "a fault in syscall_fs.c that fails the row: a length the file moves to reach",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = -EBUSY;\n    if (!loop_backs(desc->vmnt, desc->vnode)) {\n        rc = vfs_truncate(desc->vmnt, desc->fhandle, (uint64_t)length);\n    }\n",
+          "replace": "    rc = -EBUSY;\n    if (!loop_backs(desc->vmnt, desc->vnode)) {\n        krffs_node_t *n = desc->fhandle;\n        rc = krffs_truncate_node(&n, (uint32_t)length) == 0 ? 0 : -EIO;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/truncmusl did not pass",
+          "TRUNCMUSL FAIL (a length the file moves to reach)"
+        ]
+      }
+    },
+    {
+      "name": "setid-clear-on-old-node",
+      "summary": "a fault in syscall_fs.c that fails the row: the set-id bits of a file that moved",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        if (mnt_is_root(desc->vmnt)) {\n            cred_kill_setid(desc->vnode);\n        } else {\n",
+          "replace": "        if (mnt_is_root(desc->vmnt)) {\n            cred_kill_setid(ref.node);\n        } else {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/truncmusl did not pass",
+          "TRUNCMUSL FAIL (the set-id bits of a file that moved)"
+        ]
+      }
+    },
+    {
+      "name": "ftruncate-negative-length",
+      "summary": "a fault in syscall_fs.c that fails the row: a negative length to ftruncate",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (length < 0) {\n        return -EINVAL;\n    }\n    entry = fd_get(current_proc->fds, fd);\n",
+          "replace": "    entry = fd_get(current_proc->fds, fd);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/truncmusl did not pass",
+          "TRUNCMUSL FAIL (a negative length to ftruncate)"
+        ]
+      }
+    },
+    {
+      "name": "ftruncate-nonfile-ebadf",
+      "summary": "a fault in syscall_fs.c that fails the row: ftruncate of a directory",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (entry->type != FD_TYPE_FILE || !(entry->flags & FD_FLAG_WRITE)) {\n        return -EINVAL;\n    }\n",
+          "replace": "    if (entry->type != FD_TYPE_FILE) {\n        return -EBADF;\n    }\n    if (!(entry->flags & FD_FLAG_WRITE)) {\n        return -EINVAL;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/truncmusl did not pass",
+          "TRUNCMUSL FAIL (ftruncate of a directory)"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "proof": "statfsmusl",
+  "summary": "musl/statfsmusl of the default suite, with faults in the kernel that its rows must catch",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_fs.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/default_probe.sh",
+      "musl/statfsmusl"
+    ],
+    "bound_s": 1200,
+    "fail_prefix": "default-probe: fail: "
+  },
+  "faults": [
+    {
+      "name": "fstatfs-proc-dir-devfs",
+      "summary": "a fault in syscall_fs.c that fails the row: /proc",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        return statfs_fill(out, sd ? statfs_magic_for_kind(sd->kind) : STATFS_MAGIC_DEVFS);\n",
+          "replace": "        return statfs_fill(out, sd && sd->kind == VNODE_SYS_DIR ? STATFS_MAGIC_SYSFS\n                                                                : STATFS_MAGIC_DEVFS);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/statfsmusl did not pass",
+          "STATFSMUSL FAIL (/proc:"
+        ]
+      }
+    },
+    {
+      "name": "fstatfs-anon-devfs",
+      "summary": "a fault in syscall_fs.c that fails the row: an eventfd",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        return statfs_fill(out, nsfs_ns(e) ? STATFS_MAGIC_NSFS : STATFS_MAGIC_ANON);\n",
+          "replace": "        return statfs_fill(out, nsfs_ns(e) ? STATFS_MAGIC_NSFS : STATFS_MAGIC_DEVFS);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/statfsmusl did not pass",
+          "STATFSMUSL FAIL (an eventfd:"
+        ]
+      }
+    }
+  ]
+}

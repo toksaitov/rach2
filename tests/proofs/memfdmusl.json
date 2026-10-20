@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "proof": "memfdmusl",
+  "summary": "musl/memfdmusl of the default suite, with faults in the kernel that its rows must catch",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_fs.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/default_probe.sh",
+      "musl/memfdmusl"
+    ],
+    "bound_s": 1200,
+    "fail_prefix": "default-probe: fail: "
+  },
+  "faults": [
+    {
+      "name": "writev-seal-grow",
+      "summary": "a fault in syscall_fs.c that fails the row: a writev under F_SEAL_GROW",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (pos + extent > st.size) {\n",
+          "replace": "    if (0 && pos + extent > st.size) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/memfdmusl did not pass",
+          "MEMFDMUSL FAIL (a writev under F_SEAL_GROW"
+        ]
+      }
+    },
+    {
+      "name": "seal-without-write-check",
+      "summary": "a fault in syscall_fs.c that fails the row: the seal commands on a named tmpfs file",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (!(entry->flags & FD_FLAG_WRITE)) {\n        return -EPERM;\n    }\n    return tmpfs_add_seals(entry->ofd->vnode, arg);\n",
+          "replace": "    return tmpfs_add_seals(entry->ofd->vnode, arg);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/memfdmusl did not pass",
+          "MEMFDMUSL FAIL (the seal commands on a named tmpfs file"
+        ]
+      }
+    }
+  ]
+}

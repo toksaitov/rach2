@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "proof": "vfsprobe",
+  "summary": "vfsprobe of the default suite, with faults in the kernel that its rows must catch",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_fs.c",
+    "rach2/sys/arch/i686/systab.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/default_probe.sh",
+      "vfsprobe"
+    ],
+    "bound_s": 1200,
+    "fail_prefix": "default-probe: fail: "
+  },
+  "faults": [
+    {
+      "name": "krffs-statfs-counts-inodes",
+      "summary": "a fault in syscall_fs.c that fails the row: statfs64 of the root counts its inodes",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    st.f_files = 0;\n    st.f_ffree = 0;\n",
+          "replace": "    st.f_files = 1;\n    st.f_ffree = 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: vfsprobe did not pass",
+          "VFSPROBE FAIL: statfs64 of the root counts its inodes"
+        ]
+      }
+    },
+    {
+      "name": "syncfs-missing",
+      "summary": "a fault in systab.c that fails the row: syncfs flushes through an open descriptor and refuses a closed one",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/i686/systab.c",
+          "find": "    table[SYS_SYNCFS] = sys_syncfs;\n",
+          "replace": "    (void)sys_syncfs;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: vfsprobe did not pass",
+          "syncfs flushes through an open descriptor and refuses a closed one"
+        ]
+      }
+    }
+  ]
+}
