@@ -248,8 +248,8 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
             check-pdpmake check-setid check-tcc ish krffs musl-programs \
             ports/doom rach2 rach2-metal rach2-recovery tests tools/etude/guest utils
 
-prepare-images: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(ETUDEHOST) $(ETUDELEGACY) $(ETUDELINES) \
-                $(ETUDESERIAL) $(HARNESS) \
+prepare-images: $(DEMO_CREDS) $(BINFIND) $(CASECHECK) $(DEADLINE) $(ELFCHECK) $(ETUDEHOST) $(ETUDELEGACY) \
+                $(ETUDELINES) $(ETUDESERIAL) $(HARNESS) \
                 $(HOSTPEER) $(MKFIXTURE) $(MKGPT) $(MKMBR) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) \
                 $(RUNUTIL) $(SCREENTEXT) $(SHA256TOOL) $(WAVCHECK) $(GROWSET) os-real-image \
                 os-simple-image rach2-metal-image rach2-recovery-image $(SEALED_DISK) test-image \
@@ -2125,10 +2125,11 @@ run-style:
 # and the test image of ARCH are because etude_qemu_hosttest boots them under
 # QEMU through etude's launcher, and the KRFFS tools because
 # etude_scenario_hosttest also boots the kernel on a disk root that mkdisk.sh
-# makes. etude-host runs the checks.
+# makes. casecheck is because etude_legacyset_hosttest judges the cases of its
+# fixture with it. etude-host runs the checks.
 ETUDE_SCENARIO_DISK = $(IMAGES_DIR)/host-etude-scenario.disk
-run-host: check-libc $(E2FSPROGS_STAMP) $(DEADLINE) $(ETUDEHOST) build/krffs/stageimage.krffs \
-          rach2 test-image krffs
+run-host: check-libc $(E2FSPROGS_STAMP) $(DEADLINE) $(ETUDEHOST) $(CASECHECK) \
+          build/krffs/stageimage.krffs rach2 test-image krffs
 	@$(MKDISK) krffs/manifests/etude-scenario.manifest $(ETUDE_SCENARIO_DISK) 8 6 >/dev/null
 	@sh tests/system/machine_measure_test.sh
 	@ARCH=$(ARCH) ./tests/system/suites/host.sh
