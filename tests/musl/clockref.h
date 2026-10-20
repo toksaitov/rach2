@@ -23,13 +23,14 @@ static long long clockref_ns(clockid_t id)
 }
 
 /**
- * Obtain a host sample from QEMU's host at `port`. Each exchange has a
- * distinct sequence. Reads before send and after receive enclose the host
- * sample. A one-second receive timeout only bounds completion. Up to 32
- * exchanges seek an uncertainty at most 100 ms; none means an unavailable
- * reference, never evidence that a clock is correct or wrong.
+ * Obtain a host sample from the reference at IPv4 address `host` and `port`.
+ * Each exchange has a distinct sequence. Reads before send and after receive
+ * enclose the host sample. A one-second receive timeout only bounds
+ * completion. Up to 32 exchanges seek an uncertainty at most 100 ms; none
+ * means an unavailable reference, never evidence that a clock is correct or
+ * wrong.
  */
-static int clockref_read(int port, struct clockref_sample *s)
+static int clockref_read_at(const char *host, int port, struct clockref_sample *s)
 {
     static unsigned sequence;
     struct sockaddr_in address;
@@ -37,7 +38,7 @@ static int clockref_read(int port, struct clockref_sample *s)
 
     memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
-    address.sin_addr.s_addr = inet_addr("10.0.2.2");
+    address.sin_addr.s_addr = inet_addr(host);
     address.sin_port = htons((unsigned short)port);
     fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0)
@@ -84,6 +85,12 @@ static int clockref_read(int port, struct clockref_sample *s)
     }
     close(fd);
     return 0;
+}
+
+/** Obtain a host sample from QEMU's host, 10.0.2.2, at `port`. */
+static int clockref_read(int port, struct clockref_sample *s)
+{
+    return clockref_read_at("10.0.2.2", port, s);
 }
 
 #endif

@@ -18,19 +18,28 @@
  * The bound is a literal in this file rather than the date of the build,
  * which would make the binary differ on every build.
  *
- * The runner supplies a host UDP reference port as the only argument.
+ * The runner supplies a host UDP reference port as the only positional
+ * argument, at QEMU's host, 10.0.2.2; a native run gives the reference as
+ * `peer=ADDRESS:PORT` instead (tests/native/Readme.md).
  * Guest reads enclose a host timestamp with at most 100 ms uncertainty;
  * their whole error interval must be inside 30 seconds. Serial latency
  * cannot change this comparison. An unavailable or uncertain reference is
  * a failed measurement, distinct from a date mismatch. A failure prints
  * "CLOCKMUSL FAIL (detail)" and exits 1; success exits 0.
+ *
+ * Given `machine=native`, it leaves out the bound on `CLOCK_MONOTONIC`, with
+ * a line that says so, since the machine's kernel may have run for longer.
+ * Given no `peer=` as well, it leaves out the comparison with a reference in
+ * the same way, since the machine's `ntpd` keeps its date.
  */
 
 #include <stdio.h>
 #include <time.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <string.h>
 #include "clockref.h"
+#include "../probe_args.h"
 
 /* 2026-08-14 00:00:00 UTC, in seconds; a correct clock reads later. */
 #define NOT_BEFORE 1786665600L
@@ -46,6 +55,32 @@ static int fail(const char *what)
     return 1;
 }
 
+/**
+ * Read a host sample from the reference: the one `peer=ADDRESS:PORT` names,
+ * or QEMU's host at the port of the only positional argument. Returns 1 with
+ * `*s` filled, or 0 when the reference is absent or unavailable.
+ */
+static int read_reference(struct clockref_sample *s)
+{
+    const char *peer = probe_arg("peer", NULL);
+    const char *colon;
+    char host[64];
+    long port;
+
+    if (peer == NULL) {
+        port = probe_words() == 1 ? strtol(probe_word(1), NULL, 10) : 0;
+        return port >= 1 && port <= 65535 && clockref_read((int)port, s);
+    }
+    colon = strrchr(peer, ':');
+    if (colon == NULL || (size_t)(colon - peer) >= sizeof(host)) {
+        return 0;
+    }
+    memcpy(host, peer, (size_t)(colon - peer));
+    host[colon - peer] = '\0';
+    port = strtol(colon + 1, NULL, 10);
+    return port >= 1 && port <= 65535 && clockref_read_at(host, (int)port, s);
+}
+
 /** Check the date and its progress, then the independent host reference. */
 int main(int argc, char **argv)
 {
@@ -56,8 +91,8 @@ int main(int argc, char **argv)
     long slept;
     struct clockref_sample reference;
     int verdict;
-    long port = argc == 2 ? strtol(argv[1], NULL, 10) : 0;
 
+    probe_args(argc, argv);
     first = time(NULL);
     if (first == (time_t)-1) {
         return fail("time() failed");
@@ -80,7 +115,11 @@ int main(int argc, char **argv)
     if ((long)real.tv_sec < NOT_BEFORE) {
         return fail("CLOCK_REALTIME is not the date");
     }
-    if ((long)mono.tv_sec > BOOT_CEILING) {
+    if (probe_native()) {
+        printf("clockmusl: CLOCK_MONOTONIC under %ld seconds: not run: the "
+               "machine's kernel was not booted for this run\n",
+               BOOT_CEILING);
+    } else if ((long)mono.tv_sec > BOOT_CEILING) {
         return fail("CLOCK_MONOTONIC is not time since boot");
     }
 
@@ -96,7 +135,13 @@ int main(int argc, char **argv)
         return fail(detail);
     }
 
-    if (port < 1 || port > 65535 || !clockref_read((int)port, &reference)) {
+    if (probe_native() && probe_arg("peer", NULL) == NULL) {
+        printf("clockmusl: date against a reference: not run: the case gives no "
+               "reference peer\n");
+        printf("CLOCKMUSL OK\n");
+        return 0;
+    }
+    if (!read_reference(&reference)) {
         return fail("reference unavailable");
     }
     verdict = clockref_judge(reference.real_before - reference.host_real,
