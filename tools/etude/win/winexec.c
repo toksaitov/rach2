@@ -483,15 +483,17 @@ int etude_win_poll(struct etude_win_sup *s, DWORD timeout)
         if (ended != 0)
             return ended;
         waited = GetTickCount64() - start;
-        if (timeout != INFINITE && waited >= timeout)
-            return 0;
         slice = POLL_SLICE;
-        if (timeout != INFINITE && timeout - waited < slice)
+        if (timeout != INFINITE && waited >= timeout)
+            slice = 0;
+        else if (timeout != INFINITE && timeout - waited < slice)
             slice = (DWORD)(timeout - waited);
         if (!GetQueuedCompletionStatusEx(s->port, e, POLL_BATCH, &n, slice, FALSE)) {
-            if (GetLastError() == WAIT_TIMEOUT)
-                continue;
-            return -1;
+            if (GetLastError() != WAIT_TIMEOUT)
+                return -1;
+            if (slice == 0)
+                return 0;
+            continue;
         }
         for (i = 0; i < n; i++) {
             p = find_pipe(s, e[i].lpCompletionKey);

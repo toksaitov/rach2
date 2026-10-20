@@ -43,6 +43,9 @@ int fx_exec_unrun(void);
  */
 int fx_exec_sample(void);
 
+/** Waits of no time serve an attempt until it finishes, with its output. */
+int fx_exec_poll(void);
+
 /**
  * The ledger registers an attempt and its reported descendant, and recovery
  * keeps a claim while its case runs and frees it once the case's job ends.

@@ -333,6 +333,8 @@ struct etude_proc *etude_exec_wait(struct etude_exec *ex, int timeout_ms)
     ULONGLONG start = GetTickCount64();
     ULONGLONG waited;
     struct etude_proc *done;
+    DWORD left = INFINITE;
+    int polled = 0;
 
     ex->output = 0;
     for (;;) {
@@ -340,11 +342,13 @@ struct etude_proc *etude_exec_wait(struct etude_exec *ex, int timeout_ms)
         if (done != NULL || unfinished(ex) == 0 || ex->output)
             return done;
         waited = GetTickCount64() - start;
-        if (timeout_ms >= 0 && waited >= (ULONGLONG)timeout_ms)
+        if (timeout_ms >= 0)
+            left = waited >= (ULONGLONG)timeout_ms ? 0 : (DWORD)((ULONGLONG)timeout_ms - waited);
+        if (polled && left == 0)
             return NULL;
-        if (etude_win_poll(&ex->sup,
-                           timeout_ms < 0 ? INFINITE : (DWORD)((ULONGLONG)timeout_ms - waited)) < 0)
+        if (etude_win_poll(&ex->sup, left) < 0)
             return NULL;
+        polled = 1;
     }
 }
 

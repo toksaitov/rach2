@@ -28,7 +28,7 @@ struct seen {
 };
 
 /* The registrations, one for each attempt started. */
-static struct seen seen[ATTEMPTS + 2];
+static struct seen seen[ATTEMPTS + 3];
 static int nseen;
 
 /** The registration: record what it saw, and refuse the attempt `refuse`. */
@@ -274,6 +274,39 @@ int fx_exec_sample(void)
                    (unsigned long long)cpu, (unsigned long long)rss);
     else if (done != p || ended != 0)
         r = failed("the ended case sampled %d", ended);
+    etude_exec_free(ex);
+    return r;
+}
+
+int fx_exec_poll(void)
+{
+    char *argv[] = {target, "args", "polled", NULL};
+    struct etude_exec_spec spec;
+    struct etude_proc *p = NULL;
+    struct etude_proc *done = NULL;
+    struct etude_exec *ex;
+    ULONGLONG t0 = GetTickCount64();
+    int waits = 0;
+    int r = 0;
+
+    ex = etude_exec_new();
+    CHECK(ex != NULL, "no executor");
+    spec_of(&spec, "poll", argv);
+    if (etude_exec_start(ex, &spec, &p) != 0) {
+        r = failed("start: %s", strerror(errno));
+        etude_exec_free(ex);
+        return r;
+    }
+    while (done != p && GetTickCount64() - t0 < BOUND) {
+        Sleep(10);
+        done = etude_exec_wait(ex, 0);
+        waits++;
+    }
+    if (done != p)
+        r = failed("%d waits of no time did not finish the attempt, which has %lu bytes", waits,
+                   (unsigned long)etude_proc_result(p)->out.kept);
+    else if (strcmp(etude_proc_result(p)->out.data, "arg 0 polled\nargs 1\n") != 0)
+        r = failed("the attempt gave other output: %s", etude_proc_result(p)->out.data);
     etude_exec_free(ex);
     return r;
 }

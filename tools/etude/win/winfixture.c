@@ -1137,6 +1137,7 @@ static const struct {
     {"exec-attempts", fx_exec_attempts},
     {"exec-unrun", fx_exec_unrun},
     {"exec-sample", fx_exec_sample},
+    {"exec-poll", fx_exec_poll},
     {"ledger", fx_ledger},
     {"tooling-made", fx_tooling_made},
     {"tooling-digest", fx_tooling_digest},

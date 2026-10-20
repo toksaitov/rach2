@@ -46,6 +46,8 @@ verdict-on-windows|ledger.c|    if (strcmp(c->system, "win32") != 0 \&\& !verdic
 serial-per-supervisor|win/winexec.c|    s->serial = (unsigned long)InterlockedIncrement(\&started);|    s->serial++;|tooling-job
 sample-ended|win/exec.c|    if (p->child->main_ended \|\| WaitForSingleObject(p->child->process, 0) == WAIT_OBJECT_0)|    if (0)|exec-sample
 sample-no-time|win/exec.c|    *cpu_us = u.user_us + u.kernel_us;|    *cpu_us = 0;|exec-sample tooling-sample
+wait-zero-unserved|win/exec.c|        if (polled \&\& left == 0)|        if (left == 0 \&\& polled >= 0)|exec-poll
+poll-zero-unread|win/winexec.c|            slice = 0;|            return 0;|exec-poll
 path-case|tooling.c|#define name_cmp  _strnicmp|#define name_cmp  strncmp|tooling-made
 text-outputs|tooling.c|    if ((f = fopen(names, "wb")) == NULL)|    if ((f = fopen(names, "w")) == NULL)|tooling-job
 text-stdout|etude_tooling.c|    _setmode(_fileno(stdout), _O_BINARY);|    (void)0;|tooling-job

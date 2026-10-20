@@ -142,7 +142,7 @@ DWORD etude_win_start(struct etude_win_sup *s, const struct etude_win_spawn *sp,
 /**
  * Wait up to TIMEOUT milliseconds for output or for a child to end, deliver
  * the output to each child's function, and bring every child's state up to
- * date.
+ * date. A TIMEOUT of 0 delivers what has already arrived and does not wait.
  *
  * A child is `ended` once its first process has exited, no process is left
  * in its job, and both pipes have reached their end. The job's messages on
