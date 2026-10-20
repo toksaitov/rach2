@@ -52,17 +52,19 @@
  * refused before QEMU starts. This program is also the peer that a scenario
  * runs as a service; two machines at once reach it, a service ended unseen is a
  * fault, and failing rows at each stage end their own processes while a held
- * row keeps its own. With the real QEMU, a disk root written at the debug shell
- * and powered off is read back by the next boot, from a private copy on AHCI
- * and from a qcow2 overlay over the disk on an IDE drive with a serial, whose
- * map lists the write and whose raw conversion has it; etude-guest runs the
- * test image's /hello, two machines run /tcptest against the peer, the frames
- * of one machine's card recorded in its capture, QEMU accepts a connection at
- * the forwarded TCP port and has bound the forwarded UDP port, /tcptest reaches
- * the peer through the guest forward and is refused it at the gateway, and the
- * kernel finds the size of the media row's empty disk. With ETUDE_TEST_FORWARD
- * set the program runs the two forward rows alone.
+ * row keeps its own. A row that passes leaves nothing in its scratch but its
+ * machines' consoles. With the real QEMU, a disk root written at the debug
+ * shell and powered off is read back by the next boot, from a private copy on
+ * AHCI and from a qcow2 overlay over the disk on an IDE drive with a serial,
+ * whose map lists the write and whose raw conversion has it; etude-guest runs
+ * the test image's /hello, two machines run /tcptest against the peer, the
+ * frames of one machine's card recorded in its capture, QEMU accepts a
+ * connection at the forwarded TCP port and has bound the forwarded UDP port,
+ * /tcptest reaches the peer through the guest forward and is refused it at the
+ * gateway, and the kernel finds the size of the media row's empty disk. With
+ * ETUDE_TEST_FORWARD set the program runs the two forward rows alone.
  */
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -1779,7 +1781,7 @@ struct row {
                             peer and a port */
     const char *odd;     /* a step whose bound is `odd_us`, or NULL */
     uint64_t odd_us;
-    const char *evidence; /* `FILE=TEXT` pairs by `;`, which a kept scratch's
+    const char *evidence; /* `FILE=TEXT` pairs by `;`, which the scratch's
                              evidence must have */
     int stop_sig;         /* what a stop sends: SIGTERM when 0 */
 };
@@ -2401,8 +2403,62 @@ static void judge_evidence(const struct row *r, const char *scratch)
     }
 }
 
+/** Whether the evidence in scratch `scratch` has a file whose name ends in
+ * `suffix`. */
+static int evidence_keeps(const char *scratch, const char *suffix)
+{
+    char path[PATH_MAX];
+    struct dirent *e;
+    DIR *d;
+    size_t n, k = strlen(suffix);
+    int found = 0;
+
+    fix_format(path, sizeof(path), "%s/evidence", scratch);
+    d = opendir(path);
+    while (d != NULL && (e = readdir(d)) != NULL) {
+        n = strlen(e->d_name);
+        if (n >= k && strcmp(e->d_name + n - k, suffix) == 0)
+            found = 1;
+    }
+    if (d != NULL)
+        closedir(d);
+    return found;
+}
+
+/** Check that the scratch `scratch` of row `r`, which passed, has nothing left
+ * but the machines' consoles in `evidence`, which the executor removes. */
+static void judge_left(const struct row *r, const char *scratch)
+{
+    char path[PATH_MAX];
+    struct dirent *e;
+    DIR *d = opendir(scratch);
+    size_t n;
+
+    while (d != NULL && (e = readdir(d)) != NULL)
+        if (strcmp(e->d_name, ".") != 0 && strcmp(e->d_name, "..") != 0 &&
+            strcmp(e->d_name, "evidence") != 0) {
+            printf("etude-scenario-test: fail: %s: its scratch keeps %s\n", r->name, e->d_name);
+            fails++;
+        }
+    if (d != NULL)
+        closedir(d);
+    fix_format(path, sizeof(path), "%s/evidence", scratch);
+    d = opendir(path);
+    while (d != NULL && (e = readdir(d)) != NULL) {
+        n = strlen(e->d_name);
+        if (strcmp(e->d_name, ".") != 0 && strcmp(e->d_name, "..") != 0 &&
+            (n < 8 || strcmp(e->d_name + n - 8, ".console") != 0)) {
+            printf("etude-scenario-test: fail: %s: its evidence keeps %s\n", r->name, e->d_name);
+            fails++;
+        }
+    }
+    if (d != NULL)
+        closedir(d);
+}
+
 /** Check outcome `o` of row `r`: each assertion passed, the end record and
- * the exit status are as the row says, and the scratch is kept or not. */
+ * the exit status are as the row says, and the scratch is kept or not, with
+ * the consoles in either case. */
 static void judge(const struct row *r, const struct outcome *o, const char *scratch)
 {
     char word[64], rec[160], copies[4352];
@@ -2428,16 +2484,14 @@ static void judge(const struct row *r, const struct outcome *o, const char *scra
     CHECK(o->kept == r->want_kept, r->name);
     snprintf(copies, sizeof(copies), "%s/copies", scratch);
     CHECK((stat(copies, &st) == 0) == (r->want_kept && r->disk != NULL), r->name);
-    if (strcmp(r->name, "audio-pass") == 0) {
-        snprintf(copies, sizeof(copies), "%s/evidence", scratch);
-        CHECK(stat(copies, &st) != 0 && errno == ENOENT, "audio passing evidence removed");
-    }
-    if (strcmp(r->name, "capture-pass") == 0) {
-        snprintf(copies, sizeof(copies), "%s/evidence", scratch);
-        CHECK(stat(copies, &st) != 0 && errno == ENOENT, "capture passing evidence removed");
-    }
-    if (r->want_kept)
+    if (strcmp(r->name, "audio-pass") == 0)
+        CHECK(!evidence_keeps(scratch, ".wav"), "audio passing evidence removed");
+    if (strcmp(r->name, "capture-pass") == 0)
+        CHECK(!evidence_keeps(scratch, ".pcap"), "capture passing evidence removed");
+    if (r->want_kept || r->evidence != NULL)
         judge_evidence(r, scratch);
+    if (!r->want_kept)
+        judge_left(r, scratch);
     if (fails > 0 || getenv("ETUDE_TEST_VERBOSE") != NULL)
         printf("    %s: stdout:\n%s", r->name, o->out);
 }
@@ -2982,7 +3036,8 @@ static const struct row stand_in_rows[] = {
     {"reboot", "disk", "write:fixture check readback:fixture",
      "qmp-status qmp-reply qmp-error stopped shutdown host-ran host-sees same-copy readback "
      "second-stop",
-     "disk", 0, STEP_US, 0, 1, 0, 0, NULL, 0, NULL, 0},
+     "disk", 0, STEP_US, 0, 1, 0, 0, NULL, 0,
+     "fixture.1.console=fake: wrote;fixture.2.console=fake: disk says", 0},
     {"network", "network", "write:fixture check readback:fixture",
      "qmp-status qmp-reply qmp-error stopped shutdown host-ran host-sees same-copy readback "
      "second-stop",

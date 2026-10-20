@@ -96,11 +96,13 @@ struct assertion {
     int held;     /* the last report was a pass */
 };
 
-/* A file the library made, removed after a pass. */
+/* A file the library made, removed after a pass unless it is kept for the
+ * executor, as the directory of the consoles is. */
 struct made {
     struct made *next;
     char *path;
     int dir;
+    int kept;
 };
 
 /* An empty disk or an overlay of the attempt, made at its first use. */
@@ -854,6 +856,19 @@ static void made(struct etude_case *c, const char *path, int dir)
     m->dir = dir;
     m->next = c->made;
     c->made = m;
+}
+
+/** Keep the scratch's directory `sub`, which the library made, after a pass,
+ * for the executor to read and remove what it holds. */
+static void keep_made(struct etude_case *c, const char *sub)
+{
+    char path[4096];
+    struct made *m;
+
+    snprintf(path, sizeof(path), "%s/%s", c->scratch, sub);
+    for (m = c->made; m != NULL; m = m->next)
+        if (m->dir && strcmp(m->path, path) == 0)
+            m->kept = 1;
 }
 
 /** Give in `buf` the path of `name` in the scratch's directory `sub`, made
@@ -1897,7 +1912,7 @@ enum etude_status etude_boot(struct etude_case *c, const char *machine, const ch
         end->end = ETUDE_END_QEMU_EXITED;
         return ETUDE_FAILED;
     }
-    made(c, console, 0);
+    keep_made(c, "evidence");
     if (mres(m)->audio_path != NULL)
         made(c, mres(m)->audio_path, 0);
     m->next = c->machines;
@@ -2717,13 +2732,13 @@ static int held(const struct etude_case *c)
     return 1;
 }
 
-/** Remove what the library made, the newest first. */
+/** Remove what the library made, the newest first, but what it keeps. */
 static void remove_made(struct etude_case *c)
 {
     struct made *m;
 
     for (m = c->made; m != NULL; m = m->next)
-        if ((m->dir ? rmdir(m->path) : unlink(m->path)) != 0 && errno != ENOENT)
+        if (!m->kept && (m->dir ? rmdir(m->path) : unlink(m->path)) != 0 && errno != ENOENT)
             diag("%s: not removed: %s", m->path, strerror(errno));
 }
 
