@@ -196,3 +196,8 @@ unusedStructMember:*tests/musl/seccompmusl.c
 # machine scenarios read; no source of the tree includes the header yet, so
 # cppcheck finds no reader of its members.
 unusedStructMember:*tools/etude/include/etude/scenario.h
+
+# cppcheck checks these headers alone as well as their C users. Every member
+# is used by history.c, history_json.c, history_collect.c or their host test.
+unusedStructMember:*tools/etude/history_json.h
+unusedStructMember:*tools/etude/include/etude/history.h

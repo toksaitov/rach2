@@ -432,6 +432,14 @@ $(SIZECHECK): tools/verify/sizecheck.c
 # built here so that `make` compiles them under the host flags and the
 # compilation database lists them.
 ASCIISCAN  = build/tools/verify/asciiscan
+ETUDEHISTORY = build/tools/etude/history_check
+ETUDE_HISTORY_SRC = tools/etude/history.c tools/etude/history_json.c \
+                    tools/etude/history_collect.c utils/sha256.c
+$(ETUDEHISTORY): tools/etude/history_check.c $(ETUDE_HISTORY_SRC) \
+                 tools/etude/history_json.h tools/etude/include/etude/history.h utils/sha256.h
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99
+
 HOSTCHECK  = build/tools/setup/hostcheck
 MACHINENET = build/tools/dev/machine_net
 $(ASCIISCAN): tools/verify/asciiscan.c
@@ -1131,7 +1139,7 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(SHA256TOOL) $(MANCHECK) $(MKMBR) $(FATCHAINS) $(GRUBEMBED) $(STICKCHECK) \
              $(MKEXFATFIXTURE) $(DEADLINE) $(PCAPCHECK) $(MKFIXTURE) $(MKFATFIXTURE) \
              $(HOSTPEER) $(WAVCHECK) $(HARNESS) $(RUNTESTS) $(PTYDRIVE) $(RUNUTIL) \
-             $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT)
+             $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT) $(ETUDEHISTORY)
 .PHONY: host-tools print-host-tools
 host-tools: $(HOST_TOOLS)
 print-host-tools:

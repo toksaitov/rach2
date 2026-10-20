@@ -51,7 +51,10 @@
             "quality": {"enum": ["exact", "sampled", "lower_bound"]},
             "interval_us": {"oneOf": [{"$ref": "#/$defs/positive"}, {"type": "null"}]},
             "error_bound": {"oneOf": [{"$ref": "#/$defs/count"}, {"type": "null"}]}
-          }
+          },
+          "allOf": [
+            {"if": {"properties": {"quality": {"const": "sampled"}}}, "then": {"properties": {"interval_us": {"$ref": "#/$defs/positive"}}}}
+          ]
         },
         {
           "type": "object", "additionalProperties": false,

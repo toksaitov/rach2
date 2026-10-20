@@ -53,7 +53,7 @@ A test reaches the code under test in one of two ways. It names separately compi
 A test's opening comment may have three kinds of line, which `host.sh` reads with `grep`:
 
 * `host-deps: PATH ...`: sources, by path from the repository root, compiled and linked with the test. The line repeats, one list per line. A list wrapped onto a following comment line without its own `host-deps:` prefix stops the suite, since the rest of the list would be lost; a named file that does not exist fails the test.
-* `host-cflags: FLAGS`: more compiler flags, also repeatable: the include paths and warnings of a source outside the kernel tree, or a `-D` the test needs. 33 tests have one.
+* `host-cflags: FLAGS`: more compiler flags, also repeatable: the include paths and warnings of a source outside the kernel tree, or a `-D` the test needs. 35 tests have one.
 * `host-seconds: N`: the time limit, in place of 60 seconds. The interruption matrices run external checkers on copies of the volumes: `ext2_hosttest.c` and `fat32_hosttest.c` declare 300 seconds, and `exfat_hosttest.c` 450.
 
 `tools/verify/coverage.sh` reads the same lines to measure which lines of the named sources a test runs, and several mutation scripts read them to compile a test the way the suite does.
@@ -82,7 +82,7 @@ Some kernel functions are in files no host test can compile whole. The files in 
 
 ### Mutation scripts
 
-Each of the 72 `*_mutate.sh` files proves one or more host tests, or in the case of `elf64fuzz_mutate.sh` the [ELF64 fuzz harness](../fuzz/Readme.md): it copies the sources into a private directory, compiles each fault into the copy, requires the test to fail at the check named for that fault, and then restores the copy, rebuilds and requires a pass. When the script ends, normally or by a signal, its exit trap restores the source. The trap then removes the directory the script prints, under `build/` or `${TMPDIR:-/tmp}`, if the script exits 0 or a signal stops it; a failed run leaves its logs, sources and binaries there. Every script takes `--texts`, which checks that each fault's text occurs in its source and runs nothing; `tools/verify/faulttexts.sh` runs that mode for all of them. Eighteen also take `--check`, which runs the unmodified test alone. The test entries below name the script that proves each test. `ata_rate_test.sh` compiles and runs `ata_hosttest.c` alone for the `diskrate` suite, and with `--mutate` proves its two write-count checks. The [testing skill](../../.agents/skills/testing/SKILL.md) says when a mutation proof is required and how to run one on the testing host.
+Each of the 73 `*_mutate.sh` files proves one or more host tests, or in the case of `elf64fuzz_mutate.sh` the [ELF64 fuzz harness](../fuzz/Readme.md): it copies the sources into a private directory, compiles each fault into the copy, requires the test to fail at the check named for that fault, and then restores the copy, rebuilds and requires a pass. When the script ends, normally or by a signal, its exit trap restores the source. The trap then removes the directory the script prints, under `build/` or `${TMPDIR:-/tmp}`, if the script exits 0 or a signal stops it; a failed run leaves its logs, sources and binaries there. Every script takes `--texts`, which checks that each fault's text occurs in its source and runs nothing; `tools/verify/faulttexts.sh` runs that mode for all of them. Eighteen also take `--check`, which runs the unmodified test alone. The test entries below name the script that proves each test. `ata_rate_test.sh` compiles and runs `ata_hosttest.c` alone for the `diskrate` suite, and with `--mutate` proves its two write-count checks. The [testing skill](../../.agents/skills/testing/SKILL.md) says when a mutation proof is required and how to run one on the testing host.
 
 ## Adding tests
 
@@ -114,6 +114,10 @@ Repeat the `host-deps:` prefix rather than wrap a long list. A test may use the 
 ## Tests
 
 Each entry names a test, the code it compiles, and its cases. The reasoning of a case is in the test's source.
+
+### Etude history
+
+* `etude_history_hosttest.c` tests the C99 history store and collectors in `tools/etude/`: validated durable records, concurrent exclusive writers, interrupted and damaged streams, missing data, clock intervals and resource aggregation. Its cases and mutation proof are described in [the component Readme](../../tools/etude/Readme.md#tests).
 
 ### Kernel libraries, memory and processes
 

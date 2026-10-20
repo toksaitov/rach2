@@ -1,6 +1,6 @@
 # Etude
 
-Etude is the test runner that replaces `tests/run`: a controller in hosted C99 that runs Rach2's tests on Linux, macOS, Windows and Rach2, and `etude-guest`, its helper inside Rach2. This directory defines the contracts its parts share: the case manifest, the report a test program writes, the results of an attempt, the frames between the controller and `etude-guest`, the invocation of a guest case, the interface of a machine scenario, and the history of runs.
+Etude is the test runner that replaces `tests/run`: a controller in hosted C99 that runs Rach2's tests on Linux, macOS, Windows and Rach2, and `etude-guest`, its helper inside Rach2. This directory implements the history store and defines the contracts the runner parts share: the case manifest, the report a test program writes, the results of an attempt, the frames between the controller and `etude-guest`, the invocation of a guest case, the interface of a machine scenario, and the history of runs.
 
 ## Interfaces
 
@@ -160,6 +160,36 @@ The plan's items refer to a case by three digests, each of a canonical JSON docu
 
 Equal manifests therefore give equal digests, and a comparison of two runs finds a changed workload by its digest. The results document of each attempt is the history's `assertion_results` blob.
 
+## Design
+
+### The history store
+
+[`history.h`](include/etude/history.h) provides the C99 history API. `etude_history_open` creates a stream with exclusive creation and mode 0600, without inheritance by executed children. One thread in one process owns that stream. Each other writer creates a file of its own, with a globally unique stream ID allocated before execution. A forked child cannot append through its parent's writer. The writer never reopens, replaces or truncates an existing file.
+
+The caller supplies the trusted version-one [`history.schema.json`](schemas/history.schema.json), the run ID and a byte limit. The store reads the schema once and validates each record before writing it. Its JSON reader rejects duplicate members (including escaped spellings), non-ASCII text, fractional numbers and integers beyond 53 value bits. It implements the vocabulary and patterns used by this schema; it is not a general JSON Schema implementation. The store also checks elapsed-time subtraction, paired null preparation identities, and the absence of a completed run interval when cleanup is unconfirmed.
+
+`etude_history_record_id` gives the next ID as `STREAM/SEQUENCE`, which the caller can use in references before writing the record. The writer accepts that ID alone and adds the version, stream, sequence, run, UTC and kind to the supplied data object. It compacts whitespace outside strings. It flushes and synchronizes the object bytes before writing and synchronizing the newline. A failed write ends that stream; a new stream continues the run. The failed stream remains evidence.
+
+A record is at most 4 MiB and a stream at most 65,536 records, subject to its byte limit. A full stream returns an error before writing any part of the next record. A caller must bound the total of streams and referenced blobs through admission and retention. This store deletes nothing, including accepted baselines and issue evidence.
+
+`etude_history_read` checks the schema, local arithmetic, run and stream identity, contiguous sequences and unique record IDs. It accepts the contract's opaque record IDs, including those written by other producers. SHA-256 and byte length identify an exact replay, which is delivered once; a repeated ID with other bytes is an error. It returns 1 for an unfinished last line and -1 for malformed complete lines or I/O errors, with the line number. Its callbacks may have received a valid prefix before that error; the prefix cannot establish success. The input is a closed stream or a stable snapshot. The consumer must resolve references across streams, check content hashes and inventories, and derive aggregate outcomes before deciding whether a run passed.
+
+### The collectors
+
+`etude_history_now` reads UTC and the monotonic clock independently, with the clock resolution rounded upward. POSIX uses `clock_gettime`; Windows uses the performance counter and precise system time. The caller records the machine, boot and clock IDs and subtracts readings only in that domain. Elapsed metrics keep a conservative rounding bound; a missing end, backward reading or overflow stays unavailable.
+
+`etude_history_wait_usage` converts final POSIX child usage to processor microseconds. It includes descendants whose reaped usage the operating system charged to the child, and reports a lower bound with unbounded error because other descendants may be missing. `etude_history_job_usage` reads Windows Job Object cumulative user and kernel time, which includes terminated members. Its caller owns the job, forbids breakaway and records the process creation identities in the scope blob. Neither interface mistakes a process's peak resident size or a job's peak commit charge for combined resident memory; that measurement is unavailable.
+
+`etude_history_cpu_sum` adds disjoint accounting scopes with checked arithmetic. Missing scopes stay unavailable and incomplete accounting stays a lower bound. The executor supplies each inclusive scope once: it never adds a guest to its QEMU, a tooling VM to its internal processes, or a parent's inclusive usage to its children. `etude_history_memory_sample` takes simultaneous resident sizes for disjoint scopes and keeps their largest combined sample. It records the longest sampling interval and an unbounded error, and a missing sample makes the result unavailable. Summing individual peaks cannot supply it. The run's peak needs samples of the whole run, apart from its cases' peaks.
+
+## Building
+
+`make build/tools/etude/history_check` builds the stream checker with the host compiler in C99. `history_check SCHEMA STREAM` checks a closed file's shape and stream order; a valid stream alone makes no claim about the run's outcome. It returns 2 for invalid input or a lost final record. The normal host-tools build includes it. Executors link `history.c`, `history_json.c` and `history_collect.c` and `utils/sha256.c`, and include `include/`.
+
 ## Limits
 
-No program reads or writes these documents yet: the validator, the history writer, the executors, `etude-guest` and `libetude-case` do not exist, and `tests/cases/` has no manifest. The probes do not write report records; they print their own lines and are judged by their exit status, as `tests/run` judges them now. A schema-valid document alone does not establish a complete case, a valid report or a pass.
+The history store checks record shapes, stream order and local interval arithmetic. The manifest validator, executors, `etude-guest` and `libetude-case` are not implemented, and `tests/cases/` has no manifest. The probes print their own lines and are judged by their exit status, as `tests/run` judges them now. A schema-valid document alone does not establish a complete case, a valid report or a pass. Cross-stream references, hashed content, assertion coverage and aggregate results require the consumer's checks.
+
+## Tests
+
+`tests/run host` runs `etude_history_hosttest.c` under the sanitizers. It checks all record kinds, existing complete and incomplete examples, rejected shapes and interval arithmetic, concurrent private writers, competing creation of one stream, inherited writer refusal, interrupted tails, interior damage, duplicate IDs, sequence gaps, byte limits, write failure, clocks, missing measurements, overflow and simultaneous memory peaks. `etude_history_mutate.sh` proves the interrupted-tail and missing-processor-scope checks with faults in private source copies, followed by a restored pass. It changes no source in the working tree.
