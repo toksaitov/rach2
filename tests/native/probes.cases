@@ -95,3 +95,61 @@ case loopdevprobe.vfat image:loopdev-fat,loopdev-ext2,loopdev-krffs \
 case loopprobe \
     ports:7100,7101,7102,7200,7203,7205,7206,7207,7300,7301,7310,7311,7312,7313,7314,7315,7316,7317,7318,7319,7320,7321,7322,7323,7324,7325 -- \
     loopprobe machine=native
+case memprobe -- memprobe machine=native
+case memprobe.total -- memprobe total machine=native
+case miscprobe -- miscprobe
+case modeprobe.ext2 ids:1000 stage:suidhelper -- modeprobe helper=suidhelper
+case modeprobe.krffs ids:1000 stage:suidhelper volume:krffs:krffs16 \
+    -- modeprobe vol0 helper=../suidhelper
+case mountprobe mountns log ids:1000 stage:hello,stdintest \
+    volume:vfat:fat64:attached volume:krffs:krffs16:attached \
+    -- mountprobe machine=native
+case mvtest.ext2 root:ext2 -- mvtest
+case mvtest.krffs root:krffs -- mvtest
+case netifprobe -- netifprobe machine=native
+case ofdprobe stage:native/hello.txt -- ofdprobe machine=native
+case ownprobe root:krffs ids:1000,2000,3000,4000 -- ownprobe
+case packetprobe peer:echo ids:1000 -- packetprobe machine=native
+case pathcanon root:krffs -- pathcanon
+case permprobe root:krffs ids:1000 -- permprobe
+case pingtest alone peer:echo -- pingtest silent=192.0.2.1 machine=native
+case pipeprobe -- pipeprobe machine=native
+case placeprobe -- placeprobe
+case pollprobe console -- pollprobe machine=native
+case poolprobe -- poolprobe machine=native
+case procprobe utsns ids:1000 \
+    ports:8080,8081,9000,9001,9002,9003,9004,9005,9006,9007,9100,9101,9102,9103,9104,9105,9106,9107 \
+    -- procprobe machine=native
+case ptyprobe -- ptyprobe
+case rawprobe peer:echo ids:1000 -- rawprobe machine=native
+case rebootprobe ids:1000 -- rebootprobe
+case rmtest -- rmtest
+case rngprobe -- rngprobe machine=native
+case searchprobe root:krffs ids:1000 -- searchprobe
+case shelltest stage:hello -- shelltest hello=./hello
+case sigprobe -- sigprobe machine=native
+case sockettest -- sockettest
+case stattest root:krffs -- stattest machine=native
+case stdintest pty:stdintest.in -- stdintest machine=native
+case stickyprobe root:krffs ids:1000,1001 -- stickyprobe
+case stressprobe volume:krffs:krffs48 -- stressprobe dir=vol0
+case sudoprobe root:krffs ids:1000,1001 -- sudoprobe
+case suidhelper root:krffs ids:1000,5 -- suidprobe
+case suidprobe root:krffs ids:1000,5 -- suidprobe
+case tcptest peer:echo -- tcptest closed=9
+case timeprobe -- timeprobe
+case touchtest -- touchtest
+case trapprobe -- trapprobe
+case udptest peer:echo ports:12345 -- udptest
+case unlinkdirprobe.ext2 -- unlinkdirprobe dir=unlinkdir
+case unlinkdirprobe.krffs volume:krffs:krffs16 -- unlinkdirprobe dir=vol0/unlinkdir
+case usercopyfault -- usercopyfault
+case vfsprobe.ext2 root:ext2 -- vfsprobe root=ext2
+case vfsprobe.krffs root:krffs -- vfsprobe root=krffs
+case vmfault end:signal:11 -- vmfault machine=native
+case vmprobe -- vmprobe
+case vmro end:signal:11 -- vmro
+case waitprobe stage:native/hello.txt -- waitprobe
+case winprobe end:signal:11 -- winprobe
+case xsaveprobe -- xsaveprobe core=xsaveprobe.d machine=native
+case zombieprobe -- zombieprobe

@@ -28,3 +28,11 @@ image load-vfat vfat 64
 image loopdev-ext2 ext2 4 from build/tests/system/loopdev/ext2.img
 image loopdev-fat vfat 4 from build/tests/system/loopdev/fat.img
 image loopdev-krffs krffs 4 from build/tests/system/loopdev/krffs.img
+idmap 4000:64000
+portmap 8080:48080 8081:48081 12345:52345
+portmap 9000:49000 9001:49001 9002:49002 9003:49003 9004:49004 9005:49005
+portmap 9006:49006 9007:49007 9100:49100 9101:49101 9102:49102 9103:49103
+portmap 9104:49104 9105:49105 9106:49106 9107:49107
+image fat64 vfat 64
+image krffs16 krffs 16
+image krffs48 krffs 48
