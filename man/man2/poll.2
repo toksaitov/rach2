@@ -65,7 +65,20 @@ No other event bits are reported.
 .Pp
 Regular files and directories report requested read and write readiness
 immediately.
-Pipes report readiness from their buffered data, free space, and peer lifetime.
+The read end of a pipe or FIFO reports
+.Dv POLLIN
+while data is buffered and
+.Dv POLLHUP
+once every writer has closed, so an empty pipe with no writers reports
+.Dv POLLHUP
+alone, as on Linux.
+The write end reports
+.Dv POLLOUT
+while the buffer has room and
+.Dv POLLERR
+and
+.Dv POLLOUT
+once every reader has closed.
 An epoll set is readable while a wait on it would report an event, and a
 poll of it is woken by a change in any descriptor it watches, as
 .Xr epoll 2
@@ -173,9 +186,13 @@ The default suite's
 polls two empty pipes with a 30 ms timeout and expects zero.
 After writing one byte to one pipe, it expects one ready entry with
 .Dv POLLIN .
-Closing the other pipe's writer produces
+Closing the other pipe's writer with a byte buffered produces
+.Dv POLLIN
+and
 .Dv POLLHUP
-on its reader.
+on its reader, and
+.Dv POLLHUP
+alone once the byte is read.
 .Sh ERRORS
 .Bl -tag -width ENOMEM
 .It Er EFAULT

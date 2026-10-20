@@ -6386,6 +6386,20 @@ new
         rc = bind ? vfs_remount_bind(m, flags) : vfs_remount(m, flags, data + k_strlen(data));
 end
 
+# A pipe's poll after its writers have gone.
+
+fault pipe-hup-readable
+probe pollprobe
+file rach2/sys/ipc/pipe.c
+expect FAIL: closed writer, pipe empty -> POLLHUP alone
+old
+        if (pipe_available(p) != 0) {
+            revents |= (short)(events & PIPE_POLLIN);
+new
+        if (pipe_available(p) != 0 || !p->write_open) {
+            revents |= (short)(events & PIPE_POLLIN);
+end
+
 # The console's standard descriptors and its poll, which tmux's server draws
 # through.
 

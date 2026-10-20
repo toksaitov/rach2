@@ -5,7 +5,9 @@
  *   (a) timeout: poll of two empty pipes returns 0 when nothing is ready;
  *   (b) readiness: after a write, poll returns that fd with POLLIN and leaves
  *       the other fd's revents clear;
- *   (c) hangup: polling a read end whose writer has closed reports POLLHUP;
+ *   (c) hangup: a read end whose writer has closed reports POLLIN and
+ *       POLLHUP while a byte is buffered, and POLLHUP alone once it is read,
+ *       as Linux does, and select still finds the empty end readable;
  *   (d) select: the same readable fd is found through an fd_set, through
  *       the fd_set to pollfd translation and, on i386, _newselect;
  *   (e) block and wake: a parent polls with a two-second timeout while a
@@ -169,6 +171,42 @@ static char state_of(int pid)
 #endif
 
 /**
+ * Case (c), hangup: a pipe whose writer has closed with a byte buffered is
+ * POLLIN and POLLHUP, POLLHUP alone once the byte is read, as on Linux, and
+ * still readable to select.
+ */
+static void hangup(void)
+{
+    int b[2];
+    struct pollfd pfd[1];
+    char buf[1];
+    unsigned int rset[32];
+    int i, n;
+
+    check(do_pipe(b) == 0, "pipe for the hangup rows");
+    syscall3(SYS_WRITE, b[1], (long)"w", 1);
+    syscall1(SYS_CLOSE, b[1]);
+    pfd[0].fd = b[0];
+    pfd[0].events = POLLIN;
+    pfd[0].revents = 0;
+    n = do_poll(pfd, 1, 100);
+    check(n == 1 && pfd[0].revents == (POLLIN | POLLHUP),
+          "closed writer, byte buffered -> POLLIN | POLLHUP");
+    do_read(b[0], buf, 1);
+    pfd[0].revents = 0;
+    n = do_poll(pfd, 1, 100);
+    check(n == 1 && pfd[0].revents == POLLHUP, "closed writer, pipe empty -> POLLHUP alone");
+    for (i = 0; i < 32; i++) {
+        rset[i] = 0;
+    }
+    rset[b[0] / 32] = 1u << (b[0] % 32);
+    n = syscall5(SYS_SELECT, b[0] + 1, (long)rset, 0, 0, 0);
+    check(n == 1 && (rset[b[0] / 32] & (1u << (b[0] % 32))) != 0,
+          "select finds the empty end of a closed pipe readable");
+    syscall1(SYS_CLOSE, b[0]);
+}
+
+/**
  * Case (f), the select fd contract: a wide nfds with only an in-range bit
  * works, a bit for a closed descriptor is -EBADF whether past the table or
  * not, and an nfds past FD_SETSIZE is -EINVAL. `closed` is a descriptor in
@@ -298,14 +336,9 @@ PROBE_START void _start(void)
     check(pfd[1].revents == 0, "the idle pipe stays clear");
     do_read(a[0], buf, 1);
 
-    /* (c) hangup: close b's write end, poll b[0] -> POLLHUP. */
-    syscall1(SYS_CLOSE, b[1]);
-    pfd[0].fd = b[0];
-    pfd[0].events = POLLIN;
-    pfd[0].revents = 0;
-    n = do_poll(pfd, 1, 100);
-    check(n == 1 && (pfd[0].revents & POLLHUP) != 0, "closed writer -> POLLHUP");
     syscall1(SYS_CLOSE, b[0]);
+    syscall1(SYS_CLOSE, b[1]);
+    hangup();
 
     /* (d) select: a[0] made readable again, found through an fd_set. */
     syscall3(SYS_WRITE, a[1], (long)"y", 1);

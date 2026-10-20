@@ -328,13 +328,12 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
  * reading and writing is both ends, and its pollers wait on `rdwr_wq`, which
  * every change of either wakes (`pipe_wake`).
  *
- * Readiness matches the wait conditions of a read and a write, so a poller
- * wakes for what ends the wait of a read or a write: the read end is
- * readable with data buffered or the writers gone (the read then returns 0),
- * and the write end is writable with room or the readers gone (the write
- * then fails with EPIPE). POLLHUP on the read end once the writers are gone,
- * and POLLERR on the write end once the readers are gone, are reported
- * whatever `events` asks.
+ * A poller wakes for what ends the wait of a read or a write. The read end
+ * is POLLIN while data is buffered and POLLHUP once the writers are gone, so
+ * an empty pipe with no writers, whose read returns 0, reports POLLHUP
+ * alone, as on Linux. The write end is writable with room or the readers
+ * gone, and POLLERR once the readers are gone (the write then fails with
+ * EPIPE). POLLHUP and POLLERR are reported whatever `events` asks.
  */
 static short pipe_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
@@ -350,7 +349,7 @@ static short pipe_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     }
 
     if (e->flags & FD_FLAG_READ) {
-        if (pipe_available(p) != 0 || !p->write_open) {
+        if (pipe_available(p) != 0) {
             revents |= (short)(events & PIPE_POLLIN);
         }
         if (!p->write_open) {
