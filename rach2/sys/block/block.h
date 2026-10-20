@@ -209,6 +209,16 @@ void block_count_poll(void);
 void block_count_wait_tick(void);
 
 /**
+ * The queued commands a polled command found active on its port and finished
+ * first by polling, since boot (`ahci_drain`): each is a page fault's command
+ * meeting the queue of the same disk. `/proc/disk` prints the count as
+ * `disk-drains`, so a test can require the meeting and not a number of
+ * transfers made beside it.
+ */
+uint64_t block_drains(void);
+void block_count_drain(void);
+
+/**
  * A partition: the sector range `[start_lba, start_lba + sector_count)` of a
  * backing device, presented as its own `block_device`.
  *

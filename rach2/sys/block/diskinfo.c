@@ -116,9 +116,49 @@ static void put_hex(char *buf, int *n, int cap, uint32_t v, int width)
 }
 
 /**
- * The drivers' totals come first, then the cache's: reads served from a
- * buffer, reads that filled one, waits for a buffer another process held,
- * and the buffers its walks of its own lists read.
+ * Append the counters of /proc/disk at `*n`: the drivers' totals first, then
+ * the cache's: reads served from a buffer, reads that filled one, waits for a
+ * buffer another process held, and the buffers its walks of its own lists
+ * read.
+ */
+static void put_counters(char *buf, int *n, int cap)
+{
+    put(buf, n, cap, "disk-commands ");
+    put_dec(buf, n, cap, block_commands());
+    put(buf, n, cap, "\ndisk-flushes ");
+    put_dec(buf, n, cap, block_flushes());
+    put(buf, n, cap, "\ndisk-polls ");
+    put_dec(buf, n, cap, block_polls());
+    put(buf, n, cap, "\ndisk-wait-ticks ");
+    put_dec(buf, n, cap, block_wait_ticks());
+    put(buf, n, cap, "\ndisk-in-flight ");
+    put_dec(buf, n, cap, block_in_flight());
+    put(buf, n, cap, "\ndisk-overlaps ");
+    put_dec(buf, n, cap, block_overlaps());
+    put(buf, n, cap, "\ndisk-drains ");
+    put_dec(buf, n, cap, block_drains());
+    put(buf, n, cap, "\ndisk-quarantines ");
+    put_dec(buf, n, cap, block_quarantines());
+    put(buf, n, cap, "\ndisk-releases ");
+    put_dec(buf, n, cap, block_releases());
+    put(buf, n, cap, "\ndisk-release-tick ");
+    put_dec(buf, n, cap, block_release_tick());
+    put(buf, n, cap, "\nlag-completions ");
+    put_dec(buf, n, cap, block_lag_completions());
+    put(buf, n, cap, "\ncache-hits ");
+    put_dec(buf, n, cap, bcache_stat_hits());
+    put(buf, n, cap, "\ncache-fills ");
+    put_dec(buf, n, cap, bcache_stat_fills());
+    put(buf, n, cap, "\ncache-waits ");
+    put_dec(buf, n, cap, bcache_stat_waits());
+    put(buf, n, cap, "\ncache-visits ");
+    put_dec(buf, n, cap, bcache_stat_visits());
+    put(buf, n, cap, "\n");
+}
+
+/**
+ * The probe state, the driver and the policy come first, then the counters
+ * (`put_counters`), and disk 0's record only when a disk is present.
  */
 int diskinfo_format(const struct diskinfo *d, char *buf, int cap)
 {
@@ -140,35 +180,7 @@ int diskinfo_format(const struct diskinfo *d, char *buf, int cap)
     put(buf, &n, cap, d->driver ? d->driver : "none");
     put(buf, &n, cap, "\npolicy ");
     put(buf, &n, cap, diskcmd_policy() == DISKCMD_READ_ONLY ? "read-only\n" : "read-write\n");
-    put(buf, &n, cap, "disk-commands ");
-    put_dec(buf, &n, cap, block_commands());
-    put(buf, &n, cap, "\ndisk-flushes ");
-    put_dec(buf, &n, cap, block_flushes());
-    put(buf, &n, cap, "\ndisk-polls ");
-    put_dec(buf, &n, cap, block_polls());
-    put(buf, &n, cap, "\ndisk-wait-ticks ");
-    put_dec(buf, &n, cap, block_wait_ticks());
-    put(buf, &n, cap, "\ndisk-in-flight ");
-    put_dec(buf, &n, cap, block_in_flight());
-    put(buf, &n, cap, "\ndisk-overlaps ");
-    put_dec(buf, &n, cap, block_overlaps());
-    put(buf, &n, cap, "\ndisk-quarantines ");
-    put_dec(buf, &n, cap, block_quarantines());
-    put(buf, &n, cap, "\ndisk-releases ");
-    put_dec(buf, &n, cap, block_releases());
-    put(buf, &n, cap, "\ndisk-release-tick ");
-    put_dec(buf, &n, cap, block_release_tick());
-    put(buf, &n, cap, "\nlag-completions ");
-    put_dec(buf, &n, cap, block_lag_completions());
-    put(buf, &n, cap, "\ncache-hits ");
-    put_dec(buf, &n, cap, bcache_stat_hits());
-    put(buf, &n, cap, "\ncache-fills ");
-    put_dec(buf, &n, cap, bcache_stat_fills());
-    put(buf, &n, cap, "\ncache-waits ");
-    put_dec(buf, &n, cap, bcache_stat_waits());
-    put(buf, &n, cap, "\ncache-visits ");
-    put_dec(buf, &n, cap, bcache_stat_visits());
-    put(buf, &n, cap, "\n");
+    put_counters(buf, &n, cap);
 
     if (d->state != DISKINFO_PRESENT) {
         buf[n] = '\0';

@@ -1286,7 +1286,8 @@ static void ahci_start_next(struct ahci_disk *d)
  * with interrupts off. A write's flush half is finished too. A command that
  * does not leave the slot within five seconds has its request completed with
  * `-EIO` after the port's recovery. The interrupt that would have completed
- * the command finds nothing active.
+ * the command finds nothing active. Each command found active is counted for
+ * `disk-drains` (`block_count_drain`).
  */
 static void ahci_drain(struct ahci_disk *d)
 {
@@ -1294,10 +1295,10 @@ static void ahci_drain(struct ahci_disk *d)
     uint32_t is_off = ahci_port_off(d->port, AHCI_PxIS);
     uint32_t flags;
 
-    if (!d->active) {
-        return;
-    }
     flags = kirq_save();
+    if (d->active) {
+        block_count_drain();
+    }
     while (d->active) {
         uint32_t spin = AHCI_CMD_STEPS_MASKED;
 

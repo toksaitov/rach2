@@ -77,6 +77,13 @@ uint32_t block_overlaps(void)
     return 0;
 }
 
+/** The block layer's count of queued commands a polled one finished, 0 for
+ *  every row. */
+uint64_t block_drains(void)
+{
+    return 0;
+}
+
 /** The block layer's quarantine count, 0 for every row. */
 uint32_t block_quarantines(void)
 {
@@ -309,7 +316,7 @@ int main(void)
     CHECK(strcmp(buf,
                  "state not-asked\ndriver none\npolicy read-write\ndisk-commands 0\n"
                  "disk-flushes 0\ndisk-polls 0\ndisk-wait-ticks 0\ndisk-in-flight 0\ndisk-overlaps "
-                 "0\ndisk-quarantines 0\ndisk-releases 0\n"
+                 "0\ndisk-drains 0\ndisk-quarantines 0\ndisk-releases 0\n"
                  "disk-release-tick 0\nlag-completions 0\ncache-hits 0\ncache-fills 0\ncache-waits "
                  "0\ncache-visits 0\n") == 0,
           "a kernel that was never asked says so and stops there");
@@ -319,7 +326,7 @@ int main(void)
     CHECK(strcmp(buf,
                  "state no-device\ndriver none\npolicy read-write\ndisk-commands 0\n"
                  "disk-flushes 0\ndisk-polls 0\ndisk-wait-ticks 0\ndisk-in-flight 0\ndisk-overlaps "
-                 "0\ndisk-quarantines 0\ndisk-releases 0\n"
+                 "0\ndisk-drains 0\ndisk-quarantines 0\ndisk-releases 0\n"
                  "disk-release-tick 0\nlag-completions 0\ncache-hits 0\ncache-fills 0\ncache-waits "
                  "0\ncache-visits 0\n") == 0,
           "a kernel that asked and got nothing says a different thing");
@@ -329,7 +336,7 @@ int main(void)
     CHECK(strcmp(buf,
                  "state no-device\ndriver none\npolicy read-only\ndisk-commands 0\n"
                  "disk-flushes 0\ndisk-polls 0\ndisk-wait-ticks 0\ndisk-in-flight 0\ndisk-overlaps "
-                 "0\ndisk-quarantines 0\ndisk-releases 0\n"
+                 "0\ndisk-drains 0\ndisk-quarantines 0\ndisk-releases 0\n"
                  "disk-release-tick 0\nlag-completions 0\ncache-hits 0\ncache-fills 0\ncache-waits "
                  "0\ncache-visits 0\n") == 0,
           "the file names the build policy the kernel is running");

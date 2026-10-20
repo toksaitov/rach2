@@ -196,10 +196,21 @@ uint64_t block_flushes(void)
 
 static uint64_t poll_count;
 static uint64_t wait_tick_count;
+static uint64_t drain_count;
 
 void block_count_poll(void)
 {
     poll_count++;
+}
+
+void block_count_drain(void)
+{
+    drain_count++;
+}
+
+uint64_t block_drains(void)
+{
+    return drain_count;
 }
 
 void block_count_wait_tick(void)

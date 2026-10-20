@@ -424,6 +424,15 @@ void block_count_flush(void)
 void block_count_poll(void)
 {}
 
+/* The queued commands a polled command found active, `disk-drains`. */
+static unsigned drains;
+
+/** Count a queued command a polled one finished first, in `drains`. */
+void block_count_drain(void)
+{
+    drains++;
+}
+
 /** Count a batch of `sectors` for /proc/disk. */
 void block_count_batch(uint32_t sectors)
 {
@@ -880,6 +889,37 @@ static void polled_queue_restart(int fault)
     CHECK("the queued completion and the other port remain pending", reg[R_IS] == 3);
 }
 
+/**
+ * Check that a polled command counts the queued command it finds active once
+ * for `disk-drains`, finishing it and its flush first, and that one on an
+ * idle port counts none.
+ */
+static void polled_drain_counted(void)
+{
+    static uint8_t page[512], buf[512];
+
+    model_reset();
+    CHECK("the drain row starts a port",
+          ahci_select_port() == 0 && ahci_port_start(&ahci_disks[0]) == 0);
+    active_request.count = 1;
+    active_request.write = 1;
+    active_request.flags = 0;
+    active_request.page = page;
+    ahci_disks[0].active = &active_request;
+    ahci_disks[0].flushing = 0;
+    ((volatile ahci_cmd_header_t *)ahci_disks[0].cmdlist)->prdbc = 512;
+    reg[P0 + P_CI] = 0;
+    drains = 0;
+    CHECK("a polled command beside an active write succeeds",
+          ahci_run_command(&ahci_disks[0], ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) == 0);
+    CHECK("and first finished the write and its flush, counted once",
+          drains == 1 && completed == 1 && last_completed == &active_request && last_status == 0 &&
+              !ahci_disks[0].active);
+    CHECK("a polled command on an idle port counts no drain",
+          ahci_run_command(&ahci_disks[0], ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) == 0 &&
+              drains == 1);
+}
+
 /** Issue IDENTIFY on the model's port, with interrupts on or off as
  * `masked` says, for a command that completes after `after` polls of the
  * command-issue register, or never for `after` of 0 with completion off. */
@@ -1025,6 +1065,7 @@ static void interrupt_rows(void)
     polled_queue_restart(0);
     polled_queue_restart(1);
     polled_queue_restart(2);
+    polled_drain_counted();
 }
 
 /**
