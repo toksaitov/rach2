@@ -9,11 +9,16 @@
  * has no room beside it, grows f past its slack so that it moves, and checks
  * that f still resolves under /dg with its first bytes, and not as /f.
  *
+ * The names are relative to the directory the argument `dir=PATH`
+ * (probe_args.h) gives, which a native run gives as a KRFFS volume of its
+ * own; without it they are relative to `/`, the test image's KRFFS root.
+ *
  * Prints "DIRGROW OK" and exits 0, or "DIRGROW FAIL: " with the reason and
  * exits 1. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 #define STDOUT_FILENO 1
 
@@ -31,9 +36,9 @@ static int cleanup(void)
     int rc = 0;
 
     if (fixture_created) {
-        syscall1(SYS_UNLINK, (long)"/dg/f");
-        syscall1(SYS_UNLINK, (long)"/dg/g");
-        rc = syscall1(SYS_RMDIR, (long)"/dg");
+        syscall1(SYS_UNLINK, (long)"dg/f");
+        syscall1(SYS_UNLINK, (long)"dg/g");
+        rc = syscall1(SYS_RMDIR, (long)"dg");
         fixture_created = 0;
     }
     return rc;
@@ -76,19 +81,28 @@ static void fail(const char *why)
 
 static char big[GROW];
 
-/** The probe's entry: make the two files, grow the first, and look for it. */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/** The probe, entered with `sp` at argc: make the two files, grow the first,
+ * and look for it. */
+void probe_main(unsigned long *sp)
 {
     int fd_f, fd_g, fd;
     int i;
     char buf[4];
 
-    if (syscall2(SYS_MKDIR, (long)"/dg", 0755) != 0) {
+    probe_args((int)sp[0], (char **)(sp + 1));
+    if (syscall1(SYS_CHDIR, (long)probe_arg("dir", "/")) != 0) {
+        fail("chdir to the directory of the files");
+    }
+    if (syscall2(SYS_MKDIR, (long)"dg", 0755) != 0) {
         fail("mkdir /dg");
     }
     fixture_created = 1;
 
-    fd_f = syscall3(SYS_OPEN, (long)"/dg/f", O_CREAT | O_RDWR, 0644);
+    fd_f = syscall3(SYS_OPEN, (long)"dg/f", O_CREAT | O_RDWR, 0644);
     if (fd_f < 0) {
         fail("create /dg/f");
     }
@@ -97,7 +111,7 @@ PROBE_START void _start(void)
     }
 
     /* A second file right after f leaves it no adjacent room to grow into. */
-    fd_g = syscall3(SYS_OPEN, (long)"/dg/g", O_CREAT | O_RDWR, 0644);
+    fd_g = syscall3(SYS_OPEN, (long)"dg/g", O_CREAT | O_RDWR, 0644);
     if (fd_g < 0) {
         fail("create /dg/g");
     }
@@ -117,7 +131,7 @@ PROBE_START void _start(void)
     syscall2(SYS_CLOSE, fd_g, 0);
 
     /* The moved f is still under /dg. */
-    fd = syscall3(SYS_OPEN, (long)"/dg/f", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"dg/f", O_RDONLY, 0);
     if (fd < 0) {
         fail("/dg/f vanished from its directory after a relocating grow");
     }
@@ -127,7 +141,7 @@ PROBE_START void _start(void)
     syscall2(SYS_CLOSE, fd, 0);
 
     /* And not at the root as /f. */
-    fd = syscall3(SYS_OPEN, (long)"/f", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"f", O_RDONLY, 0);
     if (fd >= 0) {
         fail("the relocated file leaked to the root as /f");
     }

@@ -13,10 +13,17 @@
  * bound of MS milliseconds, 5000 by default. Prints "exitprobe: waiting:
  * ROW" when the victim sees its parent waiting, then "EXITPROBE OK ROW: ..."
  * or "EXITPROBE FAIL ROW: ...", and exits 0 when every row passed.
- * Freestanding; direct system calls (probe.h).
+ *
+ * The fixtures, the directory `exit-cwd`, the truncated program `exit-bad`
+ * and the victim's `exit-file`, are made in the working directory, which is
+ * `/` on the test image and the case's own directory in a native run, and
+ * removed before the probe exits. The row and the bound are the first two
+ * arguments without `=` (probe_args.h). Freestanding; direct system calls
+ * (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 #define SIGKILL 9
 
@@ -123,14 +130,14 @@ static void wait_parent(int parent)
  */
 static void victim(int mode, int parent, int report, int reader)
 {
-    char *args[2] = {"/exit-bad", 0};
+    char *args[2] = {"../exit-bad", 0};
     int fd;
     call(SYS_CLOSE, report, 0, 0);
     call(SYS_CLOSE, reader, 0, 0);
-    fd = call(SYS_OPEN, (long)"/exit-file", 0102, 0600);
+    fd = call(SYS_OPEN, (long)"exit-file", 0102, 0600);
     if (fd < 0 || call(SYS_WRITE, fd, (long)"held", 4) != 4 ||
-        call(SYS_UNLINK, (long)"/exit-file", 0, 0) != 0 ||
-        call(SYS_CHDIR, (long)"/exit-cwd", 0, 0) != 0) {
+        call(SYS_UNLINK, (long)"exit-file", 0, 0) != 0 ||
+        call(SYS_CHDIR, (long)"exit-cwd", 0, 0) != 0) {
         die(90);
     }
     wait_parent(parent);
@@ -234,10 +241,11 @@ static int run_row(int mode, int timeout)
 }
 
 /**
- * Make /exit-cwd and write /exit-bad: a complete ELF header of the
- * architecture's class with no program header bytes after it, ELF32 i386
- * with entry 0x08048000 or ELF64 x86-64 with entry 0x400000, each naming one
- * program header at the header's end. Returns 1 when the file was written.
+ * Make `exit-cwd` and write `exit-bad`, which the victim executes from
+ * `exit-cwd` as `../exit-bad`: a complete ELF header of the architecture's
+ * class with no program header bytes after it, ELF32 i386 with entry
+ * 0x08048000 or ELF64 x86-64 with entry 0x400000, each naming one program
+ * header at the header's end. Returns 1 when the file was written.
  */
 static int fixture(void)
 {
@@ -252,11 +260,11 @@ static int fixture(void)
         4,    8,   52,  0,   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 52, 0, 32, 0, 1, 0, 0, 0, 0, 0, 0, 0};
 #endif
     int fd, ok;
-    if (call(SYS_MKDIR, (long)"/exit-cwd", 0700, 0) != 0) {
+    if (call(SYS_MKDIR, (long)"exit-cwd", 0700, 0) != 0) {
         return 0;
     }
     fixture_dir = 1;
-    fd = call(SYS_OPEN, (long)"/exit-bad", 01301, 0700);
+    fd = call(SYS_OPEN, (long)"exit-bad", 01301, 0700);
     fixture_file = fd >= 0;
     ok = fd >= 0 && call(SYS_WRITE, fd, (long)header, sizeof(header)) == sizeof(header);
     call(SYS_CLOSE, fd, 0, 0);
@@ -266,11 +274,11 @@ static int fixture(void)
 /** Remove the supervisor's fixtures after the rows have ended. */
 static void finish(int status)
 {
-    call(SYS_UNLINK, (long)"/exit-file", 0, 0);
-    if (fixture_file && call(SYS_UNLINK, (long)"/exit-bad", 0, 0) != 0) {
+    call(SYS_UNLINK, (long)"exit-file", 0, 0);
+    if (fixture_file && call(SYS_UNLINK, (long)"exit-bad", 0, 0) != 0) {
         status = 1;
     }
-    if (fixture_dir && call(SYS_RMDIR, (long)"/exit-cwd", 0, 0) != 0) {
+    if (fixture_dir && call(SYS_RMDIR, (long)"exit-cwd", 0, 0) != 0) {
         status = 1;
     }
     die(status);
@@ -281,21 +289,24 @@ static void finish(int status)
  * a bound that is not 1 to 320000 exits 94. */
 void probe_main(unsigned long *sp)
 {
-    int argc = (int)sp[0], first = 0, last = 2, timeout = 5000, i;
-    char **argv = (char **)(sp + 1);
-    if (argc > 1) {
-        first = argv[1][0] == 'n' ? 0 : (argv[1][0] == 's' ? 1 : 2);
+    int first = 0, last = 2, timeout = 5000, i;
+    const char *mode, *bound;
+    probe_args((int)sp[0], (char **)(sp + 1));
+    mode = probe_word(1);
+    bound = probe_word(2);
+    if (mode != 0) {
+        first = mode[0] == 'n' ? 0 : (mode[0] == 's' ? 1 : 2);
         last = first;
     }
-    if (argc > 2) {
+    if (bound != 0) {
         timeout = 0;
-        for (i = 0; argv[2][i] >= '0' && argv[2][i] <= '9'; i++) {
+        for (i = 0; bound[i] >= '0' && bound[i] <= '9'; i++) {
             if (timeout > 32000) {
                 die(94);
             }
-            timeout = timeout * 10 + argv[2][i] - '0';
+            timeout = timeout * 10 + bound[i] - '0';
         }
-        if (timeout < 1 || timeout > 320000 || argv[2][i]) {
+        if (timeout < 1 || timeout > 320000 || bound[i]) {
             die(94);
         }
     }
