@@ -5,10 +5,12 @@
 # issue, bisection runs, their time limits and continuation, the run whose
 # issue bisection labels intermittent, a report and a bisection that
 # overlap, the kind an older commit's run.sh takes, a refused run in
-# bisection, a bisection whose issue has been closed, verdict errors, and the
-# statuses of a full run of chosen suites.
+# bisection, a bisection whose issue has been closed, verdict errors, the
+# statuses of a full run of chosen suites, the attempts that etude's history
+# of a run lists in its issue, and an intermittent issue that a passing run
+# leaves open.
 # The scripts run in a private tree with stand-ins for git, gh, make,
-# timeout and the clock.
+# timeout, the clock and etude's history_failures.
 
 set -eu
 case ${1:-} in
@@ -114,11 +116,31 @@ fault()
             sed 's|if \[ -f "\$result/done" \] && \[ -f "\$result/skipped" \]; then|if false; then|' \
                 "$repo/tools/ci/report.sh" > "$work/report.sh"
             ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
+        history)
+            # shellcheck disable=SC2016 # the script contains a literal $hstatus
+            sed 's/^        \[ "\$hstatus" = 0 \]; then$/        true; then/' "$repo/tools/ci/report.sh" > "$work/report.sh"
+            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
+        listing)
+            # shellcheck disable=SC2016 # the script contains a literal $history
+            sed '/^\$history$/d' "$repo/tools/ci/report.sh" > "$work/report.sh"
+            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
+        unread)
+            sed 's/|| hstatus=2$/|| hstatus=0/' "$repo/tools/ci/report.sh" > "$work/report.sh"
+            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
+        keep)
+            sed 's/--state open --label hold --limit 500/--state open --label ci --limit 500/' \
+                "$repo/tools/ci/report.sh" > "$work/report.sh"
+            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
+        old)
+            # shellcheck disable=SC2016 # the script contains a literal $1
+            sed 's#\[ -d "\$1/history" \] || return 0#:#' "$repo/tools/ci/report.sh" > "$work/report.sh"
+            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
     esac
 }
 if [ "$mode" = texts ]; then
     for name in report cilabel baseline again reread verdict rerun retry record hold bisect items comment \
-        label intermittent newest recheck older refusal limit handoff closed rerunctx skipped; do
+        label intermittent newest recheck older refusal limit handoff closed rerunctx skipped history \
+        listing unread keep old; do
         fault "$name"
     done
     exit 0
@@ -163,6 +185,9 @@ case "$1 $2" in
                 [ -z "${CI_TEST_HOLD:-}" ] || printf '%s\n' $CI_TEST_HOLD ;;
             *'--label bug '*'--json number,title,labels '*"select(.title == \"${CI_TEST_OPEN_TITLE:-}\")"*)
                 echo "$CI_TEST_OPEN" ;;
+            *' --json number --jq '*)
+                all="$*" label=${all#*--label } label=${label%% *}
+                case " ${CI_TEST_OPEN#* } " in *" $label "*) echo "${CI_TEST_OPEN%% *}" ;; esac ;;
         esac ;;
     'issue view')
         case "$*" in
@@ -190,6 +215,17 @@ EOF
 cat > "$work/bin/make" <<'EOF'
 #!/bin/sh
 echo make >> "$CI_TEST_WORK/events"
+[ -z "${CI_TEST_MAKE_FAIL:-}" ]
+EOF
+cat > "$work/bin/history_failures" <<'EOF'
+#!/bin/sh
+echo "$*" >> "$CI_TEST_WORK/reader.log"
+for path in "$@"; do
+    [ "$path" = -b ] || [ -e "$path" ] ||
+        { echo "history_failures: $path: cannot be opened" >&2; exit 2; }
+done
+[ -z "${CI_TEST_HISTORY_OUT:-}" ] || printf '%s\n' "$CI_TEST_HISTORY_OUT"
+exit "${CI_TEST_HISTORY_STATUS:-0}"
 EOF
 cat > "$work/tree/tests/run" <<'EOF'
 #!/bin/sh
@@ -233,8 +269,9 @@ CI_TEST_WORK=$work
 GITHUB_REPOSITORY=test/rach2
 GITHUB_SERVER_URL=https://example.invalid
 GITHUB_RUN_ID=1
+HISTORY_FAILURES=$work/bin/history_failures
 PATH=$work/bin:$PATH
-export CI_TEST_WORK GITHUB_REPOSITORY GITHUB_SERVER_URL GITHUB_RUN_ID PATH
+export CI_TEST_WORK GITHUB_REPOSITORY GITHUB_SERVER_URL GITHUB_RUN_ID HISTORY_FAILURES PATH
 cd "$work/tree"
 
 # clear: drop the passes, the commit's statuses, the open issue, its labels
@@ -587,6 +624,106 @@ suite()
     grep -q -- "$verdict" "$work/gh.log"
 }
 
+# attempts CASE: report a core run whose i686 half kept etude's history,
+# which the stand-in reader judges, and whose x86_64 half passed with no
+# history, and require for CASE:
+#   flaky     `default` failed and the reader lists an attempt that failed
+#             before its retry passed: the issue, the summary and the reader's
+#             arguments give that attempt and the store, and bisection and
+#             the hold start.
+#   repeated  the same with #12 open for that failure and intermittent: the
+#             comment on #12 gives the attempt, the label goes, and bisection
+#             starts for #12.
+#   hidden    nothing failed, but the reader lists an attempt that did not
+#             pass: the runner's failure is filed with that attempt.
+#   unread    nothing failed, but the reader cannot read the history: the
+#             runner's failure is filed with the reader's diagnostic.
+#   unbuilt   nothing failed, but make cannot build the reader: the runner's
+#             failure is filed and says so.
+#   kept      every attempt passed, with #12 open and intermittent: the run
+#             passes and #12 is not closed, edited or commented on.
+# No case closes an issue or rewrites one's body.
+attempts()
+(
+    clear
+    rm -rf "$work/results"
+    for arch in i686 x86_64; do
+        mkdir -p "$work/results/core-$arch"
+        : > "$work/results/core-$arch/done"
+        : > "$work/results/core-$arch/failed"
+    done
+    result=$work/results/core-i686
+    mkdir "$result/history" "$result/store"
+    : > "$result/history/run.jsonl"
+    item='guest.default.rngprobe on i686, item r1-i0: failed, and passed on another attempt, so it may be flaky'
+    assertion='    trusted-monobit: fail: 61 of 512 bits set'
+    said="The attempts that did not pass, from etude's history of the run; a failure stays listed when a later attempt of its case passed:"
+    CI_TEST_HISTORY_STATUS=1 CI_TEST_GH_FAIL='' CI_TEST_MAKE_FAIL=''
+    CI_TEST_HISTORY_OUT="run r1: failure: of 2 attempts, 1 failed, 0 did not finish
+$item
+  attempt r1-i0-a0: failure: it exited 1
+$assertion
+  attempt r1-i0-a1, a retry of r1-i0-a0: pass"
+    case $1 in
+        flaky|repeated) echo default > "$result/failed" ;;
+        unread)
+            CI_TEST_HISTORY_STATUS=2
+            # shellcheck disable=SC2016 # the diagnostic has a literal `run`
+            CI_TEST_HISTORY_OUT='history_failures: run.jsonl:3: the record of kind `run` is incomplete' ;;
+        unbuilt) unset HISTORY_FAILURES; CI_TEST_MAKE_FAIL=1 ;;
+        kept) CI_TEST_HISTORY_STATUS=0 CI_TEST_HISTORY_OUT='' ;;
+    esac
+    case $1 in
+        repeated|kept)
+            CI_TEST_OPEN_TITLE='Core tests fail on i686: default'
+            CI_TEST_OPEN='12 bug ci intermittent' CI_TEST_LABELS='bug ci intermittent' ;;
+    esac
+    export CI_TEST_HISTORY_STATUS CI_TEST_HISTORY_OUT CI_TEST_GH_FAIL CI_TEST_MAKE_FAIL
+    export CI_TEST_OPEN_TITLE CI_TEST_OPEN CI_TEST_LABELS
+    : > "$work/gh.log"
+    : > "$work/reader.log"
+    : > "$work/summary"
+    GITHUB_STEP_SUMMARY=$work/summary sh "$work/report.sh" core bad "$work/results" > "$work/report.log" 2>&1 ||
+        return 1
+    ! grep -q '^issue close ' "$work/gh.log" || return 1
+    ! grep -q '^issue edit .* --body' "$work/gh.log" || return 1
+    if [ "$1" = kept ]; then
+        grep -q 'statuses/bad -f state=success -f context=ci/core/i686 ' "$work/gh.log" || return 1
+        grep -q 'statuses/bad -f state=success -f context=ci/core ' "$work/gh.log" || return 1
+        ! grep -Eq '^issue (create|comment|edit) ' "$work/gh.log" || return 1
+        return 0
+    fi
+    grep -q 'statuses/bad -f state=failure -f context=ci/core/i686 ' "$work/gh.log" || return 1
+    grep -q 'issue create .* --label hold ' "$work/gh.log" || return 1
+    case $1 in
+        flaky|repeated|hidden)
+            grep -qxF -- "-b $result/store $result/history/run.jsonl" "$work/reader.log" || return 1
+            for line in "$said" "$item" "$assertion"; do
+                grep -qxF "$line" "$work/gh.log" && grep -qxF "$line" "$work/summary" || return 1
+            done ;;
+    esac
+    case $1 in
+        flaky)
+            grep -q '^issue create --repo test/rach2 --title Core tests fail on i686: default --label bug --label ci ' "$work/gh.log" || return 1
+            grep -q 'workflow run bisect.yml .* -f items=default -f issue=7 -f run=1' "$work/gh.log" ;;
+        repeated)
+            grep -q '^issue comment 12 ' "$work/gh.log" || return 1
+            ! grep -q '^issue create .* --title Core tests ' "$work/gh.log" || return 1
+            grep -q '^issue edit 12 --repo test/rach2 --remove-label intermittent' "$work/gh.log" || return 1
+            grep -q 'workflow run bisect.yml .* -f items=default -f issue=12 -f run=1' "$work/gh.log" ;;
+        hidden)
+            grep -q "^issue create --repo test/rach2 --title Core tests fail on i686: runner --label bug --label ci --body The core tests of commit bad failed on i686: \`runner\`\. The run listed no failure, but etude's history of the run has attempts that did not pass, so the failure is the test runner's\.\$" "$work/gh.log" || return 1
+            grep -q 'workflow run bisect.yml .* -f items=runner -f issue=7 -f run=1' "$work/gh.log" ;;
+        unread)
+            grep -q "failed on i686: \`runner\`\. The run listed no failure, but etude's history of the run could not be read" "$work/gh.log" || return 1
+            grep -qxF "Etude's history of the run could not be read:" "$work/gh.log" || return 1
+            grep -qxF "history_failures: run.jsonl:3: the record of kind 'run' is incomplete" "$work/gh.log" ;;
+        unbuilt)
+            [ ! -s "$work/reader.log" ] || return 1
+            grep -qxF 'ci: report: build/tools/etude/history_failures could not be built' "$work/gh.log" ;;
+    esac
+)
+
 # rows: check both unfinished kinds, the filed issue and the hold issue,
 # start core again after a job that no runner took, preserve an actual
 # runner failure, take a nightly pass as a full run's last pass, bisect a
@@ -595,10 +732,12 @@ suite()
 # labelling it intermittent and again after, read an issue's labels again
 # after reporting on it, repeat an unfinished full run as `night` where
 # run.sh knows only that, continue a bisection in a new run, count only a
-# reported failure of the runner suite as one, and set the statuses of a run
-# of chosen suites apart from a full run's.
+# reported failure of the runner suite as one, set the statuses of a run of
+# chosen suites apart from a full run's, call no history reader for a result
+# without etude's history, and report the attempts that a history lists.
 rows()
 {
+    rm -f "$work/reader.log"
     for kind in core full; do
         for state in missing unfinished missing-failed; do
             report "$kind" "$state" "unfinished-$kind" || return 1
@@ -629,6 +768,10 @@ rows()
     chosen || return 1
     for result in pass fail refuse; do
         suite "$result" || return 1
+    done
+    [ ! -e "$work/reader.log" ] || return 1
+    for case in flaky repeated hidden unread unbuilt kept; do
+        attempts "$case" || return 1
     done
 }
 
@@ -728,8 +871,24 @@ if [ "$mode" = mutate ]; then
             echo "ci-test: result: fail: $name fault passed" >&2; exit 1
         fi
     done
+    for name in history listing unread keep; do
+        fault "$name"
+        case $name in
+            history) case=hidden ;;
+            listing) case=flaky ;;
+            unread) case=unread ;;
+            keep) case=kept ;;
+        esac
+        if attempts "$case"; then
+            echo "ci-test: result: fail: $name fault passed" >&2; exit 1
+        fi
+    done
+    fault old
+    if lost; then
+        echo 'ci-test: result: fail: old fault passed' >&2; exit 1
+    fi
     cp "$repo/tools/ci/report.sh" "$work/report.sh"
     cp "$repo/tools/ci/bisect.sh" "$work/bisect.sh"
     rows
 fi
-echo 'ci-test: result: pass: unfinished runs, lost uploads, lost jobs, issue labels, the last pass, repeated failures, the hold issue, the runner suite, core items, time limits, continuation, the newest run, overlapping reports, older run scripts, a refused run, a closed issue, verdict errors and a run of chosen suites'
+echo 'ci-test: result: pass: unfinished runs, lost uploads, lost jobs, issue labels, the last pass, repeated failures, the hold issue, the runner suite, core items, time limits, continuation, the newest run, overlapping reports, older run scripts, a refused run, a closed issue, verdict errors, a run of chosen suites, the attempts in etude history and an intermittent issue kept open'

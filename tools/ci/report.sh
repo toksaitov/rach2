@@ -20,6 +20,19 @@
 # architecture whose directory has `skipped`, where it had nothing to run,
 # gets no status and counts as passed.
 #
+# An architecture's directory may also have `history/`, the history streams
+# of etude's run, and `store/`, the blobs they refer to, each named by its
+# SHA-256. The script reads them with build/tools/etude/history_failures,
+# which it asks make for, or with the program that HISTORY_FAILURES names. An
+# architecture passes only when that reader finds that every attempt of the
+# run passed as well; when it finds one that did not, or cannot read the
+# history, and `failed` is empty, the failure is the test runner's, `runner`.
+# The attempts that did not pass go into the issue, its comment and the
+# summary, a failure that a later attempt of its case passed among them, so
+# that a passing retry does not hide the failure it followed. A directory
+# without `history/`, as from every run before etude's, is reported as
+# before.
+#
 # A failure is filed as an issue with the labels `bug` and `ci`, titled
 # `Core tests fail on ARCH: ITEMS` or `Release tests fail on ARCH: ITEMS`,
 # ITEMS being what failed, sorted and joined by commas, or `Core tests did
@@ -37,7 +50,10 @@
 # first read. A new issue, and an open one that was intermittent, starts
 # `bisect.yml` when the last pass is known, and gives it this run's ID, so
 # that bisection does not call the failure intermittent once a later run has
-# reported it again.
+# reported it again. The script closes no issue but the hold and edits no
+# issue's body, so an issue whose failure did not repeat stays open with the
+# label `intermittent` that bisection gives it, and every report of the
+# failure stays on it.
 #
 # A core job that GitHub gave to no runner, so that none of its steps ran,
 # is not a failure of the commit: its architecture gets the status `error`,
@@ -172,6 +188,30 @@ unrun_once() { # unrun_once ARCH
     case " $errors " in *" ci/lost/$1 "*) return 1 ;; esac
 }
 
+# Set `history` to what etude's history of the run in RESULT says of the
+# attempts that did not pass, and `hstatus` to the reader's status: 0 when
+# every attempt passed, 1 when one did not, and 2 when the history could not
+# be read, `history` then saying why. A RESULT without `history/` gives 0 and
+# nothing. A backquote becomes a quote, so that the text stays in its fence.
+read_history() { # read_history RESULT
+    history=
+    hstatus=0
+    [ -d "$1/history" ] || return 0
+    reader=${HISTORY_FAILURES:-build/tools/etude/history_failures}
+    if [ -z "${HISTORY_FAILURES:-}" ] && ! make -s "$reader" >&2; then
+        history="ci: report: $reader could not be built"
+        hstatus=2
+        return 0
+    fi
+    if [ -d "$1/store" ]; then
+        history=$("$reader" -b "$1/store" "$1"/history/* 2>&1) || hstatus=$?
+    else
+        history=$("$reader" "$1"/history/* 2>&1) || hstatus=$?
+    fi
+    [ "$hstatus" -le 1 ] || hstatus=2
+    history=$(printf '%s\n' "$history" | tr '\140' "'")
+}
+
 unrun=""
 errors=""
 if [ "$kind" = core ]; then
@@ -203,7 +243,9 @@ for arch in i686 x86_64; do
         summarize "$arch had no suite to test." ""
         continue
     fi
-    if [ -f "$result/done" ] && [ -f "$result/failed" ] && [ ! -s "$result/failed" ]; then
+    read_history "$result"
+    if [ -f "$result/done" ] && [ -f "$result/failed" ] && [ ! -s "$result/failed" ] &&
+        [ "$hstatus" = 0 ]; then
         set_status "$ctx/$arch" success
         passed="$passed $arch"
         summarize "$arch passed." ""
@@ -219,6 +261,8 @@ for arch in i686 x86_64; do
     set_status "$ctx/$arch" failure
     if [ -f "$result/done" ] && [ -s "$result/failed" ]; then
         items=$(sort -u "$result/failed" | tr '\n' ' ' | sed 's/ $//')
+    elif [ -f "$result/done" ] && [ -f "$result/failed" ]; then
+        items=runner
     else
         items=unfinished-$kind
     fi
@@ -233,6 +277,12 @@ for arch in i686 x86_64; do
             failed=$(echo "$items" | sed "s/^/\`/; s/ /\`, \`/g; s/\$/\`/")
             first="The $tests of commit $short failed on $arch: $failed." ;;
     esac
+    if [ -f "$result/done" ] && [ -f "$result/failed" ] && [ ! -s "$result/failed" ]; then
+        case $hstatus in
+            1) first="$first The run listed no failure, but etude's history of the run has attempts that did not pass, so the failure is the test runner's." ;;
+            2) first="$first The run listed no failure, but etude's history of the run could not be read, so the failure is the test runner's." ;;
+        esac
+    fi
     case " $items " in
         *" build "*|*" style "*|*" runner "*|*" core "*|*" default "*|*" unfinished-core "*)
             [ "$kind" = core ] && held="$held
@@ -252,6 +302,11 @@ $(git log --format='* %h %s' "$good..$sha")"
         lines=$(grep -E ': FAIL|: result: fail' "$result/log" | head -n 8)
         [ -z "$lines" ] || summarize '```' "$lines" '```' ""
     fi
+    case $hstatus in
+        1) said="The attempts that did not pass, from etude's history of the run; a failure stays listed when a later attempt of its case passed:" ;;
+        2) said="Etude's history of the run could not be read:" ;;
+    esac
+    [ "$hstatus" = 0 ] || summarize "$said" '```' "$history" '```' ""
     summarize "Logs: \`gh run download $GITHUB_RUN_ID --repo $repo --name $kind-$arch\`" ""
     body=$first
     [ -z "$lines" ] || body="$body
@@ -260,6 +315,13 @@ The first lines of the log that name a failure:
 
 \`\`\`
 $lines
+\`\`\`"
+    [ "$hstatus" = 0 ] || body="$body
+
+$said
+
+\`\`\`
+$history
 \`\`\`"
     body="$body
 
