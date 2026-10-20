@@ -24,9 +24,19 @@
  * exchanges are in this process. Prints "DGRAMPROBE OK" and exits 0 on
  * success; a failure prints "DGRAMPROBE FAIL: " with the reason and exits 1.
  * Freestanding; direct system calls (probe.h).
+ *
+ * The machine is QEMU's: its address is 10.0.2.15, its subnet's broadcast
+ * 10.0.2.255 and its interface eth0; the probe binds UDP ports 7500 to
+ * 7503, 7511 and 7600 to 7607, and the low-port row drops to uid 1000 and
+ * binds port 68. A native run gives the machine's own as arguments
+ * (probe_args.h): `ifname=NAME` names the interface, whose address and
+ * broadcast the probe then reads with SIOCGIFADDR and SIOCGIFBRDADDR unless
+ * `addr=A.B.C.D` and `bcast=A.B.C.D` give them, and `ports=OLD:NEW,...` and
+ * `ids=OLD:NEW,...` map the ports and the uid.
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
@@ -57,14 +67,21 @@ typedef unsigned char uint8_t;
 #define EAFNOSUPPORT 97
 #define EOPNOTSUPP   95
 
-#define OUR_IP    0x0A00020FUL /* 10.0.2.15 */
-#define BCAST_IP  0xFFFFFFFFUL
-#define SUBNET_BC 0x0A0002FFUL /* 10.0.2.255 */
+#define BCAST_IP 0xFFFFFFFFUL
 
-#define PEER_PORT    7500
-#define OTHER_PORT   7501
-#define OUTSIDE_PORT 7502
-#define RENEW_PORT   7503
+#define SIOCGIFADDR    0x8915
+#define SIOCGIFBRDADDR 0x8919
+/* Where an ifreq's sockaddr_in has its address, in network order. */
+#define IFREQ_SA_ADDR  20
+
+/* The machine's address and its subnet's broadcast, in host order, the name
+ * of its interface, and the ports and the uid the rows use: QEMU's, or the
+ * values the arguments give. */
+static uint32_t our_ip, subnet_bc;
+static const char *ifname;
+static uint16_t peer_port, other_port, outside_port, renew_port, spare_port, low_port;
+static uint16_t filler_port[8];
+static int user_id;
 
 /** write(2). */
 static int sys_write(int fd, const void *data, size_t count)
@@ -130,6 +147,58 @@ static int sys_waitpid(int pid, int *status, int options)
     return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
+/** The IPv4 address A.B.C.D at `s` in host order, or `fallback` when `s` is
+ * NULL or is not one. */
+static uint32_t parse_ip(const char *s, uint32_t fallback)
+{
+    uint32_t ip = 0;
+    int part;
+
+    if (s == 0) {
+        return fallback;
+    }
+    for (part = 0; part < 4; part++) {
+        uint32_t v = 0;
+        int digits = 0;
+
+        while (*s >= '0' && *s <= '9' && digits < 3) {
+            v = v * 10 + (uint32_t)(*s++ - '0');
+            digits++;
+        }
+        if (digits == 0 || v > 255 || *s != (part < 3 ? '.' : '\0')) {
+            return fallback;
+        }
+        ip = (ip << 8) | v;
+        s++;
+    }
+    return ip;
+}
+
+/** Take the machine's interface, the ports and the uid from the arguments,
+ * with QEMU's as the defaults. */
+static void take_arguments(unsigned long *sp)
+{
+    int i;
+
+    probe_args((int)sp[0], (char **)(sp + 1));
+    ifname = probe_arg("ifname", "eth0");
+    for (i = 0; ifname[i] != '\0'; i++) {
+    }
+    if (i == 0 || i > 15) {
+        ifname = "eth0";
+    }
+    peer_port = (uint16_t)probe_port(7500);
+    other_port = (uint16_t)probe_port(7501);
+    outside_port = (uint16_t)probe_port(7502);
+    renew_port = (uint16_t)probe_port(7503);
+    spare_port = (uint16_t)probe_port(7511);
+    low_port = (uint16_t)probe_port(68);
+    for (i = 0; i < 8; i++) {
+        filler_port[i] = (uint16_t)probe_port(7600 + i);
+    }
+    user_id = (int)probe_id(1000);
+}
+
 /** Write the string `s` to standard output. */
 static void say(const char *s)
 {
@@ -161,6 +230,58 @@ static uint8_t buf[64];
 #define IFREQ_SIZE 32
 #endif
 static uint8_t ifreq[IFREQ_SIZE];
+
+/** The address the interface `ifname` has for `request`, SIOCGIFADDR or
+ * SIOCGIFBRDADDR, in host order; fails the probe with `what` when the
+ * interface does not answer. */
+static uint32_t interface_ip(int request, const char *what)
+{
+    unsigned long args[3];
+    uint32_t ip = 0;
+    int fd, i;
+
+    args[0] = AF_INET;
+    args[1] = SOCK_DGRAM;
+    args[2] = 0;
+    fd = socketcall(SC_SOCKET, args);
+    if (fd < 0) {
+        fail("the socket that reads the interface's addresses did not open");
+    }
+    for (i = 0; i < IFREQ_SIZE; i++) {
+        ifreq[i] = 0;
+    }
+    for (i = 0; ifname[i] != '\0'; i++) {
+        ifreq[i] = (uint8_t)ifname[i];
+    }
+    if (syscall3(SYS_IOCTL, (long)fd, (long)request, (long)ifreq) != 0) {
+        fail(what);
+    }
+    for (i = IFREQ_SA_ADDR; i < IFREQ_SA_ADDR + 4; i++) {
+        ip = (ip << 8) | ifreq[i];
+    }
+    sys_close(fd);
+    return ip;
+}
+
+/** Take the machine's address and its subnet's broadcast: those `addr=` and
+ * `bcast=` give, those of the interface `ifname=` names when it is given,
+ * or QEMU's, 10.0.2.15 and 10.0.2.255. */
+static void take_addresses(void)
+{
+    const char *addr = probe_arg("addr", 0), *bcast = probe_arg("bcast", 0);
+    int named = probe_arg("ifname", 0) != 0;
+
+    if (addr == 0 && named) {
+        our_ip = interface_ip(SIOCGIFADDR, "the interface's address would not read");
+    } else {
+        our_ip = parse_ip(addr, 0x0A00020FUL);
+    }
+    if (bcast == 0 && named) {
+        subnet_bc = interface_ip(SIOCGIFBRDADDR, "the interface's broadcast would not read");
+    } else {
+        subnet_bc = parse_ip(bcast, 0x0A0002FFUL);
+    }
+}
 
 /** Fill the sockaddr_in `sa` with `ip` and `port`, both in host order. */
 static void set_sockaddr(uint32_t ip, uint16_t port)
@@ -302,8 +423,13 @@ static void expect_refused(uint32_t base, int fd, const char *what, const char *
     expect_nothing(fd, what);
 }
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /**
- * The probe's entry: the rows of the list above, in its order.
+ * The probe, entered with `sp` at argc: the rows of the list above, in its
+ * order.
  *
  * A datagram to the machine's own address goes on the loopback ring, which
  * the kernel delivers after the send returns, so the first read of each
@@ -315,7 +441,7 @@ static void expect_refused(uint32_t base, int fd, const char *what, const char *
  * The connect beside eight bound sockets has to find an ephemeral port, and
  * answers at once, 0 or EAGAIN.
  */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
     unsigned long args[6];
     int peer, other, client, outside, stream, extra, listener, sender, r, i;
@@ -327,9 +453,15 @@ PROBE_START void _start(void)
     uint32_t refused;
     /* The kernel writes it through the pointer the call is given. */
     volatile uint32_t optlen;
+    uint32_t name_len = 0;
 
-    peer = open_bound(PEER_PORT);
-    other = open_bound(OTHER_PORT);
+    take_arguments(sp);
+    take_addresses();
+    while (ifname[name_len] != '\0') {
+        name_len++;
+    }
+    peer = open_bound(peer_port);
+    other = open_bound(other_port);
 
     args[0] = AF_INET;
     args[1] = SOCK_DGRAM;
@@ -345,7 +477,7 @@ PROBE_START void _start(void)
     }
 
     /* Connected, it writes to its peer without being told again. */
-    set_sockaddr(OUR_IP, PEER_PORT);
+    set_sockaddr(our_ip, peer_port);
     args[0] = (uint32_t)client;
     args[1] = (unsigned long)sa;
     args[2] = 16;
@@ -379,7 +511,7 @@ PROBE_START void _start(void)
         fail("a connected datagram socket has no source port for a reply");
     }
 
-    set_sockaddr(OUR_IP, client_port);
+    set_sockaddr(our_ip, client_port);
     args[0] = (uint32_t)peer;
     args[1] = (unsigned long)"peer";
     args[2] = 4;
@@ -390,7 +522,7 @@ PROBE_START void _start(void)
         fail("the peer's reply did not send");
     }
     refused = udp_no_ports();
-    set_sockaddr(OUR_IP, client_port);
+    set_sockaddr(our_ip, client_port);
     args[0] = (uint32_t)other;
     args[1] = (unsigned long)"other";
     args[2] = 5;
@@ -417,8 +549,8 @@ PROBE_START void _start(void)
                    "the third socket's datagram was neither received nor refused");
 
     /* A sender at another address: the suite's datagram, through a forward. */
-    outside = open_bound(OUTSIDE_PORT);
-    set_sockaddr(OUR_IP, PEER_PORT);
+    outside = open_bound(outside_port);
+    set_sockaddr(our_ip, peer_port);
     args[0] = (uint32_t)outside;
     args[1] = (unsigned long)sa;
     args[2] = 16;
@@ -431,7 +563,7 @@ PROBE_START void _start(void)
                    "a connected socket received from an address that is not its peer's",
                    "the suite's datagram from outside was neither received nor refused");
     /* The same socket still hears its peer. */
-    set_sockaddr(OUR_IP, OUTSIDE_PORT);
+    set_sockaddr(our_ip, outside_port);
     args[0] = (uint32_t)peer;
     args[1] = (unsigned long)"peer";
     args[2] = 4;
@@ -502,7 +634,7 @@ PROBE_START void _start(void)
         if (pkt < 0) {
             fail("a packet socket did not open");
         }
-        set_sockaddr(OUR_IP, PEER_PORT);
+        set_sockaddr(our_ip, peer_port);
         args[0] = (uint32_t)pkt;
         args[1] = (unsigned long)sa;
         args[2] = 16;
@@ -511,12 +643,12 @@ PROBE_START void _start(void)
         }
         sys_close(pkt);
     }
-    if (open_bound(OTHER_PORT + 10) < 0) {
+    if (open_bound(spare_port) < 0) {
         fail("the UDP binding table was exhausted by packet sockets");
     }
 
     /* Two sockets on one port, as a DHCP client's renewal binds port 68. */
-    listener = open_bound(RENEW_PORT);
+    listener = open_bound(renew_port);
     args[0] = AF_INET;
     args[1] = SOCK_DGRAM;
     args[2] = 0;
@@ -524,7 +656,7 @@ PROBE_START void _start(void)
     if (sender < 0) {
         fail("the renewal socket did not open");
     }
-    set_sockaddr(0, RENEW_PORT);
+    set_sockaddr(0, renew_port);
     args[0] = (uint32_t)sender;
     args[1] = (unsigned long)sa;
     args[2] = 16;
@@ -540,7 +672,7 @@ PROBE_START void _start(void)
     if (socketcall(SC_SETSOCKOPT, args) != 0) {
         fail("SO_REUSEADDR was refused on the renewal socket");
     }
-    set_sockaddr(0, RENEW_PORT);
+    set_sockaddr(0, renew_port);
     args[0] = (uint32_t)sender;
     args[1] = (unsigned long)sa;
     args[2] = 16;
@@ -555,7 +687,7 @@ PROBE_START void _start(void)
     if (socketcall(SC_SETSOCKOPT, args) != 0) {
         fail("SO_REUSEADDR was refused on the listener");
     }
-    set_sockaddr(0, RENEW_PORT);
+    set_sockaddr(0, renew_port);
     args[0] = (uint32_t)sender;
     args[1] = (unsigned long)sa;
     args[2] = 16;
@@ -564,7 +696,7 @@ PROBE_START void _start(void)
     }
 
     /* The sender connects to the peer, so the peer's answer is its own. */
-    set_sockaddr(OUR_IP, PEER_PORT);
+    set_sockaddr(our_ip, peer_port);
     args[0] = (uint32_t)sender;
     args[1] = (unsigned long)sa;
     args[2] = 16;
@@ -583,7 +715,7 @@ PROBE_START void _start(void)
     if (socketcall(SC_RECVFROM, args) != 5) {
         fail("the server did not receive the renewal");
     }
-    set_sockaddr(OUR_IP, RENEW_PORT);
+    set_sockaddr(our_ip, renew_port);
     args[0] = (uint32_t)peer;
     args[1] = (unsigned long)"ack";
     args[2] = 3;
@@ -614,7 +746,7 @@ PROBE_START void _start(void)
 
     /* Closing the sender leaves the listener bound. */
     sys_close(sender);
-    set_sockaddr(OUR_IP, RENEW_PORT);
+    set_sockaddr(our_ip, renew_port);
     args[0] = (uint32_t)peer;
     args[1] = (unsigned long)"after";
     args[2] = 5;
@@ -644,10 +776,10 @@ PROBE_START void _start(void)
         args[1] = SOCK_DGRAM;
         args[2] = 0;
         low = socketcall(SC_SOCKET, args);
-        if (low < 0 || sys_setuid(1000) != 0) {
+        if (low < 0 || sys_setuid(user_id) != 0) {
             sys_exit(2);
         }
-        set_sockaddr(0, 68);
+        set_sockaddr(0, low_port);
         args[0] = (uint32_t)low;
         args[1] = (unsigned long)sa;
         args[2] = 16;
@@ -669,14 +801,14 @@ PROBE_START void _start(void)
 
     /* A connect beside eight bound sockets answers 0 or EAGAIN. */
     for (i = 0; i < 8; i++) {
-        fillers[i] = open_bound_maybe((uint16_t)(7600 + i));
+        fillers[i] = open_bound_maybe(filler_port[i]);
     }
     args[0] = AF_INET;
     args[1] = SOCK_DGRAM;
     args[2] = 0;
     extra = socketcall(SC_SOCKET, args);
     if (extra >= 0) {
-        set_sockaddr(OUR_IP, PEER_PORT);
+        set_sockaddr(our_ip, peer_port);
         args[0] = (uint32_t)extra;
         args[1] = (unsigned long)sa;
         args[2] = 16;
@@ -693,7 +825,7 @@ PROBE_START void _start(void)
     }
 
     /* Broadcasting is asked for, not assumed. */
-    set_sockaddr(BCAST_IP, PEER_PORT);
+    set_sockaddr(BCAST_IP, peer_port);
     args[0] = (uint32_t)client;
     args[1] = (unsigned long)"b";
     args[2] = 1;
@@ -703,7 +835,7 @@ PROBE_START void _start(void)
     if (socketcall(SC_SENDTO, args) != -EACCES) {
         fail("a broadcast was sent by a socket that never asked to broadcast");
     }
-    set_sockaddr(SUBNET_BC, PEER_PORT);
+    set_sockaddr(subnet_bc, peer_port);
     args[4] = (unsigned long)sa;
     if (socketcall(SC_SENDTO, args) != -EACCES) {
         fail("the subnet's broadcast address was not treated as a broadcast");
@@ -718,7 +850,7 @@ PROBE_START void _start(void)
     if (socketcall(SC_SETSOCKOPT, args) != 0) {
         fail("SO_BROADCAST was refused");
     }
-    set_sockaddr(BCAST_IP, PEER_PORT);
+    set_sockaddr(BCAST_IP, peer_port);
     args[0] = (uint32_t)client;
     args[1] = (unsigned long)"b";
     args[2] = 1;
@@ -760,8 +892,8 @@ PROBE_START void _start(void)
     args[0] = (uint32_t)client;
     args[1] = SOL_SOCKET;
     args[2] = SO_BINDTODEVICE;
-    args[3] = (unsigned long)"eth0";
-    args[4] = 5;
+    args[3] = (unsigned long)ifname;
+    args[4] = name_len + 1;
     if (socketcall(SC_SETSOCKOPT, args) != 0) {
         fail("binding to this machine's interface was refused");
     }
@@ -779,16 +911,15 @@ PROBE_START void _start(void)
     for (i = 0; i < IFREQ_SIZE; i++) {
         ifreq[i] = 0;
     }
-    ifreq[0] = 'e';
-    ifreq[1] = 't';
-    ifreq[2] = 'h';
-    ifreq[3] = '0';
+    for (i = 0; i < (int)name_len && i < 15; i++) {
+        ifreq[i] = (uint8_t)ifname[i];
+    }
     args[3] = (unsigned long)ifreq;
     args[4] = IFREQ_SIZE;
     if (socketcall(SC_SETSOCKOPT, args) != 0) {
         fail("the whole struct ifreq a DHCP client sends was refused");
     }
-    /* It reads back as the name, five bytes with the NUL. */
+    /* It reads back as the name, five bytes with the NUL for eth0. */
     for (i = 0; i < IFREQ_SIZE; i++) {
         ifreq[i] = 0x5c;
     }
@@ -798,7 +929,8 @@ PROBE_START void _start(void)
     if (socketcall(SC_GETSOCKOPT, args) != 0) {
         fail("the bound interface did not read back");
     }
-    if (optlen != 5 || ifreq[0] != 'e' || ifreq[3] != '0' || ifreq[4] != 0) {
+    if (optlen != name_len + 1 || ifreq[0] != (uint8_t)ifname[0] ||
+        ifreq[name_len - 1] != (uint8_t)ifname[name_len - 1] || ifreq[name_len] != 0) {
         fail("the bound interface did not read back as its name");
     }
 

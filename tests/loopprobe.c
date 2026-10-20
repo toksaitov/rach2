@@ -25,11 +25,19 @@
  * in poll(2) until it comes, and judges what came; the suite's limit on the
  * probe's run ends one that never does.
  *
+ * The probe uses UDP ports 7100 to 7102 and TCP ports 7200 to 7207 and 7300
+ * to 7325, and 7300 is the closed port until its rows listen on it. A native
+ * run maps them with `ports=OLD:NEW,...` (probe_args.h). With
+ * `machine=native` the probe leaves out the two checks of counts that every
+ * loopback datagram of the machine moves, no datagram dropped in the bulk
+ * transfer and no round trip left for the timer by an idle machine.
+ *
  * Prints "LOOPPROBE OK" and exits 0 on success. Freestanding; direct system
  * calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
@@ -46,27 +54,20 @@ typedef unsigned char uint8_t;
 #define SOCK_STREAM 1
 #define SOCK_DGRAM  2
 
-#define UDP_PORT 7100
+/* The ports, 7100 to 7102, 7200 to 7207 and 7300 to 7325, or the values
+ * `ports=` gives in their place: `udp_port`, `nolen_port` for the recvfrom
+ * given no length pointer, `peek_port` for the peek rows' datagram and
+ * connection, `tcp_port[N]` for 7200 + N, the bound-port rows' two of
+ * `tcp_ports`, and the simultaneous-open case's SIM_PAIRS pairs, taken in
+ * turn, a pair a round. `closed_port` is the bound-port rows' listener's;
+ * `tcp_refused` runs before those rows, while nothing listens on it. */
+#define SIM_PAIRS 8
+static uint16_t udp_port, nolen_port, peek_port, tcp_port[8];
+static uint16_t bound_listen_port, bound_client_port, closed_port;
+static uint16_t sim_port[2 * SIM_PAIRS];
 
-/* The port of the recvfrom given no length pointer. */
-#define NOLEN_PORT 7101
-
-/* The port of the peek rows, for their datagram and their connection. */
-#define PEEK_PORT 7102
-
-/* The ports of the bound-port rows of `tcp_ports`. CLOSED_PORT is the same
- * number; `tcp_refused` runs before those rows, while nothing listens on it. */
-#define BOUND_LISTEN_PORT 7300
-#define BOUND_CLIENT_PORT 7301
-
-/* Where the simultaneous-open case's port pairs start, and how many it takes
- * in turn, a pair a round. */
-#define SIM_PORT_A      7310
-#define SIM_PAIRS       8
-#define TCP_PORT        7200
 /* The round trips of `tcp_loop_pingpong`, a byte each way. */
 #define PINGPONG_ROUNDS 200
-#define CLOSED_PORT     7300
 
 #define EADDRINUSE  98
 #define EPIPE       32
@@ -395,7 +396,7 @@ static char state_of(int pid)
 
 /**
  * A UDP datagram sent to 127.0.0.1 at the socket's own bound port comes
- * back with its payload and the source 127.0.0.1:UDP_PORT. A datagram of no
+ * back with its payload and the source 127.0.0.1:udp_port. A datagram of no
  * bytes comes back as one, with its source, and the datagram after it
  * arrives whole; the drained socket then answers EAGAIN. A receive that took
  * the empty datagram for an empty queue would block, and the runner reports
@@ -418,14 +419,14 @@ static void udp_loop(void)
     if (s < 0)
         fail("udp socket");
 
-    make_sockaddr(sa, UDP_PORT, 0, 0, 0, 0);
+    make_sockaddr(sa, udp_port, 0, 0, 0, 0);
     args[0] = (uint32_t)s;
     args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0)
         fail("udp bind");
 
-    make_sockaddr(dst, UDP_PORT, 127, 0, 0, 1);
+    make_sockaddr(dst, udp_port, 127, 0, 0, 1);
     args[0] = (uint32_t)s;
     args[1] = (unsigned long)msg;
     args[2] = (uint32_t)strlen(msg);
@@ -447,7 +448,7 @@ static void udp_loop(void)
     }
     if (!mem_eq(src + 4, loop_ip, 4))
         fail("udp source not 127.0.0.1");
-    if (src[2] != (UDP_PORT >> 8) || src[3] != (UDP_PORT & 0xFF)) {
+    if (src[2] != (udp_port >> 8) || src[3] != (udp_port & 0xFF)) {
         fail("udp source port");
     }
 
@@ -473,7 +474,7 @@ static void udp_loop(void)
         fail("udp empty payload");
     if (!mem_eq(src + 4, loop_ip, 4))
         fail("udp empty source not 127.0.0.1");
-    if (src[2] != (UDP_PORT >> 8) || src[3] != (UDP_PORT & 0xFF)) {
+    if (src[2] != (udp_port >> 8) || src[3] != (udp_port & 0xFF)) {
         fail("udp empty source port");
     }
 
@@ -535,13 +536,13 @@ static void udp_no_length(void)
     s = socketcall(SC_SOCKET, args);
     if (s < 0)
         fail("udp socket for the recvfrom with no length");
-    make_sockaddr(sa, NOLEN_PORT, 0, 0, 0, 0);
+    make_sockaddr(sa, nolen_port, 0, 0, 0, 0);
     args[0] = (uint32_t)s;
     args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0)
         fail("udp bind for the recvfrom with no length");
-    make_sockaddr(sa, NOLEN_PORT, 127, 0, 0, 1);
+    make_sockaddr(sa, nolen_port, 127, 0, 0, 1);
     args[0] = (uint32_t)s;
     args[1] = (unsigned long)msg;
     args[2] = (uint32_t)strlen(msg);
@@ -614,13 +615,13 @@ static void udp_peek(void)
     s = socketcall(SC_SOCKET, args);
     if (s < 0)
         fail("udp socket for the peek");
-    make_sockaddr(sa, PEEK_PORT, 0, 0, 0, 0);
+    make_sockaddr(sa, peek_port, 0, 0, 0, 0);
     args[0] = (uint32_t)s;
     args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0)
         fail("udp bind for the peek");
-    make_sockaddr(sa, PEEK_PORT, 127, 0, 0, 1);
+    make_sockaddr(sa, peek_port, 127, 0, 0, 1);
     args[0] = (uint32_t)s;
     args[1] = (unsigned long)msg;
     args[2] = (uint32_t)strlen(msg);
@@ -640,7 +641,7 @@ static void udp_peek(void)
     args[5] = (unsigned long)&salen;
     n = socketcall(SC_RECVFROM, args);
     if (n != (int)strlen(msg) || !mem_eq((const uint8_t *)rbuf, (const uint8_t *)msg, n) ||
-        src[2] != (PEEK_PORT >> 8) || src[3] != (PEEK_PORT & 0xFF))
+        src[2] != (peek_port >> 8) || src[3] != (peek_port & 0xFF))
         fail("a second udp peek did not find the datagram and its sender");
 
     args[3] = MSG_DONTWAIT;
@@ -670,7 +671,7 @@ static void tcp_peek(void)
     cs = socketcall(SC_SOCKET, args);
     if (ls < 0 || cs < 0)
         fail("tcp sockets for the peek");
-    make_sockaddr(sa, PEEK_PORT, 0, 0, 0, 0);
+    make_sockaddr(sa, peek_port, 0, 0, 0, 0);
     args[0] = (uint32_t)ls;
     args[1] = (unsigned long)sa;
     args[2] = 16;
@@ -679,7 +680,7 @@ static void tcp_peek(void)
     args[1] = 1;
     if (socketcall(SC_LISTEN, args) != 0)
         fail("tcp listen for the peek");
-    make_sockaddr(sa, PEEK_PORT, 127, 0, 0, 1);
+    make_sockaddr(sa, peek_port, 127, 0, 0, 1);
     args[0] = (uint32_t)cs;
     args[1] = (unsigned long)sa;
     args[2] = 16;
@@ -707,7 +708,7 @@ static void tcp_peek(void)
 
 /** A TCP connection to the probe's own listener on 127.0.0.1 completes its
  * handshake, carries a message each way, and reports its peer as
- * 127.0.0.1:TCP_PORT. */
+ * 127.0.0.1:tcp_port[0]. */
 static void tcp_loop(void)
 {
     unsigned long args[6];
@@ -725,7 +726,7 @@ static void tcp_loop(void)
     if (ls < 0)
         fail("tcp listener socket");
 
-    make_sockaddr(sa, TCP_PORT, 0, 0, 0, 0);
+    make_sockaddr(sa, tcp_port[0], 0, 0, 0, 0);
     args[0] = (uint32_t)ls;
     args[1] = (unsigned long)sa;
     args[2] = 16;
@@ -744,7 +745,7 @@ static void tcp_loop(void)
     if (cs < 0)
         fail("tcp client socket");
 
-    make_sockaddr(sa, TCP_PORT, 127, 0, 0, 1);
+    make_sockaddr(sa, tcp_port[0], 127, 0, 0, 1);
     args[0] = (uint32_t)cs;
     args[1] = (unsigned long)sa;
     args[2] = 16;
@@ -781,7 +782,7 @@ static void tcp_loop(void)
         fail("tcp getpeername");
     if (!mem_eq(peer + 4, loop_ip, 4))
         fail("tcp peer not 127.0.0.1");
-    if (peer[2] != (TCP_PORT >> 8) || peer[3] != (TCP_PORT & 0xFF)) {
+    if (peer[2] != (tcp_port[0] >> 8) || peer[3] != (tcp_port[0] & 0xFF)) {
         fail("tcp peer port");
     }
 
@@ -944,7 +945,7 @@ static void tcp_loop_bulk(void)
     ls = socketcall(SC_SOCKET, args);
     if (ls < 0)
         fail("bulk listener socket");
-    make_sockaddr(sa, TCP_PORT + 3, 0, 0, 0, 0);
+    make_sockaddr(sa, tcp_port[3], 0, 0, 0, 0);
     args[0] = (uint32_t)ls;
     args[1] = (unsigned long)sa;
     args[2] = 16;
@@ -961,7 +962,7 @@ static void tcp_loop_bulk(void)
     cs = socketcall(SC_SOCKET, args);
     if (cs < 0)
         fail("bulk client socket");
-    make_sockaddr(sa, TCP_PORT + 3, 127, 0, 0, 1);
+    make_sockaddr(sa, tcp_port[3], 127, 0, 0, 1);
     args[0] = (uint32_t)cs;
     args[1] = (unsigned long)sa;
     args[2] = 16;
@@ -982,7 +983,7 @@ static void tcp_loop_bulk(void)
 
     bulk_transfer(cs, as);
     dropped_after = loop_dropped_now();
-    if (dropped_after != dropped_before) {
+    if (!probe_native() && dropped_after != dropped_before) {
         fail("the loopback ring refused a datagram during the transfer");
     }
     if (loop_peak_now() < LOOP_PEAK_FLOOR) {
@@ -1075,7 +1076,7 @@ static void tcp_loop_pingpong(void)
     ls = socketcall(SC_SOCKET, args);
     if (ls < 0)
         fail("ping-pong listener socket");
-    make_sockaddr(sa, TCP_PORT + 5, 0, 0, 0, 0);
+    make_sockaddr(sa, tcp_port[5], 0, 0, 0, 0);
     args[0] = (uint32_t)ls;
     args[1] = (unsigned long)sa;
     args[2] = 16;
@@ -1096,7 +1097,7 @@ static void tcp_loop_pingpong(void)
         cs = socketcall(SC_SOCKET, args);
         if (cs < 0)
             sys_exit(1);
-        make_sockaddr(sa, TCP_PORT + 5, 127, 0, 0, 1);
+        make_sockaddr(sa, tcp_port[5], 127, 0, 0, 1);
         args[0] = (uint32_t)cs;
         args[1] = (unsigned long)sa;
         args[2] = 16;
@@ -1149,7 +1150,7 @@ static void tcp_loop_pingpong(void)
     print(", left for the timer by an idle machine ");
     print_u32(left);
     print("\n");
-    if (left != 0) {
+    if (!probe_native() && left != 0) {
         fail("a local round trip waited for the timer with nothing running");
     }
 }
@@ -1170,13 +1171,13 @@ static void tcp_bound_loopback(void)
     ls = socketcall(SC_SOCKET, args);
     if (ls < 0)
         fail("bound listener socket");
-    make_sockaddr(sa, TCP_PORT + 7, 192, 0, 2, 1);
+    make_sockaddr(sa, tcp_port[7], 192, 0, 2, 1);
     args[0] = (uint32_t)ls;
     args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != -EADDRNOTAVAIL)
         fail("a bind to an address the machine lacks was not refused");
-    make_sockaddr(sa, TCP_PORT + 7, 127, 0, 0, 1);
+    make_sockaddr(sa, tcp_port[7], 127, 0, 0, 1);
     if (socketcall(SC_BIND, args) != 0)
         fail("bind to 127.0.0.1");
     args[0] = (uint32_t)ls;
@@ -1190,7 +1191,7 @@ static void tcp_bound_loopback(void)
     cs = socketcall(SC_SOCKET, args);
     if (cs < 0)
         fail("bound client socket");
-    make_sockaddr(sa, TCP_PORT + 7, own_ip[0], own_ip[1], own_ip[2], own_ip[3]);
+    make_sockaddr(sa, tcp_port[7], own_ip[0], own_ip[1], own_ip[2], own_ip[3]);
     args[0] = (uint32_t)cs;
     args[1] = (unsigned long)sa;
     args[2] = 16;
@@ -1204,7 +1205,7 @@ static void tcp_bound_loopback(void)
     cs = socketcall(SC_SOCKET, args);
     if (cs < 0)
         fail("bound client socket");
-    make_sockaddr(sa, TCP_PORT + 7, 127, 0, 0, 1);
+    make_sockaddr(sa, tcp_port[7], 127, 0, 0, 1);
     args[0] = (uint32_t)cs;
     args[1] = (unsigned long)sa;
     args[2] = 16;
@@ -1237,7 +1238,7 @@ static void tcp_refused(void)
     if (cs < 0)
         fail("refused socket");
 
-    make_sockaddr(sa, CLOSED_PORT, 127, 0, 0, 1);
+    make_sockaddr(sa, closed_port, 127, 0, 0, 1);
     args[0] = (uint32_t)cs;
     args[1] = (unsigned long)sa;
     args[2] = 16;
@@ -1338,7 +1339,7 @@ static void shutdown_rows(int cs, uint8_t *sa)
  * once a listener is live, a bind to its port is EADDRINUSE too. A listener
  * with no port and a bind to port 0 are each given an ephemeral port, 49152
  * or above, as Linux gives them. A server binds and listens again on
- * TCP_PORT, whose connection `tcp_loop` closed, since bind and listen refuse
+ * tcp_port[0], whose connection `tcp_loop` closed, since bind and listen refuse
  * a port only for a live listener; bind does not read SO_REUSEADDR, so a
  * server that sets it gains nothing.
  *
@@ -1362,7 +1363,7 @@ static void tcp_ports(void)
     if (ls < 0)
         fail("bound-port listen socket");
 
-    make_sockaddr(sa, BOUND_LISTEN_PORT, 0, 0, 0, 0);
+    make_sockaddr(sa, bound_listen_port, 0, 0, 0, 0);
     args[0] = (uint32_t)ls;
     args[1] = (unsigned long)sa;
     args[2] = 16;
@@ -1444,7 +1445,7 @@ static void tcp_ports(void)
     second = socketcall(SC_SOCKET, args);
     if (second < 0)
         fail("restart socket");
-    make_sockaddr(sa, TCP_PORT, 0, 0, 0, 0);
+    make_sockaddr(sa, tcp_port[0], 0, 0, 0, 0);
     args[0] = (uint32_t)second;
     args[1] = (unsigned long)sa;
     args[2] = 16;
@@ -1464,14 +1465,14 @@ static void tcp_ports(void)
     if (cs < 0)
         fail("bound-port client socket");
 
-    make_sockaddr(sa, BOUND_CLIENT_PORT, 0, 0, 0, 0);
+    make_sockaddr(sa, bound_client_port, 0, 0, 0, 0);
     args[0] = (uint32_t)cs;
     args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0)
         fail("bound-port client bind");
 
-    make_sockaddr(sa, BOUND_LISTEN_PORT, 127, 0, 0, 1);
+    make_sockaddr(sa, bound_listen_port, 127, 0, 0, 1);
     args[0] = (uint32_t)cs;
     args[1] = (unsigned long)sa;
     args[2] = 16;
@@ -1486,7 +1487,7 @@ static void tcp_ports(void)
     if (as < 0)
         fail("bound-port accept");
 
-    if (peer[2] != (BOUND_CLIENT_PORT >> 8) || peer[3] != (BOUND_CLIENT_PORT & 0xFF)) {
+    if (peer[2] != (bound_client_port >> 8) || peer[3] != (bound_client_port & 0xFF)) {
         fail("the peer port is not the one the client bound");
     }
 
@@ -1497,13 +1498,13 @@ static void tcp_ports(void)
     second = socketcall(SC_SOCKET, args);
     if (second < 0)
         fail("duplicate pairing socket");
-    make_sockaddr(sa, BOUND_CLIENT_PORT, 0, 0, 0, 0);
+    make_sockaddr(sa, bound_client_port, 0, 0, 0, 0);
     args[0] = (uint32_t)second;
     args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0)
         fail("duplicate pairing bind");
-    make_sockaddr(sa, BOUND_LISTEN_PORT, 127, 0, 0, 1);
+    make_sockaddr(sa, bound_listen_port, 127, 0, 0, 1);
     args[0] = (uint32_t)second;
     args[1] = (unsigned long)sa;
     args[2] = 16;
@@ -1559,8 +1560,8 @@ static void tcp_simultaneous(void)
     int n;
 
     for (round = 0; !crossed; round++) {
-        port_a = (uint16_t)(SIM_PORT_A + (round % SIM_PAIRS) * 2);
-        port_b = (uint16_t)(port_a + 1);
+        port_a = sim_port[(round % SIM_PAIRS) * 2];
+        port_b = sim_port[(round % SIM_PAIRS) * 2 + 1];
         args[0] = AF_INET;
         args[1] = SOCK_STREAM;
         args[2] = 0;
@@ -1651,7 +1652,7 @@ static void tcp_accept_close(void)
     listener = socketcall(SC_SOCKET, args);
     if (listener < 0)
         fail("immediate-close listener");
-    make_sockaddr(sa, TCP_PORT + 6, 0, 0, 0, 0);
+    make_sockaddr(sa, tcp_port[6], 0, 0, 0, 0);
     args[0] = (uint32_t)listener;
     args[1] = (unsigned long)sa;
     args[2] = sizeof(sa);
@@ -1681,7 +1682,7 @@ static void tcp_accept_close(void)
     client = socketcall(SC_SOCKET, args);
     if (client < 0)
         fail("immediate-close client");
-    make_sockaddr(sa, TCP_PORT + 6, 127, 0, 0, 1);
+    make_sockaddr(sa, tcp_port[6], 127, 0, 0, 1);
     args[0] = (uint32_t)client;
     args[1] = (unsigned long)sa;
     args[2] = sizeof(sa);
@@ -1694,9 +1695,36 @@ static void tcp_accept_close(void)
         fail("immediate-close child");
 }
 
-/** The probe's entry: each case in turn, then LOOPPROBE OK. */
-PROBE_START void _start(void)
+/** Take the ports from the arguments, each the value `ports=` gives in place
+ * of its own number or that number itself. */
+static void take_ports(void)
 {
+    int i;
+
+    udp_port = (uint16_t)probe_port(7100);
+    nolen_port = (uint16_t)probe_port(7101);
+    peek_port = (uint16_t)probe_port(7102);
+    for (i = 0; i < 8; i++) {
+        tcp_port[i] = (uint16_t)probe_port(7200 + i);
+    }
+    bound_listen_port = (uint16_t)probe_port(7300);
+    bound_client_port = (uint16_t)probe_port(7301);
+    closed_port = bound_listen_port;
+    for (i = 0; i < 2 * SIM_PAIRS; i++) {
+        sim_port[i] = (uint16_t)probe_port(7310 + i);
+    }
+}
+
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/** The probe, entered with `sp` at argc: each case in turn, then
+ * LOOPPROBE OK. */
+void probe_main(unsigned long *sp)
+{
+    probe_args((int)sp[0], (char **)(sp + 1));
+    take_ports();
     learn_addresses();
     udp_loop();
     udp_no_length();
