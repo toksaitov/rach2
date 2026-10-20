@@ -563,31 +563,21 @@ static void orphan_scan_case(void)
 }
 
 /**
- * Read whether the root is KRFFS from /proc/mounts. The rename and rmdir
- * rows need different results on KRFFS and ext2. Assume KRFFS if the mount
- * table cannot be read or has no root line, as on an image without /proc.
+ * Read whether the root is KRFFS by `statfs` of `/`, whose magic is
+ * 0x4B524646 on the boot root and 0x4B52 on a KRFFS volume mounted by
+ * mount(2). The rename and rmdir rows need different results on KRFFS and
+ * ext2. Assume KRFFS if the call fails. `statfs` gives the type of the root
+ * the probe sees, a private root inside a chroot among them, where
+ * /proc/mounts would name the machine's.
  */
 static int root_is_krffs(void)
 {
-    static char mounts[1024];
-    int fd = syscall3(SYS_OPEN, (long)"/proc/mounts", O_RDONLY, 0);
-    int n, i;
+    static unsigned buf[KSTATFS_SIZE / sizeof(unsigned)];
 
-    if (fd < 0) {
+    if (probe_statfs("/", buf) != 0) {
         return 1;
     }
-    n = syscall3(SYS_READ, fd, (long)mounts, (int)sizeof(mounts) - 1);
-    syscall3(SYS_CLOSE, fd, 0, 0);
-    if (n <= 0) {
-        return 1;
-    }
-    mounts[n] = 0;
-    for (i = 0; i + 8 < n; i++) {
-        if (mounts[i] == ' ' && mounts[i + 1] == '/' && mounts[i + 2] == ' ') {
-            return mounts[i + 3] == 'k' && mounts[i + 4] == 'r' && mounts[i + 5] == 'f';
-        }
-    }
-    return 1;
+    return buf[0] == 0x4B524646u || buf[0] == 0x4B52u;
 }
 
 /** Whether this root performs a directory's rename. The boot root refuses

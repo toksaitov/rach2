@@ -3,8 +3,10 @@
  *
  * One row depends on the file system: KRFFS does not store `.` and `..` and
  * does not synthesize them in a directory read, and ext2 has them on the disk
- * and returns them, as Linux does. The probe reads the root's type from
- * `/proc/mounts`, prints it, and refuses to judge a root that is neither.
+ * and returns them, as Linux does. The probe reads the root's type by
+ * `statfs` of `/`, prints it, and refuses to judge a root that is neither.
+ * `statfs` gives the type of the root the probe sees, a private root inside
+ * a chroot among them, where `/proc/mounts` would name the machine's.
  *
  * Makes a directory, creates and writes a file inside it, and reads it back;
  * rejects a duplicate mkdir and a create in a missing directory; refuses rmdir
@@ -95,9 +97,15 @@ static int fails = 0;
 #define ROOT_KRFFS 1
 #define ROOT_EXT2  2
 
+/* The `statfs` magic of a KRFFS root image, of a KRFFS volume mounted by
+ * mount(2), and of ext2. */
+#define MAGIC_KRFFS_ROOT  0x4B524646u
+#define MAGIC_KRFFS_MOUNT 0x4B52u
+#define MAGIC_EXT2        0xEF53u
+
 /**
- * The root's file system type, read from `/proc/mounts`: ROOT_KRFFS,
- * ROOT_EXT2, or 0 when the file cannot be read or the type is another.
+ * The root's file system type, read by `statfs` of `/`: ROOT_KRFFS,
+ * ROOT_EXT2, or 0 when the call fails or the type is another.
  *
  * The two give different answers for a directory's entries, so a probe that
  * did not read the type would judge only the image it was written for.
@@ -105,35 +113,15 @@ static int fails = 0;
  */
 static int root_type(void)
 {
-    static char mounts[2048];
-    int fd = syscall3(SYS_OPEN, (long)"/proc/mounts", O_RDONLY, 0);
-    int n, i;
+    static unsigned buf[KSTATFS_SIZE / sizeof(unsigned)];
 
-    if (fd < 0) {
+    if (probe_statfs("/", buf) != 0) {
         return 0;
     }
-    n = syscall3(SYS_READ, fd, (long)mounts, (int)sizeof(mounts) - 1);
-    syscall1(SYS_CLOSE, fd);
-    if (n <= 0) {
-        return 0;
+    if (buf[0] == MAGIC_KRFFS_ROOT || buf[0] == MAGIC_KRFFS_MOUNT) {
+        return ROOT_KRFFS;
     }
-    mounts[n] = 0;
-    /* A line is "device mountpoint type options 0 0"; the root's has " / ". */
-    for (i = 0; i < n; i++) {
-        if (mounts[i] == ' ' && mounts[i + 1] == '/' && mounts[i + 2] == ' ') {
-            const char *t = &mounts[i + 3];
-
-            if (t[0] == 'k' && t[1] == 'r' && t[2] == 'f' && t[3] == 'f' && t[4] == 's' &&
-                t[5] == ' ') {
-                return ROOT_KRFFS;
-            }
-            if (t[0] == 'e' && t[1] == 'x' && t[2] == 't' && t[3] == '2' && t[4] == ' ') {
-                return ROOT_EXT2;
-            }
-            return 0;
-        }
-    }
-    return 0;
+    return buf[0] == MAGIC_EXT2 ? ROOT_EXT2 : 0;
 }
 
 /** Count a failure and print `msg` when `cond` is false. */
