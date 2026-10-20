@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "proof": "machine-grow-space",
+  "summary": "machine_grow_space.sh on i686, the grow helper's save, grow and restore with the recovery system's RAM root full, on a private copy of tools/dev/machine_grow.sh",
+  "tree": "private",
+  "sources": ["tools/dev/machine_grow.sh"],
+  "artifacts": ["${WORK}/machine_grow.sh"],
+  "build": {
+    "argv": ["/bin/sh", "-c", "tag=; [ ! -f krffs/recovery_authorized_keys ] || tag=-with-key; make -s -j8 rach2 tests krffs test-image utils check-busybox check-dropbearmulti rach2-recovery build/images/rach2-recovery$tag.krffs build/images/rach2-recovery$tag.iso build/images/installer-test.disk build/images/installer-test-mbr.disk build/tools/image/mkmbr build/tools/image/mkgpt build/tools/inspect/growset build/tests/system/harness build/tests/host/mkexfatfixture ARCH=i686 </dev/null && cp ${SRC}/tools/dev/machine_grow.sh ${WORK}/machine_grow.sh"],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": ["/bin/sh", "-c", "rm -rf build/tests/system/grow-proof && GROW_SPACE_DIR=build/tests/system/grow-proof GROW_SPACE_SCRIPT=${WORK}/machine_grow.sh exec sh tests/system/machine_grow_space.sh"],
+    "bound_s": 3600
+  },
+  "faults": [
+    {
+      "name": "ram-work",
+      "summary": "the helper makes its work directory on the RAM disk, which is full, in place of the store",
+      "edits": [
+        {"file": "tools/dev/machine_grow.sh", "find": "mktemp -d \"$store/machine-grow.XXXXXX\"", "replace": "mktemp -d /tmp/machine-grow.XXXXXX"}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["machine-grow: failed: creating work directory on", "grow-space: failed: fixed: the save with full RAM scratch failed; the target is as it was"]
+      }
+    },
+    {
+      "name": "ram-log",
+      "summary": "the helper writes its logs on the RAM disk, which is full, in place of the store",
+      "edits": [
+        {"file": "tools/dev/machine_grow.sh", "find": "tee -a \"$work/$log_name\"", "replace": "tee -a \"/tmp/$log_name\""}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["machine-grow: failed: writing ", "/original-check.log", "grow-space: failed: fixed: the save with full RAM scratch failed; the target is as it was"]
+      }
+    }
+  ]
+}

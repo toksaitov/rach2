@@ -1,21 +1,22 @@
 #!/bin/sh
-# machine_grow_space.sh [--mutate | --texts], or HARNESS FIXTURE MODE: check
-# that tools/dev/machine_grow.sh keeps its work and its logs on the store, so
-# that save, grow and restore all run with the recovery system's RAM root
-# full.
+# machine_grow_space.sh, or HARNESS FIXTURE space: check that
+# tools/dev/machine_grow.sh keeps its work and its logs on the store, so that
+# save, grow and restore all run with the recovery system's RAM root full.
 #
-# Run with no operands or with --mutate, it runs grow_machine.sh on the
-# images `tests/run grow` builds, which prepares the fixture and runs this
-# script again with HARNESS, the fixture directory and the mode. Each round
-# trip boots the recovery stick, fills the 5 MiB RAM root, saves, has the
-# host check the backup, grows and restores; the RAM root must be as full
-# after as before, and the target must have every original byte and boot.
-# The full-log round trip also fills the store while the restore log grows,
-# which must fail the restore with a message, and the retry must finish.
-# --mutate moves the work directory, then the log, to the RAM disk, and
-# requires the save to fail before it writes the target; --texts checks that
-# each fault changes the script. The host and the guest open only disposable
-# image files.
+# Run with no operands, it runs grow_machine.sh on the images `tests/run grow`
+# builds, which prepares the fixture and runs this script again with HARNESS,
+# the fixture directory and `space`. Each round trip boots the recovery
+# stick, fills the 5 MiB RAM root, saves, has the host check the backup,
+# grows and restores; the RAM root must be as full after as before, and the
+# target must have every original byte and boot. A save that fails must leave
+# the target as it was, and the console is printed. The full-log round trip
+# also fills the store while the restore log grows, which must fail the
+# restore with a message, and the retry must finish. GROW_SPACE_SCRIPT, when
+# set, names the helper the guest runs in place of the tree's, and
+# GROW_SPACE_DIR the directory the fixture is made in in place of the
+# suite's; tests/proofs/machine-grow-space.json runs faulty copies so, in a
+# directory it empties before each run. The host and the guest open only
+# disposable image files.
 # shellcheck disable=SC2016
 set -eu
 
@@ -30,49 +31,28 @@ if [ -z "${ARCH_BUILD:-}" ]; then
     export RACH2_QEMU
 fi
 QEMU=${RACH2_QEMU:-qemu-system-i386}
-if [ "${1:-}" != --texts ]; then
-    . "$repo/tests/system/runlock.sh"
-    runlock_hold "$repo" grow-space "$repo/tests/system/machine_grow_space.sh" "$@"
-fi
+helper=${GROW_SPACE_SCRIPT:-$repo/tools/dev/machine_grow.sh}
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" grow-space "$repo/tests/system/machine_grow_space.sh" "$@"
 cd "$repo"
 
-# space_mutant FAULT SCRIPT: print SCRIPT, the machine's grow helper, with its
-# work directory (ram-work) or its log (ram-log) moved to the RAM disk.
-space_mutant()
-{
-    case $1 in
-        ram-work) sed 's|mktemp -d "$store/machine-grow.XXXXXX"|mktemp -d /tmp/machine-grow.XXXXXX|' "$2" ;;
-        ram-log) sed 's|tee -a "$work/$log_name"|tee -a "/tmp/$log_name"|' "$2" ;;
-    esac
-}
-
-if [ "${1:-}" = --texts ]; then
-    for fault in ram-work ram-log; do
-        if [ ! -r tools/dev/machine_grow.sh ] ||
-            space_mutant "$fault" tools/dev/machine_grow.sh | cmp -s - tools/dev/machine_grow.sh; then
-            echo "grow-space: the $fault fault is not in tools/dev/machine_grow.sh" >&2
-            exit 1
-        fi
-    done
-    echo 'grow-space: texts: every fault is once in its source'
-    exit 0
-fi
-if [ "$#" -le 1 ]; then
-    mode=space
-    [ "$#" = 0 ] || { [ "$1" = --mutate ] && mode=space-mutate; } \
-        || { echo 'grow-space: usage: machine_grow_space.sh [--mutate | --texts]' >&2; exit 1; }
+if [ "$#" = 0 ]; then
     # The images are not built here: `tests/run grow` builds them, and a
     # direct run uses the same ones, the MBR disk among them, whose boot
-    # partition the grow saves as the suite's run does.
+    # partition the grow saves as the suite's run does. The fixture's
+    # directory is the suite's unless GROW_SPACE_DIR names one, and a tree
+    # that has not run the suite lacks it.
     if [ -f krffs/recovery_authorized_keys ]; then tag=-with-key; else tag=; fi
+    grow=${GROW_SPACE_DIR:-$ARCH_BUILD/images/grow}
+    mkdir -p "$grow"
     exec sh tests/system/grow_machine.sh build/tests/system/harness \
         "$ARCH_BUILD/images/rach2-recovery$tag.iso" "$ARCH_BUILD"/images/installer-test.disk \
-        "$ARCH_BUILD"/images/installer-test-mbr.disk "$ARCH_BUILD"/images/grow "$mode"
+        "$ARCH_BUILD"/images/installer-test-mbr.disk "$grow" space
 fi
-[ "$#" = 3 ] || exit 2
+[ "$#" = 3 ] && [ "$3" = space ] ||
+    { echo 'grow-space: usage: machine_grow_space.sh [HARNESS FIXTURE space]' >&2; exit 2; }
 harness=$1
 fixture=$2
-mode=$3
 fixture=$(CDPATH='' cd -- "$fixture" && pwd)
 proof=
 qpid=
@@ -108,9 +88,7 @@ echo "grow-space: logs: $proof"
 echo "$$" > "$proof/driver.pid"
 mkexfat="$repo/build/tests/host/mkexfatfixture"
 mkdir "$proof/scripts"
-cp "$repo/tools/dev/machine_grow.sh" "$proof/scripts/fixed.sh"
-space_mutant ram-work "$proof/scripts/fixed.sh" > "$proof/scripts/ram-work.sh"
-space_mutant ram-log "$proof/scripts/fixed.sh" > "$proof/scripts/ram-log.sh"
+cp "$helper" "$proof/scripts/fixed.sh"
 # full-log.sh fills the store's exFAT volume after the first restored range,
 # with the log ending on a cluster boundary, so that the next completion
 # record needs a new cluster.
@@ -129,7 +107,7 @@ awk '
     { print }
 ' "$proof/scripts/fixed.sh" > "$proof/scripts/full-log.sh"
 for script in "$proof/scripts/"*.sh; do sh -n "$script"; done
-tar -C "$proof/scripts" -cf "$proof/space-tools.tar" fixed.sh ram-work.sh ram-log.sh full-log.sh
+tar -C "$proof/scripts" -cf "$proof/space-tools.tar" fixed.sh full-log.sh
 # Add the proof scripts to a new store. No saved backup is modified.
 "$mkexfat" --make "$proof/store.vol" --sectors 262144 --offset 2048 \
     --add "seed.ext2=$fixture/seed.ext2" --add "grow-tools.tar=$fixture/grow-tools.tar" \
@@ -138,16 +116,20 @@ dd if=/dev/zero of="$proof/store.base" bs=1048576 count=1 2>"$proof/store-prefix
 cat "$proof/store.vol" >> "$proof/store.base"
 "$repo/build/tools/image/mkmbr" --lba "$proof/store.base" 2048:262144:07 > "$proof/store-mbr.log"
 
-# command_ok COMMAND WHAT: type COMMAND at the guest's shell and require it
-# to succeed; WHAT names it in a failure.
-command_ok()
+# command_try COMMAND WHAT: type COMMAND at the guest's shell and succeed
+# when it succeeds; WHAT names it when it does not return.
+command_try()
 {
     drive_type "{ $1; } && echo SPACE_\"\"STEP || echo SPACE_\"\"FAILED"
     command_start=$DRIVE_POS
     drive_expect 'SPACE_(STEP|FAILED)' 300 || fail "$2"
-    if tail -c +"$((command_start + 1))" "$DRIVE_LOG" | tr -d '\r' | grep -q '^SPACE_FAILED$'; then
-        fail "$2"
-    fi
+    ! tail -c +"$((command_start + 1))" "$DRIVE_LOG" | tr -d '\r' | grep -q '^SPACE_FAILED$'
+}
+# command_ok COMMAND WHAT: type COMMAND at the guest's shell and require it
+# to succeed; WHAT names it in a failure.
+command_ok()
+{
+    command_try "$1" "$2" || fail "$2"
 }
 # start PHASE: boot the recovery stick with a new overlay of the target and a
 # copy of the store, unpack the tools, and fill the RAM root until the file
@@ -225,7 +207,13 @@ boot_target()
 round_trip()
 {
     start "$1"
-    command_ok 'sh /tmp/grow-plan/fixed.sh save /dev/disk0 /mnt/grow /tmp/grow-plan > /mnt/grow/save.capture 2>&1' 'save with full RAM scratch'
+    if ! command_try 'sh /tmp/grow-plan/fixed.sh save /dev/disk0 /mnt/grow /tmp/grow-plan > /mnt/grow/save.capture 2>&1' 'save with full RAM scratch'; then
+        tail -c +"$((command_start + 1))" "$DRIVE_LOG" | tr -d '\r' >&2
+        command_ok 'umount -n /mnt/grow' 'unmounting after a failed save'
+        stop
+        check_target
+        fail "$1: the save with full RAM scratch failed; the target is as it was"
+    fi
     command_ok 'umount -n /mnt/grow' 'unmounting for host verification'
     host_backup
     command_ok 'report=$(sh /tmp/grow-plan/fixed.sh grow /dev/disk0 /mnt/grow /tmp/grow-plan 2>&1); rc=$?; printf "%s\n" "$report" > /mnt/grow/grow.capture && test "$rc" = 0' 'grow with accumulated work'
@@ -246,20 +234,3 @@ round_trip()
 }
 round_trip fixed
 round_trip full-log
-if [ "$mode" = space-mutate ]; then
-    for mutation in ram-work ram-log; do
-        start "$mutation"
-        drive_type "sh /tmp/grow-plan/$mutation.sh save /dev/disk0 /mnt/grow /tmp/grow-plan > /mnt/grow/mutation.capture 2>&1; test \"\$?\" != 0 && echo SPACE_MUTANT_\"\"FAILED"
-        drive_expect SPACE_MUTANT_FAILED 300 || fail "$mutation mutation passed"
-        case "$mutation" in
-            ram-work) diagnostic='creating work directory on' ;;
-            ram-log) diagnostic='writing .*original-check.log' ;;
-        esac
-        grep -q "$diagnostic" "$DRIVE_LOG" || fail "$mutation wrong failure"
-        command_ok 'umount -n /mnt/grow' 'unmounting after refusal'
-        stop
-        check_target
-        echo "grow-space: mutation: $mutation detected before a target write"
-        round_trip "$mutation-restored"
-    done
-fi

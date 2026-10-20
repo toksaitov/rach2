@@ -1,6 +1,6 @@
 #!/bin/sh
-# grow_machine.sh HARNESS ISO INSTALLER_DISK SEALED DIRECTORY [space |
-# space-mutate]: rehearse the grow procedure of tools/dev/machine_grow.sh in
+# grow_machine.sh HARNESS ISO INSTALLER_DISK SEALED DIRECTORY [space]:
+# rehearse the grow procedure of tools/dev/machine_grow.sh in
 # QEMU on a 64 MiB root, booted from the recovery stick, with the backups on
 # an exFAT store.
 #
@@ -19,8 +19,7 @@
 # repair of the boot environment is cut at a completed transfer, and a retry
 # must restore every byte and the target must boot without the stick; and
 # machine_grow_full_test.sh and machine_grow_space.sh run, on an MBR only.
-# `space` and `space-mutate` give the prepared directory to
-# machine_grow_space.sh.
+# `space` gives the prepared directory to machine_grow_space.sh.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -161,8 +160,8 @@ dd if=/dev/zero of="$work/store.img" bs=1048576 count=1 2>"$work/store-prefix.lo
 cat "$work/store.vol" >> "$work/store.img"
 "$mkmbr" --lba "$work/store.img" 2048:262144:07 > "$work/store-mbr.log"
 cp "$work/store.img" "$work/store.initial.img"
-if [ "${6:-}" = space ] || [ "${6:-}" = space-mutate ]; then
-    sh tests/system/machine_grow_space.sh "$harness" "$work" "$6"
+if [ "${6:-}" = space ]; then
+    sh tests/system/machine_grow_space.sh "$harness" "$work" space
     exit 0
 fi
 qemu-img create -q -f qcow2 -o cluster_size=4096 -F raw \
