@@ -603,20 +603,20 @@ static const char *boot_time_disagrees(void)
     struct timespec now, mono;
     struct stat st;
     char line[256];
-    long expected, btime = -1;
+    long long expected, btime = -1;
     FILE *f;
 
     if (clock_gettime(CLOCK_REALTIME, &now) != 0 || clock_gettime(CLOCK_MONOTONIC, &mono) != 0) {
         return "reading real time and time since boot";
     }
-    expected = (long)(now.tv_sec - mono.tv_sec);
+    expected = (long long)now.tv_sec - mono.tv_sec;
     f = fopen("/proc/stat", "r");
     if (f == NULL) {
         return "opening /proc/stat";
     }
     while (fgets(line, sizeof(line), f) != NULL) {
         if (strncmp(line, "btime ", 6) == 0) {
-            btime = strtol(line + 6, NULL, 10);
+            btime = strtoll(line + 6, NULL, 10);
         }
     }
     fclose(f);
@@ -626,7 +626,7 @@ static const char *boot_time_disagrees(void)
     if (stat("/dev/null", &st) != 0) {
         return "stat of /dev/null";
     }
-    if ((long)st.st_mtim.tv_sec != btime) {
+    if ((long long)st.st_mtim.tv_sec != btime) {
         return "/dev/null does not report the btime of /proc/stat";
     }
     return NULL;
