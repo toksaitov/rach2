@@ -19,7 +19,7 @@
  * the batching saves commands on the ordered write-through of a `sync`
  * mount. Both counts include fsync, and both files are reopened and checked.
  * `ext2probe cost-append` judges the appends alone, for
- * tests/system/ext2_batch_mutate.sh.
+ * tests/system/ext2_cost_rows.sh.
  *
  * A native run gives the fixture as a loop device (probe_args.h): the first
  * device that `loops=DEVICE,...` names is mounted in place of /dev/disk0p1,

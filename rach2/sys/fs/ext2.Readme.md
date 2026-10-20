@@ -103,7 +103,7 @@ A new inode belongs to the caller's effective user and group, or to the director
 ## Tests
 
 * `tests/run host` runs `tests/host/ext2_hosttest.c`, with the batch rows in `ext2_batch_cases.h` and `ext2_batch_lifecycle.h`, and `tests/host/ext2_reserve_hosttest.c`. The first mounts, reads and writes volumes the host's `mke2fs` makes, sound and damaged, checks signed and clamped timestamps through a remount, and stops all but one of its write sequences after every write on a `dirsync` mount to judge the stop by `e2fsck` and by the check.
-* `tests/proofs/ext2-batch.json` and `tests/proofs/ext2-reserve.json`, which `sh tools/etude/proof.sh` runs, and `sh tests/system/ext2_batch_mutate.sh` prove those rows and the batch's disk-command counts with compiled faults.
+* `tests/proofs/ext2-batch.json` and `tests/proofs/ext2-reserve.json`, which `sh tools/etude/proof.sh` runs, prove those rows with compiled faults, and [`tests/proofs/ext2-batch-probe.json`](../../../tests/proofs/ext2-batch-probe.json) proves the batch's disk-command counts on the machine, which `tests/system/ext2_cost_rows.sh` reads with ext2probe's `cost` and `cost-append` rows.
 * `tests/run ext2` runs file-system probes on an ext2 root and on a mounted volume, and boots os-real on an ext2 root through a kill, the check, a fault and recovery's `e2fsck`.
 * `tests/run large` writes a file past 4 GiB, and `tests/run selfbuild-ext2` builds the kernel on an ext2 root.
 
