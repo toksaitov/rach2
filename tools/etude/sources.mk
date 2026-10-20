@@ -21,6 +21,12 @@ ETUDE_HISTORY_COMPARE_SRC = tools/etude/history_compare.c tools/etude/compare.c 
                             tools/etude/history_json.c \
                             tools/etude/history_collect.c utils/sha256.c
 
+# history_failures, the attempts of a run that did not pass, which
+# tools/ci/report.sh gives in ci's issues.
+ETUDE_HISTORY_FAILURES_SRC = tools/etude/history_failures.c tools/etude/failures.c \
+                             tools/etude/history.c tools/etude/history_json.c \
+                             tools/etude/history_collect.c utils/sha256.c
+
 # etude-remote, the responder of remote execution on Linux and macOS.
 ETUDE_REMOTE_SRC = tools/etude/posix/etude_remote.c tools/etude/posix/serve.c \
                    tools/etude/posix/exec.c tools/etude/posix/keeper.c \

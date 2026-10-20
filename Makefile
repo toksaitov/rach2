@@ -459,6 +459,14 @@ $(ETUDECOMPARE): $(ETUDE_HISTORY_COMPARE_SRC) tools/etude/compare.h tools/etude/
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99
 
+# The attempts of a run that did not pass, read from its history
+# (tools/etude/failures.c), which tools/ci/report.sh gives in ci's issues.
+ETUDEFAILURES = build/tools/etude/history_failures
+$(ETUDEFAILURES): $(ETUDE_HISTORY_FAILURES_SRC) tools/etude/failures.h tools/etude/history_json.h \
+                  tools/etude/include/etude/history.h utils/sha256.h
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99
+
 # etude's responder of remote execution (tools/etude/posix/etude_remote.c),
 # built here so that `make` compiles it under the host flags.
 ETUDEREMOTE = build/tools/etude/etude-remote
@@ -1224,8 +1232,8 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(MKEXFATFIXTURE) $(DEADLINE) $(PCAPCHECK) $(MKFIXTURE) $(MKFATFIXTURE) \
              $(HOSTPEER) $(WAVCHECK) $(HARNESS) $(RUNTESTS) $(PTYDRIVE) $(RUNUTIL) \
              $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT) \
-             $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEREMOTE) $(ETUDETOOLING) $(ETUDELOAD) $(ETUDEPROOF) \
-             $(ETUDEHOST) $(ETUDEBRIDGE) $(PECHECK) $(ETUDESERIAL)
+             $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEFAILURES) $(ETUDEREMOTE) $(ETUDETOOLING) \
+             $(ETUDELOAD) $(ETUDEPROOF) $(ETUDEHOST) $(ETUDEBRIDGE) $(PECHECK) $(ETUDESERIAL)
 .PHONY: host-tools print-host-tools
 host-tools: $(HOST_TOOLS)
 print-host-tools:
