@@ -63,8 +63,10 @@
  * answer differently and -EPERM is the sticky rule's answer.
  *
  * An argument `ids=OLD:NEW,...` gives the ids that stand for 1000 and 1001
- * in a native run (probe_args.h), which runs the probe in a private copy of
- * the test image's root; without it the ids are 1000 and 1001.
+ * in a native run (probe_args.h); without it the ids are 1000 and 1001. A
+ * native run also gives `root=PATH`, since it runs the probe in a private
+ * root that lacks the manifest's pair; the probe then makes the two
+ * directories itself, with the modes the manifest gives them.
  *
  * Each denial is checked to have done nothing and each permission to have
  * been carried out, since an errno alone cannot tell a refusal from a
@@ -405,6 +407,10 @@ PROBE_SP_ENTRY;
 void probe_main(unsigned long *sp)
 {
     probe_args((int)sp[0], (char **)(sp + 1));
+    if (probe_arg("root", 0) != 0) {
+        mint_dir(STICKY, 01777);
+        mint_dir(PLAIN, 0777);
+    }
     want_mode("staged /st_sticky", STICKY, 01777);
     want_mode("staged /st_plain", PLAIN, 0777);
 

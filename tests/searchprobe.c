@@ -79,8 +79,10 @@
  * the signal in the low bits and would read as exit 0.
  *
  * An argument `ids=OLD:NEW,...` gives the id that stands for 1000 in a
- * native run (probe_args.h), which runs the probe in a private copy of the
- * test image's root; without it the id is 1000.
+ * native run (probe_args.h); without it the id is 1000. A native run also
+ * gives `root=PATH`, since it runs the probe in a private root that has the
+ * staged `/hello` and not the manifest's tree; the probe then makes the tree
+ * itself, with `prog` a copy of `/hello`.
  *
  * Prints "SEARCHPROBE OK" and exits 0 when every case passed; a failure
  * prints "SEARCHPROBE FAIL: " with the step and the answer it got, and exits
@@ -620,6 +622,34 @@ static void mint_dir(const char *path, u32 mode)
     want_eq("chmod a fixture directory", syscall3(SYS_CHMOD, (long)path, (int)mode, 0), 0);
 }
 
+/** Copy the file `src` to `dst` and give the copy `mode`. */
+static void mint_copy(const char *src, const char *dst, u32 mode)
+{
+    static char buf[4096];
+    int in = syscall3(SYS_OPEN, (long)src, O_RDONLY, 0);
+    int out = syscall3(SYS_CREAT, (long)dst, 0700, 0);
+    int n = 0;
+
+    while (in >= 0 && out >= 0 && (n = syscall3(SYS_READ, in, (long)buf, (int)sizeof(buf))) > 0 &&
+           syscall3(SYS_WRITE, out, (long)buf, n) == n) {
+    }
+    syscall3(SYS_CLOSE, in, 0, 0);
+    syscall3(SYS_CLOSE, out, 0, 0);
+    want_eq("copy /hello into the tree", in >= 0 && out >= 0 && n == 0, 1);
+    want_eq("chmod the copy", syscall3(SYS_CHMOD, (long)dst, (int)mode, 0), 0);
+}
+
+/** Make the tree the manifest stages, for a native run's private root. */
+static void stage_tree(void)
+{
+    mint_dir(DENIED, 0777);
+    mint_dir(DEEP, 0777);
+    mint_dir(SHARED, 0777);
+    mint_file(LEAF, 0644);
+    mint_file(DEEP_LEAF, 0644);
+    mint_copy("/hello", PROG, 0755);
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -638,6 +668,9 @@ PROBE_SP_ENTRY;
 void probe_main(unsigned long *sp)
 {
     probe_args((int)sp[0], (char **)(sp + 1));
+    if (probe_arg("root", 0) != 0) {
+        stage_tree();
+    }
     /* The staged tree is as the manifest declares it. */
     want_mode("staged /sp_denied", DENIED, 0777);
     want_mode("staged /sp_denied/deep", DEEP, 0777);

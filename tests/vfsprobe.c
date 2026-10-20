@@ -14,9 +14,10 @@
  * Needs: root privilege, a writable KRFFS or ext2 root, mounted /proc and
  * /dev, and absent /vp and /procx paths. The root type in /proc/mounts selects
  * the hard-link result, the statfs magic and the inode counts. An unknown
- * root type fails. A native run (probe_args.h) gives the type as `root=krffs`
- * or `root=ext2` instead, since it runs the probe in a private root, for
- * which /proc/mounts lists the machine's own root.
+ * root type fails. A native run (probe_args.h) runs the probe in a private
+ * root and gives its directory as `root=PATH`, which is the mount point
+ * /proc/mounts lists it at; the probe then reads the type of that line in
+ * place of the line of /.
  *
  * Prints "VFSPROBE OK". Freestanding; direct system calls (probe.h).
  */
@@ -83,9 +84,21 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
+/** The length of the mount point `point` at `p` in the line that ends at
+ * `end`, with the space after it, or 0 when the field is not `point`. */
+static int mount_point_is(const char *p, int end, const char *point)
+{
+    int i;
+
+    for (i = 0; point[i] != '\0' && i < end && p[i] == point[i]; i++) {
+    }
+    return point[i] == '\0' && i < end && p[i] == ' ' ? i + 1 : 0;
+}
+
 /**
- * Read the root type from the argument `root`, or else from the mount table,
- * independently of statfs, and return its statfs magic.
+ * Read the root type from the mount table, independently of statfs, and
+ * return its statfs magic: the type of the line whose mount point is the
+ * argument `root`, or / without it.
  *
  * Match the mountpoint and type fields of a complete line. Missing or
  * unsupported roots fail before the probe creates files.
@@ -93,22 +106,9 @@ static void fail(const char *why)
 static unsigned root_magic(void)
 {
     char buf[2048];
-    const char *given = probe_arg("root", 0);
-    int fd, n, start, end, p;
+    const char *point = probe_arg("root", "/");
+    int fd, n, start, end, p, len;
 
-    if (given != 0) {
-        if (given[0] == 'k' && given[1] == 'r' && given[2] == 'f' && given[3] == 'f' &&
-            given[4] == 's' && given[5] == '\0') {
-            puts("vfsprobe: root: krffs");
-            return STATFS_MAGIC_KRFFS;
-        }
-        if (given[0] == 'e' && given[1] == 'x' && given[2] == 't' && given[3] == '2' &&
-            given[4] == '\0') {
-            puts("vfsprobe: root: ext2");
-            return STATFS_MAGIC_EXT2;
-        }
-        fail("root= must name krffs or ext2");
-    }
     fd = syscall3(SYS_OPEN, (long)"/proc/mounts", O_RDONLY, 0);
     if (fd < 0) {
         fail("open /proc/mounts");
@@ -123,10 +123,11 @@ static unsigned root_magic(void)
         }
         for (p = start; p < end && buf[p] != ' '; p++) {
         }
-        if (p + 3 >= end || buf[p + 1] != '/' || buf[p + 2] != ' ') {
+        len = p + 1 < end ? mount_point_is(buf + p + 1, end - p - 1, point) : 0;
+        if (len == 0 || p + 1 + len >= end) {
             continue;
         }
-        p += 3;
+        p += 1 + len;
         if (end - p >= 6 && buf[p] == 'k' && buf[p + 1] == 'r' && buf[p + 2] == 'f' &&
             buf[p + 3] == 'f' && buf[p + 4] == 's' && buf[p + 5] == ' ') {
             puts("vfsprobe: root: krffs");
@@ -334,6 +335,14 @@ int stat_marked_file_dotdot(void)
 #endif
 }
 
+/** Keep the arguments of the initial stack `sp` (probe_args.h) and return
+ * the root type's magic (`root_magic`). */
+static unsigned start(unsigned long *sp)
+{
+    probe_args((int)sp[0], (char **)(sp + 1));
+    return root_magic();
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -351,10 +360,8 @@ void probe_main(unsigned long *sp)
 {
     int fd, dfd, rc;
     char cwd[64];
-    unsigned magic;
+    unsigned magic = start(sp);
 
-    probe_args((int)sp[0], (char **)(sp + 1));
-    magic = root_magic();
     if (syscall2(SYS_MKDIR, (long)"/vp", 0755) != 0) {
         fail("mkdir /vp");
     }
