@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "proof": "faulttexts",
+  "summary": "faulttexts_test.sh against a private copy of tools/verify/faulttexts.sh, each fault failing the row of what it lets pass or print",
+  "tree": "private",
+  "sources": [
+    "tools/verify/faulttexts.sh"
+  ],
+  "artifacts": [
+    "${WORK}/faulttexts.sh"
+  ],
+  "build": {
+    "argv": [
+      "/bin/cp",
+      "${SRC}/tools/verify/faulttexts.sh",
+      "${WORK}/faulttexts.sh"
+    ],
+    "bound_s": 10
+  },
+  "test": {
+    "argv": [
+      "/usr/bin/env",
+      "FAULTTEXTS=${WORK}/faulttexts.sh",
+      "sh",
+      "tests/system/faulttexts_test.sh"
+    ],
+    "bound_s": 120
+  },
+  "faults": [
+    {
+      "name": "glob",
+      "summary": "a pattern that matched no file printed an error",
+      "edits": [
+        {
+          "file": "tools/verify/faulttexts.sh",
+          "find": "[ -f \"$script\" ] && echo \"$script\"",
+          "replace": "ls -d \"$script\" >/dev/null; [ -f \"$script\" ] && echo \"$script\""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "faulttexts-test: texts in their sources: output beside the verdict"
+        ]
+      }
+    },
+    {
+      "name": "mutate",
+      "summary": "a script with a --mutate mode was left out",
+      "edits": [
+        {
+          "file": "tools/verify/faulttexts.sh",
+          "find": "grep -q -e '--mutate)' -e '= --mutate' -e \"'--mutate'\" \"$script\" &&",
+          "replace": "false &&"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "faulttexts-test: texts in their sources: output beside the verdict"
+        ]
+      }
+    },
+    {
+      "name": "script",
+      "summary": "a script whose fault text had changed passed",
+      "edits": [
+        {
+          "file": "tools/verify/faulttexts.sh",
+          "find": "if sh \"$script\" --texts >\"$log\" 2>&1 </dev/null; then",
+          "replace": "if sh \"$script\" --texts >\"$log\" 2>&1 </dev/null || :; then"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "faulttexts-test: changed script text: expected 1, got 0"
+        ]
+      }
+    },
+    {
+      "name": "catalogue",
+      "summary": "a catalogue whose fault text had changed passed",
+      "edits": [
+        {
+          "file": "tools/verify/faulttexts.sh",
+          "find": "\"$proof\" -t . --texts \"$catalogue\" >\"$log\" 2>&1 </dev/null; then",
+          "replace": "\"$proof\" -t . --texts \"$catalogue\" >\"$log\" 2>&1 </dev/null || :; then"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "faulttexts-test: changed catalogue text: expected 1, got 0"
+        ]
+      }
+    },
+    {
+      "name": "notexts",
+      "summary": "a script without --texts was run",
+      "edits": [
+        {
+          "file": "tools/verify/faulttexts.sh",
+          "find": "if ! grep -q -e '--texts' \"$script\"; then",
+          "replace": "if false; then"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "faulttexts-test: script without --texts: expected 1, got 0"
+        ]
+      }
+    },
+    {
+      "name": "unbuilt",
+      "summary": "an unbuilt driver was run",
+      "edits": [
+        {
+          "file": "tools/verify/faulttexts.sh",
+          "find": "if [ ! -x \"$proof\" ]; then",
+          "replace": "if false; then"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "faulttexts-test: unbuilt driver: no line: faulttexts: build/tools/etude/etude-proof: not built; make build/tools/etude/etude-proof"
+        ]
+      }
+    }
+  ]
+}

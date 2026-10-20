@@ -9,8 +9,8 @@
 # parts that need no image: its private log directory
 # (tests/system/verify_temp_test.sh), the probe assignments (probecheck.sh
 # and its test), the native cases (nativecheck.sh and its test) and the
-# fault texts (faulttexts.sh). A preflight then looks for every tool the
-# steps run, and a missing tool fails the run. The steps are:
+# fault texts (faulttexts.sh and its test). A preflight then looks for every
+# tool the steps run, and a missing tool fails the run. The steps are:
 #
 #   1. The kernel build, under -Werror.
 #   2. cppcheck (warning, style, performance, portability) with
@@ -168,6 +168,7 @@ if ! sh tests/system/verify_temp_test.sh ||
    ! sh tests/system/probecheck_test.sh ||
    ! sh tools/verify/nativecheck.sh ||
    ! sh tests/system/nativecheck_test.sh ||
+   ! sh tests/system/faulttexts_test.sh ||
    ! sh tools/verify/faulttexts.sh; then
     fail=1
 fi

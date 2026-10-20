@@ -13,17 +13,25 @@
 # without a --texts mode is counted as a failure and not run, since it would
 # start its proof. The catalogues of etude's proof driver, tests/proofs/*.json
 # and the example of the contract, are checked by the driver's own --texts,
-# which needs build/tools/etude/etude-proof built.
+# which needs build/tools/etude/etude-proof built. A pattern that matches no
+# file adds nothing. FAULTTEXTS_ROOT, when set, is the tree to check in place
+# of this one.
 #
 # Usage: sh tools/verify/faulttexts.sh
 set -u
-repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+repo=${FAULTTEXTS_ROOT:-$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)}
 cd "$repo" || exit 1
 scripts=$( {
-    ls tests/system/*_mutate.sh tests/system/accept/*_mutate.sh tests/host/*_mutate.sh \
-        tools/dev/poll_kernels.sh
-    grep -l -e '--mutate)' -e '= --mutate' -e "'--mutate'" tests/system/*.sh \
-        tests/system/accept/*.sh tests/host/*.sh tools/*/*.sh
+    for script in tests/system/*_mutate.sh tests/system/accept/*_mutate.sh \
+        tests/host/*_mutate.sh tools/dev/poll_kernels.sh; do
+        [ -f "$script" ] && echo "$script"
+    done
+    for script in tests/system/*.sh tests/system/accept/*.sh tests/host/*.sh \
+        tools/*/*.sh; do
+        [ -f "$script" ] &&
+            grep -q -e '--mutate)' -e '= --mutate' -e "'--mutate'" "$script" &&
+            echo "$script"
+    done
 } | grep -v '^tools/verify/faulttexts\.sh$' | sort -u)
 log=
 trap 'rm -f ${log:+"$log"}' EXIT
