@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "proof": "usb-latency-guest",
+  "summary": "the USB suite's two wake-to-dispatch rows of usb_latency.sh, on harness kernels with faults in the preemption and the service point",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/arch/x86/isr.c",
+    "rach2/sys/syscall.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make harness-kernel test-image build/tests/system/harness && sh tests/proofs/guest.sh copy ${WORK} rach2-harness/kernel images/test.krffs"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "exec",
+      "${WORK}",
+      "/usr/bin/env",
+      "RACH2_USB_LOG_PREFIX=${WORK}/usb",
+      "sh",
+      "tests/system/usb_latency.sh",
+      "${WORK}/kernel",
+      "${WORK}/test.krffs",
+      "build/tests/system/harness"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "usb-test: invalid dispatch record: "
+  },
+  "faults": [
+    {
+      "name": "preempt",
+      "summary": "the preemption after a device interrupt taken out, so a reader the keyboard woke waits for the timer, whose tick pumps the controller first, and the spin row fails its count of pumps",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/isr.c",
+          "find": "        sched_preempt(); /* a woken reader runs now, or at the call's exit */\n",
+          "replace": ""
+        },
+        {
+          "file": "rach2/sys/arch/x86/isr.c",
+          "find": "    if (params->vector != 32) {\n        sched_preempt();\n    }\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "usb-test: invalid dispatch record: spin"
+        ]
+      }
+    },
+    {
+      "name": "service",
+      "summary": "the service point in a large random read taken out, so the reader waits for the whole eight-mebibyte call and the random row fails its count of bytes",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "        if ((done & 4095u) == 0) {\n            sched_service_point();\n        }\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "usb-test: invalid dispatch record: random"
+        ]
+      }
+    }
+  ]
+}

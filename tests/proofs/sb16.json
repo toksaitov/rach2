@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "proof": "sb16",
+  "summary": "the audio suite's SB16 row: the scale recorded from QEMU's SB16 and judged by wavcheck, at the host's speed and under an instruction clock of 512 ns an instruction, at which the device plays periods of the buffer again",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/audio/audio_debug.c",
+    "rach2/sys/audio/sb16.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 build/tests/system/harness build/tests/system/wavcheck && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/sb16.sh",
+      "${WORK}"
+    ],
+    "bound_s": 600,
+    "fail_prefix": "sb16-proof: fail: "
+  },
+  "faults": [
+    {
+      "name": "rate",
+      "summary": "the SB16's 44100 Hz rate taken out of audio_debug.c, so `audio test scale` cannot start the audio",
+      "edits": [
+        {
+          "file": "rach2/sys/audio/audio_debug.c",
+          "find": "    if (audio->type == AUDIO_DRIVER_SB16) {\n        sample_rate = 44100;\n    }",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "sb16-proof: fail: host: AUDIO_START failed.",
+          "sb16-proof: fail: host: the boot, status 1",
+          "sb16-proof: fail: slow: AUDIO_START failed.",
+          "sb16-proof: fail: slow: the boot, status 1"
+        ]
+      }
+    },
+    {
+      "name": "refill",
+      "summary": "sb16.c filling its buffer from the ring and never from the callback, so the scale reports a stall",
+      "edits": [
+        {
+          "file": "rach2/sys/audio/sb16.c",
+          "find": "    if (user_callback) {\n        user_callback(fill_buffer, period_bytes);\n    } else {\n        ring_read_to_buffer(fill_buffer, period_bytes);\n    }",
+          "replace": "    ring_read_to_buffer(fill_buffer, period_bytes);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "sb16-proof: fail: host: audio: stalled",
+          "sb16-proof: fail: host: the boot, status 1",
+          "sb16-proof: fail: slow: audio: stalled",
+          "sb16-proof: fail: slow: the boot, status 1"
+        ]
+      }
+    },
+    {
+      "name": "stereo",
+      "summary": "the stereo bit left out of the DSP's mode, so the device plays each channel's sample as a frame of its own and wavcheck finds the tones an octave low",
+      "edits": [
+        {
+          "file": "rach2/sys/audio/sb16.c",
+          "find": "        mode |= 0x20; /* stereo */",
+          "replace": "        (void)0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "sb16-proof: fail: host: notes are not what was asked for",
+          "sb16-proof: fail: slow: notes are not what was asked for"
+        ]
+      }
+    }
+  ]
+}
