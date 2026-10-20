@@ -1,1 +1,83 @@
 # The native cases of the musl programs (Readme.md).
+case musl/addusermusl root:ext2-dir ids:1000 -- musl/addusermusl
+case musl/atcallmusl root:ext2-dir -- musl/atcallmusl
+case musl/authmusl root:ext2-dir ids:1000 utsns -- musl/authmusl machine=native
+case musl/bindholdmusl root:krffs -- musl/bindholdmusl
+case musl/budgetmusl -- musl/budgetmusl
+case musl/callsmusl root:krffs ids:4242,4243 ports:47 alone -- musl/callsmusl machine=native
+case musl/capmusl ids:1000 -- musl/capmusl
+case musl/catfile root:ext2-dir -- musl/catfile
+case musl/chrootmusl root:krffs ids:1000 -- musl/chrootmusl
+case musl/clockidmusl -- musl/clockidmusl machine=native
+case musl/clockmusl -- musl/clockmusl machine=native
+case musl/clonemusl -- musl/clonemusl
+case musl/coremusl tmpfs:16M -- musl/coremusl dir=tmpfs/coremusl.d
+case musl/cowfork -- musl/cowfork
+case musl/cputimemusl -- musl/cputimemusl
+case musl/ctrlcmusl pty:ctrlcmusl.in end:signal:2 -- musl/ctrlcmusl machine=native
+case musl/devtest pty -- musl/devtest
+case musl/direntmusl.ext2 mountns ids:1000 -- musl/direntmusl .
+case musl/direntmusl.krffs root:krffs ids:1000 -- musl/direntmusl
+case musl/epollmusl ports:7470 -- musl/epollmusl
+case musl/execargmusl root:ext2-dir -- musl/execargmusl
+case musl/fdcallmusl root:ext2-dir pty -- musl/fdcallmusl
+case musl/fdexecmusl root:ext2-dir ids:1000 -- musl/fdexecmusl
+case musl/fifomusl root:krffs -- musl/fifomusl
+case musl/hdaprobe -- musl/hdaprobe machine=native
+case musl/hello -- musl/hello
+case musl/inotifymusl tmpfs:1M -- musl/inotifymusl dir=tmpfs/inotifymusl
+case musl/ipcmusl ipcns -- musl/ipcmusl machine=native
+case musl/ishmusl root:ext2-dir -- musl/ishmusl
+case musl/lchownmusl.ext2 -- musl/lchownmusl .
+case musl/lchownmusl.krffs root:krffs -- musl/lchownmusl
+case musl/lockmusl root:krffs -- musl/lockmusl
+case musl/loginmusl root:ext2-dir ids:1000 -- musl/loginmusl
+case musl/mallocqsort -- musl/mallocqsort
+case musl/mapmusl.ext2 root:ext2-dir -- musl/mapmusl
+case musl/mapmusl.krffs root:krffs -- musl/mapmusl
+case musl/memfdmusl root:krffs -- musl/memfdmusl
+case musl/mknodmusl root:krffs ids:1000 -- musl/mknodmusl
+case musl/netlinkmusl -- musl/netlinkmusl machine=native
+case musl/nsmusl root:ext2-dir ids:1000 ipcns -- musl/nsmusl
+case musl/ofdmusl root:ext2-dir -- musl/ofdmusl
+case musl/opathmusl root:ext2-dir ids:1000 -- musl/opathmusl machine=native
+case musl/passwdmusl root:ext2-dir ids:1000,1001 -- musl/passwdmusl machine=native
+case musl/pathmaxmusl root:krffs -- musl/pathmaxmusl
+case musl/permmusl root:krffs ids:1000 -- musl/permmusl
+case musl/pipemusl -- musl/pipemusl
+case musl/pollmusl -- musl/pollmusl
+case musl/prctlmusl root:ext2-dir ids:1000 -- musl/prctlmusl
+case musl/preadmusl root:ext2-dir -- musl/preadmusl
+case musl/proclinkmusl root:ext2-dir ids:1000,1001 -- musl/proclinkmusl
+case musl/ptracemusl -- musl/ptracemusl machine=native
+case musl/ptymusl -- musl/ptymusl
+case musl/pwauthmusl root:krffs ids:1000 -- musl/pwauthmusl
+case musl/readvmusl root:ext2-dir -- musl/readvmusl
+case musl/rngmusl -- musl/rngmusl
+case musl/schedmusl root:ext2-dir ids:1000 -- musl/schedmusl
+case musl/seccompmusl ids:1000 -- musl/seccompmusl
+case musl/sigframemusl -- musl/sigframemusl
+case musl/sigmusl -- musl/sigmusl
+case musl/smpmusl -- musl/smpmusl 4 machine=native
+case musl/sockfillmusl ports:7000 -- musl/sockfillmusl
+case musl/sockflagmusl ports:7461 -- musl/sockflagmusl
+case musl/spawnmusl -- musl/spawnmusl
+case musl/stackmusl root:ext2-dir ids:1000 -- musl/stackmusl
+case musl/stampmusl root:krffs -- musl/stampmusl
+case musl/statfsmusl root:ext2-dir ipcns -- musl/statfsmusl
+case musl/statmusl root:ext2-dir -- musl/statmusl
+case musl/statxmusl root:ext2-dir -- musl/statxmusl
+case musl/suidmusl root:ext2-dir ids:1000 -- musl/suidmusl
+case musl/tcpsendrecv peer:echo -- musl/tcpsendrecv
+case musl/textbusymusl root:krffs -- musl/textbusymusl
+case musl/threadmusl root:ext2-dir ports:7480,7481 -- musl/threadmusl machine=native
+case musl/threadmusl.framebuffer console -- musl/threadmusl row=framebuffer
+case musl/timemusl -- musl/timemusl
+case musl/timerfdmusl -- musl/timerfdmusl
+case musl/tmpfsmusl root:krffs -- musl/tmpfsmusl
+case musl/truncmusl root:krffs ids:1000 -- musl/truncmusl
+case musl/ttymusl pty:ttymusl.in -- musl/ttymusl
+case musl/unixmusl root:krffs ids:1000,65534 -- musl/unixmusl
+case musl/vforkmusl root:ext2-dir -- musl/vforkmusl
+case musl/vmamusl -- musl/vmamusl
+case musl/waitidmusl -- musl/waitidmusl
