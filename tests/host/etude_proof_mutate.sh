@@ -9,8 +9,11 @@
 # left no newer than an artifact whose time is ahead, a stopped proof that
 # keeps its work or leaves its faults in the tree, commands given the
 # driver's TMPDIR, a relative work path left relative, a work that keeps an
-# unwritable directory after a pass, and a work left after a pass with no
-# line that names it must each be found.
+# unwritable directory after a pass, a work left after a pass with no line
+# that names it, builds given TMPDIRs of different paths, a build's TMPDIR
+# removed in place of being kept for its phase, a Mach-O artifact compared
+# whole, one compared with its debug map's object paths or times, its UUID or
+# its code signature, and one compared without its code must each be found.
 #
 # Usage: sh tests/host/etude_proof_mutate.sh [--texts]
 set -eu
@@ -53,6 +56,21 @@ faults = {
     'writable': ('    chmod(path, (st.st_mode & 07777) | S_IRWXU);\n', ''),
     'unremoved': ('        if (remove_tree(r->work) != 0)\n',
                   '        if (remove_tree(r->work) != 0 && 0)\n'),
+    'build-tmp': ('        tmp = build ? join(r->work, "build.tmp") : text_copy(kept);\n',
+                  '        tmp = text_copy(kept);\n'),
+    'renamed': ('        if (build && rename(tmp, kept) != 0)\n',
+                '        if (build && rmdir(tmp) != 0)\n'),
+    'compared': ('            memcpy(r->base[i], r->cmp[i], sizeof(r->base[i]));\n'
+                 '        else if (strcmp(r->base[i], r->cmp[i]) == 0)\n',
+                 '            memcpy(r->base[i], r->dig[i], sizeof(r->base[i]));\n'
+                 '        else if (strcmp(r->base[i], r->dig[i]) == 0)\n'),
+    'oso': ('        memset(s, 0, (size_t)(end - s));\n', ''),
+    'time': ('        memset(sym + 8, 0, 8);\n', ''),
+    'uuid': ('(size < 24 || blank(buf, len, (uint32_t)at + 8, 16) != 0)', '(size < 24)'),
+    'signature': ('(size < 16 || blank(buf, len, le32(cmd + 8), le32(cmd + 12)) != 0)',
+                  '(size < 16)'),
+    'code': ('(size < 16 || blank(buf, len, le32(cmd + 8), le32(cmd + 12)) != 0)',
+             '(size < 16 || blank(buf, len, 0, (uint32_t)len) != 0)'),
 }
 old, new = faults[sys.argv[2]]
 if source.count(old) != 1:
@@ -67,10 +85,13 @@ if [ "${1:-}" = --texts ]; then
     export RACH2_FAULT_TEXTS
     apply_fault tools/etude/proof.c once
     for fault in unreached restored passed status lines only kept held newer stop-work \
-        stop-restore tmpdir absolute writable unremoved; do
+        stop-restore tmpdir absolute writable unremoved build-tmp renamed compared; do
         apply_fault tools/etude/posix/proof.c "$fault"
     done
-    echo 'etude-proof-mutation: texts: all sixteen faults found once'
+    for fault in oso time uuid signature code; do
+        apply_fault tools/etude/macho.c "$fault"
+    done
+    echo 'etude-proof-mutation: texts: all twenty-four faults found once'
     exit 0
 fi
 . "$repo/tests/system/runlock.sh"
@@ -104,6 +125,7 @@ restore()
 {
     mkdir -p "$work/posix"
     cp tools/etude/proof.c "$work/proof.c"
+    cp tools/etude/macho.c "$work/macho.c"
     cp tools/etude/posix/proof.c "$work/posix/proof.c"
 }
 
@@ -118,7 +140,7 @@ run_phase()
         -Wall -Wextra -Werror -g -O1 -fsanitize=address,undefined \
         -fno-sanitize-recover=all -I tests/host/compat -I utils -I tools/etude/include \
         -I tools/etude -I tools/etude/posix tests/host/etude_proof_hosttest.c "$work/proof.c" \
-        "$work/posix/proof.c" tools/etude/json.c tools/etude/schema.c \
+        "$work/posix/proof.c" "$work/macho.c" tools/etude/json.c tools/etude/schema.c \
         tools/etude/posix/store.c tools/etude/capture.c tools/etude/posix/exec.c \
         tools/etude/posix/keeper.c tools/etude/posix/process.c utils/sha256.c \
         -o "$work/$phase" >"$work/$phase.compile.log" 2>&1 || {
@@ -163,5 +185,13 @@ prove posix/proof.c tmpdir "scratch: the faulty test's TMPDIR is its own in the 
 prove posix/proof.c absolute 'relative: a relative work directory gives the commands an absolute'
 prove posix/proof.c writable 'scratch: the work is removed after a pass, with an unwritable'
 prove posix/proof.c unremoved 'unremoved: a work that cannot be removed after a pass is named'
+prove posix/proof.c build-tmp "scratch: every build's TMPDIR has one path in the work"
+prove posix/proof.c renamed "scratch: the restored build's TMPDIR is kept as its own"
+prove posix/proof.c compared 'macho: a restored Mach-O artifact whose debug map, UUID and'
+prove macho.c oso 'macho: a restored Mach-O artifact whose debug map, UUID and'
+prove macho.c time 'macho: a restored Mach-O artifact whose debug map, UUID and'
+prove macho.c uuid 'macho: a restored Mach-O artifact whose debug map, UUID and'
+prove macho.c signature 'macho: a restored Mach-O artifact whose debug map, UUID and'
+prove macho.c code 'macho: a restored Mach-O artifact whose code differs is refused'
 restore
 run_phase restored 0

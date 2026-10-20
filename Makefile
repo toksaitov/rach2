@@ -549,7 +549,8 @@ ETUDEPROOF = build/tools/etude/etude-proof
 $(ETUDEPROOF): $(ETUDE_PROOF_SRC) tools/etude/include/etude/proof.h \
                tools/etude/include/etude/artifact.h tools/etude/include/etude/exec.h \
                tools/etude/posix/posix.h tools/etude/posix/store.h tools/etude/proof_file.h \
-               tools/etude/capture.h tools/etude/json.h tools/etude/schema.h utils/sha256.h
+               tools/etude/capture.h tools/etude/json.h tools/etude/macho.h tools/etude/schema.h \
+               utils/sha256.h
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Iutils

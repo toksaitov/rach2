@@ -19,6 +19,7 @@
 #include "etude/artifact.h"
 #include "etude/exec.h"
 #include "etude/proof.h"
+#include "macho.h"
 #include "posix.h"
 #include "proof_file.h"
 
@@ -69,8 +70,9 @@ struct run {
     char *work;
     char *srcroot;
     struct src *src;
-    char (*base)[ETUDE_DIGEST_HEX + 1]; /* the unmodified artifacts' digests */
-    char (*dig)[ETUDE_DIGEST_HEX + 1];  /* the phase's */
+    char (*base)[ETUDE_DIGEST_HEX + 1]; /* the unmodified artifacts', as compared */
+    char (*dig)[ETUDE_DIGEST_HEX + 1];  /* the phase's, in the store */
+    char (*cmp)[ETUDE_DIGEST_HEX + 1];  /* the phase's, as compared */
     char phase[96];
 };
 
@@ -528,11 +530,15 @@ static void env_free(char **env)
 
 /**
  * Run command `argv`, named `what`, in the tree's root under `bound_us`, with
- * the new directory `WORK/PHASE.WHAT.tmp` as its `TMPDIR`, and say in `*x`
- * how it ended.
+ * a new directory as its `TMPDIR`, and say in `*x` how it ended.
  *
- * @return 0, -1 with errno set when it did not start, or
- *         ETUDE_PROOF_STOPPED.
+ * The directory is `WORK/PHASE.WHAT.tmp`. A build runs in `WORK/build.tmp`,
+ * the same path in every phase, and the directory is renamed when the build
+ * ends: a compiler may write the path of its scratch into what it makes, as
+ * Apple's linker does in a debug map.
+ *
+ * @return 0, -1 with errno set when it did not start or its directory could
+ *         not be renamed, or ETUDE_PROOF_STOPPED.
  */
 static int run_command(const struct run *r, char *const *argv, uint64_t bound_us, const char *what,
                        struct ran *x)
@@ -540,15 +546,17 @@ static int run_command(const struct run *r, char *const *argv, uint64_t bound_us
     struct etude_exec_spec spec;
     struct etude_proc *p = NULL;
     char **args = expand_list(r, argv), **env = NULL;
-    char id[160], name[160], *tmp;
-    int e = 0;
+    char id[160], name[160], *tmp = NULL, *kept;
+    int build = strcmp(what, "build") == 0, e = 0;
 
     memset(x, 0, sizeof(*x));
     snprintf(name, sizeof name, "%s.%s.tmp", r->phase, what);
-    tmp = join(r->work, name);
+    kept = join(r->work, name);
+    if (kept != NULL)
+        tmp = build ? join(r->work, "build.tmp") : text_copy(kept);
     if (tmp != NULL)
         env = command_env(tmp);
-    if (args == NULL || env == NULL)
+    if (args == NULL || env == NULL || kept == NULL)
         e = ENOMEM;
     else if (mkdir(tmp, 0700) != 0)
         e = errno;
@@ -566,15 +574,19 @@ static int run_command(const struct run *r, char *const *argv, uint64_t bound_us
     }
     list_free(args);
     env_free(env);
-    free(tmp);
-    if (e != 0) {
-        errno = e;
-        return -1;
+    if (e == 0) {
+        await(r, p, bound_us, x);
+        collect(r, p, what, x);
+        etude_proc_free(p);
+        if (build && rename(tmp, kept) != 0)
+            e = errno;
     }
-    await(r, p, bound_us, x);
-    collect(r, p, what, x);
-    etude_proc_free(p);
-    return *r->stop ? ETUDE_PROOF_STOPPED : 0;
+    free(tmp);
+    free(kept);
+    if (*r->stop && e == 0)
+        return ETUDE_PROOF_STOPPED;
+    errno = e;
+    return e != 0 ? -1 : 0;
 }
 
 /** Free what a command gave. */
@@ -673,14 +685,18 @@ static int judge_fault(const struct run *r, const struct etude_fault *f, const s
     return 0;
 }
 
-/** Keep the phase's artifacts in the store and their digests; 0, 1 or 2. */
+/**
+ * Keep the phase's artifacts in the store and their digests, with the digest
+ * each is compared by: macho_digest's for a Mach-O file, the store's for any
+ * other; 0, 1 or 2.
+ */
 static int keep_artifacts(const struct run *r)
 {
     size_t i;
 
     for (i = 0; i < r->p->nartifacts; i++) {
         char *path = expand(r, r->p->artifacts[i]);
-        int e;
+        int e, m;
 
         if (path == NULL)
             return sys_error(r, "an artifact's path", ENOMEM);
@@ -693,6 +709,14 @@ static int keep_artifacts(const struct run *r)
             free(path);
             return e == ENOENT ? 1 : 2;
         }
+        m = macho_digest(path, r->cmp[i]);
+        if (m < 0) {
+            sys_error(r, path, errno);
+            free(path);
+            return 2;
+        }
+        if (m == 1)
+            memcpy(r->cmp[i], r->dig[i], sizeof(r->cmp[i]));
         free(path);
     }
     return 0;
@@ -705,8 +729,8 @@ static int judge_artifacts(const struct run *r, enum kind kind)
 
     for (i = 0; i < r->p->nartifacts; i++) {
         if (kind == BASE)
-            memcpy(r->base[i], r->dig[i], sizeof(r->base[i]));
-        else if (strcmp(r->base[i], r->dig[i]) == 0)
+            memcpy(r->base[i], r->cmp[i], sizeof(r->base[i]));
+        else if (strcmp(r->base[i], r->cmp[i]) == 0)
             same++;
         else if (kind == RESTORED)
             return fail(r, "the restored %s differs from the base's", r->p->artifacts[i]);
@@ -753,7 +777,7 @@ static int phase(const struct run *r, enum kind kind, const struct etude_fault *
     if (status == 0)
         status = sources_kept(r);
     if (status < 0)
-        return sys_error(r, "a command did not start", errno);
+        return sys_error(r, "a command did not start, or its TMPDIR was not renamed", errno);
     if (status == 0)
         report(r, kind == FAULT ? "the test failed as the fault declares" : "the test passed");
     return status;
@@ -934,8 +958,9 @@ static int open_run(struct run *r)
     r->ex = etude_exec_new();
     r->base = calloc(r->p->nartifacts, sizeof(*r->base));
     r->dig = calloc(r->p->nartifacts, sizeof(*r->dig));
+    r->cmp = calloc(r->p->nartifacts, sizeof(*r->cmp));
     if (r->srcroot == NULL || r->store == NULL || r->ex == NULL || r->base == NULL ||
-        r->dig == NULL)
+        r->dig == NULL || r->cmp == NULL)
         return sys_error(r, "the run", errno != 0 ? errno : ENOMEM);
     fprintf(r->o->log, "etude-proof: %s: saved: %s/saved\n", r->p->name, r->work);
     return 0;
@@ -976,6 +1001,7 @@ static void close_run(struct run *r, int status)
     free(r->srcroot);
     free(r->base);
     free(r->dig);
+    free(r->cmp);
 }
 
 /** Run the base phase and each fault asked for; 0, 1, 2 or stopped. */

@@ -3,7 +3,7 @@
  * tools/etude/posix/proof.c) on toy proofs whose builds and tests are shell
  * commands over two small sources.
  *
- * host-deps: tools/etude/proof.c tools/etude/posix/proof.c
+ * host-deps: tools/etude/proof.c tools/etude/posix/proof.c tools/etude/macho.c
  * host-deps: tools/etude/json.c tools/etude/schema.c
  * host-deps: tools/etude/posix/store.c tools/etude/capture.c
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
@@ -17,14 +17,17 @@
  * the texts check finds a text that is missing or found twice. A sound proof
  * passes with three distinct artifacts in its store, the restored ones equal
  * to the base's, and leaves the tree as it was, also when its build judges by
- * time stamps and gives its artifact a time ahead of the clock. A fault that
- * does not reach the artifacts, one the test misses, one that fails with
- * another status, without its line or with a line it does not name, and an
- * edit whose text is not found once each fail the proof. So do a faulty run
- * that leaves state the restored build takes in, a build that changes its
- * source, a test that prints a failure and passes, and a test that runs past
- * its bound. Each build and test has a TMPDIR of its own in the work, also
- * when the work's path is relative, and the driver's TMPDIR gets nothing: a
+ * time stamps and gives its artifact a time ahead of the clock. A restored
+ * Mach-O artifact equals the base's when only its debug map's object paths
+ * and times, its UUID and its code signature differ, and differs from it when
+ * its code does. A fault that does not reach the artifacts, one the test
+ * misses, one that fails with another status, without its line or with a
+ * line it does not name, and an edit whose text is not found once each fail
+ * the proof. So do a faulty run that leaves state the restored build takes
+ * in, a build that changes its source, a test that prints a failure and
+ * passes, and a test that runs past its bound. Each build and test has a
+ * TMPDIR of its own in the work, also when the work's path is relative; every
+ * build runs in it under one path, and the driver's TMPDIR gets nothing: a
  * faulty test's scratch there is kept with the work after a failure and
  * removed with it after a pass, with a directory the test left unwritable.
  * A work that cannot be removed after a pass is named with the reason.
@@ -460,6 +463,111 @@ static void test_sound(void)
     show("stamps", &out, before);
 }
 
+/* The size of a toy Mach-O file, which ends with a newline. */
+#define MACHO_SIZE 193
+
+/* A build that puts the toy Mach-O file macho-b of the tree before the text
+ * of the restored phase's artifact, and macho-a before the others'. */
+#define MACHO_BUILD                                                                             \
+    "case ${PHASE} in restored-*) v=b ;; *) v=a ;; esac; { cat macho-$v; cat ${SRC}/src/a.txt " \
+    "${SRC}/src/b.txt | grep -v '^#'; } > ${WORK}/art"
+
+/** Put the 32-bit value `v` at `p`, little-endian. */
+static void put32(unsigned char *p, uint32_t v)
+{
+    p[0] = (unsigned char)v;
+    p[1] = (unsigned char)(v >> 8);
+    p[2] = (unsigned char)(v >> 16);
+    p[3] = (unsigned char)(v >> 24);
+}
+
+/**
+ * Write to `tree`/`name` a toy 64-bit Mach-O file: its header; an LC_UUID, an
+ * LC_SYMTAB and an LC_CODE_SIGNATURE command; 16 bytes of `code`; a debug map
+ * entry for the object `oso`, of 15 characters, made at `when`, and the symbol
+ * `_main`; and a UUID and a signature whose bytes are all `mark`.
+ */
+static void put_macho(const char *tree, const char *name, const char *oso, uint32_t when, int mark,
+                      const char *code)
+{
+    unsigned char b[MACHO_SIZE];
+    char path[1100];
+    FILE *f;
+
+    memset(b, 0, sizeof b);
+    put32(b, 0xfeedfacfu);
+    put32(b + 4, 0x0100000cu);
+    put32(b + 12, 2);
+    put32(b + 16, 3);
+    put32(b + 20, 64);
+    put32(b + 32, 0x1b);
+    put32(b + 36, 24);
+    memset(b + 40, mark, 16);
+    put32(b + 56, 0x2);
+    put32(b + 60, 24);
+    put32(b + 64, 112);
+    put32(b + 68, 2);
+    put32(b + 72, 144);
+    put32(b + 76, 32);
+    put32(b + 80, 0x1d);
+    put32(b + 84, 16);
+    put32(b + 88, 176);
+    put32(b + 92, 16);
+    memcpy(b + 96, code, strlen(code) < 16 ? strlen(code) : 16);
+    put32(b + 112, 1);
+    b[116] = 0x66;
+    b[118] = 1;
+    put32(b + 120, when);
+    put32(b + 128, 17);
+    b[132] = 0x0f;
+    b[133] = 1;
+    put32(b + 140, 1);
+    memcpy(b + 145, oso, 15);
+    memcpy(b + 161, "_main", 5);
+    memset(b + 176, mark, 16);
+    b[192] = '\n';
+    fix_format(path, sizeof path, "%s/%s", tree, name);
+    f = fopen(path, "wb");
+    if (f == NULL || fwrite(b, 1, sizeof b, f) != sizeof b || fclose(f) != 0) {
+        printf("etude-proof-test: fail: %s cannot be written\n", path);
+        exit(1);
+    }
+}
+
+/**
+ * A restored Mach-O artifact equals the base's when its debug map's object
+ * paths and times, its UUID and its code signature differ, as two links of one
+ * source by Apple's linker do, and differs from it when its code does.
+ */
+static void test_macho(void)
+{
+    struct cat c = {"private", MACHO_BUILD, TEST, 30, F_VALUE};
+    char tree[1024], store[1100];
+    struct outcome out;
+    int before = fails;
+
+    make_tree("macho", tree);
+    put_macho(tree, "macho-a", "/t/x/m-abc123.o", 1000, 'a', "add one");
+    put_macho(tree, "macho-b", "/t/x/m-def456.o", 2000, 'b', "add one");
+    prove("macho", tree, &c, NULL, 1, &out);
+    fix_format(store, sizeof store, "%s/store", out.work);
+    CHECK(out.status == 0 && strstr(out.log, "result: pass: toy: 1 of 1 faults found") != NULL,
+          "macho: a restored Mach-O artifact whose debug map, UUID and signature alone differ "
+          "is the base's");
+    CHECK(objects(store) == 3, "macho: the store keeps the restored artifact's own bytes");
+    show("macho", &out, before);
+    before = fails;
+    make_tree("macho-code", tree);
+    put_macho(tree, "macho-a", "/t/x/m-abc123.o", 1000, 'a', "add one");
+    put_macho(tree, "macho-b", "/t/x/m-abc123.o", 1000, 'a', "add two");
+    prove("macho-code", tree, &c, NULL, 0, &out);
+    CHECK(out.status == 1 &&
+              strstr(out.log, "restored-value: the restored ${WORK}/art differs from the "
+                              "base's") != NULL,
+          "macho: a restored Mach-O artifact whose code differs is refused");
+    show("macho-code", &out, before);
+}
+
 /** The base phase run alone passes or fails as the unmodified test does,
  * and makes no fault's artifact. */
 static void test_base(void)
@@ -601,9 +709,14 @@ static void test_scratch(void)
     setenv("TMPDIR", driver, 1);
     prove("scratch", tree, &c, NULL, 1, &out);
     CHECK(out.status == 0, "scratch: the proof passes");
-    fix_format(want, sizeof want, "tmp: %s/base.build.tmp\n", out.work);
-    CHECK(work_has(out.work, "base.build.out", want),
-          "scratch: the build's TMPDIR is its own in the work");
+    fix_format(want, sizeof want, "tmp: %s/build.tmp\n", out.work);
+    CHECK(work_has(out.work, "base.build.out", want) &&
+              work_has(out.work, "restored-value.build.out", want),
+          "scratch: every build's TMPDIR has one path in the work");
+    fix_format(path, sizeof path, "%s/build.tmp", out.work);
+    CHECK(!exists(path), "scratch: the build's TMPDIR is renamed when the build ends");
+    fix_format(path, sizeof path, "%s/restored-value.build.tmp", out.work);
+    CHECK(entries(path) == 0, "scratch: the restored build's TMPDIR is kept as its own");
     fix_format(want, sizeof want, "tmp: %s/fault-value.test.tmp\n", out.work);
     CHECK(work_has(out.work, "fault-value.test.out", want),
           "scratch: the faulty test's TMPDIR is its own in the work");
@@ -819,6 +932,7 @@ int main(void)
     test_read();
     test_edits();
     test_sound();
+    test_macho();
     test_base();
     test_refused();
     test_bound();
